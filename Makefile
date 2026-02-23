@@ -13,7 +13,7 @@ lint:
 	ruff check .
 
 typecheck:
-	mypy api engine tests
+	mypy api src tests
 
 unit:
 	python -m pytest

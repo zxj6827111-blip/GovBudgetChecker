@@ -451,3 +451,10 @@ GovBudgetChecker/
 ---
 
 **注意**：本系统仍在持续开发中，如遇到问题请及时反馈。
+
+## Backend Import Conventions (Phase 6)
+
+- Backend Python imports must use `src.*` paths.
+- Legacy top-level shim packages `services/`, `engine/`, `providers/`, `schemas/` were removed.
+- Rule assets and loader remain under `rules/`.
+- Migration details: `docs/SRC_LAYOUT_MIGRATION.md`.
