@@ -79,3 +79,50 @@ def test_organization_association_flow():
     assert jobs.status_code == 200
     job_ids = [item["job_id"] for item in jobs.json()["jobs"]]
     assert job_id in job_ids
+
+
+def test_department_unit_endpoints_with_legacy_endpoints_compatible():
+    client = TestClient(app)
+
+    dept_name = f"测试部门-{uuid.uuid4().hex[:8]}"
+    create_dept = client.post(
+        "/api/organizations",
+        json={"name": dept_name, "level": "department"},
+    )
+    assert create_dept.status_code == 200
+    dept = create_dept.json()
+    dept_id = dept["id"]
+
+    create_unit = client.post(
+        "/api/organizations",
+        json={
+            "name": f"测试单位-{uuid.uuid4().hex[:8]}",
+            "level": "unit",
+            "parent_id": dept_id,
+        },
+    )
+    assert create_unit.status_code == 200
+    unit = create_unit.json()
+
+    departments_resp = client.get("/api/departments")
+    assert departments_resp.status_code == 200
+    departments = departments_resp.json()["departments"]
+    assert any(item["id"] == dept_id for item in departments)
+
+    units_resp = client.get(f"/api/departments/{dept_id}/units")
+    assert units_resp.status_code == 200
+    units = units_resp.json()["units"]
+    assert any(item["id"] == unit["id"] for item in units)
+
+    tree_resp = client.get("/api/organizations")
+    assert tree_resp.status_code == 200
+    assert tree_resp.json()["total"] >= 2
+
+    list_resp = client.get("/api/organizations/list")
+    assert list_resp.status_code == 200
+    org_ids = [item["id"] for item in list_resp.json()["organizations"]]
+    assert dept_id in org_ids
+    assert unit["id"] in org_ids
+
+    not_found_resp = client.get("/api/departments/not-exist-dept/units")
+    assert not_found_resp.status_code == 404

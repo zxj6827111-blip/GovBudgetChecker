@@ -1,0 +1,12 @@
+{
+  "unit_id_to_department": {
+    "old-unit-id-1": "示例部门A"
+  },
+  "unit_name_to_department": {
+    "示例单位名称": "示例部门A"
+  },
+  "keyword_to_department": {
+    "社会福利": "民政局",
+    "卫生服务": "卫生健康委员会"
+  }
+}

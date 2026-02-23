@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import IssueTabs, { DualModeResult, IssueItem } from "./components/IssueTabs";
 import IssueList from "./components/IssueList";
 import IssueCard from "./components/IssueCard";
@@ -99,7 +99,9 @@ export default function HomePage() {
   const [showStuckWarning, setShowStuckWarning] = useState(false);
 
   // Organization State
-  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
+  const [selectedDepartmentId, setSelectedDepartmentId] = useState<string | null>(null);
+  const [selectedDepartmentName, setSelectedDepartmentName] = useState<string>("");
+  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null); // selected unit id
   const [isAssociateOpen, setIsAssociateOpen] = useState(false);
   const [associatedJobId, setAssociatedJobId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -128,7 +130,6 @@ export default function HomePage() {
 
   // --- Layout State (New) ---
   const [viewMode, setViewMode] = useState<"org_detail" | "job_detail">("org_detail");
-  const [selectedOrgName, setSelectedOrgName] = useState<string>("");
   const [orgRefreshKey, setOrgRefreshKey] = useState(0);
   const [orgTreeRefreshKey, setOrgTreeRefreshKey] = useState(0);
 
@@ -288,14 +289,17 @@ export default function HomePage() {
 
 
   // Handlers for Views
-  const handleOrgSelect = (org: any) => {
-    setSelectedOrgId(org?.id || null);
-    setSelectedOrgName(org?.name || "");
-    if (org) {
-      setViewMode("org_detail");
-      setActiveJobId(null);
-    }
-  };
+  const handleOrgSelect = useCallback((org: any) => {
+    setSelectedDepartmentId(org?.id || null);
+    setSelectedDepartmentName(org?.name || "");
+    setSelectedOrgId(null);
+    setViewMode("org_detail");
+    setActiveJobId(null);
+  }, []);
+
+  const handleUnitSelect = useCallback((unit: any) => {
+    setSelectedOrgId(unit?.id || null);
+  }, []);
 
   const handleJobSelectFromOrg = (jobId: string) => {
     setActiveJobId(jobId);
@@ -335,7 +339,7 @@ export default function HomePage() {
     if (!f) return;
 
     if (!selectedOrgId) {
-      setToast({ message: "请先选择组织单位", type: "error" });
+      setToast({ message: "请先在部门中选择一个单位", type: "error" });
       return;
     }
 
@@ -493,7 +497,11 @@ export default function HomePage() {
               <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-400">GovChecker</span>
             </div>
           </div>
-          <OrganizationTree onSelect={handleOrgSelect} selectedOrgId={selectedOrgId} refreshKey={orgTreeRefreshKey} />
+          <OrganizationTree
+            onSelect={handleOrgSelect}
+            selectedOrgId={selectedDepartmentId}
+            refreshKey={orgTreeRefreshKey}
+          />
 
           {/* Bottom Toggle Button */}
           {showOrgTree && (
@@ -523,11 +531,13 @@ export default function HomePage() {
       <div className="flex-1 flex flex-col h-full overflow-hidden relative z-10">
 
         {viewMode === 'org_detail' && (
-          selectedOrgId ? (
+          selectedDepartmentId ? (
             <div className="flex-1 overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
               <OrganizationDetailView
-                orgId={selectedOrgId}
-                orgName={selectedOrgName}
+                departmentId={selectedDepartmentId}
+                departmentName={selectedDepartmentName}
+                selectedUnitId={selectedOrgId}
+                onSelectUnit={handleUnitSelect}
                 onSelectJob={handleJobSelectFromOrg}
                 onUpload={() => setIsUploadOpen(true)}
                 refreshKey={orgRefreshKey}
@@ -540,7 +550,7 @@ export default function HomePage() {
                 <svg className="w-12 h-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
               </div>
               <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">欢迎使用智慧预算审查系统</h2>
-              <p className="text-gray-500 dark:text-gray-400 max-w-md">请在左侧选择一个组织单位，查看其关联的预决算文档及审查报告。</p>
+              <p className="text-gray-500 dark:text-gray-400 max-w-md">请先在左侧选择部门，再选择单位查看任务与审查结果。</p>
             </div>
           )
         )}
