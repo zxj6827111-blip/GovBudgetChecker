@@ -42,7 +42,7 @@ async def run_ai_rules_batch(doc: Any,
                     evidence=[{
                         "type": "text_content",
                         "page": page_idx + 1,
-                        "snippet": text[:200] + "..." if len(text) > 200 else text
+                        "text": text[:200] + "..." if len(text) > 200 else text
                     }],
                     location={
                         "page": page_idx + 1,

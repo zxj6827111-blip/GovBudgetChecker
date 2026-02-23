@@ -41,10 +41,22 @@ def save_snapshot(job_id: str, data: Dict[str, Any]) -> None:
         except Exception as e:
             logger.warning(f"读取现有状态失败: {e}")
     
+    # 处理数据，将Pydantic模型转换为字典
+    processed_data = {}
+    for key, value in data.items():
+        if key == "ai_findings" or key == "rule_findings":
+            # 将IssueItem列表转换为字典列表
+            processed_data[key] = [item.model_dump() if hasattr(item, "model_dump") else item for item in value]
+        elif key == "merged":
+            # 将MergedSummary对象转换为字典
+            processed_data[key] = value.model_dump() if hasattr(value, "model_dump") else value
+        else:
+            processed_data[key] = value
+    
     # 合并数据，防止空快照覆盖
     merged_data = existing_data.copy()
     
-    for key, value in data.items():
+    for key, value in processed_data.items():
         if key in ["ai_findings", "rule_findings", "merged"]:
             # 对于关键数据字段，只有None才覆盖，空数组不覆盖已有非空
             if value is None:
@@ -143,148 +155,88 @@ class DualModeAnalyzer:
             ai_started_at = time.time()
             rule_started_at = time.time()
             
-            # 创建任务
-            ai_task = asyncio.create_task(self._run_ai_analysis(job_context, ai_rules, config)) if ai_rules and config.enable_ai_analysis else None
+            # 创建任务（并行启动）
+            ai_task = asyncio.create_task(self._run_ai_analysis(job_context, ai_rules, config)) if config.enable_ai_analysis else None
             rule_task = asyncio.create_task(self._run_engine_analysis(job_context, engine_rules, config)) if engine_rules else None
             
-            # 使用 asyncio.gather 真正并行执行，return_exceptions=True 确保异常不会中断其他任务
-            tasks = [t for t in [ai_task, rule_task] if t is not None]
-            
-            try:
-                # 添加超时控制
-                results = await asyncio.wait_for(
-                    asyncio.gather(*tasks, return_exceptions=True),
-                    timeout=TIMEOUT_SECONDS
-                )
-            except asyncio.TimeoutError:
-                # 超时处理：取消未完成的任务，收集已完成的结果
-                logger.warning(f"Analysis timeout after {TIMEOUT_SECONDS}s, entering degraded mode")
-                
-                # 取消所有任务
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-                
-                # 收集已完成的结果
-                ai_findings = []
-                rule_findings = []
-                ai_error = "Analysis timeout"
-                rule_error = "Analysis timeout"
-                
-                result_idx = 0
-                if ai_task is not None:
-                    if ai_task.done() and not ai_task.cancelled():
-                        try:
-                            ai_result = ai_task.result()
-                            if not isinstance(ai_result, Exception):
-                                ai_findings = ai_result or []
-                                ai_error = None
-                        except Exception as e:
-                            ai_error = str(e)
-                    ai_done_at = time.time()
-                
-                if rule_task is not None:
-                    if rule_task.done() and not rule_task.cancelled():
-                        try:
-                            rule_result = rule_task.result()
-                            if not isinstance(rule_result, Exception):
-                                rule_findings = rule_result or []
-                                rule_error = None
-                        except Exception as e:
-                            rule_error = str(e)
-                    rule_done_at = time.time()
-                
-                # 保存降级状态快照
-                save_snapshot(job_context.job_id, {
-                    "ai_findings": ai_findings,
-                    "rule_findings": rule_findings,
-                    "meta": {
-                        "status": "degraded",
-                        "stage": "超时降级",
-                        "progress": 100,
-                        "ai_started_at": ai_started_at,
-                        "ai_done_at": ai_done_at,
-                        "rule_started_at": rule_started_at,
-                        "rule_done_at": rule_done_at,
-                        "ai_error": ai_error,
-                        "rule_error": rule_error,
-                        "provider_stats": metrics.provider_stats,
-                        "timeout_seconds": TIMEOUT_SECONDS
-                    }
-                })
-                
-                # 尝试合并已有结果
-                merged_findings = merge_findings(ai_findings, rule_findings)
-                
-                return DualModeResponse(
-                    job_id=job_context.job_id,
-                    ai_findings=ai_findings,
-                    rule_findings=rule_findings,
-                    merged=merged_findings,
-                    meta={
-                        "status": "degraded",
-                        "stage": "超时降级",
-                        "progress": 100,
-                        "ai_started_at": ai_started_at,
-                        "ai_done_at": ai_done_at,
-                        "rule_started_at": rule_started_at,
-                        "rule_done_at": rule_done_at,
-                        "ai_error": ai_error,
-                        "rule_error": rule_error,
-                        "provider_stats": metrics.provider_stats,
-                        "timeout_seconds": TIMEOUT_SECONDS,
-                        "message": f"分析超时({TIMEOUT_SECONDS}s)，返回部分结果"
-                    }
-                )
-            
-            # 处理正常完成的结果和异常
-            ai_findings = []
+            # ========== 增量发布策略 ==========
+            # 1. 先等待规则任务完成（通常较快）
             rule_findings = []
-            ai_error = None
             rule_error = None
-            
-            result_idx = 0
-            if ai_task is not None:
-                ai_result = results[result_idx]
-                result_idx += 1
-                ai_done_at = time.time()
-                
-                if isinstance(ai_result, Exception):
-                    ai_error = str(ai_result)
-                    ai_findings = []
-                    logger.error(f"AI analysis failed: {ai_error}")
-                    # 记录 AI 错误到 provider_stats
-                    metrics.provider_stats.append({
-                        'provider_used': 'unknown',
-                        'model_used': 'unknown',
-                        'error': ai_error,
-                        'latency_ms': int((ai_done_at - ai_started_at) * 1000),
-                        'timestamp': ai_done_at
-                    })
-                else:
-                    ai_findings = ai_result or []
-                    logger.info(f"AI analysis completed, found {len(ai_findings)} issues")
-            else:
-                ai_done_at = ai_started_at
+            rule_done_at = rule_started_at
             
             if rule_task is not None:
-                rule_result = results[result_idx] if result_idx < len(results) else None
-                rule_done_at = time.time()
-                
-                if isinstance(rule_result, Exception):
-                    rule_error = str(rule_result)
-                    rule_findings = []
-                    logger.error(f"Rule analysis failed: {rule_error}")
-                else:
-                    rule_findings = rule_result or []
-                    logger.info(f"Rule analysis completed, found {len(rule_findings)} issues")
-            else:
-                rule_done_at = rule_started_at
+                try:
+                    rule_result = await asyncio.wait_for(rule_task, timeout=30)  # 规则 30 秒超时
+                    rule_done_at = time.time()
+                    if isinstance(rule_result, Exception):
+                        rule_error = str(rule_result)
+                        logger.error(f"Rule analysis failed: {rule_error}")
+                    else:
+                        rule_findings = rule_result or []
+                        logger.info(f"Rule analysis completed, found {len(rule_findings)} issues")
+                except asyncio.TimeoutError:
+                    rule_done_at = time.time()
+                    rule_error = "规则分析超时(30s)"
+                    logger.warning(rule_error)
+                except Exception as e:
+                    rule_done_at = time.time()
+                    rule_error = str(e)
+                    logger.error(f"Rule analysis exception: {e}")
+            
+            metrics.rule_findings_count = len(rule_findings)
+            metrics.rule_elapsed_ms = int((rule_done_at - rule_started_at) * 1000)
+            
+            # 2. 规则完成后立即发布快照（前端可先看到规则结果）
+            save_snapshot(job_context.job_id, {
+                "status": "processing",
+                "progress": 70,
+                "stage": "本地规则已完成，AI 正在审计...",
+                "ai_findings": [],
+                "rule_findings": rule_findings,
+                "meta": {
+                    "ai_status": "processing",
+                    "rule_error": rule_error,
+                    "rule_started_at": rule_started_at,
+                    "rule_done_at": rule_done_at,
+                    "last_heartbeat": time.time()
+                }
+            })
+            logger.info("Phase 1 snapshot saved: rule findings published, waiting for AI...")
+            
+            # 3. 等待 AI 任务完成
+            ai_findings = []
+            ai_error = None
+            ai_done_at = ai_started_at
+            
+            if ai_task is not None:
+                try:
+                    ai_result = await asyncio.wait_for(ai_task, timeout=TIMEOUT_SECONDS - 30)  # 剩余时间给 AI
+                    ai_done_at = time.time()
+                    if isinstance(ai_result, Exception):
+                        ai_error = str(ai_result)
+                        logger.error(f"AI analysis failed: {ai_error}")
+                        metrics.provider_stats.append({
+                            'provider_used': 'unknown',
+                            'model_used': 'unknown',
+                            'error': ai_error,
+                            'latency_ms': int((ai_done_at - ai_started_at) * 1000),
+                            'timestamp': ai_done_at
+                        })
+                    else:
+                        ai_findings = ai_result or []
+                        logger.info(f"AI analysis completed, found {len(ai_findings)} issues")
+                except asyncio.TimeoutError:
+                    ai_done_at = time.time()
+                    ai_error = f"AI分析超时({TIMEOUT_SECONDS - 30}s)"
+                    logger.warning(ai_error)
+                except Exception as e:
+                    ai_done_at = time.time()
+                    ai_error = str(e)
+                    logger.error(f"AI analysis exception: {e}")
             
             metrics.ai_findings_count = len(ai_findings)
-            metrics.rule_findings_count = len(rule_findings)
             metrics.ai_elapsed_ms = int((ai_done_at - ai_started_at) * 1000)
-            metrics.rule_elapsed_ms = int((rule_done_at - rule_started_at) * 1000)
             
             # 无论任何一支失败都要落快照
             save_snapshot(job_context.job_id, {

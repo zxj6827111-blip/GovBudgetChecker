@@ -1,0 +1,29 @@
+# Python cache
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Frontend build/cache
+app/.next/
+app/node_modules/
+app/tsconfig.tsbuildinfo
+
+# Runtime data
+uploads/
+.tmp/
+logs/
+
+# VCS & IDE
+.git/
+.vscode/
+.trae/
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Test artifacts that needn't enter backend runtime image
+e2e/

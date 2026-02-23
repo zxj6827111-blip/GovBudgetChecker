@@ -1,5 +1,18 @@
 {
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
   "python.analysis.typeCheckingMode": "basic",
-  "python.analysis.exclude": ["**/node_modules/**", "**/.venv/**"]
+  "python.analysis.exclude": ["**/node_modules/**", "**/.venv/**"],
+  "basedpyright.disable": true,
+  "python.linting.enabled": true,
+  "python.linting.ruffEnabled": true,
+  "python.linting.ruffPath": "${workspaceFolder}/.venv/Scripts/ruff.exe",
+  "python.formatting.provider": "ruff",
+  "python.formatting.ruffPath": "${workspaceFolder}/.venv/Scripts/ruff.exe",
+  "editor.formatOnSave": true,
+  "[python]": {
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "always"
+    }
+  }
 }

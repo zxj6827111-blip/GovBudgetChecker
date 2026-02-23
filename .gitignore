@@ -4,18 +4,28 @@ __pycache__/
 .venv/
 .env
 .env.*
+!.env.example
 node_modules/
 app/.next/
 app/out/
+app/tsconfig.tsbuildinfo
 .DS_Store
-pytest_cache/
+.pytest_cache/
 tiny.pdf
 
 # uploads
 uploads/
 
-# test files
+# test files (exclude tests/ directory)
 test_*.py
+!tests/test_*.py
 test_*.txt
 big.bin
 not.pdf.txt
+
+# Local temp directory
+.tmp/
+
+# Fix temp scripts (optional - can commit if useful)
+fix_temp.py
+start_fixed.bat

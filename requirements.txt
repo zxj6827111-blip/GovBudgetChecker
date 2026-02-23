@@ -15,3 +15,7 @@ volcengine>=1.0.0
 aiofiles>=23.0.0
 # 新增：requests用于后端规则R33110的同步HTTP调用AI抽取器
 requests>=2.32.0
+python-dotenv>=1.0.0
+
+# PostgreSQL 异步数据库驱动
+asyncpg>=0.29.0

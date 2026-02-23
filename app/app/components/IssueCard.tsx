@@ -9,11 +9,11 @@ interface IssueCardProps {
   compact?: boolean;
 }
 
-export default function IssueCard({ 
-  issue, 
-  onClick, 
-  showSource = false, 
-  compact = false 
+export default function IssueCard({
+  issue,
+  onClick,
+  showSource = false,
+  compact = false
 }: IssueCardProps) {
   const getSeverityColor = (severity: string) => {
     const colors = {
@@ -120,11 +120,13 @@ export default function IssueCard({
     );
   }
 
+  // Determine if we should show description (hide if same as title)
+  const showDescription = issue.message && issue.message !== issue.title;
+
   return (
     <div
-      className={`border rounded-lg p-4 cursor-pointer hover:shadow-md transition-all duration-200 bg-white ${
-        onClick ? "hover:border-indigo-300" : ""
-      }`}
+      className={`border rounded-lg p-4 cursor-pointer hover:shadow-md transition-all duration-200 bg-white group ${onClick ? "hover:border-indigo-300" : ""
+        }`}
       onClick={onClick}
     >
       {/* 头部 */}
@@ -155,9 +157,22 @@ export default function IssueCard({
         </div>
         <div className="flex items-center space-x-2 text-xs text-gray-500">
           {issue.location.page && (
-            <span className="bg-gray-100 px-2 py-1 rounded">
-              第 {issue.location.page} 页
-            </span>
+            <a
+              href={issue.job_id ? `/api/files/${issue.job_id}/source#page=${issue.location.page}` : "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => issue.job_id && e.stopPropagation()}
+              className={`flex items-center space-x-1 px-2 py-1 rounded border transition-colors ${issue.job_id
+                ? "bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200 hover:border-slate-300"
+                : "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
+                }`}
+              title={issue.job_id ? "在新标签页中打开PDF并跳转到此页" : "无法获取文件链接"}
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+              </svg>
+              <span>第 {issue.location.page} 页</span>
+            </a>
           )}
           <span>{new Date(issue.created_at * 1000).toLocaleString()}</span>
         </div>
@@ -167,27 +182,26 @@ export default function IssueCard({
       <h4 className="font-semibold text-gray-900 mb-2 text-base leading-tight">
         {issue.title}
       </h4>
-      <p className="text-sm text-gray-600 mb-3 leading-relaxed">{issue.message}</p>
+      {showDescription && (
+        <p className="text-sm text-gray-600 mb-3 leading-relaxed">{issue.message}</p>
+      )}
 
-      {/* 位置信息 */}
+      {/* 位置信息 (只显示除页码外的其他定位) */}
       {(issue.location.section || issue.location.table || issue.location.row || issue.location.col) && (
         <div className="bg-gray-50 rounded p-2 mb-3">
           <div className="text-xs text-gray-600">
-            <span className="font-medium">位置：</span>
-            {issue.location.section && <span className="text-gray-800">{issue.location.section}</span>}
+            <span className="font-medium mr-1">定位：</span>
+            {issue.location.section && <span className="bg-white border border-gray-200 rounded px-1.5 py-0.5 mr-2">{issue.location.section}</span>}
             {issue.location.table && (
-              <span className="text-gray-800">
-                {issue.location.section && " > "}
+              <span className="bg-white border border-gray-200 rounded px-1.5 py-0.5 mr-2">
                 {issue.location.table}
               </span>
             )}
             {(issue.location.row || issue.location.col) && (
-              <span className="text-gray-600">
-                {" ("}
+              <span className="text-gray-500">
                 {issue.location.row && `行: ${issue.location.row}`}
                 {issue.location.row && issue.location.col && ", "}
                 {issue.location.col && `列: ${issue.location.col}`}
-                {")"}
               </span>
             )}
           </div>
@@ -199,13 +213,13 @@ export default function IssueCard({
         <div className="bg-blue-50 rounded p-2 mb-3">
           <div className="text-xs text-blue-800">
             <span className="font-medium">相关指标：</span>
-            <div className="mt-1 space-y-1">
+            <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1">
               {Object.entries(issue.metrics).map(([key, value]) => (
                 <div key={key} className="flex justify-between">
-                  <span className="text-blue-700">{key}:</span>
-                  <span className="font-mono text-blue-900">
-                    {typeof value === 'number' 
-                      ? value.toLocaleString() 
+                  <span className="text-blue-600 opacity-80">{key}:</span>
+                  <span className="font-mono font-medium">
+                    {typeof value === 'number'
+                      ? value.toLocaleString()
                       : String(value)}
                   </span>
                 </div>
@@ -217,27 +231,40 @@ export default function IssueCard({
 
       {/* 证据 */}
       {issue.evidence.length > 0 && (
-        <div className="border-l-4 border-yellow-400 pl-3 mb-3">
-          <div className="text-xs text-gray-600 mb-1">
-            <span className="font-medium">证据文本：</span>
+        <div className="border-l-4 border-yellow-400 pl-3 mb-3 bg-yellow-50/50 py-1 rounded-r">
+          <div className="text-xs text-slate-500 mb-1 flex items-center">
+            <svg className="w-3 h-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <span className="font-medium">证据片段：</span>
           </div>
-          {issue.evidence.slice(0, 2).map((evidence, idx) => (
-            <div key={idx} className="mb-2">
-              <div className="text-xs text-gray-500 mb-1">
-                第 {evidence.page} 页
-                {evidence.bbox && (
-                  <span className="ml-2">
-                    位置: ({evidence.bbox[0]}, {evidence.bbox[1]}) - ({evidence.bbox[2]}, {evidence.bbox[3]})
-                  </span>
+          {issue.evidence.slice(0, 2).map((evidence, idx) => {
+            // Hide evidence if it's too similar to title or message to capture duplication
+            // Ensure we have some text to show, fallback to empty string
+            const txt = evidence.text || (evidence as any).text_snippet || "";
+            // if (!txt || txt === issue.title || txt === issue.message) return null; // Logic removed: user wants to see evidence regardless
+
+            return (
+              <div key={idx} className="mb-2 last:mb-0 group/evidence relative">
+                <div className="text-sm text-gray-700 italic bg-white border border-yellow-100 p-2 rounded shadow-sm">
+                  &quot;{txt}&quot;
+                </div>
+                {issue.job_id && evidence.page && (
+                  <a
+                    href={`/api/files/${issue.job_id}/source#page=${evidence.page}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute top-1 right-1 opacity-0 group-hover/evidence:opacity-100 bg-white text-indigo-600 text-[10px] px-1.5 py-0.5 rounded border border-indigo-100 hover:text-indigo-800 transition-opacity"
+                  >
+                    跳转 P{evidence.page} ↗
+                  </a>
                 )}
               </div>
-              <div className="text-sm text-gray-700 italic bg-yellow-50 p-2 rounded">
-                "{evidence.text}"
-              </div>
-            </div>
-          ))}
+            );
+          })}
           {issue.evidence.length > 2 && (
-            <div className="text-xs text-gray-500">
+            <div className="text-xs text-gray-500 mt-1">
               还有 {issue.evidence.length - 2} 条证据...
             </div>
           )}
@@ -246,13 +273,13 @@ export default function IssueCard({
 
       {/* 建议 */}
       {issue.suggestion && (
-        <div className="bg-green-50 border border-green-200 rounded p-3 mb-3">
+        <div className="bg-green-50 border border-green-200 rounded p-3">
           <div className="flex items-start">
-            <svg className="w-4 h-4 text-green-600 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+            <svg className="w-4 h-4 text-green-600 mt-0.5 mr-2 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <div>
-              <div className="text-xs font-medium text-green-800 mb-1">建议：</div>
+              <div className="text-xs font-medium text-green-800 mb-0.5">建议：</div>
               <div className="text-sm text-green-700">{issue.suggestion}</div>
             </div>
           </div>
@@ -261,11 +288,11 @@ export default function IssueCard({
 
       {/* 标签 */}
       {issue.tags.length > 0 && (
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap gap-1 mt-3 pt-2 border-t border-gray-100">
           {issue.tags.map((tag, idx) => (
             <span
               key={idx}
-              className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-indigo-100 text-indigo-800 border border-indigo-200"
+              className="inline-flex items-center px-2 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600"
             >
               #{tag}
             </span>

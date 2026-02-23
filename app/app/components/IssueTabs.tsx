@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import IssueList from "./IssueList";
 
 export type IssueItem = {
   id: string;
@@ -11,8 +12,9 @@ export type IssueItem = {
   message: string;
   evidence: Array<{
     page: number;
-    text: string;
-    bbox?: [number, number, number, number];
+    text?: string;
+    text_snippet?: string;
+    bbox?: number[];
   }>;
   location: {
     section?: string;
@@ -25,6 +27,14 @@ export type IssueItem = {
   suggestion?: string;
   tags: string[];
   created_at: number;
+  job_id?: string;
+  // Extra fields from page.tsx usage
+  page_number?: number;
+  bbox?: number[];
+  amount?: number;
+  percentage?: number;
+  text_snippet?: string;
+  why_not?: string;
 };
 
 export type ConflictItem = {
@@ -62,12 +72,20 @@ type TabType = "ai" | "rule" | "merged";
 interface IssueTabsProps {
   result: DualModeResult;
   onIssueClick?: (issue: IssueItem) => void;
+  job_id?: string;
 }
 
-export default function IssueTabs({ result, onIssueClick }: IssueTabsProps) {
+export default function IssueTabs({ result, onIssueClick, job_id }: IssueTabsProps) {
   const [activeTab, setActiveTab] = useState<TabType>("merged");
 
+  // Inject job_id into issues if provided
   const { ai_findings, rule_findings, merged } = result;
+  if (job_id) {
+    ai_findings.forEach(i => i.job_id = job_id);
+    rule_findings.forEach(i => i.job_id = job_id);
+    // Merged issues might already reference these objects, but to be sure:
+    // We modify the objects in place, so it should propagate.
+  }
 
   const tabs = [
     {
@@ -111,6 +129,22 @@ export default function IssueTabs({ result, onIssueClick }: IssueTabsProps) {
     if (issues.length === 0) {
       // 检查是否为AI结果为空且服务降级的情况
       if (showSource === false && activeTab === "ai") {
+        // 检查 AI 是否仍在处理中
+        const aiStatus = result.meta?.ai_status;
+        if (aiStatus === "processing") {
+          return (
+            <div className="text-center py-8">
+              <div className="w-16 h-16 mx-auto mb-4">
+                <svg className="animate-spin h-16 w-16 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              </div>
+              <p className="text-lg font-medium text-blue-600">AI 正在解析中，请耐心等待</p>
+            </div>
+          );
+        }
+
         // AI标签页的空态提示
         const isAiFallback = result.meta?.provider_stats?.some((stat: any) => stat.fell_back === true);
         if (isAiFallback) {
@@ -180,12 +214,12 @@ export default function IssueTabs({ result, onIssueClick }: IssueTabsProps) {
                   {issue.severity === "critical"
                     ? "严重"
                     : issue.severity === "high"
-                    ? "高"
-                    : issue.severity === "medium"
-                    ? "中"
-                    : issue.severity === "low"
-                    ? "低"
-                    : "信息"}
+                      ? "高"
+                      : issue.severity === "medium"
+                        ? "中"
+                        : issue.severity === "low"
+                          ? "低"
+                          : "信息"}
                 </span>
                 {issue.rule_id && (
                   <span className="text-xs text-gray-500">{issue.rule_id}</span>
@@ -197,18 +231,18 @@ export default function IssueTabs({ result, onIssueClick }: IssueTabsProps) {
                 </span>
               )}
             </div>
-            
+
             <h4 className="font-medium text-gray-900 mb-1">{issue.title}</h4>
             <p className="text-sm text-gray-600 mb-2">{issue.message}</p>
-            
+
             {issue.evidence.length > 0 && (
               <div className="text-xs text-gray-500">
                 <span className="font-medium">证据：</span>
-                {issue.evidence[0].text.substring(0, 100)}
-                {issue.evidence[0].text.length > 100 && "..."}
+                {(issue.evidence[0].text || issue.evidence[0]["text_snippet"] || "").substring(0, 100)}
+                {(issue.evidence[0].text || issue.evidence[0]["text_snippet"] || "").length > 100 && "..."}
               </div>
             )}
-            
+
             {issue.tags.length > 0 && (
               <div className="flex flex-wrap gap-1 mt-2">
                 {issue.tags.map((tag, idx) => (
@@ -229,18 +263,18 @@ export default function IssueTabs({ result, onIssueClick }: IssueTabsProps) {
 
   const renderMergedView = () => {
     const { conflicts = [], agreements = [] } = merged || {};
-    
+
     // 使用合并后的实际问题列表，而不是简单拼接
     const getMergedIssues = () => {
       const mergedIssues: IssueItem[] = [];
       const usedAiIds = new Set<string>();
       const usedRuleIds = new Set<string>();
-      
+
       // 添加一致的问题（优先使用AI结果）
       agreements.forEach(agreementId => {
         const aiIssue = ai_findings.find(issue => issue.id === agreementId);
         const ruleIssue = rule_findings.find(issue => issue.id === agreementId);
-        
+
         if (aiIssue) {
           mergedIssues.push(aiIssue);
           usedAiIds.add(aiIssue.id);
@@ -249,7 +283,7 @@ export default function IssueTabs({ result, onIssueClick }: IssueTabsProps) {
           usedRuleIds.add(ruleIssue.id);
         }
       });
-      
+
       // 添加冲突问题（两个都保留）
       conflicts.forEach(conflict => {
         if (conflict.ai_issue) {
@@ -267,24 +301,24 @@ export default function IssueTabs({ result, onIssueClick }: IssueTabsProps) {
           }
         }
       });
-      
+
       // 添加未匹配的AI问题
       ai_findings.forEach(issue => {
         if (!usedAiIds.has(issue.id)) {
           mergedIssues.push(issue);
         }
       });
-      
+
       // 添加未匹配的规则问题
       rule_findings.forEach(issue => {
         if (!usedRuleIds.has(issue.id)) {
           mergedIssues.push(issue);
         }
       });
-      
+
       return mergedIssues;
     };
-    
+
     const allIssues = getMergedIssues();
 
     return (
@@ -334,7 +368,7 @@ export default function IssueTabs({ result, onIssueClick }: IssueTabsProps) {
               {conflicts.map((conflict, idx) => {
                 const aiIssue = ai_findings.find((i) => i.id === conflict.ai_issue);
                 const ruleIssue = rule_findings.find((i) => i.id === conflict.rule_issue);
-                
+
                 return (
                   <div key={idx} className="border border-red-200 rounded-lg p-4 bg-red-50">
                     <div className="flex items-center mb-2">
@@ -342,8 +376,8 @@ export default function IssueTabs({ result, onIssueClick }: IssueTabsProps) {
                         冲突
                       </span>
                       <span className="ml-2 text-sm text-gray-600">
-                        原因: {conflict.reason === "value-mismatch" ? "值不匹配" : 
-                               conflict.reason === "missing" ? "缺失" : "页码不匹配"}
+                        原因: {conflict.reason === "value-mismatch" ? "值不匹配" :
+                          conflict.reason === "missing" ? "缺失" : "页码不匹配"}
                       </span>
                     </div>
                     <div className="grid md:grid-cols-2 gap-4">
@@ -367,10 +401,14 @@ export default function IssueTabs({ result, onIssueClick }: IssueTabsProps) {
           </div>
         )}
 
-        {/* 所有问题列表 */}
+        {/* 所有问题列表 - 使用新的 IssueList 组件来展示分类 */}
         <div>
-          <h3 className="text-lg font-semibold mb-3">所有问题</h3>
-          {renderIssueList(allIssues, true)}
+          <IssueList
+            issues={allIssues}
+            onIssueClick={onIssueClick}
+            showSource={true}
+            title="所有问题分类清单"
+          />
         </div>
       </div>
     );
@@ -385,11 +423,10 @@ export default function IssueTabs({ result, onIssueClick }: IssueTabsProps) {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`py-2 px-1 border-b-2 font-medium text-sm whitespace-nowrap ${
-                activeTab === tab.id
-                  ? "border-indigo-500 text-indigo-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
+              className={`py-2 px-1 border-b-2 font-medium text-sm whitespace-nowrap ${activeTab === tab.id
+                ? "border-indigo-500 text-indigo-600"
+                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                }`}
             >
               {tab.label}
               <span

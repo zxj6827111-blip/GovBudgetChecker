@@ -9,7 +9,7 @@ from typing import Any, cast
 import pytest
 
 import yaml
-from api.config import DEFAULT_RULES_FILE
+from api.config import DEFAULT_RULES_FILE_STR
 
 MANIFEST_PATH = Path("samples/manifest.yaml")
 EXPECTED_TABLES = {
@@ -46,7 +46,7 @@ def test_manifest_meta_defaults(manifest: dict[str, Any]) -> None:
     """The manifest should align with default configuration."""
 
     meta = manifest.get("meta", {})
-    assert meta.get("rules_file") == str(DEFAULT_RULES_FILE)
+    assert meta.get("rules_file") == DEFAULT_RULES_FILE_STR
 
 
 def test_template_sample_tables(manifest: dict[str, Any]) -> None:

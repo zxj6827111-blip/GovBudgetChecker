@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_RULES_FILE = Path(os.getenv("RULES_FILE", "rules/v3_3.yaml"))
+# Cross-platform string representation (always uses forward slashes for consistency)
+DEFAULT_RULES_FILE_STR = DEFAULT_RULES_FILE.as_posix()
 
 # AI辅助配置
 AI_ASSIST_ENABLED = os.getenv("AI_ASSIST_ENABLED", "true").lower() == "true"

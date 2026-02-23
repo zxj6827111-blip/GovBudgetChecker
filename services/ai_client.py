@@ -195,8 +195,15 @@ class AIClient:
         timeout = config.get('timeout_s', config.get('timeout', 60))
         max_retries = config.get('retries', 1)
         
-        # 根据名称或配置创建对应的提供商
-        if 'zhipu' in name.lower():
+        if 'modelscope' in name.lower():
+            return OpenAICompatProvider(
+                api_key=api_key,
+                base_url=base_url,
+                default_model=model,
+                timeout=timeout,
+                max_retries=max_retries
+            )
+        elif 'zhipu' in name.lower():
             return ZhipuProvider(
                 api_key=api_key,
                 base_url=base_url,
@@ -221,7 +228,6 @@ class AIClient:
                 max_retries=max_retries
             )
         else:
-            # 默认使用 OpenAI 兼容接口
             return OpenAICompatProvider(
                 api_key=api_key,
                 base_url=base_url,

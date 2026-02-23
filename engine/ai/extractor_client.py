@@ -169,6 +169,74 @@ class ExtractorClient:
                 
         return converted
     
+    async def ai_semantic_audit(self, section_text: str, doc_hash: str) -> List[Dict[str, Any]]:
+        """
+        调用AI抽取器进行语义审计（错别字、重复、表达不当）
+        
+        Args:
+            section_text: 待检查的文本内容
+            doc_hash: 文档哈希
+            
+        Returns:
+            语义问题列表，每个元素包含：
+            - type: 错误类型（错别字/重复/表达不当/规范性）
+            - original: 原文错误内容
+            - suggestion: 修改建议
+            - span: [start, end) 位置
+            - context: 上下文片段
+        """
+        if not self.config.enabled:
+            logger.debug("AI辅助未启用，返回空列表")
+            return []
+            
+        if not section_text.strip():
+            logger.debug("输入文本为空，返回空列表")
+            return []
+            
+        try:
+            result = await self._call_semantic_audit(section_text, doc_hash)
+            return result
+            
+        except Exception as e:
+            logger.error(f"AI语义审计失败: {e}")
+            return []
+    
+    async def _call_semantic_audit(self, section_text: str, doc_hash: str) -> List[Dict[str, Any]]:
+        """语义审计的单次调用"""
+        request_data = {
+            "task": "semantic_audit_v1",
+            "section_text": section_text,
+            "language": "zh", 
+            "doc_hash": doc_hash,
+            "max_windows": 3
+        }
+        
+        async with httpx.AsyncClient(timeout=self.config.timeout) as client:
+            response = await client.post(
+                self.config.url,
+                json=request_data,
+                headers={"Content-Type": "application/json"}
+            )
+            
+            if response.status_code != 200:
+                raise Exception(f"AI语义审计返回错误状态码: {response.status_code}, 响应: {response.text}")
+                
+            result = response.json()
+            
+            if "hits" not in result:
+                raise Exception(f"AI语义审计返回格式错误: {result}")
+                
+            hits = result["hits"]
+            logger.info(f"AI语义审计成功，获得{len(hits)}个结果")
+            
+            # 提取语义问题
+            semantic_issues = []
+            for hit in hits:
+                if "semantic_issues" in hit and hit["semantic_issues"]:
+                    semantic_issues.extend(hit["semantic_issues"])
+            
+            return semantic_issues
+    
     async def health_check(self) -> bool:
         """健康检查"""
         if not self.config.enabled:

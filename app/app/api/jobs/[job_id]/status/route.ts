@@ -1,24 +1,14 @@
-// app/app/api/jobs/[job_id]/status/route.ts
 import { NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
+import { backendAuthHeaders } from "@/lib/backendAuth";
 
-async function toSafeJson(res: Response) {
-  const ct = res.headers.get("content-type") || "";
+async function parseUpstream(res: Response) {
   const text = await res.text();
-  if (ct.includes("application/json")) {
-    try {
-      return { data: JSON.parse(text), status: res.status };
-    } catch (e: any) {
-      return {
-        data: { error: "json_parse_failed", raw: text, message: String(e) },
-        status: res.status,
-      };
-    }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { error: "non_json_from_backend", status: res.status, body: text };
   }
-  return {
-    data: { error: "non_json_from_backend", status: res.status, body: text },
-    status: res.status,
-  };
 }
 
 export async function GET(
@@ -26,27 +16,29 @@ export async function GET(
   { params }: { params: { job_id: string } }
 ) {
   const job = encodeURIComponent(params.job_id);
-
-  // 优先尝试后端 /api/jobs/{job}/status，回退到 /jobs_adv2/{job}/status
   const candidates = [
     `${apiBase}/api/jobs/${job}/status`,
-    `${apiBase}/jobs_adv2/${job}/status`,
+    `${apiBase}/jobs/${job}/status`,
   ];
 
-  for (let i = 0; i < candidates.length; i++) {
+  for (const url of candidates) {
     try {
-      const res = await fetch(candidates[i], { cache: "no-store" });
-      const { data, status } = await toSafeJson(res);
-      return NextResponse.json(data, { status: res.ok ? 200 : status });
-    } catch (e: any) {
-      if (i === candidates.length - 1) {
-        return NextResponse.json(
-          { error: "proxy_fetch_failed", message: String(e) },
-          { status: 502 }
-        );
+      const res = await fetch(url, {
+        cache: "no-store",
+        headers: backendAuthHeaders(),
+      });
+      const data = await parseUpstream(res);
+      if (res.ok) {
+        return NextResponse.json(data, { status: 200 });
       }
+    } catch {
+      // try next candidate
     }
   }
 
-  return NextResponse.json({ error: "unreachable" }, { status: 500 });
+  return NextResponse.json(
+    { status: "unknown", job_id: params.job_id },
+    { status: 200 }
+  );
 }
+

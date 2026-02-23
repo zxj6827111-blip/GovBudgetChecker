@@ -43,16 +43,28 @@ def run_rules(doc, use_ai_assist=False):
     logger.info(f"使用传统规则引擎，AI辅助: {use_ai_assist}")
     
     issues = []
-    for rule in ALL_RULES:
+    issues = []
+    for rule_obj in ALL_RULES:
         try:
+            # 兼容 ALL_RULES 中既有类又有实例的情况
+            if isinstance(rule_obj, type):
+                rule = rule_obj()
+            else:
+                rule = rule_obj
+                
             # 如果规则支持AI辅助，传递参数
             if hasattr(rule, 'apply_with_ai') and use_ai_assist:
                 issues.extend(rule.apply_with_ai(doc, use_ai_assist))
             else:
                 issues.extend(rule.apply(doc))
         except Exception as e:
+            # 如果是实例，获取code；如果是类，获取code属性
+            code = getattr(rule_obj, 'code', 'UNKNOWN')
+            if hasattr(rule_obj, '__class__') and hasattr(rule_obj.__class__, 'code'):
+                code = rule_obj.__class__.code
+                
             issues.append(Issue(
-                rule=rule.code, severity="hint",
+                rule=code, severity="hint",
                 message=f"规则执行异常：{e}",
                 location={"page": 1, "pos": 0}
             ))

@@ -26,7 +26,9 @@ class AIFindingsService:
     
     async def analyze(self, context: JobContext) -> List[IssueItem]:
         """执行AI分析"""
-        if not self.config.ai_enabled:
+        # 确保配置项有合理的默认值
+        ai_enabled = getattr(self.config, 'ai_enabled', True)
+        if not ai_enabled:
             logger.info("AI分析已禁用")
             return []
         
@@ -37,21 +39,38 @@ class AIFindingsService:
         self.ai_errors = []
         
         try:
-            # 构建提示词
-            prompt = self._build_prompt(context)
+            # 合并所有页面文本用于语义审计，同时计算页码偏移量
+            page_texts = context.page_texts if context.page_texts else []
+            if not page_texts:
+                logger.warning("文档文本为空，跳过AI语义审计")
+                return []
             
-            # 调用AI
-            ai_response = await self._call_ai_with_retry(prompt, context)
+            # 计算每页的起始偏移量（用于后续页码映射）
+            page_offsets = []  # [(start_offset, end_offset, page_number), ...]
+            current_offset = 0
+            for i, text in enumerate(page_texts):
+                page_start = current_offset
+                page_end = current_offset + len(text)
+                page_offsets.append((page_start, page_end, i + 1))  # 页码从1开始
+                current_offset = page_end + 1  # +1 for \n separator
             
-            # 解析结果
-            issues = self._parse_ai_response(ai_response, context)
+            all_text = "\n".join(page_texts)
+            if not all_text.strip():
+                logger.warning("文档文本为空，跳过AI语义审计")
+                return []
+            
+            # 生成文档哈希
+            import hashlib
+            doc_hash = hashlib.sha1(all_text[:5000].encode('utf-8')).hexdigest()[:12]
+            
+            # 调用真实的AI语义审计接口
+            semantic_issues = await self.ai_client.ai_semantic_audit(all_text[:15000], doc_hash)
+            
+            # 转换为IssueItem格式，传入页码偏移量
+            issues = self._convert_semantic_issues_to_items(semantic_issues, context, page_offsets)
             
             elapsed = time.time() - start_time
             logger.info(f"AI分析完成: job_id={context.job_id}, issues={len(issues)}, elapsed={elapsed:.2f}s")
-            
-            # 将错误信息添加到context中，供后续使用
-            if hasattr(context, 'ai_errors'):
-                context.ai_errors = self.ai_errors
             
             return issues
             
@@ -66,20 +85,94 @@ class AIFindingsService:
                 "timestamp": time.time()
             })
             
-            if hasattr(context, 'ai_errors'):
-                context.ai_errors = self.ai_errors
-            
             return []
+    
+    def _convert_semantic_issues_to_items(self, semantic_issues: List[Dict[str, Any]], context: JobContext, page_offsets: List[tuple] = None) -> List[IssueItem]:
+        """将语义问题转换为IssueItem格式"""
+        issues = []
+        
+        # 如果没有页码偏移量，使用默认值
+        if not page_offsets:
+            page_offsets = [(0, 999999, 1)]
+        
+        for idx, issue in enumerate(semantic_issues):
+            try:
+                # 映射错误类型到严重程度
+                severity_map = {
+                    "错别字": "high",
+                    "重复": "medium",
+                    "表达不当": "medium",
+                    "规范性": "low"
+                }
+                
+                issue_type = issue.get("type", "其他")
+                severity = severity_map.get(issue_type, "medium")
+                
+                # 根据 span 计算所属页码
+                span = issue.get("span", [0, 0])
+                span_start = span[0] if len(span) > 0 else 0
+                span_end = span[1] if len(span) > 1 else span_start
+                
+                # 遍历页码偏移量，找到 span 所属的页码
+                page_number = 1
+                for page_start, page_end, page_num in page_offsets:
+                    if span_start >= page_start and span_start < page_end:
+                        page_number = page_num
+                        break
+                
+                # 构建位置信息
+                location = {
+                    "page": page_number,
+                    "span_start": span_start,
+                    "span_end": span_end
+                }
+                
+                # 构建证据
+                evidence = [{
+                    "type": "text_content",
+                    "text": issue.get("context", ""),
+                    "original": issue.get("original", "")
+                }]
+                
+                # 生成唯一ID
+                issue_id = f"ai_semantic_{context.job_id}_{idx}_{int(time.time())}"
+                
+                item = IssueItem(
+                    id=issue_id,
+                    source="ai",
+                    rule_id=f"AI-SEM-{issue_type[:2].upper()}-{idx:03d}",
+                    severity=severity,
+                    title=f"{issue_type}：{issue.get('original', '')[:20]}",
+                    message=f"发现{issue_type}问题：「{issue.get('original', '')}」，建议修改为「{issue.get('suggestion', '')}」",
+                    evidence=evidence,
+                    location=location,
+                    page_number=page_number,  # 使用计算出的准确页码
+                    suggestion=issue.get("suggestion", ""),
+                    tags=[issue_type, "AI检测", "语义审计"],
+                    created_at=time.time()
+                )
+                issues.append(item)
+                
+            except Exception as e:
+                logger.warning(f"转换语义问题失败: {e}, issue={issue}")
+                continue
+        
+        return issues
     
     def _build_prompt(self, context: JobContext) -> str:
         """构建AI提示词"""
+        # 确保所有属性都有合理的默认值
+        pages = getattr(context, 'pages', 0)
+        ocr_text = getattr(context, 'ocr_text', '')
+        tables = getattr(context, 'tables', [])
+        
         prompt = f"""
 你是一个专业的政府预决算合规检查专家。请对以下预决算文档进行全面的合规性和一致性检查。
 
 ## 文档信息
 - 文件路径: {context.pdf_path}
-- 页数: {context.pages}
-- OCR文本长度: {len(context.ocr_text or '') // 1000}K字符
+- 页数: {pages}
+- OCR文本长度: {len(ocr_text or '') // 1000}K字符
 
 ## 检查要求
 请重点检查以下方面，发现问题时必须提供具体的页码和文本证据：
@@ -95,18 +188,17 @@ class AIFindingsService:
 9. **类款项编码**: 检查预算科目编码规范性
 
 ## OCR文本内容
-{context.ocr_text[:10000] if context.ocr_text else "无OCR文本"}
+{ocr_text[:10000] if ocr_text else "无OCR文本"}
 
 ## 表格数据
-{json.dumps(context.tables[:5], ensure_ascii=False, indent=2) if context.tables else "无表格数据"}
+{json.dumps(tables[:5], ensure_ascii=False, indent=2) if tables else "无表格数据"}
 
 ## 输出格式要求
 请严格按照以下JSON格式输出，每个问题必须包含所有必需字段：
 
 ```json
 [
-  {{
-    "rule_id": "AI-XXX-001",
+  {{"rule_id": "AI-XXX-001",
     "title": "问题标题",
     "message": "详细问题描述",
     "severity": "critical|high|medium|low|info",
@@ -129,7 +221,7 @@ class AIFindingsService:
 
 ## 重要约束
 1. 必须基于实际文本内容，不得编造问题
-2. 每个问题必须提供具体页码和文本证据
+2. 每个问题必须提供具体的页码和文本证据
 3. 金额数据必须准确，不得估算
 4. 严重程度要合理评估
 5. 建议要具体可操作
@@ -173,34 +265,24 @@ class AIFindingsService:
     async def _call_ai_client(self, prompt: str) -> str:
         """调用AI客户端"""
         try:
-            # 使用现有的AI客户端接口
-            if hasattr(self.ai_client, 'chat_completion'):
-                response = await self.ai_client.chat_completion(
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=self.config.ai_temperature,
-                    max_tokens=4000
-                )
-                return response.get("content", "")
-            else:
-                # 如果没有异步方法，使用同步方法
-                import asyncio
-                response = await asyncio.get_event_loop().run_in_executor(
-                    None, self._sync_call_ai, prompt
-                )
-                return response
+            # 注意：现有的ExtractorClient不支持chat_completion方法
+            # 这里提供一个默认实现，返回模拟结果
+            logger.warning("使用模拟AI响应，因为ExtractorClient不支持chat_completion方法")
+            return self._get_mock_ai_response()
         except Exception as e:
             logger.error(f"AI客户端调用失败: {e}")
             raise
     
-    def _sync_call_ai(self, prompt: str) -> str:
-        """同步AI调用（兼容现有代码）"""
-        try:
-            # 这里需要根据实际的AI客户端接口调整
-            # 返回模拟结果用于测试
-            return self._get_mock_ai_response()
-        except Exception as e:
-            logger.error(f"同步AI调用失败: {e}")
-            raise
+    # 移除同步AI调用方法，所有AI调用都应该使用异步方式
+    # async def _sync_call_ai(self, prompt: str) -> str:
+    #     """同步AI调用（兼容现有代码）"""
+    #     try:
+    #         # 这里需要根据实际的AI客户端接口调整
+    #         # 返回模拟结果用于测试
+    #         return self._get_mock_ai_response()
+    #     except Exception as e:
+    #         logger.error(f"同步AI调用失败: {e}")
+    #         raise
     
     def _get_mock_ai_response(self) -> str:
         """获取模拟AI响应（用于测试）"""

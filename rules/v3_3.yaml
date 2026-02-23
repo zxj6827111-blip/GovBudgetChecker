@@ -807,6 +807,17 @@ rules:
   false_positive_notes: ''
   evidence_extract: {}
   auto_explain: ''
+- rule_id: AI-SEMANTIC-AUDIT
+  title: AI 语义合规审计
+  severity: medium
+  executor: ai
+  doc_scope:
+  - 预算
+  - 决算
+  description: AI 自动检测文本中的错别字、语义重复、表达不当等质量问题。
+  fix_suggestion: 根据 AI 建议修正相关文本。
+  evidence_extract:
+    scope: 全文文本
 - rule_id: R008
   title: ‘三公’经费口径一致性（汇总=分项）
   severity: high

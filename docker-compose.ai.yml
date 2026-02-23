@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   ai-extractor:
     build:
@@ -42,6 +40,8 @@ services:
       - AI_ASSIST_ENABLED=true
       - AI_EXTRACTOR_URL=http://ai-extractor:9009/ai/extract/v1
       - RULES_FILE_PATH=/app/engine/rules_v33.py
+      - GOVBUDGET_AUTH_ENABLED=${GOVBUDGET_AUTH_ENABLED:-true}
+      - GOVBUDGET_API_KEY=${GOVBUDGET_API_KEY:-}
       # 传递AI配置到后端
       - ARK_API_KEY=${ARK_API_KEY:-}
       - ARK_BASE_URL=${ARK_BASE_URL:-}
@@ -69,7 +69,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - BACKEND_URL=http://backend:8000
+      - GOVBUDGET_API_KEY=${GOVBUDGET_API_KEY:-}
     depends_on:
       - backend
     restart: unless-stopped

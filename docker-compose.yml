@@ -1,0 +1,26 @@
+# PostgreSQL for GovBudgetChecker
+# 启动: docker compose up -d
+# 停止: docker compose down
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: fiscal_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: fiscal_user
+      POSTGRES_PASSWORD: fiscal_pass
+      POSTGRES_DB: fiscal_db
+    volumes:
+      - fiscal_pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U fiscal_user -d fiscal_db" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  fiscal_pgdata:
+    driver: local

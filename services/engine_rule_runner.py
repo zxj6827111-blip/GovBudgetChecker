@@ -50,53 +50,90 @@ class EngineRuleRunner:
         Returns:
             List[IssueItem]: 检查结果列表
         """
-        if not rules:
-            logger.info("No engine rules to execute")
-            return []
+        # 直接使用ALL_RULES中的规则，避免规则匹配失败
+        from engine.rules_v33 import ALL_RULES
         
-        logger.info(f"Running {len(rules)} engine rules for job {job_context.job_id}")
+        logger.info(f"Using {len(ALL_RULES)} rules from ALL_RULES for job {job_context.job_id}")
         
         # 准备文档对象
         document = await self._prepare_document(job_context)
         
         all_findings = []
-        self._stats["total_rules"] = len(rules)
+        self._stats = {
+            "total_rules": len(ALL_RULES),
+            "successful_rules": 0,
+            "failed_rules": 0,
+            "total_findings": 0
+        }
         
-        for rule in rules:
-            rule_id = rule.get('id', 'unknown')
+        # 执行ALL_RULES中的所有规则
+        for rule_obj in ALL_RULES:
+            rule_id = rule_obj.code
             
             try:
                 start_time = time.time()
                 
-                # 执行规则
-                result = await self._execute_rule(
-                    rule=rule,
-                    document=document,
-                    job_context=job_context,
-                    config=config
-                )
+                # 直接调用规则对象的apply方法
+                issues = rule_obj.apply(document)
                 
-                result.elapsed_ms = int((time.time() - start_time) * 1000)
+                elapsed_ms = int((time.time() - start_time) * 1000)
                 
-                if result.success:
-                    self._stats["successful_rules"] += 1
-                    all_findings.extend(result.findings)
-                    self._stats["total_findings"] += len(result.findings)
-                    
-                    logger.debug(f"Rule {rule_id} found {len(result.findings)} issues")
-                else:
-                    self._stats["failed_rules"] += 1
-                    logger.debug(f"Rule {rule_id} failed: {result.why_not}")
+                # 转换为IssueItem格式
+                findings = []
+                for issue in issues:
+                    try:
+                        # 创建符合IssueItem要求的字段
+                        severity_map = {
+                            "error": "high",
+                            "warn": "medium",
+                            "warning": "medium",
+                            "info": "info",
+                            "hint": "low"
+                        }
+                        
+                        severity = issue.severity if hasattr(issue, 'severity') else "medium"
+                        severity = severity_map.get(severity.lower(), "medium")
+                        
+                        # 生成唯一ID
+                        import uuid
+                        issue_id = str(uuid.uuid4())
+                        
+                        finding = IssueItem(
+                            id=issue_id,
+                            rule_id=issue.rule,
+                            title=issue.message,
+                            description=issue.message,
+                            severity=severity,
+                            page_number=issue.location.get("page", 1) if hasattr(issue, 'location') else 1,
+                            evidence=[{"text": getattr(issue, 'evidence_text', '') or getattr(issue, 'description', '') or issue.message}],
+                            source="rule",
+                            job_id=job_context.job_id,
+                            message=issue.message  # 添加必填的message字段
+                        )
+                        findings.append(finding)
+                    except Exception as e:
+                        logger.error(f"Failed to convert issue to IssueItem: {e}")
+                        import traceback
+                        logger.error(f"Conversion error details: {traceback.format_exc()}")
+                        continue
+                
+                self._stats["successful_rules"] += 1
+                all_findings.extend(findings)
+                self._stats["total_findings"] += len(findings)
+                
+                logger.debug(f"Rule {rule_id} found {len(findings)} issues")
                 
             except Exception as e:
                 self._stats["failed_rules"] += 1
                 logger.error(f"Rule {rule_id} execution failed: {e}")
+                import traceback
+                logger.error(f"Exception details: {traceback.format_exc()}")
                 
                 # 创建失败记录
                 if config.record_rule_failures:
                     failure_item = IssueItem(
                         rule_id=rule_id,
-                        title=f"规则执行失败: {rule.get('title', rule_id)}",
+                        title=f"规则执行失败: {rule_obj.desc}",
                         description=f"规则执行过程中发生错误: {str(e)}",
                         severity="low",
                         page_number=1,
@@ -107,7 +144,7 @@ class EngineRuleRunner:
                     )
                     all_findings.append(failure_item)
         
-        logger.info(f"Engine rules completed: {len(all_findings)} findings from {len(rules)} rules "
+        logger.info(f"Engine rules completed: {len(all_findings)} findings from {len(ALL_RULES)} rules "
                    f"(success: {self._stats['successful_rules']}, failed: {self._stats['failed_rules']})")
         
         return all_findings
@@ -115,29 +152,106 @@ class EngineRuleRunner:
     async def _prepare_document(self, job_context: JobContext) -> Document:
         """准备文档对象"""
         
-        # 加载表格数据
-        tables = {}
-        if job_context.tables:
-            for table in job_context.tables:
-                table_id = table.get('table_id', f"table_{table.get('page', 1)}")
-                tables[table_id] = table.get('data', [])
-        else:
-            # 如果没有表格数据，尝试从 PDF 加载
-            try:
-                tables = load_tables(job_context.pdf_path)
-            except Exception as e:
-                logger.warning(f"Failed to load tables from PDF: {e}")
-                tables = {}
+        # 1. 优先使用 JobContext 中的 page_texts 和 page_tables（精确页码）
+        if hasattr(job_context, 'page_texts') and job_context.page_texts:
+            logger.info(f"Using page_texts from JobContext for job {job_context.job_id} ({len(job_context.page_texts)} pages)")
+            
+            page_texts = job_context.page_texts
+            page_tables = getattr(job_context, 'page_tables', []) or []
+            
+            # 确保 page_tables 与 page_texts 长度一致
+            while len(page_tables) < len(page_texts):
+                page_tables.append([])
+            
+            return build_document(
+                path=job_context.pdf_path,
+                page_texts=page_texts,
+                page_tables=page_tables,
+                filesize=getattr(job_context, 'filesize', 0) or job_context.meta.get("filesize", 0)
+            )
         
-        # 创建文档对象
-        document = Document(
-            pdf_path=job_context.pdf_path,
-            tables=tables,
-            ocr_text=job_context.ocr_text or "",
-            pages=job_context.pages or 1
+        # 2. 回退：尝试从 ocr_text 和 tables 恢复（兼容旧数据）
+        if job_context.ocr_text and job_context.tables:
+            logger.info(f"Restoring document from JobContext ocr_text for job {job_context.job_id}")
+            
+            page_texts = []
+            page_tables = []
+            
+            # 将 ocr_text 按页拆分（如果可能）
+            if job_context.pages > 0 and "\n\n" in job_context.ocr_text:
+                parts = job_context.ocr_text.split("\n\n")
+                if len(parts) == job_context.pages:
+                    page_texts = parts
+            
+            # 如果没拆成，就全部放进第一页
+            if not page_texts:
+                page_texts = [job_context.ocr_text]
+            
+            # 恢复表格数据
+            num_pages = job_context.pages or len(job_context.tables) or 1
+            temp_tables = [[] for _ in range(num_pages)]
+            
+            for item in job_context.tables:
+                p_idx = item.get("page", 1) - 1
+                if 0 <= p_idx < len(temp_tables):
+                    temp_tables[p_idx] = item.get("tables", [])
+            
+            page_tables = temp_tables
+            
+            return build_document(
+                path=job_context.pdf_path,
+                page_texts=page_texts,
+                page_tables=page_tables,
+                filesize=job_context.meta.get("filesize", 0)
+            )
+
+        # 2. 如果 job_context 中没有数据，则实际解析 PDF 文件
+        logger.warning(f"JobContext missing data, re-parsing PDF: {job_context.pdf_path}")
+        import pdfplumber
+        import os
+        
+        page_texts = []
+        page_tables = []
+        filesize = 0
+        
+        try:
+            if os.path.exists(job_context.pdf_path):
+                filesize = os.path.getsize(job_context.pdf_path)
+                with pdfplumber.open(job_context.pdf_path) as pdf:
+                    job_context.pages = len(pdf.pages)
+                    for page in pdf.pages:
+                        page_texts.append(page.extract_text() or "")
+                        # ✅ 修复：使用更稳健的表格提取策略，与 api/main.py 保持一致
+                        tables = []
+                        try:
+                            # 尝试线策略
+                            rows = page.extract_tables(table_settings={
+                                "vertical_strategy": "lines",
+                                "horizontal_strategy": "lines",
+                                "intersection_tolerance": 3,
+                            }) or []
+                            tables.extend(rows)
+                        except:
+                            pass
+                        
+                        if not tables:
+                            # 退填默认策略
+                            tables = page.extract_tables() or []
+                            
+                        page_tables.append(tables)
+            else:
+                logger.error(f"PDF文件不存在: {job_context.pdf_path}")
+        except Exception as e:
+            logger.error(f"解析PDF文件失败: {e}")
+            import traceback
+            logger.error(f"解析错误详情: {traceback.format_exc()}")
+        
+        return build_document(
+            path=job_context.pdf_path,
+            page_texts=page_texts,
+            page_tables=page_tables,
+            filesize=filesize
         )
-        
-        return document
     
     async def _execute_rule(self, 
                            rule: Dict[str, Any],
@@ -199,7 +313,11 @@ class EngineRuleRunner:
             )
             
         except Exception as e:
-            # 分析失败原因
+            # 分析失败原因，并添加详细日志
+            import traceback
+            logger.error(f"Rule {rule_id} execution failed: {e}")
+            logger.error(f"Exception details: {traceback.format_exc()}")
+            
             why_not = self._analyze_failure_reason(e, rule_id)
             elapsed_ms = int((time.time() - start_time) * 1000)
             
@@ -219,7 +337,7 @@ class EngineRuleRunner:
         
         # 提取证据信息
         evidence = {
-            "text_snippet": getattr(issue, 'evidence_text', '') or getattr(issue, 'description', ''),
+            "text": getattr(issue, 'evidence_text', '') or getattr(issue, 'description', '') or issue.message,
         }
         
         # 如果有坐标信息，添加 bbox

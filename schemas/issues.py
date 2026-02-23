@@ -124,8 +124,11 @@ class JobContext(BaseModel):
     job_id: str = Field(..., description="任务ID")
     pdf_path: str = Field(..., description="PDF文件路径")
     ocr_text: Optional[str] = Field(None, description="OCR提取的文本")
+    page_texts: List[str] = Field(default_factory=list, description="每页提取的文本")
+    page_tables: List[Any] = Field(default_factory=list, description="每页提取的表格")
     tables: List[Dict[str, Any]] = Field(default_factory=list, description="表格数据")
     pages: int = Field(default=0, description="页数")
+    filesize: int = Field(default=0, description="文件大小")
     meta: Dict[str, Any] = Field(default_factory=dict, description="其他元数据")
 
 

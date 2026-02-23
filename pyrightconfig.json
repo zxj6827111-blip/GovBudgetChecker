@@ -1,0 +1,20 @@
+{
+  "pythonPlatform": "Windows",
+  "pythonVersion": "3.11",
+  "venvPath": ".",
+  "venv": ".venv",
+  "typeCheckingMode": "basic",
+  "exclude": [
+    "**/node_modules",
+    "**/.git",
+    "**/.venv",
+    "app",
+    "e2e"
+  ],
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false,
+  "reportUnknownMemberType": false,
+  "reportUnknownVariableType": false,
+  "reportUnknownArgumentType": false,
+  "stubPath": "./typings"
+}

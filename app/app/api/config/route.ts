@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
+import { backendAuthHeaders } from "@/lib/backendAuth";
 
 export async function GET() {
   const start = Date.now();
   try {
-    const res = await fetch(`${apiBase}/api/config`, { cache: "no-store" });
+    const res = await fetch(`${apiBase}/api/config`, {
+      cache: "no-store",
+      headers: backendAuthHeaders(),
+    });
     const data = await res.json();
 
     // 主后端响应耗时

@@ -64,6 +64,62 @@
 - Python 3.8+
 - Node.js 16+
 - npm 或 yarn
+- Docker (可选，用于 PostgreSQL)
+
+### 🐘 PostgreSQL 数据库设置（可选）
+
+系统支持使用 PostgreSQL 存储分析任务和结果。如果不配置数据库，系统将使用文件系统存储。
+
+#### 快速启动
+
+```bash
+# 1. 启动 PostgreSQL 容器（首次自动创建 fiscal_db 数据库）
+docker compose up -d
+
+# 2. 等待容器健康状态
+docker compose ps
+
+# 3. 复制环境变量模板
+cp .env.example .env
+
+# 4. 安装 Python 依赖（包含 asyncpg）
+pip install -r requirements.txt
+
+# 5. 启动后端（自动执行迁移）
+python -m uvicorn api.main:app --reload --port 8000
+```
+
+#### 验证数据库
+
+**首次启动时**，日志应显示：
+```
+INFO: Connecting to PostgreSQL with schema: public
+INFO: Schema 'public' ready, search_path configured
+INFO: Applying migration: 2026-01-14_0001_init
+INFO: ✓ Migration 2026-01-14_0001_init applied successfully
+INFO: ✓ Database initialization completed
+```
+
+**二次启动时**，日志应显示（不重复执行迁移）：
+```
+INFO: Found 1 previously applied migrations
+INFO: ✓ Database is up to date, no migrations needed
+```
+
+#### 检查迁移状态
+
+```bash
+# API 端点
+curl http://localhost:8000/api/migrations/status
+
+# 直接连接数据库
+docker compose exec postgres psql -U fiscal_user -d fiscal_db -c "SELECT * FROM schema_migrations;"
+```
+
+#### 未来扩展
+
+- 修改 `.env` 中的 `PG_SCHEMA=fiscal` 可使用独立 schema
+- 年报系统可共用同一 PostgreSQL 实例，使用不同数据库或 schema
 
 ### 后端部署
 
