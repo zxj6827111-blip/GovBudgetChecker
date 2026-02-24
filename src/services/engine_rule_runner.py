@@ -7,8 +7,8 @@ import time
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
-from schemas.issues import JobContext, AnalysisConfig, IssueItem
-from engine.rules_v33 import (
+from src.schemas.issues import JobContext, AnalysisConfig, IssueItem
+from src.engine.rules_v33 import (
     ALL_RULES, build_document, Issue, Document
 )
 
@@ -51,7 +51,7 @@ class EngineRuleRunner:
             List[IssueItem]: 检查结果列表
         """
         # 直接使用ALL_RULES中的规则，避免规则匹配失败
-        from engine.rules_v33 import ALL_RULES
+        from src.engine.rules_v33 import ALL_RULES
         
         logger.info(f"Using {len(ALL_RULES)} rules from ALL_RULES for job {job_context.job_id}")
         
@@ -451,7 +451,7 @@ async def run_engine_rules(job_context: JobContext,
                           config: Optional[AnalysisConfig] = None) -> List[IssueItem]:
     """便捷的引擎规则运行函数"""
     if config is None:
-        from schemas.issues import AnalysisConfig
+        from src.schemas.issues import AnalysisConfig
         config = AnalysisConfig()
     
     runner = EngineRuleRunner()

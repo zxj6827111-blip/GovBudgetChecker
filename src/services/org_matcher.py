@@ -5,8 +5,8 @@
 import re
 import logging
 from typing import Optional, Tuple, List
-from schemas.organization import Organization
-from services.org_storage import get_org_storage
+from src.schemas.organization import Organization
+from src.services.org_storage import get_org_storage
 
 logger = logging.getLogger(__name__)
 

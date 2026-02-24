@@ -222,3 +222,19 @@
 ---
 
 **注意**: 本更新日志将持续更新，记录系统的所有重要变更。如有疑问，请查看对应版本的详细文档或联系开发团队。
+
+## [Unreleased] - 2026-02-23
+
+### Refactor
+- Removed legacy compatibility shim packages: `services/`, `engine/`, `providers/`, `schemas/`.
+- Standardized backend imports on `src.*` only.
+- Updated type-check command in `Makefile` to `mypy api src tests`.
+
+### Tests
+- Replaced shim-compat test with import policy guard:
+  - `tests/test_import_path_policy.py`
+  - Ensures no legacy import roots are reintroduced.
+
+### Docs
+- Updated migration notes in `docs/SRC_LAYOUT_MIGRATION.md` for Phase 6 cleanup status.
+- Updated README import-path convention section to reflect shim removal.

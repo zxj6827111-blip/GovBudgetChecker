@@ -5,7 +5,7 @@ AI规则运行器
 import logging
 import time
 from typing import List, Dict, Any
-from schemas.issues import JobContext, IssueItem
+from src.schemas.issues import JobContext, IssueItem
 
 logger = logging.getLogger(__name__)
 

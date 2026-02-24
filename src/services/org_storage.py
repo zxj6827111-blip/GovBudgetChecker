@@ -6,16 +6,23 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import List, Optional, Dict, Any
-from schemas.organization import (
-    Organization, OrganizationStore, OrganizationTree, 
-    JobOrganizationLink, OrganizationLevel, ImportResult
+from typing import Any, Dict, List, Optional
+
+from src.schemas.organization import (
+    ImportResult,
+    JobOrganizationLink,
+    Organization,
+    OrganizationLevel,
+    OrganizationStore,
+    OrganizationTree,
 )
+from src.services.org_hierarchy import validate_organization_hierarchy
 
 logger = logging.getLogger(__name__)
 
 # 数据文件路径
-DATA_DIR = Path(__file__).parent.parent / "data"
+_DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+DATA_DIR = Path(os.getenv("ORG_DATA_DIR", _DEFAULT_DATA_DIR)).resolve()
 ORG_FILE = DATA_DIR / "organizations.json"
 LINKS_FILE = DATA_DIR / "job_org_links.json"
 
@@ -98,6 +105,26 @@ class OrganizationStorage:
     def get_children(self, parent_id: Optional[str]) -> List[Organization]:
         """获取子组织"""
         return [org for org in self._organizations if org.parent_id == parent_id]
+
+    def get_departments(self) -> List[Organization]:
+        """获取所有部门（按名称排序）"""
+        departments = [
+            org for org in self._organizations if org.level == OrganizationLevel.DEPARTMENT
+        ]
+        return sorted(departments, key=lambda org: org.name)
+
+    def get_units_by_department(self, dept_id: str) -> List[Organization]:
+        """获取指定部门下的直属单位（按名称排序）"""
+        department = self.get_by_id(dept_id)
+        if department is None or department.level != OrganizationLevel.DEPARTMENT:
+            return []
+
+        units = [
+            org
+            for org in self._organizations
+            if org.parent_id == dept_id and org.level == OrganizationLevel.UNIT
+        ]
+        return sorted(units, key=lambda org: org.name)
     
     def add(self, org: Organization) -> Organization:
         """添加组织"""
@@ -156,9 +183,6 @@ class OrganizationStorage:
     
     def get_tree(self) -> List[OrganizationTree]:
         """获取组织树"""
-        # 构建ID到组织的映射
-        org_map = {org.id: org for org in self._organizations}
-        
         # 统计每个组织的任务数和问题数
         job_counts = {}
         issue_counts = {}
@@ -193,7 +217,13 @@ class OrganizationStorage:
     
     # ==================== 任务关联 ====================
     
-    def link_job(self, job_id: str, org_id: str, match_type: str = "manual", confidence: float = 1.0) -> JobOrganizationLink:
+    def link_job(
+        self,
+        job_id: str,
+        org_id: str,
+        match_type: str = "manual",
+        confidence: float = 1.0,
+    ) -> JobOrganizationLink:
         """关联任务到组织"""
         # 检查是否已存在
         for link in self._links:
@@ -246,62 +276,224 @@ class OrganizationStorage:
             return True
         return False
     
+    def validate_hierarchy(self) -> Dict[str, Any]:
+        """校验组织层级关系。"""
+
+        result = validate_organization_hierarchy(self._organizations)
+        return result.to_dict()
+
     # ==================== 导入 ====================
-    
-    def import_from_list(self, data: List[Dict[str, Any]], clear_existing: bool = False) -> ImportResult:
-        """从列表导入组织"""
+
+    @staticmethod
+    def _first_non_empty(item: Dict[str, Any], keys: List[str]) -> str:
+        for key in keys:
+            if key not in item:
+                continue
+            value = item.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return ""
+
+    def _expand_import_item(self, item: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Normalize one import row into one or more records.
+
+        Supported patterns:
+        1. Flat record: `name + level (+ parent)`
+        2. Department + unit record: `department_name + unit_name`
+        """
+
+        level = self._first_non_empty(item, ["level", "层级"]).lower()
+        code = self._first_non_empty(item, ["code", "代码"])
+        parent_name = self._first_non_empty(item, ["parent", "上级", "parent_name", "父级"])
+
+        if level:
+            name = self._first_non_empty(
+                item,
+                [
+                    "name",
+                    "名称",
+                    "单位名称",
+                    "组织名称",
+                    "department_name",
+                    "department",
+                    "部门",
+                    "部门名称",
+                    "unit_name",
+                    "unit",
+                    "单位",
+                ],
+            )
+            if not name:
+                return []
+            return [
+                {
+                    "name": name,
+                    "level": level,
+                    "parent_name": parent_name,
+                    "code": code,
+                }
+            ]
+
+        department_name = self._first_non_empty(
+            item,
+            [
+                "department_name",
+                "department",
+                "部门",
+                "部门名称",
+                "所属部门",
+            ],
+        )
+        unit_name = self._first_non_empty(
+            item,
+            [
+                "unit_name",
+                "unit",
+                "单位",
+                "单位名称",
+                "name",
+                "名称",
+            ],
+        )
+
+        records: List[Dict[str, str]] = []
+        if department_name:
+            records.append(
+                {
+                    "name": department_name,
+                    "level": OrganizationLevel.DEPARTMENT,
+                    "parent_name": "",
+                    "code": "",
+                }
+            )
+
+        if unit_name:
+            unit_parent = parent_name or department_name
+            records.append(
+                {
+                    "name": unit_name,
+                    "level": OrganizationLevel.UNIT,
+                    "parent_name": unit_parent,
+                    "code": code,
+                }
+            )
+        return records
+
+    def _resolve_parent_id(self, parent_name: str) -> Optional[str]:
+        if not parent_name:
+            return None
+
+        candidates = [org for org in self._organizations if org.name == parent_name]
+        if not candidates:
+            return None
+
+        priority = {
+            OrganizationLevel.DEPARTMENT: 0,
+            OrganizationLevel.DISTRICT: 1,
+            OrganizationLevel.CITY: 2,
+            OrganizationLevel.UNIT: 3,
+        }
+        candidates.sort(key=lambda org: priority.get(org.level, 99))
+        return candidates[0].id
+
+    def import_from_list(
+        self,
+        data: List[Dict[str, Any]],
+        clear_existing: bool = False,
+    ) -> ImportResult:
+        """从列表导入组织，支持 `department/unit + parent` 模板。"""
+
+        original_organizations = [org.model_copy(deep=True) for org in self._organizations]
         if clear_existing:
             self._organizations = []
-        
-        result = ImportResult(success=True, total=len(data))
-        
+
+        expanded_rows: List[Dict[str, str]] = []
         for item in data:
-            try:
-                # 提取字段
-                name = item.get("name") or item.get("名称") or item.get("单位名称", "")
-                level = item.get("level") or item.get("层级", "unit")
-                parent_name = item.get("parent") or item.get("上级") or item.get("所属部门", "")
-                code = item.get("code") or item.get("代码", "")
-                
+            if not isinstance(item, dict):
+                continue
+            expanded_rows.extend(self._expand_import_item(item))
+
+        result = ImportResult(success=True, total=len(data))
+        pending: List[Dict[str, str]] = expanded_rows.copy()
+        pass_count = 0
+        max_passes = 5
+
+        allowed_levels = {
+            OrganizationLevel.CITY,
+            OrganizationLevel.DISTRICT,
+            OrganizationLevel.DEPARTMENT,
+            OrganizationLevel.UNIT,
+        }
+
+        while pending and pass_count < max_passes:
+            pass_count += 1
+            progressed = False
+            next_pending: List[Dict[str, str]] = []
+
+            for row in pending:
+                name = row.get("name", "").strip()
+                level = row.get("level", "").strip().lower()
+                parent_name = row.get("parent_name", "").strip()
+                code = row.get("code", "").strip()
+
                 if not name:
-                    result.errors.append(f"缺少名称: {item}")
+                    result.errors.append(f"缺少名称: {row}")
                     result.skipped += 1
                     continue
-                
-                # 查找父组织
-                parent_id = None
-                if parent_name:
-                    for org in self._organizations:
-                        if org.name == parent_name:
-                            parent_id = org.id
-                            break
-                
-                # 生成ID
+                if level not in allowed_levels:
+                    result.errors.append(f"无效层级 '{level}': {row}")
+                    result.skipped += 1
+                    continue
+
+                parent_id = self._resolve_parent_id(parent_name)
+                if parent_name and parent_id is None:
+                    next_pending.append(row)
+                    continue
+
                 org_id = Organization.generate_id(name, level, parent_id)
-                
-                # 检查是否已存在
                 if self.get_by_id(org_id):
                     result.skipped += 1
+                    progressed = True
                     continue
-                
-                # 创建组织
-                org = Organization(
-                    id=org_id,
-                    name=name,
-                    level=level,
-                    parent_id=parent_id,
-                    code=code,
-                    keywords=[name]  # 使用名称作为匹配关键词
-                )
+
+                try:
+                    org = Organization(
+                        id=org_id,
+                        name=name,
+                        level=level,
+                        parent_id=parent_id,
+                        code=code,
+                        keywords=[name],
+                    )
+                except Exception as e:
+                    result.errors.append(f"导入失败: {row}, 错误: {e}")
+                    result.skipped += 1
+                    continue
+
                 self._organizations.append(org)
                 result.imported += 1
-                
-            except Exception as e:
-                result.errors.append(f"导入失败: {item}, 错误: {str(e)}")
-                result.skipped += 1
-        
+                progressed = True
+
+            pending = next_pending
+            if not progressed:
+                break
+
+        for row in pending:
+            result.errors.append(f"父级未找到，无法导入: {row}")
+            result.skipped += 1
+
+        validation = validate_organization_hierarchy(self._organizations)
+        if validation.errors:
+            self._organizations = original_organizations
+            result.errors.extend([f"层级校验失败: {msg}" for msg in validation.errors])
+            result.success = False
+            return result
+
         self._save_organizations()
-        result.success = result.imported > 0
+        result.success = result.imported > 0 and not result.errors
         return result
 
 

@@ -7,7 +7,7 @@ from typing import List, Dict, Tuple, Set
 from difflib import SequenceMatcher
 import re
 
-from schemas.issues import IssueItem, MergedSummary, ConflictItem, AnalysisConfig
+from src.schemas.issues import IssueItem, MergedSummary, ConflictItem, AnalysisConfig
 
 logger = logging.getLogger(__name__)
 

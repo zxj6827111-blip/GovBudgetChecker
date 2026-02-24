@@ -10,8 +10,8 @@ from typing import List, Dict, Any, Optional
 import traceback
 import re
 
-from schemas.issues import IssueItem, JobContext, AnalysisConfig
-from engine.ai.extractor_client import ExtractorClient  # 复用现有AI客户端
+from src.schemas.issues import IssueItem, JobContext, AnalysisConfig
+from src.engine.ai.extractor_client import ExtractorClient  # 复用现有AI客户端
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,7 @@ import yaml
 from typing import Dict, Any, Optional
 from pathlib import Path
 
-from schemas.issues import AnalysisConfig
+from src.schemas.issues import AnalysisConfig
 
 
 class Settings:

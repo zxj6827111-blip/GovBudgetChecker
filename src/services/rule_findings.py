@@ -7,9 +7,9 @@ from typing import List, Dict, Any, Optional
 import traceback
 import time
 
-from schemas.issues import IssueItem, JobContext, AnalysisConfig
-from engine.rules_v33 import ALL_RULES, build_document, order_and_number_issues  # 导入规则相关功能
-from engine.pipeline import run_rules, build_issues_payload  # 导入流水线功能
+from src.schemas.issues import IssueItem, JobContext, AnalysisConfig
+from src.engine.rules_v33 import ALL_RULES, build_document, order_and_number_issues  # 导入规则相关功能
+from src.engine.pipeline import run_rules, build_issues_payload  # 导入流水线功能
 
 logger = logging.getLogger(__name__)
 

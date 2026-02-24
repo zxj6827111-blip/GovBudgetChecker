@@ -15,10 +15,10 @@ from pathlib import Path
 
 import yaml
 
-from providers import LLMProvider, LLMError, LLMErrorType, LLMResponse
-from providers.zhipu import ZhipuProvider
-from providers.doubao import DoubaoProvider
-from providers.openai_compat import OpenAICompatProvider
+from src.providers import LLMProvider, LLMError, LLMErrorType, LLMResponse
+from src.providers.zhipu import ZhipuProvider
+from src.providers.doubao import DoubaoProvider
+from src.providers.openai_compat import OpenAICompatProvider
 
 
 logger = logging.getLogger(__name__)

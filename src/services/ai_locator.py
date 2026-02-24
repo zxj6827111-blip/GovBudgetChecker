@@ -6,8 +6,8 @@ import logging
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
-from schemas.issues import JobContext, IssueItem
-from services.ai_client import AIClient
+from src.schemas.issues import JobContext, IssueItem
+from src.services.ai_client import AIClient
 
 logger = logging.getLogger(__name__)
 

@@ -10,12 +10,12 @@ from dataclasses import dataclass
 from pathlib import Path
 import json
 
-from schemas.issues import JobContext, AnalysisConfig, DualModeResponse, MergedSummary, IssueItem
-from services.ai_findings import AIFindingsService
-from services.engine_rule_runner import EngineRuleRunner
-from services.merge_findings import merge_findings
+from src.schemas.issues import JobContext, AnalysisConfig, DualModeResponse, MergedSummary, IssueItem
+from src.services.ai_findings import AIFindingsService
+from src.services.engine_rule_runner import EngineRuleRunner
+from src.services.merge_findings import merge_findings
 try:
-    from services.ai_locator import AILocator
+    from src.services.ai_locator import AILocator
 except Exception:
     AILocator = None
 
