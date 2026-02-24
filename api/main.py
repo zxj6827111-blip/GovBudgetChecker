@@ -137,6 +137,10 @@ async def _run_pipeline(job_dir: Path) -> None:
         use_local_rules = True
         use_ai_assist = True
         mode = "legacy"  # 默认为旧模式
+        fiscal_year = None
+        doc_type = None
+        report_year = None
+        report_kind = "unknown"
         
         if status_file.exists():
             try:
@@ -144,6 +148,11 @@ async def _run_pipeline(job_dir: Path) -> None:
                 use_local_rules = status_data.get("use_local_rules", True)
                 use_ai_assist = status_data.get("use_ai_assist", True)
                 mode = status_data.get("mode", "legacy")
+                fiscal_year = status_data.get("fiscal_year")
+                doc_type = status_data.get("doc_type")
+                report_year = runtime.parse_report_year(
+                    status_data.get("report_year") or fiscal_year
+                )
             except:
                 pass
         
@@ -164,6 +173,10 @@ async def _run_pipeline(job_dir: Path) -> None:
         })
 
         pdf_path = _find_first_pdf(job_dir)
+        report_kind = runtime.normalize_report_kind(
+            str(doc_type) if doc_type is not None else None,
+            pdf_path.name,
+        )
         started = time.time()
 
         # 读取 PDF -> 文本/表格
@@ -256,6 +269,10 @@ async def _run_pipeline(job_dir: Path) -> None:
                     "use_ai_assist": use_ai_assist,
                     "mode": mode,
                     "dual_mode_enabled": dual_mode_enabled,
+                    "fiscal_year": fiscal_year,
+                    "doc_type": doc_type,
+                    "report_year": report_year,
+                    "report_kind": report_kind,
                     "elapsed_ms": dual_result.meta.get("elapsed_ms", {}),
                     "tokens": dual_result.meta.get("tokens", {})
                 }
@@ -420,6 +437,10 @@ async def _run_pipeline(job_dir: Path) -> None:
                     "use_ai_assist": use_ai_assist,
                     "mode": mode,
                     "dual_mode_enabled": dual_mode_enabled,
+                    "fiscal_year": fiscal_year,
+                    "doc_type": doc_type,
+                    "report_year": report_year,
+                    "report_kind": report_kind,
                     "provider_stats": provider_stats
                 }
             }
@@ -434,6 +455,10 @@ async def _run_pipeline(job_dir: Path) -> None:
             "use_ai_assist": use_ai_assist,
             "mode": mode,
             "dual_mode_enabled": dual_mode_enabled,
+            "fiscal_year": fiscal_year,
+            "doc_type": doc_type,
+            "report_year": report_year,
+            "report_kind": report_kind,
             "stage": "完成"
         }
         _safe_write(job_dir, payload)
@@ -444,6 +469,10 @@ async def _run_pipeline(job_dir: Path) -> None:
             "status": "error",
             "error": str(e),
             "ts": time.time(),
+            "fiscal_year": fiscal_year,
+            "doc_type": doc_type,
+            "report_year": report_year,
+            "report_kind": report_kind,
             "provider_stats": provider_stats,
         })
 

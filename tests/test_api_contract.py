@@ -37,7 +37,7 @@ def test_document_upload_and_job_alias_routes():
 
     upload = client.post(
         "/api/documents/upload",
-        files={"file": ("sample.pdf", io.BytesIO(_pdf_bytes()), "application/pdf")},
+        files={"file": ("sample_budget_2025.pdf", io.BytesIO(_pdf_bytes()), "application/pdf")},
     )
     assert upload.status_code == 200
     payload = upload.json()
@@ -47,9 +47,18 @@ def test_document_upload_and_job_alias_routes():
     assert jobs.status_code == 200
     assert any(item["job_id"] == job_id for item in jobs.json())
 
-    run = client.post(f"/api/documents/{job_id}/run", json={"mode": "legacy"})
+    run = client.post(
+        f"/api/documents/{job_id}/run",
+        json={"mode": "legacy", "doc_type": "dept_budget", "fiscal_year": "2025"},
+    )
     assert run.status_code == 200
     assert run.json()["status"] == "started"
+
+    jobs_after_run = client.get("/api/jobs")
+    assert jobs_after_run.status_code == 200
+    uploaded_job = next(item for item in jobs_after_run.json() if item["job_id"] == job_id)
+    assert uploaded_job["report_kind"] == "budget"
+    assert uploaded_job["report_year"] == 2025
 
     status = client.get(f"/api/jobs/{job_id}/status")
     assert status.status_code == 200
@@ -70,15 +79,28 @@ def test_organization_association_flow():
     upload = client.post(
         "/api/documents/upload",
         data={"org_unit_id": org_id},
-        files={"file": ("linked.pdf", io.BytesIO(_pdf_bytes()), "application/pdf")},
+        files={"file": ("linked_final_2026.pdf", io.BytesIO(_pdf_bytes()), "application/pdf")},
     )
     assert upload.status_code == 200
     job_id = upload.json()["job_id"]
 
     jobs = client.get(f"/api/organizations/{org_id}/jobs")
     assert jobs.status_code == 200
-    job_ids = [item["job_id"] for item in jobs.json()["jobs"]]
+    jobs_payload = jobs.json()["jobs"]
+    job_ids = [item["job_id"] for item in jobs_payload]
     assert job_id in job_ids
+
+    linked_job = next(item for item in jobs_payload if item["job_id"] == job_id)
+    assert "issue_total" in linked_job
+    assert "issue_error" in linked_job
+    assert "issue_warn" in linked_job
+    assert "issue_info" in linked_job
+    assert "has_issues" in linked_job
+    assert "top_issue_rules" in linked_job
+    assert "report_year" in linked_job
+    assert linked_job["report_year"] == 2026
+    assert "report_kind" in linked_job
+    assert linked_job["report_kind"] == "final"
 
 
 def test_department_unit_endpoints_with_legacy_endpoints_compatible():
@@ -126,3 +148,49 @@ def test_department_unit_endpoints_with_legacy_endpoints_compatible():
 
     not_found_resp = client.get("/api/departments/not-exist-dept/units")
     assert not_found_resp.status_code == 404
+
+
+def test_organization_jobs_scope_controls_child_inclusion():
+    client = TestClient(app)
+
+    create_dept = client.post(
+        "/api/organizations",
+        json={"name": f"范围测试部门-{uuid.uuid4().hex[:8]}", "level": "department"},
+    )
+    assert create_dept.status_code == 200
+    dept_id = create_dept.json()["id"]
+
+    create_unit = client.post(
+        "/api/organizations",
+        json={
+            "name": f"范围测试单位-{uuid.uuid4().hex[:8]}",
+            "level": "unit",
+            "parent_id": dept_id,
+        },
+    )
+    assert create_unit.status_code == 200
+    unit_id = create_unit.json()["id"]
+
+    upload = client.post(
+        "/api/documents/upload",
+        data={"org_unit_id": unit_id},
+        files={"file": ("scope.pdf", io.BytesIO(_pdf_bytes()), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    job_id = upload.json()["job_id"]
+
+    # Default scope should return only jobs directly linked to this organization.
+    dept_direct = client.get(f"/api/organizations/{dept_id}/jobs")
+    assert dept_direct.status_code == 200
+    dept_direct_job_ids = [item["job_id"] for item in dept_direct.json()["jobs"]]
+    assert job_id not in dept_direct_job_ids
+
+    # Explicit subtree scope should include jobs linked to child units.
+    dept_with_children = client.get(
+        f"/api/organizations/{dept_id}/jobs?include_children=true"
+    )
+    assert dept_with_children.status_code == 200
+    dept_with_children_job_ids = [
+        item["job_id"] for item in dept_with_children.json()["jobs"]
+    ]
+    assert job_id in dept_with_children_job_ids

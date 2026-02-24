@@ -30,6 +30,12 @@ export default function OrganizationTree({
   const [showImporter, setShowImporter] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
+  // Create/Edit modal state
+  const [modalType, setModalType] = useState<"create" | "edit" | null>(null);
+  const [modalOrgId, setModalOrgId] = useState<string | null>(null);
+  const [modalInputVal, setModalInputVal] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const collectDepartmentsFromTree = useCallback((nodes: Organization[]): Organization[] => {
     const result: Organization[] = [];
     const walk = (items: Organization[]) => {
@@ -118,6 +124,66 @@ export default function OrganizationTree({
     }
   };
 
+  const handleCreateOrg = async () => {
+    if (!modalInputVal.trim()) return;
+    setIsSubmitting(true);
+    try {
+      const res = await fetch("/api/organizations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          name: modalInputVal.trim(),
+          level: "department"
+        }),
+      });
+      if (!res.ok) throw new Error("创建失败");
+      setModalType(null);
+      setModalInputVal("");
+      fetchDepartments();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleUpdateOrg = async () => {
+    if (!modalOrgId || !modalInputVal.trim()) return;
+    setIsSubmitting(true);
+    try {
+      const res = await fetch(`/api/organizations/${modalOrgId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: modalInputVal.trim() }),
+      });
+      if (!res.ok) throw new Error("更新失败");
+      setModalType(null);
+      setModalOrgId(null);
+      setModalInputVal("");
+      fetchDepartments();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteOrg = async (id: string, name: string) => {
+    if (!confirm(`确定要删除部门 "${name}" 吗？此操作将删除其下的所有单位和关联！`)) return;
+    try {
+      const res = await fetch(`/api/organizations/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("删除失败");
+      if (selectedOrgId === id) {
+        onSelect(null);
+      }
+      fetchDepartments();
+    } catch (e: any) {
+      alert(e.message);
+    }
+  };
+
   const filteredDepartments = departments.filter((item) =>
     item.name.toLowerCase().includes(searchQuery.trim().toLowerCase())
   );
@@ -127,25 +193,60 @@ export default function OrganizationTree({
     return (
       <div key={node.id}>
         <div
-          className={`flex items-center py-2 px-3 m-1 rounded-md cursor-pointer transition-all duration-200 group ${
+          className={`flex items-center justify-between py-3 px-4 m-1.5 rounded-xl cursor-pointer transition-all duration-300 group ${
             isSelected
-              ? "bg-indigo-600 shadow-md shadow-indigo-500/20 text-white font-medium"
-              : "hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300"
+              ? "bg-indigo-50/80 shadow-sm border border-indigo-100"
+              : "hover:bg-white hover:shadow-sm border border-transparent"
           }`}
           onClick={() => onSelect(node)}
           title={node.name}
         >
-          <span className="truncate flex-1 text-sm tracking-tight">{node.name}</span>
+          <div className="flex items-center space-x-3 overflow-hidden">
+            <div className={`w-1.5 h-6 rounded-full transition-all duration-300 ${isSelected ? 'bg-indigo-600' : 'bg-transparent group-hover:bg-gray-200'}`}></div>
+            <span className={`truncate text-sm tracking-tight ${isSelected ? 'text-indigo-900 font-semibold' : 'text-gray-700 font-medium'}`}>{node.name}</span>
+          </div>
 
-          {!isSelected && (
-            <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded border bg-blue-50 text-blue-600 border-blue-100">
-              部门
-            </span>
-          )}
+          <div className="flex items-center space-x-2 flex-shrink-0">
+             {node.job_count > 0 && (
+               <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${
+                 node.issue_count > 0 
+                  ? 'bg-red-50 text-red-600 border border-red-100' // Has issues
+                  : 'bg-green-50 text-green-600 border border-green-100' // All good
+               }`}>
+                 {node.issue_count > 0 ? `待处理: ${node.issue_count}` : '正常: 0'}
+               </span>
+             )}
 
-          {node.job_count > 0 && (
-            <span className="text-xs text-gray-400 ml-2">{node.job_count}任务</span>
-          )}
+            {/* Action buttons (Edit & Delete) shown on hover */}
+            <div className={`hidden group-hover:flex items-center space-x-1 ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity`}>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setModalType("edit");
+                  setModalOrgId(node.id);
+                  setModalInputVal(node.name);
+                }}
+                className="text-gray-400 hover:text-indigo-600 p-1 rounded-md hover:bg-indigo-50 transition-colors"
+                title="编辑"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                </svg>
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDeleteOrg(node.id, node.name);
+                }}
+                className="text-gray-400 hover:text-red-500 p-1 rounded-md hover:bg-red-50 transition-colors"
+                title="删除"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -154,7 +255,21 @@ export default function OrganizationTree({
   return (
     <div className="h-full flex flex-col">
       <div className="p-3 border-b border-gray-200 flex items-center justify-between">
-        <h3 className="font-semibold text-gray-700">部门视图</h3>
+        <h3 className="font-semibold text-gray-700 flex items-center">
+          部门视图
+          <button
+            onClick={() => {
+              setModalType("create");
+              setModalInputVal("");
+            }}
+            className="ml-2 p-1 text-gray-400 hover:text-indigo-600 hover:bg-gray-100 rounded"
+            title="新建部门"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+          </button>
+        </h3>
         <div className="flex space-x-2">
           <button
             onClick={() => onSelect(null)}
@@ -232,6 +347,45 @@ export default function OrganizationTree({
                 className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded"
               >
                 取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modalType && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-80 shadow-xl">
+            <h3 className="text-lg font-semibold mb-4">
+              {modalType === "create" ? "新建部门" : "修改部门名称"}
+            </h3>
+            <input
+              type="text"
+              autoFocus
+              value={modalInputVal}
+              onChange={(e) => setModalInputVal(e.target.value)}
+              placeholder="请输入部门名称..."
+              className="w-full border border-gray-300 rounded p-2 mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  modalType === "create" ? handleCreateOrg() : handleUpdateOrg();
+                }
+              }}
+            />
+            <div className="flex justify-end space-x-2">
+              <button
+                onClick={() => setModalType(null)}
+                className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded"
+                disabled={isSubmitting}
+              >
+                取消
+              </button>
+              <button
+                onClick={modalType === "create" ? handleCreateOrg : handleUpdateOrg}
+                disabled={!modalInputVal.trim() || isSubmitting}
+                className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {isSubmitting ? "提交中..." : "确定"}
               </button>
             </div>
           </div>

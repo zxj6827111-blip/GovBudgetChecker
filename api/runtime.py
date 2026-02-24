@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -91,6 +92,46 @@ def read_json_file(path: Path, default: Optional[Dict[str, Any]] = None) -> Dict
     return default
 
 
+def parse_report_year(raw: Any) -> Optional[int]:
+    """Parse year from arbitrary value and return 4-digit year."""
+    if raw is None:
+        return None
+    try:
+        year = int(str(raw).strip())
+    except Exception:
+        return None
+    if 2000 <= year <= 2099:
+        return year
+    return None
+
+
+def normalize_report_kind(doc_type: Optional[str], filename: str = "") -> str:
+    """Normalize report type to budget/final/unknown."""
+    text = (doc_type or "").strip()
+    text_lower = text.lower()
+    name_lower = (filename or "").lower()
+    filename_text = filename or ""
+
+    if (
+        "budget" in text_lower
+        or "预算" in text
+        or "budget" in name_lower
+        or "预算" in filename_text
+    ):
+        return "budget"
+    if (
+        "final" in text_lower
+        or "settlement" in text_lower
+        or "accounts" in text_lower
+        or "决算" in text
+        or "final" in name_lower
+        or "settlement" in name_lower
+        or "决算" in filename_text
+    ):
+        return "final"
+    return "unknown"
+
+
 def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     """Build a job summary payload for list APIs."""
     status_file = job_dir / "status.json"
@@ -105,12 +146,142 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     progress = status_data.get("progress", 0)
     status = status_data.get("status", "unknown")
     stage = status_data.get("stage")
+    doc_type = str(status_data.get("doc_type") or "").strip()
+    report_kind_raw = str(status_data.get("report_kind") or "").strip().lower()
     ts = status_data.get("ts")
     if ts is None:
         try:
             ts = job_dir.stat().st_mtime
         except Exception:
             ts = time.time()
+    report_year: Optional[int] = None
+    try:
+        for key in ("report_year", "year", "fiscal_year"):
+            year = parse_report_year(status_data.get(key))
+            if year is not None:
+                report_year = year
+                break
+    except Exception:
+        report_year = None
+
+    result_meta: Dict[str, Any] = {}
+    try:
+        result_meta = ((status_data.get("result") or {}).get("meta") or {})
+        if not isinstance(result_meta, dict):
+            result_meta = {}
+    except Exception:
+        result_meta = {}
+
+    if not doc_type:
+        try:
+            doc_type = str(result_meta.get("doc_type") or "").strip()
+        except Exception:
+            doc_type = ""
+
+    if report_year is None:
+        try:
+            for key in ("report_year", "year", "fiscal_year"):
+                year = parse_report_year(result_meta.get(key))
+                if year is not None:
+                    report_year = year
+                    break
+        except Exception:
+            report_year = None
+
+    if report_year is None and filename:
+        try:
+            m = re.search(r"(20\d{2})", filename)
+            if m:
+                year = int(m.group(1))
+                if 2000 <= year <= 2099:
+                    report_year = year
+        except Exception:
+            report_year = None
+    report_kind = normalize_report_kind(doc_type, filename)
+    if report_kind_raw in {"budget", "final"}:
+        report_kind = report_kind_raw
+
+    issue_total = 0
+    issue_error = 0
+    issue_warn = 0
+    issue_info = 0
+    top_issue_rules: List[Dict[str, Any]] = []
+
+    try:
+        result = status_data.get("result") or {}
+        issues = result.get("issues")
+        issue_items: List[Dict[str, Any]] = []
+
+        if isinstance(issues, dict):
+            err = issues.get("error")
+            wrn = issues.get("warn")
+            inf = issues.get("info")
+            all_items = issues.get("all")
+
+            if isinstance(err, list):
+                issue_error = len(err)
+            if isinstance(wrn, list):
+                issue_warn = len(wrn)
+            if isinstance(inf, list):
+                issue_info = len(inf)
+
+            if isinstance(all_items, list):
+                issue_total = len(all_items)
+                issue_items = [item for item in all_items if isinstance(item, dict)]
+            else:
+                issue_total = issue_error + issue_warn + issue_info
+                issue_items = [
+                    item
+                    for bucket in (err, wrn, inf)
+                    if isinstance(bucket, list)
+                    for item in bucket
+                    if isinstance(item, dict)
+                ]
+        elif isinstance(issues, list):
+            issue_total = len(issues)
+            for item in issues:
+                sev = str((item or {}).get("severity", "")).lower()
+                if sev in {"critical", "high", "error", "fatal"}:
+                    issue_error += 1
+                elif sev in {"warn", "warning", "medium", "low"}:
+                    issue_warn += 1
+                else:
+                    issue_info += 1
+                if isinstance(item, dict):
+                    issue_items.append(item)
+
+        # Dual-mode fallback: when `issues` bucket is absent, use rule_findings.
+        if issue_total == 0:
+            rule_findings = result.get("rule_findings")
+            if isinstance(rule_findings, list):
+                issue_total = len(rule_findings)
+                issue_items = [item for item in rule_findings if isinstance(item, dict)]
+                for item in rule_findings:
+                    sev = str((item or {}).get("severity", "")).lower()
+                    if sev in {"critical", "high", "error", "fatal"}:
+                        issue_error += 1
+                    elif sev in {"warn", "warning", "medium", "low"}:
+                        issue_warn += 1
+                    else:
+                        issue_info += 1
+
+        if issue_items:
+            rule_counter: Dict[str, int] = {}
+            for item in issue_items:
+                rule_id = str(item.get("rule_id") or item.get("rule") or "").strip()
+                if not rule_id:
+                    continue
+                rule_counter[rule_id] = rule_counter.get(rule_id, 0) + 1
+
+            top_issue_rules = [
+                {"rule_id": rid, "count": cnt}
+                for rid, cnt in sorted(
+                    rule_counter.items(),
+                    key=lambda x: (-x[1], x[0]),
+                )[:3]
+            ]
+    except Exception:
+        logger.exception("Failed to summarize issue counts for job: %s", job_dir.name)
 
     return {
         "job_id": job_dir.name,
@@ -120,6 +291,15 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "ts": ts,
         "mode": status_data.get("mode", "legacy"),
         "stage": stage,
+        "report_year": report_year,
+        "doc_type": doc_type or None,
+        "report_kind": report_kind,
+        "issue_total": issue_total,
+        "issue_error": issue_error,
+        "issue_warn": issue_warn,
+        "issue_info": issue_info,
+        "has_issues": issue_total > 0,
+        "top_issue_rules": top_issue_rules,
     }
 
 
@@ -209,9 +389,29 @@ async def start_analysis(job_id: str, body: Optional[Dict[str, Any]] = None) -> 
 
     status_file = job_dir / "status.json"
     body = body or {}
+    existing_status = read_json_file(status_file, default={})
     use_local_rules = bool(body.get("use_local_rules", True))
     use_ai_assist = bool(body.get("use_ai_assist", True))
     mode = str(body.get("mode", "legacy"))
+    fiscal_year = (
+        body.get("fiscal_year")
+        if body.get("fiscal_year") is not None
+        else existing_status.get("fiscal_year")
+    )
+    doc_type = (
+        body.get("doc_type")
+        if body.get("doc_type") is not None
+        else existing_status.get("doc_type")
+    )
+    report_year = parse_report_year(
+        body.get("report_year")
+        if body.get("report_year") is not None
+        else fiscal_year
+    )
+    report_kind = normalize_report_kind(
+        str(doc_type) if doc_type is not None else None,
+        "",
+    )
     payload = {
         "job_id": job_id,
         "status": "queued",
@@ -220,6 +420,10 @@ async def start_analysis(job_id: str, body: Optional[Dict[str, Any]] = None) -> 
         "use_local_rules": use_local_rules,
         "use_ai_assist": use_ai_assist,
         "mode": mode,
+        "fiscal_year": fiscal_year,
+        "doc_type": doc_type,
+        "report_year": report_year,
+        "report_kind": report_kind,
         "ts": time.time(),
     }
     try:
