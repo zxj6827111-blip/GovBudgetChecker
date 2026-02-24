@@ -7,7 +7,7 @@ import io
 import time
 from typing import Annotated, Any, Dict, List
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 
 from api import runtime
 
@@ -52,6 +52,39 @@ async def create_organization(request: Request):
     storage = runtime.require_org_storage()
     created = storage.add(org)
     return runtime.to_dict(created)
+
+
+@router.put("/api/organizations/{org_id}")
+async def update_organization(org_id: str, request: Request):
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="invalid request body")
+    
+    name = str(body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+        
+    storage = runtime.require_org_storage()
+    updated = storage.update(org_id, {"name": name})
+    if not updated:
+        raise HTTPException(status_code=404, detail="organization not found")
+    
+    return runtime.to_dict(updated)
+
+
+@router.delete("/api/organizations/{org_id}")
+async def delete_organization(org_id: str):
+    storage = runtime.require_org_storage()
+    
+    # Optional: We could check if there are linked jobs before deleting,
+    # but the storage layer currently handles cascading deletions correctly.
+    # Alternatively, we could prevent deletion if it's not empty, but user requested deletion capability.
+    
+    success = storage.delete(org_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="organization not found")
+        
+    return {"success": True, "message": "organization deleted"}
 
 
 @router.get("/api/organizations/list")
@@ -137,14 +170,20 @@ async def import_organizations(
 
 
 @router.get("/api/organizations/{org_id}/jobs")
-async def get_organization_jobs(org_id: str):
+async def get_organization_jobs(
+    org_id: str,
+    include_children: bool = Query(
+        default=False,
+        description="Whether to include jobs linked to descendant organizations.",
+    ),
+):
     storage = runtime.require_org_storage()
     org = storage.get_by_id(org_id)
     if org is None:
         raise HTTPException(status_code=404, detail="organization not found")
 
     jobs: List[Dict[str, Any]] = []
-    for job_id in storage.get_org_jobs(org_id, include_children=True):
+    for job_id in storage.get_org_jobs(org_id, include_children=include_children):
         job_dir = runtime.UPLOAD_ROOT / job_id
         if job_dir.exists():
             jobs.append(runtime.collect_job_summary(job_dir))
@@ -157,6 +196,12 @@ async def get_organization_jobs(org_id: str):
                     "progress": 0,
                     "ts": time.time(),
                     "mode": "legacy",
+                    "issue_total": 0,
+                    "issue_error": 0,
+                    "issue_warn": 0,
+                    "issue_info": 0,
+                    "has_issues": False,
+                    "top_issue_rules": [],
                 }
             )
     jobs.sort(key=lambda x: x.get("ts", 0), reverse=True)
