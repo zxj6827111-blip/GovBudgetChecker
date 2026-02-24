@@ -127,6 +127,7 @@ export default function HomePage() {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadDocType, setUploadDocType] = useState<"dept_final" | "dept_budget">("dept_final");
 
   // --- Layout State (New) ---
   const [viewMode, setViewMode] = useState<"org_detail" | "job_detail">("org_detail");
@@ -339,9 +340,30 @@ export default function HomePage() {
     if (!f) return;
 
     if (!selectedOrgId) {
-      setToast({ message: "请先在部门中选择一个单位", type: "error" });
+      setToast({ message: "请先在部门详情中选择一个组织（部门或单位）", type: "error" });
       return;
     }
+    const detectUploadDocType = (filename: string): "dept_final" | "dept_budget" => {
+      const lower = filename.toLowerCase();
+      if (
+        filename.includes("决算") ||
+        lower.includes("final") ||
+        lower.includes("settlement") ||
+        lower.includes("accounts")
+      ) {
+        return "dept_final";
+      }
+      if (filename.includes("预算") || lower.includes("budget")) {
+        return "dept_budget";
+      }
+      return uploadDocType;
+    };
+    const detectFiscalYear = (filename: string): string => {
+      const m = filename.match(/(20\d{2})/);
+      return m ? m[1] : new Date().getFullYear().toString();
+    };
+    const resolvedDocType = detectUploadDocType(f.name);
+    const resolvedFiscalYear = detectFiscalYear(f.name);
 
     setIsUploading(true);
     setUploadProgress(0);
@@ -365,8 +387,8 @@ export default function HomePage() {
       const v3Form = new FormData();
       v3Form.set("file", f);
       v3Form.set("org_unit_id", selectedOrgId);
-      v3Form.append("fiscal_year", new Date().getFullYear().toString());
-      v3Form.append("doc_type", "dept_budget");
+      v3Form.append("fiscal_year", resolvedFiscalYear);
+      v3Form.append("doc_type", resolvedDocType);
 
       let upload = await sendUpload("/api/documents/upload", v3Form);
 
@@ -393,7 +415,16 @@ export default function HomePage() {
 
       const versionId = resp?.id;
       if (versionId) {
-        await fetch(`/api/documents/${versionId}/run`, { method: 'POST' });
+        await fetch(`/api/documents/${versionId}/run`, {
+          method: 'POST',
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: "legacy",
+            doc_type: resolvedDocType,
+            fiscal_year: resolvedFiscalYear,
+            report_year: Number(resolvedFiscalYear),
+          }),
+        });
       }
 
       if (selectedOrgId) {
@@ -413,7 +444,8 @@ export default function HomePage() {
         refreshWithRetry();
       }
 
-      setToast({ message: "上传成功，正在处理...", type: "success" });
+      const typeLabel = resolvedDocType === "dept_budget" ? "预算" : "决算";
+      setToast({ message: `上传成功，已按${resolvedFiscalYear}年${typeLabel}检查启动`, type: "success" });
     } catch (e: any) {
       console.error("Upload failed", e);
       setToast({ message: "上传失败，请重试", type: "error" });
@@ -442,9 +474,31 @@ export default function HomePage() {
   function normalizeIssues(raw: any): IssuesBuckets {
     const empty: IssuesBuckets = { error: [], warn: [], info: [], all: [] };
     if (!raw) return empty;
-    // ... existing normalization logic
-    if (Array.isArray(raw)) return { error: raw.filter(x => x.severity === 'high'), warn: raw.filter(x => x.severity === 'medium'), info: raw.filter(x => x.severity === 'low'), all: raw };
-    // Minimal override
+    const toBucket = (severity: any): "error" | "warn" | "info" => {
+      const s = String(severity || "").toLowerCase();
+      if (["critical", "high", "error", "err", "fatal"].includes(s)) return "error";
+      if (["warn", "warning", "medium", "low"].includes(s)) return "warn";
+      return "info";
+    };
+
+    if (Array.isArray(raw)) {
+      const buckets: IssuesBuckets = { error: [], warn: [], info: [], all: [] };
+      for (const item of raw) {
+        const bucket = toBucket(item?.severity);
+        buckets[bucket].push(item);
+        buckets.all.push(item);
+      }
+      return buckets;
+    }
+
+    if (typeof raw === "object") {
+      const error = Array.isArray(raw.error) ? raw.error : [];
+      const warn = Array.isArray(raw.warn) ? raw.warn : [];
+      const info = Array.isArray(raw.info) ? raw.info : [];
+      const all = Array.isArray(raw.all) ? raw.all : [...error, ...warn, ...info];
+      return { error, warn, info, all };
+    }
+
     return empty;
   }
 
@@ -461,9 +515,43 @@ export default function HomePage() {
 
   // Mock data for UI if status not full
   const aiFindings = (status as any)?.result?.ai_findings || (status as any)?.ai_findings || [];
-  const ruleFindings = (status as any)?.result?.rule_findings || (status as any)?.rule_findings || [];
+  const legacyRuleFindings: IssueItem[] = buckets.all.map((item: any, idx: number) => {
+    const rawSeverity = String(item?.severity || "").toLowerCase();
+    const severityMap: Record<string, IssueItem["severity"]> = {
+      error: "high",
+      high: "high",
+      critical: "critical",
+      warn: "medium",
+      warning: "medium",
+      medium: "medium",
+      low: "low",
+      info: "info",
+    };
+    return {
+      id: String(item?.id || `${item?.rule_id || item?.rule || "RULE"}-${idx}`),
+      source: "rule",
+      rule_id: item?.rule_id || item?.rule || "",
+      severity: severityMap[rawSeverity] || "medium",
+      title: item?.title || item?.message || item?.rule_id || item?.rule || "规则检查结果",
+      message: item?.message || item?.title || "",
+      evidence: Array.isArray(item?.evidence)
+        ? item.evidence
+        : item?.evidence
+          ? [item.evidence]
+          : [],
+      location: (item?.location && typeof item.location === "object") ? item.location : {},
+      metrics: (item?.metrics && typeof item.metrics === "object") ? item.metrics : {},
+      tags: Array.isArray(item?.tags) ? item.tags : [],
+      created_at: item?.created_at || Date.now() / 1000,
+      job_id: activeJobId || undefined,
+    };
+  });
+  const ruleFindingsRaw = (status as any)?.result?.rule_findings || (status as any)?.rule_findings || [];
+  const ruleFindings = Array.isArray(ruleFindingsRaw) && ruleFindingsRaw.length > 0
+    ? ruleFindingsRaw
+    : legacyRuleFindings;
   const mergedFindings = (status as any)?.result?.merged || (status as any)?.merged;
-  const enrichedIssues = buckets.all.map(i => ({ ...i, source: i.source || 'local_rules' }));
+  const enrichedIssues = buckets.all.map(i => ({ ...i, source: i.source || 'rule' }));
 
   const consistencyPairs = (status as any)?.result?.dual_mode?.consistency_pairs || [];
   const conflictPairs = (status as any)?.result?.dual_mode?.conflict_pairs || [];
@@ -550,7 +638,7 @@ export default function HomePage() {
                 <svg className="w-12 h-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
               </div>
               <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">欢迎使用智慧预算审查系统</h2>
-              <p className="text-gray-500 dark:text-gray-400 max-w-md">请先在左侧选择部门，再选择单位查看任务与审查结果。</p>
+              <p className="text-gray-500 dark:text-gray-400 max-w-md">请先在左侧选择部门，再选择具体组织（部门或单位）查看任务与审查结果。</p>
             </div>
           )
         )}
@@ -657,7 +745,17 @@ export default function HomePage() {
                         result={{
                           ai_findings: aiFindings,
                           rule_findings: ruleFindings,
-                          merged: mergedFindings || { totals: { ai: 0, rule: 0, merged: 0, conflicts: 0, agreements: 0 }, conflicts: [], agreements: [] },
+                          merged: mergedFindings || {
+                            totals: {
+                              ai: Array.isArray(aiFindings) ? aiFindings.length : 0,
+                              rule: Array.isArray(ruleFindings) ? ruleFindings.length : 0,
+                              merged: Array.isArray(aiFindings) ? aiFindings.length + (Array.isArray(ruleFindings) ? ruleFindings.length : 0) : (Array.isArray(ruleFindings) ? ruleFindings.length : 0),
+                              conflicts: 0,
+                              agreements: 0
+                            },
+                            conflicts: [],
+                            agreements: []
+                          },
                           meta: (status as any)?.result?.meta || {}
                         }}
                         job_id={activeJobId || undefined}
@@ -683,6 +781,36 @@ export default function HomePage() {
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm">
           <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8 max-w-lg w-full transform transition-all scale-100 border border-white/20">
             <h3 className="text-2xl font-bold mb-6 text-gray-900 dark:text-white">上传新文档</h3>
+            <div className="mb-4">
+              <div className="text-sm text-gray-600 mb-2">默认检查类型</div>
+              <div className="inline-flex bg-white rounded-lg border border-gray-200 p-1">
+                <button
+                  type="button"
+                  onClick={() => setUploadDocType("dept_final")}
+                  className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                    uploadDocType === "dept_final"
+                      ? "bg-indigo-600 text-white"
+                      : "text-gray-600 hover:bg-gray-100"
+                  }`}
+                >
+                  决算检查
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUploadDocType("dept_budget")}
+                  className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                    uploadDocType === "dept_budget"
+                      ? "bg-indigo-600 text-white"
+                      : "text-gray-600 hover:bg-gray-100"
+                  }`}
+                >
+                  预算检查
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-gray-500">
+                系统会优先按文件名自动识别“预算/决算”和年份；识别不到时使用默认类型。
+              </p>
+            </div>
             <div
               className={`border-2 border-dashed rounded-xl p-10 text-center transition-colors relative overflow-hidden ${isDragging ? "border-indigo-500 bg-indigo-50" : "border-gray-300"}`}
               onDragOver={handleDragOver}

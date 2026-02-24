@@ -2,7 +2,6 @@
 
 import { useState, useMemo } from "react";
 import { IssueItem } from "./IssueTabs";
-import IssueCard from "./IssueCard";
 
 interface IssueListProps {
   issues: IssueItem[];
@@ -68,9 +67,6 @@ export default function IssueList({
   const [searchTerm, setSearchTerm] = useState("");
   const [expandedCats, setExpandedCats] = useState<Record<string, boolean>>({});
 
-  // Initialize expanded state (expand only if has issues initially)
-  // We'll rely on the render logic to set defaults effectively or user interaction
-
   const filteredIssues = useMemo(() => {
     return issues.filter((issue) => {
       if (!searchTerm) return true;
@@ -91,7 +87,6 @@ export default function IssueList({
     CATEGORIES.forEach(c => groups[c.id] = []);
 
     filteredIssues.forEach(issue => {
-      // 1. AI Issues
       if (issue.source === "ai") {
         groups["ai"].push(issue);
         return;
@@ -100,8 +95,6 @@ export default function IssueList({
       const rid = issue.rule_id || "";
       let matched = false;
 
-      // 2. Logic to match categories
-      // Priority 1: Exact matches
       for (const cat of CATEGORIES) {
         if (cat.exactMatches?.includes(rid)) {
           groups[cat.id].push(issue);
@@ -110,7 +103,6 @@ export default function IssueList({
         }
       }
 
-      // Priority 2: Prefix matches
       if (!matched) {
         for (const cat of CATEGORIES) {
           if (cat.prefixes.some(p => rid.startsWith(p))) {
@@ -133,70 +125,155 @@ export default function IssueList({
     setExpandedCats(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const renderCategory = (id: string, name: string, description: string, items: IssueItem[], alwaysShow = true) => {
-    // If filtering by search, hide empty categories unless they match?
-    // User requirement: "如果没有问题的话就直接显示绿色或者打钩" -> implies showing all major categories.
-    // So we show all CATEGORIES, plus AI and Other if they have content.
+  const getSeverityBadge = (severity: string) => {
+    const defaultClasses = "inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold";
+    const colors = {
+      critical: "bg-red-100 text-red-700 border border-red-200",
+      high: "bg-red-100 text-red-700 border border-red-200",
+      medium: "bg-yellow-100 text-yellow-700 border border-yellow-200",
+      low: "bg-blue-100 text-blue-700 border border-blue-200",
+      info: "bg-gray-100 text-gray-700 border border-gray-200",
+    };
+    return `${defaultClasses} ${colors[severity as keyof typeof colors] || colors.info}`;
+  };
 
+  const getSeverityText = (severity: string) => {
+    const texts = {
+      critical: "严重",
+      high: "高",
+      medium: "警告",
+      low: "低",
+      info: "信息",
+    };
+    return texts[severity as keyof typeof texts] || severity;
+  };
+
+  const getSeverityDot = (severity: string) => {
+    switch (severity) {
+      case "critical":
+      case "high": return <span className="w-1.5 h-1.5 rounded-full bg-red-500 mr-1.5"></span>;
+      case "medium": return <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 mr-1.5"></span>;
+      case "low":
+      case "info": return <span className="w-1.5 h-1.5 rounded-full bg-blue-500 mr-1.5"></span>;
+      default: return null;
+    }
+  };
+
+
+  const renderCategoryTable = (id: string, name: string, description: string, items: IssueItem[], alwaysShow = true) => {
     if (!alwaysShow && items.length === 0) return null;
 
     const hasIssues = items.length > 0;
-    const isExpanded = expandedCats[id] ?? hasIssues; // Default expand if has issues
+    const isExpanded = expandedCats[id] ?? hasIssues; 
 
     return (
-      <div key={id} className="border border-gray-200 rounded-lg overflow-hidden mb-4 bg-white shadow-sm">
+      <div key={id} className="border border-gray-200 rounded-xl overflow-hidden mb-6 bg-white shadow-sm">
         <div
-          className={`px-4 py-3 flex items-center justify-between cursor-pointer transition-colors ${hasIssues ? "bg-red-50 hover:bg-red-100" : "bg-green-50 hover:bg-green-100"
+          className={`px-5 py-4 flex items-center justify-between cursor-pointer transition-colors ${hasIssues ? "bg-white hover:bg-gray-50 border-b border-gray-100" : "bg-gray-50 hover:bg-gray-100"
             }`}
           onClick={() => toggleCat(id)}
         >
           <div className="flex items-center space-x-3">
-            {hasIssues ? (
-              <div className="flex-shrink-0 w-6 h-6 rounded-full bg-red-100 text-red-600 flex items-center justify-center">
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </div>
-            ) : (
-              <div className="flex-shrink-0 w-6 h-6 rounded-full bg-green-100 text-green-600 flex items-center justify-center">
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-            )}
-            <div>
-              <h4 className={`font-medium ${hasIssues ? "text-red-900" : "text-green-900"}`}>{name}</h4>
-              <p className={`text-xs ${hasIssues ? "text-red-700" : "text-green-700"} hidden sm:block`}>{description}</p>
-            </div>
+            <h4 className="font-bold text-gray-900 text-lg">{name}</h4>
+            <span className="text-sm text-gray-500 bg-gray-100 px-2 py-0.5 rounded-md hidden sm:block">{description}</span>
           </div>
-          <div className="flex items-center space-x-3">
-            {hasIssues && (
-              <span className="bg-white px-2 py-0.5 rounded text-xs font-bold text-red-600 shadow-sm">
+          <div className="flex items-center space-x-4">
+            {hasIssues ? (
+              <span className="bg-red-50 text-red-600 px-2.5 py-1 rounded-md text-sm font-semibold border border-red-100 flex items-center shadow-sm">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500 mr-2"></span>
                 {items.length} 个问题
               </span>
+            ) : (
+               <span className="bg-green-50 text-green-600 px-2.5 py-1 rounded-md text-sm font-semibold border border-green-100 flex items-center shadow-sm">
+                <svg className="w-4 h-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                全部通过
+              </span>
             )}
-            <svg
-              className={`w-5 h-5 text-gray-500 transition-transform ${isExpanded ? "transform rotate-180" : ""}`}
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
+            <div className="p-1 rounded-full hover:bg-gray-200 transition-colors">
+              <svg
+                className={`w-5 h-5 text-gray-400 transition-transform duration-200 ${isExpanded ? "transform rotate-180" : ""}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
           </div>
         </div>
 
-        {/* Content */}
+        {/* Table Content */}
         {isExpanded && hasIssues && (
-          <div className="p-4 bg-gray-50 border-t border-gray-100 space-y-3">
-            {items.map(issue => (
-              <IssueCard
-                key={issue.id}
-                issue={issue}
-                onClick={() => onIssueClick?.(issue)}
-                showSource={showSource}
-              />
-            ))}
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200 text-xs uppercase tracking-wider text-gray-500 font-semibold">
+                  <th className="py-3 px-5 w-16 text-center">序号</th>
+                  {showSource && <th className="py-3 px-5 w-24">来源</th>}
+                  <th className="py-3 px-5 w-32">严重程度</th>
+                  <th className="py-3 px-5 w-40">规则编号</th>
+                  <th className="py-3 px-5 min-w-[300px]">问题描述</th>
+                  <th className="py-3 px-5 w-32">证据页码</th>
+                  <th className="py-3 px-5 w-32 text-center">状态</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {items.map((issue, index) => (
+                  <tr 
+                    key={issue.id} 
+                    className="hover:bg-indigo-50/30 transition-colors group cursor-pointer"
+                    onClick={() => onIssueClick?.(issue)}
+                  >
+                    <td className="py-4 px-5 text-center text-sm text-gray-500 font-medium">{(index + 1).toString().padStart(2, '0')}</td>
+                    {showSource && (
+                      <td className="py-4 px-5">
+                         <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${issue.source === 'ai' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-purple-50 text-purple-700 border-purple-200'}`}>
+                           {issue.source === 'ai' ? 'AI' : '规则'}
+                         </span>
+                      </td>
+                    )}
+                    <td className="py-4 px-5">
+                      <span className={getSeverityBadge(issue.severity)}>
+                        {getSeverityDot(issue.severity)}
+                        {getSeverityText(issue.severity)}
+                      </span>
+                    </td>
+                    <td className="py-4 px-5">
+                      {issue.rule_id ? (
+                        <span className="font-mono text-sm text-gray-600 bg-gray-50 px-2 py-1 rounded border border-gray-200">{issue.rule_id}</span>
+                      ) : (
+                        <span className="text-gray-400 text-sm">-</span>
+                      )}
+                    </td>
+                    <td className="py-4 px-5">
+                      <p className="text-sm font-medium text-gray-900 mb-1 leading-snug group-hover:text-indigo-600 transition-colors">{issue.title}</p>
+                      {issue.message !== issue.title && (
+                         <p className="text-xs text-gray-500 line-clamp-1">{issue.message}</p>
+                      )}
+                    </td>
+                    <td className="py-4 px-5">
+                       {issue.location.page ? (
+                         <div className="flex items-center text-sm text-indigo-600 hover:text-indigo-800 font-medium">
+                            <svg className="w-4 h-4 mr-1 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                            </svg>
+                            P{issue.location.page}
+                         </div>
+                       ) : (
+                         <span className="text-gray-400 text-sm">-</span>
+                       )}
+                    </td>
+                    <td className="py-4 px-5 text-center">
+                       <span className="inline-flex items-center px-2 py-1 rounded border border-orange-200 bg-orange-50 text-xs font-semibold text-orange-600">
+                          待处理
+                       </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
@@ -204,41 +281,41 @@ export default function IssueList({
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2">
       {/* 搜索框 */}
-      <div className="relative">
+      <div className="relative mb-6">
         <input
           type="text"
-          placeholder="搜索问题..."
+          placeholder="搜索问题或规则编号..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full px-4 py-2 pl-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="w-full px-5 py-3 pl-12 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent shadow-sm transition-shadow hover:shadow text-sm"
         />
-        <svg className="w-5 h-5 text-gray-400 absolute left-3 top-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg className="w-5 h-5 text-gray-400 absolute left-4 top-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
         </svg>
       </div>
 
-      <div className="space-y-4">
+      <div className="space-y-0">
         {/* Render defined categories */}
-        {CATEGORIES.map(cat => renderCategory(cat.id, cat.name, cat.description, grouped[cat.id], true))}
+        {CATEGORIES.map(cat => renderCategoryTable(cat.id, cat.name, cat.description, grouped[cat.id], true))}
 
         {/* Render AI if exists */}
-        {renderCategory("ai", "AI 智能分析", "由 AI 大模型发现的潜在问题", grouped["ai"], false)}
+        {renderCategoryTable("ai", "AI 智能分析", "由大模型定位提取的关键问题和差异", grouped["ai"], false)}
 
         {/* Render Other if exists */}
-        {renderCategory("other", "其他检查项", "未分类的规则检查", grouped["other"], false)}
+        {renderCategoryTable("other", "其他检查项", "未分配至特定类别的检查结果", grouped["other"], false)}
       </div>
 
       {issues.length === 0 && (
-        <div className="text-center py-12 bg-white rounded-lg border border-dashed border-gray-300">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-100 text-green-600 mb-4">
-            <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-gray-300 shadow-sm">
+          <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-green-50 text-green-500 mb-6 border-8 border-green-50/50">
+            <svg className="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
           </div>
-          <h3 className="text-lg font-medium text-gray-900">恭喜！文档检查通过</h3>
-          <p className="text-gray-500 mt-1">未发现任何合规性问题</p>
+          <h3 className="text-xl font-bold text-gray-900">恭喜！查重比对通过</h3>
+          <p className="text-gray-500 mt-2 text-sm">当前条件过滤下，未发现异常问题记录</p>
         </div>
       )}
     </div>

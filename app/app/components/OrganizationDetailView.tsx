@@ -11,6 +11,11 @@ interface UnitItem {
   parent_id: string | null;
 }
 
+interface TopIssueRule {
+  rule_id: string;
+  count: number;
+}
+
 interface JobSummary {
   job_id: string;
   filename: string;
@@ -18,6 +23,15 @@ interface JobSummary {
   progress: number;
   ts: number;
   stage?: string;
+  report_year?: number | null;
+  report_kind?: "budget" | "final" | "unknown";
+  doc_type?: string | null;
+  issue_total?: number;
+  issue_error?: number;
+  issue_warn?: number;
+  issue_info?: number;
+  has_issues?: boolean;
+  top_issue_rules?: TopIssueRule[];
 }
 
 interface OrganizationDetailViewProps {
@@ -45,11 +59,50 @@ export default function OrganizationDetailView({
   const [unitsLoading, setUnitsLoading] = useState(true);
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [jobsLoading, setJobsLoading] = useState(false);
+  const [unitJobsMap, setUnitJobsMap] = useState<Record<string, JobSummary[]>>({});
+  const [orgViewTab, setOrgViewTab] = useState<"department" | "units">("department");
+  const [selectedYearFilter, setSelectedYearFilter] = useState<string>("all");
+  const [selectedKindFilter, setSelectedKindFilter] = useState<"all" | "budget" | "final">("all");
+  const [yearFilterTouched, setYearFilterTouched] = useState(false);
 
-  const selectedUnit = useMemo(
-    () => units.find((item) => item.id === selectedUnitId) || null,
-    [units, selectedUnitId]
+  const buildJobsApiPath = useCallback(
+    (orgId: string, includeChildren = false) =>
+      `/api/organizations/${orgId}/jobs?include_children=${includeChildren ? "true" : "false"}&t=${Date.now()}`,
+    []
   );
+
+  const departmentOrg = useMemo<UnitItem>(() => {
+    return {
+      id: departmentId,
+      name: departmentName,
+      level: "department",
+      parent_id: null,
+    };
+  }, [departmentId, departmentName]);
+
+  const selectableOrganizations = useMemo(
+    () => [departmentOrg, ...units],
+    [departmentOrg, units]
+  );
+
+  const selectedUnit = useMemo<UnitItem | null>(
+    () =>
+      selectableOrganizations.find((item) => item.id === selectedUnitId) || null,
+    [selectableOrganizations, selectedUnitId]
+  );
+
+  const switchToDepartmentTab = useCallback(() => {
+    setOrgViewTab("department");
+    onSelectUnit(departmentOrg);
+  }, [departmentOrg, onSelectUnit]);
+
+  const switchToUnitsTab = useCallback(() => {
+    setOrgViewTab("units");
+    if (!selectedUnit || selectedUnit.level !== "unit") {
+      onSelectUnit(null);
+      setJobs([]);
+    }
+  }, [onSelectUnit, selectedUnit]);
 
   const fetchUnits = useCallback(async () => {
     setUnitsLoading(true);
@@ -80,7 +133,7 @@ export default function OrganizationDetailView({
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
     try {
-      const res = await fetch(`/api/organizations/${unitId}/jobs?t=${Date.now()}`, {
+      const res = await fetch(buildJobsApiPath(unitId), {
         signal: controller.signal,
       });
       if (res.ok) {
@@ -96,21 +149,115 @@ export default function OrganizationDetailView({
       clearTimeout(timeoutId);
       setJobsLoading(false);
     }
-  }, []);
+  }, [buildJobsApiPath]);
 
   useEffect(() => {
     onSelectUnit(null);
     setJobs([]);
+    setOrgViewTab("department");
     fetchUnits();
   }, [departmentId, fetchUnits, onSelectUnit, refreshKey]);
+
+  useEffect(() => {
+    let active = true;
+    if (selectableOrganizations.length === 0) return;
+
+    const fetchAllJobs = async () => {
+      const newMap: Record<string, JobSummary[]> = {};
+      await Promise.all(
+        selectableOrganizations.map(async (u) => {
+          try {
+            const res = await fetch(buildJobsApiPath(u.id));
+            if (res.ok) {
+              const data = await res.json();
+              newMap[u.id] = data.jobs || [];
+            } else {
+              newMap[u.id] = [];
+            }
+          } catch {
+            newMap[u.id] = [];
+          }
+        })
+      );
+      if (active) {
+        setUnitJobsMap(newMap);
+      }
+    };
+    fetchAllJobs();
+    return () => { active = false; };
+  }, [selectableOrganizations, buildJobsApiPath, refreshKey]);
 
   useEffect(() => {
     if (!selectedUnitId) {
       setJobs([]);
       return;
     }
+    setYearFilterTouched(false);
+    setSelectedYearFilter("all");
+    setSelectedKindFilter("all");
     fetchJobsForUnit(selectedUnitId);
   }, [fetchJobsForUnit, selectedUnitId, refreshKey]);
+
+  const availableYears = useMemo(() => {
+    const years = new Set<number>();
+    jobs.forEach((job) => {
+      if (typeof job.report_year === "number" && job.report_year >= 2000 && job.report_year <= 2099) {
+        years.add(job.report_year);
+      }
+    });
+    return Array.from(years).sort((a, b) => b - a);
+  }, [jobs]);
+
+  useEffect(() => {
+    if (yearFilterTouched) {
+      return;
+    }
+    if (availableYears.length === 0) {
+      return;
+    }
+    const latest = String(availableYears[0]);
+    if (selectedYearFilter !== latest) {
+      setSelectedYearFilter(latest);
+    }
+  }, [availableYears, selectedYearFilter, yearFilterTouched]);
+
+  useEffect(() => {
+    if (selectedYearFilter === "all") {
+      return;
+    }
+    const target = Number(selectedYearFilter);
+    if (!availableYears.includes(target)) {
+      setSelectedYearFilter(availableYears.length > 0 ? String(availableYears[0]) : "all");
+    }
+  }, [availableYears, selectedYearFilter]);
+
+  const filteredJobs = useMemo(() => {
+    let scoped = jobs;
+    if (selectedYearFilter !== "all") {
+      const target = Number(selectedYearFilter);
+      if (!Number.isNaN(target)) {
+        scoped = scoped.filter((job) => job.report_year === target);
+      }
+    }
+    if (selectedKindFilter !== "all") {
+      scoped = scoped.filter((job) => job.report_kind === selectedKindFilter);
+    }
+    return scoped;
+  }, [jobs, selectedKindFilter, selectedYearFilter]);
+
+  const filteredIssueTotal = useMemo(
+    () => filteredJobs.reduce((sum, job) => sum + (job.issue_total || 0), 0),
+    [filteredJobs]
+  );
+
+  const kindCounts = useMemo(() => {
+    const counts = { budget: 0, final: 0 };
+    jobs.forEach((job) => {
+      if (job.report_kind === "budget") counts.budget += 1;
+      if (job.report_kind === "final") counts.final += 1;
+    });
+    return counts;
+  }, [jobs]);
 
   useEffect(() => {
     if (!selectedUnitId) {
@@ -182,6 +329,128 @@ export default function OrganizationDetailView({
     }
   };
 
+  const renderOrganizationCard = (org: UnitItem) => {
+    const active = selectedUnitId === org.id;
+    const orgJobsList = unitJobsMap[org.id] || [];
+    const hasJobs = orgJobsList.length > 0;
+    const isDepartment = org.level === "department";
+    const isSameNameAsDepartment = !isDepartment && org.name === departmentName;
+    const orgDisplayName = isSameNameAsDepartment ? `${org.name}（本级单位）` : org.name;
+    const orgIssueTotal = orgJobsList.reduce((sum, item) => sum + (item.issue_total || 0), 0);
+    const orgIssueError = orgJobsList.reduce((sum, item) => sum + (item.issue_error || 0), 0);
+    const orgIssueWarn = orgJobsList.reduce((sum, item) => sum + (item.issue_warn || 0), 0);
+    const orgIssueInfo = orgJobsList.reduce((sum, item) => sum + (item.issue_info || 0), 0);
+    const orgBudgetCount = orgJobsList.filter((item) => item.report_kind === "budget").length;
+    const orgFinalCount = orgJobsList.filter((item) => item.report_kind === "final").length;
+    const orgYears = Array.from(
+      new Set(
+        orgJobsList
+          .map((item) => item.report_year)
+          .filter((year): year is number => typeof year === "number" && year >= 2000 && year <= 2099)
+      )
+    ).sort((a, b) => b - a);
+    const hasProblems = orgIssueTotal > 0;
+
+    return (
+      <div
+        key={org.id}
+        className={`relative flex flex-col bg-white rounded-2xl border transition-all duration-300 shadow-sm hover:shadow-md ${
+          active
+            ? "border-indigo-500 shadow-indigo-100"
+            : "border-gray-200 hover:border-indigo-300"
+        }`}
+      >
+        <div className="p-5 flex-1">
+          <div className="flex items-start justify-between gap-2 mb-3">
+            <h3 className="font-bold text-gray-900 text-lg tracking-tight truncate" title={orgDisplayName}>
+              {orgDisplayName}
+            </h3>
+            <span
+              className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${
+                isDepartment ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-700"
+              }`}
+            >
+              {isDepartment ? "部门" : "单位"}
+            </span>
+          </div>
+
+          {orgJobsList.length > 0 && (
+            <div className="flex flex-col space-y-2.5">
+              {orgYears.length > 0 && (
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="text-gray-500 font-medium">年度:</span>
+                  {orgYears.slice(0, 3).map((year) => (
+                    <span key={year} className="inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700">
+                      {year}
+                    </span>
+                  ))}
+                  {orgYears.length > 3 && (
+                    <span className="text-gray-500">+{orgYears.length - 3}</span>
+                  )}
+                </div>
+              )}
+              <div className="flex items-center text-sm">
+                <span className="text-gray-500 font-medium w-24">文件数量:</span>
+                <span className="text-gray-700 font-mono text-sm font-semibold">{orgJobsList.length}</span>
+              </div>
+              <div className="flex items-center text-sm">
+                <span className="text-gray-500 font-medium w-24">问题数量:</span>
+                <span className={`font-mono text-sm font-semibold ${orgIssueTotal > 0 ? "text-red-600" : "text-green-600"}`}>
+                  {orgIssueTotal}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 text-xs">
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
+                  预算 {orgBudgetCount}
+                </span>
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-cyan-50 text-cyan-700">
+                  决算 {orgFinalCount}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 text-xs">
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-red-50 text-red-700">
+                  错误 {orgIssueError}
+                </span>
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-yellow-50 text-yellow-700">
+                  警告 {orgIssueWarn}
+                </span>
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">
+                  提示 {orgIssueInfo}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="px-5 pb-5 pt-2">
+          <button
+            onClick={() => {
+              setOrgViewTab(org.level === "department" ? "department" : "units");
+              onSelectUnit(org);
+            }}
+            className={`w-full py-2.5 rounded-xl font-medium text-sm transition-all duration-300 flex items-center justify-center space-x-2 shadow-sm ${
+              hasJobs
+                ? "bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-200"
+                : "bg-amber-500 hover:bg-amber-600 text-white shadow-amber-200"
+            }`}
+          >
+            {hasJobs ? (
+              <>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                <span>{hasProblems ? "查看问题" : "查看报告"}</span>
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                <span>待上传</span>
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col h-full bg-transparent overflow-hidden">
       <div className="flex-none p-8 pb-4">
@@ -190,14 +459,20 @@ export default function OrganizationDetailView({
             <div>
               <h1 className="text-3xl font-bold text-gray-900 tracking-tight">{departmentName}</h1>
               <div className="mt-2 text-sm text-gray-500">
-                {selectedUnit ? `当前单位: ${selectedUnit.name}` : "请先选择单位"}
+                {selectedUnit
+                  ? `当前组织：${
+                    selectedUnit.level === "unit" && selectedUnit.name === departmentName
+                      ? `${selectedUnit.name}（本级单位）`
+                      : selectedUnit.name
+                  }（${selectedUnit.level === "department" ? "部门" : "单位"}）`
+                  : "请先选择部门或单位"}
               </div>
             </div>
             <button
               onClick={onUpload}
               disabled={!selectedUnit}
               className="inline-flex items-center justify-center px-5 py-3 text-sm font-medium text-white bg-indigo-600 rounded-xl shadow-lg hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
-              title={selectedUnit ? "上传到当前单位" : "请先选择单位"}
+              title={selectedUnit ? "上传到当前组织" : "请先选择部门或单位"}
             >
               上传新文档
             </button>
@@ -205,105 +480,260 @@ export default function OrganizationDetailView({
         </div>
       </div>
 
-      <div className="px-8 pb-4">
-        <div className="bg-white/50 backdrop-blur-md rounded-2xl border border-white/20 p-4">
-          <div className="text-xs text-gray-500 mb-3">第二步：选择单位</div>
-          {unitsLoading ? (
-            <div className="text-sm text-gray-400">加载单位中...</div>
-          ) : units.length === 0 ? (
-            <div className="text-sm text-gray-400">该部门下暂无单位</div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-              {units.map((unit) => {
-                const active = selectedUnitId === unit.id;
-                return (
-                  <button
-                    key={unit.id}
-                    onClick={() => onSelectUnit(unit)}
-                    className={`text-left px-4 py-3 rounded-xl border transition-all ${
-                      active
-                        ? "border-indigo-500 bg-indigo-50 text-indigo-700 shadow-sm"
-                        : "border-gray-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/40"
-                    }`}
-                  >
-                    <div className="font-medium text-sm">{unit.name}</div>
-                    <div className="text-xs text-gray-500 mt-1 font-mono">ID: {unit.id.slice(0, 8)}</div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
-
       <div className="flex-1 overflow-auto px-8 pb-8">
-        <div className="bg-white/40 backdrop-blur-md rounded-2xl border border-white/20 shadow-sm overflow-x-auto">
-          <div className="px-4 py-3 border-b border-gray-200 text-xs text-gray-500">
-            第三步：查看单位任务列表
+        <div className="space-y-6">
+          <div>
+            <div className="flex items-center justify-between gap-4 mb-4">
+              <div className="text-sm font-semibold text-gray-700 bg-white/60 dark:bg-gray-800/60 inline-flex px-4 py-2 rounded-lg border border-white/40 shadow-sm backdrop-blur-md">
+                {departmentName} - 组织列表
+              </div>
+              <div className="inline-flex bg-white/70 rounded-xl border border-white/30 p-1 shadow-sm">
+                <button
+                  type="button"
+                  onClick={switchToDepartmentTab}
+                  className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                    orgViewTab === "department"
+                      ? "bg-indigo-600 text-white"
+                      : "text-gray-600 hover:bg-gray-100"
+                  }`}
+                >
+                  部门本级 (1)
+                </button>
+                <button
+                  type="button"
+                  onClick={switchToUnitsTab}
+                  className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                    orgViewTab === "units"
+                      ? "bg-indigo-600 text-white"
+                      : "text-gray-600 hover:bg-gray-100"
+                  }`}
+                >
+                  下属单位 ({units.length})
+                </button>
+              </div>
+            </div>
+
+            {orgViewTab === "department" ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                {renderOrganizationCard(departmentOrg)}
+              </div>
+            ) : unitsLoading ? (
+              <div className="text-center py-12 text-gray-400">加载单位中...</div>
+            ) : units.length === 0 ? (
+              <div className="text-center py-12 text-gray-400">该部门下暂无单位数据</div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                {units.map((unit) => renderOrganizationCard(unit))}
+              </div>
+            )}
           </div>
-          {!selectedUnit ? (
-            <div className="text-center py-16 text-gray-400">请选择单位后查看任务</div>
-          ) : jobsLoading ? (
-            <div className="text-center py-16 text-gray-400">加载任务中...</div>
-          ) : jobs.length === 0 ? (
-            <div className="text-center py-16 text-gray-400">该单位暂无文档任务</div>
-          ) : (
-            <table className="min-w-full divide-y divide-gray-200/50">
-              <thead className="bg-gray-50/50">
-                <tr>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                    文件名称
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                    上传时间
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                    状态
-                  </th>
-                  <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider w-32">
-                    操作
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200/50 bg-transparent">
-                {jobs.map((job) => (
-                  <tr
-                    key={job.job_id}
-                    className="group hover:bg-white/70 transition-colors duration-150 cursor-pointer"
-                    onClick={() => onSelectJob(job.job_id)}
-                  >
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900 group-hover:text-indigo-600 transition-colors">
-                        {job.filename}
-                      </div>
-                      <div className="text-xs text-gray-500 font-mono">ID: {job.job_id.slice(0, 8)}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 tabular-nums">
-                      {format(new Date(job.ts * 1000), "yyyy-MM-dd HH:mm", { locale: zhCN })}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">{getStatusBadge(job)}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <div className="flex items-center justify-end space-x-3">
-                        <button
-                          onClick={(e) => handleDelete(job.job_id, e)}
-                          className="text-red-500 hover:text-red-700 transition-colors px-2 py-1 rounded hover:bg-red-50"
-                          title="删除任务"
-                        >
-                          删除
-                        </button>
-                        <button
-                          onClick={() => onSelectJob(job.job_id)}
-                          className="text-indigo-600 hover:text-indigo-900 text-xs"
-                        >
-                          查看
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+
+          <div className="bg-white/40 backdrop-blur-md rounded-2xl border border-white/20 shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-200 text-xs text-gray-500">
+              第三步：查看所选组织任务列表
+            </div>
+            {selectedUnit && !jobsLoading && jobs.length > 0 && (
+              <div className="px-4 py-3 border-b border-gray-100 bg-white/30">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="inline-flex bg-white rounded-lg border border-gray-200 p-1">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedKindFilter("all")}
+                      className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                        selectedKindFilter === "all"
+                          ? "bg-indigo-600 text-white"
+                          : "text-gray-600 hover:bg-gray-100"
+                      }`}
+                    >
+                      全部类型
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedKindFilter("budget")}
+                      className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                        selectedKindFilter === "budget"
+                          ? "bg-indigo-600 text-white"
+                          : "text-gray-600 hover:bg-gray-100"
+                      }`}
+                    >
+                      预算 ({kindCounts.budget})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedKindFilter("final")}
+                      className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                        selectedKindFilter === "final"
+                          ? "bg-indigo-600 text-white"
+                          : "text-gray-600 hover:bg-gray-100"
+                      }`}
+                    >
+                      决算 ({kindCounts.final})
+                    </button>
+                  </div>
+                  <div className="inline-flex bg-white rounded-lg border border-gray-200 p-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setYearFilterTouched(true);
+                        setSelectedYearFilter("all");
+                      }}
+                      className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                        selectedYearFilter === "all"
+                          ? "bg-indigo-600 text-white"
+                          : "text-gray-600 hover:bg-gray-100"
+                      }`}
+                    >
+                      全部年度
+                    </button>
+                    {availableYears.map((year) => (
+                      <button
+                        key={year}
+                        type="button"
+                        onClick={() => {
+                          setYearFilterTouched(true);
+                          setSelectedYearFilter(String(year));
+                        }}
+                        className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                          selectedYearFilter === String(year)
+                            ? "bg-indigo-600 text-white"
+                            : "text-gray-600 hover:bg-gray-100"
+                        }`}
+                      >
+                        {year}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    当前{selectedKindFilter === "all" ? "全部类型" : selectedKindFilter === "budget" ? "预算" : "决算"}，
+                    当前{selectedYearFilter === "all" ? "全部年度" : `${selectedYearFilter}年度`}：
+                    {filteredJobs.length}个文件，问题{filteredIssueTotal}
+                  </div>
+                </div>
+              </div>
+            )}
+            {!selectedUnit ? (
+              <div className="text-center py-10 text-gray-400">
+                {orgViewTab === "units"
+                  ? "请在上方“下属单位”卡片中点击一个单位后查看任务"
+                  : "请先选择部门后查看任务"}
+              </div>
+            ) : jobsLoading ? (
+              <div className="text-center py-10 text-gray-400">加载任务中...</div>
+            ) : jobs.length === 0 ? (
+              <div className="text-center py-10 text-gray-400">
+                {selectedUnit.level === "department" ? "该部门暂无文档任务" : "该单位暂无文档任务"}
+              </div>
+            ) : filteredJobs.length === 0 ? (
+              <div className="text-center py-10 text-gray-400">
+                当前筛选条件下暂无文档任务
+              </div>
+            ) : (
+              <div className="max-h-[360px] overflow-auto">
+                <table className="min-w-full divide-y divide-gray-200/50">
+                  <thead className="bg-gray-50/50">
+                    <tr>
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                        文件名称
+                      </th>
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                        上传时间
+                      </th>
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                        状态
+                      </th>
+                      <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider w-32">
+                        操作
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200/50 bg-transparent">
+                    {filteredJobs.map((job) => (
+                      <tr
+                        key={job.job_id}
+                        className="group hover:bg-white/70 transition-colors duration-150 cursor-pointer"
+                        onClick={() => onSelectJob(job.job_id)}
+                      >
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm font-medium text-gray-900 group-hover:text-indigo-600 transition-colors">
+                            {job.filename}
+                          </div>
+                          <div className="mt-1 flex items-center gap-2 text-xs">
+                            <span className="text-gray-500 font-mono">ID: {job.job_id.slice(0, 8)}</span>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                              {typeof job.report_year === "number" ? `${job.report_year}年度` : "年度未识别"}
+                            </span>
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full ${
+                                job.report_kind === "budget"
+                                  ? "bg-emerald-50 text-emerald-700"
+                                  : job.report_kind === "final"
+                                    ? "bg-cyan-50 text-cyan-700"
+                                    : "bg-gray-100 text-gray-600"
+                              }`}
+                            >
+                              {job.report_kind === "budget"
+                                ? "预算检查"
+                                : job.report_kind === "final"
+                                  ? "决算检查"
+                                  : "类型未识别"}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 tabular-nums">
+                          {format(new Date(job.ts * 1000), "yyyy-MM-dd HH:mm", { locale: zhCN })}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="space-y-1">
+                            {getStatusBadge(job)}
+                            {job.status === "done" && (
+                              <div className="space-y-0.5">
+                                <div
+                                  className={`text-xs font-medium ${
+                                    (job.issue_total || 0) > 0 ? "text-red-600" : "text-green-600"
+                                  }`}
+                                >
+                                  {(job.issue_total || 0) > 0
+                                    ? `有问题：${job.issue_total}（错${job.issue_error || 0} / 警${job.issue_warn || 0} / 提${job.issue_info || 0}）`
+                                    : "未发现问题"}
+                                </div>
+                                {(job.issue_total || 0) > 0 &&
+                                  Array.isArray(job.top_issue_rules) &&
+                                  job.top_issue_rules.length > 0 && (
+                                    <div className="text-[11px] text-gray-500">
+                                      主要类型：
+                                      {job.top_issue_rules
+                                        .map((item) => `${item.rule_id}(${item.count})`)
+                                        .join("、")}
+                                    </div>
+                                  )}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                          <div className="flex items-center justify-end space-x-3">
+                            <button
+                              onClick={(e) => handleDelete(job.job_id, e)}
+                              className="text-red-500 hover:text-red-700 transition-colors px-2 py-1 rounded hover:bg-red-50"
+                              title="删除任务"
+                            >
+                              删除
+                            </button>
+                            <button
+                              onClick={() => onSelectJob(job.job_id)}
+                              className="text-indigo-600 hover:text-indigo-900 text-xs"
+                            >
+                              查看
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

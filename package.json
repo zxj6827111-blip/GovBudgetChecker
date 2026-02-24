@@ -1,5 +1,15 @@
 {
+  "name": "gov-budget-checker",
+  "version": "1.0.0",
+  "description": "Government Budget Checker Project",
+  "scripts": {
+    "dev": "concurrently -n \"frontend,backend\" -c \"cyan,magenta\" \"npm run dev:frontend\" \"npm run dev:backend\"",
+    "dev:frontend": "npm --prefix app run dev",
+    "dev:backend": "powershell -Command \"$env:GOVBUDGET_AUTH_ENABLED='false'; python -m uvicorn api.main:app --reload --port 8001\"",
+    "install:all": "npm install && npm --prefix app install && pip install -r requirements.txt"
+  },
   "devDependencies": {
-    "@types/node": "^24.5.2"
+    "@types/node": "^24.5.2",
+    "concurrently": "^8.2.2"
   }
 }
