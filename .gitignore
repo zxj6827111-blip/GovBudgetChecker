@@ -29,3 +29,10 @@ not.pdf.txt
 # Fix temp scripts (optional - can commit if useful)
 fix_temp.py
 start_fixed.bat
+
+# Trae & Local dev
+.agent/
+api/database.db
+*.log
+.ruff_cache/
+.trae/

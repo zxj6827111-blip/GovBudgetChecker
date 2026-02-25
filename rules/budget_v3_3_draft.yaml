@@ -1,0 +1,411 @@
+version: budget_v3_3_draft
+generated_at: "2026-02-24"
+scope:
+  applies_to:
+    - 预算公开
+  levels:
+    - 区级部门
+    - 区级单位
+
+source_evidence:
+  decision_rules_reference: rules/v3_3.yaml
+  sample_documents:
+    - X/上海市普陀区人民政府办公室25年预算.pdf
+    - X/上海市普陀区人民政府办公室单位25年预算.pdf
+
+profile_detection:
+  cover_keywords_any:
+    - 区级部门预算
+    - 区级单位预算
+    - 预算主管部门
+    - 预算单位
+  document_kind_keywords:
+    department:
+      - 区级部门预算
+      - 预算主管部门
+      - 部门主要职能
+      - 编制部门
+    unit:
+      - 区级单位预算
+      - 预算单位
+      - 单位主要职能
+      - 编制单位
+  required_year_pattern: "20\\d{2}"
+
+normalization:
+  text:
+    unify_full_half_width: true
+    remove_whitespace_variants: true
+    normalize_punctuation_zh: true
+  placeholders:
+    patterns:
+      - "\\bxxx\\b"
+      - "\\bXX\\b"
+      - "待填写"
+      - "请填写"
+      - "\\(待\\)"
+      - "\\(略\\)"
+      - "\\[待\\]"
+      - "\\[略\\]"
+      - "\\{单位\\}"
+      - "\\{部门\\}"
+    hard_fail_patterns:
+      - "\\bXX\\b"
+      - "\\{单位\\}"
+      - "\\{部门\\}"
+      - "待填写"
+  units:
+    base_unit: 万元
+    conversions_to_万元:
+      元: 0.0001
+      万元: 1
+      亿元: 10000
+  numeric_tolerance:
+    amount_equal_tolerance_in_万元: 0.05
+    ratio_percentage_tolerance: 0.1
+    percent_tolerance: 0.1
+    internal_table_tolerance_in_元: 0.01
+    cross_unit_tolerance_in_万元: 0.01
+    ocr_fallback_tolerance_in_万元: 0.05
+
+structure:
+  doc_kind_branches:
+    department_only:
+      - 下属单位覆盖关系声明
+      - 项目经费情况说明
+    unit_only: []
+    common:
+      - 预算编制说明
+      - 其他相关情况说明
+      - 九张预算表
+  title_consistency:
+    enabled: true
+    checks:
+      - cover_to_body_budget_kind_consistency
+      - table_header_compiler_role_consistency
+      - chapter_title_department_or_unit_consistency
+  required_sections:
+    common:
+      - 预算编制说明
+      - 其他相关情况说明
+      - 三公经费预算情况说明
+      - 机关运行经费预算
+      - 政府采购预算情况
+      - 绩效目标设置情况
+      - 国有资产占有使用情况
+    department_conditional:
+      - 项目经费情况说明
+  nine_tables:
+    required_min_count: 9
+    tables:
+      - key: BUD_T1
+        names:
+          - 部门财务收支预算总表
+          - 预算单位财务收支预算总表
+          - 财务收支预算总表
+        required: true
+      - key: BUD_T2
+        names:
+          - 部门收入预算总表
+          - 预算单位收入预算总表
+          - 收入预算总表
+        required: true
+      - key: BUD_T3
+        names:
+          - 部门支出预算总表
+          - 预算单位支出预算总表
+          - 支出预算总表
+        required: true
+      - key: BUD_T4
+        names:
+          - 部门财政拨款收支预算总表
+          - 预算单位财政拨款收支预算总表
+          - 财政拨款收支预算总表
+        required: true
+      - key: BUD_T5
+        names:
+          - 部门一般公共预算支出功能分类预算表
+          - 预算单位一般公共预算支出功能分类预算表
+          - 一般公共预算支出功能分类预算表
+        required: true
+      - key: BUD_T6
+        names:
+          - 部门政府性基金预算支出功能分类预算表
+          - 预算单位政府性基金预算支出功能分类预算表
+          - 政府性基金预算支出功能分类预算表
+        required: true
+      - key: BUD_T7
+        names:
+          - 部门国有资本经营预算支出功能分类预算表
+          - 预算单位国有资本经营预算支出功能分类预算表
+          - 国有资本经营预算支出功能分类预算表
+        required: true
+      - key: BUD_T8
+        names:
+          - 部门一般公共预算基本支出部门预算经济分类预算表
+          - 预算单位一般公共预算基本支出部门预算经济分类预算表
+          - 一般公共预算基本支出部门预算经济分类预算表
+        required: true
+      - key: BUD_T9
+        names:
+          - 部门三公经费和机关运行经费预算表
+          - 单位三公经费和机关运行经费预算表
+          - 三公经费和机关运行经费预算表
+        required: true
+
+empty_table_statement:
+  enabled: true
+  targets:
+    - table_key: BUD_T6
+      required_phrases_any:
+        - 无政府性基金预算财政拨款安排
+        - 本表为空表
+    - table_key: BUD_T7
+      required_phrases_any:
+        - 无国有资本经营预算财政拨款安排
+        - 本表为空表
+  strict_conflict_check: true
+
+year_rules:
+  enabled: true
+  detect_report_year_from_cover: true
+  allowed_year_offsets:
+    - 0
+    - -1
+  warn_if_future_year_found: true
+  warn_if_older_than_report_year_minus_1_found: true
+  whitelist_context_keywords:
+    - 截至
+    - 立项依据
+    - 任务书
+    - 依据
+  whitelist_patterns:
+    - "《[^》]*20\\d{2}[^》]*》"
+    - "截至\\s*20\\d{2}年\\d{1,2}月\\d{1,2}日"
+
+cross_checks:
+  enabled: true
+  treat_blank_as_zero:
+    - BUD_T9
+  checks:
+    - id: BUD-C001
+      description: T1 收入总计 = 支出总计
+      expression: BUD_T1.收入总计 == BUD_T1.支出总计
+    - id: BUD-C002
+      description: T3 合计 = 基本支出 + 项目支出
+      expression: BUD_T3.合计 == BUD_T3.基本支出 + BUD_T3.项目支出
+    - id: BUD-C003
+      description: T6 合计 = 人员经费 + 公用经费
+      expression: BUD_T8.合计 == BUD_T8.人员经费 + BUD_T8.公用经费
+    - id: BUD-C004
+      description: T3 基本支出 = T8 合计
+      expression: BUD_T3.基本支出 == BUD_T8.合计
+    - id: BUD-C005
+      description: T1 收入总计 = T4 收入总计
+      expression: BUD_T1.收入总计 == BUD_T4.收入总计
+    - id: BUD-C006
+      description: T1 支出总计 = T4 支出总计(合计列)
+      expression: BUD_T1.支出总计 == BUD_T4.支出总计_合计列
+    - id: BUD-C007
+      description: T3 合计/基本/项目 与 T5 合计/基本/项目一致
+      expression: BUD_T3.合计 == BUD_T5.合计 && BUD_T3.基本支出 == BUD_T5.基本支出 && BUD_T3.项目支出 == BUD_T5.项目支出
+    - id: BUD-C008
+      description: T9 三公合计 = 因公出国(境)费 + 公务接待费 + 公务用车购置及运行费小计
+      expression: BUD_T9.三公合计 == BUD_T9.因公出国境费 + BUD_T9.公务接待费 + BUD_T9.公务用车购置及运行费小计
+    - id: BUD-C009
+      description: T9 公务用车购置及运行费小计 = 购置费 + 运行费
+      expression: BUD_T9.公务用车购置及运行费小计 == BUD_T9.公务用车购置费 + BUD_T9.公务用车运行费
+    - id: BUD-C010
+      description: T4 支出总计(合计列) = T5合计 + T6合计 + T7合计
+      expression: BUD_T4.支出总计_合计列 == BUD_T5.合计 + BUD_T6.合计 + BUD_T7.合计
+
+text_table_alignment:
+  enabled: true
+  checks:
+    - id: BUD-T001
+      description: 预算编制说明中的收入预算/支出预算/财政拨款支出预算与表格一致（支持元↔万元转换）
+      source_section_keywords:
+        - 预算编制说明
+      compare_fields:
+        - text_field: 收入预算
+          table_field: BUD_T1.收入总计
+        - text_field: 支出预算
+          table_field: BUD_T1.支出总计
+        - text_field: 财政拨款支出预算
+          table_field: BUD_T4.支出总计_合计列
+      tolerance_in_万元: 0.05
+    - id: BUD-T002
+      description: 三公经费预算情况说明与 T9 三公列一致
+      source_section_keywords:
+        - 三公经费预算情况说明
+      compare_fields:
+        - text_field: 三公经费预算数
+          table_field: BUD_T9.三公合计
+        - text_field: 因公出国境费
+          table_field: BUD_T9.因公出国境费
+        - text_field: 公务接待费
+          table_field: BUD_T9.公务接待费
+      tolerance_in_万元: 0.01
+    - id: BUD-T003
+      description: 机关运行经费预算说明与 T9 机关运行经费一致
+      source_section_keywords:
+        - 机关运行经费预算
+      compare_fields:
+        - text_field: 机关运行经费预算
+          table_field: BUD_T9.机关运行经费预算数
+      tolerance_in_万元: 0.01
+    - id: BUD-T004
+      description: 政府采购预算内部一致性（总额=货物+工程+服务，且中小企业预留<=总额）
+      source_section_keywords:
+        - 政府采购预算情况
+      logic:
+        - 采购总额 == 政府采购货物预算 + 政府采购工程预算 + 政府采购服务预算
+        - 中小企业预留预算 <= 采购总额
+      tolerance_in_万元: 0.01
+    - id: BUD-T005
+      description: 绩效目标设置资金不超过项目支出总额
+      source_section_keywords:
+        - 绩效目标设置情况
+      logic:
+        - 绩效目标涉及项目预算资金 <= BUD_T3.项目支出
+      tolerance_in_万元: 0.01
+    - id: BUD-T006
+      description: 同比变动描述检查（预算场景）
+      source_section_keywords:
+        - 预算编制说明
+        - 三公经费预算情况说明
+      policy:
+        no_reason_required_if_contains:
+          - 持平
+        reason_required_if_contains_any:
+          - 增加
+          - 减少
+          - 上升
+          - 下降
+        reason_keywords_any:
+          - 主要原因
+          - 原因
+          - 由于
+          - 因为
+
+document_consistency:
+  enabled: true
+  checks:
+    - id: BUD-D001
+      description: 部门/单位称谓一致性（封面、章节标题、表头）
+    - id: BUD-D002
+      description: 部门预算需声明下属单位覆盖关系（行政单位/事业单位及并入关系）
+
+format_quality:
+  enabled: true
+  checks:
+    - id: BUD-F001
+      description: 占位符/模板残留检测
+    - id: BUD-F002
+      description: 重复标点与混用标点检测
+    - id: BUD-F003
+      description: 同句单位口径冲突检测（元/万元/亿元）
+    - id: BUD-F004
+      description: 金额精度异常检测（表格金额应为0-2位小数）
+
+evidence_output:
+  include_page_number: true
+  include_bbox_screenshot: true
+  include_text_snippet: true
+  include_formula_detail: true
+  export_formats:
+    - CSV
+    - JSON
+    - AnnotatedPDF
+
+rules:
+  - rule_id: BUD-001
+    title: 九张预算表完整性检查
+    severity: critical
+    doc_scope: [预算]
+    detection:
+      type: presence
+      target: structure.nine_tables
+  - rule_id: BUD-002
+    title: 必备说明章节完整性检查
+    severity: high
+    doc_scope: [预算]
+    detection:
+      type: presence
+      target: structure.required_sections
+  - rule_id: BUD-003
+    title: 预算主表勾稽检查
+    severity: high
+    doc_scope: [预算]
+    detection:
+      type: expression_group
+      target: cross_checks
+      ids: [BUD-C001, BUD-C002, BUD-C003, BUD-C004, BUD-C005, BUD-C006, BUD-C007, BUD-C008, BUD-C009, BUD-C010]
+  - rule_id: BUD-004
+    title: 预算说明-表格一致性检查
+    severity: high
+    doc_scope: [预算]
+    detection:
+      type: text_table_alignment
+      target: text_table_alignment
+  - rule_id: BUD-005
+    title: 空表说明规范检查
+    severity: high
+    doc_scope: [预算]
+    detection:
+      type: empty_table_statement
+      target: empty_table_statement
+  - rule_id: BUD-006
+    title: 年份合规检查
+    severity: high
+    doc_scope: [预算]
+    detection:
+      type: year_consistency
+      target: year_rules
+  - rule_id: BUD-007
+    title: 模板占位符检查
+    severity: critical
+    doc_scope: [预算]
+    detection:
+      type: placeholder
+      target: normalization.placeholders.patterns
+  - rule_id: BUD-008
+    title: 格式与标点质量检查
+    severity: info
+    doc_scope: [预算]
+    detection:
+      type: format_quality
+      target: format_quality.checks
+  - rule_id: BUD-009
+    title: 部门/单位称谓一致性检查
+    severity: high
+    doc_scope: [预算]
+    detection:
+      type: document_consistency
+      target: document_consistency.checks
+      ids: [BUD-D001]
+  - rule_id: BUD-010
+    title: 部门预算下属单位覆盖性声明检查
+    severity: medium
+    doc_scope: [预算]
+    detection:
+      type: document_consistency
+      target: document_consistency.checks
+      ids: [BUD-D002]
+      only_if: department
+  - rule_id: BUD-011
+    title: 采购与绩效文本约束检查
+    severity: medium
+    doc_scope: [预算]
+    detection:
+      type: text_table_alignment
+      target: text_table_alignment
+      ids: [BUD-T004, BUD-T005]
+  - rule_id: BUD-012
+    title: 同比变动原因说明检查（预算口径）
+    severity: medium
+    doc_scope: [预算]
+    detection:
+      type: text_table_alignment
+      target: text_table_alignment
+      ids: [BUD-T006]

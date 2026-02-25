@@ -56,6 +56,12 @@ except ImportError:
 
 _pipeline_runner: Optional[Callable[[Path], Awaitable[None]]] = None
 
+_YEAR_4_RE = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
+_YEAR_2_RE = re.compile(
+    r"(?<!\d)(\d{2})(?=\s*(?:\u5e74|\u5e74\u5ea6|\u9884\u7b97|\u51b3\u7b97|budget|final|settlement|accounts|$))",
+    re.I,
+)
+
 
 def set_pipeline_runner(runner: Callable[[Path], Awaitable[None]]) -> None:
     """Register the async pipeline runner used by `start_analysis`."""
@@ -94,15 +100,95 @@ def read_json_file(path: Path, default: Optional[Dict[str, Any]] = None) -> Dict
 
 def parse_report_year(raw: Any) -> Optional[int]:
     """Parse year from arbitrary value and return 4-digit year."""
-    if raw is None:
-        return None
-    try:
-        year = int(str(raw).strip())
-    except Exception:
-        return None
-    if 2000 <= year <= 2099:
+    for year in extract_report_year_candidates(raw):
         return year
     return None
+
+
+def extract_report_year_candidates(raw: Any) -> List[int]:
+    """Extract report year candidates from free-form text."""
+    if raw is None:
+        return []
+    text = str(raw).strip()
+    if not text:
+        return []
+
+    years: List[int] = []
+
+    if re.fullmatch(r"\d{1,4}", text):
+        try:
+            value = int(text)
+        except Exception:
+            value = -1
+        if 2000 <= value <= 2099:
+            years.append(value)
+        elif 0 <= value <= 99:
+            years.append(2000 + value)
+
+    for match in _YEAR_4_RE.finditer(text):
+        year = int(match.group(1))
+        if 2000 <= year <= 2099 and year not in years:
+            years.append(year)
+
+    for match in _YEAR_2_RE.finditer(text):
+        year = 2000 + int(match.group(1))
+        if 2000 <= year <= 2099 and year not in years:
+            years.append(year)
+
+    return years
+
+
+def infer_report_year(
+    filename: str = "",
+    page_texts: Optional[List[str]] = None,
+    preferred_year: Any = None,
+) -> Optional[int]:
+    """Infer report year from filename and page text with lightweight weighting."""
+    scores: Dict[int, int] = {}
+
+    def _bump(year: Optional[int], weight: int) -> None:
+        if year is None:
+            return
+        if 2000 <= year <= 2099:
+            scores[year] = scores.get(year, 0) + weight
+
+    preferred = parse_report_year(preferred_year)
+    _bump(preferred, 2)
+
+    for year in extract_report_year_candidates(filename):
+        _bump(year, 6)
+
+    if page_texts:
+        keywords = (
+            "\u9884\u7b97",
+            "\u51b3\u7b97",
+            "\u90e8\u95e8",
+            "\u5355\u4f4d",
+            "\u76ee\u5f55",
+            "budget",
+            "final",
+        )
+        for pidx, page_text in enumerate(page_texts[:6]):
+            if not page_text:
+                continue
+            for raw_line in page_text.splitlines()[:40]:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                line_years = extract_report_year_candidates(line)
+                if not line_years:
+                    continue
+                weight = 1
+                if pidx == 0:
+                    weight += 1
+                if any(token in line for token in keywords):
+                    weight += 2
+                for year in line_years:
+                    _bump(year, weight)
+
+    if not scores:
+        return preferred
+    return max(scores.items(), key=lambda item: (item[1], item[0]))[0]
 
 
 def normalize_report_kind(doc_type: Optional[str], filename: str = "") -> str:
@@ -188,13 +274,19 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         except Exception:
             report_year = None
 
-    if report_year is None and filename:
+    filename_year: Optional[int] = None
+    if filename:
         try:
-            m = re.search(r"(20\d{2})", filename)
-            if m:
-                year = int(m.group(1))
-                if 2000 <= year <= 2099:
-                    report_year = year
+            filename_candidates = extract_report_year_candidates(filename)
+            filename_year = filename_candidates[0] if filename_candidates else None
+        except Exception:
+            filename_year = None
+
+    if filename_year is not None:
+        report_year = filename_year
+    elif report_year is None and filename:
+        try:
+            report_year = parse_report_year(filename)
         except Exception:
             report_year = None
     report_kind = normalize_report_kind(doc_type, filename)
@@ -408,6 +500,27 @@ async def start_analysis(job_id: str, body: Optional[Dict[str, Any]] = None) -> 
         if body.get("report_year") is not None
         else fiscal_year
     )
+    filename = ""
+    try:
+        filename = find_first_pdf(job_dir).name
+    except Exception:
+        filename = ""
+
+    filename_year: Optional[int] = None
+    if filename:
+        try:
+            filename_candidates = extract_report_year_candidates(filename)
+            filename_year = filename_candidates[0] if filename_candidates else None
+        except Exception:
+            filename_year = None
+
+    if filename_year is not None:
+        report_year = filename_year
+    elif report_year is None:
+        report_year = infer_report_year(
+            filename=filename,
+            preferred_year=fiscal_year,
+        )
     report_kind = normalize_report_kind(
         str(doc_type) if doc_type is not None else None,
         "",

@@ -359,8 +359,20 @@ export default function HomePage() {
       return uploadDocType;
     };
     const detectFiscalYear = (filename: string): string => {
-      const m = filename.match(/(20\d{2})/);
-      return m ? m[1] : new Date().getFullYear().toString();
+      const match4 = filename.match(/(20\d{2})/);
+      if (match4) return match4[1];
+
+      // Support file names like "...25年预算.pdf" / "...24年决算.pdf".
+      const match2 = filename.match(/(?:^|[^\d])(\d{2})(?=\s*(?:年|年度|预算|决算))/);
+      if (match2) {
+        const year = Number(match2[1]);
+        if (year >= 0 && year <= 99) {
+          return String(2000 + year);
+        }
+      }
+
+      // Let backend infer from content when filename has no reliable year token.
+      return "";
     };
     const resolvedDocType = detectUploadDocType(f.name);
     const resolvedFiscalYear = detectFiscalYear(f.name);
@@ -387,7 +399,9 @@ export default function HomePage() {
       const v3Form = new FormData();
       v3Form.set("file", f);
       v3Form.set("org_unit_id", selectedOrgId);
-      v3Form.append("fiscal_year", resolvedFiscalYear);
+      if (resolvedFiscalYear) {
+        v3Form.append("fiscal_year", resolvedFiscalYear);
+      }
       v3Form.append("doc_type", resolvedDocType);
 
       let upload = await sendUpload("/api/documents/upload", v3Form);
@@ -415,15 +429,18 @@ export default function HomePage() {
 
       const versionId = resp?.id;
       if (versionId) {
+        const runPayload: Record<string, unknown> = {
+          mode: "legacy",
+          doc_type: resolvedDocType,
+        };
+        if (resolvedFiscalYear) {
+          runPayload.fiscal_year = resolvedFiscalYear;
+          runPayload.report_year = Number(resolvedFiscalYear);
+        }
         await fetch(`/api/documents/${versionId}/run`, {
           method: 'POST',
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mode: "legacy",
-            doc_type: resolvedDocType,
-            fiscal_year: resolvedFiscalYear,
-            report_year: Number(resolvedFiscalYear),
-          }),
+          body: JSON.stringify(runPayload),
         });
       }
 

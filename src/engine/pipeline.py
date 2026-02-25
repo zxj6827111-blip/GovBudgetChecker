@@ -4,7 +4,8 @@ import os, time
 from typing import Dict, Any, List, Optional  # ✅ 增加 Optional
 import pdfplumber
 
-from .rules_v33 import ALL_RULES, build_document, order_and_number_issues, Issue
+from .rules_v33 import ALL_RULES as FINAL_ALL_RULES, build_document, order_and_number_issues, Issue
+from .budget_rules import ALL_BUDGET_RULES
 
 def _extract_tables_from_page(page) -> List[List[List[str]]]:
     # 返回：该页的多张表；每张表是 2D 数组（行→列）
@@ -31,7 +32,36 @@ def _extract_tables_from_page(page) -> List[List[List[str]]]:
         norm_tables.append([[("" if c is None else str(c)).strip() for c in row] for row in (tb or [])])
     return norm_tables
 
-def run_rules(doc, use_ai_assist=False):
+
+def _resolve_report_kind(doc, report_kind: Optional[str] = None) -> str:
+    kind = (report_kind or "").strip().lower()
+    if kind in {"budget", "final"}:
+        return kind
+
+    path = str(getattr(doc, "path", "") or "")
+    lowered = path.lower()
+    if "budget" in lowered or "预算" in path:
+        return "budget"
+    if "final" in lowered or "决算" in path:
+        return "final"
+
+    page_texts = getattr(doc, "page_texts", []) or []
+    first_text = page_texts[0] if page_texts else ""
+    if "预算" in first_text:
+        return "budget"
+    if "决算" in first_text:
+        return "final"
+    return "final"
+
+
+def _select_rule_set(doc, report_kind: Optional[str] = None):
+    kind = _resolve_report_kind(doc, report_kind=report_kind)
+    if kind == "budget":
+        return ALL_BUDGET_RULES
+    return FINAL_ALL_RULES
+
+
+def run_rules(doc, use_ai_assist=False, report_kind: Optional[str] = None):
     """
     执行规则检查
     :param doc: 文档对象
@@ -40,11 +70,16 @@ def run_rules(doc, use_ai_assist=False):
     # 直接使用传统规则引擎，避免混合验证的异步问题
     import logging
     logger = logging.getLogger(__name__)
-    logger.info(f"使用传统规则引擎，AI辅助: {use_ai_assist}")
+    selected_rules = _select_rule_set(doc, report_kind=report_kind)
+    kind = _resolve_report_kind(doc, report_kind=report_kind)
+    logger.info(
+        f"使用传统规则引擎，AI辅助: {use_ai_assist}, "
+        f"report_kind={kind}, rules={len(selected_rules)}"
+    )
     
     issues = []
     issues = []
-    for rule_obj in ALL_RULES:
+    for rule_obj in selected_rules:
         try:
             # 兼容 ALL_RULES 中既有类又有实例的情况
             if isinstance(rule_obj, type):
@@ -101,7 +136,7 @@ def _norm_sev(s: Optional[str]) -> str:  # ✅ 参数改为 Optional[str]
     return "info"
 
 
-def build_issues_payload(doc, use_ai_assist=False) -> dict:
+def build_issues_payload(doc, use_ai_assist=False, report_kind: Optional[str] = None) -> dict:
     """
     把规则结果打包成前端需要的结构：
     {
@@ -113,7 +148,7 @@ def build_issues_payload(doc, use_ai_assist=False) -> dict:
       }
     }
     """
-    raw_list = run_rules(doc, use_ai_assist)  # List[Issue]
+    raw_list = run_rules(doc, use_ai_assist, report_kind=report_kind)  # List[Issue]
     items = [_issue_to_dict(x) for x in raw_list]
     for it in items:
         it["severity"] = _norm_sev(it.get("severity"))
