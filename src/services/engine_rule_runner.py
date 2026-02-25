@@ -8,9 +8,8 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
 from src.schemas.issues import JobContext, AnalysisConfig, IssueItem
-from src.engine.rules_v33 import (
-    ALL_RULES, build_document, Issue, Document
-)
+from src.engine.rules_v33 import ALL_RULES as FINAL_ALL_RULES, build_document, Issue, Document
+from src.engine.budget_rules import ALL_BUDGET_RULES
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +33,47 @@ class EngineRuleRunner:
             "successful_rules": 0,
             "failed_rules": 0,
         }
+
+    def _resolve_report_kind(
+        self,
+        job_context: JobContext,
+        document: Optional[Document] = None,
+    ) -> str:
+        """
+        Resolve report kind:
+        1) job_context.meta.report_kind
+        2) filename hint
+        3) first page text hint
+        """
+        meta = job_context.meta or {}
+        report_kind = str(meta.get("report_kind") or "").strip().lower()
+        if report_kind in {"budget", "final"}:
+            return report_kind
+
+        source_text = f"{job_context.pdf_path} {job_context.job_id}".lower()
+        if "budget" in source_text or "预算" in source_text:
+            return "budget"
+        if "final" in source_text or "决算" in source_text:
+            return "final"
+
+        if document and document.page_texts:
+            first_text = (document.page_texts[0] or "")
+            if "预算" in first_text:
+                return "budget"
+            if "决算" in first_text:
+                return "final"
+
+        return "final"
+
+    def _select_rule_set(
+        self,
+        job_context: JobContext,
+        document: Optional[Document] = None,
+    ) -> List[Any]:
+        report_kind = self._resolve_report_kind(job_context, document)
+        if report_kind == "budget":
+            return ALL_BUDGET_RULES
+        return FINAL_ALL_RULES
     
     async def run_rules(self, 
                        job_context: JobContext,
@@ -50,24 +90,26 @@ class EngineRuleRunner:
         Returns:
             List[IssueItem]: 检查结果列表
         """
-        # 直接使用ALL_RULES中的规则，避免规则匹配失败
-        from src.engine.rules_v33 import ALL_RULES
-        
-        logger.info(f"Using {len(ALL_RULES)} rules from ALL_RULES for job {job_context.job_id}")
-        
-        # 准备文档对象
+        # 准备文档对象并按报告类型选择规则集
         document = await self._prepare_document(job_context)
-        
+        selected_rules = self._select_rule_set(job_context, document)
+        report_kind = self._resolve_report_kind(job_context, document)
+
+        logger.info(
+            f"Using {len(selected_rules)} rules for job {job_context.job_id}, "
+            f"report_kind={report_kind}"
+        )
+
         all_findings = []
         self._stats = {
-            "total_rules": len(ALL_RULES),
+            "total_rules": len(selected_rules),
             "successful_rules": 0,
             "failed_rules": 0,
             "total_findings": 0
         }
-        
-        # 执行ALL_RULES中的所有规则
-        for rule_obj in ALL_RULES:
+
+        # 执行选定规则集
+        for rule_obj in selected_rules:
             rule_id = rule_obj.code
             
             try:
@@ -144,7 +186,7 @@ class EngineRuleRunner:
                     )
                     all_findings.append(failure_item)
         
-        logger.info(f"Engine rules completed: {len(all_findings)} findings from {len(ALL_RULES)} rules "
+        logger.info(f"Engine rules completed: {len(all_findings)} findings from {len(selected_rules)} rules "
                    f"(success: {self._stats['successful_rules']}, failed: {self._stats['failed_rules']})")
         
         return all_findings
@@ -266,7 +308,8 @@ class EngineRuleRunner:
         try:
             # 查找对应的规则对象
             rule_obj = None
-            for r in ALL_RULES:
+            available_rules = self._select_rule_set(job_context, document)
+            for r in available_rules:
                 if r.code == rule_id or rule_id in r.code:
                     rule_obj = r
                     break
@@ -460,9 +503,12 @@ async def run_engine_rules(job_context: JobContext,
 
 def get_available_rules() -> List[str]:
     """获取可用的规则列表"""
-    return [rule.code for rule in ALL_RULES]
+    return [rule.code for rule in (ALL_BUDGET_RULES + FINAL_ALL_RULES)]
 
 
 def validate_rule_id(rule_id: str) -> bool:
     """验证规则ID是否有效"""
-    return any(rule.code == rule_id or rule_id in rule.code for rule in ALL_RULES)
+    return any(
+        rule.code == rule_id or rule_id in rule.code
+        for rule in (ALL_BUDGET_RULES + FINAL_ALL_RULES)
+    )
