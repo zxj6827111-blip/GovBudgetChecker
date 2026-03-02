@@ -26,7 +26,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r api/requirements.txt
-          pip install ruff mypy pytest
+          pip install -r tests/requirements-test.txt ruff mypy
 
       - name: Ruff
         run: ruff check .
