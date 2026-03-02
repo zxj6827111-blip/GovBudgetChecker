@@ -36,3 +36,11 @@ api/database.db
 *.log
 .ruff_cache/
 .trae/
+
+# Local data and temporary files
+local.db
+tmp_wanli_budget_check.json
+app/tsc_output.txt
+test_pdfs/
+X/
+e2e/tests/upload-fallback.spec.ts
