@@ -8,7 +8,9 @@ on:
 
 jobs:
   test-and-build:
-    runs-on: ubuntu-latest
+    # Playwright 1.42.x dependency installer expects Ubuntu 22.04 package names (e.g. libasound2).
+    # ubuntu-latest may currently resolve to 24.04 where those names changed.
+    runs-on: ubuntu-22.04
     timeout-minutes: 45
 
     steps:
