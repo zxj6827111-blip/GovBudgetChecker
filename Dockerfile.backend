@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # 复制依赖文件并安装
 COPY requirements.txt ./
-RUN pip install --no-cache-dir gunicorn transformers uvicorn[standard] -r requirements.txt
+RUN pip install --no-cache-dir gunicorn uvicorn[standard] -r requirements.txt
 
 # 复制项目代码
 COPY . .

@@ -5,7 +5,10 @@ import { backendAuthHeaders } from "@/lib/backendAuth";
 export async function GET(req: NextRequest) {
   const runId = req.nextUrl.searchParams.get("run_id");
   if (!runId) {
-    return NextResponse.json([], { status: 200 });
+    return NextResponse.json(
+      { error: "run_id_required", detail: "Query parameter run_id is required" },
+      { status: 400 }
+    );
   }
 
   try {
@@ -16,17 +19,27 @@ export async function GET(req: NextRequest) {
         headers: backendAuthHeaders(),
       }
     );
-    if (!upstream.ok) {
-      return NextResponse.json([], { status: 200 });
-    }
     const text = await upstream.text();
     try {
-      return NextResponse.json(JSON.parse(text), { status: 200 });
+      const parsed = JSON.parse(text);
+      return NextResponse.json(parsed, { status: upstream.status });
     } catch {
-      return NextResponse.json([], { status: 200 });
+      return NextResponse.json(
+        {
+          error: "non_json_from_backend",
+          upstream_status: upstream.status,
+          raw: text,
+        },
+        { status: upstream.status || 502 }
+      );
     }
-  } catch {
-    return NextResponse.json([], { status: 200 });
+  } catch (error: any) {
+    return NextResponse.json(
+      {
+        error: "backend_unavailable",
+        detail: error?.message || String(error),
+      },
+      { status: 502 }
+    );
   }
 }
-

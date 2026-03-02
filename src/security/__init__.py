@@ -24,6 +24,8 @@ API_KEY_ENV = "GOVBUDGET_API_KEY"
 API_KEY_LENGTH = 32
 DEFAULT_RATE_LIMIT = 100
 RATE_LIMIT_WINDOW = 60
+TRUST_PROXY_HEADERS_ENV = "GOVBUDGET_TRUST_PROXY_HEADERS"
+TRUSTED_PROXY_IPS_ENV = "GOVBUDGET_TRUSTED_PROXY_IPS"
 
 
 @dataclass
@@ -49,6 +51,8 @@ class SecurityConfig:
         "/redoc",
     })
     admin_api_keys: Set[str] = field(default_factory=set)
+    trust_proxy_headers: bool = False
+    trusted_proxy_ips: Set[str] = field(default_factory=set)
 
 
 class APIKeyManager:
@@ -125,8 +129,18 @@ def create_security_config() -> SecurityConfig:
     
     admin_keys_str = os.getenv("GOVBUDGET_ADMIN_API_KEYS", "")
     admin_keys = {k.strip() for k in admin_keys_str.split(",") if k.strip()}
+    trusted_proxy_ips_str = os.getenv(TRUSTED_PROXY_IPS_ENV, "")
+    trusted_proxy_ips = {
+        ip.strip() for ip in trusted_proxy_ips_str.split(",") if ip.strip()
+    }
     
     rate_limit = int(os.getenv("GOVBUDGET_RATE_LIMIT", str(DEFAULT_RATE_LIMIT)))
+    trust_proxy_headers = os.getenv(TRUST_PROXY_HEADERS_ENV, "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     
     testing_mode = os.getenv("TESTING", "").lower() in {"1", "true", "yes"}
     auth_env = os.getenv("GOVBUDGET_AUTH_ENABLED")
@@ -146,6 +160,8 @@ def create_security_config() -> SecurityConfig:
         api_key=api_key,
         rate_limit=rate_limit,
         admin_api_keys=admin_keys,
+        trust_proxy_headers=trust_proxy_headers,
+        trusted_proxy_ips=trusted_proxy_ips,
     )
 
 
@@ -194,12 +210,21 @@ async def verify_api_key(
 
 
 class SecurityMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, config: SecurityConfig = None):
+    def __init__(
+        self,
+        app,
+        config: SecurityConfig = None,
+        manager: Optional[APIKeyManager] = None,
+    ):
         super().__init__(app)
         self.config = config or security_config
-        self.manager = api_key_manager
+        self.manager = manager or api_key_manager
     
     async def dispatch(self, request: Request, call_next):
+        # Let CORS preflight pass through before auth/rate-limit checks.
+        if request.method.upper() == "OPTIONS":
+            return await call_next(request)
+
         if request.url.path in self.config.exempt_paths:
             return await call_next(request)
         
@@ -219,6 +244,29 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                 },
                 headers={"Retry-After": str(remaining)}
             )
+
+        if self.config.enabled:
+            api_key = self._extract_api_key(request)
+            if not api_key:
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "error": "authentication_required",
+                        "detail": "API key required. Provide X-API-Key header or Authorization: Bearer <key>",
+                    },
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
+            if not self.manager.validate_key(api_key):
+                logger.warning("Invalid API key attempt from %s", client_id)
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse(
+                    status_code=403,
+                    content={"error": "invalid_api_key", "detail": "Invalid API key"},
+                )
         
         response = await call_next(request)
         
@@ -228,14 +276,35 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         return response
     
     def _get_client_id(self, request: Request) -> str:
+        if self.config.trust_proxy_headers and self._is_trusted_proxy(request):
+            forwarded = request.headers.get("X-Forwarded-For")
+            if forwarded:
+                forwarded_ip = forwarded.split(",")[0].strip()
+                if forwarded_ip:
+                    return forwarded_ip
+        
         if request.client:
             return request.client.host
         
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        
         return "unknown"
+
+    def _is_trusted_proxy(self, request: Request) -> bool:
+        if request.client is None:
+            return False
+        if not self.config.trusted_proxy_ips:
+            return True
+        return request.client.host in self.config.trusted_proxy_ips
+
+    def _extract_api_key(self, request: Request) -> Optional[str]:
+        key = request.headers.get(API_KEY_HEADER)
+        if key:
+            return key
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header.split(" ", 1)[1].strip()
+            if token:
+                return token
+        return None
 
 
 def sanitize_filename(filename: str) -> str:
@@ -265,20 +334,35 @@ ALLOWED_EXTENSIONS = {'.pdf'}
 
 MAX_FILE_SIZE_MB = 30
 
+def validate_upload_metadata(
+    filename: str,
+    content_type: str,
+) -> tuple[bool, str]:
+    if not filename:
+        return False, "Filename is required"
+
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        return False, f"File type not allowed. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}"
+
+    if content_type and content_type not in ALLOWED_MIME_TYPES:
+        return False, f"MIME type '{content_type}' not allowed"
+
+    return True, "OK"
+
+
+def is_valid_pdf_signature(content: bytes) -> bool:
+    return len(content) >= 4 and content.startswith(b"%PDF")
+
+
 def validate_file_upload(
     filename: str,
     content_type: str,
     content: bytes
 ) -> tuple[bool, str]:
-    if not filename:
-        return False, "Filename is required"
-    
-    ext = os.path.splitext(filename)[1].lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        return False, f"File type not allowed. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}"
-    
-    if content_type and content_type not in ALLOWED_MIME_TYPES:
-        return False, f"MIME type '{content_type}' not allowed"
+    metadata_ok, metadata_msg = validate_upload_metadata(filename, content_type)
+    if not metadata_ok:
+        return metadata_ok, metadata_msg
     
     file_size_mb = len(content) / (1024 * 1024)
     if file_size_mb > MAX_FILE_SIZE_MB:
@@ -287,8 +371,7 @@ def validate_file_upload(
     if len(content) < 4:
         return False, "File is too small to be a valid PDF"
     
-    pdf_signature = b'%PDF'
-    if not content.startswith(pdf_signature):
+    if not is_valid_pdf_signature(content):
         return False, "File does not appear to be a valid PDF (invalid signature)"
     
     return True, "OK"
