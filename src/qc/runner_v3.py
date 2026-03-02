@@ -598,7 +598,7 @@ class QCRunnerV3(QCRunnerV2):
     
     async def _rule_r013(self) -> Finding:
         """R013: 预算调整率检测 (调整超30%警告)"""
-        params = self._get_params('R013')
+        self._get_params('R013')
         
         # Get total budget and actual
         budget = await self.conn.fetchval("""
@@ -650,7 +650,7 @@ class QCRunnerV3(QCRunnerV2):
     
     async def _rule_r014(self) -> Finding:
         """R014: 异常数值检测 (负数/超大值)"""
-        params = self._get_params('R014')
+        self._get_params('R014')
         
         # Check for negative amounts
         negative_count = await self.conn.fetchval("""

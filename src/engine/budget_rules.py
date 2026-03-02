@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -8,7 +8,9 @@ from rapidfuzz import fuzz
 from .rules_v33 import Document, Issue, Rule, normalize_text, parse_number
 
 
-_YEAR_RE = re.compile(r"(?<!\d)(20\d{2})(?:\s*\u5e74)?")
+# Require both sides to be non-digit so numeric amounts like 20765.62
+# are not misread as year 2076.
+_YEAR_RE = re.compile(r"(?<!\d)(20\d{2})(?:\s*\u5e74)?(?!\d)")
 _YEAR_SHORT_RE = re.compile(r"(?<!\d)(\d{2})(?=\s*\u5e74)")
 _YEAR_SHORT_HINT_RE = re.compile(
     r"(?<!\d)(\d{2})(?=\s*(?:\u5e74|\u5e74\u5ea6|\u9884\u7b97|\u51b3\u7b97|budget|final|settlement|accounts))",
@@ -43,6 +45,14 @@ _YEAR_WHITELIST_TOKENS = (
     "\u7acb\u9879\u4f9d\u636e",
     "\u4efb\u52a1\u4e66",
     "\u4f9d\u636e",
+)
+
+_YEAR_TARGET_LINE_TOKENS = (
+    "\u9884\u7b97",
+    "\u51b3\u7b97",
+    "\u76ee\u5f55",
+    "\u62a5\u544a",
+    "\u8868",
 )
 
 
@@ -188,6 +198,49 @@ def _line_contains_budget_table_title(line: str) -> bool:
     if ("\u9884\u7b97\u8868" in (line or "")) or ("\u9884\u7b97\u603b\u8868" in (line or "")):
         return True
     return any(alias_norm and alias_norm in normalized_line for alias_norm in _BUDGET_TABLE_TITLE_NORMS)
+
+
+def _is_toc_page(text: str) -> bool:
+    if not text:
+        return False
+    normalized = normalize_text(text)
+    head_norm = normalize_text("\n".join(text.splitlines()[:12]))
+    if "\u76ee\u5f55" in head_norm:
+        return True
+    if ("\u76ee\u5f55" in normalized) and (
+        normalized.count("\u9884\u7b97\u8868") >= 3 or normalized.count("\u8868") >= 8
+    ):
+        return True
+    return False
+
+
+def _line_for_span(text: str, start: int, end: int) -> str:
+    left = text.rfind("\n", 0, start)
+    right = text.find("\n", end)
+    if left < 0:
+        left = 0
+    else:
+        left += 1
+    if right < 0:
+        right = len(text)
+    return text[left:right].strip()
+
+
+_TOC_LEADER_LINE_RE = re.compile(
+    r"^\s*(?:\d+[\.、]?)?\s*.+(?:\.{3,}|\u2026{2,}|\u3002{3,}|\u00b7{3,})\s*\d+\s*$"
+)
+
+
+def _is_toc_leader_line(line: str) -> bool:
+    if not line:
+        return False
+    if not _TOC_LEADER_LINE_RE.search(line):
+        return False
+    return any(token in line for token in ("\u8868", "\u7ae0", "\u76ee\u5f55", "\u8bf4\u660e"))
+
+
+def _is_target_year_line(line: str) -> bool:
+    return any(token in line for token in _YEAR_TARGET_LINE_TOKENS)
 
 
 def _largest_table_on_page(tables: Sequence[Sequence[Sequence[Any]]]) -> Optional[List[List[str]]]:
@@ -550,9 +603,11 @@ class BUD002_PlaceholderCheck(Rule):
 
     def apply(self, doc: Document) -> List[Issue]:
         issues: List[Issue] = []
+        punctuation_pattern = _PLACEHOLDER_PATTERNS[-1]
         for pidx, text in enumerate(doc.page_texts):
             if not text:
                 continue
+            toc_page = _is_toc_page(text)
             seen_spans: set[Tuple[int, int]] = set()
             page_hits = 0
             for pat in _PLACEHOLDER_PATTERNS:
@@ -560,6 +615,12 @@ class BUD002_PlaceholderCheck(Rule):
                     span = (m.start(), m.end())
                     if span in seen_spans:
                         continue
+                    if pat is punctuation_pattern:
+                        line = _line_for_span(text, m.start(), m.end())
+                        if toc_page:
+                            continue
+                        if _is_toc_leader_line(line):
+                            continue
                     seen_spans.add(span)
                     snippet = text[max(0, m.start() - 12): m.end() + 20].replace("\n", " ")
                     issues.append(
@@ -624,21 +685,27 @@ class BUD003_YearConsistency(Rule):
                 continue
             if (pidx + 1) in strict_year_issue_pages:
                 continue
-            for match in _YEAR_RE.finditer(text):
-                year = int(match.group(1))
-                if year in allowed:
+            for raw_line in text.splitlines():
+                line = raw_line.strip()
+                if not line:
                     continue
-                start = max(0, match.start() - 16)
-                end = min(len(text), match.end() + 16)
-                ctx = text[start:end]
-                if any(token in ctx for token in _YEAR_WHITELIST_TOKENS):
+                if not _is_target_year_line(line):
                     continue
+                line_years = sorted(set(_extract_year_candidates(line)))
+                if not line_years:
+                    continue
+                wrong_years = [year for year in line_years if year not in allowed]
+                if not wrong_years:
+                    continue
+                if any(token in line for token in _YEAR_WHITELIST_TOKENS):
+                    continue
+                pos = text.find(raw_line)
                 issues.append(
                     self._issue(
-                        f"\u5e74\u4efd\u53ef\u80fd\u4e0d\u4e00\u81f4: \u62a5\u544a\u5e74={report_year}, \u547d\u4e2d={year}",
-                        {"page": pidx + 1, "pos": match.start()},
+                        f"\u5e74\u4efd\u53ef\u80fd\u4e0d\u4e00\u81f4: \u62a5\u544a\u5e74={report_year}, \u547d\u4e2d={wrong_years[0]}",
+                        {"page": pidx + 1, "pos": pos if pos >= 0 else 0},
                         severity="warn",
-                        evidence_text=ctx.replace("\n", " "),
+                        evidence_text=line,
                     )
                 )
                 break

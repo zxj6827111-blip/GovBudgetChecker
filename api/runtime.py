@@ -43,6 +43,7 @@ except ImportError:
         _ = request
         return "anonymous"
 
+
 try:
     from src.services.org_storage import get_org_storage
     from src.schemas.organization import Organization, OrganizationLevel
@@ -86,7 +87,9 @@ def find_first_pdf(job_dir: Path) -> Path:
     return pdfs[0]
 
 
-def read_json_file(path: Path, default: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def read_json_file(
+    path: Path, default: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """Read JSON file safely and return `default` when missing/invalid."""
     if default is None:
         default = {}
@@ -252,7 +255,7 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
 
     result_meta: Dict[str, Any] = {}
     try:
-        result_meta = ((status_data.get("result") or {}).get("meta") or {})
+        result_meta = (status_data.get("result") or {}).get("meta") or {}
         if not isinstance(result_meta, dict):
             result_meta = {}
     except Exception:
@@ -428,7 +431,9 @@ async def store_upload_file(file: UploadFile) -> Dict[str, Any]:
         safe_name = Path(file.filename or "file.pdf").name
 
     if len(data) > MAX_UPLOAD_MB * 1024 * 1024:
-        raise HTTPException(status_code=413, detail=f"File exceeds {MAX_UPLOAD_MB}MB limit")
+        raise HTTPException(
+            status_code=413, detail=f"File exceeds {MAX_UPLOAD_MB}MB limit"
+        )
 
     job_id = os.urandom(16).hex()
     job_dir = UPLOAD_ROOT / job_id
@@ -460,7 +465,9 @@ def get_job_status_payload(job_id: str) -> Dict[str, Any]:
     try:
         return json.loads(status_file.read_text(encoding="utf-8"))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read job status: {e}") from e
+        raise HTTPException(
+            status_code=500, detail=f"Failed to read job status: {e}"
+        ) from e
 
 
 def require_org_storage():
@@ -470,14 +477,20 @@ def require_org_storage():
     return get_org_storage()
 
 
-async def start_analysis(job_id: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+async def start_analysis(
+    job_id: str, body: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """Queue a job for async processing and return started status."""
     job_dir = UPLOAD_ROOT / job_id
     if not job_dir.exists():
-        raise HTTPException(status_code=404, detail="job_id does not exist, upload first")
+        raise HTTPException(
+            status_code=404, detail="job_id does not exist, upload first"
+        )
 
     if _pipeline_runner is None:
-        raise HTTPException(status_code=500, detail="analysis pipeline is not configured")
+        raise HTTPException(
+            status_code=500, detail="analysis pipeline is not configured"
+        )
 
     status_file = job_dir / "status.json"
     body = body or {}
@@ -496,9 +509,7 @@ async def start_analysis(job_id: str, body: Optional[Dict[str, Any]] = None) -> 
         else existing_status.get("doc_type")
     )
     report_year = parse_report_year(
-        body.get("report_year")
-        if body.get("report_year") is not None
-        else fiscal_year
+        body.get("report_year") if body.get("report_year") is not None else fiscal_year
     )
     filename = ""
     try:
@@ -523,7 +534,7 @@ async def start_analysis(job_id: str, body: Optional[Dict[str, Any]] = None) -> 
         )
     report_kind = normalize_report_kind(
         str(doc_type) if doc_type is not None else None,
-        "",
+        filename,
     )
     payload = {
         "job_id": job_id,
@@ -540,8 +551,12 @@ async def start_analysis(job_id: str, body: Optional[Dict[str, Any]] = None) -> 
         "ts": time.time(),
     }
     try:
-        status_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        status_file.write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
         asyncio.create_task(_pipeline_runner(job_dir))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"failed to start analysis: {e}") from e
+        raise HTTPException(
+            status_code=500, detail=f"failed to start analysis: {e}"
+        ) from e
     return {"job_id": job_id, "status": "started"}

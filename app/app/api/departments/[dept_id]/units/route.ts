@@ -27,6 +27,9 @@ export async function GET(
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
     console.error("Failed to fetch department units:", error);
-    return NextResponse.json({ units: [], total: 0 }, { status: 200 });
+    return NextResponse.json(
+      { error: "backend_unavailable", units: [], total: 0 },
+      { status: 502 }
+    );
   }
 }

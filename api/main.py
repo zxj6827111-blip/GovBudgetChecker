@@ -2,6 +2,7 @@
 import os
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 import json
@@ -15,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import sys as _sys
+
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
@@ -33,6 +35,7 @@ except ImportError:
     SecurityMiddleware = None
 
 import logging
+
 logger = logging.getLogger(__name__)
 
 # ----------------------------- 基础配置 -----------------------------
@@ -73,6 +76,7 @@ if SecurityMiddleware and runtime.security_config and runtime.security_config.en
     app.add_middleware(SecurityMiddleware, config=runtime.security_config)
     logger.info("Security middleware enabled with rate limiting")
 
+
 # ----------------------------- 工具函数 -----------------------------
 def _safe_write(job_dir: Path, payload: Dict[str, Any]) -> None:
     """将状态写入 status.json（带异常保护）"""
@@ -98,13 +102,18 @@ def _extract_tables_from_page(page) -> List[List[List[str]]]:
     """
     tables: List[List[List[str]]] = []
     try:
-        t1 = page.extract_tables(table_settings={
-            "vertical_strategy": "lines",
-            "horizontal_strategy": "lines",
-            "intersection_tolerance": 3,
-            "min_words_vertical": 1,
-            "min_words_horizontal": 1,
-        }) or []
+        t1 = (
+            page.extract_tables(
+                table_settings={
+                    "vertical_strategy": "lines",
+                    "horizontal_strategy": "lines",
+                    "intersection_tolerance": 3,
+                    "min_words_vertical": 1,
+                    "min_words_horizontal": 1,
+                }
+            )
+            or []
+        )
         tables += t1
     except Exception:
         pass
@@ -117,7 +126,9 @@ def _extract_tables_from_page(page) -> List[List[List[str]]]:
 
     norm_tables: List[List[List[str]]] = []
     for tb in tables:
-        norm_tables.append([[("" if c is None else str(c)).strip() for c in row] for row in (tb or [])])
+        norm_tables.append(
+            [[("" if c is None else str(c)).strip() for c in row] for row in (tb or [])]
+        )
     return norm_tables
 
 
@@ -141,7 +152,7 @@ async def _run_pipeline(job_dir: Path) -> None:
         doc_type = None
         report_year = None
         report_kind = "unknown"
-        
+
         if status_file.exists():
             try:
                 status_data = json.loads(status_file.read_text(encoding="utf-8"))
@@ -155,22 +166,25 @@ async def _run_pipeline(job_dir: Path) -> None:
                 )
             except:
                 pass
-        
+
         # 检查是否启用双模式
         dual_mode_enabled = settings.get("dual_mode.enabled", False) or mode == "dual"
-        
+
         # 标记 processing
-        _safe_write(job_dir, {
-            "job_id": job_dir.name,
-            "status": "processing",
-            "progress": 5,
-            "ts": time.time(),
-            "use_local_rules": use_local_rules,
-            "use_ai_assist": use_ai_assist,
-            "mode": mode,
-            "dual_mode_enabled": dual_mode_enabled,
-            "stage": "开始解析文档"
-        })
+        _safe_write(
+            job_dir,
+            {
+                "job_id": job_dir.name,
+                "status": "processing",
+                "progress": 5,
+                "ts": time.time(),
+                "use_local_rules": use_local_rules,
+                "use_ai_assist": use_ai_assist,
+                "mode": mode,
+                "dual_mode_enabled": dual_mode_enabled,
+                "stage": "开始解析文档",
+            },
+        )
 
         pdf_path = _find_first_pdf(job_dir)
         report_kind = runtime.normalize_report_kind(
@@ -180,18 +194,21 @@ async def _run_pipeline(job_dir: Path) -> None:
         started = time.time()
 
         # 读取 PDF -> 文本/表格
-        _safe_write(job_dir, {
-            "job_id": job_dir.name,
-            "status": "processing",
-            "progress": 15,
-            "ts": time.time(),
-            "use_local_rules": use_local_rules,
-            "use_ai_assist": use_ai_assist,
-            "mode": mode,
-            "dual_mode_enabled": dual_mode_enabled,
-            "stage": "解析PDF内容"
-        })
-        
+        _safe_write(
+            job_dir,
+            {
+                "job_id": job_dir.name,
+                "status": "processing",
+                "progress": 15,
+                "ts": time.time(),
+                "use_local_rules": use_local_rules,
+                "use_ai_assist": use_ai_assist,
+                "mode": mode,
+                "dual_mode_enabled": dual_mode_enabled,
+                "stage": "解析PDF内容",
+            },
+        )
+
         def _sync_parse_pdf():
             p_texts = []
             p_tables = []
@@ -203,56 +220,65 @@ async def _run_pipeline(job_dir: Path) -> None:
             return p_texts, p_tables, f_size
 
         loop = asyncio.get_running_loop()
-        page_texts, page_tables, filesize = await loop.run_in_executor(None, _sync_parse_pdf)
-
-        # 构建 Document
-        _safe_write(job_dir, {
-            "job_id": job_dir.name,
-            "status": "processing",
-            "progress": 25,
-            "ts": time.time(),
-            "use_local_rules": use_local_rules,
-            "use_ai_assist": use_ai_assist,
-            "mode": mode,
-            "dual_mode_enabled": dual_mode_enabled,
-            "stage": "构建文档对象"
-        })
-        
-        doc = build_document(
-            path=str(pdf_path),
-            page_texts=page_texts,
-            page_tables=page_tables,
-            filesize=filesize
+        page_texts, page_tables, filesize = await loop.run_in_executor(
+            None, _sync_parse_pdf
         )
 
-        # 双模式分析
-        if dual_mode_enabled:
-            _safe_write(job_dir, {
+        # 构建 Document
+        _safe_write(
+            job_dir,
+            {
                 "job_id": job_dir.name,
                 "status": "processing",
-                "progress": 35,
+                "progress": 25,
                 "ts": time.time(),
                 "use_local_rules": use_local_rules,
                 "use_ai_assist": use_ai_assist,
                 "mode": mode,
                 "dual_mode_enabled": dual_mode_enabled,
-                "stage": "双模式分析"
-            })
-            
+                "stage": "构建文档对象",
+            },
+        )
+
+        doc = build_document(
+            path=str(pdf_path),
+            page_texts=page_texts,
+            page_tables=page_tables,
+            filesize=filesize,
+        )
+
+        # 双模式分析
+        if dual_mode_enabled:
+            _safe_write(
+                job_dir,
+                {
+                    "job_id": job_dir.name,
+                    "status": "processing",
+                    "progress": 35,
+                    "ts": time.time(),
+                    "use_local_rules": use_local_rules,
+                    "use_ai_assist": use_ai_assist,
+                    "mode": mode,
+                    "dual_mode_enabled": dual_mode_enabled,
+                    "stage": "双模式分析",
+                },
+            )
+
             # 构建JobContext
             from src.schemas.issues import JobContext
+
             job_context = JobContext(
                 job_id=job_dir.name,
                 pdf_path=str(pdf_path),
                 page_texts=page_texts,
                 page_tables=page_tables,
                 filesize=filesize,
-                meta={"started_at": started}
+                meta={"started_at": started},
             )
-            
+
             # 执行双模式分析
             dual_result = await dual_analyzer.analyze(job_context)
-            
+
             # 组装最终返回体（双模式结构）
             result = {
                 "summary": "",
@@ -274,114 +300,78 @@ async def _run_pipeline(job_dir: Path) -> None:
                     "report_year": report_year,
                     "report_kind": report_kind,
                     "elapsed_ms": dual_result.meta.get("elapsed_ms", {}),
-                    "tokens": dual_result.meta.get("tokens", {})
-                }
+                    "tokens": dual_result.meta.get("tokens", {}),
+                },
             }
         else:
             # 传统模式分析
             # AI辅助检测阶段
             if use_ai_assist:
-                _safe_write(job_dir, {
-                    "job_id": job_dir.name,
-                    "status": "processing",
-                    "progress": 35,
-                    "ts": time.time(),
-                    "use_local_rules": use_local_rules,
-                    "use_ai_assist": use_ai_assist,
-                    "mode": mode,
-                    "dual_mode_enabled": dual_mode_enabled,
-                    "stage": "AI辅助状态"
-                })
-                
-                _safe_write(job_dir, {
-                    "job_id": job_dir.name,
-                    "status": "processing",
-                    "progress": 50,
-                    "ts": time.time(),
-                    "use_local_rules": use_local_rules,
-                    "use_ai_assist": use_ai_assist,
-                    "mode": mode,
-                    "dual_mode_enabled": dual_mode_enabled,
-                    "stage": "开始抽取"
-                })
-                
+                _safe_write(
+                    job_dir,
+                    {
+                        "job_id": job_dir.name,
+                        "status": "processing",
+                        "progress": 35,
+                        "ts": time.time(),
+                        "use_local_rules": use_local_rules,
+                        "use_ai_assist": use_ai_assist,
+                        "mode": mode,
+                        "dual_mode_enabled": dual_mode_enabled,
+                        "stage": "AI辅助状态",
+                    },
+                )
+
+                _safe_write(
+                    job_dir,
+                    {
+                        "job_id": job_dir.name,
+                        "status": "processing",
+                        "progress": 50,
+                        "ts": time.time(),
+                        "use_local_rules": use_local_rules,
+                        "use_ai_assist": use_ai_assist,
+                        "mode": mode,
+                        "dual_mode_enabled": dual_mode_enabled,
+                        "stage": "开始抽取",
+                    },
+                )
+
                 # 这里会调用AI抽取服务，在build_issues_payload中处理
-                _safe_write(job_dir, {
-                    "job_id": job_dir.name,
-                    "status": "processing",
-                    "progress": 80,
-                    "ts": time.time(),
-                    "use_local_rules": use_local_rules,
-                    "use_ai_assist": use_ai_assist,
-                    "mode": mode,
-                    "dual_mode_enabled": dual_mode_enabled,
-                    "stage": "抽取完成"
-                })
-                
-                _safe_write(job_dir, {
-                    "job_id": job_dir.name,
-                    "status": "processing",
-                    "progress": 90,
-                    "ts": time.time(),
-                    "use_local_rules": use_local_rules,
-                    "use_ai_assist": use_ai_assist,
-                    "mode": mode,
-                    "dual_mode_enabled": dual_mode_enabled,
-                    "stage": "结果转换"
-                })
+                _safe_write(
+                    job_dir,
+                    {
+                        "job_id": job_dir.name,
+                        "status": "processing",
+                        "progress": 80,
+                        "ts": time.time(),
+                        "use_local_rules": use_local_rules,
+                        "use_ai_assist": use_ai_assist,
+                        "mode": mode,
+                        "dual_mode_enabled": dual_mode_enabled,
+                        "stage": "抽取完成",
+                    },
+                )
+
+                _safe_write(
+                    job_dir,
+                    {
+                        "job_id": job_dir.name,
+                        "status": "processing",
+                        "progress": 90,
+                        "ts": time.time(),
+                        "use_local_rules": use_local_rules,
+                        "use_ai_assist": use_ai_assist,
+                        "mode": mode,
+                        "dual_mode_enabled": dual_mode_enabled,
+                        "stage": "结果转换",
+                    },
+                )
 
             # 运行规则并打包统一结构（issues: {error/warn/info/all}）
-            _safe_write(job_dir, {
-                "job_id": job_dir.name,
-                "status": "processing",
-                "progress": 95,
-                "ts": time.time(),
-                "use_local_rules": use_local_rules,
-                "use_ai_assist": use_ai_assist,
-                "mode": mode,
-                "dual_mode_enabled": dual_mode_enabled,
-                "stage": "执行规则检查",
-                "provider_stats": provider_stats
-            })
-            
-            # 使用线程池为规则检查设置超时，避免在95%阶段长时间卡住
-            provider_stats = []
-            try:
-                RULES_TIMEOUT_SEC = int(os.getenv("RULES_TIMEOUT_SEC", "150"))
-            except Exception:
-                RULES_TIMEOUT_SEC = 150
-
-            def _run_build_issues():
-                return build_issues_payload(doc, use_ai_assist)
-
-            payload_issues = None
-            try:
-                loop = asyncio.get_running_loop()
-                # Run the synchronous build task in a separate thread, properly awaited
-                with ThreadPoolExecutor(max_workers=1) as ex:
-                    payload_issues = await asyncio.wait_for(
-                        loop.run_in_executor(ex, _run_build_issues),
-                        timeout=RULES_TIMEOUT_SEC
-                    )
-            except asyncio.TimeoutError:
-                # 超时：返回空结果并记录回退信息
-                payload_issues = {
-                    "issues": {
-                        "error": [],
-                        "warn": [],
-                        "info": [],
-                        "all": []
-                    }
-                }
-                provider_stats.append({
-                    "fell_back": True,
-                    "provider_used": "ai_extractor",
-                    "error": f"rules_timeout_{RULES_TIMEOUT_SEC}s",
-                    "latency_ms": RULES_TIMEOUT_SEC * 1000,
-                    "timestamp": time.time()
-                })
-                # 及时写入处理中状态，便于前端读取 provider_stats
-                _safe_write(job_dir, {
+            _safe_write(
+                job_dir,
+                {
                     "job_id": job_dir.name,
                     "status": "processing",
                     "progress": 95,
@@ -390,27 +380,77 @@ async def _run_pipeline(job_dir: Path) -> None:
                     "use_ai_assist": use_ai_assist,
                     "mode": mode,
                     "dual_mode_enabled": dual_mode_enabled,
-                    "stage": "执行规则检查（超时回退）",
-                    "provider_stats": provider_stats
-                })
+                    "stage": "执行规则检查",
+                    "provider_stats": provider_stats,
+                },
+            )
+
+            # 使用线程池为规则检查设置超时，避免在95%阶段长时间卡住
+            provider_stats = []
+            try:
+                RULES_TIMEOUT_SEC = int(os.getenv("RULES_TIMEOUT_SEC", "150"))
+            except Exception:
+                RULES_TIMEOUT_SEC = 150
+
+            def _run_build_issues():
+                return build_issues_payload(doc, use_ai_assist, report_kind=report_kind)
+
+            payload_issues = None
+            try:
+                loop = asyncio.get_running_loop()
+                # Run the synchronous build task in a separate thread, properly awaited
+                with ThreadPoolExecutor(max_workers=1) as ex:
+                    payload_issues = await asyncio.wait_for(
+                        loop.run_in_executor(ex, _run_build_issues),
+                        timeout=RULES_TIMEOUT_SEC,
+                    )
+            except asyncio.TimeoutError:
+                # 超时：返回空结果并记录回退信息
+                payload_issues = {
+                    "issues": {"error": [], "warn": [], "info": [], "all": []}
+                }
+                provider_stats.append(
+                    {
+                        "fell_back": True,
+                        "provider_used": "ai_extractor",
+                        "error": f"rules_timeout_{RULES_TIMEOUT_SEC}s",
+                        "latency_ms": RULES_TIMEOUT_SEC * 1000,
+                        "timestamp": time.time(),
+                    }
+                )
+                # 及时写入处理中状态，便于前端读取 provider_stats
+                _safe_write(
+                    job_dir,
+                    {
+                        "job_id": job_dir.name,
+                        "status": "processing",
+                        "progress": 95,
+                        "ts": time.time(),
+                        "use_local_rules": use_local_rules,
+                        "use_ai_assist": use_ai_assist,
+                        "mode": mode,
+                        "dual_mode_enabled": dual_mode_enabled,
+                        "stage": "执行规则检查（超时回退）",
+                        "provider_stats": provider_stats,
+                    },
+                )
             except Exception as e:
                 # 规则执行异常：返回空结果并记录
-                    payload_issues = {
-                        "issues": {
-                            "error": [],
-                            "warn": [],
-                            "info": [],
-                            "all": []
-                        }
-                    }
-                    provider_stats.append({
+                payload_issues = {
+                    "issues": {"error": [], "warn": [], "info": [], "all": []}
+                }
+                provider_stats.append(
+                    {
                         "fell_back": True,
                         "provider_used": "engine",
                         "error": f"rules_error:{e}",
-                        "timestamp": time.time()
-                    })
-                    # 及时写入处理中状态，便于前端读取 provider_stats
-                    _safe_write(job_dir, {
+                        "timestamp": time.time(),
+                    }
+                )
+                # 及时写入处理中状态，便于前端读取 provider_stats
+                _safe_write(
+                    job_dir,
+                    {
                         "job_id": job_dir.name,
                         "status": "processing",
                         "progress": 95,
@@ -420,12 +460,13 @@ async def _run_pipeline(job_dir: Path) -> None:
                         "mode": mode,
                         "dual_mode_enabled": dual_mode_enabled,
                         "stage": "执行规则检查（异常回退）",
-                        "provider_stats": provider_stats
-                    })
+                        "provider_stats": provider_stats,
+                    },
+                )
 
             # 组装最终返回体（保持你之前的契约字段）
             result = {
-                "summary": "",                       # 现在没有汇总，可后续填充
+                "summary": "",  # 现在没有汇总，可后续填充
                 "issues": payload_issues["issues"],  # 统一分桶结构
                 "meta": {
                     "pages": len(page_texts),
@@ -441,8 +482,8 @@ async def _run_pipeline(job_dir: Path) -> None:
                     "doc_type": doc_type,
                     "report_year": report_year,
                     "report_kind": report_kind,
-                    "provider_stats": provider_stats
-                }
+                    "provider_stats": provider_stats,
+                },
             }
 
         payload = {
@@ -459,22 +500,26 @@ async def _run_pipeline(job_dir: Path) -> None:
             "doc_type": doc_type,
             "report_year": report_year,
             "report_kind": report_kind,
-            "stage": "完成"
+            "stage": "完成",
         }
         _safe_write(job_dir, payload)
 
     except Exception as e:
-        _safe_write(job_dir, {
-            "job_id": job_dir.name,
-            "status": "error",
-            "error": str(e),
-            "ts": time.time(),
-            "fiscal_year": fiscal_year,
-            "doc_type": doc_type,
-            "report_year": report_year,
-            "report_kind": report_kind,
-            "provider_stats": provider_stats,
-        })
+        _safe_write(
+            job_dir,
+            {
+                "job_id": job_dir.name,
+                "status": "error",
+                "error": str(e),
+                "ts": time.time(),
+                "fiscal_year": fiscal_year,
+                "doc_type": doc_type,
+                "report_year": report_year,
+                "report_kind": report_kind,
+                "provider_stats": provider_stats,
+            },
+        )
+
 
 runtime.set_pipeline_runner(_run_pipeline)
 register_routes(app)

@@ -19,7 +19,10 @@ export async function GET() {
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
     console.error("Failed to fetch organizations:", error);
-    return NextResponse.json({ tree: [], total: 0 }, { status: 200 });
+    return NextResponse.json(
+      { error: "backend_unavailable", tree: [], total: 0 },
+      { status: 502 }
+    );
   }
 }
 
@@ -47,4 +50,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-

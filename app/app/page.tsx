@@ -8,6 +8,7 @@ import OrganizationTree from "./components/OrganizationTree";
 import OrganizationDetailView from "./components/OrganizationDetailView";
 import AssociateDialog from "./components/AssociateDialog";
 import PipelineStatus from "./components/PipelineStatus";
+import BatchUploadModal from "./components/BatchUploadModal";
 import QCResultView from "./components/QCResultView";
 import { format } from 'date-fns';
 
@@ -128,6 +129,7 @@ export default function HomePage() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadDocType, setUploadDocType] = useState<"dept_final" | "dept_budget">("dept_final");
+  const [isGlobalUploadOpen, setIsGlobalUploadOpen] = useState(false);
 
   // --- Layout State (New) ---
   const [viewMode, setViewMode] = useState<"org_detail" | "job_detail">("org_detail");
@@ -604,6 +606,7 @@ export default function HomePage() {
           </div>
           <OrganizationTree
             onSelect={handleOrgSelect}
+            onGlobalBatchUpload={() => setIsGlobalUploadOpen(true)}
             selectedOrgId={selectedDepartmentId}
             refreshKey={orgTreeRefreshKey}
           />
@@ -793,77 +796,51 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* Upload Modal */}
-      {isUploadOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8 max-w-lg w-full transform transition-all scale-100 border border-white/20">
-            <h3 className="text-2xl font-bold mb-6 text-gray-900 dark:text-white">上传新文档</h3>
-            <div className="mb-4">
-              <div className="text-sm text-gray-600 mb-2">默认检查类型</div>
-              <div className="inline-flex bg-white rounded-lg border border-gray-200 p-1">
-                <button
-                  type="button"
-                  onClick={() => setUploadDocType("dept_final")}
-                  className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-                    uploadDocType === "dept_final"
-                      ? "bg-indigo-600 text-white"
-                      : "text-gray-600 hover:bg-gray-100"
-                  }`}
-                >
-                  决算检查
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setUploadDocType("dept_budget")}
-                  className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-                    uploadDocType === "dept_budget"
-                      ? "bg-indigo-600 text-white"
-                      : "text-gray-600 hover:bg-gray-100"
-                  }`}
-                >
-                  预算检查
-                </button>
-              </div>
-              <p className="mt-2 text-xs text-gray-500">
-                系统会优先按文件名自动识别“预算/决算”和年份；识别不到时使用默认类型。
-              </p>
-            </div>
-            <div
-              className={`border-2 border-dashed rounded-xl p-10 text-center transition-colors relative overflow-hidden ${isDragging ? "border-indigo-500 bg-indigo-50" : "border-gray-300"}`}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-            >
-              {isUploading ? (
-                <div className="absolute inset-0 bg-white dark:bg-gray-800 flex flex-col items-center justify-center z-10 px-8">
-                  <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden mb-4">
-                    <div
-                      className="h-full bg-indigo-600 transition-all duration-300 ease-out"
-                      style={{ width: `${uploadProgress}%` }}
-                    ></div>
-                  </div>
-                  <p className="text-gray-600 dark:text-gray-300 font-mono text-lg">{uploadProgress}%</p>
-                  <p className="text-sm text-gray-500 mt-2">正在上传并分析，请稍候...</p>
-                </div>
-              ) : (
-                <p className="mt-4 text-sm text-gray-600 dark:text-gray-300">
-                  拖拽文件至此，或 <label className="mx-1 font-medium text-indigo-600 cursor-pointer">点击上传<input type="file" className="sr-only" multiple accept=".pdf" onChange={handleFileSelect} /></label>
-                </p>
-              )}
-            </div>
-            <div className="mt-6 flex justify-end space-x-3">
-              <div className="mt-6 flex justify-end space-x-3">
-                <button
-                  onClick={() => setIsUploadOpen(false)}
-                  className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors font-medium disabled:opacity-50"
-                  disabled={isUploading}
-                >
-                  取消
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+      {/* Batch Upload Modal (局限于某单位) */}
+      {isUploadOpen && selectedOrgId && (
+        <BatchUploadModal
+          orgUnitId={selectedOrgId}
+          defaultDocType={uploadDocType}
+          onClose={() => setIsUploadOpen(false)}
+          onComplete={() => {
+            fetchJobList().catch(console.error);
+            if (selectedOrgId) {
+              setOrgRefreshKey(prev => prev + 1);
+              const refreshWithRetry = async () => {
+                const delays = [300, 800, 2000];
+                for (const delay of delays) {
+                  await new Promise(r => setTimeout(r, delay));
+                  setOrgRefreshKey(prev => prev + 1);
+                }
+              };
+              refreshWithRetry();
+            }
+            setToast({ message: "批量上传完成", type: "success" });
+          }}
+        />
+      )}
+
+      {/* Global Batch Upload Modal (全区模式) */}
+      {isGlobalUploadOpen && (
+        <BatchUploadModal
+          defaultDocType={uploadDocType}
+          onClose={() => setIsGlobalUploadOpen(false)}
+          onComplete={() => {
+            fetchJobList().catch(console.error);
+            setOrgRefreshKey(prev => prev + 1);
+            setOrgTreeRefreshKey(prev => prev + 1);
+            const refreshWithRetry = async () => {
+              const delays = [300, 800, 2000];
+              for (const delay of delays) {
+                await new Promise(r => setTimeout(r, delay));
+                setOrgRefreshKey(prev => prev + 1);
+                setOrgTreeRefreshKey(prev => prev + 1);
+              }
+            };
+            refreshWithRetry();
+            setToast({ message: "全区批量上传完成", type: "success" });
+          }}
+        />
       )}
 
       {/* Associate Dialog */}

@@ -22,7 +22,7 @@ async def run_ai_rules_batch(doc: Any,
     Returns:
         List[IssueItem]: AI检查结果
     """
-    logger.info(f"Running AI rules for document")
+    logger.info("Running AI rules for document")
     
     # 模拟AI检测结果
     results = []

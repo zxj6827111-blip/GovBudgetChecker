@@ -37,11 +37,29 @@ def test_document_upload_and_job_alias_routes():
 
     upload = client.post(
         "/api/documents/upload",
-        files={"file": ("sample_budget_2025.pdf", io.BytesIO(_pdf_bytes()), "application/pdf")},
+        files={
+            "file": (
+                "sample_budget_2025.pdf",
+                io.BytesIO(_pdf_bytes()),
+                "application/pdf",
+            )
+        },
     )
     assert upload.status_code == 200
     payload = upload.json()
     job_id = payload["job_id"]
+
+    report_pdf = client.get(f"/api/reports/download?job_id={job_id}")
+    assert report_pdf.status_code == 200
+    assert report_pdf.headers["content-type"].startswith("application/pdf")
+
+    report_json = client.get(f"/api/reports/download?job_id={job_id}&format=json")
+    assert report_json.status_code == 200
+    assert report_json.json()["job_id"] == job_id
+
+    report_csv = client.get(f"/api/reports/download?job_id={job_id}&format=csv")
+    assert report_csv.status_code == 200
+    assert report_csv.headers["content-type"].startswith("text/csv")
 
     jobs = client.get("/api/jobs")
     assert jobs.status_code == 200
@@ -56,7 +74,9 @@ def test_document_upload_and_job_alias_routes():
 
     jobs_after_run = client.get("/api/jobs")
     assert jobs_after_run.status_code == 200
-    uploaded_job = next(item for item in jobs_after_run.json() if item["job_id"] == job_id)
+    uploaded_job = next(
+        item for item in jobs_after_run.json() if item["job_id"] == job_id
+    )
     assert uploaded_job["report_kind"] == "budget"
     assert uploaded_job["report_year"] == 2025
 
@@ -79,7 +99,13 @@ def test_organization_association_flow():
     upload = client.post(
         "/api/documents/upload",
         data={"org_unit_id": org_id},
-        files={"file": ("linked_final_2026.pdf", io.BytesIO(_pdf_bytes()), "application/pdf")},
+        files={
+            "file": (
+                "linked_final_2026.pdf",
+                io.BytesIO(_pdf_bytes()),
+                "application/pdf",
+            )
+        },
     )
     assert upload.status_code == 200
     job_id = upload.json()["job_id"]

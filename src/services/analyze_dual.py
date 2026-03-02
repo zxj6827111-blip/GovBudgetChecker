@@ -26,7 +26,6 @@ def save_snapshot(job_id: str, data: Dict[str, Any]) -> None:
     保存快照到status.json，防止空快照覆盖
     要点：只有 None 才覆盖，空数组不覆盖已有非空
     """
-    from pathlib import Path
     import os
     
     upload_root = Path(os.getenv("UPLOAD_DIR", "uploads")).resolve()

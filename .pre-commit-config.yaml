@@ -1,0 +1,30 @@
+repos:
+  - repo: https://github.com/psf/black
+    rev: 25.9.0
+    hooks:
+      - id: black
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.13.1
+    hooks:
+      - id: ruff
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.18.2
+    hooks:
+      - id: mypy
+        pass_filenames: false
+        args:
+          - api/routes
+          - api/runtime.py
+          - src/engine/pipeline.py
+          - tests/test_api_contract.py
+          - tests/test_import_path_policy.py
+
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: python -m pytest tests/test_api_contract.py tests/test_import_path_policy.py
+        language: system
+        pass_filenames: false

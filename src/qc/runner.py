@@ -310,7 +310,7 @@ class QCRunner:
         table_code = 'FIN_07_three_public'
         
         # Get total (both budget and actual)
-        total_budget = await self.conn.fetchval("""
+        await self.conn.fetchval("""
             SELECT amount FROM fact_fiscal_line_items
             WHERE document_version_id = $1 AND table_code = $2
               AND classification_code = 'total' AND measure = 'budget'
