@@ -15,12 +15,14 @@ interface Organization {
 
 interface OrganizationTreeProps {
   onSelect: (org: Organization | null) => void;
+  onGlobalBatchUpload?: () => void;
   selectedOrgId?: string | null;
   refreshKey?: number;
 }
 
 export default function OrganizationTree({
   onSelect,
+  onGlobalBatchUpload,
   selectedOrgId,
   refreshKey,
 }: OrganizationTreeProps) {
@@ -131,7 +133,7 @@ export default function OrganizationTree({
       const res = await fetch("/api/organizations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           name: modalInputVal.trim(),
           level: "department"
         }),
@@ -193,11 +195,10 @@ export default function OrganizationTree({
     return (
       <div key={node.id}>
         <div
-          className={`flex items-center justify-between py-3 px-4 m-1.5 rounded-xl cursor-pointer transition-all duration-300 group ${
-            isSelected
-              ? "bg-indigo-50/80 shadow-sm border border-indigo-100"
-              : "hover:bg-white hover:shadow-sm border border-transparent"
-          }`}
+          className={`flex items-center justify-between py-3 px-4 m-1.5 rounded-xl cursor-pointer transition-all duration-300 group ${isSelected
+            ? "bg-indigo-50/80 shadow-sm border border-indigo-100"
+            : "hover:bg-white hover:shadow-sm border border-transparent"
+            }`}
           onClick={() => onSelect(node)}
           title={node.name}
         >
@@ -207,15 +208,14 @@ export default function OrganizationTree({
           </div>
 
           <div className="flex items-center space-x-2 flex-shrink-0">
-             {node.job_count > 0 && (
-               <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${
-                 node.issue_count > 0 
-                  ? 'bg-red-50 text-red-600 border border-red-100' // Has issues
-                  : 'bg-green-50 text-green-600 border border-green-100' // All good
-               }`}>
-                 {node.issue_count > 0 ? `待处理: ${node.issue_count}` : '正常: 0'}
-               </span>
-             )}
+            {node.job_count > 0 && (
+              <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${node.issue_count > 0
+                ? 'bg-red-50 text-red-600 border border-red-100' // Has issues
+                : 'bg-green-50 text-green-600 border border-green-100' // All good
+                }`}>
+                {node.issue_count > 0 ? `待处理: ${node.issue_count}` : '正常: 0'}
+              </span>
+            )}
 
             {/* Action buttons (Edit & Delete) shown on hover */}
             <div className={`hidden group-hover:flex items-center space-x-1 ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity`}>
@@ -253,7 +253,7 @@ export default function OrganizationTree({
   };
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="flex-1 overflow-hidden flex flex-col">
       <div className="p-3 border-b border-gray-200 flex items-center justify-between">
         <h3 className="font-semibold text-gray-700 flex items-center">
           部门视图
@@ -271,6 +271,16 @@ export default function OrganizationTree({
           </button>
         </h3>
         <div className="flex space-x-2">
+          {onGlobalBatchUpload && (
+            <button
+              onClick={onGlobalBatchUpload}
+              className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+              title="全区批量上传"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+              全区上传
+            </button>
+          )}
           <button
             onClick={() => onSelect(null)}
             className="text-xs text-gray-500 hover:text-gray-700"
@@ -295,7 +305,7 @@ export default function OrganizationTree({
         />
       </div>
 
-      <div className="flex-1 overflow-auto p-2">
+      <div className="flex-1 overflow-y-auto p-2 pb-24 custom-scrollbar">
         {loading ? (
           <div className="text-center py-8 text-gray-400">
             <div className="w-6 h-6 border-2 border-gray-300 border-t-indigo-500 rounded-full animate-spin mx-auto mb-2"></div>

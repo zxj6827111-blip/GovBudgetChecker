@@ -1,39 +1,29 @@
-# engine/pipeline.py
 from __future__ import annotations
-import os, time
-from typing import Dict, Any, List, Optional  # ✅ 增加 Optional
-import pdfplumber
 
-from .rules_v33 import ALL_RULES as FINAL_ALL_RULES, build_document, order_and_number_issues, Issue
+import re
+import time
+from typing import Any, Dict, List, Optional
+
 from .budget_rules import ALL_BUDGET_RULES
+from .common_rules import ALL_COMMON_RULES
+from .rules_v33 import (
+    ALL_RULES as FINAL_ALL_RULES,
+)
+from .rules_v33 import (
+    Issue,
+    order_and_number_issues,
+)
+from .rules_v33 import (
+    build_document as _build_document,
+)
 
-def _extract_tables_from_page(page) -> List[List[List[str]]]:
-    # 返回：该页的多张表；每张表是 2D 数组（行→列）
-    tables: List[List[List[str]]] = []
-    try:
-        t1 = page.extract_tables(table_settings={
-            "vertical_strategy": "lines",
-            "horizontal_strategy": "lines",
-            "intersection_tolerance": 3,
-            "min_words_vertical": 1,
-            "min_words_horizontal": 1,
-        }) or []
-        tables += t1
-    except Exception:
-        pass
-    try:
-        if not tables:
-            t2 = page.extract_tables() or []
-            tables += t2
-    except Exception:
-        pass
-    norm_tables: List[List[List[str]]] = []
-    for tb in tables:
-        norm_tables.append([[("" if c is None else str(c)).strip() for c in row] for row in (tb or [])])
-    return norm_tables
+_LIST_PREFIX_RE = re.compile(r"^\s*[一二三四五六七八九十\d]+[、.)]\s*")
+
+# re-export for existing callers importing build_document from this module
+build_document = _build_document
 
 
-def _resolve_report_kind(doc, report_kind: Optional[str] = None) -> str:
+def _resolve_report_kind(doc: Any, report_kind: Optional[str] = None) -> str:
     kind = (report_kind or "").strip().lower()
     if kind in {"budget", "final"}:
         return kind
@@ -54,109 +44,191 @@ def _resolve_report_kind(doc, report_kind: Optional[str] = None) -> str:
     return "final"
 
 
-def _select_rule_set(doc, report_kind: Optional[str] = None):
-    kind = _resolve_report_kind(doc, report_kind=report_kind)
-    if kind == "budget":
-        return ALL_BUDGET_RULES
-    return FINAL_ALL_RULES
-
-
-def run_rules(doc, use_ai_assist=False, report_kind: Optional[str] = None):
-    """
-    执行规则检查
-    :param doc: 文档对象
-    :param use_ai_assist: 是否使用AI辅助
-    """
-    # 直接使用传统规则引擎，避免混合验证的异步问题
-    import logging
-    logger = logging.getLogger(__name__)
-    selected_rules = _select_rule_set(doc, report_kind=report_kind)
-    kind = _resolve_report_kind(doc, report_kind=report_kind)
-    logger.info(
-        f"使用传统规则引擎，AI辅助: {use_ai_assist}, "
-        f"report_kind={kind}, rules={len(selected_rules)}"
+def _select_rule_set(doc: Any, report_kind: Optional[str] = None) -> List[Any]:
+    return (
+        ALL_BUDGET_RULES
+        if _resolve_report_kind(doc, report_kind) == "budget"
+        else FINAL_ALL_RULES
     )
-    
-    issues = []
-    issues = []
+
+
+def run_rules(
+    doc: Any, use_ai_assist: bool = False, report_kind: Optional[str] = None
+) -> List[Issue]:
+    selected_rules = [
+        *_select_rule_set(doc, report_kind=report_kind),
+        *ALL_COMMON_RULES,
+    ]
+    issues: List[Issue] = []
+
     for rule_obj in selected_rules:
         try:
-            # 兼容 ALL_RULES 中既有类又有实例的情况
-            if isinstance(rule_obj, type):
-                rule = rule_obj()
-            else:
-                rule = rule_obj
-                
-            # 如果规则支持AI辅助，传递参数
-            if hasattr(rule, 'apply_with_ai') and use_ai_assist:
+            rule = rule_obj() if isinstance(rule_obj, type) else rule_obj
+            if hasattr(rule, "apply_with_ai") and use_ai_assist:
                 issues.extend(rule.apply_with_ai(doc, use_ai_assist))
             else:
                 issues.extend(rule.apply(doc))
-        except Exception as e:
-            # 如果是实例，获取code；如果是类，获取code属性
-            code = getattr(rule_obj, 'code', 'UNKNOWN')
-            if hasattr(rule_obj, '__class__') and hasattr(rule_obj.__class__, 'code'):
-                code = rule_obj.__class__.code
-                
-            issues.append(Issue(
-                rule=code, severity="hint",
-                message=f"规则执行异常：{e}",
-                location={"page": 1, "pos": 0}
-            ))
-    
+        except Exception as err:
+            code = getattr(rule_obj, "code", None) or getattr(
+                getattr(rule_obj, "__class__", object), "code", "UNKNOWN"
+            )
+            issues.append(
+                Issue(
+                    rule=str(code),
+                    severity="hint",
+                    message=f"规则执行异常：{err}",
+                    location={"page": 1, "pos": 0},
+                )
+            )
+
     return order_and_number_issues(doc, issues)
 
-# ===== 在此行下面粘贴 =====
 
-def _issue_to_dict(x) -> dict:
-    if isinstance(x, dict):
-        rule_code = x.get("rule", "")
-        return {
-            "rule": rule_code,
-            "rule_id": rule_code,  # 添加rule_id字段
-            "severity": (x.get("severity") or "info"),
-            "message": x.get("message", ""),
-            "location": (x.get("location") or {}),
-        }
-    rule_code = getattr(x, "rule", "") or ""
-    return {
+def _strip_list_prefix(message: str) -> str:
+    return _LIST_PREFIX_RE.sub("", message or "").strip()
+
+
+def _infer_title(rule_code: str, message: str) -> str:
+    clean = _strip_list_prefix(message)
+    if not clean:
+        return rule_code or "规则命中"
+    if "：" in clean:
+        return clean.split("：", 1)[0].strip()[:80] or clean[:80]
+    return clean[:80]
+
+
+def _default_suggestion(rule_code: str, page: Optional[int]) -> str:
+    page_hint = f"（第{page}页）" if page else ""
+    if rule_code == "CMM-001":
+        return (
+            f"请逐项核对“三公”表与“其他相关情况说明”金额口径{page_hint}，"
+            "尤其确认公务用车运行费是否一致，再统一正文与表格。"
+        )
+    if rule_code:
+        return (
+            f"请按 {rule_code} 规则复核原表与说明文字{page_hint}，必要时修订披露口径。"
+        )
+    return f"请复核原表与说明文字{page_hint}，确认口径与数值一致。"
+
+
+def _normalize_page(location: Dict[str, Any]) -> Optional[int]:
+    raw = location.get("page")
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+        return value if value > 0 else None
+    except Exception:
+        return None
+
+
+def _normalize_bbox(raw_bbox: Any) -> Optional[List[float]]:
+    if not isinstance(raw_bbox, (list, tuple)) or len(raw_bbox) != 4:
+        return None
+    bbox: List[float] = []
+    for item in raw_bbox:
+        try:
+            bbox.append(float(item))
+        except Exception:
+            return None
+    return bbox
+
+
+def _issue_to_dict(issue: Any, idx: int) -> Dict[str, Any]:
+    if isinstance(issue, dict):
+        rule_code = str(issue.get("rule_id") or issue.get("rule") or "").strip()
+        location = (
+            issue.get("location") if isinstance(issue.get("location"), dict) else {}
+        )
+        message = str(issue.get("message") or issue.get("title") or "").strip()
+        evidence_list = (
+            issue.get("evidence") if isinstance(issue.get("evidence"), list) else []
+        )
+        bbox = _normalize_bbox(issue.get("bbox"))
+    else:
+        rule_code = str(getattr(issue, "rule", "") or "").strip()
+        location = getattr(issue, "location", None) or {}
+        message = str(getattr(issue, "message", "") or "").strip()
+        evidence_text = getattr(issue, "evidence_text", None)
+        bbox = _normalize_bbox(location.get("bbox"))
+        evidence_list = []
+        if evidence_text:
+            evidence_list.append(
+                {
+                    "page": _normalize_page(location),
+                    "text": str(evidence_text),
+                    "text_snippet": str(evidence_text),
+                    "bbox": bbox,
+                }
+            )
+
+    if not rule_code:
+        rule_code = "UNKNOWN"
+
+    page = _normalize_page(location)
+    title = _infer_title(rule_code, message)
+    created_at = int(time.time())
+
+    evidence = [ev for ev in evidence_list if isinstance(ev, dict)]
+    if not evidence:
+        evidence = [
+            {
+                "page": page,
+                "text": message,
+                "text_snippet": _strip_list_prefix(message)[:200],
+                "bbox": bbox,
+            }
+        ]
+
+    suggestion = (
+        issue.get("suggestion") if isinstance(issue, dict) else None
+    ) or _default_suggestion(rule_code, page)
+
+    data: Dict[str, Any] = {
+        "id": f"{rule_code}-{idx}",
+        "source": "rule",
         "rule": rule_code,
-        "rule_id": rule_code,  # 添加rule_id字段
-        "severity": getattr(x, "severity", None) or "info",
-        "message": getattr(x, "message", "") or "",
-        "location": getattr(x, "location", None) or {},
+        "rule_id": rule_code,
+        "severity": (
+            issue.get("severity")
+            if isinstance(issue, dict)
+            else getattr(issue, "severity", None)
+        )
+        or "info",
+        "title": title,
+        "message": message,
+        "evidence": evidence,
+        "location": location,
+        "bbox": bbox,
+        "suggestion": str(suggestion),
+        "tags": [rule_code],
+        "metrics": {},
+        "created_at": created_at,
     }
+    return data
 
-def _norm_sev(s: Optional[str]) -> str:  # ✅ 参数改为 Optional[str]
-    s = (s or "").lower()
-    if s in ("error", "err", "fatal", "critical"):
+
+def _norm_sev(severity: Optional[str]) -> str:
+    value = (severity or "").lower()
+    if value in {"error", "err", "fatal", "critical", "high"}:
         return "error"
-    if s in ("warn", "warning"):
+    if value in {"warn", "warning", "medium", "low"}:
         return "warn"
     return "info"
 
 
-def build_issues_payload(doc, use_ai_assist=False, report_kind: Optional[str] = None) -> dict:
-    """
-    把规则结果打包成前端需要的结构：
-    {
-      "issues": {
-        "error": [...],
-        "warn":  [...],
-        "info":  [...],
-        "all":   [...]
-      }
-    }
-    """
-    raw_list = run_rules(doc, use_ai_assist, report_kind=report_kind)  # List[Issue]
-    items = [_issue_to_dict(x) for x in raw_list]
-    for it in items:
-        it["severity"] = _norm_sev(it.get("severity"))
+def build_issues_payload(
+    doc: Any,
+    use_ai_assist: bool = False,
+    report_kind: Optional[str] = None,
+) -> Dict[str, Any]:
+    raw_list = run_rules(doc, use_ai_assist, report_kind=report_kind)
+    items = [_issue_to_dict(item, idx) for idx, item in enumerate(raw_list, start=1)]
 
-    buckets = {"error": [], "warn": [], "info": []}
-    for d in items:
-        buckets[d["severity"]].append(d)
+    buckets: Dict[str, List[Dict[str, Any]]] = {"error": [], "warn": [], "info": []}
+    for item in items:
+        bucket = _norm_sev(str(item.get("severity") or ""))
+        item["severity"] = bucket
+        buckets[bucket].append(item)
     buckets["all"] = items
-
-    # 关键：返回必须带 "issues" 这个键
     return {"issues": buckets}

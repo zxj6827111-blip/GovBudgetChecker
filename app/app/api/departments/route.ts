@@ -20,6 +20,9 @@ export async function GET() {
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
     console.error("Failed to fetch departments:", error);
-    return NextResponse.json({ departments: [], total: 0 }, { status: 200 });
+    return NextResponse.json(
+      { error: "backend_unavailable", departments: [], total: 0 },
+      { status: 502 }
+    );
   }
 }

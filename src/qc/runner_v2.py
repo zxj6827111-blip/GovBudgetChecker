@@ -547,7 +547,7 @@ def generate_qc_report_markdown(run_info: Dict, findings: List[Dict], drilldowns
     
     lines.append("## 概览")
     lines.append("")
-    lines.append(f"| 状态 | 数量 |")
+    lines.append("| 状态 | 数量 |")
     lines.append("|------|------|")
     lines.append(f"| ✅ 通过 | {pass_count} |")
     lines.append(f"| ❌ 失败 | {fail_count} |")

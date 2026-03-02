@@ -111,7 +111,7 @@ class OrganizationStorage:
         departments = [
             org for org in self._organizations if org.level == OrganizationLevel.DEPARTMENT
         ]
-        return sorted(departments, key=lambda org: org.name)
+        return departments
 
     def get_units_by_department(self, dept_id: str) -> List[Organization]:
         """获取指定部门下的直属单位（按名称排序）"""
@@ -124,7 +124,7 @@ class OrganizationStorage:
             for org in self._organizations
             if org.parent_id == dept_id and org.level == OrganizationLevel.UNIT
         ]
-        return sorted(units, key=lambda org: org.name)
+        return units
     
     def add(self, org: Organization) -> Organization:
         """添加组织"""

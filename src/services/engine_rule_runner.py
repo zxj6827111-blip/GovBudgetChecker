@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from src.schemas.issues import JobContext, AnalysisConfig, IssueItem
 from src.engine.rules_v33 import ALL_RULES as FINAL_ALL_RULES, build_document, Issue, Document
 from src.engine.budget_rules import ALL_BUDGET_RULES
+from src.engine.common_rules import ALL_COMMON_RULES
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +73,8 @@ class EngineRuleRunner:
     ) -> List[Any]:
         report_kind = self._resolve_report_kind(job_context, document)
         if report_kind == "budget":
-            return ALL_BUDGET_RULES
-        return FINAL_ALL_RULES
+            return [*ALL_BUDGET_RULES, *ALL_COMMON_RULES]
+        return [*FINAL_ALL_RULES, *ALL_COMMON_RULES]
     
     async def run_rules(self, 
                        job_context: JobContext,
@@ -118,7 +119,7 @@ class EngineRuleRunner:
                 # 直接调用规则对象的apply方法
                 issues = rule_obj.apply(document)
                 
-                elapsed_ms = int((time.time() - start_time) * 1000)
+                int((time.time() - start_time) * 1000)
                 
                 # 转换为IssueItem格式
                 findings = []
@@ -503,12 +504,12 @@ async def run_engine_rules(job_context: JobContext,
 
 def get_available_rules() -> List[str]:
     """获取可用的规则列表"""
-    return [rule.code for rule in (ALL_BUDGET_RULES + FINAL_ALL_RULES)]
+    return [rule.code for rule in (ALL_BUDGET_RULES + FINAL_ALL_RULES + ALL_COMMON_RULES)]
 
 
 def validate_rule_id(rule_id: str) -> bool:
     """验证规则ID是否有效"""
     return any(
         rule.code == rule_id or rule_id in rule.code
-        for rule in (ALL_BUDGET_RULES + FINAL_ALL_RULES)
+        for rule in (ALL_BUDGET_RULES + FINAL_ALL_RULES + ALL_COMMON_RULES)
     )

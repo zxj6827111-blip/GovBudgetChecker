@@ -643,7 +643,7 @@ class R33002_NineTablesCheck(Rule):
             
             if not has_independent_table:
                 issues.append(self._issue(
-                    f"缺失独立的支出决算表：只找到具体的分类表（如\"一般公共预算财政拨款支出决算表\"），未找到独立的、总的\"支出决算表\"。",
+                    "缺失独立的支出决算表：只找到具体的分类表（如\"一般公共预算财政拨款支出决算表\"），未找到独立的、总的\"支出决算表\"。",
                     {"table": expense_table_name},
                     severity="error"
                 ))
@@ -1268,7 +1268,7 @@ class R33109_EmptyTables_Statement(Rule):
                 
                 if not has_statement:
                     # 简化表名用于显示
-                    short_name = nm.replace("一般公共预算财政拨款", "").replace("收入支出决算表", "").replace("预算财政拨款", "")
+                    nm.replace("一般公共预算财政拨款", "").replace("收入支出决算表", "").replace("预算财政拨款", "")
                     issues.append(self._issue(
                         f"【{nm}】为空表，但该页未见针对该表的空表说明（应有'注：XXX无{table_keywords[0] if table_keywords else '相关'}支出，故本表无数据'）。",
                         {"page": p}, "error",
@@ -1558,7 +1558,7 @@ class R33111_IncomeExpenseTotalCheck(Rule):
                 end = min(len(page_text), m.end() + 50)
                 snippet = page_text[start:end].replace('\n', ' ')
                 issues.append(self._issue(
-                    f"收入支出总计为0万元，可能存在数据异常。",
+                    "收入支出总计为0万元，可能存在数据异常。",
                     {"page": page_num + 1},
                     severity="critical",
                     evidence_text=f"发现异常数值上下文：...{snippet}..."
@@ -1627,7 +1627,6 @@ class R33113_PunctuationCheck(Rule):
         issues: List[Issue] = []
         
         # 定义中文标点符号
-        cn_punctuation = '，。！？；：""''（）【】《》、'
         
         # 遍历所有页面
         for page_num, page_text in enumerate(doc.page_texts):
@@ -1957,10 +1956,8 @@ class R33120_DetailTableCheck(Rule):
             # 2. 识别行级横向平衡
             
             col_total_idx = -1
-            col_code_start_idx = -1
             
             # 简单的列定位 heuristic
-            header_found = False
             for r in rows[:5]: # 扫描前5行找表头
                 row_str = "".join([str(c) for c in r if c])
                 if "合计" in row_str:
@@ -1968,7 +1965,7 @@ class R33120_DetailTableCheck(Rule):
                         if "合计" in str(cell):
                             col_total_idx = i
                 if "科目编码" in row_str:
-                    col_code_start_idx = 0 # 假设编码在最前
+                    pass # 假设编码在最前
             
             if col_total_idx == -1: 
                 # 尝试默认值，通常合计在中间或靠后
@@ -1978,7 +1975,7 @@ class R33120_DetailTableCheck(Rule):
 
             for i, row in enumerate(rows):
                 vals = _parse_row_values(row)
-                row_txt = "".join([str(c) for c in row if c])
+                "".join([str(c) for c in row if c])
                 
                 # 提取编码 (假设编码是单纯数字)
                 # 需处理 "201", "20101", "2010101"
@@ -1996,8 +1993,8 @@ class R33120_DetailTableCheck(Rule):
                     # 排序校验
                     sorted_vals = sorted([v for v in vals if v > 0], reverse=True)
                     if len(sorted_vals) >= 2:
-                        max_val = sorted_vals[0]
-                        rest_sum = sum(sorted_vals[1:])
+                        sorted_vals[0]
+                        sum(sorted_vals[1:])
                         # 对于 Table 5: 合计 = 基本 + 项目 (2 items) -> max = sum(rest)
                         # 对于 Table 2/3: 合计 = 多个 items -> max = sum(rest)
                         
@@ -2066,7 +2063,7 @@ class R33117_BasicExpenseClassification(Rule):
                     break
             
             if code:
-                vals = _parse_row_values(row)
+                _parse_row_values(row)
                 # 假设金额在最后一列，或倒数第二列 (有些表双栏)
                 # 双栏处理比较复杂：[301, 工资, Amt, 302, 商品, Amt]
                 # 需检查行内是否包含多个类
@@ -2076,10 +2073,9 @@ class R33117_BasicExpenseClassification(Rule):
         
         # 使用更粗暴但有效的方法：文本解析
         # 提取所有 (Code, Amount) 对
-        code_amts = []
         for row in rows:
-            vals = _parse_row_values(row)
-            txt_cells = [str(c).strip() for c in row if c]
+            _parse_row_values(row)
+            [str(c).strip() for c in row if c]
             
             # 双栏检测
             # 栏1: Code1 (Name1) Amt1
@@ -3160,7 +3156,7 @@ class R33244_Table7_ThreePublicAdvancedCheck(Rule):
                     issues.append(self._issue(
                         f"【表七】建议规范补0：说明提到{lbl}{label_col}为0，建议表内Cells填入'0.00'保持一致。",
                         {"item": lbl, "type": key}, "info",
-                        evidence_text=f"文档说明：0\n表格数据：空白"
+                        evidence_text="文档说明：0\n表格数据：空白"
                     ))
                     reported_cells.add((key, t7_idx))
             else:
@@ -3534,7 +3530,6 @@ class R33220_Narrative3_T3(Rule):
         t3_basic = 0.0
         t3_project = 0.0
         
-        found_total_row = False
         for row in t3_rows:
             row_txt = "".join([str(c) for c in row if c])
             # 找合计行
@@ -3553,7 +3548,6 @@ class R33220_Narrative3_T3(Rule):
                     # 只有两个数相加等于最大数，且这两个数都在 vals 里
                     
                     # 简单的启发式：如果有叙述值，直接去 vals 里找是否存在接近的
-                    found_total_row = True
                     
                     # 校验基本支出
                     if nar_basic is not None:
@@ -3684,15 +3678,8 @@ class R33224_Narrative7_T7(Rule):
         
         # 1. 提取叙述数据
         # 结构： { 'item_name': {'budget': val, 'final': val} }
-        nar_data = {}
         
         # 关键词映射
-        keys = {
-            '合计': ['三公', '使用一般公共预算财政拨款安排'],
-            '因公出国': ['因公出国', '出国（境）费'],
-            '公务用车': ['公务用车', '用车'],
-            '公务接待': ['公务接待']
-        }
         
         target_txt = ""
         for txt in doc.page_texts:
@@ -3937,7 +3924,7 @@ class R33230_EmptyZeroHint(Rule):
                         issues.append(self._issue(
                             "规范性提示：三公经费表内为空，说明中提及为0，建议表内补填0保持一致。",
                             {"page": pidx + 1}, "info",
-                            evidence_text=f"文档内容：提及 '0' 或相关描述\n表格检测：三公表存在但无任何大于0的数值"
+                            evidence_text="文档内容：提及 '0' 或相关描述\n表格检测：三公表存在但无任何大于0的数值"
                         ))
                 break
         
@@ -3960,7 +3947,7 @@ class R33232_PercentagePrecision(Rule):
             
             for pct_str in matches:
                 try:
-                    pct = float(pct_str)
+                    float(pct_str)
                     # 检查是否超过两位小数
                     if '.' in pct_str:
                         decimal_places = len(pct_str.split('.')[1])

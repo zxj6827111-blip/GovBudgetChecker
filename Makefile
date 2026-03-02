@@ -1,13 +1,13 @@
 .PHONY: dev backend frontend frontend-build lint typecheck unit e2e test install
 
 backend:
-	GOVBUDGET_AUTH_ENABLED=false uvicorn api.main:app --reload --port 8001
+	GOVBUDGET_AUTH_ENABLED=false python -m uvicorn api.main:app --reload --port 8000
 
 frontend:
 	npm --prefix app run dev
 
 dev:
-	bash -c 'trap "kill 0" EXIT; npm --prefix app run dev & GOVBUDGET_AUTH_ENABLED=false uvicorn api.main:app --reload --port 8001'
+	npm run dev
 
 lint:
 	ruff check .
@@ -19,11 +19,7 @@ unit:
 	python -m pytest
 
 e2e:
-	@if [ "$${RUN_E2E:-0}" = "1" ] && [ -x app/node_modules/.bin/playwright ]; then \
-		npm --prefix app run test:e2e; \
-	else \
-		echo "Skipping e2e tests (set RUN_E2E=1 to enable)."; \
-	fi
+	npm --prefix app run test:e2e
 
 frontend-build:
 	npm --prefix app run build

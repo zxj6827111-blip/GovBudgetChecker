@@ -85,7 +85,7 @@ def _generate_enhanced_markdown(run_info: Dict, findings: List[Dict], drilldowns
     
     # Summary section
     lines.append("## 摘要\n")
-    lines.append(f"| 项目 | 值 |")
+    lines.append("| 项目 | 值 |")
     lines.append("|------|------|")
     lines.append(f"| **单位名称** | {run_info.get('org_name', 'N/A')} |")
     lines.append(f"| **会计年度** | {run_info.get('fiscal_year', 'N/A')} |")

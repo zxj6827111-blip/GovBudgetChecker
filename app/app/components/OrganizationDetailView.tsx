@@ -354,21 +354,19 @@ export default function OrganizationDetailView({
     return (
       <div
         key={org.id}
-        className={`relative flex flex-col bg-white rounded-2xl border transition-all duration-300 shadow-sm hover:shadow-md ${
-          active
-            ? "border-indigo-500 shadow-indigo-100"
-            : "border-gray-200 hover:border-indigo-300"
-        }`}
+        className={`relative flex flex-col bg-white rounded-2xl border transition-all duration-300 shadow-sm hover:shadow-md ${active
+          ? "border-indigo-500 shadow-indigo-100"
+          : "border-gray-200 hover:border-indigo-300"
+          }`}
       >
         <div className="p-5 flex-1">
           <div className="flex items-start justify-between gap-2 mb-3">
-            <h3 className="font-bold text-gray-900 text-lg tracking-tight truncate" title={orgDisplayName}>
+            <h3 className="font-bold text-gray-900 text-lg tracking-tight leading-snug" title={orgDisplayName}>
               {orgDisplayName}
             </h3>
             <span
-              className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${
-                isDepartment ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-700"
-              }`}
+              className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${isDepartment ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-700"
+                }`}
             >
               {isDepartment ? "部门" : "单位"}
             </span>
@@ -428,11 +426,10 @@ export default function OrganizationDetailView({
               setOrgViewTab(org.level === "department" ? "department" : "units");
               onSelectUnit(org);
             }}
-            className={`w-full py-2.5 rounded-xl font-medium text-sm transition-all duration-300 flex items-center justify-center space-x-2 shadow-sm ${
-              hasJobs
-                ? "bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-200"
-                : "bg-amber-500 hover:bg-amber-600 text-white shadow-amber-200"
-            }`}
+            className={`w-full py-2.5 rounded-xl font-medium text-sm transition-all duration-300 flex items-center justify-center space-x-2 shadow-sm ${hasJobs
+              ? "bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-200"
+              : "bg-amber-500 hover:bg-amber-600 text-white shadow-amber-200"
+              }`}
           >
             {hasJobs ? (
               <>
@@ -460,10 +457,9 @@ export default function OrganizationDetailView({
               <h1 className="text-3xl font-bold text-gray-900 tracking-tight">{departmentName}</h1>
               <div className="mt-2 text-sm text-gray-500">
                 {selectedUnit
-                  ? `当前组织：${
-                    selectedUnit.level === "unit" && selectedUnit.name === departmentName
-                      ? `${selectedUnit.name}（本级单位）`
-                      : selectedUnit.name
+                  ? `当前组织：${selectedUnit.level === "unit" && selectedUnit.name === departmentName
+                    ? `${selectedUnit.name}（本级单位）`
+                    : selectedUnit.name
                   }（${selectedUnit.level === "department" ? "部门" : "单位"}）`
                   : "请先选择部门或单位"}
               </div>
@@ -474,7 +470,7 @@ export default function OrganizationDetailView({
               className="inline-flex items-center justify-center px-5 py-3 text-sm font-medium text-white bg-indigo-600 rounded-xl shadow-lg hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
               title={selectedUnit ? "上传到当前组织" : "请先选择部门或单位"}
             >
-              上传新文档
+              批量上传文档
             </button>
           </div>
         </div>
@@ -491,22 +487,20 @@ export default function OrganizationDetailView({
                 <button
                   type="button"
                   onClick={switchToDepartmentTab}
-                  className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
-                    orgViewTab === "department"
-                      ? "bg-indigo-600 text-white"
-                      : "text-gray-600 hover:bg-gray-100"
-                  }`}
+                  className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${orgViewTab === "department"
+                    ? "bg-indigo-600 text-white"
+                    : "text-gray-600 hover:bg-gray-100"
+                    }`}
                 >
                   部门本级 (1)
                 </button>
                 <button
                   type="button"
                   onClick={switchToUnitsTab}
-                  className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
-                    orgViewTab === "units"
-                      ? "bg-indigo-600 text-white"
-                      : "text-gray-600 hover:bg-gray-100"
-                  }`}
+                  className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${orgViewTab === "units"
+                    ? "bg-indigo-600 text-white"
+                    : "text-gray-600 hover:bg-gray-100"
+                    }`}
                 >
                   下属单位 ({units.length})
                 </button>
@@ -539,33 +533,30 @@ export default function OrganizationDetailView({
                     <button
                       type="button"
                       onClick={() => setSelectedKindFilter("all")}
-                      className={`px-3 py-1 text-xs rounded-md transition-colors ${
-                        selectedKindFilter === "all"
-                          ? "bg-indigo-600 text-white"
-                          : "text-gray-600 hover:bg-gray-100"
-                      }`}
+                      className={`px-3 py-1 text-xs rounded-md transition-colors ${selectedKindFilter === "all"
+                        ? "bg-indigo-600 text-white"
+                        : "text-gray-600 hover:bg-gray-100"
+                        }`}
                     >
                       全部类型
                     </button>
                     <button
                       type="button"
                       onClick={() => setSelectedKindFilter("budget")}
-                      className={`px-3 py-1 text-xs rounded-md transition-colors ${
-                        selectedKindFilter === "budget"
-                          ? "bg-indigo-600 text-white"
-                          : "text-gray-600 hover:bg-gray-100"
-                      }`}
+                      className={`px-3 py-1 text-xs rounded-md transition-colors ${selectedKindFilter === "budget"
+                        ? "bg-indigo-600 text-white"
+                        : "text-gray-600 hover:bg-gray-100"
+                        }`}
                     >
                       预算 ({kindCounts.budget})
                     </button>
                     <button
                       type="button"
                       onClick={() => setSelectedKindFilter("final")}
-                      className={`px-3 py-1 text-xs rounded-md transition-colors ${
-                        selectedKindFilter === "final"
-                          ? "bg-indigo-600 text-white"
-                          : "text-gray-600 hover:bg-gray-100"
-                      }`}
+                      className={`px-3 py-1 text-xs rounded-md transition-colors ${selectedKindFilter === "final"
+                        ? "bg-indigo-600 text-white"
+                        : "text-gray-600 hover:bg-gray-100"
+                        }`}
                     >
                       决算 ({kindCounts.final})
                     </button>
@@ -577,11 +568,10 @@ export default function OrganizationDetailView({
                         setYearFilterTouched(true);
                         setSelectedYearFilter("all");
                       }}
-                      className={`px-3 py-1 text-xs rounded-md transition-colors ${
-                        selectedYearFilter === "all"
-                          ? "bg-indigo-600 text-white"
-                          : "text-gray-600 hover:bg-gray-100"
-                      }`}
+                      className={`px-3 py-1 text-xs rounded-md transition-colors ${selectedYearFilter === "all"
+                        ? "bg-indigo-600 text-white"
+                        : "text-gray-600 hover:bg-gray-100"
+                        }`}
                     >
                       全部年度
                     </button>
@@ -593,11 +583,10 @@ export default function OrganizationDetailView({
                           setYearFilterTouched(true);
                           setSelectedYearFilter(String(year));
                         }}
-                        className={`px-3 py-1 text-xs rounded-md transition-colors ${
-                          selectedYearFilter === String(year)
-                            ? "bg-indigo-600 text-white"
-                            : "text-gray-600 hover:bg-gray-100"
-                        }`}
+                        className={`px-3 py-1 text-xs rounded-md transition-colors ${selectedYearFilter === String(year)
+                          ? "bg-indigo-600 text-white"
+                          : "text-gray-600 hover:bg-gray-100"
+                          }`}
                       >
                         {year}
                       </button>
@@ -663,13 +652,12 @@ export default function OrganizationDetailView({
                               {typeof job.report_year === "number" ? `${job.report_year}年度` : "年度未识别"}
                             </span>
                             <span
-                              className={`inline-flex items-center px-2 py-0.5 rounded-full ${
-                                job.report_kind === "budget"
-                                  ? "bg-emerald-50 text-emerald-700"
-                                  : job.report_kind === "final"
-                                    ? "bg-cyan-50 text-cyan-700"
-                                    : "bg-gray-100 text-gray-600"
-                              }`}
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full ${job.report_kind === "budget"
+                                ? "bg-emerald-50 text-emerald-700"
+                                : job.report_kind === "final"
+                                  ? "bg-cyan-50 text-cyan-700"
+                                  : "bg-gray-100 text-gray-600"
+                                }`}
                             >
                               {job.report_kind === "budget"
                                 ? "预算检查"
@@ -688,9 +676,8 @@ export default function OrganizationDetailView({
                             {job.status === "done" && (
                               <div className="space-y-0.5">
                                 <div
-                                  className={`text-xs font-medium ${
-                                    (job.issue_total || 0) > 0 ? "text-red-600" : "text-green-600"
-                                  }`}
+                                  className={`text-xs font-medium ${(job.issue_total || 0) > 0 ? "text-red-600" : "text-green-600"
+                                    }`}
                                 >
                                   {(job.issue_total || 0) > 0
                                     ? `有问题：${job.issue_total}（错${job.issue_error || 0} / 警${job.issue_warn || 0} / 提${job.issue_info || 0}）`

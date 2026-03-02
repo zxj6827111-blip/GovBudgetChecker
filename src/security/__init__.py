@@ -214,7 +214,7 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                 status_code=429,
                 content={
                     "error": "Rate limit exceeded",
-                    "detail": f"Too many requests. Please try again later.",
+                    "detail": "Too many requests. Please try again later.",
                     "retry_after": remaining
                 },
                 headers={"Retry-After": str(remaining)}

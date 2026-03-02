@@ -16,7 +16,6 @@ export async function GET() {
     return NextResponse.json(Array.isArray(data) ? data : []);
   } catch (error) {
     console.error("Failed to fetch jobs:", error);
-    return NextResponse.json([], { status: 200 });
+    return NextResponse.json({ error: "backend_unavailable", jobs: [] }, { status: 502 });
   }
 }
-

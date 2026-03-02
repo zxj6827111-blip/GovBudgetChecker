@@ -28,6 +28,9 @@ export async function GET(
     return NextResponse.json(data, { status: res.status });
   } catch (error) {
     console.error("Failed to fetch organization jobs:", error);
-    return NextResponse.json({ jobs: [] }, { status: 200 });
+    return NextResponse.json(
+      { error: "backend_unavailable", jobs: [] },
+      { status: 502 }
+    );
   }
 }
