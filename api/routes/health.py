@@ -9,6 +9,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter
 
+from api.config import AppConfig
 from api import runtime
 
 router = APIRouter()
@@ -44,7 +45,9 @@ async def _check_ai_extractor() -> tuple[bool, str]:
 
     url = (os.getenv("AI_EXTRACTOR_URL") or "").strip()
     if not url:
-        return False, "AI_EXTRACTOR_URL is not set"
+        url = AppConfig.load().ai_extractor_url.strip()
+    if not url:
+        return False, "AI extractor URL is empty"
 
     try:
         import httpx

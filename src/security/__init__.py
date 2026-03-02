@@ -24,6 +24,8 @@ API_KEY_ENV = "GOVBUDGET_API_KEY"
 API_KEY_LENGTH = 32
 DEFAULT_RATE_LIMIT = 100
 RATE_LIMIT_WINDOW = 60
+TRUST_PROXY_HEADERS_ENV = "GOVBUDGET_TRUST_PROXY_HEADERS"
+TRUSTED_PROXY_IPS_ENV = "GOVBUDGET_TRUSTED_PROXY_IPS"
 
 
 @dataclass
@@ -49,6 +51,8 @@ class SecurityConfig:
         "/redoc",
     })
     admin_api_keys: Set[str] = field(default_factory=set)
+    trust_proxy_headers: bool = False
+    trusted_proxy_ips: Set[str] = field(default_factory=set)
 
 
 class APIKeyManager:
@@ -125,8 +129,18 @@ def create_security_config() -> SecurityConfig:
     
     admin_keys_str = os.getenv("GOVBUDGET_ADMIN_API_KEYS", "")
     admin_keys = {k.strip() for k in admin_keys_str.split(",") if k.strip()}
+    trusted_proxy_ips_str = os.getenv(TRUSTED_PROXY_IPS_ENV, "")
+    trusted_proxy_ips = {
+        ip.strip() for ip in trusted_proxy_ips_str.split(",") if ip.strip()
+    }
     
     rate_limit = int(os.getenv("GOVBUDGET_RATE_LIMIT", str(DEFAULT_RATE_LIMIT)))
+    trust_proxy_headers = os.getenv(TRUST_PROXY_HEADERS_ENV, "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     
     testing_mode = os.getenv("TESTING", "").lower() in {"1", "true", "yes"}
     auth_env = os.getenv("GOVBUDGET_AUTH_ENABLED")
@@ -146,6 +160,8 @@ def create_security_config() -> SecurityConfig:
         api_key=api_key,
         rate_limit=rate_limit,
         admin_api_keys=admin_keys,
+        trust_proxy_headers=trust_proxy_headers,
+        trusted_proxy_ips=trusted_proxy_ips,
     )
 
 
@@ -194,12 +210,21 @@ async def verify_api_key(
 
 
 class SecurityMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, config: SecurityConfig = None):
+    def __init__(
+        self,
+        app,
+        config: SecurityConfig = None,
+        manager: Optional[APIKeyManager] = None,
+    ):
         super().__init__(app)
         self.config = config or security_config
-        self.manager = api_key_manager
+        self.manager = manager or api_key_manager
     
     async def dispatch(self, request: Request, call_next):
+        # Let CORS preflight pass through before auth/rate-limit checks.
+        if request.method.upper() == "OPTIONS":
+            return await call_next(request)
+
         if request.url.path in self.config.exempt_paths:
             return await call_next(request)
         
@@ -251,14 +276,24 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         return response
     
     def _get_client_id(self, request: Request) -> str:
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
+        if self.config.trust_proxy_headers and self._is_trusted_proxy(request):
+            forwarded = request.headers.get("X-Forwarded-For")
+            if forwarded:
+                forwarded_ip = forwarded.split(",")[0].strip()
+                if forwarded_ip:
+                    return forwarded_ip
         
         if request.client:
             return request.client.host
         
         return "unknown"
+
+    def _is_trusted_proxy(self, request: Request) -> bool:
+        if request.client is None:
+            return False
+        if not self.config.trusted_proxy_ips:
+            return True
+        return request.client.host in self.config.trusted_proxy_ips
 
     def _extract_api_key(self, request: Request) -> Optional[str]:
         key = request.headers.get(API_KEY_HEADER)
