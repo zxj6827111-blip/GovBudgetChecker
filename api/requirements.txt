@@ -1,7 +1,1 @@
-fastapi==0.110.0
-uvicorn[standard]==0.29.0
-pyyaml==6.0.1
-pydantic==2.6.4
-ruff==0.3.7
-mypy==1.8.0
-pytest==8.1.1
+-r ../requirements.txt

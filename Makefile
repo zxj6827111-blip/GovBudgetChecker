@@ -1,6 +1,9 @@
 .PHONY: dev backend frontend frontend-build lint typecheck unit e2e test install
 
 backend:
+	GOVBUDGET_AUTH_ENABLED=$${GOVBUDGET_AUTH_ENABLED:-true} GOVBUDGET_API_KEY=$${GOVBUDGET_API_KEY:-dev-local-key} python -m uvicorn api.main:app --reload --port 8000
+
+backend-noauth:
 	GOVBUDGET_AUTH_ENABLED=false python -m uvicorn api.main:app --reload --port 8000
 
 frontend:

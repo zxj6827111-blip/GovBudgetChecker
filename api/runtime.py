@@ -14,7 +14,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
 
 import aiofiles
 from fastapi import HTTPException, Request, UploadFile
@@ -30,7 +30,7 @@ try:
     from src.security import (
         security_config,
         sanitize_filename,
-        validate_file_upload,
+        validate_upload_metadata,
         verify_api_key,
     )
 
@@ -42,6 +42,12 @@ except ImportError:
     async def verify_api_key(request: Request = None):  # type: ignore[override]
         _ = request
         return "anonymous"
+
+    def validate_upload_metadata(
+        filename: str, content_type: str
+    ) -> tuple[bool, str]:
+        _ = (filename, content_type)
+        return True, "OK"
 
 
 try:
@@ -56,6 +62,10 @@ except ImportError:
     OrganizationLevel = None
 
 _pipeline_runner: Optional[Callable[[Path], Awaitable[None]]] = None
+_job_queue: Optional["DurableJobQueue"] = None
+
+if TYPE_CHECKING:
+    from api.job_queue import DurableJobQueue
 
 _YEAR_4_RE = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
 _YEAR_2_RE = re.compile(
@@ -68,6 +78,22 @@ def set_pipeline_runner(runner: Callable[[Path], Awaitable[None]]) -> None:
     """Register the async pipeline runner used by `start_analysis`."""
     global _pipeline_runner
     _pipeline_runner = runner
+
+
+def get_pipeline_runner() -> Optional[Callable[[Path], Awaitable[None]]]:
+    """Return current pipeline runner."""
+    return _pipeline_runner
+
+
+def set_job_queue(queue: Optional["DurableJobQueue"]) -> None:
+    """Register job queue implementation."""
+    global _job_queue
+    _job_queue = queue
+
+
+def get_job_queue() -> Optional["DurableJobQueue"]:
+    """Return active job queue implementation."""
+    return _job_queue
 
 
 def to_dict(obj: Any) -> Dict[str, Any]:
@@ -416,41 +442,76 @@ async def store_upload_file(file: UploadFile) -> Dict[str, Any]:
     """Persist upload into a job directory and return metadata payload."""
     if SECURITY_AVAILABLE:
         safe_name = sanitize_filename(file.filename or "file.pdf")
-        data = await file.read()
-        is_valid, error_msg = validate_file_upload(
+        is_valid, error_msg = validate_upload_metadata(
             filename=safe_name,
             content_type=file.content_type or "",
-            content=data,
         )
         if not is_valid:
             raise HTTPException(status_code=400, detail=error_msg)
     else:
         if not ensure_pdf(file):
             raise HTTPException(status_code=415, detail="Only PDF files are supported")
-        data = await file.read()
         safe_name = Path(file.filename or "file.pdf").name
 
-    if len(data) > MAX_UPLOAD_MB * 1024 * 1024:
-        raise HTTPException(
-            status_code=413, detail=f"File exceeds {MAX_UPLOAD_MB}MB limit"
-        )
-
+    max_upload_bytes = MAX_UPLOAD_MB * 1024 * 1024
+    chunk_size = int(os.getenv("UPLOAD_CHUNK_BYTES", str(1024 * 1024)))
     job_id = os.urandom(16).hex()
     job_dir = UPLOAD_ROOT / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     dst = job_dir / safe_name
 
-    async with aiofiles.open(dst, "wb") as f:
-        await f.write(data)
+    size = 0
+    sha256 = hashlib.sha256()
+    signature = bytearray()
 
-    checksum = hashlib.sha256(data).hexdigest()
+    try:
+        async with aiofiles.open(dst, "wb") as f:
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                if len(signature) < 4:
+                    missing = 4 - len(signature)
+                    signature.extend(chunk[:missing])
+                size += len(chunk)
+                if size > max_upload_bytes:
+                    raise HTTPException(
+                        status_code=413, detail=f"File exceeds {MAX_UPLOAD_MB}MB limit"
+                    )
+                sha256.update(chunk)
+                await f.write(chunk)
+    except HTTPException:
+        try:
+            if dst.exists():
+                dst.unlink()
+            if job_dir.exists() and not any(job_dir.iterdir()):
+                job_dir.rmdir()
+        except Exception:
+            logger.exception("Failed to cleanup partial upload %s", job_id)
+        raise
+    finally:
+        await file.close()
+
+    if size < 4 or bytes(signature[:4]) != b"%PDF":
+        try:
+            if dst.exists():
+                dst.unlink()
+            if job_dir.exists() and not any(job_dir.iterdir()):
+                job_dir.rmdir()
+        except Exception:
+            logger.exception("Failed to cleanup invalid upload %s", job_id)
+        raise HTTPException(
+            status_code=400,
+            detail="File does not appear to be a valid PDF (invalid signature)",
+        )
+
     return {
         "id": job_id,
         "job_id": job_id,
         "filename": safe_name,
-        "size": len(data),
+        "size": size,
         "saved_path": str(dst.relative_to(UPLOAD_ROOT)),
-        "checksum": checksum,
+        "checksum": sha256.hexdigest(),
     }
 
 
@@ -554,7 +615,15 @@ async def start_analysis(
         status_file.write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8"
         )
-        asyncio.create_task(_pipeline_runner(job_dir))
+        queue = _job_queue
+        if queue is not None:
+            await queue.enqueue(job_id)
+        else:
+            logger.warning(
+                "Job queue is not configured; falling back to in-process create_task for %s",
+                job_id,
+            )
+            asyncio.create_task(_pipeline_runner(job_dir))
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"failed to start analysis: {e}"

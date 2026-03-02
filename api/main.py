@@ -23,6 +23,7 @@ if _ROOT not in _sys.path:
 
 from src.engine.pipeline import build_document, build_issues_payload
 from api import runtime
+from api.job_queue import DurableJobQueue
 from api.routes import register_routes
 
 from src.services.analyze_dual import DualModeAnalyzer
@@ -523,3 +524,47 @@ async def _run_pipeline(job_dir: Path) -> None:
 
 runtime.set_pipeline_runner(_run_pipeline)
 register_routes(app)
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+@app.on_event("startup")
+async def _startup_job_queue() -> None:
+    testing_mode = _env_flag("TESTING", False)
+    queue_enabled = _env_flag("JOB_QUEUE_ENABLED", not testing_mode)
+    if not queue_enabled:
+        logger.info("Job queue disabled by environment")
+        return
+
+    runner = runtime.get_pipeline_runner()
+    if runner is None:
+        logger.error("Pipeline runner is not configured, skip queue startup")
+        return
+
+    try:
+        max_workers = int(os.getenv("JOB_QUEUE_WORKERS", "2"))
+    except Exception:
+        max_workers = 2
+    resume_on_start = _env_flag("JOB_QUEUE_RESUME_ON_START", True)
+
+    queue = DurableJobQueue(
+        runner,
+        max_workers=max_workers,
+        resume_on_start=resume_on_start,
+    )
+    await queue.start()
+    runtime.set_job_queue(queue)
+
+
+@app.on_event("shutdown")
+async def _shutdown_job_queue() -> None:
+    queue = runtime.get_job_queue()
+    if queue is None:
+        return
+    await queue.stop()
+    runtime.set_job_queue(None)

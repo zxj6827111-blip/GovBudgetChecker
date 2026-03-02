@@ -20,6 +20,8 @@ export async function GET(
     `${apiBase}/api/jobs/${job}/status`,
     `${apiBase}/jobs/${job}/status`,
   ];
+  let lastError: { status: number; data: unknown; source: string } | null = null;
+  let lastException: string | null = null;
 
   for (const url of candidates) {
     try {
@@ -29,16 +31,33 @@ export async function GET(
       });
       const data = await parseUpstream(res);
       if (res.ok) {
-        return NextResponse.json(data, { status: 200 });
+        return NextResponse.json(data, { status: res.status });
       }
+      lastError = { status: res.status, data, source: url };
     } catch {
-      // try next candidate
+      lastException = `fetch_failed:${url}`;
     }
   }
 
+  if (lastError) {
+    return NextResponse.json(
+      {
+        error: "backend_request_failed",
+        job_id: params.job_id,
+        upstream_status: lastError.status,
+        upstream_source: lastError.source,
+        upstream_body: lastError.data,
+      },
+      { status: lastError.status || 502 }
+    );
+  }
+
   return NextResponse.json(
-    { status: "unknown", job_id: params.job_id },
-    { status: 200 }
+    {
+      error: "backend_unavailable",
+      job_id: params.job_id,
+      detail: lastException || "all upstream candidates failed",
+    },
+    { status: 502 }
   );
 }
-

@@ -39,6 +39,7 @@ services:
     environment:
       - AI_ASSIST_ENABLED=true
       - AI_EXTRACTOR_URL=http://ai-extractor:9009/ai/extract/v1
+      - UPLOAD_DIR=/app/uploads
       - RULES_FILE_PATH=/app/engine/rules_v33.py
       - GOVBUDGET_AUTH_ENABLED=${GOVBUDGET_AUTH_ENABLED:-true}
       - GOVBUDGET_API_KEY=${GOVBUDGET_API_KEY:-}
@@ -55,6 +56,7 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./samples:/app/samples
+      - ./uploads:/app/uploads
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

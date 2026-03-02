@@ -219,6 +219,29 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                 },
                 headers={"Retry-After": str(remaining)}
             )
+
+        if self.config.enabled:
+            api_key = self._extract_api_key(request)
+            if not api_key:
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "error": "authentication_required",
+                        "detail": "API key required. Provide X-API-Key header or Authorization: Bearer <key>",
+                    },
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
+            if not self.manager.validate_key(api_key):
+                logger.warning("Invalid API key attempt from %s", client_id)
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse(
+                    status_code=403,
+                    content={"error": "invalid_api_key", "detail": "Invalid API key"},
+                )
         
         response = await call_next(request)
         
@@ -228,14 +251,25 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         return response
     
     def _get_client_id(self, request: Request) -> str:
-        if request.client:
-            return request.client.host
-        
         forwarded = request.headers.get("X-Forwarded-For")
         if forwarded:
             return forwarded.split(",")[0].strip()
         
+        if request.client:
+            return request.client.host
+        
         return "unknown"
+
+    def _extract_api_key(self, request: Request) -> Optional[str]:
+        key = request.headers.get(API_KEY_HEADER)
+        if key:
+            return key
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header.split(" ", 1)[1].strip()
+            if token:
+                return token
+        return None
 
 
 def sanitize_filename(filename: str) -> str:
@@ -265,20 +299,35 @@ ALLOWED_EXTENSIONS = {'.pdf'}
 
 MAX_FILE_SIZE_MB = 30
 
+def validate_upload_metadata(
+    filename: str,
+    content_type: str,
+) -> tuple[bool, str]:
+    if not filename:
+        return False, "Filename is required"
+
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        return False, f"File type not allowed. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}"
+
+    if content_type and content_type not in ALLOWED_MIME_TYPES:
+        return False, f"MIME type '{content_type}' not allowed"
+
+    return True, "OK"
+
+
+def is_valid_pdf_signature(content: bytes) -> bool:
+    return len(content) >= 4 and content.startswith(b"%PDF")
+
+
 def validate_file_upload(
     filename: str,
     content_type: str,
     content: bytes
 ) -> tuple[bool, str]:
-    if not filename:
-        return False, "Filename is required"
-    
-    ext = os.path.splitext(filename)[1].lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        return False, f"File type not allowed. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}"
-    
-    if content_type and content_type not in ALLOWED_MIME_TYPES:
-        return False, f"MIME type '{content_type}' not allowed"
+    metadata_ok, metadata_msg = validate_upload_metadata(filename, content_type)
+    if not metadata_ok:
+        return metadata_ok, metadata_msg
     
     file_size_mb = len(content) / (1024 * 1024)
     if file_size_mb > MAX_FILE_SIZE_MB:
@@ -287,8 +336,7 @@ def validate_file_upload(
     if len(content) < 4:
         return False, "File is too small to be a valid PDF"
     
-    pdf_signature = b'%PDF'
-    if not content.startswith(pdf_signature):
+    if not is_valid_pdf_signature(content):
         return False, "File does not appear to be a valid PDF (invalid signature)"
     
     return True, "OK"
