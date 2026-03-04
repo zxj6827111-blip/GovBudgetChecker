@@ -2,6 +2,7 @@
 AI 定位服务
 当引擎侧出现 NO_ANCHOR/MULTI_ANCHOR 时，使用 AI 定位候选页码和摘录
 """
+import os
 import logging
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
@@ -26,6 +27,8 @@ class AILocator:
     
     def __init__(self):
         self.ai_client = AIClient()
+        self.locator_model = os.getenv("AI_LOCATOR_MODEL", "").strip() or None
+        self.locator_provider = os.getenv("AI_LOCATOR_PROVIDER", "").strip() or None
     
     async def enhance_finding(self, 
                              job_context: JobContext,
@@ -56,6 +59,8 @@ class AILocator:
                         "content": prompt
                     }
                 ],
+                model=self.locator_model,
+                preferred_provider=self.locator_provider,
                 temperature=0.1,
                 max_tokens=1000
             )
@@ -67,12 +72,23 @@ class AILocator:
                 # 使用最佳候选位置更新结果
                 best_candidate = candidates[0]
                 
-                enhanced_finding = finding.copy()
+                enhanced_finding = (
+                    finding.model_copy(deep=True)
+                    if hasattr(finding, "model_copy")
+                    else finding.copy()
+                )
                 enhanced_finding.page_number = best_candidate.page
-                enhanced_finding.evidence = {
-                    "text_snippet": best_candidate.text,
-                    "bbox": best_candidate.bbox
-                }
+                enhanced_finding.evidence = [
+                    {
+                        "page": best_candidate.page,
+                        "text": best_candidate.text,
+                        "text_snippet": best_candidate.text,
+                        "bbox": best_candidate.bbox,
+                    }
+                ]
+                loc = dict(enhanced_finding.location or {})
+                loc["page"] = best_candidate.page
+                enhanced_finding.location = loc
                 
                 # 更新 why_not 说明已通过 AI 定位
                 enhanced_finding.why_not = f"AI_LOCATED: score={best_candidate.score:.2f}"
@@ -99,7 +115,7 @@ class AILocator:
 ## 问题信息
 - 规则ID: {finding.rule_id}
 - 问题标题: {finding.title}
-- 问题描述: {finding.description}
+- 问题描述: {finding.message}
 - 失败原因: {finding.why_not}
 
 ## 文档内容

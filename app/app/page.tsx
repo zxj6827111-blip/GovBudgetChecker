@@ -432,7 +432,9 @@ export default function HomePage() {
       const versionId = resp?.id;
       if (versionId) {
         const runPayload: Record<string, unknown> = {
-          mode: "legacy",
+          mode: "dual",
+          use_local_rules: useLocalRules,
+          use_ai_assist: useAiAssist,
           doc_type: resolvedDocType,
         };
         if (resolvedFiscalYear) {
@@ -801,6 +803,8 @@ export default function HomePage() {
         <BatchUploadModal
           orgUnitId={selectedOrgId}
           defaultDocType={uploadDocType}
+          useLocalRules={useLocalRules}
+          useAiAssist={useAiAssist}
           onClose={() => setIsUploadOpen(false)}
           onComplete={() => {
             fetchJobList().catch(console.error);
@@ -815,7 +819,7 @@ export default function HomePage() {
               };
               refreshWithRetry();
             }
-            setToast({ message: "批量上传完成", type: "success" });
+            setToast({ message: "上传完成", type: "success" });
           }}
         />
       )}
@@ -824,6 +828,8 @@ export default function HomePage() {
       {isGlobalUploadOpen && (
         <BatchUploadModal
           defaultDocType={uploadDocType}
+          useLocalRules={useLocalRules}
+          useAiAssist={useAiAssist}
           onClose={() => setIsGlobalUploadOpen(false)}
           onComplete={() => {
             fetchJobList().catch(console.error);

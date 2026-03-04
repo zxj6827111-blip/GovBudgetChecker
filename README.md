@@ -147,3 +147,25 @@ GovBudgetChecker/
 ## 备注
 - 本项目当前采用 FastAPI `on_event(startup/shutdown)` 管理生命周期，后续可迁移到 lifespan。
 - 若发现文档和代码不一致，以代码与 `make test` 结果为准。
+
+## Split Deployment (API + Worker)
+
+To isolate request latency from heavy PDF analysis, run API and worker as separate processes.
+
+### API process (enqueue only)
+
+```bash
+JOB_QUEUE_ROLE=api JOB_QUEUE_INLINE_FALLBACK=false make backend
+```
+
+### Worker process (consume queue)
+
+```bash
+JOB_QUEUE_ROLE=worker make worker
+```
+
+### Notes
+
+- `JOB_QUEUE_ROLE=api` means the API only writes queued status and never executes analysis inline.
+- `JOB_QUEUE_ROLE=worker` means no HTTP traffic is needed; the process only consumes queued jobs.
+- Keep `UPLOAD_DIR` shared between API and worker processes.

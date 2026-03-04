@@ -125,6 +125,28 @@ export default function IssueTabs({ result, onIssueClick, job_id }: IssueTabsPro
       : "bg-purple-100 text-purple-800";
   };
 
+  const toPositivePage = (value: unknown): number | null => {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return Math.floor(value);
+    }
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return Math.floor(parsed);
+      }
+    }
+    return null;
+  };
+
+  const getDisplayPage = (issue: IssueItem): number | null => {
+    const fromLocation = toPositivePage(issue.location?.page);
+    if (fromLocation) return fromLocation;
+    const firstEvidence = Array.isArray(issue.evidence) ? issue.evidence[0] : null;
+    const fromEvidence = toPositivePage(firstEvidence?.page);
+    if (fromEvidence) return fromEvidence;
+    return toPositivePage(issue.page_number);
+  };
+
   const renderIssueList = (issues: IssueItem[], showSource = false) => {
     if (issues.length === 0) {
       // 检查是否为AI结果为空且服务降级的情况
@@ -225,9 +247,9 @@ export default function IssueTabs({ result, onIssueClick, job_id }: IssueTabsPro
                   <span className="text-xs text-gray-500">{issue.rule_id}</span>
                 )}
               </div>
-              {issue.location.page && (
+              {getDisplayPage(issue) && (
                 <span className="text-xs text-gray-500">
-                  第 {issue.location.page} 页
+                  第 {getDisplayPage(issue)} 页
                 </span>
               )}
             </div>

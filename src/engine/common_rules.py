@@ -207,6 +207,28 @@ def _snippet(text: str, start: int, end: int, radius: int = 24) -> str:
     return text[left:right]
 
 
+def _sentence_around(text: str, start: int, end: int) -> str:
+    if not text:
+        return ""
+    separators = "。！？；\n"
+    left = -1
+    for sep in separators:
+        idx = text.rfind(sep, 0, max(start, 0))
+        if idx > left:
+            left = idx
+
+    right_candidates = [text.find(sep, min(end, len(text))) for sep in separators]
+    right_candidates = [idx for idx in right_candidates if idx != -1]
+    right = min(right_candidates) if right_candidates else len(text)
+
+    begin = left + 1
+    finish = right + 1 if right < len(text) else right
+    sentence = text[begin:finish].strip()
+    if not sentence:
+        return _snippet(text, start, end, radius=36).strip()
+    return sentence
+
+
 class CMM001_ThreePublicNarrativeConsistency(Rule):
     code, severity = "CMM-001", "warn"
     desc = "\u4e09\u516c\u8868\u4e0e\u60c5\u51b5\u8bf4\u660e\u4e00\u81f4\u6027\uff08\u9884/\u51b3\u7b97\u901a\u7528\uff09"
@@ -576,17 +598,23 @@ class CMM006_IncomeExpenseTrendConsistency(Rule):
             if income_delta and expense_delta and income_delta["direction"] != expense_delta["direction"]:
                 start = min(int(income_delta["start"]), int(expense_delta["start"]))
                 end = max(int(income_delta["end"]), int(expense_delta["end"]))
+                mismatch_sentence = _sentence_around(flat_text, start, end)
                 severity = (
                     "error"
                     if _close(float(income_delta["amount"]), float(expense_delta["amount"]))
                     else "warn"
                 )
+                message = (
+                    "收入/支出同比方向矛盾：同页同时出现“收入增加/减少”与“支出减少/增加”的相反方向描述。"
+                )
+                if mismatch_sentence:
+                    message += f" 命中原文：{mismatch_sentence}"
                 issues.append(
                     self._issue(
-                        "收入/支出同比方向矛盾：同页同时出现“收入减少（或增加）”与“支出增加（或减少）”",
+                        message,
                         {"page": page_idx, "pos": start},
                         severity,
-                        evidence_text=_snippet(flat_text, start, end),
+                        evidence_text=mismatch_sentence or _snippet(flat_text, start, end),
                     )
                 )
 
@@ -596,14 +624,21 @@ class CMM006_IncomeExpenseTrendConsistency(Rule):
                     summary_direction != str(income_delta["direction"])
                     or summary_direction != str(expense_delta["direction"])
                 ):
+                    summary_sentence = _sentence_around(
+                        flat_text, summary_match.start(), summary_match.end()
+                    )
+                    message = (
+                        f"口径描述矛盾：文中写“财政拨款收入支出{summary_direction}”，但收入/支出同比方向不一致。"
+                    )
+                    if summary_sentence:
+                        message += f" 这段文字出现了错误：{summary_sentence}"
                     issues.append(
                         self._issue(
-                            f"口径描述矛盾：文中写“财政拨款收入支出{summary_direction}”，但收入/支出同比方向不一致",
+                            message,
                             {"page": page_idx, "pos": summary_match.start()},
                             "warn",
-                            evidence_text=_snippet(
-                                flat_text, summary_match.start(), summary_match.end()
-                            ),
+                            evidence_text=summary_sentence
+                            or _snippet(flat_text, summary_match.start(), summary_match.end()),
                         )
                     )
 

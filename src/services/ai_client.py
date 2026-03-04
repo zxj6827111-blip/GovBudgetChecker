@@ -147,7 +147,17 @@ class AIClient:
     def __init__(self, config_path: Optional[str] = None):
         # 加载配置
         if config_path is None:
-            config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'providers.yaml')
+            service_dir = Path(__file__).resolve().parent
+            candidates = [
+                service_dir.parent.parent / "config" / "providers.yaml",  # <repo>/config/providers.yaml
+                service_dir.parent / "config" / "providers.yaml",  # <repo>/src/config/providers.yaml
+            ]
+            for candidate in candidates:
+                if candidate.exists():
+                    config_path = str(candidate)
+                    break
+            if config_path is None:
+                config_path = str(candidates[0])
         
         self.config = AIClientConfig.from_yaml(config_path)
         
@@ -190,8 +200,18 @@ class AIClient:
             logger.warning(f"API key not found in environment variable {api_key_env} for provider {name}")
             return None
         
-        base_url = config.get('base', config.get('base_url', ''))
-        model = config.get('model', '')
+        base_env = config.get('base_env')
+        model_env = config.get('model_env')
+        base_url = (
+            os.getenv(str(base_env), "")
+            if base_env
+            else config.get('base', config.get('base_url', ''))
+        ) or config.get('base', config.get('base_url', ''))
+        model = (
+            os.getenv(str(model_env), "")
+            if model_env
+            else config.get('model', '')
+        ) or config.get('model', '')
         timeout = config.get('timeout_s', config.get('timeout', 60))
         max_retries = config.get('retries', 1)
         
@@ -287,7 +307,16 @@ class AIClient:
                 "request_id": str
             }
         """
+        preferred_provider = kwargs.pop("preferred_provider", None) or kwargs.pop("provider", None)
         available_providers = self.get_available_providers()
+        if preferred_provider:
+            preferred_provider = str(preferred_provider)
+            if preferred_provider in available_providers:
+                available_providers = [preferred_provider] + [
+                    p for p in available_providers if p != preferred_provider
+                ]
+            else:
+                logger.warning("Preferred provider %s is not available", preferred_provider)
         
         if not available_providers:
             raise LLMError(

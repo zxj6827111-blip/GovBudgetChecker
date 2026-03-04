@@ -24,6 +24,12 @@ if _ROOT not in _sys.path:
 from src.engine.pipeline import build_document, build_issues_payload
 from api import runtime
 from api.job_queue import DurableJobQueue
+from api.queue_runtime import (
+    compute_queue_workers,
+    get_queue_role,
+    queue_resume_on_start,
+    should_start_local_queue,
+)
 from api.routes import register_routes
 
 from src.services.analyze_dual import DualModeAnalyzer
@@ -133,6 +139,36 @@ def _extract_tables_from_page(page) -> List[List[List[str]]]:
     return norm_tables
 
 
+def _is_visible_char(obj: Dict[str, Any], page_height: float) -> bool:
+    if obj.get("object_type") != "char":
+        return True
+    top = obj.get("top")
+    bottom = obj.get("bottom")
+    if top is None or bottom is None:
+        return True
+    try:
+        top_v = float(top)
+        bottom_v = float(bottom)
+    except Exception:
+        return True
+    return top_v >= 0 and bottom_v <= page_height
+
+
+def _extract_visible_text_from_page(page) -> str:
+    raw_text = page.extract_text() or ""
+    try:
+        page_height = float(page.height)
+        filtered_page = page.filter(
+            lambda obj, h=page_height: _is_visible_char(obj, h)
+        )
+        filtered_text = filtered_page.extract_text() or ""
+        if filtered_text.strip():
+            return filtered_text
+    except Exception:
+        pass
+    return raw_text
+
+
 async def _run_pipeline(job_dir: Path) -> None:
     """
     真正的解析管线：
@@ -216,7 +252,7 @@ async def _run_pipeline(job_dir: Path) -> None:
             f_size = pdf_path.stat().st_size
             with pdfplumber.open(str(pdf_path)) as pdf:
                 for p in pdf.pages:
-                    p_texts.append(p.extract_text() or "")
+                    p_texts.append(_extract_visible_text_from_page(p))
                     p_tables.append(_extract_tables_from_page(p))
             return p_texts, p_tables, f_size
 
@@ -241,12 +277,15 @@ async def _run_pipeline(job_dir: Path) -> None:
             },
         )
 
-        doc = build_document(
-            path=str(pdf_path),
-            page_texts=page_texts,
-            page_tables=page_tables,
-            filesize=filesize,
-        )
+        def _sync_build_document():
+            return build_document(
+                path=str(pdf_path),
+                page_texts=page_texts,
+                page_tables=page_tables,
+                filesize=filesize,
+            )
+
+        doc = await loop.run_in_executor(None, _sync_build_document)
 
         # 双模式分析
         if dual_mode_enabled:
@@ -267,6 +306,7 @@ async def _run_pipeline(job_dir: Path) -> None:
 
             # 构建JobContext
             from src.schemas.issues import JobContext
+            from src.schemas.issues import AnalysisConfig
 
             job_context = JobContext(
                 job_id=job_dir.name,
@@ -277,8 +317,18 @@ async def _run_pipeline(job_dir: Path) -> None:
                 meta={"started_at": started},
             )
 
+            analysis_config = AnalysisConfig(
+                dual_mode=True,
+                ai_enabled=use_ai_assist,
+                rule_enabled=use_local_rules,
+                merge_enabled=True,
+                enable_ai_analysis=use_ai_assist,
+                enable_ai_locator=use_ai_assist,
+                ai_fallback_on_error=True,
+            )
+
             # 执行双模式分析
-            dual_result = await dual_analyzer.analyze(job_context)
+            dual_result = await dual_analyzer.analyze(job_context, analysis_config)
 
             # 组装最终返回体（双模式结构）
             result = {
@@ -526,19 +576,14 @@ runtime.set_pipeline_runner(_run_pipeline)
 register_routes(app)
 
 
-def _env_flag(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() not in {"0", "false", "no", "off"}
-
-
 @app.on_event("startup")
 async def _startup_job_queue() -> None:
-    testing_mode = _env_flag("TESTING", False)
-    queue_enabled = _env_flag("JOB_QUEUE_ENABLED", not testing_mode)
-    if not queue_enabled:
-        logger.info("Job queue disabled by environment")
+    if not should_start_local_queue():
+        logger.info(
+            "Local job queue startup skipped (enabled=%s, role=%s)",
+            os.getenv("JOB_QUEUE_ENABLED"),
+            get_queue_role(),
+        )
         return
 
     runner = runtime.get_pipeline_runner()
@@ -546,16 +591,18 @@ async def _startup_job_queue() -> None:
         logger.error("Pipeline runner is not configured, skip queue startup")
         return
 
-    try:
-        max_workers = int(os.getenv("JOB_QUEUE_WORKERS", "2"))
-    except Exception:
-        max_workers = 2
-    resume_on_start = _env_flag("JOB_QUEUE_RESUME_ON_START", True)
+    max_workers, ai_sequential_mode = compute_queue_workers()
+    if ai_sequential_mode and max_workers < 10:
+        logger.warning(
+            "AI_SEQUENTIAL_MODE is enabled but JOB_QUEUE_WORKERS=%d; "
+            "batch local-stage throughput may be limited (recommend >=10).",
+            max_workers,
+        )
 
     queue = DurableJobQueue(
         runner,
         max_workers=max_workers,
-        resume_on_start=resume_on_start,
+        resume_on_start=queue_resume_on_start(),
     )
     await queue.start()
     runtime.set_job_queue(queue)
@@ -568,3 +615,4 @@ async def _shutdown_job_queue() -> None:
         return
     await queue.stop()
     runtime.set_job_queue(None)
+

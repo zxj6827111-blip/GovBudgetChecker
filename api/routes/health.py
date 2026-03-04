@@ -11,6 +11,7 @@ from fastapi import APIRouter
 
 from api.config import AppConfig
 from api import runtime
+from api import queue_runtime
 
 router = APIRouter()
 
@@ -59,6 +60,15 @@ async def _check_ai_extractor() -> tuple[bool, str]:
                 return True, f"reachable:{response.status_code}"
             return False, f"remote_error:{response.status_code}"
     except Exception as exc:
+        # Fallback: when extractor service is down, allow direct provider mode.
+        try:
+            from src.engine.ai.extractor_client import ExtractorClient
+
+            extractor = ExtractorClient()
+            if await extractor.health_check():
+                return True, "direct_fallback"
+        except Exception:
+            pass
         return False, str(exc)
 
 
@@ -68,8 +78,10 @@ async def ready() -> Dict[str, Any]:
     rules_file = Path(os.getenv("RULES_FILE", "rules/v3_3.yaml"))
     auth_enabled = bool(runtime.security_config.enabled) if runtime.security_config else False
     auth_key_present = bool(os.getenv("GOVBUDGET_API_KEY")) if auth_enabled else True
-    queue_enabled = (os.getenv("JOB_QUEUE_ENABLED", "true").strip().lower() != "false")
-    queue_started = runtime.get_job_queue() is not None if queue_enabled else True
+    queue_enabled = queue_runtime.queue_enabled()
+    queue_role = queue_runtime.get_queue_role()
+    local_queue_required = queue_enabled and queue_role in {"all", "worker"}
+    queue_started = runtime.get_job_queue() is not None if local_queue_required else True
 
     db_ok, db_detail = await _check_database()
     ai_ok, ai_detail = await _check_ai_extractor()
@@ -90,6 +102,9 @@ async def ready() -> Dict[str, Any]:
         "db": db_detail,
         "ai_extractor": ai_detail,
         "queue_enabled": queue_enabled,
+        "queue_role": queue_role,
+        "local_queue_required": local_queue_required,
+        "inline_fallback_enabled": queue_runtime.allow_inline_fallback(),
     }
 
     ready_state = all(checks.values())

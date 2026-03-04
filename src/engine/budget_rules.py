@@ -28,6 +28,7 @@ _PLACEHOLDER_PATTERNS: List[re.Pattern[str]] = [
     # Match placeholders like XXXXX even when adjacent to Chinese text.
     re.compile(r"(?<![A-Za-z0-9])[Xx]{2,}(?![A-Za-z0-9])"),
     re.compile(r"Ｘ{2,}"),
+    re.compile(r"[×✕]{2,}"),
     re.compile(r"\bTBD\b", re.I),
     re.compile(r"\bN/?A\b", re.I),
     re.compile(r"\{\s*\u5355\u4f4d\s*\}"),
@@ -54,6 +55,30 @@ _YEAR_TARGET_LINE_TOKENS = (
     "\u62a5\u544a",
     "\u8868",
 )
+
+_EMPTY_TABLE_NOTE_TOKEN = "\u672c\u8868\u4e3a\u7a7a\u8868"
+_EMPTY_TABLE_EXPECTED_PHRASES: Dict[str, str] = {
+    "BUD_T6": "\u65e0\u653f\u5e9c\u6027\u57fa\u91d1\u9884\u7b97\u8d22\u653f\u62e8\u6b3e\u5b89\u6392",
+    "BUD_T7": "\u65e0\u56fd\u6709\u8d44\u672c\u7ecf\u8425\u9884\u7b97\u8d22\u653f\u62e8\u6b3e\u5b89\u6392",
+    "BUD_T9": "\u65e0\u8d22\u653f\u62e8\u6b3e\u4e09\u516c\u7ecf\u8d39\u9884\u7b97\u5b89\u6392",
+}
+_EMPTY_TABLE_NOTE_KEYWORDS: Dict[str, Tuple[str, ...]] = {
+    "BUD_T6": ("\u653f\u5e9c\u6027\u57fa\u91d1", "\u57fa\u91d1\u9884\u7b97"),
+    "BUD_T7": ("\u56fd\u6709\u8d44\u672c\u7ecf\u8425", "\u56fd\u6709\u8d44\u672c"),
+    "BUD_T9": ("\u4e09\u516c", "\u56e0\u516c\u51fa\u56fd", "\u516c\u52a1\u63a5\u5f85", "\u516c\u52a1\u7528\u8f66"),
+}
+_EMPTY_TABLE_NOTE_TOKENS: Tuple[str, ...] = (
+    "\u672c\u8868\u4e3a\u7a7a\u8868",
+    "\u65e0\u6b64\u9879\u8d44\u91d1\u5b89\u6392",
+    "\u65e0\u6570\u636e",
+    "\u6545\u672c\u8868\u65e0\u6570\u636e",
+    "\u672a\u5b89\u6392",
+    "\u4e0d\u5b58\u5728",
+)
+
+_PERFORMANCE_LINE_RE = re.compile(r"\u7ee9\u6548\u76ee\u6807[^\n\uff1b;\u3002]{0,180}")
+_PERFORMANCE_COUNT_RE = re.compile(r"(\d+)\s*\u4e2a(?:\u9879\u76ee)?")
+_PERFORMANCE_AMOUNT_RE = re.compile(r"([0-9][0-9,]*(?:\.[0-9]+)?)\s*(\u4ebf\u5143|\u4e07\u5143|\u5143)")
 
 
 BUDGET_TABLE_SPECS: List[Dict[str, Any]] = [
@@ -550,6 +575,111 @@ def _extract_number_by_patterns(text: str, patterns: Sequence[str]) -> Optional[
     return None
 
 
+def _is_year_like_number(value: float) -> bool:
+    return abs(value - round(value)) < 1e-9 and 1900 <= value <= 2100
+
+
+def _table_data_numbers(rows: Sequence[Sequence[Any]]) -> List[float]:
+    data_numbers: List[float] = []
+    for ridx, row in enumerate(rows):
+        cells = [str(c or "").strip() for c in row]
+        for cidx, cell in enumerate(cells):
+            # Skip first column to avoid class/item codes being treated as money values.
+            if cidx == 0:
+                continue
+            value = parse_number(cell)
+            if value is None:
+                continue
+            if ridx <= 2 and _is_year_like_number(float(value)):
+                continue
+            data_numbers.append(float(value))
+    return data_numbers
+
+
+def _table_is_effectively_empty(rows: Sequence[Sequence[Any]]) -> bool:
+    if not rows:
+        return True
+    values = _table_data_numbers(rows)
+    if not values:
+        return True
+    return all(abs(v) <= 1e-9 for v in values)
+
+
+def _has_structured_empty_note(page_text: str, table_key: str) -> bool:
+    if not page_text:
+        return False
+    expected_phrase = _EMPTY_TABLE_EXPECTED_PHRASES.get(table_key, "")
+    if expected_phrase and expected_phrase in page_text:
+        return True
+
+    keywords = _EMPTY_TABLE_NOTE_KEYWORDS.get(table_key, ())
+    has_keyword = any(token in page_text for token in keywords)
+    has_note_token = any(token in page_text for token in _EMPTY_TABLE_NOTE_TOKENS)
+    has_note_prefix = bool(re.search(r"注[：:]", page_text))
+    return has_keyword and (has_note_token or has_note_prefix)
+
+
+def _find_foreign_empty_phrase(page_text: str, table_key: str) -> Optional[str]:
+    for key, phrase in _EMPTY_TABLE_EXPECTED_PHRASES.items():
+        if key == table_key:
+            continue
+        if phrase and phrase in page_text:
+            return phrase
+    return None
+
+
+def _extract_performance_summary_metrics(
+    text: str,
+) -> Tuple[Optional[int], Optional[float], Optional[str]]:
+    if not text:
+        return None, None, None
+
+    best: Optional[Tuple[int, Optional[int], Optional[float], str]] = None
+    for match in _PERFORMANCE_LINE_RE.finditer(text):
+        line = match.group(0).strip()
+        if not line:
+            continue
+
+        count: Optional[int] = None
+        count_match = _PERFORMANCE_COUNT_RE.search(line)
+        if count_match:
+            try:
+                count = int(count_match.group(1))
+            except Exception:
+                count = None
+
+        amount_wanyuan: Optional[float] = None
+        for amount_match in _PERFORMANCE_AMOUNT_RE.finditer(line):
+            raw_amount = amount_match.group(1).replace(",", "")
+            unit = amount_match.group(2)
+            try:
+                parsed = float(raw_amount)
+            except Exception:
+                continue
+            converted = _to_wanyuan(parsed, unit)
+            if converted is not None:
+                amount_wanyuan = converted
+
+        if count is None and amount_wanyuan is None:
+            continue
+
+        score = 0
+        if count is not None:
+            score += 1
+        if amount_wanyuan is not None:
+            score += 1
+        if "\u8bbe\u7f6e\u60c5\u51b5" in line or "\u7f16\u62a5\u60c5\u51b5" in line:
+            score += 1
+
+        candidate = (score, count, amount_wanyuan, line)
+        if best is None or candidate[0] > best[0]:
+            best = candidate
+
+    if best is None:
+        return None, None, None
+    return best[1], best[2], best[3]
+
+
 class BUD001_StructureAndAnchors(Rule):
     code, severity = "BUD-001", "error"
     desc = "\u9884\u7b97\u4e5d\u5f20\u8868\u5b8c\u6574\u6027\u4e0e\u5fc5\u5907\u7ae0\u8282\u68c0\u67e5"
@@ -940,49 +1070,54 @@ class BUD105_CrossTableChecks(Rule):
 
 class BUD106_EmptyTableStatement(Rule):
     code, severity = "BUD-106", "error"
-    desc = "T6/T7\u7a7a\u8868\u8bf4\u660e\u68c0\u67e5"
+    desc = "T6/T7/T9\u7a7a\u8868\u8bf4\u660e\u68c0\u67e5"
 
     def apply(self, doc: Document) -> List[Issue]:
         anchors = find_budget_anchors(doc)
         issues: List[Issue] = []
 
-        checks = [
-            (
-                "BUD_T6",
-                (
-                    "\u65e0\u653f\u5e9c\u6027\u57fa\u91d1\u9884\u7b97\u8d22\u653f\u62e8\u6b3e\u5b89\u6392",
-                    "\u672c\u8868\u4e3a\u7a7a\u8868",
-                ),
-            ),
-            (
-                "BUD_T7",
-                (
-                    "\u65e0\u56fd\u6709\u8d44\u672c\u7ecf\u8425\u9884\u7b97\u8d22\u653f\u62e8\u6b3e\u5b89\u6392",
-                    "\u672c\u8868\u4e3a\u7a7a\u8868",
-                ),
-            ),
-        ]
-
-        for table_key, phrases in checks:
+        checks = ("BUD_T6", "BUD_T7", "BUD_T9")
+        for table_key in checks:
             rows, page = _get_budget_table_rows(doc, anchors, table_key, include_continuation=False)
-            if not rows or not page:
-                continue
-
-            numbers: List[float] = []
-            for row in rows:
-                numbers.extend(_numbers_in_row(row))
-
-            data_numbers = [n for n in numbers if abs(n) > 1e-9]
-            is_empty = len(data_numbers) == 0
-            if not is_empty:
+            if not page:
                 continue
 
             page_text = doc.page_texts[page - 1] if page - 1 < len(doc.page_texts) else ""
-            if not any(phrase in page_text for phrase in phrases):
+            table_name = _table_display_name(table_key)
+            expected_phrase = _EMPTY_TABLE_EXPECTED_PHRASES.get(table_key, "")
+            keywords = _EMPTY_TABLE_NOTE_KEYWORDS.get(table_key, ())
+
+            has_empty_note = _has_structured_empty_note(page_text, table_key)
+            has_expected_phrase = bool(expected_phrase and expected_phrase in page_text)
+            has_table_keywords = any(token in page_text for token in keywords)
+            wrong_phrase = _find_foreign_empty_phrase(page_text, table_key)
+            is_empty = _table_is_effectively_empty(rows or [])
+
+            if wrong_phrase:
                 table_name = _table_display_name(table_key)
                 issues.append(
                     self._issue(
-                        f"{table_name} ({table_key})\u4e3a\u7a7a\u8868\uff0c\u4f46\u7f3a\u5c11\u89c4\u8303\u6ce8\u91ca\u8bf4\u660e",
+                        f"{table_name} ({table_key})\u7a7a\u8868\u6ce8\u91ca\u7591\u4f3c\u5957\u6a21\u677f\uff1a\u5f53\u524d\u9875\u9762\u51fa\u73b0\u300c{wrong_phrase}\u300d\uff0c\u5efa\u8bae\u6539\u4e3a\u300c{expected_phrase}\u300d\u6216\u540c\u4e49\u89c4\u8303\u8bf4\u6cd5",
+                        {"page": page, "table": table_key, "table_name": table_name},
+                        severity="error",
+                    )
+                )
+                continue
+
+            if has_empty_note and not has_table_keywords:
+                issues.append(
+                    self._issue(
+                        f"{table_name} ({table_key})\u5df2\u6709\u7a7a\u8868\u6ce8\u91ca\uff0c\u4f46\u7f3a\u5c11\u4e0e\u8be5\u8868\u5bf9\u5e94\u7684\u53e3\u5f84\u5173\u952e\u8bcd\uff08\u5efa\u8bae\u5305\u542b\u300c{expected_phrase}\u300d\u6216\u540c\u4e49\u8868\u8ff0\uff09",
+                        {"page": page, "table": table_key, "table_name": table_name},
+                        severity="error",
+                    )
+                )
+                continue
+
+            if is_empty and not (has_expected_phrase or has_empty_note):
+                issues.append(
+                    self._issue(
+                        f"{table_name} ({table_key})\u4e3a\u7a7a\u8868\uff0c\u4f46\u7f3a\u5c11\u89c4\u8303\u6ce8\u91ca\u8bf4\u660e\uff08\u5efa\u8bae\u5305\u542b\u300c{expected_phrase}\u300d\u6216\u300c{_EMPTY_TABLE_NOTE_TOKEN}\u300d\uff09",
                         {"page": page, "table": table_key, "table_name": table_name},
                         severity="error",
                     )
@@ -1116,6 +1251,44 @@ class BUD107_TextTableConsistency(Rule):
         return issues
 
 
+class BUD108_PerformanceTargetConsistency(Rule):
+    code, severity = "BUD-108", "warn"
+    desc = "\u7ee9\u6548\u76ee\u6807\u8bf4\u660e\u4e0e\u9879\u76ee\u652f\u51fa\u53e3\u5f84\u4e00\u81f4\u6027"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        anchors = find_budget_anchors(doc)
+        issues: List[Issue] = []
+
+        all_text = "\n".join(doc.page_texts)
+        _, perf_amount_wy, perf_line = _extract_performance_summary_metrics(all_text)
+        if perf_amount_wy is None:
+            return issues
+
+        t3_rows, t3_page = _get_budget_table_rows(doc, anchors, "BUD_T3")
+        if not t3_rows or not t3_page:
+            return issues
+
+        _, _, t3_project = _extract_total_basic_project(t3_rows)
+        unit = doc.units_per_page[t3_page - 1] if (t3_page - 1) < len(doc.units_per_page) else None
+        t3_project_wy = _to_wanyuan(t3_project, unit)
+        if t3_project_wy is None:
+            return issues
+
+        # Narrative and table may differ by tiny rounding; tolerate 0.10万元.
+        if _is_close(perf_amount_wy, t3_project_wy, abs_tol=0.10, rel_tol=0.005):
+            return issues
+
+        issues.append(
+            self._issue(
+                f"\u7ee9\u6548\u76ee\u6807\u8bf4\u660e\u989d\u5ea6\u4e0eT3\u9879\u76ee\u652f\u51fa\u5dee\u5f02\u8f83\u5927\uff1a\u8bf4\u660e={perf_amount_wy:.2f}\u4e07\u5143\uff0cT3={t3_project_wy:.2f}\u4e07\u5143\uff1b\u82e5\u4e3a\u4e0d\u540c\u53e3\u5f84\uff0c\u5efa\u8bae\u5728\u6587\u672c\u4e2d\u8865\u5145\u8bf4\u660e",
+                {"page": t3_page, "table": "BUD_T3"},
+                severity="warn",
+                evidence_text=perf_line,
+            )
+        )
+        return issues
+
+
 ALL_BUDGET_RULES: List[Rule] = [
     BUD001_StructureAndAnchors(),
     BUD002_PlaceholderCheck(),
@@ -1127,4 +1300,5 @@ ALL_BUDGET_RULES: List[Rule] = [
     BUD105_CrossTableChecks(),
     BUD106_EmptyTableStatement(),
     BUD107_TextTableConsistency(),
+    BUD108_PerformanceTargetConsistency(),
 ]
