@@ -83,6 +83,153 @@ class OpenAICompatProvider(BaseLLMProvider):
                 "content": msg["content"]
             })
         return formatted
+
+    def _extract_content(self, choice: Dict[str, Any]) -> str:
+        """Extract textual content from OpenAI-compatible response choice."""
+        message = choice.get("message") or {}
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: List[str] = []
+            for part in content:
+                if isinstance(part, dict):
+                    text = part.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+            return "".join(parts)
+        return ""
+
+    def _should_send_max_tokens(self) -> bool:
+        """
+        Gemini OpenAI-compatible gateway may return empty assistant content when
+        max_tokens is present. Skip this field for Gemini endpoints.
+        """
+        base = (self.base_url or "").lower()
+        return "generativelanguage.googleapis.com" not in base
+
+    @staticmethod
+    def _safe_json_parse(raw_text: str) -> Any:
+        if not raw_text:
+            return {}
+        try:
+            return json.loads(raw_text)
+        except Exception:
+            return {"error": {"message": raw_text}}
+
+    @staticmethod
+    def _extract_error_message(response_data: Any) -> str:
+        if isinstance(response_data, dict):
+            err = response_data.get("error")
+            if isinstance(err, dict):
+                return str(err.get("message") or "")
+            return str(response_data.get("message") or "")
+        return str(response_data or "")
+
+    def _should_use_responses_api(self, status_code: int, response_data: Any) -> bool:
+        if status_code not in {400, 404}:
+            return False
+        msg = self._extract_error_message(response_data).lower()
+        return (
+            "/v1/responses" in msg
+            or "unsupported legacy protocol" in msg
+            or "chat/completions is not supported" in msg
+        )
+
+    @staticmethod
+    def _extract_responses_content(response_data: Dict[str, Any]) -> str:
+        text = response_data.get("output_text")
+        if isinstance(text, str) and text.strip():
+            return text
+
+        output = response_data.get("output")
+        if not isinstance(output, list):
+            return ""
+
+        parts: List[str] = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "message":
+                content_items = item.get("content")
+                if isinstance(content_items, list):
+                    for content in content_items:
+                        if not isinstance(content, dict):
+                            continue
+                        if content.get("type") in {"output_text", "text"}:
+                            val = content.get("text")
+                            if isinstance(val, str):
+                                parts.append(val)
+                continue
+            if item.get("type") in {"output_text", "text"}:
+                val = item.get("text")
+                if isinstance(val, str):
+                    parts.append(val)
+
+        return "".join(parts)
+
+    async def _chat_via_responses(
+        self,
+        formatted_messages: List[Dict[str, str]],
+        model: str,
+        temperature: float,
+        max_tokens: Optional[int],
+        timeout: int,
+        start_time: float,
+        **kwargs,
+    ) -> LLMResponse:
+        payload: Dict[str, Any] = {
+            "model": model,
+            "input": formatted_messages,
+            "temperature": min(max(temperature, 0.0), 2.0),
+        }
+        if max_tokens:
+            payload["max_output_tokens"] = max_tokens
+
+        if "top_p" in kwargs:
+            payload["top_p"] = kwargs["top_p"]
+        if "user" in kwargs:
+            payload["user"] = kwargs["user"]
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
+            async with session.post(
+                f"{self.base_url}/responses",
+                headers=self.get_headers(),
+                json=payload,
+            ) as response:
+                raw_text = await response.text()
+                response_data = self._safe_json_parse(raw_text)
+                latency_ms = int((time.time() - start_time) * 1000)
+
+                if response.status != 200:
+                    error = self.parse_error(response.status, response_data)
+                    error.model = model
+                    self.update_stats(latency_ms, success=False)
+                    raise error
+
+                if not isinstance(response_data, dict):
+                    self.update_stats(latency_ms, success=False)
+                    raise LLMError(
+                        error_type=LLMErrorType.UNKNOWN,
+                        message=f"Unexpected response payload type: {type(response_data).__name__}",
+                        provider=self.name,
+                        model=model,
+                    )
+
+                content = self._extract_responses_content(response_data)
+                usage = response_data.get("usage", {})
+                finish_reason = str(response_data.get("status") or "completed")
+
+                self.update_stats(latency_ms, success=True)
+                return LLMResponse(
+                    content=content,
+                    model=model,
+                    provider=self.name,
+                    usage=usage if isinstance(usage, dict) else {},
+                    latency_ms=latency_ms,
+                    finish_reason=finish_reason,
+                    request_id=response_data.get("id"),
+                )
     
     async def chat(self, 
                    messages: List[Dict[str, str]], 
@@ -105,7 +252,7 @@ class OpenAICompatProvider(BaseLLMProvider):
                 "stream": False
             }
             
-            if max_tokens:
+            if max_tokens and self._should_send_max_tokens():
                 payload["max_tokens"] = max_tokens
             
             # 添加其他参数
@@ -128,19 +275,48 @@ class OpenAICompatProvider(BaseLLMProvider):
                     headers=self.get_headers(),
                     json=payload
                 ) as response:
-                    
-                    response_data = await response.json()
+
+                    raw_text = await response.text()
+                    response_data = self._safe_json_parse(raw_text)
                     latency_ms = int((time.time() - start_time) * 1000)
-                    
+
                     if response.status != 200:
+                        if self._should_use_responses_api(response.status, response_data):
+                            return await self._chat_via_responses(
+                                formatted_messages=formatted_messages,
+                                model=model,
+                                temperature=temperature,
+                                max_tokens=max_tokens,
+                                timeout=timeout,
+                                start_time=start_time,
+                                **kwargs,
+                            )
                         error = self.parse_error(response.status, response_data)
                         error.model = model
                         self.update_stats(latency_ms, success=False)
                         raise error
+
+                    if not isinstance(response_data, dict):
+                        self.update_stats(latency_ms, success=False)
+                        raise LLMError(
+                            error_type=LLMErrorType.UNKNOWN,
+                            message=f"Unexpected response payload type: {type(response_data).__name__}",
+                            provider=self.name,
+                            model=model,
+                        )
                     
                     # 解析响应
-                    choice = response_data["choices"][0]
-                    content = choice["message"]["content"]
+                    choices = response_data.get("choices")
+                    if not isinstance(choices, list) or not choices:
+                        self.update_stats(latency_ms, success=False)
+                        raise LLMError(
+                            error_type=LLMErrorType.UNKNOWN,
+                            message="OpenAI API Error: missing choices in response",
+                            provider=self.name,
+                            model=model,
+                        )
+                    choice = choices[0] if isinstance(choices[0], dict) else {}
+                    content = self._extract_content(choice)
                     finish_reason = choice.get("finish_reason", "stop")
                     usage = response_data.get("usage", {})
                     
@@ -156,7 +332,7 @@ class OpenAICompatProvider(BaseLLMProvider):
                         request_id=response_data.get("id")
                     )
                     
-        except aiohttp.ClientTimeout:
+        except (asyncio.TimeoutError, TimeoutError):
             latency_ms = int((time.time() - start_time) * 1000)
             self.update_stats(latency_ms, success=False)
             raise LLMError(
@@ -204,7 +380,7 @@ class OpenAICompatProvider(BaseLLMProvider):
             "stream": True
         }
         
-        if max_tokens:
+        if max_tokens and self._should_send_max_tokens():
             payload["max_tokens"] = max_tokens
         
         # 添加其他参数
@@ -245,7 +421,7 @@ class OpenAICompatProvider(BaseLLMProvider):
                         except json.JSONDecodeError:
                             continue
                             
-        except aiohttp.ClientTimeout:
+        except (asyncio.TimeoutError, TimeoutError):
             raise LLMError(
                 error_type=LLMErrorType.TIMEOUT,
                 message=f"Stream timeout after {timeout}s",
@@ -260,8 +436,36 @@ class OpenAICompatProvider(BaseLLMProvider):
                 model=model
             )
     
-    def parse_error(self, status_code: int, response_data: Dict[str, Any]) -> LLMError:
+    def parse_error(self, status_code: int, response_data: Any) -> LLMError:
         """解析 OpenAI 特定的错误响应"""
+        if not isinstance(response_data, dict):
+            raw = ""
+            try:
+                raw = json.dumps(response_data, ensure_ascii=False)
+            except Exception:
+                raw = str(response_data)
+
+            if status_code in [401, 403]:
+                error_type = LLMErrorType.AUTHENTICATION
+            elif status_code == 404:
+                error_type = LLMErrorType.MODEL_NOT_FOUND
+            elif status_code == 429:
+                error_type = LLMErrorType.RATE_LIMIT
+            elif status_code == 408:
+                error_type = LLMErrorType.TIMEOUT
+            elif 500 <= status_code < 600:
+                error_type = LLMErrorType.SERVER_ERROR
+            elif status_code == 400:
+                error_type = LLMErrorType.INVALID_REQUEST
+            else:
+                error_type = LLMErrorType.UNKNOWN
+            return LLMError(
+                error_type=error_type,
+                message=f"OpenAI API Error: {raw}",
+                status_code=status_code,
+                provider=self.name,
+            )
+
         error_info = response_data.get('error', {})
         error_code = error_info.get('code', '')
         error_msg = error_info.get('message', 'Unknown error')

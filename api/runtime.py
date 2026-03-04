@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
 import aiofiles
 from fastapi import HTTPException, Request, UploadFile
 
+from api import queue_runtime
+
 logger = logging.getLogger(__name__)
 
 APP_TITLE = "GovBudgetChecker API"
@@ -321,15 +323,103 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     report_kind = normalize_report_kind(doc_type, filename)
     if report_kind_raw in {"budget", "final"}:
         report_kind = report_kind_raw
+    mode = str(status_data.get("mode") or "legacy").strip() or "legacy"
+    dual_mode_enabled = bool(
+        status_data.get("dual_mode_enabled")
+        or mode == "dual"
+        or result_meta.get("dual_mode_enabled")
+        or str(result_meta.get("mode") or "").strip().lower() == "dual"
+    )
+    use_local_rules = bool(
+        status_data.get("use_local_rules", result_meta.get("use_local_rules", True))
+    )
+    use_ai_assist = bool(
+        status_data.get("use_ai_assist", result_meta.get("use_ai_assist", True))
+    )
 
     issue_total = 0
     issue_error = 0
     issue_warn = 0
     issue_info = 0
     top_issue_rules: List[Dict[str, Any]] = []
+    local_issue_total = 0
+    local_issue_error = 0
+    local_issue_warn = 0
+    local_issue_info = 0
+    ai_issue_total = 0
+    ai_issue_error = 0
+    ai_issue_warn = 0
+    ai_issue_info = 0
+    local_elapsed_ms = 0
+    ai_elapsed_ms = 0
+    provider_stats_count = 0
+    local_participated = use_local_rules
+    ai_participated = False
+
+    def _severity_bucket(severity: Any) -> str:
+        value = str(severity or "").lower()
+        if value in {"critical", "high", "error", "fatal"}:
+            return "error"
+        if value in {"warn", "warning", "medium", "low"}:
+            return "warn"
+        return "info"
+
+    def _summarize_finding_list(items: Any) -> tuple[int, int, int, int]:
+        if not isinstance(items, list):
+            return (0, 0, 0, 0)
+        total = len(items)
+        err = 0
+        wrn = 0
+        inf = 0
+        for item in items:
+            if isinstance(item, dict):
+                bucket = _severity_bucket(item.get("severity"))
+            else:
+                bucket = _severity_bucket("")
+            if bucket == "error":
+                err += 1
+            elif bucket == "warn":
+                wrn += 1
+            else:
+                inf += 1
+        return (total, err, wrn, inf)
 
     try:
         result = status_data.get("result") or {}
+        if not isinstance(result, dict):
+            result = {}
+
+        provider_stats = result_meta.get("provider_stats")
+        if isinstance(provider_stats, list):
+            provider_stats_count = len(provider_stats)
+
+        elapsed_ms = result_meta.get("elapsed_ms")
+        if isinstance(elapsed_ms, dict):
+            try:
+                ai_elapsed_ms = int(elapsed_ms.get("ai") or 0)
+            except Exception:
+                ai_elapsed_ms = 0
+            try:
+                local_elapsed_ms = int(elapsed_ms.get("rule") or 0)
+            except Exception:
+                local_elapsed_ms = 0
+
+        ai_findings = result.get("ai_findings")
+        (
+            ai_issue_total,
+            ai_issue_error,
+            ai_issue_warn,
+            ai_issue_info,
+        ) = _summarize_finding_list(ai_findings)
+
+        rule_findings_for_local = result.get("rule_findings")
+        (
+            local_issue_total,
+            local_issue_error,
+            local_issue_warn,
+            local_issue_info,
+        ) = _summarize_finding_list(rule_findings_for_local)
+
         issues = result.get("issues")
         issue_items: List[Dict[str, Any]] = []
 
@@ -361,10 +451,10 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         elif isinstance(issues, list):
             issue_total = len(issues)
             for item in issues:
-                sev = str((item or {}).get("severity", "")).lower()
-                if sev in {"critical", "high", "error", "fatal"}:
+                bucket = _severity_bucket((item or {}).get("severity", ""))
+                if bucket == "error":
                     issue_error += 1
-                elif sev in {"warn", "warning", "medium", "low"}:
+                elif bucket == "warn":
                     issue_warn += 1
                 else:
                     issue_info += 1
@@ -378,10 +468,10 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
                 issue_total = len(rule_findings)
                 issue_items = [item for item in rule_findings if isinstance(item, dict)]
                 for item in rule_findings:
-                    sev = str((item or {}).get("severity", "")).lower()
-                    if sev in {"critical", "high", "error", "fatal"}:
+                    bucket = _severity_bucket((item or {}).get("severity", ""))
+                    if bucket == "error":
                         issue_error += 1
-                    elif sev in {"warn", "warning", "medium", "low"}:
+                    elif bucket == "warn":
                         issue_warn += 1
                     else:
                         issue_info += 1
@@ -404,13 +494,28 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     except Exception:
         logger.exception("Failed to summarize issue counts for job: %s", job_dir.name)
 
+    # Legacy mode fallback: local findings come from the merged issue buckets.
+    if local_issue_total == 0 and issue_total > 0:
+        local_issue_total = issue_total
+        local_issue_error = issue_error
+        local_issue_warn = issue_warn
+        local_issue_info = issue_info
+
+    ai_participated = bool(use_ai_assist) and (
+        dual_mode_enabled
+        or ai_issue_total > 0
+        or ai_elapsed_ms > 0
+        or provider_stats_count > 0
+    )
+
     return {
         "job_id": job_dir.name,
         "filename": filename,
         "status": status,
         "progress": progress,
         "ts": ts,
-        "mode": status_data.get("mode", "legacy"),
+        "mode": mode,
+        "dual_mode_enabled": dual_mode_enabled,
         "stage": stage,
         "report_year": report_year,
         "doc_type": doc_type or None,
@@ -421,6 +526,19 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "issue_info": issue_info,
         "has_issues": issue_total > 0,
         "top_issue_rules": top_issue_rules,
+        "local_participated": local_participated,
+        "ai_participated": ai_participated,
+        "local_issue_total": local_issue_total,
+        "local_issue_error": local_issue_error,
+        "local_issue_warn": local_issue_warn,
+        "local_issue_info": local_issue_info,
+        "ai_issue_total": ai_issue_total,
+        "ai_issue_error": ai_issue_error,
+        "ai_issue_warn": ai_issue_warn,
+        "ai_issue_info": ai_issue_info,
+        "local_elapsed_ms": local_elapsed_ms,
+        "ai_elapsed_ms": ai_elapsed_ms,
+        "provider_stats_count": provider_stats_count,
     }
 
 
@@ -616,16 +734,30 @@ async def start_analysis(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8"
         )
         queue = _job_queue
+        dispatch = "local_queue"
         if queue is not None:
             await queue.enqueue(job_id)
-        else:
+        elif queue_runtime.should_enqueue_only():
+            dispatch = "queued_waiting_worker"
+            logger.info(
+                "No local queue for job %s, keep queued for external worker dispatch",
+                job_id,
+            )
+        elif queue_runtime.allow_inline_fallback():
+            dispatch = "inline_fallback"
             logger.warning(
-                "Job queue is not configured; falling back to in-process create_task for %s",
+                "Job queue unavailable; fallback to in-process create_task for %s",
                 job_id,
             )
             asyncio.create_task(_pipeline_runner(job_dir))
+        else:
+            dispatch = "queued_waiting_worker"
+            logger.info(
+                "Inline fallback disabled and local queue unavailable; job %s stays queued",
+                job_id,
+            )
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"failed to start analysis: {e}"
         ) from e
-    return {"job_id": job_id, "status": "started"}
+    return {"job_id": job_id, "status": "started", "dispatch": dispatch}

@@ -14,6 +14,8 @@ from src.engine.budget_rules import (
     BUD002_PlaceholderCheck,
     BUD003_YearConsistency,
     BUD101_T1Balance,
+    BUD106_EmptyTableStatement,
+    BUD108_PerformanceTargetConsistency,
 )
 from src.engine.common_rules import (
     CMM001_ThreePublicNarrativeConsistency,
@@ -91,6 +93,11 @@ async def test_engine_rule_runner_routes_budget_rules(
 
     assert "BUD-DUMMY" in rule_ids
     assert "FIN-DUMMY" not in rule_ids
+    bud_finding = next(item for item in findings if item.rule_id == "BUD-DUMMY")
+    assert bud_finding.location.get("page") == 1
+    assert bud_finding.page_number == 1
+    assert isinstance(bud_finding.evidence, list) and bud_finding.evidence
+    assert bud_finding.evidence[0].get("page") == 1
 
 
 def test_budget_t1_balance_rule_detects_mismatch() -> None:
@@ -148,6 +155,20 @@ def test_budget_placeholder_rule_detects_x_and_ellipsis_placeholders() -> None:
 
     assert any("XXXXX" in issue.message for issue in issues)
     assert any("\u3002\u3002\u3002" in issue.message for issue in issues)
+
+
+def test_budget_placeholder_rule_detects_times_placeholder_symbol() -> None:
+    page_text = "\u9879\u76ee\u8d44\u91d1\u8bf4\u660e\uff1a\u00d7\u00d7\u4e07\u5143\uff0c\u5f85\u540e\u7eed\u586b\u5199\u3002"
+    doc = build_document(
+        path="unit25_budget.pdf",
+        page_texts=[page_text],
+        page_tables=[[]],
+        filesize=18,
+    )
+
+    issues = BUD002_PlaceholderCheck().apply(doc)
+
+    assert any("\u00d7\u00d7" in issue.message for issue in issues)
 
 
 def test_budget_year_rule_detects_wrong_year_in_budget_table_title() -> None:
@@ -229,6 +250,153 @@ def test_budget_year_rule_ignores_historical_year_in_non_target_line() -> None:
     )
 
     issues = BUD003_YearConsistency().apply(doc)
+
+    assert not issues
+
+
+def test_budget_empty_table_statement_detects_wrong_template_phrase() -> None:
+    page_text = "\n".join(
+        [
+            "2026年部门国有资本经营预算支出功能分类预算表",
+            "单位：万元",
+            "无政府性基金预算财政拨款安排，本表为空表。",
+        ]
+    )
+    table = [
+        ["项目", "预算数"],
+        ["合计", "0"],
+    ]
+    doc = build_document(
+        path="unit-2026-budget.pdf",
+        page_texts=[page_text],
+        page_tables=[[table]],
+        filesize=20,
+    )
+
+    issues = BUD106_EmptyTableStatement().apply(doc)
+
+    assert issues
+    assert any("套模" in issue.message for issue in issues)
+
+
+def test_budget_empty_table_statement_ignores_year_header_and_requires_note() -> None:
+    page_text = "\n".join(
+        [
+            "2026年部门政府性基金预算支出功能分类预算表",
+            "单位：万元",
+        ]
+    )
+    table = [
+        ["2026年", "2025年"],
+        ["项目", "预算数"],
+        ["", ""],
+    ]
+    doc = build_document(
+        path="unit-2026-budget.pdf",
+        page_texts=[page_text],
+        page_tables=[[table]],
+        filesize=20,
+    )
+
+    issues = BUD106_EmptyTableStatement().apply(doc)
+
+    assert issues
+    assert any("缺少规范注释说明" in issue.message for issue in issues)
+
+
+def test_budget_empty_table_statement_flags_t9_empty_without_note() -> None:
+    page_text = "\n".join(
+        [
+            "2026年部门“三公”经费和机关运行经费预算表",
+            "单位：万元",
+        ]
+    )
+    table = [
+        ["项目", "预算数"],
+        ["合计", "0"],
+    ]
+    doc = build_document(
+        path="unit-2026-budget.pdf",
+        page_texts=[page_text],
+        page_tables=[[table]],
+        filesize=20,
+    )
+
+    issues = BUD106_EmptyTableStatement().apply(doc)
+
+    assert issues
+    assert any("BUD_T9" in issue.message for issue in issues)
+
+
+def test_budget_empty_table_statement_accepts_t9_note_with_keywords() -> None:
+    page_text = "\n".join(
+        [
+            "2026年部门“三公”经费和机关运行经费预算表",
+            "单位：万元",
+            "注：本单位无财政拨款三公经费预算安排，本表为空表。",
+        ]
+    )
+    table = [
+        ["项目", "预算数"],
+        ["合计", "0"],
+    ]
+    doc = build_document(
+        path="unit-2026-budget.pdf",
+        page_texts=[page_text],
+        page_tables=[[table]],
+        filesize=20,
+    )
+
+    issues = BUD106_EmptyTableStatement().apply(doc)
+
+    assert not issues
+
+
+def test_budget_performance_target_consistency_detects_large_gap() -> None:
+    t3_page_text = "\n".join(
+        [
+            "2026年部门支出预算总表",
+            "单位：万元",
+        ]
+    )
+    t3_table = [
+        ["项目", "支出合计", "基本支出", "项目支出"],
+        ["合计", "120.00", "80.00", "40.00"],
+    ]
+    perf_page_text = "绩效目标设置情况：2026年共11个项目，涉及预算资金120.00万元。"
+    doc = build_document(
+        path="unit-2026-budget.pdf",
+        page_texts=[t3_page_text, perf_page_text],
+        page_tables=[[t3_table], []],
+        filesize=30,
+    )
+
+    issues = BUD108_PerformanceTargetConsistency().apply(doc)
+
+    assert issues
+    assert any("口径" in issue.message for issue in issues)
+
+
+def test_budget_performance_target_consistency_allows_rounding_tolerance() -> None:
+    t3_page_text = "\n".join(
+        [
+            "2026年部门支出预算总表",
+            "单位：万元",
+        ]
+    )
+    t3_table = [
+        ["项目", "支出合计", "基本支出", "项目支出"],
+        ["合计", "120.00", "80.00", "40.00"],
+    ]
+    perf_page_text = "绩效目标设置情况：2026年共11个项目，涉及预算资金40.08万元。"
+    doc = build_document(
+        path="unit-2026-budget.pdf",
+        page_texts=[t3_page_text, perf_page_text],
+        page_tables=[[t3_table], []],
+        filesize=30,
+    )
+
+    issues = BUD108_PerformanceTargetConsistency().apply(doc)
 
     assert not issues
 
@@ -386,3 +554,42 @@ def test_common_income_expense_trend_rule_detects_direction_conflict() -> None:
     assert issues
     assert any("\u6536\u5165/\u652f\u51fa\u540c\u6bd4\u65b9\u5411\u77db\u76fe" in issue.message for issue in issues)
     assert any("\u53e3\u5f84\u63cf\u8ff0\u77db\u76fe" in issue.message for issue in issues)
+    assert any(
+        "\u8fd9\u6bb5\u6587\u5b57\u51fa\u73b0\u4e86\u9519\u8bef" in issue.message
+        for issue in issues
+    )
+    assert any(
+        "\u4e3b\u8981\u539f\u56e0\u662f\u9879\u76ee\u8c03\u6574" in (issue.evidence_text or "")
+        for issue in issues
+    )
+
+
+def test_common_income_expense_trend_rule_quotes_summary_sentence_with_optional_dir() -> None:
+    page_text = (
+        "2026\u5e74\u6536\u5165\u9884\u7b977279.80\u4e07\u5143\uff0c"
+        "\u6bd42025\u5e74\u9884\u7b97\u51cf\u5c111701.19\u4e07\u5143\u3002"
+        "2026\u5e74\u652f\u51fa\u9884\u7b977279.80\u4e07\u5143\uff0c"
+        "\u6bd42025\u5e74\u9884\u7b97\u51cf\u5c111701.19\u4e07\u5143\u3002"
+        "\u8d22\u653f\u62e8\u6b3e\u6536\u5165\u652f\u51fa\u589e\u52a0\uff08\u51cf\u5c11\uff09"
+        "\u7684\u4e3b\u8981\u539f\u56e0\u662f\u57fa\u5efa\u9879\u76ee\u51cf\u5c11\u3002"
+    )
+    doc = build_document(
+        path="unit-2026-budget.pdf",
+        page_texts=[page_text],
+        page_tables=[[]],
+        filesize=70,
+    )
+
+    issues = CMM006_IncomeExpenseTrendConsistency().apply(doc)
+
+    assert issues
+    assert any(
+        "\u8fd9\u6bb5\u6587\u5b57\u51fa\u73b0\u4e86\u9519\u8bef" in issue.message
+        and "\u57fa\u5efa\u9879\u76ee\u51cf\u5c11" in issue.message
+        for issue in issues
+    )
+    assert any(
+        "\u8d22\u653f\u62e8\u6b3e\u6536\u5165\u652f\u51fa\u589e\u52a0\uff08\u51cf\u5c11\uff09"
+        in (issue.evidence_text or "")
+        for issue in issues
+    )

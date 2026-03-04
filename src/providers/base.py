@@ -19,6 +19,8 @@ class LLMErrorType(Enum):
     NETWORK_ERROR = "network_error"  # 网络错误
     INVALID_REQUEST = "invalid_request"  # 400
     QUOTA_EXCEEDED = "quota_exceeded"  # 配额超限
+    NO_PROVIDERS_AVAILABLE = "no_providers_available"
+    CIRCUIT_BREAKER_OPEN = "circuit_breaker_open"
     UNKNOWN = "unknown"
 
 

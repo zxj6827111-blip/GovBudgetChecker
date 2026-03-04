@@ -159,6 +159,59 @@ export default function IssueList({
     }
   };
 
+  const toPositivePage = (value: unknown): number | null => {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return Math.floor(value);
+    }
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return Math.floor(parsed);
+      }
+    }
+    return null;
+  };
+
+  const getIssuePageInfo = (issue: IssueItem): { page: number | null; source: "location" | "evidence" | "page_number" | null } => {
+    const fromLocation = toPositivePage(issue.location?.page);
+    if (fromLocation) return { page: fromLocation, source: "location" };
+
+    const firstEvidence = Array.isArray(issue.evidence) ? issue.evidence[0] : null;
+    const fromEvidence = toPositivePage(firstEvidence?.page);
+    if (fromEvidence) return { page: fromEvidence, source: "evidence" };
+
+    const fromPageNumber = toPositivePage(issue.page_number);
+    if (fromPageNumber) return { page: fromPageNumber, source: "page_number" };
+
+    return { page: null, source: null };
+  };
+
+  const getIssueLocationHint = (issue: IssueItem): string => {
+    const locationParts: string[] = [];
+    if (issue.location?.table) locationParts.push(`表: ${issue.location.table}`);
+    if (issue.location?.section) locationParts.push(`章节: ${issue.location.section}`);
+    if (issue.location?.row) locationParts.push(`行: ${issue.location.row}`);
+    if (issue.location?.col) locationParts.push(`列: ${issue.location.col}`);
+    if (locationParts.length > 0) return locationParts.join("，");
+
+    const firstEvidence = Array.isArray(issue.evidence) ? issue.evidence[0] : null;
+    const snippet = String(firstEvidence?.text || firstEvidence?.text_snippet || "").replace(/\s+/g, " ").trim();
+    if (!snippet) {
+      return "未提取到页码或结构化坐标，请根据问题描述人工复核。";
+    }
+
+    const keyword = snippet.length > 24 ? `${snippet.slice(0, 24)}...` : snippet;
+    return `可在PDF中搜索关键词“${keyword}”`;
+  };
+
+  const getEvidenceSnippet = (issue: IssueItem): string => {
+    const firstEvidence = Array.isArray(issue.evidence) ? issue.evidence[0] : null;
+    const raw = String(firstEvidence?.text || firstEvidence?.text_snippet || "").replace(/\s+/g, " ").trim();
+    if (!raw) return "";
+    if (raw === issue.title || raw === issue.message) return "";
+    return raw.length > 90 ? `${raw.slice(0, 90)}...` : raw;
+  };
+
 
   const renderCategoryTable = (id: string, name: string, description: string, items: IssueItem[], alwaysShow = true) => {
     if (!alwaysShow && items.length === 0) return null;
@@ -220,9 +273,13 @@ export default function IssueList({
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {items.map((issue, index) => (
-                  <tr 
-                    key={issue.id} 
+                {items.map((issue, index) => {
+                  const pageInfo = getIssuePageInfo(issue);
+                  const locationHint = getIssueLocationHint(issue);
+                  const evidenceSnippet = getEvidenceSnippet(issue);
+                  return (
+                  <tr
+                    key={issue.id}
                     className="hover:bg-indigo-50/30 transition-colors group cursor-pointer"
                     onClick={() => onIssueClick?.(issue)}
                   >
@@ -252,17 +309,28 @@ export default function IssueList({
                       {issue.message !== issue.title && (
                          <p className="text-xs text-gray-500 line-clamp-1">{issue.message}</p>
                       )}
+                      {evidenceSnippet && (
+                        <p className="text-xs text-slate-600 mt-1 line-clamp-2">命中原文：{evidenceSnippet}</p>
+                      )}
+                      {!pageInfo.page && (
+                        <p className="text-xs text-amber-600 mt-1">定位提示：{locationHint}</p>
+                      )}
                     </td>
                     <td className="py-4 px-5">
-                       {issue.location.page ? (
+                       {pageInfo.page ? (
                          <div className="flex items-center text-sm text-indigo-600 hover:text-indigo-800 font-medium">
                             <svg className="w-4 h-4 mr-1 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
                             </svg>
-                            P{issue.location.page}
+                            P{pageInfo.page}
+                            {pageInfo.source !== "location" && (
+                              <span className="ml-1 text-[10px] px-1 py-0.5 rounded bg-indigo-50 text-indigo-500 border border-indigo-100">
+                                {pageInfo.source === "evidence" ? "证据推断" : "字段推断"}
+                              </span>
+                            )}
                          </div>
                        ) : (
-                         <span className="text-gray-400 text-sm">-</span>
+                         <div className="text-xs text-amber-600 leading-5">{locationHint}</div>
                        )}
                     </td>
                     <td className="py-4 px-5 text-center">
@@ -271,7 +339,8 @@ export default function IssueList({
                        </span>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

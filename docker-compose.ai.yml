@@ -6,18 +6,11 @@ services:
     ports:
       - "9009:9009"
     environment:
-      # 支持多种AI提供商配置
-      # 豆包AI (字节跳动) - 推荐
+      # Multi-provider settings (optional for extractor)
       - ARK_API_KEY=${ARK_API_KEY:-your_ark_api_key}
       - ARK_BASE_URL=${ARK_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
       - ARK_MODEL=${ARK_MODEL:-doubao-1-5-pro-32k-250115}
-      
-      # 智谱AI
-      # - OPENAI_API_KEY=${OPENAI_API_KEY:-your_zhipu_api_key}
-      # - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
-      # - OPENAI_MODEL=${OPENAI_MODEL:-glm-4-flash}
-      
-      # OpenAI兼容接口
+      # OpenAI-compatible settings can also be injected if needed
       # - OPENAI_API_KEY=${OPENAI_API_KEY:-your_openai_api_key}
       # - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       # - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4}
@@ -43,13 +36,25 @@ services:
       - RULES_FILE_PATH=/app/engine/rules_v33.py
       - GOVBUDGET_AUTH_ENABLED=${GOVBUDGET_AUTH_ENABLED:-true}
       - GOVBUDGET_API_KEY=${GOVBUDGET_API_KEY:-}
-      # 传递AI配置到后端
+      # AI provider pass-through
       - ARK_API_KEY=${ARK_API_KEY:-}
       - ARK_BASE_URL=${ARK_BASE_URL:-}
       - ARK_MODEL=${ARK_MODEL:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_BASE_URL=${GEMINI_BASE_URL:-}
+      - GEMINI_MAIN_MODEL=${GEMINI_MAIN_MODEL:-gemini-2.5-pro}
+      - GEMINI_LOCATOR_MODEL=${GEMINI_LOCATOR_MODEL:-gemini-2.5-flash}
+      - CODEX_API_KEY=${CODEX_API_KEY:-}
+      - CODEX_BASE_URL=${CODEX_BASE_URL:-}
+      - CODEX_MODEL=${CODEX_MODEL:-gpt-5.3-codex}
+      - AI_MAIN_PROVIDER=${AI_MAIN_PROVIDER:-gemini_main}
+      - AI_MAIN_MODEL=${AI_MAIN_MODEL:-gemini-2.5-pro}
+      - AI_LOCATOR_PROVIDER=${AI_LOCATOR_PROVIDER:-gemini_locator}
+      - AI_LOCATOR_MODEL=${AI_LOCATOR_MODEL:-gemini-2.5-flash}
+      - AI_EXTRACTOR_DIRECT_FALLBACK=${AI_EXTRACTOR_DIRECT_FALLBACK:-true}
     depends_on:
       - ai-extractor
     volumes:

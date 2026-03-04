@@ -6,18 +6,16 @@ region: "cn"   # cn | global
 
 # 回退链配置 - 按优先级排序
 fallback_chain: 
-  - "modelscope_glm5"
-  - "modelscope_glm47"
-  - "zhipu_flash"
-  - "zhipu_reasoner"
-  - "doubao_pro"
+  - "gemini_main"
+  - "codex_backup"
+  - "gemini_locator"
   - "openai_fallback"
 
 # 提供商详细配置
 providers:
   # ModelScope - GLM-5 (最新推理模型)
   modelscope_glm5:
-    enabled: true
+    enabled: false
     base: "https://api-inference.modelscope.cn/v1"
     api_key_env: "ZHIPU_API_KEY"
     model: "ZhipuAI/GLM-5"
@@ -31,7 +29,7 @@ providers:
     
   # ModelScope - GLM-4.7 (快速模型)
   modelscope_glm47:
-    enabled: true
+    enabled: false
     base: "https://api-inference.modelscope.cn/v1"
     api_key_env: "ZHIPU_API_KEY"
     model: "ZhipuAI/GLM-4.7"
@@ -45,7 +43,7 @@ providers:
     
   # 智谱AI - GLM-4.5-Flash (快速模型)
   zhipu_flash:
-    enabled: true
+    enabled: false
     base: "https://open.bigmodel.cn/api/paas/v4"
     api_key_env: "ZHIPU_API_KEY"
     model: "glm-4.5-flash"
@@ -58,7 +56,7 @@ providers:
     
   # 智谱AI - GLM-4.5 (推理模型)
   zhipu_reasoner:
-    enabled: true
+    enabled: false
     base: "https://open.bigmodel.cn/api/paas/v4"
     api_key_env: "ZHIPU_API_KEY"
     model: "glm-4.5"
@@ -71,7 +69,7 @@ providers:
     
   # 豆包AI - Doubao Pro
   doubao_pro:
-    enabled: true
+    enabled: false
     base: "https://ark.cn-beijing.volces.com/api/v3"
     api_key_env: "ARK_API_KEY"
     model: "doubao-1-5-pro-32k-250115"
@@ -83,6 +81,38 @@ providers:
     description: "字节跳动豆包专业版"
     
   # OpenAI 兼容接口 (备用)
+  # Gemini (OpenAI-compatible gateway, optional)
+  gemini_main:
+    enabled: true
+    base_env: "GEMINI_BASE_URL"
+    api_key_env: "GEMINI_API_KEY"
+    model_env: "GEMINI_MAIN_MODEL"
+    model: "gemini-2.5-pro"
+    timeout_s: 90
+    retries: 1
+    description: "Gemini main model via OpenAI-compatible gateway"
+
+  gemini_locator:
+    enabled: true
+    base_env: "GEMINI_BASE_URL"
+    api_key_env: "GEMINI_API_KEY"
+    model_env: "GEMINI_LOCATOR_MODEL"
+    model: "gemini-2.5-flash"
+    timeout_s: 60
+    retries: 1
+    description: "Gemini locator model via OpenAI-compatible gateway"
+
+  # Codex backup (OpenAI-compatible gateway)
+  codex_backup:
+    enabled: true
+    base_env: "CODEX_BASE_URL"
+    api_key_env: "CODEX_API_KEY"
+    model_env: "CODEX_MODEL"
+    model: "gpt-5.2-codex"
+    timeout_s: 90
+    retries: 1
+    description: "GPT-5.2 Codex backup model via OpenAI-compatible gateway"
+
   openai_fallback:
     enabled: false  # 默认禁用，需要时手动启用
     base: "https://api.openai.com/v1"

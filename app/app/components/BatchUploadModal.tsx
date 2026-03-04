@@ -13,6 +13,7 @@ interface FileItem {
     orgId?: string;
     orgName?: string;
     orgLevel?: string;
+    versionId?: string;
     status: "pending" | "uploading" | "triggering" | "success" | "failed" | "skipped";
     message: string;
 }
@@ -20,6 +21,8 @@ interface FileItem {
 interface BatchUploadModalProps {
     orgUnitId?: string; // 已选单位（局部模式），如果未传则是全区模式
     defaultDocType: "dept_final" | "dept_budget";
+    useLocalRules?: boolean;
+    useAiAssist?: boolean;
     onClose: () => void;
     onComplete: () => void;
 }
@@ -55,9 +58,12 @@ function detectFiscalYear(filename: string): string {
 export default function BatchUploadModal({
     orgUnitId,
     defaultDocType,
+    useLocalRules = true,
+    useAiAssist = true,
     onClose,
     onComplete,
 }: BatchUploadModalProps) {
+    const isScopedUpload = Boolean(orgUnitId);
     const [files, setFiles] = useState<FileItem[]>([]);
     const [orgs, setOrgs] = useState<any[]>([]);
     const [isProcessing, setIsProcessing] = useState(false);
@@ -68,15 +74,96 @@ export default function BatchUploadModal({
 
     // 拉取全区组织用于匹配和下拉选择
     useEffect(() => {
-        fetch("/api/organizations/list")
-            .then(res => res.json())
-            .then(data => {
-                if (data.organizations) {
-                    setOrgs(data.organizations);
+        let alive = true;
+
+        const flattenTree = (nodes: any[]): any[] => {
+            const result: any[] = [];
+            const walk = (items: any[]) => {
+                for (const item of items) {
+                    if (!item || !item.id) continue;
+                    result.push({
+                        id: item.id,
+                        name: item.name,
+                        level: item.level,
+                        level_name: item.level_name,
+                        parent_id: item.parent_id ?? null,
+                    });
+                    if (Array.isArray(item.children) && item.children.length > 0) {
+                        walk(item.children);
+                    }
                 }
-            })
-            .catch(console.error);
+            };
+            walk(nodes);
+            return result;
+        };
+
+        const loadOrganizations = async () => {
+            try {
+                const response = await fetch("/api/organizations/list");
+                const data = await response.json().catch(() => ({}));
+                const list = Array.isArray(data.organizations) ? data.organizations : [];
+                if (list.length > 0) {
+                    if (alive) setOrgs(list);
+                    return;
+                }
+            } catch (error) {
+                console.error("Failed to load organizations list:", error);
+            }
+
+            try {
+                const [deptRes, orgTreeRes] = await Promise.all([
+                    fetch("/api/departments"),
+                    fetch("/api/organizations"),
+                ]);
+
+                const deptData = await deptRes.json().catch(() => ({}));
+                const orgTreeData = await orgTreeRes.json().catch(() => ({}));
+
+                const departments = Array.isArray(deptData.departments) ? deptData.departments : [];
+                const tree = Array.isArray(orgTreeData.tree) ? orgTreeData.tree : [];
+                const treeOrgs = flattenTree(tree);
+
+                const merged = new Map<string, any>();
+                [...departments, ...treeOrgs].forEach((item: any) => {
+                    if (!item || !item.id) return;
+                    merged.set(item.id, {
+                        id: item.id,
+                        name: item.name,
+                        level: item.level,
+                        level_name:
+                            item.level_name ||
+                            (item.level === "department" ? "部门" : "单位"),
+                        parent_id: item.parent_id ?? null,
+                    });
+                });
+
+                if (alive) {
+                    setOrgs(Array.from(merged.values()));
+                }
+            } catch (error) {
+                console.error("Failed to load organizations from fallback endpoints:", error);
+                if (alive) setOrgs([]);
+            }
+        };
+
+        loadOrganizations();
+        return () => {
+            alive = false;
+        };
     }, []);
+
+    useEffect(() => {
+        if (!orgUnitId || orgs.length === 0) return;
+        const targetOrg = orgs.find((org) => org.id === orgUnitId);
+        if (!targetOrg) return;
+        setFiles((prev) =>
+            prev.map((item) =>
+                item.orgId === orgUnitId && (!item.orgName || !item.orgLevel)
+                    ? { ...item, orgName: targetOrg.name, orgLevel: targetOrg.level }
+                    : item
+            )
+        );
+    }, [orgUnitId, orgs]);
 
     // ── File Selection ──
 
@@ -179,7 +266,7 @@ export default function BatchUploadModal({
 
     // ── Upload Logic ──
 
-    const uploadSingleFile = async (fileItem: FileItem): Promise<void> => {
+    const uploadSingleFile = async (fileItem: FileItem): Promise<string> => {
         // Step 1: update status to uploading
         setFiles((prev) =>
             prev.map((f) =>
@@ -188,13 +275,14 @@ export default function BatchUploadModal({
         );
 
         // Step 1: upload file
-        if (!fileItem.orgId) {
+        const targetOrgId = orgUnitId || fileItem.orgId;
+        if (!targetOrgId) {
             throw new Error("请先选择该文件所属的组织/单位");
         }
 
         const formData = new FormData();
         formData.set("file", fileItem.file);
-        formData.set("org_unit_id", fileItem.orgId);
+        formData.set("org_unit_id", targetOrgId);
         if (fileItem.year) {
             formData.append("fiscal_year", fileItem.year);
         }
@@ -215,7 +303,7 @@ export default function BatchUploadModal({
 
             const v2Form = new FormData();
             v2Form.set("file", fileItem.file);
-            v2Form.set("org_id", fileItem.orgId);
+            v2Form.set("org_id", targetOrgId);
             const v2Res = await fetch("/api/upload", { method: "POST", body: v2Form });
             if (!v2Res.ok) {
                 throw new Error(await v2Res.text() || `HTTP ${v2Res.status}`);
@@ -242,6 +330,10 @@ export default function BatchUploadModal({
             throw new Error("上传成功但未返回任务ID，无法启动检查");
         }
 
+        return String(versionId);
+    };
+
+    const triggerAnalysis = async (fileItem: FileItem, versionId: string): Promise<void> => {
         // Step 2: Trigger local rules + AI check
         setFiles((prev) =>
             prev.map((f) =>
@@ -252,7 +344,9 @@ export default function BatchUploadModal({
         );
 
         const runPayload: Record<string, unknown> = {
-            mode: "legacy",
+            mode: "dual",
+            use_local_rules: useLocalRules,
+            use_ai_assist: useAiAssist,
             doc_type: fileItem.docType,
         };
         if (fileItem.year) {
@@ -278,6 +372,9 @@ export default function BatchUploadModal({
         }
 
         setIsProcessing(true);
+        const fileIndexMap = new Map(files.map((f, idx) => [f.id, idx]));
+        const fileById = new Map(files.map((f) => [f.id, f]));
+        const triggerQueue: Array<{ fileId: string; versionId: string }> = [];
 
         for (let i = 0; i < files.length; i++) {
             const fileItem = files[i];
@@ -286,12 +383,18 @@ export default function BatchUploadModal({
             setCurrentIndex(i);
 
             try {
-                await uploadSingleFile(fileItem);
+                const versionId = await uploadSingleFile(fileItem);
+                triggerQueue.push({ fileId: fileItem.id, versionId });
 
                 setFiles((prev) =>
                     prev.map((f) =>
                         f.id === fileItem.id
-                            ? { ...f, status: "success" as const, message: "✅ 上传成功，检查已启动" }
+                            ? {
+                                ...f,
+                                versionId,
+                                status: "triggering" as const,
+                                message: "上传成功，等待批量触发检查...",
+                            }
                             : f
                     )
                 );
@@ -310,7 +413,39 @@ export default function BatchUploadModal({
             }
 
             // Brief delay between uploads
-            await new Promise((r) => setTimeout(r, 300));
+            await new Promise((r) => setTimeout(r, 120));
+        }
+
+        for (const task of triggerQueue) {
+            const fileItem = fileById.get(task.fileId);
+            if (!fileItem) continue;
+            const idx = fileIndexMap.get(task.fileId);
+            if (idx !== undefined) {
+                setCurrentIndex(idx);
+            }
+            try {
+                await triggerAnalysis(fileItem, task.versionId);
+                setFiles((prev) =>
+                    prev.map((f) =>
+                        f.id === task.fileId
+                            ? { ...f, status: "success" as const, message: "✅ 上传成功，检查已启动" }
+                            : f
+                    )
+                );
+            } catch (error: any) {
+                setFiles((prev) =>
+                    prev.map((f) =>
+                        f.id === task.fileId
+                            ? {
+                                ...f,
+                                status: "failed" as const,
+                                message: error?.message || "触发检查失败",
+                            }
+                            : f
+                    )
+                );
+            }
+            await new Promise((r) => setTimeout(r, 80));
         }
 
         setIsProcessing(false);
@@ -393,10 +528,17 @@ export default function BatchUploadModal({
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                             </svg>
                         </div>
-                        <h2 className="text-xl font-bold text-gray-900 dark:text-white">批量上传文档</h2>
+                        <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+                            {isScopedUpload ? "上传报告" : "批量上传文档"}
+                        </h2>
                         {files.length > 0 && (
                             <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-xs font-medium">
                                 {files.length} 个文件
+                            </span>
+                        )}
+                        {isScopedUpload && (
+                            <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">
+                                当前组织
                             </span>
                         )}
                     </div>
@@ -510,6 +652,7 @@ export default function BatchUploadModal({
                                                 <label className="text-xs text-gray-500">单位:</label>
                                                 <select
                                                     value={fileItem.orgId || ""}
+                                                    disabled={isScopedUpload}
                                                     onChange={(e) => {
                                                         const selectedOrg = orgs.find(o => o.id === e.target.value);
                                                         updateFile(fileItem.id, {
@@ -549,7 +692,11 @@ export default function BatchUploadModal({
                                                     {fileItem.docType === "dept_budget" ? "预算" : "决算"}
                                                 </span>
                                                 <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] ${fileItem.orgId ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"}`}>
-                                                    {fileItem.orgName ? `${fileItem.orgName} (${fileItem.orgLevel === "department" ? "部门" : "单位"})` : "未识别所属单位 (需编辑补充)"}
+                                                    {fileItem.orgName
+                                                        ? `${fileItem.orgName} (${fileItem.orgLevel === "department" ? "部门" : "单位"})`
+                                                        : isScopedUpload
+                                                            ? "当前组织"
+                                                            : "未识别所属单位 (需编辑补充)"}
                                                 </span>
                                                 {fileItem.message && (
                                                     <span className="text-xs text-gray-500 dark:text-gray-400 truncate">
@@ -641,15 +788,18 @@ export default function BatchUploadModal({
                     {!isProcessing ? (
                         <button
                             onClick={startProcessing}
-                            disabled={files.filter((f) => f.status === "pending").length === 0 || files.some((f) => !f.orgId)}
-                            title={files.some((f) => !f.orgId) ? "有文件未指定所属单位" : ""}
+                            disabled={
+                                files.filter((f) => f.status === "pending").length === 0 ||
+                                (!isScopedUpload && files.some((f) => !f.orgId))
+                            }
+                            title={!isScopedUpload && files.some((f) => !f.orgId) ? "有文件未指定所属单位" : ""}
                             className="px-6 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 rounded-xl shadow-lg shadow-indigo-500/30 hover:shadow-xl hover:shadow-indigo-500/40 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none flex items-center gap-2"
                         >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
-                            开始批量上传 ({files.filter((f) => f.status === "pending").length})
+                            {isScopedUpload ? "开始上传" : "开始批量上传"} ({files.filter((f) => f.status === "pending").length})
                         </button>
                     ) : (
                         <div className="flex items-center gap-2 text-sm text-indigo-600 dark:text-indigo-400 font-medium">

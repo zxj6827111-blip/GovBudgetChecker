@@ -1,10 +1,16 @@
-.PHONY: dev backend frontend frontend-build lint typecheck unit e2e test install
+.PHONY: dev backend backend-api backend-noauth worker frontend frontend-build lint typecheck unit e2e test install
 
 backend:
-	GOVBUDGET_AUTH_ENABLED=$${GOVBUDGET_AUTH_ENABLED:-true} GOVBUDGET_API_KEY=$${GOVBUDGET_API_KEY:-dev-local-key} python -m uvicorn api.main:app --reload --port 8000
+	GOVBUDGET_AUTH_ENABLED=$${GOVBUDGET_AUTH_ENABLED:-true} GOVBUDGET_API_KEY=$${GOVBUDGET_API_KEY:-dev-local-key} GOVBUDGET_RATE_LIMIT=$${GOVBUDGET_RATE_LIMIT:-2000} python -m uvicorn api.main:app --reload --port 8000
+
+backend-api:
+	JOB_QUEUE_ROLE=api JOB_QUEUE_INLINE_FALLBACK=false GOVBUDGET_AUTH_ENABLED=$${GOVBUDGET_AUTH_ENABLED:-true} GOVBUDGET_API_KEY=$${GOVBUDGET_API_KEY:-dev-local-key} GOVBUDGET_RATE_LIMIT=$${GOVBUDGET_RATE_LIMIT:-2000} python -m uvicorn api.main:app --reload --port 8000
 
 backend-noauth:
 	GOVBUDGET_AUTH_ENABLED=false python -m uvicorn api.main:app --reload --port 8000
+
+worker:
+	JOB_QUEUE_ROLE=worker GOVBUDGET_AUTH_ENABLED=$${GOVBUDGET_AUTH_ENABLED:-true} GOVBUDGET_API_KEY=$${GOVBUDGET_API_KEY:-dev-local-key} GOVBUDGET_RATE_LIMIT=$${GOVBUDGET_RATE_LIMIT:-2000} python -m api.worker
 
 frontend:
 	npm --prefix app run dev

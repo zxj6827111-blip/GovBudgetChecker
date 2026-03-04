@@ -5,6 +5,7 @@
 import logging
 import asyncio
 import time
+import os
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,11 +106,20 @@ class AnalysisMetrics:
 
 class DualModeAnalyzer:
     """双模式分析器"""
+
+    # 全局 AI 串行队列：保证多任务时 AI 审计按进入顺序逐个执行
+    _ai_queue_guard = asyncio.Lock()
+    _ai_runner_lock = asyncio.Lock()
+    _ai_wait_queue: List[str] = []
     
     def __init__(self):
         self.ai_service = None  # 延迟初始化
         self.engine_runner = EngineRuleRunner()
         self.ai_locator = AILocator() if AILocator is not None else None
+        self.ai_sequential_enabled = (
+            os.getenv("AI_SEQUENTIAL_MODE", "true").strip().lower()
+            not in {"0", "false", "no", "off"}
+        )
     
     async def analyze(self, 
                      job_context: JobContext,
@@ -155,8 +165,19 @@ class DualModeAnalyzer:
             rule_started_at = time.time()
             
             # 创建任务（并行启动）
-            ai_task = asyncio.create_task(self._run_ai_analysis(job_context, ai_rules, config)) if config.enable_ai_analysis else None
-            rule_task = asyncio.create_task(self._run_engine_analysis(job_context, engine_rules, config)) if engine_rules else None
+            ai_enabled = bool(config.enable_ai_analysis and config.ai_enabled)
+            rule_enabled = bool(config.rule_enabled)
+
+            ai_task = (
+                asyncio.create_task(self._run_ai_analysis(job_context, ai_rules, config))
+                if ai_enabled
+                else None
+            )
+            rule_task = (
+                asyncio.create_task(self._run_engine_analysis(job_context, engine_rules, config))
+                if (rule_enabled and engine_rules)
+                else None
+            )
             
             # ========== 增量发布策略 ==========
             # 1. 先等待规则任务完成（通常较快）
@@ -190,11 +211,11 @@ class DualModeAnalyzer:
             save_snapshot(job_context.job_id, {
                 "status": "processing",
                 "progress": 70,
-                "stage": "本地规则已完成，AI 正在审计...",
+                "stage": "本地规则已完成，AI 正在审计..." if ai_task is not None else "本地规则已完成",
                 "ai_findings": [],
                 "rule_findings": rule_findings,
                 "meta": {
-                    "ai_status": "processing",
+                    "ai_status": "processing" if ai_task is not None else "disabled",
                     "rule_error": rule_error,
                     "rule_started_at": rule_started_at,
                     "rule_done_at": rule_done_at,
@@ -507,12 +528,49 @@ class DualModeAnalyzer:
                               ai_rules: List[Dict[str, Any]],
                               config: AnalysisConfig) -> List[IssueItem]:
         """运行 AI 分析"""
+        if not ai_rules:
+            return []
+
+        queue_token = f"{job_context.job_id}:{time.time_ns()}"
+        queue_pos = 1
         try:
+            if self.ai_sequential_enabled:
+                queue_pos = await self._enqueue_ai_ticket(queue_token)
+                if queue_pos > 1:
+                    save_snapshot(
+                        job_context.job_id,
+                        {
+                            "status": "processing",
+                            "stage": f"AI排队中（前方{queue_pos - 1}个任务）",
+                            "meta": {
+                                "ai_status": "queued",
+                                "ai_queue_position": queue_pos,
+                                "last_heartbeat": time.time(),
+                            },
+                        },
+                    )
+                await self._wait_for_ai_turn(queue_token, job_context.job_id)
+                save_snapshot(
+                    job_context.job_id,
+                    {
+                        "status": "processing",
+                        "stage": "AI审计中",
+                        "meta": {
+                            "ai_status": "processing",
+                            "ai_queue_position": 1,
+                            "last_heartbeat": time.time(),
+                        },
+                    },
+                )
+
             # 延迟初始化AI服务
             if self.ai_service is None:
                 self.ai_service = AIFindingsService(config)
             
-            # 使用AI服务进行分析
+            # 使用AI服务进行分析（串行模式下保证同一时刻仅1个AI任务）
+            if self.ai_sequential_enabled:
+                async with self._ai_runner_lock:
+                    return await self.ai_service.analyze(job_context)
             return await self.ai_service.analyze(job_context)
         except Exception as e:
             logger.error(f"AI analysis failed: {e}")
@@ -520,17 +578,59 @@ class DualModeAnalyzer:
                 return []
             else:
                 raise e
-    
+        finally:
+            if self.ai_sequential_enabled:
+                await self._dequeue_ai_ticket(queue_token)
+
     async def _run_engine_analysis(self, 
                                   job_context: JobContext,
                                   engine_rules: List[Dict[str, Any]],
                                   config: AnalysisConfig) -> List[IssueItem]:
         """运行引擎分析"""
+        if not config.rule_enabled:
+            return []
         return await self.engine_runner.run_rules(
             job_context=job_context,
             rules=engine_rules,
             config=config
         )
+
+    async def _enqueue_ai_ticket(self, token: str) -> int:
+        async with self._ai_queue_guard:
+            self._ai_wait_queue.append(token)
+            return len(self._ai_wait_queue)
+
+    async def _wait_for_ai_turn(self, token: str, job_id: str) -> None:
+        last_emit = 0.0
+        while True:
+            queue_pos: Optional[int] = None
+            async with self._ai_queue_guard:
+                if self._ai_wait_queue and self._ai_wait_queue[0] == token:
+                    return
+                if token not in self._ai_wait_queue:
+                    return
+                queue_pos = self._ai_wait_queue.index(token) + 1
+            now = time.time()
+            if queue_pos and queue_pos > 1 and (now - last_emit) >= 1.5:
+                save_snapshot(
+                    job_id,
+                    {
+                        "status": "processing",
+                        "stage": f"AI排队中（前方{queue_pos - 1}个任务）",
+                        "meta": {
+                            "ai_status": "queued",
+                            "ai_queue_position": queue_pos,
+                            "last_heartbeat": now,
+                        },
+                    },
+                )
+                last_emit = now
+            await asyncio.sleep(0.2)
+
+    async def _dequeue_ai_ticket(self, token: str) -> None:
+        async with self._ai_queue_guard:
+            if token in self._ai_wait_queue:
+                self._ai_wait_queue.remove(token)
     
     async def _enhance_with_ai_locator(self, 
                                      job_context: JobContext,

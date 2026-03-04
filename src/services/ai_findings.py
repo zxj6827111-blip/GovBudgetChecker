@@ -6,6 +6,7 @@ import logging
 import json
 import time
 import asyncio
+import os
 from typing import List, Dict, Any, Optional
 import traceback
 import re
@@ -23,6 +24,11 @@ class AIFindingsService:
         self.config = config
         self.ai_client = ExtractorClient()  # 复用现有AI客户端
         self.ai_errors = []  # 聚合AI错误信息
+        self.audit_window_chars = self._read_int_env("AI_AUDIT_WINDOW_CHARS", 12000, 2000)
+        self.audit_overlap_chars = self._read_int_env("AI_AUDIT_WINDOW_OVERLAP", 1200, 200)
+        if self.audit_overlap_chars >= self.audit_window_chars:
+            self.audit_overlap_chars = max(200, self.audit_window_chars // 4)
+        self.audit_max_windows = self._read_int_env("AI_AUDIT_MAX_WINDOWS", 12, 1)
     
     async def analyze(self, context: JobContext) -> List[IssueItem]:
         """执行AI分析"""
@@ -63,8 +69,35 @@ class AIFindingsService:
             import hashlib
             doc_hash = hashlib.sha1(all_text[:5000].encode('utf-8')).hexdigest()[:12]
             
-            # 调用真实的AI语义审计接口
-            semantic_issues = await self.ai_client.ai_semantic_audit(all_text[:15000], doc_hash)
+            # 分窗执行AI审计，避免15000字符硬截断导致漏检
+            semantic_issues: List[Dict[str, Any]] = []
+            windows = self._build_text_windows(all_text)
+            if windows and (windows[-1][0] + len(windows[-1][1]) < len(all_text)):
+                logger.warning(
+                    "AI审计窗口上限触发，文档后半部分未进入AI审计: covered=%s, total=%s",
+                    windows[-1][0] + len(windows[-1][1]),
+                    len(all_text),
+                )
+                self.ai_errors.append(
+                    {
+                        "type": "audit_window_limit_reached",
+                        "covered_chars": windows[-1][0] + len(windows[-1][1]),
+                        "total_chars": len(all_text),
+                        "windows": len(windows),
+                        "window_size": self.audit_window_chars,
+                        "max_windows": self.audit_max_windows,
+                        "timestamp": time.time(),
+                    }
+                )
+            for window_idx, (window_start, window_text) in enumerate(windows):
+                window_hash = hashlib.sha1(
+                    f"{doc_hash}:{window_idx}:{window_start}".encode("utf-8")
+                ).hexdigest()[:12]
+                window_issues = await self.ai_client.ai_full_report_audit(window_text, window_hash)
+                for issue in window_issues:
+                    self._shift_issue_span(issue, window_start, len(all_text))
+                semantic_issues.extend(window_issues)
+            semantic_issues = self._dedupe_semantic_issues(semantic_issues)
             
             # 转换为IssueItem格式，传入页码偏移量
             issues = self._convert_semantic_issues_to_items(semantic_issues, context, page_offsets)
@@ -102,24 +135,44 @@ class AIFindingsService:
                     "错别字": "high",
                     "重复": "medium",
                     "表达不当": "medium",
-                    "规范性": "low"
+                    "规范性": "low",
+                    "表述矛盾": "high",
+                    "单位错误": "high",
+                    "口径冲突": "high",
+                    "勾稽不一致": "critical",
+                    "完整性": "medium",
                 }
                 
-                issue_type = issue.get("type", "其他")
-                severity = severity_map.get(issue_type, "medium")
+                issue_type = str(issue.get("type") or issue.get("problem_type") or "其他")
+
+                confidence = issue.get("confidence")
+                try:
+                    if confidence is not None and float(confidence) < 0.75:
+                        continue
+                except Exception:
+                    pass
+
+                raw_severity = str(issue.get("severity") or "").lower()
+                if raw_severity in {"critical", "high", "medium", "low", "info"}:
+                    severity = raw_severity
+                else:
+                    severity = severity_map.get(issue_type, "medium")
                 
                 # 根据 span 计算所属页码
                 span = issue.get("span", [0, 0])
-                span_start = span[0] if len(span) > 0 else 0
-                span_end = span[1] if len(span) > 1 else span_start
+                span_start = int(span[0]) if isinstance(span, list) and len(span) > 0 else 0
+                span_end = int(span[1]) if isinstance(span, list) and len(span) > 1 else span_start
                 
                 # 遍历页码偏移量，找到 span 所属的页码
-                page_number = 1
+                page_number = issue.get("page", 1) if isinstance(issue.get("page"), int) else 1
                 for page_start, page_end, page_num in page_offsets:
                     if span_start >= page_start and span_start < page_end:
                         page_number = page_num
                         break
                 
+                evidence_text = str(issue.get("quote") or issue.get("context") or "")
+                original_text = str(issue.get("original") or "")
+
                 # 构建位置信息
                 location = {
                     "page": page_number,
@@ -130,25 +183,41 @@ class AIFindingsService:
                 # 构建证据
                 evidence = [{
                     "type": "text_content",
-                    "text": issue.get("context", ""),
-                    "original": issue.get("original", "")
+                    "text": evidence_text,
+                    "original": original_text
                 }]
                 
                 # 生成唯一ID
                 issue_id = f"ai_semantic_{context.job_id}_{idx}_{int(time.time())}"
                 
+                rule_id = str(issue.get("rule_id") or f"AI-SEM-{issue_type[:2].upper()}-{idx:03d}")
+                title = str(issue.get("title") or f"{issue_type}：{original_text[:20]}")
+                message = str(
+                    issue.get("message")
+                    or f"发现{issue_type}问题：「{original_text}」，建议修改为「{issue.get('suggestion', '')}」"
+                )
+
                 item = IssueItem(
                     id=issue_id,
                     source="ai",
-                    rule_id=f"AI-SEM-{issue_type[:2].upper()}-{idx:03d}",
+                    rule_id=rule_id,
                     severity=severity,
-                    title=f"{issue_type}：{issue.get('original', '')[:20]}",
-                    message=f"发现{issue_type}问题：「{issue.get('original', '')}」，建议修改为「{issue.get('suggestion', '')}」",
+                    title=title,
+                    message=message,
                     evidence=evidence,
                     location=location,
                     page_number=page_number,  # 使用计算出的准确页码
                     suggestion=issue.get("suggestion", ""),
-                    tags=[issue_type, "AI检测", "语义审计"],
+                    tags=list(
+                        {
+                            issue_type,
+                            str(issue.get("problem_type") or "").strip(),
+                            "AI检测",
+                            "语义审计",
+                            "全量审查",
+                        }
+                        - {""}
+                    ),
                     created_at=time.time()
                 )
                 issues.append(item)
@@ -158,6 +227,70 @@ class AIFindingsService:
                 continue
         
         return issues
+
+    @staticmethod
+    def _read_int_env(name: str, default: int, min_value: int) -> int:
+        try:
+            value = int(os.getenv(name, str(default)))
+            if value < min_value:
+                return min_value
+            return value
+        except Exception:
+            return default
+
+    def _build_text_windows(self, full_text: str) -> List[tuple]:
+        if not full_text:
+            return []
+        text_len = len(full_text)
+        windows: List[tuple] = []
+        start = 0
+        while start < text_len and len(windows) < self.audit_max_windows:
+            end = min(start + self.audit_window_chars, text_len)
+            windows.append((start, full_text[start:end]))
+            if end >= text_len:
+                break
+            start = max(0, end - self.audit_overlap_chars)
+        return windows
+
+    def _shift_issue_span(self, issue: Dict[str, Any], offset: int, total_len: int) -> None:
+        if offset <= 0:
+            return
+        span = issue.get("span")
+        if (
+            not isinstance(span, list)
+            or len(span) != 2
+            or not all(isinstance(v, (int, float)) for v in span)
+        ):
+            return
+        start = max(0, int(span[0]) + offset)
+        end = max(start, int(span[1]) + offset)
+        if total_len > 0:
+            start = min(start, total_len)
+            end = min(end, total_len)
+        issue["span"] = [start, end]
+
+    def _dedupe_semantic_issues(self, semantic_issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        unique: List[Dict[str, Any]] = []
+        seen = set()
+        for issue in semantic_issues:
+            if not isinstance(issue, dict):
+                continue
+            span = issue.get("span", [0, 0])
+            span_bucket = 0
+            if isinstance(span, list) and len(span) == 2 and isinstance(span[0], (int, float)):
+                span_bucket = int(span[0]) // 25
+            key = (
+                str(issue.get("rule_id") or ""),
+                str(issue.get("type") or issue.get("problem_type") or ""),
+                re.sub(r"\s+", "", str(issue.get("original") or issue.get("quote") or ""))[:80],
+                re.sub(r"\s+", "", str(issue.get("suggestion") or ""))[:80],
+                span_bucket,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(issue)
+        return unique
     
     def _build_prompt(self, context: JobContext) -> str:
         """构建AI提示词"""
