@@ -8,7 +8,7 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npm run build
+RUN npm run build && mkdir -p /app/public
 
 FROM node:20-bookworm-slim AS runner
 WORKDIR /app

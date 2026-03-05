@@ -60,8 +60,9 @@ export default function OrganizationTree({
     const timeoutId = setTimeout(() => controller.abort(), 10000);
 
     try {
-      const res = await fetch(`/api/departments?t=${Date.now()}`, {
+      const res = await fetch(`/api/departments`, {
         signal: controller.signal,
+        cache: "no-store",
       });
       if (!res.ok) {
         throw new Error("departments api not ok");
@@ -74,8 +75,9 @@ export default function OrganizationTree({
 
       // Backward-compatible fallback when departments endpoint is unavailable or empty.
       if (deptData.length === 0) {
-        const fallbackRes = await fetch(`/api/organizations?t=${Date.now()}`, {
+        const fallbackRes = await fetch(`/api/organizations`, {
           signal: controller.signal,
+          cache: "no-store",
         });
         if (fallbackRes.ok) {
           const fallbackData = await fallbackRes.json();
@@ -254,44 +256,61 @@ export default function OrganizationTree({
 
   return (
     <div className="flex-1 overflow-hidden flex flex-col">
-      <div className="p-3 border-b border-gray-200 flex items-center justify-between">
-        <h3 className="font-semibold text-gray-700 flex items-center">
-          部门视图
-          <button
-            onClick={() => {
-              setModalType("create");
-              setModalInputVal("");
-            }}
-            className="ml-2 p-1 text-gray-400 hover:text-indigo-600 hover:bg-gray-100 rounded"
-            title="新建部门"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-          </button>
-        </h3>
-        <div className="flex space-x-2">
-          {onGlobalBatchUpload && (
+      <div className="p-3 border-b border-gray-200 space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-gray-700 flex items-center">
+            部门视图
             <button
-              onClick={onGlobalBatchUpload}
-              className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
-              title="全区批量上传"
+              onClick={() => {
+                setModalType("create");
+                setModalInputVal("");
+              }}
+              className="ml-2 p-1 text-gray-400 hover:text-indigo-600 hover:bg-gray-100 rounded"
+              title="新建部门"
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-              全区上传
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
             </button>
-          )}
+          </h3>
           <button
             onClick={() => onSelect(null)}
-            className="text-xs text-gray-500 hover:text-gray-700"
+            className="text-xs px-2 py-1 rounded-md border border-gray-200 text-gray-500 hover:text-gray-700 hover:border-gray-300 hover:bg-gray-50 transition-colors"
+            title="查看全部部门"
           >
             全部
           </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          {onGlobalBatchUpload && (
+            <button
+              onClick={onGlobalBatchUpload}
+              className="rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-blue-50 px-3 py-2 text-left transition-all hover:shadow-sm hover:border-indigo-300"
+              title="上传全区 PDF 文档（批量）"
+            >
+              <div className="flex items-center gap-1.5 text-[13px] font-semibold text-indigo-700">
+                <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
+                全区上传
+              </div>
+              <div className="mt-1 text-[11px] text-indigo-500">上传全区 PDF</div>
+            </button>
+          )}
+
           <button
             onClick={() => setShowImporter(true)}
-            className="text-xs text-indigo-600 hover:text-indigo-800"
+            className="rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-teal-50 px-3 py-2 text-left transition-all hover:shadow-sm hover:border-emerald-300"
+            title="导入部门及单位名称模板（CSV / XLSX）"
           >
-            导入
+            <div className="flex items-center gap-1.5 text-[13px] font-semibold text-emerald-700">
+              <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M12 11v8m0 0l-3-3m3 3l3-3" />
+              </svg>
+              导入
+            </div>
+            <div className="mt-1 text-[11px] text-emerald-600">导入部门名称</div>
           </button>
         </div>
       </div>
