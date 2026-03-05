@@ -34,7 +34,12 @@ class OrganizationStorage:
         self._ensure_data_dir()
         self._organizations: List[Organization] = []
         self._links: List[JobOrganizationLink] = []
+        self._org_by_id: Dict[str, Organization] = {}
+        self._children_by_parent: Dict[Optional[str], List[Organization]] = {}
+        self._link_by_job: Dict[str, JobOrganizationLink] = {}
+        self._jobs_by_org: Dict[str, List[str]] = {}
         self._load()
+        self._rebuild_indexes()
     
     def _ensure_data_dir(self):
         """确保数据目录存在"""
@@ -85,6 +90,23 @@ class OrganizationStorage:
             encoding="utf-8"
         )
     
+    def _rebuild_indexes(self):
+        """Rebuild read-optimized in-memory indexes."""
+        self._org_by_id = {org.id: org for org in self._organizations}
+
+        children: Dict[Optional[str], List[Organization]] = {}
+        for org in self._organizations:
+            children.setdefault(org.parent_id, []).append(org)
+        self._children_by_parent = children
+
+        link_by_job: Dict[str, JobOrganizationLink] = {}
+        jobs_by_org: Dict[str, List[str]] = {}
+        for link in self._links:
+            link_by_job[link.job_id] = link
+            jobs_by_org.setdefault(link.org_id, []).append(link.job_id)
+        self._link_by_job = link_by_job
+        self._jobs_by_org = jobs_by_org
+
     # ==================== 组织 CRUD ====================
     
     def get_all(self) -> List[Organization]:
@@ -93,10 +115,7 @@ class OrganizationStorage:
     
     def get_by_id(self, org_id: str) -> Optional[Organization]:
         """根据ID获取组织"""
-        for org in self._organizations:
-            if org.id == org_id:
-                return org
-        return None
+        return self._org_by_id.get(org_id)
     
     def get_by_level(self, level: str) -> List[Organization]:
         """根据层级获取组织"""
@@ -104,7 +123,7 @@ class OrganizationStorage:
     
     def get_children(self, parent_id: Optional[str]) -> List[Organization]:
         """获取子组织"""
-        return [org for org in self._organizations if org.parent_id == parent_id]
+        return list(self._children_by_parent.get(parent_id, []))
 
     def get_departments(self) -> List[Organization]:
         """获取所有部门（按名称排序）"""
@@ -121,8 +140,8 @@ class OrganizationStorage:
 
         units = [
             org
-            for org in self._organizations
-            if org.parent_id == dept_id and org.level == OrganizationLevel.UNIT
+            for org in self.get_children(dept_id)
+            if org.level == OrganizationLevel.UNIT
         ]
         return units
     
@@ -134,6 +153,7 @@ class OrganizationStorage:
             raise ValueError(f"Organization with id {org.id} already exists")
         
         self._organizations.append(org)
+        self._rebuild_indexes()
         self._save_organizations()
         return org
     
@@ -145,29 +165,36 @@ class OrganizationStorage:
                 org_dict.update(updates)
                 org_dict["updated_at"] = __import__("time").time()
                 self._organizations[i] = Organization(**org_dict)
+                self._rebuild_indexes()
                 self._save_organizations()
                 return self._organizations[i]
         return None
     
     def delete(self, org_id: str) -> bool:
         """删除组织（及其所有子组织）"""
+        if org_id not in self._org_by_id:
+            return False
+
         to_delete = set()
         
-        def collect_children(parent_id: str):
-            to_delete.add(parent_id)
-            for org in self._organizations:
-                if org.parent_id == parent_id:
-                    collect_children(org.id)
-        
-        collect_children(org_id)
+        stack = [org_id]
+        while stack:
+            current = stack.pop()
+            if current in to_delete:
+                continue
+            to_delete.add(current)
+            for child in self._children_by_parent.get(current, []):
+                stack.append(child.id)
         
         original_count = len(self._organizations)
         self._organizations = [org for org in self._organizations if org.id not in to_delete]
         
         if len(self._organizations) < original_count:
+            self._rebuild_indexes()
             self._save_organizations()
             # 同时删除关联
             self._links = [link for link in self._links if link.org_id not in to_delete]
+            self._rebuild_indexes()
             self._save_links()
             return True
         return False
@@ -176,6 +203,7 @@ class OrganizationStorage:
         """清空所有组织"""
         self._organizations = []
         self._links = []
+        self._rebuild_indexes()
         self._save_organizations()
         self._save_links()
     
@@ -225,15 +253,14 @@ class OrganizationStorage:
         confidence: float = 1.0,
     ) -> JobOrganizationLink:
         """关联任务到组织"""
-        # 检查是否已存在
-        for link in self._links:
-            if link.job_id == job_id:
-                # 更新现有关联
-                link.org_id = org_id
-                link.match_type = match_type
-                link.confidence = confidence
-                self._save_links()
-                return link
+        existing_link = self._link_by_job.get(job_id)
+        if existing_link is not None:
+            existing_link.org_id = org_id
+            existing_link.match_type = match_type
+            existing_link.confidence = confidence
+            self._rebuild_indexes()
+            self._save_links()
+            return existing_link
         
         # 创建新关联
         link = JobOrganizationLink(
@@ -243,35 +270,47 @@ class OrganizationStorage:
             confidence=confidence
         )
         self._links.append(link)
+        self._rebuild_indexes()
         self._save_links()
         return link
     
     def get_job_org(self, job_id: str) -> Optional[JobOrganizationLink]:
         """获取任务的组织关联"""
-        for link in self._links:
-            if link.job_id == job_id:
-                return link
-        return None
+        return self._link_by_job.get(job_id)
     
     def get_org_jobs(self, org_id: str, include_children: bool = True) -> List[str]:
         """获取组织下的所有任务ID"""
-        org_ids = {org_id}
-        
-        if include_children:
-            def collect_children(parent_id: str):
-                for org in self._organizations:
-                    if org.parent_id == parent_id:
-                        org_ids.add(org.id)
-                        collect_children(org.id)
-            collect_children(org_id)
-        
-        return [link.job_id for link in self._links if link.org_id in org_ids]
+        if not include_children:
+            return list(self._jobs_by_org.get(org_id, []))
+
+        ordered_org_ids: List[str] = []
+        seen_org_ids = set()
+        stack = [org_id]
+        while stack:
+            current = stack.pop()
+            if current in seen_org_ids:
+                continue
+            seen_org_ids.add(current)
+            ordered_org_ids.append(current)
+            for child in self._children_by_parent.get(current, []):
+                stack.append(child.id)
+
+        result: List[str] = []
+        seen_job_ids = set()
+        for oid in ordered_org_ids:
+            for job_id in self._jobs_by_org.get(oid, []):
+                if job_id in seen_job_ids:
+                    continue
+                seen_job_ids.add(job_id)
+                result.append(job_id)
+        return result
     
     def unlink_job(self, job_id: str) -> bool:
         """取消任务关联"""
         original_count = len(self._links)
         self._links = [link for link in self._links if link.job_id != job_id]
         if len(self._links) < original_count:
+            self._rebuild_indexes()
             self._save_links()
             return True
         return False
@@ -409,6 +448,7 @@ class OrganizationStorage:
         original_organizations = [org.model_copy(deep=True) for org in self._organizations]
         if clear_existing:
             self._organizations = []
+            self._rebuild_indexes()
 
         expanded_rows: List[Dict[str, str]] = []
         for item in data:
@@ -454,7 +494,7 @@ class OrganizationStorage:
                     continue
 
                 org_id = Organization.generate_id(name, level, parent_id)
-                if self.get_by_id(org_id):
+                if any(existing.id == org_id for existing in self._organizations):
                     result.skipped += 1
                     progressed = True
                     continue
@@ -488,10 +528,12 @@ class OrganizationStorage:
         validation = validate_organization_hierarchy(self._organizations)
         if validation.errors:
             self._organizations = original_organizations
+            self._rebuild_indexes()
             result.errors.extend([f"层级校验失败: {msg}" for msg in validation.errors])
             result.success = False
             return result
 
+        self._rebuild_indexes()
         self._save_organizations()
         result.success = result.imported > 0 and not result.errors
         return result

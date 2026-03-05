@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import os
 import time
 from typing import Annotated, Any, Dict, List
 
@@ -12,6 +13,18 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Upload
 from api import runtime
 
 router = APIRouter()
+
+_DEPT_STATS_CACHE_TTL_SECONDS = float(
+    os.getenv("DEPARTMENT_STATS_CACHE_TTL_SECONDS", "3")
+)
+_DEPT_STATS_CACHE_MAX_SIZE = int(
+    os.getenv("DEPARTMENT_STATS_CACHE_MAX_SIZE", "512")
+)
+_DEPT_STATS_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def _clear_department_stats_cache() -> None:
+    _DEPT_STATS_CACHE.clear()
 
 
 @router.get("/api/organizations")
@@ -51,6 +64,7 @@ async def create_organization(request: Request):
 
     storage = runtime.require_org_storage()
     created = storage.add(org)
+    _clear_department_stats_cache()
     return runtime.to_dict(created)
 
 
@@ -68,7 +82,7 @@ async def update_organization(org_id: str, request: Request):
     updated = storage.update(org_id, {"name": name})
     if not updated:
         raise HTTPException(status_code=404, detail="organization not found")
-    
+    _clear_department_stats_cache()
     return runtime.to_dict(updated)
 
 
@@ -83,7 +97,7 @@ async def delete_organization(org_id: str):
     success = storage.delete(org_id)
     if not success:
         raise HTTPException(status_code=404, detail="organization not found")
-        
+    _clear_department_stats_cache()
     return {"success": True, "message": "organization deleted"}
 
 
@@ -123,6 +137,50 @@ async def get_units_by_department(dept_id: str):
 
     units = [runtime.to_dict(org) for org in storage.get_units_by_department(dept_id)]
     return {"units": units, "total": len(units)}
+
+
+@router.get("/api/departments/{dept_id}/stats")
+async def get_department_stats(dept_id: str):
+    storage = runtime.require_org_storage()
+    department = storage.get_by_id(dept_id)
+    if department is None or getattr(department, "level", None) != "department":
+        raise HTTPException(status_code=404, detail="department not found")
+
+    now = time.time()
+    if _DEPT_STATS_CACHE_TTL_SECONDS > 0:
+        cached = _DEPT_STATS_CACHE.get(dept_id)
+        if cached is not None:
+            ts = float(cached.get("ts", 0.0))
+            if now - ts <= _DEPT_STATS_CACHE_TTL_SECONDS:
+                payload = cached.get("payload")
+                if isinstance(payload, dict):
+                    return payload
+
+    orgs = [department, *storage.get_units_by_department(dept_id)]
+    stats: Dict[str, Dict[str, Any]] = {}
+
+    for org in orgs:
+        job_count = 0
+        issue_total = 0
+        for job_id in storage.get_org_jobs(org.id, include_children=False):
+            job_dir = runtime.UPLOAD_ROOT / job_id
+            if not job_dir.exists():
+                continue
+            summary = runtime.collect_job_summary(job_dir)
+            job_count += 1
+            issue_total += int(summary.get("issue_total") or 0)
+        stats[org.id] = {
+            "job_count": job_count,
+            "issue_total": issue_total,
+            "has_issues": issue_total > 0,
+        }
+
+    payload = {"department_id": dept_id, "stats": stats}
+    if _DEPT_STATS_CACHE_TTL_SECONDS > 0:
+        _DEPT_STATS_CACHE[dept_id] = {"ts": now, "payload": payload}
+        if len(_DEPT_STATS_CACHE) > _DEPT_STATS_CACHE_MAX_SIZE:
+            _DEPT_STATS_CACHE.pop(next(iter(_DEPT_STATS_CACHE)))
+    return payload
 
 
 @router.post("/api/organizations/import")
@@ -166,6 +224,7 @@ async def import_organizations(
         raise HTTPException(status_code=400, detail="only .csv/.xlsx are supported")
 
     result = storage.import_from_list(rows, clear_existing=clear_existing)
+    _clear_department_stats_cache()
     return runtime.to_dict(result)
 
 
@@ -176,14 +235,38 @@ async def get_organization_jobs(
         default=False,
         description="Whether to include jobs linked to descendant organizations.",
     ),
+    limit: int | None = Query(default=None, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
 ):
     storage = runtime.require_org_storage()
     org = storage.get_by_id(org_id)
     if org is None:
         raise HTTPException(status_code=404, detail="organization not found")
 
+    job_ids = storage.get_org_jobs(org_id, include_children=include_children)
+    total = len(job_ids)
+
+    def _quick_ts(job_id: str) -> float:
+        job_dir = runtime.UPLOAD_ROOT / job_id
+        try:
+            status_file = job_dir / "status.json"
+            if status_file.exists():
+                return status_file.stat().st_mtime
+            return job_dir.stat().st_mtime
+        except Exception:
+            return 0.0
+
+    if limit is not None or offset > 0:
+        sorted_ids = sorted(job_ids, key=_quick_ts, reverse=True)
+        if limit is None:
+            selected_ids = sorted_ids[offset:]
+        else:
+            selected_ids = sorted_ids[offset : offset + limit]
+    else:
+        selected_ids = job_ids
+
     jobs: List[Dict[str, Any]] = []
-    for job_id in storage.get_org_jobs(org_id, include_children=include_children):
+    for job_id in selected_ids:
         job_dir = runtime.UPLOAD_ROOT / job_id
         if job_dir.exists():
             jobs.append(runtime.collect_job_summary(job_dir))
@@ -208,4 +291,9 @@ async def get_organization_jobs(
                 }
             )
     jobs.sort(key=lambda x: x.get("ts", 0), reverse=True)
-    return {"jobs": jobs, "total": len(jobs)}
+    return {
+        "jobs": jobs,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }

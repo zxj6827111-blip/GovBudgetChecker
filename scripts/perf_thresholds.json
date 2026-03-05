@@ -1,0 +1,20 @@
+{
+  "metrics": {
+    "jobs_list_50": {
+      "avg_ms": 400,
+      "p95_ms": 800
+    },
+    "jobs_list_200": {
+      "avg_ms": 900,
+      "p95_ms": 1800
+    },
+    "department_stats": {
+      "avg_ms": 500,
+      "p95_ms": 1200
+    },
+    "organization_jobs_50": {
+      "avg_ms": 500,
+      "p95_ms": 1200
+    }
+  }
+}

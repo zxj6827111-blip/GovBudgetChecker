@@ -33,3 +33,51 @@ export async function GET(
     );
   }
 }
+
+export async function POST(
+  request: Request,
+  { params }: { params: { dept_id: string } }
+) {
+  const deptId = String(params.dept_id || "").trim();
+  if (!deptId) {
+    return NextResponse.json({ error: "dept_id is required" }, { status: 400 });
+  }
+
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "invalid request body" }, { status: 400 });
+  }
+
+  const name = String(body?.name || "").trim();
+  if (!name) {
+    return NextResponse.json({ error: "name is required" }, { status: 400 });
+  }
+
+  try {
+    const response = await fetchWithTimeout(`${apiBase}/api/organizations`, {
+      method: "POST",
+      headers: backendAuthHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        name,
+        level: "unit",
+        parent_id: deptId,
+      }),
+    });
+    const text = await response.text();
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { raw: text };
+    }
+    return NextResponse.json(data, { status: response.status });
+  } catch (error) {
+    console.error("Failed to create department unit:", error);
+    return NextResponse.json(
+      { error: "Failed to create department unit" },
+      { status: 500 }
+    );
+  }
+}

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shutil
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from api import runtime
 
@@ -13,10 +13,42 @@ router = APIRouter()
 
 @router.get("/api/jobs")
 @router.get("/jobs")
-async def list_jobs():
-    jobs = [runtime.collect_job_summary(job_dir) for job_dir in runtime.iter_job_dirs()]
-    jobs.sort(key=lambda x: x.get("ts", 0), reverse=True)
-    return jobs
+async def list_jobs(
+    limit: int | None = Query(default=None, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
+    job_dirs = runtime.iter_job_dirs()
+
+    def _quick_ts(job_dir):
+        try:
+            status_file = job_dir / "status.json"
+            if status_file.exists():
+                return status_file.stat().st_mtime
+            return job_dir.stat().st_mtime
+        except Exception:
+            return 0.0
+
+    if limit is None and offset == 0:
+        jobs = [runtime.collect_job_summary(job_dir) for job_dir in job_dirs]
+        jobs.sort(key=lambda x: x.get("ts", 0), reverse=True)
+        return jobs
+
+    sorted_dirs = sorted(job_dirs, key=_quick_ts, reverse=True)
+    total = len(sorted_dirs)
+    if limit is None:
+        selected_dirs = sorted_dirs[offset:]
+    else:
+        selected_dirs = sorted_dirs[offset : offset + limit]
+
+    items = [runtime.collect_job_summary(job_dir) for job_dir in selected_dirs]
+    items.sort(key=lambda x: x.get("ts", 0), reverse=True)
+
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/jobs/{job_id}/status")
@@ -67,4 +99,3 @@ async def associate_job(job_id: str, request: Request):
 
     link = storage.link_job(job_id, org_id, match_type="manual", confidence=1.0)
     return {"success": True, "link": runtime.to_dict(link)}
-

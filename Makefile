@@ -1,4 +1,4 @@
-.PHONY: dev backend backend-api backend-noauth worker frontend frontend-build lint typecheck unit e2e test install
+.PHONY: dev backend backend-api backend-noauth worker frontend frontend-build lint typecheck unit e2e test install perf-baseline perf-check
 
 backend:
 	GOVBUDGET_AUTH_ENABLED=$${GOVBUDGET_AUTH_ENABLED:-true} GOVBUDGET_API_KEY=$${GOVBUDGET_API_KEY:-dev-local-key} GOVBUDGET_RATE_LIMIT=$${GOVBUDGET_RATE_LIMIT:-2000} python -m uvicorn api.main:app --reload --port 8000
@@ -39,3 +39,9 @@ install:
 	npx --yes playwright install --with-deps chromium
 
 test: unit frontend-build e2e
+
+perf-baseline:
+	GOVBUDGET_AUTH_ENABLED=false GOVBUDGET_API_KEY=dev PYTHONPATH=. python scripts/perf_baseline.py
+
+perf-check:
+	GOVBUDGET_AUTH_ENABLED=false GOVBUDGET_API_KEY=dev PYTHONPATH=. python scripts/perf_baseline.py --assert-thresholds

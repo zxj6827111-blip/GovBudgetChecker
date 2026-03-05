@@ -81,6 +81,8 @@ export default function HomePage() {
   // New State for QC V3
   const [qcFingings, setQcFindings] = useState<any[]>([]);
   const [isQcLoading, setIsQcLoading] = useState(false);
+  const qcFindingsLengthRef = useRef(0);
+  const isQcLoadingRef = useRef(false);
 
   // View mode for IssueTabs/List inside a job detail view
   const [issueViewMode, setIssueViewMode] = useState<"tabs" | "list" | "card">("tabs");
@@ -136,6 +138,14 @@ export default function HomePage() {
   const [orgRefreshKey, setOrgRefreshKey] = useState(0);
   const [orgTreeRefreshKey, setOrgTreeRefreshKey] = useState(0);
 
+  useEffect(() => {
+    qcFindingsLengthRef.current = qcFingings.length;
+  }, [qcFingings.length]);
+
+  useEffect(() => {
+    isQcLoadingRef.current = isQcLoading;
+  }, [isQcLoading]);
+
   function appendLog(s: string) {
     setLog((prev) => [...prev, s].slice(-200));
   }
@@ -156,63 +166,165 @@ export default function HomePage() {
     fetchConfig();
   }, []);
 
-  // 2. Poll Job List
-  const fetchJobList = async () => {
+  // 2. Job List Refresh
+  const JOB_LIST_PAGE_SIZE = 200;
+  const fetchJobList = useCallback(async () => {
     try {
-      const res = await fetch('/api/jobs', { cache: 'no-store' });
+      const res = await fetch(`/api/jobs?limit=${JOB_LIST_PAGE_SIZE}&offset=0`, { cache: 'no-store' });
       if (res.ok) {
-        const list = await res.json();
+        const payload = await res.json();
+        const list = Array.isArray(payload)
+          ? payload
+          : Array.isArray(payload?.items)
+            ? payload.items
+            : [];
         setJobList(list);
       }
     } catch (e) {
       console.error("Failed to fetch job list", e);
     }
-  };
+  }, []);
 
   useEffect(() => {
+    if (!activeJobId) return;
     fetchJobList();
-    listPollTimer.current = setInterval(fetchJobList, 3000);
-    return () => clearInterval(listPollTimer.current);
-  }, []);
+  }, [activeJobId, fetchJobList]);
+
+  useEffect(() => {
+    if (listPollTimer.current) {
+      clearInterval(listPollTimer.current);
+      listPollTimer.current = null;
+    }
+
+    if (!activeJobId) return;
+
+    const activeStatus = status?.status;
+    const listRefreshMs =
+      activeStatus === "processing" || activeStatus === "running" || activeStatus === "queued"
+        ? 15000
+        : 45000;
+
+    listPollTimer.current = setInterval(fetchJobList, listRefreshMs);
+    return () => {
+      if (listPollTimer.current) {
+        clearInterval(listPollTimer.current);
+        listPollTimer.current = null;
+      }
+    };
+  }, [activeJobId, fetchJobList, status?.status]);
 
   // 3. Handle Active Job Switch
   const [isSwitching, setIsSwitching] = useState(false);
 
   useEffect(() => {
-    if (!activeJobId) {
-      setJob(null);
-      setStatus(null);
-      setLog([]);
-      setIsSwitching(false);
-      setQcFindings([]); // Reset QC findings
-      if (viewMode !== 'org_detail') setViewMode('org_detail');
-      return;
-    }
+    let cancelled = false;
 
-    if (viewMode !== 'job_detail') setViewMode('job_detail');
+    const hydrateActiveJob = async () => {
+      if (!activeJobId) {
+        setJob(null);
+        setStatus(null);
+        setLog([]);
+        setIsSwitching(false);
+        setQcFindings([]); // Reset QC findings
+        setViewMode((prev) => (prev === 'org_detail' ? prev : 'org_detail'));
+        return;
+      }
 
-    const selectedJob = jobList.find(j => j.job_id === activeJobId);
-    if (selectedJob) {
-      setJob({
-        job_id: selectedJob.job_id,
-        filename: selectedJob.filename
-      });
-      // Initial status from list
-      setStatus({
-        job_id: selectedJob.job_id,
-        status: (selectedJob.status as any),
-        progress: selectedJob.progress,
-        ts: selectedJob.ts
-      });
+      setViewMode((prev) => (prev === 'job_detail' ? prev : 'job_detail'));
       setIsSwitching(true);
-    }
-  }, [activeJobId]);
+
+      const selectedJob = jobList.find((j) => j.job_id === activeJobId);
+      if (selectedJob) {
+        setJob({
+          job_id: selectedJob.job_id,
+          filename: selectedJob.filename
+        });
+        // Initial status from list
+        setStatus({
+          job_id: selectedJob.job_id,
+          status: (selectedJob.status as any),
+          progress: selectedJob.progress,
+          ts: selectedJob.ts
+        });
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/jobs/${activeJobId}`, { cache: "no-store" });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const detail = await res.json();
+        if (cancelled) return;
+
+        setJob({
+          job_id: activeJobId,
+          filename: String(detail?.filename || ""),
+        });
+        setStatus({
+          job_id: activeJobId,
+          status: (detail?.status as any) || "unknown",
+          progress: Number(detail?.progress ?? 0),
+          ts: detail?.ts,
+        } as any);
+      } catch (e) {
+        console.error("Failed to hydrate active job detail", e);
+        if (cancelled) return;
+        setJob({ job_id: activeJobId, filename: "" });
+        setStatus({ job_id: activeJobId, status: "unknown" } as any);
+      }
+    };
+
+    hydrateActiveJob();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeJobId, jobList]);
 
   // 4. Poll Active Job Details
   useEffect(() => {
     if (!job?.job_id) return;
 
     let cancelled = false;
+    let stableRounds = 0;
+    let lastSnapshot = "";
+
+    const schedulePoll = (delayMs: number) => {
+      if (cancelled) return;
+      if (pollTimer.current) {
+        clearTimeout(pollTimer.current);
+      }
+      pollTimer.current = setTimeout(fetchStatus, delayMs);
+    };
+
+    const computeDelay = (payload: any): number | null => {
+      const statusText = String(payload?.status || "unknown");
+      if (["done", "completed", "error", "failed"].includes(statusText)) {
+        return null;
+      }
+
+      const stageText = String(payload?.current_stage || payload?.stage || "");
+      const progressValue =
+        typeof payload?.progress === "number" ? payload.progress : -1;
+      const snapshot = `${statusText}|${stageText}|${progressValue}`;
+
+      if (snapshot === lastSnapshot) {
+        stableRounds += 1;
+      } else {
+        stableRounds = 0;
+        lastSnapshot = snapshot;
+      }
+
+      if (statusText === "queued") {
+        return stableRounds >= 3 ? 8000 : 3500;
+      }
+      if (statusText === "processing" || statusText === "running") {
+        if (stableRounds >= 6) return 5000;
+        if (stableRounds >= 2) return 2500;
+        return 1200;
+      }
+      return 5000;
+    };
 
     const fetchStatus = async () => {
       try {
@@ -255,7 +367,7 @@ export default function HomePage() {
         const qcStage = js.stages?.qc;
         const runId = qcStage?.details?.run_id || js.qc_run_id;
 
-        if (runId && qcFingings.length === 0 && !isQcLoading) {
+        if (runId && qcFindingsLengthRef.current === 0 && !isQcLoadingRef.current) {
           setIsQcLoading(true);
           try {
             const fr = await fetch(`/api/qc/findings?run_id=${runId}`);
@@ -270,23 +382,28 @@ export default function HomePage() {
           }
         }
 
-        if (js.status === "done" || js.status === "error" || js.status === "completed" || js.status === "failed") {
-          if (pollTimer.current) clearInterval(pollTimer.current);
+        const nextDelay = computeDelay(js);
+        if (nextDelay !== null) {
+          schedulePoll(nextDelay);
+        } else if (pollTimer.current) {
+          clearTimeout(pollTimer.current);
+          pollTimer.current = null;
         }
       } catch (e: any) {
         console.error(e);
         if (!cancelled) setIsSwitching(false);
+        schedulePoll(6000);
       }
     };
 
     fetchStatus();
 
-    if (pollTimer.current) clearInterval(pollTimer.current);
-    pollTimer.current = setInterval(fetchStatus, 1000);
-
     return () => {
       cancelled = true;
-      if (pollTimer.current) clearInterval(pollTimer.current);
+      if (pollTimer.current) {
+        clearTimeout(pollTimer.current);
+        pollTimer.current = null;
+      }
     };
   }, [job?.job_id]);
 
@@ -652,6 +769,8 @@ export default function HomePage() {
                 onUpload={() => setIsUploadOpen(true)}
                 refreshKey={orgRefreshKey}
                 onJobDeleted={() => setOrgTreeRefreshKey(prev => prev + 1)}
+                onUnitCreated={() => setOrgTreeRefreshKey(prev => prev + 1)}
+                onUnitDeleted={() => setOrgTreeRefreshKey(prev => prev + 1)}
               />
             </div>
           ) : (
@@ -677,7 +796,7 @@ export default function HomePage() {
                 </button>
                 <div className="h-6 w-px bg-gray-300 dark:bg-gray-700 mx-2"></div>
                 <h2 className="ml-2 text-lg font-bold text-gray-800 dark:text-white truncate max-w-lg">
-                  {jobList.find(j => j.job_id === activeJobId)?.filename || "加载中..."}
+                  {job?.filename || jobList.find(j => j.job_id === activeJobId)?.filename || "加载中..."}
                 </h2>
                 <span className={`ml-3 px-2 py-0.5 rounded text-xs font-medium ${jobStatus === 'done' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
                   {jobStatus === 'done' ? '已完成' : jobStatus === 'processing' ? '分析中' : '未知状态'}

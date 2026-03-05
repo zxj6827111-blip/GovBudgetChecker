@@ -65,6 +65,8 @@ except ImportError:
 
 _pipeline_runner: Optional[Callable[[Path], Awaitable[None]]] = None
 _job_queue: Optional["DurableJobQueue"] = None
+_JOB_SUMMARY_CACHE: Dict[str, Dict[str, Any]] = {}
+_JOB_SUMMARY_CACHE_MAX_SIZE = 2048
 
 if TYPE_CHECKING:
     from api.job_queue import DurableJobQueue
@@ -252,13 +254,45 @@ def normalize_report_kind(doc_type: Optional[str], filename: str = "") -> str:
 def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     """Build a job summary payload for list APIs."""
     status_file = job_dir / "status.json"
-    status_data = read_json_file(status_file, default={})
-
     filename = ""
+    status_mtime_ns = -1
+    status_size = -1
+    pdf_mtime_ns = -1
+    pdf_size = -1
+
     try:
-        filename = find_first_pdf(job_dir).name
+        stat = status_file.stat()
+        status_mtime_ns = stat.st_mtime_ns
+        status_size = stat.st_size
     except Exception:
         pass
+
+    pdf_path: Optional[Path] = None
+    try:
+        pdfs = sorted(job_dir.glob("*.pdf"))
+        if pdfs:
+            pdf_path = pdfs[0]
+            filename = pdf_path.name
+            pdf_stat = pdf_path.stat()
+            pdf_mtime_ns = pdf_stat.st_mtime_ns
+            pdf_size = pdf_stat.st_size
+    except Exception:
+        pdf_path = None
+
+    cache_key = (
+        status_mtime_ns,
+        status_size,
+        filename,
+        pdf_mtime_ns,
+        pdf_size,
+    )
+    cache_entry = _JOB_SUMMARY_CACHE.get(job_dir.name)
+    if cache_entry and cache_entry.get("key") == cache_key:
+        cached_summary = cache_entry.get("summary")
+        if isinstance(cached_summary, dict):
+            return dict(cached_summary)
+
+    status_data = read_json_file(status_file, default={})
 
     progress = status_data.get("progress", 0)
     status = status_data.get("status", "unknown")
@@ -508,7 +542,7 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         or provider_stats_count > 0
     )
 
-    return {
+    summary = {
         "job_id": job_dir.name,
         "filename": filename,
         "status": status,
@@ -540,6 +574,16 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "ai_elapsed_ms": ai_elapsed_ms,
         "provider_stats_count": provider_stats_count,
     }
+
+    _JOB_SUMMARY_CACHE[job_dir.name] = {
+        "key": cache_key,
+        "summary": summary,
+    }
+    if len(_JOB_SUMMARY_CACHE) > _JOB_SUMMARY_CACHE_MAX_SIZE:
+        # Remove arbitrary oldest item (insertion-ordered dict).
+        _JOB_SUMMARY_CACHE.pop(next(iter(_JOB_SUMMARY_CACHE)))
+
+    return dict(summary)
 
 
 def iter_job_dirs() -> List[Path]:
