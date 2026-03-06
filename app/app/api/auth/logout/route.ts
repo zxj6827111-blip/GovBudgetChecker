@@ -1,14 +1,15 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { apiBase } from "@/lib/apiBase";
 import { backendAuthHeaders } from "@/lib/backendAuth";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { SESSION_COOKIE_NAME } from "@/lib/session";
+import { SESSION_COOKIE_NAME, shouldUseSecureSessionCookie } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   const response = NextResponse.json({ success: true });
+  const secureCookie = shouldUseSecureSessionCookie(request);
 
   try {
     const sessionToken = cookies().get(SESSION_COOKIE_NAME)?.value?.trim();
@@ -31,7 +32,7 @@ export async function POST() {
       name: SESSION_COOKIE_NAME,
       value: "",
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: secureCookie,
       sameSite: "lax",
       path: "/",
       maxAge: 0,

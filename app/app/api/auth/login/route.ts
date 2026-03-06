@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
 import { backendAuthHeaders } from "@/lib/backendAuth";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS } from "@/lib/session";
+import {
+  SESSION_COOKIE_NAME,
+  SESSION_MAX_AGE_SECONDS,
+  shouldUseSecureSessionCookie,
+} from "@/lib/session";
 
 type LoginPayload = {
   token?: string;
@@ -60,11 +64,12 @@ export async function POST(request: NextRequest) {
       { user: payload.user ?? null },
       { status: 200 }
     );
+    const secureCookie = shouldUseSecureSessionCookie(request);
     response.cookies.set({
       name: SESSION_COOKIE_NAME,
       value: token,
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: secureCookie,
       sameSite: "lax",
       path: "/",
       maxAge: SESSION_MAX_AGE_SECONDS,
