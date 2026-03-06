@@ -130,7 +130,7 @@ def test_organization_association_flow():
     assert linked_job["report_kind"] == "final"
 
 
-def test_organization_jobs_prune_stale_links():
+def test_organization_jobs_filters_stale_links_without_mutating_links():
     client = TestClient(app)
 
     create_org = client.post(
@@ -148,7 +148,9 @@ def test_organization_jobs_prune_stale_links():
     payload = jobs.json()
     assert payload["jobs"] == []
     assert payload["total"] == 0
-    assert runtime.require_org_storage().get_job_org(stale_job_id) is None
+    assert runtime.require_org_storage().get_job_org(stale_job_id) is not None
+
+    runtime.require_org_storage().unlink_job(stale_job_id)
 
 
 def test_department_unit_endpoints_with_legacy_endpoints_compatible():
@@ -242,3 +244,43 @@ def test_organization_jobs_scope_controls_child_inclusion():
         item["job_id"] for item in dept_with_children.json()["jobs"]
     ]
     assert job_id in dept_with_children_job_ids
+
+
+def test_department_stats_include_jobs_from_child_units():
+    client = TestClient(app)
+
+    create_dept = client.post(
+        "/api/organizations",
+        json={"name": f"stats-dept-{uuid.uuid4().hex[:8]}", "level": "department"},
+    )
+    assert create_dept.status_code == 200
+    dept_id = create_dept.json()["id"]
+
+    create_unit = client.post(
+        "/api/organizations",
+        json={
+            "name": f"stats-unit-{uuid.uuid4().hex[:8]}",
+            "level": "unit",
+            "parent_id": dept_id,
+        },
+    )
+    assert create_unit.status_code == 200
+    unit_id = create_unit.json()["id"]
+
+    upload = client.post(
+        "/api/documents/upload",
+        data={"org_unit_id": unit_id},
+        files={"file": ("stats.pdf", io.BytesIO(_pdf_bytes()), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    job_id = upload.json()["job_id"]
+
+    stats_resp = client.get(f"/api/departments/{dept_id}/stats")
+    assert stats_resp.status_code == 200
+    stats = stats_resp.json()["stats"]
+    assert stats[dept_id]["job_count"] >= 1
+
+    dept_jobs_resp = client.get(f"/api/organizations/{dept_id}/jobs?include_children=true")
+    assert dept_jobs_resp.status_code == 200
+    dept_job_ids = [item["job_id"] for item in dept_jobs_resp.json()["jobs"]]
+    assert job_id in dept_job_ids
