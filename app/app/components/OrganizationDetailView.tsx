@@ -187,13 +187,13 @@ export default function OrganizationDetailView({
 
       if (!res.ok) {
         throw new Error(
-          payload?.detail || payload?.error || payload?.message || "鍒涘缓涓嬪睘鍗曚綅澶辫触"
+          payload?.detail || payload?.error || payload?.message || "创建下属单位失败"
         );
       }
 
       const createdId = String(payload.id || "").trim();
       if (!createdId) {
-        throw new Error("鍒涘缓鍗曚綅鎴愬姛锛屼絾杩斿洖缁撴灉缂哄皯 ID");
+        throw new Error("创建单位成功，但返回结果缺少 ID");
       }
 
       const createdUnit: UnitItem = {
@@ -243,7 +243,7 @@ export default function OrganizationDetailView({
       }));
       onUnitCreated?.();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "鍒涘缓涓嬪睘鍗曚綅澶辫触";
+      const msg = e instanceof Error ? e.message : "创建下属单位失败";
       alert(msg);
     } finally {
       setIsCreatingUnit(false);
@@ -323,14 +323,16 @@ export default function OrganizationDetailView({
         limit?: number;
         append?: boolean;
         forceRefresh?: boolean;
+        includeChildren?: boolean;
       }
     ) => {
       const append = options?.append ?? false;
       const offset = options?.offset ?? 0;
       const limit = options?.limit ?? ORG_JOBS_PAGE_SIZE;
       const forceRefresh = options?.forceRefresh ?? false;
+      const includeChildren = options?.includeChildren ?? false;
       const canUseCache = !append && offset === 0 && !forceRefresh;
-      const cacheKey = `${unitId}:${limit}:${offset}`;
+      const cacheKey = `${unitId}:${includeChildren ? "subtree" : "self"}:${limit}:${offset}`;
       const cached = canUseCache ? jobsCacheRef.current.get(cacheKey) : undefined;
       const now = Date.now();
       const hasFreshCache =
@@ -351,7 +353,7 @@ export default function OrganizationDetailView({
       const timeoutId = setTimeout(() => controller.abort(), 10000);
       try {
         const res = await fetch(
-          `${buildJobsApiPath(unitId)}&limit=${limit}&offset=${offset}`,
+          `${buildJobsApiPath(unitId, includeChildren)}&limit=${limit}&offset=${offset}`,
           {
           signal: controller.signal,
           cache: "no-store",
@@ -469,6 +471,7 @@ export default function OrganizationDetailView({
       setJobsTotal(0);
       return;
     }
+    const includeChildren = selectedUnit?.level === "department";
     setYearFilterTouched(false);
     setSelectedYearFilter("all");
     setSelectedKindFilter("all");
@@ -476,8 +479,9 @@ export default function OrganizationDetailView({
       offset: 0,
       limit: ORG_JOBS_PAGE_SIZE,
       append: false,
+      includeChildren,
     });
-  }, [fetchJobsForUnit, selectedUnitId, refreshKey]);
+  }, [fetchJobsForUnit, refreshKey, selectedUnit, selectedUnitId]);
 
   const availableYears = useMemo(() => {
     const years = new Set<number>();
@@ -600,10 +604,12 @@ export default function OrganizationDetailView({
     if (!selectedUnitId || jobsLoading || jobsLoadingMore || !hasMoreJobs) {
       return;
     }
+    const includeChildren = selectedUnit?.level === "department";
     fetchJobsForUnit(selectedUnitId, {
       offset: jobs.length,
       limit: ORG_JOBS_PAGE_SIZE,
       append: true,
+      includeChildren,
     });
   }, [
     fetchJobsForUnit,
@@ -611,6 +617,7 @@ export default function OrganizationDetailView({
     jobs.length,
     jobsLoading,
     jobsLoadingMore,
+    selectedUnit,
     selectedUnitId,
   ]);
 
@@ -663,16 +670,18 @@ export default function OrganizationDetailView({
     }
 
     const refreshLimit = Math.max(ORG_JOBS_PAGE_SIZE, jobs.length);
+    const includeChildren = selectedUnit?.level === "department";
     const timer = setTimeout(() => {
       fetchJobsForUnit(selectedUnitId, {
         offset: 0,
         limit: refreshLimit,
         append: false,
         forceRefresh: true,
+        includeChildren,
       });
     }, processingPollDelayRef.current);
     return () => clearTimeout(timer);
-  }, [fetchJobsForUnit, jobs, selectedUnitId]);
+  }, [fetchJobsForUnit, jobs, selectedUnit, selectedUnitId]);
 
   useEffect(() => {
     if (!selectedUnitId) return;
@@ -762,7 +771,7 @@ export default function OrganizationDetailView({
 
         if (!res.ok) {
           throw new Error(
-            payload?.detail || payload?.error || payload?.message || "鍒犻櫎涓嬪睘鍗曚綅澶辫触"
+            payload?.detail || payload?.error || payload?.message || "删除下属单位失败"
           );
         }
 
@@ -781,7 +790,7 @@ export default function OrganizationDetailView({
 
         onUnitDeleted?.();
       } catch (err) {
-        const message = err instanceof Error ? err.message : "鍒犻櫎涓嬪睘鍗曚綅澶辫触";
+        const message = err instanceof Error ? err.message : "删除下属单位失败";
         alert(message);
       } finally {
         setDeletingUnitId(null);
@@ -821,14 +830,14 @@ export default function OrganizationDetailView({
           <div className="flex items-start justify-between gap-2 mb-3">
             <h3 className="font-bold text-gray-900 text-lg tracking-tight leading-snug" title={orgDisplayName}>{orgDisplayName}</h3>
             <div className="flex items-center gap-1.5">
-              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${isDepartment ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-700"}`}>{isDepartment ? "閮ㄩ棬" : "鍗曚綅"}</span>
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${isDepartment ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-700"}`}>{isDepartment ? "部门" : "单位"}</span>
               {isUnit && (
                 <button
                   type="button"
                   onClick={(e) => handleDeleteUnit(org, e)}
                   disabled={isDeletingThisUnit}
                   className="inline-flex items-center justify-center h-7 w-7 rounded-md text-red-500 hover:text-red-600 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  title={isDeletingThisUnit ? "鍒犻櫎涓?.." : "鍒犻櫎涓嬪睘鍗曚綅"}
+                  title={isDeletingThisUnit ? "删除中..." : "删除下属单位"}
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -838,13 +847,13 @@ export default function OrganizationDetailView({
             </div>
           </div>
           <div className="flex items-center text-sm">
-            <span className="text-gray-500 font-medium w-24">鏂囦欢鏁伴噺:</span>
+            <span className="text-gray-500 font-medium w-24">文件数量:</span>
             <span className="text-gray-700 font-mono text-sm font-semibold">
               {hasKnownStats ? jobCount : "-"}
             </span>
           </div>
           <div className="flex items-center text-sm mt-2">
-            <span className="text-gray-500 font-medium w-24">闂鏁伴噺:</span>
+            <span className="text-gray-500 font-medium w-24">问题数量:</span>
             <span className={`font-mono text-sm font-semibold ${!hasKnownStats ? "text-gray-400" : orgIssueTotal > 0 ? "text-red-600" : "text-green-600"}`}>
               {hasKnownStats ? orgIssueTotal : "-"}
             </span>
