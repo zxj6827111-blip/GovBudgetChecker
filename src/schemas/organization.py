@@ -77,7 +77,7 @@ class JobOrganizationLink(BaseModel):
     """任务与组织的关联"""
     job_id: str = Field(..., description="任务ID")
     org_id: str = Field(..., description="组织ID")
-    match_type: Literal["auto", "manual"] = Field(..., description="匹配方式")
+    match_type: Literal["auto", "manual", "rebuild"] = Field(..., description="匹配方式")
     confidence: float = Field(default=1.0, description="匹配置信度（0-1）")
     created_at: float = Field(default_factory=time.time)
 

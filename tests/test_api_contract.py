@@ -246,7 +246,7 @@ def test_organization_jobs_scope_controls_child_inclusion():
     assert job_id in dept_with_children_job_ids
 
 
-def test_department_stats_include_jobs_from_child_units():
+def test_department_stats_only_count_direct_jobs():
     client = TestClient(app)
 
     create_dept = client.post(
@@ -278,7 +278,8 @@ def test_department_stats_include_jobs_from_child_units():
     stats_resp = client.get(f"/api/departments/{dept_id}/stats")
     assert stats_resp.status_code == 200
     stats = stats_resp.json()["stats"]
-    assert stats[dept_id]["job_count"] >= 1
+    assert stats[dept_id]["job_count"] == 0
+    assert stats[unit_id]["job_count"] >= 1
 
     dept_jobs_resp = client.get(f"/api/organizations/{dept_id}/jobs?include_children=true")
     assert dept_jobs_resp.status_code == 200

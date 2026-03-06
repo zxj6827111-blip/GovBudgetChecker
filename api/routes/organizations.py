@@ -174,9 +174,8 @@ async def get_department_stats(dept_id: str):
     stats: Dict[str, Dict[str, Any]] = {}
 
     for org in orgs:
-        include_children = getattr(org, "level", None) == "department"
         valid_job_ids, _ = _split_existing_job_ids(
-            storage.get_org_jobs(org.id, include_children=include_children)
+            storage.get_org_jobs(org.id, include_children=False)
         )
         job_count = 0
         issue_total = 0
