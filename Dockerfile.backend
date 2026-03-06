@@ -10,7 +10,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DEBIAN_FRONTEND=noninteractive
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir --retries 5 --timeout 120 \
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY no_proxy NO_PROXY \
+ && (pip config unset global.proxy >/dev/null 2>&1 || true) \
+ && (pip config unset install.proxy >/dev/null 2>&1 || true) \
+ && pip install --no-cache-dir --retries 5 --timeout 120 \
     --index-url "${PIP_INDEX_URL}" \
     --trusted-host "${PIP_TRUSTED_HOST}" \
     gunicorn uvicorn[standard] -r requirements.txt
