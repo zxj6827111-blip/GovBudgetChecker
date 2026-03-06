@@ -471,7 +471,6 @@ export default function OrganizationDetailView({
       setJobsTotal(0);
       return;
     }
-    const includeChildren = selectedUnit?.level === "department";
     setYearFilterTouched(false);
     setSelectedYearFilter("all");
     setSelectedKindFilter("all");
@@ -479,9 +478,9 @@ export default function OrganizationDetailView({
       offset: 0,
       limit: ORG_JOBS_PAGE_SIZE,
       append: false,
-      includeChildren,
+      includeChildren: false,
     });
-  }, [fetchJobsForUnit, refreshKey, selectedUnit, selectedUnitId]);
+  }, [fetchJobsForUnit, refreshKey, selectedUnitId]);
 
   const availableYears = useMemo(() => {
     const years = new Set<number>();
@@ -604,12 +603,11 @@ export default function OrganizationDetailView({
     if (!selectedUnitId || jobsLoading || jobsLoadingMore || !hasMoreJobs) {
       return;
     }
-    const includeChildren = selectedUnit?.level === "department";
     fetchJobsForUnit(selectedUnitId, {
       offset: jobs.length,
       limit: ORG_JOBS_PAGE_SIZE,
       append: true,
-      includeChildren,
+      includeChildren: false,
     });
   }, [
     fetchJobsForUnit,
@@ -617,7 +615,6 @@ export default function OrganizationDetailView({
     jobs.length,
     jobsLoading,
     jobsLoadingMore,
-    selectedUnit,
     selectedUnitId,
   ]);
 
@@ -670,18 +667,17 @@ export default function OrganizationDetailView({
     }
 
     const refreshLimit = Math.max(ORG_JOBS_PAGE_SIZE, jobs.length);
-    const includeChildren = selectedUnit?.level === "department";
     const timer = setTimeout(() => {
       fetchJobsForUnit(selectedUnitId, {
         offset: 0,
         limit: refreshLimit,
         append: false,
         forceRefresh: true,
-        includeChildren,
+        includeChildren: false,
       });
     }, processingPollDelayRef.current);
     return () => clearTimeout(timer);
-  }, [fetchJobsForUnit, jobs, selectedUnit, selectedUnitId]);
+  }, [fetchJobsForUnit, jobs, selectedUnitId]);
 
   useEffect(() => {
     if (!selectedUnitId) return;
