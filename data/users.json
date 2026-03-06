@@ -1,0 +1,13 @@
+{
+  "users": [
+    {
+      "username": "admin",
+      "password_hash": "pbkdf2_sha256$260000$zAesa9yG0NWMuGYXPkKwXQ==$nx0gpFZqwtojhIH23vyYQw1Uevc1miAcP6rtfA5LvPo=",
+      "is_admin": true,
+      "is_active": true,
+      "created_at": 1772763983.66714,
+      "updated_at": 1772763983.66714
+    }
+  ],
+  "updated_at": 1772763983.9637287
+}

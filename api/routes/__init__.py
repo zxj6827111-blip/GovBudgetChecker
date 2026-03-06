@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from api.routes.analyze import router as analyze_router
+from api.routes.auth import router as auth_router
 from api.routes.config import router as config_router
 from api.routes.files import router as files_router
 from api.routes.health import router as health_router
@@ -17,6 +18,7 @@ from api.routes.upload import router as upload_router
 def register_routes(app: FastAPI) -> None:
     """Register all API routers."""
     app.include_router(health_router)
+    app.include_router(auth_router)
     app.include_router(upload_router)
     app.include_router(config_router)
     app.include_router(analyze_router)
