@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { apiBase } from "@/lib/apiBase";
 import { backendAuthHeaders } from "@/lib/backendAuth";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { SESSION_COOKIE_NAME } from "@/lib/session";
+import { SESSION_COOKIE_NAME, shouldUseSecureSessionCookie } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -51,12 +51,13 @@ export async function POST(request: NextRequest) {
     );
     const payload = parsePayload(await backendResponse.text());
     const response = NextResponse.json(payload, { status: backendResponse.status });
+    const secureCookie = shouldUseSecureSessionCookie(request);
     if (backendResponse.ok) {
       response.cookies.set({
         name: SESSION_COOKIE_NAME,
         value: "",
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
+        secure: secureCookie,
         sameSite: "lax",
         path: "/",
         maxAge: 0,
