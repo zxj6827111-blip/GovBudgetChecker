@@ -412,7 +412,7 @@ export default function HomePage() {
   const handleOrgSelect = useCallback((org: any) => {
     setSelectedDepartmentId(org?.id || null);
     setSelectedDepartmentName(org?.name || "");
-    setSelectedOrgId(null);
+    setSelectedOrgId(org?.id || null);
     setViewMode("org_detail");
     setActiveJobId(null);
   }, []);

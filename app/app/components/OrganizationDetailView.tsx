@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
@@ -19,7 +19,16 @@ interface TopIssueRule {
 interface JobSummary {
   job_id: string;
   filename: string;
-  status: "queued" | "processing" | "running" | "done" | "error" | "unknown";
+  status:
+    | "queued"
+    | "processing"
+    | "running"
+    | "started"
+    | "done"
+    | "completed"
+    | "error"
+    | "failed"
+    | "unknown";
   progress: number;
   ts: number;
   mode?: string;
@@ -108,6 +117,7 @@ export default function OrganizationDetailView({
   const [newUnitName, setNewUnitName] = useState("");
   const [isCreatingUnit, setIsCreatingUnit] = useState(false);
   const [deletingUnitId, setDeletingUnitId] = useState<string | null>(null);
+  const lastRefreshKeyRef = useRef<number | undefined>(refreshKey);
 
   const buildJobsApiPath = useCallback(
     (orgId: string, includeChildren = false) =>
@@ -177,13 +187,13 @@ export default function OrganizationDetailView({
 
       if (!res.ok) {
         throw new Error(
-          payload?.detail || payload?.error || payload?.message || "创建下属单位失败"
+          payload?.detail || payload?.error || payload?.message || "鍒涘缓涓嬪睘鍗曚綅澶辫触"
         );
       }
 
       const createdId = String(payload.id || "").trim();
       if (!createdId) {
-        throw new Error("创建单位成功，但返回结果缺少 ID");
+        throw new Error("鍒涘缓鍗曚綅鎴愬姛锛屼絾杩斿洖缁撴灉缂哄皯 ID");
       }
 
       const createdUnit: UnitItem = {
@@ -233,7 +243,7 @@ export default function OrganizationDetailView({
       }));
       onUnitCreated?.();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "创建下属单位失败";
+      const msg = e instanceof Error ? e.message : "鍒涘缓涓嬪睘鍗曚綅澶辫触";
       alert(msg);
     } finally {
       setIsCreatingUnit(false);
@@ -298,12 +308,12 @@ export default function OrganizationDetailView({
     } catch (e) {
       console.error("Failed to fetch department units", e);
       setUnits([]);
-      onSelectUnit(null);
+      onSelectUnit(departmentOrg);
     } finally {
       clearTimeout(timeoutId);
       setUnitsLoading(false);
     }
-  }, [departmentId, departmentName, onSelectUnit]);
+  }, [departmentId, departmentName, departmentOrg, onSelectUnit]);
 
   const fetchJobsForUnit = useCallback(
     async (
@@ -432,7 +442,7 @@ export default function OrganizationDetailView({
   }, [departmentId]);
 
   useEffect(() => {
-    onSelectUnit(null);
+    onSelectUnit(departmentOrg);
     setJobs([]);
     setJobsTotal(0);
     jobsCacheRef.current.clear();
@@ -440,7 +450,18 @@ export default function OrganizationDetailView({
     setOrgStatsMap({});
     fetchUnits();
     fetchOrgStats();
-  }, [departmentId, fetchOrgStats, fetchUnits, onSelectUnit, refreshKey]);
+  }, [departmentId, departmentOrg, fetchOrgStats, fetchUnits, onSelectUnit]);
+
+  useEffect(() => {
+    if (lastRefreshKeyRef.current === refreshKey) {
+      return;
+    }
+
+    lastRefreshKeyRef.current = refreshKey;
+    jobsCacheRef.current.clear();
+    fetchUnits();
+    fetchOrgStats();
+  }, [fetchOrgStats, fetchUnits, refreshKey]);
 
   useEffect(() => {
     if (!selectedUnitId) {
@@ -672,14 +693,34 @@ export default function OrganizationDetailView({
     }));
   }, [jobs, jobsTotal, selectedUnitId]);
 
+  const normalizeJobStatus = useCallback((rawStatus?: string) => {
+    switch (String(rawStatus || "").trim().toLowerCase()) {
+      case "started":
+      case "queued":
+        return "queued";
+      case "processing":
+      case "running":
+        return "processing";
+      case "done":
+      case "completed":
+      case "success":
+        return "done";
+      case "error":
+      case "failed":
+        return "error";
+      default:
+        return "unknown";
+    }
+  }, []);
+
   const getStatusBadge = (job: JobSummary) => {
-    if (job.status === "done") return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700">已完成</span>;
-    if (job.status === "processing" || job.status === "running") return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700 animate-pulse">处理中</span>;
-    if (job.status === "queued") return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-700">排队中</span>;
-    if (job.status === "error") return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-red-100 text-red-700">异常</span>;
+    const normalizedStatus = normalizeJobStatus(job.status);
+    if (normalizedStatus === "done") return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700">已完成</span>;
+    if (normalizedStatus === "processing") return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700 animate-pulse">处理中</span>;
+    if (normalizedStatus === "queued") return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-700">排队中</span>;
+    if (normalizedStatus === "error") return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-red-100 text-red-700">异常</span>;
     return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-700">未知</span>;
   };
-
   const handleDelete = async (jobId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!confirm("确定要删除这个任务吗？此操作不可恢复。")) return;
@@ -721,7 +762,7 @@ export default function OrganizationDetailView({
 
         if (!res.ok) {
           throw new Error(
-            payload?.detail || payload?.error || payload?.message || "删除下属单位失败"
+            payload?.detail || payload?.error || payload?.message || "鍒犻櫎涓嬪睘鍗曚綅澶辫触"
           );
         }
 
@@ -740,7 +781,7 @@ export default function OrganizationDetailView({
 
         onUnitDeleted?.();
       } catch (err) {
-        const message = err instanceof Error ? err.message : "删除下属单位失败";
+        const message = err instanceof Error ? err.message : "鍒犻櫎涓嬪睘鍗曚綅澶辫触";
         alert(message);
       } finally {
         setDeletingUnitId(null);
@@ -780,14 +821,14 @@ export default function OrganizationDetailView({
           <div className="flex items-start justify-between gap-2 mb-3">
             <h3 className="font-bold text-gray-900 text-lg tracking-tight leading-snug" title={orgDisplayName}>{orgDisplayName}</h3>
             <div className="flex items-center gap-1.5">
-              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${isDepartment ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-700"}`}>{isDepartment ? "部门" : "单位"}</span>
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${isDepartment ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-700"}`}>{isDepartment ? "閮ㄩ棬" : "鍗曚綅"}</span>
               {isUnit && (
                 <button
                   type="button"
                   onClick={(e) => handleDeleteUnit(org, e)}
                   disabled={isDeletingThisUnit}
                   className="inline-flex items-center justify-center h-7 w-7 rounded-md text-red-500 hover:text-red-600 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  title={isDeletingThisUnit ? "删除中..." : "删除下属单位"}
+                  title={isDeletingThisUnit ? "鍒犻櫎涓?.." : "鍒犻櫎涓嬪睘鍗曚綅"}
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -797,13 +838,13 @@ export default function OrganizationDetailView({
             </div>
           </div>
           <div className="flex items-center text-sm">
-            <span className="text-gray-500 font-medium w-24">文件数量:</span>
+            <span className="text-gray-500 font-medium w-24">鏂囦欢鏁伴噺:</span>
             <span className="text-gray-700 font-mono text-sm font-semibold">
               {hasKnownStats ? jobCount : "-"}
             </span>
           </div>
           <div className="flex items-center text-sm mt-2">
-            <span className="text-gray-500 font-medium w-24">问题数量:</span>
+            <span className="text-gray-500 font-medium w-24">闂鏁伴噺:</span>
             <span className={`font-mono text-sm font-semibold ${!hasKnownStats ? "text-gray-400" : orgIssueTotal > 0 ? "text-red-600" : "text-green-600"}`}>
               {hasKnownStats ? orgIssueTotal : "-"}
             </span>
@@ -831,7 +872,9 @@ export default function OrganizationDetailView({
           <div className="flex justify-between items-center">
             <div>
               <h1 className="text-3xl font-bold text-gray-900 tracking-tight">{departmentName}</h1>
-              <div className="mt-2 text-sm text-gray-500">{selectedUnit ? selectedUnit.name : "请先选择部门或单位"}</div>
+              <div className="mt-2 text-sm text-gray-500">
+                {selectedUnit ? selectedUnit.name : "请选择部门或单位"}
+              </div>
             </div>
             <button
               onClick={onUpload}
@@ -902,23 +945,58 @@ export default function OrganizationDetailView({
               <div className="px-4 py-3 border-b border-gray-100 bg-white/30">
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="inline-flex bg-white rounded-lg border border-gray-200 p-1">
-                    <button type="button" onClick={() => setSelectedKindFilter("all")} className={`px-3 py-1 text-xs rounded-md transition-colors ${selectedKindFilter === "all" ? "bg-indigo-600 text-white" : "text-gray-600 hover:bg-gray-100"}`}>全部类型</button>
-                    <button type="button" onClick={() => setSelectedKindFilter("budget")} className={`px-3 py-1 text-xs rounded-md transition-colors ${selectedKindFilter === "budget" ? "bg-indigo-600 text-white" : "text-gray-600 hover:bg-gray-100"}`}>预算 ({kindCounts.budget})</button>
-                    <button type="button" onClick={() => setSelectedKindFilter("final")} className={`px-3 py-1 text-xs rounded-md transition-colors ${selectedKindFilter === "final" ? "bg-indigo-600 text-white" : "text-gray-600 hover:bg-gray-100"}`}>决算 ({kindCounts.final})</button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedKindFilter("all")}
+                      className={`px-3 py-1 text-xs rounded-md transition-colors ${selectedKindFilter === "all" ? "bg-indigo-600 text-white" : "text-gray-600 hover:bg-gray-100"}`}
+                    >
+                      全部类型
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedKindFilter("budget")}
+                      className={`px-3 py-1 text-xs rounded-md transition-colors ${selectedKindFilter === "budget" ? "bg-indigo-600 text-white" : "text-gray-600 hover:bg-gray-100"}`}
+                    >
+                      预算 ({kindCounts.budget})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedKindFilter("final")}
+                      className={`px-3 py-1 text-xs rounded-md transition-colors ${selectedKindFilter === "final" ? "bg-indigo-600 text-white" : "text-gray-600 hover:bg-gray-100"}`}
+                    >
+                      决算 ({kindCounts.final})
+                    </button>
                   </div>
 
                   <div className="inline-flex bg-white rounded-lg border border-gray-200 p-1">
-                    <button type="button" onClick={() => { setYearFilterTouched(true); setSelectedYearFilter("all"); }} className={`px-3 py-1 text-xs rounded-md transition-colors ${selectedYearFilter === "all" ? "bg-indigo-600 text-white" : "text-gray-600 hover:bg-gray-100"}`}>全部年度</button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setYearFilterTouched(true);
+                        setSelectedYearFilter("all");
+                      }}
+                      className={`px-3 py-1 text-xs rounded-md transition-colors ${selectedYearFilter === "all" ? "bg-indigo-600 text-white" : "text-gray-600 hover:bg-gray-100"}`}
+                    >
+                      全部年度
+                    </button>
                     {availableYears.map((year) => (
-                      <button key={year} type="button" onClick={() => { setYearFilterTouched(true); setSelectedYearFilter(String(year)); }} className={`px-3 py-1 text-xs rounded-md transition-colors ${selectedYearFilter === String(year) ? "bg-indigo-600 text-white" : "text-gray-600 hover:bg-gray-100"}`}>{year}</button>
+                      <button
+                        key={year}
+                        type="button"
+                        onClick={() => {
+                          setYearFilterTouched(true);
+                          setSelectedYearFilter(String(year));
+                        }}
+                        className={`px-3 py-1 text-xs rounded-md transition-colors ${selectedYearFilter === String(year) ? "bg-indigo-600 text-white" : "text-gray-600 hover:bg-gray-100"}`}
+                      >
+                        {year}
+                      </button>
                     ))}
                   </div>
 
                   <div className="text-xs text-gray-500">
                     当前{selectedKindFilter === "all" ? "全部类型" : selectedKindFilter === "budget" ? "预算" : "决算"}，当前{selectedYearFilter === "all" ? "全部年度" : `${selectedYearFilter}年度`}：{filteredJobs.length}个文件，问题{filteredIssueTotal}
-                    <span className="ml-2 text-gray-400">
-                      已加载 {jobs.length}/{jobsTotal || jobs.length}
-                    </span>
+                    <span className="ml-2 text-gray-400">已加载 {jobs.length}/{jobsTotal || jobs.length}</span>
                   </div>
                 </div>
               </div>
@@ -967,9 +1045,9 @@ export default function OrganizationDetailView({
                       const aiBadgeClass = !aiParticipated ? "bg-gray-100 text-gray-500" : aiHasIssues ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700";
 
                       return (
-                        <tr key={job.job_id} className="group hover:bg-white/70 transition-colors duration-150 cursor-pointer" onClick={() => onSelectJob(job.job_id)}>
+                        <tr key={job.job_id} className="group cursor-pointer hover:bg-white/70 transition-colors duration-150" onClick={() => onSelectJob(job.job_id)}>
                           <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="text-sm font-medium text-gray-900 group-hover:text-indigo-600 transition-colors">{job.filename}</div>
+                            <div className="text-sm font-medium text-gray-900 group-hover:text-indigo-600 transition-colors">{job.filename || "未命名文件"}</div>
                             <div className="mt-1 flex items-center gap-2 text-xs">
                               <span className="text-gray-500 font-mono">ID: {job.job_id.slice(0, 8)}</span>
                               <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">{typeof job.report_year === "number" ? `${job.report_year}年度` : "年度未识别"}</span>
@@ -980,7 +1058,7 @@ export default function OrganizationDetailView({
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="space-y-1">
                               {getStatusBadge(job)}
-                              {job.status === "done" && (
+                              {normalizeJobStatus(job.status) === "done" && (
                                 <div className="space-y-1">
                                   <div className="flex flex-wrap gap-1.5">
                                     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${localBadgeClass}`}>{!localParticipated ? "本地：未参与" : localHasIssues ? `本地：${localTotal}个问题` : "本地：正常"}</span>
@@ -996,8 +1074,8 @@ export default function OrganizationDetailView({
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                             <div className="flex items-center justify-end space-x-3">
-                              <button onClick={(e) => handleDelete(job.job_id, e)} className="text-red-500 hover:text-red-700 transition-colors px-2 py-1 rounded hover:bg-red-50" title="删除任务">删除</button>
-                              <button onClick={() => onSelectJob(job.job_id)} className="text-indigo-600 hover:text-indigo-900 text-xs">查看</button>
+                              <button onClick={(e) => handleDelete(job.job_id, e)} className="rounded px-2 py-1 text-red-500 transition-colors hover:bg-red-50 hover:text-red-700" title="删除任务">删除</button>
+                              <button onClick={() => onSelectJob(job.job_id)} className="text-xs text-indigo-600 hover:text-indigo-900">查看</button>
                             </div>
                           </td>
                         </tr>
@@ -1013,12 +1091,12 @@ export default function OrganizationDetailView({
                 {hasMoreJobs && (
                   <>
                     <div ref={loadMoreSentinelRef} className="h-1 w-full" />
-                    <div className="sticky bottom-0 border-t border-gray-200/60 bg-white/80 backdrop-blur-sm p-3 text-center">
+                    <div className="sticky bottom-0 border-t border-gray-200/60 bg-white/80 p-3 text-center backdrop-blur-sm">
                       <button
                         type="button"
                         onClick={loadMoreJobs}
                         disabled={jobsLoading || jobsLoadingMore}
-                        className="inline-flex items-center px-4 py-1.5 rounded-lg border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                        className="inline-flex items-center rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-1.5 text-sm text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {jobsLoadingMore ? "加载中..." : `加载更多 (${jobs.length}/${jobsTotal})`}
                       </button>
@@ -1030,7 +1108,6 @@ export default function OrganizationDetailView({
           </div>
         </div>
       </div>
-
       {showCreateUnitModal && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
           <div className="w-full max-w-md rounded-2xl bg-white border border-gray-200 shadow-2xl p-6">

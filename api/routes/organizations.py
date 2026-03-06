@@ -6,7 +6,7 @@ import csv
 import io
 import os
 import time
-from typing import Annotated, Any, Dict, List
+from typing import Annotated, Any, Dict, List, Tuple
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 
@@ -25,6 +25,32 @@ _DEPT_STATS_CACHE: Dict[str, Dict[str, Any]] = {}
 
 def _clear_department_stats_cache() -> None:
     _DEPT_STATS_CACHE.clear()
+
+
+def _prune_missing_job_links(
+    storage: Any, job_ids: List[str]
+) -> Tuple[List[str], List[str]]:
+    existing_job_ids: List[str] = []
+    stale_job_ids: List[str] = []
+
+    for job_id in job_ids:
+        job_dir = runtime.UPLOAD_ROOT / job_id
+        if job_dir.exists():
+            existing_job_ids.append(job_id)
+        else:
+            stale_job_ids.append(job_id)
+
+    if stale_job_ids:
+        for job_id in stale_job_ids:
+            try:
+                storage.unlink_job(job_id)
+            except Exception:
+                runtime.logger.exception(
+                    "Failed to unlink stale organization job: %s", job_id
+                )
+        _clear_department_stats_cache()
+
+    return existing_job_ids, stale_job_ids
 
 
 @router.get("/api/organizations")
@@ -160,12 +186,13 @@ async def get_department_stats(dept_id: str):
     stats: Dict[str, Dict[str, Any]] = {}
 
     for org in orgs:
+        valid_job_ids, _ = _prune_missing_job_links(
+            storage, storage.get_org_jobs(org.id, include_children=False)
+        )
         job_count = 0
         issue_total = 0
-        for job_id in storage.get_org_jobs(org.id, include_children=False):
+        for job_id in valid_job_ids:
             job_dir = runtime.UPLOAD_ROOT / job_id
-            if not job_dir.exists():
-                continue
             summary = runtime.collect_job_summary(job_dir)
             job_count += 1
             issue_total += int(summary.get("issue_total") or 0)
@@ -243,7 +270,9 @@ async def get_organization_jobs(
     if org is None:
         raise HTTPException(status_code=404, detail="organization not found")
 
-    job_ids = storage.get_org_jobs(org_id, include_children=include_children)
+    job_ids, _ = _prune_missing_job_links(
+        storage, storage.get_org_jobs(org_id, include_children=include_children)
+    )
     total = len(job_ids)
 
     def _quick_ts(job_id: str) -> float:
@@ -268,28 +297,7 @@ async def get_organization_jobs(
     jobs: List[Dict[str, Any]] = []
     for job_id in selected_ids:
         job_dir = runtime.UPLOAD_ROOT / job_id
-        if job_dir.exists():
-            jobs.append(runtime.collect_job_summary(job_dir))
-        else:
-            jobs.append(
-                {
-                    "job_id": job_id,
-                    "filename": "",
-                    "status": "unknown",
-                    "progress": 0,
-                    "ts": time.time(),
-                    "mode": "legacy",
-                    "report_year": None,
-                    "doc_type": None,
-                    "report_kind": "unknown",
-                    "issue_total": 0,
-                    "issue_error": 0,
-                    "issue_warn": 0,
-                    "issue_info": 0,
-                    "has_issues": False,
-                    "top_issue_rules": [],
-                }
-            )
+        jobs.append(runtime.collect_job_summary(job_dir))
     jobs.sort(key=lambda x: x.get("ts", 0), reverse=True)
     return {
         "jobs": jobs,

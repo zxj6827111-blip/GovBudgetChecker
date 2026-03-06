@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("TESTING", "true")
 
 from api.main import app
+from api import runtime
 
 
 def _pdf_bytes() -> bytes:
@@ -127,6 +128,27 @@ def test_organization_association_flow():
     assert linked_job["report_year"] == 2026
     assert "report_kind" in linked_job
     assert linked_job["report_kind"] == "final"
+
+
+def test_organization_jobs_prune_stale_links():
+    client = TestClient(app)
+
+    create_org = client.post(
+        "/api/organizations",
+        json={"name": f"stale-job-org-{uuid.uuid4().hex[:8]}", "level": "unit"},
+    )
+    assert create_org.status_code == 200
+    org_id = create_org.json()["id"]
+
+    stale_job_id = f"missing-{uuid.uuid4().hex[:12]}"
+    runtime.require_org_storage().link_job(stale_job_id, org_id)
+
+    jobs = client.get(f"/api/organizations/{org_id}/jobs")
+    assert jobs.status_code == 200
+    payload = jobs.json()
+    assert payload["jobs"] == []
+    assert payload["total"] == 0
+    assert runtime.require_org_storage().get_job_org(stale_job_id) is None
 
 
 def test_department_unit_endpoints_with_legacy_endpoints_compatible():
