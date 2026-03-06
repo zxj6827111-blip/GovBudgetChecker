@@ -5,6 +5,7 @@
 import json
 import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -21,7 +22,10 @@ from src.services.org_hierarchy import validate_organization_hierarchy
 logger = logging.getLogger(__name__)
 
 # 数据文件路径
-_DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+_TESTING = os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes"}
+_REPO_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+_TEST_DATA_DIR = Path(tempfile.gettempdir()) / "govbudgetchecker_test_data"
+_DEFAULT_DATA_DIR = _TEST_DATA_DIR if _TESTING else _REPO_DATA_DIR
 DATA_DIR = Path(os.getenv("ORG_DATA_DIR", _DEFAULT_DATA_DIR)).resolve()
 ORG_FILE = DATA_DIR / "organizations.json"
 LINKS_FILE = DATA_DIR / "job_org_links.json"

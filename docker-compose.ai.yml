@@ -58,10 +58,10 @@ services:
     depends_on:
       - ai-extractor
     volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./samples:/app/samples
-      - ./uploads:/app/uploads
+      - ${HOST_DATA_DIR:-./data}:/app/data
+      - ${HOST_LOGS_DIR:-./logs}:/app/logs
+      - ${HOST_SAMPLES_DIR:-./samples}:/app/samples
+      - ${HOST_UPLOADS_DIR:-./uploads}:/app/uploads
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]

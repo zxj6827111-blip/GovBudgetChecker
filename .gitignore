@@ -45,3 +45,6 @@ app/tsc_output.txt
 test_pdfs/
 X/
 e2e/tests/upload-fallback.spec.ts
+
+# Runtime data should not be versioned.
+data/*.json
