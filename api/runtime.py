@@ -63,6 +63,14 @@ except ImportError:
     Organization = None
     OrganizationLevel = None
 
+try:
+    from src.services.user_store import get_user_store
+
+    USER_STORE_AVAILABLE = True
+except ImportError:
+    USER_STORE_AVAILABLE = False
+    get_user_store = None
+
 _pipeline_runner: Optional[Callable[[Path], Awaitable[None]]] = None
 _job_queue: Optional["DurableJobQueue"] = None
 _JOB_SUMMARY_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -698,6 +706,13 @@ def require_org_storage():
     if not ORG_AVAILABLE:
         raise HTTPException(status_code=503, detail="organization service unavailable")
     return get_org_storage()
+
+
+def require_user_store():
+    """Return user store singleton or 503 when unavailable."""
+    if not USER_STORE_AVAILABLE:
+        raise HTTPException(status_code=503, detail="user service unavailable")
+    return get_user_store()
 
 
 async def start_analysis(
