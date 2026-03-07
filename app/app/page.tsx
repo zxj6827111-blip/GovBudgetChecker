@@ -68,6 +68,7 @@ export default function HomePage() {
   // Global State
   const [jobList, setJobList] = useState<JobSummary[]>([]);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const jobListRef = useRef<JobSummary[]>([]);
 
   // Active Job UI State
   const [log, setLog] = useState<string[]>([]);
@@ -141,6 +142,10 @@ export default function HomePage() {
   useEffect(() => {
     qcFindingsLengthRef.current = qcFingings.length;
   }, [qcFingings.length]);
+
+  useEffect(() => {
+    jobListRef.current = jobList;
+  }, [jobList]);
 
   useEffect(() => {
     isQcLoadingRef.current = isQcLoading;
@@ -233,7 +238,7 @@ export default function HomePage() {
       setViewMode((prev) => (prev === 'job_detail' ? prev : 'job_detail'));
       setIsSwitching(true);
 
-      const selectedJob = jobList.find((j) => j.job_id === activeJobId);
+      const selectedJob = jobListRef.current.find((j) => j.job_id === activeJobId);
       if (selectedJob) {
         setJob({
           job_id: selectedJob.job_id,
@@ -279,7 +284,7 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [activeJobId, jobList]);
+  }, [activeJobId]);
 
   // 4. Poll Active Job Details
   useEffect(() => {
