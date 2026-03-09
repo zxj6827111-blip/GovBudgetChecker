@@ -604,7 +604,7 @@ def _strip_report_words(text: str) -> str:
         value = value.replace(token, "")
     value = re.sub(r"[—\-_/]+", " ", value)
     value = re.sub(r"\s+", " ", value)
-    value = value.strip(" -_（）() ")
+    value = re.sub(r"^[\s\-_（）()]+|[\s\-_（）()]+$", "", value)
     return value
 
 
