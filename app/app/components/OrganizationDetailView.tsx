@@ -83,7 +83,7 @@ interface OrganizationDetailViewProps {
   selectedUnitId?: string | null;
   onSelectUnit: (unit: UnitItem | null) => void;
   onSelectJob: (jobId: string) => void;
-  onUpload: () => void;
+  onUpload: (unit?: UnitItem | null) => void;
   refreshKey?: number;
   onJobDeleted?: () => void;
   onUnitCreated?: () => void;
@@ -122,6 +122,7 @@ export default function OrganizationDetailView({
   const processingPollDelayRef = useRef(1500);
   const processingPollSignatureRef = useRef("");
   const jobsScrollRef = useRef<HTMLDivElement | null>(null);
+  const jobsSectionRef = useRef<HTMLDivElement | null>(null);
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
   const [orgStatsMap, setOrgStatsMap] = useState<Record<string, OrgCardStats>>({});
   const [statsLoading, setStatsLoading] = useState(false);
@@ -811,16 +812,48 @@ export default function OrganizationDetailView({
     [onSelectUnit, onUnitDeleted, selectedUnitId]
   );
 
+  const scrollJobsSectionIntoView = useCallback(() => {
+    if (typeof window === "undefined") return;
+    window.requestAnimationFrame(() => {
+      jobsSectionRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  }, []);
+
+  const handleOrganizationCardAction = useCallback(
+    (org: UnitItem, hasJobs: boolean) => {
+      setOrgViewTab(org.level === "department" ? "department" : "units");
+      onSelectUnit(org);
+
+      if (hasJobs) {
+        scrollJobsSectionIntoView();
+        return;
+      }
+
+      onUpload(org);
+    },
+    [onSelectUnit, onUpload, scrollJobsSectionIntoView]
+  );
+
   const renderOrganizationCard = (org: UnitItem) => {
     const active = selectedUnitId === org.id;
+    const fallbackStats = orgStatsMap[org.id];
+    const loadedIssueTotal = jobs.reduce((sum, item) => sum + (item.issue_total || 0), 0);
+    const activeHasPartialJobs = jobsTotal > 0 && jobs.length < jobsTotal;
     const liveStats = active
       ? {
-          job_count: jobs.length,
-          issue_total: jobs.reduce((sum, item) => sum + (item.issue_total || 0), 0),
-          has_issues: jobs.some((item) => (item.issue_total || 0) > 0),
+          job_count: jobsTotal || jobs.length,
+          issue_total: activeHasPartialJobs
+            ? (fallbackStats?.issue_total ?? loadedIssueTotal)
+            : loadedIssueTotal,
+          has_issues: activeHasPartialJobs
+            ? (fallbackStats?.issue_total ?? loadedIssueTotal) > 0
+            : jobs.some((item) => (item.issue_total || 0) > 0),
         }
       : undefined;
-    const stats = liveStats || orgStatsMap[org.id];
+    const stats = liveStats || fallbackStats;
     const hasKnownStats = !!stats;
     const jobCount = stats?.job_count ?? 0;
     const hasJobs = hasKnownStats ? jobCount > 0 : true;
@@ -831,17 +864,31 @@ export default function OrganizationDetailView({
     const hasProblems = orgIssueTotal > 0;
     const isDeletingThisUnit = deletingUnitId === org.id;
     const buttonLabel = !hasKnownStats
-      ? "\u67e5\u770b"
+      ? "查看任务"
       : hasJobs
-        ? (hasProblems ? "\u67e5\u770b\u95ee\u9898" : "\u67e5\u770b\u62a5\u544a")
-        : "\u5f85\u4e0a\u4f20";
+        ? "查看任务列表"
+        : "上传报告";
+    const buttonHint = !hasKnownStats
+      ? "点击后自动定位到下方任务列表"
+      : hasJobs
+        ? active
+          ? "当前已选中，点击后重新定位到下方任务列表"
+          : hasProblems
+            ? "点击后查看该组织任务及问题情况"
+            : "点击后查看该组织任务结果"
+        : "点击后直接打开当前组织上传窗口";
 
     return (
-      <div key={org.id} className={`relative flex flex-col bg-white rounded-2xl border transition-all duration-300 shadow-sm hover:shadow-md ${active ? "border-indigo-500 shadow-indigo-100" : "border-gray-200 hover:border-indigo-300"}`}>
+      <div key={org.id} className={`relative flex flex-col bg-white rounded-2xl border transition-all duration-300 shadow-sm hover:shadow-md ${active ? "border-indigo-500 shadow-indigo-100 ring-2 ring-indigo-100" : "border-gray-200 hover:border-indigo-300"}`}>
         <div className="p-5 flex-1">
           <div className="flex items-start justify-between gap-2 mb-3">
             <h3 className="font-bold text-gray-900 text-lg tracking-tight leading-snug" title={orgDisplayName}>{orgDisplayName}</h3>
             <div className="flex items-center gap-1.5">
+              {active && (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap bg-emerald-50 text-emerald-700">
+                  已选中
+                </span>
+              )}
               <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${isDepartment ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-700"}`}>{isDepartment ? "部门" : "单位"}</span>
               {isUnit && (
                 <button
@@ -873,14 +920,12 @@ export default function OrganizationDetailView({
         </div>
         <div className="px-5 pb-5 pt-2">
           <button
-            onClick={() => {
-              setOrgViewTab(org.level === "department" ? "department" : "units");
-              onSelectUnit(org);
-            }}
+            onClick={() => handleOrganizationCardAction(org, hasJobs)}
             className={`w-full py-2.5 rounded-xl font-medium text-sm transition-all duration-300 flex items-center justify-center shadow-sm ${hasJobs ? "bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-200" : "bg-amber-500 hover:bg-amber-600 text-white shadow-amber-200"}`}
           >
             {buttonLabel}
           </button>
+          <div className="mt-2 text-xs text-gray-400 text-center">{buttonHint}</div>
         </div>
       </div>
     );
@@ -898,7 +943,7 @@ export default function OrganizationDetailView({
               </div>
             </div>
             <button
-              onClick={onUpload}
+              onClick={() => onUpload(selectedUnit)}
               disabled={!selectedUnit}
               className="inline-flex items-center justify-center px-5 py-3 text-sm font-medium text-white bg-indigo-600 rounded-xl shadow-lg hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
               title={selectedUnit ? "上传到当前组织" : "请先选择部门或单位"}
@@ -959,8 +1004,8 @@ export default function OrganizationDetailView({
             )}
           </div>
 
-          <div className="bg-white/40 backdrop-blur-md rounded-2xl border border-white/20 shadow-sm overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-200 text-xs text-gray-500">第三步：查看所选组织任务列表</div>
+          <div ref={jobsSectionRef} className="bg-white/40 backdrop-blur-md rounded-2xl border border-white/20 shadow-sm overflow-hidden scroll-mt-6">
+            <div className="px-4 py-3 border-b border-gray-200 text-xs text-gray-500">第三步：查看所选组织任务列表（空组织会直接进入上传）</div>
 
             {selectedUnit && !jobsLoading && jobs.length > 0 && (
               <div className="px-4 py-3 border-b border-gray-100 bg-white/30">

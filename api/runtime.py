@@ -193,6 +193,43 @@ def read_structured_ingest_payload(job_dir: Path) -> Dict[str, Any]:
     return read_json_file(get_structured_ingest_path(job_dir), default={})
 
 
+def _enrich_job_organization_context(job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Backfill organization fields from link storage for legacy jobs."""
+    if not ORG_AVAILABLE or not isinstance(payload, dict):
+        return payload
+
+    enriched = dict(payload)
+    try:
+        storage = require_org_storage()
+        linked_org = None
+        match_type = None
+        confidence = None
+
+        link = storage.get_job_org(job_id)
+        if link is not None:
+            linked_org = storage.get_by_id(str(link.org_id))
+            match_type = getattr(link, "match_type", None)
+            confidence = getattr(link, "confidence", None)
+        elif enriched.get("organization_id") is not None:
+            linked_org = storage.get_by_id(str(enriched["organization_id"]))
+            match_type = enriched.get("organization_match_type")
+            confidence = enriched.get("organization_match_confidence")
+
+        if linked_org is None:
+            return enriched
+
+        enriched.setdefault("organization_id", linked_org.id)
+        enriched.setdefault("organization_name", linked_org.name)
+        if match_type is not None:
+            enriched.setdefault("organization_match_type", match_type)
+        if confidence is not None:
+            enriched.setdefault("organization_match_confidence", round(float(confidence), 4))
+    except Exception:
+        logger.exception("Failed to enrich organization context for job %s", job_id)
+
+    return enriched
+
+
 def extract_pdf_first_page_text(pdf_path: Path) -> str:
     """Best-effort first-page text extraction for upload-time organization matching."""
     try:
@@ -371,7 +408,10 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         if isinstance(cached_summary, dict):
             return dict(cached_summary)
 
-    status_data = read_json_file(status_file, default={})
+    status_data = _enrich_job_organization_context(
+        job_dir.name,
+        read_json_file(status_file, default={}),
+    )
 
     progress = status_data.get("progress", 0)
     status = status_data.get("status", "unknown")
@@ -812,7 +852,7 @@ def get_job_status_payload(job_id: str) -> Dict[str, Any]:
         structured = read_structured_ingest_payload(job_dir)
         if structured:
             payload.setdefault("structured_ingest", structured)
-        return payload
+        return _enrich_job_organization_context(job_id, payload)
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to read job status: {e}"

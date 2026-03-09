@@ -126,6 +126,60 @@ def test_collect_job_summary_includes_structured_ingest(tmp_path):
     assert summary["structured_sync_match_mode"] == "organization_id"
 
 
+def test_legacy_job_link_backfills_organization_context(tmp_path, monkeypatch):
+    class _DummyOrg:
+        def __init__(self, org_id: str, name: str) -> None:
+            self.id = org_id
+            self.name = name
+
+    class _DummyLink:
+        def __init__(self, org_id: str, match_type: str, confidence: float) -> None:
+            self.org_id = org_id
+            self.match_type = match_type
+            self.confidence = confidence
+
+    class _DummyStorage:
+        def get_job_org(self, job_id: str):
+            if job_id == "job-legacy":
+                return _DummyLink("org-legacy", "manual", 1.0)
+            return None
+
+        def get_by_id(self, org_id: str):
+            if org_id == "org-legacy":
+                return _DummyOrg("org-legacy", "上海市普陀区民政局")
+            return None
+
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    monkeypatch.setattr(runtime, "ORG_AVAILABLE", True)
+    monkeypatch.setattr(runtime, "require_org_storage", lambda: _DummyStorage())
+    runtime._JOB_SUMMARY_CACHE.clear()
+
+    job_dir = tmp_path / "job-legacy"
+    job_dir.mkdir(parents=True)
+    (job_dir / "status.json").write_text(
+        json.dumps(
+            {
+                "job_id": "job-legacy",
+                "status": "done",
+                "progress": 100,
+                "report_year": 2026,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    status = runtime.get_job_status_payload("job-legacy")
+    summary = runtime.collect_job_summary(job_dir)
+
+    assert status["organization_id"] == "org-legacy"
+    assert status["organization_name"] == "上海市普陀区民政局"
+    assert status["organization_match_type"] == "manual"
+    assert status["organization_match_confidence"] == 1.0
+    assert summary["organization_name"] == "上海市普陀区民政局"
+    assert summary["organization_match_type"] == "manual"
+
+
 @pytest.mark.asyncio
 async def test_start_analysis_preserves_organization_context(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
