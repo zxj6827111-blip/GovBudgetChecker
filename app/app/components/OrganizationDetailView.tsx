@@ -53,6 +53,22 @@ interface JobSummary {
   ai_issue_error?: number;
   ai_issue_warn?: number;
   ai_issue_info?: number;
+  organization_id?: string | null;
+  organization_name?: string | null;
+  organization_match_type?: string | null;
+  organization_match_confidence?: number | null;
+  structured_ingest_status?: string | null;
+  structured_document_version_id?: number | null;
+  structured_tables_count?: number | null;
+  structured_recognized_tables?: number | null;
+  structured_facts_count?: number | null;
+  structured_document_profile?: string | null;
+  review_item_count?: number;
+  low_confidence_item_count?: number;
+  structured_report_id?: string | null;
+  structured_table_data_count?: number | null;
+  structured_line_item_count?: number | null;
+  structured_sync_match_mode?: string | null;
 }
 
 interface OrgCardStats {
@@ -1048,21 +1064,85 @@ export default function OrganizationDetailView({
                       const hasAnyIssues = localHasIssues || aiHasIssues;
                       const localBadgeClass = !localParticipated ? "bg-gray-100 text-gray-500" : localHasIssues ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700";
                       const aiBadgeClass = !aiParticipated ? "bg-gray-100 text-gray-500" : aiHasIssues ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700";
+                      const structuredTablesCount = typeof job.structured_tables_count === "number" ? job.structured_tables_count : null;
+                      const structuredRecognizedTables = typeof job.structured_recognized_tables === "number" ? job.structured_recognized_tables : null;
+                      const structuredFactsCount = typeof job.structured_facts_count === "number" ? job.structured_facts_count : null;
+                      const structuredLineItemCount = typeof job.structured_line_item_count === "number" ? job.structured_line_item_count : null;
+                      const hasStructuredMetrics =
+                        structuredRecognizedTables !== null ||
+                        structuredFactsCount !== null ||
+                        structuredLineItemCount !== null;
 
                       return (
                         <tr key={job.job_id} className="group cursor-pointer hover:bg-white/70 transition-colors duration-150" onClick={() => onSelectJob(job.job_id)}>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="text-sm font-medium text-gray-900 group-hover:text-indigo-600 transition-colors">{job.filename || "未命名文件"}</div>
-                            <div className="mt-1 flex items-center gap-2 text-xs">
+                            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
                               <span className="text-gray-500 font-mono">ID: {job.job_id.slice(0, 8)}</span>
                               <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">{typeof job.report_year === "number" ? `${job.report_year}年度` : "年度未识别"}</span>
                               <span className={`inline-flex items-center px-2 py-0.5 rounded-full ${job.report_kind === "budget" ? "bg-emerald-50 text-emerald-700" : job.report_kind === "final" ? "bg-cyan-50 text-cyan-700" : "bg-gray-100 text-gray-600"}`}>{job.report_kind === "budget" ? "预算检查" : job.report_kind === "final" ? "决算检查" : "类型未识别"}</span>
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full ${job.organization_name ? "bg-slate-100 text-slate-700" : "bg-amber-100 text-amber-700"}`}>
+                                {job.organization_name ? `所属：${job.organization_name}` : "所属：未关联"}
+                              </span>
+                              {job.organization_match_type && (
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full ${job.organization_match_type === "manual" ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"}`}>
+                                  {job.organization_match_type === "manual" ? "人工绑定" : "自动匹配"}
+                                </span>
+                              )}
+                              {typeof job.organization_match_confidence === "number" && job.organization_match_confidence > 0 && (
+                                <span className="text-blue-600">
+                                  置信度 {(job.organization_match_confidence * 100).toFixed(0)}%
+                                </span>
+                              )}
                             </div>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 tabular-nums">{format(new Date(job.ts * 1000), "yyyy-MM-dd HH:mm", { locale: zhCN })}</td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="space-y-1">
                               {getStatusBadge(job)}
+                              {job.structured_ingest_status && (
+                                <div className="space-y-1">
+                                  <div className="flex flex-wrap gap-1.5">
+                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${job.structured_ingest_status === "done" ? "bg-emerald-50 text-emerald-700" : job.structured_ingest_status === "error" ? "bg-red-50 text-red-700" : "bg-gray-100 text-gray-600"}`}>
+                                      {job.structured_ingest_status === "done" ? "已结构化入库" : job.structured_ingest_status === "error" ? "入库失败" : "入库待处理"}
+                                    </span>
+                                    {(job.review_item_count || 0) > 0 && (
+                                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-700">
+                                        待复核 {job.review_item_count} 项
+                                      </span>
+                                    )}
+                                    {(job.low_confidence_item_count || 0) > 0 && (
+                                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-orange-50 text-orange-700">
+                                        低置信 {job.low_confidence_item_count} 张
+                                      </span>
+                                    )}
+                                  </div>
+                                  {hasStructuredMetrics && (
+                                    <div className="text-[11px] text-gray-500">
+                                      {structuredRecognizedTables !== null && (
+                                        <span>
+                                          识别 {structuredRecognizedTables}
+                                          {structuredTablesCount !== null ? `/${structuredTablesCount}` : ""} 表
+                                        </span>
+                                      )}
+                                      {structuredFactsCount !== null && (
+                                        <span>
+                                          {structuredRecognizedTables !== null ? " · " : ""}
+                                          facts {structuredFactsCount}
+                                        </span>
+                                      )}
+                                      {structuredLineItemCount !== null && (
+                                        <span>
+                                          {(structuredRecognizedTables !== null || structuredFactsCount !== null) ? " · " : ""}
+                                          PS 行项 {structuredLineItemCount}
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                               {normalizeJobStatus(job.status) === "done" && (
                                 <div className="space-y-1">
                                   <div className="flex flex-wrap gap-1.5">

@@ -4,6 +4,7 @@ import os
 import asyncpg
 from typing import Optional
 import logging
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,8 @@ class DatabaseConnection:
         url = database_url or os.getenv("DATABASE_URL")
         if not url:
             raise ValueError("DATABASE_URL environment variable is required")
+
+        cls._validate_database_url(url)
         
         cls._schema = os.getenv("PG_SCHEMA", "public")
         
@@ -51,6 +54,16 @@ class DatabaseConnection:
         
         logger.info("Database connection pool initialized successfully")
         return cls._pool
+
+    @classmethod
+    def _validate_database_url(cls, database_url: str) -> None:
+        parsed = urlparse(database_url)
+        password = parsed.password or ""
+        if password == "your_password":
+            raise ValueError(
+                "DATABASE_URL still uses placeholder password 'your_password'. "
+                "Please update .env with the real PostgreSQL password."
+            )
     
     @classmethod
     async def _setup_schema(cls, conn: asyncpg.Connection):

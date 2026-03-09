@@ -33,6 +33,10 @@ from api.queue_runtime import (
 from api.routes import register_routes
 
 from src.services.analyze_dual import DualModeAnalyzer
+from src.services.structured_ingest_runner import (
+    close_structured_ingest_resources,
+    run_structured_ingest,
+)
 from config.settings import get_settings
 from concurrent.futures import ThreadPoolExecutor
 
@@ -87,10 +91,13 @@ if SecurityMiddleware and runtime.security_config and runtime.security_config.en
 # ----------------------------- 工具函数 -----------------------------
 def _safe_write(job_dir: Path, payload: Dict[str, Any]) -> None:
     """将状态写入 status.json（带异常保护）"""
+    status_file = job_dir / "status.json"
     try:
-        (job_dir / "status.json").write_text(
-            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-        )
+        merged_payload = dict(payload)
+        existing = runtime.read_json_file(status_file, default={})
+        for key, value in runtime.extract_job_status_context(existing).items():
+            merged_payload.setdefault(key, value)
+        status_file.write_text(json.dumps(merged_payload, ensure_ascii=False), encoding="utf-8")
     except Exception as e:
         (job_dir / "status_error.log").write_text(str(e), encoding="utf-8")
 
@@ -179,6 +186,7 @@ async def _run_pipeline(job_dir: Path) -> None:
     """
     # 提前初始化 provider_stats，确保处理中/失败态也能返回该字段
     provider_stats: List[Dict[str, Any]] = []
+    structured_ingest_summary: Dict[str, Any] = {}
     try:
         # 读取检测模式配置
         status_file = job_dir / "status.json"
@@ -189,6 +197,8 @@ async def _run_pipeline(job_dir: Path) -> None:
         doc_type = None
         report_year = None
         report_kind = "unknown"
+        organization_id = None
+        organization_name = None
 
         if status_file.exists():
             try:
@@ -198,6 +208,8 @@ async def _run_pipeline(job_dir: Path) -> None:
                 mode = status_data.get("mode", "legacy")
                 fiscal_year = status_data.get("fiscal_year")
                 doc_type = status_data.get("doc_type")
+                organization_id = status_data.get("organization_id")
+                organization_name = status_data.get("organization_name")
                 report_year = runtime.parse_report_year(
                     status_data.get("report_year") or fiscal_year
                 )
@@ -537,6 +549,41 @@ async def _run_pipeline(job_dir: Path) -> None:
                 },
             }
 
+        if (os.getenv("DATABASE_URL") or "").strip():
+            _safe_write(
+                job_dir,
+                {
+                    "job_id": job_dir.name,
+                    "status": "processing",
+                    "progress": 98,
+                    "ts": time.time(),
+                    "use_local_rules": use_local_rules,
+                    "use_ai_assist": use_ai_assist,
+                    "mode": mode,
+                    "dual_mode_enabled": dual_mode_enabled,
+                    "stage": "结构化入库",
+                    "provider_stats": provider_stats,
+                },
+            )
+
+        structured_ingest_summary = await run_structured_ingest(
+            job_id=job_dir.name,
+            pdf_path=pdf_path,
+            metadata={
+                "organization_id": organization_id,
+                "organization_name": organization_name,
+                "fiscal_year": fiscal_year,
+                "doc_type": doc_type,
+                "report_year": report_year,
+                "report_kind": report_kind,
+                "checksum": status_data.get("checksum")
+                if "status_data" in locals() and isinstance(status_data, dict)
+                else None,
+            },
+        )
+        runtime.write_structured_ingest_payload(job_dir, structured_ingest_summary)
+        result["meta"]["structured_ingest"] = structured_ingest_summary
+
         payload = {
             "job_id": job_dir.name,
             "status": "done",
@@ -551,6 +598,7 @@ async def _run_pipeline(job_dir: Path) -> None:
             "doc_type": doc_type,
             "report_year": report_year,
             "report_kind": report_kind,
+            "structured_ingest": structured_ingest_summary,
             "stage": "完成",
         }
         _safe_write(job_dir, payload)
@@ -568,6 +616,7 @@ async def _run_pipeline(job_dir: Path) -> None:
                 "report_year": report_year,
                 "report_kind": report_kind,
                 "provider_stats": provider_stats,
+                "structured_ingest": structured_ingest_summary,
             },
         )
 
@@ -612,7 +661,9 @@ async def _startup_job_queue() -> None:
 async def _shutdown_job_queue() -> None:
     queue = runtime.get_job_queue()
     if queue is None:
+        await close_structured_ingest_resources()
         return
     await queue.stop()
     runtime.set_job_queue(None)
+    await close_structured_ingest_resources()
 

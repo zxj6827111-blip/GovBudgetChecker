@@ -1,0 +1,4851 @@
+{
+  "organizations": [
+    {
+      "id": "187f76b6686f",
+      "name": "上海市",
+      "level": "city",
+      "parent_id": null,
+      "code": null,
+      "keywords": [
+        "上海市"
+      ],
+      "created_at": 1772891626.3371701,
+      "updated_at": 1772891626.3371775
+    },
+    {
+      "id": "833e15c63a38",
+      "name": "普陀区",
+      "level": "district",
+      "parent_id": "187f76b6686f",
+      "code": null,
+      "keywords": [
+        "普陀区"
+      ],
+      "created_at": 1772891626.337296,
+      "updated_at": 1772891626.337297
+    },
+    {
+      "id": "16d2630430dc",
+      "name": "上海市普陀区民政局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9K3_AB24C980",
+      "keywords": [
+        "上海市普陀区民政局"
+      ],
+      "created_at": 1772891626.337361,
+      "updated_at": 1772891626.3373613
+    },
+    {
+      "id": "671b74dc5eb7",
+      "name": "上海市普陀区卫生健康委员会",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9K4_77290D36",
+      "keywords": [
+        "上海市普陀区卫生健康",
+        "上海市普陀区卫生健康委员会"
+      ],
+      "created_at": 1772891626.337389,
+      "updated_at": 1772891626.3373892
+    },
+    {
+      "id": "362ef2f8090e",
+      "name": "上海市普陀区文化和旅游局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9K5_D4EDD895",
+      "keywords": [
+        "上海市普陀区文化和旅游局"
+      ],
+      "created_at": 1772891626.337408,
+      "updated_at": 1772891626.3374083
+    },
+    {
+      "id": "c4ab04345a26",
+      "name": "上海市普陀区生态环境局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9K5_9EBAD786",
+      "keywords": [
+        "上海市普陀区生态环境局"
+      ],
+      "created_at": 1772891626.3374238,
+      "updated_at": 1772891626.337424
+    },
+    {
+      "id": "96b8db56f849",
+      "name": "上海市公安局普陀分局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9K5_872A0AD4",
+      "keywords": [
+        "上海市公安局普陀分局"
+      ],
+      "created_at": 1772891626.337439,
+      "updated_at": 1772891626.3374393
+    },
+    {
+      "id": "e357c45fa2c4",
+      "name": "上海市普陀区财政局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9K6_3B0A8F3E",
+      "keywords": [
+        "上海市普陀区财政局"
+      ],
+      "created_at": 1772891626.337461,
+      "updated_at": 1772891626.3374612
+    },
+    {
+      "id": "5615d83ac0a9",
+      "name": "上海市普陀区人民政府万里街道办事处",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9K6_4779BA23",
+      "keywords": [
+        "上海市普陀区人民政府万里街道",
+        "上海市普陀区人民政府万里街道办事处"
+      ],
+      "created_at": 1772891626.3374956,
+      "updated_at": 1772891626.3374958
+    },
+    {
+      "id": "c18b6059abf5",
+      "name": "上海市普陀区人民政府宜川路街道办事处",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9K7_ACED4D54",
+      "keywords": [
+        "上海市普陀区人民政府宜川路街道",
+        "上海市普陀区人民政府宜川路街道办事处"
+      ],
+      "created_at": 1772891626.3375156,
+      "updated_at": 1772891626.3375158
+    },
+    {
+      "id": "4cfa7fa6b9ee",
+      "name": "上海市普陀区人民政府长风新村街道办事处",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9K8_9B2914D3",
+      "keywords": [
+        "上海市普陀区人民政府长风新村街道",
+        "上海市普陀区人民政府长风新村街道办事处"
+      ],
+      "created_at": 1772891626.3375795,
+      "updated_at": 1772891626.3375797
+    },
+    {
+      "id": "25f17f9db657",
+      "name": "上海市普陀区人民政府甘泉路街道办事处",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9K8_EC89054E",
+      "keywords": [
+        "上海市普陀区人民政府甘泉路街道",
+        "上海市普陀区人民政府甘泉路街道办事处"
+      ],
+      "created_at": 1772891626.3375993,
+      "updated_at": 1772891626.3375995
+    },
+    {
+      "id": "31ec43cf82a8",
+      "name": "上海市普陀区人民政府石泉路街道办事处",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9K9_FC4E6210",
+      "keywords": [
+        "上海市普陀区人民政府石泉路街道",
+        "上海市普陀区人民政府石泉路街道办事处"
+      ],
+      "created_at": 1772891626.3376162,
+      "updated_at": 1772891626.3376164
+    },
+    {
+      "id": "f940086acbb7",
+      "name": "上海市普陀区人民政府长寿路街道办事处",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9K9_06A3A358",
+      "keywords": [
+        "上海市普陀区人民政府长寿路街道",
+        "上海市普陀区人民政府长寿路街道办事处"
+      ],
+      "created_at": 1772891626.3376343,
+      "updated_at": 1772891626.3376346
+    },
+    {
+      "id": "286f2f5c1d43",
+      "name": "上海市普陀区人民政府曹杨新村街道办事处",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9K9_14D84665",
+      "keywords": [
+        "上海市普陀区人民政府曹杨新村街道",
+        "上海市普陀区人民政府曹杨新村街道办事处"
+      ],
+      "created_at": 1772891626.337652,
+      "updated_at": 1772891626.3376522
+    },
+    {
+      "id": "5b13580c3a50",
+      "name": "上海市普陀区人民政府真如镇街道办事处",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KA_A2CE2BB8",
+      "keywords": [
+        "上海市普陀区人民政府真如镇街道",
+        "上海市普陀区人民政府真如镇街道办事处"
+      ],
+      "created_at": 1772891626.3376749,
+      "updated_at": 1772891626.337675
+    },
+    {
+      "id": "ea4467ee3671",
+      "name": "上海市普陀区住房保障和房屋管理局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KA_AE916134",
+      "keywords": [
+        "上海市普陀区住房保障和房屋管理局"
+      ],
+      "created_at": 1772891626.3376908,
+      "updated_at": 1772891626.337691
+    },
+    {
+      "id": "fe610572ee6c",
+      "name": "上海市普陀区建设和管理委员会",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KB_29FE63D2",
+      "keywords": [
+        "上海市普陀区建设和管理",
+        "上海市普陀区建设和管理委员会"
+      ],
+      "created_at": 1772891626.3377135,
+      "updated_at": 1772891626.3377137
+    },
+    {
+      "id": "954f500e3082",
+      "name": "上海市普陀区国防动员办公室",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KB_71C0153E",
+      "keywords": [
+        "上海市普陀区国防动员",
+        "上海市普陀区国防动员办公室"
+      ],
+      "created_at": 1772891626.3377311,
+      "updated_at": 1772891626.3377311
+    },
+    {
+      "id": "8f773936806d",
+      "name": "上海市普陀区规划和自然资源局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KC_46694122",
+      "keywords": [
+        "上海市普陀区规划和自然资源局"
+      ],
+      "created_at": 1772891626.3377476,
+      "updated_at": 1772891626.3377478
+    },
+    {
+      "id": "006f2739940a",
+      "name": "上海市普陀区绿化和市容管理局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KC_5859E754",
+      "keywords": [
+        "上海市普陀区绿化和市容管理局"
+      ],
+      "created_at": 1772891626.3377638,
+      "updated_at": 1772891626.337764
+    },
+    {
+      "id": "2d41e52e07c9",
+      "name": "上海市普陀区教育局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KD_FB8A9885",
+      "keywords": [
+        "上海市普陀区教育局"
+      ],
+      "created_at": 1772891626.3377795,
+      "updated_at": 1772891626.3377798
+    },
+    {
+      "id": "b9b122147a17",
+      "name": "上海市普陀区科学技术委员会",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KD_3217820C",
+      "keywords": [
+        "上海市普陀区科学技术",
+        "上海市普陀区科学技术委员会"
+      ],
+      "created_at": 1772891626.3377986,
+      "updated_at": 1772891626.3377988
+    },
+    {
+      "id": "7875c96c9903",
+      "name": "上海市普陀区消费者权益保护委员会秘书处",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KD_62431562",
+      "keywords": [
+        "上海市普陀区消费者权益保护委员会秘书处"
+      ],
+      "created_at": 1772891626.3378172,
+      "updated_at": 1772891626.3378174
+    },
+    {
+      "id": "1f8dc040e7fb",
+      "name": "上海市普陀区归国华侨联合会",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KE_CB0C1AFB",
+      "keywords": [
+        "上海市普陀区归国华侨联合会"
+      ],
+      "created_at": 1772891626.3378406,
+      "updated_at": 1772891626.3378408
+    },
+    {
+      "id": "c91602500fcc",
+      "name": "上海市普陀区工商业联合会",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KF_85A6E082",
+      "keywords": [
+        "上海市普陀区工商业联合会"
+      ],
+      "created_at": 1772891626.3378599,
+      "updated_at": 1772891626.33786
+    },
+    {
+      "id": "fe11008b3e22",
+      "name": "上海市普陀区人民代表大会常务委员会办公室",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KF_0FDD7D15",
+      "keywords": [
+        "上海市普陀区人民代表大会常务委员会",
+        "上海市普陀区人民代表大会常务委员会办公室"
+      ],
+      "created_at": 1772891626.337884,
+      "updated_at": 1772891626.3378844
+    },
+    {
+      "id": "23ad6f5800e4",
+      "name": "中国人民政治协商会议上海市普陀区委员会办公室",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KG_2EC5F868",
+      "keywords": [
+        "中国人民政治协商会议上海市普陀区委员会",
+        "中国人民政治协商会议上海市普陀区委员会办公室"
+      ],
+      "created_at": 1772891626.3379097,
+      "updated_at": 1772891626.33791
+    },
+    {
+      "id": "a163b0535cc4",
+      "name": "上海市普陀区机关事务管理局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KG_DDF6957F",
+      "keywords": [
+        "上海市普陀区机关事务管理局"
+      ],
+      "created_at": 1772891626.3379304,
+      "updated_at": 1772891626.3379304
+    },
+    {
+      "id": "30b9fe685f08",
+      "name": "上海市普陀区发展和改革委员会",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KG_34173C7A",
+      "keywords": [
+        "上海市普陀区发展和改革",
+        "上海市普陀区发展和改革委员会"
+      ],
+      "created_at": 1772891626.3379483,
+      "updated_at": 1772891626.3379486
+    },
+    {
+      "id": "4c7be67d2212",
+      "name": "上海市普陀区审计局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KH_E99C4E18",
+      "keywords": [
+        "上海市普陀区审计局"
+      ],
+      "created_at": 1772891626.337965,
+      "updated_at": 1772891626.3379653
+    },
+    {
+      "id": "3ccfa923317d",
+      "name": "中共上海市普陀区委社会工作部",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KH_0CDCB4EE",
+      "keywords": [
+        "中共上海市普陀区委社会工作部"
+      ],
+      "created_at": 1772891626.337981,
+      "updated_at": 1772891626.337981
+    },
+    {
+      "id": "39bf45020b25",
+      "name": "中共上海市普陀区纪律检查委员会",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KI_4EEBE162",
+      "keywords": [
+        "中共上海市普陀区纪律检查",
+        "中共上海市普陀区纪律检查委员会"
+      ],
+      "created_at": 1772891626.3380036,
+      "updated_at": 1772891626.3380039
+    },
+    {
+      "id": "bca04257b6d9",
+      "name": "上海市普陀区商务委员会",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KI_D08B8F20",
+      "keywords": [
+        "上海市普陀区商务",
+        "上海市普陀区商务委员会"
+      ],
+      "created_at": 1772891626.338021,
+      "updated_at": 1772891626.338021
+    },
+    {
+      "id": "6b9af6869046",
+      "name": "上海市普陀区民族和宗教事务办公室",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KI_646D7BFF",
+      "keywords": [
+        "上海市普陀区民族和宗教事务",
+        "上海市普陀区民族和宗教事务办公室"
+      ],
+      "created_at": 1772891626.338037,
+      "updated_at": 1772891626.3380373
+    },
+    {
+      "id": "3ed1ea688524",
+      "name": "上海市普陀区档案局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KJ_2852C29B",
+      "keywords": [
+        "上海市普陀区档案局"
+      ],
+      "created_at": 1772891626.3380527,
+      "updated_at": 1772891626.3380532
+    },
+    {
+      "id": "43bb21232f1f",
+      "name": "中共上海市普陀区委员会办公室",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KJ_1EB4807B",
+      "keywords": [
+        "中共上海市普陀区委员会",
+        "中共上海市普陀区委员会办公室"
+      ],
+      "created_at": 1772891626.3380682,
+      "updated_at": 1772891626.3380685
+    },
+    {
+      "id": "07089907397c",
+      "name": "中共上海市普陀区区级机关工作委员会",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KJ_1D763B12",
+      "keywords": [
+        "中共上海市普陀区区级机关工作",
+        "中共上海市普陀区区级机关工作委员会"
+      ],
+      "created_at": 1772891626.3380864,
+      "updated_at": 1772891626.3380866
+    },
+    {
+      "id": "f71e86dbde27",
+      "name": "中共上海市普陀区委员会组织部",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KK_1F24E316",
+      "keywords": [
+        "中共上海市普陀区委员会组织部"
+      ],
+      "created_at": 1772891626.3381014,
+      "updated_at": 1772891626.3381019
+    },
+    {
+      "id": "2e9873d2fd1f",
+      "name": "中国共产党上海市普陀区委员会宣传部",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KK_78505ADC",
+      "keywords": [
+        "中国共产党上海市普陀区委员会宣传部"
+      ],
+      "created_at": 1772891626.3381176,
+      "updated_at": 1772891626.3381178
+    },
+    {
+      "id": "a7ecd3d21e59",
+      "name": "中国共产主义青年团上海市普陀区委员会",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KL_E555A578",
+      "keywords": [
+        "中国共产主义青年团上海市普陀区",
+        "中国共产主义青年团上海市普陀区委员会"
+      ],
+      "created_at": 1772891626.3381388,
+      "updated_at": 1772891626.3381388
+    },
+    {
+      "id": "4f7742d0d2e3",
+      "name": "上海市普陀区总工会",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KL_BC657E03",
+      "keywords": [
+        "上海市普陀区总工会"
+      ],
+      "created_at": 1772891626.3381553,
+      "updated_at": 1772891626.3381555
+    },
+    {
+      "id": "4e4182157540",
+      "name": "上海市普陀区司法局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KL_1C89C79E",
+      "keywords": [
+        "上海市普陀区司法局"
+      ],
+      "created_at": 1772891626.3381705,
+      "updated_at": 1772891626.3381708
+    },
+    {
+      "id": "1c5a80e4a3c7",
+      "name": "上海市普陀区社会主义学院",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KM_0EE98F26",
+      "keywords": [
+        "上海市普陀区社会主义学院"
+      ],
+      "created_at": 1772891626.3381875,
+      "updated_at": 1772891626.3381875
+    },
+    {
+      "id": "c1ae76b1b782",
+      "name": "上海市普陀区红十字会",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KM_08EB32D0",
+      "keywords": [
+        "上海市普陀区红十字会"
+      ],
+      "created_at": 1772891626.3382118,
+      "updated_at": 1772891626.338212
+    },
+    {
+      "id": "8cccc4ac268a",
+      "name": "上海市普陀区应急管理局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KN_15D67083",
+      "keywords": [
+        "上海市普陀区应急管理局"
+      ],
+      "created_at": 1772891626.3382847,
+      "updated_at": 1772891626.3382852
+    },
+    {
+      "id": "129d20ef545c",
+      "name": "上海市普陀区国有资产监督管理委员会",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KN_5F8033F0",
+      "keywords": [
+        "上海市普陀区国有资产监督管理",
+        "上海市普陀区国有资产监督管理委员会"
+      ],
+      "created_at": 1772891626.3383222,
+      "updated_at": 1772891626.3383224
+    },
+    {
+      "id": "8027bb49f3f7",
+      "name": "上海市普陀区人力资源和社会保障局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KO_CD22D89F",
+      "keywords": [
+        "上海市普陀区人力资源和社会保障局"
+      ],
+      "created_at": 1772891626.3383396,
+      "updated_at": 1772891626.3383396
+    },
+    {
+      "id": "43e6ad7d206d",
+      "name": "普陀区残疾人联合会",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KO_F0FDB81E",
+      "keywords": [
+        "普陀区残疾人联合会"
+      ],
+      "created_at": 1772891626.3383582,
+      "updated_at": 1772891626.3383586
+    },
+    {
+      "id": "4aec3d5304cf",
+      "name": "中共上海市普陀区委统一战线工作部",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KP_ACFAB32A",
+      "keywords": [
+        "中共上海市普陀区委统一战线工作部"
+      ],
+      "created_at": 1772891626.338378,
+      "updated_at": 1772891626.338379
+    },
+    {
+      "id": "3c8578a9f1d9",
+      "name": "中国共产党上海市普陀区委老干部局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KP_5A783ABA",
+      "keywords": [
+        "中国共产党上海市普陀区委老干部局"
+      ],
+      "created_at": 1772891626.3384018,
+      "updated_at": 1772891626.338402
+    },
+    {
+      "id": "97d79fe45e0d",
+      "name": "上海市普陀区妇女联合会",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KP_B6B42872",
+      "keywords": [
+        "上海市普陀区妇女联合会"
+      ],
+      "created_at": 1772891626.338422,
+      "updated_at": 1772891626.3384225
+    },
+    {
+      "id": "97679cfbfe5b",
+      "name": "上海市普陀区投资促进办公室",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KQ_064E4AC5",
+      "keywords": [
+        "上海市普陀区投资促进",
+        "上海市普陀区投资促进办公室"
+      ],
+      "created_at": 1772891626.338444,
+      "updated_at": 1772891626.3384445
+    },
+    {
+      "id": "06380ff4dedf",
+      "name": "上海市普陀区城市运行管理中心",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KQ_FF04D8C0",
+      "keywords": [
+        "上海市普陀区城市运行管理中心"
+      ],
+      "created_at": 1772891626.3384645,
+      "updated_at": 1772891626.3384647
+    },
+    {
+      "id": "fd4fd019405d",
+      "name": "上海市普陀区市场监督管理局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KQ_1C221D06",
+      "keywords": [
+        "上海市普陀区市场监督管理局"
+      ],
+      "created_at": 1772891626.3384948,
+      "updated_at": 1772891626.338495
+    },
+    {
+      "id": "7b448660788c",
+      "name": "上海市普陀区政务服务中心",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KR_D1070519",
+      "keywords": [
+        "上海市普陀区政务服务中心"
+      ],
+      "created_at": 1772891626.338512,
+      "updated_at": 1772891626.338512
+    },
+    {
+      "id": "468ceb073c0b",
+      "name": "上海市普陀区信访办公室",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KR_B164F535",
+      "keywords": [
+        "上海市普陀区信访",
+        "上海市普陀区信访办公室"
+      ],
+      "created_at": 1772891626.3385308,
+      "updated_at": 1772891626.338531
+    },
+    {
+      "id": "2041ea251bc8",
+      "name": "上海市普陀区统计局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KS_6B419462",
+      "keywords": [
+        "上海市普陀区统计局"
+      ],
+      "created_at": 1772891626.3385503,
+      "updated_at": 1772891626.3385506
+    },
+    {
+      "id": "d03f79e9da89",
+      "name": "上海市普陀区医疗保障局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KS_D83A37AA",
+      "keywords": [
+        "上海市普陀区医疗保障局"
+      ],
+      "created_at": 1772891626.3385723,
+      "updated_at": 1772891626.3385725
+    },
+    {
+      "id": "4b7d67c526f7",
+      "name": "上海市普陀区退役军人事务局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KT_354392B9",
+      "keywords": [
+        "上海市普陀区退役军人事务局"
+      ],
+      "created_at": 1772891626.3385978,
+      "updated_at": 1772891626.3385983
+    },
+    {
+      "id": "53e08eea2bf0",
+      "name": "上海市普陀区大数据中心",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KT_F37F61A2",
+      "keywords": [
+        "上海市普陀区大数据中心"
+      ],
+      "created_at": 1772891626.338617,
+      "updated_at": 1772891626.3386176
+    },
+    {
+      "id": "db5d5e76a65f",
+      "name": "上海市普陀区政法事务管理中心",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KW_476DB93B",
+      "keywords": [
+        "上海市普陀区政法事务管理中心"
+      ],
+      "created_at": 1772891626.3386395,
+      "updated_at": 1772891626.33864
+    },
+    {
+      "id": "065a59d1eded",
+      "name": "上海市普陀区数据局",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KW_061F1386",
+      "keywords": [
+        "上海市普陀区数据局"
+      ],
+      "created_at": 1772891626.338664,
+      "updated_at": 1772891626.3386643
+    },
+    {
+      "id": "65154bbe41c2",
+      "name": "上海市普陀区长征镇人民政府",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KX_7294C314",
+      "keywords": [
+        "上海市普陀区长征镇",
+        "上海市普陀区长征镇人民政府"
+      ],
+      "created_at": 1772891626.3386865,
+      "updated_at": 1772891626.3386867
+    },
+    {
+      "id": "e12b38d77365",
+      "name": "上海市普陀区桃浦镇人民政府",
+      "level": "department",
+      "parent_id": "833e15c63a38",
+      "code": "DEPT_MLYYK9KX_7754E10C",
+      "keywords": [
+        "上海市普陀区桃浦镇",
+        "上海市普陀区桃浦镇人民政府"
+      ],
+      "created_at": 1772891626.3387096,
+      "updated_at": 1772891626.3387098
+    },
+    {
+      "id": "3b52664dfe6f",
+      "name": "上海市公安局普陀分局",
+      "level": "unit",
+      "parent_id": "96b8db56f849",
+      "code": "UNIT_MLYYK9LJ_83292385",
+      "keywords": [
+        "上海市公安局普陀分局"
+      ],
+      "created_at": 1772891626.3390844,
+      "updated_at": 1772891626.3390853
+    },
+    {
+      "id": "1a84c1266832",
+      "name": "上海市普陀区人力资源和社会保障局本级",
+      "level": "unit",
+      "parent_id": "8027bb49f3f7",
+      "code": "UNIT_MLYYK9OE_A9ABE0D8",
+      "keywords": [
+        "上海市普陀区人力资源和社会保障局本级"
+      ],
+      "created_at": 1772891626.3391345,
+      "updated_at": 1772891626.3391347
+    },
+    {
+      "id": "a506a85683e6",
+      "name": "上海市普陀区人民代表大会常务委员会办公室",
+      "level": "unit",
+      "parent_id": "fe11008b3e22",
+      "code": "UNIT_MLYYK9O3_52C27372",
+      "keywords": [
+        "上海市普陀区人民代表大会常务委员会",
+        "上海市普陀区人民代表大会常务委员会办公室"
+      ],
+      "created_at": 1772891626.3391657,
+      "updated_at": 1772891626.3391662
+    },
+    {
+      "id": "4f5e28e38b3a",
+      "name": "上海市普陀区人民政府万里街道办事处本级",
+      "level": "unit",
+      "parent_id": "5615d83ac0a9",
+      "code": "UNIT_MLYYK9LK_6BC2A797",
+      "keywords": [
+        "上海市普陀区人民政府万里街道办事处本级"
+      ],
+      "created_at": 1772891626.3391888,
+      "updated_at": 1772891626.3391895
+    },
+    {
+      "id": "c2a71b0a8a46",
+      "name": "上海市普陀区人民政府宜川路街道办事处本级",
+      "level": "unit",
+      "parent_id": "c18b6059abf5",
+      "code": "UNIT_MLYYK9LO_4D866F39",
+      "keywords": [
+        "上海市普陀区人民政府宜川路街道办事处本级"
+      ],
+      "created_at": 1772891626.3392086,
+      "updated_at": 1772891626.3392088
+    },
+    {
+      "id": "56864aa91c39",
+      "name": "上海市普陀区人民政府曹杨新村街道办事处本级",
+      "level": "unit",
+      "parent_id": "286f2f5c1d43",
+      "code": "UNIT_MLYYK9M0_5E8C2B82",
+      "keywords": [
+        "上海市普陀区人民政府曹杨新村街道办事处本级"
+      ],
+      "created_at": 1772891626.3392386,
+      "updated_at": 1772891626.3392391
+    },
+    {
+      "id": "a3861a1fe6b1",
+      "name": "上海市普陀区人民政府甘泉路街道办事处本级",
+      "level": "unit",
+      "parent_id": "25f17f9db657",
+      "code": "UNIT_MLYYK9LT_71F34B83",
+      "keywords": [
+        "上海市普陀区人民政府甘泉路街道办事处本级"
+      ],
+      "created_at": 1772891626.3392653,
+      "updated_at": 1772891626.339266
+    },
+    {
+      "id": "623c822137bf",
+      "name": "上海市普陀区人民政府真如镇街道办事处本级",
+      "level": "unit",
+      "parent_id": "5b13580c3a50",
+      "code": "UNIT_MLYYK9M3_29E54F9E",
+      "keywords": [
+        "上海市普陀区人民政府真如镇街道办事处本级"
+      ],
+      "created_at": 1772891626.3392828,
+      "updated_at": 1772891626.339283
+    },
+    {
+      "id": "aeee45069d53",
+      "name": "上海市普陀区人民政府石泉路街道办事处本级",
+      "level": "unit",
+      "parent_id": "31ec43cf82a8",
+      "code": "UNIT_MLYYK9LV_93FC6B42",
+      "keywords": [
+        "上海市普陀区人民政府石泉路街道办事处本级"
+      ],
+      "created_at": 1772891626.3393083,
+      "updated_at": 1772891626.3393085
+    },
+    {
+      "id": "2e8d86b98d22",
+      "name": "上海市普陀区人民政府长寿路街道办事处本级",
+      "level": "unit",
+      "parent_id": "f940086acbb7",
+      "code": "UNIT_MLYYK9LY_0622DB16",
+      "keywords": [
+        "上海市普陀区人民政府长寿路街道办事处本级"
+      ],
+      "created_at": 1772891626.3393228,
+      "updated_at": 1772891626.339323
+    },
+    {
+      "id": "86327d255141",
+      "name": "上海市普陀区人民政府长风新村街道办事处本级",
+      "level": "unit",
+      "parent_id": "4cfa7fa6b9ee",
+      "code": "UNIT_MLYYK9LQ_6B9ECBBE",
+      "keywords": [
+        "上海市普陀区人民政府长风新村街道办事处本级"
+      ],
+      "created_at": 1772891626.3393435,
+      "updated_at": 1772891626.3393445
+    },
+    {
+      "id": "6624b16bcb72",
+      "name": "上海市普陀区住房保障和房屋管理局本级",
+      "level": "unit",
+      "parent_id": "ea4467ee3671",
+      "code": "UNIT_MLYYK9M5_9C20B78F",
+      "keywords": [
+        "上海市普陀区住房保障和房屋管理局本级"
+      ],
+      "created_at": 1772891626.3393724,
+      "updated_at": 1772891626.3393729
+    },
+    {
+      "id": "dcbc62b96806",
+      "name": "上海市普陀区信访办公室",
+      "level": "unit",
+      "parent_id": "468ceb073c0b",
+      "code": "UNIT_MLYYK9OK_713A91D9",
+      "keywords": [
+        "上海市普陀区信访",
+        "上海市普陀区信访办公室"
+      ],
+      "created_at": 1772891626.339408,
+      "updated_at": 1772891626.3394082
+    },
+    {
+      "id": "713dc4619b4f",
+      "name": "上海市普陀区医疗保障局本级",
+      "level": "unit",
+      "parent_id": "d03f79e9da89",
+      "code": "UNIT_MLYYK9OL_B798C58B",
+      "keywords": [
+        "上海市普陀区医疗保障局本级"
+      ],
+      "created_at": 1772891626.3394303,
+      "updated_at": 1772891626.3394306
+    },
+    {
+      "id": "7763f6796a63",
+      "name": "上海市普陀区卫生健康委员会本级",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L3_9CED306E",
+      "keywords": [
+        "上海市普陀区卫生健康委员会本级"
+      ],
+      "created_at": 1772891626.339472,
+      "updated_at": 1772891626.3394723
+    },
+    {
+      "id": "dfc4760a1443",
+      "name": "上海市普陀区发展和改革委员会",
+      "level": "unit",
+      "parent_id": "30b9fe685f08",
+      "code": "UNIT_MLYYK9O4_5DDDF712",
+      "keywords": [
+        "上海市普陀区发展和改革",
+        "上海市普陀区发展和改革委员会"
+      ],
+      "created_at": 1772891626.3395228,
+      "updated_at": 1772891626.3395228
+    },
+    {
+      "id": "9cdc4076329b",
+      "name": "上海市普陀区司法局本级",
+      "level": "unit",
+      "parent_id": "4e4182157540",
+      "code": "UNIT_MLYYK9OB_332B76FF",
+      "keywords": [
+        "上海市普陀区司法局本级"
+      ],
+      "created_at": 1772891626.3395512,
+      "updated_at": 1772891626.3395514
+    },
+    {
+      "id": "2df7a8135f4c",
+      "name": "上海市普陀区商务委员会",
+      "level": "unit",
+      "parent_id": "bca04257b6d9",
+      "code": "UNIT_MLYYK9O6_BB83BFB2",
+      "keywords": [
+        "上海市普陀区商务",
+        "上海市普陀区商务委员会"
+      ],
+      "created_at": 1772891626.339574,
+      "updated_at": 1772891626.3395746
+    },
+    {
+      "id": "92835d146aff",
+      "name": "上海市普陀区国有资产监督管理委员会",
+      "level": "unit",
+      "parent_id": "129d20ef545c",
+      "code": "UNIT_MLYYK9OE_3358BE45",
+      "keywords": [
+        "上海市普陀区国有资产监督管理",
+        "上海市普陀区国有资产监督管理委员会"
+      ],
+      "created_at": 1772891626.3396053,
+      "updated_at": 1772891626.3396056
+    },
+    {
+      "id": "8bc657d37604",
+      "name": "上海市普陀区国防动员办公室",
+      "level": "unit",
+      "parent_id": "954f500e3082",
+      "code": "UNIT_MLYYK9MA_C1A08DC0",
+      "keywords": [
+        "上海市普陀区国防动员",
+        "上海市普陀区国防动员办公室"
+      ],
+      "created_at": 1772891626.339632,
+      "updated_at": 1772891626.339632
+    },
+    {
+      "id": "3c98edaec8cc",
+      "name": "上海市普陀区城市运行管理中心",
+      "level": "unit",
+      "parent_id": "06380ff4dedf",
+      "code": "UNIT_MLYYK9OJ_73E6565C",
+      "keywords": [
+        "上海市普陀区城市运行管理中心"
+      ],
+      "created_at": 1772891626.3396556,
+      "updated_at": 1772891626.3396559
+    },
+    {
+      "id": "2b1c89ea2138",
+      "name": "上海市普陀区大数据中心",
+      "level": "unit",
+      "parent_id": "53e08eea2bf0",
+      "code": "UNIT_MLYYK9ON_4F6ACAB7",
+      "keywords": [
+        "上海市普陀区大数据中心"
+      ],
+      "created_at": 1772891626.3396804,
+      "updated_at": 1772891626.3396807
+    },
+    {
+      "id": "4b6a1f98ee3f",
+      "name": "上海市普陀区妇女联合会",
+      "level": "unit",
+      "parent_id": "97d79fe45e0d",
+      "code": "UNIT_MLYYK9OH_FAFA5731",
+      "keywords": [
+        "上海市普陀区妇女联合会"
+      ],
+      "created_at": 1772891626.3396978,
+      "updated_at": 1772891626.339698
+    },
+    {
+      "id": "8958ef2e8766",
+      "name": "上海市普陀区审计局",
+      "level": "unit",
+      "parent_id": "4c7be67d2212",
+      "code": "UNIT_MLYYK9O4_2CC88F39",
+      "keywords": [
+        "上海市普陀区审计局"
+      ],
+      "created_at": 1772891626.339721,
+      "updated_at": 1772891626.3397212
+    },
+    {
+      "id": "35f848bc0e0e",
+      "name": "上海市普陀区工商业联合会",
+      "level": "unit",
+      "parent_id": "c91602500fcc",
+      "code": "UNIT_MLYYK9O2_E961F292",
+      "keywords": [
+        "上海市普陀区工商业联合会"
+      ],
+      "created_at": 1772891626.3397489,
+      "updated_at": 1772891626.3397493
+    },
+    {
+      "id": "aae6e8946712",
+      "name": "上海市普陀区市场监督管理局",
+      "level": "unit",
+      "parent_id": "fd4fd019405d",
+      "code": "UNIT_MLYYK9OJ_CBB6FF3E",
+      "keywords": [
+        "上海市普陀区市场监督管理局"
+      ],
+      "created_at": 1772891626.3397708,
+      "updated_at": 1772891626.339771
+    },
+    {
+      "id": "601a60291bec",
+      "name": "上海市普陀区应急管理局",
+      "level": "unit",
+      "parent_id": "8cccc4ac268a",
+      "code": "UNIT_MLYYK9OC_D8DC3DE6",
+      "keywords": [
+        "上海市普陀区应急管理局"
+      ],
+      "created_at": 1772891626.3397934,
+      "updated_at": 1772891626.339794
+    },
+    {
+      "id": "abc366e47419",
+      "name": "上海市普陀区建设和管理委员会本级",
+      "level": "unit",
+      "parent_id": "fe610572ee6c",
+      "code": "UNIT_MLYYK9M8_C7710A08",
+      "keywords": [
+        "上海市普陀区建设和管理委员会本级"
+      ],
+      "created_at": 1772891626.339818,
+      "updated_at": 1772891626.3398182
+    },
+    {
+      "id": "3159bd02d9d2",
+      "name": "上海市普陀区归国华侨联合会",
+      "level": "unit",
+      "parent_id": "1f8dc040e7fb",
+      "code": "UNIT_MLYYK9O2_8A96E024",
+      "keywords": [
+        "上海市普陀区归国华侨联合会"
+      ],
+      "created_at": 1772891626.3398519,
+      "updated_at": 1772891626.339852
+    },
+    {
+      "id": "1a873bb608b3",
+      "name": "上海市普陀区总工会本级",
+      "level": "unit",
+      "parent_id": "4f7742d0d2e3",
+      "code": "UNIT_MLYYK9OA_63B7E719",
+      "keywords": [
+        "上海市普陀区总工会本级"
+      ],
+      "created_at": 1772891626.3398778,
+      "updated_at": 1772891626.339878
+    },
+    {
+      "id": "3fac7a1f0199",
+      "name": "上海市普陀区投资促进办公室本级",
+      "level": "unit",
+      "parent_id": "97679cfbfe5b",
+      "code": "UNIT_MLYYK9OI_EB999F7F",
+      "keywords": [
+        "上海市普陀区投资促进办公室本级"
+      ],
+      "created_at": 1772891626.3398952,
+      "updated_at": 1772891626.3398955
+    },
+    {
+      "id": "3090fd96d77c",
+      "name": "上海市普陀区政务服务中心",
+      "level": "unit",
+      "parent_id": "7b448660788c",
+      "code": "UNIT_MLYYK9OJ_46CD39AA",
+      "keywords": [
+        "上海市普陀区政务服务中心"
+      ],
+      "created_at": 1772891626.3399127,
+      "updated_at": 1772891626.3399127
+    },
+    {
+      "id": "5fa97912b298",
+      "name": "上海市普陀区政法事务管理中心",
+      "level": "unit",
+      "parent_id": "db5d5e76a65f",
+      "code": "UNIT_MLYYK9ON_41DD808C",
+      "keywords": [
+        "上海市普陀区政法事务管理中心"
+      ],
+      "created_at": 1772891626.33993,
+      "updated_at": 1772891626.3399303
+    },
+    {
+      "id": "6866e0495074",
+      "name": "上海市普陀区教育局本级",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MF_AE96214B",
+      "keywords": [
+        "上海市普陀区教育局本级"
+      ],
+      "created_at": 1772891626.339954,
+      "updated_at": 1772891626.3399541
+    },
+    {
+      "id": "df926e0c4cc4",
+      "name": "上海市普陀区数据局",
+      "level": "unit",
+      "parent_id": "065a59d1eded",
+      "code": "UNIT_MLYYK9ON_9DB0E14E",
+      "keywords": [
+        "上海市普陀区数据局"
+      ],
+      "created_at": 1772891626.339973,
+      "updated_at": 1772891626.3399732
+    },
+    {
+      "id": "e6d87d4a94a5",
+      "name": "上海市普陀区文化馆",
+      "level": "unit",
+      "parent_id": "362ef2f8090e",
+      "code": "UNIT_MLYYK9LC_97EA13EC",
+      "keywords": [
+        "上海市普陀区文化馆"
+      ],
+      "created_at": 1772891626.3399904,
+      "updated_at": 1772891626.3399906
+    },
+    {
+      "id": "72462f34f2b8",
+      "name": "上海市普陀区机关事务管理局",
+      "level": "unit",
+      "parent_id": "a163b0535cc4",
+      "code": "UNIT_MLYYK9O4_7A5F3DBE",
+      "keywords": [
+        "上海市普陀区机关事务管理局"
+      ],
+      "created_at": 1772891626.340007,
+      "updated_at": 1772891626.3400073
+    },
+    {
+      "id": "95840179592d",
+      "name": "上海市普陀区桃浦镇人民政府（本部）",
+      "level": "unit",
+      "parent_id": "e12b38d77365",
+      "code": "UNIT_MLYYK9OS_294FAF35",
+      "keywords": [
+        "上海市普陀区桃浦镇人民政府（本部）"
+      ],
+      "created_at": 1772891626.3400419,
+      "updated_at": 1772891626.3400424
+    },
+    {
+      "id": "80be41dba5cb",
+      "name": "上海市普陀区档案局本级",
+      "level": "unit",
+      "parent_id": "3ed1ea688524",
+      "code": "UNIT_MLYYK9O6_D55B42AF",
+      "keywords": [
+        "上海市普陀区档案局本级"
+      ],
+      "created_at": 1772891626.3400667,
+      "updated_at": 1772891626.340067
+    },
+    {
+      "id": "3c72db26535a",
+      "name": "上海市普陀区民政局本级",
+      "level": "unit",
+      "parent_id": "16d2630430dc",
+      "code": "UNIT_MLYYK9L0_E61D580A",
+      "keywords": [
+        "上海市普陀区民政局本级"
+      ],
+      "created_at": 1772891626.3400843,
+      "updated_at": 1772891626.3400846
+    },
+    {
+      "id": "8dcb57b03add",
+      "name": "上海市普陀区民族和宗教事务办公室",
+      "level": "unit",
+      "parent_id": "6b9af6869046",
+      "code": "UNIT_MLYYK9O6_01379191",
+      "keywords": [
+        "上海市普陀区民族和宗教事务",
+        "上海市普陀区民族和宗教事务办公室"
+      ],
+      "created_at": 1772891626.3401103,
+      "updated_at": 1772891626.3401105
+    },
+    {
+      "id": "09be9fca1528",
+      "name": "上海市普陀区消费者权益保护委员会秘书处",
+      "level": "unit",
+      "parent_id": "7875c96c9903",
+      "code": "UNIT_MLYYK9O1_4A63B1D2",
+      "keywords": [
+        "上海市普陀区消费者权益保护委员会秘书处"
+      ],
+      "created_at": 1772891626.3401299,
+      "updated_at": 1772891626.34013
+    },
+    {
+      "id": "04d94710b596",
+      "name": "上海市普陀区生态环境局本级",
+      "level": "unit",
+      "parent_id": "c4ab04345a26",
+      "code": "UNIT_MLYYK9LH_26D6A506",
+      "keywords": [
+        "上海市普陀区生态环境局本级"
+      ],
+      "created_at": 1772891626.3401458,
+      "updated_at": 1772891626.3401458
+    },
+    {
+      "id": "26a1b013175e",
+      "name": "上海市普陀区社会主义学院",
+      "level": "unit",
+      "parent_id": "1c5a80e4a3c7",
+      "code": "UNIT_MLYYK9OB_404C6D9D",
+      "keywords": [
+        "上海市普陀区社会主义学院"
+      ],
+      "created_at": 1772891626.3401616,
+      "updated_at": 1772891626.3401618
+    },
+    {
+      "id": "de3245431850",
+      "name": "上海市普陀区社会事务管理中心",
+      "level": "unit",
+      "parent_id": "16d2630430dc",
+      "code": "UNIT_1771849172905",
+      "keywords": [
+        "上海市普陀区社会事务管理中心"
+      ],
+      "created_at": 1772891626.3401802,
+      "updated_at": 1772891626.3401802
+    },
+    {
+      "id": "84d792d8e1f7",
+      "name": "上海市普陀区科学技术委员会本级",
+      "level": "unit",
+      "parent_id": "b9b122147a17",
+      "code": "UNIT_MLYYK9O0_3F452203",
+      "keywords": [
+        "上海市普陀区科学技术委员会本级"
+      ],
+      "created_at": 1772891626.3402047,
+      "updated_at": 1772891626.3402047
+    },
+    {
+      "id": "f74a640ffb68",
+      "name": "上海市普陀区红十字会",
+      "level": "unit",
+      "parent_id": "c1ae76b1b782",
+      "code": "UNIT_MLYYK9OC_FE9BFE3B",
+      "keywords": [
+        "上海市普陀区红十字会"
+      ],
+      "created_at": 1772891626.3402216,
+      "updated_at": 1772891626.3402221
+    },
+    {
+      "id": "a7b4f36e311a",
+      "name": "上海市普陀区统计局",
+      "level": "unit",
+      "parent_id": "2041ea251bc8",
+      "code": "UNIT_MLYYK9OK_104B572E",
+      "keywords": [
+        "上海市普陀区统计局"
+      ],
+      "created_at": 1772891626.3402386,
+      "updated_at": 1772891626.3402388
+    },
+    {
+      "id": "2cb68c714fdd",
+      "name": "上海市普陀区绿化和市容管理局本级",
+      "level": "unit",
+      "parent_id": "006f2739940a",
+      "code": "UNIT_MLYYK9ME_EAF99508",
+      "keywords": [
+        "上海市普陀区绿化和市容管理局本级"
+      ],
+      "created_at": 1772891626.3402553,
+      "updated_at": 1772891626.3402555
+    },
+    {
+      "id": "53f98bebfc3a",
+      "name": "上海市普陀区规划和自然资源局本级",
+      "level": "unit",
+      "parent_id": "8f773936806d",
+      "code": "UNIT_MLYYK9MC_1C503660",
+      "keywords": [
+        "上海市普陀区规划和自然资源局本级"
+      ],
+      "created_at": 1772891626.3402724,
+      "updated_at": 1772891626.3402727
+    },
+    {
+      "id": "59892262a48a",
+      "name": "上海市普陀区财政局",
+      "level": "unit",
+      "parent_id": "e357c45fa2c4",
+      "code": "UNIT_MLYYK9LK_D223EC87",
+      "keywords": [
+        "上海市普陀区财政局"
+      ],
+      "created_at": 1772891626.3402903,
+      "updated_at": 1772891626.3402905
+    },
+    {
+      "id": "856b19937344",
+      "name": "上海市普陀区退役军人事务局本级",
+      "level": "unit",
+      "parent_id": "4b7d67c526f7",
+      "code": "UNIT_MLYYK9OL_6A2ED41E",
+      "keywords": [
+        "上海市普陀区退役军人事务局本级"
+      ],
+      "created_at": 1772891626.3403132,
+      "updated_at": 1772891626.3403134
+    },
+    {
+      "id": "b5cca50d6660",
+      "name": "上海市普陀区长征镇人民政府（本部）",
+      "level": "unit",
+      "parent_id": "65154bbe41c2",
+      "code": "UNIT_MLYYK9OO_6BD4B315",
+      "keywords": [
+        "上海市普陀区长征镇人民政府（本部）"
+      ],
+      "created_at": 1772891626.3403358,
+      "updated_at": 1772891626.340336
+    },
+    {
+      "id": "7faf296af31c",
+      "name": "中共上海市普陀区区级机关工作委员会",
+      "level": "unit",
+      "parent_id": "07089907397c",
+      "code": "UNIT_MLYYK9O7_31330430",
+      "keywords": [
+        "中共上海市普陀区区级机关工作",
+        "中共上海市普陀区区级机关工作委员会"
+      ],
+      "created_at": 1772891626.3403563,
+      "updated_at": 1772891626.3403566
+    },
+    {
+      "id": "b251e5b6b001",
+      "name": "中共上海市普陀区委员会办公室",
+      "level": "unit",
+      "parent_id": "43bb21232f1f",
+      "code": "UNIT_MLYYK9O7_62986A14",
+      "keywords": [
+        "中共上海市普陀区委员会",
+        "中共上海市普陀区委员会办公室"
+      ],
+      "created_at": 1772891626.340376,
+      "updated_at": 1772891626.3403761
+    },
+    {
+      "id": "4a9ea57786c0",
+      "name": "中共上海市普陀区委员会组织部",
+      "level": "unit",
+      "parent_id": "f71e86dbde27",
+      "code": "UNIT_MLYYK9O7_0F8A934B",
+      "keywords": [
+        "中共上海市普陀区委员会组织部"
+      ],
+      "created_at": 1772891626.3403938,
+      "updated_at": 1772891626.340394
+    },
+    {
+      "id": "f38440efdbd0",
+      "name": "中共上海市普陀区委社会工作部",
+      "level": "unit",
+      "parent_id": "3ccfa923317d",
+      "code": "UNIT_MLYYK9O5_68E96F8B",
+      "keywords": [
+        "中共上海市普陀区委社会工作部"
+      ],
+      "created_at": 1772891626.3404098,
+      "updated_at": 1772891626.34041
+    },
+    {
+      "id": "c6cb684d6772",
+      "name": "中共上海市普陀区委统一战线工作部",
+      "level": "unit",
+      "parent_id": "4aec3d5304cf",
+      "code": "UNIT_MLYYK9OG_2571C5B5",
+      "keywords": [
+        "中共上海市普陀区委统一战线工作部"
+      ],
+      "created_at": 1772891626.3404262,
+      "updated_at": 1772891626.3404264
+    },
+    {
+      "id": "cfe9e371697f",
+      "name": "中共上海市普陀区纪律检查委员会",
+      "level": "unit",
+      "parent_id": "39bf45020b25",
+      "code": "UNIT_MLYYK9O5_93E3400A",
+      "keywords": [
+        "中共上海市普陀区纪律检查",
+        "中共上海市普陀区纪律检查委员会"
+      ],
+      "created_at": 1772891626.3404493,
+      "updated_at": 1772891626.3404493
+    },
+    {
+      "id": "a36f231631d0",
+      "name": "中国人民政治协商会议上海市普陀区委员会办公室",
+      "level": "unit",
+      "parent_id": "23ad6f5800e4",
+      "code": "UNIT_MLYYK9O3_C731A5C9",
+      "keywords": [
+        "中国人民政治协商会议上海市普陀区委员会",
+        "中国人民政治协商会议上海市普陀区委员会办公室"
+      ],
+      "created_at": 1772891626.3404741,
+      "updated_at": 1772891626.3404748
+    },
+    {
+      "id": "52a08f9c1b2e",
+      "name": "中国共产主义青年团上海市普陀区委员会",
+      "level": "unit",
+      "parent_id": "a7ecd3d21e59",
+      "code": "UNIT_MLYYK9O9_A51971F2",
+      "keywords": [
+        "中国共产主义青年团上海市普陀区",
+        "中国共产主义青年团上海市普陀区委员会"
+      ],
+      "created_at": 1772891626.3405085,
+      "updated_at": 1772891626.3405087
+    },
+    {
+      "id": "d07289f6c777",
+      "name": "中国共产党上海市普陀区委员会宣传部本级",
+      "level": "unit",
+      "parent_id": "2e9873d2fd1f",
+      "code": "UNIT_MLYYK9O8_C0D4DF47",
+      "keywords": [
+        "中国共产党上海市普陀区委员会宣传部本级"
+      ],
+      "created_at": 1772891626.3405254,
+      "updated_at": 1772891626.3405254
+    },
+    {
+      "id": "969cbd541371",
+      "name": "中国共产党上海市普陀区委老干部局",
+      "level": "unit",
+      "parent_id": "3c8578a9f1d9",
+      "code": "UNIT_MLYYK9OG_AA4F4066",
+      "keywords": [
+        "中国共产党上海市普陀区委老干部局"
+      ],
+      "created_at": 1772891626.3405414,
+      "updated_at": 1772891626.3405416
+    },
+    {
+      "id": "5a3192f33b86",
+      "name": "普陀区残疾人联合会",
+      "level": "unit",
+      "parent_id": "43e6ad7d206d",
+      "code": "UNIT_MLYYK9OF_8D5A8422",
+      "keywords": [
+        "普陀区残疾人联合会"
+      ],
+      "created_at": 1772891626.3405576,
+      "updated_at": 1772891626.3405578
+    },
+    {
+      "id": "267e51b60683",
+      "name": "上海市新杨中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MG_D6CF676F",
+      "keywords": [
+        "上海市新杨中学"
+      ],
+      "created_at": 1772891626.340576,
+      "updated_at": 1772891626.3405762
+    },
+    {
+      "id": "1e1509fde21a",
+      "name": "上海市普陀区万里街道社区事务受理服务中心",
+      "level": "unit",
+      "parent_id": "5615d83ac0a9",
+      "code": "UNIT_MLYYK9LK_B8EE16B6",
+      "keywords": [
+        "上海市普陀区万里街道社区事务受理服务中心"
+      ],
+      "created_at": 1772891626.3405924,
+      "updated_at": 1772891626.3405926
+    },
+    {
+      "id": "d711fcf47e82",
+      "name": "上海市普陀区人才发展服务中心",
+      "level": "unit",
+      "parent_id": "f71e86dbde27",
+      "code": "UNIT_MLYYK9O8_FEA0FE37",
+      "keywords": [
+        "上海市普陀区人才发展服务中心"
+      ],
+      "created_at": 1772891626.340609,
+      "updated_at": 1772891626.340609
+    },
+    {
+      "id": "9527157547d1",
+      "name": "上海市普陀区人民防空工程管理所",
+      "level": "unit",
+      "parent_id": "954f500e3082",
+      "code": "UNIT_MLYYK9MB_998A895C",
+      "keywords": [
+        "上海市普陀区人民防空工程管理所"
+      ],
+      "created_at": 1772891626.3406246,
+      "updated_at": 1772891626.3406248
+    },
+    {
+      "id": "ea60164f1fb1",
+      "name": "上海市普陀区公务网管理中心",
+      "level": "unit",
+      "parent_id": "b9b122147a17",
+      "code": "UNIT_MLYYK9O0_1262C8D2",
+      "keywords": [
+        "上海市普陀区公务网管理中心"
+      ],
+      "created_at": 1772891626.3406465,
+      "updated_at": 1772891626.3406465
+    },
+    {
+      "id": "80361169fc62",
+      "name": "上海市普陀区军队离休退休干部休养所",
+      "level": "unit",
+      "parent_id": "4b7d67c526f7",
+      "code": "UNIT_MLYYK9OM_8548B19A",
+      "keywords": [
+        "上海市普陀区军队离休退休干部休养所"
+      ],
+      "created_at": 1772891626.340669,
+      "updated_at": 1772891626.3406692
+    },
+    {
+      "id": "d0107231ac25",
+      "name": "上海市普陀区医疗保险事务中心",
+      "level": "unit",
+      "parent_id": "d03f79e9da89",
+      "code": "UNIT_MLYYK9OL_C132C9B5",
+      "keywords": [
+        "上海市普陀区医疗保险事务中心"
+      ],
+      "created_at": 1772891626.3406858,
+      "updated_at": 1772891626.340686
+    },
+    {
+      "id": "3db3e3d38476",
+      "name": "上海市普陀区图书馆（上海市普陀区少年儿童图书馆）",
+      "level": "unit",
+      "parent_id": "362ef2f8090e",
+      "code": "UNIT_MLYYK9LC_319F4AD4",
+      "keywords": [
+        "上海市普陀区图书馆（上海市普陀区少年儿童图书馆）"
+      ],
+      "created_at": 1772891626.340701,
+      "updated_at": 1772891626.3407013
+    },
+    {
+      "id": "07086133a08c",
+      "name": "上海市普陀区地方志办公室",
+      "level": "unit",
+      "parent_id": "3ed1ea688524",
+      "code": "UNIT_MLYYK9O6_89A64731",
+      "keywords": [
+        "上海市普陀区地方志",
+        "上海市普陀区地方志办公室"
+      ],
+      "created_at": 1772891626.3407276,
+      "updated_at": 1772891626.3407278
+    },
+    {
+      "id": "7984763800e8",
+      "name": "上海市普陀区宜川路街道社区党群服务中心",
+      "level": "unit",
+      "parent_id": "c18b6059abf5",
+      "code": "UNIT_MLYYK9LO_65DEDC43",
+      "keywords": [
+        "上海市普陀区宜川路街道社区党群服务中心"
+      ],
+      "created_at": 1772891626.3407462,
+      "updated_at": 1772891626.3407466
+    },
+    {
+      "id": "fb41e54fe198",
+      "name": "上海市普陀区应急管理局执法大队",
+      "level": "unit",
+      "parent_id": "8cccc4ac268a",
+      "code": "UNIT_MLYYK9OD_6CFCF2F0",
+      "keywords": [
+        "上海市普陀区应急管理局执法大队"
+      ],
+      "created_at": 1772891626.340767,
+      "updated_at": 1772891626.3407671
+    },
+    {
+      "id": "a2335aaa7192",
+      "name": "上海市普陀区建筑业管理中心",
+      "level": "unit",
+      "parent_id": "fe610572ee6c",
+      "code": "UNIT_MLYYK9M9_373C316C",
+      "keywords": [
+        "上海市普陀区建筑业管理中心"
+      ],
+      "created_at": 1772891626.3407907,
+      "updated_at": 1772891626.3407912
+    },
+    {
+      "id": "0a73d16cf1f8",
+      "name": "上海市普陀区房地产交易中心",
+      "level": "unit",
+      "parent_id": "ea4467ee3671",
+      "code": "UNIT_MLYYK9M6_D986FE26",
+      "keywords": [
+        "上海市普陀区房地产交易中心"
+      ],
+      "created_at": 1772891626.3408246,
+      "updated_at": 1772891626.3408248
+    },
+    {
+      "id": "2fd2265695e1",
+      "name": "上海市普陀区招商服务中心",
+      "level": "unit",
+      "parent_id": "97679cfbfe5b",
+      "code": "UNIT_MLYYK9OI_70F2E339",
+      "keywords": [
+        "上海市普陀区招商服务中心"
+      ],
+      "created_at": 1772891626.34085,
+      "updated_at": 1772891626.3408504
+    },
+    {
+      "id": "e645bee2331f",
+      "name": "上海市普陀区曹杨新村街道社区党群服务中心",
+      "level": "unit",
+      "parent_id": "286f2f5c1d43",
+      "code": "UNIT_MLYYK9M0_2DE558A9",
+      "keywords": [
+        "上海市普陀区曹杨新村街道社区党群服务中心"
+      ],
+      "created_at": 1772891626.340883,
+      "updated_at": 1772891626.3408833
+    },
+    {
+      "id": "d5f1d948d907",
+      "name": "上海市普陀区桃浦镇社区事务受理服务中心",
+      "level": "unit",
+      "parent_id": "e12b38d77365",
+      "code": "UNIT_MLYYK9OS_FCC4638B",
+      "keywords": [
+        "上海市普陀区桃浦镇社区事务受理服务中心"
+      ],
+      "created_at": 1772891626.3409147,
+      "updated_at": 1772891626.340915
+    },
+    {
+      "id": "edb9bd63817f",
+      "name": "上海市普陀区法律援助中心",
+      "level": "unit",
+      "parent_id": "4e4182157540",
+      "code": "UNIT_MLYYK9OB_530CCDEA",
+      "keywords": [
+        "上海市普陀区法律援助中心"
+      ],
+      "created_at": 1772891626.3409421,
+      "updated_at": 1772891626.3409424
+    },
+    {
+      "id": "89601ec558a9",
+      "name": "上海市普陀区环境监测站",
+      "level": "unit",
+      "parent_id": "c4ab04345a26",
+      "code": "UNIT_MLYYK9LH_C8008C29",
+      "keywords": [
+        "上海市普陀区环境监测站"
+      ],
+      "created_at": 1772891626.3409681,
+      "updated_at": 1772891626.3409686
+    },
+    {
+      "id": "42094998cc3a",
+      "name": "上海市普陀区甘泉路街道社区事务受理服务中心",
+      "level": "unit",
+      "parent_id": "25f17f9db657",
+      "code": "UNIT_MLYYK9LT_265F576F",
+      "keywords": [
+        "上海市普陀区甘泉路街道社区事务受理服务中心"
+      ],
+      "created_at": 1772891626.3410025,
+      "updated_at": 1772891626.341003
+    },
+    {
+      "id": "d598b572e1e9",
+      "name": "上海市普陀区真如镇街道社区党群服务中心",
+      "level": "unit",
+      "parent_id": "5b13580c3a50",
+      "code": "UNIT_MLYYK9M3_5B4D66CF",
+      "keywords": [
+        "上海市普陀区真如镇街道社区党群服务中心"
+      ],
+      "created_at": 1772891626.3410258,
+      "updated_at": 1772891626.341026
+    },
+    {
+      "id": "e507aa570d2f",
+      "name": "上海市普陀区石泉路街道社区党群服务中心",
+      "level": "unit",
+      "parent_id": "31ec43cf82a8",
+      "code": "UNIT_MLYYK9LV_900E87C7",
+      "keywords": [
+        "上海市普陀区石泉路街道社区党群服务中心"
+      ],
+      "created_at": 1772891626.341045,
+      "updated_at": 1772891626.3410451
+    },
+    {
+      "id": "2cb2460451f7",
+      "name": "上海市普陀区社会保障管理服务中心",
+      "level": "unit",
+      "parent_id": "8027bb49f3f7",
+      "code": "UNIT_MLYYK9OE_95E19BE1",
+      "keywords": [
+        "上海市普陀区社会保障管理服务中心"
+      ],
+      "created_at": 1772891626.341064,
+      "updated_at": 1772891626.3410642
+    },
+    {
+      "id": "75e4668bb837",
+      "name": "上海市普陀区社会福利院",
+      "level": "unit",
+      "parent_id": "16d2630430dc",
+      "code": "UNIT_MLYYK9L0_11A92C24",
+      "keywords": [
+        "上海市普陀区社会福利院"
+      ],
+      "created_at": 1772891626.341085,
+      "updated_at": 1772891626.3410852
+    },
+    {
+      "id": "ac7fd95c9c8d",
+      "name": "上海市普陀区绿化建设管理中心",
+      "level": "unit",
+      "parent_id": "006f2739940a",
+      "code": "UNIT_MLYYK9ME_BA5050FB",
+      "keywords": [
+        "上海市普陀区绿化建设管理中心"
+      ],
+      "created_at": 1772891626.3411083,
+      "updated_at": 1772891626.3411086
+    },
+    {
+      "id": "9532cac9ee83",
+      "name": "上海市普陀区职工援助服务中心",
+      "level": "unit",
+      "parent_id": "4f7742d0d2e3",
+      "code": "UNIT_MLYYK9OA_2B45A624",
+      "keywords": [
+        "上海市普陀区职工援助服务中心"
+      ],
+      "created_at": 1772891626.341127,
+      "updated_at": 1772891626.3411274
+    },
+    {
+      "id": "e89e8ca512e7",
+      "name": "上海市普陀区融媒体中心",
+      "level": "unit",
+      "parent_id": "2e9873d2fd1f",
+      "code": "UNIT_MLYYK9O9_AF39D54C",
+      "keywords": [
+        "上海市普陀区融媒体中心"
+      ],
+      "created_at": 1772891626.3411474,
+      "updated_at": 1772891626.3411477
+    },
+    {
+      "id": "04325972c63e",
+      "name": "上海市普陀区规划和自然资源局执法大队",
+      "level": "unit",
+      "parent_id": "8f773936806d",
+      "code": "UNIT_MLYYK9MC_97CEC30F",
+      "keywords": [
+        "上海市普陀区规划和自然资源局执法大队"
+      ],
+      "created_at": 1772891626.3411648,
+      "updated_at": 1772891626.341165
+    },
+    {
+      "id": "758d78dd0d7b",
+      "name": "上海市普陀区长寿路街道社区党群服务中心",
+      "level": "unit",
+      "parent_id": "f940086acbb7",
+      "code": "UNIT_MLYYK9LY_6299BDDC",
+      "keywords": [
+        "上海市普陀区长寿路街道社区党群服务中心"
+      ],
+      "created_at": 1772891626.3411944,
+      "updated_at": 1772891626.341195
+    },
+    {
+      "id": "7b362ab847d4",
+      "name": "上海市普陀区长征镇财政所",
+      "level": "unit",
+      "parent_id": "65154bbe41c2",
+      "code": "UNIT_MLYYK9OO_51393E38",
+      "keywords": [
+        "上海市普陀区长征镇财政所"
+      ],
+      "created_at": 1772891626.3412137,
+      "updated_at": 1772891626.341214
+    },
+    {
+      "id": "71deb08515c5",
+      "name": "上海市普陀区长风新村街道社区党群服务中心",
+      "level": "unit",
+      "parent_id": "4cfa7fa6b9ee",
+      "code": "UNIT_MLYYK9LQ_F33FE0AA",
+      "keywords": [
+        "上海市普陀区长风新村街道社区党群服务中心"
+      ],
+      "created_at": 1772891626.341231,
+      "updated_at": 1772891626.3412316
+    },
+    {
+      "id": "5378122972a2",
+      "name": "上海市普陀区长风街道白玉社区卫生服务中心",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L3_9ABC22AF",
+      "keywords": [
+        "上海市普陀区长风街道白玉社区卫生服务中心"
+      ],
+      "created_at": 1772891626.341252,
+      "updated_at": 1772891626.3412523
+    },
+    {
+      "id": "ba26b515b6c5",
+      "name": "上海市普陀区万里街道社区党群服务中心",
+      "level": "unit",
+      "parent_id": "5615d83ac0a9",
+      "code": "UNIT_MLYYK9LL_45127B3B",
+      "keywords": [
+        "上海市普陀区万里街道社区党群服务中心"
+      ],
+      "created_at": 1772891626.3412707,
+      "updated_at": 1772891626.341271
+    },
+    {
+      "id": "577d6d818cb0",
+      "name": "上海市普陀区交通管理中心",
+      "level": "unit",
+      "parent_id": "fe610572ee6c",
+      "code": "UNIT_MLYYK9M9_4D40C732",
+      "keywords": [
+        "上海市普陀区交通管理中心"
+      ],
+      "created_at": 1772891626.3412924,
+      "updated_at": 1772891626.3412929
+    },
+    {
+      "id": "1272fd747b12",
+      "name": "上海市普陀区人力资源公共服务中心",
+      "level": "unit",
+      "parent_id": "8027bb49f3f7",
+      "code": "UNIT_MLYYK9OF_65B344FB",
+      "keywords": [
+        "上海市普陀区人力资源公共服务中心"
+      ],
+      "created_at": 1772891626.341312,
+      "updated_at": 1772891626.3413122
+    },
+    {
+      "id": "380f02d6d6e4",
+      "name": "上海市普陀区土地发展中心",
+      "level": "unit",
+      "parent_id": "8f773936806d",
+      "code": "UNIT_MLYYK9MD_9A143659",
+      "keywords": [
+        "上海市普陀区土地发展中心"
+      ],
+      "created_at": 1772891626.3413374,
+      "updated_at": 1772891626.341338
+    },
+    {
+      "id": "1fc8bd77f715",
+      "name": "上海市普陀区宜川路街道社区事务受理服务中心",
+      "level": "unit",
+      "parent_id": "c18b6059abf5",
+      "code": "UNIT_MLYYK9LP_AF6B898A",
+      "keywords": [
+        "上海市普陀区宜川路街道社区事务受理服务中心"
+      ],
+      "created_at": 1772891626.3413606,
+      "updated_at": 1772891626.3413608
+    },
+    {
+      "id": "bef4b07d6371",
+      "name": "上海市普陀区征收保障和物业服务事务中心",
+      "level": "unit",
+      "parent_id": "ea4467ee3671",
+      "code": "UNIT_MLYYK9M6_BD72EBE5",
+      "keywords": [
+        "上海市普陀区征收保障和物业服务事务中心"
+      ],
+      "created_at": 1772891626.3413813,
+      "updated_at": 1772891626.3413818
+    },
+    {
+      "id": "48f3bd403384",
+      "name": "上海市普陀区救助事务中心",
+      "level": "unit",
+      "parent_id": "16d2630430dc",
+      "code": "UNIT_MLYYK9L1_12CA665D",
+      "keywords": [
+        "上海市普陀区救助事务中心"
+      ],
+      "created_at": 1772891626.3414044,
+      "updated_at": 1772891626.3414044
+    },
+    {
+      "id": "480f55063fb3",
+      "name": "上海市普陀区文化和旅游局本级",
+      "level": "unit",
+      "parent_id": "362ef2f8090e",
+      "code": "UNIT_MLYYK9LD_F8528BD6",
+      "keywords": [
+        "上海市普陀区文化和旅游局本级"
+      ],
+      "created_at": 1772891626.3414252,
+      "updated_at": 1772891626.3414257
+    },
+    {
+      "id": "6dac7b544163",
+      "name": "上海市普陀区曹杨新村街道社区事务受理服务中心",
+      "level": "unit",
+      "parent_id": "286f2f5c1d43",
+      "code": "UNIT_MLYYK9M1_E86BA0C3",
+      "keywords": [
+        "上海市普陀区曹杨新村街道社区事务受理服务中心"
+      ],
+      "created_at": 1772891626.341446,
+      "updated_at": 1772891626.3414464
+    },
+    {
+      "id": "d4fd49ab1078",
+      "name": "上海市普陀区曹杨街道社区卫生服务中心",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L4_A868F83A",
+      "keywords": [
+        "上海市普陀区曹杨街道社区卫生服务中心"
+      ],
+      "created_at": 1772891626.3414643,
+      "updated_at": 1772891626.3414648
+    },
+    {
+      "id": "bf7f49c981bb",
+      "name": "上海市普陀区桃浦镇社区文化事务中心",
+      "level": "unit",
+      "parent_id": "e12b38d77365",
+      "code": "UNIT_MLYYK9OS_5437DF29",
+      "keywords": [
+        "上海市普陀区桃浦镇社区文化事务中心"
+      ],
+      "created_at": 1772891626.3414958,
+      "updated_at": 1772891626.3414962
+    },
+    {
+      "id": "a3311b3b68f8",
+      "name": "上海市普陀区民防事务管理中心",
+      "level": "unit",
+      "parent_id": "954f500e3082",
+      "code": "UNIT_MLYYK9MB_1F8BA782",
+      "keywords": [
+        "上海市普陀区民防事务管理中心"
+      ],
+      "created_at": 1772891626.341518,
+      "updated_at": 1772891626.3415182
+    },
+    {
+      "id": "a7a24a86b789",
+      "name": "上海市普陀区环境卫生管理服务中心",
+      "level": "unit",
+      "parent_id": "006f2739940a",
+      "code": "UNIT_MLYYK9MF_1302A2AA",
+      "keywords": [
+        "上海市普陀区环境卫生管理服务中心"
+      ],
+      "created_at": 1772891626.341543,
+      "updated_at": 1772891626.341543
+    },
+    {
+      "id": "88873f06e890",
+      "name": "上海市普陀区甘泉路街道社区党群服务中心",
+      "level": "unit",
+      "parent_id": "25f17f9db657",
+      "code": "UNIT_MLYYK9LT_82A4A734",
+      "keywords": [
+        "上海市普陀区甘泉路街道社区党群服务中心"
+      ],
+      "created_at": 1772891626.3415685,
+      "updated_at": 1772891626.3415687
+    },
+    {
+      "id": "dcd5eb0335a2",
+      "name": "上海市普陀区生态环境局执法大队",
+      "level": "unit",
+      "parent_id": "c4ab04345a26",
+      "code": "UNIT_MLYYK9LI_64B0104A",
+      "keywords": [
+        "上海市普陀区生态环境局执法大队"
+      ],
+      "created_at": 1772891626.341589,
+      "updated_at": 1772891626.3415892
+    },
+    {
+      "id": "4218a715602e",
+      "name": "上海市普陀区真如镇街道社区事务受理服务中心",
+      "level": "unit",
+      "parent_id": "5b13580c3a50",
+      "code": "UNIT_MLYYK9M4_1620FCB0",
+      "keywords": [
+        "上海市普陀区真如镇街道社区事务受理服务中心"
+      ],
+      "created_at": 1772891626.3416128,
+      "updated_at": 1772891626.3416133
+    },
+    {
+      "id": "c2a820be1ef6",
+      "name": "上海市普陀区石泉路街道社区事务受理中心",
+      "level": "unit",
+      "parent_id": "31ec43cf82a8",
+      "code": "UNIT_MLYYK9LW_1FB1A5DD",
+      "keywords": [
+        "上海市普陀区石泉路街道社区事务受理中心"
+      ],
+      "created_at": 1772891626.341633,
+      "updated_at": 1772891626.3416333
+    },
+    {
+      "id": "41aff71df353",
+      "name": "上海市普陀区科技创新促进中心",
+      "level": "unit",
+      "parent_id": "b9b122147a17",
+      "code": "UNIT_MLYYK9O0_183BD8C1",
+      "keywords": [
+        "上海市普陀区科技创新促进中心"
+      ],
+      "created_at": 1772891626.3416557,
+      "updated_at": 1772891626.341656
+    },
+    {
+      "id": "b3afd1aa3bd8",
+      "name": "上海市普陀区职工文体活动中心",
+      "level": "unit",
+      "parent_id": "4f7742d0d2e3",
+      "code": "UNIT_MLYYK9OA_E678669A",
+      "keywords": [
+        "上海市普陀区职工文体活动中心"
+      ],
+      "created_at": 1772891626.3416767,
+      "updated_at": 1772891626.3416774
+    },
+    {
+      "id": "987e28d32e89",
+      "name": "上海市普陀区退役军人服务中心",
+      "level": "unit",
+      "parent_id": "4b7d67c526f7",
+      "code": "UNIT_MLYYK9OM_9590AC3B",
+      "keywords": [
+        "上海市普陀区退役军人服务中心"
+      ],
+      "created_at": 1772891626.3417072,
+      "updated_at": 1772891626.3417077
+    },
+    {
+      "id": "cab1716c2431",
+      "name": "上海市普陀区长寿路街道社区事务受理服务中心",
+      "level": "unit",
+      "parent_id": "f940086acbb7",
+      "code": "UNIT_MLYYK9LY_21BB5F89",
+      "keywords": [
+        "上海市普陀区长寿路街道社区事务受理服务中心"
+      ],
+      "created_at": 1772891626.3417292,
+      "updated_at": 1772891626.3417296
+    },
+    {
+      "id": "86871381a5a8",
+      "name": "上海市普陀区长征镇社区文化事务中心",
+      "level": "unit",
+      "parent_id": "65154bbe41c2",
+      "code": "UNIT_MLYYK9OP_28F0F1CC",
+      "keywords": [
+        "上海市普陀区长征镇社区文化事务中心"
+      ],
+      "created_at": 1772891626.3417616,
+      "updated_at": 1772891626.341762
+    },
+    {
+      "id": "0016ea6de33d",
+      "name": "上海市普陀区长风新村街道社区事务受理和服务中心",
+      "level": "unit",
+      "parent_id": "4cfa7fa6b9ee",
+      "code": "UNIT_MLYYK9LR_45466790",
+      "keywords": [
+        "上海市普陀区长风新村街道社区事务受理和服务中心"
+      ],
+      "created_at": 1772891626.3417816,
+      "updated_at": 1772891626.341782
+    },
+    {
+      "id": "13e33139f830",
+      "name": "上海市桃浦中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MG_8356E5BE",
+      "keywords": [
+        "上海市桃浦中学"
+      ],
+      "created_at": 1772891626.34181,
+      "updated_at": 1772891626.3418102
+    },
+    {
+      "id": "012734351ab3",
+      "name": "上海市子长学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MH_4FB42453",
+      "keywords": [
+        "上海市子长学校"
+      ],
+      "created_at": 1772891626.341834,
+      "updated_at": 1772891626.3418345
+    },
+    {
+      "id": "98c6c5d0c838",
+      "name": "上海市普陀区万里街道城市运行管理中心",
+      "level": "unit",
+      "parent_id": "5615d83ac0a9",
+      "code": "UNIT_MLYYK9LL_32A3E3ED",
+      "keywords": [
+        "上海市普陀区万里街道城市运行管理中心"
+      ],
+      "created_at": 1772891626.3418581,
+      "updated_at": 1772891626.3418584
+    },
+    {
+      "id": "52ed7aab8683",
+      "name": "上海市普陀区城市更新和住宅配套事务中心",
+      "level": "unit",
+      "parent_id": "ea4467ee3671",
+      "code": "UNIT_MLYYK9M7_06950381",
+      "keywords": [
+        "上海市普陀区城市更新和住宅配套事务中心"
+      ],
+      "created_at": 1772891626.3418791,
+      "updated_at": 1772891626.3418794
+    },
+    {
+      "id": "4f88b03cc0d3",
+      "name": "上海市普陀区婚姻收养登记中心",
+      "level": "unit",
+      "parent_id": "16d2630430dc",
+      "code": "UNIT_MLYYK9L1_FEE7406F",
+      "keywords": [
+        "上海市普陀区婚姻收养登记中心"
+      ],
+      "created_at": 1772891626.3419054,
+      "updated_at": 1772891626.3419056
+    },
+    {
+      "id": "14e5b36a30fb",
+      "name": "上海市普陀区宜川路街道城市运行管理中心",
+      "level": "unit",
+      "parent_id": "c18b6059abf5",
+      "code": "UNIT_MLYYK9LP_9B337054",
+      "keywords": [
+        "上海市普陀区宜川路街道城市运行管理中心"
+      ],
+      "created_at": 1772891626.3419316,
+      "updated_at": 1772891626.3419318
+    },
+    {
+      "id": "fb80df012c5d",
+      "name": "上海市普陀区就业促进中心",
+      "level": "unit",
+      "parent_id": "8027bb49f3f7",
+      "code": "UNIT_MLYYK9OF_4EE26377",
+      "keywords": [
+        "上海市普陀区就业促进中心"
+      ],
+      "created_at": 1772891626.3419507,
+      "updated_at": 1772891626.341951
+    },
+    {
+      "id": "82b2e8c8914e",
+      "name": "上海市普陀区市容管理中心（上海市普陀区景观建设中心）",
+      "level": "unit",
+      "parent_id": "006f2739940a",
+      "code": "UNIT_MLYYK9MF_C69CF1F7",
+      "keywords": [
+        "上海市普陀区市容管理中心（上海市普陀区景观建设中心）"
+      ],
+      "created_at": 1772891626.3419726,
+      "updated_at": 1772891626.3419728
+    },
+    {
+      "id": "0e5890aed36e",
+      "name": "上海市普陀区市政工程建设中心",
+      "level": "unit",
+      "parent_id": "fe610572ee6c",
+      "code": "UNIT_MLYYK9M9_7E6542C5",
+      "keywords": [
+        "上海市普陀区市政工程建设中心"
+      ],
+      "created_at": 1772891626.3419917,
+      "updated_at": 1772891626.3419921
+    },
+    {
+      "id": "9cd12c7e5aa2",
+      "name": "上海市普陀区文化和旅游局执法大队",
+      "level": "unit",
+      "parent_id": "362ef2f8090e",
+      "code": "UNIT_MLYYK9LD_14606C50",
+      "keywords": [
+        "上海市普陀区文化和旅游局执法大队"
+      ],
+      "created_at": 1772891626.3420138,
+      "updated_at": 1772891626.3420143
+    },
+    {
+      "id": "f94281397a8a",
+      "name": "上海市普陀区曹杨新村街道城市运行管理中心",
+      "level": "unit",
+      "parent_id": "286f2f5c1d43",
+      "code": "UNIT_MLYYK9M1_955ED2F9",
+      "keywords": [
+        "上海市普陀区曹杨新村街道城市运行管理中心"
+      ],
+      "created_at": 1772891626.3420324,
+      "updated_at": 1772891626.342033
+    },
+    {
+      "id": "413423ace981",
+      "name": "上海市普陀区桃浦镇综合行政执法队",
+      "level": "unit",
+      "parent_id": "e12b38d77365",
+      "code": "UNIT_MLYYK9OT_1CE00196",
+      "keywords": [
+        "上海市普陀区桃浦镇综合行政执法队"
+      ],
+      "created_at": 1772891626.3420537,
+      "updated_at": 1772891626.342054
+    },
+    {
+      "id": "de58b87fe199",
+      "name": "上海市普陀区甘泉路街道城市运行管理中心",
+      "level": "unit",
+      "parent_id": "25f17f9db657",
+      "code": "UNIT_MLYYK9LU_BC87F5EE",
+      "keywords": [
+        "上海市普陀区甘泉路街道城市运行管理中心"
+      ],
+      "created_at": 1772891626.342078,
+      "updated_at": 1772891626.3420784
+    },
+    {
+      "id": "86d71cb808e6",
+      "name": "上海市普陀区真如镇街道城市运行管理中心",
+      "level": "unit",
+      "parent_id": "5b13580c3a50",
+      "code": "UNIT_MLYYK9M4_8DD951C9",
+      "keywords": [
+        "上海市普陀区真如镇街道城市运行管理中心"
+      ],
+      "created_at": 1772891626.3420992,
+      "updated_at": 1772891626.3420997
+    },
+    {
+      "id": "cf28124cb94b",
+      "name": "上海市普陀区石泉路街道城市运行管理中心",
+      "level": "unit",
+      "parent_id": "31ec43cf82a8",
+      "code": "UNIT_MLYYK9LW_8DC1F0C8",
+      "keywords": [
+        "上海市普陀区石泉路街道城市运行管理中心"
+      ],
+      "created_at": 1772891626.342117,
+      "updated_at": 1772891626.3421173
+    },
+    {
+      "id": "545d9b987514",
+      "name": "上海市普陀区科学技术协会",
+      "level": "unit",
+      "parent_id": "c4ab04345a26",
+      "code": "UNIT_MLYYK9LI_9FA7BED0",
+      "keywords": [
+        "上海市普陀区科学技术协会"
+      ],
+      "created_at": 1772891626.342136,
+      "updated_at": 1772891626.3421361
+    },
+    {
+      "id": "bd6be5b6e443",
+      "name": "上海市普陀区自然资源确权登记事务中心",
+      "level": "unit",
+      "parent_id": "8f773936806d",
+      "code": "UNIT_MLYYK9MD_2C422824",
+      "keywords": [
+        "上海市普陀区自然资源确权登记事务中心"
+      ],
+      "created_at": 1772891626.3421578,
+      "updated_at": 1772891626.342158
+    },
+    {
+      "id": "b0924f9b27b0",
+      "name": "上海市普陀区长寿路街道城市运行管理中心",
+      "level": "unit",
+      "parent_id": "f940086acbb7",
+      "code": "UNIT_MLYYK9LZ_B6608912",
+      "keywords": [
+        "上海市普陀区长寿路街道城市运行管理中心"
+      ],
+      "created_at": 1772891626.3421924,
+      "updated_at": 1772891626.342193
+    },
+    {
+      "id": "8f895284cb5a",
+      "name": "上海市普陀区长征镇社区党群服务中心",
+      "level": "unit",
+      "parent_id": "65154bbe41c2",
+      "code": "UNIT_MLYYK9OP_F373E441",
+      "keywords": [
+        "上海市普陀区长征镇社区党群服务中心"
+      ],
+      "created_at": 1772891626.3422146,
+      "updated_at": 1772891626.3422148
+    },
+    {
+      "id": "7a5c65b1dba5",
+      "name": "上海市普陀区长风新村街道城市运行管理中心",
+      "level": "unit",
+      "parent_id": "4cfa7fa6b9ee",
+      "code": "UNIT_MLYYK9LR_E6A88A6D",
+      "keywords": [
+        "上海市普陀区长风新村街道城市运行管理中心"
+      ],
+      "created_at": 1772891626.342235,
+      "updated_at": 1772891626.3422356
+    },
+    {
+      "id": "bff2b147030d",
+      "name": "上海市普陀区长风街道长风社区卫生服务中心",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L4_8D6CA80E",
+      "keywords": [
+        "上海市普陀区长风街道长风社区卫生服务中心"
+      ],
+      "created_at": 1772891626.3422608,
+      "updated_at": 1772891626.3422613
+    },
+    {
+      "id": "7051bfdf2c0e",
+      "name": "上海市宜川中学附属学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MH_E76E3B3D",
+      "keywords": [
+        "上海市宜川中学附属学校"
+      ],
+      "created_at": 1772891626.3422787,
+      "updated_at": 1772891626.342279
+    },
+    {
+      "id": "3fe7470f5bb4",
+      "name": "上海市普陀区万里街道经济发展服务中心",
+      "level": "unit",
+      "parent_id": "5615d83ac0a9",
+      "code": "UNIT_MLYYK9LN_A60A6BCB",
+      "keywords": [
+        "上海市普陀区万里街道经济发展服务中心"
+      ],
+      "created_at": 1772891626.3423004,
+      "updated_at": 1772891626.3423007
+    },
+    {
+      "id": "65d60b9184dc",
+      "name": "上海市普陀区养老服务发展中心",
+      "level": "unit",
+      "parent_id": "16d2630430dc",
+      "code": "UNIT_MLYYK9L2_105F30A8",
+      "keywords": [
+        "上海市普陀区养老服务发展中心"
+      ],
+      "created_at": 1772891626.3423238,
+      "updated_at": 1772891626.3423243
+    },
+    {
+      "id": "5e8b3dce46a0",
+      "name": "上海市普陀区城市管理行政执法局执法大队",
+      "level": "unit",
+      "parent_id": "ea4467ee3671",
+      "code": "UNIT_MLYYK9M7_0748F9B5",
+      "keywords": [
+        "上海市普陀区城市管理行政执法局执法大队"
+      ],
+      "created_at": 1772891626.3423457,
+      "updated_at": 1772891626.3423462
+    },
+    {
+      "id": "f75f4b9e5c68",
+      "name": "上海市普陀区宜川路街道经济发展服务中心",
+      "level": "unit",
+      "parent_id": "c18b6059abf5",
+      "code": "UNIT_MLYYK9LP_A63E7F56",
+      "keywords": [
+        "上海市普陀区宜川路街道经济发展服务中心"
+      ],
+      "created_at": 1772891626.3423657,
+      "updated_at": 1772891626.342366
+    },
+    {
+      "id": "41d7a712e835",
+      "name": "上海市普陀区市政水务管理中心",
+      "level": "unit",
+      "parent_id": "fe610572ee6c",
+      "code": "UNIT_MLYYK9MA_ADA38278",
+      "keywords": [
+        "上海市普陀区市政水务管理中心"
+      ],
+      "created_at": 1772891626.342389,
+      "updated_at": 1772891626.3423893
+    },
+    {
+      "id": "cdbc6c0bdca9",
+      "name": "上海市普陀区文旅发展管理中心",
+      "level": "unit",
+      "parent_id": "362ef2f8090e",
+      "code": "UNIT_MLYYK9LE_881D9630",
+      "keywords": [
+        "上海市普陀区文旅发展管理中心"
+      ],
+      "created_at": 1772891626.3424125,
+      "updated_at": 1772891626.3424127
+    },
+    {
+      "id": "f844c5c25b28",
+      "name": "上海市普陀区曹杨新村街道经济发展服务中心",
+      "level": "unit",
+      "parent_id": "286f2f5c1d43",
+      "code": "UNIT_MLYYK9M2_FEDEAEEB",
+      "keywords": [
+        "上海市普陀区曹杨新村街道经济发展服务中心"
+      ],
+      "created_at": 1772891626.342431,
+      "updated_at": 1772891626.3424315
+    },
+    {
+      "id": "715214d80caa",
+      "name": "上海市普陀区桃浦镇城市运行管理中心",
+      "level": "unit",
+      "parent_id": "e12b38d77365",
+      "code": "UNIT_MLYYK9OT_2B49B8C6",
+      "keywords": [
+        "上海市普陀区桃浦镇城市运行管理中心"
+      ],
+      "created_at": 1772891626.3424516,
+      "updated_at": 1772891626.3424518
+    },
+    {
+      "id": "c11500b69ecd",
+      "name": "上海市普陀区甘泉路街道经济发展服务中心",
+      "level": "unit",
+      "parent_id": "25f17f9db657",
+      "code": "UNIT_MLYYK9LU_3B91E104",
+      "keywords": [
+        "上海市普陀区甘泉路街道经济发展服务中心"
+      ],
+      "created_at": 1772891626.3424695,
+      "updated_at": 1772891626.3424697
+    },
+    {
+      "id": "0661e2e6ab2d",
+      "name": "上海市普陀区真如镇街道社区卫生服务中心",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L4_8CB4ABBC",
+      "keywords": [
+        "上海市普陀区真如镇街道社区卫生服务中心"
+      ],
+      "created_at": 1772891626.3425112,
+      "updated_at": 1772891626.3425114
+    },
+    {
+      "id": "b2d4faf58a9f",
+      "name": "上海市普陀区真如镇街道经济发展服务中心",
+      "level": "unit",
+      "parent_id": "5b13580c3a50",
+      "code": "UNIT_MLYYK9M5_7CFA7242",
+      "keywords": [
+        "上海市普陀区真如镇街道经济发展服务中心"
+      ],
+      "created_at": 1772891626.3425295,
+      "updated_at": 1772891626.3425298
+    },
+    {
+      "id": "6129e7de0443",
+      "name": "上海市普陀区石泉路街道经济发展服务中心",
+      "level": "unit",
+      "parent_id": "31ec43cf82a8",
+      "code": "UNIT_MLYYK9LX_924F72BA",
+      "keywords": [
+        "上海市普陀区石泉路街道经济发展服务中心"
+      ],
+      "created_at": 1772891626.34255,
+      "updated_at": 1772891626.3425505
+    },
+    {
+      "id": "fc5171ce2e75",
+      "name": "上海市普陀区规划和自然资源管理事务中心",
+      "level": "unit",
+      "parent_id": "8f773936806d",
+      "code": "UNIT_MLYYK9MD_1687EE82",
+      "keywords": [
+        "上海市普陀区规划和自然资源管理事务中心"
+      ],
+      "created_at": 1772891626.3425689,
+      "updated_at": 1772891626.342569
+    },
+    {
+      "id": "ac44674f4e34",
+      "name": "上海市普陀区长寿路街道经济发展服务中心",
+      "level": "unit",
+      "parent_id": "f940086acbb7",
+      "code": "UNIT_MLYYK9LZ_E2380490",
+      "keywords": [
+        "上海市普陀区长寿路街道经济发展服务中心"
+      ],
+      "created_at": 1772891626.3425944,
+      "updated_at": 1772891626.3425949
+    },
+    {
+      "id": "98a7a14c89aa",
+      "name": "上海市普陀区长征镇社区事务受理服务中心",
+      "level": "unit",
+      "parent_id": "65154bbe41c2",
+      "code": "UNIT_MLYYK9OP_769546A6",
+      "keywords": [
+        "上海市普陀区长征镇社区事务受理服务中心"
+      ],
+      "created_at": 1772891626.3426144,
+      "updated_at": 1772891626.3426144
+    },
+    {
+      "id": "1655f54db77b",
+      "name": "上海市普陀区长风新村街道经济发展服务中心",
+      "level": "unit",
+      "parent_id": "4cfa7fa6b9ee",
+      "code": "UNIT_MLYYK9LR_78B3AE99",
+      "keywords": [
+        "上海市普陀区长风新村街道经济发展服务中心"
+      ],
+      "created_at": 1772891626.342635,
+      "updated_at": 1772891626.3426356
+    },
+    {
+      "id": "d318886de9a7",
+      "name": "中共上海市普陀区委员会党校",
+      "level": "unit",
+      "parent_id": "c4ab04345a26",
+      "code": "UNIT_MLYYK9LJ_2AFBB4CB",
+      "keywords": [
+        "中共上海市普陀区委员会党校"
+      ],
+      "created_at": 1772891626.3426538,
+      "updated_at": 1772891626.3426538
+    },
+    {
+      "id": "0d2f9f02212d",
+      "name": "上海市普陀区万里街道综合行政执法队",
+      "level": "unit",
+      "parent_id": "5615d83ac0a9",
+      "code": "UNIT_MLYYK9LN_8A559255",
+      "keywords": [
+        "上海市普陀区万里街道综合行政执法队"
+      ],
+      "created_at": 1772891626.3426776,
+      "updated_at": 1772891626.342678
+    },
+    {
+      "id": "4a0fdc8aed28",
+      "name": "上海市普陀区人民政府办公室",
+      "level": "unit",
+      "parent_id": "c4ab04345a26",
+      "code": "UNIT_MLYYK9LJ_A187AA11",
+      "keywords": [
+        "上海市普陀区人民政府",
+        "上海市普陀区人民政府办公室"
+      ],
+      "created_at": 1772891626.3427026,
+      "updated_at": 1772891626.342703
+    },
+    {
+      "id": "a35a537a7c4b",
+      "name": "上海市普陀区体育局本级",
+      "level": "unit",
+      "parent_id": "362ef2f8090e",
+      "code": "UNIT_MLYYK9LE_A910566A",
+      "keywords": [
+        "上海市普陀区体育局本级"
+      ],
+      "created_at": 1772891626.342728,
+      "updated_at": 1772891626.3427281
+    },
+    {
+      "id": "a01037a4aa65",
+      "name": "上海市普陀区妇婴保健院",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L5_10E5C2F2",
+      "keywords": [
+        "上海市普陀区妇婴保健院"
+      ],
+      "created_at": 1772891626.3427474,
+      "updated_at": 1772891626.342748
+    },
+    {
+      "id": "5e1ad7125bd8",
+      "name": "上海市普陀区宜川路街道综合行政执法队",
+      "level": "unit",
+      "parent_id": "c18b6059abf5",
+      "code": "UNIT_MLYYK9LQ_9B7DBC7F",
+      "keywords": [
+        "上海市普陀区宜川路街道综合行政执法队"
+      ],
+      "created_at": 1772891626.3427713,
+      "updated_at": 1772891626.3427715
+    },
+    {
+      "id": "d80335ead033",
+      "name": "上海市普陀区曹杨新村街道综合行政执法队",
+      "level": "unit",
+      "parent_id": "286f2f5c1d43",
+      "code": "UNIT_MLYYK9M3_E1DBB5F4",
+      "keywords": [
+        "上海市普陀区曹杨新村街道综合行政执法队"
+      ],
+      "created_at": 1772891626.3427908,
+      "updated_at": 1772891626.3427913
+    },
+    {
+      "id": "e8d3a751ac5f",
+      "name": "上海市普陀区桃浦镇社区党群服务中心",
+      "level": "unit",
+      "parent_id": "e12b38d77365",
+      "code": "UNIT_MLYYK9OU_5A64F496",
+      "keywords": [
+        "上海市普陀区桃浦镇社区党群服务中心"
+      ],
+      "created_at": 1772891626.3428104,
+      "updated_at": 1772891626.3428106
+    },
+    {
+      "id": "9af01cfb15fc",
+      "name": "上海市普陀区甘泉路街道综合行政执法队",
+      "level": "unit",
+      "parent_id": "25f17f9db657",
+      "code": "UNIT_MLYYK9LV_2C68315A",
+      "keywords": [
+        "上海市普陀区甘泉路街道综合行政执法队"
+      ],
+      "created_at": 1772891626.3428435,
+      "updated_at": 1772891626.3428442
+    },
+    {
+      "id": "ca2144fe9aa3",
+      "name": "上海市普陀区真如镇街道综合行政执法队",
+      "level": "unit",
+      "parent_id": "5b13580c3a50",
+      "code": "UNIT_MLYYK9M5_37E5F549",
+      "keywords": [
+        "上海市普陀区真如镇街道综合行政执法队"
+      ],
+      "created_at": 1772891626.3428671,
+      "updated_at": 1772891626.3428674
+    },
+    {
+      "id": "ca4860ebba81",
+      "name": "上海市普陀区石泉路街道综合行政执法队",
+      "level": "unit",
+      "parent_id": "31ec43cf82a8",
+      "code": "UNIT_MLYYK9LX_AE75E9D5",
+      "keywords": [
+        "上海市普陀区石泉路街道综合行政执法队"
+      ],
+      "created_at": 1772891626.3428893,
+      "updated_at": 1772891626.3428895
+    },
+    {
+      "id": "6d093e77a2ac",
+      "name": "上海市普陀区重大项目推进办公室",
+      "level": "unit",
+      "parent_id": "ea4467ee3671",
+      "code": "UNIT_MLYYK9M8_A6C55226",
+      "keywords": [
+        "上海市普陀区重大项目推进",
+        "上海市普陀区重大项目推进办公室"
+      ],
+      "created_at": 1772891626.3429105,
+      "updated_at": 1772891626.342911
+    },
+    {
+      "id": "05418fdcb497",
+      "name": "上海市普陀区长寿路街道综合行政执法队",
+      "level": "unit",
+      "parent_id": "f940086acbb7",
+      "code": "UNIT_MLYYK9M0_CAAE8EC4",
+      "keywords": [
+        "上海市普陀区长寿路街道综合行政执法队"
+      ],
+      "created_at": 1772891626.3429353,
+      "updated_at": 1772891626.3429358
+    },
+    {
+      "id": "85467aa49c45",
+      "name": "上海市普陀区长征镇综合行政执法队",
+      "level": "unit",
+      "parent_id": "65154bbe41c2",
+      "code": "UNIT_MLYYK9OQ_E5F670AC",
+      "keywords": [
+        "上海市普陀区长征镇综合行政执法队"
+      ],
+      "created_at": 1772891626.342958,
+      "updated_at": 1772891626.3429587
+    },
+    {
+      "id": "b9766ca1425b",
+      "name": "上海市普陀区长风新村街道综合行政执法队",
+      "level": "unit",
+      "parent_id": "4cfa7fa6b9ee",
+      "code": "UNIT_MLYYK9LS_3D471251",
+      "keywords": [
+        "上海市普陀区长风新村街道综合行政执法队"
+      ],
+      "created_at": 1772891626.3429933,
+      "updated_at": 1772891626.3429935
+    },
+    {
+      "id": "2becb84162ca",
+      "name": "同济大学第二附属中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MH_90C5F403",
+      "keywords": [
+        "同济大学第二附属中学"
+      ],
+      "created_at": 1772891626.3430178,
+      "updated_at": 1772891626.343018
+    },
+    {
+      "id": "1b5e6ce6bb98",
+      "name": "上海市普陀区桃浦镇财政所",
+      "level": "unit",
+      "parent_id": "e12b38d77365",
+      "code": "UNIT_MLYYK9OU_9DCB2129",
+      "keywords": [
+        "上海市普陀区桃浦镇财政所"
+      ],
+      "created_at": 1772891626.3430533,
+      "updated_at": 1772891626.3430536
+    },
+    {
+      "id": "c7493bf0f38e",
+      "name": "上海市普陀区甘泉街道社区卫生服务中心",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L5_8CA8C30F",
+      "keywords": [
+        "上海市普陀区甘泉街道社区卫生服务中心"
+      ],
+      "created_at": 1772891626.3430731,
+      "updated_at": 1772891626.3430736
+    },
+    {
+      "id": "08b214a5c6d6",
+      "name": "上海市普陀区长征镇城市运行管理中心",
+      "level": "unit",
+      "parent_id": "65154bbe41c2",
+      "code": "UNIT_MLYYK9OQ_1C571CDD",
+      "keywords": [
+        "上海市普陀区长征镇城市运行管理中心"
+      ],
+      "created_at": 1772891626.3430927,
+      "updated_at": 1772891626.343093
+    },
+    {
+      "id": "9da25e42b348",
+      "name": "上海市普陀区青少年游泳学校",
+      "level": "unit",
+      "parent_id": "362ef2f8090e",
+      "code": "UNIT_MLYYK9LE_43D5B525",
+      "keywords": [
+        "上海市普陀区青少年游泳学校"
+      ],
+      "created_at": 1772891626.3431113,
+      "updated_at": 1772891626.3431118
+    },
+    {
+      "id": "01b64b988243",
+      "name": "上海师范大学附属第二实验学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MI_9B5ABF72",
+      "keywords": [
+        "上海师范大学附属第二实验学校"
+      ],
+      "created_at": 1772891626.3431382,
+      "updated_at": 1772891626.3431385
+    },
+    {
+      "id": "149df3b7e47f",
+      "name": "上海市普陀区桃浦镇农村集体资产管理中心",
+      "level": "unit",
+      "parent_id": "e12b38d77365",
+      "code": "UNIT_MLYYK9OU_D98E63F4",
+      "keywords": [
+        "上海市普陀区桃浦镇农村集体资产管理中心"
+      ],
+      "created_at": 1772891626.3431678,
+      "updated_at": 1772891626.343168
+    },
+    {
+      "id": "1e763da58344",
+      "name": "上海市普陀区疾病预防控制中心",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L5_BE57C654",
+      "keywords": [
+        "上海市普陀区疾病预防控制中心"
+      ],
+      "created_at": 1772891626.343201,
+      "updated_at": 1772891626.3432014
+    },
+    {
+      "id": "7cfa46b2446b",
+      "name": "上海市普陀区长征镇农村集体资产管理中心",
+      "level": "unit",
+      "parent_id": "65154bbe41c2",
+      "code": "UNIT_MLYYK9OR_E7994897",
+      "keywords": [
+        "上海市普陀区长征镇农村集体资产管理中心"
+      ],
+      "created_at": 1772891626.3432217,
+      "updated_at": 1772891626.343222
+    },
+    {
+      "id": "4b94b9479d14",
+      "name": "上海市普陀区青少年足球学校",
+      "level": "unit",
+      "parent_id": "362ef2f8090e",
+      "code": "UNIT_MLYYK9LF_394E3341",
+      "keywords": [
+        "上海市普陀区青少年足球学校"
+      ],
+      "created_at": 1772891626.3432398,
+      "updated_at": 1772891626.3432403
+    },
+    {
+      "id": "1e51a100dd99",
+      "name": "上海市沙田学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MI_F289FB9C",
+      "keywords": [
+        "上海市沙田学校"
+      ],
+      "created_at": 1772891626.3432605,
+      "updated_at": 1772891626.3432608
+    },
+    {
+      "id": "0e0ac864990b",
+      "name": "上海市普陀区桃浦镇经济发展服务中心",
+      "level": "unit",
+      "parent_id": "e12b38d77365",
+      "code": "UNIT_MLYYK9OV_FC51FB67",
+      "keywords": [
+        "上海市普陀区桃浦镇经济发展服务中心"
+      ],
+      "created_at": 1772891626.3432794,
+      "updated_at": 1772891626.3432796
+    },
+    {
+      "id": "d0eb96a862a0",
+      "name": "上海市普陀区精神卫生中心",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L6_8CA61530",
+      "keywords": [
+        "上海市普陀区精神卫生中心"
+      ],
+      "created_at": 1772891626.3432996,
+      "updated_at": 1772891626.3433
+    },
+    {
+      "id": "a59608920638",
+      "name": "上海市普陀区长征镇经济发展服务中心",
+      "level": "unit",
+      "parent_id": "65154bbe41c2",
+      "code": "UNIT_MLYYK9OR_A8435AF7",
+      "keywords": [
+        "上海市普陀区长征镇经济发展服务中心"
+      ],
+      "created_at": 1772891626.3433216,
+      "updated_at": 1772891626.343322
+    },
+    {
+      "id": "2021012b843d",
+      "name": "上海市普陀区青少年体育运动学校",
+      "level": "unit",
+      "parent_id": "362ef2f8090e",
+      "code": "UNIT_MLYYK9LF_7C2CFB7B",
+      "keywords": [
+        "上海市普陀区青少年体育运动学校"
+      ],
+      "created_at": 1772891626.3433423,
+      "updated_at": 1772891626.3433425
+    },
+    {
+      "id": "86ca7abb530a",
+      "name": "上海市曹杨中学附属学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MI_9A7DCC7B",
+      "keywords": [
+        "上海市曹杨中学附属学校"
+      ],
+      "created_at": 1772891626.343364,
+      "updated_at": 1772891626.3433647
+    },
+    {
+      "id": "f38376bd941d",
+      "name": "上海市普陀区体育事业管理中心",
+      "level": "unit",
+      "parent_id": "362ef2f8090e",
+      "code": "UNIT_MLYYK9LG_9FDE7461",
+      "keywords": [
+        "上海市普陀区体育事业管理中心"
+      ],
+      "created_at": 1772891626.3433857,
+      "updated_at": 1772891626.3433862
+    },
+    {
+      "id": "c75495ebbd33",
+      "name": "上海市普陀区利群医院",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L6_238AFCA3",
+      "keywords": [
+        "上海市普陀区利群医院"
+      ],
+      "created_at": 1772891626.3434038,
+      "updated_at": 1772891626.3434043
+    },
+    {
+      "id": "9bd6c68066fa",
+      "name": "上海市普陀区晋元高级中学附属学校南校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MJ_82F5617A",
+      "keywords": [
+        "上海市普陀区晋元高级中学附属学校南校"
+      ],
+      "created_at": 1772891626.3434367,
+      "updated_at": 1772891626.343437
+    },
+    {
+      "id": "ebc72ad7b400",
+      "name": "上海市晋元高级中学附属学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MJ_8A2B8DBD",
+      "keywords": [
+        "上海市晋元高级中学附属学校"
+      ],
+      "created_at": 1772891626.343452,
+      "updated_at": 1772891626.3434522
+    },
+    {
+      "id": "d65edd01349c",
+      "name": "上海市普陀区人民医院",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L6_C2A9BC00",
+      "keywords": [
+        "上海市普陀区人民医院"
+      ],
+      "created_at": 1772891626.3434732,
+      "updated_at": 1772891626.3434737
+    },
+    {
+      "id": "805147c7497b",
+      "name": "上海市普陀区石泉街道社区卫生服务中心",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L7_27222CBE",
+      "keywords": [
+        "上海市普陀区石泉街道社区卫生服务中心"
+      ],
+      "created_at": 1772891626.3435154,
+      "updated_at": 1772891626.3435156
+    },
+    {
+      "id": "b4d67121dc75",
+      "name": "上海市铜川学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MK_1F3B0F6A",
+      "keywords": [
+        "上海市铜川学校"
+      ],
+      "created_at": 1772891626.3435314,
+      "updated_at": 1772891626.3435316
+    },
+    {
+      "id": "7ea3ae1204f3",
+      "name": "上海市普陀区桃浦镇社区卫生服务中心",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L7_DAA3685E",
+      "keywords": [
+        "上海市普陀区桃浦镇社区卫生服务中心"
+      ],
+      "created_at": 1772891626.343553,
+      "updated_at": 1772891626.3435533
+    },
+    {
+      "id": "54f38a225f89",
+      "name": "上海市真如中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MK_23EB2FC6",
+      "keywords": [
+        "上海市真如中学"
+      ],
+      "created_at": 1772891626.3435776,
+      "updated_at": 1772891626.3435779
+    },
+    {
+      "id": "2e1ba6ad3b91",
+      "name": "上海市延河中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9ML_98E6622E",
+      "keywords": [
+        "上海市延河中学"
+      ],
+      "created_at": 1772891626.3436198,
+      "updated_at": 1772891626.3436222
+    },
+    {
+      "id": "a0a81822d4b8",
+      "name": "上海市普陀区卫生健康委员会监督所",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L7_FBDEDDC5",
+      "keywords": [
+        "上海市普陀区卫生健康委员会监督所"
+      ],
+      "created_at": 1772891626.3436656,
+      "updated_at": 1772891626.343666
+    },
+    {
+      "id": "22112d0b38a2",
+      "name": "上海市普陀区眼病牙病防治所",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L8_A9E8CA4A",
+      "keywords": [
+        "上海市普陀区眼病牙病防治所"
+      ],
+      "created_at": 1772891626.3436882,
+      "updated_at": 1772891626.3436882
+    },
+    {
+      "id": "0e0aa2421ebe",
+      "name": "华东师范大学附属外国语实验学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9ML_E0709CB6",
+      "keywords": [
+        "华东师范大学附属外国语实验学校"
+      ],
+      "created_at": 1772891626.3437142,
+      "updated_at": 1772891626.3437147
+    },
+    {
+      "id": "6d771a5c59f1",
+      "name": "上海市普陀区宜川街道社区卫生服务中心",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L8_5AF00227",
+      "keywords": [
+        "上海市普陀区宜川街道社区卫生服务中心"
+      ],
+      "created_at": 1772891626.3437376,
+      "updated_at": 1772891626.3437378
+    },
+    {
+      "id": "b76a176cbd84",
+      "name": "上海市曹杨第二中学附属实验中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9ML_47131870",
+      "keywords": [
+        "上海市曹杨第二中学附属实验中学"
+      ],
+      "created_at": 1772891626.3437586,
+      "updated_at": 1772891626.343759
+    },
+    {
+      "id": "674c4aff870b",
+      "name": "上海市普陀区中心医院",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L8_82EEFAE0",
+      "keywords": [
+        "上海市普陀区中心医院"
+      ],
+      "created_at": 1772891626.3437786,
+      "updated_at": 1772891626.3437788
+    },
+    {
+      "id": "a76a565d92d1",
+      "name": "上海市普陀区教育学院附属中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MM_13EC1D64",
+      "keywords": [
+        "上海市普陀区教育学院附属中学"
+      ],
+      "created_at": 1772891626.3437977,
+      "updated_at": 1772891626.343798
+    },
+    {
+      "id": "49c3d0f37ec8",
+      "name": "上海市普陀区中医医院",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L9_FA024311",
+      "keywords": [
+        "上海市普陀区中医医院"
+      ],
+      "created_at": 1772891626.3438208,
+      "updated_at": 1772891626.343821
+    },
+    {
+      "id": "9bf70f105414",
+      "name": "上海市真北中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MM_73423C9B",
+      "keywords": [
+        "上海市真北中学"
+      ],
+      "created_at": 1772891626.3438406,
+      "updated_at": 1772891626.343841
+    },
+    {
+      "id": "f10449be8cb5",
+      "name": "上海市怒江中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MM_1FB838A8",
+      "keywords": [
+        "上海市怒江中学"
+      ],
+      "created_at": 1772891626.3438592,
+      "updated_at": 1772891626.3438597
+    },
+    {
+      "id": "859a71133696",
+      "name": "上海市药剂学校",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9L9_165E3034",
+      "keywords": [
+        "上海市药剂学校"
+      ],
+      "created_at": 1772891626.3438883,
+      "updated_at": 1772891626.343889
+    },
+    {
+      "id": "eb9f1d24210c",
+      "name": "上海市普陀区长寿街道社区卫生服务中心",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9LA_95DB898D",
+      "keywords": [
+        "上海市普陀区长寿街道社区卫生服务中心"
+      ],
+      "created_at": 1772891626.3439088,
+      "updated_at": 1772891626.343909
+    },
+    {
+      "id": "efe7e698e232",
+      "name": "上海市曹杨二中附属学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MN_A5C2844A",
+      "keywords": [
+        "上海市曹杨二中附属学校"
+      ],
+      "created_at": 1772891626.3439279,
+      "updated_at": 1772891626.343928
+    },
+    {
+      "id": "d173cbcb4c77",
+      "name": "上海市普陀区桃浦镇第二社区卫生服务中心",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9LA_21DC86AF",
+      "keywords": [
+        "上海市普陀区桃浦镇第二社区卫生服务中心"
+      ],
+      "created_at": 1772891626.343948,
+      "updated_at": 1772891626.343948
+    },
+    {
+      "id": "50c83d8db7f6",
+      "name": "上海市甘泉外国语中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MN_0FB6982C",
+      "keywords": [
+        "上海市甘泉外国语中学"
+      ],
+      "created_at": 1772891626.3439665,
+      "updated_at": 1772891626.343967
+    },
+    {
+      "id": "89189e0aae48",
+      "name": "上海市光新学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MO_E2AAF166",
+      "keywords": [
+        "上海市光新学校"
+      ],
+      "created_at": 1772891626.343987,
+      "updated_at": 1772891626.3439872
+    },
+    {
+      "id": "81f208063d64",
+      "name": "上海市普陀区卫生健康事务管理中心",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9LA_8F7E5A6D",
+      "keywords": [
+        "上海市普陀区卫生健康事务管理中心"
+      ],
+      "created_at": 1772891626.3440092,
+      "updated_at": 1772891626.3440096
+    },
+    {
+      "id": "b3e805b3da35",
+      "name": "上海市普陀区长征镇社区卫生服务中心",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9LB_C3A991E0",
+      "keywords": [
+        "上海市普陀区长征镇社区卫生服务中心"
+      ],
+      "created_at": 1772891626.3440297,
+      "updated_at": 1772891626.34403
+    },
+    {
+      "id": "9e0ac81f17db",
+      "name": "上海市洛川学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MO_A3C2F276",
+      "keywords": [
+        "上海市洛川学校"
+      ],
+      "created_at": 1772891626.344057,
+      "updated_at": 1772891626.3440576
+    },
+    {
+      "id": "bb2a7a7e6dcf",
+      "name": "上海市北海中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MP_50FB12C8",
+      "keywords": [
+        "上海市北海中学"
+      ],
+      "created_at": 1772891626.344077,
+      "updated_at": 1772891626.3440773
+    },
+    {
+      "id": "542aadc2d914",
+      "name": "上海市普陀区卫生健康促进中心",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9LB_18020D96",
+      "keywords": [
+        "上海市普陀区卫生健康促进中心"
+      ],
+      "created_at": 1772891626.3441133,
+      "updated_at": 1772891626.3441136
+    },
+    {
+      "id": "2ab72767ed62",
+      "name": "上海市普陀区万里街道社区卫生服务中心",
+      "level": "unit",
+      "parent_id": "671b74dc5eb7",
+      "code": "UNIT_MLYYK9LB_1D04F7BF",
+      "keywords": [
+        "上海市普陀区万里街道社区卫生服务中心"
+      ],
+      "created_at": 1772891626.3441312,
+      "updated_at": 1772891626.3441315
+    },
+    {
+      "id": "b2331b9815e0",
+      "name": "上海市洵阳中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MP_9A68F003",
+      "keywords": [
+        "上海市洵阳中学"
+      ],
+      "created_at": 1772891626.3441515,
+      "updated_at": 1772891626.344152
+    },
+    {
+      "id": "4f4f67cbb098",
+      "name": "上海市普陀区教育学院附属学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MQ_F27245C6",
+      "keywords": [
+        "上海市普陀区教育学院附属学校"
+      ],
+      "created_at": 1772891626.34417,
+      "updated_at": 1772891626.3441703
+    },
+    {
+      "id": "a63b62347416",
+      "name": "上海市曹杨第二中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MQ_00673414",
+      "keywords": [
+        "上海市曹杨第二中学"
+      ],
+      "created_at": 1772891626.34419,
+      "updated_at": 1772891626.3441904
+    },
+    {
+      "id": "b634450d48b4",
+      "name": "上海市晋元高级中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MR_26BE3C8E",
+      "keywords": [
+        "上海市晋元高级中学"
+      ],
+      "created_at": 1772891626.3442085,
+      "updated_at": 1772891626.3442087
+    },
+    {
+      "id": "949b61afc29b",
+      "name": "上海市曹杨中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MR_B0D2AF09",
+      "keywords": [
+        "上海市曹杨中学"
+      ],
+      "created_at": 1772891626.3442333,
+      "updated_at": 1772891626.3442335
+    },
+    {
+      "id": "8c97b0dce929",
+      "name": "上海市宜川中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MS_5593D76B",
+      "keywords": [
+        "上海市宜川中学"
+      ],
+      "created_at": 1772891626.3442514,
+      "updated_at": 1772891626.3442516
+    },
+    {
+      "id": "eb51b9edc1eb",
+      "name": "上海音乐学院附属安师实验中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MT_D5E08486",
+      "keywords": [
+        "上海音乐学院附属安师实验中学"
+      ],
+      "created_at": 1772891626.3442717,
+      "updated_at": 1772891626.3442721
+    },
+    {
+      "id": "99b8c47927a7",
+      "name": "上海市普陀区教育考试中心",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MT_855E428B",
+      "keywords": [
+        "上海市普陀区教育考试中心"
+      ],
+      "created_at": 1772891626.34429,
+      "updated_at": 1772891626.3442903
+    },
+    {
+      "id": "ae85b62fc12a",
+      "name": "上海市普陀区青少年教育活动中心",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MT_E9361E0E",
+      "keywords": [
+        "上海市普陀区青少年教育活动中心"
+      ],
+      "created_at": 1772891626.34431,
+      "updated_at": 1772891626.3443103
+    },
+    {
+      "id": "21178319b0a1",
+      "name": "上海市澄源中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MU_6413BDB9",
+      "keywords": [
+        "上海市澄源中学"
+      ],
+      "created_at": 1772891626.3443284,
+      "updated_at": 1772891626.3443286
+    },
+    {
+      "id": "bce9b111565f",
+      "name": "上海市普陀区甘霖初级职业技术学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MU_430158BA",
+      "keywords": [
+        "上海市普陀区甘霖初级职业技术学校"
+      ],
+      "created_at": 1772891626.3443525,
+      "updated_at": 1772891626.3443527
+    },
+    {
+      "id": "9d9d9a5ce65e",
+      "name": "上海市曹杨职业技术学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MV_5D350ECB",
+      "keywords": [
+        "上海市曹杨职业技术学校"
+      ],
+      "created_at": 1772891626.3443706,
+      "updated_at": 1772891626.3443708
+    },
+    {
+      "id": "f438d9f1c61a",
+      "name": "上海市普陀区业余大学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MV_74E3F3A7",
+      "keywords": [
+        "上海市普陀区业余大学"
+      ],
+      "created_at": 1772891626.3443987,
+      "updated_at": 1772891626.3443995
+    },
+    {
+      "id": "042d4627a116",
+      "name": "上海市普陀区教育学院",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MW_20A3FC17",
+      "keywords": [
+        "上海市普陀区教育学院"
+      ],
+      "created_at": 1772891626.3444173,
+      "updated_at": 1772891626.3444178
+    },
+    {
+      "id": "8eec17756821",
+      "name": "上海市普陀区桃浦中心小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MW_CB6C6B2F",
+      "keywords": [
+        "上海市普陀区桃浦中心小学"
+      ],
+      "created_at": 1772891626.3444383,
+      "updated_at": 1772891626.3444386
+    },
+    {
+      "id": "8975afef58bc",
+      "name": "上海市普陀区新普陀小学西校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MW_65F3BBC2",
+      "keywords": [
+        "上海市普陀区新普陀小学西校"
+      ],
+      "created_at": 1772891626.3444557,
+      "updated_at": 1772891626.3444562
+    },
+    {
+      "id": "568190dc36a1",
+      "name": "上海市普陀区真光小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MW_0792601A",
+      "keywords": [
+        "上海市普陀区真光小学"
+      ],
+      "created_at": 1772891626.344485,
+      "updated_at": 1772891626.3444853
+    },
+    {
+      "id": "bdbe6b4346f1",
+      "name": "上海市普陀区曹杨实验小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MX_8525F410",
+      "keywords": [
+        "上海市普陀区曹杨实验小学"
+      ],
+      "created_at": 1772891626.3445053,
+      "updated_at": 1772891626.3445055
+    },
+    {
+      "id": "5aa3d38ba5f1",
+      "name": "上海市普陀区真如第三小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MX_C2C17AF0",
+      "keywords": [
+        "上海市普陀区真如第三小学"
+      ],
+      "created_at": 1772891626.344541,
+      "updated_at": 1772891626.3445418
+    },
+    {
+      "id": "833283a77ad8",
+      "name": "上海市普陀区联建小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MX_0D6EFA42",
+      "keywords": [
+        "上海市普陀区联建小学"
+      ],
+      "created_at": 1772891626.344563,
+      "updated_at": 1772891626.3445632
+    },
+    {
+      "id": "f272a2af3310",
+      "name": "上海市普陀区真如文英中心小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MY_6982CA38",
+      "keywords": [
+        "上海市普陀区真如文英中心小学"
+      ],
+      "created_at": 1772891626.3445837,
+      "updated_at": 1772891626.344584
+    },
+    {
+      "id": "e3fa4039afaf",
+      "name": "上海市普陀区曹杨新村第六小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MY_86C80B2A",
+      "keywords": [
+        "上海市普陀区曹杨新村第六小学"
+      ],
+      "created_at": 1772891626.3446016,
+      "updated_at": 1772891626.344602
+    },
+    {
+      "id": "0358fcd29001",
+      "name": "上海市普陀区金沙江路小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MY_CBC3A11F",
+      "keywords": [
+        "上海市普陀区金沙江路小学"
+      ],
+      "created_at": 1772891626.344622,
+      "updated_at": 1772891626.3446224
+    },
+    {
+      "id": "fa0c8e47fff0",
+      "name": "华东师范大学附属小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MZ_D6C304D3",
+      "keywords": [
+        "华东师范大学附属小学"
+      ],
+      "created_at": 1772891626.3446534,
+      "updated_at": 1772891626.3446536
+    },
+    {
+      "id": "83379ec959a9",
+      "name": "上海市普陀区管弄新村小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MZ_8A707EF8",
+      "keywords": [
+        "上海市普陀区管弄新村小学"
+      ],
+      "created_at": 1772891626.344674,
+      "updated_at": 1772891626.3446743
+    },
+    {
+      "id": "fd2f6d2cf93e",
+      "name": "上海市普陀区中山北路第一小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9MZ_DD40B79F",
+      "keywords": [
+        "上海市普陀区中山北路第一小学"
+      ],
+      "created_at": 1772891626.3446934,
+      "updated_at": 1772891626.3446937
+    },
+    {
+      "id": "4adf01539f02",
+      "name": "上海市普陀区启星学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N0_B94386D5",
+      "keywords": [
+        "上海市普陀区启星学校"
+      ],
+      "created_at": 1772891626.344714,
+      "updated_at": 1772891626.3447142
+    },
+    {
+      "id": "af9cd6fb66bb",
+      "name": "上海市普陀区洵阳路小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N0_D1E286D4",
+      "keywords": [
+        "上海市普陀区洵阳路小学"
+      ],
+      "created_at": 1772891626.3447359,
+      "updated_at": 1772891626.344736
+    },
+    {
+      "id": "d557efdab87c",
+      "name": "上海市普陀区武宁路小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N0_90819D44",
+      "keywords": [
+        "上海市普陀区武宁路小学"
+      ],
+      "created_at": 1772891626.3447561,
+      "updated_at": 1772891626.3447564
+    },
+    {
+      "id": "f147010fd58d",
+      "name": "上海市普陀区朝春中心小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N1_134AB62A",
+      "keywords": [
+        "上海市普陀区朝春中心小学"
+      ],
+      "created_at": 1772891626.3447711,
+      "updated_at": 1772891626.3447716
+    },
+    {
+      "id": "a2f6e1426c08",
+      "name": "上海市普陀区回民小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N1_F057829E",
+      "keywords": [
+        "上海市普陀区回民小学"
+      ],
+      "created_at": 1772891626.3448105,
+      "updated_at": 1772891626.3448107
+    },
+    {
+      "id": "79d225f2ac00",
+      "name": "上海市普陀区华阴小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N1_1C32DD0F",
+      "keywords": [
+        "上海市普陀区华阴小学"
+      ],
+      "created_at": 1772891626.3448246,
+      "updated_at": 1772891626.3448246
+    },
+    {
+      "id": "6c37c01fc42a",
+      "name": "上海市普陀区平利路第一小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N2_6C6A8BAC",
+      "keywords": [
+        "上海市普陀区平利路第一小学"
+      ],
+      "created_at": 1772891626.344832,
+      "updated_at": 1772891626.344832
+    },
+    {
+      "id": "dfb0e1e0db94",
+      "name": "上海市普陀区沪太新村第一小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N2_C3FDC489",
+      "keywords": [
+        "上海市普陀区沪太新村第一小学"
+      ],
+      "created_at": 1772891626.3448539,
+      "updated_at": 1772891626.3448539
+    },
+    {
+      "id": "02a827802a77",
+      "name": "上海市万里城实验学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N3_C751CF1E",
+      "keywords": [
+        "上海市万里城实验学校"
+      ],
+      "created_at": 1772891626.3448603,
+      "updated_at": 1772891626.3448606
+    },
+    {
+      "id": "213c2bbef496",
+      "name": "上海市普陀区树德小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N3_9E326E0D",
+      "keywords": [
+        "上海市普陀区树德小学"
+      ],
+      "created_at": 1772891626.344873,
+      "updated_at": 1772891626.3448732
+    },
+    {
+      "id": "9ed6c87e6305",
+      "name": "上海市普陀区小铃铛幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N3_A22B9AB5",
+      "keywords": [
+        "上海市普陀区小铃铛幼儿园"
+      ],
+      "created_at": 1772891626.34488,
+      "updated_at": 1772891626.3448803
+    },
+    {
+      "id": "aa843ef60b1d",
+      "name": "上海市普陀区美墅幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N3_AB4C1E51",
+      "keywords": [
+        "上海市普陀区美墅幼儿园"
+      ],
+      "created_at": 1772891626.3448875,
+      "updated_at": 1772891626.3448877
+    },
+    {
+      "id": "56d0550355ce",
+      "name": "上海市普陀区金月亮幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N4_17BA2692",
+      "keywords": [
+        "上海市普陀区金月亮幼儿园"
+      ],
+      "created_at": 1772891626.3448942,
+      "updated_at": 1772891626.3448942
+    },
+    {
+      "id": "faf593a70fd4",
+      "name": "上海市普陀区金苹果幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N4_7519E710",
+      "keywords": [
+        "上海市普陀区金苹果幼儿园"
+      ],
+      "created_at": 1772891626.3449006,
+      "updated_at": 1772891626.3449006
+    },
+    {
+      "id": "27354a8279e6",
+      "name": "上海市普陀区真光幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N5_155AE466",
+      "keywords": [
+        "上海市普陀区真光幼儿园"
+      ],
+      "created_at": 1772891626.3449078,
+      "updated_at": 1772891626.3449078
+    },
+    {
+      "id": "1b85551a4f54",
+      "name": "上海市普陀区曹杨新村第八幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N5_7B75648E",
+      "keywords": [
+        "上海市普陀区曹杨新村第八幼儿园"
+      ],
+      "created_at": 1772891626.3449144,
+      "updated_at": 1772891626.3449147
+    },
+    {
+      "id": "f27e3da0113f",
+      "name": "上海市普陀区曹杨新村第六幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N5_78E0E6E3",
+      "keywords": [
+        "上海市普陀区曹杨新村第六幼儿园"
+      ],
+      "created_at": 1772891626.3449214,
+      "updated_at": 1772891626.3449214
+    },
+    {
+      "id": "1219c8294ced",
+      "name": "上海市普陀区北石路幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N6_9750B8FE",
+      "keywords": [
+        "上海市普陀区北石路幼儿园"
+      ],
+      "created_at": 1772891626.344931,
+      "updated_at": 1772891626.344931
+    },
+    {
+      "id": "3d1d32d613d5",
+      "name": "上海市普陀区杏山路幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N6_DBDAC5CC",
+      "keywords": [
+        "上海市普陀区杏山路幼儿园"
+      ],
+      "created_at": 1772891626.3449402,
+      "updated_at": 1772891626.3449402
+    },
+    {
+      "id": "06d2441e4701",
+      "name": "上海市普陀区梅川幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N7_1E56A7FB",
+      "keywords": [
+        "上海市普陀区梅川幼儿园"
+      ],
+      "created_at": 1772891626.344947,
+      "updated_at": 1772891626.3449473
+    },
+    {
+      "id": "915d3e5d09d4",
+      "name": "上海市普陀区大渡河路第二幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N7_86AC6080",
+      "keywords": [
+        "上海市普陀区大渡河路第二幼儿园"
+      ],
+      "created_at": 1772891626.3449538,
+      "updated_at": 1772891626.3449538
+    },
+    {
+      "id": "7d632769b999",
+      "name": "上海市普陀区长风二村幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N8_73B23AC4",
+      "keywords": [
+        "上海市普陀区长风二村幼儿园"
+      ],
+      "created_at": 1772891626.3449605,
+      "updated_at": 1772891626.3449607
+    },
+    {
+      "id": "586252fd7baa",
+      "name": "上海市普陀区岚皋路幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N8_F6AE5166",
+      "keywords": [
+        "上海市普陀区岚皋路幼儿园"
+      ],
+      "created_at": 1772891626.34497,
+      "updated_at": 1772891626.3449702
+    },
+    {
+      "id": "c079b83409ab",
+      "name": "上海市普陀区管弄新村幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N9_9A321F8C",
+      "keywords": [
+        "上海市普陀区管弄新村幼儿园"
+      ],
+      "created_at": 1772891626.3449774,
+      "updated_at": 1772891626.3449774
+    },
+    {
+      "id": "7e75b2f6f75b",
+      "name": "上海市普陀区曹杨新村幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9N9_35224993",
+      "keywords": [
+        "上海市普陀区曹杨新村幼儿园"
+      ],
+      "created_at": 1772891626.3449872,
+      "updated_at": 1772891626.3449872
+    },
+    {
+      "id": "83a3cf7cfc99",
+      "name": "上海市普陀区武宁新村幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NA_13FEEFE0",
+      "keywords": [
+        "上海市普陀区武宁新村幼儿园"
+      ],
+      "created_at": 1772891626.344994,
+      "updated_at": 1772891626.344994
+    },
+    {
+      "id": "b740755fe30f",
+      "name": "上海市普陀区回民幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NA_6CCBB500",
+      "keywords": [
+        "上海市普陀区回民幼儿园"
+      ],
+      "created_at": 1772891626.345003,
+      "updated_at": 1772891626.3450034
+    },
+    {
+      "id": "855fbd5afca6",
+      "name": "上海市普陀区白玉新村幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NA_B29F3263",
+      "keywords": [
+        "上海市普陀区白玉新村幼儿园"
+      ],
+      "created_at": 1772891626.3450103,
+      "updated_at": 1772891626.3450103
+    },
+    {
+      "id": "1ff43e28d145",
+      "name": "上海市普陀区东新幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NB_1E1768D5",
+      "keywords": [
+        "上海市普陀区东新幼儿园"
+      ],
+      "created_at": 1772891626.3450174,
+      "updated_at": 1772891626.3450174
+    },
+    {
+      "id": "f4197cec4374",
+      "name": "上海市普陀区兰溪路幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NB_4FF404E8",
+      "keywords": [
+        "上海市普陀区兰溪路幼儿园"
+      ],
+      "created_at": 1772891626.3450263,
+      "updated_at": 1772891626.3450263
+    },
+    {
+      "id": "a83784e776ea",
+      "name": "上海市普陀区宜川一村幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NB_3A4B289B",
+      "keywords": [
+        "上海市普陀区宜川一村幼儿园"
+      ],
+      "created_at": 1772891626.3450336,
+      "updated_at": 1772891626.345034
+    },
+    {
+      "id": "7ab0a4a7fafa",
+      "name": "上海市普陀区甘泉新村幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NC_C9A76FF7",
+      "keywords": [
+        "上海市普陀区甘泉新村幼儿园"
+      ],
+      "created_at": 1772891626.3450403,
+      "updated_at": 1772891626.3450406
+    },
+    {
+      "id": "2b77634e61ff",
+      "name": "上海市普陀区宜川六村幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NC_C7E69186",
+      "keywords": [
+        "上海市普陀区宜川六村幼儿园"
+      ],
+      "created_at": 1772891626.3450503,
+      "updated_at": 1772891626.3450506
+    },
+    {
+      "id": "f650690596a8",
+      "name": "上海市普陀区沪太新村第二幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9ND_ECBE7792",
+      "keywords": [
+        "上海市普陀区沪太新村第二幼儿园"
+      ],
+      "created_at": 1772891626.3450572,
+      "updated_at": 1772891626.3450572
+    },
+    {
+      "id": "8033247a1db4",
+      "name": "上海市普陀区太山新村幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9ND_077FD009",
+      "keywords": [
+        "上海市普陀区太山新村幼儿园"
+      ],
+      "created_at": 1772891626.3450642,
+      "updated_at": 1772891626.3450644
+    },
+    {
+      "id": "63b5b388a5a5",
+      "name": "上海市长征中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9ND_D9417BC1",
+      "keywords": [
+        "上海市长征中学"
+      ],
+      "created_at": 1772891626.345072,
+      "updated_at": 1772891626.3450723
+    },
+    {
+      "id": "1b53dfaf4e67",
+      "name": "上海市普陀区长征中心小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NE_5DFE7F24",
+      "keywords": [
+        "上海市普陀区长征中心小学"
+      ],
+      "created_at": 1772891626.345079,
+      "updated_at": 1772891626.3450792
+    },
+    {
+      "id": "0c2ff022c664",
+      "name": "上海市江宁学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NE_01E44B78",
+      "keywords": [
+        "上海市江宁学校"
+      ],
+      "created_at": 1772891626.345086,
+      "updated_at": 1772891626.345086
+    },
+    {
+      "id": "7cc4a0b1dd05",
+      "name": "上海市梅陇中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NE_746EF6AA",
+      "keywords": [
+        "上海市梅陇中学"
+      ],
+      "created_at": 1772891626.3450928,
+      "updated_at": 1772891626.345093
+    },
+    {
+      "id": "4c8650e3154a",
+      "name": "上海市普陀区新普陀小学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NF_EA4297FF",
+      "keywords": [
+        "上海市普陀区新普陀小学"
+      ],
+      "created_at": 1772891626.3450994,
+      "updated_at": 1772891626.3450994
+    },
+    {
+      "id": "f716c6e3b842",
+      "name": "上海市实验幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NF_202D6597",
+      "keywords": [
+        "上海市实验幼儿园"
+      ],
+      "created_at": 1772891626.3451154,
+      "updated_at": 1772891626.3451154
+    },
+    {
+      "id": "41d7748067ef",
+      "name": "上海市普陀区真如翠英幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NG_98D82F71",
+      "keywords": [
+        "上海市普陀区真如翠英幼儿园"
+      ],
+      "created_at": 1772891626.3451228,
+      "updated_at": 1772891626.3451228
+    },
+    {
+      "id": "0773c3c7b2d3",
+      "name": "上海市普陀区陆家宅幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NG_82715479",
+      "keywords": [
+        "上海市普陀区陆家宅幼儿园"
+      ],
+      "created_at": 1772891626.3451295,
+      "updated_at": 1772891626.3451297
+    },
+    {
+      "id": "85357db9fdbf",
+      "name": "上海市普陀区童星幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NH_6BE83396",
+      "keywords": [
+        "上海市普陀区童星幼儿园"
+      ],
+      "created_at": 1772891626.3451376,
+      "updated_at": 1772891626.3451378
+    },
+    {
+      "id": "2500de6fe5fb",
+      "name": "上海市普陀区康泰幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NH_E15C8EBB",
+      "keywords": [
+        "上海市普陀区康泰幼儿园"
+      ],
+      "created_at": 1772891626.3451445,
+      "updated_at": 1772891626.3451445
+    },
+    {
+      "id": "f91b1b2a8636",
+      "name": "上海市普陀区蘑菇亭幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NH_54CD2AD6",
+      "keywords": [
+        "上海市普陀区蘑菇亭幼儿园"
+      ],
+      "created_at": 1772891626.345151,
+      "updated_at": 1772891626.3451512
+    },
+    {
+      "id": "cf6cec33e1ba",
+      "name": "上海市普陀区宜川新村幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NI_C8785B9E",
+      "keywords": [
+        "上海市普陀区宜川新村幼儿园"
+      ],
+      "created_at": 1772891626.3451579,
+      "updated_at": 1772891626.3451579
+    },
+    {
+      "id": "eb395272815f",
+      "name": "上海市普陀区海贝尔幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NI_5FAD014D",
+      "keywords": [
+        "上海市普陀区海贝尔幼儿园"
+      ],
+      "created_at": 1772891626.345167,
+      "updated_at": 1772891626.345167
+    },
+    {
+      "id": "8f25cfa8cc08",
+      "name": "上海市普陀区普雄路幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NI_C4D050F3",
+      "keywords": [
+        "上海市普陀区普雄路幼儿园"
+      ],
+      "created_at": 1772891626.3451781,
+      "updated_at": 1772891626.3451784
+    },
+    {
+      "id": "345c07bcaf14",
+      "name": "上海市普陀区石岚新村幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NJ_6C26551D",
+      "keywords": [
+        "上海市普陀区石岚新村幼儿园"
+      ],
+      "created_at": 1772891626.3451858,
+      "updated_at": 1772891626.3451858
+    },
+    {
+      "id": "936909b9ba52",
+      "name": "上海市普陀区童的梦艺术幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NJ_B7CA92A1",
+      "keywords": [
+        "上海市普陀区童的梦艺术幼儿园"
+      ],
+      "created_at": 1772891626.3451922,
+      "updated_at": 1772891626.3451924
+    },
+    {
+      "id": "7a8b1982a455",
+      "name": "上海市普陀区银锄湖幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NK_1AC37F41",
+      "keywords": [
+        "上海市普陀区银锄湖幼儿园"
+      ],
+      "created_at": 1772891626.345199,
+      "updated_at": 1772891626.345199
+    },
+    {
+      "id": "53fe87d5a7df",
+      "name": "上海市普陀区满天星幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NK_E38678A3",
+      "keywords": [
+        "上海市普陀区满天星幼儿园"
+      ],
+      "created_at": 1772891626.3452063,
+      "updated_at": 1772891626.3452063
+    },
+    {
+      "id": "e8a748bb47b6",
+      "name": "上海市儿童世界基金会普陀幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NK_A60ACEC1",
+      "keywords": [
+        "上海市儿童世界基金会普陀幼儿园"
+      ],
+      "created_at": 1772891626.345214,
+      "updated_at": 1772891626.345214
+    },
+    {
+      "id": "e5993097dc61",
+      "name": "上海市普陀区教育人力资源发展中心",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NL_8F6D88FB",
+      "keywords": [
+        "上海市普陀区教育人力资源发展中心"
+      ],
+      "created_at": 1772891626.345221,
+      "updated_at": 1772891626.345221
+    },
+    {
+      "id": "57c01b1f9233",
+      "name": "上海市普陀区长征中心幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NL_5D3D28AC",
+      "keywords": [
+        "上海市普陀区长征中心幼儿园"
+      ],
+      "created_at": 1772891626.3452306,
+      "updated_at": 1772891626.3452308
+    },
+    {
+      "id": "35dac2aec5ca",
+      "name": "上海市普陀区小红帆幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NN_EF999776",
+      "keywords": [
+        "上海市普陀区小红帆幼儿园"
+      ],
+      "created_at": 1772891626.3452377,
+      "updated_at": 1772891626.3452377
+    },
+    {
+      "id": "32503a4c0366",
+      "name": "上海市普陀区大风车幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NN_927E7C34",
+      "keywords": [
+        "上海市普陀区大风车幼儿园"
+      ],
+      "created_at": 1772891626.345245,
+      "updated_at": 1772891626.3452451
+    },
+    {
+      "id": "d66375051e56",
+      "name": "上海市普陀区教育事业服务中心",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NO_756B5690",
+      "keywords": [
+        "上海市普陀区教育事业服务中心"
+      ],
+      "created_at": 1772891626.3452542,
+      "updated_at": 1772891626.3452544
+    },
+    {
+      "id": "561c759fed10",
+      "name": "上海市普陀区曹杨新村第三幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NO_5BC1D92B",
+      "keywords": [
+        "上海市普陀区曹杨新村第三幼儿园"
+      ],
+      "created_at": 1772891626.3452613,
+      "updated_at": 1772891626.3452613
+    },
+    {
+      "id": "b1c9752466b8",
+      "name": "上海市普陀区教育督导和安全事务中心",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NP_FF7AC25D",
+      "keywords": [
+        "上海市普陀区教育督导和安全事务中心"
+      ],
+      "created_at": 1772891626.3452682,
+      "updated_at": 1772891626.3452685
+    },
+    {
+      "id": "e04e59cbc958",
+      "name": "上海市普陀区豪园幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NP_9D1CC0A5",
+      "keywords": [
+        "上海市普陀区豪园幼儿园"
+      ],
+      "created_at": 1772891626.3452754,
+      "updated_at": 1772891626.3452756
+    },
+    {
+      "id": "c9af57bcd7d2",
+      "name": "华东师范大学第四附属中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NP_02B7B003",
+      "keywords": [
+        "华东师范大学第四附属中学"
+      ],
+      "created_at": 1772891626.345282,
+      "updated_at": 1772891626.3452823
+    },
+    {
+      "id": "10d4e99d002d",
+      "name": "上海市普陀区早期教育指导中心",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NP_6341F172",
+      "keywords": [
+        "上海市普陀区早期教育指导中心"
+      ],
+      "created_at": 1772891626.345292,
+      "updated_at": 1772891626.345292
+    },
+    {
+      "id": "4fdb23991dd1",
+      "name": "上海市普陀区红樱桃幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NQ_4F6418A8",
+      "keywords": [
+        "上海市普陀区红樱桃幼儿园"
+      ],
+      "created_at": 1772891626.345299,
+      "updated_at": 1772891626.3452992
+    },
+    {
+      "id": "e27b442557a9",
+      "name": "上海市普陀区白天鹅幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NQ_BDDDBFAD",
+      "keywords": [
+        "上海市普陀区白天鹅幼儿园"
+      ],
+      "created_at": 1772891626.3453057,
+      "updated_at": 1772891626.3453057
+    },
+    {
+      "id": "b20fe3975a7a",
+      "name": "上海市中远实验学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NQ_3370027D",
+      "keywords": [
+        "上海市中远实验学校"
+      ],
+      "created_at": 1772891626.345312,
+      "updated_at": 1772891626.3453124
+    },
+    {
+      "id": "9a0e3b590ca7",
+      "name": "上海市普陀区教育局（事业）",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NR_6B279E03",
+      "keywords": [
+        "上海市普陀区教育局（事业）"
+      ],
+      "created_at": 1772891626.3453188,
+      "updated_at": 1772891626.3453188
+    },
+    {
+      "id": "3847303e8e08",
+      "name": "上海市普陀区绿洲幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NR_B082DDE3",
+      "keywords": [
+        "上海市普陀区绿洲幼儿园"
+      ],
+      "created_at": 1772891626.3453279,
+      "updated_at": 1772891626.345328
+    },
+    {
+      "id": "a45f511d99c6",
+      "name": "上海市金鼎学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NR_41D54F6A",
+      "keywords": [
+        "上海市金鼎学校"
+      ],
+      "created_at": 1772891626.345338,
+      "updated_at": 1772891626.3453383
+    },
+    {
+      "id": "9ed8678d2eb0",
+      "name": "上海市普陀区阳光娃娃幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NS_073E4D65",
+      "keywords": [
+        "上海市普陀区阳光娃娃幼儿园"
+      ],
+      "created_at": 1772891626.3453457,
+      "updated_at": 1772891626.345346
+    },
+    {
+      "id": "6bc448e5841f",
+      "name": "上海市普陀区恒力锦沧幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NS_E8058359",
+      "keywords": [
+        "上海市普陀区恒力锦沧幼儿园"
+      ],
+      "created_at": 1772891626.345355,
+      "updated_at": 1772891626.3453553
+    },
+    {
+      "id": "577d5ef5c1cd",
+      "name": "上海市普陀区秋月枫幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NS_1431FAC8",
+      "keywords": [
+        "上海市普陀区秋月枫幼儿园"
+      ],
+      "created_at": 1772891626.345362,
+      "updated_at": 1772891626.345362
+    },
+    {
+      "id": "c1691c7a39c4",
+      "name": "上海市文达学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NT_88DFCE38",
+      "keywords": [
+        "上海市文达学校"
+      ],
+      "created_at": 1772891626.3453684,
+      "updated_at": 1772891626.3453684
+    },
+    {
+      "id": "503fbd4c2149",
+      "name": "上海市普陀区汇丽幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NT_50F83516",
+      "keywords": [
+        "上海市普陀区汇丽幼儿园"
+      ],
+      "created_at": 1772891626.345375,
+      "updated_at": 1772891626.345375
+    },
+    {
+      "id": "3efb63f7ef7a",
+      "name": "上海市普陀区乐怡幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NT_FC1C3DDC",
+      "keywords": [
+        "上海市普陀区乐怡幼儿园"
+      ],
+      "created_at": 1772891626.3453813,
+      "updated_at": 1772891626.3453813
+    },
+    {
+      "id": "25ba93c4fc4f",
+      "name": "上海市普陀区绿地世纪城幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NU_39022A32",
+      "keywords": [
+        "上海市普陀区绿地世纪城幼儿园"
+      ],
+      "created_at": 1772891626.345391,
+      "updated_at": 1772891626.345391
+    },
+    {
+      "id": "7efe44885b3c",
+      "name": "上海市普陀区万里城实验幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NU_CC430E8C",
+      "keywords": [
+        "上海市普陀区万里城实验幼儿园"
+      ],
+      "created_at": 1772891626.345398,
+      "updated_at": 1772891626.3453982
+    },
+    {
+      "id": "825dddc859f0",
+      "name": "上海外国语大学尚阳外国语学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NU_C45369B7",
+      "keywords": [
+        "上海外国语大学尚阳外国语学校"
+      ],
+      "created_at": 1772891626.3454049,
+      "updated_at": 1772891626.3454049
+    },
+    {
+      "id": "684d44d0c27b",
+      "name": "上海市普陀区星河世纪城幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NV_9CAD9213",
+      "keywords": [
+        "上海市普陀区星河世纪城幼儿园"
+      ],
+      "created_at": 1772891626.3454146,
+      "updated_at": 1772891626.3454146
+    },
+    {
+      "id": "640a7234ab98",
+      "name": "上海市普陀区四季艺术幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NV_93F2C7B6",
+      "keywords": [
+        "上海市普陀区四季艺术幼儿园"
+      ],
+      "created_at": 1772891626.3454216,
+      "updated_at": 1772891626.3454218
+    },
+    {
+      "id": "0483f5b6c759",
+      "name": "上海市普陀区杨家桥幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NW_A5C4C4BA",
+      "keywords": [
+        "上海市普陀区杨家桥幼儿园"
+      ],
+      "created_at": 1772891626.3454282,
+      "updated_at": 1772891626.3454282
+    },
+    {
+      "id": "19d82d023f3c",
+      "name": "上海理工大学附属普陀实验学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NW_394447D1",
+      "keywords": [
+        "上海理工大学附属普陀实验学校"
+      ],
+      "created_at": 1772891626.345438,
+      "updated_at": 1772891626.345438
+    },
+    {
+      "id": "ec7815e6840e",
+      "name": "上海市普陀区上河湾幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NX_41509E01",
+      "keywords": [
+        "上海市普陀区上河湾幼儿园"
+      ],
+      "created_at": 1772891626.3454452,
+      "updated_at": 1772891626.3454452
+    },
+    {
+      "id": "16ba2247c7a4",
+      "name": "上海市普陀区李子园幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NX_2EC47478",
+      "keywords": [
+        "上海市普陀区李子园幼儿园"
+      ],
+      "created_at": 1772891626.3454516,
+      "updated_at": 1772891626.3454518
+    },
+    {
+      "id": "f961c5f1d249",
+      "name": "上海市晋元高级中学附属学校西校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NY_18E48A32",
+      "keywords": [
+        "上海市晋元高级中学附属学校西校"
+      ],
+      "created_at": 1772891626.3454585,
+      "updated_at": 1772891626.3454585
+    },
+    {
+      "id": "c243e9d08c24",
+      "name": "上海市普陀区新普陀小学东校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NY_19F9C33F",
+      "keywords": [
+        "上海市普陀区新普陀小学东校"
+      ],
+      "created_at": 1772891626.3454678,
+      "updated_at": 1772891626.345468
+    },
+    {
+      "id": "94d09aa9e68d",
+      "name": "上海外国语大学附属普陀实验学校",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NY_90C33FEE",
+      "keywords": [
+        "上海外国语大学附属普陀实验学校"
+      ],
+      "created_at": 1772891626.3455012,
+      "updated_at": 1772891626.3455014
+    },
+    {
+      "id": "1c4f02790bf6",
+      "name": "上海市普陀区梅陇实验中学",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NZ_5FE38596",
+      "keywords": [
+        "上海市普陀区梅陇实验中学"
+      ],
+      "created_at": 1772891626.345525,
+      "updated_at": 1772891626.3455255
+    },
+    {
+      "id": "fbab35982afb",
+      "name": "上海市中托普陀幼儿园",
+      "level": "unit",
+      "parent_id": "2d41e52e07c9",
+      "code": "UNIT_MLYYK9NZ_F9190FCE",
+      "keywords": [
+        "上海市中托普陀幼儿园"
+      ],
+      "created_at": 1772891626.3455484,
+      "updated_at": 1772891626.3455489
+    }
+  ],
+  "meta": {
+    "source": "tianbaoxitong",
+    "synced_at": 1772891626.3482828,
+    "department_count": 63,
+    "unit_count": 335
+  }
+}

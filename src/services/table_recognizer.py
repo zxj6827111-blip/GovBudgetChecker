@@ -1,22 +1,27 @@
 """
-Table Recognition Engine
-
-Identifies fiscal tables from parsed cells and maps columns to canonical measures.
-Supports flexible matching for regional variations in table titles and column names.
+Table recognition for the canonical fiscal nine tables.
 """
 
-import logging
-from typing import List, Dict, Any, Optional, Tuple
+from __future__ import annotations
+
 from dataclasses import dataclass
-import re
+import logging
+from typing import Dict, Iterable, List, Optional
+
 import asyncpg
+
+from src.services.fiscal_table_rules import (
+    NINE_TABLE_RULES,
+    detect_table_code,
+    match_measure,
+    normalize_text,
+)
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class ColumnMapping:
-    """Column mapping from source to canonical measure."""
     source_col_idx: int
     source_col_name: str
     canonical_measure: str
@@ -25,7 +30,6 @@ class ColumnMapping:
 
 @dataclass
 class TableInstance:
-    """Recognized table instance."""
     table_code: str
     source_title: str
     confidence: float
@@ -35,333 +39,392 @@ class TableInstance:
     column_mappings: List[ColumnMapping]
 
 
-# Table Recognition Rules Database
-TABLE_RECOGNITION_RULES = {
-    "FIN_01_income_expenditure_total": {
-        "title_keywords": ["收入支出.*?总表", "收支.*?总表", "收入支出决算总表"],
-        "required_columns": ["本年收入", "本年支出"],
-        "optional_columns": ["年初结转", "年末结转"],
-        "measure_patterns": {
-            r"本年收入|年度收入": "income_actual",
-            r"本年支出|年度支出": "expenditure_actual",
-            r"年初结转|期初结转": "beginning_balance",
-            r"年末结转|期末结转": "ending_balance"
+def _build_legacy_rules() -> Dict[str, Dict[str, object]]:
+    legacy: Dict[str, Dict[str, object]] = {}
+    for code, rule in NINE_TABLE_RULES.items():
+        legacy[code] = {
+            "title_keywords": list(rule.aliases),
+            "required_columns": list(rule.required_headers),
+            "optional_columns": list(rule.optional_headers),
+            "measure_patterns": {
+                alias: measure
+                for measure, aliases in rule.measure_aliases.items()
+                for alias in aliases
+            },
         }
-    },
-    
-    "FIN_02_income": {
-        "title_keywords": ["收入决算表", "收入表"],
-        "required_columns": ["合计", "财政拨款"],
-        "optional_columns": ["事业收入", "经营收入", "其他收入"],
-        "measure_patterns": {
-            r"合计|总计": "total_actual",
-            r"财政拨款": "fiscal_allocation",
-            r"事业收入": "business_income",
-            r"经营收入": "operational_income",
-            r"其他收入": "other_income"
-        }
-    },
-    
-    "FIN_03_expenditure": {
-        "title_keywords": ["支出决算表", "支出表", "财政拨款支出"],
-        "required_columns": ["合计", "基本支出", "项目支出"],
-        "optional_columns": ["预算数"],
-        "measure_patterns": {
-            r"合计|总计": "total_actual",
-            r"基本支出|基本": "basic_actual",
-            r"项目支出|项目": "project_actual",
-            r"预算数|预算": "total_budget"
-        }
-    },
-    
-    "FIN_04_project_expenditure": {
-        "title_keywords": ["项目支出.*?明细", "项目.*?明细"],
-        "required_columns": ["项目名称", "金额"],
-        "measure_patterns": {
-            r"金额|决算数": "project_amount",
-            r"预算数": "project_budget"
-        }
-    },
-    
-    "FIN_05_function_classification": {
-        "title_keywords": ["功能分类.*?支出", "功能.*?支出"],
-        "required_columns": ["功能分类", "合计"],
-        "measure_patterns": {
-            r"合计|总计": "total_actual",
-            r"基本支出|基本": "basic_actual",
-            r"项目支出|项目": "project_actual"
-        }
-    },
-    
-    "FIN_06_basic_expenditure": {
-        "title_keywords": ["基本支出.*?经济分类", "基本支出.*?明细"],
-        "required_columns": ["经济分类", "决算数"],
-        "measure_patterns": {
-            r"决算数|金额": "actual",
-            r"预算数": "budget"
-        }
-    },
-    
-    "FIN_07_three_public": {
-        "title_keywords": ["三公.*?经费", '"三公".*?经费'],
-        "required_columns": ["合计", "出国"],
-        "optional_columns": ["公务用车", "公务接待"],
-        "measure_patterns": {
-            r"合计|总计": "total_actual",
-            r"决算数|实际": "actual",
-            r"预算数": "budget",
-            r"出国|因公出国": "overseas",
-            r"购置.*?车|车辆购置": "vehicle_purchase",
-            r"运行.*?车|车辆运行": "vehicle_operation",
-            r"接待|公务接待": "reception"
-        }
-    },
-    
-    "FIN_08_gov_fund": {
-        "title_keywords": ["政府性基金", "基金.*?支出"],
-        "required_columns": ["合计"],
-        "measure_patterns": {
-            r"合计|总计": "total_actual",
-            r"基本支出|基本": "basic_actual",
-            r"项目支出|项目": "project_actual"
-        }
-    },
-    
-    "FIN_09_state_capital": {
-        "title_keywords": ["国有资本", "国资.*?支出"],
-        "required_columns": ["合计"],
-        "measure_patterns": {
-            r"合计|总计": "total_actual",
-            r"基本支出|基本": "basic_actual",
-            r"项目支出|项目": "project_actual"
-        }
-    }
-}
+    return legacy
+
+
+TABLE_RECOGNITION_RULES = _build_legacy_rules()
 
 
 class TableRecognizer:
-    """Recognizes fiscal tables and maps columns."""
-    
     def __init__(self, conn: asyncpg.Connection):
         self.conn = conn
-    
+
     async def recognize_tables(self, document_version_id: int) -> List[TableInstance]:
-        """
-        Recognize all tables in a document version.
-        
-        Returns list of recognized table instances with column mappings.
-        """
-        # Get all cells for this document
-        cells = await self.conn.fetch("""
-            SELECT table_code, row_idx, col_idx, raw_text
+        cells = await self.conn.fetch(
+            """
+            SELECT table_code, row_idx, col_idx, raw_text, page_number
             FROM fiscal_table_cells
             WHERE document_version_id = $1
             ORDER BY table_code, row_idx, col_idx
-        """, document_version_id)
-        
-        if not cells:
-            logger.warning(f"No cells found for document_version {document_version_id}")
-            return []
-        
-        # Group by table_code (assuming already has table_code from import)
-        tables_by_code = {}
-        for cell in cells:
-            code = cell['table_code']
-            if code not in tables_by_code:
-                tables_by_code[code] = []
-            tables_by_code[code].append(cell)
-        
-        # Recognize each table
-        recognized = []
-        for source_table_code, table_cells in tables_by_code.items():
-            instance = await self._recognize_single_table(source_table_code, table_cells)
-            if instance:
-                recognized.append(instance)
-                logger.info(f"Recognized {instance.table_code} (confidence: {instance.confidence:.2f})")
-        
-        return recognized
-    
-    async def _recognize_single_table(self, source_table_code: str, cells: List[asyncpg.Record]) -> Optional[TableInstance]:
-        """Recognize a single table from its cells."""
-        # Get table title (usually first row, first column or spanning cells)
-        title_candidates = [c['raw_text'] for c in cells if c['row_idx'] == 0 and c['raw_text']]
-        title = " ".join(title_candidates) if title_candidates else ""
-        
-        # IMPROVED: Also use source_table_code for matching
-        # The table_code from import often already identifies the table
-        combined_title = f"{source_table_code} {title}".lower()
-        
-        # Get header row (usually row 0, which often contains column names)
-        headers = self._extract_headers(cells)
-        
-        # Try to match against each rule
-        best_match = None
-        best_score = 0.0
-        
-        for canonical_code, rule in TABLE_RECOGNITION_RULES.items():
-            score = self._match_table_improved(combined_title, headers, rule, canonical_code, source_table_code)
-            if score > best_score and score >= 0.5:  # Lowered threshold to 50%
-                best_score = score
-                best_match = canonical_code
-        
-        if not best_match:
-            logger.warning(f"Could not recognize table: {source_table_code} (title: {title[:50]})")
-            return None
-        
-        # Create column mappings
-        rule = TABLE_RECOGNITION_RULES[best_match]
-        mappings = self._create_column_mappings(headers, rule)
-        
-        return TableInstance(
-            table_code=best_match,
-            source_title=title,
-            confidence=best_score,
-            page_number=None,
-            row_start=min(c['row_idx'] for c in cells),
-            row_end=max(c['row_idx'] for c in cells),
-            column_mappings=mappings
+            """,
+            document_version_id,
         )
-    
-    def _match_table_improved(self, combined_title: str, headers: List[str], rule: Dict, 
-                             canonical_code: str, source_code: str) -> float:
-        """
-        Improved matching that considers table_code directly.
-        
-        Strategy:
-        1. If source_code contains canonical code name, high score
-        2. Otherwise use title + column matching
-        """
-        score = 0.0
-        
-        # Strategy 1: Direct code matching (weight: 0.6)
-        # Extract key part from canonical code (e.g., "expenditure" from "FIN_03_expenditure")
-        code_parts = canonical_code.lower().split('_')
-        if len(code_parts) >= 3:
-            key_word = code_parts[2]  # e.g., "expenditure", "income", etc.
-            if key_word in source_code.lower() or key_word in combined_title:
-                score += 0.6
-        
-        # Special handling for numbered tables (FIN_01, FIN_02, etc.)
-        canonical_num = canonical_code.split('_')[1] if '_' in canonical_code else None
-        source_num = source_code.split('_')[1] if '_' in source_code else None
-        if canonical_num and source_num and canonical_num == source_num:
-            score += 0.5  # Number match is strong signal
-        
-        # Strategy 2: Title keyword matching (weight: 0.2)
-        title_match = False
-        for pattern in rule['title_keywords']:
-            if re.search(pattern, combined_title, re.IGNORECASE):
-                title_match = True
-                break
-        score += 0.2 if title_match else 0.0
-        
-        # Strategy 3: Required columns matching (weight: 0.2)
-        required_cols = rule['required_columns']
-        matched_required = sum(1 for req in required_cols if self._find_column(req, headers))
-        if required_cols:
-            score += 0.2 * (matched_required / len(required_cols))
-        
-        return min(score, 1.0)  # Cap at 1.0
-    
-    def _extract_headers(self, cells: List[asyncpg.Record]) -> List[str]:
-        """Extract column headers from table cells."""
-        # Try row 1 first (common header row)
-        headers_r1 = [c['raw_text'] for c in cells if c['row_idx'] == 1]
-        if headers_r1 and any(h for h in headers_r1):
-            return headers_r1
-        
-        # Fallback to row 2
-        headers_r2 = [c['raw_text'] for c in cells if c['row_idx'] == 2]
-        return headers_r2 if headers_r2 else []
-    
-    def _match_table(self, title: str, headers: List[str], rule: Dict) -> float:
-        """Calculate match score for a table against a rule."""
-        score = 0.0
-        
-        # Title matching (weight: 0.4)
-        title_match = False
-        for pattern in rule['title_keywords']:
-            if re.search(pattern, title, re.IGNORECASE):
-                title_match = True
-                break
-        score += 0.4 if title_match else 0.0
-        
-        # Required columns matching (weight: 0.5)
-        required_cols = rule['required_columns']
-        matched_required = sum(1 for req in required_cols if self._find_column(req, headers))
-        if required_cols:
-            score += 0.5 * (matched_required / len(required_cols))
-        
-        # Optional columns matching (weight: 0.1)
-        optional_cols = rule.get('optional_columns', [])
-        if optional_cols:
-            matched_optional = sum(1 for opt in optional_cols if self._find_column(opt, headers))
-            score += 0.1 * (matched_optional / len(optional_cols))
-        
-        return score
-    
-    def _find_column(self, keyword: str, headers: List[str]) -> bool:
-        """Check if keyword appears in any header (fuzzy match)."""
-        for header in headers:
-            if header and keyword in header:
-                return True
-        return False
-    
-    def _create_column_mappings(self, headers: List[str], rule: Dict) -> List[ColumnMapping]:
-        """Create column mappings from headers to canonical measures."""
-        mappings = []
-        
-        for col_idx, header in enumerate(headers):
-            if not header:
+
+        if not cells:
+            logger.warning("No cells found for document_version %s", document_version_id)
+            return []
+
+        tables_by_code: Dict[str, List[asyncpg.Record]] = {}
+        for cell in cells:
+            tables_by_code.setdefault(cell["table_code"], []).append(cell)
+
+        recognized: List[TableInstance] = []
+        for source_table_code, table_cells in tables_by_code.items():
+            instance = self._recognize_single_table(source_table_code, table_cells)
+            if instance is None:
                 continue
-            
-            # Try to match against measure patterns
-            for pattern, canonical_measure in rule['measure_patterns'].items():
-                if re.search(pattern, header, re.IGNORECASE):
-                    mappings.append(ColumnMapping(
-                        source_col_idx=col_idx,
-                        source_col_name=header,
-                        canonical_measure=canonical_measure,
-                        confidence=0.9
-                    ))
-                    break
-        
+            recognized.append(instance)
+            logger.info(
+                "Recognized %s from %s (confidence %.2f)",
+                instance.table_code,
+                source_table_code,
+                instance.confidence,
+            )
+
+        return recognized
+
+    def _recognize_single_table(
+        self,
+        source_table_code: str,
+        cells: List[asyncpg.Record],
+    ) -> Optional[TableInstance]:
+        title = self._extract_title(cells)
+        header_columns = self._extract_header_columns(cells)
+        headers = [header for _, header in header_columns]
+        table_code, confidence = detect_table_code(
+            title=title,
+            headers=headers,
+            source_hint=source_table_code,
+        )
+
+        if table_code is None:
+            logger.warning(
+                "Could not recognize table %s with title '%s'",
+                source_table_code,
+                title[:80],
+            )
+            return None
+
+        measure_columns = self._detect_measure_columns(cells)
+        column_mappings = self._create_column_mappings(
+            header_columns,
+            NINE_TABLE_RULES[table_code],
+            measure_columns=measure_columns,
+        )
+        page_number = self._extract_page_number(cells)
+
+        return TableInstance(
+            table_code=table_code,
+            source_title=title,
+            confidence=confidence,
+            page_number=page_number,
+            row_start=min(int(cell["row_idx"]) for cell in cells),
+            row_end=max(int(cell["row_idx"]) for cell in cells),
+            column_mappings=column_mappings,
+        )
+
+    def _extract_title(self, cells: Iterable[asyncpg.Record]) -> str:
+        title_cells = sorted(
+            (cell for cell in cells if int(cell["row_idx"]) == 0 and cell["raw_text"]),
+            key=lambda item: item["col_idx"],
+        )
+        if title_cells:
+            return " ".join(str(cell["raw_text"]).strip() for cell in title_cells)
+
+        first_row = sorted(
+            (cell for cell in cells if int(cell["row_idx"]) == 1 and cell["raw_text"]),
+            key=lambda item: item["col_idx"],
+        )
+        return " ".join(str(cell["raw_text"]).strip() for cell in first_row)
+
+    def _extract_page_number(self, cells: Iterable[asyncpg.Record]) -> Optional[int]:
+        for cell in cells:
+            try:
+                value = cell.get("page_number")
+            except AttributeError:
+                value = cell["page_number"] if "page_number" in cell else None
+            if value is not None:
+                return int(value)
+        return None
+
+    def _extract_headers(self, cells: Iterable[asyncpg.Record]) -> List[str]:
+        return [header for _, header in self._extract_header_columns(cells)]
+
+    def _extract_header_columns(self, cells: Iterable[asyncpg.Record]) -> List[tuple[int, str]]:
+        rows: Dict[int, List[asyncpg.Record]] = {}
+        for cell in cells:
+            rows.setdefault(int(cell["row_idx"]), []).append(cell)
+
+        candidate_rows: List[tuple[int, List[tuple[int, str]]]] = []
+        for row_idx in sorted(rows):
+            if row_idx == 0:
+                continue
+            ordered = sorted(rows[row_idx], key=lambda item: int(item["col_idx"]))
+            entries = [
+                (int(cell["col_idx"]), str(cell["raw_text"]).strip())
+                for cell in ordered
+                if str(cell["raw_text"]).strip()
+            ]
+            if not entries:
+                continue
+            numeric_cells = sum(1 for _, text in entries if self._looks_numeric(text))
+            if numeric_cells >= max(1, len(entries) // 2):
+                continue
+            candidate_rows.append((row_idx, entries))
+            if len(candidate_rows) == 3:
+                break
+
+        if not candidate_rows:
+            return []
+
+        base_row_idx, base_row = max(candidate_rows, key=lambda item: (len(item[1]), -item[0]))
+        header_by_col = {col_idx: text for col_idx, text in base_row}
+
+        for row_idx, row in candidate_rows:
+            if row_idx == base_row_idx:
+                continue
+            if len(row) == 1 and len(base_row) >= 3:
+                continue
+            for col_idx, text in row:
+                existing = header_by_col.get(col_idx)
+                if not existing:
+                    header_by_col[col_idx] = text
+                    continue
+                if text == existing or text in existing or existing in text:
+                    continue
+                if row_idx < base_row_idx:
+                    header_by_col[col_idx] = f"{text} {existing}"
+                else:
+                    header_by_col[col_idx] = f"{existing} {text}"
+
+        return sorted(header_by_col.items())
+
+    def _match_table(self, title: str, headers: List[str], rule: Dict[str, object]) -> float:
+        normalized_title = normalize_text(title)
+        normalized_headers = [normalize_text(header) for header in headers if normalize_text(header)]
+
+        title_score = 0.0
+        for keyword in rule.get("title_keywords", []):
+            normalized_keyword = normalize_text(str(keyword))
+            if not normalized_keyword:
+                continue
+            if normalized_keyword in normalized_title:
+                title_score = max(title_score, 1.0)
+                continue
+            overlap = sum(1 for token in normalized_keyword if token and token in normalized_title)
+            title_score = max(title_score, overlap / max(len(normalized_keyword), 1))
+
+        required_columns = [normalize_text(str(item)) for item in rule.get("required_columns", [])]
+        required_hits = 0
+        for required in required_columns:
+            if any(required in header for header in normalized_headers):
+                required_hits += 1
+        required_score = required_hits / len(required_columns) if required_columns else 0.0
+
+        optional_columns = [normalize_text(str(item)) for item in rule.get("optional_columns", [])]
+        optional_hits = 0
+        for optional in optional_columns:
+            if any(optional in header for header in normalized_headers):
+                optional_hits += 1
+        optional_score = optional_hits / len(optional_columns) if optional_columns else 0.0
+
+        return round(title_score * 0.58 + required_score * 0.32 + optional_score * 0.10, 4)
+
+    def _find_column(self, keyword: str, headers: List[str]) -> bool:
+        normalized_keyword = normalize_text(keyword)
+        return any(normalized_keyword in normalize_text(header) for header in headers)
+
+    def _create_column_mappings(
+        self,
+        headers: List[str] | List[tuple[int, str]],
+        rule,
+        measure_columns: Optional[set[int]] = None,
+    ) -> List[ColumnMapping]:
+        mappings: List[ColumnMapping] = []
+        for idx, header in self._normalize_header_columns(headers):
+            if measure_columns is not None and idx not in measure_columns:
+                continue
+            if self._is_dimension_header(header):
+                continue
+            measure = match_measure(header, rule)
+            if measure is None:
+                continue
+            confidence = 0.92 if normalize_text(header) else 0.75
+            mappings.append(
+                ColumnMapping(
+                    source_col_idx=idx,
+                    source_col_name=header,
+                    canonical_measure=measure,
+                    confidence=confidence,
+                )
+            )
         return mappings
-    
-    async def save_table_instances(self, document_version_id: int, instances: List[TableInstance]):
-        """Save recognized table instances and column mappings to database."""
+
+    def _normalize_header_columns(
+        self,
+        headers: List[str] | List[tuple[int, str]],
+    ) -> List[tuple[int, str]]:
+        normalized: List[tuple[int, str]] = []
+        for idx, header in enumerate(headers):
+            if isinstance(header, tuple):
+                col_idx, text = header
+            else:
+                col_idx, text = idx, header
+            normalized.append((int(col_idx), str(text)))
+        return normalized
+
+    def _detect_measure_columns(self, cells: Iterable[asyncpg.Record]) -> set[int]:
+        measure_columns: set[int] = set()
+        for cell in cells:
+            text = str(cell["raw_text"]).strip()
+            if not text:
+                continue
+            if self._looks_amount_like(text):
+                measure_columns.add(int(cell["col_idx"]))
+        return measure_columns
+
+    def _is_dimension_header(self, header: str) -> bool:
+        normalized = normalize_text(header)
+        if not normalized:
+            return True
+
+        if normalized in {
+            normalize_text("项目"),
+            normalize_text("类"),
+            normalize_text("款"),
+            normalize_text("项"),
+            normalize_text("科目编码"),
+            normalize_text("功能分类科目名称"),
+            normalize_text("经济分类科目名称"),
+            normalize_text("部门经济分类科目名称"),
+            normalize_text("政府经济分类科目名称"),
+        }:
+            return True
+
+        return any(
+            keyword in normalized
+            for keyword in (
+                normalize_text("分类科目名称"),
+                normalize_text("科目名称"),
+                normalize_text("科目编码"),
+            )
+        )
+
+    def _looks_numeric(self, value: str) -> bool:
+        cleaned = normalize_text(value)
+        if not cleaned:
+            return False
+        cleaned = cleaned.replace(",", "").replace("，", "")
+        cleaned = cleaned.replace("万元", "").replace("元", "").replace("%", "")
+        if cleaned.startswith("(") and cleaned.endswith(")"):
+            cleaned = f"-{cleaned[1:-1]}"
+        try:
+            float(cleaned)
+            return True
+        except ValueError:
+            return False
+
+    def _looks_amount_like(self, value: str) -> bool:
+        cleaned = normalize_text(value)
+        if not cleaned:
+            return False
+
+        normalized = cleaned.replace(",", "").replace("，", "")
+        normalized = normalized.replace("万元", "").replace("元", "").replace("%", "")
+        if normalized.startswith("(") and normalized.endswith(")"):
+            normalized = f"-{normalized[1:-1]}"
+        try:
+            amount = float(normalized)
+        except ValueError:
+            return False
+
+        if "," in value or "." in value:
+            return True
+        return abs(amount) >= 1000
+
+    async def save_table_instances(
+        self,
+        document_version_id: int,
+        instances: List[TableInstance],
+    ) -> None:
+        await self.conn.execute(
+            """
+            DELETE FROM fiscal_column_mappings
+            WHERE table_instance_id IN (
+                SELECT id FROM fiscal_table_instances WHERE document_version_id = $1
+            )
+            """,
+            document_version_id,
+        )
+        await self.conn.execute(
+            "DELETE FROM fiscal_table_instances WHERE document_version_id = $1",
+            document_version_id,
+        )
+
         for instance in instances:
-            # Insert table instance
-            instance_id = await self.conn.fetchval("""
-                INSERT INTO fiscal_table_instances 
+            instance_id = await self.conn.fetchval(
+                """
+                INSERT INTO fiscal_table_instances
                 (document_version_id, table_code, source_title, confidence, page_number, row_start, row_end)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
-                ON CONFLICT (document_version_id, table_code) 
-                DO UPDATE SET source_title = EXCLUDED.source_title, confidence = EXCLUDED.confidence
+                ON CONFLICT (document_version_id, table_code)
+                DO UPDATE SET
+                    source_title = EXCLUDED.source_title,
+                    confidence = EXCLUDED.confidence,
+                    page_number = EXCLUDED.page_number,
+                    row_start = EXCLUDED.row_start,
+                    row_end = EXCLUDED.row_end
                 RETURNING id
-            """, document_version_id, instance.table_code, instance.source_title, 
-                instance.confidence, instance.page_number, instance.row_start, instance.row_end)
-            
-            # Insert column mappings
+                """,
+                document_version_id,
+                instance.table_code,
+                instance.source_title,
+                instance.confidence,
+                instance.page_number,
+                instance.row_start,
+                instance.row_end,
+            )
+
             for mapping in instance.column_mappings:
-                await self.conn.execute("""
-                    INSERT INTO fiscal_column_mappings 
+                await self.conn.execute(
+                    """
+                    INSERT INTO fiscal_column_mappings
                     (table_instance_id, source_col_idx, source_col_name, canonical_measure, confidence)
                     VALUES ($1, $2, $3, $4, $5)
-                    ON CONFLICT (table_instance_id, source_col_idx) 
-                    DO UPDATE SET canonical_measure = EXCLUDED.canonical_measure
-                """, instance_id, mapping.source_col_idx, mapping.source_col_name, 
-                    mapping.canonical_measure, mapping.confidence)
-        
-        logger.info(f"Saved {len(instances)} table instances for document_version {document_version_id}")
+                    ON CONFLICT (table_instance_id, source_col_idx)
+                    DO UPDATE SET
+                        source_col_name = EXCLUDED.source_col_name,
+                        canonical_measure = EXCLUDED.canonical_measure,
+                        confidence = EXCLUDED.confidence
+                    """,
+                    instance_id,
+                    mapping.source_col_idx,
+                    mapping.source_col_name,
+                    mapping.canonical_measure,
+                    mapping.confidence,
+                )
+
+        logger.info(
+            "Saved %s table instances for document_version %s",
+            len(instances),
+            document_version_id,
+        )
 
 
 async def recognize_and_save_tables(document_version_id: int, conn: asyncpg.Connection) -> int:
-    """
-    Convenience function to recognize and save tables for a document version.
-    
-    Returns: Number of tables recognized.
-    """
     recognizer = TableRecognizer(conn)
     instances = await recognizer.recognize_tables(document_version_id)
     await recognizer.save_table_instances(document_version_id, instances)
