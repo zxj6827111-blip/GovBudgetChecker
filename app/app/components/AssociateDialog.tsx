@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 interface Organization {
     id: string;
@@ -18,6 +18,12 @@ interface AssociateDialogProps {
     onAssociate: (orgId: string) => void;
 }
 
+interface CurrentMatch {
+    organization: Organization;
+    match_type: string;
+    confidence: number;
+}
+
 export default function AssociateDialog({
     isOpen,
     jobId,
@@ -30,14 +36,11 @@ export default function AssociateDialog({
     const [searchQuery, setSearchQuery] = useState("");
     const [loading, setLoading] = useState(false);
     const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
+    const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+    const [dynamicSuggestions, setDynamicSuggestions] = useState<Array<{ organization: Organization; confidence: number }>>([]);
+    const [currentMatch, setCurrentMatch] = useState<CurrentMatch | null>(null);
 
-    useEffect(() => {
-        if (isOpen) {
-            fetchOrganizations();
-        }
-    }, [isOpen]);
-
-    const fetchOrganizations = async () => {
+    const fetchOrganizations = useCallback(async () => {
         setLoading(true);
         try {
             const res = await fetch("/api/organizations/list");
@@ -48,7 +51,44 @@ export default function AssociateDialog({
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
+
+    const fetchSuggestions = useCallback(async () => {
+        if (!jobId) return;
+        setSuggestionsLoading(true);
+        try {
+            const res = await fetch(`/api/jobs/${jobId}/org-suggestions?top_n=5`, { cache: "no-store" });
+            const data = await res.json();
+            const nextSuggestions = Array.isArray(data?.suggestions) ? data.suggestions : [];
+            const nextCurrent = data?.current && typeof data.current === "object" ? data.current : null;
+            setDynamicSuggestions(nextSuggestions);
+            setCurrentMatch(nextCurrent);
+            const preferredId =
+                nextCurrent?.organization?.id ||
+                nextSuggestions[0]?.organization?.id ||
+                null;
+            if (preferredId) {
+                setSelectedOrgId(preferredId);
+            }
+        } catch (e) {
+            console.error("Failed to fetch organization suggestions", e);
+            setDynamicSuggestions([]);
+            setCurrentMatch(null);
+        } finally {
+            setSuggestionsLoading(false);
+        }
+    }, [jobId]);
+
+    useEffect(() => {
+        if (isOpen) {
+            setSearchQuery("");
+            setSelectedOrgId(null);
+            fetchOrganizations();
+            fetchSuggestions();
+        }
+    }, [fetchOrganizations, fetchSuggestions, isOpen]);
+
+    const effectiveSuggestions = dynamicSuggestions.length > 0 ? dynamicSuggestions : suggestions;
 
     const filteredOrgs = organizations.filter(org =>
         org.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -78,37 +118,54 @@ export default function AssociateDialog({
                     <p className="text-sm text-gray-500 mt-1">
                         文件：<span className="font-medium">{filename}</span>
                     </p>
-                    <p className="text-xs text-amber-600 mt-2">
-                        ⚠️ 未能自动匹配到组织，请手动选择该文档所属的部门/单位
-                    </p>
+                    {currentMatch ? (
+                        <div className="mt-2 rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
+                            当前已关联：
+                            <span className="ml-1 font-medium">{currentMatch.organization.name}</span>
+                            <span className="ml-2 rounded bg-white/80 px-1.5 py-0.5">
+                                {currentMatch.match_type === "manual" ? "人工绑定" : "自动匹配"}
+                            </span>
+                            <span className="ml-2 text-indigo-500">
+                                置信度 {(Number(currentMatch.confidence || 0) * 100).toFixed(0)}%
+                            </span>
+                        </div>
+                    ) : (
+                        <p className="text-xs text-amber-600 mt-2">
+                            ⚠️ 暂未匹配到组织，请手动选择该文档所属的部门/单位
+                        </p>
+                    )}
                 </div>
 
                 {/* 建议匹配 */}
-                {suggestions.length > 0 && (
+                {(effectiveSuggestions.length > 0 || suggestionsLoading) && (
                     <div className="p-4 bg-blue-50 border-b">
                         <p className="text-sm font-medium text-blue-800 mb-2">可能的匹配：</p>
-                        <div className="space-y-2">
-                            {suggestions.slice(0, 3).map(({ organization, confidence }) => (
-                                <button
-                                    key={organization.id}
-                                    onClick={() => setSelectedOrgId(organization.id)}
-                                    className={`w-full text-left p-2 rounded border ${selectedOrgId === organization.id
-                                            ? "border-indigo-500 bg-indigo-50"
-                                            : "border-gray-200 bg-white hover:bg-gray-50"
-                                        }`}
-                                >
-                                    <div className="flex items-center justify-between">
-                                        <span className="font-medium">{organization.name}</span>
-                                        <span className="text-xs text-gray-500">
-                                            置信度: {(confidence * 100).toFixed(0)}%
-                                        </span>
+                        {suggestionsLoading ? (
+                            <div className="text-sm text-blue-600">正在分析候选单位...</div>
+                        ) : (
+                            <div className="space-y-2">
+                                {effectiveSuggestions.slice(0, 3).map(({ organization, confidence }) => (
+                                    <button
+                                        key={organization.id}
+                                        onClick={() => setSelectedOrgId(organization.id)}
+                                        className={`w-full text-left p-2 rounded border ${selectedOrgId === organization.id
+                                                ? "border-indigo-500 bg-indigo-50"
+                                                : "border-gray-200 bg-white hover:bg-gray-50"
+                                            }`}
+                                    >
+                                        <div className="flex items-center justify-between">
+                                            <span className="font-medium">{organization.name}</span>
+                                            <span className="text-xs text-gray-500">
+                                                置信度: {(confidence * 100).toFixed(0)}%
+                                            </span>
                                     </div>
                                     <span className={`text-xs px-1.5 py-0.5 rounded ${levelColors[organization.level]}`}>
-                                        {organization.level_name}
+                                        {organization.level_name || organization.level}
                                     </span>
                                 </button>
                             ))}
                         </div>
+                        )}
                     </div>
                 )}
 
@@ -144,7 +201,7 @@ export default function AssociateDialog({
                                 >
                                     <span className="text-sm">{org.name}</span>
                                     <span className={`text-xs px-1.5 py-0.5 rounded ${levelColors[org.level]}`}>
-                                        {org.level_name}
+                                        {org.level_name || org.level}
                                     </span>
                                 </button>
                             ))}

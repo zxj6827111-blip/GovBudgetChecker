@@ -75,6 +75,21 @@ _pipeline_runner: Optional[Callable[[Path], Awaitable[None]]] = None
 _job_queue: Optional["DurableJobQueue"] = None
 _JOB_SUMMARY_CACHE: Dict[str, Dict[str, Any]] = {}
 _JOB_SUMMARY_CACHE_MAX_SIZE = 2048
+STRUCTURED_INGEST_FILENAME = "structured_ingest.json"
+JOB_STATUS_CONTEXT_KEYS = (
+    "filename",
+    "size",
+    "saved_path",
+    "checksum",
+    "organization_id",
+    "organization_name",
+    "organization_match_type",
+    "organization_match_confidence",
+    "fiscal_year",
+    "doc_type",
+    "report_year",
+    "report_kind",
+)
 
 if TYPE_CHECKING:
     from api.job_queue import DurableJobQueue
@@ -137,6 +152,62 @@ def read_json_file(
     except Exception:
         logger.exception("Failed to read JSON file: %s", path)
     return default
+
+
+def write_json_file(path: Path, payload: Dict[str, Any]) -> None:
+    """Write JSON payload with UTF-8 encoding."""
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def extract_job_status_context(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return stable job metadata that should survive status transitions."""
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        key: payload.get(key)
+        for key in JOB_STATUS_CONTEXT_KEYS
+        if payload.get(key) is not None
+    }
+
+
+def merge_job_status(job_dir: Path, patch: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge patch into job status and persist it."""
+    status_file = job_dir / "status.json"
+    current = read_json_file(status_file, default={})
+    current.update(patch)
+    write_json_file(status_file, current)
+    return current
+
+
+def get_structured_ingest_path(job_dir: Path) -> Path:
+    return job_dir / STRUCTURED_INGEST_FILENAME
+
+
+def write_structured_ingest_payload(job_dir: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
+    structured_path = get_structured_ingest_path(job_dir)
+    write_json_file(structured_path, payload)
+    return payload
+
+
+def read_structured_ingest_payload(job_dir: Path) -> Dict[str, Any]:
+    return read_json_file(get_structured_ingest_path(job_dir), default={})
+
+
+def extract_pdf_first_page_text(pdf_path: Path) -> str:
+    """Best-effort first-page text extraction for upload-time organization matching."""
+    try:
+        import pdfplumber
+    except Exception:
+        return ""
+
+    try:
+        with pdfplumber.open(str(pdf_path)) as pdf:
+            if not pdf.pages:
+                return ""
+            return str(pdf.pages[0].extract_text() or "").strip()
+    except Exception:
+        logger.exception("Failed to extract first page text from PDF: %s", pdf_path)
+        return ""
 
 
 def parse_report_year(raw: Any) -> Optional[int]:
@@ -397,6 +468,11 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     provider_stats_count = 0
     local_participated = use_local_rules
     ai_participated = False
+    structured_ingest = status_data.get("structured_ingest")
+    if not isinstance(structured_ingest, dict):
+        structured_ingest = read_structured_ingest_payload(job_dir)
+    if not isinstance(structured_ingest, dict):
+        structured_ingest = {}
 
     def _severity_bucket(severity: Any) -> str:
         value = str(severity or "").lower()
@@ -550,6 +626,10 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         or provider_stats_count > 0
     )
 
+    ps_sync = structured_ingest.get("ps_sync") if isinstance(structured_ingest, dict) else None
+    if not isinstance(ps_sync, dict):
+        ps_sync = {}
+
     summary = {
         "job_id": job_dir.name,
         "filename": filename,
@@ -581,6 +661,23 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "local_elapsed_ms": local_elapsed_ms,
         "ai_elapsed_ms": ai_elapsed_ms,
         "provider_stats_count": provider_stats_count,
+        "structured_ingest_status": structured_ingest.get("status"),
+        "structured_document_version_id": structured_ingest.get("document_version_id"),
+        "structured_tables_count": structured_ingest.get("tables_count"),
+        "structured_recognized_tables": structured_ingest.get("recognized_tables"),
+        "structured_facts_count": structured_ingest.get("facts_count"),
+        "structured_document_profile": structured_ingest.get("document_profile"),
+        "structured_missing_optional_tables": structured_ingest.get("missing_optional_tables") or [],
+        "review_item_count": structured_ingest.get("review_item_count"),
+        "low_confidence_item_count": structured_ingest.get("low_confidence_item_count"),
+        "structured_report_id": ps_sync.get("report_id"),
+        "structured_table_data_count": ps_sync.get("table_data_count"),
+        "structured_line_item_count": ps_sync.get("line_item_count"),
+        "structured_sync_match_mode": ps_sync.get("match_mode"),
+        "organization_id": status_data.get("organization_id"),
+        "organization_name": status_data.get("organization_name"),
+        "organization_match_type": status_data.get("organization_match_type"),
+        "organization_match_confidence": status_data.get("organization_match_confidence"),
     }
 
     _JOB_SUMMARY_CACHE[job_dir.name] = {
@@ -608,7 +705,10 @@ def ensure_pdf(file: UploadFile) -> bool:
     return ct in ("application/pdf", "application/x-pdf") or name.endswith(".pdf")
 
 
-async def store_upload_file(file: UploadFile) -> Dict[str, Any]:
+async def store_upload_file(
+    file: UploadFile,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Persist upload into a job directory and return metadata payload."""
     if SECURITY_AVAILABLE:
         safe_name = sanitize_filename(file.filename or "file.pdf")
@@ -675,7 +775,7 @@ async def store_upload_file(file: UploadFile) -> Dict[str, Any]:
             detail="File does not appear to be a valid PDF (invalid signature)",
         )
 
-    return {
+    payload = {
         "id": job_id,
         "job_id": job_id,
         "filename": safe_name,
@@ -683,6 +783,20 @@ async def store_upload_file(file: UploadFile) -> Dict[str, Any]:
         "saved_path": str(dst.relative_to(UPLOAD_ROOT)),
         "checksum": sha256.hexdigest(),
     }
+    status_payload = {
+        "job_id": job_id,
+        "status": "uploaded",
+        "progress": 0,
+        "stage": "uploaded",
+        "filename": safe_name,
+        "size": size,
+        "checksum": sha256.hexdigest(),
+        "ts": time.time(),
+    }
+    if metadata:
+        status_payload.update({key: value for key, value in metadata.items() if value is not None})
+    write_json_file(job_dir / "status.json", status_payload)
+    return payload
 
 
 def get_job_status_payload(job_id: str) -> Dict[str, Any]:
@@ -694,11 +808,38 @@ def get_job_status_payload(job_id: str) -> Dict[str, Any]:
     if not status_file.exists():
         return {"job_id": job_id, "status": "processing", "progress": 0}
     try:
-        return json.loads(status_file.read_text(encoding="utf-8"))
+        payload = json.loads(status_file.read_text(encoding="utf-8"))
+        structured = read_structured_ingest_payload(job_dir)
+        if structured:
+            payload.setdefault("structured_ingest", structured)
+        return payload
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to read job status: {e}"
         ) from e
+
+
+def get_job_review_payload(job_id: str) -> Dict[str, Any]:
+    """Return structured ingest review payload for a job."""
+    job_dir = UPLOAD_ROOT / job_id
+    if not job_dir.exists():
+        raise HTTPException(status_code=404, detail="job_id does not exist")
+
+    structured = read_structured_ingest_payload(job_dir)
+    if structured:
+        return structured
+
+    status_payload = get_job_status_payload(job_id)
+    embedded = status_payload.get("structured_ingest")
+    if isinstance(embedded, dict) and embedded:
+        return embedded
+
+    return {
+        "job_id": job_id,
+        "status": "pending",
+        "review_item_count": 0,
+        "review_items": [],
+    }
 
 
 def require_org_storage():
@@ -713,6 +854,43 @@ def require_user_store():
     if not USER_STORE_AVAILABLE:
         raise HTTPException(status_code=503, detail="user service unavailable")
     return get_user_store()
+
+
+def set_job_organization(
+    job_id: str,
+    org_id: str,
+    *,
+    match_type: str = "manual",
+    confidence: float = 1.0,
+) -> Dict[str, Any]:
+    """Persist matched organization info into both status metadata and link storage."""
+    job_dir = UPLOAD_ROOT / job_id
+    if not job_dir.exists():
+        raise HTTPException(status_code=404, detail="job_id does not exist")
+
+    storage = require_org_storage()
+    org = storage.get_by_id(org_id)
+    if org is None:
+        raise HTTPException(status_code=404, detail="organization not found")
+
+    normalized_confidence = round(float(confidence), 4)
+    link = storage.link_job(
+        job_id,
+        org.id,
+        match_type=match_type,
+        confidence=normalized_confidence,
+    )
+    patch = {
+        "organization_id": org.id,
+        "organization_name": org.name,
+        "organization_match_type": match_type,
+        "organization_match_confidence": normalized_confidence,
+    }
+    merge_job_status(job_dir, patch)
+    return {
+        **patch,
+        "link": to_dict(link),
+    }
 
 
 async def start_analysis(
@@ -774,7 +952,11 @@ async def start_analysis(
         str(doc_type) if doc_type is not None else None,
         filename,
     )
+    preserved_context = extract_job_status_context(existing_status)
+    if filename and not preserved_context.get("filename"):
+        preserved_context["filename"] = filename
     payload = {
+        **preserved_context,
         "job_id": job_id,
         "status": "queued",
         "progress": 0,

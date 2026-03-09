@@ -184,9 +184,10 @@ class JobOrchestrator:
         4. Report: Generate PDF report
         """
         from src.qc.runner_v3 import QCRunnerV3
-        from src.services.table_recognizer import TableRecognizer
+        from src.services.fiscal_fact_materializer import FiscalFactMaterializer
         from src.services.pdf_generator import generate_pdf_report
         from src.services.pdf_parser import PDFParser
+        from src.services.table_recognizer import TableRecognizer
         
         try:
             # Update to running
@@ -205,7 +206,7 @@ class JobOrchestrator:
             """, version_id)
             
             # Stage 1: Parse (PDF → cells)
-            pdf_path = version.get('storage_path') if version else None
+            pdf_path = self._resolve_storage_path(version)
             
             if pdf_path and Path(pdf_path).exists():
                 # Parse PDF file
@@ -221,8 +222,10 @@ class JobOrchestrator:
                     return
                 
                 await self.update_job_stage(job_id, 'materialize', {
-                    'cells_count': cells_count, 
+                    'cells_count': cells_count,
                     'tables_count': tables_count,
+                    'recognized_tables': parse_result.get('recognized_tables', 0),
+                    'low_confidence_tables': parse_result.get('low_confidence_tables', 0),
                     'source': 'pdf_parse'
                 })
             else:
@@ -241,18 +244,19 @@ class JobOrchestrator:
                 })
             
             # Stage 2: Materialize (Table Recognition)
-            logger.info(f"Job {job_id}: Stage 2 - Materialize (Table Recognition)")
+            logger.info(f"Job {job_id}: Stage 2 - Materialize (Table Recognition + Facts)")
             recognizer = TableRecognizer(self.conn)
             instances = await recognizer.recognize_tables(version_id)
             await recognizer.save_table_instances(version_id, instances)
-            
-            facts_count = await self.conn.fetchval("""
-                SELECT COUNT(*) FROM fact_fiscal_line_items WHERE document_version_id = $1
-            """, version_id)
-            
+
+            materializer = FiscalFactMaterializer(self.conn)
+            materialize_result = await materializer.materialize(version_id)
+            facts_count = materialize_result.get('facts_count', 0)
+
             await self.update_job_stage(job_id, 'qc', {
                 'facts_count': facts_count,
-                'tables_recognized': len(instances)
+                'tables_recognized': len(instances),
+                'low_confidence_tables': materialize_result.get('low_confidence_tables', []),
             })
             
             # Stage 3: QC (Using V3 with R001-R010)
@@ -277,3 +281,14 @@ class JobOrchestrator:
             logger.exception(f"Job {job_id} failed")
             await self.fail_job(job_id, str(e))
             raise
+
+    def _resolve_storage_path(self, version: Optional[Dict[str, Any]]) -> Optional[str]:
+        if not version:
+            return None
+
+        for key in ("storage_path", "storage_key"):
+            value = version.get(key)
+            if value and Path(value).exists():
+                return str(value)
+
+        return None

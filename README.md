@@ -22,6 +22,23 @@
 
 ## 快速开始（本地开发）
 
+### 本地目录建议（与云端保持一致）
+推荐把运行数据放到仓库外部目录，例如：
+
+- 代码目录：`D:/软件开发/TRAE/GovBudgetChecker`
+- 数据目录：`D:/软件开发/TRAE/GovBudgetChecker-data`
+
+对应 `.env` 建议配置：
+
+```env
+HOST_DATA_DIR=D:/软件开发/TRAE/GovBudgetChecker-data/data
+HOST_LOGS_DIR=D:/软件开发/TRAE/GovBudgetChecker-data/logs
+HOST_SAMPLES_DIR=D:/软件开发/TRAE/GovBudgetChecker-data/samples
+HOST_UPLOADS_DIR=D:/软件开发/TRAE/GovBudgetChecker-data/uploads
+```
+
+这样本地更新代码、切换分支或重建容器时，不会覆盖运行数据，行为与云端一致。
+
 ### 1. 安装依赖
 ```bash
 pip install -r api/requirements.txt

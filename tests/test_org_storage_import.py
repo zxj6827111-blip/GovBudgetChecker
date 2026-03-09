@@ -46,3 +46,31 @@ def test_import_fails_when_parent_not_found(tmp_path: Path, monkeypatch):
     assert result.success is False
     assert result.imported == 0
     assert any("父级未找到" in msg for msg in result.errors)
+
+
+def test_storage_loads_utf8_sig_json(tmp_path: Path, monkeypatch):
+    _patch_storage_paths(tmp_path, monkeypatch)
+    org_storage_module.ORG_FILE.write_text(
+        (
+            '\ufeff{\n'
+            '  "organizations": [\n'
+            '    {\n'
+            '      "id": "dept-1",\n'
+            '      "name": "上海市普陀区人民政府办公室",\n'
+            '      "level": "department",\n'
+            '      "parent_id": null,\n'
+            '      "code": "D001",\n'
+            '      "keywords": ["办公室"]\n'
+            '    }\n'
+            '  ],\n'
+            '  "meta": {}\n'
+            '}'
+        ),
+        encoding="utf-8",
+    )
+
+    storage = org_storage_module.OrganizationStorage()
+
+    departments = storage.get_by_level("department")
+    assert len(departments) == 1
+    assert departments[0].name == "上海市普陀区人民政府办公室"

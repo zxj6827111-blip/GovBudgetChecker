@@ -10,6 +10,7 @@ import AssociateDialog from "./components/AssociateDialog";
 import PipelineStatus from "./components/PipelineStatus";
 import BatchUploadModal from "./components/BatchUploadModal";
 import QCResultView from "./components/QCResultView";
+import StructuredIngestPanel, { StructuredIngestPayload } from "./components/StructuredIngestPanel";
 import { format } from 'date-fns';
 
 type UploadResp = {
@@ -18,6 +19,10 @@ type UploadResp = {
   size?: number;
   saved_path?: string;
   checksum?: string;
+  organization_id?: string;
+  organization_name?: string;
+  organization_match_type?: string;
+  organization_match_confidence?: number;
 };
 
 // Updated JobStatus to support V3 pipeline stages
@@ -62,6 +67,25 @@ type JobSummary = {
   progress: number;
   ts: number;
   mode: string;
+  organization_id?: string | null;
+  organization_name?: string | null;
+  organization_match_type?: string | null;
+  organization_match_confidence?: number | null;
+  structured_ingest_status?: string | null;
+  structured_document_version_id?: number | null;
+  structured_tables_count?: number | null;
+  structured_recognized_tables?: number | null;
+  structured_facts_count?: number | null;
+  structured_document_profile?: string | null;
+  structured_missing_optional_tables?: string[] | null;
+  review_item_count?: number;
+  low_confidence_item_count?: number;
+  structured_report_id?: string | null;
+  structured_table_data_count?: number | null;
+  structured_line_item_count?: number | null;
+  structured_sync_match_mode?: string | null;
+  report_year?: number | null;
+  report_kind?: "budget" | "final" | "unknown";
 };
 
 export default function HomePage() {
@@ -431,6 +455,11 @@ export default function HomePage() {
     // viewMode effect will handle switching
   };
 
+  const openAssociateDialog = useCallback((jobId: string) => {
+    setAssociatedJobId(jobId);
+    setIsAssociateOpen(true);
+  }, []);
+
   const handleBackToOrg = () => {
     setActiveJobId(null); // This will trigger effect to switch to org_detail
   };
@@ -655,6 +684,87 @@ export default function HomePage() {
   // Derived data for display
   const jobStatus = status?.status;
   const isPolling = jobStatus === 'processing' || jobStatus === 'queued' || jobStatus === "running";
+  const activeJobSummary = jobList.find((item) => item.job_id === activeJobId) || null;
+  const activeStatusAny = status as any;
+  const activeOrganizationName =
+    activeStatusAny?.organization_name ||
+    activeJobSummary?.organization_name ||
+    null;
+  const activeOrganizationMatchType =
+    activeStatusAny?.organization_match_type ||
+    activeJobSummary?.organization_match_type ||
+    null;
+  const activeOrganizationMatchConfidence =
+    typeof activeStatusAny?.organization_match_confidence === "number"
+      ? activeStatusAny.organization_match_confidence
+      : typeof activeJobSummary?.organization_match_confidence === "number"
+        ? activeJobSummary.organization_match_confidence
+        : null;
+  const structuredIngestStatus =
+    activeStatusAny?.structured_ingest?.status ||
+    activeStatusAny?.structured_ingest_status ||
+    activeJobSummary?.structured_ingest_status ||
+    null;
+  const activeStructuredIngest: StructuredIngestPayload | null =
+    activeStatusAny?.structured_ingest && typeof activeStatusAny.structured_ingest === "object"
+      ? activeStatusAny.structured_ingest
+      : activeJobSummary
+        ? {
+          status: activeJobSummary.structured_ingest_status,
+          document_version_id: activeJobSummary.structured_document_version_id,
+          tables_count: activeJobSummary.structured_tables_count,
+          recognized_tables: activeJobSummary.structured_recognized_tables,
+          facts_count: activeJobSummary.structured_facts_count,
+          document_profile: activeJobSummary.structured_document_profile,
+          missing_optional_tables: activeJobSummary.structured_missing_optional_tables,
+          review_item_count: activeJobSummary.review_item_count,
+          low_confidence_item_count: activeJobSummary.low_confidence_item_count,
+          ps_sync: {
+            report_id: activeJobSummary.structured_report_id,
+            table_data_count: activeJobSummary.structured_table_data_count,
+            line_item_count: activeJobSummary.structured_line_item_count,
+            match_mode: activeJobSummary.structured_sync_match_mode,
+          },
+        }
+        : null;
+  const structuredReviewCount =
+    Number(
+      activeStatusAny?.structured_ingest?.review_item_count ??
+      activeStatusAny?.review_item_count ??
+      activeJobSummary?.review_item_count ??
+      0
+    ) || 0;
+  const structuredLowConfidenceCount =
+    Number(
+      activeStatusAny?.structured_ingest?.low_confidence_item_count ??
+      activeStatusAny?.low_confidence_item_count ??
+      activeJobSummary?.low_confidence_item_count ??
+      0
+    ) || 0;
+  const structuredRecognizedTables =
+    Number(
+      activeStructuredIngest?.recognized_tables ??
+      activeJobSummary?.structured_recognized_tables ??
+      0
+    ) || 0;
+  const structuredTablesCount =
+    Number(
+      activeStructuredIngest?.tables_count ??
+      activeJobSummary?.structured_tables_count ??
+      0
+    ) || 0;
+  const structuredFactsCount =
+    Number(
+      activeStructuredIngest?.facts_count ??
+      activeJobSummary?.structured_facts_count ??
+      0
+    ) || 0;
+  const structuredLineItemCount =
+    Number(
+      activeStructuredIngest?.ps_sync?.line_item_count ??
+      activeJobSummary?.structured_line_item_count ??
+      0
+    ) || 0;
 
   // Mock data for UI if status not full
   const aiFindings = (status as any)?.result?.ai_findings || (status as any)?.ai_findings || [];
@@ -791,8 +901,8 @@ export default function HomePage() {
 
         {viewMode === 'job_detail' && (
           <div className="flex-1 flex flex-col overflow-hidden bg-white/50 dark:bg-gray-800/50 backdrop-blur-xl animate-in slide-in-from-right-8 duration-500">
-            <div className="h-16 border-b border-gray-200/50 dark:border-gray-700/50 flex items-center px-6 justify-between flex-shrink-0 bg-white/40 dark:bg-gray-900/40 backdrop-blur-md">
-              <div className="flex items-center">
+            <div className="border-b border-gray-200/50 dark:border-gray-700/50 px-6 py-4 flex-shrink-0 bg-white/40 dark:bg-gray-900/40 backdrop-blur-md">
+              <div className="flex items-center flex-wrap gap-y-2">
                 <button onClick={handleBackToOrg} className="mr-4 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 hover:text-gray-900 transition-colors group">
                   <div className="flex items-center space-x-1">
                     <svg className="w-5 h-5 transform group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
@@ -806,6 +916,63 @@ export default function HomePage() {
                 <span className={`ml-3 px-2 py-0.5 rounded text-xs font-medium ${jobStatus === 'done' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
                   {jobStatus === 'done' ? '已完成' : jobStatus === 'processing' ? '分析中' : '未知状态'}
                 </span>
+                {activeJobId && (
+                  <button
+                    onClick={() => openAssociateDialog(activeJobId)}
+                    className="ml-3 inline-flex items-center rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-100"
+                  >
+                    {activeOrganizationName ? "调整归属单位" : "关联单位"}
+                  </button>
+                )}
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${activeOrganizationName ? "bg-slate-100 text-slate-700" : "bg-amber-100 text-amber-700"}`}>
+                  {activeOrganizationName ? `所属：${activeOrganizationName}` : "所属：未关联"}
+                </span>
+                {activeOrganizationMatchType && (
+                  <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${activeOrganizationMatchType === "manual" ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"}`}>
+                    {activeOrganizationMatchType === "manual" ? "人工绑定" : "自动匹配"}
+                  </span>
+                )}
+                {typeof activeOrganizationMatchConfidence === "number" && activeOrganizationMatchConfidence > 0 && (
+                  <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+                    匹配置信度 {(activeOrganizationMatchConfidence * 100).toFixed(0)}%
+                  </span>
+                )}
+                <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${structuredIngestStatus === "done" ? "bg-emerald-100 text-emerald-700" : structuredIngestStatus === "error" ? "bg-red-100 text-red-700" : structuredIngestStatus === "skipped" ? "bg-gray-100 text-gray-700" : "bg-amber-100 text-amber-700"}`}>
+                  {structuredIngestStatus === "done"
+                    ? "结构化入库完成"
+                    : structuredIngestStatus === "error"
+                      ? "结构化入库失败"
+                      : structuredIngestStatus === "skipped"
+                        ? "结构化入库跳过"
+                        : "结构化入库待执行"}
+                </span>
+                {structuredReviewCount > 0 && (
+                  <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700">
+                    待复核 {structuredReviewCount} 项
+                  </span>
+                )}
+                {structuredLowConfidenceCount > 0 && (
+                  <span className="inline-flex items-center rounded-full bg-orange-100 px-2.5 py-1 text-xs font-medium text-orange-700">
+                    低置信表 {structuredLowConfidenceCount} 张
+                  </span>
+                )}
+                {structuredRecognizedTables > 0 && (
+                  <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+                    识别表 {structuredRecognizedTables}{structuredTablesCount > 0 ? `/${structuredTablesCount}` : ""}
+                  </span>
+                )}
+                {structuredFactsCount > 0 && (
+                  <span className="inline-flex items-center rounded-full bg-sky-100 px-2.5 py-1 text-xs font-medium text-sky-700">
+                    facts {structuredFactsCount}
+                  </span>
+                )}
+                {structuredLineItemCount > 0 && (
+                  <span className="inline-flex items-center rounded-full bg-teal-100 px-2.5 py-1 text-xs font-medium text-teal-700">
+                    PS 行项 {structuredLineItemCount}
+                  </span>
+                )}
               </div>
             </div>
 
@@ -819,6 +986,8 @@ export default function HomePage() {
                       <div className="bg-white/60 dark:bg-gray-800/60 backdrop-blur-md rounded-2xl border border-white/20 dark:border-gray-700/50 shadow-sm p-4">
                         <PipelineStatus stages={(status as any).stages} currentStage={(status as any).current_stage} />
                       </div>
+
+                      <StructuredIngestPanel payload={activeStructuredIngest} />
 
                       {/* QC Results */}
                       <div>
@@ -846,6 +1015,10 @@ export default function HomePage() {
                   ) : (
                     /* V2 Legacy View */
                     <div className="flex-1 overflow-y-auto pr-2 pb-20 custom-scrollbar">
+                      <div className="mb-6">
+                        <StructuredIngestPanel payload={activeStructuredIngest} />
+                      </div>
+
                       {/* Stats Cards */}
                       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                         <div className="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-between">
@@ -978,21 +1151,41 @@ export default function HomePage() {
         isOpen={isAssociateOpen}
         onClose={() => setIsAssociateOpen(false)}
         jobId={associatedJobId || ''}
-        filename={uploadFiles.find(f => f.name === jobList.find(j => j.job_id === associatedJobId)?.filename)?.name || '未知文件'}
+        filename={jobList.find(j => j.job_id === associatedJobId)?.filename || job?.filename || '未知文件'}
         onAssociate={async (orgId) => {
           try {
             if (associatedJobId) {
-              await fetch(`/api/jobs/${associatedJobId}/associate`, {
+              const response = await fetch(`/api/jobs/${associatedJobId}/associate`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ org_id: orgId })
               });
+              if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+              }
               fetchJobList();
+              if (activeJobId === associatedJobId) {
+                const detailResponse = await fetch(`/api/jobs/${associatedJobId}`, { cache: "no-store" });
+                if (detailResponse.ok) {
+                  const detail = await detailResponse.json();
+                  setJob({
+                    job_id: associatedJobId,
+                    filename: String(detail?.filename || job?.filename || ""),
+                    organization_id: detail?.organization_id,
+                    organization_name: detail?.organization_name,
+                    organization_match_type: detail?.organization_match_type,
+                    organization_match_confidence: detail?.organization_match_confidence,
+                  });
+                  setStatus(detail);
+                }
+              }
               setOrgRefreshKey(prev => prev + 1);
               setIsAssociateOpen(false);
+              setToast({ message: "任务归属单位已更新", type: "success" });
             }
           } catch (e) {
             console.error(e);
+            setToast({ message: "更新任务归属失败", type: "error" });
           }
         }}
       />

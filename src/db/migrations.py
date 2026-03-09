@@ -417,6 +417,23 @@ MIGRATIONS: List[Dict[str, Any]] = [
                 UNIQUE(rule_key, version)
             )
             """,
+            "ALTER TABLE qc_rule_versions ADD COLUMN IF NOT EXISTS params_json JSONB DEFAULT '{}'",
+            "ALTER TABLE qc_rule_versions ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE",
+            "ALTER TABLE qc_rule_versions ALTER COLUMN version SET DEFAULT '1.0.0'",
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conrelid = 'qc_rule_versions'::regclass
+                      AND conname = 'qc_rule_versions_rule_key_fkey'
+                ) THEN
+                    ALTER TABLE qc_rule_versions DROP CONSTRAINT qc_rule_versions_rule_key_fkey;
+                END IF;
+            END
+            $$;
+            """,
             "CREATE INDEX IF NOT EXISTS idx_qc_rule_versions_active ON qc_rule_versions(rule_key, is_active)",
 
             # Seed initial versions for R001-R005
@@ -588,6 +605,126 @@ MIGRATIONS: List[Dict[str, Any]] = [
                 ('R015', '1.0.0', '{"required_tables": ["FIN_01", "FIN_03", "FIN_05"]}'::jsonb, TRUE)
             ON CONFLICT (rule_key, version) DO NOTHING
             """,
+        ]
+    },
+    {
+        "id": "2026-03-07_0013_structured_ingest_enhancements",
+        "description": "Add structured PDF ingest metadata and hierarchical fact fields",
+        "sql": [
+            "ALTER TABLE fiscal_table_cells ADD COLUMN IF NOT EXISTS normalized_text TEXT",
+            "ALTER TABLE fiscal_table_cells ADD COLUMN IF NOT EXISTS numeric_value DOUBLE PRECISION",
+            "ALTER TABLE fiscal_table_cells ADD COLUMN IF NOT EXISTS page_number INTEGER",
+            "ALTER TABLE fiscal_table_cells ADD COLUMN IF NOT EXISTS bbox JSONB",
+            "ALTER TABLE fiscal_table_cells ADD COLUMN IF NOT EXISTS is_header BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE fiscal_table_cells ADD COLUMN IF NOT EXISTS row_span INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE fiscal_table_cells ADD COLUMN IF NOT EXISTS col_span INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE fiscal_table_cells ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION",
+            "ALTER TABLE fiscal_table_cells ADD COLUMN IF NOT EXISTS unit_hint TEXT",
+            "ALTER TABLE fiscal_table_cells ADD COLUMN IF NOT EXISTS extraction_method TEXT",
+            "ALTER TABLE fact_fiscal_line_items ADD COLUMN IF NOT EXISTS classification_level INTEGER",
+            "ALTER TABLE fact_fiscal_line_items ADD COLUMN IF NOT EXISTS parent_classification_code TEXT",
+            "ALTER TABLE fact_fiscal_line_items ADD COLUMN IF NOT EXISTS hierarchy_path TEXT[] DEFAULT '{}'",
+            "ALTER TABLE fact_fiscal_line_items ADD COLUMN IF NOT EXISTS source_page_number INTEGER",
+            "ALTER TABLE fact_fiscal_line_items ADD COLUMN IF NOT EXISTS source_cell_ids BIGINT[] DEFAULT '{}'",
+            "ALTER TABLE fact_fiscal_line_items ADD COLUMN IF NOT EXISTS parse_confidence DOUBLE PRECISION",
+            "CREATE INDEX IF NOT EXISTS idx_cells_version_page ON fiscal_table_cells(document_version_id, page_number)",
+            "CREATE INDEX IF NOT EXISTS idx_cells_numeric ON fiscal_table_cells(document_version_id, numeric_value)",
+            "CREATE INDEX IF NOT EXISTS idx_facts_parent_code ON fact_fiscal_line_items(parent_classification_code)",
+            "CREATE INDEX IF NOT EXISTS idx_facts_level ON fact_fiscal_line_items(classification_level)",
+        ]
+    },
+    {
+        "id": "2026-03-07_0014_ps_shared_schema",
+        "description": "Add PS/tianbaoxitong-aligned shared report tables",
+        "sql": [
+            "CREATE EXTENSION IF NOT EXISTS pgcrypto",
+            """
+            CREATE TABLE IF NOT EXISTS org_department (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                code TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                parent_id UUID REFERENCES org_department(id) ON DELETE SET NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS org_unit (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                department_id UUID NOT NULL REFERENCES org_department(id) ON DELETE RESTRICT,
+                code TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS org_dept_annual_report (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                department_id UUID NOT NULL REFERENCES org_department(id) ON DELETE CASCADE,
+                unit_id UUID NOT NULL REFERENCES org_unit(id) ON DELETE RESTRICT,
+                year INTEGER NOT NULL,
+                report_type TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_hash TEXT NOT NULL,
+                file_size BIGINT NOT NULL DEFAULT 0,
+                uploaded_by UUID,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE(department_id, unit_id, year, report_type)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS org_dept_table_data (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                report_id UUID NOT NULL REFERENCES org_dept_annual_report(id) ON DELETE CASCADE,
+                department_id UUID NOT NULL REFERENCES org_department(id) ON DELETE CASCADE,
+                year INTEGER NOT NULL,
+                report_type TEXT NOT NULL,
+                table_key TEXT NOT NULL,
+                table_title TEXT,
+                page_numbers INTEGER[] DEFAULT '{}',
+                row_count INTEGER NOT NULL DEFAULT 0,
+                col_count INTEGER NOT NULL DEFAULT 0,
+                data_json JSONB NOT NULL,
+                created_by UUID,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE(report_id, table_key)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS org_dept_line_items (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                report_id UUID NOT NULL REFERENCES org_dept_annual_report(id) ON DELETE CASCADE,
+                department_id UUID NOT NULL REFERENCES org_department(id) ON DELETE CASCADE,
+                year INTEGER NOT NULL,
+                report_type TEXT NOT NULL,
+                table_key TEXT NOT NULL,
+                row_index INTEGER NOT NULL,
+                class_code TEXT,
+                type_code TEXT,
+                item_code TEXT,
+                item_name TEXT,
+                values_json JSONB NOT NULL,
+                created_by UUID,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE(report_id, table_key, row_index)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_org_department_parent_sort ON org_department(parent_id, sort_order)",
+            "CREATE INDEX IF NOT EXISTS idx_org_unit_department_sort ON org_unit(department_id, sort_order)",
+            "CREATE INDEX IF NOT EXISTS idx_org_unit_name ON org_unit(name)",
+            "CREATE INDEX IF NOT EXISTS idx_dept_report_scope ON org_dept_annual_report(department_id, unit_id, year)",
+            "CREATE INDEX IF NOT EXISTS idx_dept_table_report ON org_dept_table_data(report_id)",
+            "CREATE INDEX IF NOT EXISTS idx_dept_table_year ON org_dept_table_data(department_id, year)",
+            "CREATE INDEX IF NOT EXISTS idx_dept_line_report ON org_dept_line_items(report_id)",
+            "CREATE INDEX IF NOT EXISTS idx_dept_line_year ON org_dept_line_items(department_id, year)",
+            "CREATE INDEX IF NOT EXISTS idx_dept_line_table_key ON org_dept_line_items(table_key)",
         ]
     },
 ]

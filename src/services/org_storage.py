@@ -54,7 +54,7 @@ class OrganizationStorage:
         # 加载组织数据
         if ORG_FILE.exists():
             try:
-                data = json.loads(ORG_FILE.read_text(encoding="utf-8"))
+                data = json.loads(ORG_FILE.read_text(encoding="utf-8-sig"))
                 store = OrganizationStore(**data)
                 self._organizations = store.organizations
                 logger.info(f"Loaded {len(self._organizations)} organizations")
@@ -65,7 +65,7 @@ class OrganizationStorage:
         # 加载关联数据
         if LINKS_FILE.exists():
             try:
-                data = json.loads(LINKS_FILE.read_text(encoding="utf-8"))
+                data = json.loads(LINKS_FILE.read_text(encoding="utf-8-sig"))
                 self._links = [JobOrganizationLink(**link) for link in data.get("links", [])]
                 logger.info(f"Loaded {len(self._links)} job-org links")
             except Exception as e:

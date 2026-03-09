@@ -8,6 +8,9 @@ import os
 from unittest.mock import Mock, AsyncMock
 from typing import Dict, Any, List
 
+os.environ["TESTING"] = "true"
+os.environ["GOVBUDGET_AUTH_ENABLED"] = "false"
+
 
 @pytest.fixture(scope="session")
 def event_loop():
