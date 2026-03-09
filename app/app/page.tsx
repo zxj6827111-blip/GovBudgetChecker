@@ -450,6 +450,13 @@ export default function HomePage() {
     setSelectedOrgId(unit?.id || null);
   }, []);
 
+  const openScopedUpload = useCallback((unit?: { id: string } | null) => {
+    if (unit?.id) {
+      setSelectedOrgId(unit.id);
+    }
+    setIsUploadOpen(true);
+  }, []);
+
   const handleJobSelectFromOrg = (jobId: string) => {
     setActiveJobId(jobId);
     // viewMode effect will handle switching
@@ -881,7 +888,7 @@ export default function HomePage() {
                 selectedUnitId={selectedOrgId}
                 onSelectUnit={handleUnitSelect}
                 onSelectJob={handleJobSelectFromOrg}
-                onUpload={() => setIsUploadOpen(true)}
+                onUpload={openScopedUpload}
                 refreshKey={orgRefreshKey}
                 onJobDeleted={() => setOrgTreeRefreshKey(prev => prev + 1)}
                 onUnitCreated={() => setOrgTreeRefreshKey(prev => prev + 1)}
