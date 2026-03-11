@@ -828,6 +828,119 @@ def _get_first_anchor_page(doc: Document, table_name: str) -> Optional[int]:
     table_pages = [p for p in pages if p <= len(doc.page_tables) and doc.page_tables[p-1]]
     return min(table_pages) if table_pages else min(pages)
 
+
+def _ensure_table_anchors(doc: Document) -> Dict[str, List[int]]:
+    anchors = doc.anchors or find_table_anchors(doc)
+    doc.anchors = anchors
+    return anchors
+
+
+def _collect_pages(*values: Any) -> List[int]:
+    pages: List[int] = []
+    seen = set()
+    for value in values:
+        if value is None:
+            continue
+        try:
+            page = int(value)
+        except (TypeError, ValueError):
+            continue
+        if page <= 0 or page in seen:
+            continue
+        seen.add(page)
+        pages.append(page)
+    return pages
+
+
+def _make_location_ref(
+    *,
+    role: Optional[str] = None,
+    page: Optional[int] = None,
+    table: Optional[str] = None,
+    section: Optional[str] = None,
+    row: Optional[str] = None,
+    col: Optional[str] = None,
+    field: Optional[str] = None,
+    code: Optional[str] = None,
+    subject: Optional[str] = None,
+    value: Optional[float] = None,
+) -> Dict[str, Any]:
+    ref: Dict[str, Any] = {}
+    if role:
+        ref["role"] = role
+    if page:
+        ref["page"] = page
+    if table:
+        ref["table"] = table
+    if section:
+        ref["section"] = section
+    if row:
+        ref["row"] = row
+    if col:
+        ref["col"] = col
+    if field:
+        ref["field"] = field
+    if code:
+        ref["code"] = code
+    if subject:
+        ref["subject"] = subject
+    if value is not None:
+        ref["value"] = value
+    return ref
+
+
+def _make_issue_location(
+    *refs: Dict[str, Any],
+    page: Optional[int] = None,
+    pages: Optional[List[int]] = None,
+    table: Optional[str] = None,
+    section: Optional[str] = None,
+    row: Optional[str] = None,
+    col: Optional[str] = None,
+    field: Optional[str] = None,
+    code: Optional[str] = None,
+    subject: Optional[str] = None,
+) -> Dict[str, Any]:
+    valid_refs = [ref for ref in refs if ref]
+    location: Dict[str, Any] = {}
+
+    all_pages = _collect_pages(page, *((pages or [])), *(ref.get("page") for ref in valid_refs))
+    if len(all_pages) == 1:
+        location["page"] = all_pages[0]
+    elif all_pages:
+        location["pages"] = all_pages
+
+    if table:
+        location["table"] = table
+    elif valid_refs:
+        tables: List[str] = []
+        seen_tables = set()
+        for ref in valid_refs:
+            name = str(ref.get("table") or "").strip()
+            if not name or name in seen_tables:
+                continue
+            seen_tables.add(name)
+            tables.append(name)
+        if tables:
+            location["table"] = " / ".join(tables)
+
+    for key, value in (
+        ("section", section),
+        ("row", row),
+        ("col", col),
+        ("field", field),
+        ("code", code),
+        ("subject", subject),
+    ):
+        if value not in (None, ""):
+            location[key] = value
+
+    if valid_refs:
+        location["table_refs"] = valid_refs
+
+    return location
+
+
 def _row_value(table: List[List[str]],
                name_keys: Tuple[str, ...],
                prefer_cols: Tuple[str, ...] = ()) -> Optional[float]:
@@ -3363,14 +3476,18 @@ class R33221_Narrative4_T4(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
         import re
-        
+
+        _ensure_table_anchors(doc)
         narrative_total = 0.0
+        narrative_page: Optional[int] = None
         for pidx, txt in enumerate(doc.page_texts):
             if "财政拨款" in txt and ("总体情况" in txt or "收入支出决算" in txt):
                 total_match = re.search(r'(?:财政拨款)?[收入支出]*总计[^\d]*(\d+\.?\d*)\s*万元', txt)
                 if total_match:
                     narrative_total = float(total_match.group(1))
-        
+                    narrative_page = pidx + 1
+
+        t4_page = _get_first_anchor_page(doc, "财政拨款收入支出决算总表")
         t4_rows = _get_table_rows(doc, "财政拨款收入支出决算总表")
         if t4_rows and narrative_total > 0:
             t4_total = 0.0
@@ -3383,9 +3500,30 @@ class R33221_Narrative4_T4(Rule):
             
             # 收紧容差到 0.01
             if t4_total > 0.01 and abs(narrative_total - t4_total) > 0.01:
+                location = _make_issue_location(
+                    _make_location_ref(
+                        role="说明4",
+                        page=narrative_page,
+                        section="说明4（财政拨款总体情况）",
+                        field="财政拨款总计",
+                        value=narrative_total,
+                    ),
+                    _make_location_ref(
+                        role="T4",
+                        page=t4_page,
+                        table="财政拨款收入支出决算总表",
+                        row="总计",
+                        field="总计",
+                        value=t4_total,
+                    ),
+                    table="财政拨款收入支出决算总表",
+                    section="说明4（财政拨款总体情况）",
+                    row="总计",
+                    field="财政拨款总计",
+                )
                 issues.append(self._issue(
                     f"说明4↔T4总计不一致：说明={narrative_total:.2f}, T4={t4_total:.2f}",
-                    {"narrative": narrative_total, "table": t4_total}, "warn",
+                    location, "warn",
                     evidence_text=f"文档说明(财政拨款总计)：{narrative_total}\n表4(总表) 总计：{t4_total}"
                 ))
         return issues
@@ -3399,7 +3537,9 @@ class R33222_Narrative5_T5(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
         import re
-        
+
+        _ensure_table_anchors(doc)
+        t5_page = _get_first_anchor_page(doc, "一般公共预算财政拨款支出决算表")
         # 1. 提取叙述数据
         # 目标：提取 "201 一般公共服务支出 XXX 万元"
         # 难点：叙述中可能只写中文名称，不写编码；或者写编码。
@@ -3434,9 +3574,11 @@ class R33222_Narrative5_T5(Rule):
 
         # 2. 在文本中搜索 T5 存在的类级科目
         target_txt = ""
-        for txt in doc.page_texts:
+        narrative_pages: List[int] = []
+        for pidx, txt in enumerate(doc.page_texts):
             if "一般公共预算" in txt and ("支出决算" in txt or "财政拨款支出" in txt) and "情况说明" in txt:
                 target_txt += txt + "\n" # 拼接相关文本，防止分页截断
+                narrative_pages.append(pidx + 1)
         
         if not target_txt: return issues
         
@@ -3445,9 +3587,31 @@ class R33222_Narrative5_T5(Rule):
         if total_match:
             nar_total = float(total_match.group(1))
             if t5_total > 0.01 and abs(nar_total - t5_total) > 0.01:
+                location = _make_issue_location(
+                    _make_location_ref(
+                        role="说明5",
+                        page=narrative_pages[0] if narrative_pages else None,
+                        section="说明5（一般公共预算支出）",
+                        field="支出总额",
+                        value=nar_total,
+                    ),
+                    _make_location_ref(
+                        role="T5",
+                        page=t5_page,
+                        table="一般公共预算财政拨款支出决算表",
+                        row="合计",
+                        field="合计",
+                        value=t5_total,
+                    ),
+                    pages=narrative_pages,
+                    table="一般公共预算财政拨款支出决算表",
+                    section="说明5（一般公共预算支出）",
+                    row="合计",
+                    field="支出总额",
+                )
                 issues.append(self._issue(
                     f"说明5↔T5支出总额不一致：说明={nar_total:.2f}, T5={t5_total:.2f}",
-                    {"narrative": nar_total, "table": t5_total}, "warn",
+                    location, "warn",
                     evidence_text=f"文档说明(一般公共预算支出)：{nar_total}\n表5(支出表) 合计：{t5_total}"
                 ))
 
@@ -3475,9 +3639,37 @@ class R33222_Narrative5_T5(Rule):
             if m:
                 nar_val = float(m.group(1))
                 if abs(nar_val - info['val']) > 0.01:
-                     issues.append(self._issue(
+                    location = _make_issue_location(
+                        _make_location_ref(
+                            role="说明5",
+                            page=narrative_pages[0] if narrative_pages else None,
+                            section="说明5（一般公共预算支出）",
+                            field=short_name,
+                            code=code,
+                            subject=short_name,
+                            value=nar_val,
+                        ),
+                        _make_location_ref(
+                            role="T5",
+                            page=t5_page,
+                            table="一般公共预算财政拨款支出决算表",
+                            row=f"{code}{short_name}",
+                            field="合计",
+                            code=code,
+                            subject=short_name,
+                            value=info['val'],
+                        ),
+                        pages=narrative_pages,
+                        table="一般公共预算财政拨款支出决算表",
+                        section="说明5（一般公共预算支出）",
+                        row=f"{code}{short_name}",
+                        field=short_name,
+                        code=code,
+                        subject=short_name,
+                    )
+                    issues.append(self._issue(
                         f"说明5↔T5类级科目({code}{short_name})金额不一致：说明={nar_val:.2f}, T5={info['val']:.2f}",
-                        {"code": code, "subject": short_name, "narrative": nar_val, "table": info['val']}, "warn",
+                        location, "warn",
                         evidence_text=f"科目：{code}{short_name}\n文档说明：{nar_val}\n表5数据：{info['val']}"
                     ))
             else:
@@ -3500,11 +3692,13 @@ class R33220_Narrative3_T3(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
         import re
-        
+
+        _ensure_table_anchors(doc)
         # 1. 提取叙述中的关键金额
         nar_basic = None
         nar_project = None
-        
+        narrative_page: Optional[int] = None
+
         for pidx, txt in enumerate(doc.page_texts):
             if "支出决算情况说明" in txt or "本年支出合计" in txt:
                 # 尝试更精确的正则匹配
@@ -3518,9 +3712,11 @@ class R33220_Narrative3_T3(Rule):
                     nar_project = float(project_matches[0])
                 
                 if nar_basic is not None or nar_project is not None:
+                    narrative_page = pidx + 1
                     break
         
         # 2. 获取 T3 数据
+        t3_page = _get_first_anchor_page(doc, "支出决算表")
         t3_rows = _get_table_rows(doc, "支出决算表")
         if not t3_rows:
             return issues
@@ -3554,9 +3750,29 @@ class R33220_Narrative3_T3(Rule):
                         # 在行数据中查找是否有一个值近似 nar_basic
                         has_match = any(abs(v - nar_basic) <= 0.01 for v in vals)
                         if not has_match:
+                            location = _make_issue_location(
+                                _make_location_ref(
+                                    role="说明3",
+                                    page=narrative_page,
+                                    section="说明3（支出决算情况）",
+                                    field="基本支出",
+                                    value=nar_basic,
+                                ),
+                                _make_location_ref(
+                                    role="T3",
+                                    page=t3_page,
+                                    table="支出决算表",
+                                    row="合计",
+                                    field="基本支出",
+                                ),
+                                table="支出决算表",
+                                section="说明3（支出决算情况）",
+                                row="合计",
+                                field="基本支出",
+                            )
                             issues.append(self._issue(
                                 f"说明3↔T3基本支出不一致：说明={nar_basic:.2f}, 表内未找到对应值 (行数据: {vals})",
-                                {"narrative": nar_basic, "table_row_vals": vals}, "warn",
+                                location, "warn",
                                 evidence_text=f"文档说明(基本支出)：{nar_basic}\n表3合计行数据：{vals}\n（未寻找匹配值）"
                             ))
                     
@@ -3564,9 +3780,29 @@ class R33220_Narrative3_T3(Rule):
                     if nar_project is not None:
                          has_match = any(abs(v - nar_project) <= 0.01 for v in vals)
                          if not has_match:
+                            location = _make_issue_location(
+                                _make_location_ref(
+                                    role="说明3",
+                                    page=narrative_page,
+                                    section="说明3（支出决算情况）",
+                                    field="项目支出",
+                                    value=nar_project,
+                                ),
+                                _make_location_ref(
+                                    role="T3",
+                                    page=t3_page,
+                                    table="支出决算表",
+                                    row="合计",
+                                    field="项目支出",
+                                ),
+                                table="支出决算表",
+                                section="说明3（支出决算情况）",
+                                row="合计",
+                                field="项目支出",
+                            )
                             issues.append(self._issue(
                                 f"说明3↔T3项目支出不一致：说明={nar_project:.2f}, 表内未找到对应值 (行数据: {vals})",
-                                {"narrative": nar_project, "table_row_vals": vals}, "warn",
+                                location, "warn",
                                 evidence_text=f"文档说明(项目支出)：{nar_project}\n表3合计行数据：{vals}\n（未寻找匹配值）"
                             ))
                     
@@ -3602,11 +3838,13 @@ class R33223_Narrative6_T6(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
         import re
-        
+
+        _ensure_table_anchors(doc)
         # 查找"基本支出决算情况说明"
         nar_personnel = None
         nar_public = None
-        
+        narrative_page: Optional[int] = None
+
         for pidx, txt in enumerate(doc.page_texts):
             if "基本支出" in txt and ("人员经费" in txt or "公用经费" in txt):
                 # 匹配模式："人员经费 XXX 万元"
@@ -3617,8 +3855,10 @@ class R33223_Narrative6_T6(Rule):
                 if pub_match: nar_public = float(pub_match.group(1))
                 
                 if nar_personnel is not None or nar_public is not None:
+                    narrative_page = pidx + 1
                     break
-        
+
+        t6_page = _get_first_anchor_page(doc, "一般公共预算财政拨款基本支出决算表")
         t6_rows = _get_table_rows(doc, "一般公共预算财政拨款基本支出决算表")
         if not t6_rows:
             return issues
@@ -3649,18 +3889,60 @@ class R33223_Narrative6_T6(Rule):
                  # 没找到显式的“人员经费合计”行，尝试用所有301+303推导？比较复杂，暂时报未找到
                  pass 
             elif abs(nar_personnel - t6_personnel) > 0.01:
+                location = _make_issue_location(
+                    _make_location_ref(
+                        role="说明6",
+                        page=narrative_page,
+                        section="说明6（基本支出情况）",
+                        field="人员经费",
+                        value=nar_personnel,
+                    ),
+                    _make_location_ref(
+                        role="T6",
+                        page=t6_page,
+                        table="一般公共预算财政拨款基本支出决算表",
+                        row="人员经费合计",
+                        field="人员经费",
+                        value=t6_personnel,
+                    ),
+                    table="一般公共预算财政拨款基本支出决算表",
+                    section="说明6（基本支出情况）",
+                    row="人员经费合计",
+                    field="人员经费",
+                )
                 issues.append(self._issue(
                     f"说明6↔T6人员经费不一致：说明={nar_personnel:.2f}, T6={t6_personnel:.2f}",
-                    {"narrative": nar_personnel, "table": t6_personnel}, "warn",
+                    location, "warn",
                     evidence_text=f"文档说明(人员经费)：{nar_personnel}\n表6(基本支出) 人员经费合计：{t6_personnel}"
                 ))
         
         # 校验公用经费
         if nar_public is not None:
             if found_pub and abs(nar_public - t6_public) > 0.01:
+                location = _make_issue_location(
+                    _make_location_ref(
+                        role="说明6",
+                        page=narrative_page,
+                        section="说明6（基本支出情况）",
+                        field="公用经费",
+                        value=nar_public,
+                    ),
+                    _make_location_ref(
+                        role="T6",
+                        page=t6_page,
+                        table="一般公共预算财政拨款基本支出决算表",
+                        row="公用经费合计",
+                        field="公用经费",
+                        value=t6_public,
+                    ),
+                    table="一般公共预算财政拨款基本支出决算表",
+                    section="说明6（基本支出情况）",
+                    row="公用经费合计",
+                    field="公用经费",
+                )
                 issues.append(self._issue(
                      f"说明6↔T6公用经费不一致：说明={nar_public:.2f}, T6={t6_public:.2f}",
-                    {"narrative": nar_public, "table": t6_public}, "warn",
+                    location, "warn",
                     evidence_text=f"文档说明(公用经费)：{nar_public}\n表6(基本支出) 公用经费合计：{t6_public}"
                 ))
         
@@ -3675,16 +3957,19 @@ class R33224_Narrative7_T7(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
         import re
-        
+
+        _ensure_table_anchors(doc)
         # 1. 提取叙述数据
         # 结构： { 'item_name': {'budget': val, 'final': val} }
         
         # 关键词映射
         
         target_txt = ""
-        for txt in doc.page_texts:
+        narrative_page: Optional[int] = None
+        for pidx, txt in enumerate(doc.page_texts):
             if "三公" in txt and ("情况说明" in txt or "经费支出" in txt):
                 target_txt = txt  # 简单取最后一页匹配到的？通常只有一处
+                narrative_page = pidx + 1
                 break
         
         if not target_txt:
@@ -3722,6 +4007,7 @@ class R33224_Narrative7_T7(Rule):
         nar_final_recept = find_val_near_key(target_txt, ['公务接待'])
 
         # 2. 获取 T7 数据
+        t7_page = _get_first_anchor_page(doc, '一般公共预算财政拨款"三公"经费支出决算表')
         t7_rows = _get_table_rows(doc, '一般公共预算财政拨款"三公"经费支出决算表')
         if not t7_rows: return issues
         
@@ -3742,9 +4028,29 @@ class R33224_Narrative7_T7(Rule):
         if nar_final_total is not None:
              # 在表内找是否存在该值 (0.01容差)
              if not any(abs(v - nar_final_total) <= 0.01 for v in t7_vals):
+                 location = _make_issue_location(
+                     _make_location_ref(
+                         role="说明7",
+                         page=narrative_page,
+                         section="说明7（三公经费情况）",
+                         field="三公经费合计",
+                         value=nar_final_total,
+                     ),
+                     _make_location_ref(
+                         role="T7",
+                         page=t7_page,
+                         table='一般公共预算财政拨款"三公"经费支出决算表',
+                         row="合计",
+                         field="三公经费合计",
+                     ),
+                     table='一般公共预算财政拨款"三公"经费支出决算表',
+                     section="说明7（三公经费情况）",
+                     row="合计",
+                     field="三公经费合计",
+                 )
                  issues.append(self._issue(
                      f"说明7↔T7三公合计不一致：说明={nar_final_total:.2f}, T7未找到对应值",
-                     {"narrative": nar_final_total, "table_vals": t7_vals}, "warn",
+                     location, "warn",
                      evidence_text=f"文档说明(三公合计)：{nar_final_total}\n表7内所有数值：{t7_vals}"
                  ))
         
@@ -3752,27 +4058,81 @@ class R33224_Narrative7_T7(Rule):
         # 出国
         if nar_final_abroad is not None and nar_final_abroad > 0:
             if not any(abs(v - nar_final_abroad) <= 0.01 for v in t7_vals):
+                 location = _make_issue_location(
+                     _make_location_ref(
+                         role="说明7",
+                         page=narrative_page,
+                         section="说明7（三公经费情况）",
+                         field="因公出国",
+                         value=nar_final_abroad,
+                     ),
+                     _make_location_ref(
+                         role="T7",
+                         page=t7_page,
+                         table='一般公共预算财政拨款"三公"经费支出决算表',
+                         field="因公出国",
+                     ),
+                     table='一般公共预算财政拨款"三公"经费支出决算表',
+                     section="说明7（三公经费情况）",
+                     field="因公出国",
+                 )
                  issues.append(self._issue(
                      f"说明7↔T7因公出国不一致：说明={nar_final_abroad:.2f}",
-                     {"narrative": nar_final_abroad}, "warn",
+                     location, "warn",
                      evidence_text=f"文档说明(因公出国)：{nar_final_abroad}\n表7内数据未找到匹配值"
                  ))
 
         # 用车
         if nar_final_car is not None and nar_final_car > 0:
             if not any(abs(v - nar_final_car) <= 0.01 for v in t7_vals):
+                 location = _make_issue_location(
+                     _make_location_ref(
+                         role="说明7",
+                         page=narrative_page,
+                         section="说明7（三公经费情况）",
+                         field="公务用车",
+                         value=nar_final_car,
+                     ),
+                     _make_location_ref(
+                         role="T7",
+                         page=t7_page,
+                         table='一般公共预算财政拨款"三公"经费支出决算表',
+                         field="公务用车",
+                     ),
+                     table='一般公共预算财政拨款"三公"经费支出决算表',
+                     section="说明7（三公经费情况）",
+                     field="公务用车",
+                 )
                  issues.append(self._issue(
                      f"说明7↔T7公务用车不一致：说明={nar_final_car:.2f}",
-                     {"narrative": nar_final_car}, "warn",
+                     location, "warn",
                      evidence_text=f"文档说明(公务用车)：{nar_final_car}\n表7内数据未找到匹配值"
                  ))
                  
         # 接待
         if nar_final_recept is not None and nar_final_recept > 0:
             if not any(abs(v - nar_final_recept) <= 0.01 for v in t7_vals):
+                 location = _make_issue_location(
+                     _make_location_ref(
+                         role="说明7",
+                         page=narrative_page,
+                         section="说明7（三公经费情况）",
+                         field="公务接待",
+                         value=nar_final_recept,
+                     ),
+                     _make_location_ref(
+                         role="T7",
+                         page=t7_page,
+                         table='一般公共预算财政拨款"三公"经费支出决算表',
+                         field="公务接待",
+                     ),
+                     table='一般公共预算财政拨款"三公"经费支出决算表',
+                     section="说明7（三公经费情况）",
+                     field="公务接待",
+                 )
                  issues.append(self._issue(
                      f"说明7↔T7公务接待不一致：说明={nar_final_recept:.2f}",
-                     {"narrative": nar_final_recept}, "warn",
+                     location, "warn",
                      evidence_text=f"文档说明(公务接待)：{nar_final_recept}\n表7内数据未找到匹配值"
                  ))
 
@@ -3787,7 +4147,8 @@ class R33226_Narrative2_T2(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
         import re
-        
+
+        _ensure_table_anchors(doc)
         # 1. 提取叙述数据
         # 常见模式: "本年收入合计 XXX 万元... 其中：财政拨款收入 XXX 万元... 上级补助收入 XXX 万元..."
         # 关键字映射表 (Nar keyword -> T2 possible col keywords)
@@ -3804,9 +4165,11 @@ class R33226_Narrative2_T2(Rule):
         
         # 查找目标文本
         target_txt = ""
-        for txt in doc.page_texts:
+        narrative_page: Optional[int] = None
+        for pidx, txt in enumerate(doc.page_texts):
             if "收入决算" in txt and ("情况说明" in txt or "本年收入合计" in txt):
                 target_txt = txt
+                narrative_page = pidx + 1
                 break
         
         if not target_txt: return issues
@@ -3824,6 +4187,7 @@ class R33226_Narrative2_T2(Rule):
 
         # 2. 获取 T2 数据
         # T2 收入决算表，通常包含上述列
+        t2_page = _get_first_anchor_page(doc, "收入决算表")
         t2_rows = _get_table_rows(doc, "收入决算表")
         if not t2_rows: return issues
         
@@ -3847,9 +4211,29 @@ class R33226_Narrative2_T2(Rule):
                 # 强校验：表中必须有这个数 (容差 0.01)
                 found = any(abs(val - v) <= 0.01 for val in t2_row_vals)
                 if not found:
+                    location = _make_issue_location(
+                        _make_location_ref(
+                            role="说明2",
+                            page=narrative_page,
+                            section="说明2（收入结构）",
+                            field=k,
+                            value=v,
+                        ),
+                        _make_location_ref(
+                            role="T2",
+                            page=t2_page,
+                            table="收入决算表",
+                            row="合计",
+                            field=k,
+                        ),
+                        table="收入决算表",
+                        section="说明2（收入结构）",
+                        row="合计",
+                        field=k,
+                    )
                     issues.append(self._issue(
                          f"说明2↔T2{k}不一致：说明={v:.2f}, T2合计行未找到对应值",
-                         {"narrative_key": k, "narrative_val": v, "table_row": t2_row_vals}, "warn",
+                         location, "warn",
                          evidence_text=f"文档说明({k})：{v}\n表2合计行数据：{t2_row_vals}"
                     ))
         
@@ -3864,17 +4248,21 @@ class R33225_Narrative1_T1(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
         import re
-        
+
+        _ensure_table_anchors(doc)
         narrative_total = 0.0
+        narrative_page: Optional[int] = None
         for pidx, txt in enumerate(doc.page_texts):
             if "收入支出决算" in txt and "总体情况" in txt:
                 total_match = re.search(r'收入支出总计[^\d]*(\d+\.?\d*)\s*万元', txt)
                 if total_match:
                     narrative_total = float(total_match.group(1))
+                    narrative_page = pidx + 1
                     break
         
         # 只要找到了匹配项（即使是0），且T1有数据，就应该校验
         if narrative_total is not None:
+            t1_page = _get_first_anchor_page(doc, "收入支出决算总表")
             t1_rows = _get_table_rows(doc, "收入支出决算总表")
             if t1_rows:
                 t1_total = 0.0
@@ -3888,9 +4276,30 @@ class R33225_Narrative1_T1(Rule):
                 
                 # 收紧容差 0.01
                 if t1_total > 0.01 and abs(narrative_total - t1_total) > 0.01:
+                    location = _make_issue_location(
+                        _make_location_ref(
+                            role="说明1",
+                            page=narrative_page,
+                            section="说明1（总体情况）",
+                            field="收入支出总计",
+                            value=narrative_total,
+                        ),
+                        _make_location_ref(
+                            role="T1",
+                            page=t1_page,
+                            table="收入支出决算总表",
+                            row="总计",
+                            field="总计",
+                            value=t1_total,
+                        ),
+                        table="收入支出决算总表",
+                        section="说明1（总体情况）",
+                        row="总计",
+                        field="收入支出总计",
+                    )
                     issues.append(self._issue(
                         f"说明1↔T1总计不一致：说明={narrative_total:.2f}, T1={t1_total:.2f}",
-                        {"narrative": narrative_total, "table": t1_total}, "warn",
+                        location, "warn",
                         evidence_text=f"文档说明(收入支出决算总计)：{narrative_total}\n表1(总表) 总计：{t1_total}"
                     ))
         return issues

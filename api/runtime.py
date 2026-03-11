@@ -7,14 +7,16 @@ depend on a stable API surface instead of importing `api.main` directly.
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
 import os
 import re
+import shutil
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Set
 
 import aiofiles
 from fastapi import HTTPException, Request, UploadFile
@@ -25,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 APP_TITLE = "GovBudgetChecker API"
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "30"))
+MAX_UPLOAD_PAGES = int(os.getenv("MAX_UPLOAD_PAGES", "800"))
 UPLOAD_ROOT = Path(os.getenv("UPLOAD_DIR", "uploads")).resolve()
 UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -76,11 +79,14 @@ _job_queue: Optional["DurableJobQueue"] = None
 _JOB_SUMMARY_CACHE: Dict[str, Dict[str, Any]] = {}
 _JOB_SUMMARY_CACHE_MAX_SIZE = 2048
 STRUCTURED_INGEST_FILENAME = "structured_ingest.json"
+IGNORED_ISSUES_FILENAME = "ignored_issues.json"
 JOB_STATUS_CONTEXT_KEYS = (
     "filename",
     "size",
     "saved_path",
     "checksum",
+    "version_created_at",
+    "job_created_at",
     "organization_id",
     "organization_name",
     "organization_match_type",
@@ -90,6 +96,7 @@ JOB_STATUS_CONTEXT_KEYS = (
     "report_year",
     "report_kind",
 )
+ACTIVE_ANALYSIS_STATUSES = {"queued", "processing", "running"}
 
 if TYPE_CHECKING:
     from api.job_queue import DurableJobQueue
@@ -132,6 +139,74 @@ def to_dict(obj: Any) -> Dict[str, Any]:
     return dict(obj)
 
 
+def get_job_quick_timestamp(job_dir: Path) -> float:
+    """Return the best-effort last-updated timestamp for a job directory."""
+    try:
+        status_file = job_dir / "status.json"
+        if status_file.exists():
+            return status_file.stat().st_mtime
+        return job_dir.stat().st_mtime
+    except Exception:
+        return 0.0
+
+
+def _parse_positive_timestamp(raw: Any) -> Optional[float]:
+    try:
+        value = float(raw)
+    except Exception:
+        return None
+    return value if value > 0 else None
+
+
+def get_job_birth_timestamp(job_dir: Path) -> float:
+    """Return a stable creation-like timestamp for a job directory."""
+    candidates: List[float] = []
+    status_file = job_dir / "status.json"
+
+    for path in (job_dir, status_file):
+        try:
+            if not path.exists():
+                continue
+            stat = path.stat()
+            for value in (getattr(stat, "st_ctime", None), getattr(stat, "st_mtime", None)):
+                parsed = _parse_positive_timestamp(value)
+                if parsed is not None:
+                    candidates.append(parsed)
+        except Exception:
+            continue
+
+    return min(candidates) if candidates else 0.0
+
+
+def get_job_created_timestamp(
+    job_dir: Path,
+    status_payload: Optional[Dict[str, Any]] = None,
+) -> float:
+    """Return the stable creation time for a job instance."""
+    payload = status_payload if isinstance(status_payload, dict) else {}
+    parsed = _parse_positive_timestamp(payload.get("job_created_at"))
+    if parsed is not None:
+        return parsed
+
+    birth = get_job_birth_timestamp(job_dir)
+    return birth if birth > 0 else get_job_quick_timestamp(job_dir)
+
+
+def get_job_version_timestamp(
+    job_dir: Path,
+    status_payload: Optional[Dict[str, Any]] = None,
+) -> float:
+    """Return the stable report-version timestamp for latest-version comparisons."""
+    payload = status_payload if isinstance(status_payload, dict) else {}
+    for key in ("version_created_at", "job_created_at"):
+        parsed = _parse_positive_timestamp(payload.get(key))
+        if parsed is not None:
+            return parsed
+
+    birth = get_job_birth_timestamp(job_dir)
+    return birth if birth > 0 else get_job_quick_timestamp(job_dir)
+
+
 def find_first_pdf(job_dir: Path) -> Path:
     """Return the first PDF in a job directory."""
     pdfs = sorted(job_dir.glob("*.pdf"))
@@ -159,6 +234,18 @@ def write_json_file(path: Path, payload: Dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
+def calculate_file_checksum(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    """Return SHA-256 checksum for a file."""
+    sha256 = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(chunk_size)
+            if not chunk:
+                break
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+
 def extract_job_status_context(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Return stable job metadata that should survive status transitions."""
     if not isinstance(payload, dict):
@@ -179,6 +266,11 @@ def merge_job_status(job_dir: Path, patch: Dict[str, Any]) -> Dict[str, Any]:
     return current
 
 
+def invalidate_job_summary_cache(job_id: str) -> None:
+    """Drop cached list summary for a job when sidecar/status changes."""
+    _JOB_SUMMARY_CACHE.pop(job_id, None)
+
+
 def get_structured_ingest_path(job_dir: Path) -> Path:
     return job_dir / STRUCTURED_INGEST_FILENAME
 
@@ -186,11 +278,194 @@ def get_structured_ingest_path(job_dir: Path) -> Path:
 def write_structured_ingest_payload(job_dir: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
     structured_path = get_structured_ingest_path(job_dir)
     write_json_file(structured_path, payload)
+    invalidate_job_summary_cache(job_dir.name)
     return payload
 
 
 def read_structured_ingest_payload(job_dir: Path) -> Dict[str, Any]:
     return read_json_file(get_structured_ingest_path(job_dir), default={})
+
+
+def get_ignored_issues_path(job_dir: Path) -> Path:
+    return job_dir / IGNORED_ISSUES_FILENAME
+
+
+def read_ignored_issues_payload(job_dir: Path) -> Dict[str, Any]:
+    payload = read_json_file(get_ignored_issues_path(job_dir), default={})
+    return payload if isinstance(payload, dict) else {}
+
+
+def read_ignored_issue_ids(job_dir: Path) -> Set[str]:
+    payload = read_ignored_issues_payload(job_dir)
+    raw_ids = payload.get("issue_ids")
+    if not isinstance(raw_ids, list):
+        return set()
+    ignored: Set[str] = set()
+    for item in raw_ids:
+        issue_id = str(item or "").strip()
+        if issue_id:
+            ignored.add(issue_id)
+    return ignored
+
+
+def write_ignored_issue_ids(job_dir: Path, issue_ids: Set[str]) -> Dict[str, Any]:
+    payload = {
+        "issue_ids": sorted({str(item).strip() for item in issue_ids if str(item).strip()}),
+        "updated_at": time.time(),
+    }
+    write_json_file(get_ignored_issues_path(job_dir), payload)
+    invalidate_job_summary_cache(job_dir.name)
+    return payload
+
+
+def _filter_issue_list(items: Any, ignored_ids: Set[str]) -> Any:
+    if not isinstance(items, list):
+        return items
+    filtered: List[Any] = []
+    for item in items:
+        if isinstance(item, dict):
+            issue_id = str(item.get("id") or "").strip()
+            if issue_id and issue_id in ignored_ids:
+                continue
+        filtered.append(item)
+    return filtered
+
+
+def _recompute_merged_payload(container: Dict[str, Any]) -> None:
+    ai_findings = container.get("ai_findings")
+    rule_findings = container.get("rule_findings")
+    if not isinstance(ai_findings, list) or not isinstance(rule_findings, list):
+        return
+    try:
+        from src.schemas.issues import AnalysisConfig, IssueItem as SchemaIssueItem
+        from src.services.merge_findings import FindingsMerger
+
+        ai_models = [
+            item if isinstance(item, SchemaIssueItem) else SchemaIssueItem(**item)
+            for item in ai_findings
+            if isinstance(item, (dict, SchemaIssueItem))
+        ]
+        rule_models = [
+            item if isinstance(item, SchemaIssueItem) else SchemaIssueItem(**item)
+            for item in rule_findings
+            if isinstance(item, (dict, SchemaIssueItem))
+        ]
+        merged_summary = FindingsMerger(AnalysisConfig()).merge_findings(
+            ai_models,
+            rule_models,
+        )
+        if hasattr(merged_summary, "model_dump"):
+            container["merged"] = merged_summary.model_dump()
+        elif hasattr(merged_summary, "dict"):
+            container["merged"] = merged_summary.dict()
+    except Exception:
+        logger.exception("Failed to recompute merged summary after issue filtering")
+
+
+def _filter_issue_container(container: Dict[str, Any], ignored_ids: Set[str]) -> Dict[str, Any]:
+    filtered = copy.deepcopy(container)
+    for key in ("ai_findings", "rule_findings"):
+        if key in filtered:
+            filtered[key] = _filter_issue_list(filtered.get(key), ignored_ids)
+
+    issues = filtered.get("issues")
+    if isinstance(issues, list):
+        filtered["issues"] = _filter_issue_list(issues, ignored_ids)
+    elif isinstance(issues, dict):
+        next_issues = dict(issues)
+        for key in ("error", "warn", "info", "all"):
+            if key in next_issues:
+                next_issues[key] = _filter_issue_list(next_issues.get(key), ignored_ids)
+        if not isinstance(next_issues.get("all"), list):
+            buckets: List[Any] = []
+            for key in ("error", "warn", "info"):
+                if isinstance(next_issues.get(key), list):
+                    buckets.extend(next_issues[key])
+            next_issues["all"] = buckets
+        filtered["issues"] = next_issues
+
+    if "merged" in filtered:
+        _recompute_merged_payload(filtered)
+    return filtered
+
+
+def _collect_issue_ids_from_container(container: Any) -> Set[str]:
+    issue_ids: Set[str] = set()
+    if not isinstance(container, dict):
+        return issue_ids
+
+    def _consume(items: Any) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            issue_id = str(item.get("id") or "").strip()
+            if issue_id:
+                issue_ids.add(issue_id)
+
+    for key in ("ai_findings", "rule_findings"):
+        _consume(container.get(key))
+
+    issues = container.get("issues")
+    if isinstance(issues, list):
+        _consume(issues)
+    elif isinstance(issues, dict):
+        for key in ("error", "warn", "info", "all"):
+            _consume(issues.get(key))
+
+    return issue_ids
+
+
+def apply_job_issue_filters(job_dir: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return payload
+
+    ignored_ids = read_ignored_issue_ids(job_dir)
+    if not ignored_ids:
+        next_payload = dict(payload)
+        next_payload.setdefault("ignored_issue_ids", [])
+        next_payload.setdefault("ignored_issue_count", 0)
+        return next_payload
+
+    filtered = copy.deepcopy(payload)
+    filtered = _filter_issue_container(filtered, ignored_ids)
+
+    result = filtered.get("result")
+    if isinstance(result, dict):
+        filtered["result"] = _filter_issue_container(result, ignored_ids)
+
+    filtered["ignored_issue_ids"] = sorted(ignored_ids)
+    filtered["ignored_issue_count"] = len(ignored_ids)
+    return filtered
+
+
+def ignore_job_issue(job_id: str, issue_id: str) -> Dict[str, Any]:
+    job_dir = UPLOAD_ROOT / job_id
+    if not job_dir.exists():
+        raise HTTPException(status_code=404, detail="job_id does not exist")
+
+    normalized_issue_id = str(issue_id or "").strip()
+    if not normalized_issue_id:
+        raise HTTPException(status_code=400, detail="issue_id is required")
+
+    status_file = job_dir / "status.json"
+    raw_payload = read_json_file(status_file, default={})
+    known_issue_ids = _collect_issue_ids_from_container(raw_payload)
+    result_payload = raw_payload.get("result")
+    if isinstance(result_payload, dict):
+        known_issue_ids.update(_collect_issue_ids_from_container(result_payload))
+
+    ignored_ids = read_ignored_issue_ids(job_dir)
+    if normalized_issue_id not in known_issue_ids and normalized_issue_id not in ignored_ids:
+        raise HTTPException(status_code=404, detail="issue_id does not exist")
+
+    ignored_ids.add(normalized_issue_id)
+    write_ignored_issue_ids(job_dir, ignored_ids)
+
+    payload = get_job_status_payload(job_id)
+    payload["ignored_issue_id"] = normalized_issue_id
+    return payload
 
 
 def _enrich_job_organization_context(job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -367,6 +642,520 @@ def normalize_report_kind(doc_type: Optional[str], filename: str = "") -> str:
     return "unknown"
 
 
+def _normalize_scope_name(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    return re.sub(r"\s+", "", text).casefold()
+
+
+def build_structured_ingest_scope(
+    *,
+    organization_id: Any = None,
+    organization_name: Any = None,
+    fiscal_year: Any = None,
+    report_year: Any = None,
+    doc_type: Any = None,
+    report_kind: Any = None,
+    filename: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Build a comparable scope key for structured ingest latest-version checks."""
+    year = parse_report_year(report_year if report_year is not None else fiscal_year)
+    if year is None and filename:
+        year = infer_report_year(filename=filename, preferred_year=fiscal_year)
+
+    kind = str(report_kind or "").strip().lower()
+    if not kind:
+        kind = normalize_report_kind(
+            str(doc_type) if doc_type is not None else None,
+            filename,
+        )
+    if not kind or kind == "unknown":
+        normalized_doc_type = str(doc_type or "").strip().lower()
+        if normalized_doc_type in {"dept_budget", "budget"}:
+            kind = "budget"
+        elif normalized_doc_type in {"dept_final", "final", "settlement", "accounts"}:
+            kind = "final"
+        elif normalized_doc_type:
+            kind = normalized_doc_type
+
+    org_id = str(organization_id or "").strip()
+    org_name = str(organization_name or "").strip()
+    if org_id:
+        org_key = f"id:{org_id}"
+        scope_source = "organization_id"
+    else:
+        normalized_name = _normalize_scope_name(org_name)
+        if not normalized_name:
+            return None
+        org_key = f"name:{normalized_name}"
+        scope_source = "organization_name"
+
+    if year is None or not kind:
+        return None
+
+    return {
+        "scope_key": f"{org_key}|year:{year}|kind:{kind}",
+        "organization_id": org_id or None,
+        "organization_name": org_name or None,
+        "report_year": year,
+        "report_kind": kind,
+        "scope_source": scope_source,
+    }
+
+
+def resolve_latest_structured_ingest_job(
+    job_id: str,
+    *,
+    organization_id: Any = None,
+    organization_name: Any = None,
+    fiscal_year: Any = None,
+    report_year: Any = None,
+    doc_type: Any = None,
+    report_kind: Any = None,
+    filename: str = "",
+    current_status_payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Resolve whether the current job is the latest report version for ingest scope."""
+    scope = build_structured_ingest_scope(
+        organization_id=organization_id,
+        organization_name=organization_name,
+        fiscal_year=fiscal_year,
+        report_year=report_year,
+        doc_type=doc_type,
+        report_kind=report_kind,
+        filename=filename,
+    )
+    if not scope:
+        return {
+            "is_latest": True,
+            "reason": None,
+            "scope": None,
+            "latest_job_id": job_id,
+            "latest_filename": filename or None,
+        }
+
+    candidates: List[Dict[str, Any]] = []
+    for job_dir in iter_job_dirs():
+        candidate_job_id = job_dir.name
+        if candidate_job_id == job_id and isinstance(current_status_payload, dict):
+            status_payload = dict(current_status_payload)
+        else:
+            status_payload = read_json_file(job_dir / "status.json", default={})
+        if not isinstance(status_payload, dict):
+            continue
+
+        candidate_scope = build_structured_ingest_scope(
+            organization_id=status_payload.get("organization_id"),
+            organization_name=status_payload.get("organization_name"),
+            fiscal_year=status_payload.get("fiscal_year"),
+            report_year=status_payload.get("report_year"),
+            doc_type=status_payload.get("doc_type"),
+            report_kind=status_payload.get("report_kind"),
+            filename=str(status_payload.get("filename") or ""),
+        )
+        if not candidate_scope or candidate_scope.get("scope_key") != scope.get("scope_key"):
+            continue
+
+        candidates.append(
+            {
+                "job_id": candidate_job_id,
+                "filename": str(status_payload.get("filename") or ""),
+                "version_created_at": get_job_version_timestamp(job_dir, status_payload),
+                "job_created_at": get_job_created_timestamp(job_dir, status_payload),
+                "quick_ts": get_job_quick_timestamp(job_dir),
+            }
+        )
+
+    if not candidates:
+        return {
+            "is_latest": True,
+            "reason": None,
+            "scope": scope,
+            "latest_job_id": job_id,
+            "latest_filename": filename or None,
+        }
+
+    latest = max(
+        candidates,
+        key=lambda item: (
+            float(item.get("version_created_at") or 0.0),
+            float(item.get("job_created_at") or 0.0),
+            float(item.get("quick_ts") or 0.0),
+            str(item.get("job_id") or ""),
+        ),
+    )
+
+    latest_job_id = str(latest.get("job_id") or "")
+    return {
+        "is_latest": latest_job_id == job_id,
+        "reason": None if latest_job_id == job_id else "not_latest_version",
+        "scope": scope,
+        "latest_job_id": latest_job_id or job_id,
+        "latest_filename": latest.get("filename") or None,
+        "latest_version_created_at": latest.get("version_created_at"),
+    }
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def _resolve_department_name(department_id: Optional[str]) -> Optional[str]:
+    normalized_id = str(department_id or "").strip()
+    if not normalized_id or not ORG_AVAILABLE:
+        return None
+    try:
+        storage = require_org_storage()
+        org = storage.get_by_id(normalized_id)
+        if org is None:
+            return None
+        return str(getattr(org, "name", "") or "").strip() or None
+    except Exception:
+        logger.exception("Failed to resolve department name for cleanup scope %s", normalized_id)
+        return None
+
+
+def plan_structured_ingest_cleanup(
+    body: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Preview which historical structured-ingest versions can be cleaned safely."""
+    request_body = dict(body or {})
+    department_id = str(request_body.get("department_id") or "").strip() or None
+    department_name = _resolve_department_name(department_id)
+
+    scanned_job_count = 0
+    matched_job_count = 0
+    scope_groups: Dict[str, List[Dict[str, Any]]] = {}
+    skipped_jobs: List[Dict[str, Any]] = []
+
+    for job_dir in sorted(iter_job_dirs(), key=get_job_quick_timestamp, reverse=True):
+        scanned_job_count += 1
+        job_id = job_dir.name
+        status_payload = get_job_status_payload(job_id)
+        department = resolve_job_department_context(
+            job_id,
+            status_payload=status_payload,
+        )
+        if department_id:
+            if not department or str(department.get("department_id") or "").strip() != department_id:
+                continue
+
+        scope = build_structured_ingest_scope(
+            organization_id=status_payload.get("organization_id"),
+            organization_name=status_payload.get("organization_name"),
+            fiscal_year=status_payload.get("fiscal_year"),
+            report_year=status_payload.get("report_year"),
+            doc_type=status_payload.get("doc_type"),
+            report_kind=status_payload.get("report_kind"),
+            filename=str(status_payload.get("filename") or ""),
+        )
+        if not scope:
+            skipped_jobs.append(
+                {
+                    "job_id": job_id,
+                    "filename": str(status_payload.get("filename") or ""),
+                    "reason": "missing_scope",
+                }
+            )
+            continue
+
+        structured_payload = read_structured_ingest_payload(job_dir)
+        if not structured_payload:
+            embedded = status_payload.get("structured_ingest")
+            if isinstance(embedded, dict):
+                structured_payload = dict(embedded)
+        structured_status = str(structured_payload.get("status") or "").strip().lower()
+        matched_job_count += 1
+        scope_groups.setdefault(scope["scope_key"], []).append(
+            {
+                "job_id": job_id,
+                "filename": str(status_payload.get("filename") or ""),
+                "organization_id": status_payload.get("organization_id"),
+                "organization_name": status_payload.get("organization_name"),
+                "department_id": department.get("department_id") if department else None,
+                "department_name": department.get("department_name") if department else None,
+                "report_year": scope.get("report_year"),
+                "report_kind": scope.get("report_kind"),
+                "scope_key": scope["scope_key"],
+                "version_created_at": get_job_version_timestamp(job_dir, status_payload),
+                "job_created_at": get_job_created_timestamp(job_dir, status_payload),
+                "quick_ts": get_job_quick_timestamp(job_dir),
+                "structured_status": structured_status or None,
+                "document_version_id": _coerce_int(structured_payload.get("document_version_id")),
+                "structured_payload": structured_payload,
+            }
+        )
+
+    kept_jobs: List[Dict[str, Any]] = []
+    cleanup_jobs: List[Dict[str, Any]] = []
+    skipped_cleanup_jobs: List[Dict[str, Any]] = []
+    retained_version_ids: Set[int] = set()
+    cleanup_versions_map: Dict[int, Dict[str, Any]] = {}
+
+    for scope_key, jobs in scope_groups.items():
+        latest = max(
+            jobs,
+            key=lambda item: (
+                float(item.get("version_created_at") or 0.0),
+                float(item.get("job_created_at") or 0.0),
+                float(item.get("quick_ts") or 0.0),
+                str(item.get("job_id") or ""),
+            ),
+        )
+        latest_job_id = str(latest.get("job_id") or "")
+        latest_filename = str(latest.get("filename") or "") or None
+        latest_document_version_id = _coerce_int(latest.get("document_version_id"))
+        if latest_document_version_id is not None:
+            retained_version_ids.add(latest_document_version_id)
+
+        kept_jobs.append(
+            {
+                "job_id": latest_job_id,
+                "filename": latest.get("filename"),
+                "department_id": latest.get("department_id"),
+                "department_name": latest.get("department_name"),
+                "organization_id": latest.get("organization_id"),
+                "organization_name": latest.get("organization_name"),
+                "report_year": latest.get("report_year"),
+                "report_kind": latest.get("report_kind"),
+                "scope_key": scope_key,
+                "document_version_id": latest_document_version_id,
+                "structured_status": latest.get("structured_status"),
+            }
+        )
+
+        for item in jobs:
+            if str(item.get("job_id") or "") == latest_job_id:
+                continue
+
+            document_version_id = _coerce_int(item.get("document_version_id"))
+            structured_status = str(item.get("structured_status") or "").strip().lower()
+            if structured_status == "cleaned":
+                skipped_cleanup_jobs.append(
+                    {
+                        "job_id": item.get("job_id"),
+                        "filename": item.get("filename"),
+                        "scope_key": scope_key,
+                        "reason": "already_cleaned",
+                    }
+                )
+                continue
+            if document_version_id is None:
+                skipped_cleanup_jobs.append(
+                    {
+                        "job_id": item.get("job_id"),
+                        "filename": item.get("filename"),
+                        "scope_key": scope_key,
+                        "reason": "missing_document_version_id",
+                    }
+                )
+                continue
+
+            candidate = {
+                "job_id": item.get("job_id"),
+                "filename": item.get("filename"),
+                "department_id": item.get("department_id"),
+                "department_name": item.get("department_name"),
+                "organization_id": item.get("organization_id"),
+                "organization_name": item.get("organization_name"),
+                "report_year": item.get("report_year"),
+                "report_kind": item.get("report_kind"),
+                "scope_key": scope_key,
+                "document_version_id": document_version_id,
+                "structured_status": item.get("structured_status"),
+                "latest_job_id": latest_job_id,
+                "latest_filename": latest_filename,
+            }
+            cleanup_jobs.append(candidate)
+            version_entry = cleanup_versions_map.setdefault(
+                document_version_id,
+                {
+                    "document_version_id": document_version_id,
+                    "scope_key": scope_key,
+                    "latest_job_id": latest_job_id,
+                    "latest_filename": latest_filename,
+                    "job_ids": [],
+                    "jobs": [],
+                },
+            )
+            version_entry["job_ids"].append(str(item.get("job_id") or ""))
+            version_entry["jobs"].append(candidate)
+
+    cleanup_document_versions: List[Dict[str, Any]] = []
+    blocked_document_versions: List[Dict[str, Any]] = []
+
+    for document_version_id, entry in sorted(cleanup_versions_map.items()):
+        public_entry = {
+            "document_version_id": document_version_id,
+            "scope_key": entry["scope_key"],
+            "latest_job_id": entry["latest_job_id"],
+            "latest_filename": entry["latest_filename"],
+            "job_count": len(entry["job_ids"]),
+            "job_ids": list(entry["job_ids"]),
+            "jobs": list(entry["jobs"]),
+        }
+        if document_version_id in retained_version_ids:
+            blocked_document_versions.append(
+                {
+                    **public_entry,
+                    "reason": "shared_with_latest_job",
+                }
+            )
+            skipped_cleanup_jobs.extend(
+                {
+                    "job_id": job["job_id"],
+                    "filename": job["filename"],
+                    "scope_key": job["scope_key"],
+                    "document_version_id": document_version_id,
+                    "reason": "shared_with_latest_job",
+                }
+                for job in entry["jobs"]
+            )
+            continue
+        cleanup_document_versions.append(public_entry)
+
+    cleanup_version_ids = {
+        int(item["document_version_id"])
+        for item in cleanup_document_versions
+        if _coerce_int(item.get("document_version_id")) is not None
+    }
+    executable_cleanup_jobs = [
+        job for job in cleanup_jobs if _coerce_int(job.get("document_version_id")) in cleanup_version_ids
+    ]
+
+    return {
+        "status": "preview",
+        "dry_run": True,
+        "department_id": department_id,
+        "department_name": department_name,
+        "scanned_job_count": scanned_job_count,
+        "matched_job_count": matched_job_count,
+        "scope_count": len(scope_groups),
+        "kept_job_count": len(kept_jobs),
+        "cleanup_job_count": len(executable_cleanup_jobs),
+        "cleanup_document_version_count": len(cleanup_document_versions),
+        "blocked_document_version_count": len(blocked_document_versions),
+        "skipped_job_count": len(skipped_jobs) + len(skipped_cleanup_jobs),
+        "kept_jobs": kept_jobs,
+        "cleanup_jobs": executable_cleanup_jobs,
+        "cleanup_document_versions": cleanup_document_versions,
+        "blocked_document_versions": blocked_document_versions,
+        "skipped_jobs": [*skipped_jobs, *skipped_cleanup_jobs],
+    }
+
+
+async def cleanup_structured_ingest_history(
+    body: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Delete historical structured-ingest document versions while keeping local job history."""
+    request_body = dict(body or {})
+    dry_run = bool(request_body.get("dry_run", False))
+    plan = plan_structured_ingest_cleanup(request_body)
+    if dry_run:
+        return plan
+
+    cleanup_versions = list(plan.get("cleanup_document_versions") or [])
+    cleanup_jobs = list(plan.get("cleanup_jobs") or [])
+    if not cleanup_versions:
+        return {
+            **plan,
+            "status": "noop",
+            "dry_run": False,
+            "deleted_document_version_count": 0,
+            "deleted_document_version_ids": [],
+            "updated_job_count": 0,
+            "updated_job_ids": [],
+        }
+
+    try:
+        from src.db.connection import DatabaseConnection
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"structured ingest database unavailable: {exc}") from exc
+
+    conn = None
+    deleted_version_ids: List[int] = []
+    try:
+        conn = await DatabaseConnection.acquire()
+        async with conn.transaction():
+            for item in cleanup_versions:
+                document_version_id = _coerce_int(item.get("document_version_id"))
+                if document_version_id is None:
+                    continue
+                result = await conn.execute(
+                    "DELETE FROM fiscal_document_versions WHERE id = $1",
+                    document_version_id,
+                )
+                if str(result).strip().endswith("1"):
+                    deleted_version_ids.append(document_version_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Structured ingest cleanup failed")
+        raise HTTPException(status_code=500, detail=f"structured ingest cleanup failed: {exc}") from exc
+    finally:
+        if conn is not None:
+            await DatabaseConnection.release(conn)
+
+    deleted_version_set = set(deleted_version_ids)
+    updated_job_ids: List[str] = []
+    cleaned_at = time.time()
+    for job in cleanup_jobs:
+        document_version_id = _coerce_int(job.get("document_version_id"))
+        if document_version_id is None or document_version_id not in deleted_version_set:
+            continue
+
+        job_id = str(job.get("job_id") or "").strip()
+        if not job_id:
+            continue
+        job_dir = UPLOAD_ROOT / job_id
+        if not job_dir.exists():
+            continue
+
+        structured_payload = read_structured_ingest_payload(job_dir)
+        if not structured_payload:
+            status_payload = get_job_status_payload(job_id)
+            embedded = status_payload.get("structured_ingest")
+            if isinstance(embedded, dict):
+                structured_payload = dict(embedded)
+
+        next_payload = dict(structured_payload)
+        ps_sync = next_payload.get("ps_sync")
+        if isinstance(ps_sync, dict):
+            next_ps_sync = dict(ps_sync)
+            next_ps_sync["report_id"] = None
+            next_payload["ps_sync"] = next_ps_sync
+
+        next_payload.update(
+            {
+                "status": "cleaned",
+                "reason": "historical_version_cleaned",
+                "cleaned_at": cleaned_at,
+                "cleaned_document_version_id": document_version_id,
+                "document_version_id": None,
+                "latest_job_id": job.get("latest_job_id"),
+                "latest_filename": job.get("latest_filename"),
+            }
+        )
+        write_structured_ingest_payload(job_dir, next_payload)
+        updated_job_ids.append(job_id)
+
+    return {
+        **plan,
+        "status": "done",
+        "dry_run": False,
+        "deleted_document_version_count": len(deleted_version_ids),
+        "deleted_document_version_ids": deleted_version_ids,
+        "updated_job_count": len(updated_job_ids),
+        "updated_job_ids": updated_job_ids,
+    }
+
+
 def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     """Build a job summary payload for list APIs."""
     status_file = job_dir / "status.json"
@@ -375,6 +1164,10 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     status_size = -1
     pdf_mtime_ns = -1
     pdf_size = -1
+    structured_mtime_ns = -1
+    structured_size = -1
+    ignored_mtime_ns = -1
+    ignored_size = -1
 
     try:
         stat = status_file.stat()
@@ -395,12 +1188,34 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     except Exception:
         pdf_path = None
 
+    structured_path = get_structured_ingest_path(job_dir)
+    try:
+        if structured_path.exists():
+            structured_stat = structured_path.stat()
+            structured_mtime_ns = structured_stat.st_mtime_ns
+            structured_size = structured_stat.st_size
+    except Exception:
+        pass
+
+    ignored_path = get_ignored_issues_path(job_dir)
+    try:
+        if ignored_path.exists():
+            ignored_stat = ignored_path.stat()
+            ignored_mtime_ns = ignored_stat.st_mtime_ns
+            ignored_size = ignored_stat.st_size
+    except Exception:
+        pass
+
     cache_key = (
         status_mtime_ns,
         status_size,
         filename,
         pdf_mtime_ns,
         pdf_size,
+        structured_mtime_ns,
+        structured_size,
+        ignored_mtime_ns,
+        ignored_size,
     )
     cache_entry = _JOB_SUMMARY_CACHE.get(job_dir.name)
     if cache_entry and cache_entry.get("key") == cache_key:
@@ -412,6 +1227,7 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         job_dir.name,
         read_json_file(status_file, default={}),
     )
+    status_data = apply_job_issue_filters(job_dir, status_data)
 
     progress = status_data.get("progress", 0)
     status = status_data.get("status", "unknown")
@@ -494,6 +1310,9 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     issue_error = 0
     issue_warn = 0
     issue_info = 0
+    merged_issue_total = 0
+    merged_issue_conflicts = 0
+    merged_issue_agreements = 0
     top_issue_rules: List[Dict[str, Any]] = []
     local_issue_total = 0
     local_issue_error = 0
@@ -561,6 +1380,23 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
                 local_elapsed_ms = int(elapsed_ms.get("rule") or 0)
             except Exception:
                 local_elapsed_ms = 0
+
+        merged_summary = result.get("merged")
+        if isinstance(merged_summary, dict):
+            merged_totals = merged_summary.get("totals")
+            if isinstance(merged_totals, dict):
+                try:
+                    merged_issue_total = int(merged_totals.get("merged") or 0)
+                except Exception:
+                    merged_issue_total = 0
+                try:
+                    merged_issue_conflicts = int(merged_totals.get("conflicts") or 0)
+                except Exception:
+                    merged_issue_conflicts = 0
+                try:
+                    merged_issue_agreements = int(merged_totals.get("agreements") or 0)
+                except Exception:
+                    merged_issue_agreements = 0
 
         ai_findings = result.get("ai_findings")
         (
@@ -659,6 +1495,9 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         local_issue_warn = issue_warn
         local_issue_info = issue_info
 
+    if merged_issue_total <= 0:
+        merged_issue_total = issue_total
+
     ai_participated = bool(use_ai_assist) and (
         dual_mode_enabled
         or ai_issue_total > 0
@@ -687,6 +1526,9 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "issue_warn": issue_warn,
         "issue_info": issue_info,
         "has_issues": issue_total > 0,
+        "merged_issue_total": merged_issue_total,
+        "merged_issue_conflicts": merged_issue_conflicts,
+        "merged_issue_agreements": merged_issue_agreements,
         "top_issue_rules": top_issue_rules,
         "local_participated": local_participated,
         "ai_participated": ai_participated,
@@ -738,11 +1580,126 @@ def iter_job_dirs() -> List[Path]:
     return [p for p in UPLOAD_ROOT.iterdir() if p.is_dir()]
 
 
+def resolve_job_department_context(
+    job_id: str,
+    *,
+    status_payload: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, str]]:
+    """Resolve the owning department for a job via organization links or status metadata."""
+    if not ORG_AVAILABLE:
+        return None
+
+    try:
+        storage = require_org_storage()
+    except Exception:
+        return None
+
+    org_id = ""
+    try:
+        link = storage.get_job_org(job_id)
+        if link is not None:
+            org_id = str(getattr(link, "org_id", "") or "").strip()
+    except Exception:
+        logger.exception("Failed to resolve org link for job %s", job_id)
+
+    if not org_id:
+        payload = status_payload or read_json_file(UPLOAD_ROOT / job_id / "status.json", default={})
+        payload = _enrich_job_organization_context(job_id, payload)
+        org_id = str(payload.get("organization_id") or "").strip()
+    if not org_id:
+        return None
+
+    try:
+        org = storage.get_by_id(org_id)
+        while org is not None:
+            level = str(getattr(org, "level", "") or "").strip().lower()
+            if level == "department":
+                return {
+                    "department_id": str(getattr(org, "id", "") or ""),
+                    "department_name": str(getattr(org, "name", "") or ""),
+                    "organization_id": org_id,
+                }
+            parent_id = str(getattr(org, "parent_id", "") or "").strip()
+            if not parent_id:
+                break
+            org = storage.get_by_id(parent_id)
+    except Exception:
+        logger.exception("Failed to resolve department context for job %s", job_id)
+    return None
+
+
 def ensure_pdf(file: UploadFile) -> bool:
     """Basic PDF content-type/extension guard."""
     ct = (file.content_type or "").lower()
     name = (file.filename or "").lower()
     return ct in ("application/pdf", "application/x-pdf") or name.endswith(".pdf")
+
+
+def delete_uploaded_job(job_id: str) -> None:
+    job_dir = UPLOAD_ROOT / job_id
+    if job_dir.exists():
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def get_pdf_page_count(pdf_path: Path) -> int:
+    import fitz
+
+    document = fitz.open(str(pdf_path))
+    try:
+        return int(document.page_count)
+    finally:
+        document.close()
+
+
+def find_duplicate_upload(
+    *,
+    checksum: str,
+    organization_id: Optional[str],
+    fiscal_year: Optional[str] = None,
+    doc_type: Optional[str] = None,
+    exclude_job_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    normalized_org_id = str(organization_id or "").strip()
+    normalized_checksum = str(checksum or "").strip()
+    normalized_year = str(fiscal_year or "").strip()
+    normalized_doc_type = str(doc_type or "").strip()
+    if not normalized_org_id or not normalized_checksum:
+        return None
+
+    for job_dir in iter_job_dirs():
+        if exclude_job_id and job_dir.name == exclude_job_id:
+            continue
+        status_file = job_dir / "status.json"
+        if not status_file.exists():
+            continue
+        try:
+            payload = json.loads(status_file.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        if str(payload.get("organization_id") or "").strip() != normalized_org_id:
+            continue
+        if str(payload.get("checksum") or "").strip() != normalized_checksum:
+            continue
+
+        existing_year = str(payload.get("fiscal_year") or "").strip()
+        if normalized_year and existing_year and existing_year != normalized_year:
+            continue
+
+        existing_doc_type = str(payload.get("doc_type") or "").strip()
+        if normalized_doc_type and existing_doc_type and existing_doc_type != normalized_doc_type:
+            continue
+
+        return {
+            "job_id": str(payload.get("job_id") or job_dir.name),
+            "filename": str(payload.get("filename") or ""),
+            "organization_id": normalized_org_id,
+            "organization_name": str(payload.get("organization_name") or ""),
+            "fiscal_year": existing_year,
+            "doc_type": existing_doc_type,
+        }
+
+    return None
 
 
 async def store_upload_file(
@@ -815,11 +1772,21 @@ async def store_upload_file(
             detail="File does not appear to be a valid PDF (invalid signature)",
         )
 
+    page_count = get_pdf_page_count(dst)
+    if MAX_UPLOAD_PAGES > 0 and page_count > MAX_UPLOAD_PAGES:
+        delete_uploaded_job(job_id)
+        raise HTTPException(
+            status_code=413,
+            detail=f"PDF页数超过限制：{page_count} 页，当前上限为 {MAX_UPLOAD_PAGES} 页",
+        )
+
+    created_at = time.time()
     payload = {
         "id": job_id,
         "job_id": job_id,
         "filename": safe_name,
         "size": size,
+        "page_count": page_count,
         "saved_path": str(dst.relative_to(UPLOAD_ROOT)),
         "checksum": sha256.hexdigest(),
     }
@@ -830,8 +1797,11 @@ async def store_upload_file(
         "stage": "uploaded",
         "filename": safe_name,
         "size": size,
+        "page_count": page_count,
         "checksum": sha256.hexdigest(),
-        "ts": time.time(),
+        "version_created_at": created_at,
+        "job_created_at": created_at,
+        "ts": created_at,
     }
     if metadata:
         status_payload.update({key: value for key, value in metadata.items() if value is not None})
@@ -852,7 +1822,8 @@ def get_job_status_payload(job_id: str) -> Dict[str, Any]:
         structured = read_structured_ingest_payload(job_dir)
         if structured:
             payload.setdefault("structured_ingest", structured)
-        return _enrich_job_organization_context(job_id, payload)
+        payload = _enrich_job_organization_context(job_id, payload)
+        return apply_job_issue_filters(job_dir, payload)
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to read job status: {e}"
@@ -1042,3 +2013,238 @@ async def start_analysis(
             status_code=500, detail=f"failed to start analysis: {e}"
         ) from e
     return {"job_id": job_id, "status": "started", "dispatch": dispatch}
+
+
+async def reanalyze_job(
+    source_job_id: str, body: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Clone an existing job into a new job id and queue it for analysis."""
+    source_job_dir = UPLOAD_ROOT / source_job_id
+    if not source_job_dir.exists():
+        raise HTTPException(status_code=404, detail="source job_id does not exist")
+
+    try:
+        source_pdf = find_first_pdf(source_job_dir)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="source job PDF does not exist") from exc
+
+    source_status = get_job_status_payload(source_job_id)
+    source_context = extract_job_status_context(source_status)
+    source_filename = source_pdf.name
+    source_size = source_pdf.stat().st_size
+    checksum = str(source_status.get("checksum") or "").strip()
+    if not checksum:
+        checksum = calculate_file_checksum(source_pdf)
+
+    new_job_id = os.urandom(16).hex()
+    new_job_dir = UPLOAD_ROOT / new_job_id
+    new_job_dir.mkdir(parents=True, exist_ok=False)
+    new_pdf = new_job_dir / source_filename
+
+    try:
+        shutil.copy2(source_pdf, new_pdf)
+        source_context.setdefault(
+            "version_created_at",
+            get_job_version_timestamp(source_job_dir, source_status),
+        )
+        created_at = time.time()
+        status_payload = {
+            **source_context,
+            "job_id": new_job_id,
+            "status": "uploaded",
+            "progress": 0,
+            "stage": "uploaded",
+            "filename": source_filename,
+            "size": source_size,
+            "saved_path": str(new_pdf.relative_to(UPLOAD_ROOT)),
+            "checksum": checksum,
+            "job_created_at": created_at,
+            "ts": created_at,
+        }
+        write_json_file(new_job_dir / "status.json", status_payload)
+
+        organization_id = str(source_status.get("organization_id") or "").strip()
+        if organization_id and ORG_AVAILABLE:
+            try:
+                set_job_organization(
+                    new_job_id,
+                    organization_id,
+                    match_type=str(
+                        source_status.get("organization_match_type") or "manual"
+                    ),
+                    confidence=float(
+                        source_status.get("organization_match_confidence") or 1.0
+                    ),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to carry organization link from %s to %s",
+                    source_job_id,
+                    new_job_id,
+                )
+
+        body = dict(body or {})
+        if "use_local_rules" not in body:
+            body["use_local_rules"] = bool(source_status.get("use_local_rules", True))
+        if "use_ai_assist" not in body:
+            body["use_ai_assist"] = bool(source_status.get("use_ai_assist", True))
+        if "mode" not in body:
+            body["mode"] = str(source_status.get("mode") or "legacy")
+        if "fiscal_year" not in body and source_status.get("fiscal_year") is not None:
+            body["fiscal_year"] = source_status.get("fiscal_year")
+        if "doc_type" not in body and source_status.get("doc_type") is not None:
+            body["doc_type"] = source_status.get("doc_type")
+        if "report_year" not in body and source_status.get("report_year") is not None:
+            body["report_year"] = source_status.get("report_year")
+
+        started = await start_analysis(new_job_id, body)
+        return {
+            **started,
+            "source_job_id": source_job_id,
+            "job_id": new_job_id,
+        }
+    except Exception:
+        try:
+            if new_job_dir.exists():
+                shutil.rmtree(new_job_dir)
+        except Exception:
+            logger.exception("Failed to cleanup reanalyze clone %s", new_job_id)
+        raise
+
+
+async def reanalyze_all_jobs(body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Clone and requeue all eligible existing jobs."""
+    request_body = dict(body or {})
+    include_active = bool(request_body.pop("include_active", False))
+    latest_per_department = bool(request_body.pop("latest_per_department", True))
+
+    source_job_dirs = sorted(iter_job_dirs(), key=get_job_quick_timestamp, reverse=True)
+    created: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    candidates: List[Dict[str, Any]] = []
+
+    if latest_per_department and ORG_AVAILABLE:
+        seen_departments = set()
+        for job_dir in source_job_dirs:
+            source_job_id = job_dir.name
+            status_payload = get_job_status_payload(source_job_id)
+            department = resolve_job_department_context(
+                source_job_id,
+                status_payload=status_payload,
+            )
+            if not department:
+                skipped.append(
+                    {
+                        "source_job_id": source_job_id,
+                        "reason": "unresolved_department",
+                    }
+                )
+                continue
+
+            department_id = str(department.get("department_id") or "").strip()
+            if not department_id:
+                skipped.append(
+                    {
+                        "source_job_id": source_job_id,
+                        "reason": "unresolved_department",
+                    }
+                )
+                continue
+
+            if department_id in seen_departments:
+                skipped.append(
+                    {
+                        "source_job_id": source_job_id,
+                        "department_id": department_id,
+                        "department_name": department.get("department_name"),
+                        "reason": "not_latest_in_department",
+                    }
+                )
+                continue
+
+            seen_departments.add(department_id)
+            candidates.append(
+                {
+                    "job_dir": job_dir,
+                    "job_id": source_job_id,
+                    "status_payload": status_payload,
+                    "department": department,
+                }
+            )
+    else:
+        for job_dir in source_job_dirs:
+            source_job_id = job_dir.name
+            candidates.append(
+                {
+                    "job_dir": job_dir,
+                    "job_id": source_job_id,
+                    "status_payload": get_job_status_payload(source_job_id),
+                    "department": None,
+                }
+            )
+
+    for candidate in candidates:
+        source_job_id = str(candidate["job_id"])
+        status_payload = candidate["status_payload"]
+        department = candidate.get("department") or {}
+        try:
+            current_status = str(status_payload.get("status") or "").strip().lower()
+            if not include_active and current_status in ACTIVE_ANALYSIS_STATUSES:
+                skipped.append(
+                    {
+                        "source_job_id": source_job_id,
+                        "department_id": department.get("department_id"),
+                        "department_name": department.get("department_name"),
+                        "status": current_status,
+                        "reason": "active_analysis",
+                    }
+                )
+                continue
+
+            result = await reanalyze_job(source_job_id, request_body)
+            created.append(
+                {
+                    "source_job_id": source_job_id,
+                    "job_id": result.get("job_id"),
+                    "status": result.get("status"),
+                    "dispatch": result.get("dispatch"),
+                    "department_id": department.get("department_id"),
+                    "department_name": department.get("department_name"),
+                }
+            )
+        except HTTPException as exc:
+            failed.append(
+                {
+                    "source_job_id": source_job_id,
+                    "department_id": department.get("department_id"),
+                    "department_name": department.get("department_name"),
+                    "status_code": exc.status_code,
+                    "detail": exc.detail,
+                }
+            )
+        except Exception as exc:
+            logger.exception("Failed to batch reanalyze job %s", source_job_id)
+            failed.append(
+                {
+                    "source_job_id": source_job_id,
+                    "department_id": department.get("department_id"),
+                    "department_name": department.get("department_name"),
+                    "status_code": 500,
+                    "detail": str(exc),
+                }
+            )
+
+    return {
+        "status": "started",
+        "include_active": include_active,
+        "latest_per_department": latest_per_department,
+        "requested_count": len(source_job_dirs),
+        "selected_count": len(candidates),
+        "created_count": len(created),
+        "skipped_count": len(skipped),
+        "failed_count": len(failed),
+        "created": created,
+        "skipped": skipped,
+        "failed": failed,
+    }

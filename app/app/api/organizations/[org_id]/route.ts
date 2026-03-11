@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
+import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { backendAuthHeaders } from "@/lib/backendAuth";
 
 export async function PUT(
   request: NextRequest,
@@ -9,9 +9,10 @@ export async function PUT(
 ) {
   try {
     const body = await request.json();
-    const response = await fetchWithTimeout(`${apiBase}/api/organizations/${params.org_id}`, {
+    const orgId = encodeURIComponent(params.org_id);
+    const response = await fetchWithTimeout(`${apiBase}/api/organizations/${orgId}`, {
       method: "PUT",
-      headers: backendAuthHeaders({ "Content-Type": "application/json" }),
+      headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
     });
     const text = await response.text();
@@ -36,9 +37,10 @@ export async function DELETE(
   { params }: { params: { org_id: string } }
 ) {
   try {
-    const response = await fetchWithTimeout(`${apiBase}/api/organizations/${params.org_id}`, {
+    const orgId = encodeURIComponent(params.org_id);
+    const response = await fetchWithTimeout(`${apiBase}/api/organizations/${orgId}`, {
       method: "DELETE",
-      headers: backendAuthHeaders(),
+      headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
     });
     const text = await response.text();
     let data: any;

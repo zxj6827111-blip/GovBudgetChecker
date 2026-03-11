@@ -8,6 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from api import runtime
+from api.routes.organizations import clear_department_stats_cache
 from src.services.org_matcher import get_org_matcher
 
 router = APIRouter()
@@ -77,6 +78,22 @@ async def _handle_upload(
         },
     )
 
+    duplicate = runtime.find_duplicate_upload(
+        checksum=str(uploaded.get("checksum") or ""),
+        organization_id=selected_org,
+        fiscal_year=fiscal_year,
+        doc_type=doc_type,
+        exclude_job_id=str(uploaded.get("job_id") or ""),
+    )
+    if duplicate is not None:
+        runtime.delete_uploaded_job(str(uploaded.get("job_id") or ""))
+        duplicate_filename = str(duplicate.get("filename") or "历史文件")
+        duplicate_job_id = str(duplicate.get("job_id") or "")
+        raise HTTPException(
+            status_code=409,
+            detail=f"检测到重复上传：{duplicate_filename}（任务 {duplicate_job_id}）",
+        )
+
     org_binding: Optional[dict] = None
     if selected_org:
         org_binding = runtime.set_job_organization(
@@ -102,6 +119,8 @@ async def _handle_upload(
     )
     uploaded["fiscal_year"] = fiscal_year
     uploaded["doc_type"] = doc_type
+    if uploaded.get("organization_id"):
+        clear_department_stats_cache()
     return uploaded
 
 

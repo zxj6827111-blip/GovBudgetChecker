@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 
 // ───────────── Types ─────────────
 
@@ -10,9 +10,14 @@ interface FileItem {
     filename: string;
     year: string;
     docType: "dept_final" | "dept_budget";
+    departmentId?: string;
+    departmentName?: string;
     orgId?: string;
     orgName?: string;
     orgLevel?: string;
+    matchSource?: "manual" | "auto" | "default" | "remembered";
+    matchConfidence?: "high" | "medium" | "low";
+    matchHint?: string;
     versionId?: string;
     status: "pending" | "uploading" | "triggering" | "success" | "failed" | "skipped";
     message: string;
@@ -27,7 +32,18 @@ interface BatchUploadModalProps {
     onComplete: () => void;
 }
 
+interface OrganizationOption {
+    id: string;
+    name: string;
+    level: string;
+    level_name?: string;
+    parent_id?: string | null;
+    children?: OrganizationOption[];
+}
+
 const MAX_FILES = 50;
+const UPLOAD_PREFS_KEY = "gbc_batch_upload_prefs_v1";
+const REQUEST_TIMEOUT_MS = 180000;
 
 // ───────────── Helpers ─────────────
 
@@ -53,6 +69,10 @@ function detectFiscalYear(filename: string): string {
     return "";
 }
 
+function sortOrganizationsByName(a: OrganizationOption, b: OrganizationOption): number {
+    return a.name.localeCompare(b.name, "zh-CN");
+}
+
 // ───────────── Component ─────────────
 
 export default function BatchUploadModal({
@@ -65,20 +85,140 @@ export default function BatchUploadModal({
 }: BatchUploadModalProps) {
     const isScopedUpload = Boolean(orgUnitId);
     const [files, setFiles] = useState<FileItem[]>([]);
-    const [orgs, setOrgs] = useState<any[]>([]);
+    const [orgs, setOrgs] = useState<OrganizationOption[]>([]);
     const [isProcessing, setIsProcessing] = useState(false);
     const [currentIndex, setCurrentIndex] = useState(-1);
     const [isDragging, setIsDragging] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
+    const [bulkDepartmentId, setBulkDepartmentId] = useState("");
+    const [bulkUnitId, setBulkUnitId] = useState("");
+    const [departmentFilter, setDepartmentFilter] = useState("");
+    const [unitFilter, setUnitFilter] = useState("");
+    const [rememberedSelection, setRememberedSelection] = useState<{
+        departmentId: string;
+        unitId: string;
+        docType: "dept_final" | "dept_budget";
+        year: string;
+    }>({
+        departmentId: "",
+        unitId: "",
+        docType: defaultDocType,
+        year: "",
+    });
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const departments = useMemo(
+        () => orgs.filter((org) => org.level === "department").slice().sort(sortOrganizationsByName),
+        [orgs]
+    );
+
+    const departmentMap = useMemo(
+        () => new Map(departments.map((department) => [department.id, department])),
+        [departments]
+    );
+
+    const orgMap = useMemo(() => new Map(orgs.map((org) => [org.id, org])), [orgs]);
+
+    const unitsByDepartment = useMemo(() => {
+        const grouped = new Map<string, OrganizationOption[]>();
+        orgs.forEach((org) => {
+            if (org.level !== "unit" || !org.parent_id) return;
+            const existing = grouped.get(org.parent_id) || [];
+            existing.push(org);
+            grouped.set(org.parent_id, existing);
+        });
+        grouped.forEach((items, key) => {
+            grouped.set(key, items.slice().sort(sortOrganizationsByName));
+        });
+        return grouped;
+    }, [orgs]);
+
+    const visibleDepartments = useMemo(() => {
+        const keyword = departmentFilter.trim().toLowerCase();
+        if (!keyword) return departments;
+        return departments.filter((department) =>
+            department.name.toLowerCase().includes(keyword)
+        );
+    }, [departmentFilter, departments]);
+
+    const getVisibleUnits = useCallback(
+        (departmentId: string) => {
+            const units = unitsByDepartment.get(departmentId) || [];
+            const keyword = unitFilter.trim().toLowerCase();
+            if (!keyword) return units;
+            return units.filter((unit) => unit.name.toLowerCase().includes(keyword));
+        },
+        [unitFilter, unitsByDepartment]
+    );
+
+    const getPreferredUnit = useCallback(
+        (departmentId: string, filename?: string): OrganizationOption | undefined => {
+            const units = unitsByDepartment.get(departmentId) || [];
+            if (units.length === 0) return undefined;
+
+            if (filename) {
+                const exactMatchedUnit = units.find((unit) => filename.includes(unit.name));
+                if (exactMatchedUnit) return exactMatchedUnit;
+            }
+
+            const baseUnit = units.find((unit) => unit.name.includes("本级"));
+            if (baseUnit) return baseUnit;
+
+            if (units.length === 1) return units[0];
+
+            return undefined;
+        },
+        [unitsByDepartment]
+    );
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        try {
+            const raw = window.localStorage.getItem(UPLOAD_PREFS_KEY);
+            if (!raw) return;
+            const parsed = JSON.parse(raw) as Partial<{
+                departmentId: string;
+                unitId: string;
+                docType: "dept_final" | "dept_budget";
+                year: string;
+            }>;
+            const next = {
+                departmentId: String(parsed.departmentId || "").trim(),
+                unitId: String(parsed.unitId || "").trim(),
+                docType: parsed.docType === "dept_final" ? "dept_final" : parsed.docType === "dept_budget" ? "dept_budget" : defaultDocType,
+                year: String(parsed.year || "").trim(),
+            };
+            setRememberedSelection(next);
+            setBulkDepartmentId(next.departmentId);
+            setBulkUnitId(next.unitId);
+        } catch (error) {
+            console.error("Failed to restore batch upload preferences:", error);
+        }
+    }, [defaultDocType]);
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        const nextDocType = rememberedSelection.docType || defaultDocType;
+        const payload = {
+            departmentId: bulkDepartmentId || rememberedSelection.departmentId,
+            unitId: bulkUnitId || rememberedSelection.unitId,
+            docType: nextDocType,
+            year: rememberedSelection.year || "",
+        };
+        try {
+            window.localStorage.setItem(UPLOAD_PREFS_KEY, JSON.stringify(payload));
+        } catch (error) {
+            console.error("Failed to persist batch upload preferences:", error);
+        }
+    }, [bulkDepartmentId, bulkUnitId, defaultDocType, rememberedSelection]);
 
     // 拉取全区组织用于匹配和下拉选择
     useEffect(() => {
         let alive = true;
 
-        const flattenTree = (nodes: any[]): any[] => {
-            const result: any[] = [];
-            const walk = (items: any[]) => {
+        const flattenTree = (nodes: OrganizationOption[]): OrganizationOption[] => {
+            const result: OrganizationOption[] = [];
+            const walk = (items: OrganizationOption[]) => {
                 for (const item of items) {
                     if (!item || !item.id) continue;
                     result.push({
@@ -123,8 +263,8 @@ export default function BatchUploadModal({
                 const tree = Array.isArray(orgTreeData.tree) ? orgTreeData.tree : [];
                 const treeOrgs = flattenTree(tree);
 
-                const merged = new Map<string, any>();
-                [...departments, ...treeOrgs].forEach((item: any) => {
+                const merged = new Map<string, OrganizationOption>();
+                [...departments, ...treeOrgs].forEach((item: OrganizationOption) => {
                     if (!item || !item.id) return;
                     merged.set(item.id, {
                         id: item.id,
@@ -154,16 +294,42 @@ export default function BatchUploadModal({
 
     useEffect(() => {
         if (!orgUnitId || orgs.length === 0) return;
-        const targetOrg = orgs.find((org) => org.id === orgUnitId);
+        const targetOrg = orgMap.get(orgUnitId);
         if (!targetOrg) return;
+        const targetDepartment =
+            targetOrg.parent_id && departmentMap.has(targetOrg.parent_id)
+                ? departmentMap.get(targetOrg.parent_id)
+                : undefined;
         setFiles((prev) =>
             prev.map((item) =>
                 item.orgId === orgUnitId && (!item.orgName || !item.orgLevel)
-                    ? { ...item, orgName: targetOrg.name, orgLevel: targetOrg.level }
+                    ? {
+                        ...item,
+                        departmentId: targetDepartment?.id || item.departmentId,
+                        departmentName: targetDepartment?.name || item.departmentName,
+                        orgName: targetOrg.name,
+                        orgLevel: targetOrg.level,
+                        matchSource: item.matchSource || "default",
+                        matchConfidence: item.matchConfidence || "high",
+                        matchHint: item.matchHint || "已使用当前选中的单位",
+                    }
                     : item
             )
         );
-    }, [orgUnitId, orgs]);
+    }, [departmentMap, orgMap, orgUnitId, orgs.length]);
+
+    useEffect(() => {
+        if (!bulkDepartmentId) {
+            if (bulkUnitId) setBulkUnitId("");
+            return;
+        }
+        const units = unitsByDepartment.get(bulkDepartmentId) || [];
+        if (bulkUnitId && units.some((unit) => unit.id === bulkUnitId)) {
+            return;
+        }
+        const preferredUnit = getPreferredUnit(bulkDepartmentId);
+        setBulkUnitId(preferredUnit?.id || "");
+    }, [bulkDepartmentId, bulkUnitId, getPreferredUnit, unitsByDepartment]);
 
     // ── File Selection ──
 
@@ -182,39 +348,79 @@ export default function BatchUploadModal({
             }
 
             const newFiles: FileItem[] = newFileArray.map((file) => {
+                let matchedDepartmentId = "";
+                let matchedDepartmentName = "";
                 let matchedOrgId = orgUnitId;
                 let matchedOrgName = "";
                 let matchedOrgLevel = "";
+                let matchSource: FileItem["matchSource"] = undefined;
+                let matchConfidence: FileItem["matchConfidence"] = undefined;
+                let matchHint = "";
 
                 // 如果是全局模式没有传 orgUnitId，尝试通过文件名自动匹配
                 if (!orgUnitId && orgs.length > 0) {
                     // 从最长的名称开始匹配，以防止部分重叠（如：区民政局 vs 区民政局本级）
                     const sortedOrgs = [...orgs].sort((a, b) => b.name.length - a.name.length);
-                    let match = sortedOrgs.find(o => file.name.includes(o.name));
+                    let match = sortedOrgs.find((o) => file.name.includes(o.name));
 
                     if (match) {
                         // 针对部门和单位的智能推导
                         const isUnitIntended = file.name.includes("单位") || file.name.includes("本级");
                         const isDeptIntended = file.name.includes("部门");
 
-                        if (match.level === "department" && isUnitIntended) {
-                            // filename 有"单位"或"本级"，但匹配到的是部门，尝试找这个部门下的本级单位
-                            const childUnit = orgs.find(o => o.parent_id === match?.id && (o.name.includes("本级") || o.name.includes("单位")));
-                            if (childUnit) match = childUnit;
-                        } else if (match.level === "unit" && isDeptIntended) {
+                        if (match.level === "unit" && isDeptIntended) {
                             // filename 带有"部门"，但匹配到了单位，尝试找它所在的部门
                             const parentDept = orgs.find(o => o.id === match?.parent_id);
                             if (parentDept) match = parentDept;
                         }
 
-                        matchedOrgId = match.id;
-                        matchedOrgName = match.name;
-                        matchedOrgLevel = match.level;
+                        if (match.level === "department") {
+                            matchedDepartmentId = match.id;
+                            matchedDepartmentName = match.name;
+
+                            const preferredUnit = getPreferredUnit(
+                                match.id,
+                                isUnitIntended ? file.name : undefined
+                            );
+                            if (preferredUnit) {
+                                matchedOrgId = preferredUnit.id;
+                                matchedOrgName = preferredUnit.name;
+                                matchedOrgLevel = preferredUnit.level;
+                                matchSource = "auto";
+                                matchConfidence = isUnitIntended ? "high" : "medium";
+                                matchHint = isUnitIntended
+                                    ? `已按文件名自动匹配到单位：${preferredUnit.name}`
+                                    : `已匹配到部门 ${match.name}，并自动带出默认单位 ${preferredUnit.name}`;
+                            } else {
+                                matchSource = "auto";
+                                matchConfidence = "low";
+                                matchHint = `已匹配到部门 ${match.name}，但该部门暂无可用单位`;
+                            }
+                        } else {
+                            matchedOrgId = match.id;
+                            matchedOrgName = match.name;
+                            matchedOrgLevel = match.level;
+                            matchSource = "auto";
+                            matchConfidence = "high";
+                            matchHint = `已按文件名自动匹配到单位：${match.name}`;
+
+                            const parentDepartment =
+                                match.parent_id && departmentMap.has(match.parent_id)
+                                    ? departmentMap.get(match.parent_id)
+                                    : undefined;
+                            if (parentDepartment) {
+                                matchedDepartmentId = parentDepartment.id;
+                                matchedDepartmentName = parentDepartment.name;
+                            }
+                        }
                     }
                 } else if (orgUnitId) {
                     const o = orgs.find(o => o.id === orgUnitId);
                     matchedOrgName = o?.name || "";
                     matchedOrgLevel = o?.level || "";
+                    matchSource = "default";
+                    matchConfidence = "high";
+                    matchHint = "已使用当前选中的单位";
                 }
 
                 return {
@@ -223,17 +429,86 @@ export default function BatchUploadModal({
                     filename: file.name,
                     year: detectFiscalYear(file.name),
                     docType: detectDocType(file.name, defaultDocType),
+                    departmentId: matchedDepartmentId,
+                    departmentName: matchedDepartmentName,
                     orgId: matchedOrgId,
                     orgName: matchedOrgName,
                     orgLevel: matchedOrgLevel,
+                    matchSource,
+                    matchConfidence,
+                    matchHint,
                     status: "pending",
                     message: "",
                 };
             });
 
-            setFiles((prev) => [...prev, ...newFiles]);
+            const normalizedFiles = newFiles.map((item) => {
+                const selectedOrg = item.orgId ? orgMap.get(item.orgId) : undefined;
+
+                if (!selectedOrg) {
+                    if (!isScopedUpload && rememberedSelection.unitId) {
+                        const rememberedOrg = orgMap.get(rememberedSelection.unitId);
+                        const rememberedDepartment =
+                            rememberedSelection.departmentId && departmentMap.has(rememberedSelection.departmentId)
+                                ? departmentMap.get(rememberedSelection.departmentId)
+                                : undefined;
+                        if (rememberedOrg && rememberedOrg.level === "unit" && rememberedDepartment) {
+                            return {
+                                ...item,
+                                departmentId: rememberedDepartment.id,
+                                departmentName: rememberedDepartment.name,
+                                orgId: rememberedOrg.id,
+                                orgName: rememberedOrg.name,
+                                orgLevel: rememberedOrg.level,
+                                matchSource: "remembered" as const,
+                                matchConfidence: "medium" as const,
+                                matchHint: `已带入上次选择：${rememberedDepartment.name} / ${rememberedOrg.name}`,
+                                year: item.year || rememberedSelection.year || "",
+                                docType: item.docType || rememberedSelection.docType || defaultDocType,
+                            };
+                        }
+                    }
+                    return item;
+                }
+
+                if (selectedOrg.level === "department") {
+                    const preferredUnit = getPreferredUnit(selectedOrg.id);
+                    return {
+                        ...item,
+                        departmentId: selectedOrg.id,
+                        departmentName: selectedOrg.name,
+                        orgId: preferredUnit?.id || "",
+                        orgName: preferredUnit?.name || "",
+                        orgLevel: preferredUnit?.level || "",
+                        matchSource: preferredUnit ? "default" : item.matchSource,
+                        matchConfidence: preferredUnit ? "medium" : item.matchConfidence,
+                        matchHint: preferredUnit
+                            ? `已为部门 ${selectedOrg.name} 自动带出默认单位 ${preferredUnit.name}`
+                            : item.matchHint,
+                    };
+                }
+
+                const parentDepartment =
+                    selectedOrg.parent_id && departmentMap.has(selectedOrg.parent_id)
+                        ? departmentMap.get(selectedOrg.parent_id)
+                        : undefined;
+
+                return {
+                    ...item,
+                    departmentId: parentDepartment?.id || item.departmentId,
+                    departmentName: parentDepartment?.name || item.departmentName,
+                    orgId: selectedOrg.id,
+                    orgName: selectedOrg.name,
+                    orgLevel: selectedOrg.level,
+                    matchSource: item.matchSource || "auto",
+                    matchConfidence: item.matchConfidence || "high",
+                    matchHint: item.matchHint || `已自动匹配到单位：${selectedOrg.name}`,
+                };
+            });
+
+            setFiles((prev) => [...prev, ...normalizedFiles]);
         },
-        [files.length, defaultDocType, orgUnitId, orgs]
+        [defaultDocType, departmentMap, files.length, getPreferredUnit, orgMap, orgUnitId, orgs, rememberedSelection, isScopedUpload]
     );
 
     const handleDragOver = (e: React.DragEvent) => {
@@ -264,6 +539,183 @@ export default function BatchUploadModal({
         setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, ...updates } : f)));
     };
 
+    const persistRememberedSelection = useCallback(
+        (updates: Partial<{ departmentId: string; unitId: string; docType: "dept_final" | "dept_budget"; year: string }>) => {
+            setRememberedSelection((prev) => ({
+                departmentId: updates.departmentId ?? prev.departmentId,
+                unitId: updates.unitId ?? prev.unitId,
+                docType: updates.docType ?? prev.docType,
+                year: updates.year ?? prev.year,
+            }));
+        },
+        []
+    );
+
+    const buildAssignmentUpdates = useCallback(
+        (
+            departmentId: string,
+            unitId: string,
+            options?: {
+                source?: FileItem["matchSource"];
+                confidence?: FileItem["matchConfidence"];
+                hint?: string;
+            }
+        ): Partial<FileItem> => {
+            const selectedDepartment = departmentId ? departmentMap.get(departmentId) : undefined;
+            const selectedUnit = departmentId
+                ? (unitsByDepartment.get(departmentId) || []).find((unit) => unit.id === unitId)
+                : undefined;
+
+            return {
+                departmentId: selectedDepartment?.id || "",
+                departmentName: selectedDepartment?.name || "",
+                orgId: selectedUnit?.id || "",
+                orgName: selectedUnit?.name || "",
+                orgLevel: selectedUnit?.level || "",
+                matchSource: options?.source,
+                matchConfidence: options?.confidence,
+                matchHint: options?.hint,
+            };
+        },
+        [departmentMap, unitsByDepartment]
+    );
+
+    const resolveDepartmentId = (fileItem: FileItem): string => {
+        if (fileItem.departmentId) return fileItem.departmentId;
+        if (!fileItem.orgId) return "";
+        const selectedOrg = orgMap.get(fileItem.orgId);
+        if (!selectedOrg) return "";
+        if (selectedOrg.level === "department") return selectedOrg.id;
+        return selectedOrg.parent_id || "";
+    };
+
+    const resolveDepartmentName = (fileItem: FileItem): string => {
+        if (fileItem.departmentName) return fileItem.departmentName;
+        const departmentId = resolveDepartmentId(fileItem);
+        return departmentId ? departmentMap.get(departmentId)?.name || "" : "";
+    };
+
+    const resolveUnitId = (fileItem: FileItem): string => {
+        if (!fileItem.orgId) return "";
+        const selectedOrg = orgMap.get(fileItem.orgId);
+        if (!selectedOrg || selectedOrg.level !== "unit") return "";
+        return selectedOrg.id;
+    };
+
+    const handleDepartmentChange = (fileId: string, departmentId: string) => {
+        const selectedDepartment = departmentId ? departmentMap.get(departmentId) : undefined;
+        const preferredUnit =
+            selectedDepartment && departmentId ? getPreferredUnit(departmentId) : undefined;
+        const hint = preferredUnit
+            ? `已自动带出默认单位：${preferredUnit.name}`
+            : selectedDepartment
+                ? "该部门暂无可用单位，请先创建单位"
+                : "";
+        updateFile(
+            fileId,
+            buildAssignmentUpdates(departmentId, preferredUnit?.id || "", {
+                source: preferredUnit ? "default" : undefined,
+                confidence: preferredUnit ? "medium" : undefined,
+                hint,
+            })
+        );
+        setBulkDepartmentId(departmentId);
+        setBulkUnitId(preferredUnit?.id || "");
+        persistRememberedSelection({
+            departmentId,
+            unitId: preferredUnit?.id || "",
+        });
+    };
+
+    const handleUnitChange = (fileId: string, departmentId: string, unitId: string) => {
+        updateFile(
+            fileId,
+            buildAssignmentUpdates(departmentId, unitId, {
+                source: unitId ? "manual" : undefined,
+                confidence: unitId ? "high" : undefined,
+                hint: unitId ? "已手动确认部门和单位" : "请先选择单位",
+            })
+        );
+        setBulkDepartmentId(departmentId);
+        setBulkUnitId(unitId);
+        persistRememberedSelection({
+            departmentId,
+            unitId,
+        });
+    };
+
+    const postWithTimeout = async (url: string, body: FormData | string, headers?: HeadersInit) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+        try {
+            return await fetch(url, {
+                method: "POST",
+                body,
+                headers,
+                signal: controller.signal,
+            });
+        } finally {
+            clearTimeout(timer);
+        }
+    };
+
+    const readErrorMessage = async (response: Response) => {
+        const text = await response.text();
+        try {
+            const payload = JSON.parse(text);
+            return (
+                payload?.detail ||
+                payload?.error ||
+                payload?.message ||
+                text ||
+                `HTTP ${response.status}`
+            );
+        } catch {
+            return text || `HTTP ${response.status}`;
+        }
+    };
+
+    const applySelectionToAllFiles = () => {
+        if (!bulkDepartmentId) {
+            alert("请先选择部门");
+            return;
+        }
+        const visibleUnits = unitsByDepartment.get(bulkDepartmentId) || [];
+        if (visibleUnits.length === 0) {
+            alert("该部门暂无单位，请先到部门详情中创建单位");
+            return;
+        }
+        if (!bulkUnitId) {
+            alert("请先选择单位");
+            return;
+        }
+        const updates = buildAssignmentUpdates(bulkDepartmentId, bulkUnitId, {
+            source: "manual",
+            confidence: "high",
+            hint: "已批量应用部门和单位",
+        });
+        setFiles((prev) => prev.map((file) => ({ ...file, ...updates })));
+        persistRememberedSelection({
+            departmentId: bulkDepartmentId,
+            unitId: bulkUnitId,
+        });
+    };
+
+    const retryFailedFiles = () => {
+        setFiles((prev) =>
+            prev.map((file) =>
+                file.status === "failed"
+                    ? {
+                        ...file,
+                        status: "pending",
+                        message: file.message || "准备重试",
+                        versionId: undefined,
+                    }
+                    : file
+            )
+        );
+    };
+
     // ── Upload Logic ──
 
     const uploadSingleFile = async (fileItem: FileItem): Promise<string> => {
@@ -275,9 +727,9 @@ export default function BatchUploadModal({
         );
 
         // Step 1: upload file
-        const targetOrgId = orgUnitId || fileItem.orgId;
+        const targetOrgId = orgUnitId || resolveUnitId(fileItem);
         if (!targetOrgId) {
-            throw new Error("请先选择该文件所属的组织/单位");
+            throw new Error("请先选择该文件所属的部门和单位");
         }
 
         const formData = new FormData();
@@ -288,25 +740,22 @@ export default function BatchUploadModal({
         }
         formData.append("doc_type", fileItem.docType);
 
-        const uploadRes = await fetch("/api/documents/upload", {
-            method: "POST",
-            body: formData,
-        });
+        const uploadRes = await postWithTimeout("/api/documents/upload", formData);
 
         let versionId: string | undefined;
 
         if (!uploadRes.ok) {
             // Fallback to v2 API
             if (uploadRes.status !== 503) {
-                throw new Error(await uploadRes.text() || `HTTP ${uploadRes.status}`);
+                throw new Error(await readErrorMessage(uploadRes));
             }
 
             const v2Form = new FormData();
             v2Form.set("file", fileItem.file);
             v2Form.set("org_id", targetOrgId);
-            const v2Res = await fetch("/api/upload", { method: "POST", body: v2Form });
+            const v2Res = await postWithTimeout("/api/upload", v2Form);
             if (!v2Res.ok) {
-                throw new Error(await v2Res.text() || `HTTP ${v2Res.status}`);
+                throw new Error(await readErrorMessage(v2Res));
             }
 
             let v2Data: any = {};
@@ -354,13 +803,13 @@ export default function BatchUploadModal({
             runPayload.report_year = Number(fileItem.year);
         }
 
-        const runRes = await fetch(`/api/documents/${versionId}/run`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(runPayload),
-        });
+        const runRes = await postWithTimeout(
+            `/api/documents/${versionId}/run`,
+            JSON.stringify(runPayload),
+            { "Content-Type": "application/json" }
+        );
         if (!runRes.ok) {
-            throw new Error(await runRes.text() || `HTTP ${runRes.status}`);
+            throw new Error(await readErrorMessage(runRes));
         }
     };
 
@@ -515,6 +964,37 @@ export default function BatchUploadModal({
         }
     };
 
+    const getMatchBadgeClass = (fileItem: FileItem): string => {
+        if (fileItem.matchSource === "manual") {
+            return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400";
+        }
+        if (fileItem.matchConfidence === "high") {
+            return "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400";
+        }
+        if (fileItem.matchConfidence === "medium") {
+            return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400";
+        }
+        if (fileItem.matchConfidence === "low") {
+            return "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400";
+        }
+        return "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300";
+    };
+
+    const getMatchBadgeLabel = (fileItem: FileItem): string => {
+        switch (fileItem.matchSource) {
+            case "manual":
+                return "手动确认";
+            case "remembered":
+                return "沿用上次";
+            case "default":
+                return "默认带出";
+            case "auto":
+                return fileItem.matchConfidence === "low" ? "自动匹配待确认" : "自动匹配";
+            default:
+                return "待确认";
+        }
+    };
+
     // ── Render ──
 
     return (
@@ -610,6 +1090,84 @@ export default function BatchUploadModal({
                             )}
                         </div>
 
+                        {!isScopedUpload && (
+                            <div className="mb-3 rounded-xl border border-indigo-100 bg-indigo-50/60 px-3 py-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <span className="text-xs font-medium text-indigo-700">统一设置</span>
+                                    <input
+                                        type="text"
+                                        value={departmentFilter}
+                                        onChange={(e) => setDepartmentFilter(e.target.value)}
+                                        placeholder="筛选部门"
+                                        className="w-28 rounded-md border border-indigo-200 bg-white px-2 py-1 text-xs text-gray-700"
+                                    />
+                                    <select
+                                        data-testid="batch-bulk-department"
+                                        value={bulkDepartmentId}
+                                        onChange={(e) => setBulkDepartmentId(e.target.value)}
+                                        className="w-40 rounded-md border border-indigo-200 bg-white px-2 py-1 text-xs text-gray-900"
+                                    >
+                                        <option value="">请选择部门</option>
+                                        {visibleDepartments.map((department) => (
+                                            <option key={department.id} value={department.id}>
+                                                {department.name}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <input
+                                        type="text"
+                                        value={unitFilter}
+                                        onChange={(e) => setUnitFilter(e.target.value)}
+                                        placeholder="筛选单位"
+                                        className="w-28 rounded-md border border-indigo-200 bg-white px-2 py-1 text-xs text-gray-700"
+                                        disabled={!bulkDepartmentId}
+                                    />
+                                    <select
+                                        data-testid="batch-bulk-unit"
+                                        value={bulkUnitId}
+                                        onChange={(e) => {
+                                            setBulkUnitId(e.target.value);
+                                            persistRememberedSelection({
+                                                departmentId: bulkDepartmentId,
+                                                unitId: e.target.value,
+                                            });
+                                        }}
+                                        disabled={!bulkDepartmentId}
+                                        className="w-44 rounded-md border border-indigo-200 bg-white px-2 py-1 text-xs text-gray-900 disabled:bg-gray-100"
+                                    >
+                                        <option value="">
+                                            {bulkDepartmentId ? "请选择单位" : "请先选择部门"}
+                                        </option>
+                                        {getVisibleUnits(bulkDepartmentId).map((unit) => (
+                                            <option key={unit.id} value={unit.id}>
+                                                {unit.name}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <button
+                                        data-testid="batch-apply-all"
+                                        type="button"
+                                        onClick={applySelectionToAllFiles}
+                                        disabled={!bulkDepartmentId || !bulkUnitId}
+                                        className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        应用到全部文件
+                                    </button>
+                                </div>
+                                <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-indigo-700/80">
+                                    <span>会自动覆盖当前列表中所有文件的部门/单位。</span>
+                                    {bulkDepartmentId && (unitsByDepartment.get(bulkDepartmentId) || []).length === 0 ? (
+                                        <span className="text-red-600">该部门暂无单位，请先到部门详情中新建单位。</span>
+                                    ) : null}
+                                    {rememberedSelection.unitId ? (
+                                        <span className="text-indigo-600">
+                                            已记住上次选择，后续新增文件会优先带入。
+                                        </span>
+                                    ) : null}
+                                </div>
+                            </div>
+                        )}
+
                         <div className="flex-1 overflow-y-auto border border-gray-200/50 dark:border-gray-700/50 rounded-xl bg-gray-50/50 dark:bg-gray-900/30">
                             {files.map((fileItem, index) => (
                                 <div
@@ -629,47 +1187,72 @@ export default function BatchUploadModal({
 
                                         {editingId === fileItem.id ? (
                                             /* Edit Mode */
-                                            <div className="flex items-center gap-2 mt-1.5">
+                                            <div className="flex flex-wrap items-center gap-2 mt-1.5">
                                                 <label className="text-xs text-gray-500">年份:</label>
                                                 <input
                                                     type="text"
                                                     value={fileItem.year}
-                                                    onChange={(e) => updateFile(fileItem.id, { year: e.target.value })}
+                                                    onChange={(e) => {
+                                                        updateFile(fileItem.id, { year: e.target.value });
+                                                        persistRememberedSelection({ year: e.target.value });
+                                                    }}
                                                     className="w-16 px-1.5 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                                                     placeholder="年份"
                                                 />
                                                 <label className="text-xs text-gray-500">类型:</label>
                                                 <select
                                                     value={fileItem.docType}
-                                                    onChange={(e) =>
-                                                        updateFile(fileItem.id, { docType: e.target.value as "dept_final" | "dept_budget" })
-                                                    }
+                                                    onChange={(e) => {
+                                                        const docType = e.target.value as "dept_final" | "dept_budget";
+                                                        updateFile(fileItem.id, { docType });
+                                                        persistRememberedSelection({ docType });
+                                                    }}
                                                     className="px-1.5 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                                                 >
                                                     <option value="dept_final">决算</option>
                                                     <option value="dept_budget">预算</option>
                                                 </select>
-                                                <label className="text-xs text-gray-500">单位:</label>
+                                                <label className="text-xs text-gray-500">部门:</label>
                                                 <select
-                                                    value={fileItem.orgId || ""}
+                                                    value={resolveDepartmentId(fileItem)}
                                                     disabled={isScopedUpload}
-                                                    onChange={(e) => {
-                                                        const selectedOrg = orgs.find(o => o.id === e.target.value);
-                                                        updateFile(fileItem.id, {
-                                                            orgId: e.target.value,
-                                                            orgName: selectedOrg ? selectedOrg.name : "",
-                                                            orgLevel: selectedOrg ? selectedOrg.level : ""
-                                                        });
-                                                    }}
-                                                    className="w-40 px-1.5 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                                    onChange={(e) => handleDepartmentChange(fileItem.id, e.target.value)}
+                                                    className="w-36 px-1.5 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                                                 >
-                                                    <option value="" disabled>请选择所属单位</option>
-                                                    {orgs.map(org => (
-                                                        <option key={org.id} value={org.id}>
-                                                            {org.name} ({org.level === "department" ? "部门" : "单位"})
+                                                    <option value="">请选择部门</option>
+                                                    {visibleDepartments.map((department) => (
+                                                        <option key={department.id} value={department.id}>
+                                                            {department.name}
                                                         </option>
                                                     ))}
                                                 </select>
+                                                <label className="text-xs text-gray-500">单位:</label>
+                                                <select
+                                                    value={resolveUnitId(fileItem)}
+                                                    disabled={isScopedUpload || !resolveDepartmentId(fileItem)}
+                                                    onChange={(e) =>
+                                                        handleUnitChange(
+                                                            fileItem.id,
+                                                            resolveDepartmentId(fileItem),
+                                                            e.target.value
+                                                        )
+                                                    }
+                                                    className="w-40 px-1.5 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:bg-gray-100 dark:disabled:bg-gray-900/50"
+                                                >
+                                                    <option value="">
+                                                        {resolveDepartmentId(fileItem) ? "请选择单位" : "请先选择部门"}
+                                                    </option>
+                                                    {getVisibleUnits(resolveDepartmentId(fileItem)).map((unit) => (
+                                                        <option key={unit.id} value={unit.id}>
+                                                            {unit.name}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                                {!isScopedUpload && resolveDepartmentId(fileItem) && (unitsByDepartment.get(resolveDepartmentId(fileItem)) || []).length === 0 ? (
+                                                    <span className="text-[11px] text-red-500">
+                                                        该部门暂无单位，请先创建单位
+                                                    </span>
+                                                ) : null}
                                                 <button
                                                     onClick={() => setEditingId(null)}
                                                     className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
@@ -679,7 +1262,7 @@ export default function BatchUploadModal({
                                             </div>
                                         ) : (
                                             /* Display Mode */
-                                            <div className="flex items-center gap-2 mt-0.5">
+                                            <div className="flex flex-wrap items-center gap-2 mt-0.5">
                                                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400">
                                                     {fileItem.year ? `${fileItem.year}年` : "年份未识别"}
                                                 </span>
@@ -691,13 +1274,27 @@ export default function BatchUploadModal({
                                                 >
                                                     {fileItem.docType === "dept_budget" ? "预算" : "决算"}
                                                 </span>
-                                                <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] ${fileItem.orgId ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"}`}>
-                                                    {fileItem.orgName
-                                                        ? `${fileItem.orgName} (${fileItem.orgLevel === "department" ? "部门" : "单位"})`
-                                                        : isScopedUpload
-                                                            ? "当前组织"
-                                                            : "未识别所属单位 (需编辑补充)"}
+                                                <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] ${resolveUnitId(fileItem)
+                                                    ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                                                    : resolveDepartmentId(fileItem)
+                                                        ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                                                        : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"}`}>
+                                                    {resolveUnitId(fileItem)
+                                                        ? `${resolveDepartmentName(fileItem) ? `${resolveDepartmentName(fileItem)} / ` : ""}${fileItem.orgName || orgMap.get(resolveUnitId(fileItem))?.name || "当前单位"}`
+                                                        : resolveDepartmentId(fileItem)
+                                                            ? `${resolveDepartmentName(fileItem) || "当前部门"} / 未选单位`
+                                                            : isScopedUpload
+                                                                ? "当前组织"
+                                                                : "未选择部门和单位"}
                                                 </span>
+                                                <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] ${getMatchBadgeClass(fileItem)}`}>
+                                                    {getMatchBadgeLabel(fileItem)}
+                                                </span>
+                                                {fileItem.matchHint && (
+                                                    <span className="text-[11px] text-gray-500 dark:text-gray-400 truncate max-w-[260px]" title={fileItem.matchHint}>
+                                                        {fileItem.matchHint}
+                                                    </span>
+                                                )}
                                                 {fileItem.message && (
                                                     <span className="text-xs text-gray-500 dark:text-gray-400 truncate">
                                                         {fileItem.message}
@@ -777,22 +1374,35 @@ export default function BatchUploadModal({
 
                 {/* Footer Actions */}
                 <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200/50 dark:border-gray-700/50 mt-2">
-                    <button
-                        onClick={onClose}
-                        disabled={isProcessing}
-                        className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        {progress.completed > 0 && !isProcessing ? "关闭" : "取消"}
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={onClose}
+                            disabled={isProcessing}
+                            className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {progress.completed > 0 && !isProcessing ? "关闭" : "取消"}
+                        </button>
+                        {!isProcessing && stats.failed > 0 ? (
+                            <button
+                                data-testid="batch-retry-failed"
+                                type="button"
+                                onClick={retryFailedFiles}
+                                className="px-4 py-2 text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-xl transition-colors"
+                            >
+                                仅重试失败项 ({stats.failed})
+                            </button>
+                        ) : null}
+                    </div>
 
                     {!isProcessing ? (
                         <button
+                            data-testid="batch-start"
                             onClick={startProcessing}
                             disabled={
                                 files.filter((f) => f.status === "pending").length === 0 ||
-                                (!isScopedUpload && files.some((f) => !f.orgId))
+                                (!isScopedUpload && files.some((f) => !resolveUnitId(f)))
                             }
-                            title={!isScopedUpload && files.some((f) => !f.orgId) ? "有文件未指定所属单位" : ""}
+                            title={!isScopedUpload && files.some((f) => !resolveUnitId(f)) ? "有文件未完成部门和单位选择" : ""}
                             className="px-6 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 rounded-xl shadow-lg shadow-indigo-500/30 hover:shadow-xl hover:shadow-indigo-500/40 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none flex items-center gap-2"
                         >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

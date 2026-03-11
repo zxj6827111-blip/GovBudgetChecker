@@ -101,6 +101,7 @@ class AIFindingsService:
             
             # 转换为IssueItem格式，传入页码偏移量
             issues = self._convert_semantic_issues_to_items(semantic_issues, context, page_offsets)
+            issues = self._populate_bbox_hints(issues, context)
             
             elapsed = time.time() - start_time
             logger.info(f"AI分析完成: job_id={context.job_id}, issues={len(issues)}, elapsed={elapsed:.2f}s")
@@ -183,8 +184,12 @@ class AIFindingsService:
                 # 构建证据
                 evidence = [{
                     "type": "text_content",
+                    "page": page_number,
                     "text": evidence_text,
-                    "original": original_text
+                    "text_snippet": evidence_text,
+                    "original": original_text,
+                    "context": str(issue.get("context") or ""),
+                    "quote": str(issue.get("quote") or ""),
                 }]
                 
                 # 生成唯一ID
@@ -227,6 +232,25 @@ class AIFindingsService:
                 continue
         
         return issues
+
+    def _populate_bbox_hints(self, issues: List[IssueItem], context: JobContext) -> List[IssueItem]:
+        if not issues or not getattr(context, "pdf_path", None):
+            return issues
+
+        from src.utils.issue_bbox import PDFBBoxLocator
+
+        locator = PDFBBoxLocator(str(context.pdf_path))
+        try:
+            resolved: List[IssueItem] = []
+            for issue in issues:
+                try:
+                    resolved.append(locator.locate(issue))
+                except Exception as exc:
+                    logger.warning("AI issue bbox locate failed: %s", exc)
+                    resolved.append(issue)
+            return resolved
+        finally:
+            locator.close()
 
     @staticmethod
     def _read_int_env(name: str, default: int, min_value: int) -> int:

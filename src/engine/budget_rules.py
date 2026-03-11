@@ -198,6 +198,91 @@ def _table_display_name(table_key: str) -> str:
     return _TABLE_NAME_BY_KEY.get(table_key, table_key)
 
 
+def _unique_pages(*values: Any) -> List[int]:
+    pages: List[int] = []
+    seen = set()
+    for value in values:
+        if value is None:
+            continue
+        try:
+            page = int(value)
+        except (TypeError, ValueError):
+            continue
+        if page <= 0 or page in seen:
+            continue
+        seen.add(page)
+        pages.append(page)
+    return pages
+
+
+def _make_location_ref(
+    *,
+    role: Optional[str] = None,
+    page: Optional[int] = None,
+    table: Optional[str] = None,
+    section: Optional[str] = None,
+    row: Optional[str] = None,
+    field: Optional[str] = None,
+    code: Optional[str] = None,
+    subject: Optional[str] = None,
+    value: Optional[float] = None,
+) -> Dict[str, Any]:
+    ref: Dict[str, Any] = {}
+    if role:
+        ref["role"] = role
+    if page:
+        ref["page"] = page
+    if table:
+        ref["table"] = table
+    if section:
+        ref["section"] = section
+    if row:
+        ref["row"] = row
+    if field:
+        ref["field"] = field
+    if code:
+        ref["code"] = code
+    if subject:
+        ref["subject"] = subject
+    if value is not None:
+        ref["value"] = value
+    return ref
+
+
+def _make_cross_table_location(
+    *refs: Dict[str, Any],
+    field: Optional[str] = None,
+    row: Optional[str] = None,
+) -> Dict[str, Any]:
+    valid_refs = [ref for ref in refs if ref]
+    location: Dict[str, Any] = {}
+
+    pages = _unique_pages(*(ref.get("page") for ref in valid_refs))
+    if len(pages) == 1:
+        location["page"] = pages[0]
+    elif pages:
+        location["pages"] = pages
+
+    tables: List[str] = []
+    seen_tables = set()
+    for ref in valid_refs:
+        table = str(ref.get("table") or "").strip()
+        if not table or table in seen_tables:
+            continue
+        seen_tables.add(table)
+        tables.append(table)
+
+    if tables:
+        location["table"] = " / ".join(tables)
+    if row:
+        location["row"] = row
+    if field:
+        location["field"] = field
+    if valid_refs:
+        location["table_refs"] = valid_refs
+    return location
+
+
 def _extract_year_candidates(text: str) -> List[int]:
     years: List[int] = []
     if not text:
@@ -680,6 +765,22 @@ def _extract_performance_summary_metrics(
     return best[1], best[2], best[3]
 
 
+def _find_text_page(doc: Document, snippet: Optional[str]) -> Optional[int]:
+    needle = normalize_text(str(snippet or "")).strip()
+    if not needle:
+        return None
+
+    candidates = [needle]
+    if len(needle) > 24:
+        candidates.append(needle[:40])
+
+    for pidx, page_text in enumerate(doc.page_texts):
+        hay = normalize_text(page_text or "")
+        if any(candidate and candidate in hay for candidate in candidates):
+            return pidx + 1
+    return None
+
+
 class BUD001_StructureAndAnchors(Rule):
     code, severity = "BUD-001", "error"
     desc = "\u9884\u7b97\u4e5d\u5f20\u8868\u5b8c\u6574\u6027\u4e0e\u5fc5\u5907\u7ae0\u8282\u68c0\u67e5"
@@ -985,10 +1086,30 @@ class BUD105_CrossTableChecks(Rule):
                 and t4_income is not None
                 and not _is_close(t1_income, t4_income, abs_tol=1.0, rel_tol=0.0005)
             ):
+                location = _make_cross_table_location(
+                    _make_location_ref(
+                        role="T1",
+                        page=t1_page,
+                        table="BUD_T1",
+                        row="收入总计",
+                        field="收入总计",
+                        value=t1_income,
+                    ),
+                    _make_location_ref(
+                        role="T4",
+                        page=t4_page,
+                        table="BUD_T4",
+                        row="收入总计",
+                        field="收入总计",
+                        value=t4_income,
+                    ),
+                    field="收入总计",
+                    row="收入总计",
+                )
                 issues.append(
                     self._issue(
                         f"T1\u4e0eT4\u6536\u5165\u603b\u8ba1\u4e0d\u4e00\u81f4: T1={t1_income:.2f}, T4={t4_income:.2f}",
-                        {"page": t1_page or t4_page or 1, "table": "BUD_T1/BUD_T4"},
+                        location,
                         severity="error",
                     )
                 )
@@ -998,10 +1119,30 @@ class BUD105_CrossTableChecks(Rule):
                 and t4_expense is not None
                 and not _is_close(t1_expense, t4_expense, abs_tol=1.0, rel_tol=0.0005)
             ):
+                location = _make_cross_table_location(
+                    _make_location_ref(
+                        role="T1",
+                        page=t1_page,
+                        table="BUD_T1",
+                        row="支出总计",
+                        field="支出总计",
+                        value=t1_expense,
+                    ),
+                    _make_location_ref(
+                        role="T4",
+                        page=t4_page,
+                        table="BUD_T4",
+                        row="支出总计",
+                        field="支出总计",
+                        value=t4_expense,
+                    ),
+                    field="支出总计",
+                    row="支出总计",
+                )
                 issues.append(
                     self._issue(
                         f"T1\u4e0eT4\u652f\u51fa\u603b\u8ba1\u4e0d\u4e00\u81f4: T1={t1_expense:.2f}, T4={t4_expense:.2f}",
-                        {"page": t1_page or t4_page or 1, "table": "BUD_T1/BUD_T4"},
+                        location,
                         severity="error",
                     )
                 )
@@ -1015,10 +1156,30 @@ class BUD105_CrossTableChecks(Rule):
                 and t5_total is not None
                 and not _is_close(t3_total, t5_total, abs_tol=1.0, rel_tol=0.0005)
             ):
+                location = _make_cross_table_location(
+                    _make_location_ref(
+                        role="T3",
+                        page=t3_page,
+                        table="BUD_T3",
+                        row="合计",
+                        field="合计",
+                        value=t3_total,
+                    ),
+                    _make_location_ref(
+                        role="T5",
+                        page=t5_page,
+                        table="BUD_T5",
+                        row="合计",
+                        field="合计",
+                        value=t5_total,
+                    ),
+                    field="合计",
+                    row="合计",
+                )
                 issues.append(
                     self._issue(
                         f"T3\u4e0eT5\u5408\u8ba1\u4e0d\u4e00\u81f4: T3={t3_total:.2f}, T5={t5_total:.2f}",
-                        {"page": t3_page or t5_page or 1, "table": "BUD_T3/BUD_T5"},
+                        location,
                         severity="error",
                     )
                 )
@@ -1028,10 +1189,30 @@ class BUD105_CrossTableChecks(Rule):
                 and t5_basic is not None
                 and not _is_close(t3_basic, t5_basic, abs_tol=1.0, rel_tol=0.0005)
             ):
+                location = _make_cross_table_location(
+                    _make_location_ref(
+                        role="T3",
+                        page=t3_page,
+                        table="BUD_T3",
+                        row="合计",
+                        field="基本支出",
+                        value=t3_basic,
+                    ),
+                    _make_location_ref(
+                        role="T5",
+                        page=t5_page,
+                        table="BUD_T5",
+                        row="合计",
+                        field="基本支出",
+                        value=t5_basic,
+                    ),
+                    field="基本支出",
+                    row="合计",
+                )
                 issues.append(
                     self._issue(
                         f"T3\u4e0eT5\u57fa\u672c\u652f\u51fa\u4e0d\u4e00\u81f4: T3={t3_basic:.2f}, T5={t5_basic:.2f}",
-                        {"page": t3_page or t5_page or 1, "table": "BUD_T3/BUD_T5"},
+                        location,
                         severity="error",
                     )
                 )
@@ -1041,10 +1222,30 @@ class BUD105_CrossTableChecks(Rule):
                 and t5_project is not None
                 and not _is_close(t3_project, t5_project, abs_tol=1.0, rel_tol=0.0005)
             ):
+                location = _make_cross_table_location(
+                    _make_location_ref(
+                        role="T3",
+                        page=t3_page,
+                        table="BUD_T3",
+                        row="合计",
+                        field="项目支出",
+                        value=t3_project,
+                    ),
+                    _make_location_ref(
+                        role="T5",
+                        page=t5_page,
+                        table="BUD_T5",
+                        row="合计",
+                        field="项目支出",
+                        value=t5_project,
+                    ),
+                    field="项目支出",
+                    row="合计",
+                )
                 issues.append(
                     self._issue(
                         f"T3\u4e0eT5\u9879\u76ee\u652f\u51fa\u4e0d\u4e00\u81f4: T3={t3_project:.2f}, T5={t5_project:.2f}",
-                        {"page": t3_page or t5_page or 1, "table": "BUD_T3/BUD_T5"},
+                        location,
                         severity="error",
                     )
                 )
@@ -1057,10 +1258,30 @@ class BUD105_CrossTableChecks(Rule):
                 and t8_total is not None
                 and not _is_close(t3_basic, t8_total, abs_tol=1.0, rel_tol=0.0005)
             ):
+                location = _make_cross_table_location(
+                    _make_location_ref(
+                        role="T3",
+                        page=t3_page,
+                        table="BUD_T3",
+                        row="合计",
+                        field="基本支出",
+                        value=t3_basic,
+                    ),
+                    _make_location_ref(
+                        role="T8",
+                        page=t8_page,
+                        table="BUD_T8",
+                        row="合计",
+                        field="合计",
+                        value=t8_total,
+                    ),
+                    field="基本支出 / 合计",
+                    row="合计",
+                )
                 issues.append(
                     self._issue(
                         f"T3\u57fa\u672c\u652f\u51fa\u4e0eT8\u5408\u8ba1\u4e0d\u4e00\u81f4: T3={t3_basic:.2f}, T8={t8_total:.2f}",
-                        {"page": t3_page or t8_page or 1, "table": "BUD_T3/BUD_T8"},
+                        location,
                         severity="error",
                     )
                 )
@@ -1274,14 +1495,35 @@ class BUD108_PerformanceTargetConsistency(Rule):
         if t3_project_wy is None:
             return issues
 
+        perf_page = _find_text_page(doc, perf_line)
+
         # Narrative and table may differ by tiny rounding; tolerate 0.10万元.
         if _is_close(perf_amount_wy, t3_project_wy, abs_tol=0.10, rel_tol=0.005):
             return issues
 
+        location = _make_cross_table_location(
+            _make_location_ref(
+                role="说明",
+                page=perf_page,
+                section="绩效目标说明",
+                field="涉及项目预算资金",
+                value=perf_amount_wy,
+            ),
+            _make_location_ref(
+                role="T3",
+                page=t3_page,
+                table="BUD_T3",
+                row="合计",
+                field="项目支出",
+                value=t3_project_wy,
+            ),
+            field="涉及项目预算资金 / 项目支出",
+        )
+
         issues.append(
             self._issue(
                 f"\u7ee9\u6548\u76ee\u6807\u8bf4\u660e\u989d\u5ea6\u4e0eT3\u9879\u76ee\u652f\u51fa\u5dee\u5f02\u8f83\u5927\uff1a\u8bf4\u660e={perf_amount_wy:.2f}\u4e07\u5143\uff0cT3={t3_project_wy:.2f}\u4e07\u5143\uff1b\u82e5\u4e3a\u4e0d\u540c\u53e3\u5f84\uff0c\u5efa\u8bae\u5728\u6587\u672c\u4e2d\u8865\u5145\u8bf4\u660e",
-                {"page": t3_page, "table": "BUD_T3"},
+                location,
                 severity="warn",
                 evidence_text=perf_line,
             )

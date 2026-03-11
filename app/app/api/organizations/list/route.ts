@@ -3,6 +3,8 @@ import { apiBase } from "@/lib/apiBase";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { backendAuthHeaders } from "@/lib/backendAuth";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   try {
     const response = await fetchWithTimeout(`${apiBase}/api/organizations/list`, {
@@ -18,8 +20,9 @@ export async function GET() {
     }
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    console.error("Failed to fetch organizations list:", error);
+    if (process.env.NODE_ENV !== "production") {
+      console.error("Failed to fetch organizations list:", error);
+    }
     return NextResponse.json({ organizations: [] }, { status: 200 });
   }
 }
-

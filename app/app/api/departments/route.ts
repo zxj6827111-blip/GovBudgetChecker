@@ -4,6 +4,8 @@ import { apiBase } from "@/lib/apiBase";
 import { backendAuthHeaders } from "@/lib/backendAuth";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   try {
     const response = await fetchWithTimeout(`${apiBase}/api/departments`, {
@@ -19,10 +21,9 @@ export async function GET() {
     }
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    console.error("Failed to fetch departments:", error);
-    return NextResponse.json(
-      { error: "backend_unavailable", departments: [], total: 0 },
-      { status: 502 }
-    );
+    if (process.env.NODE_ENV !== "production") {
+      console.error("Failed to fetch departments:", error);
+    }
+    return NextResponse.json({ departments: [], total: 0 }, { status: 200 });
   }
 }

@@ -5,9 +5,12 @@
 from typing import List, Optional, Dict, Any, Literal, Union
 from datetime import datetime
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 import time
 import hashlib
+
+from src.utils.issue_display import build_issue_display
+from src.utils.issue_location import normalize_issue_location
 
 
 class IssueSource(str, Enum):
@@ -35,6 +38,16 @@ class ConflictType(str, Enum):
     PERCENTAGE_MISMATCH = "percentage_mismatch"
 
 
+class IssueDisplay(BaseModel):
+    """Readable display fields for UI and exports."""
+
+    summary: str = Field(default="", description="一句话问题摘要")
+    page_text: str = Field(default="", description="页码文本")
+    location_text: str = Field(default="", description="定位文本")
+    detail_lines: List[str] = Field(default_factory=list, description="细项说明")
+    evidence_text: str = Field(default="", description="证据原文")
+
+
 class IssueItem(BaseModel):
     """统一的问题项数据结构"""
     id: str = Field(..., description="全局唯一ID")
@@ -57,6 +70,25 @@ class IssueItem(BaseModel):
     percentage: Optional[float] = Field(default=None, description="百分比")
     text_snippet: Optional[str] = Field(default=None, description="文本摘录")
     why_not: Optional[str] = Field(default=None, description="未命中原因")
+
+    display: Optional[IssueDisplay] = Field(default=None, description="可直接展示的问题信息")
+
+    @model_validator(mode="after")
+    def populate_display(self) -> "IssueItem":
+        self.location = normalize_issue_location(
+            rule_id=self.rule_id,
+            location=self.location,
+            message=self.message,
+            evidence_text=self.text_snippet or (self.evidence[0].get("text") if self.evidence else "") or "",
+            evidence=self.evidence,
+        )
+        if self.location.get("page"):
+            self.page_number = int(self.location["page"])
+        if self.display and self.display.summary:
+            return self
+        payload = build_issue_display(self.model_dump(exclude={"display"}, mode="python"))
+        self.display = IssueDisplay.model_validate(payload)
+        return self
 
     @classmethod
     def create_id(cls, source: str, rule_id: str, location: Dict[str, Any]) -> str:

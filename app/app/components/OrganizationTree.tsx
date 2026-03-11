@@ -16,6 +16,9 @@ interface Organization {
 interface OrganizationTreeProps {
   onSelect: (org: Organization | null) => void;
   onGlobalBatchUpload?: () => void;
+  hideUtilityActions?: boolean;
+  openImporterSignal?: number;
+  isAdmin?: boolean;
   selectedOrgId?: string | null;
   refreshKey?: number;
 }
@@ -23,6 +26,9 @@ interface OrganizationTreeProps {
 export default function OrganizationTree({
   onSelect,
   onGlobalBatchUpload,
+  hideUtilityActions = false,
+  openImporterSignal = 0,
+  isAdmin = false,
   selectedOrgId,
   refreshKey,
 }: OrganizationTreeProps) {
@@ -99,7 +105,17 @@ export default function OrganizationTree({
     fetchDepartments();
   }, [fetchDepartments, refreshKey]);
 
+  useEffect(() => {
+    if (isAdmin && openImporterSignal > 0) {
+      setShowImporter(true);
+    }
+  }, [isAdmin, openImporterSignal]);
+
   const handleImport = async (file: File) => {
+    if (!isAdmin) {
+      alert("仅管理员可以导入组织结构");
+      return;
+    }
     const formData = new FormData();
     formData.append("file", file);
     formData.append("clear_existing", "true");
@@ -129,6 +145,10 @@ export default function OrganizationTree({
   };
 
   const handleCreateOrg = async () => {
+    if (!isAdmin) {
+      alert("仅管理员可以创建部门");
+      return;
+    }
     if (!modalInputVal.trim()) return;
     setIsSubmitting(true);
     try {
@@ -152,6 +172,10 @@ export default function OrganizationTree({
   };
 
   const handleUpdateOrg = async () => {
+    if (!isAdmin) {
+      alert("仅管理员可以修改部门");
+      return;
+    }
     if (!modalOrgId || !modalInputVal.trim()) return;
     setIsSubmitting(true);
     try {
@@ -173,12 +197,41 @@ export default function OrganizationTree({
   };
 
   const handleDeleteOrg = async (id: string, name: string) => {
-    if (!confirm(`确定要删除部门 "${name}" 吗？此操作将删除其下的所有单位和关联！`)) return;
+    if (!isAdmin) {
+      alert("仅管理员可以删除部门");
+      return;
+    }
     try {
-      const res = await fetch(`/api/organizations/${id}`, {
+      const previewRes = await fetch(`/api/organizations/${encodeURIComponent(id)}/delete-preview`, {
+        cache: "no-store",
+      });
+      let previewPayload: any = {};
+      try {
+        previewPayload = await previewRes.json();
+      } catch {
+        previewPayload = {};
+      }
+      if (!previewRes.ok) {
+        throw new Error(previewPayload?.detail || previewPayload?.error || "获取删除影响范围失败");
+      }
+      const summary = previewPayload?.summary || {};
+      const confirmed = confirm(
+        `确定要删除部门 "${name}" 吗？\n\n将删除 ${summary.organization_count ?? 0} 个组织（其中单位 ${summary.unit_count ?? 0} 个），影响 ${summary.job_count ?? 0} 个任务关联。`
+      );
+      if (!confirmed) return;
+
+      const res = await fetch(`/api/organizations/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
-      if (!res.ok) throw new Error("删除失败");
+      let payload: any = {};
+      try {
+        payload = await res.json();
+      } catch {
+        payload = {};
+      }
+      if (!res.ok) {
+        throw new Error(payload?.detail || payload?.error || payload?.message || "删除部门失败");
+      }
       if (selectedOrgId === id) {
         onSelect(null);
       }
@@ -215,12 +268,13 @@ export default function OrganizationTree({
                 ? 'bg-red-50 text-red-600 border border-red-100' // Has issues
                 : 'bg-green-50 text-green-600 border border-green-100' // All good
                 }`}>
-                {node.issue_count > 0 ? `待处理: ${node.issue_count}` : '正常: 0'}
+                {node.issue_count > 0 ? `合并: ${node.issue_count}` : '正常: 0'}
               </span>
             )}
 
             {/* Action buttons (Edit & Delete) shown on hover */}
-            <div className={`hidden group-hover:flex items-center space-x-1 ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity`}>
+            {isAdmin ? (
+            <div className={`${isSelected ? 'flex opacity-100' : 'hidden group-hover:flex opacity-0 group-hover:opacity-100'} items-center space-x-1 transition-opacity`}>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -248,6 +302,7 @@ export default function OrganizationTree({
                 </svg>
               </button>
             </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -260,18 +315,20 @@ export default function OrganizationTree({
         <div className="flex items-center justify-between">
           <h3 className="font-semibold text-gray-700 flex items-center">
             部门视图
-            <button
-              onClick={() => {
-                setModalType("create");
-                setModalInputVal("");
-              }}
-              className="ml-2 p-1 text-gray-400 hover:text-indigo-600 hover:bg-gray-100 rounded"
-              title="新建部门"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-            </button>
+            {isAdmin ? (
+              <button
+                onClick={() => {
+                  setModalType("create");
+                  setModalInputVal("");
+                }}
+                className="ml-2 p-1 text-gray-400 hover:text-indigo-600 hover:bg-gray-100 rounded"
+                title="新建部门"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+              </button>
+            ) : null}
           </h3>
           <button
             onClick={() => onSelect(null)}
@@ -282,37 +339,41 @@ export default function OrganizationTree({
           </button>
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
-          {onGlobalBatchUpload && (
-            <button
-              onClick={onGlobalBatchUpload}
-              className="rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-blue-50 px-3 py-2 text-left transition-all hover:shadow-sm hover:border-indigo-300"
-              title="上传全区 PDF 文档（批量）"
-            >
-              <div className="flex items-center gap-1.5 text-[13px] font-semibold text-indigo-700">
-                <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                </svg>
-                全区上传
-              </div>
-              <div className="mt-1 text-[11px] text-indigo-500">上传全区 PDF</div>
-            </button>
-          )}
+        {!hideUtilityActions && (
+          <div className="grid grid-cols-2 gap-2">
+            {onGlobalBatchUpload && (
+              <button
+                onClick={onGlobalBatchUpload}
+                disabled={!isAdmin}
+                className="rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-blue-50 px-3 py-2 text-left transition-all hover:shadow-sm hover:border-indigo-300 disabled:cursor-not-allowed disabled:opacity-60"
+                title={isAdmin ? "上传全区 PDF 文档（批量）" : "仅管理员可操作"}
+              >
+                <div className="flex items-center gap-1.5 text-[13px] font-semibold text-indigo-700">
+                  <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                  </svg>
+                  全区上传
+                </div>
+                <div className="mt-1 text-[11px] text-indigo-500">上传全区 PDF</div>
+              </button>
+            )}
 
-          <button
-            onClick={() => setShowImporter(true)}
-            className="rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-teal-50 px-3 py-2 text-left transition-all hover:shadow-sm hover:border-emerald-300"
-            title="导入部门及单位名称模板（CSV / XLSX）"
-          >
-            <div className="flex items-center gap-1.5 text-[13px] font-semibold text-emerald-700">
-              <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M12 11v8m0 0l-3-3m3 3l3-3" />
-              </svg>
-              导入
-            </div>
-            <div className="mt-1 text-[11px] text-emerald-600">导入部门名称</div>
-          </button>
-        </div>
+            <button
+              onClick={() => setShowImporter(true)}
+              disabled={!isAdmin}
+              className="rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-teal-50 px-3 py-2 text-left transition-all hover:shadow-sm hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
+              title={isAdmin ? "导入部门及单位名称模板（CSV / XLSX）" : "仅管理员可操作"}
+            >
+              <div className="flex items-center gap-1.5 text-[13px] font-semibold text-emerald-700">
+                <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M12 11v8m0 0l-3-3m3 3l3-3" />
+                </svg>
+                导入
+              </div>
+              <div className="mt-1 text-[11px] text-emerald-600">导入部门名称</div>
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="px-3 py-2 border-b border-gray-100">
@@ -344,7 +405,7 @@ export default function OrganizationTree({
         )}
       </div>
 
-      {showImporter && (
+      {showImporter && isAdmin && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-96 shadow-xl">
             <h3 className="text-lg font-semibold mb-4">导入组织结构</h3>

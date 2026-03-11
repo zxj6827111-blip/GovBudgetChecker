@@ -12,6 +12,7 @@ from fastapi import APIRouter
 from api.config import AppConfig
 from api import runtime
 from api import queue_runtime
+from src.services.audit_log import get_audit_log_path
 
 router = APIRouter()
 
@@ -76,6 +77,7 @@ async def _check_ai_extractor() -> tuple[bool, str]:
 @router.get("/api/ready")
 async def ready() -> Dict[str, Any]:
     rules_file = Path(os.getenv("RULES_FILE", "rules/v3_3.yaml"))
+    audit_log_path = get_audit_log_path()
     auth_enabled = bool(runtime.security_config.enabled) if runtime.security_config else False
     auth_key_present = bool(os.getenv("GOVBUDGET_API_KEY")) if auth_enabled else True
     queue_enabled = queue_runtime.queue_enabled()
@@ -94,10 +96,12 @@ async def ready() -> Dict[str, Any]:
         "db_reachable": db_ok,
         "ai_extractor_reachable": ai_ok,
         "job_queue_started": queue_started,
+        "audit_log_parent_writable": os.access(audit_log_path.parent, os.W_OK) if audit_log_path.parent.exists() else True,
     }
 
     details = {
         "rules_file": str(rules_file),
+        "audit_log_path": str(audit_log_path),
         "auth_enabled": auth_enabled,
         "db": db_detail,
         "ai_extractor": ai_detail,
@@ -105,6 +109,10 @@ async def ready() -> Dict[str, Any]:
         "queue_role": queue_role,
         "local_queue_required": local_queue_required,
         "inline_fallback_enabled": queue_runtime.allow_inline_fallback(),
+        "upload_limits": {
+            "max_upload_mb": runtime.MAX_UPLOAD_MB,
+            "max_upload_pages": runtime.MAX_UPLOAD_PAGES,
+        },
     }
 
     ready_state = all(checks.values())

@@ -8,6 +8,7 @@ load_dotenv()
 import json
 import time
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, Any, List
 
@@ -49,8 +50,56 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# ----------------------------- 基础配置 -----------------------------
-app = FastAPI(title=runtime.APP_TITLE)
+async def _startup_job_queue() -> None:
+    if not should_start_local_queue():
+        logger.info(
+            "Local job queue startup skipped (enabled=%s, role=%s)",
+            os.getenv("JOB_QUEUE_ENABLED"),
+            get_queue_role(),
+        )
+        return
+
+    runner = runtime.get_pipeline_runner()
+    if runner is None:
+        logger.error("Pipeline runner is not configured, skip queue startup")
+        return
+
+    max_workers, ai_sequential_mode = compute_queue_workers()
+    if ai_sequential_mode and max_workers < 10:
+        logger.warning(
+            "AI_SEQUENTIAL_MODE is enabled but JOB_QUEUE_WORKERS=%d; "
+            "batch local-stage throughput may be limited (recommend >=10).",
+            max_workers,
+        )
+
+    queue = DurableJobQueue(
+        runner,
+        max_workers=max_workers,
+        resume_on_start=queue_resume_on_start(),
+    )
+    await queue.start()
+    runtime.set_job_queue(queue)
+
+
+async def _shutdown_job_queue() -> None:
+    queue = runtime.get_job_queue()
+    if queue is not None:
+        await queue.stop()
+        runtime.set_job_queue(None)
+    await close_structured_ingest_resources()
+
+
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI):
+    await _startup_job_queue()
+    try:
+        yield
+    finally:
+        await _shutdown_job_queue()
+
+
+# ----------------------------- 鍩虹閰嶇疆 -----------------------------
+app = FastAPI(title=runtime.APP_TITLE, lifespan=_app_lifespan)
 
 # 新增：双模式配置
 settings = get_settings()
@@ -566,21 +615,62 @@ async def _run_pipeline(job_dir: Path) -> None:
                 },
             )
 
-        structured_ingest_summary = await run_structured_ingest(
-            job_id=job_dir.name,
-            pdf_path=pdf_path,
-            metadata={
-                "organization_id": organization_id,
-                "organization_name": organization_name,
-                "fiscal_year": fiscal_year,
-                "doc_type": doc_type,
-                "report_year": report_year,
-                "report_kind": report_kind,
-                "checksum": status_data.get("checksum")
-                if "status_data" in locals() and isinstance(status_data, dict)
-                else None,
-            },
-        )
+        structured_metadata = {
+            "organization_id": organization_id,
+            "organization_name": organization_name,
+            "fiscal_year": fiscal_year,
+            "doc_type": doc_type,
+            "report_year": report_year,
+            "report_kind": report_kind,
+            "checksum": status_data.get("checksum")
+            if "status_data" in locals() and isinstance(status_data, dict)
+            else None,
+        }
+        if (os.getenv("DATABASE_URL") or "").strip():
+            current_ingest_status = runtime.read_json_file(job_dir / "status.json", default={})
+            latest_ingest = runtime.resolve_latest_structured_ingest_job(
+                job_dir.name,
+                organization_id=organization_id,
+                organization_name=organization_name,
+                fiscal_year=fiscal_year,
+                report_year=report_year,
+                doc_type=doc_type,
+                report_kind=report_kind,
+                filename=pdf_path.name,
+                current_status_payload={
+                    "job_id": job_dir.name,
+                    "filename": pdf_path.name,
+                    "organization_id": organization_id,
+                    "organization_name": organization_name,
+                    "fiscal_year": fiscal_year,
+                    "doc_type": doc_type,
+                    "report_year": report_year,
+                    "report_kind": report_kind,
+                    **runtime.extract_job_status_context(current_ingest_status),
+                },
+            )
+            if latest_ingest.get("is_latest"):
+                structured_ingest_summary = await run_structured_ingest(
+                    job_id=job_dir.name,
+                    pdf_path=pdf_path,
+                    metadata=structured_metadata,
+                )
+            else:
+                structured_ingest_summary = {
+                    "job_id": job_dir.name,
+                    "status": "skipped",
+                    "reason": "not_latest_version",
+                    "latest_job_id": latest_ingest.get("latest_job_id"),
+                    "latest_filename": latest_ingest.get("latest_filename"),
+                    "review_item_count": 0,
+                    "review_items": [],
+                }
+        else:
+            structured_ingest_summary = await run_structured_ingest(
+                job_id=job_dir.name,
+                pdf_path=pdf_path,
+                metadata=structured_metadata,
+            )
         runtime.write_structured_ingest_payload(job_dir, structured_ingest_summary)
         result["meta"]["structured_ingest"] = structured_ingest_summary
 
@@ -623,47 +713,4 @@ async def _run_pipeline(job_dir: Path) -> None:
 
 runtime.set_pipeline_runner(_run_pipeline)
 register_routes(app)
-
-
-@app.on_event("startup")
-async def _startup_job_queue() -> None:
-    if not should_start_local_queue():
-        logger.info(
-            "Local job queue startup skipped (enabled=%s, role=%s)",
-            os.getenv("JOB_QUEUE_ENABLED"),
-            get_queue_role(),
-        )
-        return
-
-    runner = runtime.get_pipeline_runner()
-    if runner is None:
-        logger.error("Pipeline runner is not configured, skip queue startup")
-        return
-
-    max_workers, ai_sequential_mode = compute_queue_workers()
-    if ai_sequential_mode and max_workers < 10:
-        logger.warning(
-            "AI_SEQUENTIAL_MODE is enabled but JOB_QUEUE_WORKERS=%d; "
-            "batch local-stage throughput may be limited (recommend >=10).",
-            max_workers,
-        )
-
-    queue = DurableJobQueue(
-        runner,
-        max_workers=max_workers,
-        resume_on_start=queue_resume_on_start(),
-    )
-    await queue.start()
-    runtime.set_job_queue(queue)
-
-
-@app.on_event("shutdown")
-async def _shutdown_job_queue() -> None:
-    queue = runtime.get_job_queue()
-    if queue is None:
-        await close_structured_ingest_resources()
-        return
-    await queue.stop()
-    runtime.set_job_queue(None)
-    await close_structured_ingest_resources()
 

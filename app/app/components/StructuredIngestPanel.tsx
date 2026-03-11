@@ -22,7 +22,12 @@ type PsSyncSummary = {
 
 export type StructuredIngestPayload = {
   status?: string | null;
+  reason?: string | null;
+  latest_job_id?: string | null;
+  latest_filename?: string | null;
   document_version_id?: number | null;
+  cleaned_at?: number | null;
+  cleaned_document_version_id?: number | null;
   tables_count?: number | null;
   recognized_tables?: number | null;
   facts_count?: number | null;
@@ -64,6 +69,12 @@ function getStatusMeta(status?: string | null) {
         label: "结构化入库告警",
         className: "bg-amber-100 text-amber-700",
         description: "已生成结构化结果，但仍建议关注少量异常提示。",
+      };
+    case "cleaned":
+      return {
+        label: "历史入库已清理",
+        className: "bg-sky-100 text-sky-700",
+        description: "该历史任务对应的旧版结构化入库记录已从数据库清理，原始报告与前台合并问题清单仍保留。",
       };
     default:
       return {
@@ -305,9 +316,19 @@ export default function StructuredIngestPanel({
         <div className="rounded-xl border border-emerald-200/70 bg-emerald-50/70 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:text-emerald-200">
           当前结构化入库已通过复核判定，可直接沉淀到 PS 共享库供填报系统复用。
         </div>
+      ) : payload?.status === "cleaned" ? (
+        <div className="rounded-xl border border-sky-200/70 bg-sky-50/70 px-4 py-3 text-sm text-sky-700 dark:border-sky-900/40 dark:bg-sky-950/20 dark:text-sky-200">
+          该历史任务原先关联的旧版结构化入库记录已被清理，当前仅保留前台合并问题清单和原始报告用于回顾。
+          {typeof payload?.cleaned_document_version_id === "number"
+            ? ` 已清理版本 ID：${payload.cleaned_document_version_id}。`
+            : ""}
+          {payload?.latest_filename ? ` 当前保留的最新报告：${payload.latest_filename}。` : ""}
+        </div>
       ) : payload?.status === "skipped" ? (
         <div className="rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 text-sm text-slate-600 dark:border-slate-700/50 dark:bg-slate-900/20 dark:text-slate-300">
-          当前环境未执行共享库同步，待数据库或部署环境准备完成后可重新入库。
+          {payload?.reason === "not_latest_version"
+            ? "\u8be5\u62a5\u544a\u4e0d\u662f\u540c\u4e00\u7ec4\u7ec7\u3001\u5e74\u5ea6\u548c\u7c7b\u578b\u4e0b\u7684\u6700\u65b0\u7248\u672c\uff0c\u5df2\u8df3\u8fc7\u6b63\u5f0f\u5165\u5e93\u3002\u5386\u53f2\u62a5\u544a\u4ecd\u4f1a\u5728\u524d\u53f0\u4fdd\u7559\u4f9b\u56de\u987e\u3002"
+            : "\u5f53\u524d\u73af\u5883\u672a\u6267\u884c\u5171\u4eab\u5e93\u540c\u6b65\uff0c\u5f85\u6570\u636e\u5e93\u6216\u90e8\u7f72\u73af\u5883\u51c6\u5907\u5b8c\u6210\u540e\u53ef\u91cd\u65b0\u5165\u5e93\u3002"}
         </div>
       ) : payload?.status === "error" ? (
         <div className="rounded-xl border border-red-200/70 bg-red-50/70 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-200">
