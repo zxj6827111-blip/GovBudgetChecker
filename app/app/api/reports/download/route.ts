@@ -4,13 +4,20 @@ import { backendAuthHeaders } from "@/lib/backendAuth";
 
 export async function GET(req: NextRequest) {
   const jobId = req.nextUrl.searchParams.get("job_id");
+  const format = req.nextUrl.searchParams.get("format");
   if (!jobId) {
     return NextResponse.json({ error: "job_id is required" }, { status: 400 });
   }
 
   try {
+    const params = new URLSearchParams({
+      job_id: jobId,
+    });
+    if (format) {
+      params.set("format", format);
+    }
     const upstream = await fetch(
-      `${apiBase}/api/reports/download?job_id=${encodeURIComponent(jobId)}`,
+      `${apiBase}/api/reports/download?${params.toString()}`,
       {
         cache: "no-store",
         headers: backendAuthHeaders(),
@@ -28,7 +35,7 @@ export async function GET(req: NextRequest) {
     const blob = await upstream.blob();
     const disposition =
       upstream.headers.get("content-disposition") ||
-      `attachment; filename="${jobId}.pdf"`;
+      `attachment; filename="${jobId}.${format || "pdf"}"`;
     return new NextResponse(blob, {
       status: 200,
       headers: {
@@ -43,4 +50,3 @@ export async function GET(req: NextRequest) {
     );
   }
 }
-

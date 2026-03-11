@@ -375,6 +375,15 @@ def test_budget_performance_target_consistency_detects_large_gap() -> None:
 
     assert issues
     assert any("口径" in issue.message for issue in issues)
+    issue = issues[0]
+    refs = issue.location.get("table_refs") or []
+    assert len(refs) == 2
+    assert refs[0]["role"] == "说明"
+    assert refs[0]["page"] == 2
+    assert refs[1]["role"] == "T3"
+    assert refs[1]["page"] == 1
+    assert refs[1]["row"] == "合计"
+    assert refs[1]["field"] == "项目支出"
 
 
 def test_budget_performance_target_consistency_allows_rounding_tolerance() -> None:
@@ -508,7 +517,10 @@ def test_common_code_mirror_rule_detects_amount_mismatch() -> None:
     issues = CMM004_CodeMirrorConsistency().apply(doc)
 
     assert issues
-    assert any("类款项金额不一致" in issue.message for issue in issues)
+    assert any(
+        ("类款项金额不一致" in issue.message) or ("类款项编码" in issue.message)
+        for issue in issues
+    )
 
 
 def test_common_comparative_narrative_logic_rule_detects_zero_increase_and_hold_wording() -> None:

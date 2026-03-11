@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { backendAuthHeaders } from "@/lib/backendAuth";
+import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
 
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const response = await fetchWithTimeout(`${apiBase}/api/organizations/import`, {
       method: "POST",
-      headers: backendAuthHeaders(),
+      headers: backendAuthHeadersWithSession(),
       body: formData,
     });
     const text = await response.text();
@@ -27,4 +27,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-

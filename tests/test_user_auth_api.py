@@ -1,10 +1,12 @@
 import os
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("TESTING", "true")
 
+from api import runtime
 from api.main import app
 from src.services.user_store import reset_user_store
 
@@ -167,3 +169,97 @@ def test_change_own_password_requires_old_password(client: TestClient):
         headers=_headers(),
     )
     assert new_login.status_code == 200
+
+
+def test_non_admin_cannot_manage_organizations_or_dangerous_jobs(client: TestClient):
+    admin_token = _login(client, "admin", ADMIN_PASSWORD)
+    create_user = client.post(
+        "/api/users",
+        headers=_headers(admin_token),
+        json={"username": "viewer_ops", "password": "ViewerPass123"},
+    )
+    assert create_user.status_code == 200
+
+    viewer_token = _login(client, "viewer_ops", "ViewerPass123")
+
+    create_org = client.post(
+        "/api/organizations",
+        headers=_headers(viewer_token),
+        json={"name": "受限部门", "level": "department"},
+    )
+    assert create_org.status_code == 403
+
+    reanalyze = client.post(
+        "/api/jobs/reanalyze-all",
+        headers=_headers(viewer_token),
+        json={},
+    )
+    assert reanalyze.status_code == 403
+
+    cleanup = client.post(
+        "/api/jobs/structured-ingest-cleanup",
+        headers=_headers(viewer_token),
+        json={"dry_run": True},
+    )
+    assert cleanup.status_code == 403
+
+
+def test_admin_delete_preview_reports_impacted_scope(client: TestClient, tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    admin_token = _login(client, "admin", ADMIN_PASSWORD)
+    dept_name = f"民政局-{os.urandom(4).hex()}"
+
+    create_dept = client.post(
+        "/api/organizations",
+        headers=_headers(admin_token),
+        json={"name": dept_name, "level": "department"},
+    )
+    assert create_dept.status_code == 200, create_dept.text
+    dept_id = create_dept.json()["id"]
+
+    create_unit = client.post(
+        "/api/organizations",
+        headers=_headers(admin_token),
+        json={"name": "民政局本级", "level": "unit", "parent_id": dept_id},
+    )
+    assert create_unit.status_code == 200, create_unit.text
+    unit_id = create_unit.json()["id"]
+
+    storage = runtime.require_org_storage()
+    job_dir = tmp_path / "job-preview-001"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "preview.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+    storage.link_job("job-preview-001", unit_id)
+
+    response = client.get(
+        f"/api/organizations/{dept_id}/delete-preview",
+        headers=_headers(admin_token),
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["organization"]["id"] == dept_id
+    assert payload["summary"]["organization_count"] == 2
+    assert payload["summary"]["unit_count"] == 1
+    assert payload["summary"]["job_count"] == 1
+
+
+def test_admin_sensitive_action_writes_audit_log(client: TestClient, tmp_path: Path, monkeypatch):
+    audit_log_path = tmp_path / "audit" / "admin-actions.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_log_path))
+
+    admin_token = _login(client, "admin", ADMIN_PASSWORD)
+    department_name = f"审计测试部门-{os.urandom(4).hex()}"
+    response = client.post(
+        "/api/organizations",
+        headers=_headers(admin_token),
+        json={"name": department_name, "level": "department"},
+    )
+    assert response.status_code == 200, response.text
+
+    assert audit_log_path.exists()
+    content = audit_log_path.read_text(encoding="utf-8")
+    assert "organization.create" in content
+    assert "admin" in content
+    assert department_name in content

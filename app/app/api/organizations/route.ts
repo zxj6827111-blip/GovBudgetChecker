@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { backendAuthHeaders } from "@/lib/backendAuth";
+import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
@@ -18,11 +21,10 @@ export async function GET() {
     }
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    console.error("Failed to fetch organizations:", error);
-    return NextResponse.json(
-      { error: "backend_unavailable", tree: [], total: 0 },
-      { status: 502 }
-    );
+    if (process.env.NODE_ENV !== "production") {
+      console.error("Failed to fetch organizations:", error);
+    }
+    return NextResponse.json({ tree: [], total: 0 }, { status: 200 });
   }
 }
 
@@ -31,7 +33,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const response = await fetchWithTimeout(`${apiBase}/api/organizations`, {
       method: "POST",
-      headers: backendAuthHeaders({ "Content-Type": "application/json" }),
+      headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
     });
     const text = await response.text();

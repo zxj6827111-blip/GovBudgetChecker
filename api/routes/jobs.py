@@ -8,7 +8,10 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from api import runtime
+from api.auth_utils import require_admin
+from api.routes.organizations import clear_department_stats_cache
 from src.services.org_matcher import get_org_matcher
+from src.services.audit_log import append_audit_event
 
 router = APIRouter()
 
@@ -59,6 +62,47 @@ async def list_jobs(
         "limit": limit,
         "offset": offset,
     }
+
+
+@router.post("/api/jobs/reanalyze-all")
+async def reanalyze_all_jobs(request: Request):
+    _, _, user = require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    result = await runtime.reanalyze_all_jobs(body)
+    append_audit_event(
+        action="jobs.reanalyze_all",
+        actor=str(user.get("username") or ""),
+        result="success",
+        resource_type="job_batch",
+        details={
+            "requested_count": int(result.get("requested_count") or 0),
+            "created_count": int(result.get("created_count") or 0),
+            "skipped_count": int(result.get("skipped_count") or 0),
+            "failed_count": int(result.get("failed_count") or 0),
+        },
+    )
+    return result
+
+
+@router.post("/api/jobs/structured-ingest-cleanup")
+async def cleanup_structured_ingest_history(request: Request):
+    _, _, user = require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    result = await runtime.cleanup_structured_ingest_history(body)
+    append_audit_event(
+        action="jobs.structured_cleanup",
+        actor=str(user.get("username") or ""),
+        result="success",
+        resource_type="structured_cleanup",
+        details={"dry_run": bool(body.get("dry_run", False)), "status": result.get("status")},
+    )
+    return result
 
 
 @router.get("/jobs/{job_id}/status")
@@ -154,6 +198,7 @@ async def delete_job(job_id: str):
         if runtime.ORG_AVAILABLE:
             try:
                 runtime.require_org_storage().unlink_job(job_id)
+                clear_department_stats_cache()
             except Exception:
                 runtime.logger.exception("Failed to unlink job during delete: %s", job_id)
     except Exception as e:
@@ -179,4 +224,28 @@ async def associate_job(job_id: str, request: Request):
         match_type="manual",
         confidence=1.0,
     )
+    clear_department_stats_cache()
     return {"success": True, **binding}
+
+
+@router.post("/api/jobs/{job_id}/reanalyze")
+async def reanalyze_job(job_id: str, request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return await runtime.reanalyze_job(job_id, body)
+
+
+@router.post("/api/jobs/{job_id}/issues/ignore")
+async def ignore_job_issue(job_id: str, request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    issue_id = str((body or {}).get("issue_id") or "").strip()
+    if not issue_id:
+        raise HTTPException(status_code=400, detail="issue_id is required")
+    payload = runtime.ignore_job_issue(job_id, issue_id)
+    clear_department_stats_cache()
+    return payload

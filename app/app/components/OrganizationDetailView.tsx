@@ -1,8 +1,9 @@
-﻿"use client";
+"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
 import { zhCN } from "date-fns/locale";
+import ActionAccordion from "./ActionAccordion";
 
 interface UnitItem {
   id: string;
@@ -38,6 +39,9 @@ interface JobSummary {
   report_kind?: "budget" | "final" | "unknown";
   doc_type?: string | null;
   issue_total?: number;
+  merged_issue_total?: number;
+  merged_issue_conflicts?: number;
+  merged_issue_agreements?: number;
   issue_error?: number;
   issue_warn?: number;
   issue_info?: number;
@@ -77,17 +81,34 @@ interface OrgCardStats {
   has_issues: boolean;
 }
 
+const getPreferredUnit = (units: UnitItem[]): UnitItem | null => {
+  const baseUnit = units.find((unit) => unit.name.includes("本级"));
+  if (baseUnit) return baseUnit;
+  if (units.length === 1) return units[0];
+  return null;
+};
+
+const getDisplayIssueTotal = (job: Pick<JobSummary, "merged_issue_total" | "issue_total">) =>
+  typeof job.merged_issue_total === "number" ? job.merged_issue_total : job.issue_total || 0;
+
 interface OrganizationDetailViewProps {
   departmentId: string;
   departmentName: string;
+  isAdmin?: boolean;
   selectedUnitId?: string | null;
   onSelectUnit: (unit: UnitItem | null) => void;
   onSelectJob: (jobId: string) => void;
   onUpload: (unit?: UnitItem | null) => void;
+  onCleanupStructuredHistory?: (options: {
+    departmentId: string;
+    departmentName: string;
+  }) => void | Promise<void>;
+  isCleaningStructuredHistory?: boolean;
   refreshKey?: number;
   onJobDeleted?: () => void;
   onUnitCreated?: () => void;
   onUnitDeleted?: () => void;
+  onDepartmentDeleted?: () => void;
 }
 
 const ORG_JOBS_PAGE_SIZE = 50;
@@ -99,14 +120,18 @@ const TABLE_VIRTUAL_THRESHOLD = 120;
 export default function OrganizationDetailView({
   departmentId,
   departmentName,
+  isAdmin = false,
   selectedUnitId,
   onSelectUnit,
   onSelectJob,
   onUpload,
+  onCleanupStructuredHistory,
+  isCleaningStructuredHistory = false,
   refreshKey,
   onJobDeleted,
   onUnitCreated,
   onUnitDeleted,
+  onDepartmentDeleted,
 }: OrganizationDetailViewProps) {
   const [units, setUnits] = useState<UnitItem[]>([]);
   const [unitsLoading, setUnitsLoading] = useState(true);
@@ -134,6 +159,7 @@ export default function OrganizationDetailView({
   const [newUnitName, setNewUnitName] = useState("");
   const [isCreatingUnit, setIsCreatingUnit] = useState(false);
   const [deletingUnitId, setDeletingUnitId] = useState<string | null>(null);
+  const [showHeaderActions, setShowHeaderActions] = useState(false);
   const lastRefreshKeyRef = useRef<number | undefined>(refreshKey);
 
   const buildJobsApiPath = useCallback(
@@ -159,6 +185,15 @@ export default function OrganizationDetailView({
     [selectableOrganizations, selectedUnitId]
   );
 
+  const preferredUnit = useMemo(() => getPreferredUnit(units), [units]);
+
+  const uploadTarget = useMemo<UnitItem | null>(() => {
+    if (selectedUnit?.level === "unit") {
+      return selectedUnit;
+    }
+    return preferredUnit;
+  }, [preferredUnit, selectedUnit]);
+
   const switchToDepartmentTab = useCallback(() => {
     setOrgViewTab("department");
     onSelectUnit(departmentOrg);
@@ -167,15 +202,16 @@ export default function OrganizationDetailView({
   const switchToUnitsTab = useCallback(() => {
     setOrgViewTab("units");
     if (!selectedUnit || selectedUnit.level !== "unit") {
-      onSelectUnit(null);
+      onSelectUnit(preferredUnit);
       setJobs([]);
     }
-  }, [onSelectUnit, selectedUnit]);
+  }, [onSelectUnit, preferredUnit, selectedUnit]);
 
   const openCreateUnitModal = useCallback(() => {
+    if (!isAdmin) return;
     setNewUnitName("");
     setShowCreateUnitModal(true);
-  }, []);
+  }, [isAdmin]);
 
   const closeCreateUnitModal = useCallback(() => {
     if (isCreatingUnit) return;
@@ -184,6 +220,10 @@ export default function OrganizationDetailView({
   }, [isCreatingUnit]);
 
   const handleCreateUnit = useCallback(async () => {
+    if (!isAdmin) {
+      alert("仅管理员可以创建单位");
+      return;
+    }
     const normalizedName = newUnitName.trim();
     if (!normalizedName) return;
 
@@ -265,7 +305,7 @@ export default function OrganizationDetailView({
     } finally {
       setIsCreatingUnit(false);
     }
-  }, [departmentId, newUnitName, onSelectUnit, onUnitCreated]);
+  }, [departmentId, isAdmin, newUnitName, onSelectUnit, onUnitCreated]);
 
   const fetchUnits = useCallback(async () => {
     setUnitsLoading(true);
@@ -523,6 +563,10 @@ export default function OrganizationDetailView({
     }
   }, [availableYears, selectedYearFilter]);
 
+  useEffect(() => {
+    setShowHeaderActions(false);
+  }, [departmentId, selectedUnitId]);
+
   const filteredJobs = useMemo(() => {
     let scoped = jobs;
     if (selectedYearFilter !== "all") {
@@ -602,7 +646,7 @@ export default function OrganizationDetailView({
   }, [filteredJobs, tableScrollTop, tableViewportHeight]);
 
   const filteredIssueTotal = useMemo(
-    () => filteredJobs.reduce((sum, job) => sum + (job.issue_total || 0), 0),
+    () => filteredJobs.reduce((sum, job) => sum + getDisplayIssueTotal(job), 0),
     [filteredJobs]
   );
 
@@ -698,7 +742,7 @@ export default function OrganizationDetailView({
 
   useEffect(() => {
     if (!selectedUnitId) return;
-    const loadedIssueTotal = jobs.reduce((sum, job) => sum + (job.issue_total || 0), 0);
+    const loadedIssueTotal = jobs.reduce((sum, job) => sum + getDisplayIssueTotal(job), 0);
     setOrgStatsMap((prev) => ({
       ...prev,
       [selectedUnitId]: {
@@ -764,6 +808,10 @@ export default function OrganizationDetailView({
   const handleDeleteUnit = useCallback(
     async (unit: UnitItem, e: React.MouseEvent) => {
       e.stopPropagation();
+      if (!isAdmin) {
+        alert("仅管理员可以删除单位");
+        return;
+      }
       if (unit.level !== "unit") return;
 
       const confirmed = confirm(`确定要删除下属单位“${unit.name}”吗？`);
@@ -771,7 +819,7 @@ export default function OrganizationDetailView({
 
       setDeletingUnitId(unit.id);
       try {
-        const res = await fetch(`/api/organizations/${unit.id}`, {
+        const res = await fetch(`/api/organizations/${encodeURIComponent(unit.id)}`, {
           method: "DELETE",
         });
 
@@ -809,7 +857,7 @@ export default function OrganizationDetailView({
         setDeletingUnitId(null);
       }
     },
-    [onSelectUnit, onUnitDeleted, selectedUnitId]
+    [isAdmin, onSelectUnit, onUnitDeleted, selectedUnitId]
   );
 
   const scrollJobsSectionIntoView = useCallback(() => {
@@ -837,10 +885,10 @@ export default function OrganizationDetailView({
     [onSelectUnit, onUpload, scrollJobsSectionIntoView]
   );
 
-  const renderOrganizationCard = (org: UnitItem) => {
+    const renderOrganizationCard = (org: UnitItem) => {
     const active = selectedUnitId === org.id;
     const fallbackStats = orgStatsMap[org.id];
-    const loadedIssueTotal = jobs.reduce((sum, item) => sum + (item.issue_total || 0), 0);
+    const loadedIssueTotal = jobs.reduce((sum, item) => sum + getDisplayIssueTotal(item), 0);
     const activeHasPartialJobs = jobsTotal > 0 && jobs.length < jobsTotal;
     const liveStats = active
       ? {
@@ -850,7 +898,7 @@ export default function OrganizationDetailView({
             : loadedIssueTotal,
           has_issues: activeHasPartialJobs
             ? (fallbackStats?.issue_total ?? loadedIssueTotal) > 0
-            : jobs.some((item) => (item.issue_total || 0) > 0),
+            : jobs.some((item) => getDisplayIssueTotal(item) > 0),
         }
       : undefined;
     const stats = liveStats || fallbackStats;
@@ -861,95 +909,188 @@ export default function OrganizationDetailView({
     const isUnit = org.level === "unit";
     const orgDisplayName = !isDepartment && org.name === departmentName ? `${org.name} (Local Unit)` : org.name;
     const orgIssueTotal = stats?.issue_total ?? 0;
-    const hasProblems = orgIssueTotal > 0;
     const isDeletingThisUnit = deletingUnitId === org.id;
-    const buttonLabel = !hasKnownStats
-      ? "查看任务"
-      : hasJobs
-        ? "查看任务列表"
-        : "上传报告";
-    const buttonHint = !hasKnownStats
-      ? "点击后自动定位到下方任务列表"
-      : hasJobs
-        ? active
-          ? "当前已选中，点击后重新定位到下方任务列表"
-          : hasProblems
-            ? "点击后查看该组织任务及问题情况"
-            : "点击后查看该组织任务结果"
-        : "点击后直接打开当前组织上传窗口";
 
     return (
-      <div key={org.id} className={`relative flex flex-col bg-white rounded-2xl border transition-all duration-300 shadow-sm hover:shadow-md ${active ? "border-indigo-500 shadow-indigo-100 ring-2 ring-indigo-100" : "border-gray-200 hover:border-indigo-300"}`}>
-        <div className="p-5 flex-1">
-          <div className="flex items-start justify-between gap-2 mb-3">
-            <h3 className="font-bold text-gray-900 text-lg tracking-tight leading-snug" title={orgDisplayName}>{orgDisplayName}</h3>
-            <div className="flex items-center gap-1.5">
-              {active && (
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap bg-emerald-50 text-emerald-700">
-                  已选中
-                </span>
-              )}
-              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${isDepartment ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-700"}`}>{isDepartment ? "部门" : "单位"}</span>
-              {isUnit && (
-                <button
-                  type="button"
-                  onClick={(e) => handleDeleteUnit(org, e)}
-                  disabled={isDeletingThisUnit}
-                  className="inline-flex items-center justify-center h-7 w-7 rounded-md text-red-500 hover:text-red-600 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  title={isDeletingThisUnit ? "删除中..." : "删除下属单位"}
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
-              )}
+      <div 
+        key={org.id} 
+        onClick={() => handleOrganizationCardAction(org, hasJobs)}
+        className={`group relative flex flex-col bg-white rounded-xl border transition-all duration-200 cursor-pointer shadow-sm hover:shadow-md ${active ? "border-indigo-400 ring-1 ring-indigo-400" : "border-gray-200 hover:border-gray-300"}`}
+      >
+        <div className="p-5 flex-1 pl-6 relative">
+          {active && <div className="absolute left-0 top-0 bottom-0 w-1 bg-indigo-500 rounded-l-xl" />}
+          <div className="flex items-start justify-between gap-2 mb-2">
+            <h3 className="font-semibold text-gray-800 text-base flex-1 line-clamp-2" title={orgDisplayName}>{orgDisplayName}</h3>
+            {isUnit && isAdmin ? (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); handleDeleteUnit(org, e); }}
+                disabled={isDeletingThisUnit}
+                className="opacity-0 group-hover:opacity-100 transition-opacity inline-flex items-center justify-center p-1 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 disabled:opacity-50"
+                title={isDeletingThisUnit ? "删除中..." : "删除单位"}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+              </button>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-4 mt-4">
+            <div className="flex flex-col">
+              <span className="text-xs text-gray-400 mb-0.5">文件数</span>
+              <span className="text-sm font-semibold text-gray-700">{hasKnownStats ? jobCount : "-"}</span>
+            </div>
+            <div className="h-6 w-px bg-gray-100"></div>
+            <div className="flex flex-col">
+              <span className="text-xs text-gray-400 mb-0.5" title="去重后的最终问题数">合并问题</span>
+              <span className={`text-sm font-semibold ${!hasKnownStats ? "text-gray-400" : orgIssueTotal > 0 ? "text-red-500" : "text-green-600"}`}>
+                {hasKnownStats ? orgIssueTotal : "-"}
+              </span>
             </div>
           </div>
-          <div className="flex items-center text-sm">
-            <span className="text-gray-500 font-medium w-24">文件数量:</span>
-            <span className="text-gray-700 font-mono text-sm font-semibold">
-              {hasKnownStats ? jobCount : "-"}
-            </span>
-          </div>
-          <div className="flex items-center text-sm mt-2">
-            <span className="text-gray-500 font-medium w-24">问题数量:</span>
-            <span className={`font-mono text-sm font-semibold ${!hasKnownStats ? "text-gray-400" : orgIssueTotal > 0 ? "text-red-600" : "text-green-600"}`}>
-              {hasKnownStats ? orgIssueTotal : "-"}
-            </span>
-          </div>
         </div>
-        <div className="px-5 pb-5 pt-2">
-          <button
-            onClick={() => handleOrganizationCardAction(org, hasJobs)}
-            className={`w-full py-2.5 rounded-xl font-medium text-sm transition-all duration-300 flex items-center justify-center shadow-sm ${hasJobs ? "bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-200" : "bg-amber-500 hover:bg-amber-600 text-white shadow-amber-200"}`}
-          >
-            {buttonLabel}
-          </button>
-          <div className="mt-2 text-xs text-gray-400 text-center">{buttonHint}</div>
+        <div className="px-5 py-3 border-t border-gray-50 flex items-center justify-between bg-gray-50/50 rounded-b-xl group-hover:bg-indigo-50/30 transition-colors">
+          <span className="text-xs font-medium text-gray-500 group-hover:text-indigo-600 transition-colors">
+            {!hasKnownStats ? "查看组织" : hasJobs ? "查看任务列表" : "上传首份报告"}
+          </span>
+          <svg className="w-4 h-4 text-gray-300 group-hover:text-indigo-500 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
         </div>
       </div>
     );
   };
 
+  const handleDeleteDepartment = useCallback(async () => {
+    if (!isAdmin) {
+      alert("仅管理员可以删除部门");
+      return;
+    }
+
+    try {
+      const previewRes = await fetch(`/api/organizations/${encodeURIComponent(departmentId)}/delete-preview`, {
+        cache: "no-store",
+      });
+      let previewPayload: any = {};
+      try {
+        previewPayload = await previewRes.json();
+      } catch {
+        previewPayload = {};
+      }
+      if (!previewRes.ok) {
+        throw new Error(
+          previewPayload?.detail || previewPayload?.error || previewPayload?.message || "获取删除影响范围失败"
+        );
+      }
+      const summary = previewPayload?.summary || {};
+      const confirmed = confirm(
+        `确定要删除当前部门“${departmentName}”吗？\n\n将删除 ${summary.organization_count ?? 0} 个组织（其中单位 ${summary.unit_count ?? 0} 个），影响 ${summary.job_count ?? 0} 个任务关联。`
+      );
+      if (!confirmed) return;
+
+      const res = await fetch(`/api/organizations/${encodeURIComponent(departmentId)}`, {
+        method: "DELETE",
+      });
+
+      let payload: any = {};
+      try {
+        payload = await res.json();
+      } catch {
+        payload = {};
+      }
+
+      if (!res.ok) {
+        throw new Error(
+          payload?.detail || payload?.error || payload?.message || "删除部门失败"
+        );
+      }
+
+      onDepartmentDeleted?.();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "删除部门失败";
+      alert(message);
+    }
+  }, [departmentId, departmentName, isAdmin, onDepartmentDeleted]);
+
   return (
     <div className="flex flex-col h-full bg-transparent overflow-hidden">
       <div className="flex-none p-8 pb-4">
         <div className="rounded-2xl bg-white/70 backdrop-blur-xl border border-white/20 shadow-xl p-8">
-          <div className="flex justify-between items-center">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <h1 className="text-3xl font-bold text-gray-900 tracking-tight">{departmentName}</h1>
               <div className="mt-2 text-sm text-gray-500">
                 {selectedUnit ? selectedUnit.name : "请选择部门或单位"}
               </div>
             </div>
-            <button
-              onClick={() => onUpload(selectedUnit)}
-              disabled={!selectedUnit}
-              className="inline-flex items-center justify-center px-5 py-3 text-sm font-medium text-white bg-indigo-600 rounded-xl shadow-lg hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
-              title={selectedUnit ? "上传到当前组织" : "请先选择部门或单位"}
-            >
-              上传报告
-            </button>
+              <div className="w-full lg:w-auto lg:min-w-[300px]">
+                <ActionAccordion
+                  title="快捷操作"
+                  description="默认收起，按需查阅当前部门上传或旧版清理"
+                  isOpen={showHeaderActions}
+                  onToggle={() => setShowHeaderActions((prev) => !prev)}
+                  icon={<svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>}
+                >
+                  {onCleanupStructuredHistory && (
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onCleanupStructuredHistory({
+                            departmentId,
+                            departmentName,
+                          })
+                        }
+                        disabled={!isAdmin || isCleaningStructuredHistory}
+                        className="inline-flex w-full items-center justify-center rounded-xl border border-sky-200 bg-gradient-to-r from-sky-50 to-cyan-50 px-4 py-2.5 text-sm font-semibold text-sky-700 shadow-sm transition-all hover:border-sky-300 hover:shadow disabled:cursor-not-allowed disabled:opacity-60"
+                        title={isAdmin ? `清理 ${departmentName} 下旧版结构化入库记录，保留历史报告与前台合并问题清单` : "仅管理员可操作"}
+                      >
+                        {isCleaningStructuredHistory ? "清理旧版入库中..." : "清理本部门旧版入库"}
+                      </button>
+                      <p className="mt-2 text-[11px] leading-5 text-sky-700/80">
+                        {isAdmin ? "只清理本部门旧版结构化入库记录，不删除原始报告和前台合并问题。" : "该操作仅管理员可用。"}
+                      </p>
+                    </div>
+                  )}
+                  <div>
+                    <button
+                      type="button"
+                      onClick={handleDeleteDepartment}
+                      disabled={!isAdmin}
+                      className="inline-flex w-full items-center justify-center rounded-xl border border-rose-200 bg-gradient-to-r from-rose-50 to-red-50 px-4 py-2.5 text-sm font-semibold text-rose-700 shadow-sm transition-all hover:border-rose-300 hover:shadow disabled:cursor-not-allowed disabled:opacity-60"
+                      title={isAdmin ? `删除当前部门 ${departmentName}` : "仅管理员可操作"}
+                    >
+                      删除当前部门
+                    </button>
+                    <p className="mt-2 text-[11px] leading-5 text-rose-700/80">
+                      {isAdmin ? "删除当前部门后，其下属单位和关联关系也会一并移除。" : "删除操作仅管理员可用。"}
+                    </p>
+                  </div>
+                  <div>
+                    <button
+                      onClick={() => onUpload(uploadTarget)}
+                      disabled={!uploadTarget}
+                      className="inline-flex w-full items-center justify-center rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-indigo-700 hover:shadow disabled:cursor-not-allowed disabled:opacity-60"
+                      title={
+                        uploadTarget
+                          ? `上传到 ${uploadTarget.name}`
+                          : unitsLoading
+                            ? "单位加载中"
+                            : units.length === 0
+                              ? "请先创建单位后再上传"
+                              : "请先选择具体单位"
+                      }
+                    >
+                      上传报告
+                    </button>
+                    <p className="mt-2 text-[11px] leading-5 text-indigo-700/80">
+                      {selectedUnit?.level === "department" && uploadTarget
+                        ? `当前停留在部门视图，上传时默认使用 ${uploadTarget.name}。`
+                        : units.length === 0
+                          ? (isAdmin ? "当前部门暂无单位，请先新建单位后再上传。" : "当前部门暂无单位，请联系管理员先创建单位。")
+                          : "将当前单位的新报告上传到系统，并刷新合并统计。"}
+                    </p>
+                  </div>
+                </ActionAccordion>
+              </div>
           </div>
         </div>
       </div>
@@ -970,8 +1111,9 @@ export default function OrganizationDetailView({
                 <button
                   type="button"
                   onClick={openCreateUnitModal}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors"
-                  title={`在 ${departmentName} 下新建单位`}
+                  disabled={!isAdmin}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                  title={isAdmin ? `在 ${departmentName} 下新建单位` : "仅管理员可操作"}
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -991,7 +1133,8 @@ export default function OrganizationDetailView({
                 <button
                   type="button"
                   onClick={openCreateUnitModal}
-                  className="mt-3 inline-flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-800"
+                  disabled={!isAdmin}
+                  className="mt-3 inline-flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-800 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -1061,7 +1204,7 @@ export default function OrganizationDetailView({
                   </div>
 
                   <div className="text-xs text-gray-500">
-                    当前{selectedKindFilter === "all" ? "全部类型" : selectedKindFilter === "budget" ? "预算" : "决算"}，当前{selectedYearFilter === "all" ? "全部年度" : `${selectedYearFilter}年度`}：{filteredJobs.length}个文件，问题{filteredIssueTotal}
+                    当前{selectedKindFilter === "all" ? "全部类型" : selectedKindFilter === "budget" ? "预算" : "决算"}，当前{selectedYearFilter === "all" ? "全部年度" : `${selectedYearFilter}年度`}：{filteredJobs.length}个文件，合并问题(去重){filteredIssueTotal}
                     <span className="ml-2 text-gray-400">已加载 {jobs.length}/{jobsTotal || jobs.length}</span>
                   </div>
                 </div>
@@ -1094,118 +1237,66 @@ export default function OrganizationDetailView({
                       </tr>
                     )}
                     {virtualWindow.items.map((job) => {
-                      const localParticipated = job.local_participated ?? true;
-                      const aiParticipated = job.ai_participated ?? job.mode === "dual";
+                      const mergedTotal = getDisplayIssueTotal(job);
                       const localTotal = typeof job.local_issue_total === "number" ? job.local_issue_total : job.issue_total || 0;
-                      const localError = typeof job.local_issue_error === "number" ? job.local_issue_error : job.issue_error || 0;
-                      const localWarn = typeof job.local_issue_warn === "number" ? job.local_issue_warn : job.issue_warn || 0;
-                      const localInfo = typeof job.local_issue_info === "number" ? job.local_issue_info : job.issue_info || 0;
                       const aiTotal = job.ai_issue_total || 0;
-                      const aiError = job.ai_issue_error || 0;
-                      const aiWarn = job.ai_issue_warn || 0;
-                      const aiInfo = job.ai_issue_info || 0;
-                      const localHasIssues = localParticipated && localTotal > 0;
-                      const aiHasIssues = aiParticipated && aiTotal > 0;
-                      const hasAnyIssues = localHasIssues || aiHasIssues;
-                      const localBadgeClass = !localParticipated ? "bg-gray-100 text-gray-500" : localHasIssues ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700";
-                      const aiBadgeClass = !aiParticipated ? "bg-gray-100 text-gray-500" : aiHasIssues ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700";
-                      const structuredTablesCount = typeof job.structured_tables_count === "number" ? job.structured_tables_count : null;
-                      const structuredRecognizedTables = typeof job.structured_recognized_tables === "number" ? job.structured_recognized_tables : null;
-                      const structuredFactsCount = typeof job.structured_facts_count === "number" ? job.structured_facts_count : null;
-                      const structuredLineItemCount = typeof job.structured_line_item_count === "number" ? job.structured_line_item_count : null;
-                      const hasStructuredMetrics =
-                        structuredRecognizedTables !== null ||
-                        structuredFactsCount !== null ||
-                        structuredLineItemCount !== null;
+                      const sourceTotal = localTotal + aiTotal;
+                      const dedupedCount = sourceTotal > mergedTotal ? sourceTotal - mergedTotal : 0;
+                      const isNormal = mergedTotal === 0;
 
                       return (
-                        <tr key={job.job_id} className="group cursor-pointer hover:bg-white/70 transition-colors duration-150" onClick={() => onSelectJob(job.job_id)}>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="text-sm font-medium text-gray-900 group-hover:text-indigo-600 transition-colors">{job.filename || "未命名文件"}</div>
-                            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
-                              <span className="text-gray-500 font-mono">ID: {job.job_id.slice(0, 8)}</span>
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">{typeof job.report_year === "number" ? `${job.report_year}年度` : "年度未识别"}</span>
-                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full ${job.report_kind === "budget" ? "bg-emerald-50 text-emerald-700" : job.report_kind === "final" ? "bg-cyan-50 text-cyan-700" : "bg-gray-100 text-gray-600"}`}>{job.report_kind === "budget" ? "预算检查" : job.report_kind === "final" ? "决算检查" : "类型未识别"}</span>
-                            </div>
-                            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
-                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full ${job.organization_name ? "bg-slate-100 text-slate-700" : "bg-amber-100 text-amber-700"}`}>
-                                {job.organization_name ? `所属：${job.organization_name}` : "所属：未关联"}
-                              </span>
-                              {job.organization_match_type && (
-                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full ${job.organization_match_type === "manual" ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"}`}>
-                                  {job.organization_match_type === "manual" ? "人工绑定" : "自动匹配"}
-                                </span>
-                              )}
-                              {typeof job.organization_match_confidence === "number" && job.organization_match_confidence > 0 && (
-                                <span className="text-blue-600">
-                                  置信度 {(job.organization_match_confidence * 100).toFixed(0)}%
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 tabular-nums">{format(new Date(job.ts * 1000), "yyyy-MM-dd HH:mm", { locale: zhCN })}</td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="space-y-1">
-                              {getStatusBadge(job)}
-                              {job.structured_ingest_status && (
-                                <div className="space-y-1">
-                                  <div className="flex flex-wrap gap-1.5">
-                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${job.structured_ingest_status === "done" ? "bg-emerald-50 text-emerald-700" : job.structured_ingest_status === "error" ? "bg-red-50 text-red-700" : "bg-gray-100 text-gray-600"}`}>
-                                      {job.structured_ingest_status === "done" ? "已结构化入库" : job.structured_ingest_status === "error" ? "入库失败" : "入库待处理"}
-                                    </span>
-                                    {(job.review_item_count || 0) > 0 && (
-                                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-700">
-                                        待复核 {job.review_item_count} 项
-                                      </span>
-                                    )}
-                                    {(job.low_confidence_item_count || 0) > 0 && (
-                                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-orange-50 text-orange-700">
-                                        低置信 {job.low_confidence_item_count} 张
-                                      </span>
-                                    )}
-                                  </div>
-                                  {hasStructuredMetrics && (
-                                    <div className="text-[11px] text-gray-500">
-                                      {structuredRecognizedTables !== null && (
-                                        <span>
-                                          识别 {structuredRecognizedTables}
-                                          {structuredTablesCount !== null ? `/${structuredTablesCount}` : ""} 表
-                                        </span>
-                                      )}
-                                      {structuredFactsCount !== null && (
-                                        <span>
-                                          {structuredRecognizedTables !== null ? " · " : ""}
-                                          facts {structuredFactsCount}
-                                        </span>
-                                      )}
-                                      {structuredLineItemCount !== null && (
-                                        <span>
-                                          {(structuredRecognizedTables !== null || structuredFactsCount !== null) ? " · " : ""}
-                                          PS 行项 {structuredLineItemCount}
-                                        </span>
-                                      )}
-                                    </div>
+                        <tr key={job.job_id} className="group hover:bg-gray-50/50 transition-colors cursor-pointer" onClick={() => onSelectJob(job.job_id)}>
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm font-medium text-gray-900 group-hover:text-indigo-600 truncate transition-colors" title={job.filename || "未命名文件"}>
+                                  {job.filename || "未命名文件"}
+                                </div>
+                                <div className="mt-1.5 flex items-center gap-2 text-[11px] text-gray-500">
+                                  <span>{typeof job.report_year === "number" ? `${job.report_year}年` : "年度未知"}</span>
+                                  <span className="w-1 h-1 rounded-full bg-gray-300"></span>
+                                  <span>{job.report_kind === "budget" ? "预算" : job.report_kind === "final" ? "决算" : "类型未知"}</span>
+                                  {job.organization_name && (
+                                    <>
+                                      <span className="w-1 h-1 rounded-full bg-gray-300"></span>
+                                      <span className="truncate max-w-[120px]" title={job.organization_name}>{job.organization_name}</span>
+                                    </>
                                   )}
                                 </div>
-                              )}
-                              {normalizeJobStatus(job.status) === "done" && (
-                                <div className="space-y-1">
-                                  <div className="flex flex-wrap gap-1.5">
-                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${localBadgeClass}`}>{!localParticipated ? "本地：未参与" : localHasIssues ? `本地：${localTotal}个问题` : "本地：正常"}</span>
-                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${aiBadgeClass}`}>{!aiParticipated ? "AI：未参与" : aiHasIssues ? `AI：${aiTotal}个问题` : "AI：正常"}</span>
-                                  </div>
-                                  <div className={`text-xs font-medium ${hasAnyIssues ? "text-red-600" : "text-green-600"}`}>{hasAnyIssues ? "已发现问题" : "未发现问题"}</div>
-                                  {localHasIssues && <div className="text-[11px] text-gray-500">本地明细：错{localError} / 警{localWarn} / 提{localInfo}</div>}
-                                  {aiHasIssues && <div className="text-[11px] text-gray-500">AI明细：错{aiError} / 警{aiWarn} / 提{aiInfo}</div>}
-                                  {localHasIssues && Array.isArray(job.top_issue_rules) && job.top_issue_rules.length > 0 && <div className="text-[11px] text-gray-500">主要类型：{job.top_issue_rules.map((item) => `${item.rule_id}(${item.count})`).join("、")}</div>}
-                                </div>
-                              )}
+                              </div>
                             </div>
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                            <div className="flex items-center justify-end space-x-3">
-                              <button onClick={(e) => handleDelete(job.job_id, e)} className="rounded px-2 py-1 text-red-500 transition-colors hover:bg-red-50 hover:text-red-700" title="删除任务">删除</button>
-                              <button onClick={() => onSelectJob(job.job_id)} className="text-xs text-indigo-600 hover:text-indigo-900">查看</button>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{format(new Date(job.ts * 1000), "MM-dd HH:mm", { locale: zhCN })}</td>
+                          <td className="px-6 py-4">
+                            <div className="flex flex-col gap-1.5 justify-center">
+                              <div className="flex items-center gap-2">
+                                {getStatusBadge(job)}
+                                {normalizeJobStatus(job.status) === "done" && (
+                                  <span className={`text-xs font-medium ${mergedTotal > 0 ? "text-red-500" : "text-green-600"}`}>
+                                    {isNormal ? "正常" : `合并问题: ${mergedTotal}`}
+                                  </span>
+                                )}
+                                {dedupedCount > 0 && normalizeJobStatus(job.status) === "done" && (
+                                  <span className="text-[10px] font-medium text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded cursor-help" title={`来源命中 ${sourceTotal} 项，已智能去重 ${dedupedCount} 项`}>
+                                    已去重 ${dedupedCount} 项
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[11px] text-gray-400 flex items-center gap-2">
+                                {job.structured_ingest_status === "done" && (
+                                  <span className="text-emerald-600" title="已成功结构化入库">✓ 已入库</span>
+                                )}
+                                {(job.review_item_count || 0) > 0 && (
+                                  <span className="text-amber-600">{job.review_item_count}待复核</span>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
+                            <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button onClick={(e) => { e.stopPropagation(); handleDelete(job.job_id, e); }} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors" title="删除">
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                              </button>
                             </div>
                           </td>
                         </tr>

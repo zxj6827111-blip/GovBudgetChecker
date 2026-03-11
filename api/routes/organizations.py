@@ -10,7 +10,9 @@ from typing import Annotated, Any, Dict, List, Tuple
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 
+from api.auth_utils import require_admin
 from api import runtime
+from src.services.audit_log import append_audit_event
 
 router = APIRouter()
 
@@ -23,8 +25,12 @@ _DEPT_STATS_CACHE_MAX_SIZE = int(
 _DEPT_STATS_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
-def _clear_department_stats_cache() -> None:
+def clear_department_stats_cache() -> None:
     _DEPT_STATS_CACHE.clear()
+
+
+def _clear_department_stats_cache() -> None:
+    clear_department_stats_cache()
 
 
 def _split_existing_job_ids(job_ids: List[str]) -> Tuple[List[str], List[str]]:
@@ -41,15 +47,156 @@ def _split_existing_job_ids(job_ids: List[str]) -> Tuple[List[str], List[str]]:
     return existing_job_ids, stale_job_ids
 
 
+def _extract_summary_issue_total(summary: Dict[str, Any]) -> int:
+    merged_issue_total = summary.get("merged_issue_total")
+    if merged_issue_total is None:
+        merged_issue_total = summary.get("issue_total")
+    try:
+        return int(merged_issue_total or 0)
+    except Exception:
+        return 0
+
+
+def _collect_subtree_org_ids(storage, root_org_id: str) -> List[str]:
+    if storage.get_by_id(root_org_id) is None:
+        return []
+
+    result: List[str] = []
+    stack = [root_org_id]
+    seen: set[str] = set()
+
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        result.append(current)
+        for child in storage.get_children(current):
+            stack.append(child.id)
+
+    return result
+
+
+def _build_delete_preview(storage, org_id: str) -> Dict[str, Any]:
+    org = storage.get_by_id(org_id)
+    if org is None:
+        raise HTTPException(status_code=404, detail="organization not found")
+
+    subtree_ids = _collect_subtree_org_ids(storage, org_id)
+    subtree_orgs = [storage.get_by_id(item_id) for item_id in subtree_ids]
+    subtree_orgs = [item for item in subtree_orgs if item is not None]
+    descendant_orgs = [item for item in subtree_orgs if item.id != org_id]
+    department_count = sum(1 for item in subtree_orgs if getattr(item, "level", "") == "department")
+    unit_count = sum(1 for item in subtree_orgs if getattr(item, "level", "") == "unit")
+    direct_job_ids, stale_job_ids = _split_existing_job_ids(
+        storage.get_org_jobs(org_id, include_children=True)
+    )
+
+    return {
+        "organization": {
+            "id": org.id,
+            "name": getattr(org, "name", ""),
+            "level": getattr(org, "level", ""),
+        },
+        "summary": {
+            "organization_count": len(subtree_orgs),
+            "descendant_count": len(descendant_orgs),
+            "department_count": department_count,
+            "unit_count": unit_count,
+            "job_count": len(direct_job_ids),
+            "stale_job_count": len(stale_job_ids),
+        },
+        "organizations": [
+            {
+                "id": item.id,
+                "name": getattr(item, "name", ""),
+                "level": getattr(item, "level", ""),
+            }
+            for item in subtree_orgs
+        ],
+        "job_ids": direct_job_ids,
+        "stale_job_ids": stale_job_ids,
+    }
+
+
+def _build_direct_org_stats(
+    storage,
+    orgs: List[Any] | None = None,
+) -> Dict[str, Dict[str, Any]]:
+    target_orgs = orgs if orgs is not None else list(storage.get_all())
+    stats: Dict[str, Dict[str, Any]] = {}
+
+    for org in target_orgs:
+        valid_job_ids, _ = _split_existing_job_ids(
+            storage.get_org_jobs(org.id, include_children=False)
+        )
+        job_count = 0
+        issue_total = 0
+        for job_id in valid_job_ids:
+            job_dir = runtime.UPLOAD_ROOT / job_id
+            summary = runtime.collect_job_summary(job_dir)
+            job_count += 1
+            issue_total += _extract_summary_issue_total(summary)
+        stats[org.id] = {
+            "job_count": job_count,
+            "issue_total": issue_total,
+            "has_issues": issue_total > 0,
+        }
+
+    return stats
+
+
+def _build_aggregated_org_stats(storage) -> Dict[str, Dict[str, Any]]:
+    direct_stats = _build_direct_org_stats(storage)
+    aggregated_stats: Dict[str, Dict[str, Any]] = {}
+
+    def walk(org_id: str) -> Dict[str, Any]:
+        current = dict(
+            direct_stats.get(
+                org_id,
+                {"job_count": 0, "issue_total": 0, "has_issues": False},
+            )
+        )
+        for child in storage.get_children(org_id):
+            child_stats = walk(child.id)
+            current["job_count"] += int(child_stats.get("job_count") or 0)
+            current["issue_total"] += int(child_stats.get("issue_total") or 0)
+        current["has_issues"] = bool(current["issue_total"] > 0)
+        aggregated_stats[org_id] = current
+        return current
+
+    for org in storage.get_all():
+        if org.id not in aggregated_stats:
+            walk(org.id)
+
+    return aggregated_stats
+
+
+def _apply_tree_stats(
+    nodes: List[Dict[str, Any]],
+    stats_by_org: Dict[str, Dict[str, Any]],
+) -> None:
+    for node in nodes:
+        org_id = str(node.get("id") or "").strip()
+        stats = stats_by_org.get(org_id, {})
+        node["job_count"] = int(stats.get("job_count") or 0)
+        node["issue_count"] = int(stats.get("issue_total") or 0)
+        children = node.get("children")
+        if isinstance(children, list):
+            _apply_tree_stats(children, stats_by_org)
+
+
 @router.get("/api/organizations")
 async def get_organizations():
     storage = runtime.require_org_storage()
     tree = [runtime.to_dict(node) for node in storage.get_tree()]
+    _apply_tree_stats(tree, _build_aggregated_org_stats(storage))
     return {"tree": tree, "total": len(storage.get_all())}
 
 
 @router.post("/api/organizations")
 async def create_organization(request: Request):
+    _, _, user = require_admin(request)
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="invalid request body")
@@ -79,11 +226,21 @@ async def create_organization(request: Request):
     storage = runtime.require_org_storage()
     created = storage.add(org)
     _clear_department_stats_cache()
+    append_audit_event(
+        action="organization.create",
+        actor=str(user.get("username") or ""),
+        result="success",
+        resource_type="organization",
+        resource_id=str(created.id),
+        resource_name=str(created.name),
+        details={"level": str(getattr(created, "level", "")), "parent_id": getattr(created, "parent_id", None)},
+    )
     return runtime.to_dict(created)
 
 
 @router.put("/api/organizations/{org_id}")
 async def update_organization(org_id: str, request: Request):
+    _, _, user = require_admin(request)
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="invalid request body")
@@ -97,12 +254,23 @@ async def update_organization(org_id: str, request: Request):
     if not updated:
         raise HTTPException(status_code=404, detail="organization not found")
     _clear_department_stats_cache()
+    append_audit_event(
+        action="organization.update",
+        actor=str(user.get("username") or ""),
+        result="success",
+        resource_type="organization",
+        resource_id=str(updated.id),
+        resource_name=str(updated.name),
+        details={"level": str(getattr(updated, "level", ""))},
+    )
     return runtime.to_dict(updated)
 
 
 @router.delete("/api/organizations/{org_id}")
-async def delete_organization(org_id: str):
+async def delete_organization(org_id: str, request: Request):
     storage = runtime.require_org_storage()
+    _, _, user = require_admin(request)
+    preview = _build_delete_preview(storage, org_id)
     
     # Optional: We could check if there are linked jobs before deleting,
     # but the storage layer currently handles cascading deletions correctly.
@@ -112,7 +280,24 @@ async def delete_organization(org_id: str):
     if not success:
         raise HTTPException(status_code=404, detail="organization not found")
     _clear_department_stats_cache()
+    append_audit_event(
+        action="organization.delete",
+        actor=str(user.get("username") or ""),
+        result="success",
+        resource_type="organization",
+        resource_id=str(org_id),
+        resource_name=str(preview["organization"]["name"] or ""),
+        details=preview.get("summary"),
+    )
     return {"success": True, "message": "organization deleted"}
+
+
+@router.get("/api/organizations/{org_id}/delete-preview")
+async def get_delete_preview(org_id: str, request: Request):
+    require_admin(request)
+    storage = runtime.require_org_storage()
+    preview = _build_delete_preview(storage, org_id)
+    return {"success": True, **preview}
 
 
 @router.get("/api/organizations/list")
@@ -138,7 +323,14 @@ async def get_organizations_list():
 @router.get("/api/departments")
 async def get_departments():
     storage = runtime.require_org_storage()
-    departments = [runtime.to_dict(org) for org in storage.get_departments()]
+    aggregated_stats = _build_aggregated_org_stats(storage)
+    departments = []
+    for org in storage.get_departments():
+        payload = runtime.to_dict(org)
+        stats = aggregated_stats.get(org.id, {})
+        payload["job_count"] = int(stats.get("job_count") or 0)
+        payload["issue_count"] = int(stats.get("issue_total") or 0)
+        departments.append(payload)
     return {"departments": departments, "total": len(departments)}
 
 
@@ -171,24 +363,7 @@ async def get_department_stats(dept_id: str):
                     return payload
 
     orgs = [department, *storage.get_units_by_department(dept_id)]
-    stats: Dict[str, Dict[str, Any]] = {}
-
-    for org in orgs:
-        valid_job_ids, _ = _split_existing_job_ids(
-            storage.get_org_jobs(org.id, include_children=False)
-        )
-        job_count = 0
-        issue_total = 0
-        for job_id in valid_job_ids:
-            job_dir = runtime.UPLOAD_ROOT / job_id
-            summary = runtime.collect_job_summary(job_dir)
-            job_count += 1
-            issue_total += int(summary.get("issue_total") or 0)
-        stats[org.id] = {
-            "job_count": job_count,
-            "issue_total": issue_total,
-            "has_issues": issue_total > 0,
-        }
+    stats = _build_direct_org_stats(storage, orgs)
 
     payload = {"department_id": dept_id, "stats": stats}
     if _DEPT_STATS_CACHE_TTL_SECONDS > 0:
@@ -200,9 +375,11 @@ async def get_department_stats(dept_id: str):
 
 @router.post("/api/organizations/import")
 async def import_organizations(
+    request: Request,
     file: Annotated[UploadFile, File(...)],
     clear_existing: Annotated[bool, Form()] = False,
 ):
+    _, _, user = require_admin(request)
     storage = runtime.require_org_storage()
     filename = (file.filename or "").lower()
     raw = await file.read()
@@ -240,7 +417,20 @@ async def import_organizations(
 
     result = storage.import_from_list(rows, clear_existing=clear_existing)
     _clear_department_stats_cache()
-    return runtime.to_dict(result)
+    result_payload = runtime.to_dict(result)
+    append_audit_event(
+        action="organization.import",
+        actor=str(user.get("username") or ""),
+        result="success",
+        resource_type="organization_import",
+        resource_name=file.filename or "",
+        details={
+            "clear_existing": bool(clear_existing),
+            "imported": int(result_payload.get("imported") or 0),
+            "errors": result_payload.get("errors") or [],
+        },
+    )
+    return result_payload
 
 
 @router.get("/api/organizations/{org_id}/jobs")

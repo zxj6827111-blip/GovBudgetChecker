@@ -4,12 +4,16 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import IssueTabs, { DualModeResult, IssueItem } from "./components/IssueTabs";
 import IssueList from "./components/IssueList";
 import IssueCard from "./components/IssueCard";
+import ActionAccordion from "./components/ActionAccordion";
 import OrganizationTree from "./components/OrganizationTree";
 import OrganizationDetailView from "./components/OrganizationDetailView";
 import AssociateDialog from "./components/AssociateDialog";
 import PipelineStatus from "./components/PipelineStatus";
 import BatchUploadModal from "./components/BatchUploadModal";
 import QCResultView from "./components/QCResultView";
+import StructuredCleanupDialog, {
+  StructuredCleanupPreviewPayload,
+} from "./components/StructuredCleanupDialog";
 import StructuredIngestPanel, { StructuredIngestPayload } from "./components/StructuredIngestPanel";
 import { format } from 'date-fns';
 
@@ -88,6 +92,13 @@ type JobSummary = {
   report_kind?: "budget" | "final" | "unknown";
 };
 
+type CurrentUser = {
+  username: string;
+  is_admin: boolean;
+};
+
+const UPLOAD_REQUEST_TIMEOUT_MS = 180000;
+
 export default function HomePage() {
   // Global State
   const [jobList, setJobList] = useState<JobSummary[]>([]);
@@ -132,7 +143,18 @@ export default function HomePage() {
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null); // selected unit id
   const [isAssociateOpen, setIsAssociateOpen] = useState(false);
   const [associatedJobId, setAssociatedJobId] = useState<string | null>(null);
+  const [isGlobalReanalyzing, setIsGlobalReanalyzing] = useState(false);
+  const [isReanalyzing, setIsReanalyzing] = useState(false);
+  const [structuredCleanupBusyScope, setStructuredCleanupBusyScope] = useState<string | null>(null);
+  const [structuredCleanupPreview, setStructuredCleanupPreview] = useState<StructuredCleanupPreviewPayload | null>(null);
+  const [structuredCleanupScope, setStructuredCleanupScope] = useState<{
+    departmentId: string | null;
+    departmentName: string;
+  }>({ departmentId: null, departmentName: "" });
+  const [isStructuredCleanupExecuting, setIsStructuredCleanupExecuting] = useState(false);
+  const [ignoringIssueId, setIgnoringIssueId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
   useEffect(() => {
     if (toast) {
@@ -140,6 +162,38 @@ export default function HomePage() {
       return () => clearTimeout(timer);
     }
   }, [toast]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchCurrentUser = async () => {
+      try {
+        const response = await fetch("/api/auth/me", { cache: "no-store" });
+        if (!response.ok) {
+          if (!cancelled) {
+            setCurrentUser(null);
+          }
+          return;
+        }
+        const payload = await response.json().catch(() => ({}));
+        if (!cancelled) {
+          setCurrentUser((payload?.user ?? null) as CurrentUser | null);
+        }
+      } catch (error) {
+        console.error("Failed to fetch current user", error);
+        if (!cancelled) {
+          setCurrentUser(null);
+        }
+      }
+    };
+
+    fetchCurrentUser();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const isAdmin = Boolean(currentUser?.is_admin);
 
 
   // Manual Associate Suggestion State (from pendingAssociateJob logic)
@@ -162,6 +216,8 @@ export default function HomePage() {
   const [viewMode, setViewMode] = useState<"org_detail" | "job_detail">("org_detail");
   const [orgRefreshKey, setOrgRefreshKey] = useState(0);
   const [orgTreeRefreshKey, setOrgTreeRefreshKey] = useState(0);
+  const [showSidebarTools, setShowSidebarTools] = useState(false);
+  const [orgImporterOpenSignal, setOrgImporterOpenSignal] = useState(0);
 
   useEffect(() => {
     qcFindingsLengthRef.current = qcFingings.length;
@@ -450,6 +506,14 @@ export default function HomePage() {
     setSelectedOrgId(unit?.id || null);
   }, []);
 
+  const handleDepartmentDeleted = useCallback(() => {
+    setSelectedDepartmentId(null);
+    setSelectedDepartmentName("");
+    setSelectedOrgId(null);
+    setOrgRefreshKey((prev) => prev + 1);
+    setOrgTreeRefreshKey((prev) => prev + 1);
+  }, []);
+
   const openScopedUpload = useCallback((unit?: { id: string } | null) => {
     if (unit?.id) {
       setSelectedOrgId(unit.id);
@@ -466,6 +530,288 @@ export default function HomePage() {
     setAssociatedJobId(jobId);
     setIsAssociateOpen(true);
   }, []);
+
+  const handleGlobalReanalyze = useCallback(async () => {
+    if (!isAdmin) {
+      setToast({ message: "仅管理员可以执行按部门重分析", type: "error" });
+      return;
+    }
+    if (isGlobalReanalyzing) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "\u5c06\u6309\u6bcf\u4e2a\u90e8\u95e8\u53ea\u53d6\u6700\u65b0\u4e00\u4efd\u62a5\u544a\u521b\u5efa\u65b0\u7684\u91cd\u5206\u6790\u4efb\u52a1\uff0c\u6b63\u5728\u5206\u6790\u4e2d\u7684\u4efb\u52a1\u4f1a\u81ea\u52a8\u8df3\u8fc7\u3002\u662f\u5426\u7ee7\u7eed\uff1f"
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setIsGlobalReanalyzing(true);
+    try {
+      const response = await fetch("/api/jobs/reanalyze-all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ include_active: false, latest_per_department: true }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message =
+          String(payload?.detail || payload?.error || "").trim() || "\u6279\u91cf\u91cd\u5206\u6790\u5931\u8d25";
+        throw new Error(message);
+      }
+
+      await fetchJobList().catch((listError) => {
+        console.error("Failed to refresh job list after batch reanalyze", listError);
+      });
+      setOrgRefreshKey((prev) => prev + 1);
+      setOrgTreeRefreshKey((prev) => prev + 1);
+
+      const createdCount = Number(payload?.created_count ?? 0);
+      const skippedCount = Number(payload?.skipped_count ?? 0);
+      const failedCount = Number(payload?.failed_count ?? 0);
+      const toastType =
+        createdCount > 0 || failedCount === 0 ? "success" : "error";
+      const message =
+        createdCount > 0
+          ? `\u5df2\u4e3a ${createdCount} \u4e2a\u90e8\u95e8\u7684\u6700\u65b0\u62a5\u544a\u521b\u5efa\u91cd\u5206\u6790\u4efb\u52a1\uff0c\u8df3\u8fc7 ${skippedCount} \u4e2a\uff0c\u5931\u8d25 ${failedCount} \u4e2a`
+          : failedCount > 0
+            ? `\u6279\u91cf\u91cd\u5206\u6790\u5931\u8d25 ${failedCount} \u4e2a\uff0c\u8df3\u8fc7 ${skippedCount} \u4e2a`
+            : `\u6ca1\u6709\u53ef\u91cd\u5206\u6790\u7684\u90e8\u95e8\u6700\u65b0\u62a5\u544a\uff0c\u8df3\u8fc7 ${skippedCount} \u4e2a`;
+      setToast({ message, type: toastType });
+    } catch (error) {
+      console.error("Failed to batch reanalyze jobs", error);
+      setToast({
+        message:
+          error instanceof Error && error.message
+            ? error.message
+            : "\u6279\u91cf\u91cd\u5206\u6790\u5931\u8d25",
+        type: "error",
+      });
+    } finally {
+      setIsGlobalReanalyzing(false);
+    }
+  }, [fetchJobList, isAdmin, isGlobalReanalyzing]);
+
+  const handleStructuredCleanup = useCallback(
+    async (options?: { departmentId?: string | null; departmentName?: string | null }) => {
+      if (!isAdmin) {
+        setToast({ message: "仅管理员可以执行旧版结构化清理", type: "error" });
+        return;
+      }
+      if (structuredCleanupBusyScope || isStructuredCleanupExecuting) {
+        return;
+      }
+
+      const departmentId = String(options?.departmentId || "").trim();
+      const departmentName = String(options?.departmentName || "").trim();
+      const scopeKey = departmentId ? `department:${departmentId}` : "all";
+      const requestBody = departmentId
+        ? { dry_run: true, department_id: departmentId }
+        : { dry_run: true };
+
+      setStructuredCleanupBusyScope(scopeKey);
+      try {
+        const previewResponse = await fetch("/api/jobs/structured-ingest-cleanup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestBody),
+        });
+        const previewPayload = await previewResponse.json().catch(() => ({}));
+        if (!previewResponse.ok) {
+          const message =
+            String(previewPayload?.detail || previewPayload?.error || "").trim() ||
+            "旧版结构化入库预览失败";
+          throw new Error(message);
+        }
+
+        setStructuredCleanupScope({
+          departmentId: departmentId || null,
+          departmentName,
+        });
+        setStructuredCleanupPreview(previewPayload as StructuredCleanupPreviewPayload);
+      } catch (error) {
+        console.error("Failed to cleanup structured ingest history", error);
+        setToast({
+          message:
+            error instanceof Error && error.message
+              ? error.message
+              : "旧版结构化入库预览失败",
+          type: "error",
+        });
+      } finally {
+        setStructuredCleanupBusyScope(null);
+      }
+    },
+    [isAdmin, isStructuredCleanupExecuting, structuredCleanupBusyScope]
+  );
+
+  const closeStructuredCleanupDialog = useCallback(() => {
+    if (isStructuredCleanupExecuting) {
+      return;
+    }
+    setStructuredCleanupPreview(null);
+    setStructuredCleanupScope({ departmentId: null, departmentName: "" });
+  }, [isStructuredCleanupExecuting]);
+
+  const confirmStructuredCleanup = useCallback(async () => {
+    if (!structuredCleanupPreview || isStructuredCleanupExecuting) {
+      return;
+    }
+
+    const departmentId = structuredCleanupScope.departmentId;
+    const scopeKey = departmentId ? `department:${departmentId}` : "all";
+    const scopeLabel =
+      structuredCleanupPreview.department_name ||
+      structuredCleanupScope.departmentName ||
+      (departmentId ? "当前部门" : "全库");
+
+    setIsStructuredCleanupExecuting(true);
+    setStructuredCleanupBusyScope(scopeKey);
+    try {
+      const executeBody = departmentId
+        ? { dry_run: false, department_id: departmentId }
+        : { dry_run: false };
+      const executeResponse = await fetch("/api/jobs/structured-ingest-cleanup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(executeBody),
+      });
+      const executePayload = await executeResponse.json().catch(() => ({}));
+      if (!executeResponse.ok) {
+        const message =
+          String(executePayload?.detail || executePayload?.error || "").trim() ||
+          "旧版结构化入库清理失败";
+        throw new Error(message);
+      }
+
+      await fetchJobList().catch((listError) => {
+        console.error("Failed to refresh job list after structured cleanup", listError);
+      });
+      setOrgRefreshKey((prev) => prev + 1);
+      setOrgTreeRefreshKey((prev) => prev + 1);
+      closeStructuredCleanupDialog();
+
+      const deletedCount = Number(executePayload?.deleted_document_version_count ?? 0);
+      const updatedCount = Number(executePayload?.updated_job_count ?? 0);
+      setToast({
+        message: `${scopeLabel}已清理 ${deletedCount} 个旧版入库版本，并更新 ${updatedCount} 条历史任务状态`,
+        type: "success",
+      });
+    } catch (error) {
+      console.error("Failed to cleanup structured ingest history", error);
+      setToast({
+        message:
+          error instanceof Error && error.message
+            ? error.message
+            : "旧版结构化入库清理失败",
+        type: "error",
+      });
+    } finally {
+      setIsStructuredCleanupExecuting(false);
+      setStructuredCleanupBusyScope(null);
+    }
+  }, [
+    closeStructuredCleanupDialog,
+    fetchJobList,
+    isStructuredCleanupExecuting,
+    structuredCleanupPreview,
+    structuredCleanupScope,
+  ]);
+
+  const handleIgnoreIssue = useCallback(
+    async (issue: IssueItem) => {
+      const targetJobId =
+        (typeof issue.job_id === "string" && issue.job_id.trim()) ||
+        (typeof activeJobId === "string" && activeJobId.trim()) ||
+        "";
+      const targetIssueId = typeof issue.id === "string" ? issue.id.trim() : "";
+      if (!targetJobId || !targetIssueId || ignoringIssueId === targetIssueId) {
+        return;
+      }
+
+      setIgnoringIssueId(targetIssueId);
+      try {
+        const response = await fetch(`/api/jobs/${encodeURIComponent(targetJobId)}/issues/ignore`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ issue_id: targetIssueId }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const message =
+            String(payload?.detail || payload?.error || "").trim() || "忽略问题失败";
+          throw new Error(message);
+        }
+
+        if (activeJobId === targetJobId) {
+          setStatus(payload as any);
+        }
+        setSelectedIssue((prev) => (prev?.id === targetIssueId ? null : prev));
+        await fetchJobList().catch((listError) => {
+          console.error("Failed to refresh job list after ignoring issue", listError);
+        });
+        setOrgRefreshKey((prev) => prev + 1);
+        setToast({ message: "该来源命中已忽略，合并问题统计已刷新", type: "success" });
+      } catch (error) {
+        console.error("Failed to ignore issue", error);
+        setToast({
+          message:
+            error instanceof Error && error.message
+              ? error.message
+              : "忽略问题失败",
+          type: "error",
+        });
+      } finally {
+        setIgnoringIssueId(null);
+      }
+    },
+    [activeJobId, fetchJobList, ignoringIssueId]
+  );
+
+  const handleReanalyzeJob = useCallback(async () => {
+    if (!activeJobId || isReanalyzing) {
+      return;
+    }
+
+    setIsReanalyzing(true);
+    try {
+      const response = await fetch(`/api/jobs/${activeJobId}/reanalyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message =
+          String(payload?.detail || payload?.error || "").trim() || "\u91cd\u65b0\u5206\u6790\u5931\u8d25";
+        throw new Error(message);
+      }
+
+      const nextJobId =
+        typeof payload?.job_id === "string" ? payload.job_id.trim() : "";
+      if (!nextJobId) {
+        throw new Error("\u672a\u8fd4\u56de\u65b0\u7684\u4efb\u52a1\u7f16\u53f7");
+      }
+
+      setActiveJobId(nextJobId);
+      await fetchJobList().catch((listError) => {
+        console.error("Failed to refresh job list after reanalyze", listError);
+      });
+      setToast({ message: "\u5df2\u521b\u5efa\u65b0\u7684\u91cd\u5206\u6790\u4efb\u52a1", type: "success" });
+    } catch (error) {
+      console.error("Failed to reanalyze job", error);
+      setToast({
+        message:
+          error instanceof Error && error.message
+            ? error.message
+            : "\u91cd\u65b0\u5206\u6790\u5931\u8d25",
+        type: "error",
+      });
+    } finally {
+      setIsReanalyzing(false);
+    }
+  }, [activeJobId, fetchJobList, isReanalyzing]);
 
   const handleBackToOrg = () => {
     setActiveJobId(null); // This will trigger effect to switch to org_detail
@@ -500,20 +846,20 @@ export default function HomePage() {
     if (!f) return;
 
     if (!selectedOrgId) {
-      setToast({ message: "请先在部门详情中选择一个组织（部门或单位）", type: "error" });
+      setToast({ message: "\u8bf7\u5148\u9009\u62e9\u90e8\u95e8\u540e\u518d\u4e0a\u4f20\u6587\u4ef6", type: "error" });
       return;
     }
     const detectUploadDocType = (filename: string): "dept_final" | "dept_budget" => {
       const lower = filename.toLowerCase();
       if (
-        filename.includes("决算") ||
+        filename.includes("\u90e8\u95e8\u51b3\u7b97") ||
         lower.includes("final") ||
         lower.includes("settlement") ||
         lower.includes("accounts")
       ) {
         return "dept_final";
       }
-      if (filename.includes("预算") || lower.includes("budget")) {
+      if (filename.includes("\u90e8\u95e8\u9884\u7b97") || lower.includes("budget")) {
         return "dept_budget";
       }
       return uploadDocType;
@@ -522,8 +868,8 @@ export default function HomePage() {
       const match4 = filename.match(/(20\d{2})/);
       if (match4) return match4[1];
 
-      // Support file names like "...25年预算.pdf" / "...24年决算.pdf".
-      const match2 = filename.match(/(?:^|[^\d])(\d{2})(?=\s*(?:年|年度|预算|决算))/);
+      // Support file names like "...25?????.pdf" or "...24????.pdf".
+      const match2 = filename.match(/(?:^|[^\d])(\d{2})(?=\s*(?:\u5e74)?(?:\u90e8\u95e8)?(?:\u51b3\u7b97|\u9884\u7b97))/);
       if (match2) {
         const year = Number(match2[1]);
         if (year >= 0 && year <= 99) {
@@ -544,6 +890,7 @@ export default function HomePage() {
       new Promise<{ status: number; responseText: string }>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open("POST", url);
+        xhr.timeout = UPLOAD_REQUEST_TIMEOUT_MS;
         xhr.upload.onprogress = (event) => {
           if (event.lengthComputable) {
             const percent = Math.round((event.loaded / event.total) * 100);
@@ -552,8 +899,24 @@ export default function HomePage() {
         };
         xhr.onload = () => resolve({ status: xhr.status, responseText: xhr.responseText });
         xhr.onerror = () => reject(new Error("Network Error"));
+        xhr.ontimeout = () => reject(new Error("Upload timed out"));
         xhr.send(formData);
       });
+
+    const parseUploadError = (responseText: string, status: number) => {
+      try {
+        const payload = JSON.parse(responseText || "{}");
+        return (
+          payload?.detail ||
+          payload?.error ||
+          payload?.message ||
+          responseText ||
+          `HTTP ${status}`
+        );
+      } catch {
+        return responseText || `HTTP ${status}`;
+      }
+    };
 
     try {
       const v3Form = new FormData();
@@ -575,7 +938,7 @@ export default function HomePage() {
       }
 
       if (upload.status < 200 || upload.status >= 300) {
-        throw new Error(upload.responseText || `HTTP ${upload.status}`);
+        throw new Error(parseUploadError(upload.responseText, upload.status));
       }
 
       setUploadProgress(100);
@@ -623,11 +986,11 @@ export default function HomePage() {
         refreshWithRetry();
       }
 
-      const typeLabel = resolvedDocType === "dept_budget" ? "预算" : "决算";
-      setToast({ message: `上传成功，已按${resolvedFiscalYear}年${typeLabel}检查启动`, type: "success" });
+      const typeLabel = resolvedDocType === "dept_budget" ? "\u90e8\u95e8\u9884\u7b97\u62a5\u544a" : "\u90e8\u95e8\u51b3\u7b97\u62a5\u544a";
+      setToast({ message: `\u5df2\u4e0a\u4f20 ${resolvedFiscalYear ? `${resolvedFiscalYear}\u5e74` : ""}${typeLabel}\uff0c\u5df2\u5f00\u59cb\u5206\u6790`, type: "success" });
     } catch (e: any) {
       console.error("Upload failed", e);
-      setToast({ message: "上传失败，请重试", type: "error" });
+      setToast({ message: e?.message || "\u6587\u4ef6\u4e0a\u4f20\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5", type: "error" });
     } finally {
       setIsUploading(false);
     }
@@ -792,7 +1155,7 @@ export default function HomePage() {
       source: "rule",
       rule_id: item?.rule_id || item?.rule || "",
       severity: severityMap[rawSeverity] || "medium",
-      title: item?.title || item?.message || item?.rule_id || item?.rule || "规则检查结果",
+      title: item?.title || item?.message || item?.rule_id || item?.rule || "\u672a\u547d\u540d\u95ee\u9898",
       message: item?.message || item?.title || "",
       evidence: Array.isArray(item?.evidence)
         ? item.evidence
@@ -844,10 +1207,79 @@ export default function HomePage() {
               <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg shadow-lg shadow-indigo-500/30 flex items-center justify-center text-white font-bold">G</div>
               <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-400">GovChecker</span>
             </div>
+            <div className="mt-4">
+              <ActionAccordion
+                title="快捷操作"
+                description="默认收起，按需查阅批量重跑或清理"
+                isOpen={showSidebarTools}
+                onToggle={() => setShowSidebarTools((prev) => !prev)}
+                icon={<svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>}
+              >
+                <div>
+                  <button
+                    onClick={handleGlobalReanalyze}
+                    disabled={!isAdmin || isGlobalReanalyzing}
+                    className="inline-flex w-full items-center justify-center rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 px-4 py-2.5 text-sm font-semibold text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:shadow disabled:cursor-not-allowed disabled:opacity-60"
+                    title={isAdmin ? "按每个部门的最新报告批量创建新的重分析任务" : "仅管理员可操作"}
+                  >
+                    {isGlobalReanalyzing ? "批量重分析中..." : "按部门重分析"}
+                  </button>
+                  <p className="mt-2 text-[11px] leading-5 text-amber-700/80">
+                    {isAdmin ? "每个部门只重跑最新一份报告，默认跳过正在分析中的任务。" : "该操作仅管理员可用。"}
+                  </p>
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setIsGlobalUploadOpen(true)}
+                    disabled={!isAdmin}
+                    className="inline-flex w-full items-center justify-center rounded-xl border border-indigo-200 bg-gradient-to-r from-indigo-50 to-blue-50 px-4 py-2.5 text-sm font-semibold text-indigo-700 shadow-sm transition-all hover:border-indigo-300 hover:shadow disabled:cursor-not-allowed disabled:opacity-60"
+                    title={isAdmin ? "上传全区 PDF 文档（批量）" : "仅管理员可操作"}
+                  >
+                    全区上传
+                  </button>
+                  <p className="mt-2 text-[11px] leading-5 text-indigo-700/80">
+                    {isAdmin ? "批量上传全区 PDF 报告，后台将自动创建任务并刷新组织统计。" : "全区批量上传仅管理员可用。"}
+                  </p>
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setOrgImporterOpenSignal((prev) => prev + 1)}
+                    disabled={!isAdmin}
+                    className="inline-flex w-full items-center justify-center rounded-xl border border-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 shadow-sm transition-all hover:border-emerald-300 hover:shadow disabled:cursor-not-allowed disabled:opacity-60"
+                    title={isAdmin ? "导入部门及单位名称模板（CSV / XLSX）" : "仅管理员可操作"}
+                  >
+                    导入部门名称
+                  </button>
+                  <p className="mt-2 text-[11px] leading-5 text-emerald-700/80">
+                    {isAdmin ? "导入部门和单位名称模板，快速初始化或批量更新组织结构。" : "组织导入仅管理员可用。"}
+                  </p>
+                </div>
+                <div>
+                  <button
+                    onClick={() => handleStructuredCleanup()}
+                    disabled={!isAdmin || !!structuredCleanupBusyScope || isStructuredCleanupExecuting}
+                    className="inline-flex w-full items-center justify-center rounded-xl border border-sky-200 bg-gradient-to-r from-sky-50 to-cyan-50 px-4 py-2.5 text-sm font-semibold text-sky-700 shadow-sm transition-all hover:border-sky-300 hover:shadow disabled:cursor-not-allowed disabled:opacity-60"
+                    title={isAdmin ? "清理数据库中的旧版记录，前台合并问题不变" : "仅管理员可操作"}
+                  >
+                    {structuredCleanupBusyScope === "all"
+                      ? (isStructuredCleanupExecuting ? "清理中..." : "加载预览...")
+                      : "清理旧版入库"}
+                  </button>
+                  <p className="mt-2 text-[11px] leading-5 text-sky-700/80">
+                    {isAdmin ? "清理旧记录，不删除原始报告和前台的合并问题记录。" : "旧版清理仅管理员可用。"}
+                  </p>
+                </div>
+              </ActionAccordion>
+            </div>
           </div>
           <OrganizationTree
             onSelect={handleOrgSelect}
             onGlobalBatchUpload={() => setIsGlobalUploadOpen(true)}
+            hideUtilityActions={true}
+            openImporterSignal={orgImporterOpenSignal}
+            isAdmin={isAdmin}
             selectedOrgId={selectedDepartmentId}
             refreshKey={orgTreeRefreshKey}
           />
@@ -858,7 +1290,7 @@ export default function HomePage() {
               <button
                 onClick={() => setShowOrgTree(false)}
                 className="p-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm text-gray-400 hover:text-indigo-600 hover:shadow-md transition-all duration-200"
-                title="收起侧边栏"
+                title="\u6536\u8d77\u90e8\u95e8\u6811"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
               </button>
@@ -885,14 +1317,18 @@ export default function HomePage() {
               <OrganizationDetailView
                 departmentId={selectedDepartmentId}
                 departmentName={selectedDepartmentName}
+                isAdmin={isAdmin}
                 selectedUnitId={selectedOrgId}
                 onSelectUnit={handleUnitSelect}
                 onSelectJob={handleJobSelectFromOrg}
                 onUpload={openScopedUpload}
+                onCleanupStructuredHistory={handleStructuredCleanup}
+                isCleaningStructuredHistory={!!structuredCleanupBusyScope || isStructuredCleanupExecuting}
                 refreshKey={orgRefreshKey}
                 onJobDeleted={() => setOrgTreeRefreshKey(prev => prev + 1)}
                 onUnitCreated={() => setOrgTreeRefreshKey(prev => prev + 1)}
                 onUnitDeleted={() => setOrgTreeRefreshKey(prev => prev + 1)}
+                onDepartmentDeleted={handleDepartmentDeleted}
               />
             </div>
           ) : (
@@ -900,8 +1336,8 @@ export default function HomePage() {
               <div className="w-24 h-24 bg-gradient-to-tr from-gray-100 to-gray-200 dark:from-gray-800 dark:to-gray-700 rounded-3xl flex items-center justify-center mb-6 shadow-inner">
                 <svg className="w-12 h-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
               </div>
-              <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">欢迎使用智慧预算审查系统</h2>
-              <p className="text-gray-500 dark:text-gray-400 max-w-md">请先在左侧选择部门，再选择具体组织（部门或单位）查看任务与审查结果。</p>
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">{"\u8bf7\u5148\u4ece\u5de6\u4fa7\u9009\u62e9\u4e00\u4e2a\u90e8\u95e8"}</h2>
+              <p className="text-gray-500 dark:text-gray-400 max-w-md">{"\u9009\u4e2d\u90e8\u95e8\u540e\u53ef\u67e5\u770b\u6700\u65b0\u62a5\u544a\u3001\u95ee\u9898\u5217\u8868\u3001\u5165\u5e93\u72b6\u6001\u548c\u91cd\u5206\u6790\u5165\u53e3\u3002"}</p>
             </div>
           )
         )}
@@ -913,61 +1349,70 @@ export default function HomePage() {
                 <button onClick={handleBackToOrg} className="mr-4 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 hover:text-gray-900 transition-colors group">
                   <div className="flex items-center space-x-1">
                     <svg className="w-5 h-5 transform group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
-                    <span className="text-sm font-medium">返回列表</span>
+                    <span className="text-sm font-medium">{"\u8fd4\u56de\u90e8\u95e8\u89c6\u56fe"}</span>
                   </div>
                 </button>
                 <div className="h-6 w-px bg-gray-300 dark:bg-gray-700 mx-2"></div>
                 <h2 className="ml-2 text-lg font-bold text-gray-800 dark:text-white truncate max-w-lg">
-                  {job?.filename || jobList.find(j => j.job_id === activeJobId)?.filename || "加载中..."}
+                  {job?.filename || jobList.find(j => j.job_id === activeJobId)?.filename || "\u672a\u547d\u540d\u6587\u4ef6..."}
                 </h2>
                 <span className={`ml-3 px-2 py-0.5 rounded text-xs font-medium ${jobStatus === 'done' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
-                  {jobStatus === 'done' ? '已完成' : jobStatus === 'processing' ? '分析中' : '未知状态'}
+                  {jobStatus === 'done' ? "\u5206\u6790\u5b8c\u6210" : jobStatus === 'processing' ? "\u5206\u6790\u4e2d" : "\u5f85\u5904\u7406"}
                 </span>
+                {activeJobId && (
+                  <button
+                    onClick={handleReanalyzeJob}
+                    disabled={isReanalyzing}
+                    className="ml-3 inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isReanalyzing ? "\u91cd\u65b0\u5206\u6790\u4e2d..." : "\u91cd\u65b0\u5206\u6790"}
+                  </button>
+                )}
                 {activeJobId && (
                   <button
                     onClick={() => openAssociateDialog(activeJobId)}
                     className="ml-3 inline-flex items-center rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-100"
                   >
-                    {activeOrganizationName ? "调整归属单位" : "关联单位"}
+                    {activeOrganizationName ? "\u91cd\u65b0\u5173\u8054\u90e8\u95e8" : "\u5173\u8054\u90e8\u95e8"}
                   </button>
                 )}
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${activeOrganizationName ? "bg-slate-100 text-slate-700" : "bg-amber-100 text-amber-700"}`}>
-                  {activeOrganizationName ? `所属：${activeOrganizationName}` : "所属：未关联"}
+                  {activeOrganizationName ? `\u5f53\u524d\u5173\u8054\u90e8\u95e8\uff1a${activeOrganizationName}` : "\u5c1a\u672a\u5173\u8054\u90e8\u95e8"}
                 </span>
                 {activeOrganizationMatchType && (
                   <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${activeOrganizationMatchType === "manual" ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"}`}>
-                    {activeOrganizationMatchType === "manual" ? "人工绑定" : "自动匹配"}
+                    {activeOrganizationMatchType === "manual" ? "\u624b\u52a8\u5173\u8054" : "\u81ea\u52a8\u5339\u914d"}
                   </span>
                 )}
                 {typeof activeOrganizationMatchConfidence === "number" && activeOrganizationMatchConfidence > 0 && (
                   <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
-                    匹配置信度 {(activeOrganizationMatchConfidence * 100).toFixed(0)}%
+                    {"\u5339\u914d\u7f6e\u4fe1\u5ea6\uff1a"}{(activeOrganizationMatchConfidence * 100).toFixed(0)}%
                   </span>
                 )}
                 <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${structuredIngestStatus === "done" ? "bg-emerald-100 text-emerald-700" : structuredIngestStatus === "error" ? "bg-red-100 text-red-700" : structuredIngestStatus === "skipped" ? "bg-gray-100 text-gray-700" : "bg-amber-100 text-amber-700"}`}>
                   {structuredIngestStatus === "done"
-                    ? "结构化入库完成"
+                    ? "\u7ed3\u6784\u5316\u5165\u5e93\uff1a\u5b8c\u6210"
                     : structuredIngestStatus === "error"
-                      ? "结构化入库失败"
+                      ? "\u7ed3\u6784\u5316\u5165\u5e93\uff1a\u5931\u8d25"
                       : structuredIngestStatus === "skipped"
-                        ? "结构化入库跳过"
-                        : "结构化入库待执行"}
+                        ? "\u7ed3\u6784\u5316\u5165\u5e93\uff1a\u5df2\u8df3\u8fc7"
+                        : "\u7ed3\u6784\u5316\u5165\u5e93\uff1a\u8fdb\u884c\u4e2d"}
                 </span>
                 {structuredReviewCount > 0 && (
                   <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700">
-                    待复核 {structuredReviewCount} 项
+                    {"\u5f85\u590d\u6838\u9879\uff1a"}{structuredReviewCount}
                   </span>
                 )}
                 {structuredLowConfidenceCount > 0 && (
                   <span className="inline-flex items-center rounded-full bg-orange-100 px-2.5 py-1 text-xs font-medium text-orange-700">
-                    低置信表 {structuredLowConfidenceCount} 张
+                    {"\u4f4e\u7f6e\u4fe1\u5ea6\uff1a"}{structuredLowConfidenceCount}
                   </span>
                 )}
                 {structuredRecognizedTables > 0 && (
                   <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
-                    识别表 {structuredRecognizedTables}{structuredTablesCount > 0 ? `/${structuredTablesCount}` : ""}
+                    {"\u5df2\u8bc6\u522b\u8868\u683c\uff1a"}{structuredRecognizedTables}{structuredTablesCount > 0 ? `/${structuredTablesCount}` : ""}
                   </span>
                 )}
                 {structuredFactsCount > 0 && (
@@ -977,7 +1422,7 @@ export default function HomePage() {
                 )}
                 {structuredLineItemCount > 0 && (
                   <span className="inline-flex items-center rounded-full bg-teal-100 px-2.5 py-1 text-xs font-medium text-teal-700">
-                    PS 行项 {structuredLineItemCount}
+                    {"PS \u884c\u9879\uff1a"}{structuredLineItemCount}
                   </span>
                 )}
               </div>
@@ -1000,17 +1445,33 @@ export default function HomePage() {
                       <div>
                         <div className="flex items-center justify-between mb-4 px-2">
                           <h3 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-gray-900 to-indigo-600 dark:from-white dark:to-indigo-400 flex items-center">
-                            <span className="mr-2 text-2xl">🔍</span> 智能审查结果
+                            <span className="mr-2 text-2xl">#</span> {"\u95ee\u9898\u68c0\u67e5\u7ed3\u679c"}
                           </h3>
                           {(status as any)?.report_path && (
-                            <a
-                              href={`/api/reports/download?job_id=${activeJobId}`}
-                              target="_blank"
-                              className="inline-flex items-center px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium shadow-md hover:shadow-lg transition-all"
-                            >
-                              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-                              下载凭证报告
-                            </a>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <a
+                                href={`/api/reports/download?job_id=${activeJobId}`}
+                                target="_blank"
+                                className="inline-flex items-center px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium shadow-md hover:shadow-lg transition-all"
+                              >
+                                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                                {"\u4e0b\u8f7d PDF \u62a5\u544a"}
+                              </a>
+                              <a
+                                href={`/api/reports/download?job_id=${activeJobId}&format=csv`}
+                                target="_blank"
+                                className="inline-flex items-center px-3 py-2 bg-white hover:bg-slate-50 text-slate-700 rounded-lg text-sm font-medium border border-slate-200 shadow-sm transition-all"
+                              >
+                                {"\u5bfc\u51fa CSV"}
+                              </a>
+                              <a
+                                href={`/api/reports/download?job_id=${activeJobId}&format=json`}
+                                target="_blank"
+                                className="inline-flex items-center px-3 py-2 bg-white hover:bg-slate-50 text-slate-700 rounded-lg text-sm font-medium border border-slate-200 shadow-sm transition-all"
+                              >
+                                {"\u5bfc\u51fa JSON"}
+                              </a>
+                            </div>
                           )}
                         </div>
 
@@ -1030,7 +1491,7 @@ export default function HomePage() {
                       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                         <div className="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-between">
                           <div>
-                            <p className="text-gray-500 dark:text-gray-400 text-xs font-medium uppercase tracking-wider">总问题</p>
+                            <p className="text-gray-500 dark:text-gray-400 text-xs font-medium uppercase tracking-wider">{"\u95ee\u9898\u603b\u6570"}</p>
                             <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">{enrichedIssues.length}</p>
                           </div>
                           <div className="p-2 bg-blue-50 dark:bg-blue-900/20 text-blue-600 rounded-lg">
@@ -1039,7 +1500,7 @@ export default function HomePage() {
                         </div>
                         <div className="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-between">
                           <div>
-                            <p className="text-gray-500 dark:text-gray-400 text-xs font-medium uppercase tracking-wider">一致</p>
+                            <p className="text-gray-500 dark:text-gray-400 text-xs font-medium uppercase tracking-wider">{"\u4e00\u81f4\u6027\u914d\u5bf9"}</p>
                             <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">{consistencyPairs.length}</p>
                           </div>
                           <div className="p-2 bg-green-50 dark:bg-green-900/20 text-green-600 rounded-lg">
@@ -1048,7 +1509,7 @@ export default function HomePage() {
                         </div>
                         <div className="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-between">
                           <div>
-                            <p className="text-gray-500 dark:text-gray-400 text-xs font-medium uppercase tracking-wider">冲突</p>
+                            <p className="text-gray-500 dark:text-gray-400 text-xs font-medium uppercase tracking-wider">{"\u51b2\u7a81\u9879"}</p>
                             <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">{conflictPairs.length}</p>
                           </div>
                           <div className="p-2 bg-red-50 dark:bg-red-900/20 text-red-600 rounded-lg">
@@ -1057,7 +1518,7 @@ export default function HomePage() {
                         </div>
                         <div className="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-between">
                           <div>
-                            <p className="text-gray-500 dark:text-gray-400 text-xs font-medium uppercase tracking-wider">PDF问题</p>
+                            <p className="text-gray-500 dark:text-gray-400 text-xs font-medium uppercase tracking-wider">{"AI \u95ee\u9898\u6570"}</p>
                             <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">{enrichedIssues.filter(i => i.source === 'ai').length}</p>
                           </div>
                           <div className="p-2 bg-yellow-50 dark:bg-yellow-900/20 text-yellow-600 rounded-lg">
@@ -1086,6 +1547,8 @@ export default function HomePage() {
                         }}
                         job_id={activeJobId || undefined}
                         onIssueClick={setSelectedIssue}
+                        onIgnoreIssue={handleIgnoreIssue}
+                        ignoringIssueId={ignoringIssueId}
                       />
                     </div>
                   )}
@@ -1093,7 +1556,7 @@ export default function HomePage() {
               ) : (
                 <div className="flex flex-col items-center justify-center flex-1 h-full">
                   <div className="w-16 h-16 border-4 border-gray-200 border-t-indigo-500 rounded-full animate-spin"></div>
-                  <p className="mt-4 text-gray-500">正在加载任务详情...</p>
+                  <p className="mt-4 text-gray-500">{"\u6b63\u5728\u52a0\u8f7d\u5206\u6790\u7ed3\u679c\uff0c\u8bf7\u7a0d\u5019..."}</p>
                 </div>
               )}
             </div>
@@ -1102,7 +1565,7 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* Batch Upload Modal (局限于某单位) */}
+      {/* Batch Upload Modal (闂傚倷娴囬褏鎹㈤幒妤€纾婚柟鐗堟緲绾惧鏌熼崜褏甯涢柍閿嬪浮閺屾盯寮撮妸銉ヮ潻婵犳鍠栭崯鎵閹烘せ鈧箓骞嬪┑鍡忔嫬闁诲孩顔栭崰鏍€﹂悜鐣屽祦闁搞儺鍓﹂弫鍡涙煃瑜滈崜娑氬垝閸懇鍋撻敐搴樺亾? */}
       {isUploadOpen && selectedOrgId && (
         <BatchUploadModal
           orgUnitId={selectedOrgId}
@@ -1123,12 +1586,12 @@ export default function HomePage() {
               };
               refreshWithRetry();
             }
-            setToast({ message: "上传完成", type: "success" });
+            setToast({ message: "浠诲姟瀹屾垚锛屽垪琛ㄥ凡鑷姩鍒锋柊", type: "success" });
           }}
         />
       )}
 
-      {/* Global Batch Upload Modal (全区模式) */}
+      {/* Global Batch Upload Modal (闂傚倸鍊烽懗鍫曗€﹂崼銏″床闁割偁鍎辩粈澶屸偓鍏夊亾闁逞屽墯缁傚秹骞栨笟鍥ㄦ櫖濠殿噯缍€閸嬫劙宕伴弽顓炲瀭闁诡垎鍛闂佹悶鍎弲鈺呭绩? */}
       {isGlobalUploadOpen && (
         <BatchUploadModal
           defaultDocType={uploadDocType}
@@ -1148,7 +1611,7 @@ export default function HomePage() {
               }
             };
             refreshWithRetry();
-            setToast({ message: "全区批量上传完成", type: "success" });
+            setToast({ message: "\u6279\u91cf\u4e0a\u4f20\u4efb\u52a1\u5df2\u63d0\u4ea4\uff0c\u7cfb\u7edf\u6b63\u5728\u540e\u53f0\u5206\u6790", type: "success" });
           }}
         />
       )}
@@ -1158,7 +1621,7 @@ export default function HomePage() {
         isOpen={isAssociateOpen}
         onClose={() => setIsAssociateOpen(false)}
         jobId={associatedJobId || ''}
-        filename={jobList.find(j => j.job_id === associatedJobId)?.filename || job?.filename || '未知文件'}
+        filename={jobList.find(j => j.job_id === associatedJobId)?.filename || job?.filename || "\u672a\u547d\u540d\u6587\u4ef6"}
         onAssociate={async (orgId) => {
           try {
             if (associatedJobId) {
@@ -1188,13 +1651,20 @@ export default function HomePage() {
               }
               setOrgRefreshKey(prev => prev + 1);
               setIsAssociateOpen(false);
-              setToast({ message: "任务归属单位已更新", type: "success" });
+              setToast({ message: "\u90e8\u95e8\u5173\u8054\u5df2\u66f4\u65b0", type: "success" });
             }
           } catch (e) {
             console.error(e);
-            setToast({ message: "更新任务归属失败", type: "error" });
+            setToast({ message: "\u90e8\u95e8\u5173\u8054\u66f4\u65b0\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5", type: "error" });
           }
         }}
+      />
+      <StructuredCleanupDialog
+        isOpen={!!structuredCleanupPreview}
+        preview={structuredCleanupPreview}
+        isExecuting={isStructuredCleanupExecuting}
+        onClose={closeStructuredCleanupDialog}
+        onConfirm={confirmStructuredCleanup}
       />
       {/* Toast Notification */}
       {toast && (
@@ -1214,3 +1684,4 @@ export default function HomePage() {
     </div>
   );
 }
+

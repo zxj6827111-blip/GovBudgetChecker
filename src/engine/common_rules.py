@@ -473,28 +473,45 @@ class CMM004_CodeMirrorConsistency(Rule):
         only_expense = sorted(set(expense) - set(income))
 
         issues: List[Issue] = []
-        if diffs:
-            sample = ", ".join(
-                f"{code}:{income[code]}!={expense[code]}" for code in diffs[:3]
-            )
+        anchors = find_table_anchors(doc)
+        candidate_pages = []
+        for table_name in ("\u6536\u5165\u51b3\u7b97\u8868", "\u652f\u51fa\u51b3\u7b97\u8868", "\u6536\u5165\u652f\u51fa\u51b3\u7b97\u603b\u8868"):
+            candidate_pages.extend(anchors.get(table_name, []))
+        page_number = min(candidate_pages) if candidate_pages else 1
+        base_location = {"page": page_number, "table": "\u6536\u5165/\u652f\u51fa\u603b\u8868"}
+
+        for code in diffs:
+            income_value = income[code]
+            expense_value = expense[code]
+            diff_value = abs(income_value - expense_value)
             issues.append(
                 self._issue(
-                    f"\u7c7b\u6b3e\u9879\u91d1\u989d\u4e0d\u4e00\u81f4\uff0c\u5171{len(diffs)}\u9879",
-                    {"page": 1},
+                    f"\u7c7b\u6b3e\u9879\u7f16\u7801 {code} \u91d1\u989d\u4e0d\u4e00\u81f4",
+                    {**base_location, "row": code},
                     "warn",
-                    evidence_text=sample,
+                    evidence_text=(
+                        f"code={code}; income={income_value}; expense={expense_value}; diff={diff_value}"
+                    ),
                 )
             )
 
-        if only_income or only_expense:
-            sample_income = ",".join(only_income[:3]) if only_income else "-"
-            sample_expense = ",".join(only_expense[:3]) if only_expense else "-"
+        for code in only_income:
             issues.append(
                 self._issue(
-                    "\u6536\u5165/\u652f\u51fa\u603b\u8868\u7c7b\u6b3e\u9879\u7f16\u7801\u96c6\u4e0d\u5b8c\u5168\u4e00\u81f4",
-                    {"page": 1},
+                    f"\u7c7b\u6b3e\u9879\u7f16\u7801 {code} \u4ec5\u51fa\u73b0\u5728\u6536\u5165\u8868",
+                    {**base_location, "row": code},
                     "warn",
-                    evidence_text=f"income_only={sample_income}; expense_only={sample_expense}",
+                    evidence_text=f"income_only={code}",
+                )
+            )
+
+        for code in only_expense:
+            issues.append(
+                self._issue(
+                    f"\u7c7b\u6b3e\u9879\u7f16\u7801 {code} \u4ec5\u51fa\u73b0\u5728\u652f\u51fa\u8868",
+                    {**base_location, "row": code},
+                    "warn",
+                    evidence_text=f"expense_only={code}",
                 )
             )
 

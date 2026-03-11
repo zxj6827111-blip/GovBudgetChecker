@@ -12,6 +12,8 @@ from src.schemas.issues import JobContext, AnalysisConfig, IssueItem
 from src.engine.rules_v33 import ALL_RULES as FINAL_ALL_RULES, build_document, Issue, Document
 from src.engine.budget_rules import ALL_BUDGET_RULES
 from src.engine.common_rules import ALL_COMMON_RULES
+from src.utils.issue_bbox import PDFBBoxLocator
+from src.utils.issue_location import normalize_issue_location
 
 logger = logging.getLogger(__name__)
 
@@ -80,17 +82,28 @@ class EngineRuleRunner:
             evidence_item["bbox"] = bbox
         return [evidence_item]
 
-    def _issue_to_finding(self, issue: Issue, rule_id: Optional[str] = None) -> IssueItem:
+    def _issue_to_finding(
+        self,
+        issue: Issue,
+        rule_id: Optional[str] = None,
+        document: Optional[Document] = None,
+    ) -> IssueItem:
         raw_location = getattr(issue, "location", {}) or {}
-        location = dict(raw_location)
+        location = normalize_issue_location(
+            rule_id=rule_id or getattr(issue, "rule", ""),
+            location=raw_location,
+            message=getattr(issue, "message", "") or "",
+            evidence_text=getattr(issue, "evidence_text", None) or getattr(issue, "message", "") or "",
+            document=document,
+        )
         page_number = self._normalize_page(
-            location.get("page", getattr(issue, "page_number", 1))
+            location.get("page", getattr(issue, "page_number", None))
         )
         location.setdefault("page", page_number)
 
         resolved_rule_id = str(rule_id or getattr(issue, "rule", "") or "UNKNOWN")
         suggestion: Optional[str] = None
-        if "page" not in raw_location:
+        if "page" not in raw_location and "pages" not in location:
             suggestion = (
                 "Page position was not precisely located. "
                 "Search the PDF with the evidence snippet to verify."
@@ -184,57 +197,62 @@ class EngineRuleRunner:
             "total_findings": 0
         }
 
-        # Execute selected rule set.
-        for rule_obj in selected_rules:
-            rule_id = rule_obj.code
-            
-            try:
-                start_time = time.time()
+        bbox_locator = PDFBBoxLocator(job_context.pdf_path)
+        try:
+            # Execute selected rule set.
+            for rule_obj in selected_rules:
+                rule_id = rule_obj.code
                 
-                # 鐩存帴璋冪敤瑙勫垯瀵硅薄鐨刟pply鏂规硶
-                issues = rule_obj.apply(document)
-                
-                int((time.time() - start_time) * 1000)
-                
-                # 杞崲涓篒ssueItem鏍煎紡
-                findings = []
-                for issue in issues:
-                    try:
-                        finding = self._issue_to_finding(issue, rule_id=rule_id)
-                        findings.append(finding)
-                    except Exception as e:
-                        logger.error(f"Failed to convert issue to IssueItem: {e}")
-                        import traceback
-                        logger.error(f"Conversion error details: {traceback.format_exc()}")
-                        continue
-                
-                self._stats["successful_rules"] += 1
-                all_findings.extend(findings)
-                self._stats["total_findings"] += len(findings)
-                
-                logger.debug(f"Rule {rule_id} found {len(findings)} issues")
-                
-            except Exception as e:
-                self._stats["failed_rules"] += 1
-                logger.error(f"Rule {rule_id} execution failed: {e}")
-                import traceback
-                logger.error(f"Exception details: {traceback.format_exc()}")
-                
-                # 鍒涘缓澶辫触璁板綍
-                if config.record_rule_failures:
-                    failure_item = IssueItem(
-                        id=str(uuid.uuid4()),
-                        source="rule",
-                        rule_id=rule_id,
-                        title=f"Rule execution failed: {rule_obj.desc}",
-                        message=f"Rule execution error: {str(e)}",
-                        severity="low",
-                        location={"page": 1},
-                        page_number=1,
-                        evidence=[{"page": 1, "text": f"Execution error: {str(e)}", "text_snippet": f"Execution error: {str(e)}"}],
-                        why_not=f"EXECUTION_ERROR: {str(e)}"
-                    )
-                    all_findings.append(failure_item)
+                try:
+                    start_time = time.time()
+                    
+                    # 鐩存帴璋冪敤瑙勫垯瀵硅薄鐨刟pply鏂规硶
+                    issues = rule_obj.apply(document)
+                    
+                    int((time.time() - start_time) * 1000)
+                    
+                    # 杞崲涓篒ssueItem鏍煎紡
+                    findings = []
+                    for issue in issues:
+                        try:
+                            finding = self._issue_to_finding(issue, rule_id=rule_id, document=document)
+                            finding = bbox_locator.locate(finding)
+                            findings.append(finding)
+                        except Exception as e:
+                            logger.error(f"Failed to convert issue to IssueItem: {e}")
+                            import traceback
+                            logger.error(f"Conversion error details: {traceback.format_exc()}")
+                            continue
+                    
+                    self._stats["successful_rules"] += 1
+                    all_findings.extend(findings)
+                    self._stats["total_findings"] += len(findings)
+                    
+                    logger.debug(f"Rule {rule_id} found {len(findings)} issues")
+                    
+                except Exception as e:
+                    self._stats["failed_rules"] += 1
+                    logger.error(f"Rule {rule_id} execution failed: {e}")
+                    import traceback
+                    logger.error(f"Exception details: {traceback.format_exc()}")
+                    
+                    # 鍒涘缓澶辫触璁板綍
+                    if config.record_rule_failures:
+                        failure_item = IssueItem(
+                            id=str(uuid.uuid4()),
+                            source="rule",
+                            rule_id=rule_id,
+                            title=f"Rule execution failed: {rule_obj.desc}",
+                            message=f"Rule execution error: {str(e)}",
+                            severity="low",
+                            location={"page": 1},
+                            page_number=1,
+                            evidence=[{"page": 1, "text": f"Execution error: {str(e)}", "text_snippet": f"Execution error: {str(e)}"}],
+                            why_not=f"EXECUTION_ERROR: {str(e)}"
+                        )
+                        all_findings.append(failure_item)
+        finally:
+            bbox_locator.close()
         
         logger.info(f"Engine rules completed: {len(all_findings)} findings from {len(selected_rules)} rules "
                    f"(success: {self._stats['successful_rules']}, failed: {self._stats['failed_rules']})")
