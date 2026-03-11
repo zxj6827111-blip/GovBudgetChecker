@@ -36,6 +36,7 @@ services:
       - RULES_FILE_PATH=/app/engine/rules_v33.py
       - GOVBUDGET_AUTH_ENABLED=${GOVBUDGET_AUTH_ENABLED:-true}
       - GOVBUDGET_API_KEY=${GOVBUDGET_API_KEY:-}
+      - USER_SESSION_SECRET=${USER_SESSION_SECRET:-}
       # AI provider pass-through
       - ARK_API_KEY=${ARK_API_KEY:-}
       - ARK_BASE_URL=${ARK_BASE_URL:-}

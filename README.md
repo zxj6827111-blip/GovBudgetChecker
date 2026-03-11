@@ -138,6 +138,7 @@ make test
 - `UPLOAD_DIR`：上传和任务产物目录（生产必须挂载持久化卷）
 - `MAX_UPLOAD_MB`：上传大小限制（默认 30）
 - `MAX_UPLOAD_PAGES`：PDF 页数限制（默认 800）
+- `USER_SESSION_SECRET`：登录会话签名密钥；生产环境建议单独配置，保证多 worker / 重启后登录态稳定
 - `UPLOAD_CHUNK_BYTES`：流式写入分块大小
 - `AUDIT_LOG_PATH`：管理员敏感操作审计日志输出位置
 - `AI_ASSIST_ENABLED`：是否启用 AI 辅助（默认 `true`）
@@ -148,6 +149,7 @@ make test
 ## 生产强化建议
 - 上传产物与任务目录建议放在持久化卷，容器重启后仍可恢复；若上云要做多实例，可进一步接入对象存储。
 - `ready` 端点会额外检查上传目录、数据库、AI 服务、队列状态以及审计日志目录是否可写。
+- 登录会话已改为签名令牌；生产环境建议固定配置 `USER_SESSION_SECRET`（或至少保持 `GOVBUDGET_API_KEY` 稳定），避免多 worker / 重启后会话失效。
 - 管理员操作（组织创建/修改/删除、导入、批量重分析、结构化清理）会写入 `AUDIT_LOG_PATH`。
 - 建议把反向代理上传大小限制与 `MAX_UPLOAD_MB`、`MAX_UPLOAD_PAGES` 保持一致。
 - 建议定期备份 `UPLOAD_DIR`、数据库和 `AUDIT_LOG_PATH`，并至少做一次恢复演练。

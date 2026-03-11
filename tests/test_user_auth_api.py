@@ -100,6 +100,29 @@ def test_logout_invalidates_session(client: TestClient):
     assert expired_response.status_code == 401
 
 
+def test_session_token_survives_user_store_reset(client: TestClient):
+    token = _login(client, "admin", ADMIN_PASSWORD)
+
+    reset_user_store()
+
+    me_response = client.get("/api/auth/me", headers=_headers(token))
+    assert me_response.status_code == 200
+    assert me_response.json()["user"]["username"] == "admin"
+    assert me_response.json()["user"]["is_admin"] is True
+
+
+def test_logout_revocation_survives_user_store_reset(client: TestClient):
+    token = _login(client, "admin", ADMIN_PASSWORD)
+
+    logout_response = client.post("/api/auth/logout", headers=_headers(token))
+    assert logout_response.status_code == 200
+
+    reset_user_store()
+
+    expired_response = client.get("/api/auth/me", headers=_headers(token))
+    assert expired_response.status_code == 401
+
+
 def test_password_reset_flow(client: TestClient):
     admin_token = _login(client, "admin", ADMIN_PASSWORD)
 
@@ -137,6 +160,26 @@ def test_password_reset_flow(client: TestClient):
         headers=_headers(),
     )
     assert new_password_login.status_code == 200
+
+
+def test_created_user_is_visible_after_user_store_reset(client: TestClient):
+    admin_token = _login(client, "admin", ADMIN_PASSWORD)
+
+    create_response = client.post(
+        "/api/users",
+        headers=_headers(admin_token),
+        json={"username": "shared_user", "password": "SharedPass123"},
+    )
+    assert create_response.status_code == 200
+
+    reset_user_store()
+
+    login_response = client.post(
+        "/api/auth/login",
+        json={"username": "shared_user", "password": "SharedPass123"},
+        headers=_headers(),
+    )
+    assert login_response.status_code == 200
 
 
 def test_change_own_password_requires_old_password(client: TestClient):

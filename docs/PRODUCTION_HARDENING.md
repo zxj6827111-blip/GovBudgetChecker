@@ -15,6 +15,9 @@
   - `MAX_UPLOAD_MB`
   - `MAX_UPLOAD_PAGES`
   - 重复上传检测（同组织下同 checksum，且年份/类型不冲突时拦截）
+- 登录会话
+  - 会话令牌已支持多 worker / 重启后继续校验
+  - 生产环境建议固定配置 `USER_SESSION_SECRET`
 - 审计日志
   - 管理员操作会写入 `AUDIT_LOG_PATH`
 - 健康检查增强
@@ -77,6 +80,7 @@ UPLOAD_DIR=/app/uploads
 MAX_UPLOAD_MB=30
 MAX_UPLOAD_PAGES=800
 AUDIT_LOG_PATH=/app/logs/admin-actions.jsonl
+USER_SESSION_SECRET=<strong-session-secret>
 DATABASE_URL=postgres://...
 JOB_QUEUE_ROLE=api
 JOB_QUEUE_INLINE_FALLBACK=false
