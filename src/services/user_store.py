@@ -24,10 +24,11 @@ _DEFAULT_DATA_DIR = _TEST_DATA_DIR if _TESTING else _REPO_DATA_DIR
 _HASH_ALGO = "pbkdf2_sha256"
 _DEFAULT_ITERATIONS = int(os.getenv("USER_PASSWORD_ITERATIONS", "260000"))
 _DEFAULT_PASSWORD_MIN_LENGTH = int(os.getenv("USER_PASSWORD_MIN_LENGTH", "6"))
+_SESSION_TOKEN_PREFIX = "gbcs1"
 
 
 class UserStore:
-    """File-backed user store with in-memory session tokens."""
+    """File-backed user store with stateless signed session tokens."""
 
     def __init__(
         self,
@@ -67,10 +68,10 @@ class UserStore:
             os.getenv("DEFAULT_LEGACY_PASSWORD", "change_me_123").strip()
             or "change_me_123"
         )
+        self._session_secret = self._resolve_session_secret()
 
         self._lock = threading.RLock()
         self._users: Dict[str, Dict[str, Any]] = {}
-        self._sessions: Dict[str, Dict[str, Any]] = {}
 
         self._ensure_data_dir()
         self._load_users()
@@ -117,6 +118,14 @@ class UserStore:
         }
 
     @staticmethod
+    def _coerce_session_version(value: Any) -> int:
+        try:
+            session_version = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return max(session_version, 0)
+
+    @staticmethod
     def _serialize_user(user: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "username": str(user.get("username") or ""),
@@ -125,6 +134,9 @@ class UserStore:
             "is_active": bool(user.get("is_active", True)),
             "created_at": float(user.get("created_at") or 0.0),
             "updated_at": float(user.get("updated_at") or 0.0),
+            "session_version": UserStore._coerce_session_version(
+                user.get("session_version")
+            ),
         }
 
     @staticmethod
@@ -191,58 +203,163 @@ class UserStore:
         )
         return self._hash_password(self._legacy_fallback_password), True
 
+    def _resolve_session_secret(self) -> bytes:
+        raw_secret = (
+            os.getenv("USER_SESSION_SECRET", "").strip()
+            or os.getenv("GOVBUDGET_API_KEY", "").strip()
+        )
+        if raw_secret:
+            return raw_secret.encode("utf-8")
+
+        fallback = "test-user-session-secret" if _TESTING else "dev-user-session-secret"
+        if not _TESTING:
+            logger.warning(
+                "USER_SESSION_SECRET and GOVBUDGET_API_KEY are both empty; "
+                "falling back to a development-only session secret."
+            )
+        return fallback.encode("utf-8")
+
+    @staticmethod
+    def _b64url_encode(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _b64url_decode(text: str) -> bytes:
+        padding = "=" * (-len(text) % 4)
+        return base64.urlsafe_b64decode((text + padding).encode("ascii"))
+
+    def _sign_session_body(self, body_text: str) -> str:
+        signature = hmac.new(
+            self._session_secret,
+            body_text.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        return self._b64url_encode(signature)
+
+    def _build_session_token_locked(self, user: Dict[str, Any]) -> str:
+        now = int(time.time())
+        payload = {
+            "u": str(user.get("username") or ""),
+            "iat": now,
+            "exp": now + self._session_ttl_seconds,
+            "sv": self._coerce_session_version(user.get("session_version")),
+        }
+        body_text = self._b64url_encode(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        )
+        signature = self._sign_session_body(body_text)
+        return f"{_SESSION_TOKEN_PREFIX}.{body_text}.{signature}"
+
+    def _parse_session_token_locked(
+        self,
+        token: str,
+        *,
+        allow_expired: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        text = str(token or "").strip()
+        if not text:
+            return None
+
+        parts = text.split(".")
+        if len(parts) != 3 or parts[0] != _SESSION_TOKEN_PREFIX:
+            return None
+
+        body_text, signature_text = parts[1], parts[2]
+        expected_signature = self._sign_session_body(body_text)
+        if not hmac.compare_digest(signature_text, expected_signature):
+            return None
+
+        try:
+            payload = json.loads(self._b64url_decode(body_text).decode("utf-8"))
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+
+        username = str(payload.get("u") or "").strip()
+        if not username:
+            return None
+
+        try:
+            issued_at = int(payload.get("iat") or 0)
+            expires_at = int(payload.get("exp") or 0)
+        except (TypeError, ValueError):
+            return None
+        if issued_at <= 0 or expires_at <= 0 or expires_at < issued_at:
+            return None
+        if not allow_expired and expires_at <= int(time.time()):
+            return None
+
+        return {
+            "username": username,
+            "issued_at": issued_at,
+            "expires_at": expires_at,
+            "session_version": self._coerce_session_version(payload.get("sv")),
+        }
+
     def _ensure_data_dir(self) -> None:
         self._users_file.parent.mkdir(parents=True, exist_ok=True)
 
     def _load_users(self) -> None:
         with self._lock:
-            self._users = {}
-            changed = False
+            self._load_users_locked()
 
-            if self._users_file.exists():
-                try:
-                    payload = json.loads(self._users_file.read_text(encoding="utf-8"))
-                    rows = payload.get("users", [])
-                    if isinstance(rows, list):
-                        now = time.time()
-                        for row in rows:
-                            if not isinstance(row, dict):
-                                continue
-                            username = str(row.get("username") or "").strip()
-                            canonical = self._normalize_username(username)
-                            if not canonical:
-                                continue
-                            created = float(row.get("created_at") or now)
-                            updated = float(row.get("updated_at") or created)
+    def _load_users_locked(self) -> None:
+        self._users = {}
+        changed = False
 
-                            raw_password_hash = str(row.get("password_hash") or "").strip()
-                            legacy_password = str(row.get("password") or "")
-                            password_hash, migrated = self._resolve_loaded_password_hash(
-                                canonical,
-                                username,
-                                raw_password_hash,
-                                legacy_password,
-                            )
-                            if migrated:
-                                changed = True
+        if self._users_file.exists():
+            try:
+                payload = json.loads(self._users_file.read_text(encoding="utf-8"))
+                rows = payload.get("users", [])
+                if isinstance(rows, list):
+                    now = time.time()
+                    for row in rows:
+                        if not isinstance(row, dict):
+                            continue
+                        username = str(row.get("username") or "").strip()
+                        canonical = self._normalize_username(username)
+                        if not canonical:
+                            continue
+                        created = float(row.get("created_at") or now)
+                        updated = float(row.get("updated_at") or created)
 
-                            self._users[canonical] = {
-                                "username": username,
-                                "password_hash": password_hash,
-                                "is_admin": bool(row.get("is_admin", False)),
-                                "is_active": bool(row.get("is_active", True)),
-                                "created_at": created,
-                                "updated_at": updated,
-                            }
-                except Exception:
-                    logger.exception("Failed to load user store from %s", self._users_file)
-                    self._users = {}
+                        raw_password_hash = str(row.get("password_hash") or "").strip()
+                        legacy_password = str(row.get("password") or "")
+                        password_hash, migrated = self._resolve_loaded_password_hash(
+                            canonical,
+                            username,
+                            raw_password_hash,
+                            legacy_password,
+                        )
+                        if migrated:
+                            changed = True
 
-            if self._ensure_default_admin_locked():
-                changed = True
+                        if "session_version" not in row:
+                            changed = True
 
-            if changed:
-                self._save_users_locked()
+                        self._users[canonical] = {
+                            "username": username,
+                            "password_hash": password_hash,
+                            "is_admin": bool(row.get("is_admin", False)),
+                            "is_active": bool(row.get("is_active", True)),
+                            "created_at": created,
+                            "updated_at": updated,
+                            "session_version": self._coerce_session_version(
+                                row.get("session_version")
+                            ),
+                        }
+            except Exception:
+                logger.exception("Failed to load user store from %s", self._users_file)
+                self._users = {}
+
+        if self._ensure_default_admin_locked():
+            changed = True
+
+        if changed:
+            self._save_users_locked()
 
     def _save_users_locked(self) -> None:
         rows = [self._serialize_user(user) for user in self._users.values()]
@@ -251,10 +368,29 @@ class UserStore:
             "users": rows,
             "updated_at": time.time(),
         }
-        self._users_file.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+
+        tmp_path: Optional[Path] = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=str(self._users_file.parent),
+                prefix=f"{self._users_file.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as tmp_file:
+                json.dump(payload, tmp_file, ensure_ascii=False, indent=2)
+                tmp_file.write("\n")
+                tmp_file.flush()
+                tmp_path = Path(tmp_file.name)
+            if tmp_path is not None:
+                tmp_path.replace(self._users_file)
+        finally:
+            if tmp_path is not None and tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
 
     def _ensure_default_admin_locked(self) -> bool:
         canonical = self._normalize_username(self._default_admin_username)
@@ -270,6 +406,7 @@ class UserStore:
                 "is_active": True,
                 "created_at": now,
                 "updated_at": now,
+                "session_version": 0,
             }
             changed = True
             logger.info("Seeded default admin account: %s", self._default_admin_username)
@@ -284,30 +421,18 @@ class UserStore:
             if not self._is_password_hash(current_hash):
                 user["password_hash"] = self._hash_password(self._default_admin_password)
                 changed = True
+            if "session_version" not in user:
+                user["session_version"] = 0
+                changed = True
             if changed:
                 user["updated_at"] = now
 
         return changed
 
-    def _cleanup_sessions_locked(self) -> None:
-        now = time.time()
-        expired = [
-            token
-            for token, session in self._sessions.items()
-            if float(session.get("expires_at") or 0.0) <= now
-        ]
-        for token in expired:
-            self._sessions.pop(token, None)
-
-    def _drop_sessions_for_username_locked(self, username: str) -> None:
-        canonical = self._normalize_username(username)
-        stale_tokens = [
-            token
-            for token, session in self._sessions.items()
-            if self._normalize_username(str(session.get("username") or "")) == canonical
-        ]
-        for token in stale_tokens:
-            self._sessions.pop(token, None)
+    @staticmethod
+    def _bump_session_version_locked(user: Dict[str, Any]) -> None:
+        current = UserStore._coerce_session_version(user.get("session_version"))
+        user["session_version"] = current + 1
 
     def _active_admin_count_locked(self) -> int:
         return sum(
@@ -318,6 +443,7 @@ class UserStore:
 
     def list_users(self) -> List[Dict[str, Any]]:
         with self._lock:
+            self._load_users_locked()
             users = [self._public_user(user) for user in self._users.values()]
             users.sort(key=lambda item: item["username"].lower())
             return users
@@ -334,6 +460,7 @@ class UserStore:
         now = time.time()
 
         with self._lock:
+            self._load_users_locked()
             if canonical in self._users:
                 raise ValueError("username already exists")
 
@@ -344,6 +471,7 @@ class UserStore:
                 "is_active": True,
                 "created_at": now,
                 "updated_at": now,
+                "session_version": 0,
             }
             self._save_users_locked()
             return self._public_user(self._users[canonical])
@@ -358,11 +486,14 @@ class UserStore:
         canonical = self._normalize_username(self._validate_username(username))
 
         with self._lock:
+            self._load_users_locked()
             user = self._users.get(canonical)
             if user is None:
                 raise KeyError("user not found")
 
             changed = False
+            should_revoke_sessions = False
+
             if is_admin is not None:
                 new_is_admin = bool(is_admin)
                 if bool(user.get("is_admin")) != new_is_admin:
@@ -388,15 +519,17 @@ class UserStore:
                     user["is_active"] = new_is_active
                     changed = True
                     if not new_is_active:
-                        self._drop_sessions_for_username_locked(user["username"])
+                        should_revoke_sessions = True
 
             if password is not None:
                 clean_password = self._validate_new_password(password)
                 user["password_hash"] = self._hash_password(clean_password)
-                self._drop_sessions_for_username_locked(user["username"])
+                should_revoke_sessions = True
                 changed = True
 
             if changed:
+                if should_revoke_sessions:
+                    self._bump_session_version_locked(user)
                 user["updated_at"] = time.time()
                 self._save_users_locked()
 
@@ -406,6 +539,7 @@ class UserStore:
         canonical = self._normalize_username(self._validate_username(username))
 
         with self._lock:
+            self._load_users_locked()
             user = self._users.get(canonical)
             if user is None:
                 raise KeyError("user not found")
@@ -421,7 +555,6 @@ class UserStore:
                 raise ValueError("at least one active admin must remain")
 
             del self._users[canonical]
-            self._drop_sessions_for_username_locked(user["username"])
             self._save_users_locked()
 
     def login(self, username: str, password: str) -> Tuple[str, Dict[str, Any]]:
@@ -429,6 +562,7 @@ class UserStore:
         plain_password = self._require_password(password)
 
         with self._lock:
+            self._load_users_locked()
             user = self._users.get(canonical)
             if user is None:
                 raise KeyError("user not found")
@@ -439,14 +573,7 @@ class UserStore:
             if not self._verify_password(plain_password, password_hash):
                 raise PermissionError("invalid username or password")
 
-            self._cleanup_sessions_locked()
-            now = time.time()
-            token = secrets.token_urlsafe(32)
-            self._sessions[token] = {
-                "username": user["username"],
-                "issued_at": now,
-                "expires_at": now + self._session_ttl_seconds,
-            }
+            token = self._build_session_token_locked(user)
             return token, self._public_user(user)
 
     def change_password(
@@ -460,6 +587,7 @@ class UserStore:
         new_plain = self._validate_new_password(new_password)
 
         with self._lock:
+            self._load_users_locked()
             user = self._users.get(canonical)
             if user is None:
                 raise KeyError("user not found")
@@ -474,31 +602,54 @@ class UserStore:
                 raise ValueError("new password must be different from old password")
 
             user["password_hash"] = self._hash_password(new_plain)
+            self._bump_session_version_locked(user)
             user["updated_at"] = time.time()
-            self._drop_sessions_for_username_locked(user["username"])
             self._save_users_locked()
 
     def revoke_session(self, token: str) -> None:
         if not token:
             return
+
         with self._lock:
-            self._sessions.pop(token, None)
+            payload = self._parse_session_token_locked(token, allow_expired=True)
+            if payload is None:
+                return
+
+            self._load_users_locked()
+            canonical = self._normalize_username(str(payload.get("username") or ""))
+            user = self._users.get(canonical)
+            if user is None:
+                return
+
+            current_version = self._coerce_session_version(user.get("session_version"))
+            token_version = self._coerce_session_version(payload.get("session_version"))
+            if current_version != token_version:
+                return
+
+            self._bump_session_version_locked(user)
+            user["updated_at"] = time.time()
+            self._save_users_locked()
 
     def get_user_by_token(self, token: str) -> Optional[Dict[str, Any]]:
         if not token:
             return None
 
         with self._lock:
-            self._cleanup_sessions_locked()
-            session = self._sessions.get(token)
-            if session is None:
+            payload = self._parse_session_token_locked(token)
+            if payload is None:
                 return None
 
-            canonical = self._normalize_username(str(session.get("username") or ""))
+            self._load_users_locked()
+            canonical = self._normalize_username(str(payload.get("username") or ""))
             user = self._users.get(canonical)
             if user is None or not bool(user.get("is_active", True)):
-                self._sessions.pop(token, None)
                 return None
+
+            current_version = self._coerce_session_version(user.get("session_version"))
+            token_version = self._coerce_session_version(payload.get("session_version"))
+            if current_version != token_version:
+                return None
+
             return self._public_user(user)
 
 

@@ -50,6 +50,7 @@ git status --short
 Check `.env` contains:
 - `GOVBUDGET_AUTH_ENABLED=true`
 - `GOVBUDGET_API_KEY=<non-empty>`
+- `USER_SESSION_SECRET=<non-empty>`
 - `UPLOAD_DIR=/app/uploads`
 - `DATABASE_URL=<reachable>`
 - `AI_EXTRACTOR_URL=<reachable>`

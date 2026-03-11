@@ -5,6 +5,7 @@
 - Confirm env vars:
   - `GOVBUDGET_AUTH_ENABLED=true`
   - `GOVBUDGET_API_KEY` is non-empty
+  - `USER_SESSION_SECRET` is fixed and non-empty
   - `UPLOAD_DIR` points to persistent volume path
   - `DATABASE_URL` reachable from runtime
   - `AI_EXTRACTOR_URL` reachable from runtime
