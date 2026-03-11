@@ -10,7 +10,12 @@ import OrganizationDetailView from "./components/OrganizationDetailView";
 import AssociateDialog from "./components/AssociateDialog";
 import PipelineStatus from "./components/PipelineStatus";
 import BatchUploadModal from "./components/BatchUploadModal";
+import BatchRematchDialog, { BatchRematchPayload } from "./components/BatchRematchDialog";
 import QCResultView from "./components/QCResultView";
+import ReanalyzeProgressDialog, {
+  ReanalyzeBatchPayload,
+  ReanalyzeLiveStatus,
+} from "./components/ReanalyzeProgressDialog";
 import StructuredCleanupDialog, {
   StructuredCleanupPreviewPayload,
 } from "./components/StructuredCleanupDialog";
@@ -132,6 +137,7 @@ export default function HomePage() {
   // Polling
   const pollTimer = useRef<any>(null);
   const listPollTimer = useRef<any>(null);
+  const reanalyzeProgressTimer = useRef<any>(null);
 
   // Stuck Detection
   const [progressHistory, setProgressHistory] = useState<number[]>([]);
@@ -145,6 +151,13 @@ export default function HomePage() {
   const [associatedJobId, setAssociatedJobId] = useState<string | null>(null);
   const [isGlobalReanalyzing, setIsGlobalReanalyzing] = useState(false);
   const [isReanalyzing, setIsReanalyzing] = useState(false);
+  const [reanalyzeBatch, setReanalyzeBatch] = useState<ReanalyzeBatchPayload | null>(null);
+  const [reanalyzeProgressOpen, setReanalyzeProgressOpen] = useState(false);
+  const [reanalyzeLiveStatuses, setReanalyzeLiveStatuses] = useState<Record<string, ReanalyzeLiveStatus>>({});
+  const [isRematchDialogOpen, setIsRematchDialogOpen] = useState(false);
+  const [isRematchLoading, setIsRematchLoading] = useState(false);
+  const [isRematchApplying, setIsRematchApplying] = useState(false);
+  const [rematchPreview, setRematchPreview] = useState<BatchRematchPayload | null>(null);
   const [structuredCleanupBusyScope, setStructuredCleanupBusyScope] = useState<string | null>(null);
   const [structuredCleanupPreview, setStructuredCleanupPreview] = useState<StructuredCleanupPreviewPayload | null>(null);
   const [structuredCleanupScope, setStructuredCleanupScope] = useState<{
@@ -492,6 +505,107 @@ export default function HomePage() {
     };
   }, [job?.job_id]);
 
+  useEffect(() => {
+    if (reanalyzeProgressTimer.current) {
+      clearTimeout(reanalyzeProgressTimer.current);
+      reanalyzeProgressTimer.current = null;
+    }
+
+    const createdJobs = (reanalyzeBatch?.created || []).filter(
+      (item): item is NonNullable<NonNullable<ReanalyzeBatchPayload["created"]>[number]> =>
+        Boolean(item?.job_id)
+    );
+
+    if (createdJobs.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    const jobIds = createdJobs.map((item) => String(item.job_id));
+    const terminalStatuses = new Set(["done", "completed", "error", "failed"]);
+
+    const pollBatchProgress = async () => {
+      try {
+        const results = await Promise.all(
+          jobIds.map(async (jobId) => {
+            try {
+              const response = await fetch(`/api/jobs/${jobId}/status`, { cache: "no-store" });
+              const payload = await response.json().catch(() => ({}));
+              if (!response.ok) {
+                const message =
+                  String(payload?.detail || payload?.error || "").trim() || `HTTP ${response.status}`;
+                throw new Error(message);
+              }
+              return [jobId, { ...(payload || {}), job_id: jobId }] as const;
+            } catch (error) {
+              return [
+                jobId,
+                {
+                  job_id: jobId,
+                  status: "unknown",
+                  error: error instanceof Error ? error.message : "状态获取失败",
+                },
+              ] as const;
+            }
+          })
+        );
+
+        if (cancelled) {
+          return;
+        }
+
+        const nextStatuses: Record<string, ReanalyzeLiveStatus> = {};
+        let hasActive = false;
+
+        for (const [jobId, payload] of results) {
+          const normalizedStatus = String(payload?.status || "unknown").trim().toLowerCase();
+          if (!terminalStatuses.has(normalizedStatus)) {
+            hasActive = true;
+          }
+          nextStatuses[jobId] = {
+            job_id: jobId,
+            status: payload?.status,
+            progress: typeof payload?.progress === "number" ? payload.progress : null,
+            current_stage: payload?.current_stage || null,
+            stage: payload?.stage || null,
+            error: payload?.error || null,
+            failure_reason: payload?.failure_reason || null,
+            ts: payload?.ts || null,
+          };
+        }
+
+        setReanalyzeLiveStatuses((prev) => ({ ...prev, ...nextStatuses }));
+
+        if (hasActive) {
+          reanalyzeProgressTimer.current = setTimeout(pollBatchProgress, 2000);
+          return;
+        }
+
+        reanalyzeProgressTimer.current = null;
+        fetchJobList().catch((error) => {
+          console.error("Failed to refresh job list after batch progress finished", error);
+        });
+        setOrgRefreshKey((prev) => prev + 1);
+        setOrgTreeRefreshKey((prev) => prev + 1);
+      } catch (error) {
+        console.error("Failed to poll batch reanalyze progress", error);
+        if (!cancelled) {
+          reanalyzeProgressTimer.current = setTimeout(pollBatchProgress, 4000);
+        }
+      }
+    };
+
+    pollBatchProgress();
+
+    return () => {
+      cancelled = true;
+      if (reanalyzeProgressTimer.current) {
+        clearTimeout(reanalyzeProgressTimer.current);
+        reanalyzeProgressTimer.current = null;
+      }
+    };
+  }, [fetchJobList, reanalyzeBatch]);
+
 
   // Handlers for Views
   const handleOrgSelect = useCallback((org: any) => {
@@ -530,6 +644,123 @@ export default function HomePage() {
     setAssociatedJobId(jobId);
     setIsAssociateOpen(true);
   }, []);
+
+  const openBatchRematchPreview = useCallback(async () => {
+    if (!isAdmin) {
+      setToast({
+        message: "\u4ec5\u7ba1\u7406\u5458\u53ef\u4ee5\u6267\u884c\u6279\u91cf\u91cd\u5339\u914d",
+        type: "error",
+      });
+      return;
+    }
+    if (isRematchLoading || isRematchApplying) {
+      return;
+    }
+
+    setIsRematchDialogOpen(true);
+    setIsRematchLoading(true);
+    try {
+      const response = await fetch("/api/jobs/rematch-organizations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dry_run: true,
+          minimum_confidence: 0.6,
+          department_id: selectedDepartmentId || undefined,
+          department_name: selectedDepartmentName || undefined,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message =
+          String(payload?.detail || payload?.error || "").trim() ||
+          "\u6279\u91cf\u91cd\u5339\u914d\u9884\u89c8\u5931\u8d25";
+        throw new Error(message);
+      }
+      setRematchPreview(payload as BatchRematchPayload);
+    } catch (error) {
+      console.error("Failed to preview organization rematch", error);
+      setIsRematchDialogOpen(false);
+      setToast({
+        message:
+          error instanceof Error && error.message
+            ? error.message
+            : "\u6279\u91cf\u91cd\u5339\u914d\u9884\u89c8\u5931\u8d25",
+        type: "error",
+      });
+    } finally {
+      setIsRematchLoading(false);
+    }
+  }, [
+    isAdmin,
+    isRematchApplying,
+    isRematchLoading,
+    selectedDepartmentId,
+    selectedDepartmentName,
+  ]);
+
+  const closeBatchRematchDialog = useCallback(() => {
+    if (isRematchApplying) {
+      return;
+    }
+    setIsRematchDialogOpen(false);
+  }, [isRematchApplying]);
+
+  const confirmBatchRematch = useCallback(async () => {
+    if (!rematchPreview || isRematchApplying) {
+      return;
+    }
+
+    setIsRematchApplying(true);
+    try {
+      const response = await fetch("/api/jobs/rematch-organizations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dry_run: false,
+          minimum_confidence: rematchPreview.minimum_confidence ?? 0.6,
+          department_id: rematchPreview.department_id ?? undefined,
+          department_name: rematchPreview.department_name ?? undefined,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message =
+          String(payload?.detail || payload?.error || "").trim() ||
+          "\u6279\u91cf\u91cd\u5339\u914d\u5931\u8d25";
+        throw new Error(message);
+      }
+
+      setRematchPreview(payload as BatchRematchPayload);
+      await fetchJobList().catch((listError) => {
+        console.error("Failed to refresh job list after rematch", listError);
+      });
+      setOrgRefreshKey((prev) => prev + 1);
+      setOrgTreeRefreshKey((prev) => prev + 1);
+
+      const updatedCount = Number(payload?.updated_count ?? 0);
+      const skippedCount = Number(payload?.skipped_count ?? 0);
+      const failedCount = Number(payload?.failed_count ?? 0);
+      setToast({
+        message:
+          updatedCount > 0
+            ? `\u5df2\u6279\u91cf\u66f4\u65b0 ${updatedCount} \u6761\u5173\u8054\uff0c\u8df3\u8fc7 ${skippedCount} \u6761\uff0c\u5931\u8d25 ${failedCount} \u6761`
+            : `\u6ca1\u6709\u9700\u8981\u66f4\u65b0\u7684\u5173\u8054\uff0c\u8df3\u8fc7 ${skippedCount} \u6761`,
+        type: failedCount > 0 && updatedCount === 0 ? "error" : "success",
+      });
+    } catch (error) {
+      console.error("Failed to apply organization rematch", error);
+      setToast({
+        message:
+          error instanceof Error && error.message
+            ? error.message
+            : "\u6279\u91cf\u91cd\u5339\u914d\u5931\u8d25",
+        type: "error",
+      });
+    } finally {
+      setIsRematchApplying(false);
+    }
+  }, [fetchJobList, isRematchApplying, rematchPreview]);
 
   const handleGlobalReanalyze = useCallback(async () => {
     if (!isAdmin) {
@@ -575,6 +806,90 @@ export default function HomePage() {
       const message =
         createdCount > 0
           ? `\u5df2\u4e3a ${createdCount} \u4e2a\u90e8\u95e8\u7684\u6700\u65b0\u62a5\u544a\u521b\u5efa\u91cd\u5206\u6790\u4efb\u52a1\uff0c\u8df3\u8fc7 ${skippedCount} \u4e2a\uff0c\u5931\u8d25 ${failedCount} \u4e2a`
+          : failedCount > 0
+            ? `\u6279\u91cf\u91cd\u5206\u6790\u5931\u8d25 ${failedCount} \u4e2a\uff0c\u8df3\u8fc7 ${skippedCount} \u4e2a`
+            : `\u6ca1\u6709\u53ef\u91cd\u5206\u6790\u7684\u90e8\u95e8\u6700\u65b0\u62a5\u544a\uff0c\u8df3\u8fc7 ${skippedCount} \u4e2a`;
+      setToast({ message, type: toastType });
+    } catch (error) {
+      console.error("Failed to batch reanalyze jobs", error);
+      setToast({
+        message:
+          error instanceof Error && error.message
+            ? error.message
+            : "\u6279\u91cf\u91cd\u5206\u6790\u5931\u8d25",
+        type: "error",
+      });
+    } finally {
+      setIsGlobalReanalyzing(false);
+    }
+  }, [fetchJobList, isAdmin, isGlobalReanalyzing]);
+
+  const handleGlobalReanalyzeWithProgress = useCallback(async () => {
+    if (!isAdmin) {
+      setToast({
+        message: "\u4ec5\u7ba1\u7406\u5458\u53ef\u4ee5\u6267\u884c\u6309\u90e8\u95e8\u91cd\u5206\u6790",
+        type: "error",
+      });
+      return;
+    }
+    if (isGlobalReanalyzing) {
+      return;
+    }
+
+    const confirmed = window.confirm("\u7cfb\u7edf\u4f1a\u6309\u6bcf\u4e2a\u90e8\u95e8\u6700\u65b0\u7684\u4e00\u4efd\u62a5\u544a\u65b0\u5efa\u91cd\u5206\u6790\u4efb\u52a1\uff0c\u4e0d\u4f1a\u8986\u76d6\u539f\u4efb\u52a1\uff1b\u6b63\u5728\u5206\u6790\u4e2d\u7684\u4efb\u52a1\u4f1a\u81ea\u52a8\u8df3\u8fc7\u3002\u662f\u5426\u7ee7\u7eed\uff1f");
+    if (!confirmed) {
+      return;
+    }
+
+    setIsGlobalReanalyzing(true);
+    try {
+      const response = await fetch("/api/jobs/reanalyze-all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ include_active: false, latest_per_department: true }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message =
+          String(payload?.detail || payload?.error || "").trim() ||
+          "\u6279\u91cf\u91cd\u5206\u6790\u5931\u8d25";
+        throw new Error(message);
+      }
+
+      await fetchJobList().catch((listError) => {
+        console.error("Failed to refresh job list after batch reanalyze", listError);
+      });
+      setOrgRefreshKey((prev) => prev + 1);
+      setOrgTreeRefreshKey((prev) => prev + 1);
+      setReanalyzeBatch(payload as ReanalyzeBatchPayload);
+      setReanalyzeProgressOpen(true);
+      setReanalyzeLiveStatuses(
+        Object.fromEntries(
+          ((payload?.created as ReanalyzeBatchPayload["created"]) || [])
+            .filter((item): item is NonNullable<NonNullable<ReanalyzeBatchPayload["created"]>[number]> => Boolean(item?.job_id))
+            .map((item) => [
+              String(item.job_id),
+              {
+                job_id: String(item.job_id),
+                status: item.status || "queued",
+                progress: 0,
+                current_stage: null,
+                stage: null,
+                error: null,
+                failure_reason: null,
+                ts: null,
+              } satisfies ReanalyzeLiveStatus,
+            ])
+        )
+      );
+
+      const createdCount = Number(payload?.created_count ?? 0);
+      const skippedCount = Number(payload?.skipped_count ?? 0);
+      const failedCount = Number(payload?.failed_count ?? 0);
+      const toastType = createdCount > 0 || failedCount === 0 ? "success" : "error";
+      const message =
+        createdCount > 0
+          ? `\u5df2\u4e3a ${createdCount} \u4e2a\u90e8\u95e8\u521b\u5efa\u91cd\u5206\u6790\u4efb\u52a1\uff0c\u5df2\u81ea\u52a8\u6253\u5f00\u8fdb\u5ea6\u9762\u677f`
           : failedCount > 0
             ? `\u6279\u91cf\u91cd\u5206\u6790\u5931\u8d25 ${failedCount} \u4e2a\uff0c\u8df3\u8fc7 ${skippedCount} \u4e2a`
             : `\u6ca1\u6709\u53ef\u91cd\u5206\u6790\u7684\u90e8\u95e8\u6700\u65b0\u62a5\u544a\uff0c\u8df3\u8fc7 ${skippedCount} \u4e2a`;
@@ -752,7 +1067,7 @@ export default function HomePage() {
           console.error("Failed to refresh job list after ignoring issue", listError);
         });
         setOrgRefreshKey((prev) => prev + 1);
-        setToast({ message: "该来源命中已忽略，合并问题统计已刷新", type: "success" });
+        setToast({ message: "该问题已忽略，合并问题统计已刷新", type: "success" });
       } catch (error) {
         console.error("Failed to ignore issue", error);
         setToast({
@@ -1187,6 +1502,33 @@ export default function HomePage() {
 
   // --- Render ---
   const [showOrgTree, setShowOrgTree] = useState(true);
+  const reanalyzeCreatedItems = reanalyzeBatch?.created || [];
+  const reanalyzeProgressStats = reanalyzeCreatedItems.reduce(
+    (acc, item) => {
+      const jobId = String(item?.job_id || "");
+      const statusText = String(
+        (jobId ? reanalyzeLiveStatuses[jobId]?.status : null) || item?.status || "queued"
+      )
+        .trim()
+        .toLowerCase();
+
+      if (statusText === "done" || statusText === "completed") {
+        acc.done += 1;
+      } else if (statusText === "error" || statusText === "failed") {
+        acc.failed += 1;
+      } else if (statusText === "processing" || statusText === "running") {
+        acc.running += 1;
+      } else {
+        acc.queued += 1;
+      }
+      return acc;
+    },
+    { done: 0, failed: 0, running: 0, queued: 0 }
+  );
+  const hasReanalyzeProgress =
+    reanalyzeCreatedItems.length > 0 ||
+    Number(reanalyzeBatch?.skipped_count ?? 0) > 0 ||
+    Number(reanalyzeBatch?.failed_count ?? 0) > 0;
 
   return (
     <div className="flex h-screen bg-[#F5F5FA] dark:bg-gray-900 overflow-hidden font-sans selection:bg-indigo-500/30">
@@ -1217,7 +1559,7 @@ export default function HomePage() {
               >
                 <div>
                   <button
-                    onClick={handleGlobalReanalyze}
+                    onClick={handleGlobalReanalyzeWithProgress}
                     disabled={!isAdmin || isGlobalReanalyzing}
                     className="inline-flex w-full items-center justify-center rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 px-4 py-2.5 text-sm font-semibold text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:shadow disabled:cursor-not-allowed disabled:opacity-60"
                     title={isAdmin ? "按每个部门的最新报告批量创建新的重分析任务" : "仅管理员可操作"}
@@ -1272,6 +1614,33 @@ export default function HomePage() {
                   </p>
                 </div>
               </ActionAccordion>
+              {showSidebarTools ? (
+                <div className="mt-3 flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={openBatchRematchPreview}
+                    disabled={!isAdmin || isRematchLoading || isRematchApplying}
+                    className="inline-flex w-full items-center justify-between rounded-2xl border border-violet-200 bg-violet-50/80 px-4 py-3 text-left text-sm font-semibold text-violet-700 transition hover:border-violet-300 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <span>{isRematchApplying ? "正在应用重匹配..." : isRematchLoading ? "正在生成重匹配预览..." : "批量重匹配部门单位"}</span>
+                  <span className="text-xs font-medium text-violet-500">
+                    {rematchPreview ? `${Number(rematchPreview.candidate_count ?? 0)} 条候选` : "先预览后执行"}
+                  </span>
+                </button>
+                {hasReanalyzeProgress ? (
+                  <button
+                    type="button"
+                    onClick={() => setReanalyzeProgressOpen(true)}
+                    className="inline-flex w-full items-center justify-between rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-left text-sm font-semibold text-amber-700 transition hover:border-amber-300 hover:bg-amber-50"
+                  >
+                    <span>查看按部门重分析进度</span>
+                    <span className="text-xs font-medium text-amber-600">
+                      {reanalyzeProgressStats.done}/{reanalyzeCreatedItems.length} 完成
+                    </span>
+                  </button>
+                ) : null}
+                </div>
+              ) : null}
             </div>
           </div>
           <OrganizationTree
@@ -1321,6 +1690,7 @@ export default function HomePage() {
                 selectedUnitId={selectedOrgId}
                 onSelectUnit={handleUnitSelect}
                 onSelectJob={handleJobSelectFromOrg}
+                onAssociateJob={openAssociateDialog}
                 onUpload={openScopedUpload}
                 onCleanupStructuredHistory={handleStructuredCleanup}
                 isCleaningStructuredHistory={!!structuredCleanupBusyScope || isStructuredCleanupExecuting}
@@ -1634,6 +2004,7 @@ export default function HomePage() {
                 throw new Error(`HTTP ${response.status}`);
               }
               fetchJobList();
+              setOrgTreeRefreshKey(prev => prev + 1);
               if (activeJobId === associatedJobId) {
                 const detailResponse = await fetch(`/api/jobs/${associatedJobId}`, { cache: "no-store" });
                 if (detailResponse.ok) {
@@ -1665,6 +2036,20 @@ export default function HomePage() {
         isExecuting={isStructuredCleanupExecuting}
         onClose={closeStructuredCleanupDialog}
         onConfirm={confirmStructuredCleanup}
+      />
+      <BatchRematchDialog
+        isOpen={isRematchDialogOpen}
+        preview={rematchPreview}
+        isLoading={isRematchLoading}
+        isApplying={isRematchApplying}
+        onClose={closeBatchRematchDialog}
+        onConfirm={confirmBatchRematch}
+      />
+      <ReanalyzeProgressDialog
+        isOpen={reanalyzeProgressOpen}
+        batch={reanalyzeBatch}
+        liveStatuses={reanalyzeLiveStatuses}
+        onClose={() => setReanalyzeProgressOpen(false)}
       />
       {/* Toast Notification */}
       {toast && (

@@ -98,7 +98,7 @@ export default function IssueCard({
     title: presentation.summary,
     location: presentation.locationText,
   });
-  const canIgnore = issue.source === "ai" && typeof onIgnore === "function";
+  const canIgnore = typeof onIgnore === "function";
 
   if (compact) {
     return (

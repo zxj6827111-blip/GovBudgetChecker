@@ -87,6 +87,32 @@ async def reanalyze_all_jobs(request: Request):
     return result
 
 
+@router.post("/api/jobs/rematch-organizations")
+async def rematch_job_organizations(request: Request):
+    _, _, user = require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    result = runtime.rematch_job_organizations(body)
+    if not bool(result.get("dry_run")) and int(result.get("updated_count") or 0) > 0:
+        clear_department_stats_cache()
+    append_audit_event(
+        action="jobs.rematch_organizations",
+        actor=str(user.get("username") or ""),
+        result="success",
+        resource_type="job_batch",
+        details={
+            "dry_run": bool(result.get("dry_run")),
+            "candidate_count": int(result.get("candidate_count") or 0),
+            "updated_count": int(result.get("updated_count") or 0),
+            "skipped_count": int(result.get("skipped_count") or 0),
+            "failed_count": int(result.get("failed_count") or 0),
+        },
+    )
+    return result
+
+
 @router.post("/api/jobs/structured-ingest-cleanup")
 async def cleanup_structured_ingest_history(request: Request):
     _, _, user = require_admin(request)

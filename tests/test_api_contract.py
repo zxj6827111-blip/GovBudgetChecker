@@ -1,6 +1,8 @@
 import io
 import os
 import uuid
+import json
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -85,6 +87,74 @@ def test_document_upload_and_job_alias_routes():
     status = client.get(f"/api/jobs/{job_id}/status")
     assert status.status_code == 200
     assert status.json()["status"] in {"queued", "processing", "done", "error"}
+
+
+def test_local_rule_issue_can_be_ignored(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    runtime._JOB_SUMMARY_CACHE.clear()
+
+    job_id = "job-local-ignore-001"
+    job_dir = tmp_path / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    issue_id = "rule:V33-001:abcd1234"
+    status_payload = {
+        "job_id": job_id,
+        "status": "done",
+        "progress": 100,
+        "filename": "local-rule-ignore.pdf",
+        "rule_findings": [
+            {
+                "id": issue_id,
+                "source": "rule",
+                "rule_id": "V33-001",
+                "severity": "medium",
+                "message": "本地规则命中",
+                "location": {"page": 1},
+            }
+        ],
+        "issues": {
+            "error": [],
+            "warn": [
+                {
+                    "id": issue_id,
+                    "source": "rule",
+                    "rule_id": "V33-001",
+                    "severity": "medium",
+                    "message": "本地规则命中",
+                    "location": {"page": 1},
+                }
+            ],
+            "info": [],
+            "all": [
+                {
+                    "id": issue_id,
+                    "source": "rule",
+                    "rule_id": "V33-001",
+                    "severity": "medium",
+                    "message": "本地规则命中",
+                    "location": {"page": 1},
+                }
+            ],
+        },
+    }
+    (job_dir / "status.json").write_text(
+        json.dumps(status_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        f"/api/jobs/{job_id}/issues/ignore",
+        json={"issue_id": issue_id},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["ignored_issue_id"] == issue_id
+    assert payload["ignored_issue_count"] == 1
+    assert payload["ignored_issue_ids"] == [issue_id]
+    assert payload["rule_findings"] == []
+    assert payload["issues"]["warn"] == []
+    assert payload["issues"]["all"] == []
 
 
 def test_document_upload_rejects_duplicate_same_org_scope(monkeypatch, tmp_path):

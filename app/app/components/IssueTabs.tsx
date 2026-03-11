@@ -205,7 +205,7 @@ export default function IssueTabs({
             <div>
               <div className="text-base font-semibold text-slate-900">问题明细</div>
               <div className="mt-1 text-sm text-slate-500">
-                可直接查看页码、定位信息、截图预览，并对 AI 误判执行忽略。
+                可直接查看页码、定位信息、截图预览，并对 AI 或本地规则命中执行忽略。
               </div>
             </div>
             <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">

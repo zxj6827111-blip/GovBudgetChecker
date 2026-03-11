@@ -98,6 +98,7 @@ interface OrganizationDetailViewProps {
   selectedUnitId?: string | null;
   onSelectUnit: (unit: UnitItem | null) => void;
   onSelectJob: (jobId: string) => void;
+  onAssociateJob?: (jobId: string) => void;
   onUpload: (unit?: UnitItem | null) => void;
   onCleanupStructuredHistory?: (options: {
     departmentId: string;
@@ -124,6 +125,7 @@ export default function OrganizationDetailView({
   selectedUnitId,
   onSelectUnit,
   onSelectJob,
+  onAssociateJob,
   onUpload,
   onCleanupStructuredHistory,
   isCleaningStructuredHistory = false,
@@ -1227,7 +1229,7 @@ export default function OrganizationDetailView({
                       <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">文件名称</th>
                       <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">上传时间</th>
                       <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">状态</th>
-                      <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider w-32">操作</th>
+                      <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider w-48">操作</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200/50 bg-transparent">
@@ -1262,6 +1264,11 @@ export default function OrganizationDetailView({
                                       <span className="truncate max-w-[120px]" title={job.organization_name}>{job.organization_name}</span>
                                     </>
                                   )}
+                                  {job.organization_match_type && (
+                                    <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 ${job.organization_match_type === "manual" ? "bg-purple-50 text-purple-600" : "bg-blue-50 text-blue-600"}`}>
+                                      {job.organization_match_type === "manual" ? "手动关联" : "自动匹配"}
+                                    </span>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -1294,6 +1301,19 @@ export default function OrganizationDetailView({
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
                             <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              {onAssociateJob && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onAssociateJob(job.job_id);
+                                  }}
+                                  className="inline-flex items-center rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 transition-colors"
+                                  title={job.organization_name ? `将当前文件从 ${job.organization_name} 重新关联到正确部门/单位` : "为当前文件关联正确部门/单位"}
+                                >
+                                  {job.organization_name ? "改关联" : "去关联"}
+                                </button>
+                              )}
                               <button onClick={(e) => { e.stopPropagation(); handleDelete(job.job_id, e); }} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors" title="删除">
                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                               </button>
