@@ -100,6 +100,19 @@ export default function AssociateDialog({
         }
     };
 
+    useEffect(() => {
+        if (!isOpen) return;
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                onClose();
+            }
+        };
+
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [isOpen, onClose]);
+
     if (!isOpen) return null;
 
     const levelColors: Record<string, string> = {
@@ -110,10 +123,30 @@ export default function AssociateDialog({
     };
 
     return (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+            onMouseDown={(event) => {
+                if (event.target === event.currentTarget) {
+                    onClose();
+                }
+            }}
+        >
             <div className="bg-white rounded-lg shadow-xl w-[500px] max-h-[80vh] flex flex-col">
                 {/* 标题 */}
                 <div className="p-4 border-b">
+                    <div className="flex justify-end">
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 hover:text-gray-700"
+                            aria-label="取消关联"
+                            title="取消"
+                        >
+                            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                    </div>
                     <h3 className="text-lg font-semibold">关联到组织</h3>
                     <p className="text-sm text-gray-500 mt-1">
                         文件：<span className="font-medium">{filename}</span>
@@ -212,12 +245,21 @@ export default function AssociateDialog({
                 {/* 按钮 */}
                 <div className="p-4 border-t flex justify-end space-x-2">
                     <button
+                        type="button"
                         onClick={onClose}
-                        className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded"
+                        className="hidden"
                     >
                         稍后关联
                     </button>
                     <button
+                        type="button"
+                        onClick={onClose}
+                        className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded border border-gray-200"
+                    >
+                        取消
+                    </button>
+                    <button
+                        type="button"
                         onClick={handleConfirm}
                         disabled={!selectedOrgId}
                         className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"

@@ -1628,6 +1628,38 @@ def resolve_job_department_context(
     return None
 
 
+def resolve_organization_department_context(org_id: str) -> Optional[Dict[str, str]]:
+    """Resolve the owning department for an organization id."""
+    if not ORG_AVAILABLE:
+        return None
+
+    normalized_org_id = str(org_id or "").strip()
+    if not normalized_org_id:
+        return None
+
+    try:
+        storage = require_org_storage()
+    except Exception:
+        return None
+
+    try:
+        org = storage.get_by_id(normalized_org_id)
+        while org is not None:
+            level = str(getattr(org, "level", "") or "").strip().lower()
+            if level == "department":
+                return {
+                    "department_id": str(getattr(org, "id", "") or ""),
+                    "department_name": str(getattr(org, "name", "") or ""),
+                }
+            parent_id = str(getattr(org, "parent_id", "") or "").strip()
+            if not parent_id:
+                break
+            org = storage.get_by_id(parent_id)
+    except Exception:
+        logger.exception("Failed to resolve department for organization %s", normalized_org_id)
+    return None
+
+
 def ensure_pdf(file: UploadFile) -> bool:
     """Basic PDF content-type/extension guard."""
     ct = (file.content_type or "").lower()
@@ -2245,6 +2277,298 @@ async def reanalyze_all_jobs(body: Optional[Dict[str, Any]] = None) -> Dict[str,
         "skipped_count": len(skipped),
         "failed_count": len(failed),
         "created": created,
+        "skipped": skipped,
+        "failed": failed,
+    }
+
+
+def rematch_job_organizations(body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Preview or apply organization re-matching for existing jobs."""
+    if not ORG_AVAILABLE:
+        raise HTTPException(status_code=503, detail="organization service unavailable")
+
+    from src.services.org_matcher import get_org_matcher
+
+    request_body = dict(body or {})
+    dry_run = bool(request_body.get("dry_run", True))
+    include_manual = bool(request_body.get("include_manual", False))
+
+    try:
+        minimum_confidence = float(request_body.get("minimum_confidence", 0.6))
+    except Exception:
+        minimum_confidence = 0.6
+    minimum_confidence = max(0.0, min(1.0, minimum_confidence))
+
+    scoped_department_id = str(request_body.get("department_id") or "").strip()
+    scoped_department_name = str(request_body.get("department_name") or "").strip()
+
+    storage = require_org_storage()
+    matcher = get_org_matcher()
+
+    matches: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    scanned_count = 0
+    fast_path_hits = 0
+    pdf_text_fallback_hits = 0
+
+    def _serialize_org_brief(
+        org_id: str,
+        *,
+        match_type: Optional[str] = None,
+        confidence: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
+        normalized_org_id = str(org_id or "").strip()
+        if not normalized_org_id:
+            return None
+
+        org = storage.get_by_id(normalized_org_id)
+        if org is None:
+            return {
+                "organization_id": normalized_org_id,
+                "organization_name": None,
+                "match_type": match_type,
+                "confidence": confidence,
+                "department_id": None,
+                "department_name": None,
+            }
+
+        department = resolve_organization_department_context(normalized_org_id) or {}
+        payload: Dict[str, Any] = {
+            "organization_id": str(getattr(org, "id", "") or ""),
+            "organization_name": str(getattr(org, "name", "") or ""),
+            "level": str(getattr(org, "level", "") or ""),
+            "department_id": department.get("department_id"),
+            "department_name": department.get("department_name"),
+        }
+        if match_type is not None:
+            payload["match_type"] = match_type
+        if confidence is not None:
+            payload["confidence"] = round(float(confidence), 4)
+        return payload
+
+    def _in_scope(*, current_org_id: str, suggested_org_id: str) -> bool:
+        if not scoped_department_id:
+            return True
+        current_department = resolve_organization_department_context(current_org_id) or {}
+        suggested_department = resolve_organization_department_context(suggested_org_id) or {}
+        return scoped_department_id in {
+            str(current_department.get("department_id") or "").strip(),
+            str(suggested_department.get("department_id") or "").strip(),
+        }
+
+    def _pick_best_match(pdf_path: Path) -> tuple[Optional[Any], float]:
+        nonlocal fast_path_hits, pdf_text_fallback_hits
+
+        filename_matches = matcher.suggest_matches(pdf_path.name, "", top_n=1)
+        if filename_matches:
+            candidate, confidence = filename_matches[0]
+            numeric_confidence = round(float(confidence), 4)
+            if numeric_confidence >= minimum_confidence:
+                fast_path_hits += 1
+                return candidate, numeric_confidence
+
+        first_page_text = extract_pdf_first_page_text(pdf_path)
+        pdf_text_fallback_hits += 1
+        matches_with_text = matcher.suggest_matches(pdf_path.name, first_page_text, top_n=1)
+        if not matches_with_text:
+            return None, 0.0
+        candidate, confidence = matches_with_text[0]
+        return candidate, round(float(confidence), 4)
+
+    for job_dir in sorted(iter_job_dirs(), key=get_job_quick_timestamp, reverse=True):
+        scanned_count += 1
+        job_id = job_dir.name
+        try:
+            pdf_path = find_first_pdf(job_dir)
+            status_payload = _enrich_job_organization_context(
+                job_id,
+                get_job_status_payload(job_id),
+            )
+
+            current_org_id = str(status_payload.get("organization_id") or "").strip()
+            current_match_type = str(
+                status_payload.get("organization_match_type") or ""
+            ).strip().lower()
+
+            try:
+                current_confidence = round(
+                    float(status_payload.get("organization_match_confidence") or 0.0),
+                    4,
+                )
+            except Exception:
+                current_confidence = 0.0
+
+            if current_match_type == "manual" and not include_manual:
+                skipped.append(
+                    {
+                        "job_id": job_id,
+                        "filename": pdf_path.name,
+                        "reason": "manual_locked",
+                        "detail": "当前是手动关联，默认不参与批量重匹配",
+                        "current": _serialize_org_brief(
+                            current_org_id,
+                            match_type=current_match_type,
+                            confidence=current_confidence,
+                        ),
+                    }
+                )
+                continue
+
+            suggested_org, suggested_confidence = _pick_best_match(pdf_path)
+            if suggested_org is None:
+                skipped.append(
+                    {
+                        "job_id": job_id,
+                        "filename": pdf_path.name,
+                        "reason": "no_match",
+                        "detail": "没有找到可用的组织匹配建议",
+                        "current": _serialize_org_brief(
+                            current_org_id,
+                            match_type=current_match_type or None,
+                            confidence=current_confidence if current_org_id else None,
+                        ),
+                    }
+                )
+                continue
+
+            suggested_org_id = str(getattr(suggested_org, "id", "") or "").strip()
+
+            if not suggested_org_id:
+                skipped.append(
+                    {
+                        "job_id": job_id,
+                        "filename": pdf_path.name,
+                        "reason": "invalid_match",
+                        "detail": "匹配器返回了无效的组织建议",
+                    }
+                )
+                continue
+
+            if suggested_confidence < minimum_confidence:
+                skipped.append(
+                    {
+                        "job_id": job_id,
+                        "filename": pdf_path.name,
+                        "reason": "low_confidence",
+                        "detail": f"建议置信度过低（{suggested_confidence:.2f}）",
+                        "current": _serialize_org_brief(
+                            current_org_id,
+                            match_type=current_match_type or None,
+                            confidence=current_confidence if current_org_id else None,
+                        ),
+                        "suggested": _serialize_org_brief(
+                            suggested_org_id,
+                            confidence=suggested_confidence,
+                        ),
+                    }
+                )
+                continue
+
+            if not _in_scope(current_org_id=current_org_id, suggested_org_id=suggested_org_id):
+                skipped.append(
+                    {
+                        "job_id": job_id,
+                        "filename": pdf_path.name,
+                        "reason": "outside_department_scope",
+                        "detail": "不在当前部门范围内",
+                    }
+                )
+                continue
+
+            if current_org_id and current_org_id == suggested_org_id:
+                skipped.append(
+                    {
+                        "job_id": job_id,
+                        "filename": pdf_path.name,
+                        "reason": "same_match",
+                        "detail": "当前关联与建议结果一致，无需调整",
+                        "current": _serialize_org_brief(
+                            current_org_id,
+                            match_type=current_match_type or None,
+                            confidence=current_confidence,
+                        ),
+                    }
+                )
+                continue
+
+            match_item: Dict[str, Any] = {
+                "job_id": job_id,
+                "filename": pdf_path.name,
+                "action": "reassociate" if current_org_id else "associate",
+                "current": _serialize_org_brief(
+                    current_org_id,
+                    match_type=current_match_type or None,
+                    confidence=current_confidence if current_org_id else None,
+                ),
+                "suggested": _serialize_org_brief(
+                    suggested_org_id,
+                    confidence=suggested_confidence,
+                ),
+            }
+
+            if dry_run:
+                matches.append(match_item)
+                continue
+
+            binding = set_job_organization(
+                job_id,
+                suggested_org_id,
+                match_type="auto",
+                confidence=suggested_confidence,
+            )
+            matches.append(
+                {
+                    **match_item,
+                    "updated": True,
+                    "binding": binding,
+                }
+            )
+        except FileNotFoundError:
+            skipped.append(
+                {
+                    "job_id": job_id,
+                    "reason": "missing_pdf",
+                    "detail": "未找到原始 PDF，无法重匹配",
+                }
+            )
+        except HTTPException as exc:
+            failed.append(
+                {
+                    "job_id": job_id,
+                    "status_code": exc.status_code,
+                    "detail": exc.detail,
+                }
+            )
+        except Exception as exc:
+            logger.exception("Failed to rematch organization for job %s", job_id)
+            failed.append(
+                {
+                    "job_id": job_id,
+                    "status_code": 500,
+                    "detail": str(exc),
+                }
+            )
+
+    if scoped_department_id and not scoped_department_name:
+        scoped_department = resolve_organization_department_context(scoped_department_id) or {}
+        scoped_department_name = str(scoped_department.get("department_name") or "").strip()
+
+    return {
+        "status": "preview" if dry_run else "applied",
+        "dry_run": dry_run,
+        "include_manual": include_manual,
+        "minimum_confidence": minimum_confidence,
+        "department_id": scoped_department_id or None,
+        "department_name": scoped_department_name or None,
+        "scanned_count": scanned_count,
+        "candidate_count": len(matches),
+        "updated_count": 0 if dry_run else len(matches),
+        "skipped_count": len(skipped),
+        "failed_count": len(failed),
+        "fast_path_hits": fast_path_hits,
+        "pdf_text_fallback_hits": pdf_text_fallback_hits,
+        "matches": matches,
         "skipped": skipped,
         "failed": failed,
     }

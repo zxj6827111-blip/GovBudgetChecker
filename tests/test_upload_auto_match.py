@@ -142,6 +142,59 @@ def test_manual_association_overrides_auto_match(tmp_path: Path, monkeypatch):
     assert link.match_type == "manual"
 
 
+def test_manual_association_moves_job_between_organization_job_lists(
+    tmp_path: Path, monkeypatch
+):
+    _patch_runtime_state(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    original_org_id = _create_org("上海市普陀区民政局")["id"]
+    target_org_id = _create_org("上海市普陀区财政局")["id"]
+
+    upload = client.post(
+        "/api/documents/upload",
+        headers=_headers(),
+        files={
+            "file": (
+                "上海市普陀区民政局2025年预算公开.pdf",
+                io.BytesIO(_pdf_bytes()),
+                "application/pdf",
+            )
+        },
+    )
+    assert upload.status_code == 200
+    job_id = upload.json()["job_id"]
+    assert upload.json()["organization_id"] == original_org_id
+
+    original_jobs_before = client.get(f"/api/organizations/{original_org_id}/jobs")
+    assert original_jobs_before.status_code == 200
+    assert any(item["job_id"] == job_id for item in original_jobs_before.json()["jobs"])
+
+    target_jobs_before = client.get(f"/api/organizations/{target_org_id}/jobs")
+    assert target_jobs_before.status_code == 200
+    assert all(item["job_id"] != job_id for item in target_jobs_before.json()["jobs"])
+
+    associate = client.post(
+        f"/api/jobs/{job_id}/associate",
+        json={"org_id": target_org_id},
+        headers=_headers(),
+    )
+    assert associate.status_code == 200
+
+    original_jobs_after = client.get(f"/api/organizations/{original_org_id}/jobs")
+    assert original_jobs_after.status_code == 200
+    assert all(item["job_id"] != job_id for item in original_jobs_after.json()["jobs"])
+
+    target_jobs_after = client.get(f"/api/organizations/{target_org_id}/jobs")
+    assert target_jobs_after.status_code == 200
+    moved_job = next(
+        item for item in target_jobs_after.json()["jobs"] if item["job_id"] == job_id
+    )
+    assert moved_job["organization_id"] == target_org_id
+    assert moved_job["organization_name"] == "上海市普陀区财政局"
+    assert moved_job["organization_match_type"] == "manual"
+
+
 def test_job_org_suggestions_returns_current_and_candidates(tmp_path: Path, monkeypatch):
     _patch_runtime_state(tmp_path, monkeypatch)
     client = TestClient(app)
@@ -178,3 +231,76 @@ def test_job_org_suggestions_returns_current_and_candidates(tmp_path: Path, monk
     assert payload["current"]["confidence"] >= 0.6
     assert len(payload["suggestions"]) >= 1
     assert payload["suggestions"][0]["organization"]["id"] == matched_org_id
+
+
+def test_batch_rematch_preview_and_apply_updates_auto_association(tmp_path: Path, monkeypatch):
+    _patch_runtime_state(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    wrong_org_id = _create_org("涓婃捣甯傛櫘闄€鍖烘皯鏀垮眬")["id"]
+    correct_org_id = _create_org("涓婃捣甯傛櫘闄€鍖鸿储鏀垮眬")["id"]
+
+    upload = client.post(
+        "/api/documents/upload",
+        headers=_headers(),
+        files={
+            "file": (
+                "涓婃捣甯傛櫘闄€鍖鸿储鏀垮眬2025骞撮绠楀叕寮€.pdf",
+                io.BytesIO(_pdf_bytes()),
+                "application/pdf",
+            )
+        },
+    )
+    assert upload.status_code == 200
+    job_id = upload.json()["job_id"]
+
+    runtime.set_job_organization(job_id, wrong_org_id, match_type="auto", confidence=0.82)
+
+    storage = runtime.require_org_storage()
+    correct_org = storage.get_by_id(correct_org_id)
+    assert correct_org is not None
+
+    class _FakeMatcher:
+        def suggest_matches(self, filename: str, first_page_text: str = "", top_n: int = 5):
+            _ = (filename, first_page_text, top_n)
+            return [(correct_org, 0.96)]
+
+    monkeypatch.setattr(org_matcher_module, "_matcher_instance", _FakeMatcher())
+
+    preview = client.post(
+        "/api/jobs/rematch-organizations",
+        headers=_headers(),
+        json={"dry_run": True, "minimum_confidence": 0.6},
+    )
+    assert preview.status_code == 200, preview.text
+    preview_payload = preview.json()
+    assert preview_payload["status"] == "preview"
+    assert preview_payload["candidate_count"] == 1
+    assert preview_payload["updated_count"] == 0
+    candidate = preview_payload["matches"][0]
+    assert candidate["job_id"] == job_id
+    assert candidate["action"] == "reassociate"
+    assert candidate["current"]["organization_id"] == wrong_org_id
+    assert candidate["suggested"]["organization_id"] == correct_org_id
+    assert candidate["suggested"]["confidence"] == 0.96
+
+    apply_resp = client.post(
+        "/api/jobs/rematch-organizations",
+        headers=_headers(),
+        json={"dry_run": False, "minimum_confidence": 0.6},
+    )
+    assert apply_resp.status_code == 200, apply_resp.text
+    apply_payload = apply_resp.json()
+    assert apply_payload["status"] == "applied"
+    assert apply_payload["candidate_count"] == 1
+    assert apply_payload["updated_count"] == 1
+
+    status_payload = runtime.get_job_status_payload(job_id)
+    assert status_payload["organization_id"] == correct_org_id
+    assert status_payload["organization_match_type"] == "auto"
+    assert status_payload["organization_match_confidence"] == 0.96
+
+    link = runtime.require_org_storage().get_job_org(job_id)
+    assert link is not None
+    assert link.org_id == correct_org_id
+    assert link.match_type == "auto"

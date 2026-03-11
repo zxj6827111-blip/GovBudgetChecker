@@ -2,10 +2,11 @@ import { apiTimeout } from "./apiBase";
 
 export async function fetchWithTimeout(
   input: RequestInfo | URL,
-  init: RequestInit = {}
+  init: RequestInit = {},
+  timeoutMs: number = apiTimeout,
 ) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), apiTimeout);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   const signal = init.signal ?? controller.signal;
 
   try {

@@ -306,7 +306,7 @@ export default function IssueList({
                               <span className="inline-flex items-center rounded-md border border-orange-200 bg-orange-50 px-2 py-1 text-xs font-semibold text-orange-600">
                                 待处理
                               </span>
-                              {issue.source === "ai" && onIgnoreIssue && (
+                              {onIgnoreIssue && (
                                 <button
                                   type="button"
                                   onClick={(event) => {
