@@ -2147,7 +2147,7 @@ async def reanalyze_job(
         raise HTTPException(status_code=404, detail="source job_id does not exist")
 
     try:
-        source_pdf = find_first_pdf(source_job_dir)
+        find_first_pdf(source_job_dir)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="source job PDF does not exist") from exc
 
