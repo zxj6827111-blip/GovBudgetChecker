@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -131,6 +130,77 @@ async def cleanup_structured_ingest_history(request: Request):
     return result
 
 
+@router.post("/api/jobs/batch-delete")
+async def batch_delete_jobs(request: Request):
+    _, _, user = require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    raw_ids = (body or {}).get("job_ids")
+    if not isinstance(raw_ids, list):
+        raise HTTPException(status_code=400, detail="job_ids must be a list")
+
+    job_ids: list[str] = []
+    seen = set()
+    for item in raw_ids:
+        normalized = str(item or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        job_ids.append(normalized)
+
+    if not job_ids:
+        raise HTTPException(status_code=400, detail="job_ids is required")
+
+    deleted: list[str] = []
+    failed: list[Dict[str, Any]] = []
+    for job_id in job_ids:
+        try:
+            runtime.delete_job(job_id)
+            deleted.append(job_id)
+        except HTTPException as exc:
+            failed.append(
+                {
+                    "job_id": job_id,
+                    "status_code": exc.status_code,
+                    "detail": exc.detail,
+                }
+            )
+        except Exception as exc:
+            failed.append(
+                {
+                    "job_id": job_id,
+                    "status_code": 500,
+                    "detail": str(exc),
+                }
+            )
+
+    if deleted:
+        clear_department_stats_cache()
+
+    append_audit_event(
+        action="jobs.batch_delete",
+        actor=str(user.get("username") or ""),
+        result="success" if not failed else "partial_success",
+        resource_type="job_batch",
+        details={
+            "requested_count": len(job_ids),
+            "deleted_count": len(deleted),
+            "failed_count": len(failed),
+        },
+    )
+    return {
+        "success": len(deleted) > 0 and not failed,
+        "requested_count": len(job_ids),
+        "deleted_count": len(deleted),
+        "failed_count": len(failed),
+        "deleted_job_ids": deleted,
+        "failed": failed,
+    }
+
+
 @router.get("/jobs/{job_id}/status")
 @router.get("/api/jobs/{job_id}/status")
 async def get_job_status(job_id: str):
@@ -215,20 +285,17 @@ async def get_job_org_suggestions(
 
 
 @router.delete("/api/jobs/{job_id}")
-async def delete_job(job_id: str):
-    job_dir = runtime.UPLOAD_ROOT / job_id
-    if not job_dir.exists():
-        raise HTTPException(status_code=404, detail="job_id 不存在")
-    try:
-        shutil.rmtree(job_dir)
-        if runtime.ORG_AVAILABLE:
-            try:
-                runtime.require_org_storage().unlink_job(job_id)
-                clear_department_stats_cache()
-            except Exception:
-                runtime.logger.exception("Failed to unlink job during delete: %s", job_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"删除任务失败: {e}") from e
+async def delete_job(job_id: str, request: Request):
+    _, _, user = require_admin(request)
+    runtime.delete_job(job_id)
+    clear_department_stats_cache()
+    append_audit_event(
+        action="jobs.delete",
+        actor=str(user.get("username") or ""),
+        result="success",
+        resource_type="job",
+        details={"job_id": job_id},
+    )
     return {"success": True, "job_id": job_id}
 
 

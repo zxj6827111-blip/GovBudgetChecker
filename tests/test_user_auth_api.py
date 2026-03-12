@@ -246,6 +246,19 @@ def test_non_admin_cannot_manage_organizations_or_dangerous_jobs(client: TestCli
     )
     assert cleanup.status_code == 403
 
+    single_delete = client.delete(
+        "/api/jobs/job-forbidden-delete",
+        headers=_headers(viewer_token),
+    )
+    assert single_delete.status_code == 403
+
+    batch_delete = client.post(
+        "/api/jobs/batch-delete",
+        headers=_headers(viewer_token),
+        json={"job_ids": ["job-forbidden-delete"]},
+    )
+    assert batch_delete.status_code == 403
+
 
 def test_admin_delete_preview_reports_impacted_scope(client: TestClient, tmp_path: Path, monkeypatch):
     monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)

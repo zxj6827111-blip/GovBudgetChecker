@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { backendAuthHeaders } from "@/lib/backendAuth";
+import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
 
 export async function GET(
   _request: NextRequest,
@@ -38,7 +39,7 @@ export async function DELETE(
   try {
     const res = await fetchWithTimeout(`${apiBase}/api/jobs/${jobId}`, {
       method: "DELETE",
-      headers: backendAuthHeaders({ "Content-Type": "application/json" }),
+      headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
     });
     const text = await res.text();
     let data: any;
@@ -56,4 +57,3 @@ export async function DELETE(
     );
   }
 }
-

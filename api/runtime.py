@@ -97,6 +97,17 @@ JOB_STATUS_CONTEXT_KEYS = (
     "report_kind",
 )
 ACTIVE_ANALYSIS_STATUSES = {"queued", "processing", "running"}
+REANALYZE_EPHEMERAL_FILES = {
+    STRUCTURED_INGEST_FILENAME,
+    IGNORED_ISSUES_FILENAME,
+    "annotated.pdf",
+    "report.pdf",
+    "report_annotated.pdf",
+    "compare_old_vs_new.json",
+    "status_old_before_compare.json",
+    "status_new_after_compare.json",
+    "status_new_after_compare_with_ai.json",
+}
 
 if TYPE_CHECKING:
     from api.job_queue import DurableJobQueue
@@ -1228,6 +1239,8 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         read_json_file(status_file, default={}),
     )
     status_data = apply_job_issue_filters(job_dir, status_data)
+    created_ts = get_job_created_timestamp(job_dir, status_data)
+    updated_ts = get_job_quick_timestamp(job_dir)
 
     progress = status_data.get("progress", 0)
     status = status_data.get("status", "unknown")
@@ -1515,6 +1528,8 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "status": status,
         "progress": progress,
         "ts": ts,
+        "created_ts": created_ts,
+        "updated_ts": updated_ts,
         "mode": mode,
         "dual_mode_enabled": dual_mode_enabled,
         "stage": stage,
@@ -1658,6 +1673,60 @@ def resolve_organization_department_context(org_id: str) -> Optional[Dict[str, s
     except Exception:
         logger.exception("Failed to resolve department for organization %s", normalized_org_id)
     return None
+
+
+def resolve_job_selection_scope(
+    job_id: str,
+    *,
+    status_payload: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, str]]:
+    """Resolve the direct organization scope used for latest-job selection."""
+    if not ORG_AVAILABLE:
+        return None
+
+    try:
+        storage = require_org_storage()
+    except Exception:
+        return None
+
+    payload = status_payload or read_json_file(UPLOAD_ROOT / job_id / "status.json", default={})
+    payload = _enrich_job_organization_context(job_id, payload)
+    linked_org_id = str(payload.get("organization_id") or "").strip()
+
+    department = resolve_job_department_context(job_id, status_payload=payload)
+    if not department:
+        return None
+
+    department_id = str(department.get("department_id") or "").strip()
+    department_name = str(department.get("department_name") or "").strip()
+    if not department_id:
+        return None
+
+    if linked_org_id:
+        try:
+            linked_org = storage.get_by_id(linked_org_id)
+        except Exception:
+            linked_org = None
+        linked_level = str(getattr(linked_org, "level", "") or "").strip().lower()
+        if linked_org is not None and linked_level in {"department", "unit"}:
+            scope_name = str(
+                getattr(linked_org, "name", "") or payload.get("organization_name") or ""
+            ).strip()
+            return {
+                "scope_id": linked_org_id,
+                "scope_name": scope_name or department_name,
+                "scope_level": linked_level,
+                "department_id": department_id,
+                "department_name": department_name,
+            }
+
+    return {
+        "scope_id": department_id,
+        "scope_name": department_name,
+        "scope_level": "department",
+        "department_id": department_id,
+        "department_name": department_name,
+    }
 
 
 def ensure_pdf(file: UploadFile) -> bool:
@@ -1936,6 +2005,28 @@ def set_job_organization(
     }
 
 
+def delete_job(job_id: str) -> Dict[str, Any]:
+    """Delete a job directory and remove its organization link if present."""
+    job_dir = UPLOAD_ROOT / job_id
+    if not job_dir.exists():
+        raise HTTPException(status_code=404, detail="job_id does not exist")
+
+    try:
+        shutil.rmtree(job_dir)
+        _JOB_SUMMARY_CACHE.pop(str(job_id), None)
+        if ORG_AVAILABLE:
+            try:
+                require_org_storage().unlink_job(job_id)
+            except Exception:
+                logger.exception("Failed to unlink job during delete: %s", job_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"failed to delete job: {exc}") from exc
+
+    return {"success": True, "job_id": job_id}
+
+
 async def start_analysis(
     job_id: str, body: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
@@ -2050,7 +2141,7 @@ async def start_analysis(
 async def reanalyze_job(
     source_job_id: str, body: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
-    """Clone an existing job into a new job id and queue it for analysis."""
+    """Reset an existing job and queue it again for in-place analysis."""
     source_job_dir = UPLOAD_ROOT / source_job_id
     if not source_job_dir.exists():
         raise HTTPException(status_code=404, detail="source job_id does not exist")
@@ -2061,87 +2152,38 @@ async def reanalyze_job(
         raise HTTPException(status_code=404, detail="source job PDF does not exist") from exc
 
     source_status = get_job_status_payload(source_job_id)
-    source_context = extract_job_status_context(source_status)
-    source_filename = source_pdf.name
-    source_size = source_pdf.stat().st_size
-    checksum = str(source_status.get("checksum") or "").strip()
-    if not checksum:
-        checksum = calculate_file_checksum(source_pdf)
+    current_status = str(source_status.get("status") or "").strip().lower()
+    if current_status in ACTIVE_ANALYSIS_STATUSES:
+        raise HTTPException(status_code=409, detail="job is already being analyzed")
 
-    new_job_id = os.urandom(16).hex()
-    new_job_dir = UPLOAD_ROOT / new_job_id
-    new_job_dir.mkdir(parents=True, exist_ok=False)
-    new_pdf = new_job_dir / source_filename
-
-    try:
-        shutil.copy2(source_pdf, new_pdf)
-        source_context.setdefault(
-            "version_created_at",
-            get_job_version_timestamp(source_job_dir, source_status),
-        )
-        created_at = time.time()
-        status_payload = {
-            **source_context,
-            "job_id": new_job_id,
-            "status": "uploaded",
-            "progress": 0,
-            "stage": "uploaded",
-            "filename": source_filename,
-            "size": source_size,
-            "saved_path": str(new_pdf.relative_to(UPLOAD_ROOT)),
-            "checksum": checksum,
-            "job_created_at": created_at,
-            "ts": created_at,
-        }
-        write_json_file(new_job_dir / "status.json", status_payload)
-
-        organization_id = str(source_status.get("organization_id") or "").strip()
-        if organization_id and ORG_AVAILABLE:
-            try:
-                set_job_organization(
-                    new_job_id,
-                    organization_id,
-                    match_type=str(
-                        source_status.get("organization_match_type") or "manual"
-                    ),
-                    confidence=float(
-                        source_status.get("organization_match_confidence") or 1.0
-                    ),
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to carry organization link from %s to %s",
-                    source_job_id,
-                    new_job_id,
-                )
-
-        body = dict(body or {})
-        if "use_local_rules" not in body:
-            body["use_local_rules"] = bool(source_status.get("use_local_rules", True))
-        if "use_ai_assist" not in body:
-            body["use_ai_assist"] = bool(source_status.get("use_ai_assist", True))
-        if "mode" not in body:
-            body["mode"] = str(source_status.get("mode") or "legacy")
-        if "fiscal_year" not in body and source_status.get("fiscal_year") is not None:
-            body["fiscal_year"] = source_status.get("fiscal_year")
-        if "doc_type" not in body and source_status.get("doc_type") is not None:
-            body["doc_type"] = source_status.get("doc_type")
-        if "report_year" not in body and source_status.get("report_year") is not None:
-            body["report_year"] = source_status.get("report_year")
-
-        started = await start_analysis(new_job_id, body)
-        return {
-            **started,
-            "source_job_id": source_job_id,
-            "job_id": new_job_id,
-        }
-    except Exception:
+    for filename in REANALYZE_EPHEMERAL_FILES:
+        target = source_job_dir / filename
         try:
-            if new_job_dir.exists():
-                shutil.rmtree(new_job_dir)
+            if target.exists():
+                target.unlink()
         except Exception:
-            logger.exception("Failed to cleanup reanalyze clone %s", new_job_id)
-        raise
+            logger.exception("Failed to clear stale reanalyze artifact %s", target)
+
+    body = dict(body or {})
+    if "use_local_rules" not in body:
+        body["use_local_rules"] = bool(source_status.get("use_local_rules", True))
+    if "use_ai_assist" not in body:
+        body["use_ai_assist"] = bool(source_status.get("use_ai_assist", True))
+    if "mode" not in body:
+        body["mode"] = str(source_status.get("mode") or "legacy")
+    if "fiscal_year" not in body and source_status.get("fiscal_year") is not None:
+        body["fiscal_year"] = source_status.get("fiscal_year")
+    if "doc_type" not in body and source_status.get("doc_type") is not None:
+        body["doc_type"] = source_status.get("doc_type")
+    if "report_year" not in body and source_status.get("report_year") is not None:
+        body["report_year"] = source_status.get("report_year")
+
+    started = await start_analysis(source_job_id, body)
+    return {
+        **started,
+        "source_job_id": source_job_id,
+        "job_id": source_job_id,
+    }
 
 
 async def reanalyze_all_jobs(body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -2149,6 +2191,7 @@ async def reanalyze_all_jobs(body: Optional[Dict[str, Any]] = None) -> Dict[str,
     request_body = dict(body or {})
     include_active = bool(request_body.pop("include_active", False))
     latest_per_department = bool(request_body.pop("latest_per_department", True))
+    direct_department_only = bool(request_body.pop("direct_department_only", False))
 
     source_job_dirs = sorted(iter_job_dirs(), key=get_job_quick_timestamp, reverse=True)
     created: List[Dict[str, Any]] = []
@@ -2157,15 +2200,15 @@ async def reanalyze_all_jobs(body: Optional[Dict[str, Any]] = None) -> Dict[str,
     candidates: List[Dict[str, Any]] = []
 
     if latest_per_department and ORG_AVAILABLE:
-        seen_departments = set()
+        seen_scopes = set()
         for job_dir in source_job_dirs:
             source_job_id = job_dir.name
             status_payload = get_job_status_payload(source_job_id)
-            department = resolve_job_department_context(
+            selection_scope = resolve_job_selection_scope(
                 source_job_id,
                 status_payload=status_payload,
             )
-            if not department:
+            if not selection_scope:
                 skipped.append(
                     {
                         "source_job_id": source_job_id,
@@ -2174,7 +2217,7 @@ async def reanalyze_all_jobs(body: Optional[Dict[str, Any]] = None) -> Dict[str,
                 )
                 continue
 
-            department_id = str(department.get("department_id") or "").strip()
+            department_id = str(selection_scope.get("department_id") or "").strip()
             if not department_id:
                 skipped.append(
                     {
@@ -2184,24 +2227,53 @@ async def reanalyze_all_jobs(body: Optional[Dict[str, Any]] = None) -> Dict[str,
                 )
                 continue
 
-            if department_id in seen_departments:
+            if direct_department_only:
+                scope_level = str(selection_scope.get("scope_level") or "").strip().lower()
+                scope_id = str(selection_scope.get("scope_id") or "").strip()
+                if scope_level != "department" or scope_id != department_id:
+                    skipped.append(
+                        {
+                            "source_job_id": source_job_id,
+                            "department_id": department_id,
+                            "department_name": selection_scope.get("department_name"),
+                            "scope_id": selection_scope.get("scope_id"),
+                            "scope_name": selection_scope.get("scope_name"),
+                            "scope_level": selection_scope.get("scope_level"),
+                            "reason": "subordinate_unit_report",
+                        }
+                    )
+                    continue
+
+            scope_key = (
+                department_id
+                if direct_department_only
+                else str(selection_scope.get("scope_id") or "").strip() or department_id
+            )
+            if scope_key in seen_scopes:
                 skipped.append(
                     {
                         "source_job_id": source_job_id,
                         "department_id": department_id,
-                        "department_name": department.get("department_name"),
-                        "reason": "not_latest_in_department",
+                        "department_name": selection_scope.get("department_name"),
+                        "scope_id": selection_scope.get("scope_id"),
+                        "scope_name": selection_scope.get("scope_name"),
+                        "scope_level": selection_scope.get("scope_level"),
+                        "reason": "not_latest_in_department" if direct_department_only else "not_latest_in_scope",
                     }
                 )
                 continue
 
-            seen_departments.add(department_id)
+            seen_scopes.add(scope_key)
             candidates.append(
                 {
                     "job_dir": job_dir,
                     "job_id": source_job_id,
                     "status_payload": status_payload,
-                    "department": department,
+                    "department": {
+                        "department_id": department_id,
+                        "department_name": selection_scope.get("department_name"),
+                    },
+                    "selection_scope": selection_scope,
                 }
             )
     else:
@@ -2220,6 +2292,7 @@ async def reanalyze_all_jobs(body: Optional[Dict[str, Any]] = None) -> Dict[str,
         source_job_id = str(candidate["job_id"])
         status_payload = candidate["status_payload"]
         department = candidate.get("department") or {}
+        selection_scope = candidate.get("selection_scope") or {}
         try:
             current_status = str(status_payload.get("status") or "").strip().lower()
             if not include_active and current_status in ACTIVE_ANALYSIS_STATUSES:
@@ -2228,6 +2301,9 @@ async def reanalyze_all_jobs(body: Optional[Dict[str, Any]] = None) -> Dict[str,
                         "source_job_id": source_job_id,
                         "department_id": department.get("department_id"),
                         "department_name": department.get("department_name"),
+                        "scope_id": selection_scope.get("scope_id"),
+                        "scope_name": selection_scope.get("scope_name"),
+                        "scope_level": selection_scope.get("scope_level"),
                         "status": current_status,
                         "reason": "active_analysis",
                     }
@@ -2243,6 +2319,9 @@ async def reanalyze_all_jobs(body: Optional[Dict[str, Any]] = None) -> Dict[str,
                     "dispatch": result.get("dispatch"),
                     "department_id": department.get("department_id"),
                     "department_name": department.get("department_name"),
+                    "scope_id": selection_scope.get("scope_id"),
+                    "scope_name": selection_scope.get("scope_name"),
+                    "scope_level": selection_scope.get("scope_level"),
                 }
             )
         except HTTPException as exc:
@@ -2251,6 +2330,9 @@ async def reanalyze_all_jobs(body: Optional[Dict[str, Any]] = None) -> Dict[str,
                     "source_job_id": source_job_id,
                     "department_id": department.get("department_id"),
                     "department_name": department.get("department_name"),
+                    "scope_id": selection_scope.get("scope_id"),
+                    "scope_name": selection_scope.get("scope_name"),
+                    "scope_level": selection_scope.get("scope_level"),
                     "status_code": exc.status_code,
                     "detail": exc.detail,
                 }
@@ -2262,6 +2344,9 @@ async def reanalyze_all_jobs(body: Optional[Dict[str, Any]] = None) -> Dict[str,
                     "source_job_id": source_job_id,
                     "department_id": department.get("department_id"),
                     "department_name": department.get("department_name"),
+                    "scope_id": selection_scope.get("scope_id"),
+                    "scope_name": selection_scope.get("scope_name"),
+                    "scope_level": selection_scope.get("scope_level"),
                     "status_code": 500,
                     "detail": str(exc),
                 }
@@ -2271,6 +2356,7 @@ async def reanalyze_all_jobs(body: Optional[Dict[str, Any]] = None) -> Dict[str,
         "status": "started",
         "include_active": include_active,
         "latest_per_department": latest_per_department,
+        "direct_department_only": direct_department_only,
         "requested_count": len(source_job_dirs),
         "selected_count": len(candidates),
         "created_count": len(created),

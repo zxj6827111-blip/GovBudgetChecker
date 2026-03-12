@@ -9,6 +9,9 @@ type ReanalyzeCreatedItem = {
   dispatch?: string | null;
   department_id?: string | null;
   department_name?: string | null;
+  scope_id?: string | null;
+  scope_name?: string | null;
+  scope_level?: string | null;
 };
 
 type ReanalyzeSkippedItem = {
@@ -17,6 +20,9 @@ type ReanalyzeSkippedItem = {
   department_name?: string | null;
   status?: string | null;
   reason?: string | null;
+  scope_id?: string | null;
+  scope_name?: string | null;
+  scope_level?: string | null;
 };
 
 type ReanalyzeFailedItem = {
@@ -25,6 +31,9 @@ type ReanalyzeFailedItem = {
   department_name?: string | null;
   status_code?: number | null;
   detail?: string | null;
+  scope_id?: string | null;
+  scope_name?: string | null;
+  scope_level?: string | null;
 };
 
 export type ReanalyzeBatchPayload = {
@@ -113,6 +122,10 @@ function getReasonLabel(reason?: string | null) {
       return "已有任务正在分析";
     case "not_latest_in_department":
       return "不是该部门最新报告";
+    case "not_latest_in_scope":
+      return "不是该组织最新报告";
+    case "subordinate_unit_report":
+      return "属于下属单位报告，按部门模式已跳过";
     case "unresolved_department":
       return "未识别到所属部门";
     default:
@@ -210,9 +223,9 @@ export default function ReanalyzeProgressDialog({
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.22em] text-indigo-500">批量重分析</div>
-            <h2 className="mt-1 text-2xl font-bold text-slate-900">按部门重分析进度</h2>
+            <h2 className="mt-1 text-2xl font-bold text-slate-900">按组织重分析进度</h2>
             <p className="mt-2 text-sm text-slate-600">
-              会为每个部门最新报告新建任务，不覆盖原任务；默认继承原任务的 AI / 本地规则开关，所以原来启用了 AI 的任务会重新跑 AI。
+              会在每个部门和单位的最新报告原任务上直接刷新并重新分析，不再创建新任务；默认继承原任务的 AI / 本地规则开关。
             </p>
           </div>
           <button
@@ -226,23 +239,23 @@ export default function ReanalyzeProgressDialog({
 
         <div className="overflow-y-auto px-6 py-5">
           <div className="grid gap-3 md:grid-cols-5">
-            <SectionCard title="已创建" value={batch.created_count} description="成功创建的新分析任务" tone="slate" />
+            <SectionCard title="已刷新" value={batch.created_count} description="成功刷新并重跑的原任务" tone="slate" />
             <SectionCard title="已完成" value={doneCount} description="重分析已经完成" tone="emerald" />
             <SectionCard title="处理中" value={runningCount} description="正在运行的任务" tone="sky" />
             <SectionCard title="等待中" value={queuedCount} description="尚未完成的任务" tone="amber" />
-            <SectionCard title="失败" value={errorCount + (batch.failed_count || 0)} description="创建失败或运行失败" tone="rose" />
+            <SectionCard title="失败" value={errorCount + (batch.failed_count || 0)} description="刷新失败或运行失败" tone="rose" />
           </div>
 
           <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            共请求 {formatCount(batch.requested_count)} 个历史任务，选中 {formatCount(batch.selected_count)} 个部门最新报告，
-            创建 {formatCount(batch.created_count)} 个新任务，跳过 {formatCount(batch.skipped_count)} 个。
+            共请求 {formatCount(batch.requested_count)} 个历史任务，选中 {formatCount(batch.selected_count)} 个组织最新报告，
+            刷新 {formatCount(batch.created_count)} 个原任务，跳过 {formatCount(batch.skipped_count)} 个。
           </div>
 
           <section className="mt-6">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h3 className="text-lg font-semibold text-slate-900">实时进度</h3>
-                <p className="mt-1 text-sm text-slate-500">下面会持续刷新每个部门对应的新任务状态。</p>
+                <p className="mt-1 text-sm text-slate-500">下面会持续刷新每个组织对应的原任务刷新状态。</p>
               </div>
               <div className="rounded-full bg-indigo-100 px-3 py-1 text-sm font-medium text-indigo-700">
                 {doneCount}/{created.length} 完成
@@ -268,11 +281,19 @@ export default function ReanalyzeProgressDialog({
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
                           <div className="text-sm font-semibold text-slate-900">
-                            {item.department_name || "未识别部门"}
+                            {item.scope_name || item.department_name || "未识别组织"}
                           </div>
                           <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
-                            <span>源任务：{item.source_job_id || "--"}</span>
-                            <span>新任务：{item.job_id || "--"}</span>
+                            <span>
+                              范围：
+                              {item.scope_level === "department"
+                                ? "部门"
+                                : item.scope_level === "unit"
+                                  ? "单位"
+                                  : "未知"}
+                            </span>
+                            <span>原任务：{item.source_job_id || "--"}</span>
+                            <span>刷新任务：{item.job_id || "--"}</span>
                           </div>
                           {stageText ? (
                             <div className="mt-2 text-sm text-slate-600">当前阶段：{stageText}</div>
@@ -303,7 +324,7 @@ export default function ReanalyzeProgressDialog({
                 })
               ) : (
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-center text-sm text-slate-500">
-                  当前没有新建的重分析任务。
+                  当前没有被刷新的重分析任务。
                 </div>
               )}
             </div>
@@ -311,14 +332,24 @@ export default function ReanalyzeProgressDialog({
 
           {skipped.length > 0 ? (
             <section className="mt-6">
-              <h3 className="text-lg font-semibold text-slate-900">未创建的部门</h3>
+              <h3 className="text-lg font-semibold text-slate-900">未刷新的组织</h3>
               <div className="mt-4 space-y-3">
                 {skipped.map((item, index) => (
                   <div key={`${item.source_job_id || "skip"}-${index}`} className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
-                        <div className="text-sm font-semibold text-slate-900">{item.department_name || "未识别部门"}</div>
-                        <div className="mt-1 text-xs text-slate-500">源任务：{item.source_job_id || "--"}</div>
+                        <div className="text-sm font-semibold text-slate-900">{item.scope_name || item.department_name || "未识别组织"}</div>
+                        <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
+                          <span>
+                            范围：
+                            {item.scope_level === "department"
+                              ? "部门"
+                              : item.scope_level === "unit"
+                                ? "单位"
+                                : "未知"}
+                          </span>
+                          <span>原任务：{item.source_job_id || "--"}</span>
+                        </div>
                       </div>
                       <div className="rounded-full bg-white/80 px-3 py-1 text-xs font-medium text-amber-700">
                         {getReasonLabel(item.reason)}
@@ -332,15 +363,25 @@ export default function ReanalyzeProgressDialog({
 
           {failed.length > 0 ? (
             <section className="mt-6">
-              <h3 className="text-lg font-semibold text-slate-900">创建失败</h3>
+              <h3 className="text-lg font-semibold text-slate-900">刷新失败</h3>
               <div className="mt-4 space-y-3">
                 {failed.map((item, index) => (
                   <div key={`${item.source_job_id || "failed"}-${index}`} className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
-                    <div className="text-sm font-semibold text-rose-800">{item.department_name || "未识别部门"}</div>
-                    <div className="mt-1 text-xs text-rose-700">源任务：{item.source_job_id || "--"}</div>
+                    <div className="text-sm font-semibold text-rose-800">{item.scope_name || item.department_name || "未识别组织"}</div>
+                    <div className="mt-1 flex flex-wrap gap-2 text-xs text-rose-700">
+                      <span>
+                        范围：
+                        {item.scope_level === "department"
+                          ? "部门"
+                          : item.scope_level === "unit"
+                            ? "单位"
+                            : "未知"}
+                      </span>
+                      <span>原任务：{item.source_job_id || "--"}</span>
+                    </div>
                     <div className="mt-2 text-sm text-rose-700">
-                      {item.status_code ? `HTTP ${item.status_code} · ` : ""}
-                      {item.detail || "创建失败"}
+                      {item.status_code ? `HTTP ${item.status_code} ` : ""}
+                      {item.detail || "刷新失败"}
                     </div>
                   </div>
                 ))}

@@ -32,6 +32,8 @@ interface JobSummary {
     | "unknown";
   progress: number;
   ts: number;
+  created_ts?: number;
+  updated_ts?: number;
   mode?: string;
   dual_mode_enabled?: boolean;
   stage?: string;
@@ -161,6 +163,8 @@ export default function OrganizationDetailView({
   const [newUnitName, setNewUnitName] = useState("");
   const [isCreatingUnit, setIsCreatingUnit] = useState(false);
   const [deletingUnitId, setDeletingUnitId] = useState<string | null>(null);
+  const [selectedJobIds, setSelectedJobIds] = useState<string[]>([]);
+  const [isBatchDeleting, setIsBatchDeleting] = useState(false);
   const [showHeaderActions, setShowHeaderActions] = useState(false);
   const lastRefreshKeyRef = useRef<number | undefined>(refreshKey);
 
@@ -582,6 +586,11 @@ export default function OrganizationDetailView({
   }, [jobs, selectedKindFilter, selectedYearFilter]);
 
   useEffect(() => {
+    const visibleIds = new Set(filteredJobs.map((job) => job.job_id));
+    setSelectedJobIds((prev) => prev.filter((jobId) => visibleIds.has(jobId)));
+  }, [filteredJobs]);
+
+  useEffect(() => {
     const root = jobsScrollRef.current;
     if (!root) return;
 
@@ -651,6 +660,11 @@ export default function OrganizationDetailView({
     () => filteredJobs.reduce((sum, job) => sum + getDisplayIssueTotal(job), 0),
     [filteredJobs]
   );
+  const filteredJobIds = useMemo(() => filteredJobs.map((job) => job.job_id), [filteredJobs]);
+  const selectedJobCount = selectedJobIds.length;
+  const allFilteredJobsSelected =
+    filteredJobIds.length > 0 && filteredJobIds.every((jobId) => selectedJobIds.includes(jobId));
+  const tableColumnCount = isAdmin ? 6 : 5;
 
   const kindCounts = useMemo(() => {
     const counts = { budget: 0, final: 0 };
@@ -789,13 +803,95 @@ export default function OrganizationDetailView({
     if (normalizedStatus === "error") return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-red-100 text-red-700">异常</span>;
     return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-700">未知</span>;
   };
+
+  const formatJobTimestamp = useCallback((value?: number | null) => {
+    if (typeof value !== "number" || value <= 0) {
+      return "--";
+    }
+    return format(new Date(value * 1000), "MM-dd HH:mm", { locale: zhCN });
+  }, []);
+
+  const toggleJobSelection = useCallback((jobId: string) => {
+    setSelectedJobIds((prev) =>
+      prev.includes(jobId) ? prev.filter((item) => item !== jobId) : [...prev, jobId]
+    );
+  }, []);
+
+  const handleBatchDelete = useCallback(async () => {
+    if (!isAdmin) {
+      alert("仅管理员可以批量删除任务");
+      return;
+    }
+    if (selectedJobIds.length === 0) return;
+    if (!confirm(`确定要批量删除选中的 ${selectedJobIds.length} 个任务吗？此操作不可恢复。`)) {
+      return;
+    }
+
+    setIsBatchDeleting(true);
+    try {
+      const res = await fetch("/api/jobs/batch-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_ids: selectedJobIds }),
+      });
+
+      let payload: any = {};
+      try {
+        payload = await res.json();
+      } catch {
+        payload = {};
+      }
+
+      if (!res.ok) {
+        throw new Error(
+          payload?.detail || payload?.error || payload?.message || "批量删除失败"
+        );
+      }
+
+      const deletedJobIds = Array.isArray(payload?.deleted_job_ids)
+        ? payload.deleted_job_ids
+            .map((item: unknown) => String(item || "").trim())
+            .filter((item: string) => item.length > 0)
+        : [];
+      const failedItems = Array.isArray(payload?.failed) ? payload.failed : [];
+      const failedJobIds = failedItems
+        .map((item: any) => String(item?.job_id || "").trim())
+        .filter((item: string) => item.length > 0);
+
+      if (deletedJobIds.length > 0) {
+        const deletedSet = new Set(deletedJobIds);
+        setJobs((prev) => prev.filter((item) => !deletedSet.has(item.job_id)));
+        setJobsTotal((prev) => Math.max(0, prev - deletedJobIds.length));
+        onJobDeleted?.();
+      }
+
+      setSelectedJobIds(failedJobIds);
+
+      if (failedItems.length > 0) {
+        alert(
+          `批量删除完成，成功 ${deletedJobIds.length} 个，失败 ${failedItems.length} 个。`
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "批量删除失败";
+      alert(message);
+    } finally {
+      setIsBatchDeleting(false);
+    }
+  }, [isAdmin, onJobDeleted, selectedJobIds]);
+
   const handleDelete = async (jobId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!isAdmin) {
+      alert("仅管理员可以删除任务");
+      return;
+    }
     if (!confirm("确定要删除这个任务吗？此操作不可恢复。")) return;
     try {
       const res = await fetch(`/api/jobs/${jobId}`, { method: "DELETE" });
       if (res.ok) {
         setJobs((prev) => prev.filter((item) => item.job_id !== jobId));
+        setSelectedJobIds((prev) => prev.filter((item) => item !== jobId));
         setJobsTotal((prev) => Math.max(0, prev - 1));
         onJobDeleted?.();
       } else {
@@ -821,8 +917,8 @@ export default function OrganizationDetailView({
 
       setDeletingUnitId(unit.id);
       try {
-        const res = await fetch(`/api/organizations/${encodeURIComponent(unit.id)}`, {
-          method: "DELETE",
+        const res = await fetch(`/api/organizations/${encodeURIComponent(unit.id)}/delete`, {
+          method: "POST",
         });
 
         let payload: any = {};
@@ -988,8 +1084,8 @@ export default function OrganizationDetailView({
       );
       if (!confirmed) return;
 
-      const res = await fetch(`/api/organizations/${encodeURIComponent(departmentId)}`, {
-        method: "DELETE",
+      const res = await fetch(`/api/organizations/${encodeURIComponent(departmentId)}/delete`, {
+        method: "POST",
       });
 
       let payload: any = {};
@@ -1209,6 +1305,29 @@ export default function OrganizationDetailView({
                     当前{selectedKindFilter === "all" ? "全部类型" : selectedKindFilter === "budget" ? "预算" : "决算"}，当前{selectedYearFilter === "all" ? "全部年度" : `${selectedYearFilter}年度`}：{filteredJobs.length}个文件，合并问题(去重){filteredIssueTotal}
                     <span className="ml-2 text-gray-400">已加载 {jobs.length}/{jobsTotal || jobs.length}</span>
                   </div>
+
+                  {isAdmin && (
+                    <div className="ml-auto flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelectedJobIds(allFilteredJobsSelected ? [] : filteredJobIds)
+                        }
+                        disabled={filteredJobIds.length === 0 || isBatchDeleting}
+                        className="inline-flex items-center rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {allFilteredJobsSelected ? "取消全选" : "全选当前筛选"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleBatchDelete}
+                        disabled={selectedJobCount === 0 || isBatchDeleting}
+                        className="inline-flex items-center rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {isBatchDeleting ? "删除中..." : `批量删除${selectedJobCount > 0 ? ` (${selectedJobCount})` : ""}`}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1226,8 +1345,14 @@ export default function OrganizationDetailView({
                 <table className="min-w-full divide-y divide-gray-200/50">
                   <thead className="bg-gray-50/50">
                     <tr>
+                      {isAdmin && (
+                        <th className="w-14 px-4 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                          选择
+                        </th>
+                      )}
                       <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">文件名称</th>
                       <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">上传时间</th>
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">更新时间</th>
                       <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">状态</th>
                       <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider w-48">操作</th>
                     </tr>
@@ -1235,7 +1360,7 @@ export default function OrganizationDetailView({
                   <tbody className="divide-y divide-gray-200/50 bg-transparent">
                     {virtualWindow.enabled && virtualWindow.topSpacerHeight > 0 && (
                       <tr aria-hidden="true" className="border-0">
-                        <td colSpan={4} className="p-0" style={{ height: `${virtualWindow.topSpacerHeight}px` }} />
+                        <td colSpan={tableColumnCount} className="p-0" style={{ height: `${virtualWindow.topSpacerHeight}px` }} />
                       </tr>
                     )}
                     {virtualWindow.items.map((job) => {
@@ -1245,9 +1370,22 @@ export default function OrganizationDetailView({
                       const sourceTotal = localTotal + aiTotal;
                       const dedupedCount = sourceTotal > mergedTotal ? sourceTotal - mergedTotal : 0;
                       const isNormal = mergedTotal === 0;
+                      const isSelected = selectedJobIds.includes(job.job_id);
 
                       return (
                         <tr key={job.job_id} className="group hover:bg-gray-50/50 transition-colors cursor-pointer" onClick={() => onSelectJob(job.job_id)}>
+                          {isAdmin && (
+                            <td className="px-4 py-4 text-center" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleJobSelection(job.job_id)}
+                                disabled={isBatchDeleting}
+                                className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                aria-label={`选择任务 ${job.filename || job.job_id}`}
+                              />
+                            </td>
+                          )}
                           <td className="px-6 py-4">
                             <div className="flex items-center gap-3">
                               <div className="flex-1 min-w-0">
@@ -1273,7 +1411,12 @@ export default function OrganizationDetailView({
                               </div>
                             </div>
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{format(new Date(job.ts * 1000), "MM-dd HH:mm", { locale: zhCN })}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {formatJobTimestamp(job.created_ts ?? job.ts)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {formatJobTimestamp(job.updated_ts ?? job.ts)}
+                          </td>
                           <td className="px-6 py-4">
                             <div className="flex flex-col gap-1.5 justify-center">
                               <div className="flex items-center gap-2">
@@ -1314,9 +1457,15 @@ export default function OrganizationDetailView({
                                   {job.organization_name ? "改关联" : "去关联"}
                                 </button>
                               )}
-                              <button onClick={(e) => { e.stopPropagation(); handleDelete(job.job_id, e); }} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors" title="删除">
-                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                              </button>
+                              {isAdmin && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleDelete(job.job_id, e); }}
+                                  className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
+                                  title="删除"
+                                >
+                                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -1324,7 +1473,7 @@ export default function OrganizationDetailView({
                     })}
                     {virtualWindow.enabled && virtualWindow.bottomSpacerHeight > 0 && (
                       <tr aria-hidden="true" className="border-0">
-                        <td colSpan={4} className="p-0" style={{ height: `${virtualWindow.bottomSpacerHeight}px` }} />
+                        <td colSpan={tableColumnCount} className="p-0" style={{ height: `${virtualWindow.bottomSpacerHeight}px` }} />
                       </tr>
                     )}
                   </tbody>
