@@ -526,7 +526,7 @@ def test_department_stats_only_count_direct_jobs():
     assert job_id in dept_job_ids
 
 
-def test_job_reanalyze_endpoint_creates_new_job(tmp_path, monkeypatch):
+def test_job_reanalyze_endpoint_refreshes_existing_job(tmp_path, monkeypatch):
     class _DummyQueue:
         def __init__(self) -> None:
             self.enqueued: list[str] = []
@@ -573,10 +573,10 @@ def test_job_reanalyze_endpoint_creates_new_job(tmp_path, monkeypatch):
     payload = response.json()
     assert payload["status"] == "started"
     assert payload["source_job_id"] == "job-old"
-    assert payload["job_id"] != "job-old"
-    assert queue.enqueued == [payload["job_id"]]
+    assert payload["job_id"] == "job-old"
+    assert queue.enqueued == ["job-old"]
 
-    detail = client.get(f"/api/jobs/{payload['job_id']}")
+    detail = client.get("/api/jobs/job-old")
     assert detail.status_code == 200
     detail_payload = detail.json()
     assert detail_payload["status"] == "queued"
@@ -647,8 +647,8 @@ def test_job_reanalyze_all_endpoint_batches_jobs(tmp_path, monkeypatch):
     assert payload["failed_count"] == 0
     assert len(queue.enqueued) == 1
 
-    new_job_id = payload["created"][0]["job_id"]
-    detail = client.get(f"/api/jobs/{new_job_id}")
+    refreshed_job_id = payload["created"][0]["job_id"]
+    detail = client.get(f"/api/jobs/{refreshed_job_id}")
     assert detail.status_code == 200
     detail_payload = detail.json()
     assert detail_payload["status"] == "queued"
@@ -676,6 +676,34 @@ def test_structured_ingest_cleanup_endpoint_returns_runtime_payload(monkeypatch)
     assert payload["status"] == "preview"
     assert payload["cleanup_document_version_count"] == 2
     assert payload["cleanup_job_count"] == 3
+
+
+def test_batch_delete_endpoint_removes_jobs(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    runtime._JOB_SUMMARY_CACHE.clear()
+
+    for job_id in ("job-delete-1", "job-delete-2"):
+        job_dir = tmp_path / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / "status.json").write_text(
+            json.dumps({"job_id": job_id, "status": "done"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/jobs/batch-delete",
+        json={"job_ids": ["job-delete-1", "job-delete-2", "job-delete-1"]},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["requested_count"] == 2
+    assert payload["deleted_count"] == 2
+    assert payload["failed_count"] == 0
+    assert set(payload["deleted_job_ids"]) == {"job-delete-1", "job-delete-2"}
+    assert not (tmp_path / "job-delete-1").exists()
+    assert not (tmp_path / "job-delete-2").exists()
 
 
 def test_job_issue_ignore_endpoint_returns_filtered_status(monkeypatch):

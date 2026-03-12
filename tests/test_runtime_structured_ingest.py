@@ -239,7 +239,7 @@ async def test_start_analysis_preserves_organization_context(tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_reanalyze_job_clones_pdf_and_reuses_analysis_context(tmp_path, monkeypatch):
+async def test_reanalyze_job_refreshes_same_job_and_reuses_analysis_context(tmp_path, monkeypatch):
     class _DummyOrg:
         def __init__(self, org_id: str, name: str) -> None:
             self.id = org_id
@@ -261,32 +261,12 @@ async def test_reanalyze_job_clones_pdf_and_reuses_analysis_context(tmp_path, mo
         async def enqueue(self, job_id: str) -> None:
             self.enqueued.append(job_id)
 
-    binding_calls: list[dict[str, object]] = []
-
-    def _fake_set_job_organization(
-        job_id: str,
-        org_id: str,
-        *,
-        match_type: str = "manual",
-        confidence: float = 1.0,
-    ) -> dict[str, object]:
-        binding_calls.append(
-            {
-                "job_id": job_id,
-                "org_id": org_id,
-                "match_type": match_type,
-                "confidence": confidence,
-            }
-        )
-        return {"organization_id": org_id}
-
     async def _dummy_runner(_job_dir):
         return None
 
     monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
     monkeypatch.setattr(runtime, "ORG_AVAILABLE", True)
     monkeypatch.setattr(runtime, "require_org_storage", lambda: _DummyStorage())
-    monkeypatch.setattr(runtime, "set_job_organization", _fake_set_job_organization)
     monkeypatch.setattr(runtime, "_pipeline_runner", _dummy_runner)
 
     queue = _DummyQueue()
@@ -330,22 +310,10 @@ async def test_reanalyze_job_clones_pdf_and_reuses_analysis_context(tmp_path, mo
 
     assert payload["status"] == "started"
     assert payload["source_job_id"] == "job-source"
-    assert payload["job_id"] != "job-source"
-    assert queue.enqueued == [payload["job_id"]]
-    assert binding_calls == [
-        {
-            "job_id": payload["job_id"],
-            "org_id": "org-1",
-            "match_type": "manual",
-            "confidence": 1.0,
-        }
-    ]
+    assert payload["job_id"] == "job-source"
+    assert queue.enqueued == ["job-source"]
 
-    cloned_job_dir = tmp_path / payload["job_id"]
-    cloned_pdf = cloned_job_dir / "source_2025.pdf"
-    assert cloned_pdf.read_bytes() == pdf_bytes
-
-    status = runtime.read_json_file(cloned_job_dir / "status.json", default={})
+    status = runtime.read_json_file(source_job_dir / "status.json", default={})
     assert status["status"] == "queued"
     assert status["filename"] == "source_2025.pdf"
     assert status["checksum"] == "checksum-source"
@@ -356,6 +324,56 @@ async def test_reanalyze_job_clones_pdf_and_reuses_analysis_context(tmp_path, mo
     assert status["use_local_rules"] is False
     assert status["use_ai_assist"] is True
     assert status["mode"] == "structured"
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_job_clears_ephemeral_outputs_before_refresh(tmp_path, monkeypatch):
+    class _DummyQueue:
+        def __init__(self) -> None:
+            self.enqueued: list[str] = []
+
+        async def enqueue(self, job_id: str) -> None:
+            self.enqueued.append(job_id)
+
+    async def _dummy_runner(_job_dir):
+        return None
+
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    monkeypatch.setattr(runtime, "ORG_AVAILABLE", False)
+    monkeypatch.setattr(runtime, "_pipeline_runner", _dummy_runner)
+    monkeypatch.setattr(runtime, "_job_queue", _DummyQueue())
+
+    job_dir = tmp_path / "job-source"
+    job_dir.mkdir(parents=True)
+    (job_dir / "source.pdf").write_bytes(
+        b"%PDF-1.4\n1 0 obj <<>> endobj\ntrailer <<>>\n%%EOF\n"
+    )
+    runtime.write_json_file(
+        job_dir / "status.json",
+        {
+            "job_id": "job-source",
+            "status": "done",
+            "progress": 100,
+            "filename": "source.pdf",
+        },
+    )
+    for filename in (
+        "structured_ingest.json",
+        "ignored_issues.json",
+        "annotated.pdf",
+        "compare_old_vs_new.json",
+    ):
+        (job_dir / filename).write_text("stale", encoding="utf-8")
+
+    await runtime.reanalyze_job("job-source")
+
+    for filename in (
+        "structured_ingest.json",
+        "ignored_issues.json",
+        "annotated.pdf",
+        "compare_old_vs_new.json",
+    ):
+        assert not (job_dir / filename).exists()
 
 
 @pytest.mark.asyncio
@@ -385,11 +403,7 @@ async def test_reanalyze_all_jobs_skips_active_and_collects_results(tmp_path, mo
         calls.append(job_id)
         if job_id == "job-error":
             raise runtime.HTTPException(status_code=404, detail="source job PDF does not exist")
-        return {
-            "job_id": f"{job_id}-new",
-            "status": "started",
-            "dispatch": "local_queue",
-        }
+        return {"job_id": job_id, "status": "started", "dispatch": "local_queue"}
 
     monkeypatch.setattr(runtime, "reanalyze_job", _fake_reanalyze_job)
 
@@ -402,7 +416,7 @@ async def test_reanalyze_all_jobs_skips_active_and_collects_results(tmp_path, mo
     assert payload["failed_count"] == 1
     assert set(calls) == {"job-done", "job-error"}
     assert payload["created"][0]["source_job_id"] == "job-done"
-    assert payload["created"][0]["job_id"] == "job-done-new"
+    assert payload["created"][0]["job_id"] == "job-done"
     assert payload["skipped"][0]["source_job_id"] == "job-running"
     assert payload["skipped"][0]["reason"] == "active_analysis"
     assert payload["failed"][0]["source_job_id"] == "job-error"
@@ -474,11 +488,7 @@ async def test_reanalyze_all_jobs_only_selects_latest_job_per_department(tmp_pat
 
     async def _fake_reanalyze_job(job_id: str, body=None):
         calls.append(job_id)
-        return {
-            "job_id": f"{job_id}-new",
-            "status": "started",
-            "dispatch": "local_queue",
-        }
+        return {"job_id": job_id, "status": "started", "dispatch": "local_queue"}
 
     monkeypatch.setattr(runtime, "reanalyze_job", _fake_reanalyze_job)
 
@@ -493,11 +503,180 @@ async def test_reanalyze_all_jobs_only_selects_latest_job_per_department(tmp_pat
     assert calls == ["job-a-new"]
 
     skipped = {(item["source_job_id"], item["reason"]) for item in payload["skipped"]}
-    assert ("job-a-old", "not_latest_in_department") in skipped
+    assert ("job-a-old", "not_latest_in_scope") in skipped
     assert ("job-b-running", "active_analysis") in skipped
     assert ("job-unassigned", "unresolved_department") in skipped
     assert payload["created"][0]["source_job_id"] == "job-a-new"
     assert payload["created"][0]["department_id"] == "dept-a"
+    assert payload["created"][0]["scope_id"] == "unit-a"
+    assert payload["created"][0]["scope_level"] == "unit"
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_all_jobs_selects_latest_department_and_unit_reports(
+    tmp_path, monkeypatch
+):
+    class _DummyOrg:
+        def __init__(self, org_id: str, name: str, level: str, parent_id: str | None = None) -> None:
+            self.id = org_id
+            self.name = name
+            self.level = level
+            self.parent_id = parent_id
+
+    class _DummyLink:
+        def __init__(self, org_id: str) -> None:
+            self.org_id = org_id
+
+    class _DummyStorage:
+        def __init__(self) -> None:
+            self.orgs = {
+                "dept-a": _DummyOrg("dept-a", "部门A", "department"),
+                "unit-a": _DummyOrg("unit-a", "部门A下属单位", "unit", "dept-a"),
+            }
+            self.links = {
+                "job-dept": _DummyLink("dept-a"),
+                "job-unit-latest": _DummyLink("unit-a"),
+            }
+
+        def get_job_org(self, job_id: str):
+            return self.links.get(job_id)
+
+        def get_by_id(self, org_id: str):
+            return self.orgs.get(org_id)
+
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    monkeypatch.setattr(runtime, "ORG_AVAILABLE", True)
+    monkeypatch.setattr(runtime, "require_org_storage", lambda: _DummyStorage())
+
+    timestamps = {
+        "job-dept": 1000,
+        "job-unit-latest": 2000,
+    }
+    for job_id in timestamps:
+        job_dir = tmp_path / job_id
+        job_dir.mkdir(parents=True)
+        status_file = job_dir / "status.json"
+        runtime.write_json_file(
+            status_file,
+            {
+                "job_id": job_id,
+                "status": "done",
+                "progress": 100,
+                "organization_id": "dept-a" if job_id == "job-dept" else "unit-a",
+                "organization_name": "部门A" if job_id == "job-dept" else "部门A下属单位",
+                "organization_match_type": "manual",
+                "organization_match_confidence": 1.0,
+            },
+        )
+        os.utime(status_file, (timestamps[job_id], timestamps[job_id]))
+
+    calls: list[str] = []
+
+    async def _fake_reanalyze_job(job_id: str, body=None):
+        calls.append(job_id)
+        return {"job_id": job_id, "status": "started", "dispatch": "local_queue"}
+
+    monkeypatch.setattr(runtime, "reanalyze_job", _fake_reanalyze_job)
+
+    payload = await runtime.reanalyze_all_jobs({"latest_per_department": True})
+
+    assert payload["status"] == "started"
+    assert payload["requested_count"] == 2
+    assert payload["selected_count"] == 2
+    assert payload["created_count"] == 2
+    assert calls == ["job-unit-latest", "job-dept"]
+
+    created_pairs = {
+        (item["source_job_id"], item["scope_id"], item["scope_level"])
+        for item in payload["created"]
+    }
+    assert ("job-dept", "dept-a", "department") in created_pairs
+    assert ("job-unit-latest", "unit-a", "unit") in created_pairs
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_all_jobs_can_skip_subordinate_unit_reports_for_department_mode(
+    tmp_path, monkeypatch
+):
+    class _DummyOrg:
+        def __init__(self, org_id: str, name: str, level: str, parent_id: str | None = None) -> None:
+            self.id = org_id
+            self.name = name
+            self.level = level
+            self.parent_id = parent_id
+
+    class _DummyLink:
+        def __init__(self, org_id: str) -> None:
+            self.org_id = org_id
+
+    class _DummyStorage:
+        def __init__(self) -> None:
+            self.orgs = {
+                "dept-a": _DummyOrg("dept-a", "部门A", "department"),
+                "unit-a": _DummyOrg("unit-a", "部门A下属单位", "unit", "dept-a"),
+            }
+            self.links = {
+                "job-dept": _DummyLink("dept-a"),
+                "job-unit-latest": _DummyLink("unit-a"),
+            }
+
+        def get_job_org(self, job_id: str):
+            return self.links.get(job_id)
+
+        def get_by_id(self, org_id: str):
+            return self.orgs.get(org_id)
+
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    monkeypatch.setattr(runtime, "ORG_AVAILABLE", True)
+    monkeypatch.setattr(runtime, "require_org_storage", lambda: _DummyStorage())
+
+    timestamps = {
+        "job-dept": 1000,
+        "job-unit-latest": 2000,
+    }
+    for job_id in timestamps:
+        job_dir = tmp_path / job_id
+        job_dir.mkdir(parents=True)
+        status_file = job_dir / "status.json"
+        runtime.write_json_file(
+            status_file,
+            {
+                "job_id": job_id,
+                "status": "done",
+                "progress": 100,
+                "organization_id": "dept-a" if job_id == "job-dept" else "unit-a",
+                "organization_name": "部门A" if job_id == "job-dept" else "部门A下属单位",
+                "organization_match_type": "manual",
+                "organization_match_confidence": 1.0,
+            },
+        )
+        os.utime(status_file, (timestamps[job_id], timestamps[job_id]))
+
+    calls: list[str] = []
+
+    async def _fake_reanalyze_job(job_id: str, body=None):
+        calls.append(job_id)
+        return {"job_id": job_id, "status": "started", "dispatch": "local_queue"}
+
+    monkeypatch.setattr(runtime, "reanalyze_job", _fake_reanalyze_job)
+
+    payload = await runtime.reanalyze_all_jobs(
+        {
+            "latest_per_department": True,
+            "direct_department_only": True,
+        }
+    )
+
+    assert payload["status"] == "started"
+    assert payload["direct_department_only"] is True
+    assert payload["requested_count"] == 2
+    assert payload["selected_count"] == 1
+    assert payload["created_count"] == 1
+    assert calls == ["job-dept"]
+
+    skipped = {(item["source_job_id"], item["reason"]) for item in payload["skipped"]}
+    assert ("job-unit-latest", "subordinate_unit_report") in skipped
+    assert payload["created"][0]["source_job_id"] == "job-dept"
 
 
 def test_resolve_latest_structured_ingest_job_prefers_latest_version_timestamp(tmp_path, monkeypatch):
@@ -611,10 +790,10 @@ async def test_reanalyze_job_preserves_source_version_timestamp(tmp_path, monkey
     monkeypatch.setattr(runtime, "start_analysis", _fake_start_analysis)
 
     payload = await runtime.reanalyze_job("job-source")
-    new_status = runtime.get_job_status_payload(payload["job_id"] )
+    new_status = runtime.get_job_status_payload(payload["job_id"])
 
     assert new_status["version_created_at"] == 1234.5
-    assert float(new_status["job_created_at"]) >= 1234.5
+    assert new_status["job_created_at"] == 1234.5
     assert payload["source_job_id"] == "job-source"
 
 

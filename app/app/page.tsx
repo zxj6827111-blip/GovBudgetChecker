@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import IssueTabs, { DualModeResult, IssueItem } from "./components/IssueTabs";
@@ -764,7 +764,7 @@ export default function HomePage() {
 
   const handleGlobalReanalyze = useCallback(async () => {
     if (!isAdmin) {
-      setToast({ message: "仅管理员可以执行按部门重分析", type: "error" });
+      setToast({ message: "仅管理员可以执行按组织重分析", type: "error" });
       return;
     }
     if (isGlobalReanalyzing) {
@@ -772,7 +772,7 @@ export default function HomePage() {
     }
 
     const confirmed = window.confirm(
-      "\u5c06\u6309\u6bcf\u4e2a\u90e8\u95e8\u53ea\u53d6\u6700\u65b0\u4e00\u4efd\u62a5\u544a\u521b\u5efa\u65b0\u7684\u91cd\u5206\u6790\u4efb\u52a1\uff0c\u6b63\u5728\u5206\u6790\u4e2d\u7684\u4efb\u52a1\u4f1a\u81ea\u52a8\u8df3\u8fc7\u3002\u662f\u5426\u7ee7\u7eed\uff1f"
+      "系统会按每个部门和单位的最新报告，直接刷新原任务并重新分析；正在分析中的任务会自动跳过。是否继续？"
     );
     if (!confirmed) {
       return;
@@ -805,10 +805,10 @@ export default function HomePage() {
         createdCount > 0 || failedCount === 0 ? "success" : "error";
       const message =
         createdCount > 0
-          ? `\u5df2\u4e3a ${createdCount} \u4e2a\u90e8\u95e8\u7684\u6700\u65b0\u62a5\u544a\u521b\u5efa\u91cd\u5206\u6790\u4efb\u52a1\uff0c\u8df3\u8fc7 ${skippedCount} \u4e2a\uff0c\u5931\u8d25 ${failedCount} \u4e2a`
+          ? `已为 ${createdCount} 个组织刷新原任务并重新分析，跳过 ${skippedCount} 个，失败 ${failedCount} 个`
           : failedCount > 0
-            ? `\u6279\u91cf\u91cd\u5206\u6790\u5931\u8d25 ${failedCount} \u4e2a\uff0c\u8df3\u8fc7 ${skippedCount} \u4e2a`
-            : `\u6ca1\u6709\u53ef\u91cd\u5206\u6790\u7684\u90e8\u95e8\u6700\u65b0\u62a5\u544a\uff0c\u8df3\u8fc7 ${skippedCount} \u4e2a`;
+            ? `批量重分析失败 ${failedCount} 个，跳过 ${skippedCount} 个`
+            : `没有可重分析的组织最新报告，跳过 ${skippedCount} 个`;
       setToast({ message, type: toastType });
     } catch (error) {
       console.error("Failed to batch reanalyze jobs", error);
@@ -827,7 +827,7 @@ export default function HomePage() {
   const handleGlobalReanalyzeWithProgress = useCallback(async () => {
     if (!isAdmin) {
       setToast({
-        message: "\u4ec5\u7ba1\u7406\u5458\u53ef\u4ee5\u6267\u884c\u6309\u90e8\u95e8\u91cd\u5206\u6790",
+        message: "\u4ec5\u7ba1\u7406\u5458\u53ef\u4ee5\u6267\u884c\u6309\u7ec4\u7ec7\u91cd\u5206\u6790",
         type: "error",
       });
       return;
@@ -836,7 +836,7 @@ export default function HomePage() {
       return;
     }
 
-    const confirmed = window.confirm("\u7cfb\u7edf\u4f1a\u6309\u6bcf\u4e2a\u90e8\u95e8\u6700\u65b0\u7684\u4e00\u4efd\u62a5\u544a\u65b0\u5efa\u91cd\u5206\u6790\u4efb\u52a1\uff0c\u4e0d\u4f1a\u8986\u76d6\u539f\u4efb\u52a1\uff1b\u6b63\u5728\u5206\u6790\u4e2d\u7684\u4efb\u52a1\u4f1a\u81ea\u52a8\u8df3\u8fc7\u3002\u662f\u5426\u7ee7\u7eed\uff1f");
+    const confirmed = window.confirm("系统会按每个部门和单位的最新报告，直接刷新原任务并重新分析；正在分析中的任务会自动跳过。是否继续？");
     if (!confirmed) {
       return;
     }
@@ -889,10 +889,10 @@ export default function HomePage() {
       const toastType = createdCount > 0 || failedCount === 0 ? "success" : "error";
       const message =
         createdCount > 0
-          ? `\u5df2\u4e3a ${createdCount} \u4e2a\u90e8\u95e8\u521b\u5efa\u91cd\u5206\u6790\u4efb\u52a1\uff0c\u5df2\u81ea\u52a8\u6253\u5f00\u8fdb\u5ea6\u9762\u677f`
+          ? `\u5df2\u4e3a ${createdCount} \u4e2a\u7ec4\u7ec7\u5237\u65b0\u539f\u4efb\u52a1\u5e76\u91cd\u65b0\u5206\u6790\uff0c\u5df2\u81ea\u52a8\u6253\u5f00\u8fdb\u5ea6\u9762\u677f`
           : failedCount > 0
             ? `\u6279\u91cf\u91cd\u5206\u6790\u5931\u8d25 ${failedCount} \u4e2a\uff0c\u8df3\u8fc7 ${skippedCount} \u4e2a`
-            : `\u6ca1\u6709\u53ef\u91cd\u5206\u6790\u7684\u90e8\u95e8\u6700\u65b0\u62a5\u544a\uff0c\u8df3\u8fc7 ${skippedCount} \u4e2a`;
+            : `\u6ca1\u6709\u53ef\u91cd\u5206\u6790\u7684\u7ec4\u7ec7\u6700\u65b0\u62a5\u544a\uff0c\u8df3\u8fc7 ${skippedCount} \u4e2a`;
       setToast({ message, type: toastType });
     } catch (error) {
       console.error("Failed to batch reanalyze jobs", error);
@@ -1055,7 +1055,7 @@ export default function HomePage() {
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
           const message =
-            String(payload?.detail || payload?.error || "").trim() || "忽略问题失败";
+            String(payload?.detail || payload?.error || "").trim() || "蹇界暐闂澶辫触";
           throw new Error(message);
         }
 
@@ -1067,14 +1067,14 @@ export default function HomePage() {
           console.error("Failed to refresh job list after ignoring issue", listError);
         });
         setOrgRefreshKey((prev) => prev + 1);
-        setToast({ message: "该问题已忽略，合并问题统计已刷新", type: "success" });
+        setToast({ message: "璇ラ棶棰樺凡蹇界暐锛屽悎骞堕棶棰樼粺璁″凡鍒锋柊", type: "success" });
       } catch (error) {
         console.error("Failed to ignore issue", error);
         setToast({
           message:
             error instanceof Error && error.message
               ? error.message
-              : "忽略问题失败",
+              : "蹇界暐闂澶辫触",
           type: "error",
         });
       } finally {
@@ -1106,14 +1106,14 @@ export default function HomePage() {
       const nextJobId =
         typeof payload?.job_id === "string" ? payload.job_id.trim() : "";
       if (!nextJobId) {
-        throw new Error("\u672a\u8fd4\u56de\u65b0\u7684\u4efb\u52a1\u7f16\u53f7");
+        throw new Error("\u672a\u8fd4\u56de\u4efb\u52a1\u7f16\u53f7");
       }
 
       setActiveJobId(nextJobId);
       await fetchJobList().catch((listError) => {
         console.error("Failed to refresh job list after reanalyze", listError);
       });
-      setToast({ message: "\u5df2\u521b\u5efa\u65b0\u7684\u91cd\u5206\u6790\u4efb\u52a1", type: "success" });
+      setToast({ message: "\u5df2\u5728\u539f\u4efb\u52a1\u4e0a\u5237\u65b0\u5e76\u91cd\u65b0\u5206\u6790", type: "success" });
     } catch (error) {
       console.error("Failed to reanalyze job", error);
       setToast({
@@ -1562,12 +1562,12 @@ export default function HomePage() {
                     onClick={handleGlobalReanalyzeWithProgress}
                     disabled={!isAdmin || isGlobalReanalyzing}
                     className="inline-flex w-full items-center justify-center rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 px-4 py-2.5 text-sm font-semibold text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:shadow disabled:cursor-not-allowed disabled:opacity-60"
-                    title={isAdmin ? "按每个部门的最新报告批量创建新的重分析任务" : "仅管理员可操作"}
+                    title={isAdmin ? "每个部门和单位各重跑最新一份报告，直接刷新原任务；默认跳过正在分析中的任务。" : "该操作仅管理员可用。"}
                   >
-                    {isGlobalReanalyzing ? "批量重分析中..." : "按部门重分析"}
+                    {isGlobalReanalyzing ? "批量重分析中..." : "按组织重分析"}
                   </button>
                   <p className="mt-2 text-[11px] leading-5 text-amber-700/80">
-                    {isAdmin ? "每个部门只重跑最新一份报告，默认跳过正在分析中的任务。" : "该操作仅管理员可用。"}
+                    {isAdmin ? "每个部门和单位各重跑最新一份报告，直接刷新原任务；默认跳过正在分析中的任务。" : "该操作仅管理员可用。"}
                   </p>
                 </div>
                 <div>
@@ -1621,24 +1621,24 @@ export default function HomePage() {
                     onClick={openBatchRematchPreview}
                     disabled={!isAdmin || isRematchLoading || isRematchApplying}
                     className="inline-flex w-full items-center justify-between rounded-2xl border border-violet-200 bg-violet-50/80 px-4 py-3 text-left text-sm font-semibold text-violet-700 transition hover:border-violet-300 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <span>{isRematchApplying ? "正在应用重匹配..." : isRematchLoading ? "正在生成重匹配预览..." : "批量重匹配部门单位"}</span>
-                  <span className="text-xs font-medium text-violet-500">
-                    {rematchPreview ? `${Number(rematchPreview.candidate_count ?? 0)} 条候选` : "先预览后执行"}
-                  </span>
-                </button>
-                {hasReanalyzeProgress ? (
-                  <button
-                    type="button"
-                    onClick={() => setReanalyzeProgressOpen(true)}
-                    className="inline-flex w-full items-center justify-between rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-left text-sm font-semibold text-amber-700 transition hover:border-amber-300 hover:bg-amber-50"
                   >
-                    <span>查看按部门重分析进度</span>
-                    <span className="text-xs font-medium text-amber-600">
-                      {reanalyzeProgressStats.done}/{reanalyzeCreatedItems.length} 完成
+                    <span>{isRematchApplying ? "正在应用重匹配..." : isRematchLoading ? "正在生成重匹配预览..." : "批量重匹配部门单位"}</span>
+                    <span className="text-xs font-medium text-violet-500">
+                      {rematchPreview ? `${Number(rematchPreview.candidate_count ?? 0)} 条候选` : "先预览后执行"}
                     </span>
                   </button>
-                ) : null}
+                  {hasReanalyzeProgress ? (
+                    <button
+                      type="button"
+                      onClick={() => setReanalyzeProgressOpen(true)}
+                      className="inline-flex w-full items-center justify-between rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-left text-sm font-semibold text-amber-700 transition hover:border-amber-300 hover:bg-amber-50"
+                    >
+                      <span>查看按组织重分析进度</span>
+                      <span className="text-xs font-medium text-amber-600">
+                        {reanalyzeProgressStats.done}/{reanalyzeCreatedItems.length} 完成
+                      </span>
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -1935,7 +1935,7 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* Batch Upload Modal (闂傚倷娴囬褏鎹㈤幒妤€纾婚柟鐗堟緲绾惧鏌熼崜褏甯涢柍閿嬪浮閺屾盯寮撮妸銉ヮ潻婵犳鍠栭崯鎵閹烘せ鈧箓骞嬪┑鍡忔嫬闁诲孩顔栭崰鏍€﹂悜鐣屽祦闁搞儺鍓﹂弫鍡涙煃瑜滈崜娑氬垝閸懇鍋撻敐搴樺亾? */}
+      {/* Batch Upload Modal (闂傚倸鍊峰ù鍥敋瑜忛幑銏ゅ箳濡も偓绾惧鏌熼悧鍫熺凡缁炬儳顭烽弻鐔煎礈瑜忕敮娑㈡煃闁垮娴柡灞剧洴瀵挳濡搁妷銉交濠电姵顔栭崰鏍疮閹殿喗顫曢柟鐑樸仜閳ь剨绠撻獮瀣攽閸″繑瀚梺璇插椤旀牠宕伴弽顓涒偓锕傛倻閻ｅ苯绁﹂梺鎼炲労閸擄箓寮崱娑欑厓鐟滄粓宕滃☉姘灊闁割偀鎳囬崑鎾绘晲鎼存ê浜? */}
       {isUploadOpen && selectedOrgId && (
         <BatchUploadModal
           orgUnitId={selectedOrgId}
@@ -1956,12 +1956,12 @@ export default function HomePage() {
               };
               refreshWithRetry();
             }
-            setToast({ message: "浠诲姟瀹屾垚锛屽垪琛ㄥ凡鑷姩鍒锋柊", type: "success" });
+            setToast({ message: "任务完成，列表已自动刷新", type: "success" });
           }}
         />
       )}
 
-      {/* Global Batch Upload Modal (闂傚倸鍊烽懗鍫曗€﹂崼銏″床闁割偁鍎辩粈澶屸偓鍏夊亾闁逞屽墯缁傚秹骞栨笟鍥ㄦ櫖濠殿噯缍€閸嬫劙宕伴弽顓炲瀭闁诡垎鍛闂佹悶鍎弲鈺呭绩? */}
+      {/* Global Batch Upload Modal (闂傚倸鍊搁崐鐑芥嚄閸洍鈧箓宕奸姀鈥冲簥闂佸壊鍋侀崕杈╃矆婢跺备鍋撻崗澶婁壕闂侀€炲苯澧紒鍌氱Ч楠炴牗绗熼崶銊︽珫婵犳鍣紞鈧柛瀣姍瀹曚即寮介鐐茬€梺璇″瀻閸涱喗顔曢梻浣规偠閸庮噣寮查埡鍛哗? */}
       {isGlobalUploadOpen && (
         <BatchUploadModal
           defaultDocType={uploadDocType}
@@ -2069,4 +2069,6 @@ export default function HomePage() {
     </div>
   );
 }
+
+
 

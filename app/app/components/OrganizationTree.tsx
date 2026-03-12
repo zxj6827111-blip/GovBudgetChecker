@@ -220,8 +220,8 @@ export default function OrganizationTree({
       );
       if (!confirmed) return;
 
-      const res = await fetch(`/api/organizations/${encodeURIComponent(id)}`, {
-        method: "DELETE",
+      const res = await fetch(`/api/organizations/${encodeURIComponent(id)}/delete`, {
+        method: "POST",
       });
       let payload: any = {};
       try {
