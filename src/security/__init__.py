@@ -227,6 +227,9 @@ class SecurityMiddleware(BaseHTTPMiddleware):
 
         if request.url.path in self.config.exempt_paths:
             return await call_next(request)
+
+        if self._is_local_file_preview_request(request):
+            return await call_next(request)
         
         client_id = self._get_client_id(request)
         
@@ -305,6 +308,19 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             if token:
                 return token
         return None
+
+    def _is_local_file_preview_request(self, request: Request) -> bool:
+        if request.method.upper() != "GET":
+            return False
+
+        path = request.url.path
+        if not path.startswith("/api/files/"):
+            return False
+        if not (path.endswith("/preview") or path.endswith("/source")):
+            return False
+
+        client_host = request.client.host if request.client else ""
+        return client_host in {"127.0.0.1", "::1", "localhost"}
 
 
 def sanitize_filename(filename: str) -> str:

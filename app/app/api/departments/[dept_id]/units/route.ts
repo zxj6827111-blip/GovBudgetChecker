@@ -3,6 +3,10 @@ import { NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
 import { backendAuthHeaders } from "@/lib/backendAuth";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import {
+  LocalDataError,
+  getLocalDepartmentUnits,
+} from "@/lib/localData";
 
 export async function GET(
   _request: Request,
@@ -24,13 +28,22 @@ export async function GET(
     } catch {
       data = { units: [], total: 0 };
     }
-    return NextResponse.json(data, { status: response.status });
+    if (response.ok) {
+      return NextResponse.json(data, { status: response.status });
+    }
   } catch (error) {
     console.error("Failed to fetch department units:", error);
-    return NextResponse.json(
-      { error: "backend_unavailable", units: [], total: 0 },
-      { status: 502 }
-    );
+  }
+
+  try {
+    const localData = await getLocalDepartmentUnits(params.dept_id);
+    return NextResponse.json(localData, { status: 200 });
+  } catch (error) {
+    if (error instanceof LocalDataError) {
+      return NextResponse.json({ detail: error.message, units: [], total: 0 }, { status: error.status });
+    }
+    console.error("Failed to read local department units:", error);
+    return NextResponse.json({ detail: "Failed to load department units", units: [], total: 0 }, { status: 500 });
   }
 }
 

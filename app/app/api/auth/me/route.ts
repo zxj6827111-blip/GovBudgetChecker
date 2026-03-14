@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { apiBase } from "@/lib/apiBase";
 import { backendAuthHeaders } from "@/lib/backendAuth";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { SESSION_COOKIE_NAME } from "@/lib/session";
+import { readLocalSession, readSessionToken } from "@/lib/localAuthSession";
 
 export const dynamic = "force-dynamic";
 
@@ -15,11 +14,19 @@ function parsePayload(text: string): Record<string, unknown> {
   }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const sessionToken = readSessionToken();
+  if (!sessionToken) {
+    if (request.headers.get("x-login-probe") === "1") {
+      return NextResponse.json({ user: null }, { status: 200 });
+    }
+    return NextResponse.json({ detail: "not logged in" }, { status: 401 });
+  }
+
   try {
-    const sessionToken = cookies().get(SESSION_COOKIE_NAME)?.value?.trim();
-    if (!sessionToken) {
-      return NextResponse.json({ detail: "not logged in" }, { status: 401 });
+    const localSession = await readLocalSession();
+    if (localSession) {
+      return NextResponse.json({ user: localSession.user }, { status: 200 });
     }
 
     const backendResponse = await fetchWithTimeout(`${apiBase}/api/auth/me`, {

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { backendAuthHeaders } from "@/lib/backendAuth";
+import { getLocalOrganizationsList } from "@/lib/localData";
 
 export const dynamic = "force-dynamic";
 
@@ -18,11 +19,15 @@ export async function GET() {
     } catch {
       data = { organizations: [] };
     }
-    return NextResponse.json(data, { status: response.status });
+    if (response.ok) {
+      return NextResponse.json(data, { status: response.status });
+    }
   } catch (error) {
     if (process.env.NODE_ENV !== "production") {
       console.error("Failed to fetch organizations list:", error);
     }
-    return NextResponse.json({ organizations: [] }, { status: 200 });
   }
+
+  const localData = await getLocalOrganizationsList();
+  return NextResponse.json(localData, { status: 200 });
 }

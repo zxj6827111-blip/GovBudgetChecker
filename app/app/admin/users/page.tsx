@@ -143,7 +143,7 @@ export default function AdminUsersPage() {
   const updateUser = async (
     username: string,
     payload: { is_admin?: boolean; is_active?: boolean; password?: string },
-    successText: string
+    successText: string,
   ) => {
     setBusyUsername(username);
     setError("");
@@ -181,11 +181,7 @@ export default function AdminUsersPage() {
       setError(`密码长度不能少于 ${MIN_PASSWORD_LENGTH} 位`);
       return;
     }
-    await updateUser(
-      username,
-      { password: newPasswordInput },
-      `${username} 密码已重置`
-    );
+    await updateUser(username, { password: newPasswordInput }, `${username} 密码已重置`);
   };
 
   const removeUser = async (username: string) => {
@@ -212,7 +208,7 @@ export default function AdminUsersPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-100">
+      <div className="flex min-h-screen items-center justify-center bg-slate-100">
         <div className="text-slate-600">正在加载用户管理...</div>
       </div>
     );
@@ -220,17 +216,17 @@ export default function AdminUsersPage() {
 
   if (!isAdmin) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-100 p-4">
+      <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
         <div className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-8 shadow-lg">
           <h1 className="text-xl font-semibold text-slate-900">无访问权限</h1>
           <p className="mt-2 text-sm text-slate-600">
-            当前账号不是管理员，不能访问用户管理页。
+            当前账号不是管理员，不能访问用户管理页面。
           </p>
           <Link
             href="/"
             className="mt-6 inline-flex rounded-lg bg-slate-900 px-4 py-2 text-sm text-white"
           >
-            返回系统主页
+            返回系统首页
           </Link>
         </div>
       </div>
@@ -252,7 +248,7 @@ export default function AdminUsersPage() {
               href="/"
               className="inline-flex rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700"
             >
-              返回主页
+              返回首页
             </Link>
           </div>
         </div>
@@ -266,6 +262,7 @@ export default function AdminUsersPage() {
               placeholder="用户名"
               className="rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
               disabled={submitting}
+              autoComplete="username"
             />
             <input
               value={newPassword}
@@ -359,7 +356,7 @@ export default function AdminUsersPage() {
                               updateUser(
                                 item.username,
                                 { is_admin: !item.is_admin },
-                                `${item.username} 角色已更新`
+                                `${item.username} 角色已更新`,
                               )
                             }
                             className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-60"
@@ -373,7 +370,7 @@ export default function AdminUsersPage() {
                               updateUser(
                                 item.username,
                                 { is_active: !item.is_active },
-                                `${item.username} 状态已更新`
+                                `${item.username} 状态已更新`,
                               )
                             }
                             className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-60"

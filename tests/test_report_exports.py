@@ -197,3 +197,86 @@ def test_report_download_json_and_csv_include_structured_location_fields(
     table_refs = json.loads(row["table_refs"])
     assert table_refs[0]["role"] == "T1"
     assert table_refs[0]["bbox"] == [72.0, 61.0, 135.0, 79.0]
+
+
+def test_report_download_uses_merged_issue_projection_without_double_counting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    job_id = "job-export-dual-merged"
+    job_dir = tmp_path / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    _create_pdf(job_dir / "source.pdf", [["Alpha"], ["Beta"]])
+
+    rule_issue = {
+        "id": "rule-export-3",
+        "source": "rule",
+        "rule_id": "RULE-3",
+        "severity": "medium",
+        "title": "Rule issue",
+        "message": "Rule issue",
+        "location": {"page": 2},
+        "evidence": [{"page": 2, "text": "Beta"}],
+        "metrics": {},
+        "tags": [],
+    }
+    ai_issue = {
+        "id": "ai-export-1",
+        "source": "ai",
+        "rule_id": "AI-1",
+        "severity": "high",
+        "title": "AI issue",
+        "message": "AI issue",
+        "location": {"page": 1},
+        "evidence": [{"page": 1, "text": "Alpha"}],
+        "metrics": {},
+        "tags": [],
+    }
+
+    _write_status(
+        job_dir,
+        {
+            "job_id": job_id,
+            "status": "done",
+            "saved_path": f"{job_id}/source.pdf",
+            "result": {
+                "issues": {
+                    "error": [],
+                    "warn": [rule_issue],
+                    "info": [],
+                    "all": [rule_issue],
+                },
+                "ai_findings": [ai_issue],
+                "rule_findings": [rule_issue],
+                "merged": {
+                    "totals": {
+                        "ai": 1,
+                        "rule": 1,
+                        "merged": 2,
+                        "conflicts": 0,
+                        "agreements": 0,
+                    },
+                    "merged_ids": ["ai-export-1", "rule-export-3"],
+                    "conflicts": [],
+                    "agreements": [],
+                },
+            },
+        },
+    )
+
+    client = TestClient(app)
+
+    report_json = client.get(f"/api/reports/download?job_id={job_id}&format=json")
+    assert report_json.status_code == 200
+    payload = report_json.json()
+    assert payload["count"] == 2
+    assert [item["id"] for item in payload["issues"]] == ["ai-export-1", "rule-export-3"]
+
+    report_csv = client.get(f"/api/reports/download?job_id={job_id}&format=csv")
+    assert report_csv.status_code == 200
+    text = report_csv.content.decode("utf-8-sig")
+    rows = list(csv.DictReader(io.StringIO(text)))
+    assert len(rows) == 2
+    assert [row["rule_id"] for row in rows] == ["AI-1", "RULE-3"]

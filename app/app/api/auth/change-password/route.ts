@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { apiBase } from "@/lib/apiBase";
 import { backendAuthHeaders } from "@/lib/backendAuth";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { SESSION_COOKIE_NAME, shouldUseSecureSessionCookie } from "@/lib/session";
+import { LocalAuthError, changeLocalPassword } from "@/lib/localAuth";
+import { clearSessionCookie, readLocalSession, readSessionToken } from "@/lib/localAuthSession";
 
 export const dynamic = "force-dynamic";
+
+function parseJsonObject(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
 
 function parsePayload(text: string): Record<string, unknown> {
   try {
@@ -16,22 +23,44 @@ function parsePayload(text: string): Record<string, unknown> {
 }
 
 export async function POST(request: NextRequest) {
-  try {
-    const sessionToken = cookies().get(SESSION_COOKIE_NAME)?.value?.trim();
-    if (!sessionToken) {
-      return NextResponse.json({ detail: "not logged in" }, { status: 401 });
-    }
+  const sessionToken = readSessionToken();
+  if (!sessionToken) {
+    return NextResponse.json({ detail: "not logged in" }, { status: 401 });
+  }
 
-    const body = await request.json().catch(() => ({}));
-    const oldPassword =
-      typeof body?.old_password === "string" ? body.old_password : "";
-    const newPassword =
-      typeof body?.new_password === "string" ? body.new_password : "";
-    if (!oldPassword || !newPassword) {
-      return NextResponse.json(
-        { detail: "old_password and new_password are required" },
-        { status: 400 }
+  const body = parseJsonObject(await request.json().catch(() => null));
+  const oldPassword =
+    typeof body?.old_password === "string" ? body.old_password : "";
+  const newPassword =
+    typeof body?.new_password === "string" ? body.new_password : "";
+  if (!oldPassword || !newPassword) {
+    return NextResponse.json(
+      { detail: "old_password and new_password are required" },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const localSession = await readLocalSession();
+    if (localSession) {
+      try {
+        await changeLocalPassword(localSession.token, oldPassword, newPassword);
+      } catch (localError) {
+        if (localError instanceof LocalAuthError) {
+          return NextResponse.json(
+            { detail: localError.detail },
+            { status: localError.status },
+          );
+        }
+        throw localError;
+      }
+
+      const response = NextResponse.json(
+        { success: true, message: "password updated, please login again" },
+        { status: 200 },
       );
+      clearSessionCookie(response, request);
+      return response;
     }
 
     const backendResponse = await fetchWithTimeout(
@@ -51,17 +80,8 @@ export async function POST(request: NextRequest) {
     );
     const payload = parsePayload(await backendResponse.text());
     const response = NextResponse.json(payload, { status: backendResponse.status });
-    const secureCookie = shouldUseSecureSessionCookie(request);
     if (backendResponse.ok) {
-      response.cookies.set({
-        name: SESSION_COOKIE_NAME,
-        value: "",
-        httpOnly: true,
-        secure: secureCookie,
-        sameSite: "lax",
-        path: "/",
-        maxAge: 0,
-      });
+      clearSessionCookie(response, request);
     }
     return response;
   } catch (error) {

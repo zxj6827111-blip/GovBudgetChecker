@@ -1,16 +1,21 @@
 import { NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
-import { backendAuthHeaders } from "@/lib/backendAuth";
 
 export async function GET(
   _req: Request,
   { params }: { params: { job_id: string } }
 ) {
   const jobId = encodeURIComponent(params.job_id);
+  const apiKey =
+    process.env.GOVBUDGET_API_KEY ||
+    process.env.BACKEND_API_KEY ||
+    "change_me_to_a_strong_secret";
   try {
     const upstream = await fetch(`${apiBase}/api/files/${jobId}/source`, {
       cache: "no-store",
-      headers: backendAuthHeaders(),
+      headers: {
+        "X-API-Key": apiKey,
+      },
     });
     if (!upstream.ok) {
       return NextResponse.json(
@@ -36,4 +41,3 @@ export async function GET(
     );
   }
 }
-

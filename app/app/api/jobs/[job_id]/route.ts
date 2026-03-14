@@ -3,6 +3,9 @@ import { apiBase } from "@/lib/apiBase";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { backendAuthHeaders } from "@/lib/backendAuth";
 import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
+import { LocalDataError, getLocalJobDetail } from "@/lib/localData";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(
   _request: NextRequest,
@@ -21,13 +24,22 @@ export async function GET(
     } catch {
       data = { raw: text };
     }
-    return NextResponse.json(data, { status: res.status });
+    if (res.ok) {
+      return NextResponse.json(data, { status: res.status });
+    }
   } catch (error) {
     console.error("Failed to fetch job detail:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+  }
+
+  try {
+    const localData = await getLocalJobDetail(params.job_id);
+    return NextResponse.json(localData, { status: 200 });
+  } catch (error) {
+    if (error instanceof LocalDataError) {
+      return NextResponse.json({ detail: error.message }, { status: error.status });
+    }
+    console.error("Failed to read local job detail:", error);
+    return NextResponse.json({ detail: "Failed to load job detail" }, { status: 500 });
   }
 }
 

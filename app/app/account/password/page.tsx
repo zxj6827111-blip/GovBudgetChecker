@@ -34,6 +34,7 @@ export default function ChangePasswordPage() {
 
   useEffect(() => {
     let cancelled = false;
+
     const probeLogin = async () => {
       try {
         const response = await fetch("/api/auth/me", { cache: "no-store" });
@@ -108,7 +109,7 @@ export default function ChangePasswordPage() {
 
   if (checking) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-100">
+      <div className="flex min-h-screen items-center justify-center bg-slate-100">
         <div className="text-slate-600">正在检查登录状态...</div>
       </div>
     );
@@ -123,7 +124,7 @@ export default function ChangePasswordPage() {
             href="/"
             className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
           >
-            返回主页
+            返回首页
           </Link>
         </div>
 

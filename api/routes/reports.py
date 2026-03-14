@@ -78,9 +78,20 @@ def _extract_issues(status_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     if not isinstance(result, dict):
         return []
 
-    issues: List[Dict[str, Any]] = []
+    def _dedupe(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        deduped: List[Dict[str, Any]] = []
+        seen = set()
+        for item in items:
+            issue_id = str(item.get("id") or "").strip()
+            if issue_id:
+                if issue_id in seen:
+                    continue
+                seen.add(issue_id)
+            deduped.append(item)
+        return deduped
 
     legacy_issues = result.get("issues")
+    issues: List[Dict[str, Any]] = []
     if isinstance(legacy_issues, dict):
         all_items = legacy_issues.get("all")
         if isinstance(all_items, list):
@@ -88,12 +99,47 @@ def _extract_issues(status_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     elif isinstance(legacy_issues, list):
         issues.extend([item for item in legacy_issues if isinstance(item, dict)])
 
+    source_issues: List[Dict[str, Any]] = []
     for key in ("ai_findings", "rule_findings"):
         bucket = result.get(key)
         if isinstance(bucket, list):
-            issues.extend([item for item in bucket if isinstance(item, dict)])
+            source_issues.extend([item for item in bucket if isinstance(item, dict)])
 
-    return issues
+    deduped_source_issues = _dedupe(source_issues)
+    merged = result.get("merged")
+    merged_ids = (
+        [
+            str(item or "").strip()
+            for item in merged.get("merged_ids", [])
+            if str(item or "").strip()
+        ]
+        if isinstance(merged, dict) and isinstance(merged.get("merged_ids"), list)
+        else []
+    )
+    if merged_ids and deduped_source_issues:
+        issue_by_id = {
+            str(item.get("id") or "").strip(): item
+            for item in deduped_source_issues
+            if str(item.get("id") or "").strip()
+        }
+        merged_issues: List[Dict[str, Any]] = []
+        seen_merged = set()
+        for merged_id in merged_ids:
+            if merged_id in seen_merged:
+                continue
+            issue = issue_by_id.get(merged_id)
+            if issue is None:
+                continue
+            seen_merged.add(merged_id)
+            merged_issues.append(issue)
+        if merged_issues:
+            return merged_issues
+
+    deduped_issues = _dedupe(issues)
+    if deduped_issues:
+        return deduped_issues
+
+    return deduped_source_issues
 
 
 def _normalize_table_refs(raw_refs: Any) -> List[Dict[str, Any]]:

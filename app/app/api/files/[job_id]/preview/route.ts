@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
-import { backendAuthHeaders } from "@/lib/backendAuth";
 
 export async function GET(
   req: Request,
@@ -10,11 +9,17 @@ export async function GET(
   const url = new URL(req.url);
   const search = url.searchParams.toString();
   const upstreamUrl = `${apiBase}/api/files/${jobId}/preview${search ? `?${search}` : ""}`;
+  const apiKey =
+    process.env.GOVBUDGET_API_KEY ||
+    process.env.BACKEND_API_KEY ||
+    "change_me_to_a_strong_secret";
 
   try {
     const upstream = await fetch(upstreamUrl, {
       cache: "no-store",
-      headers: backendAuthHeaders(),
+      headers: {
+        "X-API-Key": apiKey,
+      },
     });
 
     if (!upstream.ok) {

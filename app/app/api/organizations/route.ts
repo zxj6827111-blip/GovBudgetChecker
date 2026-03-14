@@ -3,6 +3,7 @@ import { apiBase } from "@/lib/apiBase";
 import { backendAuthHeaders } from "@/lib/backendAuth";
 import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { getLocalOrganizationsTree } from "@/lib/localData";
 
 export const dynamic = "force-dynamic";
 
@@ -19,13 +20,17 @@ export async function GET() {
     } catch {
       data = { tree: [], total: 0 };
     }
-    return NextResponse.json(data, { status: response.status });
+    if (response.ok) {
+      return NextResponse.json(data, { status: response.status });
+    }
   } catch (error) {
     if (process.env.NODE_ENV !== "production") {
       console.error("Failed to fetch organizations:", error);
     }
-    return NextResponse.json({ tree: [], total: 0 }, { status: 200 });
   }
+
+  const localData = await getLocalOrganizationsTree();
+  return NextResponse.json(localData, { status: 200 });
 }
 
 export async function POST(request: NextRequest) {
