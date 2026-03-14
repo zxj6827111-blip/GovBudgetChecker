@@ -48,3 +48,17 @@ e2e/tests/upload-fallback.spec.ts
 
 # Runtime data should not be versioned.
 data/*.json
+data/audit/admin-actions.jsonl
+
+# Local runtime artifacts
+.playwright-cli/
+output/
+status.txt
+api/dev-*.err
+api/dev-*.out
+app/dev-*.err
+app/dev-*.out
+app/start-capture.err
+app/start-capture.out
+app/sidebar-department.png
+app/sidebar-selected-dept.png
