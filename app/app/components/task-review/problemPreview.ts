@@ -99,12 +99,12 @@ export function getProblemOverlayStyle(box: OverlayBox): CSSProperties {
 }
 
 export function getProblemOverlayLabelStyle(box: OverlayBox): CSSProperties {
-  const labelWidth = clamp(Math.max(box.widthPct + 10, 28), 28, 72);
+  const labelWidth = clamp(Math.max(box.widthPct + 8, 24), 24, 56);
   const labelLeft = clamp(box.leftPct, 1.5, 100 - labelWidth - 1.5);
   const labelTop =
     box.topPct > 12
-      ? `calc(${box.topPct}% - 2.75rem)`
-      : `calc(${box.topPct + box.heightPct}% + 0.5rem)`;
+      ? `calc(${box.topPct}% - 2.3rem)`
+      : `calc(${box.topPct + box.heightPct}% + 0.35rem)`;
 
   return {
     left: `${labelLeft}%`,

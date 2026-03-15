@@ -1,14 +1,87 @@
 "use client";
 
-import { Bell, Settings, User } from "lucide-react";
+import { ChevronDown, KeyRound, LogOut, Settings } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
+type AuthUser = {
+  username?: string;
+  is_admin?: boolean;
+};
+
 export default function Header() {
   const pathname = usePathname();
+  const router = useRouter();
   const isAdminRoute = pathname.startsWith("/admin");
+  const [user, setUser] = useState<AuthUser>({ username: "admin", is_admin: false });
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadUser() {
+      try {
+        const response = await fetch("/api/auth/me", { cache: "no-store" });
+        if (!response.ok) {
+          if (!cancelled) {
+            setUser({ username: "admin", is_admin: false });
+          }
+          return;
+        }
+
+        const payload = (await response.json()) as { user?: AuthUser | null };
+        if (!cancelled) {
+          setUser({
+            username: payload.user?.username?.trim() || "admin",
+            is_admin: Boolean(payload.user?.is_admin),
+          });
+        }
+      } catch {
+        if (!cancelled) {
+          setUser({ username: "admin", is_admin: false });
+        }
+      }
+    }
+
+    void loadUser();
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname]);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+
+  const handleLogout = async () => {
+    if (loggingOut) {
+      return;
+    }
+
+    setLoggingOut(true);
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      setMenuOpen(false);
+      router.replace("/login");
+      router.refresh();
+      setLoggingOut(false);
+    }
+  };
 
   return (
     <header className="relative z-10 flex h-16 shrink-0 items-center justify-between bg-slate-900 px-6 text-white shadow-sm">
@@ -46,23 +119,52 @@ export default function Header() {
         </nav>
       </div>
 
-      <div className="flex items-center gap-4">
-        <button className="relative p-2 text-slate-400 hover:text-white">
-          <Bell className="h-5 w-5" />
-          <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full border-2 border-slate-900 bg-danger-600" />
+      <div ref={menuRef} className="relative flex items-center border-l border-slate-700 pl-4">
+        <button
+          type="button"
+          onClick={() => setMenuOpen((current) => !current)}
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-white transition hover:bg-slate-800"
+        >
+          <span>{user.username || "admin"}</span>
+          <ChevronDown
+            className={cn(
+              "h-4 w-4 text-slate-300 transition-transform",
+              menuOpen ? "rotate-180" : "",
+            )}
+          />
         </button>
-        <button className="p-2 text-slate-400 hover:text-white">
-          <Settings className="h-5 w-5" />
-        </button>
-        <div className="ml-2 flex items-center gap-2 border-l border-slate-700 pl-4">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-700">
-            <User className="h-4 w-4 text-slate-300" />
+
+        {menuOpen ? (
+          <div className="absolute right-0 top-[calc(100%+10px)] w-44 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 text-slate-800 shadow-xl">
+            <Link
+              href="/account/password"
+              onClick={() => setMenuOpen(false)}
+              className="flex items-center gap-2 px-4 py-2 text-sm transition hover:bg-slate-50"
+            >
+              <KeyRound className="h-4 w-4 text-slate-500" />
+              修改密码
+            </Link>
+            {user.is_admin ? (
+              <Link
+                href="/admin"
+                onClick={() => setMenuOpen(false)}
+                className="flex items-center gap-2 px-4 py-2 text-sm transition hover:bg-slate-50"
+              >
+                <Settings className="h-4 w-4 text-slate-500" />
+                系统管理
+              </Link>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => void handleLogout()}
+              disabled={loggingOut}
+              className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-red-600 transition hover:bg-red-50 disabled:opacity-60"
+            >
+              <LogOut className="h-4 w-4" />
+              {loggingOut ? "退出中..." : "退出登录"}
+            </button>
           </div>
-          <div className="flex flex-col">
-            <span className="text-sm font-medium leading-none">审校员 1</span>
-            <span className="mt-1 text-xs text-slate-400">市财政局</span>
-          </div>
-        </div>
+        ) : null}
       </div>
     </header>
   );

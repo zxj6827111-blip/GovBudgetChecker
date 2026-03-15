@@ -12,20 +12,14 @@ import hashlib
 import json
 import re
 import httpx
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.services.ai_client import AIClient
 
 logger = logging.getLogger(__name__)
 
 # ==================== 配置 ====================
-AI_EXTRACTOR_URL = os.getenv("AI_EXTRACTOR_URL", "http://127.0.0.1:9009/ai/extract/v1")
-AI_ASSIST_ENABLED = os.getenv("AI_ASSIST_ENABLED", "true").lower() == "true"
-AI_MAIN_MODEL = os.getenv("AI_MAIN_MODEL", os.getenv("AI_EXTRACTOR_MODEL", "")).strip()
-AI_MAIN_PROVIDER = os.getenv("AI_MAIN_PROVIDER", "").strip()
-AI_EXTRACTOR_DIRECT_FALLBACK = (
-    os.getenv("AI_EXTRACTOR_DIRECT_FALLBACK", "true").strip().lower() == "true"
-)
+DEFAULT_EXTRACTOR_URL = "http://127.0.0.1:9009/ai/extract/v1"
 
 # 超时和重试配置
 REQUEST_TIMEOUT = 120.0  # 增加到120秒，适应复杂文档处理
@@ -40,19 +34,42 @@ def _read_float_env(name: str, default: float) -> float:
         return default
 
 
+def _read_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _read_str_env(name: str, default: str = "") -> str:
+    return os.getenv(name, default).strip()
+
+
 MIN_ISSUE_CONFIDENCE = _read_float_env("AI_MIN_ISSUE_CONFIDENCE", 0.75)
 
 @dataclass
 class ExtractorConfig:
     """抽取器配置"""
-    url: str = AI_EXTRACTOR_URL
-    enabled: bool = AI_ASSIST_ENABLED
-    main_model: str = AI_MAIN_MODEL
-    main_provider: str = AI_MAIN_PROVIDER
-    direct_fallback: bool = AI_EXTRACTOR_DIRECT_FALLBACK
-    timeout: float = REQUEST_TIMEOUT
-    max_retries: int = MAX_RETRIES
-    retry_delay: float = RETRY_DELAY
+    url: str = field(default_factory=lambda: _read_str_env("AI_EXTRACTOR_URL", DEFAULT_EXTRACTOR_URL))
+    enabled: bool = field(default_factory=lambda: _read_bool_env("AI_ASSIST_ENABLED", True))
+    main_model: str = field(default_factory=lambda: _read_str_env("AI_MAIN_MODEL", _read_str_env("AI_EXTRACTOR_MODEL")))
+    main_provider: str = field(default_factory=lambda: _read_str_env("AI_MAIN_PROVIDER"))
+    audit_provider: str = field(
+        default_factory=lambda: _read_str_env(
+            "AI_AUDIT_PROVIDER",
+            _read_str_env("AI_MAIN_PROVIDER", "gemini_locator"),
+        )
+    )
+    audit_model: str = field(
+        default_factory=lambda: _read_str_env(
+            "AI_AUDIT_MODEL",
+            _read_str_env("AI_LOCATOR_MODEL"),
+        )
+    )
+    direct_fallback: bool = field(default_factory=lambda: _read_bool_env("AI_EXTRACTOR_DIRECT_FALLBACK", True))
+    timeout: float = field(default_factory=lambda: _read_float_env("AI_EXTRACTOR_TIMEOUT", REQUEST_TIMEOUT))
+    max_retries: int = field(default_factory=lambda: int(os.getenv("AI_EXTRACTOR_MAX_RETRIES", str(MAX_RETRIES))))
+    retry_delay: float = field(default_factory=lambda: _read_float_env("AI_EXTRACTOR_RETRY_DELAY", RETRY_DELAY))
 
 class ExtractorClient:
     """AI抽取器客户端"""
@@ -69,6 +86,16 @@ class ExtractorClient:
     def _get_preferred_provider(self) -> Optional[str]:
         provider = (self.config.main_provider or "").strip()
         return provider or None
+
+    def _get_audit_provider(self) -> Optional[str]:
+        provider = (self.config.audit_provider or "").strip()
+        if provider:
+            return provider
+        return self._get_preferred_provider()
+
+    def _get_audit_model(self) -> Optional[str]:
+        model = (self.config.audit_model or "").strip()
+        return model or None
 
     @staticmethod
     def _extract_json_array(text: str) -> Optional[List[Dict[str, Any]]]:
@@ -352,8 +379,8 @@ class ExtractorClient:
                 {"role": "system", "content": "你是严格的 JSON 输出助手。"},
                 {"role": "user", "content": prompt},
             ],
-            preferred_provider=self._get_preferred_provider(),
-            model=self.config.main_model or None,
+            preferred_provider=self._get_audit_provider(),
+            model=self._get_audit_model(),
             temperature=0,
             max_tokens=3200,
             timeout=int(self.config.timeout),
@@ -646,8 +673,7 @@ class ExtractorClient:
         # 先走直连模型，确保使用全量审查提示词
         try:
             direct_result = await self._direct_semantic_audit(section_text)
-            if direct_result:
-                return direct_result
+            return direct_result
         except Exception as direct_err:
             logger.warning(f"Direct full-report audit failed: {direct_err}")
 

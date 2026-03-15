@@ -10,6 +10,7 @@ os.environ.setdefault("TESTING", "true")
 
 from api.main import app
 from api import runtime
+from api.routes import upload as upload_route
 from src.services import org_matcher as org_matcher_module
 from src.services import org_storage as org_storage_module
 
@@ -46,14 +47,19 @@ def _headers() -> dict[str, str]:
     return {"X-API-Key": API_KEY}
 
 
-def _create_org(name: str, level: str = "department") -> dict:
+def _create_org(
+    name: str,
+    level: str = "department",
+    parent_id: str | None = None,
+    keywords: list[str] | None = None,
+) -> dict:
     storage = runtime.require_org_storage()
     org = runtime.Organization(
         id=runtime.Organization.generate_id(name, level),
         name=name,
         level=level,
-        parent_id=None,
-        keywords=[name],
+        parent_id=parent_id,
+        keywords=keywords or [name],
     )
     created = storage.add(org)
     return runtime.to_dict(created)
@@ -304,3 +310,172 @@ def test_batch_rematch_preview_and_apply_updates_auto_association(tmp_path: Path
     assert link is not None
     assert link.org_id == correct_org_id
     assert link.match_type == "auto"
+
+
+def test_preflight_extracts_unit_budget_cover_metadata(tmp_path: Path, monkeypatch):
+    _patch_runtime_state(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    department = _create_org("上海市普陀区人民政府石泉路街道办事处")
+    unit = _create_org(
+        "上海市普陀区人民政府石泉路街道办事处（本级）",
+        level="unit",
+        parent_id=department["id"],
+        keywords=[
+            "上海市普陀区人民政府石泉路街道办事处（本级）",
+            "上海市普陀区人民政府石泉路街道办事处",
+            "石泉路街道办事处本级",
+        ],
+    )
+
+    monkeypatch.setattr(
+        runtime,
+        "extract_pdf_page_texts_from_bytes",
+        lambda content, max_pages=3: [
+            "\n".join(
+                [
+                    "上海市普陀区2026年区级单位预算",
+                    "预算单位：上海市普陀区人民政府石泉路街道办事处（本级）",
+                ]
+            )
+        ],
+    )
+
+    response = client.post(
+        "/api/documents/preflight",
+        headers=_headers(),
+        files={
+            "file": (
+                "generic.pdf",
+                io.BytesIO(_pdf_bytes()),
+                "application/pdf",
+            )
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["report_year"] == 2026
+    assert payload["doc_type"] == "dept_budget"
+    assert payload["report_kind"] == "budget"
+    assert payload["scope_hint"] == "unit"
+    assert payload["cover_title"] == "上海市普陀区2026年区级单位预算"
+    assert payload["cover_org_name"] == "上海市普陀区人民政府石泉路街道办事处（本级）"
+    assert payload["cover_org_label"] == "预算单位"
+    assert payload["current"]["organization_id"] == unit["id"]
+    assert payload["current"]["organization_name"] == unit["name"]
+    assert payload["current"]["level"] == "unit"
+    assert payload["current"]["department_id"] == department["id"]
+    assert payload["current"]["department_name"] == department["name"]
+    assert payload["current"]["match_basis"] == "cover_field"
+
+
+def test_preflight_extracts_department_budget_cover_metadata(tmp_path: Path, monkeypatch):
+    _patch_runtime_state(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    department = _create_org("上海市普陀区人民政府石泉路街道办事处")
+    _create_org(
+        "上海市普陀区人民政府石泉路街道办事处（本级）",
+        level="unit",
+        parent_id=department["id"],
+    )
+
+    monkeypatch.setattr(
+        runtime,
+        "extract_pdf_page_texts_from_bytes",
+        lambda content, max_pages=3: [
+            "\n".join(
+                [
+                    "上海市普陀区2026年区级部门预算",
+                    "预算主管部门：上海市普陀区人民政府石泉路街道办事处",
+                ]
+            )
+        ],
+    )
+
+    response = client.post(
+        "/api/documents/preflight",
+        headers=_headers(),
+        files={
+            "file": (
+                "generic.pdf",
+                io.BytesIO(_pdf_bytes()),
+                "application/pdf",
+            )
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["report_year"] == 2026
+    assert payload["doc_type"] == "dept_budget"
+    assert payload["report_kind"] == "budget"
+    assert payload["scope_hint"] == "department"
+    assert payload["cover_title"] == "上海市普陀区2026年区级部门预算"
+    assert payload["cover_org_name"] == "上海市普陀区人民政府石泉路街道办事处"
+    assert payload["cover_org_label"] == "预算主管部门"
+    assert payload["current"]["organization_id"] == department["id"]
+    assert payload["current"]["organization_name"] == department["name"]
+    assert payload["current"]["level"] == "department"
+    assert payload["current"]["department_id"] == department["id"]
+    assert payload["current"]["department_name"] == department["name"]
+    assert payload["current"]["match_basis"] == "cover_field"
+
+
+def test_upload_auto_match_prefers_cover_org_name_over_filename_only_match(tmp_path: Path, monkeypatch):
+    _patch_runtime_state(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    wrong_org = _create_org("上海市普陀区财政局")
+    correct_org = _create_org("上海市普陀区人民政府石泉路街道办事处")
+    storage = runtime.require_org_storage()
+    correct_org_record = storage.get_by_id(correct_org["id"])
+    wrong_org_record = storage.get_by_id(wrong_org["id"])
+    assert correct_org_record is not None
+    assert wrong_org_record is not None
+
+    monkeypatch.setattr(
+        runtime,
+        "extract_pdf_page_texts",
+        lambda pdf_path, max_pages=3: [
+            "\n".join(
+                [
+                    "上海市普陀区2026年区级部门预算",
+                    "预算主管部门：上海市普陀区人民政府石泉路街道办事处",
+                ]
+            )
+        ],
+    )
+
+    class _FakeMatcher:
+        def __init__(self):
+            self.calls: list[tuple[str, str, int]] = []
+
+        def suggest_matches(self, filename: str, first_page_text: str = "", top_n: int = 5):
+            self.calls.append((filename, first_page_text, top_n))
+            if filename == "上海市普陀区人民政府石泉路街道办事处":
+                return [(correct_org_record, 0.97)]
+            return [(wrong_org_record, 0.93)]
+
+    fake_matcher = _FakeMatcher()
+    monkeypatch.setattr(upload_route, "get_org_matcher", lambda: fake_matcher)
+
+    response = client.post(
+        "/api/documents/upload",
+        headers=_headers(),
+        files={
+            "file": (
+                "2026年度预算公开.pdf",
+                io.BytesIO(_pdf_bytes()),
+                "application/pdf",
+            )
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["organization_id"] == correct_org["id"]
+    assert payload["organization_name"] == correct_org["name"]
+    assert fake_matcher.calls
+    assert fake_matcher.calls[0][0] == "上海市普陀区人民政府石泉路街道办事处"

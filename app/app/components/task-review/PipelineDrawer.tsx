@@ -71,7 +71,7 @@ export default function PipelineDrawer({ isOpen, onToggle, task }: PipelineDrawe
           <div className="mt-4 border-t border-border p-4">
             <div className="flex items-center gap-2 mb-4">
               <Database className="w-4 h-4 text-slate-400" />
-              <h3 className="text-sm font-semibold text-slate-700">数据资产入库状态</h3>
+              <h3 className="text-sm font-semibold text-slate-700">结构化入库（辅助）</h3>
             </div>
             <div className="space-y-3">
               <div className="flex justify-between items-center text-sm">

@@ -285,6 +285,34 @@ function getReportLabel(
   return `${subjectType === "unit" ? "单位" : "部门"}${phase}`;
 }
 
+function resolveReportLabel(
+  reportKind: JobSummaryRecord["report_kind"],
+  subjectType: "department" | "unit",
+): string {
+  const subjectLabel = subjectType === "unit" ? "单位" : "部门";
+  if (reportKind === "final") {
+    return `${subjectLabel}决算`;
+  }
+  if (reportKind === "budget") {
+    return `${subjectLabel}预算`;
+  }
+  return `${subjectLabel}待复核`;
+}
+
+function getDisplayReportLabel(
+  reportKind: JobSummaryRecord["report_kind"],
+  subjectType: "department" | "unit",
+): string {
+  const subjectLabel = subjectType === "unit" ? "单位" : "部门";
+  if (reportKind === "final") {
+    return `${subjectLabel}决算`;
+  }
+  if (reportKind === "budget") {
+    return `${subjectLabel}预算`;
+  }
+  return `${subjectLabel}类型待确认`;
+}
+
 export function formatJobDisplayName(
   job: Pick<
     JobSummaryRecord,
@@ -292,6 +320,9 @@ export function formatJobDisplayName(
   >,
 ): string {
   const rawFilename = String(job.filename ?? "").trim();
+  if (job.report_kind === "unknown" && rawFilename) {
+    return rawFilename;
+  }
   const subjectName =
     String(job.organization_name ?? "").trim() ||
     getFallbackSubjectName(rawFilename) ||
@@ -299,7 +330,7 @@ export function formatJobDisplayName(
     "未命名报告";
   const reportYear =
     typeof job.report_year === "number" && job.report_year > 0 ? String(job.report_year) : "";
-  const reportLabel = getReportLabel(job.report_kind, inferReportSubjectType(job));
+  const reportLabel = getDisplayReportLabel(job.report_kind, inferReportSubjectType(job));
 
   return `${subjectName}${reportYear}${reportLabel}`;
 }
@@ -311,7 +342,7 @@ export function toUiTask(job: JobSummaryRecord, structuredInput?: StructuredInge
       ? String(job.report_year)
       : "--";
   const taskStatus = normalizeUiTaskStatus(job.status);
-  const reportLabel = getReportLabel(job.report_kind, inferReportSubjectType(job));
+  const reportLabel = getDisplayReportLabel(job.report_kind, inferReportSubjectType(job));
   const syncStatus =
     String(structured.status ?? job.structured_ingest_status ?? "")
       .trim()

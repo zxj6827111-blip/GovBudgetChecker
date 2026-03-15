@@ -10,6 +10,7 @@ os.environ.setdefault("TESTING", "true")
 
 from api.main import app
 from api import runtime
+from api.routes import jobs as jobs_routes
 from api.routes import organizations as organization_routes
 
 
@@ -155,6 +156,73 @@ def test_local_rule_issue_can_be_ignored(monkeypatch, tmp_path: Path):
     assert payload["rule_findings"] == []
     assert payload["issues"]["warn"] == []
     assert payload["issues"]["all"] == []
+
+
+def test_job_status_endpoint_lifts_dual_mode_findings(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    runtime._JOB_SUMMARY_CACHE.clear()
+
+    job_id = "job-dual-status-001"
+    job_dir = tmp_path / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    status_payload = {
+        "job_id": job_id,
+        "status": "done",
+        "progress": 100,
+        "mode": "dual",
+        "dual_mode_enabled": True,
+        "result": {
+            "ai_findings": [
+                {
+                    "id": "ai:001",
+                    "source": "ai",
+                    "rule_id": "AI-001",
+                    "severity": "medium",
+                    "title": "AI finding",
+                    "message": "AI finding",
+                    "evidence": [{"page": 1, "text": "AI finding"}],
+                    "location": {"page": 1},
+                    "metrics": {},
+                    "tags": [],
+                    "created_at": 1.0,
+                }
+            ],
+            "rule_findings": [
+                {
+                    "id": "rule:001",
+                    "source": "rule",
+                    "rule_id": "RULE-001",
+                    "severity": "high",
+                    "title": "Rule finding",
+                    "message": "Rule finding",
+                    "evidence": [{"page": 2, "text": "Rule finding"}],
+                    "location": {"page": 2},
+                    "metrics": {},
+                    "tags": [],
+                    "created_at": 1.0,
+                }
+            ],
+            "merged": {
+                "totals": {"ai": 1, "rule": 1, "merged": 2, "conflicts": 0, "agreements": 0},
+                "conflicts": [],
+                "agreements": [],
+            },
+            "meta": {"elapsed_ms": {"ai": 1000, "rule": 200, "merge": 5, "total": 1205}},
+        },
+    }
+    (job_dir / "status.json").write_text(
+        json.dumps(status_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    response = client.get(f"/api/jobs/{job_id}/status")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert [item["id"] for item in payload["ai_findings"]] == ["ai:001"]
+    assert [item["id"] for item in payload["rule_findings"]] == ["rule:001"]
+    assert payload["meta"]["elapsed_ms"]["ai"] == 1000
 
 
 def test_document_upload_rejects_duplicate_same_org_scope(monkeypatch, tmp_path):
@@ -737,3 +805,86 @@ def test_job_issue_ignore_endpoint_returns_filtered_status(monkeypatch):
     assert payload["ignored_issue_id"] == "ai:001"
     assert payload["ignored_issue_ids"] == ["ai:001"]
     assert payload["result"]["ai_findings"] == []
+
+
+def test_admin_analysis_results_list_endpoint_returns_persisted_payload(monkeypatch):
+    client = TestClient(app)
+
+    async def _fake_list(**kwargs):
+        assert kwargs == {
+            "limit": 25,
+            "offset": 0,
+            "search": "budget",
+            "status": "done",
+            "mode": "dual",
+        }
+        return {
+            "available": True,
+            "total": 1,
+            "limit": 25,
+            "offset": 0,
+            "summary": {
+                "total": 1,
+                "done": 1,
+                "processing": 0,
+                "queued": 0,
+                "error": 0,
+                "ai_findings_total": 6,
+                "rule_findings_total": 16,
+            },
+            "items": [
+                {
+                    "job_uuid": "job-db-1",
+                    "filename": "sample.pdf",
+                    "status": "done",
+                    "mode": "dual",
+                    "ai_findings_count": 6,
+                    "rule_findings_count": 16,
+                    "merged_findings_count": 22,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(jobs_routes, "list_persisted_analysis_jobs", _fake_list)
+
+    response = client.get(
+        "/api/admin/analysis-results",
+        params={"limit": 25, "search": "budget", "status": "done", "mode": "dual"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["available"] is True
+    assert payload["total"] == 1
+    assert payload["items"][0]["job_uuid"] == "job-db-1"
+    assert payload["summary"]["ai_findings_total"] == 6
+
+
+def test_admin_analysis_results_detail_endpoint_returns_record(monkeypatch):
+    client = TestClient(app)
+
+    async def _fake_detail(job_uuid: str):
+        assert job_uuid == "job-db-1"
+        return {
+            "available": True,
+            "job_uuid": "job-db-1",
+            "filename": "sample.pdf",
+            "status": "done",
+            "mode": "dual",
+            "ai_findings_count": 6,
+            "rule_findings_count": 16,
+            "merged_findings_count": 22,
+            "ai_findings": [{"id": "ai-1"}],
+            "rule_findings": [{"id": "rule-1"}],
+            "merged_result": {"totals": {"merged": 22}},
+        }
+
+    monkeypatch.setattr(jobs_routes, "get_persisted_analysis_job_detail", _fake_detail)
+
+    response = client.get("/api/admin/analysis-results/job-db-1")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["job_uuid"] == "job-db-1"
+    assert payload["ai_findings"][0]["id"] == "ai-1"
+    assert payload["rule_findings"][0]["id"] == "rule-1"

@@ -221,14 +221,25 @@ async def test_start_analysis_preserves_organization_context(tmp_path, monkeypat
         async def enqueue(self, job_id: str) -> None:
             self.enqueued.append(job_id)
 
+    persisted: list[dict] = []
+
+    async def _fake_persist(payload: dict, *, include_results: bool = False) -> bool:
+        persisted.append({"payload": dict(payload), "include_results": include_results})
+        return True
+
     queue = _DummyQueue()
     monkeypatch.setattr(runtime, "_pipeline_runner", _dummy_runner)
     monkeypatch.setattr(runtime, "_job_queue", queue)
+    monkeypatch.setattr(runtime, "persist_analysis_job_snapshot", _fake_persist)
 
     payload = await runtime.start_analysis("job-queued", {"mode": "legacy"})
 
     assert payload["status"] == "started"
     assert queue.enqueued == ["job-queued"]
+    assert persisted
+    assert persisted[0]["payload"]["job_id"] == "job-queued"
+    assert persisted[0]["payload"]["status"] == "queued"
+    assert persisted[0]["include_results"] is False
 
     status = runtime.read_json_file(job_dir / "status.json", default={})
     assert status["organization_id"] == "org-1"
@@ -1077,3 +1088,73 @@ def test_ignore_job_issue_filters_ai_findings_and_summary(tmp_path, monkeypatch)
     assert summary["ai_issue_total"] == 1
     assert summary["ai_issue_warn"] == 1
     assert summary["issue_total"] == 1
+
+
+def test_get_job_status_payload_lifts_dual_mode_result_to_top_level(tmp_path, monkeypatch):
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    ai_issue = {
+        "id": "ai:1",
+        "source": "ai",
+        "severity": "medium",
+        "title": "AI issue",
+        "message": "AI issue",
+        "evidence": [{"page": 1, "text": "AI issue"}],
+        "location": {"page": 1},
+        "metrics": {},
+        "tags": [],
+        "created_at": 1.0,
+    }
+    rule_issue = {
+        "id": "rule:1",
+        "source": "rule",
+        "severity": "high",
+        "title": "Rule issue",
+        "message": "Rule issue",
+        "evidence": [{"page": 2, "text": "Rule issue"}],
+        "location": {"page": 2},
+        "metrics": {},
+        "tags": [],
+        "created_at": 1.0,
+    }
+
+    job_dir = tmp_path / "job-dual"
+    job_dir.mkdir(parents=True)
+    runtime.write_json_file(
+        job_dir / "status.json",
+        {
+            "job_id": "job-dual",
+            "status": "done",
+            "progress": 100,
+            "mode": "dual",
+            "dual_mode_enabled": True,
+            "ai_findings": [],
+            "rule_findings": [],
+            "summary": None,
+            "meta": None,
+            "result": {
+                "summary": {"merged_issue_total": 2},
+                "meta": {"elapsed_ms": {"ai": 1000, "rule": 200}},
+                "ai_findings": [ai_issue],
+                "rule_findings": [rule_issue],
+                "merged": {
+                    "totals": {
+                        "ai": 1,
+                        "rule": 1,
+                        "merged": 2,
+                        "conflicts": 0,
+                        "agreements": 0,
+                    },
+                    "conflicts": [],
+                    "agreements": [],
+                },
+            },
+        },
+    )
+
+    payload = runtime.get_job_status_payload("job-dual")
+
+    assert [item["id"] for item in payload["ai_findings"]] == ["ai:1"]
+    assert [item["id"] for item in payload["rule_findings"]] == ["rule:1"]
+    assert payload["summary"]["merged_issue_total"] == 2
+    assert payload["meta"]["elapsed_ms"]["ai"] == 1000

@@ -250,13 +250,13 @@ export default function StructuredIngestPanel({
         </div>
 
         <div className="rounded-xl border border-slate-200/70 bg-white/70 p-4 dark:border-slate-700/60 dark:bg-slate-900/20">
-          <div className="text-sm font-medium text-slate-900 dark:text-white">复核状态</div>
+          <div className="text-sm font-medium text-slate-900 dark:text-white">入库复核状态</div>
           <div className="mt-3 flex flex-wrap gap-2">
             <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700">
-              待复核 {formatCount(payload?.review_item_count)}
+              入库待复核 {formatCount(payload?.review_item_count)}
             </span>
             <span className="inline-flex items-center rounded-full bg-orange-100 px-2.5 py-1 text-xs font-medium text-orange-700">
-              低置信 {formatCount(payload?.low_confidence_item_count)}
+              低置信字段 {formatCount(payload?.low_confidence_item_count)}
             </span>
             <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-200">
               可选表缺失 {optionalTables.length}

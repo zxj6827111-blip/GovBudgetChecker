@@ -1437,7 +1437,7 @@ export default function OrganizationDetailView({
                                   <span className="text-emerald-600" title="已成功结构化入库">✓ 已入库</span>
                                 )}
                                 {(job.review_item_count || 0) > 0 && (
-                                  <span className="text-amber-600">{job.review_item_count}待复核</span>
+                                  <span className="text-amber-600">入库待复核 {job.review_item_count}</span>
                                 )}
                               </div>
                             </div>

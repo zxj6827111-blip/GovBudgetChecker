@@ -79,7 +79,7 @@ export default function ProblemPreviewFrame({
               >
                 <div
                   className={cn(
-                    "inline-flex max-w-full rounded-full border border-rose-200 bg-white/96 px-3 py-1.5 text-xs font-medium text-rose-700 shadow-lg backdrop-blur",
+                    "inline-flex max-w-full rounded-lg border border-rose-300/80 bg-white/92 px-2.5 py-1 text-[11px] font-medium text-rose-700 shadow-sm backdrop-blur-[1px]",
                     labelClassName,
                   )}
                 >
@@ -89,7 +89,7 @@ export default function ProblemPreviewFrame({
 
               <div
                 className={cn(
-                  "pointer-events-none absolute z-10 rounded-md border-[3px] border-rose-500 bg-rose-500/10",
+                  "pointer-events-none absolute z-10 rounded-sm border-[1.5px] border-rose-500/90 bg-transparent",
                   overlayClassName,
                 )}
                 style={getProblemOverlayStyle(overlayBox)}

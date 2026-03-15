@@ -29,6 +29,7 @@ class AIFindingsService:
         if self.audit_overlap_chars >= self.audit_window_chars:
             self.audit_overlap_chars = max(200, self.audit_window_chars // 4)
         self.audit_max_windows = self._read_int_env("AI_AUDIT_MAX_WINDOWS", 12, 1)
+        self.audit_max_concurrency = self._read_int_env("AI_AUDIT_MAX_CONCURRENCY", 2, 1)
     
     async def analyze(self, context: JobContext) -> List[IssueItem]:
         """执行AI分析"""
@@ -89,13 +90,12 @@ class AIFindingsService:
                         "timestamp": time.time(),
                     }
                 )
-            for window_idx, (window_start, window_text) in enumerate(windows):
-                window_hash = hashlib.sha1(
-                    f"{doc_hash}:{window_idx}:{window_start}".encode("utf-8")
-                ).hexdigest()[:12]
-                window_issues = await self.ai_client.ai_full_report_audit(window_text, window_hash)
-                for issue in window_issues:
-                    self._shift_issue_span(issue, window_start, len(all_text))
+            window_batches = await self._run_window_audits(
+                windows=windows,
+                doc_hash=doc_hash,
+                total_text_len=len(all_text),
+            )
+            for window_issues in window_batches:
                 semantic_issues.extend(window_issues)
             semantic_issues = self._dedupe_semantic_issues(semantic_issues)
             
@@ -251,6 +251,49 @@ class AIFindingsService:
             return resolved
         finally:
             locator.close()
+
+    async def _run_window_audits(
+        self,
+        windows: List[tuple[int, str]],
+        doc_hash: str,
+        total_text_len: int,
+    ) -> List[List[Dict[str, Any]]]:
+        if not windows:
+            return []
+
+        semaphore = asyncio.Semaphore(self.audit_max_concurrency)
+
+        async def audit_one(window_idx: int, window_start: int, window_text: str) -> List[Dict[str, Any]]:
+            import hashlib
+
+            window_hash = hashlib.sha1(
+                f"{doc_hash}:{window_idx}:{window_start}".encode("utf-8")
+            ).hexdigest()[:12]
+            async with semaphore:
+                try:
+                    window_issues = await self.ai_client.ai_full_report_audit(window_text, window_hash)
+                except Exception as exc:
+                    logger.warning("AI window audit failed: window=%s error=%s", window_idx, exc)
+                    self.ai_errors.append(
+                        {
+                            "type": "audit_window_failed",
+                            "window_index": window_idx,
+                            "window_start": window_start,
+                            "message": str(exc),
+                            "timestamp": time.time(),
+                        }
+                    )
+                    return []
+
+            for issue in window_issues:
+                self._shift_issue_span(issue, window_start, total_text_len)
+            return window_issues
+
+        tasks = [
+            asyncio.create_task(audit_one(window_idx, window_start, window_text))
+            for window_idx, (window_start, window_text) in enumerate(windows)
+        ]
+        return await asyncio.gather(*tasks)
 
     @staticmethod
     def _read_int_env(name: str, default: int, min_value: int) -> int:

@@ -1,5 +1,8 @@
 import sys
 from pathlib import Path
+from unittest.mock import AsyncMock
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -104,3 +107,16 @@ def test_normalize_severity_maps_p_levels() -> None:
     assert ExtractorClient._normalize_severity("p1") == "medium"
     assert ExtractorClient._normalize_severity("p2") == "low"
     assert ExtractorClient._normalize_severity("unknown") == "medium"
+
+
+@pytest.mark.asyncio
+async def test_full_report_audit_keeps_empty_direct_result_without_fallback() -> None:
+    client = ExtractorClient()
+    client._direct_semantic_audit = AsyncMock(return_value=[])
+    client.ai_semantic_audit = AsyncMock(return_value=[{"type": "should_not_run"}])
+
+    result = await client.ai_full_report_audit("测试文本", "doc-hash")
+
+    assert result == []
+    client._direct_semantic_audit.assert_awaited_once()
+    client.ai_semantic_audit.assert_not_awaited()

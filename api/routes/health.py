@@ -54,8 +54,10 @@ async def _check_ai_extractor() -> tuple[bool, str]:
     try:
         import httpx
 
+        health_url = url.replace("/ai/extract/v1", "/health")
+
         async with httpx.AsyncClient(timeout=3.0) as client:
-            response = await client.get(url)
+            response = await client.get(health_url)
             # Treat 2xx-4xx as reachable. 5xx means remote service unhealthy.
             if response.status_code < 500:
                 return True, f"reachable:{response.status_code}"

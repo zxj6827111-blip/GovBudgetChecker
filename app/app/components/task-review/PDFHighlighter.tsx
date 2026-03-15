@@ -79,8 +79,8 @@ export default function PDFHighlighter({ problem, onClose }: PDFHighlighterProps
             frameClassName="rounded-2xl border border-slate-700 bg-white shadow-2xl"
             canvasClassName="min-h-[480px] bg-slate-100/80 p-6"
             imageClassName="max-h-[calc(100vh-15rem)]"
-            overlayClassName="border-[4px] shadow-[0_0_0_9999px_rgba(15,23,42,0.42)]"
-            labelClassName="border-danger-500 bg-danger-500 text-white"
+            overlayClassName="border-[1.5px] shadow-[0_0_0_9999px_rgba(15,23,42,0.18)]"
+            labelClassName="border-danger-300 bg-white/94 text-danger-700 shadow-md"
           />
         </div>
       </div>

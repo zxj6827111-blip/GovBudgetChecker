@@ -17,6 +17,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { OrganizationRecord } from "@/lib/uiAdapters";
+import { ORG_TREE_REFRESH_EVENT } from "@/lib/orgTreeEvents";
 import { cn } from "@/lib/utils";
 
 const REGIONS = [
@@ -178,9 +179,15 @@ export default function Sidebar() {
       });
     }
 
+    const handleRefresh = () => {
+      void load();
+    };
+
     void load();
+    window.addEventListener(ORG_TREE_REFRESH_EVENT, handleRefresh);
     return () => {
       alive = false;
+      window.removeEventListener(ORG_TREE_REFRESH_EVENT, handleRefresh);
     };
   }, [selectedId]);
 
@@ -246,21 +253,21 @@ export default function Sidebar() {
             </Link>
           </div>
 
-          <div className="ml-1 flex min-w-[2.5rem] shrink-0 flex-col items-end gap-1 text-[11px] leading-none">
+          <div className="ml-2 flex min-w-[4.5rem] shrink-0 flex-col items-end gap-1 text-[11px] leading-none">
             {Number(org.issue_count ?? 0) > 0 && (
               <span
-                className="min-w-[2.25rem] rounded bg-danger-50 px-1.5 py-1 text-center font-medium text-danger-600"
-                title="问题数"
+                className="min-w-[4.5rem] whitespace-nowrap rounded bg-danger-50 px-2 py-1 text-center font-medium text-danger-600"
+                title={`问题数：${org.issue_count}`}
               >
-                {org.issue_count}
+                问题 {org.issue_count}
               </span>
             )}
             {Number(org.job_count ?? 0) > 0 && (
               <span
-                className="min-w-[2.25rem] rounded bg-slate-100 px-1.5 py-1 text-center font-medium text-slate-500"
-                title="报告数"
+                className="min-w-[4.5rem] whitespace-nowrap rounded bg-slate-100 px-2 py-1 text-center font-medium text-slate-500"
+                title={`报告数：${org.job_count}`}
               >
-                {org.job_count}
+                报告 {org.job_count}
               </span>
             )}
           </div>

@@ -114,7 +114,7 @@ export default function EvidencePanel({ problem, onOpenViewer }: EvidencePanelPr
             frameClassName="rounded-xl border border-danger-200 bg-white shadow-sm"
             canvasClassName="min-h-[260px]"
             imageClassName="max-h-[520px]"
-            overlayClassName="shadow-[0_0_0_9999px_rgba(15,23,42,0.06)]"
+            overlayClassName="shadow-[0_0_0_9999px_rgba(15,23,42,0.03)]"
             showHoverHint
             hoverHintText="点击查看大图"
           />

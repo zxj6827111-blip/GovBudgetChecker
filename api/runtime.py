@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import io
 import json
 import logging
 import os
@@ -74,6 +75,8 @@ except ImportError:
     USER_STORE_AVAILABLE = False
     get_user_store = None
 
+from src.services.analysis_result_store import persist_analysis_job_snapshot
+
 _pipeline_runner: Optional[Callable[[Path], Awaitable[None]]] = None
 _job_queue: Optional["DurableJobQueue"] = None
 _JOB_SUMMARY_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -116,6 +119,12 @@ _YEAR_4_RE = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
 _YEAR_2_RE = re.compile(
     r"(?<!\d)(\d{2})(?=\s*(?:\u5e74|\u5e74\u5ea6|\u9884\u7b97|\u51b3\u7b97|budget|final|settlement|accounts|$))",
     re.I,
+)
+_COVER_ORG_LABELS = (
+    ("\u9884\u7b97\u4e3b\u7ba1\u90e8\u95e8", "department", "budget"),
+    ("\u9884\u7b97\u5355\u4f4d", "unit", "budget"),
+    ("\u51b3\u7b97\u4e3b\u7ba1\u90e8\u95e8", "department", "final"),
+    ("\u51b3\u7b97\u5355\u4f4d", "unit", "final"),
 )
 
 
@@ -342,6 +351,26 @@ def _filter_issue_list(items: Any, ignored_ids: Set[str]) -> Any:
     return filtered
 
 
+def _lift_result_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return payload
+
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return payload
+
+    lifted = dict(payload)
+    for key in ("ai_findings", "rule_findings", "issues", "merged", "summary", "meta"):
+        result_value = result.get(key)
+        if result_value is None:
+            continue
+        current_value = lifted.get(key)
+        if current_value in (None, [], {}, ""):
+            lifted[key] = copy.deepcopy(result_value)
+
+    return lifted
+
+
 def _recompute_merged_payload(container: Dict[str, Any]) -> None:
     ai_findings = container.get("ai_findings")
     rule_findings = container.get("rule_findings")
@@ -516,21 +545,43 @@ def _enrich_job_organization_context(job_id: str, payload: Dict[str, Any]) -> Di
     return enriched
 
 
-def extract_pdf_first_page_text(pdf_path: Path) -> str:
-    """Best-effort first-page text extraction for upload-time organization matching."""
+def _extract_pdf_page_texts(pdf_source: Any, *, max_pages: int = 3) -> List[str]:
+    """Best-effort text extraction for the first few PDF pages."""
     try:
         import pdfplumber
     except Exception:
-        return ""
+        return []
 
     try:
-        with pdfplumber.open(str(pdf_path)) as pdf:
+        with pdfplumber.open(pdf_source) as pdf:
             if not pdf.pages:
-                return ""
-            return str(pdf.pages[0].extract_text() or "").strip()
+                return []
+            limit = max(1, int(max_pages or 1))
+            return [
+                str(page.extract_text() or "").strip()
+                for page in pdf.pages[:limit]
+            ]
     except Exception:
-        logger.exception("Failed to extract first page text from PDF: %s", pdf_path)
-        return ""
+        logger.exception("Failed to extract page text from PDF source")
+        return []
+
+
+def extract_pdf_page_texts_from_bytes(content: bytes, max_pages: int = 3) -> List[str]:
+    """Extract the first few page texts from in-memory PDF bytes."""
+    if not content:
+        return []
+    return _extract_pdf_page_texts(io.BytesIO(content), max_pages=max_pages)
+
+
+def extract_pdf_page_texts(pdf_path: Path, max_pages: int = 3) -> List[str]:
+    """Extract the first few page texts from a PDF path."""
+    return _extract_pdf_page_texts(str(pdf_path), max_pages=max_pages)
+
+
+def extract_pdf_first_page_text(pdf_path: Path) -> str:
+    """Best-effort first-page text extraction for upload-time organization matching."""
+    page_texts = extract_pdf_page_texts(pdf_path, max_pages=1)
+    return page_texts[0] if page_texts else ""
 
 
 def parse_report_year(raw: Any) -> Optional[int]:
@@ -651,6 +702,139 @@ def normalize_report_kind(doc_type: Optional[str], filename: str = "") -> str:
     ):
         return "final"
     return "unknown"
+
+
+def normalize_doc_type(
+    doc_type: Optional[str],
+    filename: str = "",
+    report_kind: Optional[str] = None,
+) -> Optional[str]:
+    """Normalize upload doc type to the route-facing values used by the app."""
+    normalized = str(doc_type or "").strip().lower()
+    if normalized in {"dept_budget", "budget"}:
+        return "dept_budget"
+    if normalized in {"dept_final", "final", "settlement", "accounts"}:
+        return "dept_final"
+
+    kind = str(report_kind or "").strip().lower()
+    if not kind:
+        kind = normalize_report_kind(doc_type, filename)
+    if kind == "budget":
+        return "dept_budget"
+    if kind == "final":
+        return "dept_final"
+    return None
+
+
+def _normalize_cover_line(raw: Any) -> str:
+    return re.sub(r"\s+", "", str(raw or "").strip())
+
+
+def _detect_cover_scope_hint(text: str) -> Optional[str]:
+    compact = _normalize_cover_line(text)
+    if not compact:
+        return None
+    if "\u4e3b\u7ba1\u90e8\u95e8" in compact or "\u90e8\u95e8\u9884\u7b97" in compact or "\u90e8\u95e8\u51b3\u7b97" in compact:
+        return "department"
+    if "\u9884\u7b97\u5355\u4f4d" in compact or "\u51b3\u7b97\u5355\u4f4d" in compact:
+        return "unit"
+    if "\u5355\u4f4d\u9884\u7b97" in compact or "\u5355\u4f4d\u51b3\u7b97" in compact or "\u672c\u7ea7" in compact:
+        return "unit"
+    if "\u90e8\u95e8" in compact:
+        return "department"
+    if "\u5355\u4f4d" in compact:
+        return "unit"
+    return None
+
+
+def _detect_cover_report_kind(text: str) -> Optional[str]:
+    compact = _normalize_cover_line(text)
+    if not compact:
+        return None
+    if "\u9884\u7b97" in compact or "budget" in compact.lower():
+        return "budget"
+    if "\u51b3\u7b97" in compact or "final" in compact.lower():
+        return "final"
+    return None
+
+
+def extract_cover_metadata(
+    *,
+    page_texts: Optional[List[str]] = None,
+    filename: str = "",
+    preferred_year: Any = None,
+    doc_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Extract lightweight cover metadata from the first page."""
+    normalized_pages = [str(text or "").strip() for text in (page_texts or [])]
+    first_page_text = normalized_pages[0] if normalized_pages else ""
+    lines = [line.strip() for line in first_page_text.splitlines() if line.strip()]
+
+    cover_title = ""
+    for line in lines[:20]:
+        compact = _normalize_cover_line(line)
+        if not compact:
+            continue
+        if (
+            ("\u9884\u7b97" in compact or "\u51b3\u7b97" in compact)
+            and ("\u90e8\u95e8" in compact or "\u5355\u4f4d" in compact)
+        ):
+            cover_title = line.strip()
+            break
+
+    if not cover_title:
+        for line in lines[:20]:
+            compact = _normalize_cover_line(line)
+            if "\u9884\u7b97" in compact or "\u51b3\u7b97" in compact:
+                cover_title = line.strip()
+                break
+
+    cover_org_name = ""
+    cover_org_label = ""
+    scope_hint: Optional[str] = None
+    report_kind: Optional[str] = None
+
+    for line in lines[:40]:
+        compact = _normalize_cover_line(line)
+        if not compact:
+            continue
+        for label, label_scope, label_kind in _COVER_ORG_LABELS:
+            if label not in compact:
+                continue
+            _, _, remainder = compact.partition(label)
+            remainder = re.sub(r"^[\uff1a:]+", "", remainder).strip()
+            if not remainder:
+                continue
+            cover_org_name = remainder
+            cover_org_label = label
+            scope_hint = label_scope
+            report_kind = label_kind
+            break
+        if cover_org_name:
+            break
+
+    scope_hint = scope_hint or _detect_cover_scope_hint(cover_title)
+    report_kind = report_kind or _detect_cover_report_kind(cover_title)
+
+    fallback_kind = normalize_report_kind(doc_type, filename)
+    if not report_kind and fallback_kind != "unknown":
+        report_kind = fallback_kind
+
+    report_year = infer_report_year(
+        filename=filename,
+        page_texts=normalized_pages,
+        preferred_year=preferred_year,
+    )
+
+    return {
+        "cover_title": cover_title,
+        "cover_org_name": cover_org_name,
+        "cover_org_label": cover_org_label,
+        "scope_hint": scope_hint or "",
+        "report_kind": report_kind or "unknown",
+        "report_year": report_year,
+        "doc_type": normalize_doc_type(doc_type, filename, report_kind=report_kind),
+    }
 
 
 def _normalize_scope_name(raw: Any) -> str:
@@ -1924,6 +2108,7 @@ def get_job_status_payload(job_id: str) -> Dict[str, Any]:
         if structured:
             payload.setdefault("structured_ingest", structured)
         payload = _enrich_job_organization_context(job_id, payload)
+        payload = _lift_result_payload(payload)
         return apply_job_issue_filters(job_dir, payload)
     except Exception as e:
         raise HTTPException(
@@ -2108,6 +2293,7 @@ async def start_analysis(
         status_file.write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8"
         )
+        await persist_analysis_job_snapshot(payload)
         queue = _job_queue
         dispatch = "local_queue"
         if queue is not None:

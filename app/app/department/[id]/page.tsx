@@ -13,8 +13,10 @@ import {
   Eye,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 
+import BatchUploadModal from "@/components/BatchUploadModal";
+import { dispatchOrgTreeRefresh } from "@/lib/orgTreeEvents";
 import { cn } from "@/lib/utils";
 import type { JobSummaryRecord, OrganizationRecord } from "@/lib/uiAdapters";
 import {
@@ -33,6 +35,8 @@ type OrganizationsResponse = {
   organizations?: OrganizationRecord[];
 };
 
+type DepartmentTab = "budget" | "final" | "review";
+
 async function fetchJson<T>(url: string, fallback: T): Promise<T> {
   try {
     const response = await fetch(url, { cache: "no-store" });
@@ -42,6 +46,22 @@ async function fetchJson<T>(url: string, fallback: T): Promise<T> {
     return (await response.json()) as T;
   } catch {
     return fallback;
+  }
+}
+
+async function readErrorMessage(response: Response): Promise<string> {
+  const text = await response.text();
+  try {
+    const payload = JSON.parse(text);
+    return (
+      payload?.detail ||
+      payload?.error ||
+      payload?.message ||
+      text ||
+      `HTTP ${response.status}`
+    );
+  } catch {
+    return text || `HTTP ${response.status}`;
   }
 }
 
@@ -59,6 +79,13 @@ function getSearchStatusLabel(status: ReturnType<typeof normalizeUiTaskStatus>):
   return "分析中 analyzing";
 }
 
+function needsIngestReview(job: JobSummaryRecord): boolean {
+  return (
+    Number(job.review_item_count ?? 0) > 0 ||
+    String(job.report_kind ?? "").trim().toLowerCase() === "unknown"
+  );
+}
+
 export default function Department() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -73,10 +100,13 @@ export default function Department() {
   const [loading, setLoading] = useState(true);
   const [selectedTasks, setSelectedTasks] = useState<string[]>([]);
   const [includeSub, setIncludeSub] = useState(true);
-  const [activeTab, setActiveTab] = useState<"budget" | "final">("budget");
+  const [activeTab, setActiveTab] = useState<DepartmentTab>("budget");
   const [selectedYear, setSelectedYear] = useState("all");
   const [selectedStatus, setSelectedStatus] = useState("all");
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [deletingJobId, setDeletingJobId] = useState<string | null>(null);
+  const [refreshSeed, setRefreshSeed] = useState(0);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -118,21 +148,37 @@ export default function Department() {
     return () => {
       alive = false;
     };
-  }, [id, includeSub]);
+  }, [id, includeSub, refreshSeed]);
 
   const currentOrg = useMemo(
     () => organizations.find((org) => org.id === id) ?? null,
     [id, organizations],
   );
 
+  const pendingReviewCount = useMemo(
+    () => jobs.filter((job) => needsIngestReview(job)).length,
+    [jobs],
+  );
+
+  const totalIssueCount = useMemo(
+    () => jobs.reduce((sum, job) => sum + getDisplayIssueTotal(job), 0),
+    [jobs],
+  );
+
   useEffect(() => {
-    if (jobs.some((job) => job.report_kind === "budget")) {
-      setActiveTab("budget");
-      return;
-    }
-    if (jobs.some((job) => job.report_kind === "final")) {
-      setActiveTab("final");
-    }
+    const hasBudgetJobs = jobs.some((job) => job.report_kind === "budget");
+    const hasFinalJobs = jobs.some((job) => job.report_kind === "final");
+    const hasReviewJobs = jobs.some((job) => needsIngestReview(job));
+
+    setActiveTab((current) => {
+      if (current === "budget" && hasBudgetJobs) return current;
+      if (current === "final" && hasFinalJobs) return current;
+      if (current === "review" && hasReviewJobs) return current;
+      if (hasBudgetJobs) return "budget";
+      if (hasFinalJobs) return "final";
+      if (hasReviewJobs) return "review";
+      return "budget";
+    });
   }, [jobs]);
 
   const years = useMemo(() => {
@@ -147,16 +193,24 @@ export default function Department() {
 
   const filteredTasks = useMemo(() => {
     return jobs.filter((job) => {
-      if (activeTab === "budget" && job.report_kind !== "budget") {
-        return false;
-      }
-      if (activeTab === "final" && job.report_kind !== "final") {
+      if (activeTab === "review") {
+        if (!needsIngestReview(job)) {
+          return false;
+        }
+      } else if (job.report_kind !== activeTab) {
         return false;
       }
       if (selectedYear !== "all" && String(job.report_year ?? "") !== selectedYear) {
         return false;
       }
-      if (selectedStatus !== "all" && normalizeUiTaskStatus(job.status) !== selectedStatus) {
+      if (selectedStatus === "review") {
+        if (!needsIngestReview(job)) {
+          return false;
+        }
+      } else if (
+        selectedStatus !== "all" &&
+        normalizeUiTaskStatus(job.status) !== selectedStatus
+      ) {
         return false;
       }
       if (normalizedSearchQuery) {
@@ -196,16 +250,6 @@ export default function Department() {
     }
   }, [filteredTasks, openMenuId]);
 
-  const pendingCount = useMemo(
-    () =>
-      jobs.filter(
-        (job) =>
-          Number(job.review_item_count ?? 0) > 0 ||
-          normalizeUiTaskStatus(job.status) === "analyzing",
-      ).length,
-    [jobs],
-  );
-
   const toggleSelect = (taskId: string) => {
     setSelectedTasks((prev) =>
       prev.includes(taskId) ? prev.filter((item) => item !== taskId) : [...prev, taskId],
@@ -221,92 +265,149 @@ export default function Department() {
   };
 
   const includeChildrenDisabled = currentOrg?.level === "unit";
+  const uploadTargetOrgId = currentOrg?.id;
+
+  const handleDelete = async (jobId: string, event: ReactMouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    if (deletingJobId) {
+      return;
+    }
+    if (!confirm("确定要删除这份报告吗？此操作不可恢复。")) {
+      return;
+    }
+
+    setDeletingJobId(jobId);
+    setOpenMenuId(null);
+
+    try {
+      const response = await fetch(`/api/jobs/${jobId}`, { method: "DELETE" });
+      if (!response.ok) {
+        alert(await readErrorMessage(response));
+        return;
+      }
+
+      setJobs((prev) => prev.filter((item) => item.job_id !== jobId));
+      setSelectedTasks((prev) => prev.filter((item) => item !== jobId));
+      dispatchOrgTreeRefresh();
+    } catch (error) {
+      console.error("Failed to delete report:", error);
+      alert("删除失败，请稍后重试。");
+    } finally {
+      setDeletingJobId(null);
+    }
+  };
 
   return (
-    <div className="flex h-full flex-col bg-surface-50">
-      <div className="shrink-0 border-b border-border bg-white px-8 pt-6">
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-              {currentOrg?.name ?? "组织详情"}
-            </h1>
-            <p className="mt-1 text-sm text-slate-500">
-              {loading
-                ? "正在同步真实任务数据..."
-                : `共 ${jobs.length} 份报告，其中 ${pendingCount} 份待复核`}
-            </p>
+    <>
+      <div className="flex h-full flex-col bg-surface-50">
+        <div className="shrink-0 border-b border-border bg-white px-8 pt-6">
+          <div className="mb-6 flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+                {currentOrg?.name ?? "组织详情"}
+              </h1>
+              <p className="mt-1 text-sm text-slate-500">
+                {loading
+                  ? "正在同步真实任务数据..."
+                  : `共 ${jobs.length} 份报告，累计问题 ${totalIssueCount} 项`}
+              </p>
+              {!loading && pendingReviewCount > 0 && (
+                <div className="mt-2 inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
+                  另有 {pendingReviewCount} 份入库待复核，可切换到“入库待复核”查看
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-4">
+              <label
+                className={cn(
+                  "flex items-center gap-2",
+                  includeChildrenDisabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
+                )}
+              >
+                <div className="relative">
+                  <input
+                    type="checkbox"
+                    className="sr-only"
+                    checked={includeSub}
+                    disabled={includeChildrenDisabled}
+                    onChange={() => setIncludeSub((prev) => !prev)}
+                  />
+                  <div
+                    className={cn(
+                      "block h-6 w-10 rounded-full transition-colors",
+                      includeSub ? "bg-primary-600" : "bg-slate-300",
+                    )}
+                  />
+                  <div
+                    className={cn(
+                      "dot absolute left-1 top-1 h-4 w-4 rounded-full bg-white transition-transform",
+                      includeSub && "translate-x-4",
+                    )}
+                  />
+                </div>
+                <span className="text-sm font-medium text-slate-700">包含下属单位</span>
+              </label>
+              <div className="mx-2 h-6 w-px bg-border" />
+              <button
+                type="button"
+                onClick={() => setIsUploadModalOpen(true)}
+                className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 font-medium text-white shadow-sm transition-colors hover:bg-primary-700"
+              >
+                <UploadCloud className="h-4 w-4" />
+                上传报告
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-4">
-            <label
+
+          <div className="flex items-center gap-6">
+            <button
+              onClick={() => {
+                setActiveTab("budget");
+                setSelectedTasks([]);
+              }}
               className={cn(
-                "flex items-center gap-2",
-                includeChildrenDisabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
+                "border-b-2 pb-3 text-sm font-medium transition-colors",
+                activeTab === "budget"
+                  ? "border-primary-600 text-primary-600"
+                  : "border-transparent text-slate-500 hover:text-slate-700",
               )}
             >
-              <div className="relative">
-                <input
-                  type="checkbox"
-                  className="sr-only"
-                  checked={includeSub}
-                  disabled={includeChildrenDisabled}
-                  onChange={() => setIncludeSub((prev) => !prev)}
-                />
-                <div
-                  className={cn(
-                    "block h-6 w-10 rounded-full transition-colors",
-                    includeSub ? "bg-primary-600" : "bg-slate-300",
-                  )}
-                />
-                <div
-                  className={cn(
-                    "dot absolute left-1 top-1 h-4 w-4 rounded-full bg-white transition-transform",
-                    includeSub && "translate-x-4",
-                  )}
-                />
-              </div>
-              <span className="text-sm font-medium text-slate-700">包含下属单位</span>
-            </label>
-            <div className="mx-2 h-6 w-px bg-border" />
-            <button className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 font-medium text-white shadow-sm transition-colors hover:bg-primary-700">
-              <UploadCloud className="h-4 w-4" />
-              上传报告
+              部门预算
             </button>
+            <button
+              onClick={() => {
+                setActiveTab("final");
+                setSelectedTasks([]);
+              }}
+              className={cn(
+                "border-b-2 pb-3 text-sm font-medium transition-colors",
+                activeTab === "final"
+                  ? "border-primary-600 text-primary-600"
+                  : "border-transparent text-slate-500 hover:text-slate-700",
+              )}
+            >
+              部门决算
+            </button>
+            {pendingReviewCount > 0 && (
+              <button
+                onClick={() => {
+                  setActiveTab("review");
+                  setSelectedTasks([]);
+                }}
+                className={cn(
+                  "border-b-2 pb-3 text-sm font-medium transition-colors",
+                  activeTab === "review"
+                    ? "border-amber-500 text-amber-600"
+                    : "border-transparent text-slate-500 hover:text-slate-700",
+                )}
+              >
+                入库待复核 ({pendingReviewCount})
+              </button>
+            )}
           </div>
         </div>
 
-        <div className="flex items-center gap-6">
-          <button
-            onClick={() => {
-              setActiveTab("budget");
-              setSelectedTasks([]);
-            }}
-            className={cn(
-              "border-b-2 pb-3 text-sm font-medium transition-colors",
-              activeTab === "budget"
-                ? "border-primary-600 text-primary-600"
-                : "border-transparent text-slate-500 hover:text-slate-700",
-            )}
-          >
-            部门预算
-          </button>
-          <button
-            onClick={() => {
-              setActiveTab("final");
-              setSelectedTasks([]);
-            }}
-            className={cn(
-              "border-b-2 pb-3 text-sm font-medium transition-colors",
-              activeTab === "final"
-                ? "border-primary-600 text-primary-600"
-                : "border-transparent text-slate-500 hover:text-slate-700",
-            )}
-          >
-            部门决算
-          </button>
-        </div>
-      </div>
-
-      <div className="relative flex-1 overflow-y-auto p-8">
+        <div className="relative flex-1 overflow-y-auto p-8">
         {selectedTasks.length > 0 && (
           <div className="animate-in fade-in slide-in-from-top-4 absolute left-1/2 top-4 z-20 flex -translate-x-1/2 items-center gap-6 rounded-xl bg-slate-900 px-6 py-3 text-white shadow-xl">
             <span className="text-sm font-medium">已选择 {selectedTasks.length} 项</span>
@@ -346,6 +447,7 @@ export default function Department() {
               <option value="all">全部状态</option>
               <option value="completed">已完成</option>
               <option value="analyzing">分析中</option>
+              <option value="review">入库待复核</option>
               <option value="failed">失败</option>
             </select>
           </div>
@@ -431,22 +533,38 @@ export default function Department() {
                       </td>
                       <td className="p-4 text-sm text-slate-600">{task.year}</td>
                       <td className="p-4">
-                        <span
-                          className={cn(
-                            "rounded-full border px-2.5 py-1 text-xs font-medium",
-                            task.status === "completed"
-                              ? "border-success-200 bg-success-50 text-success-700"
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={cn(
+                              "rounded-full border px-2.5 py-1 text-xs font-medium",
+                              task.status === "completed"
+                                ? "border-success-200 bg-success-50 text-success-700"
+                                : task.status === "analyzing"
+                                  ? "border-warning-200 bg-warning-50 text-warning-700"
+                                  : "border-danger-200 bg-danger-50 text-danger-700",
+                            )}
+                          >
+                            {task.status === "completed"
+                              ? "已完成"
                               : task.status === "analyzing"
-                                ? "border-warning-200 bg-warning-50 text-warning-700"
-                                : "border-danger-200 bg-danger-50 text-danger-700",
+                                ? "分析中"
+                                : "失败"}
+                          </span>
+                          {needsIngestReview(job) && (
+                            <>
+                              {String(job.report_kind ?? "").trim().toLowerCase() === "unknown" && (
+                                <span className="rounded-full border border-orange-200 bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700">
+                                  类型待识别
+                                </span>
+                              )}
+                              {Number(job.review_item_count ?? 0) > 0 && (
+                                <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
+                                  入库待复核 {job.review_item_count}
+                                </span>
+                              )}
+                            </>
                           )}
-                        >
-                          {task.status === "completed"
-                            ? "已完成"
-                            : task.status === "analyzing"
-                              ? "分析中"
-                              : "失败"}
-                        </span>
+                        </div>
                       </td>
                       <td className="p-4">
                         <div className="flex items-center gap-2">
@@ -497,9 +615,14 @@ export default function Department() {
                               导出审查报告
                             </button>
                             <div className="my-1 h-px bg-border" />
-                            <button className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-slate-400">
+                            <button
+                              type="button"
+                              onClick={(event) => void handleDelete(job.job_id, event)}
+                              disabled={deletingJobId === job.job_id}
+                              className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
                               <Trash2 className="h-4 w-4" />
-                              删除此报告
+                              {deletingJobId === job.job_id ? "删除中..." : "删除此报告"}
                             </button>
                           </div>
                         )}
@@ -511,7 +634,20 @@ export default function Department() {
             </tbody>
           </table>
         </div>
+        </div>
       </div>
-    </div>
+      {isUploadModalOpen ? (
+        <BatchUploadModal
+          orgUnitId={uploadTargetOrgId}
+          defaultDocType="dept_budget"
+          onClose={() => setIsUploadModalOpen(false)}
+          onComplete={() => {
+            setIsUploadModalOpen(false);
+            setRefreshSeed((value) => value + 1);
+            dispatchOrgTreeRefresh();
+          }}
+        />
+      ) : null}
+    </>
   );
 }

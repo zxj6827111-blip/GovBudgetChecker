@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowUpRight, FileText, AlertTriangle, CheckCircle2, UploadCloud } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import BatchUploadModal from "@/components/BatchUploadModal";
 import type { JobSummaryRecord, OrganizationRecord } from "@/lib/uiAdapters";
 import {
   formatDateTime,
@@ -54,6 +55,8 @@ export default function Dashboard() {
   const [jobs, setJobs] = useState<JobSummaryRecord[]>([]);
   const [departments, setDepartments] = useState<OrganizationRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshSeed, setRefreshSeed] = useState(0);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -87,7 +90,7 @@ export default function Dashboard() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [refreshSeed]);
 
   const summary = useMemo(() => {
     const totalReports = jobs.length;
@@ -126,7 +129,8 @@ export default function Dashboard() {
     null;
 
   return (
-    <div className="mx-auto max-w-7xl p-8">
+    <>
+      <div className="mx-auto max-w-7xl p-8">
       <div className="mb-8 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">总览</h1>
@@ -137,7 +141,11 @@ export default function Dashboard() {
           </p>
         </div>
         <div className="flex gap-3">
-          <button className="flex items-center gap-2 rounded-lg border border-border bg-white px-4 py-2 font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50">
+          <button
+            type="button"
+            onClick={() => setIsUploadModalOpen(true)}
+            className="flex items-center gap-2 rounded-lg border border-border bg-white px-4 py-2 font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+          >
             <UploadCloud className="h-4 w-4" />
             上传报告
           </button>
@@ -292,6 +300,17 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-    </div>
+      </div>
+      {isUploadModalOpen ? (
+        <BatchUploadModal
+          defaultDocType="dept_budget"
+          onClose={() => setIsUploadModalOpen(false)}
+          onComplete={() => {
+            setIsUploadModalOpen(false);
+            setRefreshSeed((value) => value + 1);
+          }}
+        />
+      ) : null}
+    </>
   );
 }

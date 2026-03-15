@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Government Budget Checker Project",
   "scripts": {
-    "dev": "concurrently -n \"frontend,backend\" -c \"cyan,magenta\" \"npm run dev:frontend\" \"npm run dev:backend\"",
+    "dev": "powershell -NoProfile -Command \"$raw = if ($env:INIT_CWD) { $env:INIT_CWD } elseif ($env:npm_package_json) { Split-Path $env:npm_package_json } else { (Get-Location).Path }; $root = ($raw -replace '^Microsoft\\.PowerShell\\.Core\\\\FileSystem::', '' -replace '^\\\\\\\\\\?\\\\', ''); Set-Location -LiteralPath $root; node .\\scripts\\dev.cjs\"",
     "dev:frontend": "npm --prefix app run dev",
     "dev:backend": "powershell -Command \"if (-not $env:GOVBUDGET_AUTH_ENABLED) { $env:GOVBUDGET_AUTH_ENABLED='true' }; if (-not $env:GOVBUDGET_API_KEY) { $env:GOVBUDGET_API_KEY='dev-local-key' }; if (-not $env:GOVBUDGET_RATE_LIMIT) { $env:GOVBUDGET_RATE_LIMIT='2000' }; python -m uvicorn api.main:app --reload --port 8000\"",
     "dev:backend:noauth": "powershell -Command \"$env:GOVBUDGET_AUTH_ENABLED='false'; python -m uvicorn api.main:app --reload --port 8000\"",
