@@ -94,3 +94,37 @@ def test_issue_item_normalizes_legacy_row_evidence_without_document() -> None:
     assert item.location["table"] == "收入决算表"
     assert item.location["row"] == "第4行"
     assert item.location["field"] == "行内合计"
+
+
+def test_rule_runner_applies_rule_specific_title_and_suggestion() -> None:
+    doc = build_document(
+        path="final.pdf",
+        page_texts=[
+            "五、一般公共预算财政拨款支出决算情况说明",
+            "一般公共预算财政拨款支出决算表\n单位：万元",
+        ],
+        page_tables=[[], []],
+        filesize=128,
+    )
+    issue = Issue(
+        rule="V33-227",
+        severity="warn",
+        message="说明5类级科目名称与T5不一致（210）：表格“卫生健康支出”，说明“医疗卫生与计划生育支出”",
+        evidence_text="编码：210\n表格名称：卫生健康支出\n说明名称：医疗卫生与计划生育支出",
+        location={
+            "page": 1,
+            "table": "一般公共预算财政拨款支出决算表",
+            "section": "说明5（一般公共预算财政拨款支出决算具体情况）",
+            "row": "210",
+            "field": "功能分类科目名称",
+        },
+    )
+
+    finding = EngineRuleRunner()._issue_to_finding(issue, rule_id="V33-227", document=doc)
+
+    assert finding.title == "说明5功能分类类款项名称与T5不一致"
+    assert finding.suggestion is not None
+    assert "说明5中同编码的类/款/项名称" in finding.suggestion
+    assert "第1页" in finding.suggestion
+    assert finding.display is not None
+    assert finding.display.summary == "说明5功能分类类款项名称与T5不一致"

@@ -1,4 +1,5 @@
 import type { Problem, Task } from "@/lib/mock";
+import { getSeverityMeta, normalizeSeverityCode } from "./issueSeverity";
 
 export interface OrganizationRecord {
   id: string;
@@ -32,6 +33,8 @@ export interface JobSummaryRecord {
   organization_name?: string | null;
   organization_level?: string | null;
   organization_match_type?: string | null;
+  use_local_rules?: boolean | null;
+  use_ai_assist?: boolean | null;
   structured_ingest_status?: string | null;
   structured_tables_count?: number | null;
   structured_recognized_tables?: number | null;
@@ -390,6 +393,13 @@ function inferProblemCategory(issue: Record<string, unknown>): string {
   const title = `${String(issue.title ?? "")} ${String(issue.message ?? "")}`.toLowerCase();
   const source = String(issue.source ?? "").trim().toLowerCase();
   const location = isRecord(issue.location) ? issue.location : {};
+  const normalizedRuleId = ruleId.toUpperCase();
+  if (
+    ["BUD-109", "V33-227"].includes(normalizedRuleId) ||
+    (title.includes("t5") && title.includes("\u540d\u79f0"))
+  ) {
+    return "\u7c7b\u6b3e\u9879\u53e3\u5f84\u4e00\u81f4\u6027";
+  }
 
   if (source.includes("ai") || ruleId.includes("ai") || title.includes("绩效")) {
     return "AI 智能分析";
@@ -407,14 +417,7 @@ function inferProblemCategory(issue: Record<string, unknown>): string {
 }
 
 function mapSeverity(value: unknown): Problem["severity"] {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  if (["critical", "high", "error", "fatal"].includes(normalized)) {
-    return "high";
-  }
-  if (["warn", "warning", "medium", "low"].includes(normalized)) {
-    return "warning";
-  }
-  return "info";
+  return normalizeSeverityCode(value);
 }
 
 function getPageNumber(issue: Record<string, unknown>, index: number): number {
@@ -577,7 +580,10 @@ export function toUiProblems(detail: JobDetailRecord): Problem[] {
     .map((issue, index) => {
       const page = getPageNumber(issue, index);
       const evidence = Array.isArray(issue.evidence) ? issue.evidence.find(isRecord) : null;
+      const rawLocation = isRecord(issue.location) ? issue.location : {};
+      const display = isRecord(issue.display) ? issue.display : {};
       const title = String(issue.title ?? issue.message ?? `问题 ${index + 1}`).trim();
+      const resolvedTitle = String(display.summary ?? issue.rule_name ?? title).trim() || title;
       const snippet = String(
         evidence?.text_snippet ?? evidence?.text ?? issue.message ?? title,
       ).trim();
@@ -586,15 +592,21 @@ export function toUiProblems(detail: JobDetailRecord): Problem[] {
       return {
         id: String(issue.id ?? `${detail.job_id}-issue-${index + 1}`),
         ruleId: String(issue.rule_id ?? issue.rule ?? "UNKNOWN"),
-        title,
+        title: resolvedTitle,
         severity: mapSeverity(issue.severity),
+        severityLabel: String(issue.severity_label ?? getSeverityMeta(issue.severity).label),
         category: inferProblemCategory(issue),
         page,
         location,
-        description: String(issue.message ?? title),
-        suggestion: String(issue.suggestion ?? "请结合原文与规则要求复核此问题。"),
+        description: String(issue.message ?? resolvedTitle),
+        suggestion: String(
+          issue.suggestion ??
+            issue.rule_suggestion ??
+            display.suggestion ??
+            "\u8bf7\u7ed3\u5408\u8868\u683c\u4e0e\u8bf4\u660e\u539f\u6587\u590d\u6838\u540e\u4fee\u6b63"
+        ),
         snippet,
-        evidenceImage: createEvidencePreviewDataUrl(title, snippet, page, location),
+        evidenceImage: createEvidencePreviewDataUrl(resolvedTitle, snippet, page, location),
         status: "pending",
         source: String(issue.source ?? ""),
         bbox: Array.isArray(issue.bbox)
@@ -602,6 +614,10 @@ export function toUiProblems(detail: JobDetailRecord): Problem[] {
           : Array.isArray(evidence?.bbox)
             ? evidence.bbox.map((item) => Number(item))
             : undefined,
+        expectedName: String(issue.expected_name ?? rawLocation.expected_name ?? ""),
+        actualName: String(issue.actual_name ?? rawLocation.actual_name ?? ""),
+        codeLevel: String(issue.code_level ?? rawLocation.code_level ?? ""),
+        sourceOfTruth: String(issue.source_of_truth ?? rawLocation.source_of_truth ?? ""),
       };
     });
 }

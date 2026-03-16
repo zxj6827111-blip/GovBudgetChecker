@@ -12,6 +12,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 
+import { getSeverityMeta } from "@/lib/issueSeverity";
 import { cn } from "@/lib/utils";
 
 type AnalysisJobSummary = {
@@ -57,6 +58,7 @@ type FindingItem = {
   source?: string;
   rule_id?: string;
   severity?: string;
+  severity_label?: string;
   title?: string;
   message?: string;
   suggestion?: string;
@@ -147,6 +149,8 @@ function statusMeta(status?: string) {
 }
 
 function severityMeta(severity?: string) {
+  const meta = getSeverityMeta(severity);
+  return { label: meta.label, className: meta.panelClass };
   switch ((severity || "").toLowerCase()) {
     case "critical":
     case "high":
@@ -216,7 +220,7 @@ function FindingColumn({
           </div>
         ) : (
           items.map((item, index) => {
-            const meta = severityMeta(item.severity);
+            const meta = severityMeta(item.severity_label || item.severity);
             const snippet = extractSnippet(item);
             return (
               <article

@@ -10,7 +10,7 @@ const baseDetail = {
         id: "ai-1",
         source: "ai",
         rule_id: "AI-1",
-        severity: "high",
+        severity: "critical",
         title: "AI issue 1",
         message: "AI issue 1 detail",
         evidence: [{ page: 1, text: "alpha" }],
@@ -81,6 +81,16 @@ assert.deepEqual(
   ["ai-1", "ai-2", "ai-3", "ai-4", "rule-1"],
   "merged_ids should drive the detail list order",
 );
+assert.deepEqual(
+  problems.map((problem) => problem.severity),
+  ["critical", "high", "medium", "low", "medium"],
+  "ui adapter should preserve backend five-level severity",
+);
+assert.deepEqual(
+  problems.map((problem) => problem.severityLabel),
+  ["严重", "高", "中", "低", "中"],
+  "ui adapter should expose Chinese severity labels",
+);
 
 const filteredProblems = toUiProblems({
   ...baseDetail,
@@ -91,5 +101,52 @@ assert.deepEqual(
   ["ai-1", "ai-3", "ai-4"],
   "ignored issues should still be removed after merged issue projection",
 );
+
+const nameAlignmentProblems = toUiProblems({
+  job_id: "job-name-alignment-001",
+  result: {
+    rule_findings: [
+      {
+        id: "bud-109-1",
+        source: "rule",
+        rule_id: "BUD-109",
+        severity: "medium",
+        message: "预算编制说明类级科目名称与T5不一致",
+        suggestion: "请以 T5 表格名称为准修订预算编制说明。",
+        display: {
+          summary: "预算编制说明功能分类类款项名称与T5不一致",
+        },
+        location: {
+          page: 9,
+          expected_name: "卫生健康支出",
+          actual_name: "医疗卫生与计划生育支出",
+          code_level: "类",
+          source_of_truth: "BUD_T5",
+        },
+        evidence: [{ page: 9, text: "卫生健康支出 / 医疗卫生与计划生育支出" }],
+      },
+    ],
+  },
+} as any);
+assert.equal(nameAlignmentProblems.length, 1, "name alignment issue should be projected");
+assert.equal(
+  nameAlignmentProblems[0].title,
+  "预算编制说明功能分类类款项名称与T5不一致",
+  "display.summary should override generic message in problem title",
+);
+assert.equal(
+  nameAlignmentProblems[0].category,
+  "类款项口径一致性",
+  "BUD-109 should land in the dedicated name-alignment category",
+);
+assert.equal(
+  nameAlignmentProblems[0].suggestion,
+  "请以 T5 表格名称为准修订预算编制说明。",
+  "backend suggestion should be preserved",
+);
+assert.equal(nameAlignmentProblems[0].expectedName, "卫生健康支出");
+assert.equal(nameAlignmentProblems[0].actualName, "医疗卫生与计划生育支出");
+assert.equal(nameAlignmentProblems[0].codeLevel, "类");
+assert.equal(nameAlignmentProblems[0].sourceOfTruth, "BUD_T5");
 
 console.log("uiAdapters dual-mode tests passed");

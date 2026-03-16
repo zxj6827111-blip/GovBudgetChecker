@@ -293,6 +293,7 @@ export default function OrganizationTree({
     return (
       <div key={node.id}>
         <div
+          data-testid={`organization-tree-node-${node.id}`}
           className={`group m-1.5 flex cursor-pointer items-center justify-between rounded-xl border px-4 py-3 transition-all duration-200 ${
             isSelected
               ? "border-indigo-100 bg-indigo-50/80 shadow-sm"
@@ -343,6 +344,7 @@ export default function OrganizationTree({
                     setModalOrgId(node.id);
                     setModalInputValue(node.name);
                   }}
+                  data-testid={`organization-tree-edit-${node.id}`}
                   className="rounded-md p-1 text-gray-400 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
                   title="编辑名称"
                 >
@@ -356,6 +358,7 @@ export default function OrganizationTree({
                     event.stopPropagation();
                     void handleDeleteOrg(node.id, node.name);
                   }}
+                  data-testid={`organization-tree-delete-${node.id}`}
                   className="rounded-md p-1 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-500"
                   title="删除部门"
                 >
@@ -384,6 +387,7 @@ export default function OrganizationTree({
                   setModalType("create");
                   setModalInputValue("");
                 }}
+                data-testid="organization-tree-create-department"
                 className="ml-2 rounded p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-indigo-600"
                 title="新建部门"
               >
@@ -429,6 +433,7 @@ export default function OrganizationTree({
               type="button"
               onClick={() => setShowImporter(true)}
               disabled={!isAdmin}
+              data-testid="organization-tree-import-button"
               className="rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-teal-50 px-3 py-2 text-left transition-all hover:border-emerald-300 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
               title={isAdmin ? "导入部门和单位名称模板（CSV / XLSX）" : "仅管理员可操作"}
             >
@@ -448,6 +453,7 @@ export default function OrganizationTree({
         <input
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
+          data-testid="organization-tree-search"
           placeholder="搜索部门"
           className="w-full rounded-md border border-gray-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
         />
@@ -480,7 +486,10 @@ export default function OrganizationTree({
       </div>
 
       {showImporter && isAdmin ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          data-testid="organization-tree-importer"
+        >
           <div className="w-96 rounded-lg bg-white p-6 shadow-xl">
             <h3 className="mb-4 text-lg font-semibold">导入组织结构</h3>
             <p className="mb-4 text-sm text-gray-500">
@@ -497,6 +506,7 @@ export default function OrganizationTree({
             <input
               type="file"
               accept=".xlsx,.csv"
+              data-testid="organization-tree-import-file"
               onChange={(event) => {
                 const file = event.target.files?.[0];
                 if (file) {
@@ -529,6 +539,7 @@ export default function OrganizationTree({
               autoFocus
               value={modalInputValue}
               onChange={(event) => setModalInputValue(event.target.value)}
+              data-testid="organization-tree-modal-input"
               placeholder="请输入部门名称..."
               className="mb-4 w-full rounded border border-gray-300 p-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               onKeyDown={(event) => {
@@ -566,6 +577,7 @@ export default function OrganizationTree({
                   }
                 }}
                 disabled={!modalInputValue.trim() || isSubmitting}
+                data-testid="organization-tree-modal-submit"
                 className="rounded bg-indigo-600 px-4 py-2 text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
               >
                 {isSubmitting ? "提交中..." : "确定"}

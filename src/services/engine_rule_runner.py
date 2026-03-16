@@ -14,6 +14,7 @@ from src.engine.budget_rules import ALL_BUDGET_RULES
 from src.engine.common_rules import ALL_COMMON_RULES
 from src.utils.issue_bbox import PDFBBoxLocator
 from src.utils.issue_location import normalize_issue_location
+from src.utils.rule_text import default_rule_suggestion, infer_rule_title
 
 logger = logging.getLogger(__name__)
 
@@ -102,11 +103,15 @@ class EngineRuleRunner:
         location.setdefault("page", page_number)
 
         resolved_rule_id = str(rule_id or getattr(issue, "rule", "") or "UNKNOWN")
-        suggestion: Optional[str] = None
+        title = infer_rule_title(resolved_rule_id, getattr(issue, "message", "") or "")
+        suggestion: Optional[str] = getattr(issue, "suggestion", None) or default_rule_suggestion(
+            resolved_rule_id, page_number
+        )
         if "page" not in raw_location and "pages" not in location:
             suggestion = (
-                "Page position was not precisely located. "
-                "Search the PDF with the evidence snippet to verify."
+                f"{suggestion} 当前页码未精确定位，可结合证据片段检索原文复核。"
+                if suggestion
+                else "当前页码未精确定位，可结合证据片段检索原文复核。"
             )
 
         return IssueItem(
@@ -114,7 +119,7 @@ class EngineRuleRunner:
             source="rule",
             rule_id=resolved_rule_id,
             severity=self._normalize_severity(getattr(issue, "severity", "medium")),
-            title=getattr(issue, "message", "") or resolved_rule_id,
+            title=title,
             message=getattr(issue, "message", "") or "",
             evidence=self._build_evidence_list(issue, page_number),
             location=location,

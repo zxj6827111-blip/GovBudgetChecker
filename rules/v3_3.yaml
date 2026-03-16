@@ -210,6 +210,16 @@ budget:
     - id: C-004
       description: 收支总表合计=功能分类表合计（财政拨款口径）
       expression: 收支总表.一般公共预算支出 == 功能分类表.合计(财政拨款)
+    - id: C-005
+      description: 以功能分类表为准，预算编制说明同编码类款项名称一致
+      expression: 功能分类表.类款项名称(按编码) == 预算编制说明.类款项名称(按编码)
+      compare_strategy: 同编码比名称
+      source_of_truth: 功能分类表
+      compare_levels:
+      - 类
+      - 款
+      - 项
+      only_report_same_code_name_mismatch: true
   ocr_pdf_handling:
     prefer_text_layer: true
     enable_ocr_if_scanned: true
@@ -305,6 +315,21 @@ table_explanation_alignment:
       - 科学技术
       - 支出结构
       - 重点领域
+    name_alignment:
+      enabled: true
+      source_of_truth: 表格
+      explanation_titles:
+      - 预算编制说明
+      - 财政拨款支出主要内容如下
+      compare_levels:
+      - 类
+      - 款
+      - 项
+      normalize_name_suffixes:
+      - 支出
+      - 预算
+      - 预算支出
+      only_report_same_code_name_mismatch: true
   - table_key: 经济分类表_财政拨款
     explanation_titles:
     - 财政拨款支出经济分类情况说明
@@ -563,6 +588,17 @@ decision:
       item_len: 7
       explanation_block: details
       require_no_missing_items: true
+    - type: functional_class_name_alignment
+      description: 以表格为准校验‘类/款/项’名称与具体情况说明一致；优先按同编码比对，无编码时仅在可唯一映射到T5项级路径时校验
+      code_field: 功能分类科目编码
+      name_field: 功能分类科目名称
+      explanation_block: details
+      compare_levels:
+      - 类
+      - 款
+      - 项
+      source_of_truth: table
+      only_report_same_code_name_mismatch: true
     - type: budget_vs_final_compare_in_text
       description: 逐项判断‘年初预算 vs 决算数’大小关系与文字描述一致，并要求变动原因
       code_field: 功能分类科目编码

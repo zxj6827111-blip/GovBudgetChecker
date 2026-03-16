@@ -1,10 +1,13 @@
-export type Severity = 'high' | 'warning' | 'info';
+import type { SeverityCode } from "./issueSeverity";
+
+export type Severity = SeverityCode;
 
 export interface Problem {
   id: string;
   ruleId: string;
   title: string;
   severity: Severity;
+  severityLabel?: string;
   category: string;
   page: number;
   location?: string;
@@ -16,6 +19,10 @@ export interface Problem {
   source?: string;
   bbox?: number[];
   jobId?: string;
+  expectedName?: string;
+  actualName?: string;
+  codeLevel?: string;
+  sourceOfTruth?: string;
 }
 
 export interface Task {
@@ -111,7 +118,7 @@ export const MOCK_PROBLEMS: Problem[] = [
     id: 'prob-1',
     ruleId: 'CMM-006',
     title: '口径描述矛盾：文中写“财政拨款收入支出增加”，但收入/支出同比方向不一致。这段文字出现了错误：财政拨款收入支出增加（减少）的主要原因是基建项目减少。',
-    severity: 'warning',
+    severity: 'medium',
     category: '文数一致性',
     page: 6,
     description: '口径描述矛盾：文中写“财政拨款收入支出增加”，但收入/支出同比方向不一致。这段文字出现了错误：财政拨款收入支出增加（减少）的主要原因是基建项目减少。',
@@ -137,7 +144,7 @@ export const MOCK_PROBLEMS: Problem[] = [
     id: 'prob-3',
     ruleId: 'R-AI-012',
     title: 'AI 智能审查：项目绩效目标描述过于宽泛',
-    severity: 'warning',
+    severity: 'medium',
     category: 'AI 智能分析',
     page: 24,
     description: '“信息化建设专项”的绩效目标描述为“提升信息化水平，保障系统运行”，缺乏可量化的产出指标和效益指标。',

@@ -1036,6 +1036,209 @@ def _snippet(s: str, start: int, end: int, max_len: int = 32) -> str:
     return seg
 
 
+def _find_text_page_after(doc: Document, snippet: Optional[str], start_page: int = 1) -> Optional[int]:
+    needle = normalize_text(str(snippet or "")).strip()
+    if not needle:
+        return None
+
+    candidates = [needle]
+    if len(needle) > 24:
+        candidates.append(needle[:40])
+
+    start_idx = max(start_page, 1) - 1
+    for pidx in range(start_idx, len(doc.page_texts)):
+        hay = normalize_text(doc.page_texts[pidx] or "")
+        if any(candidate and candidate in hay for candidate in candidates):
+            return pidx + 1
+    return None
+
+
+_FUNCTIONAL_NARRATIVE_ENTRY_RE = re.compile(
+    r"(?:^|\n)\s*(?:\d+\s*[、.．]\s*)?"
+    r"(?P<class_name>[^（）()\n]{1,40}?)\s*[（(]\s*(?:(?P<class_code>\d{3})\s*)?类\s*[）)]\s*"
+    r"(?P<section_name>[^（）()\n]{1,60}?)\s*[（(]\s*(?:(?P<section_code>\d{2})\s*)?款\s*[）)]\s*"
+    r"(?P<item_name>[^（）()\n]{1,80}?)\s*[（(]\s*(?:(?P<item_code>\d{2})\s*)?项\s*[）)]",
+    re.M,
+)
+
+
+def _format_functional_code(code: str) -> str:
+    if len(code) == 3:
+        return code
+    if len(code) == 5:
+        return f"{code[:3]}-{code[3:5]}"
+    if len(code) == 7:
+        return f"{code[:3]}-{code[3:5]}-{code[5:7]}"
+    return code
+
+
+def _normalize_functional_name(name: str) -> str:
+    normalized = normalize_text(name or "")
+    for suffix in ("预算支出", "决算支出", "支出决算", "支出", "预算", "决算"):
+        if normalized.endswith(suffix):
+            normalized = normalized[: -len(suffix)]
+            break
+    return normalized
+
+
+def _functional_name_matches(table_name: str, narrative_name: str) -> bool:
+    left = _normalize_functional_name(table_name)
+    right = _normalize_functional_name(narrative_name)
+    return bool(left and right and left == right)
+
+
+def _extract_functional_name_index(rows: List[List[str]]) -> Dict[str, Dict[str, str]]:
+    entries: Dict[str, Dict[str, str]] = {}
+
+    for row in rows:
+        cells = [str(cell or "").strip() for cell in row]
+        if len(cells) < 4:
+            continue
+
+        class_code, section_code, item_code, name = cells[:4]
+        if not re.fullmatch(r"\d{3}", class_code) or not name or name in {"项目", "功能分类科目名称"}:
+            continue
+
+        class_display = _format_functional_code(class_code)
+        entries.setdefault(
+            class_code,
+            {
+                "name": name,
+                "level": "类",
+                "code_display": class_display,
+                "row_text": f"{class_code} {name}",
+                "class_name": name,
+            },
+        )
+
+        if re.fullmatch(r"\d{2}", section_code):
+            section_full_code = f"{class_code}{section_code}"
+            section_display = _format_functional_code(section_full_code)
+            class_name = entries[class_code]["name"]
+            entries.setdefault(
+                section_full_code,
+                {
+                    "name": name,
+                    "level": "款",
+                    "code_display": section_display,
+                    "row_text": f"{class_code} {section_code} {name}",
+                    "class_name": class_name,
+                    "section_name": name,
+                },
+            )
+
+            if re.fullmatch(r"\d{2}", item_code):
+                item_full_code = f"{section_full_code}{item_code}"
+                item_display = _format_functional_code(item_full_code)
+                section_name = entries[section_full_code]["name"]
+                entries[item_full_code] = {
+                    "name": name,
+                    "level": "项",
+                    "code_display": item_display,
+                    "row_text": f"{class_code} {section_code} {item_code} {name}",
+                    "class_name": class_name,
+                    "section_name": section_name,
+                    "item_name": name,
+                }
+    return entries
+
+
+def _build_functional_item_name_index(
+    table_entries: Dict[str, Dict[str, str]]
+) -> Tuple[Dict[Tuple[str, str], List[str]], Dict[str, List[str]]]:
+    by_section_item: Dict[Tuple[str, str], List[str]] = defaultdict(list)
+    by_item: Dict[str, List[str]] = defaultdict(list)
+
+    for code, entry in table_entries.items():
+        if entry.get("level") != "项":
+            continue
+        section_name = normalize_text(entry.get("section_name", ""))
+        item_name = normalize_text(entry.get("name", ""))
+        if section_name and item_name:
+            by_section_item[(section_name, item_name)].append(code)
+        if item_name:
+            by_item[item_name].append(code)
+
+    return by_section_item, by_item
+
+
+def _extract_final_functional_narrative_mentions(
+    doc: Document, table_entries: Dict[str, Dict[str, str]]
+) -> Dict[str, List[Dict[str, str]]]:
+    mentions: Dict[str, List[Dict[str, str]]] = {}
+    by_section_item, by_item = _build_functional_item_name_index(table_entries)
+
+    for page_num, text in enumerate(doc.page_texts, start=1):
+        if not text or ("类）" not in text and "类)" not in text and "（类）" not in text and "(类)" not in text):
+            continue
+
+        for match in _FUNCTIONAL_NARRATIVE_ENTRY_RE.finditer(text):
+            class_name = str(match.group("class_name") or "").strip(" 　：:；;，,。.")
+            section_name = str(match.group("section_name") or "").strip(" 　：:；;，,。.")
+            item_name = str(match.group("item_name") or "").strip(" 　：:；;，,。.")
+            if not class_name or not section_name or not item_name:
+                continue
+
+            class_code = str(match.group("class_code") or "").strip()
+            section_code = str(match.group("section_code") or "").strip()
+            item_code = str(match.group("item_code") or "").strip()
+
+            matched_codes: Optional[Tuple[str, str, str]] = None
+            if class_code and section_code and item_code:
+                matched_codes = (
+                    class_code,
+                    f"{class_code}{section_code}",
+                    f"{class_code}{section_code}{item_code}",
+                )
+            else:
+                normalized_section = normalize_text(section_name)
+                normalized_item = normalize_text(item_name)
+                item_candidates = by_section_item.get((normalized_section, normalized_item), [])
+                if len(item_candidates) == 1:
+                    item_full_code = item_candidates[0]
+                    matched_codes = (
+                        item_full_code[:3],
+                        item_full_code[:5],
+                        item_full_code[:7],
+                    )
+                else:
+                    item_candidates = by_item.get(normalized_item, [])
+                    if len(item_candidates) == 1:
+                        item_full_code = item_candidates[0]
+                        matched_codes = (
+                            item_full_code[:3],
+                            item_full_code[:5],
+                            item_full_code[:7],
+                        )
+
+            if not matched_codes:
+                continue
+
+            snippet = _snippet(text, match.start(), match.end(), max_len=40)
+            for code, raw_name, level in (
+                (matched_codes[0], class_name, "类"),
+                (matched_codes[1], section_name, "款"),
+                (matched_codes[2], item_name, "项"),
+            ):
+                bucket = mentions.setdefault(code, [])
+                if any(
+                    item.get("page") == str(page_num)
+                    and normalize_text(item.get("name", "")) == normalize_text(raw_name)
+                    for item in bucket
+                ):
+                    continue
+                bucket.append(
+                    {
+                        "page": str(page_num),
+                        "name": raw_name,
+                        "level": level,
+                        "snippet": snippet,
+                    }
+                )
+
+    return mentions
+
+
 # ---------- 跨表勾稽（V33-101~105） ----------
 class R33101_TotalSheet_Identity(Rule):
     code, severity = "V33-101", "error"
@@ -3680,6 +3883,114 @@ class R33222_Narrative5_T5(Rule):
         return issues
 
 
+class R33227_Narrative5_T5_NameConsistency(Rule):
+    """说明5（一般公共预算财政拨款支出决算具体情况）↔ T5 类款项名称一致性"""
+    code, severity = "V33-227", "warn"
+    desc = "说明5↔T5类款项名称一致性（表格优先）"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        issues: List[Issue] = []
+
+        _ensure_table_anchors(doc)
+        table_name = "一般公共预算财政拨款支出决算表"
+        t5_page = _get_first_anchor_page(doc, table_name)
+        t5_rows = _get_table_rows(doc, table_name)
+        if not t5_rows:
+            return issues
+
+        table_entries = _extract_functional_name_index(t5_rows)
+        if not table_entries:
+            return issues
+
+        narrative_mentions = _extract_final_functional_narrative_mentions(doc, table_entries)
+        if not narrative_mentions:
+            return issues
+
+        for code, table_entry in table_entries.items():
+            mismatched_mentions = [
+                mention
+                for mention in narrative_mentions.get(code, [])
+                if not _functional_name_matches(table_entry["name"], mention["name"])
+            ]
+            if not mismatched_mentions:
+                continue
+
+            seen_names = set()
+            for mention in mismatched_mentions:
+                narrative_name = mention["name"]
+                dedupe_key = (mention.get("page"), normalize_text(narrative_name))
+                if dedupe_key in seen_names:
+                    continue
+                seen_names.add(dedupe_key)
+
+                raw_page = mention.get("page")
+                try:
+                    mention_page = int(str(raw_page).strip())
+                except Exception:
+                    mention_page = 1
+                if mention_page <= 0:
+                    mention_page = 1
+
+                row_label = table_entry.get("code_display", _format_functional_code(code))
+                table_row_page = (
+                    _find_text_page_after(doc, table_entry.get("row_text", ""), start_page=t5_page or 1)
+                    or t5_page
+                )
+                level = table_entry.get("level", mention.get("level", "类"))
+
+                location = _make_issue_location(
+                    _make_location_ref(
+                        role="说明5",
+                        page=mention_page,
+                        section="说明5（一般公共预算财政拨款支出决算具体情况）",
+                        row=row_label,
+                        field=f"{level}级名称",
+                        code=code,
+                        subject=narrative_name,
+                    ),
+                    _make_location_ref(
+                        role="T5",
+                        page=table_row_page,
+                        table=table_name,
+                        row=row_label,
+                        field="功能分类科目名称",
+                        code=code,
+                        subject=table_entry["name"],
+                    ),
+                    table=table_name,
+                    section="说明5（一般公共预算财政拨款支出决算具体情况）",
+                    row=row_label,
+                    field="功能分类科目名称",
+                    code=code,
+                )
+                location.update(
+                    {
+                        "expected_name": table_entry["name"],
+                        "actual_name": narrative_name,
+                        "code_level": level,
+                        "source_of_truth": "T5",
+                    }
+                )
+
+                evidence_text = (
+                    f"编码：{row_label}\n"
+                    f"表格名称：{table_entry['name']}\n"
+                    f"说明名称：{narrative_name}\n"
+                    f"说明片段：{mention.get('snippet', '')}"
+                )
+                issues.append(
+                    self._issue(
+                        f"说明5{level}级科目名称与T5不一致（{row_label}）："
+                        f"表格“{table_entry['name']}”，说明“{narrative_name}”",
+                        location,
+                        severity="warn",
+                        evidence_text=evidence_text,
+                    )
+                )
+
+        return issues
+
+
 # ==================================================================================
 # P2 - 表↔情况说明校验 (Table vs Narrative)
 # ==================================================================================
@@ -4417,6 +4728,7 @@ ALL_RULES = [
     R33220_Narrative3_T3(),
     R33221_Narrative4_T4(),
     R33222_Narrative5_T5(),
+    R33227_Narrative5_T5_NameConsistency(),
     R33223_Narrative6_T6(),
     R33224_Narrative7_T7(),
     # 补充 - 表间勾稽

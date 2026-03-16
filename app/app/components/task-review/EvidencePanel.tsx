@@ -1,3 +1,4 @@
+import { getSeverityMeta } from "@/lib/issueSeverity";
 import type { Problem } from "@/lib/mock";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +19,7 @@ export default function EvidencePanel({
   isIgnoring = false,
 }: EvidencePanelProps) {
   const sourcePdfUrl = buildProblemPdfPageUrl(problem.jobId, problem.page);
+  const severityMeta = getSeverityMeta(problem.severity, problem.severityLabel);
 
   return (
     <div className="flex h-full flex-1 flex-col overflow-hidden rounded-xl border border-border bg-white shadow-sm">
@@ -37,18 +39,10 @@ export default function EvidencePanel({
             <span
               className={cn(
                 "rounded-full border px-3 py-1 text-xs font-medium",
-                problem.severity === "high"
-                  ? "border-danger-100 bg-danger-50 text-danger-700"
-                  : problem.severity === "warning"
-                    ? "border-warning-100 bg-warning-50 text-warning-700"
-                    : "border-slate-200 bg-slate-100 text-slate-700"
+                severityMeta.panelClass
               )}
             >
-              {problem.severity === "high"
-                ? "高风险"
-                : problem.severity === "warning"
-                  ? "需关注"
-                  : "提示"}
+              {severityMeta.riskLabel}
             </span>
             <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
               {problem.ruleId}
@@ -84,7 +78,9 @@ export default function EvidencePanel({
             </li>
             <li className="flex items-start gap-2">
               <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" />
-              <span className="leading-relaxed">定位：{problem.location || `第 ${problem.page} 页`}</span>
+              <span className="leading-relaxed">
+                定位：{problem.location || `第 ${problem.page} 页`}
+              </span>
             </li>
             <li className="flex items-start gap-2">
               <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" />
@@ -118,8 +114,8 @@ export default function EvidencePanel({
 
           <p className="mb-4 text-sm text-danger-600">
             {problem.bbox
-              ? "当前截图已改为原始 PDF 页面截图，并在原表格位置叠加红框和问题描述。"
-              : "当前问题暂无定位框，显示原始 PDF 页面截图。"}
+              ? "当前截图已切换为原始 PDF 页面，并叠加红框定位问题区域。"
+              : "当前问题暂无定位框，展示原始 PDF 页面的整页预览。"}
           </p>
 
           <ProblemPreviewFrame

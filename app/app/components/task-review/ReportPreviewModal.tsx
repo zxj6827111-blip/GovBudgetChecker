@@ -12,6 +12,7 @@ import {
   Image as ImageIcon,
 } from "lucide-react";
 
+import { normalizeSeverityCode } from "@/lib/issueSeverity";
 import { cn } from "@/lib/utils";
 
 interface ReportPreviewModalProps {
@@ -96,9 +97,17 @@ export default function ReportPreviewModal({ task, problems, onClose }: ReportPr
     }
   };
 
-  const highCount = problems.filter((problem) => problem.severity === "high").length;
-  const mediumCount = problems.filter((problem) => problem.severity === "warning").length;
-  const lowCount = problems.filter((problem) => problem.severity === "info").length;
+  const highCount = problems.filter((problem) => {
+    const severity = normalizeSeverityCode(problem.severity);
+    return severity === "critical" || severity === "high";
+  }).length;
+  const mediumCount = problems.filter(
+    (problem) => normalizeSeverityCode(problem.severity) === "medium"
+  ).length;
+  const lowCount = problems.filter((problem) => {
+    const severity = normalizeSeverityCode(problem.severity);
+    return severity === "low" || severity === "info";
+  }).length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm animate-in fade-in duration-200 sm:p-6">
@@ -237,16 +246,16 @@ export default function ReportPreviewModal({ task, problems, onClose }: ReportPr
                       <span
                         className={cn(
                           "shrink-0 rounded border px-2 py-1 text-xs font-medium",
-                          problem.severity === "high"
+                          ["critical", "high"].includes(normalizeSeverityCode(problem.severity))
                             ? "border-danger-200 bg-danger-50 text-danger-700"
-                            : problem.severity === "warning"
+                            : normalizeSeverityCode(problem.severity) === "medium"
                               ? "border-warning-200 bg-warning-50 text-warning-700"
                               : "border-slate-200 bg-slate-100 text-slate-700"
                         )}
                       >
-                        {problem.severity === "high"
+                        {["critical", "high"].includes(normalizeSeverityCode(problem.severity))
                           ? "高风险"
-                          : problem.severity === "warning"
+                          : normalizeSeverityCode(problem.severity) === "medium"
                             ? "中风险"
                             : "低风险"}
                       </span>

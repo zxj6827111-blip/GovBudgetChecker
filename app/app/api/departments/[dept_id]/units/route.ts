@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { apiBase } from "@/lib/apiBase";
 import { backendAuthHeaders } from "@/lib/backendAuth";
+import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import {
   LocalDataError,
@@ -71,7 +72,7 @@ export async function POST(
   try {
     const response = await fetchWithTimeout(`${apiBase}/api/organizations`, {
       method: "POST",
-      headers: backendAuthHeaders({ "Content-Type": "application/json" }),
+      headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         name,
         level: "unit",

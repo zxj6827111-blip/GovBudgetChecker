@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 
+import { getSeverityMeta } from "@/lib/issueSeverity";
+
 import type { IssueItem } from "./IssueTabs";
 import { getIssuePresentation } from "../utils/issuePresentation";
 import {
@@ -58,6 +60,12 @@ const CATEGORIES: CategoryDef[] = [
     name: "跨表一致性",
     description: "检查同一指标在不同报表之间是否一致。",
     match: (issue) => hasRulePrefix(issue.rule_id, ["V33-1"]),
+  },
+  {
+    id: "name-alignment",
+    name: "\u7c7b\u6b3e\u9879\u53e3\u5f84\u4e00\u81f4\u6027",
+    description: "\u4ee5 T5 \u8868\u683c\u4e3a\u51c6\uff0c\u68c0\u67e5\u7c7b/\u6b3e/\u9879\u540d\u79f0\u4e0e\u60c5\u51b5\u8bf4\u660e\u662f\u5426\u4e00\u81f4\u3002",
+    match: (issue) => hasRulePrefix(issue.rule_id, ["BUD-109", "V33-227"]),
   },
   {
     id: "text-data",
@@ -120,6 +128,7 @@ export default function IssueList({
       quality: [],
       logic: [],
       consistency: [],
+      "name-alignment": [],
       "text-data": [],
       ai: [],
       other: [],
@@ -366,6 +375,7 @@ function getPageSummary(issue: IssueItem) {
 }
 
 function getSeverityBadge(severity: string) {
+  return getSeverityMeta(severity).badgeClass;
   const colors = {
     critical: "border-red-200 bg-red-100 text-red-700",
     high: "border-red-200 bg-red-100 text-red-700",
@@ -377,6 +387,7 @@ function getSeverityBadge(severity: string) {
 }
 
 function getSeverityText(severity: string) {
+  return getSeverityMeta(severity).label;
   const texts = {
     critical: "严重",
     high: "高",

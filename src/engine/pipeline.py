@@ -4,6 +4,8 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
+from src.utils.rule_text import default_rule_suggestion, infer_rule_title
+
 from .budget_rules import ALL_BUDGET_RULES
 from .common_rules import ALL_COMMON_RULES
 from .rules_v33 import (
@@ -16,9 +18,6 @@ from .rules_v33 import (
 from .rules_v33 import (
     build_document as _build_document,
 )
-
-_LIST_PREFIX_RE = re.compile(r"^\s*[一二三四五六七八九十\d]+[、.)]\s*")
-
 # re-export for existing callers importing build_document from this module
 build_document = _build_document
 
@@ -85,30 +84,15 @@ def run_rules(
 
 
 def _strip_list_prefix(message: str) -> str:
-    return _LIST_PREFIX_RE.sub("", message or "").strip()
+    return re.sub(r"^\s*[一二三四五六七八九十\d]+[、.)]\s*", "", message or "").strip()
 
 
 def _infer_title(rule_code: str, message: str) -> str:
-    clean = _strip_list_prefix(message)
-    if not clean:
-        return rule_code or "规则命中"
-    if "：" in clean:
-        return clean.split("：", 1)[0].strip()[:80] or clean[:80]
-    return clean[:80]
+    return infer_rule_title(rule_code, message)
 
 
 def _default_suggestion(rule_code: str, page: Optional[int]) -> str:
-    page_hint = f"（第{page}页）" if page else ""
-    if rule_code == "CMM-001":
-        return (
-            f"请逐项核对“三公”表与“其他相关情况说明”金额口径{page_hint}，"
-            "尤其确认公务用车运行费是否一致，再统一正文与表格。"
-        )
-    if rule_code:
-        return (
-            f"请按 {rule_code} 规则复核原表与说明文字{page_hint}，必要时修订披露口径。"
-        )
-    return f"请复核原表与说明文字{page_hint}，确认口径与数值一致。"
+    return default_rule_suggestion(rule_code, page)
 
 
 def _normalize_page(location: Dict[str, Any]) -> Optional[int]:

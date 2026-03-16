@@ -31,6 +31,80 @@ _SEVERITY_COLORS: Dict[str, Tuple[float, float, float]] = {
     "low": (0.16, 0.45, 0.82),
     "info": (0.30, 0.36, 0.44),
 }
+_SEVERITY_LABELS: Dict[str, str] = {
+    "critical": "严重",
+    "high": "高",
+    "medium": "中",
+    "low": "低",
+    "info": "提示",
+    "error": "高",
+    "warn": "中",
+    "warning": "中",
+}
+_CSV_FIELDNAMES: List[str] = [
+    "规则编号",
+    "标题",
+    "摘要",
+    "严重级别",
+    "严重级别代码",
+    "页码",
+    "页码列表",
+    "表",
+    "章节",
+    "行",
+    "列",
+    "字段",
+    "编码",
+    "科目",
+    "定位",
+    "明细",
+    "证据",
+    "坐标",
+    "定位引用数量",
+    "定位摘要",
+    "定位引用",
+    "命中文本",
+    "建议",
+    "原始消息",
+    "rule_id",
+    "title",
+    "summary",
+    "severity",
+    "severity_label",
+    "page",
+    "pages",
+    "table",
+    "section",
+    "row",
+    "col",
+    "field",
+    "code",
+    "subject",
+    "location",
+    "detail_lines",
+    "evidence_text",
+    "bbox",
+    "table_ref_count",
+    "evidence_role_summary",
+    "table_refs",
+    "text_snippet",
+    "suggestion",
+    "message",
+    "\u89c4\u5219\u540d\u79f0",
+    "\u4e25\u91cd\u7ea7\u522b\u6587\u672c",
+    "\u5b9a\u4f4d\u6587\u672c",
+    "\u6807\u51c6\u540d\u79f0",
+    "\u8bf4\u660e\u540d\u79f0",
+    "\u7f16\u7801\u5c42\u7ea7",
+    "\u5224\u5b9a\u57fa\u51c6",
+    "rule_name",
+    "severity_text",
+    "location_text",
+    "expected_name",
+    "actual_name",
+    "code_level",
+    "source_of_truth",
+]
 
 
 def _normalize_bbox(raw: Any) -> Optional[List[float]]:
@@ -190,6 +264,18 @@ def _resolve_suggestion(issue: Dict[str, Any]) -> str:
     return ""
 
 
+def _severity_label(severity: Any) -> str:
+    return _SEVERITY_LABELS.get(str(severity or "").strip().lower(), "提示")
+
+
+def _coalesce_issue_text(issue: Dict[str, Any], *keys: str) -> Optional[str]:
+    for key in keys:
+        value = issue.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _build_export_location(issue: Dict[str, Any]) -> Dict[str, Any]:
     location = issue.get("location") if isinstance(issue.get("location"), dict) else {}
     evidence = issue.get("evidence") if isinstance(issue.get("evidence"), list) else []
@@ -222,6 +308,10 @@ def _build_export_location(issue: Dict[str, Any]) -> Dict[str, Any]:
         "field": str(location.get("field") or "").strip() or None,
         "code": str(location.get("code") or "").strip() or None,
         "subject": str(location.get("subject") or "").strip() or None,
+        "expected_name": str(location.get("expected_name") or "").strip() or None,
+        "actual_name": str(location.get("actual_name") or "").strip() or None,
+        "code_level": str(location.get("code_level") or "").strip() or None,
+        "source_of_truth": str(location.get("source_of_truth") or "").strip() or None,
         "bbox": primary_bbox,
         "table_ref_count": len(refs),
         "role_summary": _build_role_summary(refs, fallback=location),
@@ -286,7 +376,108 @@ def _enrich_issue(item: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(enriched.get("display"), dict):
         enriched["display"] = build_issue_display(enriched)
     enriched["export_location"] = _build_export_location(enriched)
+    enriched["severity_label"] = _severity_label(enriched.get("severity"))
+    export_location = (
+        enriched.get("export_location")
+        if isinstance(enriched.get("export_location"), dict)
+        else {}
+    )
+    display = enriched.get("display") if isinstance(enriched.get("display"), dict) else {}
+    enriched["rule_name"] = _coalesce_issue_text(enriched, "rule_name", "title") or ""
+    enriched["severity_text"] = enriched["severity_label"]
+    enriched["location_text"] = str(display.get("location_text") or "").strip()
+    for key in ("expected_name", "actual_name", "code_level", "source_of_truth"):
+        enriched[key] = _coalesce_issue_text(enriched, key) or str(export_location.get(key) or "").strip()
     return enriched
+
+
+def _build_csv_row(issue: Dict[str, Any]) -> Dict[str, Any]:
+    enriched = _enrich_issue(issue)
+    display = enriched.get("display") if isinstance(enriched.get("display"), dict) else {}
+    export_location = (
+        enriched.get("export_location")
+        if isinstance(enriched.get("export_location"), dict)
+        else {}
+    )
+    severity = str(enriched.get("severity") or "").strip()
+    severity_label = str(enriched.get("severity_label") or _severity_label(severity))
+    pages_text = " | ".join(str(item) for item in export_location.get("pages", []))
+    detail_lines = " | ".join(
+        [str(line) for line in display.get("detail_lines", []) if str(line).strip()]
+    )
+    bbox_text = (
+        json.dumps(export_location.get("bbox"), ensure_ascii=False)
+        if export_location.get("bbox")
+        else ""
+    )
+    table_refs_text = json.dumps(export_location.get("table_refs", []), ensure_ascii=False)
+    role_summary = export_location.get("role_summary") or ""
+    suggestion = _resolve_suggestion(enriched)
+    row = {
+        "规则编号": enriched.get("rule_id") or enriched.get("rule") or "",
+        "标题": enriched.get("title") or "",
+        "摘要": display.get("summary") or enriched.get("title") or "",
+        "严重级别": severity_label,
+        "严重级别代码": severity,
+        "页码": export_location.get("page") or "",
+        "页码列表": pages_text,
+        "表": export_location.get("table") or "",
+        "章节": export_location.get("section") or "",
+        "行": export_location.get("row") or "",
+        "列": export_location.get("col") or "",
+        "字段": export_location.get("field") or "",
+        "编码": export_location.get("code") or "",
+        "科目": export_location.get("subject") or "",
+        "定位": display.get("location_text") or "",
+        "明细": detail_lines,
+        "证据": display.get("evidence_text") or "",
+        "坐标": bbox_text,
+        "定位引用数量": export_location.get("table_ref_count") or 0,
+        "定位摘要": role_summary,
+        "定位引用": table_refs_text,
+        "命中文本": _resolve_text_snippet(enriched),
+        "建议": suggestion,
+        "原始消息": enriched.get("message") or "",
+        "rule_id": enriched.get("rule_id") or enriched.get("rule") or "",
+        "title": enriched.get("title") or "",
+        "summary": display.get("summary") or enriched.get("title") or "",
+        "severity": severity,
+        "severity_label": severity_label,
+        "page": export_location.get("page") or "",
+        "pages": pages_text,
+        "table": export_location.get("table") or "",
+        "section": export_location.get("section") or "",
+        "row": export_location.get("row") or "",
+        "col": export_location.get("col") or "",
+        "field": export_location.get("field") or "",
+        "code": export_location.get("code") or "",
+        "subject": export_location.get("subject") or "",
+        "location": display.get("location_text") or "",
+        "detail_lines": detail_lines,
+        "evidence_text": display.get("evidence_text") or "",
+        "bbox": bbox_text,
+        "table_ref_count": export_location.get("table_ref_count") or 0,
+        "evidence_role_summary": role_summary,
+        "table_refs": table_refs_text,
+        "text_snippet": _resolve_text_snippet(enriched),
+        "suggestion": suggestion,
+        "message": enriched.get("message") or "",
+        "\u89c4\u5219\u540d\u79f0": enriched.get("rule_name") or "",
+        "\u4e25\u91cd\u7ea7\u522b\u6587\u672c": enriched.get("severity_text") or severity_label,
+        "\u5b9a\u4f4d\u6587\u672c": enriched.get("location_text") or display.get("location_text") or "",
+        "\u6807\u51c6\u540d\u79f0": enriched.get("expected_name") or export_location.get("expected_name") or "",
+        "\u8bf4\u660e\u540d\u79f0": enriched.get("actual_name") or export_location.get("actual_name") or "",
+        "\u7f16\u7801\u5c42\u7ea7": enriched.get("code_level") or export_location.get("code_level") or "",
+        "\u5224\u5b9a\u57fa\u51c6": enriched.get("source_of_truth") or export_location.get("source_of_truth") or "",
+        "rule_name": enriched.get("rule_name") or "",
+        "severity_text": enriched.get("severity_text") or severity_label,
+        "location_text": enriched.get("location_text") or display.get("location_text") or "",
+        "expected_name": enriched.get("expected_name") or export_location.get("expected_name") or "",
+        "actual_name": enriched.get("actual_name") or export_location.get("actual_name") or "",
+        "code_level": enriched.get("code_level") or export_location.get("code_level") or "",
+        "source_of_truth": enriched.get("source_of_truth") or export_location.get("source_of_truth") or "",
+    }
+    return {key: row.get(key, "") for key in _CSV_FIELDNAMES}
 
 
 def _resolve_source_pdf(job_id: str, status_payload: Dict[str, Any]) -> Path:
@@ -477,6 +668,7 @@ def _build_annotation_label(
     issue_index: int,
 ) -> str:
     parts = [f"#{issue_index}"]
+    parts.append(str(issue.get("severity_label") or _severity_label(issue.get("severity"))))
 
     role = str(target.get("role") or "").strip()
     if role:
@@ -526,8 +718,11 @@ def _draw_annotation(page: Any, bbox: Sequence[float], label: str, color: Tuple[
     )
 
 
-def _build_legend_text(target: Dict[str, Any], *, label: str) -> str:
+def _build_legend_text(issue: Dict[str, Any], target: Dict[str, Any], *, label: str) -> str:
     parts = [label]
+    severity_label = str(issue.get("severity_label") or _severity_label(issue.get("severity")))
+    if severity_label:
+        parts.append(f"\u7ea7\u522b:{severity_label}")
     for key, prefix in (
         ("field", "字段"),
         ("row", "行"),
@@ -642,7 +837,7 @@ def _create_annotated_pdf(
                 page = document.load_page(page_number - 1)
                 label = _build_annotation_label(issue, target, issue_index=issue_index)
                 _draw_annotation(page, bbox, label, color, fitz)
-                entry_text = _build_legend_text(target, label=label)
+                entry_text = _build_legend_text(issue, target, label=label)
                 legend_key = (label, entry_text)
                 page_legends.setdefault(page_number, [])
                 legend_seen.setdefault(page_number, set())
@@ -686,78 +881,11 @@ async def download_report(
         output = io.StringIO()
         writer = csv.DictWriter(
             output,
-            fieldnames=[
-                "rule_id",
-                "title",
-                "summary",
-                "severity",
-                "page",
-                "pages",
-                "table",
-                "section",
-                "row",
-                "col",
-                "field",
-                "code",
-                "subject",
-                "location",
-                "detail_lines",
-                "evidence_text",
-                "bbox",
-                "table_ref_count",
-                "evidence_role_summary",
-                "table_refs",
-                "text_snippet",
-                "suggestion",
-                "message",
-            ],
+            fieldnames=_CSV_FIELDNAMES,
         )
         writer.writeheader()
         for item in issues:
-            enriched = _enrich_issue(item)
-            display = enriched.get("display") if isinstance(enriched.get("display"), dict) else {}
-            export_location = (
-                enriched.get("export_location")
-                if isinstance(enriched.get("export_location"), dict)
-                else {}
-            )
-            writer.writerow(
-                {
-                    "rule_id": enriched.get("rule_id") or enriched.get("rule") or "",
-                    "title": enriched.get("title") or "",
-                    "summary": display.get("summary") or enriched.get("title") or "",
-                    "severity": enriched.get("severity") or "",
-                    "page": export_location.get("page") or "",
-                    "pages": " | ".join(str(item) for item in export_location.get("pages", [])),
-                    "table": export_location.get("table") or "",
-                    "section": export_location.get("section") or "",
-                    "row": export_location.get("row") or "",
-                    "col": export_location.get("col") or "",
-                    "field": export_location.get("field") or "",
-                    "code": export_location.get("code") or "",
-                    "subject": export_location.get("subject") or "",
-                    "location": display.get("location_text") or "",
-                    "detail_lines": " | ".join(
-                        [
-                            str(line)
-                            for line in display.get("detail_lines", [])
-                            if str(line).strip()
-                        ]
-                    ),
-                    "evidence_text": display.get("evidence_text") or "",
-                    "bbox": json.dumps(export_location.get("bbox"), ensure_ascii=False)
-                    if export_location.get("bbox")
-                    else "",
-                    "table_ref_count": export_location.get("table_ref_count") or 0,
-                    "evidence_role_summary": export_location.get("role_summary") or "",
-                    "table_refs": json.dumps(
-                        export_location.get("table_refs", []), ensure_ascii=False
-                    ),
-                    "text_snippet": _resolve_text_snippet(enriched),
-                    "suggestion": _resolve_suggestion(enriched),
-                    "message": enriched.get("message") or "",
-                }
-            )
+            writer.writerow(_build_csv_row(item))
 
         data = output.getvalue().encode("utf-8-sig")
         return Response(

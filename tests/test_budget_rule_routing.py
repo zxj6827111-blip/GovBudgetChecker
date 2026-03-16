@@ -16,6 +16,7 @@ from src.engine.budget_rules import (
     BUD101_T1Balance,
     BUD106_EmptyTableStatement,
     BUD108_PerformanceTargetConsistency,
+    BUD109_FunctionalClassificationNameConsistency,
 )
 from src.engine.common_rules import (
     CMM001_ThreePublicNarrativeConsistency,
@@ -410,6 +411,96 @@ def test_budget_performance_target_consistency_allows_rounding_tolerance() -> No
     assert not issues
 
 
+def test_budget_functional_classification_name_rule_detects_narrative_mismatch() -> None:
+    explanation_text = "\n".join(
+        [
+            "2026年部门预算编制说明",
+            "财政拨款支出主要内容如下：",
+            "11、医疗卫生与计划生育支出（210类）行政事业单位医疗（11款）行政单位医疗（01项）114.97万元。",
+        ]
+    )
+    t5_page_text = "\n".join(
+        [
+            "2026年部门一般公共预算支出功能分类预算表",
+            "单位：元",
+            "210 卫生健康支出",
+            "210 11 行政事业单位医疗",
+            "210 11 01 行政单位医疗",
+        ]
+    )
+    t5_table = [
+        ["项目", None, None, None, "一般公共预算支出", None, None],
+        ["功能分类科目编码", None, None, "功能分类科目名称", "合计", "基本支出", "项目支出"],
+        ["类", "款", "项", None, None, None, None],
+        ["210", "", "", "卫生健康支出", "1149678.00", "1149678.00", "0.00"],
+        ["210", "11", "", "行政事业单位医疗", "1149678.00", "1149678.00", "0.00"],
+        ["210", "11", "01", "行政单位医疗", "1149678.00", "1149678.00", "0.00"],
+        ["合计", None, None, None, "1149678.00", "1149678.00", "0.00"],
+    ]
+    doc = build_document(
+        path="unit-2026-budget.pdf",
+        page_texts=[explanation_text, "其他页面", t5_page_text],
+        page_tables=[[], [], [t5_table]],
+        filesize=30,
+    )
+
+    issues = BUD109_FunctionalClassificationNameConsistency().apply(doc)
+
+    assert issues
+    assert any("卫生健康支出" in issue.message for issue in issues)
+    assert any("医疗卫生与计划生育支出" in issue.message for issue in issues)
+    issue = issues[0]
+    refs = issue.location.get("table_refs") or []
+    assert len(refs) == 2
+    assert refs[0]["role"] == "说明"
+    assert refs[0]["page"] == 1
+    assert refs[1]["role"] == "T5"
+    assert refs[1]["page"] == 3
+    assert issue.location["expected_name"] == "\u536b\u751f\u5065\u5eb7\u652f\u51fa"
+    assert issue.location["actual_name"] == "\u533b\u7597\u536b\u751f\u4e0e\u8ba1\u5212\u751f\u80b2\u652f\u51fa"
+    assert issue.location["code_level"] == "\u7c7b"
+    assert issue.location["source_of_truth"] == "BUD_T5"
+    assert "编码：210" in (issue.evidence_text or "")
+
+
+def test_budget_functional_classification_name_rule_ignores_matching_names() -> None:
+    explanation_text = "\n".join(
+        [
+            "2026年部门预算编制说明",
+            "财政拨款支出主要内容如下：",
+            "11、卫生健康支出（210类）行政事业单位医疗（11款）行政单位医疗（01项）114.97万元。",
+        ]
+    )
+    t5_page_text = "\n".join(
+        [
+            "2026年部门一般公共预算支出功能分类预算表",
+            "单位：元",
+            "210 卫生健康支出",
+            "210 11 行政事业单位医疗",
+            "210 11 01 行政单位医疗",
+        ]
+    )
+    t5_table = [
+        ["项目", None, None, None, "一般公共预算支出", None, None],
+        ["功能分类科目编码", None, None, "功能分类科目名称", "合计", "基本支出", "项目支出"],
+        ["类", "款", "项", None, None, None, None],
+        ["210", "", "", "卫生健康支出", "1149678.00", "1149678.00", "0.00"],
+        ["210", "11", "", "行政事业单位医疗", "1149678.00", "1149678.00", "0.00"],
+        ["210", "11", "01", "行政单位医疗", "1149678.00", "1149678.00", "0.00"],
+        ["合计", None, None, None, "1149678.00", "1149678.00", "0.00"],
+    ]
+    doc = build_document(
+        path="unit-2026-budget.pdf",
+        page_texts=[explanation_text, t5_page_text],
+        page_tables=[[], [t5_table]],
+        filesize=30,
+    )
+
+    issues = BUD109_FunctionalClassificationNameConsistency().apply(doc)
+
+    assert not issues
+
+
 def test_common_three_public_narrative_rule_detects_run_fee_mismatch() -> None:
     page_texts = [
         "2026年区级单位预算",
@@ -605,3 +696,39 @@ def test_common_income_expense_trend_rule_quotes_summary_sentence_with_optional_
         in (issue.evidence_text or "")
         for issue in issues
     )
+
+
+def test_pipeline_budget_name_mismatch_uses_specific_title_and_suggestion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Budget109Only:
+        code = "BUD-109"
+        desc = "BUD-109"
+
+        def apply(self, _doc):
+            return [
+                Issue(
+                    rule="BUD-109",
+                    severity="warn",
+                    message="预算编制说明类级科目名称与T5不一致（210）：表格“卫生健康支出”，说明“医疗卫生与计划生育支出”",
+                    location={"page": 9, "table": "BUD_T5", "row": "210"},
+                )
+            ]
+
+    monkeypatch.setattr(pipeline, "ALL_BUDGET_RULES", [_Budget109Only()])
+    monkeypatch.setattr(pipeline, "ALL_COMMON_RULES", [])
+
+    doc = build_document(
+        path="sample_budget.pdf",
+        page_texts=["2026年部门预算"],
+        page_tables=[[]],
+        filesize=1,
+    )
+
+    payload = pipeline.build_issues_payload(doc, report_kind="budget")
+
+    assert payload["issues"]["all"]
+    item = payload["issues"]["all"][0]
+    assert item["title"] == "预算编制说明功能分类类款项名称与T5不一致"
+    assert "T5 一般公共预算支出功能分类预算表" in item["suggestion"]
+    assert "第9页" in item["suggestion"]

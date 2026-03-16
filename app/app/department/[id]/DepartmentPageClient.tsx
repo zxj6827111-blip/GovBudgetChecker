@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import AssociateDialog from "@/components/AssociateDialog";
 import BatchUploadModal from "@/components/BatchUploadModal";
+import ReanalyzeAiToggle from "@/components/ReanalyzeAiToggle";
 import { ORG_TREE_REFRESH_EVENT, dispatchOrgTreeRefresh } from "@/lib/orgTreeEvents";
 import { cn } from "@/lib/utils";
 import type { JobSummaryRecord } from "@/lib/uiAdapters";
@@ -140,6 +141,8 @@ export default function DepartmentPageClient() {
   const [isBatchReanalyzing, setIsBatchReanalyzing] = useState(false);
   const [isBatchExporting, setIsBatchExporting] = useState(false);
   const [isBatchZipExporting, setIsBatchZipExporting] = useState(false);
+  const [reanalyzeUseAiAssist, setReanalyzeUseAiAssist] = useState(true);
+  const [hasConfiguredReanalyzeUseAiAssist, setHasConfiguredReanalyzeUseAiAssist] = useState(false);
   const [associatingJobId, setAssociatingJobId] = useState<string | null>(null);
   const [isAssociatingJob, setIsAssociatingJob] = useState(false);
   const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
@@ -309,6 +312,12 @@ export default function DepartmentPageClient() {
     () => Object.values(advancedFilters).filter(Boolean).length,
     [advancedFilters],
   );
+  const reanalyzeRequestBody = hasConfiguredReanalyzeUseAiAssist
+    ? {
+        use_local_rules: true,
+        use_ai_assist: reanalyzeUseAiAssist,
+      }
+    : {};
 
   useEffect(() => {
     const visibleTaskIds = new Set(filteredTasks.map((task) => task.job_id));
@@ -425,7 +434,7 @@ export default function DepartmentPageClient() {
       const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/reanalyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify(reanalyzeRequestBody),
       });
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
@@ -434,7 +443,15 @@ export default function DepartmentPageClient() {
       setJobs((current) =>
         current.map((job) =>
           job.job_id === jobId
-            ? { ...job, status: "started", updated_ts: Math.floor(Date.now() / 1000) }
+            ? {
+                ...job,
+                status: "started",
+                updated_ts: Math.floor(Date.now() / 1000),
+                use_local_rules: hasConfiguredReanalyzeUseAiAssist ? true : job.use_local_rules,
+                use_ai_assist: hasConfiguredReanalyzeUseAiAssist
+                  ? reanalyzeUseAiAssist
+                  : job.use_ai_assist,
+              }
             : job,
         ),
       );
@@ -496,7 +513,7 @@ export default function DepartmentPageClient() {
           const response = await fetch(`/api/jobs/${encodeURIComponent(job.job_id)}/reanalyze`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
+            body: JSON.stringify(reanalyzeRequestBody),
           });
           if (!response.ok) {
             throw new Error(await readErrorMessage(response));
@@ -514,7 +531,15 @@ export default function DepartmentPageClient() {
       setJobs((current) =>
         current.map((job) =>
           successSet.has(job.job_id)
-            ? { ...job, status: "started", updated_ts: Math.floor(Date.now() / 1000) }
+            ? {
+                ...job,
+                status: "started",
+                updated_ts: Math.floor(Date.now() / 1000),
+                use_local_rules: hasConfiguredReanalyzeUseAiAssist ? true : job.use_local_rules,
+                use_ai_assist: hasConfiguredReanalyzeUseAiAssist
+                  ? reanalyzeUseAiAssist
+                  : job.use_ai_assist,
+              }
             : job,
         ),
       );
@@ -967,6 +992,17 @@ export default function DepartmentPageClient() {
               </label>
             </div>
           ) : null}
+
+          <ReanalyzeAiToggle
+            checked={reanalyzeUseAiAssist}
+            onChange={(checked) => {
+              setReanalyzeUseAiAssist(checked);
+              setHasConfiguredReanalyzeUseAiAssist(true);
+            }}
+            className="mt-4"
+            testId="department-reanalyze-ai-toggle"
+            description="当前页面的单个重新分析和批量重新分析都会使用这个设置；取消后仅本地解析。"
+          />
         </div>
 
         {selectedTasks.length > 0 ? (

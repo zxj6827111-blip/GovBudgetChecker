@@ -1,0 +1,90 @@
+
+> govbudgetchecker-app@0.1.0 dev
+> node ../scripts/next-dev.cjs
+
+[next-dev] cleared app/.next cache
+   ▲ Next.js 14.1.0
+   - Local:        http://localhost:3000
+   - Environments: .env.local
+   - Experiments (use at your own risk):
+     · typedRoutes
+
+ ✓ Ready in 5.3s
+ ✓ Compiled /middleware in 411ms (65 modules)
+ ✓ Compiled /login in 272ms (40 modules)
+ ✓ Compiled in 4.2s (273 modules)
+ ✓ Compiled in 515ms (273 modules)
+ ○ Compiling /admin ...
+ ✓ Compiled /admin in 586ms (591 modules)
+ ✓ Compiled /api/organizations in 176ms (324 modules)
+ ✓ Compiled (331 modules)
+ ✓ Compiled /api/organizations/[org_id]/delete-preview in 136ms (327 modules)
+ ✓ Compiled /api/organizations/[org_id]/delete in 460ms (316 modules)
+ ✓ Compiled /api/departments in 217ms (322 modules)
+ ✓ Compiled in 811ms (577 modules)
+ ✓ Compiled in 1097ms (577 modules)
+ ✓ Compiled in 571ms (577 modules)
+ ✓ Compiled in 442ms (577 modules)
+ ✓ Compiled in 425ms (577 modules)
+ ✓ Compiled in 406ms (577 modules)
+ ✓ Compiled in 391ms (577 modules)
+ ✓ Compiled in 1192ms (577 modules)
+ ✓ Compiled in 677ms (577 modules)
+ ✓ Compiled in 698ms (577 modules)
+ ✓ Compiled in 492ms (577 modules)
+ ○ Compiling /e2e/batch-upload ...
+ ✓ Compiled /e2e/batch-upload in 717ms (583 modules)
+ ○ Compiling /task/[job_id] ...
+ ✓ Compiled /task/[job_id] in 1622ms (641 modules)
+ ○ Compiling /department/[id] ...
+ ✓ Compiled /department/[id] in 740ms (662 modules)
+ ○ Compiling /api/jobs ...
+ ✓ Compiled /api/jobs in 514ms (314 modules)
+ ✓ Compiled /api/jobs/[job_id] in 236ms (308 modules)
+ ✓ Compiled (326 modules)
+ ✓ Compiled /api/jobs in 231ms (314 modules)
+ ✓ Compiled /api/jobs/[job_id] in 132ms (324 modules)
+ ✓ Compiled /api/files/[job_id]/source in 144ms (326 modules)
+ ✓ Compiled /api/files/[job_id]/preview in 169ms (328 modules)
+ ✓ Compiled in 462ms (335 modules)
+ ✓ Compiled in 330ms (335 modules)
+ ✓ Compiled in 259ms (335 modules)
+ ✓ Compiled in 576ms (336 modules)
+ ✓ Compiled in 1169ms (336 modules)
+ ✓ Compiled in 274ms (336 modules)
+ ✓ Compiled in 375ms (336 modules)
+ ✓ Compiled in 811ms (336 modules)
+ ✓ Compiled in 249ms (336 modules)
+ ✓ Compiled in 636ms (621 modules)
+ ✓ Compiled in 266ms (621 modules)
+ ✓ Compiled in 567ms (622 modules)
+ ✓ Compiled in 402ms (336 modules)
+ ✓ Compiled in 461ms (622 modules)
+ ✓ Compiled in 548ms (622 modules)
+ ✓ Compiled in 340ms (622 modules)
+ ✓ Compiled in 381ms (622 modules)
+ ✓ Compiled in 391ms (336 modules)
+ ✓ Compiled in 259ms (323 modules)
+ ✓ Compiled in 460ms (337 modules)
+ ✓ Compiled in 227ms (337 modules)
+ ✓ Compiled in 134ms (323 modules)
+ ✓ Compiled in 378ms (337 modules)
+ ✓ Compiled in 478ms (337 modules)
+ ✓ Compiled in 280ms (337 modules)
+ ✓ Compiled in 318ms (337 modules)
+ ✓ Compiled in 372ms (337 modules)
+ ✓ Compiled in 599ms (337 modules)
+ ✓ Compiled in 691ms (624 modules)
+ ✓ Compiled in 433ms (337 modules)
+ ✓ Compiled in 321ms (337 modules)
+ ✓ Compiled in 256ms (337 modules)
+ ✓ Compiled in 373ms (337 modules)
+ ✓ Compiled in 126ms (323 modules)
+ ✓ Compiled in 521ms (337 modules)
+ ✓ Compiled in 394ms (337 modules)
+ ✓ Compiled in 165ms (323 modules)
+ ✓ Compiled in 146ms (323 modules)
+ ✓ Compiled in 164ms (323 modules)
+ ✓ Compiled in 156ms (323 modules)
+ ✓ Compiled in 485ms (337 modules)
+ ✓ Compiled in 316ms (337 modules)

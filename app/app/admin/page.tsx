@@ -9,14 +9,17 @@ import {
   AlertTriangle,
   Database,
   FileText,
+  Plus,
   RefreshCw,
   Settings,
+  Trash2,
   UploadCloud,
   Users,
 } from "lucide-react";
 
 import BatchUploadModal from "@/components/BatchUploadModal";
 import OrganizationTree from "@/components/OrganizationTree";
+import ReanalyzeAiToggle from "@/components/ReanalyzeAiToggle";
 import ReanalyzeProgressDialog, {
   type ReanalyzeBatchPayload,
   type ReanalyzeLiveStatus,
@@ -188,6 +191,8 @@ function AdminPageContent() {
   const [treeRefreshKey, setTreeRefreshKey] = useState(0);
   const [notice, setNotice] = useState<OperationNotice | null>(null);
   const [isRunningReanalyzeAll, setIsRunningReanalyzeAll] = useState(false);
+  const [reanalyzeUseAiAssist, setReanalyzeUseAiAssist] = useState(true);
+  const [hasConfiguredReanalyzeUseAiAssist, setHasConfiguredReanalyzeUseAiAssist] = useState(false);
   const [isRepairingLinks, setIsRepairingLinks] = useState(false);
   const [isRematching, setIsRematching] = useState(false);
   const [isLoadingCleanupPreview, setIsLoadingCleanupPreview] = useState(false);
@@ -265,6 +270,14 @@ function AdminPageContent() {
     return `已触发 ${reanalyzeBatch.created_count ?? 0} 个任务，跳过 ${reanalyzeBatch.skipped_count ?? 0} 个，失败 ${reanalyzeBatch.failed_count ?? 0} 个。`;
   }, [reanalyzeBatch]);
 
+  const reanalyzeAllRequestBody: Record<string, unknown> = {
+    latest_per_department: true,
+  };
+  if (hasConfiguredReanalyzeUseAiAssist) {
+    reanalyzeAllRequestBody.use_local_rules = true;
+    reanalyzeAllRequestBody.use_ai_assist = reanalyzeUseAiAssist;
+  }
+
   const changeTab = (tab: AdminTab) => {
     setActiveTab(tab);
     const params = new URLSearchParams(searchParams.toString());
@@ -273,13 +286,139 @@ function AdminPageContent() {
     router.replace(href, { scroll: false });
   };
 
+  const refreshOrganizationTree = () => {
+    setTreeRefreshKey((current) => current + 1);
+  };
+
+  const handleCreateDepartment = async () => {
+    const name = window.prompt("请输入新部门名称");
+    const trimmedName = String(name || "").trim();
+    if (!trimmedName) {
+      return;
+    }
+
+    setNotice(null);
+    try {
+      const response = await fetch("/api/organizations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmedName, level: "department" }),
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const payload = (await response.json()) as OrganizationSelection;
+      setSelectedOrg({
+        id: String(payload.id || ""),
+        name: String(payload.name || trimmedName),
+        level: String(payload.level || "department"),
+        parent_id: payload.parent_id ?? null,
+      });
+      refreshOrganizationTree();
+      setNotice({ tone: "success", message: `已创建部门：${trimmedName}` });
+    } catch (error) {
+      setNotice({ tone: "error", message: error instanceof Error ? error.message : "创建部门失败。" });
+    }
+  };
+
+  const handleCreateUnit = async () => {
+    if (!selectedOrg || selectedOrg.level !== "department") {
+      setNotice({ tone: "error", message: "请先选择一个部门，再新增下属单位。" });
+      return;
+    }
+
+    const name = window.prompt(`请输入“${selectedOrg.name}”下属单位名称`);
+    const trimmedName = String(name || "").trim();
+    if (!trimmedName) {
+      return;
+    }
+
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/departments/${encodeURIComponent(selectedOrg.id)}/units`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmedName }),
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const payload = (await response.json()) as OrganizationSelection;
+      setSelectedOrg({
+        id: String(payload.id || ""),
+        name: String(payload.name || trimmedName),
+        level: String(payload.level || "unit"),
+        parent_id: payload.parent_id ?? selectedOrg.id,
+      });
+      refreshOrganizationTree();
+      setNotice({ tone: "success", message: `已创建下属单位：${trimmedName}` });
+    } catch (error) {
+      setNotice({ tone: "error", message: error instanceof Error ? error.message : "创建下属单位失败。" });
+    }
+  };
+
+  const handleDeleteOrganization = async () => {
+    if (!selectedOrg) {
+      setNotice({ tone: "error", message: "请先选择要删除的部门或单位。" });
+      return;
+    }
+
+    setNotice(null);
+    try {
+      const previewResponse = await fetch(
+        `/api/organizations/${encodeURIComponent(selectedOrg.id)}/delete-preview`,
+        { cache: "no-store" },
+      );
+      if (!previewResponse.ok) {
+        throw new Error(await readErrorMessage(previewResponse));
+      }
+
+      const previewPayload = (await previewResponse.json()) as {
+        summary?: {
+          organization_count?: number;
+          unit_count?: number;
+          job_count?: number;
+        };
+      };
+      const summary = previewPayload.summary || {};
+      const label = selectedOrg.level === "department" ? "部门" : "单位";
+      const confirmed = window.confirm(
+        [
+          `确定要删除${label}“${selectedOrg.name}”吗？`,
+          `将删除组织 ${summary.organization_count ?? 0} 个，其中单位 ${summary.unit_count ?? 0} 个。`,
+          `将影响任务关联 ${summary.job_count ?? 0} 条。`,
+        ].join("\n"),
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      const response = await fetch(`/api/organizations/${encodeURIComponent(selectedOrg.id)}/delete`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const deletedName = selectedOrg.name;
+      setSelectedOrg(null);
+      refreshOrganizationTree();
+      setNotice({ tone: "success", message: `已删除组织：${deletedName}` });
+    } catch (error) {
+      setNotice({ tone: "error", message: error instanceof Error ? error.message : "删除组织失败。" });
+    }
+  };
+
   const runReanalyzeAll = async () => {
     setIsRunningReanalyzeAll(true);
     setNotice(null);
     try {
-      const { response, payload } = await postJson<ReanalyzeBatchPayload>("/api/jobs/reanalyze-all", {
-        latest_per_department: true,
-      });
+      const { response, payload } = await postJson<ReanalyzeBatchPayload>(
+        "/api/jobs/reanalyze-all",
+        reanalyzeAllRequestBody,
+      );
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
@@ -304,7 +443,7 @@ function AdminPageContent() {
       }
       setRepairPreview(payload);
       if (!dryRun) {
-        setTreeRefreshKey((current) => current + 1);
+        refreshOrganizationTree();
       }
       setNotice({
         tone: dryRun ? "info" : "success",
@@ -329,7 +468,7 @@ function AdminPageContent() {
       }
       setRematchPreview(payload);
       if (!dryRun) {
-        setTreeRefreshKey((current) => current + 1);
+        refreshOrganizationTree();
       }
       setNotice({
         tone: dryRun ? "info" : "success",
@@ -478,6 +617,17 @@ function AdminPageContent() {
                     <Activity className="h-5 w-5 text-slate-500" />
                     <h3 className="mt-4 text-base font-semibold text-slate-900">按组织批量重分析</h3>
                     <p className="mt-2 text-sm text-slate-500">触发各组织当前最新报告重新分析，并显示实时状态。</p>
+                    <ReanalyzeAiToggle
+                      checked={reanalyzeUseAiAssist}
+                      onChange={(checked) => {
+                        setReanalyzeUseAiAssist(checked);
+                        setHasConfiguredReanalyzeUseAiAssist(true);
+                      }}
+                      disabled={isRunningReanalyzeAll}
+                      className="mt-4 bg-white"
+                      testId="admin-reanalyze-ai-toggle"
+                      description="按组织批量重分析会使用这个设置；取消勾选后仅本地解析。"
+                    />
                     <button
                       type="button"
                       onClick={() => void runReanalyzeAll()}
@@ -595,19 +745,61 @@ function AdminPageContent() {
                   />
                 </div>
                 <div className="space-y-4">
-                  <section className="rounded-2xl border border-border bg-white p-6 shadow-sm">
+                  <section
+                    className="rounded-2xl border border-border bg-white p-6 shadow-sm"
+                    data-testid="admin-org-panel"
+                  >
                     <h3 className="text-lg font-semibold text-slate-900">组织管理入口</h3>
                     <p className="mt-2 text-sm text-slate-600">左侧树已经接回真实的创建、改名、删除和导入能力。</p>
+                    <div className="mt-4 flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        onClick={() => void handleCreateDepartment()}
+                        data-testid="admin-org-create-department"
+                        className="inline-flex items-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700"
+                      >
+                        <Plus className="h-4 w-4" />
+                        新建部门
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleCreateUnit()}
+                        disabled={!selectedOrg || selectedOrg.level !== "department"}
+                        data-testid="admin-org-create-unit"
+                        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Plus className="h-4 w-4" />
+                        新增下属单位
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteOrganization()}
+                        disabled={!selectedOrg}
+                        data-testid="admin-org-delete-current"
+                        className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        删除当前组织
+                      </button>
+                    </div>
                     {selectedOrg ? (
-                      <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
-                        <div className="font-semibold text-slate-900">{selectedOrg.name}</div>
+                      <div
+                        className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600"
+                        data-testid="admin-org-selection"
+                      >
+                        <div className="font-semibold text-slate-900" data-testid="admin-org-selected-name">
+                          {selectedOrg.name}
+                        </div>
                         <div className="mt-2">当前层级：{selectedOrg.level === "department" ? "部门" : "单位"}</div>
                         <Link href={`/department/${selectedOrg.id}` as Route} className="mt-4 inline-flex rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700">
                           打开部门详情
                         </Link>
                       </div>
                     ) : (
-                      <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                      <div
+                        className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-500"
+                        data-testid="admin-org-selection-empty"
+                      >
                         先从左侧选择一个部门或单位。
                       </div>
                     )}
@@ -631,7 +823,7 @@ function AdminPageContent() {
           onClose={() => setIsUploadModalOpen(false)}
           onComplete={() => {
             setIsUploadModalOpen(false);
-            setTreeRefreshKey((current) => current + 1);
+            refreshOrganizationTree();
           }}
         />
       ) : null}

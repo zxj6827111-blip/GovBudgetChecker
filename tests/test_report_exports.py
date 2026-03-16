@@ -143,6 +143,10 @@ def test_report_download_json_and_csv_include_structured_location_fields(
                             "field": "Field A",
                             "code": "201999",
                             "subject": "Subject A",
+                            "expected_name": "\u536b\u751f\u5065\u5eb7\u652f\u51fa",
+                            "actual_name": "\u533b\u7597\u536b\u751f\u4e0e\u8ba1\u5212\u751f\u80b2\u652f\u51fa",
+                            "code_level": "\u7c7b",
+                            "source_of_truth": "BUD_T5",
                             "table_refs": [
                                 {
                                     "role": "T1",
@@ -171,6 +175,7 @@ def test_report_download_json_and_csv_include_structured_location_fields(
     assert report_json.status_code == 200
     payload = report_json.json()
     issue = payload["issues"][0]
+    assert issue["severity_label"] == "中"
     export_location = issue["export_location"]
     assert export_location["page"] == 1
     assert export_location["table"] == "Table A"
@@ -187,11 +192,20 @@ def test_report_download_json_and_csv_include_structured_location_fields(
     rows = list(csv.DictReader(io.StringIO(text)))
     assert rows
     row = rows[0]
+    assert "规则编号" in row
+    assert "严重级别" in row
     assert "table_refs" in row
     assert row["rule_id"] == "TEST-STRUCTURED"
+    assert row["severity_label"] == "中"
+    assert row["严重级别"] == "中"
+    assert row["严重级别代码"] == "medium"
+    assert row["规则编号"] == "TEST-STRUCTURED"
     assert row["table"] == "Table A"
+    assert row["表"] == "Table A"
     assert row["row"] == "ROW_A"
+    assert row["行"] == "ROW_A"
     assert row["field"] == "Field A"
+    assert row["字段"] == "Field A"
     assert row["table_ref_count"] == "1"
     assert row["evidence_role_summary"] == "T1/P1/表:Table A"
     table_refs = json.loads(row["table_refs"])
@@ -280,3 +294,4 @@ def test_report_download_uses_merged_issue_projection_without_double_counting(
     rows = list(csv.DictReader(io.StringIO(text)))
     assert len(rows) == 2
     assert [row["rule_id"] for row in rows] == ["AI-1", "RULE-3"]
+    assert [row["严重级别"] for row in rows] == ["高", "中"]

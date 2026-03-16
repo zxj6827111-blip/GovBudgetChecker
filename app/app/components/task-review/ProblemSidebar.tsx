@@ -1,5 +1,6 @@
 import { Search, Filter, AlertCircle, CheckCircle2 } from "lucide-react";
 
+import { getSeverityMeta } from "@/lib/issueSeverity";
 import type { Problem } from "@/lib/mock";
 import { cn } from "@/lib/utils";
 
@@ -96,11 +97,7 @@ export default function ProblemSidebar({
               <div
                 className={cn(
                   "absolute inset-y-0 left-0 w-1",
-                  problem.severity === "high"
-                    ? "bg-danger-500"
-                    : problem.severity === "warning"
-                      ? "bg-warning-500"
-                      : "bg-slate-300"
+                  getSeverityMeta(problem.severity, problem.severityLabel).accentClass
                 )}
               />
 
@@ -115,6 +112,14 @@ export default function ProblemSidebar({
                     )}
                   >
                     {problem.category === "AI 智能分析" ? "AI 审查" : "本地规则"}
+                  </span>
+                  <span
+                    className={cn(
+                      "rounded px-2 py-0.5 text-xs font-semibold",
+                      getSeverityMeta(problem.severity, problem.severityLabel).panelClass
+                    )}
+                  >
+                    {getSeverityMeta(problem.severity, problem.severityLabel).label}
                   </span>
                   <span className="font-mono text-xs text-slate-500">{problem.ruleId}</span>
                 </div>

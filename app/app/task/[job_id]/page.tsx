@@ -7,11 +7,13 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Download, RefreshCw, FileText, Link2 } from "lucide-react";
 
 import AssociateDialog from "@/components/AssociateDialog";
+import ReanalyzeAiToggle from "@/components/ReanalyzeAiToggle";
 import EvidencePanel from "@/components/task-review/EvidencePanel";
 import PDFHighlighter from "@/components/task-review/PDFHighlighter";
 import PipelineDrawer from "@/components/task-review/PipelineDrawer";
 import ProblemSidebar from "@/components/task-review/ProblemSidebar";
 import ReportPreviewModal from "@/components/task-review/ReportPreviewModal";
+import { isHighRiskSeverity } from "@/lib/issueSeverity";
 import type { Problem, Task } from "@/lib/mock";
 import { cn } from "@/lib/utils";
 import type { JobDetailRecord, StructuredIngestRecord } from "@/lib/uiAdapters";
@@ -61,6 +63,7 @@ export default function TaskDetail() {
   const [isReanalyzing, setIsReanalyzing] = useState(false);
   const [isAssociateDialogOpen, setIsAssociateDialogOpen] = useState(false);
   const [isAssociating, setIsAssociating] = useState(false);
+  const [reanalyzeUseAiAssist, setReanalyzeUseAiAssist] = useState<boolean | null>(null);
   const [refreshSeed, setRefreshSeed] = useState(0);
   const [problemSearchValue, setProblemSearchValue] = useState("");
   const [problemCategory, setProblemCategory] = useState("全部");
@@ -136,7 +139,7 @@ export default function TaskDetail() {
       if (problemCategory !== "全部" && problem.category !== problemCategory) {
         return false;
       }
-      if (highRiskOnly && problem.severity !== "high") {
+      if (highRiskOnly && !isHighRiskSeverity(problem.severity)) {
         return false;
       }
       if (!normalizedKeyword) {
@@ -163,6 +166,8 @@ export default function TaskDetail() {
     () => filteredProblems.find((problem) => problem.id === selectedProblemId),
     [filteredProblems, selectedProblemId]
   );
+  const effectiveReanalyzeUseAiAssist =
+    reanalyzeUseAiAssist ?? (typeof jobDetail?.use_ai_assist === "boolean" ? jobDetail.use_ai_assist : true);
 
   const handleReanalyze = async () => {
     if (isReanalyzing || task?.status === "analyzing") {
@@ -181,7 +186,10 @@ export default function TaskDetail() {
       const response = await fetch(`/api/jobs/${encodeURIComponent(job_id)}/reanalyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          use_local_rules: true,
+          use_ai_assist: effectiveReanalyzeUseAiAssist,
+        }),
       });
 
       if (!response.ok) {
@@ -190,6 +198,15 @@ export default function TaskDetail() {
       }
 
       setTask((current) => (current ? { ...current, status: "analyzing" } : current));
+      setJobDetail((current) =>
+        current
+          ? {
+              ...current,
+              use_local_rules: true,
+              use_ai_assist: effectiveReanalyzeUseAiAssist,
+            }
+          : current
+      );
       setRefreshSeed((current) => current + 1);
       alert("已开始重新分析，页面会自动刷新任务状态。");
     } catch (error) {
@@ -309,10 +326,9 @@ export default function TaskDetail() {
           ? {
               ...current,
               problemCount: Math.max(0, current.problemCount - 1),
-              highRiskCount:
-                ignoredProblem.severity === "high"
-                  ? Math.max(0, current.highRiskCount - 1)
-                  : current.highRiskCount,
+              highRiskCount: isHighRiskSeverity(ignoredProblem.severity)
+                ? Math.max(0, current.highRiskCount - 1)
+                : current.highRiskCount,
             }
           : current
       );
@@ -422,6 +438,18 @@ export default function TaskDetail() {
             <Download className="h-4 w-4 text-slate-400" />
             导出报告
           </button>
+        </div>
+      </div>
+
+      <div className="border-b border-border bg-slate-50 px-6 py-3">
+        <div className="flex justify-end">
+          <ReanalyzeAiToggle
+            checked={effectiveReanalyzeUseAiAssist}
+            onChange={setReanalyzeUseAiAssist}
+            testId="task-reanalyze-ai-toggle"
+            className="w-full max-w-md bg-white"
+            description="重新分析时默认保留本地规则；取消勾选后仅本地解析，不调用 AI。"
+          />
         </div>
       </div>
 

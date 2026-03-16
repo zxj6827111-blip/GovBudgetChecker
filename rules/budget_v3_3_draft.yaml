@@ -287,6 +287,24 @@ text_table_alignment:
           - 原因
           - 由于
           - 因为
+    - id: BUD-T007
+      description: 以 T5 功能分类表为准校验预算编制说明中的类款项名称一致性
+      source_section_keywords:
+        - 预算编制说明
+        - 财政拨款支出主要内容如下
+      compare_strategy: code_name_alignment
+      source_of_truth: BUD_T5
+      code_field: 功能分类科目编码
+      table_name_field: 功能分类科目名称
+      compare_levels:
+        - 类
+        - 款
+        - 项
+      only_report_same_code_name_mismatch: true
+      normalize_name_suffixes:
+        - 支出
+        - 预算
+        - 预算支出
 
 document_consistency:
   enabled: true
@@ -409,3 +427,11 @@ rules:
       type: text_table_alignment
       target: text_table_alignment
       ids: [BUD-T006]
+  - rule_id: BUD-013
+    title: 功能分类类款项名称一致性检查（表格优先）
+    severity: medium
+    doc_scope: [预算]
+    detection:
+      type: text_table_alignment
+      target: text_table_alignment
+      ids: [BUD-T007]
