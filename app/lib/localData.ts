@@ -1,5 +1,6 @@
 import "server-only";
 
+import { existsSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -133,9 +134,27 @@ export class LocalDataError extends Error {
   }
 }
 
+function resolveLocalDir(
+  envValue: string | undefined,
+  candidates: string[],
+): string {
+  const explicit = envValue?.trim();
+  if (explicit) {
+    return resolve(explicit);
+  }
+
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
+}
+
 const REPO_ROOT = resolve(process.cwd(), "..");
-const DATA_DIR = resolve(REPO_ROOT, "data");
-const UPLOADS_DIR = resolve(REPO_ROOT, "uploads");
+const DATA_DIR = resolveLocalDir(process.env.LOCAL_DATA_DIR ?? process.env.DATA_DIR, [
+  resolve(process.cwd(), "data"),
+  resolve(REPO_ROOT, "data"),
+]);
+const UPLOADS_DIR = resolveLocalDir(process.env.LOCAL_UPLOADS_DIR ?? process.env.UPLOAD_DIR, [
+  resolve(process.cwd(), "uploads"),
+  resolve(REPO_ROOT, "uploads"),
+]);
 const ORGANIZATIONS_FILE = resolve(DATA_DIR, "organizations.json");
 const JOB_LINKS_FILE = resolve(DATA_DIR, "job_org_links.json");
 const CACHE_TTL_MS = 2_000;
