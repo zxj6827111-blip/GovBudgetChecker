@@ -57,13 +57,13 @@ class ExtractorConfig:
     audit_provider: str = field(
         default_factory=lambda: _read_str_env(
             "AI_AUDIT_PROVIDER",
-            _read_str_env("AI_MAIN_PROVIDER", "gemini_locator"),
+            _read_str_env("AI_MAIN_PROVIDER", "gemini_main"),
         )
     )
     audit_model: str = field(
         default_factory=lambda: _read_str_env(
             "AI_AUDIT_MODEL",
-            _read_str_env("AI_LOCATOR_MODEL"),
+            _read_str_env("AI_MAIN_MODEL", _read_str_env("AI_LOCATOR_MODEL")),
         )
     )
     direct_fallback: bool = field(default_factory=lambda: _read_bool_env("AI_EXTRACTOR_DIRECT_FALLBACK", True))

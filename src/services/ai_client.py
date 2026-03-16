@@ -24,6 +24,85 @@ from src.providers.openai_compat import OpenAICompatProvider
 logger = logging.getLogger(__name__)
 
 
+def _read_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _read_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except Exception:
+        return default
+
+
+def _split_csv(raw: str) -> List[str]:
+    return [item.strip() for item in (raw or "").split(",") if item.strip()]
+
+
+def _dedupe_keep_order(items: List[str]) -> List[str]:
+    seen = set()
+    deduped: List[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
+def _build_env_provider_slot(slot_name: str, env_prefix: str) -> Optional[Dict[str, Any]]:
+    provider_type = os.getenv(f"{env_prefix}_PROVIDER_TYPE", "").strip()
+    base_url = os.getenv(f"{env_prefix}_BASE_URL", "").strip()
+    api_key = os.getenv(f"{env_prefix}_API_KEY", "").strip()
+    model = os.getenv(f"{env_prefix}_MODEL", "").strip()
+
+    if not any((provider_type, base_url, api_key, model)):
+        return None
+
+    return {
+        "enabled": _read_bool_env(f"{env_prefix}_ENABLED", True),
+        "provider_type": provider_type or "auto",
+        "base_url": base_url,
+        "api_key": api_key,
+        "model": model,
+        "timeout_s": _read_int_env(f"{env_prefix}_TIMEOUT_S", 90),
+        "retries": _read_int_env(f"{env_prefix}_RETRIES", 1),
+        "description": f"Environment-defined {slot_name} provider slot",
+    }
+
+
+def _merge_env_provider_slots(
+    providers: Dict[str, Dict[str, Any]],
+    fallback_chain: List[str],
+) -> tuple[Dict[str, Dict[str, Any]], List[str]]:
+    merged = dict(providers)
+    slot_order: List[str] = []
+
+    for slot_name, env_prefix in (
+        ("main", "AI_MAIN"),
+        ("backup", "AI_BACKUP"),
+        ("locator", "AI_LOCATOR"),
+    ):
+        slot_config = _build_env_provider_slot(slot_name, env_prefix)
+        if slot_config is None:
+            continue
+        merged[slot_name] = slot_config
+        slot_order.append(slot_name)
+
+    env_chain = _split_csv(os.getenv("AI_FALLBACK_CHAIN", ""))
+    if env_chain:
+        return merged, env_chain
+    if slot_order:
+        return merged, _dedupe_keep_order(slot_order + list(fallback_chain))
+    return merged, list(fallback_chain)
+
+
 class CircuitState(Enum):
     """熔断器状态"""
     CLOSED = "closed"      # 正常状态
@@ -129,10 +208,14 @@ class AIClientConfig:
             with open(config_path, 'r', encoding='utf-8') as f:
                 data = yaml.safe_load(f)
             
+            providers = data.get('providers', {}) or {}
+            fallback_chain = data.get('fallback_chain', []) or []
+            providers, fallback_chain = _merge_env_provider_slots(providers, fallback_chain)
+
             return cls(
                 region=data.get('region', 'cn'),
-                fallback_chain=data.get('fallback_chain', []),
-                providers=data.get('providers', {}),
+                fallback_chain=fallback_chain,
+                providers=providers,
                 thresholds=data.get('thresholds', {}),
                 circuit_breaker=data.get('circuit_breaker', {})
             )
@@ -191,31 +274,57 @@ class AIClient:
     def _create_provider(self, name: str, config: Dict[str, Any]) -> Optional[LLMProvider]:
         """创建提供商实例"""
         api_key_env = config.get('api_key_env')
-        if not api_key_env:
-            logger.error(f"No api_key_env specified for provider {name}")
-            return None
-        
-        api_key = os.getenv(api_key_env)
+        api_key = str(config.get('api_key', '') or '').strip()
+        if not api_key and api_key_env:
+            api_key = str(os.getenv(str(api_key_env), '') or '').strip()
         if not api_key:
-            logger.warning(f"API key not found in environment variable {api_key_env} for provider {name}")
+            if api_key_env:
+                logger.warning(f"API key not found in environment variable {api_key_env} for provider {name}")
+            else:
+                logger.warning(f"API key not configured for provider {name}")
             return None
         
         base_env = config.get('base_env')
         model_env = config.get('model_env')
-        base_url = (
-            os.getenv(str(base_env), "")
-            if base_env
-            else config.get('base', config.get('base_url', ''))
-        ) or config.get('base', config.get('base_url', ''))
-        model = (
-            os.getenv(str(model_env), "")
-            if model_env
-            else config.get('model', '')
-        ) or config.get('model', '')
+        base_url = str(config.get('base_url', config.get('base', '')) or '').strip()
+        if base_env:
+            env_base_url = str(os.getenv(str(base_env), '') or '').strip()
+            if env_base_url:
+                base_url = env_base_url
+        model = str(config.get('model', '') or '').strip()
+        if model_env:
+            env_model = str(os.getenv(str(model_env), '') or '').strip()
+            if env_model:
+                model = env_model
         timeout = config.get('timeout_s', config.get('timeout', 60))
         max_retries = config.get('retries', 1)
+        provider_type = str(config.get('provider_type', '') or '').strip().lower()
         
-        if 'modelscope' in name.lower():
+        if provider_type in {'openai', 'openai_compat', 'openai-compatible'}:
+            return OpenAICompatProvider(
+                api_key=api_key,
+                base_url=base_url,
+                default_model=model,
+                timeout=timeout,
+                max_retries=max_retries
+            )
+        elif provider_type in {'zhipu'}:
+            return ZhipuProvider(
+                api_key=api_key,
+                base_url=base_url,
+                default_model=model,
+                timeout=timeout,
+                max_retries=max_retries
+            )
+        elif provider_type in {'doubao', 'ark'}:
+            return DoubaoProvider(
+                api_key=api_key,
+                base_url=base_url,
+                default_model=model,
+                timeout=timeout,
+                max_retries=max_retries
+            )
+        elif 'modelscope' in name.lower():
             return OpenAICompatProvider(
                 api_key=api_key,
                 base_url=base_url,
