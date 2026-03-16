@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 def _read_bool_env(name: str, default: bool) -> bool:
     raw = os.getenv(name)
-    if raw is None:
+    if raw is None or not raw.strip():
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 

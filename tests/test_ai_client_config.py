@@ -72,3 +72,18 @@ def test_extractor_config_audit_defaults_to_main(monkeypatch) -> None:
 
     assert cfg.audit_provider == "main"
     assert cfg.audit_model == "gpt-5.4"
+
+
+def test_ai_client_env_slot_empty_enabled_uses_default_true(monkeypatch, tmp_path) -> None:
+    config_path = tmp_path / "providers.yaml"
+    config_path.write_text("region: cn\nfallback_chain: []\nproviders: {}\n", encoding="utf-8")
+
+    monkeypatch.setenv("AI_MAIN_BASE_URL", "https://main.example.com/v1")
+    monkeypatch.setenv("AI_MAIN_API_KEY", "main-key")
+    monkeypatch.setenv("AI_MAIN_MODEL", "gpt-5.4")
+    monkeypatch.setenv("AI_MAIN_PROVIDER_TYPE", "openai_compat")
+    monkeypatch.setenv("AI_MAIN_ENABLED", "")
+
+    client = AIClient(config_path=str(config_path))
+
+    assert "main" in client.loaded_providers
