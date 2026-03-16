@@ -146,6 +146,32 @@ async def rematch_job_organizations(request: Request):
     return result
 
 
+@router.post("/api/jobs/repair-missing-links")
+async def repair_missing_job_organization_links(request: Request):
+    _, _, user = require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    result = runtime.repair_missing_job_organization_links(body)
+    if int(result.get("repaired_count") or 0) > 0:
+        clear_department_stats_cache()
+    append_audit_event(
+        action="jobs.repair_missing_links",
+        actor=str(user.get("username") or ""),
+        result="success",
+        resource_type="job_batch",
+        details={
+            "dry_run": bool(result.get("dry_run")),
+            "candidate_count": int(result.get("candidate_count") or 0),
+            "repaired_count": int(result.get("repaired_count") or 0),
+            "skipped_count": int(result.get("skipped_count") or 0),
+            "failed_count": int(result.get("failed_count") or 0),
+        },
+    )
+    return result
+
+
 @router.post("/api/jobs/structured-ingest-cleanup")
 async def cleanup_structured_ingest_history(request: Request):
     _, _, user = require_admin(request)

@@ -1,34 +1,20 @@
 "use client";
 
 import type { Route } from "next";
-import {
-  Building2,
-  ChevronDown,
-  ChevronRight,
-  Folder,
-  MapPin,
-  Plus,
-  Search,
-  Upload,
-  X,
-} from "lucide-react";
+import { Building2, ChevronRight, Folder, MapPin, Search, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import type { OrganizationRecord } from "@/lib/uiAdapters";
 import { ORG_TREE_REFRESH_EVENT } from "@/lib/orgTreeEvents";
+import type { OrganizationRecord } from "@/lib/uiAdapters";
 import { cn } from "@/lib/utils";
-
-const REGIONS = [
-  { id: "region-1", name: "上海市普陀区" },
-  { id: "region-2", name: "上海市虹口区" },
-  { id: "region-3", name: "上海市浦东新区" },
-];
 
 type OrganizationsResponse = {
   tree?: OrganizationRecord[];
 };
+
+const REGION_NAME = "上海市普陀区";
 
 async function fetchJson<T>(url: string, fallback: T): Promise<T> {
   try {
@@ -50,7 +36,7 @@ function buildInitialExpanded(
   nodes: OrganizationRecord[],
   depth = 0,
   result: Record<string, boolean> = {},
-) {
+): Record<string, boolean> {
   for (const node of nodes) {
     if (depth < 2) {
       result[node.id] = true;
@@ -122,12 +108,10 @@ export default function Sidebar() {
     () => normalizeSearchValue(searchQuery),
     [searchQuery],
   );
+
   const [orgs, setOrgs] = useState<OrganizationRecord[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [currentRegion, setCurrentRegion] = useState(REGIONS[0]);
-  const [isRegionMenuOpen, setIsRegionMenuOpen] = useState(false);
   const [inputValue, setInputValue] = useState(searchQuery);
-  const regionMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setInputValue(searchQuery);
@@ -137,7 +121,6 @@ export default function Sidebar() {
     const handle = window.setTimeout(() => {
       const nextQuery = inputValue.trim();
       const currentQuery = searchQuery.trim();
-
       if (nextQuery === currentQuery) {
         return;
       }
@@ -168,14 +151,14 @@ export default function Sidebar() {
       const tree = Array.isArray(payload.tree) ? payload.tree : [];
       setOrgs(tree);
       setExpanded((current) => {
-        const initial = Object.keys(current).length > 0 ? current : buildInitialExpanded(tree);
+        const nextExpanded =
+          Object.keys(current).length > 0 ? { ...current } : buildInitialExpanded(tree);
         if (selectedId) {
-          const path = findPathToNode(tree, selectedId);
-          for (const id of path) {
-            initial[id] = true;
+          for (const id of findPathToNode(tree, selectedId)) {
+            nextExpanded[id] = true;
           }
         }
-        return { ...initial };
+        return nextExpanded;
       });
     }
 
@@ -190,17 +173,6 @@ export default function Sidebar() {
       window.removeEventListener(ORG_TREE_REFRESH_EVENT, handleRefresh);
     };
   }, [selectedId]);
-
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (regionMenuRef.current && !regionMenuRef.current.contains(event.target as Node)) {
-        setIsRegionMenuOpen(false);
-      }
-    }
-
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
 
   const visibleOrgs = useMemo(
     () => (normalizedSearchQuery ? filterOrganizations(orgs, normalizedSearchQuery) : orgs),
@@ -229,9 +201,14 @@ export default function Sidebar() {
         >
           <div className="flex min-w-0 flex-1 items-start">
             <button
-              onClick={() => !normalizedSearchQuery && hasChildren && toggle(org.id)}
+              type="button"
+              onClick={() => {
+                if (!normalizedSearchQuery && hasChildren) {
+                  toggle(org.id);
+                }
+              }}
               className="mr-1 mt-0.5 shrink-0 rounded p-0.5 text-slate-400 transition-colors hover:text-slate-600"
-              aria-label={hasChildren ? `切换 ${org.name}` : `${org.name} 无下级节点`}
+              aria-label={hasChildren ? `展开或收起 ${org.name}` : `${org.name} 无下级组织`}
             >
               {hasChildren ? (
                 <ChevronRight
@@ -248,36 +225,40 @@ export default function Sidebar() {
               <Building2 className="mr-2 mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
             )}
 
-            <Link href={href} className="min-w-0 flex-1 break-words text-[13px] leading-5" title={org.name}>
+            <Link
+              href={href}
+              className="min-w-0 flex-1 break-words text-[13px] leading-5"
+              title={org.name}
+            >
               {highlightMatch(org.name, normalizedSearchQuery)}
             </Link>
           </div>
 
           <div className="ml-2 flex min-w-[4.5rem] shrink-0 flex-col items-end gap-1 text-[11px] leading-none">
-            {Number(org.issue_count ?? 0) > 0 && (
+            {Number(org.issue_count ?? 0) > 0 ? (
               <span
                 className="min-w-[4.5rem] whitespace-nowrap rounded bg-danger-50 px-2 py-1 text-center font-medium text-danger-600"
                 title={`问题数：${org.issue_count}`}
               >
                 问题 {org.issue_count}
               </span>
-            )}
-            {Number(org.job_count ?? 0) > 0 && (
+            ) : null}
+            {Number(org.job_count ?? 0) > 0 ? (
               <span
                 className="min-w-[4.5rem] whitespace-nowrap rounded bg-slate-100 px-2 py-1 text-center font-medium text-slate-500"
                 title={`报告数：${org.job_count}`}
               >
                 报告 {org.job_count}
               </span>
-            )}
+            ) : null}
           </div>
         </div>
 
-        {hasChildren && isExpanded && (
+        {hasChildren && isExpanded ? (
           <div className="mt-1 border-l border-slate-200 pl-2">
             {org.children?.map((child) => renderOrg(child, depth + 1))}
           </div>
-        )}
+        ) : null}
       </div>
     );
   };
@@ -285,47 +266,17 @@ export default function Sidebar() {
   return (
     <aside className="flex h-[calc(100vh-64px)] w-[320px] shrink-0 flex-col overflow-y-auto border-r border-border bg-white xl:w-[360px]">
       <div className="sticky top-0 z-20 bg-white">
-        <div className="border-b border-border bg-slate-50/50 p-4">
+        <div className="border-b border-border bg-slate-50/60 p-4">
           <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
             当前行政区划
           </div>
-          <div className="relative" ref={regionMenuRef}>
-            <button
-              onClick={() => setIsRegionMenuOpen((prev) => !prev)}
-              className="flex w-full items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm transition-colors hover:border-primary-400"
-            >
-              <div className="flex items-center gap-2 overflow-hidden">
-                <MapPin className="h-4 w-4 shrink-0 text-primary-600" />
-                <span className="truncate text-sm font-medium text-slate-900">{currentRegion.name}</span>
-              </div>
-              <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
-            </button>
-
-            {isRegionMenuOpen && (
-              <div className="animate-in fade-in zoom-in-95 absolute left-0 right-0 top-full z-30 mt-1 rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
-                {REGIONS.map((region) => (
-                  <button
-                    key={region.id}
-                    onClick={() => {
-                      setCurrentRegion(region);
-                      setIsRegionMenuOpen(false);
-                    }}
-                    className={cn(
-                      "flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors",
-                      currentRegion.id === region.id
-                        ? "bg-primary-50 font-medium text-primary-700"
-                        : "text-slate-700 hover:bg-slate-50",
-                    )}
-                  >
-                    <span className="truncate">{region.name}</span>
-                    {currentRegion.id === region.id && (
-                      <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary-600" />
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
+          <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
+            <MapPin className="h-4 w-4 shrink-0 text-primary-600" />
+            <span className="truncate text-sm font-medium text-slate-900">{REGION_NAME}</span>
           </div>
+          <p className="mt-2 text-xs text-slate-500">
+            组织树与部门页搜索会同步联动，便于快速定位报告。
+          </p>
         </div>
 
         <div className="border-b border-border bg-white p-4">
@@ -349,31 +300,16 @@ export default function Sidebar() {
               </button>
             ) : null}
           </label>
-          {normalizedSearchQuery ? (
-            <p className="mt-2 text-xs text-slate-500">
-              左侧组织架构与当前部门报告列表会按同一关键词联动过滤
-            </p>
-          ) : null}
         </div>
 
         <div className="flex items-center justify-between border-b border-border bg-white p-4">
           <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-500">组织架构</h2>
-          <div className="flex items-center gap-1">
-            <button
-              disabled
-              className="rounded-md p-1.5 text-slate-300"
-              title="当前版本暂不在此维护组织架构"
-            >
-              <Plus className="h-4 w-4" />
-            </button>
-            <button
-              disabled
-              className="rounded-md p-1.5 text-slate-300"
-              title="当前版本暂不在此导入组织架构"
-            >
-              <Upload className="h-4 w-4" />
-            </button>
-          </div>
+          <Link
+            href={"/admin?tab=organization" as Route}
+            className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+          >
+            后台维护
+          </Link>
         </div>
       </div>
 
@@ -382,7 +318,7 @@ export default function Sidebar() {
           <div className="p-3 text-sm text-slate-500">正在加载组织架构...</div>
         ) : visibleOrgs.length === 0 ? (
           <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
-            未找到和“{searchQuery}”相关的组织架构
+            没有找到和“{searchQuery}”相关的组织或报告。
           </div>
         ) : (
           visibleOrgs.map((org) => renderOrg(org))

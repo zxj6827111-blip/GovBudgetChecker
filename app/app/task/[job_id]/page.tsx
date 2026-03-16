@@ -4,8 +4,9 @@ import type { Route } from "next";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Download, RefreshCw, FileText } from "lucide-react";
+import { ArrowLeft, Download, RefreshCw, FileText, Link2 } from "lucide-react";
 
+import AssociateDialog from "@/components/AssociateDialog";
 import EvidencePanel from "@/components/task-review/EvidencePanel";
 import PDFHighlighter from "@/components/task-review/PDFHighlighter";
 import PipelineDrawer from "@/components/task-review/PipelineDrawer";
@@ -15,7 +16,10 @@ import type { Problem, Task } from "@/lib/mock";
 import { cn } from "@/lib/utils";
 import type { JobDetailRecord, StructuredIngestRecord } from "@/lib/uiAdapters";
 import { toUiProblems, toUiTask } from "@/lib/uiAdapters";
-import { buildProblemPreviewUrl, normalizeProblemBbox } from "@/components/task-review/problemPreview";
+import {
+  buildProblemPreviewUrl,
+  normalizeProblemBbox,
+} from "@/components/task-review/problemPreview";
 
 async function fetchJson<T>(url: string, fallback: T): Promise<T> {
   try {
@@ -29,16 +33,39 @@ async function fetchJson<T>(url: string, fallback: T): Promise<T> {
   }
 }
 
+async function readErrorMessage(response: Response): Promise<string> {
+  const text = await response.text();
+  try {
+    const payload = JSON.parse(text);
+    return payload?.detail || payload?.error || payload?.message || text || `HTTP ${response.status}`;
+  } catch {
+    return text || `HTTP ${response.status}`;
+  }
+}
+
+function normalizeProblemSearchValue(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 export default function TaskDetail() {
   const { job_id } = useParams<{ job_id: string }>();
   const router = useRouter();
   const [task, setTask] = useState<Task | null>(null);
+  const [jobDetail, setJobDetail] = useState<JobDetailRecord | null>(null);
   const [problems, setProblems] = useState<Problem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedProblemId, setSelectedProblemId] = useState("");
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isViewerOpen, setIsViewerOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [isReanalyzing, setIsReanalyzing] = useState(false);
+  const [isAssociateDialogOpen, setIsAssociateDialogOpen] = useState(false);
+  const [isAssociating, setIsAssociating] = useState(false);
+  const [refreshSeed, setRefreshSeed] = useState(0);
+  const [problemSearchValue, setProblemSearchValue] = useState("");
+  const [problemCategory, setProblemCategory] = useState("全部");
+  const [highRiskOnly, setHighRiskOnly] = useState(false);
+  const [ignoringProblemId, setIgnoringProblemId] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -47,11 +74,15 @@ export default function TaskDetail() {
       setLoading(true);
       const [detail, structured] = await Promise.all([
         fetchJson<JobDetailRecord | null>(`/api/jobs/${encodeURIComponent(job_id)}`, null),
-        fetchJson<StructuredIngestRecord>(`/api/jobs/${encodeURIComponent(job_id)}/structured-ingest`, {}),
+        fetchJson<StructuredIngestRecord>(
+          `/api/jobs/${encodeURIComponent(job_id)}/structured-ingest`,
+          {}
+        ),
       ]);
 
       if (!alive || !detail) {
         if (alive) {
+          setJobDetail(null);
           setTask(null);
           setProblems([]);
           setLoading(false);
@@ -67,18 +98,12 @@ export default function TaskDetail() {
         ...problem,
         jobId: detail.job_id,
         bbox: normalizeProblemBbox(problem.bbox),
-        evidenceImage:
-          buildProblemPreviewUrl(detail.job_id, problem.page) ?? problem.evidenceImage,
+        evidenceImage: buildProblemPreviewUrl(detail.job_id, problem.page) ?? problem.evidenceImage,
       }));
 
+      setJobDetail(detail);
       setTask(nextTask);
       setProblems(nextProblems);
-      setSelectedProblemId((current) => {
-        if (nextProblems.some((problem) => problem.id === current)) {
-          return current;
-        }
-        return nextProblems[0]?.id ?? "";
-      });
       setLoading(false);
     }
 
@@ -86,12 +111,219 @@ export default function TaskDetail() {
     return () => {
       alive = false;
     };
-  }, [job_id]);
+  }, [job_id, refreshSeed]);
+
+  const problemCategories = useMemo(() => {
+    const categories = new Set<string>();
+    problems.forEach((problem) => {
+      if (problem.category) {
+        categories.add(problem.category);
+      }
+    });
+    return ["全部", ...Array.from(categories)];
+  }, [problems]);
+
+  useEffect(() => {
+    if (!problemCategories.includes(problemCategory)) {
+      setProblemCategory("全部");
+    }
+  }, [problemCategories, problemCategory]);
+
+  const filteredProblems = useMemo(() => {
+    const normalizedKeyword = normalizeProblemSearchValue(problemSearchValue);
+
+    return problems.filter((problem) => {
+      if (problemCategory !== "全部" && problem.category !== problemCategory) {
+        return false;
+      }
+      if (highRiskOnly && problem.severity !== "high") {
+        return false;
+      }
+      if (!normalizedKeyword) {
+        return true;
+      }
+
+      const haystack = normalizeProblemSearchValue(
+        [problem.ruleId, problem.title, problem.description, problem.category, problem.location].join(" ")
+      );
+      return haystack.includes(normalizedKeyword);
+    });
+  }, [highRiskOnly, problemCategory, problemSearchValue, problems]);
+
+  useEffect(() => {
+    setSelectedProblemId((current) => {
+      if (filteredProblems.some((problem) => problem.id === current)) {
+        return current;
+      }
+      return filteredProblems[0]?.id ?? "";
+    });
+  }, [filteredProblems]);
 
   const selectedProblem = useMemo(
-    () => problems.find((problem) => problem.id === selectedProblemId),
-    [problems, selectedProblemId],
+    () => filteredProblems.find((problem) => problem.id === selectedProblemId),
+    [filteredProblems, selectedProblemId]
   );
+
+  const handleReanalyze = async () => {
+    if (isReanalyzing || task?.status === "analyzing") {
+      return;
+    }
+
+    if (
+      !confirm("确定要重新分析这份报告吗？系统会基于当前任务重新执行分析。")
+    ) {
+      return;
+    }
+
+    setIsReanalyzing(true);
+
+    try {
+      const response = await fetch(`/api/jobs/${encodeURIComponent(job_id)}/reanalyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+
+      if (!response.ok) {
+        alert(await readErrorMessage(response));
+        return;
+      }
+
+      setTask((current) => (current ? { ...current, status: "analyzing" } : current));
+      setRefreshSeed((current) => current + 1);
+      alert("已开始重新分析，页面会自动刷新任务状态。");
+    } catch (error) {
+      console.error("Failed to reanalyze report:", error);
+      alert("重新分析失败，请稍后重试。");
+    } finally {
+      setIsReanalyzing(false);
+    }
+  };
+
+  const handleAssociate = async (orgId: string) => {
+    setIsAssociating(true);
+
+    try {
+      const response = await fetch(`/api/jobs/${encodeURIComponent(job_id)}/associate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ org_id: orgId }),
+      });
+
+      const payload = (await response.json().catch(() => ({}))) as {
+        organization_id?: string;
+        organization_name?: string;
+        organization_match_type?: string;
+        organization_match_confidence?: number;
+        detail?: string;
+        error?: string;
+        message?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.detail || payload.error || payload.message || "关联报告失败");
+      }
+
+      const nextOrganizationId = String(payload.organization_id ?? "").trim();
+      const nextOrganizationName = String(payload.organization_name ?? "").trim();
+
+      setJobDetail((current) =>
+        current
+          ? {
+              ...current,
+              organization_id: nextOrganizationId || current.organization_id,
+              organization_name: nextOrganizationName || current.organization_name,
+              organization_match_type:
+                payload.organization_match_type || current.organization_match_type || "manual",
+              organization_match_confidence:
+                typeof payload.organization_match_confidence === "number"
+                  ? payload.organization_match_confidence
+                  : current.organization_match_confidence,
+            }
+          : current
+      );
+      setTask((current) =>
+        current
+          ? {
+              ...current,
+              department: nextOrganizationName || current.department,
+              departmentId: nextOrganizationId || current.departmentId,
+            }
+          : current
+      );
+      setIsAssociateDialogOpen(false);
+      setRefreshSeed((current) => current + 1);
+      alert(
+        nextOrganizationName
+          ? `报告已关联到 ${nextOrganizationName}。`
+          : "报告关联已更新。"
+      );
+    } catch (error) {
+      console.error("Failed to associate report:", error);
+      alert(error instanceof Error ? error.message : "关联报告失败，请稍后重试。");
+    } finally {
+      setIsAssociating(false);
+    }
+  };
+
+  const handleIgnoreProblem = async () => {
+    if (!selectedProblem || ignoringProblemId) {
+      return;
+    }
+
+    if (!confirm("确定要忽略这个问题吗？忽略后它将不再出现在当前报告的问题列表中。")) {
+      return;
+    }
+
+    const ignoredProblem = selectedProblem;
+    setIgnoringProblemId(ignoredProblem.id);
+
+    try {
+      const response = await fetch(
+        `/api/jobs/${encodeURIComponent(job_id)}/issues/ignore`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ issue_id: ignoredProblem.id }),
+        }
+      );
+
+      if (!response.ok) {
+        alert(await readErrorMessage(response));
+        return;
+      }
+
+      setJobDetail((current) =>
+        current
+          ? {
+              ...current,
+              ignored_issue_ids: Array.from(
+                new Set([...(current.ignored_issue_ids ?? []), ignoredProblem.id])
+              ),
+            }
+          : current
+      );
+      setProblems((current) => current.filter((problem) => problem.id !== ignoredProblem.id));
+      setTask((current) =>
+        current
+          ? {
+              ...current,
+              problemCount: Math.max(0, current.problemCount - 1),
+              highRiskCount:
+                ignoredProblem.severity === "high"
+                  ? Math.max(0, current.highRiskCount - 1)
+                  : current.highRiskCount,
+            }
+          : current
+      );
+      alert("该问题已忽略。");
+    } catch (error) {
+      console.error("Failed to ignore issue:", error);
+      alert("忽略问题失败，请稍后重试。");
+    } finally {
+      setIgnoringProblemId(null);
+    }
+  };
 
   if (loading) {
     return (
@@ -139,9 +371,6 @@ export default function TaskDetail() {
               <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
                 <span>{task.department}</span>
                 <span className="h-1 w-1 rounded-full bg-slate-300" />
-                <span className="hidden">
-                  {task.year} {task.type === "budget" ? "部门预算" : "部门决算"}
-                </span>
                 <span>{task.year} {task.reportLabel}</span>
               </div>
             </div>
@@ -156,7 +385,7 @@ export default function TaskDetail() {
                 ? "border-success-200 bg-success-50 text-success-700"
                 : task.status === "analyzing"
                   ? "border-warning-200 bg-warning-50 text-warning-700"
-                  : "border-danger-200 bg-danger-50 text-danger-700",
+                  : "border-danger-200 bg-danger-50 text-danger-700"
             )}
           >
             {task.status === "completed"
@@ -166,9 +395,25 @@ export default function TaskDetail() {
                 : "分析失败"}
           </span>
           <div className="mx-2 h-6 w-px bg-border" />
-          <button className="flex items-center gap-2 rounded-md border border-border bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50">
+          <button
+            type="button"
+            data-testid="task-associate-button"
+            onClick={() => setIsAssociateDialogOpen(true)}
+            disabled={isAssociating}
+            className="flex items-center gap-2 rounded-md border border-border bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Link2 className="h-4 w-4 text-slate-400" />
+            {jobDetail?.organization_id ? "更改关联" : "关联报告"}
+          </button>
+          <button
+            type="button"
+            data-testid="task-reanalyze-button"
+            onClick={() => void handleReanalyze()}
+            disabled={isReanalyzing || task.status === "analyzing"}
+            className="flex items-center gap-2 rounded-md border border-border bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
             <RefreshCw className="h-4 w-4 text-slate-400" />
-            重新分析
+            {isReanalyzing ? "重新分析中..." : task.status === "analyzing" ? "分析中" : "重新分析"}
           </button>
           <button
             onClick={() => setIsReportModalOpen(true)}
@@ -188,9 +433,16 @@ export default function TaskDetail() {
         />
 
         <ProblemSidebar
-          problems={problems}
+          problems={filteredProblems}
           selectedId={selectedProblemId}
           onSelect={setSelectedProblemId}
+          searchValue={problemSearchValue}
+          onSearchChange={setProblemSearchValue}
+          categories={problemCategories}
+          activeCategory={problemCategory}
+          onCategoryChange={setProblemCategory}
+          highRiskOnly={highRiskOnly}
+          onToggleHighRiskOnly={() => setHighRiskOnly((current) => !current)}
         />
 
         <div className="flex-1 overflow-y-auto bg-slate-50/50 p-6">
@@ -198,32 +450,50 @@ export default function TaskDetail() {
             <EvidencePanel
               problem={selectedProblem}
               onOpenViewer={() => setIsViewerOpen(true)}
+              onIgnore={() => void handleIgnoreProblem()}
+              isIgnoring={ignoringProblemId === selectedProblem.id}
             />
           ) : (
             <div className="flex h-full flex-col items-center justify-center text-slate-400">
               <FileText className="mb-4 h-12 w-12 text-slate-300" />
               <p className="text-sm font-medium">
-                {problems.length === 0 ? "当前任务暂无问题。" : "请在左侧选择一个问题以查看证据"}
+                {problems.length === 0
+                  ? "当前任务暂无问题。"
+                  : "当前筛选条件下没有问题。"}
               </p>
             </div>
           )}
         </div>
       </div>
 
-      {isViewerOpen && selectedProblem && (
+      {isViewerOpen && selectedProblem ? (
         <PDFHighlighter
           problem={selectedProblem}
           onClose={() => setIsViewerOpen(false)}
         />
-      )}
+      ) : null}
 
-      {isReportModalOpen && (
+      {isReportModalOpen ? (
         <ReportPreviewModal
           task={task}
-          problems={problems}
+          problems={filteredProblems}
           onClose={() => setIsReportModalOpen(false)}
         />
-      )}
+      ) : null}
+      {isAssociateDialogOpen && jobDetail ? (
+        <AssociateDialog
+          isOpen
+          jobId={jobDetail.job_id}
+          filename={String(jobDetail.filename ?? jobDetail.job_id)}
+          isSubmitting={isAssociating}
+          onClose={() => {
+            if (!isAssociating) {
+              setIsAssociateDialogOpen(false);
+            }
+          }}
+          onAssociate={handleAssociate}
+        />
+      ) : null}
     </div>
   );
 }

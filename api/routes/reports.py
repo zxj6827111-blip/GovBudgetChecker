@@ -6,6 +6,7 @@ import csv
 import io
 import json
 import logging
+import zipfile
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -375,6 +376,44 @@ def _resolve_report_pdf(job_id: str, status_payload: Dict[str, Any]) -> Path:
     raise HTTPException(status_code=404, detail="report pdf not found")
 
 
+def _build_export_pdf_name(
+    job_id: str,
+    status_payload: Dict[str, Any],
+    *,
+    annotated: bool,
+) -> str:
+    raw_filename = str(status_payload.get("filename") or "").strip()
+    base_name = Path(raw_filename).name if raw_filename else ""
+    if not base_name or Path(base_name).suffix.lower() != ".pdf":
+        base_name = f"{job_id}.pdf"
+
+    source = Path(base_name)
+    if annotated:
+        return f"{source.stem}-annotated.pdf"
+    return source.name
+
+
+def _build_unique_zip_name(name: str, used_names: set[str], job_id: str) -> str:
+    candidate = name
+    if candidate not in used_names:
+        used_names.add(candidate)
+        return candidate
+
+    path = Path(name)
+    candidate = f"{path.stem}-{job_id[:8]}{path.suffix or '.pdf'}"
+    if candidate not in used_names:
+        used_names.add(candidate)
+        return candidate
+
+    index = 2
+    while True:
+        candidate = f"{path.stem}-{job_id[:8]}-{index}{path.suffix or '.pdf'}"
+        if candidate not in used_names:
+            used_names.add(candidate)
+            return candidate
+        index += 1
+
+
 def _iter_annotation_targets(issue: Dict[str, Any]) -> List[Dict[str, Any]]:
     export_location = issue.get("export_location")
     if not isinstance(export_location, dict):
@@ -742,3 +781,99 @@ async def download_report(
         media_type="application/pdf",
         filename=report_pdf.name,
     )
+
+
+@router.post("/api/reports/download-batch")
+async def download_reports_batch(body: Dict[str, Any]):
+    raw_job_ids = body.get("job_ids")
+    if not isinstance(raw_job_ids, list):
+        raise HTTPException(status_code=400, detail="job_ids must be a list")
+
+    job_ids: List[str] = []
+    seen_job_ids = set()
+    for item in raw_job_ids:
+        normalized = str(item or "").strip()
+        if not normalized or normalized in seen_job_ids:
+            continue
+        seen_job_ids.add(normalized)
+        job_ids.append(normalized)
+
+    if not job_ids:
+        raise HTTPException(status_code=400, detail="job_ids is required")
+
+    archive_buffer = io.BytesIO()
+    exported: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    used_names: set[str] = set()
+
+    with zipfile.ZipFile(archive_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for job_id in job_ids:
+            try:
+                status_payload = runtime.get_job_status_payload(job_id)
+                issues = _extract_issues(status_payload)
+                annotated_pdf = _create_annotated_pdf(job_id, status_payload, issues)
+                report_pdf = annotated_pdf or _resolve_report_pdf(job_id, status_payload)
+                export_name = _build_export_pdf_name(
+                    job_id,
+                    status_payload,
+                    annotated=annotated_pdf is not None,
+                )
+                zip_name = _build_unique_zip_name(export_name, used_names, job_id)
+                archive.write(report_pdf, arcname=zip_name)
+                exported.append(
+                    {
+                        "job_id": job_id,
+                        "filename": zip_name,
+                        "annotated": annotated_pdf is not None,
+                    }
+                )
+            except HTTPException as exc:
+                failed.append(
+                    {
+                        "job_id": job_id,
+                        "status_code": exc.status_code,
+                        "detail": exc.detail,
+                    }
+                )
+            except Exception as exc:
+                logger.exception("Failed to export report pdf for job %s", job_id)
+                failed.append(
+                    {
+                        "job_id": job_id,
+                        "status_code": 500,
+                        "detail": str(exc),
+                    }
+                )
+
+        archive.writestr(
+            "manifest.json",
+            json.dumps(
+                {
+                    "requested_count": len(job_ids),
+                    "exported_count": len(exported),
+                    "failed_count": len(failed),
+                    "exported": exported,
+                    "failed": failed,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+
+    if not exported:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "no_reports_exported",
+                "requested_count": len(job_ids),
+                "failed": failed,
+            },
+        )
+
+    archive_buffer.seek(0)
+    response = Response(
+        content=archive_buffer.getvalue(),
+        media_type="application/zip",
+    )
+    response.headers["Content-Disposition"] = 'attachment; filename="reports-batch.zip"'
+    return response

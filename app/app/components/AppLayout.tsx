@@ -69,7 +69,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
               "absolute top-1/2 z-50 flex h-12 w-5 -translate-y-1/2 items-center justify-center rounded-r-md border border-slate-200 bg-white text-slate-400 shadow-sm transition-all duration-300 hover:bg-primary-50 hover:text-primary-600",
               isSidebarOpen ? "left-[320px] border-l-0 xl:left-[360px]" : "left-0",
             )}
-            title={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+            title={isSidebarOpen ? "收起侧边栏" : "展开侧边栏"}
           >
             {isSidebarOpen ? (
               <ChevronLeft className="h-4 w-4" />

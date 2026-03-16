@@ -1,6 +1,7 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type UserRecord = {
@@ -23,14 +24,14 @@ type UserManagementPanelProps = {
 
 const MIN_PASSWORD_LENGTH = 6;
 
-function formatTimestamp(ts: number): string {
+function formatTimestamp(ts: number) {
   if (!Number.isFinite(ts) || ts <= 0) {
-    return "-";
+    return "--";
   }
   return new Date(ts * 1000).toLocaleString("zh-CN", { hour12: false });
 }
 
-function parseError(payload: unknown, fallback: string): string {
+function parseError(payload: unknown, fallback: string) {
   if (payload && typeof payload === "object" && "detail" in payload) {
     const detail = String((payload as Record<string, unknown>).detail ?? "").trim();
     if (detail) {
@@ -78,6 +79,7 @@ export default function UserManagementPanel({
       const currentUser = (mePayload.user ?? null) as UserRecord | null;
       setMe(currentUser);
       if (!currentUser?.is_admin) {
+        setUsers([]);
         return;
       }
 
@@ -88,9 +90,7 @@ export default function UserManagementPanel({
         return;
       }
 
-      const rows = Array.isArray(usersPayload?.users)
-        ? (usersPayload.users as UserRecord[])
-        : [];
+      const rows = Array.isArray(usersPayload?.users) ? (usersPayload.users as UserRecord[]) : [];
       setUsers(rows);
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : "用户数据加载失败");
@@ -183,23 +183,27 @@ export default function UserManagementPanel({
   };
 
   const resetUserPassword = async (username: string) => {
-    const newPasswordInput = window.prompt(`请为 ${username} 设置新密码：`, "");
-    if (newPasswordInput === null) {
+    const nextPassword = window.prompt(`请为 ${username} 设置新密码：`, "");
+    if (nextPassword === null) {
       return;
     }
-    if (!newPasswordInput) {
+    if (!nextPassword) {
       setError("密码不能为空");
       return;
     }
-    if (newPasswordInput.length < MIN_PASSWORD_LENGTH) {
+    if (nextPassword.length < MIN_PASSWORD_LENGTH) {
       setError(`密码长度不能少于 ${MIN_PASSWORD_LENGTH} 位`);
       return;
     }
 
-    await updateUser(username, { password: newPasswordInput }, `${username} 密码已重置`);
+    await updateUser(username, { password: nextPassword }, `${username} 的密码已重置`);
   };
 
   const removeUser = async (username: string) => {
+    if (!window.confirm(`确定要删除用户 ${username} 吗？`)) {
+      return;
+    }
+
     setBusyUsername(username);
     setError("");
     setMessage("");
@@ -239,9 +243,7 @@ export default function UserManagementPanel({
     return (
       <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
         <h2 className="text-xl font-semibold text-slate-900">无访问权限</h2>
-        <p className="mt-2 text-sm text-slate-600">
-          当前账号不是管理员，无法访问用户管理功能。
-        </p>
+        <p className="mt-2 text-sm text-slate-600">当前账号不是管理员，无法访问用户管理功能。</p>
       </div>
     );
   }
@@ -267,7 +269,7 @@ export default function UserManagementPanel({
       <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <h3 className="text-lg font-medium text-slate-900">添加用户</h3>
-          <p className="mt-1 text-sm text-slate-500">创建系统账号，并按需赋予管理员权限。</p>
+          <p className="mt-1 text-sm text-slate-500">创建系统账号，并按需授予管理员权限。</p>
           <form className="mt-4 space-y-3" onSubmit={createUser}>
             <input
               value={newUsername}
@@ -341,42 +343,22 @@ export default function UserManagementPanel({
                       <tr key={item.username}>
                         <td className="px-4 py-3 text-slate-800">{item.username}</td>
                         <td className="px-4 py-3">
-                          {item.is_admin ? (
-                            <span className="rounded-full bg-indigo-100 px-2 py-1 text-xs text-indigo-700">
-                              admin
-                            </span>
-                          ) : (
-                            <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700">
-                              user
-                            </span>
-                          )}
+                          <span className={`rounded-full px-2 py-1 text-xs ${item.is_admin ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-700"}`}>
+                            {item.is_admin ? "admin" : "user"}
+                          </span>
                         </td>
                         <td className="px-4 py-3">
-                          {item.is_active ? (
-                            <span className="rounded-full bg-green-100 px-2 py-1 text-xs text-green-700">
-                              已启用
-                            </span>
-                          ) : (
-                            <span className="rounded-full bg-amber-100 px-2 py-1 text-xs text-amber-700">
-                              已禁用
-                            </span>
-                          )}
+                          <span className={`rounded-full px-2 py-1 text-xs ${item.is_active ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
+                            {item.is_active ? "已启用" : "已禁用"}
+                          </span>
                         </td>
-                        <td className="px-4 py-3 text-slate-600">
-                          {formatTimestamp(item.created_at)}
-                        </td>
+                        <td className="px-4 py-3 text-slate-600">{formatTimestamp(item.created_at)}</td>
                         <td className="px-4 py-3">
                           <div className="flex flex-wrap gap-2">
                             <button
                               type="button"
                               disabled={isBusy}
-                              onClick={() =>
-                                updateUser(
-                                  item.username,
-                                  { is_admin: !item.is_admin },
-                                  `${item.username} 角色已更新`,
-                                )
-                              }
+                              onClick={() => updateUser(item.username, { is_admin: !item.is_admin }, `${item.username} 的角色已更新`)}
                               className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-60"
                             >
                               {item.is_admin ? "取消管理员" : "设为管理员"}
@@ -384,13 +366,7 @@ export default function UserManagementPanel({
                             <button
                               type="button"
                               disabled={isBusy}
-                              onClick={() =>
-                                updateUser(
-                                  item.username,
-                                  { is_active: !item.is_active },
-                                  `${item.username} 状态已更新`,
-                                )
-                              }
+                              onClick={() => updateUser(item.username, { is_active: !item.is_active }, `${item.username} 的状态已更新`)}
                               className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-60"
                             >
                               {item.is_active ? "禁用" : "启用"}

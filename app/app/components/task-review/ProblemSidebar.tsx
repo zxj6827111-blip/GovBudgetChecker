@@ -1,102 +1,154 @@
 import { Search, Filter, AlertCircle, CheckCircle2 } from "lucide-react";
-import { Problem } from "@/lib/mock";
+
+import type { Problem } from "@/lib/mock";
 import { cn } from "@/lib/utils";
 
 interface ProblemSidebarProps {
   problems: Problem[];
   selectedId: string;
   onSelect: (id: string) => void;
+  searchValue: string;
+  onSearchChange: (value: string) => void;
+  categories: string[];
+  activeCategory: string;
+  onCategoryChange: (category: string) => void;
+  highRiskOnly: boolean;
+  onToggleHighRiskOnly: () => void;
 }
 
-export default function ProblemSidebar({ problems, selectedId, onSelect }: ProblemSidebarProps) {
-  const categories = ["全部", "基础信息合规", "表格完整性", "表内逻辑关系", "文数一致性", "AI 智能分析"];
-
+export default function ProblemSidebar({
+  problems,
+  selectedId,
+  onSelect,
+  searchValue,
+  onSearchChange,
+  categories,
+  activeCategory,
+  onCategoryChange,
+  highRiskOnly,
+  onToggleHighRiskOnly,
+}: ProblemSidebarProps) {
   return (
-    <div className="w-96 border-r border-border bg-white flex flex-col shrink-0 h-full">
-      <div className="p-4 border-b border-border space-y-4 shrink-0">
+    <div className="flex h-full w-96 shrink-0 flex-col border-r border-border bg-white">
+      <div className="shrink-0 space-y-4 border-b border-border p-4">
         <div className="relative">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input 
-            type="text" 
-            placeholder="搜索问题、规则编号..." 
-            className="w-full bg-slate-50 border border-border rounded-lg pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition-all"
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            value={searchValue}
+            onChange={(event) => onSearchChange(event.target.value)}
+            placeholder="搜索问题、规则编号..."
+            className="w-full rounded-lg border border-border bg-slate-50 py-2 pl-9 pr-4 text-sm outline-none transition-all focus:border-primary-500 focus:ring-2 focus:ring-primary-500"
           />
         </div>
-        
+
         <div className="flex items-center justify-between">
-          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-            {categories.map((cat, i) => (
-              <button 
-                key={cat}
+          <div className="scrollbar-hide flex gap-2 overflow-x-auto pb-1">
+            {categories.map((category) => (
+              <button
+                key={category}
+                type="button"
+                onClick={() => onCategoryChange(category)}
                 className={cn(
-                  "px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-colors",
-                  i === 0 ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  "whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                  activeCategory === category
+                    ? "bg-slate-900 text-white"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                 )}
               >
-                {cat}
+                {category}
               </button>
             ))}
           </div>
-          <button className="p-1.5 text-slate-400 hover:text-primary-600 bg-slate-50 rounded-md shrink-0 ml-2">
-            <Filter className="w-4 h-4" />
+          <button
+            type="button"
+            onClick={onToggleHighRiskOnly}
+            title={highRiskOnly ? "取消仅看高风险" : "仅看高风险"}
+            className={cn(
+              "ml-2 shrink-0 rounded-md p-1.5 transition-colors",
+              highRiskOnly
+                ? "bg-danger-50 text-danger-600 ring-1 ring-danger-200"
+                : "bg-slate-50 text-slate-400 hover:text-primary-600"
+            )}
+          >
+            <Filter className="h-4 w-4" />
           </button>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-slate-50/50">
-        {problems.map(prob => (
-          <div 
-            key={prob.id}
-            onClick={() => onSelect(prob.id)}
-            className={cn(
-              "p-4 rounded-xl border cursor-pointer transition-all relative overflow-hidden group",
-              selectedId === prob.id 
-                ? "bg-primary-50/30 border-primary-500 shadow-sm ring-1 ring-primary-500" 
-                : "bg-white border-border hover:border-slate-300 hover:shadow-sm"
-            )}
-          >
-            {/* 严重度左侧指示条 */}
-            <div className={cn(
-              "absolute left-0 top-0 bottom-0 w-1",
-              prob.severity === 'high' ? "bg-danger-500" : 
-              prob.severity === 'warning' ? "bg-warning-500" : "bg-slate-300"
-            )} />
-
-            <div className="flex justify-between items-start mb-2 pl-2">
-              <div className="flex items-center gap-2">
-                {/* 规则来源标识：AI 还是 本地规则 */}
-                <span className={cn(
-                  "px-2 py-0.5 rounded text-xs font-bold",
-                  prob.category === 'AI 智能分析' ? "bg-blue-50 text-blue-600" : "bg-purple-50 text-purple-600"
-                )}>
-                  {prob.category === 'AI 智能分析' ? 'AI 审查' : '本地规则'}
-                </span>
-                <span className="text-xs font-mono text-slate-500">{prob.ruleId}</span>
-              </div>
-              <span className="text-xs font-medium text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">第 {prob.page} 页</span>
-            </div>
-            
-            <h3 className={cn(
-              "text-sm font-semibold leading-snug pl-2 mb-2 line-clamp-2",
-              selectedId === prob.id ? "text-primary-900" : "text-slate-900"
-            )}>
-              {prob.title}
-            </h3>
-
-            <div className="flex items-center justify-between pl-2 mt-3">
-              <span className="text-xs text-slate-500">{prob.category}</span>
-              {prob.status === 'resolved' ? (
-                <span className="text-xs font-medium text-success-600 flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3" /> 已复核
-                </span>
-              ) : (
-                <span className="text-xs font-medium text-warning-600 flex items-center gap-1">
-                  <AlertCircle className="w-3 h-3" /> 待处理
-                </span>
-              )}
-            </div>
+      <div className="flex-1 space-y-2 overflow-y-auto bg-slate-50/50 p-3">
+        {problems.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border bg-white px-4 py-8 text-center text-sm text-slate-500">
+            当前筛选条件下没有问题
           </div>
-        ))}
+        ) : (
+          problems.map((problem) => (
+            <div
+              key={problem.id}
+              onClick={() => onSelect(problem.id)}
+              className={cn(
+                "group relative cursor-pointer overflow-hidden rounded-xl border p-4 transition-all",
+                selectedId === problem.id
+                  ? "border-primary-500 bg-primary-50/30 shadow-sm ring-1 ring-primary-500"
+                  : "border-border bg-white hover:border-slate-300 hover:shadow-sm"
+              )}
+            >
+              <div
+                className={cn(
+                  "absolute inset-y-0 left-0 w-1",
+                  problem.severity === "high"
+                    ? "bg-danger-500"
+                    : problem.severity === "warning"
+                      ? "bg-warning-500"
+                      : "bg-slate-300"
+                )}
+              />
+
+              <div className="mb-2 flex items-start justify-between pl-2">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={cn(
+                      "rounded px-2 py-0.5 text-xs font-bold",
+                      problem.category === "AI 智能分析"
+                        ? "bg-blue-50 text-blue-600"
+                        : "bg-purple-50 text-purple-600"
+                    )}
+                  >
+                    {problem.category === "AI 智能分析" ? "AI 审查" : "本地规则"}
+                  </span>
+                  <span className="font-mono text-xs text-slate-500">{problem.ruleId}</span>
+                </div>
+                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-400">
+                  第 {problem.page} 页
+                </span>
+              </div>
+
+              <h3
+                className={cn(
+                  "mb-2 line-clamp-2 pl-2 text-sm font-semibold leading-snug",
+                  selectedId === problem.id ? "text-primary-900" : "text-slate-900"
+                )}
+              >
+                {problem.title}
+              </h3>
+
+              <div className="mt-3 flex items-center justify-between pl-2">
+                <span className="text-xs text-slate-500">{problem.category}</span>
+                {problem.status === "resolved" ? (
+                  <span className="flex items-center gap-1 text-xs font-medium text-success-600">
+                    <CheckCircle2 className="h-3 w-3" />
+                    已复核
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-xs font-medium text-warning-600">
+                    <AlertCircle className="h-3 w-3" />
+                    待处理
+                  </span>
+                )}
+              </div>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );

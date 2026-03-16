@@ -250,7 +250,30 @@ async def update_organization(org_id: str, request: Request):
         raise HTTPException(status_code=400, detail="name is required")
         
     storage = runtime.require_org_storage()
-    updated = storage.update(org_id, {"name": name})
+    existing = storage.get_by_id(org_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="organization not found")
+
+    previous_name = str(getattr(existing, "name", "") or "").strip()
+    raw_keywords = list(getattr(existing, "keywords", []) or [])
+    keywords: list[str] = []
+    seen_keywords = set()
+
+    for keyword in raw_keywords:
+        normalized = str(keyword or "").strip()
+        if not normalized:
+            continue
+        if previous_name and normalized == previous_name:
+            normalized = name
+        if normalized in seen_keywords:
+            continue
+        seen_keywords.add(normalized)
+        keywords.append(normalized)
+
+    if name not in seen_keywords:
+        keywords.append(name)
+
+    updated = storage.update(org_id, {"name": name, "keywords": keywords})
     if not updated:
         raise HTTPException(status_code=404, detail="organization not found")
     _clear_department_stats_cache()

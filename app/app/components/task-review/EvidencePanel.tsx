@@ -7,9 +7,16 @@ import { buildProblemPdfPageUrl } from "./problemPreview";
 interface EvidencePanelProps {
   problem: Problem;
   onOpenViewer: () => void;
+  onIgnore?: () => void;
+  isIgnoring?: boolean;
 }
 
-export default function EvidencePanel({ problem, onOpenViewer }: EvidencePanelProps) {
+export default function EvidencePanel({
+  problem,
+  onOpenViewer,
+  onIgnore,
+  isIgnoring = false,
+}: EvidencePanelProps) {
   const sourcePdfUrl = buildProblemPdfPageUrl(problem.jobId, problem.page);
 
   return (
@@ -22,7 +29,7 @@ export default function EvidencePanel({ problem, onOpenViewer }: EvidencePanelPr
                 "rounded-full border px-3 py-1 text-xs font-medium",
                 problem.category === "AI 智能分析"
                   ? "border-blue-100 bg-blue-50 text-blue-600"
-                  : "border-purple-100 bg-purple-50 text-purple-600",
+                  : "border-purple-100 bg-purple-50 text-purple-600"
               )}
             >
               {problem.category === "AI 智能分析" ? "AI 审查" : "本地规则"}
@@ -34,7 +41,7 @@ export default function EvidencePanel({ problem, onOpenViewer }: EvidencePanelPr
                   ? "border-danger-100 bg-danger-50 text-danger-700"
                   : problem.severity === "warning"
                     ? "border-warning-100 bg-warning-50 text-warning-700"
-                    : "border-slate-200 bg-slate-100 text-slate-700",
+                    : "border-slate-200 bg-slate-100 text-slate-700"
               )}
             >
               {problem.severity === "high"
@@ -51,9 +58,16 @@ export default function EvidencePanel({ problem, onOpenViewer }: EvidencePanelPr
             </span>
           </div>
 
-          <button className="rounded-lg border border-danger-100 bg-danger-50 px-4 py-1.5 text-sm font-medium text-danger-600 transition-colors hover:bg-danger-100">
-            忽略此问题
-          </button>
+          {onIgnore ? (
+            <button
+              type="button"
+              onClick={onIgnore}
+              disabled={isIgnoring}
+              className="rounded-lg border border-danger-100 bg-danger-50 px-4 py-1.5 text-sm font-medium text-danger-600 transition-colors hover:bg-danger-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isIgnoring ? "忽略中..." : "忽略此问题"}
+            </button>
+          ) : null}
         </div>
 
         <div>
@@ -89,7 +103,7 @@ export default function EvidencePanel({ problem, onOpenViewer }: EvidencePanelPr
               >
                 查看大图
               </button>
-              {sourcePdfUrl && (
+              {sourcePdfUrl ? (
                 <a
                   href={sourcePdfUrl}
                   target="_blank"
@@ -98,7 +112,7 @@ export default function EvidencePanel({ problem, onOpenViewer }: EvidencePanelPr
                 >
                   打开原页
                 </a>
-              )}
+              ) : null}
             </div>
           </div>
 

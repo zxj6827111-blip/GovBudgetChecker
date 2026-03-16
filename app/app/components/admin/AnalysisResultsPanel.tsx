@@ -28,8 +28,6 @@ type AnalysisJobSummary = {
   error_message?: string;
   organization_name?: string;
   report_year?: number | string | null;
-  doc_type?: string;
-  report_kind?: string;
   ai_findings_count: number;
   rule_findings_count: number;
   merged_findings_count: number;
@@ -42,9 +40,6 @@ type AnalysisJobSummary = {
 type AnalysisJobListResponse = {
   available?: boolean;
   detail?: string;
-  total?: number;
-  limit?: number;
-  offset?: number;
   summary?: {
     total?: number;
     done?: number;
@@ -80,19 +75,9 @@ type FindingItem = {
 };
 
 type AnalysisJobDetail = AnalysisJobSummary & {
-  available?: boolean;
   detail?: string;
   ai_findings?: FindingItem[];
   rule_findings?: FindingItem[];
-  merged_result?: {
-    totals?: {
-      ai?: number;
-      rule?: number;
-      merged?: number;
-      conflicts?: number;
-      agreements?: number;
-    };
-  };
   structured_ingest?: {
     status?: string;
     document_version_id?: number | null;
@@ -106,17 +91,14 @@ type AnalysisJobDetail = AnalysisJobSummary & {
   };
   result_meta?: {
     elapsed_ms?: {
-      ai?: number;
-      rule?: number;
-      merge?: number;
       total?: number;
     };
   };
 };
 
-function formatDate(value?: string | null): string {
+function formatDate(value?: string | null) {
   if (!value) {
-    return "-";
+    return "--";
   }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -125,9 +107,9 @@ function formatDate(value?: string | null): string {
   return date.toLocaleString("zh-CN", { hour12: false });
 }
 
-function formatDuration(ms?: number | null): string {
+function formatDuration(ms?: number | null) {
   if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) {
-    return "-";
+    return "--";
   }
   if (ms < 1000) {
     return `${ms} ms`;
@@ -138,20 +120,12 @@ function formatDuration(ms?: number | null): string {
   return `${(ms / 60_000).toFixed(1)} min`;
 }
 
-function getJobTitle(job?: Pick<AnalysisJobSummary, "display_title" | "organization_name" | "filename" | "job_uuid"> | null): string {
-  if (!job) {
-    return "";
-  }
-  return job.display_title || job.organization_name || job.filename || job.job_uuid;
+function getJobTitle(job?: Pick<AnalysisJobSummary, "display_title" | "organization_name" | "filename" | "job_uuid"> | null) {
+  return job?.display_title || job?.organization_name || job?.filename || job?.job_uuid || "";
 }
 
-function getJobSubtitle(
-  job?: Pick<AnalysisJobSummary, "display_subtitle" | "organization_name" | "filename" | "job_uuid"> | null,
-): string {
-  if (!job) {
-    return "";
-  }
-  return job.display_subtitle || job.organization_name || job.filename || job.job_uuid;
+function getJobSubtitle(job?: Pick<AnalysisJobSummary, "display_subtitle" | "organization_name" | "filename" | "job_uuid"> | null) {
+  return job?.display_subtitle || job?.organization_name || job?.filename || job?.job_uuid || "";
 }
 
 function statusMeta(status?: string) {
@@ -176,41 +150,37 @@ function severityMeta(severity?: string) {
   switch ((severity || "").toLowerCase()) {
     case "critical":
     case "high":
-      return { label: severity || "high", className: "bg-red-100 text-red-700" };
+      return { label: "高", className: "bg-red-100 text-red-700" };
     case "medium":
-      return { label: "medium", className: "bg-amber-100 text-amber-700" };
+      return { label: "中", className: "bg-amber-100 text-amber-700" };
     case "low":
     case "info":
-      return { label: severity || "info", className: "bg-blue-100 text-blue-700" };
+      return { label: "低", className: "bg-blue-100 text-blue-700" };
     default:
-      return { label: severity || "unknown", className: "bg-slate-100 text-slate-700" };
+      return { label: severity || "未知", className: "bg-slate-100 text-slate-700" };
   }
 }
 
-function buildLocationText(item: FindingItem): string {
-  const location = item.location;
-  const page = item.page_number || location?.page || item.evidence?.[0]?.page;
-  const table = location?.table;
-  const section = location?.section;
-  const row = location?.row;
-  const parts = [];
+function buildLocationText(item: FindingItem) {
+  const page = item.page_number || item.location?.page || item.evidence?.[0]?.page;
+  const parts: string[] = [];
   if (page) {
     parts.push(`第 ${page} 页`);
   }
-  if (table) {
-    parts.push(`表 ${table}`);
+  if (item.location?.table) {
+    parts.push(`表：${item.location.table}`);
   }
-  if (section) {
-    parts.push(`章节 ${section}`);
+  if (item.location?.section) {
+    parts.push(`章节：${item.location.section}`);
   }
-  if (row) {
-    parts.push(`行 ${row}`);
+  if (item.location?.row) {
+    parts.push(`行：${item.location.row}`);
   }
-  return parts.join(" / ") || "未记录定位";
+  return parts.join(" / ") || "未记录定位信息";
 }
 
-function extractSnippet(item: FindingItem): string {
-  if (typeof item.message === "string" && item.message.trim()) {
+function extractSnippet(item: FindingItem) {
+  if (item.message?.trim()) {
     return item.message.trim();
   }
   const evidence = item.evidence?.find((entry) => entry?.text_snippet || entry?.text);
@@ -248,7 +218,6 @@ function FindingColumn({
           items.map((item, index) => {
             const meta = severityMeta(item.severity);
             const snippet = extractSnippet(item);
-
             return (
               <article
                 key={item.id || `${title}-${index}`}
@@ -268,7 +237,7 @@ function FindingColumn({
                   {item.title || item.id || "未命名问题"}
                 </h4>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
-                  {snippet || "未返回问题说明"}
+                  {snippet || "没有返回问题说明。"}
                 </p>
                 <div className="mt-3 text-xs text-slate-500">{buildLocationText(item)}</div>
                 {item.suggestion ? (
@@ -322,7 +291,7 @@ export default function AnalysisResultsPanel() {
         const response = await fetch(`/api/admin/analysis-results?${params.toString()}`, {
           cache: "no-store",
         });
-        const payload = (await response.json()) as AnalysisJobListResponse & { detail?: string };
+        const payload = (await response.json()) as AnalysisJobListResponse;
         if (!response.ok) {
           throw new Error(payload.detail || "无法加载分析结果列表");
         }
@@ -332,7 +301,6 @@ export default function AnalysisResultsPanel() {
         }
 
         const nextJobs = Array.isArray(payload.items) ? payload.items : [];
-        setError("");
         setJobs(nextJobs);
         setListSummary(payload.summary ?? null);
         setSelectedJobUuid((current) => {
@@ -342,7 +310,7 @@ export default function AnalysisResultsPanel() {
           return nextJobs[0]?.job_uuid || "";
         });
         if (payload.available === false) {
-          setError(payload.detail || "数据库未就绪，暂时无法读取分析结果。");
+          setError(payload.detail || "数据库尚未就绪，暂时无法读取分析结果。");
         }
       } catch (fetchError) {
         if (!cancelled) {
@@ -379,12 +347,11 @@ export default function AnalysisResultsPanel() {
         const response = await fetch(`/api/admin/analysis-results/${encodeURIComponent(selectedJobUuid)}`, {
           cache: "no-store",
         });
-        const payload = (await response.json()) as AnalysisJobDetail & { detail?: string };
+        const payload = (await response.json()) as AnalysisJobDetail;
         if (!response.ok) {
           throw new Error(payload.detail || "无法加载分析结果详情");
         }
         if (!cancelled) {
-          setError("");
           setDetail(payload);
         }
       } catch (fetchError) {
@@ -422,7 +389,7 @@ export default function AnalysisResultsPanel() {
           <div>
             <h2 className="text-xl font-semibold text-slate-900">分析结果中心</h2>
             <p className="mt-1 text-sm text-slate-600">
-              查看数据库中的 <code>analysis_jobs</code> 与 <code>analysis_results</code>，按任务追踪 AI 和规则审校结果。
+              查看数据库中的分析任务、AI 结果、规则结果与结构化入库信息。
             </p>
           </div>
           <form onSubmit={handleSearchSubmit} className="flex flex-col gap-3 md:flex-row">
@@ -431,7 +398,7 @@ export default function AnalysisResultsPanel() {
               <input
                 value={searchDraft}
                 onChange={(event) => setSearchDraft(event.target.value)}
-                placeholder="搜索任务 ID、文件名、单位名"
+                placeholder="搜索任务 ID、文件名或单位名"
                 className="w-full rounded-xl border border-slate-300 py-2 pl-9 pr-3 text-sm outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
               />
             </div>
@@ -457,7 +424,7 @@ export default function AnalysisResultsPanel() {
             </select>
             <button
               type="submit"
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
             >
               <Search className="h-4 w-4" />
               查询
@@ -474,32 +441,12 @@ export default function AnalysisResultsPanel() {
       ) : null}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="text-xs text-slate-500">任务总数</div>
-          <div className="mt-2 text-2xl font-semibold text-slate-900">{listSummary?.total ?? jobs.length}</div>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="text-xs text-slate-500">已完成</div>
-          <div className="mt-2 text-2xl font-semibold text-emerald-600">{listSummary?.done ?? 0}</div>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="text-xs text-slate-500">处理中/排队</div>
-          <div className="mt-2 text-2xl font-semibold text-blue-600">
-            {(listSummary?.processing ?? 0) + (listSummary?.queued ?? 0)}
-          </div>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="text-xs text-slate-500">失败任务</div>
-          <div className="mt-2 text-2xl font-semibold text-rose-600">{listSummary?.error ?? 0}</div>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="text-xs text-slate-500">AI Findings</div>
-          <div className="mt-2 text-2xl font-semibold text-slate-900">{listSummary?.ai_findings_total ?? 0}</div>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="text-xs text-slate-500">Rule Findings</div>
-          <div className="mt-2 text-2xl font-semibold text-slate-900">{listSummary?.rule_findings_total ?? 0}</div>
-        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">任务总数</div><div className="mt-2 text-2xl font-semibold text-slate-900">{listSummary?.total ?? jobs.length}</div></div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">已完成</div><div className="mt-2 text-2xl font-semibold text-emerald-600">{listSummary?.done ?? 0}</div></div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">处理中</div><div className="mt-2 text-2xl font-semibold text-blue-600">{(listSummary?.processing ?? 0) + (listSummary?.queued ?? 0)}</div></div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">失败任务</div><div className="mt-2 text-2xl font-semibold text-rose-600">{listSummary?.error ?? 0}</div></div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">AI Findings</div><div className="mt-2 text-2xl font-semibold text-slate-900">{listSummary?.ai_findings_total ?? 0}</div></div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">Rule Findings</div><div className="mt-2 text-2xl font-semibold text-slate-900">{listSummary?.rule_findings_total ?? 0}</div></div>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
@@ -507,7 +454,7 @@ export default function AnalysisResultsPanel() {
           <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
             <div>
               <h3 className="text-base font-semibold text-slate-900">任务列表</h3>
-              <p className="text-sm text-slate-500">按最近更新排序</p>
+              <p className="text-sm text-slate-500">按最近更新时间排序</p>
             </div>
             <button
               type="button"
@@ -530,8 +477,8 @@ export default function AnalysisResultsPanel() {
               </div>
             ) : (
               jobs.map((item) => {
-                const itemStatus = statusMeta(item.status);
                 const isSelected = item.job_uuid === selectedJobUuid;
+                const itemStatus = statusMeta(item.status);
                 return (
                   <button
                     key={item.job_uuid}
@@ -546,52 +493,21 @@ export default function AnalysisResultsPanel() {
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold">
-                          {getJobTitle(item)}
-                        </div>
-                        <div
-                          className={cn(
-                            "mt-1 truncate text-xs",
-                            isSelected ? "text-slate-300" : "text-slate-500",
-                          )}
-                        >
+                        <div className="truncate text-sm font-semibold">{getJobTitle(item)}</div>
+                        <div className={cn("mt-1 truncate text-xs", isSelected ? "text-slate-300" : "text-slate-500")}>
                           {getJobSubtitle(item)}
                         </div>
                       </div>
-                      <span
-                        className={cn(
-                          "rounded-full px-2 py-1 text-[11px] font-medium",
-                          isSelected ? "bg-white/15 text-white" : itemStatus.className,
-                        )}
-                      >
+                      <span className={cn("rounded-full px-2 py-1 text-[11px] font-medium", isSelected ? "bg-white/15 text-white" : itemStatus.className)}>
                         {itemStatus.label}
                       </span>
                     </div>
-                    <div
-                      className={cn(
-                        "mt-4 grid grid-cols-3 gap-2 text-center text-xs",
-                        isSelected ? "text-slate-200" : "text-slate-600",
-                      )}
-                    >
-                      <div className="rounded-xl bg-black/5 px-2 py-2">
-                        <div className="font-semibold">{item.ai_findings_count}</div>
-                        <div className="mt-1 text-[11px] opacity-80">AI</div>
-                      </div>
-                      <div className="rounded-xl bg-black/5 px-2 py-2">
-                        <div className="font-semibold">{item.rule_findings_count}</div>
-                        <div className="mt-1 text-[11px] opacity-80">Rule</div>
-                      </div>
-                      <div className="rounded-xl bg-black/5 px-2 py-2">
-                        <div className="font-semibold">{item.merged_findings_count}</div>
-                        <div className="mt-1 text-[11px] opacity-80">Merged</div>
-                      </div>
+                    <div className={cn("mt-4 grid grid-cols-3 gap-2 text-center text-xs", isSelected ? "text-slate-200" : "text-slate-600")}>
+                      <div className="rounded-xl bg-black/5 px-2 py-2"><div className="font-semibold">{item.ai_findings_count}</div><div className="mt-1 text-[11px] opacity-80">AI</div></div>
+                      <div className="rounded-xl bg-black/5 px-2 py-2"><div className="font-semibold">{item.rule_findings_count}</div><div className="mt-1 text-[11px] opacity-80">Rule</div></div>
+                      <div className="rounded-xl bg-black/5 px-2 py-2"><div className="font-semibold">{item.merged_findings_count}</div><div className="mt-1 text-[11px] opacity-80">Merged</div></div>
                     </div>
-                    <div
-                      className={cn(
-                        "mt-3 text-xs",
-                        isSelected ? "text-slate-300" : "text-slate-500",
-                      )}
-                    >
+                    <div className={cn("mt-3 text-xs", isSelected ? "text-slate-300" : "text-slate-500")}>
                       更新时间：{formatDate(item.completed_at || item.updated_at || item.created_at)}
                     </div>
                   </button>
@@ -606,9 +522,7 @@ export default function AnalysisResultsPanel() {
             <div className="flex min-h-[24rem] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white px-6 text-center text-slate-500 shadow-sm">
               <Database className="mb-4 h-10 w-10 text-slate-300" />
               <h3 className="text-lg font-medium text-slate-700">请选择一条分析任务</h3>
-              <p className="mt-2 max-w-md text-sm">
-                左侧会展示已入库的分析任务，点击后即可查看该任务的 AI findings、规则 findings 和结构化入库信息。
-              </p>
+              <p className="mt-2 max-w-md text-sm">左侧列表会展示已入库的分析任务，点击后即可查看 AI、规则和结构化结果。</p>
             </div>
           ) : loadingDetail ? (
             <div className="flex min-h-[24rem] items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white text-slate-500 shadow-sm">
@@ -621,9 +535,7 @@ export default function AnalysisResultsPanel() {
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-xl font-semibold text-slate-900">
-                        {getJobTitle(detail)}
-                      </h3>
+                      <h3 className="text-xl font-semibold text-slate-900">{getJobTitle(detail)}</h3>
                       <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", status.className)}>
                         {status.label}
                       </span>
@@ -634,8 +546,8 @@ export default function AnalysisResultsPanel() {
                     <p className="mt-2 text-sm text-slate-500">{getJobSubtitle(detail)}</p>
                     <p className="mt-2 break-all font-mono text-xs text-slate-400">{detail.job_uuid}</p>
                     <div className="mt-3 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
-                      <div>单位：{detail.organization_name || "-"}</div>
-                      <div>年度：{detail.report_year || "-"}</div>
+                      <div>单位：{detail.organization_name || "--"}</div>
+                      <div>年度：{detail.report_year || "--"}</div>
                       <div>开始时间：{formatDate(detail.started_at || detail.created_at)}</div>
                       <div>完成时间：{formatDate(detail.completed_at || detail.updated_at)}</div>
                     </div>
@@ -645,55 +557,20 @@ export default function AnalysisResultsPanel() {
                       </div>
                     ) : null}
                   </div>
-
                   <div className="grid min-w-[280px] grid-cols-2 gap-3">
-                    <div className="rounded-2xl bg-slate-50 px-4 py-3">
-                      <div className="text-xs text-slate-500">AI Findings</div>
-                      <div className="mt-2 text-xl font-semibold text-slate-900">{detail.ai_findings_count}</div>
-                    </div>
-                    <div className="rounded-2xl bg-slate-50 px-4 py-3">
-                      <div className="text-xs text-slate-500">Rule Findings</div>
-                      <div className="mt-2 text-xl font-semibold text-slate-900">{detail.rule_findings_count}</div>
-                    </div>
-                    <div className="rounded-2xl bg-slate-50 px-4 py-3">
-                      <div className="text-xs text-slate-500">Merged</div>
-                      <div className="mt-2 text-xl font-semibold text-slate-900">{detail.merged_findings_count}</div>
-                    </div>
-                    <div className="rounded-2xl bg-slate-50 px-4 py-3">
-                      <div className="text-xs text-slate-500">总耗时</div>
-                      <div className="mt-2 text-xl font-semibold text-slate-900">
-                        {formatDuration(detail.result_meta?.elapsed_ms?.total || detail.elapsed_total_ms)}
-                      </div>
-                    </div>
+                    <div className="rounded-2xl bg-slate-50 px-4 py-3"><div className="text-xs text-slate-500">AI Findings</div><div className="mt-2 text-xl font-semibold text-slate-900">{detail.ai_findings_count}</div></div>
+                    <div className="rounded-2xl bg-slate-50 px-4 py-3"><div className="text-xs text-slate-500">Rule Findings</div><div className="mt-2 text-xl font-semibold text-slate-900">{detail.rule_findings_count}</div></div>
+                    <div className="rounded-2xl bg-slate-50 px-4 py-3"><div className="text-xs text-slate-500">Merged</div><div className="mt-2 text-xl font-semibold text-slate-900">{detail.merged_findings_count}</div></div>
+                    <div className="rounded-2xl bg-slate-50 px-4 py-3"><div className="text-xs text-slate-500">总耗时</div><div className="mt-2 text-xl font-semibold text-slate-900">{formatDuration(detail.result_meta?.elapsed_ms?.total || detail.elapsed_total_ms)}</div></div>
                   </div>
                 </div>
               </div>
 
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                  <div className="text-xs text-slate-500">结构化入库</div>
-                  <div className="mt-2 text-lg font-semibold text-slate-900">
-                    {detail.structured_ingest?.status || detail.structured_ingest_status || "-"}
-                  </div>
-                </div>
-                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                  <div className="text-xs text-slate-500">文档版本 ID</div>
-                  <div className="mt-2 text-lg font-semibold text-slate-900">
-                    {detail.structured_ingest?.document_version_id || detail.structured_document_version_id || "-"}
-                  </div>
-                </div>
-                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                  <div className="text-xs text-slate-500">PS Report ID</div>
-                  <div className="mt-2 break-all text-sm font-semibold text-slate-900">
-                    {detail.structured_ingest?.ps_sync?.report_id || detail.structured_report_id || "-"}
-                  </div>
-                </div>
-                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                  <div className="text-xs text-slate-500">结构化 Facts</div>
-                  <div className="mt-2 text-lg font-semibold text-slate-900">
-                    {detail.structured_ingest?.facts_count ?? "-"}
-                  </div>
-                </div>
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">结构化状态</div><div className="mt-2 text-lg font-semibold text-slate-900">{detail.structured_ingest?.status || detail.structured_ingest_status || "--"}</div></div>
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">文档版本 ID</div><div className="mt-2 text-lg font-semibold text-slate-900">{detail.structured_ingest?.document_version_id || detail.structured_document_version_id || "--"}</div></div>
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">PS Report ID</div><div className="mt-2 break-all text-sm font-semibold text-slate-900">{detail.structured_ingest?.ps_sync?.report_id || detail.structured_report_id || "--"}</div></div>
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">结构化 Facts</div><div className="mt-2 text-lg font-semibold text-slate-900">{detail.structured_ingest?.facts_count ?? "--"}</div></div>
               </div>
 
               <div className="grid gap-6 xl:grid-cols-2">
@@ -702,20 +579,20 @@ export default function AnalysisResultsPanel() {
                   icon={<Brain className="h-5 w-5 text-indigo-600" />}
                   accent="bg-indigo-50"
                   items={aiFindings}
-                  emptyText="当前任务没有落库的 AI findings。"
+                  emptyText="当前任务没有 AI Findings。"
                 />
                 <FindingColumn
                   title="Rule Findings"
                   icon={<ShieldCheck className="h-5 w-5 text-emerald-600" />}
                   accent="bg-emerald-50"
                   items={ruleFindings}
-                  emptyText="当前任务没有落库的规则 findings。"
+                  emptyText="当前任务没有 Rule Findings。"
                 />
               </div>
             </>
           ) : (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-16 text-center text-sm text-slate-500 shadow-sm">
-              当前任务暂无可展示的详情。
+              当前任务暂时没有可展示的详情。
             </div>
           )}
         </section>
