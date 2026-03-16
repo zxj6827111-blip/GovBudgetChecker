@@ -117,7 +117,7 @@ class Document:
     filesize: int
     page_texts: List[str]
     # 维度：页 -> 表 -> 行 -> 列
-    page_tables: List[List[List[List[str]]]]
+    page_tables: List[List[List[List[Any]]]]
     units_per_page: List[Optional[str]]
     years_per_page: List[List[int]]
     anchors: Dict[str, List[int]] = field(default_factory=dict)
@@ -136,7 +136,7 @@ def normalize_text(s: str) -> str:
     return re.sub(_ZH_PUNCS, "", s)
 
 
-def build_document(path: str, page_texts: List[str], page_tables: List[List[List[List[str]]]], filesize: int) -> Document:
+def build_document(path: str, page_texts: List[str], page_tables: List[List[List[List[Any]]]], filesize: int) -> Document:
     """创建Document对象"""
     # 初始化Document对象
     doc = Document(

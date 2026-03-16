@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -428,7 +429,7 @@ def test_budget_functional_classification_name_rule_detects_narrative_mismatch()
             "210 11 01 行政单位医疗",
         ]
     )
-    t5_table = [
+    t5_table: list[list[Any]] = [
         ["项目", None, None, None, "一般公共预算支出", None, None],
         ["功能分类科目编码", None, None, "功能分类科目名称", "合计", "基本支出", "项目支出"],
         ["类", "款", "项", None, None, None, None],
@@ -440,7 +441,11 @@ def test_budget_functional_classification_name_rule_detects_narrative_mismatch()
     doc = build_document(
         path="unit-2026-budget.pdf",
         page_texts=[explanation_text, "其他页面", t5_page_text],
-        page_tables=[[], [], [t5_table]],
+        page_tables=[
+            cast(list[list[Any]], []),
+            cast(list[list[Any]], []),
+            [t5_table],
+        ],
         filesize=30,
     )
 
@@ -480,7 +485,7 @@ def test_budget_functional_classification_name_rule_ignores_matching_names() -> 
             "210 11 01 行政单位医疗",
         ]
     )
-    t5_table = [
+    t5_table: list[list[Any]] = [
         ["项目", None, None, None, "一般公共预算支出", None, None],
         ["功能分类科目编码", None, None, "功能分类科目名称", "合计", "基本支出", "项目支出"],
         ["类", "款", "项", None, None, None, None],
@@ -492,7 +497,7 @@ def test_budget_functional_classification_name_rule_ignores_matching_names() -> 
     doc = build_document(
         path="unit-2026-budget.pdf",
         page_texts=[explanation_text, t5_page_text],
-        page_tables=[[], [t5_table]],
+        page_tables=[cast(list[list[Any]], []), [t5_table]],
         filesize=30,
     )
 

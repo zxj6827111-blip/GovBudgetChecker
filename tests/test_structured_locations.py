@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 from src.engine.budget_rules import BUD105_CrossTableChecks
 from src.engine.rules_v33 import (
     R33225_Narrative1_T1,
@@ -129,7 +131,7 @@ def test_final_functional_name_rule_detects_mismatch_without_codes() -> None:
             "210 11 01 行政单位医疗",
         ]
     )
-    t5_table = [
+    t5_table: list[list[Any]] = [
         ["项目", None, None, None, "决算数"],
         ["功能分类科目编码", None, None, "功能分类科目名称", "决算数"],
         ["类", "款", "项", None, None],
@@ -141,7 +143,7 @@ def test_final_functional_name_rule_detects_mismatch_without_codes() -> None:
     doc = build_document(
         path="final.pdf",
         page_texts=[explanation_text, t5_page_text],
-        page_tables=[[], [t5_table]],
+        page_tables=[cast(list[list[Any]], []), [t5_table]],
         filesize=256,
     )
 
@@ -184,7 +186,7 @@ def test_final_functional_name_rule_ignores_matching_names_without_codes() -> No
             "210 11 01 行政单位医疗",
         ]
     )
-    t5_table = [
+    t5_table: list[list[Any]] = [
         ["项目", None, None, None, "决算数"],
         ["功能分类科目编码", None, None, "功能分类科目名称", "决算数"],
         ["类", "款", "项", None, None],
@@ -196,7 +198,7 @@ def test_final_functional_name_rule_ignores_matching_names_without_codes() -> No
     doc = build_document(
         path="final.pdf",
         page_texts=[explanation_text, t5_page_text],
-        page_tables=[[], [t5_table]],
+        page_tables=[cast(list[list[Any]], []), [t5_table]],
         filesize=256,
     )
 
