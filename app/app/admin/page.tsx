@@ -3,7 +3,7 @@
 import type { Route } from "next";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -176,7 +176,7 @@ async function readErrorMessage(response: Response) {
   }
 }
 
-export default function AdminPage() {
+function AdminPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const requestedTab = searchParams.get("tab");
@@ -655,5 +655,21 @@ export default function AdminPage() {
         onConfirm={() => void confirmCleanup()}
       />
     </>
+  );
+}
+
+export default function AdminPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-slate-50 px-6">
+          <div className="rounded-2xl border border-slate-200 bg-white px-6 py-5 text-sm text-slate-600 shadow-sm">
+            正在加载系统管理页面...
+          </div>
+        </div>
+      }
+    >
+      <AdminPageContent />
+    </Suspense>
   );
 }
