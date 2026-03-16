@@ -126,7 +126,7 @@ export default function DepartmentPageClient() {
   const [jobs, setJobs] = useState<JobSummaryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedTasks, setSelectedTasks] = useState<string[]>([]);
-  const [includeSub, setIncludeSub] = useState(true);
+  const [includeSubPreference, setIncludeSubPreference] = useState(true);
   const [activeTab, setActiveTab] = useState<DepartmentTab>("budget");
   const [selectedYear, setSelectedYear] = useState("all");
   const [selectedStatus, setSelectedStatus] = useState<SearchStatus>("all");
@@ -172,6 +172,13 @@ export default function DepartmentPageClient() {
     return () => window.removeEventListener(ORG_TREE_REFRESH_EVENT, handleTreeRefresh);
   }, []);
 
+  const currentOrg = useMemo(
+    () => organizations.find((org) => org.id === id) ?? null,
+    [id, organizations],
+  );
+
+  const includeSub = currentOrg?.level === "unit" ? false : includeSubPreference;
+
   useEffect(() => {
     let alive = true;
 
@@ -203,17 +210,6 @@ export default function DepartmentPageClient() {
       alive = false;
     };
   }, [id, includeSub, refreshSeed]);
-
-  const currentOrg = useMemo(
-    () => organizations.find((org) => org.id === id) ?? null,
-    [id, organizations],
-  );
-
-  useEffect(() => {
-    if (currentOrg?.level === "unit" && includeSub) {
-      setIncludeSub(false);
-    }
-  }, [currentOrg?.level, includeSub]);
 
   const associatingJob = useMemo(
     () => jobs.find((job) => job.job_id === associatingJobId) ?? null,
@@ -255,6 +251,16 @@ export default function DepartmentPageClient() {
     }
     return Array.from(uniqueYears).sort((left, right) => right - left);
   }, [jobs]);
+
+  useEffect(() => {
+    if (selectedYear === "all") {
+      return;
+    }
+    if (years.some((year) => String(year) === selectedYear)) {
+      return;
+    }
+    setSelectedYear("all");
+  }, [selectedYear, years]);
 
   const filteredTasks = useMemo(() => {
     return jobs.filter((job) => {
@@ -815,7 +821,7 @@ export default function DepartmentPageClient() {
                   data-testid="toggle-include-sub"
                   checked={includeSub}
                   disabled={currentOrg?.level === "unit"}
-                  onChange={() => setIncludeSub((current) => !current)}
+                  onChange={() => setIncludeSubPreference((current) => !current)}
                   aria-label={includeDescendantsLabel}
                 />
                 <div
@@ -871,7 +877,7 @@ export default function DepartmentPageClient() {
                 type="checkbox"
                 checked={includeSub}
                 disabled={currentOrg?.level === "unit"}
-                onChange={() => setIncludeSub((current) => !current)}
+                onChange={() => setIncludeSubPreference((current) => !current)}
                 className="rounded border-slate-300 text-primary-600 focus:ring-primary-500"
               />
               包含下级组织
@@ -880,7 +886,7 @@ export default function DepartmentPageClient() {
               type="button"
               data-testid="toggle-include-sub-legacy"
               disabled={currentOrg?.level === "unit"}
-              onClick={() => setIncludeSub((current) => !current)}
+              onClick={() => setIncludeSubPreference((current) => !current)}
               className={cn(
                 "ml-auto hidden items-center rounded-full border px-4 py-2 text-sm font-medium transition-colors",
                 currentOrg?.level === "unit"
