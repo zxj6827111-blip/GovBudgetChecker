@@ -345,7 +345,13 @@ function AdminPageContent() {
         throw new Error(await readErrorMessage(response));
       }
 
-      await response.json().catch(() => ({}));
+      const payload = (await response.json().catch(() => ({}))) as Partial<OrganizationSelection>;
+      setSelectedOrg({
+        id: String(payload.id || ""),
+        name: String(payload.name || trimmedName),
+        level: String(payload.level || "unit"),
+        parent_id: payload.parent_id ?? selectedOrg.id,
+      });
       refreshOrganizationTree();
       setNotice({ tone: "success", message: `已创建下属单位：${trimmedName}` });
     } catch (error) {
