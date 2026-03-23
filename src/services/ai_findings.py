@@ -142,7 +142,6 @@ class AIFindingsService:
                 # 根据 span 计算所属页码
                 span = issue.get("span", [0, 0])
                 span_start = int(span[0]) if isinstance(span, list) and len(span) > 0 else 0
-                span_end = int(span[1]) if isinstance(span, list) and len(span) > 1 else span_start
                 
                 # 遍历页码偏移量，找到 span 所属的页码
                 page_number = issue.get("page", 1) if isinstance(issue.get("page"), int) else 1
