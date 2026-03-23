@@ -4620,6 +4620,325 @@ class R33225_Narrative1_T1(Rule):
 # P3 - 规范性提示 (Normative Hints)
 # ==================================================================================
 
+def _extract_header_labels(rows: List[List[str]], depth: int = 3) -> List[str]:
+    if not rows:
+        return []
+    max_cols = max(len(row) for row in rows[:depth])
+    headers: List[str] = []
+    for col in range(max_cols):
+        parts: List[str] = []
+        for row in rows[:depth]:
+            if col < len(row):
+                cell = str(row[col] or "").strip()
+                if cell:
+                    parts.append(cell)
+        headers.append("".join(parts))
+    return headers
+
+
+def _extract_final_formula_rows(rows: List[List[str]]) -> List[Dict[str, Any]]:
+    headers = _extract_header_labels(rows, depth=3)
+    norm_headers = [normalize_text(header) for header in headers]
+
+    idx_total: Optional[int] = None
+    idx_basic: Optional[int] = None
+    idx_project: Optional[int] = None
+    idx_name: Optional[int] = None
+    for idx, header in enumerate(norm_headers):
+        if idx_name is None and ("功能分类科目名称" in header or ("科目名称" in header and "编码" not in header)):
+            idx_name = idx
+        if idx_basic is None and "基本支出" in header:
+            idx_basic = idx
+        elif idx_project is None and "项目支出" in header:
+            idx_project = idx
+        elif idx_total is None and ("合计" in header) and ("基本支出" not in header) and ("项目支出" not in header):
+            idx_total = idx
+
+    if idx_name is None and len(headers) > 3:
+        idx_name = 3
+    if idx_total is None and len(headers) > 4:
+        idx_total = 4
+    if idx_basic is None and len(headers) > 5:
+        idx_basic = 5
+    if idx_project is None and len(headers) > 6:
+        idx_project = 6
+    if None in (idx_total, idx_basic, idx_project):
+        return []
+    if idx_name is None:
+        return []
+
+    extracted: List[Dict[str, Any]] = []
+    start_row = min(3, len(rows))
+    for row in rows[start_row:]:
+        cells = [str(cell or "").strip() for cell in row]
+        needed_indexes = [idx_total, idx_basic, idx_project, idx_name]
+        if any(idx is None or idx >= len(cells) for idx in needed_indexes):
+            continue
+
+        class_code = cells[0] if cells else ""
+        if not re.fullmatch(r"\d{3}", class_code):
+            continue
+
+        name = cells[idx_name]
+        if not name or ("\u5408\u8ba1" in name) or ("\u603b\u8ba1" in name):
+            continue
+
+        total = parse_number(cells[idx_total])
+        basic = parse_number(cells[idx_basic])
+        project = parse_number(cells[idx_project])
+        if total is None or basic is None or project is None:
+            continue
+
+        row_code = "".join(
+            part for part in cells[:3] if re.fullmatch(r"\d{2,3}", str(part or "").strip())
+        )
+        row_label = f"{_format_functional_code(row_code)} {name}".strip() if row_code else name
+        row_text = " ".join(part for part in (*cells[:3], name) if part)
+        extracted.append(
+            {
+                "code": row_code,
+                "name": name,
+                "row_label": row_label,
+                "row_text": row_text,
+                "total": float(total),
+                "basic": float(basic),
+                "project": float(project),
+            }
+        )
+    return extracted
+
+
+_FINAL_ITEM_START_RE = re.compile(r"(?:(?<=\n)|^|\s{2,})(?P<marker>\d+\u3001)")
+_FINAL_PREV_YEAR_PERCENT_RE = re.compile(
+    r"(?P<prev_year>20\d{2})\s*年(?:度)?(?:[^。；\n]{0,20})?(?:决算数|支出决算|收入决算|执行数)?\s*为\s*"
+    r"(?P<prev>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元"
+    r"[\s\S]{0,120}?"
+    r"(?:20\d{2}\s*年(?:度)?(?:[^。；\n]{0,20})?)?(?:支出)?决算(?:数)?\s*为\s*"
+    r"(?P<curr>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元"
+    r"[\s\S]{0,120}?"
+    r"(?:比|较)(?P=prev_year)\s*年(?:度)?(?:[^。；\n]{0,20})?(?:决算数|支出决算|收入决算|执行数)?\s*"
+    r"(?P<direction>增加|减少)\s*(?P<pct>[0-9][0-9,]*(?:\.[0-9]+)?)%",
+    re.S,
+)
+_FINAL_COMPLETION_PERCENT_RE = re.compile(
+    r"年初预算(?:数)?\s*为\s*(?P<budget>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元"
+    r"[\s\S]{0,120}?"
+    r"(?:支出)?决算(?:数)?\s*为\s*(?P<final>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元"
+    r"[\s\S]{0,80}?"
+    r"(?:完成|占)(?:年初)?预算(?:的比重)?(?:的)?\s*(?P<pct>[0-9][0-9,]*(?:\.[0-9]+)?)%",
+    re.S,
+)
+_FINAL_ITEM_OPENING_AMOUNT_RE = re.compile(
+    r"(?:^|\s)\d+\u3001[\s\S]{0,160}?(?P<front>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元",
+    re.S,
+)
+_FINAL_ITEM_DECISION_AMOUNT_RE = re.compile(
+    r"(?:支出)?决算(?:数)?\s*为\s*(?P<final>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元"
+)
+
+
+def _iter_final_narrative_segments(doc: Document) -> List[Tuple[int, str]]:
+    segments: List[Tuple[int, str]] = []
+    for page_num, text in enumerate(doc.page_texts, start=1):
+        if not text or ("\u76ee\u5f55" in text[:120]):
+            continue
+
+        matches = list(_FINAL_ITEM_START_RE.finditer(text))
+        if not matches:
+            continue
+
+        for idx, match in enumerate(matches):
+            start = match.start("marker")
+            end = matches[idx + 1].start("marker") if idx + 1 < len(matches) else len(text)
+            segment = text[start:end].strip()
+            if not segment:
+                continue
+            if ("\u51b3\u7b97" not in segment) and ("\u9884\u7b97" not in segment) and ("%" not in segment):
+                continue
+            segments.append((page_num, segment))
+    return segments
+
+
+def _final_segment_subject(segment: str) -> str:
+    head = re.split(r"[\u3002\uff1b;\n]", segment, maxsplit=1)[0].strip()
+    head = re.sub(r"^\d+\u3001", "", head).strip()
+    return head[:80] if len(head) > 80 else head
+
+
+def _infer_final_scope(doc: Document) -> Optional[str]:
+    path_text = str(getattr(doc, "path", "") or "")
+    head_text = "\n".join(doc.page_texts[:3])
+    if "\u5355\u4f4d\u51b3\u7b97" in path_text or "\u5355\u4f4d\u51b3\u7b97" in head_text:
+        return "unit"
+    if "\u90e8\u95e8\u51b3\u7b97" in path_text or "\u90e8\u95e8\u51b3\u7b97" in head_text:
+        return "department"
+    return None
+
+
+class R33233_DetailRowFormulaConsistency(Rule):
+    code, severity = "V33-233", "error"
+    desc = "决算明细行勾稽检查（合计=基本支出+项目支出）"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        _ensure_table_anchors(doc)
+        issues: List[Issue] = []
+        for table_name in ("支出决算表", "一般公共预算财政拨款支出决算表"):
+            rows = _get_table_rows(doc, table_name)
+            if not rows:
+                continue
+            table_page = _get_first_anchor_page(doc, table_name) or 1
+            for entry in _extract_final_formula_rows(rows):
+                calc = entry["basic"] + entry["project"]
+                if tolerant_equal(entry["total"], calc, atol=1.0, rtol=0.001):
+                    continue
+                row_page = _find_text_page_after(doc, entry.get("row_text", ""), start_page=table_page) or table_page
+                issues.append(
+                    self._issue(
+                        f"{table_name}明细行勾稽错误（{entry['row_label']}）：合计={entry['total']:.2f}，基本+项目={calc:.2f}",
+                        {
+                            "page": row_page,
+                            "table": table_name,
+                            "row": entry["row_label"],
+                            "field": "合计 / 基本支出 / 项目支出",
+                        },
+                        severity="error",
+                        evidence_text=entry["row_text"],
+                    )
+                )
+        return issues
+
+
+class R33234_NarrativePercentConsistency(Rule):
+    code, severity = "V33-234", "warn"
+    desc = "决算说明同比/完成率百分比复算"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        issues: List[Issue] = []
+        for page_num, segment in _iter_final_narrative_segments(doc):
+            subject = _final_segment_subject(segment)
+
+            for match in _FINAL_PREV_YEAR_PERCENT_RE.finditer(segment):
+                prev = parse_number(match.group("prev"))
+                curr = parse_number(match.group("curr"))
+                reported_pct = parse_number(match.group("pct"))
+                direction = match.group("direction")
+                if prev is None or curr is None or reported_pct is None or prev <= 0 or max(prev, curr) < 1.0:
+                    continue
+
+                diff = curr - prev
+                if abs(diff) <= 0.05:
+                    continue
+                expected_direction = "增加" if diff > 0 else "减少"
+                expected_pct = abs(diff) / prev * 100.0
+                if direction == expected_direction and tolerant_equal(reported_pct, expected_pct, atol=0.5, rtol=0.01):
+                    continue
+
+                issues.append(
+                    self._issue(
+                        f"同比表述与金额不一致（{subject}）：按金额应为{expected_direction}{expected_pct:.2f}%，当前写为{direction}{reported_pct:.2f}%",
+                        {"page": page_num, "section": "决算情况说明", "subject": subject},
+                        severity="error",
+                        evidence_text=segment.replace("\n", " "),
+                    )
+                )
+
+            for match in _FINAL_COMPLETION_PERCENT_RE.finditer(segment):
+                budget_val = parse_number(match.group("budget"))
+                final_val = parse_number(match.group("final"))
+                reported_pct = parse_number(match.group("pct"))
+                if budget_val is None or final_val is None or reported_pct is None:
+                    continue
+                if budget_val <= 0:
+                    issues.append(
+                        self._issue(
+                            f"完成率表述缺少有效分母（{subject}）：年初预算为{budget_val:.2f}万元，却写“完成年初预算的{reported_pct:.2f}%”",
+                            {"page": page_num, "section": "决算情况说明", "subject": subject},
+                            severity="error",
+                            evidence_text=segment.replace("\n", " "),
+                        )
+                    )
+                    continue
+
+                expected_pct = final_val / budget_val * 100.0
+                if tolerant_equal(reported_pct, expected_pct, atol=0.5, rtol=0.01):
+                    continue
+
+                issues.append(
+                    self._issue(
+                        f"完成率表述与金额不一致（{subject}）：按金额应为{expected_pct:.2f}%，当前写为{reported_pct:.2f}%",
+                        {"page": page_num, "section": "决算情况说明", "subject": subject},
+                        severity="error",
+                        evidence_text=segment.replace("\n", " "),
+                    )
+                )
+        return issues
+
+
+class R33235_NarrativeAmountConsistency(Rule):
+    code, severity = "V33-235", "warn"
+    desc = "同条决算说明前后金额一致性"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        issues: List[Issue] = []
+        for page_num, segment in _iter_final_narrative_segments(doc):
+            front_match = _FINAL_ITEM_OPENING_AMOUNT_RE.search(segment)
+            final_match = _FINAL_ITEM_DECISION_AMOUNT_RE.search(segment)
+            if not front_match or not final_match:
+                continue
+
+            front_amount = parse_number(front_match.group("front"))
+            final_amount = parse_number(final_match.group("final"))
+            if front_amount is None or final_amount is None:
+                continue
+            if tolerant_equal(front_amount, final_amount, atol=0.05, rtol=0.0005):
+                continue
+
+            subject = _final_segment_subject(segment)
+            issues.append(
+                self._issue(
+                    f"同条决算说明前后金额不一致（{subject}）：条目开头={front_amount:.2f}万元，“支出决算/决算数”={final_amount:.2f}万元",
+                    {"page": page_num, "section": "决算情况说明", "subject": subject},
+                    severity="warn",
+                    evidence_text=segment.replace("\n", " "),
+                )
+            )
+        return issues
+
+
+class R33236_DocumentScopeTerminology(Rule):
+    code, severity = "V33-236", "warn"
+    desc = "部门/单位决算文种表述一致性"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        scope = _infer_final_scope(doc)
+        if not scope:
+            return []
+
+        if scope == "unit":
+            pattern = re.compile(r"(?:20\d{2}年)?部门决算安排")
+            current_scope = "单位决算"
+            expected = "单位决算安排"
+            wrong_label = "部门决算安排"
+        else:
+            pattern = re.compile(r"(?:20\d{2}年)?单位决算安排")
+            current_scope = "部门决算"
+            expected = "部门决算安排"
+            wrong_label = "单位决算安排"
+
+        issues: List[Issue] = []
+        for page_num, text in enumerate(doc.page_texts, start=1):
+            for match in pattern.finditer(text or ""):
+                issues.append(
+                    self._issue(
+                        f"当前材料为{current_scope}，但正文出现“{wrong_label}”表述，建议统一为“{expected}”",
+                        {"page": page_num, "section": "其他相关情况说明", "pos": match.start()},
+                        severity="warn",
+                        evidence_text=(text or "")[max(0, match.start() - 40): match.end() + 80].replace("\n", " "),
+                    )
+                )
+        return issues
+
+
 class R33230_EmptyZeroHint(Rule):
     """空值与0值规范性提示"""
     code, severity = "V33-230", "info"
@@ -4733,6 +5052,10 @@ ALL_RULES = [
     R33224_Narrative7_T7(),
     # 补充 - 表间勾稽
     R33204_InterTable_T2_T4(),
+    R33233_DetailRowFormulaConsistency(),
+    R33234_NarrativePercentConsistency(),
+    R33235_NarrativeAmountConsistency(),
+    R33236_DocumentScopeTerminology(),
     # P3 - 规范性提示
     R33230_EmptyZeroHint(),
     R33232_PercentagePrecision(),

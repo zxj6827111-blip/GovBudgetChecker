@@ -196,7 +196,7 @@ def _norm_sev(severity: Optional[str]) -> str:
     value = (severity or "").lower()
     if value in {"error", "err", "fatal", "critical", "high"}:
         return "error"
-    if value in {"warn", "warning", "medium", "low"}:
+    if value in {"warn", "warning", "medium", "low", "manual_review"}:
         return "warn"
     return "info"
 

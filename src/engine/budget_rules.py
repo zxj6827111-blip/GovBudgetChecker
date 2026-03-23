@@ -584,6 +584,45 @@ def _extract_total_basic_project(rows: Sequence[Sequence[Any]]) -> Tuple[Optiona
     return None, None, None
 
 
+def _extract_budget_formula_rows(rows: Sequence[Sequence[Any]]) -> List[Dict[str, Any]]:
+    extracted: List[Dict[str, Any]] = []
+    for row in rows:
+        cells = [str(cell or "").strip() for cell in row]
+        if len(cells) < 5:
+            continue
+        class_code = cells[0]
+        if not re.fullmatch(r"\d{3}", class_code):
+            continue
+
+        name = cells[3] if len(cells) > 3 else ""
+        if not name or ("\u5408\u8ba1" in name) or ("\u603b\u8ba1" in name):
+            continue
+
+        payload_values = [parse_number(cell) for cell in cells[4:]]
+        numeric_values = [float(value) for value in payload_values if value is not None]
+        if len(numeric_values) < 3:
+            continue
+
+        row_code = "".join(
+            part for part in cells[:3] if re.fullmatch(r"\d{2,3}", str(part or "").strip())
+        )
+        row_label = f"{_format_functional_code(row_code)} {name}".strip() if row_code else name
+        row_text = " ".join(part for part in (*cells[:3], name) if part)
+        total, basic, project = numeric_values[-3:]
+        extracted.append(
+            {
+                "code": row_code,
+                "name": name,
+                "row_label": row_label,
+                "row_text": row_text,
+                "total": total,
+                "basic": basic,
+                "project": project,
+            }
+        )
+    return extracted
+
+
 def _extract_headers(rows: Sequence[Sequence[Any]], depth: int = 3) -> List[str]:
     if not rows:
         return []
@@ -954,6 +993,60 @@ def _extract_budget_functional_narrative_mentions(
                     }
                 )
     return mentions
+
+
+_BUDGET_ITEM_START_RE = re.compile(r"(?:(?<=\n)|^|\s{2,})(?P<marker>\d+\u3001)")
+_BUDGET_DELTA_PERCENT_RE = re.compile(
+    r"(?P<prev_year>20\d{2})\u5e74(?:\u5f53\u5e74)?\s*(?:\u9884\u7b97\u6267\u884c\u6570|\u9884\u7b97\u6570|\u51b3\u7b97\u6570)?\s*\u4e3a"
+    r"\s*(?P<prev>[0-9][0-9,]*(?:\.[0-9]+)?)\u4e07\u5143"
+    r"[\s\S]{0,120}?"
+    r"(?P<curr_year>20\d{2})\u5e74(?:\u9884\u7b97\u5b89\u6392|\u9884\u7b97\u6570|\u51b3\u7b97\u6570)"
+    r"[^0-9]{0,8}\s*(?P<curr>[0-9][0-9,]*(?:\.[0-9]+)?)\u4e07\u5143"
+    r"[\s\S]{0,120}?"
+    r"\u6bd4(?P=prev_year)\u5e74(?:\u5f53\u5e74)?\s*(?:\u9884\u7b97\u6267\u884c\u6570|\u9884\u7b97\u6570|\u51b3\u7b97\u6570)?\s*"
+    r"(?P<direction>\u589e\u52a0|\u51cf\u5c11)(?P<pct>[0-9][0-9,]*(?:\.[0-9]+)?)%",
+    re.S,
+)
+_BUDGET_ITEM_OPENING_AMOUNT_RE = re.compile(
+    r"(?:^|\s)\d+\u3001[\s\S]{0,160}?(?P<front>[0-9][0-9,]*(?:\.[0-9]+)?)\u4e07\u5143",
+    re.S,
+)
+_BUDGET_ITEM_ARRANGED_AMOUNT_RE = re.compile(
+    r"20\d{2}\u5e74\u9884\u7b97\u5b89\u6392(?P<budget>[0-9][0-9,]*(?:\.[0-9]+)?)\u4e07\u5143"
+)
+
+
+def _iter_budget_explanation_item_segments(
+    doc: Document, anchors: Dict[str, List[int]]
+) -> List[Tuple[int, str]]:
+    segments: List[Tuple[int, str]] = []
+    for page_num, text in _candidate_budget_explanation_pages(doc, anchors):
+        matches = list(_BUDGET_ITEM_START_RE.finditer(text))
+        if not matches:
+            continue
+        for idx, match in enumerate(matches):
+            start = match.start("marker")
+            end = matches[idx + 1].start("marker") if idx + 1 < len(matches) else len(text)
+            segment = text[start:end].strip()
+            if segment:
+                segments.append((page_num, segment))
+    return segments
+
+
+def _budget_segment_subject(segment: str) -> str:
+    head = re.split(r"[\u3002\uff1b;\n]", segment, maxsplit=1)[0].strip()
+    head = re.sub(r"^\d+\u3001", "", head).strip()
+    return head[:80] if len(head) > 80 else head
+
+
+def _infer_budget_scope(doc: Document) -> Optional[str]:
+    path_text = str(getattr(doc, "path", "") or "")
+    head_text = "\n".join(doc.page_texts[:3])
+    if "\u5355\u4f4d\u9884\u7b97" in path_text or "\u5355\u4f4d\u9884\u7b97" in head_text:
+        return "unit"
+    if "\u90e8\u95e8\u9884\u7b97" in path_text or "\u90e8\u95e8\u9884\u7b97" in head_text:
+        return "department"
+    return None
 
 
 class BUD001_StructureAndAnchors(Rule):
@@ -1804,6 +1897,164 @@ class BUD109_FunctionalClassificationNameConsistency(Rule):
         return issues
 
 
+class BUD110_DetailRowFormulaConsistency(Rule):
+    code, severity = "BUD-110", "error"
+    desc = "\u9884\u7b97\u652f\u51fa\u8868\u660e\u7ec6\u884c\u52fe\u7a3d\u68c0\u67e5"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        anchors = find_budget_anchors(doc)
+        issues: List[Issue] = []
+
+        for table_key in ("BUD_T3", "BUD_T5"):
+            rows, page = _get_budget_table_rows(doc, anchors, table_key)
+            if not rows or not page:
+                continue
+
+            for entry in _extract_budget_formula_rows(rows):
+                total = entry["total"]
+                basic = entry["basic"]
+                project = entry["project"]
+                calc = basic + project
+                if _is_close(total, calc, abs_tol=1.0, rel_tol=0.0005):
+                    continue
+
+                row_page = _find_text_page_after(doc, entry.get("row_text", ""), start_page=page) or page
+                issues.append(
+                    self._issue(
+                        f"{table_key}\u660e\u7ec6\u884c\u52fe\u7a3d\u9519\u8bef\uff08{entry['row_label']}\uff09: "
+                        f"\u5408\u8ba1={total:.2f}, \u57fa\u672c+\u9879\u76ee={calc:.2f}",
+                        {
+                            "page": row_page,
+                            "table": table_key,
+                            "row": entry["row_label"],
+                            "field": "\u5408\u8ba1 / \u57fa\u672c\u652f\u51fa / \u9879\u76ee\u652f\u51fa",
+                        },
+                        severity="error",
+                        evidence_text=entry["row_text"],
+                    )
+                )
+
+        return issues
+
+
+class BUD111_ComparativePercentConsistency(Rule):
+    code, severity = "BUD-111", "warn"
+    desc = "\u9884\u7b97\u7f16\u5236\u8bf4\u660e\u540c\u6bd4\u767e\u5206\u6bd4\u590d\u7b97"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        anchors = find_budget_anchors(doc)
+        issues: List[Issue] = []
+
+        for page_num, segment in _iter_budget_explanation_item_segments(doc, anchors):
+            for match in _BUDGET_DELTA_PERCENT_RE.finditer(segment):
+                prev = parse_number(match.group("prev"))
+                curr = parse_number(match.group("curr"))
+                reported_pct = parse_number(match.group("pct"))
+                reported_direction = match.group("direction")
+                if prev is None or curr is None or reported_pct is None or prev <= 0:
+                    continue
+                if max(prev, curr) < 1.0:
+                    continue
+
+                amount_diff = curr - prev
+                if abs(amount_diff) <= 0.05:
+                    continue
+
+                expected_direction = "\u589e\u52a0" if amount_diff > 0 else "\u51cf\u5c11"
+                expected_pct = abs(amount_diff) / prev * 100.0
+                direction_ok = reported_direction == expected_direction
+                pct_ok = _is_close(reported_pct, expected_pct, abs_tol=0.5, rel_tol=0.01)
+                if direction_ok and pct_ok:
+                    continue
+
+                subject = _budget_segment_subject(segment)
+                severity = "error" if (not direction_ok) or (abs(reported_pct - expected_pct) > 1.0) else "warn"
+                issues.append(
+                    self._issue(
+                        f"\u540c\u6bd4\u8868\u8ff0\u4e0e\u91d1\u989d\u4e0d\u4e00\u81f4\uff08{subject}\uff09: "
+                        f"\u6309\u91d1\u989d\u5e94\u4e3a{expected_direction}{expected_pct:.2f}%\uff0c"
+                        f"\u5f53\u524d\u5199\u4e3a{reported_direction}{reported_pct:.2f}%",
+                        {"page": page_num, "section": "\u9884\u7b97\u7f16\u5236\u8bf4\u660e", "subject": subject},
+                        severity=severity,
+                        evidence_text=segment.replace("\n", " "),
+                    )
+                )
+
+        return issues
+
+
+class BUD112_ItemAmountConsistency(Rule):
+    code, severity = "BUD-112", "warn"
+    desc = "\u540c\u6761\u9884\u7b97\u8bf4\u660e\u524d\u540e\u91d1\u989d\u4e00\u81f4\u6027"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        anchors = find_budget_anchors(doc)
+        issues: List[Issue] = []
+
+        for page_num, segment in _iter_budget_explanation_item_segments(doc, anchors):
+            front_match = _BUDGET_ITEM_OPENING_AMOUNT_RE.search(segment)
+            arranged_match = _BUDGET_ITEM_ARRANGED_AMOUNT_RE.search(segment)
+            if not front_match or not arranged_match:
+                continue
+
+            front_amount = parse_number(front_match.group("front"))
+            arranged_amount = parse_number(arranged_match.group("budget"))
+            if front_amount is None or arranged_amount is None:
+                continue
+            if _is_close(front_amount, arranged_amount, abs_tol=0.05, rel_tol=0.0005):
+                continue
+
+            subject = _budget_segment_subject(segment)
+            issues.append(
+                self._issue(
+                    f"\u540c\u6761\u9884\u7b97\u8bf4\u660e\u524d\u540e\u91d1\u989d\u4e0d\u4e00\u81f4\uff08{subject}\uff09: "
+                    f"\u6761\u76ee\u5f00\u5934={front_amount:.2f}\u4e07\u5143\uff0c"
+                    f"\u201c2026\u5e74\u9884\u7b97\u5b89\u6392\u201d={arranged_amount:.2f}\u4e07\u5143",
+                    {"page": page_num, "section": "\u9884\u7b97\u7f16\u5236\u8bf4\u660e", "subject": subject},
+                    severity="warn",
+                    evidence_text=segment.replace("\n", " "),
+                )
+            )
+
+        return issues
+
+
+class BUD113_DocumentScopeTerminology(Rule):
+    code, severity = "BUD-113", "warn"
+    desc = "\u90e8\u95e8/\u5355\u4f4d\u9884\u7b97\u6587\u79cd\u8868\u8ff0\u4e00\u81f4\u6027"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        scope = _infer_budget_scope(doc)
+        if not scope:
+            return []
+
+        if scope == "unit":
+            pattern = re.compile(r"(?:20\d{2}\u5e74)?\u90e8\u95e8\u9884\u7b97\u5b89\u6392")
+            current_scope = "\u5355\u4f4d\u9884\u7b97"
+            expected = "\u5355\u4f4d\u9884\u7b97\u5b89\u6392"
+            wrong_label = "\u90e8\u95e8\u9884\u7b97\u5b89\u6392"
+        else:
+            pattern = re.compile(r"(?:20\d{2}\u5e74)?\u5355\u4f4d\u9884\u7b97\u5b89\u6392")
+            current_scope = "\u90e8\u95e8\u9884\u7b97"
+            expected = "\u90e8\u95e8\u9884\u7b97\u5b89\u6392"
+            wrong_label = "\u5355\u4f4d\u9884\u7b97\u5b89\u6392"
+
+        issues: List[Issue] = []
+        for page_num, text in enumerate(doc.page_texts, start=1):
+            for match in pattern.finditer(text or ""):
+                issues.append(
+                    self._issue(
+                        f"\u5f53\u524d\u6750\u6599\u4e3a{current_scope}\uff0c\u4f46\u6b63\u6587\u51fa\u73b0\u201c{wrong_label}\u201d\u8868\u8ff0\uff0c"
+                        f"\u5efa\u8bae\u7edf\u4e00\u4e3a\u201c{expected}\u201d",
+                        {"page": page_num, "section": "\u5176\u4ed6\u76f8\u5173\u8bf4\u660e", "pos": match.start()},
+                        severity="warn",
+                        evidence_text=_line_for_span(text, match.start(), match.end()),
+                    )
+                )
+
+        return issues
+
+
 ALL_BUDGET_RULES: List[Rule] = [
     BUD001_StructureAndAnchors(),
     BUD002_PlaceholderCheck(),
@@ -1817,4 +2068,8 @@ ALL_BUDGET_RULES: List[Rule] = [
     BUD107_TextTableConsistency(),
     BUD108_PerformanceTargetConsistency(),
     BUD109_FunctionalClassificationNameConsistency(),
+    BUD110_DetailRowFormulaConsistency(),
+    BUD111_ComparativePercentConsistency(),
+    BUD112_ItemAmountConsistency(),
+    BUD113_DocumentScopeTerminology(),
 ]

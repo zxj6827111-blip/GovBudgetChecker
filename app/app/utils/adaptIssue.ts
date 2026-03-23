@@ -3,13 +3,14 @@
  * 确保前端数据映射一致性，支持snake_case和camelCase转换
  */
 
+import type { SeverityCode } from "../../lib/issueSeverity";
 import { normalizeSeverityCode } from "../../lib/issueSeverity";
 
 export interface AdaptedIssue {
   id: string;
   source: "ai" | "rule";
   ruleId: string;
-  severity: "critical" | "high" | "medium" | "low" | "info";
+  severity: SeverityCode;
   title: string;
   message: string;
   page?: number;
@@ -52,7 +53,7 @@ export function adaptIssue(issue: any): AdaptedIssue {
 /**
  * 标准化严重程度
  */
-function normalizeSeverity(severity: string): "critical" | "high" | "medium" | "low" | "info" {
+function normalizeSeverity(severity: string): SeverityCode {
   return normalizeSeverityCode(severity);
 }
 

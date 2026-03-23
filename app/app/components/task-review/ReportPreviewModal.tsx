@@ -101,6 +101,9 @@ export default function ReportPreviewModal({ task, problems, onClose }: ReportPr
     const severity = normalizeSeverityCode(problem.severity);
     return severity === "critical" || severity === "high";
   }).length;
+  const manualReviewCount = problems.filter(
+    (problem) => normalizeSeverityCode(problem.severity) === "manual_review"
+  ).length;
   const mediumCount = problems.filter(
     (problem) => normalizeSeverityCode(problem.severity) === "medium"
   ).length;
@@ -188,13 +191,20 @@ export default function ReportPreviewModal({ task, problems, onClose }: ReportPr
                   系统分析发现疑似问题 <span className="text-lg font-bold text-danger-600">{problems.length}</span> 个。
                   建议重点关注并核实以下高风险事项。
                 </p>
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-4 gap-4">
                   <div className="flex flex-col items-center justify-center rounded border border-slate-200 bg-white p-3">
                     <div className="mb-1 flex items-center gap-1.5 font-medium text-danger-600">
                       <AlertCircle className="h-4 w-4" />
                       高风险
                     </div>
                     <span className="text-2xl font-bold text-slate-900">{highCount}</span>
+                  </div>
+                  <div className="flex flex-col items-center justify-center rounded border border-slate-200 bg-white p-3">
+                    <div className="mb-1 flex items-center gap-1.5 font-medium text-violet-600">
+                      <AlertTriangle className="h-4 w-4" />
+                      待人工复核
+                    </div>
+                    <span className="text-2xl font-bold text-slate-900">{manualReviewCount}</span>
                   </div>
                   <div className="flex flex-col items-center justify-center rounded border border-slate-200 bg-white p-3">
                     <div className="mb-1 flex items-center gap-1.5 font-medium text-warning-600">
@@ -248,6 +258,8 @@ export default function ReportPreviewModal({ task, problems, onClose }: ReportPr
                           "shrink-0 rounded border px-2 py-1 text-xs font-medium",
                           ["critical", "high"].includes(normalizeSeverityCode(problem.severity))
                             ? "border-danger-200 bg-danger-50 text-danger-700"
+                            : normalizeSeverityCode(problem.severity) === "manual_review"
+                              ? "border-violet-200 bg-violet-50 text-violet-700"
                             : normalizeSeverityCode(problem.severity) === "medium"
                               ? "border-warning-200 bg-warning-50 text-warning-700"
                               : "border-slate-200 bg-slate-100 text-slate-700"
@@ -255,6 +267,8 @@ export default function ReportPreviewModal({ task, problems, onClose }: ReportPr
                       >
                         {["critical", "high"].includes(normalizeSeverityCode(problem.severity))
                           ? "高风险"
+                          : normalizeSeverityCode(problem.severity) === "manual_review"
+                            ? "待人工复核"
                           : normalizeSeverityCode(problem.severity) === "medium"
                             ? "中风险"
                             : "低风险"}

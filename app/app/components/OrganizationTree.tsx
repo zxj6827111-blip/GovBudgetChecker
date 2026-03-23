@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type OrganizationNode = {
   id: string;
@@ -23,10 +23,6 @@ type OrganizationTreeProps = {
   refreshKey?: number;
 };
 
-type DepartmentsResponse = {
-  departments?: OrganizationNode[];
-};
-
 type TreeResponse = {
   tree?: OrganizationNode[];
 };
@@ -37,15 +33,99 @@ function parseErrorMessage(payload: any, fallback: string): string {
       payload.detail ||
       payload.error ||
       payload.message ||
-      (Array.isArray(payload.errors) ? payload.errors.join("，") : "") ||
+      (Array.isArray(payload.errors) ? payload.errors.join(", ") : "") ||
       fallback
     );
   }
   return fallback;
 }
 
-function sortByName<T extends { name: string }>(items: T[]): T[] {
-  return [...items].sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+function normalizeSearchValue(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function sortTreeByName(nodes: OrganizationNode[]): OrganizationNode[] {
+  return [...nodes]
+    .map((node) => ({
+      ...node,
+      children: sortTreeByName(Array.isArray(node.children) ? node.children : []),
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+}
+
+function buildInitialExpandedState(
+  nodes: OrganizationNode[],
+  depth = 0,
+  result: Record<string, boolean> = {},
+): Record<string, boolean> {
+  for (const node of nodes) {
+    if (depth < 2 && Array.isArray(node.children) && node.children.length > 0) {
+      result[node.id] = true;
+    }
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      buildInitialExpandedState(node.children, depth + 1, result);
+    }
+  }
+  return result;
+}
+
+function findPathToNode(nodes: OrganizationNode[], targetId: string): string[] {
+  for (const node of nodes) {
+    if (node.id === targetId) {
+      return [node.id];
+    }
+    const children = Array.isArray(node.children) ? node.children : [];
+    const childPath = findPathToNode(children, targetId);
+    if (childPath.length > 0) {
+      return [node.id, ...childPath];
+    }
+  }
+  return [];
+}
+
+function nodeContainsTarget(node: OrganizationNode, targetId: string): boolean {
+  if (node.id === targetId) {
+    return true;
+  }
+  return (node.children || []).some((child) => nodeContainsTarget(child, targetId));
+}
+
+function filterTree(nodes: OrganizationNode[], query: string): OrganizationNode[] {
+  return nodes.flatMap((node) => {
+    const children = Array.isArray(node.children) ? filterTree(node.children, query) : [];
+    const isMatch = normalizeSearchValue(node.name).includes(query);
+
+    if (!isMatch && children.length === 0) {
+      return [];
+    }
+
+    return [
+      {
+        ...node,
+        children: isMatch ? sortTreeByName(Array.isArray(node.children) ? node.children : []) : children,
+      },
+    ];
+  });
+}
+
+function getNodeBadge(node: OrganizationNode) {
+  if (Number(node.issue_count ?? 0) > 0) {
+    return {
+      className: "border-red-100 bg-red-50 text-red-600",
+      text: `问题 ${node.issue_count}`,
+    };
+  }
+  if (Number(node.job_count ?? 0) > 0) {
+    return {
+      className: "border-slate-200 bg-slate-50 text-slate-600",
+      text: `报告 ${node.job_count}`,
+    };
+  }
+  return null;
+}
+
+function getNodeLevelLabel(level: string) {
+  return level === "department" ? "部门" : level === "unit" ? "单位" : "组织";
 }
 
 export default function OrganizationTree({
@@ -57,7 +137,8 @@ export default function OrganizationTree({
   selectedOrgId,
   refreshKey,
 }: OrganizationTreeProps) {
-  const [departments, setDepartments] = useState<OrganizationNode[]>([]);
+  const [tree, setTree] = useState<OrganizationNode[]>([]);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showImporter, setShowImporter] = useState(false);
@@ -66,26 +147,10 @@ export default function OrganizationTree({
   const [modalOrgId, setModalOrgId] = useState<string | null>(null);
   const [modalInputValue, setModalInputValue] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const requestIdRef = useRef(0);
 
-  const collectDepartmentsFromTree = useCallback((nodes: OrganizationNode[]): OrganizationNode[] => {
-    const result: OrganizationNode[] = [];
-
-    const walk = (items: OrganizationNode[]) => {
-      for (const item of items) {
-        if (item.level === "department") {
-          result.push(item);
-        }
-        if (Array.isArray(item.children) && item.children.length > 0) {
-          walk(item.children);
-        }
-      }
-    };
-
-    walk(nodes);
-    return result;
-  }, []);
-
-  const loadDepartments = useCallback(async () => {
+  const loadOrganizations = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
 
@@ -93,46 +158,66 @@ export default function OrganizationTree({
     const timeoutId = window.setTimeout(() => controller.abort(), 10000);
 
     try {
-      const response = await fetch("/api/departments", {
+      const response = await fetch("/api/organizations", {
         signal: controller.signal,
         cache: "no-store",
       });
-      const payload = (await response.json().catch(() => ({}))) as DepartmentsResponse;
+      const payload = (await response.json().catch(() => ({}))) as TreeResponse;
       if (!response.ok) {
-        throw new Error("departments api not ok");
+        throw new Error("organizations api not ok");
       }
 
-      const rows = Array.isArray(payload.departments) ? payload.departments : [];
-      if (rows.length > 0) {
-        setDepartments(sortByName(rows));
+      if (requestId !== requestIdRef.current) {
         return;
       }
 
-      const fallbackResponse = await fetch("/api/organizations", {
-        signal: controller.signal,
-        cache: "no-store",
+      const nextTree = sortTreeByName(Array.isArray(payload.tree) ? payload.tree : []);
+      setTree(nextTree);
+      setExpanded((current) => {
+        const nextExpanded =
+          Object.keys(current).length > 0 ? { ...current } : buildInitialExpandedState(nextTree);
+        if (selectedOrgId) {
+          for (const id of findPathToNode(nextTree, selectedOrgId)) {
+            nextExpanded[id] = true;
+          }
+        }
+        return nextExpanded;
       });
-      const fallbackPayload = (await fallbackResponse.json().catch(() => ({}))) as TreeResponse;
-      if (!fallbackResponse.ok) {
-        setDepartments([]);
-        return;
-      }
-
-      const tree = Array.isArray(fallbackPayload.tree) ? fallbackPayload.tree : [];
-      setDepartments(sortByName(collectDepartmentsFromTree(tree)));
     } catch (fetchError) {
       console.error(fetchError);
-      setDepartments([]);
-      setError("加载组织架构失败");
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
+      setTree([]);
+      setError("加载组织结构失败");
     } finally {
       window.clearTimeout(timeoutId);
-      setLoading(false);
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+      }
     }
-  }, [collectDepartmentsFromTree]);
+  }, [selectedOrgId]);
 
   useEffect(() => {
-    void loadDepartments();
-  }, [loadDepartments, refreshKey]);
+    void loadOrganizations();
+  }, [loadOrganizations, refreshKey]);
+
+  useEffect(() => {
+    if (!selectedOrgId) {
+      return;
+    }
+    setExpanded((current) => {
+      const path = findPathToNode(tree, selectedOrgId);
+      if (path.length === 0) {
+        return current;
+      }
+      const nextExpanded = { ...current };
+      for (const id of path) {
+        nextExpanded[id] = true;
+      }
+      return nextExpanded;
+    });
+  }, [selectedOrgId, tree]);
 
   useEffect(() => {
     if (isAdmin && openImporterSignal > 0) {
@@ -140,17 +225,25 @@ export default function OrganizationTree({
     }
   }, [isAdmin, openImporterSignal]);
 
-  const filteredDepartments = useMemo(() => {
-    const keyword = searchQuery.trim().toLowerCase();
-    if (!keyword) {
-      return departments;
+  const normalizedSearchQuery = useMemo(
+    () => normalizeSearchValue(searchQuery),
+    [searchQuery],
+  );
+
+  const filteredTree = useMemo(() => {
+    if (!normalizedSearchQuery) {
+      return tree;
     }
-    return departments.filter((item) => item.name.toLowerCase().includes(keyword));
-  }, [departments, searchQuery]);
+    return filterTree(tree, normalizedSearchQuery);
+  }, [normalizedSearchQuery, tree]);
+
+  const toggleExpanded = useCallback((id: string) => {
+    setExpanded((current) => ({ ...current, [id]: !current[id] }));
+  }, []);
 
   const handleImport = async (file: File) => {
     if (!isAdmin) {
-      window.alert("仅管理员可以导入组织结构。");
+      window.alert("仅管理员可以导入组织结构");
       return;
     }
 
@@ -170,15 +263,15 @@ export default function OrganizationTree({
 
       window.alert(`导入成功，共导入 ${payload.imported ?? 0} 个组织。`);
       setShowImporter(false);
-      await loadDepartments();
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : "导入失败");
+      await loadOrganizations();
+    } catch (importError) {
+      window.alert(importError instanceof Error ? importError.message : "导入失败");
     }
   };
 
   const handleCreateOrg = async () => {
     if (!isAdmin) {
-      window.alert("仅管理员可以创建部门。");
+      window.alert("仅管理员可以创建部门");
       return;
     }
 
@@ -201,9 +294,13 @@ export default function OrganizationTree({
 
       setModalType(null);
       setModalInputValue("");
-      await loadDepartments();
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : "创建部门失败");
+      await loadOrganizations();
+
+      if (payload && typeof payload === "object" && payload.id) {
+        onSelect(payload as OrganizationNode);
+      }
+    } catch (createError) {
+      window.alert(createError instanceof Error ? createError.message : "创建部门失败");
     } finally {
       setIsSubmitting(false);
     }
@@ -211,7 +308,7 @@ export default function OrganizationTree({
 
   const handleUpdateOrg = async () => {
     if (!isAdmin) {
-      window.alert("仅管理员可以修改部门。");
+      window.alert("仅管理员可以修改组织名称");
       return;
     }
 
@@ -229,29 +326,38 @@ export default function OrganizationTree({
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(parseErrorMessage(payload, "更新部门失败"));
+        throw new Error(parseErrorMessage(payload, "更新组织失败"));
       }
 
       setModalType(null);
       setModalOrgId(null);
       setModalInputValue("");
-      await loadDepartments();
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : "更新部门失败");
+      await loadOrganizations();
+
+      if (selectedOrgId === modalOrgId) {
+        onSelect({
+          ...(payload as OrganizationNode),
+          children: Array.isArray((payload as any)?.children) ? (payload as any).children : [],
+          job_count: Number((payload as any)?.job_count ?? 0),
+          issue_count: Number((payload as any)?.issue_count ?? 0),
+        });
+      }
+    } catch (updateError) {
+      window.alert(updateError instanceof Error ? updateError.message : "更新组织失败");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleDeleteOrg = async (id: string, name: string) => {
+  const handleDeleteOrg = async (node: OrganizationNode) => {
     if (!isAdmin) {
-      window.alert("仅管理员可以删除部门。");
+      window.alert(`仅管理员可以删除${getNodeLevelLabel(node.level)}`);
       return;
     }
 
     try {
       const previewResponse = await fetch(
-        `/api/organizations/${encodeURIComponent(id)}/delete-preview`,
+        `/api/organizations/${encodeURIComponent(node.id)}/delete-preview`,
         { cache: "no-store" },
       );
       const previewPayload = await previewResponse.json().catch(() => ({}));
@@ -260,35 +366,42 @@ export default function OrganizationTree({
       }
 
       const summary = previewPayload.summary || {};
+      const label = getNodeLevelLabel(node.level);
       const confirmed = window.confirm(
-        `确定要删除“${name}”吗？\n\n` +
-          `将删除 ${summary.organization_count ?? 0} 个组织（其中单位 ${summary.unit_count ?? 0} 个），` +
-          `影响 ${summary.job_count ?? 0} 个任务关联。`,
+        [
+          `确定要删除${label}“${node.name}”吗？`,
+          `将删除组织 ${summary.organization_count ?? 0} 个，其中单位 ${summary.unit_count ?? 0} 个。`,
+          `将影响任务关联 ${summary.job_count ?? 0} 条。`,
+        ].join("\n"),
       );
       if (!confirmed) {
         return;
       }
 
-      const response = await fetch(`/api/organizations/${encodeURIComponent(id)}/delete`, {
+      const response = await fetch(`/api/organizations/${encodeURIComponent(node.id)}/delete`, {
         method: "POST",
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(parseErrorMessage(payload, "删除部门失败"));
+        throw new Error(parseErrorMessage(payload, `删除${label}失败`));
       }
 
-      if (selectedOrgId === id) {
+      if (selectedOrgId && nodeContainsTarget(node, selectedOrgId)) {
         onSelect(null);
       }
-      await loadDepartments();
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : "删除部门失败");
+      await loadOrganizations();
+    } catch (deleteError) {
+      window.alert(deleteError instanceof Error ? deleteError.message : "删除组织失败");
     }
   };
 
-  const renderDepartment = (node: OrganizationNode) => {
+  const renderNode = (node: OrganizationNode, depth = 0) => {
+    const children = Array.isArray(node.children) ? node.children : [];
+    const hasChildren = children.length > 0;
     const isSelected = selectedOrgId === node.id;
-    const hasIssues = Number(node.issue_count ?? 0) > 0;
+    const isExpanded = normalizedSearchQuery ? true : Boolean(expanded[node.id]);
+    const badge = getNodeBadge(node);
+    const levelLabel = getNodeLevelLabel(node.level);
 
     return (
       <div key={node.id}>
@@ -299,34 +412,61 @@ export default function OrganizationTree({
               ? "border-indigo-100 bg-indigo-50/80 shadow-sm"
               : "border-transparent hover:bg-white hover:shadow-sm"
           }`}
+          style={{ marginLeft: depth === 0 ? undefined : depth * 12 }}
           onClick={() => onSelect(node)}
           title={node.name}
         >
-          <div className="flex items-center gap-3 overflow-hidden">
+          <div className="flex min-w-0 items-center gap-3 overflow-hidden">
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (hasChildren) {
+                  toggleExpanded(node.id);
+                }
+              }}
+              className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-gray-400 transition-colors ${
+                hasChildren ? "hover:bg-gray-100 hover:text-gray-600" : "cursor-default"
+              }`}
+              aria-label={hasChildren ? `${isExpanded ? "收起" : "展开"}${node.name}` : `${node.name} 无下级组织`}
+            >
+              {hasChildren ? (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className={`h-4 w-4 transition-transform ${isExpanded ? "rotate-90" : ""}`}
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              ) : (
+                <span className="inline-block h-2 w-2 rounded-full bg-gray-200" />
+              )}
+            </button>
             <div
               className={`h-6 w-1.5 rounded-full transition-all duration-200 ${
                 isSelected ? "bg-indigo-600" : "bg-transparent group-hover:bg-gray-200"
               }`}
             />
-            <span
-              className={`truncate text-sm tracking-tight ${
-                isSelected ? "font-semibold text-indigo-900" : "font-medium text-gray-700"
-              }`}
-            >
-              {node.name}
-            </span>
-          </div>
-
-          <div className="flex flex-shrink-0 items-center gap-2">
-            {node.job_count > 0 ? (
-              <span
-                className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
-                  hasIssues
-                    ? "border-red-100 bg-red-50 text-red-600"
-                    : "border-green-100 bg-green-50 text-green-600"
+            <div className="min-w-0">
+              <div
+                className={`truncate text-sm tracking-tight ${
+                  isSelected ? "font-semibold text-indigo-900" : "font-medium text-gray-700"
                 }`}
               >
-                {hasIssues ? `问题 ${node.issue_count}` : "正常"}
+                {node.name}
+              </div>
+              <div className="mt-0.5 text-[11px] text-gray-400">{levelLabel}</div>
+            </div>
+          </div>
+
+          <div className="ml-3 flex flex-shrink-0 items-center gap-2">
+            {badge ? (
+              <span
+                className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${badge.className}`}
+              >
+                {badge.text}
               </span>
             ) : null}
 
@@ -346,7 +486,7 @@ export default function OrganizationTree({
                   }}
                   data-testid={`organization-tree-edit-${node.id}`}
                   className="rounded-md p-1 text-gray-400 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
-                  title="编辑名称"
+                  title={`编辑${levelLabel}名称`}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
@@ -356,11 +496,11 @@ export default function OrganizationTree({
                   type="button"
                   onClick={(event) => {
                     event.stopPropagation();
-                    void handleDeleteOrg(node.id, node.name);
+                    void handleDeleteOrg(node);
                   }}
                   data-testid={`organization-tree-delete-${node.id}`}
                   className="rounded-md p-1 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-500"
-                  title="删除部门"
+                  title={`删除${levelLabel}`}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -370,6 +510,10 @@ export default function OrganizationTree({
             ) : null}
           </div>
         </div>
+
+        {hasChildren && isExpanded ? (
+          <div>{children.map((child) => renderNode(child, depth + 1))}</div>
+        ) : null}
       </div>
     );
   };
@@ -379,7 +523,7 @@ export default function OrganizationTree({
       <div className="space-y-3 border-b border-gray-200 p-3">
         <div className="flex items-center justify-between">
           <h3 className="flex items-center font-semibold text-gray-700">
-            部门视图
+            组织视图
             {isAdmin ? (
               <button
                 type="button"
@@ -401,7 +545,7 @@ export default function OrganizationTree({
             type="button"
             onClick={() => onSelect(null)}
             className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-500 transition-colors hover:border-gray-300 hover:bg-gray-50 hover:text-gray-700"
-            title="查看全部部门"
+            title="查看全部组织"
           >
             全部
           </button>
@@ -419,11 +563,11 @@ export default function OrganizationTree({
               >
                 <div className="flex items-center gap-1.5 text-[13px] font-semibold text-indigo-700">
                   <svg className="h-4 w-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M12 11v8m0 0l-3-3m3 3l3-3" />
                   </svg>
-                  全区上传
+                  批量上传
                 </div>
-                <div className="mt-1 text-[11px] text-indigo-500">批量上传全区 PDF</div>
+                <div className="mt-1 text-[11px] text-indigo-600">上传多个 PDF 并自动匹配组织</div>
               </button>
             ) : (
               <div />
@@ -454,7 +598,7 @@ export default function OrganizationTree({
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
           data-testid="organization-tree-search"
-          placeholder="搜索部门"
+          placeholder="搜索部门或单位"
           className="w-full rounded-md border border-gray-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
         />
       </div>
@@ -467,9 +611,9 @@ export default function OrganizationTree({
           </div>
         ) : error ? (
           <div className="py-8 text-center text-red-500">{error}</div>
-        ) : filteredDepartments.length === 0 ? (
+        ) : filteredTree.length === 0 ? (
           <div className="py-8 text-center text-gray-400">
-            <p className="mb-2">{searchQuery.trim() ? "没有匹配的部门" : "暂无部门数据"}</p>
+            <p className="mb-2">{normalizedSearchQuery ? "没有匹配的组织" : "暂无组织数据"}</p>
             {isAdmin ? (
               <button
                 type="button"
@@ -481,7 +625,7 @@ export default function OrganizationTree({
             ) : null}
           </div>
         ) : (
-          filteredDepartments.map((node) => renderDepartment(node))
+          filteredTree.map((node) => renderNode(node))
         )}
       </div>
 
@@ -532,7 +676,7 @@ export default function OrganizationTree({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="w-80 rounded-lg bg-white p-6 shadow-xl">
             <h3 className="mb-4 text-lg font-semibold">
-              {modalType === "create" ? "新建部门" : "修改部门名称"}
+              {modalType === "create" ? "新建部门" : "修改组织名称"}
             </h3>
             <input
               type="text"
@@ -540,7 +684,7 @@ export default function OrganizationTree({
               value={modalInputValue}
               onChange={(event) => setModalInputValue(event.target.value)}
               data-testid="organization-tree-modal-input"
-              placeholder="请输入部门名称..."
+              placeholder="请输入组织名称..."
               className="mb-4 w-full rounded border border-gray-300 p-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               onKeyDown={(event) => {
                 if (event.key === "Enter") {

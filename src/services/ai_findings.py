@@ -13,6 +13,7 @@ import re
 
 from src.schemas.issues import IssueItem, JobContext, AnalysisConfig
 from src.engine.ai.extractor_client import ExtractorClient  # 复用现有AI客户端
+from src.services.ai_issue_interpreter import interpret_ai_issue, normalize_ai_severity
 
 logger = logging.getLogger(__name__)
 
@@ -131,21 +132,6 @@ class AIFindingsService:
         
         for idx, issue in enumerate(semantic_issues):
             try:
-                # 映射错误类型到严重程度
-                severity_map = {
-                    "错别字": "high",
-                    "重复": "medium",
-                    "表达不当": "medium",
-                    "规范性": "low",
-                    "表述矛盾": "high",
-                    "单位错误": "high",
-                    "口径冲突": "high",
-                    "勾稽不一致": "critical",
-                    "完整性": "medium",
-                }
-                
-                issue_type = str(issue.get("type") or issue.get("problem_type") or "其他")
-
                 confidence = issue.get("confidence")
                 try:
                     if confidence is not None and float(confidence) < 0.75:
@@ -153,12 +139,6 @@ class AIFindingsService:
                 except Exception:
                     pass
 
-                raw_severity = str(issue.get("severity") or "").lower()
-                if raw_severity in {"critical", "high", "medium", "low", "info"}:
-                    severity = raw_severity
-                else:
-                    severity = severity_map.get(issue_type, "medium")
-                
                 # 根据 span 计算所属页码
                 span = issue.get("span", [0, 0])
                 span_start = int(span[0]) if isinstance(span, list) and len(span) > 0 else 0
@@ -170,60 +150,12 @@ class AIFindingsService:
                     if span_start >= page_start and span_start < page_end:
                         page_number = page_num
                         break
-                
-                evidence_text = str(issue.get("quote") or issue.get("context") or "")
-                original_text = str(issue.get("original") or "")
 
-                # 构建位置信息
-                location = {
-                    "page": page_number,
-                    "span_start": span_start,
-                    "span_end": span_end
-                }
-                
-                # 构建证据
-                evidence = [{
-                    "type": "text_content",
-                    "page": page_number,
-                    "text": evidence_text,
-                    "text_snippet": evidence_text,
-                    "original": original_text,
-                    "context": str(issue.get("context") or ""),
-                    "quote": str(issue.get("quote") or ""),
-                }]
-                
-                # 生成唯一ID
-                issue_id = f"ai_semantic_{context.job_id}_{idx}_{int(time.time())}"
-                
-                rule_id = str(issue.get("rule_id") or f"AI-SEM-{issue_type[:2].upper()}-{idx:03d}")
-                title = str(issue.get("title") or f"{issue_type}：{original_text[:20]}")
-                message = str(
-                    issue.get("message")
-                    or f"发现{issue_type}问题：「{original_text}」，建议修改为「{issue.get('suggestion', '')}」"
-                )
-
-                item = IssueItem(
-                    id=issue_id,
-                    source="ai",
-                    rule_id=rule_id,
-                    severity=severity,
-                    title=title,
-                    message=message,
-                    evidence=evidence,
-                    location=location,
-                    page_number=page_number,  # 使用计算出的准确页码
-                    suggestion=issue.get("suggestion", ""),
-                    tags=list(
-                        {
-                            issue_type,
-                            str(issue.get("problem_type") or "").strip(),
-                            "AI检测",
-                            "语义审计",
-                            "全量审查",
-                        }
-                        - {""}
-                    ),
-                    created_at=time.time()
+                item = self._build_ai_issue_item(
+                    raw_issue=issue,
+                    context=context,
+                    idx=idx,
+                    page_number=page_number,
                 )
                 issues.append(item)
                 
@@ -232,6 +164,65 @@ class AIFindingsService:
                 continue
         
         return issues
+
+    def _build_ai_issue_item(
+        self,
+        *,
+        raw_issue: Dict[str, Any],
+        context: JobContext,
+        idx: int,
+        page_number: int,
+    ) -> IssueItem:
+        fallback_rule_id = f"AI-SEM-{idx:03d}"
+        interpreted = interpret_ai_issue(
+            raw_issue,
+            page_number=page_number,
+            fallback_rule_id=fallback_rule_id,
+        )
+
+        evidence_text = str(
+            interpreted["quote"] or interpreted["context"] or interpreted["original"] or ""
+        )
+        evidence = [{
+            "type": "text_content",
+            "page": page_number,
+            "text": evidence_text,
+            "text_snippet": evidence_text,
+            "original": interpreted["original"],
+            "context": interpreted["context"],
+            "quote": interpreted["quote"],
+        }]
+
+        raw_bbox = raw_issue.get("bbox")
+        if isinstance(raw_bbox, list) and len(raw_bbox) == 4:
+            evidence[0]["bbox"] = raw_bbox
+
+        return IssueItem(
+            id=f"ai_semantic_{context.job_id}_{idx}_{int(time.time())}",
+            source="ai",
+            rule_id=str(interpreted["rule_id"]),
+            severity=str(interpreted["severity"]),
+            severity_label=str(interpreted.get("severity_label") or ""),
+            title=str(interpreted["title"]),
+            message=str(interpreted["message"]),
+            evidence=evidence,
+            location=dict(interpreted["location"]),
+            metrics=dict(interpreted["metrics"]),
+            page_number=page_number,
+            bbox=raw_bbox if isinstance(raw_bbox, list) and len(raw_bbox) == 4 else None,
+            suggestion=str(interpreted["suggestion"]),
+            tags=list(
+                dict.fromkeys(
+                    [
+                        *interpreted["tags"],
+                        "AI检测",
+                        "语义审计",
+                        "全量审查",
+                    ]
+                )
+            ),
+            created_at=time.time(),
+        )
 
     def _populate_bbox_hints(self, issues: List[IssueItem], context: JobContext) -> List[IssueItem]:
         if not issues or not getattr(context, "pdf_path", None):
@@ -401,7 +392,7 @@ class AIFindingsService:
   {{"rule_id": "AI-XXX-001",
     "title": "问题标题",
     "message": "详细问题描述",
-    "severity": "critical|high|medium|low|info",
+                "severity": "critical|high|medium|low|info|manual_review",
     "page": 页码数字,
     "section": "所在章节",
     "table": "所在表格名称",
@@ -634,72 +625,20 @@ class AIFindingsService:
     def _convert_ai_issue(self, raw_issue: Dict[str, Any], context: JobContext, idx: int) -> Optional[IssueItem]:
         """转换AI问题为IssueItem"""
         try:
-            # 验证必需字段
-            required_fields = ["title", "message", "severity"]
-            missing_fields = []
-            for field in required_fields:
-                if field not in raw_issue:
-                    missing_fields.append(field)
-            
-            if missing_fields:
-                logger.warning(f"AI问题缺少必需字段: {missing_fields}")
-                self.ai_errors.append({
-                    "type": "missing_required_fields",
-                    "missing_fields": missing_fields,
-                    "issue_index": idx,
-                    "issue_preview": str(raw_issue)[:100] + "..." if len(str(raw_issue)) > 100 else str(raw_issue)
-                })
-                return None
-            
-            # 提取基本信息
-            rule_id = raw_issue.get("rule_id", f"AI-GEN-{idx:03d}")
-            title = raw_issue["title"]
-            message = raw_issue["message"]
-            severity = self._normalize_severity(raw_issue["severity"])
-            
-            # 构建位置信息
-            location = {
-                "page": raw_issue.get("page", 0),
-                "section": raw_issue.get("section", ""),
-                "table": raw_issue.get("table", ""),
-                "row": raw_issue.get("row", ""),
-                "col": raw_issue.get("col", "")
-            }
-            
-            # 构建证据
-            evidence = []
-            if "evidence" in raw_issue:
-                evidence.append({
-                    "page": location["page"],
-                    "text": raw_issue["evidence"],
-                    "bbox": raw_issue.get("bbox")
-                })
-            
-            # 构建指标
-            metrics = raw_issue.get("metrics", {})
-            
-            # 构建标签
-            tags = raw_issue.get("tags", [])
-            if "category" in raw_issue:
-                tags.append(raw_issue["category"])
-            
-            # 生成唯一ID
-            issue_id = IssueItem.create_id("ai", rule_id, location)
-            
-            return IssueItem(
-                id=issue_id,
-                source="ai",
-                rule_id=rule_id,
-                severity=severity,
-                title=title,
-                message=message,
-                evidence=evidence,
-                location=location,
-                metrics=metrics,
-                suggestion=raw_issue.get("suggestion"),
-                tags=tags,
-                created_at=time.time()
+            page_number = 1
+            try:
+                page_number = int(raw_issue.get("page") or 1)
+            except Exception:
+                page_number = 1
+            item = self._build_ai_issue_item(
+                raw_issue=raw_issue,
+                context=context,
+                idx=idx,
+                page_number=page_number if page_number > 0 else 1,
             )
+            if "category" in raw_issue:
+                item.tags = list(dict.fromkeys([*item.tags, str(raw_issue["category"])]))
+            return item
             
         except Exception as e:
             logger.error(f"转换AI问题失败: {e}")
@@ -713,15 +652,7 @@ class AIFindingsService:
     
     def _normalize_severity(self, severity: str) -> str:
         """标准化严重程度"""
-        severity_map = {
-            "critical": "critical",
-            "high": "high",
-            "medium": "medium", 
-            "low": "low",
-            "info": "info"
-        }
-        
-        return severity_map.get(severity.lower(), "medium")
+        return normalize_ai_severity(severity)
 
 
 async def analyze_with_ai(context: JobContext, config: AnalysisConfig) -> List[IssueItem]:

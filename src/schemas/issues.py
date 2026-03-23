@@ -27,6 +27,7 @@ class IssueSeverity(str, Enum):
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
+    MANUAL_REVIEW = "manual_review"
 
 
 class ConflictType(str, Enum):
@@ -53,13 +54,14 @@ class IssueItem(BaseModel):
     id: str = Field(..., description="全局唯一ID")
     source: Literal["ai", "rule"] = Field(..., description="来源：AI或规则引擎")
     rule_id: Optional[str] = Field(None, description="规则ID，如 V33-002 或 AI-RATIO-01")
-    severity: Literal["info", "low", "medium", "high", "critical"] = Field(..., description="严重程度")
+    severity: Literal["info", "low", "medium", "high", "critical", "manual_review"] = Field(..., description="严重程度")
     title: str = Field(..., description="问题标题")
     message: str = Field(..., description="详细描述")
     evidence: List[Dict[str, Any]] = Field(default_factory=list, description="证据列表")
     location: Dict[str, Any] = Field(default_factory=dict, description="位置信息")
     metrics: Dict[str, Any] = Field(default_factory=dict, description="指标数据")
     suggestion: Optional[str] = Field(None, description="建议")
+    severity_label: Optional[str] = Field(None, description="严重程度展示标签")
     tags: List[str] = Field(default_factory=list, description="标签")
     created_at: float = Field(default_factory=time.time, description="创建时间戳")
     

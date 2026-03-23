@@ -315,6 +315,10 @@ class CMM002_TextAnomalyRule(Rule):
             (r"\u8d22\u653f\u62e8\u6b3e\u8d22\u653f\u62e8\u6b3e", "\u7591\u4f3c\u91cd\u590d\u8bcd\uff1a\u201c\u8d22\u653f\u62e8\u6b3e\u8d22\u653f\u62e8\u6b3e\u201d"),
         )
         punctuation_pattern = re.compile(r"[\u4e00-\u9fff],\s*[0-9]")
+        abnormal_punctuation_patterns: Sequence[Tuple[re.Pattern[str], str]] = (
+            (re.compile(r"\u3002{2,}"), "\u7591\u4f3c\u8fde\u7eed\u53e5\u53f7"),
+            (re.compile(r"[\uff1b;]\s*\u3002"), "\u7591\u4f3c\u6b8b\u7f3a\u53e5\u6216\u591a\u4f59\u6807\u70b9"),
+        )
 
         for page_idx, page_text in enumerate(_page_texts(doc), start=1):
             seen: set[Tuple[int, int]] = set()
@@ -348,6 +352,39 @@ class CMM002_TextAnomalyRule(Rule):
                         evidence_text=snippet,
                     )
                 )
+
+            for pattern, message in abnormal_punctuation_patterns:
+                for match in pattern.finditer(page_text):
+                    span = (match.start(), match.end())
+                    if span in seen:
+                        continue
+                    seen.add(span)
+                    snippet = page_text[max(0, match.start() - 16): match.end() + 24].replace("\n", " ")
+                    issues.append(
+                        self._issue(
+                            message,
+                            {"page": page_idx, "pos": match.start()},
+                            "warn",
+                            evidence_text=snippet,
+                        )
+                    )
+
+            for line in page_text.splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if ("\u201d" in stripped and stripped.count("\u201d") > stripped.count("\u201c")) or (
+                    "\u2019" in stripped and stripped.count("\u2019") > stripped.count("\u2018")
+                ):
+                    pos = page_text.find(line)
+                    issues.append(
+                        self._issue(
+                            "\u7591\u4f3c\u591a\u4f59\u53f3\u5f15\u53f7",
+                            {"page": page_idx, "pos": max(pos, 0)},
+                            "warn",
+                            evidence_text=stripped,
+                        )
+                    )
 
         return issues
 
@@ -524,6 +561,18 @@ _ZERO_INCREASE_PATTERN = re.compile(
 _ABNORMAL_DELTA_WORDING_PATTERN = re.compile(r"(增加|减少)持平")
 
 
+_TEMPLATE_LEFTOVER_PATTERNS: Sequence[Tuple[re.Pattern[str], str]] = (
+    (
+        re.compile(r"(?:增加|减少)[（(](?:减少|增加)[)）]"),
+        "\u7591\u4f3c\u6a21\u677f\u6b8b\u7559\uff1a\u589e\u51cf\u65b9\u5411\u672a\u786e\u5b9a",
+    ),
+    (
+        re.compile(r"\u4e3b\u8981\u539f\u56e0\u662f[：:]?[\u3002\uff1b;!?？！]"),
+        "\u7591\u4f3c\u6b8b\u7f3a\u53e5\uff1a\u201c\u4e3b\u8981\u539f\u56e0\u662f\u201d\u540e\u7f3a\u5c11\u539f\u56e0\u8bf4\u660e",
+    ),
+)
+
+
 class CMM005_ComparativeNarrativeLogic(Rule):
     code, severity = "CMM-005", "warn"
     desc = "同比叙述逻辑异常检查（预/决算通用）"
@@ -537,6 +586,21 @@ class CMM005_ComparativeNarrativeLogic(Rule):
                 continue
 
             seen_spans: set[Tuple[int, int, str]] = set()
+
+            for pattern, message in _TEMPLATE_LEFTOVER_PATTERNS:
+                for match in pattern.finditer(page_text):
+                    span_key = (match.start(), match.end(), message)
+                    if span_key in seen_spans:
+                        continue
+                    seen_spans.add(span_key)
+                    issues.append(
+                        self._issue(
+                            message,
+                            {"page": page_idx, "pos": match.start()},
+                            "warn",
+                            evidence_text=_sentence_around(page_text, match.start(), match.end()),
+                        )
+                    )
 
             for match in _ABNORMAL_DELTA_WORDING_PATTERN.finditer(flat_text):
                 span_key = (match.start(), match.end(), "wording")

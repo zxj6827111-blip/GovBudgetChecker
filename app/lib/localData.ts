@@ -172,6 +172,12 @@ const datasetCache: DatasetCache = {
   value: null,
 };
 
+export function invalidateLocalDataCache() {
+  datasetCache.expiresAt = 0;
+  datasetCache.promise = null;
+  datasetCache.value = null;
+}
+
 function isRecord(value: unknown): value is JsonObject {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -248,7 +254,7 @@ function severityBucket(value: unknown): "error" | "warn" | "info" {
   if (["critical", "high", "error", "fatal"].includes(normalized)) {
     return "error";
   }
-  if (["warn", "warning", "medium", "low"].includes(normalized)) {
+  if (["warn", "warning", "medium", "low", "manual_review"].includes(normalized)) {
     return "warn";
   }
   return "info";

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
 import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { invalidateLocalDataCache } from "@/lib/localData";
 
 export async function POST(
   _request: Request,
@@ -20,6 +21,9 @@ export async function POST(
       data = JSON.parse(text);
     } catch {
       data = { detail: text || "invalid backend response" };
+    }
+    if (response.ok) {
+      invalidateLocalDataCache();
     }
     return NextResponse.json(data, { status: response.status });
   } catch (error) {

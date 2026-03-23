@@ -46,6 +46,17 @@ const baseDetail = {
         evidence: [{ page: 4, text: "delta" }],
         location: { page: 4 },
       },
+      {
+        id: "ai-5",
+        source: "ai",
+        rule_id: "AI-5",
+        severity: "manual_review",
+        severity_label: "待人工复核",
+        title: "AI issue 5",
+        message: "AI issue 5 detail",
+        evidence: [{ page: 6, text: "zeta" }],
+        location: { page: 6 },
+      },
     ],
     rule_findings: [
       {
@@ -63,11 +74,11 @@ const baseDetail = {
       totals: {
         ai: 4,
         rule: 1,
-        merged: 5,
+        merged: 6,
         conflicts: 0,
         agreements: 0,
       },
-      merged_ids: ["ai-1", "ai-2", "ai-3", "ai-4", "rule-1"],
+      merged_ids: ["ai-1", "ai-2", "ai-3", "ai-4", "ai-5", "rule-1"],
       conflicts: [],
       agreements: [],
     },
@@ -75,20 +86,20 @@ const baseDetail = {
 };
 
 const problems = toUiProblems(baseDetail as any);
-assert.equal(problems.length, 5, "dual-mode payload should expose merged issue count in detail view");
+assert.equal(problems.length, 6, "dual-mode payload should expose merged issue count in detail view");
 assert.deepEqual(
   problems.map((problem) => problem.id),
-  ["ai-1", "ai-2", "ai-3", "ai-4", "rule-1"],
+  ["ai-1", "ai-2", "ai-3", "ai-4", "ai-5", "rule-1"],
   "merged_ids should drive the detail list order",
 );
 assert.deepEqual(
   problems.map((problem) => problem.severity),
-  ["critical", "high", "medium", "low", "medium"],
-  "ui adapter should preserve backend five-level severity",
+  ["critical", "high", "medium", "low", "manual_review", "medium"],
+  "ui adapter should preserve backend severity levels including manual_review",
 );
 assert.deepEqual(
   problems.map((problem) => problem.severityLabel),
-  ["严重", "高", "中", "低", "中"],
+  ["严重", "高", "中", "低", "待人工复核", "中"],
   "ui adapter should expose Chinese severity labels",
 );
 
@@ -98,7 +109,7 @@ const filteredProblems = toUiProblems({
 } as any);
 assert.deepEqual(
   filteredProblems.map((problem) => problem.id),
-  ["ai-1", "ai-3", "ai-4"],
+  ["ai-1", "ai-3", "ai-4", "ai-5"],
   "ignored issues should still be removed after merged issue projection",
 );
 

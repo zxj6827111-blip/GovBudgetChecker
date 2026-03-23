@@ -7,6 +7,7 @@ import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import {
   LocalDataError,
   getLocalDepartmentUnits,
+  invalidateLocalDataCache,
 } from "@/lib/localData";
 
 export async function GET(
@@ -85,6 +86,9 @@ export async function POST(
       data = JSON.parse(text);
     } catch {
       data = { raw: text };
+    }
+    if (response.ok) {
+      invalidateLocalDataCache();
     }
     return NextResponse.json(data, { status: response.status });
   } catch (error) {

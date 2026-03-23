@@ -18,6 +18,10 @@ from src.engine.budget_rules import (
     BUD106_EmptyTableStatement,
     BUD108_PerformanceTargetConsistency,
     BUD109_FunctionalClassificationNameConsistency,
+    BUD110_DetailRowFormulaConsistency,
+    BUD111_ComparativePercentConsistency,
+    BUD112_ItemAmountConsistency,
+    BUD113_DocumentScopeTerminology,
 )
 from src.engine.common_rules import (
     CMM001_ThreePublicNarrativeConsistency,
@@ -701,6 +705,169 @@ def test_common_income_expense_trend_rule_quotes_summary_sentence_with_optional_
         in (issue.evidence_text or "")
         for issue in issues
     )
+
+
+def test_budget_detail_row_formula_rule_detects_t3_and_t5_row_mismatch() -> None:
+    t3_page_text = "\n".join(
+        [
+            "2026\u5e74\u9884\u7b97\u5355\u4f4d\u652f\u51fa\u9884\u7b97\u603b\u8868",
+            "\u5355\u4f4d\uff1a\u5143",
+        ]
+    )
+    t5_page_text = "\n".join(
+        [
+            "2026\u5e74\u9884\u7b97\u5355\u4f4d\u4e00\u822c\u516c\u5171\u9884\u7b97\u652f\u51fa\u529f\u80fd\u5206\u7c7b\u9884\u7b97\u8868",
+            "\u5355\u4f4d\uff1a\u5143",
+        ]
+    )
+    bad_row = ["204", "06", "01", "\u884c\u653f\u8fd0\u884c", "14348853.34", "14348853.34", "64840547.00"]
+    t3_table: list[list[Any]] = [
+        ["\u7c7b", "\u6b3e", "\u9879", "\u529f\u80fd\u5206\u7c7b\u79d1\u76ee\u540d\u79f0", "\u5408\u8ba1", "\u57fa\u672c\u652f\u51fa", "\u9879\u76ee\u652f\u51fa"],
+        ["204", "06", "", "\u53f8\u6cd5", "79189400.34", "14348853.34", "64840547.00"],
+        bad_row,
+    ]
+    t5_table: list[list[Any]] = [
+        ["\u7c7b", "\u6b3e", "\u9879", "\u529f\u80fd\u5206\u7c7b\u79d1\u76ee\u540d\u79f0", "\u5408\u8ba1", "\u57fa\u672c\u652f\u51fa", "\u9879\u76ee\u652f\u51fa"],
+        ["204", "06", "", "\u53f8\u6cd5", "79189400.34", "14348853.34", "64840547.00"],
+        bad_row,
+    ]
+    doc = build_document(
+        path="unit-2026-budget.pdf",
+        page_texts=[t3_page_text, t5_page_text],
+        page_tables=[[t3_table], [t5_table]],
+        filesize=48,
+    )
+
+    issues = BUD110_DetailRowFormulaConsistency().apply(doc)
+
+    assert len(issues) == 2
+    assert all(issue.rule == "BUD-110" for issue in issues)
+    assert all("\u884c\u653f\u8fd0\u884c" in issue.message for issue in issues)
+    assert {issue.location.get("table") for issue in issues} == {"BUD_T3", "BUD_T5"}
+
+
+def test_budget_comparative_percent_rule_detects_wrong_percentage() -> None:
+    page_text = "\n".join(
+        [
+            "2026\u5e74\u5355\u4f4d\u9884\u7b97\u7f16\u5236\u8bf4\u660e",
+            "1\u3001\u516c\u5171\u5b89\u5168\u652f\u51fa\uff08204\u7c7b\uff09\u53f8\u6cd5\uff0806\u6b3e\uff09\u884c\u653f\u8fd0\u884c\uff0801\u9879\uff091434.89\u4e07\u5143\u3002"
+            "\u4e3b\u8981\u7528\u4e8e\uff1a\u884c\u653f\u5355\u4f4d\u7684\u57fa\u672c\u652f\u51fa\u30022025\u5e74\u5f53\u5e74\u9884\u7b97\u6267\u884c\u6570\u4e3a1690.69\u4e07\u5143\uff0c"
+            "2026\u5e74\u9884\u7b97\u5b89\u63921434.89\u4e07\u5143\uff0c\u6bd42025\u5e74\u9884\u7b97\u6267\u884c\u6570\u51cf\u5c111.10%\u3002",
+        ]
+    )
+    doc = build_document(
+        path="unit-2026-budget.pdf",
+        page_texts=[page_text],
+        page_tables=[[]],
+        filesize=32,
+    )
+
+    issues = BUD111_ComparativePercentConsistency().apply(doc)
+
+    assert issues
+    assert any("15.13%" in issue.message for issue in issues)
+    assert any("1.10%" in issue.message for issue in issues)
+
+
+def test_budget_comparative_percent_rule_detects_wrong_direction() -> None:
+    page_text = "\n".join(
+        [
+            "2026\u5e74\u90e8\u95e8\u9884\u7b97\u7f16\u5236\u8bf4\u660e",
+            "6\u3001\u516c\u5171\u5b89\u5168\u652f\u51fa\uff08204\u7c7b\uff09\u53f8\u6cd5\uff0806\u6b3e\uff09\u5176\u4ed6\u53f8\u6cd5\u652f\u51fa\uff0899\u9879\uff093845.49\u4e07\u5143\u3002"
+            "\u4e3b\u8981\u7528\u4e8e\uff1a\u4f9d\u6cd5\u6cbb\u533a\u3001\u6cd5\u5236\u4e1a\u52a1\u7ecf\u8d39\u7b49\u652f\u51fa\u30022025\u5e74\u5f53\u5e74\u9884\u7b97\u6267\u884c\u6570\u4e3a43269.3\u4e07\u5143\uff0c"
+            "2026\u5e74\u9884\u7b97\u5b89\u63923845.49\u4e07\u5143\uff0c\u6bd42025\u5e74\u9884\u7b97\u6267\u884c\u6570\u589e\u52a017.62%\u3002",
+        ]
+    )
+    doc = build_document(
+        path="dept-2026-budget.pdf",
+        page_texts=[page_text],
+        page_tables=[[]],
+        filesize=32,
+    )
+
+    issues = BUD111_ComparativePercentConsistency().apply(doc)
+
+    assert issues
+    assert any("\u5e94\u4e3a\u51cf\u5c1191.11%" in issue.message for issue in issues)
+    assert any("\u589e\u52a017.62%" in issue.message for issue in issues)
+
+
+def test_budget_item_amount_rule_detects_conflict_with_budget_amount() -> None:
+    page_text = "\n".join(
+        [
+            "2026\u5e74\u5355\u4f4d\u9884\u7b97\u7f16\u5236\u8bf4\u660e",
+            "7\u3001\u793e\u4f1a\u4fdd\u969c\u548c\u5c31\u4e1a\u652f\u51fa\uff08208\u7c7b\uff09\u884c\u653f\u4e8b\u4e1a\u5355\u4f4d\u517b\u8001\u652f\u51fa\uff0805\u6b3e\uff09\u884c\u653f\u5355\u4f4d\u79bb\u9000\u4f11\uff0801\u9879\uff0956.12\u4e07\u5143\u3002"
+            "\u4e3b\u8981\u7528\u4e8e\uff1a\u9000\u4f11\u4eba\u5458\u652f\u51fa\u30022025\u5e74\u5f53\u5e74\u9884\u7b97\u6267\u884c\u6570\u4e3a57.43\u4e07\u5143\uff0c"
+            "2026\u5e74\u9884\u7b97\u5b89\u639257.8\u4e07\u5143\uff0c\u6bd42025\u5e74\u9884\u7b97\u6267\u884c\u6570\u51cf\u5c112.27%\u3002",
+        ]
+    )
+    doc = build_document(
+        path="unit-2026-budget.pdf",
+        page_texts=[page_text],
+        page_tables=[[]],
+        filesize=30,
+    )
+
+    issues = BUD112_ItemAmountConsistency().apply(doc)
+
+    assert issues
+    assert any("56.12" in issue.message for issue in issues)
+    assert any("57.80" in issue.message for issue in issues)
+
+
+def test_budget_scope_terminology_rule_detects_department_wording_in_unit_budget() -> None:
+    page_texts = [
+        "2026\u5e74\u5355\u4f4d\u9884\u7b97",
+        "2026\u5e74\u90e8\u95e8\u9884\u7b97\u5b89\u6392\u8d2d\u7f6e\u8f66\u8f860\u8f86\uff1b\u90e8\u95e8\u9884\u7b97\u5b89\u6392\u8d2d\u7f6e\u5355\u4ef7100\u4e07\u5143\uff08\u542b\uff09\u4ee5\u4e0a\u8bbe\u59070\u53f0\u5957\u3002",
+    ]
+    doc = build_document(
+        path="unit-2026-budget.pdf",
+        page_texts=page_texts,
+        page_tables=[[], []],
+        filesize=12,
+    )
+
+    issues = BUD113_DocumentScopeTerminology().apply(doc)
+
+    assert issues
+    assert any("\u5355\u4f4d\u9884\u7b97" in issue.message for issue in issues)
+    assert any("\u90e8\u95e8\u9884\u7b97\u5b89\u6392" in (issue.evidence_text or "") for issue in issues)
+
+
+def test_common_text_anomaly_rule_detects_double_period_and_unmatched_quote() -> None:
+    page_text = (
+        "\u4fe1\u606f\u5316\u5efa\u8bbe\u53ca\u8fd0\u884c\u7ef4\u62a4\u7b49\u65b9\u9762\u7684\u652f\u51fa\u3002\u3002\n"
+        "\u9879\u76ee\u60c5\u51b5\u8bf4\u660e\uff1a\u201c\u5f00\u5c55\u6d3b\u52a8\u3002\u201d\u201d"
+    )
+    doc = build_document(
+        path="unit-2026-budget.pdf",
+        page_texts=[page_text],
+        page_tables=[[]],
+        filesize=20,
+    )
+
+    issues = CMM002_TextAnomalyRule().apply(doc)
+
+    assert any("\u8fde\u7eed\u53e5\u53f7" in issue.message for issue in issues)
+    assert any("\u591a\u4f59\u53f3\u5f15\u53f7" in issue.message for issue in issues)
+
+
+def test_common_comparative_narrative_logic_rule_detects_template_leftover_and_truncated_reason() -> None:
+    page_text = (
+        "\u8d22\u653f\u62e8\u6b3e\u6536\u5165\u652f\u51fa\u589e\u52a0\uff08\u51cf\u5c11\uff09\u7684\u4e3b\u8981\u539f\u56e0\u662f\u4e1a\u52a1\u91cf\u589e\u52a0\u3002"
+        "\u516c\u52a1\u7528\u8f66\u8d2d\u7f6e\u53ca\u8fd0\u884c\u8d399.98\u4e07\u5143\uff0c\u4e0e2025\u5e74\u9884\u7b97\u6570\u6301\u5e73\uff0c\u4e3b\u8981\u539f\u56e0\u662f\u3002"
+    )
+    doc = build_document(
+        path="unit-2026-budget.pdf",
+        page_texts=[page_text],
+        page_tables=[[]],
+        filesize=20,
+    )
+
+    issues = CMM005_ComparativeNarrativeLogic().apply(doc)
+
+    assert any("\u589e\u51cf\u65b9\u5411\u672a\u786e\u5b9a" in issue.message for issue in issues)
+    assert any("\u4e3b\u8981\u539f\u56e0\u662f" in issue.message for issue in issues)
 
 
 def test_pipeline_budget_name_mismatch_uses_specific_title_and_suggestion(

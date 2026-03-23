@@ -3,7 +3,7 @@ import { apiBase } from "@/lib/apiBase";
 import { backendAuthHeaders } from "@/lib/backendAuth";
 import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { getLocalOrganizationsTree } from "@/lib/localData";
+import { getLocalOrganizationsTree, invalidateLocalDataCache } from "@/lib/localData";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +47,9 @@ export async function POST(request: NextRequest) {
       data = JSON.parse(text);
     } catch {
       data = { raw: text };
+    }
+    if (response.ok) {
+      invalidateLocalDataCache();
     }
     return NextResponse.json(data, { status: response.status });
   } catch (error) {

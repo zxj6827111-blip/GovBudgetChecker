@@ -48,6 +48,7 @@ class EngineRuleRunner:
             "warn": "medium",
             "warning": "medium",
             "medium": "medium",
+            "manual_review": "manual_review",
             "low": "low",
             "hint": "low",
             "info": "info",

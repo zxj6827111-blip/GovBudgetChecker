@@ -1,4 +1,4 @@
-export type SeverityCode = "critical" | "high" | "medium" | "low" | "info";
+export type SeverityCode = "critical" | "high" | "medium" | "low" | "info" | "manual_review";
 
 type SeverityMeta = {
   label: string;
@@ -44,11 +44,19 @@ const SEVERITY_META: Record<SeverityCode, SeverityMeta> = {
     accentClass: "bg-slate-300",
     panelClass: "border-slate-200 bg-slate-100 text-slate-700",
   },
+  manual_review: {
+    label: "待人工复核",
+    riskLabel: "待人工复核",
+    badgeClass: "border-violet-200 bg-violet-100 text-violet-800",
+    accentClass: "bg-violet-500",
+    panelClass: "border-violet-100 bg-violet-50 text-violet-700",
+  },
 };
 
 export const SEVERITY_ORDER: SeverityCode[] = [
   "critical",
   "high",
+  "manual_review",
   "medium",
   "low",
   "info",
@@ -64,6 +72,9 @@ export function normalizeSeverityCode(value: unknown): SeverityCode {
   }
   if (["warn", "warning", "medium"].includes(normalized)) {
     return "medium";
+  }
+  if (normalized === "manual_review") {
+    return "manual_review";
   }
   if (normalized === "low") {
     return "low";

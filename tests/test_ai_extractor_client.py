@@ -106,17 +106,18 @@ def test_normalize_severity_maps_p_levels() -> None:
     assert ExtractorClient._normalize_severity("p0") == "high"
     assert ExtractorClient._normalize_severity("p1") == "medium"
     assert ExtractorClient._normalize_severity("p2") == "low"
+    assert ExtractorClient._normalize_severity("manual_review") == "manual_review"
     assert ExtractorClient._normalize_severity("unknown") == "medium"
 
 
 @pytest.mark.asyncio
-async def test_full_report_audit_keeps_empty_direct_result_without_fallback() -> None:
+async def test_full_report_audit_falls_back_when_direct_result_is_empty() -> None:
     client = ExtractorClient()
     client._direct_semantic_audit = AsyncMock(return_value=[])
     client.ai_semantic_audit = AsyncMock(return_value=[{"type": "should_not_run"}])
 
     result = await client.ai_full_report_audit("测试文本", "doc-hash")
 
-    assert result == []
+    assert result == [{"type": "should_not_run"}]
     client._direct_semantic_audit.assert_awaited_once()
-    client.ai_semantic_audit.assert_not_awaited()
+    client.ai_semantic_audit.assert_awaited_once()

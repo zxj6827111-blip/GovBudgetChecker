@@ -345,13 +345,7 @@ function AdminPageContent() {
         throw new Error(await readErrorMessage(response));
       }
 
-      const payload = (await response.json()) as OrganizationSelection;
-      setSelectedOrg({
-        id: String(payload.id || ""),
-        name: String(payload.name || trimmedName),
-        level: String(payload.level || "unit"),
-        parent_id: payload.parent_id ?? selectedOrg.id,
-      });
+      await response.json().catch(() => ({}));
       refreshOrganizationTree();
       setNotice({ tone: "success", message: `已创建下属单位：${trimmedName}` });
     } catch (error) {
@@ -792,7 +786,7 @@ function AdminPageContent() {
                         </div>
                         <div className="mt-2">当前层级：{selectedOrg.level === "department" ? "部门" : "单位"}</div>
                         <Link href={`/department/${selectedOrg.id}` as Route} className="mt-4 inline-flex rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700">
-                          打开部门详情
+                          打开组织详情
                         </Link>
                       </div>
                     ) : (

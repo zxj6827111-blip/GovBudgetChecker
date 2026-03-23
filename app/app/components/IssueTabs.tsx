@@ -9,7 +9,7 @@ export type IssueItem = {
   id: string;
   source: "ai" | "rule";
   rule_id?: string;
-  severity: "info" | "low" | "medium" | "high" | "critical";
+  severity: "info" | "low" | "medium" | "high" | "critical" | "manual_review";
   title: string;
   message: string;
   evidence: Array<{
@@ -357,6 +357,7 @@ function severityRank(severity: IssueItem["severity"]) {
   const rank = {
     critical: 5,
     high: 4,
+    manual_review: 3.5,
     medium: 3,
     low: 2,
     info: 1,
