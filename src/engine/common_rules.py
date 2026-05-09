@@ -559,6 +559,66 @@ _ZERO_INCREASE_PATTERN = re.compile(
     r"([一-龥]{0,24}?拨款支出预算)0(?:\.0+)?万元，比20\d{2}年预算增加([0-9][0-9,]*\.?[0-9]*)万元"
 )
 _ABNORMAL_DELTA_WORDING_PATTERN = re.compile(r"(增加|减少)持平")
+_BUDGET_FINAL_DIRECTION_RE = re.compile(
+    r"(?:^|[。；;\n])(?P<segment>[^。；;\n]{0,80}?"
+    r"年初预算(?:数)?(?:为|是)?\s*(?P<budget>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元"
+    r"[^。；;\n]{0,120}?"
+    r"(?:支出)?决算(?:数)?(?:为|是)?\s*(?P<final>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元"
+    r"[^。；;\n]{0,120}?"
+    r"(?P<word>持平|一致|等于|增加|增长|高于|超出|超过|减少|下降|低于|少于)[^。；;\n]{0,40})",
+    re.S,
+)
+_UP_WORDS = {"增加", "增长", "高于", "超出", "超过"}
+_DOWN_WORDS = {"减少", "下降", "低于", "少于"}
+_FLAT_WORDS = {"持平", "一致", "等于"}
+
+
+def _direction_from_word(word: str) -> Optional[str]:
+    if word in _UP_WORDS:
+        return "up"
+    if word in _DOWN_WORDS:
+        return "down"
+    if word in _FLAT_WORDS:
+        return "flat"
+    return None
+
+
+def _expected_budget_final_direction(budget: float, final: float) -> str:
+    if abs(final - budget) <= 0.01:
+        return "flat"
+    return "up" if final > budget else "down"
+
+
+def _direction_label(direction: str) -> str:
+    return {"flat": "持平", "up": "增加", "down": "减少"}.get(direction, direction)
+
+
+def _budget_final_direction_issues(rule: Rule, page_idx: int, page_text: str) -> List[Issue]:
+    issues: List[Issue] = []
+    for match in _BUDGET_FINAL_DIRECTION_RE.finditer(page_text or ""):
+        budget = _to_float(match.group("budget"))
+        final = _to_float(match.group("final"))
+        actual_direction = _direction_from_word(match.group("word"))
+        if budget is None or final is None or actual_direction is None:
+            continue
+        expected_direction = _expected_budget_final_direction(budget, final)
+        if actual_direction == expected_direction:
+            continue
+        segment = match.group("segment").strip()
+        issues.append(
+            rule._issue(
+                (
+                    "预算数与决算数文字方向不一致："
+                    f"年初预算数={budget:.2f}万元，决算数={final:.2f}万元，"
+                    f"按金额应表述为“{_direction_label(expected_direction)}”，"
+                    f"当前写为“{match.group('word')}”。"
+                ),
+                {"page": page_idx, "pos": match.start(), "section": "支出决算具体情况"},
+                "error",
+                evidence_text=segment,
+            )
+        )
+    return issues
 
 
 _TEMPLATE_LEFTOVER_PATTERNS: Sequence[Tuple[re.Pattern[str], str]] = (
@@ -634,6 +694,8 @@ class CMM005_ComparativeNarrativeLogic(Rule):
                         evidence_text=_snippet(flat_text, match.start(), match.end()),
                     )
                 )
+
+            issues.extend(_budget_final_direction_issues(self, page_idx, page_text))
 
         return issues
 

@@ -319,8 +319,103 @@ def _split_text_segments(text: str, num_segments: int) -> List[str]:
             segments.append(segment)
     
     return segments
-NINE_ALIAS_NORMAL = [{"name": it["name"], "aliases_norm": [normalize_text(x) for x in it["aliases"]]}
-                     for it in NINE_TABLES]
+STANDARD_FINAL_NINE_TABLE_ALIASES = [
+    ["收入支出决算总表", "部门收入支出决算总表", "收入支出决算总表"],
+    ["收入决算表", "部门收入决算表"],
+    ["支出决算表", "部门支出决算表"],
+    ["财政拨款收入支出决算总表", "财政拨款收支决算总表"],
+    ["一般公共预算财政拨款支出决算表", "一般公共预算财政拨款支出决算表"],
+    ["一般公共预算财政拨款基本支出决算表", "一般公共预算财政拨款基本支出决算表", "基本支出决算表"],
+    [
+        "一般公共预算财政拨款“三公”经费支出决算表",
+        "一般公共预算财政拨款\"三公\"经费支出决算表",
+        "财政拨款“三公”经费支出决算表",
+        "三公经费支出决算表",
+    ],
+    ["政府性基金预算财政拨款收入支出决算表", "政府性基金预算财政拨款收入支出决算表", "政府性基金决算表"],
+    [
+        "国有资本经营预算财政拨款收入支出决算表",
+        "国有资本经营预算财政拨款支出决算表",
+        "国有资本经营预算支出决算表",
+    ],
+]
+
+
+def _standard_aliases_for(index: int) -> List[str]:
+    if 0 <= index < len(STANDARD_FINAL_NINE_TABLE_ALIASES):
+        return STANDARD_FINAL_NINE_TABLE_ALIASES[index]
+    return []
+
+
+NINE_ALIAS_NORMAL = [
+    {
+        "name": it["name"],
+        "aliases_norm": [
+            normalize_text(x)
+            for x in list(it["aliases"]) + _standard_aliases_for(idx)
+            if x
+        ],
+    }
+    for idx, it in enumerate(NINE_TABLES)
+]
+STANDARD_FINAL_ALIAS_NORMS = {
+    normalize_text(alias)
+    for aliases in STANDARD_FINAL_NINE_TABLE_ALIASES
+    for alias in aliases
+    if alias
+}
+
+
+def _standard_alias_in_title_line(raw: str, alias_norm: str) -> bool:
+    line_norms = [
+        normalize_text(raw_line)
+        for raw_line in (raw or "").splitlines()
+        if normalize_text(raw_line)
+    ]
+    candidates = list(line_norms)
+    candidates.extend(
+        left + right
+        for left, right in zip(line_norms, line_norms[1:], strict=False)
+        if len(left) + len(right) <= 80
+    )
+    for line_norm in candidates:
+        if line_norm == alias_norm:
+            return True
+        # Allow a short table-number prefix such as "表1" or "1." but avoid
+        # matching a generic title inside another table title.
+        if line_norm.endswith(alias_norm) and len(line_norm) - len(alias_norm) <= 8:
+            return True
+    return False
+
+
+def _alias_matches_page(raw: str, normalized_page: str, alias_norm: str) -> bool:
+    if not alias_norm:
+        return False
+    if alias_norm in STANDARD_FINAL_ALIAS_NORMS:
+        return _standard_alias_in_title_line(raw, alias_norm)
+    return alias_norm in normalized_page or fuzz.partial_ratio(alias_norm, normalized_page) >= 95
+
+
+def _should_skip_short_expense_table(raw: str, alias_norm: str) -> bool:
+    short_expense_aliases = {normalize_text("支出决算表"), normalize_text("部门支出决算表")}
+    if alias_norm not in short_expense_aliases:
+        return False
+    specific_markers = [
+        normalize_text("财政拨款"),
+        normalize_text("一般公共预算"),
+        normalize_text("政府性基金"),
+        normalize_text("国有资本"),
+        normalize_text("基本支出"),
+        normalize_text("三公"),
+    ]
+    for raw_line in (raw or "").splitlines():
+        line_norm = normalize_text(raw_line)
+        if alias_norm not in line_norm:
+            continue
+        if line_norm == alias_norm:
+            return False
+        return any(marker in line_norm for marker in specific_markers)
+    return False
 
 def _is_non_table_page(raw: str) -> bool:
     r = normalize_text(raw or "")
@@ -346,7 +441,7 @@ def find_table_anchors(doc: Document) -> Dict[str, List[int]]:
         has_table_title = False
         for it in NINE_ALIAS_NORMAL:
             for alias_norm in it["aliases_norm"]:
-                if alias_norm and (alias_norm in ntxt or fuzz.partial_ratio(alias_norm, ntxt) >= 95):
+                if _alias_matches_page(raw, ntxt, alias_norm):
                     has_table_title = True
                     break
             if has_table_title:
@@ -359,14 +454,9 @@ def find_table_anchors(doc: Document) -> Dict[str, List[int]]:
         if is_table_page or has_table_title or has_actual_table:
             for it in NINE_ALIAS_NORMAL:
                 for alias_norm in it["aliases_norm"]:
-                    if alias_norm and (alias_norm in ntxt or fuzz.partial_ratio(alias_norm, ntxt) >= 95):
-                        # ====== 修复：严格排除逻辑 ======
-                        # 当匹配"支出决算表"时，必须排除带有"政府性基金"或"国有资本"前缀的页面
-                        # 这些是 Table 8 和 Table 9，不能误判为 Table 3
-                        if it["name"] == "支出决算表":
-                            if "政府性基金" in raw or "国有资本" in raw:
-                                continue  # 跳过此匹配，不算作 Table 3
-                        # ====== 修复结束 ======
+                    if _alias_matches_page(raw, ntxt, alias_norm):
+                        if _should_skip_short_expense_table(raw, alias_norm):
+                            continue
                         anchors[it["name"]].append(pidx + 1)
                         break
     return anchors
@@ -628,8 +718,11 @@ class R33002_NineTablesCheck(Rule):
             # 如果所有页面都是具体的分类表，则认为缺少独立的"支出决算表"
             has_independent_table = False
             for page_num in expense_table_pages:
-                if page_num < len(doc.page_texts):
+                if 1 <= page_num <= len(doc.page_texts):
                     page_text = doc.page_texts[page_num - 1]
+                    if _standard_alias_in_title_line(page_text, normalize_text(expense_table_name)):
+                        has_independent_table = True
+                        break
                     # 检查是否是独立的"支出决算表"
                     # 独立的"支出决算表"应该不包含"一般公共预算"、"基本支出"、"三公"等关键词
                     if ("支出决算表" in page_text and 
@@ -821,6 +914,8 @@ def _largest_table_on_page(tables: List[List[List[str]]]) -> Optional[List[List[
     return sorted(tables, key=lambda t: sum(len(r) for r in t), reverse=True)[0]
 
 def _get_first_anchor_page(doc: Document, table_name: str) -> Optional[int]:
+    if not doc.anchors:
+        doc.anchors = find_table_anchors(doc)
     pages = (doc.anchors or {}).get(table_name) or []
     if not pages:
         return None
@@ -2075,6 +2170,34 @@ def _parse_row_values(row: List[str]) -> List[float]:
             vals.append(0.0) # 空值视为0以便计算
     return vals
 
+
+_STANDARD_AMOUNT = r"([0-9][0-9,]*(?:\.[0-9]+)?)"
+
+
+def _extract_standard_three_public_total(section: str, fiscal_type: str) -> Optional[float]:
+    for sentence in re.split(r"[。；;\n]", section or ""):
+        if "三公" not in sentence or fiscal_type not in sentence or "万元" not in sentence:
+            continue
+        if not any(token in sentence for token in ("经费", "合计", "支出")):
+            continue
+        target_text = sentence
+        direct_match = re.search(r"(?<!上年)决算数(?:为|是)?\s*" + _STANDARD_AMOUNT + r"\s*万元", sentence)
+        amount_match = direct_match
+        if amount_match is None and fiscal_type in sentence:
+            fiscal_pos = sentence.find(fiscal_type)
+            if fiscal_pos >= 0:
+                target_text = sentence[fiscal_pos:]
+                amount_match = re.search(_STANDARD_AMOUNT, target_text)
+        if amount_match is None:
+            amount_match = re.search(_STANDARD_AMOUNT, target_text)
+        if not amount_match:
+            continue
+        value = parse_number(amount_match.group(1))
+        if value is not None:
+            return value
+    return None
+
+
 # ==================================================================================
 # 勾稽关系验证规则
 # ==================================================================================
@@ -3307,6 +3430,8 @@ class R33244_Table7_ThreePublicAdvancedCheck(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
         t7_rows = _get_table_rows(doc, '一般公共预算财政拨款“三公”经费支出决算表')
+        if not t7_rows:
+            t7_rows = _get_table_rows(doc, '一般公共预算财政拨款"三公"经费支出决算表')
         
         if not t7_rows:
             return issues
@@ -3405,6 +3530,32 @@ class R33244_Table7_ThreePublicAdvancedCheck(Rule):
         # 兜底：如果章节匹配完全失败，使用全文匹配
         if not three_public_section:
             three_public_section = all_text
+
+        standard_nar_final_total = _extract_standard_three_public_total(three_public_section, "决算")
+        if standard_nar_final_total is not None:
+            data_val = data["final"][0]
+            is_empty = data["is_empty"]["final"][0]
+            if is_empty:
+                if standard_nar_final_total > 0.01:
+                    issues.append(self._issue(
+                        (
+                            "【表七】三公经费合计决算数不一致："
+                            f"说明显示为{standard_nar_final_total:.2f}万元，但报表合计决算数为空白。"
+                        ),
+                        {"item": "三公经费合计", "type": "final", "nar_v": standard_nar_final_total},
+                        "error",
+                        evidence_text=f"文字说明：{standard_nar_final_total}\n表格数据：空白",
+                    ))
+            elif abs(data_val - standard_nar_final_total) > 0.01:
+                issues.append(self._issue(
+                    (
+                        "【表七】三公经费合计决算数表文不符："
+                        f"报表={data_val:.2f}万元，说明={standard_nar_final_total:.2f}万元。"
+                    ),
+                    {"item": "三公经费合计", "type": "final"},
+                    "error",
+                    evidence_text=f"文字说明：{standard_nar_final_total}\n表格数据：{data_val}",
+                ))
 
         def get_nar_val(item_p, type_p):
             # item_p: 科目特征; type_p: 预算/决算
@@ -4728,6 +4879,18 @@ _FINAL_COMPLETION_PERCENT_RE = re.compile(
     r"(?:完成|占)(?:年初)?预算(?:的比重)?(?:的)?\s*(?P<pct>[0-9][0-9,]*(?:\.[0-9]+)?)%",
     re.S,
 )
+_FINAL_COMPLETION_REASON_RE = re.compile(
+    r"主要原因(?:是|为)?|原因(?:是|为|如下)|由于|主要系|系因|受[^。；;\n]{0,60}影响|"
+    r"(?:^|[。；;，,\s])因(?!公)[^。；;\n]{1,80}",
+    re.S,
+)
+
+
+def _completion_rate_has_reason(segment: str, match: re.Match[str]) -> bool:
+    window_start = max(0, match.start() - 80)
+    window_end = min(len(segment), match.end() + 160)
+    window = segment[window_start:window_end]
+    return _FINAL_COMPLETION_REASON_RE.search(window) is not None
 _FINAL_ITEM_OPENING_AMOUNT_RE = re.compile(
     r"(?:^|\s)\d+\u3001[\s\S]{0,160}?(?P<front>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元",
     re.S,
@@ -4861,6 +5024,19 @@ class R33234_NarrativePercentConsistency(Rule):
 
                 expected_pct = final_val / budget_val * 100.0
                 if tolerant_equal(reported_pct, expected_pct, atol=0.5, rtol=0.01):
+                    if (
+                        not tolerant_equal(expected_pct, 100.0, atol=0.5, rtol=0.0)
+                        and not _completion_rate_has_reason(segment, match)
+                    ):
+                        issues.append(
+                            self._issue(
+                                f"完成率偏离100%但未说明原因（{subject}）：年初预算为{budget_val:.2f}万元，"
+                                f"支出决算为{final_val:.2f}万元，完成率为{reported_pct:.2f}%，建议补充差异原因说明",
+                                {"page": page_num, "section": "决算情况说明", "subject": subject},
+                                severity="warn",
+                                evidence_text=segment.replace("\n", " "),
+                            )
+                        )
                     continue
 
                 issues.append(
