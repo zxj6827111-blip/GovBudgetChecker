@@ -2,7 +2,7 @@ import dns from "node:dns/promises";
 import net from "node:net";
 import { NextRequest, NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
-import { backendAuthHeaders } from "@/lib/backendAuth";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export const runtime = "nodejs";
 
@@ -159,6 +159,11 @@ async function downloadPdfByUrl(rawUrl: string): Promise<{ data: Uint8Array; fil
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireBackendAuthHeaders();
+  if (!auth.ok) {
+    return auth.response;
+  }
+
   try {
     const body = await req.json();
     const url = body?.url;
@@ -173,7 +178,7 @@ export async function POST(req: NextRequest) {
 
     const upstream = await fetch(`${apiBase}/upload`, {
       method: "POST",
-      headers: backendAuthHeaders(),
+      headers: auth.headers,
       body: form as any,
     });
     const text = await upstream.text();
@@ -191,4 +196,3 @@ export async function POST(req: NextRequest) {
     );
   }
 }
-

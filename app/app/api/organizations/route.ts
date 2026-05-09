@@ -1,16 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
-import { backendAuthHeaders } from "@/lib/backendAuth";
 import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { getLocalOrganizationsTree, invalidateLocalDataCache } from "@/lib/localData";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  const auth = await requireBackendAuthHeaders({
+    "Content-Type": "application/json",
+  });
+  if (!auth.ok) {
+    return auth.response;
+  }
+
   try {
     const response = await fetchWithTimeout(`${apiBase}/api/organizations`, {
-      headers: backendAuthHeaders({ "Content-Type": "application/json" }),
+      headers: auth.headers,
       cache: "no-store",
     });
     const text = await response.text();
@@ -38,7 +45,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const response = await fetchWithTimeout(`${apiBase}/api/organizations`, {
       method: "POST",
-      headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
+      headers: await backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
     });
     const text = await response.text();

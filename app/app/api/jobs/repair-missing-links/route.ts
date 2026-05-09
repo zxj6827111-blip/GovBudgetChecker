@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
       `${apiBase}/api/jobs/repair-missing-links`,
       {
         method: "POST",
-        headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
+      headers: await backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
         body: JSON.stringify(body ?? {}),
       },
       300000,

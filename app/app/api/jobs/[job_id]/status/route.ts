@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
-import { backendAuthHeaders } from "@/lib/backendAuth";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 async function parseUpstream(res: Response) {
   const text = await res.text();
@@ -13,9 +13,14 @@ async function parseUpstream(res: Response) {
 
 export async function GET(
   _req: Request,
-  { params }: { params: { job_id: string } }
+  { params }: { params: Promise<{ job_id: string }> }
 ) {
-  const job = encodeURIComponent(params.job_id);
+  const auth = await requireBackendAuthHeaders();
+  if (!auth.ok) {
+    return auth.response;
+  }
+
+  const job = encodeURIComponent((await params).job_id);
   const candidates = [
     `${apiBase}/api/jobs/${job}/status`,
     `${apiBase}/jobs/${job}/status`,
@@ -27,7 +32,7 @@ export async function GET(
     try {
       const res = await fetch(url, {
         cache: "no-store",
-        headers: backendAuthHeaders(),
+        headers: auth.headers,
       });
       const data = await parseUpstream(res);
       if (res.ok) {
@@ -43,7 +48,7 @@ export async function GET(
     return NextResponse.json(
       {
         error: "backend_request_failed",
-        job_id: params.job_id,
+        job_id: (await params).job_id,
         upstream_status: lastError.status,
         upstream_source: lastError.source,
         upstream_body: lastError.data,
@@ -55,7 +60,7 @@ export async function GET(
   return NextResponse.json(
     {
       error: "backend_unavailable",
-      job_id: params.job_id,
+      job_id: (await params).job_id,
       detail: lastException || "all upstream candidates failed",
     },
     { status: 502 }

@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
-import { backendAuthHeaders } from "@/lib/backendAuth";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export const runtime = "nodejs";
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { versionId: string } }
+  { params }: { params: Promise<{ versionId: string }> }
 ) {
+  const auth = await requireBackendAuthHeaders();
+  if (!auth.ok) {
+    return auth.response;
+  }
+
   try {
     let body: any = undefined;
     try {
@@ -15,14 +20,16 @@ export async function POST(
     } catch {
       body = undefined;
     }
+    const headers = new Headers(auth.headers);
+    if (body) {
+      headers.set("Content-Type", "application/json");
+    }
 
     const upstream = await fetch(
-      `${apiBase}/api/documents/${encodeURIComponent(params.versionId)}/run`,
+      `${apiBase}/api/documents/${encodeURIComponent((await params).versionId)}/run`,
       {
         method: "POST",
-        headers: backendAuthHeaders(
-          body ? { "Content-Type": "application/json" } : undefined
-        ),
+        headers,
         body: body ? JSON.stringify(body) : undefined,
       }
     );
@@ -42,4 +49,3 @@ export async function POST(
     );
   }
 }
-

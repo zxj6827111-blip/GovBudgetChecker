@@ -8,7 +8,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     const response = await fetchWithTimeout(`${apiBase}/api/jobs/reanalyze-all`, {
       method: "POST",
-      headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
+    headers: await backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
       body: JSON.stringify(body ?? {}),
     });
     const text = await response.text();

@@ -23,7 +23,7 @@ export async function GET(request: Request) {
 
   try {
     const response = await fetchWithTimeout(upstreamUrl.toString(), {
-      headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
+      headers: await backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
       cache: "no-store",
     });
     const payload = parsePayload(await response.text());

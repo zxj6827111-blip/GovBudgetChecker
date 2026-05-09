@@ -1,15 +1,22 @@
 import { NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { backendAuthHeaders } from "@/lib/backendAuth";
 import { getLocalOrganizationsList } from "@/lib/localData";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  const auth = await requireBackendAuthHeaders({
+    "Content-Type": "application/json",
+  });
+  if (!auth.ok) {
+    return auth.response;
+  }
+
   try {
     const response = await fetchWithTimeout(`${apiBase}/api/organizations/list`, {
-      headers: backendAuthHeaders({ "Content-Type": "application/json" }),
+      headers: auth.headers,
       cache: "no-store",
     });
     const text = await response.text();

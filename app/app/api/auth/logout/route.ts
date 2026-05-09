@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
       return response;
     }
 
-    const sessionToken = readSessionToken();
+    const sessionToken = await readSessionToken();
     if (sessionToken) {
       try {
         await fetchWithTimeout(`${apiBase}/api/auth/logout`, {

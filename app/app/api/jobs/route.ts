@@ -1,12 +1,19 @@
 import { NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { backendAuthHeaders } from "@/lib/backendAuth";
 import { getLocalJobs } from "@/lib/localData";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
+  const auth = await requireBackendAuthHeaders({
+    "Content-Type": "application/json",
+  });
+  if (!auth.ok) {
+    return auth.response;
+  }
+
   const requestUrl = new URL(request.url);
   const upstreamUrl = new URL(`${apiBase}/api/jobs`);
   const hasPagination =
@@ -18,7 +25,7 @@ export async function GET(request: Request) {
   try {
     const res = await fetchWithTimeout(upstreamUrl.toString(), {
       cache: "no-store",
-      headers: backendAuthHeaders({ "Content-Type": "application/json" }),
+      headers: auth.headers,
     });
     const text = await res.text();
     let data: any;

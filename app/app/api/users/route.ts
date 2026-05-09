@@ -45,7 +45,7 @@ function parseBooleanField(
 }
 
 export async function GET() {
-  const sessionToken = readSessionToken();
+  const sessionToken = await readSessionToken();
   if (!sessionToken) {
     return unauthorizedResponse();
   }
@@ -75,7 +75,7 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-  const sessionToken = readSessionToken();
+  const sessionToken = await readSessionToken();
   if (!sessionToken) {
     return unauthorizedResponse();
   }

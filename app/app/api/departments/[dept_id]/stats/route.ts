@@ -1,24 +1,31 @@
 import { NextResponse } from "next/server";
 
 import { apiBase } from "@/lib/apiBase";
-import { backendAuthHeaders } from "@/lib/backendAuth";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import {
   LocalDataError,
   getLocalDepartmentStats,
 } from "@/lib/localData";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export async function GET(
   _request: Request,
-  { params }: { params: { dept_id: string } }
+  { params }: { params: Promise<{ dept_id: string }> }
 ) {
-  const deptId = encodeURIComponent(params.dept_id);
+  const auth = await requireBackendAuthHeaders({
+    "Content-Type": "application/json",
+  });
+  if (!auth.ok) {
+    return auth.response;
+  }
+
+  const deptId = encodeURIComponent((await params).dept_id);
   try {
     const response = await fetchWithTimeout(
       `${apiBase}/api/departments/${deptId}/stats`,
       {
         cache: "no-store",
-        headers: backendAuthHeaders({ "Content-Type": "application/json" }),
+        headers: auth.headers,
       }
     );
     const text = await response.text();
@@ -36,18 +43,18 @@ export async function GET(
   }
 
   try {
-    const localData = await getLocalDepartmentStats(params.dept_id);
+    const localData = await getLocalDepartmentStats((await params).dept_id);
     return NextResponse.json(localData, { status: 200 });
   } catch (error) {
     if (error instanceof LocalDataError) {
       return NextResponse.json(
-        { detail: error.message, department_id: params.dept_id, stats: {} },
+        { detail: error.message, department_id: (await params).dept_id, stats: {} },
         { status: error.status }
       );
     }
     console.error("Failed to read local department stats:", error);
     return NextResponse.json(
-      { detail: "Failed to load department stats", department_id: params.dept_id, stats: {} },
+      { detail: "Failed to load department stats", department_id: (await params).dept_id, stats: {} },
       { status: 500 }
     );
   }

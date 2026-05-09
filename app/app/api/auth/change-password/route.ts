@@ -23,7 +23,7 @@ function parsePayload(text: string): Record<string, unknown> {
 }
 
 export async function POST(request: NextRequest) {
-  const sessionToken = readSessionToken();
+  const sessionToken = await readSessionToken();
   if (!sessionToken) {
     return NextResponse.json({ detail: "not logged in" }, { status: 401 });
   }

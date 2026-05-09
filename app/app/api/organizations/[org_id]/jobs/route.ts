@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { backendAuthHeaders } from "@/lib/backendAuth";
 import {
   LocalDataError,
   getLocalOrganizationJobs,
 } from "@/lib/localData";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export const dynamic = "force-dynamic";
 
@@ -22,9 +22,16 @@ function isOrganizationJobsPayload(value: unknown): value is OrganizationJobsPay
 
 export async function GET(
   request: Request,
-  { params }: { params: { org_id: string } }
+  { params }: { params: Promise<{ org_id: string }> }
 ) {
-  const orgId = encodeURIComponent(params.org_id);
+  const auth = await requireBackendAuthHeaders({
+    "Content-Type": "application/json",
+  });
+  if (!auth.ok) {
+    return auth.response;
+  }
+
+  const orgId = encodeURIComponent((await params).org_id);
   const requestUrl = new URL(request.url);
   const upstreamUrl = new URL(`${apiBase}/api/organizations/${orgId}/jobs`);
   requestUrl.searchParams.forEach((value, key) => {
@@ -33,7 +40,7 @@ export async function GET(
   try {
     const res = await fetchWithTimeout(upstreamUrl.toString(), {
       cache: "no-store",
-      headers: backendAuthHeaders({ "Content-Type": "application/json" }),
+      headers: auth.headers,
     });
     const text = await res.text();
     let data: unknown = null;
@@ -42,7 +49,7 @@ export async function GET(
         data = JSON.parse(text);
       } catch (error) {
         console.error("Failed to parse backend organization jobs response:", {
-          orgId: params.org_id,
+          orgId: (await params).org_id,
           status: res.status,
           error,
           bodyPreview: text.slice(0, 500),
@@ -54,13 +61,13 @@ export async function GET(
     }
     if (!res.ok) {
       console.error("Backend organization jobs request failed:", {
-        orgId: params.org_id,
+        orgId: (await params).org_id,
         status: res.status,
         bodyPreview: text.slice(0, 500),
       });
     } else {
       console.error("Backend organization jobs returned unexpected payload:", {
-        orgId: params.org_id,
+        orgId: (await params).org_id,
         status: res.status,
         bodyPreview: text.slice(0, 500),
       });
@@ -70,7 +77,7 @@ export async function GET(
   }
 
   try {
-    const localData = await getLocalOrganizationJobs(params.org_id, {
+    const localData = await getLocalOrganizationJobs((await params).org_id, {
       include_children: requestUrl.searchParams.get("include_children") === "true",
       limit: requestUrl.searchParams.get("limit")
         ? Number(requestUrl.searchParams.get("limit"))

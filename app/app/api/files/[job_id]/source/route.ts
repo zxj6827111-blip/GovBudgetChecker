@@ -1,21 +1,21 @@
 import { NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export async function GET(
   _req: Request,
-  { params }: { params: { job_id: string } }
+  { params }: { params: Promise<{ job_id: string }> }
 ) {
-  const jobId = encodeURIComponent(params.job_id);
-  const apiKey =
-    process.env.GOVBUDGET_API_KEY ||
-    process.env.BACKEND_API_KEY ||
-    "change_me_to_a_strong_secret";
+  const auth = await requireBackendAuthHeaders();
+  if (!auth.ok) {
+    return auth.response;
+  }
+
+  const jobId = encodeURIComponent((await params).job_id);
   try {
     const upstream = await fetch(`${apiBase}/api/files/${jobId}/source`, {
       cache: "no-store",
-      headers: {
-        "X-API-Key": apiKey,
-      },
+      headers: auth.headers,
     });
     if (!upstream.ok) {
       return NextResponse.json(
@@ -31,7 +31,7 @@ export async function GET(
         "Content-Type": upstream.headers.get("content-type") || "application/pdf",
         "Content-Disposition":
           upstream.headers.get("content-disposition") ||
-          `inline; filename="${params.job_id}.pdf"`,
+          `inline; filename="${(await params).job_id}.pdf"`,
       },
     });
   } catch (e: any) {

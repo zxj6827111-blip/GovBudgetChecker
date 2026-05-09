@@ -1,13 +1,18 @@
 import { NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
-import { backendAuthHeaders } from "@/lib/backendAuth";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export async function GET() {
+  const auth = await requireBackendAuthHeaders();
+  if (!auth.ok) {
+    return auth.response;
+  }
+
   const start = Date.now();
   try {
     const res = await fetch(`${apiBase}/api/config`, {
       cache: "no-store",
-      headers: backendAuthHeaders(),
+      headers: auth.headers,
     });
     const data = await res.json();
 

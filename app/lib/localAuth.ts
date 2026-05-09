@@ -50,8 +50,16 @@ const PASSWORD_ITERATIONS = Number(process.env.USER_PASSWORD_ITERATIONS ?? 26000
 const PASSWORD_MIN_LENGTH = Number(process.env.USER_PASSWORD_MIN_LENGTH ?? 6);
 const SESSION_TTL_SECONDS = Number(process.env.GBC_SESSION_MAX_AGE_SECONDS ?? 8 * 60 * 60);
 const DEFAULT_ADMIN_USERNAME = process.env.DEFAULT_ADMIN_USERNAME?.trim() || "admin";
-const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD?.trim() || "admin123";
+const DEFAULT_ADMIN_PASSWORD_ENV = process.env.DEFAULT_ADMIN_PASSWORD?.trim() || "";
+const DEFAULT_ADMIN_PASSWORD = DEFAULT_ADMIN_PASSWORD_ENV || "admin123";
 const DEFAULT_LEGACY_PASSWORD = process.env.DEFAULT_LEGACY_PASSWORD?.trim() || "change_me_123";
+const INSECURE_DEFAULT_ADMIN_PASSWORDS = new Set([
+  "admin",
+  "admin123",
+  "password",
+  "change_me_123",
+  "change_me_to_a_strong_secret",
+]);
 
 let fileLock: Promise<unknown> = Promise.resolve();
 
@@ -69,6 +77,25 @@ export function isLocalAuthFallbackEnabled(): boolean {
     return envOverride;
   }
   return process.env.NODE_ENV !== "production";
+}
+
+function allowInsecureDefaultAdmin(): boolean {
+  return (
+    parseBoolean(process.env.ALLOW_INSECURE_DEFAULT_ADMIN) === true ||
+    process.env.NODE_ENV === "test"
+  );
+}
+
+function requireSafeDefaultAdminPassword(): void {
+  if (process.env.NODE_ENV !== "production" || allowInsecureDefaultAdmin()) {
+    return;
+  }
+  if (!DEFAULT_ADMIN_PASSWORD_ENV) {
+    throw new LocalAuthError(500, "DEFAULT_ADMIN_PASSWORD must be set");
+  }
+  if (INSECURE_DEFAULT_ADMIN_PASSWORDS.has(DEFAULT_ADMIN_PASSWORD.toLowerCase())) {
+    throw new LocalAuthError(500, "DEFAULT_ADMIN_PASSWORD is insecure");
+  }
 }
 
 function withFileLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -172,9 +199,18 @@ function verifyPassword(password: string, passwordHash: string): boolean {
 function getSessionSecret(): Buffer {
   const raw =
     process.env.USER_SESSION_SECRET?.trim() ||
-    process.env.GOVBUDGET_API_KEY?.trim() ||
-    (process.env.NODE_ENV === "test" ? "test-user-session-secret" : "dev-user-session-secret");
-  return Buffer.from(raw, "utf-8");
+    process.env.GOVBUDGET_API_KEY?.trim();
+  if (raw) {
+    return Buffer.from(raw, "utf-8");
+  }
+  if (process.env.NODE_ENV === "production") {
+    throw new LocalAuthError(500, "USER_SESSION_SECRET or GOVBUDGET_API_KEY must be set");
+  }
+  const fallback =
+    process.env.NODE_ENV === "test"
+      ? "test-user-session-secret"
+      : "dev-user-session-secret";
+  return Buffer.from(fallback, "utf-8");
 }
 
 function signSessionBody(bodyText: string): string {
@@ -244,6 +280,7 @@ function resolveLoadedPasswordHash(canonicalUsername: string, rawPasswordHash: s
     return { passwordHash: hashPassword(legacyPassword), migrated: true };
   }
   if (canonicalUsername === normalizeUsername(DEFAULT_ADMIN_USERNAME)) {
+    requireSafeDefaultAdminPassword();
     return { passwordHash: hashPassword(DEFAULT_ADMIN_PASSWORD), migrated: true };
   }
   return { passwordHash: hashPassword(DEFAULT_LEGACY_PASSWORD), migrated: true };
@@ -255,6 +292,7 @@ function ensureDefaultAdmin(users: Record<string, StoredUser>): boolean {
   const existing = users[canonical];
 
   if (!existing) {
+    requireSafeDefaultAdminPassword();
     users[canonical] = {
       username: DEFAULT_ADMIN_USERNAME,
       password_hash: hashPassword(DEFAULT_ADMIN_PASSWORD),
@@ -277,6 +315,7 @@ function ensureDefaultAdmin(users: Record<string, StoredUser>): boolean {
     changed = true;
   }
   if (!isPasswordHash(existing.password_hash)) {
+    requireSafeDefaultAdminPassword();
     existing.password_hash = hashPassword(DEFAULT_ADMIN_PASSWORD);
     changed = true;
   }

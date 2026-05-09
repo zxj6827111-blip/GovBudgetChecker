@@ -1,18 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { apiBase } from "@/lib/apiBase";
-import { backendAuthHeaders } from "@/lib/backendAuth";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export async function POST(request: NextRequest) {
+  const auth = await requireBackendAuthHeaders({
+    "Content-Type": "application/json",
+  });
+  if (!auth.ok) {
+    return auth.response;
+  }
+
   try {
     const body = await request.json().catch(() => ({}));
     const upstream = await fetch(`${apiBase}/api/reports/download-batch`, {
       method: "POST",
       cache: "no-store",
-      headers: {
-        "Content-Type": "application/json",
-        ...backendAuthHeaders(),
-      },
+      headers: auth.headers,
       body: JSON.stringify(body ?? {}),
     });
 

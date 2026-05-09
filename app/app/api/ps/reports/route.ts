@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { backendAuthHeaders } from "@/lib/backendAuth";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export async function GET(request: NextRequest) {
+  const auth = await requireBackendAuthHeaders({
+    "Content-Type": "application/json",
+  });
+  if (!auth.ok) {
+    return auth.response;
+  }
+
   const requestUrl = new URL(request.url);
   const upstreamUrl = new URL(`${apiBase}/api/ps/reports`);
   requestUrl.searchParams.forEach((value, key) => {
@@ -13,7 +20,7 @@ export async function GET(request: NextRequest) {
   try {
     const response = await fetchWithTimeout(upstreamUrl.toString(), {
       cache: "no-store",
-      headers: backendAuthHeaders({ "Content-Type": "application/json" }),
+      headers: auth.headers,
     });
     const text = await response.text();
     let data: any;

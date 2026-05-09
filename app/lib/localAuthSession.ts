@@ -17,8 +17,8 @@ export type LocalSession = {
   user: LocalAuthUser;
 };
 
-export function readSessionToken(): string {
-  return cookies().get(SESSION_COOKIE_NAME)?.value?.trim() ?? "";
+export async function readSessionToken(): Promise<string> {
+  return (await cookies()).get(SESSION_COOKIE_NAME)?.value?.trim() ?? "";
 }
 
 export async function readLocalSession(): Promise<LocalSession | null> {
@@ -26,7 +26,7 @@ export async function readLocalSession(): Promise<LocalSession | null> {
     return null;
   }
 
-  const token = readSessionToken();
+  const token = await readSessionToken();
   if (!token) {
     return null;
   }

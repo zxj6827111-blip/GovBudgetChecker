@@ -15,7 +15,7 @@ function parsePayload(text: string): Record<string, unknown> {
 }
 
 export async function GET(request: Request) {
-  const sessionToken = readSessionToken();
+  const sessionToken = await readSessionToken();
   if (!sessionToken) {
     if (request.headers.get("x-login-probe") === "1") {
       return NextResponse.json({ user: null }, { status: 200 });

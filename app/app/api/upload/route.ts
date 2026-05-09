@@ -1,15 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
-import { backendAuthHeaders } from "@/lib/backendAuth";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
+  const auth = await requireBackendAuthHeaders();
+  if (!auth.ok) {
+    return auth.response;
+  }
+
   try {
     const formData = await req.formData();
     const upstream = await fetch(`${apiBase}/upload`, {
       method: "POST",
-      headers: backendAuthHeaders(),
+      headers: auth.headers,
       body: formData as any,
     });
 
@@ -28,4 +33,3 @@ export async function POST(req: NextRequest) {
     );
   }
 }
-

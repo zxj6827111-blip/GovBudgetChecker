@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
-import { backendAuthHeaders } from "@/lib/backendAuth";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export async function GET(req: NextRequest) {
+  const auth = await requireBackendAuthHeaders();
+  if (!auth.ok) {
+    return auth.response;
+  }
+
   const jobId = req.nextUrl.searchParams.get("job_id");
   const format = req.nextUrl.searchParams.get("format");
   if (!jobId) {
@@ -20,7 +25,7 @@ export async function GET(req: NextRequest) {
       `${apiBase}/api/reports/download?${params.toString()}`,
       {
         cache: "no-store",
-        headers: backendAuthHeaders(),
+        headers: auth.headers,
       }
     );
 

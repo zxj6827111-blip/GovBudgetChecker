@@ -50,9 +50,9 @@ function parsePasswordField(value: unknown): string {
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { username: string } }
+  { params }: { params: Promise<{ username: string }> }
 ) {
-  const sessionToken = readSessionToken();
+  const sessionToken = await readSessionToken();
   if (!sessionToken) {
     return unauthorizedResponse();
   }
@@ -76,7 +76,7 @@ export async function PATCH(
         if ("password" in body) {
           updates.password = parsePasswordField(body.password);
         }
-        const user = await updateLocalUser(params.username, updates);
+        const user = await updateLocalUser((await params).username, updates);
         return NextResponse.json(user, { status: 200 });
       } catch (localError) {
         if (localError instanceof LocalAuthError) {
@@ -90,7 +90,7 @@ export async function PATCH(
     }
 
     const backendResponse = await fetchWithTimeout(
-      `${apiBase}/api/users/${encodeURIComponent(params.username)}`,
+      `${apiBase}/api/users/${encodeURIComponent((await params).username)}`,
       {
         method: "PATCH",
         headers: backendAuthHeaders({
@@ -111,9 +111,9 @@ export async function PATCH(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { username: string } }
+  { params }: { params: Promise<{ username: string }> }
 ) {
-  const sessionToken = readSessionToken();
+  const sessionToken = await readSessionToken();
   if (!sessionToken) {
     return unauthorizedResponse();
   }
@@ -126,7 +126,7 @@ export async function DELETE(
       }
 
       try {
-        await deleteLocalUser(params.username, localSession.user.username);
+        await deleteLocalUser((await params).username, localSession.user.username);
         return NextResponse.json({ success: true }, { status: 200 });
       } catch (localError) {
         if (localError instanceof LocalAuthError) {
@@ -140,7 +140,7 @@ export async function DELETE(
     }
 
     const backendResponse = await fetchWithTimeout(
-      `${apiBase}/api/users/${encodeURIComponent(params.username)}`,
+      `${apiBase}/api/users/${encodeURIComponent((await params).username)}`,
       {
         method: "DELETE",
         headers: backendAuthHeaders({

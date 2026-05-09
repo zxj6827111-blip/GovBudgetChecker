@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
       `${apiBase}/api/jobs/structured-ingest-cleanup`,
       {
         method: "POST",
-        headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
+      headers: await backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
         body: JSON.stringify(body ?? {}),
       }
     );

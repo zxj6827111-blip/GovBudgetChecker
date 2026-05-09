@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 
 import { apiBase } from "@/lib/apiBase";
-import { backendAuthHeaders } from "@/lib/backendAuth";
 import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import {
@@ -9,18 +8,26 @@ import {
   getLocalDepartmentUnits,
   invalidateLocalDataCache,
 } from "@/lib/localData";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export async function GET(
   _request: Request,
-  { params }: { params: { dept_id: string } }
+  { params }: { params: Promise<{ dept_id: string }> }
 ) {
-  const deptId = encodeURIComponent(params.dept_id);
+  const auth = await requireBackendAuthHeaders({
+    "Content-Type": "application/json",
+  });
+  if (!auth.ok) {
+    return auth.response;
+  }
+
+  const deptId = encodeURIComponent((await params).dept_id);
   try {
     const response = await fetchWithTimeout(
       `${apiBase}/api/departments/${deptId}/units`,
       {
         cache: "no-store",
-        headers: backendAuthHeaders({ "Content-Type": "application/json" }),
+        headers: auth.headers,
       }
     );
     const text = await response.text();
@@ -38,7 +45,7 @@ export async function GET(
   }
 
   try {
-    const localData = await getLocalDepartmentUnits(params.dept_id);
+    const localData = await getLocalDepartmentUnits((await params).dept_id);
     return NextResponse.json(localData, { status: 200 });
   } catch (error) {
     if (error instanceof LocalDataError) {
@@ -51,9 +58,9 @@ export async function GET(
 
 export async function POST(
   request: Request,
-  { params }: { params: { dept_id: string } }
+  { params }: { params: Promise<{ dept_id: string }> }
 ) {
-  const deptId = String(params.dept_id || "").trim();
+  const deptId = String((await params).dept_id || "").trim();
   if (!deptId) {
     return NextResponse.json({ error: "dept_id is required" }, { status: 400 });
   }
@@ -73,7 +80,7 @@ export async function POST(
   try {
     const response = await fetchWithTimeout(`${apiBase}/api/organizations`, {
       method: "POST",
-      headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
+      headers: await backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         name,
         level: "unit",

@@ -1,6 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE_NAME } from "@/lib/session";
 
+const PUBLIC_API_PATHS = new Set([
+  "/api/auth/login",
+  "/api/auth/me",
+  "/api/health",
+]);
+
+function isE2EPathEnabled(): boolean {
+  return (
+    process.env.NODE_ENV !== "production" ||
+    process.env.GBC_ENABLE_E2E_PAGES === "true"
+  );
+}
+
 function isPublicPath(pathname: string): boolean {
   if (pathname === "/login") {
     return true;
@@ -8,10 +21,10 @@ function isPublicPath(pathname: string): boolean {
   if (pathname.startsWith("/_next")) {
     return true;
   }
-  if (pathname.startsWith("/api")) {
+  if (PUBLIC_API_PATHS.has(pathname)) {
     return true;
   }
-  if (pathname.startsWith("/e2e")) {
+  if (pathname.startsWith("/e2e") && isE2EPathEnabled()) {
     return true;
   }
   if (pathname === "/favicon.ico") {
@@ -29,6 +42,10 @@ export function middleware(request: NextRequest) {
   const sessionToken = request.cookies.get(SESSION_COOKIE_NAME)?.value?.trim();
   if (sessionToken) {
     return NextResponse.next();
+  }
+
+  if (pathname.startsWith("/api")) {
+    return NextResponse.json({ detail: "not logged in" }, { status: 401 });
   }
 
   const loginUrl = request.nextUrl.clone();

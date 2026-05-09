@@ -7,13 +7,13 @@ import { invalidateLocalDataCache } from "@/lib/localData";
 
 export async function POST(
   _request: Request,
-  { params }: { params: { org_id: string } }
+  { params }: { params: Promise<{ org_id: string }> }
 ) {
   try {
-    const orgId = encodeURIComponent(params.org_id);
+    const orgId = encodeURIComponent((await params).org_id);
     const response = await fetchWithTimeout(`${apiBase}/api/organizations/${orgId}`, {
       method: "DELETE",
-      headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
+      headers: await backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
     });
     const text = await response.text();
     let data: any;

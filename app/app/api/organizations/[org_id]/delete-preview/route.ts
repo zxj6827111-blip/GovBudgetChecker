@@ -6,14 +6,14 @@ import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
 export async function GET(
   _request: Request,
-  { params }: { params: { org_id: string } }
+  { params }: { params: Promise<{ org_id: string }> }
 ) {
   try {
-    const orgId = encodeURIComponent(params.org_id);
+    const orgId = encodeURIComponent((await params).org_id);
     const response = await fetchWithTimeout(
       `${apiBase}/api/organizations/${orgId}/delete-preview`,
       {
-        headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
+      headers: await backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
         cache: "no-store",
       }
     );

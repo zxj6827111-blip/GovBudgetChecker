@@ -1,21 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { backendAuthHeaders } from "@/lib/backendAuth";
 import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
 import { LocalDataError, getLocalJobDetail } from "@/lib/localData";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(
   _request: NextRequest,
-  { params }: { params: { job_id: string } }
+  { params }: { params: Promise<{ job_id: string }> }
 ) {
-  const jobId = encodeURIComponent(params.job_id);
+  const auth = await requireBackendAuthHeaders();
+  if (!auth.ok) {
+    return auth.response;
+  }
+
+  const jobId = encodeURIComponent((await params).job_id);
   try {
     const res = await fetchWithTimeout(`${apiBase}/api/jobs/${jobId}`, {
       cache: "no-store",
-      headers: backendAuthHeaders(),
+      headers: auth.headers,
     });
     const text = await res.text();
     let data: any;
@@ -32,7 +37,7 @@ export async function GET(
   }
 
   try {
-    const localData = await getLocalJobDetail(params.job_id);
+    const localData = await getLocalJobDetail((await params).job_id);
     return NextResponse.json(localData, { status: 200 });
   } catch (error) {
     if (error instanceof LocalDataError) {
@@ -45,13 +50,13 @@ export async function GET(
 
 export async function DELETE(
   _request: NextRequest,
-  { params }: { params: { job_id: string } }
+  { params }: { params: Promise<{ job_id: string }> }
 ) {
-  const jobId = encodeURIComponent(params.job_id);
+  const jobId = encodeURIComponent((await params).job_id);
   try {
     const res = await fetchWithTimeout(`${apiBase}/api/jobs/${jobId}`, {
       method: "DELETE",
-      headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
+      headers: await backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
     });
     const text = await res.text();
     let data: any;

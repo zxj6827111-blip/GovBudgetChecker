@@ -9,7 +9,7 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData();
     const response = await fetchWithTimeout(`${apiBase}/api/organizations/import`, {
       method: "POST",
-      headers: backendAuthHeadersWithSession(),
+      headers: await backendAuthHeadersWithSession(),
       body: formData,
     });
     const text = await response.text();

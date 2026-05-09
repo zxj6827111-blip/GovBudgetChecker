@@ -16,13 +16,13 @@ function parsePayload(text: string): Record<string, unknown> {
 
 export async function GET(
   _request: Request,
-  { params }: { params: { jobUuid: string } },
+  { params }: { params: Promise<{ jobUuid: string }> },
 ) {
-  const jobUuid = encodeURIComponent(params.jobUuid);
+  const jobUuid = encodeURIComponent((await params).jobUuid);
 
   try {
     const response = await fetchWithTimeout(`${apiBase}/api/admin/analysis-results/${jobUuid}`, {
-      headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
+      headers: await backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
       cache: "no-store",
     });
     const payload = parsePayload(await response.text());
