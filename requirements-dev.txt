@@ -1,0 +1,5 @@
+-r requirements.txt
+-r tests/requirements-test.txt
+
+ruff==0.15.5
+types-PyYAML==6.0.12.20250915
