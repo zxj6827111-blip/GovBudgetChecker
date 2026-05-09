@@ -35,6 +35,23 @@ def test_health_and_ready_endpoints():
     ready = client.get("/ready")
     assert ready.status_code == 200
     assert ready.json()["status"] in {"ready", "not_ready"}
+    assert "dependencies" in ready.json()
+    assert "required" in ready.json()["dependencies"]
+    assert "optional" in ready.json()["dependencies"]
+
+
+def test_ready_treats_ai_extractor_as_optional_by_default(monkeypatch):
+    monkeypatch.setenv("AI_ASSIST_ENABLED", "true")
+    monkeypatch.setenv("AI_EXTRACTOR_URL", "http://127.0.0.1:1/ai/extract/v1")
+    monkeypatch.delenv("READY_REQUIRE_AI_EXTRACTOR", raising=False)
+
+    client = TestClient(app)
+    ready = client.get("/ready")
+
+    assert ready.status_code == 200
+    payload = ready.json()
+    assert "ai_extractor_reachable" in payload["dependencies"]["optional"]
+    assert "ai_extractor_reachable" not in payload["dependencies"]["required"]
 
 
 def test_document_upload_and_job_alias_routes():
