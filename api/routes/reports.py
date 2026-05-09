@@ -7,6 +7,7 @@ import io
 import json
 import logging
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -41,6 +42,9 @@ _SEVERITY_LABELS: Dict[str, str] = {
     "warn": "中",
     "warning": "中",
 }
+_DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+_ERROR_SEVERITIES = {"critical", "high", "error"}
+_RISK_SEVERITIES = {"medium", "warn", "warning"}
 _CSV_FIELDNAMES: List[str] = [
     "规则编号",
     "标题",
@@ -264,6 +268,32 @@ def _resolve_suggestion(issue: Dict[str, Any]) -> str:
     return ""
 
 
+def _source_filename(status_payload: Dict[str, Any], job_id: str) -> str:
+    for key in ("filename", "original_filename"):
+        value = status_payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return Path(value.strip()).name
+
+    saved_path = status_payload.get("saved_path")
+    if isinstance(saved_path, str) and saved_path.strip():
+        return Path(saved_path.strip()).name
+
+    result = status_payload.get("result")
+    if isinstance(result, dict):
+        for key in ("filename", "original_filename", "saved_path"):
+            value = result.get(key)
+            if isinstance(value, str) and value.strip():
+                return Path(value.strip()).name
+        meta = result.get("meta")
+        if isinstance(meta, dict):
+            for key in ("filename", "original_filename", "saved_path"):
+                value = meta.get(key)
+                if isinstance(value, str) and value.strip():
+                    return Path(value.strip()).name
+
+    return f"{job_id}.pdf"
+
+
 def _severity_label(severity: Any) -> str:
     return _SEVERITY_LABELS.get(str(severity or "").strip().lower(), "提示")
 
@@ -478,6 +508,185 @@ def _build_csv_row(issue: Dict[str, Any]) -> Dict[str, Any]:
         "source_of_truth": enriched.get("source_of_truth") or export_location.get("source_of_truth") or "",
     }
     return {key: row.get(key, "") for key in _CSV_FIELDNAMES}
+
+
+def _xml_escape(value: Any) -> str:
+    text = str(value if value is not None else "")
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
+
+
+def _docx_text(value: Any, *, limit: int = 1000) -> str:
+    text = str(value if value is not None else "").strip()
+    text = " ".join(text.split())
+    if len(text) > limit:
+        return f"{text[:limit - 3]}..."
+    return text
+
+
+def _docx_paragraph(text: Any, *, style: Optional[str] = None) -> str:
+    style_xml = f'<w:pStyle w:val="{style}"/>' if style else ""
+    safe_text = _xml_escape(_docx_text(text, limit=3000))
+    return (
+        "<w:p>"
+        f"<w:pPr>{style_xml}</w:pPr>"
+        f'<w:r><w:t xml:space="preserve">{safe_text}</w:t></w:r>'
+        "</w:p>"
+    )
+
+
+def _docx_table_cell(text: Any) -> str:
+    safe_text = _xml_escape(_docx_text(text, limit=1200))
+    return f'<w:tc><w:p><w:r><w:t xml:space="preserve">{safe_text}</w:t></w:r></w:p></w:tc>'
+
+
+def _docx_table(rows: Sequence[Sequence[Any]]) -> str:
+    row_xml = []
+    for row in rows:
+        cells = "".join(_docx_table_cell(cell) for cell in row)
+        row_xml.append(f"<w:tr>{cells}</w:tr>")
+    return "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr>" + "".join(row_xml) + "</w:tbl>"
+
+
+def _issue_bucket(issue: Dict[str, Any]) -> str:
+    severity = str(issue.get("severity") or "").strip().lower()
+    if severity in _ERROR_SEVERITIES:
+        return "错误"
+    if severity in _RISK_SEVERITIES:
+        return "风险提示"
+    return "规范性建议"
+
+
+def _build_docx_document_xml(
+    *,
+    job_id: str,
+    status_payload: Dict[str, Any],
+    issues: Sequence[Dict[str, Any]],
+) -> str:
+    enriched_issues = [_enrich_issue(item) for item in issues]
+    error_count = sum(1 for item in enriched_issues if _issue_bucket(item) == "错误")
+    risk_count = sum(1 for item in enriched_issues if _issue_bucket(item) == "风险提示")
+    suggestion_count = sum(1 for item in enriched_issues if _issue_bucket(item) == "规范性建议")
+    check_time = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    body: List[str] = [
+        _docx_paragraph("预决算公开材料审校报告", style="Title"),
+        _docx_paragraph("基本信息", style="Heading1"),
+        _docx_table(
+            [
+                ("文件名称", _source_filename(status_payload, job_id)),
+                ("检查时间", check_time),
+                ("检查模式", str(status_payload.get("mode") or status_payload.get("check_mode") or "自动审校")),
+                ("问题总数", str(len(enriched_issues))),
+                ("错误数量", str(error_count)),
+                ("风险提示数量", str(risk_count)),
+                ("规范性建议数量", str(suggestion_count)),
+            ]
+        ),
+        _docx_paragraph("问题清单", style="Heading1"),
+    ]
+
+    if not enriched_issues:
+        body.append(_docx_paragraph("未发现明显问题"))
+    else:
+        issue_index = 1
+        for bucket in ("错误", "风险提示", "规范性建议"):
+            bucket_items = [item for item in enriched_issues if _issue_bucket(item) == bucket]
+            if not bucket_items:
+                continue
+            body.append(_docx_paragraph(bucket, style="Heading2"))
+            for issue in bucket_items:
+                display = issue.get("display") if isinstance(issue.get("display"), dict) else {}
+                export_location = (
+                    issue.get("export_location")
+                    if isinstance(issue.get("export_location"), dict)
+                    else {}
+                )
+                rule_id = str(issue.get("rule_id") or issue.get("rule") or "").strip()
+                title = str(issue.get("title") or display.get("summary") or issue.get("message") or "").strip()
+                message = str(issue.get("message") or title).strip()
+                page = export_location.get("page") or ""
+                evidence = _resolve_text_snippet(issue) or str(display.get("evidence_text") or "").strip()
+                suggestion = _resolve_suggestion(issue) or "请结合原文和表格数据复核，并按公开口径修正。"
+                rows = [
+                    ("序号", str(issue_index)),
+                    ("问题等级", bucket),
+                    ("规则编号", rule_id),
+                    ("问题标题", title),
+                    ("问题说明", message),
+                    ("证据页码", page),
+                    ("原文摘录", evidence),
+                    ("建议处理方式", suggestion),
+                ]
+                body.append(_docx_table(rows))
+                issue_index += 1
+
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body>"
+        + "".join(body)
+        + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>'
+        "</w:body></w:document>"
+    )
+    return document_xml
+
+
+def _create_docx_report(
+    job_id: str,
+    status_payload: Dict[str, Any],
+    issues: Sequence[Dict[str, Any]],
+) -> bytes:
+    document_xml = _build_docx_document_xml(
+        job_id=job_id,
+        status_payload=status_payload,
+        issues=issues,
+    )
+    styles_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/>'
+        '<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="SimSun"/></w:rPr></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/>'
+        '<w:pPr><w:spacing w:after="240"/></w:pPr><w:rPr><w:b/><w:sz w:val="32"/><w:rFonts w:eastAsia="SimHei"/></w:rPr></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/>'
+        '<w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/><w:rFonts w:eastAsia="SimHei"/></w:rPr></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/>'
+        '<w:pPr><w:spacing w:before="160" w:after="80"/></w:pPr><w:rPr><w:b/><w:sz w:val="22"/><w:rFonts w:eastAsia="SimHei"/></w:rPr></w:style>'
+        "</w:styles>"
+    )
+    content_types_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+        "</Types>"
+    )
+    rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        "</Relationships>"
+    )
+    document_rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>'
+    )
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types_xml)
+        archive.writestr("_rels/.rels", rels_xml)
+        archive.writestr("word/document.xml", document_xml)
+        archive.writestr("word/styles.xml", styles_xml)
+        archive.writestr("word/_rels/document.xml.rels", document_rels_xml)
+    return buffer.getvalue()
 
 
 def _resolve_source_pdf(job_id: str, status_payload: Dict[str, Any]) -> Path:
@@ -863,7 +1072,7 @@ def _create_annotated_pdf(
 @router.get("/api/reports/download")
 async def download_report(
     job_id: str,
-    format: str = Query(default="pdf", pattern="^(pdf|json|csv)$"),
+    format: str = Query(default="pdf", pattern="^(pdf|json|csv|docx)$"),
 ):
     status_payload = runtime.get_job_status_payload(job_id)
     issues = _extract_issues(status_payload)
@@ -892,6 +1101,14 @@ async def download_report(
             content=data,
             media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="{job_id}.csv"'},
+        )
+
+    if format == "docx":
+        data = _create_docx_report(job_id, status_payload, issues)
+        return Response(
+            content=data,
+            media_type=_DOCX_MEDIA_TYPE,
+            headers={"Content-Disposition": f'attachment; filename="{job_id}.docx"'},
         )
 
     annotated_pdf: Optional[Path] = None
