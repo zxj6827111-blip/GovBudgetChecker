@@ -36,7 +36,7 @@ function SearchableOrgSelect({ value, onChange, options, hasError }: { value: st
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const filteredOptions = options.filter(opt => 
+  const filteredOptions = options.filter(opt =>
     opt.name.toLowerCase().includes(search.toLowerCase())
   );
 
@@ -44,7 +44,7 @@ function SearchableOrgSelect({ value, onChange, options, hasError }: { value: st
 
   return (
     <div ref={wrapperRef} className="relative w-full">
-      <div 
+      <div
         onClick={() => { setIsOpen(!isOpen); setSearch(''); }}
         className={cn(
           "w-full px-3 py-1.5 border rounded-md text-sm flex items-center justify-between cursor-pointer transition-colors",
@@ -59,11 +59,11 @@ function SearchableOrgSelect({ value, onChange, options, hasError }: { value: st
         <div className="absolute z-50 w-full mt-1 bg-white border border-border rounded-md shadow-xl max-h-60 flex flex-col overflow-hidden">
           <div className="p-2 border-b border-border flex items-center gap-2 shrink-0 bg-slate-50">
             <Search className="w-4 h-4 text-slate-400 shrink-0" />
-            <input 
-              type="text" 
+            <input
+              type="text"
               autoFocus
-              className="w-full text-sm outline-none bg-transparent" 
-              placeholder="搜索单位..." 
+              className="w-full text-sm outline-none bg-transparent"
+              placeholder="搜索单位..."
               value={search}
               onChange={e => setSearch(e.target.value)}
             />
@@ -73,7 +73,7 @@ function SearchableOrgSelect({ value, onChange, options, hasError }: { value: st
               <div className="p-3 text-sm text-slate-500 text-center">无匹配结果</div>
             ) : (
               filteredOptions.map(opt => (
-                <div 
+                <div
                   key={opt.id}
                   onClick={() => { onChange(opt.id); setIsOpen(false); }}
                   className={cn(
@@ -95,12 +95,11 @@ function SearchableOrgSelect({ value, onChange, options, hasError }: { value: st
     </div>
   );
 }
-
 export default function BatchUploadModal({ onClose }: BatchUploadModalProps) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [isUploading, setIsUploading] = useState(false);
   const [orgOptions, setOrgOptions] = useState<{ id: string; name: string; level: number }[]>([]);
-  
+
   // 模拟解析后的文件列表
   const [files, setFiles] = useState<UploadedFile[]>([]);
 
@@ -214,7 +213,7 @@ export default function BatchUploadModal({ onClose }: BatchUploadModalProps) {
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center backdrop-blur-sm animate-in fade-in duration-200">
       <div className="bg-white rounded-2xl shadow-2xl w-[900px] max-h-[85vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
-        
+
         {/* Header */}
         <div className="px-6 py-4 border-b border-border flex justify-between items-center bg-slate-50/50 shrink-0">
           <div>
@@ -236,7 +235,7 @@ export default function BatchUploadModal({ onClose }: BatchUploadModalProps) {
         <div className="flex-1 overflow-y-auto p-6 bg-surface-50">
           {step === 1 && (
             <div className="h-full flex flex-col items-center justify-center py-12">
-              <div 
+              <div
                 onClick={handleSimulateUpload}
                 className={cn(
                   "w-full max-w-2xl border-2 border-dashed rounded-2xl p-12 flex flex-col items-center justify-center text-center transition-all cursor-pointer group",
@@ -305,7 +304,7 @@ export default function BatchUploadModal({ onClose }: BatchUploadModalProps) {
                           </div>
                         </td>
                         <td className="p-4">
-                          <select 
+                          <select
                             value={file.year}
                             onChange={(e) => handleYearChange(file.id, e.target.value)}
                             className={cn(
@@ -320,7 +319,7 @@ export default function BatchUploadModal({ onClose }: BatchUploadModalProps) {
                           </select>
                         </td>
                         <td className="p-4">
-                          <SearchableOrgSelect 
+                          <SearchableOrgSelect
                             value={file.matchedOrgId || ''}
                             onChange={(val) => handleOrgChange(file.id, val)}
                             options={orgOptions}
@@ -353,13 +352,13 @@ export default function BatchUploadModal({ onClose }: BatchUploadModalProps) {
               已匹配: <span className="font-bold text-success-600">{files.filter(f => f.status === 'success').length}</span> / {files.length}
             </span>
             <div className="flex gap-3">
-              <button 
-                onClick={() => setStep(1)} 
+              <button
+                onClick={() => setStep(1)}
                 className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-border hover:bg-slate-50 rounded-lg transition-colors"
               >
                 重新上传
               </button>
-              <button 
+              <button
                 onClick={handleConfirm}
                 disabled={!allMatched}
                 className={cn(

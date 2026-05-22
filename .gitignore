@@ -70,6 +70,8 @@ api/dev-*.err
 api/dev-*.out
 app/dev-*.err
 app/dev-*.out
+app/start-*.err
+app/start-*.out
 app/start-capture.err
 app/start-capture.out
 app/sidebar-department.png
@@ -78,3 +80,7 @@ app/sidebar-selected-dept.png
 # Root-level local service logs
 start-*.err
 start-*.out
+
+# Temporary diagnostics and local API/browser captures
+tmp/
+tmp-cookies.txt

@@ -21,7 +21,7 @@ export default function PipelineDrawer({ isOpen, onToggle, task }: PipelineDrawe
       "flex flex-col border-r border-border bg-white transition-all duration-300 relative shrink-0",
       isOpen ? "w-64" : "w-12"
     )}>
-      <button 
+      <button
         onClick={onToggle}
         className="absolute -right-3 top-6 w-6 h-6 bg-white border border-border rounded-full flex items-center justify-center shadow-sm z-10 hover:bg-slate-50 text-slate-500 hover:text-primary-600 transition-colors"
       >
