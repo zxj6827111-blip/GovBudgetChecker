@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>部门任务台账 v2 - GovBudgetChecker DEMO</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body class="app-shell">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">预</div>
+      <div>
+        <strong>预决算公开材料审校系统</strong>
+        <span>部门与单位任务台账</span>
+      </div>
+    </div>
+    <nav class="nav">
+      <a href="./dashboard.html"><span class="icon-box">台</span>工作台</a>
+      <a href="./upload.html"><span class="icon-box">传</span>批量上传</a>
+      <a href="./region-management.html"><span class="icon-box">区</span>地区管理</a>
+      <a class="active" href="./department.html"><span class="icon-box">部</span>部门台账</a>
+      <a href="./review.html"><span class="icon-box">审</span>审校详情</a>
+    </nav>
+    <div class="topbar-right">
+      <span>上海市 / 黄浦区 / 区教育局</span>
+      <div class="user-chip"><span class="icon-box">员</span>审校员</div>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="page-head">
+      <div>
+        <p class="eyebrow">部门任务台账</p>
+        <h1>按地区、部门、年度、预算/决算快速筛任务</h1>
+        <p class="subtle">部门页保留组织树，但右侧以紧凑后台表格为主，工作人员能直接看到缺材料、待复核和高风险任务。</p>
+      </div>
+      <div class="toolbar">
+        <div class="segmented">
+          <span>全部</span>
+          <span class="on-budget">预算公开</span>
+          <span class="on-final">决算公开</span>
+        </div>
+        <a class="btn primary" href="./upload.html"><span class="icon-box">传</span>补充上传</a>
+      </div>
+    </section>
+
+    <div class="task-strip">
+      <div class="step active"><div class="step-num">1</div><div><strong>地区</strong><span>上海市 / 黄浦区。</span></div></div>
+      <div class="step active"><div class="step-num">2</div><div><strong>部门</strong><span>区教育局，含 27 个单位。</span></div></div>
+      <div class="step active"><div class="step-num">3</div><div><strong>预算筛选</strong><span>预算公开材料和预算规则包。</span></div></div>
+      <div class="step final-step"><div class="step-num">4</div><div><strong>决算筛选</strong><span>决算公开材料和决算规则包。</span></div></div>
+    </div>
+
+    <section class="two-main-grid">
+      <aside class="panel flat">
+        <div class="panel-header">
+          <h2>组织树</h2>
+          <a class="btn" href="./region-management.html"><span class="icon-box">区</span>地区</a>
+        </div>
+        <div class="panel-body">
+          <div class="field-row">
+            <label>年度</label>
+            <select class="select"><option>2026</option><option>2025</option></select>
+          </div>
+          <div class="field-row">
+            <label>状态</label>
+            <select class="select"><option>待复核 + 高风险</option><option>全部</option></select>
+          </div>
+          <div class="tree" style="margin-top: 12px;">
+            <div class="tree-row active"><span>黄浦区</span><span>55</span></div>
+            <div class="tree-row active"><span class="indent">区教育局</span><span>27</span></div>
+            <div class="tree-row"><span class="indent-2">实验小学</span><span class="tag budget">预算</span></div>
+            <div class="tree-row final-active"><span class="indent-2">教育事务中心</span><span class="tag final">决算</span></div>
+            <div class="tree-row"><span class="indent-2">青少年活动中心</span><span>2</span></div>
+            <div class="tree-row"><span class="indent">区卫健委</span><span>22</span></div>
+            <div class="tree-row"><span class="indent">区民政局</span><span>16</span></div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>区教育局任务表</h2>
+          <div class="toolbar">
+            <select class="select" style="width: 120px;"><option>2026 年</option><option>2025 年</option></select>
+            <select class="select" style="width: 128px;"><option>预算 + 决算</option><option>仅预算</option><option>仅决算</option></select>
+            <select class="select" style="width: 120px;"><option>待复核</option><option>高风险</option></select>
+          </div>
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>单位/材料</th>
+              <th>类型</th>
+              <th>年度</th>
+              <th>状态</th>
+              <th>风险</th>
+              <th>关键问题</th>
+              <th>处理人</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="strong-cell">区教育局本级</span><span class="muted-cell">部门预算公开</span></td>
+              <td><span class="tag budget">预算</span></td>
+              <td>2026</td>
+              <td>待复核</td>
+              <td><span class="tag danger">高</span></td>
+              <td>C-001 三公经费预算合计不一致</td>
+              <td>王审校</td>
+              <td><a class="btn" href="./review.html"><span class="icon-box">审</span>处理</a></td>
+            </tr>
+            <tr>
+              <td><span class="strong-cell">区教育局本级</span><span class="muted-cell">部门决算公开</span></td>
+              <td><span class="tag final">决算</span></td>
+              <td>2025</td>
+              <td>待复核</td>
+              <td><span class="tag danger">高</span></td>
+              <td>D-007 三公经费决算说明与表格不一致</td>
+              <td>李复核</td>
+              <td><a class="btn" href="./review.html"><span class="icon-box">审</span>处理</a></td>
+            </tr>
+            <tr>
+              <td><span class="strong-cell">实验小学</span><span class="muted-cell">单位预算公开</span></td>
+              <td><span class="tag budget">预算</span></td>
+              <td>2026</td>
+              <td>OCR 复核</td>
+              <td><span class="tag warning">中</span></td>
+              <td>绩效目标表跨页，置信度低</td>
+              <td>未分配</td>
+              <td><a class="btn"><span class="icon-box">派</span>分配</a></td>
+            </tr>
+            <tr>
+              <td><span class="strong-cell">教育事务中心</span><span class="muted-cell">单位决算公开</span></td>
+              <td><span class="tag final">决算</span></td>
+              <td>2025</td>
+              <td>待补充</td>
+              <td><span class="tag warning">中</span></td>
+              <td>国有资本经营预算空表说明缺失</td>
+              <td>张审校</td>
+              <td><a class="btn"><span class="icon-box">催</span>补材料</a></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

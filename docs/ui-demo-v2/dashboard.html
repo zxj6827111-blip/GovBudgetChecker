@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>工作台 v2 - GovBudgetChecker DEMO</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body class="app-shell">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">预</div>
+      <div>
+        <strong>预决算公开材料审校系统</strong>
+        <span>黄浦区财政审校工作台</span>
+      </div>
+    </div>
+    <nav class="nav">
+      <a class="active" href="./dashboard.html"><span class="icon-box">台</span>工作台</a>
+      <a href="./upload.html"><span class="icon-box">传</span>批量上传</a>
+      <a href="./region-management.html"><span class="icon-box">区</span>地区管理</a>
+      <a href="./department.html"><span class="icon-box">部</span>部门台账</a>
+      <a href="./review.html"><span class="icon-box">审</span>审校详情</a>
+    </nav>
+    <div class="topbar-right">
+      <span>上海市 / 黄浦区</span>
+      <div class="user-chip"><span class="icon-box">员</span>审校员</div>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="page-head">
+      <div>
+        <p class="eyebrow">工作台</p>
+        <h1>今天先处理什么</h1>
+        <p class="subtle">工作台不再堆功能入口，而是先锁定地区范围，再把预算和决算拆成两条可扫描的任务线。</p>
+      </div>
+      <div class="toolbar">
+        <div class="segmented">
+          <span>全部</span>
+          <span class="on-budget">预算</span>
+          <span class="on-final">决算</span>
+          <span>待复核</span>
+          <span>高风险</span>
+        </div>
+        <a class="btn primary" href="./upload.html"><span class="icon-box">传</span>上传材料</a>
+      </div>
+    </section>
+
+    <div class="task-strip">
+      <div class="step active">
+        <div class="step-num">1</div>
+        <div><strong>当前地区</strong><span>上海市 / 黄浦区，覆盖 42 个部门、116 个单位。</span></div>
+      </div>
+      <div class="step active">
+        <div class="step-num">2</div>
+        <div><strong>预算工作线</strong><span>九张表、三公预算、绩效目标优先复核。</span></div>
+      </div>
+      <div class="step final-step">
+        <div class="step-num">3</div>
+        <div><strong>决算工作线</strong><span>决算核心表、同比原因、空表说明优先复核。</span></div>
+      </div>
+      <div class="step warning-step">
+        <div class="step-num">4</div>
+        <div><strong>人工复核</strong><span>识别不确定、跨页表格、类型冲突单独进入队列。</span></div>
+      </div>
+    </div>
+
+    <section class="metric-row">
+      <div class="metric">
+        <span>今日已处理</span>
+        <strong>37</strong>
+      </div>
+      <div class="metric budget">
+        <span>预算待审</span>
+        <strong>24</strong>
+      </div>
+      <div class="metric final">
+        <span>决算待审</span>
+        <strong>31</strong>
+      </div>
+      <div class="metric warning">
+        <span>待人工复核</span>
+        <strong>12</strong>
+      </div>
+      <div class="metric danger">
+        <span>高风险问题</span>
+        <strong>9</strong>
+      </div>
+    </section>
+
+    <section class="dashboard-grid">
+      <aside class="panel flat">
+        <div class="panel-header">
+          <h2>地区与组织范围</h2>
+          <a class="btn" href="./region-management.html"><span class="icon-box">管</span>管理</a>
+        </div>
+        <div class="panel-body">
+          <div class="tree">
+            <div class="tree-row active"><span>上海市 / 黄浦区</span><span class="tag line">当前</span></div>
+            <div class="tree-row"><span class="indent">区财政局</span><span>18</span></div>
+            <div class="tree-row"><span class="indent">区教育局</span><span>27</span></div>
+            <div class="tree-row"><span class="indent-2">实验小学</span><span class="tag budget">预算</span></div>
+            <div class="tree-row"><span class="indent-2">教育事务中心</span><span class="tag final">决算</span></div>
+            <div class="tree-row"><span class="indent">区卫健委</span><span>22</span></div>
+            <div class="tree-row"><span class="indent">南京东路街道</span><span>14</span></div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>优先处理队列</h2>
+          <div class="toolbar">
+            <span class="tag budget">预算</span>
+            <span class="tag final">决算</span>
+            <span class="tag danger">高风险</span>
+          </div>
+        </div>
+        <div class="queue-item">
+          <div class="queue-score final">高</div>
+          <div>
+            <div class="queue-title"><span class="tag final">决算</span>区教育局 2025 年部门决算公开</div>
+            <span class="subtle">D-007 三公经费决算说明与表格不一致，需人工确认预算数口径。</span>
+          </div>
+          <a class="btn" href="./review.html"><span class="icon-box">看</span>审校</a>
+        </div>
+        <div class="queue-item">
+          <div class="queue-score budget">中</div>
+          <div>
+            <div class="queue-title"><span class="tag budget">预算</span>区卫健委 2026 年部门预算公开</div>
+            <span class="subtle">C-001 三公经费预算合计与分项差异 1.20 万元。</span>
+          </div>
+          <a class="btn" href="./review.html"><span class="icon-box">看</span>审校</a>
+        </div>
+        <div class="queue-item">
+          <div class="queue-score warning">核</div>
+          <div>
+            <div class="queue-title"><span class="tag warning">类型待确认</span>南京东路街道公开附件</div>
+            <span class="subtle">文件标题含“预算执行情况”，系统无法判断预算公开或决算公开。</span>
+          </div>
+          <a class="btn" href="./upload.html"><span class="icon-box">定</span>确认</a>
+        </div>
+        <div class="queue-item">
+          <div class="queue-score final">低</div>
+          <div>
+            <div class="queue-title"><span class="tag final">决算</span>区民政局 2025 年单位决算公开</div>
+            <span class="subtle">国有资本经营预算空表说明缺失，建议补充无此项说明。</span>
+          </div>
+          <a class="btn" href="./review.html"><span class="icon-box">看</span>审校</a>
+        </div>
+      </section>
+
+      <aside class="stack">
+        <section class="panel flat">
+          <div class="panel-header">
+            <h2>规则包差异</h2>
+          </div>
+          <div class="panel-body stack">
+            <div class="rail budget">
+              <div class="rail-title"><strong>预算公开</strong><span class="tag budget">蓝色</span></div>
+              <ul class="check-list">
+                <li><span class="check-dot">1</span>预算九张表与说明章节配对</li>
+                <li><span class="check-dot">2</span>三公经费预算合计与分项</li>
+                <li><span class="check-dot">3</span>绩效目标与项目支出口径</li>
+              </ul>
+            </div>
+            <div class="rail final">
+              <div class="rail-title"><strong>决算公开</strong><span class="tag final">青绿</span></div>
+              <ul class="check-list">
+                <li><span class="check-dot">1</span>收入支出决算核心表</li>
+                <li><span class="check-dot">2</span>预算数、决算数与差异原因</li>
+                <li><span class="check-dot">3</span>政府性基金、国资空表说明</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+        <section class="panel flat">
+          <div class="panel-header"><h2>地区覆盖</h2></div>
+          <div class="panel-body">
+            <div class="coverage-grid">
+              <div class="coverage-cell"><strong>部门</strong><span class="subtle">42</span></div>
+              <div class="coverage-cell"><strong>单位</strong><span class="subtle">116</span></div>
+              <div class="coverage-cell"><strong>公开站点</strong><span class="subtle">8</span></div>
+              <div class="coverage-cell"><strong>缺材料</strong><span class="subtle">13</span></div>
+            </div>
+          </div>
+        </section>
+      </aside>
+    </section>
+  </main>
+</body>
+</html>

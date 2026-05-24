@@ -1,0 +1,145 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>材料详情 - GovBudgetChecker v4 DEMO</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">预</div>
+      <div>
+        <strong>预决算公开材料审校系统</strong>
+        <span>单份材料错误与证据</span>
+      </div>
+    </div>
+    <nav class="nav">
+      <a href="./dashboard.html"><span class="icon">台</span>年度审校工作台</a>
+      <a href="./issues-dashboard.html"><span class="icon">题</span>问题数据看板</a>
+      <a href="./archive.html"><span class="icon">年</span>年度档案</a>
+      <a href="./upload.html"><span class="icon">传</span>材料上传</a>
+      <a href="./task-center.html"><span class="icon">任</span>任务中心</a>
+      <a href="#"><span class="icon">设</span>系统管理</a>
+    </nav>
+    <div class="topbar-right">当前工作区：上海市 / 普陀区 / 真如镇街道</div>
+  </header>
+
+  <main class="page">
+    <section class="page-head">
+      <div>
+        <p class="eyebrow">材料详情</p>
+        <h1>真如镇街道 2026 年预算公开</h1>
+        <p class="subtle">对齐 KIROGOVCOMPARE 的报告详情逻辑：内容、规则检查、AI 辅助检查、截图定位和整改记录用页签组织。</p>
+      </div>
+      <div class="toolbar">
+        <a class="btn" href="./dashboard.html"><span class="icon">返</span>返回工作台</a>
+        <a class="btn" href="./issues-dashboard.html"><span class="icon">题</span>问题看板</a>
+        <a class="btn primary" href="./task-center.html"><span class="icon">下</span>下载问题</a>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <div class="workspace-card blue">
+        <div class="big-icon">预</div>
+        <div><strong>材料类型：2026 年预算公开</strong><span class="subtle">当前启用预算规则包；决算规则不混入本材料。</span></div>
+      </div>
+      <div class="workspace-card amber">
+        <div class="big-icon">题</div>
+        <div><strong>检查结果：8 项问题</strong><span class="subtle">规则检查 6 项，AI 辅助检查 2 项；高风险 2 项。</span></div>
+      </div>
+      <div class="workspace-card teal">
+        <div class="big-icon">位</div>
+        <div><strong>证据状态：7 项可定位</strong><span class="subtle">PDF 页码、截图和 bbox 定位进入导出包。</span></div>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-bottom: 14px;">
+      <div class="tabs-row">
+        <span>材料内容</span>
+        <span class="active">规则检查</span>
+        <span>AI 辅助检查</span>
+        <span>截图定位</span>
+        <span>整改记录</span>
+      </div>
+    </section>
+
+    <section class="layout-detail">
+      <aside class="panel flat">
+        <div class="panel-header"><h2>问题列表</h2><span class="tag line">8 项</span></div>
+        <div class="panel-body stack">
+          <div class="issue-card rule"><span class="tag blue">规则检查</span><strong>C-001 三公经费预算合计不一致</strong><p class="subtle">第 18 页，差异 2.20 万元。</p></div>
+          <div class="issue-card rule"><span class="tag blue">规则检查</span><strong>C-003 文字说明金额与表格不一致</strong><p class="subtle">第 19 页，差异 1.20 万元。</p></div>
+          <div class="issue-card ai"><span class="tag teal">AI 辅助检查</span><strong>绩效目标截图疑似跨页漏识别</strong><p class="subtle">第 23-24 页，需要人工复核。</p></div>
+          <div class="issue-card"><span class="tag amber">manual_review</span><strong>政府采购预算说明不充分</strong><p class="subtle">证据弱，建议人工确认。</p></div>
+        </div>
+      </aside>
+
+      <section class="panel">
+        <div class="panel-header"><h2>证据与处理建议</h2><div class="toolbar"><span class="tag blue">规则检查</span><span class="tag red">high</span></div></div>
+        <div class="panel-body stack">
+          <div class="evidence-box">
+            <h3>C-001 三公经费预算合计不一致</h3>
+            <p class="subtle">财政拨款“三公”经费预算表中，合计金额与三个分项之和不一致，属于预算公开规则包的确定性勾稽问题。</p>
+            <div class="quote">
+              表格证据：合计 35.20 万元；因公出国 10.00 万元，公务用车 20.00 万元，公务接待 3.00 万元。<br>
+              系统计算：10.00 + 20.00 + 3.00 = 33.00 万元；实际合计 35.20 万元，差异 2.20 万元。
+            </div>
+          </div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>核对项</th>
+                <th>规则值</th>
+                <th>材料值</th>
+                <th>差异</th>
+                <th>建议动作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>三公经费合计</td>
+                <td>33.00 万元</td>
+                <td>35.20 万元</td>
+                <td><span class="tag red">2.20 万元</span></td>
+                <td>退回修改表格或说明</td>
+              </tr>
+              <tr>
+                <td>证据定位</td>
+                <td>第 18 页</td>
+                <td>bbox 已识别</td>
+                <td>可导出</td>
+                <td>加入整改包</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="toolbar" style="justify-content: flex-start;">
+            <a class="btn primary"><span class="icon">退</span>退回修改</a>
+            <a class="btn"><span class="icon">核</span>标记人工复核</a>
+            <a class="btn"><span class="icon">包</span>加入下载包</a>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel flat">
+        <div class="panel-header"><h2>截图定位</h2><span class="tag blue">第 18 页</span></div>
+        <div class="panel-body">
+          <div class="preview">
+            <div class="preview-toolbar"><span>PDF 预览 · 18 / 36</span><span>定位 C-001</span></div>
+            <div class="paper">
+              <div class="paper-line mid"></div>
+              <div class="paper-line"></div>
+              <div class="paper-line short"></div>
+              <div class="paper-table"><div></div><div></div><div></div><div></div></div>
+              <div class="paper-line"></div>
+              <div class="paper-line mid"></div>
+              <div class="locator"><span>命中区域</span></div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </main>
+</body>
+</html>

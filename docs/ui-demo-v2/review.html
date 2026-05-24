@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>审校详情 v2 - GovBudgetChecker DEMO</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body class="app-shell">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">预</div>
+      <div>
+        <strong>预决算公开材料审校系统</strong>
+        <span>问题、证据、定位一屏处理</span>
+      </div>
+    </div>
+    <nav class="nav">
+      <a href="./dashboard.html"><span class="icon-box">台</span>工作台</a>
+      <a href="./upload.html"><span class="icon-box">传</span>批量上传</a>
+      <a href="./region-management.html"><span class="icon-box">区</span>地区管理</a>
+      <a href="./department.html"><span class="icon-box">部</span>部门台账</a>
+      <a class="active" href="./review.html"><span class="icon-box">审</span>审校详情</a>
+    </nav>
+    <div class="topbar-right">
+      <span>上海市 / 黄浦区 / 区教育局</span>
+      <div class="user-chip"><span class="icon-box">员</span>复核员</div>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="review-titlebar">
+      <div class="doc-banner">
+        <div class="doc-title-line">
+          <span class="tag final">部门决算</span>
+          <h1>区教育局 2025 年部门决算公开</h1>
+        </div>
+        <p class="subtle">当前材料属于决算公开，系统只展示决算规则包。预算规则不会混入本页问题队列。</p>
+      </div>
+      <div class="mode-switch">
+        <div class="mode-card budget">
+          <div class="mode-icon">预</div>
+          <div><strong>预算规则</strong><span>当前隐藏，仅预算材料启用。</span></div>
+        </div>
+        <div class="mode-card final selected">
+          <div class="mode-icon">决</div>
+          <div><strong>决算规则</strong><span>正在审：决算表、差异原因、空表说明。</span></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="task-strip">
+      <div class="step final-step"><div class="step-num">1</div><div><strong>问题队列</strong><span>按严重度和规则编号排列。</span></div></div>
+      <div class="step final-step"><div class="step-num">2</div><div><strong>证据核对</strong><span>表格数、说明数、差异值放在一起。</span></div></div>
+      <div class="step final-step"><div class="step-num">3</div><div><strong>原文定位</strong><span>右侧定位页码与高亮区域。</span></div></div>
+      <div class="step warning-step"><div class="step-num">4</div><div><strong>建议动作</strong><span>确认、退回修改、标记人工复核。</span></div></div>
+    </div>
+
+    <section class="three-col">
+      <aside class="panel flat">
+        <div class="panel-header">
+          <h2>1 问题队列</h2>
+          <span class="tag final">决算 8 项</span>
+        </div>
+        <div class="panel-body issue-list">
+          <div class="issue-card active">
+            <span class="tag danger">critical</span>
+            <strong>D-007 三公经费决算说明与表格不一致</strong>
+            <p class="subtle">页 31，预算数和决算数说明口径冲突。</p>
+          </div>
+          <div class="issue-card">
+            <span class="tag warning">manual_review</span>
+            <strong>D-008 政府性基金空表说明缺失</strong>
+            <p class="subtle">表格未出现，正文也未说明无此项。</p>
+          </div>
+          <div class="issue-card">
+            <span class="tag warning">medium</span>
+            <strong>D-005 支出结构占比说明缺原因</strong>
+            <p class="subtle">出现“较上年减少”，未写明原因。</p>
+          </div>
+          <div class="issue-card">
+            <span class="tag neutral">low</span>
+            <strong>R003 说明文字重复表达</strong>
+            <p class="subtle">连续出现“增加增加”。</p>
+          </div>
+        </div>
+      </aside>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>2 证据与建议</h2>
+          <div class="toolbar">
+            <span class="tag final">决算规则包 v3.3</span>
+            <span class="tag danger">需复核</span>
+          </div>
+        </div>
+        <div class="panel-body stack">
+          <div class="evidence-box">
+            <h3>问题结论</h3>
+            <p class="subtle">财政拨款“三公”经费支出决算表中合计决算数为 18.60 万元，但说明文字写为 16.80 万元，差异 1.80 万元。</p>
+            <div class="quote-box">
+              表格证据：财政拨款“三公”经费支出决算表，合计决算数 18.60 万元。<br>
+              文字证据：本年度“三公”经费支出决算数 16.80 万元，较上年减少。
+            </div>
+          </div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>核对项</th>
+                <th>表格值</th>
+                <th>说明值</th>
+                <th>差异</th>
+                <th>置信度</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>三公经费合计决算数</td>
+                <td>18.60 万元</td>
+                <td>16.80 万元</td>
+                <td><span class="tag danger">1.80 万元</span></td>
+                <td>0.94</td>
+              </tr>
+              <tr>
+                <td>公务用车购置及运行费</td>
+                <td>12.40 万元</td>
+                <td>12.40 万元</td>
+                <td>0</td>
+                <td>0.96</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="grid-3">
+            <a class="btn primary"><span class="icon-box">退</span>退回修改</a>
+            <a class="btn"><span class="icon-box">核</span>标记人工复核</a>
+            <a class="btn"><span class="icon-box">导</span>导出问题</a>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel flat">
+        <div class="panel-header">
+          <h2>3 原文定位</h2>
+          <span class="tag final">第 31 页</span>
+        </div>
+        <div class="panel-body">
+          <div class="pdf-view">
+            <div class="pdf-toolbar">
+              <span>PDF 预览 · 31 / 42</span>
+              <span>定位 D-007</span>
+            </div>
+            <div class="pdf-page">
+              <div class="pdf-line mid"></div>
+              <div class="pdf-line"></div>
+              <div class="pdf-line short"></div>
+              <div class="pdf-table">
+                <div></div>
+                <div></div>
+                <div></div>
+                <div></div>
+              </div>
+              <div class="pdf-line"></div>
+              <div class="pdf-line mid"></div>
+              <div class="pdf-line"></div>
+              <div class="pdf-line short"></div>
+              <div class="locator">
+                <span class="locator-label">命中区域</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </main>
+</body>
+</html>

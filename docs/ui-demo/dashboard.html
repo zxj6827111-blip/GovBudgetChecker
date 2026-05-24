@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>工作台 DEMO - 预决算公开材料审校系统</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="demo-shell">
+    <header class="demo-header">
+      <div class="brand">
+        <div class="brand-mark">GB</div>
+        <div>
+          <div class="brand-title">预决算公开材料审校系统</div>
+          <div class="brand-subtitle">上海市普陀区财政审校工作台</div>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span class="user-pill"><span class="avatar">审</span>review_admin</span>
+        <button class="button">系统管理</button>
+        <button class="button">退出登录</button>
+      </div>
+    </header>
+    <nav class="demo-nav">
+      <div class="nav-item active">📋 审校工作台</div>
+      <div class="nav-item">🏢 部门任务</div>
+      <div class="nav-item">⬆️ 批量上传</div>
+      <div class="nav-item">✅ 复核中心</div>
+      <div class="nav-item">⚙️ 系统管理</div>
+    </nav>
+
+    <main class="page">
+      <section class="page-header">
+        <div>
+          <div class="eyebrow">WORKBENCH</div>
+          <h1>预决算公开审校工作台</h1>
+          <p class="subtle" style="margin-top:6px">按材料类型、年度和复核状态组织今日任务，先处理高风险和待人工确认事项。</p>
+        </div>
+        <div class="button-row">
+          <button class="button">导出汇总</button>
+          <button class="button primary">批量上传报告</button>
+        </div>
+      </section>
+
+      <div class="toolbar" style="justify-content:space-between;margin-bottom:16px">
+        <div class="segmented">
+          <span class="segment active">全部 1286</span>
+          <span class="segment">预算 742</span>
+          <span class="segment">决算 544</span>
+          <span class="segment">待复核 48</span>
+          <span class="segment">高风险 23</span>
+        </div>
+        <div class="toolbar">
+          <select class="select" style="width:120px"><option>2026 年</option></select>
+          <select class="select" style="width:150px"><option>全部部门</option></select>
+        </div>
+      </div>
+
+      <section class="grid cols-4">
+        <div class="card metric">
+          <div><div class="metric-label">今日处理</div><div class="metric-value">36</div><div class="metric-note">较昨日 +8</div></div>
+          <div class="metric-icon">📄</div>
+        </div>
+        <div class="card metric">
+          <div><div class="metric-label">待人工复核</div><div class="metric-value" style="color:var(--warning)">48</div><div class="metric-note">含类型待确认 7 份</div></div>
+          <div class="metric-icon" style="background:var(--warning-soft);color:var(--warning)">⚠</div>
+        </div>
+        <div class="card metric">
+          <div><div class="metric-label">高风险问题</div><div class="metric-value" style="color:var(--danger)">23</div><div class="metric-note">优先处理三公、核心表缺失</div></div>
+          <div class="metric-icon" style="background:var(--danger-soft);color:var(--danger)">!</div>
+        </div>
+        <div class="card metric">
+          <div><div class="metric-label">预算 / 决算</div><div class="metric-value"><span style="color:var(--budget)">742</span><span class="faint"> / </span><span style="color:var(--final)">544</span></div><div class="metric-note">两类材料分口径检查</div></div>
+          <div class="metric-icon">↔</div>
+        </div>
+      </section>
+
+      <section class="grid dashboard-layout" style="margin-top:16px">
+        <div class="panel">
+          <div class="panel-header">
+            <div><h2>今日优先任务</h2><p class="subtle">高风险、类型待确认和待复核任务置顶。</p></div>
+            <button class="button ghost">查看全部</button>
+          </div>
+          <div class="table-wrap" style="border:0;border-radius:0">
+            <table>
+              <thead><tr><th>材料</th><th>类型</th><th>部门</th><th>问题</th><th>状态</th><th>动作</th></tr></thead>
+              <tbody>
+                <tr><td><div class="file-name">2026年区财政局部门预算公开.pdf</div><div class="subtle">更新于 09:42</div></td><td><span class="badge budget">预算</span></td><td>区财政局</td><td><span class="badge danger">3 高风险</span></td><td><span class="badge warning">待复核</span></td><td><button class="button">进入复核</button></td></tr>
+                <tr><td><div class="file-name">2024年度教育局部门决算.pdf</div><div class="subtle">更新于 10:18</div></td><td><span class="badge final">决算</span></td><td>区教育局</td><td><span class="badge danger">1 高风险</span></td><td><span class="badge success">已分析</span></td><td><button class="button">进入复核</button></td></tr>
+                <tr><td><div class="file-name">2026年文化馆单位预算公开.pdf</div><div class="subtle">更新于 11:06</div></td><td><span class="badge budget">预算</span></td><td>区文旅局 / 文化馆</td><td><span class="badge warning">类型证据不足</span></td><td><span class="badge warning">待确认</span></td><td><button class="button">确认类型</button></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <aside class="panel">
+          <div class="panel-header"><div><h2>重点部门</h2><p class="subtle">按高风险和待复核排序。</p></div></div>
+          <div class="panel-body" style="display:grid;gap:12px">
+            <div class="tree-item active"><span>区财政局</span><span class="badge danger">8</span></div>
+            <div class="tree-item"><span>区教育局</span><span class="badge warning">6</span></div>
+            <div class="tree-item"><span>区卫健委</span><span class="badge warning">5</span></div>
+            <div class="tree-item"><span>区文旅局</span><span class="badge neutral">3</span></div>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

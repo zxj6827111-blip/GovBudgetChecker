@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>01 地区配置 - GovBudgetChecker v3 DEMO</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">预</div>
+      <div>
+        <strong>预决算公开材料审校系统</strong>
+        <span>流程式 DEMO：先配置地区</span>
+      </div>
+    </div>
+    <nav class="nav">
+      <a class="active" href="./region.html"><span class="icon">1</span>地区配置</a>
+      <a href="./upload.html"><span class="icon">2</span>材料上传</a>
+      <a href="./issues.html"><span class="icon">3</span>错误查看</a>
+      <a href="./downloads.html"><span class="icon">4</span>错误下载</a>
+    </nav>
+    <div class="topbar-right">上海市 / 普陀区 / 真如镇街道</div>
+  </header>
+
+  <main class="page">
+    <section class="page-head">
+      <div>
+        <p class="eyebrow">第一步：地区配置</p>
+        <h1>按“省级 / 市级 / 区县 / 街道镇”四级维护审校范围</h1>
+        <p class="subtle">以上海为主时，把“上海市”作为省级行政区，市级可固定为“市辖区”，再选择普陀区和具体街道镇。</p>
+      </div>
+      <div class="toolbar">
+        <a class="btn"><span class="icon">导</span>导入区划表</a>
+        <a class="btn primary" href="./upload.html"><span class="icon">下</span>进入材料上传</a>
+      </div>
+    </section>
+
+    <section class="flow">
+      <div class="flow-step active-blue"><div class="flow-num">1</div><div><strong>地区配置</strong><span>先确定省、市、区、街道镇。</span></div></div>
+      <div class="flow-step"><div class="flow-num">2</div><div><strong>按年度上传</strong><span>2026 预算 + 2025 决算。</span></div></div>
+      <div class="flow-step"><div class="flow-num">3</div><div><strong>查看错误</strong><span>规则检查与 AI 辅助检查分开。</span></div></div>
+      <div class="flow-step"><div class="flow-num">4</div><div><strong>下载错误</strong><span>导出清单、截图和定位证据。</span></div></div>
+    </section>
+
+    <div class="path-bar">
+      <span class="path-item"><span class="tag line">省级</span>上海市</span>
+      <span class="path-arrow">/</span>
+      <span class="path-item"><span class="tag line">市级</span>市辖区</span>
+      <span class="path-arrow">/</span>
+      <span class="path-item"><span class="tag line">区县</span>普陀区</span>
+      <span class="path-arrow">/</span>
+      <span class="path-item"><span class="tag line">街道镇</span>真如镇街道</span>
+    </div>
+
+    <section class="grid-region">
+      <div class="panel flat">
+        <div class="panel-header"><h2>省级</h2><span class="tag line">必选</span></div>
+        <div class="panel-body selector-list">
+          <div class="selector-item selected"><span>上海市</span><span>当前</span></div>
+          <div class="selector-item"><span>江苏省</span><span>未启用</span></div>
+          <div class="selector-item"><span>浙江省</span><span>未启用</span></div>
+        </div>
+      </div>
+
+      <div class="panel flat">
+        <div class="panel-header"><h2>市级</h2><span class="tag line">上海固定</span></div>
+        <div class="panel-body selector-list">
+          <div class="selector-item selected"><span>市辖区</span><span>310100</span></div>
+          <div class="selector-item"><span>崇明区管辖镇</span><span>备用</span></div>
+        </div>
+      </div>
+
+      <div class="panel flat">
+        <div class="panel-header"><h2>区县</h2><span class="tag line">16 区</span></div>
+        <div class="panel-body selector-list">
+          <div class="selector-item"><span>黄浦区</span><span>310101</span></div>
+          <div class="selector-item selected"><span>普陀区</span><span>310107</span></div>
+          <div class="selector-item"><span>静安区</span><span>310106</span></div>
+          <div class="selector-item"><span>徐汇区</span><span>310104</span></div>
+          <div class="selector-item"><span>浦东新区</span><span>310115</span></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header"><h2>街道镇</h2><span class="tag blue">当前配置</span></div>
+        <div class="panel-body">
+          <div class="selector-list">
+            <div class="selector-item teal-selected"><span>真如镇街道</span><span>310107102</span></div>
+            <div class="selector-item"><span>长寿路街道</span><span>310107015</span></div>
+            <div class="selector-item"><span>长风新村街道</span><span>310107014</span></div>
+            <div class="selector-item"><span>曹杨新村街道</span><span>310107005</span></div>
+          </div>
+          <div class="grid-two" style="margin-top: 14px;">
+            <div class="year-rule blue">
+              <div class="big-letter">预</div>
+              <div><strong>预算上传范围</strong><p class="subtle">按当前街道镇归档 2026 年预算公开材料。</p></div>
+            </div>
+            <div class="year-rule teal">
+              <div class="big-letter">决</div>
+              <div><strong>决算上传范围</strong><p class="subtle">按当前街道镇归档 2025 年决算公开材料。</p></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

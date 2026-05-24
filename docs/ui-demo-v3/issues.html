@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>03 错误查看 - GovBudgetChecker v3 DEMO</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">预</div>
+      <div>
+        <strong>预决算公开材料审校系统</strong>
+        <span>流程式 DEMO：查看错误和定位</span>
+      </div>
+    </div>
+    <nav class="nav">
+      <a href="./region.html"><span class="icon">1</span>地区配置</a>
+      <a href="./upload.html"><span class="icon">2</span>材料上传</a>
+      <a class="active" href="./issues.html"><span class="icon">3</span>错误查看</a>
+      <a href="./downloads.html"><span class="icon">4</span>错误下载</a>
+    </nav>
+    <div class="topbar-right">上海市 / 普陀区 / 真如镇街道</div>
+  </header>
+
+  <main class="page">
+    <section class="page-head">
+      <div>
+        <p class="eyebrow">第三步：错误查看</p>
+        <h1>检查结果分成“规则检查”和“AI 辅助检查”两类展示</h1>
+        <p class="subtle">每个错误都要能看到问题来源、材料类型、页码截图、定位区域、证据片段和建议动作。</p>
+      </div>
+      <div class="toolbar">
+        <a class="btn" href="./upload.html"><span class="icon">传</span>返回上传</a>
+        <a class="btn primary" href="./downloads.html"><span class="icon">下</span>下载错误</a>
+      </div>
+    </section>
+
+    <section class="flow">
+      <div class="flow-step active-blue"><div class="flow-num">1</div><div><strong>地区</strong><span>上海市 / 普陀区 / 真如镇街道。</span></div></div>
+      <div class="flow-step active-blue"><div class="flow-num">2</div><div><strong>材料</strong><span>2026 预算 + 2025 决算。</span></div></div>
+      <div class="flow-step active-blue"><div class="flow-num">3</div><div><strong>规则检查</strong><span>确定性规则，适合直接整改。</span></div></div>
+      <div class="flow-step active-teal"><div class="flow-num">4</div><div><strong>AI 辅助检查</strong><span>语义、截图、低置信度问题需复核。</span></div></div>
+    </section>
+
+    <section class="metric-row">
+      <div class="metric blue"><span>2026 预算材料</span><strong>1</strong></div>
+      <div class="metric teal"><span>2025 决算材料</span><strong>1</strong></div>
+      <div class="metric blue"><span>规则检查错误</span><strong>8</strong></div>
+      <div class="metric teal"><span>AI 辅助提示</span><strong>5</strong></div>
+      <div class="metric red"><span>高风险</span><strong>3</strong></div>
+    </section>
+
+    <section class="grid-review">
+      <aside class="panel flat">
+        <div class="panel-header"><h2>错误列表</h2><span class="tag line">13 项</span></div>
+        <div class="panel-body stack">
+          <div class="issue-card active-rule">
+            <span class="tag blue">规则检查</span>
+            <strong>C-001 三公经费预算合计不一致</strong>
+            <p class="subtle">2026 年预算，页 18，差异 1.20 万元。</p>
+          </div>
+          <div class="issue-card">
+            <span class="tag teal">AI 辅助检查</span>
+            <strong>绩效目标截图疑似跨页漏识别</strong>
+            <p class="subtle">2026 年预算，页 23-24，需要人工复核。</p>
+          </div>
+          <div class="issue-card">
+            <span class="tag blue">规则检查</span>
+            <strong>D-007 三公经费决算说明与表格不一致</strong>
+            <p class="subtle">2025 年决算，页 31，差异 1.80 万元。</p>
+          </div>
+          <div class="issue-card">
+            <span class="tag teal">AI 辅助检查</span>
+            <strong>说明文字存在口径混用风险</strong>
+            <p class="subtle">2025 年决算，涉及“预算执行”和“决算数”。</p>
+          </div>
+        </div>
+      </aside>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>当前错误详情</h2>
+          <div class="toolbar"><span class="tag blue">规则检查</span><span class="tag red">high</span></div>
+        </div>
+        <div class="panel-body stack">
+          <div class="source-tabs">
+            <div class="source-card rule">
+              <span class="tag blue">规则检查</span>
+              <h3 style="margin-top: 9px;">确定性勾稽问题</h3>
+              <p class="subtle">表内合计应等于三项分项之和，系统可直接给出差异。</p>
+            </div>
+            <div class="source-card ai">
+              <span class="tag teal">AI 辅助检查</span>
+              <h3 style="margin-top: 9px;">语义与截图复核</h3>
+              <p class="subtle">用于识别说明缺失、截图异常、OCR 低置信度等问题。</p>
+            </div>
+          </div>
+
+          <div class="evidence-box">
+            <h3>C-001 三公经费预算合计不一致</h3>
+            <p class="subtle">材料：真如镇街道 2026 年预算公开。位置：第 18 页，财政拨款“三公”经费预算表。</p>
+            <div class="quote">
+              证据：合计 35.20 万元；因公出国 10.00 万元，公务用车 20.00 万元，公务接待 3.00 万元。<br>
+              期望：10.00 + 20.00 + 3.00 = 33.00 万元；实际合计 35.20 万元；差异 2.20 万元。
+            </div>
+          </div>
+
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>字段</th>
+                <th>规则值</th>
+                <th>材料值</th>
+                <th>差异</th>
+                <th>建议动作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>三公经费合计</td>
+                <td>33.00 万元</td>
+                <td>35.20 万元</td>
+                <td><span class="tag red">2.20 万元</span></td>
+                <td>退回修改表格或说明</td>
+              </tr>
+              <tr>
+                <td>问题来源</td>
+                <td>规则 C-001</td>
+                <td>预算公开材料</td>
+                <td>高置信</td>
+                <td>可直接导出</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <aside class="panel flat">
+        <div class="panel-header"><h2>截图与定位</h2><span class="tag blue">第 18 页</span></div>
+        <div class="panel-body">
+          <div class="preview">
+            <div class="preview-toolbar"><span>PDF 预览 · 18 / 36</span><span>定位 C-001</span></div>
+            <div class="paper">
+              <div class="paper-line mid"></div>
+              <div class="paper-line"></div>
+              <div class="paper-line short"></div>
+              <div class="paper-table"><div></div><div></div><div></div><div></div></div>
+              <div class="paper-line"></div>
+              <div class="paper-line mid"></div>
+              <div class="locator"><span>命中区域</span></div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </main>
+</body>
+</html>

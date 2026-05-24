@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>04 错误下载 - GovBudgetChecker v3 DEMO</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">预</div>
+      <div>
+        <strong>预决算公开材料审校系统</strong>
+        <span>流程式 DEMO：下载错误内容</span>
+      </div>
+    </div>
+    <nav class="nav">
+      <a href="./region.html"><span class="icon">1</span>地区配置</a>
+      <a href="./upload.html"><span class="icon">2</span>材料上传</a>
+      <a href="./issues.html"><span class="icon">3</span>错误查看</a>
+      <a class="active" href="./downloads.html"><span class="icon">4</span>错误下载</a>
+    </nav>
+    <div class="topbar-right">上海市 / 普陀区 / 真如镇街道</div>
+  </header>
+
+  <main class="page">
+    <section class="page-head">
+      <div>
+        <p class="eyebrow">第四步：错误下载</p>
+        <h1>按地区、年度、材料类型和错误来源下载整改材料</h1>
+        <p class="subtle">下载内容包含错误清单、规则检查结果、AI 辅助检查结果、截图定位证据和整改反馈表。</p>
+      </div>
+      <div class="toolbar">
+        <a class="btn" href="./issues.html"><span class="icon">看</span>返回错误查看</a>
+        <a class="btn primary"><span class="icon">全</span>一键下载全部</a>
+      </div>
+    </section>
+
+    <section class="flow">
+      <div class="flow-step active-blue"><div class="flow-num">1</div><div><strong>地区</strong><span>上海市 / 普陀区 / 真如镇街道。</span></div></div>
+      <div class="flow-step active-blue"><div class="flow-num">2</div><div><strong>年份</strong><span>2026 预算，2025 决算。</span></div></div>
+      <div class="flow-step active-teal"><div class="flow-num">3</div><div><strong>来源</strong><span>规则检查和 AI 辅助检查可分开导出。</span></div></div>
+      <div class="flow-step active-orange"><div class="flow-num">4</div><div><strong>下载</strong><span>清单、截图、定位、反馈表。</span></div></div>
+    </section>
+
+    <section class="panel" style="margin-bottom: 14px;">
+      <div class="panel-header"><h2>导出筛选</h2><span class="tag orange">当前批次</span></div>
+      <div class="panel-body form-grid">
+        <div class="field"><label>地区</label><select class="select"><option>上海市 / 普陀区 / 真如镇街道</option></select></div>
+        <div class="field"><label>检查年度</label><select class="select"><option>2026</option></select></div>
+        <div class="field"><label>材料类型</label><select class="select"><option>预算 + 决算</option><option>仅预算</option><option>仅决算</option></select></div>
+        <div class="field"><label>错误来源</label><select class="select"><option>规则检查 + AI 辅助检查</option><option>仅规则检查</option><option>仅 AI 辅助检查</option></select></div>
+        <a class="btn primary"><span class="icon">刷</span>生成导出包</a>
+      </div>
+    </section>
+
+    <section class="grid-main-side">
+      <div class="stack">
+        <div class="download-card">
+          <div class="file-icon">XLS</div>
+          <div>
+            <strong>错误清单 Excel</strong>
+            <p class="subtle">包含规则编号、AI 来源、严重级别、材料类型、年份、页码、证据、建议动作。</p>
+          </div>
+          <a class="btn primary"><span class="icon">下</span>下载</a>
+        </div>
+        <div class="download-card">
+          <div class="file-icon teal">PDF</div>
+          <div>
+            <strong>截图定位 PDF</strong>
+            <p class="subtle">把每个错误的截图、页码、定位框和证据片段合并成便于流转的 PDF。</p>
+          </div>
+          <a class="btn teal"><span class="icon">下</span>下载</a>
+        </div>
+        <div class="download-card">
+          <div class="file-icon orange">ZIP</div>
+          <div>
+            <strong>整改工作包</strong>
+            <p class="subtle">包含原始错误清单、截图证据、JSON 结构化结果、整改反馈表模板。</p>
+          </div>
+          <a class="btn"><span class="icon">下</span>下载</a>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header"><h2>导出明细</h2><span class="tag line">13 项错误</span></div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>错误</th>
+                <th>材料</th>
+                <th>来源</th>
+                <th>截图</th>
+                <th>定位</th>
+                <th>导出</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="strong-cell">C-001 三公经费预算合计不一致</span><span class="muted-cell">high</span></td>
+                <td><span class="tag blue">2026 预算</span></td>
+                <td>规则检查</td>
+                <td>第 18 页截图</td>
+                <td>bbox 已有</td>
+                <td><span class="tag line">包含</span></td>
+              </tr>
+              <tr>
+                <td><span class="strong-cell">绩效目标截图疑似跨页漏识别</span><span class="muted-cell">manual_review</span></td>
+                <td><span class="tag blue">2026 预算</span></td>
+                <td>AI 辅助检查</td>
+                <td>第 23-24 页截图</td>
+                <td>待人工确认</td>
+                <td><span class="tag line">包含</span></td>
+              </tr>
+              <tr>
+                <td><span class="strong-cell">D-007 三公经费决算说明与表格不一致</span><span class="muted-cell">critical</span></td>
+                <td><span class="tag teal">2025 决算</span></td>
+                <td>规则检查</td>
+                <td>第 31 页截图</td>
+                <td>bbox 已有</td>
+                <td><span class="tag line">包含</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <aside class="stack">
+        <div class="panel flat">
+          <div class="panel-header"><h2>导出包内容</h2></div>
+          <div class="panel-body">
+            <ul class="check-list">
+              <li><span class="check-dot">1</span>规则检查错误清单。</li>
+              <li><span class="check-dot">2</span>AI 辅助检查提示清单。</li>
+              <li><span class="check-dot">3</span>每个错误的截图和定位信息。</li>
+              <li><span class="check-dot">4</span>整改反馈表和复核状态字段。</li>
+            </ul>
+          </div>
+        </div>
+        <div class="panel flat">
+          <div class="panel-header"><h2>当前批次统计</h2></div>
+          <div class="panel-body stack">
+            <div class="year-rule blue"><div class="big-letter">预</div><div><strong>2026 年预算</strong><p class="subtle">8 项错误，2 项高风险。</p></div></div>
+            <div class="year-rule teal"><div class="big-letter">决</div><div><strong>2025 年决算</strong><p class="subtle">5 项错误，1 项高风险。</p></div></div>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </main>
+</body>
+</html>

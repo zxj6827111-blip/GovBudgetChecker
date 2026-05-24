@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GovBudgetChecker v2 DEMO 导航</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body class="app-shell">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">预</div>
+      <div>
+        <strong>GovBudgetChecker v2 DEMO</strong>
+        <span>截图式方案导航，不是统一门户首页</span>
+      </div>
+    </div>
+    <nav class="nav">
+      <a class="active" href="./index.html"><span class="icon-box">目</span>方案导航</a>
+      <a href="./dashboard.html"><span class="icon-box">台</span>工作台</a>
+      <a href="./region-management.html"><span class="icon-box">区</span>地区管理</a>
+    </nav>
+  </header>
+  <main class="page demo-index">
+    <section class="page-head">
+      <div>
+        <p class="eyebrow">v2 设计重点</p>
+        <h1>把地区范围、预算审校、决算审校放进同一个清晰工作流</h1>
+        <p class="subtle">
+          本轮不改正式业务页面，也不做统一门户首页。DEMO 仅用于确认信息架构、视觉语言和工作人员的主要操作路径。
+        </p>
+      </div>
+    </section>
+
+    <div class="task-strip">
+      <div class="step active">
+        <div class="step-num">1</div>
+        <div><strong>先选地区</strong><span>行政区划决定可见部门、单位和公开站点。</span></div>
+      </div>
+      <div class="step active">
+        <div class="step-num">2</div>
+        <div><strong>再选组织</strong><span>部门、单位决定任务归属和权限边界。</span></div>
+      </div>
+      <div class="step active">
+        <div class="step-num">3</div>
+        <div><strong>区分预算</strong><span>蓝色工作线，对应预算规则包和预算表。</span></div>
+      </div>
+      <div class="step final-step">
+        <div class="step-num">4</div>
+        <div><strong>区分决算</strong><span>青绿色工作线，对应决算规则包和决算表。</span></div>
+      </div>
+    </div>
+
+    <section class="page-cards">
+      <a class="page-card" href="./login.html">
+        <div>
+          <strong>01 登录页</strong>
+          <p>强调这是 GovBudgetChecker 自身入口，登录前选择默认地区和进入视图。</p>
+        </div>
+        <span class="tag line">查看页面</span>
+      </a>
+      <a class="page-card" href="./dashboard.html">
+        <div>
+          <strong>02 工作台</strong>
+          <p>围绕“今天先处理什么”，按地区、预算、决算、高风险组织队列。</p>
+        </div>
+        <span class="tag line">查看页面</span>
+      </a>
+      <a class="page-card" href="./upload.html">
+        <div>
+          <strong>03 批量上传</strong>
+          <p>先确认地区和材料类型，再批量应用年度、部门、单位，避免预算/决算混传。</p>
+        </div>
+        <span class="tag line">查看页面</span>
+      </a>
+      <a class="page-card" href="./region-management.html">
+        <div>
+          <strong>04 地区与组织管理</strong>
+          <p>新增页面，管理行政区划、部门、单位、公开站点和材料归属规则。</p>
+        </div>
+        <span class="tag line">查看页面</span>
+      </a>
+      <a class="page-card" href="./department.html">
+        <div>
+          <strong>05 部门任务台账</strong>
+          <p>从地区和部门进入任务表，预算与决算分开筛选、统计和复核。</p>
+        </div>
+        <span class="tag line">查看页面</span>
+      </a>
+      <a class="page-card" href="./review.html">
+        <div>
+          <strong>06 审校详情</strong>
+          <p>三栏结构：问题队列、证据与建议、原文定位；当前材料类型决定规则包。</p>
+        </div>
+        <span class="tag line">查看页面</span>
+      </a>
+    </section>
+  </main>
+</body>
+</html>
