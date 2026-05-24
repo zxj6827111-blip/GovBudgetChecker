@@ -225,7 +225,7 @@ class FindingsMerger:
         
         # 1. 严重程度冲突
         if ai_item.severity != rule_item.severity:
-            severity_levels = {"info": 1, "low": 2, "medium": 3, "high": 4, "critical": 5}
+            severity_levels = {"info": 1, "low": 2, "manual_review": 2.5, "medium": 3, "high": 4, "critical": 5}
             ai_level = severity_levels.get(ai_item.severity, 0)
             rule_level = severity_levels.get(rule_item.severity, 0)
             

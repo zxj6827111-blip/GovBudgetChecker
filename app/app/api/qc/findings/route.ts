@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
-import { backendAuthHeaders } from "@/lib/backendAuth";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export async function GET(req: NextRequest) {
+  const auth = await requireBackendAuthHeaders();
+  if (!auth.ok) {
+    return auth.response;
+  }
+
   const runId = req.nextUrl.searchParams.get("run_id");
   if (!runId) {
     return NextResponse.json(
@@ -16,7 +21,7 @@ export async function GET(req: NextRequest) {
       `${apiBase}/api/qc/findings?run_id=${encodeURIComponent(runId)}`,
       {
         cache: "no-store",
-        headers: backendAuthHeaders(),
+        headers: auth.headers,
       }
     );
     const text = await upstream.text();

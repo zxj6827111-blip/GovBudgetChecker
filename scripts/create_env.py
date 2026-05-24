@@ -1,4 +1,5 @@
-"""Create .env file with correct encoding."""
+"""Create a minimal .env file for the supported runtime models."""
+
 import os
 
 env_content = """# ========================================
@@ -21,10 +22,21 @@ ARK_MODEL=doubao-1-5-pro-32k-250115
 # System Configuration
 AI_ASSIST_ENABLED=true
 AI_EXTRACTOR_URL=http://127.0.0.1:9009/ai/extract/v1
+AI_EXTRACTOR_DIRECT_FALLBACK=true
+
+# API Security
+GOVBUDGET_AUTH_ENABLED=true
+GOVBUDGET_API_KEY=change_me_to_a_strong_secret
+USER_SESSION_SECRET=change_me_to_a_different_strong_secret
+DEFAULT_ADMIN_PASSWORD=change_me_to_a_unique_admin_password
+
+# Queue / Batch flow
+JOB_QUEUE_ROLE=all
+JOB_QUEUE_INLINE_FALLBACK=false
 """
 
-env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
-with open(env_path, 'w', encoding='utf-8') as f:
+env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+with open(env_path, "w", encoding="utf-8") as f:
     f.write(env_content)
 
 print(f"Created {env_path}")

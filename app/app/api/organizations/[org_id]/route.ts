@@ -2,17 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
 import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { invalidateLocalDataCache } from "@/lib/localData";
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { org_id: string } }
+  { params }: { params: Promise<{ org_id: string }> }
 ) {
   try {
     const body = await request.json();
-    const orgId = encodeURIComponent(params.org_id);
+    const orgId = encodeURIComponent((await params).org_id);
     const response = await fetchWithTimeout(`${apiBase}/api/organizations/${orgId}`, {
       method: "PUT",
-      headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
+      headers: await backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
     });
     const text = await response.text();
@@ -21,6 +22,9 @@ export async function PUT(
       data = JSON.parse(text);
     } catch {
       data = { raw: text };
+    }
+    if (response.ok) {
+      invalidateLocalDataCache();
     }
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
@@ -34,13 +38,13 @@ export async function PUT(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { org_id: string } }
+  { params }: { params: Promise<{ org_id: string }> }
 ) {
   try {
-    const orgId = encodeURIComponent(params.org_id);
+    const orgId = encodeURIComponent((await params).org_id);
     const response = await fetchWithTimeout(`${apiBase}/api/organizations/${orgId}`, {
       method: "DELETE",
-      headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
+      headers: await backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
     });
     const text = await response.text();
     let data: any;
@@ -48,6 +52,9 @@ export async function DELETE(
       data = JSON.parse(text);
     } catch {
       data = { raw: text };
+    }
+    if (response.ok) {
+      invalidateLocalDataCache();
     }
     return NextResponse.json(data, { status: response.status });
   } catch (error) {

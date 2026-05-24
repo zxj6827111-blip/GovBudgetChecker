@@ -2,13 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
+import { invalidateLocalDataCache } from "@/lib/localData";
 
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const response = await fetchWithTimeout(`${apiBase}/api/organizations/import`, {
       method: "POST",
-      headers: backendAuthHeadersWithSession(),
+      headers: await backendAuthHeadersWithSession(),
       body: formData,
     });
     const text = await response.text();
@@ -17,6 +18,9 @@ export async function POST(request: NextRequest) {
       data = JSON.parse(text);
     } catch {
       data = { raw: text };
+    }
+    if (response.ok) {
+      invalidateLocalDataCache();
     }
     return NextResponse.json(data, { status: response.status });
   } catch (error) {

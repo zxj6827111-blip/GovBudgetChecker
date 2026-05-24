@@ -157,4 +157,4 @@ async def test_readiness_ai_check_uses_default_url_when_env_missing(
 
     assert ok is True
     assert detail == "reachable:200"
-    assert captured_urls == ["http://127.0.0.1:9009/ai/extract/v1"]
+    assert captured_urls == ["http://127.0.0.1:9009/health"]

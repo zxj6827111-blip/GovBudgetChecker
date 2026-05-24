@@ -1,19 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
-import { backendAuthHeaders } from "@/lib/backendAuth";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export const runtime = "nodejs";
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { job_id: string } }
+  { params }: { params: Promise<{ job_id: string }> }
 ) {
+  const auth = await requireBackendAuthHeaders();
+  if (!auth.ok) {
+    return auth.response;
+  }
+
   try {
     const upstream = await fetch(
-      `${apiBase}/api/jobs/${encodeURIComponent(params.job_id)}/status`,
+      `${apiBase}/api/jobs/${encodeURIComponent((await params).job_id)}/status`,
       {
         cache: "no-store",
-        headers: backendAuthHeaders(),
+        headers: auth.headers,
       }
     );
     const text = await upstream.text();
@@ -31,4 +36,3 @@ export async function GET(
     );
   }
 }
-

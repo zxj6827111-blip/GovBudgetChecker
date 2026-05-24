@@ -12,20 +12,14 @@ import hashlib
 import json
 import re
 import httpx
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.services.ai_client import AIClient
 
 logger = logging.getLogger(__name__)
 
 # ==================== 配置 ====================
-AI_EXTRACTOR_URL = os.getenv("AI_EXTRACTOR_URL", "http://127.0.0.1:9009/ai/extract/v1")
-AI_ASSIST_ENABLED = os.getenv("AI_ASSIST_ENABLED", "true").lower() == "true"
-AI_MAIN_MODEL = os.getenv("AI_MAIN_MODEL", os.getenv("AI_EXTRACTOR_MODEL", "")).strip()
-AI_MAIN_PROVIDER = os.getenv("AI_MAIN_PROVIDER", "").strip()
-AI_EXTRACTOR_DIRECT_FALLBACK = (
-    os.getenv("AI_EXTRACTOR_DIRECT_FALLBACK", "true").strip().lower() == "true"
-)
+DEFAULT_EXTRACTOR_URL = "http://127.0.0.1:9009/ai/extract/v1"
 
 # 超时和重试配置
 REQUEST_TIMEOUT = 120.0  # 增加到120秒，适应复杂文档处理
@@ -40,19 +34,42 @@ def _read_float_env(name: str, default: float) -> float:
         return default
 
 
+def _read_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _read_str_env(name: str, default: str = "") -> str:
+    return os.getenv(name, default).strip()
+
+
 MIN_ISSUE_CONFIDENCE = _read_float_env("AI_MIN_ISSUE_CONFIDENCE", 0.75)
 
 @dataclass
 class ExtractorConfig:
     """抽取器配置"""
-    url: str = AI_EXTRACTOR_URL
-    enabled: bool = AI_ASSIST_ENABLED
-    main_model: str = AI_MAIN_MODEL
-    main_provider: str = AI_MAIN_PROVIDER
-    direct_fallback: bool = AI_EXTRACTOR_DIRECT_FALLBACK
-    timeout: float = REQUEST_TIMEOUT
-    max_retries: int = MAX_RETRIES
-    retry_delay: float = RETRY_DELAY
+    url: str = field(default_factory=lambda: _read_str_env("AI_EXTRACTOR_URL", DEFAULT_EXTRACTOR_URL))
+    enabled: bool = field(default_factory=lambda: _read_bool_env("AI_ASSIST_ENABLED", True))
+    main_model: str = field(default_factory=lambda: _read_str_env("AI_MAIN_MODEL", _read_str_env("AI_EXTRACTOR_MODEL")))
+    main_provider: str = field(default_factory=lambda: _read_str_env("AI_MAIN_PROVIDER"))
+    audit_provider: str = field(
+        default_factory=lambda: _read_str_env(
+            "AI_AUDIT_PROVIDER",
+            _read_str_env("AI_MAIN_PROVIDER", "gemini_main"),
+        )
+    )
+    audit_model: str = field(
+        default_factory=lambda: _read_str_env(
+            "AI_AUDIT_MODEL",
+            _read_str_env("AI_MAIN_MODEL", _read_str_env("AI_LOCATOR_MODEL")),
+        )
+    )
+    direct_fallback: bool = field(default_factory=lambda: _read_bool_env("AI_EXTRACTOR_DIRECT_FALLBACK", True))
+    timeout: float = field(default_factory=lambda: _read_float_env("AI_EXTRACTOR_TIMEOUT", REQUEST_TIMEOUT))
+    max_retries: int = field(default_factory=lambda: int(os.getenv("AI_EXTRACTOR_MAX_RETRIES", str(MAX_RETRIES))))
+    retry_delay: float = field(default_factory=lambda: _read_float_env("AI_EXTRACTOR_RETRY_DELAY", RETRY_DELAY))
 
 class ExtractorClient:
     """AI抽取器客户端"""
@@ -69,6 +86,16 @@ class ExtractorClient:
     def _get_preferred_provider(self) -> Optional[str]:
         provider = (self.config.main_provider or "").strip()
         return provider or None
+
+    def _get_audit_provider(self) -> Optional[str]:
+        provider = (self.config.audit_provider or "").strip()
+        if provider:
+            return provider
+        return self._get_preferred_provider()
+
+    def _get_audit_model(self) -> Optional[str]:
+        model = (self.config.audit_model or "").strip()
+        return model or None
 
     @staticmethod
     def _extract_json_array(text: str) -> Optional[List[Dict[str, Any]]]:
@@ -285,6 +312,7 @@ class ExtractorClient:
             "warn": "medium",
             "warning": "medium",
             "medium": "medium",
+            "manual_review": "manual_review",
             "p2": "low",
             "low": "low",
             "info": "info",
@@ -314,34 +342,62 @@ class ExtractorClient:
         """Use configured LLM provider directly when extractor service is unavailable."""
         ai_client = self._get_direct_ai_client()
         prompt = f"""
-你是一名“政府部门预算公开报告审查员/财政文本审计校对员”。
-你的输入是全文中的局部窗口文本，只能基于窗口内可证据化内容输出问题。
+你是一名“中国政府预决算公开材料审校助手”。
+输入是全文中的局部窗口文本，只能基于窗口内可直接定位的证据输出问题。
 
 必须遵守：
 1) 只输出 JSON 数组，不要输出任何其他文字；无问题返回 []。
-2) 证据优先：每个问题都要有可定位证据，不臆测、不补数。
-3) 局部窗口限制：不要判断“全书缺表/缺章/目录问题”。
-4) 重点检查：
-   - 表文方向矛盾（大于/小于/增加/减少/增长/下降与数字方向相反）
-   - 空表说明缺失（三公/政府性基金/国有资本经营）
-   - 占位符或模板残留（XX/xxx/待填/见附件）
-   - 年份冲突、单位与口径矛盾
+2) 证据优先：每个问题都必须能在当前窗口内找到原文证据，不臆测、不补数、不编造页码。
+3) 局部窗口限制：不要判断全书缺表、缺章、目录页码整体错误等必须看全书才能确认的问题。
+4) 优先检查以下问题：
+   - 同比、占比、完成率、增长率、下降率复算错误
+   - 合计与明细勾稽不一致、同条说明前后金额矛盾
+   - 增加/减少/增长/下降等方向描述与数字变化方向相反
+   - 部门/单位预算（决算）文种误写
+   - 模板残留、占位符、重复表述、残句、异常标点
+   - 三公经费、政府性基金、国有资本经营无此项说明缺失
+   - 年份冲突、金额单位错误、统计口径冲突、编码与名称用途错配
 5) 容差：万元差值<=0.01、元差值<=100、百分点差值<=0.1 视为一致，不得报错。
-6) 口径保护：政府采购预算 vs 绩效项目资金、一般公共预算 vs 财政拨款等不同口径，
-   除非文中明确要求一致，否则不得直接判错。
-7) OCR 噪声保护：疑似抽取残影、隐藏层重复造成的问题不要输出。
+6) 口径保护：政府采购预算、绩效项目资金、一般公共预算、财政拨款等不同口径，除非文本明确要求一致，否则不得直接判错。
+7) OCR 噪声保护：疑似抽取残影、隐藏层重复、跨页断裂不稳定时，优先输出 manual_review 或不输出。
 8) 输出必须使用中文，不得使用其他语言。
 
 输出字段要求（每个元素必须具备）：
-- type: 字符串
-- original: 字符串
-- suggestion: 字符串
+- problem_type: 字符串，尽量使用 ratio_recalc/sum_mismatch/document_kind_mismatch/placeholder_residue/unit_scope_conflict/duplicate_text/missing_explanation/direction_conflict/code_subject_mismatch/generic
+- original: 字符串，原始问题文本或核心错误表述
+- suggestion: 字符串，简短修正建议
 - span: [start, end] 两个整数，无法定位填 [0,0]
-- context: 字符串
-- severity: 仅允许 critical/high/medium/low/info
+- context: 字符串，包含关键证据的上下文
+- severity: 仅允许 critical/high/medium/low/info/manual_review
 - confidence: 0-1 数值
 
-可选字段：rule_id, title, message, problem_type, quote, page, evidence, check, manual_confirm。
+建议尽量补充以下字段：
+- quote: 直接命中的原文片段
+- page: 当前窗口内能确定页码时填写
+- table_or_section: 对应表名或说明章节
+- expected: 复核后的正确值
+- actual: 当前文本中的值
+- difference: 差额或百分点差
+- check: 检查项名称，如“同比复算”“三公经费合计”
+- rule_id, title, message
+
+输出示例：
+[{{
+  "problem_type": "ratio_recalc",
+  "original": "同比增长12.5%",
+  "suggestion": "请按表内金额重新复算同比并修正文中表述",
+  "span": [120, 128],
+  "context": "一般公共预算支出情况说明：同比增长12.5%。",
+  "severity": "high",
+  "confidence": 0.86,
+  "quote": "同比增长12.5%",
+  "table_or_section": "一般公共预算支出情况说明",
+  "expected": "8.3%",
+  "actual": "12.5%",
+  "difference": "4.2个百分点",
+  "check": "同比复算"
+}}]
+
 低于 {MIN_ISSUE_CONFIDENCE:.2f} 置信度的问题不要输出。
 
 待审文本：
@@ -352,8 +408,8 @@ class ExtractorClient:
                 {"role": "system", "content": "你是严格的 JSON 输出助手。"},
                 {"role": "user", "content": prompt},
             ],
-            preferred_provider=self._get_preferred_provider(),
-            model=self.config.main_model or None,
+            preferred_provider=self._get_audit_provider(),
+            model=self._get_audit_model(),
             temperature=0,
             max_tokens=3200,
             timeout=int(self.config.timeout),
@@ -648,6 +704,7 @@ class ExtractorClient:
             direct_result = await self._direct_semantic_audit(section_text)
             if direct_result:
                 return direct_result
+            logger.info("Direct full-report audit returned no issues, falling back to extractor semantic audit")
         except Exception as direct_err:
             logger.warning(f"Direct full-report audit failed: {direct_err}")
 

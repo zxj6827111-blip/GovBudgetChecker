@@ -3,11 +3,12 @@
   "version": "1.0.0",
   "description": "Government Budget Checker Project",
   "scripts": {
-    "dev": "concurrently -n \"frontend,backend\" -c \"cyan,magenta\" \"npm run dev:frontend\" \"npm run dev:backend\"",
+    "dev": "powershell -NoProfile -Command \"$raw = if ($env:INIT_CWD) { $env:INIT_CWD } elseif ($env:npm_package_json) { Split-Path $env:npm_package_json } else { (Get-Location).Path }; $root = ($raw -replace '^Microsoft\\.PowerShell\\.Core\\\\FileSystem::', '' -replace '^\\\\\\\\\\?\\\\', ''); Set-Location -LiteralPath $root; node .\\scripts\\dev.cjs\"",
     "dev:frontend": "npm --prefix app run dev",
-    "dev:backend": "powershell -Command \"if (-not $env:GOVBUDGET_AUTH_ENABLED) { $env:GOVBUDGET_AUTH_ENABLED='true' }; if (-not $env:GOVBUDGET_API_KEY) { $env:GOVBUDGET_API_KEY='dev-local-key' }; if (-not $env:GOVBUDGET_RATE_LIMIT) { $env:GOVBUDGET_RATE_LIMIT='2000' }; python -m uvicorn api.main:app --reload --port 8000\"",
-    "dev:backend:noauth": "powershell -Command \"$env:GOVBUDGET_AUTH_ENABLED='false'; python -m uvicorn api.main:app --reload --port 8000\"",
-    "install:all": "npm install && npm --prefix app install && pip install -r requirements.txt"
+    "dev:backend": "powershell -NoProfile -Command \"if (-not $env:GOVBUDGET_AUTH_ENABLED) { $env:GOVBUDGET_AUTH_ENABLED='true' }; if (-not $env:GOVBUDGET_API_KEY) { $env:GOVBUDGET_API_KEY='dev-local-key' }; if (-not $env:GOVBUDGET_RATE_LIMIT) { $env:GOVBUDGET_RATE_LIMIT='2000' }; $py = if (Test-Path '.\\.venv\\Scripts\\python.exe') { '.\\.venv\\Scripts\\python.exe' } else { 'python' }; & $py -m uvicorn api.main:app --reload --port 8000\"",
+    "dev:backend:noauth": "powershell -NoProfile -Command \"$env:GOVBUDGET_AUTH_ENABLED='false'; $py = if (Test-Path '.\\.venv\\Scripts\\python.exe') { '.\\.venv\\Scripts\\python.exe' } else { 'python' }; & $py -m uvicorn api.main:app --reload --port 8000\"",
+    "setup:python": "python scripts/setup_python_env.py",
+    "install:all": "npm install && npm --prefix app install && npm run setup:python"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",

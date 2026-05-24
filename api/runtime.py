@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import io
 import json
 import logging
 import os
@@ -74,6 +75,8 @@ except ImportError:
     USER_STORE_AVAILABLE = False
     get_user_store = None
 
+from src.services.analysis_result_store import persist_analysis_job_snapshot
+
 _pipeline_runner: Optional[Callable[[Path], Awaitable[None]]] = None
 _job_queue: Optional["DurableJobQueue"] = None
 _JOB_SUMMARY_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -116,6 +119,12 @@ _YEAR_4_RE = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
 _YEAR_2_RE = re.compile(
     r"(?<!\d)(\d{2})(?=\s*(?:\u5e74|\u5e74\u5ea6|\u9884\u7b97|\u51b3\u7b97|budget|final|settlement|accounts|$))",
     re.I,
+)
+_COVER_ORG_LABELS = (
+    ("\u9884\u7b97\u4e3b\u7ba1\u90e8\u95e8", "department", "budget"),
+    ("\u9884\u7b97\u5355\u4f4d", "unit", "budget"),
+    ("\u51b3\u7b97\u4e3b\u7ba1\u90e8\u95e8", "department", "final"),
+    ("\u51b3\u7b97\u5355\u4f4d", "unit", "final"),
 )
 
 
@@ -342,6 +351,26 @@ def _filter_issue_list(items: Any, ignored_ids: Set[str]) -> Any:
     return filtered
 
 
+def _lift_result_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return payload
+
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return payload
+
+    lifted = dict(payload)
+    for key in ("ai_findings", "rule_findings", "issues", "merged", "summary", "meta"):
+        result_value = result.get(key)
+        if result_value is None:
+            continue
+        current_value = lifted.get(key)
+        if current_value in (None, [], {}, ""):
+            lifted[key] = copy.deepcopy(result_value)
+
+    return lifted
+
+
 def _recompute_merged_payload(container: Dict[str, Any]) -> None:
     ai_findings = container.get("ai_findings")
     rule_findings = container.get("rule_findings")
@@ -504,33 +533,56 @@ def _enrich_job_organization_context(job_id: str, payload: Dict[str, Any]) -> Di
         if linked_org is None:
             return enriched
 
-        enriched.setdefault("organization_id", linked_org.id)
-        enriched.setdefault("organization_name", linked_org.name)
+        # Keep job payloads aligned with the canonical organization record after renames.
+        enriched["organization_id"] = linked_org.id
+        enriched["organization_name"] = linked_org.name
         if match_type is not None:
-            enriched.setdefault("organization_match_type", match_type)
+            enriched["organization_match_type"] = match_type
         if confidence is not None:
-            enriched.setdefault("organization_match_confidence", round(float(confidence), 4))
+            enriched["organization_match_confidence"] = round(float(confidence), 4)
     except Exception:
         logger.exception("Failed to enrich organization context for job %s", job_id)
 
     return enriched
 
 
-def extract_pdf_first_page_text(pdf_path: Path) -> str:
-    """Best-effort first-page text extraction for upload-time organization matching."""
+def _extract_pdf_page_texts(pdf_source: Any, *, max_pages: int = 3) -> List[str]:
+    """Best-effort text extraction for the first few PDF pages."""
     try:
         import pdfplumber
     except Exception:
-        return ""
+        return []
 
     try:
-        with pdfplumber.open(str(pdf_path)) as pdf:
+        with pdfplumber.open(pdf_source) as pdf:
             if not pdf.pages:
-                return ""
-            return str(pdf.pages[0].extract_text() or "").strip()
+                return []
+            limit = max(1, int(max_pages or 1))
+            return [
+                str(page.extract_text() or "").strip()
+                for page in pdf.pages[:limit]
+            ]
     except Exception:
-        logger.exception("Failed to extract first page text from PDF: %s", pdf_path)
-        return ""
+        logger.exception("Failed to extract page text from PDF source")
+        return []
+
+
+def extract_pdf_page_texts_from_bytes(content: bytes, max_pages: int = 3) -> List[str]:
+    """Extract the first few page texts from in-memory PDF bytes."""
+    if not content:
+        return []
+    return _extract_pdf_page_texts(io.BytesIO(content), max_pages=max_pages)
+
+
+def extract_pdf_page_texts(pdf_path: Path, max_pages: int = 3) -> List[str]:
+    """Extract the first few page texts from a PDF path."""
+    return _extract_pdf_page_texts(str(pdf_path), max_pages=max_pages)
+
+
+def extract_pdf_first_page_text(pdf_path: Path) -> str:
+    """Best-effort first-page text extraction for upload-time organization matching."""
+    page_texts = extract_pdf_page_texts(pdf_path, max_pages=1)
+    return page_texts[0] if page_texts else ""
 
 
 def parse_report_year(raw: Any) -> Optional[int]:
@@ -651,6 +703,139 @@ def normalize_report_kind(doc_type: Optional[str], filename: str = "") -> str:
     ):
         return "final"
     return "unknown"
+
+
+def normalize_doc_type(
+    doc_type: Optional[str],
+    filename: str = "",
+    report_kind: Optional[str] = None,
+) -> Optional[str]:
+    """Normalize upload doc type to the route-facing values used by the app."""
+    normalized = str(doc_type or "").strip().lower()
+    if normalized in {"dept_budget", "budget"}:
+        return "dept_budget"
+    if normalized in {"dept_final", "final", "settlement", "accounts"}:
+        return "dept_final"
+
+    kind = str(report_kind or "").strip().lower()
+    if not kind:
+        kind = normalize_report_kind(doc_type, filename)
+    if kind == "budget":
+        return "dept_budget"
+    if kind == "final":
+        return "dept_final"
+    return None
+
+
+def _normalize_cover_line(raw: Any) -> str:
+    return re.sub(r"\s+", "", str(raw or "").strip())
+
+
+def _detect_cover_scope_hint(text: str) -> Optional[str]:
+    compact = _normalize_cover_line(text)
+    if not compact:
+        return None
+    if "\u4e3b\u7ba1\u90e8\u95e8" in compact or "\u90e8\u95e8\u9884\u7b97" in compact or "\u90e8\u95e8\u51b3\u7b97" in compact:
+        return "department"
+    if "\u9884\u7b97\u5355\u4f4d" in compact or "\u51b3\u7b97\u5355\u4f4d" in compact:
+        return "unit"
+    if "\u5355\u4f4d\u9884\u7b97" in compact or "\u5355\u4f4d\u51b3\u7b97" in compact or "\u672c\u7ea7" in compact:
+        return "unit"
+    if "\u90e8\u95e8" in compact:
+        return "department"
+    if "\u5355\u4f4d" in compact:
+        return "unit"
+    return None
+
+
+def _detect_cover_report_kind(text: str) -> Optional[str]:
+    compact = _normalize_cover_line(text)
+    if not compact:
+        return None
+    if "\u9884\u7b97" in compact or "budget" in compact.lower():
+        return "budget"
+    if "\u51b3\u7b97" in compact or "final" in compact.lower():
+        return "final"
+    return None
+
+
+def extract_cover_metadata(
+    *,
+    page_texts: Optional[List[str]] = None,
+    filename: str = "",
+    preferred_year: Any = None,
+    doc_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Extract lightweight cover metadata from the first page."""
+    normalized_pages = [str(text or "").strip() for text in (page_texts or [])]
+    first_page_text = normalized_pages[0] if normalized_pages else ""
+    lines = [line.strip() for line in first_page_text.splitlines() if line.strip()]
+
+    cover_title = ""
+    for line in lines[:20]:
+        compact = _normalize_cover_line(line)
+        if not compact:
+            continue
+        if (
+            ("\u9884\u7b97" in compact or "\u51b3\u7b97" in compact)
+            and ("\u90e8\u95e8" in compact or "\u5355\u4f4d" in compact)
+        ):
+            cover_title = line.strip()
+            break
+
+    if not cover_title:
+        for line in lines[:20]:
+            compact = _normalize_cover_line(line)
+            if "\u9884\u7b97" in compact or "\u51b3\u7b97" in compact:
+                cover_title = line.strip()
+                break
+
+    cover_org_name = ""
+    cover_org_label = ""
+    scope_hint: Optional[str] = None
+    report_kind: Optional[str] = None
+
+    for line in lines[:40]:
+        compact = _normalize_cover_line(line)
+        if not compact:
+            continue
+        for label, label_scope, label_kind in _COVER_ORG_LABELS:
+            if label not in compact:
+                continue
+            _, _, remainder = compact.partition(label)
+            remainder = re.sub(r"^[\uff1a:]+", "", remainder).strip()
+            if not remainder:
+                continue
+            cover_org_name = remainder
+            cover_org_label = label
+            scope_hint = label_scope
+            report_kind = label_kind
+            break
+        if cover_org_name:
+            break
+
+    scope_hint = scope_hint or _detect_cover_scope_hint(cover_title)
+    report_kind = report_kind or _detect_cover_report_kind(cover_title)
+
+    fallback_kind = normalize_report_kind(doc_type, filename)
+    if not report_kind and fallback_kind != "unknown":
+        report_kind = fallback_kind
+
+    report_year = infer_report_year(
+        filename=filename,
+        page_texts=normalized_pages,
+        preferred_year=preferred_year,
+    )
+
+    return {
+        "cover_title": cover_title,
+        "cover_org_name": cover_org_name,
+        "cover_org_label": cover_org_label,
+        "scope_hint": scope_hint or "",
+        "report_kind": report_kind or "unknown",
+        "report_year": report_year,
+        "doc_type": normalize_doc_type(doc_type, filename, report_kind=report_kind),
+    }
 
 
 def _normalize_scope_name(raw: Any) -> str:
@@ -1924,6 +2109,7 @@ def get_job_status_payload(job_id: str) -> Dict[str, Any]:
         if structured:
             payload.setdefault("structured_ingest", structured)
         payload = _enrich_job_organization_context(job_id, payload)
+        payload = _lift_result_payload(payload)
         return apply_job_issue_filters(job_dir, payload)
     except Exception as e:
         raise HTTPException(
@@ -2108,6 +2294,7 @@ async def start_analysis(
         status_file.write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8"
         )
+        await persist_analysis_job_snapshot(payload)
         queue = _job_queue
         dispatch = "local_queue"
         if queue is not None:
@@ -2655,6 +2842,308 @@ def rematch_job_organizations(body: Optional[Dict[str, Any]] = None) -> Dict[str
         "fast_path_hits": fast_path_hits,
         "pdf_text_fallback_hits": pdf_text_fallback_hits,
         "matches": matches,
+        "skipped": skipped,
+        "failed": failed,
+    }
+
+
+def repair_missing_job_organization_links(
+    body: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Repair missing or stale job-to-organization links."""
+    if not ORG_AVAILABLE:
+        raise HTTPException(status_code=503, detail="organization service unavailable")
+
+    from src.services.org_matcher import get_org_matcher
+
+    request_body = dict(body or {})
+    dry_run = bool(request_body.get("dry_run", True))
+
+    try:
+        minimum_confidence = float(request_body.get("minimum_confidence", 0.6))
+    except Exception:
+        minimum_confidence = 0.6
+    minimum_confidence = max(0.0, min(1.0, minimum_confidence))
+
+    scoped_department_id = str(request_body.get("department_id") or "").strip()
+    scoped_department_name = str(request_body.get("department_name") or "").strip()
+
+    storage = require_org_storage()
+    matcher = get_org_matcher()
+
+    repairs: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    scanned_count = 0
+    linked_from_status_count = 0
+    matched_from_pdf_count = 0
+    fast_path_hits = 0
+    pdf_text_fallback_hits = 0
+
+    def _serialize_org_brief(
+        org_id: str,
+        *,
+        match_type: Optional[str] = None,
+        confidence: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
+        normalized_org_id = str(org_id or "").strip()
+        if not normalized_org_id:
+            return None
+
+        org = storage.get_by_id(normalized_org_id)
+        if org is None:
+            return {
+                "organization_id": normalized_org_id,
+                "organization_name": None,
+                "match_type": match_type,
+                "confidence": confidence,
+                "department_id": None,
+                "department_name": None,
+            }
+
+        department = resolve_organization_department_context(normalized_org_id) or {}
+        payload: Dict[str, Any] = {
+            "organization_id": str(getattr(org, "id", "") or ""),
+            "organization_name": str(getattr(org, "name", "") or ""),
+            "level": str(getattr(org, "level", "") or ""),
+            "department_id": department.get("department_id"),
+            "department_name": department.get("department_name"),
+        }
+        if match_type is not None:
+            payload["match_type"] = match_type
+        if confidence is not None:
+            payload["confidence"] = round(float(confidence), 4)
+        return payload
+
+    def _pick_best_match(pdf_path: Path) -> tuple[Optional[Any], float]:
+        nonlocal fast_path_hits, pdf_text_fallback_hits
+
+        filename_matches = matcher.suggest_matches(pdf_path.name, "", top_n=1)
+        if filename_matches:
+            candidate, confidence = filename_matches[0]
+            numeric_confidence = round(float(confidence), 4)
+            if numeric_confidence >= minimum_confidence:
+                fast_path_hits += 1
+                return candidate, numeric_confidence
+
+        first_page_text = extract_pdf_first_page_text(pdf_path)
+        pdf_text_fallback_hits += 1
+        matches_with_text = matcher.suggest_matches(pdf_path.name, first_page_text, top_n=1)
+        if not matches_with_text:
+            return None, 0.0
+
+        candidate, confidence = matches_with_text[0]
+        return candidate, round(float(confidence), 4)
+
+    for job_dir in sorted(iter_job_dirs(), key=get_job_quick_timestamp, reverse=True):
+        scanned_count += 1
+        job_id = job_dir.name
+        try:
+            pdf_path = find_first_pdf(job_dir)
+            status_payload = _enrich_job_organization_context(
+                job_id,
+                get_job_status_payload(job_id),
+            )
+
+            department = resolve_job_department_context(
+                job_id,
+                status_payload=status_payload,
+            ) or {}
+            department_id = str(department.get("department_id") or "").strip()
+            department_name = str(department.get("department_name") or "").strip()
+
+            if scoped_department_id and department_id != scoped_department_id:
+                skipped.append(
+                    {
+                        "job_id": job_id,
+                        "filename": pdf_path.name,
+                        "reason": "outside_department_scope",
+                        "detail": "job is outside the selected department scope",
+                        "department_id": department_id or None,
+                        "department_name": department_name or None,
+                    }
+                )
+                continue
+
+            link = storage.get_job_org(job_id)
+            linked_org_id = str(getattr(link, "org_id", "") or "").strip()
+            linked_org = storage.get_by_id(linked_org_id) if linked_org_id else None
+
+            status_org_id = str(status_payload.get("organization_id") or "").strip()
+            status_org = storage.get_by_id(status_org_id) if status_org_id else None
+
+            current_match_type = str(
+                status_payload.get("organization_match_type") or getattr(link, "match_type", "") or ""
+            ).strip().lower()
+            try:
+                current_confidence = round(
+                    float(
+                        status_payload.get("organization_match_confidence")
+                        or getattr(link, "confidence", 0.0)
+                        or 0.0
+                    ),
+                    4,
+                )
+            except Exception:
+                current_confidence = 0.0
+
+            if linked_org is not None:
+                skipped.append(
+                    {
+                        "job_id": job_id,
+                        "filename": pdf_path.name,
+                        "reason": "already_linked",
+                        "detail": "job already has a valid organization link",
+                        "current": _serialize_org_brief(
+                            linked_org_id,
+                            match_type=current_match_type or None,
+                            confidence=current_confidence if current_confidence > 0 else None,
+                        ),
+                    }
+                )
+                continue
+
+            target_org_id = ""
+            target_confidence = current_confidence if current_confidence > 0 else 1.0
+            action = ""
+            detail = ""
+
+            if status_org is not None:
+                target_org_id = status_org_id
+                action = "link_status_org"
+                detail = "restored link from job status metadata"
+                linked_from_status_count += 1
+            else:
+                suggested_org, suggested_confidence = _pick_best_match(pdf_path)
+                if suggested_org is None:
+                    skipped.append(
+                        {
+                            "job_id": job_id,
+                            "filename": pdf_path.name,
+                            "reason": "no_match",
+                            "detail": "unable to infer organization from filename or first-page text",
+                            "current": _serialize_org_brief(
+                                linked_org_id or status_org_id,
+                                match_type=current_match_type or None,
+                                confidence=current_confidence if current_confidence > 0 else None,
+                            ),
+                        }
+                    )
+                    continue
+
+                target_org_id = str(getattr(suggested_org, "id", "") or "").strip()
+                if not target_org_id:
+                    skipped.append(
+                        {
+                            "job_id": job_id,
+                            "filename": pdf_path.name,
+                            "reason": "invalid_match",
+                            "detail": "matcher returned an invalid organization id",
+                        }
+                    )
+                    continue
+
+                if suggested_confidence < minimum_confidence:
+                    skipped.append(
+                        {
+                            "job_id": job_id,
+                            "filename": pdf_path.name,
+                            "reason": "low_confidence",
+                            "detail": f"suggested confidence is below threshold: {suggested_confidence:.2f}",
+                            "suggested": _serialize_org_brief(
+                                target_org_id,
+                                confidence=suggested_confidence,
+                            ),
+                        }
+                    )
+                    continue
+
+                target_confidence = suggested_confidence
+                action = "match_from_pdf"
+                detail = "repaired link using organization matcher"
+                matched_from_pdf_count += 1
+
+            repair_item: Dict[str, Any] = {
+                "job_id": job_id,
+                "filename": pdf_path.name,
+                "action": action,
+                "detail": detail,
+                "department_id": department_id or None,
+                "department_name": department_name or None,
+                "current": _serialize_org_brief(
+                    linked_org_id or status_org_id,
+                    match_type=current_match_type or None,
+                    confidence=current_confidence if current_confidence > 0 else None,
+                ),
+                "suggested": _serialize_org_brief(
+                    target_org_id,
+                    confidence=target_confidence,
+                ),
+            }
+
+            if dry_run:
+                repairs.append(repair_item)
+                continue
+
+            binding = set_job_organization(
+                job_id,
+                target_org_id,
+                match_type=current_match_type or "auto",
+                confidence=target_confidence,
+            )
+            repairs.append(
+                {
+                    **repair_item,
+                    "updated": True,
+                    "binding": binding,
+                }
+            )
+        except FileNotFoundError:
+            skipped.append(
+                {
+                    "job_id": job_id,
+                    "reason": "missing_pdf",
+                    "detail": "source pdf is missing and cannot be repaired automatically",
+                }
+            )
+        except HTTPException as exc:
+            failed.append(
+                {
+                    "job_id": job_id,
+                    "status_code": exc.status_code,
+                    "detail": exc.detail,
+                }
+            )
+        except Exception as exc:
+            logger.exception("Failed to repair organization link for job %s", job_id)
+            failed.append(
+                {
+                    "job_id": job_id,
+                    "status_code": 500,
+                    "detail": str(exc),
+                }
+            )
+
+    if scoped_department_id and not scoped_department_name:
+        scoped_department = resolve_organization_department_context(scoped_department_id) or {}
+        scoped_department_name = str(scoped_department.get("department_name") or "").strip()
+
+    return {
+        "status": "preview" if dry_run else "applied",
+        "dry_run": dry_run,
+        "minimum_confidence": minimum_confidence,
+        "department_id": scoped_department_id or None,
+        "department_name": scoped_department_name or None,
+        "scanned_count": scanned_count,
+        "candidate_count": len(repairs),
+        "repaired_count": 0 if dry_run else len(repairs),
+        "linked_from_status_count": linked_from_status_count,
+        "matched_from_pdf_count": matched_from_pdf_count,
+        "skipped_count": len(skipped),
+        "failed_count": len(failed),
+        "fast_path_hits": fast_path_hits,
+        "pdf_text_fallback_hits": pdf_text_fallback_hits,
+        "repairs": repairs,
         "skipped": skipped,
         "failed": failed,
     }

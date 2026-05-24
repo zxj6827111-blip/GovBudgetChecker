@@ -1,22 +1,14 @@
-"use client";
+import { notFound } from "next/navigation";
 
-import { useState } from "react";
-
-import BatchUploadModal from "../../components/BatchUploadModal";
+import BatchUploadE2EClient from "./BatchUploadE2EClient";
 
 export default function BatchUploadE2EPage() {
-  const [completeCount, setCompleteCount] = useState(0);
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.GBC_ENABLE_E2E_PAGES !== "true"
+  ) {
+    notFound();
+  }
 
-  return (
-    <main className="min-h-screen">
-      <BatchUploadModal
-        defaultDocType="dept_budget"
-        onClose={() => {}}
-        onComplete={() => setCompleteCount((v) => v + 1)}
-      />
-      <div data-testid="batch-complete-count" className="sr-only">
-        {completeCount}
-      </div>
-    </main>
-  );
+  return <BatchUploadE2EClient />;
 }

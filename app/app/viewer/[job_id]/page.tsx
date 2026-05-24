@@ -2,13 +2,7 @@
 
 import Image from "next/image";
 import { useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
-
-type ViewerPageProps = {
-  params: {
-    job_id: string;
-  };
-};
+import { useParams, useSearchParams } from "next/navigation";
 
 const PREVIEW_SCALE = 1.6;
 
@@ -26,7 +20,9 @@ function parseBbox(raw: string | null): number[] | null {
   return values;
 }
 
-export default function ViewerPage({ params }: ViewerPageProps) {
+export default function ViewerPage() {
+  const routeParams = useParams<{ job_id: string }>();
+  const jobId = routeParams.job_id;
   const searchParams = useSearchParams();
   const page = toPositivePage(searchParams.get("page"));
   const bbox = parseBbox(searchParams.get("bbox"));
@@ -41,10 +37,10 @@ export default function ViewerPage({ params }: ViewerPageProps) {
       scale: String(PREVIEW_SCALE),
       padding: "0",
     });
-    return `/api/files/${params.job_id}/preview?${paramsObj.toString()}`;
-  }, [page, params.job_id]);
+    return `/api/files/${jobId}/preview?${paramsObj.toString()}`;
+  }, [page, jobId]);
 
-  const sourceUrl = `/api/files/${params.job_id}/source#page=${page}`;
+  const sourceUrl = `/api/files/${jobId}/source#page=${page}`;
 
   const overlayStyle = useMemo(() => {
     if (!bbox || !naturalSize) return null;
@@ -56,8 +52,8 @@ export default function ViewerPage({ params }: ViewerPageProps) {
     };
   }, [bbox, naturalSize]);
 
-  const prevHref = `/viewer/${params.job_id}?page=${Math.max(1, page - 1)}`;
-  const nextHref = `/viewer/${params.job_id}?page=${page + 1}`;
+  const prevHref = `/viewer/${jobId}?page=${Math.max(1, page - 1)}`;
+  const nextHref = `/viewer/${jobId}?page=${page + 1}`;
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,_#f5f7fb,_#e7edf6_45%,_#d8e1ed)] text-slate-900">

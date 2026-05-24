@@ -39,7 +39,7 @@ def queue_enabled(testing_mode: bool | None = None) -> bool:
 
 
 def allow_inline_fallback() -> bool:
-    return env_flag("JOB_QUEUE_INLINE_FALLBACK", True)
+    return env_flag("JOB_QUEUE_INLINE_FALLBACK", env_flag("TESTING", False))
 
 
 def queue_resume_on_start() -> bool:

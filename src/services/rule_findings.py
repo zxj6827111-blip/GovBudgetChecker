@@ -220,6 +220,7 @@ class RuleFindingsService:
             "error": "high",
             "medium": "medium",
             "warning": "medium",
+            "manual_review": "manual_review",
             "low": "low",
             "info": "info",
             "notice": "info"

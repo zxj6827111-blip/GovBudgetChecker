@@ -1,273 +1,340 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-interface Organization {
-    id: string;
-    name: string;
-    level: string;
-    level_name: string;
-}
+type Organization = {
+  id: string;
+  name: string;
+  level: string;
+  level_name?: string;
+};
+
+type MatchSuggestion = {
+  organization: Organization;
+  confidence: number;
+};
+
+type CurrentMatch = {
+  organization: Organization;
+  match_type: string;
+  confidence: number;
+};
 
 interface AssociateDialogProps {
-    isOpen: boolean;
-    jobId: string;
-    filename: string;
-    suggestions?: Array<{ organization: Organization; confidence: number }>;
-    onClose: () => void;
-    onAssociate: (orgId: string) => void;
+  isOpen: boolean;
+  jobId: string;
+  filename: string;
+  suggestions?: MatchSuggestion[];
+  isSubmitting?: boolean;
+  onClose: () => void;
+  onAssociate: (orgId: string) => void | Promise<void>;
 }
 
-interface CurrentMatch {
-    organization: Organization;
-    match_type: string;
-    confidence: number;
+const levelStyles: Record<string, string> = {
+  city: "bg-sky-100 text-sky-700",
+  district: "bg-emerald-100 text-emerald-700",
+  department: "bg-indigo-100 text-indigo-700",
+  unit: "bg-slate-100 text-slate-700",
+};
+
+function normalizeSearchText(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
 }
 
 export default function AssociateDialog({
-    isOpen,
-    jobId,
-    filename,
-    suggestions = [],
-    onClose,
-    onAssociate
+  isOpen,
+  jobId,
+  filename,
+  suggestions = [],
+  isSubmitting = false,
+  onClose,
+  onAssociate,
 }: AssociateDialogProps) {
-    const [organizations, setOrganizations] = useState<Organization[]>([]);
-    const [searchQuery, setSearchQuery] = useState("");
-    const [loading, setLoading] = useState(false);
-    const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
-    const [suggestionsLoading, setSuggestionsLoading] = useState(false);
-    const [dynamicSuggestions, setDynamicSuggestions] = useState<Array<{ organization: Organization; confidence: number }>>([]);
-    const [currentMatch, setCurrentMatch] = useState<CurrentMatch | null>(null);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [loadingOrganizations, setLoadingOrganizations] = useState(false);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
+  const [dynamicSuggestions, setDynamicSuggestions] = useState<MatchSuggestion[]>([]);
+  const [currentMatch, setCurrentMatch] = useState<CurrentMatch | null>(null);
 
-    const fetchOrganizations = useCallback(async () => {
-        setLoading(true);
-        try {
-            const res = await fetch("/api/organizations/list");
-            const data = await res.json();
-            setOrganizations(data.organizations || []);
-        } catch (e) {
-            console.error("Failed to fetch organizations", e);
-        } finally {
-            setLoading(false);
-        }
-    }, []);
+  const fetchOrganizations = useCallback(async () => {
+    setLoadingOrganizations(true);
+    try {
+      const response = await fetch("/api/organizations/list", { cache: "no-store" });
+      const payload = (await response.json().catch(() => ({}))) as {
+        organizations?: Organization[];
+      };
+      setOrganizations(Array.isArray(payload.organizations) ? payload.organizations : []);
+    } catch (error) {
+      console.error("Failed to fetch organizations:", error);
+      setOrganizations([]);
+    } finally {
+      setLoadingOrganizations(false);
+    }
+  }, []);
 
-    const fetchSuggestions = useCallback(async () => {
-        if (!jobId) return;
-        setSuggestionsLoading(true);
-        try {
-            const res = await fetch(`/api/jobs/${jobId}/org-suggestions?top_n=5`, { cache: "no-store" });
-            const data = await res.json();
-            const nextSuggestions = Array.isArray(data?.suggestions) ? data.suggestions : [];
-            const nextCurrent = data?.current && typeof data.current === "object" ? data.current : null;
-            setDynamicSuggestions(nextSuggestions);
-            setCurrentMatch(nextCurrent);
-            const preferredId =
-                nextCurrent?.organization?.id ||
-                nextSuggestions[0]?.organization?.id ||
-                null;
-            if (preferredId) {
-                setSelectedOrgId(preferredId);
-            }
-        } catch (e) {
-            console.error("Failed to fetch organization suggestions", e);
-            setDynamicSuggestions([]);
-            setCurrentMatch(null);
-        } finally {
-            setSuggestionsLoading(false);
-        }
-    }, [jobId]);
+  const fetchSuggestions = useCallback(async () => {
+    if (!jobId) {
+      return;
+    }
 
-    useEffect(() => {
-        if (isOpen) {
-            setSearchQuery("");
-            setSelectedOrgId(null);
-            fetchOrganizations();
-            fetchSuggestions();
-        }
-    }, [fetchOrganizations, fetchSuggestions, isOpen]);
+    setLoadingSuggestions(true);
+    try {
+      const response = await fetch(`/api/jobs/${jobId}/org-suggestions?top_n=5`, {
+        cache: "no-store",
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        suggestions?: MatchSuggestion[];
+        current?: CurrentMatch;
+      };
+      const nextSuggestions = Array.isArray(payload.suggestions) ? payload.suggestions : [];
+      const nextCurrent = payload.current && typeof payload.current === "object" ? payload.current : null;
+      setDynamicSuggestions(nextSuggestions);
+      setCurrentMatch(nextCurrent);
+      setSelectedOrgId(
+        nextCurrent?.organization?.id ?? nextSuggestions[0]?.organization?.id ?? null,
+      );
+    } catch (error) {
+      console.error("Failed to fetch organization suggestions:", error);
+      setDynamicSuggestions([]);
+      setCurrentMatch(null);
+      setSelectedOrgId(null);
+    } finally {
+      setLoadingSuggestions(false);
+    }
+  }, [jobId]);
 
-    const effectiveSuggestions = dynamicSuggestions.length > 0 ? dynamicSuggestions : suggestions;
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
 
-    const filteredOrgs = organizations.filter(org =>
-        org.name.toLowerCase().includes(searchQuery.toLowerCase())
+    setSearchQuery("");
+    setSelectedOrgId(null);
+    void fetchOrganizations();
+    void fetchSuggestions();
+  }, [fetchOrganizations, fetchSuggestions, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !isSubmitting) {
+        onClose();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen, isSubmitting, onClose]);
+
+  const effectiveSuggestions = dynamicSuggestions.length > 0 ? dynamicSuggestions : suggestions;
+
+  const filteredOrganizations = useMemo(() => {
+    const query = normalizeSearchText(searchQuery);
+    if (!query) {
+      return organizations;
+    }
+    return organizations.filter((organization) =>
+      normalizeSearchText(organization.name).includes(query),
     );
+  }, [organizations, searchQuery]);
 
-    const handleConfirm = () => {
-        if (selectedOrgId) {
-            onAssociate(selectedOrgId);
+  const handleConfirm = () => {
+    if (!selectedOrgId || isSubmitting) {
+      return;
+    }
+    void onAssociate(selectedOrgId);
+  };
+
+  if (!isOpen) {
+    return null;
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !isSubmitting) {
+          onClose();
         }
-    };
-
-    useEffect(() => {
-        if (!isOpen) return;
-
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === "Escape") {
-                onClose();
-            }
-        };
-
-        window.addEventListener("keydown", handleKeyDown);
-        return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [isOpen, onClose]);
-
-    if (!isOpen) return null;
-
-    const levelColors: Record<string, string> = {
-        city: "bg-blue-100 text-blue-800",
-        district: "bg-green-100 text-green-800",
-        department: "bg-purple-100 text-purple-800",
-        unit: "bg-gray-100 text-gray-800"
-    };
-
-    return (
-        <div
-            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-            onMouseDown={(event) => {
-                if (event.target === event.currentTarget) {
-                    onClose();
-                }
-            }}
-        >
-            <div className="bg-white rounded-lg shadow-xl w-[500px] max-h-[80vh] flex flex-col">
-                {/* 标题 */}
-                <div className="p-4 border-b">
-                    <div className="flex justify-end">
-                        <button
-                            type="button"
-                            onClick={onClose}
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 hover:text-gray-700"
-                            aria-label="取消关联"
-                            title="取消"
-                        >
-                            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                        </button>
-                    </div>
-                    <h3 className="text-lg font-semibold">关联到组织</h3>
-                    <p className="text-sm text-gray-500 mt-1">
-                        文件：<span className="font-medium">{filename}</span>
-                    </p>
-                    {currentMatch ? (
-                        <div className="mt-2 rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
-                            当前已关联：
-                            <span className="ml-1 font-medium">{currentMatch.organization.name}</span>
-                            <span className="ml-2 rounded bg-white/80 px-1.5 py-0.5">
-                                {currentMatch.match_type === "manual" ? "人工绑定" : "自动匹配"}
-                            </span>
-                            <span className="ml-2 text-indigo-500">
-                                置信度 {(Number(currentMatch.confidence || 0) * 100).toFixed(0)}%
-                            </span>
-                        </div>
-                    ) : (
-                        <p className="text-xs text-amber-600 mt-2">
-                            ⚠️ 暂未匹配到组织，请手动选择该文档所属的部门/单位
-                        </p>
-                    )}
-                </div>
-
-                {/* 建议匹配 */}
-                {(effectiveSuggestions.length > 0 || suggestionsLoading) && (
-                    <div className="p-4 bg-blue-50 border-b">
-                        <p className="text-sm font-medium text-blue-800 mb-2">可能的匹配：</p>
-                        {suggestionsLoading ? (
-                            <div className="text-sm text-blue-600">正在分析候选单位...</div>
-                        ) : (
-                            <div className="space-y-2">
-                                {effectiveSuggestions.slice(0, 3).map(({ organization, confidence }) => (
-                                    <button
-                                        key={organization.id}
-                                        onClick={() => setSelectedOrgId(organization.id)}
-                                        className={`w-full text-left p-2 rounded border ${selectedOrgId === organization.id
-                                                ? "border-indigo-500 bg-indigo-50"
-                                                : "border-gray-200 bg-white hover:bg-gray-50"
-                                            }`}
-                                    >
-                                        <div className="flex items-center justify-between">
-                                            <span className="font-medium">{organization.name}</span>
-                                            <span className="text-xs text-gray-500">
-                                                置信度: {(confidence * 100).toFixed(0)}%
-                                            </span>
-                                    </div>
-                                    <span className={`text-xs px-1.5 py-0.5 rounded ${levelColors[organization.level]}`}>
-                                        {organization.level_name || organization.level}
-                                    </span>
-                                </button>
-                            ))}
-                        </div>
-                        )}
-                    </div>
-                )}
-
-                {/* 搜索 */}
-                <div className="p-4 border-b">
-                    <input
-                        type="text"
-                        placeholder="搜索组织名称..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full border rounded px-3 py-2 text-sm"
-                    />
-                </div>
-
-                {/* 组织列表 */}
-                <div className="flex-1 overflow-auto p-4">
-                    {loading ? (
-                        <div className="text-center py-8 text-gray-400">加载中...</div>
-                    ) : filteredOrgs.length === 0 ? (
-                        <div className="text-center py-8 text-gray-400">
-                            {searchQuery ? "未找到匹配的组织" : "暂无组织数据，请先导入"}
-                        </div>
-                    ) : (
-                        <div className="space-y-1">
-                            {filteredOrgs.map(org => (
-                                <button
-                                    key={org.id}
-                                    onClick={() => setSelectedOrgId(org.id)}
-                                    className={`w-full text-left p-2 rounded flex items-center justify-between ${selectedOrgId === org.id
-                                            ? "bg-indigo-100 border border-indigo-500"
-                                            : "hover:bg-gray-50 border border-transparent"
-                                        }`}
-                                >
-                                    <span className="text-sm">{org.name}</span>
-                                    <span className={`text-xs px-1.5 py-0.5 rounded ${levelColors[org.level]}`}>
-                                        {org.level_name || org.level}
-                                    </span>
-                                </button>
-                            ))}
-                        </div>
-                    )}
-                </div>
-
-                {/* 按钮 */}
-                <div className="p-4 border-t flex justify-end space-x-2">
-                    <button
-                        type="button"
-                        onClick={onClose}
-                        className="hidden"
-                    >
-                        稍后关联
-                    </button>
-                    <button
-                        type="button"
-                        onClick={onClose}
-                        className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded border border-gray-200"
-                    >
-                        取消
-                    </button>
-                    <button
-                        type="button"
-                        onClick={handleConfirm}
-                        disabled={!selectedOrgId}
-                        className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        确认关联
-                    </button>
-                </div>
+      }}
+    >
+      <div
+        data-testid="associate-dialog"
+        className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+      >
+        <div className="border-b border-slate-200 px-6 py-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">
+                {currentMatch ? "更改报告关联" : "关联报告"}
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">{filename || jobId}</p>
             </div>
+            <button
+              type="button"
+              data-testid="associate-dialog-close"
+              onClick={onClose}
+              disabled={isSubmitting}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="关闭"
+            >
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  d="M6 18 18 6M6 6l12 12"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                />
+              </svg>
+            </button>
+          </div>
+
+          {currentMatch ? (
+            <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
+              <div className="font-medium">
+                当前关联: {currentMatch.organization.name}
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                <span className="rounded-full bg-white/80 px-2 py-0.5">
+                  {currentMatch.match_type === "manual" ? "手动关联" : "自动匹配"}
+                </span>
+                <span>
+                  置信度 {(Number(currentMatch.confidence || 0) * 100).toFixed(0)}%
+                </span>
+              </div>
+            </div>
+          ) : (
+            <p className="mt-4 text-sm text-amber-700">
+              当前报告还没有关联到组织，请选择正确的部门或单位。
+            </p>
+          )}
         </div>
-    );
+
+        {(loadingSuggestions || effectiveSuggestions.length > 0) && (
+          <div className="border-b border-slate-200 bg-sky-50/70 px-6 py-4">
+            <div className="text-sm font-medium text-sky-900">智能推荐</div>
+            {loadingSuggestions ? (
+              <div className="mt-2 text-sm text-sky-700">正在分析候选组织...</div>
+            ) : (
+              <div className="mt-3 space-y-2">
+                {effectiveSuggestions.slice(0, 3).map(({ organization, confidence }) => {
+                  const selected = selectedOrgId === organization.id;
+                  return (
+                    <button
+                      key={organization.id}
+                      type="button"
+                      data-testid={`associate-suggestion-${organization.id}`}
+                      onClick={() => setSelectedOrgId(organization.id)}
+                      className={`flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left transition-colors ${
+                        selected
+                          ? "border-indigo-300 bg-indigo-50"
+                          : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-slate-900">
+                          {organization.name}
+                        </div>
+                        <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                          <span
+                            className={`rounded-full px-2 py-0.5 ${
+                              levelStyles[organization.level] ?? levelStyles.unit
+                            }`}
+                          >
+                            {organization.level_name || organization.level}
+                          </span>
+                          <span>置信度 {(confidence * 100).toFixed(0)}%</span>
+                        </div>
+                      </div>
+                      {selected ? (
+                        <span className="text-xs font-medium text-indigo-600">已选择</span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="border-b border-slate-200 px-6 py-4">
+          <input
+            type="text"
+            data-testid="associate-dialog-search"
+            placeholder="搜索组织名称"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+          />
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          {loadingOrganizations ? (
+            <div className="py-10 text-center text-sm text-slate-500">正在加载组织列表...</div>
+          ) : filteredOrganizations.length === 0 ? (
+            <div className="py-10 text-center text-sm text-slate-500">
+              {searchQuery ? "没有找到匹配的组织" : "当前没有可用的组织数据"}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {filteredOrganizations.map((organization) => {
+                const selected = selectedOrgId === organization.id;
+                return (
+                  <button
+                    key={organization.id}
+                    type="button"
+                    data-testid={`associate-option-${organization.id}`}
+                    onClick={() => setSelectedOrgId(organization.id)}
+                    className={`flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left transition-colors ${
+                      selected
+                        ? "border-indigo-300 bg-indigo-50"
+                        : "border-transparent hover:border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-slate-900">
+                        {organization.name}
+                      </div>
+                    </div>
+                    <span
+                      className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${
+                        levelStyles[organization.level] ?? levelStyles.unit
+                      }`}
+                    >
+                      {organization.level_name || organization.level}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-3 border-t border-slate-200 px-6 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isSubmitting}
+            className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            data-testid="associate-dialog-submit"
+            onClick={handleConfirm}
+            disabled={!selectedOrgId || isSubmitting}
+            className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isSubmitting ? "保存中..." : "确认关联"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

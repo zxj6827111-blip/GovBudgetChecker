@@ -2,6 +2,8 @@
 
 import Image from "next/image";
 
+import { getSeverityMeta } from "@/lib/issueSeverity";
+
 import type { IssueItem } from "./IssueTabs";
 import { getIssuePresentation } from "../utils/issuePresentation";
 import {
@@ -23,6 +25,7 @@ interface IssueCardProps {
 }
 
 function getSeverityBadge(severity: string) {
+  return getSeverityMeta(severity).badgeClass;
   const colors = {
     critical: "border-red-200 bg-red-100 text-red-700",
     high: "border-red-200 bg-red-100 text-red-700",
@@ -34,6 +37,7 @@ function getSeverityBadge(severity: string) {
 }
 
 function getSeverityText(severity: string) {
+  return getSeverityMeta(severity).label;
   const texts = {
     critical: "严重",
     high: "高",

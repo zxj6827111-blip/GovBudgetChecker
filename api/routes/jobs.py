@@ -9,6 +9,10 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from api import runtime
 from api.auth_utils import require_admin
 from api.routes.organizations import clear_department_stats_cache
+from src.services.analysis_result_store import (
+    get_persisted_analysis_job_detail,
+    list_persisted_analysis_jobs,
+)
 from src.services.org_matcher import get_org_matcher
 from src.services.audit_log import append_audit_event
 
@@ -63,6 +67,36 @@ async def list_jobs(
     }
 
 
+@router.get("/api/admin/analysis-results")
+async def list_admin_analysis_results(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    search: str = Query(default=""),
+    status: str = Query(default=""),
+    mode: str = Query(default=""),
+):
+    require_admin(request)
+    return await list_persisted_analysis_jobs(
+        limit=limit,
+        offset=offset,
+        search=search,
+        status=status,
+        mode=mode,
+    )
+
+
+@router.get("/api/admin/analysis-results/{job_uuid}")
+async def get_admin_analysis_result_detail(job_uuid: str, request: Request):
+    require_admin(request)
+    payload = await get_persisted_analysis_job_detail(job_uuid)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="analysis job not found")
+    if payload.get("available") is False:
+        raise HTTPException(status_code=503, detail="analysis result database unavailable")
+    return payload
+
+
 @router.post("/api/jobs/reanalyze-all")
 async def reanalyze_all_jobs(request: Request):
     _, _, user = require_admin(request)
@@ -105,6 +139,32 @@ async def rematch_job_organizations(request: Request):
             "dry_run": bool(result.get("dry_run")),
             "candidate_count": int(result.get("candidate_count") or 0),
             "updated_count": int(result.get("updated_count") or 0),
+            "skipped_count": int(result.get("skipped_count") or 0),
+            "failed_count": int(result.get("failed_count") or 0),
+        },
+    )
+    return result
+
+
+@router.post("/api/jobs/repair-missing-links")
+async def repair_missing_job_organization_links(request: Request):
+    _, _, user = require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    result = runtime.repair_missing_job_organization_links(body)
+    if int(result.get("repaired_count") or 0) > 0:
+        clear_department_stats_cache()
+    append_audit_event(
+        action="jobs.repair_missing_links",
+        actor=str(user.get("username") or ""),
+        result="success",
+        resource_type="job_batch",
+        details={
+            "dry_run": bool(result.get("dry_run")),
+            "candidate_count": int(result.get("candidate_count") or 0),
+            "repaired_count": int(result.get("repaired_count") or 0),
             "skipped_count": int(result.get("skipped_count") or 0),
             "failed_count": int(result.get("failed_count") or 0),
         },

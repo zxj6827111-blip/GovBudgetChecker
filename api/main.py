@@ -34,6 +34,7 @@ from api.queue_runtime import (
 from api.routes import register_routes
 
 from src.services.analyze_dual import DualModeAnalyzer
+from src.services.analysis_result_store import persist_analysis_job_snapshot
 from src.services.structured_ingest_runner import (
     close_structured_ingest_resources,
     run_structured_ingest,
@@ -282,6 +283,10 @@ async def _run_pipeline(job_dir: Path) -> None:
                 "dual_mode_enabled": dual_mode_enabled,
                 "stage": "开始解析文档",
             },
+        )
+
+        await persist_analysis_job_snapshot(
+            runtime.read_json_file(job_dir / "status.json", default={})
         )
 
         pdf_path = _find_first_pdf(job_dir)
@@ -692,6 +697,7 @@ async def _run_pipeline(job_dir: Path) -> None:
             "stage": "完成",
         }
         _safe_write(job_dir, payload)
+        await persist_analysis_job_snapshot(payload, include_results=True)
 
     except Exception as e:
         _safe_write(
@@ -708,6 +714,10 @@ async def _run_pipeline(job_dir: Path) -> None:
                 "provider_stats": provider_stats,
                 "structured_ingest": structured_ingest_summary,
             },
+        )
+        await persist_analysis_job_snapshot(
+            runtime.read_json_file(job_dir / "status.json", default={}),
+            include_results=True,
         )
 
 

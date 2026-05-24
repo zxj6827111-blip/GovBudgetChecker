@@ -25,6 +25,28 @@ _HASH_ALGO = "pbkdf2_sha256"
 _DEFAULT_ITERATIONS = int(os.getenv("USER_PASSWORD_ITERATIONS", "260000"))
 _DEFAULT_PASSWORD_MIN_LENGTH = int(os.getenv("USER_PASSWORD_MIN_LENGTH", "6"))
 _SESSION_TOKEN_PREFIX = "gbcs1"
+_INSECURE_DEFAULT_ADMIN_PASSWORDS = {
+    "admin",
+    "admin123",
+    "password",
+    "change_me_123",
+    "change_me_to_a_strong_secret",
+}
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_text(name: str) -> str:
+    return os.getenv(name, "").strip()
+
+
+def _allow_insecure_default_admin() -> bool:
+    return _TESTING or _env_flag("ALLOW_INSECURE_DEFAULT_ADMIN", False)
 
 
 class UserStore:
@@ -61,9 +83,7 @@ class UserStore:
             or os.getenv("DEFAULT_ADMIN_USERNAME", "admin").strip()
             or "admin"
         )
-        self._default_admin_password = (
-            os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123").strip() or "admin123"
-        )
+        self._default_admin_password = _env_text("DEFAULT_ADMIN_PASSWORD")
         self._legacy_fallback_password = (
             os.getenv("DEFAULT_LEGACY_PASSWORD", "change_me_123").strip()
             or "change_me_123"
@@ -195,6 +215,7 @@ class UserStore:
 
         default_admin_canonical = self._normalize_username(self._default_admin_username)
         if canonical_username == default_admin_canonical:
+            self._require_safe_default_admin_password()
             return self._hash_password(self._default_admin_password), True
 
         logger.warning(
@@ -399,6 +420,7 @@ class UserStore:
         changed = False
 
         if user is None:
+            self._require_safe_default_admin_password()
             self._users[canonical] = {
                 "username": self._default_admin_username,
                 "password_hash": self._hash_password(self._default_admin_password),
@@ -419,6 +441,7 @@ class UserStore:
                 changed = True
             current_hash = str(user.get("password_hash") or "")
             if not self._is_password_hash(current_hash):
+                self._require_safe_default_admin_password()
                 user["password_hash"] = self._hash_password(self._default_admin_password)
                 changed = True
             if "session_version" not in user:
@@ -428,6 +451,26 @@ class UserStore:
                 user["updated_at"] = now
 
         return changed
+
+    def _require_safe_default_admin_password(self) -> None:
+        if _allow_insecure_default_admin():
+            if not self._default_admin_password:
+                self._default_admin_password = "admin123"
+            return
+
+        if not self._default_admin_password:
+            raise RuntimeError(
+                "DEFAULT_ADMIN_PASSWORD must be set before seeding the default "
+                "admin account."
+            )
+
+        if self._default_admin_password.lower() in _INSECURE_DEFAULT_ADMIN_PASSWORDS:
+            raise RuntimeError(
+                "DEFAULT_ADMIN_PASSWORD uses an insecure built-in value. "
+                "Set a strong unique password, or set "
+                "ALLOW_INSECURE_DEFAULT_ADMIN=true only for disposable local "
+                "development."
+            )
 
     @staticmethod
     def _bump_session_version_locked(user: Dict[str, Any]) -> None:

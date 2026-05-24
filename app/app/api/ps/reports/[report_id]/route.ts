@@ -1,17 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { backendAuthHeaders } from "@/lib/backendAuth";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export async function GET(
   _request: NextRequest,
-  { params }: { params: { report_id: string } }
+  { params }: { params: Promise<{ report_id: string }> }
 ) {
-  const reportId = encodeURIComponent(params.report_id);
+  const auth = await requireBackendAuthHeaders({
+    "Content-Type": "application/json",
+  });
+  if (!auth.ok) {
+    return auth.response;
+  }
+
+  const reportId = encodeURIComponent((await params).report_id);
   try {
     const response = await fetchWithTimeout(`${apiBase}/api/ps/reports/${reportId}`, {
       cache: "no-store",
-      headers: backendAuthHeaders({ "Content-Type": "application/json" }),
+      headers: auth.headers,
     });
     const text = await response.text();
     let data: any;

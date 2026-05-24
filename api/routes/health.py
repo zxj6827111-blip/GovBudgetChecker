@@ -54,8 +54,10 @@ async def _check_ai_extractor() -> tuple[bool, str]:
     try:
         import httpx
 
+        health_url = url.replace("/ai/extract/v1", "/health")
+
         async with httpx.AsyncClient(timeout=3.0) as client:
-            response = await client.get(url)
+            response = await client.get(health_url)
             # Treat 2xx-4xx as reachable. 5xx means remote service unhealthy.
             if response.status_code < 500:
                 return True, f"reachable:{response.status_code}"
@@ -73,6 +75,22 @@ async def _check_ai_extractor() -> tuple[bool, str]:
         return False, str(exc)
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _status(ok: bool, required: bool, detail: str) -> Dict[str, Any]:
+    return {
+        "ok": ok,
+        "required": required,
+        "status": "ok" if ok else ("failed" if required else "degraded"),
+        "detail": detail,
+    }
+
+
 @router.get("/ready")
 @router.get("/api/ready")
 async def ready() -> Dict[str, Any]:
@@ -84,9 +102,21 @@ async def ready() -> Dict[str, Any]:
     queue_role = queue_runtime.get_queue_role()
     local_queue_required = queue_enabled and queue_role in {"all", "worker"}
     queue_started = runtime.get_job_queue() is not None if local_queue_required else True
+    inline_fallback_enabled = queue_runtime.allow_inline_fallback()
+    inline_fallback_safe = not (
+        queue_enabled and queue_role == "api" and inline_fallback_enabled
+    )
 
     db_ok, db_detail = await _check_database()
     ai_ok, ai_detail = await _check_ai_extractor()
+    db_required = bool((os.getenv("DATABASE_URL") or "").strip()) and _env_flag(
+        "READY_REQUIRE_DATABASE",
+        False,
+    )
+    ai_required = (os.getenv("AI_ASSIST_ENABLED", "true").strip().lower() == "true") and _env_flag(
+        "READY_REQUIRE_AI_EXTRACTOR",
+        False,
+    )
 
     checks = {
         "upload_root_exists": runtime.UPLOAD_ROOT.exists(),
@@ -96,7 +126,41 @@ async def ready() -> Dict[str, Any]:
         "db_reachable": db_ok,
         "ai_extractor_reachable": ai_ok,
         "job_queue_started": queue_started,
+        "inline_fallback_safe": inline_fallback_safe,
         "audit_log_parent_writable": os.access(audit_log_path.parent, os.W_OK) if audit_log_path.parent.exists() else True,
+    }
+    required = {
+        "upload_root_exists": _status(checks["upload_root_exists"], True, str(runtime.UPLOAD_ROOT)),
+        "upload_root_writable": _status(checks["upload_root_writable"], True, str(runtime.UPLOAD_ROOT)),
+        "rules_file_exists": _status(checks["rules_file_exists"], True, str(rules_file)),
+        "auth_key_configured": _status(
+            checks["auth_key_configured"],
+            True,
+            "configured" if auth_key_present else "missing GOVBUDGET_API_KEY",
+        ),
+        "job_queue_started": _status(
+            checks["job_queue_started"],
+            True,
+            "started" if queue_started else "local queue is required but not started",
+        ),
+        "inline_fallback_safe": _status(
+            checks["inline_fallback_safe"],
+            True,
+            "ok" if inline_fallback_safe else "api role must not enable inline fallback",
+        ),
+        "audit_log_parent_writable": _status(
+            checks["audit_log_parent_writable"],
+            True,
+            str(audit_log_path.parent),
+        ),
+    }
+    optional = {
+        "db_reachable": _status(db_ok, db_required, db_detail),
+        "ai_extractor_reachable": _status(ai_ok, ai_required, ai_detail),
+    }
+    dependencies = {
+        "required": {**required, **{key: value for key, value in optional.items() if value["required"]}},
+        "optional": {key: value for key, value in optional.items() if not value["required"]},
     }
 
     details = {
@@ -108,17 +172,22 @@ async def ready() -> Dict[str, Any]:
         "queue_enabled": queue_enabled,
         "queue_role": queue_role,
         "local_queue_required": local_queue_required,
-        "inline_fallback_enabled": queue_runtime.allow_inline_fallback(),
+        "inline_fallback_enabled": inline_fallback_enabled,
+        "ready_policy": {
+            "database_required": db_required,
+            "ai_extractor_required": ai_required,
+        },
         "upload_limits": {
             "max_upload_mb": runtime.MAX_UPLOAD_MB,
             "max_upload_pages": runtime.MAX_UPLOAD_PAGES,
         },
     }
 
-    ready_state = all(checks.values())
+    ready_state = all(item["ok"] for item in dependencies["required"].values())
     return {
         "status": "ready" if ready_state else "not_ready",
         "checks": checks,
+        "dependencies": dependencies,
         "details": details,
         "ts": time.time(),
     }

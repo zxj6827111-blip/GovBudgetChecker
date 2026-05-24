@@ -2,11 +2,24 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
+.python-test-deps/
+.wheels/
+.pip-cache/
+.codex_pip_tmp/
+.pytest-tmp/
+.pytest-basetemp-*/
+pip_tmp_*/
+piptmpdl_*/
+pytest_basetemp_*/
+pytest_tmp_*/
+test-results/
 .env
 .env.*
 !.env.example
 node_modules/
 app/.next/
+app/.next-*/
+app/.npm-cache/
 app/out/
 app/tsconfig.tsbuildinfo
 .DS_Store
@@ -44,7 +57,30 @@ tmp_wanli_budget_check.json
 app/tsc_output.txt
 test_pdfs/
 X/
-e2e/tests/upload-fallback.spec.ts
 
 # Runtime data should not be versioned.
 data/*.json
+data/audit/admin-actions.jsonl
+
+# Local runtime artifacts
+.playwright-cli/
+output/
+status.txt
+api/dev-*.err
+api/dev-*.out
+app/dev-*.err
+app/dev-*.out
+app/start-*.err
+app/start-*.out
+app/start-capture.err
+app/start-capture.out
+app/sidebar-department.png
+app/sidebar-selected-dept.png
+
+# Root-level local service logs
+start-*.err
+start-*.out
+
+# Temporary diagnostics and local API/browser captures
+tmp/
+tmp-cookies.txt

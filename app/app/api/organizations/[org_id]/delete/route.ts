@@ -3,16 +3,17 @@ import { NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
 import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { invalidateLocalDataCache } from "@/lib/localData";
 
 export async function POST(
   _request: Request,
-  { params }: { params: { org_id: string } }
+  { params }: { params: Promise<{ org_id: string }> }
 ) {
   try {
-    const orgId = encodeURIComponent(params.org_id);
+    const orgId = encodeURIComponent((await params).org_id);
     const response = await fetchWithTimeout(`${apiBase}/api/organizations/${orgId}`, {
       method: "DELETE",
-      headers: backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
+      headers: await backendAuthHeadersWithSession({ "Content-Type": "application/json" }),
     });
     const text = await response.text();
     let data: any;
@@ -20,6 +21,9 @@ export async function POST(
       data = JSON.parse(text);
     } catch {
       data = { detail: text || "invalid backend response" };
+    }
+    if (response.ok) {
+      invalidateLocalDataCache();
     }
     return NextResponse.json(data, { status: response.status });
   } catch (error) {

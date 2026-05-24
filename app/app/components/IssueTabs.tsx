@@ -9,7 +9,7 @@ export type IssueItem = {
   id: string;
   source: "ai" | "rule";
   rule_id?: string;
-  severity: "info" | "low" | "medium" | "high" | "critical";
+  severity: "info" | "low" | "medium" | "high" | "critical" | "manual_review";
   title: string;
   message: string;
   evidence: Array<{
@@ -67,6 +67,7 @@ export type MergedSummary = {
   };
   conflicts: ConflictItem[];
   agreements: string[];
+  merged_ids?: string[];
 };
 
 export type DualModeResult = {
@@ -109,15 +110,15 @@ export default function IssueTabs({
     () => attachJobId(result.rule_findings || [], job_id),
     [job_id, result.rule_findings]
   );
-  const allIssues = useMemo(
-    () => [...aiFindings, ...ruleFindings].sort(compareIssues),
-    [aiFindings, ruleFindings]
+  const mergedIssues = useMemo(
+    () => projectMergedIssues(aiFindings, ruleFindings, result.merged),
+    [aiFindings, result.merged, ruleFindings]
   );
 
   const mergedTotals = result.merged?.totals || {
     ai: aiFindings.length,
     rule: ruleFindings.length,
-    merged: allIssues.length,
+    merged: mergedIssues.length,
     conflicts: 0,
     agreements: 0,
   };
@@ -126,7 +127,7 @@ export default function IssueTabs({
     {
       id: "merged",
       label: "合并视图",
-      count: mergedTotals.merged || allIssues.length,
+      count: mergedTotals.merged || mergedIssues.length,
       color: "bg-blue-100 text-blue-800",
     },
     {
@@ -177,7 +178,7 @@ export default function IssueTabs({
     return (
       <div className="space-y-6">
         <div className="grid gap-4 md:grid-cols-4 lg:grid-cols-5">
-          <SummaryCard title="合并问题 (去重)" value={String(mergedTotals.merged || allIssues.length)} tone="blue" />
+          <SummaryCard title="合并问题 (去重)" value={String(mergedTotals.merged || mergedIssues.length)} tone="blue" />
           <SummaryCard title="来源命中 (AI)" value={String(mergedTotals.ai || aiFindings.length)} tone="green" />
           <SummaryCard title="来源命中 (本地)" value={String(mergedTotals.rule || ruleFindings.length)} tone="violet" />
           <SummaryCard title="智能去重/冲突" value={String(mergedTotals.conflicts || 0)} tone="slate" />
@@ -235,10 +236,10 @@ export default function IssueTabs({
           </div>
 
           {mergedViewMode === "cards" ? (
-            renderCards(allIssues, true)
+            renderCards(mergedIssues, true)
           ) : (
             <IssueList
-              issues={allIssues}
+              issues={mergedIssues}
               onIssueClick={onIssueClick}
               onIgnoreIssue={onIgnoreIssue}
               ignoringIssueId={ignoringIssueId}
@@ -297,6 +298,55 @@ function attachJobId(issues: IssueItem[], jobId?: string): IssueItem[] {
   });
 }
 
+function projectMergedIssues(
+  aiFindings: IssueItem[],
+  ruleFindings: IssueItem[],
+  merged?: MergedSummary
+): IssueItem[] {
+  const dedupedSourceIssues = dedupeIssuesById([...aiFindings, ...ruleFindings]).sort(compareIssues);
+  const mergedIds = Array.isArray(merged?.merged_ids)
+    ? merged.merged_ids.map((id: string) => String(id || "").trim()).filter(Boolean)
+    : [];
+
+  if (!mergedIds.length) {
+    return dedupedSourceIssues;
+  }
+
+  const issueById = new Map<string, IssueItem>();
+  for (const issue of dedupedSourceIssues) {
+    const issueId = String(issue.id || "").trim();
+    if (issueId && !issueById.has(issueId)) {
+      issueById.set(issueId, issue);
+    }
+  }
+
+  const projected: IssueItem[] = [];
+  const seen = new Set<string>();
+  for (const mergedId of mergedIds) {
+    if (seen.has(mergedId)) continue;
+    const issue = issueById.get(mergedId);
+    if (!issue) continue;
+    seen.add(mergedId);
+    projected.push(issue);
+  }
+
+  return projected.length ? projected : dedupedSourceIssues;
+}
+
+function dedupeIssuesById(issues: IssueItem[]): IssueItem[] {
+  const deduped: IssueItem[] = [];
+  const seen = new Set<string>();
+  for (const issue of issues) {
+    const issueId = String(issue.id || "").trim();
+    if (issueId) {
+      if (seen.has(issueId)) continue;
+      seen.add(issueId);
+    }
+    deduped.push(issue);
+  }
+  return deduped;
+}
+
 function compareIssues(left: IssueItem, right: IssueItem) {
   const severityDiff = severityRank(right.severity) - severityRank(left.severity);
   if (severityDiff !== 0) return severityDiff;
@@ -307,6 +357,7 @@ function severityRank(severity: IssueItem["severity"]) {
   const rank = {
     critical: 5,
     high: 4,
+    manual_review: 3.5,
     medium: 3,
     low: 2,
     info: 1,

@@ -1,20 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { apiBase } from "@/lib/apiBase";
-import { backendAuthHeaders } from "@/lib/backendAuth";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { job_id: string } }
+  { params }: { params: Promise<{ job_id: string }> }
 ) {
+  const auth = await requireBackendAuthHeaders({
+    "Content-Type": "application/json",
+  });
+  if (!auth.ok) {
+    return auth.response;
+  }
+
   try {
     const body = await request.json().catch(() => ({}));
     const response = await fetchWithTimeout(
-      `${apiBase}/api/jobs/${encodeURIComponent(params.job_id)}/issues/ignore`,
+      `${apiBase}/api/jobs/${encodeURIComponent((await params).job_id)}/issues/ignore`,
       {
         method: "POST",
-        headers: backendAuthHeaders({ "Content-Type": "application/json" }),
+        headers: auth.headers,
         body: JSON.stringify(body ?? {}),
       }
     );

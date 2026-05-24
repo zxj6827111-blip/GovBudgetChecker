@@ -1,12 +1,17 @@
 import { NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
-import { backendAuthHeaders } from "@/lib/backendAuth";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export async function GET(
   req: Request,
-  { params }: { params: { job_id: string } }
+  { params }: { params: Promise<{ job_id: string }> }
 ) {
-  const jobId = encodeURIComponent(params.job_id);
+  const auth = await requireBackendAuthHeaders();
+  if (!auth.ok) {
+    return auth.response;
+  }
+
+  const jobId = encodeURIComponent((await params).job_id);
   const url = new URL(req.url);
   const search = url.searchParams.toString();
   const upstreamUrl = `${apiBase}/api/files/${jobId}/preview${search ? `?${search}` : ""}`;
@@ -14,7 +19,7 @@ export async function GET(
   try {
     const upstream = await fetch(upstreamUrl, {
       cache: "no-store",
-      headers: backendAuthHeaders(),
+      headers: auth.headers,
     });
 
     if (!upstream.ok) {

@@ -29,3 +29,32 @@ def test_infer_report_year_prefers_filename_and_budget_lines() -> None:
     )
 
     assert year == 2025
+
+
+def test_infer_report_year_prefers_cover_title_when_filename_is_short_form() -> None:
+    page_texts = [
+        "\n".join(
+            [
+                "上海市普陀区2026年区级单位预算",
+                "预算单位：上海市普陀区人民政府石泉路街道办事处（本级）",
+            ]
+        )
+    ]
+
+    year = runtime.infer_report_year(
+        filename="石泉26单位.pdf",
+        page_texts=page_texts,
+        preferred_year=None,
+    )
+    cover = runtime.extract_cover_metadata(
+        page_texts=page_texts,
+        filename="石泉26单位.pdf",
+        preferred_year=None,
+        doc_type=None,
+    )
+
+    assert year == 2026
+    assert cover["report_year"] == 2026
+    assert cover["report_kind"] == "budget"
+    assert cover["scope_hint"] == "unit"
+    assert cover["cover_org_label"] == "预算单位"

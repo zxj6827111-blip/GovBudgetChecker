@@ -6,6 +6,8 @@ import csv
 import io
 import json
 import logging
+import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -30,6 +32,83 @@ _SEVERITY_COLORS: Dict[str, Tuple[float, float, float]] = {
     "low": (0.16, 0.45, 0.82),
     "info": (0.30, 0.36, 0.44),
 }
+_SEVERITY_LABELS: Dict[str, str] = {
+    "critical": "严重",
+    "high": "高",
+    "medium": "中",
+    "low": "低",
+    "info": "提示",
+    "error": "高",
+    "warn": "中",
+    "warning": "中",
+}
+_DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+_ERROR_SEVERITIES = {"critical", "high", "error"}
+_RISK_SEVERITIES = {"medium", "warn", "warning"}
+_CSV_FIELDNAMES: List[str] = [
+    "规则编号",
+    "标题",
+    "摘要",
+    "严重级别",
+    "严重级别代码",
+    "页码",
+    "页码列表",
+    "表",
+    "章节",
+    "行",
+    "列",
+    "字段",
+    "编码",
+    "科目",
+    "定位",
+    "明细",
+    "证据",
+    "坐标",
+    "定位引用数量",
+    "定位摘要",
+    "定位引用",
+    "命中文本",
+    "建议",
+    "原始消息",
+    "rule_id",
+    "title",
+    "summary",
+    "severity",
+    "severity_label",
+    "page",
+    "pages",
+    "table",
+    "section",
+    "row",
+    "col",
+    "field",
+    "code",
+    "subject",
+    "location",
+    "detail_lines",
+    "evidence_text",
+    "bbox",
+    "table_ref_count",
+    "evidence_role_summary",
+    "table_refs",
+    "text_snippet",
+    "suggestion",
+    "message",
+    "\u89c4\u5219\u540d\u79f0",
+    "\u4e25\u91cd\u7ea7\u522b\u6587\u672c",
+    "\u5b9a\u4f4d\u6587\u672c",
+    "\u6807\u51c6\u540d\u79f0",
+    "\u8bf4\u660e\u540d\u79f0",
+    "\u7f16\u7801\u5c42\u7ea7",
+    "\u5224\u5b9a\u57fa\u51c6",
+    "rule_name",
+    "severity_text",
+    "location_text",
+    "expected_name",
+    "actual_name",
+    "code_level",
+    "source_of_truth",
+]
 
 
 def _normalize_bbox(raw: Any) -> Optional[List[float]]:
@@ -78,9 +157,20 @@ def _extract_issues(status_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     if not isinstance(result, dict):
         return []
 
-    issues: List[Dict[str, Any]] = []
+    def _dedupe(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        deduped: List[Dict[str, Any]] = []
+        seen = set()
+        for item in items:
+            issue_id = str(item.get("id") or "").strip()
+            if issue_id:
+                if issue_id in seen:
+                    continue
+                seen.add(issue_id)
+            deduped.append(item)
+        return deduped
 
     legacy_issues = result.get("issues")
+    issues: List[Dict[str, Any]] = []
     if isinstance(legacy_issues, dict):
         all_items = legacy_issues.get("all")
         if isinstance(all_items, list):
@@ -88,12 +178,47 @@ def _extract_issues(status_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     elif isinstance(legacy_issues, list):
         issues.extend([item for item in legacy_issues if isinstance(item, dict)])
 
+    source_issues: List[Dict[str, Any]] = []
     for key in ("ai_findings", "rule_findings"):
         bucket = result.get(key)
         if isinstance(bucket, list):
-            issues.extend([item for item in bucket if isinstance(item, dict)])
+            source_issues.extend([item for item in bucket if isinstance(item, dict)])
 
-    return issues
+    deduped_source_issues = _dedupe(source_issues)
+    merged = result.get("merged")
+    merged_ids = (
+        [
+            str(item or "").strip()
+            for item in merged.get("merged_ids", [])
+            if str(item or "").strip()
+        ]
+        if isinstance(merged, dict) and isinstance(merged.get("merged_ids"), list)
+        else []
+    )
+    if merged_ids and deduped_source_issues:
+        issue_by_id = {
+            str(item.get("id") or "").strip(): item
+            for item in deduped_source_issues
+            if str(item.get("id") or "").strip()
+        }
+        merged_issues: List[Dict[str, Any]] = []
+        seen_merged = set()
+        for merged_id in merged_ids:
+            if merged_id in seen_merged:
+                continue
+            issue = issue_by_id.get(merged_id)
+            if issue is None:
+                continue
+            seen_merged.add(merged_id)
+            merged_issues.append(issue)
+        if merged_issues:
+            return merged_issues
+
+    deduped_issues = _dedupe(issues)
+    if deduped_issues:
+        return deduped_issues
+
+    return deduped_source_issues
 
 
 def _normalize_table_refs(raw_refs: Any) -> List[Dict[str, Any]]:
@@ -143,6 +268,44 @@ def _resolve_suggestion(issue: Dict[str, Any]) -> str:
     return ""
 
 
+def _source_filename(status_payload: Dict[str, Any], job_id: str) -> str:
+    for key in ("filename", "original_filename"):
+        value = status_payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return Path(value.strip()).name
+
+    saved_path = status_payload.get("saved_path")
+    if isinstance(saved_path, str) and saved_path.strip():
+        return Path(saved_path.strip()).name
+
+    result = status_payload.get("result")
+    if isinstance(result, dict):
+        for key in ("filename", "original_filename", "saved_path"):
+            value = result.get(key)
+            if isinstance(value, str) and value.strip():
+                return Path(value.strip()).name
+        meta = result.get("meta")
+        if isinstance(meta, dict):
+            for key in ("filename", "original_filename", "saved_path"):
+                value = meta.get(key)
+                if isinstance(value, str) and value.strip():
+                    return Path(value.strip()).name
+
+    return f"{job_id}.pdf"
+
+
+def _severity_label(severity: Any) -> str:
+    return _SEVERITY_LABELS.get(str(severity or "").strip().lower(), "提示")
+
+
+def _coalesce_issue_text(issue: Dict[str, Any], *keys: str) -> Optional[str]:
+    for key in keys:
+        value = issue.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _build_export_location(issue: Dict[str, Any]) -> Dict[str, Any]:
     location = issue.get("location") if isinstance(issue.get("location"), dict) else {}
     evidence = issue.get("evidence") if isinstance(issue.get("evidence"), list) else []
@@ -175,6 +338,10 @@ def _build_export_location(issue: Dict[str, Any]) -> Dict[str, Any]:
         "field": str(location.get("field") or "").strip() or None,
         "code": str(location.get("code") or "").strip() or None,
         "subject": str(location.get("subject") or "").strip() or None,
+        "expected_name": str(location.get("expected_name") or "").strip() or None,
+        "actual_name": str(location.get("actual_name") or "").strip() or None,
+        "code_level": str(location.get("code_level") or "").strip() or None,
+        "source_of_truth": str(location.get("source_of_truth") or "").strip() or None,
         "bbox": primary_bbox,
         "table_ref_count": len(refs),
         "role_summary": _build_role_summary(refs, fallback=location),
@@ -239,7 +406,287 @@ def _enrich_issue(item: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(enriched.get("display"), dict):
         enriched["display"] = build_issue_display(enriched)
     enriched["export_location"] = _build_export_location(enriched)
+    enriched["severity_label"] = _severity_label(enriched.get("severity"))
+    export_location = (
+        enriched.get("export_location")
+        if isinstance(enriched.get("export_location"), dict)
+        else {}
+    )
+    display = enriched.get("display") if isinstance(enriched.get("display"), dict) else {}
+    enriched["rule_name"] = _coalesce_issue_text(enriched, "rule_name", "title") or ""
+    enriched["severity_text"] = enriched["severity_label"]
+    enriched["location_text"] = str(display.get("location_text") or "").strip()
+    for key in ("expected_name", "actual_name", "code_level", "source_of_truth"):
+        enriched[key] = _coalesce_issue_text(enriched, key) or str(export_location.get(key) or "").strip()
     return enriched
+
+
+def _build_csv_row(issue: Dict[str, Any]) -> Dict[str, Any]:
+    enriched = _enrich_issue(issue)
+    display = enriched.get("display") if isinstance(enriched.get("display"), dict) else {}
+    export_location = (
+        enriched.get("export_location")
+        if isinstance(enriched.get("export_location"), dict)
+        else {}
+    )
+    severity = str(enriched.get("severity") or "").strip()
+    severity_label = str(enriched.get("severity_label") or _severity_label(severity))
+    pages_text = " | ".join(str(item) for item in export_location.get("pages", []))
+    detail_lines = " | ".join(
+        [str(line) for line in display.get("detail_lines", []) if str(line).strip()]
+    )
+    bbox_text = (
+        json.dumps(export_location.get("bbox"), ensure_ascii=False)
+        if export_location.get("bbox")
+        else ""
+    )
+    table_refs_text = json.dumps(export_location.get("table_refs", []), ensure_ascii=False)
+    role_summary = export_location.get("role_summary") or ""
+    suggestion = _resolve_suggestion(enriched)
+    row = {
+        "规则编号": enriched.get("rule_id") or enriched.get("rule") or "",
+        "标题": enriched.get("title") or "",
+        "摘要": display.get("summary") or enriched.get("title") or "",
+        "严重级别": severity_label,
+        "严重级别代码": severity,
+        "页码": export_location.get("page") or "",
+        "页码列表": pages_text,
+        "表": export_location.get("table") or "",
+        "章节": export_location.get("section") or "",
+        "行": export_location.get("row") or "",
+        "列": export_location.get("col") or "",
+        "字段": export_location.get("field") or "",
+        "编码": export_location.get("code") or "",
+        "科目": export_location.get("subject") or "",
+        "定位": display.get("location_text") or "",
+        "明细": detail_lines,
+        "证据": display.get("evidence_text") or "",
+        "坐标": bbox_text,
+        "定位引用数量": export_location.get("table_ref_count") or 0,
+        "定位摘要": role_summary,
+        "定位引用": table_refs_text,
+        "命中文本": _resolve_text_snippet(enriched),
+        "建议": suggestion,
+        "原始消息": enriched.get("message") or "",
+        "rule_id": enriched.get("rule_id") or enriched.get("rule") or "",
+        "title": enriched.get("title") or "",
+        "summary": display.get("summary") or enriched.get("title") or "",
+        "severity": severity,
+        "severity_label": severity_label,
+        "page": export_location.get("page") or "",
+        "pages": pages_text,
+        "table": export_location.get("table") or "",
+        "section": export_location.get("section") or "",
+        "row": export_location.get("row") or "",
+        "col": export_location.get("col") or "",
+        "field": export_location.get("field") or "",
+        "code": export_location.get("code") or "",
+        "subject": export_location.get("subject") or "",
+        "location": display.get("location_text") or "",
+        "detail_lines": detail_lines,
+        "evidence_text": display.get("evidence_text") or "",
+        "bbox": bbox_text,
+        "table_ref_count": export_location.get("table_ref_count") or 0,
+        "evidence_role_summary": role_summary,
+        "table_refs": table_refs_text,
+        "text_snippet": _resolve_text_snippet(enriched),
+        "suggestion": suggestion,
+        "message": enriched.get("message") or "",
+        "\u89c4\u5219\u540d\u79f0": enriched.get("rule_name") or "",
+        "\u4e25\u91cd\u7ea7\u522b\u6587\u672c": enriched.get("severity_text") or severity_label,
+        "\u5b9a\u4f4d\u6587\u672c": enriched.get("location_text") or display.get("location_text") or "",
+        "\u6807\u51c6\u540d\u79f0": enriched.get("expected_name") or export_location.get("expected_name") or "",
+        "\u8bf4\u660e\u540d\u79f0": enriched.get("actual_name") or export_location.get("actual_name") or "",
+        "\u7f16\u7801\u5c42\u7ea7": enriched.get("code_level") or export_location.get("code_level") or "",
+        "\u5224\u5b9a\u57fa\u51c6": enriched.get("source_of_truth") or export_location.get("source_of_truth") or "",
+        "rule_name": enriched.get("rule_name") or "",
+        "severity_text": enriched.get("severity_text") or severity_label,
+        "location_text": enriched.get("location_text") or display.get("location_text") or "",
+        "expected_name": enriched.get("expected_name") or export_location.get("expected_name") or "",
+        "actual_name": enriched.get("actual_name") or export_location.get("actual_name") or "",
+        "code_level": enriched.get("code_level") or export_location.get("code_level") or "",
+        "source_of_truth": enriched.get("source_of_truth") or export_location.get("source_of_truth") or "",
+    }
+    return {key: row.get(key, "") for key in _CSV_FIELDNAMES}
+
+
+def _xml_escape(value: Any) -> str:
+    text = str(value if value is not None else "")
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
+
+
+def _docx_text(value: Any, *, limit: int = 1000) -> str:
+    text = str(value if value is not None else "").strip()
+    text = " ".join(text.split())
+    if len(text) > limit:
+        return f"{text[:limit - 3]}..."
+    return text
+
+
+def _docx_paragraph(text: Any, *, style: Optional[str] = None) -> str:
+    style_xml = f'<w:pStyle w:val="{style}"/>' if style else ""
+    safe_text = _xml_escape(_docx_text(text, limit=3000))
+    return (
+        "<w:p>"
+        f"<w:pPr>{style_xml}</w:pPr>"
+        f'<w:r><w:t xml:space="preserve">{safe_text}</w:t></w:r>'
+        "</w:p>"
+    )
+
+
+def _docx_table_cell(text: Any) -> str:
+    safe_text = _xml_escape(_docx_text(text, limit=1200))
+    return f'<w:tc><w:p><w:r><w:t xml:space="preserve">{safe_text}</w:t></w:r></w:p></w:tc>'
+
+
+def _docx_table(rows: Sequence[Sequence[Any]]) -> str:
+    row_xml = []
+    for row in rows:
+        cells = "".join(_docx_table_cell(cell) for cell in row)
+        row_xml.append(f"<w:tr>{cells}</w:tr>")
+    return "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr>" + "".join(row_xml) + "</w:tbl>"
+
+
+def _issue_bucket(issue: Dict[str, Any]) -> str:
+    severity = str(issue.get("severity") or "").strip().lower()
+    if severity in _ERROR_SEVERITIES:
+        return "错误"
+    if severity in _RISK_SEVERITIES:
+        return "风险提示"
+    return "规范性建议"
+
+
+def _build_docx_document_xml(
+    *,
+    job_id: str,
+    status_payload: Dict[str, Any],
+    issues: Sequence[Dict[str, Any]],
+) -> str:
+    enriched_issues = [_enrich_issue(item) for item in issues]
+    error_count = sum(1 for item in enriched_issues if _issue_bucket(item) == "错误")
+    risk_count = sum(1 for item in enriched_issues if _issue_bucket(item) == "风险提示")
+    suggestion_count = sum(1 for item in enriched_issues if _issue_bucket(item) == "规范性建议")
+    check_time = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    body: List[str] = [
+        _docx_paragraph("预决算公开材料审校报告", style="Title"),
+        _docx_paragraph("基本信息", style="Heading1"),
+        _docx_table(
+            [
+                ("文件名称", _source_filename(status_payload, job_id)),
+                ("检查时间", check_time),
+                ("检查模式", str(status_payload.get("mode") or status_payload.get("check_mode") or "自动审校")),
+                ("问题总数", str(len(enriched_issues))),
+                ("错误数量", str(error_count)),
+                ("风险提示数量", str(risk_count)),
+                ("规范性建议数量", str(suggestion_count)),
+            ]
+        ),
+        _docx_paragraph("问题清单", style="Heading1"),
+    ]
+
+    if not enriched_issues:
+        body.append(_docx_paragraph("未发现明显问题"))
+    else:
+        issue_index = 1
+        for bucket in ("错误", "风险提示", "规范性建议"):
+            bucket_items = [item for item in enriched_issues if _issue_bucket(item) == bucket]
+            if not bucket_items:
+                continue
+            body.append(_docx_paragraph(bucket, style="Heading2"))
+            for issue in bucket_items:
+                display = issue.get("display") if isinstance(issue.get("display"), dict) else {}
+                export_location = (
+                    issue.get("export_location")
+                    if isinstance(issue.get("export_location"), dict)
+                    else {}
+                )
+                rule_id = str(issue.get("rule_id") or issue.get("rule") or "").strip()
+                title = str(issue.get("title") or display.get("summary") or issue.get("message") or "").strip()
+                message = str(issue.get("message") or title).strip()
+                page = export_location.get("page") or ""
+                evidence = _resolve_text_snippet(issue) or str(display.get("evidence_text") or "").strip()
+                suggestion = _resolve_suggestion(issue) or "请结合原文和表格数据复核，并按公开口径修正。"
+                rows = [
+                    ("序号", str(issue_index)),
+                    ("问题等级", bucket),
+                    ("规则编号", rule_id),
+                    ("问题标题", title),
+                    ("问题说明", message),
+                    ("证据页码", page),
+                    ("原文摘录", evidence),
+                    ("建议处理方式", suggestion),
+                ]
+                body.append(_docx_table(rows))
+                issue_index += 1
+
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body>"
+        + "".join(body)
+        + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>'
+        "</w:body></w:document>"
+    )
+    return document_xml
+
+
+def _create_docx_report(
+    job_id: str,
+    status_payload: Dict[str, Any],
+    issues: Sequence[Dict[str, Any]],
+) -> bytes:
+    document_xml = _build_docx_document_xml(
+        job_id=job_id,
+        status_payload=status_payload,
+        issues=issues,
+    )
+    styles_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/>'
+        '<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="SimSun"/></w:rPr></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/>'
+        '<w:pPr><w:spacing w:after="240"/></w:pPr><w:rPr><w:b/><w:sz w:val="32"/><w:rFonts w:eastAsia="SimHei"/></w:rPr></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/>'
+        '<w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/><w:rFonts w:eastAsia="SimHei"/></w:rPr></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/>'
+        '<w:pPr><w:spacing w:before="160" w:after="80"/></w:pPr><w:rPr><w:b/><w:sz w:val="22"/><w:rFonts w:eastAsia="SimHei"/></w:rPr></w:style>'
+        "</w:styles>"
+    )
+    content_types_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+        "</Types>"
+    )
+    rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        "</Relationships>"
+    )
+    document_rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>'
+    )
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types_xml)
+        archive.writestr("_rels/.rels", rels_xml)
+        archive.writestr("word/document.xml", document_xml)
+        archive.writestr("word/styles.xml", styles_xml)
+        archive.writestr("word/_rels/document.xml.rels", document_rels_xml)
+    return buffer.getvalue()
 
 
 def _resolve_source_pdf(job_id: str, status_payload: Dict[str, Any]) -> Path:
@@ -329,6 +776,44 @@ def _resolve_report_pdf(job_id: str, status_payload: Dict[str, Any]) -> Path:
     raise HTTPException(status_code=404, detail="report pdf not found")
 
 
+def _build_export_pdf_name(
+    job_id: str,
+    status_payload: Dict[str, Any],
+    *,
+    annotated: bool,
+) -> str:
+    raw_filename = str(status_payload.get("filename") or "").strip()
+    base_name = Path(raw_filename).name if raw_filename else ""
+    if not base_name or Path(base_name).suffix.lower() != ".pdf":
+        base_name = f"{job_id}.pdf"
+
+    source = Path(base_name)
+    if annotated:
+        return f"{source.stem}-annotated.pdf"
+    return source.name
+
+
+def _build_unique_zip_name(name: str, used_names: set[str], job_id: str) -> str:
+    candidate = name
+    if candidate not in used_names:
+        used_names.add(candidate)
+        return candidate
+
+    path = Path(name)
+    candidate = f"{path.stem}-{job_id[:8]}{path.suffix or '.pdf'}"
+    if candidate not in used_names:
+        used_names.add(candidate)
+        return candidate
+
+    index = 2
+    while True:
+        candidate = f"{path.stem}-{job_id[:8]}-{index}{path.suffix or '.pdf'}"
+        if candidate not in used_names:
+            used_names.add(candidate)
+            return candidate
+        index += 1
+
+
 def _iter_annotation_targets(issue: Dict[str, Any]) -> List[Dict[str, Any]]:
     export_location = issue.get("export_location")
     if not isinstance(export_location, dict):
@@ -392,6 +877,7 @@ def _build_annotation_label(
     issue_index: int,
 ) -> str:
     parts = [f"#{issue_index}"]
+    parts.append(str(issue.get("severity_label") or _severity_label(issue.get("severity"))))
 
     role = str(target.get("role") or "").strip()
     if role:
@@ -441,8 +927,11 @@ def _draw_annotation(page: Any, bbox: Sequence[float], label: str, color: Tuple[
     )
 
 
-def _build_legend_text(target: Dict[str, Any], *, label: str) -> str:
+def _build_legend_text(issue: Dict[str, Any], target: Dict[str, Any], *, label: str) -> str:
     parts = [label]
+    severity_label = str(issue.get("severity_label") or _severity_label(issue.get("severity")))
+    if severity_label:
+        parts.append(f"\u7ea7\u522b:{severity_label}")
     for key, prefix in (
         ("field", "字段"),
         ("row", "行"),
@@ -557,7 +1046,7 @@ def _create_annotated_pdf(
                 page = document.load_page(page_number - 1)
                 label = _build_annotation_label(issue, target, issue_index=issue_index)
                 _draw_annotation(page, bbox, label, color, fitz)
-                entry_text = _build_legend_text(target, label=label)
+                entry_text = _build_legend_text(issue, target, label=label)
                 legend_key = (label, entry_text)
                 page_legends.setdefault(page_number, [])
                 legend_seen.setdefault(page_number, set())
@@ -583,7 +1072,7 @@ def _create_annotated_pdf(
 @router.get("/api/reports/download")
 async def download_report(
     job_id: str,
-    format: str = Query(default="pdf", pattern="^(pdf|json|csv)$"),
+    format: str = Query(default="pdf", pattern="^(pdf|json|csv|docx)$"),
 ):
     status_payload = runtime.get_job_status_payload(job_id)
     issues = _extract_issues(status_payload)
@@ -601,84 +1090,25 @@ async def download_report(
         output = io.StringIO()
         writer = csv.DictWriter(
             output,
-            fieldnames=[
-                "rule_id",
-                "title",
-                "summary",
-                "severity",
-                "page",
-                "pages",
-                "table",
-                "section",
-                "row",
-                "col",
-                "field",
-                "code",
-                "subject",
-                "location",
-                "detail_lines",
-                "evidence_text",
-                "bbox",
-                "table_ref_count",
-                "evidence_role_summary",
-                "table_refs",
-                "text_snippet",
-                "suggestion",
-                "message",
-            ],
+            fieldnames=_CSV_FIELDNAMES,
         )
         writer.writeheader()
         for item in issues:
-            enriched = _enrich_issue(item)
-            display = enriched.get("display") if isinstance(enriched.get("display"), dict) else {}
-            export_location = (
-                enriched.get("export_location")
-                if isinstance(enriched.get("export_location"), dict)
-                else {}
-            )
-            writer.writerow(
-                {
-                    "rule_id": enriched.get("rule_id") or enriched.get("rule") or "",
-                    "title": enriched.get("title") or "",
-                    "summary": display.get("summary") or enriched.get("title") or "",
-                    "severity": enriched.get("severity") or "",
-                    "page": export_location.get("page") or "",
-                    "pages": " | ".join(str(item) for item in export_location.get("pages", [])),
-                    "table": export_location.get("table") or "",
-                    "section": export_location.get("section") or "",
-                    "row": export_location.get("row") or "",
-                    "col": export_location.get("col") or "",
-                    "field": export_location.get("field") or "",
-                    "code": export_location.get("code") or "",
-                    "subject": export_location.get("subject") or "",
-                    "location": display.get("location_text") or "",
-                    "detail_lines": " | ".join(
-                        [
-                            str(line)
-                            for line in display.get("detail_lines", [])
-                            if str(line).strip()
-                        ]
-                    ),
-                    "evidence_text": display.get("evidence_text") or "",
-                    "bbox": json.dumps(export_location.get("bbox"), ensure_ascii=False)
-                    if export_location.get("bbox")
-                    else "",
-                    "table_ref_count": export_location.get("table_ref_count") or 0,
-                    "evidence_role_summary": export_location.get("role_summary") or "",
-                    "table_refs": json.dumps(
-                        export_location.get("table_refs", []), ensure_ascii=False
-                    ),
-                    "text_snippet": _resolve_text_snippet(enriched),
-                    "suggestion": _resolve_suggestion(enriched),
-                    "message": enriched.get("message") or "",
-                }
-            )
+            writer.writerow(_build_csv_row(item))
 
         data = output.getvalue().encode("utf-8-sig")
         return Response(
             content=data,
             media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="{job_id}.csv"'},
+        )
+
+    if format == "docx":
+        data = _create_docx_report(job_id, status_payload, issues)
+        return Response(
+            content=data,
+            media_type=_DOCX_MEDIA_TYPE,
+            headers={"Content-Disposition": f'attachment; filename="{job_id}.docx"'},
         )
 
     annotated_pdf: Optional[Path] = None
@@ -696,3 +1126,99 @@ async def download_report(
         media_type="application/pdf",
         filename=report_pdf.name,
     )
+
+
+@router.post("/api/reports/download-batch")
+async def download_reports_batch(body: Dict[str, Any]):
+    raw_job_ids = body.get("job_ids")
+    if not isinstance(raw_job_ids, list):
+        raise HTTPException(status_code=400, detail="job_ids must be a list")
+
+    job_ids: List[str] = []
+    seen_job_ids = set()
+    for item in raw_job_ids:
+        normalized = str(item or "").strip()
+        if not normalized or normalized in seen_job_ids:
+            continue
+        seen_job_ids.add(normalized)
+        job_ids.append(normalized)
+
+    if not job_ids:
+        raise HTTPException(status_code=400, detail="job_ids is required")
+
+    archive_buffer = io.BytesIO()
+    exported: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    used_names: set[str] = set()
+
+    with zipfile.ZipFile(archive_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for job_id in job_ids:
+            try:
+                status_payload = runtime.get_job_status_payload(job_id)
+                issues = _extract_issues(status_payload)
+                annotated_pdf = _create_annotated_pdf(job_id, status_payload, issues)
+                report_pdf = annotated_pdf or _resolve_report_pdf(job_id, status_payload)
+                export_name = _build_export_pdf_name(
+                    job_id,
+                    status_payload,
+                    annotated=annotated_pdf is not None,
+                )
+                zip_name = _build_unique_zip_name(export_name, used_names, job_id)
+                archive.write(report_pdf, arcname=zip_name)
+                exported.append(
+                    {
+                        "job_id": job_id,
+                        "filename": zip_name,
+                        "annotated": annotated_pdf is not None,
+                    }
+                )
+            except HTTPException as exc:
+                failed.append(
+                    {
+                        "job_id": job_id,
+                        "status_code": exc.status_code,
+                        "detail": exc.detail,
+                    }
+                )
+            except Exception as exc:
+                logger.exception("Failed to export report pdf for job %s", job_id)
+                failed.append(
+                    {
+                        "job_id": job_id,
+                        "status_code": 500,
+                        "detail": str(exc),
+                    }
+                )
+
+        archive.writestr(
+            "manifest.json",
+            json.dumps(
+                {
+                    "requested_count": len(job_ids),
+                    "exported_count": len(exported),
+                    "failed_count": len(failed),
+                    "exported": exported,
+                    "failed": failed,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+
+    if not exported:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "no_reports_exported",
+                "requested_count": len(job_ids),
+                "failed": failed,
+            },
+        )
+
+    archive_buffer.seek(0)
+    response = Response(
+        content=archive_buffer.getvalue(),
+        media_type="application/zip",
+    )
+    response.headers["Content-Disposition"] = 'attachment; filename="reports-batch.zip"'
+    return response

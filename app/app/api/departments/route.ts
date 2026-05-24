@@ -1,16 +1,24 @@
 import { NextResponse } from "next/server";
 
 import { apiBase } from "@/lib/apiBase";
-import { backendAuthHeaders } from "@/lib/backendAuth";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { getLocalDepartments } from "@/lib/localData";
+import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  const auth = await requireBackendAuthHeaders({
+    "Content-Type": "application/json",
+  });
+  if (!auth.ok) {
+    return auth.response;
+  }
+
   try {
     const response = await fetchWithTimeout(`${apiBase}/api/departments`, {
       cache: "no-store",
-      headers: backendAuthHeaders({ "Content-Type": "application/json" }),
+      headers: auth.headers,
     });
     const text = await response.text();
     let data: any;
@@ -19,11 +27,15 @@ export async function GET() {
     } catch {
       data = { departments: [], total: 0 };
     }
-    return NextResponse.json(data, { status: response.status });
+    if (response.ok) {
+      return NextResponse.json(data, { status: response.status });
+    }
   } catch (error) {
     if (process.env.NODE_ENV !== "production") {
       console.error("Failed to fetch departments:", error);
     }
-    return NextResponse.json({ departments: [], total: 0 }, { status: 200 });
   }
+
+  const localData = await getLocalDepartments();
+  return NextResponse.json(localData, { status: 200 });
 }

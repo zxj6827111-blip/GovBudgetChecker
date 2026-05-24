@@ -1,5 +1,6 @@
 from pathlib import Path
 from unittest.mock import AsyncMock
+import asyncio
 
 import pytest
 
@@ -97,3 +98,40 @@ async def test_ai_findings_service_populates_bbox_from_semantic_quote(
     assert finding.evidence[0]["page"] == 1
     assert finding.bbox is not None
     assert finding.evidence[0]["bbox"] == finding.bbox
+
+
+@pytest.mark.asyncio
+async def test_ai_findings_service_runs_window_audits_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_AUDIT_WINDOW_CHARS", "2000")
+    monkeypatch.setenv("AI_AUDIT_WINDOW_OVERLAP", "200")
+    monkeypatch.setenv("AI_AUDIT_MAX_WINDOWS", "4")
+    monkeypatch.setenv("AI_AUDIT_MAX_CONCURRENCY", "2")
+
+    service = AIFindingsService(AnalysisConfig())
+    active = 0
+    max_active = 0
+
+    async def fake_audit(window_text: str, doc_hash: str):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.05)
+        active -= 1
+        return []
+
+    service.ai_client.ai_full_report_audit = AsyncMock(side_effect=fake_audit)
+
+    findings = await service.analyze(
+        JobContext(
+            job_id="job-ai-concurrency",
+            pdf_path="",
+            page_texts=["A" * 6500],
+            meta={},
+        )
+    )
+
+    assert findings == []
+    assert service.ai_client.ai_full_report_audit.await_count == 4
+    assert max_active >= 2

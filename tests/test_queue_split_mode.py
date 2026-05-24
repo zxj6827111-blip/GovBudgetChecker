@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("TESTING", "true")
 
 from api.main import app
+from api import queue_runtime
 
 
 def _pdf_bytes() -> bytes:
@@ -47,6 +48,7 @@ def test_api_role_keeps_job_queued_without_inline_fallback(monkeypatch):
 def test_ready_endpoint_does_not_require_local_queue_in_api_role(monkeypatch):
     monkeypatch.setenv("JOB_QUEUE_ENABLED", "true")
     monkeypatch.setenv("JOB_QUEUE_ROLE", "api")
+    monkeypatch.setenv("JOB_QUEUE_INLINE_FALLBACK", "false")
 
     client = TestClient(app)
     ready = client.get("/ready")
@@ -55,4 +57,11 @@ def test_ready_endpoint_does_not_require_local_queue_in_api_role(monkeypatch):
     assert payload["details"]["queue_role"] == "api"
     assert payload["details"]["local_queue_required"] is False
     assert payload["checks"]["job_queue_started"] is True
+
+
+def test_inline_fallback_defaults_off_outside_testing(monkeypatch):
+    monkeypatch.delenv("JOB_QUEUE_INLINE_FALLBACK", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+
+    assert queue_runtime.allow_inline_fallback() is False
 
