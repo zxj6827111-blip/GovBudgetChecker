@@ -319,3 +319,94 @@ def test_admin_sensitive_action_writes_audit_log(client: TestClient, tmp_path: P
     assert "organization.create" in content
     assert "admin" in content
     assert department_name in content
+
+
+# ---------------------------------------------------------------------------
+# Login brute-force lockout tests (P0-1)
+# ---------------------------------------------------------------------------
+
+
+def test_login_lockout_after_threshold(client: TestClient):
+    """Attempts 1-5 return 401; attempt 6 returns 429."""
+    for i in range(1, 6):
+        resp = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": f"wrong_{i}"},
+            headers=_headers(),
+        )
+        assert resp.status_code == 401, f"attempt {i} should be 401"
+
+    resp = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "wrong_6"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 429, f"attempt 6 should be 429, got {resp.status_code}"
+    assert "locked" in resp.json()["detail"]
+
+
+def test_login_lockout_persists_across_attempts(client: TestClient):
+    """After lockout, further attempts also return 429."""
+    for i in range(6):
+        client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": f"wrong_{i}"},
+            headers=_headers(),
+        )
+
+    for i in range(3):
+        resp = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": f"still_wrong_{i}"},
+            headers=_headers(),
+        )
+        assert resp.status_code == 429
+
+
+def test_successful_login_clears_failure_count(client: TestClient):
+    """A successful login resets the failure counter."""
+    for i in range(4):
+        client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": f"wrong_{i}"},
+            headers=_headers(),
+        )
+
+    resp = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "admin123"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 200
+
+    for i in range(4):
+        resp = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": f"wrong_after_{i}"},
+            headers=_headers(),
+        )
+        assert resp.status_code == 401, f"attempt {i} after reset should be 401"
+
+    resp = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "admin123"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 200
+
+
+def test_nonexistent_user_and_wrong_password_same_error(client: TestClient):
+    """Non-existent user and wrong password must return the same error message."""
+    resp_missing = client.post(
+        "/api/auth/login",
+        json={"username": "ghost_user_xyz", "password": "any"},
+        headers=_headers(),
+    )
+    resp_wrong = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "wrong_password"},
+        headers=_headers(),
+    )
+    assert resp_missing.status_code == 401
+    assert resp_wrong.status_code == 401
+    assert resp_missing.json()["detail"] == resp_wrong.json()["detail"]
