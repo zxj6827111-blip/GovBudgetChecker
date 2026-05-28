@@ -75,11 +75,12 @@ async def auth_login(request: Request):
     store = runtime.require_user_store()
     try:
         token, user = store.login(username, password)
-    except KeyError:
-        raise HTTPException(status_code=401, detail="username not found")
     except PermissionError as e:
-        if str(e) == "user is disabled":
+        msg = str(e)
+        if msg == "user is disabled":
             raise HTTPException(status_code=403, detail="user is disabled")
+        if "locked" in msg:
+            raise HTTPException(status_code=429, detail=msg)
         raise HTTPException(status_code=401, detail="invalid username or password")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

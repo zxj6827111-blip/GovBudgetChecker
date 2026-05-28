@@ -33,6 +33,9 @@ _INSECURE_DEFAULT_ADMIN_PASSWORDS = {
     "change_me_to_a_strong_secret",
 }
 
+_LOCKOUT_THRESHOLD = int(os.getenv("LOGIN_LOCKOUT_THRESHOLD", "5"))
+_LOCKOUT_DURATION = int(os.getenv("LOGIN_LOCKOUT_DURATION", "900"))
+
 
 def _env_flag(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
@@ -92,6 +95,7 @@ class UserStore:
 
         self._lock = threading.RLock()
         self._users: Dict[str, Dict[str, Any]] = {}
+        self._login_failures: Dict[str, List[float]] = {}
 
         self._ensure_data_dir()
         self._load_users()
@@ -232,13 +236,13 @@ class UserStore:
         if raw_secret:
             return raw_secret.encode("utf-8")
 
-        fallback = "test-user-session-secret" if _TESTING else "dev-user-session-secret"
-        if not _TESTING:
-            logger.warning(
-                "USER_SESSION_SECRET and GOVBUDGET_API_KEY are both empty; "
-                "falling back to a development-only session secret."
-            )
-        return fallback.encode("utf-8")
+        if _TESTING:
+            return b"test-user-session-secret"
+
+        raise RuntimeError(
+            "USER_SESSION_SECRET and GOVBUDGET_API_KEY are both empty. "
+            "Set at least one before starting the service."
+        )
 
     @staticmethod
     def _b64url_encode(raw: bytes) -> str:
@@ -600,22 +604,50 @@ class UserStore:
             del self._users[canonical]
             self._save_users_locked()
 
+    def _check_lockout(self, canonical_username: str) -> None:
+        """Raise PermissionError if the user account is locked out."""
+        now = time.time()
+        attempts = self._login_failures.get(canonical_username, [])
+        recent = [t for t in attempts if now - t < _LOCKOUT_DURATION]
+        if len(recent) >= _LOCKOUT_THRESHOLD:
+            remaining = int(_LOCKOUT_DURATION - (now - recent[0]))
+            raise PermissionError(
+                f"account locked due to too many failed attempts; "
+                f"try again in {remaining} seconds"
+            )
+
+    def _record_failure(self, canonical_username: str) -> None:
+        """Record a failed login attempt timestamp."""
+        now = time.time()
+        attempts = self._login_failures.get(canonical_username, [])
+        recent = [t for t in attempts if now - t < _LOCKOUT_DURATION]
+        recent.append(now)
+        self._login_failures[canonical_username] = recent
+
+    def _clear_failures(self, canonical_username: str) -> None:
+        """Clear failed login attempts after a successful login."""
+        self._login_failures.pop(canonical_username, None)
+
     def login(self, username: str, password: str) -> Tuple[str, Dict[str, Any]]:
         canonical = self._normalize_username(self._validate_username(username))
         plain_password = self._require_password(password)
 
         with self._lock:
+            self._check_lockout(canonical)
             self._load_users_locked()
             user = self._users.get(canonical)
             if user is None:
-                raise KeyError("user not found")
+                self._record_failure(canonical)
+                raise PermissionError("invalid username or password")
             if not bool(user.get("is_active", True)):
                 raise PermissionError("user is disabled")
 
             password_hash = str(user.get("password_hash") or "")
             if not self._verify_password(plain_password, password_hash):
+                self._record_failure(canonical)
                 raise PermissionError("invalid username or password")
 
+            self._clear_failures(canonical)
             token = self._build_session_token_locked(user)
             return token, self._public_user(user)
 
