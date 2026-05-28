@@ -187,10 +187,16 @@ def _apply_tree_stats(
 
 
 @router.get("/api/organizations")
-async def get_organizations():
+async def get_organizations(
+    stats: str = Query(
+        default="aggregated",
+        description="Use 'none' for a lightweight navigation tree without job statistics.",
+    ),
+):
     storage = runtime.require_org_storage()
     tree = [runtime.to_dict(node) for node in storage.get_tree()]
-    _apply_tree_stats(tree, _build_aggregated_org_stats(storage))
+    if str(stats or "").lower() not in {"none", "false", "0", "off"}:
+        _apply_tree_stats(tree, _build_aggregated_org_stats(storage))
     return {"tree": tree, "total": len(storage.get_all())}
 
 

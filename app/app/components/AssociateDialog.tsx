@@ -36,6 +36,7 @@ const levelStyles: Record<string, string> = {
   department: "bg-indigo-100 text-indigo-700",
   unit: "bg-slate-100 text-slate-700",
 };
+const MAX_VISIBLE_ORGANIZATIONS = 120;
 
 function normalizeSearchText(value: unknown): string {
   return String(value ?? "").trim().toLowerCase();
@@ -136,12 +137,19 @@ export default function AssociateDialog({
   const filteredOrganizations = useMemo(() => {
     const query = normalizeSearchText(searchQuery);
     if (!query) {
-      return organizations;
+      return organizations.slice(0, MAX_VISIBLE_ORGANIZATIONS);
     }
-    return organizations.filter((organization) =>
-      normalizeSearchText(organization.name).includes(query),
-    );
+    return organizations
+      .filter((organization) => normalizeSearchText(organization.name).includes(query))
+      .slice(0, MAX_VISIBLE_ORGANIZATIONS);
   }, [organizations, searchQuery]);
+  const hasMoreFilteredOrganizations = useMemo(() => {
+    const query = normalizeSearchText(searchQuery);
+    const total = query
+      ? organizations.filter((organization) => normalizeSearchText(organization.name).includes(query)).length
+      : organizations.length;
+    return total > filteredOrganizations.length;
+  }, [filteredOrganizations.length, organizations, searchQuery]);
 
   const handleConfirm = () => {
     if (!selectedOrgId || isSubmitting) {
@@ -311,6 +319,11 @@ export default function AssociateDialog({
                   </button>
                 );
               })}
+              {hasMoreFilteredOrganizations ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  组织较多，当前只显示前 {MAX_VISIBLE_ORGANIZATIONS} 项。请输入更具体的部门或单位名称继续筛选。
+                </div>
+              ) : null}
             </div>
           )}
         </div>

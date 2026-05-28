@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -87,6 +86,15 @@ export default function AuthToolbar() {
     }
   };
 
+  const openSystemUsers = () => {
+    if (pathname === "/") {
+      window.history.replaceState(null, "", "/?page=settings&section=users");
+      window.location.reload();
+      return;
+    }
+    router.push("/?page=settings&section=users");
+  };
+
   if (collapsed) {
     return (
       <div className="fixed left-4 top-4 z-[100] md:left-[14.75rem]">
@@ -116,19 +124,21 @@ export default function AuthToolbar() {
         收起
       </button>
       <span className="text-sm text-slate-700 whitespace-nowrap">{user.username}</span>
-      <Link
-        href="/account/password"
+      <button
+        type="button"
+        onClick={() => router.push("/account/password")}
         className="rounded-full border border-slate-300 px-3 py-1 text-xs text-slate-700 whitespace-nowrap"
       >
         修改密码
-      </Link>
+      </button>
       {user.is_admin ? (
-        <Link
-          href="/admin/users"
+        <button
+          type="button"
+          onClick={openSystemUsers}
           className="rounded-full bg-slate-900 px-3 py-1 text-xs font-medium text-white whitespace-nowrap"
         >
           用户管理
-        </Link>
+        </button>
       ) : null}
       <button
         onClick={onLogout}

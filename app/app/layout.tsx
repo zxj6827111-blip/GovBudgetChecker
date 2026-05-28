@@ -6,6 +6,9 @@ import AppLayout from "./components/AppLayout";
 export const metadata: Metadata = {
   title: "GovBudgetChecker",
   description: "Automated validation for government budget disclosures",
+  icons: {
+    icon: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({

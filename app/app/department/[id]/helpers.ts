@@ -7,9 +7,13 @@ export type AdvancedFilters = {
   pendingReviewOnly: boolean;
 };
 
-export async function fetchJson<T>(url: string, fallback: T): Promise<T> {
+export async function fetchJson<T>(
+  url: string,
+  fallback: T,
+  init?: RequestInit,
+): Promise<T> {
   try {
-    const response = await fetch(url, { cache: "no-store" });
+    const response = await fetch(url, { cache: "no-store", ...init });
     return response.ok ? ((await response.json()) as T) : fallback;
   } catch {
     return fallback;

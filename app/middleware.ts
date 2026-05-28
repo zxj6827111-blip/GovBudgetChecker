@@ -30,6 +30,9 @@ function isPublicPath(pathname: string): boolean {
   if (pathname === "/favicon.ico") {
     return true;
   }
+  if (pathname === "/favicon.svg") {
+    return true;
+  }
   return false;
 }
 

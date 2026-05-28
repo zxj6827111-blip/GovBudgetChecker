@@ -26,6 +26,21 @@ function parseBackendPayload(text: string): LoginPayload {
   }
 }
 
+async function loginWithLocalFallback(
+  request: NextRequest,
+  username: string,
+  password: string,
+) {
+  if (!isLocalAuthFallbackEnabled()) {
+    return null;
+  }
+
+  const { token, user } = await loginLocalUser(username, password);
+  const response = NextResponse.json({ user }, { status: 200 });
+  setSessionCookie(response, request, token);
+  return response;
+}
+
 export async function POST(request: NextRequest) {
   const body = parseJsonObject(await request.json().catch(() => null));
   const username = String(body?.username ?? "").trim();
@@ -47,6 +62,22 @@ export async function POST(request: NextRequest) {
     const payload = parseBackendPayload(await backendResponse.text());
 
     if (!backendResponse.ok) {
+      if (backendResponse.status === 401 || backendResponse.status === 403) {
+        try {
+          const localResponse = await loginWithLocalFallback(request, username, password);
+          if (localResponse) {
+            return localResponse;
+          }
+        } catch (localError) {
+          if (localError instanceof LocalAuthError) {
+            return NextResponse.json(
+              { detail: localError.detail },
+              { status: localError.status },
+            );
+          }
+          console.error("Local login fallback failed:", localError);
+        }
+      }
       return NextResponse.json(payload, { status: backendResponse.status });
     }
 
@@ -68,10 +99,11 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-      const { token, user } = await loginLocalUser(username, password);
-      const response = NextResponse.json({ user }, { status: 200 });
-      setSessionCookie(response, request, token);
-      return response;
+      const localResponse = await loginWithLocalFallback(request, username, password);
+      if (localResponse) {
+        return localResponse;
+      }
+      return NextResponse.json({ detail: "login failed" }, { status: 500 });
     } catch (localError) {
       if (localError instanceof LocalAuthError) {
         return NextResponse.json(
