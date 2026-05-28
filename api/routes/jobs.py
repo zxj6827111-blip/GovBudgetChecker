@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from api import runtime
-from api.auth_utils import require_admin
+from api.auth_utils import require_admin, require_login
 from api.routes.organizations import clear_department_stats_cache
 from src.services.analysis_result_store import (
     get_persisted_analysis_job_detail,
@@ -361,6 +361,7 @@ async def delete_job(job_id: str, request: Request):
 
 @router.post("/api/jobs/{job_id}/associate")
 async def associate_job(job_id: str, request: Request):
+    require_login(request)
     body = await request.json()
     org_id = (body or {}).get("org_id")
     if not org_id:
@@ -383,6 +384,7 @@ async def associate_job(job_id: str, request: Request):
 
 @router.post("/api/jobs/{job_id}/reanalyze")
 async def reanalyze_job(job_id: str, request: Request):
+    require_login(request)
     try:
         body = await request.json()
     except Exception:
@@ -392,6 +394,7 @@ async def reanalyze_job(job_id: str, request: Request):
 
 @router.post("/api/jobs/{job_id}/issues/ignore")
 async def ignore_job_issue(job_id: str, request: Request):
+    require_login(request)
     try:
         body = await request.json()
     except Exception:

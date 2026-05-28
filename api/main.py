@@ -147,7 +147,7 @@ def _safe_write(job_dir: Path, payload: Dict[str, Any]) -> None:
         existing = runtime.read_json_file(status_file, default={})
         for key, value in runtime.extract_job_status_context(existing).items():
             merged_payload.setdefault(key, value)
-        status_file.write_text(json.dumps(merged_payload, ensure_ascii=False), encoding="utf-8")
+        runtime.write_json_file(status_file, merged_payload)
     except Exception as e:
         (job_dir / "status_error.log").write_text(str(e), encoding="utf-8")
 
@@ -234,6 +234,34 @@ async def _run_pipeline(job_dir: Path) -> None:
     - 调用 build_issues_payload 打包返回
     - 写入 status.json（result.summary / result.issues / result.meta）
     """
+    try:
+        PIPELINE_TIMEOUT_SEC = int(os.getenv("PIPELINE_TIMEOUT_SEC", "600"))
+    except Exception:
+        PIPELINE_TIMEOUT_SEC = 600
+
+    try:
+        await asyncio.wait_for(
+            _run_pipeline_inner(job_dir),
+            timeout=PIPELINE_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError:
+        _safe_write(
+            job_dir,
+            {
+                "job_id": job_dir.name,
+                "status": "error",
+                "error": f"pipeline_timeout_{PIPELINE_TIMEOUT_SEC}s",
+                "ts": time.time(),
+            },
+        )
+        await persist_analysis_job_snapshot(
+            runtime.read_json_file(job_dir / "status.json", default={}),
+            include_results=True,
+        )
+
+
+async def _run_pipeline_inner(job_dir: Path) -> None:
+    """Pipeline body isolated for timeout wrapping."""
     # 提前初始化 provider_stats，确保处理中/失败态也能返回该字段
     provider_stats: List[Dict[str, Any]] = []
     structured_ingest_summary: Dict[str, Any] = {}
