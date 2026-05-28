@@ -1,5 +1,5 @@
 # 后端与AI微服务依赖
-fastapi==0.116.2
+fastapi==0.121.3
 uvicorn[standard]==0.35.0
 python-multipart==0.0.29
 pypdf==6.12.2

@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Request
 
 from api import runtime
+from api.auth_utils import require_login
 
 router = APIRouter()
 
@@ -16,6 +17,7 @@ router = APIRouter()
 @router.post("/analyze2/{job_id}")
 @router.post("/api/analyze2/{job_id}")
 async def analyze_job(job_id: str, request: Request):
+    require_login(request)
     body: Optional[Dict[str, Any]] = None
     try:
         parsed = await request.json()
@@ -29,6 +31,7 @@ async def analyze_job(job_id: str, request: Request):
 
 @router.post("/api/documents/{version_id}/run")
 async def run_document(version_id: str, request: Request):
+    require_login(request)
     body: Optional[Dict[str, Any]] = None
     try:
         parsed = await request.json()

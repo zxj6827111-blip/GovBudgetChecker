@@ -7,7 +7,6 @@ resume by scanning persisted job status files.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from pathlib import Path
@@ -107,10 +106,7 @@ class DurableJobQueue:
             }
         )
         try:
-            (job_dir / "status.json").write_text(
-                json.dumps(payload, ensure_ascii=False),
-                encoding="utf-8",
-            )
+            runtime.write_json_file(job_dir / "status.json", payload)
         except Exception:
             logger.exception("Failed to rewrite resumed status for %s", job_dir.name)
 

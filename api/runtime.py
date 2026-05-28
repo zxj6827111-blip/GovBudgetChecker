@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import shutil
+import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Set
@@ -250,8 +251,29 @@ def read_json_file(
 
 
 def write_json_file(path: Path, payload: Dict[str, Any]) -> None:
-    """Write JSON payload with UTF-8 encoding."""
-    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    """Write JSON payload atomically via unique temp file + rename."""
+    tmp_fd = None
+    tmp_path = None
+    try:
+        tmp_fd, tmp_name = tempfile.mkstemp(
+            suffix=".tmp", dir=str(path.parent)
+        )
+        tmp_path = Path(tmp_name)
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        os.write(tmp_fd, data)
+        os.fsync(tmp_fd)
+        os.close(tmp_fd)
+        tmp_fd = None
+        tmp_path.replace(path)
+    except BaseException:
+        if tmp_fd is not None:
+            try:
+                os.close(tmp_fd)
+            except OSError:
+                pass
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def calculate_file_checksum(path: Path, chunk_size: int = 1024 * 1024) -> str:
