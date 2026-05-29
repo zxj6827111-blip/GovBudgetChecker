@@ -99,6 +99,7 @@ JOB_STATUS_CONTEXT_KEYS = (
     "doc_type",
     "report_year",
     "report_kind",
+    "created_by",
 )
 ACTIVE_ANALYSIS_STATUSES = {"queued", "processing", "running"}
 REANALYZE_EPHEMERAL_FILES = {
@@ -1782,6 +1783,7 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "organization_name": status_data.get("organization_name"),
         "organization_match_type": status_data.get("organization_match_type"),
         "organization_match_confidence": status_data.get("organization_match_confidence"),
+        "created_by": status_data.get("created_by"),
     }
 
     _JOB_SUMMARY_CACHE[job_dir.name] = {
@@ -2114,7 +2116,7 @@ async def store_upload_file(
     if metadata:
         status_payload.update({key: value for key, value in metadata.items() if value is not None})
     write_json_file(job_dir / "status.json", status_payload)
-    return payload
+    return {**payload, **extract_job_status_context(status_payload)}
 
 
 def get_job_status_payload(job_id: str) -> Dict[str, Any]:
@@ -2313,9 +2315,7 @@ async def start_analysis(
         "ts": time.time(),
     }
     try:
-        status_file.write_text(
-            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-        )
+        write_json_file(status_file, payload)
         await persist_analysis_job_snapshot(payload)
         queue = _job_queue
         dispatch = "local_queue"

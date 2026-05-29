@@ -87,6 +87,14 @@ def _create_job(upload_root: Path, job_id: str = "job-read-test") -> Path:
     return job_dir
 
 
+def _create_owned_job(upload_root: Path, job_id: str, username: str) -> Path:
+    job_dir = _create_job(upload_root, job_id)
+    payload = runtime.read_json_file(job_dir / "status.json", default={})
+    payload["created_by"] = username
+    runtime.write_json_file(job_dir / "status.json", payload)
+    return job_dir
+
+
 # ---------------------------------------------------------------------------
 # No-session → 401 (TESTING=false to bypass the test shortcut)
 # ---------------------------------------------------------------------------
@@ -145,6 +153,30 @@ class TestWriteEndpointsRequireSession:
             "/api/documents/version-xxx/run",
             headers=_headers(),
             json={},
+        )
+        assert resp.status_code == 401
+
+    def test_document_preflight_no_session_returns_401(self, client: TestClient):
+        resp = client.post(
+            "/api/documents/preflight",
+            headers=_headers(),
+            files={"file": ("sample.pdf", b"%PDF-1.4\n%%EOF\n", "application/pdf")},
+        )
+        assert resp.status_code == 401
+
+    def test_document_upload_no_session_returns_401(self, client: TestClient):
+        resp = client.post(
+            "/api/documents/upload",
+            headers=_headers(),
+            files={"file": ("sample.pdf", b"%PDF-1.4\n%%EOF\n", "application/pdf")},
+        )
+        assert resp.status_code == 401
+
+    def test_legacy_upload_no_session_returns_401(self, client: TestClient):
+        resp = client.post(
+            "/upload",
+            headers=_headers(),
+            files={"file": ("sample.pdf", b"%PDF-1.4\n%%EOF\n", "application/pdf")},
         )
         assert resp.status_code == 401
 
@@ -264,6 +296,7 @@ class TestWriteEndpointsWithValidSession:
         admin_token = _login(client, "admin", ADMIN_PASSWORD)
         _create_user(client, admin_token, "analyst", "AnalystPass1")
         user_token = _login(client, "analyst", "AnalystPass1")
+        _create_owned_job(runtime.UPLOAD_ROOT, "j1", "analyst")
 
         mock_start = AsyncMock(return_value={"job_id": "j1", "status": "started"})
         monkeypatch.setattr(runtime, "start_analysis", mock_start)
@@ -310,6 +343,7 @@ class TestWriteEndpointsWithValidSession:
         admin_token = _login(client, "admin", ADMIN_PASSWORD)
         _create_user(client, admin_token, "reviewer", "ReviewerPass1")
         user_token = _login(client, "reviewer", "ReviewerPass1")
+        _create_owned_job(runtime.UPLOAD_ROOT, "j2", "reviewer")
 
         mock_reanalyze = AsyncMock(
             return_value={"job_id": "j2", "status": "queued"}
@@ -378,6 +412,107 @@ class TestWriteEndpointsWithValidSession:
         source = client.get("/api/files/job-read-test/source", headers=_headers(user_token))
         assert source.status_code == 200
         assert source.headers["content-type"].startswith("application/pdf")
+
+
+class TestJobOwnerIsolation:
+    """Regular users must not access jobs owned by another user."""
+
+    def test_jobs_list_hides_other_users_owned_jobs(self, client: TestClient):
+        admin_token = _login(client, "admin", ADMIN_PASSWORD)
+        _create_user(client, admin_token, "alice", "AlicePass1")
+        _create_user(client, admin_token, "bob", "BobPass1")
+        alice_token = _login(client, "alice", "AlicePass1")
+        bob_token = _login(client, "bob", "BobPass1")
+        _create_owned_job(runtime.UPLOAD_ROOT, "alice-job", "alice")
+        _create_owned_job(runtime.UPLOAD_ROOT, "bob-job", "bob")
+
+        alice_jobs = client.get("/api/jobs", headers=_headers(alice_token)).json()
+        bob_jobs = client.get("/api/jobs", headers=_headers(bob_token)).json()
+        admin_jobs = client.get("/api/jobs", headers=_headers(admin_token)).json()
+
+        assert {item["job_id"] for item in alice_jobs} == {"alice-job"}
+        assert {item["job_id"] for item in bob_jobs} == {"bob-job"}
+        assert {"alice-job", "bob-job"}.issubset({item["job_id"] for item in admin_jobs})
+
+    def test_regular_user_cannot_read_other_users_job_detail(self, client: TestClient):
+        admin_token = _login(client, "admin", ADMIN_PASSWORD)
+        _create_user(client, admin_token, "owner", "OwnerPass1")
+        _create_user(client, admin_token, "intruder", "IntruderPass1")
+        intruder_token = _login(client, "intruder", "IntruderPass1")
+        _create_owned_job(runtime.UPLOAD_ROOT, "owned-job", "owner")
+
+        resp = client.get("/api/jobs/owned-job", headers=_headers(intruder_token))
+
+        assert resp.status_code == 403
+
+    def test_regular_user_cannot_download_other_users_report_or_source(
+        self,
+        client: TestClient,
+    ):
+        admin_token = _login(client, "admin", ADMIN_PASSWORD)
+        _create_user(client, admin_token, "owner2", "Owner2Pass1")
+        _create_user(client, admin_token, "intruder2", "Intruder2Pass1")
+        intruder_token = _login(client, "intruder2", "Intruder2Pass1")
+        _create_owned_job(runtime.UPLOAD_ROOT, "owned-download-job", "owner2")
+
+        report = client.get(
+            "/api/reports/download?job_id=owned-download-job&format=json",
+            headers=_headers(intruder_token),
+        )
+        source = client.get(
+            "/api/files/owned-download-job/source",
+            headers=_headers(intruder_token),
+        )
+
+        assert report.status_code == 403
+        assert source.status_code == 403
+
+    def test_regular_user_cannot_batch_download_other_users_report(self, client: TestClient):
+        admin_token = _login(client, "admin", ADMIN_PASSWORD)
+        _create_user(client, admin_token, "owner_batch", "OwnerBatch1")
+        _create_user(client, admin_token, "intruder_batch", "IntruderBatch1")
+        intruder_token = _login(client, "intruder_batch", "IntruderBatch1")
+        _create_owned_job(runtime.UPLOAD_ROOT, "owned-batch-job", "owner_batch")
+
+        resp = client.post(
+            "/api/reports/download-batch",
+            headers=_headers(intruder_token),
+            json={"job_ids": ["owned-batch-job"]},
+        )
+
+        assert resp.status_code == 403
+
+    def test_regular_user_cannot_mutate_other_users_job(self, client: TestClient):
+        admin_token = _login(client, "admin", ADMIN_PASSWORD)
+        _create_user(client, admin_token, "owner3", "Owner3Pass1")
+        _create_user(client, admin_token, "intruder3", "Intruder3Pass1")
+        intruder_token = _login(client, "intruder3", "Intruder3Pass1")
+        _create_owned_job(runtime.UPLOAD_ROOT, "owned-mutate-job", "owner3")
+
+        reanalyze = client.post(
+            "/api/jobs/owned-mutate-job/reanalyze",
+            headers=_headers(intruder_token),
+            json={},
+        )
+        ignore = client.post(
+            "/api/jobs/owned-mutate-job/issues/ignore",
+            headers=_headers(intruder_token),
+            json={"issue_id": "iss-1"},
+        )
+
+        assert reanalyze.status_code == 403
+        assert ignore.status_code == 403
+
+    def test_legacy_unowned_jobs_remain_visible_to_regular_users(self, client: TestClient):
+        admin_token = _login(client, "admin", ADMIN_PASSWORD)
+        _create_user(client, admin_token, "legacy_reader", "LegacyPass1")
+        user_token = _login(client, "legacy_reader", "LegacyPass1")
+        _create_job(runtime.UPLOAD_ROOT, "legacy-job")
+
+        resp = client.get("/api/jobs/legacy-job", headers=_headers(user_token))
+
+        assert resp.status_code == 200
+        assert resp.json()["job_id"] == "legacy-job"
 
 
 # ---------------------------------------------------------------------------
