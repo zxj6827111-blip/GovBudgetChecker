@@ -7,14 +7,17 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from api.config import AppConfig
 from api import runtime
 from api import queue_runtime
+from api.auth_utils import require_admin
 from src.services.audit_log import get_audit_log_path
 
 router = APIRouter()
+
+_SENSITIVE_READY_KEYS = {"auth_key_configured"}
 
 
 @router.get("/health")
@@ -91,9 +94,44 @@ def _status(ok: bool, required: bool, detail: str) -> Dict[str, Any]:
     }
 
 
+def _redact_dependency_detail(item: Dict[str, Any]) -> Dict[str, Any]:
+    redacted = dict(item)
+    redacted["detail"] = "ok" if bool(item.get("ok")) else str(item.get("status") or "unavailable")
+    return redacted
+
+
+def _redact_dependencies(dependencies: Dict[str, Dict[str, Dict[str, Any]]]) -> Dict[str, Any]:
+    return {
+        section: {
+            key: _redact_dependency_detail(value)
+            for key, value in section_items.items()
+            if key not in _SENSITIVE_READY_KEYS
+        }
+        for section, section_items in dependencies.items()
+    }
+
+
+def _include_ready_details(request: Request) -> bool:
+    requested = str(request.query_params.get("details") or "").strip().lower()
+    if requested not in {"1", "true", "yes", "on"}:
+        return False
+    if _env_flag("READY_EXPOSE_DETAILS", False):
+        return True
+    require_admin(request)
+    return True
+
+
+def _redact_checks(checks: Dict[str, bool]) -> Dict[str, bool]:
+    return {
+        key: value
+        for key, value in checks.items()
+        if key not in _SENSITIVE_READY_KEYS
+    }
+
+
 @router.get("/ready")
 @router.get("/api/ready")
-async def ready() -> Dict[str, Any]:
+async def ready(request: Request) -> Dict[str, Any]:
     rules_file = Path(os.getenv("RULES_FILE", "rules/v3_3.yaml"))
     audit_log_path = get_audit_log_path()
     auth_enabled = bool(runtime.security_config.enabled) if runtime.security_config else False
@@ -181,13 +219,21 @@ async def ready() -> Dict[str, Any]:
             "max_upload_mb": runtime.MAX_UPLOAD_MB,
             "max_upload_pages": runtime.MAX_UPLOAD_PAGES,
         },
+        "auth_key_configured": auth_key_present,
     }
 
     ready_state = all(item["ok"] for item in dependencies["required"].values())
-    return {
+    include_details = _include_ready_details(request)
+    payload: Dict[str, Any] = {
         "status": "ready" if ready_state else "not_ready",
-        "checks": checks,
-        "dependencies": dependencies,
-        "details": details,
+        "checks": checks if include_details else _redact_checks(checks),
+        "dependencies": dependencies if include_details else _redact_dependencies(dependencies),
+        "details": details
+        if include_details
+        else {
+            "redacted": True,
+            "detail": "append ?details=true with an admin session for diagnostics",
+        },
         "ts": time.time(),
     }
+    return payload

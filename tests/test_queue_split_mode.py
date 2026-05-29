@@ -54,8 +54,7 @@ def test_ready_endpoint_does_not_require_local_queue_in_api_role(monkeypatch):
     ready = client.get("/ready")
     assert ready.status_code == 200
     payload = ready.json()
-    assert payload["details"]["queue_role"] == "api"
-    assert payload["details"]["local_queue_required"] is False
+    assert payload["details"]["redacted"] is True
     assert payload["checks"]["job_queue_started"] is True
 
 

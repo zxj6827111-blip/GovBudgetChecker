@@ -65,6 +65,28 @@ def _create_user(client: TestClient, admin_token: str, username: str, password: 
     assert resp.status_code == 200, resp.text
 
 
+def _create_job(upload_root: Path, job_id: str = "job-read-test") -> Path:
+    job_dir = upload_root / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "test.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+    runtime.write_json_file(
+        job_dir / "status.json",
+        {
+            "job_id": job_id,
+            "status": "done",
+            "result": {
+                "issues": {
+                    "all": [{"id": "iss-1", "title": "test issue"}],
+                    "error": [],
+                    "warn": [],
+                    "info": [],
+                }
+            },
+        },
+    )
+    return job_dir
+
+
 # ---------------------------------------------------------------------------
 # No-session → 401 (TESTING=false to bypass the test shortcut)
 # ---------------------------------------------------------------------------
@@ -170,6 +192,65 @@ class TestWriteEndpointsInvalidSession:
 # ---------------------------------------------------------------------------
 
 
+class TestSensitiveReadEndpointsRequireSession:
+    """Sensitive read endpoints must reject requests without a valid session."""
+
+    @pytest.fixture(autouse=True)
+    def _disable_testing_bypass(self, monkeypatch):
+        monkeypatch.setenv("TESTING", "false")
+
+    def test_jobs_list_no_session_returns_401(self, client: TestClient):
+        resp = client.get("/api/jobs", headers=_headers())
+        assert resp.status_code == 401
+
+    def test_job_status_no_session_returns_401(self, client: TestClient):
+        resp = client.get("/api/jobs/job-read-test/status", headers=_headers())
+        assert resp.status_code == 401
+
+    def test_legacy_job_status_no_session_returns_401(self, client: TestClient):
+        resp = client.get("/jobs/job-read-test/status", headers=_headers())
+        assert resp.status_code == 401
+
+    def test_job_detail_no_session_returns_401(self, client: TestClient):
+        resp = client.get("/api/jobs/job-read-test", headers=_headers())
+        assert resp.status_code == 401
+
+    def test_job_review_no_session_returns_401(self, client: TestClient):
+        resp = client.get("/api/jobs/job-read-test/review", headers=_headers())
+        assert resp.status_code == 401
+
+    def test_job_structured_ingest_no_session_returns_401(self, client: TestClient):
+        resp = client.get("/api/jobs/job-read-test/structured-ingest", headers=_headers())
+        assert resp.status_code == 401
+
+    def test_job_org_suggestions_no_session_returns_401(self, client: TestClient):
+        resp = client.get("/api/jobs/job-read-test/org-suggestions", headers=_headers())
+        assert resp.status_code == 401
+
+    def test_report_download_no_session_returns_401(self, client: TestClient):
+        resp = client.get(
+            "/api/reports/download?job_id=job-read-test&format=json",
+            headers=_headers(),
+        )
+        assert resp.status_code == 401
+
+    def test_report_batch_download_no_session_returns_401(self, client: TestClient):
+        resp = client.post(
+            "/api/reports/download-batch",
+            headers=_headers(),
+            json={"job_ids": ["job-read-test"]},
+        )
+        assert resp.status_code == 401
+
+    def test_source_pdf_no_session_returns_401(self, client: TestClient):
+        resp = client.get("/api/files/job-read-test/source", headers=_headers())
+        assert resp.status_code == 401
+
+    def test_source_preview_no_session_returns_401(self, client: TestClient):
+        resp = client.get("/api/files/job-read-test/preview", headers=_headers())
+        assert resp.status_code == 401
+
+
 class TestWriteEndpointsWithValidSession:
     """Regular (non-admin) user can access these write endpoints."""
 
@@ -273,6 +354,30 @@ class TestWriteEndpointsWithValidSession:
             json={"issue_id": "iss-1"},
         )
         assert resp.status_code == 200
+
+    def test_regular_user_can_read_sensitive_job_data(self, client: TestClient):
+        admin_token = _login(client, "admin", ADMIN_PASSWORD)
+        _create_user(client, admin_token, "reader", "ReaderPass1")
+        user_token = _login(client, "reader", "ReaderPass1")
+        _create_job(runtime.UPLOAD_ROOT, "job-read-test")
+
+        jobs = client.get("/api/jobs", headers=_headers(user_token))
+        assert jobs.status_code == 200
+
+        detail = client.get("/api/jobs/job-read-test", headers=_headers(user_token))
+        assert detail.status_code == 200
+        assert detail.json()["job_id"] == "job-read-test"
+
+        report = client.get(
+            "/api/reports/download?job_id=job-read-test&format=json",
+            headers=_headers(user_token),
+        )
+        assert report.status_code == 200
+        assert report.json()["job_id"] == "job-read-test"
+
+        source = client.get("/api/files/job-read-test/source", headers=_headers(user_token))
+        assert source.status_code == 200
+        assert source.headers["content-type"].startswith("application/pdf")
 
 
 # ---------------------------------------------------------------------------
