@@ -6,6 +6,9 @@
   - `GOVBUDGET_AUTH_ENABLED=true`
   - `GOVBUDGET_API_KEY` is non-empty
   - `USER_SESSION_SECRET` is fixed and non-empty
+  - `GOVBUDGET_API_KEY` and `USER_SESSION_SECRET` are different random secrets
+  - `READY_EXPOSE_DETAILS` is unset unless the service is private-only
+  - `POSTGRES_USER` and `POSTGRES_PASSWORD` are supplied by deployment secrets
   - `UPLOAD_DIR` points to persistent volume path
   - `DATABASE_URL` reachable from runtime
   - `AI_EXTRACTOR_URL` reachable from runtime
@@ -15,7 +18,11 @@
   - `python -m pytest`
   - `npm --prefix app run build`
   - `npm --prefix app run test:e2e`
+  - dependency audit for Python and npm packages
+  - `git diff --check`
 - Verify `/api/ready` is `ready` in staging.
+  Confirm `/api/ready` is redacted by default and detailed readiness requires an
+  administrator session.
 
 ## 2. Deployment Sequence
 1. Build backend and frontend images from the release tag.
@@ -36,6 +43,9 @@
 - Security checks:
   - Request without API key returns 401/403
   - Request with valid key succeeds
+  - Five failed login attempts trigger lockout
+  - A normal user cannot access another user's unassigned job
+  - `/ready?details=true` is rejected without an administrator session
 
 ## 4. Rollback Plan
 1. Stop routing traffic to new version.
