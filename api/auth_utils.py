@@ -36,3 +36,28 @@ def require_admin(request: Request) -> Tuple[Any, str, Dict[str, Any]]:
     if not bool(user.get("is_admin")):
         raise HTTPException(status_code=403, detail="admin privileges required")
     return store, token, user
+
+
+def user_can_access_job(user: Dict[str, Any], job_payload: Dict[str, Any]) -> bool:
+    """Return whether a logged-in user may access a job payload."""
+    if bool(user.get("is_admin")):
+        return True
+
+    owner = str(job_payload.get("created_by") or "").strip().lower()
+    if not owner:
+        # Legacy jobs did not record owners; keep them visible until migrated.
+        return True
+
+    username = str(user.get("username") or "").strip().lower()
+    return bool(username) and owner == username
+
+
+def require_job_access(
+    request: Request,
+    job_id: str,
+) -> Tuple[Any, str, Dict[str, Any], Dict[str, Any]]:
+    store, token, user = require_login(request)
+    payload = runtime.get_job_status_payload(job_id)
+    if not user_can_access_job(user, payload):
+        raise HTTPException(status_code=403, detail="job access denied")
+    return store, token, user, payload

@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 
 from api import runtime
-from api.auth_utils import require_login
+from api.auth_utils import require_job_access, require_login
 from src.utils.issue_display import build_issue_display
 
 router = APIRouter()
@@ -1076,8 +1076,7 @@ async def download_report(
     job_id: str,
     format: str = Query(default="pdf", pattern="^(pdf|json|csv|docx)$"),
 ):
-    require_login(request)
-    status_payload = runtime.get_job_status_payload(job_id)
+    _, _, _, status_payload = require_job_access(request, job_id)
     issues = _extract_issues(status_payload)
 
     if format == "json":
@@ -1158,7 +1157,7 @@ async def download_reports_batch(body: Dict[str, Any], request: Request):
     with zipfile.ZipFile(archive_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
         for job_id in job_ids:
             try:
-                status_payload = runtime.get_job_status_payload(job_id)
+                _, _, _, status_payload = require_job_access(request, job_id)
                 issues = _extract_issues(status_payload)
                 annotated_pdf = _create_annotated_pdf(job_id, status_payload, issues)
                 report_pdf = annotated_pdf or _resolve_report_pdf(job_id, status_payload)
@@ -1177,6 +1176,8 @@ async def download_reports_batch(body: Dict[str, Any], request: Request):
                     }
                 )
             except HTTPException as exc:
+                if exc.status_code in {401, 403}:
+                    raise
                 failed.append(
                     {
                         "job_id": job_id,

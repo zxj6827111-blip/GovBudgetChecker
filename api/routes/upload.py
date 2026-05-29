@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
 from api import runtime
+from api.auth_utils import require_login
 from api.routes.organizations import clear_department_stats_cache
 from src.services.org_matcher import get_org_matcher
 
@@ -212,6 +213,7 @@ async def _handle_upload(
     selected_org: Optional[str] = None,
     fiscal_year: Optional[str] = None,
     doc_type: Optional[str] = None,
+    created_by: Optional[str] = None,
 ) -> dict:
     selected_org = _clean_optional_text(selected_org)
     fiscal_year = _clean_optional_text(fiscal_year)
@@ -229,6 +231,7 @@ async def _handle_upload(
             "organization_match_confidence": 1.0 if selected_org else None,
             "fiscal_year": fiscal_year,
             "doc_type": doc_type,
+            "created_by": created_by,
         },
     )
 
@@ -280,12 +283,14 @@ async def _handle_upload(
 
 @router.post("/api/documents/preflight")
 async def preflight_document(
+    request: Request,
     file: UploadFile = File(...),
     fiscal_year: Optional[str] = Form(None),
     doc_type: Optional[str] = Form(None),
     api_key: str = Depends(runtime.verify_api_key),
 ):
     _ = api_key
+    require_login(request)
     payload = _inspect_document_preflight(
         filename=file.filename or "",
         preferred_year=_clean_optional_text(fiscal_year),
@@ -297,15 +302,18 @@ async def preflight_document(
 
 @router.post("/upload")
 async def upload_pdf(
+    request: Request,
     file: UploadFile = File(...),
     api_key: str = Depends(runtime.verify_api_key),
 ):
     _ = api_key
-    return await _handle_upload(file)
+    _, _, user = require_login(request)
+    return await _handle_upload(file, created_by=str(user.get("username") or ""))
 
 
 @router.post("/api/documents/upload")
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     org_unit_id: Optional[str] = Form(None),
     org_id: Optional[str] = Form(None),
@@ -314,9 +322,11 @@ async def upload_document(
     api_key: str = Depends(runtime.verify_api_key),
 ):
     _ = api_key
+    _, _, user = require_login(request)
     return await _handle_upload(
         file,
         selected_org=org_unit_id or org_id,
         fiscal_year=fiscal_year,
         doc_type=doc_type,
+        created_by=str(user.get("username") or ""),
     )

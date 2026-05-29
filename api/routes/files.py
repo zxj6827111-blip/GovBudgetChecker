@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 
 from api import runtime
-from api.auth_utils import require_login
+from api.auth_utils import require_job_access
 
 router = APIRouter()
 
@@ -114,7 +114,7 @@ def _render_preview_png(
 
 @router.get("/api/files/{job_id}/source")
 async def get_source_pdf(job_id: str, request: Request):
-    require_login(request)
+    require_job_access(request, job_id)
     pdf_path = _resolve_source_pdf(job_id)
     return FileResponse(str(pdf_path), media_type="application/pdf", filename=pdf_path.name)
 
@@ -128,7 +128,7 @@ async def get_source_preview(
     padding: float = Query(default=24.0, ge=0.0, le=200.0),
     scale: float = Query(default=2.0, ge=0.5, le=4.0),
 ):
-    require_login(request)
+    require_job_access(request, job_id)
     pdf_path = _resolve_source_pdf(job_id)
     parsed_bbox = _parse_bbox_query(bbox)
     png_bytes = _render_preview_png(

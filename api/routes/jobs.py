@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from api import runtime
-from api.auth_utils import require_admin, require_login
+from api.auth_utils import require_admin, require_job_access, require_login, user_can_access_job
 from api.routes.organizations import clear_department_stats_cache
 from src.services.analysis_result_store import (
     get_persisted_analysis_job_detail,
@@ -34,7 +34,7 @@ async def list_jobs(
     limit: int | None = Query(default=None, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
 ):
-    require_login(request)
+    _, _, user = require_login(request)
     job_dirs = runtime.iter_job_dirs()
 
     def _quick_ts(job_dir):
@@ -47,11 +47,20 @@ async def list_jobs(
             return 0.0
 
     if limit is None and offset == 0:
-        jobs = [runtime.collect_job_summary(job_dir) for job_dir in job_dirs]
+        jobs = [
+            summary
+            for job_dir in job_dirs
+            for summary in [runtime.collect_job_summary(job_dir)]
+            if user_can_access_job(user, summary)
+        ]
         jobs.sort(key=lambda x: x.get("ts", 0), reverse=True)
         return jobs
 
-    sorted_dirs = sorted(job_dirs, key=_quick_ts, reverse=True)
+    sorted_dirs = [
+        job_dir
+        for job_dir in sorted(job_dirs, key=_quick_ts, reverse=True)
+        if user_can_access_job(user, runtime.collect_job_summary(job_dir))
+    ]
     total = len(sorted_dirs)
     if limit is None:
         selected_dirs = sorted_dirs[offset:]
@@ -266,14 +275,13 @@ async def batch_delete_jobs(request: Request):
 @router.get("/jobs/{job_id}/status")
 @router.get("/api/jobs/{job_id}/status")
 async def get_job_status(job_id: str, request: Request):
-    require_login(request)
-    return runtime.get_job_status_payload(job_id)
+    _, _, _, payload = require_job_access(request, job_id)
+    return payload
 
 
 @router.get("/api/jobs/{job_id}")
 async def get_job_detail(job_id: str, request: Request):
-    require_login(request)
-    payload = runtime.get_job_status_payload(job_id)
+    _, _, _, payload = require_job_access(request, job_id)
     payload.setdefault("job_id", job_id)
     try:
         payload["filename"] = runtime.find_first_pdf(runtime.UPLOAD_ROOT / job_id).name
@@ -284,13 +292,13 @@ async def get_job_detail(job_id: str, request: Request):
 
 @router.get("/api/jobs/{job_id}/review")
 async def get_job_review(job_id: str, request: Request):
-    require_login(request)
+    require_job_access(request, job_id)
     return runtime.get_job_review_payload(job_id)
 
 
 @router.get("/api/jobs/{job_id}/structured-ingest")
 async def get_job_structured_ingest(job_id: str, request: Request):
-    require_login(request)
+    require_job_access(request, job_id)
     return runtime.get_job_review_payload(job_id)
 
 
@@ -300,7 +308,7 @@ async def get_job_org_suggestions(
     job_id: str,
     top_n: int = Query(default=5, ge=1, le=20),
 ):
-    require_login(request)
+    require_job_access(request, job_id)
     job_dir = runtime.UPLOAD_ROOT / job_id
     if not job_dir.exists():
         raise HTTPException(status_code=404, detail="job_id does not exist")
@@ -369,7 +377,7 @@ async def delete_job(job_id: str, request: Request):
 
 @router.post("/api/jobs/{job_id}/associate")
 async def associate_job(job_id: str, request: Request):
-    require_login(request)
+    require_job_access(request, job_id)
     body = await request.json()
     org_id = (body or {}).get("org_id")
     if not org_id:
@@ -392,7 +400,7 @@ async def associate_job(job_id: str, request: Request):
 
 @router.post("/api/jobs/{job_id}/reanalyze")
 async def reanalyze_job(job_id: str, request: Request):
-    require_login(request)
+    require_job_access(request, job_id)
     try:
         body = await request.json()
     except Exception:
@@ -402,7 +410,7 @@ async def reanalyze_job(job_id: str, request: Request):
 
 @router.post("/api/jobs/{job_id}/issues/ignore")
 async def ignore_job_issue(job_id: str, request: Request):
-    require_login(request)
+    require_job_access(request, job_id)
     try:
         body = await request.json()
     except Exception:

@@ -791,7 +791,11 @@ def test_batch_delete_endpoint_removes_jobs(monkeypatch, tmp_path: Path):
     assert not (tmp_path / "job-delete-2").exists()
 
 
-def test_job_issue_ignore_endpoint_returns_filtered_status(monkeypatch):
+def test_job_issue_ignore_endpoint_returns_filtered_status(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    job_dir = tmp_path / "job-issue"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    runtime.write_json_file(job_dir / "status.json", {"job_id": "job-issue", "status": "done"})
     client = TestClient(app)
 
     def _fake_ignore(job_id: str, issue_id: str):
