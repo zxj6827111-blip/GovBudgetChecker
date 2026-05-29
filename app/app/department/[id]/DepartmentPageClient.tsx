@@ -46,6 +46,9 @@ type OrganizationsResponse = {
 
 type OrganizationJobsResponse = {
   jobs?: JobSummaryRecord[];
+  total?: number | null;
+  limit?: number | null;
+  offset?: number | null;
 };
 
 type SearchStatus = "all" | "completed" | "analyzing" | "failed" | "review";
@@ -55,6 +58,7 @@ const defaultAdvancedFilters: AdvancedFilters = {
   unlinkedOnly: false,
   pendingReviewOnly: false,
 };
+const JOBS_PAGE_SIZE = 80;
 
 function getSearchStatusLabel(status: SearchStatus) {
   if (status === "completed") return "已完成 completed";
@@ -124,7 +128,9 @@ export default function DepartmentPageClient() {
 
   const [organizations, setOrganizations] = useState<OrganizationSummary[]>([]);
   const [jobs, setJobs] = useState<JobSummaryRecord[]>([]);
+  const [jobsTotal, setJobsTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [selectedTasks, setSelectedTasks] = useState<string[]>([]);
   const [includeSubPreference, setIncludeSubPreference] = useState(true);
   const [activeTab, setActiveTab] = useState<DepartmentTab>("budget");
@@ -151,6 +157,7 @@ export default function DepartmentPageClient() {
   const [refreshSeed, setRefreshSeed] = useState(0);
 
   const menuRef = useRef<HTMLDivElement>(null);
+  const jobsRequestIdRef = useRef(0);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -178,28 +185,39 @@ export default function DepartmentPageClient() {
   );
 
   const includeSub = currentOrg?.level === "unit" ? false : includeSubPreference;
+  const hasMoreJobs = jobs.length < jobsTotal;
 
   useEffect(() => {
     let alive = true;
+    const controller = new AbortController();
+    const requestId = ++jobsRequestIdRef.current;
 
     async function load() {
       setLoading(true);
+      setLoadingMore(false);
       const [organizationPayload, jobsPayload] = await Promise.all([
-        fetchJson<OrganizationsResponse>("/api/organizations/list", { organizations: [] }),
+        fetchJson<OrganizationsResponse>(
+          "/api/organizations/list",
+          { organizations: [] },
+          { signal: controller.signal },
+        ),
         fetchJson<OrganizationJobsResponse>(
-          `/api/organizations/${encodeURIComponent(id)}/jobs?include_children=${includeSub ? "true" : "false"}`,
-          { jobs: [] },
+          `/api/organizations/${encodeURIComponent(id)}/jobs?include_children=${includeSub ? "true" : "false"}&limit=${JOBS_PAGE_SIZE}&offset=0`,
+          { jobs: [], total: 0, limit: JOBS_PAGE_SIZE, offset: 0 },
+          { signal: controller.signal },
         ),
       ]);
 
-      if (!alive) {
+      if (!alive || requestId !== jobsRequestIdRef.current) {
         return;
       }
 
       setOrganizations(
         Array.isArray(organizationPayload.organizations) ? organizationPayload.organizations : [],
       );
-      setJobs(Array.isArray(jobsPayload.jobs) ? jobsPayload.jobs : []);
+      const nextJobs = Array.isArray(jobsPayload.jobs) ? jobsPayload.jobs : [];
+      setJobs(nextJobs);
+      setJobsTotal(Number(jobsPayload.total ?? nextJobs.length) || nextJobs.length);
       setSelectedTasks([]);
       setOpenMenuId(null);
       setLoading(false);
@@ -208,6 +226,7 @@ export default function DepartmentPageClient() {
     void load();
     return () => {
       alive = false;
+      controller.abort();
     };
   }, [id, includeSub, refreshSeed]);
 
@@ -393,6 +412,44 @@ export default function DepartmentPageClient() {
       alert(error instanceof Error ? error.message : "修改名称失败，请稍后重试。");
     } finally {
       setIsRenamingOrg(false);
+    }
+  };
+
+  const loadMoreJobs = async () => {
+    if (loading || loadingMore || !hasMoreJobs) {
+      return;
+    }
+
+    const requestId = ++jobsRequestIdRef.current;
+    setLoadingMore(true);
+    try {
+      const offset = jobs.length;
+      const payload = await fetchJson<OrganizationJobsResponse>(
+        `/api/organizations/${encodeURIComponent(id)}/jobs?include_children=${includeSub ? "true" : "false"}&limit=${JOBS_PAGE_SIZE}&offset=${offset}`,
+        { jobs: [], total: jobsTotal, limit: JOBS_PAGE_SIZE, offset },
+      );
+      if (requestId !== jobsRequestIdRef.current) {
+        return;
+      }
+
+      const nextJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+      setJobs((current) => {
+        const seen = new Set(current.map((job) => job.job_id));
+        const merged = [...current];
+        for (const job of nextJobs) {
+          if (!job?.job_id || seen.has(job.job_id)) {
+            continue;
+          }
+          merged.push(job);
+          seen.add(job.job_id);
+        }
+        return merged;
+      });
+      setJobsTotal(Number(payload.total ?? jobsTotal) || jobsTotal);
+    } finally {
+      if (requestId === jobsRequestIdRef.current) {
+        setLoadingMore(false);
+      }
     }
   };
 
@@ -788,7 +845,8 @@ export default function DepartmentPageClient() {
               {currentOrg?.name || "组织详情"}
             </h1>
             <p className="mt-2 text-sm text-slate-500">
-              当前共 {jobs.length} 份报告，问题总数 {totalIssueCount}，待复核 {pendingReviewCount}
+              已加载 {jobs.length}
+              {jobsTotal > jobs.length ? ` / ${jobsTotal}` : ""} 份报告，当前加载范围内问题总数 {totalIssueCount}，待复核 {pendingReviewCount}
               {normalizedSearchQuery ? `，搜索关键词：${searchQuery}` : ""}
             </p>
           </div>
@@ -917,7 +975,7 @@ export default function DepartmentPageClient() {
               onChange={(event) => setSelectedYear(event.target.value)}
               className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
             >
-              <option value="all">全部年度</option>
+              <option value="all">全部年度（已加载）</option>
               {years.map((year) => (
                 <option key={year} value={String(year)}>
                   {year} 年
@@ -929,7 +987,7 @@ export default function DepartmentPageClient() {
               onChange={(event) => setSelectedStatus(event.target.value as SearchStatus)}
               className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
             >
-              <option value="all">全部状态</option>
+              <option value="all">全部状态（已加载）</option>
               <option value="completed">已完成</option>
               <option value="analyzing">分析中</option>
               <option value="failed">失败</option>
@@ -1082,6 +1140,19 @@ export default function DepartmentPageClient() {
             isAssociatingJob={isAssociatingJob}
             associatingJobId={associatingJobId}
           />
+          {hasMoreJobs ? (
+            <div className="mt-4 flex justify-center">
+              <button
+                type="button"
+                data-testid="load-more-jobs"
+                onClick={() => void loadMoreJobs()}
+                disabled={loadingMore}
+                className="rounded-lg border border-primary-200 bg-primary-50 px-4 py-2 text-sm font-medium text-primary-700 transition-colors hover:bg-primary-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loadingMore ? "正在加载..." : `加载更多报告（${jobs.length}/${jobsTotal}）`}
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
 

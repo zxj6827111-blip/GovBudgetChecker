@@ -7,7 +7,7 @@ const sessionCookie = {
   sameSite: "Lax" as const,
 };
 
-type OrgLevel = "department" | "unit";
+type OrgLevel = "organization" | "department" | "unit";
 
 type OrgRecord = {
   id: string;
@@ -136,13 +136,13 @@ async function installOrganizationApiMocks(page: Page, state: MockState) {
 
     if (path === "/api/organizations" && method === "POST") {
       state.createDepartmentCalls += 1;
-      const payload = req.postDataJSON() as { name?: string };
+      const payload = req.postDataJSON() as { name?: string; parent_id?: string | null };
       const id = state.createDepartmentCalls === 1 ? "dept-created" : `dept-created-${state.createDepartmentCalls}`;
       const created: OrgRecord = {
         id,
         name: String(payload.name ?? "").trim(),
         level: "department",
-        parent_id: null,
+        parent_id: payload.parent_id ? String(payload.parent_id) : null,
         job_count: 0,
         issue_count: 0,
       };
@@ -338,7 +338,7 @@ test.describe("Admin organization regression", () => {
       }
     });
 
-    await page.goto("/admin?tab=organization");
+    await page.goto("/?page=settings&section=organization");
 
     await expect(page.getByTestId("admin-org-panel")).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId("admin-org-create-department")).toBeVisible();
@@ -352,7 +352,7 @@ test.describe("Admin organization regression", () => {
 
     page.once("dialog", async (dialog) => {
       expect(dialog.type()).toBe("prompt");
-      expect(dialog.message()).toContain("请输入新部门名称");
+      expect(dialog.message()).toContain("财政局");
       await dialog.accept("审计局");
     });
     await page.getByTestId("admin-org-create-department").click();
@@ -385,6 +385,57 @@ test.describe("Admin organization regression", () => {
     await expect.poll(() => state.deleteCalls).toBe(1);
     await expect(page.getByTestId("admin-org-selection-empty")).toBeVisible();
     expect(state.orgs.some((org) => org.id === "unit-created")).toBe(false);
+  });
+
+  test("creating a district under Shanghai keeps the parent relationship", async ({ page }) => {
+    test.setTimeout(60_000);
+
+    const state: MockState = {
+      orgs: [
+        {
+          id: "city-shanghai",
+          name: "上海市",
+          level: "organization",
+          parent_id: null,
+          job_count: 0,
+          issue_count: 0,
+        },
+        {
+          id: "dept-putuo",
+          name: "普陀区",
+          level: "department",
+          parent_id: "city-shanghai",
+          job_count: 0,
+          issue_count: 0,
+        },
+      ],
+      createDepartmentCalls: 0,
+      createUnitCalls: 0,
+      renameCalls: 0,
+      deletePreviewCalls: 0,
+      deleteCalls: 0,
+      importCalls: 0,
+    };
+
+    await page.context().addCookies([sessionCookie]);
+    await installOrganizationApiMocks(page, state);
+    await page.goto("/?page=settings&section=organization");
+
+    await page.getByTestId("organization-tree-node-city-shanghai").click();
+    await expect(page.getByTestId("admin-org-create-department")).toHaveText(/新建下级部门/);
+
+    page.once("dialog", async (dialog) => {
+      expect(dialog.type()).toBe("prompt");
+      expect(dialog.message()).toContain("上海市");
+      await dialog.accept("黄浦区");
+    });
+    await page.getByTestId("admin-org-create-department").click();
+
+    await expect.poll(() => state.createDepartmentCalls).toBe(1);
+    const created = state.orgs.find((org) => org.id === "dept-created");
+    expect(created?.parent_id).toBe("city-shanghai");
+    await expect(page.getByTestId("organization-tree-node-dept-created")).toBeVisible();
+    await expect(page.getByTestId("admin-org-selected-name")).toHaveText("黄浦区");
   });
 
   test("organization tree supports create rename import flows", async ({ page }) => {
@@ -426,7 +477,7 @@ test.describe("Admin organization regression", () => {
       await dialog.accept();
     });
 
-    await page.goto("/admin?tab=organization");
+    await page.goto("/?page=settings&section=organization");
 
     await expect(page.getByTestId("organization-tree-create-department")).toBeVisible({
       timeout: 20_000,
@@ -459,5 +510,92 @@ test.describe("Admin organization regression", () => {
     await expect.poll(() => state.importCalls).toBe(1);
     await expect(page.getByTestId("organization-tree-node-dept-imported")).toBeVisible();
     expect(dialogMessages.some((message) => message.includes("alert:"))).toBe(true);
+  });
+
+  test("organization tree keeps long district unit lists scrollable", async ({ page }) => {
+    test.setTimeout(60_000);
+
+    const longUnitList = Array.from({ length: 80 }, (_, index) => {
+      const order = String(index + 1).padStart(2, "0");
+      return {
+        id: `unit-long-${order}`,
+        name: `普陀区下属单位${order}`,
+        level: "unit" as const,
+        parent_id: "dept-putuo",
+        job_count: 0,
+        issue_count: 0,
+      };
+    });
+    const state: MockState = {
+      orgs: [
+        {
+          id: "city-shanghai",
+          name: "上海市",
+          level: "department",
+          parent_id: null,
+          job_count: 0,
+          issue_count: 0,
+        },
+        {
+          id: "dept-putuo",
+          name: "普陀区",
+          level: "department",
+          parent_id: "city-shanghai",
+          job_count: 0,
+          issue_count: 0,
+        },
+        ...longUnitList,
+      ],
+      createDepartmentCalls: 0,
+      createUnitCalls: 0,
+      renameCalls: 0,
+      deletePreviewCalls: 0,
+      deleteCalls: 0,
+      importCalls: 0,
+    };
+
+    await page.context().addCookies([sessionCookie]);
+    await installOrganizationApiMocks(page, state);
+    await page.goto("/?page=settings&section=organization");
+
+    const toggleAll = page.getByTestId("organization-tree-toggle-all");
+    await expect(toggleAll).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("organization-tree-node-dept-putuo")).toBeVisible();
+    if ((await toggleAll.textContent())?.includes("展开")) {
+      await toggleAll.click();
+    }
+
+    const scrollArea = page.getByTestId("organization-tree-scroll");
+    await expect(scrollArea).toBeVisible();
+    await expect(page.getByTestId("organization-tree-node-unit-long-01")).toBeVisible();
+    await expect.poll(
+      () => scrollArea.evaluate((element) => element.scrollHeight > element.clientHeight),
+      { message: "organization tree should create its own scrollable list area" },
+    ).toBe(true);
+
+    const beforeScrollTop = await scrollArea.evaluate((element) => element.scrollTop);
+    await scrollArea.hover();
+    await page.mouse.wheel(0, 3000);
+    await expect.poll(
+      () => scrollArea.evaluate((element) => element.scrollTop),
+      { message: "organization tree should respond to wheel scrolling" },
+    ).toBeGreaterThan(beforeScrollTop);
+
+    await scrollArea.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect.poll(
+      () =>
+        scrollArea.evaluate((element) => {
+          const target = element.querySelector('[data-testid="organization-tree-node-unit-long-80"]');
+          if (!target) {
+            return false;
+          }
+          const areaRect = element.getBoundingClientRect();
+          const targetRect = target.getBoundingClientRect();
+          return targetRect.top >= areaRect.top && targetRect.bottom <= areaRect.bottom;
+        }),
+      { message: "last unit should be visible inside the organization tree scroll area" },
+    ).toBe(true);
   });
 });

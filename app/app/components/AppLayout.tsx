@@ -16,7 +16,7 @@ interface AppLayoutProps {
 export default function AppLayout({ children }: AppLayoutProps) {
   const pathname = usePathname();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const shouldHideChrome = pathname === "/login" || pathname?.startsWith("/viewer/");
+  const shouldHideChrome = pathname === "/" || pathname === "/login" || pathname?.startsWith("/viewer/");
   const shouldAutoHideSidebar = pathname?.startsWith("/task/") ?? false;
   const lastNonTaskSidebarStateRef = useRef(true);
   const previousShouldAutoHideRef = useRef(shouldAutoHideSidebar);

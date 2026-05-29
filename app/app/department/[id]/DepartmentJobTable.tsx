@@ -2,11 +2,16 @@ import type { Route } from "next";
 import Link from "next/link";
 import { Download, Eye, Link2, MoreHorizontal, RefreshCw, Trash2 } from "lucide-react";
 import type { MouseEvent as ReactMouseEvent, RefObject } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 import type { JobSummaryRecord } from "@/lib/uiAdapters";
 import { formatDateTime, getDisplayIssueTotal, getHighRiskCount, normalizeUiTaskStatus, toUiTask } from "@/lib/uiAdapters";
 import { needsIngestReview } from "./helpers";
+
+const ROW_HEIGHT = 86;
+const VIRTUAL_TABLE_THRESHOLD = 120;
+const VIRTUAL_OVERSCAN = 8;
 
 type Props = {
   jobs: JobSummaryRecord[];
@@ -31,10 +36,39 @@ type Props = {
 };
 
 export default function DepartmentJobTable(props: Props) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
   const allSelected = props.selectedTasks.length === props.jobs.length && props.jobs.length > 0;
+  const shouldVirtualize = props.jobs.length > VIRTUAL_TABLE_THRESHOLD;
+  const viewportHeight = 620;
+  const virtualWindow = useMemo(() => {
+    if (!shouldVirtualize) {
+      return {
+        items: props.jobs,
+        topSpacer: 0,
+        bottomSpacer: 0,
+      };
+    }
+
+    const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - VIRTUAL_OVERSCAN);
+    const visibleCount = Math.ceil(viewportHeight / ROW_HEIGHT) + VIRTUAL_OVERSCAN * 2;
+    const end = Math.min(props.jobs.length, start + visibleCount);
+    return {
+      items: props.jobs.slice(start, end),
+      topSpacer: start * ROW_HEIGHT,
+      bottomSpacer: Math.max(0, (props.jobs.length - end) * ROW_HEIGHT),
+    };
+  }, [props.jobs, scrollTop, shouldVirtualize]);
 
   return (
-    <div className="overflow-visible rounded-xl border border-border bg-white shadow-sm">
+    <div
+      ref={scrollRef}
+      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+      className={cn(
+        "rounded-xl border border-border bg-white shadow-sm",
+        shouldVirtualize ? "max-h-[620px] overflow-auto" : "overflow-visible",
+      )}
+    >
       <table className="w-full border-collapse text-left">
         <thead>
           <tr className="border-b border-border bg-slate-50 text-sm font-semibold text-slate-600">
@@ -43,7 +77,11 @@ export default function DepartmentJobTable(props: Props) {
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
-          {props.loading ? <tr><td colSpan={7} className="p-8 text-center text-slate-500">正在加载任务...</td></tr> : props.jobs.length === 0 ? <tr><td colSpan={7} className="p-8 text-center text-slate-500">{props.normalizedSearchQuery ? "当前筛选条件和搜索关键字下暂无相关报告" : "当前筛选条件下暂无相关报告"}</td></tr> : props.jobs.map((job) => {
+          {props.loading ? <tr><td colSpan={7} className="p-8 text-center text-slate-500">正在加载任务...</td></tr> : props.jobs.length === 0 ? <tr><td colSpan={7} className="p-8 text-center text-slate-500">{props.normalizedSearchQuery ? "当前筛选条件和搜索关键字下暂无相关报告" : "当前筛选条件下暂无相关报告"}</td></tr> : <>
+            {shouldVirtualize && virtualWindow.topSpacer > 0 ? (
+              <tr aria-hidden="true"><td colSpan={7} className="p-0" style={{ height: virtualWindow.topSpacer }} /></tr>
+            ) : null}
+            {virtualWindow.items.map((job) => {
             const task = toUiTask(job);
             const isJobAnalyzing = normalizeUiTaskStatus(job.status) === "analyzing";
             const isReanalyzingThisJob = props.reanalyzingJobId === job.job_id;
@@ -68,6 +106,10 @@ export default function DepartmentJobTable(props: Props) {
               </td>
             </tr>;
           })}
+            {shouldVirtualize && virtualWindow.bottomSpacer > 0 ? (
+              <tr aria-hidden="true"><td colSpan={7} className="p-0" style={{ height: virtualWindow.bottomSpacer }} /></tr>
+            ) : null}
+          </>}
         </tbody>
       </table>
     </div>

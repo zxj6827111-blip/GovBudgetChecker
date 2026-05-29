@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录页 v2 - GovBudgetChecker DEMO</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="login-page">
+    <section class="login-left">
+      <div class="login-brand">
+        <div class="brand-mark">预</div>
+        <div>
+          <strong>预决算公开材料审校系统</strong>
+          <span class="subtle">GovBudgetChecker · 工作人员入口</span>
+        </div>
+      </div>
+
+      <div class="login-hero">
+        <p class="eyebrow">登录页 · 不做统一门户首页</p>
+        <h1>进入审校工作台前，<br>先确定地区权限与材料范围</h1>
+        <p class="subtle">
+          登录后直接进入 GovBudgetChecker 工作台。系统按行政区划、部门、单位组织任务，并把预算公开和决算公开作为两条清晰的审校工作线。
+        </p>
+      </div>
+
+      <div class="mode-switch" style="max-width: 760px; margin-top: 28px;">
+        <div class="mode-card budget">
+          <div class="mode-icon">预</div>
+          <div>
+            <strong>预算公开审校</strong>
+            <span>九张表、三公经费预算、绩效目标、预算说明与表格一致性。</span>
+          </div>
+        </div>
+        <div class="mode-card final">
+          <div class="mode-icon">决</div>
+          <div>
+            <strong>决算公开审校</strong>
+            <span>决算核心表、预算数与决算数、同比变化原因、空表说明。</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="login-facts">
+        <div class="fact">
+          <span class="tag line">地区权限</span>
+          <strong>黄浦区</strong>
+          <p class="subtle">按行政区划控制可见部门和单位。</p>
+        </div>
+        <div class="fact">
+          <span class="tag budget">预算</span>
+          <strong>128 份</strong>
+          <p class="subtle">进入预算规则包和预算任务队列。</p>
+        </div>
+        <div class="fact">
+          <span class="tag final">决算</span>
+          <strong>96 份</strong>
+          <p class="subtle">进入决算规则包和决算任务队列。</p>
+        </div>
+      </div>
+    </section>
+
+    <aside class="login-right">
+      <div class="login-card">
+        <p class="eyebrow">账户登录</p>
+        <h2>工作人员登录</h2>
+        <p class="subtle">登录后默认进入工作台，不跳转到两个系统的统一门户。</p>
+
+        <div style="margin-top: 18px;">
+          <div class="field-row">
+            <label>账号</label>
+            <input class="input" value="audit_operator">
+          </div>
+          <div class="field-row">
+            <label>密码</label>
+            <input class="input" type="password" value="password">
+          </div>
+          <div class="field-row">
+            <label>默认地区</label>
+            <select class="select">
+              <option>上海市 / 黄浦区</option>
+              <option>上海市 / 徐汇区</option>
+            </select>
+          </div>
+          <div class="field-row">
+            <label>进入视图</label>
+            <select class="select">
+              <option>工作台：全部任务</option>
+              <option>工作台：预算公开</option>
+              <option>工作台：决算公开</option>
+            </select>
+          </div>
+        </div>
+
+        <a class="btn primary" href="./dashboard.html" style="width: 100%; margin-top: 12px;">
+          <span class="icon-box">登</span> 登录并进入工作台
+        </a>
+        <div class="demo-note">
+          本页只表达 GovBudgetChecker 自身入口，不暗示已经和 KIROGOVCOMPARE 合并。
+        </div>
+      </div>
+    </aside>
+  </main>
+</body>
+</html>

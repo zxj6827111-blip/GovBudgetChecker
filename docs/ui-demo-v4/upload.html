@@ -1,0 +1,142 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>材料上传 - GovBudgetChecker v4 DEMO</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">预</div>
+      <div>
+        <strong>预决算公开材料审校系统</strong>
+        <span>材料上传与自动检查</span>
+      </div>
+    </div>
+    <nav class="nav">
+      <a href="./dashboard.html"><span class="icon">台</span>年度审校工作台</a>
+      <a href="./issues-dashboard.html"><span class="icon">题</span>问题数据看板</a>
+      <a href="./archive.html"><span class="icon">年</span>年度档案</a>
+      <a class="active" href="./upload.html"><span class="icon">传</span>材料上传</a>
+      <a href="./task-center.html"><span class="icon">任</span>任务中心</a>
+      <a href="#"><span class="icon">设</span>系统管理</a>
+    </nav>
+    <div class="topbar-right">当前工作区：上海市 / 普陀区 / 真如镇街道</div>
+  </header>
+
+  <main class="page">
+    <section class="page-head">
+      <div>
+        <p class="eyebrow">材料上传</p>
+        <h1>上传页只处理材料，不再要求重复配置地区</h1>
+        <p class="subtle">工作人员确认检查年度后，系统自动拆成 2026 年预算公开和 2025 年决算公开，并提交检查任务到任务中心。</p>
+      </div>
+      <div class="toolbar">
+        <a class="btn" href="./dashboard.html"><span class="icon">台</span>返回工作台</a>
+        <a class="btn primary" href="./task-center.html"><span class="icon">任</span>查看任务</a>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <div class="workspace-card blue">
+        <div class="big-icon">区</div>
+        <div><strong>工作区</strong><span class="subtle">上海市 / 普陀区 / 真如镇街道，来自系统管理配置。</span></div>
+      </div>
+      <div class="workspace-card blue">
+        <div class="big-icon">预</div>
+        <div><strong>预算投放区：2026 年</strong><span class="subtle">部门预算、单位预算、预算公开附件。</span></div>
+      </div>
+      <div class="workspace-card teal">
+        <div class="big-icon">决</div>
+        <div><strong>决算投放区：2025 年</strong><span class="subtle">部门决算、单位决算、决算公开附件。</span></div>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-bottom: 14px;">
+      <div class="panel-header"><h2>上传批次</h2><span class="tag amber">检查年度决定材料年份</span></div>
+      <div class="panel-body filter-grid">
+        <div class="field"><label>工作区</label><select class="select"><option>上海市 / 普陀区 / 真如镇街道</option></select></div>
+        <div class="field"><label>检查年度</label><select class="select"><option>2026</option><option>2027</option></select></div>
+        <div class="field"><label>单位范围</label><select class="select"><option>全部单位</option><option>街道本级</option></select></div>
+        <div class="field"><label>上传方式</label><select class="select"><option>预算、决算分区投放</option></select></div>
+        <div class="field"><label>检查方式</label><select class="select"><option>规则检查 + AI 辅助检查</option></select></div>
+        <a class="btn primary"><span class="icon">用</span>应用</a>
+      </div>
+    </section>
+
+    <section class="layout-main-side">
+      <div class="stack">
+        <div class="drop-grid">
+          <section class="panel flat">
+            <div class="panel-header"><h2>预算材料</h2><span class="tag blue">2026</span></div>
+            <div class="panel-body"><div class="drop-zone"><div><strong>拖入 2026 年预算公开材料</strong><p class="subtle">系统识别封面、目录、九张表、绩效目标和三公预算表。</p></div></div></div>
+          </section>
+          <section class="panel flat">
+            <div class="panel-header"><h2>决算材料</h2><span class="tag teal">2025</span></div>
+            <div class="panel-body"><div class="drop-zone"><div><strong>拖入 2025 年决算公开材料</strong><p class="subtle">系统识别决算核心表、三公决算表、同比和空表说明。</p></div></div></div>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="panel-header"><h2>待提交材料</h2><span class="tag line">3 份</span></div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>材料</th>
+                <th>类型</th>
+                <th>归档年份</th>
+                <th>识别结果</th>
+                <th>检查任务</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="strong-cell">真如镇街道_2026预算公开.pdf</span><span class="muted-cell">街道本级，36 页</span></td>
+                <td><span class="tag blue">预算</span></td>
+                <td>2026</td>
+                <td>识别完成</td>
+                <td>规则 + AI</td>
+                <td><a class="btn primary"><span class="icon">交</span>提交</a></td>
+              </tr>
+              <tr>
+                <td><span class="strong-cell">真如镇街道_2025决算公开.pdf</span><span class="muted-cell">街道本级，42 页</span></td>
+                <td><span class="tag teal">决算</span></td>
+                <td>2025</td>
+                <td>识别完成</td>
+                <td>规则 + AI</td>
+                <td><a class="btn primary"><span class="icon">交</span>提交</a></td>
+              </tr>
+              <tr>
+                <td><span class="strong-cell">预算执行情况说明.pdf</span><span class="muted-cell">标题和正文类型冲突</span></td>
+                <td><span class="tag amber">待确认</span></td>
+                <td>未定</td>
+                <td>需要人工确认</td>
+                <td>暂不提交</td>
+                <td><a class="btn"><span class="icon">定</span>确认</a></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+
+      <aside class="stack">
+        <section class="panel flat">
+          <div class="panel-header"><h2>提交后去哪里看</h2></div>
+          <div class="panel-body stack">
+            <div class="issue-card rule"><span class="tag blue">任务中心</span><strong>上传、解析、检查进度</strong><p class="subtle">完整任务记录在任务中心，页面右侧可保留小型任务抽屉。</p></div>
+            <div class="issue-card ai"><span class="tag teal">材料详情</span><strong>问题、证据、截图定位</strong><p class="subtle">检查完成后进入材料详情查看具体错误。</p></div>
+          </div>
+        </section>
+        <section class="panel flat">
+          <div class="panel-header"><h2>最近上传</h2></div>
+          <div class="task-item"><div class="score blue">预</div><div><strong>2026 预算</strong><span class="muted-cell">社区事务中心，检查中</span></div><span class="tag line">68%</span></div>
+          <div class="task-item"><div class="score teal">决</div><div><strong>2025 决算</strong><span class="muted-cell">党群服务中心，排队中</span></div><span class="tag line">排队</span></div>
+        </section>
+      </aside>
+    </section>
+  </main>
+</body>
+</html>

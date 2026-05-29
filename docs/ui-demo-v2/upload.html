@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>批量上传 v2 - GovBudgetChecker DEMO</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body class="app-shell">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">预</div>
+      <div>
+        <strong>预决算公开材料审校系统</strong>
+        <span>批量导入与类型确认</span>
+      </div>
+    </div>
+    <nav class="nav">
+      <a href="./dashboard.html"><span class="icon-box">台</span>工作台</a>
+      <a class="active" href="./upload.html"><span class="icon-box">传</span>批量上传</a>
+      <a href="./region-management.html"><span class="icon-box">区</span>地区管理</a>
+      <a href="./department.html"><span class="icon-box">部</span>部门台账</a>
+      <a href="./review.html"><span class="icon-box">审</span>审校详情</a>
+    </nav>
+    <div class="topbar-right">
+      <span>上海市 / 黄浦区</span>
+      <div class="user-chip"><span class="icon-box">员</span>审校员</div>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="page-head">
+      <div>
+        <p class="eyebrow">批量上传</p>
+        <h1>先确认地区和材料类型，再进入审校</h1>
+        <p class="subtle">上传页把“预算包、决算包、类型待确认”放在导入流程前置位置，避免文件进入错误规则包。</p>
+      </div>
+      <div class="toolbar">
+        <a class="btn" href="./region-management.html"><span class="icon-box">区</span>地区维护</a>
+        <a class="btn primary" href="./department.html"><span class="icon-box">台</span>查看台账</a>
+      </div>
+    </section>
+
+    <div class="task-strip">
+      <div class="step active"><div class="step-num">1</div><div><strong>选择归属</strong><span>地区、部门、单位会写入任务台账。</span></div></div>
+      <div class="step active"><div class="step-num">2</div><div><strong>选择预算</strong><span>蓝色规则包，审九张表和预算说明。</span></div></div>
+      <div class="step final-step"><div class="step-num">3</div><div><strong>选择决算</strong><span>青绿色规则包，审决算表和差异原因。</span></div></div>
+      <div class="step warning-step"><div class="step-num">4</div><div><strong>处理不确定</strong><span>标题冲突或识别低置信度时先人工确认。</span></div></div>
+    </div>
+
+    <section class="panel" style="margin-bottom: 14px;">
+      <div class="panel-header">
+        <h2>批量应用信息</h2>
+        <span class="tag warning">上传前必须确认</span>
+      </div>
+      <div class="panel-body batch-panel">
+        <div>
+          <label>行政区划</label>
+          <select class="select"><option>上海市 / 黄浦区</option></select>
+        </div>
+        <div>
+          <label>部门</label>
+          <select class="select"><option>区教育局</option><option>区卫健委</option></select>
+        </div>
+        <div>
+          <label>年度</label>
+          <select class="select"><option>2026</option><option>2025</option></select>
+        </div>
+        <div>
+          <label>材料类型</label>
+          <select class="select"><option>先自动识别，冲突时人工确认</option></select>
+        </div>
+        <a class="btn primary" href="#"><span class="icon-box">用</span>应用到全部</a>
+      </div>
+    </section>
+
+    <section class="grid-2" style="margin-bottom: 14px;">
+      <div class="mode-card budget selected">
+        <div class="mode-icon">预</div>
+        <div>
+          <strong>预算包上传</strong>
+          <span>文件名、封面、正文出现“部门预算”“预算表”“绩效目标”等证据时进入预算规则包。</span>
+        </div>
+      </div>
+      <div class="mode-card final">
+        <div class="mode-icon">决</div>
+        <div>
+          <strong>决算包上传</strong>
+          <span>出现“部门决算”“收入支出决算”“决算表”等证据时进入决算规则包。</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="two-main-grid">
+      <aside class="panel flat">
+        <div class="panel-header"><h2>文件投放区</h2></div>
+        <div class="panel-body">
+          <div class="upload-zone">
+            <div>
+              <strong>拖入 PDF、Word 或压缩包</strong>
+              <p class="subtle">系统会先读标题、封面、目录和核心表名，再给出预算/决算识别结果。</p>
+              <div class="toolbar" style="justify-content: center;">
+                <span class="tag budget">预算</span>
+                <span class="tag final">决算</span>
+                <span class="tag warning">类型待确认</span>
+              </div>
+            </div>
+          </div>
+          <div class="demo-note">
+            如果同一批文件同时含预算和决算，必须分批确认后再提交审校，避免规则包错用。
+          </div>
+        </div>
+      </aside>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>识别结果与待确认项</h2>
+          <div class="segmented"><span class="on-budget">预算</span><span class="on-final">决算</span><span>待确认</span></div>
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>文件</th>
+              <th>识别类型</th>
+              <th>关键证据</th>
+              <th>归属</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="strong-cell">区教育局_2026预算公开.pdf</span><span class="muted-cell">24 页，含目录</span></td>
+              <td><span class="tag budget">预算</span></td>
+              <td>标题含“部门预算”，目录含“绩效目标表”</td>
+              <td>黄浦区 / 区教育局</td>
+              <td><a class="btn" href="#"><span class="icon-box">入</span>入库</a></td>
+            </tr>
+            <tr>
+              <td><span class="strong-cell">区教育局_2025决算公开.pdf</span><span class="muted-cell">31 页，含决算表</span></td>
+              <td><span class="tag final">决算</span></td>
+              <td>标题含“部门决算”，表名含“收入支出决算总表”</td>
+              <td>黄浦区 / 区教育局</td>
+              <td><a class="btn" href="#"><span class="icon-box">入</span>入库</a></td>
+            </tr>
+            <tr>
+              <td><span class="strong-cell">街道预算执行情况说明.pdf</span><span class="muted-cell">正文标题冲突</span></td>
+              <td><span class="tag warning">类型待确认</span></td>
+              <td>文件名含“预算”，正文多处出现“决算数”</td>
+              <td>黄浦区 / 南京东路街道</td>
+              <td><a class="btn primary" href="#"><span class="icon-box">定</span>确认类型</a></td>
+            </tr>
+            <tr>
+              <td><span class="strong-cell">实验小学_单位预算公开.pdf</span><span class="muted-cell">扫描件，OCR 低置信度</span></td>
+              <td><span class="tag budget">预算</span></td>
+              <td>封面识别到“单位预算公开”</td>
+              <td>黄浦区 / 区教育局 / 实验小学</td>
+              <td><a class="btn" href="#"><span class="icon-box">核</span>复核</a></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

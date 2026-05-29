@@ -1,7 +1,6 @@
 "use client";
 
 import { ChevronDown, KeyRound, LogOut, Settings } from "lucide-react";
-import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
@@ -15,7 +14,7 @@ type AuthUser = {
 export default function Header() {
   const pathname = usePathname();
   const router = useRouter();
-  const isAdminRoute = pathname.startsWith("/admin");
+  const isSystemRoute = pathname === "/";
   const [user, setUser] = useState<AuthUser>({ username: "admin", is_admin: false });
   const [menuOpen, setMenuOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -83,39 +82,52 @@ export default function Header() {
     }
   };
 
+  const openRootPage = (page: "workbench" | "settings") => {
+    const target = page === "settings" ? "/?page=settings" : "/";
+    setMenuOpen(false);
+    if (pathname === "/") {
+      window.history.replaceState(null, "", target);
+      window.location.reload();
+      return;
+    }
+    router.push(target);
+  };
+
   return (
     <header className="relative z-10 flex h-16 shrink-0 items-center justify-between bg-slate-900 px-6 text-white shadow-sm">
       <div className="flex items-center gap-6">
-        <Link href="/" className="flex items-center gap-2">
+        <button type="button" onClick={() => openRootPage("workbench")} className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded bg-primary-500 font-bold text-white shadow-inner">
             GC
           </div>
           <span className="text-lg font-semibold tracking-tight">GovBudgetChecker</span>
-        </Link>
+        </button>
         <div className="mx-2 h-6 w-px bg-slate-700" />
         <nav className="flex items-center gap-1">
-          <Link
-            href="/"
+          <button
+            type="button"
+            onClick={() => openRootPage("workbench")}
             className={cn(
               "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-              !isAdminRoute
+              isSystemRoute
                 ? "bg-slate-800 text-white"
                 : "text-slate-400 hover:bg-slate-800 hover:text-white",
             )}
           >
             工作台
-          </Link>
-          <Link
-            href="/admin"
+          </button>
+          <button
+            type="button"
+            onClick={() => openRootPage("settings")}
             className={cn(
               "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-              isAdminRoute
+              pathname === "/"
                 ? "bg-slate-800 text-white"
                 : "text-slate-400 hover:bg-slate-800 hover:text-white",
             )}
           >
             系统管理
-          </Link>
+          </button>
         </nav>
       </div>
 
@@ -136,23 +148,26 @@ export default function Header() {
 
         {menuOpen ? (
           <div className="absolute right-0 top-[calc(100%+10px)] w-44 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 text-slate-800 shadow-xl">
-            <Link
-              href="/account/password"
-              onClick={() => setMenuOpen(false)}
-              className="flex items-center gap-2 px-4 py-2 text-sm transition hover:bg-slate-50"
+            <button
+              type="button"
+              onClick={() => {
+                setMenuOpen(false);
+                router.push("/account/password");
+              }}
+              className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm transition hover:bg-slate-50"
             >
               <KeyRound className="h-4 w-4 text-slate-500" />
               修改密码
-            </Link>
+            </button>
             {user.is_admin ? (
-              <Link
-                href="/admin"
-                onClick={() => setMenuOpen(false)}
-                className="flex items-center gap-2 px-4 py-2 text-sm transition hover:bg-slate-50"
+              <button
+                type="button"
+                onClick={() => openRootPage("settings")}
+                className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm transition hover:bg-slate-50"
               >
                 <Settings className="h-4 w-4 text-slate-500" />
                 系统管理
-              </Link>
+              </button>
             ) : null}
             <button
               type="button"

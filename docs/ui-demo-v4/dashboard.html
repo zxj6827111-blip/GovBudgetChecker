@@ -1,0 +1,293 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>年度审校工作台 - GovBudgetChecker v4 DEMO</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">预</div>
+      <div>
+        <strong>预决算公开材料审校系统</strong>
+        <span>对齐 KIROGOVCOMPARE 的工作台逻辑</span>
+      </div>
+    </div>
+    <nav class="nav">
+      <a class="active" href="./dashboard.html"><span class="icon">台</span>年度审校工作台</a>
+      <a href="./issues-dashboard.html"><span class="icon">题</span>问题数据看板</a>
+      <a href="./archive.html"><span class="icon">年</span>年度档案</a>
+      <a href="./upload.html"><span class="icon">传</span>材料上传</a>
+      <a href="./task-center.html"><span class="icon">任</span>任务中心</a>
+      <a href="#"><span class="icon">设</span>系统管理</a>
+    </nav>
+    <div class="topbar-right">当前工作区：上海市 / 普陀区 / 真如镇街道</div>
+  </header>
+
+  <main class="page">
+    <section class="page-head">
+      <div>
+        <p class="eyebrow">年度审校工作台</p>
+        <h1>一个工作台同时看当年办理和往年数据</h1>
+        <p class="subtle">工作人员默认进入当前检查年度；需要查往年时直接切换年度批次，同一页保留材料、问题、整改、下载结果，不再把历史数据藏在另一个入口里。</p>
+      </div>
+      <div class="toolbar">
+        <a class="btn" href="./issues-dashboard.html"><span class="icon">题</span>问题数据看板</a>
+        <a class="btn" href="./archive.html"><span class="icon">档</span>完整年度档案</a>
+        <a class="btn" href="./task-center.html"><span class="icon">任</span>任务中心</a>
+        <a class="btn primary" href="./upload.html"><span class="icon">传</span>上传材料</a>
+      </div>
+    </section>
+
+    <section class="year-switch-grid">
+      <article class="year-switch-card current">
+        <div class="year-card-top">
+          <div>
+            <span class="tag blue">当前办理</span>
+            <strong>2026 检查年度</strong>
+          </div>
+          <span class="tag line">默认显示</span>
+        </div>
+        <p class="subtle">审 2026 年预算公开 + 2025 年决算公开。</p>
+        <div class="mini-metrics">
+          <span class="metric-pill blue">预算 38/46</span>
+          <span class="metric-pill teal">决算 33/46</span>
+          <span class="metric-pill red">高风险 12</span>
+        </div>
+      </article>
+      <article class="year-switch-card">
+        <div class="year-card-top">
+          <div>
+            <span class="tag line">往年</span>
+            <strong>2025 检查年度</strong>
+          </div>
+          <span class="tag blue">可追溯</span>
+        </div>
+        <p class="subtle">审 2025 年预算公开 + 2024 年决算公开。</p>
+        <div class="mini-metrics">
+          <span class="metric-pill blue">预算 46/46</span>
+          <span class="metric-pill teal">决算 44/46</span>
+          <span class="metric-pill">归档包 8</span>
+        </div>
+      </article>
+      <article class="year-switch-card">
+        <div class="year-card-top">
+          <div>
+            <span class="tag line">往年</span>
+            <strong>2024 检查年度</strong>
+          </div>
+          <span class="tag teal">已归档</span>
+        </div>
+        <p class="subtle">审 2024 年预算公开 + 2023 年决算公开。</p>
+        <div class="mini-metrics">
+          <span class="metric-pill blue">预算 45/45</span>
+          <span class="metric-pill teal">决算 45/45</span>
+          <span class="metric-pill">问题 51</span>
+        </div>
+      </article>
+      <article class="year-switch-card readonly">
+        <div class="year-card-top">
+          <div>
+            <span class="tag line">往年</span>
+            <strong>2023 检查年度</strong>
+          </div>
+          <span class="tag line">只读</span>
+        </div>
+        <p class="subtle">历史材料、问题清单、整改记录和下载包只读查看。</p>
+        <div class="mini-metrics">
+          <span class="metric-pill blue">预算 43/43</span>
+          <span class="metric-pill teal">决算 42/43</span>
+          <span class="metric-pill">归档包 6</span>
+        </div>
+      </article>
+    </section>
+
+    <section class="summary-grid">
+      <div class="summary-card"><span>选中年度应覆盖单位</span><strong>46</strong></div>
+      <div class="summary-card blue"><span>2026 预算已上传</span><strong>38</strong></div>
+      <div class="summary-card teal"><span>2025 决算已上传</span><strong>33</strong></div>
+      <div class="summary-card red"><span>本批次有问题单位</span><strong>17</strong></div>
+      <div class="summary-card amber"><span>待人工复核问题</span><strong>52</strong></div>
+      <div class="summary-card"><span>可下载结果包</span><strong>9</strong></div>
+    </section>
+
+    <section class="layout-workbench-v2">
+      <aside class="panel flat">
+        <div class="panel-header"><h2>年度与单位筛选</h2><span class="tag line">工作区固定</span></div>
+        <div class="panel-body stack">
+          <div class="filter-block">
+            <label>地区</label>
+            <strong>上海市 / 普陀区 / 真如镇街道</strong>
+            <span class="muted-cell">地区配置只在系统管理中维护，日常不重复配置。</span>
+          </div>
+          <div class="filter-block">
+            <label>检查年度</label>
+            <div class="segmented vertical">
+              <span class="active-blue">2026 当前</span>
+              <span>2025 往年</span>
+              <span>2024 往年</span>
+              <span>2023 只读</span>
+            </div>
+          </div>
+          <div class="filter-block">
+            <label>单位范围</label>
+            <div class="selector-list compact">
+              <div class="selector-item selected"><span>全部单位</span><span>46</span></div>
+              <div class="selector-item"><span>街道本级</span><span>2</span></div>
+              <div class="selector-item"><span>社区事务受理服务中心</span><span>2</span></div>
+              <div class="selector-item"><span>城市运行管理中心</span><span>2</span></div>
+              <div class="selector-item"><span>综合行政执法队</span><span>2</span></div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="stack">
+        <section class="panel">
+          <div class="panel-header">
+            <h2>2026 检查年度总览</h2>
+            <div class="segmented"><span class="active-blue">当前批次</span><span>预算</span><span>决算</span><span>历史对比</span></div>
+          </div>
+          <div class="panel-body year-overview-grid">
+            <article class="period-card blue">
+              <div class="period-head">
+                <span class="tag blue">预算</span>
+                <strong>2026 年预算公开</strong>
+              </div>
+              <div class="progress-row"><span>上传覆盖</span><div class="bar-track"><div class="bar-fill" style="width: 83%;"></div></div><strong>38/46</strong></div>
+              <div class="progress-row"><span>检查完成</span><div class="bar-track"><div class="bar-fill" style="width: 71%;"></div></div><strong>27</strong></div>
+              <div class="progress-row"><span>待复核</span><div class="bar-track"><div class="bar-fill amber" style="width: 42%;"></div></div><strong>31</strong></div>
+            </article>
+            <article class="period-card teal">
+              <div class="period-head">
+                <span class="tag teal">决算</span>
+                <strong>2025 年决算公开</strong>
+              </div>
+              <div class="progress-row"><span>上传覆盖</span><div class="bar-track"><div class="bar-fill teal" style="width: 72%;"></div></div><strong>33/46</strong></div>
+              <div class="progress-row"><span>检查完成</span><div class="bar-track"><div class="bar-fill teal" style="width: 63%;"></div></div><strong>21</strong></div>
+              <div class="progress-row"><span>待复核</span><div class="bar-track"><div class="bar-fill amber" style="width: 35%;"></div></div><strong>21</strong></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>选中年度材料清单</h2>
+            <div class="segmented"><span>全部</span><span class="active-blue">预算</span><span class="active-teal">决算</span><span>有问题</span><span>未上传</span></div>
+          </div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>单位/材料</th>
+                <th>年度归属</th>
+                <th>类型</th>
+                <th>状态</th>
+                <th>问题</th>
+                <th>结果</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="strong-cell">真如镇街道本级</span><span class="muted-cell">2026 年预算公开材料</span></td>
+                <td>2026 检查年度</td>
+                <td><span class="tag blue">预算</span></td>
+                <td>待复核</td>
+                <td><span class="tag red">8</span></td>
+                <td>可下载</td>
+                <td><a class="btn" href="./material-detail.html"><span class="icon">看</span>查看</a></td>
+              </tr>
+              <tr>
+                <td><span class="strong-cell">真如镇街道本级</span><span class="muted-cell">2025 年决算公开材料</span></td>
+                <td>2026 检查年度</td>
+                <td><span class="tag teal">决算</span></td>
+                <td>待复核</td>
+                <td><span class="tag red">5</span></td>
+                <td>可下载</td>
+                <td><a class="btn" href="./material-detail.html"><span class="icon">看</span>查看</a></td>
+              </tr>
+              <tr>
+                <td><span class="strong-cell">社区事务受理服务中心</span><span class="muted-cell">2025 年预算公开材料</span></td>
+                <td>2025 检查年度</td>
+                <td><span class="tag blue">预算</span></td>
+                <td>已归档</td>
+                <td><span class="tag amber">3</span></td>
+                <td>历史包</td>
+                <td><a class="btn" href="./archive.html"><span class="icon">档</span>归档</a></td>
+              </tr>
+              <tr>
+                <td><span class="strong-cell">城市运行管理中心</span><span class="muted-cell">2024 年决算公开材料</span></td>
+                <td>2025 检查年度</td>
+                <td><span class="tag teal">决算</span></td>
+                <td>已整改</td>
+                <td><span class="tag line">0</span></td>
+                <td>历史包</td>
+                <td><a class="btn" href="./archive.html"><span class="icon">看</span>查看</a></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header"><h2>跨年度问题趋势</h2><span class="tag line">当前工作区</span></div>
+          <div class="panel-body chart-grid">
+            <div class="bar-list">
+              <div class="bar-row"><span>2026 检查年度</span><div class="bar-track"><div class="bar-fill red" style="width: 88%;"></div></div><strong>99</strong></div>
+              <div class="bar-row"><span>2025 检查年度</span><div class="bar-track"><div class="bar-fill amber" style="width: 66%;"></div></div><strong>74</strong></div>
+              <div class="bar-row"><span>2024 检查年度</span><div class="bar-track"><div class="bar-fill teal" style="width: 48%;"></div></div><strong>51</strong></div>
+            </div>
+            <div class="bar-list">
+              <div class="bar-row"><span>规则检查</span><div class="bar-track"><div class="bar-fill" style="width: 72%;"></div></div><strong>61</strong></div>
+              <div class="bar-row"><span>AI 辅助</span><div class="bar-track"><div class="bar-fill teal" style="width: 45%;"></div></div><strong>38</strong></div>
+              <div class="bar-row"><span>高风险</span><div class="bar-track"><div class="bar-fill red" style="width: 28%;"></div></div><strong>12</strong></div>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <aside class="stack">
+        <section class="panel flat">
+          <div class="panel-header"><h2>当年待办</h2><a class="btn" href="./task-center.html"><span class="icon">任</span>全部</a></div>
+          <div class="priority-list">
+            <div class="task-item"><div class="score red">缺</div><div><strong>13 份材料未上传</strong><span class="muted-cell">优先催办未提交单位</span></div><span class="tag red">高</span></div>
+            <div class="task-item"><div class="score amber">核</div><div><strong>52 个问题待人工复核</strong><span class="muted-cell">规则检查与 AI 辅助混合</span></div><span class="tag amber">今天</span></div>
+            <div class="task-item"><div class="score blue">下</div><div><strong>9 个结果包可下载</strong><span class="muted-cell">Excel、截图定位 PDF、整改清单</span></div><span class="tag blue">可取</span></div>
+          </div>
+        </section>
+
+        <section class="panel flat">
+          <div class="panel-header"><h2>往年快速查看</h2><a class="btn" href="./archive.html"><span class="icon">档</span>完整档案</a></div>
+          <div class="panel-body stack">
+            <div class="history-row">
+              <strong>2025 检查年度</strong>
+              <span class="muted-cell">预算 2025 / 决算 2024，历史问题 74</span>
+              <a class="btn" href="./archive.html"><span class="icon">看</span>查看</a>
+            </div>
+            <div class="history-row">
+              <strong>2024 检查年度</strong>
+              <span class="muted-cell">预算 2024 / 决算 2023，历史问题 51</span>
+              <a class="btn" href="./archive.html"><span class="icon">看</span>查看</a>
+            </div>
+            <div class="history-row">
+              <strong>2023 检查年度</strong>
+              <span class="muted-cell">只读归档，保留下载包 6 个</span>
+              <a class="btn" href="./archive.html"><span class="icon">下</span>下载</a>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel flat">
+          <div class="panel-header"><h2>工作台边界</h2><span class="tag line">说明</span></div>
+          <div class="panel-body stack">
+            <div class="note-box">当年：用于催报、检查、复核、下载。</div>
+            <div class="note-box teal">往年：用于查历史材料、历史问题、整改记录和归档下载包。</div>
+            <div class="note-box amber">地区配置：仍放在系统管理，日常工作台只读取当前工作区。</div>
+          </div>
+        </section>
+      </aside>
+    </section>
+  </main>
+</body>
+</html>

@@ -358,7 +358,7 @@ export default function OrganizationDetailView({
         return;
       }
 
-      const fallbackRes = await fetch(`/api/organizations`, {
+      const fallbackRes = await fetch(`/api/organizations?stats=none`, {
         signal: controller.signal,
         cache: "no-store",
       });

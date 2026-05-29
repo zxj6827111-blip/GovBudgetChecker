@@ -16,6 +16,8 @@ type OrganizationsResponse = {
 
 const REGION_NAME = "上海市普陀区";
 
+const MAX_SEARCHLESS_VISIBLE_NODES = 220;
+
 async function fetchJson<T>(url: string, fallback: T): Promise<T> {
   try {
     const response = await fetch(url, { cache: "no-store" });
@@ -77,6 +79,22 @@ function filterOrganizations(nodes: OrganizationRecord[], query: string): Organi
   });
 }
 
+function countVisibleOrganizations(
+  nodes: OrganizationRecord[],
+  expanded: Record<string, boolean>,
+  forceExpanded: boolean,
+): number {
+  let total = 0;
+  for (const node of nodes) {
+    total += 1;
+    const children = Array.isArray(node.children) ? node.children : [];
+    if (children.length > 0 && (forceExpanded || expanded[node.id])) {
+      total += countVisibleOrganizations(children, expanded, forceExpanded);
+    }
+  }
+  return total;
+}
+
 function highlightMatch(text: string, query: string) {
   if (!query) {
     return text;
@@ -103,6 +121,14 @@ export default function Sidebar() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const selectedId = useMemo(() => pathname.match(/^\/department\/([^/]+)/)?.[1] ?? "", [pathname]);
+  const openOrganizationAdmin = () => {
+    if (pathname === "/") {
+      window.history.replaceState(null, "", "/?page=settings&section=organization");
+      window.location.reload();
+      return;
+    }
+    router.push("/?page=settings&section=organization");
+  };
   const searchQuery = searchParams.get("q") ?? "";
   const normalizedSearchQuery = useMemo(
     () => normalizeSearchValue(searchQuery),
@@ -143,16 +169,22 @@ export default function Sidebar() {
     let alive = true;
 
     async function load() {
-      const payload = await fetchJson<OrganizationsResponse>("/api/organizations", { tree: [] });
+      const payload = await fetchJson<OrganizationsResponse>("/api/organizations?stats=none", { tree: [] });
       if (!alive) {
         return;
       }
 
       const tree = Array.isArray(payload.tree) ? payload.tree : [];
+      const initialExpanded = buildInitialExpanded(tree);
+      const initialVisibleNodeCount = countVisibleOrganizations(tree, initialExpanded, false);
       setOrgs(tree);
       setExpanded((current) => {
         const nextExpanded =
-          Object.keys(current).length > 0 ? { ...current } : buildInitialExpanded(tree);
+          Object.keys(current).length > 0
+            ? { ...current }
+            : initialVisibleNodeCount > MAX_SEARCHLESS_VISIBLE_NODES
+              ? {}
+              : initialExpanded;
         if (selectedId) {
           for (const id of findPathToNode(tree, selectedId)) {
             nextExpanded[id] = true;
@@ -178,7 +210,6 @@ export default function Sidebar() {
     () => (normalizedSearchQuery ? filterOrganizations(orgs, normalizedSearchQuery) : orgs),
     [normalizedSearchQuery, orgs],
   );
-
   const toggle = (id: string) => {
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
   };
@@ -304,12 +335,13 @@ export default function Sidebar() {
 
         <div className="flex items-center justify-between border-b border-border bg-white p-4">
           <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-500">组织架构</h2>
-          <Link
-            href={"/admin?tab=organization" as Route}
+          <button
+            type="button"
+            onClick={openOrganizationAdmin}
             className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
           >
             后台维护
-          </Link>
+          </button>
         </div>
       </div>
 

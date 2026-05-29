@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
 import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { getLocalJobDetail, getLocalStructuredIngest, LocalDataError } from "@/lib/localData";
 
 export const dynamic = "force-dynamic";
 
@@ -26,8 +27,19 @@ export async function GET(
       cache: "no-store",
     });
     const payload = parsePayload(await response.text());
+    if ((response.status === 401 || response.status === 403) && process.env.NODE_ENV !== "production") {
+      const rawJobUuid = decodeURIComponent(jobUuid);
+      const [detail, structured_ingest] = await Promise.all([
+        getLocalJobDetail(rawJobUuid),
+        getLocalStructuredIngest(rawJobUuid).catch(() => ({})),
+      ]);
+      return NextResponse.json({ ...detail, structured_ingest, source: "local-fallback" }, { status: 200 });
+    }
     return NextResponse.json(payload, { status: response.status });
   } catch (error) {
+    if (error instanceof LocalDataError) {
+      return NextResponse.json({ detail: error.message }, { status: error.status });
+    }
     console.error("Failed to fetch persisted analysis result detail:", error);
     return NextResponse.json(
       { detail: "failed to fetch persisted analysis result detail" },

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录页 DEMO - 预决算公开材料审校系统</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="login-page">
+    <section class="login-intro">
+      <div class="brand">
+        <div class="brand-mark">GB</div>
+        <div>
+          <div class="brand-title">预决算公开材料审校系统</div>
+          <div class="brand-subtitle">GovBudgetChecker UI Demo</div>
+        </div>
+      </div>
+      <h1 class="login-title">面向部门预算、单位预算、部门决算的统一审校工作台</h1>
+      <p class="subtle" style="margin-top:14px;max-width:640px">
+        工作人员登录后进入本系统工作台，按年度、部门、预算/决算类型快速处理上传、复核、证据定位和导出报告。
+      </p>
+      <div class="login-stats">
+        <div class="stat-mini">
+          <span class="subtle">已接入报告</span>
+          <strong>1,286</strong>
+        </div>
+        <div class="stat-mini">
+          <span class="subtle">预算材料</span>
+          <strong style="color:var(--budget)">742</strong>
+        </div>
+        <div class="stat-mini">
+          <span class="subtle">决算材料</span>
+          <strong style="color:var(--final)">544</strong>
+        </div>
+      </div>
+    </section>
+
+    <section class="card login-panel">
+      <div class="badge neutral">系统登录</div>
+      <h2 style="margin-top:14px">进入审校工作台</h2>
+      <p class="subtle" style="margin-top:8px">本页只作为 GovBudgetChecker 登录入口，不展示统一门户。</p>
+      <form style="margin-top:22px">
+        <div class="form-group">
+          <label>用户名</label>
+          <input class="input" value="review_admin" aria-label="用户名">
+        </div>
+        <div class="form-group">
+          <label>密码</label>
+          <input class="input" type="password" value="password" aria-label="密码">
+        </div>
+        <button type="button" class="button primary" style="width:100%;margin-top:8px">登录工作台</button>
+      </form>
+      <div class="note" style="margin-top:18px">
+        示例效果：登录后进入 GovBudgetChecker 工作台，不进入跨系统门户。
+      </div>
+    </section>
+  </main>
+</body>
+</html>

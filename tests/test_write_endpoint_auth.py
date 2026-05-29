@@ -22,8 +22,12 @@ ADMIN_PASSWORD = "AdminPass123"
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     user_file = tmp_path / "users.json"
+    upload_root = tmp_path / "uploads"
+    upload_root.mkdir()
     monkeypatch.setenv("USER_FILE", str(user_file))
     monkeypatch.setenv("DEFAULT_ADMIN_PASSWORD", ADMIN_PASSWORD)
+    monkeypatch.setenv("JOB_QUEUE_ENABLED", "false")
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", upload_root)
     reset_user_store()
     with TestClient(app) as test_client:
         yield test_client
@@ -238,7 +242,9 @@ class TestWriteEndpointsWithValidSession:
         )
         assert resp.status_code == 200
 
-    def test_regular_user_can_ignore_issue(self, client: TestClient, tmp_path):
+    def test_regular_user_can_ignore_issue(
+        self, client: TestClient, tmp_path, monkeypatch
+    ):
         admin_token = _login(client, "admin", ADMIN_PASSWORD)
         _create_user(client, admin_token, "qa", "QaPass1")
         user_token = _login(client, "qa", "QaPass1")
@@ -260,17 +266,13 @@ class TestWriteEndpointsWithValidSession:
                 },
             },
         )
-        original_root = runtime.UPLOAD_ROOT
-        runtime.UPLOAD_ROOT = tmp_path
-        try:
-            resp = client.post(
-                "/api/jobs/job-ignore-test/issues/ignore",
-                headers=_headers(user_token),
-                json={"issue_id": "iss-1"},
-            )
-            assert resp.status_code == 200
-        finally:
-            runtime.UPLOAD_ROOT = original_root
+        monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+        resp = client.post(
+            "/api/jobs/job-ignore-test/issues/ignore",
+            headers=_headers(user_token),
+            json={"issue_id": "iss-1"},
+        )
+        assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------

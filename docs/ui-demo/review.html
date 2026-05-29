@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>审校详情 DEMO - 预决算公开材料审校系统</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="demo-shell">
+    <header class="demo-header">
+      <div class="brand"><div class="brand-mark">GB</div><div><div class="brand-title">预决算公开材料审校系统</div><div class="brand-subtitle">审校详情原型</div></div></div>
+      <div class="top-actions"><button class="button">返回区财政局</button><button class="button">重新分析</button><button class="button primary">导出审校报告</button></div>
+    </header>
+    <main class="page page--wide">
+      <section class="page-header">
+        <div>
+          <div class="badge-row"><span class="badge budget">部门预算</span><span class="badge warning">待人工复核</span><span class="badge danger">3 高风险</span></div>
+          <h1 style="margin-top:10px">区财政局2026年部门预算公开.pdf</h1>
+          <p class="subtle" style="margin-top:6px">区财政局 / 2026 年 / 预算编制说明、九张表、三公经费、绩效目标同步检查。</p>
+        </div>
+        <div class="segmented"><span class="segment active">问题复核</span><span class="segment">材料预览</span><span class="segment">处理记录</span></div>
+      </section>
+
+      <section class="review-layout">
+        <aside class="issue-list">
+          <div class="panel-header"><div><h2>问题清单</h2><p class="subtle">按严重级别和页码排序。</p></div></div>
+          <div class="panel-body" style="padding-bottom:0">
+            <div class="segmented"><span class="segment active">全部 8</span><span class="segment">预算</span><span class="segment">高风险</span></div>
+          </div>
+          <div class="issue-list-body">
+            <article class="issue-card active">
+              <div class="badge-row"><span class="badge danger">high</span><span class="badge budget">C-001</span><span class="badge neutral">第 12 页</span></div>
+              <div class="issue-title">三公经费预算合计与分项之和不一致</div>
+              <p class="subtle" style="margin-top:6px">合计 35.20 万元，分项合计 33.00 万元。</p>
+            </article>
+            <article class="issue-card">
+              <div class="badge-row"><span class="badge danger">critical</span><span class="badge budget">BUD-T9</span><span class="badge neutral">第 18 页</span></div>
+              <div class="issue-title">绩效目标表缺少重点项目资金安排</div>
+              <p class="subtle" style="margin-top:6px">项目支出说明提到绩效目标，但未看到对应表格。</p>
+            </article>
+            <article class="issue-card">
+              <div class="badge-row"><span class="badge warning">manual_review</span><span class="badge neutral">OCR</span><span class="badge neutral">第 6 页</span></div>
+              <div class="issue-title">功能分类表跨页，金额列可能错位</div>
+              <p class="subtle" style="margin-top:6px">需要人工确认表头延续关系。</p>
+            </article>
+          </div>
+        </aside>
+
+        <section class="evidence-panel">
+          <div class="panel-header">
+            <div><h2>证据与处理建议</h2><p class="subtle">当前问题：三公经费预算勾稽</p></div>
+            <span class="badge danger">优先处理</span>
+          </div>
+          <div class="panel-body" style="display:grid;gap:14px">
+            <div class="evidence-grid">
+              <div class="evidence-box"><span>规则编号</span><strong>C-001</strong></div>
+              <div class="evidence-box"><span>表格/章节</span><strong>财政拨款“三公”经费预算表</strong></div>
+              <div class="evidence-box"><span>期望值</span><strong>10.00 + 20.00 + 3.00 = 33.00</strong></div>
+              <div class="evidence-box"><span>实际值</span><strong style="color:var(--danger)">35.20</strong></div>
+            </div>
+            <div class="card" style="box-shadow:none">
+              <h3>命中片段</h3>
+              <p class="subtle" style="margin-top:8px">合计 35.20 万元，其中因公出国（境）费 10.00 万元，公务用车购置及运行费 20.00 万元，公务接待费 3.00 万元。</p>
+            </div>
+            <div class="card" style="box-shadow:none;background:#fff7f7;border-color:#fecaca">
+              <h3 style="color:var(--danger)">审校建议</h3>
+              <p class="subtle" style="margin-top:8px">复核三公经费合计或分项金额，并同步修正文中说明。若为取整误差，应在说明中补充口径。</p>
+            </div>
+            <div class="button-row">
+              <button class="button primary">标记已确认</button>
+              <button class="button">设为待部门反馈</button>
+              <button class="button danger">忽略此问题</button>
+            </div>
+          </div>
+        </section>
+
+        <aside class="pdf-panel">
+          <div class="panel-header"><div><h2>PDF 定位</h2><p class="subtle">第 12 页，已定位到表格区域。</p></div></div>
+          <div class="panel-body">
+            <div class="pdf-page">
+              <div class="pdf-title">财政拨款“三公”经费预算表</div>
+              <div class="pdf-line"></div>
+              <div class="pdf-line short"></div>
+              <div class="pdf-highlight">
+                <div class="badge-row"><span class="badge budget">预算</span><span class="badge danger">红框定位</span></div>
+                <p class="subtle" style="margin-top:8px">合计 35.20 / 因公出国 10.00 / 公务用车 20.00 / 公务接待 3.00</p>
+              </div>
+              <div class="pdf-line"></div>
+              <div class="pdf-line"></div>
+              <div class="pdf-line short"></div>
+              <div class="pdf-line"></div>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

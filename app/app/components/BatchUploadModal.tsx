@@ -237,18 +237,26 @@ export default function BatchUploadModal({
 
     const visibleDepartments = useMemo(() => {
         const keyword = departmentFilter.trim().toLowerCase();
-        if (!keyword) return departments;
-        return departments.filter((department) =>
+        const filtered = !keyword ? departments : departments.filter((department) =>
             department.name.toLowerCase().includes(keyword)
         );
-    }, [departmentFilter, departments]);
+        if (!bulkDepartmentId || filtered.some((department) => department.id === bulkDepartmentId)) {
+            return filtered;
+        }
+        const selectedDepartment = departmentMap.get(bulkDepartmentId);
+        return selectedDepartment ? [selectedDepartment, ...filtered] : filtered;
+    }, [bulkDepartmentId, departmentFilter, departmentMap, departments]);
 
     const getVisibleUnits = useCallback(
-        (departmentId: string) => {
+        (departmentId: string, selectedUnitId = "") => {
             const units = unitsByDepartment.get(departmentId) || [];
             const keyword = unitFilter.trim().toLowerCase();
-            if (!keyword) return units;
-            return units.filter((unit) => unit.name.toLowerCase().includes(keyword));
+            const filtered = !keyword ? units : units.filter((unit) => unit.name.toLowerCase().includes(keyword));
+            if (!selectedUnitId || filtered.some((unit) => unit.id === selectedUnitId)) {
+                return filtered;
+            }
+            const selectedUnit = units.find((unit) => unit.id === selectedUnitId);
+            return selectedUnit ? [selectedUnit, ...filtered] : filtered;
         },
         [unitFilter, unitsByDepartment]
     );
@@ -1361,7 +1369,7 @@ export default function BatchUploadModal({
                                         <option value="">
                                             {bulkDepartmentId ? "不选单位则按部门上传" : "请先选择部门"}
                                         </option>
-                                        {getVisibleUnits(bulkDepartmentId).map((unit) => (
+                                        {getVisibleUnits(bulkDepartmentId, bulkUnitId).map((unit) => (
                                             <option key={unit.id} value={unit.id}>
                                                 {unit.name}
                                             </option>
@@ -1467,7 +1475,7 @@ export default function BatchUploadModal({
                                                     <option value="">
                                                         {resolveDepartmentId(fileItem) ? "不选单位则按部门上传" : "请先选择部门"}
                                                     </option>
-                                                    {getVisibleUnits(resolveDepartmentId(fileItem)).map((unit) => (
+                                                    {getVisibleUnits(resolveDepartmentId(fileItem), resolveUnitId(fileItem)).map((unit) => (
                                                         <option key={unit.id} value={unit.id}>
                                                             {unit.name}
                                                         </option>

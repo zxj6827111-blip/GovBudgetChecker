@@ -305,6 +305,64 @@ async function readJsonFile<T>(path: string, fallback: T): Promise<T> {
   }
 }
 
+function normalizeStoredOrganizations(
+  payload: { organizations?: StoredOrganization[] },
+): StoredOrganization[] {
+  return Array.isArray(payload.organizations)
+    ? payload.organizations.filter(isRecord).map((item) => ({
+        id: String(item.id ?? ""),
+        name: String(item.name ?? ""),
+        level: String(item.level ?? ""),
+        parent_id: item.parent_id ? String(item.parent_id) : null,
+        code: item.code ? String(item.code) : null,
+        keywords: Array.isArray(item.keywords) ? item.keywords.map((value) => String(value)) : [],
+        created_at: toNullableNumber(item.created_at) ?? undefined,
+        updated_at: toNullableNumber(item.updated_at) ?? undefined,
+      }))
+    : [];
+}
+
+async function readStoredOrganizations(): Promise<StoredOrganization[]> {
+  const payload = await readJsonFile<{ organizations?: StoredOrganization[] }>(
+    ORGANIZATIONS_FILE,
+    { organizations: [] },
+  );
+  return normalizeStoredOrganizations(payload);
+}
+
+function buildChildrenByParent(
+  organizations: StoredOrganization[],
+): Map<string | null, StoredOrganization[]> {
+  const childrenByParent = new Map<string | null, StoredOrganization[]>();
+  for (const org of organizations) {
+    const siblings = childrenByParent.get(org.parent_id ?? null) ?? [];
+    siblings.push(org);
+    childrenByParent.set(org.parent_id ?? null, siblings);
+  }
+  return childrenByParent;
+}
+
+function buildLightOrganizationTree(
+  organizations: StoredOrganization[],
+): LocalOrganizationTreeNode[] {
+  const childrenByParent = buildChildrenByParent(organizations);
+  const buildTreeNode = (org: StoredOrganization): LocalOrganizationTreeNode => {
+    const payload = toOrganizationPayload(org);
+    return {
+      ...payload,
+      children: (childrenByParent.get(org.id) ?? [])
+        .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"))
+        .map(buildTreeNode),
+      job_count: 0,
+      issue_count: 0,
+    };
+  };
+
+  return (childrenByParent.get(null) ?? [])
+    .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"))
+    .map(buildTreeNode);
+}
+
 function buildOrgLookup(orgs: StoredOrganization[]): Map<string, StoredOrganization[]> {
   const lookup = new Map<string, StoredOrganization[]>();
 
@@ -545,24 +603,9 @@ function buildJobSummary(
 }
 
 async function buildDataset(): Promise<LocalDataset> {
-  const organizationsPayload = await readJsonFile<{ organizations?: StoredOrganization[] }>(
-    ORGANIZATIONS_FILE,
-    { organizations: [] },
-  );
   const linksPayload = await readJsonFile<{ links?: StoredJobLink[] }>(JOB_LINKS_FILE, { links: [] });
 
-  const organizations = Array.isArray(organizationsPayload.organizations)
-    ? organizationsPayload.organizations.filter(isRecord).map((item) => ({
-        id: String(item.id ?? ""),
-        name: String(item.name ?? ""),
-        level: String(item.level ?? ""),
-        parent_id: item.parent_id ? String(item.parent_id) : null,
-        code: item.code ? String(item.code) : null,
-        keywords: Array.isArray(item.keywords) ? item.keywords.map((value) => String(value)) : [],
-        created_at: toNullableNumber(item.created_at) ?? undefined,
-        updated_at: toNullableNumber(item.updated_at) ?? undefined,
-      }))
-    : [];
+  const organizations = await readStoredOrganizations();
   const links = Array.isArray(linksPayload.links)
     ? linksPayload.links.filter(isRecord).map((item) => ({
         job_id: String(item.job_id ?? ""),
@@ -574,12 +617,9 @@ async function buildDataset(): Promise<LocalDataset> {
     : [];
 
   const orgById = new Map<string, StoredOrganization>();
-  const childrenByParent = new Map<string | null, StoredOrganization[]>();
+  const childrenByParent = buildChildrenByParent(organizations);
   for (const org of organizations) {
     orgById.set(org.id, org);
-    const siblings = childrenByParent.get(org.parent_id ?? null) ?? [];
-    siblings.push(org);
-    childrenByParent.set(org.parent_id ?? null, siblings);
   }
 
   const orgLookup = buildOrgLookup(organizations);
@@ -885,7 +925,15 @@ function collectDescendantOrgIds(dataset: LocalDataset, orgId: string): string[]
   return collected;
 }
 
-export async function getLocalOrganizationsTree() {
+export async function getLocalOrganizationsTree(options?: { stats?: boolean }) {
+  if (options?.stats === false) {
+    const organizations = await readStoredOrganizations();
+    return {
+      tree: buildLightOrganizationTree(organizations),
+      total: organizations.length,
+    };
+  }
+
   const dataset = await getDataset();
   return {
     tree: dataset.tree,

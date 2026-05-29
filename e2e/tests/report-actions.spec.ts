@@ -433,6 +433,109 @@ test.describe("Report actions", () => {
     expect(dialogMessages.some((message) => message.includes("alert:"))).toBe(true);
   });
 
+  test("department page loads reports in pages and keeps filters usable", async ({ page }) => {
+    test.setTimeout(60_000);
+
+    let firstPageCalls = 0;
+    let secondPageCalls = 0;
+    const jobs = Array.from({ length: 95 }, (_, index) => ({
+      job_id: `job-page-${String(index + 1).padStart(3, "0")}`,
+      filename: `report-page-${index + 1}.pdf`,
+      status: index % 7 === 0 ? "started" : "completed",
+      report_year: index < 80 ? 2025 : 2024,
+      report_kind: index % 2 === 0 ? "budget" : "final",
+      merged_issue_total: index % 5,
+      issue_error: index % 3 === 0 ? 1 : 0,
+      review_item_count: index % 11 === 0 ? 1 : 0,
+      organization_id: "dept-001",
+      organization_name: "Finance Bureau",
+      updated_ts: 1_710_000_000 + index,
+      ts: 1_710_000_000 + index,
+    }));
+
+    await page.context().addCookies([sessionCookie]);
+    await page.route("**/api/**", async (route) => {
+      const req = route.request();
+      const method = req.method().toUpperCase();
+      const url = new URL(req.url());
+      const path = url.pathname;
+
+      if (path === "/api/auth/me") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            user: {
+              username: "e2e-admin",
+              display_name: "E2E Admin",
+              is_admin: true,
+            },
+          }),
+        });
+        return;
+      }
+
+      if (path === "/api/organizations/list") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            organizations: [
+              {
+                id: "dept-001",
+                name: "Finance Bureau",
+                level: "department",
+                level_name: "department",
+                parent_id: null,
+              },
+            ],
+            total: 1,
+          }),
+        });
+        return;
+      }
+
+      if (path === "/api/organizations/dept-001/jobs" && method === "GET") {
+        const limit = Number(url.searchParams.get("limit") || 80);
+        const offset = Number(url.searchParams.get("offset") || 0);
+        if (offset === 0) firstPageCalls += 1;
+        if (offset === 80) secondPageCalls += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            jobs: jobs.slice(offset, offset + limit),
+            total: jobs.length,
+            limit,
+            offset,
+          }),
+        });
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({}),
+      });
+    });
+
+    await page.goto("/department/dept-001");
+
+    await expect(page.getByTestId("select-all-jobs")).toBeVisible({ timeout: 20_000 });
+    await expect.poll(() => firstPageCalls).toBe(1);
+    await expect(page.getByTestId("job-select-job-page-001")).toBeVisible();
+    await expect(page.getByTestId("job-select-job-page-095")).toHaveCount(0);
+
+    await page.getByTestId("load-more-jobs").click();
+    await expect.poll(() => secondPageCalls).toBe(1);
+    await expect(page.getByTestId("job-select-job-page-095")).toBeVisible();
+
+    await page.getByRole("combobox").first().selectOption("2024");
+    await expect(page.getByTestId("job-select-job-page-081")).toBeVisible();
+    await expect(page.getByTestId("job-select-job-page-001")).toHaveCount(0);
+  });
+
   test("department page can rename the current organization", async ({ page }) => {
     test.setTimeout(60_000);
 

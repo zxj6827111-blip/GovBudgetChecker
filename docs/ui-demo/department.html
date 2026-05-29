@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>部门页 DEMO - 预决算公开材料审校系统</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="demo-shell">
+    <header class="demo-header">
+      <div class="brand"><div class="brand-mark">GB</div><div><div class="brand-title">预决算公开材料审校系统</div><div class="brand-subtitle">部门任务原型</div></div></div>
+      <div class="top-actions"><button class="button">批量上传</button><button class="button primary">导出部门清单</button></div>
+    </header>
+    <main class="page page--wide">
+      <div class="department-layout">
+        <aside class="panel org-tree">
+          <div class="panel-header"><div><h2>组织结构</h2><p class="subtle">上海市普陀区</p></div></div>
+          <div class="panel-body"><input class="input" value="财政" aria-label="搜索组织"></div>
+          <div class="tree-list">
+            <div class="tree-item active"><span>区财政局</span><span class="badge danger">8</span></div>
+            <div class="tree-item tree-indent"><span>财政局本级</span><span class="badge warning">3</span></div>
+            <div class="tree-item tree-indent"><span>财政监督中心</span><span class="badge neutral">1</span></div>
+            <div class="tree-item"><span>区教育局</span><span class="badge warning">6</span></div>
+            <div class="tree-item"><span>区卫健委</span><span class="badge neutral">4</span></div>
+            <div class="tree-item"><span>区文旅局</span><span class="badge neutral">3</span></div>
+          </div>
+        </aside>
+
+        <section>
+          <div class="page-header">
+            <div>
+              <div class="eyebrow">DEPARTMENT</div>
+              <h1>区财政局</h1>
+              <p class="subtle" style="margin-top:6px">当前展示本部门及下属单位的预算、决算公开材料。</p>
+            </div>
+            <div class="button-row"><button class="button">重分析所选</button><button class="button primary">上传到本部门</button></div>
+          </div>
+
+          <section class="grid cols-4" style="margin-bottom:16px">
+            <div class="card metric"><div><div class="metric-label">预算报告</div><div class="metric-value" style="color:var(--budget)">42</div><div class="metric-note">2026 年为主</div></div></div>
+            <div class="card metric"><div><div class="metric-label">决算报告</div><div class="metric-value" style="color:var(--final)">38</div><div class="metric-note">2024 年度</div></div></div>
+            <div class="card metric"><div><div class="metric-label">待复核</div><div class="metric-value" style="color:var(--warning)">9</div><div class="metric-note">含 2 份类型待确认</div></div></div>
+            <div class="card metric"><div><div class="metric-label">高风险</div><div class="metric-value" style="color:var(--danger)">8</div><div class="metric-note">三公与核心表优先</div></div></div>
+          </section>
+
+          <div class="toolbar" style="justify-content:space-between;margin-bottom:12px">
+            <div class="segmented"><span class="segment active">全部</span><span class="segment">预算</span><span class="segment">决算</span><span class="segment">待复核</span><span class="segment">高风险</span></div>
+            <div class="toolbar"><select class="select" style="width:110px"><option>2026</option></select><select class="select" style="width:130px"><option>全部状态</option></select><input class="input" style="width:220px" value="三公" aria-label="搜索任务"></div>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th><input type="checkbox"></th><th>文件</th><th>类型</th><th>年度</th><th>问题</th><th>复核状态</th><th>更新时间</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr><td><input type="checkbox" checked></td><td><div class="file-name">区财政局2026年部门预算公开.pdf</div><div class="subtle">部门本级</div></td><td><span class="badge budget">部门预算</span></td><td>2026</td><td><span class="badge danger">3 高风险</span></td><td><span class="badge warning">待复核</span></td><td>05-22 09:42</td><td><button class="button">复核</button></td></tr>
+                <tr><td><input type="checkbox"></td><td><div class="file-name">财政监督中心2026年单位预算.pdf</div><div class="subtle">下属单位</div></td><td><span class="badge budget">单位预算</span></td><td>2026</td><td><span class="badge warning">2 待确认</span></td><td><span class="badge warning">类型待确认</span></td><td>05-22 10:08</td><td><button class="button">确认</button></td></tr>
+                <tr><td><input type="checkbox"></td><td><div class="file-name">区财政局2024年度部门决算.pdf</div><div class="subtle">部门本级</div></td><td><span class="badge final">部门决算</span></td><td>2024</td><td><span class="badge neutral">1 提示</span></td><td><span class="badge success">已完成</span></td><td>05-21 16:31</td><td><button class="button">查看</button></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

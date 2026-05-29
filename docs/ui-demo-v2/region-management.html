@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>地区与组织管理 v2 - GovBudgetChecker DEMO</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body class="app-shell">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">预</div>
+      <div>
+        <strong>预决算公开材料审校系统</strong>
+        <span>地区、部门、单位基础档案</span>
+      </div>
+    </div>
+    <nav class="nav">
+      <a href="./dashboard.html"><span class="icon-box">台</span>工作台</a>
+      <a href="./upload.html"><span class="icon-box">传</span>批量上传</a>
+      <a class="active" href="./region-management.html"><span class="icon-box">区</span>地区管理</a>
+      <a href="./department.html"><span class="icon-box">部</span>部门台账</a>
+      <a href="./review.html"><span class="icon-box">审</span>审校详情</a>
+    </nav>
+    <div class="topbar-right">
+      <span>上海市 / 黄浦区</span>
+      <div class="user-chip"><span class="icon-box">员</span>管理员</div>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="page-head">
+      <div>
+        <p class="eyebrow">地区与组织管理</p>
+        <h1>先把行政区划、部门、单位维护清楚，任务才不会归错</h1>
+        <p class="subtle">这页补上上一版缺失的地区管理：它不是门户入口，而是 GovBudgetChecker 内部的基础档案和任务归属配置。</p>
+      </div>
+      <div class="toolbar">
+        <a class="btn"><span class="icon-box">导</span>导入区划表</a>
+        <a class="btn primary"><span class="icon-box">新</span>新增地区</a>
+      </div>
+    </section>
+
+    <div class="task-strip">
+      <div class="step active"><div class="step-num">1</div><div><strong>行政区划</strong><span>市、区、街镇形成工作人员可见范围。</span></div></div>
+      <div class="step active"><div class="step-num">2</div><div><strong>组织结构</strong><span>部门、单位挂在具体地区下。</span></div></div>
+      <div class="step warning-step"><div class="step-num">3</div><div><strong>公开站点</strong><span>维护采集或上传来源，避免材料来源不明。</span></div></div>
+      <div class="step final-step"><div class="step-num">4</div><div><strong>材料归属</strong><span>预算、决算任务按地区和组织落入台账。</span></div></div>
+    </div>
+
+    <section class="dashboard-grid">
+      <aside class="panel flat">
+        <div class="panel-header">
+          <h2>行政区划树</h2>
+          <span class="tag line">3 层</span>
+        </div>
+        <div class="panel-body">
+          <div class="tree">
+            <div class="tree-row"><span>上海市</span><span>16 区</span></div>
+            <div class="tree-row active"><span class="indent">黄浦区</span><span class="tag line">当前</span></div>
+            <div class="tree-row"><span class="indent-2">南京东路街道</span><span>14</span></div>
+            <div class="tree-row"><span class="indent-2">外滩街道</span><span>9</span></div>
+            <div class="tree-row"><span class="indent-2">豫园街道</span><span>7</span></div>
+            <div class="tree-row"><span class="indent">徐汇区</span><span>待同步</span></div>
+            <div class="tree-row"><span class="indent">静安区</span><span>待同步</span></div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>黄浦区基础档案</h2>
+          <div class="toolbar">
+            <span class="tag budget">预算任务 128</span>
+            <span class="tag final">决算任务 96</span>
+          </div>
+        </div>
+        <div class="panel-body stack">
+          <div class="map-card">
+            <div class="region-tile">
+              <strong>行政区划代码</strong>
+              <span class="subtle">310101 · 当前启用</span>
+            </div>
+            <div class="region-tile">
+              <strong>公开站点</strong>
+              <span class="subtle">财政局站点、区政府站点、部门公开栏目共 8 个。</span>
+            </div>
+            <div class="region-tile">
+              <strong>部门与单位</strong>
+              <span class="subtle">42 个部门，116 个预算单位。</span>
+            </div>
+            <div class="region-tile">
+              <strong>任务归属规则</strong>
+              <span class="subtle">文件名、标题、来源栏目共同判定地区和组织。</span>
+            </div>
+          </div>
+
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>部门</th>
+                <th>单位数</th>
+                <th>预算公开</th>
+                <th>决算公开</th>
+                <th>站点映射</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="strong-cell">区教育局</span><span class="muted-cell">教育类部门</span></td>
+                <td>27</td>
+                <td><span class="tag budget">36</span></td>
+                <td><span class="tag final">31</span></td>
+                <td>已配置</td>
+                <td><a class="btn" href="./department.html"><span class="icon-box">进</span>进入台账</a></td>
+              </tr>
+              <tr>
+                <td><span class="strong-cell">区卫健委</span><span class="muted-cell">医疗卫生</span></td>
+                <td>22</td>
+                <td><span class="tag budget">24</span></td>
+                <td><span class="tag final">18</span></td>
+                <td>需补 1 个栏目</td>
+                <td><a class="btn"><span class="icon-box">配</span>配置</a></td>
+              </tr>
+              <tr>
+                <td><span class="strong-cell">南京东路街道</span><span class="muted-cell">街道组织</span></td>
+                <td>14</td>
+                <td><span class="tag budget">12</span></td>
+                <td><span class="tag final">9</span></td>
+                <td>标题匹配待确认</td>
+                <td><a class="btn"><span class="icon-box">核</span>复核</a></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <aside class="stack">
+        <section class="panel flat">
+          <div class="panel-header"><h2>导入与校验</h2></div>
+          <div class="panel-body">
+            <ul class="check-list">
+              <li><span class="check-dot">1</span>从区划 Excel 导入市、区、街镇。</li>
+              <li><span class="check-dot">2</span>从组织表导入部门与单位。</li>
+              <li><span class="check-dot">3</span>校验重复组织、缺失行政区划代码。</li>
+              <li><span class="check-dot">4</span>维护预算与决算公开栏目地址。</li>
+            </ul>
+          </div>
+        </section>
+        <section class="panel flat">
+          <div class="panel-header"><h2>权限影响</h2></div>
+          <div class="panel-body">
+            <div class="rail budget" style="margin-bottom: 10px;">
+              <div class="rail-title"><strong>预算权限</strong><span class="tag budget">预算</span></div>
+              <p class="subtle">用户只能看到授权地区下的预算公开任务。</p>
+            </div>
+            <div class="rail final">
+              <div class="rail-title"><strong>决算权限</strong><span class="tag final">决算</span></div>
+              <p class="subtle">决算公开可单独授权给复核人员。</p>
+            </div>
+          </div>
+        </section>
+      </aside>
+    </section>
+  </main>
+</body>
+</html>

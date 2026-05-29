@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>批量上传 DEMO - 预决算公开材料审校系统</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="demo-shell">
+    <header class="demo-header">
+      <div class="brand"><div class="brand-mark">GB</div><div><div class="brand-title">预决算公开材料审校系统</div><div class="brand-subtitle">批量上传原型</div></div></div>
+      <div class="top-actions"><button class="button">返回工作台</button><button class="button primary">开始上传并分析</button></div>
+    </header>
+    <main class="page">
+      <section class="page-header">
+        <div>
+          <div class="eyebrow">BATCH UPLOAD</div>
+          <h1>批量上传预决算公开材料</h1>
+          <p class="subtle" style="margin-top:6px">上传前先确认年度、部门和预算/决算类型，系统自动识别但保留人工确认入口。</p>
+        </div>
+        <span class="badge warning">7 个文件待确认</span>
+      </section>
+
+      <div class="grid cols-3">
+        <section class="panel" style="grid-column:span 2">
+          <div class="panel-header">
+            <div><h2>文件上传区</h2><p class="subtle">支持 PDF 批量拖入，最多 50 份。</p></div>
+            <div class="segmented"><span class="segment active">自动识别</span><span class="segment">手动指定</span></div>
+          </div>
+          <div class="panel-body">
+            <div class="upload-drop">
+              <div>
+                <div style="font-size:34px">⬆️</div>
+                <h2 style="margin-top:8px">拖入预算或决算 PDF</h2>
+                <p class="subtle" style="margin-top:6px">系统会从文件名、首页标题和封面单位识别年度、部门、材料类型。</p>
+                <button class="button primary" style="margin-top:14px">选择文件</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="panel">
+          <div class="panel-header"><h2>批量应用</h2></div>
+          <div class="panel-body">
+            <div class="form-group"><label>年度</label><select class="select"><option>2026</option></select></div>
+            <div class="form-group"><label>部门</label><select class="select"><option>区财政局</option></select></div>
+            <div class="form-group"><label>材料类型</label><div class="segmented"><span class="segment active">预算</span><span class="segment">决算</span></div></div>
+            <button class="button" style="width:100%">应用到未确认文件</button>
+          </div>
+        </aside>
+      </div>
+
+      <section class="panel" style="margin-top:16px">
+        <div class="panel-header">
+          <div><h2>待上传文件</h2><p class="subtle">每个文件独立显示识别结果，预算/决算不会混用。</p></div>
+          <div class="badge-row"><span class="badge budget">预算 3</span><span class="badge final">决算 2</span><span class="badge warning">待确认 1</span></div>
+        </div>
+        <div>
+          <div class="upload-row header"><span></span><span>文件名</span><span>年度</span><span>类型</span><span>部门</span><span>识别状态</span><span>动作</span></div>
+          <div class="upload-row"><input type="checkbox" checked><span class="file-name">2026年区财政局部门预算公开.pdf</span><span>2026</span><span class="badge budget">预算</span><span>区财政局</span><span class="badge success">高置信</span><button class="button">编辑</button></div>
+          <div class="upload-row"><input type="checkbox" checked><span class="file-name">2024年度区教育局部门决算.pdf</span><span>2024</span><span class="badge final">决算</span><span>区教育局</span><span class="badge success">高置信</span><button class="button">编辑</button></div>
+          <div class="upload-row"><input type="checkbox" checked><span class="file-name">文化馆公开材料.pdf</span><span>2026</span><span class="badge warning">类型待确认</span><span>区文旅局</span><span class="badge warning">需确认</span><button class="button primary">确认</button></div>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

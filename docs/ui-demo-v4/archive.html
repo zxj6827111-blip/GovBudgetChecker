@@ -1,0 +1,143 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>年度档案 - GovBudgetChecker v4 DEMO</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">预</div>
+      <div>
+        <strong>预决算公开材料审校系统</strong>
+        <span>历史年度材料与问题归档</span>
+      </div>
+    </div>
+    <nav class="nav">
+      <a href="./dashboard.html"><span class="icon">台</span>年度审校工作台</a>
+      <a href="./issues-dashboard.html"><span class="icon">题</span>问题数据看板</a>
+      <a class="active" href="./archive.html"><span class="icon">年</span>年度档案</a>
+      <a href="./upload.html"><span class="icon">传</span>材料上传</a>
+      <a href="./task-center.html"><span class="icon">任</span>任务中心</a>
+      <a href="#"><span class="icon">设</span>系统管理</a>
+    </nav>
+    <div class="topbar-right">当前工作区：上海市 / 普陀区 / 真如镇街道</div>
+  </header>
+
+  <main class="page">
+    <section class="page-head">
+      <div>
+        <p class="eyebrow">年度档案</p>
+        <h1>往年数据在这里按年度批次查看</h1>
+        <p class="subtle">年度档案保留每个检查年度的预算、决算、问题清单、整改状态和下载包，不混在日常任务队列里。</p>
+      </div>
+      <div class="toolbar">
+        <a class="btn" href="./dashboard.html"><span class="icon">台</span>返回工作台</a>
+        <a class="btn primary" href="./issues-dashboard.html"><span class="icon">题</span>查看问题看板</a>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <div class="workspace-card blue">
+        <div class="big-icon">区</div>
+        <div><strong>归档范围</strong><span class="subtle">上海市 / 普陀区 / 真如镇街道；地区变更只影响筛选，不需要重新配置。</span></div>
+      </div>
+      <div class="workspace-card blue">
+        <div class="big-icon">年</div>
+        <div><strong>年度批次</strong><span class="subtle">检查年度 2026 对应 2026 预算和 2025 决算；往年依此类推。</span></div>
+      </div>
+      <div class="workspace-card teal">
+        <div class="big-icon">档</div>
+        <div><strong>归档内容</strong><span class="subtle">材料版本、检查结果、整改记录、导出包和历史任务。</span></div>
+      </div>
+    </section>
+
+    <section class="layout-archive">
+      <aside class="panel flat">
+        <div class="panel-header"><h2>年度批次</h2><span class="tag line">历史</span></div>
+        <div class="panel-body stack">
+          <div class="year-card active">
+            <strong>2026 检查年度</strong>
+            <p class="subtle">预算：2026；决算：2025。当前工作批次。</p>
+          </div>
+          <div class="year-card">
+            <strong>2025 检查年度</strong>
+            <p class="subtle">预算：2025；决算：2024。已归档。</p>
+          </div>
+          <div class="year-card">
+            <strong>2024 检查年度</strong>
+            <p class="subtle">预算：2024；决算：2023。已归档。</p>
+          </div>
+          <div class="year-card">
+            <strong>2023 检查年度</strong>
+            <p class="subtle">预算：2023；决算：2022。只读归档。</p>
+          </div>
+        </div>
+      </aside>
+
+      <section class="stack">
+        <section class="summary-grid">
+          <div class="summary-card"><span>归档单位</span><strong>46</strong></div>
+          <div class="summary-card blue"><span>预算材料</span><strong>38</strong></div>
+          <div class="summary-card teal"><span>决算材料</span><strong>33</strong></div>
+          <div class="summary-card red"><span>历史问题</span><strong>99</strong></div>
+          <div class="summary-card amber"><span>已整改</span><strong>64</strong></div>
+          <div class="summary-card"><span>导出包</span><strong>9</strong></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>2026 检查年度归档</h2>
+            <div class="segmented"><span>全部</span><span class="active-blue">预算</span><span class="active-teal">决算</span><span>问题</span><span>下载包</span></div>
+          </div>
+          <div class="archive-row">
+            <strong>2026 预算</strong>
+            <span>材料 38 份</span>
+            <span>规则问题 34</span>
+            <span>AI 提示 23</span>
+            <span>已整改 29</span>
+            <span><span class="tag blue">可查看</span></span>
+            <a class="btn" href="./issues-dashboard.html"><span class="icon">看</span>查看</a>
+          </div>
+          <div class="archive-row">
+            <strong>2025 决算</strong>
+            <span>材料 33 份</span>
+            <span>规则问题 27</span>
+            <span>AI 提示 15</span>
+            <span>已整改 35</span>
+            <span><span class="tag teal">可查看</span></span>
+            <a class="btn" href="./issues-dashboard.html"><span class="icon">看</span>查看</a>
+          </div>
+          <div class="archive-row">
+            <strong>下载包</strong>
+            <span>Excel 3 个</span>
+            <span>PDF 4 个</span>
+            <span>ZIP 2 个</span>
+            <span>保留 180 天</span>
+            <span><span class="tag line">已生成</span></span>
+            <a class="btn primary" href="./task-center.html"><span class="icon">下</span>下载</a>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header"><h2>跨年度趋势</h2><span class="tag line">用于复盘</span></div>
+          <div class="panel-body chart-grid">
+            <div class="bar-list">
+              <div class="bar-row"><span>2026 检查年度</span><div class="bar-track"><div class="bar-fill red" style="width: 88%;"></div></div><strong>99</strong></div>
+              <div class="bar-row"><span>2025 检查年度</span><div class="bar-track"><div class="bar-fill amber" style="width: 66%;"></div></div><strong>74</strong></div>
+              <div class="bar-row"><span>2024 检查年度</span><div class="bar-track"><div class="bar-fill teal" style="width: 48%;"></div></div><strong>51</strong></div>
+            </div>
+            <div class="bar-list">
+              <div class="bar-row"><span>三公经费类</span><div class="bar-track"><div class="bar-fill" style="width: 72%;"></div></div><strong>21</strong></div>
+              <div class="bar-row"><span>说明与表格类</span><div class="bar-track"><div class="bar-fill red" style="width: 62%;"></div></div><strong>18</strong></div>
+              <div class="bar-row"><span>空表说明类</span><div class="bar-track"><div class="bar-fill teal" style="width: 38%;"></div></div><strong>11</strong></div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

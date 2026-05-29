@@ -35,10 +35,13 @@ export default function LoginPage() {
     let cancelled = false;
 
     const probeLogin = async () => {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 3000);
       try {
         const response = await fetch("/api/auth/me", {
           cache: "no-store",
           headers: { "X-Login-Probe": "1" },
+          signal: controller.signal,
         });
         const payload = (await response.json().catch(() => ({}))) as {
           user?: Record<string, unknown> | null;
@@ -50,6 +53,8 @@ export default function LoginPage() {
         }
       } catch {
         // Ignore pre-check errors and let the user log in manually.
+      } finally {
+        window.clearTimeout(timeoutId);
       }
 
       if (!cancelled) {

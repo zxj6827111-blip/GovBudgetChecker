@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>02 材料上传 - GovBudgetChecker v3 DEMO</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">预</div>
+      <div>
+        <strong>预决算公开材料审校系统</strong>
+        <span>流程式 DEMO：按年份上传</span>
+      </div>
+    </div>
+    <nav class="nav">
+      <a href="./region.html"><span class="icon">1</span>地区配置</a>
+      <a class="active" href="./upload.html"><span class="icon">2</span>材料上传</a>
+      <a href="./issues.html"><span class="icon">3</span>错误查看</a>
+      <a href="./downloads.html"><span class="icon">4</span>错误下载</a>
+    </nav>
+    <div class="topbar-right">上海市 / 普陀区 / 真如镇街道</div>
+  </header>
+
+  <main class="page">
+    <section class="page-head">
+      <div>
+        <p class="eyebrow">第二步：材料上传</p>
+        <h1>选择检查年度后，系统自动拆成“当年预算”和“上年决算”</h1>
+        <p class="subtle">例如检查年度选择 2026 年，就应该上传 2026 年预算公开材料，以及 2025 年决算公开材料。</p>
+      </div>
+      <div class="toolbar">
+        <a class="btn" href="./region.html"><span class="icon">区</span>返回地区配置</a>
+        <a class="btn primary" href="./issues.html"><span class="icon">查</span>查看检查结果</a>
+      </div>
+    </section>
+
+    <section class="flow">
+      <div class="flow-step active-blue"><div class="flow-num">1</div><div><strong>地区已选</strong><span>上海市 / 普陀区 / 真如镇街道。</span></div></div>
+      <div class="flow-step active-blue"><div class="flow-num">2</div><div><strong>上传预算</strong><span>检查年度 2026，对应 2026 年预算。</span></div></div>
+      <div class="flow-step active-teal"><div class="flow-num">3</div><div><strong>上传决算</strong><span>检查年度 2026，对应 2025 年决算。</span></div></div>
+      <div class="flow-step"><div class="flow-num">4</div><div><strong>等待检查</strong><span>上传完成后进入错误查看页。</span></div></div>
+    </section>
+
+    <section class="panel" style="margin-bottom: 14px;">
+      <div class="panel-header">
+        <h2>上传批次设置</h2>
+        <span class="tag orange">年份关系自动计算</span>
+      </div>
+      <div class="panel-body form-grid">
+        <div class="field">
+          <label>省级</label>
+          <select class="select"><option>上海市</option></select>
+        </div>
+        <div class="field">
+          <label>区县</label>
+          <select class="select"><option>普陀区</option></select>
+        </div>
+        <div class="field">
+          <label>街道镇</label>
+          <select class="select"><option>真如镇街道</option></select>
+        </div>
+        <div class="field">
+          <label>检查年度</label>
+          <select class="select"><option>2026</option><option>2027</option><option>2025</option></select>
+        </div>
+        <a class="btn primary"><span class="icon">用</span>应用批次</a>
+      </div>
+    </section>
+
+    <section class="grid-two" style="margin-bottom: 14px;">
+      <div class="year-rule blue">
+        <div class="big-letter">预</div>
+        <div>
+          <strong>本批次预算材料：2026 年预算公开</strong>
+          <p class="subtle">预算材料按检查年度本身归档，进入预算规则检查和 AI 辅助检查。</p>
+        </div>
+      </div>
+      <div class="year-rule teal">
+        <div class="big-letter">决</div>
+        <div>
+          <strong>本批次决算材料：2025 年决算公开</strong>
+          <p class="subtle">决算材料按检查年度上一年归档，进入决算规则检查和 AI 辅助检查。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid-main-side">
+      <div class="panel">
+        <div class="panel-header">
+          <h2>上传列表</h2>
+          <div class="toolbar"><span class="tag blue">预算</span><span class="tag teal">决算</span><span class="tag orange">待确认</span></div>
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>材料</th>
+              <th>类型</th>
+              <th>归档年份</th>
+              <th>地区</th>
+              <th>识别状态</th>
+              <th>下一步</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="strong-cell">真如镇街道_2026年预算公开.pdf</span><span class="muted-cell">封面、目录、预算九张表</span></td>
+              <td><span class="tag blue">预算</span></td>
+              <td>2026</td>
+              <td>上海市 / 普陀区 / 真如镇街道</td>
+              <td>识别完成</td>
+              <td><a class="btn"><span class="icon">查</span>开始检查</a></td>
+            </tr>
+            <tr>
+              <td><span class="strong-cell">真如镇街道_2025年决算公开.pdf</span><span class="muted-cell">收入支出决算表、三公决算表</span></td>
+              <td><span class="tag teal">决算</span></td>
+              <td>2025</td>
+              <td>上海市 / 普陀区 / 真如镇街道</td>
+              <td>识别完成</td>
+              <td><a class="btn"><span class="icon">查</span>开始检查</a></td>
+            </tr>
+            <tr>
+              <td><span class="strong-cell">预算执行情况说明.pdf</span><span class="muted-cell">标题含预算，正文含决算数</span></td>
+              <td><span class="tag orange">待确认</span></td>
+              <td>未定</td>
+              <td>上海市 / 普陀区 / 真如镇街道</td>
+              <td>类型冲突</td>
+              <td><a class="btn primary"><span class="icon">定</span>确认类型</a></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="stack">
+        <div class="panel flat">
+          <div class="panel-header"><h2>预算投放区</h2><span class="tag blue">2026</span></div>
+          <div class="panel-body">
+            <div class="upload-box"><div><strong>拖入 2026 年预算材料</strong><p class="subtle">部门预算、单位预算、预算公开附件。</p></div></div>
+          </div>
+        </div>
+        <div class="panel flat">
+          <div class="panel-header"><h2>决算投放区</h2><span class="tag teal">2025</span></div>
+          <div class="panel-body">
+            <div class="upload-box"><div><strong>拖入 2025 年决算材料</strong><p class="subtle">部门决算、单位决算、决算公开附件。</p></div></div>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </main>
+</body>
+</html>
