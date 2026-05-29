@@ -65,6 +65,7 @@ export async function GET(
         status: res.status,
         bodyPreview: text.slice(0, 500),
       });
+      return NextResponse.json(data ?? { detail: "backend request failed", jobs: [] }, { status: res.status });
     } else {
       console.error("Backend organization jobs returned unexpected payload:", {
         orgId: (await params).org_id,

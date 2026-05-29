@@ -17,6 +17,36 @@ def _coerce_bool(value: Any, field_name: str) -> bool:
     raise HTTPException(status_code=400, detail=f"{field_name} must be boolean")
 
 
+def _coerce_organization_ids(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise HTTPException(status_code=400, detail="organization_ids must be a list")
+
+    result: list[str] = []
+    seen = set()
+    for item in value:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def _validate_organization_ids_exist(organization_ids: list[str]) -> None:
+    if not organization_ids:
+        return
+
+    storage = runtime.require_org_storage()
+    missing = [org_id for org_id in organization_ids if storage.get_by_id(org_id) is None]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown organization_ids: {', '.join(missing)}",
+        )
+
+
 def _coerce_password(value: Any, required: bool = False) -> Optional[str]:
     if value is None:
         if required:
@@ -148,9 +178,16 @@ async def create_user(request: Request):
 
     raw_is_admin = body.get("is_admin", False)
     is_admin = _coerce_bool(raw_is_admin, "is_admin") if "is_admin" in body else False
+    organization_ids = _coerce_organization_ids(body.get("organization_ids"))
+    _validate_organization_ids_exist(organization_ids)
 
     try:
-        user = store.add_user(username=username, password=password, is_admin=is_admin)
+        user = store.add_user(
+            username=username,
+            password=password,
+            is_admin=is_admin,
+            organization_ids=organization_ids,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -165,14 +202,23 @@ async def update_user(username: str, request: Request):
     is_admin: Optional[bool] = None
     is_active: Optional[bool] = None
     password: Optional[str] = None
+    organization_ids: Optional[list[str]] = None
     if "is_admin" in body:
         is_admin = _coerce_bool(body.get("is_admin"), "is_admin")
     if "is_active" in body:
         is_active = _coerce_bool(body.get("is_active"), "is_active")
     if "password" in body:
         password = _coerce_password(body.get("password"), required=True)
+    if "organization_ids" in body:
+        organization_ids = _coerce_organization_ids(body.get("organization_ids"))
+        _validate_organization_ids_exist(organization_ids)
 
-    if is_admin is None and is_active is None and password is None:
+    if (
+        is_admin is None
+        and is_active is None
+        and password is None
+        and organization_ids is None
+    ):
         raise HTTPException(status_code=400, detail="no update fields provided")
 
     try:
@@ -181,6 +227,7 @@ async def update_user(username: str, request: Request):
             is_admin=is_admin,
             is_active=is_active,
             password=password,
+            organization_ids=organization_ids,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="user not found")

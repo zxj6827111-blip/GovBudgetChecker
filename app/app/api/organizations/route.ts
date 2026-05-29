@@ -66,6 +66,7 @@ export async function GET(request: Request) {
       }
       return NextResponse.json(data, { status: response.status });
     }
+    return NextResponse.json(data, { status: response.status });
   } catch (error) {
     if (process.env.NODE_ENV !== "production") {
       console.error("Failed to fetch organizations:", error);

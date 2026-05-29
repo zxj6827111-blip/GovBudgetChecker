@@ -38,6 +38,7 @@ export async function GET(
     if (response.ok) {
       return NextResponse.json(data, { status: response.status });
     }
+    return NextResponse.json(data, { status: response.status });
   } catch (error) {
     console.error("Failed to fetch department stats:", error);
   }
