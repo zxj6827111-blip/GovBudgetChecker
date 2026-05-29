@@ -15,12 +15,12 @@ SELECT 'CREATE DATABASE fiscal_db'
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'fiscal_db')\gexec
 
 -- 可选：创建专用用户（如果不想用 postgres 用户）
--- CREATE USER fiscal_user WITH PASSWORD 'fiscal_pass';
--- GRANT ALL PRIVILEGES ON DATABASE fiscal_db TO fiscal_user;
+-- CREATE USER govbudget_local WITH PASSWORD 'change_me_local_postgres_password';
+-- GRANT ALL PRIVILEGES ON DATABASE fiscal_db TO govbudget_local;
 
 -- 连接到 fiscal_db 后执行以下命令授权（可选）
 -- \c fiscal_db
--- GRANT ALL ON SCHEMA public TO fiscal_user;
+-- GRANT ALL ON SCHEMA public TO govbudget_local;
 
 \echo '=========================================='
 \echo 'fiscal_db 数据库创建完成！'
