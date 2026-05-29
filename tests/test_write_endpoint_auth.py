@@ -207,8 +207,24 @@ class TestSensitiveReadEndpointsRequireSession:
         resp = client.get("/api/jobs/job-read-test/status", headers=_headers())
         assert resp.status_code == 401
 
+    def test_legacy_job_status_no_session_returns_401(self, client: TestClient):
+        resp = client.get("/jobs/job-read-test/status", headers=_headers())
+        assert resp.status_code == 401
+
     def test_job_detail_no_session_returns_401(self, client: TestClient):
         resp = client.get("/api/jobs/job-read-test", headers=_headers())
+        assert resp.status_code == 401
+
+    def test_job_review_no_session_returns_401(self, client: TestClient):
+        resp = client.get("/api/jobs/job-read-test/review", headers=_headers())
+        assert resp.status_code == 401
+
+    def test_job_structured_ingest_no_session_returns_401(self, client: TestClient):
+        resp = client.get("/api/jobs/job-read-test/structured-ingest", headers=_headers())
+        assert resp.status_code == 401
+
+    def test_job_org_suggestions_no_session_returns_401(self, client: TestClient):
+        resp = client.get("/api/jobs/job-read-test/org-suggestions", headers=_headers())
         assert resp.status_code == 401
 
     def test_report_download_no_session_returns_401(self, client: TestClient):
@@ -218,8 +234,20 @@ class TestSensitiveReadEndpointsRequireSession:
         )
         assert resp.status_code == 401
 
+    def test_report_batch_download_no_session_returns_401(self, client: TestClient):
+        resp = client.post(
+            "/api/reports/download-batch",
+            headers=_headers(),
+            json={"job_ids": ["job-read-test"]},
+        )
+        assert resp.status_code == 401
+
     def test_source_pdf_no_session_returns_401(self, client: TestClient):
         resp = client.get("/api/files/job-read-test/source", headers=_headers())
+        assert resp.status_code == 401
+
+    def test_source_preview_no_session_returns_401(self, client: TestClient):
+        resp = client.get("/api/files/job-read-test/preview", headers=_headers())
         assert resp.status_code == 401
 
 

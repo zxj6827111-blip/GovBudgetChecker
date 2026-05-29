@@ -148,6 +148,8 @@ async def test_ready_response_redacts_diagnostic_details_by_default(
     assert payload["details"]["redacted"] is True
     assert "rules_file" not in payload["details"]
     assert "audit_log_path" not in payload["details"]
+    assert "auth_key_configured" not in payload["checks"]
+    assert "auth_key_configured" not in payload["dependencies"]["required"]
     assert payload["dependencies"]["required"]["upload_root_exists"]["detail"] in {
         "ok",
         "failed",
@@ -190,6 +192,9 @@ async def test_ready_details_can_be_enabled_for_diagnostics(
 
     assert "rules_file" in payload["details"]
     assert "audit_log_path" in payload["details"]
+    assert "auth_key_configured" in payload["details"]
+    assert "auth_key_configured" in payload["checks"]
+    assert "auth_key_configured" in payload["dependencies"]["required"]
 
 
 @pytest.mark.anyio

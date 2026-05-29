@@ -17,6 +17,8 @@ from src.services.audit_log import get_audit_log_path
 
 router = APIRouter()
 
+_SENSITIVE_READY_KEYS = {"auth_key_configured"}
+
 
 @router.get("/health")
 @router.get("/api/health")
@@ -103,6 +105,7 @@ def _redact_dependencies(dependencies: Dict[str, Dict[str, Dict[str, Any]]]) -> 
         section: {
             key: _redact_dependency_detail(value)
             for key, value in section_items.items()
+            if key not in _SENSITIVE_READY_KEYS
         }
         for section, section_items in dependencies.items()
     }
@@ -116,6 +119,14 @@ def _include_ready_details(request: Request) -> bool:
         return True
     require_admin(request)
     return True
+
+
+def _redact_checks(checks: Dict[str, bool]) -> Dict[str, bool]:
+    return {
+        key: value
+        for key, value in checks.items()
+        if key not in _SENSITIVE_READY_KEYS
+    }
 
 
 @router.get("/ready")
@@ -208,13 +219,14 @@ async def ready(request: Request) -> Dict[str, Any]:
             "max_upload_mb": runtime.MAX_UPLOAD_MB,
             "max_upload_pages": runtime.MAX_UPLOAD_PAGES,
         },
+        "auth_key_configured": auth_key_present,
     }
 
     ready_state = all(item["ok"] for item in dependencies["required"].values())
     include_details = _include_ready_details(request)
     payload: Dict[str, Any] = {
         "status": "ready" if ready_state else "not_ready",
-        "checks": checks,
+        "checks": checks if include_details else _redact_checks(checks),
         "dependencies": dependencies if include_details else _redact_dependencies(dependencies),
         "details": details
         if include_details
