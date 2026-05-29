@@ -48,6 +48,23 @@ function parsePasswordField(value: unknown): string {
   return value;
 }
 
+function parseOrganizationIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new LocalAuthError(400, "organization_ids must be a list");
+  }
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const text = String(item ?? "").trim();
+    if (!text || seen.has(text)) {
+      continue;
+    }
+    seen.add(text);
+    result.push(text);
+  }
+  return result;
+}
+
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ username: string }> }
@@ -65,7 +82,7 @@ export async function PATCH(
         return forbiddenResponse();
       }
 
-      const updates: { is_admin?: boolean; is_active?: boolean; password?: string } = {};
+      const updates: { is_admin?: boolean; is_active?: boolean; password?: string; organization_ids?: string[] } = {};
       try {
         if ("is_admin" in body) {
           updates.is_admin = parseBooleanField(body.is_admin, "is_admin");
@@ -75,6 +92,9 @@ export async function PATCH(
         }
         if ("password" in body) {
           updates.password = parsePasswordField(body.password);
+        }
+        if ("organization_ids" in body) {
+          updates.organization_ids = parseOrganizationIds(body.organization_ids);
         }
         const user = await updateLocalUser((await params).username, updates);
         return NextResponse.json(user, { status: 200 });

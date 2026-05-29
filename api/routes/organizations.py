@@ -10,7 +10,7 @@ from typing import Annotated, Any, Dict, List, Tuple
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 
-from api.auth_utils import require_admin
+from api.auth_utils import require_admin, require_login, user_can_access_job, user_can_access_org
 from api import runtime
 from src.services.audit_log import append_audit_event
 
@@ -172,6 +172,55 @@ def _build_aggregated_org_stats(storage) -> Dict[str, Dict[str, Any]]:
     return aggregated_stats
 
 
+def _build_user_visible_aggregated_org_stats(
+    storage,
+    user: Dict[str, Any],
+) -> Dict[str, Dict[str, Any]]:
+    direct_stats: Dict[str, Dict[str, Any]] = {}
+
+    for org in storage.get_all():
+        valid_job_ids, _ = _split_existing_job_ids(
+            storage.get_org_jobs(org.id, include_children=False)
+        )
+        job_count = 0
+        issue_total = 0
+        for job_id in valid_job_ids:
+            status_payload = runtime.get_job_status_payload(job_id)
+            if not user_can_access_job(user, status_payload):
+                continue
+            summary = runtime.collect_job_summary(runtime.UPLOAD_ROOT / job_id)
+            job_count += 1
+            issue_total += _extract_summary_issue_total(summary)
+        direct_stats[org.id] = {
+            "job_count": job_count,
+            "issue_total": issue_total,
+            "has_issues": issue_total > 0,
+        }
+
+    aggregated_stats: Dict[str, Dict[str, Any]] = {}
+
+    def walk(org_id: str) -> Dict[str, Any]:
+        current = dict(
+            direct_stats.get(
+                org_id,
+                {"job_count": 0, "issue_total": 0, "has_issues": False},
+            )
+        )
+        for child in storage.get_children(org_id):
+            child_stats = walk(child.id)
+            current["job_count"] += int(child_stats.get("job_count") or 0)
+            current["issue_total"] += int(child_stats.get("issue_total") or 0)
+        current["has_issues"] = bool(current["issue_total"] > 0)
+        aggregated_stats[org_id] = current
+        return current
+
+    for org in storage.get_all():
+        if org.id not in aggregated_stats:
+            walk(org.id)
+
+    return aggregated_stats
+
+
 def _apply_tree_stats(
     nodes: List[Dict[str, Any]],
     stats_by_org: Dict[str, Dict[str, Any]],
@@ -186,18 +235,41 @@ def _apply_tree_stats(
             _apply_tree_stats(children, stats_by_org)
 
 
+def _filter_tree_for_user(nodes: List[Dict[str, Any]], user: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if bool(user.get("is_admin")):
+        return nodes
+
+    filtered: List[Dict[str, Any]] = []
+    for node in nodes:
+        children = node.get("children")
+        child_nodes = _filter_tree_for_user(children, user) if isinstance(children, list) else []
+        node_id = str(node.get("id") or "").strip()
+        if user_can_access_org(user, node_id) or child_nodes:
+            next_node = dict(node)
+            next_node["children"] = child_nodes
+            filtered.append(next_node)
+    return filtered
+
+
 @router.get("/api/organizations")
 async def get_organizations(
+    request: Request,
     stats: str = Query(
         default="aggregated",
         description="Use 'none' for a lightweight navigation tree without job statistics.",
     ),
 ):
+    _, _, user = require_login(request)
     storage = runtime.require_org_storage()
     tree = [runtime.to_dict(node) for node in storage.get_tree()]
+    tree = _filter_tree_for_user(tree, user)
     if str(stats or "").lower() not in {"none", "false", "0", "off"}:
-        _apply_tree_stats(tree, _build_aggregated_org_stats(storage))
-    return {"tree": tree, "total": len(storage.get_all())}
+        if bool(user.get("is_admin")):
+            stats_by_org = _build_aggregated_org_stats(storage)
+        else:
+            stats_by_org = _build_user_visible_aggregated_org_stats(storage, user)
+        _apply_tree_stats(tree, stats_by_org)
+    return {"tree": tree, "total": len(tree) if not bool(user.get("is_admin")) else len(storage.get_all())}
 
 
 @router.post("/api/organizations")
@@ -330,10 +402,13 @@ async def get_delete_preview(org_id: str, request: Request):
 
 
 @router.get("/api/organizations/list")
-async def get_organizations_list():
+async def get_organizations_list(request: Request):
+    _, _, user = require_login(request)
     storage = runtime.require_org_storage()
     organizations = []
     for org in storage.get_all():
+        if not user_can_access_org(user, org.id):
+            continue
         level_name = org.level
         if runtime.OrganizationLevel is not None:
             level_name = runtime.OrganizationLevel.get_display_name(org.level)
@@ -350,11 +425,14 @@ async def get_organizations_list():
 
 
 @router.get("/api/departments")
-async def get_departments():
+async def get_departments(request: Request):
+    _, _, user = require_login(request)
     storage = runtime.require_org_storage()
     aggregated_stats = _build_aggregated_org_stats(storage)
     departments = []
     for org in storage.get_departments():
+        if not user_can_access_org(user, org.id):
+            continue
         payload = runtime.to_dict(org)
         stats = aggregated_stats.get(org.id, {})
         payload["job_count"] = int(stats.get("job_count") or 0)
@@ -364,22 +442,32 @@ async def get_departments():
 
 
 @router.get("/api/departments/{dept_id}/units")
-async def get_units_by_department(dept_id: str):
+async def get_units_by_department(dept_id: str, request: Request):
+    _, _, user = require_login(request)
     storage = runtime.require_org_storage()
     department = storage.get_by_id(dept_id)
     if department is None or getattr(department, "level", None) != "department":
         raise HTTPException(status_code=404, detail="department not found")
+    if not user_can_access_org(user, dept_id):
+        raise HTTPException(status_code=403, detail="organization access denied")
 
-    units = [runtime.to_dict(org) for org in storage.get_units_by_department(dept_id)]
+    units = [
+        runtime.to_dict(org)
+        for org in storage.get_units_by_department(dept_id)
+        if user_can_access_org(user, org.id)
+    ]
     return {"units": units, "total": len(units)}
 
 
 @router.get("/api/departments/{dept_id}/stats")
-async def get_department_stats(dept_id: str):
+async def get_department_stats(dept_id: str, request: Request):
+    _, _, user = require_login(request)
     storage = runtime.require_org_storage()
     department = storage.get_by_id(dept_id)
     if department is None or getattr(department, "level", None) != "department":
         raise HTTPException(status_code=404, detail="department not found")
+    if not user_can_access_org(user, dept_id):
+        raise HTTPException(status_code=403, detail="organization access denied")
 
     now = time.time()
     if _DEPT_STATS_CACHE_TTL_SECONDS > 0:
@@ -464,6 +552,7 @@ async def import_organizations(
 
 @router.get("/api/organizations/{org_id}/jobs")
 async def get_organization_jobs(
+    request: Request,
     org_id: str,
     include_children: bool = Query(
         default=False,
@@ -472,14 +561,22 @@ async def get_organization_jobs(
     limit: int | None = Query(default=None, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
 ):
+    _, _, user = require_login(request)
     storage = runtime.require_org_storage()
     org = storage.get_by_id(org_id)
     if org is None:
         raise HTTPException(status_code=404, detail="organization not found")
+    if not user_can_access_org(user, org_id):
+        raise HTTPException(status_code=403, detail="organization access denied")
 
     job_ids, _ = _split_existing_job_ids(
         storage.get_org_jobs(org_id, include_children=include_children)
     )
+    job_ids = [
+        job_id
+        for job_id in job_ids
+        if user_can_access_job(user, runtime.get_job_status_payload(job_id))
+    ]
     total = len(job_ids)
 
     def _quick_ts(job_id: str) -> float:

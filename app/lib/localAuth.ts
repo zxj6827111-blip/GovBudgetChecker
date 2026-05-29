@@ -7,6 +7,7 @@ type StoredUser = {
   password_hash: string;
   is_admin: boolean;
   is_active: boolean;
+  organization_ids: string[];
   created_at: number;
   updated_at: number;
   session_version: number;
@@ -16,6 +17,7 @@ export type LocalAuthUser = {
   username: string;
   is_admin: boolean;
   is_active: boolean;
+  organization_ids: string[];
   created_at: number;
   updated_at: number;
 };
@@ -144,6 +146,23 @@ function validateNewPassword(password: string): string {
   return text;
 }
 
+function normalizeOrganizationIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const text = String(item ?? "").trim();
+    if (!text || seen.has(text)) {
+      continue;
+    }
+    seen.add(text);
+    result.push(text);
+  }
+  return result;
+}
+
 function b64urlEncode(raw: Buffer): string {
   return raw.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
@@ -159,6 +178,7 @@ function publicUser(user: StoredUser): LocalAuthUser {
     username: user.username,
     is_admin: Boolean(user.is_admin),
     is_active: Boolean(user.is_active),
+    organization_ids: normalizeOrganizationIds(user.organization_ids),
     created_at: Number(user.created_at || 0),
     updated_at: Number(user.updated_at || 0),
   };
@@ -298,6 +318,7 @@ function ensureDefaultAdmin(users: Record<string, StoredUser>): boolean {
       password_hash: hashPassword(DEFAULT_ADMIN_PASSWORD),
       is_admin: true,
       is_active: true,
+      organization_ids: [],
       created_at: now,
       updated_at: now,
       session_version: 0,
@@ -323,6 +344,10 @@ function ensureDefaultAdmin(users: Record<string, StoredUser>): boolean {
     existing.session_version = 0;
     changed = true;
   }
+  if (!Array.isArray(existing.organization_ids)) {
+    existing.organization_ids = [];
+    changed = true;
+  }
   if (changed) {
     existing.updated_at = now;
   }
@@ -339,6 +364,7 @@ async function saveUsersUnlocked(users: Record<string, StoredUser>): Promise<voi
         password_hash: user.password_hash,
         is_admin: Boolean(user.is_admin),
         is_active: Boolean(user.is_active),
+        organization_ids: normalizeOrganizationIds(user.organization_ids),
         created_at: user.created_at,
         updated_at: user.updated_at,
         session_version: Math.max(Number(user.session_version || 0), 0),
@@ -391,6 +417,7 @@ async function loadUsersUnlocked(): Promise<Record<string, StoredUser>> {
       password_hash: passwordHash,
       is_admin: Boolean((row as Record<string, unknown>).is_admin),
       is_active: "is_active" in (row as Record<string, unknown>) ? Boolean((row as Record<string, unknown>).is_active) : true,
+      organization_ids: normalizeOrganizationIds((row as Record<string, unknown>).organization_ids),
       created_at: Number.isFinite(createdAt) ? createdAt : now,
       updated_at: Number.isFinite(updatedAt) ? updatedAt : now,
       session_version: Number.isFinite(sessionVersion) ? sessionVersion : 0,
@@ -511,7 +538,7 @@ export async function listLocalUsers(): Promise<LocalAuthUser[]> {
   });
 }
 
-export async function createLocalUser(input: { username: string; password: string; is_admin?: boolean }): Promise<LocalAuthUser> {
+export async function createLocalUser(input: { username: string; password: string; is_admin?: boolean; organization_ids?: string[] }): Promise<LocalAuthUser> {
   return withFileLock(async () => {
     const username = validateUsername(input.username);
     const password = validateNewPassword(input.password);
@@ -526,6 +553,7 @@ export async function createLocalUser(input: { username: string; password: strin
       password_hash: hashPassword(password),
       is_admin: Boolean(input.is_admin),
       is_active: true,
+      organization_ids: normalizeOrganizationIds(input.organization_ids),
       created_at: now,
       updated_at: now,
       session_version: 0,
@@ -537,7 +565,7 @@ export async function createLocalUser(input: { username: string; password: strin
 
 export async function updateLocalUser(
   username: string,
-  updates: { is_admin?: boolean; is_active?: boolean; password?: string },
+  updates: { is_admin?: boolean; is_active?: boolean; password?: string; organization_ids?: string[] },
 ): Promise<LocalAuthUser> {
   return withFileLock(async () => {
     const canonical = normalizeUsername(validateUsername(username));
@@ -573,6 +601,15 @@ export async function updateLocalUser(
       user.password_hash = hashPassword(validateNewPassword(updates.password));
       changed = true;
       shouldRevokeSessions = true;
+    }
+
+    if (Array.isArray(updates.organization_ids)) {
+      const nextOrganizationIds = normalizeOrganizationIds(updates.organization_ids);
+      const currentOrganizationIds = normalizeOrganizationIds(user.organization_ids);
+      if (JSON.stringify(currentOrganizationIds) !== JSON.stringify(nextOrganizationIds)) {
+        user.organization_ids = nextOrganizationIds;
+        changed = true;
+      }
     }
 
     if (!changed) {

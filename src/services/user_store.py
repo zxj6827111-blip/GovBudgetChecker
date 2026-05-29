@@ -137,9 +137,37 @@ class UserStore:
             "username": str(user.get("username") or ""),
             "is_admin": bool(user.get("is_admin")),
             "is_active": bool(user.get("is_active", True)),
+            "organization_ids": UserStore._normalize_organization_ids(
+                user.get("organization_ids")
+            ),
             "created_at": float(user.get("created_at") or 0.0),
             "updated_at": float(user.get("updated_at") or 0.0),
         }
+
+    @staticmethod
+    def _normalize_organization_ids(value: Any) -> List[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            return []
+
+        result: List[str] = []
+        seen = set()
+        for item in value:
+            text = str(item or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            result.append(text)
+        return result
+
+    @staticmethod
+    def _validate_organization_ids(value: Any) -> List[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError("organization_ids must be a list")
+        return UserStore._normalize_organization_ids(value)
 
     @staticmethod
     def _coerce_session_version(value: Any) -> int:
@@ -156,6 +184,9 @@ class UserStore:
             "password_hash": str(user.get("password_hash") or ""),
             "is_admin": bool(user.get("is_admin")),
             "is_active": bool(user.get("is_active", True)),
+            "organization_ids": UserStore._normalize_organization_ids(
+                user.get("organization_ids")
+            ),
             "created_at": float(user.get("created_at") or 0.0),
             "updated_at": float(user.get("updated_at") or 0.0),
             "session_version": UserStore._coerce_session_version(
@@ -370,6 +401,9 @@ class UserStore:
                             "password_hash": password_hash,
                             "is_admin": bool(row.get("is_admin", False)),
                             "is_active": bool(row.get("is_active", True)),
+                            "organization_ids": self._normalize_organization_ids(
+                                row.get("organization_ids")
+                            ),
                             "created_at": created,
                             "updated_at": updated,
                             "session_version": self._coerce_session_version(
@@ -430,6 +464,7 @@ class UserStore:
                 "password_hash": self._hash_password(self._default_admin_password),
                 "is_admin": True,
                 "is_active": True,
+                "organization_ids": [],
                 "created_at": now,
                 "updated_at": now,
                 "session_version": 0,
@@ -450,6 +485,9 @@ class UserStore:
                 changed = True
             if "session_version" not in user:
                 user["session_version"] = 0
+                changed = True
+            if "organization_ids" not in user:
+                user["organization_ids"] = []
                 changed = True
             if changed:
                 user["updated_at"] = now
@@ -500,9 +538,11 @@ class UserStore:
         username: str,
         password: str,
         is_admin: bool = False,
+        organization_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         clean_username = self._validate_username(username)
         clean_password = self._validate_new_password(password)
+        clean_organization_ids = self._validate_organization_ids(organization_ids)
         canonical = self._normalize_username(clean_username)
         now = time.time()
 
@@ -516,6 +556,7 @@ class UserStore:
                 "password_hash": self._hash_password(clean_password),
                 "is_admin": bool(is_admin),
                 "is_active": True,
+                "organization_ids": clean_organization_ids,
                 "created_at": now,
                 "updated_at": now,
                 "session_version": 0,
@@ -529,6 +570,7 @@ class UserStore:
         is_admin: Optional[bool] = None,
         is_active: Optional[bool] = None,
         password: Optional[str] = None,
+        organization_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         canonical = self._normalize_username(self._validate_username(username))
 
@@ -573,6 +615,16 @@ class UserStore:
                 user["password_hash"] = self._hash_password(clean_password)
                 should_revoke_sessions = True
                 changed = True
+
+            if organization_ids is not None:
+                clean_organization_ids = self._validate_organization_ids(
+                    organization_ids
+                )
+                if self._normalize_organization_ids(
+                    user.get("organization_ids")
+                ) != clean_organization_ids:
+                    user["organization_ids"] = clean_organization_ids
+                    changed = True
 
             if changed:
                 if should_revoke_sessions:

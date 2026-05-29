@@ -44,6 +44,23 @@ function parseBooleanField(
   return value;
 }
 
+function parseOrganizationIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new LocalAuthError(400, "organization_ids must be a list");
+  }
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const text = String(item ?? "").trim();
+    if (!text || seen.has(text)) {
+      continue;
+    }
+    seen.add(text);
+    result.push(text);
+  }
+  return result;
+}
+
 export async function GET() {
   const sessionToken = await readSessionToken();
   if (!sessionToken) {
@@ -94,6 +111,8 @@ export async function POST(request: NextRequest) {
           password: typeof body?.password === "string" ? body.password : "",
           is_admin:
             "is_admin" in body ? parseBooleanField(body.is_admin, "is_admin") : false,
+          organization_ids:
+            "organization_ids" in body ? parseOrganizationIds(body.organization_ids) : [],
         });
         return NextResponse.json(user, { status: 200 });
       } catch (localError) {
