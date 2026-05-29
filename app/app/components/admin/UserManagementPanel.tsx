@@ -8,8 +8,17 @@ type UserRecord = {
   username: string;
   is_admin: boolean;
   is_active: boolean;
+  organization_ids?: string[];
   created_at: number;
   updated_at: number;
+};
+
+type OrganizationRecord = {
+  id: string;
+  name: string;
+  level: string;
+  level_name?: string;
+  parent_id?: string | null;
 };
 
 type AuthMeResponse = {
@@ -41,6 +50,31 @@ function parseError(payload: unknown, fallback: string) {
   return fallback;
 }
 
+function normalizeOrganizationIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const text = String(item ?? "").trim();
+    if (!text || seen.has(text)) {
+      continue;
+    }
+    seen.add(text);
+    result.push(text);
+  }
+  return result;
+}
+
+function toggleOrganizationId(current: string[], orgId: string): string[] {
+  if (current.includes(orgId)) {
+    return current.filter((item) => item !== orgId);
+  }
+  return [...current, orgId];
+}
+
 export default function UserManagementPanel({
   embedded = false,
   showSummaryHeader = true,
@@ -48,16 +82,40 @@ export default function UserManagementPanel({
   const router = useRouter();
   const [me, setMe] = useState<UserRecord | null>(null);
   const [users, setUsers] = useState<UserRecord[]>([]);
+  const [organizations, setOrganizations] = useState<OrganizationRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyUsername, setBusyUsername] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [newUsername, setNewUsername] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newUserAdmin, setNewUserAdmin] = useState(false);
+  const [newUserOrganizationIds, setNewUserOrganizationIds] = useState<string[]>([]);
+  const [scopeEditorUsername, setScopeEditorUsername] = useState<string | null>(null);
+  const [scopeDraft, setScopeDraft] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
   const isAdmin = useMemo(() => Boolean(me?.is_admin), [me]);
+  const organizationNameById = useMemo(
+    () => new Map(organizations.map((org) => [org.id, org.name])),
+    [organizations],
+  );
+
+  const describeOrganizationScope = useCallback(
+    (ids: string[] | undefined) => {
+      const names = normalizeOrganizationIds(ids).map(
+        (orgId) => organizationNameById.get(orgId) ?? orgId,
+      );
+      if (!names.length) {
+        return "仅本人任务";
+      }
+      if (names.length <= 2) {
+        return names.join("、");
+      }
+      return `${names.slice(0, 2).join("、")} 等 ${names.length} 项`;
+    },
+    [organizationNameById],
+  );
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -80,18 +138,39 @@ export default function UserManagementPanel({
       setMe(currentUser);
       if (!currentUser?.is_admin) {
         setUsers([]);
+        setOrganizations([]);
         return;
       }
 
-      const usersResponse = await fetch("/api/users", { cache: "no-store" });
+      const [usersResponse, organizationsResponse] = await Promise.all([
+        fetch("/api/users", { cache: "no-store" }),
+        fetch("/api/organizations/list", { cache: "no-store" }),
+      ]);
+
       const usersPayload = await usersResponse.json();
       if (!usersResponse.ok) {
         setError(parseError(usersPayload, "无法获取用户列表"));
         return;
       }
 
+      const organizationsPayload = await organizationsResponse.json();
+      if (!organizationsResponse.ok) {
+        setError(parseError(organizationsPayload, "无法获取组织列表"));
+        return;
+      }
+
       const rows = Array.isArray(usersPayload?.users) ? (usersPayload.users as UserRecord[]) : [];
-      setUsers(rows);
+      setUsers(
+        rows.map((row) => ({
+          ...row,
+          organization_ids: normalizeOrganizationIds(row.organization_ids),
+        })),
+      );
+      setOrganizations(
+        Array.isArray(organizationsPayload?.organizations)
+          ? (organizationsPayload.organizations as OrganizationRecord[])
+          : [],
+      );
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : "用户数据加载失败");
     } finally {
@@ -102,6 +181,43 @@ export default function UserManagementPanel({
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  const updateUser = async (
+    username: string,
+    payload: {
+      is_admin?: boolean;
+      is_active?: boolean;
+      password?: string;
+      organization_ids?: string[];
+    },
+    successText: string,
+  ): Promise<boolean> => {
+    setBusyUsername(username);
+    setError("");
+    setMessage("");
+
+    try {
+      const response = await fetch(`/api/users/${encodeURIComponent(username)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        setError(parseError(body, "更新用户失败"));
+        return false;
+      }
+
+      setMessage(successText);
+      await loadData();
+      return true;
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : "更新用户失败");
+      return false;
+    } finally {
+      setBusyUsername(null);
+    }
+  };
 
   const createUser = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -132,6 +248,7 @@ export default function UserManagementPanel({
           username,
           password: newPassword,
           is_admin: newUserAdmin,
+          organization_ids: newUserAdmin ? [] : newUserOrganizationIds,
         }),
       });
       const payload = await response.json();
@@ -143,42 +260,13 @@ export default function UserManagementPanel({
       setNewUsername("");
       setNewPassword("");
       setNewUserAdmin(false);
+      setNewUserOrganizationIds([]);
       setMessage(`用户 ${payload.username} 已创建`);
       await loadData();
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : "新增用户失败");
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  const updateUser = async (
-    username: string,
-    payload: { is_admin?: boolean; is_active?: boolean; password?: string },
-    successText: string,
-  ) => {
-    setBusyUsername(username);
-    setError("");
-    setMessage("");
-
-    try {
-      const response = await fetch(`/api/users/${encodeURIComponent(username)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const body = await response.json();
-      if (!response.ok) {
-        setError(parseError(body, "更新用户失败"));
-        return;
-      }
-
-      setMessage(successText);
-      await loadData();
-    } catch (updateError) {
-      setError(updateError instanceof Error ? updateError.message : "更新用户失败");
-    } finally {
-      setBusyUsername(null);
     }
   };
 
@@ -227,6 +315,57 @@ export default function UserManagementPanel({
     }
   };
 
+  const openScopeEditor = (user: UserRecord) => {
+    setScopeEditorUsername(user.username);
+    setScopeDraft(normalizeOrganizationIds(user.organization_ids));
+  };
+
+  const saveScopeEditor = async (username: string) => {
+    const saved = await updateUser(
+      username,
+      { organization_ids: scopeDraft },
+      `${username} 的组织范围已更新`,
+    );
+    if (saved) {
+      setScopeEditorUsername(null);
+      setScopeDraft([]);
+    }
+  };
+
+  const renderOrganizationPicker = (
+    selectedIds: string[],
+    onChange: (nextIds: string[]) => void,
+    disabled = false,
+  ) => (
+    <div className="max-h-44 overflow-y-auto rounded-lg border border-slate-200 bg-white">
+      {organizations.length ? (
+        organizations.map((org) => {
+          const checked = selectedIds.includes(org.id);
+          return (
+            <label
+              key={org.id}
+              className="flex items-start gap-2 border-b border-slate-100 px-3 py-2 last:border-b-0"
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={disabled}
+                onChange={() => onChange(toggleOrganizationId(selectedIds, org.id))}
+                className="mt-1 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+              />
+              <span className="min-w-0">
+                <span className="block truncate text-sm text-slate-800">{org.name}</span>
+                <span className="text-xs text-slate-500">{org.level_name || org.level}</span>
+              </span>
+            </label>
+          );
+        })
+      ) : (
+        <div className="px-3 py-2 text-sm text-slate-500">暂无可选组织</div>
+      )}
+    </div>
+  );
+
   if (loading) {
     return embedded ? (
       <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
@@ -260,7 +399,7 @@ export default function UserManagementPanel({
               </p>
             </div>
             <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
-              支持新增、启停、重置密码和删除
+              支持组织范围、启停、重置密码和删除
             </div>
           </div>
         </div>
@@ -269,7 +408,7 @@ export default function UserManagementPanel({
       <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <h3 className="text-lg font-medium text-slate-900">添加用户</h3>
-          <p className="mt-1 text-sm text-slate-500">创建系统账号，并按需授予管理员权限。</p>
+          <p className="mt-1 text-sm text-slate-500">创建系统账号，并按需授予管理员或组织访问范围。</p>
           <form className="mt-4 space-y-3" onSubmit={createUser}>
             <input
               value={newUsername}
@@ -297,6 +436,23 @@ export default function UserManagementPanel({
               />
               设为管理员
             </label>
+            {!newUserAdmin ? (
+              <div className="space-y-2">
+                <div className="text-sm font-medium text-slate-700">可访问组织范围</div>
+                {renderOrganizationPicker(
+                  newUserOrganizationIds,
+                  setNewUserOrganizationIds,
+                  submitting,
+                )}
+                <div className="text-xs text-slate-500">
+                  未选择时仅能访问本人上传的任务。
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                管理员默认可访问全部组织。
+              </div>
+            )}
             <button
               type="submit"
               disabled={submitting}
@@ -330,6 +486,7 @@ export default function UserManagementPanel({
                     <th className="px-4 py-3 text-left font-medium text-slate-600">用户名</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-600">角色</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-600">状态</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">组织范围</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-600">创建时间</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-600">操作</th>
                   </tr>
@@ -338,6 +495,7 @@ export default function UserManagementPanel({
                   {users.map((item) => {
                     const isBusy = busyUsername === item.username;
                     const isCurrent = item.username === me?.username;
+                    const editingScope = scopeEditorUsername === item.username;
 
                     return (
                       <tr key={item.username}>
@@ -351,6 +509,41 @@ export default function UserManagementPanel({
                           <span className={`rounded-full px-2 py-1 text-xs ${item.is_active ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
                             {item.is_active ? "已启用" : "已禁用"}
                           </span>
+                        </td>
+                        <td className="min-w-56 px-4 py-3 text-slate-600">
+                          {item.is_admin ? (
+                            <span className="text-sm text-slate-700">全部组织</span>
+                          ) : (
+                            <div className="space-y-2">
+                              <div className="text-sm">{describeOrganizationScope(item.organization_ids)}</div>
+                              {editingScope ? (
+                                <div className="w-72 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                                  {renderOrganizationPicker(scopeDraft, setScopeDraft, isBusy)}
+                                  <div className="mt-3 flex gap-2">
+                                    <button
+                                      type="button"
+                                      disabled={isBusy}
+                                      onClick={() => saveScopeEditor(item.username)}
+                                      className="rounded bg-slate-900 px-3 py-1.5 text-xs font-medium text-white disabled:bg-slate-400"
+                                    >
+                                      保存范围
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={isBusy}
+                                      onClick={() => {
+                                        setScopeEditorUsername(null);
+                                        setScopeDraft([]);
+                                      }}
+                                      className="rounded border border-slate-300 px-3 py-1.5 text-xs text-slate-700 disabled:opacity-60"
+                                    >
+                                      取消
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-slate-600">{formatTimestamp(item.created_at)}</td>
                         <td className="px-4 py-3">
@@ -371,6 +564,16 @@ export default function UserManagementPanel({
                             >
                               {item.is_active ? "禁用" : "启用"}
                             </button>
+                            {!item.is_admin ? (
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                onClick={() => openScopeEditor(item)}
+                                className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-60"
+                              >
+                                设置范围
+                              </button>
+                            ) : null}
                             <button
                               type="button"
                               disabled={isBusy}
