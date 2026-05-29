@@ -11,10 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 
 from api import runtime
+from api.auth_utils import require_login
 from src.utils.issue_display import build_issue_display
 
 router = APIRouter()
@@ -1071,9 +1072,11 @@ def _create_annotated_pdf(
 
 @router.get("/api/reports/download")
 async def download_report(
+    request: Request,
     job_id: str,
     format: str = Query(default="pdf", pattern="^(pdf|json|csv|docx)$"),
 ):
+    require_login(request)
     status_payload = runtime.get_job_status_payload(job_id)
     issues = _extract_issues(status_payload)
 
@@ -1129,7 +1132,8 @@ async def download_report(
 
 
 @router.post("/api/reports/download-batch")
-async def download_reports_batch(body: Dict[str, Any]):
+async def download_reports_batch(body: Dict[str, Any], request: Request):
+    require_login(request)
     raw_job_ids = body.get("job_ids")
     if not isinstance(raw_job_ids, list):
         raise HTTPException(status_code=400, detail="job_ids must be a list")

@@ -30,9 +30,11 @@ def _serialize_org(org) -> Dict[str, Any]:
 @router.get("/api/jobs")
 @router.get("/jobs")
 async def list_jobs(
+    request: Request,
     limit: int | None = Query(default=None, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
 ):
+    require_login(request)
     job_dirs = runtime.iter_job_dirs()
 
     def _quick_ts(job_dir):
@@ -263,12 +265,14 @@ async def batch_delete_jobs(request: Request):
 
 @router.get("/jobs/{job_id}/status")
 @router.get("/api/jobs/{job_id}/status")
-async def get_job_status(job_id: str):
+async def get_job_status(job_id: str, request: Request):
+    require_login(request)
     return runtime.get_job_status_payload(job_id)
 
 
 @router.get("/api/jobs/{job_id}")
-async def get_job_detail(job_id: str):
+async def get_job_detail(job_id: str, request: Request):
+    require_login(request)
     payload = runtime.get_job_status_payload(job_id)
     payload.setdefault("job_id", job_id)
     try:
@@ -279,20 +283,24 @@ async def get_job_detail(job_id: str):
 
 
 @router.get("/api/jobs/{job_id}/review")
-async def get_job_review(job_id: str):
+async def get_job_review(job_id: str, request: Request):
+    require_login(request)
     return runtime.get_job_review_payload(job_id)
 
 
 @router.get("/api/jobs/{job_id}/structured-ingest")
-async def get_job_structured_ingest(job_id: str):
+async def get_job_structured_ingest(job_id: str, request: Request):
+    require_login(request)
     return runtime.get_job_review_payload(job_id)
 
 
 @router.get("/api/jobs/{job_id}/org-suggestions")
 async def get_job_org_suggestions(
+    request: Request,
     job_id: str,
     top_n: int = Query(default=5, ge=1, le=20),
 ):
+    require_login(request)
     job_dir = runtime.UPLOAD_ROOT / job_id
     if not job_dir.exists():
         raise HTTPException(status_code=404, detail="job_id does not exist")

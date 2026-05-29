@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from fastapi import FastAPI
+from fastapi import HTTPException
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
@@ -31,6 +32,7 @@ def _build_request(
     path: str = "/secure",
     headers: dict[str, str] | None = None,
     client_host: str = "198.51.100.2",
+    query_string: bytes = b"",
 ) -> Request:
     raw_headers = []
     for key, value in (headers or {}).items():
@@ -43,7 +45,7 @@ def _build_request(
         "path": path,
         "raw_path": path.encode("latin-1"),
         "headers": raw_headers,
-        "query_string": b"",
+        "query_string": query_string,
         "client": (client_host, 12345),
         "server": ("testserver", 80),
         "scheme": "http",
@@ -127,6 +129,67 @@ def test_get_client_id_ignores_x_forwarded_for_from_untrusted_proxy() -> None:
     )
 
     assert middleware._get_client_id(request) == "198.51.100.2"
+
+
+@pytest.mark.anyio
+async def test_ready_response_redacts_diagnostic_details_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_ASSIST_ENABLED", "false")
+    monkeypatch.setattr(
+        health_routes.queue_runtime,
+        "queue_enabled",
+        lambda testing_mode=None: False,
+    )
+    request = _build_request(path="/ready")
+
+    payload = await health_routes.ready(request)
+
+    assert payload["details"]["redacted"] is True
+    assert "rules_file" not in payload["details"]
+    assert "audit_log_path" not in payload["details"]
+    assert payload["dependencies"]["required"]["upload_root_exists"]["detail"] in {
+        "ok",
+        "failed",
+    }
+    assert str(payload["dependencies"]["required"]["rules_file_exists"]["detail"]) in {
+        "ok",
+        "failed",
+    }
+
+
+@pytest.mark.anyio
+async def test_ready_details_require_admin_when_not_explicitly_exposed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_ASSIST_ENABLED", "false")
+    monkeypatch.setenv("TESTING", "false")
+    monkeypatch.delenv("READY_EXPOSE_DETAILS", raising=False)
+    request = _build_request(
+        path="/ready",
+        headers={},
+        client_host="198.51.100.2",
+        query_string=b"details=true",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await health_routes.ready(request)
+
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_ready_details_can_be_enabled_for_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_ASSIST_ENABLED", "false")
+    monkeypatch.setenv("READY_EXPOSE_DETAILS", "true")
+    request = _build_request(path="/ready", query_string=b"details=true")
+
+    payload = await health_routes.ready(request)
+
+    assert "rules_file" in payload["details"]
+    assert "audit_log_path" in payload["details"]
 
 
 @pytest.mark.anyio
