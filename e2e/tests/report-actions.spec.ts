@@ -172,6 +172,7 @@ test.describe("Report actions", () => {
 
     let detailFetches = 0;
     let reanalyzeCalls = 0;
+    let reanalyzeBody: Record<string, unknown> | null = null;
     let reanalysisStarted = false;
     const dialogMessages: string[] = [];
 
@@ -252,6 +253,7 @@ test.describe("Report actions", () => {
 
       if (path === "/api/jobs/job-001/reanalyze" && method === "POST") {
         reanalyzeCalls += 1;
+        reanalyzeBody = req.postDataJSON() as Record<string, unknown>;
         reanalysisStarted = true;
         await route.fulfill({
           status: 200,
@@ -283,11 +285,164 @@ test.describe("Report actions", () => {
     await expect(reanalyzeButton).toBeVisible({ timeout: 20_000 });
     await expect(reanalyzeButton).toBeEnabled();
 
+    await page.getByTestId("task-reanalyze-ai-toggle").uncheck();
     await reanalyzeButton.click();
 
     await expect.poll(() => reanalyzeCalls).toBe(1);
+    await expect.poll(() => reanalyzeBody).toEqual({ use_local_rules: true, use_ai_assist: false });
     await expect.poll(() => detailFetches).toBeGreaterThan(1);
     await expect(reanalyzeButton).toBeDisabled();
+    expect(dialogMessages.some((message) => message.includes("confirm:"))).toBe(true);
+    expect(dialogMessages.some((message) => message.includes("alert:"))).toBe(true);
+  });
+
+  test("task detail can ignore issue, preview evidence and download report", async ({ page }) => {
+    test.setTimeout(60_000);
+
+    let ignoreCalls = 0;
+    let downloadCalls = 0;
+    const dialogMessages: string[] = [];
+
+    await page.context().addCookies([sessionCookie]);
+    page.on("dialog", async (dialog) => {
+      dialogMessages.push(`${dialog.type()}:${dialog.message()}`);
+      await dialog.accept();
+    });
+
+    await page.addInitScript(() => {
+      window.print = () => undefined;
+    });
+
+    await page.route("**/api/**", async (route) => {
+      const req = route.request();
+      const method = req.method().toUpperCase();
+      const url = new URL(req.url());
+      const path = url.pathname;
+
+      if (path === "/api/auth/me") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            user: {
+              username: "e2e-admin",
+              display_name: "E2E Admin",
+              is_admin: true,
+            },
+          }),
+        });
+        return;
+      }
+
+      if (path === "/api/jobs/job-ignore" && method === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            job_id: "job-ignore",
+            filename: "ignore-report.pdf",
+            status: "completed",
+            report_year: 2026,
+            report_kind: "budget",
+            organization_id: "dept-001",
+            organization_name: "Finance Bureau",
+            updated_ts: 1_710_000_000,
+            result: {
+              issues: [
+                {
+                  id: "issue-ignore-1",
+                  rule_id: "R-IGNORE",
+                  title: "Ignored mismatch",
+                  severity: "high",
+                  message: "Ignored mismatch details",
+                  suggestion: "Review ignored mismatch",
+                  page: 2,
+                  evidence: [
+                    {
+                      page: 2,
+                      text: "Ignored mismatch details",
+                      bbox: [10, 20, 120, 80],
+                    },
+                  ],
+                },
+              ],
+            },
+          }),
+        });
+        return;
+      }
+
+      if (path === "/api/jobs/job-ignore/structured-ingest" && method === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ status: "done" }),
+        });
+        return;
+      }
+
+      if (path === "/api/jobs/job-ignore/issues/ignore" && method === "POST") {
+        ignoreCalls += 1;
+        expect(req.postDataJSON()).toEqual({ issue_id: "issue-ignore-1" });
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ success: true, ignored_issue_ids: ["issue-ignore-1"] }),
+        });
+        return;
+      }
+
+      if (path === "/api/reports/download" && method === "GET") {
+        downloadCalls += 1;
+        expect(url.searchParams.get("job_id")).toBe("job-ignore");
+        expect(url.searchParams.get("format")).toBe("pdf");
+        await route.fulfill({
+          status: 200,
+          contentType: "application/pdf",
+          headers: { "content-disposition": "attachment; filename=\"ignore-report.pdf\"" },
+          body: "%PDF-1.4\n% e2e\n",
+        });
+        return;
+      }
+
+      if (path.startsWith("/api/files/")) {
+        await route.fulfill({
+          status: 200,
+          contentType: "image/png",
+          body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=", "base64"),
+        });
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({}),
+      });
+    });
+
+    await page.goto("/task/job-ignore");
+
+    await expect(page.getByTestId("task-ignore-issue-button")).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId("task-open-viewer-button").click();
+    await expect(page.getByTestId("task-pdf-highlighter")).toBeVisible();
+    await expect(page.getByTestId("task-pdf-highlighter-source")).toHaveAttribute("href", /job-ignore/);
+    await page.getByTestId("task-pdf-highlighter-close").click();
+    await expect(page.getByTestId("task-pdf-highlighter")).toHaveCount(0);
+
+    await page.getByTestId("task-open-report-modal").click();
+    await expect(page.getByTestId("task-report-modal")).toBeVisible();
+    await page.getByTestId("task-report-print").click();
+    const downloadPromise = page.waitForEvent("download");
+    await page.getByTestId("task-report-download").click();
+    await downloadPromise;
+    await expect.poll(() => downloadCalls).toBe(1);
+    await page.getByTestId("task-report-close").click();
+    await expect(page.getByTestId("task-report-modal")).toHaveCount(0);
+
+    await page.getByTestId("task-ignore-issue-button").click();
+    await expect.poll(() => ignoreCalls).toBe(1);
+    await expect(page.getByText("当前任务暂无问题。")).toBeVisible();
     expect(dialogMessages.some((message) => message.includes("confirm:"))).toBe(true);
     expect(dialogMessages.some((message) => message.includes("alert:"))).toBe(true);
   });
@@ -429,6 +584,232 @@ test.describe("Report actions", () => {
     await expect(page.getByTestId("selected-actions-bar")).toHaveCount(0);
     await expect(page.getByTestId("job-select-job-101")).toHaveCount(0);
     await expect(page.getByTestId("job-select-job-102")).toHaveCount(0);
+    expect(dialogMessages.some((message) => message.includes("confirm:"))).toBe(true);
+    expect(dialogMessages.some((message) => message.includes("alert:"))).toBe(true);
+  });
+
+  test("department page row menu and batch export actions call expected APIs", async ({ page }) => {
+    test.setTimeout(90_000);
+
+    let associateCalls = 0;
+    let reanalyzeCalls = 0;
+    let deleteCalls = 0;
+    let batchZipCalls = 0;
+    const reportDownloads: Array<{ jobId: string | null; format: string | null }> = [];
+    const dialogMessages: string[] = [];
+    let jobs = [
+      {
+        job_id: "job-row-1",
+        filename: "row-report-1.pdf",
+        status: "completed",
+        report_year: 2026,
+        report_kind: "budget",
+        merged_issue_total: 2,
+        issue_error: 1,
+        review_item_count: 0,
+        organization_id: "dept-001",
+        organization_name: "Finance Bureau",
+        updated_ts: 1_710_000_010,
+        ts: 1_710_000_010,
+      },
+      {
+        job_id: "job-row-2",
+        filename: "row-report-2.pdf",
+        status: "completed",
+        report_year: 2026,
+        report_kind: "budget",
+        merged_issue_total: 0,
+        issue_error: 0,
+        review_item_count: 0,
+        organization_id: "dept-001",
+        organization_name: "Finance Bureau",
+        updated_ts: 1_710_000_011,
+        ts: 1_710_000_011,
+      },
+    ];
+
+    await page.context().addCookies([sessionCookie]);
+    page.on("dialog", async (dialog) => {
+      dialogMessages.push(`${dialog.type()}:${dialog.message()}`);
+      await dialog.accept();
+    });
+
+    await page.route("**/api/**", async (route) => {
+      const req = route.request();
+      const method = req.method().toUpperCase();
+      const url = new URL(req.url());
+      const path = url.pathname;
+
+      if (path === "/api/auth/me") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            user: {
+              username: "e2e-admin",
+              display_name: "E2E Admin",
+              is_admin: true,
+            },
+          }),
+        });
+        return;
+      }
+
+      if (path === "/api/organizations/list") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            organizations: [
+              { id: "dept-001", name: "Finance Bureau", level: "department", level_name: "department", parent_id: null },
+              { id: "unit-001", name: "Finance Unit", level: "unit", level_name: "unit", parent_id: "dept-001" },
+            ],
+            total: 2,
+          }),
+        });
+        return;
+      }
+
+      if (path === "/api/organizations/dept-001/jobs" && method === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ jobs, total: jobs.length }),
+        });
+        return;
+      }
+
+      if (path === "/api/jobs/job-row-1/org-suggestions" && method === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            current: { organization: { id: "dept-001", name: "Finance Bureau", level: "department" }, match_type: "manual", confidence: 1 },
+            suggestions: [{ organization: { id: "unit-001", name: "Finance Unit", level: "unit" }, confidence: 0.98 }],
+          }),
+        });
+        return;
+      }
+
+      if (path === "/api/jobs/job-row-1/associate" && method === "POST") {
+        associateCalls += 1;
+        expect(req.postDataJSON()).toEqual({ org_id: "unit-001" });
+        jobs = jobs.map((job) => job.job_id === "job-row-1" ? { ...job, organization_id: "unit-001", organization_name: "Finance Unit" } : job);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ success: true, organization_id: "unit-001", organization_name: "Finance Unit" }),
+        });
+        return;
+      }
+
+      if ((path === "/api/jobs/job-row-1/reanalyze" || path === "/api/jobs/job-row-2/reanalyze") && method === "POST") {
+        reanalyzeCalls += 1;
+        expect(req.postDataJSON()).toEqual({ use_local_rules: true, use_ai_assist: false });
+        const jobId = path.includes("job-row-1") ? "job-row-1" : "job-row-2";
+        jobs = jobs.map((job) => job.job_id === jobId ? { ...job, status: "started" } : job);
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ success: true }) });
+        return;
+      }
+
+      if (path === "/api/reports/download" && method === "GET") {
+        reportDownloads.push({
+          jobId: url.searchParams.get("job_id"),
+          format: url.searchParams.get("format"),
+        });
+        const format = url.searchParams.get("format");
+        if (format === "json") {
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ issues: [{ id: "issue-csv", rule_id: "R001", title: "CSV issue", severity: "high", page: 1 }] }),
+          });
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/pdf",
+          headers: { "content-disposition": "attachment; filename=\"row-report.pdf\"" },
+          body: "%PDF-1.4\n% e2e\n",
+        });
+        return;
+      }
+
+      if (path === "/api/reports/download-batch" && method === "POST") {
+        batchZipCalls += 1;
+        expect(req.postDataJSON()).toEqual({ job_ids: ["job-row-1", "job-row-2"] });
+        await route.fulfill({
+          status: 200,
+          contentType: "application/zip",
+          headers: { "content-disposition": "attachment; filename=\"reports.zip\"" },
+          body: "zip",
+        });
+        return;
+      }
+
+      if (path === "/api/jobs/batch-delete" && method === "POST") {
+        deleteCalls += 1;
+        expect(req.postDataJSON()).toEqual({ job_ids: ["job-row-1"] });
+        jobs = jobs.filter((job) => job.job_id !== "job-row-1");
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ deleted_job_ids: ["job-row-1"], failed: [] }),
+        });
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({}),
+      });
+    });
+
+    await page.goto("/department/dept-001");
+
+    await expect(page.getByTestId("job-menu-job-row-1")).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId("department-reanalyze-ai-toggle").uncheck();
+    await page.getByTestId("toggle-include-sub-control").click();
+    await expect(page.getByTestId("toggle-include-sub")).not.toBeChecked();
+
+    await page.getByTestId("job-select-job-row-1").check();
+    await page.getByTestId("job-select-job-row-2").check();
+    await expect(page.getByTestId("selected-actions-bar")).toBeVisible();
+
+    await page.getByTestId("batch-reanalyze-button").click();
+    await expect.poll(() => reanalyzeCalls).toBe(2);
+
+    await page.getByTestId("job-select-job-row-1").check();
+    await page.getByTestId("job-select-job-row-2").check();
+    const csvDownload = page.waitForEvent("download");
+    await page.getByTestId("batch-export-button").click();
+    await csvDownload;
+    await expect.poll(() => reportDownloads.filter((item) => item.format === "json").length).toBe(2);
+
+    const zipDownload = page.waitForEvent("download");
+    await page.getByTestId("batch-export-zip-button").click();
+    await zipDownload;
+    await expect.poll(() => batchZipCalls).toBe(1);
+
+    await page.getByTestId("job-menu-job-row-1").click();
+    await expect(page.getByTestId("job-view-job-row-1")).toBeVisible();
+    await page.getByTestId("job-associate-job-row-1").click();
+    await expect(page.getByTestId("associate-dialog")).toBeVisible();
+    await page.getByTestId("associate-option-unit-001").click();
+    await page.getByTestId("associate-dialog-submit").click();
+    await expect.poll(() => associateCalls).toBe(1);
+
+    await page.getByTestId("job-menu-job-row-1").click();
+    const rowDownload = page.waitForEvent("download");
+    await page.getByTestId("job-export-job-row-1").click();
+    await rowDownload;
+    await expect.poll(() => reportDownloads.some((item) => item.jobId === "job-row-1" && item.format === "pdf")).toBe(true);
+
+    await page.getByTestId("job-menu-job-row-1").click();
+    await page.getByTestId("job-delete-job-row-1").click();
+    await expect.poll(() => deleteCalls).toBe(1);
+    await expect(page.getByTestId("job-menu-job-row-1")).toHaveCount(0);
     expect(dialogMessages.some((message) => message.includes("confirm:"))).toBe(true);
     expect(dialogMessages.some((message) => message.includes("alert:"))).toBe(true);
   });

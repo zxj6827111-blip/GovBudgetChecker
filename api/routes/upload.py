@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
 from api import runtime
-from api.auth_utils import require_login
+from api.auth_utils import require_login, user_can_access_org
 from api.routes.organizations import clear_department_stats_cache
 from src.services.org_matcher import get_org_matcher
 
@@ -185,7 +185,11 @@ def _inspect_document_preflight(
     }
 
 
-def _auto_match_organization(job_id: str, filename: str) -> Optional[dict]:
+def _auto_match_organization(
+    job_id: str,
+    filename: str,
+    user: Optional[Dict[str, Any]] = None,
+) -> Optional[dict]:
     if not runtime.ORG_AVAILABLE:
         return None
     try:
@@ -195,6 +199,12 @@ def _auto_match_organization(job_id: str, filename: str) -> Optional[dict]:
         organization_id = str(current.get("organization_id") or "").strip()
         confidence = float(current.get("confidence") or 0.0)
         if not organization_id:
+            return None
+        if user is not None and not user_can_access_org(user, organization_id):
+            logger.info(
+                "Ignoring out-of-scope automatic organization match for job %s",
+                job_id,
+            )
             return None
         return runtime.set_job_organization(
             job_id,
@@ -214,12 +224,15 @@ async def _handle_upload(
     fiscal_year: Optional[str] = None,
     doc_type: Optional[str] = None,
     created_by: Optional[str] = None,
+    actor: Optional[Dict[str, Any]] = None,
 ) -> dict:
     selected_org = _clean_optional_text(selected_org)
     fiscal_year = _clean_optional_text(fiscal_year)
     doc_type = _clean_optional_text(doc_type)
 
     org = _resolve_manual_org(selected_org)
+    if selected_org and actor is not None and not user_can_access_org(actor, selected_org):
+        raise HTTPException(status_code=403, detail="organization access denied")
     org_name = org["name"] if org else None
 
     uploaded = await runtime.store_upload_file(
@@ -243,7 +256,7 @@ async def _handle_upload(
         exclude_job_id=str(uploaded.get("job_id") or ""),
     )
     if duplicate is not None:
-        runtime.delete_uploaded_job(str(uploaded.get("job_id") or ""))
+        runtime.cleanup_uploaded_job(str(uploaded.get("job_id") or ""))
         duplicate_filename = str(duplicate.get("filename") or "历史文件")
         duplicate_job_id = str(duplicate.get("job_id") or "")
         raise HTTPException(
@@ -260,7 +273,9 @@ async def _handle_upload(
             confidence=1.0,
         )
     else:
-        org_binding = _auto_match_organization(uploaded["job_id"], uploaded["filename"])
+        org_binding = _auto_match_organization(
+            uploaded["job_id"], uploaded["filename"], actor
+        )
 
     uploaded["organization_id"] = (
         org_binding.get("organization_id") if org_binding else selected_org
@@ -308,7 +323,11 @@ async def upload_pdf(
 ):
     _ = api_key
     _, _, user = require_login(request)
-    return await _handle_upload(file, created_by=str(user.get("username") or ""))
+    return await _handle_upload(
+        file,
+        created_by=str(user.get("username") or ""),
+        actor=user,
+    )
 
 
 @router.post("/api/documents/upload")
@@ -329,4 +348,5 @@ async def upload_document(
         fiscal_year=fiscal_year,
         doc_type=doc_type,
         created_by=str(user.get("username") or ""),
+        actor=user,
     )

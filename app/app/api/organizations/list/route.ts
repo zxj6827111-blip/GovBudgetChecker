@@ -3,6 +3,7 @@ import { apiBase } from "@/lib/apiBase";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { getLocalOrganizationsList } from "@/lib/localData";
 import { requireBackendAuthHeaders } from "@/lib/routeAuth";
+import { shouldFallbackToLocal } from "@/lib/fallbackPolicy";
 
 export const dynamic = "force-dynamic";
 
@@ -56,13 +57,26 @@ export async function GET() {
       }
       return NextResponse.json(data, { status: response.status });
     }
+    if (shouldFallbackToLocal(response.status) && process.env.NODE_ENV !== "production") {
+      console.warn("organizations list route falling back to local data", { status: response.status });
+      const localData = await getLocalOrganizationsList();
+      return NextResponse.json(localData, {
+        status: 200,
+        headers: {
+          "X-Data-Source": "local-fallback",
+          "X-Fallback-Reason": String(response.status),
+        },
+      });
+    }
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    if (process.env.NODE_ENV !== "production") {
-      console.error("Failed to fetch organizations list:", error);
-    }
+    console.error("organizations list route backend request failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 
-  const localData = await getLocalOrganizationsList();
-  return NextResponse.json(localData, { status: 200 });
+  return NextResponse.json(
+    { detail: "backend is unavailable for organizations list" },
+    { status: 502 },
+  );
 }

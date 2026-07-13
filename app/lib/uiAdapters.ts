@@ -565,9 +565,10 @@ function collectDisplayIssues(result: Record<string, unknown>): Record<string, u
   return [];
 }
 
-export function toUiProblems(detail: JobDetailRecord): Problem[] {
+export function toUiProblems(detail: JobDetailRecord, options: { includeEvidencePreview?: boolean } = {}): Problem[] {
   const result = isRecord(detail.result) ? detail.result : {};
   const issues = collectDisplayIssues(result);
+  const includeEvidencePreview = options.includeEvidencePreview ?? true;
 
   const ignored = new Set(
     Array.isArray(detail.ignored_issue_ids)
@@ -606,7 +607,7 @@ export function toUiProblems(detail: JobDetailRecord): Problem[] {
             "\u8bf7\u7ed3\u5408\u8868\u683c\u4e0e\u8bf4\u660e\u539f\u6587\u590d\u6838\u540e\u4fee\u6b63"
         ),
         snippet,
-        evidenceImage: createEvidencePreviewDataUrl(resolvedTitle, snippet, page, location),
+        evidenceImage: includeEvidencePreview ? createEvidencePreviewDataUrl(resolvedTitle, snippet, page, location) : "",
         status: "pending",
         source: String(issue.source ?? ""),
         bbox: Array.isArray(issue.bbox)

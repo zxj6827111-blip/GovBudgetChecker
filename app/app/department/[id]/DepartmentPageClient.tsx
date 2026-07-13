@@ -865,6 +865,7 @@ export default function DepartmentPageClient() {
             </button>
             <div className="hidden h-6 w-px bg-border md:block" />
             <label
+              data-testid="toggle-include-sub-control"
               className={cn(
                 "inline-flex items-center gap-3",
                 currentOrg?.level === "unit"
@@ -1079,6 +1080,7 @@ export default function DepartmentPageClient() {
             </span>
             <button
               type="button"
+              data-testid="batch-reanalyze-button"
               onClick={() => void handleBatchReanalyze()}
               disabled={isBatchReanalyzing}
               className="inline-flex items-center gap-2 rounded-lg border border-primary-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 disabled:opacity-60"

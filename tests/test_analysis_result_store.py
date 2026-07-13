@@ -39,6 +39,7 @@ class _FakeConnection:
 
 @pytest.mark.asyncio
 async def test_persist_analysis_job_snapshot_records_dual_results(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test")
     conn = _FakeConnection()
     released = []
 
@@ -115,6 +116,7 @@ async def test_persist_analysis_job_snapshot_records_dual_results(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_persist_analysis_job_snapshot_clears_stale_results_for_active_job(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test")
     conn = _FakeConnection()
 
     async def _fake_ready():

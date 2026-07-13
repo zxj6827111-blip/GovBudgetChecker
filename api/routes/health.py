@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 
 from api.config import AppConfig
 from api import runtime
@@ -131,7 +131,7 @@ def _redact_checks(checks: Dict[str, bool]) -> Dict[str, bool]:
 
 @router.get("/ready")
 @router.get("/api/ready")
-async def ready(request: Request) -> Dict[str, Any]:
+async def ready(request: Request, response: Response) -> Dict[str, Any]:
     rules_file = Path(os.getenv("RULES_FILE", "rules/v3_3.yaml"))
     audit_log_path = get_audit_log_path()
     auth_enabled = bool(runtime.security_config.enabled) if runtime.security_config else False
@@ -139,7 +139,12 @@ async def ready(request: Request) -> Dict[str, Any]:
     queue_enabled = queue_runtime.queue_enabled()
     queue_role = queue_runtime.get_queue_role()
     local_queue_required = queue_enabled and queue_role in {"all", "worker"}
-    queue_started = runtime.get_job_queue() is not None if local_queue_required else True
+    if local_queue_required:
+        queue_started = runtime.get_job_queue() is not None
+    elif queue_enabled and queue_role == "api":
+        queue_started = queue_runtime.has_recent_worker_heartbeat(runtime.UPLOAD_ROOT)
+    else:
+        queue_started = True
     inline_fallback_enabled = queue_runtime.allow_inline_fallback()
     inline_fallback_safe = not (
         queue_enabled and queue_role == "api" and inline_fallback_enabled
@@ -179,7 +184,7 @@ async def ready(request: Request) -> Dict[str, Any]:
         "job_queue_started": _status(
             checks["job_queue_started"],
             True,
-            "started" if queue_started else "local queue is required but not started",
+            "started" if queue_started else "no active worker heartbeat detected",
         ),
         "inline_fallback_safe": _status(
             checks["inline_fallback_safe"],
@@ -223,6 +228,8 @@ async def ready(request: Request) -> Dict[str, Any]:
     }
 
     ready_state = all(item["ok"] for item in dependencies["required"].values())
+    if not ready_state:
+        response.status_code = 503
     include_details = _include_ready_details(request)
     payload: Dict[str, Any] = {
         "status": "ready" if ready_state else "not_ready",

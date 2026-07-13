@@ -64,6 +64,20 @@ def test_pipeline_routes_budget_rules(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "FIN-DUMMY" not in codes
 
 
+def test_pipeline_keeps_unknown_document_out_of_budget_and_final_rules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipeline, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
+    monkeypatch.setattr(pipeline, "FINAL_ALL_RULES", [_DummyRule("FIN-DUMMY")])
+    monkeypatch.setattr(pipeline, "ALL_COMMON_RULES", [_DummyRule("COMMON-DUMMY")])
+    doc = SimpleNamespace(path="material.pdf", page_texts=["公开材料"], page_tables=[[]])
+
+    issues = pipeline.run_rules(doc, use_ai_assist=False, report_kind="unknown")
+
+    codes = {issue.rule for issue in issues}
+    assert codes == {"DOC-TYPE-UNKNOWN", "COMMON-DUMMY"}
+
+
 @pytest.mark.asyncio
 async def test_engine_rule_runner_routes_budget_rules(
     monkeypatch: pytest.MonkeyPatch,

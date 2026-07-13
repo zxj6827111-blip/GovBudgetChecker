@@ -62,22 +62,8 @@ export async function POST(request: NextRequest) {
     const payload = parseBackendPayload(await backendResponse.text());
 
     if (!backendResponse.ok) {
-      if (backendResponse.status === 401 || backendResponse.status === 403) {
-        try {
-          const localResponse = await loginWithLocalFallback(request, username, password);
-          if (localResponse) {
-            return localResponse;
-          }
-        } catch (localError) {
-          if (localError instanceof LocalAuthError) {
-            return NextResponse.json(
-              { detail: localError.detail },
-              { status: localError.status },
-            );
-          }
-          console.error("Local login fallback failed:", localError);
-        }
-      }
+      // An explicit authentication rejection is authoritative. Falling back here
+      // could bypass backend lockout, disablement, or password policy decisions.
       return NextResponse.json(payload, { status: backendResponse.status });
     }
 

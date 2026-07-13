@@ -84,6 +84,22 @@ class TestAtomicWriteJsonFile:
         assert list(tmp_path.glob("*.tmp")) == []
 
 
+def test_rejected_upload_cleanup_does_not_replace_business_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    job_dir = tmp_path / "locked-job"
+    job_dir.mkdir()
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    def _locked_remove(_job_dir: Path, **_kwargs) -> None:
+        raise PermissionError("file is locked")
+
+    monkeypatch.setattr(runtime, "_remove_job_dir", _locked_remove)
+
+    assert runtime.cleanup_uploaded_job("locked-job") is False
+    assert job_dir.exists()
+
+
 # ---------------------------------------------------------------------------
 # Pipeline timeout
 # ---------------------------------------------------------------------------
@@ -142,3 +158,51 @@ class TestPipelineTimeout:
         await pipeline_mod._run_pipeline(job_dir)
 
         assert called is True
+
+    @pytest.mark.asyncio
+    async def test_rule_failure_writes_error_instead_of_empty_done_result(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from api import main as pipeline_mod
+        from src.services.rule_process import RuleExecutionError
+
+        job_dir = tmp_path / "job-rule-failure"
+        job_dir.mkdir()
+        (job_dir / "source.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+        runtime.write_json_file(
+            job_dir / "status.json",
+            {"status": "queued", "mode": "legacy", "use_local_rules": True},
+        )
+
+        class _Pdf:
+            pages = [object()]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+        monkeypatch.setattr(pipeline_mod.pdfplumber, "open", lambda _path: _Pdf())
+        monkeypatch.setattr(
+            pipeline_mod, "_extract_visible_text_from_page", lambda _page: "公开材料"
+        )
+        monkeypatch.setattr(
+            pipeline_mod, "_extract_tables_from_page", lambda _page: []
+        )
+        monkeypatch.setattr(
+            pipeline_mod,
+            "run_rules_in_process",
+            AsyncMock(side_effect=RuleExecutionError("rule crashed")),
+        )
+        monkeypatch.setattr(
+            pipeline_mod, "persist_analysis_job_snapshot", AsyncMock(return_value=True)
+        )
+        monkeypatch.setattr(pipeline_mod.settings, "get", lambda *_args: False)
+
+        await pipeline_mod._run_pipeline_inner(job_dir)
+
+        payload = runtime.read_json_file(job_dir / "status.json", default={})
+        assert payload["status"] == "error"
+        assert "local_rules_failed" in payload["error"]
+        assert payload.get("result") is None

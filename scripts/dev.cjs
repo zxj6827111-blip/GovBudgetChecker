@@ -1,3 +1,4 @@
+const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 
@@ -18,17 +19,62 @@ const projectRoot = normalizeWindowsPath(
   packageJsonDir || process.env.INIT_CWD || process.cwd(),
 );
 const frontendCwd = path.join(projectRoot, 'app');
-const pythonCommand = process.platform === 'win32' ? 'python.exe' : 'python';
+const venvPython =
+  process.platform === 'win32'
+    ? path.join(projectRoot, '.venv', 'Scripts', 'python.exe')
+    : path.join(projectRoot, '.venv', 'bin', 'python');
+const pythonCommand = fs.existsSync(venvPython)
+  ? venvPython
+  : process.platform === 'win32'
+    ? 'python.exe'
+    : 'python';
 const frontendCommand = process.platform === 'win32' ? 'cmd.exe' : 'npm';
 const frontendArgs =
   process.platform === 'win32'
     ? ['/d', '/s', '/c', 'npm run dev']
     : ['run', 'dev'];
 
+function loadRootEnv(rootDir) {
+  const envPath = path.join(rootDir, '.env');
+  let content = '';
+
+  try {
+    content = fs.readFileSync(envPath, 'utf8');
+  } catch {
+    return {};
+  }
+
+  const values = {};
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      continue;
+    }
+
+    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!match) {
+      continue;
+    }
+
+    const [, key, rawValue] = match;
+    values[key] = rawValue.trim().replace(/^["']|["']$/g, '');
+  }
+  return values;
+}
+
+const rootEnv = loadRootEnv(projectRoot);
+
 const sharedEnv = {
   ...process.env,
+  ...Object.fromEntries(
+    Object.entries(rootEnv).filter(([key]) => process.env[key] === undefined),
+  ),
   GOVBUDGET_AUTH_ENABLED: process.env.GOVBUDGET_AUTH_ENABLED || 'true',
-  GOVBUDGET_API_KEY: process.env.GOVBUDGET_API_KEY || 'dev-local-key',
+  GOVBUDGET_API_KEY:
+    process.env.GOVBUDGET_API_KEY ||
+    rootEnv.GOVBUDGET_API_KEY ||
+    rootEnv.BACKEND_API_KEY ||
+    'dev-local-key',
   GOVBUDGET_RATE_LIMIT: process.env.GOVBUDGET_RATE_LIMIT || '2000',
 };
 

@@ -40,7 +40,11 @@ from src.services.structured_ingest_runner import (
     run_structured_ingest,
 )
 from config.settings import get_settings
-from concurrent.futures import ThreadPoolExecutor
+from src.services.rule_process import (
+    RuleExecutionError,
+    RuleExecutionTimeout,
+    run_rules_in_process,
+)
 
 try:
     from src.security import SecurityMiddleware
@@ -265,6 +269,7 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
     # 提前初始化 provider_stats，确保处理中/失败态也能返回该字段
     provider_stats: List[Dict[str, Any]] = []
     structured_ingest_summary: Dict[str, Any] = {}
+    analysis_quality_status = "complete"
     try:
         # 读取检测模式配置
         status_file = job_dir / "status.json"
@@ -423,6 +428,12 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
 
             # 执行双模式分析
             dual_result = await dual_analyzer.analyze(job_context, analysis_config)
+            rule_error = str(dual_result.meta.get("rule_error") or "").strip()
+            ai_error = str(dual_result.meta.get("ai_error") or "").strip()
+            if use_local_rules and rule_error:
+                raise RuntimeError(f"local_rules_failed:{rule_error}")
+            if use_ai_assist and (ai_error or dual_result.meta.get("fallback")):
+                analysis_quality_status = "degraded"
 
             # 组装最终返回体（双模式结构）
             result = {
@@ -537,27 +548,18 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
             except Exception:
                 RULES_TIMEOUT_SEC = 150
 
-            def _run_build_issues():
-                return build_issues_payload(doc, use_ai_assist, report_kind=report_kind)
-
-            payload_issues = None
             try:
-                loop = asyncio.get_running_loop()
-                # Run the synchronous build task in a separate thread, properly awaited
-                with ThreadPoolExecutor(max_workers=1) as ex:
-                    payload_issues = await asyncio.wait_for(
-                        loop.run_in_executor(ex, _run_build_issues),
-                        timeout=RULES_TIMEOUT_SEC,
-                    )
-            except asyncio.TimeoutError:
-                # 超时：返回空结果并记录回退信息
-                payload_issues = {
-                    "issues": {"error": [], "warn": [], "info": [], "all": []}
-                }
+                payload_issues = await run_rules_in_process(
+                    doc,
+                    use_ai_assist,
+                    report_kind,
+                    RULES_TIMEOUT_SEC,
+                )
+            except RuleExecutionTimeout as exc:
                 provider_stats.append(
                     {
                         "fell_back": True,
-                        "provider_used": "ai_extractor",
+                        "provider_used": "engine",
                         "error": f"rules_timeout_{RULES_TIMEOUT_SEC}s",
                         "latency_ms": RULES_TIMEOUT_SEC * 1000,
                         "timestamp": time.time(),
@@ -579,16 +581,13 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                         "provider_stats": provider_stats,
                     },
                 )
-            except Exception as e:
-                # 规则执行异常：返回空结果并记录
-                payload_issues = {
-                    "issues": {"error": [], "warn": [], "info": [], "all": []}
-                }
+                raise RuntimeError(f"local_rules_timeout:{exc}") from exc
+            except RuleExecutionError as exc:
                 provider_stats.append(
                     {
                         "fell_back": True,
                         "provider_used": "engine",
-                        "error": f"rules_error:{e}",
+                        "error": f"rules_error:{exc}",
                         "timestamp": time.time(),
                     }
                 )
@@ -608,6 +607,7 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                         "provider_stats": provider_stats,
                     },
                 )
+                raise RuntimeError(f"local_rules_failed:{exc}") from exc
 
             # 组装最终返回体（保持你之前的契约字段）
             result = {
@@ -707,9 +707,10 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
         runtime.write_structured_ingest_payload(job_dir, structured_ingest_summary)
         result["meta"]["structured_ingest"] = structured_ingest_summary
 
+        final_status = "degraded" if analysis_quality_status == "degraded" else "done"
         payload = {
             "job_id": job_dir.name,
-            "status": "done",
+            "status": final_status,
             "progress": 100,
             "result": result,
             "ts": time.time(),
@@ -722,7 +723,8 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
             "report_year": report_year,
             "report_kind": report_kind,
             "structured_ingest": structured_ingest_summary,
-            "stage": "完成",
+            "quality_status": analysis_quality_status,
+            "stage": "完成（部分能力降级）" if final_status == "degraded" else "完成",
         }
         _safe_write(job_dir, payload)
         await persist_analysis_job_snapshot(payload, include_results=True)

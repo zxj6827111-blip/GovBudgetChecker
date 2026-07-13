@@ -28,7 +28,7 @@ export default function PDFHighlighter({ problem, onClose }: PDFHighlighterProps
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-slate-900/95 animate-in fade-in duration-200">
+    <div data-testid="task-pdf-highlighter" className="fixed inset-0 z-50 flex flex-col bg-slate-900/95 animate-in fade-in duration-200">
       <div className="border-b border-slate-800 bg-slate-950/85 px-6 py-4 text-slate-200 backdrop-blur-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
@@ -54,6 +54,7 @@ export default function PDFHighlighter({ problem, onClose }: PDFHighlighterProps
                 href={sourcePdfUrl}
                 target="_blank"
                 rel="noopener noreferrer"
+                data-testid="task-pdf-highlighter-source"
                 className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-medium text-slate-200 transition-colors hover:border-slate-600 hover:bg-slate-700"
               >
                 <ExternalLink className="h-4 w-4" />
@@ -62,6 +63,7 @@ export default function PDFHighlighter({ problem, onClose }: PDFHighlighterProps
             )}
 
             <button
+              data-testid="task-pdf-highlighter-close"
               onClick={onClose}
               className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-medium text-slate-200 transition-colors hover:border-danger-400 hover:bg-danger-500 hover:text-white"
             >

@@ -113,7 +113,7 @@ export default function ReportPreviewModal({ task, problems, onClose }: ReportPr
   }).length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm animate-in fade-in duration-200 sm:p-6">
+    <div data-testid="task-report-modal" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm animate-in fade-in duration-200 sm:p-6">
       <div className="flex max-h-full w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl animate-in zoom-in-95 duration-200">
         <div className="shrink-0 border-b border-border bg-slate-50 px-6 py-4">
           <div className="flex items-center justify-between">
@@ -123,6 +123,7 @@ export default function ReportPreviewModal({ task, problems, onClose }: ReportPr
             </div>
             <div className="flex items-center gap-2">
               <button
+                data-testid="task-report-print"
                 onClick={handlePrint}
                 className="flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
               >
@@ -130,6 +131,7 @@ export default function ReportPreviewModal({ task, problems, onClose }: ReportPr
                 打印
               </button>
               <button
+                data-testid="task-report-download"
                 onClick={() => void handleDownload()}
                 disabled={isDownloading}
                 className="flex items-center gap-2 rounded-md bg-primary-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
@@ -139,6 +141,7 @@ export default function ReportPreviewModal({ task, problems, onClose }: ReportPr
               </button>
               <div className="mx-1 h-6 w-px bg-slate-300" />
               <button
+                data-testid="task-report-close"
                 onClick={onClose}
                 className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
               >

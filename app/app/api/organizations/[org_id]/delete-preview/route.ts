@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { apiBase } from "@/lib/apiBase";
 import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { normalizeBackendError } from "@/lib/normalizeBackendError";
 
 export async function GET(
   _request: Request,
@@ -24,7 +25,7 @@ export async function GET(
     } catch {
       data = { detail: text || "invalid backend response" };
     }
-    return NextResponse.json(data, { status: response.status });
+    return NextResponse.json(normalizeBackendError(data, response.status), { status: response.status });
   } catch (error) {
     console.error("Failed to fetch organization delete preview:", error);
     return NextResponse.json(

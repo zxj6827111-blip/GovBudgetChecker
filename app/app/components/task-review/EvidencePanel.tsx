@@ -55,6 +55,7 @@ export default function EvidencePanel({
           {onIgnore ? (
             <button
               type="button"
+              data-testid="task-ignore-issue-button"
               onClick={onIgnore}
               disabled={isIgnoring}
               className="rounded-lg border border-danger-100 bg-danger-50 px-4 py-1.5 text-sm font-medium text-danger-600 transition-colors hover:bg-danger-100 disabled:cursor-not-allowed disabled:opacity-60"
@@ -94,6 +95,7 @@ export default function EvidencePanel({
             <h4 className="text-base font-medium text-danger-900">证据预览</h4>
             <div className="flex items-center gap-4 text-sm">
               <button
+                data-testid="task-open-viewer-button"
                 onClick={onOpenViewer}
                 className="font-medium text-primary-600 transition-colors hover:text-primary-700"
               >
@@ -104,6 +106,7 @@ export default function EvidencePanel({
                   href={sourcePdfUrl}
                   target="_blank"
                   rel="noopener noreferrer"
+                  data-testid="task-open-source-page"
                   className="font-medium text-primary-600 transition-colors hover:text-primary-700"
                 >
                   打开原页

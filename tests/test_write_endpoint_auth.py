@@ -324,10 +324,13 @@ class TestWriteEndpointsWithValidSession:
             json={"name": dept_name, "level": "department"},
         )
         org_id = org_resp.json()["id"]
-
-        job_dir = tmp_path / "job-assoc-test"
-        job_dir.mkdir()
-        (job_dir / "test.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+        scope_response = client.patch(
+            "/api/users/editor",
+            headers=_headers(admin_token),
+            json={"organization_ids": [org_id]},
+        )
+        assert scope_response.status_code == 200
+        _create_owned_job(tmp_path, "job-assoc-test", "editor")
 
         resp = client.post(
             "/api/jobs/job-assoc-test/associate",
@@ -364,23 +367,7 @@ class TestWriteEndpointsWithValidSession:
         _create_user(client, admin_token, "qa", "QaPass1")
         user_token = _login(client, "qa", "QaPass1")
 
-        job_dir = tmp_path / "job-ignore-test"
-        job_dir.mkdir()
-        (job_dir / "test.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
-        runtime.write_json_file(
-            job_dir / "status.json",
-            {
-                "status": "done",
-                "result": {
-                    "issues": {
-                        "all": [{"id": "iss-1", "title": "test issue"}],
-                        "error": [],
-                        "warn": [],
-                        "info": [],
-                    }
-                },
-            },
-        )
+        _create_owned_job(tmp_path, "job-ignore-test", "qa")
         monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
         resp = client.post(
             "/api/jobs/job-ignore-test/issues/ignore",
@@ -393,7 +380,7 @@ class TestWriteEndpointsWithValidSession:
         admin_token = _login(client, "admin", ADMIN_PASSWORD)
         _create_user(client, admin_token, "reader", "ReaderPass1")
         user_token = _login(client, "reader", "ReaderPass1")
-        _create_job(runtime.UPLOAD_ROOT, "job-read-test")
+        _create_owned_job(runtime.UPLOAD_ROOT, "job-read-test", "reader")
 
         jobs = client.get("/api/jobs", headers=_headers(user_token))
         assert jobs.status_code == 200
@@ -503,7 +490,7 @@ class TestJobOwnerIsolation:
         assert reanalyze.status_code == 403
         assert ignore.status_code == 403
 
-    def test_legacy_unowned_jobs_remain_visible_to_regular_users(self, client: TestClient):
+    def test_legacy_unowned_jobs_are_admin_only(self, client: TestClient):
         admin_token = _login(client, "admin", ADMIN_PASSWORD)
         _create_user(client, admin_token, "legacy_reader", "LegacyPass1")
         user_token = _login(client, "legacy_reader", "LegacyPass1")
@@ -511,8 +498,7 @@ class TestJobOwnerIsolation:
 
         resp = client.get("/api/jobs/legacy-job", headers=_headers(user_token))
 
-        assert resp.status_code == 200
-        assert resp.json()["job_id"] == "legacy-job"
+        assert resp.status_code == 403
 
 
 # ---------------------------------------------------------------------------

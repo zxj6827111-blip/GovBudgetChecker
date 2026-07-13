@@ -7,6 +7,8 @@ import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export const dynamic = "force-dynamic";
 
+import { shouldFallbackToLocal } from "@/lib/fallbackPolicy";
+
 export async function GET() {
   const auth = await requireBackendAuthHeaders({
     "Content-Type": "application/json",
@@ -30,13 +32,26 @@ export async function GET() {
     if (response.ok) {
       return NextResponse.json(data, { status: response.status });
     }
+    if (shouldFallbackToLocal(response.status) && process.env.NODE_ENV !== "production") {
+      console.warn("departments route falling back to local data", { status: response.status });
+      const localData = await getLocalDepartments();
+      return NextResponse.json(localData, {
+        status: 200,
+        headers: {
+          "X-Data-Source": "local-fallback",
+          "X-Fallback-Reason": String(response.status),
+        },
+      });
+    }
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    if (process.env.NODE_ENV !== "production") {
-      console.error("Failed to fetch departments:", error);
-    }
+    console.error("departments route backend request failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 
-  const localData = await getLocalDepartments();
-  return NextResponse.json(localData, { status: 200 });
+  return NextResponse.json(
+    { detail: "backend is unavailable and no local fallback configured for departments" },
+    { status: 502 },
+  );
 }

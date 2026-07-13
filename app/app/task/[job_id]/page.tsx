@@ -432,6 +432,8 @@ export default function TaskDetail() {
             {isReanalyzing ? "重新分析中..." : task.status === "analyzing" ? "分析中" : "重新分析"}
           </button>
           <button
+            type="button"
+            data-testid="task-open-report-modal"
             onClick={() => setIsReportModalOpen(true)}
             className="flex items-center gap-2 rounded-md border border-border bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
           >

@@ -12,6 +12,10 @@
   - `UPLOAD_DIR` points to persistent volume path
   - `DATABASE_URL` reachable from runtime
   - `AI_EXTRACTOR_URL` reachable from runtime
+- Validate the deployment topology before rollout:
+  - `docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml config --quiet`
+  - the backend has `READY_REQUIRE_DATABASE=true` and `DATABASE_URL` points to the internal `postgres` service
+  - `/app/data`, `/app/logs`, and `/app/uploads` are mapped to persistent host paths
 - Run gates:
   - `ruff check .`
   - `mypy api src tests`
@@ -25,9 +29,9 @@
   administrator session.
 
 ## 2. Deployment Sequence
-1. Build backend and frontend images from the release tag.
+1. Build backend and frontend images from the release tag with `docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d --build`.
 2. Apply database migrations (if any) before traffic cutover.
-3. Deploy backend with persistent `uploads` mount.
+3. Deploy backend with persistent `data`, `logs`, and `uploads` mounts. The backend must wait for PostgreSQL health before startup.
 4. Deploy frontend and route traffic to new backend.
 5. Wait for workers to start and queue resume log to appear.
 6. Open traffic (canary first, then full rollout).

@@ -66,9 +66,67 @@ interface OrganizationOption {
     children?: OrganizationOption[];
 }
 
-const MAX_FILES = 50;
+type WebkitFileSystemEntry = {
+    name: string;
+    isFile: boolean;
+    isDirectory: boolean;
+};
+
+type WebkitFileSystemFileEntry = WebkitFileSystemEntry & {
+    file: (
+        successCallback: (file: File) => void,
+        errorCallback?: (error: DOMException) => void
+    ) => void;
+};
+
+type WebkitFileSystemDirectoryReader = {
+    readEntries: (
+        successCallback: (entries: WebkitFileSystemEntry[]) => void,
+        errorCallback?: (error: DOMException) => void
+    ) => void;
+};
+
+type WebkitFileSystemDirectoryEntry = WebkitFileSystemEntry & {
+    createReader: () => WebkitFileSystemDirectoryReader;
+};
+
+type DataTransferItemWithEntry = DataTransferItem & {
+    webkitGetAsEntry?: () => unknown;
+};
+
+type BrowserFileHandle = {
+    kind: "file";
+    name: string;
+    getFile: () => Promise<File>;
+};
+
+type BrowserDirectoryHandle = {
+    kind: "directory";
+    name: string;
+    values: () => AsyncIterator<BrowserFileHandle | BrowserDirectoryHandle>;
+};
+
+type WindowWithDirectoryPicker = Window & {
+    showDirectoryPicker?: (options?: { mode?: "read" }) => Promise<BrowserDirectoryHandle>;
+};
+
+function isWebkitFileSystemEntry(entry: unknown): entry is WebkitFileSystemEntry {
+    if (!entry || typeof entry !== "object") {
+        return false;
+    }
+    const candidate = entry as Partial<WebkitFileSystemEntry>;
+    return typeof candidate.name === "string" && typeof candidate.isFile === "boolean" && typeof candidate.isDirectory === "boolean";
+}
+
+const MAX_FILES = 200;
+const PREFLIGHT_BATCH_THRESHOLD = 20;
+const PREFLIGHT_CONCURRENCY = 1;
+const PREFLIGHT_RETRY_LIMIT = 2;
+const PREFLIGHT_RETRY_DELAY_MS = 2500;
+const REQUEST_RATE_LIMIT_DELAY_MS = 750;
 const UPLOAD_PREFS_KEY = "gbc_batch_upload_prefs_v1";
 const REQUEST_TIMEOUT_MS = 180000;
+const DIRECTORY_INPUT_PROPS = { webkitdirectory: "", directory: "" };
 
 // ───────────── Helpers ─────────────
 
@@ -171,8 +229,192 @@ async function readErrorMessage(response: Response) {
     }
 }
 
+function isRateLimitMessage(message: string): boolean {
+    return /too many requests|rate limit|请求.*频繁|限流|429/i.test(message);
+}
+
+function formatRateLimitMessage(context: string): string {
+    return `${context}请求过于频繁，系统已自动放慢速度重试。`;
+}
+
+function formatRequestFailureMessage(message: string, context: string): string {
+    if (isRateLimitMessage(message)) {
+        return `${context}请求仍被限流，请稍后点击“仅重试失败项”。`;
+    }
+    return message || `${context}失败`;
+}
+
+function formatPreflightFailureMessage(error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error || "");
+    if (isRateLimitMessage(message)) {
+        return "首页识别请求过于频繁，已保留文件名匹配结果，可稍后重试或直接继续上传。";
+    }
+    return message || "首页识别失败，已保留文件名识别结果";
+}
+
+function getRetryAfterMs(response: Response, fallbackMs: number): number {
+    const retryAfter = response.headers.get("Retry-After");
+    if (!retryAfter) return fallbackMs;
+
+    const retryAfterSeconds = Number(retryAfter);
+    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0) {
+        return Math.min(Math.max(retryAfterSeconds * 1000, 0), 60_000);
+    }
+
+    const retryAfterDate = Date.parse(retryAfter);
+    if (Number.isFinite(retryAfterDate)) {
+        return Math.min(Math.max(retryAfterDate - Date.now(), 0), 60_000);
+    }
+
+    return fallbackMs;
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function postWithRateLimitRetry(
+    url: string,
+    body: FormData | string,
+    headers: HeadersInit | undefined,
+    options: {
+        context: string;
+        retryLimit?: number;
+        retryDelayMs?: number;
+        onRetry?: (attempt: number, delayMs: number) => void;
+    }
+): Promise<Response> {
+    const retryLimit = options.retryLimit ?? PREFLIGHT_RETRY_LIMIT;
+    const retryDelayMs = options.retryDelayMs ?? PREFLIGHT_RETRY_DELAY_MS;
+
+    for (let attempt = 0; attempt <= retryLimit; attempt += 1) {
+        const response = await postWithTimeout(url, body, headers);
+        if (response.status !== 429 || attempt >= retryLimit) {
+            return response;
+        }
+
+        const delayMs = getRetryAfterMs(response, retryDelayMs * (attempt + 1));
+        options.onRetry?.(attempt + 1, delayMs);
+        await sleep(delayMs);
+    }
+
+    return postWithTimeout(url, body, headers);
+}
+
 function sortOrganizationsByName(a: OrganizationOption, b: OrganizationOption): number {
     return a.name.localeCompare(b.name, "zh-CN");
+}
+
+function getUploadFileLabel(file: File): string {
+    return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+}
+
+function getFileIdentity(file: File): string {
+    return `${getUploadFileLabel(file)}::${file.size}::${file.lastModified}`;
+}
+
+function isPdfFile(file: File): boolean {
+    return file.name.toLowerCase().endsWith(".pdf") || file.type === "application/pdf";
+}
+
+function normalizeOrgMatchText(value: string): string {
+    return value
+        .replace(/\.[^.]+$/, "")
+        .replace(/[^0-9A-Za-z\u3400-\u9fff]/g, "")
+        .toLowerCase();
+}
+
+function findOrganizationByUploadName(
+    uploadName: string,
+    organizations: OrganizationOption[]
+): OrganizationOption | undefined {
+    const normalizedUploadName = normalizeOrgMatchText(uploadName);
+    if (!normalizedUploadName) return undefined;
+
+    return organizations
+        .map((org) => ({ org, normalizedName: normalizeOrgMatchText(org.name) }))
+        .filter(({ normalizedName }) => normalizedName.length >= 2 && normalizedUploadName.includes(normalizedName))
+        .sort((left, right) => {
+            if (right.normalizedName.length !== left.normalizedName.length) {
+                return right.normalizedName.length - left.normalizedName.length;
+            }
+            if (left.org.level !== right.org.level) {
+                return left.org.level === "unit" ? -1 : 1;
+            }
+            return sortOrganizationsByName(left.org, right.org);
+        })[0]?.org;
+}
+
+async function readEntryFile(entry: WebkitFileSystemFileEntry): Promise<File[]> {
+    return new Promise((resolve) => {
+        entry.file(
+            (file) => resolve([file]),
+            () => resolve([])
+        );
+    });
+}
+
+async function readDirectoryBatch(reader: WebkitFileSystemDirectoryReader): Promise<WebkitFileSystemEntry[]> {
+    return new Promise((resolve) => {
+        reader.readEntries(
+            (entries) => resolve(entries),
+            () => resolve([])
+        );
+    });
+}
+
+async function collectFilesFromEntry(entry: WebkitFileSystemEntry): Promise<File[]> {
+    if (entry.isFile) {
+        return readEntryFile(entry as WebkitFileSystemFileEntry);
+    }
+    if (!entry.isDirectory) {
+        return [];
+    }
+
+    const reader = (entry as WebkitFileSystemDirectoryEntry).createReader();
+    const files: File[] = [];
+
+    while (true) {
+        const entries = await readDirectoryBatch(reader);
+        if (entries.length === 0) break;
+        const nested = await Promise.all(entries.map((child) => collectFilesFromEntry(child)));
+        files.push(...nested.flat());
+    }
+
+    return files;
+}
+
+async function collectFilesFromDataTransfer(dataTransfer: DataTransfer): Promise<File[]> {
+    const items = Array.from(dataTransfer.items || []) as DataTransferItemWithEntry[];
+    const rawEntries: unknown[] = items
+        .map((item) => (typeof item.webkitGetAsEntry === "function" ? item.webkitGetAsEntry() : null))
+        .filter((entry) => entry !== null);
+    const entries: WebkitFileSystemEntry[] = rawEntries.filter(isWebkitFileSystemEntry);
+
+    if (entries.length > 0) {
+        const nested = await Promise.all(entries.map((entry) => collectFilesFromEntry(entry)));
+        return nested.flat();
+    }
+
+    return Array.from(dataTransfer.files || []);
+}
+
+async function collectFilesFromDirectoryHandle(directory: BrowserDirectoryHandle): Promise<File[]> {
+    const files: File[] = [];
+    const iterator = directory.values();
+
+    while (true) {
+        const next = await iterator.next();
+        if (next.done) break;
+        const entry = next.value;
+        if (entry.kind === "file") {
+            files.push(await entry.getFile());
+        } else if (entry.kind === "directory") {
+            files.push(...await collectFilesFromDirectoryHandle(entry));
+        }
+    }
+
+    return files;
 }
 
 // ───────────── Component ─────────────
@@ -191,6 +433,8 @@ export default function BatchUploadModal({
     const [isProcessing, setIsProcessing] = useState(false);
     const [currentIndex, setCurrentIndex] = useState(-1);
     const [isDragging, setIsDragging] = useState(false);
+    const [isCollectingDrop, setIsCollectingDrop] = useState(false);
+    const [selectionNotice, setSelectionNotice] = useState("");
     const [editingId, setEditingId] = useState<string | null>(null);
     const [bulkDepartmentId, setBulkDepartmentId] = useState("");
     const [bulkUnitId, setBulkUnitId] = useState("");
@@ -208,6 +452,7 @@ export default function BatchUploadModal({
         year: "",
     });
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const folderInputRef = useRef<HTMLInputElement>(null);
 
     const departments = useMemo(
         () => orgs.filter((org) => org.level === "department").slice().sort(sortOrganizationsByName),
@@ -279,6 +524,79 @@ export default function BatchUploadModal({
             return undefined;
         },
         [unitsByDepartment]
+    );
+
+    const matchUploadName = useCallback(
+        (uploadName: string): Partial<FileItem> => {
+            if (orgUnitId) {
+                const selected = orgs.find((org) => org.id === orgUnitId);
+                return {
+                    orgId: orgUnitId,
+                    orgName: selected?.name || "",
+                    orgLevel: selected?.level || "",
+                    matchSource: "default",
+                    matchConfidence: "high",
+                    matchHint: "已使用当前选中的单位",
+                };
+            }
+            if (orgs.length === 0) return {};
+
+            let match = findOrganizationByUploadName(uploadName, orgs);
+            if (!match) return {};
+
+            const isUnitIntended = uploadName.includes("单位") || uploadName.includes("本级");
+            const isDeptIntended = uploadName.includes("部门");
+            if (match.level === "unit" && isDeptIntended) {
+                match = orgs.find((org) => org.id === match?.parent_id) || match;
+            }
+
+            if (match.level === "department") {
+                const preferredUnit =
+                    isDeptIntended && !isUnitIntended
+                        ? undefined
+                        : getPreferredUnit(match.id, isUnitIntended ? uploadName : undefined);
+                if (preferredUnit) {
+                    return {
+                        departmentId: match.id,
+                        departmentName: match.name,
+                        orgId: preferredUnit.id,
+                        orgName: preferredUnit.name,
+                        orgLevel: preferredUnit.level,
+                        matchSource: "auto",
+                        matchConfidence: isUnitIntended ? "high" : "medium",
+                        matchHint: isUnitIntended
+                            ? `已按文件名自动匹配到单位：${preferredUnit.name}`
+                            : `已匹配到部门 ${match.name}，并自动带出默认单位 ${preferredUnit.name}`,
+                    };
+                }
+                return {
+                    departmentId: match.id,
+                    departmentName: match.name,
+                    orgId: match.id,
+                    orgName: match.name,
+                    orgLevel: match.level,
+                    matchSource: "auto",
+                    matchConfidence: isDeptIntended ? "high" : "medium",
+                    matchHint: `已匹配到部门 ${match.name}，未选单位时将按部门级上传。`,
+                };
+            }
+
+            const parentDepartment =
+                match.parent_id && departmentMap.has(match.parent_id)
+                    ? departmentMap.get(match.parent_id)
+                    : undefined;
+            return {
+                departmentId: parentDepartment?.id || "",
+                departmentName: parentDepartment?.name || "",
+                orgId: match.id,
+                orgName: match.name,
+                orgLevel: match.level,
+                matchSource: "auto",
+                matchConfidence: "high",
+                matchHint: `已按文件名自动匹配到单位：${match.name}`,
+            };
+        },
+        [departmentMap, getPreferredUnit, orgUnitId, orgs]
     );
 
     useEffect(() => {
@@ -428,6 +746,17 @@ export default function BatchUploadModal({
         );
     }, [departmentMap, orgMap, orgUnitId, orgs.length]);
 
+    useEffect(() => {
+        if (isScopedUpload || orgs.length === 0) return;
+        setFiles((current) =>
+            current.map((item) => {
+                if (item.orgId || item.matchSource === "manual") return item;
+                const assignment = matchUploadName(item.filename);
+                return assignment.orgId ? { ...item, ...assignment } : item;
+            })
+        );
+    }, [isScopedUpload, matchUploadName, orgs.length]);
+
     // ── File Selection ──
 
     const applyPreflightResult = useCallback(
@@ -503,6 +832,20 @@ export default function BatchUploadModal({
         );
     }, []);
 
+    const markPreflightWaiting = useCallback((fileId: string, message: string) => {
+        setFiles((prev) =>
+            prev.map((item) =>
+                item.id === fileId
+                    ? {
+                        ...item,
+                        isDetecting: true,
+                        message,
+                    }
+                    : item
+            )
+        );
+    }, []);
+
     const preflightSingleFile = useCallback(
         async (fileItem: FileItem) => {
             const formData = new FormData();
@@ -513,26 +856,31 @@ export default function BatchUploadModal({
             formData.set("doc_type", fileItem.docType);
 
             try {
-                const response = await postWithTimeout("/api/documents/preflight", formData);
+                const response = await postWithRateLimitRetry("/api/documents/preflight", formData, undefined, {
+                    context: "首页识别",
+                    onRetry: () => {
+                        markPreflightWaiting(fileItem.id, formatRateLimitMessage("首页识别"));
+                    },
+                });
                 if (!response.ok) {
-                    throw new Error(await readErrorMessage(response));
+                    throw new Error(formatRequestFailureMessage(await readErrorMessage(response), "首页识别"));
                 }
                 const payload = (await response.json()) as DocumentPreflightResponse;
                 applyPreflightResult(fileItem.id, payload);
             } catch (error: any) {
                 markPreflightFailed(
                     fileItem.id,
-                    error?.message || "首页识别失败，已保留文件名识别结果"
+                    formatPreflightFailureMessage(error)
                 );
             }
         },
-        [applyPreflightResult, markPreflightFailed]
+        [applyPreflightResult, markPreflightFailed, markPreflightWaiting]
     );
 
     const preflightFiles = useCallback(
         async (items: FileItem[]) => {
             const queue = items.slice();
-            const workerCount = Math.min(3, queue.length);
+            const workerCount = Math.min(PREFLIGHT_CONCURRENCY, queue.length);
             const workers = Array.from({ length: workerCount }, async () => {
                 while (queue.length > 0) {
                     const next = queue.shift();
@@ -540,6 +888,9 @@ export default function BatchUploadModal({
                         return;
                     }
                     await preflightSingleFile(next);
+                    if (queue.length > 0) {
+                        await sleep(REQUEST_RATE_LIMIT_DELAY_MS);
+                    }
                 }
             });
             await Promise.all(workers);
@@ -548,112 +899,45 @@ export default function BatchUploadModal({
     );
 
     const handleFilesSelect = useCallback(
-        (fileList: FileList) => {
+        (fileList: FileList | File[]) => {
             const existingCount = files.length;
-            const newFileArray = Array.from(fileList).filter(
-                (f) => f.name.toLowerCase().endsWith(".pdf")
-            );
+            const selectedFiles = Array.from(fileList);
+            const existingKeys = new Set(files.map((item) => getFileIdentity(item.file)));
+            const pdfFiles = selectedFiles.filter(isPdfFile);
+            const newFileArray = pdfFiles.filter((file) => !existingKeys.has(getFileIdentity(file)));
+            const ignoredCount = selectedFiles.length - pdfFiles.length;
+            const duplicateCount = pdfFiles.length - newFileArray.length;
 
-            if (newFileArray.length === 0) return;
+            if (newFileArray.length === 0) {
+                const reason = duplicateCount > 0 ? "这些 PDF 已在列表中" : "没有找到 PDF 文件";
+                alert(`未加入新文件：${reason}`);
+                return;
+            }
 
             if (existingCount + newFileArray.length > MAX_FILES) {
                 alert(`最多支持${MAX_FILES}个文件，当前已有${existingCount}个`);
                 return;
             }
 
+            const noticeParts = [`已加入 ${newFileArray.length} 个 PDF`];
+            if (ignoredCount > 0) noticeParts.push(`忽略 ${ignoredCount} 个非 PDF 文件`);
+            if (duplicateCount > 0) noticeParts.push(`跳过 ${duplicateCount} 个重复文件`);
+            if (newFileArray.length > PREFLIGHT_BATCH_THRESHOLD) {
+                noticeParts.push("大批量已优先使用文件名匹配");
+            }
+            setSelectionNotice(`${noticeParts.join("，")}。`);
+
             const newFiles: FileItem[] = newFileArray.map((file) => {
-                let matchedDepartmentId = "";
-                let matchedDepartmentName = "";
-                let matchedOrgId = orgUnitId;
-                let matchedOrgName = "";
-                let matchedOrgLevel = "";
-                let matchSource: FileItem["matchSource"] = undefined;
-                let matchConfidence: FileItem["matchConfidence"] = undefined;
-                let matchHint = "";
-
-                // 如果是全局模式没有传 orgUnitId，尝试通过文件名自动匹配
-                if (!orgUnitId && orgs.length > 0) {
-                    // 从最长的名称开始匹配，以防止部分重叠（如：区民政局 vs 区民政局本级）
-                    const sortedOrgs = [...orgs].sort((a, b) => b.name.length - a.name.length);
-                    let match = sortedOrgs.find((o) => file.name.includes(o.name));
-
-                    if (match) {
-                        // 针对部门和单位的智能推导
-                        const isUnitIntended = file.name.includes("单位") || file.name.includes("本级");
-                        const isDeptIntended = file.name.includes("部门");
-
-                        if (match.level === "unit" && isDeptIntended) {
-                            // filename 带有"部门"，但匹配到了单位，尝试找它所在的部门
-                            const parentDept = orgs.find(o => o.id === match?.parent_id);
-                            if (parentDept) match = parentDept;
-                        }
-
-                        if (match.level === "department") {
-                            matchedDepartmentId = match.id;
-                            matchedDepartmentName = match.name;
-
-                            const preferredUnit = getPreferredUnit(
-                                match.id,
-                                isUnitIntended ? file.name : undefined
-                            );
-                            if (preferredUnit) {
-                                matchedOrgId = preferredUnit.id;
-                                matchedOrgName = preferredUnit.name;
-                                matchedOrgLevel = preferredUnit.level;
-                                matchSource = "auto";
-                                matchConfidence = isUnitIntended ? "high" : "medium";
-                                matchHint = isUnitIntended
-                                    ? `已按文件名自动匹配到单位：${preferredUnit.name}`
-                                    : `已匹配到部门 ${match.name}，并自动带出默认单位 ${preferredUnit.name}`;
-                            } else {
-                                matchedOrgId = match.id;
-                                matchedOrgName = match.name;
-                                matchedOrgLevel = match.level;
-                                matchSource = "auto";
-                                matchConfidence = isDeptIntended ? "high" : "medium";
-                                matchHint = `已匹配到部门 ${match.name}，未选单位时将按部门级上传。`;
-                            }
-                        } else {
-                            matchedOrgId = match.id;
-                            matchedOrgName = match.name;
-                            matchedOrgLevel = match.level;
-                            matchSource = "auto";
-                            matchConfidence = "high";
-                            matchHint = `已按文件名自动匹配到单位：${match.name}`;
-
-                            const parentDepartment =
-                                match.parent_id && departmentMap.has(match.parent_id)
-                                    ? departmentMap.get(match.parent_id)
-                                    : undefined;
-                            if (parentDepartment) {
-                                matchedDepartmentId = parentDepartment.id;
-                                matchedDepartmentName = parentDepartment.name;
-                            }
-                        }
-                    }
-                } else if (orgUnitId) {
-                    const o = orgs.find(o => o.id === orgUnitId);
-                    matchedOrgName = o?.name || "";
-                    matchedOrgLevel = o?.level || "";
-                    matchSource = "default";
-                    matchConfidence = "high";
-                    matchHint = "已使用当前选中的单位";
-                }
+                const uploadName = getUploadFileLabel(file);
+                const assignment = matchUploadName(uploadName);
 
                 return {
                     id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
                     file,
-                    filename: file.name,
-                    year: detectFiscalYear(file.name),
-                    docType: detectDocType(file.name, defaultDocType),
-                    departmentId: matchedDepartmentId,
-                    departmentName: matchedDepartmentName,
-                    orgId: matchedOrgId,
-                    orgName: matchedOrgName,
-                    orgLevel: matchedOrgLevel,
-                    matchSource,
-                    matchConfidence,
-                    matchHint,
+                    filename: uploadName,
+                    year: detectFiscalYear(uploadName),
+                    docType: detectDocType(uploadName, defaultDocType),
+                    ...assignment,
                     isDetecting: true,
                     status: "pending",
                     message: "正在识别PDF首页...",
@@ -742,29 +1026,89 @@ export default function BatchUploadModal({
                 };
             });
 
-            setFiles((prev) => [...prev, ...normalizedFiles]);
-            void preflightFiles(normalizedFiles);
+            const shouldPreflightItem = (item: FileItem) =>
+                normalizedFiles.length <= PREFLIGHT_BATCH_THRESHOLD ||
+                !item.year ||
+                (!isScopedUpload && !item.orgId) ||
+                item.matchConfidence === "low";
+            const preflightItems = normalizedFiles.filter(shouldPreflightItem);
+            const preflightIds = new Set(preflightItems.map((item) => item.id));
+            const displayFiles = normalizedFiles.map((item) =>
+                preflightIds.has(item.id)
+                    ? item
+                    : {
+                        ...item,
+                        isDetecting: false,
+                        message: "已按文件名匹配，跳过首页识别",
+                    }
+            );
+
+            setFiles((prev) => [...prev, ...displayFiles]);
+            if (preflightItems.length > 0) {
+                void preflightFiles(preflightItems);
+            }
         },
-        [defaultDocType, departmentMap, files.length, getPreferredUnit, orgMap, orgUnitId, orgs, rememberedSelection, isScopedUpload, preflightFiles]
+        [defaultDocType, departmentMap, files, isScopedUpload, matchUploadName, orgMap, preflightFiles, rememberedSelection]
     );
 
     const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
         setIsDragging(true);
     };
     const handleDragLeave = (e: React.DragEvent) => {
         e.preventDefault();
+        if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) {
+            return;
+        }
         setIsDragging(false);
     };
-    const handleDrop = (e: React.DragEvent) => {
+    const handleDrop = async (e: React.DragEvent) => {
         e.preventDefault();
         setIsDragging(false);
-        if (e.dataTransfer.files) handleFilesSelect(e.dataTransfer.files);
+        setIsCollectingDrop(true);
+        try {
+            const droppedFiles = await collectFilesFromDataTransfer(e.dataTransfer);
+            if (droppedFiles.length > 0) {
+                handleFilesSelect(droppedFiles);
+            }
+        } finally {
+            setIsCollectingDrop(false);
+        }
     };
     const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files) handleFilesSelect(e.target.files);
         e.target.value = "";
     };
+    const handleFolderInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files) handleFilesSelect(e.target.files);
+        e.target.value = "";
+    };
+    const handleFolderSelect = useCallback(async () => {
+        if (isProcessing || isCollectingDrop) return;
+
+        const picker = (window as WindowWithDirectoryPicker).showDirectoryPicker;
+        if (typeof picker !== "function") {
+            folderInputRef.current?.click();
+            return;
+        }
+
+        setIsCollectingDrop(true);
+        try {
+            const directory = await picker.call(window, { mode: "read" });
+            const selectedFiles = await collectFilesFromDirectoryHandle(directory);
+            if (selectedFiles.length > 0) {
+                handleFilesSelect(selectedFiles);
+            }
+        } catch (error) {
+            const name = error instanceof DOMException ? error.name : "";
+            if (name !== "AbortError") {
+                folderInputRef.current?.click();
+            }
+        } finally {
+            setIsCollectingDrop(false);
+        }
+    }, [handleFilesSelect, isCollectingDrop, isProcessing]);
 
     // ── File Management ──
 
@@ -939,7 +1283,6 @@ export default function BatchUploadModal({
                         ...file,
                         status: "pending",
                         message: file.message || "准备重试",
-                        versionId: undefined,
                     }
                     : file
             )
@@ -970,22 +1313,54 @@ export default function BatchUploadModal({
         }
         formData.append("doc_type", fileItem.docType);
 
-        const uploadRes = await postWithTimeout("/api/documents/upload", formData);
+        const uploadRes = await postWithRateLimitRetry("/api/documents/upload", formData, undefined, {
+            context: "上传",
+            retryLimit: 3,
+            retryDelayMs: REQUEST_RATE_LIMIT_DELAY_MS,
+            onRetry: (_attempt, delayMs) => {
+                setFiles((prev) =>
+                    prev.map((f) =>
+                        f.id === fileItem.id
+                            ? {
+                                ...f,
+                                message: `上传请求过于频繁，等待 ${Math.ceil(delayMs / 1000)} 秒后自动重试...`,
+                            }
+                            : f
+                    )
+                );
+            },
+        });
 
         let versionId: string | undefined;
 
         if (!uploadRes.ok) {
             // Fallback to v2 API
             if (uploadRes.status !== 503) {
-                throw new Error(await readErrorMessage(uploadRes));
+                throw new Error(formatRequestFailureMessage(await readErrorMessage(uploadRes), "上传"));
             }
 
             const v2Form = new FormData();
             v2Form.set("file", fileItem.file);
             v2Form.set("org_id", targetOrgId);
-            const v2Res = await postWithTimeout("/api/upload", v2Form);
+            const v2Res = await postWithRateLimitRetry("/api/upload", v2Form, undefined, {
+                context: "上传",
+                retryLimit: 3,
+                retryDelayMs: REQUEST_RATE_LIMIT_DELAY_MS,
+                onRetry: (_attempt, delayMs) => {
+                    setFiles((prev) =>
+                        prev.map((f) =>
+                            f.id === fileItem.id
+                                ? {
+                                    ...f,
+                                    message: `上传请求过于频繁，等待 ${Math.ceil(delayMs / 1000)} 秒后自动重试...`,
+                                }
+                                : f
+                        )
+                    );
+                },
+            });
             if (!v2Res.ok) {
-                throw new Error(await readErrorMessage(v2Res));
+                throw new Error(formatRequestFailureMessage(await readErrorMessage(v2Res), "上传"));
             }
 
             let v2Data: any = {};
@@ -1033,13 +1408,30 @@ export default function BatchUploadModal({
             runPayload.report_year = Number(fileItem.year);
         }
 
-        const runRes = await postWithTimeout(
+        const runRes = await postWithRateLimitRetry(
             `/api/documents/${versionId}/run`,
             JSON.stringify(runPayload),
-            { "Content-Type": "application/json" }
+            { "Content-Type": "application/json" },
+            {
+                context: "启动检查",
+                retryLimit: 3,
+                retryDelayMs: REQUEST_RATE_LIMIT_DELAY_MS,
+                onRetry: (_attempt, delayMs) => {
+                    setFiles((prev) =>
+                        prev.map((f) =>
+                            f.id === fileItem.id
+                                ? {
+                                    ...f,
+                                    message: `启动检查请求过于频繁，等待 ${Math.ceil(delayMs / 1000)} 秒后自动重试...`,
+                                }
+                                : f
+                        )
+                    );
+                },
+            }
         );
         if (!runRes.ok) {
-            throw new Error(await readErrorMessage(runRes));
+            throw new Error(formatRequestFailureMessage(await readErrorMessage(runRes), "启动检查"));
         }
     };
 
@@ -1062,7 +1454,7 @@ export default function BatchUploadModal({
             setCurrentIndex(i);
 
             try {
-                const versionId = await uploadSingleFile(fileItem);
+                const versionId = fileItem.versionId || await uploadSingleFile(fileItem);
                 triggerQueue.push({ fileId: fileItem.id, versionId });
 
                 setFiles((prev) =>
@@ -1091,8 +1483,7 @@ export default function BatchUploadModal({
                 );
             }
 
-            // Brief delay between uploads
-            await new Promise((r) => setTimeout(r, 120));
+            await sleep(REQUEST_RATE_LIMIT_DELAY_MS);
         }
 
         for (const task of triggerQueue) {
@@ -1124,7 +1515,7 @@ export default function BatchUploadModal({
                     )
                 );
             }
-            await new Promise((r) => setTimeout(r, 80));
+            await sleep(REQUEST_RATE_LIMIT_DELAY_MS);
         }
 
         setIsProcessing(false);
@@ -1235,7 +1626,7 @@ export default function BatchUploadModal({
     // ── Render ──
 
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm" data-testid="batch-upload-modal">
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] flex flex-col border border-white/20 overflow-hidden animate-in zoom-in-95 duration-300">
                 {/* Header */}
                 <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200/50 dark:border-gray-700/50 bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-gray-800 dark:to-gray-800">
@@ -1260,6 +1651,7 @@ export default function BatchUploadModal({
                         )}
                     </div>
                     <button
+                        data-testid="batch-upload-close"
                         onClick={onClose}
                         disabled={isProcessing}
                         className="p-2 rounded-lg hover:bg-gray-200/50 dark:hover:bg-gray-700/50 text-gray-400 hover:text-gray-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1273,6 +1665,7 @@ export default function BatchUploadModal({
                 {/* Drop Zone */}
                 <div className="px-6 pt-4">
                     <div
+                        data-testid="batch-upload-dropzone"
                         className={`border-2 border-dashed rounded-xl p-8 text-center transition-all duration-300 cursor-pointer ${isDragging
                             ? "border-indigo-500 bg-indigo-50/50 dark:bg-indigo-900/20 scale-[1.02]"
                             : "border-gray-300 dark:border-gray-600 hover:border-indigo-400 hover:bg-gray-50/50 dark:hover:bg-gray-700/30"
@@ -1283,6 +1676,7 @@ export default function BatchUploadModal({
                         onClick={() => !isProcessing && fileInputRef.current?.click()}
                     >
                         <input
+                            data-testid="batch-upload-file-input"
                             type="file"
                             ref={fileInputRef}
                             onChange={handleFileInputChange}
@@ -1291,6 +1685,17 @@ export default function BatchUploadModal({
                             style={{ display: "none" }}
                             disabled={isProcessing}
                         />
+                        <input
+                            data-testid="batch-upload-folder-input"
+                            type="file"
+                            ref={folderInputRef}
+                            onChange={handleFolderInputChange}
+                            accept=".pdf,application/pdf"
+                            multiple
+                            style={{ display: "none" }}
+                            disabled={isProcessing}
+                            {...DIRECTORY_INPUT_PROPS}
+                        />
                         <div className="flex flex-col items-center">
                             <div className={`mb-3 transition-transform duration-300 ${isDragging ? "-translate-y-1" : ""}`}>
                                 <svg className="w-10 h-10 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1298,11 +1703,42 @@ export default function BatchUploadModal({
                                 </svg>
                             </div>
                             <p className="text-sm text-gray-700 dark:text-gray-300">
-                                <strong>点击选择多个文件</strong> 或 <strong>拖拽文件至此</strong>
+                                <strong>{isCollectingDrop ? "正在读取拖入内容" : "拖拽 PDF 或文件夹至此"}</strong>
                             </p>
                             <p className="text-xs text-gray-500 mt-1">
-                                仅支持 PDF 文件，最多 {MAX_FILES} 个 · 系统自动识别年份和类型
+                                仅支持 PDF，最多 {MAX_FILES} 个 · 文件名和 PDF 首页会自动匹配部门或单位
                             </p>
+                            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                                <button
+                                    type="button"
+                                    data-testid="batch-upload-select-files"
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        if (!isProcessing) fileInputRef.current?.click();
+                                    }}
+                                    disabled={isProcessing || isCollectingDrop}
+                                    className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    选择 PDF 文件
+                                </button>
+                                <button
+                                    type="button"
+                                    data-testid="batch-upload-select-folder"
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        void handleFolderSelect();
+                                    }}
+                                    disabled={isProcessing || isCollectingDrop}
+                                    className="rounded-lg border border-indigo-200 bg-white px-4 py-2 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    选择文件夹
+                                </button>
+                            </div>
+                            {selectionNotice ? (
+                                <p data-testid="batch-upload-selection-notice" className="mt-3 text-xs font-medium text-emerald-700">
+                                    {selectionNotice}
+                                </p>
+                            ) : null}
                         </div>
                     </div>
                 </div>

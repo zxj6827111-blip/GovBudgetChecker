@@ -69,7 +69,6 @@ def test_get_job_review_payload_prefers_sidecar(tmp_path, monkeypatch):
             "review_items": [{"id": "r1", "severity": "warn"}],
         },
     )
-
     payload = runtime.get_job_review_payload("job-1")
 
     assert payload["review_item_count"] == 1
@@ -113,6 +112,16 @@ def test_collect_job_summary_includes_structured_ingest(tmp_path):
             },
         },
     )
+    (job_dir / runtime.PERSISTENCE_STATE_FILENAME).write_text(
+        json.dumps(
+            {
+                "status": "pending_retry",
+                "last_attempt_ts": 123.0,
+                "error": "db down",
+            }
+        ),
+        encoding="utf-8",
+    )
 
     summary = runtime.collect_job_summary(job_dir)
 
@@ -126,6 +135,9 @@ def test_collect_job_summary_includes_structured_ingest(tmp_path):
     assert summary["structured_table_data_count"] == 8
     assert summary["structured_line_item_count"] == 120
     assert summary["structured_sync_match_mode"] == "organization_id"
+    assert summary["persistence_status"] == "pending_retry"
+    assert summary["persistence_last_attempt_ts"] == 123.0
+    assert summary["persistence_error"] == "db down"
 
 
 def test_legacy_job_link_backfills_organization_context(tmp_path, monkeypatch):
@@ -247,6 +259,45 @@ async def test_start_analysis_preserves_organization_context(tmp_path, monkeypat
     assert status["organization_match_type"] == "auto"
     assert status["organization_match_confidence"] == 0.88
     assert status["checksum"] == "abc123"
+
+
+@pytest.mark.asyncio
+async def test_start_analysis_keeps_requested_year_and_records_filename_conflict(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    job_dir = tmp_path / "job-year-conflict"
+    job_dir.mkdir()
+    (job_dir / "2025执行数与2026预算.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+    runtime.write_json_file(
+        job_dir / "status.json",
+        {"job_id": "job-year-conflict", "status": "uploaded"},
+    )
+
+    async def _dummy_runner(_job_dir):
+        return None
+
+    class _DummyQueue:
+        async def enqueue(self, _job_id: str) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_pipeline_runner", _dummy_runner)
+    monkeypatch.setattr(runtime, "_job_queue", _DummyQueue())
+
+    await runtime.start_analysis(
+        "job-year-conflict",
+        {"report_year": 2026, "fiscal_year": "2026", "doc_type": "dept_budget"},
+    )
+
+    status = runtime.read_json_file(job_dir / "status.json", default={})
+    assert status["report_year"] == 2026
+    assert status["report_year_source"] == "request"
+    assert status["year_conflict"] == {
+        "selected_year": 2026,
+        "filename_year": 2025,
+        "source": "request",
+        "requires_manual_review": True,
+    }
 
 
 @pytest.mark.asyncio

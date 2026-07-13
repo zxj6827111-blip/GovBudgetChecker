@@ -40,15 +40,16 @@ def _resolve_report_kind(doc: Any, report_kind: Optional[str] = None) -> str:
         return "budget"
     if "决算" in first_text:
         return "final"
-    return "final"
+    return "unknown"
 
 
 def _select_rule_set(doc: Any, report_kind: Optional[str] = None) -> List[Any]:
-    return (
-        ALL_BUDGET_RULES
-        if _resolve_report_kind(doc, report_kind) == "budget"
-        else FINAL_ALL_RULES
-    )
+    kind = _resolve_report_kind(doc, report_kind)
+    if kind == "budget":
+        return ALL_BUDGET_RULES
+    if kind == "final":
+        return FINAL_ALL_RULES
+    return []
 
 
 def run_rules(
@@ -59,6 +60,15 @@ def run_rules(
         *ALL_COMMON_RULES,
     ]
     issues: List[Issue] = []
+    if _resolve_report_kind(doc, report_kind) == "unknown":
+        issues.append(
+            Issue(
+                rule="DOC-TYPE-UNKNOWN",
+                severity="manual_review",
+                message="未能可靠识别材料为预算或决算，已仅执行通用规则，请人工确认材料类型后重新检查。",
+                location={"page": 1, "pos": 0},
+            )
+        )
 
     for rule_obj in selected_rules:
         try:

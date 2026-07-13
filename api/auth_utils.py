@@ -111,8 +111,8 @@ def user_can_access_job(user: Dict[str, Any], job_payload: Dict[str, Any]) -> bo
 
     owner = str(job_payload.get("created_by") or "").strip().lower()
     if not owner:
-        # Legacy jobs did not record owners; keep them visible until migrated.
-        return True
+        # Legacy jobs without an owner must not become visible to every user.
+        return False
 
     username = str(user.get("username") or "").strip().lower()
     return bool(username) and owner == username

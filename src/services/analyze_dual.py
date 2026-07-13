@@ -206,6 +206,14 @@ class DualModeAnalyzer:
             
             metrics.rule_findings_count = len(rule_findings)
             metrics.rule_elapsed_ms = int((rule_done_at - rule_started_at) * 1000)
+
+            if rule_enabled and rule_task is None:
+                rule_error = "未加载到可执行的本地规则"
+            if rule_enabled and rule_error:
+                if ai_task is not None and not ai_task.done():
+                    ai_task.cancel()
+                    await asyncio.gather(ai_task, return_exceptions=True)
+                raise RuntimeError(f"local_rules_failed:{rule_error}")
             
             # 2. 规则完成后立即发布快照（前端可先看到规则结果）
             save_snapshot(job_context.job_id, {
@@ -387,6 +395,8 @@ class DualModeAnalyzer:
                         "elapsed_ms": {"total": metrics.total_elapsed_ms},
                         "error": str(e),
                         "fallback": "engine_only",
+                        "ai_error": str(e),
+                        "rule_error": None,
                         "provider_stats": []
                     }
                 )

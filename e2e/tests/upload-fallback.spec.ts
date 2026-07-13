@@ -178,7 +178,7 @@ test.describe("Batch Upload Fallback", () => {
     });
 
     await page
-      .locator('input[type="file"]')
+      .getByTestId("batch-upload-file-input")
       .setInputFiles({
         name: "姘戞斂灞€閮ㄩ棬2025棰勭畻.pdf",
         mimeType: "application/pdf",

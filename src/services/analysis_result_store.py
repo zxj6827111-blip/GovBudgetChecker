@@ -9,6 +9,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 from src.db.connection import DatabaseConnection
@@ -20,6 +21,26 @@ _DB_READY = False
 _DB_READY_LOCK = asyncio.Lock()
 _ACTIVE_JOB_STATUSES = {"queued", "processing", "running"}
 _UUIDISH_FILENAME_RE = re.compile(r"^[0-9a-f]{24,}\.pdf$", re.I)
+_PERSISTENCE_RETRY_DELAYS = (0.0, 0.2, 0.5)
+
+
+def _record_persistence_state(job_uuid: str, status: str, error: str = "") -> None:
+    """Expose file/database synchronization state without changing job status."""
+    job_dir = Path(os.getenv("UPLOAD_DIR", "uploads")).resolve() / job_uuid
+    if not job_dir.is_dir():
+        return
+    target = job_dir / "persistence.json"
+    temp = target.with_suffix(".json.tmp")
+    payload = {
+        "status": status,
+        "last_attempt_ts": time.time(),
+        "error": error or None,
+    }
+    try:
+        temp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        temp.replace(target)
+    except Exception:
+        logger.exception("Failed to record persistence state for job %s", job_uuid)
 
 
 async def ensure_analysis_persistence_ready() -> bool:
@@ -58,26 +79,42 @@ async def persist_analysis_job_snapshot(
     if not job_uuid:
         return False
 
-    if not await ensure_analysis_persistence_ready():
+    if not (os.getenv("DATABASE_URL") or "").strip():
+        _record_persistence_state(job_uuid, "disabled", "DATABASE_URL is not configured")
         return False
+    last_error = "analysis result database unavailable"
+    for attempt, delay in enumerate(_PERSISTENCE_RETRY_DELAYS, start=1):
+        if delay:
+            await asyncio.sleep(delay)
+        conn = None
+        try:
+            if not await ensure_analysis_persistence_ready():
+                continue
+            conn = await DatabaseConnection.acquire()
+            async with conn.transaction():
+                job_db_id = await _upsert_analysis_job(conn, payload)
+                status = str(payload.get("status") or "").strip().lower()
+                if include_results:
+                    await _upsert_analysis_result(conn, job_db_id, payload)
+                elif status in _ACTIVE_JOB_STATUSES:
+                    await conn.execute("DELETE FROM analysis_results WHERE job_id = $1", job_db_id)
+            _record_persistence_state(job_uuid, "synced")
+            return True
+        except Exception as exc:
+            last_error = str(exc) or exc.__class__.__name__
+            logger.warning(
+                "Analysis snapshot persistence attempt %s/%s failed for job %s",
+                attempt,
+                len(_PERSISTENCE_RETRY_DELAYS),
+                job_uuid,
+                exc_info=True,
+            )
+        finally:
+            if conn is not None:
+                await DatabaseConnection.release(conn)
 
-    conn = None
-    try:
-        conn = await DatabaseConnection.acquire()
-        async with conn.transaction():
-            job_db_id = await _upsert_analysis_job(conn, payload)
-            status = str(payload.get("status") or "").strip().lower()
-            if include_results:
-                await _upsert_analysis_result(conn, job_db_id, payload)
-            elif status in _ACTIVE_JOB_STATUSES:
-                await conn.execute("DELETE FROM analysis_results WHERE job_id = $1", job_db_id)
-        return True
-    except Exception:
-        logger.exception("Failed to persist analysis snapshot for job %s", job_uuid)
-        return False
-    finally:
-        if conn is not None:
-            await DatabaseConnection.release(conn)
+    _record_persistence_state(job_uuid, "pending_retry", last_error)
+    return False
 
 
 async def _upsert_analysis_job(conn, payload: Dict[str, Any]) -> int:

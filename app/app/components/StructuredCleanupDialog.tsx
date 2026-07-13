@@ -362,6 +362,7 @@ export default function StructuredCleanupDialog({
 
   return (
     <div
+      data-testid="structured-cleanup-dialog"
       className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
       onClick={() => {
         if (!isExecuting) {
@@ -526,6 +527,7 @@ export default function StructuredCleanupDialog({
           <div className="flex items-center gap-3">
             <button
               type="button"
+              data-testid="structured-cleanup-close"
               onClick={onClose}
               disabled={isExecuting}
               className="rounded-xl border border-slate-200 bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
@@ -535,6 +537,7 @@ export default function StructuredCleanupDialog({
             {canConfirm ? (
               <button
                 type="button"
+                data-testid="structured-cleanup-confirm"
                 onClick={onConfirm}
                 disabled={isExecuting}
                 className="inline-flex items-center rounded-xl bg-gradient-to-r from-sky-600 to-cyan-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-500/30 transition-all hover:from-sky-700 hover:to-cyan-700 disabled:cursor-not-allowed disabled:opacity-60"

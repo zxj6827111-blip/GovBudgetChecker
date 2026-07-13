@@ -7,7 +7,13 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from api import runtime
-from api.auth_utils import require_admin, require_job_access, require_login, user_can_access_job
+from api.auth_utils import (
+    require_admin,
+    require_job_access,
+    require_login,
+    user_can_access_job,
+    user_can_access_org,
+)
 from api.routes.organizations import clear_department_stats_cache
 from src.services.analysis_result_store import (
     get_persisted_analysis_job_detail,
@@ -46,29 +52,22 @@ async def list_jobs(
         except Exception:
             return 0.0
 
-    if limit is None and offset == 0:
-        jobs = [
-            summary
-            for job_dir in job_dirs
-            for summary in [runtime.collect_job_summary(job_dir)]
-            if user_can_access_job(user, summary)
-        ]
-        jobs.sort(key=lambda x: x.get("ts", 0), reverse=True)
-        return jobs
-
-    sorted_dirs = [
-        job_dir
+    summaries = [
+        summary
         for job_dir in sorted(job_dirs, key=_quick_ts, reverse=True)
-        if user_can_access_job(user, runtime.collect_job_summary(job_dir))
+        for summary in [runtime.collect_job_summary(job_dir)]
+        if user_can_access_job(user, summary)
     ]
-    total = len(sorted_dirs)
-    if limit is None:
-        selected_dirs = sorted_dirs[offset:]
-    else:
-        selected_dirs = sorted_dirs[offset : offset + limit]
+    summaries.sort(key=lambda item: item.get("ts", 0), reverse=True)
 
-    items = [runtime.collect_job_summary(job_dir) for job_dir in selected_dirs]
-    items.sort(key=lambda x: x.get("ts", 0), reverse=True)
+    if limit is None and offset == 0:
+        return summaries
+
+    total = len(summaries)
+    if limit is None:
+        items = summaries[offset:]
+    else:
+        items = summaries[offset : offset + limit]
 
     return {
         "items": items,
@@ -377,7 +376,7 @@ async def delete_job(job_id: str, request: Request):
 
 @router.post("/api/jobs/{job_id}/associate")
 async def associate_job(job_id: str, request: Request):
-    require_job_access(request, job_id)
+    _, _, user, _ = require_job_access(request, job_id)
     body = await request.json()
     org_id = (body or {}).get("org_id")
     if not org_id:
@@ -387,6 +386,8 @@ async def associate_job(job_id: str, request: Request):
     org = storage.get_by_id(org_id)
     if org is None:
         raise HTTPException(status_code=404, detail="organization not found")
+    if not user_can_access_org(user, str(org_id)):
+        raise HTTPException(status_code=403, detail="organization access denied")
 
     binding = runtime.set_job_organization(
         job_id,

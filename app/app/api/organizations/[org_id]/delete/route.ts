@@ -4,6 +4,7 @@ import { apiBase } from "@/lib/apiBase";
 import { backendAuthHeadersWithSession } from "@/lib/backendAuthServer";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { invalidateLocalDataCache } from "@/lib/localData";
+import { normalizeBackendError } from "@/lib/normalizeBackendError";
 
 export async function POST(
   _request: Request,
@@ -25,7 +26,7 @@ export async function POST(
     if (response.ok) {
       invalidateLocalDataCache();
     }
-    return NextResponse.json(data, { status: response.status });
+    return NextResponse.json(normalizeBackendError(data, response.status), { status: response.status });
   } catch (error) {
     console.error("Failed to delete organization via proxy:", error);
     return NextResponse.json(

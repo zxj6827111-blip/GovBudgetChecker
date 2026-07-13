@@ -40,6 +40,36 @@ def test_health_and_ready_endpoints():
     assert "optional" in ready.json()["dependencies"]
 
 
+def test_paginated_job_list_collects_each_summary_once(monkeypatch, tmp_path):
+    job_dirs = []
+    for job_id in ("job-old", "job-new", "job-middle"):
+        job_dir = tmp_path / job_id
+        job_dir.mkdir()
+        job_dirs.append(job_dir)
+
+    calls = []
+    timestamps = {"job-old": 1, "job-middle": 2, "job-new": 3}
+
+    monkeypatch.setattr(runtime, "iter_job_dirs", lambda: job_dirs)
+
+    def _collect(job_dir):
+        calls.append(job_dir.name)
+        return {
+            "job_id": job_dir.name,
+            "created_by": "admin",
+            "ts": timestamps[job_dir.name],
+        }
+
+    monkeypatch.setattr(runtime, "collect_job_summary", _collect)
+
+    response = TestClient(app).get("/api/jobs?limit=1&offset=1")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["job_id"] == "job-middle"
+    assert response.json()["total"] == 3
+    assert sorted(calls) == sorted(timestamps)
+
+
 def test_ready_treats_ai_extractor_as_optional_by_default(monkeypatch):
     monkeypatch.setenv("AI_ASSIST_ENABLED", "true")
     monkeypatch.setenv("AI_EXTRACTOR_URL", "http://127.0.0.1:1/ai/extract/v1")
@@ -789,6 +819,31 @@ def test_batch_delete_endpoint_removes_jobs(monkeypatch, tmp_path: Path):
     assert set(payload["deleted_job_ids"]) == {"job-delete-1", "job-delete-2"}
     assert not (tmp_path / "job-delete-1").exists()
     assert not (tmp_path / "job-delete-2").exists()
+
+
+def test_delete_job_retries_transient_directory_remove_failure(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    job_dir = tmp_path / "job-delete-retry"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    runtime.write_json_file(job_dir / "status.json", {"job_id": "job-delete-retry", "status": "done"})
+    calls = 0
+    original_rmtree = runtime.shutil.rmtree
+
+    def flaky_rmtree(path: Path):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise PermissionError("file handle still closing")
+        original_rmtree(path)
+
+    monkeypatch.setattr(runtime.shutil, "rmtree", flaky_rmtree)
+    monkeypatch.setattr(runtime.time, "sleep", lambda _seconds: None)
+
+    result = runtime.delete_job("job-delete-retry")
+
+    assert result["success"] is True
+    assert calls == 2
+    assert not job_dir.exists()
 
 
 def test_job_issue_ignore_endpoint_returns_filtered_status(monkeypatch, tmp_path: Path):

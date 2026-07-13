@@ -336,6 +336,7 @@ export default function UserManagementPanel({
     selectedIds: string[],
     onChange: (nextIds: string[]) => void,
     disabled = false,
+    testIdPrefix = "admin-users-org",
   ) => (
     <div className="max-h-44 overflow-y-auto rounded-lg border border-slate-200 bg-white">
       {organizations.length ? (
@@ -348,6 +349,7 @@ export default function UserManagementPanel({
             >
               <input
                 type="checkbox"
+                data-testid={`${testIdPrefix}-${org.id}`}
                 checked={checked}
                 disabled={disabled}
                 onChange={() => onChange(toggleOrganizationId(selectedIds, org.id))}
@@ -388,7 +390,7 @@ export default function UserManagementPanel({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="admin-users-panel">
       {showSummaryHeader ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -411,6 +413,7 @@ export default function UserManagementPanel({
           <p className="mt-1 text-sm text-slate-500">创建系统账号，并按需授予管理员或组织访问范围。</p>
           <form className="mt-4 space-y-3" onSubmit={createUser}>
             <input
+              data-testid="admin-users-new-username"
               value={newUsername}
               onChange={(event) => setNewUsername(event.target.value)}
               placeholder="用户名"
@@ -419,6 +422,7 @@ export default function UserManagementPanel({
               autoComplete="username"
             />
             <input
+              data-testid="admin-users-new-password"
               value={newPassword}
               onChange={(event) => setNewPassword(event.target.value)}
               type="password"
@@ -430,6 +434,7 @@ export default function UserManagementPanel({
             <label className="flex items-center gap-2 text-sm text-slate-700">
               <input
                 type="checkbox"
+                data-testid="admin-users-new-admin"
                 checked={newUserAdmin}
                 onChange={(event) => setNewUserAdmin(event.target.checked)}
                 disabled={submitting}
@@ -443,6 +448,7 @@ export default function UserManagementPanel({
                   newUserOrganizationIds,
                   setNewUserOrganizationIds,
                   submitting,
+                  "admin-users-new-org",
                 )}
                 <div className="text-xs text-slate-500">
                   未选择时仅能访问本人上传的任务。
@@ -455,6 +461,7 @@ export default function UserManagementPanel({
             )}
             <button
               type="submit"
+              data-testid="admin-users-create"
               disabled={submitting}
               className="w-full rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
             >
@@ -465,12 +472,12 @@ export default function UserManagementPanel({
 
         <div className="space-y-4">
           {error ? (
-            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div data-testid="admin-users-error" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {error}
             </div>
           ) : null}
           {message ? (
-            <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+            <div data-testid="admin-users-message" className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
               {message}
             </div>
           ) : null}
@@ -498,7 +505,7 @@ export default function UserManagementPanel({
                     const editingScope = scopeEditorUsername === item.username;
 
                     return (
-                      <tr key={item.username}>
+                      <tr key={item.username} data-testid={`admin-users-row-${item.username}`}>
                         <td className="px-4 py-3 text-slate-800">{item.username}</td>
                         <td className="px-4 py-3">
                           <span className={`rounded-full px-2 py-1 text-xs ${item.is_admin ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-700"}`}>
@@ -518,10 +525,11 @@ export default function UserManagementPanel({
                               <div className="text-sm">{describeOrganizationScope(item.organization_ids)}</div>
                               {editingScope ? (
                                 <div className="w-72 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                                  {renderOrganizationPicker(scopeDraft, setScopeDraft, isBusy)}
+                                  {renderOrganizationPicker(scopeDraft, setScopeDraft, isBusy, `admin-users-scope-org-${item.username}`)}
                                   <div className="mt-3 flex gap-2">
                                     <button
                                       type="button"
+                                      data-testid={`admin-users-scope-save-${item.username}`}
                                       disabled={isBusy}
                                       onClick={() => saveScopeEditor(item.username)}
                                       className="rounded bg-slate-900 px-3 py-1.5 text-xs font-medium text-white disabled:bg-slate-400"
@@ -530,6 +538,7 @@ export default function UserManagementPanel({
                                     </button>
                                     <button
                                       type="button"
+                                      data-testid={`admin-users-scope-cancel-${item.username}`}
                                       disabled={isBusy}
                                       onClick={() => {
                                         setScopeEditorUsername(null);
@@ -550,6 +559,7 @@ export default function UserManagementPanel({
                           <div className="flex flex-wrap gap-2">
                             <button
                               type="button"
+                              data-testid={`admin-users-role-${item.username}`}
                               disabled={isBusy}
                               onClick={() => updateUser(item.username, { is_admin: !item.is_admin }, `${item.username} 的角色已更新`)}
                               className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-60"
@@ -558,6 +568,7 @@ export default function UserManagementPanel({
                             </button>
                             <button
                               type="button"
+                              data-testid={`admin-users-active-${item.username}`}
                               disabled={isBusy}
                               onClick={() => updateUser(item.username, { is_active: !item.is_active }, `${item.username} 的状态已更新`)}
                               className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-60"
@@ -567,6 +578,7 @@ export default function UserManagementPanel({
                             {!item.is_admin ? (
                               <button
                                 type="button"
+                                data-testid={`admin-users-scope-open-${item.username}`}
                                 disabled={isBusy}
                                 onClick={() => openScopeEditor(item)}
                                 className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-60"
@@ -576,6 +588,7 @@ export default function UserManagementPanel({
                             ) : null}
                             <button
                               type="button"
+                              data-testid={`admin-users-password-${item.username}`}
                               disabled={isBusy}
                               onClick={() => resetUserPassword(item.username)}
                               className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-60"
@@ -584,6 +597,7 @@ export default function UserManagementPanel({
                             </button>
                             <button
                               type="button"
+                              data-testid={`admin-users-delete-${item.username}`}
                               disabled={isBusy || isCurrent}
                               onClick={() => removeUser(item.username)}
                               className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 disabled:opacity-60"
