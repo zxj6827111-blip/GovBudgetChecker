@@ -32,6 +32,7 @@ MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "30"))
 MAX_UPLOAD_PAGES = int(os.getenv("MAX_UPLOAD_PAGES", "800"))
 UPLOAD_ROOT = Path(os.getenv("UPLOAD_DIR", "uploads")).resolve()
 UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+DOCUMENT_STORAGE_BACKEND = os.getenv("DOCUMENT_STORAGE_BACKEND", "filesystem").strip() or "filesystem"
 
 try:
     from src.security import (
@@ -84,6 +85,7 @@ _JOB_SUMMARY_CACHE: Dict[str, Dict[str, Any]] = {}
 _JOB_SUMMARY_CACHE_MAX_SIZE = 2048
 STRUCTURED_INGEST_FILENAME = "structured_ingest.json"
 IGNORED_ISSUES_FILENAME = "ignored_issues.json"
+PERSISTENCE_STATE_FILENAME = "persistence.json"
 JOB_STATUS_CONTEXT_KEYS = (
     "filename",
     "size",
@@ -98,6 +100,8 @@ JOB_STATUS_CONTEXT_KEYS = (
     "fiscal_year",
     "doc_type",
     "report_year",
+    "report_year_source",
+    "year_conflict",
     "report_kind",
     "created_by",
 )
@@ -1387,6 +1391,8 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     structured_size = -1
     ignored_mtime_ns = -1
     ignored_size = -1
+    persistence_mtime_ns = -1
+    persistence_size = -1
 
     try:
         stat = status_file.stat()
@@ -1425,6 +1431,15 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     except Exception:
         pass
 
+    persistence_path = job_dir / PERSISTENCE_STATE_FILENAME
+    try:
+        if persistence_path.exists():
+            persistence_stat = persistence_path.stat()
+            persistence_mtime_ns = persistence_stat.st_mtime_ns
+            persistence_size = persistence_stat.st_size
+    except Exception:
+        pass
+
     cache_key = (
         status_mtime_ns,
         status_size,
@@ -1435,6 +1450,8 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         structured_size,
         ignored_mtime_ns,
         ignored_size,
+        persistence_mtime_ns,
+        persistence_size,
     )
     cache_entry = _JOB_SUMMARY_CACHE.get(job_dir.name)
     if cache_entry and cache_entry.get("key") == cache_key:
@@ -1503,7 +1520,7 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         except Exception:
             filename_year = None
 
-    if filename_year is not None:
+    if report_year is None and filename_year is not None:
         report_year = filename_year
     elif report_year is None and filename:
         try:
@@ -1553,6 +1570,9 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         structured_ingest = read_structured_ingest_payload(job_dir)
     if not isinstance(structured_ingest, dict):
         structured_ingest = {}
+    persistence_state = read_json_file(persistence_path, default={})
+    if not isinstance(persistence_state, dict):
+        persistence_state = {}
 
     def _severity_bucket(severity: Any) -> str:
         value = str(severity or "").lower()
@@ -1741,7 +1761,10 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "mode": mode,
         "dual_mode_enabled": dual_mode_enabled,
         "stage": stage,
+        "quality_status": status_data.get("quality_status") or "complete",
         "report_year": report_year,
+        "report_year_source": status_data.get("report_year_source"),
+        "year_conflict": status_data.get("year_conflict"),
         "doc_type": doc_type or None,
         "report_kind": report_kind,
         "issue_total": issue_total,
@@ -1779,6 +1802,9 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "structured_table_data_count": ps_sync.get("table_data_count"),
         "structured_line_item_count": ps_sync.get("line_item_count"),
         "structured_sync_match_mode": ps_sync.get("match_mode"),
+        "persistence_status": persistence_state.get("status") or "unknown",
+        "persistence_last_attempt_ts": persistence_state.get("last_attempt_ts"),
+        "persistence_error": persistence_state.get("error"),
         "organization_id": status_data.get("organization_id"),
         "organization_name": status_data.get("organization_name"),
         "organization_match_type": status_data.get("organization_match_type"),
@@ -1801,7 +1827,11 @@ def iter_job_dirs() -> List[Path]:
     """Return all existing job directories."""
     if not UPLOAD_ROOT.exists():
         return []
-    return [p for p in UPLOAD_ROOT.iterdir() if p.is_dir()]
+    return [
+        path
+        for path in UPLOAD_ROOT.iterdir()
+        if path.is_dir() and not path.name.startswith(".")
+    ]
 
 
 def resolve_job_department_context(
@@ -1948,7 +1978,39 @@ def ensure_pdf(file: UploadFile) -> bool:
 def delete_uploaded_job(job_id: str) -> None:
     job_dir = UPLOAD_ROOT / job_id
     if job_dir.exists():
-        shutil.rmtree(job_dir, ignore_errors=True)
+        _remove_job_dir(job_dir)
+
+
+def cleanup_uploaded_job(job_id: str) -> bool:
+    """Best-effort cleanup that never replaces the original validation error."""
+    try:
+        delete_uploaded_job(job_id)
+        return True
+    except Exception:
+        logger.exception("Failed to cleanup rejected upload %s", job_id)
+        return False
+
+
+def _remove_job_dir(job_dir: Path, *, attempts: int = 4, delay_seconds: float = 0.25) -> None:
+    """Remove a job directory, retrying brief Windows file-handle races."""
+    last_error: Optional[Exception] = None
+    for attempt in range(attempts):
+        if not job_dir.exists():
+            return
+        try:
+            shutil.rmtree(job_dir)
+            return
+        except FileNotFoundError:
+            return
+        except (PermissionError, OSError) as exc:
+            last_error = exc
+            if attempt < attempts - 1:
+                time.sleep(delay_seconds)
+
+    if not job_dir.exists():
+        return
+    if last_error is not None:
+        raise last_error
 
 
 def get_pdf_page_count(pdf_path: Path) -> int:
@@ -2015,6 +2077,8 @@ def find_duplicate_upload(
 async def store_upload_file(
     file: UploadFile,
     metadata: Optional[Dict[str, Any]] = None,
+    *,
+    persist_snapshot: bool = True,
 ) -> Dict[str, Any]:
     """Persist upload into a job directory and return metadata payload."""
     if SECURITY_AVAILABLE:
@@ -2082,22 +2146,34 @@ async def store_upload_file(
             detail="File does not appear to be a valid PDF (invalid signature)",
         )
 
-    page_count = get_pdf_page_count(dst)
+    try:
+        page_count = get_pdf_page_count(dst)
+    except Exception as exc:
+        cleanup_uploaded_job(job_id)
+        raise HTTPException(
+            status_code=400,
+            detail="File could not be parsed as a valid PDF",
+        ) from exc
     if MAX_UPLOAD_PAGES > 0 and page_count > MAX_UPLOAD_PAGES:
-        delete_uploaded_job(job_id)
+        cleanup_uploaded_job(job_id)
         raise HTTPException(
             status_code=413,
             detail=f"PDF页数超过限制：{page_count} 页，当前上限为 {MAX_UPLOAD_PAGES} 页",
         )
 
     created_at = time.time()
+    storage_key = dst.relative_to(UPLOAD_ROOT).as_posix()
+    content_type = str(file.content_type or "application/pdf").strip() or "application/pdf"
     payload = {
         "id": job_id,
         "job_id": job_id,
         "filename": safe_name,
         "size": size,
         "page_count": page_count,
-        "saved_path": str(dst.relative_to(UPLOAD_ROOT)),
+        "saved_path": storage_key,
+        "storage_key": storage_key,
+        "storage_backend": DOCUMENT_STORAGE_BACKEND,
+        "content_type": content_type,
         "checksum": sha256.hexdigest(),
     }
     status_payload = {
@@ -2108,6 +2184,10 @@ async def store_upload_file(
         "filename": safe_name,
         "size": size,
         "page_count": page_count,
+        "saved_path": storage_key,
+        "storage_key": storage_key,
+        "storage_backend": DOCUMENT_STORAGE_BACKEND,
+        "content_type": content_type,
         "checksum": sha256.hexdigest(),
         "version_created_at": created_at,
         "job_created_at": created_at,
@@ -2116,6 +2196,8 @@ async def store_upload_file(
     if metadata:
         status_payload.update({key: value for key, value in metadata.items() if value is not None})
     write_json_file(job_dir / "status.json", status_payload)
+    if persist_snapshot:
+        await persist_analysis_job_snapshot(status_payload)
     return {**payload, **extract_job_status_context(status_payload)}
 
 
@@ -2222,7 +2304,7 @@ def delete_job(job_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="job_id does not exist")
 
     try:
-        shutil.rmtree(job_dir)
+        _remove_job_dir(job_dir)
         _JOB_SUMMARY_CACHE.pop(str(job_id), None)
         if ORG_AVAILABLE:
             try:
@@ -2268,8 +2350,22 @@ async def start_analysis(
         if body.get("doc_type") is not None
         else existing_status.get("doc_type")
     )
-    report_year = parse_report_year(
-        body.get("report_year") if body.get("report_year") is not None else fiscal_year
+    explicit_report_year = parse_report_year(body.get("report_year"))
+    explicit_fiscal_year = parse_report_year(body.get("fiscal_year"))
+    stored_report_year = parse_report_year(existing_status.get("report_year"))
+    stored_fiscal_year = parse_report_year(existing_status.get("fiscal_year"))
+    report_year = (
+        explicit_report_year
+        or explicit_fiscal_year
+        or stored_report_year
+        or stored_fiscal_year
+    )
+    report_year_source = (
+        "request"
+        if explicit_report_year or explicit_fiscal_year
+        else "stored_metadata"
+        if stored_report_year or stored_fiscal_year
+        else "inferred"
     )
     filename = ""
     try:
@@ -2285,13 +2381,20 @@ async def start_analysis(
         except Exception:
             filename_year = None
 
-    if filename_year is not None:
-        report_year = filename_year
-    elif report_year is None:
+    if report_year is None:
         report_year = infer_report_year(
             filename=filename,
             preferred_year=fiscal_year,
         )
+        report_year_source = "filename_or_content"
+    year_conflict = None
+    if report_year is not None and filename_year is not None and report_year != filename_year:
+        year_conflict = {
+            "selected_year": report_year,
+            "filename_year": filename_year,
+            "source": report_year_source,
+            "requires_manual_review": True,
+        }
     report_kind = normalize_report_kind(
         str(doc_type) if doc_type is not None else None,
         filename,
@@ -2311,6 +2414,8 @@ async def start_analysis(
         "fiscal_year": fiscal_year,
         "doc_type": doc_type,
         "report_year": report_year,
+        "report_year_source": report_year_source,
+        "year_conflict": year_conflict,
         "report_kind": report_kind,
         "ts": time.time(),
     }

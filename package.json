@@ -13,7 +13,7 @@
   "devDependencies": {
     "@types/node": "^24.5.2",
     "@types/react": "19.2.15",
-    "concurrently": "^8.2.2",
+    "concurrently": "^10.0.0",
     "typescript": "6.0.3"
   }
 }

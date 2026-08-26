@@ -24,6 +24,10 @@ _DEPT_STATS_CACHE_MAX_SIZE = int(
 )
 _DEPT_STATS_CACHE: Dict[str, Dict[str, Any]] = {}
 
+# Organization import files are small structured tables; the limit bounds the
+# memory used to buffer the upload body before parsing.
+_MAX_ORG_IMPORT_BYTES = int(os.getenv("MAX_ORG_IMPORT_MB", "20")) * 1024 * 1024
+
 
 def clear_department_stats_cache() -> None:
     _DEPT_STATS_CACHE.clear()
@@ -499,7 +503,20 @@ async def import_organizations(
     _, _, user = require_admin(request)
     storage = runtime.require_org_storage()
     filename = (file.filename or "").lower()
-    raw = await file.read()
+
+    # Enforce the size limit while reading so an oversized body is rejected
+    # before it is fully buffered in memory.
+    parts: List[bytes] = []
+    size = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > _MAX_ORG_IMPORT_BYTES:
+            raise HTTPException(status_code=413, detail="Import file exceeds 20MB limit")
+        parts.append(chunk)
+    raw = b"".join(parts)
 
     rows: List[Dict[str, Any]] = []
     if filename.endswith(".csv"):

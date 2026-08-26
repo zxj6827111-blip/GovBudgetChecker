@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import logging
 import os
+import json
+import time
+from pathlib import Path
 from typing import Tuple
 
 logger = logging.getLogger(__name__)
@@ -44,6 +47,30 @@ def allow_inline_fallback() -> bool:
 
 def queue_resume_on_start() -> bool:
     return env_flag("JOB_QUEUE_RESUME_ON_START", True)
+
+
+def has_recent_worker_heartbeat(upload_root: Path) -> bool:
+    """Return whether a worker sharing this upload root has reported recently."""
+    heartbeat_dir = upload_root / ".worker-heartbeats"
+    try:
+        max_age = max(5.0, float(os.getenv("JOB_QUEUE_HEARTBEAT_MAX_AGE_SECONDS", "15")))
+    except (TypeError, ValueError):
+        max_age = 15.0
+
+    now = time.time()
+    try:
+        candidates = heartbeat_dir.glob("*.json")
+        for path in candidates:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                heartbeat_ts = float(payload.get("ts") or path.stat().st_mtime)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+            if now - heartbeat_ts <= max_age:
+                return True
+    except OSError:
+        return False
+    return False
 
 
 def should_start_local_queue(testing_mode: bool | None = None) -> bool:

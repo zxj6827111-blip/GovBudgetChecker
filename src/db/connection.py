@@ -108,10 +108,30 @@ class DatabaseConnection:
     @classmethod
     async def close(cls):
         """Close the connection pool."""
-        if cls._pool is not None:
-            await cls._pool.close()
-            cls._pool = None
-            logger.info("Database connection pool closed")
+        pool = cls._pool
+        cls._pool = None
+        if pool is None:
+            return
+
+        def terminate_pool(reason: str) -> None:
+            try:
+                pool.terminate()
+            except (RuntimeError, AttributeError, OSError):
+                logger.exception("Database connection pool terminate failed during %s", reason)
+            else:
+                logger.info("Database connection pool terminated during %s", reason)
+
+        loop = getattr(pool, "_loop", None)
+        if loop is not None and loop.is_closed():
+            terminate_pool("event loop shutdown")
+            return
+
+        try:
+            await pool.close()
+        except (RuntimeError, AttributeError, OSError):
+            logger.exception("Database connection pool close failed; terminating pool")
+            terminate_pool("close failure")
+        logger.info("Database connection pool closed")
     
     @classmethod
     def get_schema(cls) -> str:

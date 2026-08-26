@@ -27,11 +27,21 @@ def _resolve_report_kind(doc: Any, report_kind: Optional[str] = None) -> str:
     if kind in {"budget", "final"}:
         return kind
 
+    # The repository path itself contains "GovBudgetChecker".  Detect only
+    # from the uploaded filename, otherwise every document can be routed to
+    # the budget rule set before its content is considered.
+    #
+    # NOTE: ``Path(...).name`` is host-OS dependent.  On Linux a
+    # Windows-style path such as ``E:\dir\plain.pdf`` has no path separator,
+    # so ``Path.name`` returns the whole string (which contains "Budget" via
+    # the repository directory) and misroutes the document.  Split on both
+    # separators explicitly so basename extraction is platform independent.
     path = str(getattr(doc, "path", "") or "")
-    lowered = path.lower()
-    if "budget" in lowered or "预算" in path:
+    filename = re.split(r"[\\/]", path)[-1] if path else ""
+    lowered = filename.lower()
+    if "budget" in lowered or "预算" in filename:
         return "budget"
-    if "final" in lowered or "决算" in path:
+    if "final" in lowered or "决算" in filename:
         return "final"
 
     page_texts = getattr(doc, "page_texts", []) or []
@@ -40,15 +50,16 @@ def _resolve_report_kind(doc: Any, report_kind: Optional[str] = None) -> str:
         return "budget"
     if "决算" in first_text:
         return "final"
-    return "final"
+    return "unknown"
 
 
 def _select_rule_set(doc: Any, report_kind: Optional[str] = None) -> List[Any]:
-    return (
-        ALL_BUDGET_RULES
-        if _resolve_report_kind(doc, report_kind) == "budget"
-        else FINAL_ALL_RULES
-    )
+    kind = _resolve_report_kind(doc, report_kind)
+    if kind == "budget":
+        return ALL_BUDGET_RULES
+    if kind == "final":
+        return FINAL_ALL_RULES
+    return []
 
 
 def run_rules(
@@ -59,6 +70,15 @@ def run_rules(
         *ALL_COMMON_RULES,
     ]
     issues: List[Issue] = []
+    if _resolve_report_kind(doc, report_kind) == "unknown":
+        issues.append(
+            Issue(
+                rule="DOC-TYPE-UNKNOWN",
+                severity="manual_review",
+                message="未能可靠识别材料为预算或决算，已仅执行通用规则，请人工确认材料类型后重新检查。",
+                location={"page": 1, "pos": 0},
+            )
+        )
 
     for rule_obj in selected_rules:
         try:

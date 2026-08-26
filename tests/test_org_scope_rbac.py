@@ -212,3 +212,81 @@ def test_unit_scope_does_not_leak_sibling_unit_jobs_or_stats(client: TestClient)
     assert root["job_count"] == 1
     assert [child["id"] for child in root["children"]] == [orgs["unit_a1"]]
     assert root["children"][0]["job_count"] == 1
+
+
+def test_legacy_job_without_owner_does_not_leak_to_unscoped_user(client: TestClient):
+    orgs = _setup_org_tree()
+    _create_job("legacy-b-job", owner="", org_id=orgs["unit_b1"])
+    admin_token = _login(client, "admin", ADMIN_PASSWORD)
+    client.post(
+        "/api/users",
+        headers=_headers(admin_token),
+        json={
+            "username": "dept_a_reader",
+            "password": "DeptAReader1",
+            "organization_ids": [orgs["dept_a"]],
+        },
+    )
+    token = _login(client, "dept_a_reader", "DeptAReader1")
+
+    detail = client.get("/api/jobs/legacy-b-job", headers=_headers(token))
+    jobs = client.get("/api/jobs", headers=_headers(token))
+
+    assert detail.status_code == 403
+    assert all(item["job_id"] != "legacy-b-job" for item in jobs.json())
+
+
+def test_non_admin_cannot_associate_owned_job_to_out_of_scope_org(client: TestClient):
+    orgs = _setup_org_tree()
+    _create_job("owned-a-job", owner="dept_a_reader", org_id=orgs["unit_a1"])
+    admin_token = _login(client, "admin", ADMIN_PASSWORD)
+    client.post(
+        "/api/users",
+        headers=_headers(admin_token),
+        json={
+            "username": "dept_a_reader",
+            "password": "DeptAReader1",
+            "organization_ids": [orgs["dept_a"]],
+        },
+    )
+    token = _login(client, "dept_a_reader", "DeptAReader1")
+
+    response = client.post(
+        "/api/jobs/owned-a-job/associate",
+        headers=_headers(token),
+        json={"org_id": orgs["unit_b1"]},
+    )
+
+    assert response.status_code == 403
+    assert runtime.require_org_storage().get_job_org("owned-a-job").org_id == orgs["unit_a1"]
+
+
+def test_non_admin_cannot_upload_directly_to_out_of_scope_org(client: TestClient):
+    import fitz
+
+    orgs = _setup_org_tree()
+    admin_token = _login(client, "admin", ADMIN_PASSWORD)
+    client.post(
+        "/api/users",
+        headers=_headers(admin_token),
+        json={
+            "username": "dept_a_reader",
+            "password": "DeptAReader1",
+            "organization_ids": [orgs["dept_a"]],
+        },
+    )
+    token = _login(client, "dept_a_reader", "DeptAReader1")
+    document = fitz.open()
+    document.new_page()
+    pdf_bytes = document.tobytes()
+    document.close()
+
+    response = client.post(
+        "/api/documents/upload",
+        headers=_headers(token),
+        data={"org_id": orgs["unit_b1"]},
+        files={"file": ("out-of-scope.pdf", pdf_bytes, "application/pdf")},
+    )
+
+    assert response.status_code == 403
+    assert runtime.iter_job_dirs() == []

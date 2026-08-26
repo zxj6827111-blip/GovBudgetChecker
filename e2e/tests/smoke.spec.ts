@@ -76,7 +76,7 @@ test.describe("Scaffold", () => {
     await page.goto("/e2e/batch-upload");
     await expect(page).toHaveURL(/\/e2e\/batch-upload/);
     await expect(page.locator("h2").first()).toBeVisible();
-    await expect(page.locator('input[type="file"]')).toHaveCount(1);
+  await expect(page.locator('input[type="file"]')).toHaveCount(2);
     await expect(page.locator("button").first()).toBeVisible();
   });
 });

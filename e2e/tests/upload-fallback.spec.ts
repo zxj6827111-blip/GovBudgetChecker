@@ -178,7 +178,7 @@ test.describe("Batch Upload Fallback", () => {
     });
 
     await page
-      .locator('input[type="file"]')
+      .getByTestId("batch-upload-file-input")
       .setInputFiles({
         name: "姘戞斂灞€閮ㄩ棬2025棰勭畻.pdf",
         mimeType: "application/pdf",
@@ -194,5 +194,7 @@ test.describe("Batch Upload Fallback", () => {
     await expect.poll(() => v2UploadCalls).toBe(1);
     await expect.poll(() => runCalls).toBe(1);
     expect(runVersionId).toBe("job-fallback-001");
+    await expect(page.getByTestId("batch-complete-count")).toHaveText("1");
+    await expect(page.getByTestId("batch-completed-job-ids")).toHaveText("job-fallback-001");
   });
 });

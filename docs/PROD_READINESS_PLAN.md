@@ -29,7 +29,7 @@
 ## Initial Baseline Snapshot
 - Backend tests: pass
 - Frontend build: pass (with warnings)
-- E2E: pass (contains placeholder smoke test that must be replaced)
+- E2E baseline: the original placeholder smoke test has been replaced by workflow coverage; release decisions still require a fresh full-suite run.
 - Known risk: job execution currently starts through `asyncio.create_task`.
 
 ## Change Tracking

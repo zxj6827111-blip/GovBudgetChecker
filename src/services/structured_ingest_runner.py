@@ -24,7 +24,7 @@ from src.services.table_recognizer import TableRecognizer
 logger = logging.getLogger(__name__)
 
 _DB_READY = False
-_DB_READY_LOCK = asyncio.Lock()
+_DB_READY_LOCK: asyncio.Lock | None = None
 
 CORE_TABLES = (
     "FIN_01_income_expenditure_total",
@@ -56,6 +56,10 @@ async def ensure_structured_ingest_ready() -> bool:
     if not (os.getenv("DATABASE_URL") or "").strip():
         return False
 
+    global _DB_READY_LOCK
+    active_loop = asyncio.get_running_loop()
+    if _DB_READY_LOCK is None or getattr(_DB_READY_LOCK, "_loop", None) not in (None, active_loop):
+        _DB_READY_LOCK = asyncio.Lock()
     async with _DB_READY_LOCK:
         if _DB_READY:
             return True
@@ -97,7 +101,11 @@ async def run_structured_ingest(
             fiscal_year=fiscal_year,
             doc_type=doc_type,
             checksum=checksum,
-            storage_key=str(pdf_path),
+            storage_key=_resolve_storage_key(job_id, pdf_path, metadata),
+            storage_backend=_resolve_storage_backend(metadata),
+            original_filename=str(metadata.get("filename") or pdf_path.name),
+            file_size_bytes=_resolve_file_size(pdf_path, metadata),
+            content_type=str(metadata.get("content_type") or "application/pdf"),
         )
         version_id = document_info["document_version_id"]
 
@@ -204,6 +212,10 @@ async def _ensure_document_version(
     doc_type: str,
     checksum: str,
     storage_key: str,
+    storage_backend: str,
+    original_filename: str,
+    file_size_bytes: int,
+    content_type: str,
 ) -> Dict[str, int]:
     org_id = await conn.fetchval(
         """
@@ -229,21 +241,79 @@ async def _ensure_document_version(
     )
     version_id = await conn.fetchval(
         """
-        INSERT INTO fiscal_document_versions (document_id, file_hash, storage_key)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (document_id, file_hash)
-        DO UPDATE SET storage_key = EXCLUDED.storage_key
+            INSERT INTO fiscal_document_versions (
+            document_id,
+            file_hash,
+            storage_key,
+            storage_backend,
+            original_filename,
+            file_size_bytes,
+            content_type
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (document_id, file_hash)
+            DO UPDATE SET
+                storage_key = CASE
+                    WHEN fiscal_document_versions.storage_key IS NULL
+                        OR fiscal_document_versions.storage_key = ''
+                        OR fiscal_document_versions.storage_key ~ '^(?:[A-Za-z]:)?[/\\\\]'
+                    THEN EXCLUDED.storage_key
+                    ELSE fiscal_document_versions.storage_key
+                END,
+            storage_backend = COALESCE(NULLIF(fiscal_document_versions.storage_backend, ''), EXCLUDED.storage_backend),
+            original_filename = COALESCE(NULLIF(fiscal_document_versions.original_filename, ''), EXCLUDED.original_filename),
+            file_size_bytes = GREATEST(COALESCE(fiscal_document_versions.file_size_bytes, 0), EXCLUDED.file_size_bytes),
+            content_type = COALESCE(NULLIF(fiscal_document_versions.content_type, ''), EXCLUDED.content_type)
         RETURNING id
         """,
         document_id,
         checksum,
         storage_key,
+        storage_backend,
+        original_filename,
+        file_size_bytes,
+        content_type,
     )
     return {
         "org_unit_id": int(org_id),
         "document_id": int(document_id),
         "document_version_id": int(version_id),
     }
+
+
+def _resolve_storage_key(job_id: str, pdf_path: Path, metadata: Dict[str, Any]) -> str:
+    configured_key = str(metadata.get("storage_key") or metadata.get("saved_path") or "").strip()
+    if configured_key:
+        normalized = configured_key.replace("\\", "/")
+        if not re.match(r"^(?:[A-Za-z]:)?/", normalized):
+            return normalized.lstrip("/")
+
+    try:
+        upload_root = Path(os.getenv("UPLOAD_DIR", "uploads")).resolve()
+        return pdf_path.resolve().relative_to(upload_root).as_posix()
+    except Exception:
+        return f"{str(job_id).strip() or 'unknown'}/{pdf_path.name}"
+
+
+def _resolve_storage_backend(metadata: Dict[str, Any]) -> str:
+    return str(
+        metadata.get("storage_backend")
+        or os.getenv("DOCUMENT_STORAGE_BACKEND", "filesystem")
+        or "filesystem"
+    ).strip() or "filesystem"
+
+
+def _resolve_file_size(pdf_path: Path, metadata: Dict[str, Any]) -> int:
+    try:
+        explicit_size = int(metadata.get("size") or 0)
+    except (TypeError, ValueError):
+        explicit_size = 0
+    if explicit_size > 0:
+        return explicit_size
+    try:
+        return int(pdf_path.stat().st_size)
+    except OSError:
+        return 0
 
 
 def _build_review_items(

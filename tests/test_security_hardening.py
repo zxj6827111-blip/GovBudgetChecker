@@ -7,7 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi import HTTPException
 from starlette.requests import Request
-from starlette.responses import PlainTextResponse
+from starlette.responses import PlainTextResponse, Response
 
 from api.routes import health as health_routes
 from src.security import SecurityConfig, SecurityMiddleware
@@ -143,7 +143,7 @@ async def test_ready_response_redacts_diagnostic_details_by_default(
     )
     request = _build_request(path="/ready")
 
-    payload = await health_routes.ready(request)
+    payload = await health_routes.ready(request, Response())
 
     assert payload["details"]["redacted"] is True
     assert "rules_file" not in payload["details"]
@@ -175,7 +175,7 @@ async def test_ready_details_require_admin_when_not_explicitly_exposed(
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await health_routes.ready(request)
+        await health_routes.ready(request, Response())
 
     assert exc_info.value.status_code == 401
 
@@ -188,7 +188,7 @@ async def test_ready_details_can_be_enabled_for_diagnostics(
     monkeypatch.setenv("READY_EXPOSE_DETAILS", "true")
     request = _build_request(path="/ready", query_string=b"details=true")
 
-    payload = await health_routes.ready(request)
+    payload = await health_routes.ready(request, Response())
 
     assert "rules_file" in payload["details"]
     assert "audit_log_path" in payload["details"]

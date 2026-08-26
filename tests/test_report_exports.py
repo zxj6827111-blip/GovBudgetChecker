@@ -299,6 +299,38 @@ def test_report_download_uses_merged_issue_projection_without_double_counting(
     assert [row["严重级别"] for row in rows] == ["高", "中"]
 
 
+def test_report_export_includes_structured_review_item_without_fake_page(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    job_id = "job-export-review"
+    job_dir = tmp_path / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    _create_pdf(job_dir / "source.pdf", [["Review"]])
+    _write_status(
+        job_dir,
+        {
+            "job_id": job_id,
+            "status": "done",
+            "saved_path": f"{job_id}/source.pdf",
+            "result": {"rule_findings": []},
+            "structured_ingest": {
+                "review_items": [
+                    {"id": "review-1", "type": "table", "table_code": "FIN_05", "message": "Needs review"}
+                ]
+            },
+        },
+    )
+
+    response = TestClient(app).get(f"/api/reports/download?job_id={job_id}&format=json")
+    assert response.status_code == 200
+    issue = response.json()["issues"][0]
+    assert issue["id"] == "review-1"
+    assert issue["severity"] == "manual_review"
+    assert issue["export_location"].get("page") is None
+
+
 def test_report_download_word_format_is_supported(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

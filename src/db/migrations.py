@@ -727,6 +727,60 @@ MIGRATIONS: List[Dict[str, Any]] = [
             "CREATE INDEX IF NOT EXISTS idx_dept_line_table_key ON org_dept_line_items(table_key)",
         ]
     },
+    {
+        "id": "2026-07-13_0015_document_storage_metadata",
+        "description": "Track durable original-document storage metadata for each fiscal version",
+        "sql": [
+            "ALTER TABLE fiscal_document_versions ADD COLUMN IF NOT EXISTS storage_backend TEXT NOT NULL DEFAULT 'filesystem'",
+            "ALTER TABLE fiscal_document_versions ADD COLUMN IF NOT EXISTS original_filename TEXT",
+            "ALTER TABLE fiscal_document_versions ADD COLUMN IF NOT EXISTS file_size_bytes BIGINT NOT NULL DEFAULT 0",
+            "ALTER TABLE fiscal_document_versions ADD COLUMN IF NOT EXISTS content_type TEXT NOT NULL DEFAULT 'application/pdf'",
+            "CREATE INDEX IF NOT EXISTS idx_document_versions_storage_key ON fiscal_document_versions(storage_key)",
+        ]
+    },
+    {
+        "id": "2026-07-13_0016_workflow_state_mirror",
+        "description": "Mirror remediation workflow state from the durable upload volume into PostgreSQL",
+        "sql": [
+            """
+            CREATE TABLE IF NOT EXISTS workflow_issue_records (
+                workflow_key TEXT PRIMARY KEY,
+                job_uuid TEXT NOT NULL,
+                issue_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                title TEXT,
+                severity TEXT,
+                page_number INTEGER,
+                organization_id TEXT,
+                organization_name TEXT,
+                note TEXT,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_workflow_issue_records_job ON workflow_issue_records(job_uuid)",
+            "CREATE INDEX IF NOT EXISTS idx_workflow_issue_records_status ON workflow_issue_records(status)",
+            """
+            CREATE TABLE IF NOT EXISTS workflow_state_mirror (
+                mirror_id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (mirror_id),
+                revision BIGINT NOT NULL DEFAULT 0,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS workflow_remediation_packages (
+                package_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                organization_id TEXT,
+                organization_name TEXT,
+                job_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+                issue_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+                status TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+        ]
+    },
 ]
 
 

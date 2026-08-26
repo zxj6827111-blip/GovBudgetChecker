@@ -39,6 +39,7 @@ class _FakeConnection:
 
 @pytest.mark.asyncio
 async def test_persist_analysis_job_snapshot_records_dual_results(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test")
     conn = _FakeConnection()
     released = []
 
@@ -115,6 +116,7 @@ async def test_persist_analysis_job_snapshot_records_dual_results(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_persist_analysis_job_snapshot_clears_stale_results_for_active_job(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test")
     conn = _FakeConnection()
 
     async def _fake_ready():
@@ -255,6 +257,71 @@ def test_resolve_filename_prefers_uploaded_pdf_name(monkeypatch, tmp_path):
     )
 
     assert filename == "sample_budget_2025.pdf"
+
+
+def test_build_job_metadata_keeps_durable_document_location():
+    metadata = analysis_result_store._build_job_metadata(
+        {
+            "job_id": "job-storage-1",
+            "filename": "sample.pdf",
+            "size": 12345,
+            "page_count": 8,
+            "saved_path": "job-storage-1/sample.pdf",
+            "storage_key": "job-storage-1/sample.pdf",
+            "storage_backend": "filesystem",
+            "content_type": "application/pdf",
+        }
+    )
+
+    assert metadata["storage_key"] == "job-storage-1/sample.pdf"
+    assert metadata["storage_backend"] == "filesystem"
+    assert metadata["content_type"] == "application/pdf"
+    assert metadata["size"] == 12345
+    assert metadata["page_count"] == 8
+
+
+@pytest.mark.asyncio
+async def test_sync_pending_analysis_snapshots_replays_only_retry_marked_jobs(monkeypatch, tmp_path):
+    retry_job = tmp_path / "retry-job"
+    retry_job.mkdir()
+    (retry_job / "status.json").write_text(
+        json.dumps({"job_id": "retry-job", "status": "done", "result": {}}),
+        encoding="utf-8",
+    )
+    (retry_job / "persistence.json").write_text(
+        json.dumps({"status": "pending_retry"}), encoding="utf-8"
+    )
+    clean_job = tmp_path / "clean-job"
+    clean_job.mkdir()
+    (clean_job / "persistence.json").write_text(
+        json.dumps({"status": "synced"}), encoding="utf-8"
+    )
+
+    calls = []
+
+    async def _persist(payload, *, include_results=False):
+        calls.append((payload, include_results))
+        return True
+
+    monkeypatch.setattr(analysis_result_store, "persist_analysis_job_snapshot", _persist)
+
+    summary = await analysis_result_store.sync_pending_analysis_snapshots(tmp_path)
+
+    assert summary["pending"] == 1
+    assert summary["synced"] == 1
+    assert summary["failed"] == 0
+    assert calls[0][0]["job_id"] == "retry-job"
+    assert calls[0][1] is True
+
+
+@pytest.mark.asyncio
+async def test_resolve_organization_fk_ignores_external_id_outside_postgres_integer_range():
+    conn = _FakeConnection()
+
+    resolved = await analysis_result_store._resolve_organization_fk(conn, "276592252574")
+
+    assert resolved is None
+    assert conn.fetchval_calls == []
 
 
 def test_serialize_job_summary_row_uses_display_labels(monkeypatch):

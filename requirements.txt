@@ -1,9 +1,9 @@
 # 后端与AI微服务依赖
 fastapi==0.136.3
-starlette==1.2.0
+starlette==1.3.1
 uvicorn[standard]==0.35.0
-python-multipart==0.0.29
-pypdf==6.12.2
+python-multipart==0.0.31
+pypdf==6.13.3
 PyMuPDF>=1.24.0
 pdfplumber>=0.11.0
 rapidfuzz>=3.9.0
@@ -17,7 +17,7 @@ pydantic>=2.0.0
 pyyaml>=6.0.1
 openai>=1.0.0
 aiofiles>=23.0.0
-aiohttp>=3.10.0
+aiohttp>=3.14.0
 # 新增：requests用于后端规则R33110的同步HTTP调用AI抽取器
 requests>=2.32.0
 python-dotenv>=1.0.0

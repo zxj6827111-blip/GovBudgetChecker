@@ -13,6 +13,17 @@ type OrganizationNode = {
   issue_count: number;
 };
 
+type OrganizationRecordInput = {
+  id: string;
+  name: string;
+  level: string;
+  level_name?: string;
+  parent_id: string | null;
+  children?: OrganizationRecordInput[];
+  job_count?: number;
+  issue_count?: number;
+};
+
 type OrganizationTreeProps = {
   onSelect: (org: OrganizationNode | null) => void;
   onGlobalBatchUpload?: () => void;
@@ -21,6 +32,8 @@ type OrganizationTreeProps = {
   isAdmin?: boolean;
   selectedOrgId?: string | null;
   refreshKey?: number;
+  fallbackOrganizations?: OrganizationRecordInput[];
+  onChanged?: () => Promise<void> | void;
 };
 
 type TreeResponse = {
@@ -29,13 +42,17 @@ type TreeResponse = {
 
 function parseErrorMessage(payload: any, fallback: string): string {
   if (payload && typeof payload === "object") {
-    return (
+    const message = String(
       payload.detail ||
       payload.error ||
       payload.message ||
       (Array.isArray(payload.errors) ? payload.errors.join(", ") : "") ||
       fallback
     );
+    if (/too many requests/i.test(message)) {
+      return "当前操作请求过于频繁，后端暂时限流。请稍等一分钟后重试。";
+    }
+    return message;
   }
   return fallback;
 }
@@ -51,6 +68,46 @@ function sortTreeByName(nodes: OrganizationNode[]): OrganizationNode[] {
       children: sortTreeByName(Array.isArray(node.children) ? node.children : []),
     }))
     .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+}
+
+function toOrganizationNode(item: OrganizationRecordInput): OrganizationNode {
+  return {
+    id: String(item.id),
+    name: String(item.name ?? ""),
+    level: String(item.level ?? "organization"),
+    level_name: item.level_name,
+    parent_id: item.parent_id ?? null,
+    children: [],
+    job_count: Number(item.job_count ?? 0),
+    issue_count: Number(item.issue_count ?? 0),
+  };
+}
+
+function buildTreeFromRecords(records?: OrganizationRecordInput[]): OrganizationNode[] {
+  if (!Array.isArray(records) || records.length === 0) {
+    return [];
+  }
+
+  const nodeById = new Map<string, OrganizationNode>();
+  for (const record of records) {
+    if (!record?.id) {
+      continue;
+    }
+    nodeById.set(String(record.id), toOrganizationNode(record));
+  }
+
+  const roots: OrganizationNode[] = [];
+  for (const node of Array.from(nodeById.values())) {
+    const parentId = node.parent_id ? String(node.parent_id) : null;
+    const parent = parentId ? nodeById.get(parentId) : null;
+    if (parent) {
+      parent.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  return sortTreeByName(roots);
 }
 
 function buildInitialExpandedState(
@@ -160,6 +217,8 @@ export default function OrganizationTree({
   isAdmin = false,
   selectedOrgId,
   refreshKey,
+  fallbackOrganizations,
+  onChanged,
 }: OrganizationTreeProps) {
   const [tree, setTree] = useState<OrganizationNode[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -172,10 +231,35 @@ export default function OrganizationTree({
   const [modalInputValue, setModalInputValue] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const requestIdRef = useRef(0);
+  const fallbackTree = useMemo(
+    () => buildTreeFromRecords(fallbackOrganizations),
+    [fallbackOrganizations],
+  );
+
+  const applyFallbackTree = useCallback(() => {
+    if (fallbackTree.length === 0) {
+      return false;
+    }
+
+    setTree(fallbackTree);
+    setExpanded((current) => {
+      const nextExpanded =
+        Object.keys(current).length > 0 ? { ...current } : buildInitialExpandedState(fallbackTree);
+      if (selectedOrgId) {
+        for (const id of findPathToNode(fallbackTree, selectedOrgId)) {
+          nextExpanded[id] = true;
+        }
+      }
+      return nextExpanded;
+    });
+    setError(null);
+    return true;
+  }, [fallbackTree, selectedOrgId]);
 
   const loadOrganizations = useCallback(async () => {
     const requestId = ++requestIdRef.current;
-    setLoading(true);
+    const hasFallbackTree = applyFallbackTree();
+    setLoading(!hasFallbackTree);
     setError(null);
 
     const controller = new AbortController();
@@ -188,7 +272,7 @@ export default function OrganizationTree({
       });
       const payload = (await response.json().catch(() => ({}))) as TreeResponse;
       if (!response.ok) {
-        throw new Error("organizations api not ok");
+        throw new Error(parseErrorMessage(payload, `organizations api not ok (${response.status})`));
       }
 
       if (requestId !== requestIdRef.current) {
@@ -208,10 +292,16 @@ export default function OrganizationTree({
         return nextExpanded;
       });
     } catch (fetchError) {
-      console.error(fetchError);
       if (requestId !== requestIdRef.current) {
         return;
       }
+      if (applyFallbackTree()) {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn("Using fallback organization tree after organization API failed.", fetchError);
+        }
+        return;
+      }
+      console.error(fetchError);
       setTree([]);
       setError("加载组织结构失败");
     } finally {
@@ -220,7 +310,7 @@ export default function OrganizationTree({
         setLoading(false);
       }
     }
-  }, [selectedOrgId]);
+  }, [applyFallbackTree, selectedOrgId]);
 
   useEffect(() => {
     void loadOrganizations();
@@ -308,7 +398,7 @@ export default function OrganizationTree({
 
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("clear_existing", "true");
+    formData.append("clear_existing", "false");
 
     try {
       const response = await fetch("/api/organizations/import", {
@@ -323,6 +413,7 @@ export default function OrganizationTree({
       window.alert(`导入成功，共导入 ${payload.imported ?? 0} 个组织。`);
       setShowImporter(false);
       await loadOrganizations();
+      await onChanged?.();
     } catch (importError) {
       window.alert(importError instanceof Error ? importError.message : "导入失败");
     }
@@ -375,6 +466,7 @@ export default function OrganizationTree({
           issue_count: Number(createdNode.issue_count ?? 0),
         });
       }
+      await onChanged?.();
     } catch (createError) {
       window.alert(createError instanceof Error ? createError.message : "创建部门失败");
     } finally {
@@ -418,6 +510,7 @@ export default function OrganizationTree({
           issue_count: Number((payload as any)?.issue_count ?? 0),
         });
       }
+      await onChanged?.();
     } catch (updateError) {
       window.alert(updateError instanceof Error ? updateError.message : "更新组织失败");
     } finally {
@@ -466,6 +559,7 @@ export default function OrganizationTree({
         onSelect(null);
       }
       await loadOrganizations();
+      await onChanged?.();
     } catch (deleteError) {
       window.alert(deleteError instanceof Error ? deleteError.message : "删除组织失败");
     }

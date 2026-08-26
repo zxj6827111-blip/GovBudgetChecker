@@ -141,8 +141,15 @@ async function readErrorMessage(response: Response) {
   const text = await response.text();
   try {
     const payload = JSON.parse(text) as Record<string, unknown>;
-    return String(payload.detail || payload.error || payload.message || text || `HTTP ${response.status}`);
+    const message = String(payload.detail || payload.error || payload.message || text || `HTTP ${response.status}`);
+    if (/too many requests/i.test(message)) {
+      return "当前操作请求过于频繁，后端暂时限流。请稍等一分钟后重试。";
+    }
+    return message;
   } catch {
+    if (/too many requests/i.test(text)) {
+      return "当前操作请求过于频繁，后端暂时限流。请稍等一分钟后重试。";
+    }
     return text || `HTTP ${response.status}`;
   }
 }
@@ -185,12 +192,13 @@ function Card({
   );
 }
 
-function NoticeBanner({ notice }: { notice: Notice | null }) {
+function NoticeBanner({ notice, testId }: { notice: Notice | null; testId?: string }) {
   if (!notice) {
     return null;
   }
   return (
     <div
+      data-testid={testId}
       className={cn(
         "rounded-md border px-4 py-3 text-sm font-semibold",
         notice.tone === "success" && "border-emerald-200 bg-emerald-50 text-emerald-800",
@@ -205,11 +213,13 @@ function NoticeBanner({ notice }: { notice: Notice | null }) {
 
 function ResultMetrics({
   metrics,
+  testId,
 }: {
   metrics: Array<{ label: string; value: number | string }>;
+  testId?: string;
 }) {
   return (
-    <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+    <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6" data-testid={testId}>
       {metrics.map((item) => (
         <div key={item.label} className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
           <div className="text-xs text-slate-500">{item.label}</div>
@@ -308,6 +318,7 @@ function OverviewSection({
             <button
               key={card.id}
               type="button"
+              data-testid={`admin-overview-card-${card.id}`}
               onClick={() => setSection(card.id)}
               className="min-h-[148px] rounded-md border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:border-blue-200 hover:bg-blue-50/40"
             >
@@ -331,13 +342,20 @@ function OverviewSection({
   );
 }
 
-function OrganizationSection() {
+function OrganizationSection({
+  organizations,
+  onRefresh,
+}: {
+  organizations: OrganizationRecord[];
+  onRefresh?: () => Promise<void> | void;
+}) {
   const [selectedOrg, setSelectedOrg] = useState<OrganizationSelection | null>(null);
   const [treeRefreshKey, setTreeRefreshKey] = useState(0);
   const [notice, setNotice] = useState<Notice | null>(null);
 
   const refreshOrganizationTree = async () => {
     setTreeRefreshKey((current) => current + 1);
+    await onRefresh?.();
   };
 
   const handleCreateDepartment = async () => {
@@ -476,14 +494,16 @@ function OrganizationSection() {
 
   return (
     <div className="space-y-4">
-      <NoticeBanner notice={notice} />
+      <NoticeBanner notice={notice} testId="admin-organization-notice" />
       <div className="grid items-start gap-5 xl:grid-cols-[460px_minmax(0,1fr)]">
         <div className="h-[calc(100vh-260px)] min-h-[640px] overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
           <OrganizationTree
             isAdmin
+            fallbackOrganizations={organizations}
             refreshKey={treeRefreshKey}
             selectedOrgId={selectedOrg?.id || null}
             onSelect={(org) => setSelectedOrg(org as OrganizationSelection | null)}
+            onChanged={refreshOrganizationTree}
           />
         </div>
         <div className="space-y-4">
@@ -736,12 +756,13 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
 
   return (
     <div className="space-y-5">
-      <NoticeBanner notice={notice} />
+      <NoticeBanner notice={notice} testId="admin-operations-notice" />
       <Card title="全库报告接入">
         <div className="flex flex-wrap items-start justify-between gap-4 p-5">
           <p className="max-w-2xl text-sm leading-6 text-slate-600">保留真实上传入口，上传后会走现有的匹配、结构化与审校流程。</p>
           <button
             type="button"
+            data-testid="admin-operations-open-upload"
             onClick={() => setIsUploadModalOpen(true)}
             className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700"
           >
@@ -768,6 +789,7 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
             />
             <button
               type="button"
+              data-testid="admin-operations-reanalyze-all"
               onClick={() => void runReanalyzeAll()}
               disabled={isRunningReanalyzeAll}
               className="mt-5 inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 disabled:opacity-60"
@@ -782,10 +804,10 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
           <div className="p-5">
             <p className="text-sm leading-6 text-slate-600">修复磁盘里存在、前台却看不到的报告与组织关系。</p>
             <div className="mt-5 flex flex-wrap gap-3">
-              <button type="button" onClick={() => void previewRepairLinks(true)} disabled={isRepairingLinks} className="rounded-md border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700 disabled:opacity-60">
+              <button type="button" data-testid="admin-operations-repair-preview" onClick={() => void previewRepairLinks(true)} disabled={isRepairingLinks} className="rounded-md border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700 disabled:opacity-60">
                 预览修复
               </button>
-              <button type="button" onClick={() => void previewRepairLinks(false)} disabled={isRepairingLinks} className="rounded-md bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">
+              <button type="button" data-testid="admin-operations-repair-execute" onClick={() => void previewRepairLinks(false)} disabled={isRepairingLinks} className="rounded-md bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">
                 正式修复
               </button>
             </div>
@@ -796,10 +818,10 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
           <div className="p-5">
             <p className="text-sm leading-6 text-slate-600">在组织导入、改名后批量恢复历史报告的关联结果。</p>
             <div className="mt-5 flex flex-wrap gap-3">
-              <button type="button" onClick={() => void previewRematchOrganizations(true)} disabled={isRematching} className="rounded-md border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700 disabled:opacity-60">
+              <button type="button" data-testid="admin-operations-rematch-preview" onClick={() => void previewRematchOrganizations(true)} disabled={isRematching} className="rounded-md border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700 disabled:opacity-60">
                 预览匹配
               </button>
-              <button type="button" onClick={() => void previewRematchOrganizations(false)} disabled={isRematching} className="rounded-md bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">
+              <button type="button" data-testid="admin-operations-rematch-execute" onClick={() => void previewRematchOrganizations(false)} disabled={isRematching} className="rounded-md bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">
                 正式执行
               </button>
             </div>
@@ -812,6 +834,7 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
               <p className="max-w-xl text-sm leading-6 text-red-700">只清理数据库中的旧结构化版本，先预览再确认执行。</p>
               <button
                 type="button"
+                data-testid="admin-operations-cleanup-preview"
                 onClick={() => void previewCleanup()}
                 disabled={isLoadingCleanupPreview}
                 className="rounded-md bg-red-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60"
@@ -826,7 +849,7 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
       {repairPreview ? (
         <Card title="缺失关联修复结果">
           <div className="space-y-4 p-5">
-            <ResultMetrics metrics={[
+            <ResultMetrics testId="admin-operations-repair-results" metrics={[
               { label: "候选记录", value: repairPreview.candidate_count ?? 0 },
               { label: "已修复", value: repairPreview.repaired_count ?? 0 },
               { label: "按状态补链", value: repairPreview.linked_from_status_count ?? 0 },
@@ -846,7 +869,7 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
       {rematchPreview ? (
         <Card title="组织重匹配结果">
           <div className="space-y-4 p-5">
-            <ResultMetrics metrics={[
+            <ResultMetrics testId="admin-operations-rematch-results" metrics={[
               { label: "候选记录", value: rematchPreview.candidate_count ?? 0 },
               { label: "已更新", value: rematchPreview.updated_count ?? 0 },
               { label: "文件名直匹配", value: rematchPreview.fast_path_hits ?? 0 },
@@ -867,9 +890,15 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
         <BatchUploadModal
           defaultDocType="dept_budget"
           onClose={() => setIsUploadModalOpen(false)}
-          onComplete={() => {
+          onComplete={(jobIds) => {
             setIsUploadModalOpen(false);
             void onRefresh?.();
+            if (jobIds.length === 0) {
+              return;
+            }
+            const targetPage = jobIds.length === 1 ? "detail" : "tasks";
+            const jobQuery = jobIds.length === 1 ? `&job=${encodeURIComponent(jobIds[0])}` : "";
+            window.location.assign(`/viewer/gbc-ui-demo?page=${targetPage}${jobQuery}`);
           }}
         />
       ) : null}
@@ -1038,14 +1067,14 @@ function ConfigPanel({
 
   return (
     <Card title={title}>
-      <div className="space-y-4 p-5">
+      <div className="space-y-4 p-5" data-testid={`admin-config-panel-${collection}`}>
         <p className="text-sm leading-6 text-slate-600">{description}</p>
-        <NoticeBanner notice={notice} />
+        <NoticeBanner notice={notice} testId={`admin-config-notice-${collection}`} />
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
           <div className="rounded-md border border-slate-200">
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
               <span className="text-sm font-black text-slate-900">配置列表</span>
-              <button type="button" onClick={resetForm} className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700">
+              <button type="button" data-testid={`admin-config-new-${collection}`} onClick={resetForm} className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700">
                 新建
               </button>
             </div>
@@ -1062,7 +1091,7 @@ function ConfigPanel({
               ) : (
                 <div className="space-y-3">
                   {items.map((item) => (
-                    <article key={item.id} className={cn("rounded-md border p-4", selectedId === item.id ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white")}>
+                    <article key={item.id} data-testid={`admin-config-item-${collection}-${item.id}`} className={cn("rounded-md border p-4", selectedId === item.id ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white")}>
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
                           <div className="font-black text-slate-900">{item.name}</div>
@@ -1077,10 +1106,10 @@ function ConfigPanel({
                         {JSON.stringify(item.data, null, 2)}
                       </pre>
                       <div className="mt-3 flex flex-wrap gap-2">
-                        <button type="button" onClick={() => editItem(item)} className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700">
+                        <button type="button" data-testid={`admin-config-edit-${collection}-${item.id}`} onClick={() => editItem(item)} className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700">
                           编辑
                         </button>
-                        <button type="button" onClick={() => void deleteItem(item)} disabled={saving} className="rounded-md border border-red-200 px-3 py-1.5 text-xs font-bold text-red-700 disabled:opacity-60">
+                        <button type="button" data-testid={`admin-config-delete-${collection}-${item.id}`} onClick={() => void deleteItem(item)} disabled={saving} className="rounded-md border border-red-200 px-3 py-1.5 text-xs font-bold text-red-700 disabled:opacity-60">
                           删除
                         </button>
                       </div>
@@ -1097,23 +1126,26 @@ function ConfigPanel({
               <input
                 value={name}
                 onChange={(event) => setName(event.target.value)}
+                data-testid={`admin-config-name-${collection}`}
                 placeholder="配置名称"
                 className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
               />
               <textarea
                 value={descriptionValue}
                 onChange={(event) => setDescriptionValue(event.target.value)}
+                data-testid={`admin-config-description-${collection}`}
                 placeholder="配置说明"
                 rows={3}
                 className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
               />
               <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-                <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
+                <input type="checkbox" data-testid={`admin-config-enabled-${collection}`} checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
                 启用
               </label>
               <textarea
                 value={dataText}
                 onChange={(event) => setDataText(event.target.value)}
+                data-testid={`admin-config-data-${collection}`}
                 rows={14}
                 spellCheck={false}
                 className="w-full rounded-md border border-slate-300 bg-slate-950 px-3 py-2 font-mono text-xs leading-5 text-slate-100 outline-none focus:border-blue-500"
@@ -1121,6 +1153,7 @@ function ConfigPanel({
               <div className="flex gap-2">
                 <button
                   type="button"
+                  data-testid={`admin-config-save-${collection}`}
                   onClick={() => void saveItem()}
                   disabled={saving}
                   className="inline-flex flex-1 items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 text-sm font-black text-white disabled:opacity-60"
@@ -1128,7 +1161,7 @@ function ConfigPanel({
                   {saving ? "保存中..." : "保存配置"}
                 </button>
                 {selected ? (
-                  <button type="button" onClick={resetForm} className="rounded-md border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700">
+                  <button type="button" data-testid={`admin-config-cancel-${collection}`} onClick={resetForm} className="rounded-md border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700">
                     取消
                   </button>
                 ) : null}
@@ -1180,7 +1213,7 @@ export default function SystemManagementPanel({
   );
 
   return (
-    <div className="grid min-h-[760px] grid-cols-[280px_minmax(0,1fr)] gap-5">
+    <div className="grid min-h-[760px] grid-cols-[280px_minmax(0,1fr)] gap-5" data-testid="admin-system-management">
       <aside className="self-start rounded-md border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-100 p-5">
           <div className="text-xs font-black uppercase tracking-[0.18em] text-blue-600">Admin Console</div>
@@ -1195,6 +1228,7 @@ export default function SystemManagementPanel({
               <button
                 key={section.id}
                 type="button"
+                data-testid={`admin-section-${section.id}`}
                 onClick={() => setActiveSection(section.id)}
                 className={cn(
                   "flex w-full items-start gap-3 rounded-md px-3 py-3 text-left transition",
@@ -1229,7 +1263,9 @@ export default function SystemManagementPanel({
         </header>
 
         {activeSection === "overview" ? <OverviewSection organizations={organizations} setSection={setActiveSection} /> : null}
-        {activeSection === "organization" ? <OrganizationSection /> : null}
+        {activeSection === "organization" ? (
+          <OrganizationSection organizations={organizations} onRefresh={onRefresh} />
+        ) : null}
         {activeSection === "users" ? <UserManagementPanel embedded /> : null}
         {activeSection === "operations" ? <OperationsSection onRefresh={onRefresh} /> : null}
         {activeSection === "analysis" ? <AnalysisResultsPanel /> : null}
