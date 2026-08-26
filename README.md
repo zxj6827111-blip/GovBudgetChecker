@@ -142,6 +142,9 @@ make test
 - `USER_SESSION_SECRET`：登录会话签名密钥；生产环境建议单独配置，保证多 worker / 重启后登录态稳定
 - `UPLOAD_CHUNK_BYTES`：流式写入分块大小
 - `AUDIT_LOG_PATH`：管理员敏感操作审计日志输出位置
+- `LOG_LEVEL`：日志级别（默认 `INFO`）
+- `LOG_JSON`：是否输出 JSON 结构化日志。不配置时按 stdout 是否为 TTY 自动判断——容器/日志采集管道下默认 JSON，本地终端默认人类可读格式
+- `LOG_FILE`：可选，额外写入的日志文件路径（父目录会自动创建）
 - `AI_ASSIST_ENABLED`：是否启用 AI 辅助（默认 `true`）
 - `AI_EXTRACTOR_URL`：AI 抽取服务地址
 - `DATABASE_URL`：可选，配置后 `ready` 会检查可达性

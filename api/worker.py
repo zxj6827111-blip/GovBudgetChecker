@@ -19,6 +19,7 @@ from api import runtime
 from api.job_queue import DurableJobQueue
 from api.main import _run_pipeline
 from api import queue_runtime
+from src.utils.logging_config import configure_logging_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +85,9 @@ async def run_worker() -> None:
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
-    )
+    # 结构化日志接线点（缺口 P2-01 / B-05）：原先只有 logging.basicConfig，
+    # worker 日志既不是 JSON 也没有 job_id 关联，线上无法按任务检索。
+    configure_logging_from_env("worker")
     try:
         asyncio.run(run_worker())
     except KeyboardInterrupt:

@@ -28,6 +28,12 @@ from src.services.evidence_guard import (
     count_formal_findings,
 )
 from src.utils.provenance import summarize_finding_versions
+from src.utils.logging_config import (
+    configure_logging_from_env,
+    log_context,
+    log_job_stage,
+    safe_log_extra,
+)
 from src.schemas.issues import (
     AnalysisConclusion,
     AnalysisQualityStatus,
@@ -136,6 +142,10 @@ async def _shutdown_job_queue() -> None:
 
 @asynccontextmanager
 async def _app_lifespan(_app: FastAPI):
+    # 结构化日志接线点（缺口 P2-01 / B-05）：此前 setup_logging 全仓无调用点，
+    # 线上实际用的是 Python 默认日志。放在 lifespan 而不是模块导入处，
+    # 是因为导入期装配会清掉 pytest 的日志 handler。
+    configure_logging_from_env("api")
     await _startup_job_queue()
     try:
         yield
@@ -184,7 +194,11 @@ if SecurityMiddleware and runtime.security_config and runtime.security_config.en
 
 # ----------------------------- 工具函数 -----------------------------
 def _safe_write(job_dir: Path, payload: Dict[str, Any]) -> None:
-    """将状态写入 status.json（带异常保护）"""
+    """将状态写入 status.json（带异常保护），并同步产出结构化阶段日志。
+
+    状态流转本来就集中收敛在这里，所以埋点也放在这里：一处接线覆盖全部阶段，
+    不必在十几个调用点各写一遍 logger 调用，也不会漏埋。
+    """
     status_file = job_dir / "status.json"
     try:
         merged_payload = dict(payload)
@@ -194,6 +208,23 @@ def _safe_write(job_dir: Path, payload: Dict[str, Any]) -> None:
         runtime.write_json_file(status_file, merged_payload)
     except Exception as e:
         (job_dir / "status_error.log").write_text(str(e), encoding="utf-8")
+
+    # 只写结构化元数据（进度、页覆盖率、错误码），不写 PDF 正文与证据原文
+    job_status = str(payload.get("status") or "unknown")
+    log_job_stage(
+        job_id=str(payload.get("job_id") or job_dir.name),
+        stage=str(payload.get("stage") or job_status),
+        status=job_status,
+        details={
+            "progress": payload.get("progress"),
+            "page_coverage": payload.get("page_coverage"),
+            "scanned_page_count": payload.get("scanned_page_count"),
+            "quality_status": payload.get("quality_status"),
+            "analysis_conclusion": payload.get("analysis_conclusion"),
+            "error": payload.get("error"),
+        },
+        level=logging.ERROR if job_status == "error" else logging.INFO,
+    )
 
 
 def _find_first_pdf(job_dir: Path) -> Path:
@@ -532,29 +563,50 @@ async def _run_pipeline(job_dir: Path) -> None:
     except Exception:
         PIPELINE_TIMEOUT_SEC = 600
 
-    try:
-        await asyncio.wait_for(
-            _run_pipeline_inner(job_dir),
-            timeout=PIPELINE_TIMEOUT_SEC,
-        )
-    except asyncio.TimeoutError:
-        _safe_write(
-            job_dir,
-            {
-                "job_id": job_dir.name,
-                "status": "error",
-                "error": f"pipeline_timeout_{PIPELINE_TIMEOUT_SEC}s",
-                "ts": time.time(),
-            },
-        )
-        await persist_analysis_job_snapshot(
-            runtime.read_json_file(job_dir / "status.json", default={}),
-            include_results=True,
-        )
+    # 绑定 job_id 到日志上下文：本函数内（含被调用栈里任意模块）产生的每条日志
+    # 都会自动带上 job_id，实现"全链路可按 job_id 检索"。
+    # 用 contextvars 而非全局 LogRecordFactory，队列并发多任务时不会互相串字段。
+    with log_context(job_id=job_dir.name):
+        try:
+            await asyncio.wait_for(
+                _run_pipeline_inner(job_dir),
+                timeout=PIPELINE_TIMEOUT_SEC,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "pipeline timed out after %ss",
+                PIPELINE_TIMEOUT_SEC,
+                extra=safe_log_extra(
+                    {"stage": "pipeline_timeout", "timeout_seconds": PIPELINE_TIMEOUT_SEC}
+                ),
+            )
+            _safe_write(
+                job_dir,
+                {
+                    "job_id": job_dir.name,
+                    "status": "error",
+                    "error": f"pipeline_timeout_{PIPELINE_TIMEOUT_SEC}s",
+                    "ts": time.time(),
+                },
+            )
+            await persist_analysis_job_snapshot(
+                runtime.read_json_file(job_dir / "status.json", default={}),
+                include_results=True,
+            )
 
 
 async def _run_pipeline_inner(job_dir: Path) -> None:
-    """Pipeline body isolated for timeout wrapping."""
+    """Pipeline body isolated for timeout wrapping.
+
+    这里再绑一次 job_id 上下文：`_run_pipeline` 已经绑过，但测试与 worker 恢复
+    路径会直接调用本函数，重复绑定是幂等的（同名同值），能保证任何入口都有 job_id。
+    """
+    with log_context(job_id=job_dir.name):
+        await _run_pipeline_body(job_dir)
+
+
+async def _run_pipeline_body(job_dir: Path) -> None:
+    """真正的流水线主体。"""
     # 提前初始化 provider_stats，确保处理中/失败态也能返回该字段
     provider_stats: List[Dict[str, Any]] = []
     structured_ingest_summary: Dict[str, Any] = {}
@@ -663,6 +715,14 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                 page_assessment["page_coverage"],
                 page_assessment["scanned_page_count"],
                 page_assessment["low_text_pages"][:20],
+                extra=safe_log_extra(
+                    {
+                        "stage": "page_extraction_assessed",
+                        "page_coverage": page_assessment["page_coverage"],
+                        "scanned_page_count": page_assessment["scanned_page_count"],
+                        "low_text_page_count": page_assessment["low_text_page_count"],
+                    }
+                ),
             )
 
         # 构建 Document
@@ -1045,6 +1105,18 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                 evidence_completeness["completeness_rate"],
                 evidence_completeness["degraded_count"],
                 evidence_completeness["rule_warning_count"],
+                extra=safe_log_extra(
+                    {
+                        "stage": "evidence_checked",
+                        "evidence_completeness_rate": evidence_completeness[
+                            "completeness_rate"
+                        ],
+                        "evidence_degraded_count": evidence_completeness["degraded_count"],
+                        "evidence_rule_warning_count": evidence_completeness[
+                            "rule_warning_count"
+                        ],
+                    }
+                ),
             )
 
         # 任务级质量门禁：done 只在门禁全过时出现，否则转 review_required
@@ -1066,6 +1138,16 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                 "job %s gated to review_required: %s",
                 job_dir.name,
                 [reason["code"] for reason in quality_gate["review_reasons"]],
+                extra=safe_log_extra(
+                    {
+                        "stage": "quality_gate",
+                        "review_reason_codes": [
+                            reason["code"] for reason in quality_gate["review_reasons"]
+                        ],
+                        "quality_status": quality_gate["quality_status"],
+                        "analysis_conclusion": quality_gate["analysis_conclusion"],
+                    }
+                ),
             )
         elif final_status == JobStatus.DEGRADED.value:
             stage_text = "完成（部分能力降级）"
@@ -1098,6 +1180,14 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
         await persist_analysis_job_snapshot(payload, include_results=True)
 
     except Exception as e:
+        # 只记异常类型与消息，不记 PDF 正文/证据原文
+        logger.exception(
+            "pipeline failed: %s",
+            type(e).__name__,
+            extra=safe_log_extra(
+                {"stage": "pipeline_error", "error_type": type(e).__name__}
+            ),
+        )
         # 错误态显式覆盖质量字段，避免上一轮分析残留的 complete/done 结论被继承
         _safe_write(
             job_dir,
