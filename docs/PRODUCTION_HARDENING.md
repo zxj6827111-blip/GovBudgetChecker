@@ -18,6 +18,17 @@
 - 登录会话
   - 会话令牌已支持多 worker / 重启后继续校验
   - 生产环境建议固定配置 `USER_SESSION_SECRET`
+- 首次登录强制改密（缺口 B-07）
+  - 播种出来的默认管理员带 `must_change_password`，未改密时除
+    `/api/auth/login`、`/api/auth/me`、`/api/auth/logout`、`/api/auth/change-password`
+    以外的端点一律返回 403（响应头带 `X-Password-Change-Required: 1`）
+  - 开关 `REQUIRE_FIRST_LOGIN_PASSWORD_CHANGE`，生产默认开启
+  - 已存在的账号（`users.json` 里没有该字段）不受影响
+- 安全响应头（缺口 B-08）
+  - 后端 `src/security.SecurityHeadersMiddleware`：CSP、`X-Content-Type-Options`、
+    `X-Frame-Options`、`Referrer-Policy`、HSTS（HTTPS 或 `X-Forwarded-Proto: https` 时下发）
+  - `/docs`、`/redoc`、`/openapi.json` 使用单独一份宽松 CSP，否则 Swagger UI 白屏
+  - 前端 `app/middleware.ts`：CSP 等头本就存在，本轮补齐生产环境的 HSTS
 - 审计日志
   - 管理员操作会写入 `AUDIT_LOG_PATH`
 - 健康检查增强

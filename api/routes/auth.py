@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Tuple
 from fastapi import APIRouter, HTTPException, Request
 
 from api import runtime
+from api.auth_utils import enforce_password_change
 
 router = APIRouter()
 
@@ -82,6 +83,10 @@ def _require_login(request: Request) -> Tuple[Any, str, Dict[str, Any]]:
     user = store.get_user_by_token(token)
     if user is None:
         raise HTTPException(status_code=401, detail="invalid or expired session")
+    # 首登强制改密同样覆盖用户管理类端点（/api/users 等），
+    # 否则未改密的默认管理员仍能创建账号（缺口 B-07）。
+    # 改密相关路径在 PASSWORD_CHANGE_EXEMPT_PATHS 里被放行。
+    enforce_password_change(request, user)
     return store, token, user
 
 

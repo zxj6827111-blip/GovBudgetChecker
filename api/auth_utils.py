@@ -17,6 +17,37 @@ def extract_session_token(request: Request) -> str:
     return token
 
 
+#: 首登强制改密期间仍允许访问的路径（缺口 B-07）。
+#: 不放开这几个，用户就没有任何途径完成改密——那不是加固，是把自己锁在门外。
+PASSWORD_CHANGE_EXEMPT_PATHS = frozenset(
+    {
+        "/api/auth/login",
+        "/api/auth/logout",
+        "/api/auth/me",
+        "/api/auth/change-password",
+    }
+)
+
+
+def enforce_password_change(request: Request, user: Dict[str, Any]) -> None:
+    """未完成首登改密的账号，除改密相关端点外一律拒绝（缺口 B-07）。
+
+    放在 `require_login` 与认证路由的共同入口上，而不是逐个路由挂依赖：
+    一处接线覆盖全部受保护端点，也不会因为新增路由而漏挂。
+
+    历史用户记录没有 `must_change_password` 字段时按 False 处理，旧账号不受影响。
+    """
+    if not bool(user.get("must_change_password", False)):
+        return
+    if request.url.path in PASSWORD_CHANGE_EXEMPT_PATHS:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="password change required before using other endpoints",
+        headers={"X-Password-Change-Required": "1"},
+    )
+
+
 def require_login(request: Request) -> Tuple[Any, str, Dict[str, Any]]:
     if (
         os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes"}
@@ -28,6 +59,7 @@ def require_login(request: Request) -> Tuple[Any, str, Dict[str, Any]]:
     user = store.get_user_by_token(token)
     if user is None:
         raise HTTPException(status_code=401, detail="invalid or expired session")
+    enforce_password_change(request, user)
     return store, token, user
 
 

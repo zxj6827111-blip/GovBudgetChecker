@@ -28,6 +28,14 @@ TRUST_PROXY_HEADERS_ENV = "GOVBUDGET_TRUST_PROXY_HEADERS"
 TRUSTED_PROXY_IPS_ENV = "GOVBUDGET_TRUSTED_PROXY_IPS"
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    """读取布尔型环境变量；未设置时用默认值。"""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
 @dataclass
 class RateLimitEntry:
     request_count: int = 0
@@ -321,6 +329,100 @@ class SecurityMiddleware(BaseHTTPMiddleware):
 
         client_host = request.client.host if request.client else ""
         return client_host in {"127.0.0.1", "::1", "localhost"}
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """注入安全响应头（缺口 B-08）。
+
+    整改前全仓没有任何 HSTS / CSP / X-Content-Type-Options / X-Frame-Options。
+
+    设计要点：
+    - 本中间件必须是**最外层**，这样连免认证端点（`/health`、`/ready`、`/docs`）
+      的响应也带上安全头；`api/main.py` 里在 `SecurityMiddleware` 之后添加即可
+      （Starlette 的 `add_middleware` 是前插，后加的跑在外层）。
+    - `/docs`、`/redoc`、`/openapi.json` 需要单独一份宽松 CSP：Swagger UI 会从
+      CDN 加载脚本样式并执行内联初始化脚本，用 API 那套 `default-src 'none'`
+      会把文档页面打成白屏。
+    - HSTS 默认只在 HTTPS 请求上下发（含反代的 `X-Forwarded-Proto: https`）。
+      本地 http 开发下发 HSTS 会让浏览器把 localhost 记成强制 HTTPS，得手动清缓存。
+    - 前端由 Next.js 独立进程提供，它的 CSP 在 `app/next.config.js` 里配置，
+      与本中间件互不覆盖。
+    """
+
+    #: 文档类路径前缀，使用宽松 CSP
+    DOCS_PATH_PREFIXES = ("/docs", "/redoc", "/openapi.json")
+
+    #: API 响应的默认 CSP：这些响应是 JSON 与 PNG，不需要脚本
+    DEFAULT_CSP = (
+        "default-src 'none'; "
+        "img-src 'self' data: blob:; "
+        "style-src 'self' 'unsafe-inline'; "
+        "font-src 'self' data:; "
+        "connect-src 'self'; "
+        "base-uri 'none'; "
+        "form-action 'none'; "
+        "frame-ancestors 'none'"
+    )
+
+    #: 文档页 CSP：允许 Swagger UI 的 CDN 资源与内联初始化脚本
+    DOCS_CSP = (
+        "default-src 'self'; "
+        "img-src 'self' data:; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "font-src 'self' data: https://cdn.jsdelivr.net; "
+        "connect-src 'self'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'"
+    )
+
+    DEFAULT_HSTS = "max-age=31536000; includeSubDomains"
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.enabled = _env_flag("SECURITY_HEADERS_ENABLED", True)
+        self.csp = os.getenv("SECURITY_CSP", "").strip() or self.DEFAULT_CSP
+        self.docs_csp = os.getenv("SECURITY_CSP_DOCS", "").strip() or self.DOCS_CSP
+        self.hsts = os.getenv("SECURITY_HSTS", "").strip() or self.DEFAULT_HSTS
+        # 显式打开时无条件下发 HSTS（例如 TLS 终止在更外层、请求头也被剥掉的场景）
+        self.force_hsts = _env_flag("SECURITY_HSTS_ALWAYS", False)
+        self.frame_options = os.getenv("SECURITY_FRAME_OPTIONS", "").strip() or "DENY"
+        self.referrer_policy = (
+            os.getenv("SECURITY_REFERRER_POLICY", "").strip() or "no-referrer"
+        )
+
+    def _is_docs_path(self, path: str) -> bool:
+        return any(path.startswith(prefix) for prefix in self.DOCS_PATH_PREFIXES)
+
+    def _is_https(self, request: Request) -> bool:
+        if request.url.scheme == "https":
+            return True
+        forwarded = str(request.headers.get("X-Forwarded-Proto") or "").strip().lower()
+        return forwarded.split(",")[0].strip() == "https"
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        if not self.enabled:
+            return response
+
+        headers = response.headers
+        # setdefault 语义：不覆盖路由已显式设置的同名头
+        if "X-Content-Type-Options" not in headers:
+            headers["X-Content-Type-Options"] = "nosniff"
+        if "X-Frame-Options" not in headers:
+            headers["X-Frame-Options"] = self.frame_options
+        if "Referrer-Policy" not in headers:
+            headers["Referrer-Policy"] = self.referrer_policy
+        if "Content-Security-Policy" not in headers:
+            headers["Content-Security-Policy"] = (
+                self.docs_csp if self._is_docs_path(request.url.path) else self.csp
+            )
+        if "Strict-Transport-Security" not in headers and (
+            self.force_hsts or self._is_https(request)
+        ):
+            headers["Strict-Transport-Security"] = self.hsts
+        return response
 
 
 def sanitize_filename(filename: str) -> str:

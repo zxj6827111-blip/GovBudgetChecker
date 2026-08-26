@@ -52,6 +52,25 @@ def _allow_insecure_default_admin() -> bool:
     return _TESTING or _env_flag("ALLOW_INSECURE_DEFAULT_ADMIN", False)
 
 
+def _testing_mode() -> bool:
+    """运行时读一次 TESTING，便于测试用 monkeypatch 打开/关闭策略。"""
+    return os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes"}
+
+
+def require_first_login_password_change() -> bool:
+    """首登强制改密是否启用（缺口 B-07）。
+
+    生产默认**开启**：默认管理员口令一定出现在部署环境变量 / compose 文件里，
+    运维、CI 日志甚至截图都可能带上它，所以必须在首次登录时换掉。
+
+    `TESTING=true` 时默认关闭，与仓库既有约定一致
+    （`GOVBUDGET_AUTH_ENABLED` 在测试下默认关闭、`ALLOW_INSECURE_DEFAULT_ADMIN`
+    在测试下默认放开），否则所有"登录后调业务接口"的既有测试都要先改一遍密码。
+    针对本策略本身的测试会显式打开开关。
+    """
+    return _env_flag("REQUIRE_FIRST_LOGIN_PASSWORD_CHANGE", not _testing_mode())
+
+
 class UserStore:
     """File-backed user store with stateless signed session tokens."""
 
@@ -137,6 +156,8 @@ class UserStore:
             "username": str(user.get("username") or ""),
             "is_admin": bool(user.get("is_admin")),
             "is_active": bool(user.get("is_active", True)),
+            # 历史 users.json 没有该字段时按 False 处理：既有账号不会突然被锁在改密页
+            "must_change_password": bool(user.get("must_change_password", False)),
             "organization_ids": UserStore._normalize_organization_ids(
                 user.get("organization_ids")
             ),
@@ -184,6 +205,7 @@ class UserStore:
             "password_hash": str(user.get("password_hash") or ""),
             "is_admin": bool(user.get("is_admin")),
             "is_active": bool(user.get("is_active", True)),
+            "must_change_password": bool(user.get("must_change_password", False)),
             "organization_ids": UserStore._normalize_organization_ids(
                 user.get("organization_ids")
             ),
@@ -396,11 +418,20 @@ class UserStore:
                         if "session_version" not in row:
                             changed = True
 
+                        # 口令是由本进程赋予的（默认管理员口令 / legacy 兜底口令），
+                        # 说明它一定出现在部署配置里，必须在下次登录时换掉
+                        must_change = bool(row.get("must_change_password", False))
+                        if migrated and require_first_login_password_change():
+                            must_change = True
+
                         self._users[canonical] = {
                             "username": username,
                             "password_hash": password_hash,
                             "is_admin": bool(row.get("is_admin", False)),
                             "is_active": bool(row.get("is_active", True)),
+                            # 向后兼容：历史记录没有该字段时按 False，
+                            # 已有账号不会因为升级而突然被要求改密
+                            "must_change_password": must_change,
                             "organization_ids": self._normalize_organization_ids(
                                 row.get("organization_ids")
                             ),
@@ -464,6 +495,8 @@ class UserStore:
                 "password_hash": self._hash_password(self._default_admin_password),
                 "is_admin": True,
                 "is_active": True,
+                # 首登强制改密（缺口 B-07）：播种口令来自部署环境变量，必须换掉
+                "must_change_password": require_first_login_password_change(),
                 "organization_ids": [],
                 "created_at": now,
                 "updated_at": now,
@@ -482,6 +515,8 @@ class UserStore:
             if not self._is_password_hash(current_hash):
                 self._require_safe_default_admin_password()
                 user["password_hash"] = self._hash_password(self._default_admin_password)
+                # 口令刚被重置成部署配置里的默认值，同样要求下次登录改掉
+                user["must_change_password"] = require_first_login_password_change()
                 changed = True
             if "session_version" not in user:
                 user["session_version"] = 0
@@ -556,6 +591,8 @@ class UserStore:
                 "password_hash": self._hash_password(clean_password),
                 "is_admin": bool(is_admin),
                 "is_active": True,
+                # 管理员创建的账号不强制改密（本轮只覆盖默认管理员首登，见 docs）
+                "must_change_password": False,
                 "organization_ids": clean_organization_ids,
                 "created_at": now,
                 "updated_at": now,
@@ -729,6 +766,8 @@ class UserStore:
                 raise ValueError("new password must be different from old password")
 
             user["password_hash"] = self._hash_password(new_plain)
+            # 改密完成，解除首登强制改密限制（缺口 B-07）
+            user["must_change_password"] = False
             self._bump_session_version_locked(user)
             user["updated_at"] = time.time()
             self._save_users_locked()

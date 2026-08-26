@@ -148,6 +148,10 @@ make test
 - `METRICS_ENABLED`：关键指标端点开关（默认 `true`，设为 `false` 时 `/metrics` 返回 404）
 - `METRICS_API_TOKEN`：指标抓取专用令牌（配置后采集器可用 `X-Metrics-Token` 抓取；不配置则只能用管理员会话）
 - `METRICS_CACHE_TTL_SECONDS`：指标采集缓存秒数（默认 15）
+- `REQUIRE_FIRST_LOGIN_PASSWORD_CHANGE`：默认管理员首登强制改密（生产默认开启，测试环境默认关闭）
+- `SECURITY_HEADERS_ENABLED`：后端安全响应头开关（默认 `true`）
+- `SECURITY_HSTS_ALWAYS`：无条件下发 HSTS（默认只在 HTTPS 或 `X-Forwarded-Proto: https` 时下发）
+- `SECURITY_CSP` / `SECURITY_CSP_DOCS` / `SECURITY_FRAME_OPTIONS` / `SECURITY_REFERRER_POLICY`：安全响应头取值覆盖
 - `AI_ASSIST_ENABLED`：是否启用 AI 辅助（默认 `true`）
 - `AI_EXTRACTOR_URL`：AI 抽取服务地址
 - `DATABASE_URL`：可选，配置后 `ready` 会检查可达性

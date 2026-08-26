@@ -23,8 +23,12 @@ DATABASE_URL=postgres://<user>:<password>@<host>:5432/<db>
 Rules:
 
 - `GOVBUDGET_API_KEY` and `USER_SESSION_SECRET` must be different values.
-- `DEFAULT_ADMIN_PASSWORD` must be changed after the first administrator login,
-  or the bootstrap admin account must be disabled by operational policy.
+- `DEFAULT_ADMIN_PASSWORD` is now enforced as a bootstrap-only password: the
+  seeded administrator is created with `must_change_password=true`, and every
+  endpoint except `/api/auth/login`, `/api/auth/me`, `/api/auth/logout` and
+  `/api/auth/change-password` returns `403` until the password is changed
+  (`REQUIRE_FIRST_LOGIN_PASSWORD_CHANGE`, default on outside tests).
+  Accounts that already exist in `users.json` are not affected.
 - `.env`, `.env.local`, `app/.env.local`, database dumps, and runtime logs must
   stay untracked.
 
@@ -59,6 +63,19 @@ Recommended headers:
 - `Strict-Transport-Security` for HTTPS deployments.
 - `X-Forwarded-Proto` set by the proxy, not by clients.
 - `X-Forwarded-Host` only if the application stack requires it.
+
+Application-emitted security headers (do not strip them at the proxy):
+
+- Backend (`src/security.SecurityHeadersMiddleware`): `Content-Security-Policy`,
+  `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and
+  `Strict-Transport-Security` (only when the request is HTTPS or
+  `X-Forwarded-Proto: https` is present; `SECURITY_HSTS_ALWAYS=true` forces it).
+- Frontend (`app/middleware.ts`): `Content-Security-Policy`,
+  `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`,
+  `Permissions-Policy`, and `Strict-Transport-Security` in production builds.
+
+If the proxy also sets these headers, keep the values consistent; the
+application only fills in headers that are not already present on the response.
 
 ## 4. Docker Compose Credential Rule
 
@@ -125,6 +142,10 @@ These are not blockers for the current code hardening closeout, but they remain
 useful production improvements:
 
 - Add a dead-letter queue for permanently failed jobs.
-- Add queue capacity and backpressure metrics.
+- Queue capacity and backpressure metrics are now available via `/metrics`
+  (see `docs/OBSERVABILITY_AND_ALERTS.md`); wiring them into the monitoring
+  stack and alert rules is still operator-owned.
 - Add audit entries for sensitive read operations such as report download.
 - Add a staging rollback drill record for every production release.
+- Force a password change when an administrator resets another user's password
+  (the current control only covers the bootstrap administrator's first login).

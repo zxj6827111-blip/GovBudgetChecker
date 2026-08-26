@@ -68,9 +68,10 @@ from src.services.rule_process import (
 )
 
 try:
-    from src.security import SecurityMiddleware
+    from src.security import SecurityHeadersMiddleware, SecurityMiddleware
 except ImportError:
     SecurityMiddleware = None
+    SecurityHeadersMiddleware = None
 
 import logging
 
@@ -190,6 +191,13 @@ app.add_middleware(
 if SecurityMiddleware and runtime.security_config and runtime.security_config.enabled:
     app.add_middleware(SecurityMiddleware, config=runtime.security_config)
     logger.info("Security middleware enabled with rate limiting")
+
+# 安全响应头（缺口 B-08）。放在最后 add，Starlette 会把它插到最外层，
+# 因此连免认证端点（/health、/ready、/docs）与被鉴权中间件短路的响应也带上安全头。
+# 与鉴权/限流互不影响：本中间件只加响应头，不拦请求。
+if SecurityHeadersMiddleware is not None:
+    app.add_middleware(SecurityHeadersMiddleware)
+    logger.info("Security headers middleware enabled")
 
 
 # ----------------------------- 工具函数 -----------------------------
