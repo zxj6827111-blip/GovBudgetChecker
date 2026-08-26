@@ -51,7 +51,7 @@ type OrganizationJobsResponse = {
   offset?: number | null;
 };
 
-type SearchStatus = "all" | "completed" | "analyzing" | "failed" | "review";
+type SearchStatus = "all" | "completed" | "analyzing" | "failed" | "review" | "review_required";
 
 const defaultAdvancedFilters: AdvancedFilters = {
   highRiskOnly: false,
@@ -63,7 +63,9 @@ const JOBS_PAGE_SIZE = 80;
 function getSearchStatusLabel(status: SearchStatus) {
   if (status === "completed") return "已完成 completed";
   if (status === "failed") return "失败 failed";
-  if (status === "review") return "待复核 review";
+  // review_required 是任务级质量门禁未通过；review 是结构化入库产生的待复核项，两者不同
+  if (status === "review_required") return "需人工复核 review_required";
+  if (status === "review") return "入库待复核 review";
   if (status === "analyzing") return "分析中 analyzing";
   return "全部 all";
 }
@@ -990,9 +992,10 @@ export default function DepartmentPageClient() {
             >
               <option value="all">全部状态（已加载）</option>
               <option value="completed">已完成</option>
+              <option value="review_required">需人工复核</option>
               <option value="analyzing">分析中</option>
               <option value="failed">失败</option>
-              <option value="review">待复核</option>
+              <option value="review">入库待复核</option>
             </select>
             <button
               type="button"
