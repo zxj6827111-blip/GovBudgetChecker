@@ -41,6 +41,7 @@ export interface JobSummaryRecord {
   structured_facts_count?: number | null;
   structured_table_data_count?: number | null;
   structured_line_item_count?: number | null;
+  quality_status?: "complete" | "degraded" | string | null;
   stage?: string | null;
   [key: string]: unknown;
 }
@@ -52,6 +53,7 @@ export interface StructuredIngestRecord {
   facts_count?: number;
   review_item_count?: number;
   low_confidence_item_count?: number;
+  review_items?: StructuredReviewItem[];
   document_profile?: string;
   document_version_id?: number;
   ps_sync?: {
@@ -61,6 +63,17 @@ export interface StructuredIngestRecord {
     match_mode?: string;
   };
   [key: string]: unknown;
+}
+
+export interface StructuredReviewItem {
+  id?: string | null;
+  type?: string | null;
+  severity?: string | null;
+  table_code?: string | null;
+  page?: number | null;
+  page_number?: number | null;
+  message?: string | null;
+  recommended_action?: string | null;
 }
 
 export interface JobDetailRecord extends JobSummaryRecord {
@@ -177,7 +190,7 @@ export function formatDateTime(value: unknown): string {
 
 export function normalizeUiTaskStatus(value: unknown): Task["status"] {
   const normalized = String(value ?? "").trim().toLowerCase();
-  if (["done", "completed", "success"].includes(normalized)) {
+  if (["done", "completed", "success", "degraded"].includes(normalized)) {
     return "completed";
   }
   if (["failed", "error", "cancelled"].includes(normalized)) {
@@ -186,12 +199,12 @@ export function normalizeUiTaskStatus(value: unknown): Task["status"] {
   return "analyzing";
 }
 
-export function getDisplayIssueTotal(job: Pick<JobSummaryRecord, "merged_issue_total" | "issue_total">): number {
+export function getDisplayIssueTotal(
+  job: Pick<JobSummaryRecord, "merged_issue_total" | "issue_total" | "review_item_count">,
+): number {
   const merged = Number(job.merged_issue_total);
-  if (Number.isFinite(merged)) {
-    return merged;
-  }
-  return toNumber(job.issue_total, 0);
+  const ruleAndAiTotal = Number.isFinite(merged) ? merged : toNumber(job.issue_total, 0);
+  return ruleAndAiTotal + toNumber(job.review_item_count, 0);
 }
 
 export function getHighRiskCount(job: Pick<JobSummaryRecord, "issue_error">): number {
@@ -394,6 +407,9 @@ function inferProblemCategory(issue: Record<string, unknown>): string {
   const source = String(issue.source ?? "").trim().toLowerCase();
   const location = isRecord(issue.location) ? issue.location : {};
   const normalizedRuleId = ruleId.toUpperCase();
+  if (source === "structured_ingest") {
+    return "结构化识别复核";
+  }
   if (
     ["BUD-109", "V33-227"].includes(normalizedRuleId) ||
     (title.includes("t5") && title.includes("\u540d\u79f0"))
@@ -420,17 +436,14 @@ function mapSeverity(value: unknown): Problem["severity"] {
   return normalizeSeverityCode(value);
 }
 
-function getPageNumber(issue: Record<string, unknown>, index: number): number {
+function getPageNumber(issue: Record<string, unknown>): number | undefined {
   const evidence = Array.isArray(issue.evidence) ? issue.evidence.find(isRecord) : null;
   const location = isRecord(issue.location) ? issue.location : null;
-  const page = toNumber(
-    evidence?.page ?? (location ? location.page : undefined) ?? issue.page,
-    index + 1,
-  );
-  return page > 0 ? page : index + 1;
+  const page = toNumber(evidence?.page ?? (location ? location.page : undefined) ?? issue.page);
+  return page > 0 ? page : undefined;
 }
 
-export function resolveProblemLocation(issue: Record<string, unknown>, page: number): string {
+export function resolveProblemLocation(issue: Record<string, unknown>, page?: number): string {
   const location = isRecord(issue.location) ? issue.location : {};
   if (location.table_name) {
     return `定位表：${String(location.table_name)}`;
@@ -441,13 +454,13 @@ export function resolveProblemLocation(issue: Record<string, unknown>, page: num
   if (location.section) {
     return `定位章节：${String(location.section)}`;
   }
-  return `第 ${page} 页`;
+  return page ? `第 ${page} 页` : "当前无法定位页码";
 }
 
 export function createEvidencePreviewDataUrl(
   title: string,
   snippet: string,
-  page: number,
+  page: number | undefined,
   location: string,
 ): string {
   const titleLines = splitPreviewText(title, 18, 2);
@@ -471,7 +484,7 @@ export function createEvidencePreviewDataUrl(
       ${renderSvgTextLines(titleLines, { x: 96, y: 98, lineHeight: 38, fontSize: 28, fill: "#0f172a", fontWeight: "700" })}
       ${renderSvgTextLines(snippetLines, { x: 96, y: 340, lineHeight: 34, fontSize: 24, fill: "#475569" })}
       ${renderSvgTextLines([locationLine], { x: 96, y: 408, lineHeight: 28, fontSize: 20, fill: "#64748b" })}
-      <text x="764" y="88" text-anchor="middle" fill="#1d4ed8" font-size="20" font-weight="700" font-family="Microsoft YaHei, Arial, sans-serif">第 ${page} 页</text>
+      <text x="764" y="88" text-anchor="middle" fill="#1d4ed8" font-size="20" font-weight="700" font-family="Microsoft YaHei, Arial, sans-serif">${page ? `第 ${page} 页` : "待人工定位"}</text>
     </svg>
   `.trim();
 
@@ -565,9 +578,51 @@ function collectDisplayIssues(result: Record<string, unknown>): Record<string, u
   return [];
 }
 
+function collectStructuredReviewIssues(detail: JobDetailRecord): Record<string, unknown>[] {
+  const structured = getStructuredPayload(detail, detail.structured_ingest);
+  const reviewItems = Array.isArray(structured.review_items)
+    ? structured.review_items.filter(isRecord)
+    : [];
+
+  return reviewItems.map((item, index) => {
+    const rawPage = toNumber(item.page ?? item.page_number);
+    const page = rawPage > 0 ? rawPage : undefined;
+    const tableCode = String(item.table_code ?? "").trim();
+    const itemType = String(item.type ?? "review").trim() || "review";
+    const rawId = String(item.id ?? "").trim();
+    const id = rawId || `${detail.job_id}:structured-review:${itemType}:${tableCode || "document"}:${page ?? "unlocated"}:${index + 1}`;
+    const title = tableCode
+      ? `结构化识别待复核：${tableCode}`
+      : "结构化识别结果待复核";
+    const message = String(item.message ?? "该项材料识别结果需要人工确认后再作为审校依据。").trim();
+    const location: Record<string, unknown> = {};
+    if (page) {
+      location.page = page;
+    }
+    if (tableCode) {
+      location.table = tableCode;
+    }
+
+    return {
+      id,
+      source: "structured_ingest",
+      rule_id: `STRUCTURED-${itemType.toUpperCase()}`,
+      severity: String(item.severity ?? "manual_review"),
+      title,
+      message,
+      location,
+      evidence: [{ ...(page ? { page } : {}), text: message, text_snippet: message }],
+      suggestion: String(item.recommended_action ?? "核对原始 PDF 对应页的表格标题、金额和单位后确认。").trim(),
+    };
+  });
+}
+
 export function toUiProblems(detail: JobDetailRecord, options: { includeEvidencePreview?: boolean } = {}): Problem[] {
   const result = isRecord(detail.result) ? detail.result : {};
-  const issues = collectDisplayIssues(result);
+  const issues = dedupeIssuesById([
+    ...collectDisplayIssues(result),
+    ...collectStructuredReviewIssues(detail),
+  ]);
   const includeEvidencePreview = options.includeEvidencePreview ?? true;
 
   const ignored = new Set(
@@ -579,7 +634,7 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
   return issues
     .filter((issue) => !ignored.has(String(issue.id ?? "")))
     .map((issue, index) => {
-      const page = getPageNumber(issue, index);
+      const page = getPageNumber(issue);
       const evidence = Array.isArray(issue.evidence) ? issue.evidence.find(isRecord) : null;
       const rawLocation = isRecord(issue.location) ? issue.location : {};
       const display = isRecord(issue.display) ? issue.display : {};

@@ -8,6 +8,7 @@ __pycache__/
 .codex_pip_tmp/
 .pytest-tmp/
 .pytest-basetemp-*/
+.pytest-acceptance-*/
 pip_tmp_*/
 piptmpdl_*/
 pytest_basetemp_*/
@@ -45,6 +46,7 @@ start_fixed.bat
 
 # Trae & Local dev
 .agent/
+.codegraph/
 api/database.db
 *.log
 .ruff_cache/

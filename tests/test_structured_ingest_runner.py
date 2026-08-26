@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.services import structured_ingest_runner
 from src.services.structured_ingest_runner import (
     _build_review_items,
     _normalize_org_name,
@@ -28,6 +29,19 @@ async def test_run_structured_ingest_skips_without_database(monkeypatch):
     assert payload["job_id"] == "job-x"
     assert payload["status"] == "skipped"
     assert payload["reason"] == "database_unavailable"
+
+
+def test_resolve_storage_key_uses_stable_upload_relative_path(tmp_path, monkeypatch):
+    upload_root = tmp_path / "uploads"
+    pdf_path = upload_root / "job-storage-1" / "sample.pdf"
+    pdf_path.parent.mkdir(parents=True)
+    pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    monkeypatch.setenv("UPLOAD_DIR", str(upload_root))
+
+    assert (
+        structured_ingest_runner._resolve_storage_key("job-storage-1", pdf_path, {})
+        == "job-storage-1/sample.pdf"
+    )
 
 
 def test_build_review_items_focuses_on_exceptions():

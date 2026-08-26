@@ -35,6 +35,7 @@ services:
       - AI_ASSIST_ENABLED=true
       - AI_EXTRACTOR_URL=http://ai-extractor:9009/ai/extract/v1
       - UPLOAD_DIR=/app/uploads
+      - DOCUMENT_STORAGE_BACKEND=filesystem
       - RULES_FILE_PATH=/app/engine/rules_v33.py
       - GOVBUDGET_AUTH_ENABLED=true
       - GOVBUDGET_API_KEY=${GOVBUDGET_API_KEY:?Set GOVBUDGET_API_KEY in .env}

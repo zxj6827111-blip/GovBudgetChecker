@@ -432,6 +432,7 @@ test.describe("Batch Upload Bulk Tools", () => {
     await page.getByTestId("batch-bulk-department").selectOption("dept-czj");
     await page.getByTestId("batch-bulk-unit").selectOption("unit-czj-local");
     await page.getByTestId("batch-apply-all").click();
+    await page.locator('[data-testid^="batch-confirm-metadata-"]').click();
 
     await expect(startButton).toBeEnabled();
     await startButton.click();

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import copy
 from contextlib import contextmanager
+import asyncio
+import json
+import logging
 import os
 import secrets
 import threading
@@ -15,10 +18,19 @@ from fastapi import HTTPException
 
 from api import runtime
 from api.auth_utils import user_can_access_job
+from src.db.connection import DatabaseConnection
+from src.services.analysis_result_store import ensure_analysis_persistence_ready
 
 
 _LOCK = threading.RLock()
 _VALID_STATUSES = {"pending", "confirmed", "no_issue", "needs_review", "in_package"}
+logger = logging.getLogger(__name__)
+_PERSISTENCE_FILENAME = ".issue_workflow_persistence.json"
+# The JSON file is the durable source of truth; the database mirror must not
+# stall a reviewer action when PostgreSQL is slow or unreachable.  A short
+# bounded wait keeps the workflow endpoint responsive, and the failed mirror
+# is retried by sync_workflow_recovery_state on the next opportunity.
+_WORKFLOW_DB_TIMEOUT_SECONDS = float(os.getenv("WORKFLOW_DB_TIMEOUT_SECONDS", "3"))
 
 
 def _now() -> str:
@@ -28,6 +40,25 @@ def _now() -> str:
 def _store_path() -> Path:
     # UPLOAD_DIR is a persisted backend volume in the supplied deployment topology.
     return runtime.UPLOAD_ROOT / ".issue_workflow.json"
+
+
+def _persistence_path() -> Path:
+    return runtime.UPLOAD_ROOT / _PERSISTENCE_FILENAME
+
+
+def _record_persistence_state(status: str, error: str = "") -> None:
+    """Leave a durable retry signal without changing reviewer-visible state."""
+    try:
+        runtime.write_json_file(
+            _persistence_path(),
+            {
+                "status": status,
+                "last_attempt_at": _now(),
+                "error": error or None,
+            },
+        )
+    except Exception:
+        logger.exception("Failed to record workflow persistence state")
 
 
 @contextmanager
@@ -134,7 +165,16 @@ def _normalize_state(value: Any) -> Dict[str, Any]:
                     "updated_at": str(item.get("updated_at") or "").strip() or _now(),
                 }
             )
-    return {"issues": issues, "packages": packages, "updated_at": raw.get("updated_at") or None}
+    try:
+        revision = max(0, int(raw.get("revision") or 0))
+    except (TypeError, ValueError):
+        revision = 0
+    return {
+        "issues": issues,
+        "packages": packages,
+        "updated_at": raw.get("updated_at") or None,
+        "revision": revision,
+    }
 
 
 def _read_state() -> Dict[str, Any]:
@@ -146,9 +186,195 @@ def _write_state(state: Dict[str, Any]) -> Dict[str, Any]:
         "issues": state["issues"],
         "packages": state["packages"],
         "updated_at": _now(),
+        "revision": int(state.get("revision") or 0) + 1,
     }
     runtime.write_json_file(_store_path(), payload)
     return payload
+
+
+async def persist_workflow_state(state: Dict[str, Any]) -> bool:
+    """Mirror the file-backed workflow state into PostgreSQL when configured.
+
+    The JSON file remains the local recovery source. Database failures must not
+    discard a reviewer action that has already been atomically written to it.
+    """
+    if not (os.getenv("DATABASE_URL") or "").strip():
+        _record_persistence_state("disabled", "DATABASE_URL is not configured")
+        return False
+    if not await _database_ready_within_budget():
+        _record_persistence_state("pending_retry", "database is unavailable")
+        return False
+    try:
+        return await asyncio.wait_for(
+            _mirror_workflow_state(state),
+            timeout=_WORKFLOW_DB_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Workflow state mirror to PostgreSQL timed out after %.1fs; "
+            "keeping local file state",
+            _WORKFLOW_DB_TIMEOUT_SECONDS,
+        )
+        _record_persistence_state("pending_retry", "database mirror timed out")
+        return False
+
+
+async def _database_ready_within_budget() -> bool:
+    """Check database readiness without blocking the workflow endpoint."""
+    try:
+        return await asyncio.wait_for(
+            ensure_analysis_persistence_ready(),
+            timeout=_WORKFLOW_DB_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Database readiness check for workflow mirror timed out")
+        return False
+
+
+async def _mirror_workflow_state(state: Dict[str, Any]) -> bool:
+    normalized = _normalize_state(state)
+    conn = None
+    try:
+        conn = await DatabaseConnection.acquire()
+        async with conn.transaction():
+            # A file write is serialized across workers. Persist its monotonic
+            # revision as well, so an older asynchronous mirror cannot replace
+            # a newer reviewer action after it acquires the database connection.
+            await conn.execute(
+                """
+                INSERT INTO workflow_state_mirror (mirror_id, revision, updated_at)
+                VALUES (TRUE, 0, NOW())
+                ON CONFLICT (mirror_id) DO NOTHING
+                """
+            )
+            mirrored_revision = await conn.fetchval(
+                "SELECT revision FROM workflow_state_mirror WHERE mirror_id = TRUE FOR UPDATE"
+            )
+            # Pre-revision recovery files were written before the DB mirror
+            # existed and therefore carry revision 0.  Treat their first
+            # mirror as revision 1 instead of incorrectly considering an
+            # empty DB row at revision 0 as already synchronized.
+            source_revision = int(normalized["revision"] or 0)
+            target_revision = max(1, source_revision)
+            if source_revision > 0 and int(mirrored_revision or 0) >= target_revision:
+                # The mirror revision already covers this snapshot.
+                if int(mirrored_revision or 0) > source_revision:
+                    # A strictly newer mirror must never be replaced by this
+                    # older snapshot, even when the row content differs (the
+                    # snapshot was captured before a concurrent update landed).
+                    return True
+                # Same revision: a local workflow file that was recreated from
+                # scratch restarts its revision counter at 1, which can collide
+                # with an older DB mirror that also holds revision 1. Compare
+                # the mirrored rows instead of trusting the revision alone, so
+                # a newer local state is never silently dropped.
+                mirrored_keys = {
+                    str(row["workflow_key"])
+                    for row in await conn.fetch(
+                        "SELECT workflow_key FROM workflow_issue_records"
+                    )
+                }
+                mirrored_package_count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM workflow_remediation_packages"
+                )
+                if mirrored_keys == set(normalized["issues"].keys()) and (
+                    int(mirrored_package_count or 0) == len(normalized["packages"])
+                ):
+                    return True
+                logger.info(
+                    "Workflow mirror revision %s equals local revision %s "
+                    "but content differs; resyncing %d issues / %d packages",
+                    mirrored_revision,
+                    source_revision,
+                    len(normalized["issues"]),
+                    len(normalized["packages"]),
+                )
+
+            await conn.execute("DELETE FROM workflow_issue_records")
+            for record in normalized["issues"].values():
+                await conn.execute(
+                    """
+                    INSERT INTO workflow_issue_records (
+                        workflow_key, job_uuid, issue_id, status, title, severity,
+                        page_number, organization_id, organization_name, note, updated_at
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::text::timestamptz)
+                    ON CONFLICT (workflow_key)
+                    DO UPDATE SET
+                        status = EXCLUDED.status,
+                        title = EXCLUDED.title,
+                        severity = EXCLUDED.severity,
+                        page_number = EXCLUDED.page_number,
+                        organization_id = EXCLUDED.organization_id,
+                        organization_name = EXCLUDED.organization_name,
+                        note = EXCLUDED.note,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    record["key"],
+                    record["job_id"],
+                    record["issue_id"],
+                    record["status"],
+                    record["title"],
+                    record["severity"],
+                    record["page"],
+                    record["organization_id"],
+                    record["organization_name"],
+                    record["note"],
+                    record["updated_at"],
+                )
+
+            await conn.execute("DELETE FROM workflow_remediation_packages")
+            for package in normalized["packages"]:
+                await conn.execute(
+                    """
+                    INSERT INTO workflow_remediation_packages (
+                        package_id, name, organization_id, organization_name,
+                        job_ids, issue_keys, status, created_at, updated_at
+                    )
+                    VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8::text::timestamptz, $9::text::timestamptz)
+                    """,
+                    package["id"],
+                    package["name"],
+                    package["organization_id"],
+                    package["organization_name"],
+                    json.dumps(package["job_ids"], ensure_ascii=False),
+                    json.dumps(package["issue_keys"], ensure_ascii=False),
+                    package["status"],
+                    package["created_at"],
+                    package["updated_at"],
+                )
+            await conn.execute(
+                """
+                UPDATE workflow_state_mirror
+                SET revision = $1, updated_at = $2::text::timestamptz
+                WHERE mirror_id = TRUE
+                """,
+                target_revision,
+                normalized["updated_at"] or _now(),
+            )
+        _record_persistence_state("synced")
+        return True
+    except Exception as exc:
+        logger.exception("Failed to mirror workflow state to PostgreSQL")
+        _record_persistence_state("pending_retry", str(exc) or exc.__class__.__name__)
+        return False
+    finally:
+        if conn is not None:
+            await DatabaseConnection.release(conn)
+
+
+async def sync_workflow_recovery_state() -> bool:
+    """Retry the latest recovery snapshot after a previous database outage."""
+    if not _store_path().is_file():
+        return False
+    with _state_lock():
+        state = _read_state()
+        # Upgrade a pre-mirror file in place once.  Future restarts can then
+        # use normal monotonic-revision semantics instead of repeatedly
+        # replaying revision 0.
+        if int(state.get("revision") or 0) <= 0:
+            state = _write_state(state)
+    return await persist_workflow_state(state)
 
 
 def _find_issue(payload: Dict[str, Any], issue_id: str) -> Optional[Dict[str, Any]]:
@@ -237,7 +463,7 @@ def _can_read_job(user: Dict[str, Any], job_id: str) -> bool:
         return False
 
 
-def update_issue(
+async def update_issue(
     user: Dict[str, Any],
     *,
     job_id: str,
@@ -271,10 +497,12 @@ def update_issue(
             "note": str(note or "").strip() or None,
             "updated_at": _now(),
         }
-        return _write_state(state)
+        next_state = _write_state(state)
+    await persist_workflow_state(next_state)
+    return next_state
 
 
-def create_package(
+async def create_package(
     user: Dict[str, Any],
     *,
     name: Optional[str],
@@ -338,4 +566,5 @@ def create_package(
         }
         state["packages"] = [record, *state["packages"]]
         next_state = _write_state(state)
+    await persist_workflow_state(next_state)
     return {"state": next_state, "package": record}

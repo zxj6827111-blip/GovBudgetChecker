@@ -1163,10 +1163,16 @@ export default function DepartmentPageClient() {
           orgUnitId={uploadTargetOrgId}
           defaultDocType="dept_budget"
           onClose={() => setIsUploadModalOpen(false)}
-          onComplete={() => {
+          onComplete={(jobIds) => {
             setIsUploadModalOpen(false);
             setRefreshSeed((current) => current + 1);
             dispatchOrgTreeRefresh();
+            if (jobIds.length === 0) {
+              return;
+            }
+            const targetPage = jobIds.length === 1 ? "detail" : "tasks";
+            const jobQuery = jobIds.length === 1 ? `&job=${encodeURIComponent(jobIds[0])}` : "";
+            router.push(`/viewer/gbc-ui-demo?page=${targetPage}${jobQuery}` as Route);
           }}
         />
       ) : null}

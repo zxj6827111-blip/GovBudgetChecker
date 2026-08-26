@@ -90,8 +90,10 @@ const getPreferredUnit = (units: UnitItem[]): UnitItem | null => {
   return null;
 };
 
-const getDisplayIssueTotal = (job: Pick<JobSummary, "merged_issue_total" | "issue_total">) =>
-  typeof job.merged_issue_total === "number" ? job.merged_issue_total : job.issue_total || 0;
+const getDisplayIssueTotal = (job: Pick<JobSummary, "merged_issue_total" | "issue_total" | "review_item_count">) => {
+  const inspected = typeof job.merged_issue_total === "number" ? job.merged_issue_total : job.issue_total || 0;
+  return inspected + (job.review_item_count || 0);
+};
 
 interface OrganizationDetailViewProps {
   departmentId: string;

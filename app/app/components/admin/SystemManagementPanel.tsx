@@ -890,9 +890,15 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
         <BatchUploadModal
           defaultDocType="dept_budget"
           onClose={() => setIsUploadModalOpen(false)}
-          onComplete={() => {
+          onComplete={(jobIds) => {
             setIsUploadModalOpen(false);
             void onRefresh?.();
+            if (jobIds.length === 0) {
+              return;
+            }
+            const targetPage = jobIds.length === 1 ? "detail" : "tasks";
+            const jobQuery = jobIds.length === 1 ? `&job=${encodeURIComponent(jobIds[0])}` : "";
+            window.location.assign(`/viewer/gbc-ui-demo?page=${targetPage}${jobQuery}`);
           }}
         />
       ) : null}

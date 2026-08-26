@@ -42,6 +42,7 @@ _SEVERITY_LABELS: Dict[str, str] = {
     "error": "高",
     "warn": "中",
     "warning": "中",
+    "manual_review": "待人工复核",
 }
 _DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _ERROR_SEVERITIES = {"critical", "high", "error"}
@@ -153,10 +154,56 @@ def _collect_pages(*values: Any) -> List[int]:
     return pages
 
 
+def _extract_structured_review_issues(status_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    structured = status_payload.get("structured_ingest")
+    if not isinstance(structured, dict):
+        result = status_payload.get("result")
+        structured = result.get("structured_ingest") if isinstance(result, dict) else None
+    if not isinstance(structured, dict):
+        return []
+
+    review_items = structured.get("review_items")
+    if not isinstance(review_items, list):
+        return []
+
+    job_id = str(status_payload.get("job_id") or "job")
+    issues: List[Dict[str, Any]] = []
+    for index, item in enumerate(review_items, start=1):
+        if not isinstance(item, dict):
+            continue
+        raw_page = _to_positive_int(item.get("page") or item.get("page_number"))
+        table_code = str(item.get("table_code") or "").strip()
+        item_type = str(item.get("type") or "review").strip() or "review"
+        message = str(item.get("message") or "该结构化识别项需要人工复核。").strip()
+        location: Dict[str, Any] = {}
+        if raw_page:
+            location["page"] = raw_page
+        if table_code:
+            location["table"] = table_code
+        evidence: List[Dict[str, Any]] = [{"text": message, "text_snippet": message}]
+        if raw_page:
+            evidence[0]["page"] = raw_page
+        issues.append(
+            {
+                "id": str(item.get("id") or f"{job_id}:structured-review:{item_type}:{table_code or 'document'}:{index}"),
+                "source": "structured_ingest",
+                "rule_id": f"STRUCTURED-{item_type.upper()}",
+                "severity": str(item.get("severity") or "manual_review"),
+                "title": f"结构化识别待复核：{table_code}" if table_code else "结构化识别结果待复核",
+                "message": message,
+                "location": location,
+                "evidence": evidence,
+                "suggestion": str(item.get("recommended_action") or "请核对原始 PDF 后确认。"),
+            }
+        )
+    return issues
+
+
 def _extract_issues(status_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     result = status_payload.get("result")
+    structured_issues = _extract_structured_review_issues(status_payload)
     if not isinstance(result, dict):
-        return []
+        return structured_issues
 
     def _dedupe(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         deduped: List[Dict[str, Any]] = []
@@ -213,13 +260,13 @@ def _extract_issues(status_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
             seen_merged.add(merged_id)
             merged_issues.append(issue)
         if merged_issues:
-            return merged_issues
+            return _dedupe([*merged_issues, *structured_issues])
 
     deduped_issues = _dedupe(issues)
     if deduped_issues:
-        return deduped_issues
+        return _dedupe([*deduped_issues, *structured_issues])
 
-    return deduped_source_issues
+    return _dedupe([*deduped_source_issues, *structured_issues])
 
 
 def _normalize_table_refs(raw_refs: Any) -> List[Dict[str, Any]]:

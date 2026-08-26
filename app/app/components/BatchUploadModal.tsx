@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { isHeadUnit, formatUnitOption } from "../../lib/unitMatch";
 
 // ───────────── Types ─────────────
 
@@ -12,12 +13,19 @@ interface FileItem {
     docType: "dept_final" | "dept_budget";
     departmentId?: string;
     departmentName?: string;
+    subjectLevel?: UploadSubjectLevel;
     orgId?: string;
     orgName?: string;
     orgLevel?: string;
     matchSource?: "manual" | "auto" | "default" | "remembered";
     matchConfidence?: "high" | "medium" | "low";
     matchHint?: string;
+    /** 首页识别缺失或与初始值冲突时，必须由操作员显式确认。 */
+    metadataNeedsConfirmation?: boolean;
+    metadataConfirmed?: boolean;
+    metadataHint?: string;
+    /** 低置信度组织匹配不能直接提交，确认动作会被单独记录在前端状态中。 */
+    organizationConfirmed?: boolean;
     versionId?: string;
     isDetecting?: boolean;
     status: "pending" | "uploading" | "triggering" | "success" | "failed" | "skipped";
@@ -54,7 +62,8 @@ interface BatchUploadModalProps {
     useLocalRules?: boolean;
     useAiAssist?: boolean;
     onClose: () => void;
-    onComplete: () => void;
+    /** 成功创建并启动分析的任务 ID，供调用方定位刚上传的材料。 */
+    onComplete: (jobIds: string[]) => void | Promise<void>;
 }
 
 interface OrganizationOption {
@@ -65,6 +74,8 @@ interface OrganizationOption {
     parent_id?: string | null;
     children?: OrganizationOption[];
 }
+
+type UploadSubjectLevel = "department_summary" | "unit";
 
 type WebkitFileSystemEntry = {
     name: string;
@@ -131,6 +142,10 @@ const DIRECTORY_INPUT_PROPS = { webkitdirectory: "", directory: "" };
 // ───────────── Helpers ─────────────
 
 function detectDocType(filename: string, fallback: "dept_final" | "dept_budget"): "dept_final" | "dept_budget" {
+    return detectDocTypeFromFilename(filename) || fallback;
+}
+
+function detectDocTypeFromFilename(filename: string): "dept_final" | "dept_budget" | undefined {
     const lower = filename.toLowerCase();
     if (filename.includes("决算") || lower.includes("final") || lower.includes("settlement") || lower.includes("accounts")) {
         return "dept_final";
@@ -138,7 +153,7 @@ function detectDocType(filename: string, fallback: "dept_final" | "dept_budget")
     if (filename.includes("预算") || lower.includes("budget")) {
         return "dept_budget";
     }
-    return fallback;
+    return undefined;
 }
 
 function detectFiscalYear(filename: string): string {
@@ -161,6 +176,11 @@ function normalizePreflightDocType(value?: string | null): "dept_final" | "dept_
         return "dept_final";
     }
     return undefined;
+}
+
+function inferSubjectLevel(org?: OrganizationOption | null): UploadSubjectLevel | undefined {
+    if (!org) return undefined;
+    return org.level === "unit" ? "unit" : org.level === "department" ? "department_summary" : undefined;
 }
 
 function toMatchConfidence(confidence?: number | null): FileItem["matchConfidence"] {
@@ -437,16 +457,19 @@ export default function BatchUploadModal({
     const [selectionNotice, setSelectionNotice] = useState("");
     const [editingId, setEditingId] = useState<string | null>(null);
     const [bulkDepartmentId, setBulkDepartmentId] = useState("");
+    const [bulkSubjectLevel, setBulkSubjectLevel] = useState<UploadSubjectLevel>("department_summary");
     const [bulkUnitId, setBulkUnitId] = useState("");
     const [departmentFilter, setDepartmentFilter] = useState("");
     const [unitFilter, setUnitFilter] = useState("");
     const [rememberedSelection, setRememberedSelection] = useState<{
         departmentId: string;
+        subjectLevel: UploadSubjectLevel;
         unitId: string;
         docType: "dept_final" | "dept_budget";
         year: string;
     }>({
         departmentId: "",
+        subjectLevel: "department_summary",
         unitId: "",
         docType: defaultDocType,
         year: "",
@@ -530,7 +553,14 @@ export default function BatchUploadModal({
         (uploadName: string): Partial<FileItem> => {
             if (orgUnitId) {
                 const selected = orgs.find((org) => org.id === orgUnitId);
+                const selectedDepartment = selected?.level === "unit" && selected.parent_id
+                    ? departmentMap.get(selected.parent_id)
+                    : selected?.level === "department" ? selected : undefined;
+
                 return {
+                    departmentId: selectedDepartment?.id || "",
+                    departmentName: selectedDepartment?.name || "",
+                    subjectLevel: inferSubjectLevel(selected),
                     orgId: orgUnitId,
                     orgName: selected?.name || "",
                     orgLevel: selected?.level || "",
@@ -551,14 +581,12 @@ export default function BatchUploadModal({
             }
 
             if (match.level === "department") {
-                const preferredUnit =
-                    isDeptIntended && !isUnitIntended
-                        ? undefined
-                        : getPreferredUnit(match.id, isUnitIntended ? uploadName : undefined);
+                const preferredUnit = isUnitIntended ? getPreferredUnit(match.id, uploadName) : undefined;
                 if (preferredUnit) {
                     return {
                         departmentId: match.id,
                         departmentName: match.name,
+                        subjectLevel: "unit",
                         orgId: preferredUnit.id,
                         orgName: preferredUnit.name,
                         orgLevel: preferredUnit.level,
@@ -572,6 +600,7 @@ export default function BatchUploadModal({
                 return {
                     departmentId: match.id,
                     departmentName: match.name,
+                    subjectLevel: "department_summary",
                     orgId: match.id,
                     orgName: match.name,
                     orgLevel: match.level,
@@ -588,6 +617,7 @@ export default function BatchUploadModal({
             return {
                 departmentId: parentDepartment?.id || "",
                 departmentName: parentDepartment?.name || "",
+                subjectLevel: "unit",
                 orgId: match.id,
                 orgName: match.name,
                 orgLevel: match.level,
@@ -606,18 +636,21 @@ export default function BatchUploadModal({
             if (!raw) return;
             const parsed = JSON.parse(raw) as Partial<{
                 departmentId: string;
+                subjectLevel: UploadSubjectLevel;
                 unitId: string;
                 docType: "dept_final" | "dept_budget";
                 year: string;
             }>;
             const next = {
                 departmentId: String(parsed.departmentId || "").trim(),
+                subjectLevel: parsed.subjectLevel === "unit" ? "unit" as const : "department_summary" as const,
                 unitId: String(parsed.unitId || "").trim(),
                 docType: parsed.docType === "dept_final" ? "dept_final" : parsed.docType === "dept_budget" ? "dept_budget" : defaultDocType,
                 year: String(parsed.year || "").trim(),
             };
             setRememberedSelection(next);
             setBulkDepartmentId(next.departmentId);
+            setBulkSubjectLevel(next.subjectLevel);
             setBulkUnitId(next.unitId);
         } catch (error) {
             console.error("Failed to restore batch upload preferences:", error);
@@ -629,6 +662,7 @@ export default function BatchUploadModal({
         const nextDocType = rememberedSelection.docType || defaultDocType;
         const payload = {
             departmentId: bulkDepartmentId || rememberedSelection.departmentId,
+            subjectLevel: bulkDepartmentId ? bulkSubjectLevel : rememberedSelection.subjectLevel,
             unitId: bulkDepartmentId ? bulkUnitId : rememberedSelection.unitId,
             docType: nextDocType,
             year: rememberedSelection.year || "",
@@ -638,7 +672,7 @@ export default function BatchUploadModal({
         } catch (error) {
             console.error("Failed to persist batch upload preferences:", error);
         }
-    }, [bulkDepartmentId, bulkUnitId, defaultDocType, rememberedSelection]);
+    }, [bulkDepartmentId, bulkSubjectLevel, bulkUnitId, defaultDocType, rememberedSelection]);
 
     // 拉取全区组织用于匹配和下拉选择
     useEffect(() => {
@@ -771,16 +805,28 @@ export default function BatchUploadModal({
                         message: "",
                     };
                     const detectedYear = payload.report_year ? String(payload.report_year) : "";
-                    const filenameYearGuess = detectFiscalYear(item.filename);
-                    if (detectedYear && (!item.year || item.year === filenameYearGuess)) {
+                    const detectedDocType = normalizePreflightDocType(payload.doc_type);
+                    const metadataConflict = Boolean(
+                        (detectedYear && item.year && detectedYear !== item.year) ||
+                        (detectedDocType && item.docType && detectedDocType !== item.docType)
+                    );
+                    const metadataIncomplete = !detectedYear || !detectedDocType;
+
+                    // 首页识别优先于文件名猜测和默认值。发生冲突时保留识别结果，
+                    // 但必须让操作员确认，避免把 2024 年决算沿用为 2025 年预算。
+                    if (detectedYear) {
                         next.year = detectedYear;
                     }
-
-                    const detectedDocType = normalizePreflightDocType(payload.doc_type);
-                    const filenameDocTypeGuess = detectDocType(item.filename, defaultDocType);
-                    if (detectedDocType && item.docType === filenameDocTypeGuess) {
+                    if (detectedDocType) {
                         next.docType = detectedDocType;
                     }
+                    next.metadataNeedsConfirmation = metadataIncomplete || metadataConflict;
+                    next.metadataConfirmed = !next.metadataNeedsConfirmation;
+                    next.metadataHint = metadataIncomplete
+                        ? "未能完整识别年度或材料类型，请核对后确认。"
+                        : metadataConflict
+                            ? `首页识别为 ${detectedYear} 年${detectedDocType === "dept_final" ? "决算" : "预算"}，与初始值不一致，请确认。`
+                            : "首页已确认年度和材料类型。";
 
                     if (isScopedUpload || item.matchSource === "manual") {
                         return next;
@@ -803,19 +849,21 @@ export default function BatchUploadModal({
                         next.matchSource = "auto";
                         next.matchConfidence = toMatchConfidence(current.confidence);
                         next.matchHint = buildPreflightMatchHint(payload, current);
+                        next.organizationConfirmed = toMatchConfidence(current.confidence) !== "low";
                         return next;
                     }
 
                     if (!item.orgId && (payload.cover_org_name || payload.cover_title)) {
                         next.matchConfidence = "low";
                         next.matchHint = buildPreflightPendingHint(payload);
+                        next.organizationConfirmed = false;
                     }
 
                     return next;
                 })
             );
         },
-        [defaultDocType, isScopedUpload]
+        [isScopedUpload]
     );
 
     const markPreflightFailed = useCallback((fileId: string, message: string) => {
@@ -826,6 +874,9 @@ export default function BatchUploadModal({
                         ...item,
                         isDetecting: false,
                         message,
+                        metadataNeedsConfirmation: true,
+                        metadataConfirmed: false,
+                        metadataHint: "首页识别失败，请核对年度和材料类型后确认。",
                     }
                     : item
             )
@@ -937,6 +988,11 @@ export default function BatchUploadModal({
                     filename: uploadName,
                     year: detectFiscalYear(uploadName),
                     docType: detectDocType(uploadName, defaultDocType),
+                    metadataNeedsConfirmation: !detectFiscalYear(uploadName) || !detectDocTypeFromFilename(uploadName),
+                    metadataConfirmed: Boolean(detectFiscalYear(uploadName) && detectDocTypeFromFilename(uploadName)),
+                    metadataHint: detectFiscalYear(uploadName) && detectDocTypeFromFilename(uploadName)
+                        ? "已按文件名识别年度和材料类型。"
+                        : "文件名未完整识别年度或材料类型，等待首页识别。",
                     ...assignment,
                     isDetecting: true,
                     status: "pending",
@@ -1124,6 +1180,7 @@ export default function BatchUploadModal({
         (updates: Partial<{ departmentId: string; unitId: string; docType: "dept_final" | "dept_budget"; year: string }>) => {
             setRememberedSelection((prev) => ({
                 departmentId: updates.departmentId ?? prev.departmentId,
+                subjectLevel: prev.subjectLevel,
                 unitId: updates.unitId ?? prev.unitId,
                 docType: updates.docType ?? prev.docType,
                 year: updates.year ?? prev.year,
@@ -1157,6 +1214,7 @@ export default function BatchUploadModal({
                 matchSource: options?.source,
                 matchConfidence: options?.confidence,
                 matchHint: options?.hint,
+                organizationConfirmed: options?.source === "manual" ? true : undefined,
             };
         },
         [departmentMap, unitsByDepartment]
@@ -1189,6 +1247,39 @@ export default function BatchUploadModal({
         return resolveDepartmentId(fileItem);
     };
 
+    const needsMetadataConfirmation = (fileItem: FileItem): boolean =>
+        Boolean(fileItem.metadataNeedsConfirmation && !fileItem.metadataConfirmed);
+
+    const needsOrganizationConfirmation = (fileItem: FileItem): boolean =>
+        !isScopedUpload && (
+            !resolveUploadTargetId(fileItem) ||
+            (fileItem.matchConfidence === "low" && !fileItem.organizationConfirmed)
+        );
+
+    const confirmFileMetadata = (fileId: string) => {
+        setFiles((prev) => prev.map((file) =>
+            file.id === fileId
+                ? {
+                    ...file,
+                    metadataConfirmed: true,
+                    metadataHint: "操作员已确认年度和材料类型。",
+                }
+                : file
+        ));
+    };
+
+    const confirmFileOrganization = (fileId: string) => {
+        setFiles((prev) => prev.map((file) =>
+            file.id === fileId
+                ? {
+                    ...file,
+                    organizationConfirmed: true,
+                    matchHint: `${file.matchHint || "自动匹配"}（操作员已确认）`,
+                }
+                : file
+        ));
+    };
+
     const isDepartmentLevelAssignment = (fileItem: FileItem): boolean => {
         return Boolean(resolveDepartmentId(fileItem) && !resolveUnitId(fileItem));
     };
@@ -1205,8 +1296,8 @@ export default function BatchUploadModal({
         updateFile(
             fileId,
             buildAssignmentUpdates(departmentId, preferredUnit?.id || "", {
-                source: selectedDepartment ? (preferredUnit ? "default" : "manual") : undefined,
-                confidence: selectedDepartment ? (preferredUnit ? "medium" : "high") : undefined,
+                source: selectedDepartment ? "manual" : undefined,
+                confidence: selectedDepartment ? "high" : undefined,
                 hint,
             })
         );
@@ -1441,11 +1532,19 @@ export default function BatchUploadModal({
             alert("没有待处理的文件");
             return;
         }
+        const filesRequiringConfirmation = pendingFiles.filter(
+            (file) => needsMetadataConfirmation(file) || needsOrganizationConfirmation(file)
+        );
+        if (filesRequiringConfirmation.length > 0) {
+            alert(`请先确认 ${filesRequiringConfirmation.length} 份材料的年度、类型或归属信息。`);
+            return;
+        }
 
         setIsProcessing(true);
         const fileIndexMap = new Map(files.map((f, idx) => [f.id, idx]));
         const fileById = new Map(files.map((f) => [f.id, f]));
         const triggerQueue: Array<{ fileId: string; versionId: string }> = [];
+        const successfulJobIds: string[] = [];
 
         for (let i = 0; i < files.length; i++) {
             const fileItem = files[i];
@@ -1467,7 +1566,7 @@ export default function BatchUploadModal({
                                 message: "上传成功，等待批量触发检查...",
                             }
                             : f
-                    )
+                        )
                 );
             } catch (error: any) {
                 setFiles((prev) =>
@@ -1500,8 +1599,9 @@ export default function BatchUploadModal({
                         f.id === task.fileId
                             ? { ...f, status: "success" as const, message: "✅ 上传成功，检查已启动" }
                             : f
-                    )
+                        )
                 );
+                successfulJobIds.push(task.versionId);
             } catch (error: any) {
                 setFiles((prev) =>
                     prev.map((f) =>
@@ -1520,7 +1620,7 @@ export default function BatchUploadModal({
 
         setIsProcessing(false);
         setCurrentIndex(-1);
-        onComplete();
+        await onComplete(successfulJobIds);
     };
 
     // ── Stats ──
@@ -1546,6 +1646,9 @@ export default function BatchUploadModal({
     const progress = getProgress();
     const stats = getStats();
     const hasPendingPreflight = files.some((file) => file.status === "pending" && file.isDetecting);
+    const pendingConfirmationCount = files.filter(
+        (file) => file.status === "pending" && (needsMetadataConfirmation(file) || needsOrganizationConfirmation(file))
+    ).length;
 
     // ── Status Icon ──
 
@@ -1807,7 +1910,7 @@ export default function BatchUploadModal({
                                         </option>
                                         {getVisibleUnits(bulkDepartmentId, bulkUnitId).map((unit) => (
                                             <option key={unit.id} value={unit.id}>
-                                                {unit.name}
+                                                {formatUnitOption(unit, departmentMap.get(bulkDepartmentId))}
                                             </option>
                                         ))}
                                     </select>
@@ -1862,7 +1965,12 @@ export default function BatchUploadModal({
                                                     type="text"
                                                     value={fileItem.year}
                                                     onChange={(e) => {
-                                                        updateFile(fileItem.id, { year: e.target.value });
+                                                        updateFile(fileItem.id, {
+                                                            year: e.target.value,
+                                                            metadataNeedsConfirmation: true,
+                                                            metadataConfirmed: false,
+                                                            metadataHint: "年度已修改，请确认当前年度和材料类型。",
+                                                        });
                                                         persistRememberedSelection({ year: e.target.value });
                                                     }}
                                                     className="w-16 px-1.5 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
@@ -1873,7 +1981,12 @@ export default function BatchUploadModal({
                                                     value={fileItem.docType}
                                                     onChange={(e) => {
                                                         const docType = e.target.value as "dept_final" | "dept_budget";
-                                                        updateFile(fileItem.id, { docType });
+                                                        updateFile(fileItem.id, {
+                                                            docType,
+                                                            metadataNeedsConfirmation: true,
+                                                            metadataConfirmed: false,
+                                                            metadataHint: "材料类型已修改，请确认当前年度和材料类型。",
+                                                        });
                                                         persistRememberedSelection({ docType });
                                                     }}
                                                     className="px-1.5 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
@@ -1913,7 +2026,7 @@ export default function BatchUploadModal({
                                                     </option>
                                                     {getVisibleUnits(resolveDepartmentId(fileItem), resolveUnitId(fileItem)).map((unit) => (
                                                         <option key={unit.id} value={unit.id}>
-                                                            {unit.name}
+                                                            {formatUnitOption(unit, departmentMap.get(resolveDepartmentId(fileItem)))}
                                                         </option>
                                                     ))}
                                                 </select>
@@ -1964,11 +2077,36 @@ export default function BatchUploadModal({
                                                         {fileItem.matchHint}
                                                     </span>
                                                 )}
+                                                {fileItem.metadataHint && (
+                                                    <span className={`text-[11px] ${needsMetadataConfirmation(fileItem) ? "text-orange-700" : "text-gray-500 dark:text-gray-400"}`}>
+                                                        {fileItem.metadataHint}
+                                                    </span>
+                                                )}
                                                 {fileItem.message && (
                                                     <span className="text-xs text-gray-500 dark:text-gray-400 truncate">
                                                         {fileItem.message}
                                                     </span>
                                                 )}
+                                                {needsMetadataConfirmation(fileItem) ? (
+                                                    <button
+                                                        type="button"
+                                                        data-testid={`batch-confirm-metadata-${fileItem.id}`}
+                                                        onClick={() => confirmFileMetadata(fileItem.id)}
+                                                        className="rounded-md border border-orange-300 bg-orange-50 px-2 py-1 text-[11px] font-medium text-orange-800 hover:bg-orange-100"
+                                                    >
+                                                        确认年度和类型
+                                                    </button>
+                                                ) : null}
+                                                {needsOrganizationConfirmation(fileItem) && resolveUploadTargetId(fileItem) ? (
+                                                    <button
+                                                        type="button"
+                                                        data-testid={`batch-confirm-organization-${fileItem.id}`}
+                                                        onClick={() => confirmFileOrganization(fileItem.id)}
+                                                        className="rounded-md border border-orange-300 bg-orange-50 px-2 py-1 text-[11px] font-medium text-orange-800 hover:bg-orange-100"
+                                                    >
+                                                        确认材料归属
+                                                    </button>
+                                                ) : null}
                                             </div>
                                         )}
                                     </div>
@@ -2070,13 +2208,13 @@ export default function BatchUploadModal({
                             disabled={
                                 files.filter((f) => f.status === "pending").length === 0 ||
                                 hasPendingPreflight ||
-                                (!isScopedUpload && files.some((f) => !resolveUploadTargetId(f)))
+                                pendingConfirmationCount > 0
                             }
                             title={
                                 hasPendingPreflight
                                     ? "正在识别PDF首页，请稍候"
-                                    : !isScopedUpload && files.some((f) => !resolveUploadTargetId(f))
-                                        ? "有文件未完成部门或单位选择"
+                                    : pendingConfirmationCount > 0
+                                        ? `有 ${pendingConfirmationCount} 份材料尚未确认年度、类型或归属信息`
                                         : ""
                             }
                             className="px-6 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 rounded-xl shadow-lg shadow-indigo-500/30 hover:shadow-xl hover:shadow-indigo-500/40 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none flex items-center gap-2"

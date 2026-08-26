@@ -423,6 +423,36 @@ def test_preflight_extracts_department_budget_cover_metadata(tmp_path: Path, mon
     assert payload["current"]["match_basis"] == "cover_field"
 
 
+def test_upload_backfills_preflight_metadata_and_rejects_conflicting_year(tmp_path: Path, monkeypatch):
+    _patch_runtime_state(tmp_path, monkeypatch)
+    client = TestClient(app)
+    monkeypatch.setattr(
+        runtime,
+        "extract_pdf_page_texts_from_bytes",
+        lambda content, max_pages=3: ["上海市普陀区人民政府办公室2024年度部门决算"],
+    )
+
+    uploaded = client.post(
+        "/api/documents/upload",
+        headers=_headers(),
+        files={"file": ("report.pdf", io.BytesIO(_pdf_bytes()), "application/pdf")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    payload = uploaded.json()
+    assert payload["fiscal_year"] == "2024"
+    assert payload["doc_type"] == "dept_final"
+    assert payload["report_kind"] == "final"
+
+    conflict = client.post(
+        "/api/documents/upload",
+        headers=_headers(),
+        data={"fiscal_year": "2025", "doc_type": "dept_final"},
+        files={"file": ("another.pdf", io.BytesIO(_pdf_bytes()), "application/pdf")},
+    )
+    assert conflict.status_code == 422
+    assert conflict.json()["detail"]["error"] == "report_year_conflict"
+
+
 def test_upload_auto_match_prefers_cover_org_name_over_filename_only_match(tmp_path: Path, monkeypatch):
     _patch_runtime_state(tmp_path, monkeypatch)
     client = TestClient(app)
@@ -479,3 +509,24 @@ def test_upload_auto_match_prefers_cover_org_name_over_filename_only_match(tmp_p
     assert payload["organization_name"] == correct_org["name"]
     assert fake_matcher.calls
     assert fake_matcher.calls[0][0] == "上海市普陀区人民政府石泉路街道办事处"
+
+
+def test_preflight_rejects_oversized_upload_before_buffering(tmp_path: Path, monkeypatch):
+    """Oversized bodies must be rejected with 413 while reading, before the
+    full payload is buffered in memory for cover inspection."""
+    _patch_runtime_state(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    original_limit = runtime.MAX_UPLOAD_MB
+    monkeypatch.setattr(runtime, "MAX_UPLOAD_MB", 1)
+    try:
+        oversize = b"%PDF-1.4\n" + b"x" * (2 * 1024 * 1024)
+        response = client.post(
+            "/api/documents/preflight",
+            headers=_headers(),
+            files={"file": ("oversize.pdf", io.BytesIO(oversize), "application/pdf")},
+        )
+        assert response.status_code == 413, response.text
+        assert "1MB" in response.text
+    finally:
+        monkeypatch.setattr(runtime, "MAX_UPLOAD_MB", original_limit)

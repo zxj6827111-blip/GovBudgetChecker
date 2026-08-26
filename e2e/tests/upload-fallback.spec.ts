@@ -194,5 +194,7 @@ test.describe("Batch Upload Fallback", () => {
     await expect.poll(() => v2UploadCalls).toBe(1);
     await expect.poll(() => runCalls).toBe(1);
     expect(runVersionId).toBe("job-fallback-001");
+    await expect(page.getByTestId("batch-complete-count")).toHaveText("1");
+    await expect(page.getByTestId("batch-completed-job-ids")).toHaveText("job-fallback-001");
   });
 });

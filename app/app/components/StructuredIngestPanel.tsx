@@ -127,19 +127,29 @@ function getMatchModeLabel(mode?: string | null) {
 function getSeverityMeta(severity?: string | null) {
   switch ((severity || "").toLowerCase()) {
     case "error":
+    case "critical":
+    case "high":
       return {
         label: "错误",
         className: "bg-red-100 text-red-700",
       };
+    case "warn":
+    case "warning":
+    case "medium":
+      return {
+        label: "提醒",
+        className: "bg-amber-100 text-amber-700",
+      };
     case "info":
+    case "low":
       return {
         label: "提示",
         className: "bg-blue-100 text-blue-700",
       };
     default:
       return {
-        label: "提醒",
-        className: "bg-amber-100 text-amber-700",
+        label: "待人工复核",
+        className: "bg-violet-100 text-violet-700",
       };
   }
 }

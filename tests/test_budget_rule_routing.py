@@ -78,6 +78,24 @@ def test_pipeline_keeps_unknown_document_out_of_budget_and_final_rules(
     assert codes == {"DOC-TYPE-UNKNOWN", "COMMON-DUMMY"}
 
 
+def test_pipeline_does_not_use_repository_directory_to_route_budget_rules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipeline, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
+    monkeypatch.setattr(pipeline, "FINAL_ALL_RULES", [_DummyRule("FIN-DUMMY")])
+    monkeypatch.setattr(pipeline, "ALL_COMMON_RULES", [])
+    doc = SimpleNamespace(
+        path=r"E:\\Software Development\\GovBudgetChecker\\uploads\\plain.pdf",
+        page_texts=["决算公开材料"],
+        page_tables=[[]],
+    )
+
+    codes = {issue.rule for issue in pipeline.run_rules(doc, use_ai_assist=False)}
+
+    assert "FIN-DUMMY" in codes
+    assert "BUD-DUMMY" not in codes
+
+
 @pytest.mark.asyncio
 async def test_engine_rule_runner_routes_budget_rules(
     monkeypatch: pytest.MonkeyPatch,
@@ -118,6 +136,50 @@ async def test_engine_rule_runner_routes_budget_rules(
     assert bud_finding.page_number == 1
     assert isinstance(bud_finding.evidence, list) and bud_finding.evidence
     assert bud_finding.evidence[0].get("page") == 1
+
+
+@pytest.mark.asyncio
+async def test_engine_rule_runner_uses_metadata_for_final_report_under_budget_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runner_mod, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
+    monkeypatch.setattr(runner_mod, "FINAL_ALL_RULES", [_DummyRule("FIN-DUMMY")])
+    monkeypatch.setattr(runner_mod, "ALL_COMMON_RULES", [])
+
+    runner = runner_mod.EngineRuleRunner()
+    doc = build_document(
+        path="上海市普陀区人民政府办公室2024年度部门决算.pdf",
+        page_texts=["上海市普陀区人民政府办公室 2024 年度部门决算"],
+        page_tables=[[]],
+        filesize=1,
+    )
+
+    async def _fake_prepare(_job_context):
+        return doc
+
+    monkeypatch.setattr(runner, "_prepare_document", _fake_prepare)
+    job_context = JobContext(
+        job_id="job-final",
+        pdf_path="E:/Software Development/GovBudgetChecker/GovBudgetChecker/uploads/job-final/上海市普陀区人民政府办公室2024年度部门决算.pdf",
+        page_texts=doc.page_texts,
+        page_tables=doc.page_tables,
+        meta={"report_kind": "final"},
+    )
+
+    findings = await runner.run_rules(job_context=job_context, rules=[], config=AnalysisConfig())
+    rule_ids = {item.rule_id for item in findings}
+    assert "FIN-DUMMY" in rule_ids
+    assert "BUD-DUMMY" not in rule_ids
+
+
+def test_engine_rule_runner_does_not_infer_budget_from_project_directory() -> None:
+    runner = runner_mod.EngineRuleRunner()
+    job_context = JobContext(
+        job_id="job-unknown",
+        pdf_path="E:/Software Development/GovBudgetChecker/GovBudgetChecker/uploads/job-unknown/report.pdf",
+    )
+
+    assert runner._resolve_report_kind(job_context) == "unknown"
 
 
 def test_budget_t1_balance_rule_detects_mismatch() -> None:

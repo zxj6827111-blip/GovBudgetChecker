@@ -1,5 +1,6 @@
 """Tests for P1 write-endpoint require_login enforcement."""
 
+import io
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -548,3 +549,26 @@ class TestAdminEndpointsStillProtected:
             json={"name": "非法部门", "level": "department"},
         )
         assert resp.status_code == 403
+
+    def test_org_import_rejects_oversized_file_with_413(self, client: TestClient, monkeypatch):
+        """Organization import bodies are size-limited while reading so an
+        oversized upload is rejected before it is fully buffered in memory."""
+        from api.routes import organizations as org_route
+
+        admin_token = _login(client, "admin", ADMIN_PASSWORD)
+        monkeypatch.setattr(org_route, "_MAX_ORG_IMPORT_BYTES", 64 * 1024)
+
+        oversize = b"name,level,parent_id\n" + (b"row," * 20_000)
+        resp = client.post(
+            "/api/organizations/import",
+            headers=_headers(admin_token),
+            files={
+                "file": (
+                    "orgs.csv",
+                    io.BytesIO(oversize),
+                    "text/csv",
+                )
+            },
+        )
+        assert resp.status_code == 413, resp.text
+        assert "20MB" in resp.text

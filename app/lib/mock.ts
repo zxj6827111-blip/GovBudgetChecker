@@ -9,7 +9,9 @@ export interface Problem {
   severity: Severity;
   severityLabel?: string;
   category: string;
-  page: number;
+  // Some structured-ingest review items identify a table but have no reliable
+  // PDF page.  Keep that distinction instead of inventing a page number.
+  page?: number;
   location?: string;
   description: string;
   suggestion: string;

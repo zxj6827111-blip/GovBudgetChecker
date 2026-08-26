@@ -32,6 +32,7 @@ MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "30"))
 MAX_UPLOAD_PAGES = int(os.getenv("MAX_UPLOAD_PAGES", "800"))
 UPLOAD_ROOT = Path(os.getenv("UPLOAD_DIR", "uploads")).resolve()
 UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+DOCUMENT_STORAGE_BACKEND = os.getenv("DOCUMENT_STORAGE_BACKEND", "filesystem").strip() or "filesystem"
 
 try:
     from src.security import (
@@ -1760,6 +1761,7 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "mode": mode,
         "dual_mode_enabled": dual_mode_enabled,
         "stage": stage,
+        "quality_status": status_data.get("quality_status") or "complete",
         "report_year": report_year,
         "report_year_source": status_data.get("report_year_source"),
         "year_conflict": status_data.get("year_conflict"),
@@ -2075,6 +2077,8 @@ def find_duplicate_upload(
 async def store_upload_file(
     file: UploadFile,
     metadata: Optional[Dict[str, Any]] = None,
+    *,
+    persist_snapshot: bool = True,
 ) -> Dict[str, Any]:
     """Persist upload into a job directory and return metadata payload."""
     if SECURITY_AVAILABLE:
@@ -2158,13 +2162,18 @@ async def store_upload_file(
         )
 
     created_at = time.time()
+    storage_key = dst.relative_to(UPLOAD_ROOT).as_posix()
+    content_type = str(file.content_type or "application/pdf").strip() or "application/pdf"
     payload = {
         "id": job_id,
         "job_id": job_id,
         "filename": safe_name,
         "size": size,
         "page_count": page_count,
-        "saved_path": str(dst.relative_to(UPLOAD_ROOT)),
+        "saved_path": storage_key,
+        "storage_key": storage_key,
+        "storage_backend": DOCUMENT_STORAGE_BACKEND,
+        "content_type": content_type,
         "checksum": sha256.hexdigest(),
     }
     status_payload = {
@@ -2175,6 +2184,10 @@ async def store_upload_file(
         "filename": safe_name,
         "size": size,
         "page_count": page_count,
+        "saved_path": storage_key,
+        "storage_key": storage_key,
+        "storage_backend": DOCUMENT_STORAGE_BACKEND,
+        "content_type": content_type,
         "checksum": sha256.hexdigest(),
         "version_created_at": created_at,
         "job_created_at": created_at,
@@ -2183,6 +2196,8 @@ async def store_upload_file(
     if metadata:
         status_payload.update({key: value for key, value in metadata.items() if value is not None})
     write_json_file(job_dir / "status.json", status_payload)
+    if persist_snapshot:
+        await persist_analysis_job_snapshot(status_payload)
     return {**payload, **extract_job_status_context(status_payload)}
 
 

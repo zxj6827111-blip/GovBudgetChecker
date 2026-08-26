@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx --no-cache",
     "test:ui-adapters": "jiti tests/uiAdapters.dual-mode.test.ts",
+    "test:unit-match": "jiti tests/unitMatch.regression.test.ts",
     "test:admin-config": "jiti tests/adminConfigStore.test.ts",
     "test:e2e": "node ../scripts/run-e2e.cjs"
   },

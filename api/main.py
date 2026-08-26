@@ -34,7 +34,12 @@ from api.queue_runtime import (
 from api.routes import register_routes
 
 from src.services.analyze_dual import DualModeAnalyzer
-from src.services.analysis_result_store import persist_analysis_job_snapshot
+from src.services.analysis_result_store import (
+    persist_analysis_job_snapshot,
+    sync_pending_analysis_snapshots,
+)
+from src.db.connection import DatabaseConnection
+from src.services.issue_workflow_store import sync_workflow_recovery_state
 from src.services.structured_ingest_runner import (
     close_structured_ingest_resources,
     run_structured_ingest,
@@ -54,8 +59,21 @@ except ImportError:
 import logging
 
 logger = logging.getLogger(__name__)
+_workflow_mirror_task: asyncio.Task | None = None
+
+
+async def _sync_persistence_state_on_startup() -> None:
+    try:
+        await asyncio.wait_for(sync_pending_analysis_snapshots(), timeout=20)
+        await asyncio.wait_for(sync_workflow_recovery_state(), timeout=5)
+    except asyncio.TimeoutError:
+        logger.warning("Persistence recovery retry timed out during startup")
+    except Exception:
+        logger.exception("Persistence recovery retry failed during startup")
 
 async def _startup_job_queue() -> None:
+    global _workflow_mirror_task
+    _workflow_mirror_task = asyncio.create_task(_sync_persistence_state_on_startup())
     if not should_start_local_queue():
         logger.info(
             "Local job queue startup skipped (enabled=%s, role=%s)",
@@ -87,11 +105,23 @@ async def _startup_job_queue() -> None:
 
 
 async def _shutdown_job_queue() -> None:
+    global _workflow_mirror_task
+    if _workflow_mirror_task is not None:
+        _workflow_mirror_task.cancel()
+        try:
+            await _workflow_mirror_task
+        except asyncio.CancelledError:
+            pass
+        _workflow_mirror_task = None
     queue = runtime.get_job_queue()
     if queue is not None:
         await queue.stop()
         runtime.set_job_queue(None)
     await close_structured_ingest_resources()
+    # ``close_structured_ingest_resources`` normally owns this pool, but keep
+    # the lifecycle explicit for queue-disabled/TestClient startups too.
+    if DatabaseConnection.is_initialized():
+        await DatabaseConnection.close()
 
 
 @asynccontextmanager
@@ -296,6 +326,8 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                 report_year = runtime.parse_report_year(
                     status_data.get("report_year") or fiscal_year
                 )
+                # 上传时 preflight 已持久化识别结果，直接复用；旧任务无此字段时走下方兜底推断。
+                report_kind = str(status_data.get("report_kind") or "").strip()
             except:
                 pass
 
@@ -323,10 +355,11 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
         )
 
         pdf_path = _find_first_pdf(job_dir)
-        report_kind = runtime.normalize_report_kind(
-            str(doc_type) if doc_type is not None else None,
-            pdf_path.name,
-        )
+        if not report_kind or report_kind == "unknown":
+            report_kind = runtime.normalize_report_kind(
+                str(doc_type) if doc_type is not None else None,
+                pdf_path.name,
+            )
         started = time.time()
 
         # 读取 PDF -> 文本/表格
@@ -413,7 +446,15 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                 page_texts=page_texts,
                 page_tables=page_tables,
                 filesize=filesize,
-                meta={"started_at": started},
+                meta={
+                    "started_at": started,
+                    "report_kind": report_kind,
+                    "report_year": report_year,
+                    "fiscal_year": fiscal_year,
+                    "doc_type": doc_type,
+                    "organization_id": organization_id,
+                    "organization_name": organization_name,
+                },
             )
 
             analysis_config = AnalysisConfig(

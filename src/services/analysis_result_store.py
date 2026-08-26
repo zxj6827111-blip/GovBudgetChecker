@@ -18,10 +18,12 @@ from src.db.migrations import run_migrations
 logger = logging.getLogger(__name__)
 
 _DB_READY = False
-_DB_READY_LOCK = asyncio.Lock()
+_DB_READY_LOCK: asyncio.Lock | None = None
 _ACTIVE_JOB_STATUSES = {"queued", "processing", "running"}
 _UUIDISH_FILENAME_RE = re.compile(r"^[0-9a-f]{24,}\.pdf$", re.I)
 _PERSISTENCE_RETRY_DELAYS = (0.0, 0.2, 0.5)
+_POSTGRES_INTEGER_MAX = 2_147_483_647
+_PERSISTENCE_FILENAME = "persistence.json"
 
 
 def _record_persistence_state(job_uuid: str, status: str, error: str = "") -> None:
@@ -29,7 +31,7 @@ def _record_persistence_state(job_uuid: str, status: str, error: str = "") -> No
     job_dir = Path(os.getenv("UPLOAD_DIR", "uploads")).resolve() / job_uuid
     if not job_dir.is_dir():
         return
-    target = job_dir / "persistence.json"
+    target = job_dir / _PERSISTENCE_FILENAME
     temp = target.with_suffix(".json.tmp")
     payload = {
         "status": status,
@@ -51,6 +53,14 @@ async def ensure_analysis_persistence_ready() -> bool:
         return True
     if not (os.getenv("DATABASE_URL") or "").strip():
         return False
+
+    global _DB_READY_LOCK
+    # TestClient and development reloads may create a fresh event loop after
+    # the previous one is closed.  asyncio primitives cannot be reused across
+    # loops, so create the initialization lock lazily for the active loop.
+    active_loop = asyncio.get_running_loop()
+    if _DB_READY_LOCK is None or getattr(_DB_READY_LOCK, "_loop", None) not in (None, active_loop):
+        _DB_READY_LOCK = asyncio.Lock()
 
     async with _DB_READY_LOCK:
         if _DB_READY and DatabaseConnection.is_initialized():
@@ -98,6 +108,7 @@ async def persist_analysis_job_snapshot(
                     await _upsert_analysis_result(conn, job_db_id, payload)
                 elif status in _ACTIVE_JOB_STATUSES:
                     await conn.execute("DELETE FROM analysis_results WHERE job_id = $1", job_db_id)
+                await _backfill_structured_document_version_metadata(conn, payload)
             _record_persistence_state(job_uuid, "synced")
             return True
         except Exception as exc:
@@ -115,6 +126,44 @@ async def persist_analysis_job_snapshot(
 
     _record_persistence_state(job_uuid, "pending_retry", last_error)
     return False
+
+
+async def sync_pending_analysis_snapshots(
+    upload_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Replay only snapshots marked for persistence retry after a DB outage."""
+    root = (upload_root or Path(os.getenv("UPLOAD_DIR", "uploads"))).resolve()
+    summary: Dict[str, Any] = {
+        "scanned": 0,
+        "pending": 0,
+        "synced": 0,
+        "failed": 0,
+        "failed_job_ids": [],
+    }
+    if not root.is_dir():
+        return summary
+
+    for job_dir in root.iterdir():
+        if not job_dir.is_dir() or job_dir.name.startswith("."):
+            continue
+        summary["scanned"] += 1
+        persistence = _read_json_file(job_dir / _PERSISTENCE_FILENAME)
+        if str(persistence.get("status") or "").strip() != "pending_retry":
+            continue
+        summary["pending"] += 1
+        payload = _read_json_file(job_dir / "status.json")
+        if not payload:
+            summary["failed"] += 1
+            summary["failed_job_ids"].append(job_dir.name)
+            continue
+        payload.setdefault("job_id", job_dir.name)
+        include_results = isinstance(payload.get("result"), dict)
+        if await persist_analysis_job_snapshot(payload, include_results=include_results):
+            summary["synced"] += 1
+        else:
+            summary["failed"] += 1
+            summary["failed_job_ids"].append(str(payload.get("job_id") or job_dir.name))
+    return summary
 
 
 async def _upsert_analysis_job(conn, payload: Dict[str, Any]) -> int:
@@ -219,6 +268,91 @@ async def _upsert_analysis_result(conn, job_db_id: int, payload: Dict[str, Any])
     )
 
 
+async def _backfill_structured_document_version_metadata(conn, payload: Dict[str, Any]) -> None:
+    """Repair legacy version metadata when a job already knows its version id.
+
+    Older structured-ingest rows kept an absolute local path and often omitted
+    the original filename.  A historical job snapshot is the authoritative
+    source for those transport fields; this update deliberately does not touch
+    organization, year, document type, parsed facts, or review results.
+    """
+    structured = payload.get("structured_ingest")
+    if not isinstance(structured, dict):
+        return
+    try:
+        version_id = int(structured.get("document_version_id") or 0)
+    except (TypeError, ValueError):
+        return
+    if version_id <= 0:
+        return
+
+    filename = _resolve_filename(payload)
+    storage_key = _normalize_storage_key(payload, filename)
+    if not storage_key:
+        return
+    try:
+        file_size = max(0, int(payload.get("size") or 0))
+    except (TypeError, ValueError):
+        file_size = 0
+    storage_backend = str(payload.get("storage_backend") or "filesystem").strip() or "filesystem"
+    content_type = str(payload.get("content_type") or "application/pdf").strip() or "application/pdf"
+
+    await conn.execute(
+        """
+        UPDATE fiscal_document_versions
+        SET
+            storage_key = CASE
+                WHEN storage_key IS NULL OR storage_key = ''
+                    OR storage_key ~ '^(?:[A-Za-z]:)?[/\\\\]'
+                THEN $2 ELSE storage_key
+            END,
+            storage_backend = CASE
+                WHEN storage_backend IS NULL OR storage_backend = '' THEN $3
+                ELSE storage_backend
+            END,
+            original_filename = CASE
+                WHEN original_filename IS NULL OR original_filename = ''
+                    OR original_filename ~ '^[0-9a-f]{24,}\\.pdf$'
+                THEN $4 ELSE original_filename
+            END,
+            file_size_bytes = CASE
+                WHEN COALESCE(file_size_bytes, 0) <= 0 THEN $5
+                ELSE file_size_bytes
+            END,
+            content_type = CASE
+                WHEN content_type IS NULL OR content_type = '' THEN $6
+                ELSE content_type
+            END
+        WHERE id = $1
+        """,
+        version_id,
+        storage_key,
+        storage_backend,
+        filename,
+        file_size,
+        content_type,
+    )
+
+
+def _normalize_storage_key(payload: Dict[str, Any], filename: str) -> str:
+    configured = str(payload.get("storage_key") or payload.get("saved_path") or "").strip()
+    normalized = configured.replace("\\", "/")
+    job_uuid = str(payload.get("job_id") or "").strip()
+    if normalized and not re.match(r"^(?:[A-Za-z]:)?/", normalized):
+        return normalized.lstrip("/")
+    if job_uuid and filename:
+        return f"{job_uuid}/{filename}"
+    return ""
+
+
+def _read_json_file(path: Path) -> Dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def _build_job_metadata(payload: Dict[str, Any]) -> Dict[str, Any]:
     metadata: Dict[str, Any] = {}
     for key in (
@@ -226,6 +360,12 @@ def _build_job_metadata(payload: Dict[str, Any]) -> Dict[str, Any]:
         "organization_name",
         "organization_match_type",
         "organization_match_confidence",
+        "size",
+        "page_count",
+        "saved_path",
+        "storage_key",
+        "storage_backend",
+        "content_type",
         "fiscal_year",
         "doc_type",
         "report_year",
@@ -259,6 +399,12 @@ async def _resolve_organization_fk(conn, raw_value: Any) -> Optional[int]:
         return None
 
     if organization_id <= 0:
+        return None
+
+    # ``organizations.id`` is a PostgreSQL INTEGER. Historical imports may
+    # carry external organization identifiers that are larger; retain those
+    # values in job metadata but do not bind them as this table's foreign key.
+    if organization_id > _POSTGRES_INTEGER_MAX:
         return None
 
     exists = await conn.fetchval(

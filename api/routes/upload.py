@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from api import runtime
 from api.auth_utils import require_login, user_can_access_org
 from api.routes.organizations import clear_department_stats_cache
+from src.services.analysis_result_store import persist_analysis_job_snapshot
 from src.services.org_matcher import get_org_matcher
 
 router = APIRouter()
@@ -131,6 +132,7 @@ def _inspect_document_preflight(
     content: Optional[bytes] = None,
     pdf_path: Optional[Any] = None,
     top_n: int = 5,
+    include_matches: bool = True,
 ) -> Dict[str, Any]:
     page_texts: List[str] = []
     if content is not None:
@@ -155,16 +157,15 @@ def _inspect_document_preflight(
 
     current = None
     suggestions: List[Dict[str, Any]] = []
-    for index, (org, confidence, match_basis) in enumerate(
-        _collect_org_matches(
-            filename=filename,
-            first_page_text=first_page_text,
-            cover_org_name=str(cover.get("cover_org_name") or ""),
-            cover_org_label=str(cover.get("cover_org_label") or ""),
-            scope_hint=str(cover.get("scope_hint") or ""),
-            top_n=top_n,
-        )
-    ):
+    matches = _collect_org_matches(
+        filename=filename,
+        first_page_text=first_page_text,
+        cover_org_name=str(cover.get("cover_org_name") or ""),
+        cover_org_label=str(cover.get("cover_org_label") or ""),
+        scope_hint=str(cover.get("scope_hint") or ""),
+        top_n=top_n,
+    ) if include_matches else []
+    for index, (org, confidence, match_basis) in enumerate(matches):
         serialized = _serialize_match_candidate(org, confidence, match_basis)
         suggestions.append(serialized)
         if index == 0 and float(confidence or 0.0) >= 0.6:
@@ -189,13 +190,17 @@ def _auto_match_organization(
     job_id: str,
     filename: str,
     user: Optional[Dict[str, Any]] = None,
+    preflight: Optional[Dict[str, Any]] = None,
 ) -> Optional[dict]:
     if not runtime.ORG_AVAILABLE:
         return None
     try:
         pdf_path = runtime.find_first_pdf(runtime.UPLOAD_ROOT / job_id)
-        preflight = _inspect_document_preflight(filename=filename, pdf_path=pdf_path)
-        current = preflight.get("current") or {}
+        resolved_preflight = preflight or _inspect_document_preflight(
+            filename=filename,
+            pdf_path=pdf_path,
+        )
+        current = resolved_preflight.get("current") or {}
         organization_id = str(current.get("organization_id") or "").strip()
         confidence = float(current.get("confidence") or 0.0)
         if not organization_id:
@@ -217,6 +222,83 @@ def _auto_match_organization(
         return None
 
 
+async def _inspect_upload_preflight(
+    file: UploadFile,
+    *,
+    fiscal_year: Optional[str],
+    doc_type: Optional[str],
+    include_matches: bool = False,
+) -> Dict[str, Any]:
+    """Inspect the submitted bytes once and restore the stream for storage.
+
+    The size limit is enforced while reading so an oversized body is rejected
+    before it is fully buffered in memory; only files at or below the limit
+    are parsed for cover metadata.
+    """
+    max_upload_bytes = runtime.MAX_UPLOAD_MB * 1024 * 1024
+    chunk_size = 1024 * 1024
+    parts: List[bytes] = []
+    size = 0
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > max_upload_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds {runtime.MAX_UPLOAD_MB}MB limit",
+            )
+        parts.append(chunk)
+
+    content = b"".join(parts)
+    await file.seek(0)
+    return _inspect_document_preflight(
+        filename=file.filename or "",
+        preferred_year=fiscal_year,
+        doc_type=doc_type,
+        content=content,
+        include_matches=include_matches,
+    )
+
+
+def _resolve_upload_metadata(
+    *,
+    fiscal_year: Optional[str],
+    doc_type: Optional[str],
+    preflight: Dict[str, Any],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Use cover metadata by default and reject an accidental conflicting form value."""
+    detected_year = runtime.parse_report_year(preflight.get("report_year"))
+    submitted_year = runtime.parse_report_year(fiscal_year)
+    if submitted_year is not None and detected_year is not None and submitted_year != detected_year:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "report_year_conflict",
+                "submitted_year": submitted_year,
+                "detected_year": detected_year,
+                "message": "Submitted fiscal year conflicts with PDF cover metadata.",
+            },
+        )
+
+    detected_doc_type = _clean_optional_text(str(preflight.get("doc_type") or ""))
+    submitted_doc_type = runtime.normalize_doc_type(doc_type)
+    if submitted_doc_type and detected_doc_type and submitted_doc_type != detected_doc_type:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "report_type_conflict",
+                "submitted_doc_type": submitted_doc_type,
+                "detected_doc_type": detected_doc_type,
+                "message": "Submitted document type conflicts with PDF cover metadata.",
+            },
+        )
+
+    resolved_year = str(detected_year) if detected_year is not None else fiscal_year
+    return resolved_year, detected_doc_type or submitted_doc_type
+
+
 async def _handle_upload(
     file: UploadFile,
     *,
@@ -229,6 +311,17 @@ async def _handle_upload(
     selected_org = _clean_optional_text(selected_org)
     fiscal_year = _clean_optional_text(fiscal_year)
     doc_type = _clean_optional_text(doc_type)
+
+    preflight = await _inspect_upload_preflight(
+        file,
+        fiscal_year=fiscal_year,
+        doc_type=doc_type,
+    )
+    fiscal_year, doc_type = _resolve_upload_metadata(
+        fiscal_year=fiscal_year,
+        doc_type=doc_type,
+        preflight=preflight,
+    )
 
     org = _resolve_manual_org(selected_org)
     if selected_org and actor is not None and not user_can_access_org(actor, selected_org):
@@ -244,8 +337,12 @@ async def _handle_upload(
             "organization_match_confidence": 1.0 if selected_org else None,
             "fiscal_year": fiscal_year,
             "doc_type": doc_type,
+            "report_year": runtime.parse_report_year(fiscal_year),
+            "report_year_source": "preflight_cover" if preflight.get("report_year") else None,
+            "report_kind": str(preflight.get("report_kind") or "unknown"),
             "created_by": created_by,
         },
+        persist_snapshot=False,
     )
 
     duplicate = runtime.find_duplicate_upload(
@@ -274,6 +371,10 @@ async def _handle_upload(
         )
     else:
         org_binding = _auto_match_organization(
+            # Re-read the stored PDF for organization matching.  The upload
+            # preflight is byte-based, while the durable file path is the
+            # canonical extraction source used by the matcher and by later
+            # re-analysis.  This keeps both paths consistent.
             uploaded["job_id"], uploaded["filename"], actor
         )
 
@@ -291,6 +392,11 @@ async def _handle_upload(
     )
     uploaded["fiscal_year"] = fiscal_year
     uploaded["doc_type"] = doc_type
+    uploaded["report_year"] = runtime.parse_report_year(fiscal_year)
+    uploaded["report_kind"] = str(preflight.get("report_kind") or "unknown")
+    await persist_analysis_job_snapshot(
+        runtime.get_job_status_payload(str(uploaded["job_id"])),
+    )
     if uploaded.get("organization_id"):
         clear_department_stats_cache()
     return uploaded
@@ -306,13 +412,17 @@ async def preflight_document(
 ):
     _ = api_key
     require_login(request)
-    payload = _inspect_document_preflight(
-        filename=file.filename or "",
-        preferred_year=_clean_optional_text(fiscal_year),
+    # The size limit is enforced while reading (see _inspect_upload_preflight),
+    # so an oversized body is rejected before it is fully buffered in memory.
+    # The stream is rewound after inspection for symmetric behavior with the
+    # upload path, and organization suggestions are requested here because
+    # this endpoint's purpose is preflight matching.
+    return await _inspect_upload_preflight(
+        file,
+        fiscal_year=_clean_optional_text(fiscal_year),
         doc_type=_clean_optional_text(doc_type),
-        content=await file.read(),
+        include_matches=True,
     )
-    return payload
 
 
 @router.post("/upload")

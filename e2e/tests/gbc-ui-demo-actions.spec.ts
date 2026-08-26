@@ -356,6 +356,37 @@ async function installGbcMocks(page: Page, state: MockState) {
       return;
     }
 
+    if (path === "/api/documents/preflight" && method === "POST") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          report_year: 2025,
+          doc_type: "dept_final",
+          current: {
+            organization_id: "dept-001",
+            organization_name: "Finance Bureau",
+            level: "department",
+            department_id: "dept-001",
+            department_name: "Finance Bureau",
+            confidence: 0.99,
+          },
+        }),
+      });
+      return;
+    }
+
+    const runMatch = path.match(/^\/api\/documents\/([^/]+)\/run$/);
+    if (runMatch && method === "POST") {
+      state.analyzeRequests.push(req.postDataJSON() as { fiscal_year?: string; doc_type?: string });
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "started", job_id: decodeURIComponent(runMatch[1]) }),
+      });
+      return;
+    }
+
     const analyzeMatch = path.match(/^\/api\/analyze\/([^/]+)$/);
     if (analyzeMatch && method === "POST") {
       state.analyzeRequests.push(req.postDataJSON() as { fiscal_year?: string; doc_type?: string });
@@ -436,16 +467,17 @@ test.describe("GBC UI demo primary actions", () => {
     await page.getByTestId("gbc-issues-scope").selectOption("dept-001");
 
     await page.getByTestId("gbc-nav-upload").click();
-    await expect(page.getByTestId("gbc-upload-input-2026-budget")).toBeAttached();
-
-    const chooser = page.waitForEvent("filechooser");
-    await page.getByTestId("gbc-upload-label-2025-final").click();
-    await (await chooser).setFiles(pdfFile("final-2025.pdf"));
+    await expect(page.getByTestId("gbc-upload-start")).toBeVisible();
+    await page.getByTestId("gbc-upload-start").click();
+    await expect(page.getByTestId("batch-upload-modal")).toBeVisible();
+    await page.getByTestId("batch-upload-file-input").setInputFiles(pdfFile("final-2025.pdf"));
+    await expect(page.getByTestId("batch-start")).toBeEnabled();
+    await page.getByTestId("batch-start").click();
 
     await expect.poll(() => state.uploadRequests).toEqual([{ fiscalYear: "2025", docType: "dept_final" }]);
     await expect.poll(() => state.analyzeRequests.length).toBe(1);
     expect(state.analyzeRequests[0]).toMatchObject({ fiscal_year: "2025", doc_type: "dept_final" });
-    await expect(page.getByTestId("gbc-upload-next-tasks")).toBeVisible();
+    await expect(page.getByTestId("gbc-detail-reanalyze")).toBeVisible({ timeout: 20_000 });
     await page.getByTestId("gbc-nav-tasks").click();
     await expect(page.getByTestId("gbc-task-detail-job-upload-1")).toBeVisible({ timeout: 20_000 });
 
@@ -564,7 +596,7 @@ test.describe("GBC UI demo primary actions", () => {
     await expect(page.getByTestId("gbc-workbench-reset")).toBeVisible();
 
     await page.getByTestId("gbc-workbench-upload-job-2026").click();
-    await expect(page.getByTestId("gbc-upload-input-2026-budget")).toBeAttached();
+    await expect(page.getByTestId("gbc-upload-start")).toBeVisible();
     await page.getByTestId("gbc-logo-home").click();
     await expect(page.getByTestId("gbc-workbench-reset")).toBeVisible();
 

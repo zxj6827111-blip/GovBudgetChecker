@@ -31,7 +31,7 @@ async def mutate_workflow(request: Request):
     action = str(body.get("action") or "").strip()
     actor = str(user.get("username") or "")
     if action == "update_issue":
-        state = issue_workflow_store.update_issue(
+        state = await issue_workflow_store.update_issue(
             user,
             job_id=str(body.get("job_id") or ""),
             issue_id=str(body.get("issue_id") or ""),
@@ -49,7 +49,7 @@ async def mutate_workflow(request: Request):
         return state
 
     if action == "create_package":
-        result = issue_workflow_store.create_package(
+        result = await issue_workflow_store.create_package(
             user,
             name=body.get("name") if isinstance(body.get("name"), str) else None,
             job_ids=body.get("job_ids"),

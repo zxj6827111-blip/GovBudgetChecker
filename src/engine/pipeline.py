@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.utils.rule_text import default_rule_suggestion, infer_rule_title
@@ -27,11 +28,15 @@ def _resolve_report_kind(doc: Any, report_kind: Optional[str] = None) -> str:
     if kind in {"budget", "final"}:
         return kind
 
+    # The repository path itself contains "GovBudgetChecker".  Detect only
+    # from the uploaded filename, otherwise every document can be routed to
+    # the budget rule set before its content is considered.
     path = str(getattr(doc, "path", "") or "")
-    lowered = path.lower()
-    if "budget" in lowered or "预算" in path:
+    filename = Path(path).name
+    lowered = filename.lower()
+    if "budget" in lowered or "预算" in filename:
         return "budget"
-    if "final" in lowered or "决算" in path:
+    if "final" in lowered or "决算" in filename:
         return "final"
 
     page_texts = getattr(doc, "page_texts", []) or []

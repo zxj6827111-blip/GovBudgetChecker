@@ -5,6 +5,7 @@
 import logging
 import time
 import uuid
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
@@ -139,16 +140,21 @@ class EngineRuleRunner:
         1) job_context.meta.report_kind
         2) filename hint
         3) first page text hint
+
+        Never use the full filesystem path for inference.  The project and
+        upload directories may themselves contain words such as "budget",
+        which are unrelated to the uploaded material.
         """
         meta = job_context.meta or {}
         report_kind = str(meta.get("report_kind") or "").strip().lower()
         if report_kind in {"budget", "final"}:
             return report_kind
 
-        source_text = f"{job_context.pdf_path} {job_context.job_id}".lower()
-        if "budget" in source_text or "\u9884\u7b97" in source_text:
+        filename = Path(job_context.pdf_path).name.lower()
+        # 关键词优先级与 src/engine/pipeline.py 保持一致：budget 优先。
+        if "budget" in filename or "\u9884\u7b97" in filename:
             return "budget"
-        if "final" in source_text or "\u51b3\u7b97" in source_text:
+        if "final" in filename or "\u51b3\u7b97" in filename:
             return "final"
 
         if document and document.page_texts:
@@ -158,7 +164,7 @@ class EngineRuleRunner:
             if "\u51b3\u7b97" in first_text:
                 return "final"
 
-        return "final"
+        return "unknown"
 
     def _select_rule_set(
         self,
@@ -168,7 +174,12 @@ class EngineRuleRunner:
         report_kind = self._resolve_report_kind(job_context, document)
         if report_kind == "budget":
             return [*ALL_BUDGET_RULES, *ALL_COMMON_RULES]
-        return [*FINAL_ALL_RULES, *ALL_COMMON_RULES]
+        if report_kind == "final":
+            return [*FINAL_ALL_RULES, *ALL_COMMON_RULES]
+        # A material whose type cannot be established must not be checked
+        # against either type-specific rule set.  Common rules still provide
+        # low-risk feedback while the UI requests human confirmation.
+        return list(ALL_COMMON_RULES)
     
     async def run_rules(self, 
                        job_context: JobContext,

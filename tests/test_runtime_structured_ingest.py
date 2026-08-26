@@ -19,6 +19,13 @@ from api import runtime
 @pytest.mark.asyncio
 async def test_store_upload_file_persists_status_metadata(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    persisted_payloads = []
+
+    async def _capture_persist(payload):
+        persisted_payloads.append(dict(payload))
+        return True
+
+    monkeypatch.setattr(runtime, "persist_analysis_job_snapshot", _capture_persist)
 
     upload = UploadFile(
         filename="sample_final_2025.pdf",
@@ -48,8 +55,35 @@ async def test_store_upload_file_persists_status_metadata(tmp_path, monkeypatch)
     assert status["organization_name"] == "测试单位"
     assert status["fiscal_year"] == "2025"
     assert status["doc_type"] == "dept_final"
+    assert status["storage_key"] == f"{payload['job_id']}/sample_final_2025.pdf"
+    assert status["storage_backend"] == "filesystem"
+    assert status["content_type"] == "application/pdf"
     assert float(status["version_created_at"]) > 0
     assert float(status["job_created_at"]) > 0
+    assert len(persisted_payloads) == 1
+    assert persisted_payloads[0]["job_id"] == payload["job_id"]
+    assert persisted_payloads[0]["storage_key"] == status["storage_key"]
+
+
+@pytest.mark.asyncio
+async def test_store_upload_file_can_delay_database_snapshot_until_deduplication(tmp_path, monkeypatch):
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    persisted_payloads = []
+
+    async def _capture_persist(payload):
+        persisted_payloads.append(payload)
+        return True
+
+    monkeypatch.setattr(runtime, "persist_analysis_job_snapshot", _capture_persist)
+    upload = UploadFile(
+        filename="deferred.pdf",
+        file=io.BytesIO(b"%PDF-1.4\n1 0 obj << /Type /Catalog >>\n%%EOF"),
+    )
+
+    payload = await runtime.store_upload_file(upload, persist_snapshot=False)
+
+    assert persisted_payloads == []
+    assert (tmp_path / payload["job_id"] / "status.json").is_file()
 
 
 def test_get_job_review_payload_prefers_sidecar(tmp_path, monkeypatch):
@@ -1099,6 +1133,7 @@ def test_ignore_job_issue_filters_ai_findings_and_summary(tmp_path, monkeypatch)
         {
             "job_id": "job-ignore",
             "status": "done",
+            "quality_status": "degraded",
             "progress": 100,
             "filename": "job-ignore.pdf",
             "result": {
@@ -1139,6 +1174,7 @@ def test_ignore_job_issue_filters_ai_findings_and_summary(tmp_path, monkeypatch)
     assert summary["ai_issue_total"] == 1
     assert summary["ai_issue_warn"] == 1
     assert summary["issue_total"] == 1
+    assert summary["quality_status"] == "degraded"
 
 
 def test_get_job_status_payload_lifts_dual_mode_result_to_top_level(tmp_path, monkeypatch):

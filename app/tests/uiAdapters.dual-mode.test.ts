@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { toUiProblems } from "../lib/uiAdapters";
+import { getDisplayIssueTotal, toUiProblems } from "../lib/uiAdapters";
 
 const baseDetail = {
   job_id: "job-dual-mode-count-001",
@@ -159,5 +159,59 @@ assert.equal(nameAlignmentProblems[0].expectedName, "卫生健康支出");
 assert.equal(nameAlignmentProblems[0].actualName, "医疗卫生与计划生育支出");
 assert.equal(nameAlignmentProblems[0].codeLevel, "类");
 assert.equal(nameAlignmentProblems[0].sourceOfTruth, "BUD_T5");
+
+const structuredReviewProblems = toUiProblems({
+  job_id: "job-structured-review-001",
+  result: {
+    rule_findings: [
+      {
+        id: "rule-1",
+        source: "rule",
+        rule_id: "FIN-001",
+        severity: "medium",
+        title: "规则问题",
+        message: "规则问题详情",
+      },
+    ],
+  },
+  structured_ingest: {
+    review_item_count: 2,
+    review_items: [
+      {
+        id: "review-low-confidence",
+        type: "low_confidence_table",
+        severity: "manual_review",
+        table_code: "FIN_07_three_public",
+        page_number: 29,
+        message: "三公经费表识别置信度较低",
+        recommended_action: "核对第 29 页表格。",
+      },
+      {
+        id: "review-missing-table",
+        type: "missing_core_table",
+        severity: "medium",
+        table_code: "FIN_02_income",
+        message: "未识别到收入决算表",
+      },
+    ],
+  },
+} as any);
+assert.equal(structuredReviewProblems.length, 3, "structured review items must appear beside rule findings");
+assert.deepEqual(
+  structuredReviewProblems.slice(1).map((problem) => problem.id),
+  ["review-low-confidence", "review-missing-table"],
+  "structured review identifiers should remain stable for workflow actions",
+);
+assert.deepEqual(
+  structuredReviewProblems.slice(1).map((problem) => problem.category),
+  ["结构化识别复核", "结构化识别复核"],
+);
+assert.equal(structuredReviewProblems[1].page, 29);
+assert.equal(structuredReviewProblems[1].severity, "manual_review");
+assert.equal(
+  getDisplayIssueTotal({ merged_issue_total: 20, issue_total: 20, review_item_count: 4 }),
+  24,
+  "task totals must include structured review items instead of hiding them",
+);
 
 console.log("uiAdapters dual-mode tests passed");

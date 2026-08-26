@@ -149,20 +149,11 @@ function statusMeta(status?: string) {
 }
 
 function severityMeta(severity?: string) {
+  // Prefer the severity code: a display label (e.g. a Chinese label from the
+  // backend) is not a valid code and would be normalized to "提示" by
+  // getSeverityMeta, losing the real risk level.
   const meta = getSeverityMeta(severity);
   return { label: meta.label, className: meta.panelClass };
-  switch ((severity || "").toLowerCase()) {
-    case "critical":
-    case "high":
-      return { label: "高", className: "bg-red-100 text-red-700" };
-    case "medium":
-      return { label: "中", className: "bg-amber-100 text-amber-700" };
-    case "low":
-    case "info":
-      return { label: "低", className: "bg-blue-100 text-blue-700" };
-    default:
-      return { label: severity || "未知", className: "bg-slate-100 text-slate-700" };
-  }
 }
 
 function buildLocationText(item: FindingItem) {
@@ -220,7 +211,7 @@ function FindingColumn({
           </div>
         ) : (
           items.map((item, index) => {
-            const meta = severityMeta(item.severity_label || item.severity);
+            const meta = severityMeta(item.severity || item.severity_label);
             const snippet = extractSnippet(item);
             return (
               <article

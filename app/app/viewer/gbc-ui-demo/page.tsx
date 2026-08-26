@@ -385,15 +385,17 @@ function buildYearOptions(jobs: JobSummaryRecord[], includeAll = false): SelectO
   return includeAll ? [{ value: "all", label: "全部年度" }, ...options] : options;
 }
 
-function statusText(status: string | undefined): string {
-  const normalized = normalizeUiTaskStatus(status);
+function statusText(job: Pick<JobSummaryRecord, "status" | "quality_status">): string {
+  if (String(job.quality_status ?? "").toLowerCase() === "degraded") return "完成（需复核）";
+  const normalized = normalizeUiTaskStatus(job.status);
   if (normalized === "completed") return "已完成";
   if (normalized === "failed") return "失败";
   return "执行中";
 }
 
-function statusTone(status: string | undefined): Tone {
-  const normalized = normalizeUiTaskStatus(status);
+function statusTone(job: Pick<JobSummaryRecord, "status" | "quality_status">): Tone {
+  if (String(job.quality_status ?? "").toLowerCase() === "degraded") return "orange";
+  const normalized = normalizeUiTaskStatus(job.status);
   if (normalized === "completed") return "green";
   if (normalized === "failed") return "red";
   return "blue";
@@ -1038,7 +1040,7 @@ function Workbench({
                   <tr key={job.job_id}>
                     <Td><b title={job.organization_name ?? undefined}>{jobOrgName(job)}</b><div className="mt-1 line-clamp-1 text-xs text-slate-500">{toUiTask(job).filename}</div></Td>
                     <Td><Pill tone={materialSubjectLabel(job) === "部门" ? "purple" : "blue"}>{materialTypeLabel(job)}</Pill></Td>
-                    <Td><Pill tone={statusTone(job.status)}>{statusText(job.status)}</Pill></Td>
+                    <Td><Pill tone={statusTone(job)}>{statusText(job)}</Pill></Td>
                     <Td>{getDisplayIssueTotal(job)}</Td>
                     <Td className="text-red-600">{getHighRiskCount(job)}</Td>
                     <Td><Pill tone={firstIssue ? workflowTone(firstIssue.workflow?.status) : "green"}>{firstIssue ? workflowLabel(firstIssue.workflow?.status) : "无问题"}</Pill></Td>
@@ -1118,6 +1120,7 @@ function Issues({
   const [severityFilter, setSeverityFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [query, setQuery] = useState("");
+  const [issuePage, setIssuePage] = useState(1);
   const normalized = query.trim().toLowerCase();
   const yearOptions = useMemo(() => buildYearOptions(jobs, true), [jobs]);
   const typeOptions = useMemo<SelectOption[]>(() => {
@@ -1135,16 +1138,24 @@ function Issues({
     if (!normalized) return true;
     return [issue.title, issue.ruleId, issue.task.filename, issue.task.department, jobOrgName(issue.job), materialTypeLabel(issue.job)].join(" ").toLowerCase().includes(normalized);
   }), [issues, normalized, severityFilter, statusFilter, typeFilter, year]);
+  useEffect(() => {
+    setIssuePage(1);
+  }, [query, scopeValue, severityFilter, statusFilter, typeFilter, year]);
+  const pagedIssues = useMemo(() => {
+    const start = (issuePage - 1) * ISSUES_PAGE_SIZE;
+    return visibleIssues.slice(start, start + ISSUES_PAGE_SIZE);
+  }, [issuePage, visibleIssues]);
   const grouped = useMemo(() => {
     const map = new Map<string, LiveIssue[]>();
-    for (const issue of visibleIssues.slice(0, ISSUES_PAGE_SIZE)) {
+    for (const issue of pagedIssues) {
       const key = jobOrgName(issue.job);
       map.set(key, [...(map.get(key) ?? []), issue]);
     }
     return Array.from(map.entries());
-  }, [visibleIssues]);
+  }, [pagedIssues]);
   const scopeName = selectedOrgName(selectedOrg);
-  const renderedIssueCount = Math.min(visibleIssues.length, ISSUES_PAGE_SIZE);
+  const pageStart = visibleIssues.length === 0 ? 0 : (issuePage - 1) * ISSUES_PAGE_SIZE + 1;
+  const pageEnd = Math.min(issuePage * ISSUES_PAGE_SIZE, visibleIssues.length);
 
   return (
     <>
@@ -1190,13 +1201,13 @@ function Issues({
         <Metric icon={FileText} label="涉及单位" value={`${new Set(issues.map((i) => jobOrgName(i.job))).size}个`} desc="按真实关联统计" tone="blue" />
       </div>
       <div className="grid grid-cols-[1fr_300px] gap-5">
-        <Card title="问题列表" desc={`仅显示前 ${renderedIssueCount} 个问题，当前筛选共 ${visibleIssues.length} 个。`} action={<div className="flex h-10 items-center rounded-md border border-slate-200 px-3"><input value={query} onChange={(event) => setQuery(event.target.value)} data-testid="gbc-issues-search" className="w-52 text-sm outline-none" placeholder="搜索问题/材料" /><Search className="h-4 w-4 text-slate-400" /></div>}>
+        <Card title="问题列表" desc={`当前显示第 ${pageStart}-${pageEnd} 个问题，当前筛选共 ${visibleIssues.length} 个。`} action={<div className="flex h-10 items-center rounded-md border border-slate-200 px-3"><input value={query} onChange={(event) => setQuery(event.target.value)} data-testid="gbc-issues-search" className="w-52 text-sm outline-none" placeholder="搜索问题/材料" /><Search className="h-4 w-4 text-slate-400" /></div>}>
           <div className="space-y-3 p-4">
             {grouped.length === 0 ? <div className="rounded-md border border-dashed border-slate-200 p-8 text-center text-slate-500">当前范围没有可处理问题。</div> : grouped.map(([orgName, rows], index) => (
               <IssueGroupCard key={orgName} index={index + 1} orgName={orgName} rows={rows} selectedIssue={selectedIssue} selectedIssueKeys={selectedIssueKeys} setSelectedIssueKeys={setSelectedIssueKeys} onSelectProblem={onSelectProblem} setPage={setPage} onWorkflow={onWorkflow} operationBusy={operationBusy} />
             ))}
           </div>
-          <PaginationFooter total={visibleIssues.length} label="个问题" />
+          <PaginationFooter total={visibleIssues.length} label="个问题" page={issuePage} pageSize={ISSUES_PAGE_SIZE} onPageChange={setIssuePage} />
         </Card>
         <BatchPanel selectedCount={selectedIssueKeys.length} onBatchWorkflow={onBatchWorkflow} setPage={setPage} operationBusy={operationBusy} />
       </div>
@@ -1339,12 +1350,12 @@ function Detail({ selectedOrg, selectedDetail, selectedIssue, setPage, onWorkflo
   return (
     <>
       <PageTitle selectedOrg={selectedOrg} title={task.filename} subtitle="用于问题证据核对与整改确认，数据来自当前任务详情。" action={<div className="flex gap-2"><Button testId="gbc-detail-reanalyze" onClick={() => void onReanalyze(job)} disabled={operationBusy}><RefreshCw className="h-4 w-4" />重新分析</Button><Button testId="gbc-detail-export" variant="primary" onClick={() => void onDownloadReport(job)} disabled={operationBusy}><Download className="h-4 w-4" />导出报告</Button></div>} />
-      <div className="mb-5 grid grid-cols-3 gap-5">
+      <div className="mb-5 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
         <InfoCard icon={FileText} title="材料信息" rows={[["材料名称", task.filename], ["材料类型", materialTypeLabel(job)], ["所属主体", jobOrgName(job)], ["上传时间", formatDateTime(job.created_ts ?? job.ts)], ["版本状态", "当前真实版本"]]} />
-        <InfoCard icon={ShieldCheck} title="检查结果" rows={[["问题总数", `${task.problemCount}个`], ["高风险问题", `${task.highRiskCount}个`], ["待处理问题", `${getDisplayIssueTotal(job)}个`], ["整体状态", statusText(job.status)]]} />
+        <InfoCard icon={ShieldCheck} title="检查结果" rows={[["问题总数", `${task.problemCount}个`], ["高风险问题", `${task.highRiskCount}个`], ["待处理问题", `${getDisplayIssueTotal(job)}个`], ["整体状态", statusText(job)]]} />
         <InfoCard icon={MapPin} title="证据定位" rows={[["命中页数", issue ? `第 ${issue.page || 1} 页` : "未选择问题"], ["命中区域", issue?.bbox ? "已识别 bbox" : "整页预览"], ["最后定位", formatDateTime(job.updated_ts ?? job.ts)], ["原文", "可打开 PDF 证据页"]]} />
       </div>
-      <div className="grid grid-cols-[270px_1fr_390px] gap-5">
+      <div className="grid gap-5 xl:grid-cols-[270px_minmax(0,1fr)_390px]">
         <ProblemQueue issues={queueIssues} selectedIssue={issue} onSelect={(problem) => { onSelectProblem(problem); setPage("detail"); }} />
         <EvidenceWork issue={issue} onWorkflow={onWorkflow} setPage={setPage} operationBusy={operationBusy} />
         <PdfProof issue={issue} jobId={job.job_id} />
@@ -1425,49 +1436,8 @@ function Match({ label, value, pct, tone }: { label: string; value: string; pct:
   return <div className="flex items-center justify-between rounded-md border border-slate-200 p-4"><div className="flex items-center gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-50 text-blue-600"><Icon className="h-5 w-5" /></span><span><b>{label}</b><p className="text-xs text-slate-500">{pct}</p></span></div><b>{value}</b></div>;
 }
 
-function NextBox({ icon: Icon, title, desc, setPage, target, testId }: { icon: LucideIcon; title: string; desc: string; setPage: (page: PageId) => void; target: PageId; testId?: string }) {
-  return <button type="button" data-testid={testId} onClick={() => setPage(target)} className="flex items-center gap-3 rounded-md border border-slate-200 p-4 text-left hover:bg-slate-50"><Icon className="h-7 w-7 text-blue-600" /><span><b>{title}</b><p className="text-sm text-slate-500">{desc}</p></span><ChevronRight className="ml-auto h-5 w-5 text-slate-400" /></button>;
-}
-
-function UploadPage({ selectedOrg, onUploaded, setPage, isAdmin }: { selectedOrg: OrganizationRecord | null; onUploaded: (uploadedYear: string) => Promise<void>; setPage: (page: PageId) => void; isAdmin: boolean }) {
-  const [uploading, setUploading] = useState(false);
+function UploadPage({ selectedOrg, onUploaded }: { selectedOrg: OrganizationRecord | null; onUploaded: (jobIds: string[]) => Promise<void> }) {
   const [batchOpen, setBatchOpen] = useState(false);
-  const scopeName = selectedOrgName(selectedOrg);
-  const uploadSubject = selectedOrg?.level === "unit" ? "unit" : "dept";
-  const uploadSubjectName = selectedOrg?.level === "unit" ? "单位" : "部门";
-
-  const upload = useCallback(async (files: FileList | null, uploadYear: string, uploadDocType: string) => {
-    const file = files?.[0];
-    if (!file) return;
-    if (!isPdfUploadFile(file)) {
-      window.alert("请上传 PDF 文件。");
-      return;
-    }
-    setUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("fiscal_year", uploadYear);
-      formData.append("doc_type", uploadDocType);
-      if (selectedOrg?.id) formData.append("org_id", selectedOrg.id);
-      const uploadResponse = await fetch("/api/documents/upload", { method: "POST", body: formData });
-      if (!uploadResponse.ok) throw new Error(await readErrorMessage(uploadResponse));
-      const payload = (await uploadResponse.json()) as { job_id?: string };
-      if (payload.job_id) {
-        const analyzeResponse = await fetch(`/api/analyze/${encodeURIComponent(payload.job_id)}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode: "dual", use_local_rules: true, use_ai_assist: true, fiscal_year: uploadYear, doc_type: uploadDocType, org_id: selectedOrg?.id ?? null }),
-        });
-        if (!analyzeResponse.ok) throw new Error(await readErrorMessage(analyzeResponse));
-      }
-      await onUploaded(uploadYear);
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : "上传失败");
-    } finally {
-      setUploading(false);
-    }
-  }, [onUploaded, selectedOrg?.id]);
 
   return (
     <>
@@ -1476,26 +1446,28 @@ function UploadPage({ selectedOrg, onUploaded, setPage, isAdmin }: { selectedOrg
         title="材料上传与批次提交"
         subtitle="上传后会创建真实任务并启动分析，任务结果会回到问题处理台和任务中心。"
         action={
-          <Button testId="gbc-upload-open-batch" variant="primary" onClick={() => setBatchOpen(true)} disabled={uploading}>
+          <Button testId="gbc-upload-open-batch" variant="primary" onClick={() => setBatchOpen(true)}>
             <UploadCloud className="h-4 w-4" />
             批量上传
           </Button>
         }
       />
-      <Card className="mb-5"><div className="grid grid-cols-5 gap-6 p-6"><InfoMini icon={UsersRound} title="工作区" value={scopeName} /><InfoMini icon={CalendarDays} title="上传卡片" value={`${YEAR_OPTIONS.slice(0, 2).join(" / ")} 年度`} /><InfoMini icon={Building2} title="单位范围" value={selectedOrg?.level_name ?? selectedOrg?.level ?? "全部"} /><InfoMini icon={UploadCloud} title="上传方式" value="自动识别" /><InfoMini icon={ClipboardCheck} title="检查方式" value="规则 + AI" /></div></Card>
-      <div className="grid grid-cols-[1fr_360px] gap-5">
-        <div className="grid grid-cols-2 gap-5">{YEAR_OPTIONS.slice(0, 2).map((year, index) => <UploadBox key={year} year={year} active={index === 0} uploading={uploading} onFiles={(files) => void upload(files, year, `${uploadSubject}_${index === 0 ? "budget" : "final"}`)} />)}</div>
-        <Card title="自动识别结果"><div className="space-y-3 p-5"><Match label="单位识别匹配" value={scopeName} pct="来自组织库" tone="green" /><Match label="年度识别匹配" value={`${YEAR_OPTIONS[0]} 预算 / ${YEAR_OPTIONS[1]} 决算`} pct="由所选卡片传入" tone="blue" /><Match label="类型识别匹配" value={`${uploadSubjectName}预算 / ${uploadSubjectName}决算`} pct="按当前层级区分" tone="purple" /></div></Card>
-      </div>
-      <Card title="上传后去哪里看" className="mt-5"><div className={cn("grid gap-4 p-5", isAdmin ? "grid-cols-4" : "grid-cols-3")}><NextBox testId="gbc-upload-next-tasks" icon={FileText} title="任务中心" desc="查看当前任务处理进度" setPage={setPage} target="tasks" /><NextBox testId="gbc-upload-next-issues" icon={ClipboardCheck} title="问题处理" desc="查看已提交材料详情" setPage={setPage} target="issues" /><NextBox testId="gbc-upload-next-archive" icon={Archive} title="导出归档" desc="生成整改包或报告 ZIP" setPage={setPage} target="archive" />{isAdmin ? <NextBox testId="gbc-upload-next-settings" icon={Settings} title="系统管理" desc="查看组织与单位档案" setPage={setPage} target="settings" /> : null}</div></Card>
+      <Card className="mb-5">
+        <div className="flex items-center justify-between gap-6 p-6">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">上传报告</h2>
+            <p className="mt-1 text-sm text-slate-600">系统会先读取封面和文件名，识别年度、预算或决算类型及所属单位；识别不确定时必须确认后才能提交。</p>
+          </div>
+          <Button testId="gbc-upload-start" variant="primary" onClick={() => setBatchOpen(true)}>
+            <UploadCloud className="h-4 w-4" />选择 PDF
+          </Button>
+        </div>
+      </Card>
       {batchOpen ? (
         <BatchUploadModal
           defaultDocType="dept_budget"
           onClose={() => setBatchOpen(false)}
-          onComplete={() => {
-            void onUploaded(YEAR_OPTIONS[0]);
-            setBatchOpen(false);
-          }}
+          onComplete={onUploaded}
         />
       ) : null}
     </>
@@ -1510,7 +1482,7 @@ function Tasks({ selectedOrg, rows, total, page, allJobs, setPage, setTaskPage, 
     <>
       <PageTitle selectedOrg={selectedOrg} title="任务中心" subtitle="跟踪材料上传、解析、OCR识别、规则审核、AI辅助和导出等任务的执行进度与状态。" />
       <div className="mb-5 grid grid-cols-5 gap-4"><Metric icon={PlayCircle} label="执行中" value={`${running}个`} desc="正在处理" tone="blue" /><Metric icon={CheckCircle2} label="已完成" value={`${completed}个`} desc="完成分析" tone="green" /><Metric icon={AlertTriangle} label="失败" value={`${failed}个`} desc="需要处理" tone="red" /><Metric icon={UploadCloud} label="上传/解析" value={`${allJobs.length}个`} desc="已接入文件" tone="purple" /><Metric icon={Download} label="可导出" value={`${completed}个`} desc="报告可下载" tone="orange" /></div>
-      <Card title="任务列表" desc={`当前第 ${page} 页，每页 ${TASKS_PAGE_SIZE} 条，完整范围共 ${total} 条。`}><table className="w-full table-fixed text-left"><thead className="bg-slate-50"><tr><Th>任务名称</Th><Th>类型</Th><Th>范围</Th><Th>当前步骤</Th><Th>进度</Th><Th>状态</Th><Th>操作</Th></tr></thead><tbody className="divide-y divide-slate-100">{rows.length === 0 ? <tr><Td>暂无任务。</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td></tr> : rows.map((job) => <tr key={job.job_id}><Td><button type="button" data-testid={`gbc-task-name-${job.job_id}`} onClick={() => { onSelectJob(job); setPage("detail"); }} className="line-clamp-2 text-left font-bold text-blue-600">{toUiTask(job).filename}</button><div className="text-xs text-slate-500">创建时间：{formatDateTime(job.created_ts ?? job.ts)}</div></Td><Td><Pill tone={materialSubjectLabel(job) === "部门" ? "purple" : "blue"}>{materialTypeLabel(job)}</Pill></Td><Td><span title={job.organization_name ?? undefined}>{jobOrgName(job)}</span></Td><Td>{String(job.stage ?? "任务状态")}</Td><Td><div className="h-2 rounded-full bg-slate-100"><div className={cn("h-2 rounded-full", normalizeUiTaskStatus(job.status) === "failed" ? "bg-red-500" : "bg-blue-600")} style={{ width: `${getJobProgress(job)}%` }} /></div><div className="mt-1 text-xs">{getJobProgress(job)}%</div></Td><Td><Pill tone={statusTone(job.status)}>{statusText(job.status)}</Pill></Td><Td><div className="flex flex-wrap gap-2 font-bold text-blue-600"><button type="button" data-testid={`gbc-task-detail-${job.job_id}`} onClick={() => { onSelectJob(job); setPage("detail"); }}>详情</button><button type="button" data-testid={`gbc-task-rerun-${job.job_id}`} onClick={() => void onReanalyze(job)} disabled={operationBusy}>重跑</button><button type="button" data-testid={`gbc-task-export-${job.job_id}`} onClick={() => void onDownloadReport(job)} disabled={operationBusy}>导出</button>{isAdmin ? <button type="button" data-testid={`gbc-task-delete-${job.job_id}`} onClick={() => void onDeleteJob(job)} disabled={operationBusy} className="text-red-600">删除</button> : null}</div></Td></tr>)}</tbody></table><PaginationFooter total={total} page={page} pageSize={TASKS_PAGE_SIZE} onPageChange={setTaskPage} /></Card>
+      <Card title="任务列表" desc={`当前第 ${page} 页，每页 ${TASKS_PAGE_SIZE} 条，完整范围共 ${total} 条。`}><table className="w-full table-fixed text-left"><thead className="bg-slate-50"><tr><Th>任务名称</Th><Th>类型</Th><Th>范围</Th><Th>当前步骤</Th><Th>进度</Th><Th>状态</Th><Th>操作</Th></tr></thead><tbody className="divide-y divide-slate-100">{rows.length === 0 ? <tr><Td>暂无任务。</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td></tr> : rows.map((job) => <tr key={job.job_id}><Td><button type="button" data-testid={`gbc-task-name-${job.job_id}`} onClick={() => { onSelectJob(job); setPage("detail"); }} className="line-clamp-2 text-left font-bold text-blue-600">{toUiTask(job).filename}</button><div className="text-xs text-slate-500">创建时间：{formatDateTime(job.created_ts ?? job.ts)}</div></Td><Td><Pill tone={materialSubjectLabel(job) === "部门" ? "purple" : "blue"}>{materialTypeLabel(job)}</Pill></Td><Td><span title={job.organization_name ?? undefined}>{jobOrgName(job)}</span></Td><Td>{String(job.stage ?? "任务状态")}</Td><Td><div className="h-2 rounded-full bg-slate-100"><div className={cn("h-2 rounded-full", normalizeUiTaskStatus(job.status) === "failed" ? "bg-red-500" : "bg-blue-600")} style={{ width: `${getJobProgress(job)}%` }} /></div><div className="mt-1 text-xs">{getJobProgress(job)}%</div></Td><Td><Pill tone={statusTone(job)}>{statusText(job)}</Pill></Td><Td><div className="flex flex-wrap gap-2 font-bold text-blue-600"><button type="button" data-testid={`gbc-task-detail-${job.job_id}`} onClick={() => { onSelectJob(job); setPage("detail"); }}>详情</button><button type="button" data-testid={`gbc-task-rerun-${job.job_id}`} onClick={() => void onReanalyze(job)} disabled={operationBusy}>重跑</button><button type="button" data-testid={`gbc-task-export-${job.job_id}`} onClick={() => void onDownloadReport(job)} disabled={operationBusy}>导出</button>{isAdmin ? <button type="button" data-testid={`gbc-task-delete-${job.job_id}`} onClick={() => void onDeleteJob(job)} disabled={operationBusy} className="text-red-600">删除</button> : null}</div></Td></tr>)}</tbody></table><PaginationFooter total={total} page={page} pageSize={TASKS_PAGE_SIZE} onPageChange={setTaskPage} /></Card>
     </>
   );
 }
@@ -1568,6 +1540,10 @@ export default function GovBudgetCheckerLiveUiDemo() {
     if (isPageId(requestedPage)) {
       setPage(requestedPage);
     }
+    const requestedJobId = params.get("job");
+    if (requestedJobId) {
+      setSelectedJobId(requestedJobId);
+    }
   }, []);
 
   const pushToast = useCallback((text: string, tone: Tone = "green") => {
@@ -1606,8 +1582,27 @@ export default function GovBudgetCheckerLiveUiDemo() {
   }, []);
 
   const liveIssues = useMemo(() => buildIssuesFromDetails(details, scopedJobs, workflow), [details, scopedJobs, workflow]);
-  const selectedIssue = useMemo(() => liveIssues.find((issue) => issue.key === selectedIssueKey) ?? liveIssues[0] ?? null, [liveIssues, selectedIssueKey]);
-  const selectedJob = useMemo(() => selectedJobId ? taskRows.find((job) => job.job_id === selectedJobId) ?? scopedJobs.find((job) => job.job_id === selectedJobId) ?? allJobs.find((job) => job.job_id === selectedJobId) ?? null : selectedIssue?.job ?? taskRows[0] ?? scopedJobs[0] ?? allJobs[0] ?? null, [allJobs, scopedJobs, selectedIssue?.job, selectedJobId, taskRows]);
+  const explicitlySelectedJob = useMemo(
+    () => selectedJobId
+      ? taskRows.find((job) => job.job_id === selectedJobId)
+        ?? scopedJobs.find((job) => job.job_id === selectedJobId)
+        ?? allJobs.find((job) => job.job_id === selectedJobId)
+        ?? null
+      : null,
+    [allJobs, scopedJobs, selectedJobId, taskRows],
+  );
+  const selectedIssue = useMemo(() => {
+    const selected = liveIssues.find((issue) => issue.key === selectedIssueKey);
+    if (selectedJobId) {
+      if (selected?.jobId === selectedJobId) return selected;
+      return liveIssues.find((issue) => issue.jobId === selectedJobId) ?? null;
+    }
+    return selected ?? liveIssues[0] ?? null;
+  }, [liveIssues, selectedIssueKey, selectedJobId]);
+  const selectedJob = useMemo(
+    () => explicitlySelectedJob ?? selectedIssue?.job ?? taskRows[0] ?? scopedJobs[0] ?? allJobs[0] ?? null,
+    [allJobs, explicitlySelectedJob, scopedJobs, selectedIssue?.job, taskRows],
+  );
   const selectedDetail = useMemo<SelectedDetail | null>(() => {
     if (!selectedJob) return null;
     const detail = details.find((item) => item.job_id === selectedJob.job_id);
@@ -1703,7 +1698,21 @@ export default function GovBudgetCheckerLiveUiDemo() {
   useEffect(() => { void loadScopedJobs(); }, [loadScopedJobs]);
   useEffect(() => { void loadTaskPage(); }, [loadTaskPage, refreshSeed]);
   useEffect(() => { void loadDetails(); }, [loadDetails]);
-  useEffect(() => { if (!selectedIssueKey && liveIssues[0]) setSelectedIssueKey(liveIssues[0].key); }, [liveIssues, selectedIssueKey]);
+  useEffect(() => {
+    if (selectedJobId) {
+      const jobIssue = liveIssues.find((issue) => issue.jobId === selectedJobId);
+      const selectedMatchesJob = liveIssues.some(
+        (issue) => issue.key === selectedIssueKey && issue.jobId === selectedJobId,
+      );
+      if (jobIssue && !selectedMatchesJob) {
+        setSelectedIssueKey(jobIssue.key);
+      } else if (!jobIssue && selectedIssueKey) {
+        setSelectedIssueKey("");
+      }
+      return;
+    }
+    if (!selectedIssueKey && liveIssues[0]) setSelectedIssueKey(liveIssues[0].key);
+  }, [liveIssues, selectedIssueKey, selectedJobId]);
 
   const refreshAll = useCallback(async () => { setRefreshSeed((value) => value + 1); }, []);
   const hasActiveJobs = useMemo(() => allJobs.some((job) => ["queued", "processing", "running", "analyzing"].includes(String(job.status ?? "").toLowerCase())), [allJobs]);
@@ -1719,10 +1728,18 @@ export default function GovBudgetCheckerLiveUiDemo() {
       setPage("workbench");
     }
   }, [page, user]);
-  const handleUploadCompleted = useCallback(async (uploadedYear: string) => {
-    handleYearChange(uploadedYear);
+  const handleUploadCompleted = useCallback(async (jobIds: string[]) => {
+    if (jobIds.length === 0) {
+      pushToast("没有材料成功启动检查，请修正失败项后重试", "orange");
+      return;
+    }
+    setSelectedOrgId("");
+    handleYearChange("all");
+    setSelectedIssueKey("");
+    setSelectedJobId(jobIds[0]);
     await refreshAll();
-  }, [handleYearChange, refreshAll]);
+    setPage(jobIds.length === 1 ? "detail" : "tasks");
+  }, [handleYearChange, pushToast, refreshAll]);
   const logout = useCallback(async () => { try { await fetch("/api/auth/logout", { method: "POST" }); } finally { window.location.href = "/login"; } }, []);
 
   const updateWorkflowState = useCallback(async (problem: LiveIssue, status: IssueWorkflowStatus) => {
@@ -1904,7 +1921,7 @@ export default function GovBudgetCheckerLiveUiDemo() {
       operationBusy={operationBusy}
     />
   ) : page === "upload" ? (
-    <UploadPage selectedOrg={selectedOrg} onUploaded={handleUploadCompleted} setPage={setPage} isAdmin={Boolean(user?.is_admin)} />
+    <UploadPage selectedOrg={selectedOrg} onUploaded={handleUploadCompleted} />
   ) : page === "tasks" ? (
     <Tasks selectedOrg={selectedOrg} rows={taskRows} total={taskTotal} page={taskPage} allJobs={allJobs} setPage={setPage} setTaskPage={setTaskPage} onSelectJob={selectJob} onReanalyze={reanalyzeJob} onDownloadReport={downloadReport} onDeleteJob={deleteJob} operationBusy={operationBusy} isAdmin={Boolean(user?.is_admin)} />
   ) : page === "settings" && Boolean(user?.is_admin) ? (
