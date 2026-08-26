@@ -223,6 +223,20 @@ class IssueItem(BaseModel):
         default=None, description="产出该 finding 的引擎版本"
     )
 
+    # ---- 证据链完整性（P0-07）----
+    # 由 src/services/evidence_guard 在结果落库前写入。历史快照没有这些字段时，
+    # `evidence_status` 为 None，按"正式问题"处理，旧任务的计数与展示不受影响。
+    evidence_status: Optional[str] = Field(
+        default=None,
+        description="证据状态：complete / degraded_missing_evidence / incomplete_rule_warning",
+    )
+    evidence_missing: List[str] = Field(
+        default_factory=list, description="缺失的证据要素原因码"
+    )
+    original_severity: Optional[str] = Field(
+        default=None, description="因缺证据降级前的原始严重程度"
+    )
+
     display: Optional[IssueDisplay] = Field(default=None, description="可直接展示的问题信息")
 
     @model_validator(mode="after")

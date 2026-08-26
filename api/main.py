@@ -23,6 +23,10 @@ if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 
 from src.engine.pipeline import build_document, build_issues_payload
+from src.services.evidence_guard import (
+    apply_evidence_completeness,
+    is_formal_finding,
+)
 from src.utils.provenance import summarize_finding_versions
 from src.schemas.issues import (
     AnalysisConclusion,
@@ -382,26 +386,31 @@ def _ai_assist_required() -> bool:
 
 
 def _count_result_findings(result: Dict[str, Any]) -> int:
-    """统计结果里的问题条数，兼容传统分桶结构与双模式结构。"""
+    """统计结果里的"正式问题"条数，兼容传统分桶结构与双模式结构。
+
+    缺证据被降级为待复核的条目不计入（P0-07）：它们不是可交付的正式结论，
+    而质量门禁正是用这个计数区分 findings_detected 与 no_findings，
+    口径必须与"正式问题"一致，否则会出现"问题全被降级却仍报发现问题"。
+    """
     if not isinstance(result, dict):
         return 0
     issues = result.get("issues")
     if isinstance(issues, dict):
         all_items = issues.get("all")
         if isinstance(all_items, list):
-            return len(all_items)
+            return sum(1 for item in all_items if is_formal_finding(item))
         return sum(
-            len(issues[key])
+            sum(1 for item in issues[key] if is_formal_finding(item))
             for key in ("error", "warn", "info")
             if isinstance(issues.get(key), list)
         )
     if isinstance(issues, list):
-        return len(issues)
+        return sum(1 for item in issues if is_formal_finding(item))
     total = 0
     for key in ("rule_findings", "ai_findings"):
         items = result.get(key)
         if isinstance(items, list):
-            total += len(items)
+            total += sum(1 for item in items if is_formal_finding(item))
     return total
 
 
@@ -412,6 +421,7 @@ def _evaluate_quality_gate(
     ai_requested: bool,
     ai_degraded: bool,
     issue_total: int,
+    evidence_degraded_count: int = 0,
 ) -> Dict[str, Any]:
     """任务级质量门禁：决定终态是 done / degraded / review_required。
 
@@ -423,9 +433,13 @@ def _evaluate_quality_gate(
       2. 存在疑似扫描页（本轮不做 OCR，必然漏检）；
       3. 报告类型无法识别（unknown 只跑了通用规则，专项规则未覆盖）；
       4. 年度无法识别（同比/口径类判断失去基准）；
-      5. AI 被配置为必需能力却失败。
+      5. AI 被配置为必需能力却失败；
+      6. 存在因缺证据被降级的问题项（P0-07）。
 
     `degraded` 保留原语义："部分能力降级但结论仍然有效"。
+
+    注意 `issue_total` 必须传入"正式问题数"（不含降级项），否则会出现
+    "问题全被降级却仍报 findings_detected"的口径矛盾。
     """
     coverage_threshold = _page_coverage_min_ratio()
     page_coverage = float(page_assessment.get("page_coverage") or 0.0)
@@ -478,6 +492,17 @@ def _evaluate_quality_gate(
                 "message": "AI 辅助被配置为必需能力但本次执行失败，结论覆盖面不完整",
             }
         )
+    degraded_findings = max(0, int(evidence_degraded_count or 0))
+    if degraded_findings > 0:
+        review_reasons.append(
+            {
+                "code": "evidence_incomplete_findings",
+                "message": (
+                    f"有 {degraded_findings} 条 AI 问题缺少可复核证据，已降级为待复核，"
+                    "不计入正式问题；需人工核对原文后再定性"
+                ),
+            }
+        )
 
     if review_reasons:
         status = JobStatus.REVIEW_REQUIRED.value
@@ -505,6 +530,7 @@ def _evaluate_quality_gate(
         "scanned_page_count": scanned_page_count,
         "coverage_threshold": coverage_threshold,
         "issue_total": issue_total,
+        "evidence_degraded_count": degraded_findings,
         "ai_degraded": bool(ai_degraded),
         "ai_required": _ai_assist_required(),
     }
@@ -1025,6 +1051,19 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
         runtime.write_structured_ingest_payload(job_dir, structured_ingest_summary)
         result["meta"]["structured_ingest"] = structured_ingest_summary
 
+        # 证据链完整性校验（P0-07）：落库前逐条校验证据，
+        # 缺证据的 AI 问题就地降级为待复核，规则问题只记录告警。
+        evidence_completeness = apply_evidence_completeness(result)
+        result["meta"]["evidence_completeness"] = evidence_completeness
+        if evidence_completeness["degraded_count"] or evidence_completeness["rule_warning_count"]:
+            logger.warning(
+                "job %s evidence check: rate=%.4f degraded=%d rule_warnings=%d",
+                job_dir.name,
+                evidence_completeness["completeness_rate"],
+                evidence_completeness["degraded_count"],
+                evidence_completeness["rule_warning_count"],
+            )
+
         # 任务级质量门禁：done 只在门禁全过时出现，否则转 review_required
         quality_gate = _evaluate_quality_gate(
             page_assessment=page_assessment,
@@ -1032,7 +1071,9 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
             report_year=report_year,
             ai_requested=bool(use_ai_assist),
             ai_degraded=analysis_quality_status == "degraded",
+            # 计数口径与证据校验保持一致：降级项不算正式问题
             issue_total=_count_result_findings(result),
+            evidence_degraded_count=evidence_completeness["degraded_count"],
         )
         result["meta"]["quality_gate"] = quality_gate
         final_status = quality_gate["status"]
