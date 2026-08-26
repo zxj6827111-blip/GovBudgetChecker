@@ -205,6 +205,24 @@ class IssueItem(BaseModel):
     text_snippet: Optional[str] = Field(default=None, description="文本摘录")
     why_not: Optional[str] = Field(default=None, description="未命中原因")
 
+    # ---- 版本留痕（P2-02）----
+    # 目的是让历史结果可复现：任一条 finding 都能回答"哪个规则版本 / 哪个模型 /
+    # 哪版提示词 / 哪版引擎产出的"。全部为可选字段并默认 None，
+    # 一是保证历史快照（没有这些键）仍能正常反序列化与展示，
+    # 二是坚持"来源不明就留空"，不写占位值冒充留痕。
+    rule_version: Optional[str] = Field(
+        default=None, description="规则集版本（规则来源的 finding 才有，如 v3_3）"
+    )
+    model_version: Optional[str] = Field(
+        default=None, description="AI 模型标识 provider/model（AI 来源的 finding 才有）"
+    )
+    prompt_version: Optional[str] = Field(
+        default=None, description="提示词版本（AI 来源的 finding 才有）"
+    )
+    engine_version: Optional[str] = Field(
+        default=None, description="产出该 finding 的引擎版本"
+    )
+
     display: Optional[IssueDisplay] = Field(default=None, description="可直接展示的问题信息")
 
     @model_validator(mode="after")

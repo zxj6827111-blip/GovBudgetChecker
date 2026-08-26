@@ -23,6 +23,7 @@ if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 
 from src.engine.pipeline import build_document, build_issues_payload
+from src.utils.provenance import summarize_finding_versions
 from src.schemas.issues import (
     AnalysisConclusion,
     AnalysisQualityStatus,
@@ -741,10 +742,12 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                 analysis_quality_status = "degraded"
 
             # 组装最终返回体（双模式结构）
+            dual_ai_findings = [item.dict() for item in dual_result.ai_findings]
+            dual_rule_findings = [item.dict() for item in dual_result.rule_findings]
             result = {
                 "summary": "",
-                "ai_findings": [item.dict() for item in dual_result.ai_findings],
-                "rule_findings": [item.dict() for item in dual_result.rule_findings],
+                "ai_findings": dual_ai_findings,
+                "rule_findings": dual_rule_findings,
                 "merged": dual_result.merged.dict(),
                 "meta": {
                     "pages": len(page_texts),
@@ -763,6 +766,11 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                     "elapsed_ms": dual_result.meta.get("elapsed_ms", {}),
                     "tokens": dual_result.meta.get("tokens", {}),
                     "page_extraction": page_assessment,
+                    # 版本留痕汇总（P2-02）：从各条 finding 实际写入的版本反向汇总，
+                    # 不额外拍一份"声明值"，避免汇总与逐条留痕不一致。
+                    "versions": summarize_finding_versions(
+                        [*dual_ai_findings, *dual_rule_findings]
+                    ),
                 },
             }
         else:
@@ -935,6 +943,9 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                     "report_kind": report_kind,
                     "provider_stats": provider_stats,
                     "page_extraction": page_assessment,
+                    "versions": summarize_finding_versions(
+                        payload_issues["issues"].get("all") or []
+                    ),
                 },
             }
 

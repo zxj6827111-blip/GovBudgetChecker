@@ -15,6 +15,11 @@ import httpx
 from dataclasses import dataclass, field
 
 from src.services.ai_client import AIClient
+from src.utils.provenance import (
+    build_finding_provenance,
+    build_model_version,
+    prompt_version_from_template,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +51,92 @@ def _read_str_env(name: str, default: str = "") -> str:
 
 
 MIN_ISSUE_CONFIDENCE = _read_float_env("AI_MIN_ISSUE_CONFIDENCE", 0.75)
+
+# ==================== 提示词模板（版本留痕用，P2-02） ====================
+# 直连大模型做全量审查时使用的指令部分。之所以把它提到模块级常量、并与"待审文本"分离：
+#   1) 只有指令部分才代表"提示词版本"，把文档正文一起哈希会导致每份文档版本都不同；
+#   2) 版本号由内容哈希派生，改了这段文字版本号会自动变化，不依赖手工升版。
+FULL_REPORT_AUDIT_PROMPT_ID = "full_report_audit_direct"
+
+FULL_REPORT_AUDIT_PROMPT_INSTRUCTIONS = """
+你是一名“中国政府预决算公开材料审校助手”。
+输入是全文中的局部窗口文本，只能基于窗口内可直接定位的证据输出问题。
+
+必须遵守：
+1) 只输出 JSON 数组，不要输出任何其他文字；无问题返回 []。
+2) 证据优先：每个问题都必须能在当前窗口内找到原文证据，不臆测、不补数、不编造页码。
+3) 局部窗口限制：不要判断全书缺表、缺章、目录页码整体错误等必须看全书才能确认的问题。
+4) 优先检查以下问题：
+   - 同比、占比、完成率、增长率、下降率复算错误
+   - 合计与明细勾稽不一致、同条说明前后金额矛盾
+   - 增加/减少/增长/下降等方向描述与数字变化方向相反
+   - 部门/单位预算（决算）文种误写
+   - 模板残留、占位符、重复表述、残句、异常标点
+   - 三公经费、政府性基金、国有资本经营无此项说明缺失
+   - 年份冲突、金额单位错误、统计口径冲突、编码与名称用途错配
+5) 容差：万元差值<=0.01、元差值<=100、百分点差值<=0.1 视为一致，不得报错。
+6) 口径保护：政府采购预算、绩效项目资金、一般公共预算、财政拨款等不同口径，除非文本明确要求一致，否则不得直接判错。
+7) OCR 噪声保护：疑似抽取残影、隐藏层重复、跨页断裂不稳定时，优先输出 manual_review 或不输出。
+8) 输出必须使用中文，不得使用其他语言。
+
+输出字段要求（每个元素必须具备）：
+- problem_type: 字符串，尽量使用 ratio_recalc/sum_mismatch/document_kind_mismatch/placeholder_residue/unit_scope_conflict/duplicate_text/missing_explanation/direction_conflict/code_subject_mismatch/generic
+- original: 字符串，原始问题文本或核心错误表述
+- suggestion: 字符串，简短修正建议
+- span: [start, end] 两个整数，无法定位填 [0,0]
+- context: 字符串，包含关键证据的上下文
+- severity: 仅允许 critical/high/medium/low/info/manual_review
+- confidence: 0-1 数值
+
+建议尽量补充以下字段：
+- quote: 直接命中的原文片段
+- page: 当前窗口内能确定页码时填写
+- table_or_section: 对应表名或说明章节
+- expected: 复核后的正确值
+- actual: 当前文本中的值
+- difference: 差额或百分点差
+- check: 检查项名称，如“同比复算”“三公经费合计”
+- rule_id, title, message
+
+输出示例：
+[{{
+  "problem_type": "ratio_recalc",
+  "original": "同比增长12.5%",
+  "suggestion": "请按表内金额重新复算同比并修正文中表述",
+  "span": [120, 128],
+  "context": "一般公共预算支出情况说明：同比增长12.5%。",
+  "severity": "high",
+  "confidence": 0.86,
+  "quote": "同比增长12.5%",
+  "table_or_section": "一般公共预算支出情况说明",
+  "expected": "8.3%",
+  "actual": "12.5%",
+  "difference": "4.2个百分点",
+  "check": "同比复算"
+}}]
+
+低于 {min_confidence:.2f} 置信度的问题不要输出。
+""".strip()
+
+#: 抽取服务侧语义审计的任务契约标识。提示词实际由远端服务持有，
+#: 本地只能如实记录调用的任务契约版本，不假装知道远端提示词内容。
+SEMANTIC_AUDIT_SERVICE_TASK = "semantic_audit_v1"
+
+
+def render_full_report_audit_instructions() -> str:
+    """渲染直连全量审查提示词的指令部分（不含待审文档正文）。"""
+    return FULL_REPORT_AUDIT_PROMPT_INSTRUCTIONS.format(
+        min_confidence=MIN_ISSUE_CONFIDENCE
+    )
+
+
+def full_report_audit_prompt_version() -> str:
+    """当前直连全量审查提示词的版本号（内容哈希派生）。"""
+    return prompt_version_from_template(
+        FULL_REPORT_AUDIT_PROMPT_ID,
+        render_full_report_audit_instructions(),
+    )
+
 
 @dataclass
 class ExtractorConfig:
@@ -341,68 +432,11 @@ class ExtractorClient:
     async def _direct_semantic_audit(self, section_text: str) -> List[Dict[str, Any]]:
         """Use configured LLM provider directly when extractor service is unavailable."""
         ai_client = self._get_direct_ai_client()
-        prompt = f"""
-你是一名“中国政府预决算公开材料审校助手”。
-输入是全文中的局部窗口文本，只能基于窗口内可直接定位的证据输出问题。
-
-必须遵守：
-1) 只输出 JSON 数组，不要输出任何其他文字；无问题返回 []。
-2) 证据优先：每个问题都必须能在当前窗口内找到原文证据，不臆测、不补数、不编造页码。
-3) 局部窗口限制：不要判断全书缺表、缺章、目录页码整体错误等必须看全书才能确认的问题。
-4) 优先检查以下问题：
-   - 同比、占比、完成率、增长率、下降率复算错误
-   - 合计与明细勾稽不一致、同条说明前后金额矛盾
-   - 增加/减少/增长/下降等方向描述与数字变化方向相反
-   - 部门/单位预算（决算）文种误写
-   - 模板残留、占位符、重复表述、残句、异常标点
-   - 三公经费、政府性基金、国有资本经营无此项说明缺失
-   - 年份冲突、金额单位错误、统计口径冲突、编码与名称用途错配
-5) 容差：万元差值<=0.01、元差值<=100、百分点差值<=0.1 视为一致，不得报错。
-6) 口径保护：政府采购预算、绩效项目资金、一般公共预算、财政拨款等不同口径，除非文本明确要求一致，否则不得直接判错。
-7) OCR 噪声保护：疑似抽取残影、隐藏层重复、跨页断裂不稳定时，优先输出 manual_review 或不输出。
-8) 输出必须使用中文，不得使用其他语言。
-
-输出字段要求（每个元素必须具备）：
-- problem_type: 字符串，尽量使用 ratio_recalc/sum_mismatch/document_kind_mismatch/placeholder_residue/unit_scope_conflict/duplicate_text/missing_explanation/direction_conflict/code_subject_mismatch/generic
-- original: 字符串，原始问题文本或核心错误表述
-- suggestion: 字符串，简短修正建议
-- span: [start, end] 两个整数，无法定位填 [0,0]
-- context: 字符串，包含关键证据的上下文
-- severity: 仅允许 critical/high/medium/low/info/manual_review
-- confidence: 0-1 数值
-
-建议尽量补充以下字段：
-- quote: 直接命中的原文片段
-- page: 当前窗口内能确定页码时填写
-- table_or_section: 对应表名或说明章节
-- expected: 复核后的正确值
-- actual: 当前文本中的值
-- difference: 差额或百分点差
-- check: 检查项名称，如“同比复算”“三公经费合计”
-- rule_id, title, message
-
-输出示例：
-[{{
-  "problem_type": "ratio_recalc",
-  "original": "同比增长12.5%",
-  "suggestion": "请按表内金额重新复算同比并修正文中表述",
-  "span": [120, 128],
-  "context": "一般公共预算支出情况说明：同比增长12.5%。",
-  "severity": "high",
-  "confidence": 0.86,
-  "quote": "同比增长12.5%",
-  "table_or_section": "一般公共预算支出情况说明",
-  "expected": "8.3%",
-  "actual": "12.5%",
-  "difference": "4.2个百分点",
-  "check": "同比复算"
-}}]
-
-低于 {MIN_ISSUE_CONFIDENCE:.2f} 置信度的问题不要输出。
-
-待审文本：
-{section_text or ""}
-""".strip()
+        instructions = render_full_report_audit_instructions()
+        prompt = f"{instructions}\n\n待审文本：\n{section_text or ''}"
+        prompt_version = prompt_version_from_template(
+            FULL_REPORT_AUDIT_PROMPT_ID, instructions
+        )
         response = await ai_client.chat(
             messages=[
                 {"role": "system", "content": "你是严格的 JSON 输出助手。"},
@@ -413,6 +447,16 @@ class ExtractorClient:
             temperature=0,
             max_tokens=3200,
             timeout=int(self.config.timeout),
+        )
+        # 记录"这次实际用的是哪个提供商/模型"，而不是配置里"打算用"的那个：
+        # 客户端存在熔断回退，实际生效的模型可能与配置不同。
+        provenance = build_finding_provenance(
+            model_version=build_model_version(
+                response.get("provider_used") if isinstance(response, dict) else None,
+                response.get("model") if isinstance(response, dict) else None,
+            ),
+            prompt_version=prompt_version,
+            source_channel="direct_llm",
         )
         parsed = self._extract_json_array(self._response_content_text(response)) or []
         normalized: List[Dict[str, Any]] = []
@@ -500,6 +544,7 @@ class ExtractorClient:
                     "confidence": confidence_value,
                     "page": page,
                     "manual_confirm": bool(item.get("manual_confirm", False)),
+                    "provenance": dict(provenance),
                 }
             )
         return normalized
@@ -718,7 +763,7 @@ class ExtractorClient:
     async def _call_semantic_audit(self, section_text: str, doc_hash: str) -> List[Dict[str, Any]]:
         """语义审计的单次调用"""
         request_data = {
-            "task": "semantic_audit_v1",
+            "task": SEMANTIC_AUDIT_SERVICE_TASK,
             "section_text": section_text,
             "language": "zh", 
             "doc_hash": doc_hash,
@@ -744,12 +789,28 @@ class ExtractorClient:
                 
             hits = result["hits"]
             logger.info(f"AI语义审计成功，获得{len(hits)}个结果")
-            
+
+            # 走抽取服务时提示词在远端，本地只能记录任务契约标识；
+            # 模型优先采用服务回传的实际值，缺失时退回本次请求指定的模型。
+            service_model = ""
+            if isinstance(result, dict):
+                service_model = str(result.get("model") or "").strip()
+            provenance = build_finding_provenance(
+                model_version=build_model_version(
+                    None, service_model or self.config.main_model
+                ),
+                prompt_version=SEMANTIC_AUDIT_SERVICE_TASK,
+                source_channel="extractor_service",
+            )
+
             # 提取语义问题
             semantic_issues = []
             for hit in hits:
                 if "semantic_issues" in hit and hit["semantic_issues"]:
-                    semantic_issues.extend(hit["semantic_issues"])
+                    for issue in hit["semantic_issues"]:
+                        if isinstance(issue, dict):
+                            issue.setdefault("provenance", dict(provenance))
+                        semantic_issues.append(issue)
             
             return semantic_issues
     

@@ -5,6 +5,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from src.utils.rule_text import default_rule_suggestion, infer_rule_title
+from src.utils.provenance import DEFAULT_RULE_SET_VERSION, ENGINE_VERSION
 
 from .budget_rules import ALL_BUDGET_RULES
 from .common_rules import ALL_COMMON_RULES
@@ -208,6 +209,13 @@ def _issue_to_dict(issue: Any, idx: int) -> Dict[str, Any]:
         "tags": [rule_code],
         "metrics": {},
         "created_at": created_at,
+        # 版本留痕（P2-02）：legacy 流水线没有可配置的规则版本入口，
+        # 固定使用 rules_v33/budget_rules/common_rules 这套规则模块，
+        # 因此如实记录为对应的规则集版本；不涉及 AI，模型与提示词版本留空。
+        "rule_version": DEFAULT_RULE_SET_VERSION,
+        "model_version": None,
+        "prompt_version": None,
+        "engine_version": ENGINE_VERSION,
     }
     return data
 

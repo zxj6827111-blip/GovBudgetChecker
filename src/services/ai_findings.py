@@ -14,6 +14,7 @@ import re
 from src.schemas.issues import IssueItem, JobContext, AnalysisConfig
 from src.engine.ai.extractor_client import ExtractorClient  # 复用现有AI客户端
 from src.services.ai_issue_interpreter import interpret_ai_issue, normalize_ai_severity
+from src.utils.provenance import ENGINE_VERSION, read_finding_provenance
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +197,11 @@ class AIFindingsService:
         if isinstance(raw_bbox, list) and len(raw_bbox) == 4:
             evidence[0]["bbox"] = raw_bbox
 
+        # 版本留痕（P2-02）：AI finding 记录实际使用的模型与提示词版本。
+        # 这里不填 rule_version——本条问题是语义审计提示词产出的，
+        # 并非本地规则集里某条规则命中的结果，硬填规则版本会造成误导性归因。
+        provenance = read_finding_provenance(raw_issue)
+
         return IssueItem(
             id=f"ai_semantic_{context.job_id}_{idx}_{int(time.time())}",
             source="ai",
@@ -221,6 +227,9 @@ class AIFindingsService:
                 )
             ),
             created_at=time.time(),
+            model_version=provenance["model_version"],
+            prompt_version=provenance["prompt_version"],
+            engine_version=ENGINE_VERSION,
         )
 
     def _populate_bbox_hints(self, issues: List[IssueItem], context: JobContext) -> List[IssueItem]:

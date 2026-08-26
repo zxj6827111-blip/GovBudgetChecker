@@ -15,6 +15,7 @@ from src.engine.budget_rules import ALL_BUDGET_RULES
 from src.engine.common_rules import ALL_COMMON_RULES
 from src.utils.issue_bbox import PDFBBoxLocator
 from src.utils.issue_location import normalize_issue_location
+from src.utils.provenance import ENGINE_VERSION
 from src.utils.rule_text import default_rule_suggestion, infer_rule_title
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,7 @@ class EngineRuleRunner:
         issue: Issue,
         rule_id: Optional[str] = None,
         document: Optional[Document] = None,
+        rule_version: Optional[str] = None,
     ) -> IssueItem:
         raw_location = getattr(issue, "location", {}) or {}
         location = normalize_issue_location(
@@ -128,6 +130,10 @@ class EngineRuleRunner:
             page_number=page_number,
             suggestion=suggestion,
             tags=[resolved_rule_id] if resolved_rule_id else [],
+            # 版本留痕（P2-02）：规则来源的 finding 记录本次实际使用的规则集版本
+            # 与引擎版本；模型/提示词版本留空，因为这条问题不经过任何 AI 调用。
+            rule_version=rule_version,
+            engine_version=ENGINE_VERSION,
         )
 
     def _resolve_report_kind(
@@ -200,6 +206,8 @@ class EngineRuleRunner:
         document = await self._prepare_document(job_context)
         selected_rules = self._select_rule_set(job_context, document)
         report_kind = self._resolve_report_kind(job_context, document)
+        # 版本留痕（P2-02）：本次实际生效的规则集版本，逐条写进 finding。
+        rule_version = str(getattr(config, "rules_version", "") or "").strip() or None
 
         logger.info(
             f"Using {len(selected_rules)} rules for job {job_context.job_id}, "
@@ -232,7 +240,12 @@ class EngineRuleRunner:
                     findings = []
                     for issue in issues:
                         try:
-                            finding = self._issue_to_finding(issue, rule_id=rule_id, document=document)
+                            finding = self._issue_to_finding(
+                                issue,
+                                rule_id=rule_id,
+                                document=document,
+                                rule_version=rule_version,
+                            )
                             finding = bbox_locator.locate(finding)
                             findings.append(finding)
                         except Exception as e:
@@ -265,7 +278,9 @@ class EngineRuleRunner:
                             location={"page": 1},
                             page_number=1,
                             evidence=[{"page": 1, "text": f"Execution error: {str(e)}", "text_snippet": f"Execution error: {str(e)}"}],
-                            why_not=f"EXECUTION_ERROR: {str(e)}"
+                            why_not=f"EXECUTION_ERROR: {str(e)}",
+                            rule_version=rule_version,
+                            engine_version=ENGINE_VERSION,
                         )
                         all_findings.append(failure_item)
         finally:
@@ -419,7 +434,9 @@ class EngineRuleRunner:
                         finding = self._convert_issue_to_item(
                             issue=issue,
                             rule=rule,
-                            job_context=job_context
+                            job_context=job_context,
+                            rule_version=str(getattr(config, "rules_version", "") or "").strip()
+                            or None,
                         )
                         findings.append(finding)
                     else:
@@ -459,10 +476,13 @@ class EngineRuleRunner:
     def _convert_issue_to_item(self, 
                               issue: Issue,
                               rule: Dict[str, Any],
-                              job_context: JobContext) -> IssueItem:
+                              job_context: JobContext,
+                              rule_version: Optional[str] = None) -> IssueItem:
         """灏?Issue 瀵硅薄杞崲涓?IssueItem"""
         _ = job_context
-        return self._issue_to_finding(issue, rule_id=rule.get("id"))
+        return self._issue_to_finding(
+            issue, rule_id=rule.get("id"), rule_version=rule_version
+        )
     
     def _apply_tolerance(self, 
                         findings: List[IssueItem], 
