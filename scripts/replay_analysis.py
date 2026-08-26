@@ -47,6 +47,7 @@ from src.services.evidence_guard import (  # noqa: E402
     apply_evidence_completeness,
     count_formal_findings,
 )
+from src.services.metrics import report_id_uniqueness  # noqa: E402
 from src.utils.provenance import ENGINE_VERSION  # noqa: E402
 from src.utils.report_year import parse_report_year  # noqa: E402
 
@@ -297,44 +298,10 @@ def _coverage_buckets(coverages: List[float]) -> Dict[str, Dict[str, Any]]:
 def _report_id_uniqueness(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     """report_id 唯一性检查（P0-09 的回归观测口）。
 
-    判定标准：同一个 report_id 下出现了多个不同 checksum，说明不同原件被并到了
-    同一份报告身份上。checksum 缺失的任务无法参与判定，单独计数如实说明。
+    实现下沉到 `src/services/metrics.report_id_uniqueness`，与运行时指标端点
+    （Task 11 / B-06）共用同一口径，避免"离线回放说 0 冲突、线上指标说 2 冲突"。
     """
-    grouped: Dict[str, Dict[str, Any]] = {}
-    missing_checksum = 0
-    for record in records:
-        report_id = record.get("report_id")
-        if not report_id:
-            continue
-        entry = grouped.setdefault(
-            str(report_id), {"job_ids": [], "checksums": set(), "jobs_without_checksum": 0}
-        )
-        entry["job_ids"].append(record["job_id"])
-        checksum = record.get("checksum")
-        if checksum:
-            entry["checksums"].add(str(checksum))
-        else:
-            entry["jobs_without_checksum"] += 1
-            missing_checksum += 1
-
-    collisions = [
-        {
-            "report_id": report_id,
-            "job_ids": sorted(entry["job_ids"]),
-            "distinct_checksums": sorted(entry["checksums"]),
-        }
-        for report_id, entry in sorted(grouped.items())
-        if len(entry["checksums"]) > 1
-    ]
-
-    return {
-        "jobs_with_report_id": sum(len(entry["job_ids"]) for entry in grouped.values()),
-        "distinct_report_ids": len(grouped),
-        "collision_count": len(collisions),
-        "collisions": collisions,
-        "jobs_without_checksum": missing_checksum,
-        "unique": not collisions,
-    }
+    return report_id_uniqueness(records)
 
 
 def summarize(records: List[Dict[str, Any]]) -> Dict[str, Any]:

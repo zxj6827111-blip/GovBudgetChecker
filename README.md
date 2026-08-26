@@ -145,6 +145,9 @@ make test
 - `LOG_LEVEL`：日志级别（默认 `INFO`）
 - `LOG_JSON`：是否输出 JSON 结构化日志。不配置时按 stdout 是否为 TTY 自动判断——容器/日志采集管道下默认 JSON，本地终端默认人类可读格式
 - `LOG_FILE`：可选，额外写入的日志文件路径（父目录会自动创建）
+- `METRICS_ENABLED`：关键指标端点开关（默认 `true`，设为 `false` 时 `/metrics` 返回 404）
+- `METRICS_API_TOKEN`：指标抓取专用令牌（配置后采集器可用 `X-Metrics-Token` 抓取；不配置则只能用管理员会话）
+- `METRICS_CACHE_TTL_SECONDS`：指标采集缓存秒数（默认 15）
 - `AI_ASSIST_ENABLED`：是否启用 AI 辅助（默认 `true`）
 - `AI_EXTRACTOR_URL`：AI 抽取服务地址
 - `DATABASE_URL`：可选，配置后 `ready` 会检查可达性
@@ -175,6 +178,7 @@ GovBudgetChecker/
 ## 发布相关文档
 - `docs/PROD_READINESS_PLAN.md`
 - `docs/RELEASE_RUNBOOK.md`
+- `docs/OBSERVABILITY_AND_ALERTS.md`
 - `CLOUD_DEPLOY_EXECUTION_SHEET.md`
 
 ## 备注
