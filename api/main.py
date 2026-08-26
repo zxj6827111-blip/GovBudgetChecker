@@ -66,6 +66,20 @@ from src.services.rule_process import (
     RuleExecutionTimeout,
     run_rules_in_process,
 )
+from src.services.pdf_page_extract import (
+    extract_tables_from_page,
+    extract_visible_text_from_page,
+    is_visible_char,
+)
+from src.services.pdf_parse_process import (
+    PdfParseError,
+    PdfParseLimitExceeded,
+    PdfParseTimeout,
+    isolation_enabled as pdf_parse_isolation_enabled,
+    parse_error_code,
+    parse_pdf_in_process,
+    resolve_limits as resolve_pdf_parse_limits,
+)
 
 try:
     from src.security import SecurityHeadersMiddleware, SecurityMiddleware
@@ -243,70 +257,17 @@ def _find_first_pdf(job_dir: Path) -> Path:
 
 
 def _extract_tables_from_page(page) -> List[List[List[str]]]:
-    """
-    读取单页表格，返回：该页的多张表；每张表是 2D 数组（行→列）
-    （和引擎里的逻辑一致，先用线策略，再退回默认）
-    """
-    tables: List[List[List[str]]] = []
-    try:
-        t1 = (
-            page.extract_tables(
-                table_settings={
-                    "vertical_strategy": "lines",
-                    "horizontal_strategy": "lines",
-                    "intersection_tolerance": 3,
-                    "min_words_vertical": 1,
-                    "min_words_horizontal": 1,
-                }
-            )
-            or []
-        )
-        tables += t1
-    except Exception:
-        pass
-    try:
-        if not tables:
-            t2 = page.extract_tables() or []
-            tables += t2
-    except Exception:
-        pass
-
-    norm_tables: List[List[List[str]]] = []
-    for tb in tables:
-        norm_tables.append(
-            [[("" if c is None else str(c)).strip() for c in row] for row in (tb or [])]
-        )
-    return norm_tables
+    """读取单页表格。实现下沉到 `src/services/pdf_page_extract`，
+    这样解析隔离子进程可以直接导入它，而不必导入整个 FastAPI 应用。"""
+    return extract_tables_from_page(page)
 
 
 def _is_visible_char(obj: Dict[str, Any], page_height: float) -> bool:
-    if obj.get("object_type") != "char":
-        return True
-    top = obj.get("top")
-    bottom = obj.get("bottom")
-    if top is None or bottom is None:
-        return True
-    try:
-        top_v = float(top)
-        bottom_v = float(bottom)
-    except Exception:
-        return True
-    return top_v >= 0 and bottom_v <= page_height
+    return is_visible_char(obj, page_height)
 
 
 def _extract_visible_text_from_page(page) -> str:
-    raw_text = page.extract_text() or ""
-    try:
-        page_height = float(page.height)
-        filtered_page = page.filter(
-            lambda obj, h=page_height: _is_visible_char(obj, h)
-        )
-        filtered_text = filtered_page.extract_text() or ""
-        if filtered_text.strip():
-            return filtered_text
-    except Exception:
-        pass
-    return raw_text
+    return extract_visible_text_from_page(page)
 
 
 def _scanned_page_min_chars() -> int:
@@ -710,9 +671,49 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             return p_texts, p_tables, f_size
 
         loop = asyncio.get_running_loop()
-        page_texts, page_tables, filesize = await loop.run_in_executor(
-            None, _sync_parse_pdf
-        )
+        loop = asyncio.get_running_loop()
+        # 解析资源隔离（缺口 P2-05 / B-09）：默认走可终止的独立进程 + 资源上限，
+        # 恶意或超大 PDF 打爆的是子进程，不会连带拖死 worker。
+        # 线程池路径保留给显式关闭隔离的场景（`PDF_PARSE_ISOLATION_ENABLED=false`，
+        # 测试环境默认走这条，因为子进程里 monkeypatch 不生效）。
+        if pdf_parse_isolation_enabled():
+            parse_limits = resolve_pdf_parse_limits()
+            logger.info(
+                "parsing pdf in isolated process",
+                extra=safe_log_extra(
+                    {
+                        "stage": "解析PDF内容",
+                        "parse_timeout_seconds": parse_limits["timeout_seconds"],
+                        "parse_max_pages": parse_limits["max_pages"],
+                        "parse_memory_mb": parse_limits["memory_mb"],
+                        "parse_memory_limit_supported": parse_limits[
+                            "memory_limit_supported"
+                        ],
+                        "parse_start_method": parse_limits["start_method"],
+                    }
+                ),
+            )
+            try:
+                parsed = await parse_pdf_in_process(pdf_path, parse_limits)
+            except (PdfParseTimeout, PdfParseLimitExceeded, PdfParseError) as exc:
+                code, detail = parse_error_code(exc)
+                logger.error(
+                    "pdf parsing rejected: %s",
+                    code,
+                    extra=safe_log_extra(
+                        {"stage": "解析PDF内容", "parse_error_code": code}
+                    ),
+                )
+                # 终态是 error 而不是 review_required：一页都没解析出来，
+                # 没有任何可供人工复核的结论，标成待复核就是新的虚假成功。
+                raise RuntimeError(f"{code}:{detail}") from exc
+            page_texts = parsed["page_texts"]
+            page_tables = parsed["page_tables"]
+            filesize = parsed["filesize"]
+        else:
+            page_texts, page_tables, filesize = await loop.run_in_executor(
+                None, _sync_parse_pdf
+            )
 
         # 扫描页/低文本页检测：本轮只检测不 OCR，结果先落状态供前端与后续门禁使用
         page_assessment = _assess_page_extraction(page_texts, page_tables)

@@ -33,6 +33,18 @@
   - 管理员操作会写入 `AUDIT_LOG_PATH`
 - 健康检查增强
   - `ready` 会返回上传限制、队列状态、数据库可达性、AI 服务可达性、审计日志目录可写性
+- PDF 解析资源隔离（缺口 P2-05 / B-09）
+  - 解析在独立、可终止的子进程中执行，超时后 `terminate` → `kill`，不再让杀不掉的线程继续烧 CPU
+  - 上限：`PDF_PARSE_TIMEOUT_SEC`（跨平台）、`PDF_PARSE_MAX_PAGES`（默认跟随 `MAX_UPLOAD_PAGES`）、
+    `PDF_PARSE_MAX_TEXT_CHARS` / `PDF_PARSE_MAX_TABLE_CELLS`（跨平台）、
+    `PDF_PARSE_MEMORY_MB`（`RLIMIT_AS`，**仅 POSIX 生效**；Windows 无等价能力）
+  - 超时/超限/解析失败一律落 `status=error` + `analysis_conclusion=analysis_error`，
+    错误码为 `pdf_parse_timeout` / `pdf_parse_limit_exceeded` / `pdf_parse_failed`
+  - 开关 `PDF_PARSE_ISOLATION_ENABLED`，生产默认开启
+- 备份与恢复（缺口 B-12）
+  - `scripts/backup_all.py` 覆盖 `UPLOAD_DIR` + PostgreSQL + 审计日志三件套，产出带 sha256 的 `manifest.json`
+  - `restore` 默认拒绝写入当前 `UPLOAD_DIR` / `DATABASE_URL` / `AUDIT_LOG_PATH`，需显式 `--force`
+  - 一次真实恢复演练记录见 `docs/BACKUP_RESTORE_DRILL_2026-08-27.md`
 
 ## 建议在云环境继续完成
 

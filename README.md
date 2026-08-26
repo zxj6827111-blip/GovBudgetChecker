@@ -152,6 +152,12 @@ make test
 - `SECURITY_HEADERS_ENABLED`：后端安全响应头开关（默认 `true`）
 - `SECURITY_HSTS_ALWAYS`：无条件下发 HSTS（默认只在 HTTPS 或 `X-Forwarded-Proto: https` 时下发）
 - `SECURITY_CSP` / `SECURITY_CSP_DOCS` / `SECURITY_FRAME_OPTIONS` / `SECURITY_REFERRER_POLICY`：安全响应头取值覆盖
+- `PDF_PARSE_ISOLATION_ENABLED`：PDF 解析是否在独立可终止子进程中执行（生产默认开启，测试环境默认关闭）
+- `PDF_PARSE_TIMEOUT_SEC`：单份 PDF 解析超时（默认 120 秒），超时子进程被强制终止，任务落 `error`
+- `PDF_PARSE_MAX_PAGES`：解析页数上限（默认跟随 `MAX_UPLOAD_PAGES`）
+- `PDF_PARSE_MEMORY_MB`：解析子进程地址空间上限（默认 1024，**仅 POSIX 生效**，Windows 无 `RLIMIT_AS`）
+- `PDF_PARSE_MAX_TEXT_CHARS` / `PDF_PARSE_MAX_TABLE_CELLS`：抽取结果体积上限（跨平台）
+- `PG_BIN_DIR`：`scripts/backup_all.py` 查找 `pg_dump`/`psql` 的目录（PATH 里没有时使用）
 - `AI_ASSIST_ENABLED`：是否启用 AI 辅助（默认 `true`）
 - `AI_EXTRACTOR_URL`：AI 抽取服务地址
 - `DATABASE_URL`：可选，配置后 `ready` 会检查可达性
@@ -164,7 +170,7 @@ make test
 - 登录会话已改为签名令牌；生产环境建议固定配置 `USER_SESSION_SECRET`（或至少保持 `GOVBUDGET_API_KEY` 稳定），避免多 worker / 重启后会话失效。
 - 管理员操作（组织创建/修改/删除、导入、批量重分析、结构化清理）会写入 `AUDIT_LOG_PATH`。
 - 建议把反向代理上传大小限制与 `MAX_UPLOAD_MB`、`MAX_UPLOAD_PAGES` 保持一致。
-- 建议定期备份 `UPLOAD_DIR`、数据库和 `AUDIT_LOG_PATH`，并至少做一次恢复演练。
+- 建议定期备份 `UPLOAD_DIR`、数据库和 `AUDIT_LOG_PATH`，并至少做一次恢复演练。三件套备份/校验/恢复用 `python scripts/backup_all.py`，演练记录见 `docs/BACKUP_RESTORE_DRILL_2026-08-27.md`。
 
 ## 目录结构（简化）
 ```text

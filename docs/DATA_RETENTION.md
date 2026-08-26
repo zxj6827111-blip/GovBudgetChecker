@@ -14,7 +14,7 @@
 
 ## 边界与恢复
 
-- PDF 二进制不写入 PostgreSQL，避免数据库膨胀；备份必须同时覆盖 `UPLOAD_DIR`、PostgreSQL 和审计日志。
+- PDF 二进制不写入 PostgreSQL，避免数据库膨胀；备份必须同时覆盖 `UPLOAD_DIR`、PostgreSQL 和审计日志。三件套的备份/校验/恢复统一用 `scripts/backup_all.py`（`scripts/db_backup.py` 只覆盖数据库，已不足以满足本契约）；一次真实恢复演练的记录见 `docs/BACKUP_RESTORE_DRILL_2026-08-27.md`。
 - 数据库暂不可用时，任务目录中的 `persistence.json` 会标记同步状态，便于后续排查或重试；生产环境应启用 `READY_REQUIRE_DATABASE=true` 阻止未接通数据库的实例接流量。
 - 问题处置状态的同步结果单独写入 `UPLOAD_DIR/.issue_workflow_persistence.json`；失败时保留 `pending_retry`，应用启动会重放最新恢复快照，历史导入工具也可手动重放。
 - 迁移 `2026-07-13_0015_document_storage_metadata` 为已有材料版本补充原件存储元数据列，并由启动时迁移流程自动执行。
