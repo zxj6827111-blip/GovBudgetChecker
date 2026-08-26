@@ -78,6 +78,7 @@ except ImportError:
     get_user_store = None
 
 from src.services.analysis_result_store import persist_analysis_job_snapshot
+from src.schemas.issues import infer_analysis_conclusion
 
 _pipeline_runner: Optional[Callable[[Path], Awaitable[None]]] = None
 _job_queue: Optional["DurableJobQueue"] = None
@@ -1767,6 +1768,15 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "dual_mode_enabled": dual_mode_enabled,
         "stage": stage,
         "quality_status": status_data.get("quality_status") or "complete",
+        # 旧任务没有 analysis_conclusion 字段时按 status + 问题数反推，保证列表可读
+        "analysis_conclusion": infer_analysis_conclusion(
+            status,
+            issue_total=merged_issue_total,
+            explicit_conclusion=status_data.get("analysis_conclusion"),
+        ),
+        "review_reasons": status_data.get("review_reasons") or [],
+        "page_coverage": status_data.get("page_coverage"),
+        "scanned_page_count": status_data.get("scanned_page_count"),
         "report_year": report_year,
         "report_year_source": status_data.get("report_year_source"),
         "year_conflict": status_data.get("year_conflict"),

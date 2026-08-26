@@ -23,6 +23,11 @@ if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 
 from src.engine.pipeline import build_document, build_issues_payload
+from src.schemas.issues import (
+    AnalysisConclusion,
+    AnalysisQualityStatus,
+    JobStatus,
+)
 from api import runtime
 from api.job_queue import DurableJobQueue
 from api.queue_runtime import (
@@ -353,6 +358,157 @@ def _assess_page_extraction(
     }
 
 
+def _page_coverage_min_ratio() -> float:
+    """质量门禁要求的最低页面文本覆盖率，低于该比例判定分析不完整。"""
+    raw = os.getenv("PAGE_COVERAGE_MIN_RATIO", "0.8")
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return 0.8
+    if not 0.0 < value <= 1.0:
+        return 0.8
+    return value
+
+
+def _ai_assist_required() -> bool:
+    """AI 辅助是否为"必需能力"。必需时 AI 失败不能算降级完成，必须转人工复核。"""
+    return str(os.getenv("AI_ASSIST_REQUIRED", "false")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _count_result_findings(result: Dict[str, Any]) -> int:
+    """统计结果里的问题条数，兼容传统分桶结构与双模式结构。"""
+    if not isinstance(result, dict):
+        return 0
+    issues = result.get("issues")
+    if isinstance(issues, dict):
+        all_items = issues.get("all")
+        if isinstance(all_items, list):
+            return len(all_items)
+        return sum(
+            len(issues[key])
+            for key in ("error", "warn", "info")
+            if isinstance(issues.get(key), list)
+        )
+    if isinstance(issues, list):
+        return len(issues)
+    total = 0
+    for key in ("rule_findings", "ai_findings"):
+        items = result.get(key)
+        if isinstance(items, list):
+            total += len(items)
+    return total
+
+
+def _evaluate_quality_gate(
+    page_assessment: Dict[str, Any],
+    report_kind: Any,
+    report_year: Any,
+    ai_requested: bool,
+    ai_degraded: bool,
+    issue_total: int,
+) -> Dict[str, Any]:
+    """任务级质量门禁：决定终态是 done / degraded / review_required。
+
+    设计意图是把"分析跑完了"和"结论可信"分开：只有门禁全过才允许出 done，
+    否则一律转 review_required + incomplete，避免"扫描件静默漏检却显示审核通过"。
+
+    触发人工复核的条件（任一命中即转）：
+      1. 页面文本覆盖率低于阈值；
+      2. 存在疑似扫描页（本轮不做 OCR，必然漏检）；
+      3. 报告类型无法识别（unknown 只跑了通用规则，专项规则未覆盖）；
+      4. 年度无法识别（同比/口径类判断失去基准）；
+      5. AI 被配置为必需能力却失败。
+
+    `degraded` 保留原语义："部分能力降级但结论仍然有效"。
+    """
+    coverage_threshold = _page_coverage_min_ratio()
+    page_coverage = float(page_assessment.get("page_coverage") or 0.0)
+    scanned_page_count = int(page_assessment.get("scanned_page_count") or 0)
+    low_text_pages = page_assessment.get("low_text_pages")
+    low_text_pages = low_text_pages if isinstance(low_text_pages, list) else []
+
+    review_reasons: List[Dict[str, Any]] = []
+
+    if page_coverage < coverage_threshold:
+        review_reasons.append(
+            {
+                "code": "low_page_coverage",
+                "message": (
+                    f"页面文本覆盖率 {page_coverage:.2%} 低于门禁阈值 "
+                    f"{coverage_threshold:.2%}，可能存在未被审核的页面"
+                ),
+                "pages": low_text_pages[:50],
+            }
+        )
+    if scanned_page_count > 0:
+        review_reasons.append(
+            {
+                "code": "scanned_pages_detected",
+                "message": (
+                    f"检测到 {scanned_page_count} 页疑似扫描页/无文本层，"
+                    "当前未启用 OCR，这些页面内容未参与审核"
+                ),
+                "pages": (page_assessment.get("scanned_pages") or [])[:50],
+            }
+        )
+    if str(report_kind or "").strip().lower() in {"", "unknown"}:
+        review_reasons.append(
+            {
+                "code": "unknown_report_kind",
+                "message": "未能识别材料是预算公开还是决算公开，仅执行了通用规则，专项规则未覆盖",
+            }
+        )
+    if report_year is None:
+        review_reasons.append(
+            {
+                "code": "unknown_report_year",
+                "message": "未能识别报告年度，同比与口径类判断缺少基准",
+            }
+        )
+    if ai_requested and ai_degraded and _ai_assist_required():
+        review_reasons.append(
+            {
+                "code": "ai_assist_required_but_failed",
+                "message": "AI 辅助被配置为必需能力但本次执行失败，结论覆盖面不完整",
+            }
+        )
+
+    if review_reasons:
+        status = JobStatus.REVIEW_REQUIRED.value
+        quality_status = AnalysisQualityStatus.REVIEW_REQUIRED.value
+        analysis_conclusion = AnalysisConclusion.INCOMPLETE.value
+    else:
+        status = JobStatus.DEGRADED.value if ai_degraded else JobStatus.DONE.value
+        quality_status = (
+            AnalysisQualityStatus.DEGRADED.value
+            if ai_degraded
+            else AnalysisQualityStatus.COMPLETE.value
+        )
+        analysis_conclusion = (
+            AnalysisConclusion.FINDINGS_DETECTED.value
+            if issue_total > 0
+            else AnalysisConclusion.NO_FINDINGS.value
+        )
+
+    return {
+        "status": status,
+        "quality_status": quality_status,
+        "analysis_conclusion": analysis_conclusion,
+        "review_reasons": review_reasons,
+        "page_coverage": page_coverage,
+        "scanned_page_count": scanned_page_count,
+        "coverage_threshold": coverage_threshold,
+        "issue_total": issue_total,
+        "ai_degraded": bool(ai_degraded),
+        "ai_required": _ai_assist_required(),
+    }
+
+
 async def _run_pipeline(job_dir: Path) -> None:
     """
     真正的解析管线：
@@ -393,6 +549,8 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
     provider_stats: List[Dict[str, Any]] = []
     structured_ingest_summary: Dict[str, Any] = {}
     analysis_quality_status = "complete"
+    # 解析前先给出"零覆盖"默认值：若在解析阶段就失败，错误态也能诚实报出覆盖率 0
+    page_assessment: Dict[str, Any] = _assess_page_extraction([], [])
     try:
         # 读取检测模式配置
         status_file = job_dir / "status.json"
@@ -856,7 +1014,29 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
         runtime.write_structured_ingest_payload(job_dir, structured_ingest_summary)
         result["meta"]["structured_ingest"] = structured_ingest_summary
 
-        final_status = "degraded" if analysis_quality_status == "degraded" else "done"
+        # 任务级质量门禁：done 只在门禁全过时出现，否则转 review_required
+        quality_gate = _evaluate_quality_gate(
+            page_assessment=page_assessment,
+            report_kind=report_kind,
+            report_year=report_year,
+            ai_requested=bool(use_ai_assist),
+            ai_degraded=analysis_quality_status == "degraded",
+            issue_total=_count_result_findings(result),
+        )
+        result["meta"]["quality_gate"] = quality_gate
+        final_status = quality_gate["status"]
+        if final_status == JobStatus.REVIEW_REQUIRED.value:
+            stage_text = "完成（需人工复核）"
+            logger.warning(
+                "job %s gated to review_required: %s",
+                job_dir.name,
+                [reason["code"] for reason in quality_gate["review_reasons"]],
+            )
+        elif final_status == JobStatus.DEGRADED.value:
+            stage_text = "完成（部分能力降级）"
+        else:
+            stage_text = "完成"
+
         payload = {
             "job_id": job_dir.name,
             "status": final_status,
@@ -872,15 +1052,18 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
             "report_year": report_year,
             "report_kind": report_kind,
             "structured_ingest": structured_ingest_summary,
-            "quality_status": analysis_quality_status,
+            "quality_status": quality_gate["quality_status"],
+            "analysis_conclusion": quality_gate["analysis_conclusion"],
+            "review_reasons": quality_gate["review_reasons"],
             "page_coverage": page_assessment["page_coverage"],
             "scanned_page_count": page_assessment["scanned_page_count"],
-            "stage": "完成（部分能力降级）" if final_status == "degraded" else "完成",
+            "stage": stage_text,
         }
         _safe_write(job_dir, payload)
         await persist_analysis_job_snapshot(payload, include_results=True)
 
     except Exception as e:
+        # 错误态显式覆盖质量字段，避免上一轮分析残留的 complete/done 结论被继承
         _safe_write(
             job_dir,
             {
@@ -894,6 +1077,10 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                 "report_kind": report_kind,
                 "provider_stats": provider_stats,
                 "structured_ingest": structured_ingest_summary,
+                "quality_status": AnalysisQualityStatus.REVIEW_REQUIRED.value,
+                "analysis_conclusion": AnalysisConclusion.ANALYSIS_ERROR.value,
+                "page_coverage": page_assessment.get("page_coverage", 0.0),
+                "scanned_page_count": page_assessment.get("scanned_page_count", 0),
             },
         )
         await persist_analysis_job_snapshot(
