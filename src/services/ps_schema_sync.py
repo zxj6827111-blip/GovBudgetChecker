@@ -27,7 +27,7 @@ class PSSharedSchemaSync:
         self,
         document_version_id: int,
         org_name: str,
-        fiscal_year: int,
+        fiscal_year: Optional[int],
         doc_type: str,
         pdf_path: Path,
         checksum: str,
@@ -534,7 +534,7 @@ class PSSharedSchemaSync:
         self,
         department_id,
         unit_id,
-        fiscal_year: int,
+        fiscal_year: Optional[int],
         report_type: str,
         pdf_path: Path,
         checksum: str,
@@ -552,7 +552,7 @@ class PSSharedSchemaSync:
                 file_size
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (department_id, unit_id, year, report_type)
+            ON CONFLICT (department_id, unit_id, COALESCE(year, -1), report_type)
             DO UPDATE SET
                 file_name = EXCLUDED.file_name,
                 file_path = EXCLUDED.file_path,
@@ -575,7 +575,7 @@ class PSSharedSchemaSync:
         self,
         report_id,
         department_id,
-        fiscal_year: int,
+        fiscal_year: Optional[int],
         report_type: str,
         document_version_id: int,
     ) -> int:
@@ -706,7 +706,7 @@ class PSSharedSchemaSync:
         self,
         report_id,
         department_id,
-        fiscal_year: int,
+        fiscal_year: Optional[int],
         report_type: str,
         document_version_id: int,
     ) -> int:

@@ -20,6 +20,7 @@ from src.services.org_storage import get_org_storage
 from src.services.pdf_parser import PDFParser
 from src.services.ps_schema_sync import PSSharedSchemaSync
 from src.services.table_recognizer import TableRecognizer
+from src.utils.report_year import parse_report_year
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +209,7 @@ async def run_structured_ingest(
 async def _ensure_document_version(
     conn,
     org_name: str,
-    fiscal_year: int,
+    fiscal_year: Optional[int],
     doc_type: str,
     checksum: str,
     storage_key: str,
@@ -227,11 +228,13 @@ async def _ensure_document_version(
         """,
         org_name,
     )
+    # 冲突目标用 COALESCE(fiscal_year, -1) 表达式索引：Postgres 认为多个 NULL 互不冲突，
+    # 若沿用 (org_unit_id, fiscal_year, doc_type) 会让年份未知的文档每次都新插一行。
     document_id = await conn.fetchval(
         """
         INSERT INTO fiscal_documents (org_unit_id, fiscal_year, doc_type)
         VALUES ($1, $2, $3)
-        ON CONFLICT (org_unit_id, fiscal_year, doc_type)
+        ON CONFLICT (org_unit_id, COALESCE(fiscal_year, -1), doc_type)
         DO UPDATE SET doc_type = EXCLUDED.doc_type
         RETURNING id
         """,
@@ -692,14 +695,14 @@ def _org_candidate_score(name: str) -> int:
     return score
 
 
-def _parse_year(raw_year: Any) -> int:
-    try:
-        value = int(str(raw_year).strip())
-        if 2000 <= value <= 2099:
-            return value
-    except Exception:
-        pass
-    return 2000
+def _parse_year(raw_year: Any) -> Optional[int]:
+    """解析年度，识别不到就返回 None。
+
+    这里曾经兜底 return 2000，导致无法识别年份的材料在 PostgreSQL 里被写成
+    fiscal_year=2000（缺口 B-02 / P0-03），并放大 report_id 碰撞。
+    现在直接复用与内存路径同源的权威解析实现。
+    """
+    return parse_report_year(raw_year)
 
 
 def _text_or_none(value: Any) -> Optional[str]:

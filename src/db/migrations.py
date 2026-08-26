@@ -781,6 +781,67 @@ MIGRATIONS: List[Dict[str, Any]] = [
             """,
         ]
     },
+    {
+        "id": "2026-08-26_0017_nullable_report_year",
+        "description": (
+            "Allow NULL fiscal year when the report year cannot be recognized (B-02 / P0-03). "
+            "Postgres treats multiple NULLs as distinct in a plain UNIQUE constraint, so the "
+            "affected uniqueness is re-expressed as COALESCE(year, -1) expression indexes."
+        ),
+        "sql": [
+            # 1) 放开 NOT NULL：无法识别年份的材料不再被迫写成 2000。
+            #    该方向是安全的（约束放宽），回滚说明见 docs/MIGRATION_0017_NULLABLE_YEAR.md。
+            "ALTER TABLE fiscal_documents ALTER COLUMN fiscal_year DROP NOT NULL",
+            "ALTER TABLE org_dept_annual_report ALTER COLUMN year DROP NOT NULL",
+            "ALTER TABLE org_dept_table_data ALTER COLUMN year DROP NOT NULL",
+            "ALTER TABLE org_dept_line_items ALTER COLUMN year DROP NOT NULL",
+            # 2) 先建 COALESCE 表达式唯一索引，再删原 UNIQUE 约束，
+            #    顺序反过来会让并发写入短暂失去唯一性保护。
+            #    COALESCE(year, -1) 把"年份未知"折叠成同一个键值，
+            #    否则 Postgres 视多个 NULL 互不冲突，同一单位的未知年份文档会不断新增重复行。
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_fiscal_documents_org_year_type "
+            "ON fiscal_documents (org_unit_id, COALESCE(fiscal_year, -1), doc_type)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_dept_report_scope_type "
+            "ON org_dept_annual_report (department_id, unit_id, COALESCE(year, -1), report_type)",
+            # 3) 删除被替代的原 UNIQUE 约束。约束名由 Postgres 自动生成且会因长度被截断，
+            #    因此按约束定义反查真实名字，不硬编码猜测的名称。
+            """
+            DO $$
+            DECLARE
+                target_name text;
+            BEGIN
+                SELECT conname INTO target_name
+                FROM pg_constraint
+                WHERE conrelid = 'fiscal_documents'::regclass
+                  AND contype = 'u'
+                  AND pg_get_constraintdef(oid) = 'UNIQUE (org_unit_id, fiscal_year, doc_type)';
+                IF target_name IS NOT NULL THEN
+                    EXECUTE format(
+                        'ALTER TABLE fiscal_documents DROP CONSTRAINT %I', target_name
+                    );
+                END IF;
+            END $$;
+            """,
+            """
+            DO $$
+            DECLARE
+                target_name text;
+            BEGIN
+                SELECT conname INTO target_name
+                FROM pg_constraint
+                WHERE conrelid = 'org_dept_annual_report'::regclass
+                  AND contype = 'u'
+                  AND pg_get_constraintdef(oid)
+                      = 'UNIQUE (department_id, unit_id, year, report_type)';
+                IF target_name IS NOT NULL THEN
+                    EXECUTE format(
+                        'ALTER TABLE org_dept_annual_report DROP CONSTRAINT %I', target_name
+                    );
+                END IF;
+            END $$;
+            """,
+        ]
+    },
 ]
 
 

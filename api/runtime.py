@@ -80,6 +80,13 @@ except ImportError:
 from src.services.analysis_result_store import persist_analysis_job_snapshot
 from src.schemas.issues import infer_analysis_conclusion
 
+# 年份解析的唯一权威实现放在 src/utils/report_year.py，这里重新导出，
+# 既保持 `runtime.parse_report_year` 这个既有对外名字，又保证与结构化入库路径同源。
+from src.utils.report_year import (  # noqa: F401
+    extract_report_year_candidates,
+    parse_report_year,
+)
+
 _pipeline_runner: Optional[Callable[[Path], Awaitable[None]]] = None
 _job_queue: Optional["DurableJobQueue"] = None
 _JOB_SUMMARY_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -127,11 +134,6 @@ REANALYZE_EPHEMERAL_FILES = {
 if TYPE_CHECKING:
     from api.job_queue import DurableJobQueue
 
-_YEAR_4_RE = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
-_YEAR_2_RE = re.compile(
-    r"(?<!\d)(\d{2})(?=\s*(?:\u5e74|\u5e74\u5ea6|\u9884\u7b97|\u51b3\u7b97|budget|final|settlement|accounts|$))",
-    re.I,
-)
 _COVER_ORG_LABELS = (
     ("\u9884\u7b97\u4e3b\u7ba1\u90e8\u95e8", "department", "budget"),
     ("\u9884\u7b97\u5355\u4f4d", "unit", "budget"),
@@ -616,46 +618,6 @@ def extract_pdf_first_page_text(pdf_path: Path) -> str:
     """Best-effort first-page text extraction for upload-time organization matching."""
     page_texts = extract_pdf_page_texts(pdf_path, max_pages=1)
     return page_texts[0] if page_texts else ""
-
-
-def parse_report_year(raw: Any) -> Optional[int]:
-    """Parse year from arbitrary value and return 4-digit year."""
-    for year in extract_report_year_candidates(raw):
-        return year
-    return None
-
-
-def extract_report_year_candidates(raw: Any) -> List[int]:
-    """Extract report year candidates from free-form text."""
-    if raw is None:
-        return []
-    text = str(raw).strip()
-    if not text:
-        return []
-
-    years: List[int] = []
-
-    if re.fullmatch(r"\d{1,4}", text):
-        try:
-            value = int(text)
-        except Exception:
-            value = -1
-        if 2000 <= value <= 2099:
-            years.append(value)
-        elif 0 <= value <= 99:
-            years.append(2000 + value)
-
-    for match in _YEAR_4_RE.finditer(text):
-        year = int(match.group(1))
-        if 2000 <= year <= 2099 and year not in years:
-            years.append(year)
-
-    for match in _YEAR_2_RE.finditer(text):
-        year = 2000 + int(match.group(1))
-        if 2000 <= year <= 2099 and year not in years:
-            years.append(year)
-
-    return years
 
 
 def infer_report_year(
