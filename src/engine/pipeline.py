@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.utils.rule_text import default_rule_suggestion, infer_rule_title
@@ -31,8 +30,14 @@ def _resolve_report_kind(doc: Any, report_kind: Optional[str] = None) -> str:
     # The repository path itself contains "GovBudgetChecker".  Detect only
     # from the uploaded filename, otherwise every document can be routed to
     # the budget rule set before its content is considered.
+    #
+    # NOTE: ``Path(...).name`` is host-OS dependent.  On Linux a
+    # Windows-style path such as ``E:\dir\plain.pdf`` has no path separator,
+    # so ``Path.name`` returns the whole string (which contains "Budget" via
+    # the repository directory) and misroutes the document.  Split on both
+    # separators explicitly so basename extraction is platform independent.
     path = str(getattr(doc, "path", "") or "")
-    filename = Path(path).name
+    filename = re.split(r"[\\/]", path)[-1] if path else ""
     lowered = filename.lower()
     if "budget" in lowered or "预算" in filename:
         return "budget"

@@ -26,19 +26,25 @@ async def test_rule_process_returns_unknown_manual_review() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rule_process_timeout_terminates_child() -> None:
+async def test_rule_process_timeout_terminates_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     doc = build_document(
         path="material.pdf",
         page_texts=["公开材料"],
         page_tables=[[]],
         filesize=10,
     )
+    # Force the worker to block well past the deadline so the timeout path is
+    # exercised deterministically regardless of host OS or start method
+    # (fork on Linux would otherwise finish a trivial document instantly).
+    monkeypatch.setenv("RULES_PROCESS_TEST_DELAY_SECONDS", "10")
     started = time.monotonic()
 
     with pytest.raises(RuleExecutionTimeout):
-        await run_rules_in_process(doc, False, "unknown", 0.01)
+        await run_rules_in_process(doc, False, "unknown", 0.2)
 
-    assert time.monotonic() - started < 5
+    assert time.monotonic() - started < 8
     assert not any(
         child.name == "govbudget-rule-evaluator" and child.is_alive()
         for child in multiprocessing.active_children()

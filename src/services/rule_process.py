@@ -25,6 +25,16 @@ def _rule_worker(
     report_kind: str,
 ) -> None:
     try:
+        # Test-only hook: deterministically block the worker so timeout
+        # handling can be verified regardless of host OS / start method.
+        # Unset in production, so this is a no-op for real traffic.
+        _delay = os.getenv("RULES_PROCESS_TEST_DELAY_SECONDS", "").strip()
+        if _delay:
+            try:
+                time.sleep(float(_delay))
+            except ValueError:
+                pass
+
         from src.engine.pipeline import build_issues_payload
 
         payload = build_issues_payload(
