@@ -104,6 +104,11 @@ JOB_STATUS_CONTEXT_KEYS = (
     "year_conflict",
     "report_kind",
     "created_by",
+    # 质量门禁与分析结论相关字段，需跨状态流转保留，供列表/详情/复核直接读取
+    "analysis_conclusion",
+    "quality_status",
+    "page_coverage",
+    "scanned_page_count",
 )
 ACTIVE_ANALYSIS_STATUSES = {"queued", "processing", "running"}
 REANALYZE_EPHEMERAL_FILES = {
