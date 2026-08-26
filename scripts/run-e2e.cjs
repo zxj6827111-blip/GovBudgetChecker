@@ -9,6 +9,22 @@ const outputDir = path.join(projectRoot, "output");
 const baseURL = process.env.E2E_BASE_URL || "http://127.0.0.1:3000";
 const parsedBaseURL = new URL(baseURL);
 const readyURL = new URL("/e2e/batch-upload", parsedBaseURL).toString();
+
+// 预热路径：e2e 跑在 `next dev` 上，每个路由**首次请求**才会被编译。
+// CI 是冷启动（没有 .next 缓存）且 runner 比开发机慢，首访编译动辄十几秒，
+// 会直接吃掉用例自己的超时预算，表现为"点击超时"这种看起来毫无关联的失败
+// （实测：同一个用例本机 9.9s 通过，CI 上 90s 超时）。
+// 因此在跑用例前把所有被访问的页面各请求一次，把编译成本从用例预算里挪出去。
+// 路径来源：e2e/tests/**/*.spec.ts 里的 page.goto()。
+const WARMUP_PATHS = [
+  "/e2e/batch-upload",
+  "/viewer/gbc-ui-demo",
+  "/task/job-001",
+  "/department/dept-001",
+  "/?page=settings",
+  "/?page=settings&section=organization",
+  "/login",
+];
 const forwardedArgs = process.argv.slice(2);
 let server = null;
 let ownsServer = false;
@@ -56,6 +72,36 @@ function stopServerTree() {
   }
 }
 
+function requestOnce(url, timeoutMs) {
+  return new Promise((resolve) => {
+    const request = http.get(url, { timeout: timeoutMs }, (response) => {
+      response.resume();
+      response.once("end", () => resolve(true));
+    });
+    request.on("timeout", () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.on("error", () => resolve(false));
+  });
+}
+
+/**
+ * 逐个请求被测页面，触发 next dev 的按需编译。
+ * 串行是有意的：并行首访会让 dev server 同时编译多个路由，反而更慢也更容易超时。
+ * 单个路径失败不阻断测试——预热只是提速手段，不是门禁。
+ */
+async function warmupRoutes() {
+  for (const routePath of WARMUP_PATHS) {
+    const url = new URL(routePath, parsedBaseURL).toString();
+    const started = Date.now();
+    const ok = await requestOnce(url, 120000);
+    process.stdout.write(
+      `[e2e-runner] warmup ${ok ? "ok " : "skip"} ${routePath} (${Date.now() - started}ms)\n`,
+    );
+  }
+}
+
 async function main() {
   if (!(await requestReady(readyURL))) {
     server = spawn(process.execPath, [path.join(projectRoot, "scripts", "next-dev.cjs")], {
@@ -72,6 +118,7 @@ async function main() {
   }
 
   await waitForServer();
+  await warmupRoutes();
   const playwrightCli = require.resolve("@playwright/test/cli", { paths: [appDir] });
   const testProcess = spawn(
     process.execPath,
