@@ -214,6 +214,8 @@ def test_migration_rollback_doc_exists():
     doc = Path(__file__).resolve().parent.parent / "docs" / "MIGRATION_0017_NULLABLE_YEAR.md"
     assert doc.exists()
     text = doc.read_text(encoding="utf-8")
-    assert "回滚" in text
     assert MIGRATION_ID in text
-    assert "未实测" in text
+    # 迁移类改动必须同时留下回滚方式与实测结论，否则无法支撑发布决策
+    assert "回滚" in text
+    assert "实测验证记录" in text
+    assert "PostgreSQL 15.17" in text
