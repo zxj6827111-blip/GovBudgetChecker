@@ -260,6 +260,99 @@ def _extract_visible_text_from_page(page) -> str:
     return raw_text
 
 
+def _scanned_page_min_chars() -> int:
+    """低文本页判定阈值（每页去空白后的字符数）。
+
+    预决算材料的正文页通常有数百字符，纯扫描页 pdfplumber 抽出来是空串。
+    阈值取 50 是为了同时挡住"只抽到页眉页脚/水印"这类残缺文本层。
+    走环境变量以便不同来源的材料现场调参。
+    """
+    raw = os.getenv("SCANNED_PAGE_MIN_CHARS", "50")
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return 50
+    return value if value > 0 else 50
+
+
+def _count_non_empty_table_cells(page_table: Any) -> int:
+    """统计单页抽到的非空表格单元格数量（结构容错，任何异常形状都按 0 计）。"""
+    if not isinstance(page_table, (list, tuple)):
+        return 0
+    total = 0
+    for table in page_table:
+        if not isinstance(table, (list, tuple)):
+            continue
+        for row in table:
+            if not isinstance(row, (list, tuple)):
+                continue
+            total += sum(1 for cell in row if str(cell if cell is not None else "").strip())
+    return total
+
+
+def _assess_page_extraction(
+    page_texts: Any,
+    page_tables: Any = None,
+) -> Dict[str, Any]:
+    """评估每页文本抽取质量，识别疑似扫描页与低文本页。
+
+    本轮不做自动 OCR：这里只负责"检测 + 算覆盖率"，
+    是否转人工复核由任务级质量门禁（Task 3）决定。
+
+    判定口径：
+      - 去空白字符数低于阈值、且未抽到任何非空表格单元格 -> 低文本页；
+      - 其中字符数为 0 且无表格单元格的，再计一笔"疑似扫描页"。
+
+    表格单元格参与判定属于误报控制：纯表格页正文字符本来就少，
+    但只要能抽到单元格就说明 PDF 有文本层，不该误判成扫描件。
+    """
+    texts: List[str] = []
+    if isinstance(page_texts, (list, tuple)):
+        texts = [str(item if item is not None else "") for item in page_texts]
+
+    tables: List[Any] = []
+    if isinstance(page_tables, (list, tuple)):
+        tables = list(page_tables)
+
+    min_chars = _scanned_page_min_chars()
+    low_text_pages: List[int] = []
+    scanned_pages: List[int] = []
+    total_text_chars = 0
+
+    for index, text in enumerate(texts):
+        char_count = len("".join(str(text).split()))
+        total_text_chars += char_count
+        cell_count = _count_non_empty_table_cells(tables[index] if index < len(tables) else None)
+        page_number = index + 1  # 对外一律用 1-based 页码，便于直接给人工定位
+        if char_count >= min_chars or cell_count > 0:
+            continue
+        low_text_pages.append(page_number)
+        if char_count == 0 and cell_count == 0:
+            scanned_pages.append(page_number)
+
+    page_count = len(texts)
+    if page_count > 0:
+        page_coverage = round((page_count - len(low_text_pages)) / page_count, 4)
+    else:
+        # 0 页（解析失败或空 PDF）一律按覆盖率 0 处理，让门禁把它拦成待复核，
+        # 而不是因为"没有低文本页"反而算成覆盖完整。
+        page_coverage = 0.0
+
+    return {
+        "page_count": page_count,
+        "text_page_count": page_count - len(low_text_pages),
+        "low_text_pages": low_text_pages,
+        "low_text_page_count": len(low_text_pages),
+        "scanned_pages": scanned_pages,
+        "scanned_page_count": len(scanned_pages),
+        "page_coverage": page_coverage,
+        "total_text_chars": total_text_chars,
+        "min_chars_threshold": min_chars,
+        "ocr_applied": False,
+        "detector_version": "page-extraction-v1",
+    }
+
+
 async def _run_pipeline(job_dir: Path) -> None:
     """
     真正的解析管线：
@@ -393,6 +486,17 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
             None, _sync_parse_pdf
         )
 
+        # 扫描页/低文本页检测：本轮只检测不 OCR，结果先落状态供前端与后续门禁使用
+        page_assessment = _assess_page_extraction(page_texts, page_tables)
+        if page_assessment["low_text_page_count"]:
+            logger.warning(
+                "job %s low-text pages detected: coverage=%.4f scanned=%d pages=%s",
+                job_dir.name,
+                page_assessment["page_coverage"],
+                page_assessment["scanned_page_count"],
+                page_assessment["low_text_pages"][:20],
+            )
+
         # 构建 Document
         _safe_write(
             job_dir,
@@ -406,6 +510,8 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                 "mode": mode,
                 "dual_mode_enabled": dual_mode_enabled,
                 "stage": "构建文档对象",
+                "page_coverage": page_assessment["page_coverage"],
+                "scanned_page_count": page_assessment["scanned_page_count"],
             },
         )
 
@@ -498,6 +604,7 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                     "report_kind": report_kind,
                     "elapsed_ms": dual_result.meta.get("elapsed_ms", {}),
                     "tokens": dual_result.meta.get("tokens", {}),
+                    "page_extraction": page_assessment,
                 },
             }
         else:
@@ -669,6 +776,7 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                     "report_year": report_year,
                     "report_kind": report_kind,
                     "provider_stats": provider_stats,
+                    "page_extraction": page_assessment,
                 },
             }
 
@@ -765,6 +873,8 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
             "report_kind": report_kind,
             "structured_ingest": structured_ingest_summary,
             "quality_status": analysis_quality_status,
+            "page_coverage": page_assessment["page_coverage"],
+            "scanned_page_count": page_assessment["scanned_page_count"],
             "stage": "完成（部分能力降级）" if final_status == "degraded" else "完成",
         }
         _safe_write(job_dir, payload)
