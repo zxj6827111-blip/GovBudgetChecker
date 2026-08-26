@@ -135,6 +135,34 @@ def is_formal_finding(finding: Any) -> bool:
     return status != EVIDENCE_STATUS_DEGRADED
 
 
+def count_formal_findings(result: Any) -> int:
+    """统计结果中的"正式问题"条数（缺证据被降级的不计入）。
+
+    同时兼容双模式结构与 legacy 分桶结构。这是"正式问题数"的唯一口径，
+    质量门禁与离线回放脚本都必须复用它，避免两处各算一套导致结论不一致。
+    """
+    if not isinstance(result, dict):
+        return 0
+    issues = result.get("issues")
+    if isinstance(issues, dict):
+        all_items = issues.get("all")
+        if isinstance(all_items, list):
+            return sum(1 for item in all_items if is_formal_finding(item))
+        return sum(
+            sum(1 for item in issues[key] if is_formal_finding(item))
+            for key in ("error", "warn", "info")
+            if isinstance(issues.get(key), list)
+        )
+    if isinstance(issues, list):
+        return sum(1 for item in issues if is_formal_finding(item))
+    total = 0
+    for key in ("rule_findings", "ai_findings"):
+        items = result.get(key)
+        if isinstance(items, list):
+            total += sum(1 for item in items if is_formal_finding(item))
+    return total
+
+
 def _degrade_ai_finding(finding: Dict[str, Any], missing: List[str]) -> None:
     """把缺证据的 AI 问题降级为待复核，而不是当作正式结论输出。"""
     finding["evidence_status"] = EVIDENCE_STATUS_DEGRADED

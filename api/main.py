@@ -25,7 +25,7 @@ if _ROOT not in _sys.path:
 from src.engine.pipeline import build_document, build_issues_payload
 from src.services.evidence_guard import (
     apply_evidence_completeness,
-    is_formal_finding,
+    count_formal_findings,
 )
 from src.utils.provenance import summarize_finding_versions
 from src.schemas.issues import (
@@ -391,27 +391,10 @@ def _count_result_findings(result: Dict[str, Any]) -> int:
     缺证据被降级为待复核的条目不计入（P0-07）：它们不是可交付的正式结论，
     而质量门禁正是用这个计数区分 findings_detected 与 no_findings，
     口径必须与"正式问题"一致，否则会出现"问题全被降级却仍报发现问题"。
+
+    具体实现下沉到 `evidence_guard.count_formal_findings`，与离线回放脚本共用同一口径。
     """
-    if not isinstance(result, dict):
-        return 0
-    issues = result.get("issues")
-    if isinstance(issues, dict):
-        all_items = issues.get("all")
-        if isinstance(all_items, list):
-            return sum(1 for item in all_items if is_formal_finding(item))
-        return sum(
-            sum(1 for item in issues[key] if is_formal_finding(item))
-            for key in ("error", "warn", "info")
-            if isinstance(issues.get(key), list)
-        )
-    if isinstance(issues, list):
-        return sum(1 for item in issues if is_formal_finding(item))
-    total = 0
-    for key in ("rule_findings", "ai_findings"):
-        items = result.get(key)
-        if isinstance(items, list):
-            total += sum(1 for item in items if is_formal_finding(item))
-    return total
+    return count_formal_findings(result)
 
 
 def _evaluate_quality_gate(
