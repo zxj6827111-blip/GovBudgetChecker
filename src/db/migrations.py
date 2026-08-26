@@ -842,6 +842,28 @@ MIGRATIONS: List[Dict[str, Any]] = [
             """,
         ]
     },
+    {
+        "id": "2026-08-26_0018_report_scope_key",
+        "description": (
+            "Add scope_key to org_dept_annual_report so low-confidence reports "
+            "(fallback_name org match or unknown year) are keyed per document "
+            "instead of being merged into one (dept, unit, year, type) row (P0-09)."
+        ),
+        "sql": [
+            # scope_key 为空串 = 按 (部门, 单位, 年度, 类型) 归并（原有行为）；
+            # 非空（checksum）= 按具体文档归并，避免不同材料被强行并入同一 report_id。
+            # 默认空串而非 NULL，是为了让唯一索引不必再套一层 COALESCE。
+            "ALTER TABLE org_dept_annual_report ADD COLUMN IF NOT EXISTS scope_key TEXT NOT NULL DEFAULT ''",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_dept_report_scope_type_key "
+            "ON org_dept_annual_report "
+            "(department_id, unit_id, COALESCE(year, -1), report_type, scope_key)",
+            # 迁移 0017 建的索引被本索引取代（前者是后者去掉 scope_key 的前缀）。
+            # 保留它会阻止同一 scope 下按文档区分的多行插入，必须删除。
+            "DROP INDEX IF EXISTS uq_dept_report_scope_type",
+            "CREATE INDEX IF NOT EXISTS idx_dept_report_scope_key "
+            "ON org_dept_annual_report(scope_key) WHERE scope_key <> ''",
+        ]
+    },
 ]
 
 

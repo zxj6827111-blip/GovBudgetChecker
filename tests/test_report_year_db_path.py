@@ -159,8 +159,10 @@ def _migration_0017():
     raise AssertionError(f"migration {MIGRATION_ID} not registered")
 
 
-def test_migration_0017_is_registered_last():
-    assert MIGRATIONS[-1]["id"] == MIGRATION_ID
+def test_migration_0017_is_registered():
+    ids = [migration["id"] for migration in MIGRATIONS]
+    assert MIGRATION_ID in ids
+    assert len(ids) == len(set(ids))
 
 
 def test_migration_0017_drops_not_null_on_all_year_columns():

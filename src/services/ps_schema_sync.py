@@ -7,11 +7,14 @@ from __future__ import annotations
 from collections import defaultdict
 import hashlib
 import json
+import logging
 from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import asyncpg
+
+logger = logging.getLogger(__name__)
 
 try:
     from src.services.org_storage import get_org_storage
@@ -49,6 +52,24 @@ class PSSharedSchemaSync:
             preferred_code=scope.get("unit_code"),
         )
         report_type = self._normalize_report_type(doc_type)
+        scope_key = self._resolve_report_scope_key(
+            match_mode=scope.get("match_mode"),
+            fiscal_year=fiscal_year,
+            checksum=checksum,
+            pdf_path=pdf_path,
+        )
+        if scope_key:
+            # 审计日志：组织或年份识别不可靠时，报告身份退化到 checksum 维度。
+            # 这类记录后续需要人工确认归属，日志要能直接检索出来。
+            logger.warning(
+                "report identity fell back to document dimension: "
+                "match_mode=%s fiscal_year=%s report_type=%s scope_key=%s file=%s",
+                scope.get("match_mode"),
+                fiscal_year,
+                report_type,
+                scope_key,
+                pdf_path.name,
+            )
         report_id = await self._upsert_report(
             department_id=department_id,
             unit_id=unit_id,
@@ -56,6 +77,7 @@ class PSSharedSchemaSync:
             report_type=report_type,
             pdf_path=pdf_path,
             checksum=checksum,
+            scope_key=scope_key,
         )
 
         table_count = await self._sync_table_data(
@@ -80,6 +102,8 @@ class PSSharedSchemaSync:
             "unit_name": unit_name,
             "report_type": report_type,
             "match_mode": scope.get("match_mode"),
+            "scope_key": scope_key,
+            "report_identity_mode": "document" if scope_key else "scope",
             "matched_organization_id": scope.get("matched_organization_id"),
             "table_data_count": table_count,
             "line_item_count": line_item_count,
@@ -530,6 +554,35 @@ class PSSharedSchemaSync:
             unit_name,
         )
 
+    #: 组织归属可靠的匹配方式。fallback_name 表示没匹配上任何组织，仅靠文件名拆的名字。
+    CONFIDENT_MATCH_MODES = frozenset(
+        {"organization_id", "name_unit", "name_unit_promoted", "name_department"}
+    )
+
+    def _resolve_report_scope_key(
+        self,
+        match_mode: Optional[str],
+        fiscal_year: Optional[int],
+        checksum: str,
+        pdf_path: Path,
+    ) -> str:
+        """决定报告行的身份维度。
+
+        返回空串表示"按 (部门, 单位, 年度, 类型) 归并"，即原有行为。
+        返回非空值表示"按具体文档归并"：当组织匹配退化为 fallback_name、
+        或年度无法识别时，(dept, unit, year, type) 已不足以唯一标识一份材料，
+        强行归并会把不同单位/不同年度的材料串进同一个 report_id（缺口 P0-09）。
+        此时改用 checksum 作为附加维度，保证两份不同文档拿到不同 report_id。
+        """
+        mode = str(match_mode or "").strip()
+        if mode in self.CONFIDENT_MATCH_MODES and fiscal_year is not None:
+            return ""
+        key = str(checksum or "").strip()
+        if key:
+            return key
+        # 极端情况下拿不到 checksum，退到文件名，至少不同文件不会互相覆盖
+        return str(pdf_path.name or "").strip()
+
     async def _upsert_report(
         self,
         department_id,
@@ -538,6 +591,7 @@ class PSSharedSchemaSync:
         report_type: str,
         pdf_path: Path,
         checksum: str,
+        scope_key: str = "",
     ):
         return await self.conn.fetchval(
             """
@@ -549,10 +603,11 @@ class PSSharedSchemaSync:
                 file_name,
                 file_path,
                 file_hash,
-                file_size
+                file_size,
+                scope_key
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (department_id, unit_id, COALESCE(year, -1), report_type)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (department_id, unit_id, COALESCE(year, -1), report_type, scope_key)
             DO UPDATE SET
                 file_name = EXCLUDED.file_name,
                 file_path = EXCLUDED.file_path,
@@ -569,6 +624,7 @@ class PSSharedSchemaSync:
             str(pdf_path),
             checksum,
             int(pdf_path.stat().st_size),
+            scope_key,
         )
 
     async def _sync_table_data(
