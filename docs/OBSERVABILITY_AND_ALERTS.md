@@ -47,6 +47,27 @@
 > 注意：在 `log_context` 内使用 `logger.xxx(extra=...)` 时必须用 `safe_log_extra(...)` 构造，
 > 否则与上下文同名的键会让 `logging.makeRecord` 抛 `KeyError`。
 
+### message 字段的边界与静态门禁（Task C）
+
+`redact_log_fields` 只作用于 `extras`。`record.getMessage()` 是 Python logging 的固有边界，
+**不经过任何脱敏**就进入 JSON 的 `message` 字段。因此：
+
+- 硬规则：**不得**把整条 finding / 整行表格数据 / 单元格原值 / AI 响应体拼进 message；
+  这类信息只能走 `extra=`，或先用 `fingerprint_for_log()` 换成 `len + sha256`。
+- 抛出的异常消息同样受约束：它会顺着上游的 `logger.error("...%s", e)` 落到 message。
+  `raise Exception(f"返回格式错误: {result}")` 这种写法一律改为带指纹。
+- 校验类异常（pydantic `ValidationError`）会把**输入值**回显在异常消息里。这类路径用
+  `describe_exception(exc)`：保留 `error_type` + 字段路径 `loc` + 错误码 `type` +
+  消息指纹，丢掉消息原文；并且刻意**不用** `logger.exception`，因为异常栈里带着同一段消息。
+- 静态门禁：`python scripts/check_log_message_safety.py`（已接入 `make lint` 与 CI）。
+  规则见脚本 docstring；`tests/test_log_message_safety.py` 里有正反对照用例
+  与"全仓零违规"回归线。
+
+**已知残留风险（发布决策需知晓）**：对于非校验类异常，仍保留 `logger.exception`，
+异常栈进入 JSON 的 `exception` 字段，该字段不脱敏。若第三方库把材料内容写进自己的
+异常消息，仍可能经此路径落盘。取舍理由是异常栈对生产排障是必需的；
+缓解手段是本仓库自己抛出的异常消息一律不含原文（由上述门禁的 `raise` 检查保证）。
+
 ## 二、指标端点
 
 ### 为什么用端点而不是只做日志聚合

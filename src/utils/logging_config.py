@@ -118,6 +118,16 @@ def _fingerprint(value: Any) -> Dict[str, Any]:
     return {"len": len(text), "sha256": digest[:_HASH_PREFIX_LEN]}
 
 
+def fingerprint_for_log(value: Any) -> str:
+    """把任意内容压成单行指纹 `len=…,sha256=…`。
+
+    给"必须往 message 里写点什么来定位问题"的场景用（例如 AI 服务返回体格式错误）：
+    指纹足以判断两次故障是不是同一份响应，但拿不回原文。
+    """
+    marker = _fingerprint(value)
+    return f"len={marker['len']},sha256={marker['sha256']}"
+
+
 def redact_log_fields(fields: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     """返回脱敏后的日志字段字典：敏感键的原值被长度 + 哈希前缀取代。
 
@@ -144,6 +154,49 @@ def redact_log_fields(fields: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
         else:
             result[key] = value
     return result
+
+
+def describe_exception(exc: BaseException) -> Dict[str, Any]:
+    """把异常压缩成可安全写入日志的描述（Task C）。
+
+    背景：`record.getMessage()` 不经过 `redact_log_fields`，所以
+    `logger.warning(f"失败: {e}")` 会把异常消息原样落盘。而异常消息并不总是安全的——
+    典型的是 pydantic `ValidationError`，它会把校验失败的**输入值**（可能是 PDF 正文
+    片段）写进消息里。
+
+    这里的取舍：
+      - 异常消息原文降级为 `len + sha256` 指纹，够用来判断"是不是同一类错误"，
+        但拿不回原文；
+      - 校验类异常额外保留 `loc + type`（字段路径与错误类型，**不含值**），
+        这是排障真正需要的信息；
+      - 异常类名保留，作为可直接用于告警分组的"错误码"。
+    """
+    payload: Dict[str, Any] = {"error_type": type(exc).__name__}
+
+    errors_accessor = getattr(exc, "errors", None)
+    if callable(errors_accessor):
+        try:
+            entries = errors_accessor()
+        except Exception:
+            entries = None
+        if isinstance(entries, (list, tuple)):
+            locations = []
+            for entry in list(entries)[:5]:
+                if not isinstance(entry, Mapping):
+                    continue
+                loc = entry.get("loc")
+                if isinstance(loc, (list, tuple)):
+                    loc_text = ".".join(str(part) for part in loc)
+                else:
+                    loc_text = str(loc or "")
+                locations.append({"loc": loc_text, "type": str(entry.get("type") or "")})
+            if locations:
+                payload["error_locations"] = locations
+
+    marker = _fingerprint(str(exc))
+    payload["error_message_len"] = marker["len"]
+    payload["error_message_sha256"] = marker["sha256"]
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -436,10 +489,19 @@ def log_job_stage(
     )
 
 
-def log_parse_result(version_id: int, tables: int, cells: int, errors: int):
-    """Log PDF parsing result."""
+def log_parse_result(version_id: int, table_count: int, cell_count: int, errors: int):
+    """Log PDF parsing result.
+
+    参数刻意命名为 `*_count`：这里写进 message 的必须是**数量**，
+    不能是抽取出来的表格/单元格内容本身（见 `scripts/check_log_message_safety.py`）。
+    """
     logger = get_logger("parse.pdf")
     logger.info(
-        f"Parsed version {version_id}: {tables} tables, {cells} cells, {errors} errors",
-        extra={"version_id": version_id, "tables": tables, "cells": cells, "errors": errors}
+        f"Parsed version {version_id}: {table_count} tables, {cell_count} cells, {errors} errors",
+        extra={
+            "version_id": version_id,
+            "tables": table_count,
+            "cells": cell_count,
+            "errors": errors,
+        },
     )

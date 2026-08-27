@@ -1,4 +1,4 @@
-.PHONY: dev backend backend-api backend-noauth worker frontend frontend-build lint typecheck unit e2e test install setup-python perf-baseline perf-check
+.PHONY: dev backend backend-api backend-noauth worker frontend frontend-build lint log-safety typecheck unit e2e test install setup-python perf-baseline perf-check
 
 PYTHON ?= $(if $(wildcard .venv/Scripts/python.exe),.venv/Scripts/python.exe,.venv/bin/python)
 
@@ -22,6 +22,10 @@ dev:
 
 lint:
 	$(PYTHON) -m ruff check .
+	$(PYTHON) scripts/check_log_message_safety.py
+
+log-safety:
+	$(PYTHON) scripts/check_log_message_safety.py
 
 typecheck:
 	$(PYTHON) -m mypy api src tests

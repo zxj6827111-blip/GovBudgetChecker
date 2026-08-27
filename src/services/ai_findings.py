@@ -14,6 +14,7 @@ import re
 from src.schemas.issues import IssueItem, JobContext, AnalysisConfig
 from src.engine.ai.extractor_client import ExtractorClient  # 复用现有AI客户端
 from src.services.ai_issue_interpreter import interpret_ai_issue, normalize_ai_severity
+from src.utils.logging_config import describe_exception, safe_log_extra
 from src.utils.provenance import ENGINE_VERSION, read_finding_provenance
 
 logger = logging.getLogger(__name__)
@@ -111,8 +112,12 @@ class AIFindingsService:
             return issues
             
         except Exception as e:
-            logger.error(f"AI分析失败: job_id={context.job_id}, error={e}")
-            logger.error(traceback.format_exc())
+            # 用 logger.exception：异常栈进 StructuredFormatter 的独立 exception 字段，
+            # message 保持无原文（把 traceback 拼进 message 会带出 pydantic 校验异常里的输入值）
+            logger.exception(
+                "AI分析失败",
+                extra=safe_log_extra({"job_id": context.job_id, **describe_exception(e)}),
+            )
             
             # 记录分析失败错误
             self.ai_errors.append({
@@ -160,7 +165,24 @@ class AIFindingsService:
                 issues.append(item)
                 
             except Exception as e:
-                logger.warning(f"转换语义问题失败: {e}, issue={issue}")
+                # 只记可定位信息（序号 / 规则号 / 字段名）+ 错误指纹。
+                # 绝不能把 issue 整体拼进 message：它带着 evidence_text 等 PDF 原文，
+                # 而 message 字段不经过 redact_log_fields 脱敏。
+                logger.warning(
+                    "转换语义问题失败",
+                    extra=safe_log_extra(
+                        {
+                            "issue_index": idx,
+                            "issue_rule_id": str(issue.get("rule_id") or "")
+                            if isinstance(issue, dict)
+                            else "",
+                            "issue_field_names": sorted(str(key) for key in issue)
+                            if isinstance(issue, dict)
+                            else [],
+                            **describe_exception(e),
+                        }
+                    ),
+                )
                 continue
         
         return issues
@@ -570,7 +592,19 @@ class AIFindingsService:
                                 "reason": "conversion_failed"
                             })
                 except Exception as e:
-                    logger.error(f"转换AI问题失败: {e}, issue={raw_issue}")
+                    # 同上：raw_issue 里是 AI 回传的证据原文，只能记序号与错误指纹
+                    logger.error(
+                        "转换AI问题失败",
+                        extra=safe_log_extra(
+                            {
+                                "issue_index": idx,
+                                "issue_rule_id": str(raw_issue.get("rule_id") or "")
+                                if isinstance(raw_issue, dict)
+                                else "",
+                                **describe_exception(e),
+                            }
+                        ),
+                    )
                     discarded_count += 1
                     if len(discarded_examples) < 3:
                         discarded_examples.append({

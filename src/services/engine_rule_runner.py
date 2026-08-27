@@ -15,6 +15,7 @@ from src.engine.budget_rules import ALL_BUDGET_RULES
 from src.engine.common_rules import ALL_COMMON_RULES
 from src.utils.issue_bbox import PDFBBoxLocator
 from src.utils.issue_location import normalize_issue_location
+from src.utils.logging_config import describe_exception, safe_log_extra
 from src.utils.provenance import ENGINE_VERSION
 from src.utils.rule_text import default_rule_suggestion, infer_rule_title
 
@@ -249,9 +250,15 @@ class EngineRuleRunner:
                             finding = bbox_locator.locate(finding)
                             findings.append(finding)
                         except Exception as e:
-                            logger.error(f"Failed to convert issue to IssueItem: {e}")
-                            import traceback
-                            logger.error(f"Conversion error details: {traceback.format_exc()}")
+                            # 这里的异常多来自 IssueItem 校验失败，pydantic 会把输入值
+                            # （证据原文片段）写进异常消息，异常栈里也带着同一段消息，
+                            # 所以刻意不用 logger.exception，只留错误类型、字段路径与指纹。
+                            logger.error(
+                                "Failed to convert issue to IssueItem",
+                                extra=safe_log_extra(
+                                    {"rule_id": rule_id, **describe_exception(e)}
+                                ),
+                            )
                             continue
                     
                     self._stats["successful_rules"] += 1
@@ -262,9 +269,10 @@ class EngineRuleRunner:
                     
                 except Exception as e:
                     self._stats["failed_rules"] += 1
-                    logger.error(f"Rule {rule_id} execution failed: {e}")
-                    import traceback
-                    logger.error(f"Exception details: {traceback.format_exc()}")
+                    logger.exception(
+                        "Rule execution failed",
+                        extra=safe_log_extra({"rule_id": rule_id, **describe_exception(e)}),
+                    )
                     
                     # 鍒涘缓澶辫触璁板綍
                     if config.record_rule_failures:
@@ -384,9 +392,10 @@ class EngineRuleRunner:
             else:
                 logger.error(f"PDF鏂囦欢涓嶅瓨鍦? {job_context.pdf_path}")
         except Exception as e:
-            logger.error(f"瑙ｆ瀽PDF鏂囦欢澶辫触: {e}")
-            import traceback
-            logger.error(f"瑙ｆ瀽閿欒璇︽儏: {traceback.format_exc()}")
+            logger.exception(
+                "parse pdf for rule engine failed",
+                extra=safe_log_extra(describe_exception(e)),
+            )
         
         return build_document(
             path=job_context.pdf_path,
@@ -458,9 +467,10 @@ class EngineRuleRunner:
             
         except Exception as e:
             # 鍒嗘瀽澶辫触鍘熷洜锛屽苟娣诲姞璇︾粏鏃ュ織
-            import traceback
-            logger.error(f"Rule {rule_id} execution failed: {e}")
-            logger.error(f"Exception details: {traceback.format_exc()}")
+            logger.exception(
+                "Rule execution failed",
+                extra=safe_log_extra({"rule_id": rule_id, **describe_exception(e)}),
+            )
             
             why_not = self._analyze_failure_reason(e, rule_id)
             elapsed_ms = int((time.time() - start_time) * 1000)

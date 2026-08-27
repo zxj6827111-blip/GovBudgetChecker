@@ -15,6 +15,7 @@ import httpx
 from dataclasses import dataclass, field
 
 from src.services.ai_client import AIClient
+from src.utils.logging_config import fingerprint_for_log
 from src.utils.provenance import (
     build_finding_provenance,
     build_model_version,
@@ -638,12 +639,21 @@ class ExtractorClient:
             )
             
             if response.status_code != 200:
-                raise Exception(f"AI抽取器返回错误状态码: {response.status_code}, 响应: {response.text}")
-                
+                # 只带状态码 + 响应体指纹：响应体里回显了送检的材料原文，
+                # 而这个异常消息会被上游 `logger.error("...%s", e)` 落盘。
+                raise Exception(
+                    "AI抽取器返回错误状态码: {status}, 响应指纹: {marker}".format(
+                        status=response.status_code,
+                        marker=fingerprint_for_log(response.text),
+                    )
+                )
+
             result = response.json()
-            
+
             if "hits" not in result:
-                raise Exception(f"AI抽取器返回格式错误: {result}")
+                raise Exception(
+                    f"AI抽取器返回格式错误: 缺少 hits 字段, 响应指纹: {fingerprint_for_log(result)}"
+                )
                 
             hits = result["hits"]
             logger.info(f"AI抽取成功，获得{len(hits)}个结果")
@@ -780,12 +790,19 @@ class ExtractorClient:
             )
             
             if response.status_code != 200:
-                raise Exception(f"AI语义审计返回错误状态码: {response.status_code}, 响应: {response.text}")
-                
+                raise Exception(
+                    "AI语义审计返回错误状态码: {status}, 响应指纹: {marker}".format(
+                        status=response.status_code,
+                        marker=fingerprint_for_log(response.text),
+                    )
+                )
+
             result = response.json()
-            
+
             if "hits" not in result:
-                raise Exception(f"AI语义审计返回格式错误: {result}")
+                raise Exception(
+                    f"AI语义审计返回格式错误: 缺少 hits 字段, 响应指纹: {fingerprint_for_log(result)}"
+                )
                 
             hits = result["hits"]
             logger.info(f"AI语义审计成功，获得{len(hits)}个结果")

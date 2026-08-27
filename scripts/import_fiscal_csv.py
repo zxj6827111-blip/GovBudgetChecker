@@ -32,6 +32,7 @@ load_dotenv()
 
 from src.db.connection import DatabaseConnection
 from src.db.migrations import run_migrations
+from src.utils.logging_config import safe_log_extra
 
 import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -109,7 +110,13 @@ async def import_cells(conn, version_id: int) -> int:
         reader = csv.DictReader(f)
         for row in reader:
             if 'table_code' not in row:
-                logger.warning(f"Skipping malformed row: {row}")
+                # 整行是材料数据（含 raw_text），只记行号与列名
+                logger.warning(
+                    "skipping malformed cells row: missing table_code",
+                    extra=safe_log_extra(
+                        {"row_number": reader.line_num, "column_names": sorted(row.keys())}
+                    ),
+                )
                 continue
             await conn.execute("""
                 INSERT INTO fiscal_table_cells 
@@ -141,7 +148,12 @@ async def import_facts(conn, version_id: int) -> int:
         reader = csv.DictReader(f)
         for row in reader:
             if 'table_code' not in row:
-                logger.warning(f"Skipping malformed row: {row}")
+                logger.warning(
+                    "skipping malformed facts row: missing table_code",
+                    extra=safe_log_extra(
+                        {"row_number": reader.line_num, "column_names": sorted(row.keys())}
+                    ),
+                )
                 continue
             
             # Parse amount

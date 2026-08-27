@@ -36,6 +36,11 @@ jobs:
       - name: Ruff
         run: ruff check .
 
+      # Task C：禁止把可能含材料原文/凭据的整个对象拼进日志 message。
+      # 单独成步是为了让 CI 上一眼能看出是"日志泄漏"红还是普通 lint 红。
+      - name: Log message safety
+        run: python scripts/check_log_message_safety.py
+
       - name: Mypy
         run: mypy api src tests
 
