@@ -17,12 +17,22 @@ export interface CardProps {
   children?: ReactNode;
   className?: string;
   bodyClassName?: string;
+  /** 可选测试锚点：供 e2e/单测定位某个卡片区块，不影响样式与业务逻辑（Task 4 起新增）。 */
+  "data-testid"?: string;
 }
 
-export function Card({ title, desc, action, children, className, bodyClassName }: CardProps) {
+export function Card({
+  title,
+  desc,
+  action,
+  children,
+  className,
+  bodyClassName,
+  "data-testid": testId,
+}: CardProps) {
   const hasHeader = Boolean(title || desc || action);
   return (
-    <section className={cn("rounded-card border border-border bg-white shadow-soft", className)}>
+    <section className={cn("rounded-card border border-border bg-white shadow-soft", className)} data-testid={testId}>
       {hasHeader ? (
         <header className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
           <div className="min-w-0">

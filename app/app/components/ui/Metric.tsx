@@ -25,12 +25,22 @@ export interface MetricProps {
   tone?: MetricTone;
   corner?: ReactNode;
   className?: string;
+  /** 可选测试锚点：供 e2e/单测定位某一张 KPI 卡，不影响样式与业务逻辑（Task 4 起新增）。 */
+  "data-testid"?: string;
 }
 
-export function Metric({ label, value, desc, tone = "neutral", corner, className }: MetricProps) {
+export function Metric({
+  label,
+  value,
+  desc,
+  tone = "neutral",
+  corner,
+  className,
+  "data-testid": testId,
+}: MetricProps) {
   const isEmpty = isMetricValueEmpty(value);
   return (
-    <div className={cn("rounded-card border border-border bg-white p-4 shadow-soft", className)}>
+    <div className={cn("rounded-card border border-border bg-white p-4 shadow-soft", className)} data-testid={testId}>
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-medium text-slate-500">{label}</span>
         {corner ? <span className="text-xs text-slate-400">{corner}</span> : null}
