@@ -37,15 +37,15 @@ async def run_verification():
         logger.info("3. Verifying QC Framework Tables...")
         # Check tables exist
         tables = ["qc_rule_definitions", "qc_rule_versions", "qc_runs", "qc_findings"]
-        for table in tables:
+        for table_name in tables:
             exists = await conn.fetchval(
                 "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2)",
-                schema, table
+                schema, table_name
             )
             if not exists:
-                logger.error(f"Table {table} does not exist!")
+                logger.error(f"Table {table_name} does not exist!")
                 return
-            logger.info(f"Verified table exists: {table}")
+            logger.info(f"Verified table exists: {table_name}")
 
         logger.info("4. Running End-to-End Simulation...")
         

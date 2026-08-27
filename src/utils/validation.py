@@ -9,6 +9,8 @@ from typing import Any, Optional, Union
 from decimal import Decimal
 import logging
 
+from src.utils.logging_config import safe_log_extra
+
 logger = logging.getLogger(__name__)
 
 
@@ -51,9 +53,15 @@ def safe_float(
         try:
             return float(value_clean)
         except ValueError as e:
+            # 这里的 value 是表格单元格原值（材料原文片段）。
+            # 既不能进异常消息，也不能进日志 message：两者都会被落盘且不脱敏。
+            # 原值改走 extra 的 `*_text` 键，由 redact_log_fields 换成长度+哈希。
             if raise_on_error:
-                raise ValueError(f"Cannot convert '{value}' to float") from e
-            logger.warning(f"Failed to convert '{value}' to float, returning None")
+                raise ValueError("Cannot convert string to float") from e
+            logger.warning(
+                "failed to convert string to float, returning None",
+                extra=safe_log_extra({"value_type": "str", "value_text": value_clean}),
+            )
             return None
     
     # Handle Decimal
@@ -66,7 +74,10 @@ def safe_float(
     except (ValueError, TypeError) as e:
         if raise_on_error:
             raise ValueError(f"Cannot convert {type(value).__name__} to float") from e
-        logger.warning(f"Failed to convert {value} ({type(value)}) to float")
+        logger.warning(
+            "failed to convert value to float, returning None",
+            extra=safe_log_extra({"value_type": type(value).__name__}),
+        )
         return None
 
 
@@ -92,7 +103,16 @@ def safe_int(value: Any, default: Optional[int] = None) -> Optional[int]:
     try:
         return int(float(value))  # Handle strings like "123.0"
     except (ValueError, TypeError):
-        logger.warning(f"Failed to convert '{value}' to int, using default={default}")
+        logger.warning(
+            "failed to convert value to int, using default",
+            extra=safe_log_extra(
+                {
+                    "value_type": type(value).__name__,
+                    "value_text": value if isinstance(value, str) else None,
+                    "default_value": default,
+                }
+            ),
+        )
         return default
 
 
@@ -127,17 +147,30 @@ def validate_amount(
     
     # Check negative
     if not allow_negative and value < 0:
+        # 金额本身属于材料数据：定位信息（表号 + 行号）进 message，
+        # 具体金额只进 extra，异常消息也不再携带金额。
         logger.warning(
-            f"{table_code}[{row_order}]: Negative amount {value} (not allowed)"
+            "amount validation failed: negative amount not allowed",
+            extra=safe_log_extra(
+                {"table_code": table_code, "row_order": row_order, "reason": "negative_amount"}
+            ),
         )
-        raise ValueError(f"Negative amount not allowed: {value}")
+        raise ValueError(f"Negative amount not allowed at {table_code}[{row_order}]")
     
     # Check max value
     if abs(value) > max_value:
         logger.warning(
-            f"{table_code}[{row_order}]: Amount {value} exceeds max {max_value}"
+            "amount validation failed: amount exceeds maximum",
+            extra=safe_log_extra(
+                {
+                    "table_code": table_code,
+                    "row_order": row_order,
+                    "reason": "exceeds_max",
+                    "max_value": max_value,
+                }
+            ),
         )
-        raise ValueError(f"Amount {value} exceeds maximum {max_value}")
+        raise ValueError(f"Amount at {table_code}[{row_order}] exceeds maximum {max_value}")
     
     return value
 

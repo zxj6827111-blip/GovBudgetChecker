@@ -10,6 +10,7 @@ import time
 from src.schemas.issues import IssueItem, JobContext, AnalysisConfig
 from src.engine.rules_v33 import ALL_RULES, build_document, order_and_number_issues  # 导入规则相关功能
 from src.engine.pipeline import run_rules, build_issues_payload  # 导入流水线功能
+from src.utils.logging_config import describe_exception, safe_log_extra
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +56,10 @@ class RuleFindingsService:
             return issues
             
         except Exception as e:
-            logger.error(f"规则分析失败: job_id={context.job_id}, error={e}")
-            logger.error(traceback.format_exc())
+            logger.exception(
+                "规则分析失败",
+                extra=safe_log_extra({"job_id": context.job_id, **describe_exception(e)}),
+            )
             return []
     
     async def _run_rules_engine(self, context: JobContext) -> List[Dict[str, Any]]:
@@ -140,7 +143,19 @@ class RuleFindingsService:
                 if issue:
                     issues.append(issue)
             except Exception as e:
-                logger.error(f"转换规则结果失败: {e}, result={result}")
+                # 规则结果里带 evidence/snippet 等原文，message 只能留序号与错误指纹
+                logger.error(
+                    "转换规则结果失败",
+                    extra=safe_log_extra(
+                        {
+                            "issue_index": idx,
+                            "issue_rule_id": str(result.get("rule_id") or "")
+                            if isinstance(result, dict)
+                            else "",
+                            **describe_exception(e),
+                        }
+                    ),
+                )
         
         return issues
     
@@ -209,7 +224,21 @@ class RuleFindingsService:
             )
             
         except Exception as e:
-            logger.error(f"转换单个结果失败: {e}")
+            # IssueItem 校验失败时 pydantic 会把输入值（证据原文片段）写进异常消息，
+            # 所以这里刻意**不用** logger.exception：异常栈里同样带着那段消息。
+            # 校验失败真正需要的定位信息是 loc + type，已由 describe_exception 保留。
+            logger.error(
+                "转换单个规则结果失败",
+                extra=safe_log_extra(
+                    {
+                        "issue_index": idx,
+                        "issue_rule_id": str(result.get("rule_id") or "")
+                        if isinstance(result, dict)
+                        else "",
+                        **describe_exception(e),
+                    }
+                ),
+            )
             return None
     
     def _normalize_severity(self, severity: str) -> str:

@@ -1,0 +1,94 @@
+{
+  "analysis_conclusion": "findings_detected",
+  "checksum": "checksum-job-done-full",
+  "filename": "job-done-full.pdf",
+  "job_id": "job-done-full",
+  "page_coverage": 0.35,
+  "quality_status": "ok",
+  "report_kind": "budget",
+  "report_year": 2026,
+  "result": {
+    "issues": {
+      "all": [
+        {
+          "evidence": [
+            {
+              "bbox": [
+                10,
+                20,
+                30,
+                40
+              ],
+              "page": 1,
+              "text": "合计 35.20，其中因公出国 10.00"
+            }
+          ],
+          "evidence_status": "complete",
+          "id": "rule-C-001",
+          "location": {
+            "page": 1
+          },
+          "message": "合计与分项之和不一致",
+          "page_number": 1,
+          "rule_id": "C-001",
+          "severity": "high",
+          "source": "rule",
+          "title": "三公经费合计不等于分项之和"
+        },
+        {
+          "evidence": [
+            {
+              "bbox": [
+                10,
+                20,
+                30,
+                40
+              ],
+              "page": 2,
+              "text": "合计 35.20，其中因公出国 10.00"
+            }
+          ],
+          "evidence_status": "complete",
+          "id": "rule-C-002",
+          "location": {
+            "page": 2
+          },
+          "message": "合计与分项之和不一致",
+          "page_number": 2,
+          "rule_id": "C-002",
+          "severity": "high",
+          "source": "rule",
+          "title": "三公经费合计不等于分项之和"
+        }
+      ],
+      "error": [],
+      "info": [],
+      "warn": []
+    },
+    "meta": {
+      "evidence_completeness": {
+        "complete": 2,
+        "completeness_rate": 1.0,
+        "degraded_count": 0,
+        "incomplete": 0,
+        "rule_warning_count": 0,
+        "total": 2
+      },
+      "page_extraction": {
+        "detector_version": "page-extraction-v1",
+        "page_count": 10,
+        "page_coverage": 0.35,
+        "scanned_page_count": 0
+      },
+      "report_kind": "budget",
+      "report_year": 2026
+    }
+  },
+  "scanned_page_count": 0,
+  "status": "done",
+  "structured_ingest": {
+    "ps_sync": {
+      "report_id": "11111111-1111-4111-8111-111111111111"
+    }
+  }
+}

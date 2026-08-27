@@ -8,6 +8,7 @@ __pycache__/
 .codex_pip_tmp/
 .pytest-tmp/
 .pytest-basetemp-*/
+.pytest-acceptance/
 .pytest-acceptance-*/
 pip_tmp_*/
 piptmpdl_*/
@@ -55,10 +56,14 @@ api/database.db
 
 # Local data and temporary files
 local.db
-tmp_wanli_budget_check.json
+# 一次性排查用的 payload / 抽样结果（历史上有 tmp_wanli_budget_check.json）
+tmp_*.json
 app/tsc_output.txt
 test_pdfs/
 X/
+
+# 导出产物（模板、预览图、回放报告等运行时产出，不入版本库）
+outputs/
 
 # Runtime data should not be versioned.
 data/*.json

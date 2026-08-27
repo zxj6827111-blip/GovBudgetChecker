@@ -12,6 +12,87 @@ os.environ["TESTING"] = "true"
 os.environ["GOVBUDGET_AUTH_ENABLED"] = "false"
 
 
+# ---------------------------------------------------------------------------
+# 数据库隔离
+#
+# 背景（实测缺陷）：`api/main.py` 在导入时会调用 `load_dotenv()`，把 `.env` 里的
+# `DATABASE_URL` 注入 `os.environ`；开发者 shell 里手动导出 `DATABASE_URL` 时同样如此。
+# 结果是 `pytest` 会对开发/生产库执行 `run_migrations()` 并写入测试数据
+# （已在真实库 `org_dept_annual_report` 查到 `file_name='split_mode.pdf'` 的残留行）。
+#
+# 因此这里做两件事：
+#   1. `isolate_database_url` 为 autouse，无条件摘掉 `DATABASE_URL`，测试默认永不连真库；
+#   2. 确需连库的测试必须显式请求 `real_database_url` fixture，并且只认专用变量
+#      `GOVBUDGET_TEST_DATABASE_URL`——绝不复用开发者的 `DATABASE_URL`，
+#      避免"人工记得先清环境变量"这种靠自觉的保护。
+# ---------------------------------------------------------------------------
+
+#: 专用的、必须显式配置的测试库连接串环境变量名
+TEST_DATABASE_URL_ENV = "GOVBUDGET_TEST_DATABASE_URL"
+
+
+def resolve_opt_in_database_url() -> str:
+    """返回显式 opt-in 的测试库连接串；未配置时返回空串。
+
+    只读 `GOVBUDGET_TEST_DATABASE_URL`，不回退到 `DATABASE_URL`，
+    这样开发库连接串不会因为"恰好设置了 DATABASE_URL"而被测试用上。
+    """
+    return str(os.environ.get(TEST_DATABASE_URL_ENV) or "").strip()
+
+
+@pytest.fixture(autouse=True)
+def isolate_database_url(monkeypatch):
+    """无条件移除 DATABASE_URL，保证测试进程默认不接触任何真实数据库。"""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    yield
+
+
+@pytest.fixture
+def real_database_url(isolate_database_url, monkeypatch):
+    """需要真实数据库的测试用的显式 opt-in fixture。
+
+    依赖 `isolate_database_url` 是为了固定 fixture 执行顺序：
+    先由隔离 fixture 摘掉环境里的连接串，再由本 fixture 注入专用测试库连接串，
+    否则两个 monkeypatch 的先后顺序不确定，注入可能被隔离动作覆盖。
+    """
+    dsn = resolve_opt_in_database_url()
+    if not dsn:
+        pytest.skip(
+            f"未配置 {TEST_DATABASE_URL_ENV}，跳过需要真实数据库的测试"
+        )
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    return dsn
+
+
+# ---------------------------------------------------------------------------
+# 任务产物目录隔离（Task 15.2 实测缺陷）
+#
+# 背景：`api/runtime.py:33` 在导入时把 `UPLOAD_ROOT` 解析成
+# `Path(os.getenv("UPLOAD_DIR", "uploads")).resolve()`，也就是**仓库根目录下的
+# uploads/**。多数测试会自己 monkeypatch 到 tmp_path，但有 5 个走上传接口的测试没有，
+# 于是每跑一次全量测试就往真实产物目录里多写 5 个任务目录
+# （实测：CI 全新检出跑完 pytest 后 uploads/ 里出现 5 个任务；
+#  本地 uploads/ 从 661 涨到 783 个目录，`split_mode.pdf` 反复重现）。
+#
+# 后果有三层：污染要被回放度量的历史语料、让"仓库洁净"无从保证、
+# 还会把 CI 的业务门禁指标带偏。所以这里与数据库一样做**无条件隔离**：
+# 测试进程默认永远写不到仓库的 uploads/。
+#
+# 同时改环境变量与模块属性两处：`runtime.UPLOAD_ROOT` 是模块属性（消费方都按
+# `runtime.UPLOAD_ROOT` 取值），而 `src/services/analysis_result_store.py` 里还有
+# 直接读 `os.getenv("UPLOAD_DIR")` 的路径，只改一处会漏。
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def isolate_upload_root(tmp_path_factory, monkeypatch):
+    """把任务产物根目录指向临时目录；测试自己再 monkeypatch 的话以它为准。"""
+    from api import runtime as _runtime
+
+    root = tmp_path_factory.mktemp("upload-root")
+    monkeypatch.setenv("UPLOAD_DIR", str(root))
+    monkeypatch.setattr(_runtime, "UPLOAD_ROOT", root, raising=False)
+    yield root
+
+
 @pytest.fixture(scope="session")
 def event_loop():
     """创建事件循环用于异步测试"""
@@ -350,6 +431,10 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers", "backend: marks tests as backend tests"
+    )
+    config.addinivalue_line(
+        "markers",
+        "real_database: 需要真实数据库的测试，必须同时请求 real_database_url fixture",
     )
 
 

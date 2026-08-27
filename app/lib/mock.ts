@@ -35,7 +35,17 @@ export interface Task {
   year: string;
   type: 'budget' | 'final';
   reportLabel: string;
-  status: 'analyzing' | 'completed' | 'failed';
+  /**
+   * review_required 是独立终态："分析跑完了，但质量门禁没过，结论不可交付"。
+   * 它既不能算 completed（会变成虚假成功），也不能算 failed（分析本身没出错）。
+   */
+  status: 'analyzing' | 'completed' | 'review_required' | 'failed';
+  /** 质量门禁判定结果，用于在 completed 上叠加"部分降级"标记 */
+  qualityStatus?: 'complete' | 'degraded' | 'review_required';
+  /** 分析结论四态，可区分"确实没问题"与"没查完" */
+  analysisConclusion?: 'findings_detected' | 'no_findings' | 'incomplete' | 'analysis_error';
+  /** 需要人工复核的原因（供徽标 tooltip / 详情展示） */
+  reviewReasons?: string[];
   problemCount: number;
   highRiskCount: number;
   updatedAt: string;

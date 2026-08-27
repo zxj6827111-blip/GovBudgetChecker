@@ -39,6 +39,12 @@ function buildSecurityHeaders(): Record<string, string> {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "SAMEORIGIN",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    // HSTS（缺口 B-08 前端侧缺失的一项）：只在生产构建下发。
+    // 本地 http 开发下发 HSTS 会让浏览器把 localhost 记成强制 HTTPS，
+    // 之后所有本地端口都得手动清 HSTS 缓存才能再用 http。
+    ...(isDevelopment
+      ? {}
+      : { "Strict-Transport-Security": "max-age=31536000; includeSubDomains" }),
   };
 }
 

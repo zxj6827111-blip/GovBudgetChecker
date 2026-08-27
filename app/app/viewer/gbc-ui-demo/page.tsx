@@ -57,6 +57,8 @@ import {
   formatDateTime,
   getDisplayIssueTotal,
   getHighRiskCount,
+  getUiTaskStatusMeta,
+  isUiTaskFinished,
   normalizeUiTaskStatus,
   toUiProblems,
   toUiTask,
@@ -386,19 +388,11 @@ function buildYearOptions(jobs: JobSummaryRecord[], includeAll = false): SelectO
 }
 
 function statusText(job: Pick<JobSummaryRecord, "status" | "quality_status">): string {
-  if (String(job.quality_status ?? "").toLowerCase() === "degraded") return "完成（需复核）";
-  const normalized = normalizeUiTaskStatus(job.status);
-  if (normalized === "completed") return "已完成";
-  if (normalized === "failed") return "失败";
-  return "执行中";
+  return getUiTaskStatusMeta(job).label;
 }
 
 function statusTone(job: Pick<JobSummaryRecord, "status" | "quality_status">): Tone {
-  if (String(job.quality_status ?? "").toLowerCase() === "degraded") return "orange";
-  const normalized = normalizeUiTaskStatus(job.status);
-  if (normalized === "completed") return "green";
-  if (normalized === "failed") return "red";
-  return "blue";
+  return getUiTaskStatusMeta(job).tone as Tone;
 }
 
 function workflowLabel(status?: IssueWorkflowStatus): string {
@@ -508,7 +502,8 @@ function materialTypeLabel(job: MaterialSource): string {
 function getJobProgress(job: JobSummaryRecord): number {
   const direct = Number(job.progress);
   if (Number.isFinite(direct)) return Math.max(0, Math.min(100, Math.round(direct)));
-  return normalizeUiTaskStatus(job.status) === "completed" ? 100 : normalizeUiTaskStatus(job.status) === "failed" ? 100 : 35;
+  // review_required 也是跑完的终态，进度应为 100，否则会看起来像卡住
+  return isUiTaskFinished(normalizeUiTaskStatus(job.status)) ? 100 : 35;
 }
 
 function buildIssuesFromDetails(details: JobDetailRecord[], jobs: JobSummaryRecord[], workflow: IssueWorkflowState): LiveIssue[] {
@@ -993,6 +988,7 @@ function Workbench({
             options={[
               { value: "all", label: "全部状态" },
               { value: "completed", label: "已完成" },
+              { value: "review_required", label: "需人工复核" },
               { value: "analyzing", label: "执行中" },
               { value: "failed", label: "失败" },
             ]}
@@ -1477,11 +1473,14 @@ function UploadPage({ selectedOrg, onUploaded }: { selectedOrg: OrganizationReco
 function Tasks({ selectedOrg, rows, total, page, allJobs, setPage, setTaskPage, onSelectJob, onReanalyze, onDownloadReport, onDeleteJob, operationBusy, isAdmin }: { selectedOrg: OrganizationRecord | null; rows: JobSummaryRecord[]; total: number; page: number; allJobs: JobSummaryRecord[]; setPage: (page: PageId) => void; setTaskPage: (page: number) => void; onSelectJob: (job: JobSummaryRecord) => void; onReanalyze: (job: JobSummaryRecord) => Promise<void>; onDownloadReport: (job: JobSummaryRecord) => Promise<void>; onDeleteJob: (job: JobSummaryRecord) => Promise<void>; operationBusy: boolean; isAdmin: boolean }) {
   const running = allJobs.filter((job) => normalizeUiTaskStatus(job.status) === "analyzing").length;
   const completed = allJobs.filter((job) => normalizeUiTaskStatus(job.status) === "completed").length;
+  const reviewRequired = allJobs.filter(
+    (job) => normalizeUiTaskStatus(job.status) === "review_required",
+  ).length;
   const failed = allJobs.filter((job) => normalizeUiTaskStatus(job.status) === "failed").length;
   return (
     <>
       <PageTitle selectedOrg={selectedOrg} title="任务中心" subtitle="跟踪材料上传、解析、OCR识别、规则审核、AI辅助和导出等任务的执行进度与状态。" />
-      <div className="mb-5 grid grid-cols-5 gap-4"><Metric icon={PlayCircle} label="执行中" value={`${running}个`} desc="正在处理" tone="blue" /><Metric icon={CheckCircle2} label="已完成" value={`${completed}个`} desc="完成分析" tone="green" /><Metric icon={AlertTriangle} label="失败" value={`${failed}个`} desc="需要处理" tone="red" /><Metric icon={UploadCloud} label="上传/解析" value={`${allJobs.length}个`} desc="已接入文件" tone="purple" /><Metric icon={Download} label="可导出" value={`${completed}个`} desc="报告可下载" tone="orange" /></div>
+      <div className="mb-5 grid grid-cols-6 gap-4"><Metric icon={PlayCircle} label="执行中" value={`${running}个`} desc="正在处理" tone="blue" /><Metric icon={CheckCircle2} label="已完成" value={`${completed}个`} desc="完成分析" tone="green" /><Metric icon={AlertTriangle} label="需人工复核" value={`${reviewRequired}个`} desc="门禁未通过" tone="orange" /><Metric icon={AlertTriangle} label="失败" value={`${failed}个`} desc="需要处理" tone="red" /><Metric icon={UploadCloud} label="上传/解析" value={`${allJobs.length}个`} desc="已接入文件" tone="purple" /><Metric icon={Download} label="可导出" value={`${completed}个`} desc="报告可下载" tone="slate" /></div>
       <Card title="任务列表" desc={`当前第 ${page} 页，每页 ${TASKS_PAGE_SIZE} 条，完整范围共 ${total} 条。`}><table className="w-full table-fixed text-left"><thead className="bg-slate-50"><tr><Th>任务名称</Th><Th>类型</Th><Th>范围</Th><Th>当前步骤</Th><Th>进度</Th><Th>状态</Th><Th>操作</Th></tr></thead><tbody className="divide-y divide-slate-100">{rows.length === 0 ? <tr><Td>暂无任务。</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td></tr> : rows.map((job) => <tr key={job.job_id}><Td><button type="button" data-testid={`gbc-task-name-${job.job_id}`} onClick={() => { onSelectJob(job); setPage("detail"); }} className="line-clamp-2 text-left font-bold text-blue-600">{toUiTask(job).filename}</button><div className="text-xs text-slate-500">创建时间：{formatDateTime(job.created_ts ?? job.ts)}</div></Td><Td><Pill tone={materialSubjectLabel(job) === "部门" ? "purple" : "blue"}>{materialTypeLabel(job)}</Pill></Td><Td><span title={job.organization_name ?? undefined}>{jobOrgName(job)}</span></Td><Td>{String(job.stage ?? "任务状态")}</Td><Td><div className="h-2 rounded-full bg-slate-100"><div className={cn("h-2 rounded-full", normalizeUiTaskStatus(job.status) === "failed" ? "bg-red-500" : "bg-blue-600")} style={{ width: `${getJobProgress(job)}%` }} /></div><div className="mt-1 text-xs">{getJobProgress(job)}%</div></Td><Td><Pill tone={statusTone(job)}>{statusText(job)}</Pill></Td><Td><div className="flex flex-wrap gap-2 font-bold text-blue-600"><button type="button" data-testid={`gbc-task-detail-${job.job_id}`} onClick={() => { onSelectJob(job); setPage("detail"); }}>详情</button><button type="button" data-testid={`gbc-task-rerun-${job.job_id}`} onClick={() => void onReanalyze(job)} disabled={operationBusy}>重跑</button><button type="button" data-testid={`gbc-task-export-${job.job_id}`} onClick={() => void onDownloadReport(job)} disabled={operationBusy}>导出</button>{isAdmin ? <button type="button" data-testid={`gbc-task-delete-${job.job_id}`} onClick={() => void onDeleteJob(job)} disabled={operationBusy} className="text-red-600">删除</button> : null}</div></Td></tr>)}</tbody></table><PaginationFooter total={total} page={page} pageSize={TASKS_PAGE_SIZE} onPageChange={setTaskPage} /></Card>
     </>
   );

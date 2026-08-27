@@ -23,6 +23,22 @@ if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 
 from src.engine.pipeline import build_document, build_issues_payload
+from src.services.evidence_guard import (
+    apply_evidence_completeness,
+    count_formal_findings,
+)
+from src.utils.provenance import summarize_finding_versions
+from src.utils.logging_config import (
+    configure_logging_from_env,
+    log_context,
+    log_job_stage,
+    safe_log_extra,
+)
+from src.schemas.issues import (
+    AnalysisConclusion,
+    AnalysisQualityStatus,
+    JobStatus,
+)
 from api import runtime
 from api.job_queue import DurableJobQueue
 from api.queue_runtime import (
@@ -50,11 +66,26 @@ from src.services.rule_process import (
     RuleExecutionTimeout,
     run_rules_in_process,
 )
+from src.services.pdf_page_extract import (
+    extract_tables_from_page,
+    extract_visible_text_from_page,
+    is_visible_char,
+)
+from src.services.pdf_parse_process import (
+    PdfParseError,
+    PdfParseLimitExceeded,
+    PdfParseTimeout,
+    isolation_enabled as pdf_parse_isolation_enabled,
+    parse_error_code,
+    parse_pdf_in_process,
+    resolve_limits as resolve_pdf_parse_limits,
+)
 
 try:
-    from src.security import SecurityMiddleware
+    from src.security import SecurityHeadersMiddleware, SecurityMiddleware
 except ImportError:
     SecurityMiddleware = None
+    SecurityHeadersMiddleware = None
 
 import logging
 
@@ -126,6 +157,10 @@ async def _shutdown_job_queue() -> None:
 
 @asynccontextmanager
 async def _app_lifespan(_app: FastAPI):
+    # 结构化日志接线点（缺口 P2-01 / B-05）：此前 setup_logging 全仓无调用点，
+    # 线上实际用的是 Python 默认日志。放在 lifespan 而不是模块导入处，
+    # 是因为导入期装配会清掉 pytest 的日志 handler。
+    configure_logging_from_env("api")
     await _startup_job_queue()
     try:
         yield
@@ -171,10 +206,21 @@ if SecurityMiddleware and runtime.security_config and runtime.security_config.en
     app.add_middleware(SecurityMiddleware, config=runtime.security_config)
     logger.info("Security middleware enabled with rate limiting")
 
+# 安全响应头（缺口 B-08）。放在最后 add，Starlette 会把它插到最外层，
+# 因此连免认证端点（/health、/ready、/docs）与被鉴权中间件短路的响应也带上安全头。
+# 与鉴权/限流互不影响：本中间件只加响应头，不拦请求。
+if SecurityHeadersMiddleware is not None:
+    app.add_middleware(SecurityHeadersMiddleware)
+    logger.info("Security headers middleware enabled")
+
 
 # ----------------------------- 工具函数 -----------------------------
 def _safe_write(job_dir: Path, payload: Dict[str, Any]) -> None:
-    """将状态写入 status.json（带异常保护）"""
+    """将状态写入 status.json（带异常保护），并同步产出结构化阶段日志。
+
+    状态流转本来就集中收敛在这里，所以埋点也放在这里：一处接线覆盖全部阶段，
+    不必在十几个调用点各写一遍 logger 调用，也不会漏埋。
+    """
     status_file = job_dir / "status.json"
     try:
         merged_payload = dict(payload)
@@ -185,6 +231,23 @@ def _safe_write(job_dir: Path, payload: Dict[str, Any]) -> None:
     except Exception as e:
         (job_dir / "status_error.log").write_text(str(e), encoding="utf-8")
 
+    # 只写结构化元数据（进度、页覆盖率、错误码），不写 PDF 正文与证据原文
+    job_status = str(payload.get("status") or "unknown")
+    log_job_stage(
+        job_id=str(payload.get("job_id") or job_dir.name),
+        stage=str(payload.get("stage") or job_status),
+        status=job_status,
+        details={
+            "progress": payload.get("progress"),
+            "page_coverage": payload.get("page_coverage"),
+            "scanned_page_count": payload.get("scanned_page_count"),
+            "quality_status": payload.get("quality_status"),
+            "analysis_conclusion": payload.get("analysis_conclusion"),
+            "error": payload.get("error"),
+        },
+        level=logging.ERROR if job_status == "error" else logging.INFO,
+    )
+
 
 def _find_first_pdf(job_dir: Path) -> Path:
     pdfs = sorted(job_dir.glob("*.pdf"))
@@ -194,70 +257,266 @@ def _find_first_pdf(job_dir: Path) -> Path:
 
 
 def _extract_tables_from_page(page) -> List[List[List[str]]]:
-    """
-    读取单页表格，返回：该页的多张表；每张表是 2D 数组（行→列）
-    （和引擎里的逻辑一致，先用线策略，再退回默认）
-    """
-    tables: List[List[List[str]]] = []
-    try:
-        t1 = (
-            page.extract_tables(
-                table_settings={
-                    "vertical_strategy": "lines",
-                    "horizontal_strategy": "lines",
-                    "intersection_tolerance": 3,
-                    "min_words_vertical": 1,
-                    "min_words_horizontal": 1,
-                }
-            )
-            or []
-        )
-        tables += t1
-    except Exception:
-        pass
-    try:
-        if not tables:
-            t2 = page.extract_tables() or []
-            tables += t2
-    except Exception:
-        pass
-
-    norm_tables: List[List[List[str]]] = []
-    for tb in tables:
-        norm_tables.append(
-            [[("" if c is None else str(c)).strip() for c in row] for row in (tb or [])]
-        )
-    return norm_tables
+    """读取单页表格。实现下沉到 `src/services/pdf_page_extract`，
+    这样解析隔离子进程可以直接导入它，而不必导入整个 FastAPI 应用。"""
+    return extract_tables_from_page(page)
 
 
 def _is_visible_char(obj: Dict[str, Any], page_height: float) -> bool:
-    if obj.get("object_type") != "char":
-        return True
-    top = obj.get("top")
-    bottom = obj.get("bottom")
-    if top is None or bottom is None:
-        return True
-    try:
-        top_v = float(top)
-        bottom_v = float(bottom)
-    except Exception:
-        return True
-    return top_v >= 0 and bottom_v <= page_height
+    return is_visible_char(obj, page_height)
 
 
 def _extract_visible_text_from_page(page) -> str:
-    raw_text = page.extract_text() or ""
+    return extract_visible_text_from_page(page)
+
+
+def _scanned_page_min_chars() -> int:
+    """低文本页判定阈值（每页去空白后的字符数）。
+
+    预决算材料的正文页通常有数百字符，纯扫描页 pdfplumber 抽出来是空串。
+    阈值取 50 是为了同时挡住"只抽到页眉页脚/水印"这类残缺文本层。
+    走环境变量以便不同来源的材料现场调参。
+    """
+    raw = os.getenv("SCANNED_PAGE_MIN_CHARS", "50")
     try:
-        page_height = float(page.height)
-        filtered_page = page.filter(
-            lambda obj, h=page_height: _is_visible_char(obj, h)
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return 50
+    return value if value > 0 else 50
+
+
+def _count_non_empty_table_cells(page_table: Any) -> int:
+    """统计单页抽到的非空表格单元格数量（结构容错，任何异常形状都按 0 计）。"""
+    if not isinstance(page_table, (list, tuple)):
+        return 0
+    total = 0
+    for table in page_table:
+        if not isinstance(table, (list, tuple)):
+            continue
+        for row in table:
+            if not isinstance(row, (list, tuple)):
+                continue
+            total += sum(1 for cell in row if str(cell if cell is not None else "").strip())
+    return total
+
+
+def _assess_page_extraction(
+    page_texts: Any,
+    page_tables: Any = None,
+) -> Dict[str, Any]:
+    """评估每页文本抽取质量，识别疑似扫描页与低文本页。
+
+    本轮不做自动 OCR：这里只负责"检测 + 算覆盖率"，
+    是否转人工复核由任务级质量门禁（Task 3）决定。
+
+    判定口径：
+      - 去空白字符数低于阈值、且未抽到任何非空表格单元格 -> 低文本页；
+      - 其中字符数为 0 且无表格单元格的，再计一笔"疑似扫描页"。
+
+    表格单元格参与判定属于误报控制：纯表格页正文字符本来就少，
+    但只要能抽到单元格就说明 PDF 有文本层，不该误判成扫描件。
+    """
+    texts: List[str] = []
+    if isinstance(page_texts, (list, tuple)):
+        texts = [str(item if item is not None else "") for item in page_texts]
+
+    tables: List[Any] = []
+    if isinstance(page_tables, (list, tuple)):
+        tables = list(page_tables)
+
+    min_chars = _scanned_page_min_chars()
+    low_text_pages: List[int] = []
+    scanned_pages: List[int] = []
+    total_text_chars = 0
+
+    for index, text in enumerate(texts):
+        char_count = len("".join(str(text).split()))
+        total_text_chars += char_count
+        cell_count = _count_non_empty_table_cells(tables[index] if index < len(tables) else None)
+        page_number = index + 1  # 对外一律用 1-based 页码，便于直接给人工定位
+        if char_count >= min_chars or cell_count > 0:
+            continue
+        low_text_pages.append(page_number)
+        if char_count == 0 and cell_count == 0:
+            scanned_pages.append(page_number)
+
+    page_count = len(texts)
+    if page_count > 0:
+        page_coverage = round((page_count - len(low_text_pages)) / page_count, 4)
+    else:
+        # 0 页（解析失败或空 PDF）一律按覆盖率 0 处理，让门禁把它拦成待复核，
+        # 而不是因为"没有低文本页"反而算成覆盖完整。
+        page_coverage = 0.0
+
+    return {
+        "page_count": page_count,
+        "text_page_count": page_count - len(low_text_pages),
+        "low_text_pages": low_text_pages,
+        "low_text_page_count": len(low_text_pages),
+        "scanned_pages": scanned_pages,
+        "scanned_page_count": len(scanned_pages),
+        "page_coverage": page_coverage,
+        "total_text_chars": total_text_chars,
+        "min_chars_threshold": min_chars,
+        "ocr_applied": False,
+        "detector_version": "page-extraction-v1",
+    }
+
+
+def _page_coverage_min_ratio() -> float:
+    """质量门禁要求的最低页面文本覆盖率，低于该比例判定分析不完整。"""
+    raw = os.getenv("PAGE_COVERAGE_MIN_RATIO", "0.8")
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return 0.8
+    if not 0.0 < value <= 1.0:
+        return 0.8
+    return value
+
+
+def _ai_assist_required() -> bool:
+    """AI 辅助是否为"必需能力"。必需时 AI 失败不能算降级完成，必须转人工复核。"""
+    return str(os.getenv("AI_ASSIST_REQUIRED", "false")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _count_result_findings(result: Dict[str, Any]) -> int:
+    """统计结果里的"正式问题"条数，兼容传统分桶结构与双模式结构。
+
+    缺证据被降级为待复核的条目不计入（P0-07）：它们不是可交付的正式结论，
+    而质量门禁正是用这个计数区分 findings_detected 与 no_findings，
+    口径必须与"正式问题"一致，否则会出现"问题全被降级却仍报发现问题"。
+
+    具体实现下沉到 `evidence_guard.count_formal_findings`，与离线回放脚本共用同一口径。
+    """
+    return count_formal_findings(result)
+
+
+def _evaluate_quality_gate(
+    page_assessment: Dict[str, Any],
+    report_kind: Any,
+    report_year: Any,
+    ai_requested: bool,
+    ai_degraded: bool,
+    issue_total: int,
+    evidence_degraded_count: int = 0,
+) -> Dict[str, Any]:
+    """任务级质量门禁：决定终态是 done / degraded / review_required。
+
+    设计意图是把"分析跑完了"和"结论可信"分开：只有门禁全过才允许出 done，
+    否则一律转 review_required + incomplete，避免"扫描件静默漏检却显示审核通过"。
+
+    触发人工复核的条件（任一命中即转）：
+      1. 页面文本覆盖率低于阈值；
+      2. 存在疑似扫描页（本轮不做 OCR，必然漏检）；
+      3. 报告类型无法识别（unknown 只跑了通用规则，专项规则未覆盖）；
+      4. 年度无法识别（同比/口径类判断失去基准）；
+      5. AI 被配置为必需能力却失败；
+      6. 存在因缺证据被降级的问题项（P0-07）。
+
+    `degraded` 保留原语义："部分能力降级但结论仍然有效"。
+
+    注意 `issue_total` 必须传入"正式问题数"（不含降级项），否则会出现
+    "问题全被降级却仍报 findings_detected"的口径矛盾。
+    """
+    coverage_threshold = _page_coverage_min_ratio()
+    page_coverage = float(page_assessment.get("page_coverage") or 0.0)
+    scanned_page_count = int(page_assessment.get("scanned_page_count") or 0)
+    low_text_pages = page_assessment.get("low_text_pages")
+    low_text_pages = low_text_pages if isinstance(low_text_pages, list) else []
+
+    review_reasons: List[Dict[str, Any]] = []
+
+    if page_coverage < coverage_threshold:
+        review_reasons.append(
+            {
+                "code": "low_page_coverage",
+                "message": (
+                    f"页面文本覆盖率 {page_coverage:.2%} 低于门禁阈值 "
+                    f"{coverage_threshold:.2%}，可能存在未被审核的页面"
+                ),
+                "pages": low_text_pages[:50],
+            }
         )
-        filtered_text = filtered_page.extract_text() or ""
-        if filtered_text.strip():
-            return filtered_text
-    except Exception:
-        pass
-    return raw_text
+    if scanned_page_count > 0:
+        review_reasons.append(
+            {
+                "code": "scanned_pages_detected",
+                "message": (
+                    f"检测到 {scanned_page_count} 页疑似扫描页/无文本层，"
+                    "当前未启用 OCR，这些页面内容未参与审核"
+                ),
+                "pages": (page_assessment.get("scanned_pages") or [])[:50],
+            }
+        )
+    if str(report_kind or "").strip().lower() in {"", "unknown"}:
+        review_reasons.append(
+            {
+                "code": "unknown_report_kind",
+                "message": "未能识别材料是预算公开还是决算公开，仅执行了通用规则，专项规则未覆盖",
+            }
+        )
+    if report_year is None:
+        review_reasons.append(
+            {
+                "code": "unknown_report_year",
+                "message": "未能识别报告年度，同比与口径类判断缺少基准",
+            }
+        )
+    if ai_requested and ai_degraded and _ai_assist_required():
+        review_reasons.append(
+            {
+                "code": "ai_assist_required_but_failed",
+                "message": "AI 辅助被配置为必需能力但本次执行失败，结论覆盖面不完整",
+            }
+        )
+    degraded_findings = max(0, int(evidence_degraded_count or 0))
+    if degraded_findings > 0:
+        review_reasons.append(
+            {
+                "code": "evidence_incomplete_findings",
+                "message": (
+                    f"有 {degraded_findings} 条 AI 问题缺少可复核证据，已降级为待复核，"
+                    "不计入正式问题；需人工核对原文后再定性"
+                ),
+            }
+        )
+
+    if review_reasons:
+        status = JobStatus.REVIEW_REQUIRED.value
+        quality_status = AnalysisQualityStatus.REVIEW_REQUIRED.value
+        analysis_conclusion = AnalysisConclusion.INCOMPLETE.value
+    else:
+        status = JobStatus.DEGRADED.value if ai_degraded else JobStatus.DONE.value
+        quality_status = (
+            AnalysisQualityStatus.DEGRADED.value
+            if ai_degraded
+            else AnalysisQualityStatus.COMPLETE.value
+        )
+        analysis_conclusion = (
+            AnalysisConclusion.FINDINGS_DETECTED.value
+            if issue_total > 0
+            else AnalysisConclusion.NO_FINDINGS.value
+        )
+
+    return {
+        "status": status,
+        "quality_status": quality_status,
+        "analysis_conclusion": analysis_conclusion,
+        "review_reasons": review_reasons,
+        "page_coverage": page_coverage,
+        "scanned_page_count": scanned_page_count,
+        "coverage_threshold": coverage_threshold,
+        "issue_total": issue_total,
+        "evidence_degraded_count": degraded_findings,
+        "ai_degraded": bool(ai_degraded),
+        "ai_required": _ai_assist_required(),
+    }
 
 
 async def _run_pipeline(job_dir: Path) -> None:
@@ -273,33 +532,56 @@ async def _run_pipeline(job_dir: Path) -> None:
     except Exception:
         PIPELINE_TIMEOUT_SEC = 600
 
-    try:
-        await asyncio.wait_for(
-            _run_pipeline_inner(job_dir),
-            timeout=PIPELINE_TIMEOUT_SEC,
-        )
-    except asyncio.TimeoutError:
-        _safe_write(
-            job_dir,
-            {
-                "job_id": job_dir.name,
-                "status": "error",
-                "error": f"pipeline_timeout_{PIPELINE_TIMEOUT_SEC}s",
-                "ts": time.time(),
-            },
-        )
-        await persist_analysis_job_snapshot(
-            runtime.read_json_file(job_dir / "status.json", default={}),
-            include_results=True,
-        )
+    # 绑定 job_id 到日志上下文：本函数内（含被调用栈里任意模块）产生的每条日志
+    # 都会自动带上 job_id，实现"全链路可按 job_id 检索"。
+    # 用 contextvars 而非全局 LogRecordFactory，队列并发多任务时不会互相串字段。
+    with log_context(job_id=job_dir.name):
+        try:
+            await asyncio.wait_for(
+                _run_pipeline_inner(job_dir),
+                timeout=PIPELINE_TIMEOUT_SEC,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "pipeline timed out after %ss",
+                PIPELINE_TIMEOUT_SEC,
+                extra=safe_log_extra(
+                    {"stage": "pipeline_timeout", "timeout_seconds": PIPELINE_TIMEOUT_SEC}
+                ),
+            )
+            _safe_write(
+                job_dir,
+                {
+                    "job_id": job_dir.name,
+                    "status": "error",
+                    "error": f"pipeline_timeout_{PIPELINE_TIMEOUT_SEC}s",
+                    "ts": time.time(),
+                },
+            )
+            await persist_analysis_job_snapshot(
+                runtime.read_json_file(job_dir / "status.json", default={}),
+                include_results=True,
+            )
 
 
 async def _run_pipeline_inner(job_dir: Path) -> None:
-    """Pipeline body isolated for timeout wrapping."""
+    """Pipeline body isolated for timeout wrapping.
+
+    这里再绑一次 job_id 上下文：`_run_pipeline` 已经绑过，但测试与 worker 恢复
+    路径会直接调用本函数，重复绑定是幂等的（同名同值），能保证任何入口都有 job_id。
+    """
+    with log_context(job_id=job_dir.name):
+        await _run_pipeline_body(job_dir)
+
+
+async def _run_pipeline_body(job_dir: Path) -> None:
+    """真正的流水线主体。"""
     # 提前初始化 provider_stats，确保处理中/失败态也能返回该字段
     provider_stats: List[Dict[str, Any]] = []
     structured_ingest_summary: Dict[str, Any] = {}
     analysis_quality_status = "complete"
+    # 解析前先给出"零覆盖"默认值：若在解析阶段就失败，错误态也能诚实报出覆盖率 0
+    page_assessment: Dict[str, Any] = _assess_page_extraction([], [])
     try:
         # 读取检测模式配置
         status_file = job_dir / "status.json"
@@ -389,9 +671,68 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
             return p_texts, p_tables, f_size
 
         loop = asyncio.get_running_loop()
-        page_texts, page_tables, filesize = await loop.run_in_executor(
-            None, _sync_parse_pdf
-        )
+        loop = asyncio.get_running_loop()
+        # 解析资源隔离（缺口 P2-05 / B-09）：默认走可终止的独立进程 + 资源上限，
+        # 恶意或超大 PDF 打爆的是子进程，不会连带拖死 worker。
+        # 线程池路径保留给显式关闭隔离的场景（`PDF_PARSE_ISOLATION_ENABLED=false`，
+        # 测试环境默认走这条，因为子进程里 monkeypatch 不生效）。
+        if pdf_parse_isolation_enabled():
+            parse_limits = resolve_pdf_parse_limits()
+            logger.info(
+                "parsing pdf in isolated process",
+                extra=safe_log_extra(
+                    {
+                        "stage": "解析PDF内容",
+                        "parse_timeout_seconds": parse_limits["timeout_seconds"],
+                        "parse_max_pages": parse_limits["max_pages"],
+                        "parse_memory_mb": parse_limits["memory_mb"],
+                        "parse_memory_limit_supported": parse_limits[
+                            "memory_limit_supported"
+                        ],
+                        "parse_start_method": parse_limits["start_method"],
+                    }
+                ),
+            )
+            try:
+                parsed = await parse_pdf_in_process(pdf_path, parse_limits)
+            except (PdfParseTimeout, PdfParseLimitExceeded, PdfParseError) as exc:
+                code, detail = parse_error_code(exc)
+                logger.error(
+                    "pdf parsing rejected: %s",
+                    code,
+                    extra=safe_log_extra(
+                        {"stage": "解析PDF内容", "parse_error_code": code}
+                    ),
+                )
+                # 终态是 error 而不是 review_required：一页都没解析出来，
+                # 没有任何可供人工复核的结论，标成待复核就是新的虚假成功。
+                raise RuntimeError(f"{code}:{detail}") from exc
+            page_texts = parsed["page_texts"]
+            page_tables = parsed["page_tables"]
+            filesize = parsed["filesize"]
+        else:
+            page_texts, page_tables, filesize = await loop.run_in_executor(
+                None, _sync_parse_pdf
+            )
+
+        # 扫描页/低文本页检测：本轮只检测不 OCR，结果先落状态供前端与后续门禁使用
+        page_assessment = _assess_page_extraction(page_texts, page_tables)
+        if page_assessment["low_text_page_count"]:
+            logger.warning(
+                "job %s low-text pages detected: coverage=%.4f scanned=%d pages=%s",
+                job_dir.name,
+                page_assessment["page_coverage"],
+                page_assessment["scanned_page_count"],
+                page_assessment["low_text_pages"][:20],
+                extra=safe_log_extra(
+                    {
+                        "stage": "page_extraction_assessed",
+                        "page_coverage": page_assessment["page_coverage"],
+                        "scanned_page_count": page_assessment["scanned_page_count"],
+                        "low_text_page_count": page_assessment["low_text_page_count"],
+                    }
+                ),
+            )
 
         # 构建 Document
         _safe_write(
@@ -406,6 +747,8 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                 "mode": mode,
                 "dual_mode_enabled": dual_mode_enabled,
                 "stage": "构建文档对象",
+                "page_coverage": page_assessment["page_coverage"],
+                "scanned_page_count": page_assessment["scanned_page_count"],
             },
         )
 
@@ -477,10 +820,12 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                 analysis_quality_status = "degraded"
 
             # 组装最终返回体（双模式结构）
+            dual_ai_findings = [item.dict() for item in dual_result.ai_findings]
+            dual_rule_findings = [item.dict() for item in dual_result.rule_findings]
             result = {
                 "summary": "",
-                "ai_findings": [item.dict() for item in dual_result.ai_findings],
-                "rule_findings": [item.dict() for item in dual_result.rule_findings],
+                "ai_findings": dual_ai_findings,
+                "rule_findings": dual_rule_findings,
                 "merged": dual_result.merged.dict(),
                 "meta": {
                     "pages": len(page_texts),
@@ -498,6 +843,12 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                     "report_kind": report_kind,
                     "elapsed_ms": dual_result.meta.get("elapsed_ms", {}),
                     "tokens": dual_result.meta.get("tokens", {}),
+                    "page_extraction": page_assessment,
+                    # 版本留痕汇总（P2-02）：从各条 finding 实际写入的版本反向汇总，
+                    # 不额外拍一份"声明值"，避免汇总与逐条留痕不一致。
+                    "versions": summarize_finding_versions(
+                        [*dual_ai_findings, *dual_rule_findings]
+                    ),
                 },
             }
         else:
@@ -669,6 +1020,10 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                     "report_year": report_year,
                     "report_kind": report_kind,
                     "provider_stats": provider_stats,
+                    "page_extraction": page_assessment,
+                    "versions": summarize_finding_versions(
+                        payload_issues["issues"].get("all") or []
+                    ),
                 },
             }
 
@@ -748,7 +1103,66 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
         runtime.write_structured_ingest_payload(job_dir, structured_ingest_summary)
         result["meta"]["structured_ingest"] = structured_ingest_summary
 
-        final_status = "degraded" if analysis_quality_status == "degraded" else "done"
+        # 证据链完整性校验（P0-07）：落库前逐条校验证据，
+        # 缺证据的 AI 问题就地降级为待复核，规则问题只记录告警。
+        evidence_completeness = apply_evidence_completeness(result)
+        result["meta"]["evidence_completeness"] = evidence_completeness
+        if evidence_completeness["degraded_count"] or evidence_completeness["rule_warning_count"]:
+            logger.warning(
+                "job %s evidence check: rate=%.4f degraded=%d rule_warnings=%d",
+                job_dir.name,
+                evidence_completeness["completeness_rate"],
+                evidence_completeness["degraded_count"],
+                evidence_completeness["rule_warning_count"],
+                extra=safe_log_extra(
+                    {
+                        "stage": "evidence_checked",
+                        "evidence_completeness_rate": evidence_completeness[
+                            "completeness_rate"
+                        ],
+                        "evidence_degraded_count": evidence_completeness["degraded_count"],
+                        "evidence_rule_warning_count": evidence_completeness[
+                            "rule_warning_count"
+                        ],
+                    }
+                ),
+            )
+
+        # 任务级质量门禁：done 只在门禁全过时出现，否则转 review_required
+        quality_gate = _evaluate_quality_gate(
+            page_assessment=page_assessment,
+            report_kind=report_kind,
+            report_year=report_year,
+            ai_requested=bool(use_ai_assist),
+            ai_degraded=analysis_quality_status == "degraded",
+            # 计数口径与证据校验保持一致：降级项不算正式问题
+            issue_total=_count_result_findings(result),
+            evidence_degraded_count=evidence_completeness["degraded_count"],
+        )
+        result["meta"]["quality_gate"] = quality_gate
+        final_status = quality_gate["status"]
+        if final_status == JobStatus.REVIEW_REQUIRED.value:
+            stage_text = "完成（需人工复核）"
+            logger.warning(
+                "job %s gated to review_required: %s",
+                job_dir.name,
+                [reason["code"] for reason in quality_gate["review_reasons"]],
+                extra=safe_log_extra(
+                    {
+                        "stage": "quality_gate",
+                        "review_reason_codes": [
+                            reason["code"] for reason in quality_gate["review_reasons"]
+                        ],
+                        "quality_status": quality_gate["quality_status"],
+                        "analysis_conclusion": quality_gate["analysis_conclusion"],
+                    }
+                ),
+            )
+        elif final_status == JobStatus.DEGRADED.value:
+            stage_text = "完成（部分能力降级）"
+        else:
+            stage_text = "完成"
+
         payload = {
             "job_id": job_dir.name,
             "status": final_status,
@@ -764,13 +1178,26 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
             "report_year": report_year,
             "report_kind": report_kind,
             "structured_ingest": structured_ingest_summary,
-            "quality_status": analysis_quality_status,
-            "stage": "完成（部分能力降级）" if final_status == "degraded" else "完成",
+            "quality_status": quality_gate["quality_status"],
+            "analysis_conclusion": quality_gate["analysis_conclusion"],
+            "review_reasons": quality_gate["review_reasons"],
+            "page_coverage": page_assessment["page_coverage"],
+            "scanned_page_count": page_assessment["scanned_page_count"],
+            "stage": stage_text,
         }
         _safe_write(job_dir, payload)
         await persist_analysis_job_snapshot(payload, include_results=True)
 
     except Exception as e:
+        # 只记异常类型与消息，不记 PDF 正文/证据原文
+        logger.exception(
+            "pipeline failed: %s",
+            type(e).__name__,
+            extra=safe_log_extra(
+                {"stage": "pipeline_error", "error_type": type(e).__name__}
+            ),
+        )
+        # 错误态显式覆盖质量字段，避免上一轮分析残留的 complete/done 结论被继承
         _safe_write(
             job_dir,
             {
@@ -784,6 +1211,10 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
                 "report_kind": report_kind,
                 "provider_stats": provider_stats,
                 "structured_ingest": structured_ingest_summary,
+                "quality_status": AnalysisQualityStatus.REVIEW_REQUIRED.value,
+                "analysis_conclusion": AnalysisConclusion.ANALYSIS_ERROR.value,
+                "page_coverage": page_assessment.get("page_coverage", 0.0),
+                "scanned_page_count": page_assessment.get("scanned_page_count", 0),
             },
         )
         await persist_analysis_job_snapshot(

@@ -78,6 +78,19 @@ except ImportError:
     get_user_store = None
 
 from src.services.analysis_result_store import persist_analysis_job_snapshot
+from src.schemas.issues import infer_analysis_conclusion
+
+# 展示层的问题计数必须与质量门禁同口径（缺证据被降级的条目不算正式问题），
+# 否则会出现"任务是 review_required / incomplete，列表却显示有 N 个问题"的矛盾。
+# 复用 evidence_guard 的判定函数，不在这里另立一套。
+from src.services.evidence_guard import is_formal_finding
+
+# 年份解析的唯一权威实现放在 src/utils/report_year.py，这里重新导出，
+# 既保持 `runtime.parse_report_year` 这个既有对外名字，又保证与结构化入库路径同源。
+from src.utils.report_year import (  # noqa: F401
+    extract_report_year_candidates,
+    parse_report_year,
+)
 
 _pipeline_runner: Optional[Callable[[Path], Awaitable[None]]] = None
 _job_queue: Optional["DurableJobQueue"] = None
@@ -104,6 +117,11 @@ JOB_STATUS_CONTEXT_KEYS = (
     "year_conflict",
     "report_kind",
     "created_by",
+    # 质量门禁与分析结论相关字段，需跨状态流转保留，供列表/详情/复核直接读取
+    "analysis_conclusion",
+    "quality_status",
+    "page_coverage",
+    "scanned_page_count",
 )
 ACTIVE_ANALYSIS_STATUSES = {"queued", "processing", "running"}
 REANALYZE_EPHEMERAL_FILES = {
@@ -121,11 +139,6 @@ REANALYZE_EPHEMERAL_FILES = {
 if TYPE_CHECKING:
     from api.job_queue import DurableJobQueue
 
-_YEAR_4_RE = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
-_YEAR_2_RE = re.compile(
-    r"(?<!\d)(\d{2})(?=\s*(?:\u5e74|\u5e74\u5ea6|\u9884\u7b97|\u51b3\u7b97|budget|final|settlement|accounts|$))",
-    re.I,
-)
 _COVER_ORG_LABELS = (
     ("\u9884\u7b97\u4e3b\u7ba1\u90e8\u95e8", "department", "budget"),
     ("\u9884\u7b97\u5355\u4f4d", "unit", "budget"),
@@ -610,46 +623,6 @@ def extract_pdf_first_page_text(pdf_path: Path) -> str:
     """Best-effort first-page text extraction for upload-time organization matching."""
     page_texts = extract_pdf_page_texts(pdf_path, max_pages=1)
     return page_texts[0] if page_texts else ""
-
-
-def parse_report_year(raw: Any) -> Optional[int]:
-    """Parse year from arbitrary value and return 4-digit year."""
-    for year in extract_report_year_candidates(raw):
-        return year
-    return None
-
-
-def extract_report_year_candidates(raw: Any) -> List[int]:
-    """Extract report year candidates from free-form text."""
-    if raw is None:
-        return []
-    text = str(raw).strip()
-    if not text:
-        return []
-
-    years: List[int] = []
-
-    if re.fullmatch(r"\d{1,4}", text):
-        try:
-            value = int(text)
-        except Exception:
-            value = -1
-        if 2000 <= value <= 2099:
-            years.append(value)
-        elif 0 <= value <= 99:
-            years.append(2000 + value)
-
-    for match in _YEAR_4_RE.finditer(text):
-        year = int(match.group(1))
-        if 2000 <= year <= 2099 and year not in years:
-            years.append(year)
-
-    for match in _YEAR_2_RE.finditer(text):
-        year = 2000 + int(match.group(1))
-        if 2000 <= year <= 2099 and year not in years:
-            years.append(year)
-
-    return years
 
 
 def infer_report_year(
@@ -1548,6 +1521,8 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     issue_error = 0
     issue_warn = 0
     issue_info = 0
+    # 因缺证据被降级为待复核的条目数：不计入 issue_total，但单独暴露供前端提示
+    degraded_issue_total = 0
     merged_issue_total = 0
     merged_issue_conflicts = 0
     merged_issue_agreements = 0
@@ -1582,14 +1557,82 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
             return "warn"
         return "info"
 
-    def _summarize_finding_list(items: Any) -> tuple[int, int, int, int]:
+    def _partition_findings(items: Any) -> tuple[List[Any], int]:
+        """按证据口径拆分 finding：返回 (正式问题列表, 降级问题条数)。
+
+        历史任务产物没有 `evidence_status` 字段时 `is_formal_finding` 恒为 True，
+        因此旧任务的计数结果与改动前完全一致（向后兼容）。
+        """
         if not isinstance(items, list):
-            return (0, 0, 0, 0)
-        total = len(items)
+            return [], 0
+        formal = [item for item in items if is_formal_finding(item)]
+        return formal, len(items) - len(formal)
+
+    def _collect_degraded_ids(result_payload: Any) -> Set[str]:
+        """收集被降级条目的 finding id，用于把它们从 merged 计数里剔除。
+
+        `apply_evidence_completeness` 只改写 ai_findings/rule_findings/issues，
+        不会动 `merged.merged_ids`，所以这里按 id 求差集，
+        避免"部门统计读 merged_issue_total 仍然大于 0"的口径分裂。
+        """
+        ids: Set[str] = set()
+        if not isinstance(result_payload, dict):
+            return ids
+        buckets: List[Any] = [
+            result_payload.get("ai_findings"),
+            result_payload.get("rule_findings"),
+        ]
+        issues_payload = result_payload.get("issues")
+        if isinstance(issues_payload, dict):
+            buckets.append(issues_payload.get("all"))
+            buckets.extend(issues_payload.get(key) for key in ("error", "warn", "info"))
+        elif isinstance(issues_payload, list):
+            buckets.append(issues_payload)
+        for bucket in buckets:
+            if not isinstance(bucket, list):
+                continue
+            for item in bucket:
+                if is_formal_finding(item):
+                    continue
+                item_id = ""
+                if isinstance(item, dict):
+                    item_id = str(item.get("id") or "").strip()
+                if item_id:
+                    ids.add(item_id)
+        return ids
+
+    def _count_degraded_findings(result_payload: Any) -> int:
+        """统计降级条目总数，遍历口径与 `count_formal_findings` 完全一致。
+
+        legacy 结构里 `issues.all` 与 `issues.error/warn/info` 持有同一批对象，
+        所以有 `all` 时只看 `all`，避免同一条被数两次。
+        """
+        if not isinstance(result_payload, dict):
+            return 0
+        issues_payload = result_payload.get("issues")
+        if isinstance(issues_payload, dict):
+            all_items = issues_payload.get("all")
+            if isinstance(all_items, list):
+                return _partition_findings(all_items)[1]
+            return sum(
+                _partition_findings(issues_payload.get(key))[1]
+                for key in ("error", "warn", "info")
+            )
+        if isinstance(issues_payload, list):
+            return _partition_findings(issues_payload)[1]
+        return sum(
+            _partition_findings(result_payload.get(key))[1]
+            for key in ("rule_findings", "ai_findings")
+        )
+
+    def _summarize_finding_list(items: Any) -> tuple[int, int, int, int]:
+        """汇总 finding 计数，只统计正式问题（缺证据被降级的不计入）。"""
+        formal_items, _ = _partition_findings(items)
+        total = len(formal_items)
         err = 0
         wrn = 0
         inf = 0
-        for item in items:
+        for item in formal_items:
             if isinstance(item, dict):
                 bucket = _severity_bucket(item.get("severity"))
             else:
@@ -1610,6 +1653,9 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         provider_stats = result_meta.get("provider_stats")
         if isinstance(provider_stats, list):
             provider_stats_count = len(provider_stats)
+
+        degraded_ids = _collect_degraded_ids(result)
+        degraded_issue_total = _count_degraded_findings(result)
 
         elapsed_ms = result_meta.get("elapsed_ms")
         if isinstance(elapsed_ms, dict):
@@ -1638,6 +1684,17 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
                     merged_issue_agreements = int(merged_totals.get("agreements") or 0)
                 except Exception:
                     merged_issue_agreements = 0
+            # merged_ids 是合并前后的 finding id 集合，降级条目仍留在其中；
+            # 这里按 id 求交集扣减，历史产物没有降级条目时交集为空，计数不变。
+            if degraded_ids and merged_issue_total > 0:
+                merged_ids = merged_summary.get("merged_ids")
+                if isinstance(merged_ids, list):
+                    degraded_in_merged = sum(
+                        1
+                        for item in merged_ids
+                        if str(item or "").strip() in degraded_ids
+                    )
+                    merged_issue_total = max(0, merged_issue_total - degraded_in_merged)
 
         ai_findings = result.get("ai_findings")
         (
@@ -1664,28 +1721,32 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
             inf = issues.get("info")
             all_items = issues.get("all")
 
+            err_formal, _ = _partition_findings(err)
+            wrn_formal, _ = _partition_findings(wrn)
+            inf_formal, _ = _partition_findings(inf)
             if isinstance(err, list):
-                issue_error = len(err)
+                issue_error = len(err_formal)
             if isinstance(wrn, list):
-                issue_warn = len(wrn)
+                issue_warn = len(wrn_formal)
             if isinstance(inf, list):
-                issue_info = len(inf)
+                issue_info = len(inf_formal)
 
             if isinstance(all_items, list):
-                issue_total = len(all_items)
-                issue_items = [item for item in all_items if isinstance(item, dict)]
+                all_formal, _ = _partition_findings(all_items)
+                issue_total = len(all_formal)
+                issue_items = [item for item in all_formal if isinstance(item, dict)]
             else:
                 issue_total = issue_error + issue_warn + issue_info
                 issue_items = [
                     item
-                    for bucket in (err, wrn, inf)
-                    if isinstance(bucket, list)
+                    for bucket in (err_formal, wrn_formal, inf_formal)
                     for item in bucket
                     if isinstance(item, dict)
                 ]
         elif isinstance(issues, list):
-            issue_total = len(issues)
-            for item in issues:
+            issues_formal, _ = _partition_findings(issues)
+            issue_total = len(issues_formal)
+            for item in issues_formal:
                 bucket = _severity_bucket((item or {}).get("severity", ""))
                 if bucket == "error":
                     issue_error += 1
@@ -1700,9 +1761,12 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         if issue_total == 0:
             rule_findings = result.get("rule_findings")
             if isinstance(rule_findings, list):
-                issue_total = len(rule_findings)
-                issue_items = [item for item in rule_findings if isinstance(item, dict)]
-                for item in rule_findings:
+                rule_findings_formal, _ = _partition_findings(rule_findings)
+                issue_total = len(rule_findings_formal)
+                issue_items = [
+                    item for item in rule_findings_formal if isinstance(item, dict)
+                ]
+                for item in rule_findings_formal:
                     bucket = _severity_bucket((item or {}).get("severity", ""))
                     if bucket == "error":
                         issue_error += 1
@@ -1762,6 +1826,15 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "dual_mode_enabled": dual_mode_enabled,
         "stage": stage,
         "quality_status": status_data.get("quality_status") or "complete",
+        # 旧任务没有 analysis_conclusion 字段时按 status + 问题数反推，保证列表可读
+        "analysis_conclusion": infer_analysis_conclusion(
+            status,
+            issue_total=merged_issue_total,
+            explicit_conclusion=status_data.get("analysis_conclusion"),
+        ),
+        "review_reasons": status_data.get("review_reasons") or [],
+        "page_coverage": status_data.get("page_coverage"),
+        "scanned_page_count": status_data.get("scanned_page_count"),
         "report_year": report_year,
         "report_year_source": status_data.get("report_year_source"),
         "year_conflict": status_data.get("year_conflict"),
@@ -1771,6 +1844,10 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "issue_error": issue_error,
         "issue_warn": issue_warn,
         "issue_info": issue_info,
+        # 与 evidence_guard.count_formal_findings 同口径的显式字段：
+        # issue_total 已排除降级项，这里再单独暴露一份，便于下游明确引用口径。
+        "formal_issue_total": issue_total,
+        "degraded_issue_total": degraded_issue_total,
         "has_issues": issue_total > 0,
         "merged_issue_total": merged_issue_total,
         "merged_issue_conflicts": merged_issue_conflicts,
@@ -2471,12 +2548,12 @@ async def reanalyze_job(
         raise HTTPException(status_code=409, detail="job is already being analyzed")
 
     for filename in REANALYZE_EPHEMERAL_FILES:
-        target = source_job_dir / filename
+        target_path = source_job_dir / filename
         try:
-            if target.exists():
-                target.unlink()
+            if target_path.exists():
+                target_path.unlink()
         except Exception:
-            logger.exception("Failed to clear stale reanalyze artifact %s", target)
+            logger.exception("Failed to clear stale reanalyze artifact %s", target_path)
 
     body = dict(body or {})
     if "use_local_rules" not in body:

@@ -1,0 +1,43 @@
+{
+  "analysis_conclusion": "no_findings",
+  "checksum": "checksum-job-done-no-findings",
+  "filename": "job-done-no-findings.pdf",
+  "job_id": "job-done-no-findings",
+  "page_coverage": 0.95,
+  "quality_status": "ok",
+  "report_kind": "budget",
+  "report_year": 2026,
+  "result": {
+    "issues": {
+      "all": [],
+      "error": [],
+      "info": [],
+      "warn": []
+    },
+    "meta": {
+      "evidence_completeness": {
+        "complete": 0,
+        "completeness_rate": 1.0,
+        "degraded_count": 0,
+        "incomplete": 0,
+        "rule_warning_count": 0,
+        "total": 0
+      },
+      "page_extraction": {
+        "detector_version": "page-extraction-v1",
+        "page_count": 10,
+        "page_coverage": 0.95,
+        "scanned_page_count": 0
+      },
+      "report_kind": "budget",
+      "report_year": 2026
+    }
+  },
+  "scanned_page_count": 0,
+  "status": "done",
+  "structured_ingest": {
+    "ps_sync": {
+      "report_id": "22222222-2222-4222-8222-222222222222"
+    }
+  }
+}

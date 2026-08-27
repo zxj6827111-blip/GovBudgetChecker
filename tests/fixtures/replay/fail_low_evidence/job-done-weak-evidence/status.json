@@ -1,0 +1,100 @@
+{
+  "analysis_conclusion": "findings_detected",
+  "checksum": "checksum-job-done-weak-evidence",
+  "filename": "job-done-weak-evidence.pdf",
+  "job_id": "job-done-weak-evidence",
+  "page_coverage": 1.0,
+  "quality_status": "ok",
+  "report_kind": "budget",
+  "report_year": 2026,
+  "result": {
+    "issues": {
+      "all": [
+        {
+          "evidence": [],
+          "evidence_status": "incomplete_rule_warning",
+          "id": "rule-C-001",
+          "location": {
+            "page": 1
+          },
+          "message": "合计与分项之和不一致",
+          "page_number": 1,
+          "rule_id": "C-001",
+          "severity": "high",
+          "source": "rule",
+          "title": "三公经费合计不等于分项之和"
+        },
+        {
+          "evidence": [],
+          "evidence_status": "incomplete_rule_warning",
+          "id": "rule-C-002",
+          "location": {
+            "page": 2
+          },
+          "message": "合计与分项之和不一致",
+          "page_number": 2,
+          "rule_id": "C-002",
+          "severity": "high",
+          "source": "rule",
+          "title": "三公经费合计不等于分项之和"
+        },
+        {
+          "evidence": [],
+          "evidence_status": "incomplete_rule_warning",
+          "id": "rule-C-003",
+          "location": {
+            "page": 3
+          },
+          "message": "合计与分项之和不一致",
+          "page_number": 3,
+          "rule_id": "C-003",
+          "severity": "high",
+          "source": "rule",
+          "title": "三公经费合计不等于分项之和"
+        },
+        {
+          "evidence": [],
+          "evidence_status": "incomplete_rule_warning",
+          "id": "rule-C-004",
+          "location": {
+            "page": 4
+          },
+          "message": "合计与分项之和不一致",
+          "page_number": 4,
+          "rule_id": "C-004",
+          "severity": "high",
+          "source": "rule",
+          "title": "三公经费合计不等于分项之和"
+        }
+      ],
+      "error": [],
+      "info": [],
+      "warn": []
+    },
+    "meta": {
+      "evidence_completeness": {
+        "complete": 0,
+        "completeness_rate": 0.0,
+        "degraded_count": 0,
+        "incomplete": 4,
+        "rule_warning_count": 4,
+        "total": 4
+      },
+      "page_extraction": {
+        "detector_version": "page-extraction-v1",
+        "page_count": 10,
+        "page_coverage": 1.0,
+        "scanned_page_count": 0
+      },
+      "report_kind": "budget",
+      "report_year": 2026
+    }
+  },
+  "scanned_page_count": 0,
+  "status": "done",
+  "structured_ingest": {
+    "ps_sync": {
+      "report_id": "55555555-5555-4555-8555-555555555555"
+    }
+  }
+}

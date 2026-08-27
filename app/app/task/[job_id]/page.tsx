@@ -395,20 +395,31 @@ export default function TaskDetail() {
 
         <div className="flex items-center gap-3">
           <span
+            title={task.reviewReasons?.join("；") || undefined}
             className={cn(
               "rounded-full border px-2.5 py-1 text-xs font-medium",
               task.status === "completed"
-                ? "border-success-200 bg-success-50 text-success-700"
-                : task.status === "analyzing"
-                  ? "border-warning-200 bg-warning-50 text-warning-700"
-                  : "border-danger-200 bg-danger-50 text-danger-700"
+                ? task.qualityStatus === "degraded"
+                  ? "border-orange-200 bg-orange-50 text-orange-700"
+                  : "border-success-200 bg-success-50 text-success-700"
+                : task.status === "review_required"
+                  ? "border-orange-200 bg-orange-50 text-orange-700"
+                  : task.status === "analyzing"
+                    ? "border-warning-200 bg-warning-50 text-warning-700"
+                    : "border-danger-200 bg-danger-50 text-danger-700"
             )}
           >
             {task.status === "completed"
-              ? "分析完成"
-              : task.status === "analyzing"
-                ? "分析中"
-                : "分析失败"}
+              ? task.qualityStatus === "degraded"
+                ? "分析完成（部分降级）"
+                : task.analysisConclusion === "no_findings"
+                  ? "分析完成（未发现问题）"
+                  : "分析完成"
+              : task.status === "review_required"
+                ? "需人工复核"
+                : task.status === "analyzing"
+                  ? "分析中"
+                  : "分析失败"}
           </span>
           <div className="mx-2 h-6 w-px bg-border" />
           <button

@@ -41,7 +41,11 @@ export interface JobSummaryRecord {
   structured_facts_count?: number | null;
   structured_table_data_count?: number | null;
   structured_line_item_count?: number | null;
-  quality_status?: "complete" | "degraded" | string | null;
+  quality_status?: "complete" | "degraded" | "review_required" | string | null;
+  analysis_conclusion?: "findings_detected" | "no_findings" | "incomplete" | "analysis_error" | string | null;
+  review_reasons?: unknown;
+  page_coverage?: number | null;
+  scanned_page_count?: number | null;
   stage?: string | null;
   [key: string]: unknown;
 }
@@ -190,13 +194,90 @@ export function formatDateTime(value: unknown): string {
 
 export function normalizeUiTaskStatus(value: unknown): Task["status"] {
   const normalized = String(value ?? "").trim().toLowerCase();
-  if (["done", "completed", "success", "degraded"].includes(normalized)) {
+  // review_required 必须先判：它是独立终态，既不是 completed 也不是 failed。
+  // 归到 completed 会重演"虚假成功"，归到 failed 会误报分析失败。
+  if (["review_required", "review", "needs_review"].includes(normalized)) {
+    return "review_required";
+  }
+  // degraded 仍归 completed（结论有效），由 qualityStatus 携带降级标记
+  if (["done", "completed", "complete", "success", "succeeded", "degraded"].includes(normalized)) {
     return "completed";
   }
-  if (["failed", "error", "cancelled"].includes(normalized)) {
+  if (["failed", "error", "failure", "cancelled", "canceled"].includes(normalized)) {
     return "failed";
   }
   return "analyzing";
+}
+
+/** 任务是否已跑完（含需复核）。用于区分"还在跑"与"跑完但结论不可交付"。 */
+export function isUiTaskFinished(status: Task["status"]): boolean {
+  return status === "completed" || status === "review_required" || status === "failed";
+}
+
+export function normalizeUiQualityStatus(
+  value: unknown,
+): NonNullable<Task["qualityStatus"]> | undefined {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "complete" || normalized === "degraded" || normalized === "review_required") {
+    return normalized;
+  }
+  return undefined;
+}
+
+export function normalizeAnalysisConclusion(
+  value: unknown,
+): NonNullable<Task["analysisConclusion"]> | undefined {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (
+    normalized === "findings_detected" ||
+    normalized === "no_findings" ||
+    normalized === "incomplete" ||
+    normalized === "analysis_error"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+/** 把后端 review_reasons（对象数组）压成可直接展示的中文文案列表。 */
+export function extractReviewReasonMessages(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => {
+      if (typeof item === "string") {
+        return item.trim();
+      }
+      if (isRecord(item)) {
+        return String(item.message ?? item.code ?? "").trim();
+      }
+      return "";
+    })
+    .filter(Boolean);
+}
+
+/**
+ * 任务状态的展示文案与色调。集中在这里，避免各页面各写一套导致
+ * review_required 在某些页面被显示成"失败"。
+ */
+export function getUiTaskStatusMeta(
+  job: Pick<JobSummaryRecord, "status" | "quality_status">,
+): { status: Task["status"]; label: string; tone: "green" | "orange" | "red" | "blue" } {
+  const status = normalizeUiTaskStatus(job.status);
+  if (status === "review_required") {
+    return { status, label: "需人工复核", tone: "orange" };
+  }
+  if (status === "failed") {
+    return { status, label: "失败", tone: "red" };
+  }
+  if (status === "completed") {
+    if (normalizeUiQualityStatus(job.quality_status) === "degraded") {
+      return { status, label: "完成（部分降级）", tone: "orange" };
+    }
+    return { status, label: "已完成", tone: "green" };
+  }
+  return { status, label: "执行中", tone: "blue" };
 }
 
 export function getDisplayIssueTotal(
@@ -217,7 +298,9 @@ function resolvePipelineStepStatus(job: JobSummaryRecord, structured: Structured
   const structuredStatus = String(structured.status ?? job.structured_ingest_status ?? "")
     .trim()
     .toLowerCase();
-  const isCompleted = taskStatus === "completed";
+  // review_required 是"跑完了但结论不可交付"，解析/抽取等步骤确实已完成，
+  // 不能因为不等于 completed 就把整条流水线显示成未开始。
+  const isCompleted = taskStatus === "completed" || taskStatus === "review_required";
   const isRunning = taskStatus === "analyzing";
 
   const parse: Task["pipeline"]["parse"] =
@@ -293,15 +376,15 @@ function inferReportSubjectType(
   return "department";
 }
 
-function getReportLabel(
-  reportKind: JobSummaryRecord["report_kind"],
-  subjectType: "department" | "unit",
-): string {
-  const phase = reportKind === "final" ? "决算" : "预算";
-  return `${subjectType === "unit" ? "单位" : "部门"}${phase}`;
-}
-
-function resolveReportLabel(
+/**
+ * 报告类型标签。unknown 一律显示为"待复核"，绝不猜成"预算"——
+ * 猜错类型会让使用者以为系统已按预算口径审过（缺口 P1-05）。
+ *
+ * 此前这里还有一个 getReportLabel（unknown→"预算"）和一个
+ * getDisplayReportLabel（unknown→"类型待确认"），三份并存且口径不一致，
+ * 现已合并为这一个唯一实现。
+ */
+export function resolveReportLabel(
   reportKind: JobSummaryRecord["report_kind"],
   subjectType: "department" | "unit",
 ): string {
@@ -313,20 +396,6 @@ function resolveReportLabel(
     return `${subjectLabel}预算`;
   }
   return `${subjectLabel}待复核`;
-}
-
-function getDisplayReportLabel(
-  reportKind: JobSummaryRecord["report_kind"],
-  subjectType: "department" | "unit",
-): string {
-  const subjectLabel = subjectType === "unit" ? "单位" : "部门";
-  if (reportKind === "final") {
-    return `${subjectLabel}决算`;
-  }
-  if (reportKind === "budget") {
-    return `${subjectLabel}预算`;
-  }
-  return `${subjectLabel}类型待确认`;
 }
 
 export function formatJobDisplayName(
@@ -346,7 +415,7 @@ export function formatJobDisplayName(
     "未命名报告";
   const reportYear =
     typeof job.report_year === "number" && job.report_year > 0 ? String(job.report_year) : "";
-  const reportLabel = getDisplayReportLabel(job.report_kind, inferReportSubjectType(job));
+  const reportLabel = resolveReportLabel(job.report_kind, inferReportSubjectType(job));
 
   return `${subjectName}${reportYear}${reportLabel}`;
 }
@@ -358,7 +427,7 @@ export function toUiTask(job: JobSummaryRecord, structuredInput?: StructuredInge
       ? String(job.report_year)
       : "--";
   const taskStatus = normalizeUiTaskStatus(job.status);
-  const reportLabel = getDisplayReportLabel(job.report_kind, inferReportSubjectType(job));
+  const reportLabel = resolveReportLabel(job.report_kind, inferReportSubjectType(job));
   const syncStatus =
     String(structured.status ?? job.structured_ingest_status ?? "")
       .trim()
@@ -397,6 +466,9 @@ export function toUiTask(job: JobSummaryRecord, structuredInput?: StructuredInge
   task.filename = formatJobDisplayName(job);
   task.department = String(job.organization_name ?? "未关联单位");
   task.reportLabel = reportLabel;
+  task.qualityStatus = normalizeUiQualityStatus(job.quality_status);
+  task.analysisConclusion = normalizeAnalysisConclusion(job.analysis_conclusion);
+  task.reviewReasons = extractReviewReasonMessages(job.review_reasons);
 
   return task;
 }

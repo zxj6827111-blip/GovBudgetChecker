@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Awaitable, Callable, Dict, Optional, Set
 
 from api import runtime
+from src.utils.logging_config import log_context, safe_log_extra
 
 logger = logging.getLogger(__name__)
 
@@ -177,12 +178,19 @@ class DurableJobQueue:
             self._enqueued.discard(job_id)
             self._active.add(job_id)
             try:
-                await self._run_job(job_id)
+                # 队列侧日志（认领、跳过、执行失败）同样要能按 job_id 检索
+                with log_context(job_id=job_id, worker_index=worker_idx):
+                    await self._run_job(job_id)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception(
-                    "Worker %d failed while executing job %s", worker_idx, job_id
+                    "Worker %d failed while executing job %s",
+                    worker_idx,
+                    job_id,
+                    extra=safe_log_extra(
+                        {"job_id": job_id, "stage": "queue_worker_error"}
+                    ),
                 )
             finally:
                 self._active.discard(job_id)

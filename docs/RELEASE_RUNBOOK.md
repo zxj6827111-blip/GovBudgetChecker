@@ -14,10 +14,17 @@
   - `AI_EXTRACTOR_URL` reachable from runtime
 - Validate the deployment topology before rollout:
   - `docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml config --quiet`
+  - `docker compose -f docker-compose.yml -f docker-compose.ai.yml config --services` must list
+    exactly `postgres`, `ai-extractor`, `backend`, `worker`, `frontend`
+  - `backend` runs with `JOB_QUEUE_ROLE=api` and `worker` with `JOB_QUEUE_ROLE=worker`;
+    both mount the **same** `UPLOAD_DIR` volume (the queue claim lock is a file lock in that
+    directory, so a split mount causes duplicate consumption)
   - the backend has `READY_REQUIRE_DATABASE=true` and `DATABASE_URL` points to the internal `postgres` service
   - `/app/data`, `/app/logs`, and `/app/uploads` are mapped to persistent host paths
 - Run gates:
   - `ruff check .`
+  - `python scripts/check_log_message_safety.py`（日志 message 不含材料原文/凭据）
+  - `python scripts/check_env_consistency.py`（代码 / `.env.example` / compose 三方对账）
   - `mypy api src tests`
   - `python -m pytest`
   - `npm --prefix app run build`
@@ -34,6 +41,10 @@
 3. Deploy backend with persistent `data`, `logs`, and `uploads` mounts. The backend must wait for PostgreSQL health before startup.
 4. Deploy frontend and route traffic to new backend.
 5. Wait for workers to start and queue resume log to appear.
+   The `worker` service shares the backend image and runs `python -m api.worker`;
+   confirm with `docker compose logs worker | grep "GovBudget worker started"`.
+   With `JOB_QUEUE_ROLE=api` on the backend, **no analysis runs until the worker is up** —
+   jobs stay in `queued`, which is the expected (not failed) state.
 6. Open traffic (canary first, then full rollout).
 
 ## 3. Post-Deploy Validation

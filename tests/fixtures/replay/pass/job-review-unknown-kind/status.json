@@ -1,0 +1,43 @@
+{
+  "analysis_conclusion": "incomplete",
+  "checksum": "checksum-job-review-unknown-kind",
+  "filename": "job-review-unknown-kind.pdf",
+  "job_id": "job-review-unknown-kind",
+  "page_coverage": 0.9,
+  "quality_status": "review_required",
+  "report_kind": "unknown",
+  "report_year": null,
+  "result": {
+    "issues": {
+      "all": [],
+      "error": [],
+      "info": [],
+      "warn": []
+    },
+    "meta": {
+      "evidence_completeness": {
+        "complete": 0,
+        "completeness_rate": 1.0,
+        "degraded_count": 0,
+        "incomplete": 0,
+        "rule_warning_count": 0,
+        "total": 0
+      },
+      "page_extraction": {
+        "detector_version": "page-extraction-v1",
+        "page_count": 10,
+        "page_coverage": 0.9,
+        "scanned_page_count": 0
+      },
+      "report_kind": "unknown",
+      "report_year": null
+    }
+  },
+  "scanned_page_count": 0,
+  "status": "review_required",
+  "structured_ingest": {
+    "ps_sync": {
+      "report_id": "44444444-4444-4444-8444-444444444444"
+    }
+  }
+}

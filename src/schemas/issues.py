@@ -39,6 +39,138 @@ class ConflictType(str, Enum):
     PERCENTAGE_MISMATCH = "percentage_mismatch"
 
 
+# ---------------------------------------------------------------------------
+# 分析结论与任务状态模型
+#
+# 拆成两个正交维度，是为了解决"done 既表示没问题、又表示没查完"的语义混淆：
+#   - JobStatus（任务状态）回答"流程走到哪一步、能不能交付"；
+#   - AnalysisConclusion（分析结论）回答"这次分析到底得出了什么"。
+# 本模块只提供枚举与归一化工具，不改变任何现有调用方行为（Task 1 为纯基础层）。
+# ---------------------------------------------------------------------------
+
+
+class AnalysisConclusion(str, Enum):
+    """分析结论四态。"""
+
+    # 审核完整完成且发现了问题
+    FINDINGS_DETECTED = "findings_detected"
+    # 审核完整完成、质量门禁通过，确实未发现问题
+    NO_FINDINGS = "no_findings"
+    # 分析未完整完成（扫描页漏检 / 类型或年份不明 / 关键能力缺失），结论不可信
+    INCOMPLETE = "incomplete"
+    # 分析过程本身失败
+    ANALYSIS_ERROR = "analysis_error"
+
+
+class JobStatus(str, Enum):
+    """任务状态。
+
+    `review_required` 是本次新增态：分析跑完了，但质量门禁没过，
+    结论不足以当作"审核通过"，必须转人工复核。
+    """
+
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    DONE = "done"
+    DEGRADED = "degraded"
+    REVIEW_REQUIRED = "review_required"
+    ERROR = "error"
+
+
+class AnalysisQualityStatus(str, Enum):
+    """任务级质量门禁判定结果（写入 status.json 的 `quality_status`）。"""
+
+    COMPLETE = "complete"
+    DEGRADED = "degraded"
+    REVIEW_REQUIRED = "review_required"
+
+
+#: 仍在流水线中、未产出终态结论的状态
+ACTIVE_JOB_STATUSES: frozenset[str] = frozenset(
+    {JobStatus.QUEUED.value, JobStatus.PROCESSING.value}
+)
+
+#: 终态状态（可以对外交付结论或错误）
+TERMINAL_JOB_STATUSES: frozenset[str] = frozenset(
+    {
+        JobStatus.DONE.value,
+        JobStatus.DEGRADED.value,
+        JobStatus.REVIEW_REQUIRED.value,
+        JobStatus.ERROR.value,
+    }
+)
+
+#: 分析成功跑完（结论可读）的状态，注意不含 error
+COMPLETED_JOB_STATUSES: frozenset[str] = frozenset(
+    {
+        JobStatus.DONE.value,
+        JobStatus.DEGRADED.value,
+        JobStatus.REVIEW_REQUIRED.value,
+    }
+)
+
+#: 历史/前端遗留写法 -> 规范状态。保证旧任务的 status.json 仍能正确读出。
+_JOB_STATUS_ALIASES: Dict[str, str] = {
+    "done": JobStatus.DONE.value,
+    "completed": JobStatus.DONE.value,
+    "complete": JobStatus.DONE.value,
+    "success": JobStatus.DONE.value,
+    "succeeded": JobStatus.DONE.value,
+    "degraded": JobStatus.DEGRADED.value,
+    "review_required": JobStatus.REVIEW_REQUIRED.value,
+    "review": JobStatus.REVIEW_REQUIRED.value,
+    "needs_review": JobStatus.REVIEW_REQUIRED.value,
+    "error": JobStatus.ERROR.value,
+    "failed": JobStatus.ERROR.value,
+    "failure": JobStatus.ERROR.value,
+    "cancelled": JobStatus.ERROR.value,
+    "canceled": JobStatus.ERROR.value,
+    "queued": JobStatus.QUEUED.value,
+    "pending": JobStatus.QUEUED.value,
+    "processing": JobStatus.PROCESSING.value,
+    "running": JobStatus.PROCESSING.value,
+    "analyzing": JobStatus.PROCESSING.value,
+}
+
+
+def normalize_job_status(value: Any) -> Optional[str]:
+    """把任意历史写法归一到 `JobStatus` 取值；无法识别时返回 None。
+
+    返回 None 而不是兜底成某个状态，避免重演"识别失败却给出确定结论"的老问题。
+    """
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    return _JOB_STATUS_ALIASES.get(text)
+
+
+def infer_analysis_conclusion(
+    status: Any,
+    issue_total: int = 0,
+    explicit_conclusion: Any = None,
+) -> Optional[str]:
+    """推导分析结论，用于兼容没有 `analysis_conclusion` 字段的历史任务。
+
+    优先采用任务自身已写入的结论；否则按状态与问题数反推。
+    仍在流水线中的任务没有结论，返回 None。
+    """
+    explicit = str(explicit_conclusion or "").strip().lower()
+    if explicit in {item.value for item in AnalysisConclusion}:
+        return explicit
+
+    normalized = normalize_job_status(status)
+    if normalized is None or normalized in ACTIVE_JOB_STATUSES:
+        return None
+    if normalized == JobStatus.ERROR.value:
+        return AnalysisConclusion.ANALYSIS_ERROR.value
+    if normalized == JobStatus.REVIEW_REQUIRED.value:
+        return AnalysisConclusion.INCOMPLETE.value
+    # done / degraded：分析跑完了，用问题数区分"发现问题"与"确实没问题"
+    if issue_total > 0:
+        return AnalysisConclusion.FINDINGS_DETECTED.value
+    return AnalysisConclusion.NO_FINDINGS.value
+
+
 class IssueDisplay(BaseModel):
     """Readable display fields for UI and exports."""
 
@@ -72,6 +204,38 @@ class IssueItem(BaseModel):
     percentage: Optional[float] = Field(default=None, description="百分比")
     text_snippet: Optional[str] = Field(default=None, description="文本摘录")
     why_not: Optional[str] = Field(default=None, description="未命中原因")
+
+    # ---- 版本留痕（P2-02）----
+    # 目的是让历史结果可复现：任一条 finding 都能回答"哪个规则版本 / 哪个模型 /
+    # 哪版提示词 / 哪版引擎产出的"。全部为可选字段并默认 None，
+    # 一是保证历史快照（没有这些键）仍能正常反序列化与展示，
+    # 二是坚持"来源不明就留空"，不写占位值冒充留痕。
+    rule_version: Optional[str] = Field(
+        default=None, description="规则集版本（规则来源的 finding 才有，如 v3_3）"
+    )
+    model_version: Optional[str] = Field(
+        default=None, description="AI 模型标识 provider/model（AI 来源的 finding 才有）"
+    )
+    prompt_version: Optional[str] = Field(
+        default=None, description="提示词版本（AI 来源的 finding 才有）"
+    )
+    engine_version: Optional[str] = Field(
+        default=None, description="产出该 finding 的引擎版本"
+    )
+
+    # ---- 证据链完整性（P0-07）----
+    # 由 src/services/evidence_guard 在结果落库前写入。历史快照没有这些字段时，
+    # `evidence_status` 为 None，按"正式问题"处理，旧任务的计数与展示不受影响。
+    evidence_status: Optional[str] = Field(
+        default=None,
+        description="证据状态：complete / degraded_missing_evidence / incomplete_rule_warning",
+    )
+    evidence_missing: List[str] = Field(
+        default_factory=list, description="缺失的证据要素原因码"
+    )
+    original_severity: Optional[str] = Field(
+        default=None, description="因缺证据降级前的原始严重程度"
+    )
 
     display: Optional[IssueDisplay] = Field(default=None, description="可直接展示的问题信息")
 

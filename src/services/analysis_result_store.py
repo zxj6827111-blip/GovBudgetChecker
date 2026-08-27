@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from src.db.connection import DatabaseConnection
 from src.db.migrations import run_migrations
+from src.schemas.issues import ACTIVE_JOB_STATUSES, normalize_job_status
 
 logger = logging.getLogger(__name__)
 
@@ -448,8 +449,10 @@ def _resolve_started_at(payload: Dict[str, Any]) -> Optional[datetime]:
 
 
 def _resolve_completed_at(payload: Dict[str, Any]) -> Optional[datetime]:
-    status = str(payload.get("status") or "").strip().lower()
-    if status not in {"done", "error", "completed", "failed"}:
+    # review_required / degraded 同样是"分析已跑完"的终态，必须落 completed_at，
+    # 否则新增门禁态的任务在库里会一直看起来没结束。
+    status = normalize_job_status(payload.get("status"))
+    if status is None or status in ACTIVE_JOB_STATUSES:
         return None
 
     result_payload = payload.get("result") if isinstance(payload.get("result"), dict) else {}

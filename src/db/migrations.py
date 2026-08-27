@@ -781,6 +781,89 @@ MIGRATIONS: List[Dict[str, Any]] = [
             """,
         ]
     },
+    {
+        "id": "2026-08-26_0017_nullable_report_year",
+        "description": (
+            "Allow NULL fiscal year when the report year cannot be recognized (B-02 / P0-03). "
+            "Postgres treats multiple NULLs as distinct in a plain UNIQUE constraint, so the "
+            "affected uniqueness is re-expressed as COALESCE(year, -1) expression indexes."
+        ),
+        "sql": [
+            # 1) 放开 NOT NULL：无法识别年份的材料不再被迫写成 2000。
+            #    该方向是安全的（约束放宽），回滚说明见 docs/MIGRATION_0017_NULLABLE_YEAR.md。
+            "ALTER TABLE fiscal_documents ALTER COLUMN fiscal_year DROP NOT NULL",
+            "ALTER TABLE org_dept_annual_report ALTER COLUMN year DROP NOT NULL",
+            "ALTER TABLE org_dept_table_data ALTER COLUMN year DROP NOT NULL",
+            "ALTER TABLE org_dept_line_items ALTER COLUMN year DROP NOT NULL",
+            # 2) 先建 COALESCE 表达式唯一索引，再删原 UNIQUE 约束，
+            #    顺序反过来会让并发写入短暂失去唯一性保护。
+            #    COALESCE(year, -1) 把"年份未知"折叠成同一个键值，
+            #    否则 Postgres 视多个 NULL 互不冲突，同一单位的未知年份文档会不断新增重复行。
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_fiscal_documents_org_year_type "
+            "ON fiscal_documents (org_unit_id, COALESCE(fiscal_year, -1), doc_type)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_dept_report_scope_type "
+            "ON org_dept_annual_report (department_id, unit_id, COALESCE(year, -1), report_type)",
+            # 3) 删除被替代的原 UNIQUE 约束。约束名由 Postgres 自动生成且会因长度被截断，
+            #    因此按约束定义反查真实名字，不硬编码猜测的名称。
+            """
+            DO $$
+            DECLARE
+                target_name text;
+            BEGIN
+                SELECT conname INTO target_name
+                FROM pg_constraint
+                WHERE conrelid = 'fiscal_documents'::regclass
+                  AND contype = 'u'
+                  AND pg_get_constraintdef(oid) = 'UNIQUE (org_unit_id, fiscal_year, doc_type)';
+                IF target_name IS NOT NULL THEN
+                    EXECUTE format(
+                        'ALTER TABLE fiscal_documents DROP CONSTRAINT %I', target_name
+                    );
+                END IF;
+            END $$;
+            """,
+            """
+            DO $$
+            DECLARE
+                target_name text;
+            BEGIN
+                SELECT conname INTO target_name
+                FROM pg_constraint
+                WHERE conrelid = 'org_dept_annual_report'::regclass
+                  AND contype = 'u'
+                  AND pg_get_constraintdef(oid)
+                      = 'UNIQUE (department_id, unit_id, year, report_type)';
+                IF target_name IS NOT NULL THEN
+                    EXECUTE format(
+                        'ALTER TABLE org_dept_annual_report DROP CONSTRAINT %I', target_name
+                    );
+                END IF;
+            END $$;
+            """,
+        ]
+    },
+    {
+        "id": "2026-08-26_0018_report_scope_key",
+        "description": (
+            "Add scope_key to org_dept_annual_report so low-confidence reports "
+            "(fallback_name org match or unknown year) are keyed per document "
+            "instead of being merged into one (dept, unit, year, type) row (P0-09)."
+        ),
+        "sql": [
+            # scope_key 为空串 = 按 (部门, 单位, 年度, 类型) 归并（原有行为）；
+            # 非空（checksum）= 按具体文档归并，避免不同材料被强行并入同一 report_id。
+            # 默认空串而非 NULL，是为了让唯一索引不必再套一层 COALESCE。
+            "ALTER TABLE org_dept_annual_report ADD COLUMN IF NOT EXISTS scope_key TEXT NOT NULL DEFAULT ''",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_dept_report_scope_type_key "
+            "ON org_dept_annual_report "
+            "(department_id, unit_id, COALESCE(year, -1), report_type, scope_key)",
+            # 迁移 0017 建的索引被本索引取代（前者是后者去掉 scope_key 的前缀）。
+            # 保留它会阻止同一 scope 下按文档区分的多行插入，必须删除。
+            "DROP INDEX IF EXISTS uq_dept_report_scope_type",
+            "CREATE INDEX IF NOT EXISTS idx_dept_report_scope_key "
+            "ON org_dept_annual_report(scope_key) WHERE scope_key <> ''",
+        ]
+    },
 ]
 
 
@@ -852,8 +935,10 @@ async def run_migrations():
                 continue
             
             pending_count += 1
-            description = migration.get("description", "No description")
-            logger.info(f"Applying migration: {migration_id} - {description}")
+            # 变量名刻意写全：`description` 这个泛名在别处可能承载 finding 描述
+            # （含材料金额），不适合进白名单；这里的值是迁移定义里写死的静态说明。
+            migration_description = migration.get("description", "No description")
+            logger.info(f"Applying migration: {migration_id} - {migration_description}")
             
             # Run migration in a transaction
             try:

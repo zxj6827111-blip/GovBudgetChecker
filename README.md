@@ -134,14 +134,65 @@ make e2e
 make test
 ```
 
+## Docker Compose 一键部署（backend + worker + frontend + postgres + ai-extractor）
+
+```bash
+cp .env.example .env   # 至少填 POSTGRES_*、GOVBUDGET_API_KEY、USER_SESSION_SECRET、DEFAULT_ADMIN_PASSWORD
+docker compose -f docker-compose.yml -f docker-compose.ai.yml config --quiet   # 先静态校验
+docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d --build
+```
+
+也可以在 `.env` 里写 `COMPOSE_FILE=docker-compose.yml:docker-compose.ai.yml`
+（Windows 下分隔符是 `;`），之后直接 `docker compose up -d --build`。
+
+组件分工：
+
+| 服务 | 作用 | 备注 |
+|---|---|---|
+| `postgres` | 结构化数据 | 定义在 `docker-compose.yml` |
+| `ai-extractor` | AI 抽取/语义审计服务 | 仓库自带最小实现，可替换 |
+| `backend` | HTTP API，**只入队**（`JOB_QUEUE_ROLE=api`） | 端口 8000 |
+| `worker` | 消费队列跑分析（`JOB_QUEUE_ROLE=worker`） | 无端口，`python -m api.worker` |
+| `frontend` | Next.js 前端 | 端口 3001→3000 |
+
+`backend` 与 `worker` 必须共享同一个 `UPLOAD_DIR` 卷：队列的 claim 锁是该目录下的文件锁
+（`api/job_queue.py`），不共享会导致同一个任务被重复消费。compose 里两者用同一个 YAML
+锚点声明环境与卷，只有队列角色不同。
+
+环境变量的三方对账（代码 / `.env.example` / compose）见
+`docs/ENV_VARS_RECONCILIATION.md`，机器检查是 `python scripts/check_env_consistency.py`。
+
 ## 关键环境变量
-- `UPLOAD_DIR`：上传和任务产物目录（生产必须挂载持久化卷）
+- `UPLOAD_DIR`：上传和任务产物目录（生产必须挂载持久化卷，且 API 与 worker 必须共享）
+- `RULES_FILE`：规则集 YAML 路径（默认 `rules/v3_3.yaml`，`/ready` 的 `rules_file_exists` 检查同源）
+- `JOB_QUEUE_ROLE`：`api` 只入队 / `worker` 只消费 / `all` 单进程全干（compose 里 backend 与 worker 分别固定为 `api` 和 `worker`）
+- `JOB_QUEUE_INLINE_FALLBACK`：队列不可用时是否退回请求内联执行（生产建议 `false`）
+- `SCANNED_PAGE_MIN_CHARS`：单页可见字符数低于该值即判为疑似扫描页（默认 50）
+- `PAGE_COVERAGE_MIN_RATIO`：页面覆盖率低于该比例即整单转 `review_required`（默认 0.8）
+- `AI_ASSIST_REQUIRED`：AI 被视为必需时，AI 失败会转 `review_required` 而不是 `done`（默认 `false`）
 - `DOCUMENT_STORAGE_BACKEND`：原始 PDF 存储后端标记；当前内置实现为 `filesystem`，与 `UPLOAD_DIR` 持久化卷配套使用
 - `MAX_UPLOAD_MB`：上传大小限制（默认 30）
 - `MAX_UPLOAD_PAGES`：PDF 页数限制（默认 800）
 - `USER_SESSION_SECRET`：登录会话签名密钥；生产环境建议单独配置，保证多 worker / 重启后登录态稳定
 - `UPLOAD_CHUNK_BYTES`：流式写入分块大小
 - `AUDIT_LOG_PATH`：管理员敏感操作审计日志输出位置
+- `LOG_LEVEL`：日志级别（默认 `INFO`）
+- `LOG_JSON`：是否输出 JSON 结构化日志。不配置时按 stdout 是否为 TTY 自动判断——容器/日志采集管道下默认 JSON，本地终端默认人类可读格式
+- `LOG_FILE`：可选，额外写入的日志文件路径（父目录会自动创建）
+- `METRICS_ENABLED`：关键指标端点开关（默认 `true`，设为 `false` 时 `/metrics` 返回 404）
+- `METRICS_API_TOKEN`：指标抓取专用令牌（配置后采集器可用 `X-Metrics-Token` 抓取；不配置则只能用管理员会话）
+- `METRICS_CACHE_TTL_SECONDS`：指标采集缓存秒数（默认 15）
+- `REQUIRE_FIRST_LOGIN_PASSWORD_CHANGE`：默认管理员首登强制改密（生产默认开启，测试环境默认关闭）
+- `SECURITY_HEADERS_ENABLED`：后端安全响应头开关（默认 `true`）
+- `SECURITY_HSTS_ALWAYS`：无条件下发 HSTS（默认只在 HTTPS 或 `X-Forwarded-Proto: https` 时下发）
+- `SECURITY_HSTS`：HSTS 头取值覆盖（留空用内置默认）
+- `SECURITY_CSP` / `SECURITY_CSP_DOCS` / `SECURITY_FRAME_OPTIONS` / `SECURITY_REFERRER_POLICY`：安全响应头取值覆盖
+- `PDF_PARSE_ISOLATION_ENABLED`：PDF 解析是否在独立可终止子进程中执行（生产默认开启，测试环境默认关闭）
+- `PDF_PARSE_TIMEOUT_SEC`：单份 PDF 解析超时（默认 120 秒），超时子进程被强制终止，任务落 `error`
+- `PDF_PARSE_MAX_PAGES`：解析页数上限（默认跟随 `MAX_UPLOAD_PAGES`）
+- `PDF_PARSE_MEMORY_MB`：解析子进程地址空间上限（默认 1024，**仅 POSIX 生效**，Windows 无 `RLIMIT_AS`）
+- `PDF_PARSE_MAX_TEXT_CHARS` / `PDF_PARSE_MAX_TABLE_CELLS`：抽取结果体积上限（跨平台）
+- `PG_BIN_DIR`：`scripts/backup_all.py` 查找 `pg_dump`/`psql` 的目录（PATH 里没有时使用）
 - `AI_ASSIST_ENABLED`：是否启用 AI 辅助（默认 `true`）
 - `AI_EXTRACTOR_URL`：AI 抽取服务地址
 - `DATABASE_URL`：可选，配置后 `ready` 会检查可达性
@@ -154,7 +205,7 @@ make test
 - 登录会话已改为签名令牌；生产环境建议固定配置 `USER_SESSION_SECRET`（或至少保持 `GOVBUDGET_API_KEY` 稳定），避免多 worker / 重启后会话失效。
 - 管理员操作（组织创建/修改/删除、导入、批量重分析、结构化清理）会写入 `AUDIT_LOG_PATH`。
 - 建议把反向代理上传大小限制与 `MAX_UPLOAD_MB`、`MAX_UPLOAD_PAGES` 保持一致。
-- 建议定期备份 `UPLOAD_DIR`、数据库和 `AUDIT_LOG_PATH`，并至少做一次恢复演练。
+- 建议定期备份 `UPLOAD_DIR`、数据库和 `AUDIT_LOG_PATH`，并至少做一次恢复演练。三件套备份/校验/恢复用 `python scripts/backup_all.py`，演练记录见 `docs/BACKUP_RESTORE_DRILL_2026-08-27.md`。
 
 ## 目录结构（简化）
 ```text
@@ -172,6 +223,7 @@ GovBudgetChecker/
 ## 发布相关文档
 - `docs/PROD_READINESS_PLAN.md`
 - `docs/RELEASE_RUNBOOK.md`
+- `docs/OBSERVABILITY_AND_ALERTS.md`
 - `CLOUD_DEPLOY_EXECUTION_SHEET.md`
 
 ## 备注

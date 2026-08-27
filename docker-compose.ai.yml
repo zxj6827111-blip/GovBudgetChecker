@@ -1,5 +1,82 @@
-# Production command:
-# docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d --build
+# 一键起全组件（backend + worker + frontend + postgres + ai-extractor）：
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d --build
+#
+# 也可以在 .env 里写 `COMPOSE_FILE=docker-compose.yml:docker-compose.ai.yml`，
+# 之后直接 `docker compose up -d --build` 即可（见 .env.example）。
+#
+# 校验（不启动容器）：
+#   docker compose -f docker-compose.yml -f docker-compose.ai.yml config
+#
+# ---------------------------------------------------------------------------
+# backend 与 worker 必须共享同一套环境变量与同一个 UPLOAD_DIR 卷：
+# 队列的 claim 锁是 UPLOAD_DIR 下的文件锁（api/job_queue.py），
+# 两个进程看不到同一个目录就会各跑各的，重复消费同一个任务。
+# 因此这里用 YAML 锚点共享环境，只让队列角色不同，避免两份清单漂移。
+# ---------------------------------------------------------------------------
+x-app-env: &app-env
+  AI_ASSIST_ENABLED: "true"
+  AI_EXTRACTOR_URL: http://ai-extractor:9009/ai/extract/v1
+  UPLOAD_DIR: /app/uploads
+  DOCUMENT_STORAGE_BACKEND: filesystem
+  # 代码读取的变量名是 RULES_FILE（api/config.py:9、api/routes/health.py:135），
+  # 且指向 YAML 规则集而不是 .py 模块；历史上这里写的 RULES_FILE_PATH 没有任何读取方。
+  RULES_FILE: /app/rules/v3_3.yaml
+  GOVBUDGET_AUTH_ENABLED: "true"
+  GOVBUDGET_API_KEY: ${GOVBUDGET_API_KEY:?Set GOVBUDGET_API_KEY in .env}
+  USER_SESSION_SECRET: ${USER_SESSION_SECRET:?Set USER_SESSION_SECRET in .env}
+  DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:?Set DEFAULT_ADMIN_PASSWORD in .env}
+  DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  PG_SCHEMA: ${PG_SCHEMA:-public}
+  READY_REQUIRE_DATABASE: "true"
+  READY_REQUIRE_AI_EXTRACTOR: "true"
+  AUDIT_LOG_PATH: /app/logs/admin-actions.jsonl
+  # 结构化日志（Task 10 / B-05）：容器里固定走 JSON，便于日志管道聚合
+  LOG_JSON: ${LOG_JSON:-true}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  # 指标抓取令牌（Task 11 / B-06），不配置时只能用管理员会话抓取
+  METRICS_API_TOKEN: ${METRICS_API_TOKEN:-}
+  # AI provider pass-through。
+  # 只保留代码真正读取的变量：*_API_KEY 由 config/providers.yaml 的 api_key_env 读取，
+  # AI_{MAIN,BACKUP,LOCATOR}_* 由 src/services/ai_client.py 按前缀拼装读取。
+  # 历史上这里还传过 GEMINI_BASE_URL / GEMINI_MAIN_MODEL / GEMINI_LOCATOR_MODEL /
+  # CODEX_BASE_URL / CODEX_MODEL / OPENAI_BASE_URL / OPENAI_MODEL / ARK_BASE_URL /
+  # ARK_MODEL —— 后端代码一个都不读（providers.yaml 里 base/model 是写死的），
+  # 留着只会让运维以为配了就生效，已移除（详见 docs/ENV_VARS_RECONCILIATION.md）。
+  ARK_API_KEY: ${ARK_API_KEY:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  CODEX_API_KEY: ${CODEX_API_KEY:-}
+  ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
+  AI_FALLBACK_CHAIN: ${AI_FALLBACK_CHAIN:-}
+  AI_MAIN_PROVIDER: ${AI_MAIN_PROVIDER:-gemini_main}
+  AI_MAIN_MODEL: ${AI_MAIN_MODEL:-gemini-2.5-pro}
+  AI_MAIN_PROVIDER_TYPE: ${AI_MAIN_PROVIDER_TYPE:-}
+  AI_MAIN_BASE_URL: ${AI_MAIN_BASE_URL:-}
+  AI_MAIN_API_KEY: ${AI_MAIN_API_KEY:-}
+  AI_MAIN_ENABLED: ${AI_MAIN_ENABLED:-true}
+  AI_AUDIT_PROVIDER: ${AI_AUDIT_PROVIDER:-}
+  AI_AUDIT_MODEL: ${AI_AUDIT_MODEL:-}
+  AI_BACKUP_PROVIDER_TYPE: ${AI_BACKUP_PROVIDER_TYPE:-}
+  AI_BACKUP_BASE_URL: ${AI_BACKUP_BASE_URL:-}
+  AI_BACKUP_API_KEY: ${AI_BACKUP_API_KEY:-}
+  AI_BACKUP_MODEL: ${AI_BACKUP_MODEL:-}
+  AI_BACKUP_ENABLED: ${AI_BACKUP_ENABLED:-true}
+  AI_LOCATOR_PROVIDER: ${AI_LOCATOR_PROVIDER:-gemini_locator}
+  AI_LOCATOR_MODEL: ${AI_LOCATOR_MODEL:-gemini-2.5-flash}
+  AI_LOCATOR_PROVIDER_TYPE: ${AI_LOCATOR_PROVIDER_TYPE:-}
+  AI_LOCATOR_BASE_URL: ${AI_LOCATOR_BASE_URL:-}
+  AI_LOCATOR_API_KEY: ${AI_LOCATOR_API_KEY:-}
+  AI_LOCATOR_ENABLED: ${AI_LOCATOR_ENABLED:-true}
+  AI_EXTRACTOR_DIRECT_FALLBACK: ${AI_EXTRACTOR_DIRECT_FALLBACK:-true}
+
+#: backend 与 worker 共用的持久化卷，UPLOAD_DIR 必须是同一份
+x-app-volumes: &app-volumes
+  - ${HOST_DATA_DIR:-./data}:/app/data
+  - ${HOST_LOGS_DIR:-./logs}:/app/logs
+  - ${HOST_SAMPLES_DIR:-./samples}:/app/samples
+  - ${HOST_UPLOADS_DIR:-./uploads}:/app/uploads
+
 services:
   ai-extractor:
     build:
@@ -8,7 +85,9 @@ services:
     ports:
       - "9009:9009"
     environment:
-      # Multi-provider settings (optional for extractor)
+      # 这些是给 **独立的 extractor 服务**（ai_extractor_service.py 或其替代实现）用的，
+      # 后端 Python 代码不读 ARK_BASE_URL / ARK_MODEL；仓库自带的最小实现也不读，
+      # 保留是为了替换成真实抽取器实现时不用改 compose。
       - ARK_API_KEY=${ARK_API_KEY:-your_ark_api_key}
       - ARK_BASE_URL=${ARK_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
       - ARK_MODEL=${ARK_MODEL:-doubao-1-5-pro-32k-250115}
@@ -32,71 +111,41 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - AI_ASSIST_ENABLED=true
-      - AI_EXTRACTOR_URL=http://ai-extractor:9009/ai/extract/v1
-      - UPLOAD_DIR=/app/uploads
-      - DOCUMENT_STORAGE_BACKEND=filesystem
-      - RULES_FILE_PATH=/app/engine/rules_v33.py
-      - GOVBUDGET_AUTH_ENABLED=true
-      - GOVBUDGET_API_KEY=${GOVBUDGET_API_KEY:?Set GOVBUDGET_API_KEY in .env}
-      - USER_SESSION_SECRET=${USER_SESSION_SECRET:?Set USER_SESSION_SECRET in .env}
-      - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:?Set DEFAULT_ADMIN_PASSWORD in .env}
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      - PG_SCHEMA=${PG_SCHEMA:-public}
-      - READY_REQUIRE_DATABASE=true
-      - READY_REQUIRE_AI_EXTRACTOR=true
-      - AUDIT_LOG_PATH=/app/logs/admin-actions.jsonl
-      # AI provider pass-through
-      - ARK_API_KEY=${ARK_API_KEY:-}
-      - ARK_BASE_URL=${ARK_BASE_URL:-}
-      - ARK_MODEL=${ARK_MODEL:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
-      - OPENAI_MODEL=${OPENAI_MODEL:-}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - GEMINI_BASE_URL=${GEMINI_BASE_URL:-}
-      - GEMINI_MAIN_MODEL=${GEMINI_MAIN_MODEL:-gemini-2.5-pro}
-      - GEMINI_LOCATOR_MODEL=${GEMINI_LOCATOR_MODEL:-gemini-2.5-flash}
-      - CODEX_API_KEY=${CODEX_API_KEY:-}
-      - CODEX_BASE_URL=${CODEX_BASE_URL:-}
-      - CODEX_MODEL=${CODEX_MODEL:-gpt-5.3-codex}
-      - AI_FALLBACK_CHAIN=${AI_FALLBACK_CHAIN:-}
-      - AI_MAIN_PROVIDER=${AI_MAIN_PROVIDER:-gemini_main}
-      - AI_MAIN_MODEL=${AI_MAIN_MODEL:-gemini-2.5-pro}
-      - AI_MAIN_PROVIDER_TYPE=${AI_MAIN_PROVIDER_TYPE:-}
-      - AI_MAIN_BASE_URL=${AI_MAIN_BASE_URL:-}
-      - AI_MAIN_API_KEY=${AI_MAIN_API_KEY:-}
-      - AI_MAIN_ENABLED=${AI_MAIN_ENABLED:-true}
-      - AI_AUDIT_PROVIDER=${AI_AUDIT_PROVIDER:-}
-      - AI_AUDIT_MODEL=${AI_AUDIT_MODEL:-}
-      - AI_BACKUP_PROVIDER_TYPE=${AI_BACKUP_PROVIDER_TYPE:-}
-      - AI_BACKUP_BASE_URL=${AI_BACKUP_BASE_URL:-}
-      - AI_BACKUP_API_KEY=${AI_BACKUP_API_KEY:-}
-      - AI_BACKUP_MODEL=${AI_BACKUP_MODEL:-}
-      - AI_BACKUP_ENABLED=${AI_BACKUP_ENABLED:-true}
-      - AI_LOCATOR_PROVIDER=${AI_LOCATOR_PROVIDER:-gemini_locator}
-      - AI_LOCATOR_MODEL=${AI_LOCATOR_MODEL:-gemini-2.5-flash}
-      - AI_LOCATOR_PROVIDER_TYPE=${AI_LOCATOR_PROVIDER_TYPE:-}
-      - AI_LOCATOR_BASE_URL=${AI_LOCATOR_BASE_URL:-}
-      - AI_LOCATOR_API_KEY=${AI_LOCATOR_API_KEY:-}
-      - AI_LOCATOR_ENABLED=${AI_LOCATOR_ENABLED:-true}
-      - AI_EXTRACTOR_DIRECT_FALLBACK=${AI_EXTRACTOR_DIRECT_FALLBACK:-true}
+      <<: *app-env
+      # 只入队、不在请求线程里跑分析：重解析不再拖慢 HTTP 延迟（README「Split Deployment」）。
+      # 这里写死而不是取 ${JOB_QUEUE_ROLE}，避免 .env 里的 all 让 backend 与 worker 同时消费。
+      JOB_QUEUE_ROLE: api
+      JOB_QUEUE_INLINE_FALLBACK: "false"
     depends_on:
       postgres:
         condition: service_healthy
       ai-extractor:
         condition: service_healthy
-    volumes:
-      - ${HOST_DATA_DIR:-./data}:/app/data
-      - ${HOST_LOGS_DIR:-./logs}:/app/logs
-      - ${HOST_SAMPLES_DIR:-./samples}:/app/samples
-      - ${HOST_UPLOADS_DIR:-./uploads}:/app/uploads
+    volumes: *app-volumes
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
+
+  worker:
+    # 缺口 B-10：README 早已声明 api/worker 分离模式，但此前任何 compose 里都没有
+    # worker 服务定义，"一键起全组件"实际起不出消费者，任务只会堆在队列里。
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: ["python", "-m", "api.worker"]
+    environment:
+      <<: *app-env
+      JOB_QUEUE_ROLE: worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ai-extractor:
+        condition: service_healthy
+    volumes: *app-volumes
+    restart: unless-stopped
 
   frontend:
     build:
