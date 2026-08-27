@@ -354,6 +354,74 @@ def test_summarize_handles_empty_input() -> None:
     assert summary["report_id_uniqueness"]["unique"] is True
 
 
+def test_uploaded_only_jobs_do_not_pollute_completion_metrics(tmp_path: Path) -> None:
+    """真实历史产物形态的回归线（Task 15.1 全量回放实测发现）。
+
+    2026-08-27 的全量回放里，766 个任务中有 438 个是"上传完成但从未发起分析"
+    （`status=uploaded`，没有 result、没有 page_extraction）。这类任务必须：
+      - 单独归到 `unnormalized:uploaded` 一档，而不是塞进 unrecognized；
+      - **不进入** `empty_findings_jobs` 的分母（它们不是"分析完了没查出问题"）；
+      - 覆盖率算 unmeasured，而不是当成 1.0。
+    否则历史报告里的完成率、空结论率会被系统性地算错。
+
+    正例是同目录下那个真正 done 的任务：它必须被计入完成态分母。
+    """
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+
+    # 只上传过、从未分析（历史产物里占多数）
+    _write_job(
+        uploads,
+        "job-uploaded",
+        {
+            "status": "uploaded",
+            "filename": "只上传未分析.pdf",
+            "checksum": "checksum-uploaded",
+        },
+    )
+    # 对照：真正分析完成且有 1 条完整证据的任务
+    _write_job(
+        uploads,
+        "job-done",
+        {
+            "status": "done",
+            "filename": "已完成.pdf",
+            "checksum": "checksum-done",
+            "result": _legacy_result(
+                [
+                    {
+                        "id": "rule-1",
+                        "source": "rule",
+                        "page_number": 3,
+                        "evidence": [{"page": 3, "text": "合计 35.20"}],
+                    }
+                ]
+            ),
+        },
+    )
+
+    summary = build_report(uploads)["summary"]
+
+    assert summary["job_total"] == 2
+    assert summary["status_distribution"]["unnormalized:uploaded"]["count"] == 1
+    assert summary["status_distribution"]["done"]["count"] == 1
+
+    # 完成态分母只算 done，那条 uploaded 不进分母
+    empty = summary["empty_findings_jobs"]
+    assert empty["completed_jobs"] == 1
+    assert empty["count"] == 0
+
+    # 覆盖率：uploaded 那条是 unmeasured，不能被当成 1.0 抬高均值
+    coverage = summary["page_coverage"]
+    assert coverage["measured_jobs"] == 1
+    assert coverage["unmeasured_jobs"] == 1
+    assert coverage["mean"] == 1.0
+
+    # 结论分布：uploaded 任务没有结论，必须落 unrecognized 而不是 no_findings
+    assert summary["conclusion_distribution"]["unrecognized"]["count"] == 1
+    assert "no_findings" not in summary["conclusion_distribution"]
+
+
 def _snapshot_tree(root: Path) -> Dict[str, tuple]:
     snapshot: Dict[str, tuple] = {}
     for path in sorted(root.rglob("*")):
