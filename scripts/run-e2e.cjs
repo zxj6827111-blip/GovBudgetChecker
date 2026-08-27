@@ -25,6 +25,15 @@ const WARMUP_PATHS = [
   "/?page=settings&section=organization",
   "/login",
   "/dev/ui-preview",
+  "/workbench",
+  "/upload",
+  "/queue",
+  "/review",
+  "/history",
+  "/archive",
+  "/quality",
+  "/rules",
+  "/settings",
 ];
 const forwardedArgs = process.argv.slice(2);
 let server = null;
