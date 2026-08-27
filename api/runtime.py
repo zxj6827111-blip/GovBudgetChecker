@@ -614,6 +614,33 @@ def extract_pdf_page_texts_from_bytes(content: bytes, max_pages: int = 3) -> Lis
     return _extract_pdf_page_texts(io.BytesIO(content), max_pages=max_pages)
 
 
+def get_pdf_page_count_from_bytes(content: bytes) -> Optional[int]:
+    """Best-effort page count for in-memory PDF bytes (upload-center preflight).
+
+    UI 重建第二批 Task 5：上传中心待上传文件列表需要在上传前显示真实页数
+    （原型图"18.4 MB · 48 页"），但当时手上只有内存字节、没有落盘路径，
+    不能直接复用需要 Path 的 `get_pdf_page_count()`。这里复用已有的
+    `pdfplumber` 依赖（与 `_extract_pdf_page_texts` 同一个库，不新增依赖），
+    只读页数不读正文，比整页文本抽取更轻。
+
+    解析失败（损坏文件、非 PDF、加密文档等）时返回 None 而不是 0——
+    0 意味着"已确认这份文件有 0 页"，解析失败时我们并不知道真实页数，
+    与本仓库"未知用 None、绝不用 0 顶替"的一贯原则一致。
+    """
+    if not content:
+        return None
+    try:
+        import pdfplumber
+    except Exception:
+        return None
+    try:
+        with pdfplumber.open(io.BytesIO(content)) as pdf:
+            return len(pdf.pages)
+    except Exception:
+        logger.exception("Failed to read page count from in-memory PDF bytes")
+        return None
+
+
 def extract_pdf_page_texts(pdf_path: Path, max_pages: int = 3) -> List[str]:
     """Extract the first few page texts from a PDF path."""
     return _extract_pdf_page_texts(str(pdf_path), max_pages=max_pages)
