@@ -96,17 +96,19 @@ jobs:
         run: python scripts/run_db_migrations.py
 
       # Task 15.2 / 缺口 P2-06：回放结构性指标业务门禁。
-      # CI 上没有真实 uploads/，所以跑仓库内的 fixture 语料——它既不必然通过也不必然
-      # 失败：tests/fixtures/replay/pass 必须全绿，同目录下 5 个 fail_* 语料每个都会
-      # 精确触发一条检查失败（由 tests/test_ci_business_gate.py 固化）。
+      # CI 上没有真实产物语料（`uploads/` 不入版本库，且 pytest 已被隔离到临时目录，
+      # 见 tests/conftest.py:isolate_upload_root），所以跑仓库内的 fixture 语料——
+      # 它既不必然通过也不必然失败：tests/fixtures/replay/pass 必须全绿，同目录下
+      # 5 个 fail_* 语料每个都会精确触发一条检查失败（由 tests/test_ci_business_gate.py 固化）。
+      #
+      # 刻意**不**在 CI 里判定真实 uploads/：那份语料全是 M1 之前的产物，
+      # 一定会把门禁打红（766 个任务 0 个带 page_coverage），在 CI 里挂上去只会逼人
+      # 加 `|| true` 变成假门禁。生产环境的判定方式见 docs/CI_BUSINESS_GATE.md 第 5 节。
       #
       # 局限（不得误读）：无 Golden Corpus，本门禁只覆盖结构性指标，
-      # **不度量召回率与精确率**，全绿不等于业务质量达标。详见 docs/CI_BUSINESS_GATE.md。
+      # **不度量召回率与精确率**，全绿不等于业务质量达标。
       - name: Business gate (replay structural metrics)
-        run: |
-          python scripts/check_replay_thresholds.py --uploads tests/fixtures/replay/pass
-          # 生产环境按同一套阈值判定真实产物；CI 上没有数据时显式跳过并说明
-          python scripts/check_replay_thresholds.py --uploads uploads --allow-missing
+        run: python scripts/check_replay_thresholds.py --uploads tests/fixtures/replay/pass
 
       - name: Setup Node
         uses: actions/setup-node@v4.4.0

@@ -92,8 +92,21 @@ DATABASE_URL=postgresql://govbudget_ci:govbudget_ci@localhost:5432/fiscal_ci \
 
 ## 5. 生产环境怎么用
 
-CI 上没有真实 `uploads/`，因此额外跑一次带 `--allow-missing` 的判定：有数据才校验，
-无数据显式打印 SKIP 与原因，不伪装成通过。
+CI 上刻意**不**判定真实 `uploads/`：那份语料全是 M1 之前的产物，一定会把门禁打红
+（`docs/HISTORICAL_REPLAY_2026-08-27.md`：766 个历史任务里 0 个带 `page_coverage`，
+另有 2 组 `report_id` 冲突）。硬挂上去只会逼人加 `|| true` 变成假门禁。
+
+> 实测插曲（值得记下来）：第一版 CI 里确实加了
+> `check_replay_thresholds.py --uploads uploads --allow-missing`，本以为 CI 上
+> `uploads/` 不存在会走 SKIP。结果 run `33032994019` 在这一步变红——
+> 因为**pytest 自己往 `uploads/` 写了 5 个任务目录**
+> （`api/runtime.py:33` 的 `UPLOAD_ROOT` 默认就是仓库根下的 `uploads/`，
+> 有 5 个走上传接口的测试没有自己重定向）。
+> 处置：`tests/conftest.py` 增加 autouse 的 `isolate_upload_root`，
+> 与数据库隔离同级别地把产物目录无条件指向临时目录
+> （回归线：`tests/test_upload_root_isolation.py`），同时把 CI 里对真实 `uploads/`
+> 的那次判定去掉。这个缺陷顺带解释了两件事：本地 `uploads/` 为什么从 661 涨到 783，
+> 以及 `split_mode.pdf` 为什么反复出现在真实库里。
 
 生产/预发环境按同一套阈值判定真实产物：
 
@@ -102,8 +115,6 @@ python scripts/replay_analysis.py --uploads /data/uploads --output /tmp/replay.j
 python scripts/check_replay_thresholds.py --report /tmp/replay.json
 ```
 
-注意：**历史产物会直接把这套门禁打红**（`docs/HISTORICAL_REPLAY_2026-08-27.md`：
-766 个历史任务里 0 个带 `page_coverage`，另有 2 组 `report_id` 冲突）。
-这是数据事实而非门禁误判——历史数据的处置见
-`docs/LEGACY_DATA_CLEANUP_PLAN_2026-08-27.md`。对存量数据判定时应先按
-"整改后新产生的任务"过滤，或在历史数据完成重跑后再纳入门禁。
+存量数据判定时应先按"整改后新产生的任务"过滤，或在历史数据完成重跑后再纳入门禁；
+历史数据的处置见 `docs/LEGACY_DATA_CLEANUP_PLAN_2026-08-27.md`。
+数据源缺失时用 `--allow-missing`：它会打印 SKIP 与原因，而不是伪装成通过。

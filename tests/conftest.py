@@ -64,6 +64,35 @@ def real_database_url(isolate_database_url, monkeypatch):
     return dsn
 
 
+# ---------------------------------------------------------------------------
+# 任务产物目录隔离（Task 15.2 实测缺陷）
+#
+# 背景：`api/runtime.py:33` 在导入时把 `UPLOAD_ROOT` 解析成
+# `Path(os.getenv("UPLOAD_DIR", "uploads")).resolve()`，也就是**仓库根目录下的
+# uploads/**。多数测试会自己 monkeypatch 到 tmp_path，但有 5 个走上传接口的测试没有，
+# 于是每跑一次全量测试就往真实产物目录里多写 5 个任务目录
+# （实测：CI 全新检出跑完 pytest 后 uploads/ 里出现 5 个任务；
+#  本地 uploads/ 从 661 涨到 783 个目录，`split_mode.pdf` 反复重现）。
+#
+# 后果有三层：污染要被回放度量的历史语料、让"仓库洁净"无从保证、
+# 还会把 CI 的业务门禁指标带偏。所以这里与数据库一样做**无条件隔离**：
+# 测试进程默认永远写不到仓库的 uploads/。
+#
+# 同时改环境变量与模块属性两处：`runtime.UPLOAD_ROOT` 是模块属性（消费方都按
+# `runtime.UPLOAD_ROOT` 取值），而 `src/services/analysis_result_store.py` 里还有
+# 直接读 `os.getenv("UPLOAD_DIR")` 的路径，只改一处会漏。
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def isolate_upload_root(tmp_path_factory, monkeypatch):
+    """把任务产物根目录指向临时目录；测试自己再 monkeypatch 的话以它为准。"""
+    from api import runtime as _runtime
+
+    root = tmp_path_factory.mktemp("upload-root")
+    monkeypatch.setenv("UPLOAD_DIR", str(root))
+    monkeypatch.setattr(_runtime, "UPLOAD_ROOT", root, raising=False)
+    yield root
+
+
 @pytest.fixture(scope="session")
 def event_loop():
     """创建事件循环用于异步测试"""
