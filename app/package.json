@@ -14,6 +14,7 @@
     "test:ui-components": "jiti tests/uiComponents.test.ts",
     "test:ui-preview-guard": "jiti tests/uiPreviewPage.guard.test.ts",
     "test:workspace-navigation": "jiti tests/workspaceNavigation.test.ts",
+    "test:unit": "npm run test:ui-adapters && npm run test:ui-status && npm run test:unit-match && npm run test:admin-config && npm run test:ui-components && npm run test:ui-preview-guard && npm run test:workspace-navigation",
     "test:e2e": "node ../scripts/run-e2e.cjs"
   },
   "dependencies": {
