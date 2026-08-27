@@ -11,6 +11,8 @@
     "test:ui-status": "jiti tests/uiAdapters.status.test.ts",
     "test:unit-match": "jiti tests/unitMatch.regression.test.ts",
     "test:admin-config": "jiti tests/adminConfigStore.test.ts",
+    "test:ui-components": "jiti tests/uiComponents.test.ts",
+    "test:ui-preview-guard": "jiti tests/uiPreviewPage.guard.test.ts",
     "test:e2e": "node ../scripts/run-e2e.cjs"
   },
   "dependencies": {
