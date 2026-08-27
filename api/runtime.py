@@ -1825,6 +1825,12 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "mode": mode,
         "dual_mode_enabled": dual_mode_enabled,
         "stage": stage,
+        # Task 3：per-job 规范阶段进度（见 src/services/pipeline_stages.py）。
+        # 未知/尚未写入时保持 None，前端必须显示"—"，不得补 0 或猜测值。
+        "stage_progress": status_data.get("stage_progress"),
+        # 失败任务的阶段归因：只在该任务确实失败过时才会有值，正常/进行中任务
+        # 该字段不存在（不是显式的 None，是 status_data 里本来就没有这个键）。
+        "stage_failed_at": status_data.get("stage_failed_at"),
         "quality_status": status_data.get("quality_status") or "complete",
         # 旧任务没有 analysis_conclusion 字段时按 status + 问题数反推，保证列表可读
         "analysis_conclusion": infer_analysis_conclusion(

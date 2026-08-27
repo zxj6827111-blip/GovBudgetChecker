@@ -27,6 +27,7 @@ from src.services.evidence_guard import (
     apply_evidence_completeness,
     count_formal_findings,
 )
+from src.services.pipeline_stages import resolve_stage_progress, stage_progress_to_dict
 from src.utils.provenance import summarize_finding_versions
 from src.utils.logging_config import (
     configure_logging_from_env,
@@ -220,13 +221,58 @@ def _safe_write(job_dir: Path, payload: Dict[str, Any]) -> None:
 
     状态流转本来就集中收敛在这里，所以埋点也放在这里：一处接线覆盖全部阶段，
     不必在十几个调用点各写一遍 logger 调用，也不会漏埋。
+
+    Task 3 新增职责（per-job 阶段进度 + 失败阶段归因）：
+    - 每次写入都会用 `resolve_stage_progress()` 把本次 `payload["stage"]`（若有）
+      解析成规范阶段 + 阶段内完成度，写入 `stage_progress` 字段，供
+      `GET /api/jobs/{job_id}/status` 直接暴露给前端；
+    - 失败写入（`payload["status"] == "error"` 且这次调用本身没有携带新的 `stage`，
+      即"由 pipeline 主体的 except 分支直接落错误态"这种典型失败路径）时，
+      从写入前的既有 status.json 里取出**上一次成功记录的阶段**，写入
+      `stage_failed_at` 字段——这就是"失败发生在哪个阶段"的归因依据。
+      之所以从"写入前的既有状态"里取而不是要求调用方显式传参，是因为
+      `_run_pipeline_body` 的 `except Exception` 分支本身并不知道自己是在哪个
+      阶段抛的异常（异常会打断当时的调用栈），但 status.json 在异常发生前
+      的最后一次正常写入已经忠实记录了那一刻的阶段，这是本系统里
+      "最后确认发生的事" 天然就有的证据，不需要额外埋点去追踪当前阶段变量。
+    - 严禁伪造：`resolve_stage_progress()` 对空/未知 stage 文本返回
+      `percent=None`，本函数原样透传，绝不在这里补一个猜测值。
     """
     status_file = job_dir / "status.json"
+    existing: Dict[str, Any] = {}
     try:
         merged_payload = dict(payload)
         existing = runtime.read_json_file(status_file, default={})
         for key, value in runtime.extract_job_status_context(existing).items():
             merged_payload.setdefault(key, value)
+
+        job_status = str(payload.get("status") or "unknown")
+        stage_text = payload.get("stage")
+        if stage_text is not None:
+            # 本次写入自带阶段名：正常推进路径，直接解析当前阶段进度。
+            merged_payload["stage_progress"] = stage_progress_to_dict(
+                resolve_stage_progress(str(stage_text))
+            )
+        else:
+            # 本次写入没带阶段名（典型场景：pipeline 主体 except 分支落错误态时
+            # 只传了 status/error，没有重新声明 stage）。这种情况下继续沿用
+            # 已经写入过的 stage_progress，不能因为这次调用没传就把它清空成
+            # "未知"——上一阶段确实推进到了那里，这是真实发生过的事实。
+            existing_stage_progress = existing.get("stage_progress")
+            if isinstance(existing_stage_progress, dict):
+                merged_payload.setdefault("stage_progress", existing_stage_progress)
+
+        if job_status == "error" and stage_text is None:
+            # 失败阶段归因：取"写入前"记录的最后一个阶段，即失败发生前的最后已知阶段。
+            # 只在"这次调用没有显式声明新阶段"时才这样做——如果调用方确实带了
+            # stage（例如某个阶段内部显式捕获异常后仍想标记当前阶段），
+            # 不应该被这里的兜底逻辑覆盖。
+            last_known_stage = existing.get("stage")
+            if last_known_stage:
+                merged_payload["stage_failed_at"] = stage_progress_to_dict(
+                    resolve_stage_progress(str(last_known_stage))
+                )
+
         runtime.write_json_file(status_file, merged_payload)
     except Exception as e:
         (job_dir / "status_error.log").write_text(str(e), encoding="utf-8")
