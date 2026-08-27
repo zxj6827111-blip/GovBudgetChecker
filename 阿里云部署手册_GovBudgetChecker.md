@@ -111,24 +111,27 @@ mkdir -p data logs samples uploads
 ## 第四阶段：一键启动与部署验证
 
 ### 1. 构建并启动容器
-GovBudgetChecker 整体架构拆分成了 `ai-extractor`，`backend`，`frontend`，并在 `docker-compose.ai.yml` 中编排。
+GovBudgetChecker 整体架构拆分成了 `postgres`、`ai-extractor`、`backend`、`worker`、`frontend`，
+分别定义在 `docker-compose.yml`（postgres）与 `docker-compose.ai.yml`（其余四个）中，部署时两份文件一起用。
+其中 `backend` 只入队（`JOB_QUEUE_ROLE=api`）、`worker` 负责消费队列（`JOB_QUEUE_ROLE=worker`），
+两者共享同一个 `uploads` 卷；缺了 `worker`，任务只会一直停在 `queued`。
 
 请在项目根目录（`/opt/GovBudgetChecker`）运行：
 ```bash
-docker compose -f docker-compose.ai.yml build
-docker compose -f docker-compose.ai.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.ai.yml build
+docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d
 ```
 *注：由于是在国内阿里云服务器部署，如果你未配置 Docker 国内加速镜像源，`build` 过程下载 python/node 的基础镜像可能会稍慢，请耐心等待。*
 
 ### 2. 查看容器状态和日志
 观察所有容器是否都是 `Up` (或者 `healthy`) 状态：
 ```bash
-docker compose -f docker-compose.ai.yml ps
+docker compose -f docker-compose.yml -f docker-compose.ai.yml ps
 ```
 
 检查 `backend` 的运行日志（非常重要，它是核心业务）：
 ```bash
-docker compose -f docker-compose.ai.yml logs -f backend
+docker compose -f docker-compose.yml -f docker-compose.ai.yml logs -f backend
 ```
 > 如果没看到崩溃重启或者报错信息，说明后端已成功连上 AI 提取器并启动完毕。
 

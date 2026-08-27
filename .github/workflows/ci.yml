@@ -41,6 +41,27 @@ jobs:
       - name: Log message safety
         run: python scripts/check_log_message_safety.py
 
+      # Task 14.1：代码 os.getenv / .env.example / compose 三方对账，
+      # 防止再出现"compose 配了但代码不读"（历史案例 RULES_FILE_PATH）这类静默失效。
+      - name: Env var consistency
+        run: python scripts/check_env_consistency.py
+
+      # Task 14.1：compose 清单静态校验（不启动容器）。
+      # 必填变量给占位值，只验证插值与结构，不代表容器能起来。
+      - name: Compose config check
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: fiscal_db
+          GOVBUDGET_API_KEY: ci-config-check
+          USER_SESSION_SECRET: ci-config-check
+          DEFAULT_ADMIN_PASSWORD: ci-config-check
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.ai.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.ai.yml config --services | sort > /tmp/compose-services.txt
+          cat /tmp/compose-services.txt
+          printf 'ai-extractor\nbackend\nfrontend\npostgres\nworker\n' | diff - /tmp/compose-services.txt
+
       - name: Mypy
         run: mypy api src tests
 

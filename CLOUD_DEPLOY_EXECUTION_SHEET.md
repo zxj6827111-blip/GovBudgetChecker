@@ -5,7 +5,7 @@ Use this as the step-by-step command sheet for production rollout, canary valida
 
 ## Scope
 - Environment: cloud production server
-- Mode: Docker Compose rollout (`docker-compose.ai.yml`)
+- Mode: Docker Compose rollout (`docker-compose.yml` + `docker-compose.ai.yml`：postgres / ai-extractor / backend / worker / frontend)
 - Date prepared: 2026-03-02
 
 ## 0. Variables (replace before running)
@@ -65,7 +65,7 @@ mkdir -p "$APP_DIR/uploads" "$APP_DIR/data" "$APP_DIR/logs"
 Validate compose config before deploy:
 
 ```bash
-docker compose -f docker-compose.ai.yml --env-file .env config > /tmp/gbc.compose.rendered.yaml
+docker compose -f docker-compose.yml -f docker-compose.ai.yml --env-file .env config > /tmp/gbc.compose.rendered.yaml
 ```
 
 Pass criteria:
@@ -76,8 +76,8 @@ Pass criteria:
 ## 4. T-20 min: baseline snapshot (for rollback confidence)
 
 ```bash
-docker compose -f docker-compose.ai.yml ps
-docker compose -f docker-compose.ai.yml images
+docker compose -f docker-compose.yml -f docker-compose.ai.yml ps
+docker compose -f docker-compose.yml -f docker-compose.ai.yml images
 curl -sS "$PROD_API_BASE/health"
 curl -sS "$PROD_API_BASE/ready"
 ```
@@ -90,9 +90,9 @@ Record:
 Roll backend-related services first:
 
 ```bash
-docker compose -f docker-compose.ai.yml --env-file .env pull
-docker compose -f docker-compose.ai.yml --env-file .env up -d ai-extractor backend
-docker compose -f docker-compose.ai.yml logs --tail=100 backend
+docker compose -f docker-compose.yml -f docker-compose.ai.yml --env-file .env pull
+docker compose -f docker-compose.yml -f docker-compose.ai.yml --env-file .env up -d ai-extractor backend worker
+docker compose -f docker-compose.yml -f docker-compose.ai.yml logs --tail=100 backend
 ```
 
 Pass criteria:
@@ -118,8 +118,8 @@ Pass criteria:
 ## 7. T-8 min: frontend rollout
 
 ```bash
-docker compose -f docker-compose.ai.yml --env-file .env up -d frontend
-docker compose -f docker-compose.ai.yml logs --tail=100 frontend
+docker compose -f docker-compose.yml -f docker-compose.ai.yml --env-file .env up -d frontend
+docker compose -f docker-compose.yml -f docker-compose.ai.yml logs --tail=100 frontend
 ```
 
 Pass criteria:
@@ -173,8 +173,8 @@ After canary success:
 Suggested checks during observation:
 
 ```bash
-docker compose -f docker-compose.ai.yml logs --since=15m backend | tail -n 200
-docker compose -f docker-compose.ai.yml logs --since=15m frontend | tail -n 200
+docker compose -f docker-compose.yml -f docker-compose.ai.yml logs --since=15m backend | tail -n 200
+docker compose -f docker-compose.yml -f docker-compose.ai.yml logs --since=15m frontend | tail -n 200
 ```
 
 ## 10. Rollback commands (if any P0 fails)
@@ -188,8 +188,8 @@ Rollback sequence:
 ```bash
 cd "$APP_DIR"
 git checkout <previous_good_tag>
-docker compose -f docker-compose.ai.yml --env-file .env up -d
-docker compose -f docker-compose.ai.yml ps
+docker compose -f docker-compose.yml -f docker-compose.ai.yml --env-file .env up -d
+docker compose -f docker-compose.yml -f docker-compose.ai.yml ps
 curl -sS "$PROD_API_BASE/health"
 curl -sS "$PROD_API_BASE/ready"
 ```
