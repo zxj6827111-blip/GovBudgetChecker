@@ -9,20 +9,56 @@ JSON 的 `message` 字段。所以
 `logger.warning(f"转换失败: {e}, issue={issue}")` 会把整条 finding（含 `evidence_text`
 即 PDF 原文）落盘。这类调用没法靠"写代码时注意"防住，必须有机器检查。
 
-检查规则（只抓"整个对象"这一类，避免误报淹没信号）
-------------------------------------------------
+为什么是 fail-closed（白名单）而不是黑名单
+--------------------------------------
+本检查最初用"危险名字黑名单"实现，并据此宣布全仓 0 违规。独立复核推翻了这个结论：
+`src/engine/ai/extractor_client.py` 有 4 处 `logger.warning(f"...: {hit}")`，而 `hit`
+的必需字段就包含 `budget_text` / `final_text` / `stmt_text`（送检材料原文）——只因为
+`hit` 这个名字不在黑名单里就被放过了。黑名单对"没被想到的名字"天然漏报，而漏报的
+代价是原文落盘，所以这里改成 fail-closed：
+
+    裸变量插进 message ⇒ 默认违规，除非该名字被判定安全。
+
+"判定安全"有三条来源，按顺序：
+1. `SAFE_LOG_NAMES`：逐个登记过的名字，每条都带判断理由（新增一个名字 = 一行可
+   审查的 diff，强迫作者当场说明这个变量为什么不含原文）。
+2. `_SAFE_NAME_SUFFIXES` / `_SAFE_NAME_PREFIXES`：机械可判的标量语义（`*_id`、
+   `*_count`、`*_ms`、`is_*` …），覆盖绝大多数排障字段，避免白名单变成几百行。
+3. 全大写常量名（`MAX_UPLOAD_MB`）：模块级配置阈值。
+
+两条**不可被白名单覆盖**的红线（先判，且优先级最高）：
+- `logging_config.is_sensitive_log_key` 命中（`*_text` / `*_token` / `snippet` …），
+  与运行时 `redact_log_fields` 共用同一份口径；
+- `RISKY_OBJECT_NAMES`：已知会承载整条业务对象/整行数据的名字。
+
+检查规则
+--------
 命中即违规：
 1. f-string / `%s` / `.format()` / 字符串拼接把**裸变量名**插进日志 message，
-   且该变量名在 `RISKY_OBJECT_NAMES` 里（例如 `issue`、`row`、`payload`、`value`）。
+   且该名字未被判定安全（fail-closed，见上）。
 2. 插值表达式是敏感属性或敏感下标，例如 `{finding.evidence_text}`、
-   `{issue["snippet"]}`——敏感判定复用 `logging_config.is_sensitive_log_key`，
-   与运行时脱敏共用同一份口径。
+   `{issue["snippet"]}`。
+3. `traceback.format_exc()` 拼进 message（应改用 `logger.exception`）。
+4. `raise` 的异常消息拼入 `RISKY_RAISE_NAMES` 里的名字——异常消息会顺着上游的
+   `{e}` 进入 message。
 
 不算违规（有意放过，保证信号密度）：
 - `{len(rows)}`、`{issue["rule_id"]}`、`{finding.rule_id}`：只取安全子字段或统计量。
 - `extra={...}`：这条路径已由 `redact_log_fields` 兜底脱敏。
-- 异常对象 `{e}`：异常消息本身不含原文是各调用点的责任（Task C 约定），
+- 异常对象 `{e}`：异常消息本身不含原文是各调用点的责任（由规则 4 在源头把守），
   强行禁掉 `{e}` 会毁掉排障能力。
+
+已知局限（写在这里，不要再当成"全覆盖"）
+------------------------------------
+- **`raise` 路径仍是黑名单**，不是 fail-closed。异常消息里的裸变量在本仓库实测
+  几乎全是配置值与 SQL 标识符（`model`、`timeout`、`table`、`col`、`migration_id`），
+  一律 fail-closed 只会产出几十条噪声，且原文要落盘必须先经过某个 logger——那一侧
+  已经 fail-closed。代价是：若将来有人 `raise ValueError(f"bad {new_obj}")` 且
+  `new_obj` 不在 `RISKY_RAISE_NAMES` 里，这里不会报，需要靠 code review。
+- 只看**语法形态**，不做取值分析：`logger.info(f"{obj.field}")` 里 `field` 若不在敏感
+  键口径内就会放过；`safe = row["snippet"]; logger.info(f"{safe}")` 这种先赋值再打印
+  也绕得过去（`safe` 需要被登记，但登记时看不出它的来源）。
+- 覆盖范围是 `api` / `src` / `scripts` 的 Python 代码，不含前端与 SQL。
 
 用法
 ----
@@ -118,6 +154,11 @@ RISKY_OBJECT_NAMES = frozenset(
         "page_text",
         "page_texts",
         "full_text",
+        # AI 抽取器返回的命中对象。required_fields 明确含 budget_text / final_text /
+        # stmt_text（送检材料原文），见 src/engine/ai/extractor_client.py。
+        # 独立复核就是在这里抓到 4 处真实泄漏的。
+        "hit",
+        "hits",
         # 凭据
         "api_key",
         "token",
@@ -127,6 +168,135 @@ RISKY_OBJECT_NAMES = frozenset(
         "headers",
         "authorization",
     }
+)
+
+
+#: 逐个登记过的安全名字。**新增条目必须在注释里说明为什么它不含材料原文/凭据。**
+#: 这份名单是 fail-closed 的另一半：不在这里、也不匹配下面的机械模式，就报违规。
+SAFE_LOG_NAMES = frozenset(
+    {
+        # --- 异常对象本身。异常消息不含原文由 visit_Raise 在源头把守 ---
+        "e",
+        "err",
+        "error",
+        "exc",
+        "exception",
+        "last_exception",
+        "error_msg",
+        "msg",
+        # --- 标识符 / 路径。路径含文件名，但文件名不是材料正文 ---
+        "path",
+        "filename",
+        "archive",
+        "identifier",
+        "col",  # SQL 列名（src/db/safe_ops.py 的白名单校验）
+        "schema",  # PG schema 名
+        "scope_key",  # 报告身份键：checksum 派生，不可反推原文
+        "username",  # 认证日志需要定位到人；非材料原文
+        # --- 枚举 / 状态 / 配置取值 ---
+        "code",
+        "reason",
+        "stage",
+        "status",
+        "role",
+        "name",
+        "default",
+        "model",  # AI 模型名
+        "provider",
+        "preferred_provider",
+        "executor",  # 执行器类型标记
+        "resumed",
+        "api_key_env",  # 环境变量**名**（如 ARK_API_KEY），不是 key 本身
+        # --- 计数 / 耗时 / 规模。只有量，没有内容 ---
+        "attempt",
+        "delay",
+        "elapsed",
+        "errors",
+        "remaining",
+        "returncode",
+        "timeout",
+        "totals",  # 纯计数字典，见 src/services/merge_findings.py
+        "row_order",  # 行序号
+        # --- 具名条目：宁可登记长名字，也不放过泛名 ---
+        # `description` 泛名在别处可能承载 finding 描述（含材料金额），不进白名单；
+        # 这一条只放过迁移定义里写死的静态说明文字。
+        "migration_description",
+    }
+)
+
+#: 机械可判的安全后缀：这些后缀在本仓库里稳定表示标量（ID / 计数 / 耗时 / 枚举）。
+#: 注意不要加 `_key`——`secret_key` 会被顺带放过；也不要加 `_span`——AI 返回的 span
+#: 形状不可信，正是靠它落到 fail-closed 分支才发现问题的。
+_SAFE_NAME_SUFFIXES = (
+    "_id",
+    "_ids",
+    "_uuid",
+    "_idx",
+    "_index",
+    "_count",
+    "_counts",
+    "_total",
+    "_totals",
+    "_sum",
+    "_ms",
+    "_sec",
+    "_secs",
+    "_seconds",
+    "_size",
+    "_bytes",
+    "_len",
+    "_length",
+    "_ratio",
+    "_pct",
+    "_percent",
+    "_score",
+    "_number",
+    "_order",
+    "_year",
+    "_version",
+    "_revision",
+    "_path",
+    "_dir",
+    "_file",
+    "_filename",
+    "_code",
+    "_status",
+    "_stage",
+    "_state",
+    "_role",
+    "_mode",
+    "_kind",
+    "_type",
+    "_name",
+    # 字段名清单（"缺了哪些字段"这类信息只含字段名，不含取值）。
+    # 刻意不加 `_keys`：`api_keys` 会被顺带放过，那是凭据。
+    "_field",
+    "_fields",
+    "_enabled",
+    "_flag",
+    "_strategy",
+    "_error",
+    "_err",
+    "_exc",
+    "_exception",
+)
+
+#: 机械可判的安全前缀（布尔量、上下界、计数）。
+_SAFE_NAME_PREFIXES = (
+    "is_",
+    "has_",
+    "can_",
+    "use_",
+    "allow_",
+    "enable",
+    "max_",
+    "min_",
+    "num_",
+    "n_",
+    "total_",
+    "count_",
+    "elapsed_",
+    "duration_",
 )
 
 
@@ -144,6 +314,8 @@ RISKY_RAISE_NAMES = frozenset(
         "findings",
         "result",
         "results",
+        "hit",
+        "hits",
         "row",
         "rows",
         "value",
@@ -224,15 +396,50 @@ def _message_args(node: ast.Call) -> List[ast.expr]:
     return args
 
 
+def classify_bare_name(name: str, *, fail_closed: bool) -> Optional[str]:
+    """判断"裸变量名被整体插进 message"是否违规；返回原因，安全则返回 None。
+
+    `fail_closed=True`（logger message 路径）时，未登记的名字一律违规——黑名单漏掉
+    `hit` 的教训就在这里兜住。`fail_closed=False`（raise 路径）时只查黑名单。
+    """
+    lowered = name.lower()
+
+    # 两条红线，白名单不可覆盖
+    if is_sensitive_log_key(lowered):
+        return "敏感字段名被整体拼进日志 message，可能是材料原文或凭据"
+    deny = RISKY_OBJECT_NAMES if fail_closed else RISKY_RAISE_NAMES
+    if lowered in deny:
+        return "整个对象被拼进日志 message，可能包含材料原文或凭据"
+
+    if not fail_closed:
+        return None
+
+    if lowered in SAFE_LOG_NAMES:
+        return None
+    if lowered.endswith(_SAFE_NAME_SUFFIXES) or lowered.startswith(_SAFE_NAME_PREFIXES):
+        return None
+    # 全大写（含前导下划线）视为模块级配置常量：MAX_UPLOAD_MB / _WORKFLOW_DB_TIMEOUT_SECONDS
+    stripped = name.lstrip("_")
+    if stripped and stripped.isupper():
+        return None
+    if name.startswith("__") and name.endswith("__"):
+        return None  # __name__ 之类的 dunder
+
+    return (
+        "未登记的变量被整体拼进日志 message（fail-closed）："
+        "请改为只记 ID / 数量 / 长度 / 哈希 / 错误码，"
+        "或在 SAFE_LOG_NAMES 登记该名字并注明它为何不含材料原文"
+    )
+
+
 def _check_expression(
     expr: ast.expr,
-    risky_names: frozenset = RISKY_OBJECT_NAMES,
+    *,
+    fail_closed: bool = True,
 ) -> Optional[str]:
     """判断单个插值表达式是否违规；返回违规原因，安全则返回 None。"""
     if isinstance(expr, ast.Name):
-        if expr.id.lower() in risky_names or is_sensitive_log_key(expr.id):
-            return "整个对象被拼进日志 message，可能包含材料原文或凭据"
-        return None
+        return classify_bare_name(expr.id, fail_closed=fail_closed)
     if isinstance(expr, ast.Attribute):
         if is_sensitive_log_key(expr.attr):
             return "敏感属性被拼进日志 message"
@@ -318,7 +525,7 @@ class _LogCallVisitor(ast.NodeVisitor):
         if _is_logger_call(node):
             for arg in _message_args(node):
                 for expr in _iter_interpolated(arg):
-                    reason = _check_expression(expr)
+                    reason = _check_expression(expr, fail_closed=True)
                     if reason:
                         self._record(node, expr, reason)
         self.generic_visit(node)
@@ -330,13 +537,17 @@ class _LogCallVisitor(ast.NodeVisitor):
         排障必要），但代价是**抛出的异常消息本身不能含原文**——否则原文会顺着 `{e}`
         进入 message 字段。所以在源头拦住
         `raise Exception(f"返回格式错误: {result}")` 这类写法。
+
+        这一侧刻意**不**用 fail-closed：实测异常消息里的裸变量几乎全是配置值与 SQL
+        标识符，全量拦截只出噪声；且原文要落盘必须先经过某个 logger，而那一侧已经
+        fail-closed。局限已写进模块 docstring。
         """
         exc = node.exc
         if isinstance(exc, ast.Call):
             candidates = list(exc.args) + [keyword.value for keyword in exc.keywords]
             for arg in candidates:
                 for expr in _iter_interpolated(arg):
-                    reason = _check_expression(expr, RISKY_RAISE_NAMES)
+                    reason = _check_expression(expr, fail_closed=False)
                     if reason:
                         self._record(node, expr, f"{reason}；该异常消息会随 logger 落盘")
         self.generic_visit(node)

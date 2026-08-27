@@ -935,8 +935,10 @@ async def run_migrations():
                 continue
             
             pending_count += 1
-            description = migration.get("description", "No description")
-            logger.info(f"Applying migration: {migration_id} - {description}")
+            # 变量名刻意写全：`description` 这个泛名在别处可能承载 finding 描述
+            # （含材料金额），不适合进白名单；这里的值是迁移定义里写死的静态说明。
+            migration_description = migration.get("description", "No description")
+            logger.info(f"Applying migration: {migration_id} - {migration_description}")
             
             # Run migration in a transaction
             try:

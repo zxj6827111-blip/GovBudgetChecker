@@ -29,8 +29,12 @@ from typing import Any, Dict, List
 import pytest
 
 from scripts.check_log_message_safety import (
+    RISKY_OBJECT_NAMES,
+    SAFE_LOG_NAMES,
+    _SAFE_NAME_SUFFIXES,
     check_paths,
     check_source,
+    classify_bare_name,
 )
 from src.engine.ai import extractor_client as extractor_mod
 from src.schemas.issues import AnalysisConfig, IssueItem, JobContext
@@ -40,6 +44,7 @@ from src.utils.logging_config import (
     StructuredFormatter,
     describe_exception,
     fingerprint_for_log,
+    is_sensitive_log_key,
 )
 from src.utils.validation import safe_float, safe_int, validate_amount
 
@@ -85,6 +90,18 @@ def _messages(records: List[logging.LogRecord]) -> List[str]:
         'raise Exception(f"AI返回格式错误: {result}")',
         'raise ValueError(f"Cannot convert \'{value}\' to float")',
         'raise RuntimeError(f"bad body: {response.text}")',
+        # 独立复核实际发现的漏报写法：hit 的必需字段含 budget_text/final_text/stmt_text。
+        # 旧版门禁用名字黑名单，`hit` 不在名单里就放过了——这四条锁死回归。
+        'logger.warning(f"跳过缺少必需字段的hit: {hit}")',
+        'logger.warning(f"跳过span格式错误的hit: {hit}")',
+        'logger.warning(f"转换hit失败: {e}, hit: {hit}")',
+        'raise ValueError(f"bad hit: {hit}")',
+        # fail-closed 的核心价值：**从没被想到过的名字**也必须报，
+        # 这是黑名单原理上做不到的。
+        'logger.warning(f"skip: {reason_span}")',
+        'logger.info(f"payload dump: {mystery_object}")',
+        'logger.info("dump %s", some_new_business_object)',
+        'logger.info(f"{extracted_material}")',
     ],
 )
 def test_checker_flags_leaky_log_calls(source: str) -> None:
@@ -114,6 +131,19 @@ def test_checker_flags_leaky_log_calls(source: str) -> None:
         'metrics.info(f"{issue}")',
         # 经过指纹化的内容可以进 message
         'raise Exception(f"bad body: {fingerprint_for_log(response.text)}")',
+        # fail-closed 的另一半：常规排障标量不能被误伤，否则门禁会被绕过。
+        # 机械安全模式（*_id / *_count / *_ms / is_* / 全大写常量）覆盖这些。
+        'logger.info(f"job {job_id} done in {elapsed_ms}ms")',
+        'logger.info(f"parsed {table_count} tables, {cell_count} cells")',
+        'logger.warning(f"retry {attempt}/{max_retries} after {delay}s")',
+        'logger.info(f"queue role={role} status={status} stage={stage}")',
+        'logger.info(f"ai_enabled={ai_enabled} is_ready={is_ready}")',
+        'logger.warning(f"upload too large: limit={MAX_UPLOAD_MB}MB")',
+        'logger.info(f"module {__name__} loaded")',
+        # 修好后的真实写法：只记字段名清单 + 类型 + 指纹
+        'logger.warning("跳过缺少必需字段的hit: missing=%s, %s", sorted(missing_fields), fingerprint_for_log(hit))',
+        'logger.warning("span格式错误: field=%s, type=%s", span_field, type(span).__name__)',
+        'logger.warning("转换hit失败: %s, %s", describe_exception(e), fingerprint_for_log(hit))',
     ],
 )
 def test_checker_allows_safe_log_calls(source: str) -> None:
@@ -354,3 +384,188 @@ async def test_extractor_bad_payload_message_excludes_response_body(monkeypatch)
     assert SECRET_BODY not in message
     assert "hits" in message
     assert "sha256=" in message
+
+
+# ---------------------------------------------------------------------------
+# 7. fail-closed 契约与白名单一致性
+#
+# 这一节针对的是"门禁自身被绕过"的风险。独立复核发现 4 处真实泄漏，根因不是漏改
+# 代码，而是**门禁原理不对**：名字黑名单对没被想到的名字天然漏报。所以这里锁死
+# 三件事：默认拒绝、白名单不能覆盖红线、白名单不能悄悄放宽。
+# ---------------------------------------------------------------------------
+def test_unlisted_name_is_rejected_by_default() -> None:
+    """fail-closed 的定义：没登记过就是违规。"""
+    reason = classify_bare_name("some_object_nobody_thought_of", fail_closed=True)
+    assert reason is not None
+    assert "fail-closed" in reason
+
+
+def test_hit_is_rejected_on_both_paths() -> None:
+    """`hit` 承载 budget_text/final_text/stmt_text，logger 与 raise 两侧都要拦。"""
+    assert classify_bare_name("hit", fail_closed=True) is not None
+    assert classify_bare_name("hit", fail_closed=False) is not None
+    assert classify_bare_name("hits", fail_closed=False) is not None
+
+
+def test_safe_names_never_include_sensitive_or_risky() -> None:
+    """一致性不变量：白名单不得与敏感口径/危险名单重叠。
+
+    没有这条，后人只要往 SAFE_LOG_NAMES 里加一个 `text` 或 `hit` 就能让门禁静音，
+    而 CI 依旧全绿——门禁形同虚设。
+    """
+    overlap = SAFE_LOG_NAMES & RISKY_OBJECT_NAMES
+    assert overlap == set(), f"白名单混入了危险名字: {sorted(overlap)}"
+    sensitive = {name for name in SAFE_LOG_NAMES if is_sensitive_log_key(name)}
+    assert sensitive == set(), f"白名单混入了敏感字段名: {sorted(sensitive)}"
+
+
+def test_safe_suffixes_do_not_whitelist_credentials() -> None:
+    """机械安全后缀不得开出凭据后门。
+
+    `_keys` 就是典型陷阱：加上它，`api_keys` 会被顺带放过。这条测试把当初的判断
+    钉死，防止有人"顺手补全"后缀表。
+    """
+    assert "_keys" not in _SAFE_NAME_SUFFIXES
+    assert "_key" not in _SAFE_NAME_SUFFIXES
+    for name in ("api_keys", "secret_key", "auth_keys"):
+        assert classify_bare_name(name, fail_closed=True) is not None, name
+
+
+def test_raise_path_stays_narrow_on_purpose() -> None:
+    """raise 侧刻意仍是黑名单：实测那里几乎全是配置值与 SQL 标识符。
+
+    这条测试的作用是让这个**取舍显式可见**——若将来要把 raise 也改成 fail-closed，
+    会先在这里变红，迫使改动者重新评估噪声代价，而不是无意识地改掉。
+    """
+    assert classify_bare_name("table", fail_closed=False) is None
+    assert classify_bare_name("payload", fail_closed=False) is None
+    # 但同样的名字在 logger message 侧一律拦住
+    assert classify_bare_name("table", fail_closed=True) is not None
+    assert classify_bare_name("payload", fail_closed=True) is not None
+
+
+# ---------------------------------------------------------------------------
+# 8. 真实调用路径：AI 命中转换的 4 条失败分支都不得把送检原文写进 message
+#
+# 这是对 P1 的行为级验证——不是断言源码长什么样（那种测试与实现互为镜像），
+# 而是真的跑一遍转换、抓 LogRecord，检查渲染后的 message 里有没有原文。
+# ---------------------------------------------------------------------------
+def _hit_with_text(**overrides: Any) -> Dict[str, Any]:
+    """构造一条带材料原文的 AI 命中。"""
+    hit: Dict[str, Any] = {
+        "budget_text": f"2025年部门预算表 {SECRET_EVIDENCE}",
+        "budget_span": [0, 10],
+        "final_text": f"决算数 {SECRET_BODY}",
+        "final_span": [0, 10],
+        "stmt_text": f"三公经费说明 {SECRET_EVIDENCE}",
+        "stmt_span": [0, 10],
+        "clip": {"page": 12},
+    }
+    hit.update(overrides)
+    return hit
+
+
+def _convert(hits: List[Any]) -> List[Dict[str, Any]]:
+    client = extractor_mod.ExtractorClient()
+    return client._convert_hits_to_internal_format(hits)
+
+
+def test_convert_hits_missing_field_logs_no_document_text(caplog) -> None:
+    hit = _hit_with_text()
+    hit.pop("clip")  # 触发"缺少必需字段"分支
+
+    with caplog.at_level(logging.WARNING):
+        assert _convert([hit]) == []
+
+    blob = "\n".join(_messages(caplog.records) + _render(caplog.records))
+    assert blob, "预期至少一条告警日志"
+    assert SECRET_EVIDENCE not in blob
+    assert SECRET_BODY not in blob
+    # 仍可排障：缺哪个字段 + 整条 hit 的指纹
+    assert "clip" in blob
+    assert "sha256=" in blob
+
+
+def test_convert_hits_bad_span_logs_no_document_text(caplog) -> None:
+    hit = _hit_with_text(final_span="0-10")  # 不是两元素列表
+
+    with caplog.at_level(logging.WARNING):
+        _convert([hit])
+
+    blob = "\n".join(_messages(caplog.records) + _render(caplog.records))
+    assert blob, "预期至少一条告警日志"
+    assert SECRET_EVIDENCE not in blob
+    assert SECRET_BODY not in blob
+    # 仍可排障：哪个 span 字段 + 实际类型
+    assert "final_span" in blob
+    assert "str" in blob
+
+
+def test_convert_hits_bad_reason_span_logs_no_content(caplog) -> None:
+    # reason_span 形状不对时可能携带任意内容，这里就塞原文
+    hit = _hit_with_text(reason_span=f"原因：{SECRET_EVIDENCE}")
+
+    with caplog.at_level(logging.WARNING):
+        converted = _convert([hit])
+
+    blob = "\n".join(_messages(caplog.records) + _render(caplog.records))
+    assert blob, "预期至少一条告警日志"
+    assert SECRET_EVIDENCE not in blob
+    assert converted and converted[0]["reason_span"] is None
+    assert "sha256=" in blob
+
+
+def test_convert_hits_exception_path_logs_no_document_text(caplog) -> None:
+    """异常分支：hit 不是 dict 时 `hit[span_field]` 抛 TypeError。"""
+    required = [
+        "budget_text",
+        "budget_span",
+        "final_text",
+        "final_span",
+        "stmt_text",
+        "stmt_span",
+        "clip",
+    ]
+    # list 里包含所有必需字段名，`field in hit` 成立，随后下标访问抛 TypeError
+    weird_hit: List[Any] = [*required, SECRET_BODY]
+
+    with caplog.at_level(logging.WARNING):
+        assert _convert([weird_hit]) == []
+
+    blob = "\n".join(_messages(caplog.records) + _render(caplog.records))
+    assert blob, "预期至少一条告警日志"
+    assert SECRET_BODY not in blob
+    # 仍可排障：异常类型 + 指纹
+    assert "TypeError" in blob
+    assert "sha256=" in blob
+
+
+def test_convert_hits_keeps_valid_hit_intact() -> None:
+    """反向对照：脱敏改造不能顺手改变正常路径的行为。"""
+    hit = _hit_with_text()
+    converted = _convert([hit])
+    assert len(converted) == 1
+    assert converted[0]["budget_text"] == hit["budget_text"]
+    assert converted[0]["clip"] == {"page": 12}
+
+
+def test_old_style_hit_logging_really_leaks(caplog) -> None:
+    """反向对照：证明上面四条 `SECRET not in blob` 不是空转。
+
+    这里刻意复现被复核抓到的旧写法。它确实会把 `budget_text` 原文写进 message，
+    连 `StructuredFormatter` 也拦不住——`record.getMessage()` 不经过
+    `redact_log_fields`，这正是整条门禁存在的理由。
+
+    注：本文件在 `tests/` 下，不在门禁扫描范围（api/src/scripts）内，所以这条
+    故意写坏的示例不会让门禁自相矛盾。
+    """
+    hit = _hit_with_text()
+    probe = logging.getLogger("probe.leak")
+
+    with caplog.at_level(logging.WARNING, logger="probe.leak"):
+        probe.warning(f"跳过缺少必需字段的hit: {hit}")  # 旧写法，仅用于对照
+
+    blob = "\n".join(_messages(caplog.records) + _render(caplog.records))
+    assert SECRET_EVIDENCE in blob, "对照失败：旧写法本应泄漏原文"
+    # 连结构化渲染后也还在——脱敏只覆盖 extras，不覆盖 message
+    assert any(SECRET_EVIDENCE in line for line in _render(caplog.records))

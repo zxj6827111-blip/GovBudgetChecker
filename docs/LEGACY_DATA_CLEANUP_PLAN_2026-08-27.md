@@ -48,7 +48,9 @@ Task 15.1 的"整改前后对比"脚本（`tmp/before_after_demo.py`）本意是
 
 ```sql
 BEGIN;
--- 先留档：把要删的行导出，便于事后核对
+-- 先留档：把要删的行导出，便于事后核对。
+-- 父行与两张子表都要留档——`ON DELETE CASCADE` 会静默带走 16 + 374 行子数据，
+-- 只存父行等于把绝大部分被删内容丢掉了（独立复核指出的对称性缺失）。
 CREATE TABLE IF NOT EXISTS _rollback_20260827_reports AS
 SELECT * FROM org_dept_annual_report
 WHERE id IN (
@@ -56,6 +58,20 @@ WHERE id IN (
   '7ea949a8-b4b4-4c0c-a9a3-d78a8e47dec5',
   '72752aba-dfb4-4b61-afb9-d2ffa5e4b2ea'
 );
+
+CREATE TABLE IF NOT EXISTS _rollback_20260827_table_data AS
+SELECT * FROM org_dept_table_data
+WHERE report_id IN (SELECT id FROM _rollback_20260827_reports);
+
+CREATE TABLE IF NOT EXISTS _rollback_20260827_line_items AS
+SELECT * FROM org_dept_line_items
+WHERE report_id IN (SELECT id FROM _rollback_20260827_reports);
+
+-- 留档行数自检：删之前先确认留档数量与实测一致（3 / 16 / 374）
+SELECT
+  (SELECT count(*) FROM _rollback_20260827_reports)    AS reports,     -- 期望 3
+  (SELECT count(*) FROM _rollback_20260827_table_data) AS table_data,  -- 期望 16
+  (SELECT count(*) FROM _rollback_20260827_line_items) AS line_items;  -- 期望 374
 
 -- 子表由 ON DELETE CASCADE 自动清理（table_data 16 行、line_items 374 行）
 DELETE FROM org_dept_annual_report
@@ -69,6 +85,9 @@ WHERE id IN (
 SELECT count(*) FROM org_dept_annual_report WHERE created_at >= '2026-08-27 00:00:00+00';
 COMMIT;  -- 数字不对就 ROLLBACK;
 ```
+
+留档表用完（确认无需还原后）再单独删除：
+`DROP TABLE _rollback_20260827_line_items, _rollback_20260827_table_data, _rollback_20260827_reports;`
 
 新增的那 1 个 `org_unit` 需要单独确认：它可能与既有组织重复，也可能是有用的组织记录。
 建议先看一眼再决定（下面是只读查询）：
@@ -299,10 +318,14 @@ HAVING count(DISTINCT r.file_hash) > 1;
 
 - 它们**已经执行过**，产物就是当前的 `app/` 代码，脚本本身不再被任何构建或测试引用；
 - 再次执行只会二次改写已经变了的文件，属于危险动作；
-- **建议删除**（历史仍在 git 里可查），理由是留着容易被误当成维护脚本执行。
-- 若希望保留，建议移到 `docs/archive/one-off-scripts/` 并在文件头加"已执行、勿再运行"注释。
+- **建议归档到 `scripts/legacy/` 而不是直接删**（2026-08-27 独立复核意见，已采纳）：
+  理由是保留历史可追溯性——真要回看"当年这段 UI 是怎么批量改出来的"，
+  从 git 历史里翻已删文件比看一个现存目录费事得多；
+  归档时给每个文件头加"已执行、勿再运行"注释，并在 `scripts/legacy/README.md`
+  写明目标文件与执行日期。
+- 若倾向彻底清理，直接 `git rm` 也可接受（历史仍在 git 里可查），风险同样低。
 
-无论删或留，都需要你点头，我不擅自动已跟踪文件。
+无论归档或删除，都需要你点头，我不擅自动已跟踪文件。
 
 ---
 

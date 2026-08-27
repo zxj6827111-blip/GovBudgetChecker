@@ -15,7 +15,7 @@ import httpx
 from dataclasses import dataclass, field
 
 from src.services.ai_client import AIClient
-from src.utils.logging_config import fingerprint_for_log
+from src.utils.logging_config import describe_exception, fingerprint_for_log
 from src.utils.provenance import (
     build_finding_provenance,
     build_model_version,
@@ -669,28 +669,51 @@ class ExtractorClient:
             try:
                 # 验证必需字段
                 required_fields = ["budget_text", "budget_span", "final_text", "final_span", "stmt_text", "stmt_span", "clip"]
-                if not all(field in hit for field in required_fields):
-                    logger.warning(f"跳过缺少必需字段的hit: {hit}")
+                # 日志只记"缺了哪些字段名"+ 整条 hit 的指纹：hit 里的 budget_text /
+                # final_text / stmt_text 就是送检材料原文，而 message 字段不经脱敏，
+                # 把 hit 整体拼进去等于把原文落盘（独立复核在此发现真实泄漏）。
+                missing_fields = [field for field in required_fields if field not in hit]
+                if missing_fields:
+                    logger.warning(
+                        "跳过缺少必需字段的hit: missing=%s, %s",
+                        sorted(missing_fields),
+                        fingerprint_for_log(hit),
+                    )
                     continue
                     
                 # 验证span格式
                 for span_field in ["budget_span", "final_span", "stmt_span"]:
                     span = hit[span_field]
                     if not isinstance(span, list) or len(span) != 2:
-                        logger.warning(f"跳过span格式错误的hit: {hit}")
+                        logger.warning(
+                            "跳过span格式错误的hit: field=%s, span_type=%s, %s",
+                            span_field,
+                            type(span).__name__,
+                            fingerprint_for_log(hit),
+                        )
                         continue
                         
                 # 处理可选的reason_span
                 reason_span = hit.get("reason_span")
                 if reason_span and (not isinstance(reason_span, list) or len(reason_span) != 2):
-                    logger.warning(f"reason_span格式错误，设为None: {reason_span}")
+                    # reason_span 本应是 [start, end) 两个整数；走到这里说明 AI 返回的
+                    # 形状不对，此时它可能是任意内容（含原文片段），只记类型与指纹。
+                    logger.warning(
+                        "reason_span格式错误，设为None: type=%s, %s",
+                        type(reason_span).__name__,
+                        fingerprint_for_log(reason_span),
+                    )
                     hit["reason_span"] = None
                     hit["reason_text"] = None
                 
                 converted.append(hit)
                 
             except Exception as e:
-                logger.warning(f"转换hit失败: {e}, hit: {hit}")
+                logger.warning(
+                    "转换hit失败: %s, %s",
+                    describe_exception(e),
+                    fingerprint_for_log(hit),
+                )
                 continue
                 
         return converted

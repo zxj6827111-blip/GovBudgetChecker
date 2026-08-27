@@ -1,12 +1,16 @@
 # GovBudgetChecker 发布验收报告（M4 收口）
 
-- 日期：2026-08-27
-- 分支：`feat/prod-readiness-m1`，HEAD `fc840f6`
+- 日期：2026-08-27（2026-08-27 独立复核后更新）
+- 分支：`feat/prod-readiness-m1`
 - 验收依据：`docs/PRODUCTION_REMEDIATION_PLAN_2026-08-26.md`（M1–M4）、
   `docs/PRODUCTION_GAP_AUDIT_2026-08-26.md`（缺口表 A / 表 B）、
   《GovBudgetChecker 完整整改计划》第 15 节 Gate 0–6
-- CI 证据：run [`33033745299`](https://github.com/zxj6827111-blip/GovBudgetChecker/actions/runs/33033745299)
-  **success**，18 个步骤全绿，4m36s
+- CI 证据：run [`33034732661`](https://github.com/zxj6827111-blip/GovBudgetChecker/actions/runs/33034732661)
+  **success**（HEAD `4eea300`，即本报告首版提交）；其父提交 `fc840f6` 的 run
+  [`33033745299`](https://github.com/zxj6827111-blip/GovBudgetChecker/actions/runs/33033745299)
+  同为 success，18 个步骤全绿、4m36s，下文引用的分步输出取自该 run
+- 独立复核：结论 `PASS_WITH_CONCERNS`，发现 1 项 P1（日志仍在泄漏送检原文）。
+  该项已修，见第 5 节 N-6。
 
 ---
 
@@ -111,7 +115,7 @@ PLAN 对 M4 的准出定义是：「发布门禁全绿；历史数据完成回�
 |---|---|---|
 | 监控和告警可用 | **部分通过** | 结构化日志全链 `job_id`/`stage`（`src/utils/logging_config.py`，Task C 又补齐了 message 字段脱敏与静态门禁）；`/metrics` 端点含 `report_id_uniqueness` 等关键指标；阈值文档 `docs/OBSERVABILITY_AND_ALERTS.md`。**但未接入真实告警通道**（无 Alertmanager/webhook 配置与验证）|
 | 性能测试通过 | **部分通过** | 有 `scripts/perf_baseline.py` + `scripts/perf_thresholds.json` + `make perf-check` + `docs/PERF_BASELINE.md`；**本轮 M4 未实跑性能测试**，30MB/800 页最坏耗时仍未实测 |
-| 安全测试通过 | **部分通过** | 鉴权默认开启并有生产模式矩阵验证、RBAC、限流、安全响应头、首登强制改密、上传 MIME/签名校验、路径穿越测试、PDF 解析进程隔离（超时/页数/文本量/单元格上限）、日志脱敏（extras + message 双重）。**无第三方渗透测试报告**|
+| 安全测试通过 | **部分通过** | 鉴权默认开启并有生产模式矩阵验证、RBAC、限流、安全响应头、首登强制改密、上传 MIME/签名校验、路径穿越测试、PDF 解析进程隔离（超时/页数/文本量/单元格上限）、日志脱敏（extras 强制脱敏 + message 静态门禁 fail-closed）。**无第三方渗透测试报告**；日志侧残留局限见 `docs/OBSERVABILITY_AND_ALERTS.md`（`raise` 路径仍是黑名单、不做取值分析）|
 | 备份恢复通过 | **通过** | `scripts/backup_all.py`（UPLOAD_DIR + PG + 审计日志三件套备份/校验/恢复）+ 演练记录 `docs/BACKUP_RESTORE_DRILL_2026-08-27.md` |
 | 灰度发布通过 | **未通过** | Runbook 有灰度顺序（canary → full），**无执行记录** |
 | 回滚演练通过 | **未通过** | Runbook 第 4 节有回滚方案，**无演练记录** |
@@ -188,6 +192,13 @@ PLAN 对 M4 的准出定义是：「发布门禁全绿；历史数据完成回�
 | N-3 | **测试会往仓库 `uploads/` 写任务目录**（每次全量 pytest +5 个），污染被回放度量的历史语料，也是真实库里 `split_mode.pdf` 反复重现的原因 | **已修** | `tests/conftest.py:isolate_upload_root`（autouse）+ `tests/test_upload_root_isolation.py`；实测修复后全量 pytest 前后 `uploads/` 新增 0（修复前 +5）|
 | N-4 | 本轮"整改前后对比"脚本误写开发库：`os.environ.pop("DATABASE_URL")` 被 `api/main.py` 导入链上的 `load_dotenv()` 抵消，写入 3+16+374+1 行 | **待回滚（已给 SQL）** | `docs/LEGACY_DATA_CLEANUP_PLAN_2026-08-27.md` 第 0 节；`uploads/` 未受影响（sha256 全量比对 0 变化）|
 | N-5 | 历史回放语料含测试生成任务（766 → 783 增长与 N-3 同源），会稀释"真实材料"的指标口径 | **已标记** | `docs/HISTORICAL_REPLAY_2026-08-27.md` 第 2.1 / 4 节；N-3 修复后不再增长 |
+| N-6 | **独立复核发现**：`extractor_client._convert_hits_to_internal_format` 有 4 处 `logger.warning(f"...: {hit}")`，`hit` 的必需字段含 `budget_text`/`final_text`/`stmt_text`（送检材料原文）。Task C 的"全仓 0 违规"结论因此不成立——门禁是名字黑名单，`hit` 不在名单里就被放过 | **已修** | 门禁改为 **fail-closed**（白名单 + 机械安全模式 + 两条不可覆盖红线）；4 处站点改为只记"缺哪些字段名 + 类型 + `len/sha256` 指纹"。交叉验证：旧门禁对这 4 种写法返回 0 违规，新门禁全部命中，而 `f"job {job_id} done in {elapsed_ms}ms"` 新旧都是 0。测试从 34 增至 63 项，含 4 条行为级 caplog 验证 + 1 条"旧写法确实泄漏"的反向对照 + 白名单一致性不变量 |
+
+N-6 的教训值得单列：**问题不在漏改代码，而在门禁原理**。名字黑名单只能拦住"想到过的
+名字"，而漏报的代价是原文落盘。改成 fail-closed 后，全仓只新暴露 2 处待判定站点
+（`target` / `description`，均确认安全并改成了更精确的名字），说明这个口径的噪声成本
+是可接受的。残留局限（`raise` 路径仍是黑名单、不做取值分析）已写进
+`docs/OBSERVABILITY_AND_ALERTS.md`，并有测试把这个取舍钉住。
 
 ---
 
@@ -244,15 +255,17 @@ PLAN 对 M4 的准出定义是：「发布门禁全绿；历史数据完成回�
 | `a45ec90` | 上传→等待→复核→导出关键流程 E2E | Gate 5 |
 | `c495061` | 历史遗留清理方案（未执行）| — |
 | `fc840f6` | 隔离任务产物目录，测试不再写入 `uploads/` | N-3 |
+| `4eea300` | 本报告首版（Gate 0–6 逐条 + 表 A/表 B + 发布结论）| — |
+| 本次 | 修复独立复核发现的 P1：4 处送检原文入日志 + 门禁改 fail-closed | N-6 |
 
 ### 本机门禁（Windows）
 
 ```
 ruff check .                        All checks passed!
-check_log_message_safety.py         exit 0（0 违规）
+check_log_message_safety.py         exit 0（0 违规；fail-closed 口径）
 check_env_consistency.py            exit 0（代码 124 / .env.example 120 / compose 55，0 违规）
 mypy api src tests                  Success: no issues found in 157 source files
-pytest -q                           760 passed, 1 skipped
+pytest -q                           789 passed, 1 skipped
 npm --prefix app run build          exit 0（Compiled successfully）
 npm --prefix app run test:e2e       33 passed (28.1s)
 docker compose ... config --quiet   exit 0；config --services = 5 个服务

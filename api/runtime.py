@@ -2548,12 +2548,12 @@ async def reanalyze_job(
         raise HTTPException(status_code=409, detail="job is already being analyzed")
 
     for filename in REANALYZE_EPHEMERAL_FILES:
-        target = source_job_dir / filename
+        target_path = source_job_dir / filename
         try:
-            if target.exists():
-                target.unlink()
+            if target_path.exists():
+                target_path.unlink()
         except Exception:
-            logger.exception("Failed to clear stale reanalyze artifact %s", target)
+            logger.exception("Failed to clear stale reanalyze artifact %s", target_path)
 
     body = dict(body or {})
     if "use_local_rules" not in body:

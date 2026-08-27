@@ -63,10 +63,46 @@
   规则见脚本 docstring；`tests/test_log_message_safety.py` 里有正反对照用例
   与"全仓零违规"回归线。
 
-**已知残留风险（发布决策需知晓）**：对于非校验类异常，仍保留 `logger.exception`，
-异常栈进入 JSON 的 `exception` 字段，该字段不脱敏。若第三方库把材料内容写进自己的
-异常消息，仍可能经此路径落盘。取舍理由是异常栈对生产排障是必需的；
-缓解手段是本仓库自己抛出的异常消息一律不含原文（由上述门禁的 `raise` 检查保证）。
+#### 门禁为什么是 fail-closed（2026-08-27 独立复核后改造）
+
+第一版门禁用"危险名字黑名单"，并据此宣布全仓 0 违规。**这个结论是错的**：
+`src/engine/ai/extractor_client.py` 有 4 处 `logger.warning(f"...: {hit}")`，而 `hit`
+的必需字段就包含 `budget_text` / `final_text` / `stmt_text`（送检材料原文）——只因为
+`hit` 不在黑名单里就被放过。独立复核抓到了这 4 处。
+
+复核后用旧门禁交叉验证：把这 4 种写法喂给它，返回 **0 违规**；改造后的门禁全部命中，
+而 `f"job {job_id} done in {elapsed_ms}ms"` 这类排障标量在新旧两版都是 0。
+结论是**原理性缺陷**，不是漏改代码，所以改成 fail-closed：
+
+    裸变量插进 message ⇒ 默认违规，除非该名字被判定安全。
+
+判定安全只有三条来源：`SAFE_LOG_NAMES`（逐个登记、每条带理由）、机械安全后缀/前缀
+（`*_id` / `*_count` / `*_ms` / `is_*` …）、全大写配置常量。两条红线不可被白名单覆盖：
+`is_sensitive_log_key` 命中的名字，以及 `RISKY_OBJECT_NAMES`。
+`tests/test_log_message_safety.py` 有一致性不变量测试，防止后人往白名单里塞
+`text` / `hit` 把门禁静音。
+
+改造后全仓新暴露 2 处待判定站点（`api/runtime.py` 的 `target`、
+`src/db/migrations.py` 的 `description`），均确认安全，但都改成了更精确的名字
+（`target_path` / `migration_description`）而不是把 `target` / `description` 这种泛名
+放进白名单——`description` 在别处可能承载含金额的 finding 描述。
+
+**已知残留风险（发布决策需知晓）**：
+
+1. 非校验类异常仍保留 `logger.exception`，异常栈进入 JSON 的 `exception` 字段，
+   该字段不脱敏。若第三方库把材料内容写进自己的异常消息，仍可能经此路径落盘。
+   取舍理由是异常栈对生产排障必需；缓解手段是本仓库自己抛出的异常消息一律不含原文。
+2. **`raise` 路径仍是黑名单，不是 fail-closed。** 实测异常消息里的裸变量共 87 处、
+   39 个名字，几乎全是配置值与 SQL 标识符（`model`、`timeout`、`table`、`col`、
+   `migration_id`）；一律 fail-closed 只出噪声，且原文要落盘必须先经过某个 logger，
+   而那一侧已经 fail-closed。代价：若将来 `raise ValueError(f"bad {new_obj}")` 且
+   `new_obj` 不在 `RISKY_RAISE_NAMES` 里，门禁不报，只能靠 code review。
+   这个取舍有专门的测试（`test_raise_path_stays_narrow_on_purpose`）钉住，
+   将来若要改成 fail-closed 会先在那里变红。
+3. 门禁只看**语法形态**，不做取值分析。`safe = row["snippet"]` 之后再打印 `safe`
+   仍绕得过去（`safe` 需要登记，但登记时看不出来源）；`{obj.field}` 只要 `field`
+   不在敏感键口径内就放过。
+4. 覆盖范围是 `api` / `src` / `scripts` 的 Python 代码，不含前端与 SQL。
 
 ## 二、指标端点
 
