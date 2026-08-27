@@ -681,17 +681,30 @@ class ExtractorClient:
                     )
                     continue
                     
-                # 验证span格式
-                for span_field in ["budget_span", "final_span", "stmt_span"]:
-                    span = hit[span_field]
-                    if not isinstance(span, list) or len(span) != 2:
-                        logger.warning(
-                            "跳过span格式错误的hit: field=%s, span_type=%s, %s",
-                            span_field,
-                            type(span).__name__,
-                            fingerprint_for_log(hit),
-                        )
-                        continue
+                # 验证span格式。
+                # 这里必须先把三个 span 全判完再决策：早先的写法是在内层 for 里
+                # `continue`，那只是跳到下一个 span 字段，坏 hit 依然会走到
+                # `converted.append(hit)`——与日志里写的"跳过"完全相反。
+                # 取舍：span 是必需字段，形状不对说明这条 AI 响应违反了约定，
+                # 同一条响应里的其它字段同样不可信，因此整条丢弃（与上面"缺必需
+                # 字段"分支一致）；代价是可能少一个候选问题，换来的是不把来源
+                # 可疑的证据放进审核结果。可选的 reason_span 才走"置空但保留"。
+                invalid_span_field = next(
+                    (
+                        field
+                        for field in ("budget_span", "final_span", "stmt_span")
+                        if not isinstance(hit[field], list) or len(hit[field]) != 2
+                    ),
+                    None,
+                )
+                if invalid_span_field is not None:
+                    logger.warning(
+                        "跳过span格式错误的hit: field=%s, span_type=%s, %s",
+                        invalid_span_field,
+                        type(hit[invalid_span_field]).__name__,
+                        fingerprint_for_log(hit),
+                    )
+                    continue
                         
                 # 处理可选的reason_span
                 reason_span = hit.get("reason_span")

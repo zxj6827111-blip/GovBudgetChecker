@@ -200,6 +200,16 @@ N-6 的教训值得单列：**问题不在漏改代码，而在门禁原理**。
 是可接受的。残留局限（`raise` 路径仍是黑名单、不做取值分析）已写进
 `docs/OBSERVABILITY_AND_ALERTS.md`，并有测试把这个取舍钉住。
 
+| 编号 | 发现 | 状态 | 证据 |
+|---|---|---|---|
+| N-7 | 修 N-6 时顺带发现的逻辑缺陷：`_convert_hits_to_internal_format` 里 span 校验的 `continue` 只跳出内层 `for span_field` 循环，**span 形状非法的 hit 仍被 `append` 进结果**——日志写着"跳过span格式错误的hit"，实际却放行了 | **已修** | 改为先判完三个 span 再决策（`invalid_span_field`）。新旧实现对照实测：旧实现对 4 种非法 span（非 list / 长度 3 / None / dict）全部 `kept=1`，新实现全部 `kept=0`；`[好, 坏, 好]` 三条序列旧实现留下 `[1,2,3]`，新实现留下 `[1,3]`（证明不是用 `break` 把后续 hit 一起丢掉）。测试见 `tests/test_ai_extractor_client.py`（11 项，含可选 `reason_span` 只置空不丢条的对照）|
+
+N-7 的取舍需要说明：span 是必需字段，形状不对说明这条 AI 响应违反了约定，同一条响应
+里的其它字段同样不可信，因此**整条丢弃**而不做"部分采纳"——代价是可能少一个候选问题，
+换来的是不把来源可疑的证据放进审核结果，与"优先降低误报"的既定口径一致。可选的
+`reason_span` 保持原有的"置空但保留"语义。下游 `src/engine/ai_validator.py:332`
+`_convert_ai_hit_to_result` 不读取任何 span 字段，因此本次改动不影响其它调用路径。
+
 ---
 
 ## 6. 本轮整改**未覆盖**的内容（发布决策必须知道）
@@ -256,7 +266,8 @@ N-6 的教训值得单列：**问题不在漏改代码，而在门禁原理**。
 | `c495061` | 历史遗留清理方案（未执行）| — |
 | `fc840f6` | 隔离任务产物目录，测试不再写入 `uploads/` | N-3 |
 | `4eea300` | 本报告首版（Gate 0–6 逐条 + 表 A/表 B + 发布结论）| — |
-| 本次 | 修复独立复核发现的 P1：4 处送检原文入日志 + 门禁改 fail-closed | N-6 |
+| `0cfb378` | 修复独立复核发现的 P1：4 处送检原文入日志 + 门禁改 fail-closed | N-6 |
+| 本次 | 修复 span 校验只跳内层循环导致坏 hit 被放行 | N-7 |
 
 ### 本机门禁（Windows）
 
@@ -265,7 +276,7 @@ ruff check .                        All checks passed!
 check_log_message_safety.py         exit 0（0 违规；fail-closed 口径）
 check_env_consistency.py            exit 0（代码 124 / .env.example 120 / compose 55，0 违规）
 mypy api src tests                  Success: no issues found in 157 source files
-pytest -q                           789 passed, 1 skipped
+pytest -q                           799 passed, 1 skipped
 npm --prefix app run build          exit 0（Compiled successfully）
 npm --prefix app run test:e2e       33 passed (28.1s)
 docker compose ... config --quiet   exit 0；config --services = 5 个服务
