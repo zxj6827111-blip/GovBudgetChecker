@@ -16,6 +16,23 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 45
 
+    # Task 15.2 / 缺口 P2-03：CI 此前没有迁移步骤，迁移写错要到部署当天才暴露。
+    # 这里起一个一次性 PostgreSQL，用它跑"从空库到最新"的全量迁移。
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: govbudget_ci
+          POSTGRES_PASSWORD: govbudget_ci
+          POSTGRES_DB: fiscal_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U govbudget_ci -d fiscal_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4.3.0
@@ -69,6 +86,27 @@ jobs:
         env:
           TESTING: "true"
         run: python -m pytest
+
+      # Task 15.2 / 缺口 P2-03：从空库跑全量迁移，并断言重复执行幂等
+      # （第二遍不得再应用任何迁移）。这是重复部署与回滚的前提。
+      - name: DB migrations (fresh database + idempotency)
+        env:
+          DATABASE_URL: postgresql://govbudget_ci:govbudget_ci@localhost:5432/fiscal_ci
+          PG_SCHEMA: public
+        run: python scripts/run_db_migrations.py
+
+      # Task 15.2 / 缺口 P2-06：回放结构性指标业务门禁。
+      # CI 上没有真实 uploads/，所以跑仓库内的 fixture 语料——它既不必然通过也不必然
+      # 失败：tests/fixtures/replay/pass 必须全绿，同目录下 5 个 fail_* 语料每个都会
+      # 精确触发一条检查失败（由 tests/test_ci_business_gate.py 固化）。
+      #
+      # 局限（不得误读）：无 Golden Corpus，本门禁只覆盖结构性指标，
+      # **不度量召回率与精确率**，全绿不等于业务质量达标。详见 docs/CI_BUSINESS_GATE.md。
+      - name: Business gate (replay structural metrics)
+        run: |
+          python scripts/check_replay_thresholds.py --uploads tests/fixtures/replay/pass
+          # 生产环境按同一套阈值判定真实产物；CI 上没有数据时显式跳过并说明
+          python scripts/check_replay_thresholds.py --uploads uploads --allow-missing
 
       - name: Setup Node
         uses: actions/setup-node@v4.4.0

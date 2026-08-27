@@ -1,0 +1,43 @@
+{
+  "analysis_conclusion": "incomplete",
+  "checksum": "checksum-job-unknown-0",
+  "filename": "job-unknown-0.pdf",
+  "job_id": "job-unknown-0",
+  "page_coverage": 0.9,
+  "quality_status": "review_required",
+  "report_kind": "unknown",
+  "report_year": 2026,
+  "result": {
+    "issues": {
+      "all": [],
+      "error": [],
+      "info": [],
+      "warn": []
+    },
+    "meta": {
+      "evidence_completeness": {
+        "complete": 0,
+        "completeness_rate": 1.0,
+        "degraded_count": 0,
+        "incomplete": 0,
+        "rule_warning_count": 0,
+        "total": 0
+      },
+      "page_extraction": {
+        "detector_version": "page-extraction-v1",
+        "page_count": 10,
+        "page_coverage": 0.9,
+        "scanned_page_count": 0
+      },
+      "report_kind": "unknown",
+      "report_year": 2026
+    }
+  },
+  "scanned_page_count": 0,
+  "status": "review_required",
+  "structured_ingest": {
+    "ps_sync": {
+      "report_id": "66666660-6666-4666-8666-666666666666"
+    }
+  }
+}
