@@ -19,13 +19,15 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button, SectionTitle } from "@/components/ui";
 import type { JobSummaryRecord } from "@/lib/uiAdapters";
 
 import { OrganizationFilterSelect } from "../workspace/OrganizationFilterSelect";
+import { PollRefreshStatus } from "../workspace/PollRefreshStatus";
 import { WorkbenchQueueTable } from "../workspace/WorkbenchQueueTable";
+import { useJobPolling } from "../workspace/useJobPolling";
 import { collectAvailableYears, type WorkbenchStatusFilter } from "../workspace/workbenchAdapters";
 import {
   DEFAULT_QUEUE_FILTERS,
@@ -40,6 +42,7 @@ import {
   type QueueSortKey,
   type QueueStageFilter,
 } from "./queuePageAdapters";
+import { resolvePollingDecision } from "@/lib/jobPolling";
 
 const PAGE_SIZE = 20;
 
@@ -73,31 +76,30 @@ export function QueuePage() {
   const [sortKey, setSortKey] = useState<QueueSortKey>("updated_desc");
   const [page, setPage] = useState(1);
 
-  useEffect(() => {
-    let cancelled = false;
+  /** 最新 jobs 的旁路引用：轮询决策每次续排时实时读取，不受闭包过期影响。 */
+  const jobsRef = useRef<JobSummaryRecord[] | null>(null);
+  jobsRef.current = jobs;
 
-    async function loadJobs() {
-      try {
-        const response = await fetch("/api/jobs", { cache: "no-store" });
-        if (!response.ok) {
-          return;
-        }
-        const payload = (await response.json()) as
-          | JobSummaryRecord[]
-          | { items?: JobSummaryRecord[] };
-        if (!cancelled) {
-          setJobs(Array.isArray(payload) ? payload : payload.items ?? []);
-        }
-      } catch {
-        // 保持 jobs=null（未拉到数据的展示态），不猜测。
-      }
+  /** 修复 1：任务状态轮询（此前本页只有挂载时一次 fetch，任务完成后界面不刷新）。
+   *  失败时抛错（由轮询层上报并继续重试），保持旧数据。 */
+  const loadJobs = useCallback(async () => {
+    const response = await fetch("/api/jobs", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`/api/jobs 返回 HTTP ${response.status}`);
     }
-
-    void loadJobs();
-    return () => {
-      cancelled = true;
-    };
+    const payload = (await response.json()) as JobSummaryRecord[] | { items?: JobSummaryRecord[] };
+    const next = Array.isArray(payload) ? payload : payload.items ?? [];
+    // 必须在 setJobs 之外同步更新旁路引用：轮询决策在 fetch 返回的同一微任务里
+    // 立即执行（早于 React 重渲染），走渲染期赋值会让终态判定晚一个周期、
+    // 多打一次后端。
+    jobsRef.current = next;
+    setJobs(next);
   }, []);
+
+  const polling = useJobPolling({
+    fetcher: loadJobs,
+    decide: useCallback(() => resolvePollingDecision(jobsRef.current), []),
+  });
 
   // 工作台队列行的跳转目标（/queue?job=<id>）：作为初始关键词定位该任务。
   // 只在任务数据首次加载前应用一次，之后用户自己的筛选不被覆盖。
@@ -107,21 +109,6 @@ export function QueuePage() {
       setFilters((prev) => (prev.keyword ? prev : { ...prev, keyword: initialJobParam }));
     }
   }, [initialJobParam, jobs]);
-
-  const loadJobs = useCallback(async () => {
-    try {
-      const response = await fetch("/api/jobs", { cache: "no-store" });
-      if (!response.ok) {
-        return;
-      }
-      const payload = (await response.json()) as
-        | JobSummaryRecord[]
-        | { items?: JobSummaryRecord[] };
-      setJobs(Array.isArray(payload) ? payload : payload.items ?? []);
-    } catch {
-      // 静默失败：保持现状。
-    }
-  }, []);
 
   const availableYears = useMemo(() => collectAvailableYears(jobs), [jobs]);
   const analyzingCount = useMemo(() => countAnalyzingJobs(jobs), [jobs]);
@@ -253,6 +240,13 @@ export function QueuePage() {
           共 {pagination.total} 个任务
           {pagination.total !== (jobs?.length ?? 0) ? `（总 ${jobs?.length ?? 0} 个，当前筛选条件下）` : ""}
         </span>
+        <PollRefreshStatus
+          lastSyncedAt={polling.lastSyncedAt}
+          lastErrorMessage={polling.lastErrorMessage}
+          isRefreshing={polling.isManualRefreshing}
+          onRefresh={polling.refreshNow}
+          testIdPrefix="gbc-queue-refresh"
+        />
         {pagination.pageCount > 1 ? (
           <span data-testid="gbc-queue-pagination-info">
             第 {pagination.page} / {pagination.pageCount} 页

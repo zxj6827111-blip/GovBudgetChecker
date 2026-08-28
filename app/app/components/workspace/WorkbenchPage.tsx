@@ -13,12 +13,14 @@
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge, Button, Metric, SectionTitle } from "@/components/ui";
 import type { JobSummaryRecord } from "@/lib/uiAdapters";
 
 import { OrganizationFilterSelect } from "./OrganizationFilterSelect";
+import { PollRefreshStatus } from "./PollRefreshStatus";
+import { useJobPolling } from "./useJobPolling";
 import { WorkbenchActivityPanel } from "./WorkbenchActivityPanel";
 import { WorkbenchAlertsPanel } from "./WorkbenchAlertsPanel";
 import { WorkbenchQueueTable } from "./WorkbenchQueueTable";
@@ -32,6 +34,7 @@ import {
   type QualityAlert,
   type WorkbenchStatusFilter,
 } from "./workbenchAdapters";
+import { resolvePollingDecision } from "@/lib/jobPolling";
 
 /** 页面覆盖率质量门禁阈值：与 api/main.py 的 PAGE_COVERAGE_MIN_RATIO 默认值同源（0.8）。
  *  该常量本身不是新造的口径——PAGE_COVERAGE_MIN_RATIO 是环境变量，前端拿不到后端的
@@ -67,17 +70,23 @@ export function WorkbenchPage() {
   const [organizationId, setOrganizationId] = useState("");
   const [isRetryingAll, setIsRetryingAll] = useState(false);
 
+  /** 最新 jobs 的旁路引用：轮询决策每次续排时实时读取，不受闭包过期影响。 */
+  const jobsRef = useRef<JobSummaryRecord[] | null>(null);
+  jobsRef.current = jobs;
+
+  /** 修复 1：任务状态轮询。失败时抛错（由轮询层上报并继续重试），保持旧数据。 */
   const loadJobs = useCallback(async () => {
-    try {
-      const response = await fetch("/api/jobs", { cache: "no-store" });
-      if (!response.ok) {
-        return;
-      }
-      const payload = (await response.json()) as JobSummaryRecord[] | { items?: JobSummaryRecord[] };
-      setJobs(Array.isArray(payload) ? payload : payload.items ?? []);
-    } catch {
-      // 保持 jobs=null（未拉到数据的展示态），不猜测。
+    const response = await fetch("/api/jobs", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`/api/jobs 返回 HTTP ${response.status}`);
     }
+    const payload = (await response.json()) as JobSummaryRecord[] | { items?: JobSummaryRecord[] };
+    const next = Array.isArray(payload) ? payload : payload.items ?? [];
+    // 必须在 setJobs 之外同步更新旁路引用：轮询决策在 fetch 返回的同一微任务里
+    // 立即执行（早于 React 重渲染），走渲染期赋值会让终态判定晚一个周期、
+    // 多打一次后端。
+    jobsRef.current = next;
+    setJobs(next);
   }, []);
 
   const loadMetrics = useCallback(async () => {
@@ -96,9 +105,18 @@ export function WorkbenchPage() {
   }, []);
 
   useEffect(() => {
-    void loadJobs();
+    // metrics 不参与轮询（管理员聚合指标变化慢，且非管理员必然 403），
+    // 只在挂载与手动刷新时拉一次；jobs 的定时轮询由 useJobPolling 负责。
     void loadMetrics();
-  }, [loadJobs, loadMetrics]);
+  }, [loadMetrics]);
+
+  const polling = useJobPolling({
+    fetcher: useCallback(async () => {
+      await loadJobs();
+      await loadMetrics();
+    }, [loadJobs, loadMetrics]),
+    decide: useCallback(() => resolvePollingDecision(jobsRef.current), []),
+  });
 
   const kpiCounts = useMemo(() => computeWorkbenchKpiCounts(jobs), [jobs]);
   const coverageAggregate = useMemo(() => aggregatePageCoverage(jobs), [jobs]);
@@ -265,6 +283,13 @@ export function WorkbenchPage() {
             >
               {isRetryingAll ? "重试中…" : "批量重试"}
             </Button>
+            <PollRefreshStatus
+              lastSyncedAt={polling.lastSyncedAt}
+              lastErrorMessage={polling.lastErrorMessage}
+              isRefreshing={polling.isManualRefreshing}
+              onRefresh={polling.refreshNow}
+              testIdPrefix="gbc-workbench-refresh"
+            />
           </div>
 
           {jobs === null ? (

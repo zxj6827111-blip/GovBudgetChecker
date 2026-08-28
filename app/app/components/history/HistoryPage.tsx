@@ -15,14 +15,12 @@
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { SectionTitle } from "@/components/ui";
+import { resolvePollingDecision } from "@/lib/jobPolling";
 import type { JobSummaryRecord } from "@/lib/uiAdapters";
 
-import { OrganizationFilterSelect } from "../workspace/OrganizationFilterSelect";
-import { WorkbenchQueueTable } from "../workspace/WorkbenchQueueTable";
-import { collectAvailableYears, type WorkbenchStatusFilter } from "../workspace/workbenchAdapters";
 import {
   DEFAULT_QUEUE_FILTERS,
   QUEUE_SORT_LABELS,
@@ -34,6 +32,11 @@ import {
   type QueueSortKey,
   type QueueStageFilter,
 } from "../queue/queuePageAdapters";
+import { OrganizationFilterSelect } from "../workspace/OrganizationFilterSelect";
+import { PollRefreshStatus } from "../workspace/PollRefreshStatus";
+import { WorkbenchQueueTable } from "../workspace/WorkbenchQueueTable";
+import { useJobPolling } from "../workspace/useJobPolling";
+import { collectAvailableYears, type WorkbenchStatusFilter } from "../workspace/workbenchAdapters";
 import {
   REPORT_DOWNLOAD_FORMATS,
   buildReportDownloadUrl,
@@ -73,31 +76,30 @@ export function HistoryPage() {
   const [sortKey, setSortKey] = useState<QueueSortKey>("updated_desc");
   const [page, setPage] = useState(1);
 
-  useEffect(() => {
-    let cancelled = false;
+  /** 最新 jobs 的旁路引用：轮询决策每次续排时实时读取，不受闭包过期影响。 */
+  const jobsRef = useRef<JobSummaryRecord[] | null>(null);
+  jobsRef.current = jobs;
 
-    async function loadJobs() {
-      try {
-        const response = await fetch("/api/jobs", { cache: "no-store" });
-        if (!response.ok) {
-          return;
-        }
-        const payload = (await response.json()) as
-          | JobSummaryRecord[]
-          | { items?: JobSummaryRecord[] };
-        if (!cancelled) {
-          setJobs(Array.isArray(payload) ? payload : payload.items ?? []);
-        }
-      } catch {
-        // 保持 jobs=null（未拉到数据的展示态），不猜测。
-      }
+  /** 修复 1：任务历史页同样接轮询——终态任务列表需要感知"还在跑的任务跑完了"
+   *  （跑完才会出现在历史里）。失败时抛错（由轮询层上报并继续重试），保持旧数据。 */
+  const loadJobs = useCallback(async () => {
+    const response = await fetch("/api/jobs", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`/api/jobs 返回 HTTP ${response.status}`);
     }
-
-    void loadJobs();
-    return () => {
-      cancelled = true;
-    };
+    const payload = (await response.json()) as JobSummaryRecord[] | { items?: JobSummaryRecord[] };
+    const next = Array.isArray(payload) ? payload : payload.items ?? [];
+    // 必须在 setJobs 之外同步更新旁路引用：轮询决策在 fetch 返回的同一微任务里
+    // 立即执行（早于 React 重渲染），走渲染期赋值会让终态判定晚一个周期、
+    // 多打一次后端。
+    jobsRef.current = next;
+    setJobs(next);
   }, []);
+
+  const polling = useJobPolling({
+    fetcher: loadJobs,
+    decide: useCallback(() => resolvePollingDecision(jobsRef.current), []),
+  });
 
   const availableYears = useMemo(() => collectAvailableYears(jobs), [jobs]);
   const terminalCount = useMemo(() => countTerminalJobs(jobs), [jobs]);
@@ -231,6 +233,13 @@ export function HistoryPage() {
         <span data-testid="gbc-history-result-count">
           共 {pagination.total} 个终态任务（总 {jobs?.length ?? 0} 个任务）
         </span>
+        <PollRefreshStatus
+          lastSyncedAt={polling.lastSyncedAt}
+          lastErrorMessage={polling.lastErrorMessage}
+          isRefreshing={polling.isManualRefreshing}
+          onRefresh={polling.refreshNow}
+          testIdPrefix="gbc-history-refresh"
+        />
         {pagination.pageCount > 1 ? (
           <span data-testid="gbc-history-pagination-info">
             第 {pagination.page} / {pagination.pageCount} 页

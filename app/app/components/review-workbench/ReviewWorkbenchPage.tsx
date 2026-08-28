@@ -30,6 +30,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge, Button } from "@/components/ui";
+import { resolvePollingDecision } from "@/lib/jobPolling";
 import type { Problem } from "@/lib/mock";
 import type { JobDetailRecord, StructuredIngestRecord } from "@/lib/uiAdapters";
 import { isUiTaskFinished, normalizeUiTaskStatus, toUiProblems } from "@/lib/uiAdapters";
@@ -48,6 +49,7 @@ import {
 } from "./reviewWorkbenchAdapters";
 import { StageHistoryTab } from "./StageHistoryTab";
 import { ThumbnailRail } from "./ThumbnailRail";
+import { useJobPolling } from "../workspace/useJobPolling";
 
 type RightTabId = "issues" | "metadata" | "stages";
 
@@ -92,36 +94,48 @@ export function ReviewWorkbenchPage() {
   const [isReanalyzing, setIsReanalyzing] = useState(false);
   const loadSeqRef = useRef(0);
 
-  const loadJobDetail = useCallback(async () => {
-    if (!jobId) {
+  /** 最新 detail 的旁路引用：轮询决策每次续排时实时读取。 */
+  const detailRef = useRef<JobDetailRecord | null>(null);
+  detailRef.current = detail;
+
+  const loadJobDetail = useCallback(
+    async (options: { silent?: boolean } = {}) => {
+      if (!jobId) {
+        setLoading(false);
+        return;
+      }
+      const seq = ++loadSeqRef.current;
+      // 轮询触发的刷新必须静默：不重置 loading，避免已渲染的内容每 5 秒闪一次加载态。
+      if (!options.silent) {
+        setLoading(true);
+      }
+      const [jobDetail, structured] = await Promise.all([
+        fetchJson<JobDetailRecord | null>(`/api/jobs/${encodeURIComponent(jobId)}`, null),
+        fetchJson<StructuredIngestRecord>(`/api/jobs/${encodeURIComponent(jobId)}/structured-ingest`, {}),
+      ]);
+      if (seq !== loadSeqRef.current) {
+        // 任务切换后旧请求才返回：丢弃过期结果，避免把上一个 job 的详情渲染到
+        // 当前 job 的页面上。
+        return;
+      }
+      if (!jobDetail) {
+        setDetail(null);
+        setProblems([]);
+        setLoading(false);
+        return;
+      }
+      const nextProblems = toUiProblems({ ...jobDetail, structured_ingest: structured }).map((problem) => ({
+        ...problem,
+        jobId: jobDetail.job_id,
+      }));
+      // 同步更新旁路引用（理由同各列表页 fetcher 内注释：轮询决策先于重渲染执行）。
+      detailRef.current = jobDetail;
+      setDetail(jobDetail);
+      setProblems(nextProblems);
       setLoading(false);
-      return;
-    }
-    const seq = ++loadSeqRef.current;
-    setLoading(true);
-    const [jobDetail, structured] = await Promise.all([
-      fetchJson<JobDetailRecord | null>(`/api/jobs/${encodeURIComponent(jobId)}`, null),
-      fetchJson<StructuredIngestRecord>(`/api/jobs/${encodeURIComponent(jobId)}/structured-ingest`, {}),
-    ]);
-    if (seq !== loadSeqRef.current) {
-      // 任务切换后旧请求才返回：丢弃过期结果，避免把上一个 job 的详情渲染到
-      // 当前 job 的页面上。
-      return;
-    }
-    if (!jobDetail) {
-      setDetail(null);
-      setProblems([]);
-      setLoading(false);
-      return;
-    }
-    const nextProblems = toUiProblems({ ...jobDetail, structured_ingest: structured }).map((problem) => ({
-      ...problem,
-      jobId: jobDetail.job_id,
-    }));
-    setDetail(jobDetail);
-    setProblems(nextProblems);
-    setLoading(false);
-  }, [jobId]);
+    },
+    [jobId],
+  );
 
   const loadWorkflow = useCallback(async () => {
     const payload = await fetchJson<WorkflowStateResponse>("/api/workflow", {});
@@ -145,6 +159,20 @@ export function ReviewWorkbenchPage() {
     void loadJobDetail();
     void loadWorkflow();
   }, [loadJobDetail, loadWorkflow]);
+
+  // 修复 1：任务未分析完成时轮询详情（默认 5 秒），完成后任务从"尚未分析完成"
+  // 的引导态自动翻转到可复核内容——此前只能手动刷新页面。
+  // 任务已终态或拉不到详情时决策为 stop，不向 /api/jobs/{id} 继续打请求。
+  useJobPolling({
+    fetcher: useCallback(() => loadJobDetail({ silent: true }), [loadJobDetail]),
+    decide: useCallback(() => {
+      const current = detailRef.current;
+      if (current && !isUiTaskFinished(normalizeUiTaskStatus(current.status))) {
+        return resolvePollingDecision([current]);
+      }
+      return { kind: "stop" as const };
+    }, []),
+  });
 
   useEffect(() => {
     setCurrentPage(1);
