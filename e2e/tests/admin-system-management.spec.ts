@@ -483,7 +483,7 @@ async function installAdminMocks(page: Page, state: AdminState) {
 async function openSettings(page: Page, state: AdminState) {
   await page.context().addCookies([sessionCookie]);
   await installAdminMocks(page, state);
-  await page.goto("/?page=settings");
+  await page.goto("/viewer/gbc-ui-demo?page=settings");
   await expect(page.getByTestId("admin-system-management")).toBeVisible({ timeout: 20_000 });
 }
 

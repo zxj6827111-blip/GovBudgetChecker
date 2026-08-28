@@ -338,7 +338,7 @@ test.describe("Admin organization regression", () => {
       }
     });
 
-    await page.goto("/?page=settings&section=organization");
+    await page.goto("/viewer/gbc-ui-demo?page=settings&section=organization");
 
     await expect(page.getByTestId("admin-org-panel")).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId("admin-org-create-department")).toBeVisible();
@@ -419,7 +419,7 @@ test.describe("Admin organization regression", () => {
 
     await page.context().addCookies([sessionCookie]);
     await installOrganizationApiMocks(page, state);
-    await page.goto("/?page=settings&section=organization");
+    await page.goto("/viewer/gbc-ui-demo?page=settings&section=organization");
 
     await page.getByTestId("organization-tree-node-city-shanghai").click();
     await expect(page.getByTestId("admin-org-create-department")).toHaveText(/新建下级部门/);
@@ -477,7 +477,7 @@ test.describe("Admin organization regression", () => {
       await dialog.accept();
     });
 
-    await page.goto("/?page=settings&section=organization");
+    await page.goto("/viewer/gbc-ui-demo?page=settings&section=organization");
 
     await expect(page.getByTestId("organization-tree-create-department")).toBeVisible({
       timeout: 20_000,
@@ -556,7 +556,7 @@ test.describe("Admin organization regression", () => {
 
     await page.context().addCookies([sessionCookie]);
     await installOrganizationApiMocks(page, state);
-    await page.goto("/?page=settings&section=organization");
+    await page.goto("/viewer/gbc-ui-demo?page=settings&section=organization");
 
     const toggleAll = page.getByTestId("organization-tree-toggle-all");
     await expect(toggleAll).toBeVisible({ timeout: 20_000 });

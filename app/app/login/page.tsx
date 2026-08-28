@@ -11,22 +11,18 @@
  * - 主按钮：primary-600/700（与新 UI 主按钮同源）；
  * - 错误提示：danger-*；卡片阴影：shadow-float（令牌阴影，替代硬编码 rgba）。
  * 防回归由 app/tests/hardcodedColorGuard.test.ts 把关。
+ *
+ * 修复 D（入口切换）：登录成功默认落地 /workbench（新版工作台总览），
+ * 跳转目标的解析与安全校验抽到 lib/loginNextPath.ts（拒绝非 "/" 开头、
+ * "//" 协议相对 URL 与 /login 自指，保留 ?next= 深链能力）。
  */
 
 import { FormEvent, useEffect, useState } from "react";
 
-function normalizeNextPath(rawPath: string | null): string {
-  if (!rawPath || !rawPath.startsWith("/")) {
-    return "/";
-  }
-  if (rawPath.startsWith("/login")) {
-    return "/";
-  }
-  return rawPath;
-}
+import { DEFAULT_NEXT_PATH, normalizeNextPath } from "@/lib/loginNextPath";
 
 export default function LoginPage() {
-  const [nextPath, setNextPath] = useState("/");
+  const [nextPath, setNextPath] = useState(DEFAULT_NEXT_PATH);
   const [nextPathReady, setNextPathReady] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
