@@ -334,4 +334,79 @@ test.describe("Review workbench (Task 6)", () => {
     await page.goto("/review");
     await expect(page.getByTestId("gbc-review-no-job")).toBeVisible({ timeout: 15_000 });
   });
+
+  // -------------------------------------------------------------------------
+  // 修复 B：真实入口路径回归。此前 /review?job= 只能手敲 URL（全仓无链接指向
+  // 它），e2e 全绿却没覆盖入口。本用例从处理队列列表点击「复核」进入审核台，
+  // 不允许用直接构造 URL 的方式绕过入口验证。
+  // -------------------------------------------------------------------------
+  test("REGRESSION (fix B): entering from the queue list via the 复核 button loads the real issues", async ({
+    page,
+  }) => {
+    const workflowIssuesState: MockOptions["workflowIssuesState"] = {};
+    await page.context().addCookies([sessionCookie]);
+    await installReviewWorkbenchMocks(page, { reportYear: 2026, workflowUpdates: [], workflowIssuesState });
+    // 补充列表接口 mock：安装顺序在后，优先于通配 mock 生效
+    await page.route("**/api/jobs", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          { job_id: JOB_ID, filename: "2026年度上海市教育局部门预算公开说明.pdf", status: "review_required", report_year: 2026 },
+        ]),
+      });
+    });
+
+    await page.goto("/queue");
+    const reviewEntry = page.getByTestId(`gbc-workbench-queue-review-${JOB_ID}`);
+    await expect(reviewEntry).toBeVisible({ timeout: 15_000 });
+
+    // 从列表点击进入（真实入口路径）
+    await reviewEntry.click();
+
+    await expect(page).toHaveURL(new RegExp(`/review\\?job=${JOB_ID}`), { timeout: 15_000 });
+    await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible({ timeout: 15_000 });
+    // 看到该任务的真实问题列表（与直接访问 URL 相同的数据与断言口径）
+    await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toBeVisible();
+    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("待处理 1");
+  });
+
+  test("REGRESSION (fix B): hand-typed /review?job= for a running job shows a clear guidance state, not an empty workbench", async ({
+    page,
+  }) => {
+    await page.context().addCookies([sessionCookie]);
+    await page.route("**/api/**", async (route) => {
+      const url = new URL(route.request().url());
+      const path = url.pathname;
+      if (path === "/api/auth/me") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ user: { username: "e2e-reviewer", is_admin: true } }),
+        });
+      }
+      if (path === "/api/jobs/running-job-1") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            job_id: "running-job-1",
+            filename: "正在分析的材料.pdf",
+            status: "processing",
+            result: { rule_findings: [], meta: { pages: 10 } },
+          }),
+        });
+      }
+      if (path === "/api/jobs/running-job-1/structured-ingest") {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "none" }) });
+      }
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({}) });
+    });
+
+    await page.goto("/review?job=running-job-1");
+    await expect(page.getByTestId("gbc-review-not-ready")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("gbc-review-not-ready")).toContainText("尚未分析完成");
+    // 引导态提供返回路径，不允许是死胡同
+    await expect(page.getByTestId("gbc-review-not-ready")).toContainText("前往处理队列");
+  });
 });

@@ -10,6 +10,7 @@ import {
   formatCoveragePercentText,
   formatElapsedText,
   formatPagesText,
+  resolveReviewEntryDecision,
 } from "../app/components/workspace/workbenchAdapters";
 
 // 本文件测试 Task 4 工作台总览的纯逻辑层（KPI 聚合/覆盖率聚合/质量告警派生/
@@ -290,5 +291,37 @@ assert.equal(
   formatPagesText({ job_id: "d", scanned_page_count: 30, page_coverage: 0.9 } as JobSummaryRecord),
   "30 页",
 );
+
+// --- resolveReviewEntryDecision（修复 B）：审核台入口的可达性判定 -------------
+// 只有"已分析出结果"的任务（completed / review_required）才有可复核内容；
+// queued/processing/failed 进入口必须禁用且给出原因，不能给一个点了白屏的链接。
+
+const reviewJob = (status: string): JobSummaryRecord =>
+  ({ job_id: "job-1", status }) as JobSummaryRecord;
+
+assert.deepEqual(
+  resolveReviewEntryDecision(reviewJob("review_required")),
+  { canEnter: true, reason: null },
+  "review_required 是审核台的核心目标状态，必须可进入",
+);
+assert.deepEqual(
+  resolveReviewEntryDecision(reviewJob("done")),
+  { canEnter: true, reason: null },
+  "completed（含 degraded 归一）有分析结果，必须可进入",
+);
+
+const analyzingDecision = resolveReviewEntryDecision(reviewJob("processing"));
+assert.equal(analyzingDecision.canEnter, false, "REGRESSION: 还在跑的任务不得给出可点入口");
+assert.match(analyzingDecision.reason ?? "", /尚未分析完成/, "禁用必须说明原因，不能只是灰掉");
+
+const queuedDecision = resolveReviewEntryDecision(reviewJob("queued"));
+assert.equal(queuedDecision.canEnter, false, "REGRESSION: 排队中的任务同样不得给出可点入口");
+
+const failedDecision = resolveReviewEntryDecision(reviewJob("error"));
+assert.equal(failedDecision.canEnter, false, "REGRESSION: 失败任务没有可复核的分析结果，不得给出可点入口");
+assert.match(failedDecision.reason ?? "", /失败/);
+
+// 反例：可进入与不可进入的判定必须不同（防止恒真实现：一律 true 或一律 false）
+assert.notEqual(analyzingDecision.canEnter, resolveReviewEntryDecision(reviewJob("done")).canEnter);
 
 console.log("workbenchAdapters.test.ts passed");

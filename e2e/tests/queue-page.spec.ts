@@ -253,4 +253,39 @@ test.describe("Queue page (Task 8.1)", () => {
     await expect(page.getByTestId("gbc-workbench-queue-row-job-review")).toBeVisible();
     await expect(page.getByTestId("gbc-workbench-queue-row-job-analyzing-1")).toHaveCount(0);
   });
+
+  // -------------------------------------------------------------------------
+  // 修复 B：审核工作台入口。此前 /review?job= 在 UI 上完全不可达（只能手敲
+  // URL），本用例验证处理队列页的入口存在且只对已分析出结果的任务开放。
+  // -------------------------------------------------------------------------
+  test("REGRESSION (fix B): review entry links finished jobs to /review and disables running/failed ones with a reason", async ({
+    page,
+  }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installQueueMocks(page, BASE_JOBS);
+    await page.goto("/queue");
+
+    // 已分析出结果（review_required）的任务：可点链接，指向 /review?job=
+    const reviewEntry = page.getByTestId("gbc-workbench-queue-review-job-review");
+    await expect(reviewEntry).toBeVisible();
+    await expect(reviewEntry).toHaveAttribute("href", /\/review\?job=job-review/);
+
+    // 还在跑的任务：禁用按钮（不是链接），并说明原因
+    const analyzingEntry = page.getByTestId("gbc-workbench-queue-review-job-analyzing-1");
+    await expect(analyzingEntry).toBeVisible();
+    await expect(analyzingEntry).toBeDisabled();
+    await expect(analyzingEntry).not.toHaveAttribute("href");
+    await expect(analyzingEntry).toHaveAttribute("title", /尚未分析完成/);
+
+    // 失败任务：同样禁用并说明原因
+    const failedEntry = page.getByTestId("gbc-workbench-queue-review-job-unresolved-year");
+    await expect(failedEntry).toBeDisabled();
+    await expect(failedEntry).toHaveAttribute("title", /失败/);
+
+    // 文件名链接的 /queue?job= 高亮语义必须保留（不得被入口改动破坏）
+    await expect(page.getByTestId("gbc-workbench-queue-row-link-job-review")).toHaveAttribute(
+      "href",
+      /\/queue\?job=job-review/,
+    );
+  });
 });

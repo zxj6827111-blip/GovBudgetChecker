@@ -29,7 +29,7 @@ import type { BadgeTone } from "@/components/ui";
 import type { JobSummaryRecord } from "@/lib/uiAdapters";
 import { normalizeUiTaskStatus } from "@/lib/uiAdapters";
 
-import { formatElapsedText, formatPagesText } from "./workbenchAdapters";
+import { formatElapsedText, formatPagesText, resolveReviewEntryDecision } from "./workbenchAdapters";
 
 interface StageProgressPayload {
   phase?: string | null;
@@ -131,6 +131,44 @@ export interface WorkbenchQueueTableProps {
   renderRowActions?: (job: JobSummaryRecord) => ReactNode;
 }
 
+/**
+ * 「复核」入口（修复 B）：三栏审核台此前只能手敲 URL 到达，全仓没有任何
+ * 页面链接到 /review?job=。此组件被工作台总览、处理队列、任务历史三个列表
+ * 共用，在这里加入口即可三屏全覆盖。
+ *
+ * 交互选择：行内链接按钮而非整行点击——文件名链接已承载 /queue?job= 的
+ * 高亮/筛选语义（必须保留），整行点击会让两个导航语义互相踩踏；显式按钮
+ * 可见性最好、可键盘访问、还能对"未分析完成"的任务干净地禁用并说明原因。
+ */
+function ReviewEntryLink({ job }: { job: JobSummaryRecord }) {
+  const jobId = String(job.job_id ?? "");
+  const decision = resolveReviewEntryDecision(job);
+  if (!decision.canEnter) {
+    return (
+      <button
+        type="button"
+        disabled
+        title={decision.reason ?? undefined}
+        aria-label={`任务 ${jobId} ${decision.reason ?? "暂不能进入审核台"}`}
+        data-testid={`gbc-workbench-queue-review-${jobId}`}
+        className="cursor-not-allowed rounded-md px-2 py-1 text-xs font-medium text-slate-300"
+      >
+        复核
+      </button>
+    );
+  }
+  return (
+    <Link
+      href={`/review?job=${encodeURIComponent(jobId)}` as Route}
+      aria-label={`进入任务 ${jobId} 的审核工作台`}
+      data-testid={`gbc-workbench-queue-review-${jobId}`}
+      className="rounded-md border border-border px-2 py-1 text-xs font-medium text-primary-700 transition-colors hover:border-primary-300 hover:bg-primary-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+    >
+      复核
+    </Link>
+  );
+}
+
 export function WorkbenchQueueTable({
   jobs,
   onReanalyze,
@@ -196,19 +234,22 @@ export function WorkbenchQueueTable({
                 <Td>{formatPagesText(job)}</Td>
                 <Td>{resolveIssueCountText(job)}</Td>
                 <Td className="text-right">
-                  {renderRowActions ? (
-                    renderRowActions(job)
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => onReanalyze(jobId)}
-                      aria-label={`对任务 ${jobId} 执行操作`}
-                      data-testid={`gbc-workbench-queue-actions-${jobId}`}
-                      className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
-                    >
-                      <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-                    </button>
-                  )}
+                  <span className="inline-flex items-center justify-end gap-1">
+                    <ReviewEntryLink job={job} />
+                    {renderRowActions ? (
+                      renderRowActions(job)
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => onReanalyze(jobId)}
+                        aria-label={`对任务 ${jobId} 执行操作`}
+                        data-testid={`gbc-workbench-queue-actions-${jobId}`}
+                        className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+                      >
+                        <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    )}
+                  </span>
                 </Td>
               </tr>
             );

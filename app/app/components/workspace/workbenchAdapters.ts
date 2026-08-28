@@ -364,3 +364,36 @@ export function formatPagesText(job: JobSummaryRecord): string {
   }
   return "—";
 }
+
+// ---------------------------------------------------------------------------
+// 审核工作台入口判定（修复 B：三栏审核台此前在 UI 上完全不可达）
+// ---------------------------------------------------------------------------
+
+export interface ReviewEntryDecision {
+  /** 是否可进入 /review?job= 三栏审核台。 */
+  canEnter: boolean;
+  /** 不可进入时的原因（可进入时为 null），用于禁用态的 title 提示。 */
+  reason: string | null;
+}
+
+/**
+ * 判定一个任务能否从列表进入审核工作台。
+ *
+ * 只有"已分析出结果"的任务（completed / review_required——含 degraded）才有
+ * 可复核的内容；queued/processing 还在跑、failed 没有（成功）分析结果，
+ * 进去只会看到空列表。这三类任务的入口必须禁用并给出明确原因，
+ * 不能给出一个点了白屏/空转的链接。
+ *
+ * 口径复用 normalizeUiTaskStatus + isUiTaskFinished（uiAdapters 的既有唯一口径），
+ * 不在本文件另立状态归一逻辑。
+ */
+export function resolveReviewEntryDecision(job: JobSummaryRecord): ReviewEntryDecision {
+  const status = normalizeUiTaskStatus(job.status);
+  if (status === "completed" || status === "review_required") {
+    return { canEnter: true, reason: null };
+  }
+  if (status === "failed") {
+    return { canEnter: false, reason: "任务处理失败，没有可复核的分析结果；请先重试分析" };
+  }
+  return { canEnter: false, reason: "任务尚未分析完成，暂不能进入审核台" };
+}

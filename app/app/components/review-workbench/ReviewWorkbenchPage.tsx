@@ -32,7 +32,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button } from "@/components/ui";
 import type { Problem } from "@/lib/mock";
 import type { JobDetailRecord, StructuredIngestRecord } from "@/lib/uiAdapters";
-import { toUiProblems } from "@/lib/uiAdapters";
+import { isUiTaskFinished, normalizeUiTaskStatus, toUiProblems } from "@/lib/uiAdapters";
 
 import { IssueNoteDialog } from "./IssueNoteDialog";
 import type { IssueWorkflowAction } from "./IssueCard";
@@ -289,6 +289,24 @@ export function ReviewWorkbenchPage() {
     return (
       <div className="flex h-full items-center justify-center" data-testid="gbc-review-not-found">
         <span className="text-sm text-slate-500">未找到对应任务。</span>
+      </div>
+    );
+  }
+
+  // 修复 B：未分析完成的任务（queued/processing）没有可复核内容。列表入口已对
+  // 这类任务禁用，这里兜底处理直接手敲 URL 进入的情况——给出明确提示与返回
+  // 路径，不渲染空的三栏（那是另一种形式的"白屏"）。
+  if (!isUiTaskFinished(normalizeUiTaskStatus(detail.status))) {
+    return (
+      <div
+        className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center"
+        data-testid="gbc-review-not-ready"
+      >
+        <p className="text-sm font-medium text-slate-700">该任务尚未分析完成，暂无审核内容。</p>
+        <p className="text-xs text-slate-500">请等待分析结束后再进入审核工作台；可在处理队列查看实时进度。</p>
+        <Link href={"/queue" as Route} className="mt-2 text-sm font-medium text-primary-600 hover:text-primary-700">
+          前往处理队列
+        </Link>
       </div>
     );
   }

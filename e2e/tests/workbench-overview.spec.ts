@@ -226,6 +226,33 @@ test.describe("Workbench overview (Task 4)", () => {
     await expect(page.getByTestId("gbc-workbench-activity-list")).toContainText("李审核员确认了 4 条问题并提交复核");
   });
 
+  // -------------------------------------------------------------------------
+  // 修复 B：审核工作台入口（工作台总览队列表一侧）。此前 /review?job= 在 UI 上
+  // 完全不可达，本用例验证工作台队列行提供入口且只对已分析出结果的任务开放。
+  // -------------------------------------------------------------------------
+  test("REGRESSION (fix B): workbench queue rows expose a review entry, disabled for unfinished jobs", async ({
+    page,
+  }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installWorkbenchMocks(page, { isAdmin: true });
+    await page.goto("/workbench");
+
+    // review_required 任务：可点链接进入 /review?job=
+    const reviewEntry = page.getByTestId("gbc-workbench-queue-review-job-review");
+    await expect(reviewEntry).toBeVisible();
+    await expect(reviewEntry).toHaveAttribute("href", /\/review\?job=job-review/);
+
+    // processing 任务：禁用并说明原因
+    const analyzingEntry = page.getByTestId("gbc-workbench-queue-review-job-analyzing");
+    await expect(analyzingEntry).toBeDisabled();
+    await expect(analyzingEntry).toHaveAttribute("title", /尚未分析完成/);
+
+    // failed（error 归一）任务：禁用并说明原因
+    const failedEntry = page.getByTestId("gbc-workbench-queue-review-job-unresolved-year");
+    await expect(failedEntry).toBeDisabled();
+    await expect(failedEntry).toHaveAttribute("title", /失败/);
+  });
+
   test("REGRESSION: KPI cards show em dash while jobs have not loaded, never 0", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
     await page.route("**/api/**", async (route) => {

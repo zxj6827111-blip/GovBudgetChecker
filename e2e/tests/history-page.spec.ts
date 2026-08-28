@@ -181,4 +181,31 @@ test.describe("History page (Task 8.2)", () => {
     await expect(page).toHaveURL(/\/history/);
     await expect(page.getByTestId("gbc-history-page")).toBeVisible();
   });
+
+  // -------------------------------------------------------------------------
+  // 修复 B：审核工作台入口（任务历史一侧）。终态且有分析结果的任务可进入
+  // 审核台；失败任务禁用入口并说明原因。
+  // -------------------------------------------------------------------------
+  test("REGRESSION (fix B): history rows expose a review entry; done/review_required link out, failed is disabled", async ({
+    page,
+  }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installHistoryMocks(page);
+    await page.goto("/history");
+
+    const doneEntry = page.getByTestId("gbc-workbench-queue-review-job-done");
+    await expect(doneEntry).toBeVisible();
+    await expect(doneEntry).toHaveAttribute("href", /\/review\?job=job-done/);
+
+    const reviewEntry = page.getByTestId("gbc-workbench-queue-review-job-review");
+    await expect(reviewEntry).toHaveAttribute("href", /\/review\?job=job-review/);
+
+    // 失败任务：没有可复核的分析结果，入口禁用并说明原因
+    const failedEntry = page.getByTestId("gbc-workbench-queue-review-job-error");
+    await expect(failedEntry).toBeDisabled();
+    await expect(failedEntry).toHaveAttribute("title", /失败/);
+
+    // 下载入口与复核入口并存，互不影响
+    await expect(page.getByTestId("gbc-history-download-job-done-pdf")).toBeVisible();
+  });
 });
