@@ -51,7 +51,15 @@ type OrganizationJobsResponse = {
   offset?: number | null;
 };
 
-type SearchStatus = "all" | "completed" | "analyzing" | "failed" | "review" | "review_required";
+// pending_analysis（uploaded 待分析）是修复 3 新增的独立静止态，与 analyzing 分列。
+type SearchStatus =
+  | "all"
+  | "completed"
+  | "analyzing"
+  | "pending_analysis"
+  | "failed"
+  | "review"
+  | "review_required";
 
 const defaultAdvancedFilters: AdvancedFilters = {
   highRiskOnly: false,
@@ -67,6 +75,7 @@ function getSearchStatusLabel(status: SearchStatus) {
   if (status === "review_required") return "需人工复核 review_required";
   if (status === "review") return "入库待复核 review";
   if (status === "analyzing") return "分析中 analyzing";
+  if (status === "pending_analysis") return "待分析 pending_analysis";
   return "全部 all";
 }
 

@@ -43,12 +43,14 @@ import {
   type QueueStageFilter,
 } from "./queuePageAdapters";
 import { resolvePollingDecision } from "@/lib/jobPolling";
+import { ANALYZE_START_REQUEST_BODY } from "../workspace/uploadCenterAdapters";
 
 const PAGE_SIZE = 20;
 
 const STATUS_FILTER_OPTIONS: Array<{ value: WorkbenchStatusFilter; label: string }> = [
   { value: "all", label: "全部状态" },
   { value: "review_required", label: "待人工复核" },
+  { value: "pending_analysis", label: "待分析" },
   { value: "analyzing", label: "正在处理" },
   { value: "failed", label: "处理失败" },
   { value: "completed", label: "已完成" },
@@ -122,6 +124,26 @@ export function QueuePage() {
     setFilters((prev) => ({ ...prev, ...patch }));
     setPage(1);
   }, []);
+
+  /** 修复 3：对 uploaded（待分析）任务启动首次分析——与上传触发分析同链路。 */
+  const handleStartAnalysis = useCallback(
+    async (jobId: string) => {
+      try {
+        const response = await fetch(`/api/analyze/${encodeURIComponent(jobId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(ANALYZE_START_REQUEST_BODY),
+        });
+        await loadJobs();
+        if (!response.ok) {
+          // 静默失败与既有重试入口一致：队列行在下一次刷新时反映真实状态。
+        }
+      } catch {
+        // 同上。
+      }
+    },
+    [loadJobs],
+  );
 
   const handleReanalyze = useCallback(
     async (jobId: string) => {
@@ -265,6 +287,7 @@ export function QueuePage() {
         <WorkbenchQueueTable
           jobs={pagination.items}
           onReanalyze={(jobId) => void handleReanalyze(jobId)}
+          onStartAnalysis={(jobId) => void handleStartAnalysis(jobId)}
         />
       )}
 

@@ -35,6 +35,7 @@ import {
   type WorkbenchStatusFilter,
 } from "./workbenchAdapters";
 import { resolvePollingDecision } from "@/lib/jobPolling";
+import { ANALYZE_START_REQUEST_BODY } from "./uploadCenterAdapters";
 
 /** 页面覆盖率质量门禁阈值：与 api/main.py 的 PAGE_COVERAGE_MIN_RATIO 默认值同源（0.8）。
  *  该常量本身不是新造的口径——PAGE_COVERAGE_MIN_RATIO 是环境变量，前端拿不到后端的
@@ -56,6 +57,7 @@ interface MetricsResponse {
 const STATUS_FILTER_OPTIONS: Array<{ value: WorkbenchStatusFilter; label: string }> = [
   { value: "all", label: "全部" },
   { value: "review_required", label: "待人工复核" },
+  { value: "pending_analysis", label: "待分析" },
   { value: "analyzing", label: "正在处理" },
   { value: "failed", label: "处理失败" },
   { value: "completed", label: "已完成" },
@@ -169,6 +171,26 @@ export function WorkbenchPage() {
       // 静默失败：不弹全局报错遮罩，队列行会在下一次刷新时反映真实状态。
     }
   }, [loadJobs]);
+
+  /** 修复 3：对 uploaded（待分析）任务启动首次分析——与上传触发分析同链路。 */
+  const handleStartAnalysis = useCallback(
+    async (jobId: string) => {
+      try {
+        const response = await fetch(`/api/analyze/${encodeURIComponent(jobId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(ANALYZE_START_REQUEST_BODY),
+        });
+        await loadJobs();
+        if (!response.ok) {
+          // 静默失败与既有重试入口一致：队列行在下一次刷新时反映真实状态。
+        }
+      } catch {
+        // 同上。
+      }
+    },
+    [loadJobs],
+  );
 
   const handleRetryAll = useCallback(async () => {
     setIsRetryingAll(true);
@@ -300,7 +322,11 @@ export function WorkbenchPage() {
               正在加载处理队列…
             </div>
           ) : (
-            <WorkbenchQueueTable jobs={filteredJobs} onReanalyze={(jobId) => void handleReanalyzeOne(jobId)} />
+            <WorkbenchQueueTable
+              jobs={filteredJobs}
+              onReanalyze={(jobId) => void handleReanalyzeOne(jobId)}
+              onStartAnalysis={(jobId) => void handleStartAnalysis(jobId)}
+            />
           )}
         </div>
 

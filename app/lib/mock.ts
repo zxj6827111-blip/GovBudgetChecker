@@ -47,7 +47,12 @@ export interface Task {
    * review_required 是独立终态："分析跑完了，但质量门禁没过，结论不可交付"。
    * 它既不能算 completed（会变成虚假成功），也不能算 failed（分析本身没出错）。
    */
-  status: 'analyzing' | 'completed' | 'review_required' | 'failed';
+  /**
+   * pending_analysis 是独立静止态："已上传、分析未启动"（后端 status=uploaded）。
+   * 它既不是 analyzing（后端没有在干活），更不是 completed/review_required——
+   * 把它归到任何其它状态都会制造虚假进度或虚假成功。
+   */
+  status: 'analyzing' | 'pending_analysis' | 'completed' | 'review_required' | 'failed';
   /** 质量门禁判定结果，用于在 completed 上叠加"部分降级"标记 */
   qualityStatus?: 'complete' | 'degraded' | 'review_required';
   /** 分析结论四态，可区分"确实没问题"与"没查完" */

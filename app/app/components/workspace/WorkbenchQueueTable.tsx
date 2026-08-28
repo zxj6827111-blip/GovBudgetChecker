@@ -46,8 +46,13 @@ function readStageProgress(job: JobSummaryRecord): StageProgressPayload | null {
   return null;
 }
 
-/** 阶段名文案：优先用 Task 3 的 phase_label，缺失时退回原始 stage 文本，都没有则"—"。 */
+/** 阶段名文案：优先用 Task 3 的 phase_label，缺失时退回原始 stage 文本，都没有则"—"。
+ *  uploaded（待分析）任务的原始 stage 是 "uploaded"，必须翻译成中文"待分析"，
+ *  不得让英文原始值或"分析阶段"类暗示在跑的文案出现。 */
 function resolveStageLabel(job: JobSummaryRecord): string {
+  if (normalizeUiTaskStatus(job.status) === "pending_analysis") {
+    return "待分析";
+  }
   const stageProgress = readStageProgress(job);
   return stageProgress?.phase_label || String(job.stage ?? "").trim() || "—";
 }
@@ -60,6 +65,10 @@ function resolveStageLabel(job: JobSummaryRecord): string {
  */
 function resolveQualityBadge(job: JobSummaryRecord): { tone: BadgeTone; label: string } {
   const status = normalizeUiTaskStatus(job.status);
+  // uploaded（已上传未分析）是静止态：严禁显示成"正在分析"（任务书修复 3 红线）。
+  if (status === "pending_analysis") {
+    return { tone: "neutral", label: "待分析" };
+  }
   if (status === "review_required") {
     return { tone: "review", label: "需要人工复核" };
   }
@@ -78,6 +87,9 @@ function resolveQualityBadge(job: JobSummaryRecord): { tone: BadgeTone; label: s
 
 function resolveStageTone(job: JobSummaryRecord): "primary" | "success" | "warning" | "danger" | "info" {
   const status = normalizeUiTaskStatus(job.status);
+  if (status === "pending_analysis") {
+    return "info";
+  }
   if (status === "failed") {
     return "danger";
   }
@@ -123,6 +135,11 @@ function resolveIssueCountText(job: JobSummaryRecord): string {
 export interface WorkbenchQueueTableProps {
   jobs: JobSummaryRecord[];
   onReanalyze: (jobId: string) => void;
+  /**
+   * 修复 3：可选的「开始分析」回调——只对 uploaded（待分析）态的行渲染入口，
+   * 与修复 2 的上传触发分析走同一条链路（POST /api/analyze/{job_id}）。
+   */
+  onStartAnalysis?: (jobId: string) => void;
   /**
    * 可选：自定义操作列内容（Task 8.2 任务历史页用它在操作列渲染
    * 报告下载入口）。不传时保持默认的"更多操作"按钮（调用 onReanalyze），
@@ -172,6 +189,7 @@ function ReviewEntryLink({ job }: { job: JobSummaryRecord }) {
 export function WorkbenchQueueTable({
   jobs,
   onReanalyze,
+  onStartAnalysis,
   renderRowActions,
 }: WorkbenchQueueTableProps) {
   if (jobs.length === 0) {
@@ -204,6 +222,7 @@ export function WorkbenchQueueTable({
             const stageProgress = readStageProgress(job);
             const qualityBadge = resolveQualityBadge(job);
             const jobId = String(job.job_id ?? "");
+            const isPendingAnalysis = normalizeUiTaskStatus(job.status) === "pending_analysis";
             return (
               <tr key={jobId} data-testid={`gbc-workbench-queue-row-${jobId}`} className="hover:bg-surface-100">
                 <Td>
@@ -236,6 +255,17 @@ export function WorkbenchQueueTable({
                 <Td className="text-right">
                   <span className="inline-flex items-center justify-end gap-1">
                     <ReviewEntryLink job={job} />
+                    {isPendingAnalysis && onStartAnalysis ? (
+                      <button
+                        type="button"
+                        onClick={() => onStartAnalysis(jobId)}
+                        aria-label={`开始分析任务 ${jobId}`}
+                        data-testid={`gbc-workbench-queue-start-${jobId}`}
+                        className="rounded-md border border-border px-2 py-1 text-xs font-medium text-primary-700 transition-colors hover:border-primary-300 hover:bg-primary-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+                      >
+                        开始分析
+                      </button>
+                    ) : null}
                     {renderRowActions ? (
                       renderRowActions(job)
                     ) : (

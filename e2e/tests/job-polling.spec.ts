@@ -192,3 +192,84 @@ test.describe("Job status polling (fix 1)", () => {
     await expect(row).toContainText("分析完成", { timeout: 15_000 });
   });
 });
+
+
+test.describe("Pending-analysis status & start-analysis entry (fix 3)", () => {
+  const UPLOADED_JOB = {
+    job_id: "job-uploaded-e2e",
+    filename: "待分析验证_区教育局2026年度部门预算.pdf",
+    status: "uploaded",
+    stage: "uploaded",
+    organization_id: "org-fin",
+    organization_name: "区教育局",
+    report_year: 2026,
+    report_kind: "budget",
+  };
+
+  test("REGRESSION: an uploaded job shows 待分析 (never 分析中/处理中) with a working 开始分析 entry", async ({
+    page,
+  }) => {
+    test.setTimeout(40_000);
+    const analyzeCalls: string[] = [];
+    await page.context().addCookies([sessionCookie]);
+    await page.route("**/api/**", async (route) => {
+      const url = new URL(route.request().url());
+      const path = url.pathname;
+      if (path === "/api/auth/me") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ user: { username: "e2e-user", is_admin: false } }),
+        });
+        return;
+      }
+      if (path === "/api/health") {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok" }) });
+        return;
+      }
+      if (path === "/api/jobs") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([UPLOADED_JOB]),
+        });
+        return;
+      }
+      if (path === "/api/organizations") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ tree: [{ id: "org-fin", name: "区财政局", level: "department", children: [] }] }),
+        });
+        return;
+      }
+      if (path.startsWith("/api/analyze/")) {
+        analyzeCalls.push(path.split("/").pop() ?? "");
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ started: true }) });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({}) });
+    });
+    await page.goto("/queue");
+
+    const row = page.getByTestId("gbc-workbench-queue-row-job-uploaded-e2e");
+    await expect(row).toBeVisible();
+
+    // 核心反例：uploaded 不得显示成任何暗示正在处理的文案。
+    const rowText = await row.innerText();
+    expect(rowText).not.toMatch(/分析中|正在分析|处理中|执行中|分析阶段/);
+    await expect(row).toContainText("待分析");
+
+    // 复核入口禁用，但必须给出"尚未开始分析"的明确原因（而非笼统的"未完成"）。
+    const reviewEntry = page.getByTestId("gbc-workbench-queue-review-job-uploaded-e2e");
+    await expect(reviewEntry).toBeDisabled();
+    await expect(reviewEntry).toHaveAttribute("title", /尚未开始分析/);
+
+    // 「开始分析」入口仅对 uploaded 态出现，且真实触发 POST /api/analyze/{job_id}。
+    const startButton = page.getByTestId("gbc-workbench-queue-start-job-uploaded-e2e");
+    await expect(startButton).toBeVisible();
+    await startButton.click();
+    await expect.poll(() => analyzeCalls.length, { timeout: 10_000 }).toBe(1);
+    expect(analyzeCalls[0]).toBe("job-uploaded-e2e");
+  });
+});

@@ -233,7 +233,13 @@ export function deriveQualityAlerts(inputs: QualityAlertInputs): QualityAlert[] 
 // 处理队列筛选
 // ---------------------------------------------------------------------------
 
-export type WorkbenchStatusFilter = "all" | "review_required" | "analyzing" | "failed" | "completed";
+export type WorkbenchStatusFilter =
+  | "all"
+  | "review_required"
+  | "analyzing"
+  | "pending_analysis"
+  | "failed"
+  | "completed";
 
 export interface WorkbenchQueueFilters {
   keyword: string;
@@ -394,6 +400,10 @@ export function resolveReviewEntryDecision(job: JobSummaryRecord): ReviewEntryDe
   }
   if (status === "failed") {
     return { canEnter: false, reason: "任务处理失败，没有可复核的分析结果；请先重试分析" };
+  }
+  if (status === "pending_analysis") {
+    // uploaded（已上传未分析）是静止态，不提供"开始分析"入口的话用户无从下手。
+    return { canEnter: false, reason: "任务尚未开始分析；请先点击「开始分析」" };
   }
   return { canEnter: false, reason: "任务尚未分析完成，暂不能进入审核台" };
 }

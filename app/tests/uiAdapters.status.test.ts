@@ -10,6 +10,7 @@ import {
   resolveReportLabel,
   toUiTask,
 } from "../lib/uiAdapters";
+import type { JobSummaryRecord } from "../lib/uiAdapters";
 
 // --- normalizeUiTaskStatus：四态归一，且旧任务不能被破坏 ---------------------
 
@@ -155,5 +156,81 @@ assert.equal(legacyTask.qualityStatus, undefined);
 assert.equal(legacyTask.analysisConclusion, undefined);
 assert.deepEqual(legacyTask.reviewReasons, []);
 assert.equal(legacyTask.reportLabel, "部门决算");
+
+
+
+// ===========================================================================
+// 修复 3：uploaded（已上传未分析）必须如实显示为"待分析"静止态
+// ===========================================================================
+
+// --- normalizeUiTaskStatus：uploaded 独立成态，严禁归一到 processing/done ----
+
+assert.equal(
+  normalizeUiTaskStatus("uploaded"),
+  "pending_analysis",
+  "REGRESSION: uploaded 必须归一为 pending_analysis（待分析），不得兜底成 analyzing（虚假进度）",
+);
+assert.equal(normalizeUiTaskStatus("  UPLOADED "), "pending_analysis");
+assert.equal(normalizeUiTaskStatus("pending_analysis"), "pending_analysis");
+
+// 核心反例（任务书修复 3 红线）：不得为了界面"好看"归一到 processing/done
+assert.notEqual(normalizeUiTaskStatus("uploaded"), "analyzing");
+assert.notEqual(normalizeUiTaskStatus("uploaded"), "completed");
+assert.notEqual(normalizeUiTaskStatus("uploaded"), "review_required");
+assert.notEqual(normalizeUiTaskStatus("uploaded"), "failed");
+
+// --- isUiTaskFinished：待分析不是终态（不得进入"任务历史"等终态集合） -------
+
+assert.equal(isUiTaskFinished("pending_analysis"), false);
+
+// --- getUiTaskStatusMeta：状态文案对照表（表驱动） ---------------------------
+// 每个后端状态 → 界面文案 → 语义一致性断言（任务书交付要求 4 的机器可读版）。
+
+const statusMetaTable: Array<{
+  raw: string;
+  wantStatus: string;
+  wantLabel: string;
+  forbid: RegExp;
+}> = [
+  { raw: "uploaded", wantStatus: "pending_analysis", wantLabel: "待分析", forbid: /分析中|正在|处理中|执行中|完成/ },
+  { raw: "queued", wantStatus: "analyzing", wantLabel: "执行中", forbid: /待分析|完成|失败/ },
+  { raw: "processing", wantStatus: "analyzing", wantLabel: "执行中", forbid: /待分析|完成|失败/ },
+  { raw: "done", wantStatus: "completed", wantLabel: "已完成", forbid: /分析中|待分析/ },
+  { raw: "review_required", wantStatus: "review_required", wantLabel: "需人工复核", forbid: /分析完成|失败/ },
+  { raw: "failed", wantStatus: "failed", wantLabel: "失败", forbid: /完成|分析中/ },
+  { raw: "error", wantStatus: "failed", wantLabel: "失败", forbid: /完成|分析中/ },
+];
+
+for (const row of statusMetaTable) {
+  const meta = getUiTaskStatusMeta({ status: row.raw });
+  assert.equal(meta.status, row.wantStatus, `状态 ${row.raw} 归一结果`);
+  assert.equal(meta.label, row.wantLabel, `状态 ${row.raw} 的界面文案`);
+  assert.ok(
+    !row.forbid.test(meta.label),
+    `REGRESSION: 状态 ${row.raw} 的文案「${meta.label}」违反语义（禁配 ${row.forbid}）`,
+  );
+}
+
+// 降级完成仍带降级标记，不得粉饰成纯粹的"已完成"
+assert.equal(
+  getUiTaskStatusMeta({ status: "done", quality_status: "degraded" }).label,
+  "完成（部分降级）",
+);
+
+// --- toUiTask：uploaded 任务的流水线必须全部 pending（没有任何步骤在跑） ----
+
+const uploadedJob: JobSummaryRecord = {
+  job_id: "job-uploaded",
+  filename: "2026年度部门预算.pdf",
+  status: "uploaded",
+  stage: "uploaded",
+};
+const uploadedTask = toUiTask(uploadedJob);
+assert.equal(uploadedTask.status, "pending_analysis");
+assert.deepEqual(
+  uploadedTask.pipeline,
+  { parse: "pending", extract: "pending", review: "pending", report: "pending" },
+  "REGRESSION: 待分析任务的流水线不得显示任何 done/processing 步骤（那是虚假进度）",
+);
 
 console.log("uiAdapters.status.test.ts passed");

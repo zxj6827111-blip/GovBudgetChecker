@@ -330,8 +330,16 @@ export function ReviewWorkbenchPage() {
         className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center"
         data-testid="gbc-review-not-ready"
       >
-        <p className="text-sm font-medium text-slate-700">该任务尚未分析完成，暂无审核内容。</p>
-        <p className="text-xs text-slate-500">请等待分析结束后再进入审核工作台；可在处理队列查看实时进度。</p>
+        <p className="text-sm font-medium text-slate-700">
+          {normalizeUiTaskStatus(detail.status) === "pending_analysis"
+            ? "该任务尚未开始分析，暂无审核内容。"
+            : "该任务尚未分析完成，暂无审核内容。"}
+        </p>
+        <p className="text-xs text-slate-500">
+          {normalizeUiTaskStatus(detail.status) === "pending_analysis"
+            ? "请在处理队列对该任务点击「开始分析」；分析结束后可进入审核工作台。"
+            : "请等待分析结束后再进入审核工作台；可在处理队列查看实时进度。"}
+        </p>
         <Link href={"/queue" as Route} className="mt-2 text-sm font-medium text-primary-600 hover:text-primary-700">
           前往处理队列
         </Link>
