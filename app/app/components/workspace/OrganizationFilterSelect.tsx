@@ -20,12 +20,20 @@ export interface OrganizationFilterOption {
   name: string;
   level: string;
   depth: number;
+  /**
+   * 结构父节点 id（顶层为 null）。Task 9 共享化新增：上传中心的单文件补齐
+   * 表单（UploadConfirmationPanel）需要按 parent_id 过滤部门/单位，
+   * 此前它在本地复制了一份拉平实现（flattenWithParent），现统一收敛到
+   * 这一份——拉平语义必须全仓只有一个来源。
+   */
+  parent_id: string | null;
 }
 
 interface OrganizationTreeNode {
   id: string;
   name: string;
   level?: string;
+  parent_id?: string | null;
   children?: OrganizationTreeNode[];
 }
 
@@ -37,6 +45,7 @@ interface OrganizationTreeResponse {
 export function flattenOrganizationTree(
   nodes: OrganizationTreeNode[] | undefined | null,
   depth = 0,
+  structuralParentId: string | null = null,
 ): OrganizationFilterOption[] {
   if (!Array.isArray(nodes)) {
     return [];
@@ -51,9 +60,12 @@ export function flattenOrganizationTree(
       name: String(node.name ?? ""),
       level: String(node.level ?? "organization"),
       depth,
+      // 节点自带 parent_id 优先（后端树响应包含该字段）；缺失时用递归路径上
+      // 的结构父 id 兜底，保证"单位属于哪个部门"永远可判定。
+      parent_id: node.parent_id ? String(node.parent_id) : structuralParentId,
     });
     if (Array.isArray(node.children) && node.children.length > 0) {
-      result.push(...flattenOrganizationTree(node.children, depth + 1));
+      result.push(...flattenOrganizationTree(node.children, depth + 1, String(node.id)));
     }
   }
   return result;

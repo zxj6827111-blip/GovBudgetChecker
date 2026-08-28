@@ -22,7 +22,8 @@
     "test:queue-adapters": "jiti tests/queuePageAdapters.test.ts",
     "test:history-adapters": "jiti tests/historyPageAdapters.test.ts",
     "test:rules-adapters": "jiti tests/rulesPageAdapters.test.ts",
-    "test:unit": "npm run test:ui-adapters && npm run test:ui-status && npm run test:unit-match && npm run test:admin-config && npm run test:ui-components && npm run test:ui-preview-guard && npm run test:color-guard && npm run test:workspace-navigation && npm run test:workbench-adapters && npm run test:upload-center-adapters && npm run test:review-workbench-adapters && npm run test:quality-adapters && npm run test:queue-adapters && npm run test:history-adapters && npm run test:rules-adapters",
+    "test:archive-adapters": "jiti tests/archivePageAdapters.test.ts",
+    "test:unit": "npm run test:ui-adapters && npm run test:ui-status && npm run test:unit-match && npm run test:admin-config && npm run test:ui-components && npm run test:ui-preview-guard && npm run test:color-guard && npm run test:workspace-navigation && npm run test:workbench-adapters && npm run test:upload-center-adapters && npm run test:review-workbench-adapters && npm run test:quality-adapters && npm run test:queue-adapters && npm run test:history-adapters && npm run test:rules-adapters && npm run test:archive-adapters",
     "test:e2e": "node ../scripts/run-e2e.cjs"
   },
   "dependencies": {

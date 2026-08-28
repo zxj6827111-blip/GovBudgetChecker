@@ -26,6 +26,7 @@ import { useEffect, useState } from "react";
 
 import { Badge, Button } from "@/components/ui";
 
+import { flattenOrganizationTree } from "./OrganizationFilterSelect";
 import {
   formatUnitScopeHint,
   selectDepartmentOptions,
@@ -39,32 +40,7 @@ const CURRENT_YEAR = new Date().getFullYear();
 const YEAR_OPTIONS = Array.from({ length: 6 }, (_, index) => CURRENT_YEAR - 3 + index);
 
 interface OrganizationTreeResponse {
-  tree?: Array<{ id: string; name: string; level?: string; parent_id?: string | null; children?: unknown[] }>;
-}
-
-function flattenWithParent(
-  nodes: OrganizationTreeResponse["tree"] | undefined,
-  structuralParentId: string | null = null,
-): OrganizationRecordLike[] {
-  if (!Array.isArray(nodes)) {
-    return [];
-  }
-  const result: OrganizationRecordLike[] = [];
-  for (const node of nodes) {
-    if (!node?.id) {
-      continue;
-    }
-    result.push({
-      id: String(node.id),
-      name: String(node.name ?? ""),
-      level: String(node.level ?? "organization"),
-      parent_id: node.parent_id ? String(node.parent_id) : structuralParentId,
-    });
-    if (Array.isArray(node.children) && node.children.length > 0) {
-      result.push(...flattenWithParent(node.children as OrganizationTreeResponse["tree"], String(node.id)));
-    }
-  }
-  return result;
+  tree?: Array<{ id: string; name: string; level?: string; parent_id?: string | null; children?: OrganizationTreeResponse["tree"] }>;
 }
 
 export interface UploadConfirmationPanelProps {
@@ -90,7 +66,9 @@ export function UploadConfirmationPanel({ fileName, reasons, onSave, onCancel }:
         }
         const payload = (await response.json()) as OrganizationTreeResponse;
         if (!cancelled) {
-          setOrganizations(flattenWithParent(payload.tree));
+          // Task 9 共享化：组织拉平统一走 OrganizationFilterSelect 的
+          // flattenOrganizationTree（含 parent_id），不再本地复制一份实现。
+          setOrganizations(flattenOrganizationTree(payload.tree));
         }
       } catch {
         // 保持空列表，组织下拉只显示"请选择"。

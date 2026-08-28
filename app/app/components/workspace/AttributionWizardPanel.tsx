@@ -27,6 +27,7 @@ import {
   type FileLevel,
   type OrganizationRecordLike,
 } from "./uploadCenterAdapters";
+import { flattenOrganizationTree } from "./OrganizationFilterSelect";
 import { isHeadUnit } from "../../../lib/unitMatch";
 
 export interface AttributionSelection {
@@ -45,9 +46,9 @@ export function AttributionWizardPanel({ value, onChange }: AttributionWizardPan
   const [departmentSearch, setDepartmentSearch] = useState("");
 
   // 只请求一次完整组织树并保留 parent_id：单位归属判定（selectUnitOptionsForDepartment /
-  // isHeadUnit）需要真实的部门-单位父子关系，OrganizationFilterSelect.flattenOrganizationTree
-  // 的拉平结果不带 parent_id（那个函数是给"筛选下拉"场景设计的，不需要层级关系），
-  // 因此这里用自己的 flattenWithParent 而不是复用它。
+  // isHeadUnit）需要真实的部门-单位父子关系。Task 9 共享化后
+  // OrganizationFilterSelect.flattenOrganizationTree 的拉平结果携带 parent_id
+  // （节点自带值优先，树形结构兜底），本组件不再维护自己的 flattenWithParent。
   useEffect(() => {
     let cancelled = false;
     async function loadWithParent() {
@@ -57,7 +58,7 @@ export function AttributionWizardPanel({ value, onChange }: AttributionWizardPan
           return;
         }
         const payload = (await response.json()) as { tree?: OrganizationTreeNode[] };
-        const flat = flattenWithParent(payload.tree);
+        const flat = flattenOrganizationTree(payload.tree);
         if (!cancelled) {
           setOrganizationsWithParent(flat);
         }
@@ -238,34 +239,6 @@ interface OrganizationTreeNode {
   level?: string;
   parent_id?: string | null;
   children?: OrganizationTreeNode[];
-}
-
-function flattenWithParent(nodes: OrganizationTreeNode[] | undefined): OrganizationRecordLike[] {
-  if (!Array.isArray(nodes)) {
-    return [];
-  }
-  const result: OrganizationRecordLike[] = [];
-  // structuralParentId 是遍历时已知的"这个节点在树里挂在谁下面"，作为 item.parent_id
-  // 缺失时的兜底——真实后端响应（storage.get_tree() 的 OrganizationTree.parent_id）
-  // 总是带这个字段，这里的兜底只是防御性的，不依赖它也能从树形结构本身推出父子关系。
-  const walk = (items: OrganizationTreeNode[], structuralParentId: string | null) => {
-    for (const item of items) {
-      if (!item?.id) {
-        continue;
-      }
-      result.push({
-        id: String(item.id),
-        name: String(item.name ?? ""),
-        level: String(item.level ?? "organization"),
-        parent_id: item.parent_id ? String(item.parent_id) : structuralParentId,
-      });
-      if (Array.isArray(item.children) && item.children.length > 0) {
-        walk(item.children, String(item.id));
-      }
-    }
-  };
-  walk(nodes, null);
-  return result;
 }
 
 export default AttributionWizardPanel;
