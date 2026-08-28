@@ -1,14 +1,10 @@
 import { AdminOnlyGuard } from "@/components/workspace/AdminOnlyGuard";
-import { WorkspacePlaceholderPage } from "@/components/workspace/WorkspacePlaceholderPage";
+import { SettingsPage } from "@/components/settings/SettingsPage";
 
-export default function SettingsPage() {
+export default function SettingsRoutePage() {
   return (
     <AdminOnlyGuard>
-      <WorkspacePlaceholderPage
-        title="系统设置"
-        desc="组织架构、规则包与用户管理等系统级配置。"
-        implementingTask={8}
-      />
+      <SettingsPage />
     </AdminOnlyGuard>
   );
 }
