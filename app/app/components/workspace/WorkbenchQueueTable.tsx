@@ -21,6 +21,7 @@
 
 import Link from "next/link";
 import type { Route } from "next";
+import type { ReactNode } from "react";
 import { MoreHorizontal } from "lucide-react";
 
 import { Badge, StageProgress, Td, Th } from "@/components/ui";
@@ -122,9 +123,19 @@ function resolveIssueCountText(job: JobSummaryRecord): string {
 export interface WorkbenchQueueTableProps {
   jobs: JobSummaryRecord[];
   onReanalyze: (jobId: string) => void;
+  /**
+   * 可选：自定义操作列内容（Task 8.2 任务历史页用它在操作列渲染
+   * 报告下载入口）。不传时保持默认的"更多操作"按钮（调用 onReanalyze），
+   * 工作台/处理队列页的行为不变。
+   */
+  renderRowActions?: (job: JobSummaryRecord) => ReactNode;
 }
 
-export function WorkbenchQueueTable({ jobs, onReanalyze }: WorkbenchQueueTableProps) {
+export function WorkbenchQueueTable({
+  jobs,
+  onReanalyze,
+  renderRowActions,
+}: WorkbenchQueueTableProps) {
   if (jobs.length === 0) {
     return (
       <div
@@ -185,15 +196,19 @@ export function WorkbenchQueueTable({ jobs, onReanalyze }: WorkbenchQueueTablePr
                 <Td>{formatPagesText(job)}</Td>
                 <Td>{resolveIssueCountText(job)}</Td>
                 <Td className="text-right">
-                  <button
-                    type="button"
-                    onClick={() => onReanalyze(jobId)}
-                    aria-label={`对任务 ${jobId} 执行操作`}
-                    data-testid={`gbc-workbench-queue-actions-${jobId}`}
-                    className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
-                  >
-                    <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-                  </button>
+                  {renderRowActions ? (
+                    renderRowActions(job)
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => onReanalyze(jobId)}
+                      aria-label={`对任务 ${jobId} 执行操作`}
+                      data-testid={`gbc-workbench-queue-actions-${jobId}`}
+                      className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+                    >
+                      <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                  )}
                 </Td>
               </tr>
             );
