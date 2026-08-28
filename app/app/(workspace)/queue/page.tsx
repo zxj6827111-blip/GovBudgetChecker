@@ -1,11 +1,17 @@
-import { WorkspacePlaceholderPage } from "@/components/workspace/WorkspacePlaceholderPage";
+import { Suspense } from "react";
 
-export default function QueuePage() {
+import { QueuePage } from "@/components/queue/QueuePage";
+
+export default function QueueRoutePage() {
   return (
-    <WorkspacePlaceholderPage
-      title="处理队列"
-      desc="工作台队列面板的全量版，支持分页与多维筛选。"
-      implementingTask={8}
-    />
+    <Suspense
+      fallback={
+        <div className="flex h-full items-center justify-center">
+          <span className="text-sm text-slate-500">正在加载…</span>
+        </div>
+      }
+    >
+      <QueuePage />
+    </Suspense>
   );
 }
