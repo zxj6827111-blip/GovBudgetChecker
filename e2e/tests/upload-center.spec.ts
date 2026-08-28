@@ -652,3 +652,242 @@ test.describe("Upload center failure diagnostics (fix A)", () => {
     await expect(errorBox).toContainText("建议：");
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// 修复 2：上传成功后真正触发分析。
+// 此前"开始分析 N 个文件"按钮只上传、从不调 /api/analyze（真实库里 451 个
+// uploaded 任务即此缺口的历史欠账）。本节验证：
+// 1. 上传成功后逐文件 POST /api/analyze/{job_id}；
+// 2. 批量中单个文件分析启动失败不影响其他文件；
+// 3. "上传成功但分析启动失败"与"上传失败"文案严格区分；
+// 4. 全部成功才跳转 /queue。
+// ---------------------------------------------------------------------------
+
+test.describe("Upload triggers analysis (fix 2)", () => {
+  const ANALYZE_OK_PDF = {
+    name: "上海市普陀区财政局2026年度部门预算.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.4 minimal placeholder content for e2e"),
+  };
+  const ANALYZE_FAIL_PDF = {
+    name: "上海市普陀区教育局2026年度部门预算.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.4 minimal placeholder content for e2e"),
+  };
+
+  interface AnalyzeCall {
+    jobId: string;
+    body: string;
+  }
+
+  interface AnalyzeMockOptions {
+    /** 按 job_id 决定 analyze 响应状态；不在表中的 job 默认 200。 */
+    analyzeStatusByJob: Record<string, number>;
+    uploadStatus?: number;
+    uploadRequests: Array<Record<string, unknown>>;
+    analyzeCalls: AnalyzeCall[];
+    /** 命中该文件名时上传返回的 job_id。 */
+    jobIdByFilename: Record<string, string>;
+  }
+
+  async function installAnalyzeMocks(page: Page, options: AnalyzeMockOptions) {
+    await page.route("**/api/**", async (route) => {
+      const req = route.request();
+      const url = new URL(req.url());
+      const path = url.pathname;
+
+      if (path === "/api/auth/me") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ user: { username: "e2e-user", is_admin: true } }),
+        });
+        return;
+      }
+      if (path === "/api/health") {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok" }) });
+        return;
+      }
+      if (path === "/api/config") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ max_upload_mb: 30, max_upload_pages: 800 }),
+        });
+        return;
+      }
+      if (path === "/api/organizations") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ tree: SAMPLE_ORG_TREE, total: 1 }),
+        });
+        return;
+      }
+      if (path === "/api/documents/preflight") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            filename: "preflight.pdf",
+            report_year: 2026,
+            doc_type: "dept_budget",
+            report_kind: "budget",
+            current: { organization_id: "dept-caizheng", organization_name: "上海市普陀区财政局", level: "department", confidence: 0.9 },
+            suggestions: [],
+            page_count: 30,
+          }),
+        });
+        return;
+      }
+      if (path === "/api/documents/upload") {
+        const bodyText = req.postDataBuffer()?.toString("utf-8") ?? "";
+        options.uploadRequests.push({ bodyText });
+        if (options.uploadStatus) {
+          await route.fulfill({
+            status: options.uploadStatus,
+            contentType: "application/json",
+            body: JSON.stringify({ detail: "mocked upload failure" }),
+          });
+          return;
+        }
+        // 依据 multipart 里的文件名返回不同 job_id（简单文本查找足够本测试用）。
+        const jobId =
+          Object.entries(options.jobIdByFilename).find(([filename]) => bodyText.includes(filename))?.[1] ??
+          "job-default";
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ job_id: jobId }),
+        });
+        return;
+      }
+      if (path.startsWith("/api/analyze/")) {
+        const jobId = path.split("/").pop() ?? "";
+        options.analyzeCalls.push({ jobId, body: req.postData() ?? "" });
+        const status = options.analyzeStatusByJob[jobId] ?? 200;
+        if (status !== 200) {
+          await route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ detail: "analyze start failed" }) });
+          return;
+        }
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ started: true }) });
+        return;
+      }
+      if (path === "/api/jobs") {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+        return;
+      }
+
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({}) });
+    });
+  }
+
+  test("REGRESSION: a successful upload actually triggers the first analysis and then navigates to the queue", async ({
+    page,
+  }) => {
+    const uploadRequests: Array<Record<string, unknown>> = [];
+    const analyzeCalls: AnalyzeCall[] = [];
+    await page.context().addCookies([sessionCookie]);
+    await installAnalyzeMocks(page, {
+      uploadRequests,
+      analyzeCalls,
+      analyzeStatusByJob: {},
+      jobIdByFilename: { [ANALYZE_OK_PDF.name]: "job-fix2-ok" },
+    });
+    await page.goto("/upload");
+
+    const fileInput = page.getByTestId("gbc-upload-file-input");
+    await fileInput.setInputFiles(ANALYZE_OK_PDF);
+    await page.locator('[data-testid^="gbc-upload-file-row-"]').first().waitFor({ timeout: 10_000 });
+
+    await page.getByTestId("gbc-upload-submit").click();
+
+    // 核心反例：不得只上传不触发——必须存在对 /api/analyze/job-fix2-ok 的 POST。
+    await expect.poll(() => analyzeCalls.length, { timeout: 10_000 }).toBe(1);
+    expect(analyzeCalls[0].jobId).toBe("job-fix2-ok");
+    // 与系统其他入口同参：dual 模式 + 本地规则 + AI。
+    const body = JSON.parse(analyzeCalls[0].body);
+    expect(body.mode).toBe("dual");
+    expect(body.use_local_rules).toBe(true);
+    expect(body.use_ai_assist).toBe(true);
+
+    // 全部成功：保持原有跳转行为。
+    await expect(page).toHaveURL(/\/queue\?job=job-fix2-ok/, { timeout: 15_000 });
+  });
+
+  test("REGRESSION: one file's analyze-start failure does not affect the other file, and the two failure kinds are worded distinctly", async ({
+    page,
+  }) => {
+    const uploadRequests: Array<Record<string, unknown>> = [];
+    const analyzeCalls: AnalyzeCall[] = [];
+    await page.context().addCookies([sessionCookie]);
+    await installAnalyzeMocks(page, {
+      uploadRequests,
+      analyzeCalls,
+      analyzeStatusByJob: { "job-fix2-bad": 500 },
+      jobIdByFilename: {
+        [ANALYZE_OK_PDF.name]: "job-fix2-good",
+        [ANALYZE_FAIL_PDF.name]: "job-fix2-bad",
+      },
+    });
+    await page.goto("/upload");
+
+    const fileInput = page.getByTestId("gbc-upload-file-input");
+    await fileInput.setInputFiles([ANALYZE_OK_PDF, ANALYZE_FAIL_PDF]);
+    await page.locator('[data-testid^="gbc-upload-file-row-"]').first().waitFor({ timeout: 10_000 });
+
+    await page.getByTestId("gbc-upload-submit").click();
+
+    // 逐文件隔离：两个文件都必须触发分析（某个失败不得中断另一个）。
+    await expect.poll(() => analyzeCalls.length, { timeout: 15_000 }).toBe(2);
+
+    // 文案区分：失败文件必须是"上传成功但分析启动失败"，且指出任务已在队列。
+    const errorBox = page.getByTestId("gbc-upload-submit-error");
+    await expect(errorBox).toBeVisible({ timeout: 10_000 });
+    await expect(errorBox).toContainText("上传成功但分析启动失败 1 个文件");
+    await expect(errorBox).toContainText(ANALYZE_FAIL_PDF.name);
+    await expect(errorBox).not.toContainText("上传失败 1 个文件");
+
+    // 有失败时不跳转（跳转会让失败信息随页面卸载丢失）。
+    await page.waitForTimeout(1_000);
+    expect(new URL(page.url()).pathname).toBe("/upload");
+
+    // 上传成功的两个条目（含分析启动失败的）都已移出待上传列表
+    // （列表为空时组件整体不渲染，故断言不存在）。
+    await expect(page.getByTestId("gbc-upload-file-list")).toHaveCount(0);
+  });
+
+  test("REGRESSION: an upload failure keeps its own wording and the failed entry stays for retry", async ({
+    page,
+  }) => {
+    const uploadRequests: Array<Record<string, unknown>> = [];
+    const analyzeCalls: AnalyzeCall[] = [];
+    await page.context().addCookies([sessionCookie]);
+    await installAnalyzeMocks(page, {
+      uploadRequests,
+      analyzeCalls,
+      analyzeStatusByJob: {},
+      uploadStatus: 413,
+      jobIdByFilename: {},
+    });
+    await page.goto("/upload");
+
+    const fileInput = page.getByTestId("gbc-upload-file-input");
+    await fileInput.setInputFiles(ANALYZE_OK_PDF);
+    await page.locator('[data-testid^="gbc-upload-file-row-"]').first().waitFor({ timeout: 10_000 });
+
+    await page.getByTestId("gbc-upload-submit").click();
+
+    const errorBox = page.getByTestId("gbc-upload-submit-error");
+    await expect(errorBox).toBeVisible({ timeout: 10_000 });
+    await expect(errorBox).toContainText("上传失败 1 个文件");
+    // 上传失败 = 没有触发过分析（无 job 可分析）。
+    await page.waitForTimeout(500);
+    expect(analyzeCalls.length).toBe(0);
+
+    // 失败条目保留在待上传列表，用户修正后可直接重试。
+    await expect(page.getByTestId("gbc-upload-file-list")).toContainText(ANALYZE_OK_PDF.name);
+    expect(new URL(page.url()).pathname).toBe("/upload");
+  });
+});

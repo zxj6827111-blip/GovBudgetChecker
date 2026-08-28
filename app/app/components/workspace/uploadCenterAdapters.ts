@@ -573,3 +573,160 @@ export function formatUploadFailureText(message: UploadFailureMessage): string {
   }
   return lines.join("\n");
 }
+
+// ---------------------------------------------------------------------------
+// 分析启动（修复 2）：上传成功后触发首次分析；失败与"上传失败"是两个状态
+// ---------------------------------------------------------------------------
+
+/**
+ * 首次分析触发参数（与既有 UI 入口完全同参）。
+ *
+ * 接口选择依据（不要凭猜调用）：
+ * - POST /api/analyze/{job_id}：调 runtime.start_analysis——上传端点只落
+ *   status=uploaded、从不入队（api/runtime.py 上传分支实测），start_analysis 是
+ *   唯一的"把任务排入分析"路径，因此"首次分析"走它。
+ * - POST /api/jobs/{job_id}/reanalyze：语义是"重置既有分析并重跑"（会清理
+ *   旧产物、409 拒绝进行中的任务），用于已分析过一次的任务，不是首次分析。
+ * - 参数与旧 UI（gbc-ui-demo）及工作台/队列/审核台的 reanalyze 全部一致：
+ *   mode="dual"（双轨：本地规则 + AI 合并，analyze_dual 模式；start_analysis
+ *   的默认值是 legacy，不传会退回单轨，与系统其他入口不一致），
+ *   use_local_rules=true，use_ai_assist=true。
+ */
+export const ANALYZE_START_REQUEST_BODY = {
+  mode: "dual",
+  use_local_rules: true,
+  use_ai_assist: true,
+} as const;
+
+/**
+ * 把"分析启动"接口的失败响应映射为用户可读、可行动的中文。
+ *
+ * 与 describeUploadFailure 的关键区别（任务书修复 2 硬性要求）：此刻文件已经
+ * 上传成功、任务已存在于处理队列（状态=待分析），必须如实告知"上传成功但分析
+ * 启动失败"，不能与"上传失败"混为一谈。
+ */
+export function describeAnalyzeStartFailure(input: {
+  filename: string;
+  /** HTTP 状态码；网络异常（请求根本没发出去）传 0。 */
+  status: number;
+  /** 后端响应体（已 JSON.parse；解析失败为 null）。 */
+  payload: unknown;
+}): UploadFailureMessage {
+  const { filename, status } = input;
+  const { text } = extractDetail(input.payload);
+
+  if (status === 409) {
+    return {
+      title: `文件 ${filename} 上传成功，但该任务已在分析中，无需重复启动`,
+      suggestion: "请在处理队列查看该任务的分析进度。",
+    };
+  }
+  if (status === 404) {
+    return {
+      title: `文件 ${filename} 上传成功，但启动分析时任务不存在（可能已被删除）`,
+      suggestion: "请在处理队列确认任务状态；确认不存在时请重新上传。",
+    };
+  }
+  if (status === 401) {
+    return {
+      title: `文件 ${filename} 上传成功，但登录状态已过期，分析未能启动`,
+      suggestion: "请重新登录后，在处理队列对该任务重试分析。",
+    };
+  }
+  if (status === 429 || /too many requests/i.test(text)) {
+    return {
+      title: `文件 ${filename} 上传成功，但分析启动请求过于频繁`,
+      detail: "后端暂时限流。",
+      suggestion: "请稍等一分钟后在处理队列对该任务重试分析。",
+    };
+  }
+  if (status === 0) {
+    return {
+      title: `文件 ${filename} 上传成功，但分析启动请求发送失败`,
+      detail: "网络异常或服务暂不可用。",
+      suggestion: "任务已在处理队列中（状态为待分析），可稍后重试分析。",
+    };
+  }
+  return {
+    title: `文件 ${filename} 上传成功，但分析启动失败（HTTP ${status}）`,
+    detail: text || undefined,
+    suggestion: "任务已在处理队列中（状态为待分析），可稍后重试分析；若持续出现请联系管理员。",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 批量提交结果汇总（修复 2）：逐文件隔离 + 如实区分两类失败
+// ---------------------------------------------------------------------------
+
+/** 单个文件的提交结果（上传 → 触发分析 的完整链路）。 */
+export interface SubmitFileOutcome {
+  /** 待上传列表条目 id（用于回填列表状态，同名文件也不混淆）。 */
+  entryId: string;
+  filename: string;
+  /** 上传是否成功（任务是否已创建）。 */
+  uploadOk: boolean;
+  /** 分析是否成功启动（仅在 uploadOk 为 true 时才可能为 true）。 */
+  analysisStarted: boolean;
+  /** 上传成功时后端返回的任务 id。 */
+  jobId: string | null;
+  /** 失败时的完整用户可读文案（formatUploadFailureText 的输出）；成功为 null。 */
+  failureText: string | null;
+}
+
+export interface SubmitOutcomeSummary {
+  /** 是否所有文件都"上传成功且分析已启动"。 */
+  allSucceeded: boolean;
+  /** 上传成功的任务 id（无论分析是否启动——任务都已存在于队列）。 */
+  uploadedJobIds: string[];
+  /** 上传失败、仍保留在待上传列表的条目 id（可修正后重试）。 */
+  failedEntryIds: string[];
+  /** 有失败时的汇总文案；全部成功时为 null（调用方不需要展示任何错误）。 */
+  summaryText: string | null;
+}
+
+/**
+ * 汇总一批逐文件提交结果。
+ *
+ * 反例（核心断言，任务书修复 2）：
+ * - "上传成功但分析启动失败"与"上传失败"必须是可区分的两段文案，不得合并成
+ *   一句笼统的"失败"；
+ * - 全部成功时 summaryText 必须为 null——不得在成功路径上渲染任何错误容器；
+ * - 某个文件失败不影响其他文件：每个 outcome 独立携带结果，本函数只做汇总，
+ *   不做"一个失败就否定整批"的归并。
+ */
+export function summarizeSubmitOutcome(outcomes: SubmitFileOutcome[]): SubmitOutcomeSummary {
+  const uploadedJobIds = outcomes
+    .filter((outcome) => outcome.uploadOk && outcome.jobId)
+    .map((outcome) => outcome.jobId as string);
+  const uploadFailed = outcomes.filter((outcome) => !outcome.uploadOk);
+  const analyzeStartFailed = outcomes.filter(
+    (outcome) => outcome.uploadOk && !outcome.analysisStarted,
+  );
+  const failedEntryIds = uploadFailed.map((outcome) => outcome.entryId);
+
+  if (uploadFailed.length === 0 && analyzeStartFailed.length === 0) {
+    return { allSucceeded: true, uploadedJobIds, failedEntryIds: [], summaryText: null };
+  }
+
+  const lines: string[] = [];
+  if (analyzeStartFailed.length > 0) {
+    lines.push(
+      `上传成功但分析启动失败 ${analyzeStartFailed.length} 个文件（任务已进入处理队列，状态为待分析，可在队列中重试分析）：`,
+    );
+    for (const outcome of analyzeStartFailed) {
+      lines.push(`· ${outcome.failureText ?? ""}`);
+    }
+  }
+  if (uploadFailed.length > 0) {
+    lines.push(`上传失败 ${uploadFailed.length} 个文件（未创建任务，已保留在待上传列表，可修正后重试）：`);
+    for (const outcome of uploadFailed) {
+      lines.push(`· ${outcome.failureText ?? ""}`);
+    }
+  }
+  return {
+    allSucceeded: false,
+    uploadedJobIds,
+    failedEntryIds,
+    summaryText: lines.join("\n"),
+  };
+}

@@ -45,15 +45,19 @@ import { UploadBatchPresets, type BatchPresetValues } from "./UploadBatchPresets
 import { UploadDropzone } from "./UploadDropzone";
 import { UploadFileList, type UploadFileEntry } from "./UploadFileList";
 import {
+  ANALYZE_START_REQUEST_BODY,
   applyManualConfirmationOverride,
   buildUploadFormFields,
   checkUploadLimit,
+  describeAnalyzeStartFailure,
   describeUploadFailure,
   derivePreflightStatus,
   formatUploadFailureText,
+  summarizeSubmitOutcome,
   validateAttribution,
   type ManualConfirmationOverride,
   type PreflightResponseLike,
+  type SubmitFileOutcome,
 } from "./uploadCenterAdapters";
 
 interface ConfigResponse {
@@ -253,12 +257,22 @@ export function UploadCenterPage() {
     effectiveEntries.every((entry) => entry.status !== "pending_preflight" && entry.status !== "failed") &&
     (mode === "basic" || attributionValidation.isComplete);
 
+  /**
+   * 修复 2：让"开始分析 N 个文件"名副其实——上传成功后逐文件触发首次分析
+   * （POST /api/analyze/{job_id}，参数依据见 ANALYZE_START_REQUEST_BODY 注释）。
+   *
+   * 批量语义（逐文件隔离）：
+   * - 单个文件"上传失败"或"上传成功但分析启动失败"都不中断其他文件；
+   * - 两类失败文案严格区分（summarizeSubmitOutcome），上传失败的条目保留在
+   *   列表中可修正后重试，上传成功的条目移除（任务已在队列，重复提交会重复上传）；
+   * - 全部成功时保持原有跳转行为；有任何失败时留在本页如实呈现汇总。
+   */
   const handleSubmit = useCallback(async () => {
     setIsSubmitting(true);
     setSubmitError(null);
     try {
       const targetOrgId = mode === "attribution" ? attribution.unitId || attribution.departmentId : presets.organizationId;
-      const createdJobIds: string[] = [];
+      const outcomes: SubmitFileOutcome[] = [];
       for (const entry of entries) {
         const formData = new FormData();
         formData.set("file", entry.file);
@@ -280,32 +294,147 @@ export function UploadCenterPage() {
           formData.append("doc_type", formFields.docType);
         }
 
-        const response = await fetch("/api/documents/upload", { method: "POST", body: formData });
-        if (!response.ok) {
-          // 修复 A2：必须读取并如实呈现后端的结构化失败原因（提交值 vs 封面识别值、
-          // 实际大小 vs 系统限制等），不得丢弃响应体只留一句"上传失败"。
-          const payload = (await response.json().catch(() => null)) as unknown;
-          const failureMessage = describeUploadFailure({
+        // ---- 阶段 1：上传 ----
+        let jobId: string | null = null;
+        try {
+          const response = await fetch("/api/documents/upload", { method: "POST", body: formData });
+          if (!response.ok) {
+            // 修复 A2：必须读取并如实呈现后端的结构化失败原因（提交值 vs 封面识别值、
+            // 实际大小 vs 系统限制等），不得丢弃响应体只留一句"上传失败"。
+            const payload = (await response.json().catch(() => null)) as unknown;
+            const failureMessage = describeUploadFailure({
+              filename: entry.file.name,
+              status: response.status,
+              payload,
+              fileSizeBytes: entry.file.size,
+              maxUploadMb,
+            });
+            outcomes.push({
+              entryId: entry.id,
+              filename: entry.file.name,
+              uploadOk: false,
+              analysisStarted: false,
+              jobId: null,
+              failureText: formatUploadFailureText(failureMessage),
+            });
+            continue;
+          }
+          const payload = (await response.json().catch(() => ({}))) as { id?: string; job_id?: string };
+          jobId = payload.id || payload.job_id || null;
+        } catch {
+          outcomes.push({
+            entryId: entry.id,
             filename: entry.file.name,
-            status: response.status,
-            payload,
-            fileSizeBytes: entry.file.size,
-            maxUploadMb,
+            uploadOk: false,
+            analysisStarted: false,
+            jobId: null,
+            failureText: formatUploadFailureText({
+              title: `文件 ${entry.file.name} 上传失败`,
+              detail: "网络异常或服务暂不可用。",
+              suggestion: "请检查网络后重试。",
+            }),
           });
-          throw new Error(formatUploadFailureText(failureMessage));
+          continue;
         }
-        const payload = (await response.json().catch(() => ({}))) as { id?: string; job_id?: string };
-        const jobId = payload.id || payload.job_id;
-        if (jobId) {
-          createdJobIds.push(jobId);
+
+        if (!jobId) {
+          // 上传响应里没有任务标识：无法触发分析，也不能声称"已开始分析"——如实上报。
+          outcomes.push({
+            entryId: entry.id,
+            filename: entry.file.name,
+            uploadOk: true,
+            analysisStarted: false,
+            jobId: null,
+            failureText: formatUploadFailureText({
+              title: `文件 ${entry.file.name} 上传响应缺少任务标识，分析未启动`,
+              suggestion: "请在处理队列确认任务是否创建；未创建时请重新上传。",
+            }),
+          });
+          continue;
+        }
+
+        // ---- 阶段 2：触发首次分析（修复 2 核心行为）----
+        try {
+          const analyzeResponse = await fetch(`/api/analyze/${encodeURIComponent(jobId)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(ANALYZE_START_REQUEST_BODY),
+          });
+          if (!analyzeResponse.ok) {
+            const analyzePayload = (await analyzeResponse.json().catch(() => null)) as unknown;
+            outcomes.push({
+              entryId: entry.id,
+              filename: entry.file.name,
+              uploadOk: true,
+              analysisStarted: false,
+              jobId,
+              failureText: formatUploadFailureText(
+                describeAnalyzeStartFailure({
+                  filename: entry.file.name,
+                  status: analyzeResponse.status,
+                  payload: analyzePayload,
+                }),
+              ),
+            });
+            continue;
+          }
+          outcomes.push({
+            entryId: entry.id,
+            filename: entry.file.name,
+            uploadOk: true,
+            analysisStarted: true,
+            jobId,
+            failureText: null,
+          });
+        } catch {
+          outcomes.push({
+            entryId: entry.id,
+            filename: entry.file.name,
+            uploadOk: true,
+            analysisStarted: false,
+            jobId,
+            failureText: formatUploadFailureText(
+              describeAnalyzeStartFailure({
+                filename: entry.file.name,
+                status: 0,
+                payload: null,
+              }),
+            ),
+          });
         }
       }
-      setEntries([]);
-      setPreflightResults({});
-      setManualOverrides({});
-      if (createdJobIds.length === 1) {
-        window.location.assign(`/queue?job=${encodeURIComponent(createdJobIds[0])}`);
-      } else if (createdJobIds.length > 1) {
+
+      const summary = summarizeSubmitOutcome(outcomes);
+
+      // 上传成功的条目移出待上传列表（任务已存在，重复提交会造成重复上传）；
+      // 上传失败的条目保留，用户修正后可直接重试。
+      const failedEntryIds = new Set(summary.failedEntryIds);
+      setEntries((prev) => prev.filter((entry) => failedEntryIds.has(entry.id)));
+      setPreflightResults((prev) => {
+        const next: typeof prev = {};
+        for (const entry of entries) {
+          if (failedEntryIds.has(entry.id) && prev[entry.id]) {
+            next[entry.id] = prev[entry.id];
+          }
+        }
+        return next;
+      });
+      setManualOverrides((prev) => {
+        const next: typeof prev = {};
+        for (const entry of entries) {
+          if (failedEntryIds.has(entry.id) && prev[entry.id]) {
+            next[entry.id] = prev[entry.id];
+          }
+        }
+        return next;
+      });
+
+      if (summary.summaryText) {
+        // 有失败：留在本页如实呈现，不跳转（跳转会让失败信息随着页面卸载丢失）。
+        setSubmitError(summary.summaryText);
+      } else if (summary.uploadedJobIds.length === 1) {
+        window.location.assign(`/queue?job=${encodeURIComponent(summary.uploadedJobIds[0])}`);
+      } else if (summary.uploadedJobIds.length > 1) {
         window.location.assign("/queue");
       }
     } catch (error) {
@@ -408,7 +537,7 @@ export function UploadCenterPage() {
             data-testid="gbc-upload-submit"
             className="w-full"
           >
-            {isSubmitting ? "正在上传…" : `开始分析 ${entries.length} 个文件`}
+            {isSubmitting ? "正在上传并启动分析…" : `开始分析 ${entries.length} 个文件`}
           </Button>
         </div>
       </div>

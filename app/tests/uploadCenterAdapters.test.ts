@@ -16,6 +16,9 @@ import {
   selectUnitOptionsForDepartment,
   validateAttribution,
   type OrganizationRecordLike,
+  describeAnalyzeStartFailure,
+  summarizeSubmitOutcome,
+  type SubmitFileOutcome,
 } from "../app/components/workspace/uploadCenterAdapters";
 
 // 本文件测试 Task 5 上传中心的纯逻辑层（预检状态映射/上传限制校验/三步归属
@@ -388,5 +391,113 @@ assert.match(conflictText, /文档类型与封面识别不一致/);
 assert.match(conflictText, /提交类型：部门预算（dept_budget）；封面识别：部门决算（dept_final）/);
 assert.match(conflictText, /^建议：/m, "建议行必须以「建议：」开头，用户能据此行动");
 assert.ok(conflictText.includes("\n"), "多段消息用换行分隔，供 whitespace-pre-line 渲染");
+
+
+
+// ===========================================================================
+// 修复 2：上传成功后真正触发分析——分析启动失败映射 + 批量提交结果汇总
+// ===========================================================================
+
+// --- describeAnalyzeStartFailure：核心红线——"上传成功但分析启动失败"必须与
+//     "上传失败"是可区分的两个状态，文案里必须带上"上传成功"前提 -------------
+
+const analyzeConflict = describeAnalyzeStartFailure({
+  filename: "决算.pdf",
+  status: 500,
+  payload: { detail: "internal error" },
+});
+assert.match(analyzeConflict.title, /上传成功，但分析启动失败/, "必须如实说明文件已上传成功");
+assert.match(analyzeConflict.title, /HTTP 500/);
+assert.match(String(analyzeConflict.suggestion), /处理队列/, "必须指明任务已在队列中、可重试");
+
+// 409：已在分析中，不算错误地重复启动
+assert.match(
+  describeAnalyzeStartFailure({ filename: "a.pdf", status: 409, payload: null }).title,
+  /已在分析中，无需重复启动/,
+);
+// 404：任务不存在
+assert.match(
+  describeAnalyzeStartFailure({ filename: "a.pdf", status: 404, payload: null }).title,
+  /任务不存在/,
+);
+// 429：限流
+assert.match(
+  describeAnalyzeStartFailure({ filename: "a.pdf", status: 429, payload: null }).title,
+  /过于频繁/,
+);
+// status=0：网络异常（请求根本没发出去）
+const networkFailure = describeAnalyzeStartFailure({ filename: "a.pdf", status: 0, payload: null });
+assert.match(networkFailure.title, /分析启动请求发送失败/);
+assert.ok(!JSON.stringify(networkFailure).includes("HTTP 0"), "网络异常不得误报成 HTTP 状态码");
+
+// 反例：文案不得与"上传失败"混淆——describeUploadFailure 的 500 文案没有"上传成功"前提
+const uploadFailText = formatUploadFailureText(
+  describeUploadFailure({ filename: "a.pdf", status: 500, payload: null }),
+);
+assert.ok(!uploadFailText.includes("上传成功"), "上传失败文案不得出现'上传成功'");
+
+// --- summarizeSubmitOutcome：逐文件隔离 + 两类失败如实区分 ------------------
+
+const okOutcome: SubmitFileOutcome = {
+  entryId: "e1",
+  filename: "预算A.pdf",
+  uploadOk: true,
+  analysisStarted: true,
+  jobId: "job-1",
+  failureText: null,
+};
+
+// 全部成功：summaryText 必须为 null（成功路径不渲染任何错误容器）
+const allOk = summarizeSubmitOutcome([okOutcome, { ...okOutcome, entryId: "e2", jobId: "job-2" }]);
+assert.equal(allOk.allSucceeded, true);
+assert.deepEqual(allOk.uploadedJobIds, ["job-1", "job-2"]);
+assert.equal(allOk.summaryText, null, "REGRESSION: 全部成功时不得产生任何错误文案");
+assert.deepEqual(allOk.failedEntryIds, []);
+
+// 反例：分析启动失败必须与上传失败分开表述
+const analyzeFailed: SubmitFileOutcome = {
+  entryId: "e2",
+  filename: "决算B.pdf",
+  uploadOk: true,
+  analysisStarted: false,
+  jobId: "job-2",
+  failureText: "文件 决算B.pdf 上传成功，但分析启动失败（HTTP 500）\n建议：任务已在处理队列中，可稍后重试分析。",
+};
+const mixedAnalyze = summarizeSubmitOutcome([okOutcome, analyzeFailed]);
+assert.equal(mixedAnalyze.allSucceeded, false);
+assert.deepEqual(mixedAnalyze.uploadedJobIds, ["job-1", "job-2"], "分析启动失败的文件任务仍已创建，必须计入 uploadedJobIds");
+assert.deepEqual(mixedAnalyze.failedEntryIds, [], "分析启动失败的文件不得保留在待上传列表（会重复上传）");
+assert.match(String(mixedAnalyze.summaryText), /上传成功但分析启动失败 1 个文件/);
+assert.match(String(mixedAnalyze.summaryText), /job-2|决算B|分析启动失败/);
+assert.ok(!String(mixedAnalyze.summaryText).includes("上传失败 1 个文件"), "REGRESSION: 分析启动失败不得被合并表述成'上传失败'");
+
+// 上传失败：保留条目待重试
+const uploadFailed: SubmitFileOutcome = {
+  entryId: "e3",
+  filename: "预算C.pdf",
+  uploadOk: false,
+  analysisStarted: false,
+  jobId: null,
+  failureText: "文件 预算C.pdf 上传失败（HTTP 413）",
+};
+const mixedUpload = summarizeSubmitOutcome([okOutcome, uploadFailed]);
+assert.equal(mixedUpload.allSucceeded, false);
+assert.deepEqual(mixedUpload.uploadedJobIds, ["job-1"], "上传失败的文件不得计入 uploadedJobIds");
+assert.deepEqual(mixedUpload.failedEntryIds, ["e3"], "上传失败的条目必须保留（failedEntryIds）供重试");
+assert.match(String(mixedUpload.summaryText), /上传失败 1 个文件/);
+assert.match(String(mixedUpload.summaryText), /未创建任务/);
+assert.ok(!String(mixedUpload.summaryText).includes("分析启动失败"), "上传失败不得被表述成分析启动失败");
+
+// 混合三类：逐文件独立，互不影响
+const mixedAll = summarizeSubmitOutcome([okOutcome, analyzeFailed, uploadFailed]);
+assert.deepEqual(mixedAll.uploadedJobIds, ["job-1", "job-2"]);
+assert.deepEqual(mixedAll.failedEntryIds, ["e3"]);
+assert.match(String(mixedAll.summaryText), /上传成功但分析启动失败 1 个文件/);
+assert.match(String(mixedAll.summaryText), /上传失败 1 个文件/);
+
+// 空数组（理论上不应发生，但纯函数必须稳健）
+const empty = summarizeSubmitOutcome([]);
+assert.equal(empty.allSucceeded, true);
+assert.equal(empty.summaryText, null);
 
 console.log("uploadCenterAdapters.test.ts passed");
