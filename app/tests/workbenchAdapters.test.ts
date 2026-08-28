@@ -8,6 +8,8 @@ import {
   deriveQualityAlerts,
   filterWorkbenchQueue,
   formatCoveragePercentText,
+  formatElapsedText,
+  formatPagesText,
 } from "../app/components/workspace/workbenchAdapters";
 
 // 本文件测试 Task 4 工作台总览的纯逻辑层（KPI 聚合/覆盖率聚合/质量告警派生/
@@ -249,6 +251,44 @@ assert.deepEqual(collectAvailableYears(null), []);
 assert.ok(
   !collectAvailableYears(queueJobs).includes(2000),
   "REGRESSION: 可选年份集合中绝不能出现 2000 兜底值",
+);
+
+// --- formatElapsedText：前置修复 2，null/0/负数/正常值的正反对照 --------------
+
+assert.equal(formatElapsedText(null), "—", "REGRESSION: 耗时缺失(null)必须显示 em dash，不得显示 0 或猜测值");
+assert.equal(formatElapsedText(undefined), "—");
+assert.notEqual(formatElapsedText(null), "0 秒", "REGRESSION: 耗时缺失绝不能显示成 0 秒");
+
+// 真实的 0 毫秒（如果确实发生）必须显示为 0 秒，不能与"未知"混淆——null 与 0 严格区分
+assert.equal(formatElapsedText(0), "0 秒", "真实的 0 毫秒耗时必须显示为 0 秒，不是 —");
+
+assert.equal(formatElapsedText(12500), "13 秒", "12500ms 四舍五入到 13 秒");
+assert.equal(formatElapsedText(45000), "45 秒");
+assert.equal(formatElapsedText(60000), "1 分钟", "恰好 60 秒应显示为 1 分钟（不带零秒尾巴）");
+assert.equal(formatElapsedText(90000), "1 分 30 秒");
+assert.equal(formatElapsedText(3600000), "1 小时", "恰好 1 小时应显示为 1 小时（不带零分尾巴）");
+assert.equal(formatElapsedText(3660000), "1 时 1 分");
+
+// 反例：负数（脏数据/时钟回退）必须视为不可信，显示 em dash 而不是负数文案
+assert.equal(formatElapsedText(-5000), "—", "REGRESSION: 负数耗时（脏数据）必须显示 —，不得显示负数");
+
+// --- formatPagesText：页数优先于覆盖率百分比，都没有则 — --------------------
+
+assert.equal(formatPagesText({ job_id: "a", scanned_page_count: 48 } as JobSummaryRecord), "48 页");
+assert.equal(
+  formatPagesText({ job_id: "b", page_coverage: 0.75 } as JobSummaryRecord),
+  "75% 覆盖",
+  "无页数字段时应退回覆盖率百分比",
+);
+assert.equal(
+  formatPagesText({ job_id: "c" } as JobSummaryRecord),
+  "—",
+  "REGRESSION: 页数与覆盖率字段都缺失时必须显示 —，不得显示 0 页",
+);
+// 两者都有时页数优先（更精确的真实数据优先于聚合百分比）
+assert.equal(
+  formatPagesText({ job_id: "d", scanned_page_count: 30, page_coverage: 0.9 } as JobSummaryRecord),
+  "30 页",
 );
 
 console.log("workbenchAdapters.test.ts passed");

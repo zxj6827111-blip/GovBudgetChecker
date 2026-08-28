@@ -315,3 +315,52 @@ export function collectAvailableYears(jobs: JobSummaryRecord[] | null | undefine
   }
   return Array.from(years).sort((a, b) => b - a);
 }
+
+
+// ---------------------------------------------------------------------------
+// 耗时/页数格式化（前置修复 2）
+// ---------------------------------------------------------------------------
+
+/**
+ * 任务耗时格式化。
+ *
+ * 口径（真实历史数据实测，786 个任务目录）：`runtime.collect_job_summary` 已经
+ * 按 finished_at-started_at 优先、elapsed_ms.total 兜底的顺序计算好 elapsed_ms
+ * 字段（对照任务书"确实分析过的任务子集里 97.6% 可计算，远高于 elapsed_ms.total
+ * 单独口径的约 53%"），本函数只负责把毫秒数格式化为可读文案，不重新决定取值来源。
+ *
+ * 反例（核心，M1"null 与 0 严格区分"红线在耗时字段上的落地）：
+ * elapsedMs 为 null/undefined 时必须显示 em dash，不得显示 0 或任何估算值——
+ * 0 毫秒是一个可疑的真实值（正常分析不可能瞬间完成），"未知"与"确认耗时为 0"
+ * 是两个不同语义。负数（脏数据/时钟回退）同样视为不可信，显示 em dash。
+ */
+export function formatElapsedText(elapsedMs: JobSummaryRecord["elapsed_ms"]): string {
+  if (typeof elapsedMs !== "number" || !Number.isFinite(elapsedMs) || elapsedMs < 0) {
+    return "—";
+  }
+  const totalSeconds = Math.round(elapsedMs / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds} 秒`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return seconds > 0 ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分钟`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes > 0 ? `${hours} 时 ${remainingMinutes} 分` : `${hours} 小时`;
+}
+
+/** 页数/覆盖率文案：页数已知时优先显示页数，否则退回覆盖率百分比，都没有则"—"。 */
+export function formatPagesText(job: JobSummaryRecord): string {
+  const pageCoverage = job.page_coverage;
+  const scannedPages = job.scanned_page_count;
+  if (typeof scannedPages === "number" && Number.isFinite(scannedPages)) {
+    return `${scannedPages} 页`;
+  }
+  if (typeof pageCoverage === "number" && Number.isFinite(pageCoverage)) {
+    return `${Math.round(pageCoverage * 100)}% 覆盖`;
+  }
+  return "—";
+}

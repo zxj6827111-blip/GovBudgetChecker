@@ -47,6 +47,9 @@ export interface JobSummaryRecord {
   page_coverage?: number | null;
   scanned_page_count?: number | null;
   stage?: string | null;
+  /** 前置修复 2：任务总耗时（毫秒）。finished_at-started_at 优先，elapsed_ms.total 兜底；
+   *  两者都拿不到时为 null（历史任务常见），UI 必须显示"—"，不得显示 0 或估算值。 */
+  elapsed_ms?: number | null;
   [key: string]: unknown;
 }
 

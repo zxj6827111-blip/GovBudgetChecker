@@ -1496,6 +1496,31 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     except Exception:
         result_meta = {}
 
+    # 前置修复 2：队列表"耗时"列。started_at/finished_at 写在 result.meta 里
+    # （见 api/main.py 双模式/传统模式分析结束时的 _safe_write 调用），collect_job_summary
+    # 此前从未把它们提取出来给列表接口用。真实历史数据实测（786 个任务目录）：
+    # 用 finished_at-started_at 计算耗时，在"确实跑过分析"的任务子集（done/
+    # review_required/error，336 个）里 97.6%（328/336）可计算；而 elapsed_ms.total
+    # 只在双模式且 analyze_dual 写入时才有值，覆盖率明显更低（178/336，约 53%），
+    # 因此优先用 started_at/finished_at 差值，elapsed_ms.total 仅作为兜底（例如
+    # 某些历史产物两者都有但 finished_at 缺失的边缘情况）。
+    # 严禁伪造：两者都拿不到时 elapsed_ms 为 None，前端必须显示"—"，不得显示 0。
+    started_at = result_meta.get("started_at")
+    finished_at = result_meta.get("finished_at")
+    computed_elapsed_ms: Optional[int] = None
+    if (
+        isinstance(started_at, (int, float))
+        and isinstance(finished_at, (int, float))
+        and finished_at >= started_at
+    ):
+        computed_elapsed_ms = int(round((finished_at - started_at) * 1000))
+    else:
+        fallback_elapsed = result_meta.get("elapsed_ms")
+        if isinstance(fallback_elapsed, dict):
+            fallback_total = fallback_elapsed.get("total")
+            if isinstance(fallback_total, (int, float)):
+                computed_elapsed_ms = int(fallback_total)
+
     if not doc_type:
         try:
             doc_type = str(result_meta.get("doc_type") or "").strip()
@@ -1898,6 +1923,9 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "ai_issue_info": ai_issue_info,
         "local_elapsed_ms": local_elapsed_ms,
         "ai_elapsed_ms": ai_elapsed_ms,
+        # 前置修复 2：任务总耗时（毫秒），finished_at-started_at 优先，
+        # elapsed_ms.total 兜底；两者都拿不到时为 None，前端显示"—"。
+        "elapsed_ms": computed_elapsed_ms,
         "provider_stats_count": provider_stats_count,
         "structured_ingest_status": structured_ingest.get("status"),
         "structured_document_version_id": structured_ingest.get("document_version_id"),

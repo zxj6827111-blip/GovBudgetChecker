@@ -1,8 +1,8 @@
 /**
- * WorkbenchQueueTable：原型图「处理队列」表格（Task 4.2）。
+ * WorkbenchQueueTable：原型图「处理队列」表格（Task 4.2；前置修复 2 拆分耗时/页数列）。
  *
  * 列：文档（文件名 + 组织·年份·类型副行）/ 当前阶段（阶段名+进度条）/
- * 质量状态（徽章）/ 耗时·页数 / 问题数 / 操作。
+ * 质量状态（徽章）/ 耗时 / 页数 / 问题数 / 操作。
  *
  * 关键约束：
  * - 阶段与进度必须用 Task 3 的 stage_progress（resolve_stage_progress 的输出），
@@ -13,6 +13,9 @@
  *   is_formal_finding 过滤，是 count_formal_findings 同一口径），不在前端自己
  *   用 len(issues) 另算。
  * - 年份未识别显示"未识别到"，不显示 2000 或留空猜测。
+ * - 耗时：读 job.elapsed_ms（runtime.collect_job_summary 已按 finished_at-started_at
+ *   优先、elapsed_ms.total 兜底的口径计算好），null/undefined 时显示"—"，
+ *   不得显示 0 或估算值（真实历史数据实测耗时可用比例见交付说明）。
  */
 "use client";
 
@@ -24,6 +27,8 @@ import { Badge, StageProgress, Td, Th } from "@/components/ui";
 import type { BadgeTone } from "@/components/ui";
 import type { JobSummaryRecord } from "@/lib/uiAdapters";
 import { normalizeUiTaskStatus } from "@/lib/uiAdapters";
+
+import { formatElapsedText, formatPagesText } from "./workbenchAdapters";
 
 interface StageProgressPayload {
   phase?: string | null;
@@ -101,18 +106,6 @@ function formatDocTypeLabel(job: JobSummaryRecord): string {
   return "待复核";
 }
 
-function formatElapsedAndPages(job: JobSummaryRecord): string {
-  const pageCoverage = job.page_coverage;
-  const scannedPages = job.scanned_page_count;
-  if (typeof scannedPages === "number" && Number.isFinite(scannedPages)) {
-    return `${scannedPages} 页`;
-  }
-  if (typeof pageCoverage === "number" && Number.isFinite(pageCoverage)) {
-    return `${Math.round(pageCoverage * 100)}% 覆盖`;
-  }
-  return "—";
-}
-
 /** 问题数：merged_issue_total 是唯一口径（对照 count_formal_findings），缺失显示 —。 */
 function resolveIssueCountText(job: JobSummaryRecord): string {
   const merged = job.merged_issue_total;
@@ -151,7 +144,8 @@ export function WorkbenchQueueTable({ jobs, onReanalyze }: WorkbenchQueueTablePr
             <Th>文档</Th>
             <Th>当前阶段</Th>
             <Th>质量状态</Th>
-            <Th>耗时/页数</Th>
+            <Th>耗时</Th>
+            <Th>页数</Th>
             <Th>问题数</Th>
             <Th className="text-right">操作</Th>
           </tr>
@@ -187,7 +181,8 @@ export function WorkbenchQueueTable({ jobs, onReanalyze }: WorkbenchQueueTablePr
                 <Td>
                   <Badge tone={qualityBadge.tone}>{qualityBadge.label}</Badge>
                 </Td>
-                <Td>{formatElapsedAndPages(job)}</Td>
+                <Td data-testid={`gbc-workbench-queue-elapsed-${jobId}`}>{formatElapsedText(job.elapsed_ms)}</Td>
+                <Td>{formatPagesText(job)}</Td>
                 <Td>{resolveIssueCountText(job)}</Td>
                 <Td className="text-right">
                   <button
