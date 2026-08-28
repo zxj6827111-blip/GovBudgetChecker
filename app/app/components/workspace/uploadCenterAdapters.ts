@@ -335,3 +335,241 @@ export function formatPageCountText(pageCount: number | null | undefined): strin
   }
   return `${pageCount} 页`;
 }
+
+// ---------------------------------------------------------------------------
+// 提交字段解析（修复 A1）：doc_type / fiscal_year 何时发送、何时不发送
+// ---------------------------------------------------------------------------
+
+/** 批量预设的结构（与 UploadBatchPresets 的 BatchPresetValues 保持结构兼容）。 */
+export interface UploadPresetValuesLike {
+  organizationId: string;
+  year: string;
+  docType: string;
+}
+
+export interface UploadFormFields {
+  /** null 表示"该字段整个不发送"——空字符串进 FormData 会触发后端另一条校验路径。 */
+  docType: string | null;
+  fiscalYear: string | null;
+}
+
+/**
+ * 计算某个文件最终提交给后端的 doc_type / fiscal_year。
+ *
+ * 优先级（与 applyManualConfirmationOverride 的覆盖语义一致）：
+ * 1. 有效 preflight（含批量预设 + 单文件补齐）识别出的值；
+ * 2. 识别不到时回落到批量预设值；
+ * 3. 两者都为空 → 返回 null，调用方必须**整个不发送**该字段，
+ *    让后端用封面识别结果（_resolve_upload_metadata 的 detected_* 分支）。
+ *
+ * 反例（核心断言）：预设 docType 默认值为空（不得预填 dept_budget），
+ * 否则上传决算材料时前端会提交"预算"、后端封面识别为"决算"→ 必然 422
+ * report_type_conflict——这正是实机"上传失败且无原因"的第一个根因。
+ */
+export function buildUploadFormFields(
+  effective: PreflightResponseLike | null | undefined,
+  presets: UploadPresetValuesLike,
+): UploadFormFields {
+  const detectedDocType = String(effective?.doc_type ?? "").trim();
+  const docType = detectedDocType || String(presets.docType ?? "").trim() || null;
+
+  const detectedYear = typeof effective?.report_year === "number" && effective.report_year > 0
+    ? String(effective.report_year)
+    : "";
+  const fiscalYear = detectedYear || String(presets.year ?? "").trim() || null;
+
+  return { docType, fiscalYear };
+}
+
+// ---------------------------------------------------------------------------
+// 上传失败错误映射（修复 A2）：后端结构化错误 → 用户可读、可行动的中文
+// ---------------------------------------------------------------------------
+
+export interface UploadFailureMessage {
+  /** 一句话结论，例如"文档类型与封面识别不一致"。 */
+  title: string;
+  /** 关键值对照（提交 X / 封面识别 Y、实际大小 / 系统限制 等）。 */
+  detail?: string;
+  /** 下一步怎么办（用户据此可行动）。 */
+  suggestion?: string;
+}
+
+export interface DescribeUploadFailureInput {
+  filename: string;
+  status: number;
+  /** 后端响应体（已 JSON.parse；解析失败为 null）。 */
+  payload: unknown;
+  /** 当前文件实际大小（字节），用于 413 文案展示真实值。 */
+  fileSizeBytes?: number | null;
+  /** 系统配置的大小上限（MB），来自 /api/config。 */
+  maxUploadMb?: number | null;
+}
+
+/** doc_type 枚举 → 中文标签（用户可据此行动，raw 枚举值看不懂）。 */
+function formatDocTypeLabel(value: unknown): string {
+  const text = String(value ?? "").trim();
+  if (text === "dept_budget") {
+    return "部门预算（dept_budget）";
+  }
+  if (text === "dept_final") {
+    return "部门决算（dept_final）";
+  }
+  return text || "未指定";
+}
+
+/** FastAPI 的 detail 既可能是字符串也可能是对象（结构化错误就是对象）。 */
+function extractDetail(payload: unknown): { text: string; object: Record<string, unknown> | null } {
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const record = payload as Record<string, unknown>;
+    const detail = record.detail;
+    if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+      return { text: String((detail as Record<string, unknown>).message ?? ""), object: detail as Record<string, unknown> };
+    }
+    if (typeof detail === "string") {
+      return { text: detail, object: null };
+    }
+    return { text: String(record.error ?? record.message ?? ""), object: record as Record<string, unknown> };
+  }
+  return { text: "", object: null };
+}
+
+/**
+ * 把上传接口的失败响应映射为用户可读、可行动的中文消息。
+ *
+ * 覆盖 api/routes/upload.py 与 api/runtime.py 实际会返回的全部错误状态：
+ * - 413：文件超大（File exceeds {N}MB limit）/ 页数超限（PDF页数超过限制：…）
+ * - 422：report_type_conflict / report_year_conflict（显示提交值 vs 封面识别值）
+ * - 409：重复上传；403：组织无权限；404：组织不存在；503：组织服务不可用
+ * - 429：限流（沿用 normalizeBackendError 的既有文案口径）；401：未登录
+ * - 400：非 PDF 签名 / PDF 无法解析
+ *
+ * 未知状态码不得把结构化 detail 原样 dump（可能含内部路径），只显示状态码。
+ */
+export function describeUploadFailure(input: DescribeUploadFailureInput): UploadFailureMessage {
+  const { filename, status } = input;
+  const { text, object } = extractDetail(input.payload);
+
+  if (status === 413) {
+    // 后端有两种 413：体积超限（英文文案）与页数超限（中文文案，自带实际值与上限）。
+    if (/页数|pages?/i.test(text)) {
+      return {
+        title: `文件 ${filename} 页数超过系统限制`,
+        detail: text || "PDF 页数超过限制",
+        suggestion: "请拆分材料后分批上传，或联系管理员调整页数上限。",
+      };
+    }
+    const sizeDetail =
+      typeof input.fileSizeBytes === "number" && typeof input.maxUploadMb === "number"
+        ? `文件实际大小 ${formatFileSizeMb(input.fileSizeBytes)}，系统限制 ${input.maxUploadMb} MB`
+        : text || "文件大小超过系统限制";
+    return {
+      title: `文件 ${filename} 大小超过系统限制`,
+      detail: sizeDetail,
+      suggestion: "请压缩或拆分 PDF 后重新上传。",
+    };
+  }
+
+  if (status === 422 && object) {
+    const errorCode = String(object.error ?? "");
+    if (errorCode === "report_type_conflict") {
+      return {
+        title: `文件 ${filename} 的文档类型与封面识别不一致`,
+        detail: `提交类型：${formatDocTypeLabel(object.submitted_doc_type)}；封面识别：${formatDocTypeLabel(object.detected_doc_type)}`,
+        suggestion: "请把文档类型改为与封面一致（例如封面识别为部门决算，就把类型改为部门决算），或清空类型让系统自动判定后重新上传。",
+      };
+    }
+    if (errorCode === "report_year_conflict") {
+      return {
+        title: `文件 ${filename} 的年份与封面识别不一致`,
+        detail: `提交年份：${String(object.submitted_year ?? "未指定")}；封面识别：${String(object.detected_year ?? "未指定")}`,
+        suggestion: "请核对材料封面上的年度后修改预设年份，或清空年份让系统自动判定后重新上传。",
+      };
+    }
+    return {
+      title: `文件 ${filename} 上传参数校验未通过`,
+      detail: "提交的元数据与 PDF 封面识别结果冲突。",
+      suggestion: "请核对年份、文档类型后重试，或清空预设让系统按封面自动判定。",
+    };
+  }
+
+  if (status === 409) {
+    return {
+      title: `文件 ${filename} 与历史任务重复`,
+      detail: text || "同一单位、同一年度、同一类型已存在相同内容的材料。",
+      suggestion: "请在处理队列中查看既有任务；确需重新上传时，先删除或让管理员处理原任务。",
+    };
+  }
+
+  if (status === 403) {
+    return {
+      title: `没有权限向该组织上传 ${filename}`,
+      detail: "当前账号不归属或未被授权访问所选组织。",
+      suggestion: "请确认组织选择无误；如需权限请联系管理员分配。",
+    };
+  }
+
+  if (status === 404) {
+    return {
+      title: "所选组织不存在",
+      detail: text || "organization not found",
+      suggestion: "该组织可能已被删除，请重新选择组织后上传。",
+    };
+  }
+
+  if (status === 503) {
+    return {
+      title: "组织服务暂不可用",
+      detail: text || "organization service unavailable",
+      suggestion: "请稍后重试；若持续出现请联系管理员检查组织服务。",
+    };
+  }
+
+  if (status === 429 || /too many requests/i.test(text)) {
+    return {
+      title: "上传请求过于频繁",
+      detail: "后端暂时限流。",
+      suggestion: "请稍等一分钟后重试。",
+    };
+  }
+
+  if (status === 401) {
+    return {
+      title: "登录状态已过期",
+      detail: "上传前需要重新登录。",
+      suggestion: "请重新登录后再上传。",
+    };
+  }
+
+  if (status === 400) {
+    if (/PDF/i.test(text)) {
+      return {
+        title: `文件 ${filename} 不是有效的 PDF`,
+        detail: text,
+        suggestion: "请检查文件是否损坏、是否为扫描生成的伪 PDF 后重新上传。",
+      };
+    }
+    return {
+      title: `文件 ${filename} 上传请求无效`,
+      detail: text || "请求格式或参数不被接受。",
+      suggestion: "请确认文件为 PDF 后重试；若持续出现请联系管理员。",
+    };
+  }
+
+  // 未知状态码：只给状态码与通用建议，不原样 dump detail（防内部信息泄漏）。
+  return {
+    title: `文件 ${filename} 上传失败（HTTP ${status}）`,
+    suggestion: "请稍后重试；若持续出现请联系管理员并附上任务时间。",
+  };
+}
+
+/** 把结构化失败消息拼成一段可直接展示的文本（换行分隔，whitespace-pre-line 渲染）。 */
+export function formatUploadFailureText(message: UploadFailureMessage): string {
+  const lines = [message.title];
+  if (message.detail) {
+    lines.push(message.detail);
+  }
+  if (message.suggestion) {
+    lines.push(`建议：${message.suggestion}`);
+  }
+  return lines.join("\n");
+}

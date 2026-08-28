@@ -25,6 +25,14 @@
  * 补齐后的有效值通过 effectivePreflightFor() 统一计算，提交时使用这份有效值
  * （而非原始 preflight 响应），确保后端真正收到用户补齐后的数据，不是前端
  * 单方面把徽章改绿。
+ *
+ * 修复 A（实机缺陷：上传失败且无原因）：
+ * - A1：批量预设 docType 默认值改为空，识别不到且未预设时 doc_type 字段整个
+ *   不发送（buildUploadFormFields），让后端按封面识别，避免必然的 422 冲突；
+ * - A2：上传失败必须读取后端结构化响应体并映射为可读中文（describeUploadFailure），
+ *   呈现"提交值 vs 封面识别值 / 实际大小 vs 系统限制"与下一步建议，
+ *   不再丢弃响应体只报一句"上传失败"。后端校验本身（report_type_conflict /
+ *   report_year_conflict）是保护机制，不得放宽。
  */
 "use client";
 
@@ -38,8 +46,11 @@ import { UploadDropzone } from "./UploadDropzone";
 import { UploadFileList, type UploadFileEntry } from "./UploadFileList";
 import {
   applyManualConfirmationOverride,
+  buildUploadFormFields,
   checkUploadLimit,
+  describeUploadFailure,
   derivePreflightStatus,
+  formatUploadFailureText,
   validateAttribution,
   type ManualConfirmationOverride,
   type PreflightResponseLike,
@@ -75,7 +86,7 @@ export function UploadCenterPage() {
   const [preflightResults, setPreflightResults] = useState<Record<string, PreflightResponseLike>>({});
   /** 单文件人工补齐值：key 是 entry.id，只在用户主动通过"补齐"表单保存后才有记录。 */
   const [manualOverrides, setManualOverrides] = useState<Record<string, ManualConfirmationOverride>>({});
-  const [presets, setPresets] = useState<BatchPresetValues>({ organizationId: "", year: "", docType: "dept_budget" });
+  const [presets, setPresets] = useState<BatchPresetValues>({ organizationId: "", year: "", docType: "" });
   const [attribution, setAttribution] = useState<AttributionSelection>({
     departmentId: "",
     fileLevel: null,
@@ -258,15 +269,30 @@ export function UploadCenterPage() {
         if (effectiveOrgId) {
           formData.set("org_unit_id", effectiveOrgId);
         }
-        const fiscalYear = effectivePreflight?.report_year ? String(effectivePreflight.report_year) : presets.year;
-        if (fiscalYear) {
-          formData.append("fiscal_year", fiscalYear);
+        // 修复 A1：doc_type / fiscal_year 由 buildUploadFormFields 统一解析——
+        // 识别不到且未预设时返回 null，字段整个不发送（不塞空字符串），
+        // 让后端用封面识别结果，避免"前端默认预算 vs 封面识别决算"的必然冲突。
+        const formFields = buildUploadFormFields(effectivePreflight, presets);
+        if (formFields.fiscalYear) {
+          formData.append("fiscal_year", formFields.fiscalYear);
         }
-        formData.append("doc_type", effectivePreflight?.doc_type || presets.docType);
+        if (formFields.docType) {
+          formData.append("doc_type", formFields.docType);
+        }
 
         const response = await fetch("/api/documents/upload", { method: "POST", body: formData });
         if (!response.ok) {
-          throw new Error(`文件 ${entry.file.name} 上传失败`);
+          // 修复 A2：必须读取并如实呈现后端的结构化失败原因（提交值 vs 封面识别值、
+          // 实际大小 vs 系统限制等），不得丢弃响应体只留一句"上传失败"。
+          const payload = (await response.json().catch(() => null)) as unknown;
+          const failureMessage = describeUploadFailure({
+            filename: entry.file.name,
+            status: response.status,
+            payload,
+            fileSizeBytes: entry.file.size,
+            maxUploadMb,
+          });
+          throw new Error(formatUploadFailureText(failureMessage));
         }
         const payload = (await response.json().catch(() => ({}))) as { id?: string; job_id?: string };
         const jobId = payload.id || payload.job_id;
@@ -287,7 +313,7 @@ export function UploadCenterPage() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [attribution, effectivePreflightFor, entries, mode, presets]);
+  }, [attribution, effectivePreflightFor, entries, maxUploadMb, mode, presets]);
 
   return (
     <div className="p-8" data-testid="gbc-upload-center-page">
@@ -367,7 +393,10 @@ export function UploadCenterPage() {
           ) : null}
 
           {submitError ? (
-            <div className="text-xs text-danger-600" data-testid="gbc-upload-submit-error">
+            <div
+              className="whitespace-pre-line rounded-md border border-danger-200 bg-danger-50 px-4 py-3 text-xs leading-5 text-danger-700"
+              data-testid="gbc-upload-submit-error"
+            >
               {submitError}
             </div>
           ) : null}

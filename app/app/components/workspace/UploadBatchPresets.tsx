@@ -3,6 +3,10 @@
  * 对照原型图 02-upload-center.png：批量预设是可选项，应用到后续新增文件的默认值，
  * 不强制覆盖已经过 preflight 识别的字段（识别结果优先于预设，与 BatchUploadModal.tsx
  * 现有"首页识别优先于文件名猜测和默认值"的既有原则一致）。
+ *
+ * 修复 A1：docType 不再预填 "dept_budget"。预填会在上传决算材料时必然触发
+ * 后端 422 report_type_conflict（前端提交"预算"、封面识别为"决算"），
+ * 且旧实现把结构化错误丢弃成一句"上传失败"，用户完全无从排查。
  */
 "use client";
 
@@ -13,7 +17,7 @@ import { flattenOrganizationTree, type OrganizationFilterOption } from "./Organi
 export interface BatchPresetValues {
   organizationId: string;
   year: string;
-  docType: "dept_budget" | "dept_final";
+  docType: "" | "dept_budget" | "dept_final";
 }
 
 export interface UploadBatchPresetsProps {
@@ -106,6 +110,7 @@ export function UploadBatchPresets({ value, onChange }: UploadBatchPresetsProps)
           data-testid="gbc-upload-preset-doctype"
           className="w-full rounded-md border border-border bg-white px-3 py-2 text-sm text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
         >
+          <option value="">不预设</option>
           <option value="dept_budget">部门预算</option>
           <option value="dept_final">部门决算</option>
         </select>

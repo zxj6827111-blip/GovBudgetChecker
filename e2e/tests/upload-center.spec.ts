@@ -401,3 +401,254 @@ test.describe("Upload center (Task 5)", () => {
     await expect(page.getByTestId("gbc-upload-submit")).toBeEnabled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// 修复 A（实机缺陷：上传失败且无原因）
+// A1：批量预设 docType 不得预填 dept_budget；识别不到类型时必须停在"需要确认"，
+//     由用户显式选择，而不是被默认值悄悄放行（旧实现正是实机必然冲突的根因）。
+// A2：上传失败必须把后端结构化错误映射成"提交值 vs 封面识别值 + 建议"，
+//     不得回落成一句笼统的"上传失败"。
+// ---------------------------------------------------------------------------
+
+test.describe("Upload center failure diagnostics (fix A)", () => {
+  const FINAL_PDF = {
+    name: "上海市普陀区人民政府办公室2024年度部门决算.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.4 minimal placeholder content for e2e"),
+  };
+
+  interface FinalDocMockOptions {
+    /** preflight 是否识别出 doc_type（dept_final）；false 模拟封面类型识别失败。 */
+    preflightIdentifiesDocType: boolean;
+    /** upload 接口返回的 HTTP 状态与响应体。 */
+    uploadStatus?: number;
+    uploadBody?: Record<string, unknown>;
+    uploadRequests?: Array<Record<string, unknown>>;
+  }
+
+  async function installFinalDocMocks(page: Page, options: FinalDocMockOptions) {
+    await page.route("**/api/**", async (route) => {
+      const req = route.request();
+      const url = new URL(req.url());
+      const path = url.pathname;
+
+      if (path === "/api/auth/me") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ user: { username: "e2e-user", is_admin: true } }),
+        });
+        return;
+      }
+      if (path === "/api/health") {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok" }) });
+        return;
+      }
+      if (path === "/api/config") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ max_upload_mb: 30, max_upload_pages: 800 }),
+        });
+        return;
+      }
+      if (path === "/api/organizations") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ tree: SAMPLE_ORG_TREE, total: 1 }),
+        });
+        return;
+      }
+      if (path === "/api/documents/preflight") {
+        // 决算材料：年份/组织可识别；doc_type 是否识别由用例控制。
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            filename: FINAL_PDF.name,
+            report_year: 2024,
+            doc_type: options.preflightIdentifiesDocType ? "dept_final" : null,
+            report_kind: options.preflightIdentifiesDocType ? "final" : "unknown",
+            current: {
+              organization_id: "dept-caizheng",
+              organization_name: "上海市普陀区人民政府办公室",
+              level: "department",
+              confidence: 0.9,
+            },
+            suggestions: [],
+            page_count: 40,
+          }),
+        });
+        return;
+      }
+      if (path === "/api/documents/upload") {
+        const bodyText = req.postDataBuffer()?.toString("utf-8") ?? "";
+        options.uploadRequests?.push({ bodyText });
+        if (options.uploadStatus && options.uploadStatus !== 200) {
+          await route.fulfill({
+            status: options.uploadStatus,
+            contentType: "application/json",
+            body: JSON.stringify(options.uploadBody ?? {}),
+          });
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ job_id: "job-final-e2e" }),
+        });
+        return;
+      }
+      if (path === "/api/jobs") {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+        return;
+      }
+
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({}) });
+    });
+  }
+
+  test("REGRESSION: batch preset docType defaults to 不预设 (empty), never dept_budget", async ({ page }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installFinalDocMocks(page, { preflightIdentifiesDocType: true });
+    await page.goto("/upload");
+
+    await expect(page.getByTestId("gbc-upload-preset-doctype")).toHaveValue("");
+    await expect(page.getByTestId("gbc-upload-preset-year")).toHaveValue("");
+  });
+
+  test("REGRESSION: final-account PDF with unidentified doc_type stays 需要确认 instead of being silently auto-filled as dept_budget", async ({
+    page,
+  }) => {
+    const uploadRequests: Array<Record<string, unknown>> = [];
+    await page.context().addCookies([sessionCookie]);
+    await installFinalDocMocks(page, { preflightIdentifiesDocType: false, uploadRequests });
+    await page.goto("/upload");
+
+    const fileInput = page.getByTestId("gbc-upload-file-input");
+    await fileInput.setInputFiles(FINAL_PDF);
+
+    // 旧实现：默认预设 dept_budget 会把这个文件悄悄补成"校验通过"并允许提交，
+    // 结果上传一份决算材料却被按"部门预算"提交。修复后必须停在"需要确认"。
+    const row = page.locator('[data-testid^="gbc-upload-file-row-"]').first();
+    await expect(row).toContainText("需要确认", { timeout: 10_000 });
+    await expect(page.getByTestId("gbc-upload-submit")).toBeDisabled();
+    expect(uploadRequests.length).toBe(0);
+  });
+
+  test("explicitly confirming dept_final sends the real type to the backend and uploads successfully", async ({
+    page,
+  }) => {
+    const uploadRequests: Array<Record<string, unknown>> = [];
+    await page.context().addCookies([sessionCookie]);
+    await installFinalDocMocks(page, { preflightIdentifiesDocType: false, uploadRequests });
+    await page.goto("/upload");
+
+    const fileInput = page.getByTestId("gbc-upload-file-input");
+    await fileInput.setInputFiles(FINAL_PDF);
+
+    const row = page.locator('[data-testid^="gbc-upload-file-row-"]').first();
+    await expect(row).toContainText("需要确认", { timeout: 10_000 });
+
+    // 用户显式选择"部门决算"（而不是被默认值代劳）
+    await page.getByTestId("gbc-upload-preset-doctype").selectOption("dept_final");
+    await expect(row).toContainText("校验通过");
+    await expect(page.getByTestId("gbc-upload-submit")).toBeEnabled();
+
+    await page.getByTestId("gbc-upload-submit").click();
+    await expect.poll(() => uploadRequests.length, { timeout: 10_000 }).toBeGreaterThan(0);
+
+    const bodyText = String(uploadRequests[0]?.bodyText ?? "");
+    expect(bodyText).toContain("dept_final");
+    expect(bodyText).toContain("2024");
+
+    // 上传成功后跳转到 /queue?job=...
+    await expect(page).toHaveURL(/\/queue\?job=job-final-e2e/, { timeout: 15_000 });
+  });
+
+  test("REGRESSION: a 422 type conflict shows submitted vs cover-detected values and an actionable suggestion, never a bare 上传失败", async ({
+    page,
+  }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installFinalDocMocks(page, {
+      preflightIdentifiesDocType: true,
+      uploadStatus: 422,
+      uploadBody: {
+        detail: {
+          error: "report_type_conflict",
+          submitted_doc_type: "dept_budget",
+          detected_doc_type: "dept_final",
+          message: "Submitted document type conflicts with PDF cover metadata.",
+        },
+      },
+    });
+    await page.goto("/upload");
+
+    const fileInput = page.getByTestId("gbc-upload-file-input");
+    await fileInput.setInputFiles(FINAL_PDF);
+
+    const row = page.locator('[data-testid^="gbc-upload-file-row-"]').first();
+    await expect(row).toContainText("校验通过", { timeout: 10_000 });
+
+    await page.getByTestId("gbc-upload-submit").click();
+
+    const errorBox = page.getByTestId("gbc-upload-submit-error");
+    await expect(errorBox).toBeVisible({ timeout: 10_000 });
+    // 必须显示提交值与封面识别值的对照（关键值），而不是笼统失败
+    await expect(errorBox).toContainText("文档类型与封面识别不一致");
+    await expect(errorBox).toContainText("提交类型：部门预算（dept_budget）");
+    await expect(errorBox).toContainText("封面识别：部门决算（dept_final）");
+    // 必须给出下一步建议
+    await expect(errorBox).toContainText("建议：");
+    // 不得把英文 detail 原样 dump
+    await expect(errorBox).not.toContainText("conflicts with PDF cover metadata");
+  });
+
+  test("REGRESSION: a 413 size rejection shows the real file size and the real configured limit", async ({
+    page,
+  }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installFinalDocMocks(page, {
+      preflightIdentifiesDocType: true,
+      uploadStatus: 413,
+      uploadBody: { detail: "File exceeds 30MB limit" },
+    });
+    await page.goto("/upload");
+
+    const fileInput = page.getByTestId("gbc-upload-file-input");
+    await fileInput.setInputFiles(FINAL_PDF);
+
+    await page.locator('[data-testid^="gbc-upload-file-row-"]').first().waitFor({ timeout: 10_000 });
+    await page.getByTestId("gbc-upload-submit").click();
+
+    const errorBox = page.getByTestId("gbc-upload-submit-error");
+    await expect(errorBox).toBeVisible({ timeout: 10_000 });
+    await expect(errorBox).toContainText("大小超过系统限制");
+    // 系统限制值必须来自真实配置（30MB），绝不显示原型图示例值 200MB
+    await expect(errorBox).toContainText("30 MB");
+    await expect(errorBox).not.toContainText("200 MB");
+  });
+
+  test("REGRESSION: a 409 duplicate rejection shows which historical task conflicts", async ({ page }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installFinalDocMocks(page, {
+      preflightIdentifiesDocType: true,
+      uploadStatus: 409,
+      uploadBody: { detail: "检测到重复上传：同名文件.pdf（任务 job-dup-001）" },
+    });
+    await page.goto("/upload");
+
+    const fileInput = page.getByTestId("gbc-upload-file-input");
+    await fileInput.setInputFiles(FINAL_PDF);
+
+    await page.locator('[data-testid^="gbc-upload-file-row-"]').first().waitFor({ timeout: 10_000 });
+    await page.getByTestId("gbc-upload-submit").click();
+
+    const errorBox = page.getByTestId("gbc-upload-submit-error");
+    await expect(errorBox).toBeVisible({ timeout: 10_000 });
+    await expect(errorBox).toContainText("重复");
+    await expect(errorBox).toContainText("job-dup-001");
+    await expect(errorBox).toContainText("建议：");
+  });
+});

@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 
 import {
   applyManualConfirmationOverride,
+  buildUploadFormFields,
   checkUploadLimit,
   derivePreflightStatus,
+  describeUploadFailure,
   formatAttributionBreadcrumb,
   formatFileSizeMb,
   formatPageCountText,
+  formatUploadFailureText,
   formatUnitScopeHint,
   listPreflightConfirmationReasons,
   selectDepartmentOptions,
@@ -238,5 +241,152 @@ assert.deepEqual(applyManualConfirmationOverride(originalWithYearOnly, undefined
 // response 为 null/undefined 时返回空对象基底（不抛错），覆盖值仍能叠加上去
 const fromEmptyBase = applyManualConfirmationOverride(null, { reportYear: "2025" });
 assert.equal(fromEmptyBase.report_year, 2025);
+
+// --- buildUploadFormFields（修复 A1）：doc_type / fiscal_year 何时发送 ------------
+// 反例（核心断言）：预设 docType 默认值为空（不预填 dept_budget），且识别不到时
+// 必须返回 null——null 语义是"该字段整个不进 FormData"，让后端用封面识别结果。
+const EMPTY_PRESETS = { organizationId: "", year: "", docType: "" };
+
+assert.deepEqual(
+  buildUploadFormFields({ report_year: 2024, doc_type: "dept_final" }, EMPTY_PRESETS),
+  { docType: "dept_final", fiscalYear: "2024" },
+  "识别到的值直接作为提交值",
+);
+
+assert.deepEqual(
+  buildUploadFormFields({ report_year: null, doc_type: null }, EMPTY_PRESETS),
+  { docType: null, fiscalYear: null },
+  "REGRESSION: 识别不到且未预设时 doc_type/year 必须为 null（不发送），绝不能回落成 dept_budget 或空字符串——这正是实机决算材料必然 422 的根因",
+);
+
+assert.deepEqual(
+  buildUploadFormFields({ report_year: null, doc_type: null }, { ...EMPTY_PRESETS, docType: "dept_final" }),
+  { docType: "dept_final", fiscalYear: null },
+  "用户显式预设了类型时按预设提交（年份仍不发送）",
+);
+
+assert.deepEqual(
+  buildUploadFormFields({ report_year: null, doc_type: null }, { ...EMPTY_PRESETS, year: "2025" }),
+  { docType: null, fiscalYear: "2025" },
+  "用户显式预设了年份时按预设提交（类型仍不发送）",
+);
+
+// 识别值优先于预设（预设不应该把已识别正确的字段改掉）
+assert.deepEqual(
+  buildUploadFormFields({ report_year: 2024, doc_type: "dept_final" }, { ...EMPTY_PRESETS, docType: "dept_budget", year: "2025" }),
+  { docType: "dept_final", fiscalYear: "2024" },
+  "REGRESSION: 识别到的值必须优先于批量预设，预设不覆盖已识别正确的字段",
+);
+
+assert.deepEqual(
+  buildUploadFormFields(undefined, EMPTY_PRESETS),
+  { docType: null, fiscalYear: null },
+  "无 preflight 响应且未预设时不发送任何字段",
+);
+
+// --- describeUploadFailure（修复 A2）：结构化错误 → 可读可行动的中文 -----------
+
+// 422 report_type_conflict：必须显示提交值 vs 封面识别值（含中文标签），给行动建议
+const typeConflict = describeUploadFailure({
+  filename: "上海市普陀区人民政府办公室2024年度部门决算.pdf",
+  status: 422,
+  payload: {
+    detail: {
+      error: "report_type_conflict",
+      submitted_doc_type: "dept_budget",
+      detected_doc_type: "dept_final",
+      message: "Submitted document type conflicts with PDF cover metadata.",
+    },
+  },
+});
+assert.match(typeConflict.title, /文档类型与封面识别不一致/);
+assert.match(typeConflict.detail ?? "", /部门预算（dept_budget）/);
+assert.match(typeConflict.detail ?? "", /部门决算（dept_final）/);
+assert.match(typeConflict.suggestion ?? "", /改为部门决算|清空类型/);
+assert.ok(!JSON.stringify(typeConflict).includes("conflicts with PDF cover"), "不得把英文 detail 原样 dump 给用户");
+
+// 422 report_year_conflict：显示提交年份 vs 封面识别年份
+const yearConflict = describeUploadFailure({
+  filename: "x.pdf",
+  status: 422,
+  payload: {
+    detail: {
+      error: "report_year_conflict",
+      submitted_year: 2025,
+      detected_year: 2024,
+      message: "Submitted fiscal year conflicts with PDF cover metadata.",
+    },
+  },
+});
+assert.match(yearConflict.title, /年份与封面识别不一致/);
+assert.match(yearConflict.detail ?? "", /提交年份：2025/);
+assert.match(yearConflict.detail ?? "", /封面识别：2024/);
+
+// 413 体积超限：必须显示实际限制值与实际文件值
+const tooLarge = describeUploadFailure({
+  filename: "大文件.pdf",
+  status: 413,
+  payload: { detail: "File exceeds 30MB limit" },
+  fileSizeBytes: 45 * 1024 * 1024,
+  maxUploadMb: 30,
+});
+assert.match(tooLarge.title, /大小超过系统限制/);
+assert.match(tooLarge.detail ?? "", /45\.0 MB/);
+assert.match(tooLarge.detail ?? "", /30 MB/);
+assert.doesNotMatch(tooLarge.detail ?? "", /200 MB/, "REGRESSION: 限制值来自真实配置，绝不显示原型图示例值 200MB");
+
+// 413 页数超限：后端中文 detail 自带实际页数与上限，原样保留关键值
+const tooManyPages = describeUploadFailure({
+  filename: "y.pdf",
+  status: 413,
+  payload: { detail: "PDF页数超过限制：900 页，当前上限为 800 页" },
+});
+assert.match(tooManyPages.title, /页数超过系统限制/);
+assert.match(tooManyPages.detail ?? "", /900 页/);
+assert.match(tooManyPages.detail ?? "", /800 页/);
+
+// 409 重复上传
+const duplicate = describeUploadFailure({
+  filename: "z.pdf",
+  status: 409,
+  payload: { detail: "检测到重复上传：z.pdf（任务 job-123）" },
+});
+assert.match(duplicate.title, /重复/);
+assert.match(duplicate.detail ?? "", /job-123/);
+assert.match(duplicate.suggestion ?? "", /处理队列/);
+
+// 403 / 404 / 503 / 429 / 401
+assert.match(describeUploadFailure({ filename: "a.pdf", status: 403, payload: { detail: "organization access denied" } }).title, /没有权限/);
+assert.match(describeUploadFailure({ filename: "a.pdf", status: 404, payload: { detail: "organization not found" } }).title, /组织不存在/);
+assert.match(describeUploadFailure({ filename: "a.pdf", status: 503, payload: { detail: "organization service unavailable" } }).title, /组织服务暂不可用/);
+assert.match(describeUploadFailure({ filename: "a.pdf", status: 429, payload: { detail: "Too Many Requests" } }).title, /过于频繁/);
+assert.match(describeUploadFailure({ filename: "a.pdf", status: 401, payload: { detail: "not logged in" } }).title, /登录状态已过期/);
+
+// 400 非 PDF
+assert.match(
+  describeUploadFailure({ filename: "a.pdf", status: 400, payload: { detail: "File does not appear to be a valid PDF (invalid signature)" } }).title,
+  /不是有效的 PDF/,
+);
+
+// 反例：未知状态码不得把 detail 原样 dump（可能含内部路径），只显示状态码
+const unknownError = describeUploadFailure({
+  filename: "a.pdf",
+  status: 500,
+  payload: { detail: "Internal error at C:\\\\app\\\\uploads\\\\job-1\\\\src.pdf" },
+});
+assert.ok(!JSON.stringify(unknownError).includes("C:\\\\app"), "未知错误的 detail 不得进入用户可见文案");
+assert.match(unknownError.title, /HTTP 500/);
+
+// payload 为 null（响应体不是 JSON）时不抛错，仍给出可读映射
+const noBody = describeUploadFailure({ filename: "a.pdf", status: 422, payload: null });
+assert.ok(noBody.title.length > 0);
+assert.match(noBody.title, /422|校验/);
+
+// --- formatUploadFailureText：结构化消息拼接（标题/关键值/建议 三段） -----------
+const conflictText = formatUploadFailureText(typeConflict);
+assert.match(conflictText, /文档类型与封面识别不一致/);
+assert.match(conflictText, /提交类型：部门预算（dept_budget）；封面识别：部门决算（dept_final）/);
+assert.match(conflictText, /^建议：/m, "建议行必须以「建议：」开头，用户能据此行动");
+assert.ok(conflictText.includes("\n"), "多段消息用换行分隔，供 whitespace-pre-line 渲染");
 
 console.log("uploadCenterAdapters.test.ts passed");
