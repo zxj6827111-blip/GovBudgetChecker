@@ -228,6 +228,14 @@ def collect_job_metric_record(job_dir: Path) -> Optional[Dict[str, Any]]:
     raw_status = str(payload.get("status") or "")
     result = payload.get("result") if isinstance(payload.get("result"), dict) else None
 
+    # 证据完整率分子分母（UI 重建第四批 Task 7.2 补充）：
+    # - total/complete 缺失时保持 None（历史任务没有 evidence_completeness 留痕），
+    #   与 degraded_count 的"缺失按 0"不同——计数可以缺省为 0，但"率"的分母
+    #   绝不能用 0 冒充，否则空样本会被算成 100% 完整。
+    # - has_evidence_field 单独记录，供聚合层报告真实样本量（带留痕的任务数），
+    #   避免"分母为 0 显示 —"时用户误以为扫描了 0 个任务。
+    has_evidence_field = isinstance(meta.get("evidence_completeness"), dict)
+
     return {
         "job_id": str(payload.get("job_id") or job_dir.name),
         "filename": _basename(payload.get("filename") or payload.get("saved_path")),
@@ -248,6 +256,9 @@ def collect_job_metric_record(job_dir: Path) -> Optional[Dict[str, Any]]:
         "total_stage_ms": total_ms,
         "provider_fallbacks": provider_fallbacks,
         "evidence_degraded_count": _as_int(evidence.get("degraded_count")) or 0,
+        "evidence_total": _as_int(evidence.get("total")) if has_evidence_field else None,
+        "evidence_complete": _as_int(evidence.get("complete")) if has_evidence_field else None,
+        "has_evidence_field": has_evidence_field,
         "formal_issue_total": count_formal_findings(result) if result else 0,
         "report_id": _resolve_report_id(payload),
     }
@@ -415,6 +426,21 @@ def collect_metrics(
         record for record in records if (record.get("status") or "") == JobStatus.ERROR.value
     ]
 
+    # ---- 证据完整率（UI 重建第四批 Task 7.2 补充）----
+    # 口径与 scripts/replay_analysis.py 的 evidence_completeness 一致：
+    # 分母 = 全部 finding 条数（含降级与规则告警条目，取自各任务
+    # result.meta.evidence_completeness.total 的累加），分子 = 证据完整条数。
+    # 红线：分母为 0 时 completeness_rate 必须是 None——
+    # "没有问题"不等于"证据完整"，空样本绝不能被算成 100%。
+    # 历史任务没有 evidence_completeness 留痕，不参与分子分母，
+    # 只计入 jobs_without_field 如实报告样本缺口。
+    evidence_total = sum(int(record.get("evidence_total") or 0) for record in records)
+    evidence_complete = sum(int(record.get("evidence_complete") or 0) for record in records)
+    jobs_without_evidence_field = sum(
+        1 for record in records if not record.get("has_evidence_field")
+    )
+    formal_issue_total = sum(int(record.get("formal_issue_total") or 0) for record in records)
+
     return {
         "generated_at": reference,
         "uploads_root": uploads_root.as_posix(),
@@ -460,6 +486,16 @@ def collect_metrics(
             "evidence_degraded_findings": sum(
                 int(record.get("evidence_degraded_count") or 0) for record in records
             ),
+            # 正式问题总数（count_formal_findings 口径的唯一聚合出口，Task 7.2 补充）
+            "formal_issue_total": formal_issue_total,
+            "evidence_completeness": {
+                "findings_total": evidence_total,
+                "findings_complete": evidence_complete,
+                "completeness_rate": round(evidence_complete / evidence_total, 4)
+                if evidence_total
+                else None,
+                "jobs_without_field": jobs_without_evidence_field,
+            },
         },
         "report_id": report_id_uniqueness(records),
     }
@@ -572,6 +608,18 @@ def render_prometheus(metrics: Dict[str, Any]) -> str:
         "evidence_degraded_findings",
         "因缺证据被降级的问题条数",
         quality.get("evidence_degraded_findings"),
+    )
+    lines += _prom_lines(
+        "formal_issue_total",
+        "正式问题总数（count_formal_findings 口径）",
+        quality.get("formal_issue_total"),
+    )
+    # 证据完整率：空样本（分母为 0）时为 None，_prom_lines 会直接省略该行，
+    # 绝不输出 0 或 1 冒充"全部不完整"或"全部完整"。
+    lines += _prom_lines(
+        "evidence_completeness_rate",
+        "正式问题证据完整率（空样本时无此指标）",
+        (quality.get("evidence_completeness") or {}).get("completeness_rate"),
     )
     lines += _prom_lines(
         "report_id_collision_count", "report_id 冲突数", report_id.get("collision_count")

@@ -55,6 +55,9 @@ def _write_job(
     provider_fell_back: bool = False,
     degraded_findings: int = 0,
     ts: Optional[float] = None,
+    evidence: Optional[Dict[str, Any]] = None,
+    omit_evidence_field: bool = False,
+    findings: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     job_dir = uploads / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -66,8 +69,13 @@ def _write_job(
             for key, value in (("rule", rule_ms), ("ai", ai_ms))
             if value is not None
         },
-        "evidence_completeness": {"degraded_count": degraded_findings},
     }
+    # evidence=None 且不省略字段时保持原有默认形态（只带 degraded_count，
+    # 模拟"有留痕但未写 total/complete"的最小产物）；显式传入 evidence dict
+    # 时原样写入（新任务的完整留痕）；omit_evidence_field=True 模拟历史任务
+    # 完全没有 evidence_completeness 字段。
+    if not omit_evidence_field:
+        meta["evidence_completeness"] = evidence or {"degraded_count": degraded_findings}
     if started_at is not None:
         meta["started_at"] = started_at
     if finished_at is not None:
@@ -84,7 +92,15 @@ def _write_job(
         "report_year": report_year,
         "quality_status": quality_status,
         "use_ai_assist": use_ai_assist,
-        "result": {"issues": {"all": [], "error": [], "warn": [], "info": []}, "meta": meta},
+        "result": {
+            "issues": {
+                "all": findings if findings is not None else [],
+                "error": [],
+                "warn": [],
+                "info": [],
+            },
+            "meta": meta,
+        },
     }
     if analysis_conclusion is not None:
         payload["analysis_conclusion"] = analysis_conclusion
@@ -275,6 +291,136 @@ def test_replay_script_shares_the_same_collision_definition():
         {"job_id": "j2", "report_id": "r1", "checksum": "c2"},
     ]
     assert replay_analysis._report_id_uniqueness(records) == report_id_uniqueness(records)
+
+
+# ---------------------------------------------------------------------------
+# 2.5 证据完整率与正式问题聚合（UI 重建第四批 Task 7.2 补充）
+# ---------------------------------------------------------------------------
+def test_evidence_completeness_rate_aggregates_across_jobs(tmp_path):
+    """正例：多个任务的 total/complete 分别累加后计算比率。"""
+    _write_job(
+        tmp_path,
+        "job-a",
+        status="done",
+        evidence={"total": 10, "complete": 9, "degraded_count": 1},
+    )
+    _write_job(
+        tmp_path,
+        "job-b",
+        status="done",
+        evidence={"total": 5, "complete": 5, "degraded_count": 0},
+    )
+
+    metrics = collect_metrics(tmp_path, now=FIXED_NOW)
+
+    assert metrics["quality"]["evidence_completeness"] == {
+        "findings_total": 15,
+        "findings_complete": 14,
+        "completeness_rate": round(14 / 15, 4),
+        "jobs_without_field": 0,
+    }
+
+
+def test_evidence_completeness_rate_is_none_when_denominator_is_zero(tmp_path):
+    """反例（红线）：分母为 0 时必须是 None，绝不能算成 100% 或 0。
+
+    场景一：任务带 evidence_completeness 留痕但没有任何 finding（total=0）。
+    场景二：完全没有任务。
+    两种都是"没有可判定的样本"，语义是未知，不是"全部完整"。
+    """
+    _write_job(
+        tmp_path,
+        "job-clean",
+        status="done",
+        evidence={"total": 0, "complete": 0, "degraded_count": 0},
+    )
+
+    metrics = collect_metrics(tmp_path, now=FIXED_NOW)
+    assert metrics["quality"]["evidence_completeness"]["findings_total"] == 0
+    assert metrics["quality"]["evidence_completeness"]["completeness_rate"] is None
+
+    empty_metrics = collect_metrics(tmp_path / "not-used", now=FIXED_NOW)
+    assert empty_metrics["quality"]["evidence_completeness"]["completeness_rate"] is None
+
+
+def test_evidence_completeness_excludes_jobs_without_field(tmp_path):
+    """历史任务（无 evidence_completeness 留痕）不参与分子分母，只计入缺口计数。
+
+    这是与 replay 脚本"recorded/recomputed"区分同一件事的指标侧表达：
+    运行时指标不做深拷贝重算（性能原因），所以拿不到留痕的任务
+    必须显式报告为样本缺口，而不是按 0 拉低或抬高比率。
+    """
+    _write_job(
+        tmp_path,
+        "job-new",
+        status="done",
+        evidence={"total": 4, "complete": 4, "degraded_count": 0},
+    )
+    # 两个历史任务：没有 evidence_completeness 字段，也没有任何 finding
+    _write_job(tmp_path, "job-legacy-1", status="done", omit_evidence_field=True)
+    _write_job(tmp_path, "job-legacy-2", status="done", omit_evidence_field=True)
+
+    metrics = collect_metrics(tmp_path, now=FIXED_NOW)
+
+    assert metrics["quality"]["evidence_completeness"] == {
+        "findings_total": 4,
+        "findings_complete": 4,
+        "completeness_rate": 1.0,
+        "jobs_without_field": 2,
+    }
+
+
+def test_formal_issue_total_aggregates_with_count_formal_findings(tmp_path):
+    """正例：formal_issue_total 聚合 = 各任务 count_formal_findings 之和。
+
+    带一条降级 finding（evidence_status=degraded_missing_evidence）验证
+    降级条目不计入正式问题——这是 count_formal_findings 的唯一口径，
+    聚合层不得另算一套。
+    """
+    from src.services.evidence_guard import EVIDENCE_STATUS_DEGRADED
+
+    _write_job(
+        tmp_path,
+        "job-a",
+        status="done",
+        findings=[
+            {"id": "f1", "evidence_status": "complete"},
+            {"id": "f2", "evidence_status": "complete"},
+        ],
+    )
+    _write_job(
+        tmp_path,
+        "job-b",
+        status="done",
+        findings=[
+            {"id": "f3", "evidence_status": EVIDENCE_STATUS_DEGRADED},
+            {"id": "f4"},
+        ],
+    )
+
+    metrics = collect_metrics(tmp_path, now=FIXED_NOW)
+
+    # job-a 2 条正式 + job-b 1 条正式（f3 已降级不计入，f4 无状态按正式处理）
+    assert metrics["quality"]["formal_issue_total"] == 3
+
+
+def test_prometheus_renders_evidence_and_formal_metrics(tmp_path):
+    """Prometheus 输出包含新指标；空样本时完整率指标必须整行省略。"""
+    # 有样本：渲染完整率
+    _write_job(
+        tmp_path,
+        "job-a",
+        status="done",
+        evidence={"total": 10, "complete": 10, "degraded_count": 0},
+    )
+    text = render_prometheus(collect_metrics(tmp_path, now=FIXED_NOW))
+    assert "govbudget_formal_issue_total 0" in text
+    assert "govbudget_evidence_completeness_rate 1.0" in text
+
+    # 空样本：完整率省略（不是 0，不是 1），formal_issue_total 如实输出 0
+    empty_text = render_prometheus(collect_metrics(tmp_path / "none", now=FIXED_NOW))
+    assert "govbudget_evidence_completeness_rate" not in empty_text
+    assert "govbudget_formal_issue_total 0" in empty_text
 
 
 # ---------------------------------------------------------------------------
