@@ -25,6 +25,14 @@ export interface Problem {
   actualName?: string;
   codeLevel?: string;
   sourceOfTruth?: string;
+  /**
+   * 证据完整性状态（src/services/evidence_guard.py 的 evidence_status 字段）。
+   * "degraded_missing_evidence" 表示这是一条因缺证据被降级为待复核的 AI finding，
+   * 用户有权知道哪条证据不完整——这是 M2 evidence_guard 成果第一次在前端露面
+   * （Task 6 审核工作台新增，旧 task-review 组件未消费此字段，属于纯新增能力，
+   * 不改变旧组件已有行为）。历史产物没有该字段时为 undefined，不视为降级。
+   */
+  evidenceStatus?: string;
 }
 
 export interface Task {

@@ -1,11 +1,17 @@
-import { WorkspacePlaceholderPage } from "@/components/workspace/WorkspacePlaceholderPage";
+import { Suspense } from "react";
+
+import { ReviewWorkbenchPage } from "@/components/review-workbench/ReviewWorkbenchPage";
 
 export default function ReviewPage() {
   return (
-    <WorkspacePlaceholderPage
-      title="审核工作台"
-      desc="页面缩略图、PDF 证据高亮与审核问题三栏协同复核。"
-      implementingTask={6}
-    />
+    <Suspense
+      fallback={
+        <div className="flex h-full items-center justify-center">
+          <span className="text-sm text-slate-500">正在加载…</span>
+        </div>
+      }
+    >
+      <ReviewWorkbenchPage />
+    </Suspense>
   );
 }

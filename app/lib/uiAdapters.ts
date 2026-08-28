@@ -50,6 +50,8 @@ export interface JobSummaryRecord {
   /** 前置修复 2：任务总耗时（毫秒）。finished_at-started_at 优先，elapsed_ms.total 兜底；
    *  两者都拿不到时为 null（历史任务常见），UI 必须显示"—"，不得显示 0 或估算值。 */
   elapsed_ms?: number | null;
+  /** 结构化入库的报告编号（ps_sync.report_id），Task 6 元数据 tab 展示用。 */
+  structured_report_id?: string | null;
   [key: string]: unknown;
 }
 
@@ -749,6 +751,7 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
         actualName: String(issue.actual_name ?? rawLocation.actual_name ?? ""),
         codeLevel: String(issue.code_level ?? rawLocation.code_level ?? ""),
         sourceOfTruth: String(issue.source_of_truth ?? rawLocation.source_of_truth ?? ""),
+        evidenceStatus: issue.evidence_status ? String(issue.evidence_status) : undefined,
       };
     });
 }
