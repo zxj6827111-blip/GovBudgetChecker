@@ -1,5 +1,18 @@
 "use client";
 
+/**
+ * 登录页（修复 C：纳入设计系统）。
+ *
+ * 此前登录页的蓝色不来自任何色号类名，而是硬编码在 className 任意值里的
+ * RGB 渐变（rgba(59,130,246) = Tailwind blue-500），既躲过 blue-* 类名扫描，
+ * 也不受 primary 令牌控制。本文件现在只用语义令牌：
+ * - 背景：surface-50→surface-100 渐变 + primary-100 顶部柔光；
+ * - Logo 色块：brand-900（UI_COLOR_TOKEN_MAPPING.md 的 Logo 取色）；
+ * - 主按钮：primary-600/700（与新 UI 主按钮同源）；
+ * - 错误提示：danger-*；卡片阴影：shadow-float（令牌阴影，替代硬编码 rgba）。
+ * 防回归由 app/tests/hardcodedColorGuard.test.ts 把关。
+ */
+
 import { FormEvent, useEffect, useState } from "react";
 
 function normalizeNextPath(rawPath: string | null): string {
@@ -112,18 +125,28 @@ export default function LoginPage() {
 
   if (checking) {
     return (
-      <div className="grid min-h-[100dvh] place-items-center bg-slate-100 px-4">
+      <div className="grid min-h-[100dvh] place-items-center bg-surface-100 px-4">
         <div className="text-slate-600">正在检查登录状态...</div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-[100dvh] bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.16),_transparent_38%),linear-gradient(180deg,_#f8fafc_0%,_#e2e8f0_100%)] px-4 py-8">
-      <div className="grid min-h-[calc(100dvh-4rem)] place-items-center">
+    <div className="relative min-h-[100dvh] overflow-hidden bg-gradient-to-b from-surface-50 to-surface-100 px-4 py-8">
+      {/* 顶部柔光：以 primary-100 令牌叠出（替代原先硬编码 rgba(59,130,246) 的
+          radial-gradient——那是不受令牌控制的 Tailwind blue-500，登录页因此
+          游离在设计系统之外）。 */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[44vh] overflow-hidden"
+      >
+        <div className="absolute left-1/2 top-[-55%] h-[75vh] w-[130vw] -translate-x-1/2 rounded-[100%] bg-primary-100/60 blur-2xl" />
+      </div>
+
+      <div className="relative grid min-h-[calc(100dvh-4rem)] place-items-center">
         <div className="w-full max-w-[460px]">
           <div className="mb-6 flex items-center justify-center gap-3 text-slate-900">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-900 text-sm font-bold text-white shadow-lg">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-900 text-sm font-bold text-white shadow-lg">
               GC
             </div>
             <div>
@@ -132,7 +155,7 @@ export default function LoginPage() {
             </div>
           </div>
 
-          <div className="rounded-[28px] border border-white/70 bg-white/92 p-8 shadow-[0_20px_60px_rgba(15,23,42,0.18)] backdrop-blur">
+          <div className="rounded-[28px] border border-white/70 bg-white/90 p-8 shadow-float backdrop-blur">
             <h1 className="text-2xl font-semibold text-slate-900">登录系统</h1>
             <p className="mt-2 text-sm text-slate-600">
               请输入用户名和密码进入当前审校工作台。
@@ -144,7 +167,7 @@ export default function LoginPage() {
                 <input
                   value={username}
                   onChange={(event) => setUsername(event.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3 py-3 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  className="w-full rounded-xl border border-slate-300 px-3 py-3 outline-none transition focus:border-primary-500 focus:ring-2 focus:ring-primary-100"
                   placeholder="例如：admin"
                   autoComplete="username"
                   disabled={loading}
@@ -157,7 +180,7 @@ export default function LoginPage() {
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   type="password"
-                  className="w-full rounded-xl border border-slate-300 px-3 py-3 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  className="w-full rounded-xl border border-slate-300 px-3 py-3 outline-none transition focus:border-primary-500 focus:ring-2 focus:ring-primary-100"
                   placeholder="请输入密码"
                   autoComplete="current-password"
                   disabled={loading}
@@ -165,7 +188,7 @@ export default function LoginPage() {
               </label>
 
               {error ? (
-                <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                <div className="rounded-xl border border-danger-200 bg-danger-50 px-3 py-2 text-sm text-danger-700">
                   {error}
                 </div>
               ) : null}
@@ -173,7 +196,7 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-500"
+                className="w-full rounded-xl bg-primary-600 px-4 py-3 text-sm font-medium text-white transition hover:bg-primary-700 disabled:cursor-not-allowed disabled:bg-primary-300"
               >
                 {loading ? "登录中..." : "登录"}
               </button>
