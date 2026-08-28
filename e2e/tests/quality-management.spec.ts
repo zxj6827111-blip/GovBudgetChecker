@@ -254,7 +254,10 @@ test.describe("Quality management (Task 7)", () => {
     await installQualityMocks(page, { isAdmin: false });
     await page.goto("/quality");
 
-    await expect(page).toHaveURL(/\/workbench/);
+    // 超时放宽到 15s：重定向依赖客户端 /api/auth/me 往返 + router.replace，
+    // 全量套件并行跑在 next dev 上时首访编译可能占用大部分默认 5s 预算
+    // （同一 flake 模式见 playwright.config.ts 顶部注释）。
+    await expect(page).toHaveURL(/\/workbench/, { timeout: 15_000 });
     // 被拦后不得渲染质量管理内容
     await expect(page.getByTestId("gbc-quality-page")).toHaveCount(0);
   });

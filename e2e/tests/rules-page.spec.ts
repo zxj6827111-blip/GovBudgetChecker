@@ -173,7 +173,8 @@ test.describe("Rules & versions page (Task 8.3)", () => {
     await installRulesMocks(page, { isAdmin: false });
     await page.goto("/rules");
 
-    await expect(page).toHaveURL(/\/workbench/);
+    // 超时放宽原因见 quality-management.spec.ts 同名用例注释（dev-server 并行抢占）
+    await expect(page).toHaveURL(/\/workbench/, { timeout: 15_000 });
     await expect(page.getByTestId("gbc-rules-page")).toHaveCount(0);
   });
 

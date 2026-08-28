@@ -117,7 +117,8 @@ test.describe("Settings page (Task 8.4)", () => {
     await installSettingsMocks(page, { isAdmin: false });
     await page.goto("/settings");
 
-    await expect(page).toHaveURL(/\/workbench/);
+    // 超时放宽原因见 quality-management.spec.ts 同名用例注释（dev-server 并行抢占）
+    await expect(page).toHaveURL(/\/workbench/, { timeout: 15_000 });
     await expect(page.getByTestId("gbc-settings-page")).toHaveCount(0);
   });
 
