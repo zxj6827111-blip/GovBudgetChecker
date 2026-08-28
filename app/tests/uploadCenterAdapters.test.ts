@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 
 import {
+  applyManualConfirmationOverride,
   checkUploadLimit,
   derivePreflightStatus,
   formatAttributionBreadcrumb,
   formatFileSizeMb,
   formatPageCountText,
   formatUnitScopeHint,
+  listPreflightConfirmationReasons,
   selectDepartmentOptions,
   selectUnitOptionsForDepartment,
   validateAttribution,
@@ -163,5 +165,78 @@ assert.equal(formatPageCountText(48), "48 页");
 assert.equal(formatPageCountText(null), "—", "REGRESSION: 页数未知(尚未从preflight拿到)必须显示 em dash，不得猜一个数字");
 assert.equal(formatPageCountText(undefined), "—");
 assert.notEqual(formatPageCountText(null), "0 页", "REGRESSION: 页数未知绝不能显示成 0 页");
+
+// --- listPreflightConfirmationReasons / applyManualConfirmationOverride ------
+// 前置修复 1：分析前确认闸门。needs_confirmation 必须有真实可用的补齐路径，
+// 且补齐后的状态转换必须真实生效（不是前端单方面改标记）。
+
+assert.deepEqual(listPreflightConfirmationReasons(null), [], "无 preflight 响应时没有可列出的缺失原因");
+assert.deepEqual(listPreflightConfirmationReasons(undefined), []);
+
+assert.deepEqual(
+  listPreflightConfirmationReasons({
+    report_year: 2026,
+    doc_type: "dept_budget",
+    current: { organization_id: "org-1", organization_name: "x", level: "department", confidence: 0.9 },
+  }),
+  [],
+  "三项齐全时不应列出任何缺失原因",
+);
+
+assert.deepEqual(
+  listPreflightConfirmationReasons({ report_year: null, doc_type: "dept_budget", current: null }),
+  ["missing_report_year", "low_confidence_org"],
+  "REGRESSION: 必须精确列出缺失的是哪几项（年份+组织），不是笼统的一个布尔值，否则 UI 无法告诉用户具体缺什么",
+);
+
+assert.deepEqual(
+  listPreflightConfirmationReasons({ report_year: 2026, doc_type: null, current: { organization_id: "o", organization_name: "x", level: "department", confidence: 0.9 } }),
+  ["missing_doc_type"],
+);
+
+// applyManualConfirmationOverride：只补缺失字段，不覆盖已识别正确的字段 ---------
+
+const originalWithYearOnly: import("../app/components/workspace/uploadCenterAdapters").PreflightResponseLike = {
+  report_year: 2026,
+  doc_type: null,
+  current: null,
+};
+
+const afterOverride = applyManualConfirmationOverride(originalWithYearOnly, {
+  docType: "dept_final",
+  organizationId: "org-9",
+  organizationName: "上海市普陀区财政局",
+});
+assert.equal(afterOverride.report_year, 2026, "已经识别正确的年份不应被覆盖值污染");
+assert.equal(afterOverride.doc_type, "dept_final", "缺失的文档类型必须被覆盖值补齐");
+assert.equal(afterOverride.current?.organization_id, "org-9", "缺失的组织必须被覆盖值补齐");
+assert.equal(afterOverride.current?.confidence, 1, "人工选择视为完全确认，置信度记为 1");
+
+// 补齐后必须能通过 derivePreflightStatus 重新判定为 passed（状态转换真实生效，
+// 不是前端单方面改一个标记而后端仍收到空值）——这是"反例：补齐后必须能提交"的核心。
+assert.equal(
+  derivePreflightStatus(afterOverride),
+  "passed",
+  "REGRESSION: 补齐全部缺失字段后，derivePreflightStatus 必须重新判定为 passed，否则闸门变成死路",
+);
+
+// 反例：只补了一部分缺失字段时仍应是 needs_confirmation（不能因为补了一项就整体放行）
+const partiallyFixed = applyManualConfirmationOverride(
+  { report_year: null, doc_type: null, current: null },
+  { reportYear: "2026" },
+);
+assert.equal(
+  derivePreflightStatus(partiallyFixed),
+  "needs_confirmation",
+  "REGRESSION: 只补齐年份、doc_type/组织仍缺失时，必须仍是 needs_confirmation，不能整体误判为 passed",
+);
+
+// override 为 null/undefined 时原样返回（幂等，不抛错）
+assert.deepEqual(applyManualConfirmationOverride(originalWithYearOnly, null), originalWithYearOnly);
+assert.deepEqual(applyManualConfirmationOverride(originalWithYearOnly, undefined), originalWithYearOnly);
+
+// response 为 null/undefined 时返回空对象基底（不抛错），覆盖值仍能叠加上去
+const fromEmptyBase = applyManualConfirmationOverride(null, { reportYear: "2025" });
+assert.equal(fromEmptyBase.report_year, 2025);
 
 console.log("uploadCenterAdapters.test.ts passed");

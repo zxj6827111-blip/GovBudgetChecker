@@ -103,6 +103,81 @@ async function installUploadCenterMocks(page: Page, options: MockOptions = {}) {
   });
 }
 
+/** 前置修复 1 专用：preflight 响应缺年份（低置信度场景），供确认闸门 e2e 测试使用。 */
+async function installUploadCenterMocksWithMissingYear(page: Page, uploadRequests: Array<Record<string, unknown>>) {
+  await page.route("**/api/**", async (route) => {
+    const req = route.request();
+    const url = new URL(req.url());
+    const path = url.pathname;
+
+    if (path === "/api/auth/me") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ user: { username: "e2e-user", is_admin: true } }),
+      });
+      return;
+    }
+    if (path === "/api/health") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok" }) });
+      return;
+    }
+    if (path === "/api/config") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ max_upload_mb: 30, max_upload_pages: 800 }),
+      });
+      return;
+    }
+    if (path === "/api/organizations") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ tree: SAMPLE_ORG_TREE, total: 1 }),
+      });
+      return;
+    }
+    if (path === "/api/documents/preflight") {
+      // 关键：report_year 为 null，模拟"无法识别年份"的低置信度场景。
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          filename: "扫描件_预算执行情况说明.pdf",
+          report_year: null,
+          doc_type: "dept_budget",
+          report_kind: "budget",
+          current: { organization_id: "dept-caizheng", organization_name: "上海市普陀区财政局", level: "department", confidence: 0.9 },
+          suggestions: [],
+          page_count: 22,
+        }),
+      });
+      return;
+    }
+    if (path === "/api/documents/upload") {
+      const formData = req.postDataBuffer();
+      // Playwright 的 route 无法直接拿到 multipart 字段值的结构化解析，因此这里
+      // 用简单的文本查找断言请求体里确实带上了补齐后的年份，而不是解析完整
+      // multipart（这是"补齐值真正进入上传请求"这条反例最直接的证据来源）。
+      const bodyText = formData ? formData.toString("utf-8") : "";
+      uploadRequests.push({ bodyText });
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ job_id: "job-created-by-e2e" }),
+      });
+      return;
+    }
+    if (path === "/api/jobs") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+      return;
+    }
+
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({}) });
+  });
+}
+
 test.describe("Upload center (Task 5)", () => {
   test("REGRESSION: dropzone shows the real configured upload limit, never the prototype's 200MB placeholder", async ({
     page,
@@ -229,5 +304,100 @@ test.describe("Upload center (Task 5)", () => {
     await expect(breadcrumb).toContainText("上海市普陀区财政局（本级单位）");
     // 同名处理规则说明必须存在，且文案与实现口径一致
     await expect(page.getByTestId("gbc-attribution-same-name-notice")).toContainText("部门 ID + 单位 ID + 层级类型");
+  });
+
+  // -------------------------------------------------------------------------
+  // 前置修复 1：分析前确认闸门（决策 B——真的实现这个闸门，让文案成立）
+  // -------------------------------------------------------------------------
+
+  test("REGRESSION: needs_confirmation file blocks submission, and the submit button is disabled", async ({
+    page,
+  }) => {
+    const uploadRequests: Array<Record<string, unknown>> = [];
+    await page.context().addCookies([sessionCookie]);
+    await installUploadCenterMocksWithMissingYear(page, uploadRequests);
+    await page.goto("/upload");
+
+    const fileInput = page.getByTestId("gbc-upload-file-input");
+    await fileInput.setInputFiles({
+      name: "扫描件_预算执行情况说明.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("%PDF-1.4 minimal placeholder content for e2e"),
+    });
+
+    const row = page.locator('[data-testid^="gbc-upload-file-row-"]').first();
+    await expect(row).toContainText("需要确认", { timeout: 10_000 });
+
+    // 核心反例：存在未解决的 needs_confirmation 文件时，提交按钮必须被禁用。
+    await expect(page.getByTestId("gbc-upload-submit")).toBeDisabled();
+    // 拦截原因必须明确写出来，不能只是禁用按钮却不说明为什么。
+    await expect(page.getByTestId("gbc-upload-confirmation-blocking-notice")).toContainText("1 个文件需要确认");
+
+    // 确认过程中不应该发生任何真实上传请求（防止"看起来禁用了，其实点了也会提交"）。
+    expect(uploadRequests.length).toBe(0);
+  });
+
+  test("REGRESSION: filling the missing year via the per-file 补齐 form unblocks submission and the real value reaches the backend", async ({
+    page,
+  }) => {
+    const uploadRequests: Array<Record<string, unknown>> = [];
+    await page.context().addCookies([sessionCookie]);
+    await installUploadCenterMocksWithMissingYear(page, uploadRequests);
+    await page.goto("/upload");
+
+    const fileInput = page.getByTestId("gbc-upload-file-input");
+    await fileInput.setInputFiles({
+      name: "扫描件_预算执行情况说明.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("%PDF-1.4 minimal placeholder content for e2e"),
+    });
+
+    const row = page.locator('[data-testid^="gbc-upload-file-row-"]').first();
+    await expect(row).toContainText("需要确认", { timeout: 10_000 });
+    await expect(page.getByTestId("gbc-upload-submit")).toBeDisabled();
+
+    // 单文件补齐：点击"补齐"展开表单，只填年份（该文件只缺年份，其它字段已识别正确）。
+    const toggleButton = page.locator('[data-testid^="gbc-upload-file-confirm-toggle-"]').first();
+    await toggleButton.click();
+    await expect(page.getByTestId("gbc-upload-confirmation-panel")).toBeVisible();
+    await page.getByTestId("gbc-upload-confirm-year").selectOption("2026");
+    await page.getByTestId("gbc-upload-confirm-save").click();
+
+    // 反例（防止把闸门做成死路）：补齐后必须能提交。
+    await expect(page.getByTestId("gbc-upload-submit")).toBeEnabled();
+    await expect(row).toContainText("校验通过");
+
+    await page.getByTestId("gbc-upload-submit").click();
+
+    // 等待真实上传请求发生，并断言请求体里确实带上了补齐后的年份 2026——
+    // 不是仅前端把徽章改绿，后端仍收到空年份。
+    await expect.poll(() => uploadRequests.length, { timeout: 10_000 }).toBeGreaterThan(0);
+    const bodyText = String(uploadRequests[0]?.bodyText ?? "");
+    expect(bodyText).toContain("2026");
+  });
+
+  test("REGRESSION: batch preset year fixes a needs_confirmation file without requiring per-file editing", async ({
+    page,
+  }) => {
+    const uploadRequests: Array<Record<string, unknown>> = [];
+    await page.context().addCookies([sessionCookie]);
+    await installUploadCenterMocksWithMissingYear(page, uploadRequests);
+    await page.goto("/upload");
+
+    const fileInput = page.getByTestId("gbc-upload-file-input");
+    await fileInput.setInputFiles({
+      name: "扫描件_预算执行情况说明.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("%PDF-1.4 minimal placeholder content for e2e"),
+    });
+
+    const row = page.locator('[data-testid^="gbc-upload-file-row-"]').first();
+    await expect(row).toContainText("需要确认", { timeout: 10_000 });
+
+    // 用批量预设的年份下拉补齐（而不是逐文件编辑），验证预设值会喂回 preflight 状态。
+    await page.getByTestId("gbc-upload-preset-year").selectOption(String(new Date().getFullYear()));
+
+    await expect(row).toContainText("校验通过");
+    await expect(page.getByTestId("gbc-upload-submit")).toBeEnabled();
   });
 });

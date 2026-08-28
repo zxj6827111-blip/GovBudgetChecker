@@ -14,6 +14,17 @@
  *
  * 校验状态接 `/api/documents/preflight`，"需要确认"只来自真实低置信度判定
  * （derivePreflightStatus()），不按文件名猜测。
+ *
+ * 前置修复 1（分析前确认闸门，决策 B——真的实现这个闸门）：
+ * banner 文案写着"低置信度元数据将在任务进入规则分析前要求人工确认"，
+ * 因此存在未解决的 needs_confirmation 文件时 canSubmit 必须为 false
+ * （见下方 canSubmit 计算），且必须提供真实解决路径：
+ * - 批量预设：应用到全部文件缺失的对应字段（只补缺失项，不覆盖已识别正确的字段）；
+ * - 单文件补齐（UploadConfirmationPanel）：当同一批文件缺失项不同（例如文件 A
+ *   缺年份、文件 B 缺组织）时，批量预设无法同时解决两者，因此还需要逐文件覆盖。
+ * 补齐后的有效值通过 effectivePreflightFor() 统一计算，提交时使用这份有效值
+ * （而非原始 preflight 响应），确保后端真正收到用户补齐后的数据，不是前端
+ * 单方面把徽章改绿。
  */
 "use client";
 
@@ -26,9 +37,11 @@ import { UploadBatchPresets, type BatchPresetValues } from "./UploadBatchPresets
 import { UploadDropzone } from "./UploadDropzone";
 import { UploadFileList, type UploadFileEntry } from "./UploadFileList";
 import {
+  applyManualConfirmationOverride,
   checkUploadLimit,
   derivePreflightStatus,
   validateAttribution,
+  type ManualConfirmationOverride,
   type PreflightResponseLike,
 } from "./uploadCenterAdapters";
 
@@ -43,12 +56,25 @@ function createFileEntryId(file: File): string {
   return `${file.name}::${file.size}::${file.lastModified}::${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** 把批量预设的组织/年份/文档类型转换成 applyManualConfirmationOverride 能消费的覆盖值。
+ *  年份/文档类型直接转发；组织只有 organizationId 时（批量预设下拉未强制携带名称），
+ *  organizationName 留空——不影响提交（提交只用 id），只影响 UI 展示文案的完整度。 */
+function presetsToOverride(presets: BatchPresetValues): ManualConfirmationOverride {
+  return {
+    reportYear: presets.year || undefined,
+    docType: presets.docType || undefined,
+    organizationId: presets.organizationId || undefined,
+  };
+}
+
 export function UploadCenterPage() {
   const [mode, setMode] = useState<UploadMode>("basic");
   const [maxUploadMb, setMaxUploadMb] = useState<number | null>(null);
   const [maxUploadPages, setMaxUploadPages] = useState<number | null>(null);
   const [entries, setEntries] = useState<UploadFileEntry[]>([]);
   const [preflightResults, setPreflightResults] = useState<Record<string, PreflightResponseLike>>({});
+  /** 单文件人工补齐值：key 是 entry.id，只在用户主动通过"补齐"表单保存后才有记录。 */
+  const [manualOverrides, setManualOverrides] = useState<Record<string, ManualConfirmationOverride>>({});
   const [presets, setPresets] = useState<BatchPresetValues>({ organizationId: "", year: "", docType: "dept_budget" });
   const [attribution, setAttribution] = useState<AttributionSelection>({
     departmentId: "",
@@ -142,7 +168,39 @@ export function UploadCenterPage() {
       delete next[id];
       return next;
     });
+    setManualOverrides((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   }, []);
+
+  /** 前置修复 1：保存单文件补齐值——只记录覆盖，不直接修改 preflightResults，
+   *  真正的"有效 preflight"由 effectivePreflightFor() 在渲染/提交时统一计算，
+   *  避免"原始识别结果"与"人工补齐值"两份数据源互相覆盖后无法区分。 */
+  const handleManualConfirm = useCallback((entryId: string, override: ManualConfirmationOverride) => {
+    setManualOverrides((prev) => ({ ...prev, [entryId]: override }));
+  }, []);
+
+  /** 计算某个文件"补齐后的有效 preflight"：先叠加批量预设，再叠加该文件的单文件
+   *  人工覆盖（单文件覆盖优先级更高——用户专门为这个文件填的值，不应该被批量预设
+   *  的全局值覆盖回去）。 */
+  const effectivePreflightFor = useCallback(
+    (entryId: string): PreflightResponseLike | undefined => {
+      const raw = preflightResults[entryId];
+      if (!raw) {
+        return raw;
+      }
+      const afterPresets =
+        mode === "basic" ? applyManualConfirmationOverride(raw, presetsToOverride(presets)) : raw;
+      const manualOverride = manualOverrides[entryId];
+      if (!manualOverride) {
+        return afterPresets;
+      }
+      return applyManualConfirmationOverride(afterPresets, manualOverride);
+    },
+    [manualOverrides, mode, preflightResults, presets],
+  );
 
   const uploadLimitViolations = useMemo(() => {
     if (maxUploadMb === null || maxUploadPages === null) {
@@ -160,10 +218,28 @@ export function UploadCenterPage() {
 
   const attributionValidation = useMemo(() => validateAttribution(attribution), [attribution]);
 
+  /** 每个文件基于"有效 preflight"（含批量预设 + 单文件补齐）重新计算的状态。
+   *  这就是"补齐后状态转换必须真实生效"的核心：needs_confirmation 的解除
+   *  永远来自 derivePreflightStatus 重新判定有效值，不是前端直接改一个标记位。 */
+  const effectiveEntries = useMemo(
+    () =>
+      entries.map((entry) => {
+        if (entry.status === "pending_preflight" || entry.status === "failed") {
+          return entry;
+        }
+        const effective = effectivePreflightFor(entry.id);
+        return { ...entry, status: derivePreflightStatus(effective), preflight: effective };
+      }),
+    [entries, effectivePreflightFor],
+  );
+
+  const hasUnresolvedConfirmation = effectiveEntries.some((entry) => entry.status === "needs_confirmation");
+
   const canSubmit =
     entries.length > 0 &&
     uploadLimitViolations.size === 0 &&
-    entries.every((entry) => entry.status !== "pending_preflight" && entry.status !== "failed") &&
+    !hasUnresolvedConfirmation &&
+    effectiveEntries.every((entry) => entry.status !== "pending_preflight" && entry.status !== "failed") &&
     (mode === "basic" || attributionValidation.isComplete);
 
   const handleSubmit = useCallback(async () => {
@@ -175,15 +251,18 @@ export function UploadCenterPage() {
       for (const entry of entries) {
         const formData = new FormData();
         formData.set("file", entry.file);
-        if (targetOrgId) {
-          formData.set("org_unit_id", targetOrgId);
+        // 有效 preflight（含批量预设 + 单文件补齐）是本次提交唯一的取值来源，
+        // 保证"用户在补齐表单里填的值"真正进入上传请求，而不是被静默丢弃。
+        const effectivePreflight = effectivePreflightFor(entry.id);
+        const effectiveOrgId = effectivePreflight?.current?.organization_id || targetOrgId;
+        if (effectiveOrgId) {
+          formData.set("org_unit_id", effectiveOrgId);
         }
-        const preflight = preflightResults[entry.id];
-        const fiscalYear = preflight?.report_year ? String(preflight.report_year) : presets.year;
+        const fiscalYear = effectivePreflight?.report_year ? String(effectivePreflight.report_year) : presets.year;
         if (fiscalYear) {
           formData.append("fiscal_year", fiscalYear);
         }
-        formData.append("doc_type", preflight?.doc_type || presets.docType);
+        formData.append("doc_type", effectivePreflight?.doc_type || presets.docType);
 
         const response = await fetch("/api/documents/upload", { method: "POST", body: formData });
         if (!response.ok) {
@@ -197,6 +276,7 @@ export function UploadCenterPage() {
       }
       setEntries([]);
       setPreflightResults({});
+      setManualOverrides({});
       if (createdJobIds.length === 1) {
         window.location.assign(`/queue?job=${encodeURIComponent(createdJobIds[0])}`);
       } else if (createdJobIds.length > 1) {
@@ -207,7 +287,7 @@ export function UploadCenterPage() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [attribution, entries, mode, preflightResults, presets]);
+  }, [attribution, effectivePreflightFor, entries, mode, presets]);
 
   return (
     <div className="p-8" data-testid="gbc-upload-center-page">
@@ -254,12 +334,13 @@ export function UploadCenterPage() {
               <div className="text-sm font-medium text-slate-900">待上传文件（{entries.length}）</div>
             </div>
             <UploadFileList
-              entries={entries.map((entry) => ({
+              entries={effectiveEntries.map((entry) => ({
                 ...entry,
                 errorMessage: uploadLimitViolations.get(entry.id) ?? entry.errorMessage,
                 status: uploadLimitViolations.has(entry.id) ? "failed" : entry.status,
               }))}
               onRemove={handleRemoveEntry}
+              onManualConfirm={handleManualConfirm}
             />
           </div>
 
@@ -271,6 +352,12 @@ export function UploadCenterPage() {
             <p className="mt-1">
               系统不会把无法识别的年份写成默认值。低置信度元数据将在任务进入规则分析前要求人工确认。
             </p>
+            {hasUnresolvedConfirmation ? (
+              <p className="mt-2 font-medium text-warning-700" data-testid="gbc-upload-confirmation-blocking-notice">
+                还有 {effectiveEntries.filter((entry) => entry.status === "needs_confirmation").length} 个文件需要确认后才能开始分析——
+                在左侧填写批量预设，或点击文件右侧「补齐」逐个填写缺失信息。
+              </p>
+            ) : null}
           </div>
 
           {mode === "attribution" && !attributionValidation.isComplete ? (

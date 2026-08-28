@@ -59,6 +59,109 @@ export const PREFLIGHT_STATUS_LABELS: Record<PreflightStatus, string> = {
 };
 
 // ---------------------------------------------------------------------------
+// 分析前确认闸门（前置修复 1）：needs_confirmation 的补齐与解除
+// ---------------------------------------------------------------------------
+
+/** needs_confirmation 的具体成因，供 UI 精确提示"缺什么"而不是笼统一句话。 */
+export type PreflightConfirmationReason = "missing_report_year" | "missing_doc_type" | "low_confidence_org";
+
+/**
+ * 逐项列出 preflight 响应缺失/低置信度的字段。
+ *
+ * 与 derivePreflightStatus 判据完全一致（同样的三个真实字段），只是把"是否需要确认"
+ * 这个布尔结果展开成"具体缺哪几项"的列表，用于 UI 精确提示与单文件编辑表单的
+ * 初始值兜底（例如只缺年份时不应该连文档类型一起要求用户重新选）。
+ */
+export function listPreflightConfirmationReasons(
+  response: PreflightResponseLike | null | undefined,
+): PreflightConfirmationReason[] {
+  if (!response) {
+    return [];
+  }
+  const reasons: PreflightConfirmationReason[] = [];
+  const hasReportYear = typeof response.report_year === "number" && response.report_year > 0;
+  const hasDocType = Boolean(response.doc_type);
+  const hasConfidentOrgMatch = Boolean(response.current?.organization_id);
+  if (!hasReportYear) {
+    reasons.push("missing_report_year");
+  }
+  if (!hasDocType) {
+    reasons.push("missing_doc_type");
+  }
+  if (!hasConfidentOrgMatch) {
+    reasons.push("low_confidence_org");
+  }
+  return reasons;
+}
+
+export const PREFLIGHT_CONFIRMATION_REASON_LABELS: Record<PreflightConfirmationReason, string> = {
+  missing_report_year: "年份未识别到",
+  missing_doc_type: "文档类型未识别到",
+  low_confidence_org: "组织匹配置信度不足",
+};
+
+/**
+ * 单文件的人工补齐值。三个字段均为可选——用户可能只需要补一项（例如只缺年份），
+ * 不应强迫用户重新填写已经识别正确的其它字段。
+ *
+ * organizationId/organizationName 成对出现：id 是提交时真正写入后端的值，
+ * name 只用于 UI 展示（面包屑/下拉当前值），避免组件为了显示名称反过来查一次组织树。
+ */
+export interface ManualConfirmationOverride {
+  reportYear?: string;
+  docType?: string;
+  organizationId?: string;
+  organizationName?: string;
+}
+
+/**
+ * 把批量预设或单文件人工补齐值叠加到某个文件的 preflight 响应上，得到"解除确认后
+ * 的有效 preflight 结果"。
+ *
+ * 关键约束（对照任务书"补齐后状态转换必须真实生效"）：
+ * - 只在原字段缺失/低置信度时才用覆盖值顶替，已经识别正确的字段不被覆盖值污染
+ *   （例如批量预设的"部门预算"不应该把某个文件已经正确识别出的"部门决算"改掉）；
+ * - 返回的新对象可以直接喂给 derivePreflightStatus 计算出新状态，也可以直接用于
+ *   拼装最终提交给后端的表单字段——两处消费同一份"有效值"，不会出现"UI 认为已解除
+ *   确认，但提交时用的仍是原始空值"的分裂。
+ */
+export function applyManualConfirmationOverride(
+  response: PreflightResponseLike | null | undefined,
+  override: ManualConfirmationOverride | null | undefined,
+): PreflightResponseLike {
+  const base: PreflightResponseLike = response ? { ...response } : {};
+  if (!override) {
+    return base;
+  }
+
+  const hasReportYear = typeof base.report_year === "number" && base.report_year > 0;
+  if (!hasReportYear && override.reportYear) {
+    const parsedYear = Number.parseInt(override.reportYear, 10);
+    if (Number.isFinite(parsedYear) && parsedYear > 0) {
+      base.report_year = parsedYear;
+    }
+  }
+
+  if (!base.doc_type && override.docType) {
+    base.doc_type = override.docType;
+  }
+
+  const hasConfidentOrgMatch = Boolean(base.current?.organization_id);
+  if (!hasConfidentOrgMatch && override.organizationId) {
+    base.current = {
+      organization_id: override.organizationId,
+      organization_name: override.organizationName || "",
+      level: base.current?.level || "",
+      // 人工选择视为完全确认，置信度记为 1——这与手动关联组织（associate 接口）
+      // 的既有语义一致：人工选择不再是"匹配出来的猜测"，是已确认事实。
+      confidence: 1,
+    };
+  }
+
+  return base;
+}
+
+// ---------------------------------------------------------------------------
 // 上传限制校验（真实值来自 /api/config，绝不可硬编码原型图的 200MB）
 // ---------------------------------------------------------------------------
 
