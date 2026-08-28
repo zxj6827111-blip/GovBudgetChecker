@@ -26,9 +26,9 @@ assert.equal(formatRuleCountText(null), "未识别到", "读不到条目数（�
 
 // --- resolveSeverityTone -------------------------------------------------------------
 
-assert.equal(resolveSeverityTone("high"), "danger");
-assert.equal(resolveSeverityTone("critical"), "danger");
-assert.equal(resolveSeverityTone("medium"), "warning");
+assert.equal(resolveSeverityTone("high"), "failed");
+assert.equal(resolveSeverityTone("critical"), "failed");
+assert.equal(resolveSeverityTone("medium"), "review");
 assert.equal(resolveSeverityTone("low"), "neutral");
 assert.equal(resolveSeverityTone(""), "neutral", "未知级别归中性，不得冒充高危或中危");
 

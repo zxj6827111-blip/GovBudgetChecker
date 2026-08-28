@@ -47,14 +47,15 @@ export function formatRuleCountText(value: number | null | undefined): string {
   return "未识别到";
 }
 
-/** 规则条目 severity 徽章的 tone 映射（high=危险/medium=警告/low=中性）。 */
-export function resolveSeverityTone(severity: string): "danger" | "warning" | "neutral" {
+/** 规则条目 severity 徽章的 tone 映射（对齐 BadgeTone：
+ *  high/critical → failed（红）、medium → review（橙）、其余 → neutral）。 */
+export function resolveSeverityTone(severity: string): "failed" | "review" | "neutral" {
   const normalized = severity.trim().toLowerCase();
   if (normalized === "high" || normalized === "critical") {
-    return "danger";
+    return "failed";
   }
   if (normalized === "medium") {
-    return "warning";
+    return "review";
   }
   return "neutral";
 }
