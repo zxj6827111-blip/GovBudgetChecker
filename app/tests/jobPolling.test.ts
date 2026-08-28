@@ -64,7 +64,7 @@ function createFakeTimerEnv(initialHidden = false): FakeTimerEnv {
       const deadline = now + ms;
       // 循环触发：定时器回调里可能再排新定时器（同一时刻）。
       for (;;) {
-        const due = [...pending.values()]
+        const due = Array.from(pending.values())
           .filter((timer) => timer.at <= deadline)
           .sort((a, b) => a.at - b.at);
         if (due.length === 0) {
@@ -304,7 +304,8 @@ async function main(): Promise<void> {
     const env = createFakeTimerEnv();
     let inFlightFetches = 0;
     let maxConcurrent = 0;
-    let releaseFetch: (() => void) | null = null;
+    // 预填空实现：赋值发生在 Promise executor 内，TS 控制流不追踪闭包赋值。
+    let releaseFetch: () => void = () => {};
     const controller = createJobPollingController({
       fetcher: () =>
         new Promise<void>((resolve) => {
@@ -321,7 +322,6 @@ async function main(): Promise<void> {
     controller.start();
     await flushMicrotasks();
     assert.equal(maxConcurrent, 1);
-    assert.ok(releaseFetch);
 
     // 首个请求还在飞时定时器到点：不得发出第二个请求。
     env.advance(ACTIVE_POLL_INTERVAL_MS);
