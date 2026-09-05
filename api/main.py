@@ -1189,7 +1189,10 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                     "tokens": dual_result.meta.get("tokens", {}),
                     "page_extraction": page_assessment,
                     "ai_execution": ai_execution,
-                    "rule_execution_summary": {},
+                    "rule_execution_summary": dual_result.meta.get(
+                        "rule_execution_summary"
+                    )
+                    or {},
                     "parser_quality": _assess_parser_quality(
                         page_assessment, None
                     ),

@@ -206,6 +206,11 @@ class DualModeAnalyzer:
             
             metrics.rule_findings_count = len(rule_findings)
             metrics.rule_elapsed_ms = int((rule_done_at - rule_started_at) * 1000)
+            # 规则执行摘要（六态）：供质量门与评测契约消费
+            try:
+                rule_execution_summary = self.engine_runner.get_rule_execution_summary()
+            except Exception:
+                rule_execution_summary = {}
 
             if rule_enabled and rule_task is None:
                 rule_error = "未加载到可执行的本地规则"
@@ -379,6 +384,7 @@ class DualModeAnalyzer:
                     "ai_call_ledger": ai_call_ledger,
                     # 覆盖缺口（如审计窗口上限触发）：degraded 判定依据
                     "ai_window_errors": list(getattr(self.ai_service, "ai_errors", []) or []) if self.ai_service is not None else [],
+                    "rule_execution_summary": rule_execution_summary,
                     "config": config.dict()
                 }
             )

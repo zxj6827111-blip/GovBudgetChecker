@@ -97,7 +97,22 @@ from typing import List, Dict, Any, Optional, Tuple
 import os
 import re
 from collections import Counter, defaultdict
+from decimal import Decimal
 import numpy as np
+
+from .amount_math import classify_amount_diff
+from .rule_outcome import RuleDeferred
+from src.utils.narration import (
+    amount_in_section,
+    clause_direction,
+    extract_amounts,
+    extract_three_public_facts,
+    find_section,
+    merge_page_texts,
+    merge_soft_wrapped_lines,
+    split_clauses,
+    split_numbered_sections,
+)
 from rapidfuzz import fuzz
 
 
@@ -519,56 +534,97 @@ class R33001_CoverYearUnit(Rule):
         if doc.dominant_year is None:
             issues.append(self._issue("未能在封面/目录或首个表页附近识别年度。", {"page": 1}, severity="warn"))
         else:
-            # 增强：检查整个文档的年份一致性
-            all_years = []
-            for page_years in doc.years_per_page:
-                all_years.extend(page_years)
-            
-            if all_years:
-                # 统计所有年份
+            # 年份冲突只在"结构性位置"检查：封面/目录（前 3 页）+ 表头所在页。
+            # 正文说明里的同比、较上年、历史年度引用是决算报告的必需内容，
+            # 不参与冲突判定（样张 V33-001 误报「与2024年相比增加90.09万元」
+            # 的根因，docs/SYSTEM_ISSUES_HANDOFF_2026-09-05.md §3.3C）。
+            structural_pages = sorted(set(front_idxs))
+            if doc.anchors:
+                anchor_pages = set()
+                for pages in doc.anchors.values():
+                    for p in (pages or [])[:1]:
+                        try:
+                            anchor_pages.add(int(p) - 1)
+                        except (TypeError, ValueError):
+                            continue
+                structural_pages = sorted(set(front_idxs) | anchor_pages)
+
+            structural_years: List[int] = []
+            for i in structural_pages:
+                if 0 <= i < len(doc.years_per_page):
+                    structural_years.extend(doc.years_per_page[i])
+
+            if structural_years:
                 year_counts = {}
-                for year in all_years:
+                for year in structural_years:
                     year_counts[year] = year_counts.get(year, 0) + 1
-                
-                # 检查是否有其他年份
+
                 other_years = [year for year in year_counts if year != doc.dominant_year]
                 if other_years:
-                    # 查找证据：在文中找到包含这些年份的句子
+                    # 年份语境排除：证据片段属于同比/历史引用时不判冲突
+                    comparison_context = re.compile(
+                        r"(同比|较上年|与\s*20\d{2}\s*年\s*相比|上年|上年度|历史|历年)"
+                    )
                     evidence_snippets = []
-                    for i, text in enumerate(doc.page_texts):
+                    for i in structural_pages:
+                        if i >= len(doc.page_texts):
+                            continue
+                        text = doc.page_texts[i] or ""
                         for oy in other_years:
-                           # 直接搜索年份字符串（简单高效）
-                           oy_str = str(oy)
-                           
-                           # 查找匹配项
-                           idx = text.find(oy_str)
-                           count = 0
-                           while idx != -1 and count < 2:  # 每个年份最多找2处
-                               # 以此为中心前后截取文本
-                               start = max(0, idx - 50)
-                               end = min(len(text), idx + len(oy_str) + 50)
-                               
-                               snippet = text[start:end].replace("\n", " ").strip()
-                               if len(snippet) > 10:
-                                   evidence_snippets.append(f"P{i+1}: ...{snippet}...")
-                                   count += 1
-                               
-                               if len(evidence_snippets) >= 5:
-                                   break
-                               
-                               # 继续查找下一个
-                               idx = text.find(oy_str, idx + 1)
-                        
+                            oy_str = str(oy)
+                            idx = text.find(oy_str)
+                            count = 0
+                            while idx != -1 and count < 2:
+                                start = max(0, idx - 50)
+                                end = min(len(text), idx + len(oy_str) + 50)
+                                snippet = text[start:end].replace("\n", " ").strip()
+                                if comparison_context.search(snippet):
+                                    idx = text.find(oy_str, idx + 1)
+                                    continue
+                                if len(snippet) > 10:
+                                    evidence_snippets.append(f"P{i+1}: ...{snippet}...")
+                                    count += 1
+                                if len(evidence_snippets) >= 5:
+                                    break
+                                idx = text.find(oy_str, idx + 1)
+                            if len(evidence_snippets) >= 5:
+                                break
                         if len(evidence_snippets) >= 5:
                             break
 
-                    evidence = "\n".join(evidence_snippets) if evidence_snippets else f"文档中存在非{doc.dominant_year}年的内容，但未定位到具体文本片段。"
-                    
-                    # 构建年份不一致的提示
-                    year_str = ", ".join(map(str, other_years))
-                    issues.append(self._issue(f"文档中包含多个年份：{doc.dominant_year}年报告中出现{year_str}年内容，可能存在年份混淆。", 
-                                            {"page": 1}, severity="high", evidence_text=evidence))
-        
+                    # 所有命中都在同比语境里 → 不算冲突
+                    if evidence_snippets:
+                        year_str = ", ".join(map(str, other_years))
+                        evidence = "\n".join(evidence_snippets)
+                        issues.append(
+                            self._issue(
+                                f"封面/目录/表头出现多个年份：{doc.dominant_year}年报告的结构性位置出现{year_str}年内容，可能存在年份混淆。",
+                                {"page": 1},
+                                severity="high",
+                                evidence_text=evidence,
+                            )
+                        )
+
+        # 年度缺位检测（T1）：封面/目录上形如「202 年度」「202X年度缺失一位」的
+        # 占位残留。有效年份是 20xx 四位数字，三位数字 + 年度 即为缺位。
+        incomplete_year_re = re.compile(r"(?<!\d)20\d(?!\d)\s*年度")
+        for i in front_idxs:
+            text = doc.page_texts[i] if i < len(doc.page_texts) else ""
+            if not text:
+                continue
+            for match in incomplete_year_re.finditer(text):
+                start = max(0, match.start() - 20)
+                end = min(len(text), match.end() + 30)
+                snippet = text[start:end].replace("\n", " ").strip()
+                issues.append(
+                    self._issue(
+                        f"目录/封面年度缺位：「{match.group().strip()}」疑似应为完整年份（如 {doc.dominant_year or 2025} 年度）。",
+                        {"page": i + 1, "pos": match.start()},
+                        severity="high",
+                        evidence_text=snippet,
+                    )
+                )
+
         all_units = [u for u in doc.units_per_page if u]
         if not all_units:
             issues.append(self._issue("未识别到金额单位（单位：万元/元/亿元）。", {"page": 1}, severity="warn"))
@@ -1034,6 +1090,41 @@ def _make_issue_location(
         location["table_refs"] = valid_refs
 
     return location
+
+
+def _extract_table_total(table: List[List[str]]) -> Optional[float]:
+    """提取合计行的「合计」列数值（None 安全）。
+
+    定位策略：
+    1. 合计行：任一单元格恰为「合计」或行首为「合计」，且无科目编码、
+       含 ≥2 个真实数值；
+    2. 合计列：表头（前 5 行）中恰为「合计」的列；取不到时退回行内
+       最大数值（合计列 = 各分项之和，必为行内最大）。
+    """
+    if not table:
+        return None
+    header_total_col = None
+    for row in table[:5]:
+        for i, cell in enumerate(row):
+            if str(cell or "").strip() == "合计":
+                header_total_col = i
+                break
+        if header_total_col is not None:
+            break
+
+    for row in table:
+        cells = [parse_number(c) for c in row]
+        numeric = [v for v in cells if v is not None]
+        if len(numeric) < 2:
+            continue
+        if any(str(c or "").strip().isdigit() and len(str(c).strip()) in (3, 5, 7) for c in row[:3]):
+            continue
+        if not (any(str(c or "").strip() == "合计" for c in row) or str(row[0] or "").strip().startswith("合计")):
+            continue
+        if header_total_col is not None and header_total_col < len(cells) and cells[header_total_col] is not None:
+            return float(cells[header_total_col])
+        return float(max(numeric))
+    return None
 
 
 def _row_value(table: List[List[str]],
@@ -1529,14 +1620,28 @@ class R33106_GeneralBudgetStruct(Rule):
             if not table:
                 return issues
 
-            # 2) 提取"合计"
-            total_val = _row_value(table, ("合计", "支出合计"))
+            # 2) 提取"合计"（None 安全）
+            total_val = _extract_table_total(table)
             if total_val is None:
                 return issues
 
-            # 3) 在"总体情况说明"中查找相近数字
-            full_text = "\n".join(doc.page_texts)
-            found_num = near_number(full_text, ["总体情况说明", "总体情况"])
+            # 3) 在"总体情况说明"章节内按口径锚点取数。
+            # 旧实现 near_number 用 [^0-9]*? 跨章节抓数字，把「2025年度」
+            # 的年份当成金额（HANDOFF §3.2C）；现在：软换行恢复 → 章节切分
+            # → 只取含"支出决算/支出总计"锚点分句中的金额，排除预算句。
+            merged_text = merge_page_texts(doc.page_texts)
+            found_num: Optional[float] = None
+            for title, body, _offset in split_numbered_sections(merged_text):
+                if "总体情况" not in title:
+                    continue
+                candidate = amount_in_section(
+                    body,
+                    ["支出决算", "支出总计", "决算为"],
+                    exclude_keywords=["预算", "同比", "较上年", "上年"],
+                )
+                if candidate is not None:
+                    found_num = candidate
+                    break
             if found_num is not None:
                 if not tolerant_equal(total_val, found_num):
                     issues.append(self._issue(
@@ -1544,12 +1649,17 @@ class R33106_GeneralBudgetStruct(Rule):
                         {"page": p, "pos": 0}
                     ))
 
-            # 4) 结构占比检查
+            # 4) 结构占比检查（同样使用合并后的章节文本，不跨章节抓数字）
             func_sums = _sum_by_func_class(table)
             for func_name, func_val in func_sums.items():
                 if func_val > 0:
                     pct = func_val / total_val * 100
-                    found_pct = find_percent(full_text, [func_name, "结构情况"])
+                    found_pct = None
+                    for title, body, _offset in split_numbered_sections(merged_text):
+                        if "结构情况" in title or "总体情况" in title:
+                            found_pct = find_percent(body, [func_name])
+                            if found_pct is not None:
+                                break
                     if found_pct is not None:
                         if abs(pct - found_pct) > 2.0:
                             issues.append(self._issue(
@@ -1765,185 +1875,97 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
     )
     
     def apply(self, doc: Document) -> List[Issue]:
-        """检测预算数与决算数比较的一致性"""
+        r"""预算数 vs 决算数的方向表述一致性（分句窗口内配对，禁止跨句抓数）。
+
+        旧实现用 [\s\S]*? 跨句配对：总结句的预算数（4628.17）被配到第一个
+        分项的决算数（51.98），而方向词又从总结句取到，产生假 error
+        （HANDOFF §3.2B）。新逻辑：
+        1. 软换行恢复 → 章节切分（（三）/三、一般公共…决算情况）；
+        2. 章节内切分句，构成滑动窗口：预算金额分句 → 向后找决算金额分句
+           → 向后找方向词分句；窗口遇到下一个「预算为/决算为」即截断；
+        3. 三者齐备才判定，缺失一律跳过（不得伪造）。
+        """
         issues: List[Issue] = []
-        full_text = "\n".join(doc.page_texts)
-        
-        # 1. 查找目标小节
-        start_match = self._SEC_START.search(full_text)
+        merged = merge_page_texts(doc.page_texts)
+
+        start_match = self._SEC_START.search(merged)
         if not start_match:
-            # 小节不存在，返回空列表
             return issues
-        
-        # 2. 确定小节结束位置
-        sec_start = start_match.start()
-        next_sec_match = self._NEXT_SEC.search(full_text, sec_start)
-        sec_end = next_sec_match.start() if next_sec_match else len(full_text)
-        sec_text = full_text[sec_start:sec_end]
-        
-        # 3. 先提取总结性语句
-        summary_pattern = re.compile(r'一般公共预算财政拨款支出年初预算为\s*([\d,]+\.\d{2})\s*万元[\s\S]*?支[\s\S]*?出决算为\s*([\d,]+\.\d{2})\s*万元[\s\S]*?完成年初预算', re.S)
-        summary_match = summary_pattern.search(sec_text)
-        
-        if summary_match:
-            budget_str = summary_match.group(1)
-            final_str = summary_match.group(2)
-            
-            # 转换为浮点数
-            try:
-                budget_val = float(budget_str.replace(",", ""))
-                final_val = float(final_str.replace(",", ""))
-            except ValueError:
-                pass
-            else:
-                # 确定实际关系
-                actual_relation = "等于"
-                if final_val > budget_val:
-                    actual_relation = "大于"
-                elif final_val < budget_val:
-                    actual_relation = "小于"
-                
-                # 查找关系表述
-                relation_patterns = [
-                    r'决[\s\S]*?算[\s\S]*?数[\s\S]*?(大于|小于|等于|持平|基本持平)[\s\S]*?预算[\s\S]*?数',
-                    r'决[\s\S]*?算[\s\S]*?数[\s\S]*?与[\s\S]*?预算[\s\S]*?数[\s\S]*?(基本)?[\s\S]*?持平',
-                    r'预算[\s\S]*?数[\s\S]*?(大于|小于|等于|持平|基本持平)[\s\S]*?决[\s\S]*?算[\s\S]*?数',
-                    r'预算[\s\S]*?数[\s\S]*?与[\s\S]*?决[\s\S]*?算[\s\S]*?数[\s\S]*?(基本)?[\s\S]*?持平',
-                ]
-                
-                relation = None
-                for pattern in relation_patterns:
-                    matches = re.findall(pattern, sec_text[summary_match.start():summary_match.start()+500], re.S)
-                    if matches:
-                        if '持平' in matches[0]:
-                            relation = '等于'
-                        elif '基本' in matches[0]:
-                            relation = '等于'
-                        else:
-                            relation = matches[0]
-                        break
-                
-                if relation:
-                    # 验证一致性
-                    if actual_relation != relation:
-                        # 计算匹配文本在全文中的位置
-                        match_start = sec_start + summary_match.start()
-                        
-                        # 查找匹配文本在哪个页面
-                        page = 1
-                        pos_in_page = 0
-                        abs_pos = match_start
-                        for i, page_text in enumerate(doc.page_texts):
-                            if abs_pos <= len(page_text):
-                                page = i + 1
-                                pos_in_page = abs_pos
-                                break
-                            abs_pos -= len(page_text)
-                        
-                        # 生成问题描述
-                        clip = sec_text[summary_match.start():summary_match.start()+100]
-                        issues.append(self._issue(
-                            f"预算数与决算数比较不一致：预算数{budget_str}，决算数{final_str}，实际{actual_relation}，但文本表述为{relation}。",
-                            {"page": page, "pos": pos_in_page},
-                            severity="error",
-                            evidence_text=clip
-                        ))
-        
-        # 4. 按数字编号分割，逐个分析每个项目
-        items = re.split(r'\n\s*\d+、', sec_text)
-        
-        for idx, item in enumerate(items, 1):
-            if not item.strip():
+        next_sec = self._NEXT_SEC.search(merged, start_match.end())
+        sec_text = merged[start_match.end(): next_sec.start() if next_sec else len(merged)]
+
+        clauses = split_clauses(sec_text)
+        _BUDGET_MARKS = ("年初预算为", "年初预算数为", "预算数为", "预算为", "年初预算")
+        _FINAL_MARKS = ("支出决算为", "决算数为", "决算为", "支出决算")
+        _DIRECTION_WORDS = ("大于", "小于", "等于", "持平")
+
+        def clause_amount(clause: str, marks) -> Optional[float]:
+            if not any(mark in clause for mark in marks):
+                return None
+            amounts = extract_amounts(clause)
+            if not amounts:
+                return None
+            # 年份 token 已被 extract_amounts 排除
+            return amounts[0][0]
+
+        i = 0
+        while i < len(clauses):
+            clause = clauses[i]
+            budget_val = clause_amount(clause, _BUDGET_MARKS)
+            if budget_val is None:
+                i += 1
                 continue
-            
-            # 查找预算 - 使用跨行正则表达式
-            budget_patterns = [
-                r'年初预算为\s*([\d,]+\.\d{2})\s*万元',
-                r'年[\s\S]*?初[\s\S]*?预[\s\S]*?算[\s\S]*?为[\s\S]*?([\d,]+\.\d{2})[\s\S]*?万[\s\S]*?元',
-            ]
-            
-            budget_str = None
-            for pattern in budget_patterns:
-                matches = re.findall(pattern, item, re.S)
-                if matches:
-                    budget_str = matches[0]
-                    break
-            
-            # 查找决算 - 使用跨行正则表达式
-            final_patterns = [
-                r'支出决算为\s*([\d,]+\.\d{2})\s*万元',
-                r'支[\s\S]*?出[\s\S]*?决[\s\S]*?算[\s\S]*?为[\s\S]*?([\d,]+\.\d{2})[\s\S]*?万[\s\S]*?元',
-            ]
-            
-            final_str = None
-            for pattern in final_patterns:
-                matches = re.findall(pattern, item, re.S)
-                if matches:
-                    final_str = matches[0]
-                    break
-            
-            # 查找关系 - 使用最全面的正则表达式
-            relation_patterns = [
-                r'决[\s\S]*?算[\s\S]*?数[\s\S]*?(大于|小于|等于|持平|基本持平)[\s\S]*?预算[\s\S]*?数',
-                r'决[\s\S]*?算[\s\S]*?数[\s\S]*?与[\s\S]*?预[\s\S]*?算[\s\S]*?数[\s\S]*?(基本)?[\s\S]*?持平',
-                r'预算[\s\S]*?数[\s\S]*?(大于|小于|等于|持平|基本持平)[\s\S]*?决[\s\S]*?算[\s\S]*?数',
-                r'预算[\s\S]*?数[\s\S]*?与[\s\S]*?决[\s\S]*?算[\s\S]*?数[\s\S]*?(基本)?[\s\S]*?持平',
-            ]
-            
-            relation = None
-            for pattern in relation_patterns:
-                matches = re.findall(pattern, item, re.S)
-                if matches:
-                    if '持平' in matches[0]:
-                        relation = '等于'
-                    elif '基本' in matches[0]:
-                        relation = '等于'
-                    else:
-                        relation = matches[0]
-                    break
-            
-            if budget_str and final_str:
-                # 转换为浮点数
-                try:
-                    budget_val = float(budget_str.replace(",", ""))
-                    final_val = float(final_str.replace(",", ""))
-                except ValueError:
-                    continue
-                
-                # 确定实际关系
-                actual_relation = "等于"
+
+            # 向后有限窗口找决算金额与方向词
+            final_val = None
+            direction = None
+            window = 0
+            j = i + 1
+            while j < len(clauses) and window < 6:
+                nxt = clauses[j]
+                if final_val is None:
+                    candidate = clause_amount(nxt, _FINAL_MARKS)
+                    if candidate is not None:
+                        final_val = candidate
+                        j += 1
+                        window += 1
+                        continue
+                    # 遇到新的预算配对起点 → 当前窗口作废（缺决算，不判定）
+                    if any(mark in nxt for mark in _BUDGET_MARKS):
+                        break
+                if final_val is not None:
+                    hit = next((w for w in _DIRECTION_WORDS if w in nxt), None)
+                    if hit:
+                        direction = "等于" if hit in ("持平",) else hit
+                        break
+                    if any(mark in nxt for mark in _FINAL_MARKS + _BUDGET_MARKS):
+                        # 进入下一条配对仍未见方向词 → 放弃本窗口
+                        break
+                j += 1
+                window += 1
+
+            if budget_val is not None and final_val is not None and direction:
+                actual = "等于"
                 if final_val > budget_val:
-                    actual_relation = "大于"
+                    actual = "大于"
                 elif final_val < budget_val:
-                    actual_relation = "小于"
-                
-                # 检查是否有关系表述
-                if relation:
-                    # 验证一致性
-                    if actual_relation != relation:
-                        # 计算匹配文本在全文中的位置
-                        item_start = sec_start + sec_text.find(item)
-                        
-                        # 查找匹配文本在哪个页面
-                        page = 1
-                        pos_in_page = 0
-                        abs_pos = item_start
-                        for i, page_text in enumerate(doc.page_texts):
-                            if abs_pos <= len(page_text):
-                                page = i + 1
-                                pos_in_page = abs_pos
-                                break
-                            abs_pos -= len(page_text)
-                        
-                        # 生成问题描述
-                        clip = item.strip()[:100]
-                        issues.append(self._issue(
-                            f"预算数与决算数比较不一致：预算数{budget_str}，决算数{final_str}，实际{actual_relation}，但文本表述为{relation}。",
-                            {"page": page, "pos": pos_in_page},
-                            severity="error",
-                            evidence_text=clip
-                        ))
-        
+                    actual = "小于"
+                if actual != direction:
+                    # 页码定位：在原文页中检索证据片段
+                    clip = f"年初预算{budget_val:.2f} 决算{final_val:.2f} 表述{direction}"
+                    page = 1
+                    for pi, page_text in enumerate(doc.page_texts):
+                        if str(budget_val) in page_text.replace(",", "") or "决算数" in page_text:
+                            page = pi + 1
+                            break
+                    issues.append(self._issue(
+                        f"预算数与决算数比较不一致：预算数{budget_val:.2f}，决算数{final_val:.2f}，实际{actual}，但文本表述为{direction}。",
+                        {"page": page},
+                        severity="error",
+                        evidence_text=clip,
+                    ))
+            i = max(j, i + 1)
+
         return issues
 
 
@@ -2160,7 +2182,12 @@ def _get_table_rows(doc: Document, table_name: str, include_continuation: bool =
     return main_rows
 
 def _parse_row_values(row: List[str]) -> List[float]:
-    """解析行中的所有数值，空值视为0"""
+    """解析行中的所有数值，空值视为0（历史行为，仅未迁移规则继续使用）。
+
+    迁移后的规则一律使用 ``_row_numbers`` / ``_numeric_values``：
+    非数值单元格保留 None，禁止转成 0.0——「收入总计(0.0)」这类假勾稽
+    错误的直接来源就是行标签文本被本函数转零（HANDOFF §3.1A）。
+    """
     vals = []
     for cell in row:
         v = parse_number(cell)
@@ -2169,6 +2196,73 @@ def _parse_row_values(row: List[str]) -> List[float]:
         else:
             vals.append(0.0) # 空值视为0以便计算
     return vals
+
+
+def _row_numbers(row: List[str]) -> List[Optional[float]]:
+    """None 安全的行数值解析：非数值单元格（行标签/表头）保留 None。"""
+    return [parse_number(cell) for cell in row]
+
+
+def _numeric_values(row: List[str]) -> List[float]:
+    """行内真实数值（跳过非数值单元格，不补 0）。"""
+    return [v for v in _row_numbers(row) if v is not None]
+
+
+def _modal_row_width(rows: List[List[str]]) -> Optional[int]:
+    """行的众数宽度：跨页列宽漂移的检测基线。"""
+    widths = [len(r) for r in rows if r]
+    if not widths:
+        return None
+    return Counter(widths).most_common(1)[0][0]
+
+
+def _split_two_sided_row(row: List[str]) -> Tuple[List[str], List[str]]:
+    """把双栏表行拆成左右两半（收支总表/经济分类表的左右布局）。"""
+    width = len(row)
+    if width >= 4:
+        mid = width // 2
+        return row[:mid], row[mid:]
+    return row, []
+
+
+def _half_first_number(half: List[str], start: int = 0) -> Optional[float]:
+    """半行中从 start 起第一个真实数值（无则 None，不补 0）。"""
+    for cell in half[start:]:
+        v = parse_number(cell)
+        if v is not None:
+            return v
+    return None
+
+
+def _find_label_value(
+    rows: List[List[str]],
+    keywords: Tuple[str, ...],
+    *,
+    side: Optional[str] = None,
+) -> Optional[float]:
+    """按行标签找数值：标签行内与标签同侧的真实数值（None 安全）。
+
+    side="income"/"expense" 时在双栏布局的对应半行内取值；
+    布局不确定或标签行不存在时返回 None，调用方必须跳过该检查，
+    不得以 0.0 参与勾稽。
+    """
+    for row in rows:
+        joined = "".join([str(c) for c in row if c])
+        if not all(k in joined for k in keywords):
+            continue
+        if side in ("income", "expense"):
+            left, right = _split_two_sided_row(row)
+            half = left if side == "income" else right
+            value = _half_first_number(half, 1) if half else None
+        else:
+            value = _half_first_number(row, 1)
+        if value is not None:
+            return value
+    return None
+
+
+# 舍入包络提示的 severity
+_ROUNDING_HINT_SEVERITY = "info"
 
 
 _STANDARD_AMOUNT = r"([0-9][0-9,]*(?:\.[0-9]+)?)"
@@ -2212,76 +2306,91 @@ class R33115_TotalSheetCheck(Rule):
         rows = _get_table_rows(doc, table_name)
         if not rows:
             return []
+        page = _get_first_anchor_page(doc, table_name) or 1
 
-        # 辅助查找函数：查找包含关键字的行，返回最后一个数值
-        def find_val_by_label(keywords):
-            for r in rows:
-                txt = "".join([str(c) for c in r if c])
-                if all(k in txt for k in keywords):
-                    vs = _parse_row_values(r)
-                    if vs: return vs[-1] # 通常取最后一个数值
-            return 0.0
+        # 双栏布局：[收入项目, 收入金额, 支出项目, 支出金额]。
+        # 金额必须取自与标签同侧的半行——旧实现取 vs[-1]/vs[0] 按位置猜列，
+        # 把「总计」标签转成 0.0 后产生了「收入总计(0.0) != 支出总计」假错误
+        # （HANDOFF §3.1A）。
+        def side_total(side: str) -> Optional[float]:
+            for row in rows:
+                joined = "".join([str(c) for c in row if c])
+                if "总计" not in joined:
+                    continue
+                left, right = _split_two_sided_row(row)
+                half = left if side == "income" else right
+                for i, cell in enumerate(half):
+                    if "总计" in str(cell or ""):
+                        value = _half_first_number(half, i + 1)
+                        if value is None and i > 0:
+                            value = _half_first_number(half, 0)
+                        if value is not None:
+                            return value
+            return None
 
-        # 1. 列内纵向校验 (Vertical Check)
-        # 本年收入合计 = Sum(Row 1..8)
-        # 本年支出合计 = Sum(所有功能分类科目)
-        # (由于功能分类较多且格式不固定，这里暂只实现关键行抓取和平衡性检查)
+        income_total = side_total("income")
+        expense_total = side_total("expense")
 
-        # 2. 表底平衡校验 (Balance Check)
-        # 收入侧：总计 = 本年收入合计 + 使用非财政拨款结余 + 年初结转和结余
-        # 支出侧：总计 = 本年支出合计 + 结余分配 + 年末结转和结余
-        
-        val_income_year = find_val_by_label(["本年收入合计"])
-        val_non_fiscal = find_val_by_label(["使用非财政拨款结余"])
-        val_start_balance = find_val_by_label(["年初结转和结余"])
-        
-        val_expense_year = find_val_by_label(["本年支出合计"])
-        val_balance_alloc = find_val_by_label(["结余分配"])
-        val_end_balance = find_val_by_label(["年末结转和结余"])
-        
-        # 查找总计行
-        total_vals = []
-        total_row_txt = ""
-        for r in rows:
-            if "总计" in "".join([str(c) for c in r]):
-                vs = _parse_row_values(r)
-                # 只有当总计行至少有2个大于0的数值，或者数值相等时才采纳
-                # 通常是 [收入总计, 支出总计]
-                if len(vs) >= 2:
-                    total_vals = vs
-                    total_row_txt = " | ".join([str(c) for c in r if c])
-                    break
-        
-        if len(total_vals) >= 2:
-            doc_income_total = total_vals[0]
-            doc_expense_total = total_vals[1] # 假设第二个数值是支出总计，或者倒数第一个
-            
-            # 如果总计行只有两个数，那分别对应收、支。如果有多个，通常最后两个。
-            if len(total_vals) > 2:
-                 doc_expense_total = total_vals[-1]
-            
-            # 校验1：表底平衡
-            if abs(doc_income_total - doc_expense_total) > 0.01:
-                 issues.append(self._issue(
-                    f"总表平衡性错误：收入总计({doc_income_total}) != 支出总计({doc_expense_total})",
-                    {"table": table_name}, "error",
-                    evidence_text=f"表格：{table_name}\n总计行内容：{total_row_txt}"
-                ))
-            
-            # 校验2：收入侧计算
-            calc_income = val_income_year + val_non_fiscal + val_start_balance
-            if abs(calc_income - doc_income_total) > 0.01:
+        # 校验1：表底平衡（收入总计 = 支出总计）
+        # 任一侧缺失 → 无法判定，跳过（不伪造 0.0 参与比较）
+        if income_total is not None and expense_total is not None:
+            level, diff = classify_amount_diff(income_total, expense_total, n_children=1)
+            if level == "mismatch":
                 issues.append(self._issue(
-                    f"收入侧平衡错误：计算值({calc_income}) != 文档值({doc_income_total})。公式：本年收入({val_income_year}) + 非财政({val_non_fiscal}) + 年初({val_start_balance})",
-                    {"table": table_name}, "error"
+                    f"总表平衡性错误：收入总计({income_total:.2f}) != 支出总计({expense_total:.2f})",
+                    {"table": table_name, "page": page}, "error",
+                    evidence_text=f"表格：{table_name}\n收入总计：{income_total}\n支出总计：{expense_total}"
                 ))
-                
-            # 校验3：支出侧计算
-            calc_expense = val_expense_year + val_balance_alloc + val_end_balance
-            if abs(calc_expense - doc_expense_total) > 0.01:
+            elif level == "rounding_hint":
                 issues.append(self._issue(
-                    f"支出侧平衡错误：计算值({calc_expense}) != 文档值({doc_expense_total})。公式：本年支出({val_expense_year}) + 分配({val_balance_alloc}) + 年末({val_end_balance})",
-                    {"table": table_name}, "error"
+                    f"总表平衡存在 {diff:.2f} 万元差异，在显示舍入包络内，可能为取整误差，建议复核。",
+                    {"table": table_name, "page": page}, "info",
+                    evidence_text=f"表格：{table_name}\n收入总计：{income_total}\n支出总计：{expense_total}"
+                ))
+
+        # 校验2/3：收入侧、支出侧平衡。任一分量取不到真实数值 → 跳过该侧校验
+        income_components = [
+            ("本年收入合计", _find_label_value(rows, ("本年收入合计",), side="income")),
+            ("使用非财政拨款结余", _find_label_value(rows, ("使用非财政拨款结余",), side="income")),
+            ("年初结转和结余", _find_label_value(rows, ("年初结转和结余",), side="income")),
+        ]
+        if income_total is not None and all(v is not None for _, v in income_components):
+            calc = sum(v for _, v in income_components)
+            level, diff = classify_amount_diff(income_total, calc, n_children=len(income_components))
+            if level == "mismatch":
+                detail = " + ".join(f"{name}({v:.2f})" for name, v in income_components)
+                issues.append(self._issue(
+                    f"收入侧平衡错误：计算值({calc:.2f}) != 收入总计({income_total:.2f})。公式：{detail}",
+                    {"table": table_name, "page": page}, "error",
+                    evidence_text=f"表格：{table_name}\n{detail}\n收入总计：{income_total}"
+                ))
+            elif level == "rounding_hint":
+                issues.append(self._issue(
+                    f"收入侧合计与分项存在 {diff:.2f} 万元差异，在显示舍入包络内，可能为取整误差。",
+                    {"table": table_name, "page": page}, "info",
+                    evidence_text=f"表格：{table_name}\n收入总计：{income_total}\n分项之和：{calc}"
+                ))
+
+        expense_components = [
+            ("本年支出合计", _find_label_value(rows, ("本年支出合计",), side="expense")),
+            ("结余分配", _find_label_value(rows, ("结余分配",), side="expense")),
+            ("年末结转和结余", _find_label_value(rows, ("年末结转和结余",), side="expense")),
+        ]
+        if expense_total is not None and all(v is not None for _, v in expense_components):
+            calc = sum(v for _, v in expense_components)
+            level, diff = classify_amount_diff(expense_total, calc, n_children=len(expense_components))
+            if level == "mismatch":
+                detail = " + ".join(f"{name}({v:.2f})" for name, v in expense_components)
+                issues.append(self._issue(
+                    f"支出侧平衡错误：计算值({calc:.2f}) != 支出总计({expense_total:.2f})。公式：{detail}",
+                    {"table": table_name, "page": page}, "error",
+                    evidence_text=f"表格：{table_name}\n{detail}\n支出总计：{expense_total}"
+                ))
+            elif level == "rounding_hint":
+                issues.append(self._issue(
+                    f"支出侧合计与分项存在 {diff:.2f} 万元差异，在显示舍入包络内，可能为取整误差。",
+                    {"table": table_name, "page": page}, "info",
+                    evidence_text=f"表格：{table_name}\n支出总计：{expense_total}\n分项之和：{calc}"
                 ))
 
         return issues
@@ -2372,103 +2481,207 @@ class R33120_DetailTableCheck(Rule):
     code, severity = "V33-120", "warn"
     desc = "明细表勾稽关系与层级校验 (Table 2, 3, 5)"
 
+    # 跨表同口径列名归一：表头「本年支出合计」「合计」视为同一口径
+    _COL_TOTAL = ("合计", "本年支出合计", "本年收入合计")
+    _COL_BASIC = ("基本支出",)
+    _COL_PROJECT = ("项目支出",)
+
+    def _header_columns(self, rows: List[List[str]]) -> Dict[str, int]:
+        """从表头（前 5 行）提取语义列索引：合计/基本支出/项目支出。"""
+        mapping: Dict[str, int] = {}
+        for row in rows[:5]:
+            for i, cell in enumerate(row):
+                text = re.sub(r"\s+", "", str(cell or ""))
+                if not text:
+                    continue
+                if text in self._COL_TOTAL and "total" not in mapping:
+                    mapping["total"] = i
+                elif text in self._COL_BASIC and "basic" not in mapping:
+                    mapping["basic"] = i
+                elif text in self._COL_PROJECT and "project" not in mapping:
+                    mapping["project"] = i
+        return mapping
+
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
         target_tables = ["收入决算表", "支出决算表", "一般公共预算财政拨款支出决算表"]
-        
+        table_totals: Dict[str, Dict[str, float]] = {}
+
         for table_name in target_tables:
             rows = _get_table_rows(doc, table_name)
-            if not rows: continue
-            
-            # 层级校验状态
-            # 存储格式: {code: amount}
-            hierarchy_data = {}
-            
-            # 定位金额列
-            # 对于收入表(Table 2)：Col 3 (合计) = Sum(4..end)
-            # 对于支出表(Table 3)：Col 3 (合计) = Sum(4..end)
-            # 对于一般支出(Table 5)：Col 4 (合计) = Sum(5..end)
-            # 需要智能识别 "合计" 列
-            
-            # 简化逻辑：
-            # 1. 识别编码列 (通常Col 0/1/2) 和金额合计列
-            # 2. 识别行级横向平衡
-            
-            col_total_idx = -1
-            
-            # 简单的列定位 heuristic
-            for r in rows[:5]: # 扫描前5行找表头
-                row_str = "".join([str(c) for c in r if c])
-                if "合计" in row_str:
-                    for i, cell in enumerate(r):
-                        if "合计" in str(cell):
-                            col_total_idx = i
-                if "科目编码" in row_str:
-                    pass # 假设编码在最前
-            
-            if col_total_idx == -1: 
-                # 尝试默认值，通常合计在中间或靠后
-                # Good sample: 收入表合计在 Col 4 (index 3, if 0-based and merged)
-                # 让我们遍历每行，如果发现某列数值等于后续列之和，则认为是合计列
-                pass
+            if not rows:
+                continue
+            page = _get_first_anchor_page(doc, table_name) or 1
 
-            for i, row in enumerate(rows):
-                vals = _parse_row_values(row)
-                "".join([str(c) for c in row if c])
-                
-                # 提取编码 (假设编码是单纯数字)
-                # 需处理 "201", "20101", "2010101"
+            # 跨页列宽漂移（HANDOFF §3.1C）：续页把「类|款|项」三列编码合并成
+            # 一列，行宽变窄。处置：以众数宽度为基准做**逻辑列重映射**——
+            # 尾部金额列按"行宽差"对齐（src = j + len(row) - modal_width），
+            # 前置编码列独立提取。旧实现直接按固定列索引取值，漂移行的
+            # 合计列取到 0.0/错值，产生「父级金额(0.0) != 子级之和」假警告。
+            modal_width = _modal_row_width(rows)
+            if modal_width is None:
+                continue
+
+            header_cols = self._header_columns(rows)
+            # 合计列：优先取语义表头；取不到则放弃层级校验（不做位置猜测）
+            col_total = header_cols.get("total")
+
+            hierarchy: Dict[str, Decimal] = {}
+            row_code_level: Dict[str, int] = {}
+            # 合计行的数值向量（None 安全，键为 modal 列索引）
+            total_row_values: Optional[Dict[int, Decimal]] = None
+
+            for row in rows:
+                cells = _row_numbers(row)
+                shift = len(row) - modal_width
+                joined = "".join([str(c) for c in row if c])
+                text = re.sub(r"\s+", "", joined)
+
+                # 合计行（表内汇总行，无科目编码）：名称列恰为「合计」、
+                # 行首为「合计」或含本年支出/收入合计字样
+                has_label_total = any(
+                    str(c or "").strip() == "合计" for c in row
+                ) or "本年支出合计" in text or "本年收入合计" in text or text.startswith("合计")
+                numeric_count = sum(1 for v in cells if v is not None)
+                if has_label_total and numeric_count >= 2 and not any(
+                    str(c or "").strip().isdigit() and len(str(c).strip()) in (3, 5, 7) for c in row[:3]
+                ):
+                    values = {
+                        j - shift: Decimal(str(v))
+                        for j, v in enumerate(cells)
+                        if v is not None and 0 <= j - shift < modal_width
+                    }
+                    if total_row_values is None and values:
+                        total_row_values = values
+                    continue
+
+                # 科目行：编码在前 3 列（3/5/7 位）
                 code = ""
-                for cell in row[:3]: # 检查前3列
-                    c_str = str(cell).strip()
-                    if c_str.isdigit() and len(c_str) in [3, 5, 7]:
+                for cell in row[:3]:
+                    c_str = str(cell or "").strip()
+                    if c_str.isdigit() and len(c_str) in (3, 5, 7):
                         code = c_str
                         break
-                
-                # 5. 行级横向校验 (Row Horizontal Check)
-                # 忽略表头和空行
-                if len(vals) > 2 and sum(vals) > 0.01:
-                    # 假定 Vals 中最大的数是合计，且等于其他数之和
-                    # 排序校验
-                    sorted_vals = sorted([v for v in vals if v > 0], reverse=True)
-                    if len(sorted_vals) >= 2:
-                        sorted_vals[0]
-                        sum(sorted_vals[1:])
-                        # 对于 Table 5: 合计 = 基本 + 项目 (2 items) -> max = sum(rest)
-                        # 对于 Table 2/3: 合计 = 多个 items -> max = sum(rest)
-                        
-                        # 只有当 rest_sum 近似等于 max_val 时才校验 (处理有些表包含非加项的情况)
-                        # 但这里要求严格校验。
-                        # 此时需准确定位 "合计" 列。
-                        
-                        # 如果找不到列，跳过
-                        pass
+                if not code:
+                    continue
 
-                # 6/7. 纵向层级校验 (Hierarchy Check)
-                if code and col_total_idx != -1 and col_total_idx < len(vals):
-                    amount = vals[col_total_idx]
-                    hierarchy_data[code] = amount
+                amount = None
+                if col_total is not None:
+                    src = col_total + shift  # modal 列在当前行中的下标（窄行 shift<0）
+                    if 0 <= src < len(cells) and cells[src] is not None:
+                        amount = Decimal(str(cells[src]))
+                elif len(cells) > 4:
+                    # 无语义表头时，取该行最后一个数值（None 安全，仍不做 0 填充）
+                    tail = [v for v in cells if v is not None]
+                    if tail:
+                        amount = Decimal(str(tail[-1]))
+                if amount is not None:
+                    hierarchy[code] = amount
+                    row_code_level[code] = len(code)
 
-            # 执行层级校验
-            # 类(3位) = Sum(款 5位)
-            # 款(5位) = Sum(项 7位)
-            for parent_code, parent_amt in hierarchy_data.items():
-                if len(parent_code) not in [3, 5]: continue
-                
+            # 层级校验：类(3位)=Σ款(5位)，款(5位)=Σ项(7位)
+            for parent_code, parent_amt in hierarchy.items():
+                if len(parent_code) not in (3, 5):
+                    continue
                 target_len = len(parent_code) + 2
-                child_sum = 0.0
-                has_children = False
-                
-                for child_code, child_amt in hierarchy_data.items():
-                    if len(child_code) == target_len and child_code.startswith(parent_code):
-                        child_sum += child_amt
-                        has_children = True
-                
-                if has_children and abs(parent_amt - child_sum) > 0.1:
-                     issues.append(self._issue(
-                        f"层级校验失败({parent_code}): 父级金额({parent_amt}) != 子级之和({child_sum})",
-                        {"table": table_name, "code": parent_code}, "warn",
-                        evidence_text=f"表格：{table_name}\n父级科目：{parent_code} (金额 {parent_amt})\n子级科目之和：{child_sum}"
+                children = [
+                    amt
+                    for code, amt in hierarchy.items()
+                    if len(code) == target_len and code.startswith(parent_code)
+                ]
+                if not children:
+                    continue
+                child_sum = sum(children, Decimal("0"))
+                level, diff = classify_amount_diff(
+                    parent_amt, child_sum, n_children=len(children)
+                )
+                if level == "mismatch":
+                    issues.append(self._issue(
+                        f"层级校验失败({parent_code}): 父级金额({parent_amt:.2f}) != 子级之和({child_sum:.2f})",
+                        {"table": table_name, "code": parent_code, "page": page}, "warn",
+                        evidence_text=f"表格：{table_name}\n父级科目：{parent_code} (金额 {parent_amt:.2f})\n子级科目之和：{child_sum:.2f}"
+                    ))
+                elif level == "rounding_hint":
+                    issues.append(self._issue(
+                        f"{table_name}科目 {parent_code} 与其明细之和相差 {diff:.2f} 万元，"
+                        "在显示舍入包络内，可能为取整误差。",
+                        {"table": table_name, "code": parent_code, "page": page}, "info",
+                        evidence_text=f"表格：{table_name}\n{parent_code}：{parent_amt:.2f}\n明细之和：{child_sum:.2f}"
+                    ))
+
+            # 列合计校验（T2 类差异）：最低级科目行按列求和 vs 合计行对应列
+            if hierarchy and total_row_values:
+                lowest_level = max(row_code_level.values())
+                lowest_codes = [
+                    c for c, lvl in row_code_level.items() if lvl == lowest_level
+                ]
+                # 按 modal 列索引聚合每列之和（漂移行经重映射对齐）
+                col_sums: Dict[int, Decimal] = defaultdict(lambda: Decimal("0"))
+                col_counts: Dict[int, int] = defaultdict(int)
+                for row in rows:
+                    cells = _row_numbers(row)
+                    shift = len(row) - modal_width
+                    code = ""
+                    for cell in row[:3]:
+                        c_str = str(cell or "").strip()
+                        if c_str.isdigit() and len(c_str) in (3, 5, 7):
+                            code = c_str
+                            break
+                    if code not in lowest_codes:
+                        continue
+                    for j, v in enumerate(cells):
+                        modal_idx = j - shift
+                        if v is not None and 0 <= modal_idx < modal_width:
+                            col_sums[modal_idx] += Decimal(str(v))
+                            col_counts[modal_idx] += 1
+
+                for col_idx, total_value in total_row_values.items():
+                    if col_idx not in col_sums:
+                        continue
+                    n = col_counts.get(col_idx, 1)
+                    level, diff = classify_amount_diff(
+                        total_value, col_sums[col_idx], n_children=max(n, 1)
+                    )
+                    if level == "mismatch":
+                        issues.append(self._issue(
+                            f"{table_name}合计行列校验失败：合计({total_value:.2f}) != 明细之和({col_sums[col_idx]:.2f})",
+                            {"table": table_name, "column": col_idx, "page": page}, "warn",
+                            evidence_text=f"表格：{table_name}\n合计值：{total_value:.2f}\n明细之和：{col_sums[col_idx]:.2f}"
+                        ))
+                    elif level == "rounding_hint":
+                        issues.append(self._issue(
+                            f"{table_name}合计行与明细之和相差 {diff:.2f} 万元，"
+                            "在显示舍入包络内，可能为取整误差。",
+                            {"table": table_name, "column": col_idx, "page": page}, "info",
+                            evidence_text=f"表格：{table_name}\n合计值：{total_value:.2f}\n明细之和：{col_sums[col_idx]:.2f}"
+                        ))
+                table_totals[table_name] = {
+                    "total_row": {i: float(v) for i, v in total_row_values.items()},
+                    "header_cols": header_cols,
+                    "width": modal_width,
+                }
+
+        # 跨表同口径近似差异（T3 类）：支出决算表 ↔ 一般公共预算财政拨款支出决算表
+        # 两表资金口径允许不同，但出现 0.01~0.5 级别的近似差异时可疑，转人工复核
+        t3 = table_totals.get("支出决算表")
+        t5 = table_totals.get("一般公共预算财政拨款支出决算表")
+        if t3 and t5:
+            for role in ("total", "basic", "project"):
+                idx3 = t3["header_cols"].get(role)
+                idx5 = t5["header_cols"].get(role)
+                if idx3 is None or idx5 is None:
+                    continue
+                v3 = t3["total_row"].get(idx3)
+                v5 = t5["total_row"].get(idx5)
+                if v3 is None or v5 is None:
+                    continue
+                diff = abs(Decimal(str(v3)) - Decimal(str(v5)))
+                if Decimal("0.5") >= diff > Decimal("0"):
+                    issues.append(self._issue(
+                        f"支出决算表与一般公共预算财政拨款支出决算表同口径列相差 {diff:.2f} 万元"
+                        "（可能为取整误差或口径差异），需人工复核。",
+                        {"table": "支出决算表↔一般公共预算财政拨款支出决算表", "page": _get_first_anchor_page(doc, "支出决算表") or 1}, "manual_review",
+                        evidence_text=f"支出决算表：{v3:.2f}\n一般公共预算财政拨款支出决算表：{v5:.2f}"
                     ))
 
         return issues
@@ -2478,99 +2691,116 @@ class R33117_BasicExpenseClassification(Rule):
     code, severity = "V33-117", "error"
     desc = "基本支出决算表经济分类校验 (Table 6)"
 
+    _PERSONNEL_CLASSES = ("301", "303")
+    _PUBLIC_CLASSES = ("302", "310")
+    _CLASS_LABELS = {
+        "人员经费合计": _PERSONNEL_CLASSES,
+        "公用经费合计": _PUBLIC_CLASSES,
+    }
+
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
         table_name = "一般公共预算财政拨款基本支出决算表"
         rows = _get_table_rows(doc, table_name)
-        if not rows: return []
-        
-        sum_personnel = 0.0
-        sum_public = 0.0
-        
-        # 8/9. 板块汇总校验
-        # 识别 301, 303 -> 人员
-        # 识别 302, 310 -> 公用
-        
-        # 需遍历所有行，识别类级科目 (3位数)
-        for row in rows:
-            # 提取编码
-            code = ""
-            for cell in row[:3]:
-                c_str = str(cell).strip()
-                if c_str.isdigit() and len(c_str) == 3:
-                    code = c_str
-                    break
-            
-            if code:
-                _parse_row_values(row)
-                # 假设金额在最后一列，或倒数第二列 (有些表双栏)
-                # 双栏处理比较复杂：[301, 工资, Amt, 302, 商品, Amt]
-                # 需检查行内是否包含多个类
-                
-                # 简化处理：全文搜索 301xxx 金额
-                pass
-        
-        # 使用更粗暴但有效的方法：文本解析
-        # 提取所有 (Code, Amount) 对
-        for row in rows:
-            _parse_row_values(row)
-            [str(c).strip() for c in row if c]
-            
-            # 双栏检测
-            # 栏1: Code1 (Name1) Amt1
-            # 栏2: Code2 (Name2) Amt2
-            # 尝试匹配 3位数字
-            
-            # 正则提取行内所有 3位数字及其后紧跟的数值
-            # 需结合 row 结构
-            
-            # 策略：如果单元格是3位数字，且后面某单元格是数值，则通过
-            # 仅处理 类级 (301, 302, 303, 310)
-            
-            for i, cell in enumerate(row):
-                c_str = str(cell).strip()
-                if c_str in ["301", "302", "303", "310"]:
-                    # 找该 Code 后的数值
-                    # 在 row[i+1:] 中找第一个有效数值
-                    amt = 0.0
-                    for next_cell in row[i+1:]:
-                        v = parse_number(next_cell)
-                        if v is not None:
-                            amt = v
-                            break
-                    if amt > 0:
-                        if c_str in ["301", "303"]: sum_personnel += amt
-                        if c_str in ["302", "310"]: sum_public += amt
+        if not rows:
+            return []
+        page = _get_first_anchor_page(doc, table_name) or 1
 
-        # 验证合计
-        # 查找表中显式的 "人员经费合计" 和 "公用经费合计"
-        explicit_personnel = 0.0
-        explicit_public = 0.0
-        
-        def find_val(kw):
-            for r in rows:
-                if kw in "".join([str(c) for c in r]):
-                    vs = _parse_row_values(r)
-                    if vs: return vs[-1]
-            return 0.0
+        modal_width = _modal_row_width(rows)
+        if modal_width is None:
+            return []
+        kept = [r for r in rows if len(r) == modal_width]
 
-        explicit_personnel = find_val("人员经费合计")
-        explicit_public = find_val("公用经费合计")
-        
-        # 如果表中有显式合计行，则校验
-        if explicit_personnel > 0 and abs(explicit_personnel - sum_personnel) > 1.0:
-             issues.append(self._issue(
-                f"人员经费校验失败：显式合计({explicit_personnel}) != 分项之和({sum_personnel})",
-                {"table": table_name}, "warn",
-                evidence_text=f"表格：{table_name}\n显式合计行：人员经费合计={explicit_personnel}\n逐行累加：301/303类科目之和={sum_personnel}"
-            ))
-            
-        if explicit_public > 0 and abs(explicit_public - sum_public) > 1.0:
-             issues.append(self._issue(
-                f"公用经费校验失败：显式合计({explicit_public}) != 分项之和({sum_public})",
-                {"table": table_name}, "warn",
-                evidence_text=f"表格：{table_name}\n显式合计行：公用经费合计={explicit_public}\n逐行累加：302/310类科目之和={sum_public}"
-            ))
+        # 双栏经济分类布局：每半行 = [类, 款, 科目名称..., 决算数]。
+        # 类级行与款级行的区分：第二个单元格是 1~2 位数字 → 款级明细行；
+        # 为空或文本 → 类级行。旧实现对所有含类码的行取"其后第一个数值"
+        # 累加，把款级明细重复计入类级合计，得到 3309.02 这类凭空累加值
+        # （HANDOFF §3.1B）。
+        class_amounts: Dict[str, Decimal] = {}
+        children_by_class: Dict[str, List[Decimal]] = defaultdict(list)
+
+        for row in kept:
+            left, right = _split_two_sided_row(row)
+            for half in (left, right):
+                if not half:
+                    continue
+                c1 = str(half[0] or "").strip()
+                if not (c1.isdigit() and len(c1) == 3 and "300" <= c1 <= "399"):
+                    # 半行起点不是类码：合并单元格续行或文本行，跳过
+                    continue
+                c2 = str(half[1] or "").strip() if len(half) > 1 else ""
+                if c2.isdigit() and len(c2) in (1, 2):
+                    # 款级明细行：归入其类级的子项
+                    value = _half_first_number(half, 2)
+                    if value is not None:
+                        children_by_class[c1].append(Decimal(str(value)))
+                    continue
+                # 类级行：金额 = 该半行内第一个真实数值
+                value = _half_first_number(half, 1)
+                if value is not None and c1 not in class_amounts:
+                    class_amounts[c1] = Decimal(str(value))
+
+        # 显式合计行（标签与数值同半行取值，不做跨半行猜测）
+        explicit: Dict[str, Decimal] = {}
+        for row in kept:
+            left, right = _split_two_sided_row(row)
+            for half in (left, right):
+                half_text = "".join([str(c) for c in half if c])
+                for label in self._CLASS_LABELS:
+                    if label in half_text and label not in explicit:
+                        value = _half_first_number(half, 1)
+                        if value is not None:
+                            explicit[label] = Decimal(str(value))
+
+        # 类级金额缺失时无法判定 → 跳过（不伪造数值）
+        def class_sum(codes) -> Optional[Decimal]:
+            values = [class_amounts.get(c) for c in codes]
+            if any(v is None for v in values):
+                return None
+            return sum(values, Decimal("0"))
+
+        checks = [
+            ("人员经费", explicit.get("人员经费合计"), class_sum(self._PERSONNEL_CLASSES), self._PERSONNEL_CLASSES),
+            ("公用经费", explicit.get("公用经费合计"), class_sum(self._PUBLIC_CLASSES), self._PUBLIC_CLASSES),
+        ]
+        for label, explicit_value, computed, codes in checks:
+            if explicit_value is None or computed is None:
+                continue
+            n = len(codes)
+            level, diff = classify_amount_diff(explicit_value, computed, n_children=n)
+            if level == "mismatch":
+                issues.append(self._issue(
+                    f"{label}校验失败：显式合计({explicit_value:.2f}) != 类级之和({computed:.2f})",
+                    {"table": table_name, "page": page}, "warn",
+                    evidence_text=f"表格：{table_name}\n显式合计行：{label}={explicit_value:.2f}\n类级科目之和：{computed:.2f}"
+                ))
+            elif level == "rounding_hint":
+                issues.append(self._issue(
+                    f"{label}显式合计与类级之和相差 {diff:.2f} 万元，在显示舍入包络内，可能为取整误差。",
+                    {"table": table_name, "page": page}, "info",
+                    evidence_text=f"表格：{table_name}\n显式合计：{explicit_value:.2f}\n类级之和：{computed:.2f}"
+                ))
+
+        # 类级 = Σ款级明细（T4 类差异，如 310 行 14.44 vs 明细和 14.43）
+        for class_code, children in children_by_class.items():
+            parent = class_amounts.get(class_code)
+            if parent is None or not children:
+                continue
+            child_sum = sum(children, Decimal("0"))
+            level, diff = classify_amount_diff(parent, child_sum, n_children=len(children))
+            if level == "mismatch":
+                issues.append(self._issue(
+                    f"经济分类科目 {class_code} 归集失败：类级金额({parent:.2f}) != 明细之和({child_sum:.2f})",
+                    {"table": table_name, "code": class_code, "page": page}, "warn",
+                    evidence_text=f"表格：{table_name}\n{class_code}：{parent:.2f}\n明细之和：{child_sum:.2f}"
+                ))
+            elif level == "rounding_hint":
+                issues.append(self._issue(
+                    f"经济分类科目 {class_code} 与其明细之和相差 {diff:.2f} 万元，"
+                    "在显示舍入包络内，可能为取整误差。",
+                    {"table": table_name, "code": class_code, "page": page}, "info",
+                    evidence_text=f"表格：{table_name}\n{class_code}：{parent:.2f}\n明细之和：{child_sum:.2f}"
+                ))
 
         return issues
 
@@ -3504,34 +3734,47 @@ class R33244_Table7_ThreePublicAdvancedCheck(Rule):
                     ))
 
         # --- C. 表文一致性与空值智控 (Case A/B/C) ---
-        import re
-        all_text = "\n" + "\n".join(doc.page_texts)
-        
-        # 锁定“三公”经费说明段落
+        # 说明归因（HANDOFF §3.2A）：先做软换行恢复再锁章节，最后用
+        # 主体沿分句继承的事实抽取。旧实现 `科目.*?口径.{0,20}?(\d+)万元`
+        # 被跨行断字打穿——「因公出国（境）费决\n算为0.00」匹配不到字面
+        # "决算"，滑到下一条"支出决算为16.95"，把公车决算错配给出国分项。
+        merged_all = merge_page_texts(doc.page_texts)
+
+        # 锁定“三公”经费说明段落（合并后的段落行上匹配）
         three_public_section = ""
-        # 匹配章节标题，通常形如“七、...三公...情况说明”
-        p_title = r'\n[一二三四五六七八九十]、[^\n]{1,40}情况说明'
-        matches = list(re.finditer(p_title, all_text))
-        
-        for m in matches:
-            title_text = m.group(0)
-            if "三公" not in title_text:
-                continue
-            # 截取标题后的内容，直到下一个主标题或3500字符
-            rest = all_text[m.end():]
-            m_next = re.search(r'\n[一二三四五六七八九十]、', rest)
-            temp_section = rest[:m_next.start()] if m_next else rest[:3500]
-            
-            # 验证：说明段落应包含具体的预算或决算数值描述
+        p_title = r'(?:^|\n)[（(]?[一二三四五六七八九十]+[)）、][^\n]{0,40}三公[^\n]{0,40}说明'
+        for m in re.finditer(p_title, merged_all):
+            rest = merged_all[m.end():]
+            m_next = re.search(r'(?:^|\n)[一二三四五六七八九十]+、', rest)
+            temp_section = rest[: m_next.start()] if m_next else rest[:3500]
             if "预算" in temp_section or "决算" in temp_section:
                 three_public_section = temp_section
                 break
-        
-        # 兜底：如果章节匹配完全失败，使用全文匹配
         if not three_public_section:
-            three_public_section = all_text
+            # 兜底：含三公字样的所有段落
+            candidate_paras = [
+                para for para in merged_all.splitlines() if "三公" in para or "公务接待" in para or "因公出国" in para
+            ]
+            three_public_section = "\n".join(candidate_paras)
 
-        standard_nar_final_total = _extract_standard_three_public_total(three_public_section, "决算")
+        nar_facts = extract_three_public_facts(three_public_section)
+        # 表文对比只使用"基数"事实（决算/预算），同比变化句金额不得参与
+        fact_final: Dict[str, float] = {}
+        fact_budget: Dict[str, float] = {}
+        for fact in nar_facts:
+            if fact.amount is None:
+                continue
+            if fact.metric == "决算":
+                fact_final.setdefault(fact.subject, fact.amount)
+            elif fact.metric == "预算":
+                fact_budget.setdefault(fact.subject, fact.amount)
+
+        merged_section = "\n".join(merge_soft_wrapped_lines(three_public_section))
+        standard_nar_final_total = _extract_standard_three_public_total(
+            merged_section, "决算"
+        )
+        if standard_nar_final_total is None:
+            standard_nar_final_total = fact_final.get("三公经费合计")
         if standard_nar_final_total is not None:
             data_val = data["final"][0]
             is_empty = data["is_empty"]["final"][0]
@@ -3557,25 +3800,16 @@ class R33244_Table7_ThreePublicAdvancedCheck(Rule):
                     evidence_text=f"文字说明：{standard_nar_final_total}\n表格数据：{data_val}",
                 ))
 
-        def get_nar_val(item_p, type_p):
-            # item_p: 科目特征; type_p: 预算/决算
-            # 模式：科目...口径(紧跟)...数值...万元
-            # 再次收紧：口径后面 20 字符内必须出数值，防止跨句（例如从标题的“决算”跳到正文的预算值）
-            pattern = fr'{item_p}.*?{type_p}.{{0,20}}?(\d+\.?\d*)\s*万元'
-            m = re.search(pattern, three_public_section, re.S)
-            return float(m.group(1)) if m else None
+        # 事实取值：科目基数（决算/预算口径），取不到 → None → 对应校验跳过
+        nar_f_total = fact_final.get("三公经费合计")
+        nar_f_abroad = fact_final.get("因公出国（境）费")
+        nar_f_car = fact_final.get("公务用车购置及运行维护费")
+        nar_f_reception = fact_final.get("公务接待费")
 
-        # 决算侧 (Final)
-        nar_f_total = get_nar_val(r'三公.*?支出', "决算")
-        nar_f_abroad = get_nar_val(r'因公出国', "决算")
-        nar_f_car = get_nar_val(r'公务用车', "决算")
-        nar_f_reception = get_nar_val(r'公务接待', "决算")
-
-        # 预算侧 (Budget)
-        nar_b_total = get_nar_val(r'三公.*?支出', r'预算')
-        nar_b_abroad = get_nar_val(r'因公出国', r'预算')
-        nar_b_car = get_nar_val(r'公务用车', r'预算')
-        nar_b_reception = get_nar_val(r'公务接待', r'预算')
+        nar_b_total = fact_budget.get("三公经费合计")
+        nar_b_abroad = fact_budget.get("因公出国（境）费")
+        nar_b_car = fact_budget.get("公务用车购置及运行维护费")
+        nar_b_reception = fact_budget.get("公务接待费")
 
         # 检查逻辑
         labels = ["合计", "因公出国", "公务用车", "公务接待"]
@@ -4153,142 +4387,119 @@ class R33220_Narrative3_T3(Rule):
 
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
-        import re
 
         _ensure_table_anchors(doc)
-        # 1. 提取叙述中的关键金额
+        # 1. 提取叙述中的关键金额（说明归因：软换行恢复 + 章节切分 + 分句配对）。
+        # 旧实现在含"本年支出合计"的**表格页**上用 [^\d]* 抓数字，把表内
+        # 合计 4733.14 误当成"基本支出的说明值"（HANDOFF §3.1D）。
+        merged_text = merge_page_texts(doc.page_texts)
         nar_basic = None
         nar_project = None
         narrative_page: Optional[int] = None
 
-        for pidx, txt in enumerate(doc.page_texts):
-            if "支出决算情况说明" in txt or "本年支出合计" in txt:
-                # 尝试更精确的正则匹配
-                # 模式：基本支出 XXX 万元，占 XX%；项目支出 XXX 万元，占 XX%
-                basic_matches = re.findall(r'基本支出[^\d]*(\d+\.?\d*)\s*万元', txt)
-                project_matches = re.findall(r'项目支出[^\d]*(\d+\.?\d*)\s*万元', txt)
-                
-                if basic_matches:
-                    nar_basic = float(basic_matches[0])
-                if project_matches:
-                    nar_project = float(project_matches[0])
-                
-                if nar_basic is not None or nar_project is not None:
-                    narrative_page = pidx + 1
-                    break
-        
+        for title, body, _offset in split_numbered_sections(merged_text):
+            if "支出决算情况说明" not in title:
+                continue
+            body_clauses = split_clauses(body)
+            for clause in body_clauses:
+                if nar_basic is None and "基本支出" in clause:
+                    amounts = extract_amounts(clause)
+                    if amounts:
+                        nar_basic = amounts[0][0]
+                if nar_project is None and "项目支出" in clause:
+                    amounts = extract_amounts(clause)
+                    if amounts:
+                        nar_project = amounts[0][0]
+            if nar_basic is not None or nar_project is not None:
+                # 页码定位：在原始页中检索章节标题
+                title_key = re.sub(r"\s+", "", title)[:18]
+                for pi, page_text in enumerate(doc.page_texts):
+                    if title_key and title_key in re.sub(r"\s+", "", page_text):
+                        narrative_page = pi + 1
+                        break
+                break
+
         # 2. 获取 T3 数据
         t3_page = _get_first_anchor_page(doc, "支出决算表")
         t3_rows = _get_table_rows(doc, "支出决算表")
         if not t3_rows:
             return issues
 
-        # 提取 T3 合计行的 基本支出 和 项目支出
-        t3_total = 0.0
-        t3_basic = 0.0
-        t3_project = 0.0
-        
+        # 提取 T3 合计行数值（None 安全，不再把行标签转 0.0）
+        t3_total_values: List[float] = []
+
         for row in t3_rows:
             row_txt = "".join([str(c) for c in row if c])
-            # 找合计行
-            if "合计" in row_txt or "本年支出合计" in row_txt:
-                vals = _parse_row_values(row)
-                # T3 结构通常是：... | 合计 | 基本支出 | 项目支出 | ...
-                # 这里比较依赖列位置，或者简单的数值大小推断
-                # 假设：最大的是合计，其次是基本/项目? 不一定
-                # 安全做法：假设 T3 表头已知。但这里 doc.page_tables 没有表头语义
-                # 降级策略：在合计行里找跟 nar_basic / nar_project 接近的数
-                
-                if vals:
-                    t3_total = max(vals)
-                    # 尝试找到 基本 和 项目
-                    # 通常 基本 + 项目 = 合计
-                    # 只有两个数相加等于最大数，且这两个数都在 vals 里
-                    
-                    # 简单的启发式：如果有叙述值，直接去 vals 里找是否存在接近的
-                    
-                    # 校验基本支出
-                    if nar_basic is not None:
-                        # 在行数据中查找是否有一个值近似 nar_basic
-                        has_match = any(abs(v - nar_basic) <= 0.01 for v in vals)
-                        if not has_match:
-                            location = _make_issue_location(
-                                _make_location_ref(
-                                    role="说明3",
-                                    page=narrative_page,
-                                    section="说明3（支出决算情况）",
-                                    field="基本支出",
-                                    value=nar_basic,
-                                ),
-                                _make_location_ref(
-                                    role="T3",
-                                    page=t3_page,
-                                    table="支出决算表",
-                                    row="合计",
-                                    field="基本支出",
-                                ),
-                                table="支出决算表",
-                                section="说明3（支出决算情况）",
-                                row="合计",
-                                field="基本支出",
-                            )
-                            issues.append(self._issue(
-                                f"说明3↔T3基本支出不一致：说明={nar_basic:.2f}, 表内未找到对应值 (行数据: {vals})",
-                                location, "warn",
-                                evidence_text=f"文档说明(基本支出)：{nar_basic}\n表3合计行数据：{vals}\n（未寻找匹配值）"
-                            ))
-                    
-                    # 校验项目支出
-                    if nar_project is not None:
-                         has_match = any(abs(v - nar_project) <= 0.01 for v in vals)
-                         if not has_match:
-                            location = _make_issue_location(
-                                _make_location_ref(
-                                    role="说明3",
-                                    page=narrative_page,
-                                    section="说明3（支出决算情况）",
-                                    field="项目支出",
-                                    value=nar_project,
-                                ),
-                                _make_location_ref(
-                                    role="T3",
-                                    page=t3_page,
-                                    table="支出决算表",
-                                    row="合计",
-                                    field="项目支出",
-                                ),
-                                table="支出决算表",
-                                section="说明3（支出决算情况）",
-                                row="合计",
-                                field="项目支出",
-                            )
-                            issues.append(self._issue(
-                                f"说明3↔T3项目支出不一致：说明={nar_project:.2f}, 表内未找到对应值 (行数据: {vals})",
-                                location, "warn",
-                                evidence_text=f"文档说明(项目支出)：{nar_project}\n表3合计行数据：{vals}\n（未寻找匹配值）"
-                            ))
-                    
-                    # 校验占比 (如果叙述中有百分比)
-                    pct_pattern = r'(\d+\.?\d*)\s*%'
-                    matches = re.finditer(pct_pattern, txt)
-                    for m in matches:
-                        p_val = float(m.group(1))
-                        # 检查这个百分比是否对应基本或项目
-                        # 简单逻辑：看百分比前后的文字
-                        context = txt[max(0, m.start()-10):m.end()]
-                        
-                        calc_pct = None
-                        if "基本" in context and t3_total > 0:
-                            calc_pct = (t3_basic if t3_basic > 0 else nar_basic or 0) / t3_total * 100
-                        elif "项目" in context and t3_total > 0:
-                            calc_pct = (t3_project if t3_project > 0 else nar_project or 0) / t3_total * 100
-                        
-                        if calc_pct is not None:
-                            if abs(p_val - calc_pct) > 0.05: # 百分比容差稍大一点
-                                 pass # 暂时不报百分比错误，优先报金额错误
-                    
-                    break
-        
+            if "合计" not in row_txt and "本年支出合计" not in row_txt:
+                continue
+            values = _numeric_values(row)
+            has_code = any(
+                str(c or "").strip().isdigit() and len(str(c).strip()) in (3, 5, 7)
+                for c in row[:3]
+            )
+            if values and not has_code:
+                t3_total_values = values
+                break
+
+        def _value_matches(nar_value: float) -> bool:
+            return any(abs(v - nar_value) <= 0.01 for v in t3_total_values)
+
+        # 校验说明↔表：仅在两侧都取到真实数值时判定
+        if t3_total_values and (nar_basic is not None or nar_project is not None):
+            if nar_basic is not None and not _value_matches(nar_basic):
+                location = _make_issue_location(
+                    _make_location_ref(
+                        role="说明3",
+                        page=narrative_page,
+                        section="说明3（支出决算情况）",
+                        field="基本支出",
+                        value=nar_basic,
+                    ),
+                    _make_location_ref(
+                        role="T3",
+                        page=t3_page,
+                        table="支出决算表",
+                        row="合计",
+                        field="基本支出",
+                    ),
+                    table="支出决算表",
+                    section="说明3（支出决算情况）",
+                    row="合计",
+                    field="基本支出",
+                )
+                issues.append(self._issue(
+                    f"说明3↔T3基本支出不一致：说明={nar_basic:.2f}, 表内未找到对应值 (行数据: {t3_total_values})",
+                    location, "warn",
+                    evidence_text=f"文档说明(基本支出)：{nar_basic}; 表3合计行数据：{t3_total_values}"
+                ))
+
+            if nar_project is not None and not _value_matches(nar_project):
+                location = _make_issue_location(
+                    _make_location_ref(
+                        role="说明3",
+                        page=narrative_page,
+                        section="说明3（支出决算情况）",
+                        field="项目支出",
+                        value=nar_project,
+                    ),
+                    _make_location_ref(
+                        role="T3",
+                        page=t3_page,
+                        table="支出决算表",
+                        row="合计",
+                        field="项目支出",
+                    ),
+                    table="支出决算表",
+                    section="说明3（支出决算情况）",
+                    row="合计",
+                    field="项目支出",
+                )
+                issues.append(self._issue(
+                    f"说明3↔T3项目支出不一致：说明={nar_project:.2f}, 表内未找到对应值 (行数据: {t3_total_values})",
+                    location, "warn",
+                    evidence_text=f"文档说明(项目支出)：{nar_project}; 表3合计行数据：{t3_total_values}"
+                ))
+
         return issues
 
 
@@ -5178,6 +5389,119 @@ class R33232_PercentagePrecision(Rule):
         return issues
 
 
+class R33245_ThreePublicDirectionContradiction(Rule):
+    """三公说明逻辑矛盾：同一主体同一口径同时出现「减少/增加」与「持平」。
+
+    样张实例（T5，P26）：「公务接待费支出决算减少为0.00万元，与2024年
+    持平」——若 2024 年为 0 应称持平，减少则不成立；两者同段同主体出现
+    即为逻辑矛盾（HANDOFF §2 A 档 T5）。
+    """
+    code, severity = "V33-245", "medium"
+    desc = "三公经费说明：增减方向与持平表述的逻辑矛盾"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        issues: List[Issue] = []
+        merged = merge_page_texts(doc.page_texts)
+
+        from src.utils.narration import _THREE_PUBLIC_SUBJECTS
+
+        for para in merge_soft_wrapped_lines(merged):
+            if "三公" not in para and "公务接待" not in para and "因公出国" not in para and "公务用车" not in para:
+                continue
+            clauses = split_clauses(para)
+            # 主体沿分句继承，与事实抽取保持同一口径
+            current_subject = ""
+            directions: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
+            for clause in clauses:
+                subject = current_subject
+                for token, name in _THREE_PUBLIC_SUBJECTS:
+                    if token in clause:
+                        subject = name
+                        current_subject = name
+                        break
+                if not subject:
+                    continue
+                direction = clause_direction(clause)
+                if direction:
+                    directions[subject].append((direction, clause))
+
+            for subject, hits in directions.items():
+                has_flat = any(d == "flat" for d, _ in hits)
+                has_move = any(d in ("up", "down") for d, _ in hits)
+                if has_flat and has_move:
+                    evidence = "；".join(clause for _, clause in hits)[:200]
+                    # 页码定位用首个命中分句（原文里没有拼接用的分隔符）
+                    locate_text = hits[0][1]
+                    issues.append(self._issue(
+                        f"三公说明逻辑矛盾：「{subject}」同时出现增减变化与“持平”表述，"
+                        "两者不能同时成立，需核实同比口径后修正。",
+                        {"page": self._locate_page(doc, locate_text)},
+                        severity="medium",
+                        evidence_text=evidence,
+                    ))
+
+        return issues
+
+    @staticmethod
+    def _locate_page(doc: Document, snippet: str) -> int:
+        compact = re.sub(r"\s+", "", snippet)[:24]
+        for pi, page_text in enumerate(doc.page_texts):
+            if compact and compact in re.sub(r"\s+", "", page_text):
+                return pi + 1
+        return 1
+
+
+class R33246_DomesticReceptionDisclosure(Rule):
+    """国内公务接待批次/人次披露完整性（T6，P27）。
+
+    官方公开要求：公务接待费说明应披露国内公务接待的批次与人次。
+    仅披露外宾（「接待外宾0批次、0人次」）而缺国内批次/人次时，
+    属披露缺失（样张实测：仅写外宾 0 批次 0 人次）。
+    """
+    code, severity = "V33-246", "medium"
+    desc = "公务接待：国内公务接待批次、人次披露完整性"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        issues: List[Issue] = []
+        merged = merge_page_texts(doc.page_texts)
+
+        for para in merge_soft_wrapped_lines(merged):
+            if "公务接待" not in para:
+                continue
+            clauses = split_clauses(para)
+            # 该段是否为公务接待具体说明（含批次/人次语境或接待支出语境）
+            if not any("批次" in clause or "人次" in clause or "国内公务接待" in clause for clause in clauses):
+                continue
+
+            domestic_disclosed = False
+            foreign_disclosed = False
+            for clause in clauses:
+                compact = re.sub(r"\s+", "", clause)
+                if "国内公务接待" in compact and ("批次" in compact or "人次" in compact):
+                    domestic_disclosed = True
+                if ("外宾" in compact or "国外" in compact or "境外" in compact) and (
+                    "批次" in compact or "人次" in compact
+                ):
+                    foreign_disclosed = True
+
+            if domestic_disclosed:
+                continue
+            # 国内批次/人次缺失：无论外宾是否披露，都属披露不完整；
+            # 但若整段连接待支出语境都没有则不触发（避免误伤目录/表格页）
+            if not any("国内公务接待" in clause or foreign_disclosed for clause in clauses):
+                continue
+            page = R33245_ThreePublicDirectionContradiction._locate_page(doc, para[:40])
+            issues.append(self._issue(
+                "公务接待说明未披露国内公务接待批次、人次，"
+                "应补充「国内公务接待X批次、X人次」（含公务接待费对应口径）。",
+                {"page": page},
+                severity="medium",
+                evidence_text=para[:200],
+            ))
+
+        return issues
+
+
 ALL_RULES = [
     R33001_CoverYearUnit(),
     R33002_NineTablesCheck(),
@@ -5214,6 +5538,9 @@ ALL_RULES = [
     # P1 - 表内强校验
     # R33210/R33211 已被更精准的 R33240/R33241 替代
     R33244_Table7_ThreePublicAdvancedCheck(),
+    # 文字规范/披露完整性（样张整改新增）
+    R33245_ThreePublicDirectionContradiction(),
+    R33246_DomesticReceptionDisclosure(),
     R33242_Table4_ComprehensiveCheck(),
     R33240_Table2_IncomeAdvancedCheck(),
     R33241_Table3_ExpenseAdvancedCheck(),

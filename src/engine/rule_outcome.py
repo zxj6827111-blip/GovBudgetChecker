@@ -49,21 +49,33 @@ NON_FINDING_STATUSES = frozenset(
 )
 
 
-class RuleDeferred(BaseException):
-    """规则判定数据不足时抛出：不生成 finding，记为 insufficient_data。
+class RuleOutcomeSignal(BaseException):
+    """规则主动上报非 fail 结局的信号基类（继承 BaseException 见 RuleDeferred 说明）。"""
 
-    继承 ``BaseException`` 而非 ``Exception``：规则内部常见笼统的
-    ``except Exception`` 兜底，若用普通异常会被吞掉重新伪装成正常返回；
-    BaseException 会穿透这类兜底，由 pipeline 的规则调度层统一接住。
-    """
+    status = STATUS_INSUFFICIENT_DATA
 
     def __init__(self, rule_id: str, detail: str = "") -> None:
         super().__init__(detail or rule_id)
         self.rule_id = rule_id
         self.detail = detail
 
+
+class RuleDeferred(RuleOutcomeSignal):
+    """规则判定数据不足：不生成 finding，记为 insufficient_data。"""
+
+    status = STATUS_INSUFFICIENT_DATA
+
     def __str__(self) -> str:  # pragma: no cover - 调试用
         return f"insufficient_data: {self.rule_id}: {self.detail}"
+
+
+class RuleNotApplicable(RuleOutcomeSignal):
+    """规则对当前材料不适用（如科目域/资金口径不可比）：不生成 finding。"""
+
+    status = STATUS_NOT_APPLICABLE
+
+    def __str__(self) -> str:  # pragma: no cover - 调试用
+        return f"not_applicable: {self.rule_id}: {self.detail}"
 
 
 @dataclass

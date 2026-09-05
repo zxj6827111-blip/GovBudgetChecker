@@ -13,6 +13,11 @@ from src.schemas.issues import JobContext, AnalysisConfig, IssueItem
 from src.engine.rules_v33 import ALL_RULES as FINAL_ALL_RULES, build_document, Issue, Document
 from src.engine.budget_rules import ALL_BUDGET_RULES
 from src.engine.common_rules import ALL_COMMON_RULES
+from src.engine.rule_outcome import (
+    RuleOutcome,
+    RuleOutcomeSignal,
+    summarize_rule_outcomes,
+)
 from src.utils.issue_bbox import PDFBBoxLocator
 from src.utils.issue_location import normalize_issue_location
 from src.utils.logging_config import describe_exception, safe_log_extra
@@ -24,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class EngineRuleResult:
-    """寮曟搸瑙勫垯鎵ц缁撴灉"""
+    """寮曟搸瑙勫垯鎵ц缁撴灉"""
     rule_id: str
     success: bool
     findings: List[IssueItem]
@@ -40,6 +45,7 @@ class EngineRuleRunner:
             "successful_rules": 0,
             "failed_rules": 0,
         }
+        self._outcomes: List[RuleOutcome] = []
 
     @staticmethod
     def _normalize_severity(raw_severity: Any) -> str:
@@ -222,22 +228,23 @@ class EngineRuleRunner:
             "failed_rules": 0,
             "total_findings": 0
         }
+        self._outcomes = []
 
         bbox_locator = PDFBBoxLocator(job_context.pdf_path)
         try:
             # Execute selected rule set.
             for rule_obj in selected_rules:
                 rule_id = rule_obj.code
-                
+
                 try:
                     start_time = time.time()
-                    
+
                     # 鐩存帴璋冪敤瑙勫垯瀵硅薄鐨刟pply鏂规硶
                     issues = rule_obj.apply(document)
-                    
+
                     int((time.time() - start_time) * 1000)
-                    
-                    # 杞崲涓篒ssueItem鏍煎紡
+
+                    # 杞崲涓篒ssueItem鏍煎紡
                     findings = []
                     for issue in issues:
                         try:
@@ -260,15 +267,47 @@ class EngineRuleRunner:
                                 ),
                             )
                             continue
-                    
+
                     self._stats["successful_rules"] += 1
                     all_findings.extend(findings)
                     self._stats["total_findings"] += len(findings)
-                    
+                    self._outcomes.append(
+                        RuleOutcome(
+                            rule_id=str(rule_id),
+                            status="fail" if findings else "pass",
+                        )
+                    )
+
                     logger.debug(f"Rule {rule_id} found {len(findings)} issues")
-                    
+
+                except RuleOutcomeSignal as signal:
+                    # 非 fail 结局（insufficient_data/not_applicable 等）：
+                    # 不产出 finding，也不算失败，进规则执行摘要供质量门消费
+                    self._outcomes.append(
+                        RuleOutcome(
+                            rule_id=str(rule_id),
+                            status=signal.status,
+                            detail=str(signal.detail or signal),
+                        )
+                    )
+                    logger.info(
+                        "Rule %s deferred: %s",
+                        rule_id,
+                        signal.status,
+                        extra=safe_log_extra(
+                            {"rule_id": rule_id, "outcome": signal.status}
+                        ),
+                    )
+                    continue
                 except Exception as e:
                     self._stats["failed_rules"] += 1
+                    self._outcomes.append(
+                        RuleOutcome(
+                            rule_id=str(rule_id),
+                            status="execution_error",
+                            detail=f"{type(e).__name__}: {e}",
+                        )
+                    )
                     logger.exception(
                         "Rule execution failed",
                         extra=safe_log_extra({"rule_id": rule_id, **describe_exception(e)}),
@@ -548,8 +587,12 @@ class EngineRuleRunner:
             return f"UNKNOWN_ERROR: {str(error)}"
     
     def get_stats(self) -> Dict[str, Any]:
-        """鑾峰彇鎵ц缁熻"""
+        """鑾峰彇鎵ц缁熻"""
         return self._stats.copy()
+
+    def get_rule_execution_summary(self) -> Dict[str, Any]:
+        """规则执行摘要（RuleOutcome 六态汇总），供 result.meta 与质量门消费。"""
+        return summarize_rule_outcomes(self._outcomes)
     
     def clear_stats(self):
         """娓呴櫎缁熻淇℃伅"""

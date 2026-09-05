@@ -4,7 +4,9 @@ import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .budget_rules import find_budget_anchors
+from .rule_outcome import RuleNotApplicable
 from .rules_v33 import Document, Issue, Rule, find_table_anchors
+from src.utils.narration import merge_soft_wrapped_lines as _merge_soft_wrapped_lines_shared
 
 _AMOUNT = r"([0-9][0-9,]*\.?[0-9]*)"
 
@@ -303,6 +305,14 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
         return issues
 
 
+_SOFT_LINE_ENDINGS = "。；：！？!?:;"
+
+
+def _merge_soft_wrapped_lines(page_text: str) -> List[str]:
+    """委托共享实现（src/utils/narration.py），保留旧名兼容既有调用。"""
+    return _merge_soft_wrapped_lines_shared(page_text)
+
+
 class CMM002_TextAnomalyRule(Rule):
     code, severity = "CMM-002", "warn"
     desc = "\u91cd\u590d\u8bcd/\u6807\u70b9\u5f02\u5e38\u68c0\u67e5\uff08\u9884/\u51b3\u7b97\u901a\u7528\uff09"
@@ -369,20 +379,20 @@ class CMM002_TextAnomalyRule(Rule):
                         )
                     )
 
-            for line in page_text.splitlines():
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                if ("\u201d" in stripped and stripped.count("\u201d") > stripped.count("\u201c")) or (
-                    "\u2019" in stripped and stripped.count("\u2019") > stripped.count("\u2018")
-                ):
-                    pos = page_text.find(line)
+            # 引号配对按"逻辑段落"检查（先合并 PDF 软换行）：同段右引号多于
+            # 左引号才算未闭合；逐行检查会把跨行配对引号误判成异常
+            # （样张 4 条"疑似多余右引号"误报根因，见 HANDOFF §3.3B）。
+            for paragraph in _merge_soft_wrapped_lines(page_text):
+                has_double_imbalance = paragraph.count("\u201d") > paragraph.count("\u201c")
+                has_single_imbalance = paragraph.count("\u2019") > paragraph.count("\u2018")
+                if has_double_imbalance or has_single_imbalance:
+                    pos = page_text.find(paragraph[:20])
                     issues.append(
                         self._issue(
                             "\u7591\u4f3c\u591a\u4f59\u53f3\u5f15\u53f7",
                             {"page": page_idx, "pos": max(pos, 0)},
                             "warn",
-                            evidence_text=stripped,
+                            evidence_text=paragraph[:200],
                         )
                     )
 
@@ -443,6 +453,32 @@ _ROW_CODE_RE = re.compile(
 )
 
 
+# 科目域判定（docs/SYSTEM_ISSUES_HANDOFF_2026-09-05.md §3.3A）：
+# 收入分类（101-110）、一般公共预算功能分类（201-229）、经济分类（301-310）
+# 属于互不可比的科目体系；经济分类编码只应出现在经济分类性质的表中。
+def _code_domain(code: str) -> str:
+    digits = re.sub(r"\D", "", str(code or ""))
+    if len(digits) < 3:
+        return "other"
+    prefix = int(digits[:3])
+    if 101 <= prefix <= 110:
+        return "revenue"
+    if 201 <= prefix <= 229:
+        return "functional"
+    if 301 <= prefix <= 310:
+        return "economic"
+    return "other"
+
+
+def _dominant_code_domain(codes) -> Optional[str]:
+    """取一组编码的主科目域；域混杂或无法判定时返回 None。"""
+    domains = {_code_domain(code) for code in codes}
+    domains.discard("other")
+    if len(domains) != 1:
+        return None
+    return domains.pop()
+
+
 def _extract_code_amount_pairs(page_texts: Sequence[str]) -> Tuple[Dict[str, float], Dict[str, float]]:
     income_titles = (
         "\u6536\u5165\u9884\u7b97\u603b\u8868",
@@ -498,6 +534,19 @@ class CMM004_CodeMirrorConsistency(Rule):
         income, expense = _extract_code_amount_pairs(_page_texts(doc))
         if len(income) < 2 or len(expense) < 2:
             return []
+
+        # 科目域隔离（P0 止血）：只有两侧主科目域一致时才可镜像比较。
+        # 收入分类、功能分类、经济分类互不可比——经济分类编码（301-310）
+        # 只出现在经济分类性质的《基本支出决算表》是正常且必然的，
+        # 不能报"仅出现在支出表"（样张 33 条误报的根因）。
+        income_domain = _dominant_code_domain(income)
+        expense_domain = _dominant_code_domain(expense)
+        if not income_domain or not expense_domain or income_domain != expense_domain:
+            raise RuleNotApplicable(
+                self.code,
+                f"两侧科目域不同（income={income_domain}, expense={expense_domain}）"
+                "或域混杂，收入/功能分类/经济分类之间不可比",
+            )
 
         common = sorted(set(income).intersection(expense))
         if len(common) < 2:

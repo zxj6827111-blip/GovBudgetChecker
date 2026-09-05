@@ -11,7 +11,9 @@ from .budget_rules import ALL_BUDGET_RULES
 from .common_rules import ALL_COMMON_RULES
 from .rule_outcome import (
     RuleDeferred,
+    RuleNotApplicable,
     RuleOutcome,
+    RuleOutcomeSignal,
     STATUS_EXECUTION_ERROR,
     STATUS_FAIL,
     STATUS_INSUFFICIENT_DATA,
@@ -116,13 +118,14 @@ def run_rules_with_outcomes(
             else:
                 produced = rule.apply(doc)
             produced_list = list(produced or [])
-        except RuleDeferred as deferred:
-            # 数据不足：不得伪造成正式问题，进运行摘要转人工复核
+        except RuleOutcomeSignal as signal:
+            # 非 fail 结局（insufficient_data / not_applicable 等）：
+            # 不得伪造成正式问题，进运行摘要转运行摘要/人工复核
             outcomes.append(
                 RuleOutcome(
                     rule_id=str(code),
-                    status=STATUS_INSUFFICIENT_DATA,
-                    detail=str(deferred.detail or deferred),
+                    status=signal.status,
+                    detail=str(signal.detail or signal),
                 )
             )
             continue
