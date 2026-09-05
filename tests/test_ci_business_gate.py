@@ -114,6 +114,62 @@ def test_gate_reports_limitation_in_human_output(capsys) -> None:
     assert "召回率" in output
 
 
+def test_evidence_gate_uses_locatable_rate_and_falls_back() -> None:
+    """B1 口径：门禁只看可定位类完整率，文档级单列不进分母；旧报告回退全量口径。
+
+    场景一（新口径）：全量完整率 0.5（被 96 条 BUD-001 文档级 finding 拖低），
+    但可定位类 4/4 全完整——门禁必须绿；
+    场景二（回退）：旧报告没有可定位类字段，全量完整率 0.5——门禁必须红
+    （回退不能把历史报告的已知问题放行）；
+    场景三（纯文档级）：只有 BUD-001 类 finding、可定位分母为 0——按"没有
+    可判定的可定位样本"跳过，而不是把天然无页码的问题算成证据缺口。
+    """
+    new_format = {
+        "summary": {
+            "evidence_completeness": {
+                "findings_total": 100,
+                "findings_complete": 50,
+                "completeness_rate": 0.5,
+                "locatable_findings_total": 4,
+                "locatable_findings_complete": 4,
+                "locatable_completeness_rate": 1.0,
+                "document_level_findings_total": 96,
+            }
+        }
+    }
+    assert {i.name: i.passed for i in evaluate(new_format)}["evidence_completeness_rate"] is True
+
+    legacy_format = {
+        "summary": {
+            "evidence_completeness": {
+                "findings_total": 100,
+                "findings_complete": 50,
+                "completeness_rate": 0.5,
+            }
+        }
+    }
+    assert {
+        i.name: i.passed for i in evaluate(legacy_format)
+    }["evidence_completeness_rate"] is False
+
+    document_level_only = {
+        "summary": {
+            "evidence_completeness": {
+                "findings_total": 96,
+                "findings_complete": 0,
+                "completeness_rate": 0.0,
+                "locatable_findings_total": 0,
+                "locatable_findings_complete": 0,
+                "locatable_completeness_rate": None,
+                "document_level_findings_total": 96,
+            }
+        }
+    }
+    assert {
+        i.name: i.passed for i in evaluate(document_level_only)
+    }["evidence_completeness_rate"] is True
+
+
 def test_migration_script_requires_database_url(capsys) -> None:
     """迁移脚本的数据源缺失行为与业务门禁保持一致。
 

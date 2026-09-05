@@ -297,18 +297,37 @@ def test_replay_script_shares_the_same_collision_definition():
 # 2.5 证据完整率与正式问题聚合（UI 重建第四批 Task 7.2 补充）
 # ---------------------------------------------------------------------------
 def test_evidence_completeness_rate_aggregates_across_jobs(tmp_path):
-    """正例：多个任务的 total/complete 分别累加后计算比率。"""
+    """正例：多个任务的 total/complete 分别累加后计算比率。
+
+    顺带覆盖 B1 可定位类子口径的聚合：job-a 有 2 条文档级 finding（单列），
+    job-b 有 1 条可定位类缺证据；门禁口径 locatable_completeness_rate
+    按可定位类分子分母独立计算。
+    """
     _write_job(
         tmp_path,
         "job-a",
         status="done",
-        evidence={"total": 10, "complete": 9, "degraded_count": 1},
+        evidence={
+            "total": 10,
+            "complete": 9,
+            "degraded_count": 1,
+            "locatable_total": 8,
+            "locatable_complete": 8,
+            "document_level_total": 2,
+        },
     )
     _write_job(
         tmp_path,
         "job-b",
         status="done",
-        evidence={"total": 5, "complete": 5, "degraded_count": 0},
+        evidence={
+            "total": 5,
+            "complete": 5,
+            "degraded_count": 0,
+            "locatable_total": 5,
+            "locatable_complete": 4,
+            "document_level_total": 0,
+        },
     )
 
     metrics = collect_metrics(tmp_path, now=FIXED_NOW)
@@ -318,6 +337,11 @@ def test_evidence_completeness_rate_aggregates_across_jobs(tmp_path):
         "findings_complete": 14,
         "completeness_rate": round(14 / 15, 4),
         "jobs_without_field": 0,
+        "locatable_findings_total": 13,
+        "locatable_findings_complete": 12,
+        "locatable_completeness_rate": round(12 / 13, 4),
+        "document_level_findings_total": 2,
+        "jobs_without_locatable_field": 0,
     }
 
 
@@ -367,6 +391,12 @@ def test_evidence_completeness_excludes_jobs_without_field(tmp_path):
         "findings_complete": 4,
         "completeness_rate": 1.0,
         "jobs_without_field": 2,
+        # job-new 的留痕是旧格式（无可定位类字段）：只计入样本缺口，不冒充 0
+        "locatable_findings_total": 0,
+        "locatable_findings_complete": 0,
+        "locatable_completeness_rate": None,
+        "document_level_findings_total": 0,
+        "jobs_without_locatable_field": 1,
     }
 
 

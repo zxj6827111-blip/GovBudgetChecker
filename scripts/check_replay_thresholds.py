@@ -10,7 +10,7 @@
 | `report_id_uniqueness` | 不同任务不得共用同一个报告身份 | P0-09 |
 | `completed_jobs_have_page_coverage` | 完成态任务必须带页面覆盖率，否则无法判断"是不是没查完" | B-01 / B-03 |
 | `done_jobs_min_page_coverage` | `done` 任务的覆盖率必须达阈值，低覆盖只能进 `review_required` | B-01 / B-03 |
-| `evidence_completeness_rate` | 正式问题必须带完整证据 | P0-07 |
+| `evidence_completeness_rate` | 可定位类正式问题必须带完整证据（BUD-001 类文档级规则天然无页码，单列不进分母） | P0-07 |
 | `unknown_report_kind_ratio` | 类型识别失败比例上限 | P0-04 / P1-05 |
 
 它**不能**检查什么（必须如实告知）
@@ -117,22 +117,44 @@ def check_done_jobs_min_page_coverage(
 
 
 def check_evidence_completeness(report: Dict[str, Any], minimum: float) -> CheckResult:
+    """证据完整率门禁（B1 口径：只看可定位类 finding）。
+
+    BUD-001（缺预算表/缺必备说明章节）类文档级规则天然无页码，单独计数
+    （``document_level_findings_total``），不进入分母；门禁判定用的是
+    ``locatable_completeness_rate``。旧报告没有可定位类字段时回退全量口径
+    （``completeness_rate``），保证历史报告仍可判定——回退时在 detail 里
+    明确标注，避免两种口径被误读成同一个数。
+    """
     summary = report.get("summary") or {}
     evidence = summary.get("evidence_completeness") or {}
-    total = int(evidence.get("findings_total") or 0)
-    rate = float(evidence.get("completeness_rate") or 0.0)
+    use_locatable = evidence.get("locatable_findings_total") is not None
+    if use_locatable:
+        total = int(evidence.get("locatable_findings_total") or 0)
+        raw_rate = evidence.get("locatable_completeness_rate")
+        doc_total = int(evidence.get("document_level_findings_total") or 0)
+        basis = f"可定位类 {total} 条（文档级单列 {doc_total} 条）"
+    else:
+        total = int(evidence.get("findings_total") or 0)
+        raw_rate = evidence.get("completeness_rate")
+        doc_total = None
+        basis = f"全量口径 {total} 条（旧报告无可定位类字段，未剔除文档级）"
+    # None 只在"有分母却没率"的异常报告里出现，按不能验证处理（与旧实现的
+    # float(None or 0.0) → FAIL 等价，但 detail 更诚实）。
+    rate = float(raw_rate) if isinstance(raw_rate, (int, float)) else None
     if total == 0:
+        skip_note = "语料内没有可定位类正式问题，跳过证据完整率判定"
+        if doc_total:
+            skip_note += f"（文档级单列 {doc_total} 条，不构成证据缺口）"
+        return CheckResult("evidence_completeness_rate", True, skip_note)
+    if rate is not None and rate >= minimum:
         return CheckResult(
-            "evidence_completeness_rate", True, "语料内没有正式问题，跳过证据完整率判定"
+            "evidence_completeness_rate", True, f"完整率 {rate} >= {minimum}（{basis}）"
         )
-    if rate >= minimum:
-        return CheckResult(
-            "evidence_completeness_rate", True, f"完整率 {rate} >= {minimum}（{total} 条）"
-        )
+    shown_rate = rate if rate is not None else "缺失"
     return CheckResult(
         "evidence_completeness_rate",
         False,
-        f"完整率 {rate} 低于 {minimum}（{total} 条正式问题）",
+        f"完整率 {shown_rate} 低于 {minimum}（{basis}）",
     )
 
 
