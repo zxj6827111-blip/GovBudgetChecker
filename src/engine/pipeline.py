@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.utils.rule_text import default_rule_suggestion, infer_rule_title
 from src.utils.provenance import DEFAULT_RULE_SET_VERSION, ENGINE_VERSION
 
 from .budget_rules import ALL_BUDGET_RULES
 from .common_rules import ALL_COMMON_RULES
+from .rule_outcome import (
+    RuleDeferred,
+    RuleOutcome,
+    STATUS_EXECUTION_ERROR,
+    STATUS_FAIL,
+    STATUS_INSUFFICIENT_DATA,
+    STATUS_PASS,
+    summarize_rule_outcomes,
+)
 from .rules_v33 import (
     ALL_RULES as FINAL_ALL_RULES,
 )
@@ -66,11 +75,26 @@ def _select_rule_set(doc: Any, report_kind: Optional[str] = None) -> List[Any]:
 def run_rules(
     doc: Any, use_ai_assist: bool = False, report_kind: Optional[str] = None
 ) -> List[Issue]:
+    issues, _ = run_rules_with_outcomes(doc, use_ai_assist, report_kind=report_kind)
+    return issues
+
+
+def run_rules_with_outcomes(
+    doc: Any, use_ai_assist: bool = False, report_kind: Optional[str] = None
+) -> "Tuple[List[Issue], List[RuleOutcome]]":
+    """执行规则并返回 (issues, outcomes)。
+
+    outcomes 是逐规则的 RuleOutcome 记录：只有 status=fail 的规则产出的
+    issue 会进入 issues；``RuleDeferred``（insufficient_data）、
+    ``parse_error``、``execution_error`` 一律不产出 finding，只进运行摘要，
+    供质量门 fail-closed 判定与回放评测消费。
+    """
     selected_rules = [
         *_select_rule_set(doc, report_kind=report_kind),
         *ALL_COMMON_RULES,
     ]
     issues: List[Issue] = []
+    outcomes: List[RuleOutcome] = []
     if _resolve_report_kind(doc, report_kind) == "unknown":
         issues.append(
             Issue(
@@ -82,26 +106,45 @@ def run_rules(
         )
 
     for rule_obj in selected_rules:
+        code = getattr(rule_obj, "code", None) or getattr(
+            getattr(rule_obj, "__class__", object), "code", "UNKNOWN"
+        )
         try:
             rule = rule_obj() if isinstance(rule_obj, type) else rule_obj
             if hasattr(rule, "apply_with_ai") and use_ai_assist:
-                issues.extend(rule.apply_with_ai(doc, use_ai_assist))
+                produced = rule.apply_with_ai(doc, use_ai_assist)
             else:
-                issues.extend(rule.apply(doc))
-        except Exception as err:
-            code = getattr(rule_obj, "code", None) or getattr(
-                getattr(rule_obj, "__class__", object), "code", "UNKNOWN"
-            )
-            issues.append(
-                Issue(
-                    rule=str(code),
-                    severity="hint",
-                    message=f"规则执行异常：{err}",
-                    location={"page": 1, "pos": 0},
+                produced = rule.apply(doc)
+            produced_list = list(produced or [])
+        except RuleDeferred as deferred:
+            # 数据不足：不得伪造成正式问题，进运行摘要转人工复核
+            outcomes.append(
+                RuleOutcome(
+                    rule_id=str(code),
+                    status=STATUS_INSUFFICIENT_DATA,
+                    detail=str(deferred.detail or deferred),
                 )
             )
+            continue
+        except Exception as err:
+            # 规则代码异常：同样不产出"规则执行异常"伪装 finding，进运行摘要
+            outcomes.append(
+                RuleOutcome(
+                    rule_id=str(code),
+                    status=STATUS_EXECUTION_ERROR,
+                    detail=f"{type(err).__name__}: {err}",
+                )
+            )
+            continue
+        issues.extend(produced_list)
+        outcomes.append(
+            RuleOutcome(
+                rule_id=str(code),
+                status=STATUS_FAIL if produced_list else STATUS_PASS,
+            )
+        )
 
-    return order_and_number_issues(doc, issues)
+    return order_and_number_issues(doc, issues), outcomes
 
 
 def _strip_list_prefix(message: str) -> str:
@@ -234,7 +277,7 @@ def build_issues_payload(
     use_ai_assist: bool = False,
     report_kind: Optional[str] = None,
 ) -> Dict[str, Any]:
-    raw_list = run_rules(doc, use_ai_assist, report_kind=report_kind)
+    raw_list, outcomes = run_rules_with_outcomes(doc, use_ai_assist, report_kind=report_kind)
     items = [_issue_to_dict(item, idx) for idx, item in enumerate(raw_list, start=1)]
 
     buckets: Dict[str, List[Dict[str, Any]]] = {"error": [], "warn": [], "info": []}
@@ -243,4 +286,9 @@ def build_issues_payload(
         item["severity"] = bucket
         buckets[bucket].append(item)
     buckets["all"] = items
-    return {"issues": buckets}
+    # 规则执行摘要（增量字段，向后兼容）：insufficient/parse/execution_error
+    # 不再伪装成 finding，质量门据此 fail-closed
+    return {
+        "issues": buckets,
+        "rule_execution_summary": summarize_rule_outcomes(outcomes),
+    }

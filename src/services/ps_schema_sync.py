@@ -40,6 +40,23 @@ class PSSharedSchemaSync:
             org_name=org_name,
             organization_id=organization_id,
         )
+        # 报告类型必须先于任何写库操作确定：未知类型宁可不入库转人工复核，
+        # 不能把决算材料错写成 BUDGET 身份（fail-closed）。
+        report_type = self._normalize_report_type(doc_type)
+        if report_type is None:
+            logger.warning(
+                "ps sync skipped: unknown report_type for doc_type=%s org=%s",
+                doc_type,
+                org_name,
+            )
+            return {
+                "status": "skipped",
+                "reason": "unknown_report_type",
+                "doc_type": str(doc_type or ""),
+                "report_type": None,
+                "department_name": str(scope.get("department_name") or ""),
+                "unit_name": str(scope.get("unit_name") or ""),
+            }
         department_name = str(scope["department_name"])
         unit_name = str(scope["unit_name"])
         department_id = await self._ensure_department(
@@ -51,7 +68,6 @@ class PSSharedSchemaSync:
             unit_name,
             preferred_code=scope.get("unit_code"),
         )
-        report_type = self._normalize_report_type(doc_type)
         scope_key = self._resolve_report_scope_key(
             match_mode=scope.get("match_mode"),
             fiscal_year=fiscal_year,
@@ -408,13 +424,29 @@ class PSSharedSchemaSync:
             return clean_name[:-2], clean_name
         return clean_name, clean_name
 
-    def _normalize_report_type(self, doc_type: str) -> str:
+    # doc_type 的全部合法取值（api/runtime.normalize_doc_type 输出 + 中文别名）。
+    # dept_final/unit_final → FINAL；dept_budget/unit_budget 等预算变体 → BUDGET。
+    _REPORT_TYPE_FINAL = {
+        "final", "决算", "js", "settlement", "accounts",
+        "dept_final", "unit_final", "department_final",
+    }
+    _REPORT_TYPE_BUDGET = {
+        "budget", "预算", "ys",
+        "dept_budget", "unit_budget", "department_budget",
+    }
+
+    def _normalize_report_type(self, doc_type: str) -> Optional[str]:
+        """归一化报告类型；**未知类型返回 None，禁止默认写成 BUDGET**。
+
+        此前 dept_final 不在映射表里被默认写库为 BUDGET，决算材料以预算
+        身份入库（docs/SYSTEM_ISSUES_HANDOFF_2026-09-05.md §3.6 第 3 条）。
+        """
         normalized = str(doc_type or "").strip().lower()
-        if normalized in {"budget", "预算", "ys"}:
+        if normalized in self._REPORT_TYPE_BUDGET:
             return "BUDGET"
-        if normalized in {"final", "决算", "js", "settlement"}:
+        if normalized in self._REPORT_TYPE_FINAL:
             return "FINAL"
-        return "BUDGET"
+        return None
 
     def _auto_code(self, prefix: str, name: str) -> str:
         digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:16].upper()

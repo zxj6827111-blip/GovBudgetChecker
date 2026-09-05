@@ -405,7 +405,9 @@ def _run_legacy_pipeline(
             return_value={"status": "skipped", "review_item_count": 0, "review_items": []}
         ),
     )
-    monkeypatch.setattr(pipeline_mod.settings, "get", lambda *_args: False)
+    monkeypatch.setattr(
+        pipeline_mod.settings, "is_dual_mode_enabled", lambda: False
+    )
     return job_dir  # type: ignore[return-value]
 
 
@@ -442,10 +444,15 @@ async def test_pipeline_reports_evidence_completeness(
 
 
 @pytest.mark.asyncio
-async def test_pipeline_rule_evidence_warning_does_not_change_status(
+async def test_pipeline_rule_evidence_warning_gates_to_review(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """规则问题缺证据：记录告警与完整率下降，但仍是正式问题，终态不变。"""
+    """规则问题缺证据：记录告警与完整率下降，并转 review_required。
+
+    P0 整改后的 fail-closed 语义（docs/SYSTEM_ISSUES_HANDOFF_2026-09-05.md
+    §3.6 第 2 条）：证据不完整的规则 finding 此前只告警不阻断，样张 12/52
+    缺页码的 finding 全部静默通过；现在 ``rule_evidence_incomplete`` 必须进门禁。
+    """
     job_dir = _run_legacy_pipeline(
         tmp_path,
         monkeypatch,
@@ -469,8 +476,11 @@ async def test_pipeline_rule_evidence_warning_does_not_change_status(
     assert completeness["rule_warning_count"] == 1
     assert completeness["degraded_count"] == 0
     assert completeness["formal_issue_total"] == 1
-    assert payload["status"] == "done"
-    assert payload["analysis_conclusion"] == "findings_detected"
+    assert payload["status"] == "review_required"
+    assert payload["analysis_conclusion"] == "incomplete"
+    assert "rule_evidence_incomplete" in [
+        r["code"] for r in payload["review_reasons"]
+    ]
 
 
 @pytest.mark.asyncio

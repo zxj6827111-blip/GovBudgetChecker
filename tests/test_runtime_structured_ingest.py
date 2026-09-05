@@ -397,7 +397,8 @@ async def test_reanalyze_job_refreshes_same_job_and_reuses_analysis_context(tmp_
             "doc_type": "dept_budget",
             "report_year": 2025,
             "use_local_rules": False,
-            "use_ai_assist": True,
+            # 请求契约（P0）：structured/legacy 模式不请求 AI，旧值 true 会被 422
+            "use_ai_assist": False,
             "mode": "structured",
         },
     )
@@ -418,7 +419,7 @@ async def test_reanalyze_job_refreshes_same_job_and_reuses_analysis_context(tmp_
     assert status["doc_type"] == "dept_budget"
     assert status["report_year"] == 2025
     assert status["use_local_rules"] is False
-    assert status["use_ai_assist"] is True
+    assert status["use_ai_assist"] is False
     assert status["mode"] == "structured"
 
 

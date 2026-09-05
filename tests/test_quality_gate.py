@@ -222,7 +222,25 @@ def _patch_pipeline(monkeypatch, page_texts, issues_payload):
     monkeypatch.setattr(
         pipeline_mod,
         "run_rules_in_process",
-        AsyncMock(return_value={"issues": issues_payload}),
+        AsyncMock(
+            return_value={
+                "issues": issues_payload,
+                # 与真实 run_rules_in_process 契约一致：规则执行摘要随 payload 返回
+                "rule_execution_summary": {
+                    "total_rules": 1,
+                    "executed": 1,
+                    "pass": 1,
+                    "fail": 0,
+                    "not_applicable": 0,
+                    "insufficient_data": 0,
+                    "parse_error": 0,
+                    "execution_error": 0,
+                    "unresolved_total": 0,
+                    "failed_rules": [],
+                    "unresolved_rules": [],
+                },
+            }
+        ),
     )
     monkeypatch.setattr(
         pipeline_mod, "persist_analysis_job_snapshot", AsyncMock(return_value=True)
@@ -232,7 +250,11 @@ def _patch_pipeline(monkeypatch, page_texts, issues_payload):
         "run_structured_ingest",
         AsyncMock(return_value={"status": "skipped", "review_item_count": 0, "review_items": []}),
     )
-    monkeypatch.setattr(pipeline_mod.settings, "get", lambda *_args: False)
+    # 用真实 Settings 接口关掉双模式（禁止再用不兼容的字典式 settings.get mock：
+    # 那种 mock 曾掩盖 settings.get("dual_mode.enabled") 恒为 False 的配置缺陷）
+    monkeypatch.setattr(
+        pipeline_mod.settings, "is_dual_mode_enabled", lambda: False
+    )
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("AI_ASSIST_REQUIRED", raising=False)
     monkeypatch.delenv("PAGE_COVERAGE_MIN_RATIO", raising=False)

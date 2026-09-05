@@ -79,6 +79,7 @@ except ImportError:
 
 from src.services.analysis_result_store import persist_analysis_job_snapshot
 from src.schemas.issues import infer_analysis_conclusion
+from config.settings import get_settings
 
 # 展示层的问题计数必须与质量门禁同口径（缺证据被降级的条目不算正式问题），
 # 否则会出现"任务是 review_required / incomplete，列表却显示有 N 个问题"的矛盾。
@@ -2475,9 +2476,52 @@ async def start_analysis(
     status_file = job_dir / "status.json"
     body = body or {}
     existing_status = read_json_file(status_file, default={})
+
+    # 分析请求契约（P0，docs/SYSTEM_ISSUES_HANDOFF_2026-09-05.md §3.5）：
+    # - mode 只接受 legacy / dual / structured（structured 为历史存储值，
+    #   仅结构化入库：无规则、无 AI）；
+    # - legacy/structured 是规则模式别名，不请求 AI：显式 use_ai_assist=true
+    #   属冲突参数，返回 422，不再静默忽略（此前样张就是这样
+    #   "看似请求了 AI 实则没跑"）；
+    # - legacy 必须启用本地规则（否则无任何检查能力）；
+    # - dual + use_ai_assist=true 才运行 AI；dual 默认请求 AI。
+    mode = str(body.get("mode", "legacy")).strip().lower() or "legacy"
+    if mode not in {"legacy", "dual", "structured"}:
+        raise HTTPException(
+            status_code=422,
+            detail=f"invalid mode '{mode}': must be 'legacy', 'dual' or 'structured'",
+        )
+    if mode in {"legacy", "structured"}:
+        if body.get("use_ai_assist") is True:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"conflicting analysis parameters: mode='{mode}' never runs "
+                    "AI; use mode='dual' with use_ai_assist=true to request AI assist"
+                ),
+            )
+        if mode == "legacy" and body.get("use_local_rules") is False:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "conflicting analysis parameters: mode='legacy' requires "
+                    "use_local_rules=true (no other checker would run)"
+                ),
+            )
+        use_ai_assist = False
+    else:
+        if not get_settings().is_dual_mode_enabled():
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "dual mode is disabled by config (dual_mode.enabled=false); "
+                    "enable it or use mode='legacy'"
+                ),
+            )
+        use_ai_assist = (
+            True if body.get("use_ai_assist") is None else bool(body.get("use_ai_assist"))
+        )
     use_local_rules = bool(body.get("use_local_rules", True))
-    use_ai_assist = bool(body.get("use_ai_assist", True))
-    mode = str(body.get("mode", "legacy"))
     fiscal_year = (
         body.get("fiscal_year")
         if body.get("fiscal_year") is not None
@@ -2619,10 +2663,19 @@ async def reanalyze_job(
     body = dict(body or {})
     if "use_local_rules" not in body:
         body["use_local_rules"] = bool(source_status.get("use_local_rules", True))
-    if "use_ai_assist" not in body:
-        body["use_ai_assist"] = bool(source_status.get("use_ai_assist", True))
     if "mode" not in body:
         body["mode"] = str(source_status.get("mode") or "legacy")
+    if "use_ai_assist" not in body:
+        # 请求契约：legacy 不请求 AI，只有 dual 才沿用/默认请求 AI；
+        # 否则旧任务（legacy + use_ai_assist=true 旧默认值）重分析会直接 422。
+        # structured 模式保留原值（历史行为，结构化入库不消耗该标志）。
+        resolved_mode = str(body["mode"])
+        if resolved_mode == "dual":
+            body["use_ai_assist"] = bool(source_status.get("use_ai_assist", True))
+        elif resolved_mode == "legacy":
+            body["use_ai_assist"] = False
+        else:
+            body["use_ai_assist"] = bool(source_status.get("use_ai_assist", True))
     if "fiscal_year" not in body and source_status.get("fiscal_year") is not None:
         body["fiscal_year"] = source_status.get("fiscal_year")
     if "doc_type" not in body and source_status.get("doc_type") is not None:

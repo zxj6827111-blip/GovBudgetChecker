@@ -7,6 +7,7 @@ AI抽取器客户端 - 后端调用AI抽取器微服务的客户端
 import os
 import asyncio
 import logging
+import time
 from typing import List, Dict, Any, Optional
 import hashlib
 import json
@@ -165,10 +166,46 @@ class ExtractorConfig:
 
 class ExtractorClient:
     """AI抽取器客户端"""
-    
+
     def __init__(self, config: Optional[ExtractorConfig] = None):
         self.config = config or ExtractorConfig()
         self._direct_ai_client: Optional[AIClient] = None
+        # 调用留痕：每次真实模型调用（含失败）都追加一条记录，供
+        # ai_execution 状态机判定"AI 是否真的执行过"。无留痕时禁止
+        # 呈现为 AI 已完成（P0 假完成修复，见 src/services/ai_execution.py）。
+        self.call_ledger: List[Dict[str, Any]] = []
+
+    def record_call(
+        self,
+        provider: Optional[str],
+        model: Optional[str],
+        *,
+        prompt_version: Optional[str] = None,
+        finish_reason: Optional[str] = None,
+        token_usage: Optional[Dict[str, Any]] = None,
+        content: str = "",
+        error: Optional[str] = None,
+    ) -> None:
+        """追加一条调用留痕。error 非空表示本次调用失败。"""
+
+        self.call_ledger.append(
+            {
+                "provider": provider,
+                "model": model,
+                "prompt_version": prompt_version,
+                "finish_reason": finish_reason,
+                "token_usage": token_usage,
+                "content_length": len(content or ""),
+                "error": error,
+                "timestamp": time.time(),
+            }
+        )
+
+    def pop_call_ledger(self) -> List[Dict[str, Any]]:
+        """取出并清空调用留痕（供上层聚合进 result.meta）。"""
+
+        ledger, self.call_ledger = self.call_ledger, []
+        return ledger
 
     def _get_direct_ai_client(self) -> AIClient:
         if self._direct_ai_client is None:
@@ -430,6 +467,34 @@ class ExtractorClient:
                 return parsed if parsed > 0 else None
         return None
 
+    def _resolve_audit_max_tokens(self) -> int:
+        """审计调用 max_tokens 解析链：AI_AUDIT_MAX_TOKENS > AI_MAX_TOKENS > 应用配置。
+
+        此前写死 3200：复杂决算长文一旦截断，空结果会被误解为"未发现问题"。
+        应用配置读真实 Settings 接口（config/app.yaml 的 ai.max_tokens）。
+        """
+
+        for env_name in ("AI_AUDIT_MAX_TOKENS", "AI_MAX_TOKENS"):
+            raw = os.getenv(env_name)
+            if raw is None:
+                continue
+            try:
+                value = int(str(raw).strip())
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+        try:
+            from config.settings import get_settings
+
+            configured = get_settings().get("ai", "max_tokens")
+            value = int(configured)
+            if value > 0:
+                return value
+        except Exception:
+            pass
+        return 4000
+
     async def _direct_semantic_audit(self, section_text: str) -> List[Dict[str, Any]]:
         """Use configured LLM provider directly when extractor service is unavailable."""
         ai_client = self._get_direct_ai_client()
@@ -438,19 +503,41 @@ class ExtractorClient:
         prompt_version = prompt_version_from_template(
             FULL_REPORT_AUDIT_PROMPT_ID, instructions
         )
-        response = await ai_client.chat(
-            messages=[
-                {"role": "system", "content": "你是严格的 JSON 输出助手。"},
-                {"role": "user", "content": prompt},
-            ],
-            preferred_provider=self._get_audit_provider(),
-            model=self._get_audit_model(),
-            temperature=0,
-            max_tokens=3200,
-            timeout=int(self.config.timeout),
+        try:
+            response = await ai_client.chat(
+                messages=[
+                    {"role": "system", "content": "你是严格的 JSON 输出助手。"},
+                    {"role": "user", "content": prompt},
+                ],
+                preferred_provider=self._get_audit_provider(),
+                model=self._get_audit_model(),
+                temperature=0,
+                max_tokens=self._resolve_audit_max_tokens(),
+                timeout=int(self.config.timeout),
+            )
+        except Exception as exc:
+            # 失败也要留痕：状态机需要区分"AI 没查"和"查了但失败"
+            self.record_call(
+                self._get_audit_provider(),
+                self._get_audit_model(),
+                prompt_version=prompt_version,
+                error=str(exc) or type(exc).__name__,
+            )
+            raise
+        content_text = self._response_content_text(response)
+        finish_reason = (
+            response.get("finish_reason") if isinstance(response, dict) else None
         )
         # 记录"这次实际用的是哪个提供商/模型"，而不是配置里"打算用"的那个：
         # 客户端存在熔断回退，实际生效的模型可能与配置不同。
+        self.record_call(
+            response.get("provider_used") if isinstance(response, dict) else None,
+            response.get("model") if isinstance(response, dict) else None,
+            prompt_version=prompt_version,
+            finish_reason=finish_reason if isinstance(finish_reason, str) else None,
+            token_usage=response.get("tokens") if isinstance(response, dict) else None,
+            content=content_text,
+        )
         provenance = build_finding_provenance(
             model_version=build_model_version(
                 response.get("provider_used") if isinstance(response, dict) else None,
@@ -459,7 +546,7 @@ class ExtractorClient:
             prompt_version=prompt_version,
             source_channel="direct_llm",
         )
-        parsed = self._extract_json_array(self._response_content_text(response)) or []
+        parsed = self._extract_json_array(content_text) or []
         normalized: List[Dict[str, Any]] = []
         seen_keys = set()
         for item in parsed:
@@ -817,55 +904,73 @@ class ExtractorClient:
         }
         if self.config.main_model:
             request_data["model"] = self.config.main_model
-        
-        async with httpx.AsyncClient(timeout=self.config.timeout) as client:
-            response = await client.post(
-                self.config.url,
-                json=request_data,
-                headers={"Content-Type": "application/json"}
-            )
-            
-            if response.status_code != 200:
-                raise Exception(
-                    "AI语义审计返回错误状态码: {status}, 响应指纹: {marker}".format(
-                        status=response.status_code,
-                        marker=fingerprint_for_log(response.text),
+
+        try:
+            async with httpx.AsyncClient(timeout=self.config.timeout) as client:
+                response = await client.post(
+                    self.config.url,
+                    json=request_data,
+                    headers={"Content-Type": "application/json"}
+                )
+
+                if response.status_code != 200:
+                    raise Exception(
+                        "AI语义审计返回错误状态码: {status}, 响应指纹: {marker}".format(
+                            status=response.status_code,
+                            marker=fingerprint_for_log(response.text),
+                        )
                     )
+
+                result = response.json()
+
+                if "hits" not in result:
+                    raise Exception(
+                        f"AI语义审计返回格式错误: 缺少 hits 字段, 响应指纹: {fingerprint_for_log(result)}"
+                    )
+
+                hits = result["hits"]
+                logger.info(f"AI语义审计成功，获得{len(hits)}个结果")
+
+                # 走抽取服务时提示词在远端，本地只能记录任务契约标识；
+                # 模型优先采用服务回传的实际值，缺失时退回本次请求指定的模型。
+                service_model = ""
+                if isinstance(result, dict):
+                    service_model = str(result.get("model") or "").strip()
+                # 抽取服务路径同样留痕：provider 固定为服务通道，正文以 hits 数量
+                # 表征（hits>0 视为有产出；hits=0 无正文证据，由上层兜底直连）。
+                self.record_call(
+                    "extractor_service",
+                    service_model or self.config.main_model or None,
+                    prompt_version=SEMANTIC_AUDIT_SERVICE_TASK,
+                    token_usage=result.get("usage") if isinstance(result, dict) else None,
+                    content=json.dumps(hits, ensure_ascii=False) if hits else "",
+                )
+                provenance = build_finding_provenance(
+                    model_version=build_model_version(
+                        None, service_model or self.config.main_model
+                    ),
+                    prompt_version=SEMANTIC_AUDIT_SERVICE_TASK,
+                    source_channel="extractor_service",
                 )
 
-            result = response.json()
+                # 提取语义问题
+                semantic_issues = []
+                for hit in hits:
+                    if "semantic_issues" in hit and hit["semantic_issues"]:
+                        for issue in hit["semantic_issues"]:
+                            if isinstance(issue, dict):
+                                issue.setdefault("provenance", dict(provenance))
+                            semantic_issues.append(issue)
 
-            if "hits" not in result:
-                raise Exception(
-                    f"AI语义审计返回格式错误: 缺少 hits 字段, 响应指纹: {fingerprint_for_log(result)}"
-                )
-                
-            hits = result["hits"]
-            logger.info(f"AI语义审计成功，获得{len(hits)}个结果")
-
-            # 走抽取服务时提示词在远端，本地只能记录任务契约标识；
-            # 模型优先采用服务回传的实际值，缺失时退回本次请求指定的模型。
-            service_model = ""
-            if isinstance(result, dict):
-                service_model = str(result.get("model") or "").strip()
-            provenance = build_finding_provenance(
-                model_version=build_model_version(
-                    None, service_model or self.config.main_model
-                ),
+                return semantic_issues
+        except Exception as exc:
+            self.record_call(
+                "extractor_service",
+                self.config.main_model or None,
                 prompt_version=SEMANTIC_AUDIT_SERVICE_TASK,
-                source_channel="extractor_service",
+                error=str(exc) or type(exc).__name__,
             )
-
-            # 提取语义问题
-            semantic_issues = []
-            for hit in hits:
-                if "semantic_issues" in hit and hit["semantic_issues"]:
-                    for issue in hit["semantic_issues"]:
-                        if isinstance(issue, dict):
-                            issue.setdefault("provenance", dict(provenance))
-                        semantic_issues.append(issue)
-            
-            return semantic_issues
+            raise
     
     async def health_check(self) -> bool:
         """健康检查"""
