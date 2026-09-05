@@ -94,3 +94,6 @@ audit-*.out
 # Temporary diagnostics and local API/browser captures
 tmp/
 tmp-cookies.txt
+
+# 受保护语料目录（本地人工标注样本，不入库）
+corpus/
