@@ -50,6 +50,19 @@ assert.equal(
   DEFAULT_NEXT_PATH,
 );
 assert.equal(
+  normalizeNextPath("/\\evil.com"),
+  DEFAULT_NEXT_PATH,
+  "REGRESSION: 反斜杠变体 /\\evil.com 必须被拒——浏览器把路径中的 \\ 规范化为 /，等价于 //evil.com",
+);
+assert.equal(
+  normalizeNextPath("/\\/evil.com"),
+  DEFAULT_NEXT_PATH,
+  "REGRESSION: /\\/evil.com 归一化后即 //evil.com，必须被拒",
+);
+// 注：查询串里以 %5C 编码的反斜杠经 URLSearchParams 解码后就是上面两个
+// 字面反斜杠用例，无需单列；仅出现在查询值里、路径位无反斜杠的值（如
+// "/queue?x=/\\evil.com"）整体仍是站内深链，不构成重定向向量，归一化后原样返回。
+assert.equal(
   normalizeNextPath("javascript:alert(1)"),
   DEFAULT_NEXT_PATH,
   "非 / 开头的任意 scheme 一律拒绝",

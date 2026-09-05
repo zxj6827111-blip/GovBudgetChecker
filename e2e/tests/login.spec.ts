@@ -166,6 +166,8 @@ test.describe("Login page (fix C: design-system colors, three states intact)", (
   }) => {
     const payloads = [
       "//evil.com", // 协议相对 URL：旧实现真实存在的放行漏洞
+      "/\\evil.com", // 反斜杠变体：浏览器把 \ 规范化为 /，等价于 //evil.com
+      "/\\/evil.com", // 反斜杠变体二：归一化后同样是协议相对 URL
       "https://evil.com",
       "/login", // 自指：拒绝，防登录页死循环
       "relative/path", // 非 / 开头

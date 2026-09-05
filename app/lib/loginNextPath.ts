@@ -13,6 +13,10 @@
  *    - 非以 "/" 开头的一律拒绝（https://evil.com、相对协议等）；
  *    - 以 "//" 开头的一律拒绝（协议相对 URL，如 //evil.com——这是旧实现
  *      漏掉的一条，会被 window.location.assign 解析成外部站点）；
+ *    - 路径中的 "\" 先归一化为 "/" 再校验：WHATWG URL 规范会把 special
+ *      scheme 路径里的反斜杠规范化为 "/"，因此 "/\evil.com" 与
+ *      "//evil.com" 等价，同样会跳到外部站点（查询串里以 %5C 编码的反
+ *      斜杠经 URLSearchParams 解码后就是字面反斜杠，也在此一并覆盖）；
  *    - 指向 /login 自身的拒绝（否则登录成功又弹回登录页，形成死循环）。
  *    被拒绝的值一律回落到默认 /workbench，不会把用户带到站外。
  */
@@ -20,11 +24,15 @@
 export const DEFAULT_NEXT_PATH = "/workbench";
 
 export function normalizeNextPath(rawPath: string | null): string {
-  if (!rawPath || !rawPath.startsWith("/") || rawPath.startsWith("//")) {
+  if (!rawPath) {
     return DEFAULT_NEXT_PATH;
   }
-  if (rawPath.startsWith("/login")) {
+  const path = rawPath.replaceAll("\\", "/");
+  if (!path.startsWith("/") || path.startsWith("//")) {
     return DEFAULT_NEXT_PATH;
   }
-  return rawPath;
+  if (path.startsWith("/login")) {
+    return DEFAULT_NEXT_PATH;
+  }
+  return path;
 }
