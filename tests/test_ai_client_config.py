@@ -13,6 +13,9 @@ def test_ai_client_config_adds_env_slot_providers(monkeypatch, tmp_path) -> None
     config_path = tmp_path / "providers.yaml"
     config_path.write_text("region: cn\nfallback_chain: []\nproviders: {}\n", encoding="utf-8")
 
+    # 开发机 .env（api.main 导入时被 load_dotenv 注入进程）常带 AI_FALLBACK_CHAIN，
+    # 它会整体接管 fallback chain；本用例要测的是"空链 + env 槽位合成默认链"，须先摘除。
+    monkeypatch.delenv("AI_FALLBACK_CHAIN", raising=False)
     monkeypatch.setenv("AI_MAIN_BASE_URL", "https://main.example.com/v1")
     monkeypatch.setenv("AI_MAIN_API_KEY", "main-key")
     monkeypatch.setenv("AI_MAIN_MODEL", "gpt-5.4")
