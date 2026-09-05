@@ -82,10 +82,41 @@
 
 ## 7. 回归基线
 
-- 后端 pytest：**908 passed + 1 skipped**（整改前 873+1，新增 35 个测试：P0 契约 31 + 配置集成 4，零回归）。
+- 后端 pytest：**941 passed + 1 skipped**（整改前 873+1，新增 68 个测试：P0 契约 31 + 配置集成 4 + 规则矩阵 33，零回归）。
 - 前端：18 个 jiti 单测套件全过；`npm run build` 成功。
 - E2E：**137 passed**（清理残留 dev server 后全过，1.2 分钟）。
 - 历史回放门禁：`scripts/replay_analysis.py` 职责未动；新 `replay_golden_corpus.py` 负责当前规则的真实重放。
+
+## 7.1 历史 PDF 无 AI 当前规则重跑（逐规则数量变化报告）
+
+`python scripts/replay_golden_corpus.py --historical --workers 6`（只读 uploads/，只写 outputs/）：
+
+- 扫描 346 个历史任务（348 份 PDF），339 份有旧规则基线可比，7 份无基线排除；
+- **双层聚合**：`consistent_routing`（新旧 report_kind 一致，delta 纯粹来自规则逻辑修复）与 `routing_changed`（历史代码版本对 unknown 的路由行为与当前不同，单独列出，不算本次回归）；
+- 同口径净变化：**removed 342 / added 78**。主要减少：CMM-004 −169（13 docs，科目域修复）、V33-120 −55（跨页列重映射）、BUD-001 −37（3 docs，待人工抽查）、V33-115 −18、V33-110 −18、CMM-002 −13、V33-220 −10、V33-001 −8、V33-106 −6；主要增加：V33-246 +11 / V33-245 +2（新规则按设计命中）、V33-235 +14 / V33-005 +10 / V33-002 +9（抽查 V33-235 为真实的说明-金额不一致 warn，属当前规则更全面，待人工复核确认）；
+- **变化最大的 30 份文档清单**已输出（top_changed_docs_for_manual_review），样张 job `303e3d95…` 名列第一（52→7）；
+- 报告：`outputs/golden_replay/historical-rules-delta-*.json`。
+
+## 7.2 FIN_05 识别缺口修复
+
+根因：`detect_table_code` 中泛别名（FIN_03「支出决算表」）靠 `fuzz.partial_ratio` 在样张 P14 标题「一般公共预算财政拨款支出决算表」上拿满分，与精确别名 FIN_05 同分，先注册者胜 → FIN_05 缺失。且 `exact_alias_coverage` 分母被 86 字表头拼接稀释。
+
+修复（`src/services/fiscal_table_rules.py`）：
+1. coverage 按别名实际命中目标计算（命中标题用标题长度做分母，不再被 hint 稀释）；
+2. 高分平局（Δscore<0.02）时按 `exact_alias_coverage` 特异性 tie-break，更特异别名胜出。
+
+修复后样张离线验证：P8→FIN_02、P10→FIN_03、P12→FIN_04、**P14→FIN_05**、**P15→FIN_06** 全部正确；短标题「支出决算表」仍归 FIN_03（tie-break 不反向误伤）；识别相关 50 个既有测试零回归。
+
+## 7.3 受影响规则专项测试矩阵
+
+`tests/test_rule_matrix_20260905.py`（33 例）：逐规则覆盖正例/反例/软换行/双栏/跨页/舍入边界/解析不足——CMM-002（软换行配对反例+真未闭合正例）、CMM-004（同域正例+域混杂 not_applicable）、V33-001（T1 年度缺位+同比反例+结构性冲突）、V33-106/110/220/244（年份 token、跨句错配反例、真不一致正例、软换行断字+同比句）、V33-115/117/120（双栏、跨页窄行重映射、0.01 舍入 info、解析不足不产 0.0 假 error、真实错误）、V33-245/246 正反例、detect_table_code tie-break 三例。
+
+## 7.4 真实 AI 调用留痕实测
+
+用 .env 真实凭据走 ExtractorClient 完整链路（密钥不落盘，报告只记 provider/model/error/token 存在性）：
+- 当前凭据状态：main/locator TPM 耗尽、gemini_main/gemini_locator 模型 404、codex_backup 鉴权失败——**全部 provider 失败**；
+- 状态机实测输出：`state=failed`、error_code 传播、每次尝试均有 call_ledger 留痕、`gate_pass=False` → 任务必然 `review_required + incomplete`；
+- **fail-closed 路径实证成立**；succeeded 路径由单测合成 ledger 覆盖，需凭据配额恢复后重跑留痕脚本（报告 `outputs/ai_execution_trace-*.json`）。
 
 ## 8. 发布与回滚
 
