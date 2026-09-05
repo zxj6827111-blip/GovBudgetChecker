@@ -82,9 +82,9 @@
 
 ## 7. 回归基线
 
-- 后端 pytest：**904 passed + 1 skipped**（整改前 873+1，新增 31 个 P0 契约测试，零回归）。
+- 后端 pytest：**908 passed + 1 skipped**（整改前 873+1，新增 35 个测试：P0 契约 31 + 配置集成 4，零回归）。
 - 前端：18 个 jiti 单测套件全过；`npm run build` 成功。
-- E2E：见下方验证记录。
+- E2E：**137 passed**（清理残留 dev server 后全过，1.2 分钟）。
 - 历史回放门禁：`scripts/replay_analysis.py` 职责未动；新 `replay_golden_corpus.py` 负责当前规则的真实重放。
 
 ## 8. 发布与回滚
