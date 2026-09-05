@@ -12,10 +12,12 @@ import path from "node:path";
  *    无论是否套在渐变/阴影的方括号里）；
  * 2. 禁用调色板类名：blue-* / indigo-* / sky-* / cyan-* / violet-* / purple-*。
  *
- * 守卫范围 = 本批新 UI 自有文件（登录页 + (workspace) 路由组 + 新组件目录）。
+ * 守卫范围 = 本批新 UI 自有文件（登录页 + (workspace) 路由组 + 新组件目录），
+ * 以及已收敛完成、纳入防回归的存量组件（GUARDED_FILES）。
  * 不在范围内：app/components/admin/*（SystemManagementPanel 等旧单体共用面板，
  * Task 10 收尾时统一处理，见交付说明的硬编码颜色清单）、旧页面 viewer/*、
- * task-review/*、tailwind.config.ts（令牌定义本身必须用 hex）。
+ * task-review/*（随 Task 10 删除自然消失）、tailwind.config.ts
+ * （令牌定义本身必须用色值，不属于硬编码债务）。
  */
 
 const APP_ROOT = path.resolve(__dirname, "..");
@@ -32,6 +34,9 @@ const GUARDED_DIRS = [
   "app/components/rules",
   "app/components/settings",
 ];
+
+/** 存量组件逐文件纳入守卫（收敛完成后即锁定，防止回退）。 */
+const GUARDED_FILES = ["app/components/StructuredCleanupDialog.tsx"];
 
 /** 去掉块注释与整行 // 注释后再扫描，避免"注释里描述历史问题"被误报。 */
 function stripComments(source: string): string {
@@ -87,6 +92,24 @@ for (const guardedDir of GUARDED_DIRS) {
     if (paletteMatch) {
       violations.push(`${relative}: 禁用调色板类名「${paletteMatch[0]}」`);
     }
+  }
+}
+
+for (const guardedFile of GUARDED_FILES) {
+  const filePath = path.join(APP_ROOT, guardedFile);
+  scannedFileCount += 1;
+  const source = stripComments(readFileSync(filePath, "utf-8"));
+
+  for (const [pattern, label] of HARDCODED_VALUE_PATTERNS) {
+    const match = source.match(pattern);
+    if (match) {
+      violations.push(`${guardedFile}: ${label}「${match[0]}」`);
+    }
+  }
+
+  const paletteMatch = source.match(BANNED_PALETTE_PATTERN);
+  if (paletteMatch) {
+    violations.push(`${guardedFile}: 禁用调色板类名「${paletteMatch[0]}」`);
   }
 }
 

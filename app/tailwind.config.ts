@@ -108,6 +108,15 @@ const config: Config = {
       boxShadow: {
         soft: "0 4px 20px -2px rgba(0, 0, 0, 0.05)",
         float: "0 10px 40px -10px rgba(0, 0, 0, 0.08)",
+        // 全屏 overlay 对话框（如结构化清理）的重投影，收敛自组件内硬编码阴影。
+        dialog: "0 30px 80px rgba(15, 23, 42, 0.28)",
+      },
+      backgroundImage: {
+        // 结构化清理对话框头部柔光：左上 info 色系径向光晕 + 白→info-50 斜向渐变。
+        // 收敛自原 sky 系硬编码 rgba(14,165,233,0.18) 与 #eef6ff（#eef6ff 与
+        // info-50 #eef6fb 肉眼不可辨，径向光晕按 info-500 加同透明度折算）。
+        "dialog-header-wash":
+          "radial-gradient(circle at top left, rgba(28, 124, 174, 0.18), transparent 38%), linear-gradient(135deg, #ffffff, #eef6fb)",
       },
       fontSize: {
         // 字号阶梯：对照原型图 KPI 数值(28px)/卡片标题(15-16px)/正文(13-14px)/
