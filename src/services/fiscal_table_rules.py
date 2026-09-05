@@ -248,6 +248,11 @@ def detect_table_code(
 
     best_code: Optional[str] = None
     best_score = 0.0
+    # 特异性 tie-break：泛别名（如「支出决算表」）靠 partial_ratio 也能在
+    # 「一般公共预算财政拨款支出决算表」上拿满分，与精确别名同分。
+    # 此时标题对别名文本的覆盖率（exact_alias_coverage）更高者才是正确表码——
+    # 否则样张 P14 的 FIN_05 会被先注册的 FIN_03 抢走（识别缺口根因）。
+    best_exact_coverage = 0.0
 
     for code, rule in NINE_TABLE_RULES.items():
         alias_score = 0.0
@@ -262,11 +267,13 @@ def detect_table_code(
             if normalized_alias and (
                 normalized_alias in normalized_title or normalized_alias in normalized_hint
             ):
-                coverage_base = max(
-                    len(normalized_title) or 1,
-                    len(normalized_hint) or 1,
-                    len(normalized_alias),
-                )
+                # 覆盖率按别名实际命中的目标计算：命中标题时以标题长度为分母，
+                # 命中表头拼接时才用 hint 长度——统一用 max(len(title), len(hint))
+                # 做分母会把长 hint 稀释掉精确别名信号（FIN_05 识别缺口根因之二）。
+                if normalized_alias in normalized_title:
+                    coverage_base = max(len(normalized_title), len(normalized_alias))
+                else:
+                    coverage_base = max(len(normalized_hint), len(normalized_alias))
                 exact_alias_coverage = max(
                     exact_alias_coverage,
                     len(normalized_alias) / coverage_base,
@@ -302,6 +309,15 @@ def detect_table_code(
         if score > best_score:
             best_score = score
             best_code = code
+            best_exact_coverage = exact_alias_coverage
+        elif (
+            abs(score - best_score) < 0.02
+            and exact_alias_coverage > best_exact_coverage + 0.15
+        ):
+            # 高分平局：标题与更特异别名完整匹配的规则胜出
+            best_score = score
+            best_code = code
+            best_exact_coverage = exact_alias_coverage
 
     if best_score < 0.55:
         return None, best_score
