@@ -114,9 +114,25 @@
 ## 7.4 真实 AI 调用留痕实测
 
 用 .env 真实凭据走 ExtractorClient 完整链路（密钥不落盘，报告只记 provider/model/error/token 存在性）：
-- 当前凭据状态：main/locator TPM 耗尽、gemini_main/gemini_locator 模型 404、codex_backup 鉴权失败——**全部 provider 失败**；
+- 当前凭据状态：main/locator TPM 耗尽、gemini_main/gemini_locator 模型 404、codex_backup 鉴权失败、extractor_service 502——**全部 provider 失败**；
 - 状态机实测输出：`state=failed`、error_code 传播、每次尝试均有 call_ledger 留痕、`gate_pass=False` → 任务必然 `review_required + incomplete`；
 - **fail-closed 路径实证成立**；succeeded 路径由单测合成 ledger 覆盖，需凭据配额恢复后重跑留痕脚本（报告 `outputs/ai_execution_trace-*.json`）。
+
+## 7.5 AI 输入表征增强（阶段 4 收尾）
+
+- `src/services/ai_input_builder.py`：`build_structured_context(page_texts, page_tables)` 产出注入块——表格关系（表题/页码/列语义/合计行/明细样本/解析风险，来自与规则同源的 `materialize_table`）+ 说明金额事实（narration 归因抽取，年份 token 排除）；长度预算截断并如实标注；
+- 注入链路：`AIFindingsService.analyze` 构建一次 → 每个审计窗口随 prompt 注入 `_direct_semantic_audit`；注入块显式声明「**金额勾稽以确定性规则为准，模型只负责语义候选，不负责金额复算**」；
+- 边界测试（`tests/test_ai_input_builder.py`）：上下文含表题/页码/金额/边界声明、prompt 携带注入块、注入后金额勾稽仍由规则层负责（R33115 不受影响）；`fake_audit` 桩同步新契约参数；
+- 真实样张产出：全文档上下文 3342 字符（14 条表格关系 + 25 条说明事实）。
+
+## 7.6 ps_sync 端到端入库验证（本地 fiscal_db）
+
+`run_structured_ingest` 对样张 DOC-20260905-001 实跑（metadata doc_type=dept_final, report_year=2025）：
+- status=done，tables_count=17，**recognized_tables=9（九张表全部识别，含 FIN_05_general_public_expenditure）**；
+- **missing_core_table review items 为空**（FIN_05 缺表信号消失）；
+- **ps_sync.status=done，ps_sync.report_type=FINAL**（dept_final 正确映射）；
+- facts_count=470；报告 `outputs/structured-ingest-verify-*.json`；
+- 验证数据已清理（document_version_id=220：470 facts + 9 instances + 1594 cells + 版本/文档/report 级联删除；org_unit/org_unit_ref 无其他引用者删除，department 因存在其他引用保留）。
 
 ## 8. 发布与回滚
 
