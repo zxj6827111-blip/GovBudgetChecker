@@ -4,6 +4,7 @@ import io
 import os
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("TESTING", "true")
@@ -530,3 +531,50 @@ def test_preflight_rejects_oversized_upload_before_buffering(tmp_path: Path, mon
         assert "1MB" in response.text
     finally:
         monkeypatch.setattr(runtime, "MAX_UPLOAD_MB", original_limit)
+
+
+def test_upload_real_final_account_pdf_without_doc_type_succeeds(tmp_path: Path, monkeypatch):
+    """修复 A 回归（真实材料实测）：决算 PDF 不携带 doc_type 上传必须成功。
+
+    背景：上传中心旧实现把批量预设 docType 预填为 dept_budget，上传决算
+    材料时前端会替用户提交"部门预算"。修复后前端在识别不到且未预设时整个
+    不发送 doc_type，由后端按封面识别——本用例用仓库自带的真实决算样本
+    （samples/good/上海市普陀区财政局2024年度部门决算.pdf，25 页）端到端
+    验证这条链路：preflight 识别 + upload 落库均为 dept_final / final / 2024。
+    """
+    sample = (
+        Path(__file__).resolve().parents[1]
+        / "samples"
+        / "good"
+        / "上海市普陀区财政局2024年度部门决算.pdf"
+    )
+    if not sample.is_file():
+        pytest.skip(f"real sample not available: {sample}")
+    pdf_bytes = sample.read_bytes()
+
+    _patch_runtime_state(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    # preflight（不传 doc_type，与前端 runPreflight 的请求形态一致）
+    preflight = client.post(
+        "/api/documents/preflight",
+        headers=_headers(),
+        files={"file": (sample.name, io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert preflight.status_code == 200, preflight.text
+    preflight_payload = preflight.json()
+    assert preflight_payload["doc_type"] == "dept_final"
+    assert preflight_payload["report_kind"] == "final"
+    assert preflight_payload["report_year"] == 2024
+
+    # upload：不带 doc_type / fiscal_year 表单字段（前端 null 语义 = 不发送）
+    upload = client.post(
+        "/api/documents/upload",
+        headers=_headers(),
+        files={"file": (sample.name, io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload.status_code == 200, upload.text
+    uploaded = upload.json()
+    assert uploaded["doc_type"] == "dept_final", uploaded
+    assert uploaded["report_kind"] == "final", uploaded
+    assert uploaded["fiscal_year"] == "2024", uploaded

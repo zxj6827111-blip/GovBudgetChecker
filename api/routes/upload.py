@@ -135,8 +135,13 @@ def _inspect_document_preflight(
     include_matches: bool = True,
 ) -> Dict[str, Any]:
     page_texts: List[str] = []
+    page_count: Optional[int] = None
     if content is not None:
         page_texts = runtime.extract_pdf_page_texts_from_bytes(content, max_pages=3)
+        # 页数只在 content（内存字节）分支计算：这正是上传中心 preflight 请求真正
+        # 需要页数的路径。pdf_path 分支主要用于 `_auto_match_organization` 的内部
+        # 复检，那里不消费 page_count，没必要额外打开一次文件读页数。
+        page_count = runtime.get_pdf_page_count_from_bytes(content)
     elif pdf_path is not None:
         page_texts = runtime.extract_pdf_page_texts(pdf_path, max_pages=3)
 
@@ -183,6 +188,9 @@ def _inspect_document_preflight(
         "scope_hint": str(cover.get("scope_hint") or ""),
         "current": current,
         "suggestions": suggestions,
+        # UI 重建第二批 Task 5：待上传文件列表需要显示真实页数。解析失败时为
+        # None（未知），前端必须显示"—"而不是猜一个数字或干脆显示 0 页。
+        "page_count": page_count,
     }
 
 

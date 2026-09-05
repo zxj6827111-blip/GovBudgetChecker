@@ -47,6 +47,11 @@ export interface JobSummaryRecord {
   page_coverage?: number | null;
   scanned_page_count?: number | null;
   stage?: string | null;
+  /** 前置修复 2：任务总耗时（毫秒）。finished_at-started_at 优先，elapsed_ms.total 兜底；
+   *  两者都拿不到时为 null（历史任务常见），UI 必须显示"—"，不得显示 0 或估算值。 */
+  elapsed_ms?: number | null;
+  /** 结构化入库的报告编号（ps_sync.report_id），Task 6 元数据 tab 展示用。 */
+  structured_report_id?: string | null;
   [key: string]: unknown;
 }
 
@@ -199,6 +204,12 @@ export function normalizeUiTaskStatus(value: unknown): Task["status"] {
   if (["review_required", "review", "needs_review"].includes(normalized)) {
     return "review_required";
   }
+  // uploaded/pending_analysis 是"已上传、分析未启动"的静止态，必须先于
+  // 兜底分支识别：兜底会把一切未知状态归为 analyzing（那会让"还没开始分析"
+  // 伪装成"正在分析"，重演本批修复要消除的虚假进度）。
+  if (["uploaded", "pending_analysis"].includes(normalized)) {
+    return "pending_analysis";
+  }
   // degraded 仍归 completed（结论有效），由 qualityStatus 携带降级标记
   if (["done", "completed", "complete", "success", "succeeded", "degraded"].includes(normalized)) {
     return "completed";
@@ -265,6 +276,10 @@ export function getUiTaskStatusMeta(
   job: Pick<JobSummaryRecord, "status" | "quality_status">,
 ): { status: Task["status"]; label: string; tone: "green" | "orange" | "red" | "blue" } {
   const status = normalizeUiTaskStatus(job.status);
+  if (status === "pending_analysis") {
+    // 待分析是静止态：文案不得暗示"正在处理"（严禁"分析中/处理中"类措辞）。
+    return { status, label: "待分析", tone: "blue" };
+  }
   if (status === "review_required") {
     return { status, label: "需人工复核", tone: "orange" };
   }
@@ -746,6 +761,7 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
         actualName: String(issue.actual_name ?? rawLocation.actual_name ?? ""),
         codeLevel: String(issue.code_level ?? rawLocation.code_level ?? ""),
         sourceOfTruth: String(issue.source_of_truth ?? rawLocation.source_of_truth ?? ""),
+        evidenceStatus: issue.evidence_status ? String(issue.evidence_status) : undefined,
       };
     });
 }

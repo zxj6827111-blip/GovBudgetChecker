@@ -14,6 +14,19 @@
 页码可用 **且**（证据文本可用 **或** bbox 可用）才算证据完整。
 bbox 与证据文本二者取其一，是因为大量规则命中能定位页码与原文片段但拿不到坐标，
 而少数版式类问题只有坐标；只要能把人带回原文的某一处，就算可复核。
+
+文档级规则单列（B1 口径调整，2026-08-28）：``BUD-001``（缺预算表/缺必备说明
+章节）是结构性"有没有"判定，问题本身不指向某一页，页码天然缺失——把它们与
+可定位问题混在同一个完整率分母里，会让证据留痕最完整的语料也被这类规则拖到
+0%。因此完整率统计分两层：
+
+- **可定位类完整率**（门禁指标）：剔除文档级 finding 后的正常口径；
+- **文档级 finding**：单独计数（``document_level_total``），不参与可定位类分母。
+
+识别锚是 ``rule_id == BUD-001``（引擎里缺表与缺章节两个分支共用该编号），
+而不是"页码缺失"——``engine_rule_runner`` 会把缺失页码折算成 1，
+页码信号在历史数据里不可靠。整体完整率（``completeness_rate``）保留全量
+分母不变，供趋势对照。
 """
 
 from __future__ import annotations
@@ -26,6 +39,10 @@ EVIDENCE_STATUS_DEGRADED = "degraded_missing_evidence"
 EVIDENCE_STATUS_COMPLETE = "complete"
 #: 规则来源缺证据时的标记（仍计入正式问题，只是带告警）
 EVIDENCE_STATUS_RULE_WARNING = "incomplete_rule_warning"
+
+#: 文档级规则编号：结构性"缺章节/缺表"判定，finding 天然无页码。
+#: 完整率统计时单独计数，不进入可定位类分母（B1 口径调整）。
+DOCUMENT_LEVEL_RULE_IDS = frozenset({"BUD-001"})
 
 #: 降级条目附加的标签，便于前端与导出识别
 EVIDENCE_DEGRADED_TAG = "证据不足待复核"
@@ -121,6 +138,18 @@ def evaluate_finding_evidence(finding: Mapping[str, Any]) -> Tuple[bool, List[st
 
     complete = has_page and (has_text or has_bbox)
     return complete, missing
+
+
+def is_document_level_finding(finding: Mapping[str, Any]) -> bool:
+    """该 finding 是否属于文档级规则（缺章节/缺表等结构性判定）。
+
+    这类问题不指向某一页，页码天然缺失，证据完整率按可定位类口径单独统计。
+    识别锚是规则编号（见 ``DOCUMENT_LEVEL_RULE_IDS``）：引擎会把缺失页码
+    折算成 1，"页码缺失"在历史数据里既不充分（BUD-001 可能被折成 1）
+    也不必要（其他规则的页码缺失是真证据缺口，不能豁免）。
+    """
+    rule_id = str(finding.get("rule_id") or finding.get("rule") or "").strip().upper()
+    return rule_id in DOCUMENT_LEVEL_RULE_IDS
 
 
 def is_formal_finding(finding: Any) -> bool:
@@ -220,9 +249,18 @@ def apply_evidence_completeness(result: Dict[str, Any]) -> Dict[str, Any]:
 
     副作用：缺证据的 AI finding 会被降级（修改 severity/tags/evidence_status）。
     规则 finding 只打标记与告警，不改 severity。
+
+    完整率两层口径（B1 调整）：
+    - ``completeness_rate``：全量分母（含文档级 finding），趋势对照用；
+    - ``locatable_completeness_rate``：可定位类分母（剔除文档级 finding），
+      质量门禁 ``check_replay_thresholds`` 消费这个口径。
+    分母为 0 时两个 rate 都是 None——"没有问题"不等于"证据完整"。
     """
     total = 0
     complete_count = 0
+    locatable_total = 0
+    locatable_complete_count = 0
+    document_level_total = 0
     degraded: List[Dict[str, Any]] = []
     rule_warnings: List[Dict[str, Any]] = []
 
@@ -235,25 +273,37 @@ def apply_evidence_completeness(result: Dict[str, Any]) -> Dict[str, Any]:
             complete_count += 1
             # 只在没有既有状态时补写，避免覆盖上一轮已判定的降级态
             finding.setdefault("evidence_status", EVIDENCE_STATUS_COMPLETE)
-            continue
-
-        blocking = [code for code in missing if code != "missing_bbox"] or list(missing)
-        if source == "ai":
-            _degrade_ai_finding(finding, blocking)
-            degraded.append(_finding_ref(finding, blocking))
         else:
-            finding["evidence_status"] = EVIDENCE_STATUS_RULE_WARNING
-            finding["evidence_missing"] = list(blocking)
-            rule_warnings.append(_finding_ref(finding, blocking))
+            blocking = [code for code in missing if code != "missing_bbox"] or list(missing)
+            if source == "ai":
+                _degrade_ai_finding(finding, blocking)
+                degraded.append(_finding_ref(finding, blocking))
+            else:
+                finding["evidence_status"] = EVIDENCE_STATUS_RULE_WARNING
+                finding["evidence_missing"] = list(blocking)
+                rule_warnings.append(_finding_ref(finding, blocking))
+
+        if is_document_level_finding(finding):
+            document_level_total += 1
+        else:
+            locatable_total += 1
+            if complete:
+                locatable_complete_count += 1
 
     formal_total = sum(1 for finding in _iter_findings(result) if is_formal_finding(finding))
-    completeness_rate = round(complete_count / total, 4) if total else 1.0
+    completeness_rate = round(complete_count / total, 4) if total else None
 
     return {
         "total": total,
         "complete": complete_count,
         "incomplete": total - complete_count,
         "completeness_rate": completeness_rate,
+        "locatable_total": locatable_total,
+        "locatable_complete": locatable_complete_count,
+        "locatable_completeness_rate": round(locatable_complete_count / locatable_total, 4)
+        if locatable_total
+        else None,
+        "document_level_total": document_level_total,
         "degraded_count": len(degraded),
         "rule_warning_count": len(rule_warnings),
         "formal_issue_total": formal_total,

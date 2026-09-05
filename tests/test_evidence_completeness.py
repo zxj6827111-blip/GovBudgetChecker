@@ -29,6 +29,7 @@ from src.services.evidence_guard import (
     EVIDENCE_STATUS_RULE_WARNING,
     apply_evidence_completeness,
     evaluate_finding_evidence,
+    is_document_level_finding,
     is_formal_finding,
 )
 
@@ -201,11 +202,86 @@ def test_legacy_bucket_structure_is_checked_without_double_counting() -> None:
     assert result["issues"]["error"][0]["evidence_status"] == EVIDENCE_STATUS_COMPLETE
 
 
-def test_empty_result_reports_full_completeness() -> None:
+def test_empty_result_reports_none_completeness() -> None:
+    """空样本红线：分母为 0 时完整率必须是 None——"没有问题"不等于"证据完整"。"""
     completeness = apply_evidence_completeness({"ai_findings": [], "rule_findings": []})
     assert completeness["total"] == 0
-    assert completeness["completeness_rate"] == 1.0
+    assert completeness["completeness_rate"] is None
+    assert completeness["locatable_total"] == 0
+    assert completeness["locatable_completeness_rate"] is None
     assert completeness["degraded_count"] == 0
+
+
+# --------------------------------------------------------------------------
+# B1 口径：文档级规则（BUD-001 缺表/缺章节）单列
+# --------------------------------------------------------------------------
+def test_is_document_level_finding_anchors_on_rule_id() -> None:
+    """文档级识别锚是规则编号，不是页码（引擎会把缺失页码折成 1）。"""
+    assert is_document_level_finding({"rule_id": "BUD-001"})
+    assert is_document_level_finding({"rule_id": "bud-001"})
+    assert is_document_level_finding({"rule": "BUD-001"})
+    # 其他规则即便页码缺失也是真证据缺口，不能豁免
+    assert not is_document_level_finding({"rule_id": "C-001", "page_number": None})
+    assert not is_document_level_finding({"rule_id": "BUD-101"})
+
+
+def test_document_level_findings_are_counted_separately() -> None:
+    """BUD-001 类文档级 finding 单列：不进可定位类分母，整体口径保留对照。
+
+    文档级 finding 页码天然缺失，旧口径下永远是"不完整"，会把证据留痕
+    完整的语料拖到 0%；新口径下可定位类完整率反映真实证据水平。
+    """
+    result = {
+        "rule_findings": [
+            {
+                "id": "b1",
+                "rule_id": "BUD-001",
+                "source": "rule",
+                "severity": "critical",
+                "message": "缺少预算表：政府采购预算表",
+            },
+            {
+                "id": "b2",
+                "rule_id": "BUD-001",
+                "source": "rule",
+                "severity": "critical",
+                "message": "缺少必要章节：三公经费说明",
+            },
+            {
+                "id": "c1",
+                "rule_id": "C-001",
+                "source": "rule",
+                "severity": "error",
+                "location": {"page": 12},
+                "evidence": [{"page": 12, "text": "合计 35.20"}],
+            },
+        ]
+    }
+
+    completeness = apply_evidence_completeness(result)
+
+    assert completeness["total"] == 3
+    assert completeness["complete"] == 1
+    assert completeness["completeness_rate"] == round(1 / 3, 4)
+    assert completeness["document_level_total"] == 2
+    assert completeness["locatable_total"] == 1
+    assert completeness["locatable_complete"] == 1
+    assert completeness["locatable_completeness_rate"] == 1.0
+
+
+def test_document_level_single_counting_keeps_rule_warning_marking() -> None:
+    """单列只改统计口径，不改变 finding 级标记：缺页的 BUD-001 仍是规则告警。"""
+    finding = {
+        "id": "b1",
+        "rule_id": "BUD-001",
+        "source": "rule",
+        "severity": "critical",
+    }
+    completeness = apply_evidence_completeness({"rule_findings": [finding]})
+    assert finding["evidence_status"] == EVIDENCE_STATUS_RULE_WARNING
+    assert completeness["document_level_total"] == 1
+    assert completeness["locatable_total"] == 0
+    assert completeness["locatable_completeness_rate"] is None
 
 
 # --------------------------------------------------------------------------

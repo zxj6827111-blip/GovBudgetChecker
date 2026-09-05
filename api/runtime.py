@@ -614,6 +614,33 @@ def extract_pdf_page_texts_from_bytes(content: bytes, max_pages: int = 3) -> Lis
     return _extract_pdf_page_texts(io.BytesIO(content), max_pages=max_pages)
 
 
+def get_pdf_page_count_from_bytes(content: bytes) -> Optional[int]:
+    """Best-effort page count for in-memory PDF bytes (upload-center preflight).
+
+    UI 重建第二批 Task 5：上传中心待上传文件列表需要在上传前显示真实页数
+    （原型图"18.4 MB · 48 页"），但当时手上只有内存字节、没有落盘路径，
+    不能直接复用需要 Path 的 `get_pdf_page_count()`。这里复用已有的
+    `pdfplumber` 依赖（与 `_extract_pdf_page_texts` 同一个库，不新增依赖），
+    只读页数不读正文，比整页文本抽取更轻。
+
+    解析失败（损坏文件、非 PDF、加密文档等）时返回 None 而不是 0——
+    0 意味着"已确认这份文件有 0 页"，解析失败时我们并不知道真实页数，
+    与本仓库"未知用 None、绝不用 0 顶替"的一贯原则一致。
+    """
+    if not content:
+        return None
+    try:
+        import pdfplumber
+    except Exception:
+        return None
+    try:
+        with pdfplumber.open(io.BytesIO(content)) as pdf:
+            return len(pdf.pages)
+    except Exception:
+        logger.exception("Failed to read page count from in-memory PDF bytes")
+        return None
+
+
 def extract_pdf_page_texts(pdf_path: Path, max_pages: int = 3) -> List[str]:
     """Extract the first few page texts from a PDF path."""
     return _extract_pdf_page_texts(str(pdf_path), max_pages=max_pages)
@@ -1469,6 +1496,31 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     except Exception:
         result_meta = {}
 
+    # 前置修复 2：队列表"耗时"列。started_at/finished_at 写在 result.meta 里
+    # （见 api/main.py 双模式/传统模式分析结束时的 _safe_write 调用），collect_job_summary
+    # 此前从未把它们提取出来给列表接口用。真实历史数据实测（786 个任务目录）：
+    # 用 finished_at-started_at 计算耗时，在"确实跑过分析"的任务子集（done/
+    # review_required/error，336 个）里 97.6%（328/336）可计算；而 elapsed_ms.total
+    # 只在双模式且 analyze_dual 写入时才有值，覆盖率明显更低（178/336，约 53%），
+    # 因此优先用 started_at/finished_at 差值，elapsed_ms.total 仅作为兜底（例如
+    # 某些历史产物两者都有但 finished_at 缺失的边缘情况）。
+    # 严禁伪造：两者都拿不到时 elapsed_ms 为 None，前端必须显示"—"，不得显示 0。
+    started_at = result_meta.get("started_at")
+    finished_at = result_meta.get("finished_at")
+    computed_elapsed_ms: Optional[int] = None
+    if (
+        isinstance(started_at, (int, float))
+        and isinstance(finished_at, (int, float))
+        and finished_at >= started_at
+    ):
+        computed_elapsed_ms = int(round((finished_at - started_at) * 1000))
+    else:
+        fallback_elapsed = result_meta.get("elapsed_ms")
+        if isinstance(fallback_elapsed, dict):
+            fallback_total = fallback_elapsed.get("total")
+            if isinstance(fallback_total, (int, float)):
+                computed_elapsed_ms = int(fallback_total)
+
     if not doc_type:
         try:
             doc_type = str(result_meta.get("doc_type") or "").strip()
@@ -1825,6 +1877,12 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "mode": mode,
         "dual_mode_enabled": dual_mode_enabled,
         "stage": stage,
+        # Task 3：per-job 规范阶段进度（见 src/services/pipeline_stages.py）。
+        # 未知/尚未写入时保持 None，前端必须显示"—"，不得补 0 或猜测值。
+        "stage_progress": status_data.get("stage_progress"),
+        # 失败任务的阶段归因：只在该任务确实失败过时才会有值，正常/进行中任务
+        # 该字段不存在（不是显式的 None，是 status_data 里本来就没有这个键）。
+        "stage_failed_at": status_data.get("stage_failed_at"),
         "quality_status": status_data.get("quality_status") or "complete",
         # 旧任务没有 analysis_conclusion 字段时按 status + 问题数反推，保证列表可读
         "analysis_conclusion": infer_analysis_conclusion(
@@ -1865,6 +1923,9 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "ai_issue_info": ai_issue_info,
         "local_elapsed_ms": local_elapsed_ms,
         "ai_elapsed_ms": ai_elapsed_ms,
+        # 前置修复 2：任务总耗时（毫秒），finished_at-started_at 优先，
+        # elapsed_ms.total 兜底；两者都拿不到时为 None，前端显示"—"。
+        "elapsed_ms": computed_elapsed_ms,
         "provider_stats_count": provider_stats_count,
         "structured_ingest_status": structured_ingest.get("status"),
         "structured_document_version_id": structured_ingest.get("document_version_id"),

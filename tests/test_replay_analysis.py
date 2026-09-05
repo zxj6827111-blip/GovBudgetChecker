@@ -350,7 +350,9 @@ def test_summarize_handles_empty_input() -> None:
     summary = summarize([])
     assert summary["job_total"] == 0
     assert summary["page_coverage"]["mean"] is None
-    assert summary["evidence_completeness"]["completeness_rate"] == 1.0
+    # 空样本红线：没有 finding 时完整率是 None，不是 1.0
+    assert summary["evidence_completeness"]["completeness_rate"] is None
+    assert summary["evidence_completeness"]["locatable_completeness_rate"] is None
     assert summary["report_id_uniqueness"]["unique"] is True
 
 

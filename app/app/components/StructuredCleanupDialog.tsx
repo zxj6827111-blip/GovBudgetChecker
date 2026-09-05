@@ -177,13 +177,13 @@ function SectionCard({
   title: string;
   subtitle: string;
   count: number | null | undefined;
-  tone: "slate" | "emerald" | "sky" | "amber";
+  tone: "slate" | "emerald" | "info" | "amber";
 }) {
   const toneClass =
     tone === "emerald"
       ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-      : tone === "sky"
-        ? "border-sky-200 bg-sky-50 text-sky-800"
+      : tone === "info"
+        ? "border-info-200 bg-info-50 text-info-800"
         : tone === "amber"
           ? "border-amber-200 bg-amber-50 text-amber-800"
           : "border-slate-200 bg-slate-50 text-slate-800";
@@ -213,7 +213,7 @@ function ScopeBadge({
       <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-1 font-medium text-slate-700">
         {typeof year === "number" ? `${year} ${TEXT.yearSuffix}` : TEXT.yearUnknown}
       </span>
-      <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-1 font-medium text-indigo-700">
+      <span className="inline-flex items-center rounded-full bg-primary-50 px-2 py-1 font-medium text-primary-700">
         {getReportKindLabel(kind)}
       </span>
       {departmentName ? (
@@ -222,7 +222,7 @@ function ScopeBadge({
         </span>
       ) : null}
       {organizationName ? (
-        <span className="inline-flex items-center rounded-full bg-sky-50 px-2 py-1 font-medium text-sky-700">
+        <span className="inline-flex items-center rounded-full bg-info-50 px-2 py-1 font-medium text-info-700">
           {TEXT.org}：{organizationName}
         </span>
       ) : null}
@@ -235,13 +235,13 @@ function JobCard({
   accent,
 }: {
   item: CleanupJobItem | KeptJobItem;
-  accent: "emerald" | "sky" | "slate";
+  accent: "emerald" | "info" | "slate";
 }) {
   const accentClass =
     accent === "emerald"
       ? "border-emerald-200 bg-emerald-50/50"
-      : accent === "sky"
-        ? "border-sky-200 bg-sky-50/50"
+      : accent === "info"
+        ? "border-info-200 bg-info-50/50"
         : "border-slate-200 bg-white";
 
   return (
@@ -279,12 +279,12 @@ function VersionGroupCard({
   tone,
 }: {
   item: CleanupVersionItem;
-  tone: "sky" | "amber";
+  tone: "info" | "amber";
 }) {
   const jobs = Array.isArray(item.jobs) ? item.jobs : [];
   const toneClass =
-    tone === "sky"
-      ? "border-sky-200 bg-sky-50/60"
+    tone === "info"
+      ? "border-info-200 bg-info-50/60"
       : "border-amber-200 bg-amber-50/60";
 
   return (
@@ -316,7 +316,7 @@ function VersionGroupCard({
             <JobCard
               key={`${item.document_version_id}:${job.job_id}`}
               item={job}
-              accent={tone === "sky" ? "sky" : "slate"}
+              accent={tone === "info" ? "info" : "slate"}
             />
           ))}
         </div>
@@ -371,12 +371,12 @@ export default function StructuredCleanupDialog({
       }}
     >
       <div
-        className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-[28px] border border-white/60 bg-[#f8fafc] shadow-[0_30px_80px_rgba(15,23,42,0.28)]"
+        className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-[28px] border border-white/60 bg-surface-50 shadow-dialog"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="relative overflow-hidden border-b border-slate-200/80 bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.18),_transparent_38%),linear-gradient(135deg,#ffffff,#eef6ff)] px-8 py-7">
+        <div className="relative overflow-hidden border-b border-slate-200/80 bg-dialog-header-wash px-8 py-7">
           <div className="max-w-3xl">
-            <div className="inline-flex rounded-full border border-sky-200 bg-white/80 px-3 py-1 text-xs font-semibold tracking-[0.18em] text-sky-700">
+            <div className="inline-flex rounded-full border border-info-200 bg-white/80 px-3 py-1 text-xs font-semibold tracking-[0.18em] text-info-700">
               {TEXT.preview}
             </div>
             <h2 className="mt-3 text-3xl font-semibold tracking-tight text-slate-900">
@@ -399,7 +399,7 @@ export default function StructuredCleanupDialog({
               title={TEXT.cleanupVersions}
               subtitle={TEXT.cleanupVersionsDesc}
               count={preview.cleanup_document_version_count}
-              tone="sky"
+              tone="info"
             />
             <SectionCard
               title={TEXT.cleanupJobs}
@@ -453,7 +453,7 @@ export default function StructuredCleanupDialog({
                   <VersionGroupCard
                     key={`cleanup:${item.document_version_id}`}
                     item={item}
-                    tone="sky"
+                    tone="info"
                   />
                 ))
               ) : (
@@ -540,7 +540,7 @@ export default function StructuredCleanupDialog({
                 data-testid="structured-cleanup-confirm"
                 onClick={onConfirm}
                 disabled={isExecuting}
-                className="inline-flex items-center rounded-xl bg-gradient-to-r from-sky-600 to-cyan-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-500/30 transition-all hover:from-sky-700 hover:to-cyan-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex items-center rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isExecuting ? TEXT.executing : TEXT.confirm}
               </button>

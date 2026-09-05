@@ -124,6 +124,12 @@ jobs:
           npm ci
           npm --prefix app ci
 
+      # UI 重建第二批 Task 0：7 个前端单测脚本此前只在本机跑过，从未接入 CI 门禁，
+      # 承载 null/0 语义等关键反例的 test:ui-components 因此可能悄悄失效而无人发现。
+      # jiti 直跑纯 TS/无 JSX 依赖，不需要浏览器，放在 Playwright 安装之前即可跑。
+      - name: Frontend unit tests
+        run: npm --prefix app run test:unit
+
       - name: Install Playwright browser
         run: npx --prefix app playwright install --with-deps chromium
 

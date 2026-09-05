@@ -86,6 +86,17 @@ function isPublicPath(pathname: string): boolean {
 
 export function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
+
+  // Task 9 旧 URL 重定向：旧单体「导出归档」深链（/viewer/gbc-ui-demo?page=archive）
+  // 已由新 UI 的 /archive 承接（能力迁移完成），老链接不得 404 也不得留在旧页。
+  // 其余旧单体入口（默认页/上传/任务等）保持可访问，Task 10 收尾时统一处理。
+  if (pathname === "/viewer/gbc-ui-demo" && request.nextUrl.searchParams.get("page") === "archive") {
+    const archiveUrl = request.nextUrl.clone();
+    archiveUrl.pathname = "/archive";
+    archiveUrl.search = "";
+    return withSecurityHeaders(NextResponse.redirect(archiveUrl));
+  }
+
   if (isPublicPath(pathname)) {
     return withSecurityHeaders(NextResponse.next());
   }

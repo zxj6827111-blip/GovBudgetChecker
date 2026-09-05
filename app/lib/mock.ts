@@ -25,6 +25,14 @@ export interface Problem {
   actualName?: string;
   codeLevel?: string;
   sourceOfTruth?: string;
+  /**
+   * 证据完整性状态（src/services/evidence_guard.py 的 evidence_status 字段）。
+   * "degraded_missing_evidence" 表示这是一条因缺证据被降级为待复核的 AI finding，
+   * 用户有权知道哪条证据不完整——这是 M2 evidence_guard 成果第一次在前端露面
+   * （Task 6 审核工作台新增，旧 task-review 组件未消费此字段，属于纯新增能力，
+   * 不改变旧组件已有行为）。历史产物没有该字段时为 undefined，不视为降级。
+   */
+  evidenceStatus?: string;
 }
 
 export interface Task {
@@ -39,7 +47,12 @@ export interface Task {
    * review_required 是独立终态："分析跑完了，但质量门禁没过，结论不可交付"。
    * 它既不能算 completed（会变成虚假成功），也不能算 failed（分析本身没出错）。
    */
-  status: 'analyzing' | 'completed' | 'review_required' | 'failed';
+  /**
+   * pending_analysis 是独立静止态："已上传、分析未启动"（后端 status=uploaded）。
+   * 它既不是 analyzing（后端没有在干活），更不是 completed/review_required——
+   * 把它归到任何其它状态都会制造虚假进度或虚假成功。
+   */
+  status: 'analyzing' | 'pending_analysis' | 'completed' | 'review_required' | 'failed';
   /** 质量门禁判定结果，用于在 completed 上叠加"部分降级"标记 */
   qualityStatus?: 'complete' | 'degraded' | 'review_required';
   /** 分析结论四态，可区分"确实没问题"与"没查完" */

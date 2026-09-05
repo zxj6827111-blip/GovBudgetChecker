@@ -21,9 +21,19 @@ const WARMUP_PATHS = [
   "/viewer/gbc-ui-demo",
   "/task/job-001",
   "/department/dept-001",
-  "/?page=settings",
-  "/?page=settings&section=organization",
+  "/viewer/gbc-ui-demo?page=settings",
+  "/viewer/gbc-ui-demo?page=settings&section=organization",
   "/login",
+  "/dev/ui-preview",
+  "/workbench",
+  "/upload",
+  "/queue",
+  "/review",
+  "/history",
+  "/archive",
+  "/quality",
+  "/rules",
+  "/settings",
 ];
 const forwardedArgs = process.argv.slice(2);
 let server = null;

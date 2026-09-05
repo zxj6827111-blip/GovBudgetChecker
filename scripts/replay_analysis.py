@@ -156,29 +156,52 @@ def _resolve_report_year(payload: Dict[str, Any]) -> Optional[int]:
 
 
 def _resolve_evidence_metrics(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """取证据完整率。
+    """取证据完整率（含 B1 可定位类子口径）。
 
-    新任务的 `result.meta.evidence_completeness` 直接可用；历史任务没有该字段时，
-    对结果的**深拷贝**重新跑一遍校验逻辑得出指标——深拷贝保证既有产物不被改写，
-    复用同一函数保证与线上口径一致。
+    新任务的 `result.meta.evidence_completeness` 直接可用；历史任务没有该字段、
+    或留痕是旧格式（缺可定位类字段）时，对结果的**深拷贝**重新跑一遍校验逻辑
+    得出指标——深拷贝保证既有产物不被改写，复用同一函数保证与线上口径一致。
     """
     meta = _result_meta(payload)
     recorded = meta.get("evidence_completeness")
-    if isinstance(recorded, dict) and _as_int(recorded.get("total")) is not None:
+    recorded_total = _as_int(recorded.get("total")) if isinstance(recorded, dict) else None
+    if (
+        isinstance(recorded, dict)
+        and recorded_total is not None
+        and _as_int(recorded.get("locatable_total")) is not None
+    ):
         return {
             "source": "recorded",
-            "total": _as_int(recorded.get("total")) or 0,
+            "total": recorded_total or 0,
             "complete": _as_int(recorded.get("complete")) or 0,
+            "locatable_total": _as_int(recorded.get("locatable_total")) or 0,
+            "locatable_complete": _as_int(recorded.get("locatable_complete")) or 0,
+            "document_level_total": _as_int(recorded.get("document_level_total")) or 0,
             "degraded_count": _as_int(recorded.get("degraded_count")) or 0,
             "rule_warning_count": _as_int(recorded.get("rule_warning_count")) or 0,
         }
 
     result = payload.get("result")
     if not isinstance(result, dict):
+        if recorded_total is not None:
+            # 旧格式留痕且结果体缺失：全量口径照实返回，可定位类字段置 None
+            return {
+                "source": "recorded",
+                "total": recorded_total or 0,
+                "complete": _as_int(recorded.get("complete")) or 0,
+                "locatable_total": None,
+                "locatable_complete": None,
+                "document_level_total": None,
+                "degraded_count": _as_int(recorded.get("degraded_count")) or 0,
+                "rule_warning_count": _as_int(recorded.get("rule_warning_count")) or 0,
+            }
         return {
             "source": "unavailable",
             "total": 0,
             "complete": 0,
+            "locatable_total": None,
+            "locatable_complete": None,
+            "document_level_total": None,
             "degraded_count": 0,
             "rule_warning_count": 0,
         }
@@ -188,6 +211,9 @@ def _resolve_evidence_metrics(payload: Dict[str, Any]) -> Dict[str, Any]:
         "source": "recomputed",
         "total": int(recomputed["total"]),
         "complete": int(recomputed["complete"]),
+        "locatable_total": int(recomputed["locatable_total"]),
+        "locatable_complete": int(recomputed["locatable_complete"]),
+        "document_level_total": int(recomputed["document_level_total"]),
         "degraded_count": int(recomputed["degraded_count"]),
         "rule_warning_count": int(recomputed["rule_warning_count"]),
     }
@@ -329,6 +355,23 @@ def summarize(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     evidence_rule_warnings = sum(
         int(record["evidence"]["rule_warning_count"]) for record in records
     )
+    # B1 口径：可定位类子口径（BUD-001 等文档级规则单列，不计入分母）。
+    # 旧格式留痕且结果体缺失时逐任务字段为 None，只跳过该任务，不冒充 0。
+    locatable_total = sum(
+        int(record["evidence"]["locatable_total"] or 0)
+        for record in records
+        if record["evidence"].get("locatable_total") is not None
+    )
+    locatable_complete = sum(
+        int(record["evidence"]["locatable_complete"] or 0)
+        for record in records
+        if record["evidence"].get("locatable_complete") is not None
+    )
+    document_level_total = sum(
+        int(record["evidence"]["document_level_total"] or 0)
+        for record in records
+        if record["evidence"].get("document_level_total") is not None
+    )
 
     return {
         "job_total": total,
@@ -361,9 +404,18 @@ def summarize(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "evidence_completeness": {
             "findings_total": evidence_total,
             "findings_complete": evidence_complete,
-            "completeness_rate": _ratio(evidence_complete, evidence_total)
+            # 红线与 metrics.py 一致：分母为 0 时是 None，不是 1.0——
+            # "没有问题"不等于"证据完整"。
+            "completeness_rate": round(evidence_complete / evidence_total, 4)
             if evidence_total
-            else 1.0,
+            else None,
+            # B1 口径：门禁消费的是可定位类完整率。
+            "locatable_findings_total": locatable_total,
+            "locatable_findings_complete": locatable_complete,
+            "locatable_completeness_rate": round(locatable_complete / locatable_total, 4)
+            if locatable_total
+            else None,
+            "document_level_findings_total": document_level_total,
             "degraded_total": evidence_degraded,
             "rule_warning_total": evidence_rule_warnings,
         },

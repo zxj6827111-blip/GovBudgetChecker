@@ -63,11 +63,28 @@ DATABASE_URL=postgresql://govbudget_ci:govbudget_ci@localhost:5432/fiscal_ci \
 | `report_id_uniqueness` | 不同任务不得共用同一 `report_id` | 冲突数 = 0 | P0-09 |
 | `completed_jobs_have_page_coverage` | 完成态任务必须带 `page_coverage` | 缺失数 = 0 | B-01 / B-03 |
 | `done_jobs_min_page_coverage` | `done` 任务覆盖率下限（低覆盖只能进 `review_required`） | ≥ 0.8 | B-01 / B-03 |
-| `evidence_completeness_rate` | 正式问题的证据完整率 | ≥ 0.99 | P0-07 |
+| `evidence_completeness_rate` | **可定位类**正式问题的证据完整率（BUD-001 类文档级规则单列，不进分母） | ≥ 0.99 | P0-07 |
 | `unknown_report_kind_ratio` | 类型识别失败比例上限 | ≤ 0.35 | P0-04 / P1-05 |
 
 阈值都是 CLI 参数（`--min-page-coverage` / `--min-evidence-rate` /
 `--max-unknown-kind-ratio`），不是硬编码。
+
+### 3.1 证据完整率的两层口径（B1 调整，2026-08-28）
+
+`BUD-001`（缺预算表/缺必备说明章节）是结构性"有没有"判定，问题本身不指向
+某一页，页码天然缺失——把它们与可定位问题混在同一个分母里，会让证据留痕
+最完整的语料也被拖到 0%。因此该指标分两层：
+
+- **可定位类完整率**（`locatable_completeness_rate`，门禁消费）：剔除文档级
+  finding 后的正常口径，识别锚是 `rule_id == BUD-001`（引擎里缺表与缺章节
+  两个分支共用该编号），不是"页码缺失"——引擎会把缺失页码折算成 1，
+  页码信号在历史数据里不可靠；
+- **全量完整率**（`completeness_rate`，趋势对照）：保留旧口径（全部 finding
+  进分母），`document_level_findings_total` 单列文档级条数。
+
+旧回放报告没有可定位类字段时，门禁回退全量口径并在输出里明确标注，
+保证历史报告仍可判定；分母为 0 时两个 rate 都是 `None`（"没有问题"不等于
+"证据完整"），门禁对空样本跳过判定。
 
 ## 4. 为什么这不是"假门禁"
 
