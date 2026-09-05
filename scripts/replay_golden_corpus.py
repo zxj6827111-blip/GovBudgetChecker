@@ -63,6 +63,8 @@ def load_page_texts(pdf_path: Path) -> List[str]:
 
 
 def load_page_tables(pdf_path: Path) -> List[List[Any]]:
+    import pdfplumber
+
     from src.services.pdf_page_extract import extract_tables_from_page
 
     tables: List[List[Any]] = []
@@ -157,9 +159,12 @@ def infer_report_kind(page_texts: List[str], doc_id: str) -> str:
 
 
 def normalize_rule_key(rule: str) -> str:
-    """规则键归一化：legacy 与 structured 共用（去掉序号后缀与大小写差异）。"""
-    text = unicodedata.normalize("NFKC", str(rule or "")).strip().upper()
-    return re.sub(r"-\d+$", "", text)
+    """规则键归一化：legacy 与 structured 共用同一规则编号。
+
+    规则编号本身形如 V33-001 / CMM-004（尾部数字是编号的一部分，
+    不可截断），这里只做去空白与大写归一。
+    """
+    return unicodedata.normalize("NFKC", str(rule or "")).strip().upper()
 
 
 def diff_legacy_structured(legacy: Dict[str, Any], structured: Dict[str, Any]) -> Dict[str, Any]:

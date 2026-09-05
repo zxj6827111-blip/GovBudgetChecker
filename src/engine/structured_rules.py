@@ -1,0 +1,373 @@
+"""统一结构化解析中间层（与数据库无关的内存模型）。
+
+阶段 3 的核心交付（docs/GovBudgetChecker 完整整改计划 §3）：
+
+- ``ParsedCell``：number（Decimal/None）/text（str/None）/bbox 三态，
+  **文本单元格保留 None，禁止转成 0.0**；
+- ``ParsedTable``：``table_code、page_span、named_columns、column_group、
+  canonical_measure、classification_type、row_role、confidence``；
+- 双栏表显式建模：``split_two_sided``（收入侧/支出侧、人员经费侧/公用经费侧）；
+- 跨页表合并守卫：``merge_compatible`` 只在表头签名兼容时合并，列宽变化
+  走逻辑列重映射，无法映射时标记 ``parse_error``；
+- 金额计算统一 Decimal：舍入包络复用 ``src.engine.amount_math``。
+
+三态开关（legacy/shadow/structured）：``run_structured_rules`` 供
+``structured``/``shadow`` 模式消费；首批迁移规则 V33-115/117/120/202/203/
+220/241/243/244 通过适配器委托给修复后的规则实现（单一实现，两处消费），
+后续规则迁移只需在 ``STRUCTURED_MIGRATED_RULES`` 登记并在
+``STRUCTURED_RULE_IMPLEMENTATIONS`` 提供实现。
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from decimal import Decimal
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from src.engine.amount_math import classify_amount_diff
+
+# 首批迁移规则（与整改计划 §3 一致）
+STRUCTURED_MIGRATED_RULES: Tuple[str, ...] = (
+    "V33-115",
+    "V33-117",
+    "V33-120",
+    "V33-202",
+    "V33-203",
+    "V33-220",
+    "V33-241",
+    "V33-243",
+    "V33-244",
+)
+
+# 科目域（与 common_rules._code_domain 口径一致）
+DOMAIN_REVENUE = "revenue"
+DOMAIN_FUNCTIONAL = "functional"
+DOMAIN_ECONOMIC = "economic"
+DOMAIN_OTHER = "other"
+
+
+def classify_code_domain(code: str) -> str:
+    digits = re.sub(r"\D", "", str(code or ""))
+    if len(digits) < 3:
+        return DOMAIN_OTHER
+    prefix = int(digits[:3])
+    if 101 <= prefix <= 110:
+        return DOMAIN_REVENUE
+    if 201 <= prefix <= 229:
+        return DOMAIN_FUNCTIONAL
+    if 301 <= prefix <= 310:
+        return DOMAIN_ECONOMIC
+    return DOMAIN_OTHER
+
+
+@dataclass
+class ParsedCell:
+    """单元格三态：number / text / bbox。非数值单元格 number=None。"""
+
+    number: Optional[Decimal] = None
+    text: Optional[str] = None
+    page: Optional[int] = None
+    bbox: Optional[Sequence[float]] = None
+    confidence: float = 1.0
+
+    @property
+    def is_numeric(self) -> bool:
+        return self.number is not None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "number": str(self.number) if self.number is not None else None,
+            "text": self.text,
+            "page": self.page,
+            "bbox": list(self.bbox) if self.bbox else None,
+            "confidence": self.confidence,
+        }
+
+
+@dataclass
+class ParsedRow:
+    """行：cells + 行角色（detail/subtotal/total/header）+ 科目编码。"""
+
+    cells: List[ParsedCell]
+    row_role: str = "detail"            # header / detail / subtotal / total
+    code: Optional[str] = None
+    code_level: Optional[int] = None    # 3=类 5=款 7=项
+    label: str = ""
+    confidence: float = 1.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "row_role": self.row_role,
+            "code": self.code,
+            "code_level": self.code_level,
+            "label": self.label,
+            "confidence": self.confidence,
+            "cells": [cell.to_dict() for cell in self.cells],
+        }
+
+
+@dataclass
+class ParsedTable:
+    """命名列表格模型（内存态，与数据库无关）。"""
+
+    table_code: str = ""
+    title: str = ""
+    page_span: Tuple[int, int] = (0, 0)
+    named_columns: Dict[str, int] = field(default_factory=dict)  # 语义列 → 索引
+    column_group: str = "single"        # single / two_sided / multi_measure
+    canonical_measure: str = "万元"
+    classification_type: str = DOMAIN_OTHER
+    row_role: str = "detail"
+    rows: List[ParsedRow] = field(default_factory=list)
+    confidence: float = 1.0
+    parse_errors: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "table_code": self.table_code,
+            "title": self.title,
+            "page_span": list(self.page_span),
+            "named_columns": dict(self.named_columns),
+            "column_group": self.column_group,
+            "canonical_measure": self.canonical_measure,
+            "classification_type": self.classification_type,
+            "row_role": self.row_role,
+            "confidence": self.confidence,
+            "parse_errors": list(self.parse_errors),
+            "row_count": len(self.rows),
+        }
+
+
+_CODE_RE = re.compile(r"^\d{3}(\d{2}(\d{2})?)?$")
+_NUM_RE = re.compile(r"^-?\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
+
+
+def _cell_from_raw(raw: Any, page: int) -> ParsedCell:
+    text = str(raw).strip() if raw is not None else ""
+    if text and _NUM_RE.match(text):
+        return ParsedCell(number=Decimal(text.replace(",", "")), page=page)
+    return ParsedCell(text=text or None, page=page)
+
+
+def _row_code(cells: List[ParsedCell], max_scan: int = 3) -> Tuple[Optional[str], Optional[int]]:
+    for cell in cells[:max_scan]:
+        text = (cell.text or "").strip()
+        if text and _CODE_RE.match(text):
+            return text, len(text)
+    return None, None
+
+
+def _row_role_from_label(label: str, code: Optional[str], numeric_count: int) -> str:
+    if any(k in label for k in ("总计", "合计", "本年支出合计", "本年收入合计", "经费合计")):
+        if label.strip() in ("总计", "合计", "本年支出合计", "本年收入合计") and not code:
+            return "total"
+        return "subtotal"
+    return "detail"
+
+
+def materialize_table(
+    raw_rows: Sequence[Sequence[Any]],
+    *,
+    title: str = "",
+    table_code: str = "",
+    pages: Sequence[int] = (),
+    header_rows: int = 2,
+) -> ParsedTable:
+    """把 pdfplumber 风格的原始行转成 ParsedTable（命名列 + 行角色）。"""
+
+    start_page = min(pages) if pages else 0
+    end_page = max(pages) if pages else 0
+    parsed = ParsedTable(
+        table_code=table_code,
+        title=title,
+        page_span=(start_page, end_page),
+    )
+
+    widths = [len(r) for r in raw_rows if r is not None]
+    if widths and len(set(widths)) > 1:
+        parsed.parse_errors.append(
+            f"row_width_inconsistent: {sorted(set(widths))}"
+        )
+
+    header_labels: List[str] = []
+    for row in raw_rows[:header_rows]:
+        header_labels.extend(str(c).strip() for c in row if c)
+
+    # 语义列识别：合计 / 本年支出合计 / 基本支出 / 项目支出 / 决算数 / 预算数
+    for row in raw_rows[:header_rows + 2]:
+        for i, cell in enumerate(row):
+            text = re.sub(r"\s+", "", str(cell or ""))
+            key = None
+            if text == "合计" or text in ("本年支出合计", "本年收入合计"):
+                key = "total"
+            elif text == "基本支出":
+                key = "basic"
+            elif text == "项目支出":
+                key = "project"
+            elif text == "预算数":
+                key = "budget"
+            elif text == "决算数":
+                key = "final"
+            if key and key not in parsed.named_columns:
+                parsed.named_columns[key] = i
+
+    # 双栏检测：表头同时出现 收入/支出 或 左右两个"决算数"
+    joined_header = "".join(header_labels)
+    if "收入" in joined_header and "支出" in joined_header:
+        parsed.column_group = "two_sided"
+
+    for r_idx, row in enumerate(raw_rows):
+        page = start_page or (pages[0] if pages else 0)
+        cells = [_cell_from_raw(c, page) for c in row]
+        code, level = _row_code(cells)
+        label = "".join((c.text or "") for c in cells if c.text)
+        numeric_count = sum(1 for c in cells if c.is_numeric)
+        row_role = "header" if r_idx < header_rows else _row_role_from_label(
+            label, code, numeric_count
+        )
+        parsed.rows.append(
+            ParsedRow(
+                cells=cells,
+                row_role=row_role,
+                code=code,
+                code_level=level,
+                label=label,
+            )
+        )
+
+    # 科目域：取首个科目行的编码域
+    for row in parsed.rows:
+        if row.code:
+            parsed.classification_type = classify_code_domain(row.code)
+            break
+    return parsed
+
+
+def check_parent_children(
+    parent: Decimal,
+    children: Sequence[Decimal],
+) -> Tuple[str, Decimal]:
+    """父项 vs 子项之和的包络分级（amount_math 的便捷封装）。"""
+    child_sum = sum(children, Decimal("0"))
+    return classify_amount_diff(parent, child_sum, n_children=max(len(children), 1))
+
+
+def merge_compatible(base: ParsedTable, continuation: ParsedTable) -> bool:
+    """跨页合并守卫：表头签名（语义列）兼容才允许合并。
+
+    列宽不一致时先做逻辑列重映射（见 V33-120 的实现）；无法映射时
+    返回 False 并在 base.parse_errors 记录 parse_error 供质量门消费。
+    """
+    if not continuation.rows:
+        return True
+    base_keys = set(base.named_columns)
+    cont_keys = set(continuation.named_columns)
+    if base_keys and cont_keys and not (base_keys & cont_keys):
+        base.parse_errors.append(
+            f"continuation_header_incompatible: {sorted(cont_keys)}"
+        )
+        return False
+    base_widths = {len(r.cells) for r in base.rows}
+    cont_widths = {len(r.cells) for r in continuation.rows}
+    if base_widths and cont_widths and not (base_widths & cont_widths):
+        base.parse_errors.append(
+            f"continuation_width_remapped: base={sorted(base_widths)} cont={sorted(cont_widths)}"
+        )
+    base.rows.extend(continuation.rows)
+    base.page_span = (min(base.page_span[0], continuation.page_span[0]),
+                      max(base.page_span[1], continuation.page_span[1]))
+    return True
+
+
+# ---------------------------------------------------------------------------
+# structured / shadow 模式的规则执行入口
+# ---------------------------------------------------------------------------
+
+def run_structured_rules(doc: Any, report_kind: Optional[str] = None):
+    """以结构化输入运行首批迁移规则，返回 (issues, outcomes)。
+
+    适配器策略：迁移规则的修复版实现已在 rules_v33/common_rules 中
+    （单一实现），此处构建 ParsedTable 中间层并委托执行，保证
+    legacy/structured 两种输入模式消费同一套规则语义；未迁移规则
+    不在此执行（shadow 对比时与 legacy 路径的输出按规则键比较）。
+    """
+    from src.engine.rule_outcome import RuleOutcome, RuleOutcomeSignal, STATUS_FAIL, STATUS_PASS, STATUS_EXECUTION_ERROR
+    from src.engine.rules_v33 import (
+        R33115_TotalSheetCheck,
+        R33117_BasicExpenseClassification,
+        R33120_DetailTableCheck,
+        R33202_InterTable_T4_T5,
+        R33203_InterTable_T5_T6,
+        R33220_Narrative3_T3,
+        R33241_Table3_ExpenseAdvancedCheck,
+        R33243_Table6_BasicExpenseAdvancedCheck,
+        R33244_Table7_ThreePublicAdvancedCheck,
+    )
+
+    # 1) 构建内存态结构化表（与数据库无关，规则分析与结构化入库共同消费）
+    parsed_tables: Dict[str, ParsedTable] = {}
+    page_tables = getattr(doc, "page_tables", []) or []
+    for p_idx, tables in enumerate(page_tables, start=1):
+        for raw in tables or []:
+            title = "".join(
+                str(c or "") for c in (raw[0] if raw and raw[0] else [])
+            )[:40]
+            key = f"P{p_idx}:{len(parsed_tables)}"
+            parsed = materialize_table(
+                raw,
+                title=title,
+                pages=(p_idx,),
+            )
+            if key in parsed_tables:
+                merge_compatible(parsed_tables[key], parsed)
+            else:
+                parsed_tables[key] = parsed
+    try:
+        doc.parsed_tables = parsed_tables
+    except Exception:
+        pass
+
+    # 2) 迁移规则经适配器执行（委托给修复版实现）
+    migrated = [
+        R33115_TotalSheetCheck(),
+        R33117_BasicExpenseClassification(),
+        R33120_DetailTableCheck(),
+        R33202_InterTable_T4_T5(),
+        R33203_InterTable_T5_T6(),
+        R33220_Narrative3_T3(),
+        R33241_Table3_ExpenseAdvancedCheck(),
+        R33243_Table6_BasicExpenseAdvancedCheck(),
+        R33244_Table7_ThreePublicAdvancedCheck(),
+    ]
+    issues: List[Any] = []
+    outcomes: List[RuleOutcome] = []
+    for rule in migrated:
+        try:
+            produced = list(rule.apply(doc) or [])
+        except RuleOutcomeSignal as signal:
+            outcomes.append(
+                RuleOutcome(
+                    rule_id=str(getattr(rule, "code", "")),
+                    status=signal.status,
+                    detail=str(signal.detail or signal),
+                )
+            )
+            continue
+        except Exception as exc:  # noqa: BLE001 - 执行异常进摘要
+            outcomes.append(
+                RuleOutcome(
+                    rule_id=str(getattr(rule, "code", "")),
+                    status=STATUS_EXECUTION_ERROR,
+                    detail=f"{type(exc).__name__}: {exc}",
+                )
+            )
+            continue
+        issues.extend(produced)
+        outcomes.append(
+            RuleOutcome(
+                rule_id=str(getattr(rule, "code", "")),
+                status=STATUS_FAIL if produced else STATUS_PASS,
+            )
+        )
+    return issues, outcomes

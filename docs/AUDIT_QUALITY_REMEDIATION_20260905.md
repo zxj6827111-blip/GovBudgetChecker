@@ -1,0 +1,101 @@
+# 审查质量整改交付说明（fix/audit-quality-remediation-20260905）
+
+> 对应计划：docs/GovBudgetChecker 完整整改计划（2026-09-05）
+> 问题基线：docs/SYSTEM_ISSUES_HANDOFF_2026-09-05.md（v2，GPT-5.6 复核版）
+> 分支基点：feat/ui-redesign-prototype@043579a（批次一证据完整率/回放指标已在此前提交）
+
+## 0. 基线冻结与语料
+
+- 从批次一提交创建分支 `fix/audit-quality-remediation-20260905`。
+- `corpus/` 已加入 `.gitignore`（本地受保护语料，不入库）。
+- 样张入库：`corpus/DOC-20260905-001/`
+  - `sample.pdf`（SHA-256 `113b98bb…f912c7`，见 golden.json）
+  - `sys_findings_baseline.json`（系统原始 52 条结果）
+  - `sample_pdf_text.txt`（全文逐页文本）
+  - `ANNOTATIONS.md` + `golden.json`（人工标签：defect×3 / rounding_hint×2+1 / manual_review×1 / acceptable 负例×1）
+- `scripts/replay_analysis.py` 职责不变：只统计历史旧产物，不作为当前规则回归。
+
+## 1. P0 假完成与配置修复（commit 91c0508）
+
+| 缺陷 | 修复 |
+|---|---|
+| `Settings.get("dual_mode.enabled")` 点号误用，恒取 False，被字典式 mock 掩盖 | `api/main.py` 改用真实接口 `settings.is_dual_mode_enabled()`；测试改 patch 该接口，禁用字典式 mock |
+| legacy + `use_ai_assist=true` 被静默忽略（样张"AI 未运行"根因） | 请求契约：mode ∈ {legacy, dual, structured}；legacy/structured 不请求 AI，显式 `use_ai_assist=true` → **422**；legacy 必须启用本地规则；dual 默认请求 AI。旧任务残留标志如实记 `not_run` 并转复核 |
+| AI 执行不可观测 | 新增 `result.meta.ai_execution`：`requested/state/attempts/provider/model/prompt_version/finish_reason/token_usage/error_code`，五态 not_requested/not_run/succeeded/degraded/failed；ExtractorClient 调用留痕（call_ledger），analyze_dual 成功也记 provider_stats |
+| 请求 AI 后未成功仍可 done | 质量门：请求 AI 后**只有 succeeded** 可通过；not_run→`ai_not_run`，failed/degraded（超时/空响应/finish_reason=length 截断/全 provider 失败）→`ai_failed` |
+| 结构化缺表/表歧义/证据不完整/规则异常/报告类型错分被丢弃 | 质量门新增原因码：`missing_required_table`、`ambiguous_table_schema`、`rule_evidence_incomplete`、`rule_execution_error`、`report_type_mismatch`、`rules_not_executed`（no_findings 门禁） |
+| `_normalize_report_type` 把 dept_final 错写 BUDGET | 补 dept_final/unit_final/dept_budget/unit_budget 等映射；未知类型返回 None → ps_sync 跳过入库转复核，**不再默认 BUDGET** |
+| no_findings 口径 | 仅在规则全部执行 + 解析合格 + 请求的 AI succeeded + 证据门通过时产出 |
+| 新增 meta 增量字段 | `ai_execution`、`parser_quality`、`rule_execution_summary`；原 provider_stats/ai_error/issues/merged 保留 |
+
+## 2. 高频规则止血 + 说明归因（commit 339171d）
+
+- **CMM-004**（33 条误报）：科目域隔离——收入/功能分类/经济分类互不可比时 `not_applicable`（RuleOutcomeSignal）。
+- **CMM-002**（4 条）：软换行合并 + 段落级引号配对；`src/utils/narration.py` 为共享实现。
+- **V33-001**：年份冲突只查封面/目录/表头（结构位置），同比/上年语境排除；新增「年度缺位」检测（`202 年度` 三位数字占位残留）→ 命中 T1/P2。
+- **V33-115**：双栏总表同侧取值 + None 安全 + 舍入包络；分量缺失时跳过该侧校验，不伪造 0.0。
+- **V33-117**：经济分类表类级/款级行区分（第二格为 1~2 位数字→款级），显式合计与标签同半行取值；类级=Σ款级包络校验 → T4/P15 info。
+- **V33-120**：跨页列宽逻辑列重映射（`src = col + (row_len - modal_width)` 对齐尾部金额列）+ 语义表头列（合计/基本支出/项目支出）+ None 安全层级校验 + 列合计校验（→T2/P10 info）+ 跨表同口径近似差异（→T3/P10↔P14 manual_review）。
+- **V33-106/110/220/244**：说明归因重构——`merge_page_texts` 软换行恢复 → `split_numbered_sections` 章节切分 → `split_clauses` 分句配对；`extract_amounts` 只认"数字+单位"，年份 token 自动排除；三公事实抽取主体沿分句继承、基数句/变化句分离。
+- **新增规则**：`V33-245`（三公说明同主体"减少/增加"与"持平"逻辑矛盾，T5/P26 命中）、`V33-246`（国内公务接待批次/人次披露完整性，T6/P27 命中）。
+- **RuleOutcome 六态**（`src/engine/rule_outcome.py`）：pass/fail/not_applicable/insufficient_data/parse_error/execution_error；`RuleDeferred`/`RuleNotApplicable` 继承 BaseException 穿透规则内 except Exception 兜底；只有 fail 生成 finding；legacy 与 dual 引擎路径（engine_rule_runner）都接入执行摘要。
+
+## 3. 统一结构化解析（阶段 3）
+
+- `src/engine/structured_rules.py`：与数据库无关的内存解析模型。
+  - `ParsedCell`：number(Decimal)/text/bbox 三态，文本单元格保留 None；
+  - `ParsedTable`：table_code/page_span/named_columns/column_group/canonical_measure/classification_type/row_role/confidence；
+  - `materialize_table`（含双栏建模）、`merge_compatible`（跨页合并守卫+parse_error 记录）、`check_parent_children`（包络封装）；
+  - 首批迁移规则 V33-115/117/120/202/203/220/241/243/244 经适配器委托修复版实现（单一实现两处消费）。
+- `src/engine/amount_math.py`：金额统一 Decimal，父项与 n 子项显示舍入包络 `(n+1)×0.005 万元`；包络内→`rounding_hint`（info），超出→`mismatch`。
+- legacy/shadow/structured 三态：`scripts/replay_golden_corpus.py --parse-mode`（legacy/structured/shadow 对比逐规则差异）；管线内开关经 `rules.input_mode` 配置位预留，默认 legacy。
+
+## 4. AI 与环境修复（阶段 4）
+
+- `AI_AUDIT_MAX_TOKENS` > `AI_MAX_TOKENS` > 应用配置（config/app.yaml ai.max_tokens）；写死 3200 已移除。
+- 空正文、`finish_reason=length`、推理耗尽均按失败处理（不解释为"未发现问题"）。
+- Makefile 移除 `dev-local-key` 默认 key 注入；`scripts/dev.cjs` 移除最后兜底默认 key；三者统一从根 `.env` 读取。认证开启但 key 缺失时后端安全模块直接拒绝启动（fail-closed，既有逻辑）。
+- `tests/conftest.py` 新增 autouse `isolate_ai_and_secret_env`：统一摘除 AI_*/OPENAI_*/GEMINI_*/ZHIPU_*/DEEPSEEK_* 前缀与 AI_FALLBACK_CHAIN/GOVBUDGET_API_KEY 等；真实 AI 测试通过专用 `GOVBUDGET_TEST_AI_*` + `real_ai_env` fixture 显式启用。
+
+## 5. 评测契约与脚本
+
+- `scripts/replay_golden_corpus.py`：用当前解析器+规则真实重跑语料 PDF；只写 `outputs/golden_replay/`。
+- `scripts/evaluate_golden_corpus.py`：对 `corpus/<DOC-ID>/golden.json` 计算 TP/FP/FN、precision/recall、严重度/页码准确率、证据可定位率、acceptable 负例违规；只写 `outputs/golden_eval/`；两脚本绝不改历史任务目录。
+- 标签四类：defect / rounding_hint / manual_review / acceptable，含 annotation_id、rule_id、page、location_key、expected_severity、evidence、confidence、reviewed_by。
+
+## 6. 样张验收结果（DOC-20260905-001）
+
+| 验收项 | 要求 | 实测 |
+|---|---|---|
+| 旧 52 条误报清零 | 0 | **52 → 7 条，0 假阳性**（CMM-004×33、CMM-002×4 全消） |
+| T1 目录年度缺位 | V33-001/P2 命中 | ✅ high P2 |
+| T5 三公逻辑矛盾 | V33-245/P26 命中 | ✅ medium P26 |
+| T6 国内接待披露缺失 | V33-246/P27 命中 | ✅ medium P27 |
+| T2 表内合计差 0.01 | info | ✅ V33-120 info P10 |
+| T3 两表同口径差 0.01 | manual_review | ✅ V33-120 manual_review P10 |
+| T4 310 行舍入 | info | ✅ V33-117 info P15 ×2 |
+| T7 绩效口径（负例） | 无 finding | ✅ P28 无任何 finding |
+| 主要勾稽反证 | 全部 pass | ✅ rule_execution_summary: pass=52, not_applicable=1 |
+| 证据可定位率 | 100% | ✅ 1.0 |
+
+评测报告：`outputs/golden_eval/DOC-20260905-001-eval-*.json`（GATE-PASS，precision=1.0 recall=1.0）。
+
+## 7. 回归基线
+
+- 后端 pytest：**904 passed + 1 skipped**（整改前 873+1，新增 31 个 P0 契约测试，零回归）。
+- 前端：18 个 jiti 单测套件全过；`npm run build` 成功。
+- E2E：见下方验证记录。
+- 历史回放门禁：`scripts/replay_analysis.py` 职责未动；新 `replay_golden_corpus.py` 负责当前规则的真实重放。
+
+## 8. 发布与回滚
+
+- 解析三态开关默认 **legacy**（本次止血与归因修复在 legacy 路径内生效，属缺陷修复而非行为切换）；structured/shadow 经 replay 脚本验证后由人工决定切换。
+- 回滚可切回 legacy 解析，但 AI 真实性状态、严格报告类型映射、fail-closed 质量门不得回退（安全修复）。
+- 本轮无新增第三方依赖、无数据库结构迁移、无 UI 重构。
+
+## 9. 遗留与后续
+
+1. Golden Corpus 扩容至 ≥20 份并完成双人复核后，启用 P0 召回≥98%/精确≥95%、P1 召回≥95%/精确≥90% 正式门禁（`evaluate_golden_corpus.py` 的 check_gates 已具备）。
+2. dual 模式真实 AI 链路（成本/超时/provider 回退）需在测试/预发用 `GOVBUDGET_TEST_AI_*` 显式验证。
+3. `ps_sync.report_type` 已错分的历史数据需要一次性修正（本轮未动历史数据）。
+4. V33-202/203 等表间规则的完整结构化迁移（named-column 驱动）可按 structured_rules.py 的适配器模式继续推进。

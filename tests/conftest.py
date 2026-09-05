@@ -47,6 +47,65 @@ def isolate_database_url(monkeypatch):
     yield
 
 
+# ---------------------------------------------------------------------------
+# AI / provider / 密钥环境隔离
+#
+# 背景（HANDOFF §4.1）：`api.main` 导入时 `load_dotenv()` 会把项目 `.env` 的
+# AI_*/GOVBUDGET_* 变量注入进程，个别测试只能靠自觉 delenv（如
+# test_ai_client_config.py 摘 AI_FALLBACK_CHAIN）。这里统一做 autouse 摘除，
+# 让"测试环境禁止加载项目 .env 的 AI/密钥变量"成为默认行为。
+#
+# 需要真实 AI 的测试只能通过专用 `GOVBUDGET_TEST_AI_*` 前缀显式 opt-in
+# （real_ai_env fixture），绝不复用开发者 shell / .env 里的 AI_* 变量。
+# ---------------------------------------------------------------------------
+
+#: 统一摘除的环境变量前缀
+_SCRUBBED_ENV_PREFIXES = ("AI_", "OPENAI_", "GEMINI_", "ZHIPU_", "DEEPSEEK_")
+#: 统一摘除的完整变量名
+_SCRUBBED_ENV_KEYS = (
+    "AI_FALLBACK_CHAIN",
+    "AI_ASSIST_ENABLED",
+    "AI_EXTRACTOR_URL",
+    "AI_EXTRACTOR_DIRECT_FALLBACK",
+    "GOVBUDGET_API_KEY",
+)
+
+
+def _is_scrubbed(name: str) -> bool:
+    upper = name.upper()
+    if upper in _SCRUBBED_ENV_KEYS:
+        return True
+    return upper.startswith(_SCRUBBED_ENV_PREFIXES)
+
+
+@pytest.fixture(autouse=True)
+def isolate_ai_and_secret_env(monkeypatch):
+    """无条件摘除 AI/provider/密钥类环境变量，防止 .env 泄漏影响用例。"""
+    affected = [name for name in list(os.environ) if _is_scrubbed(name)]
+    for name in affected:
+        monkeypatch.delenv(name, raising=False)
+    yield
+
+
+@pytest.fixture
+def real_ai_env(monkeypatch):
+    """真实 AI 测试的显式 opt-in fixture。
+
+    读取专用 `GOVBUDGET_TEST_AI_*` 变量，映射为 `AI_` 前缀注入进程供被测
+    代码消费；未配置任何 `GOVBUDGET_TEST_AI_*` 时跳过用例。
+    """
+    pairs = []
+    for name, value in list(os.environ.items()):
+        if name.startswith("GOVBUDGET_TEST_AI_"):
+            target = "AI_" + name[len("GOVBUDGET_TEST_AI_"):]
+            pairs.append((target, value))
+    if not pairs:
+        pytest.skip("real AI test requested but no GOVBUDGET_TEST_AI_* configured")
+    for target, value in pairs:
+        monkeypatch.setenv(target, value)
+    yield pairs
+
+
 @pytest.fixture
 def real_database_url(isolate_database_url, monkeypatch):
     """需要真实数据库的测试用的显式 opt-in fixture。

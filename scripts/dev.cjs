@@ -70,11 +70,17 @@ const sharedEnv = {
     Object.entries(rootEnv).filter(([key]) => process.env[key] === undefined),
   ),
   GOVBUDGET_AUTH_ENABLED: process.env.GOVBUDGET_AUTH_ENABLED || 'true',
-  GOVBUDGET_API_KEY:
-    process.env.GOVBUDGET_API_KEY ||
-    rootEnv.GOVBUDGET_API_KEY ||
-    rootEnv.BACKEND_API_KEY ||
-    'dev-local-key',
+  // 统一从根 .env 读取，不再保留 'dev-local-key' 之类与前端/Makefile
+  // 互相不同的默认 key（HANDOFF §4.2：不一致会导致代理链路 403）。
+  // 认证开启但 key 缺失时后端安全模块会直接拒绝启动（fail-closed）。
+  ...(process.env.GOVBUDGET_API_KEY || rootEnv.GOVBUDGET_API_KEY || rootEnv.BACKEND_API_KEY
+    ? {
+        GOVBUDGET_API_KEY:
+          process.env.GOVBUDGET_API_KEY ||
+          rootEnv.GOVBUDGET_API_KEY ||
+          rootEnv.BACKEND_API_KEY,
+      }
+    : {}),
   GOVBUDGET_RATE_LIMIT: process.env.GOVBUDGET_RATE_LIMIT || '2000',
 };
 
