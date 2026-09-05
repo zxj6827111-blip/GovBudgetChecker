@@ -495,11 +495,22 @@ class ExtractorClient:
             pass
         return 4000
 
-    async def _direct_semantic_audit(self, section_text: str) -> List[Dict[str, Any]]:
-        """Use configured LLM provider directly when extractor service is unavailable."""
+    async def _direct_semantic_audit(
+        self,
+        section_text: str,
+        structured_context: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Use configured LLM provider directly when extractor service is unavailable.
+
+        AI 输入表征增强（计划 §4）：prompt = 指令 + 结构化事实与表格关系
+        （带页码，确定性解析产出）+ 原文窗口。模型只输出语义候选，
+        金额勾稽以确定性规则为准——注入块中显式声明该边界。
+        """
         ai_client = self._get_direct_ai_client()
         instructions = render_full_report_audit_instructions()
         prompt = f"{instructions}\n\n待审文本：\n{section_text or ''}"
+        if structured_context:
+            prompt += f"\n\n{structured_context}"
         prompt_version = prompt_version_from_template(
             FULL_REPORT_AUDIT_PROMPT_ID, instructions
         )
@@ -864,10 +875,18 @@ class ExtractorClient:
                     logger.error(f"Direct semantic fallback failed: {direct_err}")
             return []
 
-    async def ai_full_report_audit(self, section_text: str, doc_hash: str) -> List[Dict[str, Any]]:
+    async def ai_full_report_audit(
+        self,
+        section_text: str,
+        doc_hash: str,
+        structured_context: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
         全量报告审查：优先走直连大模型（Gemini等）以使用增强提示词，
         当直连失败时再回退到抽取服务语义审计。
+
+        ``structured_context`` 为可选的结构化事实与表格关系注入块
+        （src/services/ai_input_builder.py 构建），直连路径随 prompt 注入。
         """
         if not self.config.enabled:
             logger.debug("AI辅助未启用，返回空列表")
@@ -879,7 +898,9 @@ class ExtractorClient:
 
         # 先走直连模型，确保使用全量审查提示词
         try:
-            direct_result = await self._direct_semantic_audit(section_text)
+            direct_result = await self._direct_semantic_audit(
+                section_text, structured_context=structured_context
+            )
             if direct_result:
                 return direct_result
             logger.info("Direct full-report audit returned no issues, falling back to extractor semantic audit")

@@ -113,7 +113,8 @@ async def test_ai_findings_service_runs_window_audits_concurrently(
     active = 0
     max_active = 0
 
-    async def fake_audit(window_text: str, doc_hash: str):
+    async def fake_audit(window_text: str, doc_hash: str, structured_context=None):
+        # structured_context：输入表征增强后的新契约参数（可能为 None）
         nonlocal active, max_active
         active += 1
         max_active = max(max_active, active)

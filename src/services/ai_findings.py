@@ -14,6 +14,7 @@ import re
 from src.schemas.issues import IssueItem, JobContext, AnalysisConfig
 from src.engine.ai.extractor_client import ExtractorClient  # 复用现有AI客户端
 from src.services.ai_issue_interpreter import interpret_ai_issue, normalize_ai_severity
+from src.services.ai_input_builder import build_structured_context
 from src.utils.logging_config import describe_exception, safe_log_extra
 from src.utils.provenance import ENGINE_VERSION, read_finding_provenance
 
@@ -72,10 +73,17 @@ class AIFindingsService:
             # 生成文档哈希
             import hashlib
             doc_hash = hashlib.sha1(all_text[:5000].encode('utf-8')).hexdigest()[:12]
-            
+
             # 分窗执行AI审计，避免15000字符硬截断导致漏检
             semantic_issues: List[Dict[str, Any]] = []
             windows = self._build_text_windows(all_text)
+            # 输入表征增强（计划 §4）：一次性构建「结构化事实 + 表格关系 +
+            # 页码」上下文，随每个窗口注入 prompt；模型只做语义候选，
+            # 金额勾稽以确定性规则为准
+            self.structured_context = build_structured_context(
+                page_texts,
+                getattr(context, "page_tables", None),
+            )
             if windows and (windows[-1][0] + len(windows[-1][1]) < len(all_text)):
                 logger.warning(
                     "AI审计窗口上限触发，文档后半部分未进入AI审计: covered=%s, total=%s",
@@ -292,7 +300,11 @@ class AIFindingsService:
             ).hexdigest()[:12]
             async with semaphore:
                 try:
-                    window_issues = await self.ai_client.ai_full_report_audit(window_text, window_hash)
+                    window_issues = await self.ai_client.ai_full_report_audit(
+                        window_text,
+                        window_hash,
+                        structured_context=getattr(self, "structured_context", None),
+                    )
                 except Exception as exc:
                     logger.warning("AI window audit failed: window=%s error=%s", window_idx, exc)
                     self.ai_errors.append(
