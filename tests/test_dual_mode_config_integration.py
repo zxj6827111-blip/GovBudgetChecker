@@ -54,7 +54,7 @@ def test_dual_mode_enabled_derivation_matches_contract():
 
     # legacy 请求：配置开启也不走双模式
     mode = "legacy"
-    assert dual_config_enabled and mode == "dual" is False
+    assert (dual_config_enabled and mode == "dual") is False
     # dual 请求：配置开启才走双模式
     mode = "dual"
     assert (dual_config_enabled and mode == "dual") is True
