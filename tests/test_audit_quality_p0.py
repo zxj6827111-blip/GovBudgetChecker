@@ -942,3 +942,39 @@ def test_run_rules_with_outcomes_only_fail_produces_findings(monkeypatch):
     assert summary["execution_error"] == 1
     assert summary["fail"] == 1
     assert summary["pass"] == 1
+
+
+def test_real_ledger_chain_extractor_service_empty_hits_is_succeeded():
+    """抽取服务合法空结果（hits=[]）≠ 调用失败（GPT5.6 R2 P1-3）。
+
+    服务返回 200 且 hits 为空是"审过、无问题"；content 必须落 "[]"
+    （非空字符串构成成功证据），否则状态机误判 ai_empty_response，
+    直连失败+抽取服务成功无发现的任务会错误转 failed/review_required。
+    """
+    client = _extractor_client()
+    client.record_call(
+        "extractor_service",
+        "remote-model",
+        prompt_version="semantic_audit",
+        token_usage={"total_tokens": 42},
+        content="[]",  # _call_semantic_audit 对空 hits 的落盘契约
+    )
+    record = build_ai_execution(True, call_ledger=client.pop_call_ledger())
+    assert record["state"] == AI_STATE_SUCCEEDED, record
+    assert record["provider"] == "extractor_service"
+
+
+def test_real_ledger_chain_mixed_failure_then_service_empty_hits():
+    """直连失败后抽取服务成功且无发现：整体状态必须是 succeeded。"""
+    client = _extractor_client()
+    client.record_call(
+        "gemini_main", "gemini-2.0", error="timeout"
+    )  # 直连失败留痕
+    client.record_call(
+        "extractor_service",
+        "remote-model",
+        finish_reason="stop",
+        content="[]",  # 抽取服务成功且无发现
+    )
+    record = build_ai_execution(True, call_ledger=client.pop_call_ledger())
+    assert record["state"] == AI_STATE_SUCCEEDED, record

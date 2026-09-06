@@ -20,13 +20,18 @@ from scripts.evaluate_golden_corpus import (
 
 
 def test_short_annotation_without_numbers_matches():
-    """短于 6 字且无数字的标注：按全串比对，正确相关时必须命中。"""
+    """短标注（<4 字窗口起点）：短于 4 字的标注按全串包含比对。
+
+    R2 收敛后的窗口序列是 (min(6,len), 4)：长度 2-3 的标注两个窗口
+    都够不到（循环条件 window<4 break），需在全串通道兜底——本用例
+    锁定该兜底行为。
+    """
+    # 4 字及以上：走 4 字窗口
     assert evidence_overlaps(
-        "空表", {"message": "缺少空表说明", "evidence_text": ""}
+        "空表说明缺失", {"message": "缺少空表说明或等效说明", "evidence_text": ""}
     )
-    assert evidence_overlaps(
-        "空表说明", {"message": "", "evidence_text": "应附空表说明或等效说明"}
-    )
+    # 超短标注（2-3 字）：全串包含兜底
+    assert evidence_overlaps("空表", {"message": "缺少空表", "evidence_text": ""})
 
 
 def test_short_annotation_unrelated_still_rejected():
@@ -90,3 +95,97 @@ def test_match_annotation_prefers_numeric_overlap():
 def test_normalize_for_overlap_strips_punctuation():
     assert _normalize_for_overlap("  1,367.76 万元！") == "136776万元"
     assert _normalize_for_overlap("") == ""
+
+
+# ---------------------------------------------------------------------------
+# GPT5.6 R2 P1-2：假 TP 三场景 + location_key 锚点 + 双证据可定位
+# ---------------------------------------------------------------------------
+
+def test_year_only_overlap_is_not_evidence():
+    """同规则同页、内容相反、仅共享年份"2025"：必须拒绝（R2 假 TP 场景）。
+
+    年份是低区分度 token（不构成证据），且无关正文与标注证据
+    「目录行年度缺位…202 年度」无 4 字连续重叠。
+    """
+    ann = {
+        "rule_id": "V33-001",
+        "page": 2,
+        "evidence": "目录行年度缺位：「202 年度」",
+        "location_key": "toc:第三部分…202 年度部门决算情况说明",
+    }
+    fake = {
+        "rule": "V33-001",
+        "page": 2,
+        "message": "无关正文，本年度为 2025 年",
+        "evidence_text": "",
+    }
+    assert not evidence_overlaps(ann["evidence"], fake)
+    assert match_annotation(ann, [fake], set()) is None
+
+
+def test_distinctive_numeric_tokens_exclude_years():
+    """年份与孤立两位数不算区分度证据；金额/编码保留（R2 P1-2）。"""
+    from scripts.evaluate_golden_corpus import (
+        _distinctive_numeric_tokens,
+        _numeric_tokens,
+    )
+
+    raw = "2025 年支出 40.00 万元，科目 221，序号 12"
+    assert _numeric_tokens(raw) >= {"2025", "40.00", "221", "12"}
+    distinctive = _distinctive_numeric_tokens(raw)
+    assert "2025" not in distinctive
+    assert "12" not in distinctive
+    assert "40.00" in distinctive
+    assert "221" in distinctive
+
+
+def test_location_key_anchor_ranks_not_gates():
+    """R2 收敛语义：锚点是排序加分而非否决门槛——多候选时优先消费
+    锚点命中数高的 finding（标注措辞与规则文案差异大，否决会误伤）。
+    """
+    ann = {
+        "rule_id": "V33-245",
+        "page": 26,
+        "evidence": "公务接待费 0.00 与 2024 年持平",
+        "location_key": "sec:三公说明(一)公务接待费",
+    }
+    # 两个候选都与标注重叠（数字 0.00 + 公务接待费片段），
+    # 但只有一个命中锚点短语（三公说明）
+    unrelated_domain = {
+        "rule": "V33-245",
+        "page": 26,
+        "message": "其他章节的公务接待费 0.00 万元问题",
+        "evidence_text": "公务接待费 0.00",
+    }
+    matching_domain = {
+        "rule": "V33-245",
+        "page": 26,
+        "message": "三公说明：公务接待费支出决算减少为0.00万元表述矛盾",
+        "evidence_text": "公务接待费 0.00",
+    }
+    hit = match_annotation(ann, [unrelated_domain, matching_domain], set())
+    assert hit is matching_domain
+
+
+def test_table_anchor_contributes_to_ranking():
+    """tbl 锚（表名段）计入排序：表名一致的候选优先被消费。"""
+    ann = {
+        "rule_id": "V33-120",
+        "page": 10,
+        "evidence": "1,367.76 不等于分项之和",
+        "location_key": "tbl:支出决算表合计行·项目支出",
+    }
+    same_table = {
+        "rule": "V33-120",
+        "page": 10,
+        "message": "支出决算表合计行与明细之和相差 0.01 万元",
+        "evidence_text": "合计值：1367.76",
+    }
+    other_table = {
+        "rule": "V33-120",
+        "page": 10,
+        "message": "收入决算表合计行差异 0.01 万元",
+        "evidence_text": "合计值：1367.76",
+    }
+    hit = match_annotation(ann, [other_table, same_table], set())
+    assert hit is same_table

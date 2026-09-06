@@ -34,6 +34,18 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+
+# Windows 控制台默认 GBK：print 含 CJK 特殊字符（如"…·×"）的文件名/
+# 规则文本时触发 UnicodeEncodeError 并以退出码 1 结束（GPT5.6 R2 P2-5a，
+# 历史回放在报告打印阶段崩溃）。统一 reconfigure 为 UTF-8，且把
+# unencodable 字符降级为 replacement 而不是让脚本崩溃。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # 非 TextIO（如 pytest 捕获流）：跳过
+            pass
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -87,10 +99,29 @@ def _normalize_for_overlap(text: Any) -> str:
     return re.sub(r"[^\w\u4e00-\u9fff]+", "", str(text or "").lower())
 
 
+# 低区分度数字 token：年份（19xx/20xx）与孤立两位数几乎出现在任何一段
+# 决算文字里。交集里**只有**这类 token 时不构成内容证据（GPT5.6 R2
+# P1-2 假 TP：同规则同页、内容相反、仅共享 "2025"）；但年份出现在
+# 双方**文本片段**中也叠加佐证，不单独作为通过判据。
+
+
 def _numeric_tokens(text: Any) -> set:
-    """提取数字 token（金额/年份/编码），归一化去千分位。"""
+    """提取数字 token（金额/编码/带小数的值），不做区分度过滤。"""
     raw = str(text or "").replace(",", "")
     return {t for t in re.findall(r"\d+(?:\.\d+)?", raw) if len(t) >= 2}
+
+
+def _distinctive_numeric_tokens(text: Any) -> set:
+    """有区分度的数字 token：金额（含小数）、编码（≥3 位整数）。
+
+    年份（19xx/20xx）与孤立两位数被排除——它们单凭自身不构成证据。
+    """
+    return {
+        t
+        for t in _numeric_tokens(text)
+        if ("." in t or len(t) >= 3)
+        and not (re.fullmatch(r"(?:19|20)\d{2}", t) and "." not in t)
+    }
 
 
 def evidence_overlaps(annotation_evidence: Any, finding: Dict[str, Any]) -> bool:
@@ -105,19 +136,97 @@ def evidence_overlaps(annotation_evidence: Any, finding: Dict[str, Any]) -> bool
     find_norm = _normalize_for_overlap(finding_text)
     if not find_norm:
         return False
-    # 1) 数字 token 交集（金额/页码位/编码是最直接的共同证据）
-    ann_nums = _numeric_tokens(annotation_evidence)
-    find_nums = _numeric_tokens(finding_text)
+    # 1) 有区分度的数字 token 交集（金额/编码是最直接的共同证据）；
+    #    年份/页码位不单独构成证据（R2 假 TP 场景）
+    ann_nums = _distinctive_numeric_tokens(annotation_evidence)
+    find_nums = _distinctive_numeric_tokens(finding_text)
     if ann_nums and ann_nums & find_nums:
         return True
-    # 2) 归一化片段重叠：窗口取 min(6, 标注长度)，短标注按全串比对
-    window = min(6, len(ann_norm))
-    if window <= 0:
-        return False
-    for i in range(0, len(ann_norm) - window + 1):
-        if ann_norm[i : i + window] in find_norm:
-            return True
+    # 2) 归一化片段重叠：窗口取 min(6, 标注长度)，短标注按全串比对。
+    #    4-5 字窗口作为措辞差异的放宽通道（标注人工措辞与 finding
+    #    文案不必完全一致，如「逻辑矛盾」vs「增减变化与持平表述」，
+    #    但会共享「公务接待」这类 4 字关键片段）。
+    for window in (min(6, len(ann_norm)), 4):
+        if window < 4:
+            break
+        for i in range(0, len(ann_norm) - window + 1):
+            if ann_norm[i : i + window] in find_norm:
+                return True
+    # 3) 超短标注（2-3 字）兜底：全串包含比对（「空表」⊂「缺少空表」）
+    if len(ann_norm) < 4 and ann_norm in find_norm:
+        return True
     return False
+
+
+
+def _anchor_phrases(anchor: str) -> List[str]:
+    """把锚文本切成短语级锚点（GPT5.6 R2 P1-2，三轮调参后的收敛设计）。
+
+    location_key 是人工写的定位提示：括号序号（「三公说明(一)公务
+    接待费」）、省略号（「第三部分…202 年度部门决算情况说明」）标记
+    着措辞的边界。按括号/省略号/顿号切出短语，任一**完整短语**出现在
+    finding 证据中即锚点成立——短语级既有区分度（不放大到任意 3 字
+    子串），又容忍人工措辞与规则文案的差异（整段匹配过严）。
+
+    短语内的数字（如「202」年度缺位锚）是**定位信息**而非重叠证据：
+    年份在锚点侧参与匹配（它指着目录里那行带残缺年份的文本），假 TP
+    防线在 evidence_overlaps 的区分度 token 过滤（年份不算重叠证据）。
+    """
+    parts = re.split(r"[（）()\[…·、/]|…", anchor)
+    phrases: List[str] = []
+    for part in parts:
+        norm = _normalize_for_overlap(part)
+        if len(norm) >= 2:  # ≥2 字（含纯数字短语如 "202"）
+            phrases.append(norm)
+    generic = {"第三部分", "第一部分", "第二部分", "情况说明", "决算情况"}
+    return [p for p in phrases if p not in generic]
+
+
+def _location_anchor_prefix(location_key: Any) -> str:
+    """location_key 的定位域前缀（toc/sec/tbl/xtbl，无则空串）。"""
+    raw = str(location_key or "").strip()
+    prefix, sep, _ = raw.partition(":")
+    return prefix if sep and prefix in {"toc", "sec", "tbl", "xtbl"} else ""
+
+
+def _table_anchor_phrase(location_key: Any) -> str:
+    """tbl/xtbl 锚的表名/主体短语（首个分隔符前的段），供排序加分。
+
+    R2 样张实测后收敛：表锚否决在「跨表同页 + 标注行级措辞 vs 规则
+    文案措辞交叉」场景（A-005「p14同口径表合计」vs finding「同口径列」、
+    A-006「310资本性支出类行」vs「经济分类科目 310」）无法可靠区分，
+    只剩误伤。假 TP 防线由 evidence_overlaps 的区分度数字 token
+    （仅共享年份不构成证据）承担；锚点（含表锚）全部转为排序加分，
+    让多候选时优先消费定位域一致的 finding。
+    """
+    raw = str(location_key or "").strip()
+    prefix = _location_anchor_prefix(raw)
+    if prefix not in {"tbl", "xtbl"}:
+        return ""
+    _, _, anchor = raw.partition(":")
+    head = re.split(r"[（()·、…\[]", anchor)[0]
+    norm = _normalize_for_overlap(head)
+    return norm if len(norm) >= 3 else ""
+
+
+def _anchor_hit_count(location_key: Any, finding: Dict[str, Any]) -> int:
+    """锚点短语命中数（排序加分项）。
+
+    只按**完整短语**命中计数（不滑窗）——4 字滑窗会因「算表合计」
+    这类跨界片段给错表 finding 也加分，失去排序分辨力。短语本身已按
+    括号/省略号边界切出，完整短语在 finding 中出现才是真正的定位域
+    一致（排序严格只损失分辨力，不会像否决那样误拒真命中）。
+    """
+    raw = str(location_key or "").strip()
+    _, _, anchor = raw.partition(":")
+    if not anchor:
+        return 0
+    finding_norm = _normalize_for_overlap(
+        " ".join(
+            str(finding.get(key) or "") for key in ("evidence_text", "message")
+        )
+    )
+    return sum(1 for phrase in _anchor_phrases(anchor) if phrase in finding_norm)
 
 
 def match_annotation(
@@ -125,17 +234,21 @@ def match_annotation(
     findings: List[Dict[str, Any]],
     consumed: set,
 ) -> Optional[Dict[str, Any]]:
-    """标注 ↔ finding 匹配：规则一致（或标注无规则时只看页码）+ 页码一致
-    + evidence 内容重叠（GPT5.6 P1-4）。
+    """标注 ↔ finding 匹配（GPT5.6 P1-4 + R2 P1-2 收敛设计）：
 
-    每条 finding 只能被一条 defect 标注消费（consumed 集合去重），
-    避免同页同规则的多条标注命中同一条 finding。
-    优先返回重叠度最高的 finding（数字交集 > 文本片段），使"最贴近
-    原始数字的证据"优先被消费。
+    候选门槛 = 规则一致（或标注无规则）+ 页码一致 + evidence 内容重叠
+    （区分度数字 token 交集或 4-6 字文本片段）；tbl/xtbl 表锚的表名
+    短语必须出现在 finding 中（错表拒绝）；toc/sec 锚仅作排序加分
+    （人工措辞与规则文案差异大，作为否决会误拒真命中——R2 样张实测）。
+
+    每条 finding 只能被一条标注消费（consumed 去重）。
+    优先返回综合得分最高的 finding：区分度数字交集 > 锚点命中 > 文本
+    片段长度，使"最贴近原始数字与定位域的证据"优先被消费。
     """
     rule_id = str(annotation.get("rule_id") or "").strip().upper()
     page = annotation.get("page")
     annotation_evidence = annotation.get("evidence")
+    location_key = annotation.get("location_key")
     candidates: List[Tuple[int, Dict[str, Any]]] = []
     for finding in findings:
         if id(finding) in consumed:
@@ -146,15 +259,19 @@ def match_annotation(
             finding_rule = str(finding.get("rule") or "").strip().upper()
             if finding_rule != rule_id:
                 continue
+        # 表锚不再否决（见 _table_anchor_phrase 的收敛说明），
+        # 其命中计入 _anchor_hit_count 排序加分
         if not evidence_overlaps(annotation_evidence, finding):
             continue
-        # 重叠度打分：数字 token 交集数优先，其次共享文本片段长度
+        # 综合得分：区分度数字交集 > 锚点命中数 > 共享文本片段长度
         finding_text = " ".join(
             str(finding.get(key) or "") for key in ("evidence_text", "message")
         )
         shared_nums = len(
-            _numeric_tokens(annotation_evidence) & _numeric_tokens(finding_text)
+            _distinctive_numeric_tokens(annotation_evidence)
+            & _distinctive_numeric_tokens(finding_text)
         )
+        anchor_hits = _anchor_hit_count(location_key, finding)
         ann_norm = _normalize_for_overlap(annotation_evidence)
         find_norm = _normalize_for_overlap(finding_text)
         shared_text = 0
@@ -165,7 +282,8 @@ def match_annotation(
             ):
                 shared_text = size
                 break
-        candidates.append((shared_nums * 100 + shared_text, finding))
+        score = shared_nums * 10000 + anchor_hits * 100 + shared_text
+        candidates.append((score, finding))
     if not candidates:
         return None
     candidates.sort(key=lambda pair: pair[0], reverse=True)
@@ -239,8 +357,19 @@ def evaluate(doc_id: str, replay_path: Path) -> Dict[str, Any]:
     severity_ok = [item for item in matched if item["severity_ok"]]
     page_ok = [item for item in matched if item["page_ok"]]
 
-    # 证据可定位率：正式 finding 需带页码
-    locatable = [f for f in findings if _page_of(f) is not None]
+    # 证据可定位率（GPT5.6 R2 P1-2 强化）：正式 finding 需要**双证据**——
+    # 页码 + 非空 evidence_text/message（此前只查页码，"有页码无证据文本"
+    # 也算可定位）。缺任一即不可定位，进入未达标明细。
+    def _has_text_evidence(f: Dict[str, Any]) -> bool:
+        return bool(
+            str(f.get("evidence_text") or "").strip()
+            or str(f.get("message") or "").strip()
+        )
+
+    locatable = [
+        f for f in findings if _page_of(f) is not None and _has_text_evidence(f)
+    ]
+    unlocatable = [f for f in findings if f not in locatable]
     locatable_rate = round(len(locatable) / len(findings), 4) if findings else None
 
     # acceptable 负例违规：负例页上不得出现任何 finding
@@ -278,6 +407,18 @@ def evaluate(doc_id: str, replay_path: Path) -> Dict[str, Any]:
         "severity_accuracy": round(len(severity_ok) / tp, 4) if tp else None,
         "page_accuracy": round(len(page_ok) / tp, 4) if tp else None,
         "locatable_evidence_rate": locatable_rate,
+        "unlocatable_findings": [
+            {
+                "rule": f.get("rule"),
+                "page": f.get("page"),
+                "missing": (
+                    "page"
+                    if _page_of(f) is None
+                    else "evidence_text"
+                ),
+            }
+            for f in unlocatable
+        ],
         "acceptable_violations": acceptable_violations,
         "matched": matched,
         "hint_hits": hint_matched,

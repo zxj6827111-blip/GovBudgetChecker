@@ -244,13 +244,92 @@ def materialize_table(
     return parsed
 
 
-def check_parent_children(
-    parent: Decimal,
-    children: Sequence[Decimal],
-) -> Tuple[str, Decimal]:
-    """父项 vs 子项之和的包络分级（amount_math 的便捷封装）。"""
-    child_sum = sum(children, Decimal("0"))
-    return classify_amount_diff(parent, child_sum, n_children=max(len(children), 1))
+def build_parsed_tables(page_tables: Sequence[Sequence[Any]]) -> Dict[str, "ParsedTable"]:
+    """从 pdfplumber 风格的逐页表格构建 ParsedTable 集合（跨页续表合并）。
+
+    GPT5.6 R2 P0-1a：原实现的 key 为 ``P{页}:{当前累计表数}``，累计数
+    只增不减 → key 永不重复 → ``if key in parsed_tables`` 永假，续表
+    从不合并（实测两页续表 keys=['P1:0','P2:1']、merge_calls=0）。
+
+    正确的续表识别是**内容签名**而非位置：与"上一张表"表头签名兼容
+    （语义列有交集或双方都无语义列但表头文本相近）即视为跨页续表，
+    走 merge_compatible 守卫（列宽漂移重映射/表头不兼容拒绝合并）；
+    签名不同则作为独立表存在。表头签名 = 语义列集合 + 前 header_rows
+    行的归一化文本。
+    """
+    parsed_tables: Dict[str, ParsedTable] = {}
+    last_key: Optional[str] = None
+    for p_idx, tables in enumerate(page_tables or [], start=1):
+        for raw in tables or []:
+            title = "".join(
+                str(c or "") for c in (raw[0] if raw and raw[0] else [])
+            )[:40]
+            parsed = materialize_table(raw, title=title, pages=(p_idx,))
+            candidate = last_key
+            if (
+                candidate is not None
+                and candidate in parsed_tables
+                and _table_signature_compatible(parsed_tables[candidate], parsed)
+            ):
+                merge_compatible(parsed_tables[candidate], parsed)
+                # 合并后表头签名不变，续表仍可与它继续合并（链式续页）
+            else:
+                key = f"P{p_idx}:{len(parsed_tables)}"
+                if key in parsed_tables:  # 理论不可达，防御性保底
+                    key = f"{key}:{id(parsed)}"
+                parsed_tables[key] = parsed
+                last_key = key
+    return parsed_tables
+
+
+# 高区分度语义列：仅出现在特定表种表头中。"total"（合计/本年收支合计）
+# 几乎所有决算表都有，单凭它不能判定同表（GPT5.6 R2 复核发现：
+# 收入决算表与支出决算表仅共 total 时会被误判续表）。
+_DISTINCTIVE_COLUMNS = {"basic", "project", "budget", "final"}
+
+
+def _table_signature_compatible(base: "ParsedTable", cont: "ParsedTable") -> bool:
+    """续表表头签名是否与基准表兼容（语义列或表头文本）。
+
+    续页常常不带表头行（语义列为空）——此时不能仅凭"列名缺失"判为
+    不同表：基准表有语义列、续页行宽可落入基准列宽族（或经显式重映射
+    对齐）即视为续表候选，由 merge_compatible 的守卫做最终裁决（表头
+    语义列都不匹配时它仍会拒绝）。
+    """
+    base_keys = set(base.named_columns)
+    cont_keys = set(cont.named_columns)
+    if base_keys and cont_keys:
+        # 双方都有语义列：要求共享高区分度列（basic/project/budget/final），
+        # 或共享 ≥2 个语义列——只共 total 不足以判定同表。
+        shared = base_keys & cont_keys
+        if shared & _DISTINCTIVE_COLUMNS or len(shared) >= 2:
+            return True
+        # 仅有 total 交集：退回表头文本复核（同表种续页表头文本相同）
+        base_head = _normalized_head_text(base, rows=2)
+        cont_head = _normalized_head_text(cont, rows=2)
+        return bool(base_head and cont_head) and (
+            cont_head in base_head or base_head in cont_head
+        )
+    if base_keys and not cont_keys:
+        # 续页无表头：列宽可对齐（同宽或窄于基准）即续表候选
+        base_widths = {len(r.cells) for r in base.rows} or {0}
+        cont_widths = {len(r.cells) for r in cont.rows} or {0}
+        return min(cont_widths) <= max(base_widths)
+    if cont_keys and not base_keys:
+        return False  # 基准表都没识别出语义列，续页反而有 → 不可靠，不合并
+    # 双方都无语义列：按表头文本近似判断（前 2 行归一化后子串包含）
+    base_head = _normalized_head_text(base, rows=2)
+    cont_head = _normalized_head_text(cont, rows=2)
+    if not base_head or not cont_head:
+        return False
+    return cont_head in base_head or base_head in cont_head
+
+
+def _normalized_head_text(table: "ParsedTable", rows: int = 2) -> str:
+    parts: List[str] = []
+    for row in table.rows[:rows]:
+        parts.append("".join((c.text or "") for c in row.cells))
+    return re.sub(r"\s+", "", "".join(parts))
 
 
 def _remap_continuation_rows(
@@ -355,24 +434,10 @@ def run_structured_rules(doc: Any, report_kind: Optional[str] = None):
         R33244_Table7_ThreePublicAdvancedCheck,
     )
 
-    # 1) 构建内存态结构化表（与数据库无关，规则分析与结构化入库共同消费）
-    parsed_tables: Dict[str, ParsedTable] = {}
-    page_tables = getattr(doc, "page_tables", []) or []
-    for p_idx, tables in enumerate(page_tables, start=1):
-        for raw in tables or []:
-            title = "".join(
-                str(c or "") for c in (raw[0] if raw and raw[0] else [])
-            )[:40]
-            key = f"P{p_idx}:{len(parsed_tables)}"
-            parsed = materialize_table(
-                raw,
-                title=title,
-                pages=(p_idx,),
-            )
-            if key in parsed_tables:
-                merge_compatible(parsed_tables[key], parsed)
-            else:
-                parsed_tables[key] = parsed
+    # 1) 构建内存态结构化表（与数据库无关，规则分析与结构化入库共同消费）。
+    # GPT5.6 R2 P0-1a：续表合并改由 build_parsed_tables 按表头签名识别
+    # （原内联实现 key 含累计表数，永不重复 → 永不合并）。
+    parsed_tables = build_parsed_tables(getattr(doc, "page_tables", []) or [])
     try:
         doc.parsed_tables = parsed_tables
     except Exception:

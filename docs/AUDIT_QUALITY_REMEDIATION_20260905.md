@@ -196,3 +196,35 @@ Ruff 两错修复（`replay_golden_corpus.py` Tuple 未导入、routing_changed_
 - shadow replay：`structured_ready=false（coverage 17.3%）` 如实标注，legacy 7 条/structured 4 条差异逐规则列出；
 - Ruff：涉及文件 All checks passed；
 - e2e 137 项未重跑（前端仅改 backendAuth.ts 移除兜底 key，本地 .env.local 已配置一致 key，行为不变；`test:e2e` 包装命令的 output/e2e-webserver.log EPERM 为已知环境问题，直连临时服务可全过——GPT5.6 本轮已实测 137 passed）。
+
+## 9.4 GPT5.6 第二轮复核整改（2026-09-06，同日第四轮）
+
+第二轮复核指出 5 项剩余问题（1 P0 / 3 P1 / 1 P2），经逐项核实全部属实，本轮修复情况：
+
+### P0-1 结构化解析消费链路（部分完成，试点打通）
+1. **续表合并 key 永假 bug 修复**：原实现 `key=f"P{页}:{累计表数}"` 累计数只增不减 → key 永不重复 → 续表从不合并（实测 `keys=['P1:0','P2:1']`、`merge_calls=0`）。重构为 `build_parsed_tables()`：按**内容签名**识别续表（语义列交集/列宽对齐/表头文本），走 `merge_compatible` 守卫。跨页合并、不同表种隔离、三页链式续表测试锁定。语义列判定发现并修复「收入决算表/支出决算表仅共 total 被误判续表」——区分度列（basic/project/budget/final）或 ≥2 列交集才判同表。
+2. **V33-115 真实消费试点**：规则挂载 `doc.parsed_tables` 时优先走 `_apply_structured`（从 ParsedRow/ParsedCell 三态取数，文本单元格不误读 0.0），无挂载回退 legacy 文本行——第一条真实结构化消费链路落地。测试覆盖：结构化路径产出平衡错误 finding、平衡表零误报、无挂载走回退。
+3. **顺手修复** `_get_table_rows` 锚点页越界 IndexError（纯文本材料锚点来自全文但 page_tables 为空时崩溃）。
+4. **未完成（如实记录）**：其余 8 条迁移规则仍走 legacy 路径；生产管线仍恒走 legacy（`run_rules_in_process`）；`FiscalFactMaterializer` 的数据库依赖未移除。这是宏观计划 Phase 3 的剩余工作，见 §9 遗留 4。
+
+### P1-2 评估器假 TP 与证据质量
+1. **区分度数字 token**：年份（19xx/20xx）与孤立两位数不再单独构成内容证据——GPT5.6 复现场景（同规则同页、内容相反、仅共享"2025"）实测被拒绝。金额/编码 token 仍是一级证据；4-6 字文本片段为措辞差异通道；2-3 字超短标注按全串包含兜底。
+2. **location_key 纳入匹配**：锚点短语（按括号/省略号切分）计入排序加分（数字交集 > 锚点命中 > 文本片段）。三轮调参的结论如实记录：锚点做**否决**会在「标注行级措辞 vs 规则文案措辞交叉」场景误拒真命中（A-005「p14同口径表合计」vs finding「同口径列」等实测），收敛为排序项——假 TP 防线由区分度 token 通道承担，定位域一致性用于多候选择优。
+3. **locatable 双证据**：可定位率从"仅页码"升级为"页码 + 非空 evidence_text/message"，缺项进入 `unlocatable_findings` 明细。样张实测 7/7 双证据齐备，locatable 1.0 保持。
+
+### P1-3 抽取服务合法空结果契约
+`_call_semantic_audit` 空命中（hits=[]，服务 200）时 ledger 落盘 `"[]"`（非空字符串构成成功证据）而非 `""`——与直连路径返回 `"[]"` 判成功的契约一致。修复前：直连失败 + 抽取服务成功且无发现的任务会被误判 `ai_empty_response` → failed/review_required。契约测试 2 例（含 mixed 失败后成功的组合场景）。
+
+### P1-4 正式验收数据（未完成，如实记录）
+Golden Corpus 仍为 1 份（目标 ≥20 份双人复核）；历史 top30 仅清单无逐份人工结论；真实外部 AI provider 成功链路未预发验证。均属计划内遗留，非本轮代码缺陷。
+
+### P2-5 两个自动化入口
+1. **replay 脚本 GBK 崩溃**：Windows 控制台默认 GBK，打印含特殊字符的文件名触发 UnicodeEncodeError 退出码 1。两个脚本（replay/evaluate）入口 `sys.stdout/stderr.reconfigure(encoding="utf-8", errors="replace")`。实测 exit 0。
+2. **run-e2e.cjs EPERM**：`output/e2e-webserver.log` 被残留进程占用时 openSync 直接抛 EPERM、包装命令未启动即失败。改为失败回退时间戳文件名 + 提示清理（node 单测验证回退生效）。
+
+### 验证（2026-09-06 第四轮）
+- 全量 pytest：**1025 passed + 1 skipped**（第三轮 1013 → 新增 12 测试：build_parsed_tables 6 + V33-115 消费 3 + 空 hits 2 + 评估器语义更新，零回归）；
+- replay+evaluate：**GATE-PASS**（TP=3 FP=0 FN=0、hint 4/4、全指标 1.0）——评估器强化后真命中无一误拒（三轮调参过程中曾出现召回 0.33/0.67 的过度收紧，均已在收敛设计下消除）；
+- shadow replay：structured 路径经 P0-1 修复后行为不变（4 条 finding、`structured_ready=false` 17.3%）；
+- Ruff（api/src/scripts 全目录）：All checks passed（本轮引入的 2 个新错误 F841/B905 已修）；
+- node --check：run-e2e.cjs / next-dev.cjs / dev.cjs 全过。

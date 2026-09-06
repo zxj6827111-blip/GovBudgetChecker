@@ -34,6 +34,18 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+
+# Windows 控制台默认 GBK：print 含 CJK 特殊字符（如"…·×"）的文件名/
+# 规则文本时触发 UnicodeEncodeError 并以退出码 1 结束（GPT5.6 R2 P2-5a，
+# 历史回放在报告打印阶段崩溃）。统一 reconfigure 为 UTF-8，且把
+# unencodable 字符降级为 replacement 而不是让脚本崩溃。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # 非 TextIO（如 pytest 捕获流）：跳过
+            pass
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 

@@ -2153,7 +2153,12 @@ def _get_table_rows(doc: Document, table_name: str, include_continuation: bool =
     p = _get_first_anchor_page(doc, table_name)
     if not p:
         return None
-    tables = doc.page_tables[p - 1]
+    page_tables = getattr(doc, "page_tables", []) or []
+    # 锚点页可能超出 page_tables 范围（锚点来自全文文本但表格抽取为空，
+    # 如纯文本说明材料）：越界按"该页无表"处理，不抛 IndexError
+    if p - 1 >= len(page_tables):
+        return None
+    tables = page_tables[p - 1]
     if not tables:
         return None
     # 返回最大的表格
@@ -2296,6 +2301,43 @@ def _extract_standard_three_public_total(section: str, fiscal_type: str) -> Opti
 # 勾稽关系验证规则
 # ==================================================================================
 
+def _structured_side_total(table, side: str) -> Optional[Decimal]:
+    """从 ParsedTable 的总计行提取指定侧金额（结构化消费试点，V33-115）。
+
+    双栏布局与 legacy 路径同源：[收入项目, 收入金额, 支出项目, 支出金额]，
+    金额取自与「总计」标签同侧的半行；ParsedCell 三态保证文本单元格
+    number=None，不会把标签误读成 0.0。
+    """
+    mid = len(table.rows[0].cells) // 2 if table.rows else 0
+    for row in table.rows:
+        if row.row_role not in ("total", "subtotal"):
+            continue
+        cells = row.cells
+        if not any("总计" in (c.text or "") for c in cells):
+            continue
+        half = cells[:mid] if side == "income" else cells[mid:]
+        got_number = False
+        for c in half:
+            if c.number is not None:
+                return c.number
+            if "总计" in (c.text or ""):
+                got_number = True
+        # 标签在半行内但金额在另一半（罕见布局）：跳过，不猜测
+        _ = got_number
+    return None
+
+
+def _find_parsed_table(doc: Document, title_fragment: str):
+    """按标题片段在 doc.parsed_tables 中查找目标表（无挂载时返回 None）。"""
+    tables = getattr(doc, "parsed_tables", None)
+    if not isinstance(tables, dict):
+        return None
+    for table in tables.values():
+        if title_fragment in (getattr(table, "title", "") or ""):
+            return table
+    return None
+
+
 class R33115_TotalSheetCheck(Rule):
     code, severity = "V33-115", "error"
     desc = "收入支出决算总表勾稽关系验证 (Table 1)"
@@ -2303,6 +2345,12 @@ class R33115_TotalSheetCheck(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
         table_name = "收入支出决算总表"
+        # 结构化消费试点（GPT5.6 R2 P0-1b）：doc 挂载了 ParsedTable 时
+        # 优先走命名行取值（ParsedCell 三态杜绝标签误读 0.0）；legacy
+        # 文本行路径保留为无挂载时的回退——单一规则两条输入表征过渡。
+        structured = _find_parsed_table(doc, table_name)
+        if structured is not None and structured.rows:
+            return self._apply_structured(doc, structured)
         rows = _get_table_rows(doc, table_name)
         if not rows:
             # 决算材料应含此核心表：查不到=证据不足而非"无问题"，
@@ -2393,6 +2441,95 @@ class R33115_TotalSheetCheck(Rule):
                     f"支出侧合计与分项存在 {diff:.2f} 万元差异，在显示舍入包络内，可能为取整误差。",
                     {"table": table_name, "page": page}, "info",
                     evidence_text=f"表格：{table_name}\n支出总计：{expense_total}\n分项之和：{calc}"
+                ))
+
+        return issues
+
+    def _apply_structured(self, doc: Document, table) -> List[Issue]:
+        """结构化消费路径（GPT5.6 R2 P0-1b）：直接消费 ParsedTable。
+
+        与 legacy apply 的三个校验一一对应（表底平衡/收入侧/支出侧），
+        数值来源改为 ParsedCell.number（Decimal 三态），标签匹配改为
+        row.label 前缀查找；任一侧数值取不到 → 跳过该校验（与 legacy
+        的 None 安全语义一致）。
+        """
+        issues: List[Issue] = []
+        table_name = "收入支出决算总表"
+        page = table.page_span[0] or 1
+
+        def half_cells(row):
+            cells = row.cells
+            mid = len(cells) // 2
+            return cells[:mid], cells[mid:]
+
+        def side_total(side: str) -> Optional[Decimal]:
+            for row in table.rows:
+                if row.row_role not in ("total", "subtotal"):
+                    continue
+                left, right = half_cells(row)
+                half = left if side == "income" else right
+                if not any("总计" in (c.text or "") for c in half):
+                    continue
+                for c in half:
+                    if c.number is not None:
+                        return c.number
+            return None
+
+        def side_component(side: str, label: str) -> Optional[Decimal]:
+            for row in table.rows:
+                if row.row_role in ("header",):
+                    continue
+                left, right = half_cells(row)
+                half = left if side == "income" else right
+                if not any(label in (c.text or "") for c in half):
+                    continue
+                for c in half:
+                    if c.number is not None:
+                        return c.number
+            return None
+
+        income_total = side_total("income")
+        expense_total = side_total("expense")
+
+        if income_total is not None and expense_total is not None:
+            level, diff = classify_amount_diff(income_total, expense_total, n_children=1)
+            if level == "mismatch":
+                issues.append(self._issue(
+                    f"总表平衡性错误：收入总计({income_total:.2f}) != 支出总计({expense_total:.2f})",
+                    {"table": table_name, "page": page}, "error",
+                    evidence_text=f"表格：{table_name}\n收入总计：{income_total}\n支出总计：{expense_total}"
+                ))
+            elif level == "rounding_hint":
+                issues.append(self._issue(
+                    f"总表平衡存在 {diff:.2f} 万元差异，在显示舍入包络内，可能为取整误差，建议复核。",
+                    {"table": table_name, "page": page}, "info",
+                    evidence_text=f"表格：{table_name}\n收入总计：{income_total}\n支出总计：{expense_total}"
+                ))
+
+        for side, total, components in (
+            ("income", income_total, ("本年收入合计", "使用非财政拨款结余", "年初结转和结余")),
+            ("expense", expense_total, ("本年支出合计", "结余分配", "年末结转和结余")),
+        ):
+            if total is None:
+                continue
+            values = [side_component(side, label) for label in components]
+            if any(v is None for v in values):
+                continue
+            calc = sum(values, Decimal("0"))
+            level, diff = classify_amount_diff(total, calc, n_children=len(components))
+            side_label = "收入" if side == "income" else "支出"
+            if level == "mismatch":
+                detail = " + ".join(f"{n}({v:.2f})" for n, v in zip(components, values, strict=True))
+                issues.append(self._issue(
+                    f"{side_label}侧平衡错误：计算值({calc:.2f}) != {side_label}总计({total:.2f})。公式：{detail}",
+                    {"table": table_name, "page": page}, "error",
+                    evidence_text=f"表格：{table_name}\n{detail}\n{side_label}总计：{total}"
+                ))
+            elif level == "rounding_hint":
+                issues.append(self._issue(
+                    f"{side_label}侧合计与分项存在 {diff:.2f} 万元差异，在显示舍入包络内，可能为取整误差。",
+                    {"table": table_name, "page": page}, "info",
+                    evidence_text=f"表格：{table_name}\n{side_label}总计：{total}\n分项之和：{calc}"
                 ))
 
         return issues

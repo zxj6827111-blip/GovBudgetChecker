@@ -980,14 +980,18 @@ class ExtractorClient:
                 service_model = ""
                 if isinstance(result, dict):
                     service_model = str(result.get("model") or "").strip()
-                # 抽取服务路径同样留痕：provider 固定为服务通道，正文以 hits 数量
-                # 表征（hits>0 视为有产出；hits=0 无正文证据，由上层兜底直连）。
+                # 抽取服务路径同样留痕。合法空结果（hits=[]，服务 200 且
+                # 明确"无问题"）与调用失败不同：content 落 "[]"（非空字符串
+                # 构成成功证据，与直连路径返回 "[]" 的契约一致——GPT5.6 R2
+                # P1-3：此前空 hits 落 ""，会被 ai_execution 误判
+                # ai_empty_response → 直连失败+抽取服务成功无发现时错误转
+                # failed/review_required）。
                 self.record_call(
                     "extractor_service",
                     service_model or self.config.main_model or None,
                     prompt_version=SEMANTIC_AUDIT_SERVICE_TASK,
                     token_usage=result.get("usage") if isinstance(result, dict) else None,
-                    content=json.dumps(hits, ensure_ascii=False) if hits else "",
+                    content=json.dumps(hits, ensure_ascii=False),
                 )
                 provenance = build_finding_provenance(
                     model_version=build_model_version(
