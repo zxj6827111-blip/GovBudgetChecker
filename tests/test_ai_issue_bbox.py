@@ -136,3 +136,46 @@ async def test_ai_findings_service_runs_window_audits_concurrently(
     assert findings == []
     assert service.ai_client.ai_full_report_audit.await_count == 4
     assert max_active >= 2
+
+
+@pytest.mark.asyncio
+async def test_ai_findings_service_drops_stale_call_ledger_on_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """analyze 入口丢弃上一任务残留的调用留痕（review 🟢2）。
+
+    异常路径若漏 pop，残留 ledger（content 含材料原文）会跨任务累积，
+    且可能把旧任务的正文计入本次 ai_execution 判定。入口清理后，
+    本次分析结束时 ledger 只含本任务的调用。
+    """
+    monkeypatch.setenv("AI_AUDIT_WINDOW_CHARS", "2000")
+    monkeypatch.setenv("AI_AUDIT_WINDOW_OVERLAP", "200")
+    monkeypatch.setenv("AI_AUDIT_MAX_WINDOWS", "4")
+    monkeypatch.setenv("AI_AUDIT_MAX_CONCURRENCY", "2")
+
+    service = AIFindingsService(AnalysisConfig())
+    # 模拟上一任务异常路径漏 pop 的残留留痕
+    service.ai_client.record_call(
+        "zhipu", "glm-4.5-flash", finish_reason="stop", content="上一任务的正文"
+    )
+    assert len(service.ai_client.call_ledger) == 1
+
+    async def fake_audit(window_text: str, doc_hash: str, structured_context=None):
+        return []
+
+    service.ai_client.ai_full_report_audit = AsyncMock(side_effect=fake_audit)
+
+    findings = await service.analyze(
+        JobContext(
+            job_id="job-ai-stale-ledger",
+            pdf_path="",
+            page_texts=["B" * 3000],
+            meta={},
+        )
+    )
+
+    assert findings == []
+    # 本次 analyze 结束后 ledger 里没有任何条目：残留已在入口丢弃，
+    # fake_audit 不产生新留痕（真实链路由 record_call 在窗口调用时写入，
+    # 由 analyze_dual 统一 pop）
+    assert service.ai_client.call_ledger == []

@@ -45,10 +45,21 @@ class AIFindingsService:
         
         start_time = time.time()
         logger.info(f"开始AI分析: job_id={context.job_id}")
-        
+
         # 重置错误计数
         self.ai_errors = []
-        
+
+        # 防御性留痕清理（review 🟢2）：ledger 里的 content 含材料原文，
+        # 正常链路由 analyze_dual 在任务结束时 pop 走；若上一任务异常路径
+        # 漏 pop，残留留痕会跨任务累积且可能把旧正文计入本次 ai_execution
+        # 判定——入口处丢弃残留，保证每次分析的留痕只属于本任务。
+        stale_ledger = self.ai_client.pop_call_ledger()
+        if stale_ledger:
+            logger.warning(
+                "丢弃上一任务残留的 %d 条 AI 调用留痕（异常路径未 pop）",
+                len(stale_ledger),
+            )
+
         try:
             # 合并所有页面文本用于语义审计，同时计算页码偏移量
             page_texts = context.page_texts if context.page_texts else []

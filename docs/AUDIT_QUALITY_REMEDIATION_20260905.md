@@ -181,10 +181,16 @@
 `package.json` dev:backend 与 `scripts/next-dev.cjs` 各自硬编码 `dev-local-key`、`app/lib/backendAuth.ts` 兜底 `change_me_to_a_strong_secret`——分别启动前后端时与后端实际 key 不一致会静默 403。修复：三处兜底全部移除，统一从根 .env（GOVBUDGET_API_KEY / BACKEND_API_KEY）解析，缺 key 显式失败（fail-closed，与后端安全模块行为对齐）。已核实根 .env 与 app/.env.local 的 key 一致；localAuth.ts 中 `change_me_to_a_strong_secret` 属弱密码黑名单（防呆），保留。
 
 ### P2-6 工程收尾
-Ruff 两错修复（`replay_golden_corpus.py` Tuple 未导入、routing_changed_docs 重复键）；全部改动随本轮两个 commit 提交，不再留未提交工作树。
+Ruff 两错修复（`replay_golden_corpus.py` Tuple 未导入、routing_changed_docs 重复键）；全部改动随本轮两个 commit 提交，不再留未提交工作树。（勘误：实际为单个 commit a7a87cb——两轮整改在同 3 个文件交织，按文件拆分会破坏原子性。）
+
+### 9.3 /review 自查修复（2026-09-06，同日第三轮）
+对 a7a87cb 做交叉复查（RuleDeferred 穿透路径排查、no_findings 兜底误伤排查、评估器真实语料逐条验证），确认无阻断回归，另修复 3 个自查发现：
+1. **🟡 evidence_overlaps 短标注盲区**（`evaluate_golden_corpus.py`）：滑窗固定 6 字，短于 6 字且无数字的标注（如「空表」）永远匹配不上。修复：窗口退化 `min(6, len)`，短标注按全串比对。回归测试 `tests/test_golden_eval_overlap.py` 8 例（短标注正反例、单字退化、数字交集优先、无关正文仍拒绝、优先消费重叠度最高者）。
+2. **🟢 ledger 跨任务残留**（`ai_findings.py`）：content 含材料原文的留痕若因异常路径漏 pop 会跨任务累积、污染下次 ai_execution 判定。修复：`analyze` 入口防御性丢弃残留留痕并告警；测试覆盖（`test_ai_issue_bbox.py` 新增残留清理用例）。
+3. **🟢 engine_rule_runner 死代码**：`_execute_rule`/`_convert_issue_to_item`/`_analyze_failure_reason`/`EngineRuleResult` 无任何调用方，且 `_execute_rule` 用 `except Exception` 接 RuleDeferred（与活跃路径的信号捕获语义相反，误复用会把 insufficient_data 记成 execution_error）。全部删除（-110 行）。
 
 ### 验证（2026-09-06）
-- 全量 pytest：**1004 passed + 1 skipped**（K3 轮 990 → 本轮新增 14 测试，零回归）；
+- 全量 pytest：**1013 passed + 1 skipped**（9.2 轮 1004 → 本轮新增 9 测试，零回归）；
 - 前端 18 个 jiti 套件全过；
 - replay+evaluate 重跑：GATE-PASS（TP=3 FP=0 FN=0、hint 4/4、severity/page/locatable 全 1.0）；
 - shadow replay：`structured_ready=false（coverage 17.3%）` 如实标注，legacy 7 条/structured 4 条差异逐规则列出；

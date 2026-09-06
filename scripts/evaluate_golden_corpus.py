@@ -72,12 +72,14 @@ def _page_of(finding: Dict[str, Any]) -> Optional[int]:
 
 
 # ---------------------------------------------------------------------------
-# 内容重叠校验（GPT5.6 P1-4）
+# 内容重叠校验（GPT5.6 P1-4 + review 🟡1 修正）
 #
 # 此前匹配只看规则+页码，"规则和页码正确但正文完全无关、evidence 为空"
 # 的 finding 也会被判为命中。此后 TP 判定还需 evidence 内容重叠：
 # 标注 evidence 与 finding 的 evidence_text/message 至少共享一个
-# 归一化数字 token，或一个 ≥6 字的归一化文本片段。
+# 归一化数字 token，或一个足够长的归一化文本片段。片段窗口随标注长度
+# 退化（min(6, len)）——短于 6 字的标注按全串比对，避免"空表说明"这类
+# 短证据永远匹配不上的盲区（review 🟡1）。
 # ---------------------------------------------------------------------------
 
 def _normalize_for_overlap(text: Any) -> str:
@@ -108,9 +110,11 @@ def evidence_overlaps(annotation_evidence: Any, finding: Dict[str, Any]) -> bool
     find_nums = _numeric_tokens(finding_text)
     if ann_nums and ann_nums & find_nums:
         return True
-    # 2) 长 CJK/字母数字片段重叠（滑动窗口取标注侧 ≥6 字片段）
-    window = 6
-    for i in range(0, max(0, len(ann_norm) - window + 1)):
+    # 2) 归一化片段重叠：窗口取 min(6, 标注长度)，短标注按全串比对
+    window = min(6, len(ann_norm))
+    if window <= 0:
+        return False
+    for i in range(0, len(ann_norm) - window + 1):
         if ann_norm[i : i + window] in find_norm:
             return True
     return False

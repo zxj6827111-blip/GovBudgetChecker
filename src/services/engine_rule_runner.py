@@ -7,7 +7,6 @@ import time
 import uuid
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from dataclasses import dataclass
 
 from src.schemas.issues import JobContext, AnalysisConfig, IssueItem
 from src.engine.rules_v33 import ALL_RULES as FINAL_ALL_RULES, build_document, Issue, Document
@@ -25,16 +24,6 @@ from src.utils.provenance import ENGINE_VERSION
 from src.utils.rule_text import default_rule_suggestion, infer_rule_title
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class EngineRuleResult:
-    """寮曟搸瑙勫垯鎵ц缁撴灉"""
-    rule_id: str
-    success: bool
-    findings: List[IssueItem]
-    why_not: Optional[str] = None
-    elapsed_ms: int = 0
 
 
 class EngineRuleRunner:
@@ -443,96 +432,6 @@ class EngineRuleRunner:
             filesize=filesize
         )
     
-    async def _execute_rule(self, 
-                           rule: Dict[str, Any],
-                           document: Document,
-                           job_context: JobContext,
-                           config: AnalysisConfig) -> EngineRuleResult:
-        """鎵ц鍗曚釜瑙勫垯"""
-        
-        start_time = time.time()
-        rule_id = rule.get('id', 'unknown')
-        
-        try:
-            # 鏌ユ壘瀵瑰簲鐨勮鍒欏璞?            rule_obj = None
-            available_rules = self._select_rule_set(job_context, document)
-            for r in available_rules:
-                if r.code == rule_id or rule_id in r.code:
-                    rule_obj = r
-                    break
-            
-            if rule_obj is None:
-                return EngineRuleResult(
-                    rule_id=rule_id,
-                    success=False,
-                    findings=[],
-                    why_not=f"NO_RULE: Rule object not found for {rule_id}",
-                    elapsed_ms=int((time.time() - start_time) * 1000)
-                )
-            
-            # 鎵ц瑙勫垯
-            issues = rule_obj.apply(document)
-            
-            # 杞崲涓?IssueItem 鏍煎紡
-            findings = []
-            
-            if issues:
-                for issue in issues:
-                    if isinstance(issue, Issue):
-                        finding = self._convert_issue_to_item(
-                            issue=issue,
-                            rule=rule,
-                            job_context=job_context,
-                            rule_version=str(getattr(config, "rules_version", "") or "").strip()
-                            or None,
-                        )
-                        findings.append(finding)
-                    else:
-                        logger.warning(f"Rule {rule_id} returned non-Issue object: {type(issue)}")
-            
-            # 搴旂敤瀹瑰樊璁剧疆
-            if rule.get('tolerance') and findings:
-                findings = self._apply_tolerance(findings, rule['tolerance'])
-            
-            elapsed_ms = int((time.time() - start_time) * 1000)
-            
-            return EngineRuleResult(
-                rule_id=rule_id,
-                success=True,
-                findings=findings,
-                why_not=None if findings else "NO_ISSUES_FOUND",
-                elapsed_ms=elapsed_ms
-            )
-            
-        except Exception as e:
-            # 鍒嗘瀽澶辫触鍘熷洜锛屽苟娣诲姞璇︾粏鏃ュ織
-            logger.exception(
-                "Rule execution failed",
-                extra=safe_log_extra({"rule_id": rule_id, **describe_exception(e)}),
-            )
-            
-            why_not = self._analyze_failure_reason(e, rule_id)
-            elapsed_ms = int((time.time() - start_time) * 1000)
-            
-            return EngineRuleResult(
-                rule_id=rule_id,
-                success=False,
-                findings=[],
-                why_not=why_not,
-                elapsed_ms=elapsed_ms
-            )
-    
-    def _convert_issue_to_item(self, 
-                              issue: Issue,
-                              rule: Dict[str, Any],
-                              job_context: JobContext,
-                              rule_version: Optional[str] = None) -> IssueItem:
-        """灏?Issue 瀵硅薄杞崲涓?IssueItem"""
-        _ = job_context
-        return self._issue_to_finding(
-            issue, rule_id=rule.get("id"), rule_version=rule_version
-        )
-    
     def _apply_tolerance(self, 
                         findings: List[IssueItem], 
                         tolerance: Dict[str, Any]) -> List[IssueItem]:
@@ -565,26 +464,6 @@ class EngineRuleRunner:
                 finding.why_not = f"TOLERANCE_FILTERED: money_rel={money_rel}, pct_abs={pct_abs}"
         
         return filtered_findings
-    
-    def _analyze_failure_reason(self, error: Exception, rule_id: str) -> str:
-        """鍒嗘瀽澶辫触鍘熷洜"""
-        
-        error_str = str(error).lower()
-        
-        if "anchor" in error_str:
-            return f"NO_ANCHOR: {str(error)}"
-        elif "table" in error_str or "\u8868\u683c" in error_str:
-            return f"TABLE_PARSE_FAIL: {str(error)}"
-        elif "unit" in error_str or "\u5355\u4f4d" in error_str:
-            return f"UNIT_MISMATCH: {str(error)}"
-        elif "tolerance" in error_str or "\u5bb9\u5dee" in error_str:
-            return f"TOLERANCE_FAIL: {str(error)}"
-        elif "keyerror" in error_str or "key" in error_str:
-            return f"MISSING_DATA: {str(error)}"
-        elif "valueerror" in error_str or "value" in error_str:
-            return f"DATA_FORMAT_ERROR: {str(error)}"
-        else:
-            return f"UNKNOWN_ERROR: {str(error)}"
     
     def get_stats(self) -> Dict[str, Any]:
         """鑾峰彇鎵ц缁熻"""
