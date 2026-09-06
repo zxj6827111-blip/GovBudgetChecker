@@ -125,6 +125,76 @@ async def test_full_report_audit_falls_back_when_direct_result_is_empty() -> Non
 
 
 # ---------------------------------------------------------------------------
+# 回退链 structured_context 透传（2026-09-06 K3 复核整改）
+#
+# 缺陷背景：ai_semantic_audit 签名无 structured_context，两处
+# _direct_semantic_audit 回退丢失注入块——同一文档在主链路与回退
+# 路径出现两种输入表征。以下测试锁定整条链的透传契约。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_full_report_audit_passes_structured_context_to_extractor_fallback() -> None:
+    """直连失败回退到抽取服务时，structured_context 必须继续透传。"""
+    client = ExtractorClient()
+    client._direct_semantic_audit = AsyncMock(side_effect=RuntimeError("direct down"))
+    client.ai_semantic_audit = AsyncMock(return_value=[{"type": "from_service"}])
+
+    result = await client.ai_full_report_audit(
+        "测试文本", "doc-hash", structured_context="结构化事实块"
+    )
+
+    assert result == [{"type": "from_service"}]
+    client.ai_semantic_audit.assert_awaited_once_with(
+        "测试文本", "doc-hash", structured_context="结构化事实块"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fallback_trigger, extractor_returns",
+    [
+        ("empty_hits", []),
+        ("service_error", RuntimeError("service down")),
+    ],
+)
+async def test_semantic_audit_fallback_keeps_structured_context(
+    fallback_trigger, extractor_returns
+) -> None:
+    """抽取服务空结果/异常回退直连时，注入块必须随 prompt 下发。"""
+    client = ExtractorClient()
+    if fallback_trigger == "empty_hits":
+        client._call_semantic_audit = AsyncMock(return_value=[])
+    else:
+        client._call_semantic_audit = AsyncMock(side_effect=extractor_returns)
+    client._direct_semantic_audit = AsyncMock(return_value=[{"type": "direct"}])
+
+    result = await client.ai_semantic_audit(
+        "测试文本", "doc-hash", structured_context="结构化事实块"
+    )
+
+    assert result == [{"type": "direct"}]
+    client._direct_semantic_audit.assert_awaited_once_with(
+        "测试文本", structured_context="结构化事实块"
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_audit_fallback_without_structured_context() -> None:
+    """未提供注入块（历史调用形态）时回退行为不变：以 None 透传。"""
+    client = ExtractorClient()
+    client._call_semantic_audit = AsyncMock(return_value=[])
+    client._direct_semantic_audit = AsyncMock(return_value=[{"type": "direct"}])
+
+    result = await client.ai_semantic_audit("测试文本", "doc-hash")
+
+    assert result == [{"type": "direct"}]
+    client._direct_semantic_audit.assert_awaited_once_with(
+        "测试文本", structured_context=None
+    )
+
+
+# ---------------------------------------------------------------------------
 # hits 转换：必需字段与 span 形状校验
 #
 # 这一组针对的是一个真实缺陷：原实现在内层 `for span_field` 循环里 `continue`，

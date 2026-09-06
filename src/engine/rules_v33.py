@@ -2305,7 +2305,9 @@ class R33115_TotalSheetCheck(Rule):
         table_name = "收入支出决算总表"
         rows = _get_table_rows(doc, table_name)
         if not rows:
-            return []
+            # 决算材料应含此核心表：查不到=证据不足而非"无问题"，
+            # 转 insufficient_data 供质量门转人工复核（GPT5.6 P0-2）。
+            raise RuleDeferred(self.code, f"表缺失或无可解析行: {table_name}")
         page = _get_first_anchor_page(doc, table_name) or 1
 
         # 双栏布局：[收入项目, 收入金额, 支出项目, 支出金额]。
@@ -2404,7 +2406,10 @@ class R33119_FiscalTotalCheck(Rule):
         issues = []
         table_name = "财政拨款收入支出决算总表"
         rows = _get_table_rows(doc, table_name)
-        if not rows: return []
+        if not rows:
+            # 决算材料应含此核心表（Table 4）：查不到=证据不足，
+            # 转 insufficient_data 供质量门转人工复核（GPT5.6 P0-2）。
+            raise RuleDeferred(self.code, f"表缺失或无可解析行: {table_name}")
 
         # 3. 行级横向校验 (Row Horizontal Check)
         # 合计(Col 1) = 一般公共(Col 2) + 政府性(Col 3) + 国有资本(Col 4)
@@ -2506,11 +2511,13 @@ class R33120_DetailTableCheck(Rule):
         issues = []
         target_tables = ["收入决算表", "支出决算表", "一般公共预算财政拨款支出决算表"]
         table_totals: Dict[str, Dict[str, float]] = {}
+        found_any_table = False
 
         for table_name in target_tables:
             rows = _get_table_rows(doc, table_name)
             if not rows:
                 continue
+            found_any_table = True
             page = _get_first_anchor_page(doc, table_name) or 1
 
             # 跨页列宽漂移（HANDOFF §3.1C）：续页把「类|款|项」三列编码合并成
@@ -2684,6 +2691,14 @@ class R33120_DetailTableCheck(Rule):
                         evidence_text=f"支出决算表：{v3:.2f}\n一般公共预算财政拨款支出决算表：{v5:.2f}"
                     ))
 
+        # 三张目标表全部查不到：本规则覆盖的核心勾稽完全未执行，
+        # 不得记 pass，转 insufficient_data 供质量门转人工复核
+        # （GPT5.6 P0-2）。
+        if not found_any_table:
+            raise RuleDeferred(
+                self.code, f"三张目标表均缺失: {'、'.join(target_tables)}"
+            )
+
         return issues
 
 
@@ -2703,12 +2718,15 @@ class R33117_BasicExpenseClassification(Rule):
         table_name = "一般公共预算财政拨款基本支出决算表"
         rows = _get_table_rows(doc, table_name)
         if not rows:
-            return []
+            # 决算材料应含此核心表（Table 6）：查不到=证据不足，
+            # 转 insufficient_data 供质量门转人工复核（GPT5.6 P0-2）。
+            raise RuleDeferred(self.code, f"表缺失或无可解析行: {table_name}")
         page = _get_first_anchor_page(doc, table_name) or 1
 
         modal_width = _modal_row_width(rows)
         if modal_width is None:
-            return []
+            # 有表但行宽无法稳定判定：同样属解析证据不足，不得记 pass
+            raise RuleDeferred(self.code, "行宽众数无法判定，无法做列对齐校验")
         kept = [r for r in rows if len(r) == modal_width]
 
         # 双栏经济分类布局：每半行 = [类, 款, 科目名称..., 决算数]。
@@ -2813,7 +2831,11 @@ class R33121_ThreePublicCheck(Rule):
         issues = []
         table_name = "一般公共预算财政拨款“三公”经费支出决算表"
         rows = _get_table_rows(doc, table_name)
-        if not rows: return []
+        if not rows:
+            # 三公表为条件性表，但决算材料极大多数应含此表：
+            # 查不到时按证据不足转人工复核（missing 核因由 missing_core_table
+            # 门禁另行呈现），不得静默记 pass（GPT5.6 P0-2）。
+            raise RuleDeferred(self.code, f"表缺失或无可解析行: {table_name}")
         
         # 10. 列间加和校验 (Column Sum Check)
         # 合计 = 因公出国 + 公务用车购置及运行 + 公务接待

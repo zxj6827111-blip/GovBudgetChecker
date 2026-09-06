@@ -195,6 +195,13 @@ class ExtractorClient:
                 "prompt_version": prompt_version,
                 "finish_reason": finish_reason,
                 "token_usage": token_usage,
+                # ledger 数据契约（2026-09-06 GPT5.6 复核整改）：
+                # ``content`` 是 ai_execution 状态机的判定证据（_call_succeeded
+                # 要求非空正文），此前只落 content_length 导致真实成功调用
+                # 必被判 ai_empty_response；``content_length`` 保留为轻量
+                # 冗余字段供展示层使用。content 可能含材料原文，仅供
+                # 进程内状态机消费，pop 后不再外带。
+                "content": content or "",
                 "content_length": len(content or ""),
                 "error": error,
                 "timestamp": time.time(),
@@ -829,14 +836,22 @@ class ExtractorClient:
                 
         return converted
     
-    async def ai_semantic_audit(self, section_text: str, doc_hash: str) -> List[Dict[str, Any]]:
+    async def ai_semantic_audit(
+        self,
+        section_text: str,
+        doc_hash: str,
+        structured_context: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
         调用AI抽取器进行语义审计（错别字、重复、表达不当）
-        
+
         Args:
             section_text: 待检查的文本内容
             doc_hash: 文档哈希
-            
+            structured_context: 结构化事实与表格关系注入块
+                （src/services/ai_input_builder.py 构建）。仅直连回退路径
+                消费；抽取服务路径提示词在远端，不透传。
+
         Returns:
             语义问题列表，每个元素包含：
             - type: 错误类型（错别字/重复/表达不当/规范性）
@@ -848,11 +863,11 @@ class ExtractorClient:
         if not self.config.enabled:
             logger.debug("AI辅助未启用，返回空列表")
             return []
-            
+
         if not section_text.strip():
             logger.debug("输入文本为空，返回空列表")
             return []
-            
+
         try:
             result = await self._call_semantic_audit(section_text, doc_hash)
             if result:
@@ -860,17 +875,21 @@ class ExtractorClient:
             if self.config.direct_fallback:
                 try:
                     logger.warning("Semantic audit service returned empty hits, falling back to direct LLM semantic audit")
-                    return await self._direct_semantic_audit(section_text)
+                    return await self._direct_semantic_audit(
+                        section_text, structured_context=structured_context
+                    )
                 except Exception as direct_err:
                     logger.error(f"Direct semantic fallback on empty hits failed: {direct_err}")
             return result
-            
+
         except Exception as e:
             logger.error(f"AI语义审计失败: {e}")
             if self.config.direct_fallback:
                 try:
                     logger.warning("Falling back to direct LLM semantic audit")
-                    return await self._direct_semantic_audit(section_text)
+                    return await self._direct_semantic_audit(
+                        section_text, structured_context=structured_context
+                    )
                 except Exception as direct_err:
                     logger.error(f"Direct semantic fallback failed: {direct_err}")
             return []
@@ -907,9 +926,13 @@ class ExtractorClient:
         except Exception as direct_err:
             logger.warning(f"Direct full-report audit failed: {direct_err}")
 
-        # 直连失败或直连无结果时，再尝试抽取服务
+        # 直连失败或直连无结果时，再尝试抽取服务；
+        # structured_context 继续透传——直连回退同样要拿到注入块，
+        # 避免同一文档在不同回退层级出现两种输入表征。
         try:
-            return await self.ai_semantic_audit(section_text, doc_hash)
+            return await self.ai_semantic_audit(
+                section_text, doc_hash, structured_context=structured_context
+            )
         except Exception as e:
             logger.error(f"AI全量审查失败: {e}")
             return []

@@ -48,7 +48,7 @@
   - `materialize_table`（含双栏建模）、`merge_compatible`（跨页合并守卫+parse_error 记录）、`check_parent_children`（包络封装）；
   - 首批迁移规则 V33-115/117/120/202/203/220/241/243/244 经适配器委托修复版实现（单一实现两处消费）。
 - `src/engine/amount_math.py`：金额统一 Decimal，父项与 n 子项显示舍入包络 `(n+1)×0.005 万元`；包络内→`rounding_hint`（info），超出→`mismatch`。
-- legacy/shadow/structured 三态：`scripts/replay_golden_corpus.py --parse-mode`（legacy/structured/shadow 对比逐规则差异）；管线内开关经 `rules.input_mode` 配置位预留，默认 legacy。
+- legacy/shadow/structured 三态：`scripts/replay_golden_corpus.py --parse-mode`（legacy/structured/shadow 对比逐规则差异）；管线本身无解析模式开关，恒走 legacy（2026-09-06 K3 复核后修正表述：此前所写「经 `rules.input_mode` 配置位预留」与代码不符，全仓无该配置位；真正的运行时切换留待结构化迁移完成后再实现）。
 
 ## 4. AI 与环境修复（阶段 4）
 
@@ -82,7 +82,7 @@
 
 ## 7. 回归基线
 
-- 后端 pytest：**941 passed + 1 skipped**（整改前 873+1，新增 68 个测试：P0 契约 31 + 配置集成 4 + 规则矩阵 33，零回归）。
+- 后端 pytest：**1004 passed + 1 skipped**（2026-09-06 GPT5.6 复核整改后；演进：整改前 873+1 → 941+1 → K3 重跑 945+1 → K3 整改 990+1 → 本轮含真实 ledger 链路/质量门缺口/合并守卫矩阵 1004+1，零回归）。
 - 前端：18 个 jiti 单测套件全过；`npm run build` 成功。
 - E2E：**137 passed**（清理残留 dev server 后全过，1.2 分钟）。
 - 历史回放门禁：`scripts/replay_analysis.py` 职责未动；新 `replay_golden_corpus.py` 负责当前规则的真实重放。
@@ -136,8 +136,8 @@
 
 ## 8. 发布与回滚
 
-- 解析三态开关默认 **legacy**（本次止血与归因修复在 legacy 路径内生效，属缺陷修复而非行为切换）；structured/shadow 经 replay 脚本验证后由人工决定切换。
-- 回滚可切回 legacy 解析，但 AI 真实性状态、严格报告类型映射、fail-closed 质量门不得回退（安全修复）。
+- 解析三态：管线恒走 **legacy**（本次止血与归因修复在 legacy 路径内生效，属缺陷修复而非行为切换）；structured/shadow 仅 replay 脚本可比较，切换到 structured 解析需改代码并另行评估（当前无运行时开关，见 §3 修正表述）。
+- 回滚可切回 legacy 解析（解析路径本轮未改，无需回滚），但 AI 真实性状态、严格报告类型映射、fail-closed 质量门、布尔参数真值归一（§7.7）不得回退（安全修复）。
 - 本轮无新增第三方依赖、无数据库结构迁移、无 UI 重构。
 
 ## 9. 遗留与后续
@@ -145,4 +145,48 @@
 1. Golden Corpus 扩容至 ≥20 份并完成双人复核后，启用 P0 召回≥98%/精确≥95%、P1 召回≥95%/精确≥90% 正式门禁（`evaluate_golden_corpus.py` 的 check_gates 已具备）。
 2. dual 模式真实 AI 链路（成本/超时/provider 回退）需在测试/预发用 `GOVBUDGET_TEST_AI_*` 显式验证。
 3. `ps_sync.report_type` 已错分的历史数据需要一次性修正（本轮未动历史数据）。
-4. V33-202/203 等表间规则的完整结构化迁移（named-column 驱动）可按 structured_rules.py 的适配器模式继续推进。
+4. V33-202/203 等表间规则的完整结构化迁移（named-column 驱动）可按 structured_rules.py 的适配器模式继续推进；迁移覆盖率达到可切换水平时再实现管线级解析模式开关。
+
+## 9.1 K3 复核整改（2026-09-06）
+
+外部 K3 独立核查（13 提交全量复核 + 独立重跑）确认整改主体成立，另指出 2 处代码遗留与 1 处文档失实，本轮已全部修复：
+
+1. **`use_ai_assist`/`use_local_rules` 真值归一**（`api/runtime.py`）：新增 `normalize_request_flag`——bool 原样；字符串 `true/1/yes/on`、`false/0/no/off`（忽略大小写空白）归一为对应真值；其余取值 422（fail-closed）。修复两个缺陷：legacy/structured 下字符串 `"true"` 此前绕过 422 冲突拦截、被静默当 False 持久化；dual 下 `bool("false")` 恒真、字符串 `"false"` 被当成请求 AI。契约矩阵测试（`tests/test_audit_quality_p0.py` §2.1）：字符串真值 422、字符串假值/真值持久化类型与值、legacy 字符串假值关停规则 422。
+2. **`ai_semantic_audit` 回退透传 `structured_context`**（`src/engine/ai/extractor_client.py`）：签名增加可选 `structured_context`，两处 `_direct_semantic_audit` 回退（空结果/异常）与 `ai_full_report_audit` 的抽取服务回退均透传注入块——同一文档在主链路与任意回退层级输入表征一致。透传矩阵测试（`tests/test_ai_extractor_client.py`）：直连失败→抽取服务回退、抽取服务空结果/异常→直连回退、无注入块（历史调用形态）三种路径的透传契约。
+3. **交付文档表述修正**：§3「管线内开关经 `rules.input_mode` 配置位预留」与代码不符（全仓无此配置位），已改为如实描述「管线恒走 legacy，运行时切换待结构化迁移完成后实现」；§8 同步修正。
+
+验证：`tests/test_audit_quality_p0.py` + `tests/test_ai_extractor_client.py` 97 passed；全量 pytest 见 §7 基线更新。
+
+## 9.2 GPT5.6 复核整改（2026-09-06）
+
+外部 GPT5.6 独立审计（对着「完整整改计划验收」口径，结论：样张治理 GO / 整体验收 NO-GO）指出 3 个 P0、2 个 P1、1 个 P2，经逐项核实全部属实，本轮已全部修复：
+
+### P0-1 AI ledger 数据契约不一致（真实成功调用被判失败）
+`record_call` 只落 `content_length`，而 `ai_execution._call_succeeded` 要求非空 `content`——dual 模式真实成功调用必被判 `state=failed / ai_empty_response`，无法进入 succeeded；既有测试手工构造带 content 的 ledger 掩盖了该不一致。修复：ledger 同时落 `content`（状态机判定证据）与 `content_length`（展示冗余）；content 含材料原文，仅进程内状态机消费、pop 后不外带。新增真实链路测试 6 例（`record_call → pop_call_ledger → build_ai_execution`）：成功/空数组正文→succeeded、空正文→ai_empty_response、截断→ai_truncated_response、异常→failed、抽取服务 hits→succeeded。
+
+### P0-2 质量门假绿 no_findings 三缺口
+1. **缺数据规则静默记 pass**：V33-115/117/119/120/121 在表缺失/行宽无法判定时 `return []` 被 pipeline 记 pass。修复：改抛 `RuleDeferred`（insufficient_data），V33-120 三表全缺同样处理。
+2. **门禁缺口**：`_evaluate_quality_gate` 新增 `rules_insufficient_data` 原因码；`rule_execution_summary` 缺失/为空时无发现不再允许 no_findings（`rules_not_executed` 兜底）；`fact_materialization_empty` 从"仅标 parser_quality=poor"升级为独立 review reason 阻断完成态。
+3. 旧测试以「无摘要+无发现→done」为期望的 4 个用例随契约收紧更新（test_quality_gate / test_evidence_completeness / test_pipeline_stage_progress_integration / test_pdf_parse_isolation_and_backup 的规则桩补齐 build_issues_payload 契约的 summary 字段）。
+
+### P0-3 structured 路径诚实化
+1. **merge_compatible 只记错不处置**：列宽不一致时直接 append（错位合并不重映射）。修复：新增 `_remap_continuation_rows`（尾部对齐显式重映射，与 V33-120 运行时 shift 同源），有共同语义列时重映射后合并并留 `continuation_width_remapped`；无共同语义列时拒绝合并（宁可少合并也不错位合并）。新测试 `tests/test_structured_merge_rules.py` 6 例锁定契约。
+2. **structured_ready 误导**：此前"迁移列表非空即 ready"（9/52 条≈17% 也报 true）。修复：以迁移覆盖率判定（`STRUCTURED_READY_MIN_COVERAGE=0.9`），如实输出 `structured_ready=false, structured_coverage=0.1731` + ready_note 说明。§7.1 历史回放的 `routing_changed_docs` 字典重复键（计数被列表覆盖）一并修复，拆为 `routing_changed_top_docs`。
+3. 需要说明：structured 与 legacy 的两套表格模型统一、`FiscalFactMaterializer` 去数据库依赖、跨页列重映射的运行时消费，属宏观《完整整改计划》Phase 3 的未完成项，不在本轮修复范围（见 §9 遗留 4）。
+
+### P1-4 Golden 评估器只按 rule+page 匹配
+"规则和页码正确但正文完全无关、evidence 为空"的 finding 也会被判命中。修复：replay 序列化带全量 `message` 与 `evidence_text`（统一 `_serialize_finding`）；评估器 `match_annotation` 增加内容重叠校验（数字 token 交集优先，其次 ≥6 字归一化片段，重叠度最高者优先消费）。实测：GPT5.6 的复现场景（无关正文 finding）被正确拒绝；样张 replay+evaluate 重跑 GATE-PASS（TP=3 FP=0 FN=0，全指标 1.0）。
+
+### P1-5 认证密钥兜底三处不一致
+`package.json` dev:backend 与 `scripts/next-dev.cjs` 各自硬编码 `dev-local-key`、`app/lib/backendAuth.ts` 兜底 `change_me_to_a_strong_secret`——分别启动前后端时与后端实际 key 不一致会静默 403。修复：三处兜底全部移除，统一从根 .env（GOVBUDGET_API_KEY / BACKEND_API_KEY）解析，缺 key 显式失败（fail-closed，与后端安全模块行为对齐）。已核实根 .env 与 app/.env.local 的 key 一致；localAuth.ts 中 `change_me_to_a_strong_secret` 属弱密码黑名单（防呆），保留。
+
+### P2-6 工程收尾
+Ruff 两错修复（`replay_golden_corpus.py` Tuple 未导入、routing_changed_docs 重复键）；全部改动随本轮两个 commit 提交，不再留未提交工作树。
+
+### 验证（2026-09-06）
+- 全量 pytest：**1004 passed + 1 skipped**（K3 轮 990 → 本轮新增 14 测试，零回归）；
+- 前端 18 个 jiti 套件全过；
+- replay+evaluate 重跑：GATE-PASS（TP=3 FP=0 FN=0、hint 4/4、severity/page/locatable 全 1.0）；
+- shadow replay：`structured_ready=false（coverage 17.3%）` 如实标注，legacy 7 条/structured 4 条差异逐规则列出；
+- Ruff：涉及文件 All checks passed；
+- e2e 137 项未重跑（前端仅改 backendAuth.ts 移除兜底 key，本地 .env.local 已配置一致 key，行为不变；`test:e2e` 包装命令的 output/e2e-webserver.log EPERM 为已知环境问题，直连临时服务可全过——GPT5.6 本轮已实测 137 passed）。

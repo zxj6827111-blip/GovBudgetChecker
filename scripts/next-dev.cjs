@@ -51,10 +51,16 @@ Object.entries(rootEnv).forEach(([key, value]) => {
 
 process.env.GOVBUDGET_AUTH_ENABLED =
   process.env.GOVBUDGET_AUTH_ENABLED || "true";
-process.env.GOVBUDGET_API_KEY =
-  process.env.GOVBUDGET_API_KEY ||
-  process.env.BACKEND_API_KEY ||
-  "dev-local-key";
+// 密钥统一从根 .env 读取（GOVBUDGET_API_KEY / BACKEND_API_KEY），不再保留
+// 'dev-local-key' 硬编码兜底——与后端安全模块的 fail-closed 行为对齐：
+// 认证开启但 key 缺失时让请求带空 key 失败并暴露配置问题，而不是静默
+// 用错误 key 运行（GPT5.6 P1-5：分别启动前后端时旧兜底导致 403）。
+// 注意：rootEnv 在上方已注入 process.env（未定义时），这里再兜一次
+// 是为了覆盖 process.env 里存在空字符串的场景。
+if (!process.env.GOVBUDGET_API_KEY) {
+  process.env.GOVBUDGET_API_KEY =
+    rootEnv.GOVBUDGET_API_KEY || rootEnv.BACKEND_API_KEY || "";
+}
 process.env.GOVBUDGET_RATE_LIMIT = process.env.GOVBUDGET_RATE_LIMIT || "2000";
 
 if (!skipClean) {

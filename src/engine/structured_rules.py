@@ -253,17 +253,57 @@ def check_parent_children(
     return classify_amount_diff(parent, child_sum, n_children=max(len(children), 1))
 
 
+def _remap_continuation_rows(
+    rows: List[ParsedRow], target_width: int
+) -> List[ParsedRow]:
+    """把续页行重映射到基准列宽（GPT5.6 P0-3）。
+
+    跨页列宽漂移的典型形态：续页把前置编码列（类|款|项）合并成一列，
+    行宽变窄、尾部金额列相对位置不变。处置与 V33-120 的运行时 shift
+    同源：``src = j + (len(row) - target_width)``，窄行尾部列按"行宽差"
+    对齐到基准宽度的尾部索引；前置编码列不参与金额对齐。
+    """
+    remapped: List[ParsedRow] = []
+    for row in rows:
+        shift = target_width - len(row.cells)
+        if shift == 0:
+            remapped.append(row)
+            continue
+        first_page = row.cells[0].page if row.cells else 0
+        cells: List[ParsedCell] = [ParsedCell(page=first_page) for _ in range(target_width)]
+        for j, cell in enumerate(row.cells):
+            src = j + shift
+            if 0 <= src < target_width:
+                cells[src] = cell
+        remapped.append(
+            ParsedRow(
+                row_role=row.row_role,
+                code=row.code,
+                code_level=row.code_level,
+                label=row.label,
+                confidence=row.confidence,
+                cells=cells,
+            )
+        )
+    return remapped
+
+
 def merge_compatible(base: ParsedTable, continuation: ParsedTable) -> bool:
     """跨页合并守卫：表头签名（语义列）兼容才允许合并。
 
-    列宽不一致时先做逻辑列重映射（见 V33-120 的实现）；无法映射时
-    返回 False 并在 base.parse_errors 记录 parse_error 供质量门消费。
+    列宽不一致时（GPT5.6 P0-3）：
+    - 有共同语义列 → 按基准宽度做显式列重映射（尾部对齐，见
+      ``_remap_continuation_rows``），重映射记入 parse_errors 供质量门/
+      评测消费，随后合并；
+    - 无共同语义列（表头不兼容）→ 拒绝合并并 parse_error 留痕，
+      续表保持独立（宁可少合并也不错位合并）。
     """
     if not continuation.rows:
         return True
     base_keys = set(base.named_columns)
     cont_keys = set(continuation.named_columns)
-    if base_keys and cont_keys and not (base_keys & cont_keys):
+    shared = base_keys & cont_keys
+    if base_keys and cont_keys and not shared:
         base.parse_errors.append(
             f"continuation_header_incompatible: {sorted(cont_keys)}"
         )
@@ -271,9 +311,19 @@ def merge_compatible(base: ParsedTable, continuation: ParsedTable) -> bool:
     base_widths = {len(r.cells) for r in base.rows}
     cont_widths = {len(r.cells) for r in continuation.rows}
     if base_widths and cont_widths and not (base_widths & cont_widths):
+        # 列宽族不重叠：必须重映射后才能合并，否则金额列错位
+        if not shared:
+            base.parse_errors.append(
+                "continuation_width_incompatible_no_shared_columns: "
+                f"base={sorted(base_widths)} cont={sorted(cont_widths)}"
+            )
+            return False
+        base_width = max(base_widths)
         base.parse_errors.append(
-            f"continuation_width_remapped: base={sorted(base_widths)} cont={sorted(cont_widths)}"
+            f"continuation_width_remapped: base={sorted(base_widths)} "
+            f"cont={sorted(cont_widths)}"
         )
+        continuation.rows = _remap_continuation_rows(continuation.rows, base_width)
     base.rows.extend(continuation.rows)
     base.page_span = (min(base.page_span[0], continuation.page_span[0]),
                       max(base.page_span[1], continuation.page_span[1]))

@@ -43,6 +43,22 @@ GOOD_PAGES = {
     "page_coverage": 1.0,
 }
 
+# 规则执行摘要桩（GPT5.6 P0-2 后 no_findings 需要执行证据）：
+# 所有适用规则已执行、无未决项。
+FULLY_EXECUTED_SUMMARY = {
+    "total_rules": 10,
+    "executed": 10,
+    "pass": 10,
+    "fail": 0,
+    "not_applicable": 0,
+    "insufficient_data": 0,
+    "parse_error": 0,
+    "execution_error": 0,
+    "unresolved_total": 0,
+    "failed_rules": [],
+    "unresolved_rules": [],
+}
+
 
 def _reason_codes(gate: Dict[str, Any]) -> List[str]:
     return [reason["code"] for reason in gate["review_reasons"]]
@@ -334,6 +350,9 @@ def test_gate_stays_done_when_no_degradation() -> None:
         ai_degraded=False,
         issue_total=0,
         evidence_degraded_count=0,
+        # 摘要缺失时 no_findings 会被 rules_not_executed 拦下（GPT5.6 P0-2），
+        # 对照组必须带"规则已全部执行"的摘要才能验证"仅证据维度"的行为。
+        rule_execution_summary=FULLY_EXECUTED_SUMMARY,
     )
     assert gate["status"] == "done"
     assert gate["analysis_conclusion"] == "no_findings"

@@ -733,6 +733,40 @@ def normalize_report_kind(doc_type: Optional[str], filename: str = "") -> str:
     return "unknown"
 
 
+def normalize_request_flag(value: Any, name: str) -> Optional[bool]:
+    """请求布尔参数真值归一（分析请求契约，2026-09-06 K3 复核整改）。
+
+    背景：start_analysis 此前用 ``is True`` 身份判断，调用方传字符串
+    "true"/"1" 会绕过 422 冲突拦截、被静默当作 False 持久化；dual 分支
+    的 ``bool()`` 又会把 "false" 扭曲成 True（请求 AI）。归一规则：
+
+    - 缺省/None → None（未指定，由 mode 默认值决定）；
+    - bool → 原样；
+    - "true"/"1"/"yes"/"on"、"false"/"0"/"no"/"off"（忽略大小写与空白）
+      → 对应真值；
+    - 其余取值 → 422（fail-closed：不静默猜测调用方意图）。
+
+    status.json 持久化的布尔值均由本函数产出，下游 ``bool()`` 不会再
+    遇到字符串。
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"true", "1", "yes", "on"}:
+            return True
+        if text in {"false", "0", "no", "off"}:
+            return False
+    raise HTTPException(
+        status_code=422,
+        # 不回显调用方原始值：既是日志安全要求，也避免把任意请求输入
+        # 拼进 422 响应体。错误类型信息足以让调用方定位问题参数。
+        detail=f"invalid boolean parameter '{name}': expected true/false",
+    )
+
+
 def normalize_doc_type(
     doc_type: Optional[str],
     filename: str = "",
@@ -2483,6 +2517,8 @@ async def start_analysis(
     # - legacy/structured 是规则模式别名，不请求 AI：显式 use_ai_assist=true
     #   属冲突参数，返回 422，不再静默忽略（此前样张就是这样
     #   "看似请求了 AI 实则没跑"）；
+    # - 布尔参数统一经 normalize_request_flag 真值归一（字符串 "true"/"1"
+    #   与 True 等价、未知取值 422），杜绝 is True 身份判断被字符串绕过；
     # - legacy 必须启用本地规则（否则无任何检查能力）；
     # - dual + use_ai_assist=true 才运行 AI；dual 默认请求 AI。
     mode = str(body.get("mode", "legacy")).strip().lower() or "legacy"
@@ -2491,8 +2527,12 @@ async def start_analysis(
             status_code=422,
             detail=f"invalid mode '{mode}': must be 'legacy', 'dual' or 'structured'",
         )
+    ai_assist_flag = normalize_request_flag(body.get("use_ai_assist"), "use_ai_assist")
+    local_rules_flag = normalize_request_flag(
+        body.get("use_local_rules"), "use_local_rules"
+    )
     if mode in {"legacy", "structured"}:
-        if body.get("use_ai_assist") is True:
+        if ai_assist_flag is True:
             raise HTTPException(
                 status_code=422,
                 detail=(
@@ -2500,7 +2540,7 @@ async def start_analysis(
                     "AI; use mode='dual' with use_ai_assist=true to request AI assist"
                 ),
             )
-        if mode == "legacy" and body.get("use_local_rules") is False:
+        if mode == "legacy" and local_rules_flag is False:
             raise HTTPException(
                 status_code=422,
                 detail=(
@@ -2518,10 +2558,8 @@ async def start_analysis(
                     "enable it or use mode='legacy'"
                 ),
             )
-        use_ai_assist = (
-            True if body.get("use_ai_assist") is None else bool(body.get("use_ai_assist"))
-        )
-    use_local_rules = bool(body.get("use_local_rules", True))
+        use_ai_assist = True if ai_assist_flag is None else ai_assist_flag
+    use_local_rules = True if local_rules_flag is None else local_rules_flag
     fiscal_year = (
         body.get("fiscal_year")
         if body.get("fiscal_year") is not None
@@ -2669,6 +2707,8 @@ async def reanalyze_job(
         # 请求契约：legacy 不请求 AI，只有 dual 才沿用/默认请求 AI；
         # 否则旧任务（legacy + use_ai_assist=true 旧默认值）重分析会直接 422。
         # structured 模式保留原值（历史行为，结构化入库不消耗该标志）。
+        # 历史 status.json 均为布尔值（分析请求经 normalize_request_flag
+        # 归一后持久化），此处 bool() 是防御性收尾而非真值解析。
         resolved_mode = str(body["mode"])
         if resolved_mode == "dual":
             body["use_ai_assist"] = bool(source_status.get("use_ai_assist", True))

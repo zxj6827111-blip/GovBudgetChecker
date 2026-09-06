@@ -29,6 +29,23 @@ GOOD_PAGES = {
     "page_coverage": 1.0,
 }
 
+# 规则执行摘要桩：所有适用规则已执行且无未决项（GPT5.6 P0-2 后，
+# no_findings 必须有"规则已全部执行"的证据，摘要缺失会被判
+# rules_not_executed 转人工复核）。
+FULLY_EXECUTED_SUMMARY = {
+    "total_rules": 10,
+    "executed": 10,
+    "pass": 10,
+    "fail": 0,
+    "not_applicable": 0,
+    "insufficient_data": 0,
+    "parse_error": 0,
+    "execution_error": 0,
+    "unresolved_total": 0,
+    "failed_rules": [],
+    "unresolved_rules": [],
+}
+
 
 def _reason_codes(gate):
     return [reason["code"] for reason in gate["review_reasons"]]
@@ -57,6 +74,7 @@ def test_gate_pass_without_findings_yields_no_findings_not_bare_done():
         ai_requested=True,
         ai_degraded=False,
         issue_total=0,
+        rule_execution_summary=dict(FULLY_EXECUTED_SUMMARY),
     )
     assert gate["status"] == "done"
     assert gate["analysis_conclusion"] == "no_findings"
@@ -168,7 +186,10 @@ def test_coverage_threshold_is_configurable(monkeypatch):
     gated = _evaluate_quality_gate(assessment, "budget", 2025, False, False, 0)
     assert gated["status"] == "review_required"
     monkeypatch.setenv("PAGE_COVERAGE_MIN_RATIO", "0.85")
-    passed = _evaluate_quality_gate(assessment, "budget", 2025, False, False, 0)
+    passed = _evaluate_quality_gate(
+        assessment, "budget", 2025, False, False, 0,
+        rule_execution_summary=dict(FULLY_EXECUTED_SUMMARY),
+    )
     assert passed["status"] == "done"
 
 

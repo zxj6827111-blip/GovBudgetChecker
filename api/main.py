@@ -23,6 +23,7 @@ if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 
 from src.engine.pipeline import build_document, build_issues_payload
+from src.engine.rule_outcome import STATUS_INSUFFICIENT_DATA
 from src.services.evidence_guard import (
     apply_evidence_completeness,
     count_formal_findings,
@@ -600,6 +601,23 @@ def _evaluate_quality_gate(
                 "table_codes": ambiguous_tables[:20],
             }
         )
+    # 已识别到表格却未生成任何结构化 facts：解析/列映射存在系统性问题，
+    # 仅标 parser_quality=poor 不足以阻断"完成"态——必须转人工复核
+    # （GPT5.6 P0-2：fact_materialization_empty 不得允许假绿完成）。
+    facts_empty = any(
+        str(item.get("type") or "") == "fact_materialization_empty"
+        for item in ingest_review_items
+    )
+    if facts_empty:
+        review_reasons.append(
+            {
+                "code": "fact_materialization_empty",
+                "message": (
+                    "已识别到表格但未成功生成结构化 facts（列映射或数值单元格"
+                    "解析失败），基于表格的勾稽与入库未实际完成，需人工复核"
+                ),
+            }
+        )
 
     # ---- 规则证据完整性（此前只有降级数进门禁，不完整数被丢弃） ----
     if isinstance(evidence_completeness, dict):
@@ -619,6 +637,11 @@ def _evaluate_quality_gate(
     if isinstance(rule_execution_summary, dict) and rule_execution_summary:
         error_rules = int(rule_execution_summary.get("execution_error") or 0)
         parse_error_rules = int(rule_execution_summary.get("parse_error") or 0)
+        # insufficient_data 同样属"未得出可信结论"：数据缺失的规则被
+        # 静默记 pass 是假绿 no_findings 的来源之一（GPT5.6 P0-2）。
+        insufficient_rules = int(
+            rule_execution_summary.get("insufficient_data") or 0
+        )
         if error_rules + parse_error_rules > 0:
             review_reasons.append(
                 {
@@ -632,6 +655,25 @@ def _evaluate_quality_gate(
                     )[:20],
                 }
             )
+        if insufficient_rules > 0:
+            review_reasons.append(
+                {
+                    "code": "rules_insufficient_data",
+                    "message": (
+                        f"有 {insufficient_rules} 条规则因数据缺失/解析歧义无法得出结论"
+                        "（如表缺失、行宽无法对齐），这些检查项未实际覆盖，需人工复核"
+                    ),
+                    "unresolved_rules": [
+                        item
+                        for item in (
+                            rule_execution_summary.get("unresolved_rules") or []
+                        )
+                        if isinstance(item, dict)
+                        and str(item.get("status") or "")
+                        == STATUS_INSUFFICIENT_DATA
+                    ][:20],
+                }
+            )
 
     # ---- 报告类型一致性 ----
     report_type_reason = _report_type_mismatch_reason(
@@ -643,23 +685,32 @@ def _evaluate_quality_gate(
         review_reasons.append(report_type_reason)
 
     # ---- no_findings 门禁：无发现时要求规则全部执行 ----
-    if (
-        issue_total == 0
-        and isinstance(rule_execution_summary, dict)
-        and rule_execution_summary
-    ):
-        total_rules = int(rule_execution_summary.get("total_rules") or 0)
-        executed_rules = int(rule_execution_summary.get("executed") or 0)
-        if total_rules > 0 and executed_rules < total_rules:
+    # 摘要缺失/为空同样是"证据不足"：规则执行摘要只要不是非空 dict，
+    # 就无法证明规则真的执行过，不允许输出 no_findings（GPT5.6 P0-2）。
+    if issue_total == 0:
+        if not (isinstance(rule_execution_summary, dict) and rule_execution_summary):
             review_reasons.append(
                 {
                     "code": "rules_not_executed",
                     "message": (
-                        f"适用规则中仅 {executed_rules}/{total_rules} 条得出结论，"
-                        "不允许在规则未执行完毕时输出 no_findings"
+                        "无问题发现但缺少规则执行摘要，无法证明适用规则已执行，"
+                        "不允许输出 no_findings"
                     ),
                 }
             )
+        else:
+            total_rules = int(rule_execution_summary.get("total_rules") or 0)
+            executed_rules = int(rule_execution_summary.get("executed") or 0)
+            if total_rules > 0 and executed_rules < total_rules:
+                review_reasons.append(
+                    {
+                        "code": "rules_not_executed",
+                        "message": (
+                            f"适用规则中仅 {executed_rules}/{total_rules} 条得出结论，"
+                            "不允许在规则未执行完毕时输出 no_findings"
+                        ),
+                    }
+                )
 
     if review_reasons:
         status = JobStatus.REVIEW_REQUIRED.value

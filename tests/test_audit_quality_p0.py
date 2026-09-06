@@ -195,6 +195,110 @@ def test_ai_gate_reasons_not_run_and_failed():
     assert quality_gate_ai_reasons({"requested": False, "state": AI_STATE_NOT_REQUESTED}) == []
 
 
+# ---------------------------------------------------------------------------
+# 1.1 真实 ledger 链路（2026-09-06 GPT5.6 复核整改）
+#
+# 缺陷背景：record_call 只落 content_length，ai_execution._call_succeeded
+# 要求 content 非空——真实成功调用必被判 ai_empty_response，dual 模式
+# 无法进入 succeeded。上方状态机测试手工构造带 content 的 ledger，
+# 掩盖了生产接口不一致。以下测试走 record_call → pop_call_ledger →
+# build_ai_execution 真实链路，锁定契约。
+# ---------------------------------------------------------------------------
+
+
+def _extractor_client():
+    from src.engine.ai.extractor_client import ExtractorClient
+
+    return ExtractorClient()
+
+
+def test_real_ledger_chain_successful_call_is_succeeded():
+    """真实 record_call 成功留痕（JSON 数组正文）→ 状态机必须判 succeeded。"""
+    client = _extractor_client()
+    client.record_call(
+        "zhipu",
+        "glm-4.5-flash",
+        prompt_version="audit-v1",
+        finish_reason="stop",
+        token_usage={"total_tokens": 1234},
+        content='[{"problem_type":"repeat_word"}]',
+    )
+    record = build_ai_execution(True, call_ledger=client.pop_call_ledger())
+    assert record["state"] == AI_STATE_SUCCEEDED, record
+    assert record["provider"] == "zhipu"
+    assert record["model"] == "glm-4.5-flash"
+    assert ai_execution_is_successful(record) is True
+
+
+def test_real_ledger_chain_empty_json_array_is_succeeded():
+    """模型诚实回答「未发现问题」（正文 '[]'）：非空字符串即真实调用证据。"""
+    client = _extractor_client()
+    client.record_call(
+        "zhipu",
+        "glm-4.5-flash",
+        finish_reason="stop",
+        content="[]",
+    )
+    record = build_ai_execution(True, call_ledger=client.pop_call_ledger())
+    assert record["state"] == AI_STATE_SUCCEEDED, record
+
+
+def test_real_ledger_chain_empty_content_is_failed():
+    """真实 record_call 空正文（推理耗尽）→ 状态机必须判 failed/ai_empty_response。"""
+    client = _extractor_client()
+    client.record_call(
+        "zhipu",
+        "glm-4.5-flash",
+        finish_reason="stop",
+        content="",
+    )
+    record = build_ai_execution(True, call_ledger=client.pop_call_ledger())
+    assert record["state"] == AI_STATE_FAILED
+    assert record["error_code"] == "ai_empty_response"
+
+
+def test_real_ledger_chain_truncated_is_failed():
+    """真实 record_call 截断（finish_reason=length）→ failed/ai_truncated_response。"""
+    client = _extractor_client()
+    client.record_call(
+        "zhipu",
+        "glm-4.5-flash",
+        finish_reason="length",
+        content='[{"problem_type":',
+    )
+    record = build_ai_execution(True, call_ledger=client.pop_call_ledger())
+    assert record["state"] == AI_STATE_FAILED
+    assert record["error_code"] == "ai_truncated_response"
+
+
+def test_real_ledger_chain_error_call_is_failed():
+    """真实 record_call 异常留痕 → failed，error_code 取错误文本。"""
+    client = _extractor_client()
+    client.record_call(
+        "zhipu",
+        "glm-4.5-flash",
+        error="timeout",
+    )
+    record = build_ai_execution(True, call_ledger=client.pop_call_ledger())
+    assert record["state"] == AI_STATE_FAILED
+    assert record["error_code"] == "timeout"
+
+
+def test_real_ledger_chain_extractor_service_hits_counts_as_evidence():
+    """抽取服务路径：hits 非空即以 json.dumps(hits) 作为 content 留痕。"""
+    client = _extractor_client()
+    client.record_call(
+        "extractor_service",
+        "remote-model",
+        prompt_version="semantic_audit",
+        token_usage={"total_tokens": 99},
+        content='[{"hit":1}]',
+    )
+    record = build_ai_execution(True, call_ledger=client.pop_call_ledger())
+    assert record["state"] == AI_STATE_SUCCEEDED, record
+    assert record["provider"] == "extractor_service"
+
+
 @pytest.mark.asyncio
 async def test_legacy_pipeline_records_ai_not_run_for_stale_ai_flag(tmp_path, monkeypatch):
     """旧任务 status.json 残留 legacy + use_ai_assist=true：如实记 not_run 并转复核。"""
@@ -349,6 +453,131 @@ async def test_start_analysis_dual_defaults_to_ai_requested(tmp_path, monkeypatc
     assert status["use_ai_assist"] is True
 
 
+# ---------------------------------------------------------------------------
+# 2.1 布尔参数真值归一（2026-09-06 K3 复核整改）
+#
+# 缺陷背景：start_analysis 此前用 ``is True`` 身份判断，字符串 "true"/"1"
+# 会绕过 legacy/structured 的 422 冲突拦截、被静默当作 False 持久化；
+# dual 分支的 ``bool()`` 又会把 "false" 扭曲成 True。以下矩阵锁定
+# normalize_request_flag 的契约：字符串真值与布尔等价、未知取值 422。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        (None, None),
+        (True, True),
+        (False, False),
+        ("true", True),
+        (" True ", True),
+        ("TRUE", True),
+        ("1", True),
+        ("yes", True),
+        ("on", True),
+        ("false", False),
+        ("0", False),
+        ("no", False),
+        ("off", False),
+    ],
+)
+def test_normalize_request_flag_truthy_matrix(raw, expected):
+    assert runtime.normalize_request_flag(raw, "use_ai_assist") == expected
+
+
+@pytest.mark.parametrize("raw", ["", "  ", "2", "enable", "y", "n", "null", 5, 1, 0, [], {}])
+def test_normalize_request_flag_rejects_unknown_values(raw):
+    with pytest.raises(HTTPException) as excinfo:
+        runtime.normalize_request_flag(raw, "use_ai_assist")
+    assert excinfo.value.status_code == 422
+    assert "use_ai_assist" in str(excinfo.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("truthy", [True, "true", "1", "yes", "on"])
+async def test_start_analysis_string_truthy_conflicts_are_rejected(
+    tmp_path, monkeypatch, truthy
+):
+    """字符串 "true"/"1" 请求 AI 在 legacy/structured 下必须同样 422。"""
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    monkeypatch.setattr(runtime, "_pipeline_runner", _dummy_runner)
+    monkeypatch.setattr(runtime, "_job_queue", _DummyQueue())
+    monkeypatch.setattr(runtime, "persist_analysis_job_snapshot", _fake_persist)
+    monkeypatch.setattr(runtime, "get_settings", lambda: _settings_with_dual(True))
+
+    _prepare_job(tmp_path)
+    for mode in ("legacy", "structured"):
+        with pytest.raises(HTTPException) as excinfo:
+            await runtime.start_analysis(
+                "job-contract", {"mode": mode, "use_ai_assist": truthy}
+            )
+        assert excinfo.value.status_code == 422
+        assert "conflicting analysis parameters" in str(excinfo.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("falsy", [False, "false", "0", "no", "off"])
+async def test_start_analysis_string_falsy_persists_as_false(
+    tmp_path, monkeypatch, falsy
+):
+    """dual 下字符串假值必须归一为 False 持久化，不能被 bool() 扭曲成 True。"""
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    monkeypatch.setattr(runtime, "_pipeline_runner", _dummy_runner)
+    monkeypatch.setattr(runtime, "_job_queue", _DummyQueue())
+    monkeypatch.setattr(runtime, "persist_analysis_job_snapshot", _fake_persist)
+    monkeypatch.setattr(runtime, "get_settings", lambda: _settings_with_dual(True))
+
+    _prepare_job(tmp_path)
+    await runtime.start_analysis(
+        "job-contract", {"mode": "dual", "use_ai_assist": falsy}
+    )
+    status = runtime.read_json_file(tmp_path / "job-contract" / "status.json")
+    assert status["use_ai_assist"] is False
+    assert isinstance(status["use_ai_assist"], bool)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("truthy", [True, "true", "1"])
+async def test_start_analysis_dual_string_truthy_persists_as_true(
+    tmp_path, monkeypatch, truthy
+):
+    """dual 下字符串真值必须归一为 True 持久化（此前 "true" 会被静默当 False）。"""
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    monkeypatch.setattr(runtime, "_pipeline_runner", _dummy_runner)
+    monkeypatch.setattr(runtime, "_job_queue", _DummyQueue())
+    monkeypatch.setattr(runtime, "persist_analysis_job_snapshot", _fake_persist)
+    monkeypatch.setattr(runtime, "get_settings", lambda: _settings_with_dual(True))
+
+    _prepare_job(tmp_path)
+    await runtime.start_analysis(
+        "job-contract", {"mode": "dual", "use_ai_assist": truthy}
+    )
+    status = runtime.read_json_file(tmp_path / "job-contract" / "status.json")
+    assert status["use_ai_assist"] is True
+    assert isinstance(status["use_ai_assist"], bool)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("falsy", [False, "false", "0"])
+async def test_start_analysis_legacy_string_falsy_local_rules_conflict(
+    tmp_path, monkeypatch, falsy
+):
+    """legacy 下字符串 "false" 关停本地规则必须 422，不能静默放行。"""
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    monkeypatch.setattr(runtime, "_pipeline_runner", _dummy_runner)
+    monkeypatch.setattr(runtime, "_job_queue", _DummyQueue())
+    monkeypatch.setattr(runtime, "persist_analysis_job_snapshot", _fake_persist)
+    monkeypatch.setattr(runtime, "get_settings", lambda: _settings_with_dual(True))
+
+    _prepare_job(tmp_path)
+    with pytest.raises(HTTPException) as excinfo:
+        await runtime.start_analysis(
+            "job-contract", {"mode": "legacy", "use_local_rules": falsy}
+        )
+    assert excinfo.value.status_code == 422
+    assert "use_local_rules" in str(excinfo.value.detail)
+
+
 class _SettingsStub:
     def __init__(self, dual_enabled: bool):
         self._dual_enabled = dual_enabled
@@ -464,7 +693,75 @@ def test_gate_no_findings_blocked_when_rules_not_executed():
     assert gate["analysis_conclusion"] == "incomplete"
 
 
-def test_gate_no_findings_allowed_when_all_rules_executed():
+# ---------------------------------------------------------------------------
+# 质量门三缺口（2026-09-06 GPT5.6 P0-2）
+#
+# 1. insufficient_data 不触发人工复核（此前只有 parse/execution_error 进门禁）；
+# 2. rule_execution_summary=None 仍可能生成 no_findings（此前摘要缺失时
+#    no_findings 门禁整体跳过）；
+# 3. fact_materialization_empty 只把 parser_quality 标 poor，不阻断完成。
+# ---------------------------------------------------------------------------
+
+
+def test_gate_insufficient_data_gets_own_reason():
+    """insufficient_data>0 必须触发 rules_insufficient_data 并转人工复核。"""
+    summary = dict(FULL_EXECUTED_SUMMARY)
+    summary.update(
+        {
+            "executed": 9,
+            "pass": 9,
+            "insufficient_data": 1,
+            "unresolved_total": 1,
+            "unresolved_rules": [
+                {
+                    "rule_id": "V33-115",
+                    "status": "insufficient_data",
+                    "detail": "表缺失或无可解析行: 收入支出决算总表",
+                },
+            ],
+        }
+    )
+    gate = _evaluate_quality_gate(
+        **_base_gate_kwargs(issue_total=2, rule_execution_summary=summary)
+    )
+    assert "rules_insufficient_data" in _reason_codes(gate)
+    assert gate["status"] == "review_required"
+
+
+def test_gate_no_findings_blocked_when_summary_missing():
+    """无发现且规则执行摘要缺失：无法证明规则执行过，禁止 no_findings。"""
+    gate = _evaluate_quality_gate(
+        **_base_gate_kwargs(rule_execution_summary=None)
+    )
+    assert "rules_not_executed" in _reason_codes(gate)
+    assert gate["status"] == "review_required"
+    assert gate["analysis_conclusion"] == "incomplete"
+
+    gate_empty = _evaluate_quality_gate(
+        **_base_gate_kwargs(rule_execution_summary={})
+    )
+    assert "rules_not_executed" in _reason_codes(gate_empty)
+    assert gate_empty["analysis_conclusion"] == "incomplete"
+
+
+def test_gate_fact_materialization_empty_blocks_done():
+    """已识别表格但 facts 全空：parser_quality=poor 之外必须转人工复核。"""
+    gate = _evaluate_quality_gate(
+        **_base_gate_kwargs(
+            structured_ingest={
+                "review_items": [
+                    {
+                        "id": "facts:none",
+                        "type": "fact_materialization_empty",
+                        "severity": "error",
+                    }
+                ]
+            }
+        )
+    )
+    assert "fact_materialization_empty" in _reason_codes(gate)
+    assert gate["status"] == "review_required"
+    assert gate["analysis_conclusion"] == "incomplete"
     gate = _evaluate_quality_gate(
         **_base_gate_kwargs(rule_execution_summary=dict(FULL_EXECUTED_SUMMARY))
     )

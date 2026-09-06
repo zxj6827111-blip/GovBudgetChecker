@@ -64,7 +64,27 @@ def _prepare_success_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: 
     monkeypatch.setattr(
         pipeline_mod,
         "run_rules_in_process",
-        AsyncMock(return_value={"issues": {"all": [], "error": [], "warn": [], "info": []}}),
+        # 桩必须遵守 build_issues_payload 契约：无发现也要带"规则已全部
+        # 执行"的摘要，否则质量门按 rules_not_executed 转复核（GPT5.6
+        # P0-2 后摘要缺失不再允许 no_findings）。
+        AsyncMock(
+            return_value={
+                "issues": {"all": [], "error": [], "warn": [], "info": []},
+                "rule_execution_summary": {
+                    "total_rules": 1,
+                    "executed": 1,
+                    "pass": 1,
+                    "fail": 0,
+                    "not_applicable": 0,
+                    "insufficient_data": 0,
+                    "parse_error": 0,
+                    "execution_error": 0,
+                    "unresolved_total": 0,
+                    "failed_rules": [],
+                    "unresolved_rules": [],
+                },
+            }
+        ),
     )
     monkeypatch.setattr(pipeline_mod, "persist_analysis_job_snapshot", AsyncMock(return_value=True))
     monkeypatch.setattr(

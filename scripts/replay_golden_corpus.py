@@ -32,13 +32,18 @@ import time
 import unicodedata
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 CORPUS_DIR = ROOT / "corpus"
 OUTPUT_DIR = ROOT / "outputs" / "golden_replay"
+
+# structured 解析视为"可切换（ready）"的最低规则覆盖率（GPT5.6 P0-3）：
+# 低于该值时 structured 只能作为 shadow 对比的中间态，不得当作可独立
+# 交付的解析路径。当前 9/52 ≈ 17%，远未达到。
+STRUCTURED_READY_MIN_COVERAGE = 0.9
 
 
 def sha256_file(path: Path) -> str:
@@ -74,6 +79,24 @@ def load_page_tables(pdf_path: Path) -> List[List[Any]]:
     return tables
 
 
+def _serialize_finding(issue: Any) -> Dict[str, Any]:
+    """finding 统一序列化：带 message 全文与 evidence_text（GPT5.6 P1-4）。
+
+    此前只落 rule/severity/message[:200]/page，评估器只能按规则+页码匹配，
+    "规则和页码正确但正文完全无关"的 finding 也会被判为命中。带上
+    evidence_text（规则侧的原文证据）与完整 message 后，评估器可以
+    做内容重叠校验。
+    """
+    location = getattr(issue, "location", {}) or {}
+    return {
+        "rule": str(getattr(issue, "rule", "")),
+        "severity": str(getattr(issue, "severity", "")),
+        "message": str(getattr(issue, "message", "")),
+        "page": location.get("page"),
+        "evidence_text": str(getattr(issue, "evidence_text", "") or ""),
+    }
+
+
 def run_legacy_rules(page_texts: List[str], page_tables: List[Any], report_kind: str) -> Dict[str, Any]:
     """当前规则路径（与生产 legacy 完全同源）。"""
     from src.engine.pipeline import build_document, run_rules_with_outcomes
@@ -89,16 +112,7 @@ def run_legacy_rules(page_texts: List[str], page_tables: List[Any], report_kind:
     issues, outcomes = run_rules_with_outcomes(doc, False, report_kind=report_kind)
     elapsed_ms = int((time.time() - started) * 1000)
 
-    findings = []
-    for issue in issues:
-        findings.append(
-            {
-                "rule": str(getattr(issue, "rule", "")),
-                "severity": str(getattr(issue, "severity", "")),
-                "message": str(getattr(issue, "message", ""))[:200],
-                "page": (getattr(issue, "location", {}) or {}).get("page"),
-            }
-        )
+    findings = [_serialize_finding(issue) for issue in issues]
     rule_counts = dict(Counter(item["rule"] for item in findings))
     return {
         "mode": "legacy",
@@ -114,11 +128,15 @@ def run_structured_rules(page_texts: List[str], page_tables: List[Any], report_k
     """结构化解析输入路径。
 
     阶段3 的迁移规则（V33-115/117/120/202/203/220/241/243/244 首批）通过
-    `src.engine.structured_rules` 提供的结构化输入执行；未迁移部分与
-    legacy 同源。当前迁移批次尚未全部落地时如实标注 structured_ready=false。
+    `src.engine.structured_rules` 提供的结构化输入执行；未迁移部分不执行。
+
+    structured_ready 的判定（GPT5.6 P0-3 诚实化）：以"迁移规则数 / 决算
+    规则总数"的覆盖率为准，达到 STRUCTURED_READY_MIN_COVERAGE 才算
+    ready——此前"迁移列表非空即 ready"会误导下游把它当作可切换状态。
     """
     from src.engine.pipeline import build_document
     from src.engine.rule_outcome import summarize_rule_outcomes
+    from src.engine.rules_v33 import ALL_RULES as FINAL_ALL_RULES
     from src.engine.structured_rules import (
         STRUCTURED_MIGRATED_RULES,
         run_structured_rules as _run,
@@ -128,20 +146,22 @@ def run_structured_rules(page_texts: List[str], page_tables: List[Any], report_k
     started = time.time()
     issues, outcomes = _run(doc, report_kind=report_kind)
     elapsed_ms = int((time.time() - started) * 1000)
-    findings = []
-    for issue in issues:
-        findings.append(
-            {
-                "rule": str(getattr(issue, "rule", "")),
-                "severity": str(getattr(issue, "severity", "")),
-                "message": str(getattr(issue, "message", ""))[:200],
-                "page": (getattr(issue, "location", {}) or {}).get("page"),
-            }
-        )
+    findings = [_serialize_finding(issue) for issue in issues]
+    migrated_count = len(STRUCTURED_MIGRATED_RULES)
+    total_count = len(FINAL_ALL_RULES)
+    coverage = round(migrated_count / total_count, 4) if total_count else 0.0
     return {
         "mode": "structured",
-        "structured_ready": bool(STRUCTURED_MIGRATED_RULES),
+        "structured_ready": coverage >= STRUCTURED_READY_MIN_COVERAGE,
+        "structured_coverage": coverage,
         "migrated_rules": sorted(STRUCTURED_MIGRATED_RULES),
+        "migrated_rule_count": migrated_count,
+        "final_rule_total": total_count,
+        "ready_note": (
+            f"已迁移 {migrated_count}/{total_count} 条决算规则"
+            f"（覆盖率 {coverage:.1%}），未迁移规则在 structured 模式下不执行；"
+            f"覆盖率 ≥ {STRUCTURED_READY_MIN_COVERAGE:.0%} 才视为可切换（ready）"
+        ),
         "elapsed_ms": elapsed_ms,
         "finding_total": len(findings),
         "rule_counts": dict(Counter(item["rule"] for item in findings)),
@@ -514,7 +534,10 @@ def replay_historical(
         "removed_total": removed_total,
         "added_total": added_total,
         "top_changed_docs_for_manual_review": top_changed,
-        "routing_changed_docs": routing_changed_docs[:30],
+        # 注意与上方 "routing_changed_docs"（计数）区分：此处是变更文档
+        # 明细清单（此前与计数同名，字典重复键导致计数被列表覆盖，
+        # GPT5.6 P2 指出后拆分为独立键名）。
+        "routing_changed_top_docs": routing_changed_docs[:30],
         "results": results,
     }
 
