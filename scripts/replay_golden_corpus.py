@@ -341,7 +341,19 @@ def replay_historical_doc(
     report_kind = str(old_meta.get("report_kind") or "").strip().lower()
     if report_kind not in ("budget", "final"):
         report_kind = infer_report_kind(page_texts, pdf_path.name)
-    new = run_legacy_rules(page_texts, page_tables, report_kind)
+    # GPT5.6 R4 P1-4：parse_mode 必须真实生效——此前无条件 run_legacy_rules，
+    # 报告标记 structured/shadow 却实际执行 legacy，构成虚假验证通道。
+    if parse_mode == "structured":
+        new = run_structured_rules(page_texts, page_tables, report_kind)
+    elif parse_mode == "shadow":
+        # shadow 对比语义：legacy 与 structured 各跑一遍，新口径取 legacy
+        # （与旧结果对比的 delta 必须同口径），structured 结果附带留痕
+        new = run_legacy_rules(page_texts, page_tables, report_kind)
+        new = {**new, "shadow_structured": run_structured_rules(page_texts, page_tables, report_kind)}
+    else:
+        new = run_legacy_rules(page_texts, page_tables, report_kind)
+        if parse_mode not in ("legacy",):
+            raise ValueError(f"unknown parse mode: {parse_mode}")
 
     # 旧规则结果缺失（任务失败/未存 result）时不能当作"旧 0 条"参与对比，
     # 否则会制造 old=0 → new=N 的假 delta（fail-closed 对比口径）。
@@ -374,6 +386,16 @@ def replay_historical_doc(
         "changed_total": changed,
         "parse_sec": parse_sec,
     }
+    # shadow 模式：structured 侧结果留痕（与旧结果对比的 delta 仍是
+    # legacy 同口径；structured 侧只做记录，供逐规则差异分析）
+    if parse_mode == "shadow" and new.get("shadow_structured"):
+        result["shadow_structured"] = {
+            "finding_total": new["shadow_structured"]["finding_total"],
+            "rule_counts": new["shadow_structured"]["rule_counts"],
+            "rule_execution_summary": new["shadow_structured"][
+                "rule_execution_summary"
+            ],
+        }
     return result
 
 
@@ -401,14 +423,21 @@ def replay_historical(
     if limit:
         jobs = jobs[:limit]
 
-    checkpoint_path = OUTPUT_DIR / "historical-partial.json"
+    # 检查点按 parse_mode 隔离（R4 修复）：resume 默认开，此前检查点
+    # 不分模式——structured 模式的报告会把 legacy 全量回放缓存结果
+    # 合并进来（实测 processed=333 而 jobs_total=3，total_rules 出现
+    # 6/22/58 混杂），构成「标记 structured 实际 legacy」的缓存形态。
+    checkpoint_path = OUTPUT_DIR / f"historical-partial-{parse_mode}.json"
     results: List[Dict[str, Any]] = []
     done: set = set()
     if resume and checkpoint_path.exists():
         try:
             partial = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-            results = partial.get("results") or []
-            done = {r.get("job_id") for r in results if r.get("job_id")}
+            # 双保险：缓存结果的 parse_mode 与本次不一致时整体作废
+            cached_mode = str(partial.get("parse_mode") or "")
+            if cached_mode == parse_mode:
+                results = partial.get("results") or []
+                done = {r.get("job_id") for r in results if r.get("job_id")}
         except Exception:
             results, done = [], set()
 

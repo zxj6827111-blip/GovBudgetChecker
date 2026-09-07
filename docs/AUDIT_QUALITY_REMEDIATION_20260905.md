@@ -265,3 +265,37 @@ GPT5.6 复现场景（唯一候选来自其他章节）实测仍匹配——但�
 - 生产管线仍恒走 legacy（`run_rules_in_process`）；
 - FiscalFactMaterializer 数据库依赖未移除；
 - Golden Corpus 仍 1 份（目标 ≥20）；历史 top30 无逐份人工裁决；真实 AI provider 成功链路未预发验证。
+
+## 9.6 GPT5.6 第四轮复核整改（2026-09-07，基于 2183b89，用户确认开工顺序）
+
+第四轮复核 5 项指控全部复现属实并修复。本轮方法论修正：先在官方样张复现、再改代码、再以样张真值重新固化断言（R3 的教训——断言固化错误合并）。
+
+### P0-1 表名锚约束（跨表种合并清零）
+R3 版「物理相邻」挡不住相邻页的不同业务表（样张实测 P7 总表+P8 收入决算表合并为 (7,8)、P15-17、P18+19 同样误并）。R4 收敛语义：**每张新建表从起始页页文本提取独立表名行**（anchor_table_name，样张形态：表名行在页文本、不在表格 bbox 内）；合并候选必须满足三层约束——①当前页出现新表名行即无条件禁止合并（物理翻表）；②基准表有表名、续页无表名（续页不重复表名）→ 同表候选交签名守卫；③双方都有表名但不同 → 禁止。样张实测：**14 张原始表 → 12 张逻辑表**（10 个表名各归各位 + P9/P11 两个无表名续页保守独立），真续表（P12→13 财政拨款总表、P15→16 基本支出表）正确合并，**跨表种合并清零**。
+
+### P0-1b 集成测试断言修正（R3 固化的错误被纠正）
+`test_structured_sample_integration.py` 逐表对照页文本表名清单断言（收入支出决算总表 (7,7)——R3 曾错误断言 (7,8)）；V33-115 断言升级为数据级：总计行两侧必须取到 Decimal 4733.14（结论由数据支撑，GPT5.6 指出的「碰巧一致」被消除）。
+
+### P1-2 科目编码识别限定编码列
+`_row_code` 对 number 形态（PDF 抽取把 "301" 存为 Decimal）的编码识别**只认表头确认的「科目编码/功能分类/经济分类」列**（named_columns 新增 code 语义列）；无编码列信息时数字形态不识别（金额恰好 3/5/7 位整数如 "301" 万元不再误判科目，text 形态不受限）。双向测试：金额 301 → code=None；编码列 301/30101 → code 正确。
+
+### P1-4 历史回放 parse_mode 真执行 + 检查点隔离
+`replay_historical_doc` 此前无条件 run_legacy_rules（报告标 structured 实跑 legacy——虚假验证通道）。修复：structured 模式真跑迁移规则集、shadow 模式双侧留痕（shadow_structured 字段）、legacy 保持全量。**连带发现并修复检查点缓存污染**：resume 检查点文件不区分 parse_mode，structured 报告会合并 legacy 全量缓存（实测 processed=333 而 jobs_total=3、total_rules 6/22/58 混杂）——检查点文件按 parse_mode 隔离 + 缓存 parse_mode 校验双保险。修复后 structured smoke：5 份历史任务全部 total_rules=9 真实执行。
+
+### P1-5 CI 固定夹具 fail-closed
+新增 `scripts/build_sample_fixture.py`：样张解析产物（page_texts+page_tables，公开决算材料）序列化为 `tests/fixtures/sample_page_data.json` 入库（55KB，含源 PDF SHA-256 溯源）。集成测试改造为 **fail-closed**：夹具缺失即测试失败（不再 skipif 静默跳过）；本地有真实 PDF 时 SHA 交叉校验（夹具过期/篡改即失败）。测试耗时从 8s（真实解析）降到 0.55s。
+
+### P1-3 评估器零锚点拒配（终版语义）+ 标注侧对齐
+- 评估器：标注可提取锚点短语但候选**零命中** → 拒配（FN/待复核），不再降级放行——「唯一候选来自其他章节」不晋升 TP。修复过程中连带修复 **R2 起就存在的前缀剥离 bug**：`tbl:支出决算表合计行` 此前归一化成 `tbl支出决算表合计行` 整段，表锚永远零命中（样张 A-004 实测成因）。
+- 标注侧配套（经用户确认采用此方案而非接受召回下降）：A-003/005/006/008 四条措辞交叉标注补充 `anchor_phrases_aligned` 字段（取自规则实际产出文案的对齐短语），修订记录在 ANNOTATIONS.md；标注本体（label/rule_id/page/evidence）未动。A-005 的对齐短语在验证中收紧（「支出决算表」对同规则两条 finding 都命中会抢占 A-004 的 finding，改为「同口径列」精确指向）。
+- 诚实记录边界：GPT5.6 构造的「其他章节 finding 与正确域候选共享主题词（如『公务接待费』）」场景，靠短语命中无法区分（主题词命中即 hits>0）——该场景由「错域与正域并存时淘汰错域」（锚点条件约束）承担；真实规则产出中文案含章节标记（V33-245 message 固定含「三公说明」），构造性输入不构成真实假 TP 通道。
+
+### 验证（2026-09-07 第六轮）
+- 全量 pytest：**1038 passed + 1 skipped**（上轮 1032 → 新增 6 测试，零回归）；
+- replay+evaluate：**GATE-PASS**（defect 3/3 + hint 4/4，全部在零锚点拒配的严格语义下通过）；
+- shadow replay：structured 覆盖率 1.9% 真实口径保持，差异逐规则列出；
+- 历史 structured smoke：5 份任务全部 total_rules=9 真实执行（预算材料如实 3 条 insufficient_data）；
+- Ruff 全目录通过。
+
+### 仍未完成（如实记录）
+其余 8 条规则的结构化消费迁移（V33-117/120 的 `_apply_structured` 化是下一批，建立在已修正的表数据基础上）、生产管线切换、FiscalFactMaterializer 去 DB、Golden Corpus 扩容 ≥20、top30 人工裁决、真实 AI provider 预发验证。

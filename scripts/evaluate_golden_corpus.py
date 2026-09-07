@@ -160,18 +160,23 @@ def evidence_overlaps(annotation_evidence: Any, finding: Dict[str, Any]) -> bool
 
 
 def _anchor_phrases(anchor: str) -> List[str]:
-    """把锚文本切成短语级锚点（GPT5.6 R2 P1-2，三轮调参后的收敛设计）。
+    """把锚文本切成短语级锚点（GPT5.6 R2→R4 收敛设计）。
 
-    location_key 是人工写的定位提示：括号序号（「三公说明(一)公务
+    location_key 是人工写的定位提示：定位域前缀（toc/sec/tbl/xtbl）
+    是分类标记不是锚文本，先剥掉；括号序号（「三公说明(一)公务
     接待费」）、省略号（「第三部分…202 年度部门决算情况说明」）标记
-    着措辞的边界。按括号/省略号/顿号切出短语，任一**完整短语**出现在
-    finding 证据中即锚点成立——短语级既有区分度（不放大到任意 3 字
-    子串），又容忍人工措辞与规则文案的差异（整段匹配过严）。
+    着措辞的边界。按括号/省略号/顿号切出短语，任一**完整短语**出现
+    在 finding 证据中即锚点成立——短语级既有区分度（不放大到任意
+    3 字子串），又容忍人工措辞与规则文案的差异（整段匹配过严）。
 
-    短语内的数字（如「202」年度缺位锚）是**定位信息**而非重叠证据：
-    年份在锚点侧参与匹配（它指着目录里那行带残缺年份的文本），假 TP
-    防线在 evidence_overlaps 的区分度 token 过滤（年份不算重叠证据）。
+    R4 修复：此前未剥前缀，`tbl:支出决算表合计行` 归一化成
+    `tbl支出决算表合计行` 整段——表锚永远零命中（样张 A-004 实测）。
     """
+    anchor = str(anchor or "").strip()
+    # 剥定位域前缀（toc:/sec:/tbl:/xtbl:）——分类标记不是锚文本
+    prefix, sep, rest = anchor.partition(":")
+    if sep and prefix in {"toc", "sec", "tbl", "xtbl"}:
+        anchor = rest
     parts = re.split(r"[（）()\[…·、/]|…", anchor)
     phrases: List[str] = []
     for part in parts:
@@ -182,7 +187,23 @@ def _anchor_phrases(anchor: str) -> List[str]:
     return [p for p in phrases if p not in generic]
 
 
-def _anchor_hit_count(location_key: Any, finding: Dict[str, Any]) -> int:
+def _annotation_anchor_phrases(annotation: Dict[str, Any]) -> List[str]:
+    """标注的全部锚点短语：location_key 切分短语 + 对齐短语补充。
+
+    R4 P1-3 配套：零锚点命中即拒配后，历史标注中与规则文案措辞交叉
+    的锚点（R2 实测 A-003/005/006/008 四条真命中零命中）需要在标注
+    侧补充与规则文案对齐的短语（``anchor_phrases_aligned``，修订记录
+    见 ANNOTATIONS.md）——评估器不再单方面迁就措辞差异。
+    """
+    phrases = _anchor_phrases(str(annotation.get("location_key") or ""))
+    for extra in annotation.get("anchor_phrases_aligned") or []:
+        norm = _normalize_for_overlap(extra)
+        if len(norm) >= 2 and norm not in phrases:
+            phrases.append(norm)
+    return phrases
+
+
+def _anchor_hit_count(phrases: List[str], finding: Dict[str, Any]) -> int:
     """锚点短语命中数（排序加分项）。
 
     只按**完整短语**命中计数（不滑窗）——4 字滑窗会因「算表合计」
@@ -190,16 +211,12 @@ def _anchor_hit_count(location_key: Any, finding: Dict[str, Any]) -> int:
     括号/省略号边界切出，完整短语在 finding 中出现才是真正的定位域
     一致（排序严格只损失分辨力，不会像否决那样误拒真命中）。
     """
-    raw = str(location_key or "").strip()
-    _, _, anchor = raw.partition(":")
-    if not anchor:
-        return 0
     finding_norm = _normalize_for_overlap(
         " ".join(
             str(finding.get(key) or "") for key in ("evidence_text", "message")
         )
     )
-    return sum(1 for phrase in _anchor_phrases(anchor) if phrase in finding_norm)
+    return sum(1 for phrase in phrases if phrase in finding_norm)
 
 
 def match_annotation(
@@ -207,30 +224,26 @@ def match_annotation(
     findings: List[Dict[str, Any]],
     consumed: set,
 ) -> Optional[Dict[str, Any]]:
-    """标注 ↔ finding 匹配（GPT5.6 P1-4 + R2 P1-2 + R3 P1-4 收敛设计）：
+    """标注 ↔ finding 匹配（GPT5.6 R4 P1-3 终版语义）：
 
     候选门槛 = 规则一致（或标注无规则）+ 页码一致 + evidence 内容重叠
     （区分度数字 token 交集，或 4-6 字/超短全串的文本片段重叠——
     年份/孤立两位数不单独构成证据）。
 
-    location_key 锚点做**条件约束**（R3 P1-4：纯排序挡不住「唯一候选
-    来自其他章节、仅共享“公务接待费 0.00”」的假 TP）：
-    - 候选中**存在**锚点命中者 → 未命中锚点的候选全部淘汰（定位域
-      可区分时，跨位置 finding 不允许成为 TP）；
-    - 候选中**无一**命中锚点 → 保留全部候选按证据排序（R2 样张实测：
-      标注者行级措辞与规则文案交叉时，锚点否决会误拒真命中——
-      「p14同口径表合计」vs finding「同口径列」）。锚点区分度不足
-      时不作为否决依据，降级回纯证据排序。
+    **锚点约束（零命中拒配）**：标注带 location_key（或补充锚点短语）
+    且可提取有效短语时，只有命中锚点的候选允许成为 TP；零命中即拒配
+    返回 None（计入 FN/待复核）——「唯一候选来自其他章节」不再晋升
+    为 TP。标注无锚点时无定位约束，纯证据排序。措辞交叉的历史锚点由
+    标注侧补充 anchor_phrases_aligned 对齐（见 ANNOTATIONS.md）。
 
     每条 finding 只能被一条标注消费（consumed 去重）。
     优先返回综合得分最高的 finding：区分度数字交集 > 锚点短语命中
-    （_anchor_phrases 完整短语）> 共享文本片段长度，使"最贴近原始
-    数字与定位域的证据"优先被消费。
+    > 共享文本片段长度，使"最贴近原始数字与定位域的证据"优先被消费。
     """
     rule_id = str(annotation.get("rule_id") or "").strip().upper()
     page = annotation.get("page")
     annotation_evidence = annotation.get("evidence")
-    location_key = annotation.get("location_key")
+    anchor_phrases = _annotation_anchor_phrases(annotation)
     candidates: List[Tuple[int, Dict[str, Any]]] = []
     for finding in findings:
         if id(finding) in consumed:
@@ -251,7 +264,7 @@ def match_annotation(
             _distinctive_numeric_tokens(annotation_evidence)
             & _distinctive_numeric_tokens(finding_text)
         )
-        anchor_hits = _anchor_hit_count(location_key, finding)
+        anchor_hits = _anchor_hit_count(anchor_phrases, finding)
         ann_norm = _normalize_for_overlap(annotation_evidence)
         find_norm = _normalize_for_overlap(finding_text)
         shared_text = 0
@@ -266,10 +279,18 @@ def match_annotation(
         candidates.append((score, finding, anchor_hits))
     if not candidates:
         return None
-    # 锚点条件约束：有候选命中锚点 → 淘汰未命中者（跨位置假 TP 防线）；
-    # 无候选命中 → 措辞交叉场景，降级纯证据排序（不误拒真命中）
-    anchor_hit_candidates = [c for c in candidates if c[2] > 0]
-    if anchor_hit_candidates:
+    # 锚点约束（GPT5.6 R4 P1-3 终版语义）：
+    # - 标注可提取有效锚点短语（location_key 切分 + 对齐补充）→ 只有
+    #   命中锚点的候选允许成为 TP；零命中即**拒配**（返回 None，计入
+    #   FN/待复核），不再降级放行——"唯一候选来自其他章节"不得晋升 TP；
+    # - 标注无锚点短语 → 无定位约束，纯证据排序。
+    # 配套：golden 标注侧已为措辞交叉的历史锚点补充规则文案对齐短语
+    # （A-003/005/006/008，见 ANNOTATIONS.md 2026-09-07 修订记录）——
+    # 零命中拒配要求标注锚点与规则文案可对齐，评估器不再单方面迁就。
+    if anchor_phrases:
+        anchor_hit_candidates = [c for c in candidates if c[2] > 0]
+        if not anchor_hit_candidates:
+            return None  # 零锚点命中：unmatched，不晋升 TP
         candidates = anchor_hit_candidates
     candidates.sort(key=lambda triple: triple[0], reverse=True)
     return candidates[0][1]

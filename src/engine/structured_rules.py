@@ -134,6 +134,9 @@ class ParsedTable:
     rows: List[ParsedRow] = field(default_factory=list)
     confidence: float = 1.0
     parse_errors: List[str] = field(default_factory=list)
+    # R4 表名锚：从起始页页文本提取的独立表名行（「收入支出决算总表」），
+    # 业务表身份——跨页续表合并要求两侧表名严格相同
+    anchor_table_name: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -147,6 +150,7 @@ class ParsedTable:
             "row_role": self.row_role,
             "confidence": self.confidence,
             "parse_errors": list(self.parse_errors),
+            "anchor_table_name": self.anchor_table_name,
             "row_count": len(self.rows),
         }
 
@@ -162,14 +166,22 @@ def _cell_from_raw(raw: Any, page: int) -> ParsedCell:
     return ParsedCell(text=text or None, page=page)
 
 
-def _row_code(cells: List[ParsedCell], max_scan: int = 3) -> Tuple[Optional[str], Optional[int]]:
+def _row_code(
+    cells: List[ParsedCell],
+    max_scan: int = 3,
+    code_column: Optional[int] = None,
+) -> Tuple[Optional[str], Optional[int]]:
     """提取行首科目编码（3/5/7 位整数）。
 
     科目编码单元格在 PDF 抽取中可能是纯数字串——_cell_from_raw 会把
-    "301" 存为 number（GPT5.6 R3 P1-3：此前只读 cell.text，导致
-    code=None、classification_type=other，经济/功能分类域判断失效）。
-    因此对 number 为整数的单元格，检查其无小数位形式是否匹配编码位长；
-    text 单元格仍按原文匹配（前导零场景如 "301" vs "0301" 以文本为准）。
+    "301" 存为 number（GPT5.6 R3 P1-3）。对 number 为整数的单元格，
+    检查其无小数位形式是否匹配编码位长。
+
+    GPT5.6 R4 P1-2 收紧：表头确认了「科目编码」列（code_column）时，
+    **只在该列识别**——防止金额恰好为 3/5/7 位整数（"301" 万元）被
+    误判为科目编码、污染分类域。无编码列信息时（表头未识别出编码列），
+    保守降级为不识别数字形态（只认 text 形态——PDF 抽取的编码单元格
+    若真在编码列，表头通常可识别；识别不出说明证据不足）。
     """
     for cell in cells[:max_scan]:
         text = (cell.text or "").strip()
@@ -178,7 +190,13 @@ def _row_code(cells: List[ParsedCell], max_scan: int = 3) -> Tuple[Optional[str]
         if cell.number is not None and cell.number == cell.number.to_integral_value():
             digits = str(int(cell.number))
             if _CODE_RE.match(digits):
-                return digits, len(digits)
+                # 数字形态只在表头确认的编码列内采信（text 形态无此限制：
+                # 文本单元格不可能是金额）
+                if code_column is None:
+                    continue
+                col_idx = cells.index(cell)
+                if col_idx == code_column:
+                    return digits, len(digits)
     return None, None
 
 
@@ -236,6 +254,17 @@ def materialize_table(
             if key and key not in parsed.named_columns:
                 parsed.named_columns[key] = i
 
+    # 科目编码列识别（GPT5.6 R4 P1-2）：表头含「科目编码/功能分类/
+    # 经济分类」的列是编码列——_row_code 只在该列内识别编码，防止
+    # 金额恰好为 3/5/7 位整数（如 301.00 万元取整值 301）被误判科目。
+    for row in raw_rows[:header_rows + 2]:
+        for i, cell in enumerate(row):
+            text = re.sub(r"\s+", "", str(cell or ""))
+            if "编码" in text or text in ("功能分类", "经济分类"):
+                if "code" not in parsed.named_columns:
+                    parsed.named_columns["code"] = i
+                break
+
     # 双栏检测：表头同时出现 收入/支出 或 左右两个"决算数"
     joined_header = "".join(header_labels)
     if "收入" in joined_header and "支出" in joined_header:
@@ -244,7 +273,7 @@ def materialize_table(
     for r_idx, row in enumerate(raw_rows):
         page = start_page or (pages[0] if pages else 0)
         cells = [_cell_from_raw(c, page) for c in row]
-        code, level = _row_code(cells)
+        code, level = _row_code(cells, code_column=parsed.named_columns.get("code"))
         label = "".join((c.text or "") for c in cells if c.text)
         numeric_count = sum(1 for c in cells if c.is_numeric)
         row_role = "header" if r_idx < header_rows else _row_role_from_label(
@@ -268,54 +297,100 @@ def materialize_table(
     return parsed
 
 
-def build_parsed_tables(page_tables: Sequence[Sequence[Any]]) -> Dict[str, "ParsedTable"]:
+_TABLE_NAME_RE = re.compile(r"^.{0,28}?(决算表|决算总表|预算表|支出表|收入表)$")
+
+
+def _extract_anchor_table_name(page_text: str, scan_lines: int = 8) -> str:
+    """从页面文本前几行提取独立表名行（如「收入支出决算总表」）。
+
+    官方样张形态（R4 实测）：每张表的起始页，表名以独立短行出现在
+    页文本头部（首行常是部门抬头「…部门决算表」——含「部门」的
+    抬头行跳过；「二、收入决算表」这类目录/说明引用也跳过）。
+    表名行是唯一稳定的业务身份：PDF 表格 bbox 不含它，但页文本有。
+    """
+    for line in str(page_text or "").split("\n")[:scan_lines]:
+        stripped = line.strip()
+        if not stripped or len(stripped) > 30:
+            continue
+        if "部门" in stripped or "单位" in stripped or stripped.startswith(("一、", "二、", "三、")):
+            continue
+        if _TABLE_NAME_RE.search(stripped):
+            return stripped
+    return ""
+
+
+def build_parsed_tables(
+    page_tables: Sequence[Sequence[Any]],
+    page_texts: Optional[Sequence[str]] = None,
+) -> Dict[str, "ParsedTable"]:
     """从 pdfplumber 风格的逐页表格构建 ParsedTable 集合（跨页续表合并）。
 
-    演进史（三次复核迭代，语义边界逐轮收紧）：
-    - R2 前的原实现：key 含累计表数永不重复 → 续表从不合并；
-    - R2 修复：按内容签名识别续表——但在官方样张上暴露三个新缺陷
-      （GPT5.6 R3 P0-1，实测 14 张原始表只剩 4 张）：
-      ① last_key 不限相邻：跨页合并后，后续任意页的签名兼容表都
-        会被继续吞并（P10 表 span 竟达 (10,19)，10~19 页全归一张表）；
-      ② 签名兼容但 merge_compatible 拒绝（如表头语义列不相交）时，
-        else 分支不执行 → 该表被静默丢弃；
-      ③ 同页两张相同列结构的独立表被合成一张。
-    - R3 收敛语义（本实现）：
-      ① 合并候选限定**物理相邻**：上一张表与当前表同页，或上一张表
-         的 span 末页与当前表相邻页（隔页/隔表不合并——续表在物理
-         排版上必然连续）；
-      ② 拒绝合并（签名不兼容或 merge_compatible 返回 False）时，
-         当前表无条件保留为独立表，绝不允许静默丢表；
-      ③ key 唯一性由「首次出现的页 + 该页内序号」保证。
+    演进史（四次复核迭代，语义边界逐轮收紧）：
+    - R2 前原实现：key 含累计表数永不重复 → 续表从不合并；
+    - R2 修复：内容签名识别续表——真实样张上暴露三个缺陷（14 表→4，
+      span 吞并 (10,19)、拒绝时静默丢表、同页独立表误合）；
+    - R3 收敛：物理相邻 + 拒绝不丢表——但仍把 P7 总表与 P8 收入决算表
+      合成 (7,8)、P15-17（基本支出+三公）、P18-19（政府性基金+国有
+      资本）跨表种合并（GPT5.6 R4 P0-1：物理相邻挡不住相邻页的
+      **不同业务表**；同签名的语义列在决算表族里没有区分度）。
+    - R4 收敛（本实现）——**表名锚约束**：
+      ① 每张新建表从起始页页文本提取独立表名行（anchor_table_name，
+         见 _extract_anchor_table_name）——这是稳定的业务身份；
+      ② 合并候选必须满足：物理相邻 **且表名严格相同**（空表名不可
+         合并——宁可多独立表不错并）；
+      ③ 拒绝合并时无条件保留独立表（R3 语义保持）。
     """
     parsed_tables: Dict[str, ParsedTable] = {}
     last_key: Optional[str] = None
     last_end_page: int = 0
+    last_anchor: str = ""
+    texts = list(page_texts or [])
     for p_idx, tables in enumerate(page_tables or [], start=1):
+        page_text = texts[p_idx - 1] if 0 < p_idx <= len(texts) else ""
         for raw in tables or []:
             title = "".join(
                 str(c or "") for c in (raw[0] if raw and raw[0] else [])
             )[:40]
             parsed = materialize_table(raw, title=title, pages=(p_idx,))
-            # 相邻性：上一表与当前表同页（同页连续排版的续表），或上一
-            # 表结束页紧邻当前页（跨页续表）。隔页出现的同签名表是
-            # 新表种而非续表。
+            # 表名锚：新建表尝试从起始页页文本取业务表名；
+            # 续表候选页若页文本有**新表名行**，则该页起的是新表，
+            # 强制不合并（P7 总表续到 P8 时，P8 有「收入决算表」新锚）
+            page_anchor = _extract_anchor_table_name(page_text)
+            if page_anchor:
+                parsed.anchor_table_name = page_anchor
+            # 相邻性：上一表与当前表同页或紧邻页（R3 语义）
             adjacent = (
                 last_key is not None
                 and last_end_page in (p_idx, p_idx - 1)
             )
             merged = False
-            if (
-                adjacent
-                and last_key in parsed_tables
-                and _table_signature_compatible(parsed_tables[last_key], parsed)
-            ):
-                if merge_compatible(parsed_tables[last_key], parsed):
-                    merged = True
-                    # 合并后表头签名不变且 span 已扩展：续表可继续合并
-                    last_end_page = max(last_end_page, parsed.page_span[1])
+            if adjacent and last_key in parsed_tables:
+                base_table = parsed_tables[last_key]
+                # R4 表名锚约束（三层）：
+                # ① 当前页出现**新表名行** → 物理翻表，无条件禁止合并
+                #   （P7 总表续到 P8 时，P8 有「收入决算表」新锚）；
+                # ② 基准表有表名、续页无表名 → 续页通常不重复表名，
+                #   视为同表候选，交给签名守卫裁决；
+                # ③ 双方都有表名但不同 → 不同业务表，禁止合并。
+                # 双方都无表名 → 无业务身份证据，保守不合并。
+                new_anchor_on_page = page_anchor and page_anchor != last_anchor
+                same_anchor = bool(
+                    last_anchor
+                    and (
+                        parsed.anchor_table_name == last_anchor
+                        # 续页无表名行（表名只在首页）→ 同表候选
+                        or not parsed.anchor_table_name
+                    )
+                )
+                if same_anchor and not new_anchor_on_page:
+                    if _table_signature_compatible(base_table, parsed):
+                        if merge_compatible(base_table, parsed):
+                            merged = True
+                            last_end_page = max(
+                                last_end_page, parsed.page_span[1]
+                            )
             if not merged:
-                # 拒绝合并/不相邻/签名不兼容：无条件保留为独立表——
+                # 拒绝合并/不相邻/表名不同：无条件保留为独立表——
                 # 结构化解析阶段宁可多出独立表，绝不静默丢表
                 key = f"P{p_idx}:{len(parsed_tables)}"
                 if key in parsed_tables:
@@ -323,6 +398,7 @@ def build_parsed_tables(page_tables: Sequence[Sequence[Any]]) -> Dict[str, "Pars
                 parsed_tables[key] = parsed
                 last_key = key
                 last_end_page = parsed.page_span[1]
+                last_anchor = parsed.anchor_table_name
     return parsed_tables
 
 
@@ -481,7 +557,11 @@ def run_structured_rules(doc: Any, report_kind: Optional[str] = None):
     # 1) 构建内存态结构化表（与数据库无关，规则分析与结构化入库共同消费）。
     # GPT5.6 R2 P0-1a：续表合并改由 build_parsed_tables 按表头签名识别
     # （原内联实现 key 含累计表数，永不重复 → 永不合并）。
-    parsed_tables = build_parsed_tables(getattr(doc, "page_tables", []) or [])
+    # R4：page_texts 传入以提取表名锚（表名行在页文本、不在表格 bbox）
+    parsed_tables = build_parsed_tables(
+        getattr(doc, "page_tables", []) or [],
+        getattr(doc, "page_texts", []) or [],
+    )
     try:
         doc.parsed_tables = parsed_tables
     except Exception:

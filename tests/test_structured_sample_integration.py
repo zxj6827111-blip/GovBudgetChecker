@@ -1,14 +1,22 @@
-"""官方样张真实 PDF 的结构化解析集成测试（GPT5.6 R3 要求）。
+"""官方样张结构化解析集成测试（GPT5.6 R4 P1-5：fail-closed，CI 可复现）。
 
-R2/R3 复核的核心批评：结构化修复从未在真实样张上验证——build_parsed_tables
-的续表判定在官方 PDF 上把 14 张原始表错误合并成 4 张（跨 10 页吞并、拒绝
-合并时丢表），V33-115 的标题匹配从未命中（title 实为「收入支出」，表名
-在页文本里）。本文件用 corpus 的真实 PDF 锁定两件事：
-1. 逻辑表数量在合理范围（约 9-10 张，不吞并、不丢表）；
-2. V33-115 在样张上真正进入 _apply_structured 结构化消费路径。
+R3 版问题：corpus/ 被 .gitignore 排除，干净 checkout 无样张 PDF，
+skipif 让三项关键测试在 CI 上静默跳过。R4 修复：解析产物
+（page_texts/page_tables，公开决算材料）序列化为入库夹具
+（tests/fixtures/sample_page_data.json，含源 PDF SHA-256 溯源），
+测试基于夹具 fail-closed 运行；本地有真实 PDF 时做 SHA 交叉校验
+（夹具与 PDF 不一致即失败——防止夹具过期或被篡改）。
+
+锁定的业务基线（R4 表名锚语义，样张实测）：
+- 12 张逻辑表 = 10 个页文本表名各归各位 + P9/P11 两个无表名续页的
+  保守独立；真续表（P12→13、P15→16）正确合并；
+- 跨表种合并（P7+8 / P15-17 / P18+19，R3 版缺陷）必须为零；
+- V33-115 命中总表 (7,7)、取到真实总计 4733.14、进入结构化路径。
 """
 
 import glob
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -18,20 +26,31 @@ from src.engine.rules_v33 import R33115_TotalSheetCheck, _find_parsed_table
 from src.engine.structured_rules import build_parsed_tables
 
 ROOT = Path(__file__).resolve().parents[1]
+FIXTURE_PATH = ROOT / "tests" / "fixtures" / "sample_page_data.json"
 _SAMPLE_PDFS = glob.glob(str(ROOT / "corpus" / "DOC-20260905-001" / "*.pdf"))
 
-pytestmark = pytest.mark.skipif(
-    not _SAMPLE_PDFS,
-    reason="corpus/DOC-20260905-001 样张 PDF 不存在（corpus 未入库时跳过）",
-)
-SAMPLE_PDF = Path(_SAMPLE_PDFS[0]) if _SAMPLE_PDFS else None
+SOURCE_SHA = "113b98bb5df18c264f9c589a1034d3bfc27ed65562b4bbbe72bfd33420f912c7"
 
 
-def _load_sample():
-    from scripts.replay_golden_corpus import load_page_tables, load_page_texts
-
-    page_texts = load_page_texts(SAMPLE_PDF)
-    page_tables = load_page_tables(SAMPLE_PDF)
+@pytest.fixture(scope="module")
+def sample():
+    """夹具 fail-closed：不存在即失败（不再静默跳过）。"""
+    assert FIXTURE_PATH.exists(), (
+        f"固定夹具缺失: {FIXTURE_PATH}——用 scripts/build_sample_fixture.py "
+        "重新生成（GPT5.6 R4 P1-5：关键测试不允许静默跳过）"
+    )
+    payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+    assert payload["source_pdf_sha256"] == SOURCE_SHA, "夹具源 PDF SHA 不符"
+    if _SAMPLE_PDFS:
+        # 本地有真实 PDF：交叉校验夹具未过期/未被篡改
+        local_sha = hashlib.sha256(
+            Path(_SAMPLE_PDFS[0]).read_bytes()
+        ).hexdigest()
+        assert local_sha == payload["source_pdf_sha256"], (
+            "本地样张与夹具 SHA 不一致——夹具过期，请重新生成"
+        )
+    page_texts = payload["page_texts"]
+    page_tables = payload["page_tables"]
     doc = build_document(
         path="DOC-20260905-001.pdf",
         page_texts=page_texts,
@@ -41,64 +60,73 @@ def _load_sample():
     return doc, page_tables
 
 
-def test_sample_raw_tables_merge_to_about_ten_logical_tables():
-    """官方样张：14 张原始表 → 逻辑表约 9-10 张（R3 P0-1 实测基线）。
-
-    R2 版实现曾把 14 张合并成 4 张（span 达 (10,19) 的跨页吞并）；
-    R3 修复后每张表 span 必须紧凑（≤3 页）、无表被静默丢弃。
-    """
-    doc, page_tables = _load_sample()
+def test_sample_table_boundaries_follow_page_text_anchors(sample):
+    """表边界服从页文本表名锚：12 张逻辑表、跨表种合并为零。"""
+    doc, page_tables = sample
     raw_count = sum(len(t) for t in page_tables)
-    tables = build_parsed_tables(page_tables)
+    tables = build_parsed_tables(page_tables, doc.page_texts)
 
     assert raw_count == 14, f"样张原始表数量变化: {raw_count}"
-    # 逻辑表约 10 张：合理合并（续页）但不吞并相邻表种
-    assert 8 <= len(tables) <= 12, (
-        f"逻辑表 {len(tables)} 张异常（R2 版缺陷是 4 张吞并、丢表）"
+    assert len(tables) == 12, (
+        f"逻辑表 {len(tables)} 张：R4 表名锚语义基线是 12（10 表名 + 2 保守续页）"
     )
-    # 无表丢失：所有逻辑表的行数之和 ≥ 原始表行数之和
     raw_rows = sum(
         len(raw) for tables_on_page in page_tables for raw in tables_on_page
     )
     merged_rows = sum(len(t.rows) for t in tables.values())
-    assert merged_rows >= raw_rows, (
-        f"合并后行数 {merged_rows} < 原始 {raw_rows}：存在静默丢表"
-    )
-    # span 紧凑：任何逻辑表不得跨越超过 3 页
-    for key, table in tables.items():
-        span_pages = table.page_span[1] - table.page_span[0] + 1
-        assert span_pages <= 3, (
-            f"{key} span={table.page_span} 跨 {span_pages} 页：续表判定吞并了无关表"
-        )
+    assert merged_rows >= raw_rows, "存在静默丢表"
+    # 逐表对照页文本表名清单：跨表种合并必须为零
+    by_anchor = {}
+    for t in tables.values():
+        if t.anchor_table_name:
+            by_anchor.setdefault(t.anchor_table_name, []).append(t.page_span)
+    expected = {
+        "收入支出决算总表": [(7, 7)],          # R3 错误断言曾是 (7,8)
+        "收入决算表": [(8, 8)],
+        "支出决算表": [(10, 10)],
+        "财政拨款收入支出决算总表": [(12, 13)],  # 真续表（P13 无新表名）
+        "一般公共预算财政拨款支出决算表": [(14, 14)],
+        "一般公共预算财政拨款基本支出决算表": [(15, 16)],  # 真续表
+        "财政拨款“三公”经费支出决算表": [(17, 17)],
+        "政府性基金预算财政拨款收入支出决算表": [(18, 18)],
+        "国有资本经营预算财政拨款收入支出决算表": [(19, 19)],
+    }
+    for name, spans in expected.items():
+        got = by_anchor.get(name)
+        assert got == spans, f"表「{name}」span 应为 {spans}，实测 {got}"
 
 
-def test_sample_v33_115_enters_structured_consumption_path():
-    """官方样张：V33-115 必须命中目标表并进入 _apply_structured（R3 P0-2）。
+def test_sample_v33_115_enters_structured_consumption_path(sample):
+    """V33-115 命中总表 (7,7) 并进入结构化路径，取到真实总计 4733.14。"""
+    from decimal import Decimal
 
-    表名「收入支出决算总表」在页文本（P7）而表格 title 只是表体首行
-    「收入支出」——两级匹配（title → 锚点页）必须命中；命中后结构化
-    路径取到真实总计值（样张收支两侧均为 4733.14，平衡无 finding）。
-    """
-    doc, page_tables = _load_sample()
-    doc.parsed_tables = build_parsed_tables(page_tables)
+    doc, page_tables = sample
+    doc.parsed_tables = build_parsed_tables(page_tables, doc.page_texts)
 
     target = _find_parsed_table(doc, "收入支出决算总表")
-    assert target is not None, (
-        "两级匹配（title→锚点页）未命中样张总表——R3 P0-2 回归"
-    )
-    assert target.page_span == (7, 8), f"总表 span 异常: {target.page_span}"
+    assert target is not None, "两级匹配（title→锚点页）未命中样张总表"
+    # R4 修正：总表只占 P7（P8 起是收入决算表）
+    assert target.page_span == (7, 7), f"总表 span 异常: {target.page_span}"
     assert len(target.rows) > 10, f"总表行数异常: {len(target.rows)}"
-
-    # 结构化路径产出（平衡表 → 0 issues 是正确结论，不是取不到数）
+    totals = [
+        r
+        for r in target.rows
+        if "总计" in r.label and r.row_role in ("total", "subtotal")
+    ]
+    assert totals, "总表必须解析出总计行"
+    numbers = [c.number for c in totals[0].cells if c.number is not None]
+    assert numbers == [Decimal("4733.14")] * 2, (
+        f"总计两侧应为 4733.14: {numbers}"
+    )
+    # 平衡表 → 0 issues 是由数据支撑的正确结论
     issues = R33115_TotalSheetCheck().apply(doc)
-    # 样张总表收支两侧相等（legacy 同样无 finding）：结构化结论必须一致
     assert issues == [], f"平衡总表不应产出 finding: {[i.message for i in issues]}"
 
 
-def test_sample_v33_115_structured_matches_legacy_conclusion():
+def test_sample_v33_115_structured_matches_legacy_conclusion(sample):
     """结构化与 legacy 在样张总表上结论一致（输入表征不同、语义相同）。"""
-    doc, page_tables = _load_sample()
+    doc, page_tables = sample
     legacy_issues = R33115_TotalSheetCheck().apply(doc)
-    doc.parsed_tables = build_parsed_tables(page_tables)
+    doc.parsed_tables = build_parsed_tables(page_tables, doc.page_texts)
     structured_issues = R33115_TotalSheetCheck().apply(doc)
     assert len(legacy_issues) == len(structured_issues)

@@ -227,16 +227,39 @@ def test_anchor_constraint_eliminates_wrong_domain_when_correct_exists():
     assert hit_reversed is correct_domain
 
 
-def test_anchor_constraint_degrades_when_no_candidate_hits_anchor():
-    """锚点零命中（措辞交叉，如 A-005「p14同口径表合计」vs finding
-    「同口径列」）：降级纯证据排序，不因锚点不匹配而拒绝真命中。"""
+def test_zero_anchor_hits_rejects_unmatched_annotation():
+    """零锚点命中即拒配（R4 P1-3 终版语义，取代 R3 的降级放行）。
+
+    标注带锚点但候选全部零命中 → 返回 None（FN/待复核），不再
+    晋升 TP。真命中的措辞交叉由标注侧 anchor_phrases_aligned 对齐
+    （见 ANNOTATIONS.md 2026-09-07 修订），评估器不再单方面迁就。
+    """
     ann = {
         "rule_id": "V33-120",
         "page": 10,
         "evidence": "P14 同口径表合计 1,367.75，两表差 0.01",
         "location_key": "xtbl:p14同口径表合计",
+        # 注意：真实 golden 标注已补 anchor_phrases_aligned=["同口径列"]；
+        # 此处故意不补，模拟未对齐标注在新语义下的行为
     }
-    # finding 措辞与锚点无任何重叠（真实 R2 场景），但金额证据充分
+    finding = {
+        "rule": "V33-120",
+        "page": 10,
+        "message": "支出决算表与一般公共预算财政拨款支出决算表同口径列相差 0.01 万元",
+        "evidence_text": "支出决算表：1367.76 同口径表：1367.75",
+    }
+    assert match_annotation(ann, [finding], set()) is None
+
+
+def test_aligned_anchor_phrase_restores_match():
+    """标注补对齐短语后恢复匹配——R4 拒配语义的配套通道。"""
+    ann = {
+        "rule_id": "V33-120",
+        "page": 10,
+        "evidence": "P14 同口径表合计 1,367.75，两表差 0.01",
+        "location_key": "xtbl:p14同口径表合计",
+        "anchor_phrases_aligned": ["同口径列"],
+    }
     finding = {
         "rule": "V33-120",
         "page": 10,
@@ -244,6 +267,17 @@ def test_anchor_constraint_degrades_when_no_candidate_hits_anchor():
         "evidence_text": "支出决算表：1367.76 同口径表：1367.75",
     }
     assert match_annotation(ann, [finding], set()) is finding
+
+
+def test_anchor_prefix_is_stripped_from_phrases():
+    """R4 修复：tbl:/sec: 等定位域前缀必须剥离——此前 `tbl:支出决算表`
+    归一化成 `tbl支出决算表` 整段，表锚永远零命中（样张 A-004 实测）。"""
+    from scripts.evaluate_golden_corpus import _anchor_phrases
+
+    phrases = _anchor_phrases("tbl:支出决算表合计行·项目支出")
+    assert "支出决算表合计行" in phrases
+    assert "项目支出" in phrases
+    assert all(not p.startswith("tbl") for p in phrases)
 
 
 def test_locatable_requires_page_and_evidence_text():

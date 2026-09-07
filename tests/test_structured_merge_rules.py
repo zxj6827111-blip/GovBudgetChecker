@@ -95,16 +95,18 @@ def test_empty_continuation_merges_trivially():
 
 
 # ---------------------------------------------------------------------------
-# build_parsed_tables 跨页续表合并（GPT5.6 R2 P0-1a）
+# build_parsed_tables 跨页续表合并（GPT5.6 R2→R4 语义演进）
 #
-# 缺陷背景：原内联实现 key=f"P{页}:{累计表数}"，累计数只增不减 →
-# key 永不重复 → 续表从不合并（实测 keys=['P1:0','P2:1']、merge_calls=0）。
-# 修复后按表头签名（语义列交集/表头文本）识别续表并走 merge_compatible。
+# R2：key 含累计表数永不重复 → 续表从不合并。
+# R3：内容签名+物理相邻——真实样张暴露跨表种误合并（14→4）。
+# R4：**表名锚约束**——合并要求「基准表有表名锚 + 续页无新表名」，
+# 页文本出现新表名行即物理翻表，无条件禁止合并；双方都无表名时保守
+# 不合并（无业务身份证据）。测试因此需传 page_texts 提供表名行。
 # ---------------------------------------------------------------------------
 
 
 def _cont_page_tables():
-    """两页同表头（语义列相同）的续表原始数据——GPT5.6 的动态验证场景。"""
+    """两页续表原始数据 + 页文本（首页有表名行、续页无）。"""
     page1 = [[
         ["收入支出决算总表", "", "", ""],
         ["项目", "合计", "基本支出", "项目支出"],
@@ -114,16 +116,45 @@ def _cont_page_tables():
         ["二、事业收入", "20.00", "10.00", "10.00"],
         ["总计", "120.00", "70.00", "50.00"],
     ]]
-    return [page1, page2]
+    texts = ["收入支出决算总表\n单位：万元\n" + "x" * 40, "续页无表名行"]
+    return [page1, page2], texts
 
 
 def test_build_parsed_tables_merges_cross_page_continuation():
-    tables = build_parsed_tables(_cont_page_tables())
-    # 语义列相同（total/basic/project）→ 第二页识别为续表合并进第一张
+    page_tables, texts = _cont_page_tables()
+    tables = build_parsed_tables(page_tables, texts)
+    # 首页表名锚 + 续页无新表名 + 签名兼容 → 合并
     assert len(tables) == 1, f"续表未合并: keys={sorted(tables)}"
     merged = next(iter(tables.values()))
-    assert len(merged.rows) == 5  # 3 + 2，表头行也随行保留
     assert merged.page_span == (1, 2)
+    assert merged.anchor_table_name == "收入支出决算总表"
+
+
+def test_build_parsed_tables_new_anchor_blocks_merge():
+    """相邻页出现新表名行（物理翻表）：无条件禁止合并（R4 核心语义）。"""
+    page1 = [[
+        ["收入支出决算总表", "", "", ""],
+        ["项目", "合计", "基本支出", "项目支出"],
+    ]]
+    page2 = [[
+        ["收入决算表", "", ""],
+        ["项目", "合计", "基本支出", "项目支出"],
+    ]]
+    # 两页页文本各含自己的表名行（P7 总表 → P8 收入决算表的真实形态）
+    texts = ["收入支出决算总表", "收入决算表"]
+    tables = build_parsed_tables([page1, page2], texts)
+    assert len(tables) == 2, "相邻页不同表种必须保持独立"
+    spans = sorted(t.page_span for t in tables.values())
+    assert spans == [(1, 1), (2, 2)]
+
+
+def test_build_parsed_tables_no_anchor_no_merge():
+    """双方都无表名锚（页文本缺失/表名提取失败）：保守不合并（R4）。"""
+    page1 = [[["项目", "合计"], ["行1", "1.00"]]]
+    page2 = [[["行2", "2.00"]]]
+    # 不传 page_texts → 无表名锚 → 无业务身份证据，宁可分不误并
+    tables = build_parsed_tables([page1, page2])
+    assert len(tables) == 2
 
 
 def test_build_parsed_tables_keeps_disjoint_tables_separate():
@@ -146,7 +177,9 @@ def test_build_parsed_tables_chains_multi_page_continuation():
     page1 = [[["项目", "合计", "基本支出", "项目支出"], ["一、行1", "1.00", "", ""]]]
     page2 = [[["二、行2", "2.00", "", ""]]]
     page3 = [[["三、行3", "3.00", "", ""]]]
-    tables = build_parsed_tables([page1, page2, page3])
+    # 首页有表名行、P2/P3 是无表名的延续页（真实续页形态）
+    texts = ["支出决算表\n单位：万元", "", ""]
+    tables = build_parsed_tables([page1, page2, page3], texts)
     assert len(tables) == 1, f"链式续页未全合并: keys={sorted(tables)}"
     merged = next(iter(tables.values()))
     assert merged.page_span == (1, 3)
@@ -251,3 +284,37 @@ def test_build_parsed_tables_same_page_disjoint_tables_stay_separate():
     assert len(tables) == 2, f"同页不同表种被误合并: keys={sorted(tables)}"
     titles = [t.title[:5] for t in tables.values()]
     assert "收入决算表" in "".join(titles) and "支出决算表" in "".join(titles)
+
+
+# ---------------------------------------------------------------------------
+# GPT5.6 R4 P1-2：金额与科目编码的区分
+# ---------------------------------------------------------------------------
+
+
+def test_amount_301_is_not_misread_as_code():
+    """金额恰好为 3 位整数（"301"）不得判为科目编码（R4 P1-2）。"""
+    from src.engine.structured_rules import materialize_table
+
+    raw = [
+        ["项目", "金额（万元）", "备注"],
+        ["某支出事项", "301", "全额"],
+    ]
+    table = materialize_table(raw, title="测试表", pages=(1,))
+    assert all(r.code is None for r in table.rows), (
+        [r.code for r in table.rows]
+    )
+
+
+def test_code_column_number_form_is_recognized():
+    """表头确认「科目编码」列时：number 形态的 301/30101 正确识别。"""
+    from src.engine.structured_rules import materialize_table
+
+    raw = [
+        ["科目编码", "科目名称", "决算数"],
+        ["301", "工资福利支出", "300.00"],
+        ["30101", "基本工资", "200.00"],
+    ]
+    table = materialize_table(raw, title="测试表", pages=(1,))
+    assert table.named_columns.get("code") == 0
+    codes = [r.code for r in table.rows]
+    assert codes == [None, "301", "30101"]
