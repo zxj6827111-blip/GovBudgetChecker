@@ -154,41 +154,52 @@ def test_location_key_anchor_ranks_not_gates():
     unrelated_domain = {
         "rule": "V33-245",
         "page": 26,
-        "message": "其他章节的公务接待费 0.00 万元问题",
-        "evidence_text": "公务接待费 0.00",
+        "message": "其他章节的问题",
+        "evidence_text": "项目支出说明 公务接待费 0.00",  # evidence 驻留定位词
     }
     matching_domain = {
         "rule": "V33-245",
         "page": 26,
-        "message": "三公说明：公务接待费支出决算减少为0.00万元表述矛盾",
-        "evidence_text": "公务接待费 0.00",
+        "message": "m",
+        "evidence_text": "三公说明 公务接待费 0.00 表述矛盾",
     }
     hit = match_annotation(ann, [unrelated_domain, matching_domain], set())
     assert hit is matching_domain
 
 
 def test_table_anchor_contributes_to_ranking():
-    """tbl 锚（表名段）计入排序：表名一致的候选优先被消费。"""
+    """tbl 锚 + evidence 驻留对齐短语共同区分同规则同页的两条 finding。
+
+    真实形态（R5）：V33-120 的 evidence 模板是「表格：支出决算表
+    合计值：1367.76」——tbl 锚切出的「支出决算表合计行」六字连续段
+    不在 evidence 中（「支出决算表」与「合计值」隔标点），表名区分
+    由 anchor_phrases_aligned 的 evidence 驻留短语承担（与真实
+    golden A-004 的「合计值」同型）。
+    """
     ann = {
         "rule_id": "V33-120",
         "page": 10,
         "evidence": "1,367.76 不等于分项之和",
         "location_key": "tbl:支出决算表合计行·项目支出",
+        "anchor_phrases_aligned": ["支出决算表", "合计值"],
     }
     same_table = {
         "rule": "V33-120",
         "page": 10,
-        "message": "支出决算表合计行与明细之和相差 0.01 万元",
-        "evidence_text": "合计值：1367.76",
+        "message": "m",
+        "evidence_text": "表格：支出决算表 合计值：1367.76",
     }
     other_table = {
         "rule": "V33-120",
         "page": 10,
-        "message": "收入决算表合计行差异 0.01 万元",
-        "evidence_text": "合计值：1367.76",
+        "message": "m",
+        "evidence_text": "表格：收入决算表 明细之和：1367.75",
     }
     hit = match_annotation(ann, [other_table, same_table], set())
     assert hit is same_table
+    # 反序仍然选中正确表（排序不依赖候选顺序）
+    hit_reversed = match_annotation(ann, [same_table, other_table], set())
+    assert hit_reversed is same_table
 
 
 # ---------------------------------------------------------------------------
@@ -263,8 +274,8 @@ def test_aligned_anchor_phrase_restores_match():
     finding = {
         "rule": "V33-120",
         "page": 10,
-        "message": "支出决算表与一般公共预算财政拨款支出决算表同口径列相差 0.01 万元",
-        "evidence_text": "支出决算表：1367.76 同口径表：1367.75",
+        "message": "m",
+        "evidence_text": "支出决算表与一般公共预算财政拨款支出决算表同口径列相差 0.01 万元",
     }
     assert match_annotation(ann, [finding], set()) is finding
 

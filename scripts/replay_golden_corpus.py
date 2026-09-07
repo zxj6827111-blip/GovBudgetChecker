@@ -423,20 +423,27 @@ def replay_historical(
     if limit:
         jobs = jobs[:limit]
 
-    # 检查点按 parse_mode 隔离（R4 修复）：resume 默认开，此前检查点
-    # 不分模式——structured 模式的报告会把 legacy 全量回放缓存结果
-    # 合并进来（实测 processed=333 而 jobs_total=3，total_rules 出现
-    # 6/22/58 混杂），构成「标记 structured 实际 legacy」的缓存形态。
+    # 检查点按 parse_mode 隔离（R4 修复）+ 按当前任务集过滤（R5 P2-F：
+    # 同模式下 --limit 变更时，旧缓存的全量结果会混入本次报告——
+    # 实测 jobs_total=1、processed=2。恢复时只保留本次 jobs 集合
+    # 内的结果，集合外丢弃（下次全量跑会重新生成）。
     checkpoint_path = OUTPUT_DIR / f"historical-partial-{parse_mode}.json"
     results: List[Dict[str, Any]] = []
     done: set = set()
+    job_set = set(jobs)
     if resume and checkpoint_path.exists():
         try:
             partial = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-            # 双保险：缓存结果的 parse_mode 与本次不一致时整体作废
+            # 双保险①：缓存结果的 parse_mode 与本次不一致时整体作废
             cached_mode = str(partial.get("parse_mode") or "")
             if cached_mode == parse_mode:
-                results = partial.get("results") or []
+                # 双保险②：只保留当前任务集合内的结果（--limit 变更/
+                # 任务删除后的陈旧条目不再混入）
+                results = [
+                    r
+                    for r in (partial.get("results") or [])
+                    if isinstance(r, dict) and r.get("job_id") in job_set
+                ]
                 done = {r.get("job_id") for r in results if r.get("job_id")}
         except Exception:
             results, done = [], set()

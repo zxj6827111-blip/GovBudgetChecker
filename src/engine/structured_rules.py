@@ -99,12 +99,20 @@ class ParsedCell:
 
 @dataclass
 class ParsedRow:
-    """行：cells + 行角色（detail/subtotal/total/header）+ 科目编码。"""
+    """行：cells + 行角色（detail/subtotal/total/header）+ 科目编码。
+
+    双栏表（GPT5.6 R5 P0-B）：左/右栏各持一套「编码+名称+金额」。
+    ``code`` 保留左栏编码；右栏编码存 ``code_right``（此前单值
+    ``code``/``named_columns`` 丢失右栏数据——样张 P15-16 实测右栏
+    310 在第 5-6 列、金额在第 8 列，相关行全部 code=None）。
+    """
 
     cells: List[ParsedCell]
     row_role: str = "detail"            # header / detail / subtotal / total
     code: Optional[str] = None
     code_level: Optional[int] = None    # 3=类 5=款 7=项
+    code_right: Optional[str] = None    # 双栏右栏编码（two_sided 表）
+    code_level_right: Optional[int] = None
     label: str = ""
     confidence: float = 1.0
 
@@ -113,6 +121,8 @@ class ParsedRow:
             "row_role": self.row_role,
             "code": self.code,
             "code_level": self.code_level,
+            "code_right": self.code_right,
+            "code_level_right": self.code_level_right,
             "label": self.label,
             "confidence": self.confidence,
             "cells": [cell.to_dict() for cell in self.cells],
@@ -179,24 +189,28 @@ def _row_code(
 
     GPT5.6 R4 P1-2 收紧：表头确认了「科目编码」列（code_column）时，
     **只在该列识别**——防止金额恰好为 3/5/7 位整数（"301" 万元）被
-    误判为科目编码、污染分类域。无编码列信息时（表头未识别出编码列），
-    保守降级为不识别数字形态（只认 text 形态——PDF 抽取的编码单元格
-    若真在编码列，表头通常可识别；识别不出说明证据不足）。
+    误判为科目编码、污染分类域。指定 code_column 时不受 max_scan
+    限制（双栏表右栏编码列在第 5-6 列，R5 P0-B）；未指定时只扫
+    行首 3 列的 text 形态（数字形态无列守卫不采信）。
     """
+    if code_column is not None:
+        if 0 <= code_column < len(cells):
+            cell = cells[code_column]
+            text = (cell.text or "").strip()
+            if text and _CODE_RE.match(text):
+                return text, len(text)
+            if (
+                cell.number is not None
+                and cell.number == cell.number.to_integral_value()
+            ):
+                digits = str(int(cell.number))
+                if _CODE_RE.match(digits):
+                    return digits, len(digits)
+        return None, None
     for cell in cells[:max_scan]:
         text = (cell.text or "").strip()
         if text and _CODE_RE.match(text):
             return text, len(text)
-        if cell.number is not None and cell.number == cell.number.to_integral_value():
-            digits = str(int(cell.number))
-            if _CODE_RE.match(digits):
-                # 数字形态只在表头确认的编码列内采信（text 形态无此限制：
-                # 文本单元格不可能是金额）
-                if code_column is None:
-                    continue
-                col_idx = cells.index(cell)
-                if col_idx == code_column:
-                    return digits, len(digits)
     return None, None
 
 
@@ -236,8 +250,15 @@ def materialize_table(
     for row in raw_rows[:header_rows]:
         header_labels.extend(str(c).strip() for c in row if c)
 
-    # 语义列识别：合计 / 本年支出合计 / 基本支出 / 项目支出 / 决算数 / 预算数
+    # 语义列识别：合计 / 本年支出合计 / 基本支出 / 项目支出 / 决算数 / 预算数。
+    # 双栏表（GPT5.6 R5 P0-B）：行宽的一半为界，右半识别出的同名列记为
+    # ``*_right``——单值 named_columns 只能存一个位置，右栏的
+    # 决算数/合计（样张 P15 右栏 final 在第 8 列）此前被丢弃。
+    width_hint = max((len(r) for r in raw_rows if r is not None), default=0)
+    seen_right_half = False
     for row in raw_rows[:header_rows + 2]:
+        row_width = len(row)
+        mid = row_width // 2 if width_hint >= 4 else row_width
         for i, cell in enumerate(row):
             text = re.sub(r"\s+", "", str(cell or ""))
             key = None
@@ -251,29 +272,49 @@ def materialize_table(
                 key = "budget"
             elif text == "决算数":
                 key = "final"
-            if key and key not in parsed.named_columns:
-                parsed.named_columns[key] = i
+            if key:
+                target_key = f"{key}_right" if i >= mid and width_hint >= 4 else key
+                if target_key not in parsed.named_columns:
+                    parsed.named_columns[target_key] = i
+                    if target_key.endswith("_right"):
+                        seen_right_half = True
+    # 双栏检测（R5 扩展）：表头同时出现 收入/支出，或右半出现 *_right
+    # 语义列（两个"决算数"分列左右），任一即 two_sided
+    joined_header = "".join(header_labels)
+    if ("收入" in joined_header and "支出" in joined_header) or seen_right_half:
+        parsed.column_group = "two_sided"
 
     # 科目编码列识别（GPT5.6 R4 P1-2）：表头含「科目编码/功能分类/
     # 经济分类」的列是编码列——_row_code 只在该列内识别编码，防止
     # 金额恰好为 3/5/7 位整数（如 301.00 万元取整值 301）被误判科目。
+    # 双栏表左右各有一个编码列（R5 P0-B）：右半记 code_right。
+    # 注意：同一表头行可能同时含左右两个编码列（样张 P15 R0 的
+    # 「经济分类科目编码」×2），必须扫完该行全部列再分配，遇首个
+    # 命中就 break 会漏掉右栏。
     for row in raw_rows[:header_rows + 2]:
+        row_width = len(row)
+        mid = row_width // 2 if width_hint >= 4 else row_width
         for i, cell in enumerate(row):
             text = re.sub(r"\s+", "", str(cell or ""))
             if "编码" in text or text in ("功能分类", "经济分类"):
-                if "code" not in parsed.named_columns:
+                if i >= mid and width_hint >= 4:
+                    if "code_right" not in parsed.named_columns:
+                        parsed.named_columns["code_right"] = i
+                elif "code" not in parsed.named_columns:
                     parsed.named_columns["code"] = i
-                break
-
-    # 双栏检测：表头同时出现 收入/支出 或 左右两个"决算数"
-    joined_header = "".join(header_labels)
-    if "收入" in joined_header and "支出" in joined_header:
-        parsed.column_group = "two_sided"
 
     for r_idx, row in enumerate(raw_rows):
         page = start_page or (pages[0] if pages else 0)
         cells = [_cell_from_raw(c, page) for c in row]
         code, level = _row_code(cells, code_column=parsed.named_columns.get("code"))
+        code_right = level_right = None
+        if (
+            parsed.column_group == "two_sided"
+            and "code_right" in parsed.named_columns
+        ):
+            code_right, level_right = _row_code(
+                cells, code_column=parsed.named_columns["code_right"]
+            )
         label = "".join((c.text or "") for c in cells if c.text)
         numeric_count = sum(1 for c in cells if c.is_numeric)
         row_role = "header" if r_idx < header_rows else _row_role_from_label(
@@ -285,6 +326,8 @@ def materialize_table(
                 row_role=row_role,
                 code=code,
                 code_level=level,
+                code_right=code_right,
+                code_level_right=level_right,
                 label=label,
             )
         )
@@ -494,8 +537,15 @@ def merge_compatible(base: ParsedTable, continuation: ParsedTable) -> bool:
     - 有共同语义列 → 按基准宽度做显式列重映射（尾部对齐，见
       ``_remap_continuation_rows``），重映射记入 parse_errors 供质量门/
       评测消费，随后合并；
-    - 无共同语义列（表头不兼容）→ 拒绝合并并 parse_error 留痕，
-      续表保持独立（宁可少合并也不错位合并）。
+    - 基准表有语义列、续页无表头（表名锚已确认同表、宽度一致且窄于
+      基准）→ 这是官方样张的真实续页形态（P9/P11：续页省略左侧
+      「功能分类/科目编码」层级表头列，行宽 9/8 vs 基准 11/10，
+      语义列为空）——按基准宽度做显式尾部重映射后合并（R5 P0-A：
+      此前一律拒绝导致 P9/P11 真实续表断裂、14 行数据不进规则）；
+    - 双方语义列零交集（不同表种）→ 拒绝合并并 parse_error 留痕。
+
+    重映射后语义列索引随之平移（named_columns 按宽度差平移），保证
+    消费方按命名列取数跨页一致。
     """
     if not continuation.rows:
         return True
@@ -511,18 +561,33 @@ def merge_compatible(base: ParsedTable, continuation: ParsedTable) -> bool:
     cont_widths = {len(r.cells) for r in continuation.rows}
     if base_widths and cont_widths and not (base_widths & cont_widths):
         # 列宽族不重叠：必须重映射后才能合并，否则金额列错位
-        if not shared:
+        if shared:
+            pass  # 有共享语义列：可以精确重映射
+        elif (
+            base_keys
+            and not cont_keys
+            and len(cont_widths) == 1
+            and max(cont_widths) < max(base_widths)
+        ):
+            # 续页无表头 + 行宽一致且窄于基准：真实续页形态（表名锚
+            # 已在 build_parsed_tables 确认同表），尾部重映射合并
+            pass
+        else:
             base.parse_errors.append(
                 "continuation_width_incompatible_no_shared_columns: "
                 f"base={sorted(base_widths)} cont={sorted(cont_widths)}"
             )
             return False
         base_width = max(base_widths)
+        shift = base_width - max(cont_widths)
         base.parse_errors.append(
             f"continuation_width_remapped: base={sorted(base_widths)} "
             f"cont={sorted(cont_widths)}"
         )
         continuation.rows = _remap_continuation_rows(continuation.rows, base_width)
+        # 语义列索引按宽度差平移（续页自身语义列为空时无操作）
+        if not cont_keys and shift:
+            continuation.named_columns = {}
     base.rows.extend(continuation.rows)
     base.page_span = (min(base.page_span[0], continuation.page_span[0]),
                       max(base.page_span[1], continuation.page_span[1]))
@@ -540,6 +605,12 @@ def run_structured_rules(doc: Any, report_kind: Optional[str] = None):
     （单一实现），此处构建 ParsedTable 中间层并委托执行，保证
     legacy/structured 两种输入模式消费同一套规则语义；未迁移规则
     不在此执行（shadow 对比时与 legacy 路径的输出按规则键比较）。
+
+    材料类型路由（GPT5.6 R5 P1-E）：V33 迁移集是**决算**规则——
+    budget/unknown 材料不适用，返回空结果（此前对预算任务也执行
+    9 条决算规则、统一显示 6 pass + 3 insufficient，把"预算规则减少
+    量"误算成 structured delta，且从未验证过规则在目标决算材料上
+    的正确性）。
     """
     from src.engine.rule_outcome import RuleOutcome, RuleOutcomeSignal, STATUS_FAIL, STATUS_PASS, STATUS_EXECUTION_ERROR
     from src.engine.rules_v33 import (
@@ -553,6 +624,12 @@ def run_structured_rules(doc: Any, report_kind: Optional[str] = None):
         R33243_Table6_BasicExpenseAdvancedCheck,
         R33244_Table7_ThreePublicAdvancedCheck,
     )
+
+    # 材料类型路由：非决算材料不执行决算规则集（迁移批次全部预算
+    # 规则落地前，budget/unknown 返回空——诚实反映"该类型无可执行
+    # 的迁移规则"，而不是跑出 3 条 insufficient 的假象）
+    if (report_kind or "").strip().lower() != "final":
+        return [], []
 
     # 1) 构建内存态结构化表（与数据库无关，规则分析与结构化入库共同消费）。
     # GPT5.6 R2 P0-1a：续表合并改由 build_parsed_tables 按表头签名识别

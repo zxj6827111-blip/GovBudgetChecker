@@ -187,6 +187,35 @@ def _anchor_phrases(anchor: str) -> List[str]:
     return [p for p in phrases if p not in generic]
 
 
+def _annotation_section_phrases(annotation: Dict[str, Any]) -> List[str]:
+    """sec/toc 域的**章节标记**短语（R5 P1-C 结构化位置键核心）。
+
+    语义分离：sec 锚切出的短语有两类——
+    - 章节标记（「三公说明」）：指证 finding 属于哪个说明章节；
+    - 行内主题词（「公务接待费」）：出现在该章节的正文里，但其他
+      章节提到同一主题时也会出现——**不构成章节证明**（GPT5.6 R5
+      实测：其他事项说明里的公务接待矛盾，evidence 含「公务接待费」
+      即过锚点）。
+
+    章节标记取锚文本的**首个短语**（冒号后第一段，标注书写约定）；
+    ``section_phrases_aligned`` 供标注补充（规则 evidence 引文起点
+    常是章节标题行）。sec/toc 锚点命中**只认章节标记**；tbl/xtbl
+    锚与 anchor_phrases_aligned 仍走全短语集（表名/证据短语本身即
+    定位声明）。
+    """
+    raw = str(annotation.get("location_key") or "").strip()
+    prefix, _, rest = raw.partition(":")
+    if not (raw and prefix in {"sec", "toc"}):
+        return []
+    phrases = _anchor_phrases(rest)
+    section_marks = phrases[:1] if phrases else []
+    for extra in annotation.get("section_phrases_aligned") or []:
+        norm = _normalize_for_overlap(extra)
+        if len(norm) >= 2 and norm not in section_marks:
+            section_marks.append(norm)
+    return section_marks
+
+
 def _annotation_anchor_phrases(annotation: Dict[str, Any]) -> List[str]:
     """标注的全部锚点短语：location_key 切分短语 + 对齐短语补充。
 
@@ -194,6 +223,9 @@ def _annotation_anchor_phrases(annotation: Dict[str, Any]) -> List[str]:
     的锚点（R2 实测 A-003/005/006/008 四条真命中零命中）需要在标注
     侧补充与规则文案对齐的短语（``anchor_phrases_aligned``，修订记录
     见 ANNOTATIONS.md）——评估器不再单方面迁就措辞差异。
+
+    R5 P1-C：对齐短语必须驻留在 finding 的 evidence_text（原文引文）
+    中才有效——命中搜索已 evidence-only，短语取规则实际引文的片段。
     """
     phrases = _anchor_phrases(str(annotation.get("location_key") or ""))
     for extra in annotation.get("anchor_phrases_aligned") or []:
@@ -204,17 +236,15 @@ def _annotation_anchor_phrases(annotation: Dict[str, Any]) -> List[str]:
 
 
 def _anchor_hit_count(phrases: List[str], finding: Dict[str, Any]) -> int:
-    """锚点短语命中数（排序加分项）。
+    """锚点短语命中数（排序/约束共用的计数器）。
 
-    只按**完整短语**命中计数（不滑窗）——4 字滑窗会因「算表合计」
-    这类跨界片段给错表 finding 也加分，失去排序分辨力。短语本身已按
-    括号/省略号边界切出，完整短语在 finding 中出现才是真正的定位域
-    一致（排序严格只损失分辨力，不会像否决那样误拒真命中）。
+    只按**完整短语**命中计数（不滑窗）。搜索范围**仅限 evidence_text**
+    （R5 P1-C：规则生成的 message 是文案不是定位证据——V33-245 的
+    message 模板固定含「三公说明」，把它算进命中等于规则文案自证
+    章节，任何该规则 finding 都自动过锚点，防线形同虚设）。
     """
     finding_norm = _normalize_for_overlap(
-        " ".join(
-            str(finding.get(key) or "") for key in ("evidence_text", "message")
-        )
+        str(finding.get("evidence_text") or "")
     )
     return sum(1 for phrase in phrases if phrase in finding_norm)
 
@@ -279,19 +309,46 @@ def match_annotation(
         candidates.append((score, finding, anchor_hits))
     if not candidates:
         return None
-    # 锚点约束（GPT5.6 R4 P1-3 终版语义）：
+    # 锚点约束（GPT5.6 R4 P1-3 + R5 P1-C 终版语义）：
     # - 标注可提取有效锚点短语（location_key 切分 + 对齐补充）→ 只有
-    #   命中锚点的候选允许成为 TP；零命中即**拒配**（返回 None，计入
-    #   FN/待复核），不再降级放行——"唯一候选来自其他章节"不得晋升 TP；
+    #   命中锚点的候选允许成为 TP；零命中即**拒配**（FN/待复核），
+    #   "唯一候选来自其他章节"不得晋升 TP；
+    # - sec/toc 域额外要求**章节标记短语**在 evidence 中命中（R5 P1-C：
+    #   行内主题词如「公务接待费」不构成章节证明——其他章节提到同一
+    #   主题时 evidence 也会含它）；标注可用 section_phrases_aligned
+    #   补充章节标记（规则 evidence 引文起点常是章节标题行）。
     # - 标注无锚点短语 → 无定位约束，纯证据排序。
-    # 配套：golden 标注侧已为措辞交叉的历史锚点补充规则文案对齐短语
-    # （A-003/005/006/008，见 ANNOTATIONS.md 2026-09-07 修订记录）——
-    # 零命中拒配要求标注锚点与规则文案可对齐，评估器不再单方面迁就。
     if anchor_phrases:
         anchor_hit_candidates = [c for c in candidates if c[2] > 0]
         if not anchor_hit_candidates:
             return None  # 零锚点命中：unmatched，不晋升 TP
         candidates = anchor_hit_candidates
+    # 章节标记约束（R5 P1-C）：sec/toc 锚的章节标记短语。
+    # - 标注**显式声明** section_phrases_aligned（章节词的 evidence 驻留
+    #   形态）→ 硬约束：零命中拒配（跨章节候选不晋升 TP）；
+    # - 未声明 → 章节标记退位为纯排序加分：规则层已对 V33-245/246 做
+    #   章节 scope 限定（finding 必然产自该章节），此时 evidence 无
+    #   章节词不构成异常；硬拒配只会误伤（样张 A-002 实测——V33-245
+    #   的 evidence 模板是矛盾分句拼接，天然不含章节词）。
+    declared_marks = [
+        m
+        for m in annotation.get("section_phrases_aligned") or []
+        if _normalize_for_overlap(m)
+    ]
+    if declared_marks:
+        normalized_marks = [_normalize_for_overlap(m) for m in declared_marks]
+        finding_norm_of = {
+            id(c[1]): _normalize_for_overlap(str(c[1].get("evidence_text") or ""))
+            for c in candidates
+        }
+        section_hit = [
+            c
+            for c in candidates
+            if any(m in finding_norm_of[id(c[1])] for m in normalized_marks)
+        ]
+        if not section_hit:
+            return None  # 声明的章节词零命中：跨章节候选不晋升 TP
+        candidates = section_hit
     candidates.sort(key=lambda triple: triple[0], reverse=True)
     return candidates[0][1]
 

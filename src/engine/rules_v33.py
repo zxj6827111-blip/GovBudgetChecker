@@ -5547,12 +5547,23 @@ class R33245_ThreePublicDirectionContradiction(Rule):
     desc = "三公经费说明：增减方向与持平表述的逻辑矛盾"
 
     def apply(self, doc: Document) -> List[Issue]:
-        issues: List[Issue] = []
+        issues = []
         merged = merge_page_texts(doc.page_texts)
 
         from src.utils.narration import _THREE_PUBLIC_SUBJECTS
 
-        for para in merge_soft_wrapped_lines(merged):
+        # 章节限定（GPT5.6 R5 P1-C 规则层修复）：本规则语义是「三公说明
+        # 内部的逻辑矛盾」——此前全文扫段落，其他章节（如项目支出说明）
+        # 提到「公务接待费…减少…持平」同样产出 finding，规则文案自证
+        # 章节名却内容跨章节。定位到「三公经费…决算情况说明」主章节的
+        # 完整范围（含（一）（二）子章节，find_section_scope——主标题后
+        # 紧跟子标题时 find_section 的 body 为空）；找不到章节时才降级
+        # 全文（材料无标准章节标题时的兼容）。
+        from src.utils.narration import find_section_scope
+
+        scope_text = find_section_scope(merged, ["三公"]) or merged
+
+        for para in merge_soft_wrapped_lines(scope_text):
             if "三公" not in para and "公务接待" not in para and "因公出国" not in para and "公务用车" not in para:
                 continue
             clauses = split_clauses(para)
@@ -5609,10 +5620,17 @@ class R33246_DomesticReceptionDisclosure(Rule):
     desc = "公务接待：国内公务接待批次、人次披露完整性"
 
     def apply(self, doc: Document) -> List[Issue]:
-        issues: List[Issue] = []
+        issues = []
         merged = merge_page_texts(doc.page_texts)
 
-        for para in merge_soft_wrapped_lines(merged):
+        # 章节限定（GPT5.6 R5 P1-C 规则层修复，同 V33-245）：披露
+        # 完整性针对「三公经费…决算情况说明」主章节完整范围
+        # （find_section_scope 含子章节正文）；找不到时降级全文。
+        from src.utils.narration import find_section_scope
+
+        scope_text = find_section_scope(merged, ["三公"]) or merged
+
+        for para in merge_soft_wrapped_lines(scope_text):
             if "公务接待" not in para:
                 continue
             clauses = split_clauses(para)

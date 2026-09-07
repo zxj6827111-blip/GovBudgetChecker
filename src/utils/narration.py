@@ -129,6 +129,32 @@ def find_section(text: str, keywords: List[str]) -> Optional[Tuple[str, str]]:
     return None
 
 
+def find_section_scope(text: str, keywords: List[str]) -> Optional[str]:
+    """找关键词章节的**完整范围正文**（主标题起、到下一个主标题止）。
+
+    说明材料的常见排版是主章节标题紧跟子标题（「七、财政拨款三公
+    经费支出决算情况说明」后紧跟「（一）…总体情况说明」）——
+    ``split_numbered_sections`` 把子标题也切为独立章节，主章节的 body
+    因此为空、正文全落在子章节里（样张实测）。本函数从主标题位置
+    起切到**下一个主级序号标题**（一、二、…，不含（一）子标题），
+    覆盖该主章节的全部子章节内容。
+    """
+    text = str(text or "")
+    main_title_re = re.compile(
+        r"(?:^|\n)\s*(?:[一二三四五六七八九十]+、|\d{1,2}、)"
+        r"[^。；;！!？?\n]{0,60}(?:说明|情况)"
+    )
+    matches = list(main_title_re.finditer(text))
+    for i, match in enumerate(matches):
+        title = match.group(0).strip()
+        if not all(kw in title for kw in keywords):
+            continue
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        return text[start:end]
+    return None
+
+
 def extract_amounts(clause: str) -> List[Tuple[float, str]]:
     """从分句中抽取金额，返回 [(amount_in_wan, unit)]。
 

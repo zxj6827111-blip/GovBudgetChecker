@@ -299,3 +299,36 @@ R3 版「物理相邻」挡不住相邻页的不同业务表（样张实测 P7 �
 
 ### 仍未完成（如实记录）
 其余 8 条规则的结构化消费迁移（V33-117/120 的 `_apply_structured` 化是下一批，建立在已修正的表数据基础上）、生产管线切换、FiscalFactMaterializer 去 DB、Golden Corpus 扩容 ≥20、top30 人工裁决、真实 AI provider 预发验证。
+
+## 9.7 GPT5.6 第五轮复核整改（2026-09-08，基于 55d3e26）
+
+第五轮 2 P0 / 3 P1 / 1 P2 全部复现属实并修复。按其指定顺序执行：续页合并 → 双栏 lane → 评估器位置键 → Golden 入库 → 类型路由与 checkpoint。
+
+### P0-A 真实续表断裂（P9/P11）
+R4 把「保守独立」固化成基线是错的——P9/P11 是**真实续页**（无表头行、宽度 9/8 vs 基准 11/10，列宽族不重叠被 R2 的 merge 守卫拒绝），其 14/16 行分类明细不进 V33-120。修复：`merge_compatible` 新增真实续页分支——基准表有语义列、续页无表头、行宽一致且窄于基准时（表名锚已确认同表），显式尾部重映射后合并。**样张实测 14→10 张逻辑表**（GPT5.6 预期基线），P9/P11 明细进入各自基准表（行级断言 2110105/2110101 可取、page 归属正确）。基线测试同步修正（10 张 + 续页可达性测试）。
+
+### P0-B 双栏右栏 lane
+单值 `code`/`named_columns` 丢失右栏数据（样张 P15-16 双栏 8 列，右栏 310 在第 5-6 列、金额第 8 列）。修复：右半语义列记 `*_right`（final_right=7）、`code_right=4`；ParsedRow 增 `code_right`/`code_level_right`；`_row_code` 指定 code_column 时不受 max_scan 限制（右栏列超出前 3 列）。样张实测右栏 310 行的 14.44/13.94/0.49 全部可取（V33-117 迁移最关键的 T4 真值）。编码列识别的同表头行双编码列 bug 一并修复（break 漏右栏）。
+
+### P1-C 评估器结构化位置键（评估器 + 规则层双管）
+GPT5.6 指出核心漏洞：锚点命中搜 message，而 V33-245 的 message 模板固定含「三公说明」——规则文案自证章节，任何该规则 finding 自动过锚点。三层修复：
+1. **评估器**：`_anchor_hit_count` 只搜 evidence_text（原文引文）；sec/toc 锚提取**章节标记短语**（锚文本首段）与行内主题词分离——「公务接待费」是主题词不构成章节证明；`section_phrases_aligned` 声明的章节词硬约束（零命中拒配）。
+2. **规则层（根因）**：V33-245/246 改为只扫「三公经费…决算情况说明」主章节完整范围（`find_section_scope`——`find_section` 在主标题紧跟子标题时 body 为空，样张实测；新辅助从主标题切到下一主级序号标题，覆盖（一）（二）子章节）。完整材料中其他章节的公务接待矛盾**不再产出 finding**（正反双验证：其他章节 0 / 三公章节内 1）；无标准章节标题材料降级全文（兼容）。
+3. **golden 配套**：对齐短语全部改为 evidence 驻留（A-003「国内公务接待」、A-004「合计值」、A-005「一般公共预算财政拨款支出决算表」——R4 的「同口径列」会抢占 A-004 的 finding、且不在 evidence 中，已修正；A-006「310/明细之和」、A-008「显式合计」）；A-002 无章节声明（V33-245 evidence 模板是矛盾分句拼接，天然无章节词——规则层 scope 已保证其章节域）。
+
+### P1-D Golden 验收入库
+golden.json 与 ANNOTATIONS.md 经 gitignore 否定规则入库（corpus/* 全忽略 + !golden.json/!ANNOTATIONS.md 例外；PDF 与基线转储仍不入库）——干净 checkout 可复现 GATE。ANNOTATIONS.md 补 R5 修订记录（evidence 驻留变更全史）。夹具增加**内容哈希锁定**（FIXTURE_SHA，源 PDF SHA 只能溯源、检测不了内容被改——双锁）。
+
+### P1-E 类型路由 + P2-F checkpoint 过滤
+- `run_structured_rules` 按 report_kind 路由：非 final 返回空（V33 迁移集是决算规则——此前预算任务跑出 6 pass + 3 insufficient 的假象，把预算规则减少量误算成 structured delta）。smoke 验证：budget/unknown 任务 total_rules=0。
+- checkpoint 按当前任务集过滤：恢复时只保留本次 jobs 集合内结果（此前同模式下 --limit 变更会混入旧缓存全量——GPT5.6 复现 jobs_total=1/processed=2）。验证 jobs_total=1/processed=1。
+
+### 验证（2026-09-08 第七轮）
+- 全量 pytest **1040 passed + 1 skipped**（+2 测试零回归）；
+- replay+evaluate **GATE-PASS**（defect 3/3 + hint 4/4，evidence-only 锚点下通过）；
+- V33-245 规则层章节限定正反双验证（其他章节矛盾 0 findings / 章节内 1 finding）；
+- 历史 structured smoke：budget/unknown 如实 0 规则、checkpoint 过滤生效；
+- Ruff 全目录通过。
+
+### 仍未完成（如实记录）
+V33-117/120 的 `_apply_structured` 消费迁移（P0-B 的右栏 lane 数据已就绪，下一批）、生产管线切换、Golden Corpus 扩容、top30 人工裁决、真实 AI 预发验证。
