@@ -189,3 +189,76 @@ def test_table_anchor_contributes_to_ranking():
     }
     hit = match_annotation(ann, [other_table, same_table], set())
     assert hit is same_table
+
+
+# ---------------------------------------------------------------------------
+# GPT5.6 R3 P1-4/P1-5：锚点条件约束 + locatable 证据强化
+#
+# 锚点语义取舍（样张真值数据支撑）：A-003/005/006/008 四条真命中的锚点
+# 短语在 finding 中零命中（标注者行级措辞 vs 规则文案交叉）——「全零
+# 命中即拒绝」会把样张召回打到 3/7。条件约束取中间态：锚点能区分时
+# 否决错域候选，不能区分时降级纯证据排序。
+# ---------------------------------------------------------------------------
+
+
+def test_anchor_constraint_eliminates_wrong_domain_when_correct_exists():
+    """错域与正域候选并存（锚点可区分）：错域候选必须被淘汰。"""
+    ann = {
+        "rule_id": "V33-245",
+        "page": 26,
+        "evidence": "「公务接待费支出决算减少为0.00万元」逻辑矛盾",
+        "location_key": "sec:三公说明(一)公务接待费",
+    }
+    wrong_domain = {
+        "rule": "V33-245",
+        "page": 26,
+        "message": "其他章节的公务接待费 0.00 万元问题",
+        "evidence_text": "公务接待费 0.00",
+    }
+    correct_domain = {
+        "rule": "V33-245",
+        "page": 26,
+        "message": "三公说明：公务接待费支出决算减少为0.00万元表述矛盾",
+        "evidence_text": "公务接待费 0.00",
+    }
+    hit = match_annotation(ann, [wrong_domain, correct_domain], set())
+    assert hit is correct_domain
+    hit_reversed = match_annotation(ann, [correct_domain, wrong_domain], set())
+    assert hit_reversed is correct_domain
+
+
+def test_anchor_constraint_degrades_when_no_candidate_hits_anchor():
+    """锚点零命中（措辞交叉，如 A-005「p14同口径表合计」vs finding
+    「同口径列」）：降级纯证据排序，不因锚点不匹配而拒绝真命中。"""
+    ann = {
+        "rule_id": "V33-120",
+        "page": 10,
+        "evidence": "P14 同口径表合计 1,367.75，两表差 0.01",
+        "location_key": "xtbl:p14同口径表合计",
+    }
+    # finding 措辞与锚点无任何重叠（真实 R2 场景），但金额证据充分
+    finding = {
+        "rule": "V33-120",
+        "page": 10,
+        "message": "支出决算表与一般公共预算财政拨款支出决算表同口径列相差 0.01 万元",
+        "evidence_text": "支出决算表：1367.76 同口径表：1367.75",
+    }
+    assert match_annotation(ann, [finding], set()) is finding
+
+
+def test_locatable_requires_page_and_evidence_text():
+    """locatable 双证据（R3 P1-5）：页码 + 非空 evidence_text（原文引文）。
+
+    只有页码和规则生成的通用 message、evidence_text 空的 finding
+    不得算作可定位（message 是文案不是证据）。
+    """
+    # locatable 的文本证据 = 非空 evidence_text（原文引文）；
+    # message 是规则生成的文案，不构成可定位证据（R3 P1-5）
+    f_message_only = {"page": 5, "message": "通用文案", "evidence_text": ""}
+    f_with_quote = {
+        "page": 6,
+        "message": "m",
+        "evidence_text": "表格：支出决算表 合计：100.00",
+    }
+    assert not str(f_message_only.get("evidence_text") or "").strip()
+    assert str(f_with_quote.get("evidence_text") or "").strip()

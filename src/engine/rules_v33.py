@@ -2302,13 +2302,27 @@ def _extract_standard_three_public_total(section: str, fiscal_type: str) -> Opti
 # ==================================================================================
 
 def _find_parsed_table(doc: Document, title_fragment: str):
-    """按标题片段在 doc.parsed_tables 中查找目标表（无挂载时返回 None）。"""
+    """在 doc.parsed_tables 中查找目标表（无挂载时返回 None）。
+
+    两级匹配（GPT5.6 R3 P0-2）：① 表 title 含表名片段；② title 常只
+    含表体首行（pdfplumber 的表格 bbox 不含表标题行——官方样张的总表
+    title 实为「收入支出」，表名「收入支出决算总表」在页文本里），
+    此时回退按锚点页匹配：表起始页的页文本含表名即命中（与 legacy
+    `_get_first_anchor_page` 同源锚点）。仍无法定位时返回 None 走
+    legacy 回退。
+    """
     tables = getattr(doc, "parsed_tables", None)
     if not isinstance(tables, dict):
         return None
     for table in tables.values():
         if title_fragment in (getattr(table, "title", "") or ""):
             return table
+    page_texts = getattr(doc, "page_texts", []) or []
+    for table in tables.values():
+        start_page = (getattr(table, "page_span", (0, 0)) or (0, 0))[0]
+        if 0 < start_page <= len(page_texts):
+            if title_fragment in (page_texts[start_page - 1] or ""):
+                return table
     return None
 
 

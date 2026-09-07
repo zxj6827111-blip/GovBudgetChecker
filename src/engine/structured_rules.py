@@ -27,7 +27,14 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.engine.amount_math import classify_amount_diff
 
-# 首批迁移规则（与整改计划 §3 一致）
+# 结构化迁移登记（两级口径，GPT5.6 R3 P0-2 诚实化）：
+# - STRUCTURED_MIGRATED_RULES：经 run_structured_rules 适配器执行的规则
+#   （与 legacy 共用同一实现）；
+# - STRUCTURED_PARSING_CONSUMERS：**真正消费 doc.parsed_tables**
+#   （命名行/三态单元格取数，不再依赖 legacy 文本行回退）的规则。
+#   覆盖率/structured_ready 必须以这一级为准——R2/R3 复核指出按登记数
+#   报 9/52 是误导（除 V33-115 外其余 8 条虽在适配器中执行，输入仍是
+#   legacy 表征）。
 STRUCTURED_MIGRATED_RULES: Tuple[str, ...] = (
     "V33-115",
     "V33-117",
@@ -38,6 +45,11 @@ STRUCTURED_MIGRATED_RULES: Tuple[str, ...] = (
     "V33-241",
     "V33-243",
     "V33-244",
+)
+
+# 真实消费 parsed_tables 的规则（structured 解析覆盖率的分子）
+STRUCTURED_PARSING_CONSUMERS: Tuple[str, ...] = (
+    "V33-115",  # R3 P0-2：_apply_structured 从 ParsedRow/ParsedCell 三态取数
 )
 
 # 科目域（与 common_rules._code_domain 口径一致）
@@ -151,10 +163,22 @@ def _cell_from_raw(raw: Any, page: int) -> ParsedCell:
 
 
 def _row_code(cells: List[ParsedCell], max_scan: int = 3) -> Tuple[Optional[str], Optional[int]]:
+    """提取行首科目编码（3/5/7 位整数）。
+
+    科目编码单元格在 PDF 抽取中可能是纯数字串——_cell_from_raw 会把
+    "301" 存为 number（GPT5.6 R3 P1-3：此前只读 cell.text，导致
+    code=None、classification_type=other，经济/功能分类域判断失效）。
+    因此对 number 为整数的单元格，检查其无小数位形式是否匹配编码位长；
+    text 单元格仍按原文匹配（前导零场景如 "301" vs "0301" 以文本为准）。
+    """
     for cell in cells[:max_scan]:
         text = (cell.text or "").strip()
         if text and _CODE_RE.match(text):
             return text, len(text)
+        if cell.number is not None and cell.number == cell.number.to_integral_value():
+            digits = str(int(cell.number))
+            if _CODE_RE.match(digits):
+                return digits, len(digits)
     return None, None
 
 
@@ -247,38 +271,58 @@ def materialize_table(
 def build_parsed_tables(page_tables: Sequence[Sequence[Any]]) -> Dict[str, "ParsedTable"]:
     """从 pdfplumber 风格的逐页表格构建 ParsedTable 集合（跨页续表合并）。
 
-    GPT5.6 R2 P0-1a：原实现的 key 为 ``P{页}:{当前累计表数}``，累计数
-    只增不减 → key 永不重复 → ``if key in parsed_tables`` 永假，续表
-    从不合并（实测两页续表 keys=['P1:0','P2:1']、merge_calls=0）。
-
-    正确的续表识别是**内容签名**而非位置：与"上一张表"表头签名兼容
-    （语义列有交集或双方都无语义列但表头文本相近）即视为跨页续表，
-    走 merge_compatible 守卫（列宽漂移重映射/表头不兼容拒绝合并）；
-    签名不同则作为独立表存在。表头签名 = 语义列集合 + 前 header_rows
-    行的归一化文本。
+    演进史（三次复核迭代，语义边界逐轮收紧）：
+    - R2 前的原实现：key 含累计表数永不重复 → 续表从不合并；
+    - R2 修复：按内容签名识别续表——但在官方样张上暴露三个新缺陷
+      （GPT5.6 R3 P0-1，实测 14 张原始表只剩 4 张）：
+      ① last_key 不限相邻：跨页合并后，后续任意页的签名兼容表都
+        会被继续吞并（P10 表 span 竟达 (10,19)，10~19 页全归一张表）；
+      ② 签名兼容但 merge_compatible 拒绝（如表头语义列不相交）时，
+        else 分支不执行 → 该表被静默丢弃；
+      ③ 同页两张相同列结构的独立表被合成一张。
+    - R3 收敛语义（本实现）：
+      ① 合并候选限定**物理相邻**：上一张表与当前表同页，或上一张表
+         的 span 末页与当前表相邻页（隔页/隔表不合并——续表在物理
+         排版上必然连续）；
+      ② 拒绝合并（签名不兼容或 merge_compatible 返回 False）时，
+         当前表无条件保留为独立表，绝不允许静默丢表；
+      ③ key 唯一性由「首次出现的页 + 该页内序号」保证。
     """
     parsed_tables: Dict[str, ParsedTable] = {}
     last_key: Optional[str] = None
+    last_end_page: int = 0
     for p_idx, tables in enumerate(page_tables or [], start=1):
         for raw in tables or []:
             title = "".join(
                 str(c or "") for c in (raw[0] if raw and raw[0] else [])
             )[:40]
             parsed = materialize_table(raw, title=title, pages=(p_idx,))
-            candidate = last_key
+            # 相邻性：上一表与当前表同页（同页连续排版的续表），或上一
+            # 表结束页紧邻当前页（跨页续表）。隔页出现的同签名表是
+            # 新表种而非续表。
+            adjacent = (
+                last_key is not None
+                and last_end_page in (p_idx, p_idx - 1)
+            )
+            merged = False
             if (
-                candidate is not None
-                and candidate in parsed_tables
-                and _table_signature_compatible(parsed_tables[candidate], parsed)
+                adjacent
+                and last_key in parsed_tables
+                and _table_signature_compatible(parsed_tables[last_key], parsed)
             ):
-                merge_compatible(parsed_tables[candidate], parsed)
-                # 合并后表头签名不变，续表仍可与它继续合并（链式续页）
-            else:
+                if merge_compatible(parsed_tables[last_key], parsed):
+                    merged = True
+                    # 合并后表头签名不变且 span 已扩展：续表可继续合并
+                    last_end_page = max(last_end_page, parsed.page_span[1])
+            if not merged:
+                # 拒绝合并/不相邻/签名不兼容：无条件保留为独立表——
+                # 结构化解析阶段宁可多出独立表，绝不静默丢表
                 key = f"P{p_idx}:{len(parsed_tables)}"
-                if key in parsed_tables:  # 理论不可达，防御性保底
+                if key in parsed_tables:
                     key = f"{key}:{id(parsed)}"
                 parsed_tables[key] = parsed
                 last_key = key
+                last_end_page = parsed.page_span[1]
     return parsed_tables
 
 

@@ -228,3 +228,40 @@ Golden Corpus 仍为 1 份（目标 ≥20 份双人复核）；历史 top30 仅�
 - shadow replay：structured 路径经 P0-1 修复后行为不变（4 条 finding、`structured_ready=false` 17.3%）；
 - Ruff（api/src/scripts 全目录）：All checks passed（本轮引入的 2 个新错误 F841/B905 已修）；
 - node --check：run-e2e.cjs / next-dev.cjs / dev.cjs 全过。
+
+## 9.5 GPT5.6 第三轮复核整改（2026-09-07，基于 78fbe40）
+
+第三轮复核指出 2 P0 / 3 P1，经**官方样张真实 PDF 复现**全部属实，本轮修复：
+
+### P0-1 build_parsed_tables 误合并与静默丢表（样张实测 14 表→4）
+R2 版实现的三个缺陷在真实 PDF 上全部复现：`last_key` 不限相邻（支出决算表 span 竟达 (10,19)、10~19 页被吞并）；签名兼容但 merge_compatible 拒绝时表被静默丢弃；同页同列结构独立表被合成一张。重写为三条硬语义：**合并候选限定物理相邻**（同页或紧邻页，隔页/隔表不合并——续表在排版上必然连续）；**拒绝合并时无条件保留独立表**（宁可多表不丢表）；key 唯一性由页+序号保证。样张实测 14→9 张逻辑表（GPT5.6 预期约 10），所有 span ≤3 页、合并后行数 ≥ 原始行数（零丢表）。
+
+### P0-2 V33-115 结构化试点未在样张生效（target_found=False）
+根因：pdfplumber 的表格 bbox 不含表标题行——样张总表的 title 实为表体首行「收入支出」，表名「收入支出决算总表」在页文本里，title 片段匹配必然失败。修复：`_find_parsed_table` 两级匹配（title 片段 → 表起始页的页文本锚点，与 legacy `_get_first_anchor_page` 同源）。样张实测：target_found=True（span 7-8、51 行），`_apply_structured` 真实取到总计两侧 4733.14（平衡 → 0 finding 是正确结论，与 legacy 一致）。
+
+### P0-2b structured 覆盖率诚实化
+`STRUCTURED_MIGRATED_RULES`（适配器登记 9 条）之外新增 `STRUCTURED_PARSING_CONSUMERS`（真正消费 parsed_tables 的规则，当前仅 V33-115）。shadow 报告的覆盖率分子改为后者：**1/52 = 1.9%**（此前按登记数报 17.3% 是误导——其余 8 条输入仍是 legacy 表征）。ready_note 如实区分两级口径。
+
+### P1-3 数字科目编码被当金额
+`_cell_from_raw` 把 "301" 存为 number=301、text=None，`_row_code` 只读 text → code=None、分类域判断失效。修复：`_row_code` 对 number 为整数的单元格检查其数位形式（3/5/7 位）是否匹配编码位长。样张总表的首列「类款项」合并编码（Decimal 形态）现在可正确提取。
+
+### P1-4 location_key 升格为条件约束（取舍有数据支撑）
+GPT5.6 复现场景（唯一候选来自其他章节）实测仍匹配——但样张真值数据显示 **A-003/005/006/008 四条真命中的锚点短语零命中**（标注者行级措辞 vs 规则文案交叉），「全零命中即拒绝」会把样张召回打到 3/7。收敛为**条件约束**：锚点可区分（存在命中候选）时淘汰未命中者（挡住「错域与正域并存」的假 TP）；锚点零命中（措辞交叉）时降级纯证据排序（不误拒真命中）。GPT5.6 构造的「其他章节」文案在真实规则产出中不存在，该场景由排序语义承担。
+
+### P1-5 locatable 证据强化
+文本证据从「evidence_text 或 message」收紧为**仅非空 evidence_text**（规则侧的原文引文：表名/金额/标签行）——message 是规则生成的文案不是证据。样张 7 条 finding 的 evidence_text 全部非空，locatable 1.0 保持。
+
+### 真实 PDF 集成测试（GPT5.6 R3 明确要求）
+`tests/test_structured_sample_integration.py` 3 例：① 样张 14 张原始表 → 8-12 张逻辑表、零丢表、span ≤3 页；② V33-115 两级匹配命中总表且 `_apply_structured` 走通（span/行数/结论断言）；③ 结构化与 legacy 在样张上结论一致。
+
+### 验证（2026-09-07 第五轮）
+- 全量 pytest：**1032 passed + 1 skipped**（第四轮 1026 → 新增 6 测试，零回归）；
+- replay+evaluate：**GATE-PASS**（TP=3 FP=0 FN=0、hint 4/4、全指标 1.0）；
+- shadow replay：`structured_ready=false`，覆盖率按真实消费口径 1.9% 如实标注；
+- Ruff 全目录通过。
+
+### 仍未完成（如实记录，与 R3 结论一致）
+- 其余 8 条适配器规则的结构化消费迁移（`_apply_structured` 复制到 117/120/202/203/220/241/243/244）——**这是 Phase 3 的主体工作，必须在 build_parsed_tables 数据正确的基础上进行**（本轮已修复基础）；
+- 生产管线仍恒走 legacy（`run_rules_in_process`）；
+- FiscalFactMaterializer 数据库依赖未移除；
+- Golden Corpus 仍 1 份（目标 ≥20）；历史 top30 无逐份人工裁决；真实 AI provider 成功链路未预发验证。

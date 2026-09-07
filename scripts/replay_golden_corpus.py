@@ -142,15 +142,17 @@ def run_structured_rules(page_texts: List[str], page_tables: List[Any], report_k
     阶段3 的迁移规则（V33-115/117/120/202/203/220/241/243/244 首批）通过
     `src.engine.structured_rules` 提供的结构化输入执行；未迁移部分不执行。
 
-    structured_ready 的判定（GPT5.6 P0-3 诚实化）：以"迁移规则数 / 决算
-    规则总数"的覆盖率为准，达到 STRUCTURED_READY_MIN_COVERAGE 才算
-    ready——此前"迁移列表非空即 ready"会误导下游把它当作可切换状态。
+    structured_ready 的判定（GPT5.6 P0-3/R3 P0-2 两轮诚实化）：覆盖率
+    分子用 **STRUCTURED_PARSING_CONSUMERS**（真正消费 doc.parsed_tables、
+    从命名行三态取数的规则）——登记在适配器的 9 条中只有 V33-115 完成
+    消费链路，其余 8 条输入仍是 legacy 表征，按登记数报覆盖率是误导。
     """
     from src.engine.pipeline import build_document
     from src.engine.rule_outcome import summarize_rule_outcomes
     from src.engine.rules_v33 import ALL_RULES as FINAL_ALL_RULES
     from src.engine.structured_rules import (
         STRUCTURED_MIGRATED_RULES,
+        STRUCTURED_PARSING_CONSUMERS,
         run_structured_rules as _run,
     )
 
@@ -159,19 +161,21 @@ def run_structured_rules(page_texts: List[str], page_tables: List[Any], report_k
     issues, outcomes = _run(doc, report_kind=report_kind)
     elapsed_ms = int((time.time() - started) * 1000)
     findings = [_serialize_finding(issue) for issue in issues]
-    migrated_count = len(STRUCTURED_MIGRATED_RULES)
+    consumer_count = len(STRUCTURED_PARSING_CONSUMERS)
     total_count = len(FINAL_ALL_RULES)
-    coverage = round(migrated_count / total_count, 4) if total_count else 0.0
+    coverage = round(consumer_count / total_count, 4) if total_count else 0.0
     return {
         "mode": "structured",
         "structured_ready": coverage >= STRUCTURED_READY_MIN_COVERAGE,
         "structured_coverage": coverage,
-        "migrated_rules": sorted(STRUCTURED_MIGRATED_RULES),
-        "migrated_rule_count": migrated_count,
+        "parsing_consumer_rules": sorted(STRUCTURED_PARSING_CONSUMERS),
+        "parsing_consumer_count": consumer_count,
+        "adapter_migrated_rules": sorted(STRUCTURED_MIGRATED_RULES),
         "final_rule_total": total_count,
         "ready_note": (
-            f"已迁移 {migrated_count}/{total_count} 条决算规则"
-            f"（覆盖率 {coverage:.1%}），未迁移规则在 structured 模式下不执行；"
+            f"真正消费 parsed_tables 的规则 {consumer_count}/{total_count}"
+            f"（覆盖率 {coverage:.1%}）；另有 {len(STRUCTURED_MIGRATED_RULES) - consumer_count} 条"
+            "登记在适配器但输入仍为 legacy 表征；"
             f"覆盖率 ≥ {STRUCTURED_READY_MIN_COVERAGE:.0%} 才视为可切换（ready）"
         ),
         "elapsed_ms": elapsed_ms,

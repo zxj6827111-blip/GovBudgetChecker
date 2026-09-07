@@ -207,17 +207,20 @@ def match_annotation(
     findings: List[Dict[str, Any]],
     consumed: set,
 ) -> Optional[Dict[str, Any]]:
-    """标注 ↔ finding 匹配（GPT5.6 P1-4 + R2 P1-2 收敛设计）：
+    """标注 ↔ finding 匹配（GPT5.6 P1-4 + R2 P1-2 + R3 P1-4 收敛设计）：
 
     候选门槛 = 规则一致（或标注无规则）+ 页码一致 + evidence 内容重叠
     （区分度数字 token 交集，或 4-6 字/超短全串的文本片段重叠——
     年份/孤立两位数不单独构成证据）。
 
-    location_key 锚点（toc/sec/tbl/xtbl 全部定位域）只做**排序加分**
-    不做否决——R2 样张实测：标注者的行级措辞（「p14同口径表合计」
-    「310资本性支出类行」）与规则文案（「同口径列」「经济分类科目
-    310」）交叉时，锚点否决会误拒全部真命中；假 TP 防线由区分度
-    token 通道承担（见 evidence_overlaps）。
+    location_key 锚点做**条件约束**（R3 P1-4：纯排序挡不住「唯一候选
+    来自其他章节、仅共享“公务接待费 0.00”」的假 TP）：
+    - 候选中**存在**锚点命中者 → 未命中锚点的候选全部淘汰（定位域
+      可区分时，跨位置 finding 不允许成为 TP）；
+    - 候选中**无一**命中锚点 → 保留全部候选按证据排序（R2 样张实测：
+      标注者行级措辞与规则文案交叉时，锚点否决会误拒真命中——
+      「p14同口径表合计」vs finding「同口径列」）。锚点区分度不足
+      时不作为否决依据，降级回纯证据排序。
 
     每条 finding 只能被一条标注消费（consumed 去重）。
     优先返回综合得分最高的 finding：区分度数字交集 > 锚点短语命中
@@ -260,10 +263,15 @@ def match_annotation(
                 shared_text = size
                 break
         score = shared_nums * 10000 + anchor_hits * 100 + shared_text
-        candidates.append((score, finding))
+        candidates.append((score, finding, anchor_hits))
     if not candidates:
         return None
-    candidates.sort(key=lambda pair: pair[0], reverse=True)
+    # 锚点条件约束：有候选命中锚点 → 淘汰未命中者（跨位置假 TP 防线）；
+    # 无候选命中 → 措辞交叉场景，降级纯证据排序（不误拒真命中）
+    anchor_hit_candidates = [c for c in candidates if c[2] > 0]
+    if anchor_hit_candidates:
+        candidates = anchor_hit_candidates
+    candidates.sort(key=lambda triple: triple[0], reverse=True)
     return candidates[0][1]
 
 
@@ -337,11 +345,14 @@ def evaluate(doc_id: str, replay_path: Path) -> Dict[str, Any]:
     # 证据可定位率（GPT5.6 R2 P1-2 强化）：正式 finding 需要**双证据**——
     # 页码 + 非空 evidence_text/message（此前只查页码，"有页码无证据文本"
     # 也算可定位）。缺任一即不可定位，进入未达标明细。
+    # 证据可定位率（GPT5.6 R2 P1-2 + R3 P1-5 两级强化）：
+    # - R2：页码 + 文本（此前仅页码）；
+    # - R3：文本必须是非空 **evidence_text**（规则侧的原文引文，如
+    #   表名/金额/「总计」标签行）。规则生成的 message 是文案不是
+    #   证据——"有页码 + 通用 message、evidence_text 空"的 finding
+    #   不允许算作可定位。缺项进入 unlocatable_findings 明细。
     def _has_text_evidence(f: Dict[str, Any]) -> bool:
-        return bool(
-            str(f.get("evidence_text") or "").strip()
-            or str(f.get("message") or "").strip()
-        )
+        return bool(str(f.get("evidence_text") or "").strip())
 
     locatable = [
         f for f in findings if _page_of(f) is not None and _has_text_evidence(f)
