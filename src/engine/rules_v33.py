@@ -2301,32 +2301,6 @@ def _extract_standard_three_public_total(section: str, fiscal_type: str) -> Opti
 # 勾稽关系验证规则
 # ==================================================================================
 
-def _structured_side_total(table, side: str) -> Optional[Decimal]:
-    """从 ParsedTable 的总计行提取指定侧金额（结构化消费试点，V33-115）。
-
-    双栏布局与 legacy 路径同源：[收入项目, 收入金额, 支出项目, 支出金额]，
-    金额取自与「总计」标签同侧的半行；ParsedCell 三态保证文本单元格
-    number=None，不会把标签误读成 0.0。
-    """
-    mid = len(table.rows[0].cells) // 2 if table.rows else 0
-    for row in table.rows:
-        if row.row_role not in ("total", "subtotal"):
-            continue
-        cells = row.cells
-        if not any("总计" in (c.text or "") for c in cells):
-            continue
-        half = cells[:mid] if side == "income" else cells[mid:]
-        got_number = False
-        for c in half:
-            if c.number is not None:
-                return c.number
-            if "总计" in (c.text or ""):
-                got_number = True
-        # 标签在半行内但金额在另一半（罕见布局）：跳过，不猜测
-        _ = got_number
-    return None
-
-
 def _find_parsed_table(doc: Document, title_fragment: str):
     """按标题片段在 doc.parsed_tables 中查找目标表（无挂载时返回 None）。"""
     tables = getattr(doc, "parsed_tables", None)

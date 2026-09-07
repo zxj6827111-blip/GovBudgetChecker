@@ -236,3 +236,18 @@ def test_v33_115_falls_back_to_legacy_when_not_mounted():
     doc = build_document(path="x决算.pdf", page_texts=["决算"], page_tables=[], filesize=0)
     with pytest.raises(RuleDeferred):
         R33115_TotalSheetCheck().apply(doc)
+
+
+def test_build_parsed_tables_same_page_disjoint_tables_stay_separate():
+    """同页两张不同表种（语义列零交集）：必须保持独立，不误判续表。
+
+    审查发现易混淆点：page_tables 的一页是"表格列表"（[t1, t2]），
+    同页相邻的两张不同表也走 last_key 续表判定——语义列零交集
+    （{total} vs {final}）且表头文本互不包含时必须拒绝合并。
+    """
+    t1 = [["收入决算表", "", ""], ["项目", "合计", "本年收入"]]
+    t2 = [["支出决算表", "", ""], ["功能分类", "决算数", "备注"]]
+    tables = build_parsed_tables([[t1, t2]])  # 一页两表
+    assert len(tables) == 2, f"同页不同表种被误合并: keys={sorted(tables)}"
+    titles = [t.title[:5] for t in tables.values()]
+    assert "收入决算表" in "".join(titles) and "支出决算表" in "".join(titles)

@@ -182,33 +182,6 @@ def _anchor_phrases(anchor: str) -> List[str]:
     return [p for p in phrases if p not in generic]
 
 
-def _location_anchor_prefix(location_key: Any) -> str:
-    """location_key 的定位域前缀（toc/sec/tbl/xtbl，无则空串）。"""
-    raw = str(location_key or "").strip()
-    prefix, sep, _ = raw.partition(":")
-    return prefix if sep and prefix in {"toc", "sec", "tbl", "xtbl"} else ""
-
-
-def _table_anchor_phrase(location_key: Any) -> str:
-    """tbl/xtbl 锚的表名/主体短语（首个分隔符前的段），供排序加分。
-
-    R2 样张实测后收敛：表锚否决在「跨表同页 + 标注行级措辞 vs 规则
-    文案措辞交叉」场景（A-005「p14同口径表合计」vs finding「同口径列」、
-    A-006「310资本性支出类行」vs「经济分类科目 310」）无法可靠区分，
-    只剩误伤。假 TP 防线由 evidence_overlaps 的区分度数字 token
-    （仅共享年份不构成证据）承担；锚点（含表锚）全部转为排序加分，
-    让多候选时优先消费定位域一致的 finding。
-    """
-    raw = str(location_key or "").strip()
-    prefix = _location_anchor_prefix(raw)
-    if prefix not in {"tbl", "xtbl"}:
-        return ""
-    _, _, anchor = raw.partition(":")
-    head = re.split(r"[（()·、…\[]", anchor)[0]
-    norm = _normalize_for_overlap(head)
-    return norm if len(norm) >= 3 else ""
-
-
 def _anchor_hit_count(location_key: Any, finding: Dict[str, Any]) -> int:
     """锚点短语命中数（排序加分项）。
 
@@ -237,13 +210,19 @@ def match_annotation(
     """标注 ↔ finding 匹配（GPT5.6 P1-4 + R2 P1-2 收敛设计）：
 
     候选门槛 = 规则一致（或标注无规则）+ 页码一致 + evidence 内容重叠
-    （区分度数字 token 交集或 4-6 字文本片段）；tbl/xtbl 表锚的表名
-    短语必须出现在 finding 中（错表拒绝）；toc/sec 锚仅作排序加分
-    （人工措辞与规则文案差异大，作为否决会误拒真命中——R2 样张实测）。
+    （区分度数字 token 交集，或 4-6 字/超短全串的文本片段重叠——
+    年份/孤立两位数不单独构成证据）。
+
+    location_key 锚点（toc/sec/tbl/xtbl 全部定位域）只做**排序加分**
+    不做否决——R2 样张实测：标注者的行级措辞（「p14同口径表合计」
+    「310资本性支出类行」）与规则文案（「同口径列」「经济分类科目
+    310」）交叉时，锚点否决会误拒全部真命中；假 TP 防线由区分度
+    token 通道承担（见 evidence_overlaps）。
 
     每条 finding 只能被一条标注消费（consumed 去重）。
-    优先返回综合得分最高的 finding：区分度数字交集 > 锚点命中 > 文本
-    片段长度，使"最贴近原始数字与定位域的证据"优先被消费。
+    优先返回综合得分最高的 finding：区分度数字交集 > 锚点短语命中
+    （_anchor_phrases 完整短语）> 共享文本片段长度，使"最贴近原始
+    数字与定位域的证据"优先被消费。
     """
     rule_id = str(annotation.get("rule_id") or "").strip().upper()
     page = annotation.get("page")
@@ -259,8 +238,6 @@ def match_annotation(
             finding_rule = str(finding.get("rule") or "").strip().upper()
             if finding_rule != rule_id:
                 continue
-        # 表锚不再否决（见 _table_anchor_phrase 的收敛说明），
-        # 其命中计入 _anchor_hit_count 排序加分
         if not evidence_overlaps(annotation_evidence, finding):
             continue
         # 综合得分：区分度数字交集 > 锚点命中数 > 共享文本片段长度
