@@ -223,25 +223,69 @@ def diff_legacy_structured(legacy: Dict[str, Any], structured: Dict[str, Any]) -
     }
 
 
-def replay_doc(doc_dir: Path, parse_mode: str) -> Dict[str, Any]:
+def _load_corpus_inputs(doc_dir: Path) -> Tuple[str, List[str], List[List[Any]]]:
+    """语料输入加载：优先真实 PDF；无 PDF 时按 SHA 回退入库 fixture。
+
+    GPT5.6 R6 P1-5：corpus PDF 不入库（大文件），干净 checkout 上
+    replay 直接 FileNotFoundError → replay+evaluate 不可复现（pytest
+    可跑，评测链路断）。回退逻辑：按 doc_id 找 tests/fixtures 中的
+    序列化解析产物，校验其 source_pdf_sha256 与 golden.json 声明的
+    样张 SHA 一致后使用——解析产物由 fixture 生成脚本与 PDF 实时
+    抽取保证一致（tests 双向 SHA 锁定）。
+    """
     pdf_path = next(
         (candidate for candidate in sorted(doc_dir.glob("*.pdf"))), None
     )
-    if pdf_path is None:
-        raise FileNotFoundError(f"no pdf in corpus doc dir: {doc_dir}")
+    if pdf_path is not None:
+        return (
+            str(pdf_path),
+            load_page_texts(pdf_path),
+            load_page_tables(pdf_path),
+        )
+    fixture_path = ROOT / "tests" / "fixtures" / "sample_page_data.json"
+    if not fixture_path.exists():
+        raise FileNotFoundError(
+            f"no pdf in corpus doc dir: {doc_dir}, and fixture missing: {fixture_path}"
+        )
+    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+    golden_path = doc_dir / "golden.json"
+    if golden_path.exists():
+        golden = json.loads(golden_path.read_text(encoding="utf-8"))
+        expected_sha = str(golden.get("sha256") or "")
+        fixture_sha = str(payload.get("source_pdf_sha256") or "")
+        if expected_sha and fixture_sha and expected_sha != fixture_sha:
+            raise RuntimeError(
+                "fixture SHA 与 golden 声明不一致——fixture 过期，"
+                "请用 scripts/build_sample_fixture.py 重新生成"
+            )
+    return (
+        "(fixture)",
+        list(payload["page_texts"]),
+        list(payload["page_tables"]),
+    )
 
-    page_texts = load_page_texts(pdf_path)
-    page_tables = load_page_tables(pdf_path)
+
+def replay_doc(doc_dir: Path, parse_mode: str) -> Dict[str, Any]:
+    pdf_name, page_texts, page_tables = _load_corpus_inputs(doc_dir)
     report_kind = infer_report_kind(page_texts, doc_dir.name)
 
     result: Dict[str, Any] = {
         "doc_id": doc_dir.name,
-        "pdf": pdf_path.name,
-        "sha256": sha256_file(pdf_path),
+        "pdf": pdf_name,
+        "sha256": (
+            sha256_file(Path(pdf_name))
+            if pdf_name != "(fixture)"
+            else json.loads(
+                (ROOT / "tests" / "fixtures" / "sample_page_data.json").read_text(
+                    encoding="utf-8"
+                )
+            )["source_pdf_sha256"]
+        ),
         "pages": len(page_texts),
         "report_kind": report_kind,
         "replay_ts": time.time(),
         "parse_mode": parse_mode,
+        "input_source": "fixture" if pdf_name == "(fixture)" else "pdf",
     }
 
     if parse_mode == "legacy":
@@ -423,10 +467,30 @@ def replay_historical(
     if limit:
         jobs = jobs[:limit]
 
-    # 检查点按 parse_mode 隔离（R4 修复）+ 按当前任务集过滤（R5 P2-F：
-    # 同模式下 --limit 变更时，旧缓存的全量结果会混入本次报告——
-    # 实测 jobs_total=1、processed=2。恢复时只保留本次 jobs 集合
-    # 内的结果，集合外丢弃（下次全量跑会重新生成）。
+    # 检查点按 parse_mode 隔离（R4 修复）+ 按当前任务集过滤（R5 P2-F）
+    # + 缓存指纹（R6 P1-6）：代码/规则/解析器变更后旧缓存必须作废——
+    # 此前只校验 parse_mode + job_set，规则改了仍复用陈旧结果。
+    # 指纹 = 引擎版本 + 规则集长度 + build_parsed_tables/规则源文件的
+    # 内容哈希（同一工作副本内演进自动失效缓存）。
+    def _cache_fingerprint() -> str:
+        digest = hashlib.sha256()
+        from src.utils.provenance import ENGINE_VERSION
+
+        digest.update(str(ENGINE_VERSION).encode("utf-8"))
+        from src.engine.rules_v33 import ALL_RULES as _ALL
+
+        digest.update(str(len(_ALL)).encode("utf-8"))
+        for src in (
+            ROOT / "src" / "engine" / "structured_rules.py",
+            ROOT / "src" / "engine" / "rules_v33.py",
+            ROOT / "src" / "engine" / "pipeline.py",
+            ROOT / "src" / "utils" / "narration.py",
+        ):
+            digest.update(str(src).encode("utf-8"))
+            digest.update(src.read_bytes())
+        return digest.hexdigest()
+
+    fingerprint = _cache_fingerprint()
     checkpoint_path = OUTPUT_DIR / f"historical-partial-{parse_mode}.json"
     results: List[Dict[str, Any]] = []
     done: set = set()
@@ -434,9 +498,10 @@ def replay_historical(
     if resume and checkpoint_path.exists():
         try:
             partial = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-            # 双保险①：缓存结果的 parse_mode 与本次不一致时整体作废
+            # 双保险①：缓存结果的 parse_mode 或代码指纹与本次不一致时整体作废
             cached_mode = str(partial.get("parse_mode") or "")
-            if cached_mode == parse_mode:
+            cached_fp = str(partial.get("cache_fingerprint") or "")
+            if cached_mode == parse_mode and cached_fp == fingerprint:
                 # 双保险②：只保留当前任务集合内的结果（--limit 变更/
                 # 任务删除后的陈旧条目不再混入）
                 results = [
@@ -478,7 +543,7 @@ def replay_historical(
                     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
                     checkpoint_path.write_text(
                         json.dumps(
-                            {"parse_mode": parse_mode, "results": results},
+                            {"parse_mode": parse_mode, "cache_fingerprint": fingerprint, "results": results},
                             ensure_ascii=False,
                         ),
                         encoding="utf-8",
@@ -499,6 +564,24 @@ def replay_historical(
     processed = [r for r in results if "old_counts" in r and r.get("has_baseline")]
     no_baseline = [r for r in results if "old_counts" in r and not r.get("has_baseline")]
     skipped = [r for r in results if "old_counts" not in r]
+    # not_applicable 分组（GPT5.6 R6 P1-6）：structured 模式下 report_kind
+    # 路由后不适用（budget/unknown 不执行 V33 决算迁移集，total_rules=0）。
+    # 此前这些任务仍计入 processed/delta——预算任务的旧预算规则结果被
+    # 误读成 "structured removed_findings"（R6 smoke 实测 removed=31 假象）。
+    # 不适用任务单列，不进 delta 聚合与 top30。
+    if parse_mode == "structured":
+        not_applicable = [
+            r
+            for r in processed
+            if str(r.get("report_kind_new") or "").lower() != "final"
+        ]
+        processed = [
+            r
+            for r in processed
+            if str(r.get("report_kind_new") or "").lower() == "final"
+        ]
+    else:
+        not_applicable = []
     skip_reasons = dict(
         Counter(r.get("skipped", "unknown").split(":")[0] for r in skipped)
     )
@@ -565,6 +648,10 @@ def replay_historical(
         "parse_mode": parse_mode,
         "jobs_total": len(jobs),
         "processed": len(processed),
+        "not_applicable_count": len(not_applicable),
+        "not_applicable_kinds": dict(
+            Counter(str(r.get("report_kind_new")) for r in not_applicable)
+        ),
         "consistent_routing_docs": len(consistent),
         "routing_changed_docs": len(routing_changed),
         "routing_changed_note": (

@@ -88,3 +88,28 @@ D-001 收支总表平衡；收入/支出决算表类款层级；三公合计=分
 规则层配套（同轮）：V33-245/246 章节限定——find_section_scope 提取
 「三公经费…决算情况说明」主章节完整范围（含（一）（二）子章节），
 其他章节的公务接待表述不再产出 finding。
+
+## 2026-09-08 真值冻结（GPT5.6 R6 P1-4，annotation_version=2）
+
+背景：机器 golden 曾按系统输出漂移——A-004/A-005 被改写成 V33-120（原始
+手工标注是 V33-202/V33-203 跨表差）、A-005 被改 manual_review、并新增 A-008
+「接住」第二条 V33-117 输出（annotation_version 仍标 1）。存在「按现有输出
+塑造真值」的假绿风险。
+
+冻结内容（golden.json v2）：
+- **truth_id 独立冻结**：T1-T7 与本文件「人工标签」表一一对应，不随规则
+  实现变化。T4a=支出决算表合计差（原 A-004）、T4b=跨表同口径差（原 A-005）、
+  T5a=310 行明细差（原 A-006）、T5b=公用经费显示和差（原 A-008，与 T5a
+  为同一 0.01 差的第二个证据面——聚类验收，命中任一即 T5 命中）。
+- **allowed_rule_ids**：真值到规则映射解耦——T4a 允许 V33-202（原始
+  标注口径）/V33-120（当前实现近似路径），均视为命中；后续实现演进
+  不再要求改真值，只调 allowed 列表。
+- 原始 severity 恢复：A-005（T4b）回到 rounding_hint/info（曾被改
+  manual_review）。
+- 评估器配套：defect/hint 验收按 truth_id 聚类（同一真值多证据面只要求
+  命中任一面），matched 明细输出 truth_id/allowed_rule_ids/matched_rule。
+
+anchor_phrases_aligned / section_phrases_aligned 保留为**评估基建**
+（非真值本体）：短语全部为 finding evidence 的原文驻留片段，用于
+evidence-only 锚点匹配；V33-245/246 的 evidence 现自带「【章节:…】」
+结构化前缀（R6 P1-3），章节验证不再依赖标注猜测。

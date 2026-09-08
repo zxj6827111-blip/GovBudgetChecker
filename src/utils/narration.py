@@ -138,6 +138,12 @@ def find_section_scope(text: str, keywords: List[str]) -> Optional[str]:
     因此为空、正文全落在子章节里（样张实测）。本函数从主标题位置
     起切到**下一个主级序号标题**（一、二、…，不含（一）子标题），
     覆盖该主章节的全部子章节内容。
+
+    标题实例选择（GPT5.6 R6 P1-3）：同名主标题会在**目录与正文**各
+    出现一次——目录实例的下一个主标题紧跟着（scope 为空），此前
+    循环命中首个（目录）即返回空串、调用方 ``or merged`` 退回全文
+    扫描，跨章节误报通道未真正关闭。改为在所有命中实例中选**正文
+    最长**的（目录实例 scope≈0 自动落选）。
     """
     text = str(text or "")
     main_title_re = re.compile(
@@ -145,14 +151,17 @@ def find_section_scope(text: str, keywords: List[str]) -> Optional[str]:
         r"[^。；;！!？?\n]{0,60}(?:说明|情况)"
     )
     matches = list(main_title_re.finditer(text))
+    best_scope: Optional[str] = None
     for i, match in enumerate(matches):
         title = match.group(0).strip()
         if not all(kw in title for kw in keywords):
             continue
         start = match.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        return text[start:end]
-    return None
+        scope = text[start:end]
+        if scope.strip() and (best_scope is None or len(scope) > len(best_scope)):
+            best_scope = scope
+    return best_scope
 
 
 def extract_amounts(clause: str) -> List[Tuple[float, str]]:

@@ -5561,7 +5561,14 @@ class R33245_ThreePublicDirectionContradiction(Rule):
         # 全文（材料无标准章节标题时的兼容）。
         from src.utils.narration import find_section_scope
 
-        scope_text = find_section_scope(merged, ["三公"]) or merged
+        scope = find_section_scope(merged, ["三公"])
+        # 章节标题从 split_numbered_sections 取（find_section_scope 只返
+        # 正文）；目录实例的空 scope 已被其内部择优选实例逻辑排除
+        section_title = None
+        _fs = find_section(merged, ["三公"])
+        if scope and _fs and _fs[1].strip() in scope:
+            section_title = _fs[0]
+        scope_text = scope or merged
 
         for para in merge_soft_wrapped_lines(scope_text):
             if "三公" not in para and "公务接待" not in para and "因公出国" not in para and "公务用车" not in para:
@@ -5590,12 +5597,17 @@ class R33245_ThreePublicDirectionContradiction(Rule):
                     evidence = "；".join(clause for _, clause in hits)[:200]
                     # 页码定位用首个命中分句（原文里没有拼接用的分隔符）
                     locate_text = hits[0][1]
+                    # 结构化章节标记（GPT5.6 R6 P1-3）：规则层 scope 已限定
+                    # 本 finding 产自三公说明章节；evidence 前缀让 finding
+                    # 自带可校验的章节身份——评估器 sec 锚点消费它，
+                    # 不再依赖标注侧猜测 evidence 里的章节词
+                    section_tag = f"【章节:{(section_title or '').strip()[:40]}】" if section_title else ""
                     issues.append(self._issue(
                         f"三公说明逻辑矛盾：「{subject}」同时出现增减变化与“持平”表述，"
                         "两者不能同时成立，需核实同比口径后修正。",
                         {"page": self._locate_page(doc, locate_text)},
                         severity="medium",
-                        evidence_text=evidence,
+                        evidence_text=f"{section_tag}{evidence}",
                     ))
 
         return issues
@@ -5628,7 +5640,12 @@ class R33246_DomesticReceptionDisclosure(Rule):
         # （find_section_scope 含子章节正文）；找不到时降级全文。
         from src.utils.narration import find_section_scope
 
-        scope_text = find_section_scope(merged, ["三公"]) or merged
+        scope = find_section_scope(merged, ["三公"])
+        section_title = None
+        _fs = find_section(merged, ["三公"])
+        if scope and _fs and _fs[1].strip() in scope:
+            section_title = _fs[0]
+        scope_text = scope or merged
 
         for para in merge_soft_wrapped_lines(scope_text):
             if "公务接待" not in para:
@@ -5656,12 +5673,15 @@ class R33246_DomesticReceptionDisclosure(Rule):
             if not any("国内公务接待" in clause or foreign_disclosed for clause in clauses):
                 continue
             page = R33245_ThreePublicDirectionContradiction._locate_page(doc, para[:40])
+            # 结构化章节标记（R6 P1-3，同 V33-245）：规则层 scope 已限定
+            # finding 产自三公说明章节，evidence 前缀供评估器锚点消费
+            section_tag = f"【章节:{(section_title or '').strip()[:40]}】" if section_title else ""
             issues.append(self._issue(
                 "公务接待说明未披露国内公务接待批次、人次，"
                 "应补充「国内公务接待X批次、X人次」（含公务接待费对应口径）。",
                 {"page": page},
                 severity="medium",
-                evidence_text=para[:200],
+                evidence_text=f"{section_tag}{para[:200]}",
             ))
 
         return issues

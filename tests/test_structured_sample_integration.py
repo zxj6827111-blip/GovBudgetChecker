@@ -215,3 +215,71 @@ def test_sample_two_sided_right_lane_is_preserved(sample):
         if r.cells[basic.named_columns["final_right"]].number is not None
     ]
     assert Decimal("14.44") in amounts, f"右栏 310 的 14.44 未取到: {amounts}"
+
+
+def test_sample_column_group_classification(sample):
+    """列组建模（R6 P0-1）：只有真双栏判 two_sided，普通表保标准语义键。
+
+    R5 的几何中点把 10 张表全部误判（P14 支出决算表 7 列、P17 三公表、
+    P18/19 基金表的语义键被 *_right 污染）；R6 列语义序列对称检测
+    （领域词归一）后：P7 收支总表与 P15-16 经济分类表是真双栏，
+    其余 8 张 single——后续结构化规则才能按标准键消费。
+    """
+    doc, page_tables = sample
+    tables = build_parsed_tables(page_tables, doc.page_texts)
+    by_anchor = {t.anchor_table_name: t for t in tables.values() if t.anchor_table_name}
+    two_sided = [n for n, t in by_anchor.items() if t.column_group == "two_sided"]
+    assert set(two_sided) == {"收入支出决算总表", "一般公共预算财政拨款基本支出决算表"}, (
+        f"真双栏应只有总表与经济分类表: {two_sided}"
+    )
+    # 普通表语义键不被 *_right 污染
+    expense = by_anchor["支出决算表"]
+    assert "total" in expense.named_columns and "total_right" not in expense.named_columns
+    assert "basic" in expense.named_columns and "basic_right" not in expense.named_columns
+
+
+def test_sample_continuation_rows_carry_codes_and_hierarchy_computes(sample):
+    """续页 schema 继承（R6 P0-2）：code 可继承 + 层级汇总可计算。
+
+    GPT5.6 验收口径：不只检查单元格里存在数字——P9/P11 的编码必须
+    进入 row.code，且 T2 层级（类级 = 款级之和）在结构化模型上
+    可计算（样张真值：四类合计 4733.14，与总表总计一致）。
+    """
+    from decimal import Decimal
+
+    doc, page_tables = sample
+    tables = build_parsed_tables(page_tables, doc.page_texts)
+    expense = next(
+        t for t in tables.values() if t.anchor_table_name == "支出决算表"
+    )
+    # P11 续页行 code 继承（此前 None → V33-120 无法层级汇总）
+    p11_codes = [
+        r.code for r in expense.rows
+        if any(c.page == 11 for c in r.cells) and r.code
+    ]
+    assert p11_codes, "P11 续页编码未继承基准 schema"
+    assert any(len(c) == 7 for c in p11_codes), f"缺 7 位项级编码: {p11_codes}"
+
+    # 层级汇总可计算：类级(3位)合计 = 对应款级(5位)之和
+    total_col = expense.named_columns["total"]
+    class_amounts = {}
+    for r in expense.rows:
+        if r.code and len(r.code) == 3:
+            v = r.cells[total_col].number
+            if v is not None:
+                class_amounts[r.code] = v
+    assert class_amounts, "类级合计不可计算"
+    for cls, amount in class_amounts.items():
+        kuan_sum = sum(
+            (
+                r.cells[total_col].number
+                for r in expense.rows
+                if r.code and len(r.code) == 5 and r.code.startswith(cls)
+            ),
+            Decimal("0"),
+        )
+        assert kuan_sum == amount, (
+            f"类 {cls} 层级不平: 类级 {amount} vs 款级和 {kuan_sum}（T2 断言）"
+        )
+    # 样张真值：类级之和等于总计 4733.14
+    assert sum(class_amounts.values(), Decimal("0")) == Decimal("4733.14")

@@ -251,14 +251,16 @@ def materialize_table(
         header_labels.extend(str(c).strip() for c in row if c)
 
     # 语义列识别：合计 / 本年支出合计 / 基本支出 / 项目支出 / 决算数 / 预算数。
-    # 双栏表（GPT5.6 R5 P0-B）：行宽的一半为界，右半识别出的同名列记为
-    # ``*_right``——单值 named_columns 只能存一个位置，右栏的
-    # 决算数/合计（样张 P15 右栏 final 在第 8 列）此前被丢弃。
-    width_hint = max((len(r) for r in raw_rows if r is not None), default=0)
-    seen_right_half = False
+    #
+    # 双栏识别（GPT5.6 R6 P0-1 终版）：R5 的几何中点把普通多金额列表
+    # 全部误判 two_sided；R6 第一版的"同键出现两次"仍会误判多段式表头
+    # （样张 P18 的「合计×2」分属 年初结转/本年支出 两个金额段，左右
+    # 并非重复结构）。真双栏（P7 收支总表、P15 经济分类表）的特征是
+    # **列语义序列左右两半相同**——把表头逐列的语义标签串起来，空位
+    # 归一后检查 seq[:n//2] == seq[n//2:]。P17 的分组宽表（费用主体
+    # 分列）与 P18 的多段表头都不对称，正确判为 single。
+    header_hits: Dict[str, List[int]] = {}
     for row in raw_rows[:header_rows + 2]:
-        row_width = len(row)
-        mid = row_width // 2 if width_hint >= 4 else row_width
         for i, cell in enumerate(row):
             text = re.sub(r"\s+", "", str(cell or ""))
             key = None
@@ -273,35 +275,64 @@ def materialize_table(
             elif text == "决算数":
                 key = "final"
             if key:
-                target_key = f"{key}_right" if i >= mid and width_hint >= 4 else key
-                if target_key not in parsed.named_columns:
-                    parsed.named_columns[target_key] = i
-                    if target_key.endswith("_right"):
-                        seen_right_half = True
-    # 双栏检测（R5 扩展）：表头同时出现 收入/支出，或右半出现 *_right
-    # 语义列（两个"决算数"分列左右），任一即 two_sided
-    joined_header = "".join(header_labels)
-    if ("收入" in joined_header and "支出" in joined_header) or seen_right_half:
+                header_hits.setdefault(key, []).append(i)
+
+    # 列语义序列：每列聚合表头行标签（归一化），含编码/名称类结构性标签。
+    # 领域前缀词（收入/支出/年初/年末等）在归一前先剥除——真双栏左右
+    # 两半的领域词不同（P7 收入侧 vs 支出侧）但结构标签对称，
+    # 直接比较会把真双栏判 single。
+    col_count = max(
+        (len(r) for r in raw_rows[:header_rows] if r is not None), default=0
+    )
+    domain_words = ("收入", "支出", "年初", "年末", "结转", "结余", "功能分类", "经济分类")
+
+    def _structural_label(text: str) -> str:
+        for w in domain_words:
+            text = text.replace(w, "")
+        return text
+
+    col_seq: List[str] = []
+    for i in range(col_count):
+        labels: List[str] = []
+        for r in raw_rows[:header_rows]:
+            if i < len(r):
+                t = re.sub(r"\s+", "", str(r[i] or ""))
+                if t:
+                    labels.append(t)
+        joined = "|".join(labels) if labels else "_"
+        col_seq.append(_structural_label(joined))
+    is_two_sided = False
+    if col_count >= 4 and col_count % 2 == 0:
+        half = col_count // 2
+        left_seq = [c for c in col_seq[:half] if c != "_"]
+        right_seq = [c for c in col_seq[half:] if c != "_"]
+        is_two_sided = bool(left_seq) and left_seq == right_seq
+    if is_two_sided:
         parsed.column_group = "two_sided"
+
+    for key, positions in header_hits.items():
+        if is_two_sided and len(positions) >= 2:
+            # 双栏：首次出现记标准键、二次出现记 *_right
+            parsed.named_columns[key] = positions[0]
+            parsed.named_columns[f"{key}_right"] = positions[1]
+        else:
+            parsed.named_columns[key] = positions[0]
 
     # 科目编码列识别（GPT5.6 R4 P1-2）：表头含「科目编码/功能分类/
     # 经济分类」的列是编码列——_row_code 只在该列内识别编码，防止
     # 金额恰好为 3/5/7 位整数（如 301.00 万元取整值 301）被误判科目。
-    # 双栏表左右各有一个编码列（R5 P0-B）：右半记 code_right。
-    # 注意：同一表头行可能同时含左右两个编码列（样张 P15 R0 的
-    # 「经济分类科目编码」×2），必须扫完该行全部列再分配，遇首个
-    # 命中就 break 会漏掉右栏。
+    # 双栏表左右各有一个编码列（code/code_right 分记）。
+    code_positions: List[int] = []
     for row in raw_rows[:header_rows + 2]:
-        row_width = len(row)
-        mid = row_width // 2 if width_hint >= 4 else row_width
         for i, cell in enumerate(row):
             text = re.sub(r"\s+", "", str(cell or ""))
             if "编码" in text or text in ("功能分类", "经济分类"):
-                if i >= mid and width_hint >= 4:
-                    if "code_right" not in parsed.named_columns:
-                        parsed.named_columns["code_right"] = i
-                elif "code" not in parsed.named_columns:
-                    parsed.named_columns["code"] = i
+                if i not in code_positions:
+                    code_positions.append(i)
+    if code_positions:
+        parsed.named_columns["code"] = code_positions[0]
+    if is_two_sided and len(code_positions) >= 2:
+        parsed.named_columns["code_right"] = code_positions[1]
 
     for r_idx, row in enumerate(raw_rows):
         page = start_page or (pages[0] if pages else 0)
@@ -496,14 +527,21 @@ def _normalized_head_text(table: "ParsedTable", rows: int = 2) -> str:
 
 
 def _remap_continuation_rows(
-    rows: List[ParsedRow], target_width: int
+    rows: List[ParsedRow],
+    target_width: int,
+    code_column: Optional[int] = None,
 ) -> List[ParsedRow]:
-    """把续页行重映射到基准列宽（GPT5.6 P0-3）。
+    """把续页行重映射到基准列宽（GPT5.6 P0-3 → R6 P0-2 重设计）。
 
-    跨页列宽漂移的典型形态：续页把前置编码列（类|款|项）合并成一列，
-    行宽变窄、尾部金额列相对位置不变。处置与 V33-120 的运行时 shift
-    同源：``src = j + (len(row) - target_width)``，窄行尾部列按"行宽差"
-    对齐到基准宽度的尾部索引；前置编码列不参与金额对齐。
+    无表头续页的两种列形态：
+    - 前置编码列：续页常把「类|款|项」合并为单列（P9 的 2110105 在
+      续页第 0 列，基准 P8 的编码拆列 code=0）。合并编码应**前对齐**
+      到基准的 code 列位（左端对齐），此前纯尾部对齐把它推到第 2 列
+      （恰好基准的款列位），基准 schema 取不到 → V33-120 无法层级汇总；
+    - 尾部金额列：相对位置不变，按行宽差尾部对齐（原语义保持）。
+
+    重建 ParsedRow 时保留 code_right/code_level_right（R6 P0-2：
+    此前重建丢右栏字段）。
     """
     remapped: List[ParsedRow] = []
     for row in rows:
@@ -513,15 +551,27 @@ def _remap_continuation_rows(
             continue
         first_page = row.cells[0].page if row.cells else 0
         cells: List[ParsedCell] = [ParsedCell(page=first_page) for _ in range(target_width)]
-        for j, cell in enumerate(row.cells):
+        # 前置编码列前对齐：首列（合并编码）放到基准 code 列位
+        prefix_aligned = 0
+        if code_column is not None and code_column < target_width:
+            first_cell = row.cells[0] if row.cells else None
+            if first_cell is not None and (
+                (first_cell.text or "").strip() or first_cell.number is not None
+            ):
+                cells[code_column] = first_cell
+                prefix_aligned = 1
+        # 其余列尾部对齐（金额列相对位置不变）
+        for j in range(prefix_aligned, len(row.cells)):
             src = j + shift
             if 0 <= src < target_width:
-                cells[src] = cell
+                cells[src] = row.cells[j]
         remapped.append(
             ParsedRow(
                 row_role=row.row_role,
                 code=row.code,
                 code_level=row.code_level,
+                code_right=row.code_right,
+                code_level_right=row.code_level_right,
                 label=row.label,
                 confidence=row.confidence,
                 cells=cells,
@@ -584,10 +634,24 @@ def merge_compatible(base: ParsedTable, continuation: ParsedTable) -> bool:
             f"continuation_width_remapped: base={sorted(base_widths)} "
             f"cont={sorted(cont_widths)}"
         )
-        continuation.rows = _remap_continuation_rows(continuation.rows, base_width)
+        continuation.rows = _remap_continuation_rows(
+            continuation.rows, base_width, code_column=base.named_columns.get("code")
+        )
         # 语义列索引按宽度差平移（续页自身语义列为空时无操作）
         if not cont_keys and shift:
             continuation.named_columns = {}
+    # 继承首页 schema 重解析续页行（GPT5.6 R6 P0-2）：无表头续页（P9/P11）
+    # 自身识别不出编码列，合并后行.code 沿用重映射前的旧值（None）——
+    # V33-120 无法做层级汇总。用基准表的 named_columns 对全部续页行
+    # 重新计算 code/code_right/code_level，行内编码数据即可被消费。
+    code_col = base.named_columns.get("code")
+    code_right_col = base.named_columns.get("code_right")
+    for row in continuation.rows:
+        row.code, row.code_level = _row_code(row.cells, code_column=code_col)
+        if code_right_col is not None:
+            row.code_right, row.code_level_right = _row_code(
+                row.cells, code_column=code_right_col
+            )
     base.rows.extend(continuation.rows)
     base.page_span = (min(base.page_span[0], continuation.page_span[0]),
                       max(base.page_span[1], continuation.page_span[1]))

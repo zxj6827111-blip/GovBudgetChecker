@@ -270,7 +270,17 @@ def match_annotation(
     优先返回综合得分最高的 finding：区分度数字交集 > 锚点短语命中
     > 共享文本片段长度，使"最贴近原始数字与定位域的证据"优先被消费。
     """
-    rule_id = str(annotation.get("rule_id") or "").strip().upper()
+    # R6 P1-4 真值冻结：allowed_rule_ids 列该真值可由哪些规则命中
+    # （V33-202 原始标注 + V33-120 当前实现近似路径均可）；旧字段
+    # rule_id 兼容
+    allowed_rules = {
+        str(r).strip().upper()
+        for r in (annotation.get("allowed_rule_ids") or [])
+        if str(r).strip()
+    }
+    legacy_rule = str(annotation.get("rule_id") or "").strip().upper()
+    if legacy_rule and legacy_rule not in allowed_rules:
+        allowed_rules.add(legacy_rule)
     page = annotation.get("page")
     annotation_evidence = annotation.get("evidence")
     anchor_phrases = _annotation_anchor_phrases(annotation)
@@ -280,9 +290,9 @@ def match_annotation(
             continue
         if page is not None and _page_of(finding) != page:
             continue
-        if rule_id:
+        if allowed_rules:
             finding_rule = str(finding.get("rule") or "").strip().upper()
-            if finding_rule != rule_id:
+            if finding_rule not in allowed_rules:
                 continue
         if not evidence_overlaps(annotation_evidence, finding):
             continue
@@ -375,16 +385,27 @@ def evaluate(doc_id: str, replay_path: Path) -> Dict[str, Any]:
     hint_missed: List[Dict[str, Any]] = []
     matched_finding_ids: set = set()
 
+    # R6 P1-4：truth_id 聚类验收——T4a/T4b（T5a/T5b）是同一真值的
+    # 证据面，任一标注面命中即真值命中；全部面都未命中才计 FN
+    # （按 truth_id 去重计入 missed，不再按 annotation 放大召回缺口）
+    hit_truth_ids: set = set()
     for annotation in defects:
+        truth_id = str(annotation.get("truth_id") or annotation.get("annotation_id") or "")
+        if truth_id in hit_truth_ids:
+            continue  # 该真值已有证据面命中
         finding = match_annotation(annotation, findings, matched_finding_ids)
         if finding is None:
             missed.append(annotation)
         else:
+            hit_truth_ids.add(truth_id)
             matched_finding_ids.add(id(finding))
             matched.append(
                 {
                     "annotation_id": annotation.get("annotation_id"),
+                    "truth_id": truth_id,
                     "rule_id": annotation.get("rule_id"),
+                    "allowed_rule_ids": sorted(annotation.get("allowed_rule_ids") or []),
+                    "matched_rule": finding.get("rule"),
                     "expected_page": annotation.get("page"),
                     "expected_severity": annotation.get("expected_severity"),
                     "actual_severity": _norm_severity(finding.get("severity")),

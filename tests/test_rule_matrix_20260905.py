@@ -597,3 +597,69 @@ def test_detect_table_code_basic_expenditure_six():
         source_hint="经济分类科目编码 科目名称 决算数",
     )
     assert code == "FIN_06_basic_expenditure"
+
+
+# ---------------------------------------------------------------------------
+# GPT5.6 R6 P1-3：章节 scope 择优 + 跨章节隔离锁定
+# ---------------------------------------------------------------------------
+
+
+def test_v33_245_scope_selects_body_instance_not_toc():
+    """find_section_scope 择优实例：目录同名标题（scope≈0）自动落选。"""
+    from src.utils.narration import find_section_scope
+
+    text = (
+        "目录部分出现同名标题行\n"
+        "七、财政拨款“三公”经费支出决算情况说明\n"  # 目录实例（下一行紧跟其他标题）
+        "八、政府性基金预算财政拨款收入支出决算情况说明\n"
+        "正文从这里开始\n"
+        "七、财政拨款“三公”经费支出决算情况说明\n"  # 正文实例
+        "（一）“三公”经费财政拨款支出决算总体情况说明。\n"
+        "公务接待费支出决算减少为 0.00 万元，与2024年持平。\n"
+    )
+    scope = find_section_scope(text, ["三公"])
+    assert scope and "公务接待费" in scope, (
+        "目录实例被选中导致 scope 缺正文——R6 P1-3 回归"
+    )
+
+
+def test_v33_245_evidence_carries_section_tag():
+    """V33-245 finding 的 evidence 自带结构化章节标记（R6 P1-3）。"""
+    from src.engine.rules_v33 import R33245_ThreePublicDirectionContradiction
+
+    text = (
+        "七、财政拨款“三公”经费支出决算情况说明\n"
+        "（一）“三公”经费财政拨款支出决算总体情况说明。\n"
+        "公务接待费支出决算减少为 0.00 万元，与2024年持平。\n"
+    )
+    doc = make_doc([text], [])
+    issues = R33245_ThreePublicDirectionContradiction().apply(doc)
+    assert issues, "三公章节内矛盾应命中"
+    evidence = issues[0].evidence_text or ""
+    assert evidence.startswith("【章节:"), (
+        f"evidence 应带章节标记前缀: {evidence[:40]!r}"
+    )
+
+
+def test_v33_245_cross_section_isolation_with_real_toc():
+    """完整材料（目录+正文）中其他章节的公务接待表述不再产出 finding。
+
+    GPT5.6 R6 实测：样张目录先出现「三公」标题 → scope 空 → or merged
+    退回全文。R6 修复后 scope 择优正文实例，跨章节隔离真正生效。
+    """
+    from src.engine.rules_v33 import R33245_ThreePublicDirectionContradiction
+
+    text = (
+        "七、财政拨款“三公”经费支出决算情况说明\n"  # 目录实例
+        "八、政府性基金预算财政拨款收入支出决算情况说明\n"
+        "三、支出决算情况说明\n"
+        "项目支出中列支的公务接待费支出决算减少为 0.00 万元，与上年持平。\n"
+        "七、财政拨款“三公”经费支出决算情况说明\n"  # 正文实例
+        "（一）“三公”经费财政拨款支出决算总体情况说明。\n"
+        "公务用车运行维护费支出决算 16.95 万元，与上年基本持平。\n"
+    )
+    doc = make_doc([text], [])
+    issues = R33245_ThreePublicDirectionContradiction().apply(doc)
+    # 三公章节内只有「持平」没有矛盾主体增减对——0 finding；
+    # 其他章节的矛盾表述（章节外）不得触发
+    assert issues == [], f"跨章节隔离失效: {[i.message for i in issues]}"

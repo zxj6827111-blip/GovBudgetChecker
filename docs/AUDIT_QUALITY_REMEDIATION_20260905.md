@@ -332,3 +332,35 @@ golden.json 与 ANNOTATIONS.md 经 gitignore 否定规则入库（corpus/* 全�
 
 ### 仍未完成（如实记录）
 V33-117/120 的 `_apply_structured` 消费迁移（P0-B 的右栏 lane 数据已就绪，下一批）、生产管线切换、Golden Corpus 扩容、top30 人工裁决、真实 AI 预发验证。
+
+## 9.8 GPT5.6 第六轮复核整改（2026-09-08，基于 e5a449b）
+
+第六轮 2 P0 / 4 P1 全部复现属实并按其指定顺序修复。
+
+### P0-1 双栏识别破坏普通多金额列表
+R5 的几何中点方案把样张 10 张表**全部**误判 two_sided（P14 支出决算表、P17 三公表、P18/19 基金表的语义键被 *_right 污染）。两轮收敛：先试"同键出现两次"判据——P18 的「合计×2」多段表头仍误判；终版为**列语义序列对称检测**（表头逐列聚合标签、领域词归一后比较左半==右半）：P7 收支总表与 P15-16 经济分类表（真双栏）命中，其余 8 张恢复 single + 标准语义键。测试锁定 `test_sample_column_group_classification`。
+
+### P0-2 跨页合并从"行可见"到"结构可计算"
+两层缺陷：① 无表头续页重映射用纯尾部对齐——P9 的合并编码 2110105 被推到基准"款"列位（第 2 列），基准 code=0 取不到；② 重建 ParsedRow 丢 code_right 字段；③ 合并后未重算 code。修复：`_remap_continuation_rows` 前置编码列**前对齐**到基准 code 列位 + 金额列尾部对齐；`merge_compatible` 合并后用基准 schema 对全部续页行重算 code/code_right。**验收按 GPT5.6 口径升级为结构可计算**：T2 层级断言——支出决算表类级(3位)合计 = 对应款级(5位)之和、四类之和 = 4733.14 与总表总计一致（样张全平）。测试锁定 `test_sample_continuation_rows_carry_codes_and_hierarchy_computes`。
+
+### P1-3 跨章节通道（scope 择优 + 结构化章节标记）
+GPT5.6 实测命中**目录**里的同名「三公」标题（scope 空）→ `or merged` 退回全文。修复：`find_section_scope` 在所有标题实例中选**正文最长**的（目录实例 scope≈0 自动落选）——样张 scope 828 字符且目标矛盾短语在内。配套：V33-245/246 的 finding evidence 注入结构化章节标记前缀（`【章节:七、财政拨款"三公"经费支出决算情况说明】…`）——规则层 scope 已保证章节域，finding 自带可校验身份。三测试锁定：scope 择优、evidence 章节标记、含目录形态的跨章节隔离（0 findings）。
+
+### P1-4 Golden 真值冻结（annotation_version=2）
+漂移全部对上：A-004/A-005 原始手工标注是 V33-202/V33-203，机器 golden 曾改成 V33-120；A-005 曾被改 manual_review；A-008 是为接住第二条 V33-117 输出而新增。v2 冻结：**truth_id 独立**（T1-T7 对应原始手工标准，不随实现变化）；**allowed_rule_ids** 解耦真值与规则（T4a 允许 V33-202 原始口径 + V33-120 近似路径）；A-006/A-008 聚为 T5a/T5b（同一 0.01 差的两个证据面，**任一命中即真值命中**）；评估器按 truth_id 聚类验收。anchor/section 对齐短语保留为评估基建（evidence 驻留片段，非真值本体）。ANNOTATIONS.md 记录冻结全史。GATE-PASS 在冻结真值下通过——假绿风险消除。
+
+### P1-5 干净 checkout 可复现 replay+evaluate
+`replay_doc` 的输入加载改为**双源**：优先真实 PDF；无 PDF 时按 doc_id 回退 tests/fixtures 的序列化解析产物（SHA 与 golden.json 声明交叉校验，过期即报错）。实测：临时移走 PDF 后 replay findings=7 与 PDF 实时抽取一致、GATE-PASS——评测链路在无 corpus PDF 的 checkout 上完整可复现。
+
+### P1-6 历史回放适用性分组 + 缓存指纹
+- **not_applicable 分组**：structured 模式下 budget/unknown 任务（V33 迁移集不适用、total_rules=0）单列，不进 delta 聚合与 top30——R6 smoke 的 "removed_findings=31" 假象消除（实测 removed=0、not_applicable=8 全分组）。
+- **缓存指纹**：checkpoint 增加 cache_fingerprint（ENGINE_VERSION + 规则数 + structured_rules/rules_v33/pipeline/narration 源文件哈希）——代码或规则变更后旧缓存整体作废，不再只靠 parse_mode+job_set。
+
+### 验证（2026-09-08 第八轮）
+- 全量 pytest **1045 passed + 1 skipped**（+5 测试零回归）；Ruff 全目录通过；
+- GATE-PASS（冻结真值 v2 + truth_id 聚类下）；
+- 干净 checkout 模拟（无 PDF）：replay+evaluate 完整可复现；
+- 历史 structured smoke：not_applicable=8、removed=0（假象消除）。
+
+### 仍未完成（如实记录）
+V33-117/120 结构化消费迁移（本轮 P0-1/P0-2 已把列组模型与层级计算基础修正，GPT5.6 的迁移前置条件满足）、生产管线切换、Golden Corpus 扩容、top30 人工裁决、真实 AI 预发验证。
