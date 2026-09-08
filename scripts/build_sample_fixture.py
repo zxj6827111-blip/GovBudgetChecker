@@ -31,6 +31,7 @@ def main() -> int:
     page_texts = load_page_texts(CORPUS_PDF)
     page_tables = load_page_tables(CORPUS_PDF)
     payload = {
+        "doc_id": CORPUS_PDF.parent.name,
         "source_pdf_sha256": digest,
         "source_pdf_bytes": CORPUS_PDF.stat().st_size,
         "page_count": len(page_texts),

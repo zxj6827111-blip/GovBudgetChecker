@@ -542,6 +542,7 @@ def test_v33245_direction_only_no_hit():
 def test_v33246_missing_domestic_reception_hits():
     """正例（T6）：仅披露外宾批次人次、缺国内批次 → 命中。"""
     text = (
+        "七、财政拨款“三公”经费支出决算情况说明\n"
         "3、公务接待费支出0 万元。其中：\n"
         "国内公务接待支出0.00 万（含外宾接待支出0.00 万元）。其\n"
         "中：接待外宾0 批次、0 人次。\n"
@@ -554,6 +555,7 @@ def test_v33246_missing_domestic_reception_hits():
 def test_v33246_domestic_disclosed_no_hit():
     """反例：国内公务接待批次、人次已披露 → 不命中。"""
     text = (
+        "七、财政拨款“三公”经费支出决算情况说明\n"
         "3、公务接待费支出0 万元。其中：国内公务接待0 批次、0 人次。\n"
         "接待外宾0 批次、0 人次。\n"
     )
@@ -663,3 +665,47 @@ def test_v33_245_cross_section_isolation_with_real_toc():
     # 三公章节内只有「持平」没有矛盾主体增减对——0 finding；
     # 其他章节的矛盾表述（章节外）不得触发
     assert issues == [], f"跨章节隔离失效: {[i.message for i in issues]}"
+
+
+def test_v33_245_no_section_no_full_text_fallback():
+    """缺三公章节时不得全文回退（R7 P1-3）。
+
+    仅含「十一、其他重要事项说明」的材料里出现公务接待增减+持平
+    表述——旧行为 scope or merged 扫描全文产出 finding；R7 后
+    证据不足直接返回空。
+    """
+    from src.engine.rules_v33 import R33245_ThreePublicDirectionContradiction
+
+    text = (
+        "十一、其他重要事项说明\n"
+        "公务接待费支出决算减少为 0.00 万元，与上年持平。\n"
+    )
+    doc = make_doc([text], [])
+    assert R33245_ThreePublicDirectionContradiction().apply(doc) == []
+
+
+def test_v33_246_no_section_no_full_text_fallback():
+    """V33-246 同样禁止全文回退（R7 P1-3）。"""
+    from src.engine.rules_v33 import R33246_DomesticReceptionDisclosure
+
+    text = (
+        "十一、其他重要事项说明\n"
+        "接待外宾0 批次、0 人次，国内公务接待未披露。\n"
+    )
+    doc = make_doc([text], [])
+    assert R33246_DomesticReceptionDisclosure().apply(doc) == []
+
+
+def test_v33_245_finding_carries_independent_section_id():
+    """V33-245 finding 携带独立 section_id（R7 P1-3），不只拼进 evidence。"""
+    from src.engine.rules_v33 import R33245_ThreePublicDirectionContradiction
+
+    text = (
+        "七、财政拨款“三公”经费支出决算情况说明\n"
+        "（一）“三公”经费财政拨款支出决算总体情况说明。\n"
+        "公务接待费支出决算减少为 0.00 万元，与2024年持平。\n"
+    )
+    doc = make_doc([text], [])
+    issues = R33245_ThreePublicDirectionContradiction().apply(doc)
+    assert issues and issues[0].section_id, "finding 必须携带独立 section_id"
+    assert "三公" in (issues[0].section_id or "")

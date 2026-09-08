@@ -364,3 +364,121 @@ GPT5.6 实测命中**目录**里的同名「三公」标题（scope 空）→ `o
 
 ### 仍未完成（如实记录）
 V33-117/120 结构化消费迁移（本轮 P0-1/P0-2 已把列组模型与层级计算基础修正，GPT5.6 的迁移前置条件满足）、生产管线切换、Golden Corpus 扩容、top30 人工裁决、真实 AI 预发验证。
+
+## 9.9 第七轮复核整改（2026-09-08，基于 39dc3f3，R6.1 补漏）
+
+第七轮复核确认 R6 六项整改全部落地且行为正确，另指出 3 个新问题
+（🟡1 fixture 回退边界 / 🟡2 hint 侧聚类缺失 / 🟢3 前对齐形态守卫），
+本轮全部修复并补锁定测试。
+
+### 🟡1 fixture 回退 fail-closed（scripts/replay_golden_corpus.py）
+此前回退的 SHA 交叉校验以 `golden_path.exists()` 为前提——无 golden.json
+的 doc_dir 会静默拿到样张 fixture（扩语料后新 doc 评测错数据）。修复：
+- **golden.json 缺失 → 拒绝回退**（FileNotFoundError，明确报错）；
+- **fixture 内嵌 doc_id**（build_sample_fixture.py + fixture 同步写入），
+  与 doc_dir 不符 → 拒绝——fixture 不能用于评测别的 doc；
+- **SHA 任一为空或不一致 → 拒绝**（不再 `if expected_sha and fixture_sha` 静默放行）。
+测试：无 golden.json / doc_id 不符 / SHA 不符 / 正常回退 四条锁定。
+
+### 🟡2 truth_id 聚类贯通 hint 侧（scripts/evaluate_golden_corpus.py）
+- 新增 `_truth_group`：证据面后缀归一（T4a/T4b → 组 T4），与冻结文档
+  「任一命中即真值命中」语义对齐；defect/hint 两侧共用 `_consume_truth_annotations`；
+- 匹配阶段**每面独立尝试**（同一真值的两个证据面在样张上各有对应 finding，
+  跳过会制造 FP——实测曾出现 FP=2）；**计数按组去重**：组内任一命中即真值命中，
+  其余面未命中不报 miss；整组全未命中才计 1 个 missed（明细带全部面）；
+- 报告输出改为 `hint真值命中 2/2（证据面 4/4）`，hint_matched/missed 均带
+  truth_group；`_annotation_section_phrases` 死代码删除（R6 已用 evidence
+  【章节:】前缀替代，该函数自 R5 起无人调用）。
+测试：后缀归一、单面命中另一面不报 miss、整组未命中计 1 组、异组独立、
+evaluate 全链路 hint 聚类（monkeypatch CORPUS_DIR）。
+
+### 🟢3 前对齐编码形态守卫（src/engine/structured_rules.py）
+`_remap_continuation_rows` 前对齐此前对"首列任意非空"生效（序号 "1" 也会进
+code 列位）。改为仅首列为 3/5/7 位编码形态（文本或整数 number，与 _row_code
+同守卫）时前对齐；序号文本走尾部对齐、code 列位留空（_row_code 兜底 None）。
+测试：编码形态前对齐保留、序号文本不进 code 列位。
+
+### R6 P1-6 补完（scripts/replay_golden_corpus.py）
+- **缓存恢复逐 job PDF SHA 校验**：`replay_historical_doc` 结果落 sha256；
+  resume 时 `_cached_result_valid` 重算当前 PDF SHA——同一 job_id 的 PDF 被
+  替换后旧缓存失效重跑（此前只验 parse_mode+指纹+job_set）；
+- **强制 final 优先抽样**：structured + --limit 时按 status.json 存储的
+  report_kind 把 final 任务排前（delta 聚合有可适用样本），报告新增
+  `sampled_final_count`。
+
+### 验证（2026-09-08 第九轮）
+- 全量 pytest **1059 passed + 1 skipped**（+14 新测试零回归）；Ruff 全目录通过；
+- GATE-PASS（TP=3 FP=0 FN=0、hint 真值命中 2/2、证据面 4/4、全指标 1.0）；
+- 干净 checkout（无 PDF）：fixture 回退 + 评估 GATE-PASS 复现；
+- 回归确认：修复 🟡2 时曾出现"跳过第二面 → FP=2"，已按"每面独立匹配 +
+  按组计数"收敛，样张 4 条 hint 证据面全命中、FP 清零。
+
+### /review 自查补修（2026-09-08，同轮）
+- **负 shift 覆盖边界**（structured_rules._remap_continuation_rows）：续页宽于基准时
+  尾部循环 src=j+shift 可能落回 code 列位、覆盖已前对齐的编码单元格。修复：
+  前对齐仅在续页窄于基准（shift>0）时生效 + 尾部循环跳过 code 列位；新增
+  负 shift 锁定测试（宽续页不前对齐、编码不被特殊放置）。
+- 测试清理：test_golden_eval_overlap 移除未使用的 CORPUS_DIR 导入。
+- 历史回放新路径实测：structured --limit 3 抽到 3/3 final（抽样优先生效），
+  每条结果带 sha256；手工构造同指纹检查点后 resume 复用缓存（6.9s 完成，
+  SHA 逐 job 校验通过）。
+- 复验：全量 pytest **1060 passed + 1 skipped**；Ruff 全目录通过。
+
+## 9.9 第八轮复核整改（2026-09-09，R7 外部审查五缺口）
+
+第八轮复核确认跨页编码/章节正文选择修复有效，另指出 5 个会制造
+「假通过」的问题（2×P0 + 3×P1），本轮全部修复：
+
+### P0-1 真值编号纠偏 + 舍入门禁进硬门禁
+- **golden.json v3**：truth_id 对齐 HANDOFF §2 权威编号（硬问题
+  T1/T5/T6、舍入提示 T2/T3/T4）——R6 冻结曾按标注顺序错位编号，
+  把舍入真值组从 3 缩成 2（实测 hint 2/2 假通过）。映射修正为
+  A-001=T1、A-002=T5、A-003=T6、A-004=T2、A-005=T3、
+  A-006/A-008=T4a/T4b；
+- **check_gates**：舍入提示进入硬门禁——`hint_groups_total ==
+  hint_groups_hit == 3`（两侧都必须等于 3，防真值集缩减假绿），
+  另锁硬问题 `tp == 3`（此前只查 fn，删标注也能过）。构造 0/3、
+  2/2 均实测失败；
+- 样张复验：hint 真值命中 **3/3（证据面 4/4）**、GATE-PASS。
+
+### P0-2 multi_measure 列组模型（src/engine/structured_rules.py）
+- 非双栏表同一语义键多次出现 → `column_group="multi_measure"`
+  （真实生成路径落地）：样张 P17 三公表、P18/19 基金表、P8/P10
+  收入/支出决算表均正确分类；
+- 新增 `semantic_columns: key -> List[index]`（全量位置）与
+  `column_groups: List[ColumnGroup]`（subject/parent_subject/
+  columns/span）——P17 的 6 组预算/决算逐组保留「合计、因公出国、
+  公车小计/购置/运行、公务接待」主体；P18 的 `total` 首选修正为
+  第 4 列（本年支出段合计），第 0 列行标签列单独成组不再抢占；
+- 边界：首列表头为空的多金额组表不得崩溃（历史回放 3 份 final
+  worker_failed 的根因，修复并锁定测试）。
+
+### P1-3 章节缺失禁止全文回退 + 独立 section_id
+- V33-245/246：`find_section_scope` 找不到三公章节 → **证据不足
+  直接返回空**（删除 `scope or merged` 回退）——仅含「十一、其他
+  重要事项说明」的材料不再产出 finding；
+- `Issue` 新增独立 `section_id` 字段（结构化携带章节标题，不再只
+  向 evidence_text 拼「【章节:…】」文字），replay 序列化透出；
+- 评估器：sec 锚标注 + finding 带 section_id 时校验章节域同源
+  （锚短语或其 2 字前缀出现在 section_id 中），「其他事项说明 +
+  公务接待费」跨章节候选不得晋升 TP；无 section_id 的旧产物
+  退回锚点语义不惩罚。
+
+### P1-4 历史 structured 回放差异限定迁移集（scripts/replay_golden_corpus.py）
+- 旧行为用「旧全量规则集 ∪ 新九条」计算差异，未迁移规则的旧计数
+  全算成 removed（历史实测 removed=131 假象）。修复：structured
+  模式 delta/removed 只认 `STRUCTURED_MIGRATED_RULES`，未迁移规则
+  旧计数单独报告 `coverage_gap`（聚合 + 逐规则明细 + 总量）；
+- 复验：--limit 3 抽到 3/3 final 真实执行，removed=66（迁移集内）、
+  coverage_gap=65（V33-235/CMM-004 等未迁移规则旧计数，不参与
+  delta）——66+65=131 与旧口径一致，但不再混淆两种含义；
+- legacy 模式不限定（历史回归对比需要全量规则域）。
+
+### 验证（2026-09-09）
+- 相关测试 104 passed；全量 pytest **1072 passed + 1 skipped**；
+- Ruff 全目录通过；
+- 样张 replay + GATE：TP=3 FP=0 FN=0、hint 真值命中 3/3（证据面
+  4/4）、severity/page/locatable 全 1.0、GATE-PASS；
+- 历史 structured：3/3 final 真实执行，removed=66、coverage_gap=65；
+- mypy：4 项既有失败（rules_v33.py:2506/2791/2792/2903），非本轮
+  引入，工程门仍未全绿（如实记录）。

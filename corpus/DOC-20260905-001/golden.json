@@ -1,18 +1,19 @@
 {
  "doc_id": "DOC-20260905-001",
  "sha256": "113b98bb5df18c264f9c589a1034d3bfc27ed65562b4bbbe72bfd33420f912c7",
- "annotation_version": 2,
+ "annotation_version": 3,
  "annotated_at": "2026-09-08",
  "truth_frozen_at": "2026-09-08",
  "reviewed_by": [
   "人工审校（HANDOFF §2 v2）",
   "GPT-5.6 复核",
-  "R6 真值冻结"
+  "R6 真值冻结",
+  "R7 真值编号纠偏（对齐 HANDOFF §2 权威编号）"
  ],
  "report_kind": "final",
  "fiscal_year": 2025,
  "organization": "上海市普陀区生态环境局",
- "notes": "R6 P1-4 真值冻结：truth_id 与规则实现解耦（T1-T7 沿 ANNOTATIONS.md 原始手工标准）；allowed_rule_ids 列该真值可由哪些规则命中（V33-202/203 为原始标注，V33-120 为当前实现的近似路径，均可接受）；T4 的两条标注 （A-006/A-008）是同一真值的两个证据面（310 行明细差与公用经费显示和差），命中任一即 T4 命中。",
+ "notes": "R7 P0-1 真值编号纠偏：R6 冻结曾按标注顺序错位编号（T2=A-002、T3=A-003、T4=A-004/A-005、T5=A-006/A-008），与 HANDOFF §2 权威编号（硬问题 T1/T5/T6、舍入提示 T2/T3/T4）不一致，导致舍入真值组从 3 缩成 2、门禁假绿。现恢复：A-001=T1、A-002=T5、A-003=T6、A-004=T2、A-005=T3、A-006=T4a、A-008=T4b（T4 的两条标注是同一真值的两个证据面，命中任一即 T4 命中）。allowed_rule_ids 保留 R6 冻结语义（V33-202/203 为原始标注，V33-120 为当前实现的近似路径，均可接受）。",
  "labels": [
   {
    "annotation_id": "A-001",
@@ -29,7 +30,7 @@
   },
   {
    "annotation_id": "A-002",
-   "truth_id": "T2",
+   "truth_id": "T5",
    "label": "defect",
    "page": 26,
    "allowed_rule_ids": [
@@ -42,7 +43,7 @@
   },
   {
    "annotation_id": "A-003",
-   "truth_id": "T3",
+   "truth_id": "T6",
    "label": "defect",
    "page": 27,
    "allowed_rule_ids": [
@@ -58,7 +59,7 @@
   },
   {
    "annotation_id": "A-004",
-   "truth_id": "T4a",
+   "truth_id": "T2",
    "label": "rounding_hint",
    "page": 10,
    "allowed_rule_ids": [
@@ -75,7 +76,7 @@
   },
   {
    "annotation_id": "A-005",
-   "truth_id": "T4b",
+   "truth_id": "T3",
    "label": "rounding_hint",
    "page": 10,
    "allowed_rule_ids": [
@@ -92,7 +93,7 @@
   },
   {
    "annotation_id": "A-006",
-   "truth_id": "T5a",
+   "truth_id": "T4a",
    "label": "rounding_hint",
    "page": 15,
    "allowed_rule_ids": [
@@ -109,7 +110,7 @@
   },
   {
    "annotation_id": "A-008",
-   "truth_id": "T5b",
+   "truth_id": "T4b",
    "label": "rounding_hint",
    "page": 15,
    "allowed_rule_ids": [

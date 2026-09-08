@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -130,13 +131,44 @@ class ParsedRow:
 
 
 @dataclass
+class ColumnGroup:
+    """multi_measure 表的一个列组：业务主体 + 组内语义列位置。
+
+    R7 P0-2：多金额组表（三公表 6 组预算/决算、基金表多段表头）的
+    语义必须逐组保留——subject 是该组列上方的业务主体标签（合计、
+    因公出国（境）费、小计、公务接待费…），parent_subject 是多级
+    表头的父标签（公务用车购置及运行维护费），columns 登记组内
+    语义键 → 列索引（如 {budget: 2, final: 3}）。
+    """
+
+    subject: str = ""
+    parent_subject: str = ""
+    columns: Dict[str, int] = field(default_factory=dict)  # 语义键 → 列索引
+    span: Tuple[int, int] = (0, 0)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "subject": self.subject,
+            "parent_subject": self.parent_subject,
+            "columns": dict(self.columns),
+            "span": list(self.span),
+        }
+
+
+@dataclass
 class ParsedTable:
     """命名列表格模型（内存态，与数据库无关）。"""
 
     table_code: str = ""
     title: str = ""
     page_span: Tuple[int, int] = (0, 0)
-    named_columns: Dict[str, int] = field(default_factory=dict)  # 语义列 → 索引
+    named_columns: Dict[str, int] = field(default_factory=dict)  # 语义列 → 首选索引
+    # R7 P0-2：semantic_columns 保留每种语义键的**全部**列位置
+    # （named_columns 只是兼容旧消费方的首选单值——P17 三公表 6 组
+    # 预算/决算列此前只剩 budget=0/final=1，其余 5 组全部丢失）；
+    # column_groups 逐组保留业务主体（合计/出国/公车/接待…）。
+    semantic_columns: Dict[str, List[int]] = field(default_factory=dict)
+    column_groups: List[ColumnGroup] = field(default_factory=list)
     column_group: str = "single"        # single / two_sided / multi_measure
     canonical_measure: str = "万元"
     classification_type: str = DOMAIN_OTHER
@@ -154,6 +186,10 @@ class ParsedTable:
             "title": self.title,
             "page_span": list(self.page_span),
             "named_columns": dict(self.named_columns),
+            "semantic_columns": {
+                k: list(v) for k, v in self.semantic_columns.items()
+            },
+            "column_groups": [g.to_dict() for g in self.column_groups],
             "column_group": self.column_group,
             "canonical_measure": self.canonical_measure,
             "classification_type": self.classification_type,
@@ -260,7 +296,9 @@ def materialize_table(
     # 归一后检查 seq[:n//2] == seq[n//2:]。P17 的分组宽表（费用主体
     # 分列）与 P18 的多段表头都不对称，正确判为 single。
     header_hits: Dict[str, List[int]] = {}
-    for row in raw_rows[:header_rows + 2]:
+    hit_rows: Counter = Counter()
+    scan_rows = list(raw_rows[:header_rows + 2])
+    for r_idx, row in enumerate(scan_rows):
         for i, cell in enumerate(row):
             text = re.sub(r"\s+", "", str(cell or ""))
             key = None
@@ -276,6 +314,7 @@ def materialize_table(
                 key = "final"
             if key:
                 header_hits.setdefault(key, []).append(i)
+                hit_rows[r_idx] += 1
 
     # 列语义序列：每列聚合表头行标签（归一化），含编码/名称类结构性标签。
     # 领域前缀词（收入/支出/年初/年末等）在归一前先剥除——真双栏左右
@@ -310,11 +349,108 @@ def materialize_table(
     if is_two_sided:
         parsed.column_group = "two_sided"
 
+    # ---- R7 P0-2：multi_measure 列组模型 ----
+    # 非双栏表中同一语义键多次出现 = 多金额组表（样张 P17 三公表
+    # 6 组预算/决算、P18 基金表「合计」行标签列 + 本年支出段合计）。
+    # 此前非双栏只存每种键的首个位置：P17 只剩 budget=0/final=1、
+    # P18 total=0 错指行标签列——其余金额组全部丢失。
+    # 语义列全量登记（named_columns 保持首选单值兼容旧消费方）。
+    parsed.semantic_columns = {
+        key: sorted(set(positions)) for key, positions in header_hits.items()
+    }
+    is_multi_measure = (
+        not is_two_sided and any(len(v) >= 2 for v in header_hits.values())
+    )
+    # 语义叶行：扫描窗口内命中语义键最多的表头行（预算/决算数行、
+    # 合计/基本/项目行）——列组主体只取它上方的标签。
+    leaf_row: Optional[int] = hit_rows.most_common(1)[0][0] if hit_rows else None
+    col_seqs: List[Optional[Tuple[str, ...]]] = []
+    if is_multi_measure:
+        parsed.column_group = "multi_measure"
+
+        def _stacked_labels(col: int) -> Tuple[str, ...]:
+            """列上方（语义叶行之前）的非空表头标签序列，自顶向下去相邻重复。
+
+            非空单元格 <2 的行视为标题/抬头行跳过——P17 的表名行只有
+            第 0 列有值，不跳过会把「财政拨款"三公"经费」表名当成
+            0 号列组的父主体。
+            """
+            if leaf_row is None:
+                return ()
+            labels: List[str] = []
+            for r in range(leaf_row):
+                if r >= len(scan_rows) or scan_rows[r] is None:
+                    continue
+                row_cells = scan_rows[r]
+                if sum(1 for c in row_cells if str(c or "").strip()) < 2:
+                    continue
+                if col >= len(row_cells):
+                    continue
+                text = re.sub(r"\s+", "", str(row_cells[col] or ""))
+                if text and (not labels or labels[-1] != text):
+                    labels.append(text)
+            return tuple(labels)
+
+        for col in range(col_count):
+            seq = _stacked_labels(col)
+            if not seq and col_seqs:
+                # 空列头延续左侧列组（合并单元格跨列，如 P17 决算数列）
+                seq = col_seqs[-1]
+            if not seq:
+                # 首列本身无表头标签（历史材料的多形态表头）：
+                # 不建组、也不崩溃——该列命中键不进任何列组
+                seq = None
+            col_seqs.append(seq)
+
+        # 按「上方标签序列相同」切列组：subject=最深标签、parent_subject=
+        # 其上一级标签（多级表头），组内登记语义键 → 列索引。
+        groups: List[ColumnGroup] = []
+        current_seq: Optional[Tuple[str, ...]] = None
+        for col, seq in enumerate(col_seqs):
+            if seq is None:
+                continue
+            if seq != current_seq:
+                groups.append(
+                    ColumnGroup(
+                        subject=seq[-1],
+                        parent_subject=seq[-2] if len(seq) > 1 else "",
+                        span=(col, col),
+                    )
+                )
+                current_seq = seq
+            elif groups:
+                groups[-1].span = (groups[-1].span[0], col)
+        for key, positions in header_hits.items():
+            for pos in positions:
+                for group in groups:
+                    if group.span[0] <= pos <= group.span[1]:
+                        group.columns[key] = pos
+        parsed.column_groups = groups
+
+    def _label_block(seq: Optional[Tuple[str, ...]]) -> bool:
+        """行标签列组（编码/科目名称等结构性列）——其中的语义键
+        （如 P18 第 0 列「合计」是行标签列，不是金额列）不得成为
+        named_columns 的首选位置。"""
+        joined = "".join(seq or ())
+        return "编码" in joined or "科目名称" in joined or joined == "项目"
+
     for key, positions in header_hits.items():
         if is_two_sided and len(positions) >= 2:
             # 双栏：首次出现记标准键、二次出现记 *_right
             parsed.named_columns[key] = positions[0]
             parsed.named_columns[f"{key}_right"] = positions[1]
+        elif is_multi_measure:
+            # 多金额组：首选**金额段**位置（跳过行标签列组）——P18 的
+            # total 首选第 4 列（本年支出段合计），而非第 0 列行标签
+            primary = next(
+                (
+                    p
+                    for p in positions
+                    if not _label_block(col_seqs[p] if p < len(col_seqs) else None)
+                ),
+                positions[0],
+            )
+            parsed.named_columns[key] = primary
         else:
             parsed.named_columns[key] = positions[0]
 
@@ -542,7 +678,30 @@ def _remap_continuation_rows(
 
     重建 ParsedRow 时保留 code_right/code_level_right（R6 P0-2：
     此前重建丢右栏字段）。
+
+    review 🟢3（形态守卫）：前对齐只认**编码形态**的首列——合并编码
+    （"2110105" 文本或整数 number）才有资格进基准 code 列位；首列是
+    任意非空内容（如序号 "1"）时不做前对齐，走尾部对齐（code 列位
+    留空 → _row_code 形态守卫兜底返回 None，不会污染编码列）。
+
+    /review 自查补：前对齐仅在续页**窄于**基准（shift>0）时有语义
+    （续页把前置编码列合并成单列）；续页更宽（shift<0）时不做前对齐，
+    且尾部对齐循环不得覆盖已前对齐的编码单元格（否则 src=j+shift
+    可能落回 code 列位，编码被续页第二列静默覆盖）。
     """
+
+    def _looks_like_code(cell: ParsedCell) -> bool:
+        text = (cell.text or "").strip()
+        if text and _CODE_RE.match(text):
+            return True
+        if (
+            cell.number is not None
+            and cell.number == cell.number.to_integral_value()
+            and _CODE_RE.match(str(int(cell.number)))
+        ):
+            return True
+        return False
+
     remapped: List[ParsedRow] = []
     for row in rows:
         shift = target_width - len(row.cells)
@@ -551,19 +710,20 @@ def _remap_continuation_rows(
             continue
         first_page = row.cells[0].page if row.cells else 0
         cells: List[ParsedCell] = [ParsedCell(page=first_page) for _ in range(target_width)]
-        # 前置编码列前对齐：首列（合并编码）放到基准 code 列位
+        # 前置编码列前对齐：续页窄于基准（shift>0）且首列为编码形态
+        # （3/5/7 位数字）时才前对齐
         prefix_aligned = 0
-        if code_column is not None and code_column < target_width:
+        if shift > 0 and code_column is not None and code_column < target_width:
             first_cell = row.cells[0] if row.cells else None
-            if first_cell is not None and (
-                (first_cell.text or "").strip() or first_cell.number is not None
-            ):
+            if first_cell is not None and _looks_like_code(first_cell):
                 cells[code_column] = first_cell
                 prefix_aligned = 1
         # 其余列尾部对齐（金额列相对位置不变）
         for j in range(prefix_aligned, len(row.cells)):
             src = j + shift
             if 0 <= src < target_width:
+                if prefix_aligned and src == code_column:
+                    continue  # 不覆盖前对齐的编码单元格
                 cells[src] = row.cells[j]
         remapped.append(
             ParsedRow(

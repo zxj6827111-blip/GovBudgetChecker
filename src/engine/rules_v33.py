@@ -124,6 +124,11 @@ class Issue:
     message: str
     evidence_text: Optional[str] = None
     location: Dict[str, Any] = field(default_factory=dict)
+    # R7 P1-3：finding 的独立章节身份（结构化字段）。此前章节只以
+    # 「【章节:…】」文字拼进 evidence_text——评估器无法结构化校验
+    # 候选 finding 是否真的产自标注章节（跨章节候选可借主题词混过
+    # 锚点）。section_id 携带规则层 scope 定位到的章节标题原文。
+    section_id: Optional[str] = None
 
 @dataclass
 class Document:
@@ -493,13 +498,15 @@ class Rule:
     def _issue(self, message: str,
                location: Optional[Dict[str, Any]] = None,
                severity: Optional[str] = None,
-               evidence_text: Optional[str] = None) -> Issue:
+               evidence_text: Optional[str] = None,
+               section_id: Optional[str] = None) -> Issue:
         return Issue(
             rule=self.code,
             severity=severity or self.severity,
             message=message,
             evidence_text=evidence_text,
-            location=location or {}
+            location=location or {},
+            section_id=section_id,
         )
 
 
@@ -5557,18 +5564,22 @@ class R33245_ThreePublicDirectionContradiction(Rule):
         # 提到「公务接待费…减少…持平」同样产出 finding，规则文案自证
         # 章节名却内容跨章节。定位到「三公经费…决算情况说明」主章节的
         # 完整范围（含（一）（二）子章节，find_section_scope——主标题后
-        # 紧跟子标题时 find_section 的 body 为空）；找不到章节时才降级
-        # 全文（材料无标准章节标题时的兼容）。
+        # 紧跟子标题时 find_section 的 body 为空）。
+        # R7 P1-3：找不到章节 → 证据不足直接返回空——禁止 scope or
+        # merged 全文回退（此前仅含「十一、其他重要事项说明」的材料里
+        # 出现公务接待表述仍会产出 finding，跨章节误报通道未真正关闭）。
         from src.utils.narration import find_section_scope
 
         scope = find_section_scope(merged, ["三公"])
+        if not (scope and scope.strip()):
+            return issues
         # 章节标题从 split_numbered_sections 取（find_section_scope 只返
         # 正文）；目录实例的空 scope 已被其内部择优选实例逻辑排除
         section_title = None
         _fs = find_section(merged, ["三公"])
         if scope and _fs and _fs[1].strip() in scope:
             section_title = _fs[0]
-        scope_text = scope or merged
+        scope_text = scope
 
         for para in merge_soft_wrapped_lines(scope_text):
             if "三公" not in para and "公务接待" not in para and "因公出国" not in para and "公务用车" not in para:
@@ -5600,7 +5611,9 @@ class R33245_ThreePublicDirectionContradiction(Rule):
                     # 结构化章节标记（GPT5.6 R6 P1-3）：规则层 scope 已限定
                     # 本 finding 产自三公说明章节；evidence 前缀让 finding
                     # 自带可校验的章节身份——评估器 sec 锚点消费它，
-                    # 不再依赖标注侧猜测 evidence 里的章节词
+                    # 不再依赖标注侧猜测 evidence 里的章节词。
+                    # R7 P1-3：另以独立 section_id 结构化携带（评估器可
+                    # 据此拒绝跨章节候选，不再只靠 evidence 文字）。
                     section_tag = f"【章节:{(section_title or '').strip()[:40]}】" if section_title else ""
                     issues.append(self._issue(
                         f"三公说明逻辑矛盾：「{subject}」同时出现增减变化与“持平”表述，"
@@ -5608,6 +5621,7 @@ class R33245_ThreePublicDirectionContradiction(Rule):
                         {"page": self._locate_page(doc, locate_text)},
                         severity="medium",
                         evidence_text=f"{section_tag}{evidence}",
+                        section_id=section_title,
                     ))
 
         return issues
@@ -5637,15 +5651,18 @@ class R33246_DomesticReceptionDisclosure(Rule):
 
         # 章节限定（GPT5.6 R5 P1-C 规则层修复，同 V33-245）：披露
         # 完整性针对「三公经费…决算情况说明」主章节完整范围
-        # （find_section_scope 含子章节正文）；找不到时降级全文。
+        # （find_section_scope 含子章节正文）。
+        # R7 P1-3：找不到章节 → 证据不足直接返回空，禁止全文回退。
         from src.utils.narration import find_section_scope
 
         scope = find_section_scope(merged, ["三公"])
+        if not (scope and scope.strip()):
+            return issues
         section_title = None
         _fs = find_section(merged, ["三公"])
         if scope and _fs and _fs[1].strip() in scope:
             section_title = _fs[0]
-        scope_text = scope or merged
+        scope_text = scope
 
         for para in merge_soft_wrapped_lines(scope_text):
             if "公务接待" not in para:
@@ -5674,7 +5691,8 @@ class R33246_DomesticReceptionDisclosure(Rule):
                 continue
             page = R33245_ThreePublicDirectionContradiction._locate_page(doc, para[:40])
             # 结构化章节标记（R6 P1-3，同 V33-245）：规则层 scope 已限定
-            # finding 产自三公说明章节，evidence 前缀供评估器锚点消费
+            # finding 产自三公说明章节，evidence 前缀供评估器锚点消费；
+            # R7 P1-3：另以独立 section_id 结构化携带。
             section_tag = f"【章节:{(section_title or '').strip()[:40]}】" if section_title else ""
             issues.append(self._issue(
                 "公务接待说明未披露国内公务接待批次、人次，"
@@ -5682,6 +5700,7 @@ class R33246_DomesticReceptionDisclosure(Rule):
                 {"page": page},
                 severity="medium",
                 evidence_text=f"{section_tag}{para[:200]}",
+                section_id=section_title,
             ))
 
         return issues

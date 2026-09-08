@@ -106,6 +106,9 @@ def _serialize_finding(issue: Any) -> Dict[str, Any]:
         "message": str(getattr(issue, "message", "")),
         "page": location.get("page"),
         "evidence_text": str(getattr(issue, "evidence_text", "") or ""),
+        # R7 P1-3：finding 的独立章节身份——评估器可结构化校验
+        # sec 锚标注的候选是否真产自该章节（跨章节候选不得晋升 TP）
+        "section_id": str(getattr(issue, "section_id", "") or ""),
     }
 
 
@@ -203,6 +206,55 @@ def normalize_rule_key(rule: str) -> str:
     return unicodedata.normalize("NFKC", str(rule or "")).strip().upper()
 
 
+def _migration_scope(parse_mode: str) -> Optional[set]:
+    """structured 模式历史对比的合法规则域（R7 P1-4）。
+
+    structured 解析路径只执行 STRUCTURED_MIGRATED_RULES（九条迁移集），
+    旧结果却是**全量规则集**（V33-235/CMM-004 等未迁移规则也在其中）。
+    用「旧全集 ∪ 新九条」计算差异会把未迁移规则的旧计数全部算成
+    removed（历史实测 removed=131 假象）——delta/removed 必须限定在
+    迁移集内，未迁移规则的旧计数单独报告为 coverage_gap。
+    legacy 模式返回 None（不限定——历史回归对比需要全量规则域）。
+    """
+    if parse_mode != "structured":
+        return None
+    from src.engine.structured_rules import STRUCTURED_MIGRATED_RULES
+
+    return {normalize_rule_key(r) for r in STRUCTURED_MIGRATED_RULES}
+
+
+def _restricted_rule_delta(
+    old_counts: Dict[str, int],
+    new_counts: Dict[str, int],
+    scope: Optional[set],
+) -> Tuple[Dict[str, Dict[str, int]], Dict[str, int]]:
+    """逐规则差异计算（R7 P1-4）：scope 非空时只对比域内规则。
+
+    返回 (per_rule_delta, coverage_gap)：
+    - per_rule_delta：域内（或全部，scope=None）新旧计数不同的规则；
+    - coverage_gap：域外规则的历史旧计数——未被 structured 重跑覆盖，
+      不是"被消除"，单列报告、不参与 delta/removed。
+    """
+    rules = set(old_counts) | set(new_counts)
+    if scope is not None:
+        rules &= scope
+    per_rule_delta = {
+        rule: {"old": old_counts.get(rule, 0), "new": new_counts.get(rule, 0)}
+        for rule in sorted(rules)
+        if old_counts.get(rule, 0) != new_counts.get(rule, 0)
+    }
+    coverage_gap = (
+        {
+            rule: old_counts[rule]
+            for rule in sorted(old_counts)
+            if old_counts[rule] and normalize_rule_key(rule) not in scope
+        }
+        if scope is not None
+        else {}
+    )
+    return per_rule_delta, coverage_gap
+
+
 def diff_legacy_structured(legacy: Dict[str, Any], structured: Dict[str, Any]) -> Dict[str, Any]:
     legacy_counts = {normalize_rule_key(k): v for k, v in legacy["rule_counts"].items()}
     structured_counts = {normalize_rule_key(k): v for k, v in structured["rule_counts"].items()}
@@ -228,10 +280,15 @@ def _load_corpus_inputs(doc_dir: Path) -> Tuple[str, List[str], List[List[Any]]]
 
     GPT5.6 R6 P1-5：corpus PDF 不入库（大文件），干净 checkout 上
     replay 直接 FileNotFoundError → replay+evaluate 不可复现（pytest
-    可跑，评测链路断）。回退逻辑：按 doc_id 找 tests/fixtures 中的
-    序列化解析产物，校验其 source_pdf_sha256 与 golden.json 声明的
-    样张 SHA 一致后使用——解析产物由 fixture 生成脚本与 PDF 实时
-    抽取保证一致（tests 双向 SHA 锁定）。
+    可跑，评测链路断）。回退逻辑：用 tests/fixtures 的序列化解析产物，
+    校验其 source_pdf_sha256 与 golden.json 声明的样张 SHA 一致后使用。
+
+    review 🟡1（fail-closed 补强）：回退的前提是「fixture 与该 doc 的
+    PDF 同源」——此前 golden.json 缺失时整个 SHA 校验被跳过、静默回退
+    样张数据（扩语料后一个忘了放 golden.json 的新 doc 会评测错数据）。
+    现在：golden.json 缺失 → 拒绝；fixture 内嵌 doc_id 与 doc_dir 不符
+    → 拒绝；SHA 任一为空或不一致 → 拒绝。任何一步不满足都明确报错，
+    不允许「拿样张数据评测别的 doc」。
     """
     pdf_path = next(
         (candidate for candidate in sorted(doc_dir.glob("*.pdf"))), None
@@ -242,22 +299,35 @@ def _load_corpus_inputs(doc_dir: Path) -> Tuple[str, List[str], List[List[Any]]]
             load_page_texts(pdf_path),
             load_page_tables(pdf_path),
         )
+    golden_path = doc_dir / "golden.json"
+    if not golden_path.exists():
+        raise FileNotFoundError(
+            f"no pdf in corpus doc dir: {doc_dir}，且无 golden.json——"
+            "fixture 回退缺少同源性证明，拒绝静默回退（fail-closed，"
+            "review 🟡1）。请放置语料 PDF，或补全 golden.json 后重试。"
+        )
+    golden = json.loads(golden_path.read_text(encoding="utf-8"))
     fixture_path = ROOT / "tests" / "fixtures" / "sample_page_data.json"
     if not fixture_path.exists():
         raise FileNotFoundError(
             f"no pdf in corpus doc dir: {doc_dir}, and fixture missing: {fixture_path}"
         )
     payload = json.loads(fixture_path.read_text(encoding="utf-8"))
-    golden_path = doc_dir / "golden.json"
-    if golden_path.exists():
-        golden = json.loads(golden_path.read_text(encoding="utf-8"))
-        expected_sha = str(golden.get("sha256") or "")
-        fixture_sha = str(payload.get("source_pdf_sha256") or "")
-        if expected_sha and fixture_sha and expected_sha != fixture_sha:
-            raise RuntimeError(
-                "fixture SHA 与 golden 声明不一致——fixture 过期，"
-                "请用 scripts/build_sample_fixture.py 重新生成"
-            )
+    fixture_doc = str(payload.get("doc_id") or "").strip()
+    if fixture_doc != doc_dir.name:
+        raise RuntimeError(
+            f"fixture doc_id={fixture_doc!r} 与 doc_dir={doc_dir.name!r} 不符——"
+            f"fixture 是 DOC-20260905-001 的解析产物，不能用于评测别的 doc；"
+            f"请用 scripts/build_sample_fixture.py 为该 doc 生成独立 fixture。"
+        )
+    expected_sha = str(golden.get("sha256") or "").strip()
+    fixture_sha = str(payload.get("source_pdf_sha256") or "").strip()
+    if not expected_sha or not fixture_sha or expected_sha != fixture_sha:
+        raise RuntimeError(
+            f"fixture SHA 与 golden 声明不一致（golden={expected_sha or '(空)'} "
+            f"fixture={fixture_sha or '(空)'}）——fixture 过期或 golden 缺 SHA，"
+            "请用 scripts/build_sample_fixture.py 重新生成。"
+        )
     return (
         "(fixture)",
         list(payload["page_texts"]),
@@ -403,19 +473,18 @@ def replay_historical_doc(
     # 否则会制造 old=0 → new=N 的假 delta（fail-closed 对比口径）。
     has_baseline = old_counts is not None
     old_counts = old_counts if old_counts is not None else {}
-    all_rules = sorted(set(old_counts) | set(new["rule_counts"]))
-    per_rule_delta = {
-        rule: {
-            "old": old_counts.get(rule, 0),
-            "new": new["rule_counts"].get(rule, 0),
-        }
-        for rule in all_rules
-        if old_counts.get(rule, 0) != new["rule_counts"].get(rule, 0)
-    }
+    # R7 P1-4：structured 模式的 delta 限定在迁移集内——旧结果是全量
+    # 规则集，未迁移规则（V33-235/CMM-004 等）的旧计数不是"被消除"，
+    # 单独报告为 coverage_gap（历史实测 removed=131 假象由此产生）。
+    scope = _migration_scope(parse_mode)
+    per_rule_delta, coverage_gap = _restricted_rule_delta(
+        old_counts, new["rule_counts"], scope
+    )
     changed = sum(abs(v["new"] - v["old"]) for v in per_rule_delta.values())
     result: Dict[str, Any] = {
         "job_id": job_dir.name,
         "pdf": pdf_path.name,
+        "sha256": sha256_file(pdf_path),
         "pages": len(page_texts),
         "report_kind_old": old_meta.get("report_kind"),
         "report_kind_new": report_kind,
@@ -428,6 +497,8 @@ def replay_historical_doc(
         "new_counts": new["rule_counts"],
         "per_rule_delta": per_rule_delta,
         "changed_total": changed,
+        "coverage_gap": coverage_gap,
+        "coverage_gap_total": sum(coverage_gap.values()),
         "parse_sec": parse_sec,
     }
     # shadow 模式：structured 侧结果留痕（与旧结果对比的 delta 仍是
@@ -449,6 +520,35 @@ def _historical_worker(args: Tuple[str, str]) -> Dict[str, Any]:
     return replay_historical_doc(UPLOADS_DIR / job_name, parse_mode=parse_mode)
 
 
+def _stored_report_kind(job_dir: Path) -> str:
+    """历史任务存储的 report_kind（status.json），无则空串。"""
+    try:
+        payload = json.loads((job_dir / "status.json").read_text(encoding="utf-8"))
+        return str(payload.get("report_kind") or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _cached_result_valid(result: Dict[str, Any]) -> bool:
+    """缓存结果是否仍有效：job 目录的 PDF 与缓存 SHA 一致。
+
+    review P1-6 补完（PDF SHA 纳入缓存校验）：此前检查点只验
+    parse_mode + 代码指纹 + job_set，同一 job_id 的 PDF 被替换后旧缓存
+    仍被复用。恢复时对每条缓存结果重算当前 PDF 的 SHA——不一致即丢弃
+    （该任务重新执行）。skipped/failed 条目不带 sha256 → 直接失效重跑
+    （恢复语义：只有完整跑完的条目才能续）。
+    """
+    job_id = result.get("job_id")
+    pdf_name = result.get("pdf")
+    if not job_id or not pdf_name or not result.get("sha256"):
+        return False
+    pdf_path = UPLOADS_DIR / job_id / pdf_name
+    try:
+        return pdf_path.exists() and sha256_file(pdf_path) == result.get("sha256")
+    except Exception:
+        return False
+
+
 def replay_historical(
     parse_mode: str,
     limit: Optional[int],
@@ -464,6 +564,17 @@ def replay_historical(
         if not list(job_dir.glob("*.pdf")):
             continue
         jobs.append(job_dir.name)
+    if limit and parse_mode == "structured":
+        # 强制抽取 final 样本（R6 P1-6 补完）：--limit 抽样时优先决算类
+        # 任务——结构化迁移的 delta 聚合只认 report_kind=final，预算任务
+        # 全部进 not_applicable；此前抽样顺序固定时可能抽到 0 份 final，
+        # removed_findings 报告因此失去意义。
+        jobs.sort(
+            key=lambda name: (
+                _stored_report_kind(UPLOADS_DIR / name) != "final",
+                name,
+            )
+        )
     if limit:
         jobs = jobs[:limit]
 
@@ -502,12 +613,15 @@ def replay_historical(
             cached_mode = str(partial.get("parse_mode") or "")
             cached_fp = str(partial.get("cache_fingerprint") or "")
             if cached_mode == parse_mode and cached_fp == fingerprint:
-                # 双保险②：只保留当前任务集合内的结果（--limit 变更/
-                # 任务删除后的陈旧条目不再混入）
+                # 双保险②：只保留当前任务集合内、且 PDF 未被替换的缓存
+                # 结果（--limit 变更/任务删除/PDF 更换后的陈旧条目不再
+                # 混入；PDF SHA 校验见 _cached_result_valid）
                 results = [
                     r
                     for r in (partial.get("results") or [])
-                    if isinstance(r, dict) and r.get("job_id") in job_set
+                    if isinstance(r, dict)
+                    and r.get("job_id") in job_set
+                    and _cached_result_valid(r)
                 ]
                 done = {r.get("job_id") for r in results if r.get("job_id")}
         except Exception:
@@ -598,8 +712,14 @@ def replay_historical(
 
     def aggregate(docs: List[Dict[str, Any]]) -> Dict[str, Dict[str, int]]:
         agg: Dict[str, Dict[str, int]] = {}
+        # R7 P1-4：structured 模式的聚合同样限定在迁移集内（与单份
+        # delta 同域——未迁移规则的旧计数不构成 removed）。
+        scope = _migration_scope(parse_mode)
         for r in docs:
-            for rule in set(r["old_counts"]) | set(r["new_counts"]):
+            rules = set(r["old_counts"]) | set(r["new_counts"])
+            if scope is not None:
+                rules &= scope
+            for rule in rules:
                 entry = agg.setdefault(rule, {"old": 0, "new": 0, "docs_changed": 0})
                 entry["old"] += r["old_counts"].get(rule, 0)
                 entry["new"] += r["new_counts"].get(rule, 0)
@@ -612,6 +732,14 @@ def replay_historical(
 
     rule_agg = aggregate(consistent)
     routing_rule_agg = aggregate(routing_changed)
+
+    # R7 P1-4：未迁移规则的旧计数聚合为 coverage_gap（结构化路径不
+    # 重跑这些规则，其历史计数不参与 delta/removed——单独报告覆盖
+    # 缺口，历史回归结论才有可比性）。
+    gap_agg: Dict[str, int] = {}
+    for r in processed:
+        for rule, cnt in (r.get("coverage_gap") or {}).items():
+            gap_agg[rule] = gap_agg.get(rule, 0) + cnt
 
     ranked_docs = sorted(
         consistent, key=lambda r: (-r["changed_total"], r["job_id"])
@@ -647,6 +775,9 @@ def replay_historical(
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "parse_mode": parse_mode,
         "jobs_total": len(jobs),
+        "sampled_final_count": sum(
+            1 for name in jobs if _stored_report_kind(UPLOADS_DIR / name) == "final"
+        ),
         "processed": len(processed),
         "not_applicable_count": len(not_applicable),
         "not_applicable_kinds": dict(
@@ -672,6 +803,15 @@ def replay_historical(
         ),
         "removed_total": removed_total,
         "added_total": added_total,
+        "coverage_gap_total": sum(gap_agg.values()),
+        "coverage_gap_rule_aggregate": dict(
+            sorted(gap_agg.items(), key=lambda kv: (-kv[1], kv[0]))
+        ),
+        "coverage_gap_note": (
+            "structured 模式只执行 STRUCTURED_MIGRATED_RULES（九条迁移集）——"
+            "未迁移规则不重跑，其历史旧计数不是'被消除的 findings'，单列"
+            "于此供覆盖缺口评估，不参与 removed/added（R7 P1-4）。"
+        ),
         "top_changed_docs_for_manual_review": top_changed,
         # 注意与上方 "routing_changed_docs"（计数）区分：此处是变更文档
         # 明细清单（此前与计数同名，字典重复键导致计数被列表覆盖，
@@ -722,6 +862,11 @@ def main() -> int:
             f"skipped={report['skipped']} elapsed={report['elapsed_sec']}s"
         )
         print(f"removed_findings={report['removed_total']} added_findings={report['added_total']}")
+        if report.get("coverage_gap_total"):
+            print(
+                f"coverage_gap_findings={report['coverage_gap_total']} "
+                "（未迁移规则旧计数，不参与 delta）"
+            )
         print("逐规则变化（按 |delta| 降序，前 20）:")
         for rule, agg in list(report["rule_aggregate"].items())[:20]:
             print(

@@ -187,35 +187,6 @@ def _anchor_phrases(anchor: str) -> List[str]:
     return [p for p in phrases if p not in generic]
 
 
-def _annotation_section_phrases(annotation: Dict[str, Any]) -> List[str]:
-    """sec/toc 域的**章节标记**短语（R5 P1-C 结构化位置键核心）。
-
-    语义分离：sec 锚切出的短语有两类——
-    - 章节标记（「三公说明」）：指证 finding 属于哪个说明章节；
-    - 行内主题词（「公务接待费」）：出现在该章节的正文里，但其他
-      章节提到同一主题时也会出现——**不构成章节证明**（GPT5.6 R5
-      实测：其他事项说明里的公务接待矛盾，evidence 含「公务接待费」
-      即过锚点）。
-
-    章节标记取锚文本的**首个短语**（冒号后第一段，标注书写约定）；
-    ``section_phrases_aligned`` 供标注补充（规则 evidence 引文起点
-    常是章节标题行）。sec/toc 锚点命中**只认章节标记**；tbl/xtbl
-    锚与 anchor_phrases_aligned 仍走全短语集（表名/证据短语本身即
-    定位声明）。
-    """
-    raw = str(annotation.get("location_key") or "").strip()
-    prefix, _, rest = raw.partition(":")
-    if not (raw and prefix in {"sec", "toc"}):
-        return []
-    phrases = _anchor_phrases(rest)
-    section_marks = phrases[:1] if phrases else []
-    for extra in annotation.get("section_phrases_aligned") or []:
-        norm = _normalize_for_overlap(extra)
-        if len(norm) >= 2 and norm not in section_marks:
-            section_marks.append(norm)
-    return section_marks
-
-
 def _annotation_anchor_phrases(annotation: Dict[str, Any]) -> List[str]:
     """标注的全部锚点短语：location_key 切分短语 + 对齐短语补充。
 
@@ -333,6 +304,32 @@ def match_annotation(
         if not anchor_hit_candidates:
             return None  # 零锚点命中：unmatched，不晋升 TP
         candidates = anchor_hit_candidates
+    # 独立章节校验（R7 P1-3）：sec 锚标注 + finding 携带 section_id
+    # （结构化字段，非 evidence 文字）时，章节域必须同源——section_id
+    # 归一文本要包含锚短语或其 2 字前缀（章节标题措辞与标注短语允许
+    # 差异：「三公说明」vs「财政拨款"三公"经费支出决算情况说明」共享
+    # 「三公」）。「其他重要事项说明 + 公务接待费」的跨章节候选被拒，
+    # 此前只能靠 evidence 文字、主题词混过即可晋升 TP。
+    # finding 无 section_id（旧产物/未迁移规则）：退回锚点语义，不惩罚。
+    if (
+        str(annotation.get("location_key") or "").partition(":")[0] == "sec"
+        and anchor_phrases
+    ):
+        section_candidates = []
+        for c in candidates:
+            section_id = str(c[1].get("section_id") or "").strip()
+            if not section_id:
+                section_candidates.append(c)
+                continue
+            section_norm = _normalize_for_overlap(section_id)
+            if any(
+                p in section_norm or (len(p) >= 2 and p[:2] in section_norm)
+                for p in anchor_phrases
+            ):
+                section_candidates.append(c)
+        if not section_candidates:
+            return None  # 章节域不符的候选不得晋升 TP
+        candidates = section_candidates
     # 章节标记约束（R5 P1-C）：sec/toc 锚的章节标记短语。
     # - 标注**显式声明** section_phrases_aligned（章节词的 evidence 驻留
     #   形态）→ 硬约束：零命中拒配（跨章节候选不晋升 TP）；
@@ -363,6 +360,79 @@ def match_annotation(
     return candidates[0][1]
 
 
+def _truth_group(annotation: Dict[str, Any]) -> str:
+    """真值分组：证据面后缀归一——T4a/T4b 是同一真值 T4 的两个证据面。
+
+    R6 P1-4 冻结语义（ANNOTATIONS.md）：同一真值的多个证据面**任一
+    命中即该真值命中**。分组取 truth_id 去掉尾部小写后缀（T4a→T4、
+    T5b→T5）；无后缀的 truth_id（T1…）组即自身；缺 truth_id 时退回
+    annotation_id。
+    """
+    truth_id = str(annotation.get("truth_id") or annotation.get("annotation_id") or "")
+    return re.sub(r"[a-z]+$", "", truth_id) or truth_id
+
+
+def _consume_truth_annotations(
+    annotations: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    consumed: set,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], int]:
+    """按真值组聚类消费标注（defect/hint 共用，review 🟡2）。
+
+    匹配阶段：每个证据面**独立尝试**匹配自己的 finding（同一真值的两
+    个证据面在样张上各有对应 finding——T5a=310 行明细差、T5b=公用经费
+    显示和差，跳过第二面会把它对应的 finding 变成 FP）。
+    计数阶段：missed 按真值组去重——组内**任一**面命中即该真值命中；
+    其余面未命中不构成缺口（review 验收口径：单条 finding 命中另一面
+    不再报 miss）；整组全部面都未命中才计 **1** 个 missed（明细带全部
+    面，召回缺口按真值计，不按标注面放大）。
+    返回 (matched 明细, missed 明细[组去重], 命中组数)。
+    """
+    matched: List[Dict[str, Any]] = []
+    missed: List[Dict[str, Any]] = []
+    hit_groups: set = set()
+    pending: Dict[str, List[Dict[str, Any]]] = {}
+    for annotation in annotations:
+        group = _truth_group(annotation)
+        finding = match_annotation(annotation, findings, consumed)
+        if finding is None:
+            pending.setdefault(group, []).append(annotation)
+            continue
+        hit_groups.add(group)
+        consumed.add(id(finding))
+        matched.append(
+            {
+                "annotation_id": annotation.get("annotation_id"),
+                "truth_id": annotation.get("truth_id"),
+                "truth_group": group,
+                "rule_id": annotation.get("rule_id"),
+                "allowed_rule_ids": sorted(annotation.get("allowed_rule_ids") or []),
+                "matched_rule": finding.get("rule"),
+                "expected_page": annotation.get("page"),
+                "expected_severity": annotation.get("expected_severity"),
+                "actual_severity": _norm_severity(finding.get("severity")),
+                "severity_ok": _norm_severity(finding.get("severity"))
+                == _norm_severity(annotation.get("expected_severity")),
+                "page_ok": _page_of(finding) == annotation.get("page"),
+            }
+        )
+    for group, faces in pending.items():
+        if group in hit_groups:
+            continue
+        missed.append(
+            {
+                "truth_group": group,
+                "annotation_id": faces[0].get("annotation_id"),
+                "annotation_ids": [f.get("annotation_id") for f in faces],
+                "rule_id": faces[0].get("rule_id"),
+                "page": faces[0].get("page"),
+                "evidence": faces[0].get("evidence"),
+                "faces": faces,
+            }
+        )
+    return matched, missed, len(hit_groups)
+
+
 def evaluate(doc_id: str, replay_path: Path) -> Dict[str, Any]:
     golden_path = CORPUS_DIR / doc_id / "golden.json"
     golden = json.loads(golden_path.read_text(encoding="utf-8"))
@@ -385,52 +455,16 @@ def evaluate(doc_id: str, replay_path: Path) -> Dict[str, Any]:
     hint_missed: List[Dict[str, Any]] = []
     matched_finding_ids: set = set()
 
-    # R6 P1-4：truth_id 聚类验收——T4a/T4b（T5a/T5b）是同一真值的
-    # 证据面，任一标注面命中即真值命中；全部面都未命中才计 FN
-    # （按 truth_id 去重计入 missed，不再按 annotation 放大召回缺口）
-    hit_truth_ids: set = set()
-    for annotation in defects:
-        truth_id = str(annotation.get("truth_id") or annotation.get("annotation_id") or "")
-        if truth_id in hit_truth_ids:
-            continue  # 该真值已有证据面命中
-        finding = match_annotation(annotation, findings, matched_finding_ids)
-        if finding is None:
-            missed.append(annotation)
-        else:
-            hit_truth_ids.add(truth_id)
-            matched_finding_ids.add(id(finding))
-            matched.append(
-                {
-                    "annotation_id": annotation.get("annotation_id"),
-                    "truth_id": truth_id,
-                    "rule_id": annotation.get("rule_id"),
-                    "allowed_rule_ids": sorted(annotation.get("allowed_rule_ids") or []),
-                    "matched_rule": finding.get("rule"),
-                    "expected_page": annotation.get("page"),
-                    "expected_severity": annotation.get("expected_severity"),
-                    "actual_severity": _norm_severity(finding.get("severity")),
-                    "severity_ok": _norm_severity(finding.get("severity"))
-                    == _norm_severity(annotation.get("expected_severity")),
-                    "page_ok": _page_of(finding) == annotation.get("page"),
-                }
-            )
-
-    for annotation in hints:
-        finding = match_annotation(annotation, findings, matched_finding_ids)
-        if finding is None:
-            hint_missed.append(annotation)
-        else:
-            matched_finding_ids.add(id(finding))
-            hint_matched.append(
-                {
-                    "annotation_id": annotation.get("annotation_id"),
-                    "rule_id": annotation.get("rule_id"),
-                    "expected_page": annotation.get("page"),
-                    "expected_severity": annotation.get("expected_severity"),
-                    "actual_severity": _norm_severity(finding.get("severity")),
-                    "page_ok": _page_of(finding) == annotation.get("page"),
-                }
-            )
+    # R6 P1-4 + review 🟡2：truth_id 聚类验收（defect/hint 两侧一致）。
+    # 同一真值的多个证据面（T4a/T4b → 组 T4）任一命中即该真值命中，
+    # 组内其余面不再要求独立命中（也不计入 missed）；整组全部面都
+    # 未命中才计 1 个 missed——召回缺口按真值计，不按标注面放大。
+    matched, missed, _ = _consume_truth_annotations(
+        defects, findings, matched_finding_ids
+    )
+    hint_matched, hint_missed, hint_groups_hit = _consume_truth_annotations(
+        hints, findings, matched_finding_ids
+    )
 
     tp = len(matched)
     fn = len(missed)
@@ -490,6 +524,8 @@ def evaluate(doc_id: str, replay_path: Path) -> Dict[str, Any]:
         "recall": recall,
         "hint_total": len(hints),
         "hint_matched": len(hint_matched),
+        "hint_groups_total": len({_truth_group(a) for a in hints}),
+        "hint_groups_hit": hint_groups_hit,
         "hint_missed_count": len(hint_missed),
         "severity_accuracy": round(len(severity_ok) / tp, 4) if tp else None,
         "page_accuracy": round(len(page_ok) / tp, 4) if tp else None,
@@ -511,19 +547,23 @@ def evaluate(doc_id: str, replay_path: Path) -> Dict[str, Any]:
         "hint_hits": hint_matched,
         "missed": [
             {
-                "annotation_id": item.get("annotation_id"),
-                "rule_id": item.get("rule_id"),
-                "page": item.get("page"),
-                "evidence": item.get("evidence"),
+                "truth_group": item["truth_group"],
+                "annotation_id": item["annotation_id"],
+                "annotation_ids": item["annotation_ids"],
+                "rule_id": item["rule_id"],
+                "page": item["page"],
+                "evidence": item["evidence"],
             }
             for item in missed
         ],
         "hint_missed": [
             {
-                "annotation_id": item.get("annotation_id"),
-                "rule_id": item.get("rule_id"),
-                "page": item.get("page"),
-                "evidence": item.get("evidence"),
+                "truth_group": item["truth_group"],
+                "annotation_id": item["annotation_id"],
+                "annotation_ids": item["annotation_ids"],
+                "rule_id": item["rule_id"],
+                "page": item["page"],
+                "evidence": item["evidence"],
             }
             for item in hint_missed
         ],
@@ -546,6 +586,27 @@ def check_gates(report: Dict[str, Any]) -> List[str]:
         failures.append(f"FP={report['fp']}，要求 0（样张 52 条误报必须清零）")
     if report["fn"] != 0:
         failures.append(f"FN={report['fn']}，硬问题召回要求 3/3")
+    # R7 P0-1：硬问题必须 3/3 全命中——只查 fn==0 挡不住"缩减真值集"
+    # 的假绿（删掉一条 defect 标注后 fn 仍为 0、tp 降为 2 也能过）。
+    # 验收标准（HANDOFF §7）是 T1/T5/T6 三条硬问题全命中，tp 锁定为 3。
+    if report["tp"] != 3:
+        failures.append(
+            f"TP={report['tp']}，硬问题召回要求 3/3（HANDOFF §2 T1/T5/T6，"
+            "真值集不得缩减）"
+        )
+    # R7 P0-1：舍入提示进入硬门禁。验收标准是 T2/T3/T4 三组全命中；
+    # 同时锁定 hint_groups_total==3——只查"hit==total"挡不住把真值组
+    # 从 3 缩到 2 的假绿（历史实测 hint 2/2 假通过）。两侧都必须等于 3。
+    if report["hint_groups_total"] != 3 or report["hint_groups_hit"] != 3:
+        failures.append(
+            f"舍入门禁：hint 真值命中 {report['hint_groups_hit']}/{report['hint_groups_total']}，"
+            "要求 3/3（HANDOFF §2 T2/T3/T4 三组，truth_id 编号须对齐"
+            "HANDOFF 权威口径且真值集不得缩减）"
+        )
+    if report["hint_missed_count"] != 0:
+        failures.append(
+            f"舍入门禁：hint_missed={report['hint_missed_count']}，要求 0"
+        )
     if report["precision"] is not None and report["precision"] < 0.95:
         failures.append(f"精确率 {report['precision']} < 0.95")
     if report["recall"] is not None and report["recall"] < 0.98:
@@ -580,8 +641,9 @@ def main() -> int:
 
     print(f"TP={report['tp']} FP={report['fp']} FN={report['fn']} "
           f"precision={report['precision']} recall={report['recall']}")
-    print(f"hint命中 {report['hint_matched']}/{report['hint_total']} "
-          f"severity_accuracy={report['severity_accuracy']} "
+    print(f"hint真值命中 {report['hint_groups_hit']}/{report['hint_groups_total']} "
+          f"（证据面 {report['hint_matched']}/{report['hint_total']}）"
+          f" severity_accuracy={report['severity_accuracy']} "
           f"page_accuracy={report['page_accuracy']} "
           f"locatable_evidence_rate={report['locatable_evidence_rate']}")
     if report["hint_missed"]:

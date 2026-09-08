@@ -34,7 +34,9 @@ _SAMPLE_PDFS = glob.glob(str(ROOT / "corpus" / "DOC-20260905-001" / "*.pdf"))
 SOURCE_SHA = "113b98bb5df18c264f9c589a1034d3bfc27ed65562b4bbbe72bfd33420f912c7"
 # 夹具内容哈希锁定（GPT5.6 R5 P1-D）：源 PDF SHA 只能溯源不能检测夹具
 # 本体被修改——内容哈希与源 SHA 双锁，任一不符即失败。
-FIXTURE_SHA = "a85b158735413ee52483d4138e00c4fe34f1a3621ea2fb1727b2e647f7524c16"
+# 2026-09-08 R6.1：fixture 新增 doc_id 字段（replay fixture 回退的
+# 同源性绑定，review 🟡1），内容哈希随之更新。
+FIXTURE_SHA = "2f862419dde3d04326125c9f4c45f9171c9c45af303c49a350b3be998ec31de1"
 
 
 @pytest.fixture(scope="module")
@@ -236,6 +238,54 @@ def test_sample_column_group_classification(sample):
     expense = by_anchor["支出决算表"]
     assert "total" in expense.named_columns and "total_right" not in expense.named_columns
     assert "basic" in expense.named_columns and "basic_right" not in expense.named_columns
+
+
+def test_sample_multi_measure_column_groups_preserved(sample):
+    """multi_measure 列组（R7 P0-2）：所有金额组与业务主体逐组可消费。
+
+    此前非双栏只存每种语义键的首个位置：P17 三公表 6 组预算/决算列
+    只剩 budget=0/final=1，P18 基金表 total=0 错指行标签列（真正的
+    本年支出合计在第 4 列），column_group="multi_measure" 无生成路径。
+    R7 后：semantic_columns 保留全部位置，column_groups 逐组保留
+    「合计、出国、公车（小计/购置/运行）、接待」等主体。
+    """
+    doc, page_tables = sample
+    tables = build_parsed_tables(page_tables, doc.page_texts)
+    by_anchor = {t.anchor_table_name: t for t in tables.values() if t.anchor_table_name}
+    three_public = by_anchor["财政拨款“三公”经费支出决算表"]
+    fund = by_anchor["政府性基金预算财政拨款收入支出决算表"]
+
+    # 分组宽表/多段表头 → multi_measure（有真实生成路径）
+    assert three_public.column_group == "multi_measure"
+    assert fund.column_group == "multi_measure"
+
+    # P17：6 组预算/决算列全部保留
+    assert three_public.semantic_columns["budget"] == [0, 2, 4, 6, 8, 10]
+    assert three_public.semantic_columns["final"] == [1, 3, 5, 7, 9, 11]
+    by_subject = {g.subject: g for g in three_public.column_groups}
+    assert by_subject["合计"].columns == {"total": 0, "budget": 0, "final": 1}
+    assert by_subject["因公出国（境）费"].columns == {"budget": 2, "final": 3}
+    assert by_subject["小计"].columns == {"budget": 4, "final": 5}
+    assert by_subject["公务用车购置费"].columns == {"budget": 6, "final": 7}
+    assert by_subject["公务用车运行维护费"].columns == {"budget": 8, "final": 9}
+    assert by_subject["公务接待费"].columns == {"budget": 10, "final": 11}
+    # 多级表头父主体保留（公车小计组的父标签）
+    assert by_subject["小计"].parent_subject == "公务用车购置及运行维护费"
+    # 首组（合计）仍是首选 named_columns（兼容旧消费方）
+    assert three_public.named_columns["budget"] == 0
+    assert three_public.named_columns["final"] == 1
+
+    # P18：本年支出段合计位于第 4 列，第 0 列是行标签列（项目/编码）
+    assert fund.named_columns["total"] == 4, (
+        "基金表 total 首选必须是本年支出段合计列，行标签列不得抢占"
+    )
+    segments = {g.subject: g for g in fund.column_groups}
+    assert segments["本年支出"].columns == {"total": 4, "basic": 5, "project": 6}
+    label_group = segments["功能分类科目编码"]
+    assert label_group.parent_subject == "项目"
+    assert label_group.columns.get("total") == 0, (
+        "行标签列的合计单独成组，不与金额段混淆"
+    )
 
 
 def test_sample_continuation_rows_carry_codes_and_hierarchy_computes(sample):

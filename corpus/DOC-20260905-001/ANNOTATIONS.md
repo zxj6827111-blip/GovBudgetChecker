@@ -113,3 +113,31 @@ anchor_phrases_aligned / section_phrases_aligned 保留为**评估基建**
 （非真值本体）：短语全部为 finding evidence 的原文驻留片段，用于
 evidence-only 锚点匹配；V33-245/246 的 evidence 现自带「【章节:…】」
 结构化前缀（R6 P1-3），章节验证不再依赖标注猜测。
+
+## 2026-09-09 修订（GPT5.6 R7 P0-1：真值编号纠偏，annotation_version=3）
+
+背景：R6 冻结曾按标注顺序错位编号——T2=A-002、T3=A-003、
+T4=A-004/A-005、T5=A-006/A-008。这与 HANDOFF §2 的权威编号
+（确定级缺陷 T1/T5/T6、舍入提示 T2/T3/T4）不一致，导致舍入真值组
+从 3 缩成 2（T4/T5 两组），评估器输出 hint 命中 2/2 的假绿——验收
+标准（HANDOFF §7）明确要求舍入提示 3/3。
+
+纠偏内容（golden.json v3，仅 truth_id，标注本体 label/rule_id/page/
+evidence/expected_severity 未动）：
+- A-001 = T1（P2 目录年度缺位，defect）
+- A-002 = T5（P26 三公逻辑矛盾，defect）
+- A-003 = T6（P27 国内接待披露缺失，defect）
+- A-004 = T2（P10 支出决算表合计行差 0.01，rounding_hint）
+- A-005 = T3（P10↔P14 跨表同口径差 0.01，rounding_hint）
+- A-006 = T4a / A-008 = T4b（P15 310 行差与公用经费显示和差，
+  同一真值的两个证据面，命中任一即 T4 命中，rounding_hint）
+- A-007 = T7（acceptable 负例，不变）
+
+配套（同轮）：
+- check_gates 新增舍入硬门禁：hint_groups_total == hint_groups_hit == 3
+  （两侧都必须等于 3，真值集不得缩减），并锁定硬问题 tp==3；
+- 评估器新增 sec 锚标注的独立 section_id 校验（R7 P1-3）——finding
+  携带结构化 section_id 时跨章节候选（如「其他重要事项说明 + 公务
+  接待费」）不得晋升 TP；
+- 样张复验：hint 真值命中 3/3（证据面 4/4）、TP=3 FP=0 FN=0、
+  GATE-PASS。

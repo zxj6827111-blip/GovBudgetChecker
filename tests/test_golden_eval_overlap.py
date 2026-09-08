@@ -307,3 +307,296 @@ def test_locatable_requires_page_and_evidence_text():
     }
     assert not str(f_message_only.get("evidence_text") or "").strip()
     assert str(f_with_quote.get("evidence_text") or "").strip()
+
+
+# ---------------------------------------------------------------------------
+# review 🟡2：truth_id 聚类验收（defect/hint 两侧一致）
+# ---------------------------------------------------------------------------
+
+
+def _ann(annotation_id, truth_id, rule_id, page, evidence):
+    return {
+        "annotation_id": annotation_id,
+        "truth_id": truth_id,
+        "rule_id": rule_id,
+        "page": page,
+        "evidence": evidence,
+    }
+
+
+def _finding(rule, page, evidence_text, message="m"):
+    return {
+        "rule": rule,
+        "severity": "info",
+        "page": page,
+        "evidence_text": evidence_text,
+        "message": message,
+    }
+
+
+def test_truth_group_normalizes_evidence_face_suffix():
+    """证据面后缀归一：T4a/T4b 属同一真值 T4，T1 组即自身。
+
+    编号对齐 HANDOFF §2 权威口径（R7 P0-1）：T4 的两个证据面是
+    A-006（310 行明细差）/A-008（公用经费显示和差）。
+    """
+    from scripts.evaluate_golden_corpus import _truth_group
+
+    assert _truth_group(_ann("A-006", "T4a", "V33-117", 15, "x")) == "T4"
+    assert _truth_group(_ann("A-008", "T4b", "V33-117", 15, "x")) == "T4"
+    assert _truth_group(_ann("A-001", "T1", "V33-001", 2, "x")) == "T1"
+
+
+def test_truth_cluster_single_face_hit_skips_other_face():
+    """同一真值两个证据面、一条 finding 只命中一面 → 真值命中、另一面不报 miss。
+
+    review 🟡2 验收口径：同 truth_id 的两条 hint 标注，单条 finding 命中
+    即 hint 计数正确——聚类语义与 defect 侧一致（任一命中即真值命中）。
+    """
+    from scripts.evaluate_golden_corpus import _consume_truth_annotations
+
+    findings = [_finding("V33-117", 15, "310 行 14.44 与明细和不符")]
+    anns = [
+        _ann("A-006", "T4a", "V33-117", 15, "310 行 14.44 与明细和不符"),
+        _ann("A-008", "T4b", "V33-117", 15, "310 行 14.44 与明细和不符"),
+    ]
+    matched, missed, hit_groups = _consume_truth_annotations(anns, findings, set())
+    assert hit_groups == 1, "同一真值只计 1 个命中组"
+    assert len(matched) == 1, "一面命中即止，不重复消费第二面"
+    assert missed == [], "命中组内未命中的证据面不得计入 missed"
+    assert matched[0]["truth_group"] == "T4"
+
+
+def test_truth_cluster_all_faces_missed_counts_one_group():
+    """整组全部证据面未命中 → 只计 1 个 missed（不按标注面放大缺口）。"""
+    from scripts.evaluate_golden_corpus import _consume_truth_annotations
+
+    findings = [_finding("V33-117", 15, "310 行 14.44 与明细和不符")]
+    anns = [
+        _ann("A-006", "T4a", "V33-117", 99, "310 行 14.44"),  # 页不符
+        _ann("A-008", "T4b", "V33-117", 98, "310 行 14.44"),  # 页不符
+    ]
+    matched, missed, hit_groups = _consume_truth_annotations(anns, findings, set())
+    assert hit_groups == 0
+    assert len(missed) == 1, "整组未命中只计 1 个 missed"
+    assert missed[0]["annotation_ids"] == ["A-006", "A-008"], "missed 明细带全部面"
+
+
+def test_truth_cluster_distinct_groups_count_separately():
+    """不同真值组各自独立验收：两组都未命中 → 2 个 missed。"""
+    from scripts.evaluate_golden_corpus import _consume_truth_annotations
+
+    findings = []
+    anns = [
+        _ann("A-001", "T1", "V33-001", 2, "目录行年度缺位"),
+        _ann("A-002", "T5", "V33-245", 26, "三公说明逻辑矛盾"),
+    ]
+    matched, missed, hit_groups = _consume_truth_annotations(anns, findings, set())
+    assert hit_groups == 0
+    assert len(missed) == 2, "不同真值组未命中按组计 missed"
+
+
+def test_evaluate_hint_clustering_end_to_end(monkeypatch, tmp_path):
+    """evaluate 全链路：hint 侧按 truth 组聚类（review 🟡2 锁定）。
+
+    构造两条同真值（T4a/T4b，HANDOFF 权威编号：A-006/A-008）hint
+    标注 + 一条能命中两面的 finding：旧行为下面 B 因 finding 被面 A
+    消费而报 miss；修复后组命中即止，hint 侧不再报 miss、按组计数
+    为 1/1。
+    """
+    import json
+    import sys
+    from pathlib import Path
+
+    ROOT = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(ROOT))
+    from scripts.evaluate_golden_corpus import evaluate
+
+    doc_id = "DOC-TEST-CLUSTER"
+    corpus_dir = tmp_path / "corpus" / doc_id
+    corpus_dir.mkdir(parents=True)
+    golden = {
+        "doc_id": doc_id,
+        "sha256": "x" * 64,
+        "annotation_version": 3,
+        "labels": [
+            {
+                "annotation_id": "A-001",
+                "truth_id": "T1",
+                "label": "defect",
+                "rule_id": "V33-001",
+                "page": 2,
+                "expected_severity": "high",
+                "evidence": "目录行年度缺位（应为 2025）",
+            },
+            {
+                "annotation_id": "A-006",
+                "truth_id": "T4a",
+                "label": "rounding_hint",
+                "rule_id": "V33-117",
+                "page": 15,
+                "expected_severity": "info",
+                "evidence": "310 行 14.44 与明细和不符",
+            },
+            {
+                "annotation_id": "A-008",
+                "truth_id": "T4b",
+                "label": "rounding_hint",
+                "rule_id": "V33-117",
+                "page": 15,
+                "expected_severity": "info",
+                "evidence": "310 行 14.44 与明细和不符（公用经费口径）",
+            },
+        ],
+    }
+    (corpus_dir / "golden.json").write_text(
+        json.dumps(golden, ensure_ascii=False), encoding="utf-8"
+    )
+    replay_path = tmp_path / "replay.json"
+    replay_path.write_text(
+        json.dumps(
+            {
+                "legacy": {
+                    "findings": [
+                        {
+                            "rule": "V33-001",
+                            "severity": "high",
+                            "page": 2,
+                            "evidence_text": "「202 年度」目录行年度缺位",
+                            "message": "目录年度缺位",
+                        },
+                        {
+                            "rule": "V33-117",
+                            "severity": "info",
+                            "page": 15,
+                            "evidence_text": "310 行 14.44 与明细和不符",
+                            "message": "舍入差",
+                        },
+                    ]
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus"
+    )
+    report = evaluate(doc_id, replay_path)
+    assert report["tp"] == 1 and report["fn"] == 0
+    assert report["hint_groups_total"] == 1, "T4a/T4b 归一为同一真值组"
+    assert report["hint_groups_hit"] == 1, "任一证据面命中即真值命中"
+    assert report["hint_matched"] == 1, "只消费一面，不重复计数"
+    assert report["hint_missed_count"] == 0, "命中组内另一面不得报 miss"
+
+
+# ---------------------------------------------------------------------------
+# R7 P0-1：舍入提示硬门禁（check_gates）
+# ---------------------------------------------------------------------------
+
+
+def _gate_report(**overrides):
+    base = {
+        "tp": 3,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "locatable_evidence_rate": 1.0,
+        "acceptable_violations": [],
+        "hint_groups_total": 3,
+        "hint_groups_hit": 3,
+        "hint_missed_count": 0,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_gate_requires_hint_3_of_3():
+    """舍入门禁进入硬门禁：0/3、缩减真值集、hint_missed 都必须失败。
+
+    R7 P0-1：此前 check_gates 完全不检查 hint——构造 0/3 命中仍返回
+    无失败条件；且只查 hit==total 挡不住把真值组从 3 缩到 2 的假绿。
+    """
+    from scripts.evaluate_golden_corpus import check_gates
+
+    assert check_gates(_gate_report()) == []
+    assert check_gates(_gate_report(hint_groups_hit=0)) != [], "0/3 命中必须失败"
+    # 真值组被缩减（历史实测 2/2 假通过形态）：两侧必须都等于 3
+    assert check_gates(
+        _gate_report(hint_groups_total=2, hint_groups_hit=2)
+    ) != [], "缩减真值集必须失败"
+    assert check_gates(_gate_report(hint_missed_count=1)) != []
+
+
+def test_gate_requires_hard_problem_3_of_3():
+    """硬问题 3/3 同样锁定：缩减 defect 真值集（tp=2、fn=0）必须失败。
+
+    只查 fn!=0 挡不住删掉一条 defect 标注的假绿——HANDOFF §7 验收
+    标准是 T1/T5/T6 三条硬问题全命中。
+    """
+    from scripts.evaluate_golden_corpus import check_gates
+
+    assert check_gates(_gate_report(tp=2, fn=0)) != [], "tp=2 必须失败（3/3 锁定）"
+
+
+# ---------------------------------------------------------------------------
+# R7 P1-3：finding 独立 section_id 的跨章节候选拒配
+# ---------------------------------------------------------------------------
+
+
+def test_section_id_rejects_cross_section_candidate():
+    """sec 锚标注 + finding 带 section_id → 跨章节候选不得晋升 TP。
+
+    旧行为：「其他重要事项说明」章节的候选借「公务接待费」主题词
+    混过 evidence 锚点；R7 后 section_id 结构化校验章节域。
+    """
+    ann = {
+        "rule_id": "V33-245",
+        "page": 26,
+        "evidence": "公务接待费 0.00 与 2024 年持平",
+        "location_key": "sec:三公说明(一)公务接待费",
+    }
+    wrong_section = {
+        "rule": "V33-245",
+        "page": 26,
+        "message": "m",
+        "evidence_text": "公务接待费 0.00 与 2024 年持平",
+        "section_id": "十一、其他重要事项说明",
+    }
+    assert match_annotation(ann, [wrong_section], set()) is None
+
+
+def test_section_id_accepts_matching_section():
+    """section_id 与标注章节同域（三公）→ 正常晋升 TP。"""
+    ann = {
+        "rule_id": "V33-245",
+        "page": 26,
+        "evidence": "公务接待费 0.00 与 2024 年持平",
+        "location_key": "sec:三公说明(一)公务接待费",
+    }
+    matching = {
+        "rule": "V33-245",
+        "page": 26,
+        "message": "m",
+        "evidence_text": "公务接待费 0.00 与 2024 年持平",
+        "section_id": "七、财政拨款“三公”经费支出决算情况说明",
+    }
+    assert match_annotation(ann, [matching], set()) is matching
+
+
+def test_section_id_absent_falls_back_to_anchor_semantics():
+    """finding 无 section_id（旧产物/未迁移规则）→ 不惩罚，退回锚点语义。"""
+    ann = {
+        "rule_id": "V33-245",
+        "page": 26,
+        "evidence": "公务接待费 0.00 与 2024 年持平",
+        "location_key": "sec:三公说明(一)公务接待费",
+    }
+    legacy_finding = {
+        "rule": "V33-245",
+        "page": 26,
+        "message": "m",
+        "evidence_text": "公务接待费 0.00 与 2024 年持平",
+    }
+    assert match_annotation(ann, [legacy_finding], set()) is legacy_finding

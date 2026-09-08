@@ -15,6 +15,7 @@ from src.engine.structured_rules import (
     ParsedTable,
     _remap_continuation_rows,
     build_parsed_tables,
+    materialize_table,
     merge_compatible,
 )
 
@@ -41,6 +42,97 @@ def test_remap_continuation_rows_aligns_tail_columns():
     assert remapped[0].cells[4].text == "40.00"
     # 前置填充列不应携带金额
     assert remapped[0].cells[0].text in (None, "")
+
+
+def test_materialize_multi_measure_empty_first_column_header():
+    """首列表头为空的多金额组表不得崩溃（R7 P0-2 边界，历史材料实测）。
+
+    历史回放里 3 份 final 全部 worker_failed（tuple index out of
+    range）：列组切分对空标签列调 seq[-1]。修复后空列不建组、
+    其余列组正常逐组保留主体。
+    """
+    raw = [
+        ["", "合计", "", "公务接待费", ""],
+        ["", "预算数", "决算数", "预算数", "决算数"],
+        ["", "21.00", "16.95", "0.50", "0.00"],
+    ]
+    table = materialize_table(raw, title="t", table_code="T", pages=(1,))
+    assert table.column_group == "multi_measure"
+    assert table.semantic_columns["budget"] == [1, 3]
+    assert table.semantic_columns["final"] == [2, 4]
+    by_subject = {g.subject: g for g in table.column_groups}
+    # 「合计」主体本身也是 total 语义键命中（与真实样张三公表一致）
+    assert by_subject["合计"].columns == {"total": 1, "budget": 1, "final": 2}
+    assert by_subject["公务接待费"].columns == {"budget": 3, "final": 4}
+
+
+def test_remap_prefix_align_code_shaped_first_cell():
+    """合并编码（7 位数字形态）前对齐到基准 code 列位（R6 P0-2 语义）。"""
+    from src.engine.structured_rules import ParsedCell
+
+    row = ParsedRow(
+        cells=[
+            ParsedCell(text="2110105"),
+            ParsedCell(text="40.00"),
+            ParsedCell(text="1.00"),
+            ParsedCell(text="2.00"),
+            ParsedCell(text="3.00"),
+        ]
+    )
+    # 基准宽 6、code 列位 0：首列是编码形态 → 前对齐到 cells[0]
+    remapped = _remap_continuation_rows([row], 6, code_column=0)
+    cells = remapped[0].cells
+    assert cells[0].text == "2110105", "合并编码应前对齐到 code 列位"
+    # 其余列尾部对齐：原第 j 列（j≥1）到基准 j+1
+    assert cells[2].text == "40.00"
+    assert cells[5].text == "3.00"
+
+
+def test_remap_prefix_align_rejects_sequence_number_first_cell():
+    """首列为序号文本时不做前对齐（review 🟢3：code 列位不被污染）。"""
+    from src.engine.structured_rules import ParsedCell
+
+    row = ParsedRow(
+        cells=[
+            ParsedCell(text="1"),  # 序号，非 3/5/7 位编码形态
+            ParsedCell(text="40.00"),
+            ParsedCell(text="1.00"),
+            ParsedCell(text="2.00"),
+            ParsedCell(text="3.00"),
+        ]
+    )
+    remapped = _remap_continuation_rows([row], 6, code_column=0)
+    cells = remapped[0].cells
+    assert cells[0].text in (None, ""), "序号文本不得进 code 列位"
+    # 全部列走尾部对齐：原第 0 列落到基准第 1 列
+    assert cells[1].text == "1"
+    assert cells[5].text == "3.00"
+
+
+def test_remap_wider_continuation_never_prefix_aligns():
+    """续页比基准宽（负 shift）：不做前对齐，编码单元格不被覆盖。
+
+    /review 自查边界：负 shift 时尾部循环 src=j+shift 可能落回 code
+    列位——前对齐语义只适用于续页窄于基准（合并编码成单列），宽续页
+    无此形态，必须保持纯尾部对齐。
+    """
+    from src.engine.structured_rules import ParsedCell
+
+    row = ParsedRow(
+        cells=[
+            ParsedCell(text="211"),  # 编码形态但续页更宽——不前对齐
+            ParsedCell(text="科目名称"),
+            ParsedCell(text="40.00"),
+            ParsedCell(text="1.00"),
+            ParsedCell(text="2.00"),
+        ]
+    )
+    remapped = _remap_continuation_rows([row], 4, code_column=0)
+    cells = remapped[0].cells
+    assert len(cells) == 4
+    # 负 shift=-1：j=0 落 src=-1（丢弃），j=1..4 落 src=0..3
+    assert cells[0].text == "科目名称", "负 shift 不得前对齐，尾部对齐原样"
+    assert all(c.text != "211" for c in cells), "编码不应被特殊放置"
 
 
 def test_merge_same_width_appends_without_remap():
