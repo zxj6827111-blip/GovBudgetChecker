@@ -22,6 +22,9 @@
 用法:
     python scripts/evaluate_golden_corpus.py --doc DOC-20260905-001 \
         --replay outputs/golden_replay/DOC-20260905-001-legacy-xxx.json
+    # shadow replay（同时含 legacy/structured）必须显式 --mode 指定验收对象：
+    python scripts/evaluate_golden_corpus.py --doc DOC-20260905-001 \
+        --replay outputs/golden_replay/DOC-20260905-001-shadow-xxx.json --mode structured
 """
 
 from __future__ import annotations
@@ -490,13 +493,17 @@ def evaluate(doc_id: str, replay_path: Path, mode: str = "auto") -> Dict[str, An
                 "无法按 --mode legacy 验收"
             )
         run = legacy_run
-    else:  # mode == "structured"
+    elif mode == "structured":
         if structured_run is None:
             raise ValueError(
                 f"replay 无 structured 结果（现有: {runs_present}），"
                 "无法按 --mode structured 验收"
             )
         run = structured_run
+    else:
+        # 直接调用方传错 mode（绕过 argparse choices）时必须明确失败，
+        # 不得静默落入 structured 分支（/review 加固）
+        raise ValueError(f"unknown mode: {mode!r}，允许 auto/legacy/structured")
     findings: List[Dict[str, Any]] = run.get("findings") or []
 
     labels = golden.get("labels", [])

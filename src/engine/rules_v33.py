@@ -2518,7 +2518,7 @@ class R33115_TotalSheetCheck(Rule):
             level, diff = classify_amount_diff(total, calc, n_children=len(components))
             side_label = "收入" if side == "income" else "支出"
             if level == "mismatch":
-                detail = " + ".join(f"{n}({v:.2f})" for n, v in zip(components, values, strict=True))
+                detail = " + ".join(f"{n}({v:.2f})" for n, v in zip(components, numeric_values, strict=True))
                 issues.append(self._issue(
                     f"{side_label}侧平衡错误：计算值({calc:.2f}) != {side_label}总计({total:.2f})。公式：{detail}",
                     {"table": table_name, "page": page}, "error",
