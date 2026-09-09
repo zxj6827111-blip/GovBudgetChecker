@@ -107,7 +107,6 @@ from src.utils.narration import (
     clause_direction,
     extract_amounts,
     extract_three_public_facts,
-    find_section,
     merge_page_texts,
     merge_soft_wrapped_lines,
     split_clauses,
@@ -5568,17 +5567,15 @@ class R33245_ThreePublicDirectionContradiction(Rule):
         # R7 P1-3：找不到章节 → 证据不足直接返回空——禁止 scope or
         # merged 全文回退（此前仅含「十一、其他重要事项说明」的材料里
         # 出现公务接待表述仍会产出 finding，跨章节误报通道未真正关闭）。
-        from src.utils.narration import find_section_scope
+        from src.utils.narration import find_section_scope, section_title_of_scope
 
         scope = find_section_scope(merged, ["三公"])
         if not (scope and scope.strip()):
             return issues
-        # 章节标题从 split_numbered_sections 取（find_section_scope 只返
-        # 正文）；目录实例的空 scope 已被其内部择优选实例逻辑排除
-        section_title = None
-        _fs = find_section(merged, ["三公"])
-        if scope and _fs and _fs[1].strip() in scope:
-            section_title = _fs[0]
+        # 章节标题取 scope 起点前最近的标题行——**正文实例**而非目录
+        # 同名实例（/review 修正：此前 find_section 首命中目录实例，
+        # 且「_fs[1] in scope」对空 body 恒真，目录标题被误当正文标题）
+        section_title = section_title_of_scope(merged, scope)
         scope_text = scope
 
         for para in merge_soft_wrapped_lines(scope_text):
@@ -5653,15 +5650,12 @@ class R33246_DomesticReceptionDisclosure(Rule):
         # 完整性针对「三公经费…决算情况说明」主章节完整范围
         # （find_section_scope 含子章节正文）。
         # R7 P1-3：找不到章节 → 证据不足直接返回空，禁止全文回退。
-        from src.utils.narration import find_section_scope
+        from src.utils.narration import find_section_scope, section_title_of_scope
 
         scope = find_section_scope(merged, ["三公"])
         if not (scope and scope.strip()):
             return issues
-        section_title = None
-        _fs = find_section(merged, ["三公"])
-        if scope and _fs and _fs[1].strip() in scope:
-            section_title = _fs[0]
+        section_title = section_title_of_scope(merged, scope)
         scope_text = scope
 
         for para in merge_soft_wrapped_lines(scope_text):

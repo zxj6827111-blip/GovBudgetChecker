@@ -482,3 +482,18 @@ code 列位）。改为仅首列为 3/5/7 位编码形态（文本或整数 numb
 - 历史 structured：3/3 final 真实执行，removed=66、coverage_gap=65；
 - mypy：4 项既有失败（rules_v33.py:2506/2791/2792/2903），非本轮
   引入，工程门仍未全绿（如实记录）。
+
+### /review 自查补修（2026-09-09，同轮）
+- **section_id 取目录实例的潜缺陷**：V33-245/246 用 `find_section` 首命中实例 +
+  `_fs[1] in scope` 判定正文归属——空 body 使判定恒真，样张实测 section_id
+  实为**目录**实例标题（仅因目录/正文标题文字相同未暴露）。修复：新增
+  `section_title_of_scope`（scope 起点前最近标题行 = 正文实例），替换
+  find_section 用法并删除 rules_v33 中已无调用的 find_section 导入；
+  锁定测试用措辞不同的目录/正文标题验证取正文实例。
+- **历史对比适配器漂移防线**：`_restricted_rule_delta` 此前把域外**新**
+  计数静默丢弃（structured 真实执行过但未登记迁移集的规则会被抹出
+  delta）。修复：漂移规则显式进入 delta 并留痕 `out_of_scope_new`，
+  聚合报告新增 `adapter_scope_drift`（提示迁移集登记与适配器执行列表
+  不同步）。测试：漂移规则进入 delta、正常路径漂移留痕为空。
+- 复验：全量 pytest **1074 passed + 1 skipped**、Ruff 通过、样张
+  GATE-PASS（hint 3/3、section_id 取自正文实例）。

@@ -164,6 +164,26 @@ def find_section_scope(text: str, keywords: List[str]) -> Optional[str]:
     return best_scope
 
 
+def section_title_of_scope(text: str, scope: str) -> Optional[str]:
+    """返回 scope 正文对应的章节标题行（scope 起点前最近的一行）。
+
+    R7 /review 修正：V33-245/246 的独立 section_id 需要**正文实例**的
+    标题——scope 由 find_section_scope 从同一全文切出（text[start:end]），
+    定位 scope 起点并向前取最近一行即可。此前用 find_section 取第一个
+    实例、且以「body in scope」判定实例归属——空 body 使该判定恒真，
+    样张实测取到的是**目录**实例标题（恰与正文标题文字相同才未暴露）。
+    """
+    text = str(text or "")
+    scope = str(scope or "")
+    if not scope.strip():
+        return None
+    idx = text.find(scope)
+    if idx < 0:
+        return None
+    line = text[:idx].rstrip("\n").rsplit("\n", 1)[-1].strip()
+    return line or None
+
+
 def extract_amounts(clause: str) -> List[Tuple[float, str]]:
     """从分句中抽取金额，返回 [(amount_in_wan, unit)]。
 

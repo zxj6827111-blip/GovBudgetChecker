@@ -625,6 +625,31 @@ def test_v33_245_scope_selects_body_instance_not_toc():
     )
 
 
+def test_section_title_of_scope_selects_body_instance_not_toc():
+    """section_id 必须取正文实例标题（R7 /review：目录与正文措辞不同时）。
+
+    此前用 find_section 取第一个实例、以「body in scope」判定归属——
+    空 body 使该判定恒真，样张实测取到目录实例（仅因目录/正文标题
+    文字相同未暴露）。scope 起点前最近的标题行才是正文实例标题。
+    """
+    from src.utils.narration import find_section_scope, section_title_of_scope
+
+    text = (
+        "七、三公经费支出决算情况说明\n"  # 目录实例（措辞略异）
+        "八、政府性基金预算财政拨款收入支出决算情况说明\n"
+        "正文从这里开始\n"
+        "七、财政拨款“三公”经费支出决算情况说明\n"  # 正文实例
+        "（一）“三公”经费财政拨款支出决算总体情况说明。\n"
+        "公务接待费支出决算减少为 0.00 万元，与2024年持平。\n"
+    )
+    scope = find_section_scope(text, ["三公"])
+    assert scope and "公务接待费" in scope
+    title = section_title_of_scope(text, scope)
+    assert title == "七、财政拨款“三公”经费支出决算情况说明", (
+        f"必须取正文实例标题: {title!r}"
+    )
+
+
 def test_v33_245_evidence_carries_section_tag():
     """V33-245 finding 的 evidence 自带结构化章节标记（R6 P1-3）。"""
     from src.engine.rules_v33 import R33245_ThreePublicDirectionContradiction

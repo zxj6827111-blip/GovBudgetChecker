@@ -141,15 +141,38 @@ def test_structured_delta_restricted_to_migrated_rules():
     assert scope and "V33-115" in scope, "迁移集域应含 V33-115"
     assert "V33-235" not in scope and "CMM-004" not in scope
 
-    delta, gap = _restricted_rule_delta(old_counts, new_counts, scope)
+    delta, gap, drift = _restricted_rule_delta(old_counts, new_counts, scope)
     assert delta == {"V33-120": {"old": 1, "new": 0}}, (
         "未迁移规则不得进入 delta"
     )
     assert gap == {"V33-235": 21, "CMM-004": 10}, (
         "未迁移规则旧计数单独进 coverage_gap"
     )
+    assert drift == [], "无域外新规则时漂移留痕为空"
     changed = sum(abs(v["new"] - v["old"]) for v in delta.values())
     assert changed == 1, "removed 口径只统计迁移集内变化"
+
+
+def test_structured_delta_surfaces_out_of_scope_new_rules():
+    """适配器漂移（新规则真实执行但未登记迁移集）不得静默丢弃。
+
+    R7 /review：域外新计数若被 scope 过滤静默丢弃，历史对比会漏掉
+    已执行规则的变更。漂移规则必须显式进入 delta 并留痕 out_of_scope_new。
+    """
+    from scripts.replay_golden_corpus import (
+        _migration_scope,
+        _restricted_rule_delta,
+    )
+
+    old_counts = {"V33-115": 3}
+    new_counts = {"V33-115": 3, "V33-999": 5}
+    scope = _migration_scope("structured")
+    delta, gap, drift = _restricted_rule_delta(old_counts, new_counts, scope)
+    assert delta == {"V33-999": {"old": 0, "new": 5}}, (
+        "漂移规则必须显式进入 delta"
+    )
+    assert gap == {}
+    assert drift == ["V33-999"], "漂移规则必须留痕"
 
 
 def test_legacy_delta_keeps_full_rule_scope():
@@ -162,6 +185,7 @@ def test_legacy_delta_keeps_full_rule_scope():
     old_counts = {"V33-235": 21, "V33-115": 3}
     new_counts = {"V33-115": 0}
     assert _migration_scope("legacy") is None
-    delta, gap = _restricted_rule_delta(old_counts, new_counts, None)
+    delta, gap, drift = _restricted_rule_delta(old_counts, new_counts, None)
     assert set(delta) == {"V33-235", "V33-115"}
     assert gap == {}
+    assert drift == []

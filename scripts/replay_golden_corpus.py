@@ -227,17 +227,26 @@ def _restricted_rule_delta(
     old_counts: Dict[str, int],
     new_counts: Dict[str, int],
     scope: Optional[set],
-) -> Tuple[Dict[str, Dict[str, int]], Dict[str, int]]:
+) -> Tuple[Dict[str, Dict[str, int]], Dict[str, int], List[str]]:
     """逐规则差异计算（R7 P1-4）：scope 非空时只对比域内规则。
 
-    返回 (per_rule_delta, coverage_gap)：
+    返回 (per_rule_delta, coverage_gap, out_of_scope_new)：
     - per_rule_delta：域内（或全部，scope=None）新旧计数不同的规则；
     - coverage_gap：域外规则的历史旧计数——未被 structured 重跑覆盖，
-      不是"被消除"，单列报告、不参与 delta/removed。
+      不是"被消除"，单列报告、不参与 delta/removed；
+    - out_of_scope_new（R7 /review）：域外**新**计数——structured 路径
+      真实执行过却不属于迁移集登记（适配器与
+      STRUCTURED_MIGRATED_RULES 漂移）。必须显式进入 delta 而非静默
+      丢弃（静默丢弃会把已执行的规则变化从历史对比中抹掉）。
     """
     rules = set(old_counts) | set(new_counts)
+    out_of_scope_new: List[str] = []
     if scope is not None:
+        out_of_scope_new = sorted(
+            k for k in set(new_counts) if normalize_rule_key(k) not in scope
+        )
         rules &= scope
+        rules |= set(out_of_scope_new)
     per_rule_delta = {
         rule: {"old": old_counts.get(rule, 0), "new": new_counts.get(rule, 0)}
         for rule in sorted(rules)
@@ -252,7 +261,7 @@ def _restricted_rule_delta(
         if scope is not None
         else {}
     )
-    return per_rule_delta, coverage_gap
+    return per_rule_delta, coverage_gap, out_of_scope_new
 
 
 def diff_legacy_structured(legacy: Dict[str, Any], structured: Dict[str, Any]) -> Dict[str, Any]:
@@ -477,7 +486,7 @@ def replay_historical_doc(
     # 规则集，未迁移规则（V33-235/CMM-004 等）的旧计数不是"被消除"，
     # 单独报告为 coverage_gap（历史实测 removed=131 假象由此产生）。
     scope = _migration_scope(parse_mode)
-    per_rule_delta, coverage_gap = _restricted_rule_delta(
+    per_rule_delta, coverage_gap, out_of_scope_new = _restricted_rule_delta(
         old_counts, new["rule_counts"], scope
     )
     changed = sum(abs(v["new"] - v["old"]) for v in per_rule_delta.values())
@@ -499,6 +508,7 @@ def replay_historical_doc(
         "changed_total": changed,
         "coverage_gap": coverage_gap,
         "coverage_gap_total": sum(coverage_gap.values()),
+        "out_of_scope_new": out_of_scope_new,
         "parse_sec": parse_sec,
     }
     # shadow 模式：structured 侧结果留痕（与旧结果对比的 delta 仍是
@@ -741,6 +751,13 @@ def replay_historical(
         for rule, cnt in (r.get("coverage_gap") or {}).items():
             gap_agg[rule] = gap_agg.get(rule, 0) + cnt
 
+    # R7 /review：域外新规则（适配器与 STRUCTURED_MIGRATED_RULES 漂移）
+    # 聚合留痕——出现即提示迁移集登记与适配器执行列表不同步。
+    drift_agg: Counter = Counter()
+    for r in processed:
+        for rule in r.get("out_of_scope_new") or []:
+            drift_agg[rule] += 1
+
     ranked_docs = sorted(
         consistent, key=lambda r: (-r["changed_total"], r["job_id"])
     )
@@ -811,6 +828,12 @@ def replay_historical(
             "structured 模式只执行 STRUCTURED_MIGRATED_RULES（九条迁移集）——"
             "未迁移规则不重跑，其历史旧计数不是'被消除的 findings'，单列"
             "于此供覆盖缺口评估，不参与 removed/added（R7 P1-4）。"
+        ),
+        "adapter_scope_drift": dict(sorted(drift_agg.items())),
+        "adapter_scope_drift_note": (
+            "structured 实际执行过但不在 STRUCTURED_MIGRATED_RULES 登记内"
+            "的规则——出现即迁移集登记与适配器执行列表漂移，需同步"
+            "（漂移规则已显式进入 delta，不静默丢弃）。"
         ),
         "top_changed_docs_for_manual_review": top_changed,
         # 注意与上方 "routing_changed_docs"（计数）区分：此处是变更文档
