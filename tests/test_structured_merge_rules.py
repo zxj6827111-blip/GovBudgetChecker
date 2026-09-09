@@ -467,6 +467,64 @@ def test_build_parsed_tables_continuation_plus_new_table_on_same_page():
     assert any("2080501" in v for v in cont_rows), "续页明细行不得丢失"
 
 
+def test_build_parsed_tables_continuation_with_total_data_row_merges():
+    """页顶续表首行即「合计」数据行时仍须并入基准表（/review R9 自查反例）。
+
+    R9 P1-4 修复的残留形态：续表扫描窗口（表头+前 2 数据行）内含
+    精确「合计」**数据行**（含金额）——命中被登记为表头语义列后，
+    多表页首表守卫（named_columns 非空 → 不可续表）与签名守卫
+    （仅共 total 单键 → 表头文本复核失败）双双拒并，应 2 张实得
+    3 张。修复后：含金额数字的扫描行是数据行，其命中不作表头证据。
+    """
+    base = [
+        ["支出决算表", "", ""],
+        ["科目", "合计", "基本支出"],
+        ["201", "100", "80"],
+    ]
+    cont = [["合计", "120", "90"]]  # 页顶续表：首行即合计数据行（无表头）
+    new_table = [
+        ["收入决算表", "", ""],
+        ["科目", "合计", ""],
+        ["101", "50", ""],
+    ]
+    tables = build_parsed_tables(
+        [[base], [cont, new_table]],
+        ["支出决算表\n", "收入决算表\n"],
+    )
+    assert len(tables) == 2, (
+        f"含合计数据行的续表应并入基准、新表独立（应 2 张）: {len(tables)}"
+    )
+    merged = next(
+        (t for t in tables.values() if t.page_span == (1, 2)), None
+    )
+    assert merged is not None, "续表必须并入基准表 (1,2)"
+    assert merged.anchor_table_name == "支出决算表"
+    assert len(merged.rows) == 4, f"合并后应 4 行: {len(merged.rows)}"
+    total_cells = [str(c.number or "") for c in merged.rows[-1].cells]
+    assert "120" in total_cells, "续表合计数据行不得丢失"
+
+
+def test_materialize_total_data_row_not_registered_as_header():
+    """数据行的精确「合计」命中不得登记为表头语义列（/review R9 自查）。
+
+    普通单金额表的合计数据行（含金额）在扫描窗口内——其命中此前
+    进入 semantic_columns（total=[1,0] 跨行列位混入），过滤后只保
+    留表头行命中（total=[1]）。
+    """
+    raw = [
+        ["项目", "合计", "基本支出"],
+        ["类", "款", "项", ""],
+        ["合计", "4,733.14", "3,365.38"],
+    ]
+    table = materialize_table(raw, title="t", table_code="T", pages=(1,))
+    assert table.semantic_columns.get("total") == [1], (
+        f"合计数据行（含金额）不得登记为表头语义列: "
+        f"{table.semantic_columns.get('total')}"
+    )
+    assert table.named_columns.get("total") == 1
+    assert table.column_group != "multi_measure"
+
+
 def test_multi_measure_same_column_repeats_not_triggered():
     """同列跨行重复命中不得误触发 multi_measure（R9 P2 反例）。
 

@@ -612,3 +612,37 @@ R9 在 R8 修复基础上扩展反例，仍判 legacy GO / 验收体系与 struc
   --mode structured GATE-FAIL（新组集校验生效：[]/3）；历史
   structured --limit 3：removed=66、coverage_gap=65、漂移无漏报、
   gap/delta 无双计。
+
+## 9.12 /review 自查整改（2026-09-09，R9 提交后自审）
+
+### 🟡 续表含「合计」数据行被误判「有表头」，混合页面续表仍拆断（src/engine/structured_rules.py）
+- **现象（R9 P1-4 修复的残留形态）**：混合页面（页顶=上一页续表 +
+  下方=新表）中，页顶续表的扫描窗口（表头+前 2 数据行）若含精确
+  「合计/基本支出」等**数据行**（带金额），命中被登记为表头语义列
+  （named_columns 非空）——多表页首表守卫（named_columns 非空 →
+  adjacent=False）与签名守卫（仅共 total 单键 → 表头文本复核失败）
+  双双拒并：实测应 2 张实得 3 张（R9 反例换「合计数据行续表」
+  仍复现）。fail-closed 方向（多独立表、不错并），官方样张无多表
+  页不受影响。
+- **修复**：`materialize_table` 语义键扫描跳过含金额数字的行
+  （`_NUM_RE` 匹配）——目标语料的真实表头行不含金额数字，数据行
+  命中不作表头证据。单一过滤同时根治三处消费：named_columns/
+  semantic_columns 不再混入数据行列位、首表续表守卫恢复正确输入、
+  multi_measure 同行判定不再可能被数据行重复命中污染。
+- **测试**：`test_build_parsed_tables_continuation_with_total_data_row_merges`
+  （页顶合计数据行续表并入基准 (1,2)、新表独立、数据行不丢失）；
+  `test_materialize_total_data_row_not_registered_as_header`（合计
+  数据行不登记 semantic_columns，total=[1] 不混入第 0 列）。
+- **自审其余四项无问题**：defect 组计数/门禁与测试字段一致；
+  `section_title_of_scope` 删除后无代码残留引用；drift 遍历
+  processed+no_baseline 无重复计数（两列表按 has_baseline 互斥构造）；
+  coverage_gap 排除已执行域外规则后 gap/delta 域不重叠。
+
+### 验证（2026-09-09）
+- 新增 2 测试通过；全量 pytest **1088 passed + 1 skipped**；
+- Ruff 通过；mypy src/ 全绿（79 源文件）；
+- 样张 shadow 回放：auto EVAL-REJECTED（exit 2）、--mode legacy
+  **GATE-PASS**（TP=3/FP=0/FN=0、hint 3/3、T1/T5/T6 组集校验）、
+  --mode structured GATE-FAIL（[]/3，覆盖率缺口如实报告）；
+- 历史 structured --limit 3：processed=3、coverage_gap=65、
+  adapter_scope_drift={}，聚合无异常。

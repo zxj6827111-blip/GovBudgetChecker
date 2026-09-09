@@ -304,19 +304,30 @@ def materialize_table(
         {} for _ in scan_rows
     ]
     for r_idx, row in enumerate(scan_rows):
+        # 数据行守卫（/review R9 自查）：扫描窗口含表头后 2 行数据——
+        # 其中「合计/基本支出」等精确命中（如续表首页的合计数据行）
+        # 不是表头证据。登记会把无表头续表误判成「有表头的新表」：
+        # 多表页首表续表守卫（named_columns 非空 → adjacent=False）
+        # 与签名守卫（仅共 total 单键 → 表头文本复核失败）双双拒并
+        # （实测应 2 张实得 3 张的残留形态）。目标语料的真实表头行
+        # 不含金额数字，按行过滤不改变既有表的判定。
+        row_has_amount = any(
+            _NUM_RE.match(re.sub(r"\s+", "", str(c or ""))) for c in row
+        )
         for i, cell in enumerate(row):
             text = re.sub(r"\s+", "", str(cell or ""))
             key = None
-            if text == "合计" or text in ("本年支出合计", "本年收入合计"):
-                key = "total"
-            elif text == "基本支出":
-                key = "basic"
-            elif text == "项目支出":
-                key = "project"
-            elif text == "预算数":
-                key = "budget"
-            elif text == "决算数":
-                key = "final"
+            if not row_has_amount:
+                if text == "合计" or text in ("本年支出合计", "本年收入合计"):
+                    key = "total"
+                elif text == "基本支出":
+                    key = "basic"
+                elif text == "项目支出":
+                    key = "project"
+                elif text == "预算数":
+                    key = "budget"
+                elif text == "决算数":
+                    key = "final"
             if key:
                 header_hits.setdefault(key, []).append(i)
                 per_row_hits[r_idx].setdefault(key, []).append(i)
