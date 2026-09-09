@@ -256,7 +256,14 @@ def _restricted_rule_delta(
         {
             rule: old_counts[rule]
             for rule in sorted(old_counts)
-            if old_counts[rule] and normalize_rule_key(rule) not in scope
+            if old_counts[rule]
+            and normalize_rule_key(rule) not in scope
+            # R9 P1：已真实执行的域外规则（适配器漂移）不是覆盖缺口——
+            # 此前旧计数同时进 delta 和 coverage_gap（实测 V33-999 old=2
+            # 两处重复），与"未被 structured 重跑"的定义冲突
+            and normalize_rule_key(rule) not in {
+                normalize_rule_key(k) for k in out_of_scope_new
+            }
         }
         if scope is not None
         else {}
@@ -777,8 +784,11 @@ def replay_historical(
 
     # R7 /review：域外新规则（适配器与 STRUCTURED_MIGRATED_RULES 漂移）
     # 聚合留痕——出现即提示迁移集登记与适配器执行列表不同步。
+    # R9 P1：遍历**所有成功执行的 structured 结果**（含无历史基线
+    # 任务）——此前只遍历 processed，无基线任务真实执行的漂移规则
+    # 被漏报（实测结果明细含 V33-999，adapter_scope_drift 却为空）。
     drift_agg: Counter = Counter()
-    for r in processed:
+    for r in processed + no_baseline:
         for rule in r.get("out_of_scope_new") or []:
             drift_agg[rule] += 1
 

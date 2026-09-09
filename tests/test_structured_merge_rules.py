@@ -428,3 +428,61 @@ def test_build_parsed_tables_same_page_two_tables_never_merge():
         [[raw, raw]], ["收入决算表\n支出决算表\n"]
     )
     assert len(tables) == 2, f"同页两表应独立: {len(tables)}"
+
+
+def test_build_parsed_tables_continuation_plus_new_table_on_same_page():
+    """混合页面（页顶续表 + 下方新表）不得拆断续表（R9 P1-4 反例）。
+
+    此前页文本的首个表名行（属新表）被安到页顶第一张 raw table——
+    续表错标新表名、拒绝合并，应 2 张实得 3 张。修复后：多表页不赋
+    页锚，首表无表头（续表形态）仍可并入基准表。
+    """
+    base = [
+        ["功能分类科目编码", "科目名称", "决算数"],
+        ["类", "款", "项", "合计"],
+        ["208", "", "", "471.44"],
+    ]
+    cont = [
+        ["20805", "", "", "460.67"],
+        ["2080501", "", "", "51.98"],
+    ]
+    new_table = [
+        ["项目", "决算数"],
+        ["类", "款", "项", "合计"],
+        ["211", "", "", "3742.47"],
+    ]
+    tables = build_parsed_tables(
+        [[base], [cont, new_table]],
+        ["支出决算表\n", "支出决算表\n"],
+    )
+    assert len(tables) == 2, (
+        f"续表应并入基准、新表独立（应 2 张）: {len(tables)}"
+    )
+    merged = next(
+        (t for t in tables.values() if t.page_span == (1, 2)), None
+    )
+    assert merged is not None, "续表必须并入基准表 (1,2)"
+    assert merged.anchor_table_name == "支出决算表"
+    cont_rows = [str(c.number or c.text or "") for r in merged.rows for c in r.cells]
+    assert any("2080501" in v for v in cont_rows), "续页明细行不得丢失"
+
+
+def test_multi_measure_same_column_repeats_not_triggered():
+    """同列跨行重复命中不得误触发 multi_measure（R9 P2 反例）。
+
+    普通单金额表的「合计」在表头与首条数据行同列重复出现——此前按
+    命中次数判定误标 multi_measure；修复后按同行不同列位置判定。
+    """
+    raw = [
+        ["项目", "合计"],
+        ["类", "款", "项", "合计"],
+        ["208", "", "", "471.44"],
+    ]
+    table = materialize_table(raw, title="t", table_code="T", pages=(1,))
+    assert table.column_group != "multi_measure", (
+        f"同列跨行重复不得触发 multi_measure: {table.column_group}"
+    )
+    # 「合计」在表头行第 1 列与数据行第 3 列各命中一次（跨行），语义
+    # 位置如实记录；multi_measure 判定不因跨行重复而触发
+    assert table.semantic_columns.get("total") == [1, 3]
+    assert table.named_columns.get("total") == 1

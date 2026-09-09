@@ -625,14 +625,9 @@ def test_v33_245_scope_selects_body_instance_not_toc():
     )
 
 
-def test_section_title_of_scope_selects_body_instance_not_toc():
-    """section_id 必须取正文实例标题（R7 /review：目录与正文措辞不同时）。
-
-    此前用 find_section 取第一个实例、以「body in scope」判定归属——
-    空 body 使该判定恒真，样张实测取到目录实例（仅因目录/正文标题
-    文字相同未暴露）。scope 起点前最近的标题行才是正文实例标题。
-    """
-    from src.utils.narration import find_section_scope, section_title_of_scope
+def test_section_scope_with_title_selects_body_instance_not_toc():
+    """章节解析直接携带标题（R9 P1）：目录与正文措辞不同时取正文实例。"""
+    from src.utils.narration import find_section_scope_with_title
 
     text = (
         "七、三公经费支出决算情况说明\n"  # 目录实例（措辞略异）
@@ -642,11 +637,36 @@ def test_section_title_of_scope_selects_body_instance_not_toc():
         "（一）“三公”经费财政拨款支出决算总体情况说明。\n"
         "公务接待费支出决算减少为 0.00 万元，与2024年持平。\n"
     )
-    scope = find_section_scope(text, ["三公"])
-    assert scope and "公务接待费" in scope
-    title = section_title_of_scope(text, scope)
-    assert title == "七、财政拨款“三公”经费支出决算情况说明", (
-        f"必须取正文实例标题: {title!r}"
+    found = find_section_scope_with_title(text, ["三公"])
+    assert found and "公务接待费" in found[1], (
+        "目录实例被选中导致 scope 缺正文——R6 P1-3 回归"
+    )
+    assert found[0] == "七、财政拨款“三公”经费支出决算情况说明", (
+        f"标题必须随解析携带（正文实例）: {found[0]!r}"
+    )
+
+
+def test_section_scope_with_title_identical_bodies_no_reverse_lookup():
+    """正文相同的两个章节：标题必须来自解析携带（R9 P1 反查复现防护）。
+
+    此前 section_title_of_scope 用 text.find(scope) 反查标题——较早的
+    非目标章节正文与目标章节相同（实测复现）时反查命中错误标题。
+    携带式解析（{title, body, start, end}）不受影响。
+    """
+    from src.utils.narration import find_section_scope_with_title
+
+    same_body = "公务接待费支出决算减少为 0.00 万元，与2024年持平。\n"
+    text = (
+        "三、支出决算情况说明\n"  # 较早章节，正文与目标章节相同
+        + same_body
+        + "八、政府性基金预算财政拨款收入支出决算情况说明\n"
+        "七、财政拨款“三公”经费支出决算情况说明\n"  # 目标章节
+        + same_body
+    )
+    found = find_section_scope_with_title(text, ["三公"])
+    assert found is not None and "公务接待费" in found[1]
+    assert found[0] == "七、财政拨款“三公”经费支出决算情况说明", (
+        f"正文相同也不得反查到较早章节标题: {found[0]!r}"
     )
 
 

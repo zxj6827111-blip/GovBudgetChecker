@@ -239,3 +239,69 @@ def test_historical_aggregation_survives_drift_rule(tmp_path, monkeypatch):
     assert entry["docs_changed"] == 1 and entry["new"] == 5, (
         "漂移规则必须进入聚合（此前 KeyError 崩溃）"
     )
+
+
+def test_historical_drift_counted_for_no_baseline_and_gap_excludes_executed(
+    tmp_path, monkeypatch
+):
+    """R9 P1 反例：无基线任务的漂移必须留痕、已执行域外规则不进 coverage_gap。
+
+    构造两份 structured 结果：job-a 有基线（V33-999 old=2 → 旧行为会
+    同时进 delta 与 coverage_gap 的冲突形态）、job-b 无基线（真实执行
+    V33-999 但不进 processed）——此前漂移汇总只遍历 processed（job-b
+    的漂移被漏报）、coverage_gap 含已执行规则（job-a 冲突双计）。
+    """
+    import scripts.replay_golden_corpus as mod
+
+    for name in ("job-a-r9", "job-b-r9"):
+        job_dir = tmp_path / name
+        job_dir.mkdir()
+        (job_dir / "doc.pdf").write_bytes(b"pdf-bytes")
+    monkeypatch.setattr(mod, "UPLOADS_DIR", tmp_path)
+
+    def fake_replay(job_path, parse_mode="legacy"):
+        if job_path.name == "job-a-r9":
+            return {
+                "job_id": "job-a-r9",
+                "pdf": "doc.pdf",
+                "report_kind_old": "final",
+                "report_kind_new": "final",
+                "has_baseline": True,
+                "old_total": 5,
+                "new_total": 8,
+                "old_counts": {"V33-999": 2},
+                "new_counts": {"V33-999": 5},
+                "per_rule_delta": {"V33-999": {"old": 2, "new": 5}},
+                # 已执行的域外规则不再出现在 coverage_gap
+                "coverage_gap": {},
+                "out_of_scope_new": ["V33-999"],
+                "changed_total": 3,
+            }
+        return {
+            "job_id": "job-b-r9",
+            "pdf": "doc.pdf",
+            "report_kind_old": "final",
+            "report_kind_new": "final",
+            "has_baseline": False,  # 无历史基线：真实执行但不进 processed
+            "old_total": 0,
+            "new_total": 3,
+            "old_counts": {},
+            "new_counts": {"V33-999": 3},
+            "per_rule_delta": {},
+            "coverage_gap": {},
+            "out_of_scope_new": ["V33-999"],
+            "changed_total": 0,
+        }
+
+    monkeypatch.setattr(mod, "replay_historical_doc", fake_replay)
+    report = mod.replay_historical(
+        parse_mode="structured", limit=None, resume=False, workers=1
+    )
+    # 无基线任务的漂移必须计入
+    assert report["adapter_scope_drift"] == {"V33-999": 2}, (
+        f"漂移汇总必须含无基线任务: {report['adapter_scope_drift']}"
+    )
+    # 已执行域外规则的旧计数不得进入 coverage_gap
+    assert report["coverage_gap_rule_aggregate"] == {}, (
+        f"已执行域外规则不得进 coverage_gap: {report['coverage_gap_rule_aggregate']}"
+    )

@@ -5586,15 +5586,14 @@ class R33245_ThreePublicDirectionContradiction(Rule):
         # R7 P1-3：找不到章节 → 证据不足直接返回空——禁止 scope or
         # merged 全文回退（此前仅含「十一、其他重要事项说明」的材料里
         # 出现公务接待表述仍会产出 finding，跨章节误报通道未真正关闭）。
-        from src.utils.narration import find_section_scope, section_title_of_scope
+        from src.utils.narration import find_section_scope_with_title
 
-        scope = find_section_scope(merged, ["三公"])
-        if not (scope and scope.strip()):
+        found = find_section_scope_with_title(merged, ["三公"])
+        if not found:
             return issues
-        # 章节标题取 scope 起点前最近的标题行——**正文实例**而非目录
-        # 同名实例（/review 修正：此前 find_section 首命中目录实例，
-        # 且「_fs[1] in scope」对空 body 恒真，目录标题被误当正文标题）
-        section_title = section_title_of_scope(merged, scope)
+        # 标题由解析携带（R9 P1）——此前 section_title_of_scope 用正文
+        # 反查，正文相同的两章节会取到较早章节的标题（实测复现）
+        section_title, scope, _start, _end = found
         scope_text = scope
 
         for para in merge_soft_wrapped_lines(scope_text):
@@ -5669,12 +5668,12 @@ class R33246_DomesticReceptionDisclosure(Rule):
         # 完整性针对「三公经费…决算情况说明」主章节完整范围
         # （find_section_scope 含子章节正文）。
         # R7 P1-3：找不到章节 → 证据不足直接返回空，禁止全文回退。
-        from src.utils.narration import find_section_scope, section_title_of_scope
+        from src.utils.narration import find_section_scope_with_title
 
-        scope = find_section_scope(merged, ["三公"])
-        if not (scope and scope.strip()):
+        found = find_section_scope_with_title(merged, ["三公"])
+        if not found:
             return issues
-        section_title = section_title_of_scope(merged, scope)
+        section_title, scope, _start, _end = found
         scope_text = scope
 
         for para in merge_soft_wrapped_lines(scope_text):

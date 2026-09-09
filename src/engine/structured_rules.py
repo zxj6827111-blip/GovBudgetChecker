@@ -298,6 +298,11 @@ def materialize_table(
     header_hits: Dict[str, List[int]] = {}
     hit_rows: Counter = Counter()
     scan_rows = list(raw_rows[:header_rows + 2])
+    # R9 P2：逐行记录各语义键的列位置——multi_measure 判定需要「同行
+    # 不同列」证据，跨行的同列重复（表头+首条数据行的「合计」）不算
+    per_row_hits: List[Dict[str, List[int]]] = [
+        {} for _ in scan_rows
+    ]
     for r_idx, row in enumerate(scan_rows):
         for i, cell in enumerate(row):
             text = re.sub(r"\s+", "", str(cell or ""))
@@ -314,6 +319,7 @@ def materialize_table(
                 key = "final"
             if key:
                 header_hits.setdefault(key, []).append(i)
+                per_row_hits[r_idx].setdefault(key, []).append(i)
                 hit_rows[r_idx] += 1
 
     # 列语义序列：每列聚合表头行标签（归一化），含编码/名称类结构性标签。
@@ -358,8 +364,18 @@ def materialize_table(
     parsed.semantic_columns = {
         key: sorted(set(positions)) for key, positions in header_hits.items()
     }
+    # R9 P2：multi_measure 判定必须用**同行内不同列位置**——此前按命中
+    # 次数判定，普通单金额表的「合计」在表头与首条数据行同列重复出现
+    # 时被误标 multi_measure（语义位置去重后只有 [0]）。分组宽表/多段
+    # 表头的真实形态是同一表头行内多个不同列位（P17 预算×6、P18
+    # 合计×2、P8 决算数×7 均同行不同列）。
     is_multi_measure = (
-        not is_two_sided and any(len(v) >= 2 for v in header_hits.values())
+        not is_two_sided
+        and any(
+            len(set(positions)) >= 2
+            for row_positions in per_row_hits
+            for positions in row_positions.values()
+        )
     )
     # 语义叶行：扫描窗口内命中语义键最多的表头行（预算/决算数行、
     # 合计/基本/项目行）——列组主体只取它上方的标签。
@@ -557,38 +573,54 @@ def build_parsed_tables(
     texts = list(page_texts or [])
     for p_idx, tables in enumerate(page_tables or [], start=1):
         page_text = texts[p_idx - 1] if 0 < p_idx <= len(texts) else ""
-        for t_idx, raw in enumerate(tables or []):
+        page_tables_on_page = list(tables or [])
+        multi_table_page = len(page_tables_on_page) > 1
+        for t_idx, raw in enumerate(page_tables_on_page):
             title = "".join(
                 str(c or "") for c in (raw[0] if raw and raw[0] else [])
             )[:40]
             parsed = materialize_table(raw, title=title, pages=(p_idx,))
-            # 表名锚：新建表尝试从起始页页文本取业务表名；
-            # 续表候选页若页文本有**新表名行**，则该页起的是新表，
-            # 强制不合并（P7 总表续到 P8 时，P8 有「收入决算表」新锚）
+            # 表名锚：新建表尝试从起始页页文本取业务表名。
+            # R9 P1-4：单页多表无法用单个页锚表达——「页顶=上一页续表 +
+            # 下方=新表」时，页文本的首个表名行属于**新表**，把它安到
+            # 页顶第一张 raw table 会把续表错标成新表名、拆断合并（实测
+            # 应 2 张实得 3 张）。多表页不赋页锚：首表仅当**无表头**
+            # （续表形态）才允许作续表候选，其余一律独立；单表页保持
+            # R4 页锚约束（P7→P8 防错并）。bbox 关联是根治方向，当前
+            # 抽取层无 bbox，退化为 fail-closed（宁可多独立表不错并）。
             page_anchor = _extract_anchor_table_name(page_text)
-            if page_anchor:
+            if page_anchor and not multi_table_page:
                 parsed.anchor_table_name = page_anchor
             # 相邻性：上一表与当前表同页或紧邻页（R3 语义）。
-            # R8 P2：同页第 2+ 张独立 raw table 默认禁止续表合并——同页
-            # 多表无 bbox 连续性证据，且都复用同一页面表名锚（同页「收入
-            # 决算表」+「支出决算表」结构相同时曾被误并为 1 张）。只有
-            # 该页第一张表才可能是上一页的续表（官方样张的真实续页形态）。
+            # R8 P2：同页第 2+ 张独立 raw table 默认禁止续表合并（无
+            # bbox 连续性证据）。
+            first_on_page = t_idx == 0
             adjacent = (
                 last_key is not None
                 and last_end_page in (p_idx, p_idx - 1)
-                and t_idx == 0
+                and first_on_page
             )
+            # 多表页首表：仅无表头（无语义列）才可能是上一页续表；
+            # 有表头说明它是本页起的新表，不得与上一页的表合并
+            if multi_table_page and first_on_page and parsed.named_columns:
+                adjacent = False
             merged = False
             if adjacent and last_key in parsed_tables:
                 base_table = parsed_tables[last_key]
                 # R4 表名锚约束（三层）：
                 # ① 当前页出现**新表名行** → 物理翻表，无条件禁止合并
                 #   （P7 总表续到 P8 时，P8 有「收入决算表」新锚）；
+                #   R9 P1-4：多表页的页锚属于页内新表、不属于续表，
+                #   该守卫对多表页不适用（续表会被误拆）；
                 # ② 基准表有表名、续页无表名 → 续页通常不重复表名，
                 #   视为同表候选，交给签名守卫裁决；
                 # ③ 双方都有表名但不同 → 不同业务表，禁止合并。
                 # 双方都无表名 → 无业务身份证据，保守不合并。
-                new_anchor_on_page = page_anchor and page_anchor != last_anchor
+                new_anchor_on_page = (
+                    page_anchor
+                    and page_anchor != last_anchor
+                    and not multi_table_page
+                )
                 same_anchor = bool(
                     last_anchor
                     and (

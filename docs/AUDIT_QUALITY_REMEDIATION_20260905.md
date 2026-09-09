@@ -558,3 +558,57 @@ hint 3/3），「整改全部完成、可切换 structured」NO-GO。指出 4 �
   `--mode structured` GATE-FAIL 如实；篡改 doc_id/SHA 均拒绝；
 - 历史 structured --limit 3：3/3 final 执行，removed=66、
   coverage_gap=65，漂移聚合无崩溃。
+
+## 9.11 第十轮复核整改（2026-09-09，R9 外部审查五缺口）
+
+R9 在 R8 修复基础上扩展反例，仍判 legacy GO / 验收体系与 structured
+切换 NO-GO。五个新缺口全部修复：
+
+### P0 defect 仍按证据面计 TP，可制造门禁假绿（scripts/evaluate_golden_corpus.py）
+- 实测：T1a/T1b/T1c 三个证据面归一同一 T1 → 报告 TP=3/FN=0、
+  check_gates=[]——R7 的 tp==3 锁定被「多面归一」绕过。
+- 修复：tp 改按**命中真值组**计，证据面另存 defect_faces_matched；
+  check_gates 直接校验 `defect_groups_total == 3` 且命中组集恰为
+  `{T1, T5, T6}`。反例锁定测试覆盖「3 面 1 组」「缩减真值集」「命中
+  组错位」三种形态。
+
+### P1 sec 保护在无有效章节锚时绕过 + 章节标题反查（evaluate + narration）
+- 实测：location_key="sec:情况说明"（短语被通用词过滤）时缺失
+  section_id 的 finding 仍晋升 TP——section_id 硬要求此前挂在
+  `if section_anchors:` 内；narration 的 section_title_of_scope 用
+  text.find(scope) 反查标题，两个章节正文相同时命中较早章节（实测）。
+- 修复：① 任何 sec 标注强制非空 section_id（与锚无关）；② golden
+  加载阶段要求 sec 标注声明 section_title_phrases_aligned，缺失即
+  EVAL-REJECTED；③ 新增 `find_section_scope_with_title` 返回
+  {title, body, start, end}（标题随解析携带，禁用正文字符串反查），
+  V33-245/246 改用之，section_title_of_scope 反查实现删除。
+
+### P1 adapter drift 汇总漏无基线任务 + coverage_gap 冲突双计（replay）
+- 实测：结果明细含 V33-999 但 adapter_scope_drift={}（汇总只遍历
+  processed，无基线任务被排除）；V33-999 old=2 时同时进 delta 和
+  coverage_gap=2（与"未被 structured 重跑"定义冲突）。
+- 修复：漂移汇总遍历 processed + no_baseline；coverage_gap 排除
+  已真实执行的域外规则。全链路测试覆盖两形态。
+
+### P1 「续表 + 同页新表」拆断续表（structured_rules）
+- 实测：页顶续表 + 下方新表时，页文本首个表名行（属新表）被安到
+  页顶第一张 raw table → 续表错标新表名拒绝合并（应 2 张实得 3 张）。
+- 修复：多表页不赋页锚——首表仅当**无表头**（续表形态）才允许作
+  续表候选（签名守卫裁决），其余一律独立；单表页保持 R4 页锚约束
+  （P7→P8 防错并不受影响）。bbox 关联表名为根治方向（抽取层无
+  bbox，当前 fail-closed：宁可多独立表不错并）。
+
+### P2 multi_measure 被同列跨行重复命中误触发（structured_rules）
+- 实测：普通单金额表的「合计」在表头与首条数据行同列重复出现时
+  被误标 multi_measure（语义位置去重后只有 [0]）。
+- 修复：multi_measure 判定改为**同一表头行内 ≥2 个不同列位置**
+  （P17 预算×6、P18 合计×2、P8 决算数×7 均同行不同列，真实形态
+  全部保留；跨行同列重复不再触发）。
+
+### 验证（2026-09-09）
+- 相关测试 118 passed；全量 pytest **1086 passed + 1 skipped**；
+- Ruff 通过；mypy src/ 全绿（79 源文件）；
+- 样张 legacy replay + GATE-PASS（hint 3/3）；shadow auto 拒绝、
+  --mode structured GATE-FAIL（新组集校验生效：[]/3）；历史
+  structured --limit 3：removed=66、coverage_gap=65、漂移无漏报、
+  gap/delta 无双计。

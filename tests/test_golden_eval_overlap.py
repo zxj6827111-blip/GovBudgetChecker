@@ -505,7 +505,7 @@ def test_evaluate_hint_clustering_end_to_end(monkeypatch, tmp_path):
 
 def _gate_report(**overrides):
     base = {
-        "tp": 3,
+        "tp": 3,  # R9 P0：tp 已是真值组口径
         "fp": 0,
         "fn": 0,
         "precision": 1.0,
@@ -515,6 +515,8 @@ def _gate_report(**overrides):
         "hint_groups_total": 3,
         "hint_groups_hit": 3,
         "hint_missed_count": 0,
+        "defect_groups_total": 3,
+        "defect_groups_hit": ["T1", "T5", "T6"],
     }
     base.update(overrides)
     return base
@@ -538,14 +540,33 @@ def test_gate_requires_hint_3_of_3():
 
 
 def test_gate_requires_hard_problem_3_of_3():
-    """硬问题 3/3 同样锁定：缩减 defect 真值集（tp=2、fn=0）必须失败。
+    """硬问题 3/3 锁定：缩减 defect 真值集或按证据面虚增都必须失败。
 
-    只查 fn!=0 挡不住删掉一条 defect 标注的假绿——HANDOFF §7 验收
-    标准是 T1/T5/T6 三条硬问题全命中。
+    HANDOFF §7 验收标准是 T1/T5/T6 三组全命中——只查 fn!=0 挡不住
+    删标注；R9 P0 前按证据面计 tp 挡不住多面归一（实测 3 面 1 组
+    报告 TP=3 假绿）。现在直接校验命中组集恰为 {T1, T5, T6}。
     """
     from scripts.evaluate_golden_corpus import check_gates
 
-    assert check_gates(_gate_report(tp=2, fn=0)) != [], "tp=2 必须失败（3/3 锁定）"
+    # 缩减真值集（2 组）
+    assert check_gates(
+        _gate_report(
+            tp=2,
+            defect_groups_total=2,
+            defect_groups_hit=["T1", "T5"],
+        )
+    ) != [], "缩减真值集必须失败"
+    # 证据面虚增（3 面归一同一真值组——R9 P0 复现形态）
+    assert check_gates(
+        _gate_report(
+            tp=1,
+            defect_groups_hit=["T1"],
+        )
+    ) != [], "按证据面虚增必须失败"
+    # 命中组错位（缺 T6 多 T9）
+    assert check_gates(
+        _gate_report(defect_groups_hit=["T1", "T5", "T9"])
+    ) != [], "命中组集必须是 T1/T5/T6"
 
 
 # ---------------------------------------------------------------------------
@@ -750,3 +771,148 @@ def test_evaluate_shadow_replay_requires_explicit_mode(monkeypatch, tmp_path):
     assert report["tp"] == 0 and report["fn"] == 1, (
         "structured 缺陷召回缺口必须如实呈现，不得被 legacy 掩盖"
     )
+
+
+# ---------------------------------------------------------------------------
+# R9 P0：defect 真值组口径 + R9 P1：sec 保护绕过反例
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_defect_groups_not_face_inflated(monkeypatch, tmp_path):
+    """T1a/T1b/T1c 三个证据面归一同一 T1 时，tp 必须按组计（R9 P0）。
+
+    此前 tp = len(matched) 按证据面计——3 面全命中报告 TP=3/FN=0、
+    门禁假绿，可绕过「T1/T5/T6 三组」锁定。修复后 tp=1（组）、
+    defect_groups_total=1、命中组集不含 T5/T6，check_gates 必须失败。
+    """
+    import json
+
+    from scripts.evaluate_golden_corpus import check_gates, evaluate
+
+    doc_id = "DOC-20260905-001"
+    corpus_dir = tmp_path / "corpus" / doc_id
+    corpus_dir.mkdir(parents=True)
+    golden = {
+        "doc_id": doc_id,
+        "sha256": "113b98bb5df18c264f9c589a1034d3bfc27ed65562b4bbbe72bfd33420f912c7",
+        "labels": [
+            {
+                "annotation_id": f"A-{n}",
+                "truth_id": f"T1{n}",  # T1a/T1b/T1c → 组 T1
+                "label": "defect",
+                "rule_id": "V33-001",
+                "page": 2,
+                "expected_severity": "high",
+                "evidence": "目录行年度缺位（应为 2025）",
+            }
+            for n in ("a", "b", "c")
+        ],
+    }
+    (corpus_dir / "golden.json").write_text(json.dumps(golden), encoding="utf-8")
+    monkeypatch.setattr(
+        "scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus"
+    )
+
+    replay_path = tmp_path / "replay.json"
+    replay_path.write_text(
+        json.dumps(
+            {
+                "doc_id": doc_id,
+                "sha256": "113b98bb5df18c264f9c589a1034d3bfc27ed65562b4bbbe72bfd33420f912c7",
+                "legacy": {
+                    "findings": [
+                        {
+                            "rule": "V33-001",
+                            "severity": "high",
+                            "page": 2,
+                            "evidence_text": "「202 年度」目录行年度缺位",
+                            "message": "目录年度缺位",
+                        }
+                    ]
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    report = evaluate(doc_id, replay_path)
+    assert report["tp"] == 1, f"tp 必须按真值组计: {report['tp']}"
+    assert report["defect_faces_matched"] == 1, "三个面只能消费一条 finding"
+    assert report["defect_groups_total"] == 1
+    assert report["defect_groups_hit"] == ["T1"]
+    assert check_gates(report), "单组命中不得通过三组门禁"
+
+
+def test_sec_generic_anchor_without_section_id_rejected():
+    """sec: 锚短语被通用词过滤时，缺失 section_id 仍必须拒配（R9 P1）。
+
+    此前 section_id 硬要求挂在 `if section_anchors:` 内——location_key
+    ="sec:情况说明" 的短语被通用词过滤、无有效锚，缺失 section_id 的
+    finding 绕过章节保护（实测）。章节标识是非空硬前提，与锚无关。
+    """
+    ann = {
+        "rule_id": "V33-245",
+        "page": 26,
+        "evidence": "公务接待费 0.00 与 2024 年持平",
+        "location_key": "sec:情况说明",  # 「情况说明」在通用词表 → 无有效锚
+    }
+    finding = {
+        "rule": "V33-245",
+        "page": 26,
+        "message": "m",
+        "evidence_text": "公务接待费 0.00 与 2024 年持平",
+        # 无 section_id
+    }
+    assert match_annotation(ann, [finding], set()) is None
+
+
+def test_evaluate_rejects_sec_annotation_without_section_anchor(monkeypatch, tmp_path):
+    """golden 加载阶段：sec 标注缺 section_title_phrases_aligned → 拒绝。
+
+    R9 P1：缺章节锚的 sec 标注无法做结构化章节校验，fail-closed 在
+    加载期报错，不等到匹配阶段静默退化。
+    """
+    import json
+
+    import pytest
+
+    from scripts.evaluate_golden_corpus import evaluate
+
+    doc_id = "DOC-20260905-001"
+    corpus_dir = tmp_path / "corpus" / doc_id
+    corpus_dir.mkdir(parents=True)
+    golden = {
+        "doc_id": doc_id,
+        "sha256": "113b98bb5df18c264f9c589a1034d3bfc27ed65562b4bbbe72bfd33420f912c7",
+        "labels": [
+            {
+                "annotation_id": "A-002",
+                "truth_id": "T5",
+                "label": "defect",
+                "rule_id": "V33-245",
+                "page": 26,
+                "location_key": "sec:三公说明(一)公务接待费",
+                "expected_severity": "medium",
+                "evidence": "逻辑矛盾",
+                # 缺 section_title_phrases_aligned
+            }
+        ],
+    }
+    (corpus_dir / "golden.json").write_text(json.dumps(golden), encoding="utf-8")
+    monkeypatch.setattr(
+        "scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus"
+    )
+    replay_path = tmp_path / "replay.json"
+    replay_path.write_text(
+        json.dumps(
+            {
+                "doc_id": doc_id,
+                "sha256": "113b98bb5df18c264f9c589a1034d3bfc27ed65562b4bbbe72bfd33420f912c7",
+                "legacy": {"findings": []},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="section_title_phrases_aligned"):
+        evaluate(doc_id, replay_path)

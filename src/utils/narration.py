@@ -129,21 +129,14 @@ def find_section(text: str, keywords: List[str]) -> Optional[Tuple[str, str]]:
     return None
 
 
-def find_section_scope(text: str, keywords: List[str]) -> Optional[str]:
-    """找关键词章节的**完整范围正文**（主标题起、到下一个主标题止）。
+def find_section_scope_with_title(
+    text: str, keywords: List[str]
+) -> Optional[Tuple[str, str, int, int]]:
+    """找关键词章节的完整范围，返回 (标题, 正文, 起点, 终点)。
 
-    说明材料的常见排版是主章节标题紧跟子标题（「七、财政拨款三公
-    经费支出决算情况说明」后紧跟「（一）…总体情况说明」）——
-    ``split_numbered_sections`` 把子标题也切为独立章节，主章节的 body
-    因此为空、正文全落在子章节里（样张实测）。本函数从主标题位置
-    起切到**下一个主级序号标题**（一、二、…，不含（一）子标题），
-    覆盖该主章节的全部子章节内容。
-
-    标题实例选择（GPT5.6 R6 P1-3）：同名主标题会在**目录与正文**各
-    出现一次——目录实例的下一个主标题紧跟着（scope 为空），此前
-    循环命中首个（目录）即返回空串、调用方 ``or merged`` 退回全文
-    扫描，跨章节误报通道未真正关闭。改为在所有命中实例中选**正文
-    最长**的（目录实例 scope≈0 自动落选）。
+    R9 P1：此前只返回正文字符串，调用方用 ``text.find(scope)`` 反查
+    标题——两个章节正文相同时反查命中**较早**章节的标题（实测复现）。
+    解析时直接携带标题与位置，调用方不得再用正文字符串反查位置。
     """
     text = str(text or "")
     main_title_re = re.compile(
@@ -151,37 +144,27 @@ def find_section_scope(text: str, keywords: List[str]) -> Optional[str]:
         r"[^。；;！!？?\n]{0,60}(?:说明|情况)"
     )
     matches = list(main_title_re.finditer(text))
-    best_scope: Optional[str] = None
+    best: Optional[Tuple[str, str, int, int]] = None
     for i, match in enumerate(matches):
         title = match.group(0).strip()
         if not all(kw in title for kw in keywords):
             continue
         start = match.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        scope = text[start:end]
-        if scope.strip() and (best_scope is None or len(scope) > len(best_scope)):
-            best_scope = scope
-    return best_scope
+        body = text[start:end]
+        if body.strip() and (best is None or len(body) > len(best[1])):
+            best = (title, body, start, end)
+    return best
 
 
-def section_title_of_scope(text: str, scope: str) -> Optional[str]:
-    """返回 scope 正文对应的章节标题行（scope 起点前最近的一行）。
+def find_section_scope(text: str, keywords: List[str]) -> Optional[str]:
+    """找关键词章节的完整范围正文（兼容旧签名）。
 
-    R7 /review 修正：V33-245/246 的独立 section_id 需要**正文实例**的
-    标题——scope 由 find_section_scope 从同一全文切出（text[start:end]），
-    定位 scope 起点并向前取最近一行即可。此前用 find_section 取第一个
-    实例、且以「body in scope」判定实例归属——空 body 使该判定恒真，
-    样张实测取到的是**目录**实例标题（恰与正文标题文字相同才未暴露）。
+    新调用方请直接用 ``find_section_scope_with_title`` 取标题——
+    正文字符串反查位置不可靠（R9 P1）。
     """
-    text = str(text or "")
-    scope = str(scope or "")
-    if not scope.strip():
-        return None
-    idx = text.find(scope)
-    if idx < 0:
-        return None
-    line = text[:idx].rstrip("\n").rsplit("\n", 1)[-1].strip()
-    return line or None
+    found = find_section_scope_with_title(text, keywords)
+    return found[1] if found else None
 
 
 def extract_amounts(clause: str) -> List[Tuple[float, str]]:

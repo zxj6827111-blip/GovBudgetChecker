@@ -167,3 +167,16 @@ expected_severity 未动）：
   被 legacy 掩盖（样张 structured 4 findings/TP=0/FN=3 实测 GATE-FAIL）；
 - 评估器校验 replay doc_id + sha256 与 golden 一致（R8 P1）——篡改
   DOC-WRONG / sha256=deadbeef 均 EVAL-REJECTED（exit 2）。
+
+## 2026-09-09 修订（GPT5.6 R9 P0：defect 验收改真值组口径）
+
+R9 扩展反例发现：defect 侧 tp 按**证据面**计（len(matched)）——构造
+T1a/T1b/T1c 三个面全部归一同一 T1 时，实际只有 1 个缺陷真值组，报告
+却得 TP=3/FN=0、门禁假绿，可绕过「T1/T5/T6 三组」锁定。
+
+修正内容（评估器语义，标注本体未动）：
+- tp 改按**命中真值组**计（len({truth_group})），证据面命中数另存
+  defect_faces_matched；
+- check_gates 直接校验命中组集恰为 {T1, T5, T6} 且 defect_groups_total
+  == 3（真值集不得缩减、也不得按证据面虚增）；
+- 本样张 3 条 defect 均单面标注，TP=3/GATE-PASS 结论不变。

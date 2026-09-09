@@ -317,6 +317,17 @@ def match_annotation(
     # section_phrases_aligned 的 evidence 驻留词职责分离），未声明时
     # 用 location_key 锚短语——整短语包含判定，不做前缀宽松。
     if str(annotation.get("location_key") or "").partition(":")[0] == "sec":
+        # R9 P1：任何 sec 真值都强制非空 section_id——此前该要求挂在
+        # `if section_anchors:` 内，location_key="sec:情况说明" 这类短语
+        # 被通用词过滤后无有效锚，缺失 section_id 的 finding 仍可晋升
+        # TP（实测绕过）。章节标识是非空硬前提，与锚无关。
+        candidates = [
+            c
+            for c in candidates
+            if str(c[1].get("section_id") or "").strip()
+        ]
+        if not candidates:
+            return None  # sec 真值缺结构化章节标识：不得晋升 TP
         declared_section = [
             _normalize_for_overlap(m)
             for m in annotation.get("section_title_phrases_aligned") or []
@@ -326,14 +337,13 @@ def match_annotation(
         if section_anchors:
             section_candidates = []
             for c in candidates:
-                section_id = str(c[1].get("section_id") or "").strip()
-                if not section_id:
-                    continue  # sec 真值强制非空结构化章节标识（fail-closed）
-                section_norm = _normalize_for_overlap(section_id)
+                section_norm = _normalize_for_overlap(
+                    str(c[1].get("section_id") or "")
+                )
                 if any(anchor in section_norm for anchor in section_anchors):
                     section_candidates.append(c)
             if not section_candidates:
-                return None  # 章节域不符/缺章节标识的候选不得晋升 TP
+                return None  # 章节域不符的候选不得晋升 TP
             candidates = section_candidates
     # 章节标记约束（R5 P1-C）：sec/toc 锚的章节标记短语。
     # - 标注**显式声明** section_phrases_aligned（章节词的 evidence 驻留
@@ -507,6 +517,24 @@ def evaluate(doc_id: str, replay_path: Path, mode: str = "auto") -> Dict[str, An
     findings: List[Dict[str, Any]] = run.get("findings") or []
 
     labels = golden.get("labels", [])
+    # R9 P1：sec 标注必须在 golden 加载阶段声明章节标题短语——缺章节
+    # 锚的标注无法做结构化章节校验，fail-closed 拒绝，不等到匹配阶段
+    # 静默退化（location_key="sec:情况说明" 这类无有效锚的标注实测可
+    # 绕过章节保护）。
+    for annotation in labels:
+        if str(annotation.get("location_key") or "").partition(":")[0] != "sec":
+            continue
+        titles = [
+            _normalize_for_overlap(m)
+            for m in annotation.get("section_title_phrases_aligned") or []
+            if _normalize_for_overlap(m)
+        ]
+        if not titles:
+            raise ValueError(
+                f"sec 标注 {annotation.get('annotation_id')} 缺 "
+                "section_title_phrases_aligned——章节锚缺失无法做结构化"
+                "章节校验（fail-closed，R9 P1）"
+            )
     defects = [lb for lb in labels if lb.get("label") == "defect"]
     hints = [
         lb for lb in labels
@@ -531,8 +559,16 @@ def evaluate(doc_id: str, replay_path: Path, mode: str = "auto") -> Dict[str, An
         hints, findings, matched_finding_ids
     )
 
-    tp = len(matched)
+    # R9 P0：defect 验收按**真值组**计——此前 tp = len(matched) 按证据
+    # 面计，T1a/T1b/T1c 三个面归一同一 T1 时报告 TP=3/FN=0、门禁假绿
+    # （实测可绕过「T1/T5/T6 三组」锁定）。tp 改计命中组数；证据面
+    # 命中数另存 defect_faces_matched；命中组明细进 defect_groups_hit
+    # 供门禁直接校验恰好命中 T1/T5/T6。
+    tp = len({item["truth_group"] for item in matched})
     fn = len(missed)
+    defect_groups_total = len({_truth_group(a) for a in defects})
+    defect_groups_hit = sorted({item["truth_group"] for item in matched})
+    defect_faces_matched = len(matched)
     # FP：未被任何标注（缺陷或预期提示）消费的 finding——提示级预期输出
     # 不是误报（HANDOFF §2 三档真值模型）
     fp = sum(1 for finding in findings if id(finding) not in matched_finding_ids)
@@ -587,6 +623,9 @@ def evaluate(doc_id: str, replay_path: Path, mode: str = "auto") -> Dict[str, An
         "tp": tp,
         "fp": fp,
         "fn": fn,
+        "defect_groups_total": defect_groups_total,
+        "defect_groups_hit": defect_groups_hit,
+        "defect_faces_matched": defect_faces_matched,
         "precision": precision,
         "recall": recall,
         "hint_total": len(hints),
@@ -653,13 +692,19 @@ def check_gates(report: Dict[str, Any]) -> List[str]:
         failures.append(f"FP={report['fp']}，要求 0（样张 52 条误报必须清零）")
     if report["fn"] != 0:
         failures.append(f"FN={report['fn']}，硬问题召回要求 3/3")
-    # R7 P0-1：硬问题必须 3/3 全命中——只查 fn==0 挡不住"缩减真值集"
-    # 的假绿（删掉一条 defect 标注后 fn 仍为 0、tp 降为 2 也能过）。
-    # 验收标准（HANDOFF §7）是 T1/T5/T6 三条硬问题全命中，tp 锁定为 3。
-    if report["tp"] != 3:
+    # R7 P0-1 → R9 P0：硬问题门禁直接校验**命中真值组恰好是 T1/T5/T6**。
+    # 此前只查 tp==3（tp 按证据面计）——T1a/T1b/T1c 三个面归一同一 T1
+    # 时报告 TP=3/FN=0、门禁假绿（实测可绕过「三组」锁定）；只查
+    # fn==0 又挡不住缩减真值集。现在：组数必须等于 3 且命中组集必须
+    # 恰为 {T1, T5, T6}（HANDOFF §2 权威编号）。
+    if (
+        report["defect_groups_total"] != 3
+        or set(report["defect_groups_hit"]) != {"T1", "T5", "T6"}
+    ):
         failures.append(
-            f"TP={report['tp']}，硬问题召回要求 3/3（HANDOFF §2 T1/T5/T6，"
-            "真值集不得缩减）"
+            f"硬问题真值组 {report['defect_groups_hit']}/{report['defect_groups_total']}，"
+            "要求恰好命中 HANDOFF §2 T1/T5/T6 三组（真值集不得缩减，"
+            "也不得按证据面虚增）"
         )
     # R7 P0-1：舍入提示进入硬门禁。验收标准是 T2/T3/T4 三组全命中；
     # 同时锁定 hint_groups_total==3——只查"hit==total"挡不住把真值组
