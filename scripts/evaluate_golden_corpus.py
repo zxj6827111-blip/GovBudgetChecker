@@ -304,32 +304,34 @@ def match_annotation(
         if not anchor_hit_candidates:
             return None  # 零锚点命中：unmatched，不晋升 TP
         candidates = anchor_hit_candidates
-    # 独立章节校验（R7 P1-3）：sec 锚标注 + finding 携带 section_id
-    # （结构化字段，非 evidence 文字）时，章节域必须同源——section_id
-    # 归一文本要包含锚短语或其 2 字前缀（章节标题措辞与标注短语允许
-    # 差异：「三公说明」vs「财政拨款"三公"经费支出决算情况说明」共享
-    # 「三公」）。「其他重要事项说明 + 公务接待费」的跨章节候选被拒，
-    # 此前只能靠 evidence 文字、主题词混过即可晋升 TP。
-    # finding 无 section_id（旧产物/未迁移规则）：退回锚点语义，不惩罚。
-    if (
-        str(annotation.get("location_key") or "").partition(":")[0] == "sec"
-        and anchor_phrases
-    ):
-        section_candidates = []
-        for c in candidates:
-            section_id = str(c[1].get("section_id") or "").strip()
-            if not section_id:
-                section_candidates.append(c)
-                continue
-            section_norm = _normalize_for_overlap(section_id)
-            if any(
-                p in section_norm or (len(p) >= 2 and p[:2] in section_norm)
-                for p in anchor_phrases
-            ):
-                section_candidates.append(c)
-        if not section_candidates:
-            return None  # 章节域不符的候选不得晋升 TP
-        candidates = section_candidates
+    # 独立章节校验（R7 P1-3 → R8 P1 收紧）：sec 锚标注的 finding 必须
+    # 携带非空 section_id（结构化章节标识），且用**全短语**章节锚匹配。
+    # R8 关掉两个 fail-open 通道：① 此前无 section_id 的候选退回锚点
+    # 语义即可晋升 TP（缺章节标识的 finding 不能证明产自目标章节）；
+    # ② 此前允许锚短语的 2 字前缀（「九、公务管理情况说明」仅共享
+    # 「公务」两字即可命中三公真值）。章节锚 = 标注声明的
+    # section_title_phrases_aligned（golden 已补章节标题短语，与
+    # section_phrases_aligned 的 evidence 驻留词职责分离），未声明时
+    # 用 location_key 锚短语——整短语包含判定，不做前缀宽松。
+    if str(annotation.get("location_key") or "").partition(":")[0] == "sec":
+        declared_section = [
+            _normalize_for_overlap(m)
+            for m in annotation.get("section_title_phrases_aligned") or []
+            if _normalize_for_overlap(m)
+        ]
+        section_anchors = declared_section or list(anchor_phrases)
+        if section_anchors:
+            section_candidates = []
+            for c in candidates:
+                section_id = str(c[1].get("section_id") or "").strip()
+                if not section_id:
+                    continue  # sec 真值强制非空结构化章节标识（fail-closed）
+                section_norm = _normalize_for_overlap(section_id)
+                if any(anchor in section_norm for anchor in section_anchors):
+                    section_candidates.append(c)
+            if not section_candidates:
+                return None  # 章节域不符/缺章节标识的候选不得晋升 TP
+            candidates = section_candidates
     # 章节标记约束（R5 P1-C）：sec/toc 锚的章节标记短语。
     # - 标注**显式声明** section_phrases_aligned（章节词的 evidence 驻留
     #   形态）→ 硬约束：零命中拒配（跨章节候选不晋升 TP）；
@@ -433,12 +435,68 @@ def _consume_truth_annotations(
     return matched, missed, len(hit_groups)
 
 
-def evaluate(doc_id: str, replay_path: Path) -> Dict[str, Any]:
+def evaluate(doc_id: str, replay_path: Path, mode: str = "auto") -> Dict[str, Any]:
     golden_path = CORPUS_DIR / doc_id / "golden.json"
     golden = json.loads(golden_path.read_text(encoding="utf-8"))
     replay = json.loads(replay_path.read_text(encoding="utf-8"))
 
-    run = replay.get("legacy") or replay.get("structured") or {}
+    # R8 P1：replay 必须与 golden 同源——doc_id + 源 PDF SHA 双重绑定。
+    # 此前只校验内容不校验身份，篡改 replay 的 doc_id/SHA 后仍
+    # GATE-PASS（实测 DOC-WRONG / sha256=deadbeef）。任何一步不符
+    # 都明确拒绝，不允许评测错源产物（fail-closed）。
+    replay_doc_id = str(replay.get("doc_id") or "").strip()
+    if replay_doc_id != doc_id:
+        raise ValueError(
+            f"replay doc_id={replay_doc_id or '(空)'} 与评测目标 {doc_id} 不符——"
+            "拒绝评测错源产物（fail-closed，R8 P1）"
+        )
+    golden_sha = str(golden.get("sha256") or "").strip()
+    replay_sha = str(replay.get("sha256") or "").strip()
+    if not golden_sha or not replay_sha or replay_sha != golden_sha:
+        raise ValueError(
+            f"replay SHA({replay_sha or '(空)'}) 与 golden SHA({golden_sha or '(空)'}) "
+            "不一致——replay 不是该 golden 的产物，拒绝评测（fail-closed，R8 P1）"
+        )
+
+    # R8 P0：解析模式显式化。shadow replay 同时含 legacy/structured，
+    # 此前无条件取 legacy，structured 路径失败被静默掩盖（实测同一样张
+    # structured 4 findings / TP=0 / FN=3，shadow 仍 GATE-PASS）。
+    # auto 只用于单结果 replay；双结果必须显式 --mode 指定验收对象。
+    legacy_run = (
+        replay.get("legacy") if isinstance(replay.get("legacy"), dict) else None
+    )
+    structured_run = (
+        replay.get("structured")
+        if isinstance(replay.get("structured"), dict)
+        else None
+    )
+    runs_present = [
+        name
+        for name, run in (("legacy", legacy_run), ("structured", structured_run))
+        if run is not None
+    ]
+    if mode == "auto":
+        if legacy_run is not None and structured_run is not None:
+            raise ValueError(
+                "shadow replay 同时含 legacy/structured 两套结果，必须显式 "
+                "--mode legacy|structured 指定验收对象（auto 拒绝猜测，"
+                "避免 structured 路径失败被 legacy 掩盖，R8 P0）"
+            )
+        run = legacy_run or structured_run or {}
+    elif mode == "legacy":
+        if legacy_run is None:
+            raise ValueError(
+                f"replay 无 legacy 结果（现有: {runs_present}），"
+                "无法按 --mode legacy 验收"
+            )
+        run = legacy_run
+    else:  # mode == "structured"
+        if structured_run is None:
+            raise ValueError(
+                f"replay 无 structured 结果（现有: {runs_present}），"
+                "无法按 --mode structured 验收"
+            )
+        run = structured_run
     findings: List[Dict[str, Any]] = run.get("findings") or []
 
     labels = golden.get("labels", [])
@@ -513,6 +571,8 @@ def evaluate(doc_id: str, replay_path: Path) -> Dict[str, Any]:
 
     return {
         "doc_id": doc_id,
+        "mode": mode,
+        "runs_present": runs_present,
         "replay": str(replay_path.relative_to(ROOT)) if replay_path.is_relative_to(ROOT) else str(replay_path),
         "evaluated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "finding_total": len(findings),
@@ -624,6 +684,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--doc", required=True, help="语料 DOC-ID")
     parser.add_argument("--replay", required=True, help="重放产物 JSON 路径")
+    parser.add_argument(
+        "--mode",
+        default="auto",
+        choices=["auto", "legacy", "structured"],
+        help="验收的解析模式（R8 P0）：shadow replay 同时含 legacy/structured "
+        "时必须显式指定；auto 仅用于单结果 replay，遇双结果拒绝猜测",
+    )
     args = parser.parse_args()
 
     replay_path = Path(args.replay)
@@ -633,7 +700,13 @@ def main() -> int:
         print(f"replay file not found: {replay_path}", file=sys.stderr)
         return 1
 
-    report = evaluate(args.doc, replay_path)
+    try:
+        report = evaluate(args.doc, replay_path, mode=args.mode)
+    except ValueError as exc:
+        # R8 P0/P1：身份绑定与模式歧义是评测前提错误，不是指标失败——
+        # 明确报错并失败退出，不落 GATE 报告（避免把错源产物写成 PASS）
+        print(f"EVAL-REJECTED: {exc}", file=sys.stderr)
+        return 2
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out_path = OUTPUT_DIR / f"{args.doc}-eval-{stamp}.json"

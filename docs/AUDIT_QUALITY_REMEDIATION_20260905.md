@@ -497,3 +497,64 @@ code 列位）。改为仅首列为 3/5/7 位编码形态（文本或整数 numb
   不同步）。测试：漂移规则进入 delta、正常路径漂移留痕为空。
 - 复验：全量 pytest **1074 passed + 1 skipped**、Ruff 通过、样张
   GATE-PASS（hint 3/3、section_id 取自正文实例）。
+
+## 9.10 第九轮复核整改（2026-09-09，R8 外部审查六缺口）
+
+第八轮复核判定：legacy 样张止血 GO（7 findings、TP=3/FP=0/FN=0、
+hint 3/3），「整改全部完成、可切换 structured」NO-GO。指出 4 个验收
+可靠性问题 + 2 个工程遗留，本轮全部修复：
+
+### P0 Shadow 验收掩盖 structured 路径失败（scripts/evaluate_golden_corpus.py）
+- 此前 `run = replay.get("legacy") or replay.get("structured")` 无条件
+  取 legacy——同一样张 structured 4 findings/TP=0/FN=3 时 shadow
+  replay 仍 GATE-PASS（实测）。
+- 修复：新增 `--mode {auto,legacy,structured}`。auto 只用于单结果
+  replay，shadow 双结果必须显式指定验收对象（拒绝猜测）；报告新增
+  mode/runs_present。实测：shadow auto → EVAL-REJECTED（exit 2）；
+  `--mode structured` → GATE-FAIL（TP=0，如实呈现）。
+
+### P1 历史适配器漂移保护在聚合阶段崩溃（scripts/replay_golden_corpus.py）
+- 构造 V33-999 漂移后实测 KeyError: 'V33-999'：单份 per_rule_delta
+  已显式纳入漂移规则，聚合层 `rules &= scope` 却未同步补回该域，
+  docs_changed 累加对域外键崩溃。
+- 修复：aggregate 在 scope 分支内 `rules |= out_of_scope_new`。
+- 测试补全链路：monkeypatch UPLOADS_DIR + replay_historical_doc，
+  覆盖完整 replay_historical() 聚合（此前只测 _restricted_rule_delta）。
+
+### P1 section_id 验收 fail-open 关闭（scripts/evaluate_golden_corpus.py）
+- 此前两个 fail-open 通道：① finding 缺失 section_id 退回锚点语义
+  即可晋升 TP；② 章节匹配允许锚短语 2 字前缀（「九、公务管理情况
+  说明」仅共享「公务」即命中三公真值，实测）。
+- 修复：sec 真值强制非空 section_id；章节锚 = 标注声明的
+  `section_title_phrases_aligned`（新字段，与 section_phrases_aligned
+  的 evidence 驻留词职责分离），未声明时用 location_key 锚短语——
+  **整短语**包含判定，不做前缀宽松。golden.json v3 增补 A-002/A-003
+  的章节标题短语（三公经费支出决算情况说明）。
+
+### P1 回放/评估绑定 doc_id 与 SHA（fail-closed）
+- 此前有 PDF 时 `_load_corpus_inputs` 直接返回不校验 golden SHA；
+  evaluate 不核对 replay 的 doc_id/sha256——篡改 DOC-WRONG /
+  sha256=deadbeef 后评估仍 GATE-PASS（实测）。
+- 修复：回放侧（PDF 分支）核对 golden 声明的源 PDF SHA；评估侧
+  双重绑定 replay doc_id + sha256 与 golden 一致，不符即
+  EVAL-REJECTED（exit 2）。锁定测试覆盖两种篡改。
+
+### P2 同页两张同结构业务表误合并（src/engine/structured_rules.py）
+- 同页「收入决算表」+「支出决算表」复用同一页面表名锚、签名兼容时
+  误并为 1 张（实测 table_count=1）。修复：同页第 2+ 张 raw table
+  默认禁止续表合并（无 bbox 连续性证据；仅该页第一张表可能是上一页
+  续表）。新增同页双表独立测试。
+
+### P2 mypy 4 项既有错误清零
+- rules_v33.py：R33120 的 table_totals 用 TypedDict（_TableTotalsRecord）
+  表达真实形状（total_row=Dict[int,float]、header_cols=Dict[str,int]）；
+  两处 `sum(Optional[Decimal])` 用显式标注的新列表变量过滤（mypy 对
+  重绑定/any(...) 不收窄）。`mypy src/` 全绿（79 源文件 0 错误）。
+
+### 验证（2026-09-09）
+- 相关测试 111 passed；全量 pytest **1079 passed + 1 skipped**；
+- Ruff 通过；mypy src/ 全绿（此前 4 项既有错误清零）；
+- 样张 legacy replay + GATE-PASS（hint 3/3）；shadow auto 拒绝、
+  `--mode structured` GATE-FAIL 如实；篡改 doc_id/SHA 均拒绝；
+- 历史 structured --limit 3：3/3 final 执行，removed=66、
+  coverage_gap=65，漂移聚合无崩溃。

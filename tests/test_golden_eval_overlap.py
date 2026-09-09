@@ -148,20 +148,23 @@ def test_location_key_anchor_ranks_not_gates():
         "page": 26,
         "evidence": "公务接待费 0.00 与 2024 年持平",
         "location_key": "sec:三公说明(一)公务接待费",
+        "section_title_phrases_aligned": ["三公经费支出决算情况说明"],
     }
-    # 两个候选都与标注重叠（数字 0.00 + 公务接待费片段），
+    # 两个候选都与标注重叠（数字 0.00 + 公务接待费片段）、同章节，
     # 但只有一个命中锚点短语（三公说明）
     unrelated_domain = {
         "rule": "V33-245",
         "page": 26,
         "message": "其他章节的问题",
         "evidence_text": "项目支出说明 公务接待费 0.00",  # evidence 驻留定位词
+        "section_id": "七、财政拨款“三公”经费支出决算情况说明",
     }
     matching_domain = {
         "rule": "V33-245",
         "page": 26,
         "message": "m",
         "evidence_text": "三公说明 公务接待费 0.00 表述矛盾",
+        "section_id": "七、财政拨款“三公”经费支出决算情况说明",
     }
     hit = match_annotation(ann, [unrelated_domain, matching_domain], set())
     assert hit is matching_domain
@@ -219,18 +222,21 @@ def test_anchor_constraint_eliminates_wrong_domain_when_correct_exists():
         "page": 26,
         "evidence": "「公务接待费支出决算减少为0.00万元」逻辑矛盾",
         "location_key": "sec:三公说明(一)公务接待费",
+        "section_title_phrases_aligned": ["三公经费支出决算情况说明"],
     }
     wrong_domain = {
         "rule": "V33-245",
         "page": 26,
         "message": "其他章节的公务接待费 0.00 万元问题",
         "evidence_text": "公务接待费 0.00",
+        "section_id": "七、财政拨款“三公”经费支出决算情况说明",
     }
     correct_domain = {
         "rule": "V33-245",
         "page": 26,
         "message": "三公说明：公务接待费支出决算减少为0.00万元表述矛盾",
         "evidence_text": "公务接待费 0.00",
+        "section_id": "七、财政拨款“三公”经费支出决算情况说明",
     }
     hit = match_annotation(ann, [wrong_domain, correct_domain], set())
     assert hit is correct_domain
@@ -456,6 +462,8 @@ def test_evaluate_hint_clustering_end_to_end(monkeypatch, tmp_path):
     replay_path.write_text(
         json.dumps(
             {
+                "doc_id": doc_id,
+                "sha256": "x" * 64,  # 与 golden 同源（R8 P1 绑定）
                 "legacy": {
                     "findings": [
                         {
@@ -556,6 +564,7 @@ def test_section_id_rejects_cross_section_candidate():
         "page": 26,
         "evidence": "公务接待费 0.00 与 2024 年持平",
         "location_key": "sec:三公说明(一)公务接待费",
+        "section_title_phrases_aligned": ["三公经费支出决算情况说明"],
     }
     wrong_section = {
         "rule": "V33-245",
@@ -574,6 +583,7 @@ def test_section_id_accepts_matching_section():
         "page": 26,
         "evidence": "公务接待费 0.00 与 2024 年持平",
         "location_key": "sec:三公说明(一)公务接待费",
+        "section_title_phrases_aligned": ["三公经费支出决算情况说明"],
     }
     matching = {
         "rule": "V33-245",
@@ -585,13 +595,18 @@ def test_section_id_accepts_matching_section():
     assert match_annotation(ann, [matching], set()) is matching
 
 
-def test_section_id_absent_falls_back_to_anchor_semantics():
-    """finding 无 section_id（旧产物/未迁移规则）→ 不惩罚，退回锚点语义。"""
+def test_section_id_missing_rejects_sec_annotation():
+    """sec 真值强制非空结构化章节标识（R8 P1 fail-open 关闭）。
+
+    此前无 section_id 的 finding 退回锚点语义即可晋升 TP——缺章节
+    标识的 finding 无法证明产自目标章节，必须拒配（FN/待复核）。
+    """
     ann = {
         "rule_id": "V33-245",
         "page": 26,
         "evidence": "公务接待费 0.00 与 2024 年持平",
         "location_key": "sec:三公说明(一)公务接待费",
+        "section_title_phrases_aligned": ["三公经费支出决算情况说明"],
     }
     legacy_finding = {
         "rule": "V33-245",
@@ -599,4 +614,139 @@ def test_section_id_absent_falls_back_to_anchor_semantics():
         "message": "m",
         "evidence_text": "公务接待费 0.00 与 2024 年持平",
     }
-    assert match_annotation(ann, [legacy_finding], set()) is legacy_finding
+    assert match_annotation(ann, [legacy_finding], set()) is None
+
+
+def test_section_id_full_phrase_matching_rejects_two_char_prefix():
+    """章节锚全短语匹配（R8 P1）：仅共享 2 字前缀的章节不得通过。
+
+    旧行为允许锚短语的 2 字前缀——「九、公务管理情况说明」仅与
+    「三公说明」共享「公」/「公务」即可命中三公真值（实测）。现在
+    必须整短语（或声明的章节标题短语）出现在 section_id 中。
+    """
+    ann = {
+        "rule_id": "V33-245",
+        "page": 26,
+        "evidence": "公务接待费 0.00 与 2024 年持平",
+        "location_key": "sec:三公说明(一)公务接待费",
+    }
+    # 未声明章节短语时，章节锚 = location_key 锚短语全量——两字前缀
+    # 不再放行「九、公务管理情况说明」（共享「公务」两字）
+    wrong_section = {
+        "rule": "V33-245",
+        "page": 26,
+        "message": "m",
+        "evidence_text": "公务接待费 0.00 与 2024 年持平",
+        "section_id": "九、公务管理情况说明",
+    }
+    assert match_annotation(ann, [wrong_section], set()) is None
+
+
+# ---------------------------------------------------------------------------
+# R8 P0：shadow replay 显式 mode + R8 P1：replay 身份绑定（doc_id/SHA）
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_rejects_tampered_doc_id_and_sha(monkeypatch, tmp_path):
+    """replay 身份绑定（R8 P1）：doc_id 不符或 SHA 不符都必须拒绝。
+
+    此前只校验内容不校验身份——篡改 replay 的 doc_id=DOC-WRONG、
+    sha256=deadbeef 后评估仍 GATE-PASS（实测）。
+    """
+    import json
+
+    import pytest
+
+    from scripts.evaluate_golden_corpus import evaluate
+
+    doc_id = "DOC-20260905-001"
+    corpus_dir = tmp_path / "corpus" / doc_id
+    corpus_dir.mkdir(parents=True)
+    golden = {
+        "doc_id": doc_id,
+        "sha256": "113b98bb5df18c264f9c589a1034d3bfc27ed65562b4bbbe72bfd33420f912c7",
+        "labels": [],
+    }
+    (corpus_dir / "golden.json").write_text(json.dumps(golden), encoding="utf-8")
+    monkeypatch.setattr(
+        "scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus"
+    )
+
+    replay_path = tmp_path / "replay.json"
+    replay_path.write_text(
+        json.dumps(
+            {"doc_id": "DOC-WRONG", "sha256": "d" * 64, "legacy": {"findings": []}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="doc_id"):
+        evaluate(doc_id, replay_path)
+
+    replay_path.write_text(
+        json.dumps(
+            {"doc_id": doc_id, "sha256": "deadbeef", "legacy": {"findings": []}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="SHA"):
+        evaluate(doc_id, replay_path)
+
+
+def test_evaluate_shadow_replay_requires_explicit_mode(monkeypatch, tmp_path):
+    """shadow replay 双结果不得静默取 legacy（R8 P0）。
+
+    structured 路径失败时（同一样张 4 findings/TP=0/FN=3），auto 必须
+    拒绝猜测；--mode structured 显式验收 structured 路径（如实呈现
+    召回缺口，而不是读 legacy 蒙混 GATE-PASS）。
+    """
+    import json
+
+    import pytest
+
+    from scripts.evaluate_golden_corpus import evaluate
+
+    doc_id = "DOC-20260905-001"
+    corpus_dir = tmp_path / "corpus" / doc_id
+    corpus_dir.mkdir(parents=True)
+    golden = {
+        "doc_id": doc_id,
+        "sha256": "113b98bb5df18c264f9c589a1034d3bfc27ed65562b4bbbe72bfd33420f912c7",
+        "labels": [
+            {
+                "annotation_id": "A-001",
+                "truth_id": "T1",
+                "label": "defect",
+                "rule_id": "V33-001",
+                "page": 2,
+                "expected_severity": "high",
+                "evidence": "目录行年度缺位",
+            }
+        ],
+    }
+    (corpus_dir / "golden.json").write_text(json.dumps(golden), encoding="utf-8")
+    monkeypatch.setattr(
+        "scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus"
+    )
+
+    replay_path = tmp_path / "replay.json"
+    replay_path.write_text(
+        json.dumps(
+            {
+                "doc_id": doc_id,
+                "sha256": "113b98bb5df18c264f9c589a1034d3bfc27ed65562b4bbbe72bfd33420f912c7",
+                "legacy": {"findings": []},
+                "structured": {"findings": []},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="--mode"):
+        evaluate(doc_id, replay_path)  # auto 遇双结果拒绝猜测
+    report = evaluate(doc_id, replay_path, mode="structured")
+    assert report["mode"] == "structured"
+    assert report["tp"] == 0 and report["fn"] == 1, (
+        "structured 缺陷召回缺口必须如实呈现，不得被 legacy 掩盖"
+    )

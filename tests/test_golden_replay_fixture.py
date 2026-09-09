@@ -189,3 +189,53 @@ def test_legacy_delta_keeps_full_rule_scope():
     assert set(delta) == {"V33-235", "V33-115"}
     assert gap == {}
     assert drift == []
+
+
+# ---------------------------------------------------------------------------
+# R8 P1：replay_historical 全链路聚合（漂移规则不崩溃）
+# ---------------------------------------------------------------------------
+
+
+def test_historical_aggregation_survives_drift_rule(tmp_path, monkeypatch):
+    """replay_historical 全链路：漂移规则进聚合不崩溃（R8 P1 复现防护）。
+
+    此前只测 _restricted_rule_delta；聚合层 scope 限定后未同步漂移域，
+    per_rule_delta 含 V33-999 而 agg 无该键 → docs_changed 累加 KeyError
+    （独立反例稳定复现）。修复后：漂移规则显式进入 rule_aggregate，
+    并留痕 adapter_scope_drift。
+    """
+    import scripts.replay_golden_corpus as mod
+
+    job_dir = tmp_path / "job-drift"
+    job_dir.mkdir()
+    (job_dir / "doc.pdf").write_bytes(b"pdf-bytes")
+    monkeypatch.setattr(mod, "UPLOADS_DIR", tmp_path)
+
+    def fake_replay(job_path, parse_mode="legacy"):
+        assert job_path.name == "job-drift"
+        assert parse_mode == "structured"
+        return {
+            "job_id": "job-drift",
+            "pdf": "doc.pdf",
+            "report_kind_old": "final",
+            "report_kind_new": "final",
+            "has_baseline": True,
+            "old_total": 3,
+            "new_total": 8,
+            "old_counts": {"V33-115": 3},
+            "new_counts": {"V33-115": 3, "V33-999": 5},
+            "per_rule_delta": {"V33-999": {"old": 0, "new": 5}},
+            "coverage_gap": {},
+            "out_of_scope_new": ["V33-999"],
+            "changed_total": 5,
+        }
+
+    monkeypatch.setattr(mod, "replay_historical_doc", fake_replay)
+    report = mod.replay_historical(
+        parse_mode="structured", limit=None, resume=False, workers=1
+    )
+    assert report["adapter_scope_drift"] == {"V33-999": 1}
+    entry = report["rule_aggregate"]["V33-999"]
+    assert entry["docs_changed"] == 1 and entry["new"] == 5, (
+        "漂移规则必须进入聚合（此前 KeyError 崩溃）"
+    )

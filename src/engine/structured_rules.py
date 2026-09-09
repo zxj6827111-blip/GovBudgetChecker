@@ -557,7 +557,7 @@ def build_parsed_tables(
     texts = list(page_texts or [])
     for p_idx, tables in enumerate(page_tables or [], start=1):
         page_text = texts[p_idx - 1] if 0 < p_idx <= len(texts) else ""
-        for raw in tables or []:
+        for t_idx, raw in enumerate(tables or []):
             title = "".join(
                 str(c or "") for c in (raw[0] if raw and raw[0] else [])
             )[:40]
@@ -568,10 +568,15 @@ def build_parsed_tables(
             page_anchor = _extract_anchor_table_name(page_text)
             if page_anchor:
                 parsed.anchor_table_name = page_anchor
-            # 相邻性：上一表与当前表同页或紧邻页（R3 语义）
+            # 相邻性：上一表与当前表同页或紧邻页（R3 语义）。
+            # R8 P2：同页第 2+ 张独立 raw table 默认禁止续表合并——同页
+            # 多表无 bbox 连续性证据，且都复用同一页面表名锚（同页「收入
+            # 决算表」+「支出决算表」结构相同时曾被误并为 1 张）。只有
+            # 该页第一张表才可能是上一页的续表（官方样张的真实续页形态）。
             adjacent = (
                 last_key is not None
                 and last_end_page in (p_idx, p_idx - 1)
+                and t_idx == 0
             )
             merged = False
             if adjacent and last_key in parsed_tables:

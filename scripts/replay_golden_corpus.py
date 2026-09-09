@@ -303,6 +303,26 @@ def _load_corpus_inputs(doc_dir: Path) -> Tuple[str, List[str], List[List[Any]]]
         (candidate for candidate in sorted(doc_dir.glob("*.pdf"))), None
     )
     if pdf_path is not None:
+        # R8 P1：有 PDF 也要核对 golden 声明的源 PDF SHA——此前该分支
+        # 直接返回，corpus PDF 被替换或与标注版本不一致仍静默回放
+        # （配合评估侧 doc_id/SHA 绑定，篡改链路在回放处即被切断）。
+        golden_path = doc_dir / "golden.json"
+        if not golden_path.exists():
+            raise FileNotFoundError(
+                f"no golden.json in corpus doc dir: {doc_dir}——"
+                "有 PDF 也必须有 golden 作同源证明（fail-closed，R8 P1）"
+            )
+        golden_sha = str(
+            json.loads(golden_path.read_text(encoding="utf-8")).get("sha256") or ""
+        ).strip()
+        pdf_sha = sha256_file(pdf_path)
+        if not golden_sha or pdf_sha != golden_sha:
+            raise RuntimeError(
+                f"{doc_dir.name} 的 PDF SHA({pdf_sha}) 与 golden 声明"
+                f"({golden_sha or '(空)'}) 不一致——corpus PDF 被替换或 golden "
+                "过期，请用 scripts/build_sample_fixture.py 重新生成"
+                "（fail-closed，R8 P1）"
+            )
         return (
             str(pdf_path),
             load_page_texts(pdf_path),
@@ -729,6 +749,10 @@ def replay_historical(
             rules = set(r["old_counts"]) | set(r["new_counts"])
             if scope is not None:
                 rules &= scope
+                # R8 P1：漂移规则（真实执行但未登记迁移集）已显式进入
+                # 单份 per_rule_delta——聚合必须同步补回该域，否则
+                # docs_changed 累加对域外键 KeyError（实测 V33-999 崩溃）
+                rules |= set(r.get("out_of_scope_new") or [])
             for rule in rules:
                 entry = agg.setdefault(rule, {"old": 0, "new": 0, "docs_changed": 0})
                 entry["old"] += r["old_counts"].get(rule, 0)

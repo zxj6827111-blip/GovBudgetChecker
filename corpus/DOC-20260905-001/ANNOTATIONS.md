@@ -141,3 +141,29 @@ evidence/expected_severity 未动）：
   接待费」）不得晋升 TP；
 - 样张复验：hint 真值命中 3/3（证据面 4/4）、TP=3 FP=0 FN=0、
   GATE-PASS。
+
+## 2026-09-09 修订（GPT5.6 R8 P1：sec 章节锚收紧，golden.json v3 增补）
+
+背景：评估器 sec 锚校验此前 fail-open——finding 缺失 section_id 时
+退回锚点语义即可晋升 TP；章节匹配允许 2 字前缀（「九、公务管理情况
+说明」仅共享「公务」两字即可命中三公真值，实测）。R8 收紧为：
+sec 真值强制非空结构化 section_id + **全短语**章节锚匹配（不做前缀
+宽松）。
+
+增补内容（仅新增字段，标注本体 label/rule_id/page/evidence/
+expected_severity 未动）：
+- 新增 `section_title_phrases_aligned` 字段（章节标题短语，与
+  section_phrases_aligned 的 evidence 驻留词职责分离）：
+  - A-002：`["三公经费支出决算情况说明"]`（V33-245 finding 的
+    section_id 归一后整短语包含）；
+  - A-003：`["三公经费支出决算情况说明"]`（保留原 section_
+    phrases_aligned 的 evidence 词不变）。
+- R5 记录「A-002 无 section_phrases_aligned」依旧成立（该字段仍未
+  声明）；新约束走独立字段，不再依赖 evidence 拼章节词。
+
+配套（同轮）：
+- 评估器 `--mode` 显式化（R8 P0）：shadow replay 双结果 auto 拒绝
+  猜测，必须 `--mode legacy|structured`——structured 路径失败不再
+  被 legacy 掩盖（样张 structured 4 findings/TP=0/FN=3 实测 GATE-FAIL）；
+- 评估器校验 replay doc_id + sha256 与 golden 一致（R8 P1）——篡改
+  DOC-WRONG / sha256=deadbeef 均 EVAL-REJECTED（exit 2）。

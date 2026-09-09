@@ -39,6 +39,9 @@
    "location_key": "sec:三公说明(一)公务接待费",
    "expected_severity": "medium",
    "evidence": "「公务接待费支出决算减少为0.00万元，与2024年持平」逻辑矛盾（2024 为 0 应称持平）",
+   "section_title_phrases_aligned": [
+    "三公经费支出决算情况说明"
+   ],
    "confidence": 0.97
   },
   {
@@ -55,6 +58,13 @@
    "confidence": 0.95,
    "anchor_phrases_aligned": [
     "国内公务接待"
+   ],
+   "section_phrases_aligned": [
+    "接待外宾",
+    "国内公务接待"
+   ],
+   "section_title_phrases_aligned": [
+    "三公经费支出决算情况说明"
    ]
   },
   {

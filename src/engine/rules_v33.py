@@ -92,7 +92,7 @@ def order_and_number_issues(doc, issues):
 # engine/rules_v33.py  —— v3.3 规则（修正版）
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, TypedDict
 
 import os
 import re
@@ -2509,7 +2509,12 @@ class R33115_TotalSheetCheck(Rule):
             values = [side_component(side, label) for label in components]
             if any(v is None for v in values):
                 continue
-            calc = sum(values, Decimal("0"))
+            # mypy 无法从 any(...)/重绑定收窄 Optional 列表：显式标注
+            # 新变量过滤后再求和（R8 P2）
+            numeric_values: List[Decimal] = [
+                v for v in values if v is not None
+            ]
+            calc = sum(numeric_values, Decimal("0"))
             level, diff = classify_amount_diff(total, calc, n_children=len(components))
             side_label = "收入" if side == "income" else "支出"
             if level == "mismatch":
@@ -2613,6 +2618,19 @@ class R33119_FiscalTotalCheck(Rule):
         return issues
 
 
+class _TableTotalsRecord(TypedDict):
+    """R33120 跨表同口径对比的记录形状（R8 P2：mypy 收窄）。
+
+    此前标注 Dict[str, Dict[str, float]] 与真实形状（total_row 为
+    Dict[int, float]、header_cols 为 Dict[str, int]）不符，mypy 报
+    dict-item 类型错误——用 TypedDict 表达真实结构。
+    """
+
+    total_row: Dict[int, float]
+    header_cols: Dict[str, int]
+    width: int
+
+
 class R33120_DetailTableCheck(Rule):
     code, severity = "V33-120", "warn"
     desc = "明细表勾稽关系与层级校验 (Table 2, 3, 5)"
@@ -2641,7 +2659,7 @@ class R33120_DetailTableCheck(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
         target_tables = ["收入决算表", "支出决算表", "一般公共预算财政拨款支出决算表"]
-        table_totals: Dict[str, Dict[str, float]] = {}
+        table_totals: Dict[str, _TableTotalsRecord] = {}
         found_any_table = False
 
         for table_name in target_tables:
@@ -2906,7 +2924,8 @@ class R33117_BasicExpenseClassification(Rule):
             values = [class_amounts.get(c) for c in codes]
             if any(v is None for v in values):
                 return None
-            return sum(values, Decimal("0"))
+            numeric: List[Decimal] = [v for v in values if v is not None]
+            return sum(numeric, Decimal("0"))
 
         checks = [
             ("人员经费", explicit.get("人员经费合计"), class_sum(self._PERSONNEL_CLASSES), self._PERSONNEL_CLASSES),

@@ -410,3 +410,21 @@ def test_code_column_number_form_is_recognized():
     assert table.named_columns.get("code") == 0
     codes = [r.code for r in table.rows]
     assert codes == [None, "301", "30101"]
+
+
+def test_build_parsed_tables_same_page_two_tables_never_merge():
+    """同页两张同结构业务表不得误合并（R8 P2 复现防护）。
+
+    同页「收入决算表」与「支出决算表」结构相同（项目/决算数）时，
+    此前同页复用同一表名锚 + 签名兼容 → 误并为 1 张（实测 table_count=1）。
+    同页第 2 张 raw table 无 bbox 连续性证据，默认独立成表。
+    """
+    raw = [
+        ["项目", "决算数"],
+        ["类", "款", "项", "合计"],
+        ["208", "", "", "471.44"],
+    ]
+    tables = build_parsed_tables(
+        [[raw, raw]], ["收入决算表\n支出决算表\n"]
+    )
+    assert len(tables) == 2, f"同页两表应独立: {len(tables)}"
