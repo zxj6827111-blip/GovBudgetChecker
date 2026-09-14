@@ -21,11 +21,6 @@ from src.utils.issue_display import build_issue_display
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-_GENERATED_PDF_NAMES = {
-    "annotated.pdf",
-    "report.pdf",
-    "report_annotated.pdf",
-}
 _SEVERITY_COLORS: Dict[str, Tuple[float, float, float]] = {
     "critical": (0.82, 0.16, 0.12),
     "high": (0.87, 0.22, 0.18),
@@ -763,10 +758,12 @@ def _resolve_source_pdf(job_id: str, status_payload: Dict[str, Any]) -> Path:
         if isinstance(meta, dict):
             _append_candidate(meta.get("saved_path"))
 
-    for candidate in sorted(job_dir.glob("*.pdf")):
-        if candidate.name in _GENERATED_PDF_NAMES:
-            continue
-        candidates.append(candidate)
+    # 没有 status 明确的原件时，多 PDF 任务必须 fail-closed；按文件名
+    # 排序猜测会把 annotated/report 派生件当成原件，破坏导出证据链。
+    try:
+        candidates.append(runtime.find_first_pdf(job_dir))
+    except (FileNotFoundError, ValueError):
+        pass
 
     for candidate in candidates:
         if candidate.exists() and candidate.is_file() and candidate.suffix.lower() == ".pdf":

@@ -24,6 +24,7 @@ import aiofiles
 from fastapi import HTTPException, Request, UploadFile
 
 from api import queue_runtime
+from src.services.pdf_selection import select_canonical_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -248,11 +249,8 @@ def get_job_version_timestamp(
 
 
 def find_first_pdf(job_dir: Path) -> Path:
-    """Return the first PDF in a job directory."""
-    pdfs = sorted(job_dir.glob("*.pdf"))
-    if not pdfs:
-        raise FileNotFoundError("PDF file not found under job directory")
-    return pdfs[0]
+    """Return the canonical PDF recorded by the job, failing closed if ambiguous."""
+    return select_canonical_pdf(job_dir)
 
 
 def read_json_file(
@@ -1438,14 +1436,13 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
 
     pdf_path: Optional[Path] = None
     try:
-        pdfs = sorted(job_dir.glob("*.pdf"))
-        if pdfs:
-            pdf_path = pdfs[0]
+        pdf_path = find_first_pdf(job_dir)
+        if pdf_path:
             filename = pdf_path.name
             pdf_stat = pdf_path.stat()
             pdf_mtime_ns = pdf_stat.st_mtime_ns
             pdf_size = pdf_stat.st_size
-    except Exception:
+    except (FileNotFoundError, ValueError, OSError):
         pdf_path = None
 
     structured_path = get_structured_ingest_path(job_dir)
@@ -2003,8 +2000,26 @@ def iter_job_dirs() -> List[Path]:
     return [
         path
         for path in UPLOAD_ROOT.iterdir()
-        if path.is_dir() and not path.name.startswith(".")
+        if path.is_dir()
+        and not path.name.startswith(".")
+        and _looks_like_job_dir(path)
     ]
+
+
+def _looks_like_job_dir(path: Path) -> bool:
+    """任务目录判定：含 status.json 或 PDF 文件才算任务目录。
+
+    uploads/ 下可能遗留非任务目录（如 QC 报告输出目录 reports/），它们
+    没有 status.json 也没有 PDF。若被当作任务目录，collect_job_summary 会
+    给出 status="unknown"，前端 normalizeUiTaskStatus 的兜底分支把它归为
+    analyzing，导致处理队列角标恒为 1（该"正在处理"任务实际并不存在）。
+    """
+    if (path / "status.json").exists():
+        return True
+    try:
+        return any(p.suffix.lower() == ".pdf" for p in path.iterdir())
+    except OSError:
+        return False
 
 
 def resolve_job_department_context(

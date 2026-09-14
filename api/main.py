@@ -301,10 +301,13 @@ def _safe_write(job_dir: Path, payload: Dict[str, Any]) -> None:
 
 
 def _find_first_pdf(job_dir: Path) -> Path:
-    pdfs = sorted(job_dir.glob("*.pdf"))
-    if not pdfs:
-        raise FileNotFoundError("未在该 job 目录下找到 PDF 文件")
-    return pdfs[0]
+    # 统一使用 runtime 的 canonical-PDF 选择逻辑：多 PDF 任务必须由
+    # status.json 的 filename/saved_path 唯一指向原件，不能把 annotated
+    # 派生文件按字母序误当成输入。
+    try:
+        return runtime.find_first_pdf(job_dir)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError("未在该 job 目录下找到 PDF 文件") from exc
 
 
 def _extract_tables_from_page(page) -> List[List[List[str]]]:
