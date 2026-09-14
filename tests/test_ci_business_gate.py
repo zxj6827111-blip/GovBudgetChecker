@@ -16,12 +16,15 @@
 
 from __future__ import annotations
 
+import copy
+import json
 from pathlib import Path
 from typing import Dict, List
 
 import pytest
 
 from scripts.check_replay_thresholds import (
+    check_evidence_completeness,
     evaluate,
     load_report,
     main as gate_main,
@@ -41,6 +44,7 @@ def _results(corpus: str) -> Dict[str, bool]:
 def test_pass_corpus_satisfies_every_check() -> None:
     results = _results("pass")
     assert results == {
+        "replay_integrity": True,
         "report_id_uniqueness": True,
         "completed_jobs_have_page_coverage": True,
         "done_jobs_min_page_coverage": True,
@@ -77,20 +81,18 @@ def test_pass_corpus_fails_when_thresholds_are_tightened() -> None:
     baseline = {item.name: item.passed for item in evaluate(report)}
     assert baseline["done_jobs_min_page_coverage"] is True
 
-    tightened = {
-        item.name: item.passed for item in evaluate(report, min_page_coverage=0.99)
-    }
+    tightened = {item.name: item.passed for item in evaluate(report, min_page_coverage=0.99)}
     assert tightened["done_jobs_min_page_coverage"] is False
 
     # 证据完整率同理
-    assert {
-        item.name: item.passed for item in evaluate(report, min_evidence_rate=1.01)
-    }["evidence_completeness_rate"] is False
+    assert {item.name: item.passed for item in evaluate(report, min_evidence_rate=1.01)}[
+        "evidence_completeness_rate"
+    ] is False
 
     # unknown 比例同理（pass 语料里 1/4 是 unknown）
-    assert {
-        item.name: item.passed for item in evaluate(report, max_unknown_kind_ratio=0.1)
-    }["unknown_report_kind_ratio"] is False
+    assert {item.name: item.passed for item in evaluate(report, max_unknown_kind_ratio=0.1)}[
+        "unknown_report_kind_ratio"
+    ] is False
 
 
 def test_missing_data_source_requires_explicit_allow_missing(tmp_path, capsys) -> None:
@@ -106,12 +108,142 @@ def test_missing_data_source_requires_explicit_allow_missing(tmp_path, capsys) -
     assert "不代表业务质量达标" in output
 
 
+@pytest.mark.parametrize(
+    "option_value",
+    [
+        ("--min-page-coverage", "nan"),
+        ("--min-page-coverage", "-inf"),
+        ("--min-evidence-rate", "-0.1"),
+        ("--max-unknown-kind-ratio", "1.1"),
+    ],
+)
+def test_cli_rejects_invalid_thresholds(option_value) -> None:
+    option, value = option_value
+    with pytest.raises(SystemExit) as exc_info:
+        gate_main(["--uploads", str(_FIXTURES / "pass"), option, value])
+    assert exc_info.value.code == 2
+
+
+def test_gate_cli_handles_non_mapping_summary_without_crashing(tmp_path, capsys) -> None:
+    report_path = tmp_path / "malformed.json"
+    report_path.write_text(json.dumps({"summary": "not-a-mapping", "jobs": []}), encoding="utf-8")
+
+    assert gate_main(["--report", str(report_path), "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["passed"] is False
+    assert payload["job_total"] is None
+
+
 def test_gate_reports_limitation_in_human_output(capsys) -> None:
     """门禁输出必须自带"不度量召回率"的免责说明，避免被误读成业务质量达标。"""
     assert gate_main(["--uploads", str(_FIXTURES / "pass")]) == 0
     output = capsys.readouterr().out
     assert "Golden Corpus" in output
     assert "召回率" in output
+
+
+def test_malformed_or_empty_report_fails_closed() -> None:
+    """空报告与缺失结构不能把结构性门禁变成假绿。"""
+    empty = {"summary": {}, "jobs": []}
+    results = {item.name: item.passed for item in evaluate(empty)}
+    assert not all(results.values())
+    assert results["report_id_uniqueness"] is False
+    assert results["completed_jobs_have_page_coverage"] is False
+    assert results["evidence_completeness_rate"] is False
+    assert results["unknown_report_kind_ratio"] is False
+
+    valid = load_report(report_path=None, uploads=str(_FIXTURES / "pass"))
+    assert valid is not None
+
+    without_evidence = copy.deepcopy(valid)
+    del without_evidence["summary"]["evidence_completeness"]
+    assert {item.name: item.passed for item in evaluate(without_evidence)}[
+        "evidence_completeness_rate"
+    ] is False
+
+    without_unknown = copy.deepcopy(valid)
+    del without_unknown["summary"]["unknown_report_kind"]
+    assert {item.name: item.passed for item in evaluate(without_unknown)}[
+        "unknown_report_kind_ratio"
+    ] is False
+
+    without_jobs = copy.deepcopy(valid)
+    del without_jobs["jobs"]
+    assert {item.name: item.passed for item in evaluate(without_jobs)}[
+        "completed_jobs_have_page_coverage"
+    ] is False
+
+    malformed_jobs = copy.deepcopy(valid)
+    malformed_jobs["jobs"] = [{}]
+    assert {item.name: item.passed for item in evaluate(malformed_jobs)}[
+        "completed_jobs_have_page_coverage"
+    ] is False
+
+
+def test_report_id_coverage_is_required_even_without_collisions() -> None:
+    report = load_report(report_path=None, uploads=str(_FIXTURES / "pass"))
+    assert report is not None
+    report["summary"]["report_id_uniqueness"].update(
+        {
+            "total_jobs": 4,
+            "jobs_with_report_id": 3,
+            "jobs_without_report_id": 1,
+            "identity_complete": False,
+        }
+    )
+
+    result = {item.name: item.passed for item in evaluate(report)}
+    assert result["report_id_uniqueness"] is False
+
+
+@pytest.mark.parametrize("invalid_ratio", [float("nan"), float("inf"), -0.1, 1.1, True])
+def test_ratio_checks_reject_non_finite_out_of_range_and_boolean_values(
+    invalid_ratio,
+) -> None:
+    report = load_report(report_path=None, uploads=str(_FIXTURES / "pass"))
+    assert report is not None
+    report["summary"]["unknown_report_kind"]["ratio"] = invalid_ratio
+    result = {item.name: item.passed for item in evaluate(report)}["unknown_report_kind_ratio"]
+    assert result is False
+
+
+def test_replay_integrity_rejects_skipped_directories_and_count_mismatch() -> None:
+    report = load_report(report_path=None, uploads=str(_FIXTURES / "pass"))
+    assert report is not None
+
+    report["skipped_count"] = 1
+    report["skipped_dirs"] = ["broken-job"]
+    assert {item.name: item.passed for item in evaluate(report)}["replay_integrity"] is False
+
+    report["skipped_count"] = 0
+    report["skipped_dirs"] = ["stale-entry"]
+    assert {item.name: item.passed for item in evaluate(report)}["replay_integrity"] is False
+
+
+def test_replay_integrity_recomputes_summary_from_job_rows() -> None:
+    """摘要被篡改时，不能仅因 jobs 数量仍相等就让报告假绿。"""
+    report = load_report(report_path=None, uploads=str(_FIXTURES / "pass"))
+    assert report is not None
+    report["summary"]["unknown_report_kind"]["count"] = 0
+    report["summary"]["unknown_report_kind"]["ratio"] = 0.0
+
+    result = {item.name: item for item in evaluate(report)}["replay_integrity"]
+    assert result.passed is False
+    assert "summary.unknown_report_kind" in result.detail
+
+
+def test_ratio_checks_reject_inconsistent_counts_and_rates() -> None:
+    report = load_report(report_path=None, uploads=str(_FIXTURES / "pass"))
+    assert report is not None
+
+    report["summary"]["unknown_report_kind"]["ratio"] = 0.0
+    assert {item.name: item.passed for item in evaluate(report)}["unknown_report_kind_ratio"] is False
+
+    report = load_report(report_path=None, uploads=str(_FIXTURES / "pass"))
+    assert report is not None
+    evidence = report["summary"]["evidence_completeness"]
+    evidence["findings_complete"] = evidence["findings_total"] + 1
+    assert {item.name: item.passed for item in evaluate(report)}["evidence_completeness_rate"] is False
 
 
 def test_evidence_gate_uses_locatable_rate_and_falls_back() -> None:
@@ -148,9 +280,9 @@ def test_evidence_gate_uses_locatable_rate_and_falls_back() -> None:
             }
         }
     }
-    assert {
-        i.name: i.passed for i in evaluate(legacy_format)
-    }["evidence_completeness_rate"] is False
+    assert {i.name: i.passed for i in evaluate(legacy_format)}[
+        "evidence_completeness_rate"
+    ] is False
 
     document_level_only = {
         "summary": {
@@ -165,9 +297,18 @@ def test_evidence_gate_uses_locatable_rate_and_falls_back() -> None:
             }
         }
     }
-    assert {
-        i.name: i.passed for i in evaluate(document_level_only)
-    }["evidence_completeness_rate"] is True
+    assert {i.name: i.passed for i in evaluate(document_level_only)}[
+        "evidence_completeness_rate"
+    ] is True
+
+    missing_zero_rate = {
+        "summary": {
+            "evidence_completeness": {
+                "findings_total": 0,
+            }
+        }
+    }
+    assert check_evidence_completeness(missing_zero_rate, 0.99).passed is False
 
 
 def test_migration_script_requires_database_url(capsys) -> None:

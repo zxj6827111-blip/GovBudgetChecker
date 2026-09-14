@@ -64,7 +64,7 @@ def test_real_database_fixture_skips_without_opt_in() -> None:
 
 
 @pytest.mark.slow
-def test_child_pytest_ignores_external_database_url() -> None:
+def test_child_pytest_ignores_external_database_url(tmp_path: Path) -> None:
     """端到端证据：带着外部 DATABASE_URL 启动 pytest，隔离断言仍然通过。
 
     只选中单个测试节点执行，避免子进程再次触发本用例导致无限递归。
@@ -82,6 +82,8 @@ def test_child_pytest_ignores_external_database_url() -> None:
             "-q",
             "-p",
             "no:cacheprovider",
+            "--basetemp",
+            str(tmp_path / "child-basetemp"),
             _GUARD_NODE_ID,
         ],
         cwd=str(_REPO_ROOT),

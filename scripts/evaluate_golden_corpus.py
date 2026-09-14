@@ -31,9 +31,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import os
 import re
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -54,6 +57,11 @@ sys.path.insert(0, str(ROOT))
 
 CORPUS_DIR = ROOT / "corpus"
 OUTPUT_DIR = ROOT / "outputs" / "golden_eval"
+
+# structured 结果只有在真正消费 parsed_tables 的规则覆盖率达到该阈值
+# 后才允许作为独立交付路径通过 Golden Gate。这个阈值与
+# scripts/replay_golden_corpus.py 保持一致；缺失/不一致一律 fail-closed。
+STRUCTURED_READY_MIN_COVERAGE = 0.9
 
 # severity 归一：finding 的 severity 词表 → 标注词表
 _SEVERITY_ALIASES = {
@@ -97,6 +105,7 @@ def _page_of(finding: Dict[str, Any]) -> Optional[int]:
 # 短证据永远匹配不上的盲区（review 🟡1）。
 # ---------------------------------------------------------------------------
 
+
 def _normalize_for_overlap(text: Any) -> str:
     """去掉空白与标点，只保留字母数字与 CJK 字符，统一小写。"""
     return re.sub(r"[^\w\u4e00-\u9fff]+", "", str(text or "").lower())
@@ -122,8 +131,7 @@ def _distinctive_numeric_tokens(text: Any) -> set:
     return {
         t
         for t in _numeric_tokens(text)
-        if ("." in t or len(t) >= 3)
-        and not (re.fullmatch(r"(?:19|20)\d{2}", t) and "." not in t)
+        if ("." in t or len(t) >= 3) and not (re.fullmatch(r"(?:19|20)\d{2}", t) and "." not in t)
     }
 
 
@@ -133,9 +141,7 @@ def evidence_overlaps(annotation_evidence: Any, finding: Dict[str, Any]) -> bool
     if not ann_norm:
         # 标注本身没写 evidence：退回规则+页码匹配（不惩罚标注侧的缺失）
         return True
-    finding_text = " ".join(
-        str(finding.get(key) or "") for key in ("evidence_text", "message")
-    )
+    finding_text = " ".join(str(finding.get(key) or "") for key in ("evidence_text", "message"))
     find_norm = _normalize_for_overlap(finding_text)
     if not find_norm:
         return False
@@ -159,7 +165,6 @@ def evidence_overlaps(annotation_evidence: Any, finding: Dict[str, Any]) -> bool
     if len(ann_norm) < 4 and ann_norm in find_norm:
         return True
     return False
-
 
 
 def _anchor_phrases(anchor: str) -> List[str]:
@@ -217,9 +222,7 @@ def _anchor_hit_count(phrases: List[str], finding: Dict[str, Any]) -> int:
     message 模板固定含「三公说明」，把它算进命中等于规则文案自证
     章节，任何该规则 finding 都自动过锚点，防线形同虚设）。
     """
-    finding_norm = _normalize_for_overlap(
-        str(finding.get("evidence_text") or "")
-    )
+    finding_norm = _normalize_for_overlap(str(finding.get("evidence_text") or ""))
     return sum(1 for phrase in phrases if phrase in finding_norm)
 
 
@@ -248,9 +251,7 @@ def match_annotation(
     # （V33-202 原始标注 + V33-120 当前实现近似路径均可）；旧字段
     # rule_id 兼容
     allowed_rules = {
-        str(r).strip().upper()
-        for r in (annotation.get("allowed_rule_ids") or [])
-        if str(r).strip()
+        str(r).strip().upper() for r in (annotation.get("allowed_rule_ids") or []) if str(r).strip()
     }
     legacy_rule = str(annotation.get("rule_id") or "").strip().upper()
     if legacy_rule and legacy_rule not in allowed_rules:
@@ -271,9 +272,7 @@ def match_annotation(
         if not evidence_overlaps(annotation_evidence, finding):
             continue
         # 综合得分：区分度数字交集 > 锚点命中数 > 共享文本片段长度
-        finding_text = " ".join(
-            str(finding.get(key) or "") for key in ("evidence_text", "message")
-        )
+        finding_text = " ".join(str(finding.get(key) or "") for key in ("evidence_text", "message"))
         shared_nums = len(
             _distinctive_numeric_tokens(annotation_evidence)
             & _distinctive_numeric_tokens(finding_text)
@@ -284,8 +283,7 @@ def match_annotation(
         shared_text = 0
         for size in range(min(len(ann_norm), len(find_norm)), 5, -1):
             if ann_norm[:size] in find_norm or any(
-                ann_norm[i : i + size] in find_norm
-                for i in range(0, len(ann_norm) - size + 1)
+                ann_norm[i : i + size] in find_norm for i in range(0, len(ann_norm) - size + 1)
             ):
                 shared_text = size
                 break
@@ -321,11 +319,7 @@ def match_annotation(
         # `if section_anchors:` 内，location_key="sec:情况说明" 这类短语
         # 被通用词过滤后无有效锚，缺失 section_id 的 finding 仍可晋升
         # TP（实测绕过）。章节标识是非空硬前提，与锚无关。
-        candidates = [
-            c
-            for c in candidates
-            if str(c[1].get("section_id") or "").strip()
-        ]
+        candidates = [c for c in candidates if str(c[1].get("section_id") or "").strip()]
         if not candidates:
             return None  # sec 真值缺结构化章节标识：不得晋升 TP
         declared_section = [
@@ -337,9 +331,7 @@ def match_annotation(
         if section_anchors:
             section_candidates = []
             for c in candidates:
-                section_norm = _normalize_for_overlap(
-                    str(c[1].get("section_id") or "")
-                )
+                section_norm = _normalize_for_overlap(str(c[1].get("section_id") or ""))
                 if any(anchor in section_norm for anchor in section_anchors):
                     section_candidates.append(c)
             if not section_candidates:
@@ -353,9 +345,7 @@ def match_annotation(
     #   章节词不构成异常；硬拒配只会误伤（样张 A-002 实测——V33-245
     #   的 evidence 模板是矛盾分句拼接，天然不含章节词）。
     declared_marks = [
-        m
-        for m in annotation.get("section_phrases_aligned") or []
-        if _normalize_for_overlap(m)
+        m for m in annotation.get("section_phrases_aligned") or [] if _normalize_for_overlap(m)
     ]
     if declared_marks:
         normalized_marks = [_normalize_for_overlap(m) for m in declared_marks]
@@ -364,9 +354,7 @@ def match_annotation(
             for c in candidates
         }
         section_hit = [
-            c
-            for c in candidates
-            if any(m in finding_norm_of[id(c[1])] for m in normalized_marks)
+            c for c in candidates if any(m in finding_norm_of[id(c[1])] for m in normalized_marks)
         ]
         if not section_hit:
             return None  # 声明的章节词零命中：跨章节候选不晋升 TP
@@ -448,6 +436,23 @@ def _consume_truth_annotations(
     return matched, missed, len(hit_groups)
 
 
+def _group_accuracy(matched: List[Dict[str, Any]], field: str) -> Optional[float]:
+    """按命中真值组计算准确率，避免证据面重复放大分子。
+
+    同一真值组的多个 evidence faces 仍保留在 matched 中供审计，但一个组
+    对指标最多贡献一次。若一个组的多个已匹配面在该指标上有任一错误，
+    该组按错误计，避免正确面掩盖同组的错误面。
+    """
+    if not matched:
+        return None
+    statuses_by_group: Dict[str, List[bool]] = {}
+    for item in matched:
+        group = str(item.get("truth_group") or "")
+        statuses_by_group.setdefault(group, []).append(bool(item.get(field)))
+    correct_groups = sum(1 for statuses in statuses_by_group.values() if all(statuses))
+    return round(correct_groups / len(statuses_by_group), 4)
+
+
 def evaluate(doc_id: str, replay_path: Path, mode: str = "auto") -> Dict[str, Any]:
     golden_path = CORPUS_DIR / doc_id / "golden.json"
     golden = json.loads(golden_path.read_text(encoding="utf-8"))
@@ -475,19 +480,16 @@ def evaluate(doc_id: str, replay_path: Path, mode: str = "auto") -> Dict[str, An
     # 此前无条件取 legacy，structured 路径失败被静默掩盖（实测同一样张
     # structured 4 findings / TP=0 / FN=3，shadow 仍 GATE-PASS）。
     # auto 只用于单结果 replay；双结果必须显式 --mode 指定验收对象。
-    legacy_run = (
-        replay.get("legacy") if isinstance(replay.get("legacy"), dict) else None
-    )
+    legacy_run = replay.get("legacy") if isinstance(replay.get("legacy"), dict) else None
     structured_run = (
-        replay.get("structured")
-        if isinstance(replay.get("structured"), dict)
-        else None
+        replay.get("structured") if isinstance(replay.get("structured"), dict) else None
     )
     runs_present = [
         name
         for name, run in (("legacy", legacy_run), ("structured", structured_run))
         if run is not None
     ]
+    selected_mode = mode
     if mode == "auto":
         if legacy_run is not None and structured_run is not None:
             raise ValueError(
@@ -495,21 +497,28 @@ def evaluate(doc_id: str, replay_path: Path, mode: str = "auto") -> Dict[str, An
                 "--mode legacy|structured 指定验收对象（auto 拒绝猜测，"
                 "避免 structured 路径失败被 legacy 掩盖，R8 P0）"
             )
-        run = legacy_run or structured_run or {}
+        if legacy_run is not None:
+            selected_mode = "legacy"
+            run = legacy_run
+        elif structured_run is not None:
+            selected_mode = "structured"
+            run = structured_run
+        else:
+            run = {}
     elif mode == "legacy":
         if legacy_run is None:
             raise ValueError(
-                f"replay 无 legacy 结果（现有: {runs_present}），"
-                "无法按 --mode legacy 验收"
+                f"replay 无 legacy 结果（现有: {runs_present}），无法按 --mode legacy 验收"
             )
         run = legacy_run
+        selected_mode = "legacy"
     elif mode == "structured":
         if structured_run is None:
             raise ValueError(
-                f"replay 无 structured 结果（现有: {runs_present}），"
-                "无法按 --mode structured 验收"
+                f"replay 无 structured 结果（现有: {runs_present}），无法按 --mode structured 验收"
             )
         run = structured_run
+        selected_mode = "structured"
     else:
         # 直接调用方传错 mode（绕过 argparse choices）时必须明确失败，
         # 不得静默落入 structured 分支（/review 加固）
@@ -536,10 +545,7 @@ def evaluate(doc_id: str, replay_path: Path, mode: str = "auto") -> Dict[str, An
                 "章节校验（fail-closed，R9 P1）"
             )
     defects = [lb for lb in labels if lb.get("label") == "defect"]
-    hints = [
-        lb for lb in labels
-        if lb.get("label") in ("rounding_hint", "manual_review")
-    ]
+    hints = [lb for lb in labels if lb.get("label") in ("rounding_hint", "manual_review")]
     acceptable = [lb for lb in labels if lb.get("label") == "acceptable"]
 
     matched: List[Dict[str, Any]] = []
@@ -552,9 +558,7 @@ def evaluate(doc_id: str, replay_path: Path, mode: str = "auto") -> Dict[str, An
     # 同一真值的多个证据面（T4a/T4b → 组 T4）任一命中即该真值命中，
     # 组内其余面不再要求独立命中（也不计入 missed）；整组全部面都
     # 未命中才计 1 个 missed——召回缺口按真值计，不按标注面放大。
-    matched, missed, _ = _consume_truth_annotations(
-        defects, findings, matched_finding_ids
-    )
+    matched, missed, _ = _consume_truth_annotations(defects, findings, matched_finding_ids)
     hint_matched, hint_missed, hint_groups_hit = _consume_truth_annotations(
         hints, findings, matched_finding_ids
     )
@@ -573,8 +577,8 @@ def evaluate(doc_id: str, replay_path: Path, mode: str = "auto") -> Dict[str, An
     # 不是误报（HANDOFF §2 三档真值模型）
     fp = sum(1 for finding in findings if id(finding) not in matched_finding_ids)
 
-    severity_ok = [item for item in matched if item["severity_ok"]]
-    page_ok = [item for item in matched if item["page_ok"]]
+    severity_accuracy = _group_accuracy(matched, "severity_ok")
+    page_accuracy = _group_accuracy(matched, "page_ok")
 
     # 证据可定位率（GPT5.6 R2 P1-2 强化）：正式 finding 需要**双证据**——
     # 页码 + 非空 evidence_text/message（此前只查页码，"有页码无证据文本"
@@ -588,9 +592,7 @@ def evaluate(doc_id: str, replay_path: Path, mode: str = "auto") -> Dict[str, An
     def _has_text_evidence(f: Dict[str, Any]) -> bool:
         return bool(str(f.get("evidence_text") or "").strip())
 
-    locatable = [
-        f for f in findings if _page_of(f) is not None and _has_text_evidence(f)
-    ]
+    locatable = [f for f in findings if _page_of(f) is not None and _has_text_evidence(f)]
     unlocatable = [f for f in findings if f not in locatable]
     locatable_rate = round(len(locatable) / len(findings), 4) if findings else None
 
@@ -614,12 +616,28 @@ def evaluate(doc_id: str, replay_path: Path, mode: str = "auto") -> Dict[str, An
 
     return {
         "doc_id": doc_id,
-        "mode": mode,
+        # 报告记录实际被评测的结果模式。auto 选择单一 structured 结果
+        # 时不能继续写成 auto，否则 structured readiness 门禁会被绕过。
+        "mode": selected_mode,
         "runs_present": runs_present,
-        "replay": str(replay_path.relative_to(ROOT)) if replay_path.is_relative_to(ROOT) else str(replay_path),
+        "replay": str(replay_path.relative_to(ROOT))
+        if replay_path.is_relative_to(ROOT)
+        else str(replay_path),
         "evaluated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "finding_total": len(findings),
         "rule_counts": run.get("rule_counts", {}),
+        "structured_ready": (
+            run.get("structured_ready") if selected_mode == "structured" else None
+        ),
+        "structured_coverage": (
+            run.get("structured_coverage") if selected_mode == "structured" else None
+        ),
+        "structured_consumer_count": (
+            run.get("parsing_consumer_count") if selected_mode == "structured" else None
+        ),
+        "structured_final_rule_total": (
+            run.get("final_rule_total") if selected_mode == "structured" else None
+        ),
         "tp": tp,
         "fp": fp,
         "fn": fn,
@@ -632,19 +650,16 @@ def evaluate(doc_id: str, replay_path: Path, mode: str = "auto") -> Dict[str, An
         "hint_matched": len(hint_matched),
         "hint_groups_total": len({_truth_group(a) for a in hints}),
         "hint_groups_hit": hint_groups_hit,
+        "hint_groups_hit_ids": sorted({item["truth_group"] for item in hint_matched}),
         "hint_missed_count": len(hint_missed),
-        "severity_accuracy": round(len(severity_ok) / tp, 4) if tp else None,
-        "page_accuracy": round(len(page_ok) / tp, 4) if tp else None,
+        "severity_accuracy": severity_accuracy,
+        "page_accuracy": page_accuracy,
         "locatable_evidence_rate": locatable_rate,
         "unlocatable_findings": [
             {
                 "rule": f.get("rule"),
                 "page": f.get("page"),
-                "missing": (
-                    "page"
-                    if _page_of(f) is None
-                    else "evidence_text"
-                ),
+                "missing": ("page" if _page_of(f) is None else "evidence_text"),
             }
             for f in unlocatable
         ],
@@ -697,32 +712,72 @@ def check_gates(report: Dict[str, Any]) -> List[str]:
     # 时报告 TP=3/FN=0、门禁假绿（实测可绕过「三组」锁定）；只查
     # fn==0 又挡不住缩减真值集。现在：组数必须等于 3 且命中组集必须
     # 恰为 {T1, T5, T6}（HANDOFF §2 权威编号）。
-    if (
-        report["defect_groups_total"] != 3
-        or set(report["defect_groups_hit"]) != {"T1", "T5", "T6"}
-    ):
+    if report["defect_groups_total"] != 3 or set(report["defect_groups_hit"]) != {"T1", "T5", "T6"}:
         failures.append(
             f"硬问题真值组 {report['defect_groups_hit']}/{report['defect_groups_total']}，"
             "要求恰好命中 HANDOFF §2 T1/T5/T6 三组（真值集不得缩减，"
             "也不得按证据面虚增）"
         )
-    # R7 P0-1：舍入提示进入硬门禁。验收标准是 T2/T3/T4 三组全命中；
-    # 同时锁定 hint_groups_total==3——只查"hit==total"挡不住把真值组
-    # 从 3 缩到 2 的假绿（历史实测 hint 2/2 假通过）。两侧都必须等于 3。
-    if report["hint_groups_total"] != 3 or report["hint_groups_hit"] != 3:
+    # R7 P0-1：舍入提示进入硬门禁。验收标准不仅是 3/3，还必须是
+    # HANDOFF §2 指定的 T2/T3/T4。只检查数量会让其它三个真值组伪装成
+    # 全部命中；只检查 hit==total 又挡不住把真值集缩减成 2/2。
+    hint_hit = report.get("hint_groups_hit")
+    hint_hit_ids = report.get("hint_groups_hit_ids")
+    hint_hit_set = set(hint_hit_ids) if isinstance(hint_hit_ids, list) else None
+    expected_hint_groups = {"T2", "T3", "T4"}
+    if (
+        report.get("hint_groups_total") != 3
+        or hint_hit != 3
+        or hint_hit_set != expected_hint_groups
+    ):
         failures.append(
-            f"舍入门禁：hint 真值命中 {report['hint_groups_hit']}/{report['hint_groups_total']}，"
-            "要求 3/3（HANDOFF §2 T2/T3/T4 三组，truth_id 编号须对齐"
-            "HANDOFF 权威口径且真值集不得缩减）"
+            f"舍入门禁：hint 真值命中 {hint_hit!r}/{report.get('hint_groups_total')!r}，"
+            "要求恰好命中 HANDOFF §2 的 T2/T3/T4 三组（truth_id 集合必须对齐，"
+            "且不得用旧版数量字段代替组身份）"
         )
     if report["hint_missed_count"] != 0:
-        failures.append(
-            f"舍入门禁：hint_missed={report['hint_missed_count']}，要求 0"
-        )
+        failures.append(f"舍入门禁：hint_missed={report['hint_missed_count']}，要求 0")
     if report["precision"] is not None and report["precision"] < 0.95:
         failures.append(f"精确率 {report['precision']} < 0.95")
     if report["recall"] is not None and report["recall"] < 0.98:
         failures.append(f"召回率 {report['recall']} < 0.98")
+    for metric_name, metric_label in (
+        ("severity_accuracy", "严重度准确率"),
+        ("page_accuracy", "页码准确率"),
+    ):
+        metric = report.get(metric_name)
+        if not isinstance(metric, (int, float)) or isinstance(metric, bool) or metric != 1.0:
+            failures.append(f"{metric_label}({metric_name}) {metric!r}，要求 1.0")
+    if report.get("mode") == "structured":
+        coverage = report.get("structured_coverage")
+        consumer_count = report.get("structured_consumer_count")
+        total_count = report.get("structured_final_rule_total")
+        coverage_valid = (
+            isinstance(coverage, (int, float))
+            and not isinstance(coverage, bool)
+            and math.isfinite(float(coverage))
+            and 0.0 <= float(coverage) <= 1.0
+        )
+        count_valid = (
+            isinstance(consumer_count, int)
+            and not isinstance(consumer_count, bool)
+            and isinstance(total_count, int)
+            and not isinstance(total_count, bool)
+            and 0 <= consumer_count <= total_count
+            and total_count > 0
+            and round(consumer_count / total_count, 4) == coverage
+        )
+        if not coverage_valid or not count_valid:
+            failures.append(
+                "structured 覆盖率/消费者计数缺失或不一致，禁止作为独立路径通过"
+            )
+        elif float(coverage) < STRUCTURED_READY_MIN_COVERAGE:
+            failures.append(
+                f"structured parsed_tables 消费覆盖率 {coverage} < "
+                f"{STRUCTURED_READY_MIN_COVERAGE}，禁止切换生产"
+            )
+        if report.get("structured_ready") is not True:
+            failures.append("structured_ready=false，结构化路径尚未达到可切换条件")
     if report["locatable_evidence_rate"] not in (None, 1.0):
         failures.append(f"证据可定位率 {report['locatable_evidence_rate']} < 1.0")
     if report["acceptable_violations"]:
@@ -730,6 +785,33 @@ def check_gates(report: Dict[str, Any]) -> List[str]:
             f"acceptable 负例出现 {len(report['acceptable_violations'])} 处违规 finding"
         )
     return failures
+
+
+def _write_eval_report_atomic(path: Path, report: Dict[str, Any]) -> None:
+    """先完整写临时文件，再原子发布评测报告。
+
+    文件名已经带 mode、时间和 UUID，调用方还会用 ``open('x')`` 语义
+    避免同名覆盖；这里再把写入与发布分开，防止进程在 JSON 尚未写完时
+    被中断而留下一个看似存在、实际不可解析的最终报告。临时文件使用
+    ``x`` 创建，并在异常路径清理。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("x", encoding="utf-8", newline="") as report_file:
+            json.dump(report, report_file, ensure_ascii=False, indent=2)
+            report_file.write("\n")
+            report_file.flush()
+            os.fsync(report_file.fileno())
+        # 在 Windows/NTFS 和 POSIX 上，硬链接创建都是原子的且不会覆盖
+        # 已存在目标；它同时避免了“先 exists 再 replace”的 TOCTOU 窗口。
+        # 临时文件与目标位于同一目录，满足跨卷限制。
+        os.link(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def main() -> int:
@@ -761,16 +843,39 @@ def main() -> int:
         return 2
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    out_path = OUTPUT_DIR / f"{args.doc}-eval-{stamp}.json"
-    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    report_mode = str(report.get("mode") or args.mode)
+    out_path: Optional[Path] = None
+    for attempt in range(100):
+        collision_suffix = f"-{attempt}" if attempt else ""
+        candidate = OUTPUT_DIR / (
+            f"{args.doc}-eval-{report_mode}-{stamp}-{uuid.uuid4().hex}{collision_suffix}.json"
+        )
+        try:
+            _write_eval_report_atomic(candidate, report)
+        except FileExistsError:
+            # 目标可能由同秒并发评测或固定 UUID 的测试先占用；换后缀，
+            # 绝不覆盖已有证据。
+            continue
+        out_path = candidate
+        break
+    if out_path is None:
+        raise RuntimeError("无法为评测报告分配唯一文件名（已重试 100 次）")
+    try:
+        display_path = out_path.relative_to(ROOT)
+    except ValueError:
+        display_path = out_path
 
-    print(f"TP={report['tp']} FP={report['fp']} FN={report['fn']} "
-          f"precision={report['precision']} recall={report['recall']}")
-    print(f"hint真值命中 {report['hint_groups_hit']}/{report['hint_groups_total']} "
-          f"（证据面 {report['hint_matched']}/{report['hint_total']}）"
-          f" severity_accuracy={report['severity_accuracy']} "
-          f"page_accuracy={report['page_accuracy']} "
-          f"locatable_evidence_rate={report['locatable_evidence_rate']}")
+    print(
+        f"TP={report['tp']} FP={report['fp']} FN={report['fn']} "
+        f"precision={report['precision']} recall={report['recall']}"
+    )
+    print(
+        f"hint真值命中 {report['hint_groups_hit']}/{report['hint_groups_total']} "
+        f"（证据面 {report['hint_matched']}/{report['hint_total']}）"
+        f" severity_accuracy={report['severity_accuracy']} "
+        f"page_accuracy={report['page_accuracy']} "
+        f"locatable_evidence_rate={report['locatable_evidence_rate']}"
+    )
     if report["hint_missed"]:
         print(f"hint_missed: {report['hint_missed']}")
     if report["acceptable_violations"]:
@@ -781,10 +886,10 @@ def main() -> int:
     if gate_failures:
         for failure in gate_failures:
             print(f"GATE-FAIL: {failure}")
-        print(f"report -> {out_path.relative_to(ROOT)}")
+        print(f"report -> {display_path}")
         return 2
     print("GATE-PASS")
-    print(f"report -> {out_path.relative_to(ROOT)}")
+    print(f"report -> {display_path}")
     return 0
 
 

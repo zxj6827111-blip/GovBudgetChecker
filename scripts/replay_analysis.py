@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import math
 import os
 import re
 import sys
@@ -85,7 +86,7 @@ def _as_float(value: Any) -> Optional[float]:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
-    return parsed
+    return parsed if math.isfinite(parsed) else None
 
 
 def _as_int(value: Any) -> Optional[int]:
@@ -111,11 +112,14 @@ def _resolve_page_coverage(payload: Dict[str, Any]) -> Optional[float]:
     candidates: List[Any] = [payload.get("page_coverage")]
     if isinstance(page_extraction, dict):
         candidates.append(page_extraction.get("page_coverage"))
-    for candidate in candidates:
-        value = _as_float(candidate)
-        if value is not None:
-            return value
-    return None
+    values = [_as_float(candidate) for candidate in candidates]
+    values = [value for value in values if value is not None]
+    # 同一任务的顶层和 meta 是两个独立留痕面；冲突时不能任选其一抬高
+    # 覆盖率，按缺失处理并让质量门明确拦截。
+    if len({value for value in values}) > 1:
+        return None
+    value = values[0] if values else None
+    return value if value is not None and 0.0 <= value <= 1.0 else None
 
 
 def _resolve_scanned_page_count(payload: Dict[str, Any]) -> Optional[int]:
@@ -133,16 +137,24 @@ def _resolve_scanned_page_count(payload: Dict[str, Any]) -> Optional[int]:
 
 def _resolve_report_kind(payload: Dict[str, Any]) -> str:
     meta = _result_meta(payload)
+    kinds = set()
     for candidate in (payload.get("report_kind"), meta.get("report_kind")):
         kind = str(candidate or "").strip().lower()
         if kind:
-            return kind
+            kinds.add(kind)
+    if len(kinds) == 1:
+        return next(iter(kinds))
+    if len(kinds) > 1:
+        # 顶层/meta 冲突说明产物不是一个可证明的快照；不要优先相信
+        # 任意一层，否则旧报告可通过改一处字段绕过 unknown 门禁。
+        return "unknown"
     return "unknown"
 
 
 def _resolve_report_year(payload: Dict[str, Any]) -> Optional[int]:
     """复用 M1 的唯一权威年份解析实现，识别不到就是 None（不兜底）。"""
     meta = _result_meta(payload)
+    years = set()
     for candidate in (
         payload.get("report_year"),
         meta.get("report_year"),
@@ -151,35 +163,21 @@ def _resolve_report_year(payload: Dict[str, Any]) -> Optional[int]:
     ):
         year = parse_report_year(candidate)
         if year is not None:
-            return year
-    return None
+            years.add(year)
+    return next(iter(years)) if len(years) == 1 else None
 
 
 def _resolve_evidence_metrics(payload: Dict[str, Any]) -> Dict[str, Any]:
     """取证据完整率（含 B1 可定位类子口径）。
 
-    新任务的 `result.meta.evidence_completeness` 直接可用；历史任务没有该字段、
-    或留痕是旧格式（缺可定位类字段）时，对结果的**深拷贝**重新跑一遍校验逻辑
-    得出指标——深拷贝保证既有产物不被改写，复用同一函数保证与线上口径一致。
+    只要结果体存在，就对结果的**深拷贝**按当前证据政策重新跑一遍校验逻辑；
+    这样跨页定位和文档级规则口径的修复也能作用于历史回放。没有结果体时才
+    回读 recorded 字段——深拷贝保证既有产物不被改写，复用同一函数保证与线上
+    口径一致。
     """
     meta = _result_meta(payload)
     recorded = meta.get("evidence_completeness")
     recorded_total = _as_int(recorded.get("total")) if isinstance(recorded, dict) else None
-    if (
-        isinstance(recorded, dict)
-        and recorded_total is not None
-        and _as_int(recorded.get("locatable_total")) is not None
-    ):
-        return {
-            "source": "recorded",
-            "total": recorded_total or 0,
-            "complete": _as_int(recorded.get("complete")) or 0,
-            "locatable_total": _as_int(recorded.get("locatable_total")) or 0,
-            "locatable_complete": _as_int(recorded.get("locatable_complete")) or 0,
-            "document_level_total": _as_int(recorded.get("document_level_total")) or 0,
-            "degraded_count": _as_int(recorded.get("degraded_count")) or 0,
-            "rule_warning_count": _as_int(recorded.get("rule_warning_count")) or 0,
-        }
 
     result = payload.get("result")
     if not isinstance(result, dict):
@@ -206,9 +204,12 @@ def _resolve_evidence_metrics(payload: Dict[str, Any]) -> Dict[str, Any]:
             "rule_warning_count": 0,
         }
 
+    # 即使产物带有旧版 recorded 指标，只要结果体存在就按当前证据政策
+    # 重算。否则新增的文档级规则分类、跨页定位修复只能影响新任务，
+    # 历史回放仍会被旧摘要锁死，形成“代码已修复、门禁仍读旧错数”。
     recomputed = apply_evidence_completeness(copy.deepcopy(result))
     return {
-        "source": "recomputed",
+        "source": "recomputed_current_policy",
         "total": int(recomputed["total"]),
         "complete": int(recomputed["complete"]),
         "locatable_total": int(recomputed["locatable_total"]),

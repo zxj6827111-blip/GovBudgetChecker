@@ -28,6 +28,8 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 load_dotenv(_REPO_ROOT / ".env")
 
+from src.services.pdf_selection import select_canonical_pdf  # noqa: E402
+
 
 def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -82,9 +84,11 @@ def build_snapshot(job_dir: Path) -> Dict[str, Any] | None:
     if structured_ingest and not isinstance(payload.get("structured_ingest"), dict):
         payload["structured_ingest"] = structured_ingest
 
-    pdfs = sorted(job_dir.glob("*.pdf"))
-    if pdfs:
-        pdf = pdfs[0]
+    try:
+        pdf = select_canonical_pdf(job_dir)
+    except FileNotFoundError:
+        pdf = None
+    if pdf is not None:
         payload.setdefault("filename", pdf.name)
         payload.setdefault("size", pdf.stat().st_size)
         existing_storage_key = str(payload.get("storage_key") or payload.get("saved_path") or "").replace("\\", "/")
@@ -188,7 +192,13 @@ def inspect_uploads(uploads_dir: Path, limit: int = 0) -> Tuple[List[Dict[str, A
     for job_dir in iter_job_directories(uploads_dir):
         if limit and len(snapshots) + len(skipped) >= limit:
             break
-        payload = build_snapshot(job_dir)
+        try:
+            payload = build_snapshot(job_dir)
+        except ValueError as exc:
+            # 多 PDF 且元数据无法唯一指向原件时不迁移猜测结果；
+            # 将任务和原因留在 dry-run 清单，供人工修复后重试。
+            skipped.append(f"{job_dir.name}: {exc}")
+            continue
         if payload is None:
             skipped.append(job_dir.name)
         else:

@@ -26,11 +26,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 import time
 import unicodedata
+import uuid
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -64,6 +67,57 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _fresh_output_path(prefix: str) -> Path:
+    """Build a mode-bearing, millisecond/UUID-qualified output path."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")[:-3]
+    return OUTPUT_DIR / f"{prefix}-{stamp}-{uuid.uuid4().hex}.json"
+
+
+def _write_json_exclusive(path: Path, payload: Dict[str, Any]) -> Path:
+    """Write a complete replay artifact without overwriting existing evidence."""
+    candidate = path
+    for _ in range(3):
+        temporary = candidate.with_name(
+            f".{candidate.name}.{uuid.uuid4().hex}.tmp"
+        )
+        try:
+            with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            # Hard-link publication is atomic and fails when the destination
+            # already exists, closing the TOCTOU window of exists()+replace().
+            os.link(temporary, candidate)
+            return candidate
+        except FileExistsError:
+            candidate = candidate.with_name(
+                f"{candidate.stem}-{uuid.uuid4().hex}{candidate.suffix}"
+            )
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+    raise FileExistsError(f"无法排他创建回放产物：{path}")
+
+
+def _write_checkpoint_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    """先完整写临时文件再替换，避免并发续跑留下半个 JSON。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, ensure_ascii=False)
+            handle.write("\n")
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def load_page_texts(pdf_path: Path) -> List[str]:
@@ -306,10 +360,16 @@ def _load_corpus_inputs(doc_dir: Path) -> Tuple[str, List[str], List[List[Any]]]
     → 拒绝；SHA 任一为空或不一致 → 拒绝。任何一步不满足都明确报错，
     不允许「拿样张数据评测别的 doc」。
     """
-    pdf_path = next(
-        (candidate for candidate in sorted(doc_dir.glob("*.pdf"))), None
+    pdf_candidates = sorted(
+        (
+            candidate
+            for candidate in doc_dir.iterdir()
+            if candidate.is_file() and candidate.suffix.lower() == ".pdf"
+        ),
+        key=lambda item: item.name,
     )
-    if pdf_path is not None:
+    pdf_path: Optional[Path] = None
+    if pdf_candidates:
         # R8 P1：有 PDF 也要核对 golden 声明的源 PDF SHA——此前该分支
         # 直接返回，corpus PDF 被替换或与标注版本不一致仍静默回放
         # （配合评估侧 doc_id/SHA 绑定，篡改链路在回放处即被切断）。
@@ -322,6 +382,18 @@ def _load_corpus_inputs(doc_dir: Path) -> Tuple[str, List[str], List[List[Any]]]
         golden_sha = str(
             json.loads(golden_path.read_text(encoding="utf-8")).get("sha256") or ""
         ).strip()
+        matches = [
+            candidate
+            for candidate in pdf_candidates
+            if sha256_file(candidate) == golden_sha
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"{doc_dir.name} 的 PDF 候选数为 {len(pdf_candidates)}，"
+                f"按 golden SHA 唯一匹配到 {len(matches)} 个；拒绝按文件名猜测"
+                "（fail-closed）"
+            )
+        pdf_path = matches[0]
         pdf_sha = sha256_file(pdf_path)
         if not golden_sha or pdf_sha != golden_sha:
             raise RuntimeError(
@@ -454,9 +526,14 @@ def replay_historical_doc(
 ) -> Dict[str, Any]:
     """单个历史任务的当前规则重跑 + 旧结果对比。"""
 
-    pdf_path = next((c for c in sorted(job_dir.glob("*.pdf"))), None)
-    if pdf_path is None:
+    from src.services.pdf_selection import select_canonical_pdf
+
+    try:
+        pdf_path = select_canonical_pdf(job_dir)
+    except FileNotFoundError:
         return {"job_id": job_dir.name, "skipped": "no_pdf"}
+    except ValueError as exc:
+        return {"job_id": job_dir.name, "skipped": f"ambiguous_pdf: {exc}"[:200]}
 
     status_path = job_dir / "status.json"
     old_counts = _old_rule_counts(status_path) if status_path.exists() else None
@@ -579,9 +656,14 @@ def _cached_result_valid(result: Dict[str, Any]) -> bool:
     pdf_name = result.get("pdf")
     if not job_id or not pdf_name or not result.get("sha256"):
         return False
-    pdf_path = UPLOADS_DIR / job_id / pdf_name
     try:
-        return pdf_path.exists() and sha256_file(pdf_path) == result.get("sha256")
+        from src.services.pdf_selection import select_canonical_pdf
+
+        pdf_path = select_canonical_pdf(UPLOADS_DIR / str(job_id))
+        return (
+            pdf_path.name == str(pdf_name)
+            and sha256_file(pdf_path) == result.get("sha256")
+        )
     except Exception:
         return False
 
@@ -595,11 +677,19 @@ def replay_historical(
     """扫描 uploads/ 全部历史任务，输出逐规则数量变化聚合报告。"""
 
     jobs = []
+    from src.services.pdf_selection import select_canonical_pdf
+
     for job_dir in sorted(UPLOADS_DIR.iterdir()):
         if not job_dir.is_dir():
             continue
-        if not list(job_dir.glob("*.pdf")):
+        try:
+            select_canonical_pdf(job_dir)
+        except FileNotFoundError:
             continue
+        except ValueError:
+            # 保留 PDF 身份不明确的任务，让逐任务结果显式记录
+            # ambiguous_pdf，而不是静默从历史任务集剔除。
+            pass
         jobs.append(job_dir.name)
     if limit and parse_mode == "structured":
         # 强制抽取 final 样本（R6 P1-6 补完）：--limit 抽样时优先决算类
@@ -692,12 +782,13 @@ def replay_historical(
                         flush=True,
                     )
                     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-                    checkpoint_path.write_text(
-                        json.dumps(
-                            {"parse_mode": parse_mode, "cache_fingerprint": fingerprint, "results": results},
-                            ensure_ascii=False,
-                        ),
-                        encoding="utf-8",
+                    _write_checkpoint_atomic(
+                        checkpoint_path,
+                        {
+                            "parse_mode": parse_mode,
+                            "cache_fingerprint": fingerprint,
+                            "results": results,
+                        },
                     )
     else:
         for idx, name in enumerate(pending, start=1):
@@ -909,11 +1000,10 @@ def main() -> int:
             workers=max(1, args.workers),
         )
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        out_path = OUTPUT_DIR / f"historical-rules-delta-{stamp}.json"
-        out_path.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        out_path = _fresh_output_path(
+            f"historical-rules-delta-{args.parse_mode}"
         )
+        out_path = _write_json_exclusive(out_path, report)
         print(
             f"historical replay: processed={report['processed']} "
             f"skipped={report['skipped']} elapsed={report['elapsed_sec']}s"
@@ -959,11 +1049,8 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001 - 回放失败要留痕继续下一份
             result = {"doc_id": doc_dir.name, "error": f"{type(exc).__name__}: {exc}"}
             exit_code = 2
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        out_path = OUTPUT_DIR / f"{doc_dir.name}-{args.parse_mode}-{stamp}.json"
-        out_path.write_text(
-            json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        out_path = _fresh_output_path(f"{doc_dir.name}-{args.parse_mode}")
+        out_path = _write_json_exclusive(out_path, result)
         summary = result.get("legacy") or result.get("structured") or {}
         print(
             f"{doc_dir.name}: mode={args.parse_mode} "

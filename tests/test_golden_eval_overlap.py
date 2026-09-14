@@ -5,12 +5,15 @@
 为 min(6, len) 后按全串比对，消除该盲区。
 """
 
+import json
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+import pytest
 
 from scripts.evaluate_golden_corpus import (
     _normalize_for_overlap,
@@ -100,6 +103,7 @@ def test_normalize_for_overlap_strips_punctuation():
 # ---------------------------------------------------------------------------
 # GPT5.6 R2 P1-2：假 TP 三场景 + location_key 锚点 + 双证据可定位
 # ---------------------------------------------------------------------------
+
 
 def test_year_only_overlap_is_not_evidence():
     """同规则同页、内容相反、仅共享年份"2025"：必须拒绝（R2 假 TP 场景）。
@@ -481,15 +485,13 @@ def test_evaluate_hint_clustering_end_to_end(monkeypatch, tmp_path):
                             "message": "舍入差",
                         },
                     ]
-                }
+                },
             },
             ensure_ascii=False,
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        "scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus"
-    )
+    monkeypatch.setattr("scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus")
     report = evaluate(doc_id, replay_path)
     assert report["tp"] == 1 and report["fn"] == 0
     assert report["hint_groups_total"] == 1, "T4a/T4b 归一为同一真值组"
@@ -510,10 +512,13 @@ def _gate_report(**overrides):
         "fn": 0,
         "precision": 1.0,
         "recall": 1.0,
+        "severity_accuracy": 1.0,
+        "page_accuracy": 1.0,
         "locatable_evidence_rate": 1.0,
         "acceptable_violations": [],
         "hint_groups_total": 3,
         "hint_groups_hit": 3,
+        "hint_groups_hit_ids": ["T2", "T3", "T4"],
         "hint_missed_count": 0,
         "defect_groups_total": 3,
         "defect_groups_hit": ["T1", "T5", "T6"],
@@ -533,10 +538,11 @@ def test_gate_requires_hint_3_of_3():
     assert check_gates(_gate_report()) == []
     assert check_gates(_gate_report(hint_groups_hit=0)) != [], "0/3 命中必须失败"
     # 真值组被缩减（历史实测 2/2 假通过形态）：两侧必须都等于 3
-    assert check_gates(
-        _gate_report(hint_groups_total=2, hint_groups_hit=2)
-    ) != [], "缩减真值集必须失败"
+    assert check_gates(_gate_report(hint_groups_total=2, hint_groups_hit=2)) != [], (
+        "缩减真值集必须失败"
+    )
     assert check_gates(_gate_report(hint_missed_count=1)) != []
+    assert check_gates(_gate_report(hint_groups_hit_ids=["T1", "T3", "T4"])) != []
 
 
 def test_gate_requires_hard_problem_3_of_3():
@@ -549,24 +555,30 @@ def test_gate_requires_hard_problem_3_of_3():
     from scripts.evaluate_golden_corpus import check_gates
 
     # 缩减真值集（2 组）
-    assert check_gates(
-        _gate_report(
-            tp=2,
-            defect_groups_total=2,
-            defect_groups_hit=["T1", "T5"],
+    assert (
+        check_gates(
+            _gate_report(
+                tp=2,
+                defect_groups_total=2,
+                defect_groups_hit=["T1", "T5"],
+            )
         )
-    ) != [], "缩减真值集必须失败"
+        != []
+    ), "缩减真值集必须失败"
     # 证据面虚增（3 面归一同一真值组——R9 P0 复现形态）
-    assert check_gates(
-        _gate_report(
-            tp=1,
-            defect_groups_hit=["T1"],
+    assert (
+        check_gates(
+            _gate_report(
+                tp=1,
+                defect_groups_hit=["T1"],
+            )
         )
-    ) != [], "按证据面虚增必须失败"
+        != []
+    ), "按证据面虚增必须失败"
     # 命中组错位（缺 T6 多 T9）
-    assert check_gates(
-        _gate_report(defect_groups_hit=["T1", "T5", "T9"])
-    ) != [], "命中组集必须是 T1/T5/T6"
+    assert check_gates(_gate_report(defect_groups_hit=["T1", "T5", "T9"])) != [], (
+        "命中组集必须是 T1/T5/T6"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -689,9 +701,7 @@ def test_evaluate_rejects_tampered_doc_id_and_sha(monkeypatch, tmp_path):
         "labels": [],
     }
     (corpus_dir / "golden.json").write_text(json.dumps(golden), encoding="utf-8")
-    monkeypatch.setattr(
-        "scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus"
-    )
+    monkeypatch.setattr("scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus")
 
     replay_path = tmp_path / "replay.json"
     replay_path.write_text(
@@ -747,9 +757,7 @@ def test_evaluate_shadow_replay_requires_explicit_mode(monkeypatch, tmp_path):
         ],
     }
     (corpus_dir / "golden.json").write_text(json.dumps(golden), encoding="utf-8")
-    monkeypatch.setattr(
-        "scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus"
-    )
+    monkeypatch.setattr("scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus")
 
     replay_path = tmp_path / "replay.json"
     replay_path.write_text(
@@ -809,9 +817,7 @@ def test_evaluate_defect_groups_not_face_inflated(monkeypatch, tmp_path):
         ],
     }
     (corpus_dir / "golden.json").write_text(json.dumps(golden), encoding="utf-8")
-    monkeypatch.setattr(
-        "scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus"
-    )
+    monkeypatch.setattr("scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus")
 
     replay_path = tmp_path / "replay.json"
     replay_path.write_text(
@@ -841,6 +847,320 @@ def test_evaluate_defect_groups_not_face_inflated(monkeypatch, tmp_path):
     assert report["defect_groups_total"] == 1
     assert report["defect_groups_hit"] == ["T1"]
     assert check_gates(report), "单组命中不得通过三组门禁"
+
+
+def test_evaluate_all_severity_errors_fail_gate_and_missing_accuracy_is_rejected(
+    monkeypatch, tmp_path
+):
+    """三组严重度全错时准确率为 0，且门禁缺失/None 必须 fail-closed。"""
+    import json
+
+    from scripts.evaluate_golden_corpus import check_gates, evaluate
+
+    doc_id = "DOC-TEST-SEVERITY"
+    sha = "s" * 64
+    corpus_dir = tmp_path / "corpus" / doc_id
+    corpus_dir.mkdir(parents=True)
+    labels = []
+    findings = []
+    for index, (truth_id, page) in enumerate((("T1", 2), ("T5", 26), ("T6", 27)), start=1):
+        rule = f"V33-{index:03d}"
+        evidence = f"严重度测试证据 {100 + index}.01"
+        labels.append(
+            {
+                "annotation_id": f"A-{index}",
+                "truth_id": truth_id,
+                "label": "defect",
+                "rule_id": rule,
+                "page": page,
+                "expected_severity": "high",
+                "evidence": evidence,
+            }
+        )
+        findings.append(
+            {
+                "rule": rule,
+                "severity": "info",  # 三组均与 expected_severity 不符
+                "page": page,
+                "evidence_text": evidence,
+                "message": evidence,
+            }
+        )
+    (corpus_dir / "golden.json").write_text(
+        json.dumps({"doc_id": doc_id, "sha256": sha, "labels": labels}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus")
+    replay_path = tmp_path / "replay.json"
+    replay_path.write_text(
+        json.dumps(
+            {"doc_id": doc_id, "sha256": sha, "legacy": {"findings": findings}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = evaluate(doc_id, replay_path)
+    assert report["severity_accuracy"] == 0.0
+    assert any("严重度准确率" in failure for failure in check_gates(report))
+    for metric in ("severity_accuracy", "page_accuracy"):
+        missing = dict(report)
+        missing.pop(metric)
+        assert any(metric in failure for failure in check_gates(missing))
+        missing[metric] = None
+        assert any(metric in failure for failure in check_gates(missing))
+
+
+def test_structured_readiness_is_a_hard_gate():
+    """structured 即使指标碰巧全绿，未达到真实消费者覆盖率也不能放行。"""
+    from scripts.evaluate_golden_corpus import check_gates
+
+    not_ready = _gate_report(
+        mode="structured",
+        structured_ready=False,
+        structured_coverage=1.0 / 52,
+        structured_consumer_count=1,
+        structured_final_rule_total=52,
+    )
+    failures = check_gates(not_ready)
+    assert any("structured" in failure for failure in failures)
+
+    ready = _gate_report(
+        mode="structured",
+        structured_ready=True,
+        structured_coverage=1.0,
+        structured_consumer_count=52,
+        structured_final_rule_total=52,
+    )
+    assert check_gates(ready) == []
+
+
+def test_auto_mode_records_and_gates_single_structured_result(monkeypatch, tmp_path):
+    """单独 structured replay 走 auto 时也必须进入 readiness 门禁。"""
+    import json
+
+    from scripts.evaluate_golden_corpus import check_gates, evaluate
+
+    doc_id = "DOC-TEST-AUTO-STRUCTURED"
+    sha = "u" * 64
+    corpus_dir = tmp_path / "corpus" / doc_id
+    corpus_dir.mkdir(parents=True)
+    (corpus_dir / "golden.json").write_text(
+        json.dumps({"doc_id": doc_id, "sha256": sha, "labels": []}), encoding="utf-8"
+    )
+    replay_path = tmp_path / "replay.json"
+    replay_path.write_text(
+        json.dumps(
+            {
+                "doc_id": doc_id,
+                "sha256": sha,
+                "structured": {
+                    "findings": [],
+                    "structured_ready": False,
+                    "structured_coverage": 1 / 52,
+                    "parsing_consumer_count": 1,
+                    "final_rule_total": 52,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus")
+
+    report = evaluate(doc_id, replay_path)
+    assert report["mode"] == "structured"
+    assert any("structured" in failure for failure in check_gates(report))
+
+
+def test_evaluate_accuracy_is_group_bounded_with_repeated_evidence_faces(monkeypatch, tmp_path):
+    """同组两个 evidence faces 全部命中时，准确率仍以 1 个组为分母。"""
+    import json
+
+    from scripts.evaluate_golden_corpus import evaluate
+
+    doc_id = "DOC-TEST-ACCURACY-GROUP"
+    sha = "a" * 64
+    corpus_dir = tmp_path / "corpus" / doc_id
+    corpus_dir.mkdir(parents=True)
+    evidence = "同组重复证据面 123.45"
+    labels = [
+        {
+            "annotation_id": f"A-{suffix}",
+            "truth_id": f"T1{suffix}",
+            "label": "defect",
+            "rule_id": "V33-001",
+            "page": 2,
+            "expected_severity": "high",
+            "evidence": evidence,
+        }
+        for suffix in ("a", "b")
+    ]
+    findings = [
+        {
+            "rule": "V33-001",
+            "severity": "high",
+            "page": 2,
+            "evidence_text": evidence,
+            "message": evidence,
+        }
+        for _ in range(2)
+    ]
+    (corpus_dir / "golden.json").write_text(
+        json.dumps({"doc_id": doc_id, "sha256": sha, "labels": labels}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus")
+    replay_path = tmp_path / "replay.json"
+    replay_path.write_text(
+        json.dumps(
+            {"doc_id": doc_id, "sha256": sha, "legacy": {"findings": findings}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = evaluate(doc_id, replay_path)
+    assert report["tp"] == 1
+    assert report["defect_faces_matched"] == 2
+    assert report["severity_accuracy"] == 1.0
+    assert report["page_accuracy"] == 1.0
+
+
+def test_group_accuracy_marks_group_wrong_when_one_face_has_wrong_page() -> None:
+    """同组证据面只要有一面页码错误，该组页码准确率必须记错。"""
+    from scripts.evaluate_golden_corpus import _group_accuracy
+
+    matched = [
+        {"truth_group": "T1", "page_ok": True},
+        {"truth_group": "T1", "page_ok": False},
+        {"truth_group": "T5", "page_ok": True},
+    ]
+    assert _group_accuracy(matched, "page_ok") == 0.5
+
+
+def test_main_writes_mode_specific_reports_exclusively_on_fixed_timestamp(monkeypatch, tmp_path):
+    """固定秒和 UUID 碰撞时，legacy/structured 报告仍不覆盖既有文件。"""
+    import json
+
+    import scripts.evaluate_golden_corpus as evaluator
+
+    doc_id = "DOC-TEST-REPORT-NAMES"
+    sha = "r" * 64
+    corpus_dir = tmp_path / "corpus" / doc_id
+    corpus_dir.mkdir(parents=True)
+    entries = [
+        ("T1", "defect", "V33-001", 2, "high"),
+        ("T5", "defect", "V33-245", 26, "medium"),
+        ("T6", "defect", "V33-246", 27, "medium"),
+        ("T2", "rounding_hint", "V33-202", 10, "info"),
+        ("T3", "rounding_hint", "V33-203", 10, "info"),
+        ("T4", "rounding_hint", "V33-117", 15, "info"),
+    ]
+    labels = []
+    findings = []
+    for index, (truth_id, label, rule, page, severity) in enumerate(entries, start=1):
+        evidence = f"报告写入验收证据 {200 + index}.01"
+        labels.append(
+            {
+                "annotation_id": f"A-{index}",
+                "truth_id": truth_id,
+                "label": label,
+                "rule_id": rule,
+                "page": page,
+                "expected_severity": severity,
+                "evidence": evidence,
+            }
+        )
+        findings.append(
+            {
+                "rule": rule,
+                "severity": severity,
+                "page": page,
+                "evidence_text": evidence,
+                "message": evidence,
+            }
+        )
+    (corpus_dir / "golden.json").write_text(
+        json.dumps({"doc_id": doc_id, "sha256": sha, "labels": labels}),
+        encoding="utf-8",
+    )
+    replay_path = tmp_path / "replay.json"
+    replay_path.write_text(
+        json.dumps(
+            {
+                "doc_id": doc_id,
+                "sha256": sha,
+                "legacy": {"findings": findings},
+                    "structured": {
+                        "findings": findings,
+                        "structured_ready": True,
+                        "structured_coverage": 1.0,
+                        "parsing_consumer_count": 52,
+                        "final_rule_total": 52,
+                    },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(evaluator, "CORPUS_DIR", tmp_path / "corpus")
+    output_dir = tmp_path / "golden_eval"
+    monkeypatch.setattr(evaluator, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(evaluator.time, "strftime", lambda _format: "20260909-120000")
+
+    class FixedUUID:
+        hex = "fixeduuid"
+
+    monkeypatch.setattr(evaluator.uuid, "uuid4", lambda: FixedUUID())
+    argv = [
+        "evaluate_golden_corpus.py",
+        "--doc",
+        doc_id,
+        "--replay",
+        str(replay_path),
+        "--mode",
+        "legacy",
+    ]
+    monkeypatch.setattr(evaluator.sys, "argv", argv)
+    assert evaluator.main() == 0
+    first_legacy = next(output_dir.glob("*-legacy-*.json"))
+    first_contents = first_legacy.read_text(encoding="utf-8")
+
+    argv[-1] = "structured"
+    assert evaluator.main() == 0
+    argv[-1] = "legacy"
+    assert evaluator.main() == 0
+
+    reports = list(output_dir.glob("*.json"))
+    assert len(reports) == 3
+    assert len(list(output_dir.glob("*-legacy-*.json"))) == 2
+    assert len(list(output_dir.glob("*-structured-*.json"))) == 1
+    assert first_legacy.read_text(encoding="utf-8") == first_contents
+
+
+def test_eval_report_writer_publishes_complete_json_atomically(tmp_path):
+    """评测报告先写完整临时文件，最终路径不能看到半个 JSON。"""
+    from scripts.evaluate_golden_corpus import _write_eval_report_atomic
+
+    target = tmp_path / "eval-report.json"
+    _write_eval_report_atomic(target, {"findings": [{"rule": "V33-001"}]})
+
+    assert json.loads(target.read_text(encoding="utf-8"))["findings"][0]["rule"] == "V33-001"
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_eval_report_writer_never_replaces_existing_report(tmp_path):
+    """固定命名碰撞时保留旧证据，调用方负责换新名字重试。"""
+    from scripts.evaluate_golden_corpus import _write_eval_report_atomic
+
+    target = tmp_path / "eval-report.json"
+    target.write_text("old", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        _write_eval_report_atomic(target, {"version": "new"})
+
+    assert target.read_text(encoding="utf-8") == "old"
+    assert not list(tmp_path.glob(".*.tmp"))
 
 
 def test_sec_generic_anchor_without_section_id_rejected():
@@ -899,9 +1219,7 @@ def test_evaluate_rejects_sec_annotation_without_section_anchor(monkeypatch, tmp
         ],
     }
     (corpus_dir / "golden.json").write_text(json.dumps(golden), encoding="utf-8")
-    monkeypatch.setattr(
-        "scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus"
-    )
+    monkeypatch.setattr("scripts.evaluate_golden_corpus.CORPUS_DIR", tmp_path / "corpus")
     replay_path = tmp_path / "replay.json"
     replay_path.write_text(
         json.dumps(

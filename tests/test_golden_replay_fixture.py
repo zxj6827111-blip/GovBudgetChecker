@@ -18,6 +18,8 @@ import pytest
 from scripts.replay_golden_corpus import (
     _cached_result_valid,
     _load_corpus_inputs,
+    _write_checkpoint_atomic,
+    _write_json_exclusive,
 )
 
 
@@ -111,6 +113,28 @@ def test_cached_result_valid_rejects_skipped_entries(tmp_path, monkeypatch):
 
     monkeypatch.setattr(mod, "UPLOADS_DIR", tmp_path)
     assert _cached_result_valid({"job_id": "job-b", "pdf": "x.pdf", "skipped": "no_pdf"}) is False
+
+
+def test_replay_artifact_writer_never_overwrites_existing_path(tmp_path):
+    """同名回放产物已存在时必须改用新文件，不能覆盖旧证据。"""
+    target = tmp_path / "DOC-legacy-20260909.json"
+    target.write_text("old", encoding="utf-8")
+
+    created = _write_json_exclusive(target, {"version": "new"})
+
+    assert created != target
+    assert target.read_text(encoding="utf-8") == "old"
+    assert created.exists()
+    assert '"version": "new"' in created.read_text(encoding="utf-8")
+
+
+def test_checkpoint_writer_leaves_complete_json(tmp_path):
+    """checkpoint 先完整写入再替换，读取时不能看到半个 JSON。"""
+    target = tmp_path / "historical-partial-legacy.json"
+    _write_checkpoint_atomic(target, {"results": [{"job_id": "job-a"}]})
+
+    assert json.loads(target.read_text(encoding="utf-8"))["results"][0]["job_id"] == "job-a"
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 # ---------------------------------------------------------------------------
