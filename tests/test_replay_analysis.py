@@ -273,7 +273,7 @@ def test_legacy_job_evidence_metrics_are_recomputed(sample_uploads: Path) -> Non
     """历史产物没有 evidence_completeness，指标要现场重算而不是留空。"""
     record = collect_job_record(sample_uploads / "job-legacy")
     assert record is not None
-    assert record["evidence"]["source"] == "recomputed"
+    assert record["evidence"]["source"] == "recomputed_current_policy"
     assert record["evidence"]["total"] == 1
     assert record["evidence"]["complete"] == 0
     # 规则缺证据只告警、不降级，仍是正式问题

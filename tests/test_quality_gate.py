@@ -29,6 +29,23 @@ GOOD_PAGES = {
     "page_coverage": 1.0,
 }
 
+# 规则执行摘要桩：所有适用规则已执行且无未决项（GPT5.6 P0-2 后，
+# no_findings 必须有"规则已全部执行"的证据，摘要缺失会被判
+# rules_not_executed 转人工复核）。
+FULLY_EXECUTED_SUMMARY = {
+    "total_rules": 10,
+    "executed": 10,
+    "pass": 10,
+    "fail": 0,
+    "not_applicable": 0,
+    "insufficient_data": 0,
+    "parse_error": 0,
+    "execution_error": 0,
+    "unresolved_total": 0,
+    "failed_rules": [],
+    "unresolved_rules": [],
+}
+
 
 def _reason_codes(gate):
     return [reason["code"] for reason in gate["review_reasons"]]
@@ -57,6 +74,7 @@ def test_gate_pass_without_findings_yields_no_findings_not_bare_done():
         ai_requested=True,
         ai_degraded=False,
         issue_total=0,
+        rule_execution_summary=dict(FULLY_EXECUTED_SUMMARY),
     )
     assert gate["status"] == "done"
     assert gate["analysis_conclusion"] == "no_findings"
@@ -168,7 +186,10 @@ def test_coverage_threshold_is_configurable(monkeypatch):
     gated = _evaluate_quality_gate(assessment, "budget", 2025, False, False, 0)
     assert gated["status"] == "review_required"
     monkeypatch.setenv("PAGE_COVERAGE_MIN_RATIO", "0.85")
-    passed = _evaluate_quality_gate(assessment, "budget", 2025, False, False, 0)
+    passed = _evaluate_quality_gate(
+        assessment, "budget", 2025, False, False, 0,
+        rule_execution_summary=dict(FULLY_EXECUTED_SUMMARY),
+    )
     assert passed["status"] == "done"
 
 
@@ -222,7 +243,25 @@ def _patch_pipeline(monkeypatch, page_texts, issues_payload):
     monkeypatch.setattr(
         pipeline_mod,
         "run_rules_in_process",
-        AsyncMock(return_value={"issues": issues_payload}),
+        AsyncMock(
+            return_value={
+                "issues": issues_payload,
+                # 与真实 run_rules_in_process 契约一致：规则执行摘要随 payload 返回
+                "rule_execution_summary": {
+                    "total_rules": 1,
+                    "executed": 1,
+                    "pass": 1,
+                    "fail": 0,
+                    "not_applicable": 0,
+                    "insufficient_data": 0,
+                    "parse_error": 0,
+                    "execution_error": 0,
+                    "unresolved_total": 0,
+                    "failed_rules": [],
+                    "unresolved_rules": [],
+                },
+            }
+        ),
     )
     monkeypatch.setattr(
         pipeline_mod, "persist_analysis_job_snapshot", AsyncMock(return_value=True)
@@ -232,7 +271,11 @@ def _patch_pipeline(monkeypatch, page_texts, issues_payload):
         "run_structured_ingest",
         AsyncMock(return_value={"status": "skipped", "review_item_count": 0, "review_items": []}),
     )
-    monkeypatch.setattr(pipeline_mod.settings, "get", lambda *_args: False)
+    # 用真实 Settings 接口关掉双模式（禁止再用不兼容的字典式 settings.get mock：
+    # 那种 mock 曾掩盖 settings.get("dual_mode.enabled") 恒为 False 的配置缺陷）
+    monkeypatch.setattr(
+        pipeline_mod.settings, "is_dual_mode_enabled", lambda: False
+    )
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("AI_ASSIST_REQUIRED", raising=False)
     monkeypatch.delenv("PAGE_COVERAGE_MIN_RATIO", raising=False)

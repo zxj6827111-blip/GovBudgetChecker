@@ -842,13 +842,13 @@ def _resolve_uploaded_pdf_name(job_uuid: str) -> str:
     upload_root = Path(os.getenv("UPLOAD_DIR", "uploads")).resolve()
     job_dir = upload_root / normalized_job_uuid
     try:
-        pdfs = sorted(job_dir.glob("*.pdf"))
-    except Exception:
-        return ""
+        # 与 API/回放共用 status.json 指向的 canonical PDF；多 PDF 无法
+        # 唯一确认原件时不按字母序猜，宁可退回数据库已有文件名。
+        from api import runtime as upload_runtime
 
-    if not pdfs:
+        return upload_runtime.find_first_pdf(job_dir).name
+    except (FileNotFoundError, ValueError, OSError):
         return ""
-    return pdfs[0].name
 
 
 def _looks_like_job_uuid_filename(filename: str, job_uuid: str) -> bool:

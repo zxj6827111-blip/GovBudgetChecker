@@ -206,6 +206,11 @@ class DualModeAnalyzer:
             
             metrics.rule_findings_count = len(rule_findings)
             metrics.rule_elapsed_ms = int((rule_done_at - rule_started_at) * 1000)
+            # 规则执行摘要（六态）：供质量门与评测契约消费
+            try:
+                rule_execution_summary = self.engine_runner.get_rule_execution_summary()
+            except Exception:
+                rule_execution_summary = {}
 
             if rule_enabled and rule_task is None:
                 rule_error = "未加载到可执行的本地规则"
@@ -236,7 +241,8 @@ class DualModeAnalyzer:
             ai_findings = []
             ai_error = None
             ai_done_at = ai_started_at
-            
+            ai_call_ledger: List[Dict[str, Any]] = []
+
             if ai_task is not None:
                 try:
                     ai_result = await asyncio.wait_for(ai_task, timeout=TIMEOUT_SECONDS - 30)  # 剩余时间给 AI
@@ -262,6 +268,26 @@ class DualModeAnalyzer:
                     ai_done_at = time.time()
                     ai_error = str(e)
                     logger.error(f"AI analysis exception: {e}")
+
+                # AI 调用留痕：成功也必须记录 provider/model/token，否则
+                # "AI 已审计且未发现问题"与"AI 根本没跑"无法区分（P0 假完成修复）。
+                if self.ai_service is not None:
+                    try:
+                        ai_call_ledger = self.ai_service.ai_client.pop_call_ledger()
+                    except Exception:
+                        ai_call_ledger = []
+                    if ai_findings is not None and not ai_error and ai_call_ledger:
+                        last_call = ai_call_ledger[-1]
+                        metrics.provider_stats.append({
+                            'provider_used': last_call.get('provider') or 'unknown',
+                            'model_used': last_call.get('model') or 'unknown',
+                            'error': None,
+                            'latency_ms': int((ai_done_at - ai_started_at) * 1000),
+                            'timestamp': ai_done_at,
+                            'tokens': last_call.get('token_usage') or {},
+                            'finish_reason': last_call.get('finish_reason'),
+                            'calls': len(ai_call_ledger),
+                        })
             
             metrics.ai_findings_count = len(ai_findings)
             metrics.ai_elapsed_ms = int((ai_done_at - ai_started_at) * 1000)
@@ -326,7 +352,7 @@ class DualModeAnalyzer:
             })
             
             logger.info(f"Dual mode analysis completed in {metrics.total_elapsed_ms}ms")
-            
+
             return DualModeResponse(
                 job_id=job_context.job_id,
                 ai_findings=ai_findings,
@@ -355,6 +381,10 @@ class DualModeAnalyzer:
                     "rule_done_at": rule_done_at,
                     "last_heartbeat": time.time(),
                     "provider_stats": metrics.provider_stats,
+                    "ai_call_ledger": ai_call_ledger,
+                    # 覆盖缺口（如审计窗口上限触发）：degraded 判定依据
+                    "ai_window_errors": list(getattr(self.ai_service, "ai_errors", []) or []) if self.ai_service is not None else [],
+                    "rule_execution_summary": rule_execution_summary,
                     "config": config.dict()
                 }
             )

@@ -3,16 +3,16 @@
 PYTHON ?= $(if $(wildcard .venv/Scripts/python.exe),.venv/Scripts/python.exe,.venv/bin/python)
 
 backend:
-	GOVBUDGET_AUTH_ENABLED=$${GOVBUDGET_AUTH_ENABLED:-true} GOVBUDGET_API_KEY=$${GOVBUDGET_API_KEY:-dev-local-key} GOVBUDGET_RATE_LIMIT=$${GOVBUDGET_RATE_LIMIT:-2000} $(PYTHON) -m uvicorn api.main:app --reload --port 8000
+	GOVBUDGET_AUTH_ENABLED=$${GOVBUDGET_AUTH_ENABLED:-true} GOVBUDGET_RATE_LIMIT=$${GOVBUDGET_RATE_LIMIT:-2000} $(PYTHON) -m uvicorn api.main:app --reload --port 8000
 
 backend-api:
-	JOB_QUEUE_ROLE=api JOB_QUEUE_INLINE_FALLBACK=false GOVBUDGET_AUTH_ENABLED=$${GOVBUDGET_AUTH_ENABLED:-true} GOVBUDGET_API_KEY=$${GOVBUDGET_API_KEY:-dev-local-key} GOVBUDGET_RATE_LIMIT=$${GOVBUDGET_RATE_LIMIT:-2000} $(PYTHON) -m uvicorn api.main:app --reload --port 8000
+	JOB_QUEUE_ROLE=api JOB_QUEUE_INLINE_FALLBACK=false GOVBUDGET_AUTH_ENABLED=$${GOVBUDGET_AUTH_ENABLED:-true} GOVBUDGET_RATE_LIMIT=$${GOVBUDGET_RATE_LIMIT:-2000} $(PYTHON) -m uvicorn api.main:app --reload --port 8000
 
 backend-noauth:
 	GOVBUDGET_AUTH_ENABLED=false $(PYTHON) -m uvicorn api.main:app --reload --port 8000
 
 worker:
-	JOB_QUEUE_ROLE=worker GOVBUDGET_AUTH_ENABLED=$${GOVBUDGET_AUTH_ENABLED:-true} GOVBUDGET_API_KEY=$${GOVBUDGET_API_KEY:-dev-local-key} GOVBUDGET_RATE_LIMIT=$${GOVBUDGET_RATE_LIMIT:-2000} $(PYTHON) -m api.worker
+	JOB_QUEUE_ROLE=worker GOVBUDGET_AUTH_ENABLED=$${GOVBUDGET_AUTH_ENABLED:-true} GOVBUDGET_RATE_LIMIT=$${GOVBUDGET_RATE_LIMIT:-2000} $(PYTHON) -m api.worker
 
 frontend:
 	npm --prefix app run dev

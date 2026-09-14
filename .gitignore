@@ -94,3 +94,14 @@ audit-*.out
 # Temporary diagnostics and local API/browser captures
 tmp/
 tmp-cookies.txt
+
+# 受保护语料目录（本地人工标注样本，默认不入库）。
+# 例外（GPT5.6 R5 P1-D）：golden.json 与 ANNOTATIONS.md 是评测的
+# 验收输入——不入库则干净 checkout 无法复现 GATE（anchor_phrases_
+# aligned 等标注修订也不在版本库）。PDF/基线转储仍不入库（大文件与
+# 历史产物），仅入库标注文件。
+corpus/*
+!corpus/DOC-20260905-001/
+corpus/DOC-20260905-001/*
+!corpus/DOC-20260905-001/golden.json
+!corpus/DOC-20260905-001/ANNOTATIONS.md

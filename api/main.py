@@ -10,7 +10,7 @@ import time
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 import pdfplumber
 from fastapi import FastAPI
@@ -23,6 +23,7 @@ if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 
 from src.engine.pipeline import build_document, build_issues_payload
+from src.engine.rule_outcome import STATUS_INSUFFICIENT_DATA
 from src.services.evidence_guard import (
     apply_evidence_completeness,
     count_formal_findings,
@@ -60,6 +61,10 @@ from src.services.issue_workflow_store import sync_workflow_recovery_state
 from src.services.structured_ingest_runner import (
     close_structured_ingest_resources,
     run_structured_ingest,
+)
+from src.services.ai_execution import (
+    build_ai_execution,
+    quality_gate_ai_reasons,
 )
 from config.settings import get_settings
 from src.services.rule_process import (
@@ -296,10 +301,13 @@ def _safe_write(job_dir: Path, payload: Dict[str, Any]) -> None:
 
 
 def _find_first_pdf(job_dir: Path) -> Path:
-    pdfs = sorted(job_dir.glob("*.pdf"))
-    if not pdfs:
-        raise FileNotFoundError("未在该 job 目录下找到 PDF 文件")
-    return pdfs[0]
+    # 统一使用 runtime 的 canonical-PDF 选择逻辑：多 PDF 任务必须由
+    # status.json 的 filename/saved_path 唯一指向原件，不能把 annotated
+    # 派生文件按字母序误当成输入。
+    try:
+        return runtime.find_first_pdf(job_dir)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError("未在该 job 目录下找到 PDF 文件") from exc
 
 
 def _extract_tables_from_page(page) -> List[List[List[str]]]:
@@ -451,6 +459,12 @@ def _evaluate_quality_gate(
     ai_degraded: bool,
     issue_total: int,
     evidence_degraded_count: int = 0,
+    *,
+    ai_execution: Optional[Dict[str, Any]] = None,
+    structured_ingest: Optional[Dict[str, Any]] = None,
+    evidence_completeness: Optional[Dict[str, Any]] = None,
+    rule_execution_summary: Optional[Dict[str, Any]] = None,
+    doc_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     """任务级质量门禁：决定终态是 done / degraded / review_required。
 
@@ -462,10 +476,23 @@ def _evaluate_quality_gate(
       2. 存在疑似扫描页（本轮不做 OCR，必然漏检）；
       3. 报告类型无法识别（unknown 只跑了通用规则，专项规则未覆盖）；
       4. 年度无法识别（同比/口径类判断失去基准）；
-      5. AI 被配置为必需能力却失败；
+      5. AI 被配置为必需能力却失败（legacy 参数路径）；
       6. 存在因缺证据被降级的问题项（P0-07）。
 
-    `degraded` 保留原语义："部分能力降级但结论仍然有效"。
+    P0 假完成修复新增（docs/SYSTEM_ISSUES_HANDOFF_2026-09-05.md §3.6）：
+      7. ``ai_not_run`` / ``ai_failed``：请求 AI 后只有 succeeded 可以通过
+         质量门（not_run、超时、空响应、token 截断、全部 provider 失败均转）；
+      8. ``missing_required_table``：结构化入库发现核心表缺失；
+      9. ``ambiguous_table_schema``：表结构歧义（未知表/低置信度表）；
+     10. ``rule_evidence_incomplete``：规则证据不完整（此前只有降级数进门禁，
+         不完整数被丢弃）；
+     11. ``rule_execution_error``：规则执行异常/解析失败（不再伪装成 hint finding）；
+     12. ``report_type_mismatch``：报告类型冲突（doc_type 与内容判定不一致，
+         或 ps_sync 因类型未知跳过/写错）；
+     13. ``rules_not_executed``：无发现时所有适用规则必须已执行，
+         否则不允许出 no_findings。
+
+    ``degraded`` 保留原语义："部分能力降级但结论仍然有效"。
 
     注意 `issue_total` 必须传入"正式问题数"（不含降级项），否则会出现
     "问题全被降级却仍报 findings_detected"的口径矛盾。
@@ -514,7 +541,11 @@ def _evaluate_quality_gate(
                 "message": "未能识别报告年度，同比与口径类判断缺少基准",
             }
         )
-    if ai_requested and ai_degraded and _ai_assist_required():
+    if ai_execution is not None:
+        # 新契约：AI 执行状态机判定，请求后只有 succeeded 可通过
+        review_reasons.extend(quality_gate_ai_reasons(ai_execution))
+    elif ai_requested and ai_degraded and _ai_assist_required():
+        # legacy 兼容路径：未提供 ai_execution 时沿用 AI_ASSIST_REQUIRED 语义
         review_reasons.append(
             {
                 "code": "ai_assist_required_but_failed",
@@ -532,6 +563,157 @@ def _evaluate_quality_gate(
                 ),
             }
         )
+
+    # ---- 结构化入库信号（此前被丢弃，P0 §3.6） ----
+    ingest_review_items: List[Dict[str, Any]] = []
+    if isinstance(structured_ingest, dict) and isinstance(
+        structured_ingest.get("review_items"), list
+    ):
+        ingest_review_items = [
+            item for item in structured_ingest["review_items"] if isinstance(item, dict)
+        ]
+    missing_core_tables = [
+        str(item.get("table_code") or item.get("id") or "")
+        for item in ingest_review_items
+        if str(item.get("type") or "") == "missing_core_table"
+    ]
+    if missing_core_tables:
+        review_reasons.append(
+            {
+                "code": "missing_required_table",
+                "message": (
+                    f"结构化入库未识别到 {len(missing_core_tables)} 张核心表，"
+                    "对应检查项未实际覆盖，不能视为已完成审核"
+                ),
+                "table_codes": missing_core_tables[:20],
+            }
+        )
+    ambiguous_tables = [
+        str(item.get("table_code") or item.get("id") or "")
+        for item in ingest_review_items
+        if str(item.get("type") or "") in {"unknown_table", "low_confidence_table"}
+    ]
+    if ambiguous_tables:
+        review_reasons.append(
+            {
+                "code": "ambiguous_table_schema",
+                "message": (
+                    f"有 {len(ambiguous_tables)} 张表结构识别存在歧义（未知表/低置信度），"
+                    "基于这些表的勾稽结论不可信"
+                ),
+                "table_codes": ambiguous_tables[:20],
+            }
+        )
+    # 已识别到表格却未生成任何结构化 facts：解析/列映射存在系统性问题，
+    # 仅标 parser_quality=poor 不足以阻断"完成"态——必须转人工复核
+    # （GPT5.6 P0-2：fact_materialization_empty 不得允许假绿完成）。
+    facts_empty = any(
+        str(item.get("type") or "") == "fact_materialization_empty"
+        for item in ingest_review_items
+    )
+    if facts_empty:
+        review_reasons.append(
+            {
+                "code": "fact_materialization_empty",
+                "message": (
+                    "已识别到表格但未成功生成结构化 facts（列映射或数值单元格"
+                    "解析失败），基于表格的勾稽与入库未实际完成，需人工复核"
+                ),
+            }
+        )
+
+    # ---- 规则证据完整性（此前只有降级数进门禁，不完整数被丢弃） ----
+    if isinstance(evidence_completeness, dict):
+        incomplete_count = int(evidence_completeness.get("incomplete") or 0)
+        if incomplete_count > 0:
+            review_reasons.append(
+                {
+                    "code": "rule_evidence_incomplete",
+                    "message": (
+                        f"有 {incomplete_count} 条问题缺少页码等可定位证据，"
+                        "证据完整率未达 100%，需人工复核"
+                    ),
+                }
+            )
+
+    # ---- 规则执行摘要（parse/execution 异常不再伪装成 hint finding） ----
+    if isinstance(rule_execution_summary, dict) and rule_execution_summary:
+        error_rules = int(rule_execution_summary.get("execution_error") or 0)
+        parse_error_rules = int(rule_execution_summary.get("parse_error") or 0)
+        # insufficient_data 同样属"未得出可信结论"：数据缺失的规则被
+        # 静默记 pass 是假绿 no_findings 的来源之一（GPT5.6 P0-2）。
+        insufficient_rules = int(
+            rule_execution_summary.get("insufficient_data") or 0
+        )
+        if error_rules + parse_error_rules > 0:
+            review_reasons.append(
+                {
+                    "code": "rule_execution_error",
+                    "message": (
+                        f"有 {error_rules} 条规则执行异常、{parse_error_rules} 条解析失败，"
+                        "对应检查项未得出可信结论"
+                    ),
+                    "unresolved_rules": (
+                        rule_execution_summary.get("unresolved_rules") or []
+                    )[:20],
+                }
+            )
+        if insufficient_rules > 0:
+            review_reasons.append(
+                {
+                    "code": "rules_insufficient_data",
+                    "message": (
+                        f"有 {insufficient_rules} 条规则因数据缺失/解析歧义无法得出结论"
+                        "（如表缺失、行宽无法对齐），这些检查项未实际覆盖，需人工复核"
+                    ),
+                    "unresolved_rules": [
+                        item
+                        for item in (
+                            rule_execution_summary.get("unresolved_rules") or []
+                        )
+                        if isinstance(item, dict)
+                        and str(item.get("status") or "")
+                        == STATUS_INSUFFICIENT_DATA
+                    ][:20],
+                }
+            )
+
+    # ---- 报告类型一致性 ----
+    report_type_reason = _report_type_mismatch_reason(
+        doc_type=doc_type,
+        report_kind=report_kind,
+        structured_ingest=structured_ingest,
+    )
+    if report_type_reason is not None:
+        review_reasons.append(report_type_reason)
+
+    # ---- no_findings 门禁：无发现时要求规则全部执行 ----
+    # 摘要缺失/为空同样是"证据不足"：规则执行摘要只要不是非空 dict，
+    # 就无法证明规则真的执行过，不允许输出 no_findings（GPT5.6 P0-2）。
+    if issue_total == 0:
+        if not (isinstance(rule_execution_summary, dict) and rule_execution_summary):
+            review_reasons.append(
+                {
+                    "code": "rules_not_executed",
+                    "message": (
+                        "无问题发现但缺少规则执行摘要，无法证明适用规则已执行，"
+                        "不允许输出 no_findings"
+                    ),
+                }
+            )
+        else:
+            total_rules = int(rule_execution_summary.get("total_rules") or 0)
+            executed_rules = int(rule_execution_summary.get("executed") or 0)
+            if total_rules > 0 and executed_rules < total_rules:
+                review_reasons.append(
+                    {
+                        "code": "rules_not_executed",
+                        "message": (
+                            f"适用规则中仅 {executed_rules}/{total_rules} 条得出结论，"
+                            "不允许在规则未执行完毕时输出 no_findings"
+                        ),
+                    }
+                )
 
     if review_reasons:
         status = JobStatus.REVIEW_REQUIRED.value
@@ -562,6 +744,145 @@ def _evaluate_quality_gate(
         "evidence_degraded_count": degraded_findings,
         "ai_degraded": bool(ai_degraded),
         "ai_required": _ai_assist_required(),
+        "ai_execution": ai_execution,
+    }
+
+
+_DOC_TYPE_FINAL = {
+    "dept_final",
+    "unit_final",
+    "department_final",
+    "final",
+    "settlement",
+    "accounts",
+}
+_DOC_TYPE_BUDGET = {
+    "dept_budget",
+    "unit_budget",
+    "department_budget",
+    "budget",
+}
+
+
+def _report_type_mismatch_reason(
+    doc_type: Any,
+    report_kind: Any,
+    structured_ingest: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """检查请求 doc_type、内容判定 report_kind、入库 report_type 三者是否一致。
+
+    任何一处冲突（或入库因类型未知跳过）都返回 ``report_type_mismatch``
+    原因，防止决算材料以预算身份入库后无人察觉。
+    """
+
+    doc_type_text = str(doc_type or "").strip().lower()
+    kind_text = str(report_kind or "").strip().lower()
+    doc_type_is_final = doc_type_text in _DOC_TYPE_FINAL
+    doc_type_is_budget = doc_type_text in _DOC_TYPE_BUDGET
+
+    if doc_type_is_final and kind_text and kind_text != "unknown" and kind_text != "final":
+        return {
+            "code": "report_type_mismatch",
+            "message": (
+                f"上传声明 doc_type={doc_type_text}（决算），但内容判定为 "
+                f"report_kind={kind_text}，报告类型存在冲突，需人工确认"
+            ),
+        }
+    if doc_type_is_budget and kind_text and kind_text != "unknown" and kind_text != "budget":
+        return {
+            "code": "report_type_mismatch",
+            "message": (
+                f"上传声明 doc_type={doc_type_text}（预算），但内容判定为 "
+                f"report_kind={kind_text}，报告类型存在冲突，需人工确认"
+            ),
+        }
+
+    if not isinstance(structured_ingest, dict):
+        return None
+    ps_sync = structured_ingest.get("ps_sync")
+    if not isinstance(ps_sync, dict):
+        return None
+    ps_status = str(ps_sync.get("status") or "")
+    if ps_status == "skipped" and str(ps_sync.get("reason") or "") == "unknown_report_type":
+        return {
+            "code": "report_type_mismatch",
+            "message": (
+                "结构化入库因报告类型无法识别而跳过，报告未以任何类型入库，需人工确认"
+            ),
+        }
+    ps_report_type = str(ps_sync.get("report_type") or "").strip().upper()
+    if doc_type_is_final and ps_report_type and ps_report_type != "FINAL":
+        return {
+            "code": "report_type_mismatch",
+            "message": (
+                f"doc_type={doc_type_text}（决算）但入库 report_type={ps_report_type}，"
+                "报告类型归类错误，需人工确认"
+            ),
+        }
+    if doc_type_is_budget and ps_report_type and ps_report_type != "BUDGET":
+        return {
+            "code": "report_type_mismatch",
+            "message": (
+                f"doc_type={doc_type_text}（预算）但入库 report_type={ps_report_type}，"
+                "报告类型归类错误，需人工确认"
+            ),
+        }
+    return None
+
+
+def _assess_parser_quality(
+    page_assessment: Dict[str, Any],
+    structured_ingest: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """解析质量评估，输出 ``result.meta.parser_quality``（增量字段）。
+
+    quality 三级：ok / degraded / poor。poor 必然伴随质量门转人工复核
+    （扫描页、覆盖率低、facts 为空都会另外生成 review_reasons）。
+    """
+    coverage = float(page_assessment.get("page_coverage") or 0.0)
+    scanned_page_count = int(page_assessment.get("scanned_page_count") or 0)
+    review_items: List[Dict[str, Any]] = []
+    if isinstance(structured_ingest, dict) and isinstance(
+        structured_ingest.get("review_items"), list
+    ):
+        review_items = [
+            item for item in structured_ingest["review_items"] if isinstance(item, dict)
+        ]
+    missing_core = sum(
+        1 for item in review_items if str(item.get("type") or "") == "missing_core_table"
+    )
+    unknown_tables = sum(
+        1 for item in review_items if str(item.get("type") or "") == "unknown_table"
+    )
+    low_confidence = sum(
+        1
+        for item in review_items
+        if str(item.get("type") or "") == "low_confidence_table"
+    )
+    facts_empty = any(
+        str(item.get("type") or "") == "fact_materialization_empty"
+        for item in review_items
+    )
+
+    if (
+        scanned_page_count > 0
+        or facts_empty
+        or coverage < _page_coverage_min_ratio()
+    ):
+        quality = "poor"
+    elif missing_core or unknown_tables or low_confidence:
+        quality = "degraded"
+    else:
+        quality = "ok"
+
+    return {
+        "quality": quality,
+        "page_coverage": coverage,
+        "scanned_page_count": scanned_page_count,
+        "missing_core_tables": missing_core,
+        "unknown_tables": unknown_tables,
+        "low_confidence_tables": low_confidence,
+        "facts_materialization_empty": facts_empty,
     }
 
 
@@ -659,8 +980,30 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             except:
                 pass
 
-        # 检查是否启用双模式
-        dual_mode_enabled = settings.get("dual_mode.enabled", False) or mode == "dual"
+        # 检查是否启用双模式。
+        # 必须走真实 Settings 接口（is_dual_mode_enabled 读 config/app.yaml 的
+        # dual_mode.enabled）；此前用 "dual_mode.enabled" 点号风格调用
+        # settings.get(section, key, default) 永远取到默认值 False，被字典式
+        # mock 的测试掩盖（docs/SYSTEM_ISSUES_HANDOFF_2026-09-05.md §3.5）。
+        # 请求契约（P0）：legacy 是规则模式别名，不运行 AI；
+        # 只有 dual + use_ai_assist=true 才请求 AI。旧任务 status.json 可能
+        # 残留 legacy + use_ai_assist=true（旧默认值），此时 ai_requested 如实
+        # 记录、状态记 not_run（error_code=legacy_mode_no_ai），由质量门转
+        # 人工复核，绝不静默忽略。
+        dual_config_enabled = settings.is_dual_mode_enabled()
+        dual_mode_enabled = dual_config_enabled and mode == "dual"
+        raw_use_ai_assist = bool(use_ai_assist)
+        if mode == "dual":
+            ai_requested = raw_use_ai_assist and dual_config_enabled
+            _ai_not_run_code = "" if dual_config_enabled else "dual_mode_disabled"
+        else:
+            # legacy 路径不运行 AI。若旧任务残留 use_ai_assist=true（旧默认值），
+            # 必须如实记 requested=True + not_run（error_code=legacy_mode_no_ai）
+            # 转人工复核；新请求已在 API 层 422 拦截，不存在静默忽略。
+            ai_requested = raw_use_ai_assist
+            _ai_not_run_code = "legacy_mode_no_ai" if raw_use_ai_assist else ""
+        # legacy 路径没有 AI 能力：强制按"未请求 AI"执行；原始请求留痕进 ai_execution
+        use_ai_assist = raw_use_ai_assist and dual_mode_enabled
 
         # 标记 processing
         _safe_write(
@@ -868,6 +1211,15 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             # 组装最终返回体（双模式结构）
             dual_ai_findings = [item.dict() for item in dual_result.ai_findings]
             dual_rule_findings = [item.dict() for item in dual_result.rule_findings]
+            # AI 执行状态机（P0）：从调用留痕推导，无留痕禁止呈现为已执行
+            ai_execution = build_ai_execution(
+                ai_requested,
+                ai_error=str(dual_result.meta.get("ai_error") or ""),
+                fallback=dual_result.meta.get("fallback"),
+                call_ledger=dual_result.meta.get("ai_call_ledger") or [],
+                provider_stats=dual_result.meta.get("provider_stats") or [],
+                window_errors=dual_result.meta.get("ai_window_errors") or [],
+            )
             result = {
                 "summary": "",
                 "ai_findings": dual_ai_findings,
@@ -890,6 +1242,14 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                     "elapsed_ms": dual_result.meta.get("elapsed_ms", {}),
                     "tokens": dual_result.meta.get("tokens", {}),
                     "page_extraction": page_assessment,
+                    "ai_execution": ai_execution,
+                    "rule_execution_summary": dual_result.meta.get(
+                        "rule_execution_summary"
+                    )
+                    or {},
+                    "parser_quality": _assess_parser_quality(
+                        page_assessment, None
+                    ),
                     # 版本留痕汇总（P2-02）：从各条 finding 实际写入的版本反向汇总，
                     # 不额外拍一份"声明值"，避免汇总与逐条留痕不一致。
                     "versions": summarize_finding_versions(
@@ -1048,6 +1408,12 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                 raise RuntimeError(f"local_rules_failed:{exc}") from exc
 
             # 组装最终返回体（保持你之前的契约字段）
+            # legacy 路径的 AI 执行状态：请求过但路径本身不运行 AI → not_run；
+            # 新契约下 legacy 不再请求 AI（422 拦截），这里是旧任务兜底如实留痕。
+            ai_execution = build_ai_execution(
+                ai_requested,
+                error_code=_ai_not_run_code,
+            )
             result = {
                 "summary": "",  # 现在没有汇总，可后续填充
                 "issues": payload_issues["issues"],  # 统一分桶结构
@@ -1067,6 +1433,12 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                     "report_kind": report_kind,
                     "provider_stats": provider_stats,
                     "page_extraction": page_assessment,
+                    "ai_execution": ai_execution,
+                    "rule_execution_summary": payload_issues.get(
+                        "rule_execution_summary"
+                    )
+                    or {},
+                    "parser_quality": _assess_parser_quality(page_assessment, None),
                     "versions": summarize_finding_versions(
                         payload_issues["issues"].get("all") or []
                     ),
@@ -1148,6 +1520,10 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             )
         runtime.write_structured_ingest_payload(job_dir, structured_ingest_summary)
         result["meta"]["structured_ingest"] = structured_ingest_summary
+        # 解析质量以结构化入库结果为准重新评估（含缺表/歧义/facts 信号）
+        result["meta"]["parser_quality"] = _assess_parser_quality(
+            page_assessment, structured_ingest_summary
+        )
 
         # 证据链完整性校验（P0-07）：落库前逐条校验证据，
         # 缺证据的 AI 问题就地降级为待复核，规则问题只记录告警。
@@ -1179,11 +1555,16 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             page_assessment=page_assessment,
             report_kind=report_kind,
             report_year=report_year,
-            ai_requested=bool(use_ai_assist),
+            ai_requested=ai_requested,
             ai_degraded=analysis_quality_status == "degraded",
             # 计数口径与证据校验保持一致：降级项不算正式问题
             issue_total=_count_result_findings(result),
             evidence_degraded_count=evidence_completeness["degraded_count"],
+            ai_execution=result["meta"].get("ai_execution"),
+            structured_ingest=structured_ingest_summary,
+            evidence_completeness=evidence_completeness,
+            rule_execution_summary=result["meta"].get("rule_execution_summary"),
+            doc_type=doc_type,
         )
         result["meta"]["quality_gate"] = quality_gate
         final_status = quality_gate["status"]

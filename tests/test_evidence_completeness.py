@@ -43,6 +43,22 @@ GOOD_PAGES = {
     "page_coverage": 1.0,
 }
 
+# 规则执行摘要桩（GPT5.6 P0-2 后 no_findings 需要执行证据）：
+# 所有适用规则已执行、无未决项。
+FULLY_EXECUTED_SUMMARY = {
+    "total_rules": 10,
+    "executed": 10,
+    "pass": 10,
+    "fail": 0,
+    "not_applicable": 0,
+    "insufficient_data": 0,
+    "parse_error": 0,
+    "execution_error": 0,
+    "unresolved_total": 0,
+    "failed_rules": [],
+    "unresolved_rules": [],
+}
+
 
 def _reason_codes(gate: Dict[str, Any]) -> List[str]:
     return [reason["code"] for reason in gate["review_reasons"]]
@@ -102,6 +118,34 @@ def test_invalid_bbox_does_not_count() -> None:
     )
     assert complete is False
     assert "missing_bbox" in missing
+
+
+def test_nonfinite_or_reversed_bbox_does_not_count() -> None:
+    for bbox in ([1, 2, float("nan"), 4], [10, 20, 5, 30]):
+        complete, missing = evaluate_finding_evidence(
+            {"page_number": 2, "bbox": bbox, "evidence": []}
+        )
+        assert complete is False
+        assert "missing_bbox" in missing
+
+
+def test_explicit_cross_page_location_is_usable_but_scalar_page_count_is_not() -> None:
+    complete, _missing = evaluate_finding_evidence(
+        {
+            "location": {"pages": [3, 5]},
+            "evidence": [{"text": "跨页勾稽证据"}],
+        }
+    )
+    assert complete is True
+
+    incomplete, missing = evaluate_finding_evidence(
+        {
+            "location": {"pages": 5},
+            "evidence": [{"text": "文档共 5 页"}],
+        }
+    )
+    assert incomplete is False
+    assert "missing_page" in missing
 
 
 # --------------------------------------------------------------------------
@@ -220,6 +264,8 @@ def test_is_document_level_finding_anchors_on_rule_id() -> None:
     assert is_document_level_finding({"rule_id": "BUD-001"})
     assert is_document_level_finding({"rule_id": "bud-001"})
     assert is_document_level_finding({"rule": "BUD-001"})
+    assert is_document_level_finding({"rule_id": "V33-002"})
+    assert is_document_level_finding({"rule_id": "V33-003"})
     # 其他规则即便页码缺失也是真证据缺口，不能豁免
     assert not is_document_level_finding({"rule_id": "C-001", "page_number": None})
     assert not is_document_level_finding({"rule_id": "BUD-101"})
@@ -334,6 +380,9 @@ def test_gate_stays_done_when_no_degradation() -> None:
         ai_degraded=False,
         issue_total=0,
         evidence_degraded_count=0,
+        # 摘要缺失时 no_findings 会被 rules_not_executed 拦下（GPT5.6 P0-2），
+        # 对照组必须带"规则已全部执行"的摘要才能验证"仅证据维度"的行为。
+        rule_execution_summary=FULLY_EXECUTED_SUMMARY,
     )
     assert gate["status"] == "done"
     assert gate["analysis_conclusion"] == "no_findings"
@@ -405,7 +454,9 @@ def _run_legacy_pipeline(
             return_value={"status": "skipped", "review_item_count": 0, "review_items": []}
         ),
     )
-    monkeypatch.setattr(pipeline_mod.settings, "get", lambda *_args: False)
+    monkeypatch.setattr(
+        pipeline_mod.settings, "is_dual_mode_enabled", lambda: False
+    )
     return job_dir  # type: ignore[return-value]
 
 
@@ -442,10 +493,15 @@ async def test_pipeline_reports_evidence_completeness(
 
 
 @pytest.mark.asyncio
-async def test_pipeline_rule_evidence_warning_does_not_change_status(
+async def test_pipeline_rule_evidence_warning_gates_to_review(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """规则问题缺证据：记录告警与完整率下降，但仍是正式问题，终态不变。"""
+    """规则问题缺证据：记录告警与完整率下降，并转 review_required。
+
+    P0 整改后的 fail-closed 语义（docs/SYSTEM_ISSUES_HANDOFF_2026-09-05.md
+    §3.6 第 2 条）：证据不完整的规则 finding 此前只告警不阻断，样张 12/52
+    缺页码的 finding 全部静默通过；现在 ``rule_evidence_incomplete`` 必须进门禁。
+    """
     job_dir = _run_legacy_pipeline(
         tmp_path,
         monkeypatch,
@@ -469,8 +525,11 @@ async def test_pipeline_rule_evidence_warning_does_not_change_status(
     assert completeness["rule_warning_count"] == 1
     assert completeness["degraded_count"] == 0
     assert completeness["formal_issue_total"] == 1
-    assert payload["status"] == "done"
-    assert payload["analysis_conclusion"] == "findings_detected"
+    assert payload["status"] == "review_required"
+    assert payload["analysis_conclusion"] == "incomplete"
+    assert "rule_evidence_incomplete" in [
+        r["code"] for r in payload["review_reasons"]
+    ]
 
 
 @pytest.mark.asyncio

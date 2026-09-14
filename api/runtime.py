@@ -24,6 +24,7 @@ import aiofiles
 from fastapi import HTTPException, Request, UploadFile
 
 from api import queue_runtime
+from src.services.pdf_selection import select_canonical_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ except ImportError:
 
 from src.services.analysis_result_store import persist_analysis_job_snapshot
 from src.schemas.issues import infer_analysis_conclusion
+from config.settings import get_settings
 
 # 展示层的问题计数必须与质量门禁同口径（缺证据被降级的条目不算正式问题），
 # 否则会出现"任务是 review_required / incomplete，列表却显示有 N 个问题"的矛盾。
@@ -247,11 +249,8 @@ def get_job_version_timestamp(
 
 
 def find_first_pdf(job_dir: Path) -> Path:
-    """Return the first PDF in a job directory."""
-    pdfs = sorted(job_dir.glob("*.pdf"))
-    if not pdfs:
-        raise FileNotFoundError("PDF file not found under job directory")
-    return pdfs[0]
+    """Return the canonical PDF recorded by the job, failing closed if ambiguous."""
+    return select_canonical_pdf(job_dir)
 
 
 def read_json_file(
@@ -730,6 +729,40 @@ def normalize_report_kind(doc_type: Optional[str], filename: str = "") -> str:
     ):
         return "final"
     return "unknown"
+
+
+def normalize_request_flag(value: Any, name: str) -> Optional[bool]:
+    """请求布尔参数真值归一（分析请求契约，2026-09-06 K3 复核整改）。
+
+    背景：start_analysis 此前用 ``is True`` 身份判断，调用方传字符串
+    "true"/"1" 会绕过 422 冲突拦截、被静默当作 False 持久化；dual 分支
+    的 ``bool()`` 又会把 "false" 扭曲成 True（请求 AI）。归一规则：
+
+    - 缺省/None → None（未指定，由 mode 默认值决定）；
+    - bool → 原样；
+    - "true"/"1"/"yes"/"on"、"false"/"0"/"no"/"off"（忽略大小写与空白）
+      → 对应真值；
+    - 其余取值 → 422（fail-closed：不静默猜测调用方意图）。
+
+    status.json 持久化的布尔值均由本函数产出，下游 ``bool()`` 不会再
+    遇到字符串。
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"true", "1", "yes", "on"}:
+            return True
+        if text in {"false", "0", "no", "off"}:
+            return False
+    raise HTTPException(
+        status_code=422,
+        # 不回显调用方原始值：既是日志安全要求，也避免把任意请求输入
+        # 拼进 422 响应体。错误类型信息足以让调用方定位问题参数。
+        detail=f"invalid boolean parameter '{name}': expected true/false",
+    )
 
 
 def normalize_doc_type(
@@ -1403,14 +1436,13 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
 
     pdf_path: Optional[Path] = None
     try:
-        pdfs = sorted(job_dir.glob("*.pdf"))
-        if pdfs:
-            pdf_path = pdfs[0]
+        pdf_path = find_first_pdf(job_dir)
+        if pdf_path:
             filename = pdf_path.name
             pdf_stat = pdf_path.stat()
             pdf_mtime_ns = pdf_stat.st_mtime_ns
             pdf_size = pdf_stat.st_size
-    except Exception:
+    except (FileNotFoundError, ValueError, OSError):
         pdf_path = None
 
     structured_path = get_structured_ingest_path(job_dir)
@@ -1968,8 +2000,26 @@ def iter_job_dirs() -> List[Path]:
     return [
         path
         for path in UPLOAD_ROOT.iterdir()
-        if path.is_dir() and not path.name.startswith(".")
+        if path.is_dir()
+        and not path.name.startswith(".")
+        and _looks_like_job_dir(path)
     ]
+
+
+def _looks_like_job_dir(path: Path) -> bool:
+    """任务目录判定：含 status.json 或 PDF 文件才算任务目录。
+
+    uploads/ 下可能遗留非任务目录（如 QC 报告输出目录 reports/），它们
+    没有 status.json 也没有 PDF。若被当作任务目录，collect_job_summary 会
+    给出 status="unknown"，前端 normalizeUiTaskStatus 的兜底分支把它归为
+    analyzing，导致处理队列角标恒为 1（该"正在处理"任务实际并不存在）。
+    """
+    if (path / "status.json").exists():
+        return True
+    try:
+        return any(p.suffix.lower() == ".pdf" for p in path.iterdir())
+    except OSError:
+        return False
 
 
 def resolve_job_department_context(
@@ -2475,9 +2525,56 @@ async def start_analysis(
     status_file = job_dir / "status.json"
     body = body or {}
     existing_status = read_json_file(status_file, default={})
-    use_local_rules = bool(body.get("use_local_rules", True))
-    use_ai_assist = bool(body.get("use_ai_assist", True))
-    mode = str(body.get("mode", "legacy"))
+
+    # 分析请求契约（P0，docs/SYSTEM_ISSUES_HANDOFF_2026-09-05.md §3.5）：
+    # - mode 只接受 legacy / dual / structured（structured 为历史存储值，
+    #   仅结构化入库：无规则、无 AI）；
+    # - legacy/structured 是规则模式别名，不请求 AI：显式 use_ai_assist=true
+    #   属冲突参数，返回 422，不再静默忽略（此前样张就是这样
+    #   "看似请求了 AI 实则没跑"）；
+    # - 布尔参数统一经 normalize_request_flag 真值归一（字符串 "true"/"1"
+    #   与 True 等价、未知取值 422），杜绝 is True 身份判断被字符串绕过；
+    # - legacy 必须启用本地规则（否则无任何检查能力）；
+    # - dual + use_ai_assist=true 才运行 AI；dual 默认请求 AI。
+    mode = str(body.get("mode", "legacy")).strip().lower() or "legacy"
+    if mode not in {"legacy", "dual", "structured"}:
+        raise HTTPException(
+            status_code=422,
+            detail=f"invalid mode '{mode}': must be 'legacy', 'dual' or 'structured'",
+        )
+    ai_assist_flag = normalize_request_flag(body.get("use_ai_assist"), "use_ai_assist")
+    local_rules_flag = normalize_request_flag(
+        body.get("use_local_rules"), "use_local_rules"
+    )
+    if mode in {"legacy", "structured"}:
+        if ai_assist_flag is True:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"conflicting analysis parameters: mode='{mode}' never runs "
+                    "AI; use mode='dual' with use_ai_assist=true to request AI assist"
+                ),
+            )
+        if mode == "legacy" and local_rules_flag is False:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "conflicting analysis parameters: mode='legacy' requires "
+                    "use_local_rules=true (no other checker would run)"
+                ),
+            )
+        use_ai_assist = False
+    else:
+        if not get_settings().is_dual_mode_enabled():
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "dual mode is disabled by config (dual_mode.enabled=false); "
+                    "enable it or use mode='legacy'"
+                ),
+            )
+        use_ai_assist = True if ai_assist_flag is None else ai_assist_flag
+    use_local_rules = True if local_rules_flag is None else local_rules_flag
     fiscal_year = (
         body.get("fiscal_year")
         if body.get("fiscal_year") is not None
@@ -2619,10 +2716,21 @@ async def reanalyze_job(
     body = dict(body or {})
     if "use_local_rules" not in body:
         body["use_local_rules"] = bool(source_status.get("use_local_rules", True))
-    if "use_ai_assist" not in body:
-        body["use_ai_assist"] = bool(source_status.get("use_ai_assist", True))
     if "mode" not in body:
         body["mode"] = str(source_status.get("mode") or "legacy")
+    if "use_ai_assist" not in body:
+        # 请求契约：legacy 不请求 AI，只有 dual 才沿用/默认请求 AI；
+        # 否则旧任务（legacy + use_ai_assist=true 旧默认值）重分析会直接 422。
+        # structured 模式保留原值（历史行为，结构化入库不消耗该标志）。
+        # 历史 status.json 均为布尔值（分析请求经 normalize_request_flag
+        # 归一后持久化），此处 bool() 是防御性收尾而非真值解析。
+        resolved_mode = str(body["mode"])
+        if resolved_mode == "dual":
+            body["use_ai_assist"] = bool(source_status.get("use_ai_assist", True))
+        elif resolved_mode == "legacy":
+            body["use_ai_assist"] = False
+        else:
+            body["use_ai_assist"] = bool(source_status.get("use_ai_assist", True))
     if "fiscal_year" not in body and source_status.get("fiscal_year") is not None:
         body["fiscal_year"] = source_status.get("fiscal_year")
     if "doc_type" not in body and source_status.get("doc_type") is not None:

@@ -149,6 +149,39 @@ def test_manual_association_overrides_auto_match(tmp_path: Path, monkeypatch):
     assert link.match_type == "manual"
 
 
+def test_manual_association_uses_status_selected_original_when_annotated_pdf_exists(
+    tmp_path: Path, monkeypatch
+):
+    """关联接口与运行时 canonical PDF 选择器保持同一口径。"""
+    _patch_runtime_state(tmp_path, monkeypatch)
+    client = TestClient(app)
+    target_org_id = _create_org("上海市普陀区财政局")["id"]
+
+    upload = client.post(
+        "/api/documents/upload",
+        headers=_headers(),
+        files={
+            "file": (
+                "unidentified-document.pdf",
+                io.BytesIO(_pdf_bytes()),
+                "application/pdf",
+            )
+        },
+    )
+    assert upload.status_code == 200
+    job_id = upload.json()["job_id"]
+    job_dir = runtime.UPLOAD_ROOT / job_id
+    (job_dir / "annotated.pdf").write_bytes(b"derived annotation")
+
+    associate = client.post(
+        f"/api/jobs/{job_id}/associate",
+        json={"org_id": target_org_id},
+        headers=_headers(),
+    )
+    assert associate.status_code == 200
+    assert associate.json()["organization_id"] == target_org_id
+
+
 def test_manual_association_moves_job_between_organization_job_lists(
     tmp_path: Path, monkeypatch
 ):

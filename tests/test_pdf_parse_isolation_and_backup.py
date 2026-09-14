@@ -363,8 +363,25 @@ async def test_pipeline_succeeds_through_isolated_parser(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pipeline_mod,
         "run_rules_in_process",
+        # 桩遵守 build_issues_payload 契约：无发现也要带"规则已全部执行"
+        # 的摘要（GPT5.6 P0-2 后摘要缺失会被质量门判 rules_not_executed）。
         AsyncMock(
-            return_value={"issues": {"all": [], "error": [], "warn": [], "info": []}}
+            return_value={
+                "issues": {"all": [], "error": [], "warn": [], "info": []},
+                "rule_execution_summary": {
+                    "total_rules": 1,
+                    "executed": 1,
+                    "pass": 1,
+                    "fail": 0,
+                    "not_applicable": 0,
+                    "insufficient_data": 0,
+                    "parse_error": 0,
+                    "execution_error": 0,
+                    "unresolved_total": 0,
+                    "failed_rules": [],
+                    "unresolved_rules": [],
+                },
+            }
         ),
     )
 

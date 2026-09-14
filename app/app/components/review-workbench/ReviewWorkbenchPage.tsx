@@ -32,7 +32,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button } from "@/components/ui";
 import { resolvePollingDecision } from "@/lib/jobPolling";
 import type { Problem } from "@/lib/mock";
-import type { JobDetailRecord, StructuredIngestRecord } from "@/lib/uiAdapters";
+import type { JobDetailRecord, JobSummaryRecord, StructuredIngestRecord } from "@/lib/uiAdapters";
 import { isUiTaskFinished, normalizeUiTaskStatus, toUiProblems } from "@/lib/uiAdapters";
 
 import { IssueNoteDialog } from "./IssueNoteDialog";
@@ -43,6 +43,7 @@ import { PdfViewerPane } from "./PdfViewerPane";
 import {
   computeWorkflowStatusCounts,
   extractTotalPageCount,
+  pickAutoSelectJob,
   resolveProblemTargetPage,
   resolveWorkbenchHeaderBadge,
   type WorkflowIssueRecord,
@@ -92,11 +93,50 @@ export function ReviewWorkbenchPage() {
   const [noteDialogProblem, setNoteDialogProblem] = useState<Problem | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [isReanalyzing, setIsReanalyzing] = useState(false);
+  /** 无 job 参数时已尝试过自动选择（只试一次，避免每次渲染都重复请求）。 */
+  const [autoSelectDone, setAutoSelectDone] = useState(false);
   const loadSeqRef = useRef(0);
 
   /** 最新 detail 的旁路引用：轮询决策每次续排时实时读取。 */
   const detailRef = useRef<JobDetailRecord | null>(null);
   detailRef.current = detail;
+
+  /**
+   * 无 job 参数时的自动选择：侧边栏「审核工作台」href 是 /review（不带参数），
+   * 直接点击会停在引导态。进入时自动挑最近一个待人工复核任务跳转；
+   * 没有可复核任务时保持引导态（不假装有默认任务）。
+   */
+  useEffect(() => {
+    if (jobId || autoSelectDone) {
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch("/api/jobs", { cache: "no-store" });
+        if (!response.ok) {
+          return;
+        }
+        const payload = (await response.json()) as
+          | JobSummaryRecord[]
+          | { items?: JobSummaryRecord[] };
+        const jobs = Array.isArray(payload) ? payload : payload.items ?? [];
+        const next = pickAutoSelectJob(jobs);
+        if (!cancelled && next?.job_id) {
+          router.replace(`/review?job=${encodeURIComponent(next.job_id)}`);
+        }
+      } catch {
+        // 拉取失败时保持引导态，不阻断页面。
+      } finally {
+        if (!cancelled) {
+          setAutoSelectDone(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId, autoSelectDone, router]);
 
   const loadJobDetail = useCallback(
     async (options: { silent?: boolean } = {}) => {

@@ -40,8 +40,26 @@ let server = null;
 let ownsServer = false;
 
 fs.mkdirSync(outputDir, { recursive: true });
-const stdoutFd = fs.openSync(path.join(outputDir, "e2e-webserver.log"), "a");
-const stderrFd = fs.openSync(path.join(outputDir, "e2e-webserver.err.log"), "a");
+
+// 日志文件 EPERM 兜底（GPT5.6 R2 P2-5b）：output/e2e-webserver.log 被
+// 上一进程（崩溃/残留 dev server）占用时 openSync 直接抛 EPERM，包装
+// 命令从未启动就失败。改为失败时回退到时间戳文件名，并提示清理。
+function openAppendFd(preferredPath, fallbackPrefix) {
+  try {
+    return fs.openSync(preferredPath, "a");
+  } catch (error) {
+    const fallback = `${fallbackPrefix}-${Date.now()}.log`;
+    process.stderr.write(
+      `[run-e2e] cannot open ${path.basename(preferredPath)} (${error.code || error.message}); ` +
+        `falling back to ${fallback}\n` +
+        `[run-e2e] hint: stop processes holding output/*.log or delete the file, then retry\n`
+    );
+    return fs.openSync(path.join(path.dirname(preferredPath), fallback), "a");
+  }
+}
+
+const stdoutFd = openAppendFd(path.join(outputDir, "e2e-webserver.log"), "e2e-webserver");
+const stderrFd = openAppendFd(path.join(outputDir, "e2e-webserver.err.log"), "e2e-webserver.err");
 
 function requestReady(url) {
   return new Promise((resolve) => {

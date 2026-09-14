@@ -7,6 +7,7 @@ AI抽取器客户端 - 后端调用AI抽取器微服务的客户端
 import os
 import asyncio
 import logging
+import time
 from typing import List, Dict, Any, Optional
 import hashlib
 import json
@@ -165,10 +166,53 @@ class ExtractorConfig:
 
 class ExtractorClient:
     """AI抽取器客户端"""
-    
+
     def __init__(self, config: Optional[ExtractorConfig] = None):
         self.config = config or ExtractorConfig()
         self._direct_ai_client: Optional[AIClient] = None
+        # 调用留痕：每次真实模型调用（含失败）都追加一条记录，供
+        # ai_execution 状态机判定"AI 是否真的执行过"。无留痕时禁止
+        # 呈现为 AI 已完成（P0 假完成修复，见 src/services/ai_execution.py）。
+        self.call_ledger: List[Dict[str, Any]] = []
+
+    def record_call(
+        self,
+        provider: Optional[str],
+        model: Optional[str],
+        *,
+        prompt_version: Optional[str] = None,
+        finish_reason: Optional[str] = None,
+        token_usage: Optional[Dict[str, Any]] = None,
+        content: str = "",
+        error: Optional[str] = None,
+    ) -> None:
+        """追加一条调用留痕。error 非空表示本次调用失败。"""
+
+        self.call_ledger.append(
+            {
+                "provider": provider,
+                "model": model,
+                "prompt_version": prompt_version,
+                "finish_reason": finish_reason,
+                "token_usage": token_usage,
+                # ledger 数据契约（2026-09-06 GPT5.6 复核整改）：
+                # ``content`` 是 ai_execution 状态机的判定证据（_call_succeeded
+                # 要求非空正文），此前只落 content_length 导致真实成功调用
+                # 必被判 ai_empty_response；``content_length`` 保留为轻量
+                # 冗余字段供展示层使用。content 可能含材料原文，仅供
+                # 进程内状态机消费，pop 后不再外带。
+                "content": content or "",
+                "content_length": len(content or ""),
+                "error": error,
+                "timestamp": time.time(),
+            }
+        )
+
+    def pop_call_ledger(self) -> List[Dict[str, Any]]:
+        """取出并清空调用留痕（供上层聚合进 result.meta）。"""
+
+        ledger, self.call_ledger = self.call_ledger, []
+        return ledger
 
     def _get_direct_ai_client(self) -> AIClient:
         if self._direct_ai_client is None:
@@ -430,27 +474,88 @@ class ExtractorClient:
                 return parsed if parsed > 0 else None
         return None
 
-    async def _direct_semantic_audit(self, section_text: str) -> List[Dict[str, Any]]:
-        """Use configured LLM provider directly when extractor service is unavailable."""
+    def _resolve_audit_max_tokens(self) -> int:
+        """审计调用 max_tokens 解析链：AI_AUDIT_MAX_TOKENS > AI_MAX_TOKENS > 应用配置。
+
+        此前写死 3200：复杂决算长文一旦截断，空结果会被误解为"未发现问题"。
+        应用配置读真实 Settings 接口（config/app.yaml 的 ai.max_tokens）。
+        """
+
+        for env_name in ("AI_AUDIT_MAX_TOKENS", "AI_MAX_TOKENS"):
+            raw = os.getenv(env_name)
+            if raw is None:
+                continue
+            try:
+                value = int(str(raw).strip())
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+        try:
+            from config.settings import get_settings
+
+            configured = get_settings().get("ai", "max_tokens")
+            value = int(configured)
+            if value > 0:
+                return value
+        except Exception:
+            pass
+        return 4000
+
+    async def _direct_semantic_audit(
+        self,
+        section_text: str,
+        structured_context: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Use configured LLM provider directly when extractor service is unavailable.
+
+        AI 输入表征增强（计划 §4）：prompt = 指令 + 结构化事实与表格关系
+        （带页码，确定性解析产出）+ 原文窗口。模型只输出语义候选，
+        金额勾稽以确定性规则为准——注入块中显式声明该边界。
+        """
         ai_client = self._get_direct_ai_client()
         instructions = render_full_report_audit_instructions()
         prompt = f"{instructions}\n\n待审文本：\n{section_text or ''}"
+        if structured_context:
+            prompt += f"\n\n{structured_context}"
         prompt_version = prompt_version_from_template(
             FULL_REPORT_AUDIT_PROMPT_ID, instructions
         )
-        response = await ai_client.chat(
-            messages=[
-                {"role": "system", "content": "你是严格的 JSON 输出助手。"},
-                {"role": "user", "content": prompt},
-            ],
-            preferred_provider=self._get_audit_provider(),
-            model=self._get_audit_model(),
-            temperature=0,
-            max_tokens=3200,
-            timeout=int(self.config.timeout),
+        try:
+            response = await ai_client.chat(
+                messages=[
+                    {"role": "system", "content": "你是严格的 JSON 输出助手。"},
+                    {"role": "user", "content": prompt},
+                ],
+                preferred_provider=self._get_audit_provider(),
+                model=self._get_audit_model(),
+                temperature=0,
+                max_tokens=self._resolve_audit_max_tokens(),
+                timeout=int(self.config.timeout),
+            )
+        except Exception as exc:
+            # 失败也要留痕：状态机需要区分"AI 没查"和"查了但失败"
+            self.record_call(
+                self._get_audit_provider(),
+                self._get_audit_model(),
+                prompt_version=prompt_version,
+                error=str(exc) or type(exc).__name__,
+            )
+            raise
+        content_text = self._response_content_text(response)
+        finish_reason = (
+            response.get("finish_reason") if isinstance(response, dict) else None
         )
         # 记录"这次实际用的是哪个提供商/模型"，而不是配置里"打算用"的那个：
         # 客户端存在熔断回退，实际生效的模型可能与配置不同。
+        self.record_call(
+            response.get("provider_used") if isinstance(response, dict) else None,
+            response.get("model") if isinstance(response, dict) else None,
+            prompt_version=prompt_version,
+            finish_reason=finish_reason if isinstance(finish_reason, str) else None,
+            token_usage=response.get("tokens") if isinstance(response, dict) else None,
+            content=content_text,
+        )
         provenance = build_finding_provenance(
             model_version=build_model_version(
                 response.get("provider_used") if isinstance(response, dict) else None,
@@ -459,7 +564,7 @@ class ExtractorClient:
             prompt_version=prompt_version,
             source_channel="direct_llm",
         )
-        parsed = self._extract_json_array(self._response_content_text(response)) or []
+        parsed = self._extract_json_array(content_text) or []
         normalized: List[Dict[str, Any]] = []
         seen_keys = set()
         for item in parsed:
@@ -731,14 +836,22 @@ class ExtractorClient:
                 
         return converted
     
-    async def ai_semantic_audit(self, section_text: str, doc_hash: str) -> List[Dict[str, Any]]:
+    async def ai_semantic_audit(
+        self,
+        section_text: str,
+        doc_hash: str,
+        structured_context: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
         调用AI抽取器进行语义审计（错别字、重复、表达不当）
-        
+
         Args:
             section_text: 待检查的文本内容
             doc_hash: 文档哈希
-            
+            structured_context: 结构化事实与表格关系注入块
+                （src/services/ai_input_builder.py 构建）。仅直连回退路径
+                消费；抽取服务路径提示词在远端，不透传。
+
         Returns:
             语义问题列表，每个元素包含：
             - type: 错误类型（错别字/重复/表达不当/规范性）
@@ -750,11 +863,11 @@ class ExtractorClient:
         if not self.config.enabled:
             logger.debug("AI辅助未启用，返回空列表")
             return []
-            
+
         if not section_text.strip():
             logger.debug("输入文本为空，返回空列表")
             return []
-            
+
         try:
             result = await self._call_semantic_audit(section_text, doc_hash)
             if result:
@@ -762,25 +875,37 @@ class ExtractorClient:
             if self.config.direct_fallback:
                 try:
                     logger.warning("Semantic audit service returned empty hits, falling back to direct LLM semantic audit")
-                    return await self._direct_semantic_audit(section_text)
+                    return await self._direct_semantic_audit(
+                        section_text, structured_context=structured_context
+                    )
                 except Exception as direct_err:
                     logger.error(f"Direct semantic fallback on empty hits failed: {direct_err}")
             return result
-            
+
         except Exception as e:
             logger.error(f"AI语义审计失败: {e}")
             if self.config.direct_fallback:
                 try:
                     logger.warning("Falling back to direct LLM semantic audit")
-                    return await self._direct_semantic_audit(section_text)
+                    return await self._direct_semantic_audit(
+                        section_text, structured_context=structured_context
+                    )
                 except Exception as direct_err:
                     logger.error(f"Direct semantic fallback failed: {direct_err}")
             return []
 
-    async def ai_full_report_audit(self, section_text: str, doc_hash: str) -> List[Dict[str, Any]]:
+    async def ai_full_report_audit(
+        self,
+        section_text: str,
+        doc_hash: str,
+        structured_context: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
         全量报告审查：优先走直连大模型（Gemini等）以使用增强提示词，
         当直连失败时再回退到抽取服务语义审计。
+
+        ``structured_context`` 为可选的结构化事实与表格关系注入块
+        （src/services/ai_input_builder.py 构建），直连路径随 prompt 注入。
         """
         if not self.config.enabled:
             logger.debug("AI辅助未启用，返回空列表")
@@ -792,16 +917,22 @@ class ExtractorClient:
 
         # 先走直连模型，确保使用全量审查提示词
         try:
-            direct_result = await self._direct_semantic_audit(section_text)
+            direct_result = await self._direct_semantic_audit(
+                section_text, structured_context=structured_context
+            )
             if direct_result:
                 return direct_result
             logger.info("Direct full-report audit returned no issues, falling back to extractor semantic audit")
         except Exception as direct_err:
             logger.warning(f"Direct full-report audit failed: {direct_err}")
 
-        # 直连失败或直连无结果时，再尝试抽取服务
+        # 直连失败或直连无结果时，再尝试抽取服务；
+        # structured_context 继续透传——直连回退同样要拿到注入块，
+        # 避免同一文档在不同回退层级出现两种输入表征。
         try:
-            return await self.ai_semantic_audit(section_text, doc_hash)
+            return await self.ai_semantic_audit(
+                section_text, doc_hash, structured_context=structured_context
+            )
         except Exception as e:
             logger.error(f"AI全量审查失败: {e}")
             return []
@@ -817,55 +948,77 @@ class ExtractorClient:
         }
         if self.config.main_model:
             request_data["model"] = self.config.main_model
-        
-        async with httpx.AsyncClient(timeout=self.config.timeout) as client:
-            response = await client.post(
-                self.config.url,
-                json=request_data,
-                headers={"Content-Type": "application/json"}
-            )
-            
-            if response.status_code != 200:
-                raise Exception(
-                    "AI语义审计返回错误状态码: {status}, 响应指纹: {marker}".format(
-                        status=response.status_code,
-                        marker=fingerprint_for_log(response.text),
+
+        try:
+            async with httpx.AsyncClient(timeout=self.config.timeout) as client:
+                response = await client.post(
+                    self.config.url,
+                    json=request_data,
+                    headers={"Content-Type": "application/json"}
+                )
+
+                if response.status_code != 200:
+                    raise Exception(
+                        "AI语义审计返回错误状态码: {status}, 响应指纹: {marker}".format(
+                            status=response.status_code,
+                            marker=fingerprint_for_log(response.text),
+                        )
                     )
+
+                result = response.json()
+
+                if "hits" not in result:
+                    raise Exception(
+                        f"AI语义审计返回格式错误: 缺少 hits 字段, 响应指纹: {fingerprint_for_log(result)}"
+                    )
+
+                hits = result["hits"]
+                logger.info(f"AI语义审计成功，获得{len(hits)}个结果")
+
+                # 走抽取服务时提示词在远端，本地只能记录任务契约标识；
+                # 模型优先采用服务回传的实际值，缺失时退回本次请求指定的模型。
+                service_model = ""
+                if isinstance(result, dict):
+                    service_model = str(result.get("model") or "").strip()
+                # 抽取服务路径同样留痕。合法空结果（hits=[]，服务 200 且
+                # 明确"无问题"）与调用失败不同：content 落 "[]"（非空字符串
+                # 构成成功证据，与直连路径返回 "[]" 的契约一致——GPT5.6 R2
+                # P1-3：此前空 hits 落 ""，会被 ai_execution 误判
+                # ai_empty_response → 直连失败+抽取服务成功无发现时错误转
+                # failed/review_required）。
+                self.record_call(
+                    "extractor_service",
+                    service_model or self.config.main_model or None,
+                    prompt_version=SEMANTIC_AUDIT_SERVICE_TASK,
+                    token_usage=result.get("usage") if isinstance(result, dict) else None,
+                    content=json.dumps(hits, ensure_ascii=False),
+                )
+                provenance = build_finding_provenance(
+                    model_version=build_model_version(
+                        None, service_model or self.config.main_model
+                    ),
+                    prompt_version=SEMANTIC_AUDIT_SERVICE_TASK,
+                    source_channel="extractor_service",
                 )
 
-            result = response.json()
+                # 提取语义问题
+                semantic_issues = []
+                for hit in hits:
+                    if "semantic_issues" in hit and hit["semantic_issues"]:
+                        for issue in hit["semantic_issues"]:
+                            if isinstance(issue, dict):
+                                issue.setdefault("provenance", dict(provenance))
+                            semantic_issues.append(issue)
 
-            if "hits" not in result:
-                raise Exception(
-                    f"AI语义审计返回格式错误: 缺少 hits 字段, 响应指纹: {fingerprint_for_log(result)}"
-                )
-                
-            hits = result["hits"]
-            logger.info(f"AI语义审计成功，获得{len(hits)}个结果")
-
-            # 走抽取服务时提示词在远端，本地只能记录任务契约标识；
-            # 模型优先采用服务回传的实际值，缺失时退回本次请求指定的模型。
-            service_model = ""
-            if isinstance(result, dict):
-                service_model = str(result.get("model") or "").strip()
-            provenance = build_finding_provenance(
-                model_version=build_model_version(
-                    None, service_model or self.config.main_model
-                ),
+                return semantic_issues
+        except Exception as exc:
+            self.record_call(
+                "extractor_service",
+                self.config.main_model or None,
                 prompt_version=SEMANTIC_AUDIT_SERVICE_TASK,
-                source_channel="extractor_service",
+                error=str(exc) or type(exc).__name__,
             )
-
-            # 提取语义问题
-            semantic_issues = []
-            for hit in hits:
-                if "semantic_issues" in hit and hit["semantic_issues"]:
-                    for issue in hit["semantic_issues"]:
-                        if isinstance(issue, dict):
-                            issue.setdefault("provenance", dict(provenance))
-                        semantic_issues.append(issue)
-            
-            return semantic_issues
+            raise
     
     async def health_check(self) -> bool:
         """健康检查"""

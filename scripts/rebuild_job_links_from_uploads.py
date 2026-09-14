@@ -18,6 +18,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from src.services.pdf_selection import select_canonical_pdf  # noqa: E402
+
 
 @dataclass(frozen=True)
 class OrgRecord:
@@ -207,9 +213,14 @@ def rank_candidates(orgs: Sequence[OrgRecord], filename: str) -> List[Tuple[OrgR
 
 
 def first_pdf_name(job_dir: Path) -> Optional[str]:
-    pdfs = sorted(job_dir.glob("*.pdf"))
-    if pdfs:
-        return pdfs[0].name
+    try:
+        return select_canonical_pdf(job_dir).name
+    except ValueError:
+        # 多 PDF 无法由 status 唯一确认时不能猜测文件；调用方会把
+        # 该任务列入 unmatched，而不是按错误文件绑定组织。
+        return None
+    except FileNotFoundError:
+        pass
     status_path = job_dir / "status.json"
     if status_path.exists():
         try:

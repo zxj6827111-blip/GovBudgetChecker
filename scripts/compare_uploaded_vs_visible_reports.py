@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -22,6 +23,12 @@ import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from src.services.pdf_selection import select_canonical_pdf  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -126,7 +133,12 @@ def iter_upload_jobs(uploads_dir: Path) -> Dict[str, UploadJob]:
         has_pdf = bool(pdfs)
         has_status = (child / "status.json").exists()
 
-        filename = pdfs[0].name if pdfs else ""
+        try:
+            filename = select_canonical_pdf(child).name
+        except (FileNotFoundError, ValueError):
+            # 多 PDF 无法唯一确认原件时不按字母序猜；状态中的文件名
+            # 仍可作为显示线索，但不会被误报为已选中的本地 PDF。
+            filename = ""
         if not filename:
             status_payload = load_json(child / "status.json", {})
             filename = str(status_payload.get("filename") or "").strip()
