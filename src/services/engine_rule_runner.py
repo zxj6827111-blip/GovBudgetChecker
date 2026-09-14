@@ -2,6 +2,7 @@
 寮曟搸瑙勫垯杩愯鍣?
 灏佽鐜版湁鐨?engine/rules_v33锛岀粺涓€杈撳嚭鏍煎紡涓?IssueItem
 """
+
 import logging
 import time
 import uuid
@@ -15,6 +16,7 @@ from src.engine.common_rules import ALL_COMMON_RULES
 from src.engine.rule_outcome import (
     RuleOutcome,
     RuleOutcomeSignal,
+    STATUS_PARSE_ERROR,
     summarize_rule_outcomes,
 )
 from src.utils.issue_bbox import PDFBBoxLocator
@@ -28,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 class EngineRuleRunner:
     """Execute local engine rules and normalize findings."""
+
     def __init__(self):
         self._stats = {
             "total_rules": 0,
@@ -94,7 +97,9 @@ class EngineRuleRunner:
             rule_id=rule_id or getattr(issue, "rule", ""),
             location=raw_location,
             message=getattr(issue, "message", "") or "",
-            evidence_text=getattr(issue, "evidence_text", None) or getattr(issue, "message", "") or "",
+            evidence_text=getattr(issue, "evidence_text", None)
+            or getattr(issue, "message", "")
+            or "",
             document=document,
         )
         page_number = self._normalize_page(
@@ -160,7 +165,7 @@ class EngineRuleRunner:
             return "final"
 
         if document and document.page_texts:
-            first_text = (document.page_texts[0] or "")
+            first_text = document.page_texts[0] or ""
             if "\u9884\u7b97" in first_text:
                 return "budget"
             if "\u51b3\u7b97" in first_text:
@@ -182,19 +187,18 @@ class EngineRuleRunner:
         # against either type-specific rule set.  Common rules still provide
         # low-risk feedback while the UI requests human confirmation.
         return list(ALL_COMMON_RULES)
-    
-    async def run_rules(self, 
-                       job_context: JobContext,
-                       rules: List[Dict[str, Any]],
-                       config: AnalysisConfig) -> List[IssueItem]:
+
+    async def run_rules(
+        self, job_context: JobContext, rules: List[Dict[str, Any]], config: AnalysisConfig
+    ) -> List[IssueItem]:
         """
         杩愯寮曟搸瑙勫垯妫€鏌?
-        
+
         Args:
             job_context: 浣滀笟涓婁笅鏂?
             rules: 寮曟搸瑙勫垯鍒楄〃
             config: 鍒嗘瀽閰嶇疆
-            
+
         Returns:
             List[IssueItem]: 妫€鏌ョ粨鏋滃垪琛?
         """
@@ -215,7 +219,7 @@ class EngineRuleRunner:
             "total_rules": len(selected_rules),
             "successful_rules": 0,
             "failed_rules": 0,
-            "total_findings": 0
+            "total_findings": 0,
         }
         self._outcomes = []
 
@@ -235,6 +239,7 @@ class EngineRuleRunner:
 
                     # 杞崲涓篒ssueItem鏍煎紡
                     findings = []
+                    conversion_errors = []
                     for issue in issues:
                         try:
                             finding = self._issue_to_finding(
@@ -251,21 +256,36 @@ class EngineRuleRunner:
                             # 所以刻意不用 logger.exception，只留错误类型、字段路径与指纹。
                             logger.error(
                                 "Failed to convert issue to IssueItem",
-                                extra=safe_log_extra(
-                                    {"rule_id": rule_id, **describe_exception(e)}
-                                ),
+                                extra=safe_log_extra({"rule_id": rule_id, **describe_exception(e)}),
                             )
+                            conversion_errors.append(type(e).__name__)
                             continue
 
-                    self._stats["successful_rules"] += 1
+                    if conversion_errors:
+                        # 规则本身跑完不等于结果可信：只要有一条 issue 在
+                        # IssueItem 边界被丢弃，就必须进入 parse_error 摘要，
+                        # 由质量门转人工复核，不能把“部分输出”记成 pass。
+                        self._stats["failed_rules"] += 1
+                        self._outcomes.append(
+                            RuleOutcome(
+                                rule_id=str(rule_id),
+                                status=STATUS_PARSE_ERROR,
+                                detail=(
+                                    f"{len(conversion_errors)} 个 finding 转换失败，"
+                                    f"异常类型={sorted(set(conversion_errors))}"
+                                ),
+                            )
+                        )
+                    else:
+                        self._stats["successful_rules"] += 1
+                        self._outcomes.append(
+                            RuleOutcome(
+                                rule_id=str(rule_id),
+                                status="fail" if findings else "pass",
+                            )
+                        )
                     all_findings.extend(findings)
                     self._stats["total_findings"] += len(findings)
-                    self._outcomes.append(
-                        RuleOutcome(
-                            rule_id=str(rule_id),
-                            status="fail" if findings else "pass",
-                        )
-                    )
 
                     logger.debug(f"Rule {rule_id} found {len(findings)} issues")
 
@@ -283,9 +303,7 @@ class EngineRuleRunner:
                         "Rule %s deferred: %s",
                         rule_id,
                         signal.status,
-                        extra=safe_log_extra(
-                            {"rule_id": rule_id, "outcome": signal.status}
-                        ),
+                        extra=safe_log_extra({"rule_id": rule_id, "outcome": signal.status}),
                     )
                     continue
                 except Exception as e:
@@ -301,7 +319,7 @@ class EngineRuleRunner:
                         "Rule execution failed",
                         extra=safe_log_extra({"rule_id": rule_id, **describe_exception(e)}),
                     )
-                    
+
                     # 鍒涘缓澶辫触璁板綍
                     if config.record_rule_failures:
                         failure_item = IssueItem(
@@ -313,7 +331,13 @@ class EngineRuleRunner:
                             severity="low",
                             location={"page": 1},
                             page_number=1,
-                            evidence=[{"page": 1, "text": f"Execution error: {str(e)}", "text_snippet": f"Execution error: {str(e)}"}],
+                            evidence=[
+                                {
+                                    "page": 1,
+                                    "text": f"Execution error: {str(e)}",
+                                    "text_snippet": f"Execution error: {str(e)}",
+                                }
+                            ],
                             why_not=f"EXECUTION_ERROR: {str(e)}",
                             rule_version=rule_version,
                             engine_version=ENGINE_VERSION,
@@ -321,102 +345,95 @@ class EngineRuleRunner:
                         all_findings.append(failure_item)
         finally:
             bbox_locator.close()
-        
-        logger.info(f"Engine rules completed: {len(all_findings)} findings from {len(selected_rules)} rules "
-                   f"(success: {self._stats['successful_rules']}, failed: {self._stats['failed_rules']})")
-        
+
+        logger.info(
+            f"Engine rules completed: {len(all_findings)} findings from {len(selected_rules)} rules "
+            f"(success: {self._stats['successful_rules']}, failed: {self._stats['failed_rules']})"
+        )
+
         return all_findings
-    
+
     async def _prepare_document(self, job_context: JobContext) -> Document:
         """鍑嗗鏂囨。瀵硅薄"""
-        
+
         # 1. 浼樺厛浣跨敤 JobContext 涓殑 page_texts 鍜?page_tables锛堢簿纭〉鐮侊級
-        if hasattr(job_context, 'page_texts') and job_context.page_texts:
-            logger.info(f"Using page_texts from JobContext for job {job_context.job_id} ({len(job_context.page_texts)} pages)")
-            
+        if hasattr(job_context, "page_texts") and job_context.page_texts:
+            logger.info(
+                f"Using page_texts from JobContext for job {job_context.job_id} ({len(job_context.page_texts)} pages)"
+            )
+
             page_texts = job_context.page_texts
-            page_tables = getattr(job_context, 'page_tables', []) or []
-            
+            page_tables = getattr(job_context, "page_tables", []) or []
+
             # 纭繚 page_tables 涓?page_texts 闀垮害涓€鑷?
             while len(page_tables) < len(page_texts):
                 page_tables.append([])
-            
+
             return build_document(
                 path=job_context.pdf_path,
                 page_texts=page_texts,
                 page_tables=page_tables,
-                filesize=getattr(job_context, 'filesize', 0) or job_context.meta.get("filesize", 0)
+                filesize=getattr(job_context, "filesize", 0) or job_context.meta.get("filesize", 0),
             )
-        
+
         # 2. 鍥為€€锛氬皾璇曚粠 ocr_text 鍜?tables 鎭㈠锛堝吋瀹规棫鏁版嵁锛?
         if job_context.ocr_text and job_context.tables:
             logger.info(f"Restoring document from JobContext ocr_text for job {job_context.job_id}")
-            
+
             page_texts = []
             page_tables = []
-            
+
             # 灏?ocr_text 鎸夐〉鎷嗗垎锛堝鏋滃彲鑳斤級
             if job_context.pages > 0 and "\n\n" in job_context.ocr_text:
                 parts = job_context.ocr_text.split("\n\n")
                 if len(parts) == job_context.pages:
                     page_texts = parts
-            
+
             # 濡傛灉娌℃媶鎴愶紝灏卞叏閮ㄦ斁杩涚涓€椤?
             if not page_texts:
                 page_texts = [job_context.ocr_text]
-            
+
             # 鎭㈠琛ㄦ牸鏁版嵁
             num_pages = job_context.pages or len(job_context.tables) or 1
             temp_tables = [[] for _ in range(num_pages)]
-            
+
             for item in job_context.tables:
                 p_idx = item.get("page", 1) - 1
                 if 0 <= p_idx < len(temp_tables):
                     temp_tables[p_idx] = item.get("tables", [])
-            
+
             page_tables = temp_tables
-            
+
             return build_document(
                 path=job_context.pdf_path,
                 page_texts=page_texts,
                 page_tables=page_tables,
-                filesize=job_context.meta.get("filesize", 0)
+                filesize=job_context.meta.get("filesize", 0),
             )
 
         # 2. 濡傛灉 job_context 涓病鏈夋暟鎹紝鍒欏疄闄呰В鏋?PDF 鏂囦欢
         logger.warning(f"JobContext missing data, re-parsing PDF: {job_context.pdf_path}")
         import pdfplumber
         import os
-        
+        from src.services.pdf_page_extract import (
+            extract_tables_from_page,
+            extract_visible_text_from_page,
+        )
+
         page_texts = []
         page_tables = []
         filesize = 0
-        
+
         try:
             if os.path.exists(job_context.pdf_path):
                 filesize = os.path.getsize(job_context.pdf_path)
                 with pdfplumber.open(job_context.pdf_path) as pdf:
                     job_context.pages = len(pdf.pages)
                     for page in pdf.pages:
-                        page_texts.append(page.extract_text() or "")
-                        # 鉁?淇锛氫娇鐢ㄦ洿绋冲仴鐨勮〃鏍兼彁鍙栫瓥鐣ワ紝涓?api/main.py 淇濇寔涓€鑷?
-                        tables = []
-                        try:
-                            # 灏濊瘯绾跨瓥鐣?
-                            rows = page.extract_tables(table_settings={
-                                "vertical_strategy": "lines",
-                                "horizontal_strategy": "lines",
-                                "intersection_tolerance": 3,
-                            }) or []
-                            tables.extend(rows)
-                        except:
-                            pass
-                        
-                        if not tables:
-                            # 閫€濉粯璁ょ瓥鐣?
-                            tables = page.extract_tables() or []
-                            
-                        page_tables.append(tables)
+                        page_texts.append(extract_visible_text_from_page(page))
+                        # fallback 也必须复用带 bbox/表名锚的统一抽取器，
+                        # 否则 structured 规则会在该入口重新丢失表边界。
+                        page_tables.append(extract_tables_from_page(page))
             else:
                 logger.error(f"PDF鏂囦欢涓嶅瓨鍦? {job_context.pdf_path}")
         except Exception as e:
@@ -424,47 +441,47 @@ class EngineRuleRunner:
                 "parse pdf for rule engine failed",
                 extra=safe_log_extra(describe_exception(e)),
             )
-        
+
         return build_document(
             path=job_context.pdf_path,
             page_texts=page_texts,
             page_tables=page_tables,
-            filesize=filesize
+            filesize=filesize,
         )
-    
-    def _apply_tolerance(self, 
-                        findings: List[IssueItem], 
-                        tolerance: Dict[str, Any]) -> List[IssueItem]:
+
+    def _apply_tolerance(
+        self, findings: List[IssueItem], tolerance: Dict[str, Any]
+    ) -> List[IssueItem]:
         """搴旂敤瀹瑰樊璁剧疆杩囨护缁撴灉"""
-        
+
         filtered_findings = []
-        
-        money_rel = tolerance.get('money_rel', 0.005)  # 榛樿 0.5%
-        pct_abs = tolerance.get('pct_abs', 0.002)      # 榛樿 0.2pp
-        
+
+        money_rel = tolerance.get("money_rel", 0.005)  # 榛樿 0.5%
+        pct_abs = tolerance.get("pct_abs", 0.002)  # 榛樿 0.2pp
+
         for finding in findings:
             should_include = True
-            
+
             # 閲戦瀹瑰樊妫€鏌?
             if finding.amount is not None and money_rel > 0:
                 # 杩欓噷闇€瑕佹牴鎹叿浣撶殑涓氬姟閫昏緫瀹炵幇瀹瑰樊妫€鏌?
                 # 鏆傛椂淇濈暀鎵€鏈夐噾棰濈浉鍏崇殑闂
                 pass
-            
+
             # 姣斾緥瀹瑰樊妫€鏌?
             if finding.percentage is not None and pct_abs > 0:
                 # 杩欓噷闇€瑕佹牴鎹叿浣撶殑涓氬姟閫昏緫瀹炵幇瀹瑰樊妫€鏌?
                 # 鏆傛椂淇濈暀鎵€鏈夋瘮渚嬬浉鍏崇殑闂
                 pass
-            
+
             if should_include:
                 filtered_findings.append(finding)
             else:
                 # 鏇存柊 why_not 璇存槑琚宸繃婊?
                 finding.why_not = f"TOLERANCE_FILTERED: money_rel={money_rel}, pct_abs={pct_abs}"
-        
+
         return filtered_findings
-    
+
     def get_stats(self) -> Dict[str, Any]:
         """鑾峰彇鎵ц缁熻"""
         return self._stats.copy()
@@ -472,26 +489,27 @@ class EngineRuleRunner:
     def get_rule_execution_summary(self) -> Dict[str, Any]:
         """规则执行摘要（RuleOutcome 六态汇总），供 result.meta 与质量门消费。"""
         return summarize_rule_outcomes(self._outcomes)
-    
+
     def clear_stats(self):
         """娓呴櫎缁熻淇℃伅"""
         self._stats = {
             "total_rules": 0,
             "successful_rules": 0,
             "failed_rules": 0,
-            "total_findings": 0
+            "total_findings": 0,
         }
 
 
 # 渚挎嵎鍑芥暟
-async def run_engine_rules(job_context: JobContext,
-                          rules: List[Dict[str, Any]],
-                          config: Optional[AnalysisConfig] = None) -> List[IssueItem]:
+async def run_engine_rules(
+    job_context: JobContext, rules: List[Dict[str, Any]], config: Optional[AnalysisConfig] = None
+) -> List[IssueItem]:
     """Convenience wrapper for running engine rules."""
     if config is None:
         from src.schemas.issues import AnalysisConfig
+
         config = AnalysisConfig()
-    
+
     runner = EngineRuleRunner()
     return await runner.run_rules(job_context, rules, config)
 
@@ -507,5 +525,3 @@ def validate_rule_id(rule_id: str) -> bool:
         rule.code == rule_id or rule_id in rule.code
         for rule in (ALL_BUDGET_RULES + FINAL_ALL_RULES + ALL_COMMON_RULES)
     )
-
-

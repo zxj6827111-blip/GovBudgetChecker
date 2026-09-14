@@ -31,6 +31,7 @@ bbox 与证据文本二者取其一，是因为大量规则命中能定位页码
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 #: 缺证据的 AI 问题被降级后写入的状态值
@@ -40,9 +41,13 @@ EVIDENCE_STATUS_COMPLETE = "complete"
 #: 规则来源缺证据时的标记（仍计入正式问题，只是带告警）
 EVIDENCE_STATUS_RULE_WARNING = "incomplete_rule_warning"
 
-#: 文档级规则编号：结构性"缺章节/缺表"判定，finding 天然无页码。
-#: 完整率统计时单独计数，不进入可定位类分母（B1 口径调整）。
-DOCUMENT_LEVEL_RULE_IDS = frozenset({"BUD-001"})
+#: 文档级规则编号：结构性"缺章节/缺表/页数体量"判定，finding 天然
+#: 没有单一页码；完整率统计时单独计数，不进入可定位类分母。
+# 这些规则判定的是整份文档的结构/体量，不存在可绑定到某一页的
+# 单一证据面：BUD-001 缺表/缺章节、V33-002 九表集合缺失/顺序、
+# V33-003 文件页数/体积阈值。把它们硬塞进可定位分母会把“天然无
+# 单页定位”伪装成证据缺口；其余规则缺页仍必须计入缺口。
+DOCUMENT_LEVEL_RULE_IDS = frozenset({"BUD-001", "V33-002", "V33-003"})
 
 #: 降级条目附加的标签，便于前端与导出识别
 EVIDENCE_DEGRADED_TAG = "证据不足待复核"
@@ -66,14 +71,18 @@ def _positive_int(value: Any) -> Optional[int]:
 def _is_valid_bbox(value: Any) -> bool:
     if not isinstance(value, (list, tuple)) or len(value) != 4:
         return False
+    coordinates = []
     for item in value:
         if isinstance(item, bool):
             return False
         try:
-            float(item)
+            coordinate = float(item)
         except (TypeError, ValueError):
             return False
-    return True
+        if not math.isfinite(coordinate):
+            return False
+        coordinates.append(coordinate)
+    return coordinates[2] > coordinates[0] and coordinates[3] > coordinates[1]
 
 
 def _evidence_items(finding: Mapping[str, Any]) -> List[Mapping[str, Any]]:
@@ -87,8 +96,28 @@ def _has_page(finding: Mapping[str, Any]) -> bool:
     if _positive_int(finding.get("page_number")) is not None:
         return True
     location = finding.get("location")
-    if isinstance(location, Mapping) and _positive_int(location.get("page")) is not None:
-        return True
+    if isinstance(location, Mapping):
+        if _positive_int(location.get("page")) is not None:
+            return True
+        # ``pages`` 只有列表/元组形态才代表跨页定位。标量 ``pages`` 在
+        # V33-003 中是“文档总页数”，不能误当作 finding 页码。
+        raw_pages = location.get("pages")
+        if isinstance(raw_pages, (list, tuple)) and any(
+            _positive_int(page) is not None for page in raw_pages
+        ):
+            return True
+        table_refs = location.get("table_refs")
+        if isinstance(table_refs, (list, tuple)):
+            for ref in table_refs:
+                if not isinstance(ref, Mapping):
+                    continue
+                if _positive_int(ref.get("page")) is not None:
+                    return True
+                ref_pages = ref.get("pages")
+                if isinstance(ref_pages, (list, tuple)) and any(
+                    _positive_int(page) is not None for page in ref_pages
+                ):
+                    return True
     return any(
         _positive_int(item.get("page")) is not None for item in _evidence_items(finding)
     )

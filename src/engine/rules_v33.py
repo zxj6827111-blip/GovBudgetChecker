@@ -625,7 +625,14 @@ class R33001_CoverYearUnit(Rule):
                 issues.append(
                     self._issue(
                         f"目录/封面年度缺位：「{match.group().strip()}」疑似应为完整年份（如 {doc.dominant_year or 2025} 年度）。",
-                        {"page": i + 1, "pos": match.start()},
+                        {
+                            "page": i + 1,
+                            "pos": match.start(),
+                            # 精确锚词：命中文本本身（如「202 年度」）。bbox 定位器
+                            # 优先用它全文搜索，避免跨行 evidence 切分词标到别的行
+                            # （实测曾把该问题标到「一、收入支出决算总体情况说明」）。
+                            "anchor": match.group().strip(),
+                        },
                         severity="high",
                         evidence_text=snippet,
                     )
@@ -2154,8 +2161,23 @@ class R33113_PunctuationCheck(Rule):
 # 辅助函数
 # ==================================================================================
 
-def _get_table_rows(doc: Document, table_name: str, include_continuation: bool = True) -> Optional[List[List[str]]]:
-    """获取指定表格的所有行数据，支持跨页表格读取"""
+def _get_table_rows(
+    doc: Document,
+    table_name: str,
+    include_continuation: bool = True,
+    full_extent: bool = False,
+) -> Optional[List[List[str]]]:
+    """获取指定表格的所有行数据，支持跨页表格读取。
+
+    ``full_extent=True`` 时按**锚点页界**合并续页：某表的页范围取其锚点页到
+    下一个（任意表的）锚点页之前一页。实测 41 页样张中「收入决算表」跨 p7-p11、
+    「支出决算表」跨 p12-p16，旧实现只并 1 页，导致 208/210 等类级子项整类缺失，
+    产出「层级校验失败(208)」「合计行列校验失败」等假警告。
+
+    默认 ``False`` 保留历史「最多再并 1 页」行为：本函数有 37 个调用点，
+    放宽页界会改变其它规则的输入（实测会新暴露 V33-202/V33-222/V33-119 的
+    口径与列选择缺陷），故仅由已按全表语义校验的 V33-120 显式启用。
+    """
     p = _get_first_anchor_page(doc, table_name)
     if not p:
         return None
@@ -2169,17 +2191,32 @@ def _get_table_rows(doc: Document, table_name: str, include_continuation: bool =
         return None
     # 返回最大的表格
     main_rows = _largest_table_on_page(tables)
-    
-    # ====== 修复：跨页表格续读 ======
-    # 如果表格看起来未闭合（没有"合计"或"总计"行），尝试读取下一页
+
     if include_continuation and main_rows:
+        if full_extent:
+            anchors = _ensure_table_anchors(doc)
+            later = sorted({pg for pages in anchors.values() for pg in pages if pg > p})
+            # 无后续锚点（本表是最后一张）时以文档末页为界；无表的页直接跳过，
+            # 故说明/名词解释等章节页不会被并入。
+            end_page = (later[0] - 1) if later else len(page_tables)
+            for pg in range(p + 1, min(end_page, len(page_tables)) + 1):
+                next_tables = page_tables[pg - 1]
+                if not next_tables:
+                    continue
+                next_rows = _largest_table_on_page(next_tables)
+                if next_rows:
+                    main_rows = main_rows + next_rows
+            return main_rows
+
+        # ====== 修复：跨页表格续读 ======
+        # 如果表格看起来未闭合（没有"合计"或"总计"行），尝试读取下一页
         has_total_row = False
         for row in main_rows[-5:]:  # 检查最后5行
             row_txt = "".join([str(c) for c in row if c])
             if "合计" in row_txt or "总计" in row_txt or "人员经费合计" in row_txt or "公用经费合计" in row_txt:
                 has_total_row = True
                 break
-        
+
         if not has_total_row and p < len(doc.page_tables):
             # 尝试读取下一页
             next_tables = doc.page_tables[p]  # p 是 1-based, so page_tables[p] is next page
@@ -2188,8 +2225,8 @@ def _get_table_rows(doc: Document, table_name: str, include_continuation: bool =
                 if next_rows:
                     # 合并表格行
                     main_rows = main_rows + next_rows
-    # ====== 修复结束 ======
-    
+        # ====== 修复结束 ======
+
     return main_rows
 
 def _parse_row_values(row: List[str]) -> List[float]:
@@ -2225,6 +2262,39 @@ def _modal_row_width(rows: List[List[str]]) -> Optional[int]:
     if not widths:
         return None
     return Counter(widths).most_common(1)[0][0]
+
+
+def _row_name_col(row: List[str]) -> int:
+    """定位行内「科目名称」列：第一个非空、非纯数字、非类款项标签的单元格。
+
+    跨页续表常把「类|款|项」编码列收缩掉——首页 [码,'','',名,合计,基本,项目]、
+    续页 [码,名,合计,基本,项目]，**行宽不变而语义整体左移 2 格**。此时按首页
+    列位读续页必然错列（长风样张 4 条「合计行列校验失败」误报根因）。
+    """
+    for ci, cell in enumerate(row):
+        text = str(cell or "").strip()
+        if not text:
+            continue
+        compact = text.replace(",", "").replace("，", "")
+        if compact.replace(".", "", 1).isdigit():
+            continue
+        if compact.isdigit() and len(compact) in (3, 5, 7):
+            continue
+        if text in ("类", "款", "项", "合计", "总计", "小计"):
+            continue
+        return ci
+    return -1
+
+
+def _adaptive_value_cols(row: List[str]) -> Optional[Tuple[int, int, int, int]]:
+    """按行自适应定位 (名称列, 合计列, 基本列, 项目列)；定位不到返回 None。
+
+    与 :func:`_row_name_col` 配合使用：名称列之后依次为 合计/基本/项目。
+    """
+    name_col = _row_name_col(row)
+    if name_col < 0:
+        return None
+    return (name_col, name_col + 1, name_col + 2, name_col + 3)
 
 
 def _split_two_sided_row(row: List[str]) -> Tuple[List[str], List[str]]:
@@ -2663,7 +2733,9 @@ class R33120_DetailTableCheck(Rule):
         found_any_table = False
 
         for table_name in target_tables:
-            rows = _get_table_rows(doc, table_name)
+            # 本规则的层级/合计行列校验按**整表**语义判断，故取全页界合并续页；
+            # 旧「最多并 1 页」会把跨 5 页的表截断，产出层级与合计列的假警告。
+            rows = _get_table_rows(doc, table_name, full_extent=True)
             if not rows:
                 continue
             found_any_table = True
@@ -2686,6 +2758,7 @@ class R33120_DetailTableCheck(Rule):
             row_code_level: Dict[str, int] = {}
             # 合计行的数值向量（None 安全，键为 modal 列索引）
             total_row_values: Optional[Dict[int, Decimal]] = None
+            total_row_cells: Optional[List[str]] = None
 
             for row in rows:
                 cells = _row_numbers(row)
@@ -2709,6 +2782,7 @@ class R33120_DetailTableCheck(Rule):
                     }
                     if total_row_values is None and values:
                         total_row_values = values
+                        total_row_cells = row
                     continue
 
                 # 科目行：编码在前 3 列（3/5/7 位）
@@ -2722,7 +2796,14 @@ class R33120_DetailTableCheck(Rule):
                     continue
 
                 amount = None
-                if col_total is not None:
+                # 列位按行自适应：跨页续表会整体左移名称/金额列（宽度不变、语义变），
+                # 固定列位会把续页的「基本/项目」当成「合计」（长风样张根因）
+                adaptive = _adaptive_value_cols(row)
+                if adaptive is not None:
+                    t_col = adaptive[1]
+                    if 0 <= t_col < len(cells) and cells[t_col] is not None:
+                        amount = Decimal(str(cells[t_col]))
+                elif col_total is not None:
                     src = col_total + shift  # modal 列在当前行中的下标（窄行 shift<0）
                     if 0 <= src < len(cells) and cells[src] is not None:
                         amount = Decimal(str(cells[src]))
@@ -2765,18 +2846,22 @@ class R33120_DetailTableCheck(Rule):
                         evidence_text=f"表格：{table_name}\n{parent_code}：{parent_amt:.2f}\n明细之和：{child_sum:.2f}"
                     ))
 
-            # 列合计校验（T2 类差异）：最低级科目行按列求和 vs 合计行对应列
-            if hierarchy and total_row_values:
+            # 列合计校验（T2 类差异）：最低级科目行按列求和 vs 合计行对应列。
+            # 列位按行自适应定位：跨页续表会把「类|款|项」编码列收缩掉——首页
+            # [码,'','',名,合计,基本,项目]、续页 [码,名,合计,基本,项目]，行宽不变
+            # 而语义整体左移 2 格，按首页固定列位读续页必然错列
+            # （长风样张 4 条「合计行列校验失败」误报根因）。
+            # 合计行无名称列（纯数字）时，其数值单元格依序对应 合计/基本/项目。
+            if hierarchy and total_row_values and total_row_cells is not None:
                 lowest_level = max(row_code_level.values())
                 lowest_codes = [
                     c for c, lvl in row_code_level.items() if lvl == lowest_level
                 ]
-                # 按 modal 列索引聚合每列之和（漂移行经重映射对齐）
-                col_sums: Dict[int, Decimal] = defaultdict(lambda: Decimal("0"))
-                col_counts: Dict[int, int] = defaultdict(int)
+                role_sums: Dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+                role_counts: Dict[str, int] = defaultdict(int)
+                adaptive_ok = 0
                 for row in rows:
                     cells = _row_numbers(row)
-                    shift = len(row) - modal_width
                     code = ""
                     for cell in row[:3]:
                         c_str = str(cell or "").strip()
@@ -2785,32 +2870,40 @@ class R33120_DetailTableCheck(Rule):
                             break
                     if code not in lowest_codes:
                         continue
-                    for j, v in enumerate(cells):
-                        modal_idx = j - shift
-                        if v is not None and 0 <= modal_idx < modal_width:
-                            col_sums[modal_idx] += Decimal(str(v))
-                            col_counts[modal_idx] += 1
-
-                for col_idx, total_value in total_row_values.items():
-                    if col_idx not in col_sums:
+                    adaptive = _adaptive_value_cols(row)
+                    if adaptive is None:
                         continue
-                    n = col_counts.get(col_idx, 1)
-                    level, diff = classify_amount_diff(
-                        total_value, col_sums[col_idx], n_children=max(n, 1)
-                    )
-                    if level == "mismatch":
-                        issues.append(self._issue(
-                            f"{table_name}合计行列校验失败：合计({total_value:.2f}) != 明细之和({col_sums[col_idx]:.2f})",
-                            {"table": table_name, "column": col_idx, "page": page}, "warn",
-                            evidence_text=f"表格：{table_name}\n合计值：{total_value:.2f}\n明细之和：{col_sums[col_idx]:.2f}"
-                        ))
-                    elif level == "rounding_hint":
-                        issues.append(self._issue(
-                            f"{table_name}合计行与明细之和相差 {diff:.2f} 万元，"
-                            "在显示舍入包络内，可能为取整误差。",
-                            {"table": table_name, "column": col_idx, "page": page}, "info",
-                            evidence_text=f"表格：{table_name}\n合计值：{total_value:.2f}\n明细之和：{col_sums[col_idx]:.2f}"
-                        ))
+                    adaptive_ok += 1
+                    _name_col, t_col, b_col, p_col = adaptive
+                    for role, c_idx in (("total", t_col), ("basic", b_col), ("project", p_col)):
+                        if 0 <= c_idx < len(cells) and cells[c_idx] is not None:
+                            role_sums[role] += Decimal(str(cells[c_idx]))
+                            role_counts[role] += 1
+
+                if adaptive_ok:
+                    # 合计行：数值单元格依序对应 合计/基本/项目（缺则跳过该角色）
+                    total_cells = _row_numbers(total_row_cells)
+                    total_numeric = [v for v in total_cells if v is not None]
+                    for role, total_value in zip(
+                        ("total", "basic", "project"), total_numeric, strict=False
+                    ):
+                        n = role_counts.get(role, 1)
+                        level, diff = classify_amount_diff(
+                            total_value, role_sums[role], n_children=max(n, 1)
+                        )
+                        if level == "mismatch":
+                            issues.append(self._issue(
+                                f"{table_name}合计行列校验失败：合计({total_value:.2f}) != 明细之和({role_sums[role]:.2f})",
+                                {"table": table_name, "column": role, "page": page}, "warn",
+                                evidence_text=f"表格：{table_name}\n合计值：{total_value:.2f}\n明细之和：{role_sums[role]:.2f}"
+                            ))
+                        elif level == "rounding_hint":
+                            issues.append(self._issue(
+                                f"{table_name}合计行与明细之和相差 {diff:.2f} 万元，"
+                                "在显示舍入包络内，可能为取整误差。",
+                                {"table": table_name, "column": role, "page": page}, "info",
+                                evidence_text=f"表格：{table_name}\n合计值：{total_value:.2f}\n明细之和：{role_sums[role]:.2f}"
+                            ))
                 table_totals[table_name] = {
                     "total_row": {i: float(v) for i, v in total_row_values.items()},
                     "header_cols": header_cols,
@@ -3173,14 +3266,31 @@ class R33202_InterTable_T4_T5(Rule):
         if not t4_rows or not t5_rows:
             return issues
         
-        # T4: 查找"一般公共预算财政拨款"列的支出合计
+        # T4: 查找"一般公共预算财政拨款"列的支出合计。
+        # 列索引必须从表头解析：财政拨款总表支出侧为 [项目, 合计, 一般公共预算财政拨款,
+        # 政府性基金…, 国有资本…]；旧实现硬编码 vals[1] 取到的是**合计**列
+        # （文旅局样张因此拿 26,538.47 去比，而一般公共应为 24,535.67）。
+        col_general = -1
+        for row in t4_rows[:4]:
+            first_cell = str(row[0] or "").strip() if row else ""
+            if re.match(r"^[一二三四五六七八九十]+、", first_cell):
+                break  # 已进入数据行区，停止表头扫描
+            for ci, cell in enumerate(row):
+                if "一般公共" in str(cell or ""):
+                    col_general = ci
+                    break
+            if col_general >= 0:
+                break
+
         t4_general_expense = 0.0
         for row in t4_rows:
             row_txt = "".join([str(c) for c in row if c])
             if "本年支出合计" in row_txt or "支出合计" in row_txt:
                 vals = _parse_row_values(row)
-                # 假设第2列是"一般公共预算"（根据标准表结构）
-                if len(vals) >= 2: t4_general_expense = vals[1]
+                if col_general >= 0 and col_general < len(vals):
+                    t4_general_expense = vals[col_general]
+                elif len(vals) >= 2:
+                    t4_general_expense = vals[1]
                 break
         
         # T5: 查找"合计"行
@@ -3498,6 +3608,12 @@ class R33211_T3_RowTotal(Rule):
         return issues
 
 
+# 两位小数的浮点相减会产生伪差：|20323.21 - (14107.46+6215.76)| 得到
+# 0.010000000002037268，使声明为「0.01 容差」的 `diff > 0.01` 误判为超差。
+# 加一个远小于显示精度（0.01 万元）的容差，只吃掉浮点噪声，不改变阈值语义。
+_AMOUNT_DIFF_EPS = 1e-6
+
+
 class R33240_Table2_IncomeAdvancedCheck(Rule):
     """表二（收入决算表）高级校验：横向求和(强校验0.01) + 纵向层级汇总(容差校验0.01)"""
     code, severity = "V33-240", "error"
@@ -3511,11 +3627,11 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
     
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
-        t2_rows = _get_table_rows(doc, "收入决算表")
-        
+        t2_rows = _get_table_rows(doc, "收入决算表", full_extent=True)
+
         if not t2_rows or len(t2_rows) < 3:
             return issues
-        
+
         # A. 智能表头解析
         header_row_idx = -1
         col_total_idx = -1
@@ -3525,23 +3641,28 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
         
         for r_idx, row in enumerate(t2_rows[:5]):
             row_txt = "".join([str(c) for c in row if c])
-            if "本年收入" in row_txt or "财政拨款" in row_txt:
-                header_row_idx = r_idx
+            # 表头常跨两行：首行「项目/本年收入合计/财政拨款收入…」，次行「功能分类科目编码/科目名称」。
+            # 旧实现命中首行即 break，编码列/名称列永远取不到（col_code_idx 恒为 -1），
+            # 所有数据行 code 为空、level=-1，横向与层级校验整段被跳过（实际只查过 TOTAL 行）。
+            # 故命中任一表头特征都解析，列索引一律「首次命中为准」。
+            if "本年收入" in row_txt or "财政拨款" in row_txt or "科目编码" in row_txt:
+                if header_row_idx == -1:
+                    header_row_idx = r_idx
                 for c_idx, cell in enumerate(row):
                     cell_str = str(cell).strip() if cell else ""
-                    for kw in self.TOTAL_COLUMN_KEYWORDS:
-                        if kw in cell_str:
-                            col_total_idx = c_idx
-                            break
+                    if col_total_idx == -1:
+                        for kw in self.TOTAL_COLUMN_KEYWORDS:
+                            if kw in cell_str:
+                                col_total_idx = c_idx
+                                break
                     for kw in self.INCOME_SOURCE_KEYWORDS:
-                        if kw in cell_str:
+                        if kw in cell_str and kw not in col_sources:
                             col_sources[kw] = c_idx
                             break
-                    if "科目编码" in cell_str or "编码" in cell_str:
+                    if col_code_idx == -1 and ("科目编码" in cell_str or "编码" in cell_str):
                         col_code_idx = c_idx
-                    if "科目名称" in cell_str or "名称" in cell_str:
+                    if col_name_idx == -1 and "科目名称" in cell_str:
                         col_name_idx = c_idx
-                break
         
         if col_total_idx == -1:
             col_code_idx, col_name_idx, col_total_idx = 0, 1, 2
@@ -3552,10 +3673,16 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
         # B. 构建层级数据结构
         hierarchy_data = {}
         
+        # 跨页列布局漂移（如首页「类|款|项|名称|合计…」、续页「编码|名称|合计…」）时，
+        # 续页行按首页列映射解析必然产出假错误。此处不做列重映射，只要求整表列宽一致，
+        # 否则整表跳过（宁可不判，也不误报）。
+        if len({len(r) for r in t2_rows if r}) > 1:
+            return issues
+
         for r_idx, row in enumerate(t2_rows):
             if r_idx <= header_row_idx:
                 continue
-            
+
             row_txt = "".join([str(c) for c in row if c])
             code, name, level = "", "", -1
             
@@ -3590,7 +3717,7 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
                 source_sum = sum(source_vals.values())
                 diff = abs(total_val - source_sum)
                 
-                if diff > 0.01:
+                if diff > 0.01 + _AMOUNT_DIFF_EPS:
                     source_detail = ", ".join([f"{k}={v:.2f}" for k, v in source_vals.items() if v != 0])
                     issues.append(self._issue(
                         f"【收入决算表】第{r_idx+1}行横向求和不平：本年收入合计({total_val:.2f}) ≠ 各来源之和({source_sum:.2f})，差额={diff:.2f}。明细：{source_detail}。科目：{code} {name}",
@@ -3608,8 +3735,9 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
             children = [hierarchy_data[c] for c in level_3 if c.startswith(parent_code)]
             if children:
                 child_sum = sum(c["total"] for c in children)
-                diff = abs(parent["total"] - child_sum)
-                if diff > 0.01:
+                # 统一舍入包络分级：0.0x 级尾差属显示舍入（V33-120 已出提示），不再按 error 误报
+                diff_level, diff = classify_amount_diff(parent["total"], child_sum, n_children=len(children))
+                if diff_level == "mismatch":
                     issues.append(self._issue(
                         f"【收入决算表】款级({parent_code} {parent['name']})纵向汇总不平：款({parent['total']:.2f}) ≠ 项之和({child_sum:.2f})，差额={diff:.2f}",
                         {"table": "收入决算表", "code": parent_code, "diff": diff, "type": "vertical"}, "error",
@@ -3621,8 +3749,8 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
             children = [hierarchy_data[c] for c in level_2 if c.startswith(parent_code)]
             if children:
                 child_sum = sum(c["total"] for c in children)
-                diff = abs(parent["total"] - child_sum)
-                if diff > 0.01:
+                diff_level, diff = classify_amount_diff(parent["total"], child_sum, n_children=len(children))
+                if diff_level == "mismatch":
                     issues.append(self._issue(
                         f"【收入决算表】类级({parent_code} {parent['name']})纵向汇总不平：类({parent['total']:.2f}) ≠ 款之和({child_sum:.2f})，差额={diff:.2f}",
                         {"table": "收入决算表", "code": parent_code, "diff": diff, "type": "vertical"}, "error",
@@ -3632,8 +3760,8 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
         total_row = hierarchy_data.get("TOTAL")
         if total_row and level_1:
             level_1_sum = sum(hierarchy_data[c]["total"] for c in level_1)
-            diff = abs(total_row["total"] - level_1_sum)
-            if diff > 0.01:
+            diff_level, diff = classify_amount_diff(total_row["total"], level_1_sum, n_children=len(level_1))
+            if diff_level == "mismatch":
                 issues.append(self._issue(
                     f"【收入决算表】合计行纵向汇总不平：合计({total_row['total']:.2f}) ≠ 各类之和({level_1_sum:.2f})，差额={diff:.2f}",
                     {"table": "收入决算表", "diff": diff, "type": "vertical_total"}, "error",
@@ -3654,11 +3782,11 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
     
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
-        t3_rows = _get_table_rows(doc, "支出决算表")
-        
+        t3_rows = _get_table_rows(doc, "支出决算表", full_extent=True)
+
         if not t3_rows or len(t3_rows) < 3:
             return issues
-        
+
         # A. 智能表头解析
         header_row_idx = -1
         col_total_idx = -1
@@ -3669,27 +3797,27 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
         
         for r_idx, row in enumerate(t3_rows[:5]):
             row_txt = "".join([str(c) for c in row if c])
-            if "合计" in row_txt or "基本支出" in row_txt or "项目支出" in row_txt:
+            if ("合计" in row_txt or "基本支出" in row_txt or "项目支出" in row_txt
+                    or "科目编码" in row_txt):
                 header_row_idx = r_idx
                 for c_idx, cell in enumerate(row):
                     cell_str = str(cell).strip() if cell else ""
                     for kw in self.TOTAL_COL_KEYWORDS:
-                        if kw in cell_str:
+                        if kw in cell_str and col_total_idx == -1:
                             col_total_idx = c_idx
                             break
                     for kw in self.BASIC_COL_KEYWORDS:
-                        if kw in cell_str:
+                        if kw in cell_str and col_basic_idx == -1:
                             col_basic_idx = c_idx
                             break
                     for kw in self.PROJECT_COL_KEYWORDS:
-                        if kw in cell_str:
+                        if kw in cell_str and col_project_idx == -1:
                             col_project_idx = c_idx
                             break
-                    if cell_str in ["类", "款", "项"] or "编码" in cell_str:
+                    if ("编码" in cell_str or cell_str in ("类", "款", "项")) and c_idx not in col_code_indices:
                         col_code_indices.append(c_idx)
-                    if "科目名称" in cell_str or "名称" in cell_str:
+                    if col_name_idx == -1 and ("科目名称" in cell_str or "名称" in cell_str):
                         col_name_idx = c_idx
-                break
         
         # Default layout: [类, 款, 项, 名称, 合计, 基本, 项目]
         if col_total_idx == -1:
@@ -3703,17 +3831,25 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
         # B. 构建层级数据结构
         hierarchy_data = {}
         
+        # 同 V33-240：跨页列布局漂移时整表跳过，不做部分校验
+        if len({len(r) for r in t3_rows if r}) > 1:
+            return issues
+
         for r_idx, row in enumerate(t3_rows):
             if r_idx <= header_row_idx:
                 continue
-            
+
             row_txt = "".join([str(c) for c in row if c])
             
             # 提取编码 (合并类款项)
             code_parts = []
             for ci in col_code_indices[:3]:
                 if ci < len(row) and row[ci]:
-                    code_parts.append(str(row[ci]).strip())
+                    s = str(row[ci]).strip()
+                    # 只接受 3/5/7 位数字编码：否则「合计」行会把标签并入 code，
+                    # 走不进 elif 分支、level 落到 -1，TOTAL 行被整行跳过
+                    if s.isdigit() and len(s) in (3, 5, 7):
+                        code_parts.append(s)
             code = "".join(code_parts)
             
             # 获取名称
@@ -3765,7 +3901,7 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
                 calc_sum = basic_val + project_val
                 diff = abs(total_val - calc_sum)
                 
-                if diff > 0.01:
+                if diff > 0.01 + _AMOUNT_DIFF_EPS:
                     issues.append(self._issue(
                         f"【支出决算表】第{r_idx+1}行横向求和不平：合计({total_val:.2f}) ≠ 基本({basic_val:.2f})+项目({project_val:.2f})={calc_sum:.2f}，差额={diff:.2f}。科目：{code} {name}",
                         {"table": "支出决算表", "row": r_idx+1, "code": code, "diff": diff}, "error",
@@ -3782,8 +3918,9 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
             children = [hierarchy_data[c] for c in level_3 if c.startswith(parent_code)]
             if children:
                 child_sum = sum(c["total"] for c in children)
-                diff = abs(parent["total"] - child_sum)
-                if diff > 0.01:
+                # 统一舍入包络分级：0.0x 级尾差属显示舍入（V33-120 已出提示），不再按 error 误报
+                diff_level, diff = classify_amount_diff(parent["total"], child_sum, n_children=len(children))
+                if diff_level == "mismatch":
                     issues.append(self._issue(
                         f"【支出决算表】款级({parent_code} {parent['name']})纵向汇总不平：款({parent['total']:.2f}) ≠ 项之和({child_sum:.2f})，差额={diff:.2f}",
                         {"table": "支出决算表", "code": parent_code, "diff": diff, "type": "vertical"}, "error",
@@ -3795,8 +3932,8 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
             children = [hierarchy_data[c] for c in level_2 if c.startswith(parent_code)]
             if children:
                 child_sum = sum(c["total"] for c in children)
-                diff = abs(parent["total"] - child_sum)
-                if diff > 0.01:
+                diff_level, diff = classify_amount_diff(parent["total"], child_sum, n_children=len(children))
+                if diff_level == "mismatch":
                     issues.append(self._issue(
                         f"【支出决算表】类级({parent_code} {parent['name']})纵向汇总不平：类({parent['total']:.2f}) ≠ 款之和({child_sum:.2f})，差额={diff:.2f}",
                         {"table": "支出决算表", "code": parent_code, "diff": diff, "type": "vertical"}, "error",
@@ -3806,8 +3943,8 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
         total_row = hierarchy_data.get("TOTAL")
         if total_row and level_1:
             level_1_sum = sum(hierarchy_data[c]["total"] for c in level_1)
-            diff = abs(total_row["total"] - level_1_sum)
-            if diff > 0.01:
+            diff_level, diff = classify_amount_diff(total_row["total"], level_1_sum, n_children=len(level_1))
+            if diff_level == "mismatch":
                 issues.append(self._issue(
                     f"【支出决算表】合计行纵向汇总不平：合计({total_row['total']:.2f}) ≠ 各类之和({level_1_sum:.2f})，差额={diff:.2f}",
                     {"table": "支出决算表", "diff": diff, "type": "vertical_total"}, "error",
@@ -4242,9 +4379,22 @@ class R33221_Narrative4_T4(Rule):
         narrative_page: Optional[int] = None
         for pidx, txt in enumerate(doc.page_texts):
             if "财政拨款" in txt and ("总体情况" in txt or "收入支出决算" in txt):
-                total_match = re.search(r'(?:财政拨款)?[收入支出]*总计[^\d]*(\d+\.?\d*)\s*万元', txt)
+                # 优先取「财政拨款…总计」：同页可能先出现说明一的「收入支出总计」（含年初
+                # 结转、另一口径，文旅局样张为 26,591.08），直接用首个匹配会把另一口径
+                # 当成财政拨款总计。取不到再退回通用模式（兼容不写"财政拨款"前缀的文档）。
+                # 「总\s*计」「增\s*加」等均容忍软换行空白——PDF 常把"总计增/加"拆在两行，
+                # 否则负向断言失效、又会把**增加额**当成总计（文旅局样张 8,487.88）。
+                total_match = re.search(
+                    r'财政拨款[收入支出]*总\s*计(?!\s*(?:增\s*加|减\s*少|下\s*降|增\s*长))[^0-9]{0,12}(\d[\d,]*(?:\.\d+)?)\s*万元',
+                    txt,
+                )
+                if total_match is None:
+                    total_match = re.search(
+                        r'(?:财政拨款)?[收入支出]*总\s*计(?!\s*(?:增\s*加|减\s*少|下\s*降|增\s*长))[^0-9]{0,12}(\d[\d,]*(?:\.\d+)?)\s*万元',
+                        txt,
+                    )
                 if total_match:
-                    narrative_total = float(total_match.group(1))
+                    narrative_total = float(total_match.group(1).replace(",", ""))
                     narrative_page = pidx + 1
 
         t4_page = _get_first_anchor_page(doc, "财政拨款收入支出决算总表")
@@ -4342,10 +4492,15 @@ class R33222_Narrative5_T5(Rule):
         
         if not target_txt: return issues
         
-        # 校验总额
-        total_match = re.search(r'支出[^\d]*(\d+\.?\d*)\s*万元', target_txt)
+        # 校验总额：必须锚定「一般公共预算财政拨款支出」。旧正则从任意"支出"二字起配，
+        # 会命中同页说明一「收入支出总计 26591.08 万元」（含年初结转的另一口径），
+        # 导致说明侧取数错误（文旅局样张）。负向断言排除「…支出年初预算为」。
+        total_match = re.search(
+            r'一般公共预算财政拨款支出(?!\s*年初预算)[^\d]{0,20}(\d[\d,]*(?:\.\d+)?)\s*万元',
+            target_txt,
+        )
         if total_match:
-            nar_total = float(total_match.group(1))
+            nar_total = float(total_match.group(1).replace(",", ""))
             if t5_total > 0.01 and abs(nar_total - t5_total) > 0.01:
                 location = _make_issue_location(
                     _make_location_ref(
@@ -5157,11 +5312,21 @@ class R33225_Narrative1_T1(Rule):
 def _extract_header_labels(rows: List[List[str]], depth: int = 3) -> List[str]:
     if not rows:
         return []
-    max_cols = max(len(row) for row in rows[:depth])
+    # 表头合并不得跨越首个数据行：行首为 3/5/7 位科目编码或「合计/总计」即为数据行。
+    # 否则「合计」数据行的列首单元格会被并入第 0 列（科目编码列）的表头，
+    # 使 _extract_final_formula_rows 的 idx_total 落到编码列——实测把功能分类
+    # 编码 201/204/… 当成合计值 201.00/204.00，整行列索引左移一位。
+    effective = depth
+    for i in range(min(depth, len(rows))):
+        first = str(rows[i][0] or "").strip() if rows[i] else ""
+        if first in ("合计", "总计") or (first.isdigit() and len(first) in (3, 5, 7)):
+            effective = max(i, 1)
+            break
+    max_cols = max(len(row) for row in rows[:effective])
     headers: List[str] = []
     for col in range(max_cols):
         parts: List[str] = []
-        for row in rows[:depth]:
+        for row in rows[:effective]:
             if col < len(row):
                 cell = str(row[col] or "").strip()
                 if cell:
@@ -5181,6 +5346,11 @@ def _extract_final_formula_rows(rows: List[List[str]]) -> List[Dict[str, Any]]:
     for idx, header in enumerate(norm_headers):
         if idx_name is None and ("功能分类科目名称" in header or ("科目名称" in header and "编码" not in header)):
             idx_name = idx
+        # 双保险：科目编码列永不参与金额取值。表头深度探测（_extract_header_labels）
+        # 已经能挡住「合计」数据行污染，但若某表的表头行数与形态超出探测假设，
+        # 编码列的数值化（"201" -> 201.0）仍会被误当合计，故在此再拦一道。
+        if "编码" in header:
+            continue
         if idx_basic is None and "基本支出" in header:
             idx_basic = idx
         elif idx_project is None and "项目支出" in header:
@@ -5445,6 +5615,16 @@ class R33235_NarrativeAmountConsistency(Rule):
             if not front_match or not final_match:
                 continue
 
+            # 条目开头金额必须是「条目自身的决算数」（紧跟科目名之后、位于"年初预算"之前）。
+            # 若条目格式为「N、…（项）。主要用于：…。年初预算为 X 万元，支出决算为 Y 万元」
+            # （开头无金额，文旅局样张格式），首个数字会是**年初预算**——拿它和决算比必然
+            # 不等，曾一次性产出 20 条误报。故开头金额落在"年初预算"之后的一律不判。
+            # 注意：PDF 软换行会在字间插空格（"年 初预算"、"年初预 算为"），
+            # 定位"年初预算"必须允许字符间空白，否则守卫失效。
+            budget_hint = re.search(r"年\s*初\s*预\s*算", segment)
+            if budget_hint and front_match.start("front") > budget_hint.start():
+                continue
+
             front_amount = parse_number(front_match.group("front"))
             final_amount = parse_number(final_match.group("final"))
             if front_amount is None or final_amount is None:
@@ -5676,6 +5856,38 @@ class R33246_DomesticReceptionDisclosure(Rule):
         section_title, scope, _start, _end = found
         scope_text = scope
 
+        # 批次/人次的口径按「就近主体」判定（句子 → 分句 两级 + 主体状态机）：
+        # - 只按句子判：会把「公务接待 1 批次、7 人次，其中：接待外宾批 0 次、0 人次」
+        #   这种同句混合口径整句判成外事口径（长风样张误报）；
+        # - 只按分句判：会把「接待外宾 0 批次、0 人次」拆出的「0 人次」误判成国内
+        #   （语料 T6 漏报）。
+        # 状态机：遇 外宾/境外/国外 置外事口径，遇 国内/公务接待 切回国内，
+        #         计数词归属当时的口径；句子边界处重置为国内。
+        def _para_disclosure(para: str) -> Tuple[bool, bool]:
+            domestic = False
+            foreign = False
+            for sentence in re.split(r"[。；;！!]", para):
+                state_foreign = False
+                for clause in split_clauses(sentence):
+                    compact_c = re.sub(r"\s+", "", clause)
+                    if not compact_c:
+                        continue
+                    if "外宾" in compact_c or "境外" in compact_c or "国外" in compact_c:
+                        state_foreign = True
+                    if "国内" in compact_c or "公务接待" in compact_c:
+                        state_foreign = False
+                    if "批次" in compact_c or "人次" in compact_c:
+                        if state_foreign:
+                            foreign = True
+                        else:
+                            domestic = True
+            return domestic, foreign
+
+        # 披露完整性按**整个三公章节**判定：国内批次/人次只要在任一段落披露过即完整。
+        # 长风样张把说明拆成两段（前段只有金额、后段才有「1 批次、7 人次」），
+        # 逐段判定会对前段重复产出误报。
+        candidate_paras: List[str] = []
+        section_domestic = False
         for para in merge_soft_wrapped_lines(scope_text):
             if "公务接待" not in para:
                 continue
@@ -5683,18 +5895,17 @@ class R33246_DomesticReceptionDisclosure(Rule):
             # 该段是否为公务接待具体说明（含批次/人次语境或接待支出语境）
             if not any("批次" in clause or "人次" in clause or "国内公务接待" in clause for clause in clauses):
                 continue
+            candidate_paras.append(para)
+            para_domestic, _para_foreign = _para_disclosure(para)
+            if para_domestic:
+                section_domestic = True
 
-            domestic_disclosed = False
-            foreign_disclosed = False
-            for clause in clauses:
-                compact = re.sub(r"\s+", "", clause)
-                if "国内公务接待" in compact and ("批次" in compact or "人次" in compact):
-                    domestic_disclosed = True
-                if ("外宾" in compact or "国外" in compact or "境外" in compact) and (
-                    "批次" in compact or "人次" in compact
-                ):
-                    foreign_disclosed = True
+        if section_domestic:
+            return issues
 
+        for para in candidate_paras:
+            clauses = split_clauses(para)
+            domestic_disclosed, foreign_disclosed = _para_disclosure(para)
             if domestic_disclosed:
                 continue
             # 国内批次/人次缺失：无论外宾是否披露，都属披露不完整；

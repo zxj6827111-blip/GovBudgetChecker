@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -163,14 +164,122 @@ def _default_suggestion(rule_code: str, page: Optional[int]) -> str:
 
 
 def _normalize_page(location: Dict[str, Any]) -> Optional[int]:
-    raw = location.get("page")
-    if raw is None:
+    """Return the first valid page carried by a location/evidence object.
+
+    规则定位长期同时存在 ``page``、``pages`` 和 ``table_refs[*].page``
+    三种形态。统一输出以前只读取 ``page``，导致已经具备页码证据的
+    跨表 finding 被错误标成 ``missing_page``。这里只消费已有的显式页码，
+    不把任意数值字段（例如 ``t1``/``diff``）当成页码。
+    """
+    pages = _location_pages(location)
+    return pages[0] if pages else None
+
+
+def _location_pages(location: Dict[str, Any]) -> List[int]:
+    """Collect explicit page references without inventing a location."""
+    values: List[Any] = [location.get("page")]
+    raw_pages = location.get("pages")
+    if isinstance(raw_pages, (list, tuple)):
+        values.extend(raw_pages)
+    raw_refs = location.get("table_refs")
+    if isinstance(raw_refs, (list, tuple)):
+        for ref in raw_refs:
+            if not isinstance(ref, dict):
+                continue
+            values.append(ref.get("page"))
+            ref_pages = ref.get("pages")
+            if isinstance(ref_pages, (list, tuple)):
+                values.extend(ref_pages)
+
+    pages: List[int] = []
+    seen = set()
+    for raw in values:
+        if isinstance(raw, bool):
+            continue
+        try:
+            page = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if page <= 0 or page in seen:
+            continue
+        seen.add(page)
+        pages.append(page)
+    return pages
+
+
+def _anchor_page_for_table(doc: Any, table_name: Any) -> Optional[int]:
+    """Resolve a table location against the document's existing anchors.
+
+    A table name must match an existing anchor key after whitespace
+    normalization. If no anchor exists, the page remains unknown rather than
+    being guessed from an unrelated numeric field.
+    """
+    anchors = getattr(doc, "anchors", None)
+    if not isinstance(anchors, dict):
         return None
-    try:
-        value = int(raw)
-        return value if value > 0 else None
-    except Exception:
+    target = re.sub(r"\s+", "", str(table_name or ""))
+    if not target:
         return None
+    candidates: List[int] = []
+    for anchor_name, raw_pages in anchors.items():
+        normalized = re.sub(r"\s+", "", str(anchor_name or ""))
+        if not normalized or not (
+            target == normalized or target in normalized or normalized in target
+        ):
+            continue
+        if not isinstance(raw_pages, (list, tuple)):
+            continue
+        for raw_page in raw_pages:
+            if isinstance(raw_page, bool):
+                continue
+            try:
+                page = int(raw_page)
+            except (TypeError, ValueError):
+                continue
+            if page > 0:
+                candidates.append(page)
+    return min(candidates) if candidates else None
+
+
+_RULE_TABLE_HINTS: Dict[str, Tuple[str, ...]] = {
+    # 这些规则的 finding 可能只带业务字段，但规则本身有明确的表域；
+    # 只有在文档锚点已存在时才用锚点补页码。
+    "V33-200": ("收入支出决算总表", "收入决算表"),
+    "V33-201": ("收入支出决算总表", "支出决算表"),
+    "V33-244": ('一般公共预算财政拨款“三公”经费支出决算表',),
+}
+
+
+def _infer_issue_page(
+    issue: Any,
+    location: Dict[str, Any],
+    evidence_list: List[Dict[str, Any]],
+    doc: Any = None,
+) -> Optional[int]:
+    """Resolve a primary page from explicit finding evidence only."""
+    pages = _location_pages(location)
+    if pages:
+        return pages[0]
+    for item in evidence_list:
+        item_pages = _location_pages(item)
+        if item_pages:
+            return item_pages[0]
+
+    table_names: List[str] = []
+    table = location.get("table")
+    if isinstance(table, str):
+        table_names.extend(part.strip() for part in table.split(" / ") if part.strip())
+    rule_code = str(
+        (issue.get("rule_id") or issue.get("rule") or "")
+        if isinstance(issue, dict)
+        else (getattr(issue, "rule", "") or "")
+    ).strip()
+    table_names.extend(_RULE_TABLE_HINTS.get(rule_code, ()))
+    for table_name in table_names:
+        page = _anchor_page_for_table(doc, table_name)
+        if page is not None:
+            return page
+    return None
 
 
 def _normalize_bbox(raw_bbox: Any) -> Optional[List[float]]:
@@ -179,17 +288,25 @@ def _normalize_bbox(raw_bbox: Any) -> Optional[List[float]]:
     bbox: List[float] = []
     for item in raw_bbox:
         try:
-            bbox.append(float(item))
+            value = float(item)
         except Exception:
             return None
+        if not math.isfinite(value):
+            return None
+        bbox.append(value)
+    x0, y0, x1, y1 = bbox
+    if x1 <= x0 or y1 <= y0:
+        return None
     return bbox
 
 
-def _issue_to_dict(issue: Any, idx: int) -> Dict[str, Any]:
+def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
     if isinstance(issue, dict):
         rule_code = str(issue.get("rule_id") or issue.get("rule") or "").strip()
         location = (
-            issue.get("location") if isinstance(issue.get("location"), dict) else {}
+            dict(issue.get("location"))
+            if isinstance(issue.get("location"), dict)
+            else {}
         )
         message = str(issue.get("message") or issue.get("title") or "").strip()
         evidence_list = (
@@ -198,7 +315,7 @@ def _issue_to_dict(issue: Any, idx: int) -> Dict[str, Any]:
         bbox = _normalize_bbox(issue.get("bbox"))
     else:
         rule_code = str(getattr(issue, "rule", "") or "").strip()
-        location = getattr(issue, "location", None) or {}
+        location = dict(getattr(issue, "location", None) or {})
         message = str(getattr(issue, "message", "") or "").strip()
         evidence_text = getattr(issue, "evidence_text", None)
         bbox = _normalize_bbox(location.get("bbox"))
@@ -216,11 +333,17 @@ def _issue_to_dict(issue: Any, idx: int) -> Dict[str, Any]:
     if not rule_code:
         rule_code = "UNKNOWN"
 
-    page = _normalize_page(location)
+    page = _infer_issue_page(issue, location, evidence_list, doc)
+    if page is not None and _normalize_page({"page": location.get("page")}) is None:
+        # 只在统一页字段缺失时补写主页；原始跨页集合不被覆盖。
+        location["page"] = page
     title = _infer_title(rule_code, message)
     created_at = int(time.time())
 
-    evidence = [ev for ev in evidence_list if isinstance(ev, dict)]
+    evidence = [dict(ev) for ev in evidence_list if isinstance(ev, dict)]
+    for ev in evidence:
+        if _normalize_page(ev) is None and page is not None:
+            ev["page"] = page
     if not evidence:
         evidence = [
             {
@@ -281,7 +404,10 @@ def build_issues_payload(
     report_kind: Optional[str] = None,
 ) -> Dict[str, Any]:
     raw_list, outcomes = run_rules_with_outcomes(doc, use_ai_assist, report_kind=report_kind)
-    items = [_issue_to_dict(item, idx) for idx, item in enumerate(raw_list, start=1)]
+    items = [
+        _issue_to_dict(item, idx, doc)
+        for idx, item in enumerate(raw_list, start=1)
+    ]
 
     buckets: Dict[str, List[Dict[str, Any]]] = {"error": [], "warn": [], "info": []}
     for item in items:

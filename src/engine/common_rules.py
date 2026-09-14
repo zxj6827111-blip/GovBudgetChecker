@@ -379,22 +379,41 @@ class CMM002_TextAnomalyRule(Rule):
                         )
                     )
 
-            # 引号配对按"逻辑段落"检查（先合并 PDF 软换行）：同段右引号多于
-            # 左引号才算未闭合；逐行检查会把跨行配对引号误判成异常
-            # （样张 4 条"疑似多余右引号"误报根因，见 HANDOFF §3.3B）。
-            for paragraph in _merge_soft_wrapped_lines(page_text):
-                has_double_imbalance = paragraph.count("\u201d") > paragraph.count("\u201c")
-                has_single_imbalance = paragraph.count("\u2019") > paragraph.count("\u2018")
-                if has_double_imbalance or has_single_imbalance:
-                    pos = page_text.find(paragraph[:20])
-                    issues.append(
-                        self._issue(
-                            "\u7591\u4f3c\u591a\u4f59\u53f3\u5f15\u53f7",
-                            {"page": page_idx, "pos": max(pos, 0)},
-                            "warn",
-                            evidence_text=paragraph[:200],
-                        )
-                    )
+        # 引号配对按"全篇逻辑段落"检查（先合并软换行，且段落允许跨页）：
+        # 同段右引号多于左引号才算未闭合。
+        # - 逐行检查会把同段跨行的配对引号误判成异常（样张 4 条误报根因，HANDOFF §3.3B）；
+        # - 按页检查会把"段首在上页页尾、段尾在下页页首"的跨页配对误判成异常
+        #   （石泉路样张 3 条误报根因：p29 末"…一般行政管理事"与 p30 首"务（项）"…"）。
+        page_texts_all = _page_texts(doc)
+        page_spans: List[Tuple[int, int, int]] = []
+        parts: List[str] = []
+        offset = 0
+        for page_idx, page_text in enumerate(page_texts_all, start=1):
+            parts.append(page_text)
+            page_spans.append((offset, offset + len(page_text), page_idx))
+            offset += len(page_text) + 1  # +1 为页间连接符
+        full_text = "\n".join(parts)
+
+        def _page_at(pos: int) -> int:
+            for start, end, pageno in page_spans:
+                if start <= pos < end:
+                    return pageno
+            return len(page_texts_all)
+
+        for paragraph in _merge_soft_wrapped_lines(full_text):
+            has_double_imbalance = paragraph.count("\u201d") > paragraph.count("\u201c")
+            has_single_imbalance = paragraph.count("\u2019") > paragraph.count("\u2018")
+            if not (has_double_imbalance or has_single_imbalance):
+                continue
+            pos = full_text.find(paragraph[:20])
+            issues.append(
+                self._issue(
+                    "\u7591\u4f3c\u591a\u4f59\u53f3\u5f15\u53f7",
+                    {"page": _page_at(max(pos, 0))},
+                    "warn",
+                    evidence_text=paragraph[:200],
+                )
+            )
 
         return issues
 

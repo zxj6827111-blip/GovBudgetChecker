@@ -120,6 +120,34 @@ def test_invalid_bbox_does_not_count() -> None:
     assert "missing_bbox" in missing
 
 
+def test_nonfinite_or_reversed_bbox_does_not_count() -> None:
+    for bbox in ([1, 2, float("nan"), 4], [10, 20, 5, 30]):
+        complete, missing = evaluate_finding_evidence(
+            {"page_number": 2, "bbox": bbox, "evidence": []}
+        )
+        assert complete is False
+        assert "missing_bbox" in missing
+
+
+def test_explicit_cross_page_location_is_usable_but_scalar_page_count_is_not() -> None:
+    complete, _missing = evaluate_finding_evidence(
+        {
+            "location": {"pages": [3, 5]},
+            "evidence": [{"text": "跨页勾稽证据"}],
+        }
+    )
+    assert complete is True
+
+    incomplete, missing = evaluate_finding_evidence(
+        {
+            "location": {"pages": 5},
+            "evidence": [{"text": "文档共 5 页"}],
+        }
+    )
+    assert incomplete is False
+    assert "missing_page" in missing
+
+
 # --------------------------------------------------------------------------
 # 按来源分别处理
 # --------------------------------------------------------------------------
@@ -236,6 +264,8 @@ def test_is_document_level_finding_anchors_on_rule_id() -> None:
     assert is_document_level_finding({"rule_id": "BUD-001"})
     assert is_document_level_finding({"rule_id": "bud-001"})
     assert is_document_level_finding({"rule": "BUD-001"})
+    assert is_document_level_finding({"rule_id": "V33-002"})
+    assert is_document_level_finding({"rule_id": "V33-003"})
     # 其他规则即便页码缺失也是真证据缺口，不能豁免
     assert not is_document_level_finding({"rule_id": "C-001", "page_number": None})
     assert not is_document_level_finding({"rule_id": "BUD-101"})

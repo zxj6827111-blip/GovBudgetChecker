@@ -138,11 +138,14 @@ def report_id_uniqueness(records: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
 
     离线回放脚本与运行时指标端点共用本函数，保证"冲突数"只有一个口径。
     """
+    records = list(records)
     grouped: Dict[str, Dict[str, Any]] = {}
     missing_checksum = 0
+    missing_report_id = 0
     for record in records:
         report_id = record.get("report_id")
         if not report_id:
+            missing_report_id += 1
             continue
         entry = grouped.setdefault(
             str(report_id), {"job_ids": [], "checksums": set(), "jobs_without_checksum": 0}
@@ -166,12 +169,15 @@ def report_id_uniqueness(records: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     ]
 
     return {
+        "total_jobs": len(records),
         "jobs_with_report_id": sum(len(entry["job_ids"]) for entry in grouped.values()),
+        "jobs_without_report_id": missing_report_id,
         "distinct_report_ids": len(grouped),
         "collision_count": len(collisions),
         "collisions": collisions,
         "jobs_without_checksum": missing_checksum,
         "unique": not collisions,
+        "identity_complete": missing_report_id == 0,
     }
 
 

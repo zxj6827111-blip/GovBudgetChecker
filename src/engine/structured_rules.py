@@ -20,8 +20,10 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -109,10 +111,10 @@ class ParsedRow:
     """
 
     cells: List[ParsedCell]
-    row_role: str = "detail"            # header / detail / subtotal / total
+    row_role: str = "detail"  # header / detail / subtotal / total
     code: Optional[str] = None
-    code_level: Optional[int] = None    # 3=类 5=款 7=项
-    code_right: Optional[str] = None    # 双栏右栏编码（two_sided 表）
+    code_level: Optional[int] = None  # 3=类 5=款 7=项
+    code_right: Optional[str] = None  # 双栏右栏编码（two_sided 表）
     code_level_right: Optional[int] = None
     label: str = ""
     confidence: float = 1.0
@@ -162,6 +164,10 @@ class ParsedTable:
     table_code: str = ""
     title: str = ""
     page_span: Tuple[int, int] = (0, 0)
+    # raw table 的几何范围（pdfplumber 约定为 x0, top, x1, bottom）。
+    # 这是把页文本表名绑定到多表页具体 raw table 的必要证据；缺失时
+    # 不得把整页唯一 page anchor 盲目复制给所有表。
+    bbox: Optional[Sequence[float]] = None
     named_columns: Dict[str, int] = field(default_factory=dict)  # 语义列 → 首选索引
     # R7 P0-2：semantic_columns 保留每种语义键的**全部**列位置
     # （named_columns 只是兼容旧消费方的首选单值——P17 三公表 6 组
@@ -169,7 +175,7 @@ class ParsedTable:
     # column_groups 逐组保留业务主体（合计/出国/公车/接待…）。
     semantic_columns: Dict[str, List[int]] = field(default_factory=dict)
     column_groups: List[ColumnGroup] = field(default_factory=list)
-    column_group: str = "single"        # single / two_sided / multi_measure
+    column_group: str = "single"  # single / two_sided / multi_measure
     canonical_measure: str = "万元"
     classification_type: str = DOMAIN_OTHER
     row_role: str = "detail"
@@ -185,10 +191,9 @@ class ParsedTable:
             "table_code": self.table_code,
             "title": self.title,
             "page_span": list(self.page_span),
+            "bbox": list(self.bbox) if self.bbox else None,
             "named_columns": dict(self.named_columns),
-            "semantic_columns": {
-                k: list(v) for k, v in self.semantic_columns.items()
-            },
+            "semantic_columns": {k: list(v) for k, v in self.semantic_columns.items()},
             "column_groups": [g.to_dict() for g in self.column_groups],
             "column_group": self.column_group,
             "canonical_measure": self.canonical_measure,
@@ -235,10 +240,7 @@ def _row_code(
             text = (cell.text or "").strip()
             if text and _CODE_RE.match(text):
                 return text, len(text)
-            if (
-                cell.number is not None
-                and cell.number == cell.number.to_integral_value()
-            ):
+            if cell.number is not None and cell.number == cell.number.to_integral_value():
                 digits = str(int(cell.number))
                 if _CODE_RE.match(digits):
                     return digits, len(digits)
@@ -258,6 +260,70 @@ def _row_role_from_label(label: str, code: Optional[str], numeric_count: int) ->
     return "detail"
 
 
+def _normalize_bbox(raw_bbox: Any) -> Optional[Tuple[float, float, float, float]]:
+    """归一化 table/text bbox；几何不完整或方向反常时按缺失处理。"""
+    if not isinstance(raw_bbox, (list, tuple)) or len(raw_bbox) != 4:
+        return None
+    try:
+        x0, top, x1, bottom = (float(value) for value in raw_bbox)
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in (x0, top, x1, bottom)):
+        return None
+    if x1 <= x0 or bottom <= top:
+        return None
+    return (x0, top, x1, bottom)
+
+
+def _raw_table_rows_and_bbox(
+    raw: Any,
+) -> Tuple[Sequence[Sequence[Any]], Optional[Tuple[float, float, float, float]]]:
+    """读取兼容的 raw table 形态。
+
+    生产抽取通常传 ``pdfplumber.Table``（``extract()`` + ``bbox``），而
+    旧测试/旧流水线传 2D rows。评测器也可能传 ``{"rows": ..., "bbox": ...}``
+    或 ``{"table": ..., "bbox": ...}``；统一在这里解包，避免丢失几何。
+    """
+    bbox: Optional[Tuple[float, float, float, float]] = None
+    rows: Any = raw
+
+    if isinstance(raw, Mapping):
+        for key in ("bbox", "table_bbox", "geometry"):
+            bbox = _normalize_bbox(raw.get(key))
+            if bbox is not None:
+                break
+        for key in ("rows", "data", "table", "values"):
+            if key in raw:
+                rows = raw[key]
+                break
+    else:
+        bbox = _normalize_bbox(getattr(raw, "bbox", None) or getattr(raw, "table_bbox", None))
+        # pdfplumber Table；不要要求具体类型，便于轻量测试 doubles。
+        extract = getattr(raw, "extract", None)
+        if callable(extract):
+            rows = extract() or []
+        elif hasattr(raw, "rows"):
+            rows = raw.rows
+
+    if rows is None:
+        rows = []
+    return rows, bbox
+
+
+def _raw_table_anchor(raw: Any) -> Tuple[str, bool]:
+    """读取抽取层按 bbox 绑定的表名锚，并区分元数据是否存在。"""
+    keys = ("anchor_table_name", "table_anchor", "title_anchor")
+    if isinstance(raw, Mapping):
+        for key in keys:
+            if key in raw:
+                return str(raw.get(key) or "").strip(), True
+        return "", False
+    for key in keys:
+        if hasattr(raw, key):
+            return str(getattr(raw, key) or "").strip(), True
+    return "", False
+
+
 def materialize_table(
     raw_rows: Sequence[Sequence[Any]],
     *,
@@ -268,19 +334,20 @@ def materialize_table(
 ) -> ParsedTable:
     """把 pdfplumber 风格的原始行转成 ParsedTable（命名列 + 行角色）。"""
 
+    raw_rows, raw_bbox = _raw_table_rows_and_bbox(raw_rows)
+
     start_page = min(pages) if pages else 0
     end_page = max(pages) if pages else 0
     parsed = ParsedTable(
         table_code=table_code,
         title=title,
         page_span=(start_page, end_page),
+        bbox=raw_bbox,
     )
 
     widths = [len(r) for r in raw_rows if r is not None]
     if widths and len(set(widths)) > 1:
-        parsed.parse_errors.append(
-            f"row_width_inconsistent: {sorted(set(widths))}"
-        )
+        parsed.parse_errors.append(f"row_width_inconsistent: {sorted(set(widths))}")
 
     header_labels: List[str] = []
     for row in raw_rows[:header_rows]:
@@ -297,12 +364,10 @@ def materialize_table(
     # 分列）与 P18 的多段表头都不对称，正确判为 single。
     header_hits: Dict[str, List[int]] = {}
     hit_rows: Counter = Counter()
-    scan_rows = list(raw_rows[:header_rows + 2])
+    scan_rows = list(raw_rows[: header_rows + 2])
     # R9 P2：逐行记录各语义键的列位置——multi_measure 判定需要「同行
     # 不同列」证据，跨行的同列重复（表头+首条数据行的「合计」）不算
-    per_row_hits: List[Dict[str, List[int]]] = [
-        {} for _ in scan_rows
-    ]
+    per_row_hits: List[Dict[str, List[int]]] = [{} for _ in scan_rows]
     for r_idx, row in enumerate(scan_rows):
         # 数据行守卫（/review R9 自查）：扫描窗口含表头后 2 行数据——
         # 其中「合计/基本支出」等精确命中（如续表首页的合计数据行）
@@ -311,9 +376,7 @@ def materialize_table(
         # 与签名守卫（仅共 total 单键 → 表头文本复核失败）双双拒并
         # （实测应 2 张实得 3 张的残留形态）。目标语料的真实表头行
         # 不含金额数字，按行过滤不改变既有表的判定。
-        row_has_amount = any(
-            _NUM_RE.match(re.sub(r"\s+", "", str(c or ""))) for c in row
-        )
+        row_has_amount = any(_NUM_RE.match(re.sub(r"\s+", "", str(c or ""))) for c in row)
         for i, cell in enumerate(row):
             text = re.sub(r"\s+", "", str(cell or ""))
             key = None
@@ -337,9 +400,7 @@ def materialize_table(
     # 领域前缀词（收入/支出/年初/年末等）在归一前先剥除——真双栏左右
     # 两半的领域词不同（P7 收入侧 vs 支出侧）但结构标签对称，
     # 直接比较会把真双栏判 single。
-    col_count = max(
-        (len(r) for r in raw_rows[:header_rows] if r is not None), default=0
-    )
+    col_count = max((len(r) for r in raw_rows[:header_rows] if r is not None), default=0)
     domain_words = ("收入", "支出", "年初", "年末", "结转", "结余", "功能分类", "经济分类")
 
     def _structural_label(text: str) -> str:
@@ -380,13 +441,10 @@ def materialize_table(
     # 时被误标 multi_measure（语义位置去重后只有 [0]）。分组宽表/多段
     # 表头的真实形态是同一表头行内多个不同列位（P17 预算×6、P18
     # 合计×2、P8 决算数×7 均同行不同列）。
-    is_multi_measure = (
-        not is_two_sided
-        and any(
-            len(set(positions)) >= 2
-            for row_positions in per_row_hits
-            for positions in row_positions.values()
-        )
+    is_multi_measure = not is_two_sided and any(
+        len(set(positions)) >= 2
+        for row_positions in per_row_hits
+        for positions in row_positions.values()
     )
     # 语义叶行：扫描窗口内命中语义键最多的表头行（预算/决算数行、
     # 合计/基本/项目行）——列组主体只取它上方的标签。
@@ -486,7 +544,7 @@ def materialize_table(
     # 金额恰好为 3/5/7 位整数（如 301.00 万元取整值 301）被误判科目。
     # 双栏表左右各有一个编码列（code/code_right 分记）。
     code_positions: List[int] = []
-    for row in raw_rows[:header_rows + 2]:
+    for row in raw_rows[: header_rows + 2]:
         for i, cell in enumerate(row):
             text = re.sub(r"\s+", "", str(cell or ""))
             if "编码" in text or text in ("功能分类", "经济分类"):
@@ -502,17 +560,14 @@ def materialize_table(
         cells = [_cell_from_raw(c, page) for c in row]
         code, level = _row_code(cells, code_column=parsed.named_columns.get("code"))
         code_right = level_right = None
-        if (
-            parsed.column_group == "two_sided"
-            and "code_right" in parsed.named_columns
-        ):
+        if parsed.column_group == "two_sided" and "code_right" in parsed.named_columns:
             code_right, level_right = _row_code(
                 cells, code_column=parsed.named_columns["code_right"]
             )
         label = "".join((c.text or "") for c in cells if c.text)
         numeric_count = sum(1 for c in cells if c.is_numeric)
-        row_role = "header" if r_idx < header_rows else _row_role_from_label(
-            label, code, numeric_count
+        row_role = (
+            "header" if r_idx < header_rows else _row_role_from_label(label, code, numeric_count)
         )
         parsed.rows.append(
             ParsedRow(
@@ -537,7 +592,103 @@ def materialize_table(
 _TABLE_NAME_RE = re.compile(r"^.{0,28}?(决算表|决算总表|预算表|支出表|收入表)$")
 
 
-def _extract_anchor_table_name(page_text: str, scan_lines: int = 8) -> str:
+def _page_text_line_records(
+    page_text: Any,
+) -> List[Tuple[str, Optional[Tuple[float, float, float, float]]]]:
+    """提取页文本行及其可选 bbox，兼容纯字符串和轻量结构化文本。"""
+
+    def _line_text(item: Any) -> str:
+        if isinstance(item, Mapping):
+            for key in ("text", "line", "content", "raw_text"):
+                if item.get(key) is not None:
+                    return str(item[key])
+            return ""
+        return str(item or "")
+
+    def _line_bbox(item: Any) -> Optional[Tuple[float, float, float, float]]:
+        if not isinstance(item, Mapping):
+            return _normalize_bbox(getattr(item, "bbox", None))
+        bbox = _normalize_bbox(item.get("bbox") or item.get("table_bbox"))
+        if bbox is not None:
+            return bbox
+        keys = ("x0", "top", "x1", "bottom")
+        if all(key in item for key in keys):
+            return _normalize_bbox([item[key] for key in keys])
+        return None
+
+    if isinstance(page_text, str):
+        return [(line, None) for line in page_text.split("\n")]
+
+    if isinstance(page_text, Mapping):
+        for key in ("lines", "text_lines"):
+            if isinstance(page_text.get(key), (list, tuple)):
+                return [(_line_text(item), _line_bbox(item)) for item in page_text[key]]
+        words = page_text.get("words")
+        if isinstance(words, (list, tuple)):
+            # pdfplumber words 需要按 top 分组，否则一个表名被拆成多个词
+            # 后无法命中完整表名；同一 top 的词保持输入顺序。
+            grouped: Dict[float, List[Tuple[str, Optional[Tuple[float, float, float, float]]]]] = {}
+            order: List[float] = []
+            for word in words:
+                word_bbox = _line_bbox(word)
+                top = word_bbox[1] if word_bbox is not None else float(len(order))
+                key_top = round(top, 2)
+                if key_top not in grouped:
+                    grouped[key_top] = []
+                    order.append(key_top)
+                grouped[key_top].append((_line_text(word), word_bbox))
+            records: List[Tuple[str, Optional[Tuple[float, float, float, float]]]] = []
+            for key_top in sorted(order):
+                items = grouped[key_top]
+                text = "".join(item[0] for item in items)
+                bboxes = [item[1] for item in items if item[1] is not None]
+                if bboxes:
+                    records.append(
+                        (
+                            text,
+                            (
+                                min(b[0] for b in bboxes),
+                                key_top,
+                                max(b[2] for b in bboxes),
+                                max(b[3] for b in bboxes),
+                            ),
+                        )
+                    )
+                else:
+                    records.append((text, None))
+            return records
+        if page_text.get("text") is not None:
+            return [(line, _line_bbox(page_text)) for line in str(page_text["text"]).split("\n")]
+
+    if isinstance(page_text, (list, tuple)):
+        return [(_line_text(item), _line_bbox(item)) for item in page_text]
+
+    extract_text = getattr(page_text, "extract_text", None)
+    if callable(extract_text):
+        return [(line, None) for line in str(extract_text() or "").split("\n")]
+    return [(line, None) for line in str(page_text or "").split("\n")]
+
+
+def _extract_anchor_records(
+    page_text: Any, scan_lines: int = 8
+) -> List[Tuple[str, Optional[float]]]:
+    records: List[Tuple[str, Optional[float]]] = []
+    for line, bbox in _page_text_line_records(page_text)[:scan_lines]:
+        stripped = line.strip()
+        if not stripped or len(stripped) > 30:
+            continue
+        if (
+            "部门" in stripped
+            or "单位" in stripped
+            or stripped.startswith(("一、", "二、", "三、"))
+        ):
+            continue
+        if _TABLE_NAME_RE.search(stripped):
+            records.append((stripped, bbox[1] if bbox is not None else None))
+    return records
+
+
+def _extract_anchor_table_name(page_text: Any, scan_lines: int = 8) -> str:
     """从页面文本前几行提取独立表名行（如「收入支出决算总表」）。
 
     官方样张形态（R4 实测）：每张表的起始页，表名以独立短行出现在
@@ -545,15 +696,107 @@ def _extract_anchor_table_name(page_text: str, scan_lines: int = 8) -> str:
     抬头行跳过；「二、收入决算表」这类目录/说明引用也跳过）。
     表名行是唯一稳定的业务身份：PDF 表格 bbox 不含它，但页文本有。
     """
-    for line in str(page_text or "").split("\n")[:scan_lines]:
-        stripped = line.strip()
-        if not stripped or len(stripped) > 30:
-            continue
-        if "部门" in stripped or "单位" in stripped or stripped.startswith(("一、", "二、", "三、")):
-            continue
-        if _TABLE_NAME_RE.search(stripped):
-            return stripped
-    return ""
+    records = _extract_anchor_records(page_text, scan_lines=scan_lines)
+    return records[0][0] if records else ""
+
+
+def _bind_page_anchors(
+    page_text: Any,
+    tables: Sequence["ParsedTable"],
+    raw_anchors: Optional[Sequence[Tuple[str, bool]]] = None,
+) -> Tuple[List[str], bool]:
+    """把页内表名按 bbox 绑定到具体表，并返回绑定是否可靠。
+
+    多表页只有在「标题位置→表 bbox」唯一，或标题数量与表数量一致且
+    bbox 顺序可确定时才绑定。其余情况全部返回空锚，调用方必须
+    fail-closed，不能以 named_columns 是否为空猜测续表。
+    """
+    count = len(tables)
+    anchors = [""] * count
+    if count == 0:
+        return anchors, False
+
+    if (
+        count == 1
+        and raw_anchors is not None
+        and len(raw_anchors) == 1
+        and raw_anchors[0][1]
+        and raw_anchors[0][0]
+        and tables[0].bbox is not None
+    ):
+        return [raw_anchors[0][0]], True
+
+    # 抽取层已经用各自 table bbox 裁切过标题时，优先采用逐表元数据。
+    # 空锚也要保留：它表示该表 bbox 上方没有可识别标题，不能把页上
+    # 另一张表的标题复制过来。只有至少一个非空锚时，空锚表才获得
+    # “标题已完成分配”的负向证据，允许页首续表候选继续接受签名守卫。
+    if (
+        count > 1
+        and raw_anchors is not None
+        and len(raw_anchors) == count
+        and all(has_metadata for _, has_metadata in raw_anchors)
+        and all(table.bbox is not None for table in tables)
+    ):
+        bound = [anchor for anchor, _ in raw_anchors]
+        if any(bound):
+            return bound, True
+        return anchors, False
+    records = _extract_anchor_records(page_text)
+    if not records:
+        return anchors, False
+
+    if count == 1:
+        if len(records) == 1:
+            anchors[0] = records[0][0]
+            return anchors, True
+        return anchors, False
+
+    table_tops = [table.bbox[1] if table.bbox is not None else None for table in tables]
+    if any(top is None for top in table_tops):
+        return anchors, False
+    ordered_tables = sorted(range(count), key=lambda index: (table_tops[index], index))
+
+    # 有标题几何时，按相邻标题形成的垂直区间求唯一表。页首标题在
+    # 第一张表之前时直接绑定首表；页内标题则不能跨越前面已结束的表。
+    if all(top is not None for _, top in records):
+        sorted_records = sorted(enumerate(records), key=lambda item: item[1][1])
+        used: set[int] = set()
+        for record_index, (name, title_top) in sorted_records:
+            assert title_top is not None
+            if title_top <= table_tops[ordered_tables[0]]:
+                candidates = [ordered_tables[0]] if not used else []
+            else:
+                next_title_top = next(
+                    (
+                        next_record[1][1]
+                        for next_record in sorted_records
+                        if next_record[0] != record_index and next_record[1][1] > title_top
+                    ),
+                    None,
+                )
+                candidates = [
+                    table_index
+                    for table_index in ordered_tables
+                    if table_index not in used
+                    and table_tops[table_index] >= title_top
+                    and (next_title_top is None or table_tops[table_index] < next_title_top)
+                ]
+                if len(candidates) > 1:
+                    # 标题在多个表之前且没有下一标题，无法可靠判断归属。
+                    candidates = []
+            if len(candidates) != 1:
+                return [""] * count, False
+            anchors[candidates[0]] = name
+            used.add(candidates[0])
+        return anchors, True
+
+    # 没有标题 bbox 时，只有标题数恰好等于表数，且每张表 bbox 可排序，
+    # 才允许按阅读顺序绑定；标题数不足时禁止把唯一页锚复制给整页。
+    if len(records) == count:
+        for table_index, (name, _) in zip(ordered_tables, records, strict=True):
+            anchors[table_index] = name
+        return anchors, True
+    return anchors, False
 
 
 def build_parsed_tables(
@@ -573,8 +816,8 @@ def build_parsed_tables(
     - R4 收敛（本实现）——**表名锚约束**：
       ① 每张新建表从起始页页文本提取独立表名行（anchor_table_name，
          见 _extract_anchor_table_name）——这是稳定的业务身份；
-      ② 合并候选必须满足：物理相邻 **且表名严格相同**（空表名不可
-         合并——宁可多独立表不错并）；
+       ② 合并候选必须满足：物理相邻且业务表名严格相同；无表名的
+          headerless 续页只有在 raw table 几何已确认其位置时才例外；
       ③ 拒绝合并时无条件保留独立表（R3 语义保持）。
     """
     parsed_tables: Dict[str, ParsedTable] = {}
@@ -586,34 +829,74 @@ def build_parsed_tables(
         page_text = texts[p_idx - 1] if 0 < p_idx <= len(texts) else ""
         page_tables_on_page = list(tables or [])
         multi_table_page = len(page_tables_on_page) > 1
+        # 先完成整页的几何绑定，再逐表处理，避免页内新表的标题被
+        # 错写到页首续表。
+        materialized_page_tables: List[ParsedTable] = []
+        raw_anchors: List[Tuple[str, bool]] = []
+        for raw in page_tables_on_page:
+            raw_rows, raw_bbox = _raw_table_rows_and_bbox(raw)
+            title = "".join(str(c or "") for c in (raw_rows[0] if raw_rows else []))[:40]
+            parsed = materialize_table(raw_rows, title=title, pages=(p_idx,))
+            parsed.bbox = raw_bbox
+            materialized_page_tables.append(parsed)
+            raw_anchors.append(_raw_table_anchor(raw))
+        page_anchors, anchor_binding_reliable = _bind_page_anchors(
+            page_text, materialized_page_tables, raw_anchors
+        )
+        page_has_title_anchor = bool(_extract_anchor_records(page_text))
         for t_idx, raw in enumerate(page_tables_on_page):
-            title = "".join(
-                str(c or "") for c in (raw[0] if raw and raw[0] else [])
-            )[:40]
-            parsed = materialize_table(raw, title=title, pages=(p_idx,))
-            # 表名锚：新建表尝试从起始页页文本取业务表名。
-            # R9 P1-4：单页多表无法用单个页锚表达——「页顶=上一页续表 +
-            # 下方=新表」时，页文本的首个表名行属于**新表**，把它安到
-            # 页顶第一张 raw table 会把续表错标成新表名、拆断合并（实测
-            # 应 2 张实得 3 张）。多表页不赋页锚：首表仅当**无表头**
-            # （续表形态）才允许作续表候选，其余一律独立；单表页保持
-            # R4 页锚约束（P7→P8 防错并）。bbox 关联是根治方向，当前
-            # 抽取层无 bbox，退化为 fail-closed（宁可多独立表不错并）。
-            page_anchor = _extract_anchor_table_name(page_text)
-            if page_anchor and not multi_table_page:
-                parsed.anchor_table_name = page_anchor
+            parsed = materialized_page_tables[t_idx]
+            # 表名锚已按当前 raw table 的 bbox/阅读顺序绑定；无法可靠
+            # 绑定时保持空值，由下方 fail-closed 守卫处理。
+            parsed.anchor_table_name = page_anchors[t_idx]
             # 相邻性：上一表与当前表同页或紧邻页（R3 语义）。
             # R8 P2：同页第 2+ 张独立 raw table 默认禁止续表合并（无
             # bbox 连续性证据）。
             first_on_page = t_idx == 0
             adjacent = (
-                last_key is not None
-                and last_end_page in (p_idx, p_idx - 1)
-                and first_on_page
+                last_key is not None and last_end_page in (p_idx, p_idx - 1) and first_on_page
             )
-            # 多表页首表：仅无表头（无语义列）才可能是上一页续表；
-            # 有表头说明它是本页起的新表，不得与上一页的表合并
-            if multi_table_page and first_on_page and parsed.named_columns:
+            # 多表页首表：只有当前表的 bbox 绑定结果明确携带了与上一表
+            # 相同的业务锚，才允许在页首续接。一个“空锚 + 有 bbox”只
+            # 说明该表没有被标题识别出来，不能作为续表的正向证据；否则
+            # “页首未识别的新表 + 下方有标题的新表”会被错误并入上一表。
+            # 续表若确有重复标题，会由抽取层把标题按 bbox 绑定回来。
+            explicit_same_anchor_evidence = (
+                multi_table_page
+                and first_on_page
+                and anchor_binding_reliable
+                and parsed.bbox is not None
+                and bool(parsed.anchor_table_name)
+                and parsed.anchor_table_name == last_anchor
+            )
+            headerless_mixed_page_evidence = False
+            if (
+                multi_table_page
+                and first_on_page
+                and last_key is not None
+                and last_key in parsed_tables
+            ):
+                headerless_mixed_page_evidence = _has_headerless_mixed_page_evidence(
+                    parsed_tables[last_key],
+                    parsed,
+                    materialized_page_tables,
+                    page_anchors,
+                    anchor_binding_reliable=anchor_binding_reliable,
+                    last_anchor=last_anchor,
+                )
+            headerless_continuation_evidence = not parsed.anchor_table_name and (
+                (
+                    not multi_table_page
+                    and not page_has_title_anchor
+                    # 单表页没有页内标题归属歧义；保留旧的纯 rows 兼容性。
+                    and len(page_tables_on_page) == 1
+                )
+                or headerless_mixed_page_evidence
+            )
+            continuation_evidence = (
+                headerless_continuation_evidence or explicit_same_anchor_evidence
+            )
+            if multi_table_page and first_on_page and not continuation_evidence:
                 adjacent = False
             merged = False
             if adjacent and last_key in parsed_tables:
@@ -627,10 +910,8 @@ def build_parsed_tables(
                 #   视为同表候选，交给签名守卫裁决；
                 # ③ 双方都有表名但不同 → 不同业务表，禁止合并。
                 # 双方都无表名 → 无业务身份证据，保守不合并。
-                new_anchor_on_page = (
-                    page_anchor
-                    and page_anchor != last_anchor
-                    and not multi_table_page
+                new_anchor_on_page = bool(
+                    parsed.anchor_table_name and parsed.anchor_table_name != last_anchor
                 )
                 same_anchor = bool(
                     last_anchor
@@ -641,12 +922,18 @@ def build_parsed_tables(
                     )
                 )
                 if same_anchor and not new_anchor_on_page:
-                    if _table_signature_compatible(base_table, parsed):
-                        if merge_compatible(base_table, parsed):
+                    if _table_signature_compatible(
+                        base_table,
+                        parsed,
+                        allow_headerless_continuation=continuation_evidence,
+                    ):
+                        if merge_compatible(
+                            base_table,
+                            parsed,
+                            allow_headerless_continuation=continuation_evidence,
+                        ):
                             merged = True
-                            last_end_page = max(
-                                last_end_page, parsed.page_span[1]
-                            )
+                            last_end_page = max(last_end_page, parsed.page_span[1])
             if not merged:
                 # 拒绝合并/不相邻/表名不同：无条件保留为独立表——
                 # 结构化解析阶段宁可多出独立表，绝不静默丢表
@@ -666,7 +953,12 @@ def build_parsed_tables(
 _DISTINCTIVE_COLUMNS = {"basic", "project", "budget", "final"}
 
 
-def _table_signature_compatible(base: "ParsedTable", cont: "ParsedTable") -> bool:
+def _table_signature_compatible(
+    base: "ParsedTable",
+    cont: "ParsedTable",
+    *,
+    allow_headerless_continuation: bool = False,
+) -> bool:
     """续表表头签名是否与基准表兼容（语义列或表头文本）。
 
     续页常常不带表头行（语义列为空）——此时不能仅凭"列名缺失"判为
@@ -685,11 +977,12 @@ def _table_signature_compatible(base: "ParsedTable", cont: "ParsedTable") -> boo
         # 仅有 total 交集：退回表头文本复核（同表种续页表头文本相同）
         base_head = _normalized_head_text(base, rows=2)
         cont_head = _normalized_head_text(cont, rows=2)
-        return bool(base_head and cont_head) and (
-            cont_head in base_head or base_head in cont_head
-        )
+        return bool(base_head and cont_head) and (cont_head in base_head or base_head in cont_head)
     if base_keys and not cont_keys:
-        # 续页无表头：列宽可对齐（同宽或窄于基准）即续表候选
+        # 续页无表头只有在调用方已经用表名/几何证明其为续表时才可
+        # 进入宽度判断；空 named_columns 本身不能作为正向证据。
+        if not allow_headerless_continuation:
+            return False
         base_widths = {len(r.cells) for r in base.rows} or {0}
         cont_widths = {len(r.cells) for r in cont.rows} or {0}
         return min(cont_widths) <= max(base_widths)
@@ -708,6 +1001,102 @@ def _normalized_head_text(table: "ParsedTable", rows: int = 2) -> str:
     for row in table.rows[:rows]:
         parts.append("".join((c.text or "") for c in row.cells))
     return re.sub(r"\s+", "", "".join(parts))
+
+
+def _code_like_text(cell: "ParsedCell") -> str:
+    """Return a classification-code-shaped value from text or Decimal cells."""
+    text = (cell.text or "").strip()
+    if text and _CODE_RE.match(text):
+        return text
+    if cell.number is not None and cell.number == cell.number.to_integral_value():
+        digits = str(int(cell.number))
+        if _CODE_RE.match(digits):
+            return digits
+    return ""
+
+
+def _table_code_families(
+    table: "ParsedTable", *, code_column: Optional[int] = None
+) -> set[str]:
+    """Collect three-digit code domains without treating arbitrary amounts as codes."""
+    values: set[str] = set()
+    for row in table.rows:
+        cells = (
+            [row.cells[code_column]]
+            if code_column is not None and 0 <= code_column < len(row.cells)
+            else row.cells[:3]
+        )
+        for cell in cells:
+            code = _code_like_text(cell)
+            if code:
+                values.add(code[:3])
+    return values
+
+
+def _has_headerless_mixed_page_evidence(
+    base: "ParsedTable",
+    continuation: "ParsedTable",
+    page_tables: Sequence["ParsedTable"],
+    page_anchors: Sequence[str],
+    *,
+    anchor_binding_reliable: bool,
+    last_anchor: str,
+) -> bool:
+    """Prove a headerless top table is a continuation on a mixed page.
+
+    An empty ``named_columns``/anchor is negative evidence only.  The one
+    safe exception needs independent signals: the extractor must have bound a
+    later title to a lower table, the top and prior tables must have strongly
+    overlapping table geometry, and the top rows must continue the prior
+    classification-code domain.  This prevents an unrecognized new table at
+    page top from being swallowed merely because another table has a title.
+    """
+    if (
+        not anchor_binding_reliable
+        or len(page_tables) < 2
+        or page_tables[0] is not continuation
+        or continuation.anchor_table_name
+        or not last_anchor
+        or "code" not in base.named_columns
+        or base.bbox is None
+        or continuation.bbox is None
+    ):
+        return False
+
+    lower_anchors = [
+        name
+        for name in page_anchors[1:]
+        if name and name != last_anchor
+    ]
+    if not lower_anchors:
+        return False
+    lower_tables = page_tables[1:]
+    if not any(
+        table.bbox is not None
+        and table.bbox[1] > continuation.bbox[3]
+        for table in lower_tables
+    ):
+        return False
+
+    base_left, _, base_right, _ = base.bbox
+    cont_left, cont_top, cont_right, cont_bottom = continuation.bbox
+    base_width = base_right - base_left
+    cont_width = cont_right - cont_left
+    if base_width <= 0 or cont_width <= 0:
+        return False
+    overlap = min(base_right, cont_right) - max(base_left, cont_left)
+    if overlap / min(base_width, cont_width) < 0.75:
+        return False
+    # The candidate must actually be the page-top table; a mid-page table
+    # before a later title is not a continuation proof.
+    if cont_top > 120.0 or cont_bottom <= cont_top:
+        return False
+
+    base_families = _table_code_families(
+        base, code_column=base.named_columns.get("code")
+    )
+    continuation_families = _table_code_families(continuation)
+    return bool(base_families & continuation_families)
 
 
 def _remap_continuation_rows(
@@ -788,7 +1177,12 @@ def _remap_continuation_rows(
     return remapped
 
 
-def merge_compatible(base: ParsedTable, continuation: ParsedTable) -> bool:
+def merge_compatible(
+    base: ParsedTable,
+    continuation: ParsedTable,
+    *,
+    allow_headerless_continuation: bool = False,
+) -> bool:
     """跨页合并守卫：表头签名（语义列）兼容才允许合并。
 
     列宽不一致时（GPT5.6 P0-3）：
@@ -809,11 +1203,12 @@ def merge_compatible(base: ParsedTable, continuation: ParsedTable) -> bool:
         return True
     base_keys = set(base.named_columns)
     cont_keys = set(continuation.named_columns)
+    if base_keys and not cont_keys and not allow_headerless_continuation:
+        base.parse_errors.append("continuation_header_missing_without_geometry")
+        return False
     shared = base_keys & cont_keys
     if base_keys and cont_keys and not shared:
-        base.parse_errors.append(
-            f"continuation_header_incompatible: {sorted(cont_keys)}"
-        )
+        base.parse_errors.append(f"continuation_header_incompatible: {sorted(cont_keys)}")
         return False
     base_widths = {len(r.cells) for r in base.rows}
     cont_widths = {len(r.cells) for r in continuation.rows}
@@ -839,8 +1234,7 @@ def merge_compatible(base: ParsedTable, continuation: ParsedTable) -> bool:
         base_width = max(base_widths)
         shift = base_width - max(cont_widths)
         base.parse_errors.append(
-            f"continuation_width_remapped: base={sorted(base_widths)} "
-            f"cont={sorted(cont_widths)}"
+            f"continuation_width_remapped: base={sorted(base_widths)} cont={sorted(cont_widths)}"
         )
         continuation.rows = _remap_continuation_rows(
             continuation.rows, base_width, code_column=base.named_columns.get("code")
@@ -857,18 +1251,19 @@ def merge_compatible(base: ParsedTable, continuation: ParsedTable) -> bool:
     for row in continuation.rows:
         row.code, row.code_level = _row_code(row.cells, code_column=code_col)
         if code_right_col is not None:
-            row.code_right, row.code_level_right = _row_code(
-                row.cells, code_column=code_right_col
-            )
+            row.code_right, row.code_level_right = _row_code(row.cells, code_column=code_right_col)
     base.rows.extend(continuation.rows)
-    base.page_span = (min(base.page_span[0], continuation.page_span[0]),
-                      max(base.page_span[1], continuation.page_span[1]))
+    base.page_span = (
+        min(base.page_span[0], continuation.page_span[0]),
+        max(base.page_span[1], continuation.page_span[1]),
+    )
     return True
 
 
 # ---------------------------------------------------------------------------
 # structured / shadow 模式的规则执行入口
 # ---------------------------------------------------------------------------
+
 
 def run_structured_rules(doc: Any, report_kind: Optional[str] = None):
     """以结构化输入运行首批迁移规则，返回 (issues, outcomes)。
@@ -884,7 +1279,14 @@ def run_structured_rules(doc: Any, report_kind: Optional[str] = None):
     量"误算成 structured delta，且从未验证过规则在目标决算材料上
     的正确性）。
     """
-    from src.engine.rule_outcome import RuleOutcome, RuleOutcomeSignal, STATUS_FAIL, STATUS_PASS, STATUS_EXECUTION_ERROR
+    from src.engine.rule_outcome import (
+        RuleOutcome,
+        RuleOutcomeSignal,
+        STATUS_FAIL,
+        STATUS_PASS,
+        STATUS_PARSE_ERROR,
+        STATUS_EXECUTION_ERROR,
+    )
     from src.engine.rules_v33 import (
         R33115_TotalSheetCheck,
         R33117_BasicExpenseClassification,
@@ -930,6 +1332,20 @@ def run_structured_rules(doc: Any, report_kind: Optional[str] = None):
     ]
     issues: List[Any] = []
     outcomes: List[RuleOutcome] = []
+    # 解析器已明确记录的结构化错误必须进入同一套六态摘要；否则规则
+    # 可能在不完整表上返回 pass，质量门会把“未覆盖”误读成“已检查”。
+    for index, table in enumerate(parsed_tables):
+        parse_errors = getattr(table, "parse_errors", None)
+        if not isinstance(parse_errors, list) or not parse_errors:
+            continue
+        table_code = str(getattr(table, "table_code", "") or f"table-{index + 1}")
+        outcomes.append(
+            RuleOutcome(
+                rule_id=f"STRUCTURED-PARSE:{table_code}",
+                status=STATUS_PARSE_ERROR,
+                detail="; ".join(str(item) for item in parse_errors[:5]),
+            )
+        )
     for rule in migrated:
         try:
             produced = list(rule.apply(doc) or [])

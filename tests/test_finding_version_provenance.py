@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List
 
 import pytest
@@ -292,6 +293,54 @@ def test_legacy_pipeline_issue_dict_carries_versions() -> None:
     assert data["engine_version"] == ENGINE_VERSION
     assert data["model_version"] is None
     assert data["prompt_version"] is None
+
+
+def test_legacy_pipeline_promotes_existing_cross_table_page_evidence() -> None:
+    """跨表 finding 已有 pages/table_refs 时统一输出不能丢掉页码。"""
+    issue = Issue(
+        rule="V33-221",
+        severity="warn",
+        message="说明与表格不一致",
+        evidence_text="说明页与表格页的金额",
+        location={
+            "pages": [20, 12],
+            "table_refs": [
+                {"role": "说明", "page": 20},
+                {"role": "T4", "page": 12},
+            ],
+        },
+    )
+
+    data = _issue_to_dict(issue, 1)
+
+    assert data["location"]["page"] == 20
+    assert data["location"]["pages"] == [20, 12]
+    assert data["evidence"][0]["page"] == 20
+
+
+def test_legacy_pipeline_uses_existing_table_anchor_but_not_numeric_fields() -> None:
+    """表名锚可补页；业务金额字段不能被误当成页码。"""
+    anchored = Issue(
+        rule="V33-240",
+        severity="error",
+        message="表内合计与分项不一致",
+        evidence_text="收入决算表合计 10.00",
+        location={"table": "收入决算表"},
+    )
+    doc = SimpleNamespace(anchors={"收入决算表": [9]})
+    anchored_data = _issue_to_dict(anchored, 1, doc)
+    assert anchored_data["location"]["page"] == 9
+    assert anchored_data["evidence"][0]["page"] == 9
+
+    no_page = Issue(
+        rule="V33-200",
+        severity="error",
+        message="跨表金额不一致",
+        evidence_text="T1=10.00, T2=9.00",
+        location={"t1": 10.0, "t2": 9.0},
+    )
+    no_page_data = _issue_to_dict(no_page, 2)
+    assert no_page_data["location"].get("page") is None
 
 
 # --------------------------------------------------------------------------

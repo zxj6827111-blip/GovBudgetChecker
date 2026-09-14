@@ -147,6 +147,16 @@ class PDFBBoxLocator:
 
     def _build_terms(self, *, issue: IssueItem, target: Dict[str, Any]) -> List[str]:
         terms: List[str] = []
+        # 规则显式给出的精确锚词优先级最高：它直接来自命中文本（如 V33-001
+        # 命中的「202 年度」），能在页面上精确命中目标行。若放到 evidence
+        # 切分词之后，跨行拼接产生的碎片词可能先在别的行命中（实测把
+        # 「一、收入支出决算总体情况说明」当成「202 年度」的位置），
+        # 造成标注错位。
+        for key in ("anchor", "search", "match_text"):
+            raw = str(target.get(key) or "").strip()
+            if raw:
+                terms.append(raw)
+                break
         for key in ("row", "code", "subject", "field", "section", "col"):
             raw = str(target.get(key) or "").strip()
             if not raw:
@@ -405,7 +415,10 @@ class PDFBBoxLocator:
 
     @staticmethod
     def _ref_has_search_terms(ref: Dict[str, Any]) -> bool:
-        return any(str(ref.get(key) or "").strip() for key in ("row", "code", "subject", "field", "section", "col", "table"))
+        return any(
+            str(ref.get(key) or "").strip()
+            for key in ("anchor", "search", "match_text", "row", "code", "subject", "field", "section", "col", "table")
+        )
 
     def _issue_has_text_terms(self, issue: IssueItem) -> bool:
         return bool(self._extract_text_terms(issue=issue, target={}))
