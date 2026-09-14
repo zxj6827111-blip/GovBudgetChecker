@@ -15,6 +15,7 @@
 
 import type { Problem } from "../../../lib/mock";
 import type { JobDetailRecord, JobSummaryRecord } from "../../../lib/uiAdapters";
+import { isUiTaskFinished, normalizeUiTaskStatus } from "../../../lib/uiAdapters";
 import { normalizeProblemBbox } from "../task-review/problemPreview";
 import type { OverlayBox } from "../task-review/problemPreview";
 
@@ -514,4 +515,30 @@ export function computeWorkflowStatusCounts(
   }
   const pending = Math.max(0, formalProblems.length - confirmed - ignored);
   return { confirmed, ignored, pending };
+}
+
+// ---------------------------------------------------------------------------
+// 审核工作台无任务参数时的自动选择（侧边栏 /review 直达）
+// ---------------------------------------------------------------------------
+
+/**
+ * 从任务列表中挑选审核工作台默认进入的任务。
+ *
+ * 侧边栏「审核工作台」href 是 /review（不带 job 参数），直接点击时页面没有
+ * 可渲染内容。这里挑选"最近一个待人工复核任务"作为默认进入项；没有待复核
+ * 任务时回退到最近一个已跑完（completed/review_required/failed）的任务，
+ * 让用户能继续查看历史结论；两者都没有时返回 null，由页面保持引导态。
+ *
+ * 输入 jobs 应为 /api/jobs 返回顺序（按 updated 倒序），因此 find 到的
+ * 第一个即最近的一个。
+ */
+export function pickAutoSelectJob(jobs: JobSummaryRecord[] | null | undefined): JobSummaryRecord | null {
+  if (!Array.isArray(jobs) || jobs.length === 0) {
+    return null;
+  }
+  return (
+    jobs.find((job) => normalizeUiTaskStatus(job.status) === "review_required") ??
+    jobs.find((job) => isUiTaskFinished(normalizeUiTaskStatus(job.status))) ??
+    null
+  );
 }

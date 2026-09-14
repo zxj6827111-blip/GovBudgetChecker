@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 import type { Problem } from "../lib/mock";
-import type { JobDetailRecord } from "../lib/uiAdapters";
+import type { JobDetailRecord, JobSummaryRecord } from "../lib/uiAdapters";
 import {
   computeOverlayBoxAtScale,
   computeWorkflowStatusCounts,
@@ -13,6 +13,7 @@ import {
   formatMetadataYear,
   formatVersionList,
   isProblemDegraded,
+  pickAutoSelectJob,
   resolveProblemTargetPage,
   resolveWorkbenchHeaderBadge,
   sortProblemsForReview,
@@ -145,6 +146,19 @@ function makeProblem(overrides: Partial<Problem>): Problem {
     snippet: "示例引文",
     evidenceImage: "",
     status: "pending",
+    ...overrides,
+  };
+}
+
+function makeJob(overrides: Partial<JobSummaryRecord>): JobSummaryRecord {
+  return {
+    job_id: "job-1",
+    filename: "sample.pdf",
+    status: "done",
+    ts: 0,
+    created_ts: 0,
+    updated_ts: 0,
+    progress: 100,
     ...overrides,
   };
 }
@@ -381,6 +395,26 @@ function runSyncAssertions(): void {
     { confirmed: 2, ignored: 1, pending: 3 },
     "REGRESSION: 降级问题不应计入待处理数，否则底部计数会比审核问题tab的正式问题数更大，造成口径分裂",
   );
+
+  // --- pickAutoSelectJob：侧边栏 /review 直达时的默认任务选择 ----------------
+
+  // 空列表/未拉到数据 → null（保持引导态，不假装有默认任务）
+  assert.equal(pickAutoSelectJob(null), null);
+  assert.equal(pickAutoSelectJob([]), null);
+
+  const jobReview = makeJob({ status: "review_required" });
+  const jobDone = makeJob({ status: "done" });
+  const jobFailed = makeJob({ status: "error" });
+  const jobAnalyzing = makeJob({ status: "processing" });
+  const jobUploaded = makeJob({ status: "uploaded" });
+
+  // 存在待人工复核任务时，必须选最近一个（列表首位），而不是已完成任务
+  assert.equal(pickAutoSelectJob([jobReview, jobDone, jobAnalyzing])?.job_id, jobReview.job_id);
+  // 没有待复核任务时回退到最近一个已跑完的任务（completed/review_required/failed）
+  assert.equal(pickAutoSelectJob([jobDone, jobAnalyzing, jobUploaded])?.job_id, jobDone.job_id);
+  assert.equal(pickAutoSelectJob([jobFailed, jobAnalyzing, jobUploaded])?.job_id, jobFailed.job_id);
+  // 全是进行中/待分析任务时 → null（没有可复核内容，不得跳转）
+  assert.equal(pickAutoSelectJob([jobAnalyzing, jobUploaded]), null);
 }
 
 async function main(): Promise<void> {
