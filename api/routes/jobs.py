@@ -389,6 +389,40 @@ async def associate_job(job_id: str, request: Request):
     if not user_can_access_org(user, str(org_id)):
         raise HTTPException(status_code=403, detail="organization access denied")
 
+    # 上传时已经拒绝“封面明确组织 A、手工选择组织 B”的绑定；关联接口
+    # 也必须复用同一证据检查，否则用户可以在上传后绕过保护，重新制造
+    # report scope 串线和 report_id 冲突。没有可读封面组织时仍允许人工
+    # 覆盖自动匹配，这是产品原有的人工纠错路径。
+    job_dir = runtime.UPLOAD_ROOT / job_id
+    try:
+        pdf_path = runtime.find_first_pdf(job_dir)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "pdf_not_found",
+                "message": "任务不存在可用于复核组织绑定的 PDF。",
+            },
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "organization_binding_unverifiable",
+                "message": "任务包含多个 PDF，且无法由 status.json 唯一确认原件。",
+            },
+        ) from exc
+    from api.routes.upload import _inspect_document_preflight, _organization_binding_conflict
+
+    preflight = _inspect_document_preflight(
+        filename=pdf_path.name,
+        pdf_path=pdf_path,
+        include_matches=False,
+    )
+    conflict = _organization_binding_conflict(preflight, runtime.to_dict(org))
+    if conflict is not None:
+        raise HTTPException(status_code=422, detail=conflict)
+
     binding = runtime.set_job_organization(
         job_id,
         org_id,

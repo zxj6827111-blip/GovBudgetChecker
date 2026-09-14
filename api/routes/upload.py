@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -19,11 +20,58 @@ _MATCH_BASIS_PRIORITY = {
     "cover_field": 2,
     "content_fallback": 1,
 }
+_GENERIC_COVER_NAMES = {"人民政府", "政府", "办公室", "本级", "本部"}
 
 
 def _clean_optional_text(value: Optional[str]) -> Optional[str]:
     text = str(value or "").strip()
     return text or None
+
+
+def _normalize_org_name(value: Any) -> str:
+    """归一化封面/组织名，只用于防止明显错绑，不用于生成组织身份。"""
+    return re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", "", str(value or "")).casefold()
+
+
+def _organization_binding_conflict(
+    preflight: Dict[str, Any], organization: Optional[Dict[str, Any]]
+) -> Optional[Dict[str, str]]:
+    """检查封面组织和选定组织是否存在可证明的冲突。
+
+    没有可读封面组织名时不臆测；一旦封面给出具体名称或层级，则拒绝
+    把文件绑定到明显不同的组织，避免多个原件落进同一 report scope。
+    """
+    if not isinstance(preflight, dict) or not isinstance(organization, dict):
+        return None
+    cover_name = _normalize_org_name(preflight.get("cover_org_name"))
+    selected_name = _normalize_org_name(organization.get("name"))
+    cover_label = str(preflight.get("cover_org_label") or "")
+    scope_hint = str(preflight.get("scope_hint") or "").strip().lower()
+    level = str(organization.get("level") or "").strip().lower()
+
+    if cover_name and cover_name not in _GENERIC_COVER_NAMES and selected_name:
+        if cover_name not in selected_name and selected_name not in cover_name:
+            return {
+                "code": "organization_cover_conflict",
+                "cover_org_name": str(preflight.get("cover_org_name") or ""),
+                "selected_org_name": str(organization.get("name") or ""),
+                "message": "PDF 封面组织与所选组织不一致，已拒绝建立组织绑定。",
+            }
+    if scope_hint == "department" and level == "unit":
+        return {
+            "code": "organization_scope_conflict",
+            "cover_org_label": cover_label or "主管部门",
+            "selected_level": level,
+            "message": "PDF 标明主管部门材料，不能绑定到下属单位。",
+        }
+    if scope_hint == "unit" and level == "department":
+        return {
+            "code": "organization_scope_conflict",
+            "cover_org_label": cover_label or "预算单位",
+            "selected_level": level,
+            "message": "PDF 标明预算单位材料，不能绑定到主管部门。",
+        }
+    return None
 
 
 def _resolve_manual_org(selected_org: Optional[str]) -> Optional[dict]:
@@ -204,14 +252,30 @@ def _auto_match_organization(
         return None
     try:
         pdf_path = runtime.find_first_pdf(runtime.UPLOAD_ROOT / job_id)
-        resolved_preflight = preflight or _inspect_document_preflight(
-            filename=filename,
-            pdf_path=pdf_path,
+        # _handle_upload 的首次 preflight 为了只解析一次上传字节默认不请求
+        # 组织候选；只有带 current/suggestions 的 preflight 才能直接用于
+        # 自动绑定，否则必须用落盘 PDF 重新执行组织匹配。
+        resolved_preflight = (
+            preflight
+            if isinstance(preflight, dict)
+            and (preflight.get("current") is not None or preflight.get("suggestions"))
+            else _inspect_document_preflight(
+                filename=filename,
+                pdf_path=pdf_path,
+            )
         )
         current = resolved_preflight.get("current") or {}
         organization_id = str(current.get("organization_id") or "").strip()
         confidence = float(current.get("confidence") or 0.0)
         if not organization_id:
+            return None
+        conflict = _organization_binding_conflict(resolved_preflight, current)
+        if conflict is not None:
+            logger.warning(
+                "Rejecting organization auto-match for job %s: %s",
+                job_id,
+                conflict.get("code"),
+            )
             return None
         if user is not None and not user_can_access_org(user, organization_id):
             logger.info(
@@ -334,6 +398,9 @@ async def _handle_upload(
     org = _resolve_manual_org(selected_org)
     if selected_org and actor is not None and not user_can_access_org(actor, selected_org):
         raise HTTPException(status_code=403, detail="organization access denied")
+    conflict = _organization_binding_conflict(preflight, org)
+    if conflict is not None:
+        raise HTTPException(status_code=422, detail=conflict)
     org_name = org["name"] if org else None
 
     uploaded = await runtime.store_upload_file(
@@ -383,7 +450,10 @@ async def _handle_upload(
             # preflight is byte-based, while the durable file path is the
             # canonical extraction source used by the matcher and by later
             # re-analysis.  This keeps both paths consistent.
-            uploaded["job_id"], uploaded["filename"], actor
+            uploaded["job_id"],
+            uploaded["filename"],
+            actor,
+            preflight=preflight,
         )
 
     uploaded["organization_id"] = (
