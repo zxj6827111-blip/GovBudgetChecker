@@ -569,3 +569,24 @@ def test_old_style_hit_logging_really_leaks(caplog) -> None:
     assert SECRET_EVIDENCE in blob, "对照失败：旧写法本应泄漏原文"
     # 连结构化渲染后也还在——脱敏只覆盖 extras，不覆盖 message
     assert any(SECRET_EVIDENCE in line for line in _render(caplog.records))
+
+
+def test_signal_vs_ordinary_exception_exemption_narrowing() -> None:
+    """P2-1: 仅对 RuleOutcomeSignal 家族豁免 partial_issues/unresolved_reasons，普通异常不可豁免。"""
+    from scripts.check_log_message_safety import check_source
+
+    ordinary_leaky = '''class PayloadError(Exception):
+    def __init__(self, partial_issues):
+        super().__init__(partial_issues)
+issues = 'secret_content'
+raise PayloadError(partial_issues=issues)
+'''
+    violations = check_source(ordinary_leaky)
+    assert len(violations) >= 1, "普通异常带 partial_issues 传递敏感变量必须被扫描检出"
+
+    signal_safe = '''issues = []
+raise RuleDeferred('V33-103', detail='ok', partial_issues=issues)
+'''
+    signal_violations = check_source(signal_safe)
+    assert len(signal_violations) == 0, "RuleDeferred 结构化载荷入参应合法放行"
+

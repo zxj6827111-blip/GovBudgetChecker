@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+from decimal import Decimal
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from rapidfuzz import fuzz
 
 from .rules_v33 import Document, Issue, Rule, normalize_text, parse_number
+from .amount_math import classify_amount_diff, compute_dynamic_envelope
+from .rule_outcome import RuleDeferred, RuleOutcomeSignal, STATUS_INSUFFICIENT_DATA
+from .field_extractor import (
+    STATUS_MISSING_COLUMN,
+    STATUS_OUT_OF_BOUNDS,
+    StrictValue,
+    extract_row_strict,
+    find_column_index,
+    parse_strict_cell,
+)
 
 
 # Require both sides to be non-digit so numeric amounts like 20765.62
@@ -451,6 +462,17 @@ def _to_wanyuan(v: Optional[float], unit: Optional[str]) -> Optional[float]:
     return v * factor
 
 
+def _dynamic_half_unit_tol(a: float, b: float) -> float:
+    """P1-2b: Return half-unit tolerance based on displayed decimal places of both values."""
+    from decimal import Decimal as _D
+    try:
+        sa = abs(_D(str(a)).as_tuple().exponent)
+        sb = abs(_D(str(b)).as_tuple().exponent)
+        return 0.5 * (10 ** (-max(sa, sb)))
+    except Exception:
+        return 0.05  # safe fallback
+
+
 def _contains_all_tokens(text: str, tokens: Sequence[str]) -> bool:
     return all(tok in text for tok in tokens)
 
@@ -518,36 +540,248 @@ def _get_budget_table_rows(
     return rows, page
 
 
-def _extract_t1_totals(rows: Sequence[Sequence[Any]]) -> Tuple[Optional[float], Optional[float]]:
-    fallback: Optional[Tuple[float, float]] = None
+
+
+def _is_table_boundary_cell(c: str) -> bool:
+    """判断单元格是否为下一个字段/指标的文本边界，防止越界扫描补数。"""
+    if not c:
+        return False
+    c_strip = c.strip()
+    if any(kw in c_strip for kw in ("收入", "支出", "总计", "合计", "项目", "结转", "结余", "资金", "科目", "预算数")):
+        return True
+    if re.search(r"[\u4e00-\u9fa5]", c_strip) and c_strip not in ("万元", "元", "亿元"):
+        return True
+    return False
+
+
+def _extract_t1_t4_strict_totals(
+    rows: Sequence[Sequence[Any]],
+    default_unit: str = "万元",
+) -> Tuple[Optional[StrictValue], Optional[StrictValue]]:
+    """从 T1/T4 表格中严格提取收入总计与支出总计单元格，保留原始精度与单位。
+
+    支持单栏、双栏及多年度（本年/上年、纯年份 2025年/2024年、“2025 预算数”等）布局；
+    严格按期间列定位，遇非数值或空白单元格立即停止（fail-closed），绝不猜借上一期间金额。
+    期间判定只依据真正的表头行：含数值单元格（金额/科目编码）的数据行一律不参与，
+    防止数据金额中的四位片段（如 2050.00）被误当作期间年份污染 max_year。
+    期间无法判定时（多数值列且无任何期间语义），取数一律 fail-closed 返回 None，不得猜列。
+    """
+    income_val: Optional[StrictValue] = None
+    expense_val: Optional[StrictValue] = None
+
+    if not rows:
+        return None, None
+
+    max_len = max(len(r) for r in rows)
+    col_is_prior = [False] * max_len
+    col_is_current = [False] * max_len
+    col_is_amount = [False] * max_len
+
+    header_years: List[int] = []
+    col_years: List[Optional[int]] = [None] * max_len
+
+    # 年份采信双通道：带“年”字锚定（2025年/2024年度），或单元格含明确期间词
+    # （预算数/决算数/执行数/调整数，如“2025 预算数”）；金额四位片段、文号数字一律不采信
+    _YEAR_WITH_NIAN_RE = re.compile(r"(?:19|20)\d{2}\s*年")
+    _YEAR_4DIGIT_RE = re.compile(r"(?:19|20)\d{2}")
+    _PERIOD_WORDS = ("预算数", "决算数", "执行数", "调整数")
+    _AMOUNT_HEADER_WORDS = _PERIOD_WORDS + (
+        "金额",
+        "数额",
+        "本年",
+        "当年",
+        "预算年度",
+        "上年",
+        "去年",
+        "以前年度",
+        "上年度",
+    )
+
+    # 表头行识别：任一单元格为数值（金额/科目编码）即判定为数据行，整行不参与期间推断
+    header_rows: List[List[str]] = []
+    for r in rows[:3]:
+        str_r = [str(c or "").strip() for c in r]
+        if any(parse_strict_cell(c, default_unit=default_unit).is_numeric for c in str_r if c):
+            continue
+        header_rows.append(str_r)
+
+    for str_r in header_rows:
+        for ci, txt in enumerate(str_r):
+            if not txt:
+                continue
+            if _YEAR_WITH_NIAN_RE.search(txt) or any(w in txt for w in _AMOUNT_HEADER_WORDS):
+                col_is_amount[ci] = True
+            if not (_YEAR_WITH_NIAN_RE.search(txt) or any(w in txt for w in _PERIOD_WORDS)):
+                continue
+            for ym in _YEAR_4DIGIT_RE.findall(txt):
+                y = int(ym)
+                if 2000 <= y <= 2099:
+                    header_years.append(y)
+                    if col_years[ci] is None or y > col_years[ci]:
+                        col_years[ci] = y
+
+    distinct_years = sorted(set(header_years))
+    max_year = max(distinct_years) if distinct_years else None
+
+    for str_r in header_rows:
+        for ci, txt in enumerate(str_r):
+            if not txt:
+                continue
+            if any(p in txt for p in ("上年", "去年", "以前年度", "上年度", "结转", "执行数", "决算数", "决算")):
+                col_is_prior[ci] = True
+            elif any(cur in txt for cur in ("本年", "当年", "预算年度")):
+                col_is_current[ci] = True
+            elif col_years[ci] is not None and max_year is not None and len(distinct_years) >= 2:
+                if col_years[ci] < max_year:
+                    col_is_prior[ci] = True
+                elif col_years[ci] == max_year:
+                    col_is_current[ci] = True
+
+    def _extract_metric(row_cells: List[str], label_idx: int, stop_idx: int) -> Optional[StrictValue]:
+        candidate_cols = list(range(label_idx + 1, stop_idx))
+        if not candidate_cols:
+            return None
+
+        current_cols = [ci for ci in candidate_cols if col_is_current[ci]]
+        if len(current_cols) > 1:
+            # 重复 current 表头没有列组证据可消歧，不能按排列顺序取首列。
+            return None
+
+        if len(current_cols) == 1:
+            target_ci = current_cols[0]
+        else:
+            # fallback 只接受表头结构能证明唯一的金额列；单元格是否为空不能参与列身份判断。
+            # 因而多个未识别期间列即使恰好只有一个有值，也必须 fail-closed。
+            amount_cols = [ci for ci in candidate_cols if col_is_amount[ci]]
+            if len(amount_cols) > 1:
+                return None
+            if len(amount_cols) == 1:
+                target_ci = amount_cols[0]
+            elif len(candidate_cols) == 1:
+                target_ci = candidate_cols[0]
+            else:
+                return None
+
+            # “唯一但明确为 prior”仍不是 current，不能靠排除法借用上期金额。
+            if col_is_prior[target_ci]:
+                return None
+
+        probe_c = row_cells[target_ci]
+        if _is_table_boundary_cell(probe_c):
+            return None
+        sv = parse_strict_cell(probe_c, default_unit=default_unit, col_index=target_ci)
+        return sv if sv.is_numeric else None
+
     for row in rows:
-        txt = _row_text(row)
         cells = [str(c or "").strip() for c in row]
-        income_val: Optional[float] = None
-        expense_val: Optional[float] = None
+        inc_label_idx: Optional[int] = None
+        exp_label_idx: Optional[int] = None
+
         for idx, cell in enumerate(cells):
-            if "\u6536\u5165\u603b\u8ba1" in cell:
-                for probe in cells[idx + 1 :]:
-                    v = parse_number(probe)
-                    if v is not None:
-                        income_val = float(v)
-                        break
-            if "\u652f\u51fa\u603b\u8ba1" in cell:
-                for probe in cells[idx + 1 :]:
-                    v = parse_number(probe)
-                    if v is not None:
-                        expense_val = float(v)
-                        break
+            if "收入总计" in cell or ("本年收入" in cell and "合计" in cell):
+                if inc_label_idx is None:
+                    inc_label_idx = idx
+            if "支出总计" in cell or ("本年支出" in cell and "合计" in cell):
+                if exp_label_idx is None:
+                    exp_label_idx = idx
+
+        if inc_label_idx is not None and income_val is None:
+            stop_idx = exp_label_idx if (exp_label_idx is not None and exp_label_idx > inc_label_idx) else len(cells)
+            income_val = _extract_metric(cells, inc_label_idx, stop_idx)
+
+        if exp_label_idx is not None and expense_val is None:
+            stop_idx = len(cells)
+            expense_val = _extract_metric(cells, exp_label_idx, stop_idx)
 
         if income_val is not None and expense_val is not None:
             return income_val, expense_val
 
-        nums = _numbers_in_row(row)
-        if len(nums) < 2:
+    return income_val, expense_val
+
+
+_extract_t4_strict = _extract_t1_t4_strict_totals
+
+
+def _extract_total_basic_project_strict(
+    rows: Sequence[Sequence[Any]],
+    default_unit: str = "万元",
+) -> Tuple[Optional[StrictValue], Optional[StrictValue], Optional[StrictValue]]:
+    """严格提取表格中的合计、基本支出、项目支出单元格，保留原始精度与单位。
+
+    逐字段独立提取，某一列缺失不阻断其余已定位列的取数与核验。
+    """
+    idx_total: Optional[int] = None
+    idx_basic: Optional[int] = None
+    idx_project: Optional[int] = None
+
+    for r in rows[:3]:
+        str_r = [str(c or "").strip() for c in r]
+        if idx_total is None:
+            idx_total = find_column_index(str_r, ["合计", "总计", "本年支出合计", "支出预算合计"])
+        if idx_basic is None:
+            idx_basic = find_column_index(str_r, ["基本支出", "基本支出预算", "基本支出合计"], exclude_keys=["人员", "公用"])
+        if idx_project is None:
+            idx_project = find_column_index(str_r, ["项目支出", "项目支出预算", "项目支出合计"])
+        if idx_total is not None and idx_basic is not None and idx_project is not None:
+            break
+
+    # 至少有一列被识别到，否则无法提取
+    if idx_total is None and idx_basic is None and idx_project is None:
+        return None, None, None
+
+    for row in rows:
+        txt = _row_text(row)
+        if "合计" not in txt and "总计" not in txt:
             continue
-        if "\u603b\u8ba1" in txt or "\u5408\u8ba1" in txt:
-            fallback = (nums[0], nums[-1])
-    return fallback if fallback else (None, None)
+        # P2-1: only check column 0 (subject code column); do not scan amount columns
+        _first_cell = str(row[0] if row else "").strip()
+        if _first_cell.isdigit() and len(_first_cell) in (3, 5, 7):
+            continue
+        if not any(parse_strict_cell(c, default_unit=default_unit).is_numeric for c in row):
+            continue
+
+        v_tot = extract_row_strict(row, idx_total, "合计", default_unit=default_unit) if idx_total is not None else None
+        v_bas = extract_row_strict(row, idx_basic, "基本支出", default_unit=default_unit) if idx_basic is not None else None
+        v_prj = extract_row_strict(row, idx_project, "项目支出", default_unit=default_unit) if idx_project is not None else None
+        return (
+            v_tot if (v_tot and v_tot.is_numeric) else None,
+            v_bas if (v_bas and v_bas.is_numeric) else None,
+            v_prj if (v_prj and v_prj.is_numeric) else None,
+        )
+
+    return None, None, None
+
+
+_extract_t1_strict = _extract_t1_t4_strict_totals
+
+
+def _extract_text_strict_by_patterns(
+    text: str, patterns: Sequence[str], default_unit: str = "万元"
+) -> Optional[StrictValue]:
+    """从说明文本中按正则提取金额，保留原始字面量、小数位与单位。"""
+    for pat in patterns:
+        m = re.search(pat, text)
+        if m:
+            raw = m.group(1).strip()
+            sv = parse_strict_cell(raw, default_unit=default_unit)
+            if sv.is_numeric:
+                return sv
+    return None
+
+
+
+def _extract_t1_totals(rows: Sequence[Sequence[Any]]) -> Tuple[Optional[float], Optional[float]]:
+    v_inc, v_exp = _extract_t1_strict(rows)
+    inc_flt = float(v_inc.decimal_val) if v_inc and v_inc.decimal_val is not None else None
+    exp_flt = float(v_exp.decimal_val) if v_exp and v_exp.decimal_val is not None else None
+    if inc_flt is not None and exp_flt is not None:
+        return inc_flt, exp_flt
+    for row in rows:
+        txt = _row_text(row)
+        nums = _numbers_in_row(row)
+        if len(nums) >= 2 and ("\u603b\u8ba1" in txt or "\u5408\u8ba1" in txt):
+            return (nums[0], nums[-1])
+    return (None, None)
 
 
 def _extract_t4_totals(rows: Sequence[Sequence[Any]]) -> Tuple[Optional[float], Optional[float]]:
@@ -581,6 +815,61 @@ def _extract_total_basic_project(rows: Sequence[Sequence[Any]]) -> Tuple[Optiona
             continue
         if "\u5408\u8ba1" in txt or "\u603b\u8ba1" in txt:
             return nums[-3], nums[-2], nums[-1]
+    return None, None, None
+
+
+def _extract_t3_strict(
+    rows: Sequence[Sequence[Any]],
+    default_unit: str = "万元",
+) -> Tuple[Optional[StrictValue], Optional[StrictValue], Optional[StrictValue]]:
+    """从 T3 表格中严格提取合计、基本支出、项目支出单元格，保留原始精度与单位。"""
+    return _extract_total_basic_project_strict(rows, default_unit=default_unit)
+
+
+
+def _extract_t8_strict(
+    rows: Sequence[Sequence[Any]],
+    default_unit: str = "万元",
+) -> Tuple[Optional[StrictValue], Optional[StrictValue], Optional[StrictValue]]:
+    """从 T8 表格中严格提取合计、人员经费、公用经费单元格，保留原始精度与单位。"""
+    idx_total: Optional[int] = None
+    idx_personnel: Optional[int] = None
+    idx_public: Optional[int] = None
+
+    for r in rows[:3]:
+        str_r = [str(c or "").strip() for c in r]
+        if idx_total is None:
+            idx_total = find_column_index(str_r, ["合计", "总计", "本年支出合计", "支出预算合计", "小计"])
+        if idx_personnel is None:
+            idx_personnel = find_column_index(str_r, ["人员经费", "人员支出", "基本支出人员经费"])
+        if idx_public is None:
+            idx_public = find_column_index(str_r, ["公用经费", "公用支出", "日常公用经费", "公用经费支出"])
+        if idx_total is not None and idx_personnel is not None and idx_public is not None:
+            break
+
+    if idx_total is None or idx_personnel is None or idx_public is None:
+        return None, None, None
+
+    for row in rows:
+        txt = _row_text(row)
+        if "合计" not in txt and "总计" not in txt:
+            continue
+        # P2-1: only check column 0 (subject code column); do not scan amount columns
+        _first_cell = str(row[0] if row else "").strip()
+        if _first_cell.isdigit() and len(_first_cell) in (3, 5, 7):
+            continue
+        if not any(parse_strict_cell(c, default_unit=default_unit).is_numeric for c in row):
+            continue
+
+        v_tot = extract_row_strict(row, idx_total, "合计", default_unit=default_unit)
+        v_per = extract_row_strict(row, idx_personnel, "人员经费", default_unit=default_unit)
+        v_pub = extract_row_strict(row, idx_public, "公用经费", default_unit=default_unit)
+        return (
+            v_tot if v_tot.is_numeric else None,
+            v_per if v_per.is_numeric else None,
+            v_pub if v_pub.is_numeric else None,
+        )
+
     return None, None, None
 
 
@@ -639,27 +928,35 @@ def _extract_headers(rows: Sequence[Sequence[Any]], depth: int = 3) -> List[str]
     return headers
 
 
-def _extract_t9_values(rows: Sequence[Sequence[Any]]) -> Dict[str, float]:
+def _extract_t9_strict_values(
+    rows: Sequence[Sequence[Any]],
+    default_unit: str = "万元",
+) -> Dict[str, StrictValue]:
+    """严格提取 T9 三公表格的各列数值（Contract C2 实现）。
+
+    缺列、越界、空白、无法解析保留 StrictValue 状态（is_missing=True），
+    绝对不隐式填充为 0.0。明确零（如 0, 0.00, -）正常保留为 is_zero=True 的数值。
+    """
     headers = _extract_headers(rows, depth=3)
     norm_headers = [normalize_text(h) for h in headers]
 
     idx_map: Dict[str, int] = {}
     for idx, h in enumerate(norm_headers):
-        if "\u673a\u5173\u8fd0\u884c\u7ecf\u8d39\u9884\u7b97\u6570" in h:
+        if "机关运行经费预算数" in h or "机关运行经费" in h:
             idx_map["org_run"] = idx
-        elif "\u56e0\u516c\u51fa\u56fd\u5883\u8d39" in h:
+        elif "因公出国境费" in h or "因公出国" in h:
             idx_map["abroad"] = idx
-        elif "\u516c\u52a1\u63a5\u5f85\u8d39" in h:
+        elif "公务接待费" in h:
             idx_map["reception"] = idx
-        elif "\u516c\u52a1\u7528\u8f66\u8d2d\u7f6e\u53ca\u8fd0\u884c\u8d39\u5c0f\u8ba1" in h or (
-            "\u516c\u52a1\u7528\u8f66\u8d2d\u7f6e\u53ca\u8fd0\u884c\u8d39" in h and "\u5c0f\u8ba1" in h
+        elif "公务用车购置及运行费小计" in h or (
+            "公务用车购置及运行费" in h and "小计" in h
         ):
             idx_map["car_sub"] = idx
-        elif "\u8d2d\u7f6e\u8d39" in h:
+        elif ("购置费" in h and "运行" not in h) or "公务用车购置" in h:
             idx_map["car_buy"] = idx
-        elif "\u8fd0\u884c\u8d39" in h:
+        elif ("运行费" in h or "运行维护费" in h) and "购置" not in h:
             idx_map["car_run"] = idx
-        elif ("\u5408\u8ba1" in h) and ("\u5c0f\u8ba1" not in h):
+        elif ("合计" in h or "总计" in h) and ("小计" not in h):
             idx_map["total"] = idx
 
     data_row: Optional[Sequence[Any]] = None
@@ -669,27 +966,35 @@ def _extract_t9_values(rows: Sequence[Sequence[Any]]) -> Dict[str, float]:
             data_row = row
             break
 
+    target_fields = ["total", "abroad", "reception", "car_sub", "car_buy", "car_run", "org_run"]
     if not data_row:
-        return {}
-
-    def read_value(col_name: str) -> float:
-        idx = idx_map.get(col_name)
-        if idx is None:
-            return 0.0
-        if idx >= len(data_row):
-            return 0.0
-        val = parse_number(data_row[idx])
-        return float(val) if val is not None else 0.0
+        return {
+            field: StrictValue(
+                raw_text="",
+                status=STATUS_MISSING_COLUMN,
+                col_name=field,
+                reason="未在表格中找到有效数据行",
+            )
+            for field in target_fields
+        }
 
     return {
-        "total": read_value("total"),
-        "abroad": read_value("abroad"),
-        "reception": read_value("reception"),
-        "car_sub": read_value("car_sub"),
-        "car_buy": read_value("car_buy"),
-        "car_run": read_value("car_run"),
-        "org_run": read_value("org_run"),
+        field: extract_row_strict(
+            data_row,
+            idx_map.get(field),
+            field,
+            default_unit=default_unit,
+        )
+        for field in target_fields
     }
+
+
+def _extract_t9_values(rows: Sequence[Sequence[Any]]) -> Dict[str, Optional[float]]:
+    """提取 T9 数值（兼容旧调用，缺失返回 None，明确零返回 0.0）。"""
+    strict_map = _extract_t9_strict_values(rows)
+    if all(sv.reason == "未在表格中找到有效数据行" for sv in strict_map.values()):
+        return {}
+    return {k: sv.as_float() for k, sv in strict_map.items()}
 
 
 def _extract_number_by_patterns(text: str, patterns: Sequence[str]) -> Optional[float]:
@@ -1147,7 +1452,11 @@ class BUD003_YearConsistency(Rule):
         issues: List[Issue] = []
         report_year = _infer_report_year(doc)
         if not report_year:
-            return issues
+            raise RuleDeferred(
+                self.code,
+                detail="未识别到报告年度",
+                unresolved_reasons=["未识别到报告年度"],
+            )
 
         strict_year_issue_pages: set[int] = set()
         for pidx, text in enumerate(doc.page_texts):
@@ -1212,119 +1521,239 @@ class BUD003_YearConsistency(Rule):
 
 class BUD101_T1Balance(Rule):
     code, severity = "BUD-101", "error"
-    desc = "T1 \u6536\u5165\u603b\u8ba1 = \u652f\u51fa\u603b\u8ba1"
+    desc = "T1 收入总计 = 支出总计"
 
     def apply(self, doc: Document) -> List[Issue]:
         anchors = find_budget_anchors(doc)
         rows, page = _get_budget_table_rows(doc, anchors, "BUD_T1")
         if not rows:
-            return []
-
-        income_total, expense_total = _extract_t1_totals(rows)
-        if income_total is None or expense_total is None:
-            return []
-
-        if _is_close(income_total, expense_total, abs_tol=1.0, rel_tol=0.0005):
-            return []
-
-        return [
-            self._issue(
-                f"T1\u6536\u652f\u603b\u8ba1\u4e0d\u4e00\u81f4: \u6536\u5165={income_total:.2f}, \u652f\u51fa={expense_total:.2f}",
-                {"page": page or 1, "table": "BUD_T1"},
-                severity="error",
+            raise RuleDeferred(
+                self.code,
+                detail="未找到部门收支总表(T1)表格数据",
+                unresolved_reasons=["未找到部门收支总表(T1)表格数据"],
             )
-        ]
+
+        unit = (doc.units_per_page[page - 1] if page and page <= len(doc.units_per_page) else None) or doc.dominant_unit
+        if not unit:
+            raise RuleDeferred(
+                self.code,
+                detail=f"部门收支总表(第{page}页)金额单位未知，无法可靠核验",
+                unresolved_reasons=[f"部门收支总表(第{page}页)金额单位未知，无法可靠核验"],
+            )
+
+        v_inc, v_exp = _extract_t1_strict(rows, default_unit=unit)
+        if v_inc is None or v_exp is None or not (v_inc.is_numeric and v_exp.is_numeric):
+            missing = []
+            if v_inc is None or not v_inc.is_numeric:
+                missing.append("收入总计")
+            if v_exp is None or not v_exp.is_numeric:
+                missing.append("支出总计")
+            raise RuleDeferred(
+                self.code,
+                detail=f"T1未找到{','.join(missing)}数值",
+                unresolved_reasons=[f"T1未找到{','.join(missing)}数值"],
+            )
+
+        envelope = compute_dynamic_envelope([v_inc, v_exp])
+        inc_d = v_inc.decimal_val or Decimal("0")
+        exp_d = v_exp.decimal_val or Decimal("0")
+        diff = abs(inc_d - exp_d)
+        if diff > envelope:
+            max_scale = max(v_inc.scale_digits, v_exp.scale_digits, 2)
+            return [
+                self._issue(
+                    f"T1收支总计不一致: 收入={inc_d:.{max_scale}f}, 支出={exp_d:.{max_scale}f} (差额={diff:.{max_scale}f})",
+                    {"page": page or 1, "table": "BUD_T1"},
+                    severity="error",
+                )
+            ]
+        return []
 
 
 class BUD102_T3TotalFormula(Rule):
     code, severity = "BUD-102", "error"
-    desc = "T3 \u5408\u8ba1 = \u57fa\u672c\u652f\u51fa + \u9879\u76ee\u652f\u51fa"
+    desc = "T3 合计 = 基本支出 + 项目支出"
 
     def apply(self, doc: Document) -> List[Issue]:
         anchors = find_budget_anchors(doc)
         rows, page = _get_budget_table_rows(doc, anchors, "BUD_T3")
         if not rows:
-            return []
-
-        total, basic, project = _extract_total_basic_project(rows)
-        if total is None or basic is None or project is None:
-            return []
-
-        calc = basic + project
-        if _is_close(total, calc, abs_tol=1.0, rel_tol=0.0005):
-            return []
-
-        return [
-            self._issue(
-                f"T3\u52fe\u7a3d\u9519\u8bef: \u5408\u8ba1={total:.2f}, \u57fa\u672c+\u9879\u76ee={calc:.2f}",
-                {"page": page or 1, "table": "BUD_T3"},
-                severity="error",
+            raise RuleDeferred(
+                self.code,
+                detail="未找到支出预算总表(T3)表格数据",
+                unresolved_reasons=["未找到支出预算总表(T3)表格数据"],
             )
-        ]
+
+        unit = (doc.units_per_page[page - 1] if page and page <= len(doc.units_per_page) else None) or doc.dominant_unit
+        if not unit:
+            raise RuleDeferred(
+                self.code,
+                detail=f"支出预算总表(第{page}页)金额单位未知，无法可靠核验",
+                unresolved_reasons=[f"支出预算总表(第{page}页)金额单位未知，无法可靠核验"],
+            )
+
+        v_total, v_basic, v_project = _extract_t3_strict(rows, default_unit=unit)
+        if v_total is None or v_basic is None or v_project is None or not (v_total.is_numeric and v_basic.is_numeric and v_project.is_numeric):
+            missing = []
+            if v_total is None or not v_total.is_numeric:
+                missing.append("合计")
+            if v_basic is None or not v_basic.is_numeric:
+                missing.append("基本支出")
+            if v_project is None or not v_project.is_numeric:
+                missing.append("项目支出")
+            raise RuleDeferred(
+                self.code,
+                detail=f"T3未找到{','.join(missing)}数值",
+                unresolved_reasons=[f"T3未找到{','.join(missing)}数值"],
+            )
+
+        envelope = compute_dynamic_envelope([v_total, v_basic, v_project])
+        calc = (v_basic.decimal_val or Decimal("0")) + (v_project.decimal_val or Decimal("0"))
+        tot = v_total.decimal_val or Decimal("0")
+        diff = abs(tot - calc)
+        if diff > envelope:
+            max_scale = max(v_total.scale_digits, v_basic.scale_digits, v_project.scale_digits, 2)
+            return [
+                self._issue(
+                    f"T3勾稽错误: 合计={tot:.{max_scale}f}, 基本+项目={calc:.{max_scale}f} (差额={diff:.{max_scale}f})",
+                    {"page": page or 1, "table": "BUD_T3"},
+                    severity="error",
+                )
+            ]
+        return []
 
 
 class BUD103_T8TotalFormula(Rule):
     code, severity = "BUD-103", "error"
-    desc = "T8 \u5408\u8ba1 = \u4eba\u5458\u7ecf\u8d39 + \u516c\u7528\u7ecf\u8d39"
+    desc = "T8 合计 = 人员经费 + 公用经费"
 
     def apply(self, doc: Document) -> List[Issue]:
         anchors = find_budget_anchors(doc)
         rows, page = _get_budget_table_rows(doc, anchors, "BUD_T8")
         if not rows:
-            return []
-
-        total, personnel, public = _extract_total_basic_project(rows)
-        if total is None or personnel is None or public is None:
-            return []
-
-        calc = personnel + public
-        if _is_close(total, calc, abs_tol=1.0, rel_tol=0.0005):
-            return []
-
-        return [
-            self._issue(
-                f"T8\u52fe\u7a3d\u9519\u8bef: \u5408\u8ba1={total:.2f}, \u4eba\u5458+\u516c\u7528={calc:.2f}",
-                {"page": page or 1, "table": "BUD_T8"},
-                severity="error",
+            raise RuleDeferred(
+                self.code,
+                detail="未找到一般公共预算基本支出表(T8)表格数据",
+                unresolved_reasons=["未找到一般公共预算基本支出表(T8)表格数据"],
             )
-        ]
+
+        unit = (doc.units_per_page[page - 1] if page and page <= len(doc.units_per_page) else None) or doc.dominant_unit
+        if not unit:
+            raise RuleDeferred(
+                self.code,
+                detail=f"一般公共预算基本支出表(第{page}页)金额单位未知，无法可靠核验",
+                unresolved_reasons=[f"一般公共预算基本支出表(第{page}页)金额单位未知，无法可靠核验"],
+            )
+
+        v_total, v_personnel, v_public = _extract_t8_strict(rows, default_unit=unit)
+        if v_total is None or v_personnel is None or v_public is None or not (v_total.is_numeric and v_personnel.is_numeric and v_public.is_numeric):
+            missing = []
+            if v_total is None or not v_total.is_numeric:
+                missing.append("合计")
+            if v_personnel is None or not v_personnel.is_numeric:
+                missing.append("人员经费")
+            if v_public is None or not v_public.is_numeric:
+                missing.append("公用经费")
+            raise RuleDeferred(
+                self.code,
+                detail=f"T8未找到{','.join(missing)}数值",
+                unresolved_reasons=[f"T8未找到{','.join(missing)}数值"],
+            )
+
+        envelope = compute_dynamic_envelope([v_total, v_personnel, v_public])
+        calc = (v_personnel.decimal_val or Decimal("0")) + (v_public.decimal_val or Decimal("0"))
+        tot = v_total.decimal_val or Decimal("0")
+        diff = abs(tot - calc)
+        if diff > envelope:
+            max_scale = max(v_total.scale_digits, v_personnel.scale_digits, v_public.scale_digits, 2)
+            return [
+                self._issue(
+                    f"T8勾稽错误: 合计={tot:.{max_scale}f}, 人员+公用={calc:.{max_scale}f} (差额={diff:.{max_scale}f})",
+                    {"page": page or 1, "table": "BUD_T8"},
+                    severity="error",
+                )
+            ]
+        return []
 
 
 class BUD104_T9Formula(Rule):
     code, severity = "BUD-104", "error"
-    desc = "T9 \u4e09\u516c\u5e8f\u5217\u516c\u5f0f\u68c0\u67e5"
+    desc = "T9 三公序列公式检查"
 
     def apply(self, doc: Document) -> List[Issue]:
         anchors = find_budget_anchors(doc)
         rows, page = _get_budget_table_rows(doc, anchors, "BUD_T9", include_continuation=False)
         if not rows:
-            return []
-
-        v = _extract_t9_values(rows)
-        if not v:
-            return []
-
-        issues: List[Issue] = []
-        lhs = v["total"]
-        rhs = v["abroad"] + v["reception"] + v["car_sub"]
-        if not _is_close(lhs, rhs, abs_tol=0.01, rel_tol=0.0005):
-            issues.append(
-                self._issue(
-                    f"T9\u4e09\u516c\u5408\u8ba1\u4e0d\u4e00\u81f4: \u5408\u8ba1={lhs:.2f}, \u56e0\u516c+\u63a5\u5f85+\u516c\u8f66\u5c0f\u8ba1={rhs:.2f}",
-                    {"page": page or 1, "table": "BUD_T9"},
-                    severity="error",
-                )
+            raise RuleDeferred(
+                self.code,
+                detail="未找到T9三公经费预算表数据",
+                unresolved_reasons=["未找到T9三公经费预算表数据"],
             )
 
-        car_sub = v["car_sub"]
-        car_calc = v["car_buy"] + v["car_run"]
-        if not _is_close(car_sub, car_calc, abs_tol=0.01, rel_tol=0.0005):
-            issues.append(
-                self._issue(
-                    f"T9\u516c\u8f66\u5c0f\u8ba1\u4e0d\u4e00\u81f4: \u5c0f\u8ba1={car_sub:.2f}, \u8d2d\u7f6e+\u8fd0\u884c={car_calc:.2f}",
-                    {"page": page or 1, "table": "BUD_T9"},
-                    severity="error",
-                )
+        strict_v = _extract_t9_strict_values(rows)
+        if not strict_v or all(sv.reason == "未在表格中找到有效数据行" for sv in strict_v.values()):
+            raise RuleDeferred(
+                self.code,
+                detail="未能解析T9三公经费预算表数值行",
+                unresolved_reasons=["未能解析T9三公经费预算表数值行"],
+            )
+
+        issues: List[Issue] = []
+        unresolved_reasons: List[str] = []
+
+        # 子公式 1: total == abroad + reception + car_sub
+        req1 = ["total", "abroad", "reception", "car_sub"]
+        missing1 = [k for k in req1 if not strict_v[k].is_numeric]
+        if missing1:
+            unresolved_reasons.append(f"公式1(三公合计)缺少输入项: {','.join(missing1)}")
+        else:
+            tot = strict_v["total"].decimal_val
+            ab = strict_v["abroad"].decimal_val
+            rec = strict_v["reception"].decimal_val
+            cs = strict_v["car_sub"].decimal_val
+            if tot is not None and ab is not None and rec is not None and cs is not None:
+                rhs = ab + rec + cs
+                env1 = compute_dynamic_envelope([strict_v["total"], strict_v["abroad"], strict_v["reception"], strict_v["car_sub"]])
+                diff_val = abs(tot - rhs)
+                if diff_val > env1:
+                    max_scale1 = max(strict_v["total"].scale_digits, strict_v["abroad"].scale_digits, strict_v["reception"].scale_digits, strict_v["car_sub"].scale_digits, 2)
+                    issues.append(
+                        self._issue(
+                            f"T9三公合计不一致: 合计={tot:.{max_scale1}f}, 因公+接待+公车小计={rhs:.{max_scale1}f} (差额={diff_val:.{max_scale1}f})",
+                            {"page": page or 1, "table": "BUD_T9"},
+                            severity="error",
+                        )
+                    )
+
+        # 子公式 2: car_sub == car_buy + car_run
+        req2 = ["car_sub", "car_buy", "car_run"]
+        missing2 = [k for k in req2 if not strict_v[k].is_numeric]
+        if missing2:
+            unresolved_reasons.append(f"公式2(公车小计)缺少输入项: {','.join(missing2)}")
+        else:
+            car_sub = strict_v["car_sub"].decimal_val
+            cb = strict_v["car_buy"].decimal_val
+            cr = strict_v["car_run"].decimal_val
+            if car_sub is not None and cb is not None and cr is not None:
+                car_calc = cb + cr
+                env2 = compute_dynamic_envelope([strict_v["car_sub"], strict_v["car_buy"], strict_v["car_run"]])
+                diff_val2 = abs(car_sub - car_calc)
+                if diff_val2 > env2:
+                    max_scale2 = max(strict_v["car_sub"].scale_digits, strict_v["car_buy"].scale_digits, strict_v["car_run"].scale_digits, 2)
+                    issues.append(
+                        self._issue(
+                            f"T9公车小计不一致: 小计={car_sub:.{max_scale2}f}, 购置+运行={car_calc:.{max_scale2}f} (差额={diff_val2:.{max_scale2}f})",
+                            {"page": page or 1, "table": "BUD_T9"},
+                            severity="error",
+                        )
+                    )
+
+        if unresolved_reasons:
+            raise RuleDeferred(
+                self.code,
+                detail="; ".join(unresolved_reasons),
+                partial_issues=issues,
+                unresolved_reasons=unresolved_reasons,
             )
 
         return issues
@@ -1332,7 +1761,7 @@ class BUD104_T9Formula(Rule):
 
 class BUD105_CrossTableChecks(Rule):
     code, severity = "BUD-105", "error"
-    desc = "\u8868\u95f4\u52fe\u7a3d\u5173\u7cfb\u68c0\u67e5"
+    desc = "表间勾稽关系检查"
 
     def apply(self, doc: Document) -> List[Issue]:
         anchors = find_budget_anchors(doc)
@@ -1344,215 +1773,201 @@ class BUD105_CrossTableChecks(Rule):
         t8_rows, t8_page = _get_budget_table_rows(doc, anchors, "BUD_T8")
 
         issues: List[Issue] = []
+        unresolved_reasons: List[str] = []
 
+        # 检查对 1: T1 ↔ T4 (收入总计、支出总计)
         if t1_rows and t4_rows:
-            t1_income, t1_expense = _extract_t1_totals(t1_rows)
-            t4_income, t4_expense = _extract_t4_totals(t4_rows)
+            t1_unit = doc.units_per_page[t1_page - 1] if t1_page and (t1_page - 1) < len(doc.units_per_page) else None
+            t4_unit = doc.units_per_page[t4_page - 1] if t4_page and (t4_page - 1) < len(doc.units_per_page) else None
+            if not t1_unit:
+                unresolved_reasons.append("BUD_T1单位未识别")
+            if not t4_unit:
+                unresolved_reasons.append("BUD_T4单位未识别")
 
-            if (
-                t1_income is not None
-                and t4_income is not None
-                and not _is_close(t1_income, t4_income, abs_tol=1.0, rel_tol=0.0005)
-            ):
-                location = _make_cross_table_location(
-                    _make_location_ref(
-                        role="T1",
-                        page=t1_page,
-                        table="BUD_T1",
-                        row="收入总计",
-                        field="收入总计",
-                        value=t1_income,
-                    ),
-                    _make_location_ref(
-                        role="T4",
-                        page=t4_page,
-                        table="BUD_T4",
-                        row="收入总计",
-                        field="收入总计",
-                        value=t4_income,
-                    ),
-                    field="收入总计",
-                    row="收入总计",
-                )
-                issues.append(
-                    self._issue(
-                        f"T1\u4e0eT4\u6536\u5165\u603b\u8ba1\u4e0d\u4e00\u81f4: T1={t1_income:.2f}, T4={t4_income:.2f}",
-                        location,
-                        severity="error",
-                    )
-                )
+            if t1_unit and t4_unit:
+                t1_inc_sv, t1_exp_sv = _extract_t1_strict(t1_rows, default_unit=t1_unit)
+                t4_inc_sv, t4_exp_sv = _extract_t4_strict(t4_rows, default_unit=t4_unit)
 
-            if (
-                t1_expense is not None
-                and t4_expense is not None
-                and not _is_close(t1_expense, t4_expense, abs_tol=1.0, rel_tol=0.0005)
-            ):
-                location = _make_cross_table_location(
-                    _make_location_ref(
-                        role="T1",
-                        page=t1_page,
-                        table="BUD_T1",
-                        row="支出总计",
-                        field="支出总计",
-                        value=t1_expense,
-                    ),
-                    _make_location_ref(
-                        role="T4",
-                        page=t4_page,
-                        table="BUD_T4",
-                        row="支出总计",
-                        field="支出总计",
-                        value=t4_expense,
-                    ),
-                    field="支出总计",
-                    row="支出总计",
-                )
-                issues.append(
-                    self._issue(
-                        f"T1\u4e0eT4\u652f\u51fa\u603b\u8ba1\u4e0d\u4e00\u81f4: T1={t1_expense:.2f}, T4={t4_expense:.2f}",
-                        location,
-                        severity="error",
-                    )
-                )
+                if t1_inc_sv and t4_inc_sv and t1_inc_sv.is_numeric and t4_inc_sv.is_numeric:
+                    env = compute_dynamic_envelope([t1_inc_sv, t4_inc_sv])
+                    diff_level, diff_val = classify_amount_diff(t1_inc_sv.decimal_val, t4_inc_sv.decimal_val, 1, envelope=env)
+                    if diff_level == "mismatch":
+                        max_scale = max(t1_inc_sv.scale_digits, t4_inc_sv.scale_digits, 2)
+                        location = _make_cross_table_location(
+                            _make_location_ref(
+                                role="T1",
+                                page=t1_page,
+                                table="BUD_T1",
+                                row="收入总计",
+                                field="收入总计",
+                                value=float(t1_inc_sv.decimal_val),
+                            ),
+                            _make_location_ref(
+                                role="T4",
+                                page=t4_page,
+                                table="BUD_T4",
+                                row="收入总计",
+                                field="收入总计",
+                                value=float(t4_inc_sv.decimal_val),
+                            ),
+                            field="收入总计",
+                            row="收入总计",
+                        )
+                        issues.append(
+                            self._issue(
+                                f"T1与T4收入总计不一致: T1={t1_inc_sv.decimal_val:.{max_scale}f}, T4={t4_inc_sv.decimal_val:.{max_scale}f} (差额={diff_val:.{max_scale}f})",
+                                location,
+                                severity="error",
+                            )
+                        )
+                else:
+                    unresolved_reasons.append("T1与T4收入总计数值缺失")
 
+                if t1_exp_sv and t4_exp_sv and t1_exp_sv.is_numeric and t4_exp_sv.is_numeric:
+                    env = compute_dynamic_envelope([t1_exp_sv, t4_exp_sv])
+                    diff_level_e, diff_val_e = classify_amount_diff(t1_exp_sv.decimal_val, t4_exp_sv.decimal_val, 1, envelope=env)
+                    if diff_level_e == "mismatch":
+                        max_scale = max(t1_exp_sv.scale_digits, t4_exp_sv.scale_digits, 2)
+                        location = _make_cross_table_location(
+                            _make_location_ref(
+                                role="T1",
+                                page=t1_page,
+                                table="BUD_T1",
+                                row="支出总计",
+                                field="支出总计",
+                                value=float(t1_exp_sv.decimal_val),
+                            ),
+                            _make_location_ref(
+                                role="T4",
+                                page=t4_page,
+                                table="BUD_T4",
+                                row="支出总计",
+                                field="支出总计",
+                                value=float(t4_exp_sv.decimal_val),
+                            ),
+                            field="支出总计",
+                            row="支出总计",
+                        )
+                        issues.append(
+                            self._issue(
+                                f"T1与T4支出总计不一致: T1={t1_exp_sv.decimal_val:.{max_scale}f}, T4={t4_exp_sv.decimal_val:.{max_scale}f} (差额={diff_val_e:.{max_scale}f})",
+                                location,
+                                severity="error",
+                            )
+                        )
+                else:
+                    unresolved_reasons.append("T1与T4支出总计数值缺失")
+        else:
+            unresolved_reasons.append("BUD_T1或BUD_T4表格缺失，无法核验收支总计表间勾稽")
+
+        # 检查对 2: T3 ↔ T5 (合计、基本支出、项目支出)
         if t3_rows and t5_rows:
-            t3_total, t3_basic, t3_project = _extract_total_basic_project(t3_rows)
-            t5_total, t5_basic, t5_project = _extract_total_basic_project(t5_rows)
+            t3_unit = doc.units_per_page[t3_page - 1] if t3_page and (t3_page - 1) < len(doc.units_per_page) else None
+            t5_unit = doc.units_per_page[t5_page - 1] if t5_page and (t5_page - 1) < len(doc.units_per_page) else None
+            if not t3_unit:
+                unresolved_reasons.append("BUD_T3单位未识别")
+            if not t5_unit:
+                unresolved_reasons.append("BUD_T5单位未识别")
 
-            if (
-                t3_total is not None
-                and t5_total is not None
-                and not _is_close(t3_total, t5_total, abs_tol=1.0, rel_tol=0.0005)
-            ):
-                location = _make_cross_table_location(
-                    _make_location_ref(
-                        role="T3",
-                        page=t3_page,
-                        table="BUD_T3",
-                        row="合计",
-                        field="合计",
-                        value=t3_total,
-                    ),
-                    _make_location_ref(
-                        role="T5",
-                        page=t5_page,
-                        table="BUD_T5",
-                        row="合计",
-                        field="合计",
-                        value=t5_total,
-                    ),
-                    field="合计",
-                    row="合计",
-                )
-                issues.append(
-                    self._issue(
-                        f"T3\u4e0eT5\u5408\u8ba1\u4e0d\u4e00\u81f4: T3={t3_total:.2f}, T5={t5_total:.2f}",
-                        location,
-                        severity="error",
-                    )
-                )
+            if t3_unit and t5_unit:
+                t3_tot_sv, t3_bas_sv, t3_prj_sv = _extract_total_basic_project_strict(t3_rows, default_unit=t3_unit)
+                t5_tot_sv, t5_bas_sv, t5_prj_sv = _extract_total_basic_project_strict(t5_rows, default_unit=t5_unit)
 
-            if (
-                t3_basic is not None
-                and t5_basic is not None
-                and not _is_close(t3_basic, t5_basic, abs_tol=1.0, rel_tol=0.0005)
-            ):
-                location = _make_cross_table_location(
-                    _make_location_ref(
-                        role="T3",
-                        page=t3_page,
-                        table="BUD_T3",
-                        row="合计",
-                        field="基本支出",
-                        value=t3_basic,
-                    ),
-                    _make_location_ref(
-                        role="T5",
-                        page=t5_page,
-                        table="BUD_T5",
-                        row="合计",
-                        field="基本支出",
-                        value=t5_basic,
-                    ),
-                    field="基本支出",
-                    row="合计",
-                )
-                issues.append(
-                    self._issue(
-                        f"T3\u4e0eT5\u57fa\u672c\u652f\u51fa\u4e0d\u4e00\u81f4: T3={t3_basic:.2f}, T5={t5_basic:.2f}",
-                        location,
-                        severity="error",
-                    )
-                )
+                for (name, sv3, sv5) in [("合计", t3_tot_sv, t5_tot_sv), ("基本支出", t3_bas_sv, t5_bas_sv), ("项目支出", t3_prj_sv, t5_prj_sv)]:
+                    if sv3 and sv5 and sv3.is_numeric and sv5.is_numeric:
+                        env = compute_dynamic_envelope([sv3, sv5])
+                        diff_l, diff_v = classify_amount_diff(sv3.decimal_val, sv5.decimal_val, 1, envelope=env)
+                        if diff_l == "mismatch":
+                            max_scale = max(sv3.scale_digits, sv5.scale_digits, 2)
+                            location = _make_cross_table_location(
+                                _make_location_ref(
+                                    role="T3",
+                                    page=t3_page,
+                                    table="BUD_T3",
+                                    row="合计",
+                                    field=name,
+                                    value=float(sv3.decimal_val),
+                                ),
+                                _make_location_ref(
+                                    role="T5",
+                                    page=t5_page,
+                                    table="BUD_T5",
+                                    row="合计",
+                                    field=name,
+                                    value=float(sv5.decimal_val),
+                                ),
+                                field=name,
+                                row="合计",
+                            )
+                            issues.append(
+                                self._issue(
+                                    f"T3与T5{name}不一致: T3={sv3.decimal_val:.{max_scale}f}, T5={sv5.decimal_val:.{max_scale}f} (差额={diff_v:.{max_scale}f})",
+                                    location,
+                                    severity="error",
+                                )
+                            )
+                    else:
+                        unresolved_reasons.append(f"T3与T5{name}数值缺失")
+        else:
+            unresolved_reasons.append("BUD_T3或BUD_T5表格缺失，无法核验T3↔T5勾稽")
 
-            if (
-                t3_project is not None
-                and t5_project is not None
-                and not _is_close(t3_project, t5_project, abs_tol=1.0, rel_tol=0.0005)
-            ):
-                location = _make_cross_table_location(
-                    _make_location_ref(
-                        role="T3",
-                        page=t3_page,
-                        table="BUD_T3",
-                        row="合计",
-                        field="项目支出",
-                        value=t3_project,
-                    ),
-                    _make_location_ref(
-                        role="T5",
-                        page=t5_page,
-                        table="BUD_T5",
-                        row="合计",
-                        field="项目支出",
-                        value=t5_project,
-                    ),
-                    field="项目支出",
-                    row="合计",
-                )
-                issues.append(
-                    self._issue(
-                        f"T3\u4e0eT5\u9879\u76ee\u652f\u51fa\u4e0d\u4e00\u81f4: T3={t3_project:.2f}, T5={t5_project:.2f}",
-                        location,
-                        severity="error",
-                    )
-                )
-
+        # 检查对 3: T3 ↔ T8 (T3基本支出 ↔ T8合计)
         if t3_rows and t8_rows:
-            _, t3_basic, _ = _extract_total_basic_project(t3_rows)
-            t8_total, _, _ = _extract_total_basic_project(t8_rows)
-            if (
-                t3_basic is not None
-                and t8_total is not None
-                and not _is_close(t3_basic, t8_total, abs_tol=1.0, rel_tol=0.0005)
-            ):
-                location = _make_cross_table_location(
-                    _make_location_ref(
-                        role="T3",
-                        page=t3_page,
-                        table="BUD_T3",
-                        row="合计",
-                        field="基本支出",
-                        value=t3_basic,
-                    ),
-                    _make_location_ref(
-                        role="T8",
-                        page=t8_page,
-                        table="BUD_T8",
-                        row="合计",
-                        field="合计",
-                        value=t8_total,
-                    ),
-                    field="基本支出 / 合计",
-                    row="合计",
-                )
-                issues.append(
-                    self._issue(
-                        f"T3\u57fa\u672c\u652f\u51fa\u4e0eT8\u5408\u8ba1\u4e0d\u4e00\u81f4: T3={t3_basic:.2f}, T8={t8_total:.2f}",
-                        location,
-                        severity="error",
-                    )
-                )
+            t3_unit = doc.units_per_page[t3_page - 1] if t3_page and (t3_page - 1) < len(doc.units_per_page) else None
+            t8_unit = doc.units_per_page[t8_page - 1] if t8_page and (t8_page - 1) < len(doc.units_per_page) else None
+            if not t3_unit:
+                unresolved_reasons.append("BUD_T3单位未识别")
+            if not t8_unit:
+                unresolved_reasons.append("BUD_T8单位未识别")
+
+            if t3_unit and t8_unit:
+                _, t3_bas_sv, _ = _extract_total_basic_project_strict(t3_rows, default_unit=t3_unit)
+                t8_tot_sv, _, _ = _extract_t8_strict(t8_rows, default_unit=t8_unit)
+
+                if t3_bas_sv and t8_tot_sv and t3_bas_sv.is_numeric and t8_tot_sv.is_numeric:
+                    env = compute_dynamic_envelope([t3_bas_sv, t8_tot_sv])
+                    diff_l8, diff_v8 = classify_amount_diff(t3_bas_sv.decimal_val, t8_tot_sv.decimal_val, 1, envelope=env)
+                    if diff_l8 == "mismatch":
+                        max_scale = max(t3_bas_sv.scale_digits, t8_tot_sv.scale_digits, 2)
+                        location = _make_cross_table_location(
+                            _make_location_ref(
+                                role="T3",
+                                page=t3_page,
+                                table="BUD_T3",
+                                row="合计",
+                                field="基本支出",
+                                value=float(t3_bas_sv.decimal_val),
+                            ),
+                            _make_location_ref(
+                                role="T8",
+                                page=t8_page,
+                                table="BUD_T8",
+                                row="合计",
+                                field="合计",
+                                value=float(t8_tot_sv.decimal_val),
+                            ),
+                            field="基本支出 / 合计",
+                            row="合计",
+                        )
+                        issues.append(
+                            self._issue(
+                                f"T3基本支出与T8合计不一致: T3={t3_bas_sv.decimal_val:.{max_scale}f}, T8={t8_tot_sv.decimal_val:.{max_scale}f} (差额={diff_v8:.{max_scale}f})",
+                                location,
+                                severity="error",
+                            )
+                        )
+                else:
+                    unresolved_reasons.append("T3基本支出或T8合计数值缺失")
+        else:
+            unresolved_reasons.append("BUD_T3或BUD_T8表格缺失，无法核验T3基本支出↔T8合计勾稽")
+
+        if unresolved_reasons:
+            raise RuleDeferred(
+                self.code,
+                detail="; ".join(unresolved_reasons),
+                partial_issues=issues,
+                unresolved_reasons=unresolved_reasons,
+            )
 
         return issues
 
@@ -1564,13 +1979,17 @@ class BUD106_EmptyTableStatement(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         anchors = find_budget_anchors(doc)
         issues: List[Issue] = []
+        unresolved_reasons: List[str] = []
 
         checks = ("BUD_T6", "BUD_T7", "BUD_T9")
+        checked_count = 0
         for table_key in checks:
             rows, page = _get_budget_table_rows(doc, anchors, table_key, include_continuation=False)
             if not page:
+                unresolved_reasons.append(f"{table_key}表格未定位到")
                 continue
 
+            checked_count += 1
             page_text = doc.page_texts[page - 1] if page - 1 < len(doc.page_texts) else ""
             table_name = _table_display_name(table_key)
             expected_phrase = _EMPTY_TABLE_EXPECTED_PHRASES.get(table_key, "")
@@ -1612,16 +2031,25 @@ class BUD106_EmptyTableStatement(Rule):
                     )
                 )
 
+        if checked_count == 0:
+            raise RuleDeferred(
+                self.code,
+                detail="T6/T7/T9空表说明检查前置表格均未定位到",
+                unresolved_reasons=unresolved_reasons,
+            )
+
         return issues
 
 
 class BUD107_TextTableConsistency(Rule):
     code, severity = "BUD-107", "warn"
-    desc = "\u9884\u7b97\u8bf4\u660e\u4e0e\u8868\u683c\u6570\u503c\u4e00\u81f4\u6027"
+    desc = "表内数字与文字说明一致性"
 
     def apply(self, doc: Document) -> List[Issue]:
         anchors = find_budget_anchors(doc)
         issues: List[Issue] = []
+        unresolved_reasons: List[str] = []
+        checked_count = 0
 
         all_text = "\n".join(doc.page_texts)
 
@@ -1629,113 +2057,147 @@ class BUD107_TextTableConsistency(Rule):
         t4_rows, t4_page = _get_budget_table_rows(doc, anchors, "BUD_T4")
 
         if t1_rows and t1_page:
-            t1_income, t1_expense = _extract_t1_totals(t1_rows)
+            checked_count += 1
             unit = doc.units_per_page[t1_page - 1] if (t1_page - 1) < len(doc.units_per_page) else None
-            t1_income_wy = _to_wanyuan(t1_income, unit)
-            t1_expense_wy = _to_wanyuan(t1_expense, unit)
-
-            text_income = _extract_number_by_patterns(
-                all_text,
-                [
-                    r"\u6536\u5165\u9884\u7b97\s*([0-9,]+(?:\.[0-9]+)?)\s*\u4e07\u5143",
-                ],
-            )
-            text_expense = _extract_number_by_patterns(
-                all_text,
-                [
-                    r"\u652f\u51fa\u9884\u7b97\s*([0-9,]+(?:\.[0-9]+)?)\s*\u4e07\u5143",
-                ],
-            )
-
-            if (
-                t1_income_wy is not None
-                and text_income is not None
-                and not _is_close(t1_income_wy, text_income, abs_tol=0.05, rel_tol=0.0005)
-            ):
-                issues.append(
-                    self._issue(
-                        f"\u6587\u672c\u6536\u5165\u9884\u7b97\u4e0eT1\u4e0d\u4e00\u81f4: \u6587\u672c={text_income:.2f}\u4e07\u5143, \u8868={t1_income_wy:.2f}\u4e07\u5143",
-                        {"page": t1_page, "table": "BUD_T1"},
-                        severity="warn",
-                    )
-                )
-
-            if (
-                t1_expense_wy is not None
-                and text_expense is not None
-                and not _is_close(t1_expense_wy, text_expense, abs_tol=0.05, rel_tol=0.0005)
-            ):
-                issues.append(
-                    self._issue(
-                        f"\u6587\u672c\u652f\u51fa\u9884\u7b97\u4e0eT1\u4e0d\u4e00\u81f4: \u6587\u672c={text_expense:.2f}\u4e07\u5143, \u8868={t1_expense_wy:.2f}\u4e07\u5143",
-                        {"page": t1_page, "table": "BUD_T1"},
-                        severity="warn",
-                    )
-                )
-
-        if t4_rows and t4_page:
-            _, t4_expense = _extract_t4_totals(t4_rows)
-            unit = doc.units_per_page[t4_page - 1] if (t4_page - 1) < len(doc.units_per_page) else None
-            t4_expense_wy = _to_wanyuan(t4_expense, unit)
-            text_fin_expense = _extract_number_by_patterns(
-                all_text,
-                [
-                    r"\u8d22\u653f\u62e8\u6b3e\u652f\u51fa\u9884\u7b97\s*([0-9,]+(?:\.[0-9]+)?)\s*\u4e07\u5143",
-                ],
-            )
-            if (
-                t4_expense_wy is not None
-                and text_fin_expense is not None
-                and not _is_close(t4_expense_wy, text_fin_expense, abs_tol=0.05, rel_tol=0.0005)
-            ):
-                issues.append(
-                    self._issue(
-                        f"\u6587\u672c\u8d22\u653f\u62e8\u6b3e\u652f\u51fa\u9884\u7b97\u4e0eT4\u4e0d\u4e00\u81f4: \u6587\u672c={text_fin_expense:.2f}\u4e07\u5143, \u8868={t4_expense_wy:.2f}\u4e07\u5143",
-                        {"page": t4_page, "table": "BUD_T4"},
-                        severity="warn",
-                    )
-                )
-
-        t9_rows, t9_page = _get_budget_table_rows(doc, anchors, "BUD_T9", include_continuation=False)
-        if t9_rows and t9_page:
-            t9 = _extract_t9_values(t9_rows)
-            if t9:
-                text_total = _extract_number_by_patterns(
+            if not unit:
+                unresolved_reasons.append("T1单位未识别")
+            else:
+                t1_inc_sv, t1_exp_sv = _extract_t1_strict(t1_rows, default_unit=unit)
+                text_inc_sv = _extract_text_strict_by_patterns(
                     all_text,
-                    [
-                        r"\u4e09\u516c\u201d?\u7ecf\u8d39\u9884\u7b97\u6570\u4e3a\s*([0-9,]+(?:\.[0-9]+)?)\s*\u4e07\u5143",
-                    ],
+                    [r"收入预算\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
+                    default_unit="万元",
                 )
-                text_abroad = _extract_number_by_patterns(
+                text_exp_sv = _extract_text_strict_by_patterns(
                     all_text,
-                    [r"\u56e0\u516c\u51fa\u56fd\uff08?\u5883\uff09?\u8d39\s*([0-9,]+(?:\.[0-9]+)?)\s*\u4e07\u5143"],
-                )
-                text_reception = _extract_number_by_patterns(
-                    all_text,
-                    [r"\u516c\u52a1\u63a5\u5f85\u8d39\s*([0-9,]+(?:\.[0-9]+)?)\s*\u4e07\u5143"],
-                )
-                text_org_run = _extract_number_by_patterns(
-                    all_text,
-                    [r"\u673a\u5173\u8fd0\u884c\u7ecf\u8d39\u9884\u7b97(?:\u4e3a)?\s*([0-9,]+(?:\.[0-9]+)?)\s*\u4e07\u5143"],
+                    [r"支出预算\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
+                    default_unit="万元",
                 )
 
-                comparisons = [
-                    ("\u4e09\u516c\u5408\u8ba1", text_total, t9.get("total", 0.0)),
-                    ("\u56e0\u516c\u51fa\u56fd\u8d39", text_abroad, t9.get("abroad", 0.0)),
-                    ("\u516c\u52a1\u63a5\u5f85\u8d39", text_reception, t9.get("reception", 0.0)),
-                    ("\u673a\u5173\u8fd0\u884c\u7ecf\u8d39", text_org_run, t9.get("org_run", 0.0)),
-                ]
-                for label, text_val, table_val in comparisons:
-                    if text_val is None:
-                        continue
-                    if not _is_close(text_val, table_val, abs_tol=0.01, rel_tol=0.0005):
+                if t1_inc_sv is None or text_inc_sv is None:
+                    unresolved_reasons.append("T1收入预算或文本未提取到")
+                else:
+                    env = compute_dynamic_envelope([t1_inc_sv, text_inc_sv])
+                    diff_l, diff_v = classify_amount_diff(text_inc_sv.decimal_val, t1_inc_sv.decimal_val, 1, envelope=env)
+                    if diff_l == "mismatch":
+                        max_scale = max(t1_inc_sv.scale_digits, text_inc_sv.scale_digits, 2)
                         issues.append(
                             self._issue(
-                                f"\u6587\u5b57\u8bf4\u660e\u4e0eT9\u4e0d\u4e00\u81f4({label}): \u6587\u672c={text_val:.2f}, \u8868={table_val:.2f}",
-                                {"page": t9_page, "table": "BUD_T9"},
+                                f"文本收入预算与T1不一致: 文本={text_inc_sv.decimal_val:.{max_scale}f}万元, 表={t1_inc_sv.decimal_val:.{max_scale}f}万元",
+                                {"page": t1_page, "table": "BUD_T1"},
                                 severity="warn",
                             )
                         )
+
+                if t1_exp_sv is None or text_exp_sv is None:
+                    unresolved_reasons.append("T1支出预算或文本未提取到")
+                else:
+                    env_e = compute_dynamic_envelope([t1_exp_sv, text_exp_sv])
+                    diff_le, diff_ve = classify_amount_diff(text_exp_sv.decimal_val, t1_exp_sv.decimal_val, 1, envelope=env_e)
+                    if diff_le == "mismatch":
+                        max_scale = max(t1_exp_sv.scale_digits, text_exp_sv.scale_digits, 2)
+                        issues.append(
+                            self._issue(
+                                f"文本支出预算与T1不一致: 文本={text_exp_sv.decimal_val:.{max_scale}f}万元, 表={t1_exp_sv.decimal_val:.{max_scale}f}万元",
+                                {"page": t1_page, "table": "BUD_T1"},
+                                severity="warn",
+                            )
+                        )
+        else:
+            unresolved_reasons.append("BUD_T1表格未定位到")
+
+        if t4_rows and t4_page:
+            checked_count += 1
+            unit = doc.units_per_page[t4_page - 1] if (t4_page - 1) < len(doc.units_per_page) else None
+            if not unit:
+                unresolved_reasons.append("T4单位未识别")
+            else:
+                _, t4_exp_sv = _extract_t4_strict(t4_rows, default_unit=unit)
+                text_fin_exp_sv = _extract_text_strict_by_patterns(
+                    all_text,
+                    [r"财政拨款支出预算\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
+                    default_unit="万元",
+                )
+                if t4_exp_sv is None or text_fin_exp_sv is None:
+                    unresolved_reasons.append("T4财政拨款支出或文本未提取到")
+                else:
+                    env = compute_dynamic_envelope([t4_exp_sv, text_fin_exp_sv])
+                    diff_l, diff_v = classify_amount_diff(text_fin_exp_sv.decimal_val, t4_exp_sv.decimal_val, 1, envelope=env)
+                    if diff_l == "mismatch":
+                        max_scale = max(t4_exp_sv.scale_digits, text_fin_exp_sv.scale_digits, 2)
+                        issues.append(
+                            self._issue(
+                                f"文本财政拨款支出预算与T4不一致: 文本={text_fin_exp_sv.decimal_val:.{max_scale}f}万元, 表={t4_exp_sv.decimal_val:.{max_scale}f}万元",
+                                {"page": t4_page, "table": "BUD_T4"},
+                                severity="warn",
+                            )
+                        )
+        else:
+            unresolved_reasons.append("BUD_T4表格未定位到")
+
+        t9_rows, t9_page = _get_budget_table_rows(doc, anchors, "BUD_T9", include_continuation=False)
+        if t9_rows and t9_page:
+            unit = doc.units_per_page[t9_page - 1] if (t9_page - 1) < len(doc.units_per_page) else None
+            if not unit:
+                unresolved_reasons.append("BUD_T9单位未识别")
+            else:
+                t9_strict = _extract_t9_strict_values(t9_rows, default_unit=unit)
+                if not t9_strict:
+                    unresolved_reasons.append("BUD_T9数值提取失败")
+                else:
+                    checked_count += 1
+                    text_total_sv = _extract_text_strict_by_patterns(
+                        all_text,
+                        [r"三公”?\s*经费预算数(?:为)?\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
+                        default_unit="万元",
+                    )
+                    text_abroad_sv = _extract_text_strict_by_patterns(
+                        all_text,
+                        [r"因公出国（?境）?费\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
+                        default_unit="万元",
+                    )
+                    text_reception_sv = _extract_text_strict_by_patterns(
+                        all_text,
+                        [r"公务接待费\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
+                        default_unit="万元",
+                    )
+                    text_org_run_sv = _extract_text_strict_by_patterns(
+                        all_text,
+                        [r"机关运行经费预算(?:为)?\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
+                        default_unit="万元",
+                    )
+
+                    comparisons = [
+                        ("三公合计", text_total_sv, t9_strict.get("total")),
+                        ("因公出国费", text_abroad_sv, t9_strict.get("abroad")),
+                        ("公务接待费", text_reception_sv, t9_strict.get("reception")),
+                        ("机关运行经费", text_org_run_sv, t9_strict.get("org_run")),
+                    ]
+                    for label, text_sv, table_sv in comparisons:
+                        if text_sv is None or table_sv is None or not text_sv.is_numeric or not table_sv.is_numeric:
+                            unresolved_reasons.append(f"T9 {label}文本或表格数值缺失")
+                            continue
+                        env = compute_dynamic_envelope([text_sv, table_sv])
+                        diff_l, diff_v = classify_amount_diff(text_sv.decimal_val, table_sv.decimal_val, 1, envelope=env)
+                        if diff_l == "mismatch":
+                            max_scale = max(text_sv.scale_digits, table_sv.scale_digits, 2)
+                            issues.append(
+                                self._issue(
+                                    f"文字说明与T9不一致({label}): 文本={text_sv.decimal_val:.{max_scale}f}, 表={table_sv.decimal_val:.{max_scale}f} (差额={diff_v:.{max_scale}f})",
+                                    {"page": t9_page, "table": "BUD_T9"},
+                                    severity="warn",
+                                )
+                            )
+        else:
+            unresolved_reasons.append("BUD_T9表格未定位到")
+
+        if unresolved_reasons:
+            raise RuleDeferred(
+                self.code,
+                detail="; ".join(unresolved_reasons),
+                partial_issues=issues,
+                unresolved_reasons=unresolved_reasons,
+            )
 
         return issues
 
@@ -1751,22 +2213,35 @@ class BUD108_PerformanceTargetConsistency(Rule):
         all_text = "\n".join(doc.page_texts)
         _, perf_amount_wy, perf_line = _extract_performance_summary_metrics(all_text)
         if perf_amount_wy is None:
-            return issues
+            raise RuleDeferred(
+                self.code,
+                detail="未提取到绩效目标说明金额",
+                unresolved_reasons=["未提取到绩效目标说明金额"],
+            )
 
         t3_rows, t3_page = _get_budget_table_rows(doc, anchors, "BUD_T3")
         if not t3_rows or not t3_page:
-            return issues
+            raise RuleDeferred(
+                self.code,
+                detail="BUD_T3表格缺失，无法核验绩效目标说明与项目支出口径一致性",
+                unresolved_reasons=["BUD_T3表格缺失"],
+            )
 
         _, _, t3_project = _extract_total_basic_project(t3_rows)
         unit = doc.units_per_page[t3_page - 1] if (t3_page - 1) < len(doc.units_per_page) else None
         t3_project_wy = _to_wanyuan(t3_project, unit)
         if t3_project_wy is None:
-            return issues
+            raise RuleDeferred(
+                self.code,
+                detail="BUD_T3未能提取到项目支出金额",
+                unresolved_reasons=["BUD_T3未能提取到项目支出金额"],
+            )
 
         perf_page = _find_text_page(doc, perf_line)
 
         # Narrative and table may differ by tiny rounding; tolerate 0.10万元.
-        if _is_close(perf_amount_wy, t3_project_wy, abs_tol=0.10, rel_tol=0.005):
+        diff_label, diff_val = classify_amount_diff(perf_amount_wy, t3_project_wy, 1)
+        if diff_label == "identical" or _is_close(perf_amount_wy, t3_project_wy, abs_tol=0.10, rel_tol=0.005):
             return issues
 
         location = _make_cross_table_location(
@@ -1790,7 +2265,7 @@ class BUD108_PerformanceTargetConsistency(Rule):
 
         issues.append(
             self._issue(
-                f"\u7ee9\u6548\u76ee\u6807\u8bf4\u660e\u989d\u5ea6\u4e0eT3\u9879\u76ee\u652f\u51fa\u5dee\u5f02\u8f83\u5927\uff1a\u8bf4\u660e={perf_amount_wy:.2f}\u4e07\u5143\uff0cT3={t3_project_wy:.2f}\u4e07\u5143\uff1b\u82e5\u4e3a\u4e0d\u540c\u53e3\u5f84\uff0c\u5efa\u8bae\u5728\u6587\u672c\u4e2d\u8865\u5145\u8bf4\u660e",
+                f"绩效目标说明额度与T3项目支出差异较大：说明={perf_amount_wy:.2f}万元，T3={t3_project_wy:.2f}万元；若为不同口径，建议在文本中补充说明",
                 location,
                 severity="warn",
                 evidence_text=perf_line,
@@ -1807,15 +2282,27 @@ class BUD109_FunctionalClassificationNameConsistency(Rule):
         anchors = find_budget_anchors(doc)
         t5_rows, t5_page = _get_budget_table_rows(doc, anchors, "BUD_T5")
         if not t5_rows:
-            return []
+            raise RuleDeferred(
+                self.code,
+                detail="BUD_T5表格缺失，无法核验功能分类科目名称一致性",
+                unresolved_reasons=["BUD_T5表格缺失"],
+            )
 
         table_entries = _extract_t5_functional_name_index(t5_rows)
         if not table_entries:
-            return []
+            raise RuleDeferred(
+                self.code,
+                detail="BUD_T5未能提取到功能分类科目行",
+                unresolved_reasons=["BUD_T5未能提取到功能分类科目行"],
+            )
 
         narrative_mentions = _extract_budget_functional_narrative_mentions(doc, anchors)
         if not narrative_mentions:
-            return []
+            raise RuleDeferred(
+                self.code,
+                detail="正文中未提取到功能分类科目名称说明",
+                unresolved_reasons=["正文中未提取到功能分类科目名称说明"],
+            )
 
         issues: List[Issue] = []
         table_name = _table_display_name("BUD_T5")
@@ -1899,59 +2386,82 @@ class BUD109_FunctionalClassificationNameConsistency(Rule):
 
 class BUD110_DetailRowFormulaConsistency(Rule):
     code, severity = "BUD-110", "error"
-    desc = "\u9884\u7b97\u652f\u51fa\u8868\u660e\u7ec6\u884c\u52fe\u7a3d\u68c0\u67e5"
+    desc = "预算支出表明细行勾稽检查"
 
     def apply(self, doc: Document) -> List[Issue]:
         anchors = find_budget_anchors(doc)
         issues: List[Issue] = []
+        unresolved_reasons: List[str] = []
 
+        checked_tables = 0
         for table_key in ("BUD_T3", "BUD_T5"):
             rows, page = _get_budget_table_rows(doc, anchors, table_key)
             if not rows or not page:
+                unresolved_reasons.append(f"{table_key}表格缺失")
                 continue
 
+            checked_tables += 1
             for entry in _extract_budget_formula_rows(rows):
                 total = entry["total"]
                 basic = entry["basic"]
                 project = entry["project"]
                 calc = basic + project
-                if _is_close(total, calc, abs_tol=1.0, rel_tol=0.0005):
+                diff_label, diff_val = classify_amount_diff(total, calc, 2)
+                if diff_label != "mismatch":
                     continue
 
                 row_page = _find_text_page_after(doc, entry.get("row_text", ""), start_page=page) or page
                 issues.append(
                     self._issue(
-                        f"{table_key}\u660e\u7ec6\u884c\u52fe\u7a3d\u9519\u8bef\uff08{entry['row_label']}\uff09: "
-                        f"\u5408\u8ba1={total:.2f}, \u57fa\u672c+\u9879\u76ee={calc:.2f}",
+                        f"{table_key}明细行勾稽错误（{entry['row_label']}）: "
+                        f"合计={total:.2f}, 基本+项目={calc:.2f}",
                         {
                             "page": row_page,
                             "table": table_key,
                             "row": entry["row_label"],
-                            "field": "\u5408\u8ba1 / \u57fa\u672c\u652f\u51fa / \u9879\u76ee\u652f\u51fa",
+                            "field": "合计 / 基本支出 / 项目支出",
                         },
                         severity="error",
                         evidence_text=entry["row_text"],
                     )
                 )
 
+        if checked_tables == 0:
+            raise RuleDeferred(
+                self.code,
+                detail="BUD_T3与BUD_T5表格均缺失，无法进行明细行勾稽检查",
+                unresolved_reasons=unresolved_reasons,
+            )
+        if unresolved_reasons:
+            raise RuleDeferred(
+                self.code,
+                detail=f"部分表格缺失: {', '.join(unresolved_reasons)}",
+                partial_issues=issues,
+                unresolved_reasons=unresolved_reasons,
+            )
+
         return issues
 
 
 class BUD111_ComparativePercentConsistency(Rule):
     code, severity = "BUD-111", "warn"
-    desc = "\u9884\u7b97\u7f16\u5236\u8bf4\u660e\u540c\u6bd4\u767e\u5206\u6bd4\u590d\u7b97"
+    desc = "预算编制说明同比百分比复算"
 
     def apply(self, doc: Document) -> List[Issue]:
         anchors = find_budget_anchors(doc)
         issues: List[Issue] = []
+        unresolved_reasons: List[str] = []
+        checked_items: int = 0  # M-3: count iterated segments
 
         for page_num, segment in _iter_budget_explanation_item_segments(doc, anchors):
+            checked_items += 1  # M-3: track iteration count
             for match in _BUDGET_DELTA_PERCENT_RE.finditer(segment):
                 prev = parse_number(match.group("prev"))
                 curr = parse_number(match.group("curr"))
                 reported_pct = parse_number(match.group("pct"))
                 reported_direction = match.group("direction")
                 if prev is None or curr is None or reported_pct is None or prev <= 0:
+                    unresolved_reasons.append(f"第{page_num}页同比数值缺失或基期为0")
                     continue
                 if max(prev, curr) < 1.0:
                     continue
@@ -1960,7 +2470,7 @@ class BUD111_ComparativePercentConsistency(Rule):
                 if abs(amount_diff) <= 0.05:
                     continue
 
-                expected_direction = "\u589e\u52a0" if amount_diff > 0 else "\u51cf\u5c11"
+                expected_direction = "增加" if amount_diff > 0 else "减少"
                 expected_pct = abs(amount_diff) / prev * 100.0
                 direction_ok = reported_direction == expected_direction
                 pct_ok = _is_close(reported_pct, expected_pct, abs_tol=0.5, rel_tol=0.01)
@@ -1971,27 +2481,38 @@ class BUD111_ComparativePercentConsistency(Rule):
                 severity = "error" if (not direction_ok) or (abs(reported_pct - expected_pct) > 1.0) else "warn"
                 issues.append(
                     self._issue(
-                        f"\u540c\u6bd4\u8868\u8ff0\u4e0e\u91d1\u989d\u4e0d\u4e00\u81f4\uff08{subject}\uff09: "
-                        f"\u6309\u91d1\u989d\u5e94\u4e3a{expected_direction}{expected_pct:.2f}%\uff0c"
-                        f"\u5f53\u524d\u5199\u4e3a{reported_direction}{reported_pct:.2f}%",
-                        {"page": page_num, "section": "\u9884\u7b97\u7f16\u5236\u8bf4\u660e", "subject": subject},
+                        f"同比表述与金额不一致（{subject}）："
+                        f"按金额应为{expected_direction}{expected_pct:.2f}%，"
+                        f"当前写为{reported_direction}{reported_pct:.2f}%",
+                        {"page": page_num, "section": "预算编制说明", "subject": subject},
                         severity=severity,
                         evidence_text=segment.replace("\n", " "),
                     )
                 )
+
+        if checked_items > 0 and unresolved_reasons:  # M-3: only defer if items were found
+            raise RuleDeferred(
+                self.code,
+                detail=f"部分同比百分比数值未完成核验: {', '.join(unresolved_reasons[:5])}",
+                partial_issues=issues,
+                unresolved_reasons=unresolved_reasons,
+            )
 
         return issues
 
 
 class BUD112_ItemAmountConsistency(Rule):
     code, severity = "BUD-112", "warn"
-    desc = "\u540c\u6761\u9884\u7b97\u8bf4\u660e\u524d\u540e\u91d1\u989d\u4e00\u81f4\u6027"
+    desc = "同条预算说明前后金额一致性"
 
     def apply(self, doc: Document) -> List[Issue]:
         anchors = find_budget_anchors(doc)
         issues: List[Issue] = []
+        unresolved_reasons: List[str] = []
+        checked_items: int = 0  # M-3: count iterated segments
 
         for page_num, segment in _iter_budget_explanation_item_segments(doc, anchors):
+            checked_items += 1  # M-3: track iteration count
             front_match = _BUDGET_ITEM_OPENING_AMOUNT_RE.search(segment)
             arranged_match = _BUDGET_ITEM_ARRANGED_AMOUNT_RE.search(segment)
             if not front_match or not arranged_match:
@@ -2000,20 +2521,30 @@ class BUD112_ItemAmountConsistency(Rule):
             front_amount = parse_number(front_match.group("front"))
             arranged_amount = parse_number(arranged_match.group("budget"))
             if front_amount is None or arranged_amount is None:
+                unresolved_reasons.append(f"第{page_num}页预算条目金额解析失败")
                 continue
-            if _is_close(front_amount, arranged_amount, abs_tol=0.05, rel_tol=0.0005):
+            diff_label, diff_val = classify_amount_diff(front_amount, arranged_amount, 1)
+            if diff_label != "mismatch":
                 continue
 
             subject = _budget_segment_subject(segment)
             issues.append(
                 self._issue(
-                    f"\u540c\u6761\u9884\u7b97\u8bf4\u660e\u524d\u540e\u91d1\u989d\u4e0d\u4e00\u81f4\uff08{subject}\uff09: "
-                    f"\u6761\u76ee\u5f00\u5934={front_amount:.2f}\u4e07\u5143\uff0c"
-                    f"\u201c2026\u5e74\u9884\u7b97\u5b89\u6392\u201d={arranged_amount:.2f}\u4e07\u5143",
-                    {"page": page_num, "section": "\u9884\u7b97\u7f16\u5236\u8bf4\u660e", "subject": subject},
+                    f"同条预算说明前后金额不一致（{subject}）："
+                    f"条目开头={front_amount:.2f}万元，"
+                    f"“2026年预算安排”={arranged_amount:.2f}万元",
+                    {"page": page_num, "section": "预算编制说明", "subject": subject},
                     severity="warn",
                     evidence_text=segment.replace("\n", " "),
                 )
+            )
+
+        if checked_items > 0 and unresolved_reasons:  # M-3: only defer if items were found
+            raise RuleDeferred(
+                self.code,
+                detail=f"部分预算条目金额未能解析: {', '.join(unresolved_reasons[:5])}",
+                partial_issues=issues,
+                unresolved_reasons=unresolved_reasons,
             )
 
         return issues
@@ -2021,12 +2552,16 @@ class BUD112_ItemAmountConsistency(Rule):
 
 class BUD113_DocumentScopeTerminology(Rule):
     code, severity = "BUD-113", "warn"
-    desc = "\u90e8\u95e8/\u5355\u4f4d\u9884\u7b97\u6587\u79cd\u8868\u8ff0\u4e00\u81f4\u6027"
+    desc = "部门/单位预算文种表述一致性"
 
     def apply(self, doc: Document) -> List[Issue]:
         scope = _infer_budget_scope(doc)
         if not scope:
-            return []
+            raise RuleDeferred(
+                self.code,
+                detail="未识别到预算文种口径（部门预算/单位预算）",
+                unresolved_reasons=["未识别到预算文种口径"],
+            )
 
         if scope == "unit":
             pattern = re.compile(r"(?:20\d{2}\u5e74)?\u90e8\u95e8\u9884\u7b97\u5b89\u6392")

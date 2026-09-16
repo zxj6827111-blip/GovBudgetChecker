@@ -1,6 +1,8 @@
 from typing import Any, cast
 
+import pytest
 from src.engine.budget_rules import BUD105_CrossTableChecks
+from src.engine.rule_outcome import RuleDeferred
 from src.engine.rules_v33 import (
     R33225_Narrative1_T1,
     R33227_Narrative5_T5_NameConsistency,
@@ -25,7 +27,7 @@ def test_issue_display_includes_structured_location_refs() -> None:
                     "page": 3,
                     "section": "说明4（财政拨款总体情况）",
                     "field": "财政拨款总计",
-                    "value": 123.4,
+                    "value": 123.40,
                 },
                 {
                     "role": "T4",
@@ -33,14 +35,13 @@ def test_issue_display_includes_structured_location_refs() -> None:
                     "table": "财政拨款收入支出决算总表",
                     "row": "总计",
                     "field": "总计",
-                    "value": 100.0,
+                    "value": 100.00,
                 },
             ],
         },
-        "evidence": [],
     }
 
-    display = build_issue_display(issue)
+    display = build_issue_display(cast(Any, issue))
 
     assert display["page_text"] == "第3、8页"
     assert display["location_text"] == (
@@ -71,8 +72,10 @@ def test_budget_cross_table_rule_emits_multi_page_refs() -> None:
         filesize=128,
     )
 
-    issues = BUD105_CrossTableChecks().apply(doc)
+    with pytest.raises(RuleDeferred) as exc_info:
+        BUD105_CrossTableChecks().apply(doc)
 
+    issues = exc_info.value.partial_issues
     assert issues
     income_issue = next(issue for issue in issues if "收入总计不一致" in issue.message)
     assert income_issue.location["pages"] == [1, 2]

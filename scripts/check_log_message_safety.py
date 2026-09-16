@@ -544,7 +544,31 @@ class _LogCallVisitor(ast.NodeVisitor):
         """
         exc = node.exc
         if isinstance(exc, ast.Call):
-            candidates = list(exc.args) + [keyword.value for keyword in exc.keywords]
+            # 区分异常文本消息与结构化载荷：
+            # 仅对已确认安全且不拼入 __str__ 的 RuleOutcomeSignal 家族（如 RuleDeferred）
+            # 豁免 partial_issues 与 unresolved_reasons 结构化载荷入参。普通异常同名入参仍须受检。
+            is_signal = False
+            if isinstance(exc.func, ast.Name):
+                is_signal = exc.func.id in {
+                    "RuleDeferred",
+                    "RuleOutcomeSignal",
+                    "RuleExecutionError",
+                }
+            elif isinstance(exc.func, ast.Attribute):
+                is_signal = exc.func.attr in {
+                    "RuleDeferred",
+                    "RuleOutcomeSignal",
+                    "RuleExecutionError",
+                }
+
+            exempt_kwargs = (
+                {"partial_issues", "unresolved_reasons"} if is_signal else set()
+            )
+            candidates = list(exc.args) + [
+                keyword.value
+                for keyword in exc.keywords
+                if keyword.arg not in exempt_kwargs
+            ]
             for arg in candidates:
                 for expr in _iter_interpolated(arg):
                     reason = _check_expression(expr, fail_closed=False)

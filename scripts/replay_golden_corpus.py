@@ -721,6 +721,10 @@ def replay_historical(
         for src in (
             ROOT / "src" / "engine" / "structured_rules.py",
             ROOT / "src" / "engine" / "rules_v33.py",
+            ROOT / "src" / "engine" / "budget_rules.py",
+            ROOT / "src" / "engine" / "common_rules.py",
+            ROOT / "src" / "engine" / "amount_math.py",
+            ROOT / "src" / "engine" / "rule_outcome.py",
             ROOT / "src" / "engine" / "pipeline.py",
             ROOT / "src" / "utils" / "narration.py",
         ):

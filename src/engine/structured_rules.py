@@ -1265,7 +1265,11 @@ def merge_compatible(
 # ---------------------------------------------------------------------------
 
 
-def run_structured_rules(doc: Any, report_kind: Optional[str] = None):
+def run_structured_rules(
+    doc: Any,
+    report_kind: Optional[str] = None,
+    rules: Optional[List[Any]] = None,
+):
     """以结构化输入运行首批迁移规则，返回 (issues, outcomes)。
 
     适配器策略：迁移规则的修复版实现已在 rules_v33/common_rules 中
@@ -1286,6 +1290,7 @@ def run_structured_rules(doc: Any, report_kind: Optional[str] = None):
         STATUS_PASS,
         STATUS_PARSE_ERROR,
         STATUS_EXECUTION_ERROR,
+        resolve_rule_status,
     )
     from src.engine.rules_v33 import (
         R33115_TotalSheetCheck,
@@ -1319,17 +1324,20 @@ def run_structured_rules(doc: Any, report_kind: Optional[str] = None):
         pass
 
     # 2) 迁移规则经适配器执行（委托给修复版实现）
-    migrated = [
-        R33115_TotalSheetCheck(),
-        R33117_BasicExpenseClassification(),
-        R33120_DetailTableCheck(),
-        R33202_InterTable_T4_T5(),
-        R33203_InterTable_T5_T6(),
-        R33220_Narrative3_T3(),
-        R33241_Table3_ExpenseAdvancedCheck(),
-        R33243_Table6_BasicExpenseAdvancedCheck(),
-        R33244_Table7_ThreePublicAdvancedCheck(),
-    ]
+    if rules is not None:
+        migrated = list(rules)
+    else:
+        migrated = [
+            R33115_TotalSheetCheck(),
+            R33117_BasicExpenseClassification(),
+            R33120_DetailTableCheck(),
+            R33202_InterTable_T4_T5(),
+            R33203_InterTable_T5_T6(),
+            R33220_Narrative3_T3(),
+            R33241_Table3_ExpenseAdvancedCheck(),
+            R33243_Table6_BasicExpenseAdvancedCheck(),
+            R33244_Table7_ThreePublicAdvancedCheck(),
+        ]
     issues: List[Any] = []
     outcomes: List[RuleOutcome] = []
     # 解析器已明确记录的结构化错误必须进入同一套六态摘要；否则规则
@@ -1350,11 +1358,24 @@ def run_structured_rules(doc: Any, report_kind: Optional[str] = None):
         try:
             produced = list(rule.apply(doc) or [])
         except RuleOutcomeSignal as signal:
+            partial_list = list(getattr(signal, "partial_issues", []) or [])
+            if partial_list:
+                issues.extend(partial_list)
+            detail_str = str(signal.detail or signal)
+            unresolved = list(getattr(signal, "unresolved_reasons", []) or [])
+            if not unresolved and detail_str:
+                unresolved = [detail_str]
+            outcome_status = resolve_rule_status(
+                base_status=signal.status,
+                has_findings=bool(partial_list),
+            )
             outcomes.append(
                 RuleOutcome(
                     rule_id=str(getattr(rule, "code", "")),
-                    status=signal.status,
-                    detail=str(signal.detail or signal),
+                    status=outcome_status,
+                    detail=detail_str,
+                    partial_findings_count=len(partial_list),
+                    unresolved_reasons=unresolved,
                 )
             )
             continue
