@@ -19,6 +19,7 @@ from .rule_outcome import (
     STATUS_FAIL,
     STATUS_INSUFFICIENT_DATA,
     STATUS_PASS,
+    resolve_rule_status,
     summarize_rule_outcomes,
 )
 from .rules_v33 import (
@@ -83,19 +84,28 @@ def run_rules(
 
 
 def run_rules_with_outcomes(
-    doc: Any, use_ai_assist: bool = False, report_kind: Optional[str] = None
+    doc: Any,
+    use_ai_assist: bool = False,
+    report_kind: Optional[str] = None,
+    rules: Optional[List[Any]] = None,
 ) -> "Tuple[List[Issue], List[RuleOutcome]]":
     """执行规则并返回 (issues, outcomes)。
 
-    outcomes 是逐规则的 RuleOutcome 记录：只有 status=fail 的规则产出的
-    issue 会进入 issues；``RuleDeferred``（insufficient_data）、
-    ``parse_error``、``execution_error`` 一律不产出 finding，只进运行摘要，
-    供质量门 fail-closed 判定与回放评测消费。
+    outcomes 是逐规则的 RuleOutcome 记录。在 Contract C1 契约下：
+    - 规则返回的 issue 无论规则最终状态是 fail 还是因部分检查未完成记为
+      insufficient_data/parse_error，已确认的 finding 均保留在 issues 中，
+      不能被丢弃或隐藏；
+    - 规则聚合状态按优先级判定（execution_error > parse_error > insufficient_data > fail > not_applicable > pass），
+      部分子检查 not_applicable 绝不能覆盖已确认的 fail；
+    - 未完成状态供质量门 fail-closed 判定与回放评测消费。
     """
-    selected_rules = [
-        *_select_rule_set(doc, report_kind=report_kind),
-        *ALL_COMMON_RULES,
-    ]
+    if rules is not None:
+        selected_rules = list(rules)
+    else:
+        selected_rules = [
+            *_select_rule_set(doc, report_kind=report_kind),
+            *ALL_COMMON_RULES,
+        ]
     issues: List[Issue] = []
     outcomes: List[RuleOutcome] = []
     if _resolve_report_kind(doc, report_kind) == "unknown":
@@ -121,12 +131,25 @@ def run_rules_with_outcomes(
             produced_list = list(produced or [])
         except RuleOutcomeSignal as signal:
             # 非 fail 结局（insufficient_data / not_applicable 等）：
-            # 不得伪造成正式问题，进运行摘要转运行摘要/人工复核
+            # 若有已确认的 partial_issues，保留为正式 finding（合入原始 Issue 列表）
+            partial_list = list(getattr(signal, "partial_issues", []) or [])
+            if partial_list:
+                issues.extend(partial_list)
+            detail_str = str(signal.detail or signal)
+            unresolved = list(getattr(signal, "unresolved_reasons", []) or [])
+            if not unresolved and detail_str:
+                unresolved = [detail_str]
+            outcome_status = resolve_rule_status(
+                base_status=signal.status,
+                has_findings=bool(partial_list),
+            )
             outcomes.append(
                 RuleOutcome(
                     rule_id=str(code),
-                    status=signal.status,
-                    detail=str(signal.detail or signal),
+                    status=outcome_status,
+                    detail=detail_str,
+                    partial_findings_count=len(partial_list),
+                    unresolved_reasons=unresolved,
                 )
             )
             continue
@@ -402,8 +425,11 @@ def build_issues_payload(
     doc: Any,
     use_ai_assist: bool = False,
     report_kind: Optional[str] = None,
+    rules: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
-    raw_list, outcomes = run_rules_with_outcomes(doc, use_ai_assist, report_kind=report_kind)
+    raw_list, outcomes = run_rules_with_outcomes(
+        doc, use_ai_assist, report_kind=report_kind, rules=rules
+    )
     items = [
         _issue_to_dict(item, idx, doc)
         for idx, item in enumerate(raw_list, start=1)

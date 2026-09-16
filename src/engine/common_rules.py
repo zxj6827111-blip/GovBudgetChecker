@@ -4,7 +4,7 @@ import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .budget_rules import find_budget_anchors
-from .rule_outcome import RuleNotApplicable
+from .rule_outcome import RuleDeferred, RuleNotApplicable
 from .rules_v33 import Document, Issue, Rule, find_table_anchors
 from src.utils.narration import merge_soft_wrapped_lines as _merge_soft_wrapped_lines_shared
 
@@ -238,41 +238,55 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         texts = _page_texts(doc)
         if not texts:
-            return []
+            raise RuleDeferred(
+                self.code,
+                detail="未提取到正文页面",
+                unresolved_reasons=["未提取到正文页面"],
+            )
 
         full_text = "\n".join(texts)
         narrative = _extract_three_public_narrative(full_text)
         if all(value is None for value in narrative.values()):
-            return []
+            raise RuleDeferred(
+                self.code,
+                detail="未提取到三公经费情况说明数值",
+                unresolved_reasons=["未提取到三公经费情况说明数值"],
+            )
 
         table_page, table_values = _find_three_public_table(doc)
         if table_values is None:
-            return []
+            raise RuleDeferred(
+                self.code,
+                detail="未定位到三公经费表格数值",
+                unresolved_reasons=["未定位到三公经费表格数值"],
+            )
 
         issues: List[Issue] = []
+        unresolved_reasons: List[str] = []
         labels = {
-            "total": "\u4e09\u516c\u5408\u8ba1",
-            "abroad": "\u56e0\u516c\u51fa\u56fd\uff08\u5883\uff09\u8d39",
-            "reception": "\u516c\u52a1\u63a5\u5f85\u8d39",
-            "car_total": "\u516c\u52a1\u7528\u8f66\u5c0f\u8ba1",
-            "car_buy": "\u516c\u52a1\u7528\u8f66\u8d2d\u7f6e\u8d39",
-            "car_run": "\u516c\u52a1\u7528\u8f66\u8fd0\u884c\u8d39",
+            "total": "三公合计",
+            "abroad": "因公出国（境）费",
+            "reception": "公务接待费",
+            "car_total": "公务用车小计",
+            "car_buy": "公务用车购置费",
+            "car_run": "公务用车运行费",
         }
 
         for key in ("total", "abroad", "reception", "car_total", "car_buy", "car_run"):
             nar = narrative.get(key)
             tab = table_values.get(key)
             if nar is None or tab is None:
+                unresolved_reasons.append(f"{labels[key]}分项说明或表格数值缺失")
                 continue
             if _close(nar, tab):
                 continue
             label = labels[key]
             severity = "error" if key == "car_run" else "warn"
             message = (
-                f"\u4e09\u516c\u8868\u4e0e\u8bf4\u660e\u4e0d\u4e00\u81f4\uff1a{label}\u8bf4\u660e={nar:.2f}\u4e07\u5143\uff0c\u8868\u5185={tab:.2f}\u4e07\u5143"
+                f"三公表与说明不一致：{label}说明={nar:.2f}万元，表内={tab:.2f}万元"
             )
             if key == "car_run":
-                message += "\uff1b\u5efa\u8bae\uff1a\u8bf7\u7edf\u4e00\u201c\u516c\u52a1\u7528\u8f66\u8fd0\u884c\u8d39\u201d\u5728\u8868\u683c\u4e0e\u60c5\u51b5\u8bf4\u660e\u4e2d\u7684\u91d1\u989d\u53e3\u5f84"
+                message += "；建议：请统一“公务用车运行费”在表格与情况说明中的金额口径"
             issues.append(
                 self._issue(
                     message,
@@ -293,13 +307,23 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
         ):
             issues.append(
                 self._issue(
-                    "\u4e09\u516c\u6587\u5b57\u8bf4\u660e\u5185\u90e8\u52fe\u7a3d\u4e0d\u4e00\u81f4\uff1a\u516c\u8f66\u5c0f\u8ba1\u2260\u8d2d\u7f6e\u8d39+\u8fd0\u884c\u8d39",
+                    "三公文字说明内部勾稽不一致：公车小计≠购置费+运行费",
                     {"page": table_page or 1},
                     "warn",
                     evidence_text=(
                         f"car_total={nar_car_total}, car_buy={nar_car_buy}, car_run={nar_car_run}"
                     ),
                 )
+            )
+
+        if not issues and all(
+            narrative.get(key) is None or table_values.get(key) is None
+            for key in ("total", "abroad", "reception", "car_total", "car_buy", "car_run")
+        ):
+            raise RuleDeferred(
+                self.code,
+                detail=f"部分三公数据缺失: {', '.join(unresolved_reasons[:5])}",
+                unresolved_reasons=unresolved_reasons,
             )
 
         return issues
@@ -552,7 +576,11 @@ class CMM004_CodeMirrorConsistency(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         income, expense = _extract_code_amount_pairs(_page_texts(doc))
         if len(income) < 2 or len(expense) < 2:
-            return []
+            raise RuleDeferred(
+                self.code,
+                detail="收入或支出明细条目不足2条，无法执行镜像比对",
+                unresolved_reasons=["收入或支出明细条目不足"],
+            )
 
         # 科目域隔离（P0 止血）：只有两侧主科目域一致时才可镜像比较。
         # 收入分类、功能分类、经济分类互不可比——经济分类编码（301-310）
@@ -569,7 +597,11 @@ class CMM004_CodeMirrorConsistency(Rule):
 
         common = sorted(set(income).intersection(expense))
         if len(common) < 2:
-            return []
+            raise RuleDeferred(
+                self.code,
+                detail="收支公共科目条目不足2条，无法执行镜像比对",
+                unresolved_reasons=["收支公共科目条目不足"],
+            )
 
         diffs = [
             code for code in common if abs(income[code] - expense[code]) > 1e-6
@@ -707,6 +739,7 @@ class CMM005_ComparativeNarrativeLogic(Rule):
 
     def apply(self, doc: Document) -> List[Issue]:
         issues: List[Issue] = []
+        unresolved_reasons: List[str] = []
 
         for page_idx, page_text in enumerate(_page_texts(doc), start=1):
             flat_text = _compact_text(page_text)
@@ -748,6 +781,7 @@ class CMM005_ComparativeNarrativeLogic(Rule):
             for match in _ZERO_INCREASE_PATTERN.finditer(flat_text):
                 amount = _to_float(match.group(2))
                 if amount is None or amount <= 0:
+                    unresolved_reasons.append(f"第{page_idx}页零增长语句数值解析异常")
                     continue
                 span_key = (match.start(), match.end(), "zero_increase")
                 if span_key in seen_spans:
@@ -764,6 +798,14 @@ class CMM005_ComparativeNarrativeLogic(Rule):
                 )
 
             issues.extend(_budget_final_direction_issues(self, page_idx, page_text))
+
+        if unresolved_reasons:
+            raise RuleDeferred(
+                self.code,
+                detail=f"部分同比表述数值未能解析: {', '.join(unresolved_reasons[:5])}",
+                partial_issues=issues,
+                unresolved_reasons=unresolved_reasons,
+            )
 
         return issues
 
