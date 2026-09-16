@@ -7,7 +7,7 @@ import multiprocessing
 import os
 import time
 from multiprocessing.connection import Connection
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 
 class RuleExecutionTimeout(TimeoutError):
@@ -23,6 +23,7 @@ def _rule_worker(
     doc: Any,
     use_ai_assist: bool,
     report_kind: str,
+    rules: Optional[List[Any]] = None,
 ) -> None:
     try:
         # Test-only hook: deterministically block the worker so timeout
@@ -41,6 +42,7 @@ def _rule_worker(
             doc,
             use_ai_assist,
             report_kind=report_kind,
+            rules=rules,
         )
         connection.send(("ok", payload))
     except BaseException as exc:
@@ -54,6 +56,7 @@ def _run_rules_sync(
     use_ai_assist: bool,
     report_kind: str,
     timeout_seconds: float,
+    rules: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
     start_method = os.getenv("RULES_PROCESS_START_METHOD", "").strip()
     if not start_method:
@@ -62,7 +65,7 @@ def _run_rules_sync(
     parent_connection, child_connection = context.Pipe(duplex=False)
     process = context.Process(
         target=_rule_worker,
-        args=(child_connection, doc, use_ai_assist, report_kind),
+        args=(child_connection, doc, use_ai_assist, report_kind, rules),
         name="govbudget-rule-evaluator",
         daemon=True,
     )
@@ -102,9 +105,10 @@ def _run_rules_sync(
 
 async def run_rules_in_process(
     doc: Any,
-    use_ai_assist: bool,
-    report_kind: str,
-    timeout_seconds: float,
+    use_ai_assist: bool = False,
+    report_kind: str = "auto",
+    timeout_seconds: float = 60.0,
+    rules: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
     return await asyncio.to_thread(
         _run_rules_sync,
@@ -112,4 +116,5 @@ async def run_rules_in_process(
         use_ai_assist,
         report_kind,
         timeout_seconds,
+        rules,
     )

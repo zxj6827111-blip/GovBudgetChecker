@@ -7,7 +7,7 @@ import logging
 import time
 import uuid
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from src.schemas.issues import JobContext, AnalysisConfig, IssueItem
 from src.engine.rules_v33 import ALL_RULES as FINAL_ALL_RULES, build_document, Issue, Document
@@ -17,6 +17,8 @@ from src.engine.rule_outcome import (
     RuleOutcome,
     RuleOutcomeSignal,
     STATUS_PARSE_ERROR,
+    STATUS_PRIORITY,
+    resolve_rule_status,
     summarize_rule_outcomes,
 )
 from src.utils.issue_bbox import PDFBBoxLocator
@@ -137,6 +139,38 @@ class EngineRuleRunner:
             engine_version=ENGINE_VERSION,
         )
 
+    def _convert_and_locate_issues(
+        self,
+        issues: Iterable[Any],
+        rule_id: str,
+        document: Optional[Document],
+        rule_version: Optional[str],
+        bbox_locator: Any,
+    ) -> Tuple[List[IssueItem], List[str]]:
+        findings: List[IssueItem] = []
+        conversion_errors: List[str] = []
+        for issue in issues:
+            try:
+                finding = self._issue_to_finding(
+                    issue,
+                    rule_id=rule_id,
+                    document=document,
+                    rule_version=rule_version,
+                )
+                finding = bbox_locator.locate(finding)
+                findings.append(finding)
+            except Exception as e:
+                # 这里的异常多来自 IssueItem 校验失败，pydantic 会把输入值
+                # （证据原文片段）写进异常消息，异常栈里也带着同一段消息，
+                # 所以刻意不用 logger.exception，只留错误类型、字段路径与指纹。
+                logger.error(
+                    "Failed to convert issue to IssueItem",
+                    extra=safe_log_extra({"rule_id": rule_id, **describe_exception(e)}),
+                )
+                conversion_errors.append(type(e).__name__)
+                continue
+        return findings, conversion_errors
+
     def _resolve_report_kind(
         self,
         job_context: JobContext,
@@ -237,43 +271,30 @@ class EngineRuleRunner:
 
                     int((time.time() - start_time) * 1000)
 
-                    # 杞崲涓篒ssueItem鏍煎紡
-                    findings = []
-                    conversion_errors = []
-                    for issue in issues:
-                        try:
-                            finding = self._issue_to_finding(
-                                issue,
-                                rule_id=rule_id,
-                                document=document,
-                                rule_version=rule_version,
-                            )
-                            finding = bbox_locator.locate(finding)
-                            findings.append(finding)
-                        except Exception as e:
-                            # 这里的异常多来自 IssueItem 校验失败，pydantic 会把输入值
-                            # （证据原文片段）写进异常消息，异常栈里也带着同一段消息，
-                            # 所以刻意不用 logger.exception，只留错误类型、字段路径与指纹。
-                            logger.error(
-                                "Failed to convert issue to IssueItem",
-                                extra=safe_log_extra({"rule_id": rule_id, **describe_exception(e)}),
-                            )
-                            conversion_errors.append(type(e).__name__)
-                            continue
+                    findings, conversion_errors = self._convert_and_locate_issues(
+                        issues=issues,
+                        rule_id=rule_id,
+                        document=document,
+                        rule_version=rule_version,
+                        bbox_locator=bbox_locator,
+                    )
 
                     if conversion_errors:
                         # 规则本身跑完不等于结果可信：只要有一条 issue 在
                         # IssueItem 边界被丢弃，就必须进入 parse_error 摘要，
                         # 由质量门转人工复核，不能把“部分输出”记成 pass。
                         self._stats["failed_rules"] += 1
+                        conv_detail = (
+                            f"{len(conversion_errors)} 个 finding 转换失败，"
+                            f"异常类型={sorted(set(conversion_errors))}"
+                        )
                         self._outcomes.append(
                             RuleOutcome(
                                 rule_id=str(rule_id),
                                 status=STATUS_PARSE_ERROR,
-                                detail=(
-                                    f"{len(conversion_errors)} 个 finding 转换失败，"
-                                    f"异常类型={sorted(set(conversion_errors))}"
-                                ),
+                                detail=conv_detail,
+                                partial_findings_count=len(findings),
+                                unresolved_reasons=[conv_detail],
                             )
                         )
                     else:
@@ -291,19 +312,53 @@ class EngineRuleRunner:
 
                 except RuleOutcomeSignal as signal:
                     # 非 fail 结局（insufficient_data/not_applicable 等）：
-                    # 不产出 finding，也不算失败，进规则执行摘要供质量门消费
+                    # 保留已确认的 partial_issues，原因双保留
+                    partial_list = list(getattr(signal, "partial_issues", []) or [])
+                    findings, conversion_errors = self._convert_and_locate_issues(
+                        issues=partial_list,
+                        rule_id=rule_id,
+                        document=document,
+                        rule_version=rule_version,
+                        bbox_locator=bbox_locator,
+                    )
+
+                    all_findings.extend(findings)
+                    self._stats["total_findings"] += len(findings)
+
+                    detail_str = str(signal.detail or signal)
+                    unresolved = list(getattr(signal, "unresolved_reasons", []) or [])
+                    if not unresolved and detail_str:
+                        unresolved = [detail_str]
+
+                    if conversion_errors:
+                        conv_detail = (
+                            f"{len(conversion_errors)} 个 finding 转换失败，"
+                            f"异常类型={sorted(set(conversion_errors))}"
+                        )
+                        unresolved.append(conv_detail)
+                        detail_str = f"{detail_str}; {conv_detail}" if detail_str else conv_detail
+                        self._stats["failed_rules"] += 1
+
+                    outcome_status = resolve_rule_status(
+                        base_status=signal.status,
+                        has_findings=bool(findings),
+                        has_conversion_error=bool(conversion_errors),
+                    )
+
                     self._outcomes.append(
                         RuleOutcome(
                             rule_id=str(rule_id),
-                            status=signal.status,
-                            detail=str(signal.detail or signal),
+                            status=outcome_status,
+                            detail=detail_str,
+                            partial_findings_count=len(findings),
+                            unresolved_reasons=unresolved,
                         )
                     )
                     logger.info(
                         "Rule %s deferred: %s",
                         rule_id,
-                        signal.status,
-                        extra=safe_log_extra({"rule_id": rule_id, "outcome": signal.status}),
+                        outcome_status,
+                        extra=safe_log_extra({"rule_id": rule_id, "outcome": outcome_status}),
                     )
                     continue
                 except Exception as e:
