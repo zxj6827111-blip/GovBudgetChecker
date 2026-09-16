@@ -18,7 +18,7 @@ from __future__ import annotations
 import pytest
 
 from src.engine.pipeline import build_document
-from src.engine.rule_outcome import RuleNotApplicable
+from src.engine.rule_outcome import RuleDeferred, RuleNotApplicable
 from src.engine.rules_v33 import (
     R33001_CoverYearUnit,
     R33106_GeneralBudgetStruct,
@@ -395,8 +395,22 @@ def test_v33106_year_token_not_treated_as_amount():
     （样张「说明数字(2025.00)」误报根因）。"""
     text = "五、一般公共预算财政拨款支出决算情况说明\n2025年度年初预算为4,628.17万元，支出决算为4,733.14万元。"
     doc = make_doc([text], [[]])
-    issues = R33106_GeneralBudgetStruct().apply(doc)
+    with pytest.raises(RuleDeferred) as exc_info:
+        R33106_GeneralBudgetStruct().apply(doc)
+    assert not any("2025.00" in str(i.message) for i in exc_info.value.partial_issues)
+
+    # 包含表格时同样不把年份当金额
+    text_with_table = (
+        "一般公共预算财政拨款支出决算表\n"
+        "五、一般公共预算财政拨款支出决算情况说明\n"
+        "（一）支出决算总体情况。\n"
+        "2025年度年初预算为4,628.17万元，支出决算为4,733.14万元。"
+    )
+    table = [["科目名称", "合计", "基本支出"], ["合计", "4,733.14", "4,733.14"]]
+    doc_with_table = make_doc([text_with_table], [table])
+    issues = R33106_GeneralBudgetStruct().apply(doc_with_table)
     assert not any("2025.00" in str(i.message) for i in issues)
+    assert issues == []
 
 
 def test_v33110_cross_sentence_pairing_not_flagged():
@@ -430,7 +444,7 @@ def test_v33220_narrative_table_consistent_passes():
         ["类", "款", "项", "合计", "4,733.14", "3,365.38", "1,367.76"],
         ["201", "", "", "一般公共服务支出", "474.40", "400.00", "74.40"],
     ]
-    doc = make_doc([text, "支出决算表"], [None, table])
+    doc = make_doc([text, "支出决算表\n单位：万元"], [None, table])
     issues = R33220_Narrative3_T3().apply(doc)
     assert issues == [], [str(i.message) for i in issues]
 
@@ -443,7 +457,7 @@ def test_v33220_narrative_table_mismatch_hits():
         ["类", "款", "项", "合计", "4,733.14", "3,365.38", "1,367.76"],
         ["201", "", "", "一般公共服务支出", "474.40", "400.00", "74.40"],
     ]
-    doc = make_doc([text, "支出决算表"], [None, table])
+    doc = make_doc([text, "支出决算表\n单位：万元"], [None, table])
     issues = R33220_Narrative3_T3().apply(doc)
     assert any("基本支出不一致" in str(i.message) for i in issues)
 
@@ -717,7 +731,7 @@ def test_v33_245_no_section_no_full_text_fallback():
 
     仅含「十一、其他重要事项说明」的材料里出现公务接待增减+持平
     表述——旧行为 scope or merged 扫描全文产出 finding；R7 后
-    证据不足直接返回空。
+    证据不足抛出 deferred 且 partial_issues 为空。
     """
     from src.engine.rules_v33 import R33245_ThreePublicDirectionContradiction
 
@@ -726,7 +740,9 @@ def test_v33_245_no_section_no_full_text_fallback():
         "公务接待费支出决算减少为 0.00 万元，与上年持平。\n"
     )
     doc = make_doc([text], [])
-    assert R33245_ThreePublicDirectionContradiction().apply(doc) == []
+    with pytest.raises(RuleDeferred) as exc_info:
+        R33245_ThreePublicDirectionContradiction().apply(doc)
+    assert exc_info.value.partial_issues == []
 
 
 def test_v33_246_no_section_no_full_text_fallback():
@@ -738,7 +754,9 @@ def test_v33_246_no_section_no_full_text_fallback():
         "接待外宾0 批次、0 人次，国内公务接待未披露。\n"
     )
     doc = make_doc([text], [])
-    assert R33246_DomesticReceptionDisclosure().apply(doc) == []
+    with pytest.raises(RuleDeferred) as exc_info:
+        R33246_DomesticReceptionDisclosure().apply(doc)
+    assert exc_info.value.partial_issues == []
 
 
 def test_v33_245_finding_carries_independent_section_id():

@@ -1,3 +1,5 @@
+import pytest
+from src.engine.rule_outcome import RuleDeferred
 from src.engine.rules_v33 import (
     R33233_DetailRowFormulaConsistency,
     R33234_NarrativePercentConsistency,
@@ -27,8 +29,10 @@ def test_final_detail_row_formula_rule_detects_row_mismatch() -> None:
         filesize=128,
     )
 
-    issues = R33233_DetailRowFormulaConsistency().apply(doc)
+    with pytest.raises(RuleDeferred) as exc_info:
+        R33233_DetailRowFormulaConsistency().apply(doc)
 
+    issues = exc_info.value.partial_issues
     assert issues
     issue = issues[0]
     assert issue.rule == "V33-233"
