@@ -96,13 +96,7 @@ from src.utils.report_year import (  # noqa: F401
 
 # 报告画像的唯一解析器。此前文种/层级等识别在本模块与规则引擎里各写一套，
 # 兜底口径互相矛盾，同一 PDF 在不同环节可能被判成不同文种。
-# 这里只保留薄封装，判定逻辑不再在本模块维护。
-from src.services.document_profile_resolver import (  # noqa: F401
-    cover_report_kind as _cover_report_kind,
-)
-from src.services.document_profile_resolver import (  # noqa: F401
-    cover_scope_hint as _cover_scope_hint,
-)
+# 本模块只保留对解析器的调用，判定逻辑不再在本模块维护。
 from src.services.document_profile_resolver import (
     detect_cover_facts,
     resolve_document_profile,
@@ -784,20 +778,6 @@ def normalize_doc_type(
     if kind == "final":
         return "dept_final"
     return None
-
-
-def _normalize_cover_line(raw: Any) -> str:
-    return re.sub(r"\s+", "", str(raw or "").strip())
-
-
-def _detect_cover_scope_hint(text: str) -> Optional[str]:
-    """封面层级提示（薄封装，实现在画像解析器里）。"""
-    return _cover_scope_hint(text)
-
-
-def _detect_cover_report_kind(text: str) -> Optional[str]:
-    """封面文种判定（薄封装，实现在画像解析器里）。"""
-    return _cover_report_kind(text)
 
 
 def extract_cover_metadata(

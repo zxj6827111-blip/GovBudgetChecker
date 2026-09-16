@@ -6,7 +6,6 @@
 import logging
 import time
 import uuid
-from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from src.schemas.issues import JobContext, AnalysisConfig, IssueItem

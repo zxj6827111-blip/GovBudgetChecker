@@ -38,7 +38,6 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from src.schemas.document_profile import (
     CALIBERS,
-    EXTRACTION_QUALITIES,
     FUND_SCOPE_GENERAL,
     FUND_SCOPE_GOVERNMENT_FUND,
     FUND_SCOPE_STATE_CAPITAL,
@@ -54,7 +53,6 @@ from src.schemas.document_profile import (
     SOURCE_EXPLICIT,
     SOURCE_FILENAME,
     SOURCE_PAGE_TEXT,
-    SOURCE_TABLE_TITLE,
     SOURCE_UNRESOLVED,
     DocumentProfile,
     ProfileField,
@@ -149,21 +147,11 @@ def _detect_cover_report_kind(text: str) -> Optional[str]:
     compact = normalize_cover_line(text)
     if not compact:
         return None
-    if "\u9884\u7b97" in compact or "budget" in compact.lower():
+    if "预算" in compact or "budget" in compact.lower():
         return "budget"
-    if "\u51b3\u7b97" in compact or "final" in compact.lower():
+    if "决算" in compact or "final" in compact.lower():
         return "final"
     return None
-
-
-def cover_scope_hint(text: str) -> Optional[str]:
-    """封面层级提示（公开名；供 api.runtime 薄封装转发）。"""
-    return _detect_cover_scope_hint(text)
-
-
-def cover_report_kind(text: str) -> Optional[str]:
-    """封面文种判定（公开名；供 api.runtime 薄封装转发）。"""
-    return _detect_cover_report_kind(text)
 
 
 def _kind_from_doc_type(doc_type: Any) -> Optional[str]:
