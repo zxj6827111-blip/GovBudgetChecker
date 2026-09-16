@@ -429,3 +429,98 @@ def test_report_download_word_format_handles_empty_results(
         for node in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t")
     )
     assert "未发现明显问题" in document_text
+
+
+# ---------------------------------------------------------------------------
+# 导出必须交出"检查范围"，而不只是问题列表（plan §3/§6）
+# ---------------------------------------------------------------------------
+
+
+def test_check_scope_export_marks_legacy_records_explicitly() -> None:
+    """旧任务没有覆盖台账时，必须显示"旧版未记录"，不能显示成已检查完整。"""
+    from api.routes.reports import _build_check_scope_export
+
+    scope = _build_check_scope_export({"status": "done", "result": {"meta": {}}})
+    assert scope["check_coverage"] == "旧版未记录"
+    assert scope["unfinished_checks"] == "旧版未记录"
+    assert scope["document_profile"] == "旧版未记录"
+    assert "无法据此判断检查范围是否完整" in scope["coverage_note"]
+
+
+def test_check_scope_export_lists_unfinished_checks() -> None:
+    """新结果必须把未完成检查逐条交出，并说明"未发现问题"的适用范围。"""
+    from api.routes.reports import _build_check_scope_export
+
+    status_payload = {
+        "status": "review_required",
+        "report_kind": "final",
+        "profile_status": "resolved",
+        "conclusion_scope": "incomplete_scope",
+        "check_coverage": {
+            "catalog_version": "obligations-v1",
+            "applicable_total": 43,
+            "unresolved_total": 2,
+            "blocking_total": 2,
+            "instances": [
+                {
+                    "obligation_id": "OBL-SG-COMPLETION",
+                    "group_title": "三公经费",
+                    "title": "三公经费预算数与决算数对比及说明",
+                    "status": "not_implemented",
+                    "reason_label": "尚未实现",
+                    "detail": "该要求尚无规则实现",
+                    "basis": "AGENTS.md 决算必查勾稽 D-007",
+                    "gap_note": "缺少三公经费预算数/决算数对比与说明一致性检查",
+                },
+                {
+                    "obligation_id": "OBL-SG-TOTAL",
+                    "group_title": "三公经费",
+                    "title": "三公经费合计 = 三项分项之和",
+                    "status": "completed",
+                    "reason_label": None,
+                    "detail": "规则 V33-121 已得出可信结论",
+                    "basis": "AGENTS.md 决算必查勾稽 D-007",
+                    "gap_note": "",
+                },
+            ],
+        },
+    }
+    scope = _build_check_scope_export(status_payload)
+    assert [item["obligation_id"] for item in scope["unfinished_checks"]] == [
+        "OBL-SG-COMPLETION"
+    ]
+    assert scope["unfinished_checks"][0]["reason_label"] == "尚未实现"
+    assert scope["conclusion_scope"] == "incomplete_scope"
+    assert "仅表示在本次已完成的检查范围内" in scope["coverage_note"]
+
+
+def test_csv_export_includes_obligation_ids_column() -> None:
+    """CSV 必须带上问题与检查义务的关联，且旧结果留空而不是填 0。"""
+    from api.routes.reports import _build_csv_row
+
+    row = _build_csv_row(
+        {
+            "id": "rule:V33-121:x",
+            "source": "rule",
+            "rule_id": "V33-121",
+            "severity": "high",
+            "title": "t",
+            "message": "m",
+            "obligation_ids": ["OBL-SG-TOTAL", "OBL-SG-ITEMS"],
+        }
+    )
+    assert row["obligation_ids"] == "OBL-SG-TOTAL; OBL-SG-ITEMS"
+    assert row["关联检查项"] == "OBL-SG-TOTAL; OBL-SG-ITEMS"
+
+    legacy = _build_csv_row(
+        {
+            "id": "rule:V33-121:y",
+            "source": "rule",
+            "rule_id": "V33-121",
+            "severity": "high",
+            "title": "t",
+            "message": "m",
+        }
+    )
+    assert legacy["obligation_ids"] == ""
+    assert legacy["关联检查项"] == ""

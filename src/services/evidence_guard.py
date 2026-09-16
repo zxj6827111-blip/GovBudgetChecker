@@ -237,8 +237,11 @@ def _degrade_ai_finding(finding: Dict[str, Any], missing: List[str]) -> None:
     finding["why_not"] = f"{why_not}; {marker}" if why_not else marker
 
 
-def _iter_findings(result: Mapping[str, Any]) -> Iterable[Dict[str, Any]]:
+def iter_findings(result: Mapping[str, Any]) -> Iterable[Dict[str, Any]]:
     """遍历结果中的所有 finding 字典（同时兼容双模式与 legacy 分桶结构）。
+
+    公开函数：证据校验与检查义务标注都必须走同一遍历口径，
+    否则会出现"证据校验看到 10 条、义务标注只看到 5 条"的静默偏差。
 
     legacy 结构里 ``issues.all`` 与 ``issues.error/warn/info`` 持有同一批字典对象，
     因此只遍历 ``all``：既避免重复计数，原地修改也会同步反映到各分桶。
@@ -293,7 +296,7 @@ def apply_evidence_completeness(result: Dict[str, Any]) -> Dict[str, Any]:
     degraded: List[Dict[str, Any]] = []
     rule_warnings: List[Dict[str, Any]] = []
 
-    for finding in _iter_findings(result):
+    for finding in iter_findings(result):
         total += 1
         complete, missing = evaluate_finding_evidence(finding)
         source = str(finding.get("source") or "").strip().lower()
@@ -319,7 +322,7 @@ def apply_evidence_completeness(result: Dict[str, Any]) -> Dict[str, Any]:
             if complete:
                 locatable_complete_count += 1
 
-    formal_total = sum(1 for finding in _iter_findings(result) if is_formal_finding(finding))
+    formal_total = sum(1 for finding in iter_findings(result) if is_formal_finding(finding))
     completeness_rate = round(complete_count / total, 4) if total else None
 
     return {

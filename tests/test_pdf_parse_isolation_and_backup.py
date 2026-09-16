@@ -33,6 +33,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from api import main as pipeline_mod
+from support_rule_receipt import full_rule_receipt, without_gap_obligations
 from api import runtime
 from scripts import backup_all
 from src.services.pdf_parse_process import (
@@ -350,7 +351,13 @@ async def test_pipeline_parse_timeout_lands_error_terminal_state(tmp_path, monke
 
 @pytest.mark.asyncio
 async def test_pipeline_succeeds_through_isolated_parser(tmp_path, monkeypatch):
-    """对照：开启隔离且不超限时，流水线必须能正常跑到终态。"""
+    """对照：开启隔离且不超限时，流水线必须能正常跑到 done。
+
+    本用例验证的是解析路径（子进程隔离）没有把流水线打断，因此摘掉清单里
+    "尚未实现"的检查义务——否则终态会因为真实的实现缺口转 review_required，
+    "流水线跑通了"这件事反而看不出来。缺口门禁由 test_quality_gate 覆盖。
+    """
+    without_gap_obligations(monkeypatch)
     monkeypatch.setenv("PDF_PARSE_ISOLATION_ENABLED", "true")
     monkeypatch.delenv("PDF_PARSE_TEST_DELAY_SECONDS", raising=False)
     monkeypatch.setenv("PDF_PARSE_MAX_PAGES", "50")
@@ -368,19 +375,7 @@ async def test_pipeline_succeeds_through_isolated_parser(tmp_path, monkeypatch):
         AsyncMock(
             return_value={
                 "issues": {"all": [], "error": [], "warn": [], "info": []},
-                "rule_execution_summary": {
-                    "total_rules": 1,
-                    "executed": 1,
-                    "pass": 1,
-                    "fail": 0,
-                    "not_applicable": 0,
-                    "insufficient_data": 0,
-                    "parse_error": 0,
-                    "execution_error": 0,
-                    "unresolved_total": 0,
-                    "failed_rules": [],
-                    "unresolved_rules": [],
-                },
+                "rule_execution_summary": full_rule_receipt("budget"),
             }
         ),
     )

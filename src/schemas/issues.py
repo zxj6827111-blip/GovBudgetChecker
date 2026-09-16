@@ -237,6 +237,14 @@ class IssueItem(BaseModel):
         default=None, description="因缺证据降级前的原始严重程度"
     )
 
+    # ---- 检查义务关联（plan §6：问题的业务分组标识与关联检查项）----
+    # 由 src/engine/check_obligations.attach_obligation_ids 在落库前写入。
+    # 让"这条问题属于哪一项应检查事项"可被页面、JSON 与导出直接消费，
+    # 而不必让前端按规则编号反查台账。旧快照没有该字段时为空列表。
+    obligation_ids: List[str] = Field(
+        default_factory=list, description="该问题关联的检查义务编号"
+    )
+
     display: Optional[IssueDisplay] = Field(default=None, description="可直接展示的问题信息")
 
     @model_validator(mode="after")
