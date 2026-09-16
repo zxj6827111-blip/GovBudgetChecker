@@ -21,6 +21,7 @@ from src.engine.rule_outcome import (
     resolve_rule_status,
     summarize_rule_outcomes,
 )
+from src.services.document_profile_resolver import resolve_report_kind_from_path
 from src.utils.issue_bbox import PDFBBoxLocator
 from src.utils.issue_location import normalize_issue_location
 from src.utils.logging_config import describe_exception, safe_log_extra
@@ -176,36 +177,19 @@ class EngineRuleRunner:
         job_context: JobContext,
         document: Optional[Document] = None,
     ) -> str:
-        """
-        Resolve report kind:
-        1) job_context.meta.report_kind
-        2) filename hint
-        3) first page text hint
+        """材料文种判定：显式元数据 > 文件名基名 > 正文首页，兜底 unknown。
 
-        Never use the full filesystem path for inference.  The project and
-        upload directories may themselves contain words such as "budget",
-        which are unrelated to the uploaded material.
+        实现已收敛到唯一解析器 ``src/services/document_profile_resolver``。
+        这里不复用 ``job_context.pdf_path`` 的整串路径做关键词判断——
+        项目与上传目录本身可能含 "budget" 等词，与材料内容无关；
+        解析器内部只取基名，并处理了 Windows 路径在 Linux 上取基名的问题。
         """
         meta = job_context.meta or {}
-        report_kind = str(meta.get("report_kind") or "").strip().lower()
-        if report_kind in {"budget", "final"}:
-            return report_kind
-
-        filename = Path(job_context.pdf_path).name.lower()
-        # 关键词优先级与 src/engine/pipeline.py 保持一致：budget 优先。
-        if "budget" in filename or "\u9884\u7b97" in filename:
-            return "budget"
-        if "final" in filename or "\u51b3\u7b97" in filename:
-            return "final"
-
-        if document and document.page_texts:
-            first_text = document.page_texts[0] or ""
-            if "\u9884\u7b97" in first_text:
-                return "budget"
-            if "\u51b3\u7b97" in first_text:
-                return "final"
-
-        return "unknown"
+        explicit = str(meta.get("report_kind") or "").strip().lower()
+        page_texts: List[str] = []
+        if document is not None and document.page_texts:
+            page_texts = list(document.page_texts)
+        return resolve_report_kind_from_path(job_context.pdf_path, page_texts, explicit)
 
     def _select_rule_set(
         self,

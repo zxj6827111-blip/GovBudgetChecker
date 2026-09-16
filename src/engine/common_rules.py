@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from .budget_rules import find_budget_anchors
 from .rule_outcome import RuleDeferred, RuleNotApplicable
 from .rules_v33 import Document, Issue, Rule, find_table_anchors
+from src.services.document_profile_resolver import resolve_report_kind_from_path
 from src.utils.narration import merge_soft_wrapped_lines as _merge_soft_wrapped_lines_shared
 
 _AMOUNT = r"([0-9][0-9,]*\.?[0-9]*)"
@@ -40,19 +41,21 @@ def _to_float(value: Any) -> Optional[float]:
 
 
 def _infer_report_kind(doc: Document) -> str:
-    path_text = str(getattr(doc, "path", "") or "").lower()
-    if "budget" in path_text or "\u9884\u7b97" in path_text:
-        return "budget"
-    if "final" in path_text or "\u51b3\u7b97" in path_text:
-        return "final"
+    """材料文种判定（收敛到唯一解析器）。
 
-    texts = _page_texts(doc)
-    head = "\n".join(texts[:3])
-    if "\u9884\u7b97" in head:
-        return "budget"
-    if "\u51b3\u7b97" in head:
-        return "final"
-    return "final"
+    此前这里有独立的第三份实现：整条 ``doc.path`` 做关键词匹配，并在
+    识别不到时兜底 ``"final"``。整串路径匹配有问题——仓库目录名
+    ``GovBudgetChecker`` 自带 "Budget"，会让任何材料被判成预算；兜底 final
+    则把"不知道"伪装成"知道了"。现在统一走画像解析器：只看文件名基名与
+    正文首页，识别不到就是 ``"unknown"``。
+
+    本函数的唯一调用方按 ``budget`` / 其它 二分支选择锚点集合，
+    因此把兜底从 ``"final"`` 改成 ``"unknown"`` 不改变锚点选择结果。
+    """
+    return resolve_report_kind_from_path(
+        str(getattr(doc, "path", "") or ""),
+        _page_texts(doc),
+    )
 
 
 def _find_first_amount(text: str, patterns: Sequence[str]) -> Optional[float]:
