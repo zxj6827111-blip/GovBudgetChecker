@@ -247,6 +247,11 @@ class MaterialCoverageSummary(ExpectedCoverageFields):
     #: 截止时间未知（``due_at IS NULL``）的槽位数。它必须独立可见：
     #: 这些槽位不能计入"逾期未上传"，也不该被读成"尚未到期"。
     due_at_unknown: int
+    #: **确认**尚未到截止时间的槽位数：``status='not_due' AND reason='due_not_reached'``。
+    #: 与 ``status_counts.not_due`` 是两个口径，必须并存而不是互相覆盖：
+    #: 后者是状态机事实（"截止时间未知"的槽位也停在 not_due），前者才是业务上
+    #: 可以对外说"未到期"的那些。前端"未到期"数字只取本字段。
+    not_due_confirmed: int
     #: 未归入任何行政区划的槽位数。区县卡片只覆盖有 jurisdiction 的槽位，
     #: 这个计数保证"剩下那些去哪了"在首页就能看到，而不是凭空消失。
     jurisdiction_unknown_total: int
@@ -263,6 +268,7 @@ class DistrictCoverageItem(ExpectedCoverageFields):
     final_total: int
     unknown_kind_total: int
     due_at_unknown: int
+    not_due_confirmed: int
     updated_at: Optional[UtcDatetime] = None
 
 
@@ -302,7 +308,10 @@ class DepartmentMatrixItem(ExpectedCoverageFields):
 
     unknown_kind_total: int
     missing: int
+    #: 状态机事实：not_due 总数（含"截止时间未知"）。
     not_due: int
+    #: 业务展示用：确实尚未到截止时间的数量（见 MaterialCoverageSummary 的说明）。
+    not_due_confirmed: int
     due_at_unknown: int
     updated_at: Optional[UtcDatetime] = None
 

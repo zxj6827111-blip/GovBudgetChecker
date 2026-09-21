@@ -96,31 +96,97 @@ def _is_admin(user: Any) -> bool:
         return False
 
 
-def _require_org_access(user: Any, org_id: str, detail: str) -> None:
-    if not user_can_access_org(user, org_id):
-        raise HTTPException(status_code=403, detail=detail)
+class MaterialAccessScope:
+    """当前账号在材料台账上的访问范围。
+
+    两个集合，**职责严格分开**（这是本轮最重要的一条设计）：
+
+    ``visible_org_ids``
+        可以读到哪些**数据**。判定复用仓库既有的 ``user_can_access_org``
+        （已授权节点可访问其后代），本模块不重新实现祖先/后代判断。
+        ``None`` = 管理员，不加权限过滤。
+
+    ``container_org_ids``
+        可以打开哪些**页面容器**。= 可见组织的**祖先闭包**。
+        用途只有一个：让"只授权了 dept-A / unit-A1"的账号仍能打开其所属区县或
+        部门页面做导航（否则他们连自己的材料都点不进去）。
+
+    容器可打开 ≠ 容器下数据可见：页面里的每一行仍然由 ``visible_org_ids``
+    在 SQL 层过滤。只放开容器而不加范围过滤，会从"过度拒绝"直接变成"越权泄露"。
+    """
+
+    __slots__ = ("visible_org_ids", "container_org_ids")
+
+    def __init__(
+        self,
+        *,
+        visible_org_ids: Optional[List[str]] = None,
+        container_org_ids: Optional[set] = None,
+    ) -> None:
+        self.visible_org_ids = visible_org_ids
+        self.container_org_ids = container_org_ids or set()
+
+    @property
+    def unrestricted(self) -> bool:
+        return self.visible_org_ids is None
+
+    @property
+    def has_any_visible_org(self) -> bool:
+        return bool(self.visible_org_ids)
+
+    def can_open_container(self, org_id: str) -> bool:
+        """能否打开该组织对应的页面（管理员恒可）。"""
+        if self.unrestricted:
+            return True
+        return str(org_id or "") in self.container_org_ids
 
 
-def _accessible_jurisdiction_ids(user: Any) -> Optional[List[str]]:
-    """当前账号可访问的行政区划 id。
+def _build_access_scope(user: Any) -> MaterialAccessScope:
+    """按既有 RBAC 语义算出可见范围与容器范围。
 
-    返回 ``None`` 表示不受限（管理员）；返回列表表示只看得到这些区划
-    （其中空列表表示一个都没授权）。判定复用仓库既有的
-    ``user_can_access_org``（沿组织目录向上找授权范围），不另写一套权限规则。
+    - 管理员：``visible_org_ids=None``，不加任何权限条件；
+    - 非管理员：遍历组织目录，凡 ``user_can_access_org`` 为真的节点都是可见节点
+      （层级不限：区县、部门、单位一视同仁）。这样 department / unit 授权不会被
+      错误折算成"必须能访问区县"，也不会把单位授权放大成整个部门；
+    - 组织目录不可用：返回空可见集合（fail-closed，宁可看不到也不越权）。
     """
     if _is_admin(user):
-        return None
+        return MaterialAccessScope(visible_org_ids=None)
+
     try:
         storage = runtime.require_org_storage()
     except Exception:  # noqa: BLE001 - 组织目录不可用时按"无授权"处理（fail-closed）
         logger.warning("Organization catalog unavailable while resolving material scope")
-        return []
-    allowed: List[str] = []
-    for org in storage.get_all():
-        level = str(getattr(org, "level", "") or "")
-        if level in _JURISDICTION_LEVELS and user_can_access_org(user, str(getattr(org, "id", ""))):
-            allowed.append(str(org.id))
-    return allowed
+        return MaterialAccessScope(visible_org_ids=[])
+
+    records = list(storage.get_all())
+    by_id = {str(getattr(org, "id", "") or ""): org for org in records}
+
+    visible: List[str] = []
+    for org in records:
+        org_id = str(getattr(org, "id", "") or "")
+        if org_id and user_can_access_org(user, org_id):
+            visible.append(org_id)
+
+    # 容器集合 = 可见节点的祖先闭包（含可见节点自身）。
+    containers = set(visible)
+    for org_id in visible:
+        current = by_id.get(org_id)
+        seen: set = set()
+        while current is not None:
+            parent_id = str(getattr(current, "parent_id", "") or "")
+            if not parent_id or parent_id in seen:
+                break
+            seen.add(parent_id)
+            containers.add(parent_id)
+            current = by_id.get(parent_id)
+
+    return MaterialAccessScope(visible_org_ids=visible, container_org_ids=containers)
+
+
+def _require_container_access(scope: MaterialAccessScope, org_id: str, detail: str) -> None:
+    if not scope.can_open_container(org_id):
+        raise HTTPException(status_code=403, detail=detail)
 
 
 # ---- 组织目录显示名（纯展示，查不到就回退） ---------------------------------
@@ -181,26 +247,25 @@ async def get_material_coverage(
     """
     _, _, user = require_login(request)
 
-    allowed = _accessible_jurisdiction_ids(user)
-    scoped_ids: Optional[List[str]] = None
-    if allowed is not None:
-        if not allowed:
+    scope = _build_access_scope(user)
+    if not scope.unrestricted:
+        if not scope.has_any_visible_org:
             raise HTTPException(
                 status_code=403,
-                detail="no jurisdiction authorized for this account",
+                detail="no organization authorized for this account",
             )
         if jurisdiction_id:
-            _require_org_access(user, jurisdiction_id, "jurisdiction access denied")
-        else:
-            # 非管理员只能看到自己授权范围内的区划汇总。
-            scoped_ids = allowed
+            # 指定区县时它必须是"可打开的容器"：授权部门/单位的账号也要能按
+            # 自己所属区县筛选（否则首页无法按区县下钻）。数据范围仍由下面的
+            # visible_org_ids 过滤，容器放开不等于范围放开。
+            _require_container_access(scope, jurisdiction_id, "jurisdiction access denied")
 
     filters = MaterialSlotFilters(
         fiscal_year=fiscal_year,
         report_kind=report_kind,
         status=status,
         jurisdiction_id=jurisdiction_id,
-        jurisdiction_ids=scoped_ids,
+        visible_org_ids=scope.visible_org_ids,
     )
     data = await _run_query(lambda service: service.coverage(filters=filters))
     return MaterialCoverageResponse(ok=True, data=data, meta=build_meta())
@@ -225,7 +290,8 @@ async def get_district_departments(
 ) -> DistrictDepartmentMatrixResponse:
     """某区县下的主管部门矩阵（分页）。"""
     _, _, user = require_login(request)
-    _require_org_access(user, district_id, "jurisdiction access denied")
+    scope = _build_access_scope(user)
+    _require_container_access(scope, district_id, "jurisdiction access denied")
 
     storage = _org_storage_or_none()
     district_name = _org_name(storage, district_id)
@@ -234,6 +300,9 @@ async def get_district_departments(
         fiscal_year=fiscal_year,
         report_kind=report_kind,
         status=status,
+        # 容器里的每一行仍按可见组织过滤：unit 授权的账号打开父部门页时，
+        # 只会看到自己那个单位所在的那一行，且该行的数字只由自己产生。
+        visible_org_ids=scope.visible_org_ids,
     )
     data, total = await _run_query(
         lambda service: service.district_departments(
@@ -277,7 +346,8 @@ async def get_department_matrix(
     会让整页数字悄悄错位（2024 年度决算在 2025 年发布是常态）。
     """
     _, _, user = require_login(request)
-    _require_org_access(user, department_id, "department access denied")
+    scope = _build_access_scope(user)
+    _require_container_access(scope, department_id, "department access denied")
 
     storage = _org_storage_or_none()
     department_name = _org_name(storage, department_id)
@@ -290,6 +360,7 @@ async def get_department_matrix(
             department_name=department_name,
             jurisdiction_id=jurisdiction_id,
             jurisdiction_name=jurisdiction_name,
+            visible_org_ids=scope.visible_org_ids,
         )
     )
 

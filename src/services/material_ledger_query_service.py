@@ -56,13 +56,17 @@ from src.schemas.material_ledger import (
 #: 超出取值域即抛错（见模块顶部第 3 条纪律）。
 _STATUS_DOMAIN = frozenset(MATERIAL_STATUSES)
 
-#: "本级/本部"单位的名称形态：``…局本级``、``…局（本级）``、``…局本部``。
-#: 组织目录里没有"是否本级"的显式字段，名称后缀是目前唯一可用的信号，
-#: 且与既有实现同源（``ps_schema_sync`` 用 ``endswith("本级")`` 过滤、
-#: ``org_hierarchy_migration`` 用同一后缀反推部门名）。
-#: 局限：这是**展示层**的层级归类，不参与任何身份判定；WP9 引入组织主数据后，
-#: 应改成显式字段而不是继续依赖名称。
-_HEAD_UNIT_SUFFIX_RE = re.compile(r"(?:[（(]\s*(?:本级|本部)\s*[）)]|本级|本部)\s*$")
+#: "本级/本部"标志：``…局本级``、``…局（本级）``、``…局本部``、``…局（本部）``。
+#: 归一化与判定口径与前端 ``app/lib/unitMatch.ts`` 对齐（同一套业务语义，不允许两处漂移）：
+#: 前端 ``normalizeOrgName`` 去空白与全半角括号、再去掉 "（本级）"/"本级"；
+#: 这里同样处理，并额外覆盖"本部"（评审要求）——两者都表示"部门本级"。
+_HEAD_UNIT_MARKER_RE = re.compile(r"(?:[（(]\s*(?:本级|本部)\s*[）)]|本级|本部)")
+_ORG_NAME_NOISE_RE = re.compile(r"[\s（）()]")
+
+#: 组织目录里没有"是否本级"的显式字段，名称是当前唯一可用信号：
+#: 「单位名与部门名一致」或「单位名带本级/本部标志」都判为本部单位。
+#: 局限：这是**展示层**的层级归类，不参与任何身份判定（身份永远按 id）；WP9 引入
+#: 组织主数据后应改成显式字段而不是继续依赖名称。
 
 
 class UnknownMaterialStatusError(ValueError):
@@ -81,12 +85,41 @@ class UnknownMaterialStatusError(ValueError):
         self.status_code = status_code
 
 
-def is_head_unit_name(name: Any) -> bool:
-    """名称是否形如"…局本级 / …局（本部）"。"""
-    text = str(name or "").strip()
-    if not text:
+def normalize_org_name(value: Any) -> str:
+    """组织名称归一化：去空白、去全半角括号、去"本级/本部"标志。
+
+    与前端 ``app/lib/unitMatch.ts`` 的 ``normalizeOrgName`` 同一口径：
+    ``上海市普陀区财政局（本级）`` 与 ``上海市普陀区财政局`` 归一后相等。
+    """
+    text = str(value or "")
+    return _ORG_NAME_NOISE_RE.sub("", _HEAD_UNIT_MARKER_RE.sub("", text))
+
+
+def is_head_unit_name(unit_name: Any, department_name: Any = None) -> bool:
+    """单位是否为"部门本级"。
+
+    两条证据（满足其一即可，与前端 ``isHeadUnit`` 语义一致）：
+
+    1. **归一化后单位名 == 部门名**。真实场景：部门叫"上海市普陀区财政局"，
+       其本级单位也叫"上海市普陀区财政局"（名称完全相同、id 与 level 不同），
+       名称里根本没有"本级/本部"字样——只靠后缀会把它错判成直属单位。
+    2. **单位名带"本级/本部"标志**（含 ``（本级）``/``（本部）`` 写法）。
+
+    名称只用于**展示层**的层级归类；槽位身份始终按 ``subject_org_id`` 判定，
+    绝不按名称合并数据。
+    """
+    unit = str(unit_name or "").strip()
+    if not unit:
         return False
-    return bool(_HEAD_UNIT_SUFFIX_RE.search(text))
+    if _HEAD_UNIT_MARKER_RE.search(unit):
+        return True
+    department = str(department_name or "").strip()
+    if not department:
+        # 没有部门名可比对时只能靠标志；比对不了就不猜（返回 False 由调用方按直属单位处理）。
+        return False
+    normalized_unit = normalize_org_name(unit)
+    normalized_department = normalize_org_name(department)
+    return bool(normalized_unit) and normalized_unit == normalized_department
 
 
 def relationship_of(
@@ -96,18 +129,24 @@ def relationship_of(
     subject_kind: Any,
     material_scope: Any,
     subject_org_name: Any = None,
+    department_name: Any = None,
 ) -> str:
     """主体在部门矩阵中的层级关系（**纯展示**，不落库）。
 
     判定顺序：
 
     1. 主体就是主管部门自己 -> ``department_summary``（部门汇总材料）；
-    2. 主体是单位：名称含"本级/本部"-> ``head_unit``，否则 ``subordinate_unit``；
-       但如果材料范围写着"部门汇总"（与"主体是单位"互相矛盾），不猜 -> 待确认；
-    3. 主体层级认不出来但材料范围写着部门汇总 -> ``department_summary``；
-    4. 其余 -> ``relationship_unknown``（宁可在界面上承认"关系待确认"，也不猜）。
+    2. 主体是单位且属于"部门本级"（名称与部门名一致，或带本级/本部标志）-> ``head_unit``；
+       若材料范围写着"部门汇总"（与"主体是单位"互相矛盾）-> 不猜，转待确认；
+    3. 主体是单位但没有本部证据 -> ``subordinate_unit``；
+    4. 主体层级认不出来但材料范围写着部门汇总 -> ``department_summary``；
+    5. 其余 -> ``relationship_unknown``（宁可在界面上承认"关系待确认"，也不猜）。
 
-    关系由现有字段推导（§二十四 明确禁止写回数据库制造新的业务真值）。
+    ``department_name`` 就是"同名本级单位"判定的另一半证据：只传单位名无法发现
+    "财政局（部门）"与"财政局（本级单位）"这种完全同名的真实形态。
+
+    关系由现有字段推导（§二十四 明确禁止写回数据库制造新的业务真值）；
+    身份始终按 ``subject_org_id``，名称只在这里做展示归类。
     """
     subject = str(subject_org_id or "")
     department = str(department_id or "")
@@ -121,7 +160,11 @@ def relationship_of(
             # 主体是单位、材料范围却写着部门汇总：两个字段互相矛盾，
             # 归到哪一层都会是错的断言，交给人工确认。
             return "relationship_unknown"
-        return "head_unit" if is_head_unit_name(subject_org_name) else "subordinate_unit"
+        return (
+            "head_unit"
+            if is_head_unit_name(subject_org_name, department_name)
+            else "subordinate_unit"
+        )
     if kind == "department" or scope == "department_summary":
         return "department_summary"
     if scope == "unit_self":
@@ -147,8 +190,8 @@ class MaterialSlotFilters:
         "report_kind",
         "status",
         "jurisdiction_id",
-        "jurisdiction_ids",
         "department_id",
+        "visible_org_ids",
     )
 
     def __init__(
@@ -158,16 +201,17 @@ class MaterialSlotFilters:
         report_kind: str = "all",
         status: Optional[str] = None,
         jurisdiction_id: Optional[str] = None,
-        jurisdiction_ids: Optional[Sequence[str]] = None,
         department_id: Optional[str] = None,
+        visible_org_ids: Optional[Sequence[str]] = None,
     ) -> None:
         self.fiscal_year = fiscal_year
         self.report_kind = report_kind
         self.status = status
         self.jurisdiction_id = jurisdiction_id
-        #: 授权范围（非管理员）：``None`` 表示不限制；空列表表示一条都不可见。
-        self.jurisdiction_ids = None if jurisdiction_ids is None else list(jurisdiction_ids)
         self.department_id = department_id
+        #: 可见组织范围（非管理员）：``None`` = 管理员不加权限过滤；列表 = 只保留
+        #: 与这些组织有关的槽位（见 ``where()`` 的三列 OR 条件）。
+        self.visible_org_ids = None if visible_org_ids is None else list(visible_org_ids)
 
     def where(self) -> Tuple[str, List[Any]]:
         clauses: List[str] = []
@@ -187,10 +231,24 @@ class MaterialSlotFilters:
             add("status = ${n}", self.status)
         if self.jurisdiction_id:
             add("jurisdiction_org_id = ${n}", self.jurisdiction_id)
-        if self.jurisdiction_ids is not None:
-            add("jurisdiction_org_id = ANY(${n}::text[])", self.jurisdiction_ids)
         if self.department_id:
             add("department_org_id = ${n}", self.department_id)
+        if self.visible_org_ids is not None:
+            # 权限范围必须覆盖槽位的三个层次，且三列之间是 **OR**：
+            # 授权的可能是区县（命中 jurisdiction）、部门（命中 department）、
+            # 或某个单位（命中 subject）。写成 AND 会把 department/unit 授权全部误杀
+            # ——部门级授权的槽位 subject 往往不是部门自己，反之单位级授权也不会命中
+            # 部门列。三个位置共用同一个 ``$n``（同一个数组参数引用三次）。
+            #
+            # NULL 列（未识别归属的槽位）与占位主体（unresolved:...）都不会命中
+            # ANY(...)：非管理员因此看不到"无法证明归属"的材料，管理员不受此限。
+            params.append(self.visible_org_ids)
+            index = len(params)
+            clauses.append(
+                "(jurisdiction_org_id = ANY(${index}::text[])"
+                " OR department_org_id = ANY(${index}::text[])"
+                " OR subject_org_id = ANY(${index}::text[]))".format(index=index)
+            )
 
         return (" AND ".join(clauses) if clauses else "TRUE"), params
 
@@ -217,7 +275,11 @@ def _accumulate(bucket: Dict[str, Any], row: Dict[str, Any]) -> None:
     """把一行分组结果累加进一个统计桶。
 
     桶字段：``slot_total`` / ``status_counts`` / ``budget_total`` / ``final_total`` /
-    ``unknown_kind_total`` / ``due_at_unknown`` / ``updated_at``。
+    ``unknown_kind_total`` / ``due_at_unknown`` / ``not_due_confirmed`` / ``updated_at``。
+
+    ``not_due_confirmed`` 与 ``status_counts["not_due"]`` 是两件事：
+    前者是"确实还没到截止时间"（``status='not_due' AND reason='due_not_reached'``），
+    后者是状态机事实（还包含"截止时间未知"那种也算 not_due 的情况）。
     """
     count = int(row.get("slot_count") or 0)
     bucket["slot_total"] += count
@@ -233,6 +295,7 @@ def _accumulate(bucket: Dict[str, Any], row: Dict[str, Any]) -> None:
         bucket["unknown_kind_total"] += count
 
     bucket["due_at_unknown"] += int(row.get("due_at_unknown_count") or 0)
+    bucket["not_due_confirmed"] += int(row.get("not_due_confirmed_count") or 0)
     bucket["updated_at"] = _max_moment(bucket.get("updated_at"), row.get("updated_at"))
 
 
@@ -252,6 +315,7 @@ def new_bucket() -> Dict[str, Any]:
         "final_total": 0,
         "unknown_kind_total": 0,
         "due_at_unknown": 0,
+        "not_due_confirmed": 0,
         "updated_at": None,
     }
 
@@ -298,6 +362,9 @@ class MaterialLedgerQueryService:
                    status,
                    COUNT(*)::int AS slot_count,
                    COUNT(*) FILTER (WHERE due_at IS NULL)::int AS due_at_unknown_count,
+                   COUNT(*) FILTER (
+                       WHERE status = 'not_due' AND status_reason = 'due_not_reached'
+                   )::int AS not_due_confirmed_count,
                    MAX(updated_at) AS updated_at
             FROM material_slots
             WHERE {where}
@@ -311,6 +378,9 @@ class MaterialLedgerQueryService:
                    status,
                    COUNT(*)::int AS slot_count,
                    COUNT(*) FILTER (WHERE due_at IS NULL)::int AS due_at_unknown_count,
+                   COUNT(*) FILTER (
+                       WHERE status = 'not_due' AND status_reason = 'due_not_reached'
+                   )::int AS not_due_confirmed_count,
                    COUNT(*) FILTER (WHERE jurisdiction_org_id IS NULL)::int AS jurisdiction_unknown_count
             FROM material_slots
             WHERE {where}
@@ -369,6 +439,7 @@ class MaterialLedgerQueryService:
                 final_total=bucket["final_total"],
                 unknown_kind_total=bucket["unknown_kind_total"],
                 due_at_unknown=bucket["due_at_unknown"],
+                not_due_confirmed=bucket["not_due_confirmed"],
                 updated_at=bucket["updated_at"],
             )
             for bucket in districts.values()
@@ -382,6 +453,7 @@ class MaterialLedgerQueryService:
             final_total=summary_bucket["final_total"],
             unknown_kind_total=summary_bucket["unknown_kind_total"],
             due_at_unknown=summary_bucket["due_at_unknown"],
+            not_due_confirmed=summary_bucket["not_due_confirmed"],
             jurisdiction_unknown_total=summary_bucket["jurisdiction_unknown_total"],
         )
         return MaterialCoverageData(summary=summary, districts=items)
@@ -408,12 +480,16 @@ class MaterialLedgerQueryService:
         名称以组织目录为准，而组织目录的名称与槽位里的名称快照可能不同
         （部门改名会换组织 id）。按聚合后的显示名过滤，用户搜到的是他看见的名字。
         """
+        # 重建筛选时必须把**权限范围**一并带过来：只换 jurisdiction_id 而漏掉
+        # visible_org_ids，就等于"容器可打开、内容不设限"——授权部门/单位的账号
+        # 一旦打开父区县页，同区其它部门的材料就会全部泄露。
         scoped = MaterialSlotFilters(
             fiscal_year=filters.fiscal_year,
             report_kind=filters.report_kind,
             status=filters.status,
             jurisdiction_id=district_id,
             department_id=filters.department_id,
+            visible_org_ids=filters.visible_org_ids,
         )
         where, params = scoped.where()
         rows = await self._conn.fetch(
@@ -425,6 +501,9 @@ class MaterialLedgerQueryService:
                    status,
                    COUNT(*)::int AS slot_count,
                    COUNT(*) FILTER (WHERE due_at IS NULL)::int AS due_at_unknown_count,
+                   COUNT(*) FILTER (
+                       WHERE status = 'not_due' AND status_reason = 'due_not_reached'
+                   )::int AS not_due_confirmed_count,
                    MAX(updated_at) AS updated_at
             FROM material_slots
             WHERE {where}
@@ -499,7 +578,10 @@ class MaterialLedgerQueryService:
                     ),
                     unknown_kind_total=bucket["unknown_kind_total"],
                     missing=int(bucket["status_counts"]["missing"]),
+                    # 状态机事实：not_due 总数（含"截止时间未知"那部分）。
                     not_due=int(bucket["status_counts"]["not_due"]),
+                    # 业务展示用：确实还没到截止时间的数量。
+                    not_due_confirmed=bucket["not_due_confirmed"],
                     due_at_unknown=bucket["due_at_unknown"],
                     updated_at=bucket["updated_at"],
                 )
@@ -517,6 +599,7 @@ class MaterialLedgerQueryService:
         department_name: Optional[str] = None,
         jurisdiction_id: Optional[str] = None,
         jurisdiction_name: Optional[str] = None,
+        visible_org_ids: Optional[Sequence[str]] = None,
     ) -> DepartmentMatrixData:
         """某主管部门在指定财政年度的主体矩阵。一条 SQL，不做聚合。
 
@@ -528,8 +611,14 @@ class MaterialLedgerQueryService:
         "身份已确认的槽位优先于按文档临时安置的占位槽位"就可以被直接测到，
         而 SQL ORDER BY 与 Python 选择规则分居两处必然漂移。
         """
+        scoped = MaterialSlotFilters(
+            department_id=department_id,
+            fiscal_year=fiscal_year,
+            visible_org_ids=visible_org_ids,
+        )
+        where, params = scoped.where()
         rows = await self._conn.fetch(
-            """
+            f"""
             SELECT id::text AS slot_id,
                    slot_key,
                    mapping_key,
@@ -553,10 +642,9 @@ class MaterialLedgerQueryService:
                    current_document_version_id,
                    updated_at
             FROM material_slots
-            WHERE department_org_id = $1 AND fiscal_year = $2
+            WHERE {where}
             """,
-            department_id,
-            int(fiscal_year),
+            *params,
         )
         return self.aggregate_department_matrix(
             rows,
@@ -591,7 +679,20 @@ class MaterialLedgerQueryService:
 
         # 先按"该展示哪一条槽位"排序，再按顺序归并：同一（主体 × 文种）下
         # 第一条即代表槽位。排序规则见 _slot_preference，与 SQL 无关。
-        for row in sorted(rows, key=_slot_preference):
+        ordered_rows = sorted(rows, key=_slot_preference)
+
+        # 「同名本级单位」判定需要部门名作另一半证据（部门与本部单位可以完全同名）。
+        # 部门名优先取调用方传入的组织目录名，其次取槽位里的名称快照。
+        effective_department_name = str(department_name or "").strip() or next(
+            (
+                str(row.get("department_name") or "").strip()
+                for row in ordered_rows
+                if str(row.get("department_name") or "").strip()
+            ),
+            "",
+        )
+
+        for row in ordered_rows:
             subject_id = str(row.get("subject_org_id") or "")
             if not subject_id:
                 # subject_org_id 是 NOT NULL，出现空值说明数据被外部破坏，
@@ -625,6 +726,7 @@ class MaterialLedgerQueryService:
                     subject_kind=row.get("subject_kind"),
                     material_scope=row.get("material_scope"),
                     subject_org_name=row.get("subject_org_name"),
+                    department_name=effective_department_name or None,
                 )
             )
 
