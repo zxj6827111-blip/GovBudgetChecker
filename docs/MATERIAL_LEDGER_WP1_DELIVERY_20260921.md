@@ -116,11 +116,18 @@
 
 | 检查 | 基线（`4a1cabf`） | 本次 | 结论 |
 | --- | --- | --- | --- |
-| `python -m pytest -q` | 1307 passed, 1 skipped, 0 failed | **1439 passed, 17 skipped, 0 failed** | +132 passed / +16 skipped（新真库用例默认跳过），**零失败** |
+| `python -m pytest -q`（本机 Windows） | 1307 passed, 1 skipped, 0 failed | **1439 passed, 17 skipped, 0 failed** | +132 passed / +16 skipped（新真库用例默认跳过），**零失败** |
+| `python -m pytest -q`（GitHub CI, Linux） | — | **1440 passed, 16 skipped** | 与本地差 1 条，原因见下 |
 | `ruff check .`（Makefile 与 CI 同款全仓命令） | All checks passed | **All checks passed** | 无变化 |
-| `mypy api src tests` | Success（199 files） | **Success（210 files）** | 无变化 |
+| `mypy api src tests` | Success（199 files） | **Success（212 files）** | 无变化 |
 
 基线数字取自 `4a1cabf` 的干净检出（`git worktree`），不是带改动的当前树。
+
+**本地与 CI 相差 1 条的原因（已逐条核对，不是缺陷）**：
+`tests/test_pdf_parse_isolation_and_backup.py:255` 在 Windows 上跳过
+（`RLIMIT_AS` 不适用），在 Linux 上运行并通过。因此
+`1440 = 1439 + 1`、`16 = 17 - 1`，两边完全对得上。
+16 条真库用例在两种环境下都跳过（未配置 `GOVBUDGET_TEST_DATABASE_URL`）。
 
 ### 3.2 真库验证（PostgreSQL 15.17）
 
@@ -199,6 +206,16 @@ GOVBUDGET_TEST_DATABASE_URL=postgresql://.../fiscal_db \
 **全部一致**，说明接入画像不会制造虚假年度冲突。同一批样张 `caliber` 仍为未识别
 （封面写"年度部门决算"，不含汇总/本级口径词），因此口径冲突通道目前主要由
 用例覆盖，真实数据尚未触发——这一点在 §6 如实登记。
+
+### 3.6 PR 与 CI
+
+| 项目 | 值 |
+| --- | --- |
+| PR | **#42（保持 OPEN，未合并）** |
+| 分支 | `feat/material-ledger-foundation-v1` |
+| 提交数 | 10（WP0+WP1 七条 + 评审修复三条） |
+| CI | `test-and-build` 两跑均 **pass** |
+| CI 侧测试统计 | 1440 passed / 16 skipped（与本地差 1 条的原因见 §3.1） |
 
 ---
 
