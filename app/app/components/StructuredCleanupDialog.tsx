@@ -127,6 +127,8 @@ const TEXT = {
   noCleanupVersion: "\u5f53\u524d\u6ca1\u6709\u53ef\u5220\u9664\u7684 document_version_id",
   cleanupShared: "\u4e0e\u6700\u65b0\u4efb\u52a1\u5171\u7528\u540c\u4e00\u5165\u5e93\u7248\u672c\uff0c\u5df2\u81ea\u52a8\u4fdd\u7559",
   cleanupDone: "\u8be5\u5386\u53f2\u4efb\u52a1\u7684\u65e7\u7248\u5165\u5e93\u8bb0\u5f55\u5df2\u6e05\u7406",
+  cleanupMaterialSlotBound:
+    "\u5df2\u7ed1\u5b9a\u6750\u6599\u53f0\u8d26\uff0c\u4e0d\u7531\u65e7\u7248\u5165\u5e93\u6e05\u7406\u5220\u9664",
   missingScope: "\u65e0\u6cd5\u8bc6\u522b\u8be5\u4efb\u52a1\u7684\u90e8\u95e8/\u5e74\u5ea6/\u7c7b\u578b\u8303\u56f4",
   skippedDefault: "\u5df2\u8df3\u8fc7",
   yearSuffix: "\u5e74\u5ea6",
@@ -157,6 +159,8 @@ function getSkippedReasonLabel(reason?: string | null) {
       return TEXT.cleanupDone;
     case "missing_document_version_id":
       return TEXT.noCleanupVersion;
+    case "material_slot_bound":
+      return TEXT.cleanupMaterialSlotBound;
     case "missing_scope":
       return TEXT.missingScope;
     default:
