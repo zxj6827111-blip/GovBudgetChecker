@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import Any, Dict
 
 import asyncpg
 import pytest
@@ -492,6 +494,316 @@ async def test_service_refuses_slot_whose_natural_key_collides(db):
         # 冲突对象必须是复合身份索引，而不是 slot_key 那一条——
         # 否则"自然键拦住重复"这条结论就没有被真正验证。
         assert "uq_material_slots_identity" in str(excinfo.value)
+
+
+async def test_cross_slot_rebind_is_rejected_and_rolls_back_on_real_db(db):
+    """跨槽重绑在真库上被拒绝，且失败的那次分配整体回滚。
+
+    假连接能验证语句序列，验证不了"FOR UPDATE 之后确实读到了最新值"。
+    这里走完整服务层：第二次分配用不同身份指向另一个槽位，必须报冲突，
+    并且新槽位不能留在库里。
+    """
+    from src.services.material_slot_service import (
+        allocate_for_document,
+        safe_allocate_for_document,
+    )
+
+    schema, pool = db
+    await run_migrations()
+
+    async with _conn(schema, pool) as connection:
+        version_id = await _seed_version(connection, prefix="rebind")
+
+        first = await allocate_for_document(
+            connection,
+            metadata=_metadata_for(version_prefix="rebind"),
+            checksum="1" * 64,
+            org_records=_ORG_RECORDS,
+            document_version_id=version_id,
+        )
+        assert first["bound"] is True
+        original_slot_id = first["slot_id"]
+
+        conflict = await safe_allocate_for_document(
+            connection,
+            metadata={
+                **_metadata_for(version_prefix="rebind"),
+                "report_kind": "budget",
+                "doc_type": "dept_budget",
+            },
+            checksum="1" * 64,
+            org_records=_ORG_RECORDS,
+            document_version_id=version_id,
+        )
+
+        assert conflict["status"] == "conflict"
+        assert conflict["reason"] == "slot_binding_conflict"
+        assert conflict["bound"] is False
+
+        # 原来那个槽位仍在，指针未变
+        assert await connection.fetchval(
+            "SELECT current_document_version_id FROM material_slots WHERE id = $1::uuid",
+            original_slot_id,
+        ) == version_id
+        # 版本没有被改挂
+        assert str(
+            await connection.fetchval(
+                "SELECT slot_id FROM fiscal_document_versions WHERE id = $1", version_id
+            )
+        ) == original_slot_id
+        # 冲突那次分配新建的槽位被整体回滚
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM material_slots WHERE report_kind = 'budget'"
+        ) == 0
+
+
+async def test_concurrent_binding_of_one_version_has_exactly_one_winner(db):
+    """同一版本被并发绑定到两个槽位：只能有一个合法归属。
+
+    没有行锁时两个事务都会读到 ``slot_id IS NULL`` 然后各自写入，
+    两边都以为自己成功，最后一个槽位的当前版本指针会指向别人家的版本。
+    这条用例是行锁真正生效的证据。
+    """
+    import asyncio
+
+    from src.services.material_slot_service import (
+        MaterialSlotService,
+        SlotBindingConflict,
+    )
+
+    schema, pool = db
+    await run_migrations()
+
+    async with _conn(schema, pool) as connection:
+        version_id = await _seed_version(connection, prefix="race")
+        slot_a = await _seed_slot_row(connection, "race-slot-a", subject_org_id="race-org-a")
+        slot_b = await _seed_slot_row(connection, "race-slot-b", subject_org_id="race-org-b")
+
+    results: dict = {}
+
+    async def _bind(key: str, slot_id: str) -> None:
+        async with _conn(schema, pool) as connection:
+            service = MaterialSlotService(connection)
+            try:
+                await service.bind_document_version(slot_id, version_id)
+                results[key] = "bound"
+            except SlotBindingConflict:
+                results[key] = "conflict"
+
+    await asyncio.gather(_bind("a", slot_a), _bind("b", slot_b))
+
+    assert sorted(results.values()) == ["bound", "conflict"], results
+
+    async with _conn(schema, pool) as connection:
+        winner_slot = str(
+            await connection.fetchval(
+                "SELECT slot_id FROM fiscal_document_versions WHERE id = $1", version_id
+            )
+        )
+        assert winner_slot in (slot_a, slot_b)
+        # 只有一个槽位声称它是自己的当前版本
+        claimers = await connection.fetch(
+            "SELECT id::text FROM material_slots WHERE current_document_version_id = $1",
+            version_id,
+        )
+        assert [row["id"] for row in claimers] == [winner_slot]
+
+
+async def test_current_version_tie_break_uses_id_on_real_db(db):
+    """同 created_at 的版本按 id 决定新旧——真库上的整数比较。
+
+    若把排序键写成单独的 created_at，指针会在这两个版本之间随机停靠；
+    若按字符串比较 id，``10 < 9``，结果与线上相反。
+    """
+    from src.services.material_slot_service import MaterialSlotService
+
+    schema, pool = db
+    await run_migrations()
+
+    async with _conn(schema, pool) as connection:
+        slot_id = await _seed_slot_row(connection, "tie-slot")
+        org_unit_id = await connection.fetchval(
+            "INSERT INTO org_units (org_name) VALUES ('同级时间戳单位') RETURNING id"
+        )
+        document_id = await connection.fetchval(
+            """
+            INSERT INTO fiscal_documents (org_unit_id, fiscal_year, doc_type)
+            VALUES ($1, 2024, 'dept_final') RETURNING id
+            """,
+            org_unit_id,
+        )
+        # asyncpg 要求传 datetime 对象而不是时间字符串（后者会在绑定参数时报 DataError）
+        same_moment = datetime(2026, 9, 21, tzinfo=timezone.utc)
+        version_ids = []
+        for index in range(2):
+            version_ids.append(
+                await connection.fetchval(
+                    """
+                    INSERT INTO fiscal_document_versions
+                        (document_id, file_hash, storage_key, created_at)
+                    VALUES ($1, $2, $3, $4) RETURNING id
+                    """,
+                    document_id,
+                    f"tie-hash-{index}",
+                    f"job-tie/file-{index}.pdf",
+                    same_moment,
+                )
+            )
+
+        service = MaterialSlotService(connection)
+        # 先绑大 id 再绑小 id：指针不应被小 id 抢走
+        await service.bind_document_version(slot_id, version_ids[1])
+        await service.bind_document_version(slot_id, version_ids[0])
+
+        assert await connection.fetchval(
+            "SELECT current_document_version_id FROM material_slots WHERE id = $1::uuid",
+            slot_id,
+        ) == version_ids[1]
+
+
+async def test_caliber_conflict_is_durable_on_real_db(db):
+    """口径矛盾在真库上被持久化，且不会被后续一致观测洗掉。"""
+    from src.services import material_slot_resolver as resolver
+    from src.services.material_slot_service import MaterialSlotService
+
+    schema, pool = db
+    await run_migrations()
+
+    decision = resolver.decide_slot_allocation(
+        metadata=_metadata_for(version_prefix="caliber"),
+        org_records=_ORG_RECORDS,
+        checksum="2" * 64,
+    )
+    assert decision.ok, decision.reason
+
+    async with _conn(schema, pool) as connection:
+        service = MaterialSlotService(connection)
+        await service.upsert_from_decision(decision, caliber="summary")
+        await service.upsert_from_decision(decision, caliber="self")
+        # 又一次识别回 summary，矛盾仍然存在
+        row = await service.upsert_from_decision(decision, caliber="summary")
+
+        stored = await service.get_slot_by_key(decision.identity.slot_key)
+        assert stored["caliber"] == "summary"
+        assert stored["caliber_conflict_candidate"] == "self"
+        assert stored["status"] == "mapping_required"
+        assert stored["status_reason"] == "caliber_conflict"
+        # 刷新一次也不会把冲突洗掉
+        refreshed = await service.refresh_status(row["id"])
+        assert refreshed["status_reason"] == "caliber_conflict"
+
+
+async def test_mark_not_applicable_respects_identity_gate_on_real_db(db):
+    """身份未确认的槽位：标不适用仍停在待确认；身份完整的才转不适用。"""
+    from src.services.material_slot_service import MaterialSlotService
+
+    schema, pool = db
+    await run_migrations()
+
+    async with _conn(schema, pool) as connection:
+        await _seed_slot_row(connection, "gate-unresolved", fiscal_year=None, mapping_key="")
+        await _seed_slot_row(connection, "gate-resolved")
+
+        service = MaterialSlotService(connection)
+        first = await service.mark_not_applicable("gate-unresolved", note="依据 A")
+        second = await service.mark_not_applicable("gate-resolved", note="依据 B")
+
+        assert first["status"] == "mapping_required"
+        assert first["status_reason"] == "identity_unresolved"
+        assert second["status"] == "not_applicable"
+        # 事实都写进去了，状态差异来自身份是否完整
+        written = await connection.fetch(
+            "SELECT slot_key, applicability_status FROM material_slots ORDER BY slot_key"
+        )
+        assert {row["applicability_status"] for row in written} == {"not_applicable"}
+
+
+# ---- 真库用例的共享夹具 -----------------------------------------------------
+
+_ORG_RECORDS = [
+    {"id": "district-1", "name": "普陀区", "level": "district", "parent_id": None},
+    {
+        "id": "dept-1",
+        "name": "上海市普陀区规划和自然资源局",
+        "level": "department",
+        "parent_id": "district-1",
+    },
+    {
+        "id": "unit-org-1",
+        "name": "上海市普陀区规划和自然资源局本级",
+        "level": "unit",
+        "parent_id": "dept-1",
+    },
+]
+
+
+def _metadata_for(*, version_prefix: str) -> Dict[str, Any]:
+    return {
+        "organization_id": "unit-org-1",
+        "organization_name": "上海市普陀区规划和自然资源局本级",
+        "report_year": "2024",
+        "report_kind": "final",
+        "doc_type": "dept_final",
+        "filename": f"{version_prefix}-单位决算.pdf",
+    }
+
+
+async def _seed_version(connection: Any, *, prefix: str) -> int:
+    org_unit_id = await connection.fetchval(
+        "INSERT INTO org_units (org_name) VALUES ($1) RETURNING id", f"{prefix} 测试单位"
+    )
+    document_id = await connection.fetchval(
+        """
+        INSERT INTO fiscal_documents (org_unit_id, fiscal_year, doc_type)
+        VALUES ($1, 2024, 'dept_final') RETURNING id
+        """,
+        org_unit_id,
+    )
+    return await connection.fetchval(
+        """
+        INSERT INTO fiscal_document_versions (document_id, file_hash, storage_key)
+        VALUES ($1, $2, $3) RETURNING id
+        """,
+        document_id,
+        f"{prefix}-hash",
+        f"job-{prefix}/file.pdf",
+    )
+
+
+async def _seed_slot_row(
+    connection: Any,
+    slot_key: str,
+    *,
+    subject_org_id: str = "unit-org-1",
+    fiscal_year: Any = 2024,
+    mapping_key: str = "",
+    subject_kind: str = "unit",
+    material_scope: str = "unit_self",
+    report_kind: str = "final",
+) -> str:
+    """落一条槽位行。
+
+    需要多条槽位时**必须**让 ``subject_org_id`` 或年份、文种互不相同：
+    复合唯一索引会拒绝同一身份的第二次插入（这正是它的职责），
+    夹具图省事复用同一身份只会撞在约束上。
+    """
+    return await connection.fetchval(
+        """
+        INSERT INTO material_slots (
+            slot_key, subject_org_id, subject_org_name,
+            subject_kind, subject_level, material_scope,
+            report_kind, fiscal_year, mapping_key
+        ) VALUES ($1, $2, '某单位', $3, $3, $4, $5, $6, $7)
+        RETURNING id::text
+        """,
+        slot_key,
+        subject_org_id,
+        subject_kind,
+        material_scope,
+        report_kind,
+        fiscal_year,
+        mapping_key,
+    )
 
 
 def _insert_sql(slot_key: str) -> str:
