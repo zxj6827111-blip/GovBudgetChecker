@@ -46,12 +46,20 @@ def _infer_report_kind(doc: Document) -> str:
     此前这里有独立的第三份实现：整条 ``doc.path`` 做关键词匹配，并在
     识别不到时兜底 ``"final"``。整串路径匹配有问题——仓库目录名
     ``GovBudgetChecker`` 自带 "Budget"，会让任何材料被判成预算；兜底 final
-    则把"不知道"伪装成"知道了"。现在统一走画像解析器：只看文件名基名与
-    正文首页，识别不到就是 ``"unknown"``。
+    则把"不知道"伪装成"知道了"。
 
-    本函数的唯一调用方按 ``budget`` / 其它 二分支选择锚点集合，
-    因此把兜底从 ``"final"`` 改成 ``"unknown"`` 不改变锚点选择结果。
+    现在的取值顺序（独立验收 2026-09-17 kind_disagreement 反例整改）：
+
+    1. **消费执行入口一次解析的结论** ``doc.report_kind``——同一份材料
+       在 pipeline 与通用规则里不允许得出互斥文种；
+    2. 没有挂接结论时（如单测直接构造 Document），才按"文件名基名 +
+       正文首页"推断；识别不到就是 ``"unknown"``，不兜底。
+
+    本函数的唯一调用方按 ``budget`` / 其它 二分支选择锚点集合。
     """
+    attached = str(getattr(doc, "report_kind", "") or "").strip().lower()
+    if attached in {"budget", "final"}:
+        return attached
     return resolve_report_kind_from_path(
         str(getattr(doc, "path", "") or ""),
         _page_texts(doc),

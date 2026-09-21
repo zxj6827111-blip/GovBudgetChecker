@@ -55,11 +55,22 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
+from src.engine.rule_outcome import (
+    STATUS_EXECUTION_ERROR,
+    STATUS_FAIL,
+    STATUS_INSUFFICIENT_DATA,
+    STATUS_NOT_APPLICABLE,
+    STATUS_PARSE_ERROR,
+    STATUS_PASS,
+)
 from src.schemas.document_profile import DocumentProfile
 
 #: 义务清单版本。清单增删条目、调整 checkers 或适用条件时必须递增，
 #: 否则历史结论无法回答"当时是按哪版要求判定已检查完整的"。
-OBLIGATION_CATALOG_VERSION = "obligations-v1"
+#: v2（2026-09-17 独立验收整改）：拆出零基数同比复算缺口（OBL-TREND-ZERO-BASE），
+#: 收窄 OBL-TREND-COMPARATIVE-LOGIC 的 basis 使其与 CMM-005 实际能力一致，
+#: 文种冲突单独登记为阻塞实例（OBL-PROFILE-KIND-CONFLICT）。
+OBLIGATION_CATALOG_VERSION = "obligations-v2"
 
 # ---- 实例状态 ---------------------------------------------------------------
 
@@ -71,6 +82,7 @@ OBLIGATION_INSUFFICIENT_DATA = "insufficient_data"
 OBLIGATION_PARSE_AMBIGUITY = "parse_ambiguity"
 OBLIGATION_EXECUTION_ERROR = "execution_error"
 OBLIGATION_PROFILE_UNRESOLVED = "profile_unresolved"
+OBLIGATION_KIND_CONFLICT = "kind_conflict"
 OBLIGATION_AI_NOT_RUN = "ai_not_run"
 OBLIGATION_AI_FAILED = "ai_failed"
 
@@ -83,6 +95,7 @@ UNRESOLVED_OBLIGATION_STATUSES: FrozenSet[str] = frozenset(
         OBLIGATION_PARSE_AMBIGUITY,
         OBLIGATION_EXECUTION_ERROR,
         OBLIGATION_PROFILE_UNRESOLVED,
+        OBLIGATION_KIND_CONFLICT,
         OBLIGATION_AI_NOT_RUN,
         OBLIGATION_AI_FAILED,
     }
@@ -96,6 +109,7 @@ OBLIGATION_REASON_LABELS: Dict[str, str] = {
     OBLIGATION_PARSE_AMBIGUITY: "解析歧义",
     OBLIGATION_EXECUTION_ERROR: "执行异常",
     OBLIGATION_PROFILE_UNRESOLVED: "画像未确认",
+    OBLIGATION_KIND_CONFLICT: "文种冲突待确认",
     OBLIGATION_AI_NOT_RUN: "语义模型未执行",
     OBLIGATION_AI_FAILED: "语义模型失败",
 }
@@ -106,6 +120,20 @@ _RULE_STATUS_TO_OBLIGATION_REASON: Dict[str, str] = {
     "parse_error": OBLIGATION_PARSE_AMBIGUITY,
     "execution_error": OBLIGATION_EXECUTION_ERROR,
 }
+
+#: 规则回执的合法终态（六态，取值来自 ``rule_outcome`` 的权威常量）。
+#: 台账只认这些：缺回执或状态不在六态内都算"未执行"，不能算完成——
+#: "某义务需要两条规则、只来了一张 pass 回执"不允许被记成整单完成。
+KNOWN_RULE_STATUSES: FrozenSet[str] = frozenset(
+    {
+        STATUS_PASS,
+        STATUS_FAIL,
+        STATUS_NOT_APPLICABLE,
+        STATUS_INSUFFICIENT_DATA,
+        STATUS_PARSE_ERROR,
+        STATUS_EXECUTION_ERROR,
+    }
+)
 
 # ---- 义务分组 ---------------------------------------------------------------
 
@@ -570,18 +598,46 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
     Obligation(
         obligation_id="OBL-TREND-DIRECTION",
         group_id=GROUP_TREND,
-        title="同比方向与增减表述一致性（含相反方向残留）",
+        title="同比方向与增减表述一致性",
         report_kinds=_BOTH,
         checkers_by_kind=_both(("CMM-006", "V33-245"), ("CMM-006",)),
-        basis="增减方向、数额与文字表述不得互相矛盾（如'减少…增加'）",
+        # basis 与 checker 实际能力对齐（独立验收 2026-09-17：不得用规则
+        # 名或规则存在证明语义覆盖）：CMM-006 查同页收入/支出方向矛盾，
+        # V33-245 查三公经费说明内增减方向与"持平"表述的矛盾。
+        basis="同页收入/支出同比方向不得互相矛盾；三公经费说明内增减方向与持平表述不得矛盾",
     ),
     Obligation(
         obligation_id="OBL-TREND-COMPARATIVE-LOGIC",
         group_id=GROUP_TREND,
-        title="同比表述逻辑（零基数、持平、模板残留、原因缺失）",
+        title="同比表述异常（模板残留、增减原因缺失、零值口径矛盾、预决算方向矛盾）",
         report_kinds=_BOTH,
         checkers_by_kind=_both(("CMM-005",), ("CMM-005",)),
-        basis="零基数不得表述为增长百分比；增减须写明原因且原因不得截断",
+        # basis 收窄到 CMM-005 已实现的三类子检查 + 预决算方向比对。
+        # 原版 basis 声称的"零基数不得表述为增长百分比"需要基期/本期
+        # 金额复算，CMM-005 并未实现——该子能力拆到 OBL-TREND-ZERO-BASE。
+        basis=(
+            "“增加（减少）”等模板残留须报告；“主要原因是”后不得缺失说明；"
+            "当前金额为0却写“比上年增加”属口径矛盾；预算数与决算数的增减方向须与金额一致"
+        ),
+    ),
+    Obligation(
+        obligation_id="OBL-TREND-ZERO-BASE",
+        group_id=GROUP_TREND,
+        title="同比基期/本期/增减额与增长百分比的确定性复算（零基数）",
+        report_kinds=_BOTH,
+        # 样张真实漏报（独立验收 2026-09-17 反例）：宜川接待费 0.30 万元、
+        # 增加 0.30 万元，文旅接待费 0.40 万元、增加 0.40 万元，两份材料
+        # 都写“增长100%”——本期等于增加额说明基期为 0，此时不存在可比
+        # 增长率。CMM-005 只查“当前为0却写增加”，覆盖不了这一类。
+        pending_checkers=("CMM-007",),
+        basis=(
+            "本期金额等于增加金额时基期为0，不得表述为“增长X%”；"
+            "增减额与增长百分比须可由基期/本期金额复算"
+        ),
+        gap_note=(
+            "缺少“基期=本期-增减额”的复算检查：本期=增加额（基期为0）"
+            "却写“增长100%”的表述未报告（样张：宜川 0.30/0.30、文旅 0.40/0.40）"
+        ),
     ),
     Obligation(
         obligation_id="OBL-TREND-COMPLETION-RATE",
@@ -947,6 +1003,36 @@ def expand_obligations(
     if profile is not None and not profile.is_fully_resolved:
         notes.append(f"profile_status={profile.profile_status}")
 
+    # 文种冲突单独记账并阻塞（独立验收 2026-09-17 P1“画像冲突不闭合”）：
+    # 有互斥候选时，按优先级取的文种只是“候选选择”，不是“已确认”。
+    # 不登记的话，报告里写着“文种冲突，需人工确认”，台账与质量门却
+    # 显示检查完整，冲突永远到不了人工面前。
+    if profile is not None and profile.has_kind_conflict:
+        # 只列与所选文种互斥的候选：与所选同值的落选候选是"同向证据"，列进
+        # "其余候选"会把冲突份量和一致份量混在一起，人工反而不容易判断。
+        candidates = "、".join(
+            f"{item.get('source')}={item.get('value')}"
+            for item in profile.report_kind.rejected
+            if item.get("value") and str(item.get("value")) != kind
+        )
+        instances.append(
+            ObligationInstance(
+                obligation_id="OBL-PROFILE-KIND-CONFLICT",
+                group_id=GROUP_STRUCTURE,
+                group_title=OBLIGATION_GROUP_TITLES[GROUP_STRUCTURE],
+                title="文种冲突人工确认",
+                status=OBLIGATION_KIND_CONFLICT,
+                reason=OBLIGATION_KIND_CONFLICT,
+                detail=(
+                    f"同一材料出现互斥文种候选（已取 {kind}），"
+                    f"其余候选：{candidates or '见画像 conflicts'}，需人工确认文种后复跑"
+                ),
+                evidence_kind=EVIDENCE_DOCUMENT_LEVEL,
+                basis="文种决定整套专项检查配置；存在互斥候选而未确认时，检查范围不可信",
+            )
+        )
+        notes.append("report_kind_conflict: 文种存在互斥候选，需人工确认")
+
     for item in _select_obligations(kind):
         if item.subject_levels and level != "unknown" and level not in item.subject_levels:
             instances.append(
@@ -1066,33 +1152,52 @@ def _resolve_rule_backed(
         instance.detail = f"部分子检查尚无实现：{'/'.join(missing)}"
         return
 
-    observed = [statuses[item] for item in implemented if item in statuses]
-    if not observed:
+    # 逐条核对执行回执：每个必需 checker 都必须有**合法终态**才算完成。
+    # 独立验收 2026-09-17 partial_receipt 反例：OBL-TREND-DIRECTION 依赖
+    # CMM-006 与 V33-245，只提供 CMM-006=pass 时旧逻辑同样记 completed。
+    # 缺执行、缺回执不能虚增完成数——缺哪条就点名哪条。
+    missing_receipts = tuple(item for item in implemented if item not in statuses)
+    unknown_receipts = tuple(
+        item
+        for item in implemented
+        if item in statuses and statuses[item] not in KNOWN_RULE_STATUSES
+    )
+    if missing_receipts or unknown_receipts:
+        parts: List[str] = []
+        if missing_receipts:
+            parts.append(f"无执行回执（{'/'.join(missing_receipts)}）")
+        if unknown_receipts:
+            parts.append(f"回执状态不在六态内（{'/'.join(unknown_receipts)}）")
         instance.status = OBLIGATION_NOT_EXECUTED
         instance.reason = OBLIGATION_NOT_EXECUTED
         instance.detail = (
-            f"适用规则（{'/'.join(implemented)}）本次没有执行回执，"
-            "无法证明该检查已执行"
+            f"适用规则未全部拿到合法终态：{'；'.join(parts)}，不能据此认定该检查已完成"
         )
         return
 
+    observed = {item: statuses[item] for item in implemented}
+
     for rule_status, mapped in _RULE_STATUS_TO_OBLIGATION_REASON.items():
-        hit = [item for item in implemented if statuses.get(item) == rule_status]
+        hit = [item for item in implemented if observed[item] == rule_status]
         if hit:
             instance.status = mapped
             instance.reason = mapped
             instance.detail = f"规则 {'/'.join(hit)} 判定为 {rule_status}"
             return
 
-    if all(statuses.get(item) == "not_applicable" for item in implemented):
+    if all(observed[item] == "not_applicable" for item in implemented):
         # 规则自己判定不适用：这是有依据的排除，但仍需写明是哪条规则给的依据。
         instance.status = OBLIGATION_NOT_APPLICABLE
         instance.detail = f"规则 {'/'.join(implemented)} 判定本次材料不适用"
         instance.blocks_gate = False
         return
 
+    # 剩下的组合（pass / fail / not_applicable 的混合）说明每条 checker
+    # 都执行并到达了合法终态，检查已完成；逐条写明结果，避免"部分
+    # 不适用"被读成"整单不适用"而悄悄掉出完成率分母。
+    outcome_summary = "、".join(f"{item}={observed[item]}" for item in implemented)
     instance.status = OBLIGATION_COMPLETED
-    instance.detail = f"规则 {'/'.join(implemented)} 已得出可信结论"
+    instance.detail = f"规则已全部执行并到达终态：{outcome_summary}"
 
 
 def _resolve_ai_backed(

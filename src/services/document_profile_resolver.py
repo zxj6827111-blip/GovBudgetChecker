@@ -452,6 +452,18 @@ def resolve_document_profile(
     if resolved_kind == "unknown":
         profile_status = PROFILE_STATUS_UNRESOLVED
         unsupported_reason = "report_kind_unresolved"
+    elif conflicts:
+        # 文种有取值，但存在互斥候选：按优先级取的只是"候选选择"，
+        # 不是"已确认"（独立验收 2026-09-17 conflicting_profile 反例：
+        # 画像记录了"文种冲突，需人工确认"，profile_status 却是 resolved）。
+        # conflicts 目前只有 report_kind 维度会写入；将来其他维度记录冲突
+        # 时，这里按字段过滤，避免误伤。
+        profile_status = PROFILE_STATUS_PARTIAL
+        unsupported_reason = (
+            "report_kind_conflict"
+            if any(str(item.get("field")) == "report_kind" for item in conflicts)
+            else None
+        )
     elif resolved_level == "unknown":
         profile_status = PROFILE_STATUS_PARTIAL
         unsupported_reason = None

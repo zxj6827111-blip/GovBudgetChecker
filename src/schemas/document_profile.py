@@ -182,6 +182,18 @@ class DocumentProfile(BaseModel):
     def is_fully_resolved(self) -> bool:
         return self.profile_status == PROFILE_STATUS_RESOLVED
 
+    @property
+    def has_kind_conflict(self) -> bool:
+        """文种维度是否存在互斥候选。
+
+        有取值但存在不同值的落选候选时为真——此时 ``report_kind.value``
+        只是"按来源优先级选择的候选"，不是"已确认的结论"，下游必须
+        让人工确认，不能对外表达为"已解决"。
+        """
+        return any(
+            str(item.get("field") or "") == "report_kind" for item in self.conflicts
+        )
+
     def fund_scope_values(self) -> List[str]:
         raw = self.fund_scopes.value
         if not isinstance(raw, (list, tuple)):

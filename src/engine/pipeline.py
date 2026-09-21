@@ -62,8 +62,8 @@ def _resolve_report_kind(doc: Any, report_kind: Optional[str] = None) -> str:
     )
 
 
-def _select_rule_set(doc: Any, report_kind: Optional[str] = None) -> List[Any]:
-    kind = _resolve_report_kind(doc, report_kind)
+def _rule_set_for_kind(kind: str) -> List[Any]:
+    """按文种选择专项规则集。识别不了文种就不选专项规则，只跑通用规则。"""
     if kind == "budget":
         return ALL_BUDGET_RULES
     if kind == "final":
@@ -94,16 +94,25 @@ def run_rules_with_outcomes(
       部分子检查 not_applicable 绝不能覆盖已确认的 fail；
     - 未完成状态供质量门 fail-closed 判定与回放评测消费。
     """
+    resolved_kind = _resolve_report_kind(doc, report_kind)
+    # 一次解析、全程消费：把文种结论挂到文档上，规则体（如 CMM-003 的
+    # 锚点选择）读同一个值，不再各自用不同输入重新猜。独立验收
+    # 2026-09-17 kind_disagreement 反例：显式指定 final、文件名与正文为
+    # "部门预算"的材料，主流程判 final，通用规则却按文件名判 budget——
+    # 同一份 PDF 在两个环节拿到互斥的检查配置。
+    if doc is not None:
+        doc.report_kind = resolved_kind
+
     if rules is not None:
         selected_rules = list(rules)
     else:
         selected_rules = [
-            *_select_rule_set(doc, report_kind=report_kind),
+            *_rule_set_for_kind(resolved_kind),
             *ALL_COMMON_RULES,
         ]
     issues: List[Issue] = []
     outcomes: List[RuleOutcome] = []
-    if _resolve_report_kind(doc, report_kind) == "unknown":
+    if resolved_kind == "unknown":
         issues.append(
             Issue(
                 rule="DOC-TYPE-UNKNOWN",

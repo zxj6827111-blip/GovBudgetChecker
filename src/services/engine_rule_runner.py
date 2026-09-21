@@ -221,8 +221,13 @@ class EngineRuleRunner:
         """
         # Prepare document object and select rules by report kind.
         document = await self._prepare_document(job_context)
-        selected_rules = self._select_rule_set(job_context, document)
         report_kind = self._resolve_report_kind(job_context, document)
+        # 一次解析、全程消费：文种结论挂到文档上，规则体（如 CMM-003 的
+        # 锚点选择）读同一个值，不再按文件名重新猜（与 pipeline 同一纪律，
+        # 独立验收 2026-09-17 kind_disagreement 反例整改）。
+        if document is not None:
+            document.report_kind = report_kind
+        selected_rules = self._select_rule_set(job_context, document)
         # 版本留痕（P2-02）：本次实际生效的规则集版本，逐条写进 finding。
         rule_version = str(getattr(config, "rules_version", "") or "").strip() or None
 
