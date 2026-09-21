@@ -50,6 +50,42 @@ _PREDICATE_PATTERNS: Tuple[Tuple[re.Pattern, str], ...] = (
     (re.compile(r"^(?P<column>[a-z_]+) = ANY\(\$(?P<index>\d+)::text\[\]\)$"), "any"),
 )
 
+#: 权限范围的三列 OR 组：``(a = ANY($1::text[]) OR b = ANY($1::text[]) OR c = ANY($1::text[]))``。
+#: 三列共用同一个数组参数，任意一列命中即可见 —— 与真库谓词逐字对应。
+_ANY_OR_GROUP_RE = re.compile(
+    r"^\(\s*(?P<first>[a-z_]+) = ANY\(\$(?P<index>\d+)::text\[\]\)"
+    r"\s+OR\s+[a-z_]+ = ANY\(\$\d+::text\[\]\)"
+    r"\s+OR\s+[a-z_]+ = ANY\(\$\d+::text\[\]\)\s*\)$"
+)
+
+
+def _split_top_level(clause: str, separator: str = " AND ") -> List[str]:
+    """按顶层分隔符切分，括号内的分隔符不算。
+
+    权限谓词本身是 ``(a = ANY(...) OR b = ANY(...) OR c = ANY(...))``，
+    里面没有 AND，但括号深度必须被跟踪：否则将来把 OR 组换成嵌套写法时
+    会把它切碎，测试假连接会给出与真库相反的结果。
+    """
+    parts: List[str] = []
+    depth = 0
+    current: List[str] = []
+    index = 0
+    while index < len(clause):
+        char = clause[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        if depth == 0 and clause.startswith(separator, index):
+            parts.append("".join(current).strip())
+            current = []
+            index += len(separator)
+            continue
+        current.append(char)
+        index += 1
+    parts.append("".join(current).strip())
+    return [part for part in parts if part]
+
 
 def make_slot(**overrides: Any) -> Dict[str, Any]:
     """构造一条内存槽位行（字段与真库列一一对应）。"""
@@ -120,8 +156,18 @@ def _predicates(sql: str, args: Iterable[Any]) -> List[Any]:
     if clause == "TRUE":
         return []
     predicates: List[Any] = []
-    for raw in clause.split(" AND "):
-        fragment = raw.strip()
+    for fragment in _split_top_level(clause):
+        group = _ANY_OR_GROUP_RE.match(fragment)
+        if group is not None:
+            column = group.group("first")
+            allowed = list(params[int(group.group("index")) - 1])
+            # 只校验首列名，但语义是"三列任意一列命中"：三列各写一份判定。
+            columns = _any_or_group_columns(fragment)
+            predicates.append(
+                lambda row, cols=columns, a=allowed: any(row.get(c) in a for c in cols)
+            )
+            assert column == columns[0]
+            continue
         for pattern, kind in _PREDICATE_PATTERNS:
             match = pattern.match(fragment)
             if match is None:
@@ -137,6 +183,11 @@ def _predicates(sql: str, args: Iterable[Any]) -> List[Any]:
         else:
             raise UnknownLedgerSqlError(f"假连接不认识的谓词: {fragment!r}")
     return predicates
+
+
+def _any_or_group_columns(fragment: str) -> List[str]:
+    """取出 OR 组里参与判定的列名（按出现顺序）。"""
+    return re.findall(r"([a-z_]+) = ANY\(\$\d+::text\[\]\)", fragment)
 
 
 def _matches(sql: str, args: Iterable[Any], row: Dict[str, Any]) -> bool:
@@ -158,6 +209,7 @@ def _group_rows(
     columns: List[str],
     *,
     include_jurisdiction_unknown: bool,
+    include_not_due_confirmed: bool,
     include_max_names: Iterable[str],
 ) -> List[Dict[str, Any]]:
     """按分组列聚合，输出列名与真库 SELECT 别名一致。"""
@@ -170,6 +222,8 @@ def _group_rows(
             bucket = {column: row.get(column) for column in columns}
             bucket["slot_count"] = 0
             bucket["due_at_unknown_count"] = 0
+            if include_not_due_confirmed:
+                bucket["not_due_confirmed_count"] = 0
             for name in max_columns:
                 bucket[name] = None
             if include_jurisdiction_unknown:
@@ -178,6 +232,11 @@ def _group_rows(
         bucket["slot_count"] += 1
         if row.get("due_at") is None:
             bucket["due_at_unknown_count"] += 1
+        # 与 SQL 的 FILTER 逐字对应：两个条件同时成立才算"确认未到期"。
+        if include_not_due_confirmed and (
+            row.get("status") == "not_due" and row.get("status_reason") == "due_not_reached"
+        ):
+            bucket["not_due_confirmed_count"] += 1
         if include_jurisdiction_unknown and row.get("jurisdiction_org_id") is None:
             bucket["jurisdiction_unknown_count"] += 1
         for name in max_columns:
@@ -268,6 +327,7 @@ class FakeLedgerConnection:
                 hit,
                 columns,
                 include_jurisdiction_unknown="jurisdiction_unknown_count" in normalized,
+                include_not_due_confirmed="not_due_confirmed_count" in normalized,
                 include_max_names=[
                     name
                     for name in ("jurisdiction_name", "department_name", "updated_at")

@@ -430,8 +430,8 @@ async def test_covered_route_filters_execute_on_real_postgres(seeded):
             MaterialSlotFilters(report_kind="budget"),
             MaterialSlotFilters(status="missing"),
             MaterialSlotFilters(jurisdiction_id=DISTRICT),
-            MaterialSlotFilters(jurisdiction_ids=[DISTRICT, OTHER_DISTRICT]),
-            MaterialSlotFilters(jurisdiction_ids=[]),
+            MaterialSlotFilters(visible_org_ids=[DEPT, HEAD_UNIT]),
+            MaterialSlotFilters(visible_org_ids=[]),
             MaterialSlotFilters(department_id=DEPT),
             MaterialSlotFilters(
                 fiscal_year=2025, report_kind="final", status="review_required", jurisdiction_id=DISTRICT
@@ -441,6 +441,87 @@ async def test_covered_route_filters_execute_on_real_postgres(seeded):
             assert data.summary.slot_total >= 0
             assert sum(data.summary.status_counts.model_dump().values()) == data.summary.slot_total
 
-        empty = await service.coverage(filters=MaterialSlotFilters(jurisdiction_ids=[]))
+        empty = await service.coverage(filters=MaterialSlotFilters(visible_org_ids=[]))
         assert empty.summary.slot_total == 0, "空授权范围必须查出 0 条，而不是不过滤"
         assert empty.districts == []
+
+
+# ---- 权限过滤在真实 PostgreSQL 上的行为 -------------------------------------
+
+
+async def test_department_visible_scope_excludes_sibling_departments_in_real_sql(seeded):
+    """部门级可见范围：只带出本部门及其后代，兄弟部门/其它区的行不得出现。
+
+    这里验证的是新增的三列 OR 谓词
+    （``jurisdiction_org_id OR department_org_id OR subject_org_id``）
+    在 PostgreSQL 上真的成立：写成 AND 会让本用例一条都查不出来，
+    不写权限谓词则会让兄弟部门的行漏出来。
+    """
+    schema, pool = seeded
+    visible = [DEPT, HEAD_UNIT, SUB_UNIT]
+    async with _conn(schema, pool) as conn:
+        service = MaterialLedgerQueryService(conn)
+
+        coverage = await service.coverage(
+            filters=MaterialSlotFilters(fiscal_year=2025, visible_org_ids=visible)
+        )
+        data, total = await service.district_departments(
+            district_id=DISTRICT,
+            district_name="上海市普陀区",
+            filters=MaterialSlotFilters(fiscal_year=2025, visible_org_ids=visible),
+        )
+
+    # 可见集合内的槽位：部门汇总 1 + 本部 1 + 执法大队 1 + 7 个样例单位 = 10
+    # （政府级、无归属、静安区、2024 年度四条都不在范围内）
+    assert coverage.summary.slot_total == 10
+    assert coverage.summary.budget_total == 8
+    assert coverage.summary.final_total == 1
+    assert coverage.summary.unknown_kind_total == 1
+    assert (
+        coverage.summary.budget_total
+        + coverage.summary.final_total
+        + coverage.summary.unknown_kind_total
+        == 10
+    )
+    assert coverage.summary.jurisdiction_unknown_total == 0, "无归属槽位对受限账号不可见"
+    assert [item.district_name for item in coverage.districts] == ["上海市普陀区"]
+
+    assert total == 1, "只应剩下规划局一行（静安区民政局不得出现）"
+    assert [item.department_id for item in data.items] == [DEPT]
+    assert data.items[0].subject_count == 10
+
+
+async def test_unit_visible_scope_excludes_sibling_units_in_real_sql(seeded):
+    """单位级可见范围：只带出该单位自己的槽位。
+
+    部门汇总、本部单位、以及同部门的其它单位都不在可见集合里，
+    因此既不能出现在首页统计里，也不能出现在父部门的矩阵分组里。
+    """
+    schema, pool = seeded
+    visible = [SUB_UNIT]
+    async with _conn(schema, pool) as conn:
+        service = MaterialLedgerQueryService(conn)
+
+        coverage = await service.coverage(
+            filters=MaterialSlotFilters(fiscal_year=2025, visible_org_ids=visible)
+        )
+        matrix = await service.department_matrix(
+            department_id=DEPT,
+            fiscal_year=2025,
+            department_name="上海市普陀区规划和自然资源局",
+            visible_org_ids=visible,
+        )
+
+    assert coverage.summary.slot_total == 1, "执法大队在可迁移样例里只有一条（文种未识别那条）"
+    assert coverage.summary.unknown_kind_total == 1
+    assert coverage.summary.budget_total == 0 and coverage.summary.final_total == 0
+
+    assert matrix.groups.department_summary == [], "部门汇总材料不属于本单位可见范围"
+    assert matrix.groups.head_unit == [], "本部单位不是自己"
+    assert [row.subject_org_id for row in matrix.groups.subordinate_units] == [SUB_UNIT]
+    subject_ids = {
+        row.subject_org_id
+        for rows in matrix.groups.__dict__.values()
+        for row in rows
+    }
+    assert subject_ids == {SUB_UNIT}, "同一部门的其它单位不得出现"

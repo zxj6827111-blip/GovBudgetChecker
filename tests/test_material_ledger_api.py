@@ -35,6 +35,7 @@ EARLIER = NOW - timedelta(days=30)
 DEPT_NAME = "上海市普陀区规划和自然资源局"
 HEAD_UNIT_NAME = "上海市普陀区规划和自然资源局本级"
 SUB_UNIT_NAME = "上海市普陀区规划和自然资源局执法大队"
+SIBLING_UNIT_NAME = "上海市普陀区规划和自然资源局事务中心"
 
 
 # ---- 夹具 -------------------------------------------------------------------
@@ -69,6 +70,7 @@ def org_tree(tmp_path, monkeypatch):
     dept = _add_org(storage, DEPT_NAME, "department", district)
     head_unit = _add_org(storage, HEAD_UNIT_NAME, "unit", dept)
     sub_unit = _add_org(storage, SUB_UNIT_NAME, "unit", dept)
+    sibling_unit = _add_org(storage, SIBLING_UNIT_NAME, "unit", dept)
     dept2 = _add_org(storage, "上海市普陀区民政局", "department", district)
     other_dept = _add_org(storage, "上海市静安区教育局", "department", other_district)
 
@@ -79,6 +81,7 @@ def org_tree(tmp_path, monkeypatch):
         "dept": dept,
         "head_unit": head_unit,
         "sub_unit": sub_unit,
+        "sibling_unit": sibling_unit,
         "dept2": dept2,
         "other_dept": other_dept,
     }
@@ -886,3 +889,290 @@ def test_database_unavailable_returns_503(client, ledger, monkeypatch):
     response = client.get("/api/materials/coverage")
 
     assert response.status_code == 503
+
+
+# ---- RBAC：department / unit 授权（与 tests/test_org_scope_rbac.py 同一套语义） ----
+
+
+def _scoped_token(client: TestClient, username: str, organization_ids: list[str]) -> dict[str, str]:
+    """建一个只授权给指定组织的普通用户并登录，返回请求头。"""
+    password = f"{username.title()}123"
+    admin_token = _login(client, "admin", ADMIN_PASSWORD)
+    _create_user(client, admin_token, username, password, organization_ids)
+    return _headers(_login(client, username, password))
+
+
+def _seed_sibling_unit_slot(fake_db, orgs) -> None:
+    """给"同部门下的兄弟单位"塞一条材料，用于 sibling 泄露反例。"""
+    fake_db.slots.append(
+        make_slot(
+            id="slot-sibling-unit",
+            slot_key="key-sibling-unit",
+            jurisdiction_org_id=orgs["district"],
+            jurisdiction_name="上海市普陀区",
+            department_org_id=orgs["dept"],
+            department_name=DEPT_NAME,
+            subject_org_id=orgs["sibling_unit"],
+            subject_org_name=SIBLING_UNIT_NAME,
+            subject_kind="unit",
+            material_scope="unit_self",
+            report_kind="final",
+            status="uploaded",
+            status_reason="awaiting_analysis",
+            updated_at=NOW,
+        )
+    )
+
+
+def test_department_scope_can_read_material_coverage(client, ledger, org_tree):
+    """部门授权账号必须能读首页（而不是 403）：既有 RBAC 允许 department scope。"""
+    headers = _scoped_token(client, "dept_reader", [org_tree["dept"]])
+
+    response = client.get("/api/materials/coverage", headers=headers)
+
+    assert response.status_code == 200, response.text
+    summary = response.json()["data"]["summary"]
+    assert summary["slot_total"] == 3, "部门汇总 + 本部决算 + 执法大队预算"
+
+
+def test_department_scope_coverage_excludes_sibling_departments(client, ledger, org_tree):
+    """只授权 dept-A：同区的 dept-B、其它区、以及无法归属的槽位都不得计入。"""
+    headers = _scoped_token(client, "dept_only", [org_tree["dept"]])
+
+    body = client.get("/api/materials/coverage", headers=headers).json()
+
+    summary = body["data"]["summary"]
+    assert summary["slot_total"] == 3
+    assert summary["final_total"] == 1 and summary["budget_total"] == 2
+    assert summary["jurisdiction_unknown_total"] == 0, "无法证明归属的槽位对非管理员不可见"
+    assert [item["district_name"] for item in body["data"]["districts"]] == ["上海市普陀区"]
+    assert body["data"]["districts"][0]["slot_total"] == 3
+
+
+def test_department_scope_can_open_parent_district_with_filtered_rows(client, ledger, org_tree):
+    """父区县页可作导航容器打开，但只出现被授权部门那一行。"""
+    headers = _scoped_token(client, "dept_container", [org_tree["dept"]])
+
+    response = client.get(
+        f"/api/materials/districts/{org_tree['district']}/departments", headers=headers
+    )
+
+    assert response.status_code == 200, response.text
+    items = response.json()["data"]["items"]
+    assert [item["department_id"] for item in items] == [org_tree["dept"]]
+    assert items[0]["slot_total"] == 3
+    assert items[0]["subject_count"] == 3, "部门本身 + 本部单位 + 执法大队"
+
+
+def test_department_scope_department_matrix_includes_children(client, ledger, org_tree):
+    """部门授权 -> 可以看本部门及其下属单位（既有"授权节点可访问后代"语义）。"""
+    headers = _scoped_token(client, "dept_matrix", [org_tree["dept"]])
+
+    response = client.get(
+        f"/api/materials/departments/{org_tree['dept']}/matrix?fiscal_year=2025", headers=headers
+    )
+
+    assert response.status_code == 200, response.text
+    groups = response.json()["data"]["groups"]
+    assert [row["subject_org_id"] for row in groups["department_summary"]] == [org_tree["dept"]]
+    assert [row["subject_org_id"] for row in groups["head_unit"]] == [org_tree["head_unit"]]
+    assert [row["subject_org_id"] for row in groups["subordinate_units"]] == [org_tree["sub_unit"]]
+
+
+def test_unit_scope_can_read_material_coverage(client, ledger, org_tree):
+    """单位授权账号同样必须能读首页。"""
+    headers = _scoped_token(client, "unit_reader", [org_tree["sub_unit"]])
+
+    response = client.get("/api/materials/coverage", headers=headers)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["summary"]["slot_total"] == 1
+
+
+def test_unit_scope_coverage_contains_only_own_unit(client, ledger, fake_db, org_tree):
+    """单位授权只统计自己：不得出现部门汇总、本部单位、兄弟单位。"""
+    _seed_sibling_unit_slot(fake_db, org_tree)
+    headers = _scoped_token(client, "unit_only", [org_tree["sub_unit"]])
+
+    body = client.get("/api/materials/coverage", headers=headers).json()
+
+    summary = body["data"]["summary"]
+    assert summary["slot_total"] == 1
+    assert summary["budget_total"] == 1 and summary["final_total"] == 0
+    assert summary["status_counts"]["missing"] == 1, "自己那条材料的状态必须仍然可见"
+    assert body["data"]["districts"][0]["slot_total"] == 1, "区县卡片只由本单位产生"
+
+
+def test_unit_scope_parent_district_does_not_leak_siblings(client, ledger, fake_db, org_tree):
+    """单位授权可以进父区县页导航，但行内数字只能由本单位产生。"""
+    _seed_sibling_unit_slot(fake_db, org_tree)
+    headers = _scoped_token(client, "unit_district", [org_tree["sub_unit"]])
+
+    response = client.get(
+        f"/api/materials/districts/{org_tree['district']}/departments", headers=headers
+    )
+
+    assert response.status_code == 200, response.text
+    items = response.json()["data"]["items"]
+    assert [item["department_id"] for item in items] == [org_tree["dept"]]
+    row = items[0]
+    assert row["subject_count"] == 1, "只覆盖本单位一个主体"
+    assert row["slot_total"] == 1
+    assert row["budget"]["slot_total"] == 1
+    assert row["final"]["slot_total"] == 0, "兄弟单位的决算槽位不得混入"
+
+
+def test_unit_scope_parent_department_matrix_contains_only_own_unit(client, ledger, org_tree):
+    """单位授权进入父部门矩阵：只能看到自己，看不到部门汇总 / 本部 / 兄弟单位。"""
+    headers = _scoped_token(client, "unit_matrix", [org_tree["sub_unit"]])
+
+    response = client.get(
+        f"/api/materials/departments/{org_tree['dept']}/matrix?fiscal_year=2025", headers=headers
+    )
+
+    assert response.status_code == 200, response.text
+    groups = response.json()["data"]["groups"]
+    assert groups["department_summary"] == [], "部门汇总材料不属于本单位授权范围"
+    assert groups["head_unit"] == [], "本部单位不是自己，不得出现"
+    assert [row["subject_org_id"] for row in groups["subordinate_units"]] == [org_tree["sub_unit"]]
+    assert groups["relationship_unknown"] == []
+
+
+def test_unit_scope_cannot_read_sibling_unit_materials(client, ledger, fake_db, org_tree):
+    """兄弟单位的材料对 unit-scope 账号完全不可见（既有 RBAC 语义：不横向泄露）。"""
+    _seed_sibling_unit_slot(fake_db, org_tree)
+    headers = _scoped_token(client, "unit_sibling", [org_tree["sub_unit"]])
+
+    body = client.get("/api/materials/coverage", headers=headers).json()
+    matrix = client.get(
+        f"/api/materials/departments/{org_tree['dept']}/matrix?fiscal_year=2025", headers=headers
+    ).json()
+
+    assert body["data"]["summary"]["slot_total"] == 1
+    assert body["data"]["summary"]["final_total"] == 0, "兄弟单位那条是决算材料"
+    subject_ids = {
+        row["subject_org_id"] for rows in matrix["data"]["groups"].values() for row in rows
+    }
+    assert subject_ids == {org_tree["sub_unit"]}
+
+
+def test_out_of_scope_container_still_returns_403(client, ledger, org_tree):
+    """容器概念只覆盖"自己所属的上级"，不覆盖别的区/部门。"""
+    headers = _scoped_token(client, "dept_outside", [org_tree["dept"]])
+
+    other_district = client.get(
+        f"/api/materials/districts/{org_tree['other_district']}/departments", headers=headers
+    )
+    other_department = client.get(
+        f"/api/materials/departments/{org_tree['other_dept']}/matrix?fiscal_year=2025",
+        headers=headers,
+    )
+
+    assert other_district.status_code == 403
+    assert other_department.status_code == 403
+
+
+def test_unattributable_slots_are_hidden_from_scoped_users(client, ledger, org_tree):
+    """fail-closed：无法证明归属的槽位（无区划、占位主体）对非管理员不可见，管理员可见。"""
+    headers = _scoped_token(client, "dept_failclosed", [org_tree["dept"]])
+
+    scoped = client.get("/api/materials/coverage", headers=headers).json()["data"]["summary"]
+    admin = client.get("/api/materials/coverage").json()["data"]["summary"]
+
+    assert scoped["slot_total"] == 3, "unresolved:abc 那条不能被非管理员看到"
+    assert admin["slot_total"] == 6, "管理员不受可见性过滤影响"
+    assert admin["jurisdiction_unknown_total"] == 1
+
+
+def test_same_name_department_and_head_unit_are_grouped_apart_via_api(client, fake_db, org_tree):
+    """完全同名（无"本级/本部"字样）的部门与本部单位，API 必须分到两组。"""
+    _seed_baseline(fake_db, org_tree)
+    fake_db.slots.append(
+        make_slot(
+            id="slot-same-name-head",
+            slot_key="key-same-name-head",
+            jurisdiction_org_id=org_tree["district"],
+            jurisdiction_name="上海市普陀区",
+            department_org_id=org_tree["dept"],
+            department_name=DEPT_NAME,
+            subject_org_id=org_tree["head_unit"],
+            # 与部门名完全一致：真实形态（财政局 / 同名本级单位）
+            subject_org_name=DEPT_NAME,
+            subject_kind="unit",
+            material_scope="unit_self",
+            report_kind="budget",
+            status="uploaded",
+            status_reason="awaiting_analysis",
+            updated_at=NOW,
+        )
+    )
+
+    groups = client.get(
+        f"/api/materials/departments/{org_tree['dept']}/matrix?fiscal_year=2025"
+    ).json()["data"]["groups"]
+
+    assert [row["subject_org_id"] for row in groups["head_unit"]] == [org_tree["head_unit"]]
+    assert groups["head_unit"][0]["relationship"] == "head_unit"
+    assert all(
+        row["subject_org_id"] != org_tree["head_unit"] for row in groups["subordinate_units"]
+    )
+    assert groups["department_summary"][0]["subject_org_id"] == org_tree["dept"], (
+        "部门与本级单位是不同的 subject_org_id，各自成行"
+    )
+
+
+def test_not_due_confirmed_separates_confirmed_from_unknown_deadline(client, fake_db, org_tree):
+    """due_not_reached 与 due_at_unknown 必须分别可见，不能都叫"未到期"。"""
+    fake_db.slots.extend(
+        [
+            make_slot(
+                id="slot-not-due-confirmed",
+                slot_key="key-not-due-confirmed",
+                jurisdiction_org_id=org_tree["district"],
+                jurisdiction_name="上海市普陀区",
+                department_org_id=org_tree["dept"],
+                department_name=DEPT_NAME,
+                subject_org_id=org_tree["sub_unit"],
+                subject_org_name=SUB_UNIT_NAME,
+                report_kind="budget",
+                status="not_due",
+                status_reason="due_not_reached",
+                due_at=NOW + timedelta(days=30),
+                updated_at=NOW,
+            ),
+            make_slot(
+                id="slot-not-due-unknown",
+                slot_key="key-not-due-unknown",
+                jurisdiction_org_id=org_tree["district"],
+                jurisdiction_name="上海市普陀区",
+                department_org_id=org_tree["dept2"],
+                department_name="上海市普陀区民政局",
+                subject_org_id=org_tree["dept2"],
+                subject_org_name="上海市普陀区民政局",
+                subject_kind="department",
+                material_scope="department_summary",
+                report_kind="final",
+                status="not_due",
+                status_reason="due_at_unknown",
+                due_at=None,
+                updated_at=NOW,
+            ),
+        ]
+    )
+
+    coverage = client.get("/api/materials/coverage").json()["data"]
+    district_rows = client.get(
+        f"/api/materials/districts/{org_tree['district']}/departments"
+    ).json()["data"]["items"]
+
+    summary = coverage["summary"]
+    assert summary["status_counts"]["not_due"] == 2, "状态机事实：两条都停在 not_due"
+    assert summary["not_due_confirmed"] == 1, "只有 due_not_reached 那条算确认未到期"
+    assert summary["due_at_unknown"] == 1
+
+    by_id = {item["department_id"]: item for item in district_rows}
+    confirmed_row = by_id[org_tree["dept"]]
+    unknown_row = by_id[org_tree["dept2"]]
+    assert confirmed_row["not_due_confirmed"] == 1 and confirmed_row["due_at_unknown"] == 0
+    assert unknown_row["not_due_confirmed"] == 0 and unknown_row["due_at_unknown"] == 1
+    assert unknown_row["not_due"] == 1, "底层 not_due 计数保持不变"

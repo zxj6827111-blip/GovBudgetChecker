@@ -15,6 +15,7 @@ from src.services.material_ledger_query_service import (
     MaterialSlotFilters,
     UnknownMaterialStatusError,
     is_head_unit_name,
+    normalize_org_name,
     relationship_of,
 )
 from support_material_ledger_db import make_matrix_row, make_slot
@@ -45,12 +46,38 @@ def test_report_kind_all_is_not_a_database_filter():
     assert params == []
 
 
-def test_empty_authorized_jurisdiction_list_matches_nothing():
-    """账号一个区划都没授权时，条件必须恒假，而不是退化成"不过滤"。"""
-    where, params = MaterialSlotFilters(jurisdiction_ids=[]).where()
+def test_empty_visible_org_scope_matches_nothing():
+    """账号一个组织都没授权时，条件必须恒假，而不是退化成"不过滤"。"""
+    where, params = MaterialSlotFilters(visible_org_ids=[]).where()
 
-    assert where == "jurisdiction_org_id = ANY($1::text[])"
-    assert params == [[]]
+    assert where == (
+        "(jurisdiction_org_id = ANY($1::text[])"
+        " OR department_org_id = ANY($1::text[])"
+        " OR subject_org_id = ANY($1::text[]))"
+    )
+    assert params == [[]]  # 空数组 → ANY 恒假 → 一条都查不出来
+
+
+def test_visible_org_scope_is_an_or_across_three_slot_levels():
+    """权限条件必须覆盖槽位的三个层次且是 OR。
+
+    写成 AND 会把 department / unit 授权全部误杀：部门级授权下槽位的 subject
+    往往是某个单位，单位级授权下 department 列同样不会命中被授权节点。
+    """
+    where, params = MaterialSlotFilters(visible_org_ids=["dept-a", "unit-a1"]).where()
+
+    assert " OR " in where
+    assert " AND department_org_id" not in where
+    for column in ("jurisdiction_org_id", "department_org_id", "subject_org_id"):
+        assert f"{column} = ANY($1::text[])" in where
+    assert params == [["dept-a", "unit-a1"]], "三列共用同一个数组参数"
+
+
+def test_admin_scope_adds_no_permission_clause():
+    where, params = MaterialSlotFilters(fiscal_year=2025).where()
+
+    assert where == "fiscal_year = $1"
+    assert params == [2025]
 
 
 # ---- 状态分桶 ---------------------------------------------------------------
@@ -153,6 +180,49 @@ def test_jurisdiction_less_slots_are_counted_but_not_shown_as_a_district_card():
     assert data.summary.jurisdiction_unknown_total == 1
 
 
+def test_not_due_confirmed_is_counted_separately_from_not_due_total():
+    """``not_due`` 是状态机事实，``not_due_confirmed`` 是"确认还没到期"的业务数字。
+
+    两个条件必须同时成立（``status='not_due'`` 且 ``reason='due_not_reached'``）；
+    "截止时间未知"的槽位也停在 not_due，因此不能算进"未到期"，
+    也不能用 ``not_due - due_at_unknown`` 在前端相减得出（due_at_unknown 可能与
+    任意状态并存）。
+    """
+    rows = [
+        {
+            "report_kind": "budget",
+            "status": "not_due",
+            "slot_count": 1,
+            "due_at_unknown_count": 0,
+            "not_due_confirmed_count": 1,
+            "jurisdiction_unknown_count": 0,
+        },
+        {
+            "report_kind": "budget",
+            "status": "not_due",
+            "slot_count": 1,
+            "due_at_unknown_count": 1,
+            "not_due_confirmed_count": 0,
+            "jurisdiction_unknown_count": 0,
+        },
+        {
+            "report_kind": "final",
+            "status": "uploaded",
+            "slot_count": 1,
+            "due_at_unknown_count": 1,
+            "not_due_confirmed_count": 0,
+            "jurisdiction_unknown_count": 0,
+        },
+    ]
+
+    summary = _aggregate([], rows).summary
+
+    assert summary.status_counts.not_due == 2, "状态机事实：两条都停在 not_due"
+    assert summary.not_due_confirmed == 1, "只有 due_not_reached 那条才算确认未到期"
+    assert summary.due_at_unknown == 2, "due_at IS NULL 是独立的数据质量指标"
+    assert summary.status_counts.uploaded == 1
+
+
 def test_district_order_is_by_name_then_id_regardless_of_input_order():
     rows = [
         {"jurisdiction_org_id": "d-b", "jurisdiction_name": "静安区", "report_kind": "budget", "status": "uploaded", "slot_count": 1, "due_at_unknown_count": 0},
@@ -240,6 +310,66 @@ def test_head_unit_name_detection(name, expected):
     assert is_head_unit_name(name) is expected
 
 
+def test_relationship_of_treats_same_name_unit_as_head_unit():
+    """部门与其本级单位可以**完全同名**：名称里没有"本级/本部"也要判为本部单位。
+
+    真实形态（见 app/tests/uploadCenterAdapters.test.ts 的同名反例）：
+    部门「上海市普陀区财政局」与单位「上海市普陀区财政局」，
+    名称完全相同、id 与 level 不同。只靠后缀会把本级单位错判成直属单位。
+    """
+    assert (
+        relationship_of(
+            subject_org_id="unit-caizheng-head",
+            department_id="dept-caizheng",
+            subject_kind="unit",
+            material_scope="unit_self",
+            subject_org_name="上海市普陀区财政局",
+            department_name="上海市普陀区财政局",
+        )
+        == "head_unit"
+    )
+
+
+def test_relationship_of_same_name_requires_department_name_evidence():
+    """没有部门名可比对时不猜：仅凭单位名无法证明它是本级，按直属单位处理。"""
+    assert (
+        relationship_of(
+            subject_org_id="unit-x",
+            department_id="dept-x",
+            subject_kind="unit",
+            material_scope="unit_self",
+            subject_org_name="上海市普陀区财政局",
+            department_name=None,
+        )
+        == "subordinate_unit"
+    )
+
+
+def test_relationship_of_still_prefers_explicit_marker_over_name_mismatch():
+    assert (
+        relationship_of(
+            subject_org_id="unit-y",
+            department_id="dept-y",
+            subject_kind="unit",
+            material_scope="unit_self",
+            subject_org_name="上海市普陀区民政局（本级）",
+            department_name="上海市普陀区民政局",
+        )
+        == "head_unit"
+    )
+
+
+def test_normalize_org_name_matches_frontend_unit_match_semantics():
+    """归一化口径与前端 app/lib/unitMatch.ts 的 normalizeOrgName 对齐。"""
+    assert normalize_org_name("上海市普陀区财政局（本级）") == "上海市普陀区财政局"
+    assert normalize_org_name("上海市普陀区财政局(本部)") == "上海市普陀区财政局"
+    assert normalize_org_name(" 上海市普陀区 财政局 ") == "上海市普陀区财政局"
+    assert normalize_org_name("上海市普陀区财政局") == "上海市普陀区财政局"
+    assert normalize_org_name(None) == ""
+    assert is_head_unit_name("上海市普陀区财政局", "上海市普陀区财政局（本级）") is True
+    assert is_head_unit_name("上海市普陀区财政局执法大队", "上海市普陀区财政局") is False
+
+
 def test_relationship_of_never_guesses_subordinate_for_unknown_kind():
     """主体层级未知时不能猜成"直属单位"。"""
     assert (
@@ -297,6 +427,53 @@ def test_same_name_department_and_unit_stay_separate_subjects():
     assert [row.subject_org_id for row in data.groups.department_summary] == ["dept-1"]
     assert [row.subject_org_id for row in data.groups.head_unit] == ["unit-1"]
     assert data.groups.subordinate_units == []
+
+
+def test_same_name_head_unit_is_not_grouped_as_subordinate():
+    """完全同名的部门 / 本级单位必须分别落在部门汇总与本部单位，且不进入直属单位。"""
+    rows = [
+        make_matrix_row(
+            id="slot-dept",
+            slot_key="key-dept",
+            subject_org_id="dept-caizheng",
+            subject_org_name="上海市普陀区财政局",
+            subject_kind="department",
+            material_scope="department_summary",
+            report_kind="budget",
+        ),
+        make_matrix_row(
+            id="slot-head",
+            slot_key="key-head",
+            subject_org_id="unit-caizheng-head",
+            subject_org_name="上海市普陀区财政局",
+            subject_kind="unit",
+            material_scope="unit_self",
+            report_kind="budget",
+        ),
+        make_matrix_row(
+            id="slot-sub",
+            slot_key="key-sub",
+            subject_org_id="unit-caizheng-pay",
+            subject_org_name="上海市普陀区财政局支付中心",
+            subject_kind="unit",
+            material_scope="unit_self",
+            report_kind="budget",
+        ),
+    ]
+
+    data = MaterialLedgerQueryService.aggregate_department_matrix(
+        rows,
+        department_id="dept-caizheng",
+        fiscal_year=2025,
+        department_name="上海市普陀区财政局",
+    )
+
+    assert [row.subject_org_id for row in data.groups.department_summary] == ["dept-caizheng"]
+    assert [row.subject_org_id for row in data.groups.head_unit] == ["unit-caizheng-head"]
+    assert [row.subject_org_id for row in data.groups.subordinate_units] == ["unit-caizheng-pay"]
+    assert all(
+        row.subject_org_id != "unit-caizheng-head" for row in data.groups.subordinate_units
+    ), "同级同名的本级单位绝不能落进直属单位"
 
 
 def test_subject_with_conflicting_self_declaration_goes_to_relationship_unknown():
