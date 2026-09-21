@@ -28,6 +28,7 @@ const WORKSPACE_ROUTES = [
   "/quality",
   "/rules",
   "/settings",
+  "/materials",
 ] as const;
 
 async function installBaselineMocks(page: Page, options: { isAdmin: boolean; healthStatus?: "ok" | "down" }) {
@@ -79,8 +80,8 @@ async function installBaselineMocks(page: Page, options: { isAdmin: boolean; hea
   });
 }
 
-test.describe("Workspace shell: 9-route navigation", () => {
-  test("all 9 workspace routes are reachable (200) for an admin session", async ({ page }) => {
+test.describe("Workspace shell: 10-route navigation", () => {
+  test("all 10 workspace routes are reachable (200) for an admin session", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
     await installBaselineMocks(page, { isAdmin: true });
 
@@ -108,7 +109,7 @@ test.describe("Workspace shell: 9-route navigation", () => {
     await expect(workbenchLink).not.toHaveAttribute("aria-current", "page");
   });
 
-  test("clicking through all 9 navigation entries does not error", async ({ page }) => {
+  test("clicking through all 10 navigation entries does not error", async ({ page }) => {
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
 
@@ -116,7 +117,18 @@ test.describe("Workspace shell: 9-route navigation", () => {
     await installBaselineMocks(page, { isAdmin: true });
 
     await page.goto("/workbench");
-    for (const item of ["workbench", "upload", "queue", "review", "history", "archive", "quality", "rules", "settings"]) {
+    for (const item of [
+      "workbench",
+      "upload",
+      "queue",
+      "review",
+      "history",
+      "archive",
+      "quality",
+      "rules",
+      "settings",
+      "materials",
+    ]) {
       await page.getByTestId(`gbc-workspace-nav-${item}`).click();
       await page.waitForLoadState("domcontentloaded");
     }

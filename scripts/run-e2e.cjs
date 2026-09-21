@@ -34,6 +34,9 @@ const WARMUP_PATHS = [
   "/quality",
   "/rules",
   "/settings",
+  "/materials",
+  "/materials/district/district-pt",
+  "/materials/department/dept-ghzy?year=2025",
 ];
 const forwardedArgs = process.argv.slice(2);
 let server = null;
