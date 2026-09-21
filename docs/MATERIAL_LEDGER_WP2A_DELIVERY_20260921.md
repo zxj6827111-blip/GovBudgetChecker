@@ -2,7 +2,9 @@
 
 - 日期：2026-09-21
 - 分支：`feat/material-ledger-ui-wp2a`
-- 基线：`main` @ `WP1_MERGED_MAIN_SHA`（PR #42 合并后的 main）
+- 基线：`main` @ `61250e398169a379740a8cf8af2ac5e5f1a48615`
+  （PR #42「材料台账底座 WP0+WP1」已合并，合并方式为普通 merge，未 squash）
+- 本批 PR：#43（`feat/material-ledger-ui-wp2a`），交付 HEAD 见 PR 页面；CI 绿（7m6s）
 - 对应范围：WP2-A（**只做**首页 / 区级主管部门矩阵 / 部门材料矩阵 + 三个只读 API）
 
 本轮不包含：WP2-B（单位多年度时间轴、材料详情、检查覆盖、版本与来源、缺失态、处理记录）、
@@ -27,7 +29,8 @@ CSV/Excel 初始化、官网采集）、`backfill --apply`。
 | SQL 条数 | ✅ 首页 2 条、区级矩阵 1 条、部门矩阵 1 条（无 N+1） |
 | 页面 06/07/08 | ✅ `/materials`、`/materials/district/[districtId]`、`/materials/department/[departmentId]?year=` |
 | 06→07→08 E2E | ✅ 19 条 e2e 全绿（含 5 条截图采集） |
-| 全量 pytest / ruff / mypy | ✅ 见 §10 |
+| 全量 pytest / ruff / mypy | ✅ 见 §9.1 |
+| CI（GitHub Actions `test-and-build`） | ✅ 绿 |
 | coverage baseline | ✅ 仍 8 gaps（`--assert-gaps 8` 通过） |
 | WP1 schema / Golden / rules / obligations | ✅ 未修改 |
 | WP3 / WP9 / backfill apply | ✅ 未触碰 |
