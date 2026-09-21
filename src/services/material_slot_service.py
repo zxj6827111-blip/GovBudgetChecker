@@ -18,6 +18,41 @@
 3. **状态只有一个生产者。** 所有状态都出自 ``material_slot_status`` 的状态机，
    本模块任何写路径都不直接拼状态值。
 
+LOCK ORDER（全系统统一，不许有例外）
+------------------------------------
+    身份 advisory 锁  →  material_slots 行  →  fiscal_document_versions 行
+
+三级全序，本模块五个写方法一律遵守：
+
+| 方法 | 取锁顺序 |
+| --- | --- |
+| ``upsert_from_decision`` | advisory(slot_key) → 槽位（INSERT DO NOTHING → SELECT FOR UPDATE） |
+| ``refresh_status`` | 槽位（SELECT FOR UPDATE） |
+| ``mark_not_applicable`` | 槽位（UPDATE → refresh_status 复用同一事务） |
+| ``bind_document_version`` | 槽位（SELECT FOR UPDATE）→ 版本（SELECT FOR UPDATE） |
+| ``allocate_for_document`` | advisory+槽位（upsert）→ 版本（bind）→ 槽位（refresh，同一事务内复用） |
+
+**为什么槽位与版本之间必须统一顺序**：``allocate_for_document`` 天然是
+"先槽位后版本"，而 ``bind_document_version`` 最初写成"先版本后槽位"。
+两者并发指向**同一个 (槽位, 版本) 对**时会形成经典的 ABBA 死锁——
+一个持有槽位等版本，另一个持有版本等槽位。把 ``bind_document_version``
+改成先锁槽位就消除了这个环，代价只是多一条 SELECT。
+
+**为什么最外层还需要身份 advisory 锁**：``material_slots`` 有两个唯一约束
+（``slot_key`` 与自然键表达式索引 ``uq_material_slots_identity``）。
+两个事务并发插入同一身份时，每个唯一索引各有一个"推测插入"标记，
+双方可能分别等待对方在**不同索引**上的标记，形成环路——
+真库实测确实报 ``DeadlockDetectedError``。advisory 锁把同一身份的首次创建
+串行化，推测插入竞争不复存在。
+
+ABBA 不可能成立的理由：advisory 锁永远是本模块取的**第一把**锁，
+行锁顺序是固定的"槽位 → 版本"，两条规则合起来构成全序，
+不存在"某条路径反向持有"的情况。
+
+``_advance_current_version`` 里的 ``UPDATE ... FROM fiscal_document_versions``
+只锁目标表（槽位）的行，``FROM`` 与 ``EXISTS`` 子查询都是普通 MVCC 读，
+不会取版本行锁，因此不破坏上述顺序。
+
 永不阻断主流程
 --------------
 ``safe_allocate_for_document`` 吞掉全部异常并返回带原因的摘要。
@@ -94,6 +129,21 @@ class SlotBindingTargetMissing(SlotBindingError):
         )
 
 
+class SlotIdentityRowMissing(RuntimeError):
+    """刚确保存在的槽位行紧接着又读不到。
+
+    这不是预期路径，出现即说明有并发删除，或身份行的写入没按预期落地。
+    抛错让事务整体回滚，比返回 ``None`` 安全：``None`` 会被调用方理解成
+    "本次没建槽位"，而库里可能已经留下半成品。
+    """
+
+    reason = "slot_identity_row_missing"
+
+    def __init__(self, slot_key: str) -> None:
+        super().__init__(f"槽位 {slot_key} 在确保存在后读取不到")
+        self.slot_key = slot_key
+
+
 def in_transaction(conn: Any) -> bool:
     """连接是否已处于事务中。
 
@@ -146,15 +196,36 @@ class MaterialSlotService:
         并把矛盾观测记进 ``caliber_conflict_candidate`` 等人工裁决。
         这一步是必须的——口径决定"两笔数字能不能相加"，静默取最新一次识别
         等于让口径随分析次数漂移。
+
+        写法是"先确保存在 → 再锁 → 锁内读最新事实 → 锁内判定 → 写回"，分三步。
+        为什么不沿用"SELECT ... FOR UPDATE 再 ON CONFLICT DO UPDATE"：
+        ``SELECT ... FOR UPDATE`` **锁不住一条不存在的行**。首次创建同一个槽位时，
+        两个事务都会读到空行、各自在锁外算好口径，随后一个 INSERT、一个走
+        ON CONFLICT 分支把锁外算出的结果盖上去——结果就是 ``summary`` 与 ``self``
+        两者只留下一个、冲突证据被抹掉。这正是本轮要修掉的竞态。
+
+        三步各自的职责被刻意分开，避免职责重叠再次制造竞态：
+
+        1. 第一步只保证"这一行存在"，不承担覆盖业务事实的职责；
+        2. 第二步拿到**真实存在**的行锁，两个事务在此被数据库串行化；
+        3. 第三步的判定与写入都发生在持锁期间，读到的就是最新已提交值。
         """
         if decision.identity is None:
             return None
 
         identity: SlotIdentity = decision.identity
         async with _transaction(self._conn):
-            # 先读后写并加行锁：口径冲突判定依赖"当前已确认值"，
-            # 读到之后到写入之前若有别的请求改了它，判定依据就过期了。
-            existing = await self._conn.fetchrow(
+            await self._lock_slot_identity(identity.slot_key)
+            await self._ensure_slot_row(
+                identity=identity,
+                decision=decision,
+                caliber=caliber,
+                due_at=due_at,
+                expected_source_url=expected_source_url,
+            )
+
+            # 到这里行一定存在，FOR UPDATE 才真正取到锁。
+            current = await self._conn.fetchrow(
                 """
                 SELECT id, caliber, caliber_conflict_candidate,
                        current_document_version_id, applicability_status, due_at
@@ -164,23 +235,23 @@ class MaterialSlotService:
                 """,
                 identity.slot_key,
             )
+            if current is None:
+                # 刚确保存在、紧接着又读不到，说明有并发删除或其他不变量被破坏。
+                # 抛错让事务整体回滚，不返回 None——静默返回 None 会让调用方以为
+                # "没建槽位"，而库里其实可能留下半成品。
+                raise SlotIdentityRowMissing(identity.slot_key)
+
             resolved_caliber, conflict_candidate = _resolve_caliber(
-                existing["caliber"] if existing is not None else None,
-                existing["caliber_conflict_candidate"] if existing is not None else None,
+                current["caliber"],
+                current["caliber_conflict_candidate"],
                 caliber,
             )
-            has_document = (
-                existing is not None and existing["current_document_version_id"] is not None
-            )
+            has_document = current["current_document_version_id"] is not None
             # 状态推导要用**库里已有的适用性与截止时间**：人工确认过"本年度无此材料"
             # 的槽位，不能被一次自动重放重新推回 applicable。
             status_result = derive_slot_status(
-                applicability_status=str(
-                    existing["applicability_status"]
-                    if existing is not None and existing["applicability_status"]
-                    else "applicable"
-                ),
-                due_at=due_at if existing is None or existing["due_at"] is None else existing["due_at"],
+                applicability_status=str(current["applicability_status"] or "applicable"),
+                due_at=due_at if current["due_at"] is None else current["due_at"],
                 identity_resolved=identity.is_resolved,
                 caliber_conflict=bool(conflict_candidate),
                 has_current_document=bool(has_document),
@@ -194,75 +265,120 @@ class MaterialSlotService:
 
             row = await self._conn.fetchrow(
                 """
-                INSERT INTO material_slots (
-                    slot_key,
-                    jurisdiction_org_id, jurisdiction_name,
-                    department_org_id, department_name,
-                    subject_org_id, subject_org_name, subject_org_code,
-                    subject_kind, subject_level, material_scope, caliber,
-                    caliber_conflict_candidate,
-                    fiscal_year, report_kind,
-                    applicability_status, due_at, expected_source_url,
-                    status, status_reason, mapping_key
-                )
-                VALUES (
-                    $1,
-                    $2, $3,
-                    $4, $5,
-                    $6, $7, $8,
-                    $9, $10, $11, $12,
-                    $13,
-                    $14, $15,
-                    'applicable', $16, $17,
-                    $18, $19, $20
-                )
-                ON CONFLICT (slot_key) DO UPDATE SET
-                    -- 已确认的归属不允许被后续的空值抹掉：历史任务常常缺字段，
-                    -- 用 COALESCE 保留先写入的可靠值。
-                    jurisdiction_org_id = COALESCE(EXCLUDED.jurisdiction_org_id, material_slots.jurisdiction_org_id),
-                    jurisdiction_name = COALESCE(EXCLUDED.jurisdiction_name, material_slots.jurisdiction_name),
-                    department_org_id = COALESCE(EXCLUDED.department_org_id, material_slots.department_org_id),
-                    department_name = COALESCE(EXCLUDED.department_name, material_slots.department_name),
-                    subject_org_name = COALESCE(NULLIF(EXCLUDED.subject_org_name, ''), material_slots.subject_org_name),
-                    subject_org_code = COALESCE(EXCLUDED.subject_org_code, material_slots.subject_org_code),
-                    -- 口径与冲突候选由 Python 侧算好后原样写入；
-                    -- 冲突候选一旦记下就只能由显式裁决清除，普通重放不许抹掉它。
-                    caliber = EXCLUDED.caliber,
-                    caliber_conflict_candidate = EXCLUDED.caliber_conflict_candidate,
-                    expected_source_url = COALESCE(EXCLUDED.expected_source_url, material_slots.expected_source_url),
-                    -- 截止时间只填空值：人工设定的截止时间不该被自动流程覆盖
-                    due_at = COALESCE(material_slots.due_at, EXCLUDED.due_at),
-                    -- 适用性不由本方法改动：它只能由人工动作设置，
-                    -- 自动流程重放不得把"已确认不适用"打回 applicable。
-                    applicability_status = material_slots.applicability_status,
-                    applicability_note = material_slots.applicability_note,
-                    status = EXCLUDED.status,
-                    status_reason = EXCLUDED.status_reason,
+                UPDATE material_slots
+                SET jurisdiction_org_id = COALESCE($2, jurisdiction_org_id),
+                    jurisdiction_name = COALESCE($3, jurisdiction_name),
+                    department_org_id = COALESCE($4, department_org_id),
+                    department_name = COALESCE($5, department_name),
+                    subject_org_name = COALESCE(NULLIF($6, ''), subject_org_name),
+                    subject_org_code = COALESCE($7, subject_org_code),
+                    caliber = $8,
+                    caliber_conflict_candidate = $9,
+                    expected_source_url = COALESCE($10, expected_source_url),
+                    due_at = COALESCE(due_at, $11),
+                    status = $12,
+                    status_reason = $13,
                     updated_at = NOW()
+                WHERE id = $1
                 RETURNING id, slot_key, status, status_reason
                 """,
-                identity.slot_key,
+                current["id"],
                 decision.jurisdiction_org_id,
                 decision.jurisdiction_name,
                 decision.department_org_id,
                 decision.department_name,
-                identity.subject_org_id,
                 decision.subject_org_name or identity.subject_org_id,
                 decision.subject_org_code,
-                identity.subject_kind,
-                identity.subject_kind,
-                identity.material_scope,
                 resolved_caliber,
                 conflict_candidate or None,
-                identity.fiscal_year,
-                identity.report_kind,
-                due_at,
                 expected_source_url,
+                due_at,
                 status_result.status,
                 status_result.reason,
-                identity.mapping_key,
             )
         return dict(row) if row is not None else None
+
+    async def _lock_slot_identity(self, slot_key: str) -> None:
+        """按身份串行化槽位的首次创建。
+
+        **为什么光靠 ``INSERT ... ON CONFLICT DO NOTHING`` 不够**（实测结论）：
+        ``material_slots`` 上有两个唯一约束——``slot_key`` 列约束，以及自然键
+        表达式索引 ``uq_material_slots_identity``。两个事务同时插入同一个身份时，
+        PostgreSQL 会为每个唯一索引各建一个"推测插入（speculative insertion）"
+        标记，两个事务可能分别等待对方在**不同索引**上的标记，形成环路。
+        真库实测结果就是 ``DeadlockDetectedError``（等待推测记号上的 ShareLock）。
+
+        事务级 advisory 锁把同一身份的首次创建彻底串行化，推测插入竞争不复存在。
+        锁在事务结束时自动释放，不需要手工解锁。
+
+        锁键用 ``hashtextextended(slot_key, 0)`` 取 64 位哈希。不同身份撞哈希时
+        只会互相多等一会儿（性能），不会让两条身份互相覆盖（正确性）。
+
+        锁层级：这是**最外层**的一把锁，永远在行锁之前取，见模块顶部 LOCK ORDER。
+        """
+        await self._conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+            slot_key,
+        )
+
+    async def _ensure_slot_row(
+        self,
+        *,
+        identity: SlotIdentity,
+        decision: resolver.SlotAllocationDecision,
+        caliber: str,
+        due_at: Optional[datetime],
+        expected_source_url: Optional[str],
+    ) -> None:
+        """第一步：确保身份行存在。**只负责存在性，不覆盖任何已有业务事实。**
+
+        ``ON CONFLICT (slot_key) DO NOTHING`` 是关键：已存在的行一个字段都不动，
+        因此这一步无论被多少并发事务同时执行都只会留下一条记录，
+        也不可能拿锁外算出的旧结论覆盖别人刚写下的口径。
+
+        并发下的行为：两个事务同时首次创建时，一个真正插入，另一个在此等待
+        对方提交后跳过。随后双方在第二步的行锁上串行，各自读到同一份最新值。
+        """
+        await self._conn.execute(
+            """
+            INSERT INTO material_slots (
+                slot_key,
+                jurisdiction_org_id, jurisdiction_name,
+                department_org_id, department_name,
+                subject_org_id, subject_org_name, subject_org_code,
+                subject_kind, subject_level, material_scope,
+                caliber, fiscal_year, report_kind,
+                due_at, expected_source_url, mapping_key
+            )
+            VALUES (
+                $1,
+                $2, $3,
+                $4, $5,
+                $6, $7, $8,
+                $9, $10, $11,
+                $12, $13, $14,
+                $15, $16, $17
+            )
+            ON CONFLICT (slot_key) DO NOTHING
+            """,
+            identity.slot_key,
+            decision.jurisdiction_org_id,
+            decision.jurisdiction_name,
+            decision.department_org_id,
+            decision.department_name,
+            identity.subject_org_id,
+            decision.subject_org_name or identity.subject_org_id,
+            decision.subject_org_code,
+            identity.subject_kind,
+            identity.subject_kind,
+            identity.material_scope,
+            _normalize_caliber(caliber),
+            identity.fiscal_year,
+            identity.report_kind,
+            due_at,
+            expected_source_url,
+            identity.mapping_key,
+        )
 
     async def bind_document_version(
         self, slot_id: Any, document_version_id: Any
@@ -275,8 +391,25 @@ class MaterialSlotService:
         整段在一个事务里，并对版本行 ``FOR UPDATE``：没有行锁的话，
         两个并发请求可以同时读到 ``slot_id IS NULL`` 然后各自绑定，
         结果是后写的覆盖先写的、而两边都以为自己成功。
+
+        **锁顺序：先槽位行，后版本行。** 这是全系统统一顺序（见模块顶部的
+        ``LOCK ORDER``）。本方法此前先锁版本、再在推进指针时锁槽位，
+        与 ``allocate_for_document`` 的"先锁槽位再绑版本"正好相反，
+        两者并发指向同一个 (槽位, 版本) 对时会形成 ABBA 死锁。
+        先锁槽位把顺序统一过来，代价只是多一条 SELECT。
         """
         async with _transaction(self._conn):
+            # 先按全局锁序取槽位行锁。槽位不存在时这里锁不到任何行，
+            # 之后的 UPDATE 会由外键约束拦下，不需要在这里额外判空。
+            await self._conn.fetchrow(
+                """
+                SELECT id
+                FROM material_slots
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                slot_id,
+            )
             row = await self._conn.fetchrow(
                 """
                 SELECT id, slot_id
@@ -352,49 +485,61 @@ class MaterialSlotService:
         未显式传入 ``analysis_state`` / ``review_state`` 时，从当前状态反推
         （``infer_progress_state``），而不是默认成"分析未开始"：调用方往往只
         关心槽位事实（版本、口径），一次无关刷新不该把"待人工复核"打回"已上传"。
-        """
-        row = await self._conn.fetchrow(
-            """
-            SELECT subject_org_id, subject_kind, material_scope, report_kind,
-                   fiscal_year, mapping_key, applicability_status, due_at,
-                   current_document_version_id, caliber_conflict_candidate, status
-            FROM material_slots
-            WHERE id = $1
-            """,
-            slot_id,
-        )
-        if row is None:
-            return {}
 
-        identity_resolved = slot_identity_is_resolved(
-            subject_org_id=row["subject_org_id"],
-            subject_kind=row["subject_kind"],
-            material_scope=row["material_scope"],
-            report_kind=row["report_kind"],
-            fiscal_year=row["fiscal_year"],
-            mapping_key=row["mapping_key"],
-        )
-        inferred_analysis, inferred_review = infer_progress_state(row["status"])
-        result = derive_slot_status(
-            applicability_status=str(row["applicability_status"] or "applicable"),
-            due_at=row["due_at"],
-            identity_resolved=identity_resolved,
-            caliber_conflict=bool(row["caliber_conflict_candidate"]),
-            has_current_document=row["current_document_version_id"] is not None,
-            analysis_state=analysis_state if analysis_state is not None else inferred_analysis,
-            review_state=review_state if review_state is not None else inferred_review,
-            now=now,
-        )
-        await self._conn.execute(
-            """
-            UPDATE material_slots
-            SET status = $2, status_reason = $3, updated_at = NOW()
-            WHERE id = $1
-            """,
-            slot_id,
-            result.status,
-            result.reason,
-        )
+        **本方法自带事务与行锁，不依赖调用方替它兜底。** 此前它"读事实 → 推导 →
+        写状态"三步之间没有任何保护：读完之后若有别的事务绑定了文件版本，
+        它仍会按读到的旧快照把状态写成"未上传"，于是库里出现
+        ``current_document_version_id`` 有值而 ``status`` 还是 ``missing``
+        这种缓存与事实互相矛盾的行。当前调用方（``allocate_for_document``、
+        ``mark_not_applicable``）恰好已经开了事务，但那是调用约定而不是保证——
+        WP2/WP3 会直接调它，靠约定维持的正确性迟早会破。
+
+        锁顺序：只锁槽位行，与全系统统一顺序一致（见模块顶部 ``LOCK ORDER``）。
+        """
+        async with _transaction(self._conn):
+            row = await self._conn.fetchrow(
+                """
+                SELECT subject_org_id, subject_kind, material_scope, report_kind,
+                       fiscal_year, mapping_key, applicability_status, due_at,
+                       current_document_version_id, caliber_conflict_candidate, status
+                FROM material_slots
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                slot_id,
+            )
+            if row is None:
+                return {}
+
+            identity_resolved = slot_identity_is_resolved(
+                subject_org_id=row["subject_org_id"],
+                subject_kind=row["subject_kind"],
+                material_scope=row["material_scope"],
+                report_kind=row["report_kind"],
+                fiscal_year=row["fiscal_year"],
+                mapping_key=row["mapping_key"],
+            )
+            inferred_analysis, inferred_review = infer_progress_state(row["status"])
+            result = derive_slot_status(
+                applicability_status=str(row["applicability_status"] or "applicable"),
+                due_at=row["due_at"],
+                identity_resolved=identity_resolved,
+                caliber_conflict=bool(row["caliber_conflict_candidate"]),
+                has_current_document=row["current_document_version_id"] is not None,
+                analysis_state=analysis_state if analysis_state is not None else inferred_analysis,
+                review_state=review_state if review_state is not None else inferred_review,
+                now=now,
+            )
+            await self._conn.execute(
+                """
+                UPDATE material_slots
+                SET status = $2, status_reason = $3, updated_at = NOW()
+                WHERE id = $1
+                """,
+                slot_id,
+                result.status,
+                result.reason,
+            )
         return {"status": result.status, "status_reason": result.reason}
 
     async def record_source(
