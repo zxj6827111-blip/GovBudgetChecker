@@ -147,6 +147,16 @@ async def run_structured_ingest(
             metadata=metadata,
         )
 
+        # 材料槽位：把这份 PDF 挂到"地区+部门+主体+年度+文种"这条稳定业务对象上。
+        # 槽位是材料台账的旁路能力，safe_* 版本不抛异常——它失败只会在结果里留下
+        # 一条 error 摘要，绝不阻断解析/入库主流程。
+        material_slot = await _allocate_material_slot(
+            conn=conn,
+            metadata=metadata,
+            checksum=checksum,
+            document_version_id=version_id,
+        )
+
         review_items = _build_review_items(
             parse_result=parse_result,
             table_instances=instances,
@@ -173,6 +183,7 @@ async def run_structured_ingest(
             "low_confidence_tables": materialize_result.get("low_confidence_tables") or [],
             "document_profile": document_profile,
             "ps_sync": ps_sync_summary,
+            "material_slot": material_slot,
             "review_item_count": len(review_items),
             "low_confidence_item_count": sum(
                 1 for item in review_items if item.get("type") == "low_confidence_table"
@@ -282,6 +293,37 @@ async def _ensure_document_version(
         "document_id": int(document_id),
         "document_version_id": int(version_id),
     }
+
+
+async def _allocate_material_slot(
+    conn,
+    *,
+    metadata: Dict[str, Any],
+    checksum: str,
+    document_version_id: int,
+) -> Dict[str, Any]:
+    """把当前文档挂到材料槽位上。
+
+    独立成函数是为了让"能不能关掉"这件事显式：材料台账是新增旁路，
+    故障时运维需要一条不重新部署就能停掉它的开关。默认开启——
+    默认关闭就等于这段代码在真实环境里从不执行，那它是不是能用永远无人知道。
+    """
+    if str(os.getenv("MATERIAL_LEDGER_DISABLED") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        return {"status": "skipped", "reason": "material_ledger_disabled"}
+
+    from src.services.material_slot_service import safe_allocate_for_document
+
+    return await safe_allocate_for_document(
+        conn,
+        metadata=metadata,
+        checksum=checksum,
+        document_version_id=document_version_id,
+    )
 
 
 def _resolve_storage_key(job_id: str, pdf_path: Path, metadata: Dict[str, Any]) -> str:
