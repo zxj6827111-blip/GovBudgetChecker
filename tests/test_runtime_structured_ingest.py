@@ -1070,8 +1070,16 @@ async def test_cleanup_structured_ingest_history_marks_old_jobs_cleaned(
         def transaction(self):
             return _FakeTransaction()
 
+        async def fetch(self, query: str, version_ids) -> list[dict]:
+            # 计划阶段会查一次 Material Slot 绑定；本用例没有绑定版本。
+            assert "FROM fiscal_document_versions" in query
+            assert "slot_id IS NOT NULL" in query
+            return []
+
         async def execute(self, query: str, document_version_id: int):
             assert "DELETE FROM fiscal_document_versions" in query
+            # 执行阶段必须自带 slot_id 守卫，这是 TOCTOU 的第二道闸
+            assert "slot_id IS NULL" in query
             self.deleted.append(document_version_id)
             return "DELETE 1"
 
@@ -1104,6 +1112,419 @@ async def test_cleanup_structured_ingest_history_marks_old_jobs_cleaned(
     assert structured["latest_job_id"] == "job-latest"
     assert structured["latest_filename"] == "latest.pdf"
     assert structured["ps_sync"]["report_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# structured-ingest cleanup × Material Ledger
+#
+# 从 PR #42 起 `fiscal_document_versions.slot_id` 把 PDF 文件版本绑到了
+# `material_slots`。旧的结构化清理是按"每个 scope 只留最新入库版本"设计的，
+# 它看到的是入库维度的冗余，看不到台账维度的归属——因此必须显式保护：
+# 已绑定即不可由本链路删除，无论是不是当前版本。
+# ---------------------------------------------------------------------------
+
+MATERIAL_SLOT_BOUND = "material_slot_bound"
+
+
+class _CleanupFakeConnection:
+    """清理链路用的记录式假连接。
+
+    只实现链路真正会用到的两条语句，不模拟 Postgres。
+
+    ``slot_bound`` 模拟"计划阶段就能查到已绑定"；
+    ``bound_after_plan`` 模拟"计划生成之后、DELETE 之前才发生绑定"——
+    此时 DELETE 因为带 ``slot_id IS NULL`` 守卫而影响 0 行。
+    """
+
+    def __init__(self, *, slot_bound=None, bound_after_plan=None) -> None:
+        self.slot_bound = dict(slot_bound or {})
+        self.bound_after_plan = set(bound_after_plan or ())
+        self.fetch_calls: list = []
+        self.delete_attempts: list = []
+        self.deleted: list = []
+
+    def transaction(self):
+        class _Transaction:
+            async def __aenter__(self_inner):
+                return self_inner
+
+            async def __aexit__(self_inner, *_exc):
+                return False
+
+        return _Transaction()
+
+    async def fetch(self, query: str, version_ids) -> list:
+        assert "FROM fiscal_document_versions" in query
+        assert "slot_id IS NOT NULL" in query
+        self.fetch_calls.append(list(version_ids))
+        return [
+            {"id": version_id, "slot_id": self.slot_bound[version_id]}
+            for version_id in version_ids
+            if version_id in self.slot_bound
+        ]
+
+    async def execute(self, query: str, document_version_id: int) -> str:
+        assert "DELETE FROM fiscal_document_versions" in query
+        # 执行阶段的第二道闸：不依赖计划是否准确，绑定版本一律删不掉
+        assert "slot_id IS NULL" in query
+        self.delete_attempts.append((query, document_version_id))
+        if document_version_id in self.bound_after_plan:
+            return "DELETE 0"
+        self.deleted.append(document_version_id)
+        return "DELETE 1"
+
+
+def _patch_cleanup_db(monkeypatch, fake):
+    from src.db.connection import DatabaseConnection
+
+    released: list = []
+
+    async def _acquire():
+        return fake
+
+    async def _release(conn):
+        released.append(conn)
+
+    monkeypatch.setattr(DatabaseConnection, "acquire", _acquire)
+    monkeypatch.setattr(DatabaseConnection, "release", _release)
+    return released
+
+
+def _write_cleanup_job(
+    root,
+    job_id: str,
+    *,
+    document_version_id,
+    version_created_at: float,
+    job_created_at: float,
+    organization_id: str = "org-1",
+    organization_name: str = "Org One",
+    doc_type: str = "dept_final",
+    report_kind: str = "final",
+) -> None:
+    job_dir = root / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    runtime.write_json_file(
+        job_dir / "status.json",
+        {
+            "job_id": job_id,
+            "filename": f"{job_id}.pdf",
+            "organization_id": organization_id,
+            "organization_name": organization_name,
+            "fiscal_year": "2025",
+            "report_year": 2025,
+            "doc_type": doc_type,
+            "report_kind": report_kind,
+            "version_created_at": version_created_at,
+            "job_created_at": job_created_at,
+            "status": "done",
+        },
+    )
+    if document_version_id is not None:
+        runtime.write_structured_ingest_payload(
+            job_dir,
+            {
+                "job_id": job_id,
+                "status": "done",
+                "document_version_id": document_version_id,
+                "ps_sync": {"report_id": f"report-{document_version_id}"},
+            },
+        )
+
+
+def _structured_payload(job_id: str) -> dict:
+    return runtime.get_job_review_payload(job_id) or {}
+
+
+# ---- 纯计划阶段的保护规则 ---------------------------------------------------
+
+
+def test_pure_plan_is_marked_as_not_material_ledger_checked(tmp_path, monkeypatch):
+    """纯计划不知道台账绑定，必须自报"没校验过"，不能冒充可执行计划。"""
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    plan = runtime.plan_structured_ingest_cleanup()
+
+    assert plan["material_ledger_checked"] is False
+
+
+def test_material_ledger_protection_moves_bound_versions_to_blocked():
+    plan = {
+        "cleanup_document_versions": [
+            {"document_version_id": 1, "jobs": [{"job_id": "job-a"}]},
+            {"document_version_id": 2, "jobs": [{"job_id": "job-b"}]},
+        ],
+        "cleanup_jobs": [
+            {"job_id": "job-a", "document_version_id": 1},
+            {"job_id": "job-b", "document_version_id": 2},
+        ],
+        "blocked_document_versions": [],
+        "skipped_jobs": [],
+        "cleanup_document_version_count": 2,
+        "cleanup_job_count": 2,
+        "blocked_document_version_count": 0,
+        "skipped_job_count": 0,
+    }
+
+    result = runtime._apply_material_ledger_protection(plan, {1: "slot-abc"})
+
+    assert [item["document_version_id"] for item in result["cleanup_document_versions"]] == [2]
+    blocked = result["blocked_document_versions"]
+    assert len(blocked) == 1
+    assert blocked[0]["document_version_id"] == 1
+    assert blocked[0]["reason"] == MATERIAL_SLOT_BOUND
+    # slot_id 一并透出，运维不必再查库
+    assert blocked[0]["slot_id"] == "slot-abc"
+    # 涉及的历史任务从待清理里摘掉，并给出跳过原因
+    assert [job["job_id"] for job in result["cleanup_jobs"]] == ["job-b"]
+    assert {
+        (job["job_id"], job["reason"]) for job in result["skipped_jobs"]
+    } == {("job-a", MATERIAL_SLOT_BOUND)}
+    assert result["cleanup_document_version_count"] == 1
+    assert result["blocked_document_version_count"] == 1
+    assert result["material_ledger_checked"] is True
+
+
+def test_material_ledger_protection_leaves_unbound_plan_untouched():
+    plan = {
+        "cleanup_document_versions": [{"document_version_id": 7, "jobs": []}],
+        "cleanup_jobs": [{"job_id": "job-a", "document_version_id": 7}],
+        "blocked_document_versions": [],
+        "skipped_jobs": [],
+    }
+    result = runtime._apply_material_ledger_protection(plan, {})
+    assert result["cleanup_document_versions"] == plan["cleanup_document_versions"]
+    assert result["blocked_document_versions"] == []
+    assert result["material_ledger_checked"] is True
+
+
+# ---- Case 1：槽位「当前版本」不得删除 --------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cleanup_keeps_slot_current_version(tmp_path, monkeypatch):
+    """版本 V1 是槽位 A 的当前版本，旧清理链路认为它是历史版本也必须放过。"""
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    _write_cleanup_job(
+        tmp_path, "job-old", document_version_id=41, version_created_at=100.0, job_created_at=100.0
+    )
+    _write_cleanup_job(
+        tmp_path, "job-new", document_version_id=42, version_created_at=200.0, job_created_at=200.0
+    )
+
+    fake = _CleanupFakeConnection(slot_bound={41: "slot-A"})
+    _patch_cleanup_db(monkeypatch, fake)
+
+    result = await runtime.cleanup_structured_ingest_history({"dry_run": False})
+
+    assert fake.deleted == []
+    assert fake.delete_attempts == [], "计划阶段就应拦下，不该走到 DELETE"
+    assert result["deleted_document_version_ids"] == []
+    assert result["blocked_at_delete"] == []
+    blocked_ids = {item["document_version_id"] for item in result["blocked_document_versions"]}
+    assert 41 in blocked_ids
+    bound_entry = next(
+        item for item in result["blocked_document_versions"] if item["document_version_id"] == 41
+    )
+    assert bound_entry["reason"] == MATERIAL_SLOT_BOUND
+    assert bound_entry["slot_id"] == "slot-A"
+
+    # job 侧不得被标成已清理：数据库里那一版还在
+    assert result["updated_job_ids"] == []
+    payload = _structured_payload("job-old")
+    assert payload["status"] == "done"
+    assert payload["document_version_id"] == 41
+
+
+# ---- Case 2：槽位「历史版本」也不得删除 ------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cleanup_keeps_slot_historical_version(tmp_path, monkeypatch):
+    """V1 与 V2 同属槽位 A；V2 是当前版本，V1 是历史版本——V1 同样不许删。"""
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    _write_cleanup_job(
+        tmp_path, "job-v1", document_version_id=51, version_created_at=100.0, job_created_at=100.0
+    )
+    _write_cleanup_job(
+        tmp_path, "job-v2", document_version_id=52, version_created_at=200.0, job_created_at=200.0
+    )
+
+    fake = _CleanupFakeConnection(slot_bound={51: "slot-A", 52: "slot-A"})
+    _patch_cleanup_db(monkeypatch, fake)
+
+    result = await runtime.cleanup_structured_ingest_history({"dry_run": False})
+
+    assert fake.deleted == []
+    assert result["deleted_document_version_ids"] == []
+    assert 51 in {item["document_version_id"] for item in result["blocked_document_versions"]}
+    # "不是当前版本"从来不是可以删的理由
+    assert _structured_payload("job-v1")["document_version_id"] == 51
+
+
+# ---- Case 3：两个占位槽位不被旧 scope 误清理 -------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cleanup_keeps_two_placeholder_slot_versions(tmp_path, monkeypatch):
+    """两个 mapping_required 占位槽位（同组织/同年度/同文种、不同校验和）。
+
+    旧 structured-ingest scope 只看"组织+年度+文种"，会把这两个任务归进
+    同一个分组并认为旧的那份是冗余版本；但它们在台账里是两条独立的材料
+    （身份未确认时按文档校验和各自成槽），任何一份都不许删。
+    """
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    _write_cleanup_job(
+        tmp_path, "job-doc-a", document_version_id=61, version_created_at=100.0, job_created_at=100.0
+    )
+    _write_cleanup_job(
+        tmp_path, "job-doc-b", document_version_id=62, version_created_at=200.0, job_created_at=200.0
+    )
+
+    # 计划阶段：两个任务确实被归进同一个 scope（否则本用例没有意义）
+    plan = runtime.plan_structured_ingest_cleanup()
+    assert plan["scope_count"] == 1
+    assert plan["cleanup_document_version_count"] == 1
+    assert plan["cleanup_document_versions"][0]["document_version_id"] == 61
+
+    fake = _CleanupFakeConnection(
+        slot_bound={61: "slot-placeholder-a", 62: "slot-placeholder-b"}
+    )
+    _patch_cleanup_db(monkeypatch, fake)
+
+    result = await runtime.cleanup_structured_ingest_history({"dry_run": False})
+
+    assert fake.deleted == []
+    assert result["deleted_document_version_ids"] == []
+    assert 61 in {item["document_version_id"] for item in result["blocked_document_versions"]}
+    assert "slot-placeholder-a" in {
+        item.get("slot_id") for item in result["blocked_document_versions"]
+    }
+    assert _structured_payload("job-doc-a")["document_version_id"] == 61
+
+
+# ---- Case 4：plan 之后才绑定（TOCTOU） -------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cleanup_delete_guard_blocks_binding_after_plan(tmp_path, monkeypatch):
+    """计划时未绑定、执行前被绑定：DELETE 影响 0 行，按阻断处理。
+
+    这条用例专门证明执行阶段的 ``slot_id IS NULL`` 守卫真的有效——
+    只信计划的话，这一版会被删掉，而它已经进了台账。
+    """
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    _write_cleanup_job(
+        tmp_path, "job-old", document_version_id=71, version_created_at=100.0, job_created_at=100.0
+    )
+    _write_cleanup_job(
+        tmp_path, "job-new", document_version_id=72, version_created_at=200.0, job_created_at=200.0
+    )
+
+    # 计划阶段查不到绑定；DELETE 时该版本已被另一个事务绑定 → 影响 0 行
+    fake = _CleanupFakeConnection(slot_bound={}, bound_after_plan={71})
+    _patch_cleanup_db(monkeypatch, fake)
+
+    result = await runtime.cleanup_structured_ingest_history({"dry_run": False})
+
+    assert [attempt[1] for attempt in fake.delete_attempts] == [71], "必须真的尝试过删除"
+    assert fake.deleted == []
+    assert result["deleted_document_version_ids"] == []
+    assert result["deleted_document_version_count"] == 0
+    assert result["blocked_at_delete"] == [
+        {"document_version_id": 71, "reason": MATERIAL_SLOT_BOUND}
+    ]
+    assert result["blocked_at_delete_count"] == 1
+
+    # 双真相防护：数据库里还在，文件系统就不许说已清理
+    assert result["updated_job_ids"] == []
+    payload = _structured_payload("job-old")
+    assert payload["status"] == "done"
+    assert payload["document_version_id"] == 71
+
+
+# ---- §9：未绑定的历史版本仍按原行为清理 ------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cleanup_still_deletes_unbound_history_next_to_bound_version(
+    tmp_path, monkeypatch
+):
+    """清理没有被整体禁掉：同一轮里，绑定的拦住、未绑定的照常删。
+
+    组织不同 → 两个 scope；org-1 的旧版本已绑定台账，org-2 的旧版本没有。
+    """
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    _write_cleanup_job(
+        tmp_path, "job-bound-old", document_version_id=81, version_created_at=100.0, job_created_at=100.0
+    )
+    _write_cleanup_job(
+        tmp_path, "job-bound-new", document_version_id=82, version_created_at=200.0, job_created_at=200.0
+    )
+    _write_cleanup_job(
+        tmp_path,
+        "job-free-old",
+        document_version_id=83,
+        version_created_at=100.0,
+        job_created_at=100.0,
+        organization_id="org-2",
+        organization_name="Org Two",
+    )
+    _write_cleanup_job(
+        tmp_path,
+        "job-free-new",
+        document_version_id=84,
+        version_created_at=200.0,
+        job_created_at=200.0,
+        organization_id="org-2",
+        organization_name="Org Two",
+    )
+
+    fake = _CleanupFakeConnection(slot_bound={81: "slot-A"})
+    _patch_cleanup_db(monkeypatch, fake)
+
+    result = await runtime.cleanup_structured_ingest_history({"dry_run": False})
+
+    assert fake.deleted == [83]
+    assert result["deleted_document_version_ids"] == [83]
+    assert result["updated_job_ids"] == ["job-free-old"]
+    # 未绑定的那份被正常清理，job 侧写 cleaned
+    cleaned = _structured_payload("job-free-old")
+    assert cleaned["status"] == "cleaned"
+    assert cleaned["reason"] == "historical_version_cleaned"
+    assert cleaned["document_version_id"] is None
+    # 绑定的那份原样保留
+    assert _structured_payload("job-bound-old")["document_version_id"] == 81
+
+
+@pytest.mark.asyncio
+async def test_cleanup_dry_run_reports_material_ledger_protection(tmp_path, monkeypatch):
+    """预览也必须过台账校验，否则它会把不该删的算进"将删除"。"""
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    _write_cleanup_job(
+        tmp_path, "job-old", document_version_id=91, version_created_at=100.0, job_created_at=100.0
+    )
+    _write_cleanup_job(
+        tmp_path, "job-new", document_version_id=92, version_created_at=200.0, job_created_at=200.0
+    )
+
+    fake = _CleanupFakeConnection(slot_bound={91: "slot-A"})
+    _patch_cleanup_db(monkeypatch, fake)
+
+    preview = await runtime.cleanup_structured_ingest_history({"dry_run": True})
+
+    assert preview["dry_run"] is True
+    assert preview["material_ledger_checked"] is True
+    assert preview["cleanup_document_versions"] == []
+    assert preview["cleanup_document_version_count"] == 0
+    assert 91 in {item["document_version_id"] for item in preview["blocked_document_versions"]}
+    assert fake.deleted == [], "预览不得删除任何东西"
 
 
 def test_ignore_job_issue_filters_ai_findings_and_summary(tmp_path, monkeypatch):

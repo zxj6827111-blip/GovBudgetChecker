@@ -1170,6 +1170,127 @@ async def _seed_slot_row(
     )
 
 
+async def test_cleanup_guard_keeps_placeholder_slot_versions_on_real_db(db):
+    """两个 mapping_required 占位槽位 + 旧清理链路的 DELETE 守卫（真库）。
+
+    构造的是最容易出事的那一幕：两个任务组织名相同、年度与文种相同、
+    只有文档校验和不同。旧 structured-ingest scope 只看"组织+年度+文种"，
+    会把它们当成同一份材料的两个版本，于是认为旧的那个可以清理；
+    而在台账里它们是两条独立材料（身份未确认时按文档校验和各自成槽）。
+
+    这里不模拟：槽位由真实 resolver 判定、走真实服务层落库，
+    最后执行的就是清理链路那条带守卫的 DELETE。
+    """
+    from src.services import material_slot_resolver as resolver
+    from src.services.material_slot_service import allocate_for_document
+
+    schema, pool = db
+    await run_migrations()
+
+    shared = {
+        "organization_id": None,
+        "organization_name": "同名占位单位",
+        "report_year": "2024",
+        "report_kind": "final",
+        "doc_type": "dept_final",
+    }
+    checksums = {"a": "a" * 64, "b": "b" * 64}
+
+    async with _conn(schema, pool) as connection:
+        version_ids = {}
+        for key, checksum in checksums.items():
+            decision = resolver.decide_slot_allocation(
+                metadata={**shared, "filename": f"placeholder-{key}.pdf"},
+                org_records=[],
+                checksum=checksum,
+            )
+            assert decision.status == resolver.DECISION_MAPPING_REQUIRED, decision.reason
+            assert decision.identity.mapping_key == f"doc:{checksum}"
+
+            version_id = await _seed_version(connection, prefix=f"placeholder-{key}")
+            summary = await allocate_for_document(
+                connection,
+                metadata={**shared, "filename": f"placeholder-{key}.pdf"},
+                checksum=checksum,
+                org_records=[],
+                document_version_id=version_id,
+            )
+            assert summary["bound"] is True
+            version_ids[key] = version_id
+
+        # 两条材料各自成槽，且各自都有当前版本
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM material_slots WHERE mapping_key IS NOT NULL"
+        ) == 2
+        for key, version_id in version_ids.items():
+            assert await connection.fetchval(
+                "SELECT slot_id FROM fiscal_document_versions WHERE id = $1", version_id
+            ) is not None, f"{key} 没有绑定槽位"
+            assert await connection.fetchval(
+                "SELECT COUNT(*) FROM material_slots"
+                " WHERE current_document_version_id = $1",
+                version_id,
+            ) == 1
+
+        # 旧清理链路的 DELETE：带 slot_id IS NULL 守卫
+        for key, version_id in version_ids.items():
+            affected = await connection.execute(
+                "DELETE FROM fiscal_document_versions WHERE id = $1 AND slot_id IS NULL",
+                version_id,
+            )
+            assert str(affected).strip().endswith("0"), (
+                f"占位槽位 {key} 的版本被清理链路删掉了"
+            )
+
+        # 版本与槽位指针都还在
+        for key, version_id in version_ids.items():
+            assert await connection.fetchval(
+                "SELECT COUNT(*) FROM fiscal_document_versions WHERE id = $1", version_id
+            ) == 1, f"{key} 的版本不见了"
+            assert await connection.fetchval(
+                "SELECT current_document_version_id FROM material_slots"
+                " WHERE mapping_key = $1",
+                f"doc:{checksums[key]}",
+            ) == version_id
+
+
+async def test_cleanup_guard_still_deletes_unbound_version_on_real_db(db):
+    """未绑定槽位的版本仍可被旧链路正常删除——保护不是把清理整条禁掉。"""
+    schema, pool = db
+    await run_migrations()
+
+    async with _conn(schema, pool) as connection:
+        bound_version = await _seed_version(connection, prefix="guard-bound")
+        free_version = await _seed_version(connection, prefix="guard-free")
+        slot_id = await _seed_slot_row(
+            connection, "guard-slot", subject_org_id="guard-org"
+        )
+        await connection.execute(
+            "UPDATE fiscal_document_versions SET slot_id = $1 WHERE id = $2",
+            slot_id,
+            bound_version,
+        )
+
+        blocked = await connection.execute(
+            "DELETE FROM fiscal_document_versions WHERE id = $1 AND slot_id IS NULL",
+            bound_version,
+        )
+        assert str(blocked).strip().endswith("0")
+
+        removed = await connection.execute(
+            "DELETE FROM fiscal_document_versions WHERE id = $1 AND slot_id IS NULL",
+            free_version,
+        )
+        assert str(removed).strip().endswith("1")
+
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM fiscal_document_versions WHERE id = $1", bound_version
+        ) == 1
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM fiscal_document_versions WHERE id = $1", free_version
+        ) == 0
+
+
 def _insert_sql(slot_key: str) -> str:
     """槽位身份唯一性用例的最小插入语句。
 

@@ -48,7 +48,7 @@
 > `api/main.py` 是本轮唯一被触及的既有生产文件，净改动是"import 多一项 +
 > 构造 metadata 时多传一个画像参数"，没有改变任何既有分支或返回值。
 
-### 新增：测试（148 条）
+### 新增：测试（172 条）
 
 | 文件 | 条数 | 默认是否运行 |
 | --- | --- | --- |
@@ -57,9 +57,10 @@
 | `tests/test_material_slot_backfill.py` | 11 | 是 |
 | `tests/test_material_slot_api_regression.py` | 5 | 是 |
 | `tests/support_material_slot_db.py`（辅助） | — | — |
-| `tests/test_material_slot_binding_and_state.py` | 37 | 是 |
+| `tests/test_material_slot_binding_and_state.py` | 45 | 是 |
 | `tests/test_material_slot_profile_integration.py` | 15 | 是 |
-| `tests/test_material_slot_migration_pg.py` | 16 | 否（需 `GOVBUDGET_TEST_DATABASE_URL`） |
+| `tests/test_material_slot_migration_pg.py` | 23 | 否（需 `GOVBUDGET_TEST_DATABASE_URL`） |
+| `tests/test_runtime_structured_ingest.py`（新增 9 条清理兼容用例） | 28（含既有 19） | 是 |
 
 ### 新增：文档与基线产物
 
@@ -116,25 +117,29 @@
 
 | 检查 | 基线（`4a1cabf`） | 本次 | 结论 |
 | --- | --- | --- | --- |
-| `python -m pytest -q`（本机 Windows） | 1307 passed, 1 skipped, 0 failed | **1439 passed, 17 skipped, 0 failed** | +132 passed / +16 skipped（新真库用例默认跳过），**零失败** |
-| `python -m pytest -q`（GitHub CI, Linux） | — | **1440 passed, 16 skipped** | 与本地差 1 条，原因见下 |
+| `python -m pytest -q`（本机 Windows） | 1307 passed, 1 skipped, 0 failed | **1456 passed, 24 skipped, 0 failed** | 新增用例全部计入；24 条 skip 里 23 条是真库用例（未配置 DSN），1 条是平台条件用例 |
+| `python -m pytest -q`（GitHub CI, Linux） | — | 见 PR #42 的 CI 运行结果 | CI 比本地多 1 条通过（平台条件用例），**条数随用例集变化，此处不写死数字**，理由见下 |
 | `ruff check .`（Makefile 与 CI 同款全仓命令） | All checks passed | **All checks passed** | 无变化 |
 | `mypy api src tests` | Success（199 files） | **Success（212 files）** | 无变化 |
 
 基线数字取自 `4a1cabf` 的干净检出（`git worktree`），不是带改动的当前树。
 
-**本地与 CI 相差 1 条的原因（已逐条核对，不是缺陷）**：
+**本地与 CI 条数不同的原因（已逐条核对，不是缺陷）**：
 `tests/test_pdf_parse_isolation_and_backup.py:255` 在 Windows 上跳过
-（`RLIMIT_AS` 不适用），在 Linux 上运行并通过。因此
-`1440 = 1439 + 1`、`16 = 17 - 1`，两边完全对得上。
-16 条真库用例在两种环境下都跳过（未配置 `GOVBUDGET_TEST_DATABASE_URL`）。
+（`RLIMIT_AS` 不适用），在 Linux 上运行并通过。所以 CI 恒比本地
+**多 1 条通过、少 1 条跳过**，其余完全相同。
+23 条真库用例在两种环境下都跳过（未配置 `GOVBUDGET_TEST_DATABASE_URL`）。
+
+> 为什么 CI 那一栏不写具体数字：本轮新增用例后数字还会变，写死的数字会立刻过期，
+> 而为了更新它再提交一次又会改变提交历史——与提交数是同一个陷阱。
+> CI 数字以 PR 检查页的运行为准；本地与真库两组是本节实际执行的结果。
 
 ### 3.2 真库验证（PostgreSQL 15.17）
 
 ```bash
 GOVBUDGET_TEST_DATABASE_URL=postgresql://.../fiscal_db \
     python -m pytest tests/test_material_slot_migration_pg.py -v
-# => 16 passed
+# => 23 passed
 ```
 
 覆盖：全新库应用、第二次 no-op、既有库升级只增 0019、语句重放、schema 形状、
@@ -237,6 +242,37 @@ GOVBUDGET_TEST_DATABASE_URL=postgresql://.../fiscal_db \
 这一轮**没有改 schema**（`SCHEMA_CHANGE_REQUIRED = NO`），只动 service / tests / docs。
 
 ---
+
+### 3.8 第四轮：structured-ingest cleanup × Material Ledger 兼容
+
+PR #42 给 `fiscal_document_versions` 加了 `slot_id` 之后，旧的结构化入库清理链路
+（`POST /api/jobs/structured-ingest-cleanup`）多了一条它看不见的依赖：它按
+"每个组织+年度+文种只留最新入库版本"设计，看到的是**入库维度的冗余**，
+看不到**台账维度的归属**。放任它删掉绑定版本会同时造成两件事——槽位的文件
+版本历史缺一块，以及 `material_slots.current_document_version_id` 被外键置空、
+材料突然变成"没有文件"。
+
+采取的策略是保守的：**只要 `slot_id IS NOT NULL`，该版本就不允许由本链路删除**，
+无论它是当前版本还是历史版本。
+
+| 环节 | 修复 |
+| --- | --- |
+| 计划阶段 | 新增 `_apply_material_ledger_protection()`：查询候选版本的 `slot_id`，把已绑定的从 `cleanup_document_versions` 移到 `blocked_document_versions`，原因码 `material_slot_bound`，并附带 `slot_id` 便于运维定位；涉及的历史任务同步进 `skipped_jobs` |
+| 执行阶段 | DELETE 改为 `WHERE id = $1 AND slot_id IS NULL`。影响 0 行即表示"计划之后才被绑定"，按阻断处理并写入 `blocked_at_delete`，**不当作普通成功** |
+| job sidecar | 只有实际 `DELETE 1` 的版本才把 `structured_ingest.json` 标成 `cleaned`。计划阶段被阻断、或执行阶段发现已绑定的版本，数据库里都还在，此时标 cleaned 会制造双真相 |
+| 预览 | dry_run 同样要过台账校验（预览的全部意义就是"将会删除哪些"）。查不到数据库时宁可报 503，也不返回一份可能夸大删除范围的计划 |
+| 纯计划 | `plan_structured_ingest_cleanup()` 仍是纯函数，返回 `material_ledger_checked: false` 自报"没校验过"，不冒充可执行计划 |
+
+为什么计划与执行要各加一道：两者之间可能插进新的绑定（重分析、重新归属）。
+执行阶段的 `slot_id IS NULL` 是兜底，它不依赖计划是否准确，因此 TOCTOU 窗口被关掉。
+
+**没有**采用"先删版本、让外键把当前指针 SET NULL、再刷新状态"的方案——
+那等于先破坏台账再补救，而正确策略是根本不让它被删掉。
+
+未绑定槽位的版本保持原行为：`shared_with_latest_job`、`already_cleaned`、
+`missing_document_version_id` 等规则不变，清理没有被整体禁掉。
+
+前端补了 `material_slot_bound` 的中文原因标签，否则运维会在清理预览里看到原始代码。
 
 ## 4. 三个真实槽位身份示例
 
