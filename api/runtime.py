@@ -94,6 +94,14 @@ from src.utils.report_year import (  # noqa: F401
     parse_report_year,
 )
 
+# 报告画像的唯一解析器。此前文种/层级等识别在本模块与规则引擎里各写一套，
+# 兜底口径互相矛盾，同一 PDF 在不同环节可能被判成不同文种。
+# 本模块只保留对解析器的调用，判定逻辑不再在本模块维护。
+from src.services.document_profile_resolver import (
+    detect_cover_facts,
+    resolve_document_profile,
+)
+
 _pipeline_runner: Optional[Callable[[Path], Awaitable[None]]] = None
 _job_queue: Optional["DurableJobQueue"] = None
 _JOB_SUMMARY_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -705,30 +713,15 @@ def infer_report_year(
 
 
 def normalize_report_kind(doc_type: Optional[str], filename: str = "") -> str:
-    """Normalize report type to budget/final/unknown."""
-    text = (doc_type or "").strip()
-    text_lower = text.lower()
-    name_lower = (filename or "").lower()
-    filename_text = filename or ""
+    """Normalize report type to budget/final/unknown.
 
-    if (
-        "budget" in text_lower
-        or "预算" in text
-        or "budget" in name_lower
-        or "预算" in filename_text
-    ):
-        return "budget"
-    if (
-        "final" in text_lower
-        or "settlement" in text_lower
-        or "accounts" in text_lower
-        or "决算" in text
-        or "final" in name_lower
-        or "settlement" in name_lower
-        or "决算" in filename_text
-    ):
-        return "final"
-    return "unknown"
+    实现已下沉到唯一解析器 ``src/services/document_profile_resolver``：
+    此前文种在 8 处各判一次且兜底口径互相矛盾（本函数与 pipeline 在本口径上
+    曾把"文种 vs 文件名"混在一个预算优先的判断里），导致同一 PDF 在不同环节
+    得到不同文种，进而静默换掉整套专项检查。保留本函数签名是为了不破坏
+    既有调用方与测试桩，判定逻辑不再在此处维护。
+    """
+    return resolve_document_profile(doc_type=doc_type, filename=filename).kind
 
 
 def normalize_request_flag(value: Any, name: str) -> Optional[bool]:
@@ -787,38 +780,6 @@ def normalize_doc_type(
     return None
 
 
-def _normalize_cover_line(raw: Any) -> str:
-    return re.sub(r"\s+", "", str(raw or "").strip())
-
-
-def _detect_cover_scope_hint(text: str) -> Optional[str]:
-    compact = _normalize_cover_line(text)
-    if not compact:
-        return None
-    if "\u4e3b\u7ba1\u90e8\u95e8" in compact or "\u90e8\u95e8\u9884\u7b97" in compact or "\u90e8\u95e8\u51b3\u7b97" in compact:
-        return "department"
-    if "\u9884\u7b97\u5355\u4f4d" in compact or "\u51b3\u7b97\u5355\u4f4d" in compact:
-        return "unit"
-    if "\u5355\u4f4d\u9884\u7b97" in compact or "\u5355\u4f4d\u51b3\u7b97" in compact or "\u672c\u7ea7" in compact:
-        return "unit"
-    if "\u90e8\u95e8" in compact:
-        return "department"
-    if "\u5355\u4f4d" in compact:
-        return "unit"
-    return None
-
-
-def _detect_cover_report_kind(text: str) -> Optional[str]:
-    compact = _normalize_cover_line(text)
-    if not compact:
-        return None
-    if "\u9884\u7b97" in compact or "budget" in compact.lower():
-        return "budget"
-    if "\u51b3\u7b97" in compact or "final" in compact.lower():
-        return "final"
-    return None
-
-
 def extract_cover_metadata(
     *,
     page_texts: Optional[List[str]] = None,
@@ -826,75 +787,48 @@ def extract_cover_metadata(
     preferred_year: Any = None,
     doc_type: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Extract lightweight cover metadata from the first page."""
+    """Extract lightweight cover metadata from the first page.
+
+    返回值保持历史键不变（封面标题/机构/层级提示/文种/年度/doc_type），
+    并新增 ``profile`` 与 ``profile_status``：前者是报告画像的完整留痕
+    （含每个维度的来源与落选候选），后者让上层一眼看出画像是否足以
+    选择检查配置。同一 PDF 在上传、规则执行、AI、入库、导出各环节
+    都应消费这一个画像，不得各自重新猜文种。
+    """
     normalized_pages = [str(text or "").strip() for text in (page_texts or [])]
-    first_page_text = normalized_pages[0] if normalized_pages else ""
-    lines = [line.strip() for line in first_page_text.splitlines() if line.strip()]
+    facts = detect_cover_facts(normalized_pages)
 
-    cover_title = ""
-    for line in lines[:20]:
-        compact = _normalize_cover_line(line)
-        if not compact:
-            continue
-        if (
-            ("\u9884\u7b97" in compact or "\u51b3\u7b97" in compact)
-            and ("\u90e8\u95e8" in compact or "\u5355\u4f4d" in compact)
-        ):
-            cover_title = line.strip()
-            break
-
-    if not cover_title:
-        for line in lines[:20]:
-            compact = _normalize_cover_line(line)
-            if "\u9884\u7b97" in compact or "\u51b3\u7b97" in compact:
-                cover_title = line.strip()
-                break
-
-    cover_org_name = ""
-    cover_org_label = ""
-    scope_hint: Optional[str] = None
-    report_kind: Optional[str] = None
-
-    for line in lines[:40]:
-        compact = _normalize_cover_line(line)
-        if not compact:
-            continue
-        for label, label_scope, label_kind in _COVER_ORG_LABELS:
-            if label not in compact:
-                continue
-            _, _, remainder = compact.partition(label)
-            remainder = re.sub(r"^[\uff1a:]+", "", remainder).strip()
-            if not remainder:
-                continue
-            cover_org_name = remainder
-            cover_org_label = label
-            scope_hint = label_scope
-            report_kind = label_kind
-            break
-        if cover_org_name:
-            break
-
-    scope_hint = scope_hint or _detect_cover_scope_hint(cover_title)
-    report_kind = report_kind or _detect_cover_report_kind(cover_title)
-
-    fallback_kind = normalize_report_kind(doc_type, filename)
-    if not report_kind and fallback_kind != "unknown":
-        report_kind = fallback_kind
-
+    # 年度沿用原有的加权推断（文件名权重最高、封面关键词加分、只看前 6 页），
+    # 把它作为显式值交给画像，避免"统一画像"顺手把年度识别精度降级。
     report_year = infer_report_year(
         filename=filename,
         page_texts=normalized_pages,
         preferred_year=preferred_year,
     )
 
+    profile = resolve_document_profile(
+        doc_type=doc_type,
+        filename=filename,
+        page_texts=normalized_pages,
+        cover_title=facts["cover_title"],
+        cover_org_name=facts["cover_org_name"],
+        cover_org_label=facts["cover_org_label"],
+        cover_scope_hint=facts["cover_scope_hint"] or None,
+        preferred_year=report_year,
+    )
+
+    report_kind = profile.kind
     return {
-        "cover_title": cover_title,
-        "cover_org_name": cover_org_name,
-        "cover_org_label": cover_org_label,
-        "scope_hint": scope_hint or "",
-        "report_kind": report_kind or "unknown",
+        "cover_title": facts["cover_title"],
+        "cover_org_name": facts["cover_org_name"],
+        "cover_org_label": facts["cover_org_label"],
+        "scope_hint": profile.level if profile.level != "unknown" else "",
+        "report_kind": report_kind,
         "report_year": report_year,
         "doc_type": normalize_doc_type(doc_type, filename, report_kind=report_kind),
+        "profile": profile.to_dict(),
+        "profile_status": profile.profile_status,
+        "profile_unsupported_reason": profile.unsupported_reason,
     }
 
 

@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.engine import common_rules as common_rules_mod
 from src.engine import pipeline
 from src.engine.budget_rules import (
     BUD001_StructureAndAnchors,
@@ -170,6 +171,47 @@ async def test_engine_rule_runner_uses_metadata_for_final_report_under_budget_pa
     rule_ids = {item.rule_id for item in findings}
     assert "FIN-DUMMY" in rule_ids
     assert "BUD-DUMMY" not in rule_ids
+
+
+@pytest.mark.asyncio
+async def test_engine_rule_runner_shares_resolved_kind_with_rule_bodies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """一次解析、全程消费（独立验收 2026-09-17 kind_disagreement 反例）。
+
+    显式元数据 final、文件名与正文都是"部门预算"：runner 判 final 后，
+    文档对象必须携带同一结论，规则体（common_rules._infer_report_kind）
+    不得再按文件名猜出 budget——同一份 PDF 在两个环节拿到互斥的检查
+    配置，正是此前主流程/通用规则互斥结论的成因。
+    """
+    monkeypatch.setattr(runner_mod, "ALL_BUDGET_RULES", [])
+    monkeypatch.setattr(runner_mod, "FINAL_ALL_RULES", [])
+    monkeypatch.setattr(runner_mod, "ALL_COMMON_RULES", [])
+
+    runner = runner_mod.EngineRuleRunner()
+    doc = build_document(
+        path="2024部门预算.pdf",
+        page_texts=["2024年度部门预算"],
+        page_tables=[[]],
+        filesize=1,
+    )
+
+    async def _fake_prepare(_job_context):
+        return doc
+
+    monkeypatch.setattr(runner, "_prepare_document", _fake_prepare)
+    job_context = JobContext(
+        job_id="job-kind-share",
+        pdf_path="2024部门预算.pdf",
+        page_texts=doc.page_texts,
+        page_tables=doc.page_tables,
+        meta={"report_kind": "final"},
+    )
+
+    await runner.run_rules(job_context=job_context, rules=[], config=AnalysisConfig())
+
+    assert doc.report_kind == "final"
+    assert common_rules_mod._infer_report_kind(doc) == "final"
 
 
 def test_engine_rule_runner_does_not_infer_budget_from_project_directory() -> None:

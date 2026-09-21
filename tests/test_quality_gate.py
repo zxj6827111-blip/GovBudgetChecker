@@ -18,6 +18,7 @@ import pytest
 from api import main as pipeline_mod
 from api import runtime
 from api.main import _count_result_findings, _evaluate_quality_gate
+from src.engine import check_obligations
 
 GOOD_PAGES = {
     "page_count": 3,
@@ -227,7 +228,32 @@ def _prepare_job(tmp_path: Path, name: str, status_payload: dict) -> Path:
     return job_dir
 
 
-def _patch_pipeline(monkeypatch, page_texts, issues_payload):
+def _full_rule_receipt(report_kind: str = "budget"):
+    """构造"全部适用规则均已执行且无未决项"的规则执行摘要。
+
+    必须带上 ``rule_statuses``（逐规则回执）：检查义务台账要按规则编号
+    逐条核对"这项检查到底跑没跑"，只有总数无法证明任何一条具体规则执行过。
+    规则编号直接从真实注册表取，保证桩与生产契约同源；用假的编号会让
+    桩"看起来通过"而台账里全是未执行。
+    """
+    rules = sorted(check_obligations.registered_rule_ids(report_kind))
+    return {
+        "total_rules": len(rules),
+        "executed": len(rules),
+        "pass": len(rules),
+        "fail": 0,
+        "not_applicable": 0,
+        "insufficient_data": 0,
+        "parse_error": 0,
+        "execution_error": 0,
+        "unresolved_total": 0,
+        "failed_rules": [],
+        "unresolved_rules": [],
+        "rule_statuses": {code: "pass" for code in rules},
+    }
+
+
+def _patch_pipeline(monkeypatch, page_texts, issues_payload, report_kind="budget"):
     monkeypatch.setattr(
         pipeline_mod.pdfplumber, "open", lambda _path: _FakePdf(len(page_texts))
     )
@@ -247,19 +273,7 @@ def _patch_pipeline(monkeypatch, page_texts, issues_payload):
             return_value={
                 "issues": issues_payload,
                 # 与真实 run_rules_in_process 契约一致：规则执行摘要随 payload 返回
-                "rule_execution_summary": {
-                    "total_rules": 1,
-                    "executed": 1,
-                    "pass": 1,
-                    "fail": 0,
-                    "not_applicable": 0,
-                    "insufficient_data": 0,
-                    "parse_error": 0,
-                    "execution_error": 0,
-                    "unresolved_total": 0,
-                    "failed_rules": [],
-                    "unresolved_rules": [],
-                },
+                "rule_execution_summary": _full_rule_receipt(report_kind),
             }
         ),
     )
@@ -312,7 +326,15 @@ async def test_pipeline_marks_scanned_document_as_review_required(tmp_path, monk
 
 
 @pytest.mark.asyncio
-async def test_pipeline_marks_clean_document_as_done_no_findings(tmp_path, monkeypatch):
+async def test_pipeline_clean_document_with_unimplemented_checks_is_not_done(
+    tmp_path, monkeypatch
+):
+    """干净材料 + 全部适用规则执行完毕，仍不能算"检查完整"。
+
+    这是本次整改的核心断言：当前预算口径下仍有尚未实现的检查义务
+    （如"占 XX.XX"漏百分号、绩效阶段金额口径），它们不是"没问题"，
+    而是"没查"。门禁必须保留 review_required，否则漏查会被当成通过。
+    """
     job_dir = _prepare_job(
         tmp_path,
         "job-clean",
@@ -333,12 +355,79 @@ async def test_pipeline_marks_clean_document_as_done_no_findings(tmp_path, monke
     await pipeline_mod._run_pipeline_inner(job_dir)
 
     payload = runtime.read_json_file(job_dir / "status.json", default={})
+    assert payload["status"] == "review_required"
+    assert payload["analysis_conclusion"] == "incomplete"
+    assert payload["page_coverage"] == 1.0
+    codes = [r["code"] for r in payload["review_reasons"]]
+    assert "check_obligations_incomplete" in codes
+
+    coverage = payload["result"]["meta"]["obligation_coverage"]
+    assert coverage["catalog_version"] == check_obligations.OBLIGATION_CATALOG_VERSION
+    # "已识别为预算"不是未完成原因：画像已确定文种，不能把它记成缺口
+    assert "profile_unresolved" not in (coverage["by_reason"] or {})
+    # 规则侧已被完整回执排除（没有 not_executed / 取数不足 / 解析歧义），
+    # 剩下的只有真实的实现缺口，以及"本次未启用 AI"的语义复核义务。
+    assert set(coverage["by_reason"]) <= {"not_implemented", "ai_not_run"}
+    assert coverage["by_reason"].get("not_implemented", 0) > 0
+    # AI 语义义务未执行会如实记账，但不阻塞门禁（未配置为必需能力时），
+    # 因此阻塞数应严格等于"尚未实现"的项数。
+    assert coverage["blocking_total"] == coverage["by_reason"]["not_implemented"]
+    assert coverage["unresolved_total"] >= coverage["blocking_total"]
+    # 完成率不得因分母调整而虚高
+    assert coverage["applicable_total"] > 0
+    assert coverage["coverage_rate"] is not None
+    assert coverage["coverage_rate"] < 1.0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_clean_document_is_done_when_catalog_has_no_gap(
+    tmp_path, monkeypatch
+):
+    """把"尚未实现"的义务从清单里去掉后，干净材料才允许出 done + no_findings。
+
+    这条测试守住反向边界：门禁不是无条件转人工——只要应检查事项全部完成、
+    无问题、页覆盖达标，仍然可以给出 done + no_findings。同时说明
+    "没有未完成项"是靠补实现达到的，不是靠删分母达到的（本测试只改清单，
+    不改任何计数逻辑）。
+    """
+    implemented_only = tuple(
+        item
+        for item in check_obligations.OBLIGATION_CATALOG
+        if not item.pending_checkers and not item.requires_ai
+    )
+    monkeypatch.setattr(
+        check_obligations, "OBLIGATION_CATALOG", implemented_only, raising=True
+    )
+
+    job_dir = _prepare_job(
+        tmp_path,
+        "job-clean-all-implemented",
+        {
+            "status": "queued",
+            "mode": "legacy",
+            "use_local_rules": True,
+            "use_ai_assist": False,
+            "report_year": 2025,
+            "report_kind": "budget",
+        },
+    )
+    full_text = "一般公共预算财政拨款支出预算表" * 10
+    _patch_pipeline(
+        monkeypatch, [full_text, full_text], {"all": [], "error": [], "warn": [], "info": []}
+    )
+
+    await pipeline_mod._run_pipeline_inner(job_dir)
+
+    payload = runtime.read_json_file(job_dir / "status.json", default={})
     assert payload["status"] == "done"
     assert payload["quality_status"] == "complete"
     assert payload["analysis_conclusion"] == "no_findings"
-    assert payload["page_coverage"] == 1.0
+    # "未发现问题"必须限定在已完成的检查范围内，而不是含混地说材料没问题
+    assert payload["conclusion_scope"] == "no_findings_within_covered_checks"
     assert payload["review_reasons"] == []
-    assert payload["result"]["meta"]["quality_gate"]["status"] == "done"
+    coverage = payload["result"]["meta"]["obligation_coverage"]
+    assert coverage["blocking_total"] == 0
+    assert coverage["coverage_rate"] == 1.0
 
 
 @pytest.mark.asyncio

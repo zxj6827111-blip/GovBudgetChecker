@@ -8,6 +8,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.utils.rule_text import default_rule_suggestion, infer_rule_title
 from src.utils.provenance import DEFAULT_RULE_SET_VERSION, ENGINE_VERSION
 
+from src.services.document_profile_resolver import (
+    resolve_report_kind_from_path,
+)
+
 from .budget_rules import ALL_BUDGET_RULES
 from .common_rules import ALL_COMMON_RULES
 from .rule_outcome import (
@@ -37,38 +41,29 @@ build_document = _build_document
 
 
 def _resolve_report_kind(doc: Any, report_kind: Optional[str] = None) -> str:
-    kind = (report_kind or "").strip().lower()
-    if kind in {"budget", "final"}:
-        return kind
+    """材料文种判定。
 
-    # The repository path itself contains "GovBudgetChecker".  Detect only
-    # from the uploaded filename, otherwise every document can be routed to
-    # the budget rule set before its content is considered.
-    #
-    # NOTE: ``Path(...).name`` is host-OS dependent.  On Linux a
-    # Windows-style path such as ``E:\dir\plain.pdf`` has no path separator,
-    # so ``Path.name`` returns the whole string (which contains "Budget" via
-    # the repository directory) and misroutes the document.  Split on both
-    # separators explicitly so basename extraction is platform independent.
-    path = str(getattr(doc, "path", "") or "")
-    filename = re.split(r"[\\/]", path)[-1] if path else ""
-    lowered = filename.lower()
-    if "budget" in lowered or "预算" in filename:
-        return "budget"
-    if "final" in lowered or "决算" in filename:
-        return "final"
+    实现已收敛到唯一解析器 ``src/services/document_profile_resolver``：此前
+    pipeline / engine_rule_runner / common_rules / api.runtime 各写一份，
+    兜底值互相矛盾（本模块默认 unknown、common_rules 默认 final），存在
+    "同一 PDF 在不同入口换掉整套专项检查"的风险。
 
-    page_texts = getattr(doc, "page_texts", []) or []
-    first_text = page_texts[0] if page_texts else ""
-    if "预算" in first_text:
-        return "budget"
-    if "决算" in first_text:
-        return "final"
-    return "unknown"
+    ``path`` 仍按基名参与判断，不整串路径匹配：仓库目录名
+    ``GovBudgetChecker`` 自带 "Budget"，整串匹配会把任何材料都判成预算。
+    解析器内部显式按两种路径分隔符取基名，避免 Windows 路径在 Linux 上
+    把整串当文件名。
+    """
+    explicit = str(report_kind or "").strip().lower()
+    if explicit in {"budget", "final"}:
+        return explicit
+    return resolve_report_kind_from_path(
+        str(getattr(doc, "path", "") or ""),
+        getattr(doc, "page_texts", []) or [],
+    )
 
 
-def _select_rule_set(doc: Any, report_kind: Optional[str] = None) -> List[Any]:
-    kind = _resolve_report_kind(doc, report_kind)
+def _rule_set_for_kind(kind: str) -> List[Any]:
+    """按文种选择专项规则集。识别不了文种就不选专项规则，只跑通用规则。"""
     if kind == "budget":
         return ALL_BUDGET_RULES
     if kind == "final":
@@ -99,16 +94,25 @@ def run_rules_with_outcomes(
       部分子检查 not_applicable 绝不能覆盖已确认的 fail；
     - 未完成状态供质量门 fail-closed 判定与回放评测消费。
     """
+    resolved_kind = _resolve_report_kind(doc, report_kind)
+    # 一次解析、全程消费：把文种结论挂到文档上，规则体（如 CMM-003 的
+    # 锚点选择）读同一个值，不再各自用不同输入重新猜。独立验收
+    # 2026-09-17 kind_disagreement 反例：显式指定 final、文件名与正文为
+    # "部门预算"的材料，主流程判 final，通用规则却按文件名判 budget——
+    # 同一份 PDF 在两个环节拿到互斥的检查配置。
+    if doc is not None:
+        doc.report_kind = resolved_kind
+
     if rules is not None:
         selected_rules = list(rules)
     else:
         selected_rules = [
-            *_select_rule_set(doc, report_kind=report_kind),
+            *_rule_set_for_kind(resolved_kind),
             *ALL_COMMON_RULES,
         ]
     issues: List[Issue] = []
     outcomes: List[RuleOutcome] = []
-    if _resolve_report_kind(doc, report_kind) == "unknown":
+    if resolved_kind == "unknown":
         issues.append(
             Issue(
                 rule="DOC-TYPE-UNKNOWN",

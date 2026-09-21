@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from api import main as pipeline_mod
+from support_rule_receipt import full_rule_receipt
 from api import runtime
 from src.utils.logging_config import (
     StructuredFormatter,
@@ -416,7 +417,10 @@ async def test_pipeline_logs_carry_job_id_and_stage(tmp_path, monkeypatch, caplo
     stages = [record.stage for record in stage_records]
     assert "解析PDF内容" in stages
     assert "执行规则检查" in stages
-    assert "完成" in stages
+    # 终态 stage 文本有三态（完成 / 完成（部分能力降级） / 完成（需人工复核）），
+    # 断言前缀而不是等值：等值会在质量门因任何原因转人工复核时误报，
+    # 而本用例要验的是日志字段，不是门禁结论。
+    assert any(stage.startswith("完成") for stage in stages), stages
 
 
 @pytest.mark.asyncio

@@ -148,6 +148,12 @@ class Document:
     anchors: Dict[str, List[int]] = field(default_factory=dict)
     dominant_year: Optional[int] = None
     dominant_unit: Optional[str] = None
+    # 一次解析的文种结论（"budget"/"final"/"unknown"）：由规则执行入口
+    # （pipeline / engine_rule_runner）解析后挂上，规则体（如 CMM-003）
+    # 消费同一个值，不再各自用不同输入重新猜文种。None 表示尚未解析，
+    # 规则体回退到"文件名基名 + 正文首页"推断（独立验收 2026-09-17
+    # kind_disagreement 反例的整改）。
+    report_kind: Optional[str] = None
 
 
 # ---------- 工具 ----------

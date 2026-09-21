@@ -105,6 +105,8 @@ _CSV_FIELDNAMES: List[str] = [
     "actual_name",
     "code_level",
     "source_of_truth",
+    "关联检查项",
+    "obligation_ids",
 ]
 
 
@@ -444,6 +446,76 @@ def _build_role_summary(
     return ""
 
 
+def _format_obligation_ids(issue: Dict[str, Any]) -> str:
+    """把义务编号格式化成单元格文本。
+
+    旧结果没有该字段时返回空串（不是 "0"、不是 "无"）：空串表示"未记录"，
+    不会让阅读者以为"这条问题不属于任何检查项"。
+    """
+    raw = issue.get("obligation_ids")
+    if not isinstance(raw, list):
+        return ""
+    return "; ".join(str(item) for item in raw if str(item).strip())
+
+
+def _build_check_scope_export(status_payload: Dict[str, Any]) -> Dict[str, Any]:
+    """导出用的检查范围摘要：四类内容与检查覆盖的身份信息。
+
+    plan §6 要求页面、JSON、CSV、PDF 导出统一展示：已确认问题、待人工复核、
+    未完成检查、舍入与格式建议。导出侧至少必须把"检查范围"和"未完成清单"
+    交出去——只给问题列表会让接收方以为没列出来的部分都查过了。
+
+    旧任务（本次整改前的结果）没有 ``check_coverage`` / ``document_profile``，
+    这里明确写成 ``"旧版未记录"``，而不是补一个空的"已完成"。
+    """
+    result = status_payload.get("result")
+    result = result if isinstance(result, dict) else {}
+    meta = result.get("meta")
+    meta = meta if isinstance(meta, dict) else {}
+
+    coverage = status_payload.get("check_coverage")
+    if not isinstance(coverage, dict):
+        coverage = meta.get("obligation_coverage")
+    profile = status_payload.get("document_profile")
+    if not isinstance(profile, dict):
+        profile = meta.get("document_profile")
+
+    legacy = coverage is None or not coverage
+    return {
+        "conclusion_scope": status_payload.get("conclusion_scope") or "旧版未记录",
+        "profile_status": status_payload.get("profile_status") or "旧版未记录",
+        "report_kind": status_payload.get("report_kind") or "旧版未记录",
+        "check_coverage": coverage if isinstance(coverage, dict) else "旧版未记录",
+        "unfinished_checks": (
+            [
+                {
+                    "obligation_id": item.get("obligation_id"),
+                    "group_title": item.get("group_title"),
+                    "title": item.get("title"),
+                    "status": item.get("status"),
+                    "reason_label": item.get("reason_label"),
+                    "detail": item.get("detail"),
+                    "basis": item.get("basis"),
+                    "gap_note": item.get("gap_note"),
+                }
+                for item in coverage.get("instances", [])
+                if isinstance(item, dict)
+                and str(item.get("status") or "")
+                not in {"completed", "not_applicable"}
+            ]
+            if isinstance(coverage, dict)
+            else "旧版未记录"
+        ),
+        "document_profile": profile if isinstance(profile, dict) else "旧版未记录",
+        "coverage_note": (
+            "本次结果为旧版记录，未包含检查覆盖台账，"
+            "无法据此判断检查范围是否完整"
+            if legacy
+            else "“未发现问题”仅表示在本次已完成的检查范围内未发现问题"
+        ),
+    }
+
+
 def _enrich_issue(item: Dict[str, Any]) -> Dict[str, Any]:
     enriched = dict(item)
     if not isinstance(enriched.get("display"), dict):
@@ -549,6 +621,10 @@ def _build_csv_row(issue: Dict[str, Any]) -> Dict[str, Any]:
         "actual_name": enriched.get("actual_name") or export_location.get("actual_name") or "",
         "code_level": enriched.get("code_level") or export_location.get("code_level") or "",
         "source_of_truth": enriched.get("source_of_truth") or export_location.get("source_of_truth") or "",
+        # 关联检查项：把问题挂回"应检查事项"，让线下沟通能直接说清
+        # "这条问题属于哪一项检查"，而不必让接收方按规则编号反查。
+        "关联检查项": _format_obligation_ids(enriched),
+        "obligation_ids": _format_obligation_ids(enriched),
     }
     return {key: row.get(key, "") for key in _CSV_FIELDNAMES}
 
@@ -1125,12 +1201,17 @@ async def download_report(
 
     if format == "json":
         enriched_issues = [_enrich_issue(item) for item in issues]
-        return {
+        payload: Dict[str, Any] = {
             "job_id": job_id,
             "status": status_payload.get("status"),
             "issues": enriched_issues,
             "count": len(enriched_issues),
         }
+        # 导出必须能回答"哪些检查没做完、为什么"，否则使用者会把
+        # "结果里没有问题"读成"材料没有问题"（plan §3/§6）。
+        # 旧任务没有这些字段时明确写"旧版未记录"，不显示成已完成。
+        payload.update(_build_check_scope_export(status_payload))
+        return payload
 
     if format == "csv":
         output = io.StringIO()

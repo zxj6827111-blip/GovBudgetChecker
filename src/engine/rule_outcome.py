@@ -255,6 +255,11 @@ def summarize_rule_outcomes(outcomes: Iterable[RuleOutcome]) -> Dict[str, Any]:
     counts = {status: 0 for status in ALL_STATUSES}
     failed_rules: List[str] = []
     unresolved_rules: List[Dict[str, Any]] = []
+    # 逐规则状态回执。此前摘要只有"未决规则列表"与"命中规则列表"，
+    # 通过的规则只剩一个计数——于是"这条检查项到底有没有跑"无法回答，
+    # 检查义务台账只能靠总数推断（总数对不上就什么都证明不了）。
+    # 这里把每个规则 id 的最终状态如实列出，让台账能逐条对账。
+    rule_statuses: Dict[str, str] = {}
     total = 0
     partial_findings_total = 0
     for outcome in outcomes:
@@ -262,6 +267,13 @@ def summarize_rule_outcomes(outcomes: Iterable[RuleOutcome]) -> Dict[str, Any]:
         status = outcome.status if outcome.status in counts else STATUS_EXECUTION_ERROR
         counts[status] += 1
         partial_findings_total += outcome.partial_findings_count
+        # 同一规则编号在多轮/多渠道被调度时，保留更严重的状态，
+        # 避免后一次 pass 覆盖前一次 execution_error。
+        previous = rule_statuses.get(outcome.rule_id)
+        if previous is None or STATUS_PRIORITY.get(status, -1) > STATUS_PRIORITY.get(
+            previous, -1
+        ):
+            rule_statuses[outcome.rule_id] = status
         if status == STATUS_FAIL and outcome.rule_id not in failed_rules:
             failed_rules.append(outcome.rule_id)
         if status in NON_FINDING_STATUSES and status != STATUS_NOT_APPLICABLE:
@@ -285,6 +297,7 @@ def summarize_rule_outcomes(outcomes: Iterable[RuleOutcome]) -> Dict[str, Any]:
         "failed_rules": failed_rules,
         "unresolved_rules": unresolved_rules,
         "partial_findings_total": partial_findings_total,
+        "rule_statuses": rule_statuses,
     }
 
 

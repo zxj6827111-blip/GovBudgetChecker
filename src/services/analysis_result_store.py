@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 from src.db.connection import DatabaseConnection
 from src.db.migrations import run_migrations
 from src.schemas.issues import ACTIVE_JOB_STATUSES, normalize_job_status
+from src.services.document_profile_resolver import resolve_document_profile
 
 logger = logging.getLogger(__name__)
 
@@ -909,18 +910,16 @@ def _format_report_year_label(value: Any) -> str:
 
 
 def _normalize_report_kind(doc_type: str, report_kind: str, filename: str) -> str:
-    normalized_kind = str(report_kind or "").strip().lower()
-    if normalized_kind in {"budget", "final"}:
-        return normalized_kind
+    """结果存储侧的文种归一（收敛到唯一解析器）。
 
-    joined = " ".join(
-        part for part in (str(doc_type or "").strip().lower(), str(filename or "").strip().lower()) if part
-    )
-    if "budget" in joined or "预算" in joined:
-        return "budget"
-    if any(token in joined for token in ("final", "settlement", "accounts")) or "决算" in joined:
-        return "final"
-    return "unknown"
+    此前这里是又一份独立实现：把 ``doc_type`` 与 ``filename`` 拼成一串再做
+    预算优先判断，于是"用户选了决算、文件名带预算"会静默记成预算，与规则
+    路由的判定可能不一致。现在统一走画像解析器，取值口径与规则执行一致。
+    """
+    explicit = str(report_kind or "").strip().lower()
+    if explicit in {"budget", "final"}:
+        return explicit
+    return resolve_document_profile(doc_type=doc_type, filename=filename).kind
 
 
 def _report_kind_label(kind: str) -> str:

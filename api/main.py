@@ -22,8 +22,13 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 
+from src.engine.check_obligations import (
+    attach_obligation_ids,
+    build_obligation_ledger,
+)
 from src.engine.pipeline import build_document, build_issues_payload
 from src.engine.rule_outcome import STATUS_INSUFFICIENT_DATA
+from src.services.document_profile_resolver import resolve_document_profile
 from src.services.evidence_guard import (
     apply_evidence_completeness,
     count_formal_findings,
@@ -465,6 +470,7 @@ def _evaluate_quality_gate(
     evidence_completeness: Optional[Dict[str, Any]] = None,
     rule_execution_summary: Optional[Dict[str, Any]] = None,
     doc_type: Optional[str] = None,
+    obligation_coverage: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """任务级质量门禁：决定终态是 done / degraded / review_required。
 
@@ -489,8 +495,13 @@ def _evaluate_quality_gate(
      11. ``rule_execution_error``：规则执行异常/解析失败（不再伪装成 hint finding）；
      12. ``report_type_mismatch``：报告类型冲突（doc_type 与内容判定不一致，
          或 ps_sync 因类型未知跳过/写错）；
-     13. ``rules_not_executed``：无发现时所有适用规则必须已执行，
+      13. ``rules_not_executed``：无发现时所有适用规则必须已执行，
          否则不允许出 no_findings。
+      14. ``check_obligations_incomplete``：存在"应执行但未完成"的检查义务
+         （尚未实现 / 未执行 / 取数不足 / 解析歧义 / 执行异常 / 画像未确认）。
+         这是本项目"漏查不得被当成通过"的核心闸门：规则注册数、规则执行数
+         都不参与这里的判定，分母只由义务清单里"应检查的事项"决定，
+         因此删规则、跳过输入、把缺失当零都无法让完成率变绿。
 
     ``degraded`` 保留原语义："部分能力降级但结论仍然有效"。
 
@@ -687,6 +698,40 @@ def _evaluate_quality_gate(
     if report_type_reason is not None:
         review_reasons.append(report_type_reason)
 
+    # ---- 检查义务台账：应执行而未完成，一律不得算通过 ----
+    # 与上面的规则执行摘要刻意分开：摘要回答"调度出去的规则跑成什么样"，
+    # 台账回答"应该检查的事情完成了多少"。前者按实现方视角计数，后者按
+    # 业务要求计数，因此"规则不存在"这类漏查只有台账能发现。
+    obligation_blocking = 0
+    if isinstance(obligation_coverage, dict):
+        try:
+            obligation_blocking = int(obligation_coverage.get("blocking_total") or 0)
+        except (TypeError, ValueError):
+            obligation_blocking = 0
+        if obligation_blocking > 0:
+            by_reason = obligation_coverage.get("by_reason")
+            by_reason = by_reason if isinstance(by_reason, dict) else {}
+            labels = obligation_coverage.get("by_reason_labels")
+            labels = labels if isinstance(labels, dict) else {}
+            parts = [
+                f"{labels.get(code, code)} {count} 项"
+                for code, count in sorted(by_reason.items(), key=lambda kv: -kv[1])
+            ]
+            review_reasons.append(
+                {
+                    "code": "check_obligations_incomplete",
+                    "message": (
+                        f"应检查事项中有 {obligation_blocking} 项未完成"
+                        f"（{'、'.join(parts)}），本次结论只覆盖已完成的检查范围，"
+                        "不能视为已完整审核"
+                    ),
+                    "blocking_obligation_ids": (
+                        obligation_coverage.get("blocking_obligation_ids") or []
+                    )[:40],
+                    "catalog_version": obligation_coverage.get("catalog_version"),
+                }
+            )
+
     # ---- no_findings 门禁：无发现时要求规则全部执行 ----
     # 摘要缺失/为空同样是"证据不足"：规则执行摘要只要不是非空 dict，
     # 就无法证明规则真的执行过，不允许输出 no_findings（GPT5.6 P0-2）。
@@ -719,6 +764,10 @@ def _evaluate_quality_gate(
         status = JobStatus.REVIEW_REQUIRED.value
         quality_status = AnalysisQualityStatus.REVIEW_REQUIRED.value
         analysis_conclusion = AnalysisConclusion.INCOMPLETE.value
+        # "未发现问题"必须限定为"在本次已完成的检查范围内"（plan §3）。
+        # 结论为 incomplete 时同样需要给出范围说明，否则前端只能显示
+        # 一句"需人工复核"，读者无法判断到底哪些检查没做完。
+        conclusion_scope = "incomplete_scope"
     else:
         status = JobStatus.DEGRADED.value if ai_degraded else JobStatus.DONE.value
         quality_status = (
@@ -731,6 +780,31 @@ def _evaluate_quality_gate(
             if issue_total > 0
             else AnalysisConclusion.NO_FINDINGS.value
         )
+        conclusion_scope = (
+            "findings_within_covered_checks"
+            if issue_total > 0
+            else "no_findings_within_covered_checks"
+        )
+
+    coverage_snapshot: Optional[Dict[str, Any]] = None
+    if isinstance(obligation_coverage, dict):
+        coverage_snapshot = {
+            key: obligation_coverage.get(key)
+            for key in (
+                "catalog_version",
+                "applicable_total",
+                "completed_total",
+                "not_applicable_total",
+                "unresolved_total",
+                "blocking_total",
+                "coverage_rate",
+                "auto_completion_rate",
+                "by_reason",
+                "by_reason_labels",
+                "by_group",
+                "notes",
+            )
+        }
 
     return {
         "status": status,
@@ -745,6 +819,11 @@ def _evaluate_quality_gate(
         "ai_degraded": bool(ai_degraded),
         "ai_required": _ai_assist_required(),
         "ai_execution": ai_execution,
+        # 结论的作用域标签与覆盖摘要：页面对外展示"这是检查范围"，而不是
+        # 让"未发现问题"看起来像"材料没问题"。
+        "conclusion_scope": conclusion_scope,
+        "obligation_coverage": coverage_snapshot,
+        "obligation_blocking_total": obligation_blocking,
     }
 
 
@@ -1123,6 +1202,21 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                 ),
             )
 
+        # 报告画像：后续规则执行、AI、入库与导出统一消费这一个画像。
+        # 此前文种在 8 处各判一次且兜底口径互相矛盾，同一 PDF 在不同环节
+        # 可能被换成不同文种的检查配置，而结果里看不到任何异常。
+        # 这里把已识别的文种作为显式候选传入（来源优先级最高），
+        # 与画像判定不一致时由画像的 conflicts 留痕，不做静默覆盖。
+        document_profile = resolve_document_profile(
+            explicit_report_kind=report_kind,
+            doc_type=str(doc_type) if doc_type is not None else None,
+            filename=pdf_path.name,
+            page_texts=page_texts,
+            page_assessment=page_assessment,
+        )
+        if document_profile.kind in {"budget", "final"}:
+            report_kind = document_profile.kind
+
         # 构建 Document
         _safe_write(
             job_dir,
@@ -1138,6 +1232,8 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                 "stage": "构建文档对象",
                 "page_coverage": page_assessment["page_coverage"],
                 "scanned_page_count": page_assessment["scanned_page_count"],
+                "report_kind": report_kind,
+                "profile_status": document_profile.profile_status,
             },
         )
 
@@ -1550,6 +1646,50 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                 ),
             )
 
+        # 检查义务台账：把"应检查的事情"逐项落账。
+        # 关键顺序：必须写在证据校验之前，这样记录的证据状态才是最终状态；
+        # 也必须写在质量门之前，门禁才能据"应执行未完成"保留 review_required。
+        # 台账只做判定与记账，不新增/删除任何 finding——删规则、跳过输入、
+        # 把缺失当零都无法让它变绿，因为分母来自义务清单而非规则注册数。
+        attach_obligation_ids(result)
+        obligation_coverage = build_obligation_ledger(
+            document_profile,
+            report_kind=report_kind,
+            rule_execution_summary=result["meta"].get("rule_execution_summary"),
+            ai_execution=result["meta"].get("ai_execution"),
+            ai_required=_ai_assist_required(),
+            structured_ingest=structured_ingest_summary,
+        )
+        result["meta"]["obligation_coverage"] = obligation_coverage
+        result["meta"]["document_profile"] = document_profile.to_dict()
+        logger.info(
+            "job %s check coverage: applicable=%s completed=%s unresolved=%s blocking=%s",
+            job_dir.name,
+            obligation_coverage["applicable_total"],
+            obligation_coverage["completed_total"],
+            obligation_coverage["unresolved_total"],
+            obligation_coverage["blocking_total"],
+            extra=safe_log_extra(
+                {
+                    "stage": "obligation_ledger",
+                    "coverage_rate": obligation_coverage["coverage_rate"],
+                    "auto_completion_rate": obligation_coverage[
+                        "auto_completion_rate"
+                    ],
+                    "obligation_applicable_total": obligation_coverage[
+                        "applicable_total"
+                    ],
+                    "obligation_unresolved_total": obligation_coverage[
+                        "unresolved_total"
+                    ],
+                    "obligation_blocking_total": obligation_coverage["blocking_total"],
+                    "obligation_catalog_version": obligation_coverage[
+                        "catalog_version"
+                    ],
+                }
+            ),
+        )
+
         # 任务级质量门禁：done 只在门禁全过时出现，否则转 review_required
         quality_gate = _evaluate_quality_gate(
             page_assessment=page_assessment,
@@ -1565,6 +1705,7 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             evidence_completeness=evidence_completeness,
             rule_execution_summary=result["meta"].get("rule_execution_summary"),
             doc_type=doc_type,
+            obligation_coverage=obligation_coverage,
         )
         result["meta"]["quality_gate"] = quality_gate
         final_status = quality_gate["status"]
@@ -1610,6 +1751,12 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             "review_reasons": quality_gate["review_reasons"],
             "page_coverage": page_assessment["page_coverage"],
             "scanned_page_count": page_assessment["scanned_page_count"],
+            # 结论作用域与检查覆盖：页面对外必须能回答
+            # "这是什么报告、哪些已检查、哪些未完成、为什么"。
+            "conclusion_scope": quality_gate["conclusion_scope"],
+            "check_coverage": obligation_coverage,
+            "document_profile": document_profile.to_dict(),
+            "profile_status": document_profile.profile_status,
             "stage": stage_text,
         }
         _safe_write(job_dir, payload)

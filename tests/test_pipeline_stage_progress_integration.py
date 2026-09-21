@@ -26,6 +26,7 @@ import pytest
 
 from api import main as pipeline_mod
 from api import runtime
+from support_rule_receipt import full_rule_receipt, without_gap_obligations
 
 
 class _FakePdf:
@@ -70,19 +71,7 @@ def _prepare_success_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: 
         AsyncMock(
             return_value={
                 "issues": {"all": [], "error": [], "warn": [], "info": []},
-                "rule_execution_summary": {
-                    "total_rules": 1,
-                    "executed": 1,
-                    "pass": 1,
-                    "fail": 0,
-                    "not_applicable": 0,
-                    "insufficient_data": 0,
-                    "parse_error": 0,
-                    "execution_error": 0,
-                    "unresolved_total": 0,
-                    "failed_rules": [],
-                    "unresolved_rules": [],
-                },
+                "rule_execution_summary": full_rule_receipt("budget"),
             }
         ),
     )
@@ -280,14 +269,17 @@ async def test_stage_progress_addition_does_not_change_final_status_on_success(
     不得影响 `_evaluate_quality_gate` 计算出的 final_status（即 quality_gate 判定
     的输入完全来自页面覆盖率/证据完整性/AI 降级等既有信号，与本次改动无关）。
     """
+    # 摘掉"尚未实现"的检查义务：本用例的自变量是"阶段进度写入是否扰动门禁"，
+    # 若不摘掉，终态会因为真实的实现缺口转 review_required，
+    # 断言就不再能区分"门禁被扰动"与"清单里本来就有未做的检查"。
+    without_gap_obligations(monkeypatch)
     job_dir = _prepare_success_job(tmp_path, monkeypatch, "job-final-status-unchanged")
 
     await pipeline_mod._run_pipeline_inner(job_dir)
 
     payload: Dict[str, Any] = runtime.read_json_file(job_dir / "status.json", default={})
-    # 干净输入（无扫描页、无证据降级、AI 未启用）下应该走到 done，
-    # 这与 Task 3 之前的行为完全一致——如果这里不是 done，说明新增逻辑
-    # 意外扰动了质量门禁判定。
+    # 干净输入（无扫描页、无证据降级、AI 未启用、应检查事项全部完成）下应该
+    # 走到 done——如果这里不是 done，说明新增逻辑意外扰动了质量门禁判定。
     assert payload["status"] == "done", (
         f"REGRESSION: 新增阶段进度写入不应改变质量门禁的 final_status 判定，"
         f"预期 done，实际 {payload['status']!r}"

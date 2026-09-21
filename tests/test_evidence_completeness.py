@@ -22,6 +22,7 @@ import pytest
 from api import main as pipeline_mod
 from api import runtime
 from api.main import _count_result_findings, _evaluate_quality_gate
+from support_rule_receipt import full_rule_receipt, without_gap_obligations
 from src.services.evidence_guard import (
     EVIDENCE_DEGRADED_TAG,
     EVIDENCE_STATUS_COMPLETE,
@@ -43,21 +44,11 @@ GOOD_PAGES = {
     "page_coverage": 1.0,
 }
 
-# 规则执行摘要桩（GPT5.6 P0-2 后 no_findings 需要执行证据）：
-# 所有适用规则已执行、无未决项。
-FULLY_EXECUTED_SUMMARY = {
-    "total_rules": 10,
-    "executed": 10,
-    "pass": 10,
-    "fail": 0,
-    "not_applicable": 0,
-    "insufficient_data": 0,
-    "parse_error": 0,
-    "execution_error": 0,
-    "unresolved_total": 0,
-    "failed_rules": [],
-    "unresolved_rules": [],
-}
+# 规则执行摘要桩（GPT5.6 P0-2 后 no_findings 需要执行证据）：所有适用规则
+# 已执行、无未决项。集中到 support_rule_receipt，规则编号取自真实注册表 ——
+# 检查义务台账要按规则编号逐条核对，内联的"总数桩"无法证明任何一条具体规则
+# 执行过，会让所有义务误落到"未执行"。
+FULLY_EXECUTED_SUMMARY = full_rule_receipt("budget")
 
 
 def _reason_codes(gate: Dict[str, Any]) -> List[str]:
@@ -440,7 +431,10 @@ def _run_legacy_pipeline(
                     "error": list(issue_items),
                     "warn": [],
                     "info": [],
-                }
+                },
+                # 与真实 run_rules_in_process 契约一致：摘要随 payload 返回。
+                # 缺少逐规则回执时，检查义务台账无法证明任何一条检查执行过。
+                "rule_execution_summary": FULLY_EXECUTED_SUMMARY,
             }
         ),
     )
@@ -464,7 +458,14 @@ def _run_legacy_pipeline(
 async def test_pipeline_reports_evidence_completeness(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """完整证据的规则问题：完整率 1.0、无降级、终态仍是 done + findings_detected。"""
+    """完整证据的规则问题：完整率 1.0、无降级、终态仍是 done + findings_detected。
+
+    这里把"尚未实现"的检查义务从清单摘掉，是为了让本用例只暴露证据链这一个
+    自变量：否则终态会因为真实的实现缺口转 review_required，证据完整率这条
+    断言就被另一个原因盖住，测不出它本身是否成立。缺口导致的门禁行为由
+    `tests/test_quality_gate.py` 单独覆盖。
+    """
+    without_gap_obligations(monkeypatch)
     job_dir = _run_legacy_pipeline(
         tmp_path,
         monkeypatch,

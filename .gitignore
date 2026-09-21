@@ -105,3 +105,12 @@ corpus/*
 corpus/DOC-20260905-001/*
 !corpus/DOC-20260905-001/golden.json
 !corpus/DOC-20260905-001/ANNOTATIONS.md
+
+# 一次性排查脚本与 pytest 临时产物，不入库。
+# scratch/ 内含批次整改的临时校验脚本与 pytest 工作目录（2600+ 文件、21MB），
+# scratch_inventory_out.txt 是规则清单的一次性导出结果，两者都会随批次推进快速过期。
+# .pytest-luna-* 是历史测试运行留下的临时目录，此前 git status 因权限无法读取而持续报
+# Permission denied 告警；加入忽略后 git 不再递归扫描，告警消失。
+scratch/
+scratch_inventory_out.txt
+.pytest-luna-*/
