@@ -25,6 +25,9 @@ CSV/Excel 初始化、官网采集）、`backfill --apply`。
 | 同上名部门/本部单位隔离 | ✅ 全程按 `subject_org_id` 计数，无任何按名称归并 |
 | budget / final / fiscal_year / district / department 隔离 | ✅ 各有专门用例（假连接 + 真库两层） |
 | 权限 | ✅ 服务端判定：401（未登录）/ 403（越权、无授权范围）/ 404（未知区划或部门）/ 422（参数非法）/ 503（数据库不可用） |
+| department / unit 授权 | ✅ 已接通：可见范围按 `user_can_access_org` 逐节点判定，SQL 三列 OR 过滤；上级区县/部门仅作导航容器 |
+| 同名部门 / 同名本级单位 | ✅ 展示归类与前端 `unitMatch.ts` 统一：归一化同名或带本级/本部标志 → 本部单位 |
+| 未到期 vs 截止时间未知 | ✅ 新增 `not_due_confirmed`（`due_not_reached`）；`status_counts.not_due` 语义不变，两者并列展示 |
 | 不扫文件系统、不用 `/api/jobs` 前端聚合 | ✅ 数据全部来自 `material_slots` 聚合查询 |
 | SQL 条数 | ✅ 首页 2 条、区级矩阵 1 条、部门矩阵 1 条（无 N+1） |
 | 页面 06/07/08 | ✅ `/materials`、`/materials/district/[districtId]`、`/materials/department/[departmentId]?year=` |
@@ -127,7 +130,7 @@ CSV/Excel 初始化、官网采集）、`backfill --apply`。
                      "review_required": 1, "reviewing": 1, "completed": 1,
                      "not_applicable": 1, "mapping_required": 2, "failed": 1 },
   "budget_total": 9, "final_total": 2, "unknown_kind_total": 2,
-  "due_at_unknown": 5, "jurisdiction_unknown_total": 1,
+  "due_at_unknown": 5, "not_due_confirmed": 1, "jurisdiction_unknown_total": 1,
   "expected_total": null, "expected_budget_total": null, "expected_final_total": null,
   "coverage_rate": null, "budget_coverage_rate": null, "final_coverage_rate": null,
   "missing_expected_total": null
@@ -137,9 +140,10 @@ CSV/Excel 初始化、官网采集）、`backfill --apply`。
 `data.districts[]` 与 summary 同形（少 `jurisdiction_unknown_total`，因为它只对全局有意义），
 按 `district_name`（Unicode 码点）+ id 兜底稳定排序。
 
-**三个刻意保留的口径出口**：`unknown_kind_total`（文种未识别/冲突的槽位，既不进预算也不进决算）、
+**四个刻意保留的口径出口**：`unknown_kind_total`（文种未识别/冲突的槽位，既不进预算也不进决算）、
 `due_at_unknown`（截止时间未知，不得被读成"尚未到期"）、`jurisdiction_unknown_total`
-（没有行政区划的槽位，不变成区县卡片，但也**不会凭空消失**）。
+（没有行政区划的槽位，不变成区县卡片，但也**不会凭空消失**）、
+`not_due_confirmed`（已确认尚未到截止时间；与 `status_counts.not_due` 并存，见 §3.6）。
 
 ### 3.3 `GET /api/materials/districts/{district_id}/departments`
 
@@ -206,7 +210,19 @@ CSV/Excel 初始化、官网采集）、`backfill --apply`。
   身份已确认（`mapping_key=''`）优先 → 更新时间较新优先 → `slot_id` 兜底。
   **SQL 刻意不做排序**，避免两处规则漂移。
 
-### 3.5 时间 / ID / 布尔 / 空值
+### 3.5 「未到期」的两个口径（`not_due` vs `not_due_confirmed`）
+
+| 字段 | 含义 | 用途 |
+| --- | --- | --- |
+| `status_counts.not_due` | 状态机事实：停在 `not_due` 的槽位总数（**含**"截止时间未知"） | 保留不变，供排查/对账 |
+| `not_due_confirmed` | `status='not_due' AND status_reason='due_not_reached'` | 界面"未到期"只取这个字段 |
+| `due_at_unknown` | `due_at IS NULL` 的数据质量指标（可能与任意状态并存） | 单独展示为"截止时间未知" |
+
+三者由 SQL 直接计算（分组查询里 `COUNT(*) FILTER (WHERE status = 'not_due' AND
+status_reason = 'due_not_reached')`），**不允许**在前端用 `not_due - due_at_unknown` 相减：
+`due_at_unknown` 与 `uploaded`/`review_required`/`completed` 等状态也可能并存，相减得不到正确答案。
+
+### 3.6 时间 / ID / 布尔 / 空值
 
 - 时间：一律 ISO 8601、UTC、以 `Z` 结尾（`2026-09-21T11:42:00Z`）；前端负责本地化显示。
 - ID：`slot_id` / `jurisdiction_id` / `department_id` / `subject_org_id` / `slot_key` 全部字符串；
@@ -223,13 +239,26 @@ CSV/Excel 初始化、官网采集）、`backfill --apply`。
 | 角色 | 行为 |
 | --- | --- |
 | 未登录 | 401（`require_login`） |
-| 管理员 | 全量可见（`user_can_access_org` 对管理员恒真） |
-| 授权区用户 | 首页只返回其授权范围内的区划，且 summary 与可见范围同口径；访问越权的区县/部门 → **403** |
-| 无任何授权范围的账号 | 首页 → **403**（明确拒绝，而不是返回一片空白让人以为"确实没有材料"） |
+| 管理员 | 不加权限条件（`visible_org_ids=None`） |
+| 授权区县 / 部门 / 单位用户 | 首页只统计自己可见的槽位；可打开所属区县/部门页面作**导航容器**，但容器内的行仍按可见范围过滤 |
+| 无任何授权组织的账号 | 首页 → **403**（明确拒绝，而不是返回一片空白让人以为"确实没有材料"） |
+| 越权访问别的区县/部门 | **403**（容器只覆盖"自己所属的上级"，不覆盖其它分支） |
 | 未知区划/部门 | 组织目录与库中都查不到 → **404**；"存在但当前筛选为空"仍是 200 + 空态 |
+| 无法证明归属的槽位（无区划、占位主体） | 非管理员不可见（fail-closed）；管理员可见 |
 
-权限判定复用仓库既有 `user_can_access_org`（沿组织目录向上找授权范围），未另写一套规则。
-**服务端强制**，与前端是否隐藏入口无关。
+权限判定复用仓库既有 `user_can_access_org`（已授权节点可访问其后代），**未另写一套规则**。
+两个集合职责严格分开：
+
+- `visible_org_ids`（能看到哪些**数据**）= 组织目录中所有 `user_can_access_org(user, id)` 为真的节点；
+  SQL 条件为 `(jurisdiction_org_id = ANY(...) OR department_org_id = ANY(...) OR subject_org_id = ANY(...))`，
+  三列是 **OR**（写成 AND 会把 department / unit 授权全部误杀）；
+- `container_org_ids`（能打开哪些**页面**）= 可见节点的祖先闭包。
+
+**容器可打开 ≠ 容器下数据可见**：只放开容器而不加范围过滤，会从"过度拒绝"直接变成"越权泄露"。
+本轮实测就先踩到一次——区县查询重建筛选条件时漏传 `visible_org_ids`，
+授权部门的账号打开父区县页后能看到同区其它部门（见 §9.4 第 7 条）。
+
+服务端强制，与前端是否隐藏入口无关。
 
 ---
 
@@ -331,18 +360,25 @@ CSV/Excel 初始化、官网采集）、`backfill --apply`。
 
 ---
 
-## 8. `relationship` 的推导与局限
+## 8. `relationship` 的推导（最终行为）
 
 `relationship` 是**纯展示字段**，不落库、不制造新的业务真值：
 
 1. `subject_org_id == department_id` → `department_summary`（部门汇总材料）；
-2. `subject_kind == 'unit'`：名称形如「…局本级 / …局（本级）/ …局本部」→ `head_unit`，
-   否则 `subordinate_unit`；若材料范围写着 `department_summary`（与"主体是单位"矛盾）→ 不猜，落待确认；
-3. 其余（层级/范围认不出来）→ `relationship_unknown`（界面上是「关系待确认」分组）。
+2. `subject_kind == 'unit'` 且命中"部门本级"证据 → `head_unit`：
+   - **归一化后单位名 == 部门名**（`上海市普陀区财政局` 的部门与本级单位可以完全同名），或
+   - 单位名带「本级 / 本部」标志（含 `（本级）`/`（本部）` 写法）；
+3. `subject_kind == 'unit'` 但无本级证据 → `subordinate_unit`；
+4. 主体层级认不出来但材料范围写着部门汇总 → `department_summary`；
+5. 其余（含"主体是单位、材料范围却写着部门汇总"这类字段互相矛盾）→ `relationship_unknown`。
 
-局限：组织目录里没有"是否本级"的显式字段，名称后缀是当前唯一可用信号，
-与既有实现同源（`ps_schema_sync` 用 `endswith("本级")`、`org_hierarchy_migration` 用同一后缀反推部门名）。
-WP9 引入组织主数据后应改为显式字段。
+归一化口径与前端 `app/lib/unitMatch.ts` 的 `normalizeOrgName` 一致：去空白、去全半角括号、
+去「本级/本部」标志。Python 侧不 import TypeScript，但语义必须相同——两处判定不一致会让
+"上传中心把某个单位标成本级、材料台账把它标成直属"这种矛盾出现在同一份数据上。
+
+**局限（仍然存在，但已收口）**：组织目录没有"是否本级"的显式字段，名称仍是唯一信号；
+判定只用于展示归类，**身份始终按 `subject_org_id`**，`slot_key` / `SlotIdentity` /
+`material_scope` / migration 0019 均未改动。WP9 引入组织主数据后应改为显式字段。
 
 ---
 
@@ -351,7 +387,7 @@ WP9 引入组织主数据后应改为显式字段。
 ### 9.1 后端
 
 ```bash
-python -m pytest -q                                  # 1534 passed, 33 skipped, 0 failed
+python -m pytest -q                                  # 1555 passed, 35 skipped, 0 failed
 python -m ruff check .                               # All checks passed
 python -m mypy api src tests                         # Success: no issues found in 219 source files
 python scripts/check_coverage_baseline.py --json
@@ -364,9 +400,9 @@ python scripts/check_coverage_baseline.py --assert-gaps 8   # 通过（仍 8 gap
 
 | 文件 | 条数 | 覆盖 |
 | --- | --- | --- |
-| `tests/test_material_ledger_query_service.py` | 30 | 筛选参数与 `$n` 顺序、10 状态分桶、未知状态报错、文种拆分、无区划计数、区县/部门稳定排序、同名隔离、关系推导（含矛盾→待确认）、代表槽位优先级、`formal_issue_count=null`、空矩阵 |
-| `tests/test_material_ledger_api.py` | 45 | 空库零值、全枚举状态、budget/final 与年度/区划/部门隔离、分页契约、非法参数 422、404 与空态区分、403/401、SQL 条数、`MAX(updated_at)` 回归、期望字段恒 null、ISO 时间 |
-| `tests/test_material_ledger_pg.py`（opt-in） | 6 | **真库**：三条聚合 SQL 可执行、NULL 分组行为、`ANY($n::text[])` 空数组、UUID→text、TIMESTAMPTZ→tz-aware、分页/关键词、代表槽位选择 |
+| `tests/test_material_ledger_query_service.py` | 38 | 筛选参数与 `$n` 顺序、10 状态分桶、未知状态报错、文种拆分、无区划计数、区县/部门稳定排序、同名隔离、关系推导（含矛盾→待确认）、代表槽位优先级、`formal_issue_count=null`、空矩阵 |
+| `tests/test_material_ledger_api.py` | 57 | 空库零值、全枚举状态、budget/final 与年度/区划/部门隔离、分页契约、非法参数 422、404 与空态区分、403/401、SQL 条数、`MAX(updated_at)` 回归、期望字段恒 null、ISO 时间 |
+| `tests/test_material_ledger_pg.py`（opt-in） | 8 | **真库**：三条聚合 SQL 可执行、NULL 分组行为、`ANY($n::text[])` 空数组、UUID→text、TIMESTAMPTZ→tz-aware、分页/关键词、代表槽位选择 |
 
 **真库验证发现并修掉的缺陷**：区县分组的 SQL 最初漏了 `MAX(updated_at)`，
 区县卡片的"更新时间"会恒为 `null`（前端显示 `—`）。已补 SQL，并在假连接层补了同口径的快速回归用例。
@@ -375,10 +411,12 @@ python scripts/check_coverage_baseline.py --assert-gaps 8   # 通过（仍 8 gap
 
 | 变异 | 结果 |
 | --- | --- |
-| 首页去掉授权范围过滤（`jurisdiction_ids=None`） | 被 `test_authorized_district_user_sees_only_own_district` 抓住 |
-| `_require_org_access` 改为恒放行 | 被 `test_out_of_scope_district_is_403` 抓住 |
+| 首页去掉授权范围过滤（`visible_org_ids=None`） | 被 `test_authorized_district_user_sees_only_own_district` 抓住 |
+| 容器访问改为恒放行 | 被 `test_out_of_scope_container_still_returns_403` 抓住 |
+| 区县查询重建筛选时丢 `visible_org_ids`（真实踩到的缺陷） | 被 `test_department_scope_can_open_parent_district_with_filtered_rows` / `test_unit_scope_parent_district_does_not_leak_siblings` 抓住 |
 | `formal_issue_count` 从 `None` 改成 `0` | 被 `test_department_matrix_formal_issue_count_is_null` 抓住 |
-| `head_unit` 判定退化为固定 `subordinate_unit` | 被分组用例抓住 |
+| `head_unit` 判定退化为固定 `subordinate_unit` | 被同名与本级用例抓住 |
+| "未到期"改回读 `status_counts.not_due` | 被前端 `materialLedgerAdapters.test.ts` 的反例与 e2e 抓住 |
 
 ### 9.2 前端
 
@@ -393,7 +431,10 @@ npm --prefix app run build        # 生产构建通过（新增 3 个路由）
 E2E_BASE_URL=http://127.0.0.1:3100 npm --prefix app run test:e2e -- material-ledger
 ```
 
-结果：**19 passed**（14 条功能用例 + 5 条截图采集），另有既有导航用例同步更新（9 项 → 10 项）。
+结果：**24 passed**（19 条功能用例 + 5 条截图采集），另有既有导航用例同步更新（9 项 → 10 项）。
+
+其中本轮新增：`due_at_unknown` 与"未到期"分列可见（首页 KPI / 汇总行 / 区县卡片 / 区级矩阵）、
+完全同名的本级单位落「本部单位」而不落「直属单位」、受限授权范围（部门 / 单位）下的行数与数字渲染。
 
 > 端口说明：本机 3000 端口被另一个 Next 应用占用，`run-e2e.cjs` 的"服务已就绪"探测会把那个应用
 > 当成我们的 dev server（它的 404 也是 `< 500`），导致全部用例打到错误的站点。
@@ -416,6 +457,8 @@ E2E_BASE_URL=http://127.0.0.1:3100 npm --prefix app run test:e2e -- material-led
 | 4 | 本机 3000 端口被另一个 Next 应用占用，e2e 的"服务已就绪"探测把那个应用当成 dev server（404 也 `< 500`），14 条用例全打到错误站点 | 首次 e2e 全红 + 页面快照是别的产品 | 本地显式指定 `E2E_BASE_URL=http://127.0.0.1:3100`；**未改仓库默认端口**，只在本文档记录该环境坑 |
 | 5 | 截图相对路径被 Playwright 按进程工作目录解析，落到了仓库外 | 截图目录为空 | 改为 `path.resolve(__dirname, ...)` 的仓库内绝对路径 |
 | 6 | 区级矩阵 11 列在 1600 宽视口下表头折行、右列被横向滚动挤出视口 | 人工看截图 | 表头不折行 + 表头用 §三十五 的短名（完整含义放 `title`）+ 表格 `min-w` + 截图视口取 1920 |
+| 7 | **权限泄露（独立 Review 收口时抓到）**：区县查询重建筛选条件时漏传 `visible_org_ids`，授权部门/单位的账号一旦打开父区县页就能看到同区其它部门 | 新增的容器 + 范围用例（`test_department_scope_can_open_parent_district_with_filtered_rows`）直接变红 | 重建筛选时把权限范围一并带过来，并在代码里写明"容器放开 ≠ 范围放开" |
+| 8 | 受限账号首页 403（department / unit 授权被错误折算成区县） | 独立 Review 指出 + 新增 10 条 RBAC 用例 | 改为按组织目录逐节点判定可见集合，SQL 三列 OR 过滤 |
 
 ### 9.5 截图（可视化证据）
 
@@ -439,7 +482,8 @@ E2E_BASE_URL=http://127.0.0.1:3100 npm --prefix app run test:e2e -- material-led
    完整率、真实缺失数、应收总数全部为 `null`；`missing` 只可能来自"已建槽位 + 已到期 + 无当前文件"。
 2. **resolver 细分原因未落库**（见 §7 的说明）：界面上 `mapping_required` 统一显示
    `identity_unresolved`，看不到"是年份没认出来还是文种冲突"。
-3. **`relationship` 依赖名称后缀**（见 §8），且是展示层推导，不入库、不能被别的系统引用。
+3. **`relationship` 依赖组织名称**（见 §8）：同名或带「本级/本部」标志即判为本部单位，
+   该判定是展示层推导，不入库、不能被别的系统引用；名称被人工改错时会跟着错（身份仍按 id）。
 4. **`formal_issue_count` 恒为 `null`**：正式 finding 与当前文件版本的关联要等 WP3，
    本轮按 §二十六 返回 `null` 而**不是** `0`（`0` 会被读成"查过且没有问题"）。
 5. **状态不会自动推进**：本轮只消费 WP1 已经写入的状态；"已上传 → 处理中 → 待复核"的
@@ -490,3 +534,73 @@ E2E_BASE_URL=http://127.0.0.1:3100 npm --prefix app run test:e2e -- material-led
 GBC_CAPTURE_SCREENSHOTS=1 E2E_BASE_URL=http://127.0.0.1:3100 \
     npm --prefix app run test:e2e -- material-ledger.screenshots
 ```
+
+---
+
+## 13. 最终独立 Review 收口（2026-09-21 第二轮）
+
+独立 Review 在 PR #43 上提出三项收口要求，本轮逐项处理并补齐证据。
+**未进入 WP2-B，未 merge PR #43**。
+
+### 13.1 department / unit RBAC 已接通
+
+- **问题**：首页与容器页只按"可访问的区县"折算权限。而 `user_can_access_org` 的语义是
+  "授权节点可访问其后代"，不是"后代可反向访问祖先"——因此只授权 dept-A / unit-A1 的账号
+  既打不开区县页（403），首页也是 403。这个语义在 `tests/test_org_scope_rbac.py` 里已固化
+  （department scope 可访问子 unit；unit scope 不得访问 sibling），Materials 必须完全继承。
+- **处理**：新增 `MaterialAccessScope`：
+  - `visible_org_ids` = 组织目录里所有 `user_can_access_org(user, id)` 为真的节点（层级不限）；
+    查询层加 `(jurisdiction_org_id = ANY(...) OR department_org_id = ANY(...) OR subject_org_id = ANY(...))`，
+    三列 OR，管理员不加该条件；
+  - `container_org_ids` = 可见节点的祖先闭包，**只**决定"页面能不能打开"；
+    容器内的每一行仍由 `visible_org_ids` 过滤。
+- **结果**：department scope → 首页 200 且只含本部门及后代；unit scope → 首页 200 且只含本单位；
+  两者都能进上级容器页导航，但容器里不会出现 sibling 部门/单位；
+  越权容器（别的区/部门）仍 403；无法证明归属的槽位对非管理员不可见（fail-closed）。
+
+### 13.2 同名部门 / 同名本级单位的展示归类已统一
+
+- **问题**：原先只判断名称是否带「本级/本部」后缀。真实形态里部门与其本级单位可以**完全同名**
+  （部门「上海市普陀区财政局」/ 单位「上海市普陀区财政局」，id 与 level 不同），
+  只靠后缀会把本级单位错判成直属单位。
+- **处理**：`is_head_unit_name(unit_name, department_name)` 与 `relationship_of(..., department_name=...)`
+  支持两条证据：归一化后同名，或带「本级/本部」标志；归一化口径与前端 `app/lib/unitMatch.ts`
+  的 `normalizeOrgName` 一致（去空白、去全半角括号、去本级/本部标志）。
+- **边界**：只改 **WP2 presentation relationship**。`slot_key` / `SlotIdentity` / `subject_org_id` /
+  `material_scope` / migration 0019 **均未改动**，身份仍按 id，不会按名称合并数据。
+
+### 13.3 `due_at_unknown` 不再被表述为确认"未到期"
+
+- **问题**：`not_due` 状态同时覆盖"确实没到截止时间"与"截止时间未知"，界面上一律显示"未到期"
+  等于把未知当已知。
+- **处理**：SQL 层新增 `not_due_confirmed = COUNT(*) FILTER (WHERE status='not_due' AND
+  status_reason='due_not_reached')`；三个 DTO 增加该字段；`status_counts.not_due` **语义不变**。
+  界面"未到期"只取 `not_due_confirmed`，并把 `due_at_unknown` 作为独立列/独立条目展示
+  （首页 KPI 行、区县卡片、区级矩阵新增「截止未知」列，表头 tooltip 写明两个口径的差别）。
+  未做任何前端相减推算。
+- **未改动**：`src/services/material_slot_status.py`（WP1 状态机）一行未动。
+
+### 13.4 本轮验证结果
+
+| 项 | 结果 |
+| --- | --- |
+| `python -m pytest -q` | 1555 passed, 35 skipped, 0 failed |
+| `python -m ruff check .` | All checks passed |
+| `python -m mypy api src tests` | Success，219 files |
+| `check_coverage_baseline.py --assert-gaps 8` | 通过（仍 8 gaps） |
+| 前端 `test:unit` / `build` | 全绿 / 通过 |
+| E2E（`material-ledger`） | 24 passed（含本轮新增 5 条） |
+| 真库 `tests/test_material_ledger_pg.py` | 8 passed（含新增 2 条权限谓词用例） |
+
+新增 RBAC 用例（`tests/test_material_ledger_api.py`，与 `test_org_scope_rbac.py` 同一套语义）：
+`test_department_scope_can_read_material_coverage`、
+`test_department_scope_coverage_excludes_sibling_departments`、
+`test_department_scope_can_open_parent_district_with_filtered_rows`、
+`test_department_scope_department_matrix_includes_children`、
+`test_unit_scope_can_read_material_coverage`、`test_unit_scope_coverage_contains_only_own_unit`、
+`test_unit_scope_parent_district_does_not_leak_siblings`、
+`test_unit_scope_parent_department_matrix_contains_only_own_unit`、
+`test_unit_scope_cannot_read_sibling_unit_materials`、`test_out_of_scope_container_still_returns_403`；
+另有 fail-closed、同名分组、`not_due_confirmed` 三条契约用例。
+真库侧新增 `test_department_visible_scope_excludes_sibling_departments_in_real_sql`、
+`test_unit_visible_scope_excludes_sibling_units_in_real_sql`，证明三列 OR 谓词在 PostgreSQL 上真实成立。
