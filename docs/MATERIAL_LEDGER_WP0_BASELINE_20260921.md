@@ -123,13 +123,17 @@ SHA 记录在此以便任何机器上取得同名文件后校验同一份）。
 | 检查 | 基线结果 | 复算命令 |
 | --- | --- | --- |
 | `pytest`（全量） | **1307 passed, 1 skipped, 0 failed**（101.64s） | `python -m pytest -q` |
-| `ruff check src tests scripts api` | **All checks passed** | 同左 |
+| `ruff check .` | **All checks passed** | 同左（Makefile 与 CI 用的就是这个全仓命令） |
 | `mypy api src tests` | **Success: no issues found in 199 source files** | 同左 |
 
 基线 `pytest` 原始输出：`outputs/wp0_pytest_baseline.txt`（该目录被 `.gitignore` 排除）。
 
 `ruff` / `mypy` 的基线数字取自**基线提交的干净检出**（`git worktree` 指向 `4a1cabf`），
 不是取自带有本轮改动的当前工作树——后者会把新文件算进去，无法作为对比起点。
+
+> 命令口径提醒：仓库的权威 lint 命令是 `ruff check .`（Makefile 与 CI 都用它），
+> 不是 `ruff check src tests scripts api`。两者范围不同，窄命令会漏报 `tests/` 下的违规，
+> 本轮就因此在 CI 上失败过一次（B017 盲捕异常）。复核时请用全仓命令。
 
 ## 7. 真库验证能力（本轮新建立）
 
@@ -175,6 +179,6 @@ python scripts/check_coverage_baseline.py --assert-gaps 8
 python -m pytest -q
 
 # 静态检查
-python -m ruff check src tests scripts api
+python -m ruff check .
 python -m mypy api src tests
 ```

@@ -26,6 +26,7 @@ from __future__ import annotations
 import uuid
 from contextlib import asynccontextmanager
 
+import asyncpg
 import pytest
 
 from src.db.migrations import MIGRATIONS, ensure_migrations_table, run_migrations
@@ -202,7 +203,9 @@ async def test_identity_unique_index_blocks_duplicate_slot(db):
     values = ("unit-org", "unit", "unit_self", "final", 2024, "")
     async with _conn(schema, pool) as connection:
         await connection.execute(_insert_sql("slot-key-1"), *values)
-        with pytest.raises(Exception):
+        # 断言具体异常类型而不是"任意异常"：只有唯一约束冲突才算这条闸真的拦住了，
+        # 语法错误、权限错误同样会抛异常，但那些说明测试根本没跑到位。
+        with pytest.raises(asyncpg.exceptions.UniqueViolationError):
             await connection.execute(_insert_sql("slot-key-2"), *values)
 
 
@@ -224,7 +227,7 @@ async def test_unknown_year_slots_are_distinguished_by_mapping_key(db):
 
     # 同样的 mapping_key 必须冲突（同一条材料不许建两个槽位）
     async with _conn(schema, pool) as connection:
-        with pytest.raises(Exception):
+        with pytest.raises(asyncpg.exceptions.UniqueViolationError):
             await connection.execute(
                 _insert_sql("slot-key-c"),
                 "unit-org",
@@ -241,7 +244,7 @@ async def test_status_check_constraint_rejects_unknown_value(db):
     await run_migrations()
 
     async with _conn(schema, pool) as connection:
-        with pytest.raises(Exception):
+        with pytest.raises(asyncpg.exceptions.CheckViolationError):
             await connection.execute(
                 """
                 INSERT INTO material_slots (
@@ -482,13 +485,13 @@ async def test_service_refuses_slot_whose_natural_key_collides(db):
         await connection.execute(
             _insert_sql("slot-existing"), "unit-org", "unit", "unit_self", "final", 2024, ""
         )
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(asyncpg.exceptions.UniqueViolationError) as excinfo:
             await connection.execute(
                 _insert_sql("slot-different-key"), "unit-org", "unit", "unit_self", "final", 2024, ""
             )
-        assert "uq_material_slots_identity" in str(excinfo.value) or "duplicate" in str(
-            excinfo.value
-        ).lower()
+        # 冲突对象必须是复合身份索引，而不是 slot_key 那一条——
+        # 否则"自然键拦住重复"这条结论就没有被真正验证。
+        assert "uq_material_slots_identity" in str(excinfo.value)
 
 
 def _insert_sql(slot_key: str) -> str:

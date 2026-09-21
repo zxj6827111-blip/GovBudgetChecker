@@ -111,8 +111,8 @@
 
 | 检查 | 基线（`4a1cabf`） | 本次 | 结论 |
 | --- | --- | --- | --- |
-| `python -m pytest -q` | 1307 passed, 1 skipped, 0 failed | **1387 passed, 11 skipped, 0 failed** | +80 passed / +10 skipped，**零失败** |
-| `ruff check src tests scripts api` | All checks passed | **All checks passed** | 无变化 |
+| `python -m pytest -q` | 1307 passed, 1 skipped, 0 failed | **1387 passed, 12 skipped, 0 failed** | +80 passed / +11 skipped（新真库用例默认跳过），**零失败** |
+| `ruff check .`（Makefile 与 CI 同款全仓命令） | All checks passed | **All checks passed** | 无变化 |
 | `mypy api src tests` | Success（199 files） | **Success（210 files）** | 无变化 |
 
 基线数字取自 `4a1cabf` 的干净检出（`git worktree`），不是带改动的当前树。
@@ -236,7 +236,7 @@ GOVBUDGET_TEST_DATABASE_URL=postgresql://.../fiscal_db \
 python -m pytest -q
 
 # 静态检查
-python -m ruff check src tests scripts api
+python -m ruff check .
 python -m mypy api src tests
 
 # 覆盖基线（应仍是 8 个缺口）
