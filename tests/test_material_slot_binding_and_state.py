@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from src.services.material_slot_service import (
@@ -17,6 +19,7 @@ from src.services.material_slot_service import (
     MaterialSlotService,
     SlotBindingConflict,
     SlotBindingTargetMissing,
+    SlotIdentityRowMissing,
     allocate_for_document,
     safe_allocate_for_document,
 )
@@ -42,6 +45,18 @@ ORG_RECORDS = [
         "parent_id": DEPT_ID,
     },
 ]
+
+def _assigned_columns(sql: str) -> set:
+    """取出 UPDATE ... SET 里被赋值的列名。
+
+    不能用"按逗号切分再取等号左边"的写法：``COALESCE($2, jurisdiction_org_id)``
+    里的逗号会把一条赋值切成两段，得到的列名集合是错的。
+    改用"行首或逗号之后紧接的标识符 + 等号"来匹配，嵌套函数参数不会被误判。
+    """
+    set_clause = sql.split("SET", 1)[1].split("WHERE", 1)[0]
+    return {match.group(1) for match in re.finditer(r"(?:^|,)\s*(\w+)\s*=", set_clause)}
+
+
 
 CHECKSUM = "a" * 64
 VERSION_ID = 100
@@ -305,6 +320,197 @@ async def test_bind_locks_the_version_row_before_deciding():
     assert "FOR UPDATE" in locks[0][0]
 
 
+# ==== 4b. refresh_status 必须自带事务与行锁 =================================
+
+
+@pytest.mark.asyncio
+async def test_refresh_status_opens_its_own_transaction():
+    """独立调用 refresh_status 时也不能裸奔。
+
+    它当前的两个调用方恰好已经开了事务，但那是调用约定而不是保证——
+    WP2/WP3 会直接调它。用例把"自己开事务"钉成行为，而不是靠注释提醒。
+    """
+    conn = FakeSlotConnection()
+    row = _seed_slot(conn)
+    service = MaterialSlotService(conn)
+
+    opened = 0
+    original = conn.transaction
+
+    def counting_transaction():
+        nonlocal opened
+        opened += 1
+        return original()
+
+    conn.transaction = counting_transaction  # type: ignore[method-assign]
+    await service.refresh_status(row["id"])
+    assert opened == 1, "refresh_status 没有自己开启事务"
+
+
+@pytest.mark.asyncio
+async def test_refresh_status_locks_the_slot_row():
+    conn = FakeSlotConnection()
+    row = _seed_slot(conn)
+    service = MaterialSlotService(conn)
+
+    await service.refresh_status(row["id"])
+
+    reads = [
+        sql
+        for sql, _ in conn.calls
+        if "FROM material_slots" in sql and "WHERE id = $1" in sql
+    ]
+    assert reads, "refresh_status 没有读取槽位行"
+    assert "FOR UPDATE" in reads[0], "refresh_status 读事实时没有加行锁"
+
+
+@pytest.mark.asyncio
+async def test_refresh_status_reuses_an_existing_transaction():
+    """外层已有事务时不再另开一层（避免无谓的 SAVEPOINT）。"""
+    conn = FakeSlotConnection()
+    row = _seed_slot(conn)
+    service = MaterialSlotService(conn)
+
+    opened = 0
+    original = conn.transaction
+
+    def counting_transaction():
+        nonlocal opened
+        opened += 1
+        return original()
+
+    conn.transaction = counting_transaction  # type: ignore[method-assign]
+    async with conn.transaction():
+        await service.refresh_status(row["id"])
+    assert opened == 1, "外层已开事务时不应再开一层"
+
+
+# ==== 4c. 首次建槽：确保存在 → 锁 → 锁内解析 → 写回 =========================
+
+
+@pytest.mark.asyncio
+async def test_slot_row_is_ensured_before_it_is_locked():
+    """必须"先确保存在再锁"。
+
+    ``SELECT ... FOR UPDATE`` 锁不住不存在的行。若顺序反过来，
+    首次并发创建时两个事务都会读到空行、各自在锁外算好口径，
+    随后一个插入、一个覆盖——冲突证据就此丢失。
+    """
+    conn = FakeSlotConnection()
+    service = MaterialSlotService(conn)
+    await service.upsert_from_decision(_decision(), caliber="summary")
+
+    statements = [sql for sql, _ in conn.calls]
+    ensure_index = next(
+        index for index, sql in enumerate(statements) if "INSERT INTO material_slots" in sql
+    )
+    lock_index = next(
+        index
+        for index, sql in enumerate(statements)
+        if "FROM material_slots" in sql and "FOR UPDATE" in sql
+    )
+    assert ensure_index < lock_index, "存在性插入必须发生在加锁之前"
+
+
+@pytest.mark.asyncio
+async def test_identity_advisory_lock_is_taken_before_any_row_lock():
+    """首次创建必须先按身份串行化，再碰任何行。
+
+    这是真库死锁的修复机制：``material_slots`` 上有两个唯一约束，
+    并发插入同一身份时 PostgreSQL 会在两个唯一索引上各建一个"推测插入"标记，
+    双方可能分别等对方的标记而形成环路（真库实测报 DeadlockDetectedError）。
+    先取事务级 advisory 锁把同一身份的首次创建串行化，推测插入竞争就不存在了。
+
+    顺序必须是"advisory → 槽位行 → 版本行"这条全序的第一段；
+    若哪天它被挪到行锁之后，这条断言会失败。
+    """
+    conn = FakeSlotConnection()
+    conn.seed_version(VERSION_ID, created_at=10)
+    await allocate_for_document(
+        conn,
+        metadata=_metadata(),
+        checksum=CHECKSUM,
+        org_records=ORG_RECORDS,
+        document_version_id=VERSION_ID,
+    )
+
+    assert conn.advisory_locks, "首次创建没有取身份 advisory 锁"
+    statements = [sql for sql, _ in conn.calls]
+    advisory_index = next(
+        index
+        for index, sql in enumerate(statements)
+        if sql.strip().startswith("SELECT pg_advisory_xact_lock")
+    )
+    first_row_lock = next(
+        index
+        for index, sql in enumerate(statements)
+        if "FOR UPDATE" in sql
+        or "INSERT INTO material_slots" in sql
+        or "UPDATE material_slots" in sql
+    )
+    assert advisory_index < first_row_lock, "身份锁必须早于所有行锁"
+
+
+@pytest.mark.asyncio
+async def test_ensure_step_does_not_overwrite_an_existing_row():
+    """第一步的冲突动作必须是 DO NOTHING，不能是 DO UPDATE。
+
+    DO UPDATE 会把锁外算出的结论盖到已有口径上——这正是首次创建并发竞争
+    的成因。这条断言守的是修复机制本身。
+    """
+    conn = FakeSlotConnection()
+    service = MaterialSlotService(conn)
+    await service.upsert_from_decision(_decision(), caliber="summary")
+    await service.upsert_from_decision(_decision(), caliber="self")
+
+    inserts = [sql for sql, _ in conn.executed("INSERT INTO material_slots")]
+    assert all("DO NOTHING" in sql for sql in inserts)
+    assert not any("DO UPDATE" in sql for sql in inserts)
+
+
+@pytest.mark.asyncio
+async def test_identity_columns_are_not_rewritten_by_later_writes():
+    """第二步写回不得改动身份列与适用性——身份一旦确认就不该被重放改写。"""
+    conn = FakeSlotConnection()
+    service = MaterialSlotService(conn)
+    row = await service.upsert_from_decision(_decision(), caliber="summary")
+    await service.mark_not_applicable(
+        conn._slot_by_id(row["id"])["slot_key"], note="依据 X"
+    )
+    await service.upsert_from_decision(_decision(), caliber="summary")
+
+    updates = [sql for sql, _ in conn.executed("jurisdiction_org_id = COALESCE")]
+    assert updates
+    for sql in updates:
+        assigned = _assigned_columns(sql)
+        for forbidden in (
+            "slot_key",
+            "subject_org_id",
+            "subject_kind",
+            "material_scope",
+            "fiscal_year",
+            "report_kind",
+            "mapping_key",
+            "applicability_status",
+        ):
+            assert forbidden not in assigned, f"写回改动了不该改的列: {forbidden}"
+
+
+@pytest.mark.asyncio
+async def test_missing_identity_row_raises_instead_of_returning_none():
+    """确保存在之后读不到行，必须抛错回滚，不能静默返回 None。"""
+    conn = FakeSlotConnection()
+    service = MaterialSlotService(conn)
+
+    async def _vanish(sql, *args):
+        conn.calls.append((sql, args))
+        return None
+
+    conn.fetchrow = _vanish  # type: ignore[method-assign]
+    with pytest.raises(SlotIdentityRowMissing):
+        await service.upsert_from_decision(_decision(), caliber="summary")
+
+
 # ==== 5. 身份完整性判定：不能只看 mapping_key ===============================
 
 
@@ -447,8 +653,7 @@ async def test_mark_not_applicable_does_not_write_status_directly():
     for sql in statements:
         if "SET applicability_status" not in sql:
             continue
-        set_clause = sql.split("SET", 1)[1].split("WHERE", 1)[0]
-        assigned = {part.split("=")[0].strip() for part in set_clause.split(",")}
+        assigned = _assigned_columns(sql)
         assert "status" not in assigned, f"绕过状态机直接写 status: {sql}"
         assert "status_reason" not in assigned, f"绕过状态机直接写 status_reason: {sql}"
 

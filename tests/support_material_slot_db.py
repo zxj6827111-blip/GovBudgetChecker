@@ -68,6 +68,8 @@ class FakeSlotConnection:
         self.slot_key_by_id: Dict[str, str] = {}
         #: fiscal_document_versions.id -> 行
         self.versions: Dict[Any, Dict[str, Any]] = {}
+        #: 被取过的身份 advisory 锁键，用于断言"首次创建前先按身份串行化"
+        self.advisory_locks: List[str] = []
         #: 指定 SQL 片段命中时抛异常，用于故障注入
         self.fail_on: List[str] = []
         self.fail_exception: Exception = RuntimeError("injected failure")
@@ -130,15 +132,21 @@ class FakeSlotConnection:
         # 例如"取整行返回"与"取若干列供刷新"都以 `FROM material_slots` 开头，
         # 顺序写反会让前者拿到后者的列集合，测试就会因为缺字段而报 KeyError——
         # 那是测试辅助的错误，不是生产代码的错误，会浪费排查时间。
-        if "SELECT id, slot_key, status, status_reason, applicability_status" in normalized:
-            return self._select_slot(by_id=args[0])
-        if "FROM material_slots" in normalized and "WHERE slot_key = $1" in normalized:
+        if normalized.startswith("SELECT id FROM material_slots WHERE id = $1 FOR UPDATE"):
+            return self._select_slot_id_for_lock(args)
+        if normalized.startswith("SELECT id, caliber, caliber_conflict_candidate"):
             return self._select_for_caliber(args)
-        if "FROM material_slots" in normalized and "WHERE id = $1" in normalized:
-            return self._select_for_refresh(args)
-        if "FROM fiscal_document_versions" in normalized and "FOR UPDATE" in normalized:
+        if normalized.startswith("SELECT id, slot_id FROM fiscal_document_versions"):
             return self._lock_version(args)
-        if "UPDATE material_slots" in normalized and "RETURNING id" in normalized:
+        if normalized.startswith("SELECT subject_org_id, subject_kind, material_scope"):
+            return self._select_for_refresh(args)
+        if normalized.startswith("SELECT id, slot_key, status, status_reason"):
+            return self._select_slot(by_id=args[0])
+        if normalized.startswith("UPDATE material_slots SET jurisdiction_org_id"):
+            return self._update_slot_resolved(args)
+        if normalized.startswith("INSERT INTO material_sources"):
+            return {"id": f"source-{len(self.calls)}", "slot_id": args[0], "source_url": args[2]}
+        if normalized.startswith("UPDATE material_slots SET applicability_status"):
             return self._mark_not_applicable(args)
         if normalized.startswith("SELECT s.*"):
             return self._select_slot(
@@ -160,6 +168,14 @@ class FakeSlotConnection:
         self._maybe_fail(normalized)
         self.calls.append((sql, args))
 
+        if normalized.startswith("SELECT pg_advisory_xact_lock"):
+            # 事务级 advisory 锁在假连接里只是一个记录点：它的作用是让真库上
+            # 同一身份的首次创建串行化，单连接测试无并发语义可言。
+            self.advisory_locks.append(str(args[0]) if args else "")
+            return "SELECT 1"
+        if normalized.startswith("INSERT INTO material_slots"):
+            self._insert_slot_if_absent(args)
+            return "INSERT 0 1"
         if "UPDATE fiscal_document_versions" in normalized and "SET slot_id" in normalized:
             version_id, slot_id = args[0], args[1]
             version = self.versions.setdefault(version_id, {"id": version_id})
@@ -183,6 +199,15 @@ class FakeSlotConnection:
         payload = {"id": version_id, "created_at": created_at, "slot_id": None}
         payload.update(extra)
         self.versions[version_id] = payload
+
+    def _select_slot_id_for_lock(self, args: tuple) -> Optional[Dict[str, Any]]:
+        """``SELECT id FROM material_slots WHERE id = $1 FOR UPDATE``。
+
+        锁不到行时返回 None——真实 Postgres 对不存在的行也是这个行为
+        （不报错、不取锁），调用方随后会由外键约束兜住。
+        """
+        slot = self._slot_by_id(args[0])
+        return {"id": slot["id"]} if slot is not None else None
 
     def _select_for_caliber(self, args: tuple) -> Optional[Dict[str, Any]]:
         key = str(args[0])
@@ -228,12 +253,17 @@ class FakeSlotConnection:
             slot = self.slots_by_key.get(by_key)
         return dict(slot) if slot else None
 
-    def _upsert_slot(self, args: tuple) -> Dict[str, Any]:
-        """模拟 INSERT ... ON CONFLICT (slot_key) DO UPDATE 的净效果。
+    def _insert_slot_if_absent(self, args: tuple) -> bool:
+        """模拟 ``INSERT ... ON CONFLICT (slot_key) DO NOTHING``。
 
-        参数顺序必须与 ``material_slot_service.upsert_from_decision`` 的
-        VALUES 一一对应；对不上就说明 SQL 与 Python 已经漂移，
-        这条断言本身就有价值。
+        **DO NOTHING 的语义是关键**：已存在的行一个字段都不改。
+        假连接必须如实模拟这一点，否则"首次创建的口径竞态"在测试里
+        根本复现不出来——那正是本轮要修的缺陷。
+
+        参数顺序与 ``material_slot_service._ensure_slot_row`` 的 VALUES
+        一一对应；对不上就说明 SQL 与 Python 已经漂移。
+
+        返回是否真正插入了新行。
         """
         (
             slot_key,
@@ -248,34 +278,19 @@ class FakeSlotConnection:
             _subject_level,
             material_scope,
             caliber,
-            caliber_conflict_candidate,
             fiscal_year,
             report_kind,
             due_at,
             expected_source_url,
-            status,
-            status_reason,
             mapping_key,
         ) = args
 
-        existing = self.slots_by_key.get(slot_key)
-        if existing is not None:
-            # DO UPDATE 分支：只刷新允许刷新的列，identity 与适用性保持不变。
-            existing["jurisdiction_org_id"] = jurisdiction_org_id or existing.get(
-                "jurisdiction_org_id"
-            )
-            existing["subject_org_name"] = subject_org_name or existing.get("subject_org_name")
-            existing["caliber"] = caliber
-            existing["caliber_conflict_candidate"] = caliber_conflict_candidate
-            existing["due_at"] = existing.get("due_at") or due_at
-            existing["status"] = status
-            existing["status_reason"] = status_reason
-            existing["upsert_count"] = int(existing.get("upsert_count") or 1) + 1
-            return dict(existing)
+        if slot_key in self.slots_by_key:
+            return False
 
         slot_id = f"slot-{self._next_slot}"
         self._next_slot += 1
-        row = {
+        self.slots_by_key[slot_key] = {
             "id": slot_id,
             "slot_key": slot_key,
             "jurisdiction_org_id": jurisdiction_org_id,
@@ -288,22 +303,74 @@ class FakeSlotConnection:
             "subject_kind": subject_kind,
             "material_scope": material_scope,
             "caliber": caliber,
-            "caliber_conflict_candidate": caliber_conflict_candidate,
+            # 这两列在第一步不写，走建表默认值；第二步计算、第三步落库。
+            "caliber_conflict_candidate": None,
             "fiscal_year": fiscal_year,
             "report_kind": report_kind,
             "applicability_status": "applicable",
             "applicability_note": None,
             "due_at": due_at,
             "expected_source_url": expected_source_url,
-            "status": status,
-            "status_reason": status_reason,
+            # 与建表默认值一致；紧随其后的第三步会写入真正推导出的状态。
+            "status": "mapping_required",
+            "status_reason": None,
             "mapping_key": mapping_key,
             "current_document_version_id": None,
-            "upsert_count": 1,
+            # 两个计数分别记录"真正插入过几次"和"锁内解析更新过几次"。
+            # 只有 insert_count 能证明"没有多建材料"；更新次数会随调用次数增长，
+            # 拿它当幂等证据会把断言绑死在实现细节上。
+            "insert_count": 1,
+            "upsert_count": 0,
         }
-        self.slots_by_key[slot_key] = row
         self.slot_key_by_id[slot_id] = slot_key
-        return dict(row)
+        return True
+
+    def _update_slot_resolved(self, args: tuple) -> Optional[Dict[str, Any]]:
+        """第三步：把锁内算出的权威值写回。
+
+        identity 列（slot_key / subject_org_id / subject_kind /
+        material_scope / fiscal_year / report_kind / mapping_key）与适用性
+        都不在 UPDATE 列表里，因此**不可能**被这一步改写——
+        假连接同样不碰它们，两边行为保持一致。
+        """
+        (
+            slot_id,
+            jurisdiction_org_id,
+            jurisdiction_name,
+            department_org_id,
+            department_name,
+            subject_org_name,
+            subject_org_code,
+            caliber,
+            caliber_conflict_candidate,
+            expected_source_url,
+            due_at,
+            status,
+            status_reason,
+        ) = args
+
+        slot = self._slot_by_id(slot_id)
+        if slot is None:
+            return None
+        slot["jurisdiction_org_id"] = jurisdiction_org_id or slot.get("jurisdiction_org_id")
+        slot["jurisdiction_name"] = jurisdiction_name or slot.get("jurisdiction_name")
+        slot["department_org_id"] = department_org_id or slot.get("department_org_id")
+        slot["department_name"] = department_name or slot.get("department_name")
+        slot["subject_org_name"] = subject_org_name or slot.get("subject_org_name")
+        slot["subject_org_code"] = subject_org_code or slot.get("subject_org_code")
+        slot["caliber"] = caliber
+        slot["caliber_conflict_candidate"] = caliber_conflict_candidate
+        slot["expected_source_url"] = expected_source_url or slot.get("expected_source_url")
+        slot["due_at"] = slot.get("due_at") or due_at
+        slot["status"] = status
+        slot["status_reason"] = status_reason
+        slot["upsert_count"] = int(slot.get("upsert_count") or 0) + 1
+        return {
+            "id": slot["id"],
+            "slot_key": slot["slot_key"],
+            "status": slot["status"],
+            "status_reason": slot["status_reason"],
+        }
 
     def _slot_by_id(self, slot_id: Any) -> Optional[Dict[str, Any]]:
         key = self.slot_key_by_id.get(slot_id)

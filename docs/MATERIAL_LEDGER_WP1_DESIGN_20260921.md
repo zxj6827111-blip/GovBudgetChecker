@@ -439,6 +439,33 @@ B 的版本"这种双向不一致。双向不一致是材料串线的直接来�
 （``infer_progress_state``），而不是默认成"分析未开始"。否则一次无关刷新会把
 "待人工复核"打回"已上传"，用户看到的是待办凭空消失。
 
+### 7.9 全系统锁顺序（第三轮加固，2026-09-21）
+
+```
+LOCK ORDER = 身份 advisory 锁  →  material_slots 行  →  fiscal_document_versions 行
+```
+
+三级全序，五个写方法一律遵守。
+
+**为什么要统一**：`allocate_for_document` 天然是"先槽位后版本"，
+而 `bind_document_version` 最初写成"先版本后槽位"。两者并发指向
+**同一个 (槽位, 版本) 对**时会形成经典 ABBA 死锁——一个持有槽位等版本，
+另一个持有版本等槽位。把 `bind_document_version` 改成先锁槽位即消除该环。
+
+**为什么最外层还要 advisory 锁**：`material_slots` 有两个唯一约束
+（`slot_key` 列约束与自然键表达式索引 `uq_material_slots_identity`）。
+`SELECT ... FOR UPDATE` 锁不住不存在的行，所以首次创建必须用
+`INSERT ... ON CONFLICT DO NOTHING` 先确保存在；但两个事务并发插入
+同一身份时，PostgreSQL 会为**每个**唯一索引各建一个"推测插入"标记，
+双方可能分别等待对方在不同索引上的标记，形成环路。
+
+这不是理论推演：本轮先只做"确保存在 → 锁 → 判定"就把真库用例跑出
+`DeadlockDetectedError`（等待推测记号上的 ShareLock），加上 advisory 锁后才通过。
+
+**ABBA 不可能成立的理由**：advisory 锁永远是本模块取的第一把锁，
+行锁顺序固定为"槽位 → 版本"，两条规则合起来构成全序，
+不存在任何一条路径反向持有。
+
 ## 八、本轮不做的事（明确边界）
 
 - 不新增任何 HTTP 接口（`GET /api/materials/*` 等留给 WP2 一起设计，

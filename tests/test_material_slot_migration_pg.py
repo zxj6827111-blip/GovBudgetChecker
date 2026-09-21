@@ -23,10 +23,11 @@ NULL 年份在复合唯一索引下的行为是否符合预期、既有库升级
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import asyncpg
 import pytest
@@ -564,8 +565,6 @@ async def test_concurrent_binding_of_one_version_has_exactly_one_winner(db):
     两边都以为自己成功，最后一个槽位的当前版本指针会指向别人家的版本。
     这条用例是行锁真正生效的证据。
     """
-    import asyncio
-
     from src.services.material_slot_service import (
         MaterialSlotService,
         SlotBindingConflict,
@@ -716,6 +715,371 @@ async def test_mark_not_applicable_respects_identity_gate_on_real_db(db):
             "SELECT slot_key, applicability_status FROM material_slots ORDER BY slot_key"
         )
         assert {row["applicability_status"] for row in written} == {"not_applicable"}
+
+
+async def _race_allocate_against_direct_bind(
+    schema: str,
+    pool,
+    *,
+    metadata: Dict[str, Any],
+    checksum: str,
+    version_id: int,
+    slot_id: str,
+) -> list:
+    """让 allocate 与直接 bind 同时指向同一个 (槽位, 版本) 对。
+
+    抽成显式传参的函数而不是写在测试的循环体里：循环里的闭包会按引用捕获
+    循环变量，那一轮跑完变量就被改掉，用例要么静默失效、要么在加下一轮时
+    突然变成竞态。参数化之后每轮传进去的都是当轮的值，不存在这个问题。
+    """
+    from src.services.material_slot_service import (
+        MaterialSlotService,
+        allocate_for_document,
+    )
+
+    barrier = _ConcurrencyBarrier(2)
+
+    async def _allocate() -> None:
+        async with _conn(schema, pool) as connection:
+            await barrier.wait()
+            await allocate_for_document(
+                connection,
+                metadata=metadata,
+                checksum=checksum,
+                org_records=_ORG_RECORDS,
+                document_version_id=version_id,
+            )
+
+    async def _direct_bind() -> None:
+        async with _conn(schema, pool) as connection:
+            await barrier.wait()
+            await MaterialSlotService(connection).bind_document_version(slot_id, version_id)
+
+    tasks = [asyncio.create_task(_allocate()), asyncio.create_task(_direct_bind())]
+    await barrier.release()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return [item for item in results if isinstance(item, BaseException)]
+
+
+class _ConcurrencyBarrier:
+    """让 N 个协程同时越过同一个点。
+
+    用途是制造**真并发**：协调方等到所有参与者都到达之后才放行，
+    因此不依赖 ``sleep`` 去赌时序。任何参与者提前失败都会让 ``release`` 超时，
+    测试直接红，而不是安静地退化成串行执行——那会让并发用例变成假证据。
+    """
+
+    def __init__(self, parties: int) -> None:
+        self._parties = parties
+        self._arrived = asyncio.Semaphore(0)
+        self._go = asyncio.Event()
+
+    async def wait(self) -> None:
+        self._arrived.release()
+        await self._go.wait()
+
+    async def release(self, timeout: float = 15.0) -> None:
+        for _ in range(self._parties):
+            await asyncio.wait_for(self._arrived.acquire(), timeout=timeout)
+        self._go.set()
+
+
+async def _slot_row(schema: str, pool, slot_key: str) -> Optional[asyncpg.Record]:
+    async with _conn(schema, pool) as connection:
+        return await connection.fetchrow(
+            """
+            SELECT caliber, caliber_conflict_candidate, status, status_reason
+            FROM material_slots
+            WHERE slot_key = $1
+            """,
+            slot_key,
+        )
+
+
+async def test_concurrent_first_slot_creation_preserves_caliber_conflict(db):
+    """首次并发创建同一槽位、且两次口径相反时，冲突证据必须留下。
+
+    这是本轮最重要的验收用例。旧写法"SELECT ... FOR UPDATE 再 ON CONFLICT
+    DO UPDATE"在这里会失败：``FOR UPDATE`` **锁不住不存在的行**，
+    两个事务都读到空行、各自在锁外算好口径，随后一个插入、另一个把锁外
+    算出的结果盖上去——``summary`` 与 ``self`` 只留下一个，冲突证据被抹掉。
+
+    现写法先在锁外确保行存在、再在锁内读最新值并判定，因此两个事务被数据库
+    串行化，后到者一定读得到先到者写下的口径。
+
+    同步用的是 barrier 而不是 sleep：两个协程都到达起点后才一起放行，
+    否则先启动的那个会先跑完，用例就只是"两次串行调用"。
+    """
+    from src.services import material_slot_resolver as resolver
+    from src.services.material_slot_service import MaterialSlotService
+
+    schema, pool = db
+    await run_migrations()
+
+    decision = resolver.decide_slot_allocation(
+        metadata=_metadata_for(version_prefix="caliber-race"),
+        org_records=_ORG_RECORDS,
+        checksum="7" * 64,
+    )
+    assert decision.ok, decision.reason
+    slot_key = decision.identity.slot_key
+
+    barrier = _ConcurrencyBarrier(2)
+
+    async def _allocate(caliber: str) -> None:
+        async with _conn(schema, pool) as connection:
+            await barrier.wait()
+            await MaterialSlotService(connection).upsert_from_decision(
+                decision, caliber=caliber
+            )
+
+    tasks = [
+        asyncio.create_task(_allocate("summary")),
+        asyncio.create_task(_allocate("self")),
+    ]
+    await barrier.release()
+    await asyncio.gather(*tasks)
+
+    async with _conn(schema, pool) as connection:
+        rows = await connection.fetch(
+            "SELECT caliber, caliber_conflict_candidate, status, status_reason"
+            " FROM material_slots WHERE slot_key = $1",
+            slot_key,
+        )
+
+    assert len(rows) == 1, "首次并发创建应当只留下一条槽位"
+    row = rows[0]
+    assert {row["caliber"], row["caliber_conflict_candidate"]} == {"summary", "self"}, (
+        f"口径冲突证据丢失: caliber={row['caliber']!r} "
+        f"candidate={row['caliber_conflict_candidate']!r}"
+    )
+    assert row["caliber"] != row["caliber_conflict_candidate"]
+    assert row["status"] == "mapping_required"
+    assert row["status_reason"] == "caliber_conflict"
+
+
+async def test_concurrent_first_slot_creation_with_same_caliber_has_no_false_conflict(db):
+    """两次口径相同：仍然只有一条槽位，且**不能**凭空判出冲突。"""
+    from src.services import material_slot_resolver as resolver
+    from src.services.material_slot_service import MaterialSlotService
+
+    schema, pool = db
+    await run_migrations()
+
+    decision = resolver.decide_slot_allocation(
+        metadata=_metadata_for(version_prefix="caliber-same"),
+        org_records=_ORG_RECORDS,
+        checksum="8" * 64,
+    )
+    assert decision.ok, decision.reason
+    slot_key = decision.identity.slot_key
+
+    barrier = _ConcurrencyBarrier(2)
+
+    async def _allocate() -> None:
+        async with _conn(schema, pool) as connection:
+            await barrier.wait()
+            await MaterialSlotService(connection).upsert_from_decision(
+                decision, caliber="summary"
+            )
+
+    tasks = [asyncio.create_task(_allocate()), asyncio.create_task(_allocate())]
+    await barrier.release()
+    await asyncio.gather(*tasks)
+
+    row = await _slot_row(schema, pool, slot_key)
+    assert row is not None
+    assert row["caliber"] == "summary"
+    assert row["caliber_conflict_candidate"] is None
+    assert row["status_reason"] != "caliber_conflict"
+
+
+async def test_refresh_status_reads_facts_under_its_own_row_lock(db):
+    """refresh_status 必须在自己的行锁内读事实，不能按过期快照覆盖状态。
+
+    构造方式：事务 B 先锁住槽位行，然后在持锁期间绑定文件版本并提交。
+    如果没有行锁，A 的 refresh 会立刻读完旧快照并写出 ``not_due``，
+    ``wait_for`` 就不会超时——**超时本身就是"锁确实生效"的断言**。
+    锁生效时 A 只能等 B 提交，于是读到的是绑定之后的事实。
+    """
+    from src.services.material_slot_service import MaterialSlotService
+
+    schema, pool = db
+    await run_migrations()
+
+    async with _conn(schema, pool) as connection:
+        version_id = await _seed_version(connection, prefix="refresh-race")
+        slot_id = await _seed_slot_row(
+            connection, "refresh-race-slot", subject_org_id="refresh-race-org"
+        )
+
+    async def _refresh() -> Dict[str, Any]:
+        async with _conn(schema, pool) as connection:
+            return await MaterialSlotService(connection).refresh_status(slot_id)
+
+    async with _conn(schema, pool) as holder:
+        transaction = holder.transaction()
+        await transaction.start()
+        # B 持锁：槽位行被锁住，A 的 FOR UPDATE 会一直等
+        await holder.fetchrow(
+            "SELECT id FROM material_slots WHERE id = $1::uuid FOR UPDATE", slot_id
+        )
+
+        refresh_task = asyncio.create_task(_refresh())
+        with pytest.raises(asyncio.TimeoutError):
+            # shield：超时只用来做断言，不能把任务取消掉
+            await asyncio.wait_for(asyncio.shield(refresh_task), timeout=0.5)
+
+        # B 在持锁期间完成绑定，然后提交
+        await MaterialSlotService(holder).bind_document_version(slot_id, version_id)
+        await transaction.commit()
+
+    result = await refresh_task
+
+    assert result["status"] == "uploaded", (
+        f"refresh 没有看到刚刚绑定的版本，读到的是过期事实: {result}"
+    )
+    async with _conn(schema, pool) as connection:
+        stored = await connection.fetchrow(
+            "SELECT status, current_document_version_id, applicability_status,"
+            " caliber_conflict_candidate FROM material_slots WHERE id = $1::uuid",
+            slot_id,
+        )
+    # 缓存状态与数据库事实不许互相矛盾
+    assert stored["current_document_version_id"] == version_id
+    assert stored["status"] == "uploaded"
+    if stored["current_document_version_id"] is not None:
+        assert stored["status"] not in ("missing", "not_due")
+
+
+async def test_concurrent_allocate_and_direct_bind_do_not_deadlock(db):
+    """并发 allocate 与直接 bind 反例：锁顺序统一后不允许出现死锁。
+
+    这就是修复前的 ABBA 场景：``allocate_for_document`` 先锁槽位再锁版本，
+    而 ``bind_document_version`` 曾经先锁版本再锁槽位。两者并发指向
+    **同一个 (槽位, 版本) 对**时，一个持槽位等版本、另一个持版本等槽位。
+    现在两边都是"槽位 → 版本"，全序成立，环不可能形成。
+
+    重复多轮是为了让调度器有机会把两种交错都试出来；每轮用全新的身份与版本，
+    避免上一轮的锁等待影响下一轮。
+    """
+    from src.services import material_slot_resolver as resolver
+    from src.services.material_slot_service import (
+        MaterialSlotService,
+        allocate_for_document,
+    )
+
+    schema, pool = db
+    await run_migrations()
+
+    rounds = 6
+    for round_index in range(rounds):
+        prefix = f"deadlock-{round_index}"
+        metadata = _metadata_for(version_prefix=prefix)
+        decision = resolver.decide_slot_allocation(
+            metadata=metadata, org_records=_ORG_RECORDS, checksum=f"{round_index}" * 8
+        )
+        assert decision.ok, decision.reason
+
+        async with _conn(schema, pool) as connection:
+            version_id = await _seed_version(connection, prefix=prefix)
+            # 先串行建槽位，让并发的两条路径指向同一个槽位
+            created = await allocate_for_document(
+                connection,
+                metadata=metadata,
+                checksum=f"{round_index}" * 8,
+                org_records=_ORG_RECORDS,
+                document_version_id=None,
+            )
+            slot_id = created["slot_id"]
+
+        failures = await _race_allocate_against_direct_bind(
+            schema,
+            pool,
+            metadata=metadata,
+            checksum=f"{round_index}" * 8,
+            version_id=version_id,
+            slot_id=slot_id,
+        )
+        assert failures == [], f"第 {round_index} 轮出现异常（疑似死锁）: {failures}"
+
+        async with _conn(schema, pool) as connection:
+            assert await connection.fetchval(
+                "SELECT COUNT(*) FROM material_slots WHERE slot_key = $1",
+                decision.identity.slot_key,
+            ) == 1
+            assert await connection.fetchval(
+                "SELECT COUNT(*) FROM fiscal_document_versions WHERE slot_id = $1::uuid",
+                slot_id,
+            ) >= 1
+
+
+async def test_allocate_does_not_deadlock_with_cross_slot_bind(db):
+    """跨槽绑定路径也不许死锁：版本属于 S1、请求绑到 S2 时全程只等一次。"""
+    from src.services.material_slot_service import (
+        MaterialSlotService,
+        allocate_for_document,
+        safe_allocate_for_document,
+    )
+
+    schema, pool = db
+    await run_migrations()
+
+    async with _conn(schema, pool) as connection:
+        version_id = await _seed_version(connection, prefix="cross-deadlock")
+        first = await allocate_for_document(
+            connection,
+            metadata=_metadata_for(version_prefix="cross-deadlock"),
+            checksum="9" * 64,
+            org_records=_ORG_RECORDS,
+            document_version_id=version_id,
+        )
+        other_slot = await _seed_slot_row(
+            connection, "cross-deadlock-other", subject_org_id="cross-deadlock-org"
+        )
+        slot_id = first["slot_id"]
+
+    barrier = _ConcurrencyBarrier(2)
+
+    async def _winner_bind() -> None:
+        async with _conn(schema, pool) as connection:
+            await barrier.wait()
+            await MaterialSlotService(connection).bind_document_version(slot_id, version_id)
+
+    async def _loser_bind() -> Dict[str, Any]:
+        async with _conn(schema, pool) as connection:
+            await barrier.wait()
+            return await safe_allocate_for_document(
+                connection,
+                metadata={
+                    **_metadata_for(version_prefix="cross-deadlock"),
+                    "report_kind": "budget",
+                    "doc_type": "dept_budget",
+                },
+                checksum="9" * 64,
+                org_records=_ORG_RECORDS,
+                document_version_id=version_id,
+            )
+
+    tasks = [asyncio.create_task(_winner_bind()), asyncio.create_task(_loser_bind())]
+    await barrier.release()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    failures = [item for item in results if isinstance(item, BaseException)]
+    assert failures == [], f"跨槽路径出现异常（疑似死锁）: {failures}"
+    assert results[1]["status"] == "conflict"
+
+    async with _conn(schema, pool) as connection:
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM material_slots WHERE current_document_version_id = $1",
+            version_id,
+        ) == 1
+        assert str(
+            await connection.fetchval(
+                "SELECT slot_id FROM fiscal_document_versions WHERE id = $1", version_id
+            )
+        ) == slot_id
+        assert other_slot != slot_id
 
 
 # ---- 真库用例的共享夹具 -----------------------------------------------------

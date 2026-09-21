@@ -231,7 +231,10 @@ async def test_reanalysis_of_same_version_does_not_create_new_material():
 
     assert first["id"] == second["id"]
     assert len(conn.slots_by_key) == 1
-    assert conn.slots_by_key[decision.identity.slot_key]["upsert_count"] == 2
+    stored = conn.slots_by_key[decision.identity.slot_key]
+    # 关键是"只真正插入过一次"。更新次数会随调用次数增长，拿它当幂等证据
+    # 等于把断言绑在实现细节上——三次重放就该是 3，说明不了任何事。
+    assert stored["insert_count"] == 1
 
 
 # ==== 6/7. 未到期与缺失 =====================================================
@@ -461,15 +464,20 @@ async def test_allocate_is_idempotent_on_slot_key():
 
 
 @pytest.mark.asyncio
-async def test_upsert_conflict_target_is_slot_key():
-    """幂等靠的是 ON CONFLICT (slot_key)，不是靠调用方自觉。"""
+async def test_idempotency_is_enforced_by_the_database_on_slot_key():
+    """幂等由数据库在 slot_key 上保证，不是靠调用方自觉。
+
+    写入拆成"确保存在 → 锁内解析 → 写回"三步之后，第一步的冲突动作是
+    ``DO NOTHING``：已存在的行一个字段都不动。这正是首次创建并发竞争
+    被消除的机制——锁外算出的结论没有机会覆盖别人写下的口径。
+    """
     conn = FakeSlotConnection()
     await safe_allocate_for_document(
         conn, metadata=_metadata(), checksum="f" * 64, org_records=ORG_RECORDS
     )
     inserts = conn.executed("INSERT INTO material_slots")
-    assert len(inserts) == 1
-    assert "ON CONFLICT (slot_key) DO UPDATE" in inserts[0][0]
+    assert len(inserts) == 1, "一次分配只应发出一条确保存在的插入语句"
+    assert "ON CONFLICT (slot_key) DO NOTHING" in inserts[0][0]
 
 
 @pytest.mark.asyncio

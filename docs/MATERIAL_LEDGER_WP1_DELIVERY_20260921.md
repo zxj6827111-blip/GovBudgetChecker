@@ -213,9 +213,28 @@ GOVBUDGET_TEST_DATABASE_URL=postgresql://.../fiscal_db \
 | --- | --- |
 | PR | **#42（保持 OPEN，未合并）** |
 | 分支 | `feat/material-ledger-foundation-v1` |
-| 提交数 | 10（WP0+WP1 七条 + 评审修复三条） |
+| 提交历史与总数 | **以 PR #42 的 GitHub 页面为准，本文档不记录固定数字** |
 | CI | `test-and-build` 两跑均 **pass** |
-| CI 侧测试统计 | 1440 passed / 16 skipped（与本地差 1 条的原因见 §3.1） |
+| CI 侧测试统计 | 见 §5（CI 与本地分开记，不合并成一个数字） |
+
+> 关于"提交总数"：本文档此前写过固定数字，结果每修一次就要跟着改一次，
+> 而改这个数字本身又会产生一个新提交、让数字再次过期。因此改为只记录
+> **Review 基线 HEAD**，总数交给 GitHub 页面，这是唯一不会自相矛盾的写法。
+
+### 3.7 第三轮：并发一致性加固
+
+第二轮把写入语义修正为不可违反之后，第三轮针对**并发首次创建**与
+**状态刷新**两处剩余竞态做了加固。
+
+| # | 问题 | 修复后行为 |
+| --- | --- | --- |
+| 1 | `SELECT ... FOR UPDATE` **锁不住不存在的行**。首次并发创建同一槽位时，两个事务都读到空行、各自在锁外算好口径，随后一个插入、另一个把锁外结论盖上去，`summary` 与 `self` 只剩一个、冲突证据被抹掉 | 写入拆成三步：**确保存在（`ON CONFLICT DO NOTHING`）→ 锁住真实存在的行 → 锁内读最新值并判定 → 写回**。判定与写入都在持锁期间完成 |
+| 2 | 只靠 `ON CONFLICT DO NOTHING` 仍不够：`material_slots` 有两个唯一约束（`slot_key` + 自然键表达式索引），并发插入同一身份时两个事务会在**不同索引**的推测插入标记上互相等待 | 真库实测报 `DeadlockDetectedError`。在行锁之前加**事务级 advisory 锁**（按 `slot_key` 哈希）串行化同一身份的首次创建，推测插入竞争不复存在 |
+| 3 | `refresh_status` 自己没有事务与行锁，"读事实 → 推导 → 写状态"三步之间无保护，可能按过期快照把状态写回旧值，造成"已绑定版本却仍是 `missing`" | 自带事务与 `SELECT ... FOR UPDATE`；外层已有事务时复用。调用方不再需要替它兜底 |
+| 4 | 锁顺序不统一：`allocate_for_document` 是"槽位 → 版本"，`bind_document_version` 却是"版本 → 槽位"，两者并发指向同一 `(槽位, 版本)` 对时形成 **ABBA 死锁** | `bind_document_version` 改为先锁槽位。全系统统一为 **advisory(身份) → 槽位行 → 版本行** 三级全序 |
+| 5 | 文档/PR 描述里写死了提交数量，每修一次就要改、改完又产生新提交 | 改为只记 Review 基线 HEAD，总数以 GitHub 页面为准 |
+
+这一轮**没有改 schema**（`SCHEMA_CHANGE_REQUIRED = NO`），只动 service / tests / docs。
 
 ---
 
