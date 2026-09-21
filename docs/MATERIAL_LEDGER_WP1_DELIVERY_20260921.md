@@ -39,7 +39,7 @@
 
 | 文件 | 改动 | 影响面 |
 | --- | --- | --- |
-| `src/services/structured_ingest_runner.py` | 新增 `build_ingest_metadata` 纯函数；结构化入库后调用槽位分配，结果里新增 `material_slot` 摘要字段 | **只做加法**。槽位失败被 `safe_allocate_for_document` 兜住，不改任何既有字段、不阻断主流程 |
+| `src/services/structured_ingest_runner.py` | 新增 `build_ingest_metadata` 纯函数；**文档版本建立后立即**调用槽位分配（在 PDF 解析之前，见 §3.9），结果里新增 `material_slot` 摘要字段；错误返回保留已建立的 `document_id` / `document_version_id` / `material_slot` | **顺序调整 + 加法**。槽位失败被 `safe_allocate_for_document` 兜住，不阻断主流程；成功路径的字段集一个没动 |
 | `api/main.py` | 构造结构化入库 metadata 改用 `build_ingest_metadata`，把主分析链路已算好的 `document_profile` 一并传入（评审修复） | 管线多传一个入参；`run_structured_ingest` 的签名与返回契约未变 |
 | `.env.example` | 声明新环境变量 | 无 |
 
@@ -48,7 +48,7 @@
 > `api/main.py` 是本轮唯一被触及的既有生产文件，净改动是"import 多一项 +
 > 构造 metadata 时多传一个画像参数"，没有改变任何既有分支或返回值。
 
-### 新增：测试（172 条）
+### 新增：测试（本 PR 新增 178 条；下表各文件当前合计 211 条）
 
 | 文件 | 条数 | 默认是否运行 |
 | --- | --- | --- |
@@ -59,8 +59,13 @@
 | `tests/support_material_slot_db.py`（辅助） | — | — |
 | `tests/test_material_slot_binding_and_state.py` | 45 | 是 |
 | `tests/test_material_slot_profile_integration.py` | 15 | 是 |
-| `tests/test_material_slot_migration_pg.py` | 23 | 否（需 `GOVBUDGET_TEST_DATABASE_URL`） |
-| `tests/test_runtime_structured_ingest.py`（新增 9 条清理兼容用例） | 28（含既有 19） | 是 |
+| `tests/test_material_slot_migration_pg.py` | 26 | 否（需 `GOVBUDGET_TEST_DATABASE_URL`） |
+| `tests/test_runtime_structured_ingest.py`（本 PR 新增 9 条清理兼容用例） | 28（含既有 19） | 是 |
+| `tests/test_structured_ingest_runner.py`（本 PR 新增 3 条主链路编排用例） | 17（含既有 14） | 是 |
+
+> "新增 178 条"= 上表各文件本 PR 新增数之和（`test_runtime_structured_ingest.py`
+> 与 `test_structured_ingest_runner.py` 按新增数计入）。两个数字都在改动前后
+> 用 `pytest --collect-only` 实点，不是估算。
 
 ### 新增：文档与基线产物
 
@@ -84,7 +89,7 @@
 | 2 | 同单位 2024 budget / final 是两个 slot | `test_budget_and_final_are_separate_slots` | ✅ |
 | 3 | 2024 final 发布于 2025 仍 `fiscal_year=2024` | `test_final_published_in_later_year_keeps_fiscal_year`、`test_published_at_does_not_override_fiscal_year` | ✅ |
 | 4 | 同 slot 两个 PDF hash 成为两个版本 | `test_two_pdf_hashes_for_one_slot_become_two_versions` | ✅ |
-| 5 | 同 PDF 版本两次分析仍只有一个 slot | `test_reanalysis_of_same_version_does_not_create_new_material`（假连接）+ `test_service_allocate_and_bind_against_real_database`（真库） | ✅ |
+| 5 | 同 PDF 版本两次分析仍只有一个 slot | `test_reanalysis_of_same_version_does_not_create_new_material`（假连接）+ `test_service_allocate_and_bind_against_real_database`、`test_run_structured_ingest_rerun_reuses_single_slot_on_real_db`（真库，后者走完整主链路） | ✅ |
 | 6 | 未到期没有 PDF → `not_due` | `test_not_due_when_due_at_is_in_the_future` | ✅ |
 | 7 | 已到期没有 PDF → `missing` | `test_missing_only_when_due_passed_and_no_document` | ✅ |
 | 8 | unknown year → `mapping_required` | `test_unknown_year_goes_to_mapping_required` | ✅ |
@@ -117,7 +122,7 @@
 
 | 检查 | 基线（`4a1cabf`） | 本次 | 结论 |
 | --- | --- | --- | --- |
-| `python -m pytest -q`（本机 Windows） | 1307 passed, 1 skipped, 0 failed | **1456 passed, 24 skipped, 0 failed** | 新增用例全部计入；24 条 skip 里 23 条是真库用例（未配置 DSN），1 条是平台条件用例 |
+| `python -m pytest -q`（本机 Windows） | 1307 passed, 1 skipped, 0 failed | **1459 passed, 27 skipped, 0 failed** | 新增用例全部计入；27 条 skip 里 26 条是真库用例（未配置 DSN），1 条是平台条件用例 |
 | `python -m pytest -q`（GitHub CI, Linux） | — | 见 PR #42 的 CI 运行结果 | CI 比本地多 1 条通过（平台条件用例），**条数随用例集变化，此处不写死数字**，理由见下 |
 | `ruff check .`（Makefile 与 CI 同款全仓命令） | All checks passed | **All checks passed** | 无变化 |
 | `mypy api src tests` | Success（199 files） | **Success（212 files）** | 无变化 |
@@ -128,7 +133,7 @@
 `tests/test_pdf_parse_isolation_and_backup.py:255` 在 Windows 上跳过
 （`RLIMIT_AS` 不适用），在 Linux 上运行并通过。所以 CI 恒比本地
 **多 1 条通过、少 1 条跳过**，其余完全相同。
-23 条真库用例在两种环境下都跳过（未配置 `GOVBUDGET_TEST_DATABASE_URL`）。
+26 条真库用例在两种环境下都跳过（未配置 `GOVBUDGET_TEST_DATABASE_URL`）。
 
 > 为什么 CI 那一栏不写具体数字：本轮新增用例后数字还会变，写死的数字会立刻过期，
 > 而为了更新它再提交一次又会改变提交历史——与提交数是同一个陷阱。
@@ -139,7 +144,7 @@
 ```bash
 GOVBUDGET_TEST_DATABASE_URL=postgresql://.../fiscal_db \
     python -m pytest tests/test_material_slot_migration_pg.py -v
-# => 23 passed
+# => 26 passed
 ```
 
 覆盖：全新库应用、第二次 no-op、既有库升级只增 0019、语句重放、schema 形状、
@@ -147,7 +152,10 @@ GOVBUDGET_TEST_DATABASE_URL=postgresql://.../fiscal_db \
 **回滚 SQL 实测**、服务层端到端幂等；评审修复轮又补了
 **跨槽重绑被拒且整体回滚**、**两连接并发绑定只有一个胜者（行锁生效）**、
 **同 `created_at` 按 id 决定新旧**、**口径冲突持久化且刷新洗不掉**、
-**`mark_not_applicable` 尊重身份门槛**。
+**`mark_not_applicable` 尊重身份门槛**、**并发首次建槽不丢口径冲突**、
+**`refresh_status` 自带行锁**、**两条写路径并发不死锁**；第四轮补了
+**旧清理链路两条 DELETE 守卫用例**；第五轮补了**主链路真库 Smoke 三条**
+（成功落库 / 解析失败仍落库 / 重跑不造重复槽位，见 §3.9）。
 
 测后核对目标库：`public` schema 仍为 18 条迁移、无 `material_slots`、
 无残留 `matslot_test_*` schema。**开发库数据零改动。**
@@ -274,6 +282,119 @@ PR #42 给 `fiscal_document_versions` 加了 `slot_id` 之后，旧的结构化�
 
 前端补了 `material_slot_bound` 的中文原因标签，否则运维会在清理预览里看到原始代码。
 
+---
+
+### 3.9 第五轮：主链路 Material Slot 真库 Smoke
+
+前三轮把**写入语义**修到不可违反，第四轮把**旧清理链路**接上台账；
+第五轮处理的是剩下那个一直没被验证的接缝：槽位分配**在主链路的什么位置**执行。
+
+#### 为什么位置本身就是缺陷
+
+分配原先挂在整条链路末尾（解析 → 表识别 → 事实物化 → PS 同步 → **分配槽位**）。
+后果不是报错，而是**静默丢材料**：PDF 解析一失败，`run_structured_ingest` 直接
+跳到 `except`，槽位分配的代码行根本没被执行到，于是"文件已经收到、只是解析不出来"
+的材料在台账里**不存在**。这恰恰是最需要人工介入的一批——台账看不见它，
+也就永远不会有人去补录它。
+
+台账回答的是"这份材料有没有收到"，解析回答的是"这份材料看不看得懂"，
+前者不该依赖后者。
+
+#### 调整后的顺序
+
+```text
+run_structured_ingest
+  → _ensure_document_version      （建立 org_units / fiscal_documents / fiscal_document_versions）
+  → _allocate_material_slot       （分配槽位 + 绑定版本 + 推进当前指针 + 刷新状态）
+  → PDFParser.parse_pdf
+  → TableRecognizer
+  → FiscalFactMaterializer
+  → PSSharedSchemaSync
+  → 组装结果
+```
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | 槽位分配前移到"文档版本建立之后、PDF 解析之前" | `src/services/structured_ingest_runner.py` |
+| 2 | **全流程只有这一处调用**，后面不再有第二次分配：一份分析只允许分配一次，否则"何时进入台账"又重新取决于解析是否成功 | 同上 |
+| 3 | 错误返回保留已建立的上下文：`document_id` / `document_version_id` / `material_slot`（以及 `organization_name` / `fiscal_year` / `doc_type`） | 同上，`except` 分支 |
+| 4 | 槽位分配失败**仍然不阻断**主流程（`safe_allocate_for_document` 语义未变）：`status=error` 只出现在结果里 | 同上 |
+
+错误 payload 里"保留上下文"这一条不是锦上添花：没有它，调用方拿到的是一个
+"什么都没发生"的失败，既判断不出材料有没有进台账，也决定不了要不要人工补录。
+
+#### 前移会不会改变归属判定？——实测：不会
+
+位置变化会改变两件事的先后：`_backfill_local_organization_catalog`
+（把 PS 同步出的部门/单位写进本地组织目录）与槽位归属判定。逐条核对：
+
+- 该回填只在 `metadata["organization_id"]` **为空**时执行；有 id 时第一行就返回。
+- 归属判定的"主体"只按 **id** 解析（`resolve_subject_org`），
+  `organization_id` 为空时主体必然是 `None`，判定结论与目录内容无关。
+
+实测（同一份元数据，空目录 vs 填充目录）：
+
+| 场景 | 空目录 | 有目录 | 结论 |
+| --- | --- | --- | --- |
+| 无 `organization_id`（回填路径） | `mapping_required` / `df4c23e5…` | `mapping_required` / `df4c23e5…` | **完全一致**（状态与 slot_key 都相同） |
+| 有 `organization_id` | `mapping_required` / `cf8be4a6…` | `resolved` / `2e274121…` | 有差异，但该场景下回填**不会执行**，目录内容不受位置影响 |
+
+结论：前移改变的只是"判定发生的时刻"，不改变任何一次判定结果。
+
+#### 本轮**没有**做的事
+
+- **没有**接状态自动刷新（`uploaded → processing → failed / review_required`）。
+  文件成功绑定槽位、但后续解析失败时，槽位仍可能停在 `uploaded`。
+  本轮的目标只有一条：**不能因为分析失败导致材料根本没进台账**。
+  生命周期接线属于 WP2/WP3，见 §6 第 5 条。
+- **没有**动第四轮的清理保护（`api/runtime.py`、`StructuredCleanupDialog.tsx`）
+  与 `migration 0019`、槽位身份/锁顺序/状态机。生产代码只改了
+  `structured_ingest_runner.py` 一个文件。
+
+#### 新增用例
+
+默认用例（`tests/test_structured_ingest_runner.py`，3 条）：
+
+| 用例 | 断言 |
+| --- | --- |
+| `test_material_slot_is_allocated_before_pdf_parsing` | 调用序列恰为 `ensure_document_version → allocate_material_slot → parse_pdf`；分配只调用一次 |
+| `test_parser_failure_keeps_material_slot_context` | 解析抛错时 `status == "error"`，且 `document_id` / `document_version_id` / `material_slot.bound == True` 都在；分配次数仍为 1 |
+| `test_material_slot_failure_does_not_block_structured_ingest` | 分配返回 `status=error, bound=false` 时，主流程照常 `done`，`facts_count` 正常 |
+
+真库 Smoke（`tests/test_material_slot_migration_pg.py`，3 条）：
+
+| 用例 | 真实执行的部分 | 断言 |
+| --- | --- | --- |
+| `test_run_structured_ingest_really_persists_material_slot` | `run_structured_ingest` 全链路 + `_ensure_document_version` + `_allocate_material_slot` + `MaterialSlotService` + 真 `material_slots` / `fiscal_document_versions.slot_id` | `bound=True`、`status=="resolved"`、`slot_id` 非空且与返回值一致、`current_document_version_id == document_version_id`、`material_slots COUNT == 1` |
+| `test_run_structured_ingest_parser_failure_still_persists_slot` | 同上，但 `PDFParser.parse_pdf` 故意抛 `RuntimeError` | `payload.status == "error"` 且仍带 `document_version_id` / `material_slot`；**库里**版本 `slot_id` 非空、槽位当前指针指向它 |
+| `test_run_structured_ingest_rerun_reuses_single_slot_on_real_db` | 同上，同一材料跑两次 | 两次 `slot_id` 与 `document_version_id` 相同；`material_slots COUNT == 1` |
+
+被替换的只有 `PDFParser` / `TableRecognizer` / `FiscalFactMaterializer` /
+`PSSharedSchemaSync`——留下它们，这几条用例就变成 PDF 解析测试而不是
+"材料有没有进台账"的测试。**版本创建、槽位分配、版本绑定、数据库查询全部真实。**
+组织目录（JSON 外部输入）固定为测试常量，避免身份判定随本机目录变化。
+
+#### 用例不是恒真的（做了变异验证）
+
+把分配块重新移回解析之后，重新执行：
+
+- `test_material_slot_is_allocated_before_pdf_parsing` → **FAILED**（调用序列不符）
+- `test_parser_failure_keeps_material_slot_context` → **FAILED**（`KeyError: 'material_slot'`）
+- `test_run_structured_ingest_parser_failure_still_persists_slot`（真库）→ **FAILED**（`KeyError: 'material_slot'`）
+
+恢复后三者全绿。这一步是为了排除"断言写得刚好也成立"的可能。
+
+#### 本轮实测数字
+
+| 组 | 命令 | 结果 |
+| --- | --- | --- |
+| 本地 Windows | `python -m pytest -q` | **1459 passed, 27 skipped, 0 failed**（27 = 26 条真库 + 1 条平台条件） |
+| 静态检查 | `python -m ruff check .` / `python -m mypy api src tests` | All checks passed / Success（212 files） |
+| PostgreSQL 显式套件 | `GOVBUDGET_TEST_DATABASE_URL=... python -m pytest tests/test_material_slot_migration_pg.py` | **26 passed**（PostgreSQL 15.17，独立随机 schema，测后 `DROP SCHEMA CASCADE`） |
+| GitHub CI Linux | 见 PR #42 的 Actions 运行 | 以 PR 页面为准 |
+
+`SCHEMA_CHANGE_REQUIRED = NO`（本轮未改 `migration 0019`）。
+
 ## 4. 三个真实槽位身份示例
 
 数据取自本机真实任务（`uploads/` 与 `data/organizations.json`）。
@@ -304,7 +425,7 @@ PR #42 给 `fiscal_document_versions` 加了 `slot_id` 之后，旧的结构化�
 | 导出 | **否** | `api/routes/reports.py` 未改 |
 | Golden | **否** | `corpus/`、`rules/`、`samples/` 未改；SHA 与基线一致 |
 | obligation coverage | **否（逐项核对一致）** | 见 §3.3 |
-| 结构化入库 | **是，但只做加法** | 结果字典新增 `material_slot` 键；既有键全部保留（`test_structured_ingest_payload_shape_gains_only_material_slot`）；槽位失败被兜住不抛异常 |
+| 结构化入库 | **是：分配顺序调整 + 只做加法** | 槽位分配前移到"版本建立后、解析前"（§3.9）；结果字典新增 `material_slot` 键，既有键全部保留（`test_structured_ingest_payload_shape_gains_only_material_slot`）；**失败**返回新增 `document_id` / `document_version_id` / `material_slot` 上下文；槽位失败被兜住不抛异常 |
 | 结构化入库结果文件 | **是，新增一个键** | `uploads/<job>/structured_ingest.json` 会多一个 `material_slot` 字段。前端若做严格 schema 校验需注意 |
 
 ---
@@ -313,35 +434,33 @@ PR #42 给 `fiscal_document_versions` 加了 `slot_id` 之后，旧的结构化�
 
 以下内容**没有**在本次验证中覆盖，独立复核时应据此调整信任范围：
 
-1. **线上结构化入库的真实写入未做端到端验证。** 服务层已在真库上验证
-   （`test_service_allocate_and_bind_against_real_database`），评审修复轮又把
-   **画像接线**做成了行为级验证（真跑 `_run_pipeline_inner` 并捕获交给
-   `run_structured_ingest` 的 metadata），但"分析完成 → 槽位真的写进数据库表"
-   这一段仍然**没有跑过**：`run_structured_ingest` 在测试里被 mock 掉了，
-   因为触发真实入库需要可用的数据库与完整的解析链路。
-   **建议复核时在一个可控任务上跑一次分析，检查 `structured_ingest.json`
-   的 `material_slot` 字段与 `material_slots` 表的实际行。**
-2. **回填写入完全未实现。** 只提供 dry-run 盘点，没有 `--apply`。
+> "分析完成 → 槽位真的写进数据库表"此前列在本节第 1 条，**第五轮已关闭**：
+> 由 §3.9 的三条真库 Smoke 覆盖（真实 `_ensure_document_version`、
+> 真实 `MaterialSlotService`、真实 `material_slots` / `fiscal_document_versions.slot_id`）。
+
+1. **回填写入完全未实现。** 只提供 dry-run 盘点，没有 `--apply`。
    历史数据目前**尚未进入任何槽位表**。
-3. **`material_scope` 未反映文档实际口径。** 当前按组织层级一对一推导
+2. **`material_scope` 未反映文档实际口径。** 当前按组织层级一对一推导
    （见设计确认 §三 第 4 条）。评审修复轮已把真正的 `caliber` 接进归属链路，
    但**在 7 份真实样张上 `caliber` 仍为未识别**（封面写"年度部门决算"，
    不含汇总/本级口径词），所以口径冲突通道目前主要由用例覆盖。
    提升口径识别能力属于解析/规则层，不在本轮范围。
-4. **占位槽位无法改判/合并。** 人工确认年份/文种后如何把它并到目标槽位，
+3. **占位槽位无法改判/合并。** 人工确认年份/文种后如何把它并到目标槽位，
    属于 WP2 的槽位管理动作，本轮未提供。
-5. **口径冲突没有裁决入口。** 冲突已能持久化、可见、且不会被普通刷新洗掉，
+4. **口径冲突没有裁决入口。** 冲突已能持久化、可见、且不会被普通刷新洗掉，
    但"人工确认到底哪个口径正确"的入口留给 WP2。
-6. **状态缓存的自动刷新未接线。** 分析状态、复核状态变化不会自动触发重算，
+5. **状态缓存的自动刷新未接线。** 分析状态、复核状态变化不会自动触发重算，
    需要由 WP2/WP3 调用 `refresh_status`。在此之前已有文件的槽位停在 `uploaded`。
    评审修复轮保证的是"刷新不会把既有进度打回起点"（`infer_progress_state`），
-   不是"刷新会被自动触发"。
-7. **组织 id 不稳定（既有限制）。** Model A 的 md5 id 参与名称哈希，组织改名即换 id。
+   不是"刷新会被自动触发"。**第五轮明确了这条边界**：文件成功绑定槽位但后续
+   解析失败时，槽位仍可能停在 `uploaded`——本轮只保证"材料进得了台账"，
+   不保证"状态跟着分析结果走"（见 §3.9）。
+6. **组织 id 不稳定（既有限制）。** Model A 的 md5 id 参与名称哈希，组织改名即换 id。
    本轮保存了 `subject_org_code` 与名称快照作为凭据，但**没有自动重认机制**。
-8. **`fiscal_documents` 仍无法区分同名部门/单位**（其上游 `org_units` 是名称维表）。
+7. **`fiscal_documents` 仍无法区分同名部门/单位**（其上游 `org_units` 是名称维表）。
    本轮通过在 `fiscal_document_versions` 上绑定槽位绕开了这个问题，
    但没有修复 `fiscal_documents` 本身。
-9. **`material_sources` 无 URL 来源的唯一键待复核（WP9 前必须处理）。**
+8. **`material_sources` 无 URL 来源的唯一键待复核（WP9 前必须处理）。**
    当前唯一键 `(slot_id, COALESCE(source_url, ''))` 会让
    `manual_upload + NULL URL` 与 `excel_import + NULL URL` 互相冲突并覆盖
    `source_kind`。本轮按评审要求只登记不扩张，做 CSV/Excel 应收清单时

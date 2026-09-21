@@ -27,6 +27,7 @@ import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
 import asyncpg
@@ -1304,3 +1305,225 @@ def _insert_sql(slot_key: str) -> str:
             report_kind, fiscal_year, mapping_key
         ) VALUES ('{slot_key}', $1, '某单位', $2, $2, $3, $4, $5, $6)
     """
+
+
+# ==== 主链路真库 Smoke（第五轮） =============================================
+#
+# 这一段回答的是 WP1 此前唯一没有被端到端验证的问题：
+#   "分析跑完 → run_structured_ingest → fiscal_document_versions → material_slots"
+#   这条链路上，槽位到底有没有真的写进库。
+#
+# 静态用例能证明调用顺序对了，但证明不了 "ON CONFLICT (slot_key) 在真库认不认"、
+# "外键列有没有真的被写上"。所以这里**不模拟**任何落库动作：
+# 文档版本创建走真实 ``_ensure_document_version``，槽位分配走真实
+# ``_allocate_material_slot`` → ``MaterialSlotService``，读回走真实 SQL。
+# 被替换的只有 PDF 解析、表识别、事实物化、PS 同步——留下它们，
+# 这条用例就变成 PDF 解析测试，而不是"材料有没有进台账"的测试。
+
+#: 组织目录是外部输入（JSON 文件），不是被测链路的一环。固定它，
+#: 身份判定才能在每台机器上得到同一个结论——替换的是数据来源，不是槽位逻辑。
+_SMOKE_ORG_RECORDS: list = [dict(record) for record in _ORG_RECORDS]
+
+
+def _patch_smoke_pipeline(monkeypatch, *, parser_error: Optional[BaseException] = None) -> Dict[str, int]:
+    """替换主链路里与本轮无关的几步；所有写库动作保持真实。"""
+    from src.services import material_slot_resolver as resolver
+    from src.services import structured_ingest_runner as runner
+
+    calls = {"parse": 0}
+
+    monkeypatch.setattr(
+        resolver,
+        "load_org_records",
+        lambda: [dict(record) for record in _SMOKE_ORG_RECORDS],
+    )
+
+    class _Parser:
+        def __init__(self, _conn):
+            pass
+
+        async def parse_pdf(self, _path, _version_id):
+            calls["parse"] += 1
+            if parser_error is not None:
+                raise parser_error
+            return {"success": True, "tables_count": 1, "unknown_tables": []}
+
+    class _Recognizer:
+        def __init__(self, _conn):
+            pass
+
+        async def recognize_tables(self, _version_id):
+            return [
+                SimpleNamespace(
+                    table_code="FIN_01_income_expenditure_total",
+                    confidence=0.92,
+                    page_number=3,
+                )
+            ]
+
+        async def save_table_instances(self, _version_id, _instances):
+            return None
+
+    class _Materializer:
+        def __init__(self, _conn):
+            pass
+
+        async def materialize(self, _version_id):
+            return {"facts_count": 4, "low_confidence_tables": []}
+
+    class _PsSync:
+        def __init__(self, _conn):
+            pass
+
+        async def sync(self, **_kwargs):
+            return {"status": "skipped", "reason": "smoke_stub"}
+
+    monkeypatch.setattr(runner, "PDFParser", _Parser)
+    monkeypatch.setattr(runner, "TableRecognizer", _Recognizer)
+    monkeypatch.setattr(runner, "FiscalFactMaterializer", _Materializer)
+    monkeypatch.setattr(runner, "PSSharedSchemaSync", _PsSync)
+    # ``_DB_READY`` 是模块级缓存：显式重置，让本用例真正走一遍
+    # "检查连接串 → 复用连接池 → 跑迁移"的入口判断，
+    # 而不是靠前一条用例留下的状态蒙混过关。
+    monkeypatch.setattr(runner, "_DB_READY", False)
+    return calls
+
+
+def _smoke_pdf(tmp_path) -> Any:
+    pdf_path = tmp_path / "上海市普陀区规划和自然资源局本级2024年单位决算.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\nsmoke\n%%EOF\n")
+    return pdf_path
+
+
+def _smoke_metadata(pdf_path, *, checksum: str) -> Dict[str, Any]:
+    return {
+        "organization_id": "unit-org-1",
+        "organization_name": "上海市普陀区规划和自然资源局本级",
+        "report_year": "2024",
+        "report_kind": "final",
+        "doc_type": "dept_final",
+        "checksum": checksum,
+        "filename": pdf_path.name,
+        "content_type": "application/pdf",
+    }
+
+
+async def test_run_structured_ingest_really_persists_material_slot(db, tmp_path, monkeypatch):
+    """成功路径：主链路跑完，版本与槽位在真库里互相指向对方。"""
+    from src.services.structured_ingest_runner import run_structured_ingest
+
+    schema, pool = db
+    await run_migrations()
+    calls = _patch_smoke_pipeline(monkeypatch)
+
+    pdf_path = _smoke_pdf(tmp_path)
+    payload = await run_structured_ingest(
+        job_id="job-smoke-ok",
+        pdf_path=pdf_path,
+        metadata=_smoke_metadata(pdf_path, checksum="e" * 64),
+    )
+
+    assert payload["status"] == "done", payload
+    assert calls["parse"] == 1
+    assert payload["material_slot"]["bound"] is True
+    # 身份是"已确认"而不是占位：组织目录命中 + 年度文种唯一，
+    # 说明真实 resolver 在真实元数据上判出了正常结论。
+    assert payload["material_slot"]["status"] == "resolved"
+
+    version_id = payload["document_version_id"]
+    async with _conn(schema, pool) as connection:
+        slot_id = await connection.fetchval(
+            "SELECT slot_id FROM fiscal_document_versions WHERE id = $1", version_id
+        )
+        assert slot_id is not None, "版本建立后没有进入材料台账"
+        assert str(slot_id) == payload["material_slot"]["slot_id"]
+        assert await connection.fetchval(
+            "SELECT current_document_version_id FROM material_slots WHERE id = $1",
+            slot_id,
+        ) == version_id
+        assert await connection.fetchval("SELECT COUNT(*) FROM material_slots") == 1
+
+
+async def test_run_structured_ingest_parser_failure_still_persists_slot(
+    db, tmp_path, monkeypatch
+):
+    """解析失败路径：这是本轮真正要关掉的那个面。
+
+    失效的做法是"解析全部成功之后才写槽位"——那样 PDF 解析一抛错，
+    材料在台账里就根本不存在，而它恰恰是最需要人工补录的一批。
+    这里让 PDFParser 故意抛错，断言版本与槽位都已经落库、并且互相指向。
+    """
+    from src.services.structured_ingest_runner import run_structured_ingest
+
+    schema, pool = db
+    await run_migrations()
+    _patch_smoke_pipeline(monkeypatch, parser_error=RuntimeError("pdf parse exploded"))
+
+    pdf_path = _smoke_pdf(tmp_path)
+    payload = await run_structured_ingest(
+        job_id="job-smoke-parser-fail",
+        pdf_path=pdf_path,
+        metadata=_smoke_metadata(pdf_path, checksum="f" * 64),
+    )
+
+    assert payload["status"] == "error"
+    assert "pdf parse exploded" in payload["error"]
+    # 已经建立的上下文必须留在错误结果里
+    assert payload["document_version_id"] is not None
+    assert payload["document_id"] is not None
+    assert payload["material_slot"]["bound"] is True
+
+    version_id = payload["document_version_id"]
+    async with _conn(schema, pool) as connection:
+        slot_id = await connection.fetchval(
+            "SELECT slot_id FROM fiscal_document_versions WHERE id = $1", version_id
+        )
+        assert slot_id is not None, "解析失败导致材料没有进入台账"
+        assert await connection.fetchval(
+            "SELECT current_document_version_id FROM material_slots WHERE id = $1",
+            slot_id,
+        ) == version_id
+        assert await connection.fetchval("SELECT COUNT(*) FROM material_slots") == 1
+
+
+async def test_run_structured_ingest_rerun_reuses_single_slot_on_real_db(
+    db, tmp_path, monkeypatch
+):
+    """同一材料重跑：只保留一条槽位，版本仍指向同一条。
+
+    分配被提前到解析之前以后，"每次分析都重新分配一次"的机会变多了，
+    因此这里必须显式证明它没有重新引入重复槽位。
+    """
+    from src.services.structured_ingest_runner import run_structured_ingest
+
+    schema, pool = db
+    await run_migrations()
+    _patch_smoke_pipeline(monkeypatch)
+
+    pdf_path = _smoke_pdf(tmp_path)
+    metadata = _smoke_metadata(pdf_path, checksum="a1" * 32)
+
+    first = await run_structured_ingest(
+        job_id="job-smoke-first", pdf_path=pdf_path, metadata=metadata
+    )
+    second = await run_structured_ingest(
+        job_id="job-smoke-second", pdf_path=pdf_path, metadata=metadata
+    )
+
+    assert first["status"] == "done" and second["status"] == "done"
+    assert first["document_version_id"] == second["document_version_id"]
+    assert first["material_slot"]["slot_id"] == second["material_slot"]["slot_id"]
+
+    version_id = first["document_version_id"]
+    async with _conn(schema, pool) as connection:
+        assert await connection.fetchval("SELECT COUNT(*) FROM material_slots") == 1
+        assert str(
+            await connection.fetchval(
+                "SELECT slot_id FROM fiscal_document_versions WHERE id = $1", version_id
+            )
+        ) == first["material_slot"]["slot_id"]
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM material_slots WHERE current_document_version_id = $1",
+            version_id,
+        ) == 1
+
