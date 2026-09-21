@@ -940,6 +940,17 @@ MIGRATIONS: List[Dict[str, Any]] = [
                 caliber TEXT NOT NULL DEFAULT 'unknown'
                     CONSTRAINT ck_material_slots_caliber
                     CHECK (caliber IN ('summary', 'self', 'unknown')),
+                -- 已确认口径与后来识别到的口径互相矛盾时，把**矛盾的观测值**记在这里。
+                -- caliber 保留先确认的值不动，候选非空即表示"等人工裁决"。
+                -- 没有这一列的话，口径只能靠"取最新一次识别"来决定；那等于让
+                -- "两笔数字能不能相加"随分析次数漂移，而且是静默漂移。
+                -- 用可空文本而不是布尔：布尔只说明有矛盾，看不出矛盾的是什么。
+                caliber_conflict_candidate TEXT
+                    CONSTRAINT ck_material_slots_caliber_candidate
+                    CHECK (
+                        caliber_conflict_candidate IS NULL
+                        OR caliber_conflict_candidate IN ('summary', 'self')
+                    ),
 
                 -- 财政年度。允许 NULL：识别不到年份时不能兜底成某个具体年份，
                 -- 归一为 NULL 并让 slot 停在 mapping_required 等人工确认。

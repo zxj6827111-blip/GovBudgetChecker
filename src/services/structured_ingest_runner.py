@@ -74,6 +74,71 @@ async def ensure_structured_ingest_ready() -> bool:
     return True
 
 
+def build_ingest_metadata(
+    *,
+    organization_id: Any = None,
+    organization_name: Any = None,
+    fiscal_year: Any = None,
+    doc_type: Any = None,
+    report_year: Any = None,
+    report_kind: Any = None,
+    checksum: Any = None,
+    document_profile: Any = None,
+) -> Dict[str, Any]:
+    """构建结构化入库的元数据。
+
+    抽成独立函数是为了让"画像到底有没有被传进来"成为**可测的事实**，
+    而不是靠读源码断言。
+
+    为什么必须把 ``document_profile`` 传进来：Slot 归属判定要靠它识别
+    "文种在不同来源间冲突""任务年度与材料实际年度不一致""材料口径"这三件事。
+    画像里本来就带着 ``conflicts`` 与被否决的候选值，只传最终选中的那个值，
+    冲突信息在进入台账之前就被丢掉了——本应停在"待人工确认"的材料
+    会被当成已确认，而且事后无从察觉。
+
+    这里复用主分析链路**已经算好的同一个** DocumentProfile，不重新解析 PDF、
+    也不在入库侧另造一套业务画像：两套画像必然漂移，而漂移的表现就是
+    "分析说是这份材料、台账说是另一份"。
+
+    ``document_profile`` 既有的**输出**字段（``canonical_nine_table`` 这类
+    结构化解析类型字符串）与本函数的**输入**参数是两回事，不要混淆。
+    """
+    payload: Dict[str, Any] = {
+        "organization_id": organization_id,
+        "organization_name": organization_name,
+        "fiscal_year": fiscal_year,
+        "doc_type": doc_type,
+        "report_year": report_year,
+        "report_kind": report_kind,
+        "checksum": checksum,
+    }
+    profile = _normalize_document_profile(document_profile)
+    if profile is not None:
+        payload["document_profile"] = profile
+    return payload
+
+
+def _normalize_document_profile(value: Any) -> Optional[Dict[str, Any]]:
+    """把画像归一为字典；None 表示"本次没有画像"。
+
+    传入无法识别的类型时抛错而不是静默丢弃：静默丢弃正是本轮要修的缺陷类型
+    ——画像没传进来不会报错，只会让台账少识别一批冲突，而且事后查不出来。
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        payload = to_dict()
+        if isinstance(payload, dict):
+            return payload
+    raise TypeError(
+        "document_profile 必须是 dict、带 to_dict() 的画像对象或 None，"
+        f"实际收到 {type(value).__name__}"
+    )
+
+
 async def run_structured_ingest(
     job_id: str,
     pdf_path: Path,

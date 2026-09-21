@@ -32,6 +32,7 @@ from src.schemas.material_slot import (
     STATUS_REASON_APPLICABILITY_MARKED,
     STATUS_REASON_APPLICABILITY_UNRESOLVED,
     STATUS_REASON_AWAITING_ANALYSIS,
+    STATUS_REASON_CALIBER_CONFLICT,
     STATUS_REASON_DUE_EXCEEDED,
     STATUS_REASON_DUE_NOT_REACHED,
     STATUS_REASON_DUE_UNKNOWN,
@@ -70,6 +71,7 @@ def derive_slot_status(
     applicability_status: str = "applicable",
     due_at: Optional[datetime] = None,
     identity_resolved: bool = True,
+    caliber_conflict: bool = False,
     has_current_document: bool = False,
     analysis_state: str = ANALYSIS_NOT_STARTED,
     review_state: str = REVIEW_NONE,
@@ -82,8 +84,13 @@ def derive_slot_status(
     1. 身份未解决 -> ``mapping_required``。身份都没确认，谈上传与否没有意义。
     2. 适用性未确认 -> ``mapping_required``。是否应收都没定，不能计入缺失。
     3. 人工确认不适用 -> ``not_applicable``。
-    4. 已确认适用但没有当前文件 -> 再分到期与否（``missing`` / ``not_due``）。
-    5. 有文件 -> 按分析/复核进度推进，终态才算 ``completed``。
+    4. 口径存在未裁决的矛盾 -> ``mapping_required``。已确认的口径与后来识别到的
+       口径不一致时，只有人工能裁决；静默取一个会让"两笔数字能不能相加"失去依据。
+    5. 已确认适用但没有当前文件 -> 再分到期与否（``missing`` / ``not_due``）。
+    6. 有文件 -> 按分析/复核进度推进，终态才算 ``completed``。
+
+    第 4 步排在第 3 步之后是有意的：一份已被人工确认"本年度无此材料"的槽位，
+    口径矛盾已经没有意义，不该再被拉回待确认。
     """
     moment = now or datetime.now(tz=due_at.tzinfo if due_at is not None else None)
 
@@ -99,7 +106,11 @@ def derive_slot_status(
     if applicability_status == "not_applicable":
         return SlotStatusResult("not_applicable", STATUS_REASON_APPLICABILITY_MARKED)
 
-    # 4) 适用但尚无当前文件
+    # 4) 口径矛盾未裁决
+    if caliber_conflict:
+        return SlotStatusResult("mapping_required", STATUS_REASON_CALIBER_CONFLICT)
+
+    # 5) 适用但尚无当前文件
     if not has_current_document:
         if due_at is None:
             # 截止时间未知：无法证明逾期。计入"未到期"并注明成因，
@@ -109,7 +120,7 @@ def derive_slot_status(
             return SlotStatusResult("missing", STATUS_REASON_DUE_EXCEEDED)
         return SlotStatusResult("not_due", STATUS_REASON_DUE_NOT_REACHED)
 
-    # 5) 已有当前文件：按处理进度推进
+    # 6) 已有当前文件：按处理进度推进
     if analysis_state == ANALYSIS_FAILED:
         return SlotStatusResult("failed", STATUS_REASON_ANALYSIS_FAILED)
     if analysis_state == ANALYSIS_PROCESSING:
@@ -141,6 +152,32 @@ def _is_due(now: datetime, due_at: datetime) -> bool:
         return now > due_at
     except TypeError:
         return now.replace(tzinfo=None) > due_at.replace(tzinfo=None)
+
+
+#: 从既有状态反推"分析与复核走到哪一步"。
+#: 用途：调用方只关心槽位事实（是否已绑定版本、口径是否冲突）而不知道
+#: 分析/复核进度时，刷新不能把进度信息丢掉——否则一次无关刷新会把
+#: "待人工复核"打回"已上传"，用户看到的是待办凭空消失。
+#: 反推结果必须能"往返一致"：用反推出的状态对同一批事实再推一次，
+#: 仍得到原状态（相关用例逐条验证了这一点）。
+_STATUS_TO_PROGRESS: dict = {
+    "uploaded": (ANALYSIS_NOT_STARTED, REVIEW_NONE),
+    "processing": (ANALYSIS_PROCESSING, REVIEW_NONE),
+    "failed": (ANALYSIS_FAILED, REVIEW_NONE),
+    "review_required": (ANALYSIS_DONE, REVIEW_REQUIRED),
+    "reviewing": (ANALYSIS_DONE, REVIEW_IN_PROGRESS),
+    "completed": (ANALYSIS_DONE, REVIEW_COMPLETED),
+}
+
+
+def infer_progress_state(status: Any) -> tuple:
+    """从既有状态反推 (analysis_state, review_state)。
+
+    无法反推（``not_due`` / ``missing`` / ``not_applicable`` / ``mapping_required``）
+    时返回"分析未开始"——这些状态描述的是"文件到没到、身份定没定"，
+    本来就不携带分析进度，重算不会丢信息。
+    """
+    return _STATUS_TO_PROGRESS.get(str(status or ""), (ANALYSIS_NOT_STARTED, REVIEW_NONE))
 
 
 def status_is_blocking(status: str) -> bool:
@@ -196,4 +233,5 @@ def reason_label(reason: Any) -> str:
         STATUS_REASON_FINDINGS_PENDING: "存在待人工处理的问题",
         STATUS_REASON_REVIEW_IN_PROGRESS: "人工复核进行中",
         STATUS_REASON_REVIEW_DONE: "人工复核已完成",
+        STATUS_REASON_CALIBER_CONFLICT: "材料口径识别结果互相矛盾，待人工裁决",
     }.get(str(reason or ""), str(reason or ""))

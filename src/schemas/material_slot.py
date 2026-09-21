@@ -93,6 +93,9 @@ STATUS_REASON_ANALYSIS_FAILED = "analysis_failed"
 STATUS_REASON_FINDINGS_PENDING = "findings_pending"
 STATUS_REASON_REVIEW_IN_PROGRESS = "review_in_progress"
 STATUS_REASON_REVIEW_DONE = "review_completed"
+#: 已确认的口径与后来识别到的口径互相矛盾。这类矛盾必须由人工裁决，
+#: 不能被"取最新一次识别"或"取先写入的值"这类默认策略静默抹平。
+STATUS_REASON_CALIBER_CONFLICT = "caliber_conflict"
 
 #: 组织目录里的层级 -> 槽位主体层级。组织目录用 city/district/department/unit 四级，
 #: 槽位把 city/district 统一表达为 government（谁在报：政府本级，而不是某个部门）。
@@ -109,6 +112,46 @@ _SUBJECT_KIND_TO_SCOPE: Dict[str, str] = {
     "unit": "unit_self",
     "government": "government",
 }
+
+
+# ---- 身份完整性：全系统唯一判定 --------------------------------------------
+
+
+def slot_identity_is_resolved(
+    *,
+    subject_org_id: Any,
+    subject_kind: Any,
+    material_scope: Any,
+    report_kind: Any,
+    fiscal_year: Any,
+    mapping_key: Any = "",
+) -> bool:
+    """槽位身份是否已经完整到可以当作"一条应收材料"。
+
+    **这是全系统唯一的判定入口。** 内存里的 ``SlotIdentity.is_resolved``
+    委托给它；从数据库读回来的槽位行也必须调它，不许各自写一份简化版。
+
+    为什么要专门抽出来：此前 ``refresh_status`` 只看了 ``mapping_key``，
+    于是 ``mapping_key='' 且 fiscal_year IS NULL`` 这种"年份没认出来"的槽位
+    被判成身份已确认，一路滑到 ``not_due``——年份未知的材料被当成"没到期"，
+    这是最典型的把未知当已知。
+
+    判定与 ``SlotIdentity`` 的六个身份维度一一对应，全部满足才算完整：
+    主体 id 非空、主体层级与材料范围与文种都不是 ``unknown``、
+    财政年度不是 NULL、且不是"按具体文档临时安置"的占位槽位。
+    """
+    kind = str(subject_kind or "").strip()
+    scope = str(material_scope or "").strip()
+    report = str(report_kind or "").strip()
+    if not str(subject_org_id or "").strip():
+        return False
+    if kind in ("", "unknown") or scope in ("", "unknown") or report in ("", "unknown"):
+        return False
+    if fiscal_year is None or fiscal_year == "":
+        return False
+    if str(mapping_key or "").strip():
+        return False
+    return True
 
 
 class SlotIdentityError(ValueError):
@@ -190,17 +233,12 @@ class SlotIdentity:
     def is_resolved(self) -> bool:
         """身份是否足以把槽位当作一条"应收材料"看待。
 
-        四个维度任一为 unknown，或年份缺失，都属未解决——此时槽位必须是
-        ``mapping_required``，不能计入缺失、不能进入任何覆盖率分母。
-        ``mapping_key`` 非空表示这是"按具体文档临时安置"的槽位，同样未解决。
+        实现委托给模块级 ``slot_identity_is_resolved``，因此内存对象与
+        数据库行使用**同一套判定**——两处各写一份必然漂移，而漂移的表现
+        恰好是"库里已经落地的槽位被判成已确认、内存里的同一个身份被判成未确认"
+        这种最难查的不一致。
         """
-        return (
-            self.subject_kind != "unknown"
-            and self.material_scope != "unknown"
-            and self.report_kind != "unknown"
-            and self.fiscal_year is not None
-            and not self.mapping_key
-        )
+        return slot_identity_is_resolved(**self.canonical_payload())
 
 
 # ---- 组织解析 --------------------------------------------------------------

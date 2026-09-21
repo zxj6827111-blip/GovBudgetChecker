@@ -64,6 +64,7 @@ from src.services.analysis_result_store import (
 from src.db.connection import DatabaseConnection
 from src.services.issue_workflow_store import sync_workflow_recovery_state
 from src.services.structured_ingest_runner import (
+    build_ingest_metadata,
     close_structured_ingest_resources,
     run_structured_ingest,
 )
@@ -1558,17 +1559,22 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                 },
             )
 
-        structured_metadata = {
-            "organization_id": organization_id,
-            "organization_name": organization_name,
-            "fiscal_year": fiscal_year,
-            "doc_type": doc_type,
-            "report_year": report_year,
-            "report_kind": report_kind,
-            "checksum": status_data.get("checksum")
+        # 画像随元数据一起交给结构化入库：槽位归属要靠它识别文种冲突、
+        # 任务年度与材料实际年度不一致、以及材料口径。只传最终选中的文种会把
+        # 冲突信息丢在门口——本应停在"待人工确认"的材料会被当成已确认。
+        # 传的是上面主分析链路已经算好的同一个画像，不重新解析 PDF。
+        structured_metadata = build_ingest_metadata(
+            organization_id=organization_id,
+            organization_name=organization_name,
+            fiscal_year=fiscal_year,
+            doc_type=doc_type,
+            report_year=report_year,
+            report_kind=report_kind,
+            checksum=status_data.get("checksum")
             if "status_data" in locals() and isinstance(status_data, dict)
             else None,
-        }
+            document_profile=document_profile,
+        )
         if (os.getenv("DATABASE_URL") or "").strip():
             current_ingest_status = runtime.read_json_file(job_dir / "status.json", default={})
             latest_ingest = runtime.resolve_latest_structured_ingest_job(
