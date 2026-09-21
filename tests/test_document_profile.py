@@ -99,6 +99,26 @@ def test_upload_entry_agrees_with_engine_entries_on_filename_signal(
     assert engine == expected
 
 
+def test_pipeline_resolves_kind_once_and_common_rules_consume_it():
+    """一次解析、全程消费（独立验收 2026-09-17 kind_disagreement 反例）。
+
+    显式指定 final、文件名与正文都是"部门预算"：pipeline 判 final 后，
+    通用规则不得再按文件名判 budget——同一份 PDF 在两个环节拿到互斥的
+    检查配置，正是独立验收复现的主流程/通用规则互斥结论。pipeline
+    解析一次并把结论挂到 Document.report_kind，规则体消费同一个值。
+    """
+    doc = build_document(
+        path="2024部门预算.pdf",
+        page_texts=["2024年度部门预算"],
+        page_tables=[[]],
+        filesize=1,
+    )
+    assert common_rules_mod._infer_report_kind(doc) == "budget", "未挂接时按文件名推断"
+    pipeline.run_rules_with_outcomes(doc, report_kind="final", rules=[])
+    assert doc.report_kind == "final"
+    assert common_rules_mod._infer_report_kind(doc) == "final", "挂接后不得重新猜"
+
+
 def test_repository_directory_name_does_not_route_rules():
     """仓库目录名含 "Budget"，不得据此把材料判成预算。
 
@@ -152,6 +172,35 @@ def test_explicit_source_wins_over_filename():
     )
     assert profile.kind == "budget"
     assert profile.report_kind.source == "explicit"
+
+
+def test_kind_conflict_downgrades_status_and_states_why():
+    """文种互斥时状态不得是 resolved（独立验收 2026-09-17 反例）。
+
+    反例：显式指定 final、封面/文件名/正文都是预算。画像记录了
+    "文种冲突，需人工确认"，profile_status 却是 resolved——按优先级
+    取的只是候选选择，不是"已确认"。必须降为 partial 并给出原因码，
+    台账才有依据把冲突登记为阻塞事项。
+    """
+    profile = resolve_document_profile(
+        explicit_report_kind="final",
+        filename="2024部门预算.pdf",
+        page_texts=["2024年度部门预算"],
+    )
+    assert profile.kind == "final", "显式值保留为候选选择"
+    assert profile.profile_status == PROFILE_STATUS_PARTIAL
+    assert profile.unsupported_reason == "report_kind_conflict"
+    assert profile.has_kind_conflict is True
+    assert profile.conflicts[0]["field"] == "report_kind"
+
+    # 无互斥候选的干净画像不得被这条规则误降级
+    clean = resolve_document_profile(
+        doc_type="dept_final",
+        filename="2024年度部门决算.pdf",
+        page_texts=["2024年度部门决算"],
+    )
+    assert clean.profile_status == PROFILE_STATUS_RESOLVED
+    assert clean.has_kind_conflict is False
 
 
 # ---------------------------------------------------------------------------

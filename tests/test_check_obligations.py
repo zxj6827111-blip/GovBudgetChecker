@@ -25,6 +25,7 @@ from src.engine.check_obligations import (  # noqa: E402
     OBLIGATION_AI_NOT_RUN,
     OBLIGATION_COMPLETED,
     OBLIGATION_INSUFFICIENT_DATA,
+    OBLIGATION_KIND_CONFLICT,
     OBLIGATION_NOT_APPLICABLE,
     OBLIGATION_NOT_EXECUTED,
     OBLIGATION_NOT_IMPLEMENTED,
@@ -200,6 +201,134 @@ def test_missing_receipt_is_not_treated_as_pass():
     total = _instance(ledger, "OBL-SG-TOTAL")
     assert total["status"] == OBLIGATION_NOT_EXECUTED
     assert total["blocks_gate"] is True
+
+
+def test_partial_receipts_do_not_complete_obligation():
+    """独立验收 2026-09-17 partial_receipt 反例：缺一条回执不得记完成。
+
+    OBL-TREND-DIRECTION 依赖 CMM-006 与 V33-245，只提供 CMM-006=pass 时
+    旧逻辑整单记 completed，文案甚至写"两条规则已得出可信结论"。整改后
+    必须逐条核对所需 checker：缺哪条回执就点名哪条，并保持阻塞。
+    """
+    ledger = build_obligation_ledger(
+        _profile("final"),
+        report_kind="final",
+        rule_execution_summary=_receipt({"CMM-006": "pass"}),
+    )
+    direction = _instance(ledger, "OBL-TREND-DIRECTION")
+    assert direction["status"] == OBLIGATION_NOT_EXECUTED
+    assert direction["blocks_gate"] is True
+    assert "V33-245" in direction["detail"]
+    assert "OBL-TREND-DIRECTION" in ledger["blocking_obligation_ids"]
+
+
+def test_unknown_receipt_status_is_not_a_valid_terminal_state():
+    """回执状态不在六态内时同样不算完成：未知状态不能被当成 pass 消费。"""
+    ledger = build_obligation_ledger(
+        _profile("final"),
+        report_kind="final",
+        rule_execution_summary=_receipt({"CMM-006": "pass", "V33-245": "unfinished"}),
+    )
+    direction = _instance(ledger, "OBL-TREND-DIRECTION")
+    assert direction["status"] == OBLIGATION_NOT_EXECUTED
+    assert direction["blocks_gate"] is True
+    assert "V33-245" in direction["detail"]
+
+
+def test_mixed_pass_and_not_applicable_stays_in_denominator_with_detail():
+    """部分 pass、部分不适用：检查已执行，但必须逐条写明结果。
+
+    "部分不适用"若被读成"整单不适用"，该实例会掉出完成率分母——
+    这正是用 not_applicable 绿化完成率的手法，必须用明细堵住。
+    """
+    ledger = build_obligation_ledger(
+        _profile("final"),
+        report_kind="final",
+        rule_execution_summary=_receipt(
+            {"CMM-006": "pass", "V33-245": "not_applicable"}
+        ),
+    )
+    direction = _instance(ledger, "OBL-TREND-DIRECTION")
+    assert direction["status"] == OBLIGATION_COMPLETED
+    assert "CMM-006=pass" in direction["detail"]
+    assert "V33-245=not_applicable" in direction["detail"]
+
+
+def test_fail_on_one_checker_still_counts_the_check_as_done():
+    """多 checker 义务里一条 fail、其余 pass：检查已完成，问题另计。"""
+    ledger = build_obligation_ledger(
+        _profile("final"),
+        report_kind="final",
+        rule_execution_summary=_receipt({"CMM-006": "fail", "V33-245": "pass"}),
+    )
+    direction = _instance(ledger, "OBL-TREND-DIRECTION")
+    assert direction["status"] == OBLIGATION_COMPLETED
+
+
+def test_zero_base_recompute_is_a_declared_gap_not_a_claimed_capability():
+    """零基数同比复算未实现，必须登记为缺口而不是挂在 CMM-005 名下。
+
+    独立验收 2026-09-17：OBL-TREND-COMPARATIVE-LOGIC 曾宣称"零基数不得
+    表述为增长百分比"，但 CMM-005 只查"当前为 0 却写增加"。样张漏报
+    （宜川接待费 0.30/增加 0.30、文旅 0.40/增加 0.40，均写"增长100%"）
+    证明该子能力不存在。不得用规则名或规则存在证明语义覆盖。
+    """
+    ledger = build_obligation_ledger(
+        _profile("final"),
+        report_kind="final",
+        rule_execution_summary=_receipt({"CMM-005": "pass"}),
+    )
+    gap = _instance(ledger, "OBL-TREND-ZERO-BASE")
+    assert gap["status"] == OBLIGATION_NOT_IMPLEMENTED
+    assert gap["missing_checkers"] == ["CMM-007"]
+    assert "增长100%" in gap["gap_note"]
+    assert "OBL-TREND-ZERO-BASE" in ledger["blocking_obligation_ids"]
+    # 拆分后，CMM-005 的完成不再被读作"零基数复算已具备"
+    logic = _instance(ledger, "OBL-TREND-COMPARATIVE-LOGIC")
+    assert logic["status"] == OBLIGATION_COMPLETED
+    assert "零基数不得表述为增长百分比" not in logic["basis"]
+
+
+def test_kind_conflict_is_registered_as_a_blocking_obligation():
+    """独立验收 2026-09-17：画像记录了文种冲突，台账必须单独记账并阻塞。
+
+    显式指定 final、文件名与正文都是"部门预算"时，按优先级取的 final
+    只是候选选择。若台账不登记，报告里写着"需人工确认"，质量门却显示
+    检查完整，冲突永远到不了人工面前。
+    """
+    profile = resolve_document_profile(
+        explicit_report_kind="final",
+        filename="2024部门预算.pdf",
+        page_texts=["2024年度部门预算"],
+    )
+    assert profile.profile_status == "partial"
+    assert profile.unsupported_reason == "report_kind_conflict"
+
+    ledger = build_obligation_ledger(profile, report_kind="final")
+    conflict = _instance(ledger, "OBL-PROFILE-KIND-CONFLICT")
+    assert conflict["status"] == OBLIGATION_KIND_CONFLICT
+    assert conflict["blocks_gate"] is True
+    assert "OBL-PROFILE-KIND-CONFLICT" in ledger["blocking_obligation_ids"]
+    assert ledger["by_reason"][OBLIGATION_KIND_CONFLICT] == 1
+    # 冲突记账不挤占正常义务：专项义务照常展开
+    assert _instance(ledger, "OBL-SG-TOTAL")
+
+
+def test_kind_conflict_detail_names_only_truly_conflicting_candidates():
+    """冲突明细只点名互斥候选，同向的落选证据不列入。
+
+    与所选值相同的落选候选是"同向证据"（如 page_text 与显式值一致），
+    混进明细会把冲突份量和一致份量混在一起，人工复核反而更难判断。
+    """
+    profile = resolve_document_profile(
+        explicit_report_kind="final",
+        filename="2024部门预算.pdf",
+        page_texts=["2024年度部门决算"],
+    )
+    ledger = build_obligation_ledger(profile, report_kind="final")
+    conflict = _instance(ledger, "OBL-PROFILE-KIND-CONFLICT")
+    assert "filename=budget" in conflict["detail"], "冲突的 filename 候选必须点名"
+    assert "page_text=" not in conflict["detail"], "同向的 page_text 候选不应出现在冲突明细"
 
 
 def test_rule_not_in_registry_is_reported_as_unimplemented():

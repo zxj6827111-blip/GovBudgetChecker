@@ -457,7 +457,7 @@ def test_check_scope_export_lists_unfinished_checks() -> None:
         "profile_status": "resolved",
         "conclusion_scope": "incomplete_scope",
         "check_coverage": {
-            "catalog_version": "obligations-v1",
+            "catalog_version": "obligations-v2",
             "applicable_total": 43,
             "unresolved_total": 2,
             "blocking_total": 2,
@@ -478,7 +478,7 @@ def test_check_scope_export_lists_unfinished_checks() -> None:
                     "title": "三公经费合计 = 三项分项之和",
                     "status": "completed",
                     "reason_label": None,
-                    "detail": "规则 V33-121 已得出可信结论",
+                    "detail": "规则已全部执行并到达终态：V33-121=pass",
                     "basis": "AGENTS.md 决算必查勾稽 D-007",
                     "gap_note": "",
                 },
