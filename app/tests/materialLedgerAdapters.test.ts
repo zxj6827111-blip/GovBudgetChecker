@@ -49,12 +49,14 @@ import {
 assert.equal(MATERIAL_STATUSES.length, 10, "状态取值域必须与 WP1 CHECK 约束一致（10 个）");
 
 const statusPresentations = MATERIAL_STATUSES.map((status) => presentMaterialStatus(status));
-for (const [index, presentation] of statusPresentations.entries()) {
+// 用 forEach 而不是 for..of entries()：本项目 tsconfig target 是 es5，
+// 迭代 IterableIterator 需要 downlevelIteration，会在 tsc 上多一条噪声。
+statusPresentations.forEach((presentation, index) => {
   const status = MATERIAL_STATUSES[index];
   assert.ok(presentation.label.length > 0, `status=${status} 必须有中文文案`);
   assert.ok(presentation.description.length > 0, `status=${status} 必须有说明`);
   assert.ok(presentation.icon.length > 0, `status=${status} 必须有图标名`);
-}
+});
 
 const labels = statusPresentations.map((presentation) => presentation.label);
 assert.equal(
@@ -170,6 +172,8 @@ const counts = {
 };
 const kpis = buildMaterialKpis({
   slot_total: 55,
+  // 刻意让"状态机事实"与"确认未到期"不同：not_due=1 里有 1 条其实是"截止时间未知"
+  not_due_confirmed: 0,
   status_counts: counts,
   budget_total: 20,
   final_total: 20,
@@ -192,7 +196,11 @@ assert.equal(kpiOf("review"), 11, "待复核 = review_required + reviewing");
 assert.equal(kpiOf("completed"), 7);
 assert.equal(kpiOf("mapping_required"), 9);
 assert.equal(kpiOf("failed"), 10);
-assert.equal(kpiOf("not_due"), 1);
+assert.equal(
+  kpiOf("not_due"),
+  0,
+  "REGRESSION: 未到期只能取 not_due_confirmed，绝不能取 status_counts.not_due（含截止时间未知）",
+);
 assert.equal(kpiOf("missing"), 2);
 assert.equal(
   kpis.length,
@@ -200,6 +208,37 @@ assert.equal(
   "首页 KPI 第一屏 8 张（已建材料/已上传/待复核/已完成/待确认归属/处理失败/未到期/逾期未上传）",
 );
 assert.deepEqual(buildMaterialKpis(null), [], "没有数据时不产出 KPI（由页面显示加载/错误态）");
+
+// --- 反例：未到期 vs 截止时间未知（两个 not_due 槽位，只有一个算未到期） ---------
+
+const twoNotDueSummary = {
+  slot_total: 2,
+  status_counts: { ...counts, not_due: 2 },
+  not_due_confirmed: 1,
+  budget_total: 2,
+  final_total: 0,
+  unknown_kind_total: 0,
+  due_at_unknown: 1,
+  jurisdiction_unknown_total: 0,
+  expected_total: null,
+  expected_budget_total: null,
+  expected_final_total: null,
+  coverage_rate: null,
+  budget_coverage_rate: null,
+  final_coverage_rate: null,
+  missing_expected_total: null,
+};
+const twoNotDueKpis = buildMaterialKpis(twoNotDueSummary);
+assert.equal(
+  twoNotDueKpis.find((kpi) => kpi.key === "not_due")?.value,
+  1,
+  "REGRESSION: status_counts.not_due=2 时，未到期仍必须是 1（另一条是截止时间未知）",
+);
+assert.equal(
+  twoNotDueSummary.status_counts.not_due,
+  2,
+  "底层状态机事实保持 2，不被展示口径覆盖",
+);
 
 // --- 行映射 -----------------------------------------------------------------
 
@@ -213,6 +252,7 @@ const districtRows = toDistrictCardRows([
     final_total: 1,
     unknown_kind_total: 1,
     due_at_unknown: 3,
+    not_due_confirmed: 1,
     updated_at: "2026-09-21T12:00:00Z",
     expected_total: null,
     expected_budget_total: null,
@@ -225,6 +265,8 @@ const districtRows = toDistrictCardRows([
 ]);
 assert.equal(districtRows[0].coverageRate, null, "无应收基线时完整率是 null（页面显示 —）");
 assert.equal(districtRows[0].reviewRequired, 11);
+assert.equal(districtRows[0].notDueConfirmed, 1, "区县卡片未到期取 not_due_confirmed");
+assert.equal(districtRows[0].dueAtUnknown, 3, "截止时间未知必须与未到期并列可见");
 
 const departmentRows = toDepartmentMatrixRows([
   {
@@ -238,7 +280,8 @@ const departmentRows = toDepartmentMatrixRows([
     unknown_kind_total: 0,
     missing: 2,
     not_due: 1,
-    due_at_unknown: 0,
+    not_due_confirmed: 1,
+    due_at_unknown: 4,
     updated_at: null,
     expected_total: null,
     expected_budget_total: null,
@@ -255,6 +298,8 @@ assert.equal(
   "没有主管部门的区级政府材料必须有明确名称，不能显示空白",
 );
 assert.equal(departmentRows[0].departmentId, null, "无主管部门的行不可下钻（id 为 null）");
+assert.equal(departmentRows[0].notDueConfirmed, 1, "区级矩阵未到期取 not_due_confirmed");
+assert.equal(departmentRows[0].dueAtUnknown, 4, "区级矩阵必须同时显示截止时间未知");
 
 // --- 分组 -------------------------------------------------------------------
 

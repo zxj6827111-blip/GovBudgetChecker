@@ -88,7 +88,17 @@ export interface MaterialCoverageSummary extends ExpectedCoverageFields {
   budget_total: number;
   final_total: number;
   unknown_kind_total: number;
+  /**
+   * 截止时间未知（due_at 为空）的槽位数：独立的数据质量指标，与任意状态并存，
+   * 不能用来与 not_due 相减反推"未到期"。
+   */
   due_at_unknown: number;
+  /**
+   * 已确认尚未到截止时间的槽位数（status='not_due' 且 reason='due_not_reached'）。
+   * 界面"未到期"只取这个字段；`status_counts.not_due` 是状态机事实
+   * （含"截止时间未知"那种同样停在 not_due 的情况），两者并存、不互相覆盖。
+   */
+  not_due_confirmed: number;
   jurisdiction_unknown_total: number;
 }
 
@@ -101,6 +111,7 @@ export interface DistrictCoverageItem extends ExpectedCoverageFields {
   final_total: number;
   unknown_kind_total: number;
   due_at_unknown: number;
+  not_due_confirmed: number;
   updated_at: string | null;
 }
 
@@ -130,7 +141,10 @@ export interface DepartmentMatrixItem extends ExpectedCoverageFields {
   final: DepartmentScopeStat;
   unknown_kind_total: number;
   missing: number;
+  /** 状态机事实：not_due 总数（含"截止时间未知"那部分），界面不直接展示。 */
   not_due: number;
+  /** 界面"未到期"展示用的数字：已确认尚未到截止时间。 */
+  not_due_confirmed: number;
   due_at_unknown: number;
   updated_at: string | null;
 }
@@ -190,36 +204,74 @@ export interface DepartmentMatrixResponse {
 export interface MaterialKpiDefinition {
   key: string;
   label: string;
-  /** 由 status_counts 折算；无法折算的（如"已建材料"以外的新口径）留空。 */
-  fromCounts: (counts: MaterialStatusCounts) => number;
+  /**
+   * 从 summary 折算展示值。
+   *
+   * "未到期"取 `summary.not_due_confirmed`（已确认尚未到截止时间），**不是**
+   * `status_counts.not_due`：后者含"截止时间未知"的槽位，把未知当已知正是
+   * 本轮要修掉的口径错误；两者也不能相减反推（due_at_unknown 与任意状态并存）。
+   */
+  fromSummary: (summary: MaterialCoverageSummary) => number;
   testId: string;
 }
 
 /**
- * 首页 KPI 的第一屏（§十九）。口径与后端 status_counts 一一对应，
+ * 首页 KPI 的第一屏（§十九）。口径与后端字段一一对应，
  * 不在前端做任何"合并状态"的再解释以外的加工：
  * - 待复核 = review_required + reviewing（两者都是"等人处理"）；
- * - 未到期与逾期未上传严格分开；not_applicable 绝不计入缺失。
+ * - 未到期只统计 due_not_reached，截止时间未知单独展示；
+ * - not_applicable 绝不计入缺失。
  */
 export const MATERIAL_KPIS: MaterialKpiDefinition[] = [
-  { key: "slot_total", label: "已建材料", fromCounts: () => 0, testId: "gbc-material-kpi-slot-total" },
-  { key: "uploaded", label: "已上传", fromCounts: (c) => c.uploaded, testId: "gbc-material-kpi-uploaded" },
+  {
+    key: "slot_total",
+    label: "已建材料",
+    fromSummary: (summary) => summary.slot_total,
+    testId: "gbc-material-kpi-slot-total",
+  },
+  {
+    key: "uploaded",
+    label: "已上传",
+    fromSummary: (summary) => summary.status_counts.uploaded,
+    testId: "gbc-material-kpi-uploaded",
+  },
   {
     key: "review",
     label: "待复核",
-    fromCounts: (c) => c.review_required + c.reviewing,
+    fromSummary: (summary) =>
+      summary.status_counts.review_required + summary.status_counts.reviewing,
     testId: "gbc-material-kpi-review",
   },
-  { key: "completed", label: "已完成", fromCounts: (c) => c.completed, testId: "gbc-material-kpi-completed" },
+  {
+    key: "completed",
+    label: "已完成",
+    fromSummary: (summary) => summary.status_counts.completed,
+    testId: "gbc-material-kpi-completed",
+  },
   {
     key: "mapping_required",
     label: "待确认归属",
-    fromCounts: (c) => c.mapping_required,
+    fromSummary: (summary) => summary.status_counts.mapping_required,
     testId: "gbc-material-kpi-mapping",
   },
-  { key: "failed", label: "处理失败", fromCounts: (c) => c.failed, testId: "gbc-material-kpi-failed" },
-  { key: "not_due", label: "未到期", fromCounts: (c) => c.not_due, testId: "gbc-material-kpi-not-due" },
-  { key: "missing", label: "逾期未上传", fromCounts: (c) => c.missing, testId: "gbc-material-kpi-missing" },
+  {
+    key: "failed",
+    label: "处理失败",
+    fromSummary: (summary) => summary.status_counts.failed,
+    testId: "gbc-material-kpi-failed",
+  },
+  {
+    key: "not_due",
+    label: "未到期",
+    fromSummary: (summary) => summary.not_due_confirmed,
+    testId: "gbc-material-kpi-not-due",
+  },
+  {
+    key: "missing",
+    label: "逾期未上传",
+    fromSummary: (summary) => summary.status_counts.missing,
+    testId: "gbc-material-kpi-missing",
+  },
 ];
 
 export interface MaterialKpiValue {
@@ -237,10 +289,7 @@ export function buildMaterialKpis(summary: MaterialCoverageSummary | null): Mate
   return MATERIAL_KPIS.map((definition) => ({
     key: definition.key,
     label: definition.label,
-    value:
-      definition.key === "slot_total"
-        ? summary.slot_total
-        : definition.fromCounts(summary.status_counts),
+    value: definition.fromSummary(summary),
     testId: definition.testId,
   }));
 }
@@ -257,7 +306,10 @@ export interface DistrictCardRow {
   mappingRequired: number;
   failed: number;
   missing: number;
-  notDue: number;
+  /** "未到期"展示值：已确认尚未到截止时间（不含"截止时间未知"）。 */
+  notDueConfirmed: number;
+  /** 截止时间未知的槽位数：与 notDueConfirmed 并列展示，两者含义不同。 */
+  dueAtUnknown: number;
   /** 完整率：无应收基线时为 null，界面显示 `—`。 */
   coverageRate: number | null;
   updatedAt: string | null;
@@ -274,7 +326,8 @@ export function toDistrictCardRows(districts: DistrictCoverageItem[]): DistrictC
     mappingRequired: item.status_counts.mapping_required,
     failed: item.status_counts.failed,
     missing: item.status_counts.missing,
-    notDue: item.status_counts.not_due,
+    notDueConfirmed: item.not_due_confirmed,
+    dueAtUnknown: item.due_at_unknown,
     coverageRate: item.coverage_rate,
     updatedAt: item.updated_at,
   }));
@@ -290,7 +343,10 @@ export interface DepartmentMatrixRow {
   mappingRequired: number;
   failed: number;
   missing: number;
-  notDue: number;
+  /** "未到期"展示值：已确认尚未到截止时间（不含"截止时间未知"）。 */
+  notDueConfirmed: number;
+  /** 截止时间未知的槽位数：与"未到期"是两个不同口径，必须都能看到。 */
+  dueAtUnknown: number;
   coverageRate: number | null;
   updatedAt: string | null;
 }
@@ -309,7 +365,8 @@ export function toDepartmentMatrixRows(items: DepartmentMatrixItem[]): Departmen
     mappingRequired: item.status_counts.mapping_required,
     failed: item.status_counts.failed,
     missing: item.missing,
-    notDue: item.not_due,
+    notDueConfirmed: item.not_due_confirmed,
+    dueAtUnknown: item.due_at_unknown,
     coverageRate: item.coverage_rate,
     updatedAt: item.updated_at,
   }));

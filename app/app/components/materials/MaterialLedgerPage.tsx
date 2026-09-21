@@ -132,7 +132,10 @@ export function MaterialLedgerPage() {
             <span data-testid="gbc-material-ledger-unknown-kind-total">
               文种待确认 {summary.unknown_kind_total}
             </span>
-            <span data-testid="gbc-material-ledger-due-unknown">
+            <span
+              data-testid="gbc-material-ledger-due-unknown"
+              title="due_at 尚未建立，无法判断是否到期；与「未到期」不是一回事"
+            >
               截止时间未知 {summary.due_at_unknown}
             </span>
             {summary.jurisdiction_unknown_total > 0 ? (
@@ -198,6 +201,14 @@ export function MaterialLedgerPage() {
                         <div>
                           <dt>逾期未上传</dt>
                           <dd className="text-sm text-slate-800">{row.missing}</dd>
+                        </div>
+                        <div>
+                          <dt title="已明确 due_at 且尚未到截止时间">未到期</dt>
+                          <dd className="text-sm text-slate-800">{row.notDueConfirmed}</dd>
+                        </div>
+                        <div>
+                          <dt title="due_at 尚未建立，无法判断是否到期">截止时间未知</dt>
+                          <dd className="text-sm text-slate-800">{row.dueAtUnknown}</dd>
                         </div>
                       </dl>
                       <p className="mt-3 text-xs text-slate-400">

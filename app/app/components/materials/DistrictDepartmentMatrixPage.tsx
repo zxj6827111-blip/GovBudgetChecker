@@ -198,8 +198,17 @@ export function DistrictDepartmentMatrixPage({
                       <Th className="whitespace-nowrap" title="逾期未上传（missing）">
                         缺失
                       </Th>
-                      <Th className="whitespace-nowrap" title="未到期（not_due，含截止时间未知）">
+                      <Th
+                        className="whitespace-nowrap"
+                        title="未到期：已明确 due_at 且尚未到截止时间（due_not_reached）"
+                      >
                         未到期
+                      </Th>
+                      <Th
+                        className="whitespace-nowrap"
+                        title="截止时间未知：due_at 尚未建立，无法判断是否到期"
+                      >
+                        截止未知
                       </Th>
                       <Th className="whitespace-nowrap" title="应收材料基线尚未建立时不可计算，显示 —">
                         完整率
@@ -229,7 +238,20 @@ export function DistrictDepartmentMatrixPage({
                           <Td className="whitespace-nowrap">{row.mappingRequired}</Td>
                           <Td className="whitespace-nowrap">{row.failed}</Td>
                           <Td className="whitespace-nowrap">{row.missing}</Td>
-                          <Td className="whitespace-nowrap">{row.notDue}</Td>
+                          <Td
+                            className="whitespace-nowrap"
+                            title="已明确 due_at 且尚未到截止时间"
+                            data-testid={`${testId}-not-due-confirmed`}
+                          >
+                            {row.notDueConfirmed}
+                          </Td>
+                          <Td
+                            className="whitespace-nowrap"
+                            title="due_at 尚未建立，无法判断是否到期（不计入未到期）"
+                            data-testid={`${testId}-due-unknown`}
+                          >
+                            {row.dueAtUnknown}
+                          </Td>
                           <Td className="whitespace-nowrap">
                             <span
                               title={
