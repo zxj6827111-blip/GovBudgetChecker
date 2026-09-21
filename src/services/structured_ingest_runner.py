@@ -144,6 +144,17 @@ async def run_structured_ingest(
     pdf_path: Path,
     metadata: Dict[str, Any],
 ) -> Dict[str, Any]:
+    """结构化入库主链路。
+
+    顺序上有一条硬约束：**文档版本建立之后立刻分配材料槽位，然后才解析**。
+    两者回答的是不同问题——台账回答"这份材料有没有收到"，解析回答"这份材料
+    看得懂看不懂"。把分配放在末尾，等于要求解析、识别、物化全部成功材料
+    才算进台账，而解析失败的那批恰恰是最需要被台账看见的。
+
+    错误返回必须保留已经建立的 ``document_version_id`` 与 ``material_slot``：
+    没有这两个字段，调用方只能看到一个"什么都没发生"的失败，
+    无从判断材料到底进没进台账。
+    """
     if not await ensure_structured_ingest_ready():
         return {
             "job_id": job_id,
@@ -154,6 +165,13 @@ async def run_structured_ingest(
         }
 
     conn = None
+    # 下面这些值在 try 之外声明并逐步填充：任何一步抛错时，错误结果里仍要能
+    # 回答"是哪份材料""文档版本建了没有""槽位分到没有"。
+    org_name: Optional[str] = None
+    fiscal_year: Optional[int] = None
+    doc_type: Optional[str] = None
+    document_info: Optional[Dict[str, int]] = None
+    material_slot: Optional[Dict[str, Any]] = None
     try:
         conn = await DatabaseConnection.acquire()
         checksum = metadata.get("checksum") or _sha256_file(pdf_path)
@@ -174,6 +192,24 @@ async def run_structured_ingest(
             content_type=str(metadata.get("content_type") or "application/pdf"),
         )
         version_id = document_info["document_version_id"]
+
+        # 材料槽位：文件版本一旦建立就立即尝试进入材料台账，**不等解析结果**。
+        #
+        # 这里的位置不能后移。台账记的是"这份材料有没有收到"，解析记的是
+        # "这份材料看不看得懂"，前者不该依赖后者；原先放在整条链路末尾，
+        # 结果是"拿到文件但解析失败"的材料在台账里根本不存在——那正是最需要
+        # 人工补录的一批，被看不见就等于被丢掉。
+        #
+        # 后续任何环节都**不得**再次调用本函数：一次分析只允许分配一次，
+        # 二次分配会把"何时进入台账"重新绑回解析是否成功。
+        # 槽位仍是旁路能力，safe_* 版本不抛异常——它失败只在结果里留下一条
+        # error 摘要，不阻断解析/识别/物化/入库主流程。
+        material_slot = await _allocate_material_slot(
+            conn=conn,
+            metadata=metadata,
+            checksum=checksum,
+            document_version_id=version_id,
+        )
 
         parser = PDFParser(conn)
         parse_result = await parser.parse_pdf(str(pdf_path), version_id)
@@ -210,16 +246,6 @@ async def run_structured_ingest(
             pdf_path=pdf_path,
             ps_sync_summary=ps_sync_summary,
             metadata=metadata,
-        )
-
-        # 材料槽位：把这份 PDF 挂到"地区+部门+主体+年度+文种"这条稳定业务对象上。
-        # 槽位是材料台账的旁路能力，safe_* 版本不抛异常——它失败只会在结果里留下
-        # 一条 error 摘要，绝不阻断解析/入库主流程。
-        material_slot = await _allocate_material_slot(
-            conn=conn,
-            metadata=metadata,
-            checksum=checksum,
-            document_version_id=version_id,
         )
 
         review_items = _build_review_items(
@@ -262,7 +288,7 @@ async def run_structured_ingest(
         return payload
     except Exception as exc:
         logger.exception("Structured ingest failed for job %s", job_id)
-        return {
+        error_payload: Dict[str, Any] = {
             "job_id": job_id,
             "status": "error",
             "error": str(exc),
@@ -277,6 +303,19 @@ async def run_structured_ingest(
                 }
             ],
         }
+        # 已经建立的上下文一律带回：文档版本与槽位一旦落库就是既成事实，
+        # 从错误结果里丢掉它们，调用方就只能看到一个"什么都没发生"的失败，
+        # 既判断不出材料有没有进台账，也做不了后续的人工补录。
+        if org_name is not None:
+            error_payload["organization_name"] = org_name
+            error_payload["fiscal_year"] = fiscal_year
+            error_payload["doc_type"] = doc_type
+        if document_info is not None:
+            error_payload["document_id"] = document_info["document_id"]
+            error_payload["document_version_id"] = document_info["document_version_id"]
+        if material_slot is not None:
+            error_payload["material_slot"] = material_slot
+        return error_payload
     finally:
         if conn is not None:
             await DatabaseConnection.release(conn)
