@@ -1,0 +1,167 @@
+"""WP1 不破坏既有接口：路由面冻结 + 入库集成只做加法。
+
+本轮新增的是业务数据底座，既有上传/任务/分析/组织接口的行为必须一字不动。
+"没有改动"这种话不能只靠 review 声称，所以这里把接口面固化成清单：
+少一条、多一条都会失败。清单本身写在下面，改动它必须是一个显式决定。
+"""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+
+os.environ.setdefault("TESTING", "true")
+
+from api.main import app  # noqa: E402
+
+#: 上传 / 任务 / 分析 / 文件 / 组织 相关接口的冻结清单（2026-09-21 @ 4a1cabf 基线）。
+FROZEN_ROUTES = frozenset(
+    {
+        ("POST", "/api/documents/preflight"),
+        ("POST", "/api/documents/upload"),
+        ("POST", "/api/documents/{version_id}/run"),
+        ("POST", "/upload"),
+        ("POST", "/analyze/{job_id}"),
+        ("POST", "/api/analyze/{job_id}"),
+        ("POST", "/analyze2/{job_id}"),
+        ("POST", "/api/analyze2/{job_id}"),
+        ("GET", "/api/jobs"),
+        ("GET", "/jobs"),
+        ("GET", "/api/jobs/{job_id}"),
+        ("GET", "/api/jobs/{job_id}/status"),
+        ("GET", "/jobs/{job_id}/status"),
+        ("GET", "/api/jobs/{job_id}/review"),
+        ("GET", "/api/jobs/{job_id}/structured-ingest"),
+        ("GET", "/api/jobs/{job_id}/org-suggestions"),
+        ("DELETE", "/api/jobs/{job_id}"),
+        ("POST", "/api/jobs/{job_id}/associate"),
+        ("POST", "/api/jobs/{job_id}/reanalyze"),
+        ("POST", "/api/jobs/{job_id}/issues/ignore"),
+        ("POST", "/api/jobs/reanalyze-all"),
+        ("POST", "/api/jobs/rematch-organizations"),
+        ("POST", "/api/jobs/repair-missing-links"),
+        ("POST", "/api/jobs/structured-ingest-cleanup"),
+        ("POST", "/api/jobs/batch-delete"),
+        ("GET", "/api/files/{job_id}/source"),
+        ("GET", "/api/files/{job_id}/preview"),
+        ("GET", "/api/organizations"),
+        ("GET", "/api/organizations/list"),
+        ("POST", "/api/organizations"),
+        ("PUT", "/api/organizations/{org_id}"),
+        ("DELETE", "/api/organizations/{org_id}"),
+        ("GET", "/api/organizations/{org_id}/jobs"),
+        ("GET", "/api/organizations/{org_id}/delete-preview"),
+        ("POST", "/api/organizations/import"),
+        ("GET", "/api/departments"),
+        ("GET", "/api/departments/{dept_id}/units"),
+        ("GET", "/api/departments/{dept_id}/stats"),
+    }
+)
+
+
+def _route_surface() -> set:
+    surface = set()
+    for route in app.routes:
+        methods = getattr(route, "methods", None)
+        if not methods:
+            continue
+        for method in methods:
+            if method in ("HEAD", "OPTIONS"):
+                continue
+            surface.add((method, getattr(route, "path", "")))
+    return surface
+
+
+def test_job_upload_org_route_surface_is_unchanged():
+    actual = {row for row in _route_surface() if _is_frozen_family(row[1])}
+    missing = FROZEN_ROUTES - actual
+    added = actual - FROZEN_ROUTES
+    assert not missing, f"既有接口被删除: {sorted(missing)}"
+    assert not added, f"出现未登记的新接口: {sorted(added)}"
+
+
+def _is_frozen_family(path: str) -> bool:
+    return any(
+        marker in path
+        for marker in (
+            "/jobs",
+            "/upload",
+            "/documents",
+            "/analyze",
+            "/files/",
+            "/organizations",
+            "/departments",
+        )
+    )
+
+
+def test_material_slot_work_added_no_new_http_routes():
+    """WP1 是数据底座，不对外新增 HTTP 接口；接口留给 WP2 一起设计。"""
+    assert not [row for row in _route_surface() if "material" in row[1]]
+
+
+# ==== 入库集成只做加法，且可关闭 ============================================
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_skips_slot_allocation(monkeypatch):
+    """运维需要一条不重新部署就能停掉槽位写入的开关。"""
+    from src.services import structured_ingest_runner
+
+    monkeypatch.setenv("MATERIAL_LEDGER_DISABLED", "1")
+
+    class _NeverTouched:
+        async def fetchrow(self, *args, **kwargs):
+            raise AssertionError("开关打开时不应访问数据库")
+
+        async def execute(self, *args, **kwargs):
+            raise AssertionError("开关打开时不应访问数据库")
+
+    result = await structured_ingest_runner._allocate_material_slot(
+        _NeverTouched(),
+        metadata={"organization_id": "x"},
+        checksum="a" * 64,
+        document_version_id=1,
+    )
+    assert result == {"status": "skipped", "reason": "material_ledger_disabled"}
+
+
+@pytest.mark.asyncio
+async def test_slot_failure_is_reported_not_raised():
+    """槽位写入失败时，入库返回值里能看到原因，但流程不中断。"""
+    from src.services import structured_ingest_runner
+    from src.services.material_slot_service import safe_allocate_for_document
+    from support_material_slot_db import FailingSlotConnection
+
+    result = await safe_allocate_for_document(
+        FailingSlotConnection(),
+        metadata={"organization_id": "x", "report_year": "2024", "report_kind": "final"},
+        checksum="b" * 64,
+        org_records=[],
+        document_version_id=1,
+    )
+    assert result["status"] == "error"
+    assert "simulated database outage" in result["error"]
+    # 函数确实返回了，而不是把异常抛给调用方
+    assert structured_ingest_runner is not None
+
+
+def test_structured_ingest_payload_shape_gains_only_material_slot():
+    """结构化入库结果新增 ``material_slot`` 摘要，既有字段名一个都没动。"""
+    import inspect
+
+    from src.services import structured_ingest_runner
+
+    source = inspect.getsource(structured_ingest_runner.run_structured_ingest)
+    assert '"material_slot": material_slot,' in source
+    # 既有字段仍在
+    for key in (
+        '"document_id"',
+        '"document_version_id"',
+        '"tables_count"',
+        '"document_profile"',
+        '"ps_sync"',
+        '"review_items"',
+    ):
+        assert key in source, f"结构化入库结果字段 {key} 丢失"

@@ -18,7 +18,7 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Optional, Set
 
 import aiofiles
 from fastapi import HTTPException, Request, UploadFile
@@ -1011,10 +1011,128 @@ def _resolve_department_name(department_id: Optional[str]) -> Optional[str]:
         return None
 
 
+#: 已绑定 Material Slot 的文件版本禁止由旧结构化清理链路删除。
+#:
+#: 一旦 ``fiscal_document_versions.slot_id`` 非空，这份 PDF 版本就进入了
+#: 材料台账，成为"某条业务材料的一版文件历史"。旧的结构化入库清理是按
+#: "每个 scope 只留最新"设计的，它看到的是入库维度的冗余，看不到台账维度的
+#: 归属——让它删掉绑定版本会同时造成两件事：槽位的版本历史缺一块，
+#: 以及 ``material_slots.current_document_version_id`` 被外键置空、
+#: 材料突然变成"没有文件"。
+#: 因此这里采取保守策略：**已绑定即不可由本链路删除**，无论它是不是当前版本。
+MATERIAL_LEDGER_BLOCK_REASON = "material_slot_bound"
+
+
+def _apply_material_ledger_protection(
+    plan: Dict[str, Any],
+    slot_bound_versions: Dict[int, str],
+) -> Dict[str, Any]:
+    """把已绑定 Material Slot 的版本从"待清理"移到"已阻断"。
+
+    纯函数，不碰数据库：入参是"哪些版本已经绑定、绑到哪个槽位"的既定事实，
+    出参是修正后的计划。这样阻断规则可以脱离数据库单测，
+    也便于在真正的 DELETE 之前再做一次。
+
+    只影响 ``cleanup_document_versions``；未绑定的候选原样保留，
+    旧清理链路对它们的行为完全不变。
+    """
+    cleanup_versions = list(plan.get("cleanup_document_versions") or [])
+    if not cleanup_versions:
+        return {**plan, "material_ledger_checked": True}
+
+    remaining: List[Dict[str, Any]] = []
+    newly_blocked: List[Dict[str, Any]] = []
+    for entry in cleanup_versions:
+        version_id = _coerce_int(entry.get("document_version_id"))
+        slot_id = slot_bound_versions.get(version_id) if version_id is not None else None
+        if slot_id is None:
+            remaining.append(entry)
+            continue
+        newly_blocked.append(
+            {
+                **entry,
+                "reason": MATERIAL_LEDGER_BLOCK_REASON,
+                # slot_id 一并返回，运维不必再查库就能知道它属于哪条材料
+                "slot_id": slot_id,
+            }
+        )
+
+    if not newly_blocked:
+        return {**plan, "material_ledger_checked": True}
+
+    remaining_version_ids = {
+        _coerce_int(item.get("document_version_id")) for item in remaining
+    }
+    skipped_jobs = list(plan.get("skipped_jobs") or [])
+    for entry in newly_blocked:
+        for job in entry.get("jobs") or []:
+            skipped_jobs.append(
+                {
+                    "job_id": job.get("job_id"),
+                    "filename": job.get("filename"),
+                    "scope_key": job.get("scope_key"),
+                    "document_version_id": entry.get("document_version_id"),
+                    "reason": MATERIAL_LEDGER_BLOCK_REASON,
+                }
+            )
+
+    cleanup_jobs = [
+        job
+        for job in (plan.get("cleanup_jobs") or [])
+        if _coerce_int(job.get("document_version_id")) in remaining_version_ids
+    ]
+    blocked = [*(plan.get("blocked_document_versions") or []), *newly_blocked]
+    return {
+        **plan,
+        "material_ledger_checked": True,
+        "cleanup_document_versions": remaining,
+        "cleanup_jobs": cleanup_jobs,
+        "blocked_document_versions": blocked,
+        "skipped_jobs": skipped_jobs,
+        "cleanup_document_version_count": len(remaining),
+        "cleanup_job_count": len(cleanup_jobs),
+        "blocked_document_version_count": len(blocked),
+        "skipped_job_count": len(skipped_jobs),
+    }
+
+
+async def _fetch_slot_bound_versions(
+    conn: Any, version_ids: Iterable[Any]
+) -> Dict[int, str]:
+    """查出候选版本里哪些已经绑定 Material Slot，返回 ``{版本 id: 槽位 id}``。
+
+    只查候选集，不做全表扫描：清理链路每次只处理几十个版本。
+    """
+    ids = sorted({int(value) for value in (_coerce_int(item) for item in version_ids) if value is not None})
+    if not ids:
+        return {}
+    rows = await conn.fetch(
+        """
+        SELECT id, slot_id
+        FROM fiscal_document_versions
+        WHERE id = ANY($1::int[]) AND slot_id IS NOT NULL
+        """,
+        ids,
+    )
+    bound: Dict[int, str] = {}
+    for row in rows or []:
+        version_id = _coerce_int(row["id"])
+        if version_id is not None:
+            bound[version_id] = str(row["slot_id"])
+    return bound
+
+
 def plan_structured_ingest_cleanup(
     body: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Preview which historical structured-ingest versions can be cleaned safely."""
+    """Preview which historical structured-ingest versions can be cleaned safely.
+
+    这是**纯计划**，不知道 Material Slot 绑定情况，因此
+    ``material_ledger_checked`` 恒为 False。真正对外返回的计划都必须经过
+    ``_apply_material_ledger_protection`` 补齐这一步（见
+    ``cleanup_structured_ingest_history``）；把未校验的计划当成可执行计划，
+    就会把已绑定台账的版本算进"待删除"。
+    """
     request_body = dict(body or {})
     department_id = str(request_body.get("department_id") or "").strip() or None
     department_name = _resolve_department_name(department_id)
@@ -1222,6 +1340,9 @@ def plan_structured_ingest_cleanup(
     return {
         "status": "preview",
         "dry_run": True,
+        # 纯计划未经 Material Ledger 校验；对外返回前必须被
+        # _apply_material_ledger_protection 置为 True。
+        "material_ledger_checked": False,
         "department_id": department_id,
         "department_name": department_name,
         "scanned_job_count": scanned_job_count,
@@ -1243,25 +1364,24 @@ def plan_structured_ingest_cleanup(
 async def cleanup_structured_ingest_history(
     body: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Delete historical structured-ingest document versions while keeping local job history."""
+    """Delete historical structured-ingest document versions while keeping local job history.
+
+    Material Ledger 兼容：已绑定 ``material_slots`` 的文件版本一律不删，
+    且这个保护在两处生效——**计划阶段**把它移出待清理集合并标记
+    ``material_slot_bound``，**DELETE 阶段**再自带 ``slot_id IS NULL`` 守卫。
+
+    为什么需要两处：计划生成与执行之间可能插进新的绑定（重分析、重新归属），
+    只信计划就会删掉刚刚进入台账的版本。DELETE 的守卫是兜底，
+    它不依赖计划是否准确，因此 TOCTOU 窗口被关掉。
+
+    预览（dry_run）同样要过 Material Ledger 校验：预览的全部意义就是
+    "将会删除哪些"，而删除集合现在取决于绑定情况。查不到数据库时宁可
+    明确报 503，也不返回一份可能夸大删除范围的计划——那正是
+    "数据库里还在、文件系统说已清理"这类双真相的起点。
+    """
     request_body = dict(body or {})
     dry_run = bool(request_body.get("dry_run", False))
     plan = plan_structured_ingest_cleanup(request_body)
-    if dry_run:
-        return plan
-
-    cleanup_versions = list(plan.get("cleanup_document_versions") or [])
-    cleanup_jobs = list(plan.get("cleanup_jobs") or [])
-    if not cleanup_versions:
-        return {
-            **plan,
-            "status": "noop",
-            "dry_run": False,
-            "deleted_document_version_count": 0,
-            "deleted_document_version_ids": [],
-            "updated_job_count": 0,
-            "updated_job_ids": [],
-        }
 
     try:
         from src.db.connection import DatabaseConnection
@@ -1270,19 +1390,59 @@ async def cleanup_structured_ingest_history(
 
     conn = None
     deleted_version_ids: List[int] = []
+    blocked_at_delete: List[Dict[str, Any]] = []
     try:
         conn = await DatabaseConnection.acquire()
+
+        candidate_ids = [
+            item.get("document_version_id")
+            for item in (plan.get("cleanup_document_versions") or [])
+        ]
+        slot_bound_versions = await _fetch_slot_bound_versions(conn, candidate_ids)
+        plan = _apply_material_ledger_protection(plan, slot_bound_versions)
+
+        if dry_run:
+            return plan
+
+        cleanup_versions = list(plan.get("cleanup_document_versions") or [])
+        cleanup_jobs = list(plan.get("cleanup_jobs") or [])
+        if not cleanup_versions:
+            return {
+                **plan,
+                "status": "noop",
+                "dry_run": False,
+                "deleted_document_version_count": 0,
+                "deleted_document_version_ids": [],
+                "blocked_at_delete_count": 0,
+                "blocked_at_delete": [],
+                "updated_job_count": 0,
+                "updated_job_ids": [],
+            }
+
         async with conn.transaction():
             for item in cleanup_versions:
                 document_version_id = _coerce_int(item.get("document_version_id"))
                 if document_version_id is None:
                     continue
+                # 计划之后可能新增了 Slot 绑定，所以守卫写在 DELETE 自身。
+                # 影响 0 行即表示"这一版在执行前进入了台账"，按阻断处理，
+                # 绝不当作普通成功。
                 result = await conn.execute(
-                    "DELETE FROM fiscal_document_versions WHERE id = $1",
+                    """
+                    DELETE FROM fiscal_document_versions
+                    WHERE id = $1 AND slot_id IS NULL
+                    """,
                     document_version_id,
                 )
                 if str(result).strip().endswith("1"):
                     deleted_version_ids.append(document_version_id)
+                else:
+                    blocked_at_delete.append(
+                        {
+                            "document_version_id": document_version_id,
+                            "reason": MATERIAL_LEDGER_BLOCK_REASON,
+                        }
+                    )
     except HTTPException:
         raise
     except Exception as exc:
@@ -1297,6 +1457,10 @@ async def cleanup_structured_ingest_history(
     cleaned_at = time.time()
     for job in cleanup_jobs:
         document_version_id = _coerce_int(job.get("document_version_id"))
+        # 只有**真的删掉了**（DELETE 1）才对 job 侧写 cleaned。
+        # 计划阶段被阻断、或执行阶段才发现已绑定（DELETE 0）的版本，
+        # 数据库里都还在，此时把 sidecar 标成 cleaned 会制造双真相：
+        # 文件系统说"旧版入库已清理"，数据库里那一版却还在被槽位引用着。
         if document_version_id is None or document_version_id not in deleted_version_set:
             continue
 
@@ -1335,12 +1499,30 @@ async def cleanup_structured_ingest_history(
         write_structured_ingest_payload(job_dir, next_payload)
         updated_job_ids.append(job_id)
 
+    blocked_at_delete_count = len(blocked_at_delete)
+    # 日志只记版本 ID 与数量：清理链路会碰到与材料相关的记录，把整个条目打进
+    # 日志等于把文件名等信息写进运行日志（仓库对日志内容有 fail-closed 门禁）。
+    blocked_at_delete_version_ids = [
+        item["document_version_id"] for item in blocked_at_delete
+    ]
+    if blocked_at_delete_count:
+        logger.warning(
+            "structured ingest cleanup skipped %d version(s) bound to material slots"
+            " after planning: %s",
+            blocked_at_delete_count,
+            blocked_at_delete_version_ids,
+        )
+
     return {
         **plan,
         "status": "done",
         "dry_run": False,
         "deleted_document_version_count": len(deleted_version_ids),
         "deleted_document_version_ids": deleted_version_ids,
+        # 计划之后才被绑定、因而在执行阶段被拦下的版本。数量非零说明
+        # 计划与执行之间确实发生了新的绑定，运维应当重新预览。
+        "blocked_at_delete_count": blocked_at_delete_count,
+        "blocked_at_delete": blocked_at_delete,
         "updated_job_count": len(updated_job_ids),
         "updated_job_ids": updated_job_ids,
     }

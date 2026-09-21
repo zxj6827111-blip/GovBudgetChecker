@@ -4,6 +4,7 @@ Tests for structured ingest runner safeguards.
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, Dict, List, Optional
 
 import pytest
 
@@ -259,3 +260,203 @@ def test_normalize_org_name_prefers_full_segment_after_underscore():
     )
 
     assert normalized == "上海市普陀区城市管理行政执法局"
+
+
+# ==== 主链路编排：版本 → 槽位 → 解析 =========================================
+#
+# 这段守的是一条**顺序约束**：文档版本建立之后立刻分配材料槽位，然后才解析。
+# 顺序错了不会报错，只会让"解析失败的材料在台账里不存在"这个缺陷重新长回来，
+# 所以这里断言的是调用顺序与调用次数，而不是读源码确认。
+
+
+def _install_runner_stubs(
+    monkeypatch,
+    *,
+    events: List[str],
+    slot_result: Optional[Dict[str, Any]] = None,
+    parse_error: Optional[BaseException] = None,
+) -> Dict[str, int]:
+    """把主链路的外部协作者全部换成可控替身，返回调用计数。
+
+    只替换"本用例不关心其内部实现"的环节：数据库句柄、PDF 解析、表识别、
+    事实物化、PS 同步。被验证的是 ``run_structured_ingest`` 自己的编排顺序，
+    这些替身不参与断言，也不改变被测代码。
+    """
+    from src.services import structured_ingest_runner as runner
+
+    calls = {"allocate": 0}
+    fake_conn = SimpleNamespace(name="fake-conn")
+    resolved_slot = dict(
+        slot_result
+        if slot_result is not None
+        else {"status": "resolved", "reason": "ok", "bound": True, "slot_id": "slot-1"}
+    )
+
+    async def _acquire():
+        return fake_conn
+
+    async def _release(_conn):
+        return None
+
+    async def _ready():
+        return True
+
+    async def _ensure_document_version(**_kwargs):
+        events.append("ensure_document_version")
+        return {"org_unit_id": 11, "document_id": 22, "document_version_id": 33}
+
+    async def _allocate_material_slot(**_kwargs):
+        calls["allocate"] += 1
+        events.append("allocate_material_slot")
+        return dict(resolved_slot)
+
+    class _Parser:
+        def __init__(self, _conn):
+            pass
+
+        async def parse_pdf(self, _path, _version_id):
+            events.append("parse_pdf")
+            if parse_error is not None:
+                raise parse_error
+            return {"success": True, "tables_count": 2, "unknown_tables": []}
+
+    class _Recognizer:
+        def __init__(self, _conn):
+            pass
+
+        async def recognize_tables(self, _version_id):
+            return [
+                SimpleNamespace(
+                    table_code="FIN_01_income_expenditure_total",
+                    confidence=0.93,
+                    page_number=3,
+                )
+            ]
+
+        async def save_table_instances(self, _version_id, _instances):
+            return None
+
+    class _Materializer:
+        def __init__(self, _conn):
+            pass
+
+        async def materialize(self, _version_id):
+            return {"facts_count": 9, "low_confidence_tables": []}
+
+    class _PsSync:
+        def __init__(self, _conn):
+            pass
+
+        async def sync(self, **_kwargs):
+            return {"status": "skipped", "reason": "stub"}
+
+    monkeypatch.setattr(runner, "ensure_structured_ingest_ready", _ready)
+    monkeypatch.setattr(
+        runner,
+        "DatabaseConnection",
+        SimpleNamespace(acquire=_acquire, release=_release),
+    )
+    monkeypatch.setattr(runner, "_ensure_document_version", _ensure_document_version)
+    monkeypatch.setattr(runner, "_allocate_material_slot", _allocate_material_slot)
+    monkeypatch.setattr(runner, "PDFParser", _Parser)
+    monkeypatch.setattr(runner, "TableRecognizer", _Recognizer)
+    monkeypatch.setattr(runner, "FiscalFactMaterializer", _Materializer)
+    monkeypatch.setattr(runner, "PSSharedSchemaSync", _PsSync)
+    return calls
+
+
+def _ingest_metadata(pdf_path: Path) -> Dict[str, Any]:
+    return {
+        "organization_name": "上海市普陀区规划和自然资源局本级",
+        "report_year": "2024",
+        "report_kind": "final",
+        "doc_type": "dept_final",
+        "checksum": "d" * 64,
+        "filename": pdf_path.name,
+    }
+
+
+async def test_material_slot_is_allocated_before_pdf_parsing(monkeypatch, tmp_path):
+    """版本建立 → 槽位分配 → PDF 解析：分配必须在解析之前，且只做一次。"""
+    events: List[str] = []
+    calls = _install_runner_stubs(monkeypatch, events=events)
+
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+    payload = await run_structured_ingest(
+        job_id="job-order",
+        pdf_path=pdf_path,
+        metadata=_ingest_metadata(pdf_path),
+    )
+
+    assert events[:3] == [
+        "ensure_document_version",
+        "allocate_material_slot",
+        "parse_pdf",
+    ], f"主链路顺序不对: {events}"
+    assert calls["allocate"] == 1, "一份分析只允许分配一次槽位"
+    assert payload["status"] == "done"
+    assert payload["material_slot"]["slot_id"] == "slot-1"
+
+
+async def test_parser_failure_keeps_material_slot_context(monkeypatch, tmp_path):
+    """解析抛错时，已建立的版本与槽位必须出现在错误结果里。"""
+    events: List[str] = []
+    calls = _install_runner_stubs(
+        monkeypatch,
+        events=events,
+        slot_result={"status": "resolved", "reason": "ok", "bound": True, "slot_id": "slot-9"},
+        parse_error=RuntimeError("parser exploded"),
+    )
+
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+    payload = await run_structured_ingest(
+        job_id="job-parser-fail",
+        pdf_path=pdf_path,
+        metadata=_ingest_metadata(pdf_path),
+    )
+
+    assert payload["status"] == "error"
+    assert "parser exploded" in payload["error"]
+    assert payload["document_id"] == 22
+    assert payload["document_version_id"] == 33
+    assert payload["material_slot"]["bound"] is True
+    assert payload["material_slot"]["slot_id"] == "slot-9"
+    # 解析失败不得触发第二次分配：槽位不依赖解析结果
+    assert calls["allocate"] == 1
+    assert events.count("allocate_material_slot") == 1
+    assert events.count("parse_pdf") == 1
+
+
+async def test_material_slot_failure_does_not_block_structured_ingest(monkeypatch, tmp_path):
+    """槽位分配自身失败只是旁路故障，结构化入库主流程必须照常完成。"""
+    events: List[str] = []
+    calls = _install_runner_stubs(
+        monkeypatch,
+        events=events,
+        slot_result={
+            "status": "error",
+            "reason": "slot_allocation_failed",
+            "bound": False,
+            "error": "RuntimeError: slot backend down",
+        },
+    )
+
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+    payload = await run_structured_ingest(
+        job_id="job-slot-fail",
+        pdf_path=pdf_path,
+        metadata=_ingest_metadata(pdf_path),
+    )
+
+    assert payload["status"] == "done"
+    assert payload["facts_count"] == 9
+    assert payload["material_slot"]["status"] == "error"
+    assert payload["material_slot"]["bound"] is False
+    assert calls["allocate"] == 1
+

@@ -74,11 +74,87 @@ async def ensure_structured_ingest_ready() -> bool:
     return True
 
 
+def build_ingest_metadata(
+    *,
+    organization_id: Any = None,
+    organization_name: Any = None,
+    fiscal_year: Any = None,
+    doc_type: Any = None,
+    report_year: Any = None,
+    report_kind: Any = None,
+    checksum: Any = None,
+    document_profile: Any = None,
+) -> Dict[str, Any]:
+    """构建结构化入库的元数据。
+
+    抽成独立函数是为了让"画像到底有没有被传进来"成为**可测的事实**，
+    而不是靠读源码断言。
+
+    为什么必须把 ``document_profile`` 传进来：Slot 归属判定要靠它识别
+    "文种在不同来源间冲突""任务年度与材料实际年度不一致""材料口径"这三件事。
+    画像里本来就带着 ``conflicts`` 与被否决的候选值，只传最终选中的那个值，
+    冲突信息在进入台账之前就被丢掉了——本应停在"待人工确认"的材料
+    会被当成已确认，而且事后无从察觉。
+
+    这里复用主分析链路**已经算好的同一个** DocumentProfile，不重新解析 PDF、
+    也不在入库侧另造一套业务画像：两套画像必然漂移，而漂移的表现就是
+    "分析说是这份材料、台账说是另一份"。
+
+    ``document_profile`` 既有的**输出**字段（``canonical_nine_table`` 这类
+    结构化解析类型字符串）与本函数的**输入**参数是两回事，不要混淆。
+    """
+    payload: Dict[str, Any] = {
+        "organization_id": organization_id,
+        "organization_name": organization_name,
+        "fiscal_year": fiscal_year,
+        "doc_type": doc_type,
+        "report_year": report_year,
+        "report_kind": report_kind,
+        "checksum": checksum,
+    }
+    profile = _normalize_document_profile(document_profile)
+    if profile is not None:
+        payload["document_profile"] = profile
+    return payload
+
+
+def _normalize_document_profile(value: Any) -> Optional[Dict[str, Any]]:
+    """把画像归一为字典；None 表示"本次没有画像"。
+
+    传入无法识别的类型时抛错而不是静默丢弃：静默丢弃正是本轮要修的缺陷类型
+    ——画像没传进来不会报错，只会让台账少识别一批冲突，而且事后查不出来。
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        payload = to_dict()
+        if isinstance(payload, dict):
+            return payload
+    raise TypeError(
+        "document_profile 必须是 dict、带 to_dict() 的画像对象或 None，"
+        f"实际收到 {type(value).__name__}"
+    )
+
+
 async def run_structured_ingest(
     job_id: str,
     pdf_path: Path,
     metadata: Dict[str, Any],
 ) -> Dict[str, Any]:
+    """结构化入库主链路。
+
+    顺序上有一条硬约束：**文档版本建立之后立刻分配材料槽位，然后才解析**。
+    两者回答的是不同问题——台账回答"这份材料有没有收到"，解析回答"这份材料
+    看得懂看不懂"。把分配放在末尾，等于要求解析、识别、物化全部成功材料
+    才算进台账，而解析失败的那批恰恰是最需要被台账看见的。
+
+    错误返回必须保留已经建立的 ``document_version_id`` 与 ``material_slot``：
+    没有这两个字段，调用方只能看到一个"什么都没发生"的失败，
+    无从判断材料到底进没进台账。
+    """
     if not await ensure_structured_ingest_ready():
         return {
             "job_id": job_id,
@@ -89,6 +165,13 @@ async def run_structured_ingest(
         }
 
     conn = None
+    # 下面这些值在 try 之外声明并逐步填充：任何一步抛错时，错误结果里仍要能
+    # 回答"是哪份材料""文档版本建了没有""槽位分到没有"。
+    org_name: Optional[str] = None
+    fiscal_year: Optional[int] = None
+    doc_type: Optional[str] = None
+    document_info: Optional[Dict[str, int]] = None
+    material_slot: Optional[Dict[str, Any]] = None
     try:
         conn = await DatabaseConnection.acquire()
         checksum = metadata.get("checksum") or _sha256_file(pdf_path)
@@ -109,6 +192,24 @@ async def run_structured_ingest(
             content_type=str(metadata.get("content_type") or "application/pdf"),
         )
         version_id = document_info["document_version_id"]
+
+        # 材料槽位：文件版本一旦建立就立即尝试进入材料台账，**不等解析结果**。
+        #
+        # 这里的位置不能后移。台账记的是"这份材料有没有收到"，解析记的是
+        # "这份材料看不看得懂"，前者不该依赖后者；原先放在整条链路末尾，
+        # 结果是"拿到文件但解析失败"的材料在台账里根本不存在——那正是最需要
+        # 人工补录的一批，被看不见就等于被丢掉。
+        #
+        # 后续任何环节都**不得**再次调用本函数：一次分析只允许分配一次，
+        # 二次分配会把"何时进入台账"重新绑回解析是否成功。
+        # 槽位仍是旁路能力，safe_* 版本不抛异常——它失败只在结果里留下一条
+        # error 摘要，不阻断解析/识别/物化/入库主流程。
+        material_slot = await _allocate_material_slot(
+            conn=conn,
+            metadata=metadata,
+            checksum=checksum,
+            document_version_id=version_id,
+        )
 
         parser = PDFParser(conn)
         parse_result = await parser.parse_pdf(str(pdf_path), version_id)
@@ -173,6 +274,7 @@ async def run_structured_ingest(
             "low_confidence_tables": materialize_result.get("low_confidence_tables") or [],
             "document_profile": document_profile,
             "ps_sync": ps_sync_summary,
+            "material_slot": material_slot,
             "review_item_count": len(review_items),
             "low_confidence_item_count": sum(
                 1 for item in review_items if item.get("type") == "low_confidence_table"
@@ -186,7 +288,7 @@ async def run_structured_ingest(
         return payload
     except Exception as exc:
         logger.exception("Structured ingest failed for job %s", job_id)
-        return {
+        error_payload: Dict[str, Any] = {
             "job_id": job_id,
             "status": "error",
             "error": str(exc),
@@ -201,6 +303,19 @@ async def run_structured_ingest(
                 }
             ],
         }
+        # 已经建立的上下文一律带回：文档版本与槽位一旦落库就是既成事实，
+        # 从错误结果里丢掉它们，调用方就只能看到一个"什么都没发生"的失败，
+        # 既判断不出材料有没有进台账，也做不了后续的人工补录。
+        if org_name is not None:
+            error_payload["organization_name"] = org_name
+            error_payload["fiscal_year"] = fiscal_year
+            error_payload["doc_type"] = doc_type
+        if document_info is not None:
+            error_payload["document_id"] = document_info["document_id"]
+            error_payload["document_version_id"] = document_info["document_version_id"]
+        if material_slot is not None:
+            error_payload["material_slot"] = material_slot
+        return error_payload
     finally:
         if conn is not None:
             await DatabaseConnection.release(conn)
@@ -282,6 +397,37 @@ async def _ensure_document_version(
         "document_id": int(document_id),
         "document_version_id": int(version_id),
     }
+
+
+async def _allocate_material_slot(
+    conn,
+    *,
+    metadata: Dict[str, Any],
+    checksum: str,
+    document_version_id: int,
+) -> Dict[str, Any]:
+    """把当前文档挂到材料槽位上。
+
+    独立成函数是为了让"能不能关掉"这件事显式：材料台账是新增旁路，
+    故障时运维需要一条不重新部署就能停掉它的开关。默认开启——
+    默认关闭就等于这段代码在真实环境里从不执行，那它是不是能用永远无人知道。
+    """
+    if str(os.getenv("MATERIAL_LEDGER_DISABLED") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        return {"status": "skipped", "reason": "material_ledger_disabled"}
+
+    from src.services.material_slot_service import safe_allocate_for_document
+
+    return await safe_allocate_for_document(
+        conn,
+        metadata=metadata,
+        checksum=checksum,
+        document_version_id=document_version_id,
+    )
 
 
 def _resolve_storage_key(job_id: str, pdf_path: Path, metadata: Dict[str, Any]) -> str:

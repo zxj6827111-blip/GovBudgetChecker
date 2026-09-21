@@ -114,3 +114,9 @@ corpus/DOC-20260905-001/*
 scratch/
 scratch_inventory_out.txt
 .pytest-luna-*/
+
+# UI 效果图压缩包（3.2MB 二进制，WP2 的参考素材，不入库）。
+# 仓库既有策略是不入库大二进制（见 corpus/*.pdf 的忽略规则）；
+# 压缩包 SHA-256 记录在 docs/MATERIAL_LEDGER_WP0_BASELINE_20260921.md，
+# 需要核对是否为同一份素材时可以复算。
+docs/GovBudgetChecker_UI_FINAL_*.zip

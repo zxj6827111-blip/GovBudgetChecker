@@ -1,0 +1,12 @@
+﻿编号,优先级,工作包,主要交付,估算,关键验收
+WP0,P0,基线冻结与真值锁定,冻结main/样张/Golden/gaps/回放,2-3d,所有后续对比可复现
+WP1,P0,Material Slot数据模型,material_slots/material_sources/version-run映射/API,4-6d,同名部门/本部、年份、预算决算不串线
+WP2,P0,材料台账UI,市/区/部门/单位/材料详情/全局搜索,5-8d,效果图06-13路径全通
+WP3,P0,审核生命周期,review start/complete/manual obligation/audit trail,4-6d,刷新重启后审核状态不丢
+WP4,P0/P1,8项义务缺口,逐条实现pending_checkers,10-15d,supported core not_implemented=0
+WP5,P0/P1,结构化消费收敛,V33-117/120 + shadow compare + 主路径切换,5-8d,结构化与legacy对比通过
+WP6,P0/P1,误报治理,formal gate/rounding/root cause/AI gate,5-8d,precision/evidence门禁达标
+WP7,P0/P1,Golden扩容,30+文档/19真值/top30裁决,5-10d,precision/recall可量化
+WP8,P1,质量/规则可视化,obligation/Golden/unfinished metrics UI,3-5d,业务用户可看到真实覆盖
+WP9,P1/P2,应收清单与来源,CSV导入优先，官网发现第二阶段,5-8d,可真实统计逾期未上传
+WP10,P0,性能安全UAT,万级slot/权限/备份/发布演练,4-7d,Gate A-F 全部通过
