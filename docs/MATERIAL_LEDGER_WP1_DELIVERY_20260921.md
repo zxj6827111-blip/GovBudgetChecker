@@ -35,17 +35,20 @@
 | `scripts/backfill_material_slots.py` | 历史回填盘点 CLI（默认 dry-run） |
 | `.env.example` | 增加 `MATERIAL_LEDGER_DISABLED` 声明 |
 
-### 修改：既有代码（仅 2 处）
+### 修改：既有代码（3 处，均为加法或语义修正）
 
 | 文件 | 改动 | 影响面 |
 | --- | --- | --- |
-| `src/services/structured_ingest_runner.py` | 结构化入库后调用槽位分配；结果里新增 `material_slot` 摘要字段 | **只做加法**。槽位失败被 `safe_allocate_for_document` 兜住，不改任何既有字段、不阻断主流程 |
+| `src/services/structured_ingest_runner.py` | 新增 `build_ingest_metadata` 纯函数；结构化入库后调用槽位分配，结果里新增 `material_slot` 摘要字段 | **只做加法**。槽位失败被 `safe_allocate_for_document` 兜住，不改任何既有字段、不阻断主流程 |
+| `api/main.py` | 构造结构化入库 metadata 改用 `build_ingest_metadata`，把主分析链路已算好的 `document_profile` 一并传入（评审修复） | 管线多传一个入参；`run_structured_ingest` 的签名与返回契约未变 |
 | `.env.example` | 声明新环境变量 | 无 |
 
-> 除上述两个文件外，**没有修改任何既有源码**。
+> 除上述三个文件外，**没有修改任何既有源码**。
 > 规则引擎、PDF 解析、AI 抽取、上传路径、任务队列、审核工作台一行未动。
+> `api/main.py` 是本轮唯一被触及的既有生产文件，净改动是"import 多一项 +
+> 构造 metadata 时多传一个画像参数"，没有改变任何既有分支或返回值。
 
-### 新增：测试（91 条）
+### 新增：测试（148 条）
 
 | 文件 | 条数 | 默认是否运行 |
 | --- | --- | --- |
@@ -54,7 +57,9 @@
 | `tests/test_material_slot_backfill.py` | 11 | 是 |
 | `tests/test_material_slot_api_regression.py` | 5 | 是 |
 | `tests/support_material_slot_db.py`（辅助） | — | — |
-| `tests/test_material_slot_migration_pg.py` | 11 | 否（需 `GOVBUDGET_TEST_DATABASE_URL`） |
+| `tests/test_material_slot_binding_and_state.py` | 37 | 是 |
+| `tests/test_material_slot_profile_integration.py` | 15 | 是 |
+| `tests/test_material_slot_migration_pg.py` | 16 | 否（需 `GOVBUDGET_TEST_DATABASE_URL`） |
 
 ### 新增：文档与基线产物
 
@@ -111,7 +116,7 @@
 
 | 检查 | 基线（`4a1cabf`） | 本次 | 结论 |
 | --- | --- | --- | --- |
-| `python -m pytest -q` | 1307 passed, 1 skipped, 0 failed | **1387 passed, 12 skipped, 0 failed** | +80 passed / +11 skipped（新真库用例默认跳过），**零失败** |
+| `python -m pytest -q` | 1307 passed, 1 skipped, 0 failed | **1439 passed, 17 skipped, 0 failed** | +132 passed / +16 skipped（新真库用例默认跳过），**零失败** |
 | `ruff check .`（Makefile 与 CI 同款全仓命令） | All checks passed | **All checks passed** | 无变化 |
 | `mypy api src tests` | Success（199 files） | **Success（210 files）** | 无变化 |
 
@@ -122,12 +127,15 @@
 ```bash
 GOVBUDGET_TEST_DATABASE_URL=postgresql://.../fiscal_db \
     python -m pytest tests/test_material_slot_migration_pg.py -v
-# => 11 passed
+# => 16 passed
 ```
 
 覆盖：全新库应用、第二次 no-op、既有库升级只增 0019、语句重放、schema 形状、
 复合唯一索引拦截、`mapping_key` 区分未知年份、CHECK 约束、删槽位不删文件版本、
-**回滚 SQL 实测**、服务层端到端幂等。
+**回滚 SQL 实测**、服务层端到端幂等；评审修复轮又补了
+**跨槽重绑被拒且整体回滚**、**两连接并发绑定只有一个胜者（行锁生效）**、
+**同 `created_at` 按 id 决定新旧**、**口径冲突持久化且刷新洗不掉**、
+**`mark_not_applicable` 尊重身份门槛**。
 
 测后核对目标库：`public` schema 仍为 18 条迁移、无 `material_slots`、
 无残留 `matslot_test_*` schema。**开发库数据零改动。**
@@ -167,6 +175,30 @@ GOVBUDGET_TEST_DATABASE_URL=postgresql://.../fiscal_db \
 另有 5 条 smoke/乱码文件名。**剔除测试文件名后，53 条真实材料 100% 可自动映射
 （归并成 41 个槽位）。** 76 条"文种未识别"全部是 `split_mode.pdf`。
 所以这些数字反映的是本机数据卫生，不是判定过严。
+
+### 3.5 评审修复轮（2026-09-21 第二轮）
+
+第一轮交付后经独立评审，发现六处"能跑通但不成立"的写入语义并全部修复。
+这些不是新功能，而是把原本靠约定维持的性质变成**代码上做不到违反**。
+
+| # | 问题 | 修复后行为 |
+| --- | --- | --- |
+| 1 | `bind_document_version` 允许静默跨槽改挂版本，留下双向引用不一致 | 只允许"未归属"或"已归属同一槽位"；其它抛 `SlotBindingConflict`（`slot_binding_conflict`）。判定在事务内对该版本行 `SELECT ... FOR UPDATE` 之后进行 |
+| 2 | 槽位 upsert / 版本绑定 / 指针推进 / 状态刷新是四个独立语句，中途失败留部分写入 | 四步合入**同一个事务**，要么全成要么全不成；异常回滚后由 `safe_allocate_for_document` 转成错误摘要，主分析继续 |
+| 3 | `refresh_status` 只看 `mapping_key` 判身份完整性 | 改用全系统唯一的 `slot_identity_is_resolved`：六个身份维度同时成立才算完整 |
+| 4 | `mark_not_applicable` 直接写 `status='not_applicable'`，绕过状态机 | 只写适用性事实，状态交给 `refresh_status`；身份未确认的槽位即使标了不适用仍停在 `mapping_required` |
+| 5 | 主分析算出的 `DocumentProfile` 没有传给结构化入库，文种冲突/年度冲突/口径全部丢失 | 新增 `build_ingest_metadata`，把**同一个**画像对象传进去，不重新解析 PDF、不另造画像 |
+| 6 | 口径冲突（已有 `summary`，新识别 `self`）被静默覆盖成新值 | 保留已确认值，把矛盾观测记进 `caliber_conflict_candidate`，状态压成 `mapping_required` / `caliber_conflict`；后续一致观测也洗不掉它 |
+| 7 | 当前版本指针只比 `created_at`，同时刻版本随机停靠 | 排序键改为 `(created_at, id)`，按数值比较 |
+
+配套升级：`FakeSlotConnection` 现在支持事务回滚、故障注入与行锁语义，
+并且**遇到不认识的 SQL 直接报错**（此前会静默返回 `None`，让生产 SQL 改了
+而假连接没跟上时表现为测试通过）。
+
+**影响面实测**：在 7 份真实样张上跑画像解析，`profile.report_year` 与任务年度
+**全部一致**，说明接入画像不会制造虚假年度冲突。同一批样张 `caliber` 仍为未识别
+（封面写"年度部门决算"，不含汇总/本级口径词），因此口径冲突通道目前主要由
+用例覆盖，真实数据尚未触发——这一点在 §6 如实登记。
 
 ---
 
@@ -209,23 +241,39 @@ GOVBUDGET_TEST_DATABASE_URL=postgresql://.../fiscal_db \
 
 以下内容**没有**在本次验证中覆盖，独立复核时应据此调整信任范围：
 
-1. **线上结构化入库的真实写入未做端到端验证。** 服务层已在真库上验证（`test_service_allocate_and_bind_against_real_database`），
-   但"真实跑一次 PDF 分析 → 槽位被写出"这条完整链路**没有跑过**，
-   因为需要触发完整流水线。**建议复核时在一个可控任务上跑一次分析，
-   检查 `structured_ingest.json` 的 `material_slot` 字段与 `material_slots` 表的实际行。**
+1. **线上结构化入库的真实写入未做端到端验证。** 服务层已在真库上验证
+   （`test_service_allocate_and_bind_against_real_database`），评审修复轮又把
+   **画像接线**做成了行为级验证（真跑 `_run_pipeline_inner` 并捕获交给
+   `run_structured_ingest` 的 metadata），但"分析完成 → 槽位真的写进数据库表"
+   这一段仍然**没有跑过**：`run_structured_ingest` 在测试里被 mock 掉了，
+   因为触发真实入库需要可用的数据库与完整的解析链路。
+   **建议复核时在一个可控任务上跑一次分析，检查 `structured_ingest.json`
+   的 `material_slot` 字段与 `material_slots` 表的实际行。**
 2. **回填写入完全未实现。** 只提供 dry-run 盘点，没有 `--apply`。
    历史数据目前**尚未进入任何槽位表**。
 3. **`material_scope` 未反映文档实际口径。** 当前按组织层级一对一推导
-   （见设计确认 §三 第 4 条）。
+   （见设计确认 §三 第 4 条）。评审修复轮已把真正的 `caliber` 接进归属链路，
+   但**在 7 份真实样张上 `caliber` 仍为未识别**（封面写"年度部门决算"，
+   不含汇总/本级口径词），所以口径冲突通道目前主要由用例覆盖。
+   提升口径识别能力属于解析/规则层，不在本轮范围。
 4. **占位槽位无法改判/合并。** 人工确认年份/文种后如何把它并到目标槽位，
    属于 WP2 的槽位管理动作，本轮未提供。
-5. **状态缓存的自动刷新未接线。** 分析状态、复核状态变化不会自动触发重算，
+5. **口径冲突没有裁决入口。** 冲突已能持久化、可见、且不会被普通刷新洗掉，
+   但"人工确认到底哪个口径正确"的入口留给 WP2。
+6. **状态缓存的自动刷新未接线。** 分析状态、复核状态变化不会自动触发重算，
    需要由 WP2/WP3 调用 `refresh_status`。在此之前已有文件的槽位停在 `uploaded`。
-6. **组织 id 不稳定（既有限制）。** Model A 的 md5 id 参与名称哈希，组织改名即换 id。
+   评审修复轮保证的是"刷新不会把既有进度打回起点"（`infer_progress_state`），
+   不是"刷新会被自动触发"。
+7. **组织 id 不稳定（既有限制）。** Model A 的 md5 id 参与名称哈希，组织改名即换 id。
    本轮保存了 `subject_org_code` 与名称快照作为凭据，但**没有自动重认机制**。
-7. **`fiscal_documents` 仍无法区分同名部门/单位**（其上游 `org_units` 是名称维表）。
+8. **`fiscal_documents` 仍无法区分同名部门/单位**（其上游 `org_units` 是名称维表）。
    本轮通过在 `fiscal_document_versions` 上绑定槽位绕开了这个问题，
    但没有修复 `fiscal_documents` 本身。
+9. **`material_sources` 无 URL 来源的唯一键待复核（WP9 前必须处理）。**
+   当前唯一键 `(slot_id, COALESCE(source_url, ''))` 会让
+   `manual_upload + NULL URL` 与 `excel_import + NULL URL` 互相冲突并覆盖
+   `source_kind`。本轮按评审要求只登记不扩张，做 CSV/Excel 应收清单时
+   再决定是否改为 `slot_id + source_kind + normalized source locator`。
 
 ---
 

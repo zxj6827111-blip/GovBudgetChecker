@@ -139,7 +139,8 @@ org_units(org_name UNIQUE)
 | `subject_kind` | `department` / `unit` / `government` / `unknown` |
 | `subject_level` | 与 `subject_kind` 同值。保留独立列是为兼容 PLAN §3.1 的字段表和未来"政府级主体"细分 |
 | `material_scope` | `department_summary` / `unit_self` / `government` / `unknown` |
-| `caliber` | `summary` / `self` / `unknown` |
+| `caliber` | `summary` / `self` / `unknown`。**已确认口径不会被静默改写**，冲突见 §七 |
+| `caliber_conflict_candidate` | 已确认口径与后来识别到的口径矛盾时，记录矛盾的那个观测值；非空即表示等人工裁决 |
 | `fiscal_year` | 可空。识别不到就是 NULL |
 | `report_kind` | `budget` / `final` / `unknown` |
 | `applicability_status` / `applicability_note` | `applicable` / `not_applicable` / `unresolved` + 人工依据 |
@@ -304,17 +305,151 @@ applicability_status = not_applicable         -> not_applicable
 4. **状态缓存的刷新时机**：`status` 在槽位写入与版本绑定时重算；
    分析状态、复核状态的变化目前不会自动触发重算（它们由 WP2/WP3 接入）。
    在此之前，已有文件的槽位会停在 `uploaded`。
+   （评审修复轮已保证"刷新不会把既有进度打回起点"，见 §7.8；
+   但"谁来触发刷新"仍然是 WP2/WP3 的接线工作。）
 5. **`material_scope` 尚未反映文档实际口径**：见 §三 第 4 条。
+   评审修复轮已把真正的 `caliber` 接进归属链路（§7.5），但**在
+   7 份真实样张上 `caliber` 仍为未识别**（封面写"年度部门决算"，
+   不含汇总/本级口径词），因此该通道目前主要由用例覆盖，真实数据尚未触发。
+   提升口径识别能力属于解析/规则层，不在本轮范围。
 6. **本机 `uploads/` 与 `data/organizations.json` 存在测试残留**（WP0 §8）。
    它们会让手工跑回填时看到偏高的 `missing_subject` / `kind_unknown`。
+7. **`material_sources` 无 URL 来源的唯一键需要复核**：
+   当前唯一键是 `(slot_id, COALESCE(source_url, ''))`，于是
+   `manual_upload + NULL URL` 与 `excel_import + NULL URL` 会互相冲突并覆盖
+   `source_kind`。本轮不扩张范围，登记为 **WP9 前必须复核项**；
+   做 CSV/Excel 应收清单时再决定是否改为
+   `slot_id + source_kind + normalized source locator` 这类更合理的口径。
 
 ---
 
-## 七、本轮不做的事（明确边界）
+## 七、评审修复轮补充的写入不变式（2026-09-21 第二轮）
+
+第一轮交付后经独立评审，发现六处"能跑通但不成立"的写入语义。以下不变式现在
+由代码与用例共同保证；它们不是新增功能，而是把原本靠约定维持的性质变成
+**代码上做不到违反**。
+
+### 7.1 文件版本不得跨槽重绑（fail-closed）
+
+允许的两种情况只有：版本尚未归属，或已归属**同一个**槽位（幂等重放）。
+其它情况抛 ``SlotBindingConflict``（原因码 ``slot_binding_conflict``）。
+
+为什么必须 fail-closed：允许静默改挂会留下"槽位 A 的当前版本指针指向
+B 的版本"这种双向不一致。双向不一致是材料串线的直接来源，而且它不会报错，
+只会让台账在两个页面上对同一份材料给出不同说法。
+真正的改判/合并是显式的人工业务动作，不属于普通 bind。
+
+并发：判定在事务内对该版本行 ``SELECT ... FOR UPDATE`` 之后进行。
+没有行锁的话，两个并发请求会同时读到 ``slot_id IS NULL`` 然后各自写入，
+两边都以为自己成功。真库用例
+``test_concurrent_binding_of_one_version_has_exactly_one_winner``
+断言"只有一个合法归属"，这是行锁真正生效的证据。
+
+### 7.2 一次材料分配是一个原子单元
+
+``allocate_for_document`` 把四步写在同一个事务里：槽位 upsert、
+版本绑定、当前版本指针推进、状态刷新。要么全成，要么全不成。
+
+此前它们是四个独立语句，中间失败会留下部分写入——例如槽位建好了、
+版本也挂上了，只有"哪个是当前版本"没写。库看起来正常，但槽位没有当前版本，
+台账会把它当成"还没有材料"。**部分写入比整体失败危险得多：失败会报警，
+部分写入只会安静地留下一个看起来正常的错误状态。**
+
+事务化没有破坏"旁路故障不阻断主分析"：异常在事务内回滚，
+再由 ``safe_allocate_for_document`` 转成错误摘要，主 PDF 分析继续。
+
+### 7.3 身份完整性只有一个判定入口
+
+``slot_identity_is_resolved`` 是**全系统唯一**的判定函数：
+内存里的 ``SlotIdentity.is_resolved`` 委托给它，从数据库读回的槽位行也调它。
+
+此前 ``refresh_status`` 只看 ``mapping_key`` 是否为空，于是
+``mapping_key='' 且 fiscal_year IS NULL``（年份没认出来）被判成身份已确认，
+一路滑到 ``not_due``——年份未知的材料被当成"没到期"，最典型的把未知当已知。
+
+完整身份要求六个维度同时成立：主体 id 非空、主体层级/材料范围/文种都不是
+``unknown``、财政年度非 NULL、且不是"按具体文档临时安置"的占位槽位。
+
+### 7.4 `mark_not_applicable` 只写事实，状态交给状态机
+
+该方法只写 ``applicability_status`` 与 ``applicability_note``，
+然后调用统一的 ``refresh_status``。它不直接写 ``status``。
+
+于是身份未确认的槽位即使被人工标了"不适用"，状态仍停在 ``mapping_required``：
+"这份材料不适用"和"我们不知道这是哪份材料"是两个问题，后者不能借前者绕过。
+只有身份完整的槽位才会进入 ``not_applicable``。
+
+### 7.5 真正的 DocumentProfile 必须进入归属链路
+
+主分析链路已经算出完整画像（含 ``conflicts``、``report_year``、
+``caliber``、``profile_status``），但第一轮交付时交给结构化入库的 metadata
+里只有几个标量。后果是：
+
+- 画像已判定文种互斥，入库侧看不到，本应停在映射待确认的材料被当成已确认；
+- 任务年度与材料实际年度不一致时，第二个候选丢失，年度冲突无从发现；
+- ``caliber`` 永远取不到值，材料口径恒为 ``unknown``。
+
+修复方式是新增纯函数 ``build_ingest_metadata``，由它统一构建 metadata 并接收
+**主分析链路已经算好的同一个画像对象**（不重新解析 PDF、不在入库侧另造画像）。
+传错类型直接抛 ``TypeError`` 而不是静默丢弃——静默丢弃正是这类缺陷的成因。
+
+接线验证是**行为级**的：``test_pipeline_hands_the_document_profile_to_structured_ingest``
+真跑一次 ``_run_pipeline_inner``，捕获 ``run_structured_ingest`` 收到的 metadata。
+"字段写在源码里"和"真的传过去了"是两件事，只有后者能证明缺口被补上。
+
+注意：结构化入库**输出**结果里既有的 ``document_profile`` 字段是结构化解析类型
+字符串（``canonical_nine_table`` 等），属于既有接口契约，本轮未改动。
+新增的是**输入** metadata 里的业务画像，两者是不同的东西。
+
+**实测影响面**：在 7 份真实样张上跑画像解析，``profile.report_year`` 与任务年度
+**全部一致**，因此接入画像不会制造虚假的年度冲突。同一批样张上 ``caliber``
+仍为未识别（封面写"年度部门决算"，不含汇总/本级口径词），
+所以口径冲突通道目前主要由用例覆盖，真实数据尚未触发它。
+
+### 7.6 已确认口径不被静默改写
+
+``caliber`` 不进入唯一键，但它决定"两笔数字能不能相加"，因此不能随分析次数漂移。
+
+| existing | incoming | 结果 |
+| --- | --- | --- |
+| unknown | 已确认 | 采用 incoming |
+| unknown | unknown | 保持 unknown |
+| 已确认 | unknown | 保留 existing（识别失败不改口径） |
+| 已确认 | 与 existing 相同 | 保持 existing |
+| 已确认 | 与 existing 不同 | **保留 existing**，把 incoming 记为冲突候选 |
+
+冲突候选一旦记下**不会被后续一致观测清除**：后来又一次识别成 existing
+并不能证明第一次的相反观测是错的，只说明矛盾还在。清除只能由显式人工裁决完成
+（本轮不提供该入口，因此候选会一直可见）。状态由状态机压成
+``mapping_required`` / ``caliber_conflict``。
+
+### 7.7 当前版本排序用 `(created_at, id)`
+
+只比 ``created_at`` 会让同时刻建出的版本之间随机停靠，同一槽位重复回填可能
+得到不同的"当前版本"。补上 ``id`` 作为兜底后顺序稳定；注意必须按数值比较，
+按字符串比较会得到 ``10 < 9`` 这种与线上相反的结果。
+
+### 7.8 重分析会重置复核进度（刻意如此）
+
+一次新的分析运行之后，槽位回到 ``uploaded``。此前的人工复核结论针对的是
+**上一次**分析结果，沿用它等于拿过期结论冒充已复核；PLAN 的 WP-RVW-01 也要求
+重分析使复核失效。方向是 fail-closed：宁可要求人工再看一遍，也不宣称已完成。
+
+与之配套：``refresh_status`` 在调用方未指定分析/复核进度时，从当前状态反推
+（``infer_progress_state``），而不是默认成"分析未开始"。否则一次无关刷新会把
+"待人工复核"打回"已上传"，用户看到的是待办凭空消失。
+
+## 八、本轮不做的事（明确边界）
 
 - 不新增任何 HTTP 接口（`GET /api/materials/*` 等留给 WP2 一起设计，
   避免先定一个没有 UI 验证过的接口形状）；
 - 不实现回填写入（dry-run 之外不提供 `--apply`）；
 - 不改规则引擎、不碰 8 项 pending_checkers；
 - 不改 PDF 解析、不改 AI 抽取、不改 Golden 真值；
-- 不合并/重命名组织主数据。
+- 不合并/重命名组织主数据；
+- 不提供"人工裁决口径冲突"的入口（只把冲突持久化并暴露出来，
+  消除入口留给 WP2 的槽位管理动作）；
+- 不提供"占位槽位改判/合并"的入口（同上）。
+
+评审修复轮同样遵守这条边界：它只把已有的写入语义修正为不可违反，
+没有新增任何对外能力。

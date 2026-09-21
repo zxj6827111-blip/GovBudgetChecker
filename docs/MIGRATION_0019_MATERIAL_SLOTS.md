@@ -14,6 +14,26 @@
 2. 给 `fiscal_document_versions` 增加可空列 `slot_id`（槽位绑定）；
 3. 建立台账查询所需的索引。
 
+### 关于 `caliber_conflict_candidate`
+
+`material_slots` 上有一个为"口径矛盾"准备的可空列，含义是：
+已确认口径与后来识别到的口径互相矛盾时，**保留已确认值**，
+把矛盾的那个观测值记在这一列里，等人工裁决。
+
+没有它的话，口径只能靠"取最新一次识别"来决定；那等于让"两笔数字能不能相加"
+随分析次数漂移，而且是静默漂移。用可空文本而不是布尔，是因为布尔只能说明
+有矛盾、看不出矛盾的是什么，人工裁决时还得回头翻日志。
+
+### 本迁移在评审修复轮被原地修改过
+
+`2026-09-21_0019_material_slots` 是**未发布的迁移**：PR #42 尚未合并，
+且已核对过任何持久数据库（含本机开发库 `fiscal_db`）的 `public` schema
+**都没有应用过它**（迁移记录停在 0018，`material_slots` 不存在）。
+
+因此 `caliber_conflict_candidate` 直接加进了 0019 的建表语句，
+而不是新开 0020。这样做的代价是：如果有人已经私下跑过 0019，
+必须回滚后重跑（回滚步骤见下）。已核对本机不存在这种状态。
+
 `fiscal_documents`、`org_units`、`org_department`、`org_unit`、`analysis_jobs`、
 `issues`、`analysis_results` 的**结构一行未改**。
 
@@ -129,6 +149,12 @@ MATERIAL_LEDGER_DISABLED=1   # 停掉槽位写入，保留已有数据供排查
 | `test_deleting_a_slot_keeps_document_versions` | 删槽位后文件版本行仍在，`slot_id` 置空 | ✅ |
 | `test_service_allocate_and_bind_against_real_database` | 服务层端到端：分配 → 绑定 → 幂等重放 → 状态推进 | ✅ |
 | `test_service_refuses_slot_whose_natural_key_collides` | 自然键冲突报错而非静默合并 | ✅ |
+| `test_cross_slot_rebind_is_rejected_and_rolls_back_on_real_db` | 跨槽重绑被拒，且失败那次分配新建的槽位被整体回滚 | ✅ |
+| `test_concurrent_binding_of_one_version_has_exactly_one_winner` | 两个连接并发绑定同一版本：只有一个胜者，只有一个槽位声称它是当前版本（行锁生效） | ✅ |
+| `test_current_version_tie_break_uses_id_on_real_db` | 同 `created_at` 的两个版本按 id 决定新旧 | ✅ |
+| `test_caliber_conflict_is_durable_on_real_db` | 口径矛盾持久化，后续一致观测与状态刷新都洗不掉 | ✅ |
+| `test_mark_not_applicable_respects_identity_gate_on_real_db` | 身份未确认的槽位标不适用后仍停在 `mapping_required` | ✅ |
+| `test_rollback_restores_previous_shape_without_losing_versions`（含在回滚验证内） | 回滚 SQL 原样执行后新增对象消失、原始版本一条不少、可重新迁移 | ✅ |
 
 跑法：
 
@@ -137,7 +163,7 @@ GOVBUDGET_TEST_DATABASE_URL=postgresql://user:pass@host:5432/db \
     python -m pytest tests/test_material_slot_migration_pg.py -v
 ```
 
-不设该变量时这 10 条全部 skip，CI 与默认开发环境不受影响。
+不设该变量时这 16 条全部 skip，CI 与默认开发环境不受影响。
 
 **实测后核对**：`fiscal_db` 的 `public` schema 未发生任何变化
 （仍 18 条迁移、无 `material_slots`、无残留测试 schema）。
