@@ -864,6 +864,205 @@ MIGRATIONS: List[Dict[str, Any]] = [
             "ON org_dept_annual_report(scope_key) WHERE scope_key <> ''",
         ]
     },
+    {
+        "id": "2026-09-21_0019_material_slots",
+        "description": (
+            "Material ledger foundation: material_slots (地区+主管部门+主体+财政年度+文种+口径) "
+            "+ material_sources (官网来源/发布日期) + fiscal_document_versions.slot_id 绑定。"
+            "只新增，不修改任何既有核心表的数据。"
+        ),
+        "sql": [
+            # 0004 已建过扩展，这里再声明一次是为了让"只重放本迁移"也能成功
+            # （迁移必须能单独幂等执行，不依赖"前面一定跑过"）。
+            "CREATE EXTENSION IF NOT EXISTS pgcrypto",
+
+            # ------------------------------------------------------------------
+            # material_slots - 材料槽位：本轮的核心业务对象
+            #
+            # 为什么要有它：当前系统只有"跑过哪些 job"，没有"哪些材料应该有"。
+            # 一条 slot = 地区 + 主管部门 + 主体 + 主体层级 + 财政年度 + 文种 + 口径。
+            # PDF 是 slot 下的文件版本，job 是文件版本下的一次运行。
+            #
+            # 关于 subject_kind / material_scope / caliber 三个维度为什么这样拆：
+            #   - subject_kind  = 谁在报（department / unit / government）
+            #   - material_scope= 这份材料覆盖多大范围（部门汇总 / 单位本级 / 政府）
+            #   - caliber       = 材料内数字含不含下级（summary / self / unknown）
+            #   前两者决定"这是哪一条应收材料"，进唯一键；caliber 描述文档内容口径，
+            #   由 DocumentProfile 识别，**不进唯一键**——它经常是 unknown，
+            #   放进唯一键会让同一份材料被反复建成新 slot（正是本轮要消灭的串线）。
+            #   caliber 只作为属性随最近一次识别更新，并在冲突时转 mapping_required。
+            #
+            # 关于 subject_org_id：引用的是 `data/organizations.json` 那套组织目录的
+            # md5 id（level:parent:name 的哈希）。该 id 天然把"部门"和"同名本级单位"
+            # 分开，正是本轮要的隔离。它不建外键，因为组织主数据在 JSON 里而不是库里，
+            # 库里造镜像等于再开第四套组织主数据（PLAN §3.5 明确禁止）。
+            # 代价是丢了数据库级引用完整性，用 subject_org_code + 名称快照兜底。
+            # ------------------------------------------------------------------
+            """
+            CREATE TABLE IF NOT EXISTS material_slots (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+                -- 身份键：由 (subject_org_id, subject_kind, material_scope, report_kind,
+                -- fiscal_year, mapping_key) 规范化后取 sha256，用于日志/URL/跨系统引用。
+                slot_key TEXT NOT NULL UNIQUE,
+
+                -- 行政区划。独立于主体组织：政府级材料的主体就是区本身，
+                -- 部门/单位材料的区县由上级推导。用于台账按区县聚合。
+                jurisdiction_org_id TEXT,
+                jurisdiction_name TEXT,
+
+                -- 主管部门（部门汇总材料的主体；单位材料则是单位的上级部门）
+                department_org_id TEXT,
+                department_name TEXT,
+
+                -- 具体主体组织
+                subject_org_id TEXT NOT NULL,
+                subject_org_name TEXT NOT NULL,
+                -- 主体在组织目录里的稳定代码（PS 的 DEPT_/UNIT_ code），可空。
+                -- 组织目录的 md5 id 由"名称"参与哈希，改名即换 id；code 不随改名变，
+                -- 因此同时记录两者，便于日后组织重命名后仍能把 slot 认回来。
+                subject_org_code TEXT,
+
+                -- 'unknown' 是刻意允许的取值：识别不到主体/文种的**真实**材料
+                -- 必须能在台账里被看见（状态 mapping_required 等人工确认）。
+                -- 拒绝 unknown 会让这类材料无处安放，"应收未收"统计直接漏掉它们。
+                subject_kind TEXT NOT NULL
+                    CONSTRAINT ck_material_slots_subject_kind
+                    CHECK (subject_kind IN ('department', 'unit', 'government', 'unknown')),
+                subject_level TEXT NOT NULL
+                    CONSTRAINT ck_material_slots_subject_level
+                    CHECK (subject_level IN ('department', 'unit', 'government', 'unknown')),
+                material_scope TEXT NOT NULL
+                    CONSTRAINT ck_material_slots_material_scope
+                    CHECK (material_scope IN (
+                        'department_summary', 'unit_self', 'government', 'unknown'
+                    )),
+                caliber TEXT NOT NULL DEFAULT 'unknown'
+                    CONSTRAINT ck_material_slots_caliber
+                    CHECK (caliber IN ('summary', 'self', 'unknown')),
+
+                -- 财政年度。允许 NULL：识别不到年份时不能兜底成某个具体年份，
+                -- 归一为 NULL 并让 slot 停在 mapping_required 等人工确认。
+                fiscal_year INTEGER,
+                report_kind TEXT NOT NULL
+                    CONSTRAINT ck_material_slots_report_kind
+                    CHECK (report_kind IN ('budget', 'final', 'unknown')),
+
+                applicability_status TEXT NOT NULL DEFAULT 'applicable'
+                    CONSTRAINT ck_material_slots_applicability
+                    CHECK (applicability_status IN ('applicable', 'not_applicable', 'unresolved')),
+                -- 人工判定"不适用/待定"的依据，不允许无依据改判。
+                applicability_note TEXT,
+
+                -- 应收/公开截止时间。NULL = 未知，未知不得计为"逾期未上传"。
+                due_at TIMESTAMPTZ,
+                expected_source_url TEXT,
+
+                -- 缓存状态。权威来源是 src/services/material_slot_status.py 的纯函数，
+                -- 这里落库是为了台账列表能一次 SQL 聚合（PLAN §12 禁止逐条实时计算）。
+                status TEXT NOT NULL DEFAULT 'mapping_required'
+                    CONSTRAINT ck_material_slots_status
+                    CHECK (status IN (
+                        'not_due', 'missing', 'uploaded', 'processing',
+                        'review_required', 'reviewing', 'completed',
+                        'not_applicable', 'mapping_required', 'failed'
+                    )),
+                -- 状态成因（机器可读）。status 只有 10 个值，不足以表达
+                -- "没到期"与"到期时间未知"的区别，后者必须在界面上可分辨，
+                -- 因此单独存原因码，避免把未知当成已知。
+                status_reason TEXT,
+
+                -- 身份无法可靠确定时的区分键（与 org_dept_annual_report.scope_key 同一手法）：
+                -- 空串 = 正常按身份归并；非空（如文档 sha256）= 按具体文档单独建槽，
+                -- 否则同单位所有"年份未知"材料会挤进同一个 slot 互相覆盖。
+                mapping_key TEXT NOT NULL DEFAULT '',
+
+                -- 当前文件版本指针。不额外在 fiscal_document_versions 上放 is_current：
+                -- 两处都记"谁是当前版本"必然漂移，指针放在 slot 上只有一个真相。
+                current_document_version_id INTEGER
+                    REFERENCES fiscal_document_versions(id) ON DELETE SET NULL,
+
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+
+            # 复合唯一键：与 slot_key 表达同一件事，但用可读的列组合兜住
+            # "哈希算错/序列化口径变更"这类静默合并。冲突时插入报错而不是悄悄合并，
+            # 属于 fail-closed。
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_material_slots_identity "
+            "ON material_slots ("
+            "subject_org_id, subject_kind, material_scope, report_kind, "
+            "COALESCE(fiscal_year, -1), mapping_key)",
+
+            # ------------------------------------------------------------------
+            # material_sources - 材料的来源记录
+            #
+            # 存在的理由是口径隔离：财政年度来自材料本身，发布日期来自网页。
+            # 2024 年度决算在 2025 年发布是常态，两者混用会把年份判错。
+            # ------------------------------------------------------------------
+            """
+            CREATE TABLE IF NOT EXISTS material_sources (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                slot_id UUID NOT NULL REFERENCES material_slots(id) ON DELETE CASCADE,
+
+                source_kind TEXT NOT NULL DEFAULT 'manual_upload'
+                    CONSTRAINT ck_material_sources_kind
+                    CHECK (source_kind IN ('official_site', 'manual_upload', 'excel_import')),
+                source_url TEXT,
+                source_page_title TEXT,
+                source_site TEXT,
+                -- 网页发布日期，与 slot.fiscal_year 严格分开
+                published_at TIMESTAMPTZ,
+                discovered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_checked_at TIMESTAMPTZ,
+                -- 栏目页内容指纹：用于日后判断"官网是否仍挂着同一份材料"
+                source_page_hash TEXT,
+                status TEXT NOT NULL DEFAULT 'active'
+                    CONSTRAINT ck_material_sources_status
+                    CHECK (status IN ('active', 'unreachable', 'superseded', 'retired')),
+
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+
+            # 唯一键用 COALESCE 表达式：Postgres 视多个 NULL 互不冲突，
+            # 不折叠的话"同一 slot 多条手工来源（无 URL）"会无限重复。
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_material_sources_slot_url "
+            "ON material_sources (slot_id, COALESCE(source_url, ''))",
+
+            # ------------------------------------------------------------------
+            # fiscal_document_versions.slot_id - 把已有的文件版本挂到槽位上
+            # 允许 NULL：历史版本、以及身份不可靠的新版本不强行归属。
+            # ON DELETE SET NULL 而不是 CASCADE：删 slot 不该删掉原始 PDF 版本记录。
+            # ------------------------------------------------------------------
+            "ALTER TABLE fiscal_document_versions "
+            "ADD COLUMN IF NOT EXISTS slot_id UUID "
+            "REFERENCES material_slots(id) ON DELETE SET NULL",
+
+            # ------------------------------------------------------------------
+            # 台账查询索引（PLAN §12：万级 slot，禁止逐条实时计算）
+            # ------------------------------------------------------------------
+            "CREATE INDEX IF NOT EXISTS idx_material_slots_subject ON material_slots(subject_org_id)",
+            "CREATE INDEX IF NOT EXISTS idx_material_slots_department ON material_slots(department_org_id)",
+            "CREATE INDEX IF NOT EXISTS idx_material_slots_jurisdiction "
+            "ON material_slots(jurisdiction_org_id)",
+            # 区级主管部门矩阵：按区县 + 年度 + 文种成组扫描
+            "CREATE INDEX IF NOT EXISTS idx_material_slots_scope "
+            "ON material_slots(jurisdiction_org_id, fiscal_year, report_kind)",
+            # 工作台 KPI：按状态计数
+            "CREATE INDEX IF NOT EXISTS idx_material_slots_status ON material_slots(status)",
+            # 最近变更列表 / 增量同步
+            "CREATE INDEX IF NOT EXISTS idx_material_slots_updated ON material_slots(updated_at DESC)",
+            # 超期未上传排查：只索引有截止时间的行
+            "CREATE INDEX IF NOT EXISTS idx_material_slots_due "
+            "ON material_slots(due_at) WHERE due_at IS NOT NULL",
+            "CREATE INDEX IF NOT EXISTS idx_material_sources_slot ON material_sources(slot_id)",
+            "CREATE INDEX IF NOT EXISTS idx_document_versions_slot "
+            "ON fiscal_document_versions(slot_id)",
+        ]
+    },
 ]
 
 
