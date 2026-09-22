@@ -432,7 +432,11 @@ B2 是最有价值的一条：它证明新增的安全反例**确实能抓住被
 | material-ledger E2E（WP2-A + WP2-B + 两套截图 spec） | **34 passed, 13 skipped**（WP2-B 用例 13 → 15） |
 | PostgreSQL（pg + detail_pg） | **16 passed** |
 | `check_coverage_baseline.py --assert-gaps 8` | 通过（**仍 8 gaps**） |
+| GitHub CI `test-and-build`（Linux） | **success**（run 35688170431 / 35688172943）：pytest **1690 passed / 42 skipped**、E2E **170 passed**、ruff / mypy / frontend build 均通过 |
 | `SCHEMA_CHANGE_REQUIRED` | **NO**（本轮未新增 migration） |
+
+> 本地与 CI 的 skip 数差 1 条，与 WP2-A 时同一原因：
+> `test_pdf_parse_isolation_and_backup.py` 依赖 `RLIMIT_AS`，Windows 无此能力。
 
 WP1 底座（migration 0019 / `material_slot_service` / `material_slot_resolver` /
 `material_slot_status` / slot identity / cleanup protection / allocation ordering）
