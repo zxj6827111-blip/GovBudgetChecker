@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import type { Route } from "next";
 import { useCallback, useMemo, useState } from "react";
 
 import { Card, SectionTitle } from "@/components/ui";
@@ -34,25 +36,53 @@ export interface DepartmentMatrixPageProps {
 }
 
 function SubjectRowCells({ row }: { row: DepartmentSubjectRow }) {
+  const isUnitSubject = String(row.subject_kind) === "unit";
+  const unitHref = isUnitSubject
+    ? `/materials/unit/${encodeURIComponent(row.subject_org_id)}`
+    : null;
+  const slotHref = (slot: { slot_id: string } | null | undefined) =>
+    slot ? `/materials/slots/${encodeURIComponent(slot.slot_id)}` : null;
+
   return (
     <tr data-testid={`gbc-material-subject-${row.subject_org_id}`}>
       <td className="border-b border-border px-4 py-3 align-top">
-        <div className="whitespace-nowrap text-sm text-slate-900">{row.subject_org_name}</div>
+        {unitHref ? (
+          <Link
+            href={unitHref as Route}
+            className="whitespace-nowrap text-sm text-primary-700 hover:underline"
+            data-testid={`gbc-material-subject-${row.subject_org_id}-unit-link`}
+          >
+            {row.subject_org_name}
+          </Link>
+        ) : (
+          // 部门汇总主体不链到单位时间轴：主体是部门，按单位去查会得到一个空页面，
+          // 那等于把一个不存在的关系画成存在的（§六十六）。
+          <div className="whitespace-nowrap text-sm text-slate-900">{row.subject_org_name}</div>
+        )}
         <div className="mt-1 whitespace-nowrap text-xs text-slate-400">
           主体 id {row.subject_org_id}
         </div>
       </td>
       <td className="border-b border-border px-4 py-3 align-top">
-        <MaterialSlotCard ref={row.budget} testId={`gbc-material-slot-${row.subject_org_id}-budget`} />
+        <MaterialSlotCard
+          ref={row.budget}
+          testId={`gbc-material-slot-${row.subject_org_id}-budget`}
+          href={slotHref(row.budget?.slot)}
+        />
       </td>
       <td className="border-b border-border px-4 py-3 align-top">
-        <MaterialSlotCard ref={row.final} testId={`gbc-material-slot-${row.subject_org_id}-final`} />
+        <MaterialSlotCard
+          ref={row.final}
+          testId={`gbc-material-slot-${row.subject_org_id}-final`}
+          href={slotHref(row.final?.slot)}
+        />
       </td>
       <td className="border-b border-border px-4 py-3 align-top">
         {row.unclassified.exists ? (
           <MaterialSlotCard
             ref={row.unclassified}
             testId={`gbc-material-slot-${row.subject_org_id}-unclassified`}
+            href={slotHref(row.unclassified?.slot)}
           />
         ) : (
           <span className="text-xs text-slate-300">—</span>

@@ -11,6 +11,17 @@ export default defineConfig({
   // 根因缓解放在 scripts/run-e2e.cjs 的路由预热里，重试只是兜底，
   // 本机保持 0 重试，避免把真实回归掩盖成"重试一次就过"。
   retries: process.env.CI ? 2 : 0,
+  expect: {
+    // dev 模式的客户端导航要**现编译**目标路由的客户端资源：冷缓存（含
+    // `rm -rf app/.next` 后首次运行）实测单次导航能到 4–5s，正好压在
+    // Playwright 默认 5s 上。表现为随机的"某个下钻用例 URL 没变"，
+    // 而且每次换一个 spec（谁先跨到未编译的路由谁中招）——容易被误读成
+    // 业务回归。预热（scripts/run-e2e.cjs）只覆盖 HTML 路由，覆盖不到
+    // 客户端导航，因此把断言超时统一放宽到这里一处，而不是在每个
+    // `toHaveURL` 上各调一次。15s 仍然是"会失败"的界，只是不再随
+    // dev 编译抖动。
+    timeout: 15_000,
+  },
   use: {
     baseURL,
     trace: "on-first-retry",

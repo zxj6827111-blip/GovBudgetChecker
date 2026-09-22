@@ -1,32 +1,50 @@
-"""材料台账只读 API（WP2-A）。
+"""材料台账只读 API（WP2-A + WP2-B）。
 
-本轮只实现三个 GET：
+接口面**恰好七条只读 GET**（多一条就会被 ``test_material_slot_api_regression``
+拦住，写入路径属于 WP3/WP9）：
 
     1. ``GET /api/materials/coverage``                          首页口径统计
     2. ``GET /api/materials/districts/{id}/departments``         区级主管部门矩阵
     3. ``GET /api/materials/departments/{id}/matrix``            部门材料矩阵
+    4. ``GET /api/materials/units/{id}/timeline``                单位多年度时间轴
+    5. ``GET /api/materials/slots/{slot_id}``                    材料详情
+    6. ``GET /api/materials/slots/{slot_id}/versions``           版本历史
+    7. ``GET /api/materials/slots/{slot_id}/runs``               处理记录
 
-三条纪律
+四条纪律
 --------
 1. **全部服务端鉴权。** 管理员、被授权的区县用户、未授权用户三种情况都在服务端判定，
-   不依赖前端隐藏入口：未授权访问具体区县/部门返回 403；首页聚合按账号授权范围过滤，
-   账号一个区划都没授权时返回 403（"看不到东西"必须能解释清楚，不能是一片空白）。
-2. **不扫文件系统、不聚合 /api/jobs。** 数据全部来自 ``material_slots`` 一次（或两次）
-   聚合查询；台账页的速度不取决于 uploads 目录有多大。
+   不依赖前端隐藏入口：未授权访问具体区县/部门/单位/槽位返回 403；首页聚合按账号
+   授权范围过滤，账号一个区划都没授权时返回 403（"看不到东西"必须能解释清楚，
+   不能是一片空白）。
+2. **不扫文件系统、不聚合 /api/jobs。** 数据全部来自台账四张表的 SQL；
+   详情页的速度不取决于 uploads 目录有多大。
 3. **错误沿用仓库既有契约。** 校验错误交给 FastAPI（422），未登录 401、越权 403、
    数据库不可用 503；不为 Materials 发明第二套错误格式。
+4. **"容器"与"数据"分开授权。** 区县/部门是**导航容器**（授权其下级即可打开），
+   单位与槽位是**数据目标**（必须自己就在可见范围内），见 ``_require_unit_access``
+   与 ``_require_slot_access``。
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Awaitable, Callable, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from api import runtime
 from api.auth_utils import require_login, user_can_access_org
 from src.db.connection import DatabaseConnection
+from src.schemas.material_detail import (
+    SlotDetailResponse,
+    SlotRunListData,
+    SlotRunListResponse,
+    SlotVersionListData,
+    SlotVersionListResponse,
+    UnitTimelineResponse,
+    build_detail_meta,
+)
 from src.schemas.material_ledger import (
     MATERIAL_STATUSES,
     DepartmentMatrixData,
@@ -38,6 +56,7 @@ from src.schemas.material_ledger import (
     build_list_meta,
     build_meta,
 )
+from src.services.material_detail_query_service import MaterialDetailQueryService
 from src.services.material_ledger_query_service import (
     MaterialLedgerQueryService,
     MaterialSlotFilters,
@@ -70,9 +89,12 @@ async def _close_connection(conn: Any) -> None:
     await DatabaseConnection.release(conn)
 
 
-async def _run_query(
-    callback: Callable[[MaterialLedgerQueryService], Awaitable[Any]],
-) -> Any:
+async def _with_connection(callback: Callable[[Any], Awaitable[Any]]) -> Any:
+    """取一条连接执行 ``callback(conn)``，无论成败都归还。
+
+    把"取连接 / 503 口径 / 归还"收在一处：两个查询服务（台账聚合与详情）
+    共用同一条失败语义，不会出现"一个接口 503、另一个 500"。
+    """
     try:
         conn = await _open_connection()
     except Exception as exc:  # noqa: BLE001 - 连接失败的形态由驱动决定
@@ -81,9 +103,25 @@ async def _run_query(
         logger.warning("Material ledger database unavailable: %s", exc)
         raise HTTPException(status_code=503, detail="material ledger database unavailable") from exc
     try:
-        return await callback(MaterialLedgerQueryService(conn))
+        return await callback(conn)
     finally:
         await _close_connection(conn)
+
+
+async def _run_query(
+    callback: Callable[[MaterialLedgerQueryService], Awaitable[Any]],
+) -> Any:
+    return await _with_connection(
+        lambda conn: callback(MaterialLedgerQueryService(conn))
+    )
+
+
+async def _run_detail_query(
+    callback: Callable[[MaterialDetailQueryService], Awaitable[Any]],
+) -> Any:
+    return await _with_connection(
+        lambda conn: callback(MaterialDetailQueryService(conn))
+    )
 
 
 # ---- 授权范围 ---------------------------------------------------------------
@@ -189,6 +227,64 @@ def _require_container_access(scope: MaterialAccessScope, org_id: str, detail: s
         raise HTTPException(status_code=403, detail=detail)
 
 
+def _require_unit_access(scope: MaterialAccessScope, unit_id: str, detail: str) -> None:
+    """单位时间轴的授权：``unit_id`` 本身必须在**可见数据范围**内。
+
+    这里**刻意不用** ``can_open_container``：单位是数据目标，不是导航容器。
+    容器的语义是"授权了它的下级就能打开它"，用在单位上会把
+    "只授权了隔壁单位"的账号放进来（容器闭包是向上取的，单位本身不在自己的
+    闭包里，看起来恰好安全；但只要将来有人把容器算法改成向下闭包，
+    就会静默变成越权）。用可见范围判定则与 SQL 的过滤完全同源。
+    """
+    if scope.unrestricted:
+        return
+    if str(unit_id or "") not in set(scope.visible_org_ids or []):
+        raise HTTPException(status_code=403, detail=detail)
+
+
+def slot_row_is_visible(row: Any, scope: MaterialAccessScope) -> bool:
+    """槽位行是否落在当前账号的可见范围内（管理员恒真）。
+
+    判定按槽位的三个组织列 **OR**：区县、主管部门、主体任一命中即可见。
+    与 SQL 里的权限谓词逐字同源 —— 两处各写一套必然出现
+    "列表里看得到、点进去 403"（或反过来，那更糟）。
+
+    抽取成公开纯函数是为了让"越权反例"能直接用行数据断言，
+    不必先起一个 FastAPI 测试客户端。
+    """
+    if scope.unrestricted:
+        return True
+    visible = set(scope.visible_org_ids or [])
+    if not visible:
+        # 没有任何可见组织：fail-closed，宁可看不到也不越权。
+        return False
+    for column in ("jurisdiction_org_id", "department_org_id", "subject_org_id"):
+        value = str((row or {}).get(column) or "").strip()
+        if value and value in visible:
+            return True
+    return False
+
+
+def _require_slot_access(
+    scope: MaterialAccessScope, row: Optional[Dict[str, Any]], slot_id: str
+) -> Dict[str, Any]:
+    """槽位级授权（§六十九）：详情、版本、处理记录三个接口共用同一个入口。
+
+    三条硬要求：
+
+    1. **不存在与无权不能混为一谈** —— 不存在 404，越权 403；
+    2. **不能只保护页面入口** —— 直接带一个别人的槽位 UUID 请求详情、
+       ``/versions``、``/runs`` 都必须 403（IDOR 反例）；
+    3. **只能有一处判定** —— 三个接口各写一份必然漂移，而漏掉的那一个
+       就是数据泄露口。
+    """
+    if row is None:
+        raise HTTPException(status_code=404, detail="material slot not found")
+    if not slot_row_is_visible(row, scope):
+        raise HTTPException(status_code=403, detail="slot access denied")
+    return row
+
+
 # ---- 组织目录显示名（纯展示，查不到就回退） ---------------------------------
 
 
@@ -221,6 +317,29 @@ def _jurisdiction_of(storage: Any, org_id: str) -> Tuple[Optional[str], Optional
             return (None, None)
         seen.add(current_id)
         if str(getattr(current, "level", "") or "") in _JURISDICTION_LEVELS:
+            name = str(getattr(current, "name", "") or "").strip()
+            return (current_id, name or None)
+        parent_id = str(getattr(current, "parent_id", "") or "")
+        current = storage.get_by_id(parent_id) if parent_id else None
+    return (None, None)
+
+
+def _department_of(storage: Any, org_id: str) -> Tuple[Optional[str], Optional[str]]:
+    """单位所属主管部门（沿组织目录向上找 ``department`` 层级）。
+
+    单位时间轴的面包屑要显示"区县 > 主管部门 > 单位"，因此需要它。
+    查不到就返回 ``(None, None)``：面包屑少一级，而不是猜一个部门。
+    """
+    if storage is None:
+        return (None, None)
+    seen: set = set()
+    current = storage.get_by_id(org_id)
+    while current is not None:
+        current_id = str(getattr(current, "id", "") or "")
+        if not current_id or current_id in seen:
+            return (None, None)
+        seen.add(current_id)
+        if str(getattr(current, "level", "") or "") == "department":
             name = str(getattr(current, "name", "") or "").strip()
             return (current_id, name or None)
         parent_id = str(getattr(current, "parent_id", "") or "")
@@ -376,6 +495,150 @@ async def get_department_matrix(
         raise HTTPException(status_code=404, detail="department not found")
 
     return DepartmentMatrixResponse(ok=True, data=data, meta=build_meta())
+
+
+# ---- 接口四：单位多年度时间轴 ------------------------------------------------
+
+
+@router.get(
+    "/api/materials/units/{unit_id}/timeline",
+    response_model=UnitTimelineResponse,
+)
+async def get_unit_timeline(unit_id: str, request: Request) -> UnitTimelineResponse:
+    """某单位的多年度材料时间轴。
+
+    两条身份纪律：
+
+    - **按 ``subject_org_id`` 查询，不按单位名称**。组织目录里"部门"与
+      "同名本级单位"可以完全同名，按名称查会把两个主体混成一串；
+    - **必须按 ``material_slots.fiscal_year`` 排列**。按 ``published_at`` /
+      ``uploaded_at`` / ``created_at`` / job 年份排，会把"2024 年度决算
+      （2025 年 8 月发布）"挪到 2025 那一行 —— 这正是本项目历史上把年份
+      判错的主要成因。
+
+    年度未知的槽位不兜底成任何具体年份，单独进 ``unresolved_year_slots``。
+    """
+    _, _, user = require_login(request)
+    scope = _build_access_scope(user)
+    # 单位是数据目标而不是导航容器：必须自己就在可见范围内（§六十八）。
+    _require_unit_access(scope, unit_id, "unit access denied")
+
+    storage = _org_storage_or_none()
+    unit_name = _org_name(storage, unit_id)
+    jurisdiction_id, jurisdiction_name = _jurisdiction_of(storage, unit_id)
+    department_id, department_name = _department_of(storage, unit_id)
+
+    data = await _run_detail_query(
+        lambda service: service.unit_timeline(
+            unit_id=unit_id,
+            unit_name=unit_name,
+            department_name=department_name,
+            jurisdiction_name=jurisdiction_name,
+            visible_org_ids=scope.visible_org_ids,
+        )
+    )
+
+    has_any_slot = bool(
+        data.years or data.unresolved_year_slots
+    )
+    if unit_name is None and not has_any_slot:
+        # 组织目录里没有这个单位，库里也没有它任何年度的材料 —— 连名字都给不出来。
+        # 单位存在但还没有槽位不算 404：那是"尚无已建立材料"空态。
+        raise HTTPException(status_code=404, detail="unit not found")
+
+    if data.unit.jurisdiction_id is None:
+        data.unit.jurisdiction_id = jurisdiction_id
+    if data.unit.department_id is None:
+        data.unit.department_id = department_id
+
+    return UnitTimelineResponse(ok=True, data=data, meta=build_detail_meta())
+
+
+# ---- 接口五：材料详情 --------------------------------------------------------
+
+
+@router.get("/api/materials/slots/{slot_id}", response_model=SlotDetailResponse)
+async def get_slot_detail(slot_id: str, request: Request) -> SlotDetailResponse:
+    """材料详情：槽位 + 当前文件版本 + 来源 + 当前分析（含检查覆盖）。
+
+    ``current_analysis`` 严格绑定 ``current_document_version_id``：
+    版本被替换后，上一版的分析只出现在「版本历史」与「处理记录」里并标注
+    "历史版本"，**绝不**冒充当前文件的结论。算不出来时
+    ``formal_issue_count`` 为 ``null`` 而不是 0 —— 0 的含义是
+    "已确认当前版本的分析结果里没有正式问题"。
+    """
+    _, _, user = require_login(request)
+    scope = _build_access_scope(user)
+
+    async def _load(service: MaterialDetailQueryService) -> Any:
+        row = _require_slot_access(scope, await service.load_slot_row(slot_id), slot_id)
+        return await service.slot_detail(row)
+
+    data = await _run_detail_query(_load)
+    return SlotDetailResponse(ok=True, data=data, meta=build_detail_meta())
+
+
+# ---- 接口六：版本历史 --------------------------------------------------------
+
+
+@router.get(
+    "/api/materials/slots/{slot_id}/versions",
+    response_model=SlotVersionListResponse,
+)
+async def get_slot_versions(slot_id: str, request: Request) -> SlotVersionListResponse:
+    """槽位下的文件版本历史（只读，不删除任何历史版本）。
+
+    每个版本显式带 ``is_current``：真值只有
+    ``material_slots.current_document_version_id`` 一个，
+    ``is_current`` 只是把它投影成每行一个布尔，**不是**第二个真值来源。
+    """
+    _, _, user = require_login(request)
+    scope = _build_access_scope(user)
+
+    async def _load(service: MaterialDetailQueryService) -> Any:
+        row = _require_slot_access(scope, await service.load_slot_row(slot_id), slot_id)
+        items = await service.versions(row)
+        return SlotVersionListData(
+            slot_id=str(row.get("slot_id") or slot_id),
+            items=items,
+            current_document_version_id=(
+                int(row["current_document_version_id"])
+                if row.get("current_document_version_id") is not None
+                else None
+            ),
+        )
+
+    data = await _run_detail_query(_load)
+    return SlotVersionListResponse(ok=True, data=data, meta=build_detail_meta())
+
+
+# ---- 接口七：处理记录 --------------------------------------------------------
+
+
+@router.get("/api/materials/slots/{slot_id}/runs", response_model=SlotRunListResponse)
+async def get_slot_runs(slot_id: str, request: Request) -> SlotRunListResponse:
+    """槽位下的分析运行记录。
+
+    关联依据**唯一**：
+    ``analysis_jobs.metadata.structured_ingest.document_version_id`` 等于该槽位
+    某个文件版本的 id。没有这个字段的 legacy 运行不会被猜到任何槽位下
+    （``meta.legacy_unlinked_runs_excluded = true``）。
+
+    只返回摘要：列表里不含 ``raw_response`` / 完整 finding / 完整 evidence，
+    避免"打开处理记录 Tab 等于下载 N 份完整分析 JSON"。
+    """
+    _, _, user = require_login(request)
+    scope = _build_access_scope(user)
+
+    async def _load(service: MaterialDetailQueryService) -> Any:
+        row = _require_slot_access(scope, await service.load_slot_row(slot_id), slot_id)
+        return SlotRunListData(
+            slot_id=str(row.get("slot_id") or slot_id),
+            items=await service.run_history(row),
+        )
+
+    data = await _run_detail_query(_load)
+    return SlotRunListResponse(ok=True, data=data, meta=build_detail_meta())
 
 
 __all__ = [
