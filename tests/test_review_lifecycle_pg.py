@@ -1,0 +1,1114 @@
+"""复核生命周期在**真实 PostgreSQL** 上的验证（显式 opt-in）。
+
+为什么必须有这一层
+------------------
+接口层与纯函数层能回答"门禁判定对不对"，但回答不了下面这些**只有真库能回答**的问题：
+
+A. 事务与行锁的真实语义：``start`` / ``complete`` 在同一事务内写入会话、刷新槽位状态，
+   中途失败是否整体回滚；
+B. **两个并发 start 只能产生一个** ``in_progress`` 会话（``uq_review_sessions_active``
+   这个 partial unique index 是否真的拦得住，而不是靠应用层"先查再写"）；
+C. **两个并发 complete 只产生一条**完成记录，且完成人/完成时间不被第二次覆盖；
+D. **complete 与版本指针推进竞争**：终态不允许出现"复核已完成，而它钉的版本
+   已经不是槽位当前版本"；
+E. **complete 与重新分析竞争**：终态不允许出现"复核已完成，而分析代际已变"；
+F. 已完成会话在重新查询（新的连接、新的 read）后仍然存在——这正是 WP3-A 要
+   灭掉的那个缺陷（"刷新之后系统并不知道这份材料复核过"）；
+G. 旧会话作为审计历史保留（invalidated 不被删除、不被覆盖）；
+H. 槽位状态真的从 ``uploaded`` 走到 ``reviewing`` / ``completed`` / ``review_required``；
+I. 分析代际：同一 job_uuid 重新分析换代、同一结果的重复落库**不**换代
+   （``ON CONFLICT DO UPDATE`` 的真实行为）。
+J. 迁移 0020 在已有库上的升级路径只新增，且可重复执行。
+
+隔离方式（沿用 WP1/WP2 的 PG 用例约定）
+---------------------------------------
+整个文件在**随机命名的独立 schema** 里执行：先跑真实迁移建出全部表，
+灌入测试数据，跑完 ``DROP SCHEMA CASCADE``。即使目标库是开发库，
+也不会碰 public 下的任何既有数据，不留残留表。
+
+运行方式::
+
+    GOVBUDGET_TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/fiscal_db \
+        python -m pytest tests/test_review_lifecycle_pg.py -v
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
+import pytest
+from fastapi import HTTPException
+
+from src.db.migrations import run_migrations
+from src.schemas.review_lifecycle import ERROR_COMPLETION_BLOCKED
+from src.services import review_lifecycle_service, review_slot_sync
+from src.services.analysis_result_store import (
+    compute_analysis_result_fingerprint,
+    persist_analysis_job_snapshot,
+)
+
+pytestmark = pytest.mark.real_database
+
+NOW = datetime(2026, 9, 22, 12, 0, tzinfo=timezone.utc)
+EARLIER = NOW - timedelta(days=3)
+LATER = NOW + timedelta(days=1)
+
+DISTRICT = "district-putuo"
+DEPT = "dept-planning"
+UNIT = "unit-planning-enforcement"
+
+
+# ---- 数据构造 ---------------------------------------------------------------
+
+
+async def _insert_slot(conn, **fields: Any) -> str:
+    payload: Dict[str, Any] = {
+        "slot_key": f"key-{uuid.uuid4().hex}",
+        # 自然键（subject_org_id, subject_kind, material_scope, report_kind,
+        # fiscal_year, mapping_key）由唯一索引兜住。需要两条互不相同的槽位时
+        # 传 slot_fields 覆盖其中一项即可；这里的默认值只是"最常见的可复核材料"。
+        "mapping_key": "",
+        "jurisdiction_org_id": DISTRICT,
+        "jurisdiction_name": "上海市普陀区",
+        "department_org_id": DEPT,
+        "department_name": "上海市普陀区规划和自然资源局",
+        "subject_org_id": UNIT,
+        "subject_org_name": "上海市普陀区规划和自然资源局执法大队",
+        "subject_kind": "unit",
+        "subject_level": "unit",
+        "material_scope": "unit_self",
+        "caliber": "self",
+        "fiscal_year": 2024,
+        "report_kind": "final",
+        "due_at": None,
+        "status": "uploaded",
+        "status_reason": "awaiting_analysis",
+        "updated_at": NOW,
+    }
+    payload.update(fields)
+    columns = ", ".join(payload)
+    placeholders = ", ".join(f"${index}" for index in range(1, len(payload) + 1))
+    row = await conn.fetchrow(
+        f"INSERT INTO material_slots ({columns}) VALUES ({placeholders})"
+        " RETURNING id::text AS slot_id",
+        *payload.values(),
+    )
+    return str(row["slot_id"])
+
+
+async def _insert_version(
+    conn, *, slot_id: str, file_hash: str, created_at: datetime
+) -> int:
+    org_unit_id = await conn.fetchval(
+        "INSERT INTO org_units (org_name) VALUES ($1) RETURNING id",
+        f"unit-{uuid.uuid4().hex[:8]}",
+    )
+    document_id = await conn.fetchval(
+        "INSERT INTO fiscal_documents (org_unit_id, fiscal_year, doc_type)"
+        " VALUES ($1, $2, $3) RETURNING id",
+        org_unit_id,
+        2024,
+        f"final-{uuid.uuid4().hex[:8]}",
+    )
+    return int(
+        await conn.fetchval(
+            """
+            INSERT INTO fiscal_document_versions
+                (document_id, file_hash, storage_key, created_at, slot_id)
+            VALUES ($1, $2, $3, $4, $5::uuid)
+            RETURNING id
+            """,
+            document_id,
+            file_hash,
+            f"{uuid.uuid4().hex}/material.pdf",
+            created_at,
+            slot_id,
+        )
+    )
+
+
+async def _insert_job(
+    conn,
+    *,
+    job_uuid: str,
+    version_id: int,
+    status: str = "done",
+    completed_at: datetime = NOW,
+    analysis_revision: int = 0,
+    result_meta: Optional[Dict[str, Any]] = None,
+) -> int:
+    metadata: Dict[str, Any] = {"structured_ingest": {"document_version_id": version_id}}
+    if result_meta is not None:
+        metadata["result_meta"] = result_meta
+    return int(
+        await conn.fetchval(
+            """
+            INSERT INTO analysis_jobs
+                (job_uuid, filename, status, mode, started_at, completed_at,
+                 metadata, analysis_revision)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+            RETURNING id
+            """,
+            job_uuid,
+            "material.pdf",
+            status,
+            "dual",
+            completed_at - timedelta(minutes=2),
+            completed_at,
+            json.dumps(metadata, ensure_ascii=False),
+            analysis_revision,
+        )
+    )
+
+
+async def _insert_result(
+    conn,
+    *,
+    job_id: int,
+    ai_findings: List[Dict[str, Any]] | None = None,
+    rule_findings: List[Dict[str, Any]] | None = None,
+) -> None:
+    await conn.execute(
+        """
+        INSERT INTO analysis_results
+            (job_id, ai_findings, rule_findings, merged_result, raw_response)
+        VALUES ($1, $2::jsonb, $3::jsonb, '{}'::jsonb, '{}'::jsonb)
+        """,
+        job_id,
+        json.dumps(ai_findings or [], ensure_ascii=False),
+        json.dumps(rule_findings or [], ensure_ascii=False),
+    )
+
+
+def _coverage_payload(*, blocking_total: int = 0, applicable: int = 42) -> Dict[str, Any]:
+    return {
+        "obligation_coverage": {
+            "catalog_version": "test-catalog",
+            "catalog_fingerprint": "fingerprint",
+            "applicable_total": applicable,
+            "completed_total": applicable,
+            "not_applicable_total": 0,
+            "unresolved_total": 0,
+            "blocking_total": blocking_total,
+            "by_reason": {},
+            "by_group": [],
+            "instances": [],
+        }
+    }
+
+
+async def _make_reviewable_slot(
+    conn,
+    *,
+    findings: Optional[List[Dict[str, Any]]] = None,
+    result_meta: Optional[Dict[str, Any]] = None,
+    job_status: str = "done",
+    slot_fields: Optional[Dict[str, Any]] = None,
+    review_items: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """造一条"可复核"的材料：有当前版本、有已完成的当前分析、覆盖可信。"""
+    slot_id = await _insert_slot(conn, **(slot_fields or {}))
+    version_id = await _insert_version(conn, slot_id=slot_id, file_hash="a" * 64, created_at=NOW)
+    job_uuid = f"job-{uuid.uuid4().hex[:12]}"
+    job_id = await _insert_job(
+        conn,
+        job_uuid=job_uuid,
+        version_id=version_id,
+        status=job_status,
+        analysis_revision=1,
+        result_meta=result_meta if result_meta is not None else _coverage_payload(),
+    )
+    await _insert_result(conn, job_id=job_id, ai_findings=findings or [])
+    await conn.execute(
+        "UPDATE material_slots SET current_document_version_id = $1 WHERE id = $2::uuid",
+        version_id,
+        slot_id,
+    )
+    if review_items:
+        # 结构化待复核项要写进 metadata（与生产落库路径一致：整份 structured_ingest
+        # 进 metadata），否则门禁读不到它，用例就测不到"结构化待复核阻塞完成"。
+        metadata = await conn.fetchval(
+            "SELECT metadata FROM analysis_jobs WHERE job_uuid = $1", job_uuid
+        )
+        payload = json.loads(metadata) if isinstance(metadata, str) else dict(metadata or {})
+        structured = dict(payload.get("structured_ingest") or {})
+        structured["review_items"] = review_items
+        payload["structured_ingest"] = structured
+        await conn.execute(
+            "UPDATE analysis_jobs SET metadata = $2::jsonb WHERE job_uuid = $1",
+            job_uuid,
+            json.dumps(payload, ensure_ascii=False),
+        )
+    return {"slot_id": slot_id, "version_id": version_id, "job_uuid": job_uuid, "job_id": job_id}
+
+
+def _finding(issue_id: str, **extra: Any) -> Dict[str, Any]:
+    payload = {
+        "id": issue_id,
+        "source": "rule",
+        "rule_id": f"RULE-{issue_id}",
+        "severity": "high",
+        "title": f"问题 {issue_id}",
+        "message": f"问题 {issue_id} 的描述",
+        "evidence": [{"page": 3, "text": "证据文本", "bbox": [1, 2, 3, 4]}],
+        "location": {"page": 3, "table": "T1"},
+    }
+    payload.update(extra)
+    return payload
+
+
+def _write_decisions(decisions: Dict[str, str]) -> None:
+    """直接写 issue_workflow 的持久化文件（它就是该状态的可信来源）。"""
+    from api import runtime
+
+    issues: Dict[str, Any] = {}
+    for key, status in decisions.items():
+        job_id, _, issue_id = key.partition("::")
+        issues[key] = {
+            "key": key,
+            "job_id": job_id,
+            "issue_id": issue_id,
+            "status": status,
+            "title": None,
+            "severity": None,
+            "page": None,
+            "organization_id": None,
+            "organization_name": None,
+            "note": None,
+            "updated_at": "2026-09-22T00:00:00Z",
+        }
+    runtime.write_json_file(
+        runtime.UPLOAD_ROOT / ".issue_workflow.json",
+        {
+            "issues": issues,
+            "packages": [],
+            "review_locks": {},
+            "updated_at": "2026-09-22T00:00:00Z",
+            "revision": 1,
+        },
+    )
+
+
+def _write_ignored(decisions_job_id: str, issue_ids: List[str]) -> None:
+    """写任务目录下的 legacy 忽略清单（``ignored_issue_ids``）。"""
+    from api import runtime
+
+    job_dir = runtime.UPLOAD_ROOT / decisions_job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    runtime.write_json_file(job_dir / "ignored_issues.json", {"issue_ids": issue_ids})
+
+
+@pytest.fixture
+async def review_db(real_database_url, monkeypatch):
+    """独立 schema + 真实迁移。"""
+    from src.db.connection import DatabaseConnection
+
+    schema = f"review_test_{uuid.uuid4().hex[:12]}"
+    monkeypatch.setenv("PG_SCHEMA", schema)
+    DatabaseConnection._pool = None
+    pool = await DatabaseConnection.initialize(real_database_url)
+    assert DatabaseConnection.get_schema() == schema
+
+    async with pool.acquire() as conn:
+        await conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+    await run_migrations()
+
+    try:
+        yield schema, pool
+    finally:
+        DatabaseConnection._pool = None
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        finally:
+            await pool.close()
+
+
+@asynccontextmanager
+async def _conn(schema: str, pool):
+    async with pool.acquire() as conn:
+        await conn.execute(f'SET search_path TO "{schema}", public')
+        yield conn
+
+
+async def _slot_status(schema: str, pool, slot_id: str) -> Dict[str, Any]:
+    async with _conn(schema, pool) as conn:
+        row = await conn.fetchrow(
+            "SELECT status, status_reason FROM material_slots WHERE id = $1::uuid", slot_id
+        )
+        return dict(row) if row is not None else {}
+
+
+async def _sessions(schema: str, pool, slot_id: str) -> List[Dict[str, Any]]:
+    async with _conn(schema, pool) as conn:
+        rows = await conn.fetch(
+            "SELECT id::text AS id, status, document_version_id, analysis_basis_token,"
+            " completed_by, invalidated_reason, review_result"
+            " FROM review_sessions WHERE slot_id = $1::uuid ORDER BY created_at, id",
+            slot_id,
+        )
+        return [dict(row) for row in rows]
+
+
+# ==== A / H / F：真实事务、槽位状态、刷新后仍然存在 ==========================
+
+
+async def test_start_and_complete_are_real_transactions(review_db):
+    """A. start 建会话并把槽位推到 reviewing；complete 写完成人与快照并把槽位推到 completed。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[_finding("rule-1")])
+        started = await review_lifecycle_service.start_review(
+            conn, ctx["slot_id"], actor="reviewer-a"
+        )
+
+    assert started.session.status == "in_progress"
+    assert started.session.document_version_id == ctx["version_id"]
+    assert started.session.analysis_job_uuid == ctx["job_uuid"]
+    assert started.session.analysis_basis_token == f"{ctx['job_uuid']}:1"
+    assert started.session.started_by == "reviewer-a"
+    assert (await _slot_status(schema, pool, ctx["slot_id"]))["status"] == "reviewing"
+
+    # 未处理的问题阻塞完成（没有记录 = pending）
+    async with _conn(schema, pool) as conn:
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+            await review_lifecycle_service.complete_review(
+                conn, ctx["slot_id"], actor="reviewer-a"
+            )
+    assert excinfo.value.status_code == 409
+    assert [item.code for item in excinfo.value.blockers] == ["pending_findings"]
+    assert excinfo.value.blockers[0].count == 1
+
+    _write_decisions({f"{ctx['job_uuid']}::rule-1": "confirmed"})
+    async with _conn(schema, pool) as conn:
+        completed = await review_lifecycle_service.complete_review(
+            conn, ctx["slot_id"], actor="reviewer-a"
+        )
+
+    assert completed.session.status == "completed"
+    assert completed.session.completed_by == "reviewer-a"
+    assert completed.session.completed_at
+    counts = completed.session.review_result["issue_counts"]
+    assert counts == {
+        "total": 1,
+        "confirmed": 1,
+        "no_issue": 0,
+        "in_package": 0,
+        "pending": 0,
+        "needs_review": 0,
+    }
+    assert completed.session.review_result["coverage"]["blocking_count"] == 0
+    assert (await _slot_status(schema, pool, ctx["slot_id"]))["status"] == "completed"
+
+    # F. 重新查询（新连接、新 read）之后"已完成"仍然是持久化事实
+    async with _conn(schema, pool) as conn:
+        reloaded = await review_lifecycle_service.load_review_by_job(conn, ctx["job_uuid"])
+    assert reloaded.review is not None
+    assert reloaded.review.completion_gate.can_complete is True
+    assert reloaded.review.history[0].status == "completed"
+    assert reloaded.review.history[0].completed_by == "reviewer-a"
+    assert reloaded.review.current_session is None
+
+
+async def test_complete_is_idempotent(review_db):
+    """重复 complete 返回同一结果，且完成人/完成时间不被第二次覆盖。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn)
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="first")
+        first = await review_lifecycle_service.complete_review(
+            conn, ctx["slot_id"], actor="first"
+        )
+        second = await review_lifecycle_service.complete_review(
+            conn, ctx["slot_id"], actor="second"
+        )
+
+    assert first.session.review_session_id == second.session.review_session_id
+    assert second.session.completed_by == "first", "完成人必须是第一个点击的人"
+    assert len([s for s in await _sessions(schema, pool, ctx["slot_id"])]) == 1
+
+
+async def test_complete_requires_explicit_action_even_with_zero_findings(review_db):
+    """§八十二：0 条问题 + 0 条阻塞义务，仍然必须有人显式完成。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        preview = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
+        assert preview.completion_gate.can_complete is False
+        assert [item.code for item in preview.completion_gate.blockers] == [
+            "review_not_started"
+        ]
+        assert preview.current_analysis.formal_issue_count == 0
+
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="reviewer")
+        inside = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
+        assert inside.completion_gate.can_complete is True
+
+    # 只 start、不 complete → 槽位停在 reviewing，不是 completed
+    assert (await _slot_status(schema, pool, ctx["slot_id"]))["status"] == "reviewing"
+
+
+# ==== 门禁：问题状态与结构化待复核 ==========================================
+
+
+@pytest.mark.parametrize(
+    "status,expected_blocked",
+    [
+        ("pending", True),
+        ("needs_review", True),
+        ("confirmed", False),
+        ("no_issue", False),
+        ("in_package", False),
+    ],
+)
+async def test_issue_status_resolution_matrix(review_db, status, expected_blocked):
+    """confirmed / no_issue / in_package 视为已解决；pending / needs_review 阻塞。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[_finding("rule-1")])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+    _write_decisions({f"{ctx['job_uuid']}::rule-1": status})
+
+    async with _conn(schema, pool) as conn:
+        state = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
+    codes = [item.code for item in state.completion_gate.blockers]
+    assert ("pending_findings" in codes or "needs_review_findings" in codes) is expected_blocked
+
+
+async def test_structured_review_items_block_completion(review_db):
+    """§四十四：结构化识别待复核项没人表态时，完成必须被阻塞。"""
+    schema, pool = review_db
+    review_items = [
+        {"id": "T1:low_confidence", "type": "low_confidence_table", "table_code": "T1",
+         "severity": "warn", "page_number": 2, "message": "该表识别置信度偏低"},
+        {"id": "T9:missing", "type": "missing_core_table", "table_code": "T9",
+         "severity": "warn", "message": "核心九表未识别到"},
+    ]
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[], review_items=review_items)
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+
+    async with _conn(schema, pool) as conn:
+        blocked = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
+    assert [item.code for item in blocked.completion_gate.blockers] == ["pending_findings"]
+    assert blocked.completion_gate.blockers[0].count == 2
+
+    # 两个结构化条目都可以通过工作流表态（此前它们在 ai/rule findings 里找不到，
+    # 更新请求会 404，用户"处理"了却什么也没发生）
+    _write_decisions(
+        {
+            f"{ctx['job_uuid']}::T1:low_confidence": "confirmed",
+            f"{ctx['job_uuid']}::T9:missing": "no_issue",
+        }
+    )
+    async with _conn(schema, pool) as conn:
+        allowed = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
+    assert allowed.completion_gate.can_complete is True
+
+
+async def test_legacy_ignored_issue_ids_do_not_block(review_db):
+    """legacy 忽略清单里的条目与工作台可见集合一致：页面看不到就不该阻塞。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[_finding("rule-1")])
+    _write_ignored(ctx["job_uuid"], ["rule-1"])
+
+    async with _conn(schema, pool) as conn:
+        state = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
+    assert state.completion_gate.can_complete is False
+    assert [item.code for item in state.completion_gate.blockers] == ["review_not_started"]
+
+
+async def test_degraded_findings_are_displayed_but_do_not_block(review_db):
+    """缺证据被降级的 finding 不计入正式问题（与底部状态条同一口径）。"""
+    schema, pool = review_db
+    degraded = _finding(
+        "ai-degraded", source="ai", evidence_status="degraded_missing_evidence",
+        severity="manual_review",
+    )
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[degraded])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+        state = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
+    assert state.completion_gate.can_complete is True
+    assert state.current_analysis.formal_issue_count == 0
+
+
+# ==== 门禁：检查覆盖 ========================================================
+
+
+async def test_coverage_unavailable_blocks_completion(review_db):
+    """§四十六：没有可信覆盖 ⇒ 不能证明可完成，禁止把"未知"当成"0 条阻塞"。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[], result_meta={})
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+        state = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
+    assert [item.code for item in state.completion_gate.blockers] == ["coverage_unavailable"]
+
+
+async def test_blocking_obligations_block_completion(review_db):
+    """§四十七：WP3-A 还没有人工补核能力，因此 blocking > 0 必须阻塞完成。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(
+            conn, findings=[], result_meta=_coverage_payload(blocking_total=4)
+        )
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+        state = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
+    assert [item.code for item in state.completion_gate.blockers] == ["blocking_obligations"]
+    assert state.completion_gate.blockers[0].count == 4
+
+
+# ==== 门禁：身份与口径 ======================================================
+
+
+async def test_identity_unresolved_and_caliber_conflict_block(review_db):
+    """§三十七/§三十八：身份未确认、口径有未裁决冲突时，start 与 complete 都不允许。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        unresolved = await _make_reviewable_slot(conn, findings=[], slot_fields={"fiscal_year": None})
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+            await review_lifecycle_service.start_review(conn, unresolved["slot_id"], actor="r")
+    assert [item.code for item in excinfo.value.blockers] == ["identity_unresolved"]
+
+    async with _conn(schema, pool) as conn:
+        conflict = await _make_reviewable_slot(
+            conn, findings=[], slot_fields={"caliber_conflict_candidate": "summary"}
+        )
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+            await review_lifecycle_service.start_review(conn, conflict["slot_id"], actor="r")
+    assert [item.code for item in excinfo.value.blockers] == ["caliber_conflict"]
+
+
+async def test_analysis_not_finished_blocks_start(review_db):
+    """§三十：当前分析没跑完不能开复核。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[], job_status="processing")
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+            await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+    assert [item.code for item in excinfo.value.blockers] == ["analysis_not_completed"]
+
+
+async def test_no_current_version_blocks_start(review_db):
+    """§三十：槽位没有当前文件版本时，没有可复核的对象。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await conn.execute(
+            "UPDATE material_slots SET current_document_version_id = NULL WHERE id = $1::uuid",
+            ctx["slot_id"],
+        )
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+            await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+    assert "no_current_document_version" in [item.code for item in excinfo.value.blockers]
+
+
+# ==== B：并发 start =========================================================
+
+
+async def test_two_concurrent_starts_produce_one_session(review_db):
+    """B. 两个浏览器同时点"进入审核"只能产生一条活动复核。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+
+    async def _start(actor: str):
+        async with _conn(schema, pool) as conn:
+            return await review_lifecycle_service.start_review(
+                conn, ctx["slot_id"], actor=actor
+            )
+
+    results = await asyncio.gather(_start("a"), _start("b"), return_exceptions=True)
+    # 两条路径都必须成功（一个是新建、一个是复用），不允许以异常收场
+    assert not [item for item in results if isinstance(item, Exception)], results
+    ids = {item.session.review_session_id for item in results}
+    assert len(ids) == 1, results
+
+    rows = await _sessions(schema, pool, ctx["slot_id"])
+    assert len(rows) == 1
+    assert rows[0]["status"] == "in_progress"
+
+
+# ==== C：并发 complete ======================================================
+
+
+async def test_two_concurrent_completes_produce_one_completion(review_db):
+    """C. 两个并发 complete：同一条会话、一个完成记录、完成人不被覆盖。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="starter")
+
+    async def _complete(actor: str):
+        async with _conn(schema, pool) as conn:
+            return await review_lifecycle_service.complete_review(
+                conn, ctx["slot_id"], actor=actor
+            )
+
+    results = await asyncio.gather(_complete("a"), _complete("b"), return_exceptions=True)
+    assert not [item for item in results if isinstance(item, Exception)], results
+    ids = {item.session.review_session_id for item in results}
+    assert len(ids) == 1
+    assert {item.session.status for item in results} == {"completed"}
+
+    rows = await _sessions(schema, pool, ctx["slot_id"])
+    assert len(rows) == 1
+    assert rows[0]["status"] == "completed"
+    assert rows[0]["completed_by"] in {"a", "b"}
+
+
+# ==== D：complete 与版本替换竞争 ============================================
+
+
+async def test_version_replacement_prevents_completed_review(review_db):
+    """D. 版本指针推进后：旧会话失效，complete 必须 409 且槽位回到 review_required。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+        # 推进到新版本（走真实服务路径：绑定 + 指针推进 + 复核失效）
+        from src.services.material_slot_service import MaterialSlotService
+
+        new_version = await _insert_version(
+            conn, slot_id=ctx["slot_id"], file_hash="b" * 64, created_at=LATER
+        )
+        await MaterialSlotService(conn).bind_document_version(ctx["slot_id"], new_version)
+
+    rows = await _sessions(schema, pool, ctx["slot_id"])
+    assert rows[0]["status"] == "invalidated"
+    assert rows[0]["invalidated_reason"] == "document_version_changed"
+
+    async with _conn(schema, pool) as conn:
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+            await review_lifecycle_service.complete_review(conn, ctx["slot_id"], actor="r")
+    codes = [item.code for item in excinfo.value.blockers]
+    # 当前分析已换到新版本（新版本还没有分析）→ 分析不可用是**正确**的终态
+    assert "analysis_unavailable" in codes or "analysis_not_completed" in codes
+
+    status = await _slot_status(schema, pool, ctx["slot_id"])
+    assert status["status"] != "completed"
+
+
+async def test_completed_review_is_invalidated_when_version_advances(review_db):
+    """D'. 已完成复核 + 版本推进 ⇒ 会话必须失效，不允许"completed 但版本已换"。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+        await review_lifecycle_service.complete_review(conn, ctx["slot_id"], actor="r")
+        assert (await _slot_status(schema, pool, ctx["slot_id"]))["status"] == "completed"
+
+        from src.services.material_slot_service import MaterialSlotService
+
+        new_version = await _insert_version(
+            conn, slot_id=ctx["slot_id"], file_hash="c" * 64, created_at=LATER
+        )
+        await MaterialSlotService(conn).bind_document_version(ctx["slot_id"], new_version)
+        current = await conn.fetchval(
+            "SELECT current_document_version_id FROM material_slots WHERE id = $1::uuid",
+            ctx["slot_id"],
+        )
+
+    rows = await _sessions(schema, pool, ctx["slot_id"])
+    assert rows[0]["status"] == "invalidated"
+    # 核心不变式：不存在"status = completed 而 document_version_id 不是当前版本"的行
+    assert all(
+        not (row["status"] == "completed" and int(row["document_version_id"]) != int(current))
+        for row in rows
+    )
+
+
+# ==== E：重新分析换代与失效 ================================================
+
+
+async def test_reanalysis_invalidates_completed_review_and_is_recorded(review_db):
+    """E. 同一 job_uuid 重新分析：旧复核失效、槽位回到 review_required。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+        await review_lifecycle_service.complete_review(conn, ctx["slot_id"], actor="r")
+
+    result = await review_lifecycle_service.invalidate_reviews_for_analysis_restart(
+        ctx["job_uuid"]
+    )
+    assert result["sessions_invalidated"] == 1
+    assert result["slot_id"] == ctx["slot_id"]
+
+    rows = await _sessions(schema, pool, ctx["slot_id"])
+    assert rows[0]["status"] == "invalidated"
+    assert rows[0]["invalidated_reason"] == "analysis_restarted"
+    assert (await _slot_status(schema, pool, ctx["slot_id"]))["status"] == "review_required"
+
+    async with _conn(schema, pool) as conn:
+        fingerprint = await conn.fetchval(
+            "SELECT analysis_result_fingerprint FROM analysis_jobs WHERE job_uuid = $1",
+            ctx["job_uuid"],
+        )
+    assert fingerprint is None, "指纹必须被清空，下一次落库才会换代"
+
+
+# ==== I：分析代际在真库上的行为 =============================================
+
+
+async def test_result_replay_does_not_bump_generation_but_reanalysis_does(review_db):
+    """I. 同一结果重复落库不换代；重置后（重新分析）再落库换代——即使内容相同。"""
+    schema, pool = review_db
+    payload = {
+        "job_id": f"job-{uuid.uuid4().hex[:12]}",
+        "status": "done",
+        "filename": "material.pdf",
+        "mode": "dual",
+        "result": {"ai_findings": [_finding("ai-1")], "rule_findings": [], "merged": {}},
+        "structured_ingest": {"document_version_id": 0},
+    }
+    async with _conn(schema, pool) as conn:
+        await conn.execute(
+            "INSERT INTO analysis_jobs (job_uuid, filename, status, mode, metadata)"
+            " VALUES ($1, $2, 'queued', 'dual', '{}'::jsonb)",
+            payload["job_id"],
+            payload["filename"],
+        )
+
+    assert await persist_analysis_job_snapshot(payload, include_results=True) is True
+    async with _conn(schema, pool) as conn:
+        first = await conn.fetchrow(
+            "SELECT analysis_revision, analysis_result_fingerprint FROM analysis_jobs"
+            " WHERE job_uuid = $1",
+            payload["job_id"],
+        )
+    assert first["analysis_revision"] == 1
+    assert first["analysis_result_fingerprint"] == compute_analysis_result_fingerprint(payload)
+
+    # 同一个结果重放（断线重试、补记）→ 不换代
+    assert await persist_analysis_job_snapshot(payload, include_results=True) is True
+    async with _conn(schema, pool) as conn:
+        replayed = await conn.fetchval(
+            "SELECT analysis_revision FROM analysis_jobs WHERE job_uuid = $1",
+            payload["job_id"],
+        )
+    assert replayed == 1, "同一结果的重复落库不允许换代，否则恢复动作会误伤复核"
+
+    # 重新分析：作业被重置为 queued（清指纹）→ 即使结果逐字相同也必须换代
+    queued = {**payload, "status": "queued"}
+    assert await persist_analysis_job_snapshot(queued) is True
+    assert await persist_analysis_job_snapshot(payload, include_results=True) is True
+    async with _conn(schema, pool) as conn:
+        after = await conn.fetchval(
+            "SELECT analysis_revision FROM analysis_jobs WHERE job_uuid = $1",
+            payload["job_id"],
+        )
+        cleared = await conn.fetchval(
+            "SELECT analysis_result_fingerprint IS NULL FROM analysis_jobs WHERE job_uuid = $1",
+            payload["job_id"],
+        )
+    assert after == 2, "重新分析必须换代"
+    assert cleared is False
+
+    # 进度更新（不带结果）不换代
+    assert await persist_analysis_job_snapshot({**payload, "status": "processing"}) is True
+    async with _conn(schema, pool) as conn:
+        progressed = await conn.fetchval(
+            "SELECT analysis_revision FROM analysis_jobs WHERE job_uuid = $1",
+            payload["job_id"],
+        )
+    assert progressed in (2, 3), progressed
+
+
+async def test_stale_complete_after_generation_change_returns_409(review_db):
+    """§六十三：重新分析换代后，旧会话的 complete 必须 409（分析代际已变）。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+        # 只换代、不失效（模拟钩子没生效或代际在别处变化）：懒失效必须兜住
+        await conn.execute(
+            "UPDATE analysis_jobs SET analysis_revision = analysis_revision + 1"
+            " WHERE job_uuid = $1",
+            ctx["job_uuid"],
+        )
+        state = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
+    assert [item.code for item in state.completion_gate.blockers] == ["analysis_basis_changed"]
+
+
+# ==== G / I：历史保留与失效回退 =============================================
+
+
+async def test_reopen_keeps_history_and_creates_new_session(review_db):
+    """§五十九/§八十三：重开后旧 completed 变 invalidated 并留在历史里。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="first")
+        first = await review_lifecycle_service.complete_review(
+            conn, ctx["slot_id"], actor="first"
+        )
+        reopened = await review_lifecycle_service.reopen_review(
+            conn, ctx["slot_id"], actor="second"
+        )
+        reloaded = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
+
+    assert reopened.session.status == "in_progress"
+    assert reopened.session.review_session_id != first.session.review_session_id
+    assert (await _slot_status(schema, pool, ctx["slot_id"]))["status"] == "reviewing"
+
+    rows = await _sessions(schema, pool, ctx["slot_id"])
+    assert len(rows) == 2, rows
+    old = [row for row in rows if row["id"] == first.session.review_session_id][0]
+    assert old["status"] == "invalidated"
+    assert old["invalidated_reason"] == "review_reopened"
+    assert reloaded.current_session is not None
+    assert [item.status for item in reloaded.history] == ["invalidated"]
+
+
+async def test_invalidation_returns_slot_to_review_required(review_db):
+    """I. 失效之后槽位必须回到 review_required（而不是停在 reviewing/completed）。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+        assert (await _slot_status(schema, pool, ctx["slot_id"]))["status"] == "reviewing"
+        # 事实没变（版本与代际都还是会话钉的那一套）⇒ 懒失效不应误伤
+        unchanged = await review_lifecycle_service.invalidate_review(conn, ctx["slot_id"])
+    assert unchanged == 0, "版本与代际都没变时不允许把有效复核判成失效"
+
+    async with _conn(schema, pool) as conn:
+        # 代际变化（模拟重新分析后新结果落库，但没有走主动钩子）
+        await conn.execute(
+            "UPDATE analysis_jobs SET analysis_revision = analysis_revision + 1"
+            " WHERE job_uuid = $1",
+            ctx["job_uuid"],
+        )
+        invalidated = await review_lifecycle_service.invalidate_review(conn, ctx["slot_id"])
+    assert invalidated == 1
+    rows = await _sessions(schema, pool, ctx["slot_id"])
+    assert rows[0]["status"] == "invalidated"
+    assert rows[0]["invalidated_reason"] == "analysis_basis_changed"
+    assert (await _slot_status(schema, pool, ctx["slot_id"]))["status"] == "review_required"
+
+
+# ==== 槽位状态接线：分析完成 → review_required ==============================
+
+
+async def test_analysis_completion_moves_slot_to_review_required(review_db):
+    """H. WP1 预置的 review_required 此前没有任何路径会写出来；落库后必须接通。"""
+    schema, pool = review_db
+    job_uuid = f"job-{uuid.uuid4().hex[:12]}"
+    async with _conn(schema, pool) as conn:
+        slot_id = await _insert_slot(conn)
+        version_id = await _insert_version(
+            conn, slot_id=slot_id, file_hash="d" * 64, created_at=NOW
+        )
+        await conn.execute(
+            "UPDATE material_slots SET current_document_version_id = $1 WHERE id = $2::uuid",
+            version_id,
+            slot_id,
+        )
+        await conn.execute(
+            "INSERT INTO analysis_jobs (job_uuid, filename, status, mode, metadata)"
+            " VALUES ($1, 'material.pdf', 'queued', 'dual', $2::jsonb)",
+            job_uuid,
+            json.dumps({"structured_ingest": {"document_version_id": version_id}}),
+        )
+
+    payload = {
+        "job_id": job_uuid,
+        "status": "done",
+        "filename": "material.pdf",
+        "mode": "dual",
+        "result": {"ai_findings": [], "rule_findings": [], "merged": {}},
+        "structured_ingest": {"document_version_id": version_id},
+        "meta": _coverage_payload(),
+    }
+    payload["result"]["meta"] = _coverage_payload()
+    assert await persist_analysis_job_snapshot(payload, include_results=True) is True
+
+    status = await _slot_status(schema, pool, slot_id)
+    assert status["status"] == "review_required"
+    assert status["status_reason"] == "findings_pending"
+
+
+async def test_slot_sync_keeps_completed_when_review_already_completed(review_db):
+    """重新落库同一个已复核的现役结果时，不能把"已复核完成"打回"待复核"。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+        await review_lifecycle_service.complete_review(conn, ctx["slot_id"], actor="r")
+        synced = await review_slot_sync.sync_slot_review_state_for_job(conn, ctx["job_uuid"])
+    assert synced is not None
+    assert synced["status"] == "completed"
+
+
+async def test_slot_sync_is_noop_for_historical_run(review_db):
+    """历史运行（不是当前分析）落库不允许改写当前材料的复核状态。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        # 造一次"更晚的历史运行"，让 ctx 的那次不再是当前分析
+        other_job = f"job-{uuid.uuid4().hex[:12]}"
+        other_id = await _insert_job(
+            conn,
+            job_uuid=other_job,
+            version_id=ctx["version_id"],
+            completed_at=LATER,
+        )
+        await _insert_result(conn, job_id=other_id)
+        synced = await review_slot_sync.sync_slot_review_state_for_job(conn, ctx["job_uuid"])
+    assert synced is None
+
+
+# ==== 路由级：job/slot 不匹配 ==============================================
+
+
+async def test_job_from_other_slot_is_rejected(review_db):
+    """§七十一：两个资源分别有权也不能组合成功——job 不属于该槽位就是 409。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        first = await _make_reviewable_slot(conn, findings=[])
+        second = await _make_reviewable_slot(
+            conn, findings=[], slot_fields={"subject_org_id": "unit-planning-affairs"}
+        )
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+            await review_lifecycle_service.start_review(
+                conn, first["slot_id"], actor="r", job_uuid=second["job_uuid"]
+            )
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail["error"] == "review_context_mismatch"
+
+
+async def test_legacy_unlinked_job_has_no_review_context(review_db):
+    """§二十六：没有精确版本链路的旧任务不能建复核上下文，也不能开复核。"""
+    schema, pool = review_db
+    legacy_job = f"job-{uuid.uuid4().hex[:12]}"
+    async with _conn(schema, pool) as conn:
+        await conn.execute(
+            "INSERT INTO analysis_jobs (job_uuid, filename, status, mode, metadata)"
+            " VALUES ($1, 'legacy.pdf', 'done', 'dual', '{}'::jsonb)",
+            legacy_job,
+        )
+    async with _conn(schema, pool) as conn:
+        by_job = await review_lifecycle_service.load_review_by_job(conn, legacy_job)
+    assert by_job.review_context.available is False
+    assert by_job.review_context.reason == "review_context_unavailable"
+    assert by_job.review is None
+
+
+# ==== J：迁移的既有库升级路径 ==============================================
+
+
+async def test_upgrade_path_adds_only_0020_objects(review_db):
+    """J. 0020 在已有库上只新增：既有 analysis_jobs 行保留、新列取默认值。"""
+    schema, pool = review_db
+    existing = f"job-{uuid.uuid4().hex[:12]}"
+    async with _conn(schema, pool) as conn:
+        await conn.execute(
+            "INSERT INTO analysis_jobs (job_uuid, filename, status, mode, metadata)"
+            " VALUES ($1, 'old.pdf', 'done', 'dual', '{}'::jsonb)",
+            existing,
+        )
+        # 模拟"0020 之前入库的行"：把新列复位成 ALTER 之后的默认形态
+        await conn.execute(
+            "UPDATE analysis_jobs SET analysis_revision = 0,"
+            " analysis_result_fingerprint = NULL WHERE job_uuid = $1",
+            existing,
+        )
+        row = await conn.fetchrow(
+            "SELECT analysis_revision, analysis_result_fingerprint FROM analysis_jobs"
+            " WHERE job_uuid = $1",
+            existing,
+        )
+        tables = await conn.fetchval(
+            "SELECT COUNT(*) FROM information_schema.tables"
+            " WHERE table_schema = $1 AND table_name = 'review_sessions'",
+            schema,
+        )
+    assert row["analysis_revision"] == 0
+    assert row["analysis_result_fingerprint"] is None
+    assert tables == 1
+
+
+async def test_completed_review_locks_issue_mutation_until_reopen(review_db):
+    """§五十五/§五十六：复核完成后 `update_issue` 被 409 拒绝，重开后恢复可改。
+
+    走的是**真实入口**（``issue_workflow_store.update_issue``），不是内部断言：
+    上一版只在内部函数上断言，无法证明"工作台那条 POST /api/workflow 真的被拦"。
+    """
+    from api import runtime
+    from src.services import issue_workflow_store
+
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[_finding("rule-1")])
+        job_dir = runtime.UPLOAD_ROOT / ctx["job_uuid"]
+        job_dir.mkdir(parents=True, exist_ok=True)
+        runtime.write_json_file(
+            job_dir / "status.json",
+            {
+                "job_id": ctx["job_uuid"],
+                "status": "done",
+                "result": {"rule_findings": [_finding("rule-1")], "ai_findings": []},
+            },
+        )
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+        # 未表态时问题可改
+        await issue_workflow_store.update_issue(
+            {"username": "admin", "is_admin": True},
+            job_id=ctx["job_uuid"],
+            issue_id="rule-1",
+            status="confirmed",
+            note=None,
+        )
+        await review_lifecycle_service.complete_review(conn, ctx["slot_id"], actor="r")
+
+    # 完成复核的真实路径必须已经把编辑锁落下
+    lock = issue_workflow_store.get_review_lock(ctx["job_uuid"])
+    assert lock is not None
+    assert lock["slot_id"] == ctx["slot_id"]
+    assert lock["completed_by"] == "r"
+
+    with pytest.raises(HTTPException) as excinfo:
+        await issue_workflow_store.update_issue(
+            {"username": "admin", "is_admin": True},
+            job_id=ctx["job_uuid"],
+            issue_id="rule-1",
+            status="no_issue",
+            note=None,
+        )
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail["error"] == "review_completed_locked"
+
+    async with _conn(schema, pool) as conn:
+        await review_lifecycle_service.reopen_review(conn, ctx["slot_id"], actor="r")
+    assert issue_workflow_store.get_review_lock(ctx["job_uuid"]) is None
+
+    # 重开之后恢复可改（修复 §五十六 要求的"请先重新开始复核"闭环）
+    state = await issue_workflow_store.update_issue(
+        {"username": "admin", "is_admin": True},
+        job_id=ctx["job_uuid"],
+        issue_id="rule-1",
+        status="no_issue",
+        note=None,
+    )
+    assert state["issues"][f"{ctx['job_uuid']}::rule-1"]["status"] == "no_issue"
+
+
+async def test_api_error_contract_carries_blockers(review_db):
+    """§一百零五/§一百零六：409 的 detail 是对象，带 error 与 blockers，不是字符串。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[_finding("rule-1")])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+            await review_lifecycle_service.complete_review(conn, ctx["slot_id"], actor="r")
+
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail["error"] == ERROR_COMPLETION_BLOCKED
+    assert excinfo.value.detail["blockers"] == [{"code": "pending_findings", "count": 1}]

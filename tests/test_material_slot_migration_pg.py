@@ -96,15 +96,23 @@ async def test_migrations_apply_and_second_run_is_noop(db):
 
 
 async def test_upgrade_from_existing_database_applies_only_0019(db):
-    """已有库升级路径：库已经停在 0018，跑迁移只应新增 0019 的内容。
+    """已有库升级路径：库停在 0018，跑迁移只应新增 0019（及其后的附加迁移）。
 
     全新库建表与既有库升级是两条不同的风险路径。全新库出错是"建不起来"，
     一眼就能发现；既有库出错可能是"悄悄改了老数据"，很久以后才暴露。
     所以这里先把 0018 之前的状态原样搭出来，再跑迁移。
+
+    WP3-A 起改成**按位置切分**："0019 之后新增的迁移"（0020 复核生命周期）
+    同样属于升级路径要干的事，因此期望值从"只新增 1 条"改成"新增 0019
+    及其后所有尚未应用的迁移"。原来那种"除 0019 外全部先搭出来"的写法
+    把"0019 一定是最新一条"写死了：新增 0020 后它会先把 0020 也搭出来，
+    而 0020 依赖 material_slots，于是这条用例以与断言无关的理由失败。
     """
     schema, pool = db
-    prior = [item for item in MIGRATIONS if item["id"] != MIGRATION_ID]
-    assert len(prior) == len(MIGRATIONS) - 1
+    ids = [item["id"] for item in MIGRATIONS]
+    marker_index = ids.index(MIGRATION_ID)
+    prior = MIGRATIONS[:marker_index]
+    pending_count = len(MIGRATIONS) - marker_index
 
     async with _conn(schema, pool) as connection:
         await ensure_migrations_table(connection, schema)
@@ -114,9 +122,12 @@ async def test_upgrade_from_existing_database_applies_only_0019(db):
             await connection.execute(
                 f'INSERT INTO "{schema}".schema_migrations (id) VALUES ($1)', migration["id"]
             )
-        # 升级前：material_slots 尚不存在
+        # 升级前：0019 与 0020 的对象都还不存在
         assert await connection.fetchval(
             "SELECT to_regclass($1) IS NOT NULL", f'"{schema}".material_slots'
+        ) is False
+        assert await connection.fetchval(
+            "SELECT to_regclass($1) IS NOT NULL", f'"{schema}".review_sessions'
         ) is False
         before = await connection.fetchval(f'SELECT COUNT(*) FROM "{schema}".schema_migrations')
 
@@ -124,7 +135,7 @@ async def test_upgrade_from_existing_database_applies_only_0019(db):
 
     async with _conn(schema, pool) as connection:
         after = await connection.fetchval(f'SELECT COUNT(*) FROM "{schema}".schema_migrations')
-        assert after == before + 1, "升级路径只应新增一条迁移记录"
+        assert after == before + pending_count, "升级路径只应新增尚未应用的迁移"
         assert await connection.fetchval(
             "SELECT to_regclass($1) IS NOT NULL", f'"{schema}".material_slots'
         ) is True
@@ -137,6 +148,15 @@ async def test_upgrade_from_existing_database_applies_only_0019(db):
             """,
             schema,
         ) == "YES"
+        # analysis_jobs 只新增两列，既有列一个没动
+        assert await connection.fetchval(
+            """
+            SELECT is_nullable FROM information_schema.columns
+            WHERE table_schema = $1 AND table_name = 'analysis_jobs'
+              AND column_name = 'job_uuid'
+            """,
+            schema,
+        ) == "NO"
 
 
 async def test_every_statement_replays_cleanly(db):
@@ -302,8 +322,23 @@ async def test_rollback_restores_previous_shape_without_losing_versions(db):
         )
 
         # --- 文档中记录的回滚 SQL，逐条原样执行 ---
-        # 顺序不能颠倒：fiscal_document_versions.slot_id 的外键指向 material_slots，
-        # 先删表会被 DependentObjectsStillExist 拒绝。必须先解除引用再删表。
+        #
+        # 顺序必须是**逆序**：0020 的 review_sessions 外键指向 material_slots，
+        # 0019 的 fiscal_document_versions.slot_id 也指向它。因此先撤 0020，
+        # 再撤 0019；直接删 material_slots 会被 DependentObjectsStillExist 拒绝。
+        # 这条用例的真实价值就在于"文档里写的回滚语句真的跑过"——
+        # 新增了依赖对象之后仍然照原样跑，正是它要发现的那类问题。
+        await connection.execute("DROP TABLE IF EXISTS review_sessions")
+        await connection.execute(
+            "ALTER TABLE analysis_jobs DROP COLUMN IF EXISTS analysis_result_fingerprint"
+        )
+        await connection.execute(
+            "ALTER TABLE analysis_jobs DROP COLUMN IF EXISTS analysis_revision"
+        )
+        await connection.execute(
+            f'DELETE FROM "{schema}".schema_migrations WHERE id = $1',
+            "2026-09-22_0020_review_lifecycle",
+        )
         await connection.execute(
             "ALTER TABLE fiscal_document_versions DROP COLUMN IF EXISTS slot_id"
         )
