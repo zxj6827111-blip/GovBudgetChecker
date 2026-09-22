@@ -36,9 +36,8 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from api import runtime
-from api.auth_utils import require_login, user_can_access_job, user_can_access_org
-from src.db.connection import DatabaseConnection
+from api import material_access, runtime
+from api.auth_utils import require_login, user_can_access_job
 from src.schemas.material_detail import (
     SlotDetailResponse,
     SlotRunListData,
@@ -96,38 +95,23 @@ _JURISDICTION_LEVELS = ("district", "city")
 
 
 # ---- 数据库连接（测试可替换） ------------------------------------------------
-
-
-async def _open_connection() -> Any:
-    """获取一条数据库连接。
-
-    单独抽成函数是为了让测试可以替换成假连接：接口契约（鉴权、筛选、分页、
-    字段名）与聚合逻辑因此可以在不连真库的情况下被完整验证。
-    """
-    return await DatabaseConnection.acquire()
-
-
-async def _close_connection(conn: Any) -> None:
-    await DatabaseConnection.release(conn)
+#
+# 共享实现已搬到 ``api/material_access.py``（复核接口与台账接口共用同一套
+# "取连接 / 503 口径 / 归还"）。这里保留同名模块级函数是为了让既有用例继续
+# 通过替换 ``materials_routes._open_connection`` 注入假连接——那是 WP2 接口契约
+# 能在无真库时被完整验证的前提，不因为搬运而失效。
+_open_connection = material_access.open_connection
+_close_connection = material_access.close_connection
 
 
 async def _with_connection(callback: Callable[[Any], Awaitable[Any]]) -> Any:
-    """取一条连接执行 ``callback(conn)``，无论成败都归还。
-
-    把"取连接 / 503 口径 / 归还"收在一处：两个查询服务（台账聚合与详情）
-    共用同一条失败语义，不会出现"一个接口 503、另一个 500"。
-    """
-    try:
-        conn = await _open_connection()
-    except Exception as exc:  # noqa: BLE001 - 连接失败的形态由驱动决定
-        # 与 ps_shared 的 503 口径一致：数据库没起来是可恢复的运维状态，
-        # 不是"这个接口不存在"，也不该伪装成空数据。
-        logger.warning("Material ledger database unavailable: %s", exc)
-        raise HTTPException(status_code=503, detail="material ledger database unavailable") from exc
-    try:
-        return await callback(conn)
-    finally:
-        await _close_connection(conn)
+    return await material_access.with_connection(
+        callback,
+        # 用 lambda 而非直接传函数对象：模块级名字必须在**调用时**再查一次，
+        # 否则测试的 monkeypatch 替换不会被看到。
+        opener=lambda: _open_connection(),
+        closer=lambda conn: _close_connection(conn),
+    )
 
 
 async def _run_query(
@@ -155,164 +139,29 @@ async def _run_search_query(
 
 
 # ---- 授权范围 ---------------------------------------------------------------
+#
+# 判定实现已搬到 ``api/material_access.py``：复核接口的授权目标是槽位，与材料详情
+# 完全同一套判定。两份实现做不到长期一致——漏掉一个组织列就是越权口子，
+# 而漏掉的那一处永远不会报错。这里保留原名（含前导下划线）只为不动既有调用点。
+
+_is_admin = material_access.is_admin
+MaterialAccessScope = material_access.MaterialAccessScope
 
 
-def _is_admin(user: Any) -> bool:
-    try:
-        return bool(user.get("is_admin"))
-    except AttributeError:  # pragma: no cover - 用户记录始终是 dict
-        return False
+def _build_access_scope(user: Any) -> material_access.MaterialAccessScope:
+    return material_access.build_access_scope(user)
 
 
-class MaterialAccessScope:
-    """当前账号在材料台账上的访问范围。
-
-    两个集合，**职责严格分开**（这是本轮最重要的一条设计）：
-
-    ``visible_org_ids``
-        可以读到哪些**数据**。判定复用仓库既有的 ``user_can_access_org``
-        （已授权节点可访问其后代），本模块不重新实现祖先/后代判断。
-        ``None`` = 管理员，不加权限过滤。
-
-    ``container_org_ids``
-        可以打开哪些**页面容器**。= 可见组织的**祖先闭包**。
-        用途只有一个：让"只授权了 dept-A / unit-A1"的账号仍能打开其所属区县或
-        部门页面做导航（否则他们连自己的材料都点不进去）。
-
-    容器可打开 ≠ 容器下数据可见：页面里的每一行仍然由 ``visible_org_ids``
-    在 SQL 层过滤。只放开容器而不加范围过滤，会从"过度拒绝"直接变成"越权泄露"。
-    """
-
-    __slots__ = ("visible_org_ids", "container_org_ids")
-
-    def __init__(
-        self,
-        *,
-        visible_org_ids: Optional[List[str]] = None,
-        container_org_ids: Optional[set] = None,
-    ) -> None:
-        self.visible_org_ids = visible_org_ids
-        self.container_org_ids = container_org_ids or set()
-
-    @property
-    def unrestricted(self) -> bool:
-        return self.visible_org_ids is None
-
-    @property
-    def has_any_visible_org(self) -> bool:
-        return bool(self.visible_org_ids)
-
-    def can_open_container(self, org_id: str) -> bool:
-        """能否打开该组织对应的页面（管理员恒可）。"""
-        if self.unrestricted:
-            return True
-        return str(org_id or "") in self.container_org_ids
+def _require_container_access(scope: Any, org_id: str, detail: str) -> None:
+    material_access.require_container_access(scope, org_id, detail)
 
 
-def _build_access_scope(user: Any) -> MaterialAccessScope:
-    """按既有 RBAC 语义算出可见范围与容器范围。
-
-    - 管理员：``visible_org_ids=None``，不加任何权限条件；
-    - 非管理员：遍历组织目录，凡 ``user_can_access_org`` 为真的节点都是可见节点
-      （层级不限：区县、部门、单位一视同仁）。这样 department / unit 授权不会被
-      错误折算成"必须能访问区县"，也不会把单位授权放大成整个部门；
-    - 组织目录不可用：返回空可见集合（fail-closed，宁可看不到也不越权）。
-    """
-    if _is_admin(user):
-        return MaterialAccessScope(visible_org_ids=None)
-
-    try:
-        storage = runtime.require_org_storage()
-    except Exception:  # noqa: BLE001 - 组织目录不可用时按"无授权"处理（fail-closed）
-        logger.warning("Organization catalog unavailable while resolving material scope")
-        return MaterialAccessScope(visible_org_ids=[])
-
-    records = list(storage.get_all())
-    by_id = {str(getattr(org, "id", "") or ""): org for org in records}
-
-    visible: List[str] = []
-    for org in records:
-        org_id = str(getattr(org, "id", "") or "")
-        if org_id and user_can_access_org(user, org_id):
-            visible.append(org_id)
-
-    # 容器集合 = 可见节点的祖先闭包（含可见节点自身）。
-    containers = set(visible)
-    for org_id in visible:
-        current = by_id.get(org_id)
-        seen: set = set()
-        while current is not None:
-            parent_id = str(getattr(current, "parent_id", "") or "")
-            if not parent_id or parent_id in seen:
-                break
-            seen.add(parent_id)
-            containers.add(parent_id)
-            current = by_id.get(parent_id)
-
-    return MaterialAccessScope(visible_org_ids=visible, container_org_ids=containers)
+def _require_unit_access(scope: Any, unit_id: str, detail: str) -> None:
+    material_access.require_unit_access(scope, unit_id, detail)
 
 
-def _require_container_access(scope: MaterialAccessScope, org_id: str, detail: str) -> None:
-    if not scope.can_open_container(org_id):
-        raise HTTPException(status_code=403, detail=detail)
-
-
-def _require_unit_access(scope: MaterialAccessScope, unit_id: str, detail: str) -> None:
-    """单位时间轴的授权：``unit_id`` 本身必须在**可见数据范围**内。
-
-    这里**刻意不用** ``can_open_container``：单位是数据目标，不是导航容器。
-    容器的语义是"授权了它的下级就能打开它"，用在单位上会把
-    "只授权了隔壁单位"的账号放进来（容器闭包是向上取的，单位本身不在自己的
-    闭包里，看起来恰好安全；但只要将来有人把容器算法改成向下闭包，
-    就会静默变成越权）。用可见范围判定则与 SQL 的过滤完全同源。
-    """
-    if scope.unrestricted:
-        return
-    if str(unit_id or "") not in set(scope.visible_org_ids or []):
-        raise HTTPException(status_code=403, detail=detail)
-
-
-def slot_row_is_visible(row: Any, scope: MaterialAccessScope) -> bool:
-    """槽位行是否落在当前账号的可见范围内（管理员恒真）。
-
-    判定按槽位的三个组织列 **OR**：区县、主管部门、主体任一命中即可见。
-    与 SQL 里的权限谓词逐字同源 —— 两处各写一套必然出现
-    "列表里看得到、点进去 403"（或反过来，那更糟）。
-
-    抽取成公开纯函数是为了让"越权反例"能直接用行数据断言，
-    不必先起一个 FastAPI 测试客户端。
-    """
-    if scope.unrestricted:
-        return True
-    visible = set(scope.visible_org_ids or [])
-    if not visible:
-        # 没有任何可见组织：fail-closed，宁可看不到也不越权。
-        return False
-    for column in ("jurisdiction_org_id", "department_org_id", "subject_org_id"):
-        value = str((row or {}).get(column) or "").strip()
-        if value and value in visible:
-            return True
-    return False
-
-
-def _require_slot_access(
-    scope: MaterialAccessScope, row: Optional[Dict[str, Any]], slot_id: str
-) -> Dict[str, Any]:
-    """槽位级授权（§六十九）：详情、版本、处理记录三个接口共用同一个入口。
-
-    三条硬要求：
-
-    1. **不存在与无权不能混为一谈** —— 不存在 404，越权 403；
-    2. **不能只保护页面入口** —— 直接带一个别人的槽位 UUID 请求详情、
-       ``/versions``、``/runs`` 都必须 403（IDOR 反例）；
-    3. **只能有一处判定** —— 三个接口各写一份必然漂移，而漏掉的那一个
-       就是数据泄露口。
-    """
-    if row is None:
-        raise HTTPException(status_code=404, detail="material slot not found")
-    if not slot_row_is_visible(row, scope):
-        raise HTTPException(status_code=403, detail="slot access denied")
-    return row
+slot_row_is_visible = material_access.slot_row_is_visible
+_require_slot_access = material_access.require_slot_access
 
 
 # ---- 组织目录显示名（纯展示，查不到就回退） ---------------------------------

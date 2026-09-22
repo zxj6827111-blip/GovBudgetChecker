@@ -16,6 +16,7 @@ from api.routes.metrics import router as metrics_router
 from api.routes.organizations import router as organizations_router
 from api.routes.ps_shared import router as ps_shared_router
 from api.routes.reports import router as reports_router
+from api.routes.reviews import router as reviews_router
 from api.routes.rules import router as rules_router
 from api.routes.upload import router as upload_router
 from api.routes.workflow import router as workflow_router
@@ -36,5 +37,6 @@ def register_routes(app: FastAPI) -> None:
     app.include_router(ps_shared_router)
     app.include_router(files_router)
     app.include_router(reports_router)
+    app.include_router(reviews_router)
     app.include_router(rules_router)
     app.include_router(workflow_router)
