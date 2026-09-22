@@ -5,6 +5,7 @@ import {
   GitBranch,
   History,
   LayoutDashboard,
+  Library,
   ListTodo,
   Settings,
   ShieldCheck,
@@ -13,6 +14,8 @@ import {
 
 /**
  * Task 2 导航结构定义（唯一权威来源）。
+ *
+ * WP2-A 追加第 10 项「材料台账」（工作区组第 7 项）。
  *
  * 对照原型图（`01-workbench-overview.png` 左侧导航）：
  * - 「工作区」组 5 项：工作台总览 / 上传中心 / 处理队列 / 审核工作台 / 任务历史；
@@ -67,6 +70,10 @@ export const NAV_ITEMS: NavItem[] = [
   },
   { id: "history", label: "任务历史", href: "/history", icon: History, group: "workspace", adminOnly: false },
   { id: "archive", label: "导出归档", href: "/archive", icon: Archive, group: "workspace", adminOnly: false },
+  // 「材料台账」（WP2-A）：按地区/主管部门/主体看"应收材料到没到、处理到哪一步"。
+  // 放在「工作区」组末尾而不是插在既有项中间：既有项的位置是原型图与 Task 2
+  // 验收基线的一部分，新增能力不该移动它们（也避免既有 e2e 的相对顺序断言失效）。
+  { id: "materials", label: "材料台账", href: "/materials", icon: Library, group: "workspace", adminOnly: false },
   { id: "quality", label: "质量管理", href: "/quality", icon: ShieldCheck, group: "admin", adminOnly: true },
   { id: "rules", label: "规则与版本", href: "/rules", icon: GitBranch, group: "admin", adminOnly: true },
   { id: "settings", label: "系统设置", href: "/settings", icon: Settings, group: "admin", adminOnly: true },

@@ -6,11 +6,19 @@ import { resolveServiceHealthState } from "../app/components/workspace/serviceHe
 
 // --- 导航配置结构性检查：9 项、分组正确、路径唯一、admin-only 项落在 admin 组 ------
 
-assert.equal(NAV_ITEMS.length, 9, "REGRESSION: navigation must have exactly 8+1=9 items");
+assert.equal(
+  NAV_ITEMS.length,
+  10,
+  "REGRESSION: navigation must have exactly 8+2=10 items（WP2-A 追加「材料台账」）",
+);
 
 const workspaceItems = NAV_ITEMS.filter((item) => item.group === "workspace");
 const adminItems = NAV_ITEMS.filter((item) => item.group === "admin");
-assert.equal(workspaceItems.length, 6, "工作区组应有 5 项原型图项 + 1 项导出归档 = 6 项");
+assert.equal(
+  workspaceItems.length,
+  7,
+  "工作区组应有 5 项原型图项 + 导出归档 + 材料台账 = 7 项",
+);
 assert.equal(adminItems.length, 3, "管理组应有质量管理/规则与版本/系统设置 3 项");
 
 for (const item of adminItems) {
@@ -31,6 +39,15 @@ const archiveItem = NAV_ITEMS.find((item) => item.id === "archive");
 assert.ok(archiveItem, "REGRESSION: 导出归档入口缺失（决策 2=a 明确要求新增第 9 个入口）");
 assert.equal(archiveItem?.group, "workspace");
 assert.equal(archiveItem?.adminOnly, false, "导出归档不是管理员专属项");
+
+// 「材料台账」（WP2-A）必须存在且属于工作区组：它面向审核员而非仅管理员
+const materialsItem = NAV_ITEMS.find((item) => item.id === "materials");
+assert.ok(materialsItem, "REGRESSION: 材料台账入口缺失（WP2-A 明确要求新增）");
+assert.equal(materialsItem?.href, "/materials");
+assert.equal(materialsItem?.group, "workspace");
+assert.equal(materialsItem?.adminOnly, false, "材料台账是审核员的日常工作入口，不是管理员专属");
+assert.equal(isAdminOnlyPathname("/materials"), false);
+assert.equal(isAdminOnlyPathname("/materials/district/d-1"), false, "子路径不得被误判为管理员专属");
 
 // --- isAdminOnlyPathname：反例覆盖 ------------------------------------------
 

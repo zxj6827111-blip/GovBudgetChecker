@@ -25,10 +25,16 @@ export interface BadgeProps {
   tone?: BadgeTone;
   children: ReactNode;
   className?: string;
+  /** 可选测试锚点：供 e2e/单测定位某一枚徽章，不影响样式与业务逻辑。 */
+  "data-testid"?: string;
 }
 
-export function Badge({ tone = "neutral", children, className }: BadgeProps) {
-  return <span className={cn(BADGE_BASE_CLASSES, BADGE_TONE_CLASSES[tone], className)}>{children}</span>;
+export function Badge({ tone = "neutral", children, className, "data-testid": testId }: BadgeProps) {
+  return (
+    <span className={cn(BADGE_BASE_CLASSES, BADGE_TONE_CLASSES[tone], className)} data-testid={testId}>
+      {children}
+    </span>
+  );
 }
 
 export default Badge;

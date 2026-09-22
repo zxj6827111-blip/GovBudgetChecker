@@ -11,6 +11,7 @@ from api.routes.config import router as config_router
 from api.routes.files import router as files_router
 from api.routes.health import router as health_router
 from api.routes.jobs import router as jobs_router
+from api.routes.materials import router as materials_router
 from api.routes.metrics import router as metrics_router
 from api.routes.organizations import router as organizations_router
 from api.routes.ps_shared import router as ps_shared_router
@@ -30,6 +31,7 @@ def register_routes(app: FastAPI) -> None:
     app.include_router(config_router)
     app.include_router(analyze_router)
     app.include_router(jobs_router)
+    app.include_router(materials_router)
     app.include_router(organizations_router)
     app.include_router(ps_shared_router)
     app.include_router(files_router)

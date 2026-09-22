@@ -81,24 +81,55 @@ def test_job_upload_org_route_surface_is_unchanged():
     assert not added, f"出现未登记的新接口: {sorted(added)}"
 
 
+#: 冻结族的前缀。**用前缀而不是子串**：WP2-A 的材料台账路由里含
+#: ``/departments`` 子串（``/api/materials/districts/{id}/departments``），
+#: 子串匹配会把它误判成"部门接口族出现了未登记的新接口"。
+FROZEN_FAMILY_PREFIXES = (
+    "/jobs",
+    "/api/jobs",
+    "/upload",
+    "/documents",
+    "/api/documents",
+    "/analyze",
+    "/api/analyze",
+    "/api/analyze2",
+    "/api/files/",
+    "/api/organizations",
+    "/api/departments",
+)
+
+
 def _is_frozen_family(path: str) -> bool:
-    return any(
-        marker in path
-        for marker in (
-            "/jobs",
-            "/upload",
-            "/documents",
-            "/analyze",
-            "/files/",
-            "/organizations",
-            "/departments",
-        )
+    return path.startswith(FROZEN_FAMILY_PREFIXES)
+
+
+#: WP2-A 新增的材料台账只读接口（本清单同样冻结：多一条、少一条都会失败）。
+#: 从 WP1 的"不新增任何 HTTP 接口"改为"新增且**恰好**这三条"：
+#: WP2-A 的交付范围就是这三个读接口，写成精确集合才能继续拦住"顺手多加一个接口"。
+WP2A_MATERIAL_ROUTES = frozenset(
+    {
+        ("GET", "/api/materials/coverage"),
+        ("GET", "/api/materials/districts/{district_id}/departments"),
+        ("GET", "/api/materials/departments/{department_id}/matrix"),
+    }
+)
+
+
+def test_material_http_route_surface_is_exactly_the_planned_set():
+    """材料台账的 HTTP 接口面恰好是 WP2-A 计划的三条只读接口。
+
+    WP1 阶段这里是"一条都没有"；WP2-A 交付首页/区级矩阵/部门矩阵三个 GET，
+    因此清单从"空集"变成"精确三条"——状态、口径、详情、搜索等接口属于
+    WP2-B/WP2-C，**不在本轮范围内**，多出来就会被这条测试拦住。
+    """
+    actual = {row for row in _route_surface() if "/materials" in row[1]}
+    assert actual == WP2A_MATERIAL_ROUTES, (
+        f"材料台账接口面与计划不一致：多了 {sorted(actual - WP2A_MATERIAL_ROUTES)}；"
+        f"少了 {sorted(WP2A_MATERIAL_ROUTES - actual)}"
     )
-
-
-def test_material_slot_work_added_no_new_http_routes():
-    """WP1 是数据底座，不对外新增 HTTP 接口；接口留给 WP2 一起设计。"""
-    assert not [row for row in _route_surface() if "material" in row[1]]
+    assert all(
+        method == "GET" for method, _ in actual
+    ), "本轮的三个材料接口都是只读 GET：写入路径属于 WP3/WP9"
 
 
 # ==== 入库集成只做加法，且可关闭 ============================================

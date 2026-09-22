@@ -33,6 +33,7 @@ const GUARDED_DIRS = [
   "app/components/quality",
   "app/components/rules",
   "app/components/settings",
+  "app/components/materials",
 ];
 
 /** 存量组件逐文件纳入守卫（收敛完成后即锁定，防止回退）。 */
