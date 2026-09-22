@@ -579,7 +579,9 @@ def test_slot_detail_current_version_and_analysis(client, org_tree):
     analysis = data["current_analysis"]
     assert analysis["available"] is True
     assert analysis["run"]["job_uuid"] == "job-v2"
-    assert analysis["formal_issue_count"] == 1
+    # 权威口径（count_formal_findings）：1 条 high + 1 条 info 都是正式 finding，
+    # 降级的那条不算 → 2。**不是**"正式问题"那一栏的长度（那是 1）。
+    assert analysis["formal_issue_count"] == 2
     assert [item["finding_id"] for item in analysis["formal_findings"]] == ["f-high"]
     assert [item["finding_id"] for item in analysis["manual_review_items"]] == ["f-degraded"]
     assert [item["finding_id"] for item in analysis["info_findings"]] == ["f-info"]
@@ -794,6 +796,145 @@ def test_run_error_summary_hides_paths_and_stack(client, org_tree, fake_db):
     failed = next(item for item in items if item["job_uuid"] == "job-v2")
     assert failed["status"] == "error"
     assert failed["error_summary"] == "处理失败（详情见任务日志）"
+
+
+#: 会用「看起来安全就放行」的黑名单拦不住的错误原文样本。
+#: 覆盖评审列出的四类（Windows 盘符 / Unix 绝对路径 / UNC / 连接串）
+#: 加上"看起来普通"的错误文本 —— 因为不存在稳定的"安全/不安全"分类标准，
+#: 所以实现不分类，一律固定文案。
+RAW_ERROR_SAMPLES = [
+    r"C:\secret\a.pdf",
+    r"D:\secret\a.pdf",
+    r"E:\secret\a.pdf",
+    r"Z:\secret\a.pdf",
+    r"E:\Software Development\GovBudgetChecker\uploads\secret.pdf",
+    "/tmp/secret/a.pdf",
+    "/mnt/data/secret/a.pdf",
+    "/home/user/a.pdf",
+    r"\\server\share\internal.pdf",
+    "postgresql://user:password@host/db",
+    "postgres://user:password@host/db",
+    'Traceback (most recent call last):\n  File "x.py", line 1',
+    "parser failed because invalid xref",
+    "token=abcdef123456 rejected",
+]
+
+
+@pytest.mark.parametrize("raw_error", RAW_ERROR_SAMPLES)
+def test_runs_api_returns_only_fixed_safe_error_summary(client, org_tree, fake_db, raw_error):
+    """㉙ 处理记录接口对任何原始 error_message 都只返回固定安全文案。
+
+    这条是**接口层**的守卫：单元测试证明 ``_safe_error_summary`` 的行为，
+    这条证明它确实被接在了响应上 —— 而且响应体的任何位置都不出现原文片段。
+    """
+    for job in fake_db.jobs:
+        if job["job_uuid"] == "job-v2":
+            job["status"] = "error"
+            job["error_message"] = raw_error
+        if job["job_uuid"] == "job-v1":
+            job["error_message"] = raw_error
+
+    token = _admin(client)
+    response = client.get(
+        f"/api/materials/slots/{SLOT_MAIN}/runs", headers=_headers(token)
+    )
+    assert response.status_code == 200, response.text
+
+    items = response.json()["data"]["items"]
+    assert items, "样本数据应当有运行记录"
+    assert all(
+        item["error_summary"] == "处理失败（详情见任务日志）" for item in items
+    ), [item["error_summary"] for item in items]
+
+    for leak in (
+        "secret",
+        "password",
+        "E:\\",
+        "Z:\\",
+        "/tmp/",
+        "/mnt/",
+        "/home/",
+        "server",
+        "Traceback",
+        "token",
+        "invalid xref",
+        "GovBudgetChecker",
+    ):
+        assert leak not in response.text, f"响应里泄露了 {leak!r}"
+
+
+def test_runs_api_error_summary_is_null_when_there_is_no_error(client, org_tree, fake_db):
+    """没有 error_message 时 error_summary 是 null，而不是"处理失败"。
+
+    把"没失败"渲染成"处理失败"会让运行状态与错误摘要互相矛盾。
+    """
+    for job in fake_db.jobs:
+        job["error_message"] = None
+    token = _admin(client)
+    response = client.get(
+        f"/api/materials/slots/{SLOT_MAIN}/runs", headers=_headers(token)
+    )
+    assert response.status_code == 200, response.text
+    items = response.json()["data"]["items"]
+    assert all(item["error_summary"] is None for item in items)
+
+
+def test_slot_detail_formal_issue_count_equals_canonical_count(client, org_tree, fake_db):
+    """接口层口径对照：formal_issue_count == count_formal_findings(...)。
+
+    V2 的样本是 1 条 high + 1 条 info（都算正式 finding）+ 1 条降级（不算），
+    因此期望 2；而"正式问题"那一栏只有 1 条 —— 两者必须不同，
+    否则说明又在用展示分组的长度报数。
+    """
+    from src.services.evidence_guard import count_formal_findings
+
+    token = _admin(client)
+    data = client.get(
+        f"/api/materials/slots/{SLOT_MAIN}", headers=_headers(token)
+    ).json()["data"]
+    analysis = data["current_analysis"]
+    assert analysis["available"] is True
+
+    expected = count_formal_findings(
+        {
+            "ai_findings": [item for item in _V2_AI_FINDINGS],
+            "rule_findings": [item for item in _V2_RULE_FINDINGS],
+        }
+    )
+    assert expected == 2
+    assert analysis["formal_issue_count"] == expected
+    # 展示分组与计数口径是两件事
+    assert len(analysis["formal_findings"]) == 1
+    assert len(analysis["info_findings"]) == 1
+    assert len(analysis["manual_review_items"]) == 1
+    assert analysis["formal_issue_count"] == (
+        len(analysis["formal_findings"]) + len(analysis["info_findings"])
+    )
+
+
+#: 与 ``_seed`` 里 V2 结果完全一致的 finding 样本（供权威函数对照）。
+_V2_AI_FINDINGS = [
+    {
+        "id": "f-high",
+        "severity": "high",
+        "title": "表内金额勾稽不一致",
+        "rule_id": "V33-121",
+        "page_number": 15,
+        "bbox": [100.0, 220.0, 420.0, 300.0],
+        "evidence": [{"page": 15, "text": "合计 35.20"}],
+        "obligation_ids": ["OBL-T-004"],
+    },
+    {
+        "id": "f-degraded",
+        "severity": "manual_review",
+        "original_severity": "high",
+        "evidence_status": "degraded_missing_evidence",
+        "title": "缺证据的候选问题",
+    },
+]
+_V2_RULE_FINDINGS = [
+    {"id": "f-info", "severity": "info", "title": "命名不规范"},
+]
 
 
 # ==== 鉴权与 IDOR ============================================================

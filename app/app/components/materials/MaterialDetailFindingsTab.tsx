@@ -18,17 +18,22 @@ import {
 /**
  * MaterialDetailFindingsTab（页面 10 的「检查结果」Tab）。
  *
- * 分三栏：正式问题 / 需人工核验 / 信息提示。
+ * 分三栏（**展示分组**）：正式问题 / 需人工核验 / 信息提示。
  *
  * 为什么必须分栏而不是一张表
  * --------------------------
- * "证据不足被降级"的条目与"已确认的正式问题"含义完全不同：前者需要人去看，
+ * "证据不足被降级"的条目与"已确认的正式 finding"含义完全不同：前者需要人去看，
  * 后者是需要处置的结论。混在一张表里，用户会把降级项当成确认的问题（过度告警），
  * 或者反过来把降级项也算进"没有问题"的分母（漏报）。三栏之和等于该版本分析的
  * 全部条目，既不漏也不重。
  *
- * 「正式问题」只来自后端通过正式门禁（`is_formal_finding`）的那一批；
- * 前端**不做**任何二次判定，也不把全部 finding 都显示成正式问题。
+ * 展示分组 ≠ 计数口径（这条边界必须守住）
+ * --------------------------------------
+ * 顶部的「正式检查记录：N」取后端的 `formal_issue_count`，其权威语义是
+ * `evidence_guard.count_formal_findings`：**没有被降级就算正式 finding**，
+ * `error` / `warn` / `info` 都算。所以 N = len(正式问题) + len(信息提示)，
+ * 恒等成立。三栏只是把这批正式 finding 按严重度拆开展示，
+ * 前端**不做**任何二次判定，也不允许用"正式问题"那一栏的长度去对外报数。
  */
 export interface MaterialDetailFindingsTabProps {
   analysis: AnalysisBlock | null | undefined;
@@ -136,8 +141,18 @@ export function MaterialDetailFindingsTab({ analysis }: MaterialDetailFindingsTa
           历史版本的分析不会出现在这里。
         </p>
         <p className="mt-1" data-testid="gbc-material-findings-formal-count">
-          正式问题：{formatCount(formalCount ?? null)}
-          {formalCount === null ? "（当前算不出来）" : formalCount === 0 ? "（已确认没有正式问题）" : ""}
+          正式检查记录：{formatCount(formalCount ?? null)}
+          {formalCount === null
+            ? "（当前算不出来）"
+            : formalCount === 0
+              ? "（已确认没有正式 finding）"
+              : ""}
+        </p>
+        {/* 总计口径与工作台/质量门禁完全一致：没有被 evidence guard 降级就是
+            正式 finding，info 也算。因此这里必须说明"包含信息提示"，
+            否则用户会把上面的总计与下面的「信息提示」栏看成两回事。 */}
+        <p className="mt-1 text-xs text-slate-500" data-testid="gbc-material-findings-formal-count-note">
+          包含正式问题与信息提示；证据不足被降级的待人工核验项不计入。
         </p>
       </div>
 

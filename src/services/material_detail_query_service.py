@@ -82,7 +82,7 @@ from src.schemas.material_detail import (
     TimelineYearRow,
     UnitTimelineData,
 )
-from src.services.evidence_guard import is_formal_finding
+from src.services.evidence_guard import count_formal_findings, is_formal_finding
 from src.services.material_ledger_query_service import _slot_summary
 
 #: 证据文本在详情里的截断长度。证据原文属于 `/api/jobs/{id}` 的职责，
@@ -662,8 +662,15 @@ class MaterialDetailQueryService:
             manual_review_items=manual_review,
             info_findings=info_items,
             # 只有走到这里（当前版本 → 精确运行 → 已落库结果 → 正式门禁）
-            # 才允许出现整数 0：0 的含义是"算过且确实没有正式问题"。
-            formal_issue_count=len(formal),
+            # 才允许出现整数 0：0 的含义是"算过且确实没有正式 finding"。
+            #
+            # 计数**必须**走仓库唯一权威函数，不能用 len(formal)：
+            # formal 桶是展示分组（把 info 拆了出去），而权威语义是
+            # "没有被 evidence guard 降级就是正式 finding"（info 也算）。
+            # 用 len(formal) 会让同一份分析在这里与审核工作台给出两个问题数。
+            formal_issue_count=count_canonical_formal_findings(
+                current_run.get("ai_findings"), current_run.get("rule_findings")
+            ),
             coverage=build_coverage(result_meta.get("obligation_coverage")),
         )
 
@@ -795,36 +802,31 @@ def version_items(
 
 
 def _safe_error_summary(value: Any) -> Optional[str]:
-    """把 ``error_message`` 压成安全的短摘要。
+    """``analysis_jobs.error_message`` → 面向普通用户的固定安全摘要。
 
-    失败运行允许显示"处理失败"，但绝不把堆栈、本地路径或连接串摆到普通用户面前
-    （§五十六）。形态像路径/连接串的直接换成固定文案：这类文本对排障有用，
-    对用户只有风险，而完整错误仍在任务日志与 ``/api/jobs/{id}`` 里。
+    **fail-closed：只要数据库里有非空 error_message，一律返回固定文案，
+    不回显原文的任何片段。**
+
+    为什么不做"看起来安全就放行"的判断
+    ----------------------------------
+    早期版本用一份"坏形态黑名单"（驱动盘符 / 常见 Unix 路径前缀 / 连接串 /
+    Traceback）来决定是否脱敏，并放行其余文本。这条路走不通，原因是原理性的：
+
+    - 黑名单永远补不完：``E:\\`` ``F:\\`` ``Z:\\``、``/tmp/`` ``/mnt/`` ``/usr/``
+      ``/srv/``、UNC ``\\\\server\\share`` —— 而且本项目的开发环境本身就在
+      ``E:\\Software Development\\...`` 下，不是理论风险；
+    - 错误文本里能出现的敏感信息远超"路径"：连接串、URL、token、用户名、
+      数据库名、内部 host、环境变量值、文件名、业务数据片段；
+    - "看起来安全的错误"与"不安全的错误"没有稳定分类标准，
+      任何部分脱敏都在赌下一版错误消息里不会出现新形态。
+
+    这个接口是**材料详情**，不是运维日志页。因此这里承担的最小责任是：
+    告诉用户"处理失败了、去哪里看详情"，把完整错误留在任务日志、
+    运维界面与数据库里（信息没有丢失，只是不向普通用户回显）。
     """
-    text = str(value or "").strip()
-    if not text:
+    if not str(value or "").strip():
         return None
-    first_line = text.splitlines()[0].strip()
-    if not first_line:
-        return None
-    lowered = first_line.lower()
-    if any(
-        token in lowered
-        for token in (
-            "traceback",
-            "postgres://",
-            "postgresql://",
-            "c:\\",
-            "d:\\",
-            "/opt/",
-            "/home/",
-            "/var/",
-        )
-    ):
-        return "处理失败（详情见任务日志）"
-    if len(first_line) > 200:
-        return first_line[:200] + "…"
-    return first_line
+    return "处理失败（详情见任务日志）"
 
 
 def _run_item(row: Dict[str, Any], *, current_version_id: Optional[int]) -> RunSummaryItem:
@@ -914,20 +916,28 @@ def severity_bucket(severity: Any) -> str:
 def partition_findings(
     ai_findings: Any, rule_findings: Any
 ) -> Tuple[List[AnalysisFindingItem], List[AnalysisFindingItem], List[AnalysisFindingItem]]:
-    """把已落库的 finding 分成三个互不重叠的桶。
+    """把已落库的 finding 分成三个互不重叠的**展示**桶。
 
     返回 ``(正式问题, 需人工核验, 信息提示)``。
 
+    **这只用于页面分组，不定义"正式 finding"的业务真值。**
+    "有多少条正式 finding"的唯一口径是 ``count_formal_findings``
+    （见 ``count_canonical_formal_findings``）：只要没有被 evidence guard
+    降级就是正式 finding，``info`` 严重度同样计入。这里的 ``formal`` 桶
+    额外把 ``info`` 拆出去只是为了让页面能分开显示——
+    **绝不允许**用 ``len(formal)`` 当作 formal finding 数去对外报数，
+    那会让同一份分析在"审核工作台 / 质量门禁"与"材料详情"上给出两个问题数。
+
     判定链只有一条：``is_formal_finding``（``evidence_guard`` 的正式门禁）。
-    缺证据被降级的条目（``evidence_status='degraded'``，severity 已被改成
-    ``manual_review``）**不是**正式问题；它们必须单独成桶，否则页面会把
-    "证据不足、待人工核验"显示成"确认存在的问题"，或反过来把它算进
-    "没有问题"的分母里。
+    缺证据被降级的条目（``evidence_status='degraded_missing_evidence'``，
+    severity 已被改成 ``manual_review``）**不是**正式 finding；它们必须单独成桶，
+    否则页面会把"证据不足、待人工核验"显示成"确认存在的问题"，
+    或反过来把它算进"没有问题"的分母里。
 
     三个桶是**划分**（并集 = 全部 finding，两两不交）：
 
-    - ``formal``：通过正式门禁且严重度归并桶不是 ``info`` 的条目；
-    - ``info``：通过正式门禁且严重度归并桶是 ``info`` 的条目；
+    - ``formal``：正式 finding 且严重度归并桶不是 ``info`` 的条目；
+    - ``info``：正式 finding 且严重度归并桶是 ``info`` 的条目；
     - ``manual_review``：未通过正式门禁（缺证据被降级）的条目。
 
     数据来源只有 ``analysis_results`` 的 ``ai_findings`` / ``rule_findings``
@@ -953,6 +963,28 @@ def partition_findings(
                 formal.append(item)
 
     return formal, manual_review, info_items
+
+
+def count_canonical_formal_findings(ai_findings: Any, rule_findings: Any) -> int:
+    """正式 finding 数：**直接**调用仓库唯一权威函数 ``count_formal_findings``。
+
+    为什么必须走这一步而不是 ``len(partition_findings(...)[0])``：
+
+    ``partition_findings`` 的第一桶是**展示**用的"正式问题"（把 ``info``
+    拆到另一桶），而权威语义是"没有被 evidence guard 降级就是正式 finding"，
+    ``error`` / ``warn`` / ``info`` 三种严重度**都算**。一旦用 ``len(formal)``
+    对外报数，同一份分析会在审核工作台/质量门禁与材料详情上给出两个不同的
+    问题数——这是禁止的口径分裂。
+
+    这里把已落库的两列拼成 ``count_formal_findings`` 认识的结果形态再交给它，
+    保证本接口与工作台用的是同一段判定代码，而不是同一套"看起来一样"的规则。
+    """
+    return count_formal_findings(
+        {
+            "ai_findings": _json_list(ai_findings),
+            "rule_findings": _json_list(rule_findings),
+        }
+    )
 
 
 def _finding_item(finding: Dict[str, Any]) -> AnalysisFindingItem:
@@ -1166,6 +1198,7 @@ __all__ = [
     "select_current_run",
     "severity_bucket",
     "partition_findings",
+    "count_canonical_formal_findings",
     "build_coverage",
     "version_items",
 ]

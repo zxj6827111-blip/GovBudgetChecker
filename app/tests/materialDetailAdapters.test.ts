@@ -44,6 +44,7 @@ import {
   type AnalysisBlock,
   type CoverageBlock,
   type RunSummaryItem,
+  type FindingsSection,
   type SlotDetailResponse,
 } from "../app/components/materials/materialDetailAdapters";
 import {
@@ -602,6 +603,41 @@ check(
 check(
   "三栏之和等于该版本分析结论的全部条目（1 正式 + 1 需核验 + 0 提示）",
   sections.reduce((sum, section) => sum + section.items.length, 0) === 2,
+);
+
+// 计数口径 ≠ 展示分组：顶部「正式检查记录」取后端的 formal_issue_count，
+// 其权威语义是"没有被 evidence guard 降级就算正式 finding"（info 也计入）。
+// 因此它必须等于「正式问题」+「信息提示」两栏之和，
+// **不是**「正式问题」那一栏的长度。
+const infoSection = (list: FindingsSection[]) =>
+  list.find((section) => section.key === "info")!;
+
+check(
+  "formal_issue_count = 正式问题栏 + 信息提示栏（不是正式问题栏长度）",
+  analysis.formal_issue_count === sections[0].items.length + infoSection(sections).items.length,
+);
+check(
+  "该样本里两者确实不同（否则断言无意义）",
+  analysis.formal_issue_count !== sections[0].items.length || infoSection(sections).items.length === 0,
+);
+
+const infoOnly: AnalysisBlock = {
+  ...analysis,
+  formal_findings: [],
+  manual_review_items: [],
+  info_findings: analysis.manual_review_items ?? [],
+  formal_issue_count: 1,
+};
+const infoOnlySections = buildFindingsSections(infoOnly);
+check(
+  "只有 info 时「正式问题」栏为空，但计数仍为 1（不能被读成「没有正式 finding」）",
+  infoOnlySections[0].items.length === 0 &&
+    infoSection(infoOnlySections).items.length === 1 &&
+    infoOnly.formal_issue_count === 1,
+);
+check(
+  "info 仍然单独成栏，展示分组不因计数口径改变",
+  infoOnlySections.map((section) => section.key).join(",") === "formal,manual_review,info",
 );
 
 // ---- Tab 契约 ---------------------------------------------------------------

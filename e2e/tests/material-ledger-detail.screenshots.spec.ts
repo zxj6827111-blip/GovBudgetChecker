@@ -56,7 +56,7 @@ test.describe("WP2-B 截图采集（默认跳过）", () => {
 
   test("WP2B_02 材料详情概览", async ({ page }) => {
     await page.goto(`/materials/slots/${SLOT_MAIN}`);
-    await expect(page.getByTestId("gbc-material-overview-formal-count")).toContainText("2");
+    await expect(page.getByTestId("gbc-material-overview-formal-count")).toContainText("3");
     await page.screenshot({
       path: `${OUTPUT_DIR}/WP2B_02_material_detail_overview.png`,
       fullPage: true,

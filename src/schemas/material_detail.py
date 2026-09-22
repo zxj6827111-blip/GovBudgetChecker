@@ -230,7 +230,7 @@ class RunSummaryItem(BaseModel):
     analysis_conclusion: Optional[str] = None
     #: 该运行落库时的检查要求版本（``obligation_coverage.catalog_version``）。
     obligation_catalog_version: Optional[str] = None
-    #: 正式问题数：**只有在**"当前版本 → 精确运行 → 已落库结果 → 正式门禁"
+    #: 正式 finding 数：**只有在**"当前版本 → 精确运行 → 已落库结果 → 正式门禁"
     #: 全部成立时才是可算的整数（见 ``AnalysisBlock.formal_issue_count``）。
     #: 运行列表里一律为 null：这里只解释"这次跑了什么"，不下结论。
     formal_issue_count: Optional[int] = None
@@ -385,14 +385,24 @@ class AnalysisBlock(BaseModel):
     available: bool = False
     reason: Optional[str] = None
     run: Optional[RunSummaryItem] = None
-    #: 正式问题（通过 ``is_formal_finding`` 门禁、且严重度不是 info）。
+    #: **展示分组**之一：正式 finding 里严重度为 error / warn 的条目。
+    #: 这个分组名不代表"正式 finding 的全部"——info 也是正式 finding，
+    #: 只是单独放在 ``info_findings`` 里显示。
     formal_findings: Optional[List[AnalysisFindingItem]] = None
-    #: 需人工核验：缺证据被降级为 ``manual_review`` 的条目。**不是**正式问题。
+    #: 需人工核验：缺证据被降级的条目（``evidence_status`` 为
+    #: ``degraded_missing_evidence``）。**不是**正式 finding。
     manual_review_items: Optional[List[AnalysisFindingItem]] = None
-    #: 信息提示：通过正式门禁但严重度为 info 的条目。
+    #: 展示分组之一：正式 finding 里严重度为 info 的条目。**仍然计入**
+    #: ``formal_issue_count``（权威语义：没有被降级就是正式 finding）。
     info_findings: Optional[List[AnalysisFindingItem]] = None
-    #: 正式问题数。``None`` = 现在算不出来；``0`` = 算过且确实没有正式问题。
+    #: 正式 finding 数。``None`` = 现在算不出来；``0`` = 算过且确实没有正式 finding。
     #: 只有上面那条链路全部成立时才允许出现 0（§三十三）。
+    #:
+    #: 口径与审核工作台/质量门禁**完全一致**：直接取
+    #: ``evidence_guard.count_formal_findings``，即"没有被 evidence guard
+    #: 降级就算正式 finding"，``error`` / ``warn`` / ``info`` 三种严重度都算。
+    #: 因此 ``formal_issue_count == len(formal_findings) + len(info_findings)``
+    #: 恒成立；**不允许**用 ``len(formal_findings)`` 代替它对外报数。
     formal_issue_count: Optional[int] = None
     coverage: Optional[CoverageBlock] = None
 

@@ -31,7 +31,11 @@ import {
  * 2. **缺失态下若该槽位存在历史版本，只能写"当前无有效文件版本"**，
  *    不能写"从未上传"（§五十八）—— 判断在 `presentSlotState` 一处完成；
  * 3. **`formal_issue_count` 为 null 显示"—"**，为 0 显示 `0`：前者是
- *    "还没算出可确认结论"，后者是"已确认没有正式问题"（§五十三）。
+ *    "还没算出可确认结论"，后者是"已确认没有正式 finding"（§五十三）。
+ *    该字段的口径与审核工作台/质量门禁一致（`count_formal_findings`，
+ *    info 计入），因此界面把它叫「正式检查记录」而不是「正式问题」——
+ *    「正式问题」是检查结果页里"严重度为 error/warn"那一栏的名字，
+ *    两者同名会让用户以为总计漏算了「信息提示」。
  */
 export interface MaterialDetailOverviewTabProps {
   data: SlotDetailData;
@@ -137,11 +141,11 @@ export function MaterialDetailOverviewTab({ data, state }: MaterialDetailOvervie
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Metric
-          label="正式问题"
+          label="正式检查记录"
           value={formatCount(analysis?.formal_issue_count ?? null)}
           desc={
             analysis?.available
-              ? "当前文件版本上已确认的正式问题数"
+              ? "当前文件版本上已确认的正式 finding（含信息提示；降级待人工核验项不计入）"
               : "当前文件版本暂无可确认的分析结果，因此这个数字算不出来"
           }
           tone="danger"
@@ -179,7 +183,7 @@ export function MaterialDetailOverviewTab({ data, state }: MaterialDetailOvervie
               {analysis.run?.completed_at ? formatMaterialTimestamp(analysis.run.completed_at) : "完成时间未记录"}）
             </p>
             <p className="text-xs text-slate-500">
-              正式问题 {formatCount(analysis.formal_issue_count)} 条 · 需人工核验{" "}
+              正式检查记录 {formatCount(analysis.formal_issue_count)} 条 · 需人工核验{" "}
               {formatCount(analysis.manual_review_items?.length ?? null)} 条 · 信息提示{" "}
               {formatCount(analysis.info_findings?.length ?? null)} 条
             </p>

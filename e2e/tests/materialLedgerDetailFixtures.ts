@@ -518,7 +518,10 @@ export const DETAIL_BODY = {
       formal_findings: [FINDING_FORMAL_HIGH, FINDING_FORMAL_MEDIUM],
       manual_review_items: [FINDING_MANUAL],
       info_findings: [FINDING_INFO],
-      formal_issue_count: 2,
+      // 与后端权威口径一致：没有被 evidence guard 降级就是正式 finding，
+      // info 也算。因此总计 = 2（error/warn）+ 1（info）= 3，
+      // 而不是"正式问题那一栏"的 2。mock 必须自洽，否则页面口径断言没有意义。
+      formal_issue_count: 3,
       coverage: COVERAGE_AVAILABLE,
     },
   },

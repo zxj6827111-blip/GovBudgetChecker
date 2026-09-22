@@ -5,6 +5,7 @@ import {
   DETAIL_VERSION_REPLACED_BODY,
   DETAIL_BODY,
   HEAD_UNIT_ID,
+  RUNS_BODY,
   SLOT_DUE_UNKNOWN,
   SLOT_MAIN,
   SLOT_MISSING,
@@ -72,7 +73,8 @@ test.describe("WP2-B 主链：08 → 09 → 10 → 11 → 12", () => {
       "data-tab-active",
       "true",
     );
-    await expect(page.getByTestId("gbc-material-overview-formal-count")).toContainText("2");
+    // 3 = 2 条 error/warn 正式 finding + 1 条 info 正式 finding（info 也计入权威口径）
+    await expect(page.getByTestId("gbc-material-overview-formal-count")).toContainText("3");
 
     // 11：检查覆盖 Tab
     await page.getByTestId("gbc-material-detail-tab-coverage").click();
@@ -113,6 +115,51 @@ test.describe("WP2-B 主链：08 → 09 → 10 → 11 → 12", () => {
     // 未知 tab 回落到概览，而不是空白
     await page.goto(`/materials/slots/${SLOT_MAIN}?tab=does-not-exist`);
     await expect(page.getByTestId("gbc-material-detail-panel-overview")).toBeVisible();
+  });
+});
+
+test.describe("检查结果：计数口径与展示分组是两件事", () => {
+  test("顶部「正式检查记录」= 正式问题栏 + 信息提示栏（分组只是展示拆分）", async ({ page }) => {
+    await installDetailMocks(page);
+    await page.goto(`/materials/slots/${SLOT_MAIN}?tab=findings`);
+    // 先等三栏都渲染出来再计数：count() 不重试，数据未到位时会读到 0，
+    // 失败信息看起来像"分组错了"，其实是时序问题。
+    await expect(page.getByTestId("gbc-material-findings-section-formal")).toBeVisible();
+    await expect(page.getByTestId("gbc-material-findings-section-info")).toBeVisible();
+    await expect(page.getByTestId("gbc-material-findings-section-manual_review")).toBeVisible();
+
+    // 总计取后端权威口径 count_formal_findings：error/warn/info 都算正式 finding
+    await expect(page.getByTestId("gbc-material-findings-formal-count")).toContainText("3");
+    await expect(page.getByTestId("gbc-material-findings-formal-count-note")).toContainText(
+      "包含正式问题与信息提示",
+    );
+
+    // 用 data-finding-id 计数：卡片内部还有 severity/rule/evidence 等细粒度
+    // testid 也带 -item-N 前缀，按前缀数会一条当六条（12 而不是 2）。
+    const formalItems = await page
+      .locator('[data-testid="gbc-material-findings-section-formal"] [data-finding-id]')
+      .count();
+    const infoItems = await page
+      .locator('[data-testid="gbc-material-findings-section-info"] [data-finding-id]')
+      .count();
+    const manualItems = await page
+      .locator('[data-testid="gbc-material-findings-section-manual_review"] [data-finding-id]')
+      .count();
+
+    expect(formalItems).toBe(2);
+    expect(infoItems).toBe(1);
+    expect(manualItems).toBe(1);
+    // 恒等式：总计 = 正式问题 + 信息提示（降级待核验项不计入）
+    expect(formalItems + infoItems).toBe(3);
+
+    // 三个分组同时存在，且降级项不在正式分组里
+    await expect(page.getByTestId("gbc-material-findings-section-formal")).toBeVisible();
+    await expect(page.getByTestId("gbc-material-findings-section-info")).toBeVisible();
+    await expect(page.getByTestId("gbc-material-findings-section-manual_review")).toBeVisible();
+    const formalSectionText = await page
+      .getByTestId("gbc-material-findings-section-formal")
+      .innerText();
+    expect(formalSectionText).not.toContain("缺证据的候选问题");
   });
 });
 
@@ -312,6 +359,43 @@ test.describe("材料来源：人工上传无 URL 是正常形态", () => {
     await expect(page.getByTestId("gbc-material-source-0-published")).toContainText("2025-08-20");
     const text = await page.getByTestId("gbc-material-detail-panel-versions").innerText();
     expect(text).not.toContain("来源缺失");
+  });
+});
+
+test.describe("处理记录：失败运行只给固定安全文案", () => {
+  test("原始 error_message 含路径/连接串时，页面只显示固定文案", async ({ page }) => {
+    await installDetailMocks(page, {
+      runs: {
+        ok: true,
+        data: {
+          slot_id: SLOT_MAIN,
+          items: [
+            {
+              ...RUNS_BODY.data.items[0],
+              status: "error",
+              error_summary: "处理失败（详情见任务日志）",
+              // 这里刻意不把原文放进 mock：后端已经换掉了。
+              // 这个用例校验的是"页面不会自己拼原文、也不会多给一个查看日志入口"。
+            },
+          ],
+        },
+        meta: RUNS_BODY.meta,
+      },
+    });
+    await page.goto(`/materials/slots/${SLOT_MAIN}?tab=runs`);
+
+    await expect(page.getByTestId("gbc-material-runs-current-table-row-0-status")).toContainText(
+      "处理失败",
+    );
+    await expect(page.getByTestId("gbc-material-runs-current-table-row-0-error")).toContainText(
+      "处理失败（详情见任务日志）",
+    );
+
+    const panelText = await page.getByTestId("gbc-material-detail-panel-runs").innerText();
+    // 本轮不新增"查看日志"入口：日志权限属于后续运维/权限设计
+    expect(panelText).not.toContain("查看日志");
+    expect(panelText).not.toContain("secret");
+    expect(panelText).not.toContain("password");
   });
 });
 
