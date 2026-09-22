@@ -2854,12 +2854,56 @@ async def reanalyze_job(
     if "report_year" not in body and source_status.get("report_year") is not None:
         body["report_year"] = source_status.get("report_year")
 
+    # WP3-A：重新分析开始前，主动让这个任务上的复核立刻失效并把结果指纹清空。
+    #
+    # 这是**所有**重新分析路径的共同漏斗（``/api/jobs/{id}/reanalyze`` 与
+    # ``/api/jobs/reanalyze-all`` 都走这里），因此钩子只要挂在这一处，
+    # 就不会出现"某个批量入口绕过了失效逻辑"。
+    #
+    # 只靠"下次打开页面才发现"是不够的：那段时间页面会理直气壮地显示
+    # 「已完成复核」，而它复核的是上一代分析结果。主动失效让界面立刻显示
+    # "分析结果已更新，需要重新复核"。
+    #
+    # 失败不阻断重新分析（维护操作不能被旁路能力卡住），但必须**大声报错**：
+    # 钩子没生效意味着旧复核在库里仍显示"已完成"，这是运维需要立刻知道的事。
+    await _invalidate_reviews_before_reanalysis(source_job_id)
+
     started = await start_analysis(source_job_id, body)
     return {
         **started,
         "source_job_id": source_job_id,
         "job_id": source_job_id,
     }
+
+
+async def _invalidate_reviews_before_reanalysis(job_id: str) -> None:
+    """重新分析前的复核失效钩子（WP3-A）。
+
+    函数内延迟导入是有意的，而且必须在延迟位置：``review_lifecycle_service``
+    依赖 ``issue_workflow_store``，后者在模块级 ``from api import runtime``。
+    若这里在模块级导入复核服务，``api.runtime → 复核服务 → issue_workflow_store
+    → api.runtime`` 就构成循环导入。延迟到调用时，导入链已经走完，环不存在。
+    """
+    try:
+        from src.services.review_lifecycle_service import (
+            invalidate_reviews_for_analysis_restart,
+        )
+
+        result = await invalidate_reviews_for_analysis_restart(job_id)
+    except Exception:  # noqa: BLE001 - 详见上方注释：不阻断但必须报错
+        logger.error(
+            "Failed to invalidate review sessions before reanalysis of job %s; "
+            "a completed review may still be shown for this job",
+            job_id,
+            exc_info=True,
+        )
+        return
+    if result.get("sessions_invalidated"):
+        logger.info(
+            "Reanalysis invalidated %s review session(s) for job %s",
+            result.get("sessions_invalidated"),
+            job_id,
+        )
 
 
 async def reanalyze_all_jobs(body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

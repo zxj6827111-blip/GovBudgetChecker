@@ -498,6 +498,15 @@ class MaterialDetailQueryService:
         只读：本模块绝不删除、不清理、不改写历史版本。第四轮已经锁死
         "Material Slot 绑定版本不能被 structured cleanup 删除"，
         这里连 UPDATE 语句都不存在。
+
+        ``j.analysis_revision``（WP3-A 分析代际）刻意放在**这一行查询**里，
+        而不是让复核服务另查一次：''"当前运行是哪一代"''是这一行的属性，
+        分两次查会在两次查询之间留下"运行已经换代"的窗口，
+        而窗口期做出的复核结论会绑到错误的代际上。
+
+        注意：投影列表里**不能**写 SQL 注释。WP2-B 的真值校验器逐列检查
+        "聚合列是否带表别名"，多一行注释就会被判成没有别名的列——
+        这条说明因此只能待在文档字符串里。
         """
         return list(
             await self._conn.fetch(
@@ -520,6 +529,7 @@ class MaterialDetailQueryService:
                        j.updated_at,
                        j.error_message,
                        j.metadata,
+                       j.analysis_revision,
                        r.id AS result_id,
                        r.ai_findings,
                        r.rule_findings,

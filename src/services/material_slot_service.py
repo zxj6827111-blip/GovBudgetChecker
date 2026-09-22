@@ -21,16 +21,22 @@
 LOCK ORDER（全系统统一，不许有例外）
 ------------------------------------
     身份 advisory 锁  →  material_slots 行  →  fiscal_document_versions 行
+        →  review_sessions 行  →  analysis_jobs 行
 
-三级全序，本模块五个写方法一律遵守：
+五级全序，本模块五个写方法一律遵守：
 
 | 方法 | 取锁顺序 |
 | --- | --- |
 | ``upsert_from_decision`` | advisory(slot_key) → 槽位（INSERT DO NOTHING → SELECT FOR UPDATE） |
 | ``refresh_status`` | 槽位（SELECT FOR UPDATE） |
 | ``mark_not_applicable`` | 槽位（UPDATE → refresh_status 复用同一事务） |
-| ``bind_document_version`` | 槽位（SELECT FOR UPDATE）→ 版本（SELECT FOR UPDATE） |
+| ``bind_document_version`` | 槽位（SELECT FOR UPDATE）→ 版本（SELECT FOR UPDATE）→ 复核会话（失效旧版本上的复核） |
 | ``allocate_for_document`` | advisory+槽位（upsert）→ 版本（bind）→ 槽位（refresh，同一事务内复用） |
+
+后两级由 WP3-A 加入（见 ``review_session_store`` 的 LOCK ORDER）：版本推进要让
+旧复核失效，因此复核会话必须排在版本之后；重新分析要先失效复核再写分析代际，
+因此复核会话又必须排在 analysis_jobs 之前。这两级的先后不是风格问题——
+反过来的任一顺序都会与对应路径构成 ABBA 环。
 
 **为什么槽位与版本之间必须统一顺序**：``allocate_for_document`` 天然是
 "先槽位后版本"，而 ``bind_document_version`` 最初写成"先版本后槽位"。
@@ -72,7 +78,11 @@ from src.schemas.material_slot import (
     SlotIdentity,
     slot_identity_is_resolved,
 )
+from src.schemas.review_lifecycle import (
+    INVALIDATION_REASON_DOCUMENT_VERSION_CHANGED,
+)
 from src.services import material_slot_resolver as resolver
+from src.services import review_session_store
 from src.services.material_slot_status import (
     ANALYSIS_NOT_STARTED,
     REVIEW_NONE,
@@ -437,6 +447,24 @@ class MaterialSlotService:
                     slot_id,
                 )
             await self._advance_current_version(slot_id, document_version_id)
+            # 当前版本指针推进之后，钉在旧版本上的复核会话必须立刻失效（WP3-A §六十）。
+            #
+            # 这条语句**自守卫**：它自己比较 ``r.document_version_id`` 与
+            # ``s.current_document_version_id``，因此可以无条件、幂等地执行——
+            # 指针没动时一条也匹配不到，同一份文档被重复绑定不会误伤复核。
+            # 让"这次到底有没有推进"由 SQL 自己判断，而不是回传给 Python 再决定，
+            # 是为了避免同一条判断写两遍：两处一旦漂移，就会出现"指针换了、
+            # 复核没失效"这种最难发现的静默不一致。
+            #
+            # 不这么做的话，只靠"下次打开页面才发现"会留下一个窗口：窗口内页面
+            # 理直气壮地显示「已完成复核」，而它复核的是已经被替换掉的那一版文件。
+            # 锁顺序：本条只锁 review_sessions（``FROM material_slots`` 是 MVCC 读），
+            # 仍严格处在"槽位 → 版本 → 会话"之后，不破坏 WP1 的全序。
+            await review_session_store.invalidate_stale_version_sessions(
+                self._conn,
+                slot_id,
+                reason=INVALIDATION_REASON_DOCUMENT_VERSION_CHANGED,
+            )
         return await self.get_slot_by_id(slot_id) or {}
 
     async def _advance_current_version(self, slot_id: Any, document_version_id: Any) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 import os
@@ -15,6 +16,7 @@ from typing import Any, Dict, List, Optional
 from src.db.connection import DatabaseConnection
 from src.db.migrations import run_migrations
 from src.schemas.issues import ACTIVE_JOB_STATUSES, normalize_job_status
+from src.services import review_slot_sync
 from src.services.document_profile_resolver import resolve_document_profile
 
 logger = logging.getLogger(__name__)
@@ -104,14 +106,36 @@ async def persist_analysis_job_snapshot(
                 continue
             conn = await DatabaseConnection.acquire()
             async with conn.transaction():
-                job_db_id = await _upsert_analysis_job(conn, payload)
+                job_db_id = await _upsert_analysis_job(
+                    conn,
+                    payload,
+                    result_fingerprint=(
+                        compute_analysis_result_fingerprint(payload) if include_results else None
+                    ),
+                )
                 status = str(payload.get("status") or "").strip().lower()
                 if include_results:
                     await _upsert_analysis_result(conn, job_db_id, payload)
                 elif status in _ACTIVE_JOB_STATUSES:
                     await conn.execute("DELETE FROM analysis_results WHERE job_id = $1", job_db_id)
+                    # 作业被重置为"待跑/在跑"：分析结果被作废，同时清掉结果指纹。
+                    # 这样**下一次真正落库的结果**必定递增分析代际——哪怕它与上一代
+                    # 逐字相同。重新分析意味着"请重新看这一次的分析"，而不是
+                    # "看一份看起来一样的旧结论"（详见 migration 0020 的注释）。
+                    await conn.execute(
+                        "UPDATE analysis_jobs SET analysis_result_fingerprint = NULL, "
+                        "updated_at = NOW() WHERE id = $1",
+                        job_db_id,
+                    )
                 await _backfill_structured_document_version_metadata(conn, payload)
             _record_persistence_state(job_uuid, "synced")
+            # 结果刚落库时把槽位的复核状态接线到"待人工复核 / 已完成复核"。
+            # 放在主事务**之外**（独立事务 + 吞异常）：槽位与复核是旁路能力，
+            # 其故障不允许让"分析结果写库"失败（与 safe_allocate_for_document 同一条纪律）。
+            # 但它必须在这里——这是"分析真正跑完"的唯一事件点，WP1 预置的
+            # review_required 状态此前没有任何路径会写出来。
+            if include_results:
+                await review_slot_sync.best_effort_sync_slot_review_state(conn, job_uuid)
             return True
         except Exception as exc:
             last_error = str(exc) or exc.__class__.__name__
@@ -168,7 +192,22 @@ async def sync_pending_analysis_snapshots(
     return summary
 
 
-async def _upsert_analysis_job(conn, payload: Dict[str, Any]) -> int:
+async def _upsert_analysis_job(
+    conn, payload: Dict[str, Any], *, result_fingerprint: Optional[str] = None
+) -> int:
+    """写入作业快照，并维护分析代际。
+
+    ``result_fingerprint`` 非空表示"这次调用同时带来了一个分析结果"，
+    它驱动的递增规则是：
+
+    - 库里指纹为空（从未落过结果，或作业刚被重置）→ 递增 ⇒ 新的一代；
+    - 库里指纹与本次不同 → 递增 ⇒ 新的一代；
+    - 相同 → **不递增** ⇒ 这是同一个结果的重复落库 / 断线重放。
+
+    为什么不能只按"没有结果行"判断：重新分析完全可能产出与上一代逐字相同的
+    结果，而那也必须换代。把"重置时清指纹"与"落库时比指纹"合起来，
+    就同时满足了两件事：重新分析一定换代、纯重放一定不换代。
+    """
     metadata = _build_job_metadata(payload)
     organization_fk = await _resolve_organization_fk(conn, payload.get("organization_id"))
     status = str(payload.get("status") or "pending").strip() or "pending"
@@ -190,9 +229,11 @@ async def _upsert_analysis_job(conn, payload: Dict[str, Any]) -> int:
                 started_at,
                 completed_at,
                 error_message,
-                metadata
+                metadata,
+                analysis_revision,
+                analysis_result_fingerprint
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)
             ON CONFLICT (job_uuid)
             DO UPDATE SET
                 filename = CASE
@@ -210,6 +251,24 @@ async def _upsert_analysis_job(conn, payload: Dict[str, Any]) -> int:
                 completed_at = COALESCE(EXCLUDED.completed_at, analysis_jobs.completed_at),
                 error_message = EXCLUDED.error_message,
                 metadata = COALESCE(analysis_jobs.metadata, '{}'::jsonb) || EXCLUDED.metadata,
+                -- 分析代际：只有"带来新结果"的落库才递增。本次没带结果
+                -- （进度更新、错误快照、metadata 修复）时保持原值——
+                -- 状态重放与补偿写库绝不能让人工复核无意义地失效。
+                analysis_revision = CASE
+                    WHEN EXCLUDED.analysis_result_fingerprint IS NULL
+                        THEN analysis_jobs.analysis_revision
+                    WHEN analysis_jobs.analysis_result_fingerprint IS NULL
+                        THEN analysis_jobs.analysis_revision + 1
+                    WHEN analysis_jobs.analysis_result_fingerprint
+                         IS DISTINCT FROM EXCLUDED.analysis_result_fingerprint
+                        THEN analysis_jobs.analysis_revision + 1
+                    ELSE analysis_jobs.analysis_revision
+                END,
+                analysis_result_fingerprint = CASE
+                    WHEN EXCLUDED.analysis_result_fingerprint IS NULL
+                        THEN analysis_jobs.analysis_result_fingerprint
+                    ELSE EXCLUDED.analysis_result_fingerprint
+                END,
                 updated_at = NOW()
             RETURNING id
             """,
@@ -223,8 +282,34 @@ async def _upsert_analysis_job(conn, payload: Dict[str, Any]) -> int:
             completed_at,
             error_message,
             _to_json(metadata),
+            0,
+            result_fingerprint,
         )
     )
+
+
+#: 分析结果指纹覆盖的内容。刻意**不含** progress / ts / message / elapsed_ms
+#: 这类每次都变的字段：指纹回答的是"被复核的分析内容是不是同一份"，
+#: 而不是"字节是不是同一份"。把它做得太宽会让每次进度更新都换代，
+#: 让人工复核被无意义地反复作废。
+_RESULT_FINGERPRINT_KEYS = ("ai_findings", "rule_findings", "merged")
+
+
+def compute_analysis_result_fingerprint(payload: Dict[str, Any]) -> str:
+    """算出本次落库分析结果的内容指纹（sha256）。
+
+    只覆盖 ``ai_findings`` / ``rule_findings`` / ``merged`` 与
+    ``meta.obligation_coverage``：它们共同决定"这次分析的结论与检查覆盖是什么"。
+    """
+    result_payload = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    meta = result_payload.get("meta") if isinstance(result_payload.get("meta"), dict) else {}
+    content: Dict[str, Any] = {}
+    for key in _RESULT_FINGERPRINT_KEYS:
+        value = result_payload.get(key, payload.get(key))
+        content[key] = value if value is not None else None
+    content["obligation_coverage"] = meta.get("obligation_coverage")
+    canonical = json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 async def _upsert_analysis_result(conn, job_db_id: int, payload: Dict[str, Any]) -> None:
