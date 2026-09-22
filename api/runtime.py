@@ -547,8 +547,16 @@ def ignore_job_issue(job_id: str, issue_id: str) -> Dict[str, Any]:
     if normalized_issue_id not in known_issue_ids and normalized_issue_id not in ignored_ids:
         raise HTTPException(status_code=404, detail="issue_id does not exist")
 
-    ignored_ids.add(normalized_issue_id)
-    write_ignored_issue_ids(job_dir, ignored_ids)
+    # 写入必须走 workflow 存储的文件锁（WP3-A）：
+    #   - 复核完成门禁的问题集合同时覆盖"workflow 决定"与"忽略清单"，
+    #     而落编辑锁时的 CAS 也在那把锁之下重算快照；两边各写各的会有窗口；
+    #   - 该锁之下还会先判复核锁：已完成的复核不允许再改问题集合
+    #     （409 review_completed_locked）。
+    # 延迟导入的理由与 _invalidate_reviews_before_analysis_start 相同：
+    # issue_workflow_store 在模块级 import 本模块，这里必须等到调用时再导入。
+    from src.services.issue_workflow_store import add_ignored_issue_id
+
+    add_ignored_issue_id(job_id, normalized_issue_id)
 
     payload = get_job_status_payload(job_id)
     payload["ignored_issue_id"] = normalized_issue_id

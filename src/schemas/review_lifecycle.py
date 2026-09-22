@@ -96,6 +96,10 @@ ERROR_REVIEW_COMPLETED_LOCKED = "review_completed_locked"
 #: 因此这条错误会让本次复核失败并回滚数据库事务（503：存储暂时不可用）。
 ERROR_REVIEW_LOCK_UNAVAILABLE = "review_lock_unavailable"
 
+#: 完成门禁判定所用的"问题集合快照"在落编辑锁之前发生了变化（issue 被改状态、
+#: 或被加入忽略清单）。fail-closed：不写锁、回滚、请用户刷新后重新确认。
+ERROR_REVIEW_WORKFLOW_CHANGED = "review_workflow_changed"
+
 
 class ReviewBlocker(BaseModel):
     """一条完成门禁阻塞。``count`` 只对计数类阻塞有意义。"""
@@ -280,6 +284,7 @@ __all__ = [
     "ERROR_REVIEW_CONTEXT_MISMATCH",
     "ERROR_REVIEW_COMPLETED_LOCKED",
     "ERROR_REVIEW_LOCK_UNAVAILABLE",
+    "ERROR_REVIEW_WORKFLOW_CHANGED",
     "ReviewBlocker",
     "CompletionGate",
     "CurrentAnalysisRef",

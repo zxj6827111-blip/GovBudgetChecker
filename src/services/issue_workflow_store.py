@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 from contextlib import contextmanager
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -556,6 +557,170 @@ def get_job_issue_decisions(job_id: str) -> Dict[str, str]:
         result[str(record.get("issue_id") or "")] = str(record.get("status") or "pending")
     result.pop("", None)
     return result
+
+
+#: 问题集合快照的算法版本。改变快照覆盖范围（例如新增一类来源）时必须改动它，
+#: 否则老版本写下的 token 会被误判成"仍然匹配"。
+PROBLEM_SNAPSHOT_ALGORITHM = "sha256(decisions + ignored_issue_ids)"
+
+
+def _decision_pairs(state: Dict[str, Any], job_id: str) -> List[List[str]]:
+    """该任务全部"已表态"的问题，按 issue_id 升序的 ``[issue_id, status]`` 列表。
+
+    排序是必需的：文件里 issue 的插入顺序会随操作历史变化，不排序算出的 token
+    会在**没有任何实质变化**时也变化，把"无关的写入顺序差异"变成假的冲突。
+    """
+    normalized = str(job_id or "").strip()
+    pairs: List[List[str]] = []
+    for record in state["issues"].values():
+        if str(record.get("job_id") or "") != normalized:
+            continue
+        issue_id = str(record.get("issue_id") or "")
+        if not issue_id:
+            continue
+        pairs.append([issue_id, str(record.get("status") or "pending")])
+    pairs.sort(key=lambda item: item[0])
+    return pairs
+
+
+def _ignored_issue_ids_for_job(job_id: str) -> List[str]:
+    """该任务的 legacy 忽略清单（``ignored_issue_ids``），已排序。
+
+    复核的问题集合同时由"workflow 决定"与这份忽略清单决定（见
+    ``review_problem_set``），因此它必须进快照——否则"完成后才想起忽略一条问题"
+    会让已完成复核对应的问题集合发生变化。
+
+    读不到（任务目录不存在、文件损坏）时返回空列表：与
+    ``review_problem_set`` 的取值保持一致，两边算出的 token 才可比。
+    """
+    job_dir = runtime.UPLOAD_ROOT / str(job_id or "").strip()
+    try:
+        return sorted(str(item) for item in runtime.read_ignored_issue_ids(job_dir))
+    except Exception:  # noqa: BLE001 - 忽略清单不是关键路径，读不到按"没有"处理
+        logger.warning("Failed to read ignored issue ids for job %s", job_id, exc_info=True)
+        return []
+
+
+def _problem_snapshot_token(state: Dict[str, Any], job_id: str) -> str:
+    """问题集合快照的指纹：**必须在 ``_state_lock()`` 之内调用。**
+
+    覆盖两项，正是 Completion Gate 判定所消费的全部外部状态：
+
+    - ``(issue_id, status)``：问题被怎么处理了（confirmed / no_issue / ...）；
+    - ``ignored_issue_ids``：legacy 忽略清单（它决定哪些问题不进集合）。
+
+    不含 ``revision``：那是全局的，别的任务的修改会让当前复核被无意义地打断
+    （fail-closed 但噪声大）。按 job 计算即可表达"这个 job 的问题集合变没变"。
+    """
+    payload = {
+        "algorithm": PROBLEM_SNAPSHOT_ALGORITHM,
+        "decisions": _decision_pairs(state, job_id),
+        "ignored_issue_ids": _ignored_issue_ids_for_job(job_id),
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def get_job_problem_snapshot(job_id: str) -> Dict[str, Any]:
+    """读取"该任务当前的问题集合"及其指纹（同一把文件锁之下的**一致**快照）。
+
+    复核服务用它做两件事：判定完成门禁、并在落编辑锁时用 ``token`` 做 CAS。
+    分成两次独立读取就会重新引入 TOCTOU：门禁看到的是一份、落锁时写的是另一份。
+    """
+    normalized = str(job_id or "").strip()
+    if not normalized:
+        return {"decisions": {}, "ignored_issue_ids": [], "token": ""}
+    with _state_lock():
+        state = _read_state()
+        decisions = {
+            issue_id: status for issue_id, status in _decision_pairs(state, normalized)
+        }
+        return {
+            "decisions": decisions,
+            "ignored_issue_ids": _ignored_issue_ids_for_job(normalized),
+            "token": _problem_snapshot_token(state, normalized),
+        }
+
+
+def set_review_lock_if_problem_snapshot_matches(
+    job_id: str,
+    *,
+    expected_token: str,
+    slot_id: Optional[str],
+    review_session_id: Optional[str],
+    analysis_basis_token: Optional[str],
+    completed_by: Optional[str],
+) -> Dict[str, Any]:
+    """**比较后再落锁**：问题集合自门禁判定以来没变才写编辑锁。
+
+    为什么不能"先 get 再 set"：两个操作之间有真实窗口。反例——
+
+        T1 complete：读到 issue-1 = confirmed → 门禁 PASS
+        T2 update_issue：把 issue-1 改回 pending（此刻还没有编辑锁，成功）
+        T1 set_review_lock → 提交
+
+    终态是"复核已完成，但它据以完成的那条问题已经被改回未处理"，
+    而任务书要求复核完成时锁住的问题状态必须就是门禁判定时的那一份。
+
+    比较与写入在**同一把 ``_state_lock()`` 之内**完成，因此窗口不存在：
+    要么 T2 的写入发生在比较之前（token 不同 → 冲突，本次复核失败并回滚），
+    要么发生在比较之后（那时锁已经在文件里，T2 会被 ``review_completed_locked`` 拒绝）。
+
+    返回 ``{"status": "written" | "conflict", ...}``；冲突时**不写锁**。
+    """
+    normalized = str(job_id or "").strip()
+    if not normalized:
+        return {"status": "conflict", "reason": "job_id_required"}
+    with _state_lock():
+        state = _read_state()
+        current_token = _problem_snapshot_token(state, normalized)
+        if not expected_token or str(expected_token) != current_token:
+            # fail-closed：不为"读不到期望 token"或"token 不同"做任何妥协。
+            return {
+                "status": "conflict",
+                "expected_decision_token": str(expected_token or ""),
+                "current_decision_token": current_token,
+            }
+        locks = dict(state.get("review_locks") or {})
+        locks[normalized] = {
+            "job_id": normalized,
+            "slot_id": str(slot_id or "").strip() or None,
+            "review_session_id": str(review_session_id or "").strip() or None,
+            "analysis_basis_token": str(analysis_basis_token or "").strip() or None,
+            "completed_by": str(completed_by or "").strip() or None,
+            "problem_snapshot_token": current_token,
+            "completed_at": _now(),
+        }
+        state["review_locks"] = locks
+        _write_state(state)
+        return {"status": "written", "current_decision_token": current_token}
+
+
+def add_ignored_issue_id(job_id: str, issue_id: str) -> Dict[str, Any]:
+    """在 workflow 文件锁之下把某条问题加入忽略清单（legacy 写入路径）。
+
+    为什么必须走这把锁：Completion Gate 的问题集合快照同时覆盖 workflow 决定与
+    ignored 清单，落锁时的 CAS 也在这把锁之下重算。两边各写各的时，
+    "读 ignored → 判门禁 → 写 review_lock"之间会有窗口。
+
+    顺序也是刻意的：**先判复核锁，再写**。已经完成复核的任务不允许再改问题集合
+    （legacy 忽略端点 ``POST /api/jobs/{id}/issues/ignore`` 至今仍可写，
+    因此它必须与 workflow 决定受同一约束）。
+    """
+    normalized_job = str(job_id or "").strip()
+    normalized_issue = str(issue_id or "").strip()
+    if not normalized_job or not normalized_issue:
+        raise HTTPException(status_code=400, detail="job_id and issue_id are required")
+    with _state_lock():
+        # 复核已在完成时拒绝问题集合变更（与 update_issue 同一语义、同一错误体）。
+        # 这里刻意调用**私有**校验并直接传已读到的 state：公开版会自己去取
+        # ``_state_lock``，在锁内重入同一把文件锁在 Windows 上会直接
+        # PermissionError（同一线程用第二个句柄读同一个锁文件）。
+        _require_issue_mutable(_read_state(), normalized_job)
+        job_dir = runtime.UPLOAD_ROOT / normalized_job
+        ignored = set(runtime.read_ignored_issue_ids(job_dir))
+        ignored.add(normalized_issue)
+        return runtime.write_ignored_issue_ids(job_dir, ignored)
 
 
 def get_review_lock(job_id: str) -> Optional[Dict[str, Any]]:

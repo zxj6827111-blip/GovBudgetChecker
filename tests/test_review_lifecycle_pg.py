@@ -46,7 +46,11 @@ from fastapi import HTTPException
 
 from src.db.migrations import run_migrations
 from src.schemas.review_lifecycle import ERROR_COMPLETION_BLOCKED
-from src.services import review_lifecycle_service, review_slot_sync
+from src.services import (
+    review_lifecycle_service,
+    review_session_store,
+    review_slot_sync,
+)
 from src.services.analysis_result_store import (
     compute_analysis_result_fingerprint,
     persist_analysis_job_snapshot,
@@ -1629,7 +1633,10 @@ async def test_set_review_lock_failure_aborts_completion(review_db, monkeypatch,
     def _boom(*_args, **_kwargs):
         raise PermissionError("simulated lock store failure")
 
-    monkeypatch.setattr(issue_workflow_store, "set_review_lock", _boom)
+    # 复核完成现在走 CAS 版本（比较问题集合快照后再写锁）；注入点同步更新。
+    monkeypatch.setattr(
+        issue_workflow_store, "set_review_lock_if_problem_snapshot_matches", _boom
+    )
 
     async with _conn(schema, pool) as conn:
         with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
@@ -1904,3 +1911,414 @@ async def test_invalidate_audit_waits_for_commit(review_db, monkeypatch, tmp_pat
             == 1
         )
     assert len(_audit_events_for("review.invalidate", "success", audit_path)) == 1
+
+
+# ==== 问题集合快照 CAS 与 mutation 事务边界（独立评审第三轮） ================
+#
+# 两个并发一致性问题：
+#   A. Completion Gate 读的是"问题集合快照"，而编辑锁是**后来**才落的。
+#      两份读取之间有人改 issue 状态 / 加进忽略清单时，会产出
+#      "复核已完成，但它据以完成的那条问题已经被改回未处理"。
+#   B. mutation 若跑在调用方的外层事务里，`_mutation_scope` 退出时并不是真正
+#      的 commit，文件副作用却已经执行 —— 调用方一回滚就重新造出
+#      "数据库说没复核、文件说已复核"。
+# 下面每条用例都用可控暂停点把窗口钉死。
+
+
+def _write_job_payload(job_uuid: str, finding_id: str) -> None:
+    """给任务目录写一份带该 finding 的 status.json（update_issue 需要它）。"""
+    from api import runtime
+
+    job_dir = runtime.UPLOAD_ROOT / job_uuid
+    job_dir.mkdir(parents=True, exist_ok=True)
+    runtime.write_json_file(
+        job_dir / "status.json",
+        {
+            "job_id": job_uuid,
+            "status": "done",
+            "created_by": "unit-user",
+            "result": {
+                "rule_findings": [
+                    {
+                        "id": finding_id,
+                        "severity": "high",
+                        "title": f"问题 {finding_id}",
+                        "evidence": [{"page": 1, "text": "证据", "bbox": [1, 2, 3, 4]}],
+                    }
+                ],
+                "ai_findings": [],
+            },
+        },
+    )
+
+
+async def test_complete_rejects_when_problem_snapshot_changed_during_gate(
+    review_db, monkeypatch, tmp_path
+):
+    """§十一 决策竞态：门禁判定之后、落编辑锁之前有人改了 issue → 409 + 回滚。
+
+    没有 CAS 时的终态是：review completed / slot completed，但 issue-1 = pending
+    —— "复核完成"对应的是一份已经不存在的问题集合。这是禁止状态。
+    """
+    from src.services import issue_workflow_store
+
+    schema, pool = review_db
+    audit_path = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[_finding("rule-1")])
+        _write_job_payload(ctx["job_uuid"], "rule-1")
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+
+    # 先把这条问题处理成"已确认"，门禁才可能通过
+    user = {"username": "unit-user", "is_admin": True}
+    await issue_workflow_store.update_issue(
+        user, job_id=ctx["job_uuid"], issue_id="rule-1", status="confirmed", note=None
+    )
+
+    holding = asyncio.Event()
+    release = asyncio.Event()
+    # 暂停点选在 `complete_session`（async，可以真正等）：此刻门禁已经判定通过、
+    # 编辑锁尚未落下，正是"读完问题集合 → 落锁"之间的那个窗口。
+    # 同步钩子假停不行——同步函数里无法 await，只会立刻返回，窗口就不存在了。
+    real_complete = review_session_store.complete_session
+
+    async def _paused_complete(conn, **kwargs):
+        holding.set()
+        await release.wait()
+        return await real_complete(conn, **kwargs)
+
+    monkeypatch.setattr(review_session_store, "complete_session", _paused_complete)
+
+    async def _t1_complete():
+        async with _conn(schema, pool) as conn:
+            return await review_lifecycle_service.complete_review(
+                conn, ctx["slot_id"], actor="a"
+            )
+
+    t1 = asyncio.create_task(_t1_complete())
+    await asyncio.wait_for(holding.wait(), timeout=15)
+
+    # T2：门禁之后把这条问题改回未处理（此刻还没有编辑锁，所以能成功）
+    await issue_workflow_store.update_issue(
+        user, job_id=ctx["job_uuid"], issue_id="rule-1", status="pending", note=None
+    )
+    release.set()
+
+    with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+        await asyncio.wait_for(t1, timeout=15)
+
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail["error"] == "review_workflow_changed"
+
+    sessions = await _sessions_for_job(schema, pool, ctx["job_uuid"])
+    assert [item["status"] for item in sessions] == ["in_progress"], sessions
+    status = await _slot_status(schema, pool, ctx["slot_id"])
+    assert status["status"] != "completed", status
+    assert issue_workflow_store.get_review_lock(ctx["job_uuid"]) is None, "冲突时不得写编辑锁"
+    decisions = issue_workflow_store.get_job_issue_decisions(ctx["job_uuid"])
+    assert decisions["rule-1"] == "pending", "T2 的修改必须保留（它是用户真实操作）"
+    assert _audit_events_for("review.complete", "success", audit_path) == []
+
+
+async def test_complete_locks_then_blocks_further_issue_changes(review_db, monkeypatch, tmp_path):
+    """§十二 反方向：编辑锁落下之后，任何问题改动都必须被 409 拒绝。
+
+    "T2 等待"这件事由 ``issue_workflow_store`` 的文件锁提供（见
+    ``test_workflow_state_lock_is_exclusive_across_threads``）；
+    这条用例断言的是可观察结果：锁落下后 update_issue 一律
+    ``review_completed_locked``，问题保持原状态。
+    """
+    from src.services import issue_workflow_store
+
+    schema, pool = review_db
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
+
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[_finding("rule-1")])
+        _write_job_payload(ctx["job_uuid"], "rule-1")
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+
+    user = {"username": "unit-user", "is_admin": True}
+    await issue_workflow_store.update_issue(
+        user, job_id=ctx["job_uuid"], issue_id="rule-1", status="confirmed", note=None
+    )
+    async with _conn(schema, pool) as conn:
+        completed = await review_lifecycle_service.complete_review(
+            conn, ctx["slot_id"], actor="a"
+        )
+    assert completed.session.status == "completed"
+
+    with pytest.raises(HTTPException) as excinfo:
+        await issue_workflow_store.update_issue(
+            user, job_id=ctx["job_uuid"], issue_id="rule-1", status="pending", note=None
+        )
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail["error"] == "review_completed_locked"
+    assert (
+        issue_workflow_store.get_job_issue_decisions(ctx["job_uuid"])["rule-1"] == "confirmed"
+    ), "已完成复核后问题状态不得改变"
+
+
+async def test_create_package_cannot_change_the_locked_problem_set(review_db, monkeypatch, tmp_path):
+    """§十三 create_package 同样会改问题状态（→ in_package），必须受同一约束。
+
+    两个方向都验：锁落下之后被 409 拒绝；锁之前改动会让 complete 因快照变化失败。
+    """
+    from src.services import issue_workflow_store
+
+    schema, pool = review_db
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
+
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[_finding("rule-1")])
+        _write_job_payload(ctx["job_uuid"], "rule-1")
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+
+    user = {"username": "unit-user", "is_admin": True}
+    await issue_workflow_store.create_package(
+        user,
+        name="整改包",
+        job_ids=[ctx["job_uuid"]],
+        issue_keys=[f"{ctx['job_uuid']}::rule-1"],
+    )
+    # 组包把该问题改成 in_package：门禁现在是通过的
+    async with _conn(schema, pool) as conn:
+        completed = await review_lifecycle_service.complete_review(
+            conn, ctx["slot_id"], actor="a"
+        )
+    assert completed.session.status == "completed"
+
+    with pytest.raises(HTTPException) as excinfo:
+        await issue_workflow_store.create_package(
+            user,
+            name="第二个包",
+            job_ids=[ctx["job_uuid"]],
+            issue_keys=[f"{ctx['job_uuid']}::rule-1"],
+        )
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail["error"] == "review_completed_locked"
+
+
+async def test_create_package_during_gate_fails_completion(review_db, monkeypatch, tmp_path):
+    """组包发生在门禁之后、落锁之前 → 快照变化 → complete 409 + 回滚。"""
+    from src.services import issue_workflow_store
+
+    schema, pool = review_db
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
+
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[_finding("rule-1")])
+        _write_job_payload(ctx["job_uuid"], "rule-1")
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+
+    user = {"username": "unit-user", "is_admin": True}
+    await issue_workflow_store.update_issue(
+        user, job_id=ctx["job_uuid"], issue_id="rule-1", status="confirmed", note=None
+    )
+
+    holding = asyncio.Event()
+    release = asyncio.Event()
+
+    # 暂停点选在 `complete_session`（async，可以真正等）：此刻门禁已经判定通过、
+    # 编辑锁尚未落下，正是"读完问题集合 → 落锁"之间的那个窗口。
+    # 同步钩子假停不行——同步函数里无法 await，只会立刻返回，窗口就不存在了。
+    real_complete = review_session_store.complete_session
+
+    async def _paused_complete(conn, **kwargs):
+        holding.set()
+        await release.wait()
+        return await real_complete(conn, **kwargs)
+
+    monkeypatch.setattr(review_session_store, "complete_session", _paused_complete)
+
+    async def _t1_complete():
+        async with _conn(schema, pool) as conn:
+            return await review_lifecycle_service.complete_review(
+                conn, ctx["slot_id"], actor="a"
+            )
+
+    t1 = asyncio.create_task(_t1_complete())
+    await asyncio.wait_for(holding.wait(), timeout=15)
+    await issue_workflow_store.create_package(
+        user, name="并发组包", job_ids=[ctx["job_uuid"]], issue_keys=[f"{ctx['job_uuid']}::rule-1"]
+    )
+    release.set()
+
+    with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+        await asyncio.wait_for(t1, timeout=15)
+    assert excinfo.value.detail["error"] == "review_workflow_changed"
+    sessions = await _sessions_for_job(schema, pool, ctx["job_uuid"])
+    assert [item["status"] for item in sessions] == ["in_progress"], sessions
+
+
+async def test_ignore_endpoint_is_blocked_after_review_completed(review_db, monkeypatch, tmp_path):
+    """§十四 legacy 忽略清单同样属于问题集合：复核完成后不允许再改。
+
+    ``ignored_issue_ids`` 至今仍有线上可写入口（``POST /api/jobs/{id}/issues/ignore``，
+    旧任务详情页会调用），因此它必须与 workflow 决定受同一约束。
+    """
+    from api import runtime
+    from src.services import issue_workflow_store
+
+    schema, pool = review_db
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
+
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[_finding("rule-1")])
+        _write_job_payload(ctx["job_uuid"], "rule-1")
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+
+    user = {"username": "unit-user", "is_admin": True}
+    await issue_workflow_store.update_issue(
+        user, job_id=ctx["job_uuid"], issue_id="rule-1", status="confirmed", note=None
+    )
+    async with _conn(schema, pool) as conn:
+        await review_lifecycle_service.complete_review(conn, ctx["slot_id"], actor="a")
+
+    with pytest.raises(HTTPException) as excinfo:
+        issue_workflow_store.add_ignored_issue_id(ctx["job_uuid"], "rule-1")
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail["error"] == "review_completed_locked"
+
+    job_dir = runtime.UPLOAD_ROOT / ctx["job_uuid"]
+    assert runtime.read_ignored_issue_ids(job_dir) == set(), "被拒绝时不得写入"
+
+
+async def test_ignored_change_during_gate_fails_completion(review_db, monkeypatch, tmp_path):
+    """门禁之后、落锁之前被加入忽略清单 → 快照变化 → complete 409。
+
+    忽略清单会**把一条问题从复核集合里移除**，因此它同样属于快照：
+    不纳入校验时，"完成后才想起忽略"会让已完成复核对应的问题集合发生变化。
+    """
+    from src.services import issue_workflow_store
+
+    schema, pool = review_db
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
+
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[_finding("rule-1")])
+        _write_job_payload(ctx["job_uuid"], "rule-1")
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+
+    user = {"username": "unit-user", "is_admin": True}
+    await issue_workflow_store.update_issue(
+        user, job_id=ctx["job_uuid"], issue_id="rule-1", status="confirmed", note=None
+    )
+
+    holding = asyncio.Event()
+    release = asyncio.Event()
+
+    # 暂停点选在 `complete_session`（async，可以真正等）：此刻门禁已经判定通过、
+    # 编辑锁尚未落下，正是"读完问题集合 → 落锁"之间的那个窗口。
+    # 同步钩子假停不行——同步函数里无法 await，只会立刻返回，窗口就不存在了。
+    real_complete = review_session_store.complete_session
+
+    async def _paused_complete(conn, **kwargs):
+        holding.set()
+        await release.wait()
+        return await real_complete(conn, **kwargs)
+
+    monkeypatch.setattr(review_session_store, "complete_session", _paused_complete)
+
+    async def _t1_complete():
+        async with _conn(schema, pool) as conn:
+            return await review_lifecycle_service.complete_review(
+                conn, ctx["slot_id"], actor="a"
+            )
+
+    t1 = asyncio.create_task(_t1_complete())
+    await asyncio.wait_for(holding.wait(), timeout=15)
+    issue_workflow_store.add_ignored_issue_id(ctx["job_uuid"], "rule-1")
+    release.set()
+
+    with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+        await asyncio.wait_for(t1, timeout=15)
+    assert excinfo.value.detail["error"] == "review_workflow_changed"
+    sessions = await _sessions_for_job(schema, pool, ctx["job_uuid"])
+    assert [item["status"] for item in sessions] == ["in_progress"], sessions
+
+
+@pytest.mark.parametrize("operation", ["start", "complete", "reopen", "invalidate"])
+async def test_mutations_reject_an_outer_transaction(review_db, operation):
+    """§二十/§二十一 四个 public mutation 都必须在外层事务下 **fail fast**。
+
+    跑在外层事务里时，``transaction_scope`` 直接复用（不 BEGIN、不 SAVEPOINT），
+    函数返回时数据库并没有提交，但文件副作用已经执行 —— 调用方一回滚就出现
+    "数据库说没复核、文件说已复核"。因此正确性必须由代码保证：在**任何**
+    数据库写入与文件副作用之前拒绝。SAVEPOINT 解决不了（RELEASE 不是 commit）。
+    """
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        if operation in {"complete", "reopen", "invalidate"}:
+            await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+
+    async with _conn(schema, pool) as conn:
+        with pytest.raises(RuntimeError) as excinfo:
+            async with conn.transaction():
+                if operation == "start":
+                    await review_lifecycle_service.start_review(
+                        conn, ctx["slot_id"], actor="r"
+                    )
+                elif operation == "complete":
+                    await review_lifecycle_service.complete_review(
+                        conn, ctx["slot_id"], actor="r"
+                    )
+                elif operation == "reopen":
+                    await review_lifecycle_service.reopen_review(
+                        conn, ctx["slot_id"], actor="r"
+                    )
+                else:
+                    await review_lifecycle_service.invalidate_review(conn, ctx["slot_id"])
+    assert "autocommit" in str(excinfo.value)
+
+    # 拒绝必须发生在任何写入之前
+    sessions = await _sessions_for_job(schema, pool, ctx["job_uuid"])
+    if operation in {"complete", "reopen", "invalidate"}:
+        assert [item["status"] for item in sessions] == ["in_progress"], sessions
+    else:
+        assert sessions == [], sessions
+    status = await _slot_status(schema, pool, ctx["slot_id"])
+    assert status["status"] != "completed", status
+
+
+def test_workflow_state_lock_is_exclusive_across_threads(tmp_path):
+    """§十二 的"T2 必须等待"：``_state_lock`` 的文件锁确实跨线程互斥。
+
+    用真线程验证——asyncio 单线程里"等锁"会表现为同步忙等（把事件循环一起卡住），
+    测不出等待语义。这里只验证机制：一方持锁期间，另一方拿不到。
+    """
+    import threading
+    import time
+
+    from src.services import issue_workflow_store
+
+    held = threading.Event()
+    acquired = threading.Event()
+    release = threading.Event()
+
+    def _holder() -> None:
+        with issue_workflow_store._state_lock():
+            held.set()
+            release.wait(timeout=10)
+
+    def _waiter() -> None:
+        held.wait(timeout=10)
+        with issue_workflow_store._state_lock():
+            acquired.set()
+
+    holder = threading.Thread(target=_holder)
+    waiter = threading.Thread(target=_waiter)
+    holder.start()
+    waiter.start()
+    assert held.wait(timeout=10)
+
+    time.sleep(0.3)
+    assert not acquired.is_set(), "第二个线程不应在第一个持锁期间拿到文件锁"
+
+    release.set()
+    holder.join(timeout=10)
+    waiter.join(timeout=10)
+    assert acquired.is_set(), "释放之后第二个线程必须拿到锁"
