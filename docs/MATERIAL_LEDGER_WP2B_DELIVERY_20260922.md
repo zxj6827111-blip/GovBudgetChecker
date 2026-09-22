@@ -428,12 +428,13 @@ B2 是最有价值的一条：它证明新增的安全反例**确实能抓住被
 | `python -m mypy api src tests` | Success: no issues found in 226 source files |
 | `npm --prefix app run test:unit` | 全绿（`test:material-detail` 115 断言，收口前 111） |
 | `npm --prefix app run build` | 通过 |
-| 全仓 E2E | **171 passed, 13 skipped**（13 = 两套截图采集，默认跳过） |
+| 全仓 E2E | **171 passed, 13 skipped, 0 failed**（13 = 两套截图采集，默认跳过；冷缓存下连跑两次均如此） |
 | material-ledger E2E（WP2-A + WP2-B + 两套截图 spec） | **34 passed, 13 skipped**（WP2-B 用例 13 → 15） |
 | PostgreSQL（pg + detail_pg） | **16 passed** |
 | `check_coverage_baseline.py --assert-gaps 8` | 通过（**仍 8 gaps**） |
 | GitHub CI `test-and-build`（Linux） | **success**（run 35688170431 / 35688172943）：pytest **1690 passed / 42 skipped**、E2E **170 passed**、ruff / mypy / frontend build 均通过 |
 | `SCHEMA_CHANGE_REQUIRED` | **NO**（本轮未新增 migration） |
+| `e2e/playwright.config.ts` | 新增 `expect.timeout = 15s`（见下） |
 
 > 本地与 CI 的 skip 数差 1 条，与 WP2-A 时同一原因：
 > `test_pdf_parse_isolation_and_backup.py` 依赖 `RLIMIT_AS`，Windows 无此能力。
@@ -441,3 +442,25 @@ B2 是最有价值的一条：它证明新增的安全反例**确实能抓住被
 WP1 底座（migration 0019 / `material_slot_service` / `material_slot_resolver` /
 `material_slot_status` / slot identity / cleanup protection / allocation ordering）
 与 WP2-A 的 access scope 语义均未修改；WP3、WP9、`backfill --apply` 未触碰。
+
+### 11.6 顺带修掉的一处测试设施脆弱性（非业务改动）
+
+收口过程中在**冷缓存**（`rm -rf app/.next` 后首次运行）下跑全仓 E2E，出现随机失败：
+第一次 `report-actions.spec.ts` 的批量删除、第二次 `login.spec.ts` 的 open-redirect、
+第三次 WP2-B 主链下钻。**每次换一个 spec，且每个都能单独跑通**——这是典型的
+"谁先跨到未编译路由谁中招"，不是业务回归。查 `output/e2e-webserver.log` 确认：
+
+```
+○ Compiling /materials/unit/[unitId] ...
+✓ Compiled /materials/unit/[unitId] in 2.7s (1336 modules)
+ GET /materials/unit/unit-ghzy-head 200 in 4910ms   ← 冷缓存下的首次导航
+```
+
+根因：`next dev` 模式下**客户端导航**要现编译目标路由的客户端资源，冷缓存实测
+单次 4–5s，正好压在 Playwright 默认 5s 断言超时上。`scripts/run-e2e.cjs` 的预热
+只发普通 HTML GET，覆盖不到客户端导航这条路径。
+
+处置：在 `e2e/playwright.config.ts` 一处把 `expect.timeout` 设为 15s（并写明原因），
+而不是在每个 `toHaveURL` 上各调一次。15s 仍然是"会失败"的界，只是不再随 dev
+编译抖动。**没有修改任何已验收的断言或业务代码**；冷缓存下连跑两次全量 E2E
+均为 171 passed / 13 skipped / 0 failed。
