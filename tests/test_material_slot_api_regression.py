@@ -104,7 +104,8 @@ def _is_frozen_family(path: str) -> bool:
 
 
 #: 材料台账只读接口（本清单同样冻结：多一条、少一条都会失败）。
-#: WP1：不新增任何 HTTP 接口；WP2-A：新增且**恰好**三条；WP2-B：新增且**恰好**七条。
+#: WP1：不新增任何 HTTP 接口；WP2-A：新增且**恰好**三条；WP2-B：新增且**恰好**七条；
+#: WP2-C：新增且**恰好**八条（全局搜索）。
 #: 每轮把它写成精确集合，是为了继续拦住"顺手多加一个接口"——
 #: 详情页需要数据不是实现写接口的理由（写入路径属于 WP3/WP9）。
 MATERIAL_LEDGER_ROUTES = frozenset(
@@ -116,17 +117,19 @@ MATERIAL_LEDGER_ROUTES = frozenset(
         ("GET", "/api/materials/slots/{slot_id}"),
         ("GET", "/api/materials/slots/{slot_id}/versions"),
         ("GET", "/api/materials/slots/{slot_id}/runs"),
+        ("GET", "/api/materials/search"),
     }
 )
 
 
 def test_material_http_route_surface_is_exactly_the_planned_set():
-    """材料台账的 HTTP 接口面恰好是计划中的七条只读接口。
+    """材料台账的 HTTP 接口面恰好是计划中的八条只读接口。
 
-    WP1 阶段这里是"一条都没有"；WP2-A 变成"精确三条"；WP2-B 变成
-    "精确七条"（单位时间轴 + 槽位详情 + 版本历史 + 处理记录）。
-    搜索（WP2-C）、复核生命周期（WP3）、应收基线（WP9）的接口**不在本轮
-    范围内**，多出来就会被这条测试拦住。
+    WP1 阶段这里是"一条都没有"；WP2-A 变成"精确三条"；WP2-B 变成"精确七条"
+    （单位时间轴 + 槽位详情 + 版本历史 + 处理记录）；WP2-C 变成"精确八条"
+    （多一条全局搜索）。
+    复核生命周期（WP3）、应收基线（WP9）的接口**不在本轮范围内**，
+    多出来就会被这条测试拦住。
     """
     actual = {row for row in _route_surface() if "/materials" in row[1]}
     assert actual == MATERIAL_LEDGER_ROUTES, (
@@ -135,8 +138,8 @@ def test_material_http_route_surface_is_exactly_the_planned_set():
     )
     assert all(
         method == "GET" for method, _ in actual
-    ), "本轮的七个材料接口都是只读 GET：写入路径属于 WP3/WP9"
-    assert len(actual) == 7
+    ), "本轮的材料接口全部是只读 GET：写入路径属于 WP3/WP9"
+    assert len(actual) == 8
 
 
 # ==== 入库集成只做加法，且可关闭 ============================================

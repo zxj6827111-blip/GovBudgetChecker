@@ -3,7 +3,9 @@
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import { NAV_GROUP_LABELS, NAV_ITEMS } from "./nav";
+import { GlobalMaterialSearch } from "../materials/GlobalMaterialSearch";
+
+import { NAV_GROUP_LABELS, findNavItemByPathname, resolveNavLabel } from "./nav";
 import { resolveServiceHealthState, type ServiceHealthResult } from "./serviceHealth";
 
 /**
@@ -14,8 +16,12 @@ import { resolveServiceHealthState, type ServiceHealthResult } from "./serviceHe
  *   （见 serviceHealth.ts 顶部注释：healthy / unhealthy / unknown 三态而非二态）；
  * - 异常时如实显示"服务异常"或"服务状态未知"，不吞掉失败伪装成"正常"。
  *
- * 搜索/通知/帮助三个按钮本批只做占位（无具体交互逻辑），
- * 具体功能超出 Task 2"只搬骨架，不迁移业务逻辑"的范围。
+ * 「搜索」在 WP2-C 正式接通：由 GlobalMaterialSearch 自带按钮 + 命令面板 +
+ * Ctrl/Cmd+K 快捷键；「通知」「帮助」继续保持占位（本轮范围外）。
+ *
+ * 面包屑标签由 `nav.ts` 的 `resolveNavLabel` 统一给出：它同时覆盖
+ * 一级导航项与**已退出一级导航但路由仍在**的兼容入口（如 `/history`），
+ * 因此这里不会再出现裸路径字符串。
  */
 const POLL_INTERVAL_MS = 30_000;
 
@@ -25,13 +31,8 @@ function formatUpdatedAt(date: Date): string {
   return `${hh}:${mm}`;
 }
 
-function resolveBreadcrumbLabel(pathname: string): string {
-  const navItem = NAV_ITEMS.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
-  return navItem?.label ?? pathname;
-}
-
 function resolveGroupLabel(pathname: string): string | null {
-  const navItem = NAV_ITEMS.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
+  const navItem = findNavItemByPathname(pathname);
   return navItem ? NAV_GROUP_LABELS[navItem.group] : null;
 }
 
@@ -68,7 +69,7 @@ export function WorkspaceTopbar() {
   }, []);
 
   const groupLabel = resolveGroupLabel(pathname);
-  const pageLabel = resolveBreadcrumbLabel(pathname);
+  const pageLabel = resolveNavLabel(pathname);
   const statusDotClass =
     health.state === "healthy"
       ? "bg-success-600"
@@ -98,14 +99,7 @@ export function WorkspaceTopbar() {
         </div>
 
         <div className="flex items-center gap-1 border-l border-border pl-4">
-          <button
-            type="button"
-            aria-label="搜索"
-            data-testid="gbc-workspace-action-search"
-            className="rounded-md p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
-          >
-            搜索
-          </button>
+          <GlobalMaterialSearch />
           <button
             type="button"
             aria-label="通知"

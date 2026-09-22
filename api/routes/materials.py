@@ -1,6 +1,6 @@
-"""材料台账只读 API（WP2-A + WP2-B）。
+"""材料台账只读 API（WP2-A + WP2-B + WP2-C）。
 
-接口面**恰好七条只读 GET**（多一条就会被 ``test_material_slot_api_regression``
+接口面**恰好八条只读 GET**（多一条就会被 ``test_material_slot_api_regression``
 拦住，写入路径属于 WP3/WP9）：
 
     1. ``GET /api/materials/coverage``                          首页口径统计
@@ -10,15 +10,18 @@
     5. ``GET /api/materials/slots/{slot_id}``                    材料详情
     6. ``GET /api/materials/slots/{slot_id}/versions``           版本历史
     7. ``GET /api/materials/slots/{slot_id}/runs``               处理记录
+    8. ``GET /api/materials/search``                             全局材料搜索（WP2-C）
 
 四条纪律
 --------
 1. **全部服务端鉴权。** 管理员、被授权的区县用户、未授权用户三种情况都在服务端判定，
    不依赖前端隐藏入口：未授权访问具体区县/部门/单位/槽位返回 403；首页聚合按账号
    授权范围过滤，账号一个区划都没授权时返回 403（"看不到东西"必须能解释清楚，
-   不能是一片空白）。
+   不能是一片空白）。搜索同样：无任何授权 -> 403，有授权但没命中 -> 200 + 空列表，
+   两者语义不得混（§三十六）。
 2. **不扫文件系统、不聚合 /api/jobs。** 数据全部来自台账四张表的 SQL；
-   详情页的速度不取决于 uploads 目录有多大。
+   详情页的速度不取决于 uploads 目录有多大。搜索也一样：它按槽位查库，
+   任务只是"精确关联到文件版本"的一条路径（§十/§二十七）。
 3. **错误沿用仓库既有契约。** 校验错误交给 FastAPI（422），未登录 401、越权 403、
    数据库不可用 503；不为 Materials 发明第二套错误格式。
 4. **"容器"与"数据"分开授权。** 区县/部门是**导航容器**（授权其下级即可打开），
@@ -31,10 +34,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from api import runtime
-from api.auth_utils import require_login, user_can_access_org
+from api.auth_utils import require_login, user_can_access_job, user_can_access_org
 from src.db.connection import DatabaseConnection
 from src.schemas.material_detail import (
     SlotDetailResponse,
@@ -56,10 +59,29 @@ from src.schemas.material_ledger import (
     build_list_meta,
     build_meta,
 )
+from src.schemas.material_search import (
+    DEFAULT_SEARCH_PAGE_SIZE,
+    MAX_SEARCH_PAGE_SIZE,
+    MaterialSearchData,
+    MaterialSearchMeta,
+    MaterialSearchResponse,
+    RelationshipResolution,
+    build_search_meta,
+)
 from src.services.material_detail_query_service import MaterialDetailQueryService
 from src.services.material_ledger_query_service import (
     MaterialLedgerQueryService,
     MaterialSlotFilters,
+)
+from src.services.material_search_query_service import (
+    MAX_QUERY_LENGTH,
+    MAX_TEXT_TOKENS,
+    MIN_QUERY_LENGTH,
+    MaterialSearchFilters,
+    MaterialSearchQueryError,
+    MaterialSearchQueryService,
+    head_unit_subject_ids,
+    parse_search_query,
 )
 
 logger = logging.getLogger(__name__)
@@ -121,6 +143,14 @@ async def _run_detail_query(
 ) -> Any:
     return await _with_connection(
         lambda conn: callback(MaterialDetailQueryService(conn))
+    )
+
+
+async def _run_search_query(
+    callback: Callable[[MaterialSearchQueryService], Awaitable[Any]],
+) -> Any:
+    return await _with_connection(
+        lambda conn: callback(MaterialSearchQueryService(conn))
     )
 
 
@@ -641,9 +671,120 @@ async def get_slot_runs(slot_id: str, request: Request) -> SlotRunListResponse:
     return SlotRunListResponse(ok=True, data=data, meta=build_detail_meta())
 
 
+# ---- 接口八：全局材料搜索（WP2-C） ------------------------------------------
+
+
+def _validated_search_query(
+    q: str = Query(..., min_length=MIN_QUERY_LENGTH, max_length=MAX_QUERY_LENGTH),
+) -> str:
+    """``q`` 的校验依赖：**trim 之后**再判长度。
+
+    只靠 FastAPI 的 ``min_length`` 不够：``"  a  "`` 原始长度 5 会过闸，
+    去空白后只剩 1 个字符。查询串的长度口径必须与"实际参与匹配的字符串"
+    同一份，否则会出现"校验通过、匹配为空"这种无从解释的空结果。
+    空查询**不返回全部材料**（§八）——它连校验都过不去。
+    """
+    value = str(q or "").strip()
+    if len(value) < MIN_QUERY_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"q must be at least {MIN_QUERY_LENGTH} characters after trimming",
+        )
+    return value
+
+
+@router.get("/api/materials/search", response_model=MaterialSearchResponse)
+async def search_materials(
+    request: Request,
+    q: str = Depends(_validated_search_query),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(
+        default=DEFAULT_SEARCH_PAGE_SIZE, ge=1, le=MAX_SEARCH_PAGE_SIZE
+    ),
+) -> MaterialSearchResponse:
+    """全局材料搜索：**返回 Material Slot，不是 Job**。
+
+    可以搜的字段（§十一）：PDF 文件名（含历史版本）、区县、主管部门、单位、
+    财政年度、预算/决算、job id，以及"本部/本级"这一层关系修饰词。
+
+    三条对外承诺：
+
+    - **搜索式与台账式是两条并存的找材料路径**：这条接口不替代
+      ``/api/materials/coverage`` 那条下钻链，它只解决"我知道一个词"的场景；
+    - **越权材料不出现，也不以禁用态出现**：权限过滤在 SQL 里完成
+      （``visible_org_ids`` 三列 OR），无权访问的材料连"存在"这件事都看不到
+      （§三十五）。没命中与没权限在响应上完全同形；
+    - **"进入复核"是两段判定的合取**：后端只回答"这个任务你有没有权限看"
+      （复用 ``user_can_access_job``），任务状态是否允许进复核由前端既有的
+      ``resolveReviewEntryDecision()`` 决定（§二十八）。判定不了时
+      ``review_candidate`` 为 null，界面只保留「打开材料」（§二十九）。
+    """
+    _, _, user = require_login(request)
+
+    scope = _build_access_scope(user)
+    if not scope.unrestricted and not scope.has_any_visible_org:
+        # 与 WP2-A 首页聚合同一口径：一个区划都没授权的账号是 403 而不是空列表。
+        # 空列表会被读成"这些材料不存在"，而真相是"这个账号看不到任何东西"。
+        raise HTTPException(
+            status_code=403,
+            detail="no organization authorized for this account",
+        )
+
+    try:
+        parsed = parse_search_query(q)
+    except MaterialSearchQueryError as exc:
+        # 异常消息是静态文案（不含用户输入），可以安全地作为 detail 透出。
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    relationship_resolution: RelationshipResolution = "not_requested"
+    head_unit_ids: List[str] = []
+    if parsed.relationship == "head_unit":
+        storage = _org_storage_or_none()
+        if storage is None:
+            # fail-closed（§十八）：解析不出"本部"时不给关系命中，
+            # 而不是把"主体是单位"当成"本部"（直属单位也是单位）。
+            relationship_resolution = "unavailable"
+        else:
+            relationship_resolution = "resolved"
+            head_unit_ids = head_unit_subject_ids(list(storage.get_all()))
+
+    filters = MaterialSearchFilters(
+        # 年度/文种/关系只在 parsed 里（解析结果的唯一持有者），
+        # 这里只传"解析出来的东西"与权限范围。
+        head_unit_org_ids=head_unit_ids,
+        # 管理员是 None（不加权限条件）；非管理员是可见组织列表，
+        # 空列表在此分支不会出现（上面已经 403 拦掉）。
+        visible_org_ids=scope.visible_org_ids,
+    )
+
+    def _job_access(payload: Dict[str, Any]) -> bool:
+        """任务可见性判定：复用仓库既有实现，不另写一套 job 权限（§二十六）。"""
+        return user_can_access_job(user, payload)
+
+    items, total = await _run_search_query(
+        lambda service: service.search(
+            query=parsed,
+            filters=filters,
+            page=page,
+            page_size=page_size,
+            job_access=_job_access,
+        )
+    )
+
+    meta: MaterialSearchMeta = build_search_meta(
+        query=parsed.raw,
+        page=page,
+        page_size=page_size,
+        total=total,
+        relationship_resolution=relationship_resolution,
+    )
+    return MaterialSearchResponse(ok=True, data=MaterialSearchData(items=items), meta=meta)
+
+
 __all__ = [
     "DEFAULT_PAGE_SIZE",
     "MAX_PAGE_SIZE",
     "MATERIAL_STATUSES",
+    "MAX_TEXT_TOKENS",
     "router",
 ]
