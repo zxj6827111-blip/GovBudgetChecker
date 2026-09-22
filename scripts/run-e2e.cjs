@@ -37,6 +37,10 @@ const WARMUP_PATHS = [
   "/materials",
   "/materials/district/district-pt",
   "/materials/department/dept-ghzy?year=2025",
+  // WP2-B 两条新路由：dev 模式下 Next 首次编译很慢，不预热会让
+  // 第一个导航用例把编译时间算进自身超时（表现为随机失败）。
+  "/materials/unit/unit-ghzy-head",
+  "/materials/slots/slot-head-final-2024",
 ];
 const forwardedArgs = process.argv.slice(2);
 let server = null;
