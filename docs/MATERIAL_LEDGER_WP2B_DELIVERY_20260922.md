@@ -77,9 +77,11 @@ material_slots.current_document_version_id
 2. **JSONB 的真实形态**：仓库没有给 asyncpg 注册 JSON codec，取回来是**字符串**。
    只写 `isinstance(x, dict)` 会在真库上静默读到空 dict，页面显示"没有覆盖记录"而数据其实存在。
    查询层因此统一走 `_json_value` 强制转换（与 `analysis_result_store._coerce_json_value` 同一手法）。
-3. **正式问题的唯一门禁**是 `src/services/evidence_guard.is_formal_finding`
-   （`evidence_status != "degraded_missing_evidence"`）。详情接口的"正式问题数"
-   就是把已落库的 `ai_findings` / `rule_findings` 交给这一个门禁计数，
+3. **正式 finding 的唯一门禁**是 `src/services/evidence_guard.is_formal_finding`
+   （`evidence_status != "degraded_missing_evidence"`），唯一计数函数是
+   `evidence_guard.count_formal_findings`。权威语义是"没有被 evidence guard 降级
+   就属于正式 finding"，`error` / `warn` / `info` 三种严重度**都算**。
+   详情接口的 `formal_issue_count` 直接调用该函数（见 §11.1 的收口），
    没有第二套判定。legacy 落库路径下 `rule_findings` 就是 `issues` 的展平去重结果
    （`_flatten_legacy_issues`），双模式路径本来就没有 `issues` 键 —— 两条路径读的都是同一批对象。
 4. **仓库既有的任务排序口径**是
@@ -238,7 +240,7 @@ material_slots.current_document_version_id
 | ① | 时间轴年度排序降序 → 升序 | CAUGHT |
 | ② | 当前版本指针为空时挑最新版本冒充 | CAUGHT |
 | ③ | 当前版本无分析时回退到该槽位任意运行的结论 | CAUGHT |
-| ④ | 正式问题数算不出来时返回 `0` 而不是 `null` | CAUGHT |
+| ④ | `formal_issue_count` 算不出来时返回 `0` 而不是 `null` | CAUGHT |
 | ⑤ | 检查覆盖不可用时返回 `available=true` + 全 0 | CAUGHT |
 | ⑥ | 单位时间轴授权恒放行 | CAUGHT |
 | ⑦ | 槽位可见性判定恒真（放行越权） | CAUGHT |
@@ -331,3 +333,107 @@ GOVBUDGET_TEST_DATABASE_URL=postgresql://... python -m pytest \
 > 另外：`next build` 与 `next dev` 共用 `app/.next`，在 dev server 存活期间跑 build
 > 会让 dev 的路由清单失效（新路由返回 404）。e2e 前先停掉 dev server，或让
 > `scripts/next-dev.cjs` 清缓存重启。
+
+---
+
+## 11. 最终独立 Review 收口（2026-09-22）
+
+独立 Review 基线 `960409f1cf5d382b368a47dddce5509d20f36e73` 通过主链、版本隔离、
+RBAC/IDOR、timeline、current pointer、current analysis、coverage、sources、runs 之后，
+只提出两项合并阻塞。本轮**只**修这两项，没有重构任何已通过的部分。
+
+### 11.1 `formal_issue_count` 回到仓库唯一权威口径
+
+**问题**：``partition_findings`` 的第一桶是**展示**分组（把 ``info`` 拆到另一栏），
+而当时的 ``formal_issue_count = len(formal)``。于是同一份分析出现两个问题数：
+
+| 读取方 | 口径 | 结果 |
+| --- | --- | --- |
+| 审核工作台 / 质量门禁 / ``evidence_guard`` | ``is_formal_finding``（未降级即正式，``error``/``warn``/``info`` 都算） | error + warn + info |
+| 材料详情（修复前） | ``len(正式问题那一栏)`` | error + warn |
+
+**修法**：新增 ``count_canonical_formal_findings(ai_findings, rule_findings)``，
+把已落库的两列拼成 ``count_formal_findings`` 认识的结果形态后**直接调用**该权威函数；
+``_build_analysis`` 改用它，不再用 ``len(formal)``。
+三个展示分组保持原样（正式问题 / 需人工核验 / 信息提示）——
+**展示分组不重新定义业务真值**，只是把同一批正式 finding 按严重度拆开展示。
+
+因此现在恒有：
+
+```
+formal_issue_count == len(formal_findings) + len(info_findings)
+formal_issue_count == count_formal_findings({ai_findings, rule_findings})
+```
+
+**文案同步**：页面顶部总计由「正式问题：N」改为「**正式检查记录：N**」，
+并补一句说明「包含正式问题与信息提示；证据不足被降级的待人工核验项不计入」——
+否则用户会把"总计"与下面「信息提示」那一栏看成两回事。
+概览页的 KPI 标签同步改为「正式检查记录」。
+**API 字段名 ``formal_issue_count`` 未改**（本轮保持兼容）。
+
+### 11.2 处理记录不再回显任何原始 `error_message`
+
+**问题**：``_safe_error_summary`` 原实现用一份"坏形态黑名单"
+（``c:\`` ``d:\`` / ``/opt/`` ``/home/`` ``/var/`` / 连接串 / Traceback）决定是否脱敏，
+并**放行其余文本**。这条路的漏洞是原理性的：
+
+- 黑名单补不完：``E:\`` ``F:\`` ``Z:\``、``/tmp/`` ``/mnt/`` ``/usr/`` ``/srv/``、
+  UNC ``\server\share`` —— 而本项目开发环境本身就在 ``E:\Software Development\...`` 下，
+  不是理论风险；
+- 错误文本里可能出现的敏感信息远超"路径"：连接串、URL、token、用户名、数据库名、
+  内部 host、环境变量值、文件名、业务数据片段；
+- "看起来安全的错误"与"不安全的错误"没有稳定分类标准，部分脱敏只是在赌下一版错误消息。
+
+**修法（fail-closed）**：
+
+```python
+def _safe_error_summary(value):
+    if not str(value or "").strip():
+        return None
+    return "处理失败（详情见任务日志）"
+```
+
+只要数据库里存在非空 ``error_message``，普通材料详情一律返回**这一条固定文案**；
+没有错误（``None``/空串/纯空白）返回 ``None``，不把"没失败"渲染成"处理失败"。
+完整错误仍保留在任务日志、运维界面与数据库里，**没有信息丢失**。
+本轮**不做**部分脱敏（不新增 sanitize 函数后再回显剩余原文），
+也不在页面上新增「查看日志」按钮（日志权限属于后续运维/权限设计）。
+
+### 11.3 新增测试
+
+| 文件 | 新增 | 内容 |
+| --- | --- | --- |
+| `tests/test_material_ledger_detail_closure.py` | 47 | 口径对照（多样本与权威函数逐一比对、info 计数但单独展示、降级不计入、"只有 info"时计数不为 0）、`_safe_error_summary` 的 16 类原文样本与 13 个泄露片段反向断言、空值返回 None、不做部分脱敏 |
+| `tests/test_material_ledger_detail_api.py` | +16 | `test_runs_api_returns_only_fixed_safe_error_summary`（14 个样本参数化，断言响应体任意位置不含原文片段）、`test_runs_api_error_summary_is_null_when_there_is_no_error`、`test_slot_detail_formal_issue_count_equals_canonical_count` |
+| `app/tests/materialDetailAdapters.test.ts` | +4 断言（111 → 115） | 前端契约层断言"总计 = 正式问题栏 + 信息提示栏"，且"只有 info 时正式问题栏为空但计数不为 0" |
+| `e2e/tests/material-ledger-detail.spec.ts` | +2（13 → 15） | 顶部「正式检查记录」= 两栏之和（并核对三栏条数）、失败运行只显示固定安全文案且无"查看日志"入口 |
+
+### 11.4 变异验证（收口项）
+
+| # | 变异 | 结果 |
+| --- | --- | --- |
+| A | `formal_issue_count` 改回 `len(formal)` | **CAUGHT**（5 failed） |
+| B1 | `_safe_error_summary` 改回 `return first_line` | **CAUGHT**（47 failed） |
+| B2 | `_safe_error_summary` 改回**原始黑名单实现** | **CAUGHT**（20 failed） |
+
+B2 是最有价值的一条：它证明新增的安全反例**确实能抓住被 Review 指出的原始缺陷**
+（``E:\`` 与 ``/tmp/`` 会漏过旧黑名单）。还原后全绿（134 passed）。
+
+### 11.5 收口后的实测数字
+
+| 项 | 结果 |
+| --- | --- |
+| 本地 `python -m pytest -q`（Windows） | **1689 passed, 43 skipped**（收口前 1626/43；新增 63 条） |
+| `python -m ruff check .` | All checks passed |
+| `python -m mypy api src tests` | Success: no issues found in 226 source files |
+| `npm --prefix app run test:unit` | 全绿（`test:material-detail` 115 断言，收口前 111） |
+| `npm --prefix app run build` | 通过 |
+| 全仓 E2E | **171 passed, 13 skipped**（13 = 两套截图采集，默认跳过） |
+| material-ledger E2E（WP2-A + WP2-B + 两套截图 spec） | **34 passed, 13 skipped**（WP2-B 用例 13 → 15） |
+| PostgreSQL（pg + detail_pg） | **16 passed** |
+| `check_coverage_baseline.py --assert-gaps 8` | 通过（**仍 8 gaps**） |
+| `SCHEMA_CHANGE_REQUIRED` | **NO**（本轮未新增 migration） |
+
+WP1 底座（migration 0019 / `material_slot_service` / `material_slot_resolver` /
+`material_slot_status` / slot identity / cleanup protection / allocation ordering）
+与 WP2-A 的 access scope 语义均未修改；WP3、WP9、`backfill --apply` 未触碰。
