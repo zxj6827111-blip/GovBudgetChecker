@@ -92,6 +92,10 @@ ERROR_REVIEW_CONTEXT_UNAVAILABLE = "review_context_unavailable"
 ERROR_REVIEW_CONTEXT_MISMATCH = "review_context_mismatch"
 ERROR_REVIEW_COMPLETED_LOCKED = "review_completed_locked"
 
+#: 编辑锁（文件存储）写不进去。复核完成是**安全约束**，锁没落下就不允许宣称完成，
+#: 因此这条错误会让本次复核失败并回滚数据库事务（503：存储暂时不可用）。
+ERROR_REVIEW_LOCK_UNAVAILABLE = "review_lock_unavailable"
+
 
 class ReviewBlocker(BaseModel):
     """一条完成门禁阻塞。``count`` 只对计数类阻塞有意义。"""
@@ -275,6 +279,7 @@ __all__ = [
     "ERROR_REVIEW_CONTEXT_UNAVAILABLE",
     "ERROR_REVIEW_CONTEXT_MISMATCH",
     "ERROR_REVIEW_COMPLETED_LOCKED",
+    "ERROR_REVIEW_LOCK_UNAVAILABLE",
     "ReviewBlocker",
     "CompletionGate",
     "CurrentAnalysisRef",

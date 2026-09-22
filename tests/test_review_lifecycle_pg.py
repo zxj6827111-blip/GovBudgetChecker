@@ -1583,3 +1583,324 @@ async def test_first_persist_with_result_starts_at_revision_one(review_db):
             "SELECT analysis_revision FROM analysis_jobs WHERE job_uuid = $1", job_uuid
         )
     assert bumped == 2, "重置之后即使内容逐字相同也必须换代"
+
+# ==== 跨存储一致性（独立评审 P1：文件锁 / JSONL 审计不属于 PostgreSQL 事务） ==
+#
+# 三种存储之间没有共同事务：
+#
+#   PostgreSQL                      review_sessions / material_slots / analysis_jobs
+#   文件 .issue_workflow.json        review_locks（复核完成后问题不可改）
+#   JSONL admin-actions.jsonl        审计事件
+#
+# 因此本轮的规则是"事务内只做数据库事实；文件副作用在提交成功之后做"，
+# 并且对"锁写了但提交失败"这个反向窗口做**精确补偿**（按 session + basis 比较）。
+# 下面每条用例对应评审要求的一个失败路径。
+
+
+def _audit_events_for(action: str, result: str, path: Any) -> List[Dict[str, Any]]:
+    return [
+        event
+        for event in _read_audit_events(path)
+        if event["action"] == action and event["result"] == result
+    ]
+
+
+class _Boom(RuntimeError):
+    """测试用的注入异常。"""
+
+
+async def test_set_review_lock_failure_aborts_completion(review_db, monkeypatch, tmp_path):
+    """§十二 A：编辑锁写失败 → 复核不允许成功（fail-closed）。
+
+    fail-closed 的检验点有三处：会话仍是 in_progress、槽位没有变成 completed、
+    审计里没有 review.complete success。缺任何一处都意味着"数据库说完成了、
+    但问题其实还能被改"。
+    """
+    from src.services import issue_workflow_store
+
+    schema, pool = review_db
+    audit_path = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+
+    def _boom(*_args, **_kwargs):
+        raise PermissionError("simulated lock store failure")
+
+    monkeypatch.setattr(issue_workflow_store, "set_review_lock", _boom)
+
+    async with _conn(schema, pool) as conn:
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+            await review_lifecycle_service.complete_review(
+                conn, ctx["slot_id"], actor="r"
+            )
+    assert excinfo.value.status_code == 503
+    assert excinfo.value.detail["error"] == "review_lock_unavailable"
+
+    sessions = await _sessions_for_job(schema, pool, ctx["job_uuid"])
+    assert [item["status"] for item in sessions] == ["in_progress"], sessions
+    status = await _slot_status(schema, pool, ctx["slot_id"])
+    assert status["status"] != "completed", status
+    assert issue_workflow_store.get_review_lock(ctx["job_uuid"]) is None
+    assert _audit_events_for("review.complete", "success", audit_path) == []
+
+
+async def test_commit_failure_after_lock_write_is_compensated(review_db, monkeypatch, tmp_path):
+    """§十二 B：锁已写入但 PostgreSQL 提交失败 → 必须精确补偿掉那条锁。
+
+    怎么构造"提交失败"：编辑锁是在事务体内写的，写完之后事务里再没有别的
+    数据库动作，所以失败只可能发生在**提交**这一刻。这里把事务边界换成
+    "事务体正常执行、退出时抛错"——等价于 COMMIT 失败，数据库整体回滚，
+    而文件锁已经落下。
+
+    终态必须满足：会话不是 completed，且没有残留本次会话的编辑锁。
+    没有补偿时，那条锁会把"问题不可改"永久扣在一份**并没有复核完成**的材料上。
+    """
+    from contextlib import asynccontextmanager
+
+    from src.db.transaction import transaction_scope
+    from src.services import issue_workflow_store
+    from src.services import review_session_store
+
+    schema, pool = review_db
+    audit_path = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+
+    @asynccontextmanager
+    async def _commit_fails(conn):
+        """事务体正常跑完，退出时抛错 = COMMIT 失败。"""
+        async with transaction_scope(conn):
+            yield
+            raise _Boom("simulated commit failure")
+
+    monkeypatch.setattr(review_session_store, "review_transaction", _commit_fails)
+
+    async with _conn(schema, pool) as conn:
+        with pytest.raises(_Boom):
+            await review_lifecycle_service.complete_review(conn, ctx["slot_id"], actor="r")
+
+    sessions = await _sessions_for_job(schema, pool, ctx["job_uuid"])
+    assert [item["status"] for item in sessions] == ["in_progress"], sessions
+    assert (
+        issue_workflow_store.get_review_lock(ctx["job_uuid"]) is None
+    ), "提交失败后必须把本次写入的编辑锁补偿掉，否则问题被永久锁死"
+    assert _audit_events_for("review.complete", "success", audit_path) == []
+
+    # 补偿之后重试必须成功（锁必须处于"可被正确重建"的状态）
+    monkeypatch.setattr(review_session_store, "review_transaction", transaction_scope)
+    async with _conn(schema, pool) as conn:
+        completed = await review_lifecycle_service.complete_review(
+            conn, ctx["slot_id"], actor="r"
+        )
+    assert completed.session.status == "completed"
+    lock = issue_workflow_store.get_review_lock(ctx["job_uuid"])
+    assert lock is not None and lock["review_session_id"] == completed.session.review_session_id
+
+
+async def test_compensation_requires_session_match(review_db, monkeypatch, tmp_path):
+    """§十二 C：补偿只清"自己那条"锁；文件里已是别的会话时不得删除。
+
+    最危险的一档是 **basis 相同、session 不同**：同一代分析上重开复核会产生
+    新的 session id 而 basis token 不变（重开不换代）。此时旧会话的补偿如果
+    只比 basis，就会把**新会话**的锁删掉——"复核已完成、问题不可改"这条安全
+    约束会从后来那次复核身上被静默摘掉。因此三个键（job / session / basis）
+    必须一起比，本用例逐档验证。
+    """
+    from src.services import issue_workflow_store
+
+    schema, pool = review_db
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
+
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+
+    basis = f"{ctx['job_uuid']}:1"
+    # 文件里是**别的会话**（B）的锁，且 basis 与当前一致
+    issue_workflow_store.set_review_lock(
+        ctx["job_uuid"],
+        slot_id=ctx["slot_id"],
+        review_session_id="sess-B",
+        analysis_basis_token=basis,
+        completed_by="other",
+    )
+
+    # 档 1：basis 相同、session 不同 → 不得删除（这正是"只比 basis"会漏掉的那一档）
+    assert (
+        issue_workflow_store.clear_review_lock_if_matches(
+            ctx["job_uuid"], review_session_id="sess-A", analysis_basis_token=basis
+        )
+        is False
+    )
+    survivor = issue_workflow_store.get_review_lock(ctx["job_uuid"])
+    assert survivor is not None and survivor["review_session_id"] == "sess-B"
+
+    # 档 2：session 相同、basis 不同 → 不得删除（旧代际的补偿不能动新代际的锁）
+    assert (
+        issue_workflow_store.clear_review_lock_if_matches(
+            ctx["job_uuid"],
+            review_session_id="sess-B",
+            analysis_basis_token=f"{ctx['job_uuid']}:9",
+        )
+        is False
+    )
+    assert issue_workflow_store.get_review_lock(ctx["job_uuid"]) is not None
+
+    # 档 3：三个键全匹配 → 允许删除
+    assert (
+        issue_workflow_store.clear_review_lock_if_matches(
+            ctx["job_uuid"], review_session_id="sess-B", analysis_basis_token=basis
+        )
+        is True
+    )
+    assert issue_workflow_store.get_review_lock(ctx["job_uuid"]) is None
+
+    # 档 4：本来就没有锁 → 返回 False，不报错
+    assert (
+        issue_workflow_store.clear_review_lock_if_matches(
+            ctx["job_uuid"], review_session_id="sess-B", analysis_basis_token=basis
+        )
+        is False
+    )
+
+
+async def test_success_audit_appears_only_after_commit(review_db, monkeypatch, tmp_path):
+    """§十二 D：审计只能在 PostgreSQL 提交成功之后出现。
+
+    回滚场景：一条 success 都不许有。
+    """
+    from src.services.material_slot_service import MaterialSlotService
+
+    schema, pool = review_db
+    audit_path = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+
+    real_refresh = MaterialSlotService.refresh_status
+
+    async def _failing_refresh(self, slot_id, **kwargs):
+        if kwargs.get("review_state") == "completed":
+            raise _Boom("rollback")
+        return await real_refresh(self, slot_id, **kwargs)
+
+    monkeypatch.setattr(MaterialSlotService, "refresh_status", _failing_refresh)
+    async with _conn(schema, pool) as conn:
+        with pytest.raises(_Boom):
+            await review_lifecycle_service.complete_review(conn, ctx["slot_id"], actor="r")
+
+    assert _audit_events_for("review.complete", "success", audit_path) == []
+
+    # 正常成功：恰好 1 条
+    monkeypatch.setattr(MaterialSlotService, "refresh_status", real_refresh)
+    async with _conn(schema, pool) as conn:
+        await review_lifecycle_service.complete_review(conn, ctx["slot_id"], actor="r")
+    assert len(_audit_events_for("review.complete", "success", audit_path)) == 1
+
+    # 重复 complete：0 条新增
+    async with _conn(schema, pool) as conn:
+        await review_lifecycle_service.complete_review(conn, ctx["slot_id"], actor="r")
+    assert len(_audit_events_for("review.complete", "success", audit_path)) == 1
+
+
+async def test_reopen_rollback_keeps_old_completion_and_lock(review_db, monkeypatch, tmp_path):
+    """§十二 E：reopen 的数据库事务失败时，旧 completed 与它的编辑锁都必须还在。
+
+    这检验的是"清锁不能在事务内执行"：若清锁写在事务体内，回滚后会出现
+    "数据库说这份材料已完成复核，文件却说问题可以随便改"的分裂状态。
+    """
+    from src.services import issue_workflow_store
+    from src.services.material_slot_service import MaterialSlotService
+
+    schema, pool = review_db
+    audit_path = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+        first = await review_lifecycle_service.complete_review(
+            conn, ctx["slot_id"], actor="r"
+        )
+    lock_before = issue_workflow_store.get_review_lock(ctx["job_uuid"])
+    assert lock_before is not None
+
+    real_refresh = MaterialSlotService.refresh_status
+
+    async def _failing_refresh(self, slot_id, **kwargs):
+        if kwargs.get("review_state") == "in_progress":
+            raise _Boom("rollback the reopen")
+        return await real_refresh(self, slot_id, **kwargs)
+
+    monkeypatch.setattr(MaterialSlotService, "refresh_status", _failing_refresh)
+    async with _conn(schema, pool) as conn:
+        with pytest.raises(_Boom):
+            await review_lifecycle_service.reopen_review(conn, ctx["slot_id"], actor="r")
+
+    sessions = await _sessions_for_job(schema, pool, ctx["job_uuid"])
+    assert [item["status"] for item in sessions] == ["completed"], sessions
+    assert (
+        issue_workflow_store.get_review_lock(ctx["job_uuid"]) == lock_before
+    ), "reopen 事务回滚时旧编辑锁必须保留（否则问题被提前解锁）"
+    assert _audit_events_for("review.reopen", "success", audit_path) == []
+
+    # 放开之后重开成功：旧锁被精确清掉、新会话开始
+    monkeypatch.setattr(MaterialSlotService, "refresh_status", real_refresh)
+    async with _conn(schema, pool) as conn:
+        reopened = await review_lifecycle_service.reopen_review(
+            conn, ctx["slot_id"], actor="r"
+        )
+    assert reopened.session.status == "in_progress"
+    assert reopened.session.review_session_id != first.session.review_session_id
+    assert issue_workflow_store.get_review_lock(ctx["job_uuid"]) is None
+    sessions = await _sessions_for_job(schema, pool, ctx["job_uuid"])
+    assert sorted(item["status"] for item in sessions) == ["in_progress", "invalidated"]
+
+
+async def test_invalidate_audit_waits_for_commit(review_db, monkeypatch, tmp_path):
+    """失效路径同样遵守跨存储规则：事务回滚时不清锁、不写审计。"""
+    from src.services import review_session_store
+    from src.services.material_slot_service import MaterialSlotService
+
+    schema, pool = review_db
+    audit_path = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+
+    real_refresh = MaterialSlotService.refresh_status
+
+    async def _failing_refresh(self, slot_id, **kwargs):
+        if kwargs.get("review_state") == "required":
+            raise _Boom("rollback the invalidation")
+        return await real_refresh(self, slot_id, **kwargs)
+
+    monkeypatch.setattr(MaterialSlotService, "refresh_status", _failing_refresh)
+    async with _conn(schema, pool) as conn:
+        with pytest.raises(_Boom):
+            await review_lifecycle_service.invalidate_review(
+                conn, ctx["slot_id"], reason="analysis_restarted"
+            )
+    sessions = await _sessions_for_job(schema, pool, ctx["job_uuid"])
+    assert [item["status"] for item in sessions] == ["in_progress"], sessions
+    assert _audit_events_for("review.invalidate", "success", audit_path) == []
+
+    monkeypatch.setattr(MaterialSlotService, "refresh_status", real_refresh)
+    async with _conn(schema, pool) as conn:
+        assert (
+            await review_lifecycle_service.invalidate_review(
+                conn, ctx["slot_id"], reason="analysis_restarted"
+            )
+            == 1
+        )
+    assert len(_audit_events_for("review.invalidate", "success", audit_path)) == 1

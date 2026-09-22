@@ -616,6 +616,51 @@ def clear_review_lock(job_id: str) -> Dict[str, Any]:
         return _write_state(state)
 
 
+def clear_review_lock_if_matches(
+    job_id: str,
+    *,
+    review_session_id: Optional[str],
+    analysis_basis_token: Optional[str],
+) -> bool:
+    """**比较后再清**：只有当前锁确实是这条会话留下的才删除。
+
+    存在的唯一理由是"PostgreSQL 提交失败后的补偿"：复核完成的顺序是
+    "事务内写下编辑锁 → 提交"。提交失败时数据库已经回滚（会话不是 completed），
+    那条文件锁就成了孤儿，必须清掉；但**不能无条件按 job_id 清**——
+    并发下另一个会话可能已经写下它自己的锁，无条件清会把别人的安全约束一起删掉。
+
+    比较键取 ``(job_id, review_session_id, analysis_basis_token)``：
+    session id 唯一标识"哪一次复核"，basis token 额外确认"是哪一代分析"。
+    两者都不匹配（或文件里已是别的会话）时**不动它**，返回 ``False``。
+
+    整个判断与删除在 ``_state_lock()`` 之内完成，因此与并发写锁互斥——
+    放到锁外做"先读、再比、后删"会留下"读完之后被别人换掉"的窗口。
+
+    返回是否真的删除了锁。
+    """
+    normalized = str(job_id or "").strip()
+    if not normalized:
+        return False
+    expected_session = str(review_session_id or "").strip()
+    expected_basis = str(analysis_basis_token or "").strip()
+    with _state_lock():
+        state = _read_state()
+        locks = dict(state.get("review_locks") or {})
+        current = locks.get(normalized)
+        if not isinstance(current, dict):
+            return False
+        if expected_session and str(current.get("review_session_id") or "").strip() != expected_session:
+            # 文件里已经是别的会话的锁：不删。删了就等于把"复核已完成、问题不可改"
+            # 这条安全约束从后来那次复核身上摘掉。
+            return False
+        if expected_basis and str(current.get("analysis_basis_token") or "").strip() != expected_basis:
+            return False
+        locks.pop(normalized, None)
+        state["review_locks"] = locks
+        _write_state(state)
+        return True
+
+
 def _require_issue_mutable(state: Dict[str, Any], job_id: str) -> None:
     """复核已完成的任务：拒绝静默修改问题（§五十五/§五十六）。
 

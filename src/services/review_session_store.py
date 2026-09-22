@@ -63,9 +63,11 @@ from src.db.transaction import transaction_scope
 
 logger = logging.getLogger(__name__)
 
-#: 复核写路径的事务边界（与 WP1 共用同一套语义：已在事务中则复用，
-#: 嵌套时退化为 SAVEPOINT）。所有复核写路径都必须包在它里面，
-#: 否则 ``FOR UPDATE`` 拿到的锁活不过单条语句。
+#: 复核写路径的事务边界（与 WP1 共用同一套语义）。所有复核写路径都必须
+#: 包在它里面，否则 ``FOR UPDATE`` 拿到的锁活不过单条语句。
+#:
+#: 语义细节见 ``src/db/transaction.py``：连接已在事务中时**直接复用外层事务**，
+#: 不创建保存点；需要"内层失败外层继续"时必须显式写 ``conn.transaction()``。
 review_transaction = transaction_scope
 
 #: ``analysis_basis_token`` 的构造分隔符：``<job_uuid>:<analysis_revision>``。
@@ -356,7 +358,9 @@ async def invalidate_session(
     return session_row_to_dict(row)
 
 
-async def invalidate_sessions_for_job(conn: Any, analysis_job_uuid: str, *, reason: str) -> int:
+async def invalidate_sessions_for_job(
+    conn: Any, analysis_job_uuid: str, *, reason: str
+) -> List[Dict[str, Any]]:
     """让某个 job 上的活动/已完成会话全部失效（重新分析钩子用）。
 
     按 ``analysis_job_uuid`` 而不是按槽位：一个槽位的会话在正常情况下都指向
@@ -366,7 +370,7 @@ async def invalidate_sessions_for_job(conn: Any, analysis_job_uuid: str, *, reas
     已完成复核挂的是**旧那一代**分析结果，重新分析后它不再有效，
     必须一起失效——否则页面上会同时出现"已完成复核"和"分析结果已更新"。
     """
-    result = await conn.execute(
+    rows = await conn.fetch(
         """
         UPDATE review_sessions
         SET status = 'invalidated',
@@ -374,11 +378,15 @@ async def invalidate_sessions_for_job(conn: Any, analysis_job_uuid: str, *, reas
             invalidated_reason = $2,
             updated_at = NOW()
         WHERE analysis_job_uuid = $1 AND status IN ('in_progress', 'completed')
+        RETURNING id::text AS review_session_id, analysis_basis_token
         """,
         str(analysis_job_uuid or "").strip(),
         reason,
     )
-    return _affected_rows(result)
+    # 返回被失效会话的**身份**（而不只是条数）：调用方需要在提交之后按
+    # (session, basis) 精确清除对应的文件锁——无条件按 job 清会误删
+    # 并发下后来会话留下的锁。
+    return [dict(row) for row in rows]
 
 
 async def invalidate_stale_version_sessions(conn: Any, slot_id: Any, *, reason: str) -> int:

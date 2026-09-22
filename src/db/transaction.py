@@ -23,9 +23,9 @@ WP3-A 的一轮独立评审正是抓到了这一点：复核写路径里
 1. **写路径自己开事务，不靠调用约定。** 同一条服务函数会被路由、真库用例、
    内部任务分别调用（``complete_review`` 就有三个调用方）。只要事务边界由
    调用方负责，就一定会有人忘——而忘记的后果是静默的并发缺陷，不是报错。
-2. **已在事务中则复用，不重复包裹。** 重复包裹在 asyncpg 下会退化成
-   SAVEPOINT：语义仍然正确（可部分回滚），但每层都多一次往返。显式区分开，
-   读代码时不必去猜嵌套了几层。
+2. **已在事务中则复用外层事务，不再嵌套。** `transaction_scope` 在已有事务时
+   直接让出，既不 BEGIN 也不 SAVEPOINT（详见其文档字符串）。需要"内层失败
+   外层继续"的地方必须显式写 `conn.transaction()`——那才会产生保存点。
 """
 
 from __future__ import annotations
@@ -37,9 +37,9 @@ from typing import Any
 def in_transaction(conn: Any) -> bool:
     """连接是否已处于事务中。
 
-    取不到状态时按"未开启"处理：多开一层事务（asyncpg 会退化为 SAVEPOINT）
-    不会破坏正确性，而"以为在事务里、其实不在"会让行锁在语句结束就释放，
-    那才是真正的风险。因此不确定时选择更安全的一侧。
+    取不到状态时按"未开启"处理：多开一层事务不会破坏正确性，而
+    "以为在事务里、其实不在"会让行锁在语句结束就释放，那才是真正的风险。
+    因此不确定时选择更安全的一侧。
     """
     checker = getattr(conn, "is_in_transaction", None)
     if not callable(checker):
@@ -52,11 +52,24 @@ def in_transaction(conn: Any) -> bool:
 
 @asynccontextmanager
 async def transaction_scope(conn: Any):
-    """需要时开启事务；已在事务中则直接复用，不重复包裹。
+    """需要时开启事务；**已在事务中则直接复用外层事务，不创建保存点**。
 
-    嵌套时 asyncpg 会退化为 SAVEPOINT，因此"在外层事务里再包一层"是可用的：
-    内层抛错只回滚到该 SAVEPOINT，外层事务仍可继续（复核服务处理
-    ``uq_review_sessions_active`` 唯一冲突时就依赖这个语义）。
+    两种嵌套语义必须分清楚，它们不是同一件事：
+
+    =====================================  ==================================
+    写法                                    连接已在事务中时
+    =====================================  ==================================
+    ``transaction_scope(conn)``（本函数）    直接 ``yield``：复用外层事务，
+                                            既不 BEGIN 也不 SAVEPOINT
+    显式 ``conn.transaction()``              asyncpg 起一个 **SAVEPOINT**：
+                                            内层抛错只回滚到该保存点，
+                                            外层事务仍可继续
+    =====================================  ==================================
+
+    也就是说"嵌套会退化成 SAVEPOINT"只对**显式** ``conn.transaction()`` 成立。
+    需要"内层失败但外层继续"的地方（例如复核服务处理
+    ``uq_review_sessions_active`` 唯一冲突）必须显式写 ``conn.transaction()``，
+    只包 ``transaction_scope`` 是拿不到部分回滚语义的。
     """
     if in_transaction(conn):
         yield

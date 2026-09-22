@@ -44,6 +44,7 @@ LOCK ORDER（在 ``review_session_store`` 的全序之内）
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import logging
 import os
 from dataclasses import dataclass, field
@@ -69,6 +70,7 @@ from src.schemas.review_lifecycle import (
     ERROR_COMPLETION_BLOCKED,
     ERROR_REVIEW_CONTEXT_MISMATCH,
     ERROR_REVIEW_CONTEXT_UNAVAILABLE,
+    ERROR_REVIEW_LOCK_UNAVAILABLE,
     ERROR_START_BLOCKED,
     INVALIDATION_REASON_ANALYSIS_BASIS_CHANGED,
     INVALIDATION_REASON_ANALYSIS_RESTARTED,
@@ -210,6 +212,122 @@ async def _load_state(
     _load_problem_set(state)
     _load_coverage(state)
     return state
+
+
+@dataclass
+class _CommitEffects:
+    """**PostgreSQL 提交成功之后**才允许执行的外部副作用。
+
+    为什么必须把它们与数据库写入分开
+    --------------------------------
+    复核涉及三种存储，它们之间**没有**也**无法有**共同的原子事务：
+
+    ==============================  ====================================
+    存储                             内容
+    ==============================  ====================================
+    PostgreSQL                      ``review_sessions`` / ``material_slots``
+                                    / ``analysis_jobs``
+    文件 ``.issue_workflow.json``     ``review_locks``（复核完成后问题不可改）
+    JSONL ``admin-actions.jsonl``     审计事件
+    ==============================  ====================================
+
+    ``conn.transaction()`` 只管第一行。把文件写入放进事务体内执行，会得到两种
+    说谎的状态：DB 回滚了但文件已经改了（一个孤儿编辑锁把问题永久锁住），
+    或者 DB 提交失败但审计里已经写了"复核完成"。
+
+    因此本轮的规则是：
+
+    **事务内只做数据库事实；文件副作用一律在提交成功之后执行。**
+
+    唯一的例外是 ``lock_writes``：编辑锁必须在事务内写，因为它的失败必须
+    让整个复核失败（fail-closed，见 ``_set_workflow_lock_or_raise``）；
+    代价是"锁写了、提交失败"这个反向窗口，由提交失败时的
+    ``clear_review_lock_if_matches`` 精确补偿。
+    """
+
+    #: 需要在事务内落下的编辑锁（失败即中止复核）。每项记录它的
+    #: (job_id, review_session_id, analysis_basis_token)，供补偿时精确比较。
+    lock_writes: List[Dict[str, Any]] = field(default_factory=list)
+    #: 提交成功后才清除的编辑锁（每项含 job_uuid / review_session_id /
+    #: analysis_basis_token，供精确比较；不带身份就清等于可能误删别人的锁）
+    lock_clears: List[Dict[str, Any]] = field(default_factory=list)
+    #: 提交成功后才写的业务成功审计
+    audits: List[Dict[str, Any]] = field(default_factory=list)
+
+
+@asynccontextmanager
+async def _mutation_scope(conn: Any, effects: _CommitEffects):
+    """复核写路径的事务范围：提交成功后执行文件副作用，提交失败则精确补偿。
+
+    用法::
+
+        effects = _CommitEffects()
+        async with _mutation_scope(conn, effects):
+            ... 只写数据库；需要锁时调 _set_workflow_lock_or_raise(effects, ...) ...
+        # 到这里 PostgreSQL 已提交，文件副作用（清锁 / 审计）已执行
+
+    提交失败（或事务体抛错）时：**不执行**任何 clears/audits，并把事务内已经
+    写下的编辑锁按 session + basis 精确补偿掉——否则会留下"数据库说没复核、
+    文件说已复核"的孤儿锁。
+
+    已知边界：若调用方**自己**已经开了外层事务，本层不再开启新事务（`transaction_scope`
+    直接复用），此时真正的提交时点由调用方掌握，文件副作用会提前到本层退出时执行。
+    生产入口（路由）都在自动提交连接上调用，不存在这个情况；
+    服务层自持事务边界也正是为了让"提交时点"这件事不必依赖调用方的记性。
+    """
+    try:
+        async with review_session_store.review_transaction(conn):
+            yield effects
+    except BaseException:
+        _compensate_lock_writes(effects)
+        raise
+    _run_post_commit_effects(effects)
+
+
+def _run_post_commit_effects(effects: _CommitEffects) -> None:
+    """执行提交后的文件副作用。两者都**不能**反向影响已经提交的数据库结论。"""
+    for identity in effects.lock_clears:
+        # 清锁失败是 fail-closed 方向：锁留着，用户暂时改不了问题（可重开复核），
+        # 而不会出现"数据库说复核已失效、文件却把问题解锁了"。只记运维错误。
+        #
+        # 按 (job, session, basis) 精确比较：并发下文件里可能已经是**另一个会话**
+        # 的锁，无条件按 job 清会把别人那条安全约束一起删掉。
+        _clear_workflow_lock_if_matches(
+            str(identity.get("job_uuid") or ""),
+            review_session_id=str(identity.get("review_session_id") or ""),
+            analysis_basis_token=str(identity.get("analysis_basis_token") or ""),
+        )
+    for event in effects.audits:
+        _append_audit_best_effort(event)
+
+
+def _compensate_lock_writes(effects: _CommitEffects) -> None:
+    """DB 未提交 → 把本次写下的编辑锁按 session + basis 精确清掉。
+
+    不能无条件按 job_id 清：并发下另一个会话可能已经写下它自己的锁，
+    无条件清会把后来那次复核的安全约束一起删掉。
+    """
+    from src.services import issue_workflow_store
+
+    for lock in effects.lock_writes:
+        try:
+            cleared = issue_workflow_store.clear_review_lock_if_matches(
+                str(lock.get("job_uuid") or ""),
+                review_session_id=lock.get("review_session_id"),
+                analysis_basis_token=lock.get("analysis_basis_token"),
+            )
+        except Exception:  # noqa: BLE001 - 补偿是尽力而为，失败要让运维看见
+            logger.exception(
+                "Failed to compensate review lock after rollback for job %s",
+                str(lock.get("job_uuid") or ""),
+            )
+            continue
+        if cleared:
+            logger.warning(
+                "Compensated review lock after failed commit (job %s, session %s)",
+                str(lock.get("job_uuid") or ""),
+                str(lock.get("review_session_id") or ""),
+            )
 
 
 def _load_problem_set(state: ReviewState) -> None:
@@ -529,6 +647,18 @@ def _require_job_belongs_to_state(state: ReviewState, job_uuid: str) -> None:
 
 
 # ---- 写路径 -----------------------------------------------------------------
+#
+# 四条写路径形状统一：
+#
+#     effects = _CommitEffects()
+#     async with _mutation_scope(conn, effects):
+#         只写数据库（槽位锁 / 会话 / 槽位状态）
+#         _set_workflow_lock_or_raise(effects, ...)   # 编辑锁：事务内写，失败即中止
+#         effects.lock_clears / effects.audits.append(...)  # 只登记，不在事务内执行
+#     # PostgreSQL 提交成功 → 文件副作用才执行
+#
+# 理由见 ``_CommitEffects``：三种存储之间没有共同事务，唯一不说谎的做法是
+# "文件副作用只在提交成功之后做"。
 
 
 async def start_review(
@@ -548,10 +678,9 @@ async def start_review(
        数据库的 partial unique index 是第二道门——两个浏览器同时点进来时，
        应用层的"先查再写"一定漏，唯一约束不会；
     3. **就地失效**：发现活动/已完成会话钉的版本或代际与当前不符时，
-       先失效（记审计 + 清除编辑锁）再建新会话。这样"重新分析之后又进来复核"
-       不需要用户先理解失效规则。
+       先失效再建新会话。这样"重新分析之后又进来复核"不需要用户先理解失效规则。
 
-    **整个函数体在一个事务里**（``review_transaction``）：槽位行锁与会话行锁
+    **整个函数体在一个事务里**（``_mutation_scope``）：槽位行锁与会话行锁
     必须活到"会话写入 + 槽位状态刷新"全部完成。裸放在 autocommit 连接上的
     ``FOR UPDATE`` 会在该条语句结束就释放，锁等于不存在——版本指针可以在
     "读到旧版本"与"写完成"之间被推进，产出"复核完成但复核的是旧版本"。
@@ -561,9 +690,11 @@ async def start_review(
     在事务内直接抛错会把纠正一起回滚掉，留下一条明明已经过期的"已完成复核"
     继续显示在界面上。
     """
+    effects = _CommitEffects()
+    outcome: Optional[ReviewMutationData] = None
     rejection: Optional[List[ReviewBlocker]] = None
 
-    async with review_session_store.review_transaction(conn):
+    async with _mutation_scope(conn, effects):
         state = await _load_state(conn, slot_id, lock_slot=True, lock_session=True)
         if state is None:
             raise HTTPException(status_code=404, detail="material slot not found")
@@ -571,54 +702,67 @@ async def start_review(
         if job_uuid:
             _require_job_belongs_to_state(state, job_uuid)
 
-        await _invalidate_stale_sessions(conn, state, actor=actor)
+        await _invalidate_stale_sessions(conn, state, effects=effects, actor=actor)
 
         active = state.active_session
         if active is not None:
             # 复用前重新对照一次：``_invalidate_stale_sessions`` 只会清掉与当前
             # 不符的会话，能走到这里的活动会话一定与当前版本/代际一致。
-            return _mutation_data(state, active)
-
-        gate = evaluate_start_gate(state)
-        if not gate.can_complete:
-            rejection = gate.blockers
+            outcome = _mutation_data(state, active)
         else:
-            assert state.analysis.job_uuid and state.basis_token  # 门禁已保证
-            created = await _insert_session_resilient(conn, state, actor=actor)
-            if created is not None:
-                await MaterialSlotService(conn).refresh_status(
-                    state.slot_id,
-                    analysis_state=ANALYSIS_DONE,
-                    review_state=REVIEW_IN_PROGRESS,
+            gate = evaluate_start_gate(state)
+            if not gate.can_complete:
+                rejection = gate.blockers
+            else:
+                assert state.analysis.job_uuid and state.basis_token  # 门禁已保证
+                created = await _insert_session_resilient(
+                    conn, state, effects=effects, actor=actor
                 )
-                _audit(
-                    actor,
-                    "review.start",
-                    "success",
-                    state,
-                    review_session_id=str(created.get("review_session_id") or ""),
-                )
-                return _mutation_data(state, created)
-            # 并发下被别人先建好了：``_insert_session_resilient`` 已回读并记审计。
-            existing = await review_session_store.get_active_session(conn, state.slot_id)
-            if existing is not None:
-                return _mutation_data(state, existing)
-            rejection = [ReviewBlocker(code=BLOCKER_REVIEW_NOT_STARTED)]
+                if created is not None:
+                    await MaterialSlotService(conn).refresh_status(
+                        state.slot_id,
+                        analysis_state=ANALYSIS_DONE,
+                        review_state=REVIEW_IN_PROGRESS,
+                    )
+                    effects.audits.append(
+                        _audit_event(
+                            actor,
+                            "review.start",
+                            "success",
+                            state,
+                            review_session_id=str(created.get("review_session_id") or ""),
+                        )
+                    )
+                    outcome = _mutation_data(state, created)
+                else:
+                    # 并发下被别人先建好了：``_insert_session_resilient`` 已回读并登记审计。
+                    existing = await review_session_store.get_active_session(
+                        conn, state.slot_id
+                    )
+                    if existing is not None:
+                        outcome = _mutation_data(state, existing)
+                    else:
+                        rejection = [ReviewBlocker(code=BLOCKER_REVIEW_NOT_STARTED)]
 
+    if outcome is not None:
+        return outcome
     raise ReviewLifecycleError(
         409, ERROR_START_BLOCKED, "当前无法开始复核", blockers=rejection or []
     )
 
 
 async def _insert_session_resilient(
-    conn: Any, state: ReviewState, *, actor: str
+    conn: Any, state: ReviewState, *, effects: _CommitEffects, actor: str
 ) -> Optional[Dict[str, Any]]:
-    """插入会话；并发下被别人抢先时返回 ``None``（并把复用记进审计）。
+    """插入会话；并发下被别人抢先时返回 ``None``（并把复用登记进审计）。
 
-    内层 ``conn.transaction()`` 在已有外层事务时退化为 **SAVEPOINT**：
+    内层 ``conn.transaction()`` 在已有外层事务时会被 asyncpg 变成 **SAVEPOINT**：
     唯一约束冲突只回滚到该保存点，外层事务仍然可用，可以继续回读对方刚提交的
     那条会话。没有这一层的话，一次冲突就会把整个外层事务标记为失败，
     后续任何查询都报 ``current transaction is aborted``。
+
+    注意这里是**显式** ``conn.transaction()`` 才会产生 SAVEPOINT；
+    ``transaction_scope`` 自己不会创建保存点（它在已有事务时直接复用）。
 
     这里之所以还留着冲突分支：槽位行锁已经把并发 start 串行化了，
     理论上冲突不会发生；但"理论上不会"不能作为删掉兜底的理由——
@@ -639,13 +783,15 @@ async def _insert_session_resilient(
         if existing is None:
             raise
         logger.info("Concurrent review start detected for slot %s: %s", state.slot_id, exc)
-        _audit(
-            actor,
-            "review.start",
-            "reused",
-            state,
-            review_session_id=str(existing.get("review_session_id") or ""),
-            concurrency="unique_violation",
+        effects.audits.append(
+            _audit_event(
+                actor,
+                "review.start",
+                "reused",
+                state,
+                review_session_id=str(existing.get("review_session_id") or ""),
+                concurrency="unique_violation",
+            )
         )
         return None
 
@@ -662,17 +808,23 @@ async def complete_review(
     ``status`` 已经是 ``completed``，因此走幂等分支返回同一结果——
     不会出现两条完成记录，也不会出现两次审计。
 
-    **整个函数体在一个事务里**（``review_transaction``）：槽位行锁必须从
-    "读当前版本/代际"一直持到"会话写成 completed + 槽位状态刷成 completed"。
-    这正是本函数最关键的时刻——若锁只活一条语句，版本指针可以在读完 V1 之后、
-    写成 completed 之前被推进到 V2，于是产出一条"已完成，但复核的是已经被替换掉
-    的那一版文件"的记录。真库用例用两个连接 + 可控暂停点把这段窗口钉死。
+    **整个函数体在一个事务里**：槽位行锁必须从"读当前版本/代际"一直持到
+    "会话写成 completed + 槽位状态刷成 completed"。这正是本函数最关键的时刻——
+    若锁只活一条语句，版本指针可以在读完 V1 之后、写成 completed 之前被推进到
+    V2，于是产出一条"已完成，但复核的是已经被替换掉的那一版文件"的记录。
 
-    与 ``start_review`` 不同，本函数在拒绝时**直接抛错**（由事务回滚）：门禁
-    判定之前没有任何写入，回滚等于什么都没发生。``start_review`` 需要"先提交
-    再抛错"是因为它在判定之前会写下过期会话的失效。
+    与数据库**不在同一事务**的两件事各有一个明确的时点：
+
+    - **编辑锁**在事务内写，写不进去就中止（fail-closed，见
+      ``_set_workflow_lock_or_raise``）；万一随后提交失败，提交失败路径会按
+      (session, basis) 把它精确补偿掉；
+    - **success 审计**在提交成功之后才写——写在事务体内会出现
+      "审计说复核完成、数据库实际回滚了"。
     """
-    async with review_session_store.review_transaction(conn):
+    effects = _CommitEffects()
+    outcome: Optional[ReviewMutationData] = None
+
+    async with _mutation_scope(conn, effects):
         state = await _load_state(conn, slot_id, lock_slot=True, lock_session=True)
         if state is None:
             raise HTTPException(status_code=404, detail="material slot not found")
@@ -682,73 +834,81 @@ async def complete_review(
 
         active = state.active_session
         if active is None and state.completed_session is not None:
-            # 当前代际上已完成：幂等返回。**不**新建第二条完成记录。
-            return _mutation_data(state, state.completed_session, gate_override=True)
+            # 当前代际上已完成：幂等返回。**不**新建第二条完成记录、不新增审计。
+            outcome = _mutation_data(state, state.completed_session, gate_override=True)
+        else:
+            gate = evaluate_completion_gate(state)
+            if not gate.can_complete:
+                # 把"为什么不能完成"原样回给前端：409 本身不是业务原因。
+                raise ReviewLifecycleError(
+                    409,
+                    ERROR_COMPLETION_BLOCKED,
+                    "当前无法完成复核",
+                    blockers=gate.blockers,
+                )
 
-        gate = evaluate_completion_gate(state)
-        if not gate.can_complete:
-            # 把"为什么不能完成"原样回给前端：409 + HTTP 状态码本身不是业务原因。
-            raise ReviewLifecycleError(
-                409,
-                ERROR_COMPLETION_BLOCKED,
-                "当前无法完成复核",
-                blockers=gate.blockers,
+            assert active is not None and state.basis_token  # 门禁已保证有活动会话
+
+            issue_counts = build_issue_counts(state.problems, state.decisions)
+            review_result = {
+                "document_version_id": active.get("document_version_id"),
+                "analysis_job_uuid": active.get("analysis_job_uuid"),
+                "analysis_basis_token": active.get("analysis_basis_token"),
+                "issue_counts": issue_counts,
+                "coverage": {
+                    "applicable_total": _coverage_summary_value(state, "applicable_total"),
+                    "completed_total": _coverage_summary_value(state, "completed_total"),
+                    "blocking_count": state.coverage_blocking_total,
+                    "blocking_obligations_closed_by": "automatic_only",
+                },
+            }
+
+            completed = await review_session_store.complete_session(
+                conn,
+                review_session_id=active.get("review_session_id"),
+                completed_by=actor,
+                review_result=review_result,
             )
+            if completed is None:
+                # 行锁之内的状态已经不满足 ``status = 'in_progress'``：
+                # 说明有人先一步完成或失效了这条会话。回读真实状态，不伪造成功。
+                latest = await review_session_store.get_session_by_id(
+                    conn, active.get("review_session_id")
+                )
+                if latest is None:
+                    raise HTTPException(status_code=404, detail="review session not found")
+                if latest.get("status") == REVIEW_STATUS_COMPLETED:
+                    outcome = _mutation_data(state, latest, gate_override=True)
+                else:
+                    raise ReviewLifecycleError(
+                        409,
+                        ERROR_COMPLETION_BLOCKED,
+                        "复核会话状态已变化，请刷新后重试",
+                        blockers=[ReviewBlocker(code=BLOCKER_REVIEW_NOT_STARTED)],
+                    )
+            else:
+                await MaterialSlotService(conn).refresh_status(
+                    state.slot_id,
+                    analysis_state=ANALYSIS_DONE,
+                    review_state=REVIEW_COMPLETED,
+                )
+                # 编辑锁（"复核完成后问题不可再改"）是安全约束：它没落下就不允许
+                # 宣称复核完成。写失败 → 抛错 → 整个事务回滚。
+                _set_workflow_lock_or_raise(effects, state, actor=actor, session=completed)
+                effects.audits.append(
+                    _audit_event(
+                        actor,
+                        "review.complete",
+                        "success",
+                        state,
+                        review_session_id=str(completed.get("review_session_id") or ""),
+                        issue_total=issue_counts.get("total"),
+                    )
+                )
+                outcome = _mutation_data(state, completed, gate_override=True)
 
-        assert active is not None and state.basis_token  # 门禁已保证有活动会话
-
-        issue_counts = build_issue_counts(state.problems, state.decisions)
-        review_result = {
-            "document_version_id": active.get("document_version_id"),
-            "analysis_job_uuid": active.get("analysis_job_uuid"),
-            "analysis_basis_token": active.get("analysis_basis_token"),
-            "issue_counts": issue_counts,
-            "coverage": {
-                "applicable_total": _coverage_summary_value(state, "applicable_total"),
-                "completed_total": _coverage_summary_value(state, "completed_total"),
-                "blocking_count": state.coverage_blocking_total,
-                "blocking_obligations_closed_by": "automatic_only",
-            },
-        }
-
-        completed = await review_session_store.complete_session(
-            conn,
-            review_session_id=active.get("review_session_id"),
-            completed_by=actor,
-            review_result=review_result,
-        )
-        if completed is None:
-            # 行锁之内的状态已经不满足 ``status = 'in_progress'``：
-            # 说明有人先一步完成或失效了这条会话。回读真实状态，不伪造成功。
-            latest = await review_session_store.get_session_by_id(
-                conn, active.get("review_session_id")
-            )
-            if latest is None:
-                raise HTTPException(status_code=404, detail="review session not found")
-            if latest.get("status") == REVIEW_STATUS_COMPLETED:
-                return _mutation_data(state, latest, gate_override=True)
-            raise ReviewLifecycleError(
-                409,
-                ERROR_COMPLETION_BLOCKED,
-                "复核会话状态已变化，请刷新后重试",
-                blockers=[ReviewBlocker(code=BLOCKER_REVIEW_NOT_STARTED)],
-            )
-
-        # 槽位状态、编辑锁、审计与会话写入在**同一个事务**里提交：
-        # 不允许出现"会话已 completed 但槽位仍是 reviewing"或反过来。
-        await MaterialSlotService(conn).refresh_status(
-            state.slot_id, analysis_state=ANALYSIS_DONE, review_state=REVIEW_COMPLETED
-        )
-        _set_workflow_lock(state, actor=actor, session=completed)
-        _audit(
-            actor,
-            "review.complete",
-            "success",
-            state,
-            review_session_id=str(completed.get("review_session_id") or ""),
-            issue_total=issue_counts.get("total"),
-        )
-        return _mutation_data(state, completed, gate_override=True)
+    assert outcome is not None  # 上面的每条分支要么赋值要么抛错
+    return outcome
 
 
 async def reopen_review(
@@ -762,10 +922,16 @@ async def reopen_review(
     与 ``start_review`` 一样：整个函数体在一个事务里（锁必须活到写完新会话），
     且门禁拒绝时**先提交再抛错**——"把旧复核作废"是用户显式要求的动作，
     它不因为"新的复核开不起来"而变得不成立。
+
+    旧编辑锁的清除登记在 ``effects.lock_clears`` 里、**提交之后**才执行：
+    若事务最终回滚（旧 completed 仍然有效），提前清锁会让那份"已完成"在文件层面
+    失去"问题不可改"的约束，出现"数据库说已完成、文件说可以改"的分裂。
     """
+    effects = _CommitEffects()
+    outcome: Optional[ReviewMutationData] = None
     rejection: Optional[List[ReviewBlocker]] = None
 
-    async with review_session_store.review_transaction(conn):
+    async with _mutation_scope(conn, effects):
         state = await _load_state(conn, slot_id, lock_slot=True, lock_session=True)
         if state is None:
             raise HTTPException(status_code=404, detail="material slot not found")
@@ -780,14 +946,16 @@ async def reopen_review(
                 review_session_id=previous.get("review_session_id"),
                 reason=INVALIDATION_REASON_REVIEW_REOPENED,
             )
-            _clear_workflow_lock(str(previous.get("analysis_job_uuid") or ""))
-            _audit(
-                actor,
-                "review.reopen",
-                "invalidated_previous",
-                state,
-                review_session_id=str(previous.get("review_session_id") or ""),
-                reason=INVALIDATION_REASON_REVIEW_REOPENED,
+            effects.lock_clears.append(_lock_identity(previous))
+            effects.audits.append(
+                _audit_event(
+                    actor,
+                    "review.reopen",
+                    "invalidated_previous",
+                    state,
+                    review_session_id=str(previous.get("review_session_id") or ""),
+                    reason=INVALIDATION_REASON_REVIEW_REOPENED,
+                )
             )
 
         gate = evaluate_start_gate(state)
@@ -795,26 +963,34 @@ async def reopen_review(
             rejection = gate.blockers
         else:
             assert state.analysis.job_uuid and state.basis_token
-            created = await _insert_session_resilient(conn, state, actor=actor)
+            created = await _insert_session_resilient(
+                conn, state, effects=effects, actor=actor
+            )
             if created is not None:
                 await MaterialSlotService(conn).refresh_status(
                     state.slot_id,
                     analysis_state=ANALYSIS_DONE,
                     review_state=REVIEW_IN_PROGRESS,
                 )
-                _audit(
-                    actor,
-                    "review.reopen",
-                    "success",
-                    state,
-                    review_session_id=str(created.get("review_session_id") or ""),
+                effects.audits.append(
+                    _audit_event(
+                        actor,
+                        "review.reopen",
+                        "success",
+                        state,
+                        review_session_id=str(created.get("review_session_id") or ""),
+                    )
                 )
-                return _mutation_data(state, created)
-            existing = await review_session_store.get_active_session(conn, state.slot_id)
-            if existing is not None:
-                return _mutation_data(state, existing)
-            rejection = [ReviewBlocker(code=BLOCKER_REVIEW_NOT_STARTED)]
+                outcome = _mutation_data(state, created)
+            else:
+                existing = await review_session_store.get_active_session(conn, state.slot_id)
+                if existing is not None:
+                    outcome = _mutation_data(state, existing)
+                else:
+                    rejection = [ReviewBlocker(code=BLOCKER_REVIEW_NOT_STARTED)]
 
+    if outcome is not None:
+        return outcome
     raise ReviewLifecycleError(
         409, ERROR_START_BLOCKED, "当前无法重新开始复核", blockers=rejection or []
     )
@@ -840,8 +1016,12 @@ async def invalidate_review(
 
     整个函数体在一个事务里：失效写入与它在同一把槽位锁之下读到的版本/代际
     必须是一个一致快照，否则"判它过期"这件事本身就可能依据了旧事实。
+    清锁与审计在提交之后执行。
     """
-    async with review_session_store.review_transaction(conn):
+    effects = _CommitEffects()
+    invalidated_count = 0
+
+    async with _mutation_scope(conn, effects):
         state = await _load_state(conn, slot_id, lock_slot=True, lock_session=True)
         if state is None:
             raise HTTPException(status_code=404, detail="material slot not found")
@@ -849,35 +1029,41 @@ async def invalidate_review(
         targeted = state.active_session or state.completed_session
         if targeted is not None and reason:
             # 调用方指定了原因码时，作用对象收窄到"当前那一条会话"：
-            # 这用于"已经知道该作废哪一条"的场景（重开、重新分析钩子）。
+            # 这用于"已经知道该作废哪一条"的场景。
             invalidated = await review_session_store.invalidate_session(
                 conn, review_session_id=targeted.get("review_session_id"), reason=reason
             )
             if invalidated is not None:
-                _clear_workflow_lock(str(targeted.get("analysis_job_uuid") or ""))
-                _audit(
-                    actor,
-                    "review.invalidate",
-                    "success",
-                    state,
-                    review_session_id=str(targeted.get("review_session_id") or ""),
-                    reason=reason,
+                effects.lock_clears.append(_lock_identity(targeted))
+                effects.audits.append(
+                    _audit_event(
+                        actor,
+                        "review.invalidate",
+                        "success",
+                        state,
+                        review_session_id=str(targeted.get("review_session_id") or ""),
+                        reason=reason,
+                    )
                 )
                 await MaterialSlotService(conn).refresh_status(
                     slot_id, review_state=REVIEW_REQUIRED
                 )
-                return 1
-            return 0
-
-        invalidated_count = await _invalidate_stale_sessions(conn, state, actor=actor)
-        if invalidated_count:
-            await MaterialSlotService(conn).refresh_status(
-                slot_id, review_state=REVIEW_REQUIRED
+                invalidated_count = 1
+        else:
+            invalidated_count = await _invalidate_stale_sessions(
+                conn, state, effects=effects, actor=actor
             )
-        return invalidated_count
+            if invalidated_count:
+                await MaterialSlotService(conn).refresh_status(
+                    slot_id, review_state=REVIEW_REQUIRED
+                )
+
+    return invalidated_count
 
 
-async def _invalidate_stale_sessions(conn: Any, state: ReviewState, *, actor: str) -> int:
+async def _invalidate_stale_sessions(
+    conn: Any, state: ReviewState, *, effects: _CommitEffects, actor: str
+) -> int:
     """把"钉着过期版本/代际"的会话就地失效（懒失效层），返回失效条数。
 
     两种情形分开记原因：版本被替换（``document_version_changed``）与
@@ -886,6 +1072,9 @@ async def _invalidate_stale_sessions(conn: Any, state: ReviewState, *, actor: st
 
     失效之后会把 ``state`` 里对应的字段清空：调用方（``start_review``）随后
     要据此创建新会话，留着一条"已经被作废的旧会话"会让它误以为已有活动会话。
+
+    清锁与审计只登记进 ``effects``，由提交成功之后统一执行——
+    事务回滚时旧会话仍然有效，提前清锁会让它在文件层面失去约束。
     """
     invalidated_count = 0
     for session in (state.active_session, state.completed_session):
@@ -908,14 +1097,16 @@ async def _invalidate_stale_sessions(conn: Any, state: ReviewState, *, actor: st
             reason=reason,
         )
         invalidated_count += 1
-        _clear_workflow_lock(str(session.get("analysis_job_uuid") or ""))
-        _audit(
-            actor,
-            "review.invalidate",
-            "success",
-            state,
-            review_session_id=str(session.get("review_session_id") or ""),
-            reason=reason,
+        effects.lock_clears.append(_lock_identity(session))
+        effects.audits.append(
+            _audit_event(
+                actor,
+                "review.invalidate",
+                "success",
+                state,
+                review_session_id=str(session.get("review_session_id") or ""),
+                reason=reason,
+            )
         )
         if session is state.active_session:
             state.active_session = None
@@ -942,6 +1133,9 @@ async def invalidate_reviews_for_analysis_restart(
     这里**不**递增 ``analysis_revision``：那是"结果落库"路径的职责
     （见 ``clear_analysis_result_fingerprint`` 的注释）。本钩子只做两件事：
     清指纹（让下一次落库必定换代）与失效旧复核。
+
+    跨存储纪律与前四条写路径一致：清锁在事务**提交之后**做，
+    且按 (session, basis) 精确比较——无条件按 job 清会误删并发下新会话的锁。
     """
     from src.db.connection import DatabaseConnection
 
@@ -965,7 +1159,8 @@ async def invalidate_reviews_for_analysis_restart(
             "skipped": "database_not_configured",
         }
 
-    invalidated_count = 0
+    invalidated_sessions: List[Dict[str, Any]] = []
+    slot_uuid: Optional[str] = None
     conn = await DatabaseConnection.acquire()
     try:
         async with conn.transaction():
@@ -974,19 +1169,26 @@ async def invalidate_reviews_for_analysis_restart(
             if slot_uuid is not None:
                 # 锁顺序：槽位行锁必须在会话行之前（模块顶部 LOCK ORDER）。
                 await review_session_store.lock_slot_row(conn, slot_uuid)
-            invalidated_count = await review_session_store.invalidate_sessions_for_job(
+            invalidated_sessions = await review_session_store.invalidate_sessions_for_job(
                 conn, job_uuid, reason=reason
             )
             await review_session_store.clear_analysis_result_fingerprint(conn, job_uuid)
-            if slot_uuid is not None and invalidated_count:
+            if slot_uuid is not None and invalidated_sessions:
                 await MaterialSlotService(conn).refresh_status(
                     slot_uuid, review_state=REVIEW_REQUIRED
                 )
     finally:
         await DatabaseConnection.release(conn)
 
+    # 提交之后：按会话身份精确清锁（fail-closed：失败保留锁，只记运维错误）。
+    for item in invalidated_sessions:
+        _clear_workflow_lock_if_matches(
+            job_uuid,
+            review_session_id=str(item.get("review_session_id") or ""),
+            analysis_basis_token=str(item.get("analysis_basis_token") or ""),
+        )
+    invalidated_count = len(invalidated_sessions)
     if invalidated_count:
-        _clear_workflow_lock(job_uuid)
         logger.info(
             "Review sessions invalidated for reanalysis of job %s (invalidated_count=%s)",
             job_uuid,
@@ -1003,39 +1205,98 @@ async def invalidate_reviews_for_analysis_restart(
 # ---- 工作流编辑锁（与 issue_workflow_store 同一份持久化） -------------------
 
 
-def _set_workflow_lock(state: ReviewState, *, actor: str, session: Dict[str, Any]) -> None:
-    """复核完成时落下"问题不可再改"的编辑锁。
+def _lock_identity(session: Dict[str, Any]) -> Dict[str, Any]:
+    """会话 → 清除编辑锁所需的身份三元组。
 
-    锁写在 ``issue_workflow_store`` 的同一份文件里，而不是新增一处存储：
-    issue 的"决定"与"能不能改"必须落在同一个文件锁之下，否则两者之间存在
-    真实窗口（复核刚完成、锁还没落下时的一次 issue 修改会静默穿过去）。
-    跨存储做不到原子事务，这是本仓库既有结构下的正确做法（§五十七）。
+    必须带上 session 与 basis：清除只按 job_id 做时，并发下会误删**后来会话**
+    留下的锁——那等于把"复核已完成、问题不可改"这条安全约束从别人身上摘掉。
+    """
+    return {
+        "job_uuid": str(session.get("analysis_job_uuid") or ""),
+        "review_session_id": str(session.get("review_session_id") or ""),
+        "analysis_basis_token": str(session.get("analysis_basis_token") or ""),
+    }
+
+
+def _set_workflow_lock_or_raise(
+    effects: _CommitEffects, state: ReviewState, *, actor: str, session: Dict[str, Any]
+) -> None:
+    """在**事务内**落下"问题不可再改"的编辑锁；失败即中止本次复核（fail-closed）。
+
+    三个设计点：
+
+    1. **锁与 issue 决定写在同一份文件、同一把文件锁下**。跨存储做不到原子事务，
+       所以让锁跟着它保护的数据走：否则"复核刚完成、锁还没落下"的那一瞬间，
+       一次 issue 修改会静默穿过去（§五十七）。
+    2. **失败必须让复核失败**。此前这里吞掉异常，结果是
+       "PostgreSQL 提交 review_session=completed，但编辑锁没落下"——
+       用户仍然可以改一份"已完成复核"的问题。编辑锁是**安全约束**，
+       它没落下就不允许宣称复核完成。
+    3. **记下锁的身份**（job + session + basis），供提交失败时精确补偿。
+       无条件按 job 清锁会在并发下误删后来会话留下的锁。
     """
     from src.services import issue_workflow_store
 
     job_uuid = str(state.analysis.job_uuid or "")
+    review_session_id = str(session.get("review_session_id") or "")
+    basis_token = str(session.get("analysis_basis_token") or "")
     try:
         issue_workflow_store.set_review_lock(
             job_uuid,
             slot_id=state.slot_id,
-            review_session_id=str(session.get("review_session_id") or ""),
-            analysis_basis_token=str(session.get("analysis_basis_token") or ""),
+            review_session_id=review_session_id,
+            analysis_basis_token=basis_token,
             completed_by=actor,
         )
-    except Exception:  # noqa: BLE001 - 锁落不下来时不能把已完成的复核改回未完成
-        logger.exception("Failed to persist review edit lock for job %s", job_uuid)
+    except Exception as exc:  # noqa: BLE001 - 任何写入失败都必须阻止复核成功
+        logger.error(
+            "Failed to persist review edit lock for job %s; aborting completion",
+            job_uuid,
+            exc_info=True,
+        )
+        raise ReviewLifecycleError(
+            503,
+            ERROR_REVIEW_LOCK_UNAVAILABLE,
+            "无法记录复核锁定状态，本次复核未完成，请稍后重试",
+        ) from exc
+    effects.lock_writes.append(
+        {
+            "job_uuid": job_uuid,
+            "review_session_id": review_session_id,
+            "analysis_basis_token": basis_token,
+        }
+    )
 
 
-def _clear_workflow_lock(job_uuid: str) -> None:
+def _clear_workflow_lock_if_matches(
+    job_uuid: str, *, review_session_id: str, analysis_basis_token: str
+) -> bool:
+    """按 (job, session, basis) 精确清除编辑锁。
+
+    **fail-closed 方向**：清锁失败时保留锁（用户暂时改不了问题，可以重开复核），
+    而不会出现"数据库说复核已失效、文件却把问题解锁了"。因此失败只记运维错误，
+    不抛给调用方——它发生在提交之后，抛出去也改不了已提交的数据库结论。
+    """
     from src.services import issue_workflow_store
 
     job_uuid = str(job_uuid or "").strip()
     if not job_uuid:
-        return
+        return False
     try:
-        issue_workflow_store.clear_review_lock(job_uuid)
+        return bool(
+            issue_workflow_store.clear_review_lock_if_matches(
+                job_uuid,
+                review_session_id=review_session_id,
+                analysis_basis_token=analysis_basis_token,
+            )
+        )
     except Exception:  # noqa: BLE001
-        logger.exception("Failed to clear review edit lock for job %s", job_uuid)
+        logger.exception(
+            "Failed to clear review edit lock for job %s; the lock stays "
+            "(issues remain non-editable until the review is reopened)",
+            job_uuid,
+        )
+        return False
 
 
 # ---- 小工具 -----------------------------------------------------------------
@@ -1067,7 +1328,7 @@ def _coverage_summary_value(state: ReviewState, key: str) -> Optional[int]:
     return getattr(coverage.summary, key, None)
 
 
-def _audit(
+def _audit_event(
     actor: str,
     action: str,
     result: str,
@@ -1075,11 +1336,14 @@ def _audit(
     *,
     review_session_id: str,
     **extra: Any,
-) -> None:
-    """写审计事件。
+) -> Dict[str, Any]:
+    """构造一条审计事件（纯函数，不写盘）。
 
     ``details`` 只放安全字段（槽位、版本、任务、原因）——**不放** finding 全文、
     PDF 原文、raw_response。审计日志是"谁在什么时候做了什么"，不是第二份分析结果。
+
+    构造与写入分开，是为了让业务成功审计能在**PostgreSQL 提交之后**才落盘：
+    写在事务体内会出现"审计说复核完成、数据库实际回滚了"。
     """
     details: Dict[str, Any] = {
         "slot_id": state.slot_id,
@@ -1089,14 +1353,31 @@ def _audit(
         "review_session_id": review_session_id,
     }
     details.update({key: value for key, value in extra.items() if value is not None})
-    append_audit_event(
-        action=action,
-        actor=actor,
-        result=result,
-        resource_type="review_session",
-        resource_id=review_session_id,
-        details=details,
-    )
+    return {
+        "action": action,
+        "actor": actor,
+        "result": result,
+        "resource_type": "review_session",
+        "resource_id": review_session_id,
+        "details": details,
+    }
+
+
+def _append_audit_best_effort(event: Dict[str, Any]) -> None:
+    """把审计事件追加到 JSONL（尽力而为）。
+
+    数据库**已经提交**之后才调用，因此这里失败不能反向把业务结果说成失败
+    （那会变成"复核其实成功了，但用户被告知失败"）。失败只记运维错误。
+    真要做到"审计与业务同生共死"需要数据库 outbox，属于另一个层面的改造，
+    本轮不做（评审意见也明确不要引入完整 event bus）。
+    """
+    try:
+        append_audit_event(**event)
+    except Exception:  # noqa: BLE001 - 见上：提交后的审计失败不改业务结论
+        logger.exception(
+            "Failed to append review audit event %s (business result already committed)",
+            str(event.get("action") or ""),
+        )
 
 
 def _iso(value: Any) -> str:
