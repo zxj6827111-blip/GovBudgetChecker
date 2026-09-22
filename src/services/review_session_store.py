@@ -12,10 +12,26 @@
 ``material_slot_service ↔ review_lifecycle_service`` 的循环导入。把行级写入
 放在这里，两边都只依赖它，依赖方向保持单向。
 
+事务边界不由本模块负责
+----------------------
+本模块的每个函数只发一条语句，**锁的生命周期由调用方的事务决定**。
+``review_transaction`` 是给复核写路径用的统一入口：
+
+    async with review_transaction(conn):
+        await lock_slot_row(conn, slot_id)      # 锁从这里开始持有
+        ...
+        await insert_session(conn, ...)          # 业务写入
+    # 事务提交，锁才释放
+
+不这么写的话（例如把 ``lock_slot_row`` 裸放在 autocommit 连接上），
+``FOR UPDATE`` 会在**这一条语句**的事务结束时就释放，锁形同虚设——
+WP3-A 的一轮独立评审用两个真库连接实证了这一点：没有显式事务时，
+后一个连接对同一行的 ``UPDATE`` 完全不会被阻塞。
+
 LOCK ORDER（全系统统一，不许有例外）
 ------------------------------------
-    身份 advisory 锁 → material_slots → fiscal_document_versions
-        → review_sessions → analysis_jobs
+身份 advisory 锁 → material_slots → fiscal_document_versions
+    → review_sessions → analysis_jobs
 
 本模块新增的两级必须挂在既有三级**之后**，理由：
 
@@ -43,7 +59,14 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
+from src.db.transaction import transaction_scope
+
 logger = logging.getLogger(__name__)
+
+#: 复核写路径的事务边界（与 WP1 共用同一套语义：已在事务中则复用，
+#: 嵌套时退化为 SAVEPOINT）。所有复核写路径都必须包在它里面，
+#: 否则 ``FOR UPDATE`` 拿到的锁活不过单条语句。
+review_transaction = transaction_scope
 
 #: ``analysis_basis_token`` 的构造分隔符：``<job_uuid>:<analysis_revision>``。
 #: job_uuid 是 UUID，不含冒号，因此用 ``rpartition`` 解析是安全的。
@@ -434,6 +457,7 @@ def _affected_rows(result: Any) -> int:
 
 __all__ = [
     "BASIS_TOKEN_SEPARATOR",
+    "review_transaction",
     "build_analysis_basis_token",
     "parse_analysis_basis_token",
     "to_jsonb",

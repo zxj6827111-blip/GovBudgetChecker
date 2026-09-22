@@ -550,42 +550,91 @@ async def start_review(
     3. **就地失效**：发现活动/已完成会话钉的版本或代际与当前不符时，
        先失效（记审计 + 清除编辑锁）再建新会话。这样"重新分析之后又进来复核"
        不需要用户先理解失效规则。
+
+    **整个函数体在一个事务里**（``review_transaction``）：槽位行锁与会话行锁
+    必须活到"会话写入 + 槽位状态刷新"全部完成。裸放在 autocommit 连接上的
+    ``FOR UPDATE`` 会在该条语句结束就释放，锁等于不存在——版本指针可以在
+    "读到旧版本"与"写完成"之间被推进，产出"复核完成但复核的是旧版本"。
+
+    门禁拒绝时**先提交事务再抛错**：过期事实的纠正（``_invalidate_stale_sessions``
+    写下的失效）与"能不能开新复核"是两件事，前者不因后者失败而变得不成立。
+    在事务内直接抛错会把纠正一起回滚掉，留下一条明明已经过期的"已完成复核"
+    继续显示在界面上。
     """
-    state = await _load_state(conn, slot_id, lock_slot=True, lock_session=True)
-    if state is None:
-        raise HTTPException(status_code=404, detail="material slot not found")
+    rejection: Optional[List[ReviewBlocker]] = None
 
-    if job_uuid:
-        _require_job_belongs_to_state(state, job_uuid)
+    async with review_session_store.review_transaction(conn):
+        state = await _load_state(conn, slot_id, lock_slot=True, lock_session=True)
+        if state is None:
+            raise HTTPException(status_code=404, detail="material slot not found")
 
-    await _invalidate_stale_sessions(conn, state, actor=actor)
+        if job_uuid:
+            _require_job_belongs_to_state(state, job_uuid)
 
-    active = state.active_session
-    if active is not None:
-        # 复用前重新对照一次：``_invalidate_stale_sessions`` 只会清掉与当前
-        # 不符的会话，能走到这里的活动会话一定与当前版本/代际一致。
-        return _mutation_data(state, active)
+        await _invalidate_stale_sessions(conn, state, actor=actor)
 
-    gate = evaluate_start_gate(state)
-    if not gate.can_complete:
-        raise ReviewLifecycleError(
-            409,
-            ERROR_START_BLOCKED,
-            "当前无法开始复核",
-            blockers=gate.blockers,
-        )
+        active = state.active_session
+        if active is not None:
+            # 复用前重新对照一次：``_invalidate_stale_sessions`` 只会清掉与当前
+            # 不符的会话，能走到这里的活动会话一定与当前版本/代际一致。
+            return _mutation_data(state, active)
 
-    assert state.analysis.job_uuid and state.basis_token  # 门禁已保证
+        gate = evaluate_start_gate(state)
+        if not gate.can_complete:
+            rejection = gate.blockers
+        else:
+            assert state.analysis.job_uuid and state.basis_token  # 门禁已保证
+            created = await _insert_session_resilient(conn, state, actor=actor)
+            if created is not None:
+                await MaterialSlotService(conn).refresh_status(
+                    state.slot_id,
+                    analysis_state=ANALYSIS_DONE,
+                    review_state=REVIEW_IN_PROGRESS,
+                )
+                _audit(
+                    actor,
+                    "review.start",
+                    "success",
+                    state,
+                    review_session_id=str(created.get("review_session_id") or ""),
+                )
+                return _mutation_data(state, created)
+            # 并发下被别人先建好了：``_insert_session_resilient`` 已回读并记审计。
+            existing = await review_session_store.get_active_session(conn, state.slot_id)
+            if existing is not None:
+                return _mutation_data(state, existing)
+            rejection = [ReviewBlocker(code=BLOCKER_REVIEW_NOT_STARTED)]
+
+    raise ReviewLifecycleError(
+        409, ERROR_START_BLOCKED, "当前无法开始复核", blockers=rejection or []
+    )
+
+
+async def _insert_session_resilient(
+    conn: Any, state: ReviewState, *, actor: str
+) -> Optional[Dict[str, Any]]:
+    """插入会话；并发下被别人抢先时返回 ``None``（并把复用记进审计）。
+
+    内层 ``conn.transaction()`` 在已有外层事务时退化为 **SAVEPOINT**：
+    唯一约束冲突只回滚到该保存点，外层事务仍然可用，可以继续回读对方刚提交的
+    那条会话。没有这一层的话，一次冲突就会把整个外层事务标记为失败，
+    后续任何查询都报 ``current transaction is aborted``。
+
+    这里之所以还留着冲突分支：槽位行锁已经把并发 start 串行化了，
+    理论上冲突不会发生；但"理论上不会"不能作为删掉兜底的理由——
+    少一条兜底，代价是一条无人能解释的 500。
+    """
     try:
-        created = await review_session_store.insert_session(
-            conn,
-            slot_id=state.slot_id,
-            document_version_id=state.analysis.document_version_id,
-            analysis_job_uuid=state.analysis.job_uuid,
-            analysis_basis_token=state.basis_token,
-            started_by=actor,
-        )
-    except Exception as exc:  # 唯一约束冲突 → 另一个并发请求刚建好
+        async with conn.transaction():
+            return await review_session_store.insert_session(
+                conn,
+                slot_id=state.slot_id,
+                document_version_id=state.analysis.document_version_id,
+                analysis_job_uuid=state.analysis.job_uuid,
+                analysis_basis_token=state.basis_token,
+                started_by=actor,
+            )
+    except Exception as exc:  # noqa: BLE001 - 唯一约束冲突的形态由驱动决定
         existing = await review_session_store.get_active_session(conn, state.slot_id)
         if existing is None:
             raise
@@ -598,19 +647,7 @@ async def start_review(
             review_session_id=str(existing.get("review_session_id") or ""),
             concurrency="unique_violation",
         )
-        return _mutation_data(state, existing)
-
-    await MaterialSlotService(conn).refresh_status(
-        state.slot_id, analysis_state=ANALYSIS_DONE, review_state=REVIEW_IN_PROGRESS
-    )
-    _audit(
-        actor,
-        "review.start",
-        "success",
-        state,
-        review_session_id=str(created.get("review_session_id") or ""),
-    )
-    return _mutation_data(state, created)
+        return None
 
 
 async def complete_review(
@@ -624,82 +661,94 @@ async def complete_review(
     并发：两个 complete 同时到达时，两者都在槽位行锁上串行；后到者看到的
     ``status`` 已经是 ``completed``，因此走幂等分支返回同一结果——
     不会出现两条完成记录，也不会出现两次审计。
+
+    **整个函数体在一个事务里**（``review_transaction``）：槽位行锁必须从
+    "读当前版本/代际"一直持到"会话写成 completed + 槽位状态刷成 completed"。
+    这正是本函数最关键的时刻——若锁只活一条语句，版本指针可以在读完 V1 之后、
+    写成 completed 之前被推进到 V2，于是产出一条"已完成，但复核的是已经被替换掉
+    的那一版文件"的记录。真库用例用两个连接 + 可控暂停点把这段窗口钉死。
+
+    与 ``start_review`` 不同，本函数在拒绝时**直接抛错**（由事务回滚）：门禁
+    判定之前没有任何写入，回滚等于什么都没发生。``start_review`` 需要"先提交
+    再抛错"是因为它在判定之前会写下过期会话的失效。
     """
-    state = await _load_state(conn, slot_id, lock_slot=True, lock_session=True)
-    if state is None:
-        raise HTTPException(status_code=404, detail="material slot not found")
+    async with review_session_store.review_transaction(conn):
+        state = await _load_state(conn, slot_id, lock_slot=True, lock_session=True)
+        if state is None:
+            raise HTTPException(status_code=404, detail="material slot not found")
 
-    if job_uuid:
-        _require_job_belongs_to_state(state, job_uuid)
+        if job_uuid:
+            _require_job_belongs_to_state(state, job_uuid)
 
-    active = state.active_session
-    if active is None:
-        if state.completed_session is not None:
+        active = state.active_session
+        if active is None and state.completed_session is not None:
             # 当前代际上已完成：幂等返回。**不**新建第二条完成记录。
             return _mutation_data(state, state.completed_session, gate_override=True)
 
-    gate = evaluate_completion_gate(state)
-    if not gate.can_complete:
-        # 把"为什么不能完成"原样回给前端：409 + HTTP 状态码本身不是业务原因。
-        raise ReviewLifecycleError(
-            409,
-            ERROR_COMPLETION_BLOCKED,
-            "当前无法完成复核",
-            blockers=gate.blockers,
+        gate = evaluate_completion_gate(state)
+        if not gate.can_complete:
+            # 把"为什么不能完成"原样回给前端：409 + HTTP 状态码本身不是业务原因。
+            raise ReviewLifecycleError(
+                409,
+                ERROR_COMPLETION_BLOCKED,
+                "当前无法完成复核",
+                blockers=gate.blockers,
+            )
+
+        assert active is not None and state.basis_token  # 门禁已保证有活动会话
+
+        issue_counts = build_issue_counts(state.problems, state.decisions)
+        review_result = {
+            "document_version_id": active.get("document_version_id"),
+            "analysis_job_uuid": active.get("analysis_job_uuid"),
+            "analysis_basis_token": active.get("analysis_basis_token"),
+            "issue_counts": issue_counts,
+            "coverage": {
+                "applicable_total": _coverage_summary_value(state, "applicable_total"),
+                "completed_total": _coverage_summary_value(state, "completed_total"),
+                "blocking_count": state.coverage_blocking_total,
+                "blocking_obligations_closed_by": "automatic_only",
+            },
+        }
+
+        completed = await review_session_store.complete_session(
+            conn,
+            review_session_id=active.get("review_session_id"),
+            completed_by=actor,
+            review_result=review_result,
         )
+        if completed is None:
+            # 行锁之内的状态已经不满足 ``status = 'in_progress'``：
+            # 说明有人先一步完成或失效了这条会话。回读真实状态，不伪造成功。
+            latest = await review_session_store.get_session_by_id(
+                conn, active.get("review_session_id")
+            )
+            if latest is None:
+                raise HTTPException(status_code=404, detail="review session not found")
+            if latest.get("status") == REVIEW_STATUS_COMPLETED:
+                return _mutation_data(state, latest, gate_override=True)
+            raise ReviewLifecycleError(
+                409,
+                ERROR_COMPLETION_BLOCKED,
+                "复核会话状态已变化，请刷新后重试",
+                blockers=[ReviewBlocker(code=BLOCKER_REVIEW_NOT_STARTED)],
+            )
 
-    assert active is not None and state.basis_token  # 门禁已保证有活动会话
-
-    issue_counts = build_issue_counts(state.problems, state.decisions)
-    review_result = {
-        "document_version_id": active.get("document_version_id"),
-        "analysis_job_uuid": active.get("analysis_job_uuid"),
-        "analysis_basis_token": active.get("analysis_basis_token"),
-        "issue_counts": issue_counts,
-        "coverage": {
-            "applicable_total": _coverage_summary_value(state, "applicable_total"),
-            "completed_total": _coverage_summary_value(state, "completed_total"),
-            "blocking_count": state.coverage_blocking_total,
-            "blocking_obligations_closed_by": "automatic_only",
-        },
-    }
-
-    completed = await review_session_store.complete_session(
-        conn,
-        review_session_id=active.get("review_session_id"),
-        completed_by=actor,
-        review_result=review_result,
-    )
-    if completed is None:
-        # 行锁之内的状态已经不满足 ``status = 'in_progress'``：
-        # 说明有人先一步完成或失效了这条会话。回读真实状态，不伪造成功。
-        latest = await review_session_store.get_session_by_id(
-            conn, active.get("review_session_id")
+        # 槽位状态、编辑锁、审计与会话写入在**同一个事务**里提交：
+        # 不允许出现"会话已 completed 但槽位仍是 reviewing"或反过来。
+        await MaterialSlotService(conn).refresh_status(
+            state.slot_id, analysis_state=ANALYSIS_DONE, review_state=REVIEW_COMPLETED
         )
-        if latest is None:
-            raise HTTPException(status_code=404, detail="review session not found")
-        if latest.get("status") == REVIEW_STATUS_COMPLETED:
-            return _mutation_data(state, latest, gate_override=True)
-        raise ReviewLifecycleError(
-            409,
-            ERROR_COMPLETION_BLOCKED,
-            "复核会话状态已变化，请刷新后重试",
-            blockers=[ReviewBlocker(code=BLOCKER_REVIEW_NOT_STARTED)],
+        _set_workflow_lock(state, actor=actor, session=completed)
+        _audit(
+            actor,
+            "review.complete",
+            "success",
+            state,
+            review_session_id=str(completed.get("review_session_id") or ""),
+            issue_total=issue_counts.get("total"),
         )
-
-    await MaterialSlotService(conn).refresh_status(
-        state.slot_id, analysis_state=ANALYSIS_DONE, review_state=REVIEW_COMPLETED
-    )
-    _set_workflow_lock(state, actor=actor, session=completed)
-    _audit(
-        actor,
-        "review.complete",
-        "success",
-        state,
-        review_session_id=str(completed.get("review_session_id") or ""),
-        issue_total=issue_counts.get("total"),
-    )
-    return _mutation_data(state, completed, gate_override=True)
+        return _mutation_data(state, completed, gate_override=True)
 
 
 async def reopen_review(
@@ -709,57 +758,66 @@ async def reopen_review(
 
     "重新复核"必须是用户的**显式动作**（§七十六）：打开页面就把 completed
     改回 reviewing 会让"这份材料已经复核过"这一事实凭空消失。
+
+    与 ``start_review`` 一样：整个函数体在一个事务里（锁必须活到写完新会话），
+    且门禁拒绝时**先提交再抛错**——"把旧复核作废"是用户显式要求的动作，
+    它不因为"新的复核开不起来"而变得不成立。
     """
-    state = await _load_state(conn, slot_id, lock_slot=True, lock_session=True)
-    if state is None:
-        raise HTTPException(status_code=404, detail="material slot not found")
+    rejection: Optional[List[ReviewBlocker]] = None
 
-    if job_uuid:
-        _require_job_belongs_to_state(state, job_uuid)
+    async with review_session_store.review_transaction(conn):
+        state = await _load_state(conn, slot_id, lock_slot=True, lock_session=True)
+        if state is None:
+            raise HTTPException(status_code=404, detail="material slot not found")
 
-    previous = state.active_session or state.completed_session
-    if previous is not None:
-        await review_session_store.invalidate_session(
-            conn,
-            review_session_id=previous.get("review_session_id"),
-            reason=INVALIDATION_REASON_REVIEW_REOPENED,
-        )
-        _clear_workflow_lock(str(previous.get("analysis_job_uuid") or ""))
-        _audit(
-            actor,
-            "review.reopen",
-            "invalidated_previous",
-            state,
-            review_session_id=str(previous.get("review_session_id") or ""),
-            reason=INVALIDATION_REASON_REVIEW_REOPENED,
-        )
+        if job_uuid:
+            _require_job_belongs_to_state(state, job_uuid)
 
-    gate = evaluate_start_gate(state)
-    if not gate.can_complete:
-        raise ReviewLifecycleError(
-            409, ERROR_START_BLOCKED, "当前无法重新开始复核", blockers=gate.blockers
-        )
+        previous = state.active_session or state.completed_session
+        if previous is not None:
+            await review_session_store.invalidate_session(
+                conn,
+                review_session_id=previous.get("review_session_id"),
+                reason=INVALIDATION_REASON_REVIEW_REOPENED,
+            )
+            _clear_workflow_lock(str(previous.get("analysis_job_uuid") or ""))
+            _audit(
+                actor,
+                "review.reopen",
+                "invalidated_previous",
+                state,
+                review_session_id=str(previous.get("review_session_id") or ""),
+                reason=INVALIDATION_REASON_REVIEW_REOPENED,
+            )
 
-    assert state.analysis.job_uuid and state.basis_token
-    created = await review_session_store.insert_session(
-        conn,
-        slot_id=state.slot_id,
-        document_version_id=state.analysis.document_version_id,
-        analysis_job_uuid=state.analysis.job_uuid,
-        analysis_basis_token=state.basis_token,
-        started_by=actor,
+        gate = evaluate_start_gate(state)
+        if not gate.can_complete:
+            rejection = gate.blockers
+        else:
+            assert state.analysis.job_uuid and state.basis_token
+            created = await _insert_session_resilient(conn, state, actor=actor)
+            if created is not None:
+                await MaterialSlotService(conn).refresh_status(
+                    state.slot_id,
+                    analysis_state=ANALYSIS_DONE,
+                    review_state=REVIEW_IN_PROGRESS,
+                )
+                _audit(
+                    actor,
+                    "review.reopen",
+                    "success",
+                    state,
+                    review_session_id=str(created.get("review_session_id") or ""),
+                )
+                return _mutation_data(state, created)
+            existing = await review_session_store.get_active_session(conn, state.slot_id)
+            if existing is not None:
+                return _mutation_data(state, existing)
+            rejection = [ReviewBlocker(code=BLOCKER_REVIEW_NOT_STARTED)]
+
+    raise ReviewLifecycleError(
+        409, ERROR_START_BLOCKED, "当前无法重新开始复核", blockers=rejection or []
     )
-    await MaterialSlotService(conn).refresh_status(
-        state.slot_id, analysis_state=ANALYSIS_DONE, review_state=REVIEW_IN_PROGRESS
-    )
-    _audit(
-        actor,
-        "review.reopen",
-        "success",
-        state,
-        review_session_id=str(created.get("review_session_id") or ""),
-    )
-    return _mutation_data(state, created)
 
 
 async def invalidate_review(
@@ -779,38 +837,44 @@ async def invalidate_review(
     槽位状态**不由本方法直接指定**：只把 ``review_state=REVIEW_REQUIRED`` 交给
     ``refresh_status``，身份未解决 / 口径冲突 / 没有当前文件的槽位，
     状态机会给出它们各自正确的状态。
-    """
-    state = await _load_state(conn, slot_id, lock_slot=True, lock_session=True)
-    if state is None:
-        raise HTTPException(status_code=404, detail="material slot not found")
 
-    targeted = state.active_session or state.completed_session
-    if targeted is not None and reason:
-        # 调用方指定了原因码时，作用对象收窄到"当前那一条会话"：
-        # 这用于"已经知道该作废哪一条"的场景（重开、重新分析钩子）。
-        invalidated = await review_session_store.invalidate_session(
-            conn, review_session_id=targeted.get("review_session_id"), reason=reason
-        )
-        if invalidated is not None:
-            _clear_workflow_lock(str(targeted.get("analysis_job_uuid") or ""))
-            _audit(
-                actor,
-                "review.invalidate",
-                "success",
-                state,
-                review_session_id=str(targeted.get("review_session_id") or ""),
-                reason=reason,
+    整个函数体在一个事务里：失效写入与它在同一把槽位锁之下读到的版本/代际
+    必须是一个一致快照，否则"判它过期"这件事本身就可能依据了旧事实。
+    """
+    async with review_session_store.review_transaction(conn):
+        state = await _load_state(conn, slot_id, lock_slot=True, lock_session=True)
+        if state is None:
+            raise HTTPException(status_code=404, detail="material slot not found")
+
+        targeted = state.active_session or state.completed_session
+        if targeted is not None and reason:
+            # 调用方指定了原因码时，作用对象收窄到"当前那一条会话"：
+            # 这用于"已经知道该作废哪一条"的场景（重开、重新分析钩子）。
+            invalidated = await review_session_store.invalidate_session(
+                conn, review_session_id=targeted.get("review_session_id"), reason=reason
             )
+            if invalidated is not None:
+                _clear_workflow_lock(str(targeted.get("analysis_job_uuid") or ""))
+                _audit(
+                    actor,
+                    "review.invalidate",
+                    "success",
+                    state,
+                    review_session_id=str(targeted.get("review_session_id") or ""),
+                    reason=reason,
+                )
+                await MaterialSlotService(conn).refresh_status(
+                    slot_id, review_state=REVIEW_REQUIRED
+                )
+                return 1
+            return 0
+
+        invalidated_count = await _invalidate_stale_sessions(conn, state, actor=actor)
+        if invalidated_count:
             await MaterialSlotService(conn).refresh_status(
                 slot_id, review_state=REVIEW_REQUIRED
             )
-            return 1
-        return 0
-
-    invalidated_count = await _invalidate_stale_sessions(conn, state, actor=actor)
-    if invalidated_count:
-        await MaterialSlotService(conn).refresh_status(slot_id, review_state=REVIEW_REQUIRED)
-    return invalidated_count
+        return invalidated_count
 
 
 async def _invalidate_stale_sessions(conn: Any, state: ReviewState, *, actor: str) -> int:

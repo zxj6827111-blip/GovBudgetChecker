@@ -74,6 +74,10 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from src.db.transaction import (
+    in_transaction as db_in_transaction,
+    transaction_scope,
+)
 from src.schemas.material_slot import (
     SlotIdentity,
     slot_identity_is_resolved,
@@ -154,34 +158,12 @@ class SlotIdentityRowMissing(RuntimeError):
         self.slot_key = slot_key
 
 
-def in_transaction(conn: Any) -> bool:
-    """连接是否已处于事务中。
-
-    取不到状态时按"未开启"处理：多开一层事务（asyncpg 会退化为 SAVEPOINT）
-    不会破坏正确性，而"以为在事务里、其实不在"会让行锁在语句结束就释放，
-    那才是真正的风险。因此不确定时选择更安全的一侧。
-    """
-    checker = getattr(conn, "is_in_transaction", None)
-    if not callable(checker):
-        return False
-    try:
-        return bool(checker())
-    except Exception:  # pragma: no cover - 驱动实现差异的兜底
-        return False
-
-
-@asynccontextmanager
-async def _transaction(conn: Any):
-    """需要时开启事务；已在事务中则直接复用，不重复包裹。
-
-    重复包裹在 asyncpg 下会退化成 SAVEPOINT——语义仍然正确，但每层都多一次
-    往返。调用链已经很短，这里显式区分，读代码时不必去猜嵌套了几层。
-    """
-    if in_transaction(conn):
-        yield
-        return
-    async with conn.transaction():
-        yield
+# 事务包装已提到 ``src/db/transaction.py``：WP3-A 的复核写路径需要**同一套**
+# 事务语义（含"已在事务中则复用"与嵌套 SAVEPOINT 行为）。两份实现一旦漂移，
+# 会出现"某一侧以为自己在事务里、另一侧其实没有"这种最难发现的并发缺陷。
+# 这里保留同名符号，既有调用点与文档引用都不必改。
+in_transaction = db_in_transaction
+_transaction = transaction_scope
 
 
 class MaterialSlotService:
