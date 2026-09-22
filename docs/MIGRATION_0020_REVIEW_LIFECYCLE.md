@@ -47,6 +47,7 @@ slot_id + document_version_id + analysis_job_uuid + analysis_basis_token
 | 同一个结果的重复落库 / 断线重放 | 否 | 指纹相同 ⇒ 不递增 |
 | 进度更新、metadata 修复 | 否 | 不带结果的那次落库不参与代际判定 |
 | 状态重放、持久化补记 | 否 | 同上（因此 `updated_at` **不能**当 generation） |
+| **首次写库就带结果**（初始 queued 快照因数据库不可用没入库） | 初值为 **1** | INSERT 的初值按"是否带结果"取 1 / 0，不会造出"revision = 0 且指纹非空"的行 |
 
 `analysis_basis_token = "<job_uuid>:<analysis_revision>"`。
 

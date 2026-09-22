@@ -467,8 +467,17 @@ def test_slot_without_read_permission_is_403_for_by_job(client, org_tree, monkey
 # ==== 审计留痕 ==============================================================
 
 
-def test_successful_mutation_writes_audit_event(client, monkeypatch, tmp_path):
-    """成功的动作要留审计：action / actor / 资源与安全字段。"""
+def test_successful_mutation_does_not_audit_in_the_route(client, monkeypatch, tmp_path):
+    """成功路径的审计**只有服务层一个写入口**，路由层不再写第二条。
+
+    历史缺陷：路由层也写一条 `result="success"`，于是
+    1) 一次正常 complete 产生两条 success；2) 幂等重复 complete 时服务层不写、
+       路由层却每次写——而任务书要求"重复 complete 不得重复产生业务副作用与审计"。
+
+    这里断言的是"路由没有再添一条"；"服务层恰好写一条"由
+    `tests/test_review_lifecycle_pg.py::test_complete_writes_exactly_one_success_audit`
+    在真库上验证（含幂等与并发）。
+    """
     audit_path = tmp_path / "audit.jsonl"
     monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
     token = _admin(client)
@@ -480,25 +489,7 @@ def test_successful_mutation_writes_audit_event(client, monkeypatch, tmp_path):
     response = client.post(f"/api/reviews/{SLOT_MINE}/start", headers=_headers(token))
     assert response.status_code == 200, response.text
 
-    import json as _json
-
-    events = [
-        _json.loads(line)
-        for line in audit_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    review_events = [item for item in events if item["action"].startswith("review.")]
-    assert review_events, events
-    event = review_events[-1]
-    assert event["action"] == "review.start"
-    assert event["result"] == "success"
-    assert event["resource_type"] == "review_session"
-    assert event["resource_id"] == "sess-1"
-    assert event["details"]["slot_id"] == SLOT_MINE
-    assert event["details"]["document_version_id"] == 11
-    # 审计里不允许出现 finding 全文 / PDF 原文 / raw_response
-    assert "findings" not in event["details"]
-    assert "raw_response" not in event["details"]
+    assert not audit_path.exists(), "成功路径不允许在路由层再写一条审计"
 
 
 def test_rejected_mutation_is_also_audited(client, monkeypatch, tmp_path):

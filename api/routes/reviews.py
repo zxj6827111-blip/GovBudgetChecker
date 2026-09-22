@@ -245,6 +245,9 @@ async def _mutate(
     except review_lifecycle_service.ReviewLifecycleError as exc:
         # 被门禁拒绝也要留痕：审计关心的是"谁在什么时候尝试过什么"，
         # 只记成功的动作会让"为什么这份材料一直完不成"无从追查。
+        #
+        # 这条审计留在路由层，而不是下沉到服务层：它记录的是**API 边界**上
+        # "这次请求被拒绝了"这件事，与"业务状态发生了改变"是两回事。
         append_audit_event(
             action=f"review.{action}",
             actor=actor,
@@ -259,19 +262,13 @@ async def _mutate(
         )
         raise
 
-    append_audit_event(
-        action=f"review.{action}",
-        actor=actor,
-        result="success",
-        resource_type="review_session",
-        resource_id=data.session.review_session_id,
-        details={
-            "slot_id": slot_id,
-            "document_version_id": data.session.document_version_id,
-            "analysis_job_uuid": data.session.analysis_job_uuid,
-            "status": data.session.status,
-        },
-    )
+    # **成功审计只有服务层一个写入口**（`review_lifecycle_service._audit`）。
+    #
+    # 路由层这里曾经也写一条 `result="success"`，后果是两类重复：
+    #   1. 一次正常的 complete 产生两条 success（服务层一条、路由一条）；
+    #   2. 幂等重复调用 complete 时服务层不再写，路由层却每次都写一条——
+    #      而任务书明确要求"重复 complete 不得重复产生业务完成副作用与审计记录"。
+    # 审计的价值在于"一条事件 = 一次业务动作"，两条记录会让它彻底失去这个性质。
     return ReviewMutationResponse(ok=True, data=data)
 
 

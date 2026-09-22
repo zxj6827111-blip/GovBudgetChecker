@@ -1112,3 +1112,474 @@ async def test_api_error_contract_carries_blockers(review_db):
     assert excinfo.value.status_code == 409
     assert excinfo.value.detail["error"] == ERROR_COMPLETION_BLOCKED
     assert excinfo.value.detail["blockers"] == [{"code": "pending_findings", "count": 1}]
+
+# ==== 事务边界与锁生命周期（deterministic race） =============================
+#
+# 为什么必须用两个真连接 + 可控暂停点
+# ----------------------------------
+# 只断言"顺序执行时能发现旧版本"证明不了并发安全：真正要验证的是
+# **锁的生命周期**——槽位行锁必须从"读当前版本/代际"一直持到"写成 completed"。
+# 裸放在 autocommit 连接上的 ``FOR UPDATE`` 会在该条语句结束就释放，
+# 两个事务可以同时成功；这类缺陷只有在"一个事务持锁期间另一个事务尝试同一把锁"
+# 时才暴露。因此下面每条用例都：① 用 asyncio.Event 把 T1 精确停在中途；
+# ② 断言 T2 确实处于等待状态；③ 放开后再断言终态不变量。
+
+FINGERPRINT_SQL = "SELECT analysis_result_fingerprint FROM analysis_jobs WHERE job_uuid = $1"
+
+
+async def _sessions_for_job(schema, pool, job_uuid: str) -> List[Dict[str, Any]]:
+    async with _conn(schema, pool) as conn:
+        rows = await conn.fetch(
+            "SELECT id::text AS id, status, document_version_id, invalidated_reason"
+            " FROM review_sessions WHERE analysis_job_uuid = $1 ORDER BY created_at, id",
+            job_uuid,
+        )
+        return [dict(row) for row in rows]
+
+
+async def _current_version(schema, pool, slot_id: str) -> int:
+    async with _conn(schema, pool) as conn:
+        return int(
+            await conn.fetchval(
+                "SELECT current_document_version_id FROM material_slots WHERE id = $1::uuid",
+                slot_id,
+            )
+        )
+
+
+async def _assert_no_stale_completion(schema, pool, slot_id: str) -> None:
+    """核心不变量：不存在"completed 且钉的版本不是槽位当前版本"的会话。
+
+    这正是 WP3-A 最不能出现的状态：复核完成了，但它复核的是已经被替换掉的那一版
+    文件——而它看起来完全正常。
+    """
+    async with _conn(schema, pool) as conn:
+        rows = await conn.fetch(
+            """
+            SELECT r.id::text AS id, r.document_version_id, s.current_document_version_id
+            FROM review_sessions AS r
+            JOIN material_slots AS s ON s.id = r.slot_id
+            WHERE r.slot_id = $1::uuid AND r.status = 'completed'
+            """,
+            slot_id,
+        )
+    for row in rows:
+        assert int(row["document_version_id"]) == int(row["current_document_version_id"]), dict(row)
+
+
+async def _drain(*tasks: Any, release: Any = None) -> None:
+    """无论成败都收尾：释放暂停点、取消未完成任务、等它们真正结束。
+
+    不做这件事时，断言失败会留下两个仍持有池连接的任务，而 ``pool.close()``
+    会一直等连接归还——表现是"这条用例挂住"而不是"这条用例失败"。
+    把红灯变成超时，等于把最需要看到的信号藏起来。
+    """
+    if release is not None:
+        release.set()
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _read_audit_events(path: Any) -> List[Dict[str, Any]]:
+    if not path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+async def test_complete_holds_slot_lock_against_concurrent_version_advance(review_db, monkeypatch):
+    """§七 T1 先持有槽位锁：T2 的版本推进必须**阻塞**，直到 T1 提交。
+
+    修复前这条用例会失败：``FOR UPDATE`` 不在显式事务里时锁在语句结束就释放，
+    T2 完全不会被阻塞（同一现象已在真库上单独实证过）。
+    """
+    from src.services import review_session_store
+    from src.services.material_slot_service import MaterialSlotService
+
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+        new_version = await _insert_version(
+            conn, slot_id=ctx["slot_id"], file_hash="b" * 64, created_at=LATER
+        )
+
+    holding = asyncio.Event()
+    release = asyncio.Event()
+    real_complete = review_session_store.complete_session
+
+    async def _paused_complete(conn, **kwargs):
+        # 此刻 T1 已在自己的事务里持有槽位行锁与会话行锁，但还没写成 completed
+        holding.set()
+        await release.wait()
+        return await real_complete(conn, **kwargs)
+
+    monkeypatch.setattr(review_session_store, "complete_session", _paused_complete)
+
+    async def _t1_complete():
+        async with _conn(schema, pool) as conn:
+            return await review_lifecycle_service.complete_review(
+                conn, ctx["slot_id"], actor="a"
+            )
+
+    async def _t2_advance():
+        async with _conn(schema, pool) as conn:
+            return await MaterialSlotService(conn).bind_document_version(
+                ctx["slot_id"], new_version
+            )
+
+    t1 = asyncio.create_task(_t1_complete())
+    await asyncio.wait_for(holding.wait(), timeout=15)
+    t2 = asyncio.create_task(_t2_advance())
+
+    try:
+        # T2 必须卡在槽位行锁上：这是"锁真的活到了事务结束"的直接证据
+        await asyncio.sleep(0.8)
+        assert not t2.done(), "T2 未被阻塞：槽位行锁没有跨语句持有（事务边界缺失）"
+
+        release.set()
+        await asyncio.wait_for(t1, timeout=15)
+        await asyncio.wait_for(t2, timeout=15)
+    finally:
+        await _drain(t1, t2, release=release)
+
+    # T2 提交之后，钉在 V1 上的那条 completed 会话必须已经失效
+    sessions = await _sessions_for_job(schema, pool, ctx["job_uuid"])
+    assert [item["status"] for item in sessions] == ["invalidated"]
+    assert sessions[0]["invalidated_reason"] == "document_version_changed"
+    assert await _current_version(schema, pool, ctx["slot_id"]) == new_version
+    await _assert_no_stale_completion(schema, pool, ctx["slot_id"])
+
+
+async def test_complete_waits_for_concurrent_version_advance_and_rejects(review_db, monkeypatch):
+    """§八 反向时序：T2 先持有槽位锁推进版本，T1 必须等待并**重新读到**新版本。
+
+    T1 不能使用进入函数前的旧快照：等锁期间版本已经从 V1 变成 V2，
+    它必须据此拒绝完成（或发现旧会话已被失效），而不是把 V1 记成已完成。
+    """
+    from src.services.material_slot_service import MaterialSlotService
+
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+        new_version = await _insert_version(
+            conn, slot_id=ctx["slot_id"], file_hash="c" * 64, created_at=LATER
+        )
+
+    holding = asyncio.Event()
+    release = asyncio.Event()
+    real_advance = MaterialSlotService._advance_current_version
+
+    async def _paused_advance(self, slot_id, document_version_id):
+        # 此刻 T2 已持有槽位行锁与版本行锁，正准备推进当前版本指针
+        holding.set()
+        await release.wait()
+        return await real_advance(self, slot_id, document_version_id)
+
+    monkeypatch.setattr(MaterialSlotService, "_advance_current_version", _paused_advance)
+
+    async def _t2_advance():
+        async with _conn(schema, pool) as conn:
+            return await MaterialSlotService(conn).bind_document_version(
+                ctx["slot_id"], new_version
+            )
+
+    async def _t1_complete():
+        async with _conn(schema, pool) as conn:
+            return await review_lifecycle_service.complete_review(
+                conn, ctx["slot_id"], actor="a"
+            )
+
+    t2 = asyncio.create_task(_t2_advance())
+    await asyncio.wait_for(holding.wait(), timeout=15)
+    t1 = asyncio.create_task(_t1_complete())
+
+    try:
+        await asyncio.sleep(0.8)
+        assert not t1.done(), "T1 未被阻塞：它没有等在槽位行锁上"
+
+        release.set()
+        await asyncio.wait_for(t2, timeout=15)
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+            await asyncio.wait_for(t1, timeout=15)
+    finally:
+        await _drain(t1, t2, release=release)
+
+    assert excinfo.value.status_code == 409
+    assert [item.code for item in excinfo.value.blockers], "拒绝必须带业务原因"
+    assert await _current_version(schema, pool, ctx["slot_id"]) == new_version
+    await _assert_no_stale_completion(schema, pool, ctx["slot_id"])
+    sessions = await _sessions_for_job(schema, pool, ctx["job_uuid"])
+    assert all(item["status"] != "completed" for item in sessions), sessions
+
+
+async def test_complete_holds_lock_against_concurrent_reanalysis(review_db, monkeypatch):
+    """§九 complete 与重新分析竞争：两者必须串行，终态不允许"已完成但代际已过期"。"""
+    from src.services import review_session_store
+
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+
+    holding = asyncio.Event()
+    release = asyncio.Event()
+    real_complete = review_session_store.complete_session
+
+    async def _paused_complete(conn, **kwargs):
+        holding.set()
+        await release.wait()
+        return await real_complete(conn, **kwargs)
+
+    monkeypatch.setattr(review_session_store, "complete_session", _paused_complete)
+
+    async def _t1_complete():
+        async with _conn(schema, pool) as conn:
+            return await review_lifecycle_service.complete_review(
+                conn, ctx["slot_id"], actor="a"
+            )
+
+    t1 = asyncio.create_task(_t1_complete())
+    await asyncio.wait_for(holding.wait(), timeout=15)
+    t2 = asyncio.create_task(
+        review_lifecycle_service.invalidate_reviews_for_analysis_restart(ctx["job_uuid"])
+    )
+
+    try:
+        await asyncio.sleep(0.8)
+        assert not t2.done(), "重新分析失效钩子未被阻塞：它没有等在槽位行锁上"
+
+        release.set()
+        await asyncio.wait_for(t1, timeout=15)
+        result = await asyncio.wait_for(t2, timeout=15)
+    finally:
+        await _drain(t1, t2, release=release)
+
+    assert result["sessions_invalidated"] == 1
+    sessions = await _sessions_for_job(schema, pool, ctx["job_uuid"])
+    assert [item["status"] for item in sessions] == ["invalidated"]
+    assert sessions[0]["invalidated_reason"] == "analysis_restarted"
+    async with _conn(schema, pool) as conn:
+        fingerprint = await conn.fetchval(FINGERPRINT_SQL, ctx["job_uuid"])
+    assert fingerprint is None, "重分析钩子必须清空指纹，下一次落库才会换代"
+
+
+async def test_parallel_complete_is_serialized_by_the_slot_lock(review_db, monkeypatch, tmp_path):
+    """§十 用可控 barrier 证明并发 complete 真的被锁串行化，且审计只写一条。
+
+    只靠 ``asyncio.gather`` 的随机调度无法证明锁存在（它证明的只是"这次跑通了"）。
+    这里把 T1 精确停在中途，断言 T2 处于等待，再放开。
+    """
+    from src.services import review_session_store
+
+    schema, pool = review_db
+    audit_path = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="starter")
+
+    holding = asyncio.Event()
+    release = asyncio.Event()
+    real_complete = review_session_store.complete_session
+    paused = {"active": True}
+
+    async def _paused_complete(conn, **kwargs):
+        if paused["active"]:
+            paused["active"] = False
+            holding.set()
+            await release.wait()
+        return await real_complete(conn, **kwargs)
+
+    monkeypatch.setattr(review_session_store, "complete_session", _paused_complete)
+
+    async def _complete(actor: str):
+        async with _conn(schema, pool) as conn:
+            return await review_lifecycle_service.complete_review(
+                conn, ctx["slot_id"], actor=actor
+            )
+
+    t1 = asyncio.create_task(_complete("aaa"))
+    await asyncio.wait_for(holding.wait(), timeout=15)
+
+    # T1 持锁期间把 T2 放进来：T2 必须等待（不能进入完成分支）
+    t2 = asyncio.create_task(_complete("bbb"))
+
+    try:
+        await asyncio.sleep(0.8)
+        assert not t2.done(), "T2 未被阻塞：槽位/会话行锁没有跨语句持有"
+
+        release.set()
+        first = await asyncio.wait_for(t1, timeout=15)
+        second = await asyncio.wait_for(t2, timeout=15)
+    finally:
+        await _drain(t1, t2, release=release)
+
+    assert first.session.review_session_id == second.session.review_session_id
+    assert first.session.completed_by == "aaa"
+    assert second.session.completed_by == "aaa", "完成人必须是第一个点击的人"
+    assert second.session.status == "completed"
+
+    sessions = await _sessions_for_job(schema, pool, ctx["job_uuid"])
+    assert len(sessions) == 1 and sessions[0]["status"] == "completed"
+
+    # 审计：并发 complete 只留一条 success
+    successes = [
+        event
+        for event in _read_audit_events(audit_path)
+        if event["action"] == "review.complete" and event["result"] == "success"
+    ]
+    assert len(successes) == 1, successes
+
+
+async def test_complete_writes_exactly_one_success_audit(review_db, monkeypatch, tmp_path):
+    """§十一/§十二：成功审计只有一个权威写入口（服务层）。
+
+    第一次 complete → 恰好 1 条 `review.complete` success；
+    幂等重复 complete → **0 条新增**（路由层曾经每次都写一条，现已移除）。
+    """
+    schema, pool = review_db
+    audit_path = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+        await review_lifecycle_service.complete_review(conn, ctx["slot_id"], actor="r")
+        await review_lifecycle_service.complete_review(conn, ctx["slot_id"], actor="r")
+
+    successes = [
+        event
+        for event in _read_audit_events(audit_path)
+        if event["action"] == "review.complete" and event["result"] == "success"
+    ]
+    assert len(successes) == 1, successes
+    assert successes[0]["details"]["slot_id"] == ctx["slot_id"]
+
+
+async def test_repeated_complete_keeps_review_lock_and_session(review_db, monkeypatch, tmp_path):
+    """§十八 编辑锁的失败路径：重复 complete 不清锁、不重写锁、不换会话 id。"""
+    from src.services import issue_workflow_store
+
+    schema, pool = review_db
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
+
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+        first = await review_lifecycle_service.complete_review(
+            conn, ctx["slot_id"], actor="r"
+        )
+
+    lock_after_first = issue_workflow_store.get_review_lock(ctx["job_uuid"])
+    assert lock_after_first is not None
+
+    async with _conn(schema, pool) as conn:
+        second = await review_lifecycle_service.complete_review(
+            conn, ctx["slot_id"], actor="r"
+        )
+
+    lock_after_second = issue_workflow_store.get_review_lock(ctx["job_uuid"])
+    assert second.session.review_session_id == first.session.review_session_id
+    assert lock_after_second == lock_after_first, "重复 complete 不得改写编辑锁"
+    sessions = await _sessions_for_job(schema, pool, ctx["job_uuid"])
+    assert len(sessions) == 1
+
+
+async def test_refresh_status_obeys_the_outer_transaction(review_db):
+    """§六 嵌套事务：``refresh_status`` 在外层事务里必须服从外层的提交/回滚。
+
+    asyncpg 把嵌套 ``conn.transaction()`` 退化为 SAVEPOINT。要验证的不是
+    "没报错"，而是**它不再自行提交**：外层回滚之后，它写下的状态必须一起消失。
+    否则"槽位状态已改、会话没写成"这类半成功会重新出现。
+    """
+    from src.services.material_slot_service import MaterialSlotService
+
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, findings=[])
+
+    async with _conn(schema, pool) as conn:
+        before = await conn.fetchval(
+            "SELECT status FROM material_slots WHERE id = $1::uuid", ctx["slot_id"]
+        )
+        with pytest.raises(RuntimeError):
+            async with conn.transaction():
+                await MaterialSlotService(conn).refresh_status(
+                    ctx["slot_id"], analysis_state="done", review_state="in_progress"
+                )
+                inside = await conn.fetchval(
+                    "SELECT status FROM material_slots WHERE id = $1::uuid", ctx["slot_id"]
+                )
+                assert inside == "reviewing"
+                raise RuntimeError("刻意回滚外层事务")
+
+    async with _conn(schema, pool) as conn:
+        after = await conn.fetchval(
+            "SELECT status FROM material_slots WHERE id = $1::uuid", ctx["slot_id"]
+        )
+    assert after == before, "外层回滚之后，refresh_status 写下的状态必须一起回滚"
+
+
+async def test_first_persist_with_result_starts_at_revision_one(review_db):
+    """§十四/§十六 首次落库就带结果的真实场景。
+
+    上传时数据库不可用 → 初始 queued 快照没入库 → 分析跑完后数据库恢复 →
+    第一次成功写库就是带结果的 completed 快照。
+    此时 ``analysis_revision`` 必须是 1（"已经落库过一代结果"），
+    而不是 0（迁移定义 0 = 尚无任何分析结果落库）。
+    """
+    schema, pool = review_db
+    job_uuid = f"job-direct-{uuid.uuid4().hex[:10]}"
+    payload = {
+        "job_id": job_uuid,
+        "status": "done",
+        "filename": "material.pdf",
+        "mode": "dual",
+        "result": {"ai_findings": [], "rule_findings": [], "merged": {}},
+        "structured_ingest": {},
+    }
+
+    assert await persist_analysis_job_snapshot(payload, include_results=True) is True
+    async with _conn(schema, pool) as conn:
+        row = await conn.fetchrow(
+            "SELECT analysis_revision, analysis_result_fingerprint FROM analysis_jobs"
+            " WHERE job_uuid = $1",
+            job_uuid,
+        )
+    assert row["analysis_revision"] == 1, "首次直接落结果必须是第 1 代，不是 0"
+    assert row["analysis_result_fingerprint"]
+
+    # 同一份 completed payload 再落一次 → 仍是 1（纯重放不换代）
+    assert await persist_analysis_job_snapshot(payload, include_results=True) is True
+    async with _conn(schema, pool) as conn:
+        replayed = await conn.fetchval(
+            "SELECT analysis_revision FROM analysis_jobs WHERE job_uuid = $1", job_uuid
+        )
+    assert replayed == 1
+
+    # queued 重置（清指纹）→ revision 不变；同内容再落 → 2
+    assert await persist_analysis_job_snapshot({**payload, "status": "queued"}) is True
+    async with _conn(schema, pool) as conn:
+        reset = await conn.fetchval(
+            "SELECT analysis_revision FROM analysis_jobs WHERE job_uuid = $1", job_uuid
+        )
+        cleared = await conn.fetchval(
+            "SELECT analysis_result_fingerprint IS NULL FROM analysis_jobs WHERE job_uuid = $1",
+            job_uuid,
+        )
+    assert reset == 1 and cleared is True
+
+    assert await persist_analysis_job_snapshot(payload, include_results=True) is True
+    async with _conn(schema, pool) as conn:
+        bumped = await conn.fetchval(
+            "SELECT analysis_revision FROM analysis_jobs WHERE job_uuid = $1", job_uuid
+        )
+    assert bumped == 2, "重置之后即使内容逐字相同也必须换代"

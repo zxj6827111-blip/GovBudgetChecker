@@ -207,7 +207,17 @@ async def _upsert_analysis_job(
     为什么不能只按"没有结果行"判断：重新分析完全可能产出与上一代逐字相同的
     结果，而那也必须换代。把"重置时清指纹"与"落库时比指纹"合起来，
     就同时满足了两件事：重新分析一定换代、纯重放一定不换代。
+
+    **首次 INSERT 也走同一条规则**：``analysis_revision`` 的初值由
+    "这次有没有带结果"决定（无结果 0 / 有结果 1），而不是无条件写 0。
+    真实场景：上传时数据库不可用 → 初始的 queued 快照没入库 →
+    分析跑完后数据库已恢复 → **第一次**成功写库就是带结果的 completed 快照。
+    无条件写 0 会造出"``analysis_revision = 0`` 且指纹非空"的行，
+    与迁移自己定义的语义（0 = 尚无任何分析结果落库）直接冲突；
+    这种行下一次落库会从 0 跳到 1，看起来像是"换了一代"。
     """
+    # 初值：带结果进来就是第 1 代；不带结果（queued/processing 快照）才是 0。
+    initial_revision = 1 if result_fingerprint is not None else 0
     metadata = _build_job_metadata(payload)
     organization_fk = await _resolve_organization_fk(conn, payload.get("organization_id"))
     status = str(payload.get("status") or "pending").strip() or "pending"
@@ -282,7 +292,7 @@ async def _upsert_analysis_job(
             completed_at,
             error_message,
             _to_json(metadata),
-            0,
+            initial_revision,
             result_fingerprint,
         )
     )
