@@ -293,6 +293,62 @@ def test_safe_error_summary_contains_no_fragment_of_the_original(fragment):
     assert fragment not in summary
 
 
+# 下面四条按"泄露类别"逐条命名。上面的参数化用例已经覆盖它们，
+# 这里再显式列出来的目的只有一个：让 Review 能按类别逐项核对覆盖面，
+# 而不是去数参数表里有没有自己关心的那一种形态。
+
+WINDOWS_DRIVE_SAMPLES = [
+    r"C:\secret\a.pdf",
+    r"D:\secret\a.pdf",
+    r"E:\secret\a.pdf",
+    r"F:\secret\a.pdf",
+    r"Z:\secret\a.pdf",
+    r"E:\Software Development\GovBudgetChecker\uploads\secret.pdf",
+]
+UNIX_PATH_SAMPLES = [
+    "/tmp/secret/a.pdf",
+    "/mnt/data/secret/a.pdf",
+    "/home/user/a.pdf",
+    "/root/secret/a.pdf",
+    "/srv/app/secret/a.pdf",
+    "/usr/local/secret/a.pdf",
+]
+UNC_SAMPLES = [
+    r"\\server\share\a.pdf",
+    r"\\fileserver\budget\2024\secret.pdf",
+]
+CONNECTION_STRING_SAMPLES = [
+    "postgresql://user:password@host/db",
+    "postgres://user:password@host/db",
+    "amqp://user:password@host:5672/vhost",
+    "host=db.internal user=admin password=secret dbname=fiscal",
+]
+
+
+@pytest.mark.parametrize("raw", WINDOWS_DRIVE_SAMPLES)
+def test_safe_error_summary_never_exposes_windows_drive_path(raw):
+    """Windows 盘符路径（含本项目开发环境实际使用的 E:\\）。"""
+    assert _safe_error_summary(raw) == SAFE_ERROR_SUMMARY
+
+
+@pytest.mark.parametrize("raw", UNIX_PATH_SAMPLES)
+def test_safe_error_summary_never_exposes_unix_path(raw):
+    """Unix 绝对路径（含 /tmp、/mnt、/root、/srv、/usr）。"""
+    assert _safe_error_summary(raw) == SAFE_ERROR_SUMMARY
+
+
+@pytest.mark.parametrize("raw", UNC_SAMPLES)
+def test_safe_error_summary_never_exposes_unc_path(raw):
+    """UNC 网络路径（\\\\server\\share 形态）。"""
+    assert _safe_error_summary(raw) == SAFE_ERROR_SUMMARY
+
+
+@pytest.mark.parametrize("raw", CONNECTION_STRING_SAMPLES)
+def test_safe_error_summary_never_exposes_connection_string(raw):
+    """连接串（URL 形态与 key=value 形态）。"""
+    assert _safe_error_summary(raw) == SAFE_ERROR_SUMMARY
+
+
 def test_safe_error_summary_is_none_for_empty_values():
     """没有错误就没有摘要：空值返回 None，而不是"处理失败"。
 
