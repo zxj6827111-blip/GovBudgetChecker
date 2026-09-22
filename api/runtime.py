@@ -2772,6 +2772,10 @@ async def start_analysis(
     }
     try:
         write_json_file(status_file, payload)
+        # WP3-A：任何一次分析启动之前，先让上一次的复核立刻失效。
+        # 挂在这里而不是某个具体路由，是为了让"从队列点开始分析"这条路径
+        # 也走同一套失效逻辑（详见 _invalidate_reviews_before_analysis_start）。
+        await _invalidate_reviews_before_analysis_start(job_id)
         await persist_analysis_job_snapshot(payload)
         queue = _job_queue
         dispatch = "local_queue"
@@ -2854,20 +2858,6 @@ async def reanalyze_job(
     if "report_year" not in body and source_status.get("report_year") is not None:
         body["report_year"] = source_status.get("report_year")
 
-    # WP3-A：重新分析开始前，主动让这个任务上的复核立刻失效并把结果指纹清空。
-    #
-    # 这是**所有**重新分析路径的共同漏斗（``/api/jobs/{id}/reanalyze`` 与
-    # ``/api/jobs/reanalyze-all`` 都走这里），因此钩子只要挂在这一处，
-    # 就不会出现"某个批量入口绕过了失效逻辑"。
-    #
-    # 只靠"下次打开页面才发现"是不够的：那段时间页面会理直气壮地显示
-    # 「已完成复核」，而它复核的是上一代分析结果。主动失效让界面立刻显示
-    # "分析结果已更新，需要重新复核"。
-    #
-    # 失败不阻断重新分析（维护操作不能被旁路能力卡住），但必须**大声报错**：
-    # 钩子没生效意味着旧复核在库里仍显示"已完成"，这是运维需要立刻知道的事。
-    await _invalidate_reviews_before_reanalysis(source_job_id)
-
     started = await start_analysis(source_job_id, body)
     return {
         **started,
@@ -2876,8 +2866,22 @@ async def reanalyze_job(
     }
 
 
-async def _invalidate_reviews_before_reanalysis(job_id: str) -> None:
-    """重新分析前的复核失效钩子（WP3-A）。
+async def _invalidate_reviews_before_analysis_start(job_id: str) -> None:
+    """分析启动前的复核失效钩子（WP3-A）。
+
+    挂在 ``start_analysis`` 这个**唯一**的分析起点上，而不是只挂在
+    ``reanalyze_job``：仓库里还有一条会重跑分析的路——``POST /api/analyze/{job_id}``
+    （处理队列的「开始分析」，``api/routes/analyze.py`` 直连 ``start_analysis``）。
+    只挂在 reanalyze 上时，从队列对一份已复核完成的材料点「开始分析」会重新分析
+    却**不失效旧复核**——页面继续显示「已完成复核」，而它复核的是上一代结果。
+    挂在共同起点上，两个入口自动都覆盖。
+
+    分析与复核的取舍：分析代际的变化本身由"重置时清指纹"保证（即使本钩子失败，
+    complete 时的懒失效仍会拦下过期会话）；本钩子的价值是**立刻**让界面知道
+    要重做，而不是等用户下一次打开页面。
+
+    失败不阻断分析（维护与上传主流程不能被旁路能力卡住），但必须**大声报错**：
+    钩子没生效意味着旧复核在库里仍显示"已完成"，这是运维需要立刻知道的事。
 
     函数内延迟导入是有意的，而且必须在延迟位置：``review_lifecycle_service``
     依赖 ``issue_workflow_store``，后者在模块级 ``from api import runtime``。
@@ -2892,7 +2896,7 @@ async def _invalidate_reviews_before_reanalysis(job_id: str) -> None:
         result = await invalidate_reviews_for_analysis_restart(job_id)
     except Exception:  # noqa: BLE001 - 详见上方注释：不阻断但必须报错
         logger.error(
-            "Failed to invalidate review sessions before reanalysis of job %s; "
+            "Failed to invalidate review sessions before analysis of job %s; "
             "a completed review may still be shown for this job",
             job_id,
             exc_info=True,
@@ -2900,7 +2904,7 @@ async def _invalidate_reviews_before_reanalysis(job_id: str) -> None:
         return
     if result.get("sessions_invalidated"):
         logger.info(
-            "Reanalysis invalidated %s review session(s) for job %s",
+            "Analysis restart invalidated %s review session(s) for job %s",
             result.get("sessions_invalidated"),
             job_id,
         )

@@ -489,3 +489,96 @@ def test_affected_rows_parsing_is_fail_open():
     assert review_session_store._affected_rows("UPDATE 0") == 0
     assert review_session_store._affected_rows(None) == 0
     assert review_session_store._affected_rows("garbage") == 0
+
+
+# ==== 分析起点钩子：从队列点「开始分析」也必须失效旧复核 ======================
+
+
+async def test_analysis_start_invalidates_previous_review(tmp_path, monkeypatch):
+    """`start_analysis`（所有分析起点的唯一漏斗）启动前必须让旧复核失效。
+
+    为什么专门测这条：仓库里除了 `/api/jobs/{id}/reanalyze` 与
+    `/api/jobs/reanalyze-all`，还有 `POST /api/analyze/{job_id}`
+    （处理队列的「开始分析」，`api/routes/analyze.py` 直连 `start_analysis`）。
+    钩子只挂在 reanalyze 上时，从队列对一份已复核完成的材料点「开始分析」会
+    重跑分析**却不失效旧复核**——页面继续显示「已完成复核」，而它复核的是
+    上一代结果。挂在共同起点上，两个入口自动都覆盖。
+    """
+    from api import runtime
+
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    job_dir = tmp_path / "job-analyze-hook"
+    job_dir.mkdir()
+    (job_dir / "sample_2025.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+    runtime.write_json_file(
+        job_dir / "status.json", {"job_id": "job-analyze-hook", "status": "uploaded"}
+    )
+
+    seen: List[str] = []
+
+    async def _fake_invalidate(target, *, reason="analysis_restarted"):
+        seen.append(target)
+        return {"job_uuid": target, "sessions_invalidated": 1, "slot_id": "slot-1"}
+
+    async def _dummy_runner(_job_dir):
+        return None
+
+    class _DummyQueue:
+        async def enqueue(self, job_id: str) -> None:
+            return None
+
+    async def _fake_persist(payload, *, include_results: bool = False):
+        return True
+
+    monkeypatch.setattr(
+        review_lifecycle_service,
+        "invalidate_reviews_for_analysis_restart",
+        _fake_invalidate,
+    )
+    monkeypatch.setattr(runtime, "_pipeline_runner", _dummy_runner)
+    monkeypatch.setattr(runtime, "_job_queue", _DummyQueue())
+    monkeypatch.setattr(runtime, "persist_analysis_job_snapshot", _fake_persist)
+
+    await runtime.start_analysis("job-analyze-hook", {"mode": "legacy"})
+
+    assert seen == ["job-analyze-hook"], "分析启动前必须失效该任务上的旧复核"
+
+
+async def test_analysis_start_hook_failure_does_not_block_analysis(tmp_path, monkeypatch):
+    """钩子失败不允许阻断分析：维护与上传主流程不能被旁路能力卡住。
+
+    但失败必须大声报错（`logger.error`），因为库里仍会显示"已完成复核"。
+    """
+    from api import runtime
+
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    job_dir = tmp_path / "job-analyze-hook-fail"
+    job_dir.mkdir()
+    (job_dir / "sample_2025.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+    runtime.write_json_file(
+        job_dir / "status.json", {"job_id": "job-analyze-hook-fail", "status": "uploaded"}
+    )
+
+    async def _boom(_target, *, reason="analysis_restarted"):
+        raise RuntimeError("simulated database outage")
+
+    async def _dummy_runner(_job_dir):
+        return None
+
+    class _DummyQueue:
+        async def enqueue(self, job_id: str) -> None:
+            return None
+
+    async def _fake_persist(payload, *, include_results: bool = False):
+        return True
+
+    monkeypatch.setattr(
+        review_lifecycle_service, "invalidate_reviews_for_analysis_restart", _boom
+    )
+    monkeypatch.setattr(runtime, "_pipeline_runner", _dummy_runner)
+    monkeypatch.setattr(runtime, "_job_queue", _DummyQueue())
+    monkeypatch.setattr(runtime, "persist_analysis_job_snapshot", _fake_persist)
+
+    payload = await runtime.start_analysis("job-analyze-hook-fail", {"mode": "legacy"})
+
+    assert payload["status"] == "started", "钩子失败不能阻断分析"

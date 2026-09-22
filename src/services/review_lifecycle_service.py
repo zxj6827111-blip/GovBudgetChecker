@@ -45,6 +45,7 @@ LOCK ORDER（在 ``review_session_store`` 的全序之内）
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -886,6 +887,19 @@ async def invalidate_reviews_for_analysis_restart(
     job_uuid = str(job_uuid or "").strip()
     if not job_uuid:
         return {"job_uuid": "", "sessions_invalidated": 0, "slot_id": None}
+
+    # 没有配库就没有复核存储，更不会有复核会话可失效。
+    # 直接返回而不是去 acquire（那会在未配库时抛异常）：钩子挂在**每一次**分析
+    # 启动上，而仓库的多数测试都不配库，用异常路径收场只会把日志刷满噪声，
+    # 让真正的失败被淹没。
+    if not (os.getenv("DATABASE_URL") or "").strip():
+        return {
+            "job_uuid": job_uuid,
+            "slot_id": None,
+            "sessions_invalidated": 0,
+            "reason": reason,
+            "skipped": "database_not_configured",
+        }
 
     invalidated_count = 0
     conn = await DatabaseConnection.acquire()
