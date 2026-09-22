@@ -423,7 +423,7 @@ B2 是最有价值的一条：它证明新增的安全反例**确实能抓住被
 
 | 项 | 结果 |
 | --- | --- |
-| 本地 `python -m pytest -q`（Windows） | **1689 passed, 43 skipped**（收口前 1626/43；新增 63 条） |
+| 本地 `python -m pytest -q`（Windows） | **1707 passed, 43 skipped**（收口前 1626/43；本轮收口新增 81 条） |
 | `python -m ruff check .` | All checks passed |
 | `python -m mypy api src tests` | Success: no issues found in 226 source files |
 | `npm --prefix app run test:unit` | 全绿（`test:material-detail` 115 断言，收口前 111） |
@@ -432,7 +432,7 @@ B2 是最有价值的一条：它证明新增的安全反例**确实能抓住被
 | material-ledger E2E（WP2-A + WP2-B + 两套截图 spec） | **34 passed, 13 skipped**（WP2-B 用例 13 → 15） |
 | PostgreSQL（pg + detail_pg） | **16 passed** |
 | `check_coverage_baseline.py --assert-gaps 8` | 通过（**仍 8 gaps**） |
-| GitHub CI `test-and-build`（Linux） | **success**（run 35688170431 / 35688172943）：pytest **1690 passed / 42 skipped**、E2E **170 passed**、ruff / mypy / frontend build 均通过 |
+| GitHub CI `test-and-build`（Linux，最终 HEAD `ff42724`） | **success**（run 35690545323 / 35690548066）：pytest **1708 passed / 42 skipped**、E2E **171 passed**、ruff / mypy / frontend build 均通过 |
 | `SCHEMA_CHANGE_REQUIRED` | **NO**（本轮未新增 migration） |
 | `e2e/playwright.config.ts` | 新增 `expect.timeout = 15s`（见下） |
 
