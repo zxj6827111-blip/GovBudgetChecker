@@ -61,6 +61,7 @@ SIBLING_UNIT_NAME = "上海市普陀区规划和自然资源局事务中心"
 
 SLOT_MINE = "slot-mine"
 SLOT_SIBLING = "slot-sibling"
+SLOT_OTHER_DISTRICT = "slot-other-district"
 SLOT_MISSING = "slot-missing"
 
 
@@ -124,13 +125,18 @@ def org_tree(tmp_path, monkeypatch):
 
     city = _add("上海市", "city")
     district = _add("上海市普陀区", "district", city)
+    other_district = _add("上海市静安区", "district", city)
     dept = _add(DEPT_NAME, "department", district)
+    other_dept = _add("上海市静安区教育局", "department", other_district)
     return {
         "city": city,
         "district": district,
+        "other_district": other_district,
         "dept": dept,
+        "other_dept": other_dept,
         "sub_unit": _add(SUB_UNIT_NAME, "unit", dept),
         "sibling_unit": _add(SIBLING_UNIT_NAME, "unit", dept),
+        "other_unit": _add("上海市静安区教育局第一小学", "unit", other_dept),
     }
 
 
@@ -161,6 +167,7 @@ def client(tmp_path, monkeypatch, org_tree):
         [
             _slot_row(SLOT_MINE, subject_org_id=org_tree["sub_unit"]),
             _slot_row(SLOT_SIBLING, subject_org_id=org_tree["sibling_unit"]),
+            _slot_row(SLOT_OTHER_DISTRICT, subject_org_id=org_tree["other_unit"]),
         ]
     )
 
@@ -524,3 +531,58 @@ def test_rejected_mutation_is_also_audited(client, monkeypatch, tmp_path):
     assert rejected[-1]["action"] == "review.complete"
     assert rejected[-1]["details"]["error"] == "review_completion_blocked"
     assert rejected[-1]["details"]["blocker_codes"] == ["pending_findings"]
+
+
+# ==== 授权范围矩阵（§九十五） ================================================
+
+
+def _read_review(client, token: str, slot_id: str) -> int:
+    """读复核状态，返回状态码；把服务层替换成固定数据，只测授权这一层。"""
+    return client.get(f"/api/reviews/{slot_id}", headers=_headers(token)).status_code
+
+
+@pytest.fixture
+def stub_lifecycle(monkeypatch):
+    async def _load(conn, slot_id, *, expected_job_uuid=None):
+        return _lifecycle_data()
+
+    monkeypatch.setattr(review_lifecycle_service, "load_review_by_slot", _load)
+
+
+@pytest.mark.parametrize(
+    "scope_key,slot_id,expected",
+    [
+        # 区县授权：本区县下两个单位都可见，别的区县不可见
+        ("district", SLOT_MINE, 200),
+        ("district", SLOT_SIBLING, 200),
+        ("district", SLOT_OTHER_DISTRICT, 403),
+        # 部门授权：本部门下两个单位可见，别的区县不可见
+        ("dept", SLOT_MINE, 200),
+        ("dept", SLOT_SIBLING, 200),
+        ("dept", SLOT_OTHER_DISTRICT, 403),
+        # 单位授权：只有自己那一条可见（兄弟单位也不行）
+        ("sub_unit", SLOT_MINE, 200),
+        ("sub_unit", SLOT_SIBLING, 403),
+        ("sub_unit", SLOT_OTHER_DISTRICT, 403),
+    ],
+)
+def test_review_slot_scope_matrix(client, org_tree, stub_lifecycle, scope_key, slot_id, expected):
+    """三档授权各自能读到哪些槽位，与材料台账同一套判定（同一份 MaterialAccessScope）。
+
+    矩阵覆盖 admin 之外的三种范围：区县 / 部门 / 单位。判定实现本轮从
+    `api/routes/materials.py` 搬运到 `api/material_access.py`（逐行未改），
+    这条用例是"搬运没有改变行为"在复核接口上的直接证据。
+
+    用户统一叫 `unit-user`：任务目录里的 `created_by` 就是它，否则会在
+    **任务授权**那一层先 403，测不到槽位授权（两个授权面必须都能过，
+    这正是 `test_slot_without_read_permission_is_403_for_by_job` 验证的方向）。
+    """
+    token = _unit_user(client, [org_tree[scope_key]], name="unit-user")
+    assert _read_review(client, token, slot_id) == expected
+
+
+def test_review_slot_scope_matrix_admin_can_read_everything(client, org_tree, stub_lifecycle):
+    """管理员不受范围限制。"""
+    token = _admin(client)
+    for slot_id in (SLOT_MINE, SLOT_SIBLING, SLOT_OTHER_DISTRICT):
+        assert _read_review(client, token, slot_id) == 200
