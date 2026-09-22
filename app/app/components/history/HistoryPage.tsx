@@ -142,6 +142,20 @@ export function HistoryPage() {
         desc={`已完成、待人工复核与失败任务的检索；每个任务可下载 PDF / CSV / JSON 格式报告（当前共 ${terminalCount} 个终态任务）。`}
       />
 
+      <div
+        className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+        data-testid="gbc-history-compat-notice"
+      >
+        <p className="font-medium">任务历史已退出一级业务导航。</p>
+        <p className="mt-1">
+          查找历史材料请使用「材料台账」或顶部全局搜索；单份材料的历史分析请进入
+          「材料详情 → 处理记录」。
+        </p>
+        <p className="mt-1 text-amber-800">
+          本页面暂作为兼容 / 运维任务历史入口保留（未关联到材料槽位的历史任务只能在这里查到）。
+        </p>
+      </div>
+
       <div className="mt-6 mb-3 flex flex-wrap items-center gap-2">
         <input
           value={filters.keyword}
