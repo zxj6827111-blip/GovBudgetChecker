@@ -480,6 +480,10 @@ export interface WorkflowIssueRecord {
 export interface WorkflowStatusCounts {
   confirmed: number;
   ignored: number;
+  /** 已进整改包（`in_package`）。与后端门禁同属"已处理"终态。 */
+  inPackage: number;
+  /** 显式标记为待复核（`needs_review`）。与 `pending` 一样阻塞完成。 */
+  needsReview: number;
   pending: number;
 }
 
@@ -490,12 +494,20 @@ export interface WorkflowStatusCounts {
  * - confirmed：workflow 状态为 "confirmed" 的问题数；
  * - ignored：workflow 状态为 "no_issue" 的问题数（"忽略"操作写入的状态，见
  *   ReviewWorkbenchPage 的 handleConfirm/handleIgnore）；
- * - pending：既不在 workflow 记录里、也不是上述两种终态的问题数——即
- *   "全部问题数 - 已确认 - 已忽略"，包含从未操作过的问题（workflow 里完全
- *   没有记录）与显式标记为 pending/needs_review/in_package 的问题。
+ * - inPackage：workflow 状态为 "in_package" 的问题数（已进整改包）；
+ * - pending：既不在 workflow 记录里、也不是上述三种终态的问题数。
+ *
+ * **三个终态必须与后端完成门禁完全一致**（WP3-A §四十/§四十三）：
+ * `confirmed` / `no_issue` / `in_package` 都算"已处理"，`pending` 与
+ * `needs_review` 都算未处理。此前 `in_package` 被算进 pending，
+ * 于是"问题已进整改包"的材料会显示"还有待处理问题"，
+ * 而后端门禁允许完成——两侧对同一份材料给出相反的结论。
+ * 跨语言契约由 `tests/fixtures/review_problem_fixture.json` 双向锁定：
+ * 后端 `tests/test_review_lifecycle_service.py` 与前端
+ * `app/tests/reviewWorkbenchContract.test.ts` 读同一份夹具。
  *
  * 反例（核心，对照任务书"计数接真实工作流状态，不得写死原型图的 2/1/3"）：
- * 全部问题数与 workflowRecords 都为空时，三项计数必须是 0/0/0（真实的零），
+ * 全部问题数与 workflowRecords 都为空时，各项计数必须是真实的 0，
  * 不是原型图示例的 2/1/3。
  */
 export function computeWorkflowStatusCounts(
@@ -505,16 +517,27 @@ export function computeWorkflowStatusCounts(
   const formalProblems = problems.filter((problem) => !isProblemDegraded(problem));
   let confirmed = 0;
   let ignored = 0;
+  let inPackage = 0;
+  let needsReview = 0;
   for (const problem of formalProblems) {
-    const record = workflowRecords[problem.id];
-    if (record?.status === "confirmed") {
+    const status = workflowRecords[problem.id]?.status;
+    if (status === "confirmed") {
       confirmed += 1;
-    } else if (record?.status === "no_issue") {
+    } else if (status === "no_issue") {
       ignored += 1;
+    } else if (status === "in_package") {
+      inPackage += 1;
+    } else if (status === "needs_review") {
+      needsReview += 1;
     }
   }
-  const pending = Math.max(0, formalProblems.length - confirmed - ignored);
-  return { confirmed, ignored, pending };
+  // pending 用"总数 - 已解决"而不是单独循环累加：这样"未识别的状态码"
+  // 一定落在待处理里，绝不会因为漏了一个 if 分支而被当成已处理。
+  const pending = Math.max(
+    0,
+    formalProblems.length - confirmed - ignored - inPackage - needsReview,
+  );
+  return { confirmed, ignored, inPackage, needsReview, pending };
 }
 
 // ---------------------------------------------------------------------------

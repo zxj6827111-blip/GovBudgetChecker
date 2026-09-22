@@ -368,8 +368,8 @@ function runSyncAssertions(): void {
 
   assert.deepEqual(
     computeWorkflowStatusCounts([], {}),
-    { confirmed: 0, ignored: 0, pending: 0 },
-    "REGRESSION: 没有任何问题、没有任何工作流记录时，三项计数必须是真实的 0/0/0，不得是原型图示例的 2/1/3",
+    { confirmed: 0, ignored: 0, inPackage: 0, needsReview: 0, pending: 0 },
+    "REGRESSION: 没有任何问题、没有任何工作流记录时，各项计数必须是真实的 0，不得是原型图示例的 2/1/3",
   );
 
   const sixProblems: Problem[] = Array.from({ length: 6 }, (_, i) => makeProblem({ id: `issue-${i + 1}` }));
@@ -381,8 +381,22 @@ function runSyncAssertions(): void {
   };
   assert.deepEqual(
     computeWorkflowStatusCounts(sixProblems, workflowRecords),
-    { confirmed: 2, ignored: 1, pending: 3 },
+    { confirmed: 2, ignored: 1, inPackage: 0, needsReview: 0, pending: 3 },
     "6 个问题：2 已确认 + 1 已忽略 + 3 待处理（含未操作过的），与原型图 2/1/3 的数字巧合但来自真实计算，不是硬编码",
+  );
+
+  // WP3-A §四十：in_package 与 nees_review 必须与后端完成门禁同口径。
+  // confirmed / no_issue / in_package 视为已处理；pending / needs_review 阻塞完成。
+  // 此前 in_package 被算进 pending，于是"问题已进整改包"的材料会显示
+  // "还有待处理问题"，而后端门禁允许完成——两侧对同一份材料给出相反结论。
+  assert.deepEqual(
+    computeWorkflowStatusCounts(sixProblems, {
+      ...workflowRecords,
+      "issue-4": { issue_id: "issue-4", status: "in_package" },
+      "issue-5": { issue_id: "issue-5", status: "needs_review" },
+    }),
+    { confirmed: 2, ignored: 1, inPackage: 1, needsReview: 1, pending: 1 },
+    "in_package 属于已处理终态，needs_review 与 pending 一样阻塞完成",
   );
 
   // 反例：降级问题不计入底部状态条的任何计数（既不算待处理也不算已确认/已忽略）
@@ -392,7 +406,7 @@ function runSyncAssertions(): void {
   ];
   assert.deepEqual(
     computeWorkflowStatusCounts(withDegraded, workflowRecords),
-    { confirmed: 2, ignored: 1, pending: 3 },
+    { confirmed: 2, ignored: 1, inPackage: 0, needsReview: 0, pending: 3 },
     "REGRESSION: 降级问题不应计入待处理数，否则底部计数会比审核问题tab的正式问题数更大，造成口径分裂",
   );
 
