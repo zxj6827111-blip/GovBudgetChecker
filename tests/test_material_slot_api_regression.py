@@ -103,33 +103,40 @@ def _is_frozen_family(path: str) -> bool:
     return path.startswith(FROZEN_FAMILY_PREFIXES)
 
 
-#: WP2-A 新增的材料台账只读接口（本清单同样冻结：多一条、少一条都会失败）。
-#: 从 WP1 的"不新增任何 HTTP 接口"改为"新增且**恰好**这三条"：
-#: WP2-A 的交付范围就是这三个读接口，写成精确集合才能继续拦住"顺手多加一个接口"。
-WP2A_MATERIAL_ROUTES = frozenset(
+#: 材料台账只读接口（本清单同样冻结：多一条、少一条都会失败）。
+#: WP1：不新增任何 HTTP 接口；WP2-A：新增且**恰好**三条；WP2-B：新增且**恰好**七条。
+#: 每轮把它写成精确集合，是为了继续拦住"顺手多加一个接口"——
+#: 详情页需要数据不是实现写接口的理由（写入路径属于 WP3/WP9）。
+MATERIAL_LEDGER_ROUTES = frozenset(
     {
         ("GET", "/api/materials/coverage"),
         ("GET", "/api/materials/districts/{district_id}/departments"),
         ("GET", "/api/materials/departments/{department_id}/matrix"),
+        ("GET", "/api/materials/units/{unit_id}/timeline"),
+        ("GET", "/api/materials/slots/{slot_id}"),
+        ("GET", "/api/materials/slots/{slot_id}/versions"),
+        ("GET", "/api/materials/slots/{slot_id}/runs"),
     }
 )
 
 
 def test_material_http_route_surface_is_exactly_the_planned_set():
-    """材料台账的 HTTP 接口面恰好是 WP2-A 计划的三条只读接口。
+    """材料台账的 HTTP 接口面恰好是计划中的七条只读接口。
 
-    WP1 阶段这里是"一条都没有"；WP2-A 交付首页/区级矩阵/部门矩阵三个 GET，
-    因此清单从"空集"变成"精确三条"——状态、口径、详情、搜索等接口属于
-    WP2-B/WP2-C，**不在本轮范围内**，多出来就会被这条测试拦住。
+    WP1 阶段这里是"一条都没有"；WP2-A 变成"精确三条"；WP2-B 变成
+    "精确七条"（单位时间轴 + 槽位详情 + 版本历史 + 处理记录）。
+    搜索（WP2-C）、复核生命周期（WP3）、应收基线（WP9）的接口**不在本轮
+    范围内**，多出来就会被这条测试拦住。
     """
     actual = {row for row in _route_surface() if "/materials" in row[1]}
-    assert actual == WP2A_MATERIAL_ROUTES, (
-        f"材料台账接口面与计划不一致：多了 {sorted(actual - WP2A_MATERIAL_ROUTES)}；"
-        f"少了 {sorted(WP2A_MATERIAL_ROUTES - actual)}"
+    assert actual == MATERIAL_LEDGER_ROUTES, (
+        f"材料台账接口面与计划不一致：多了 {sorted(actual - MATERIAL_LEDGER_ROUTES)}；"
+        f"少了 {sorted(MATERIAL_LEDGER_ROUTES - actual)}"
     )
     assert all(
         method == "GET" for method, _ in actual
-    ), "本轮的三个材料接口都是只读 GET：写入路径属于 WP3/WP9"
+    ), "本轮的七个材料接口都是只读 GET：写入路径属于 WP3/WP9"
+    assert len(actual) == 7
 
 
 # ==== 入库集成只做加法，且可关闭 ============================================
