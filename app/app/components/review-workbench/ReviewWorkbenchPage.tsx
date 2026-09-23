@@ -57,6 +57,7 @@ import {
   formatReviewMoment,
   latestCompletedSession,
   latestInvalidatedSession,
+  canDecideObligations,
   parseReviewErrorDetail,
   pendingObligationCount,
   resolveCompleteButtonState,
@@ -239,7 +240,13 @@ export function ReviewWorkbenchPage() {
         const parsed = parseReviewErrorDetail(body);
         if (parsed) {
           // 门禁拒绝：逐条展示业务原因。只显示"HTTP 409"等于把唯一有用的信息丢掉。
-          setReviewBlockers(parsed);
+          // 但 blockers 为空的 409（如问题集合在工作流上已变化）没有可逐条
+          // 渲染的条目——业务消息必须落到通知条，不能静默。
+          if (parsed.blockers && parsed.blockers.length > 0) {
+            setReviewBlockers(parsed);
+          } else {
+            setReviewNotice(parsed.message);
+          }
           return { ok: false, detail: parsed };
         }
         setReviewNotice(
@@ -562,8 +569,17 @@ export function ReviewWorkbenchPage() {
         }
         const parsed = parseReviewErrorDetail(body);
         if (parsed) {
-          // 并发冲突也走这里：消息本身是服务端给的业务原因，逐条展示。
-          setReviewBlockers(parsed);
+          if (parsed.blockers && parsed.blockers.length > 0) {
+            setReviewBlockers(parsed);
+          } else {
+            // 无 blockers 的 409（并发冲突 / 复核已完成锁定 / 尚未开始复核）：
+            // blockers 区不渲染空列表，业务消息必须落到通知条——
+            // 否则"点了按钮没反应"，与"409 只显示状态码"同害。
+            setReviewNotice(parsed.message);
+          }
+          // 被拒意味着页面事实可能已过期：静默重取，把面板上的
+          // revision / 结论 / 门禁刷成服务端真值。
+          await loadReviewContext();
           return;
         }
         setReviewNotice(
@@ -844,6 +860,7 @@ export function ReviewWorkbenchPage() {
               <ObligationsTab
                 block={obligationReview}
                 submittingId={obligationSubmittingId}
+                readOnly={!canDecideObligations(reviewData)}
                 onDecide={(item, decision, note) =>
                   void handleObligationDecision(item, decision, note)
                 }

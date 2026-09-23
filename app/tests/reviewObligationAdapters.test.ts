@@ -6,6 +6,7 @@ import {
   obligationDecisionTone,
 } from "../lib/reviewLifecyclePresentation";
 import {
+  canDecideObligations,
   isObligationHandled,
   pendingObligationCount,
   toReviewContextState,
@@ -161,5 +162,53 @@ assert.equal(legacy.kind, "available");
 if (legacy.kind === "available") {
   assert.equal(legacy.review.obligation_review, undefined, "老后端没有该字段也不影响解析");
 }
+
+// ---- 补核动作的前端即时门槛（真正判定在服务端，这只是少让人白点） -------------
+
+assert.equal(canDecideObligations(null), false, "没有复核上下文 ⇒ 不可补核");
+assert.equal(canDecideObligations(reviewBase), false, "没有活动会话 ⇒ 不可补核");
+assert.equal(
+  canDecideObligations({
+    ...reviewBase,
+    current_session: {
+      review_session_id: "sess-1",
+      status: "in_progress",
+      slot_id: "slot-1",
+      document_version_id: 11,
+      analysis_job_uuid: "job-1",
+      analysis_basis_token: "job-1:1",
+      started_by: "r",
+      started_at: "2026-09-23T00:00:00+00:00",
+      completed_by: null,
+      completed_at: null,
+      invalidated_at: null,
+      invalidated_reason: null,
+      review_result: {},
+    },
+  }),
+  true,
+);
+assert.equal(
+  canDecideObligations({
+    ...reviewBase,
+    current_session: {
+      review_session_id: "sess-2",
+      status: "completed",
+      slot_id: "slot-1",
+      document_version_id: 11,
+      analysis_job_uuid: "job-1",
+      analysis_basis_token: "job-1:1",
+      started_by: "r",
+      started_at: "2026-09-23T00:00:00+00:00",
+      completed_by: "r",
+      completed_at: "2026-09-23T01:00:00+00:00",
+      invalidated_at: null,
+      invalidated_reason: null,
+      review_result: {},
+    },
+  }),
+  false,
+  "已完成复核 ⇒ 不可再补核（须先重新复核）",
+);
 
 console.log("reviewObligationAdapters.test.ts passed");

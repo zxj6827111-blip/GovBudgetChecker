@@ -30,6 +30,9 @@ interface ObligationsTabProps {
   block: ObligationReviewBlockRecord;
   /** 正在提交补核的义务 id（防连点）。 */
   submittingId: string | null;
+  /** 当前没有进行中的复核会话时为 true：只读展示，按钮禁用。
+      与「完成复核」同一纪律——前端禁用只是即时提示，真正判定在服务端。 */
+  readOnly: boolean;
   onDecide: (
     item: ObligationReviewItemRecord,
     decision: string,
@@ -37,14 +40,16 @@ interface ObligationsTabProps {
   ) => void;
 }
 
-function ObligationRow({ item, submittingId, onDecide }: {
+function ObligationRow({ item, submittingId, readOnly, onDecide }: {
   item: ObligationReviewItemRecord;
   submittingId: string | null;
+  readOnly: boolean;
   onDecide: ObligationsTabProps["onDecide"];
 }) {
   const handled = isObligationHandled(item);
   const [note, setNote] = useState(item.note ?? "");
   const busy = submittingId === item.obligation_id;
+  const disabled = busy || readOnly;
 
   return (
     <li
@@ -89,14 +94,14 @@ function ObligationRow({ item, submittingId, onDecide }: {
           placeholder="补核依据（可选，审计留痕）"
           data-testid={`gbc-obligation-note-${item.obligation_id}`}
           className="h-8 min-w-0 flex-1 rounded-md border border-border px-2 text-xs text-slate-700 placeholder:text-slate-300"
-          disabled={busy}
+          disabled={disabled}
         />
       </div>
 
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <Button
           variant="secondary"
-          disabled={busy}
+          disabled={disabled}
           data-testid={`gbc-obligation-verify-ok-${item.obligation_id}`}
           onClick={() => onDecide(item, "verified_ok", note)}
         >
@@ -104,7 +109,7 @@ function ObligationRow({ item, submittingId, onDecide }: {
         </Button>
         <Button
           variant="secondary"
-          disabled={busy}
+          disabled={disabled}
           data-testid={`gbc-obligation-verify-issue-${item.obligation_id}`}
           onClick={() => onDecide(item, "verified_issue", note)}
         >
@@ -112,7 +117,7 @@ function ObligationRow({ item, submittingId, onDecide }: {
         </Button>
         <Button
           variant="secondary"
-          disabled={busy}
+          disabled={disabled}
           data-testid={`gbc-obligation-not-applicable-${item.obligation_id}`}
           onClick={() => onDecide(item, "not_applicable", note)}
         >
@@ -121,7 +126,7 @@ function ObligationRow({ item, submittingId, onDecide }: {
         {handled ? (
           <Button
             variant="secondary"
-            disabled={busy}
+            disabled={disabled}
             data-testid={`gbc-obligation-reset-${item.obligation_id}`}
             onClick={() => onDecide(item, "pending", note)}
           >
@@ -142,7 +147,7 @@ function ObligationRow({ item, submittingId, onDecide }: {
   );
 }
 
-export function ObligationsTab({ block, submittingId, onDecide }: ObligationsTabProps) {
+export function ObligationsTab({ block, submittingId, readOnly, onDecide }: ObligationsTabProps) {
   if (!block.available) {
     return (
       <div className="px-4 py-6 text-sm text-slate-500" data-testid="gbc-obligation-unavailable">
@@ -164,6 +169,7 @@ export function ObligationsTab({ block, submittingId, onDecide }: ObligationsTab
         data-testid="gbc-obligation-summary"
       >
         待补核 {block.pending_total ?? 0} 项 · 共 {block.items.length} 项
+        {readOnly ? "（未开始复核或复核已完成，仅可查看）" : ""}
       </div>
       <ul className="flex-1 overflow-auto" data-testid="gbc-obligation-list">
         {block.items.map((item) => (
@@ -171,6 +177,7 @@ export function ObligationsTab({ block, submittingId, onDecide }: ObligationsTab
             key={item.obligation_id}
             item={item}
             submittingId={submittingId}
+            readOnly={readOnly}
             onDecide={onDecide}
           />
         ))}

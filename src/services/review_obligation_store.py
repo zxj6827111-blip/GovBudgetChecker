@@ -72,23 +72,6 @@ async def list_session_decisions(
     return [item for item in (decision_row_to_dict(row) for row in rows) if item is not None]
 
 
-async def get_decision(
-    conn: Any, *, review_session_id: Any, obligation_id: str, for_update: bool = False
-) -> Optional[Dict[str, Any]]:
-    """按 (会话, 义务) 取一条决定；``for_update`` 供乐观锁写入前锁定该行。"""
-    suffix = " FOR UPDATE" if for_update else ""
-    row = await conn.fetchrow(
-        f"""
-        SELECT {_DECISION_COLUMNS}
-        FROM review_obligation_decisions
-        WHERE review_session_id = $1 AND obligation_id = $2{suffix}
-        """,
-        review_session_id,
-        obligation_id,
-    )
-    return decision_row_to_dict(row)
-
-
 async def insert_decision(
     conn: Any,
     *,
@@ -170,7 +153,6 @@ async def update_decision_if_revision_matches(
 __all__ = [
     "decision_row_to_dict",
     "list_session_decisions",
-    "get_decision",
     "insert_decision",
     "update_decision_if_revision_matches",
 ]

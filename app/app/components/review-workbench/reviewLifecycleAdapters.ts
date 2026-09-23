@@ -158,6 +158,17 @@ export function pendingObligationCount(
   return (block.items ?? []).filter((item) => !isObligationHandled(item)).length;
 }
 
+/**
+ * 当前是否允许在前端发起补核（与「完成复核」按钮同一纪律：
+ * 按钮 disabled 只是即时提示，真正的判定永远在服务端）。
+ * 没有进行中的会话时没有可表态的对象——必须先「开始复核」。
+ */
+export function canDecideObligations(
+  review: ReviewLifecycleDataRecord | null | undefined,
+): boolean {
+  return review?.current_session?.status === "in_progress";
+}
+
 /** 补核写入的响应体（与后端 ObligationDecisionData 对齐）。 */
 export interface ObligationDecisionDataRecord {
   slot_id: string;
