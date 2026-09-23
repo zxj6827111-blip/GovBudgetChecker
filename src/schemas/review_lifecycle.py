@@ -152,6 +152,10 @@ ERROR_OBLIGATION_NOT_BLOCKING = "obligation_not_blocking"
 #: 与库里的 ``revision`` 不一致。客户端必须刷新后重试——**不允许**静默覆盖
 #: 另一个复核人的决定。
 ERROR_OBLIGATION_DECISION_CONFLICT = "obligation_decision_conflict"
+#: resolved 决定缺必要依据（HTTP 422）。请求结构合法但缺业务必填字段属于
+#: 输入校验，不用 409。零依据放行意味着"点一下「不适用」、不写任何说明，
+#: 阻塞义务就消失"——对审计系统不可接受（任务书 §十）。
+ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED = "obligation_decision_evidence_required"
 
 
 class ReviewBlocker(BaseModel):
@@ -463,6 +467,7 @@ __all__ = [
     "ERROR_REVIEW_NOT_ACTIVE",
     "ERROR_OBLIGATION_NOT_BLOCKING",
     "ERROR_OBLIGATION_DECISION_CONFLICT",
+    "ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED",
     "ObligationDecisionRecord",
     "ObligationReviewItem",
     "ObligationReviewBlock",

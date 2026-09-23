@@ -448,7 +448,8 @@ async def test_decisions_belong_to_the_session(review_db):
         )
         old_session = started.session.review_session_id
         await review_lifecycle_service.decide_obligation(
-            conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok", actor="reviewer-a"
+            conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok",
+            actor="reviewer-a", note="已逐项核对",
         )
         await review_lifecycle_service.complete_review(conn, ctx["slot_id"], actor="reviewer-a")
 
@@ -475,7 +476,8 @@ async def test_rejected_decision_entry_points(review_db):
         # 还没开始复核 ⇒ 409 review_not_active
         with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
             await review_lifecycle_service.decide_obligation(
-                conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok", actor="r"
+                conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok",
+                actor="r", note="已核对，无问题",
             )
         assert excinfo.value.error == "review_not_active"
 
@@ -484,7 +486,8 @@ async def test_rejected_decision_entry_points(review_db):
         # 未知义务 ⇒ 404
         with pytest.raises(HTTPException) as excinfo404:
             await review_lifecycle_service.decide_obligation(
-                conn, ctx["slot_id"], obligation_id="OBL-NOPE", decision="verified_ok", actor="r"
+                conn, ctx["slot_id"], obligation_id="OBL-NOPE", decision="verified_ok",
+                actor="r", note="已核对",
             )
         assert excinfo404.value.status_code == 404
 
@@ -497,12 +500,14 @@ async def test_rejected_decision_entry_points(review_db):
 
         # 决定之后完成；已完成 ⇒ 409 review_completed_locked
         await review_lifecycle_service.decide_obligation(
-            conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok", actor="r"
+            conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok",
+            actor="r", note="已核对，无问题",
         )
         await review_lifecycle_service.complete_review(conn, ctx["slot_id"], actor="r")
         with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
             await review_lifecycle_service.decide_obligation(
-                conn, ctx["slot_id"], obligation_id="OBL-A", decision="not_applicable", actor="r"
+                conn, ctx["slot_id"], obligation_id="OBL-A", decision="not_applicable",
+                actor="r", note="本材料不涉及该项",
             )
         assert excinfo.value.error == "review_completed_locked"
 
@@ -548,7 +553,8 @@ async def test_non_blocking_obligation_cannot_be_decided(review_db):
         await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
         with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
             await review_lifecycle_service.decide_obligation(
-                conn, ctx["slot_id"], obligation_id="OBL-DONE", decision="verified_ok", actor="r"
+                conn, ctx["slot_id"], obligation_id="OBL-DONE", decision="verified_ok",
+                actor="r", note="已核对",
             )
         assert excinfo.value.error == "obligation_not_blocking"
 
@@ -570,7 +576,8 @@ async def test_concurrent_first_decisions_do_not_overwrite(review_db):
     async def _decide(actor: str, decision: str):
         async with _conn(schema, pool) as conn:
             return await review_lifecycle_service.decide_obligation(
-                conn, ctx["slot_id"], obligation_id="OBL-A", decision=decision, actor=actor
+                conn, ctx["slot_id"], obligation_id="OBL-A", decision=decision,
+                actor=actor, note=f"{actor} 的补核依据",
             )
 
     results = await asyncio.gather(
@@ -602,7 +609,8 @@ async def test_stale_revision_update_is_rejected(review_db):
         ctx = await _make_reviewable_slot(conn, blocking_ids=["OBL-A"])
         await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="reviewer-a")
         first = await review_lifecycle_service.decide_obligation(
-            conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok", actor="reviewer-a"
+            conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok",
+            actor="reviewer-a", note="已核对，无问题",
         )
         updated = await review_lifecycle_service.decide_obligation(
             conn,
@@ -610,6 +618,7 @@ async def test_stale_revision_update_is_rejected(review_db):
             obligation_id="OBL-A",
             decision="verified_issue",
             actor="reviewer-b",
+            note="确认存在勾稽差异",
             expected_revision=first.decision.revision,
         )
         assert updated.decision.decision == "verified_issue"
@@ -623,6 +632,7 @@ async def test_stale_revision_update_is_rejected(review_db):
                 obligation_id="OBL-A",
                 decision="not_applicable",
                 actor="reviewer-c",
+                note="本材料不涉及",
                 expected_revision=1,
             )
         assert excinfo.value.error == "obligation_decision_conflict"
@@ -634,6 +644,7 @@ async def test_stale_revision_update_is_rejected(review_db):
                 obligation_id="OBL-A",
                 decision="not_applicable",
                 actor="reviewer-c",
+                note="本材料不涉及",
             )
         assert excinfo.value.error == "obligation_decision_conflict"
 
@@ -660,7 +671,8 @@ async def test_decision_audits_are_written_once_after_commit(review_db, monkeypa
         ctx = await _make_reviewable_slot(conn, blocking_ids=["OBL-A"])
         await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
         await review_lifecycle_service.decide_obligation(
-            conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok", actor="r"
+            conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok",
+            actor="r", note="已核对，无问题", evidence_reference="第 12 页",
         )
         await review_lifecycle_service.decide_obligation(
             conn,
@@ -668,6 +680,7 @@ async def test_decision_audits_are_written_once_after_commit(review_db, monkeypa
             obligation_id="OBL-A",
             decision="verified_issue",
             actor="r",
+            note="确认存在差异",
             expected_revision=1,
         )
 
@@ -681,3 +694,120 @@ async def test_decision_audits_are_written_once_after_commit(review_db, monkeypa
     assert reviewed[0]["details"]["decision"] == "verified_ok"
     assert reviewed[0]["details"]["review_session_id"]
     assert updated[0]["details"]["revision"] == 2
+
+
+# ==== F：依据纪律（任务书 §十/§二十） =========================================
+
+
+async def test_resolved_decisions_require_evidence(review_db):
+    """零依据拒绝：verified_ok 缺 note 与 evidence ⇒ 422；verified_issue /
+    not_applicable 缺 note ⇒ 422。拒绝不落任何行（连读取都还没发生）。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, blocking_ids=["OBL-A"])
+        started = await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+
+        cases = [
+            # verified_ok：两项依据全空 ⇒ 拒
+            {"decision": "verified_ok"},
+            # verified_issue：确认问题却不写发现了什么 ⇒ 拒
+            {"decision": "verified_issue"},
+            {"decision": "verified_issue", "evidence_reference": "第 3 页"},
+            # not_applicable：改变适用性必须写原因 ⇒ 拒
+            {"decision": "not_applicable"},
+            {"decision": "not_applicable", "evidence_reference": "见附件"},
+        ]
+        for case in cases:
+            with pytest.raises(HTTPException) as excinfo:
+                await review_lifecycle_service.decide_obligation(
+                    conn, ctx["slot_id"], obligation_id="OBL-A", actor="r", **case
+                )
+            assert excinfo.value.status_code == 422, case
+            assert excinfo.value.detail["error"] == "obligation_decision_evidence_required"
+
+    rows = await _decisions(schema, pool, started.session.review_session_id)
+    assert rows == [], f"被拒的请求不允许留下决定行: {rows}"
+
+
+async def test_pending_and_supported_resolved_decisions_are_allowed(review_db):
+    """正向边界：pending 不需要依据；verified_ok 只给 evidence 也可以；
+    verified_issue / not_applicable 写明原因即可。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, blocking_ids=["OBL-A", "OBL-B", "OBL-C", "OBL-D"])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+
+        ok_only_evidence = await review_lifecycle_service.decide_obligation(
+            conn, ctx["slot_id"], obligation_id="OBL-A",
+            decision="verified_ok", actor="r", evidence_reference="表 8 合计行",
+        )
+        assert ok_only_evidence.decision.decision == "verified_ok"
+
+        issue_with_note = await review_lifecycle_service.decide_obligation(
+            conn, ctx["slot_id"], obligation_id="OBL-B",
+            decision="verified_issue", actor="r", note="确认：合计与分项之和不一致",
+        )
+        assert issue_with_note.decision.decision == "verified_issue"
+
+        na_with_note = await review_lifecycle_service.decide_obligation(
+            conn, ctx["slot_id"], obligation_id="OBL-C",
+            decision="not_applicable", actor="r", note="本单位年度内无三公经费支出",
+        )
+        assert na_with_note.decision.decision == "not_applicable"
+
+        reset_pending = await review_lifecycle_service.decide_obligation(
+            conn, ctx["slot_id"], obligation_id="OBL-D",
+            decision="pending", actor="r",  # pending 允许零依据（只是置回待处理）
+        )
+        assert reset_pending.decision.decision == "pending"
+        # pending 不算已处理：门禁仍阻塞 OBL-D
+        assert [
+            (b.code, b.count) for b in reset_pending.completion_gate.blockers
+        ] == [("blocking_obligations", 1)]
+
+
+# ==== G：服务端 candidate 校验（任务书 §四/§九） ==============================
+
+
+async def test_stale_job_claim_is_rejected_without_mutation(review_db):
+    """任务书 §九：路由阶段校验过的 job 在进入事务前被换掉时，
+    service 必须 409 review_context_mismatch，且**不留任何写入**。"""
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, blocking_ids=["OBL-A"])
+
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+            await review_lifecycle_service.start_review(
+                conn, ctx["slot_id"], actor="r", job_uuid="job-which-is-not-current"
+            )
+        assert excinfo.value.error == "review_context_mismatch"
+
+        sessions = await conn.fetch(
+            "SELECT id FROM review_sessions WHERE slot_id = $1::uuid", ctx["slot_id"]
+        )
+        assert sessions == [], "mismatch 拒绝不允许留下会话"
+
+        # 先正常开出会话，再验证 complete / decide 的同类 mismatch 也无写入
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError):
+            await review_lifecycle_service.complete_review(
+                conn, ctx["slot_id"], actor="r", job_uuid="job-which-is-not-current"
+            )
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError):
+            await review_lifecycle_service.decide_obligation(
+                conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok",
+                actor="r", note="已核对", job_uuid="job-which-is-not-current",
+            )
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError):
+            await review_lifecycle_service.reopen_review(
+                conn, ctx["slot_id"], actor="r", job_uuid="job-which-is-not-current"
+            )
+
+        session_rows = await conn.fetch(
+            "SELECT status FROM review_sessions WHERE slot_id = $1::uuid", ctx["slot_id"]
+        )
+        assert [str(row["status"]) for row in session_rows] == ["in_progress"]
+        decisions = await conn.fetch(
+            "SELECT id FROM review_obligation_decisions WHERE slot_id = $1::uuid", ctx["slot_id"]
+        )
+        assert decisions == [], "mismatch 拒绝不允许留下补核决定"

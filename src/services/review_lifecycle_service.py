@@ -76,6 +76,7 @@ from src.schemas.review_lifecycle import (
     BLOCKER_REVIEW_NOT_STARTED,
     ERROR_COMPLETION_BLOCKED,
     ERROR_OBLIGATION_DECISION_CONFLICT,
+    ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED,
     ERROR_OBLIGATION_NOT_BLOCKING,
     ERROR_REVIEW_COMPLETED_LOCKED,
     ERROR_REVIEW_CONTEXT_MISMATCH,
@@ -88,6 +89,10 @@ from src.schemas.review_lifecycle import (
     INVALIDATION_REASON_ANALYSIS_RESTARTED,
     INVALIDATION_REASON_DOCUMENT_VERSION_CHANGED,
     INVALIDATION_REASON_REVIEW_REOPENED,
+    OBLIGATION_DECISION_NOT_APPLICABLE,
+    OBLIGATION_DECISION_PENDING,
+    OBLIGATION_DECISION_VERIFIED_ISSUE,
+    OBLIGATION_DECISION_VERIFIED_OK,
     OBLIGATION_DECISIONS,
     RESOLVED_OBLIGATION_DECISIONS,
     REVIEW_STATUS_COMPLETED,
@@ -1229,6 +1234,49 @@ async def reopen_review(
     )
 
 
+def _obligation_evidence_error(
+    decision: str, note: Optional[str], evidence_reference: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """依据纪律（任务书 §十）：resolved 决定不允许"零依据"关闭门禁。
+
+    规则（独立评审裁决版）：
+
+    - ``pending``：允许空依据（它只是"置回待处理"，不产生放行效果）；
+    - ``verified_ok``：``note`` 或 ``evidence_reference`` 至少填一项——
+      "我核对过"必须能回答"核对了什么/在哪里"；
+    - ``verified_issue``：``note`` 必填——"确认存在问题"却不写发现了什么问题，
+      审计无法回答"这项问题到底是什么"（任务书允许 note-OR-evidence 的放宽，
+      但"问题描述"属于补核结论本体，不是可选附件）；
+    - ``not_applicable``：``note`` 必填——人工改变适用性必须解释
+      "为什么这条义务对本材料不适用"。
+
+    一律 422：请求结构合法、缺的是业务必填字段，属输入校验，不是状态冲突
+    （任务书 §十二 的 422/409 二选一，本批全接口统一 422）。
+    """
+    if decision == OBLIGATION_DECISION_PENDING:
+        return None
+    if decision == OBLIGATION_DECISION_VERIFIED_OK:
+        if note or evidence_reference:
+            return None
+        message = "补核通过必须填写补核说明或证据位置（页码/表名/章节）"
+    elif decision == OBLIGATION_DECISION_VERIFIED_ISSUE:
+        if note:
+            return None
+        message = "确认存在问题必须写明发现了什么问题（补核说明）"
+    elif decision == OBLIGATION_DECISION_NOT_APPLICABLE:
+        if note:
+            return None
+        message = "判定不适用必须写明原因（为什么本材料不涉及该项检查）"
+    else:
+        # 未知决定值在参数校验处已被拒绝；这里是防御性兜底，永远不会到达。
+        return None
+    return {
+        "error": ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED,
+        "message": message,
+        "decision": decision,
+    }
+
+
 def _prepare_obligation_decision(
     state: ReviewState, obligation_id: str
 ) -> Optional[HTTPException]:
@@ -1373,6 +1421,12 @@ async def decide_obligation(
         raise HTTPException(status_code=400, detail="invalid obligation decision")
     note_text = str(note or "").strip() or None
     evidence_text = str(evidence_reference or "").strip() or None
+
+    # 依据纪律在任何数据库写入之前判定：读都没有必要做——缺依据的请求
+    # 立刻 422，不给它接触并发窗口的机会。
+    evidence_error = _obligation_evidence_error(normalized_decision, note_text, evidence_text)
+    if evidence_error is not None:
+        raise HTTPException(status_code=422, detail=evidence_error)
 
     effects = _CommitEffects()
     outcome: Optional[ObligationDecisionData] = None
