@@ -94,6 +94,25 @@ PUT /api/reviews/{slot_id}/obligations/{obligation_id}
   提交前不写"已成功"）；details 含 session/义务/结论/revision/复核人备注与依据；
 - 拒绝：`obligation.review` + `result="rejected"`，路由层留痕（谁尝试过什么）。
 
+## 独立评审整改（2026-09-23 第二轮）
+
+1. **写路径任务层权限不再可绕过（P1）**。此前 start/complete/reopen/PUT 补核
+   只在请求体带 `job_uuid` 时才做 job 层权限检查——省略即豁免。现统一为：
+   路由先按槽位当前版本由服务端解析 candidate（`resolve_current_analysis`），
+   对 candidate 强制 `user_can_access_job`（无权 403），再把 candidate 传给
+   service；service 在事务内 `_require_job_belongs_to_state` 二次校验——
+   "授权看 A、事务里变成 B"以 409 `review_context_mismatch` 收尾（TOCTOU 闭合）。
+2. **依据纪律（P1/P2）**。resolved 决定不允许零依据放开阻塞：
+   `verified_ok` 需 note 或 evidence_reference；`verified_issue` 需 note
+   （确认问题必须写明是什么问题）；`not_applicable` 需 note（改变适用性必须
+   给原因）；`pending` 不需要依据（置回待处理不产生放行效果）。违例一律
+   结构化 422 `obligation_decision_evidence_required`（请求结构合法、缺业务
+   必填字段属输入校验；全接口统一 422）。依据写入数据库与审计，未另建日志。
+3. **前端**。补核行分设「补核说明」与「证据位置/引用」两个输入；面板常驻
+   依据纪律提示；按钮不禁用（判定在服务端），422 消息落通知条。
+4. **E2E 真链**：`e2e/tests/obligation-review.spec.ts`——补核两项义务到
+   门禁放行并完成复核的完整链路 + 空依据 422 展示用例。
+
 ## 验证
 
 - 真库 PG 用例：`tests/test_obligation_review_pg.py`（9 条，0 skipped）——
