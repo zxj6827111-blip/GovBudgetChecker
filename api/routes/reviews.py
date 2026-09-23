@@ -40,6 +40,8 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from api import material_access, runtime
 from api.auth_utils import require_login, user_can_access_job
 from src.schemas.review_lifecycle import (
+    ObligationDecisionRequest,
+    ObligationDecisionResponse,
     ReviewActionRequest,
     ReviewByJobResponse,
     ReviewLifecycleResponse,
@@ -214,6 +216,80 @@ async def reopen_review(
     这是"已完成复核之后再改问题"的唯一合法前置动作（问题编辑锁由复核完成时落下）。
     """
     return await _mutate(slot_id, request, payload, action="reopen")
+
+
+@router.put(
+    "/api/reviews/{slot_id}/obligations/{obligation_id}",
+    response_model=ObligationDecisionResponse,
+)
+async def decide_obligation(
+    slot_id: str,
+    obligation_id: str,
+    request: Request,
+    payload: ObligationDecisionRequest = Body(...),
+) -> ObligationDecisionResponse:
+    """人工补核一条检查义务（WP3-B）。
+
+    鉴权与 ``_mutate`` 完全同源（先槽位后任务，任务书 §十四）：
+    obligation 接口**不得**绕过槽位权限另开入口。成功审计只有服务层
+    一个写入口（提交成功后才落 ``obligation.reviewed`` / ``obligation.updated``）；
+    这里只记录"这次请求被业务拒绝"这一事实（``result="rejected"``）。
+    """
+    _, _, user = require_login(request)
+    await _require_slot_readable(user, slot_id)
+
+    if payload.job_uuid:
+        _require_job_access(user, payload.job_uuid)
+
+    actor = _actor(user)
+    try:
+        data = await _with_connection(
+            lambda conn: review_lifecycle_service.decide_obligation(
+                conn,
+                slot_id,
+                obligation_id=obligation_id,
+                decision=payload.decision,
+                actor=actor,
+                note=payload.note,
+                evidence_reference=payload.evidence_reference,
+                expected_revision=payload.expected_revision,
+                job_uuid=payload.job_uuid,
+            )
+        )
+    except review_lifecycle_service.ReviewLifecycleError as exc:
+        append_audit_event(
+            action="obligation.review",
+            actor=actor,
+            result="rejected",
+            resource_type="review_obligation_decision",
+            resource_id=f"{slot_id}:{obligation_id}",
+            details={
+                "slot_id": slot_id,
+                "obligation_id": obligation_id,
+                "decision": payload.decision,
+                "error": exc.error,
+            },
+        )
+        raise
+    except HTTPException as exc:
+        # 404（义务不在当前复核里）这类非业务码拒绝同样留痕：审计关心的是
+        # "谁在什么时候尝试过什么"，只记成功会让"为什么这条义务一直没表态"
+        # 无从追查。
+        append_audit_event(
+            action="obligation.review",
+            actor=actor,
+            result="rejected",
+            resource_type="review_obligation_decision",
+            resource_id=f"{slot_id}:{obligation_id}",
+            details={
+                "slot_id": slot_id,
+                "obligation_id": obligation_id,
+                "decision": payload.decision,
+                "status_code": exc.status_code,
+            },
+        )
+        raise
+    return ObligationDecisionResponse(ok=True, data=data)
 
 
 async def _mutate(
