@@ -49,6 +49,7 @@ import { IssueNoteDialog } from "./IssueNoteDialog";
 import type { IssueWorkflowAction } from "./IssueCard";
 import { IssuesTab } from "./IssuesTab";
 import { MetadataTab } from "./MetadataTab";
+import { ObligationsTab } from "./ObligationsTab";
 import { PdfViewerPane } from "./PdfViewerPane";
 import {
   REVIEW_CONTEXT_UNAVAILABLE_MESSAGE,
@@ -57,10 +58,12 @@ import {
   latestCompletedSession,
   latestInvalidatedSession,
   parseReviewErrorDetail,
+  pendingObligationCount,
   resolveCompleteButtonState,
   resolveReviewBadge,
   shouldAutoStartReview,
   toReviewContextState,
+  type ObligationReviewItemRecord,
   type ReviewByJobDataRecord,
   type ReviewContextState,
   type ReviewErrorDetail,
@@ -77,7 +80,7 @@ import { StageHistoryTab } from "./StageHistoryTab";
 import { ThumbnailRail } from "./ThumbnailRail";
 import { useJobPolling } from "../workspace/useJobPolling";
 
-type RightTabId = "issues" | "metadata" | "stages";
+type RightTabId = "issues" | "metadata" | "stages" | "obligations";
 
 interface WorkflowStateResponse {
   issues?: Record<string, { issue_id: string; job_id: string; status: string; note?: string | null }>;
@@ -126,6 +129,8 @@ export function ReviewWorkbenchPage() {
   const [reviewBlockers, setReviewBlockers] = useState<ReviewErrorDetail | null>(null);
   /** 复核写动作失败的非门禁原因（网络/权限/服务不可用）。 */
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
+  /** 正在提交人工补核的义务 id（WP3-B，防连点）。 */
+  const [obligationSubmittingId, setObligationSubmittingId] = useState<string | null>(null);
   /** 无 job 参数时已尝试过自动选择（只试一次，避免每次渲染都重复请求）。 */
   const [autoSelectDone, setAutoSelectDone] = useState(false);
   const loadSeqRef = useRef(0);
@@ -509,6 +514,74 @@ export function ReviewWorkbenchPage() {
     }
   }, [loadJobDetail, loadReviewContext, reviewContext, submitReviewAction]);
 
+  /**
+   * 人工补核一条检查义务（WP3-B）。
+   *
+   * 与复核写动作同一套错误纪律：409 的业务体（并发冲突 / 会话已换 /
+   * 复核已完成）逐条展示，网络失败只说"服务暂时不可用"。成功后整段重取
+   * 复核上下文——门禁、待办数、别人刚写入的结论都在这一次刷新里收敛。
+   *
+   * 乐观锁：改写已有结论时必须带上页面上读到的 ``decision_revision``；
+   * 带旧版本被拒绝（409 obligation_decision_conflict）就让用户看到
+   * "有人先改了"，而不是把别人的结论悄悄冲掉。
+   */
+  const handleObligationDecision = useCallback(
+    async (item: ObligationReviewItemRecord, decision: string, note: string) => {
+      if (reviewContext.kind !== "available") {
+        return;
+      }
+      const slotId = reviewContext.review.slot_id;
+      setObligationSubmittingId(item.obligation_id);
+      setReviewNotice(null);
+      try {
+        const response = await fetch(
+          `/api/reviews/${encodeURIComponent(slotId)}/obligations/${encodeURIComponent(item.obligation_id)}`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              decision,
+              note: note.trim() || undefined,
+              job_uuid: jobId,
+              ...(item.decision_revision !== null
+                ? { expected_revision: item.decision_revision }
+                : {}),
+            }),
+          },
+        );
+        if (response.ok) {
+          setReviewBlockers(null);
+          await loadReviewContext();
+          return;
+        }
+        let body: unknown = null;
+        try {
+          body = await response.json();
+        } catch {
+          body = null;
+        }
+        const parsed = parseReviewErrorDetail(body);
+        if (parsed) {
+          // 并发冲突也走这里：消息本身是服务端给的业务原因，逐条展示。
+          setReviewBlockers(parsed);
+          return;
+        }
+        setReviewNotice(
+          response.status === 403
+            ? "没有权限对这条材料执行该操作。"
+            : response.status === 404
+              ? "这条检查义务不在当前复核范围内（可能分析已更新）。"
+              : `操作未完成（HTTP ${response.status}）。`,
+        );
+      } catch {
+        setReviewNotice("复核服务暂时不可用，请稍后重试。");
+      } finally {
+        setObligationSubmittingId(null);
+      }
+    },
+    [jobId, loadReviewContext, reviewContext],
+  );
+
   if (!jobId) {
     return (
       <div className="flex h-full flex-col items-center justify-center p-8 text-center" data-testid="gbc-review-no-job">
@@ -571,6 +644,25 @@ export function ReviewWorkbenchPage() {
   const completedSummary = describeCompletedReview(latestCompletedSession(reviewData));
   const invalidated = latestInvalidatedSession(reviewData);
   const completeButton = resolveCompleteButtonState(reviewData, statusCounts.pending);
+  /** 人工补核块（WP3-B）：老后端/旧数据没有该字段时按"无此页签"处理。 */
+  const obligationReview = reviewData?.obligation_review ?? null;
+  const pendingObligations = pendingObligationCount(reviewData);
+  const rightTabs: { id: RightTabId; label: string }[] = [
+    { id: "issues", label: "审核问题" },
+    ...(obligationReview
+      ? [
+          {
+            id: "obligations" as const,
+            label:
+              pendingObligations && pendingObligations > 0
+                ? `检查补核 (${pendingObligations})`
+                : "检查补核",
+          },
+        ]
+      : []),
+    { id: "metadata", label: "元数据" },
+    { id: "stages", label: "阶段记录" },
+  ];
   const blockerLines = describeBlockers(reviewBlockers?.blockers ?? []);
   /**
    * 服务端算出的门禁阻塞：**常驻**显示，而不是等用户点了按钮才出现。
@@ -722,13 +814,7 @@ export function ReviewWorkbenchPage() {
 
         <div className="flex flex-col overflow-hidden border-l border-border bg-white">
           <div className="flex shrink-0 border-b border-border text-sm">
-            {(
-              [
-                { id: "issues" as const, label: "审核问题" },
-                { id: "metadata" as const, label: "元数据" },
-                { id: "stages" as const, label: "阶段记录" },
-              ]
-            ).map((tab) => (
+            {rightTabs.map((tab) => (
               <button
                 key={tab.id}
                 type="button"
@@ -753,6 +839,14 @@ export function ReviewWorkbenchPage() {
                 workflowStatusByIssueId={workflowStatusByIssueId}
                 onAction={handleIssueAction}
                 submittingIssueId={submittingIssueId}
+              />
+            ) : activeTab === "obligations" && obligationReview ? (
+              <ObligationsTab
+                block={obligationReview}
+                submittingId={obligationSubmittingId}
+                onDecide={(item, decision, note) =>
+                  void handleObligationDecision(item, decision, note)
+                }
               />
             ) : activeTab === "metadata" ? (
               <MetadataTab job={detail} detail={detail} />

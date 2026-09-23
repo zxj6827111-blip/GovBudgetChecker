@@ -88,9 +88,8 @@ export function blockerLabel(code: string, count?: number | null): string {
     return `还有 ${n} 项问题标记为待复核`;
   }
   if (key === "blocking_obligations" && hasCount) {
-    // 忠实说明能力边界（§八十一）：WP3-A 还没有人工补核入口，
-    // 不假装"处理完问题就能完成"。
-    return `还有 ${n} 项检查义务未完成（需人工补核，该能力将在人工补核流程中处理）`;
+    // WP3-B 起补核入口已存在：告诉用户**去哪里**处理，而不只是"不能完成"。
+    return `还有 ${n} 项检查义务待人工补核（请在「检查补核」页签逐项确认）`;
   }
 
   return (
@@ -110,6 +109,36 @@ export function blockerLabel(code: string, count?: number | null): string {
       review_not_started: "尚未开始复核",
     }[key] ?? key
   );
+}
+
+/** 人工补核决定（WP3-B）的中文说明与色调。取值域与后端四态逐字一致。 */
+export function obligationDecisionLabel(decision: string | null | undefined): string {
+  const key = String(decision ?? "").trim();
+  return (
+    {
+      verified_ok: "已补核通过",
+      verified_issue: "已确认存在问题",
+      not_applicable: "人工判定不适用",
+      pending: "待处理",
+    }[key] ?? (key || "待处理")
+  );
+}
+
+export function obligationDecisionTone(
+  decision: string | null | undefined,
+): "review" | "processing" | "lowconf" | "failed" | "done" | "neutral" {
+  const key = String(decision ?? "").trim();
+  if (key === "verified_ok") {
+    return "done";
+  }
+  if (key === "verified_issue") {
+    // 红色不是"操作失败"，而是"这里确实存在一个问题"——与 Badge 的语义一致。
+    return "failed";
+  }
+  if (key === "not_applicable") {
+    return "neutral";
+  }
+  return "lowconf";
 }
 
 /** 阻塞列表 → 可直接渲染的中文句子（顺序沿用服务端给出的顺序）。 */

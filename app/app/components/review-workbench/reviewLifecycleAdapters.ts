@@ -21,7 +21,7 @@ import {
   invalidationReasonLabel,
   reviewStatusLabel,
   reviewStatusTone,
-} from "@/lib/reviewLifecyclePresentation";
+} from "../../../lib/reviewLifecyclePresentation";
 
 /** 门禁阻塞。 */
 export interface ReviewBlockerRecord {
@@ -87,6 +87,34 @@ export interface ReviewContextRecord {
   job_uuid: string | null;
 }
 
+/** 人工补核（WP3-B）的一条义务：引擎判定的阻塞实例 + 当前会话的人工决定。 */
+export interface ObligationReviewItemRecord {
+  obligation_id: string;
+  group_id: string | null;
+  group_title: string | null;
+  title: string | null;
+  /** 引擎判定状态（not_executed / insufficient_data / …），机器码。 */
+  status: string;
+  reason: string | null;
+  reason_label: string | null;
+  detail: string | null;
+  /** 当前有效会话上的人工决定；null = 尚无记录（待处理）。 */
+  decision: string | null;
+  decision_revision: number | null;
+  decided_by: string | null;
+  decided_at: string | null;
+  note: string | null;
+  evidence_reference: string | null;
+}
+
+/** `obligation_review` 块。`available=false` 时 items 必为空、pending_total 为 null。 */
+export interface ObligationReviewBlockRecord {
+  available: boolean;
+  reason: string | null;
+  pending_total: number | null;
+  items: ObligationReviewItemRecord[];
+}
+
 /** `GET /api/reviews/{slot_id}` 的数据体。 */
 export interface ReviewLifecycleDataRecord {
   slot_id: string;
@@ -95,6 +123,59 @@ export interface ReviewLifecycleDataRecord {
   current_session: ReviewSessionRecord | null;
   history: ReviewHistoryRecord[];
   completion_gate: ReviewCompletionGateRecord;
+  /**
+   * 人工补核块（WP3-B）。旧后端/旧 mock 可能没有该字段——按"无待办"处理，
+   * 不能因为字段缺失就把面板当成"0 项待补核"渲染出来骗人的反方向是
+   * "字段缺失 ⇒ 不渲染面板"，与 available=false 的语义一致。
+   */
+  obligation_review?: ObligationReviewBlockRecord | null;
+}
+
+/** 已处理的人工决定取值（与后端 ``RESOLVED_OBLIGATION_DECISIONS`` 逐字一致）。 */
+export const RESOLVED_OBLIGATION_DECISIONS = [
+  "verified_ok",
+  "verified_issue",
+  "not_applicable",
+] as const;
+
+/** 这条义务在当前会话上是否已被人工处理（待处理 = 无记录 / pending / 未知值）。 */
+export function isObligationHandled(item: ObligationReviewItemRecord | null | undefined): boolean {
+  const decision = String(item?.decision ?? "").trim();
+  return (RESOLVED_OBLIGATION_DECISIONS as readonly string[]).includes(decision);
+}
+
+/** 待补核条数：服务端给了 pending_total 就用它（权威），否则按 items 推一遍。 */
+export function pendingObligationCount(
+  review: ReviewLifecycleDataRecord | null | undefined,
+): number | null {
+  const block = review?.obligation_review;
+  if (!block || !block.available) {
+    return null;
+  }
+  if (typeof block.pending_total === "number" && Number.isFinite(block.pending_total)) {
+    return block.pending_total;
+  }
+  return (block.items ?? []).filter((item) => !isObligationHandled(item)).length;
+}
+
+/** 补核写入的响应体（与后端 ObligationDecisionData 对齐）。 */
+export interface ObligationDecisionDataRecord {
+  slot_id: string;
+  current_document_version_id: number | null;
+  session: ReviewSessionRecord;
+  decision: {
+    review_session_id: string;
+    slot_id: string;
+    obligation_id: string;
+    decision: string;
+    note: string | null;
+    evidence_reference: string | null;
+    reviewer: string;
+    reviewed_at: string;
+    revision: number;
+  };
+  completion_gate: ReviewCompletionGateRecord;
+  blockers: ReviewBlockerRecord[];
 }
 
 /** `GET /api/reviews?job_uuid=` 的数据体。 */
