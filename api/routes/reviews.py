@@ -40,6 +40,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from api import material_access, runtime
 from api.auth_utils import require_login, user_can_access_job
 from src.schemas.review_lifecycle import (
+    ERROR_REVIEW_CONTEXT_UNAVAILABLE,
     ObligationDecisionRequest,
     ObligationDecisionResponse,
     ReviewActionRequest,
@@ -47,7 +48,7 @@ from src.schemas.review_lifecycle import (
     ReviewLifecycleResponse,
     ReviewMutationResponse,
 )
-from src.services import review_lifecycle_service
+from src.services import review_context_query, review_lifecycle_service
 from src.services.audit_log import append_audit_event
 from src.services.material_detail_query_service import MaterialDetailQueryService
 
@@ -104,6 +105,54 @@ def _require_job_access(user: Any, job_uuid: Optional[str]) -> None:
 
 def _actor(user: Any) -> str:
     return str(user.get("username") or "").strip() or "unknown"
+
+
+async def _resolve_write_job_uuid(
+    conn: Any, slot_row: dict, supplied_job_uuid: Optional[str]
+) -> str:
+    """写路径的任务归属解析（独立评审 P1 修复）。
+
+    - 调用方显式给了 ``job_uuid``：归一化透传。它是"待核对声明"，是否真是
+      当前分析由 service 在事务内再校验（``_require_job_belongs_to_state``）；
+    - 没给：服务端按槽位当前版本**自行解析当前分析**。
+
+    "省略 job_uuid 就跳过任务层权限"是绝对不允许的：``job_uuid`` 的角色是
+    待核对声明，不能同时充当"要不要查权限"的开关。
+    """
+    supplied = str(supplied_job_uuid or "").strip()
+    if supplied:
+        return supplied
+    analysis = await review_context_query.resolve_current_analysis(conn, slot_row)
+    return str(analysis.job_uuid or "").strip()
+
+
+async def _authorize_review_write(
+    user: Any, slot_id: str, supplied_job_uuid: Optional[str]
+) -> str:
+    """四条写路径统一的授权链：槽位权限（404/403）→ 解析 candidate → 任务权限（403）。
+
+    返回的 candidate 一定会传进 service 并再次被 ``_require_job_belongs_to_state``
+    校验：路由把权限判在 candidate A 上之后、service 事务开启之前，当前分析
+    可能已从 A 换成 B——那时 service 回 409 ``review_context_mismatch``，而不是
+    "拿着 A 的权限去改 B"（TOCTOU 双保险闭合，任务书 §四）。
+    """
+    scope = material_access.build_access_scope(user)
+
+    async def _authorize(conn: Any) -> str:
+        slot_row = material_access.require_slot_access(
+            scope, await _load_slot_row(conn, slot_id), slot_id
+        )
+        candidate = await _resolve_write_job_uuid(conn, slot_row, supplied_job_uuid)
+        if not candidate:
+            raise review_lifecycle_service.ReviewLifecycleError(
+                409,
+                ERROR_REVIEW_CONTEXT_UNAVAILABLE,
+                "当前没有可复核的分析结果，无法执行复核操作",
+            )
+        _require_job_access(user, candidate)
+        return candidate
+
+    return await _with_connection(_authorize)
 
 
 # ---- 读 ---------------------------------------------------------------------
@@ -236,13 +285,11 @@ async def decide_obligation(
     这里只记录"这次请求被业务拒绝"这一事实（``result="rejected"``）。
     """
     _, _, user = require_login(request)
-    await _require_slot_readable(user, slot_id)
-
-    if payload.job_uuid:
-        _require_job_access(user, payload.job_uuid)
-
     actor = _actor(user)
     try:
+        # 与 start/complete/reopen 同一条授权链（任务书 §五）：省略 job_uuid
+        # 同样先做服务端解析、再判任务权限，义务补核不得绕开 job 层。
+        candidate = await _authorize_review_write(user, slot_id, payload.job_uuid)
         data = await _with_connection(
             lambda conn: review_lifecycle_service.decide_obligation(
                 conn,
@@ -253,7 +300,7 @@ async def decide_obligation(
                 note=payload.note,
                 evidence_reference=payload.evidence_reference,
                 expected_revision=payload.expected_revision,
-                job_uuid=payload.job_uuid,
+                job_uuid=candidate,
             )
         )
     except review_lifecycle_service.ReviewLifecycleError as exc:
@@ -299,14 +346,8 @@ async def _mutate(
     *,
     action: str,
 ) -> ReviewMutationResponse:
-    """三个写动作共用的前置：鉴权 → 校验 → 调用服务 → 审计。"""
+    """三个写动作共用的前置：鉴权（槽位+任务双层）→ 调用服务 → 审计。"""
     _, _, user = require_login(request)
-    await _require_slot_readable(user, slot_id)
-
-    job_uuid = (payload.job_uuid if payload is not None else None) or None
-    if job_uuid:
-        _require_job_access(user, job_uuid)
-
     actor = _actor(user)
     handler = {
         "start": review_lifecycle_service.start_review,
@@ -315,8 +356,14 @@ async def _mutate(
     }[action]
 
     try:
+        # 独立评审 P1：job_uuid 是否提供都不允许跳过任务层权限——
+        # 先由服务端解析出 candidate，再对它做 job access，最后把它传给
+        # service 在事务里二次校验一致性。
+        candidate = await _authorize_review_write(
+            user, slot_id, payload.job_uuid if payload is not None else None
+        )
         data = await _with_connection(
-            lambda conn: handler(conn, slot_id, actor=actor, job_uuid=job_uuid)
+            lambda conn: handler(conn, slot_id, actor=actor, job_uuid=candidate)
         )
     except review_lifecycle_service.ReviewLifecycleError as exc:
         # 被门禁拒绝也要留痕：审计关心的是"谁在什么时候尝试过什么"，
