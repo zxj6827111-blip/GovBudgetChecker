@@ -33,13 +33,17 @@
 LOCK ORDER（在 ``review_session_store`` 的全序之内）
 ---------------------------------------------------
     身份 advisory 锁 → material_slots → fiscal_document_versions
-        → review_sessions → analysis_jobs
+        → review_sessions → review_obligation_decisions（WP3-B）→ analysis_jobs
 
 本模块严格遵守：先 ``lock_slot_row``（槽位行锁），再取活动会话行锁，
 **在拿到这两把锁之后**才去读"当前分析代际"。顺序反过来（先读代际再加锁）
 会留下一个窗口：重新分析在"读完代际"之后、"取会话锁"之前提交，
 本次复核就把旧代际记成完成。相关的并发用例（complete 与重新分析竞争）
 在真库上逐条验证。
+
+补核决定（WP3-B）排在会话之后：它只在"槽位锁 + 会话锁"都已持有的事业内
+写入，与完成判定天然同一把锁、同一个一致快照——补核与完成不可能出现
+"写进去了但判定没看到"或反过来的窗口。
 """
 
 from __future__ import annotations
@@ -53,6 +57,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 from src.db.transaction import in_transaction
 
+from src.engine.check_obligations import UNRESOLVED_OBLIGATION_STATUSES
+from src.schemas.material_detail import CoverageObligationItem
 from src.schemas.material_slot import slot_identity_is_resolved
 from src.schemas.review_lifecycle import (
     BLOCKER_ANALYSIS_BASIS_CHANGED,
@@ -69,19 +75,29 @@ from src.schemas.review_lifecycle import (
     BLOCKER_REVIEW_ALREADY_COMPLETED,
     BLOCKER_REVIEW_NOT_STARTED,
     ERROR_COMPLETION_BLOCKED,
+    ERROR_OBLIGATION_DECISION_CONFLICT,
+    ERROR_OBLIGATION_NOT_BLOCKING,
+    ERROR_REVIEW_COMPLETED_LOCKED,
     ERROR_REVIEW_CONTEXT_MISMATCH,
     ERROR_REVIEW_CONTEXT_UNAVAILABLE,
     ERROR_REVIEW_LOCK_UNAVAILABLE,
+    ERROR_REVIEW_NOT_ACTIVE,
     ERROR_REVIEW_WORKFLOW_CHANGED,
     ERROR_START_BLOCKED,
     INVALIDATION_REASON_ANALYSIS_BASIS_CHANGED,
     INVALIDATION_REASON_ANALYSIS_RESTARTED,
     INVALIDATION_REASON_DOCUMENT_VERSION_CHANGED,
     INVALIDATION_REASON_REVIEW_REOPENED,
+    OBLIGATION_DECISIONS,
+    RESOLVED_OBLIGATION_DECISIONS,
     REVIEW_STATUS_COMPLETED,
     RESOLVED_ISSUE_STATUSES,
     CompletionGate,
     CurrentAnalysisRef,
+    ObligationDecisionData,
+    ObligationDecisionRecord,
+    ObligationReviewBlock,
+    ObligationReviewItem,
     ReviewBlocker,
     ReviewByJobData,
     ReviewContextData,
@@ -90,7 +106,7 @@ from src.schemas.review_lifecycle import (
     ReviewMutationData,
     ReviewSessionSummary,
 )
-from src.services import review_context_query, review_session_store
+from src.services import review_context_query, review_obligation_store, review_session_store
 from src.services.audit_log import append_audit_event
 from src.services.material_detail_query_service import build_coverage
 from src.services.material_slot_service import MaterialSlotService
@@ -158,6 +174,14 @@ class ReviewState:
     problem_snapshot_token: str = ""
     coverage_available: bool = False
     coverage_blocking_total: Optional[int] = None
+    #: 当前分析代际上的覆盖台账实例（obligation ledger 的逐项）。WP3-B 起，
+    #: 完成门禁与人工补核都从这里取"哪些义务阻塞"——只允许这一处解析，
+    #: 各处自行重算必然漂移（任务书 §十六）。
+    coverage_items: List[CoverageObligationItem] = field(default_factory=list)
+    #: 当前**有效会话**（进行中，否则当前代际上已完成）的人工补核决定，
+    #: ``{obligation_id: 决定行}``。会话失效后旧决定留在库里供审计，
+    #: 但不再出现在这里——门禁只读"这一次复核"的结论。
+    obligation_decisions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 # ---- 事实装载 ---------------------------------------------------------------
@@ -216,6 +240,7 @@ async def _load_state(
     )
     _load_problem_set(state)
     _load_coverage(state)
+    await _load_obligation_decisions(conn, state)
     return state
 
 
@@ -417,11 +442,35 @@ def _load_coverage(state: ReviewState) -> None:
 
     取不到就是"不可用"，不是"0 条阻塞"。这两者在数字上不能长得一样：
     把未知读成零正是本项目反复出现的假完成来源（§四十六）。
+
+    ``coverage_items`` 与计数在同一次解析里落定：门禁的"哪些义务待补核"
+    与补核接口的"这条义务能不能表态"必须看到同一份清单。
     """
     coverage = build_coverage(state.analysis.result_meta.get("obligation_coverage"))
     state.coverage_available = bool(coverage.available)
+    state.coverage_items = list(coverage.items) if coverage.available else []
     if coverage.available and coverage.summary is not None:
         state.coverage_blocking_total = coverage.summary.blocking_total
+
+
+async def _load_obligation_decisions(conn: Any, state: ReviewState) -> None:
+    """装载**当前有效会话**的人工补核决定（WP3-B）。
+
+    有效会话 = 进行中的会话，否则当前分析代际上最近一条已完成会话。
+    故意不按 (obligation_id, job_uuid) 聚合历史：上一次复核的补核结论
+    不能漏进这一次——同一份材料可能有多个分析代际，决定属于"哪一次复核"
+    必须毫不含糊（任务书 §十）。
+    """
+    effective = state.active_session or state.completed_session
+    if effective is None:
+        state.obligation_decisions = {}
+        return
+    rows = await review_obligation_store.list_session_decisions(
+        conn, effective.get("review_session_id")
+    )
+    state.obligation_decisions = {
+        str(row.get("obligation_id") or ""): row for row in rows if row.get("obligation_id")
+    }
 
 
 # ---- 门禁（纯函数，输入即事实） ---------------------------------------------
@@ -469,6 +518,37 @@ def _problem_blockers(problems: List[ReviewProblem], decisions: Dict[str, str]) 
     if needs_review:
         blockers.append(ReviewBlocker(code=BLOCKER_NEEDS_REVIEW_FINDINGS, count=needs_review))
     return blockers
+
+
+def _blocking_obligations(state: ReviewState) -> List[CoverageObligationItem]:
+    """引擎判定"阻塞门禁且未完成"的义务实例（WP3-B 起补核待办只含这些）。
+
+    与 ``check_obligations._build_summary`` 的 ``blocking`` 口径完全一致：
+    ``blocks_gate`` 且状态落在未完成集合里。门禁统计从这里出数，
+    保证页面上"待补核清单"与 409 的 ``count`` 说的是同一批条目。
+    """
+    return [
+        item
+        for item in state.coverage_items
+        if item.blocks_gate and item.status in UNRESOLVED_OBLIGATION_STATUSES
+    ]
+
+
+def _unhandled_obligations(state: ReviewState) -> List[CoverageObligationItem]:
+    """尚未被人工处理的阻塞义务（完成门禁 WP3-B 口径的唯一判据）。
+
+    ``verified_ok`` / ``verified_issue`` / ``not_applicable`` 算已处理；
+    ``pending``、**没有决定记录**、以及任何未知决定值全部阻塞——
+    与 ``_problem_blockers`` 同一条纪律：把不认识的值当成"已解决"，
+    等于让一个拼错的状态码静默放行复核。
+    """
+    unhandled: List[CoverageObligationItem] = []
+    for item in _blocking_obligations(state):
+        row = state.obligation_decisions.get(item.obligation_id)
+        current = str((row or {}).get("decision") or "").strip() or "pending"
+        if current not in RESOLVED_OBLIGATION_DECISIONS:
+            unhandled.append(item)
+    return unhandled
 
 
 def evaluate_start_gate(state: ReviewState) -> CompletionGate:
@@ -532,13 +612,19 @@ def evaluate_completion_gate(state: ReviewState) -> CompletionGate:
 
     if not state.coverage_available:
         # "没有覆盖记录"与"覆盖完整"在数字上不能长得一样。
+        # WP3-B 起这里**也不许**用人工补核绕过：覆盖不可用意味着"没有账本
+        # 可表态"，只能回到分析侧修数据（任务书 §十二：禁止自动 not_applicable）。
         blockers.append(ReviewBlocker(code=BLOCKER_COVERAGE_UNAVAILABLE))
-    elif state.coverage_blocking_total:
-        blockers.append(
-            ReviewBlocker(
-                code=BLOCKER_BLOCKING_OBLIGATIONS, count=int(state.coverage_blocking_total)
+    else:
+        # WP3-B 之后："阻塞义务存在"本身不再直接卡死完成门禁，卡的是
+        # "存在**未处理**的阻塞义务"。人工在**当前复核会话**上逐条补核
+        # （verified_ok / verified_issue / not_applicable）即可放行；
+        # pending / 无记录 / 未知决定值继续阻塞。
+        unhandled = _unhandled_obligations(state)
+        if unhandled:
+            blockers.append(
+                ReviewBlocker(code=BLOCKER_BLOCKING_OBLIGATIONS, count=len(unhandled))
             )
-        )
 
     return CompletionGate(can_complete=not blockers, blockers=blockers)
 
@@ -606,7 +692,77 @@ def _lifecycle_data(state: ReviewState) -> ReviewLifecycleData:
         ),
         history=[_history_item(row) for row in state.history],
         completion_gate=evaluate_completion_gate(state),
+        obligation_review=_obligation_review_block(state),
     )
+
+
+def _obligation_review_block(state: ReviewState) -> "ObligationReviewBlock":
+    """复核视角的补核待办清单：引擎判阻塞的义务 + 当前会话的人工决定。
+
+    覆盖不可用时整体 ``available=False``（与 CoverageBlock 同一纪律：
+    "没有覆盖记录"与"0 项待补核"在数字上不能长得一样）。
+    """
+    if not state.coverage_available:
+        return ObligationReviewBlock(available=False, reason=BLOCKER_COVERAGE_UNAVAILABLE)
+    items: List[ObligationReviewItem] = []
+    for item in _blocking_obligations(state):
+        row = state.obligation_decisions.get(item.obligation_id)
+        items.append(
+            ObligationReviewItem(
+                obligation_id=item.obligation_id,
+                group_id=item.group_id,
+                group_title=item.group_title,
+                title=item.title,
+                status=item.status,
+                reason=item.reason,
+                reason_label=item.reason_label,
+                detail=item.detail,
+                decision=(str(row.get("decision") or "") or None) if row else None,
+                decision_revision=(
+                    int(row.get("revision") or 0) if row else None
+                ),
+                decided_by=(_opt_text(row.get("reviewer")) if row else None),
+                decided_at=(_opt_iso(row.get("reviewed_at")) if row else None),
+                note=(_opt_text(row.get("note")) if row else None),
+                evidence_reference=(
+                    _opt_text(row.get("evidence_reference")) if row else None
+                ),
+            )
+        )
+    return ObligationReviewBlock(
+        available=True,
+        reason=None,
+        pending_total=len(_unhandled_obligations(state)),
+        items=items,
+    )
+
+
+def _decision_record(row: Dict[str, Any]) -> ObligationDecisionRecord:
+    return ObligationDecisionRecord(
+        review_session_id=str(row.get("review_session_id") or ""),
+        slot_id=str(row.get("slot_id") or ""),
+        obligation_id=str(row.get("obligation_id") or ""),
+        decision=str(row.get("decision") or ""),
+        note=_opt_text(row.get("note")),
+        evidence_reference=_opt_text(row.get("evidence_reference")),
+        reviewer=str(row.get("reviewer") or ""),
+        reviewed_at=_iso(row.get("reviewed_at")),
+        revision=int(row.get("revision") or 1),
+    )
+
+
+def _manual_decision_summary(state: ReviewState) -> Dict[str, int]:
+    """当前有效会话上各人工作出结论的计数（完成复核快照用）。"""
+    summary = {
+        "verified_ok": 0,
+        "verified_issue": 0,
+        "not_applicable": 0,
+        "pending": 0,
+    }
+    for row in state.obligation_decisions.values():
+        key = str(row.get("decision") or "").strip()
+        summary[key if key in summary else "pending"] += 1
+    return summary
 
 
 async def load_review_by_slot(
@@ -781,6 +937,11 @@ async def start_review(
                             review_session_id=str(created.get("review_session_id") or ""),
                         )
                     )
+                    # 新会话 ≠ 装载时那条有效会话：人工补核决定按会话重新绑定
+                    # （新会话此刻一定没有任何决定）。
+                    state.active_session = created
+                    state.completed_session = None
+                    await _load_obligation_decisions(conn, state)
                     outcome = _mutation_data(state, created)
                 else:
                     # 并发下被别人先建好了：``_insert_session_resilient`` 已回读并登记审计。
@@ -788,6 +949,9 @@ async def start_review(
                         conn, state.slot_id
                     )
                     if existing is not None:
+                        state.active_session = existing
+                        state.completed_session = None
+                        await _load_obligation_decisions(conn, state)
                         outcome = _mutation_data(state, existing)
                     else:
                         rejection = [ReviewBlocker(code=BLOCKER_REVIEW_NOT_STARTED)]
@@ -899,6 +1063,7 @@ async def complete_review(
             assert active is not None and state.basis_token  # 门禁已保证有活动会话
 
             issue_counts = build_issue_counts(state.problems, state.decisions)
+            manual_decisions = _manual_decision_summary(state)
             review_result = {
                 "document_version_id": active.get("document_version_id"),
                 "analysis_job_uuid": active.get("analysis_job_uuid"),
@@ -907,8 +1072,18 @@ async def complete_review(
                 "coverage": {
                     "applicable_total": _coverage_summary_value(state, "applicable_total"),
                     "completed_total": _coverage_summary_value(state, "completed_total"),
-                    "blocking_count": state.coverage_blocking_total,
-                    "blocking_obligations_closed_by": "automatic_only",
+                    # WP3-B 起这个字段的语义是"完成时仍未人工处理的阻塞义务数"
+                    # （被门禁恒压成 0）；引擎判出的阻塞总数另记在
+                    # ``blocking_engine_total``，两者分开才能回答"这次是全自动
+                    # 通过，还是人工补核后通过"。
+                    "blocking_count": len(_unhandled_obligations(state)),
+                    "blocking_engine_total": state.coverage_blocking_total,
+                    "blocking_obligations_closed_by": (
+                        "automatic_and_manual"
+                        if any(manual_decisions.values())
+                        else "automatic_only"
+                    ),
+                    "manual_decisions": manual_decisions,
                 },
             }
 
@@ -1031,10 +1206,18 @@ async def reopen_review(
                         review_session_id=str(created.get("review_session_id") or ""),
                     )
                 )
+                # 旧会话刚被显式失效：有效会话换成新会话，补核决定同步重绑
+                # （旧会话的决定留在库里供审计，但不再参与本次门禁）。
+                state.active_session = created
+                state.completed_session = None
+                await _load_obligation_decisions(conn, state)
                 outcome = _mutation_data(state, created)
             else:
                 existing = await review_session_store.get_active_session(conn, state.slot_id)
                 if existing is not None:
+                    state.active_session = existing
+                    state.completed_session = None
+                    await _load_obligation_decisions(conn, state)
                     outcome = _mutation_data(state, existing)
                 else:
                     rejection = [ReviewBlocker(code=BLOCKER_REVIEW_NOT_STARTED)]
@@ -1045,6 +1228,233 @@ async def reopen_review(
         409, ERROR_START_BLOCKED, "当前无法重新开始复核", blockers=rejection or []
     )
 
+
+def _prepare_obligation_decision(
+    state: ReviewState, obligation_id: str
+) -> Optional[HTTPException]:
+    """判定这条义务当前**能不能**被人工表态；可以则返回 ``None``。
+
+    两层判据（都不通过即拒绝，而不是"先记下来再说"）：
+
+    - 义务必须出现在**当前分析代际的覆盖台账**里：账本里没有它，
+      人工结论就没有可依附的事实（覆盖不可用时 items 为空，天然全部 404）；
+    - 义务必须仍被引擎判为"阻塞且未完成"：已自动完成的义务没有东西
+      需要人工表态——"给已完成义务补个通过"会让引擎台账与人工台账
+      各说各话。
+    """
+    if obligation_id not in {item.obligation_id for item in state.coverage_items}:
+        return HTTPException(status_code=404, detail="obligation not found in current review")
+    if obligation_id not in {item.obligation_id for item in _blocking_obligations(state)}:
+        return ReviewLifecycleError(
+            409,
+            ERROR_OBLIGATION_NOT_BLOCKING,
+            "该检查义务当前不由引擎判定为待补核（已自动完成或不适用）",
+        )
+    return None
+
+
+async def _write_obligation_decision(
+    conn: Any,
+    state: ReviewState,
+    active_session: Dict[str, Any],
+    *,
+    obligation_id: str,
+    decision: str,
+    note: Optional[str],
+    evidence_reference: Optional[str],
+    expected_revision: Optional[int],
+    actor: str,
+) -> tuple:
+    """执行决定写入，返回 ``(行, 审计动作)``；并发/过期一律 409，不静默覆盖。
+
+    两条并发防线各自的职责（任务书 §十五）：
+
+    - **唯一约束** ``uq_review_obligation_decisions_scope``：两个复核人同时
+      首次表态时，后到者的 INSERT 命中冲突返回 None → 409；
+    - **乐观锁** ``revision``：改写已有决定必须携带读到的 revision，
+      带错/不带 → 409（响应里附 ``current_revision`` 供展示层提示刷新）。
+    """
+    existing = state.obligation_decisions.get(obligation_id)
+    if existing is None:
+        if expected_revision is not None:
+            # 带着 revision 来却查不到行：客户端拿到的是过期视图。
+            raise ReviewLifecycleError(
+                409,
+                ERROR_OBLIGATION_DECISION_CONFLICT,
+                "该义务的补核状态已变化，请刷新后重试",
+            )
+        row = await review_obligation_store.insert_decision(
+            conn,
+            review_session_id=active_session.get("review_session_id"),
+            slot_id=state.slot_id,
+            obligation_id=obligation_id,
+            decision=decision,
+            note=note,
+            evidence_reference=evidence_reference,
+            reviewer=actor,
+        )
+        if row is None:
+            # 并发下别人已先写入（唯一约束兜底）。先到者的结论优先。
+            raise ReviewLifecycleError(
+                409,
+                ERROR_OBLIGATION_DECISION_CONFLICT,
+                "该义务已有其他复核人表态，请刷新后查看再决定",
+            )
+        return row, "obligation.reviewed"
+
+    current_revision = int(existing.get("revision") or 0)
+    if expected_revision is None or int(expected_revision) != current_revision:
+        # 改写必须基于最新读数：拿旧 revision（或不带）来改，
+        # 等于在不知情时覆盖别人的结论。
+        raise ReviewLifecycleError(
+            409,
+            ERROR_OBLIGATION_DECISION_CONFLICT,
+            "该义务的补核状态已变化，请刷新后重试",
+            current_revision=current_revision,
+        )
+    row = await review_obligation_store.update_decision_if_revision_matches(
+        conn,
+        decision_record_id=existing.get("decision_record_id"),
+        expected_revision=expected_revision,
+        decision=decision,
+        note=note,
+        evidence_reference=evidence_reference,
+        reviewer=actor,
+    )
+    if row is None:
+        raise ReviewLifecycleError(
+            409,
+            ERROR_OBLIGATION_DECISION_CONFLICT,
+            "该义务的补核状态已变化，请刷新后重试",
+            current_revision=current_revision,
+        )
+    return row, "obligation.updated"
+
+
+async def decide_obligation(
+    conn: Any,
+    slot_id: str,
+    *,
+    obligation_id: str,
+    decision: str,
+    actor: str,
+    note: Optional[str] = None,
+    evidence_reference: Optional[str] = None,
+    expected_revision: Optional[int] = None,
+    job_uuid: Optional[str] = None,
+) -> ObligationDecisionData:
+    _require_autocommit(conn, operation="decide_obligation")
+    """人工补核一条检查义务（WP3-B），写入绑定**当前活动会话**的数据库决定。
+
+    四条红线逐条落点：
+
+    1. **持久化**：写入 ``review_obligation_decisions``（PostgreSQL），
+       不落前端 state / localStorage / 临时 JSON 文件；
+    2. **绑定会话**：决定挂到服务端解析出的**当前活动复核会话**上，
+       前端不传、也不许传 review_session_id——"这是哪一次复核上的结论"
+       只能由服务端认定（与 ``ReviewActionRequest`` 的 job_uuid 口径一致）；
+    3. **人工显式**：只有本函数能写入决定。系统任何路径都不得把
+       "覆盖不可用 / 取数不足 / AI 通过"自动折算成人工结论；
+    4. **并发不静默覆盖**：首次表态撞唯一约束、改写未带当前 ``revision``，
+       一律 409（``obligation_decision_conflict``）。宁可让人刷新后再确认
+       一次，也不能让后到者的写入悄悄冲掉先到者的结论。
+
+    **整个函数体在一个事务里**（``_mutation_scope``，槽位行锁贯穿始终）：
+    补核与完成复核被同一把槽位锁串行化——不会出现"补核写进去了，
+    但完成判定看的是写入前的旧决定"，也不会反过来。
+    """
+    normalized_obligation = str(obligation_id or "").strip()
+    normalized_decision = str(decision or "").strip()
+    if not normalized_obligation:
+        raise HTTPException(status_code=422, detail="obligation_id is required")
+    if normalized_decision not in OBLIGATION_DECISIONS:
+        # 路由层的 pydantic 校验已经会用 422 拦住；服务层再校验一次
+        # 是纵深防御（其他调用方不走路由）。沿用 issue 工作流的 400 口径。
+        raise HTTPException(status_code=400, detail="invalid obligation decision")
+    note_text = str(note or "").strip() or None
+    evidence_text = str(evidence_reference or "").strip() or None
+
+    effects = _CommitEffects()
+    outcome: Optional[ObligationDecisionData] = None
+    rejection: Optional[HTTPException] = None
+
+    async with _mutation_scope(conn, effects):
+        state = await _load_state(conn, slot_id, lock_slot=True, lock_session=True)
+        if state is None:
+            raise HTTPException(status_code=404, detail="material slot not found")
+
+        if job_uuid:
+            _require_job_belongs_to_state(state, job_uuid)
+
+        # 与 start_review 同一条纪律：发现活动/已完成会话钉着过期事实，
+        # 先就地失效、**提交**，再拒绝——补核写进一条已经过期的会话等于
+        # 把结论挂在死记录上；而"纠正过期事实"不因为"这次补核被拒绝"
+        # 就变得不成立（在事务内直接抛错会把纠正一起回滚掉）。
+        await _invalidate_stale_sessions(conn, state, effects=effects, actor=actor)
+
+        active = state.active_session
+        if active is None:
+            if state.completed_session is not None:
+                # 复核完成后补核同样锁定（与"复核完成后问题不可再改"同源）。
+                # 要先改结论，先显式重新复核。
+                rejection = ReviewLifecycleError(
+                    409,
+                    ERROR_REVIEW_COMPLETED_LOCKED,
+                    "复核已完成，如需调整补核结论请先重新复核",
+                )
+            else:
+                rejection = ReviewLifecycleError(
+                    409,
+                    ERROR_REVIEW_NOT_ACTIVE,
+                    "请先开始复核，再处理检查义务",
+                )
+        else:
+            rejection = _prepare_obligation_decision(state, normalized_obligation)
+            if rejection is None:
+                row, action = await _write_obligation_decision(
+                    conn,
+                    state,
+                    active,
+                    obligation_id=normalized_obligation,
+                    decision=normalized_decision,
+                    note=note_text,
+                    evidence_reference=evidence_text,
+                    expected_revision=expected_revision,
+                    actor=actor,
+                )
+                # 让本函数返回的门禁反映刚写入的决定（同事务内的一致视图）。
+                state.obligation_decisions[normalized_obligation] = row
+                effects.audits.append(
+                    _obligation_audit_event(
+                        actor,
+                        action,
+                        "success",
+                        state,
+                        obligation_id=normalized_obligation,
+                        decision=normalized_decision,
+                        revision=int(row.get("revision") or 1),
+                        note=note_text,
+                        evidence_reference=evidence_text,
+                    )
+                )
+                gate = evaluate_completion_gate(state)
+                outcome = ObligationDecisionData(
+                    slot_id=state.slot_id,
+                    current_document_version_id=(
+                        int(state.slot_row["current_document_version_id"])
+                        if state.slot_row.get("current_document_version_id") is not None
+                        else None
+                    ),
+                    session=_session_summary(active),
+                    decision=_decision_record(row),
+                    completion_gate=gate,
+                    blockers=gate.blockers,
+                )
+
+    if outcome is not None:
+        return outcome
+    assert rejection is not None  # 上面的每条分支要么给结果，要么给拒绝
+    raise rejection
 
 async def invalidate_review(
     conn: Any, slot_id: str, *, reason: Optional[str] = None, actor: str = "system"
@@ -1163,6 +1573,11 @@ async def _invalidate_stale_sessions(
             state.active_session = None
         if session is state.completed_session:
             state.completed_session = None
+    if invalidated_count:
+        # 有效会话的身份可能已变化（或变空）——人工补核决定绑定的是**会话**，
+        # 不随失效动作自动迁移（任务书 §十）。重新按当前有效会话装载一次，
+        # 错误地沿用旧会话的决定等于让上一次复核的结论漏进这一次。
+        await _load_obligation_decisions(conn, state)
     return invalidated_count
 
 
@@ -1431,6 +1846,47 @@ def _audit_event(
     }
 
 
+def _obligation_audit_event(
+    actor: str,
+    action: str,
+    result: str,
+    state: ReviewState,
+    *,
+    obligation_id: str,
+    decision: str,
+    revision: int,
+    note: Optional[str],
+    evidence_reference: Optional[str],
+) -> Dict[str, Any]:
+    """构造一条人工补核审计事件（纯函数；落盘在提交之后，与复核审计同一纪律）。
+
+    复用唯一的审计体系（``append_audit_event`` 的 JSONL），不另开第二套。
+    ``note`` / ``evidence_reference`` 是复核人**自己写下**的补核依据——
+    它们就是审计要回答的"凭什么这么判"；finding 全文与材料原文仍然不进审计。
+    """
+    session = state.active_session or state.completed_session or {}
+    resource_id = f"{session.get('review_session_id') or ''}:{obligation_id}"
+    return {
+        "action": action,
+        "actor": actor,
+        "result": result,
+        "resource_type": "review_obligation_decision",
+        "resource_id": resource_id,
+        "details": {
+            "slot_id": state.slot_id,
+            "document_version_id": state.analysis.document_version_id,
+            "analysis_job_uuid": state.analysis.job_uuid,
+            "analysis_basis_token": state.basis_token,
+            "review_session_id": str(session.get("review_session_id") or ""),
+            "obligation_id": obligation_id,
+            "decision": decision,
+            "revision": revision,
+            "note": note,
+            "evidence_reference": evidence_reference,
+        },
+    }
+
+
 def _append_audit_best_effort(event: Dict[str, Any]) -> None:
     """把审计事件追加到 JSONL（尽力而为）。
 
@@ -1476,6 +1932,7 @@ __all__ = [
     "start_review",
     "complete_review",
     "reopen_review",
+    "decide_obligation",
     "invalidate_review",
     "invalidate_reviews_for_analysis_restart",
 ]

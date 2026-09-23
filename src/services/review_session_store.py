@@ -31,7 +31,7 @@ WP3-A 的一轮独立评审用两个真库连接实证了这一点：没有显�
 LOCK ORDER（全系统统一，不许有例外）
 ------------------------------------
 身份 advisory 锁 → material_slots → fiscal_document_versions
-    → review_sessions → analysis_jobs
+    → review_sessions → review_obligation_decisions（WP3-B）→ analysis_jobs
 
 本模块新增的两级必须挂在既有三级**之后**，理由：
 
