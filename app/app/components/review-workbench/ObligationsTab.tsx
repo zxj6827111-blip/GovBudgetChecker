@@ -37,6 +37,7 @@ interface ObligationsTabProps {
     item: ObligationReviewItemRecord,
     decision: string,
     note: string,
+    evidenceReference: string,
   ) => void;
 }
 
@@ -48,6 +49,7 @@ function ObligationRow({ item, submittingId, readOnly, onDecide }: {
 }) {
   const handled = isObligationHandled(item);
   const [note, setNote] = useState(item.note ?? "");
+  const [evidenceReference, setEvidenceReference] = useState(item.evidence_reference ?? "");
   const busy = submittingId === item.obligation_id;
   const disabled = busy || readOnly;
 
@@ -91,8 +93,17 @@ function ObligationRow({ item, submittingId, readOnly, onDecide }: {
           type="text"
           value={note}
           onChange={(event) => setNote(event.target.value)}
-          placeholder="补核依据（可选，审计留痕）"
+          placeholder="补核说明（确认问题/不适用时必填）"
           data-testid={`gbc-obligation-note-${item.obligation_id}`}
+          className="h-8 min-w-0 flex-1 rounded-md border border-border px-2 text-xs text-slate-700 placeholder:text-slate-300"
+          disabled={disabled}
+        />
+        <input
+          type="text"
+          value={evidenceReference}
+          onChange={(event) => setEvidenceReference(event.target.value)}
+          placeholder="证据位置/引用（如：第 12 页 · 表 8）"
+          data-testid={`gbc-obligation-evidence-${item.obligation_id}`}
           className="h-8 min-w-0 flex-1 rounded-md border border-border px-2 text-xs text-slate-700 placeholder:text-slate-300"
           disabled={disabled}
         />
@@ -103,7 +114,7 @@ function ObligationRow({ item, submittingId, readOnly, onDecide }: {
           variant="secondary"
           disabled={disabled}
           data-testid={`gbc-obligation-verify-ok-${item.obligation_id}`}
-          onClick={() => onDecide(item, "verified_ok", note)}
+          onClick={() => onDecide(item, "verified_ok", note, evidenceReference)}
         >
           补核通过
         </Button>
@@ -111,7 +122,7 @@ function ObligationRow({ item, submittingId, readOnly, onDecide }: {
           variant="secondary"
           disabled={disabled}
           data-testid={`gbc-obligation-verify-issue-${item.obligation_id}`}
-          onClick={() => onDecide(item, "verified_issue", note)}
+          onClick={() => onDecide(item, "verified_issue", note, evidenceReference)}
         >
           确认存在问题
         </Button>
@@ -119,7 +130,7 @@ function ObligationRow({ item, submittingId, readOnly, onDecide }: {
           variant="secondary"
           disabled={disabled}
           data-testid={`gbc-obligation-not-applicable-${item.obligation_id}`}
-          onClick={() => onDecide(item, "not_applicable", note)}
+          onClick={() => onDecide(item, "not_applicable", note, evidenceReference)}
         >
           不适用
         </Button>
@@ -128,7 +139,7 @@ function ObligationRow({ item, submittingId, readOnly, onDecide }: {
             variant="secondary"
             disabled={disabled}
             data-testid={`gbc-obligation-reset-${item.obligation_id}`}
-            onClick={() => onDecide(item, "pending", note)}
+            onClick={() => onDecide(item, "pending", note, evidenceReference)}
           >
             置回待处理
           </Button>
@@ -170,6 +181,9 @@ export function ObligationsTab({ block, submittingId, readOnly, onDecide }: Obli
       >
         待补核 {block.pending_total ?? 0} 项 · 共 {block.items.length} 项
         {readOnly ? "（未开始复核或复核已完成，仅可查看）" : ""}
+        <span data-testid="gbc-obligation-evidence-policy" className="ml-2 text-slate-400">
+          依据纪律：确认存在问题/不适用须写明补核说明；补核通过须填写说明或证据位置。
+        </span>
       </div>
       <ul className="flex-1 overflow-auto" data-testid="gbc-obligation-list">
         {block.items.map((item) => (

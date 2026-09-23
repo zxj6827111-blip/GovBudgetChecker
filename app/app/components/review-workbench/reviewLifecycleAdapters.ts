@@ -169,6 +169,66 @@ export function canDecideObligations(
   return review?.current_session?.status === "in_progress";
 }
 
+/**
+ * 依据纪律（WP3-B 评审整改）：resolved 决定不允许"零依据"放行。
+ * 与服务端 ``_obligation_evidence_error`` 逐字一致——这里只做**即时提示**，
+ * 真正的判定永远在服务端（任务书 §十三/§十五）。
+ */
+export interface ObligationEvidencePolicy {
+  /** note 是否必填。 */
+  noteRequired: boolean;
+  /** evidence_reference 单独即可满足要求（仅 verified_ok）。 */
+  evidenceAloneSatisfies: boolean;
+  /** 该决定的依据提示语。 */
+  hint: string;
+}
+
+export function obligationEvidencePolicy(decision: string | null | undefined): ObligationEvidencePolicy {
+  switch (String(decision ?? "").trim()) {
+    case "verified_ok":
+      return {
+        noteRequired: false,
+        evidenceAloneSatisfies: true,
+        hint: "须填写补核说明或证据位置（页码/表名/章节）",
+      };
+    case "verified_issue":
+      return {
+        noteRequired: true,
+        evidenceAloneSatisfies: false,
+        hint: "须写明发现了什么问题（补核说明必填）",
+      };
+    case "not_applicable":
+      return {
+        noteRequired: true,
+        evidenceAloneSatisfies: false,
+        hint: "须写明不适用的原因（补核说明必填）",
+      };
+    default:
+      // pending（置回待处理）与未知值都不要求依据。
+      return { noteRequired: false, evidenceAloneSatisfies: false, hint: "" };
+  }
+}
+
+/** 当前填写是否满足该决定的依据纪律（前端即时提示用；服务端仍会再判一次）。 */
+export function obligationEvidenceSatisfied(
+  decision: string | null | undefined,
+  note: string,
+  evidenceReference: string,
+): boolean {
+  const policy = obligationEvidencePolicy(decision);
+  const hasNote = note.trim().length > 0;
+  const hasEvidence = evidenceReference.trim().length > 0;
+  if (policy.evidenceAloneSatisfies && hasEvidence) {
+    return true;
+  }
+  if (policy.noteRequired) {
+    return hasNote;
+  }
+  // verified_ok：note 或 evidence 任一；pending / 未知值：无要求
+  const requiresAny = String(decision ?? "").trim() === "verified_ok";
+  return requiresAny ? hasNote || hasEvidence : true;
+}
+
 /** 补核写入的响应体（与后端 ObligationDecisionData 对齐）。 */
 export interface ObligationDecisionDataRecord {
   slot_id: string;

@@ -533,7 +533,7 @@ export function ReviewWorkbenchPage() {
    * "有人先改了"，而不是把别人的结论悄悄冲掉。
    */
   const handleObligationDecision = useCallback(
-    async (item: ObligationReviewItemRecord, decision: string, note: string) => {
+    async (item: ObligationReviewItemRecord, decision: string, note: string, evidenceReference: string) => {
       if (reviewContext.kind !== "available") {
         return;
       }
@@ -549,6 +549,7 @@ export function ReviewWorkbenchPage() {
             body: JSON.stringify({
               decision,
               note: note.trim() || undefined,
+              evidence_reference: evidenceReference.trim() || undefined,
               job_uuid: jobId,
               ...(item.decision_revision !== null
                 ? { expected_revision: item.decision_revision }
@@ -861,8 +862,8 @@ export function ReviewWorkbenchPage() {
                 block={obligationReview}
                 submittingId={obligationSubmittingId}
                 readOnly={!canDecideObligations(reviewData)}
-                onDecide={(item, decision, note) =>
-                  void handleObligationDecision(item, decision, note)
+                onDecide={(item, decision, note, evidenceReference) =>
+                  void handleObligationDecision(item, decision, note, evidenceReference)
                 }
               />
             ) : activeTab === "metadata" ? (

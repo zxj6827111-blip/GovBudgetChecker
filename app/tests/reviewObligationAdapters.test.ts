@@ -8,6 +8,8 @@ import {
 import {
   canDecideObligations,
   isObligationHandled,
+  obligationEvidencePolicy,
+  obligationEvidenceSatisfied,
   pendingObligationCount,
   toReviewContextState,
   type ObligationReviewItemRecord,
@@ -210,5 +212,29 @@ assert.equal(
   false,
   "已完成复核 ⇒ 不可再补核（须先重新复核）",
 );
+
+// ---- 依据纪律（与服务端 _obligation_evidence_error 逐字对齐） -------------------
+
+// verified_ok：note 或 evidence 至少一项
+assert.equal(obligationEvidencePolicy("verified_ok").noteRequired, false);
+assert.equal(obligationEvidencePolicy("verified_ok").evidenceAloneSatisfies, true);
+assert.equal(obligationEvidenceSatisfied("verified_ok", "", ""), false);
+assert.equal(obligationEvidenceSatisfied("verified_ok", "已核对", ""), true);
+assert.equal(obligationEvidenceSatisfied("verified_ok", "", "第 12 页"), true);
+
+// verified_issue：note 必填
+assert.equal(obligationEvidencePolicy("verified_issue").noteRequired, true);
+assert.equal(obligationEvidenceSatisfied("verified_issue", "", "第 3 页"), false);
+assert.equal(obligationEvidenceSatisfied("verified_issue", "确认存在差异", ""), true);
+
+// not_applicable：note 必填
+assert.equal(obligationEvidencePolicy("not_applicable").noteRequired, true);
+assert.equal(obligationEvidenceSatisfied("not_applicable", "", ""), false);
+assert.equal(obligationEvidenceSatisfied("not_applicable", "本单位不涉及", ""), true);
+
+// pending：无须依据（置回待处理不产生放行效果）
+assert.equal(obligationEvidenceSatisfied("pending", "", ""), true);
+// 未知值同样放行客户端提示——服务端会先用 400/422 拒绝它，提示不构成放行
+assert.equal(obligationEvidenceSatisfied("approved", "", ""), true);
 
 console.log("reviewObligationAdapters.test.ts passed");
