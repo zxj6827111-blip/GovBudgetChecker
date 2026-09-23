@@ -547,8 +547,16 @@ def ignore_job_issue(job_id: str, issue_id: str) -> Dict[str, Any]:
     if normalized_issue_id not in known_issue_ids and normalized_issue_id not in ignored_ids:
         raise HTTPException(status_code=404, detail="issue_id does not exist")
 
-    ignored_ids.add(normalized_issue_id)
-    write_ignored_issue_ids(job_dir, ignored_ids)
+    # 写入必须走 workflow 存储的文件锁（WP3-A）：
+    #   - 复核完成门禁的问题集合同时覆盖"workflow 决定"与"忽略清单"，
+    #     而落编辑锁时的 CAS 也在那把锁之下重算快照；两边各写各的会有窗口；
+    #   - 该锁之下还会先判复核锁：已完成的复核不允许再改问题集合
+    #     （409 review_completed_locked）。
+    # 延迟导入的理由与 _invalidate_reviews_before_analysis_start 相同：
+    # issue_workflow_store 在模块级 import 本模块，这里必须等到调用时再导入。
+    from src.services.issue_workflow_store import add_ignored_issue_id
+
+    add_ignored_issue_id(job_id, normalized_issue_id)
 
     payload = get_job_status_payload(job_id)
     payload["ignored_issue_id"] = normalized_issue_id
@@ -2772,6 +2780,10 @@ async def start_analysis(
     }
     try:
         write_json_file(status_file, payload)
+        # WP3-A：任何一次分析启动之前，先让上一次的复核立刻失效。
+        # 挂在这里而不是某个具体路由，是为了让"从队列点开始分析"这条路径
+        # 也走同一套失效逻辑（详见 _invalidate_reviews_before_analysis_start）。
+        await _invalidate_reviews_before_analysis_start(job_id)
         await persist_analysis_job_snapshot(payload)
         queue = _job_queue
         dispatch = "local_queue"
@@ -2860,6 +2872,50 @@ async def reanalyze_job(
         "source_job_id": source_job_id,
         "job_id": source_job_id,
     }
+
+
+async def _invalidate_reviews_before_analysis_start(job_id: str) -> None:
+    """分析启动前的复核失效钩子（WP3-A）。
+
+    挂在 ``start_analysis`` 这个**唯一**的分析起点上，而不是只挂在
+    ``reanalyze_job``：仓库里还有一条会重跑分析的路——``POST /api/analyze/{job_id}``
+    （处理队列的「开始分析」，``api/routes/analyze.py`` 直连 ``start_analysis``）。
+    只挂在 reanalyze 上时，从队列对一份已复核完成的材料点「开始分析」会重新分析
+    却**不失效旧复核**——页面继续显示「已完成复核」，而它复核的是上一代结果。
+    挂在共同起点上，两个入口自动都覆盖。
+
+    分析与复核的取舍：分析代际的变化本身由"重置时清指纹"保证（即使本钩子失败，
+    complete 时的懒失效仍会拦下过期会话）；本钩子的价值是**立刻**让界面知道
+    要重做，而不是等用户下一次打开页面。
+
+    失败不阻断分析（维护与上传主流程不能被旁路能力卡住），但必须**大声报错**：
+    钩子没生效意味着旧复核在库里仍显示"已完成"，这是运维需要立刻知道的事。
+
+    函数内延迟导入是有意的，而且必须在延迟位置：``review_lifecycle_service``
+    依赖 ``issue_workflow_store``，后者在模块级 ``from api import runtime``。
+    若这里在模块级导入复核服务，``api.runtime → 复核服务 → issue_workflow_store
+    → api.runtime`` 就构成循环导入。延迟到调用时，导入链已经走完，环不存在。
+    """
+    try:
+        from src.services.review_lifecycle_service import (
+            invalidate_reviews_for_analysis_restart,
+        )
+
+        result = await invalidate_reviews_for_analysis_restart(job_id)
+    except Exception:  # noqa: BLE001 - 详见上方注释：不阻断但必须报错
+        logger.error(
+            "Failed to invalidate review sessions before analysis of job %s; "
+            "a completed review may still be shown for this job",
+            job_id,
+            exc_info=True,
+        )
+        return
+    if result.get("sessions_invalidated"):
+        logger.info(
+            "Analysis restart invalidated %s review session(s) for job %s",
+            result.get("sessions_invalidated"),
+            job_id,
+        )
 
 
 async def reanalyze_all_jobs(body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

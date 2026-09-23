@@ -156,10 +156,16 @@ async def test_persist_analysis_job_snapshot_clears_stale_results_for_active_job
 
     assert ok is True
     assert len(conn.fetchval_calls) == 1
-    assert len(conn.execute_calls) == 1
+    # 作业被重置为 queued 时要写两条：先作废旧结果，再清掉结果指纹。
+    # 清指纹是 WP3-A 分析代际的关键一步——没有它，"重新分析产出与上一代
+    # 逐字相同的结果"会被当成重复落库，旧复核将静默继承新结论。
+    assert len(conn.execute_calls) == 2
     query, args = conn.execute_calls[0]
     assert query == "DELETE FROM analysis_results WHERE job_id = $1"
     assert args == (17,)
+    fingerprint_query, fingerprint_args = conn.execute_calls[1]
+    assert "analysis_result_fingerprint = NULL" in fingerprint_query
+    assert fingerprint_args == (17,)
 
 
 @pytest.mark.asyncio

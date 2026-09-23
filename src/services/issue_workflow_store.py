@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 from contextlib import contextmanager
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -169,9 +170,34 @@ def _normalize_state(value: Any) -> Dict[str, Any]:
         revision = max(0, int(raw.get("revision") or 0))
     except (TypeError, ValueError):
         revision = 0
+
+    # 复核编辑锁（WP3-A）：{job_id: {...}}。
+    #
+    # 锁与"决定"放在**同一份文件、同一把文件锁**之下是有意的：复核完成与
+    # 问题被修改之间不能有真实窗口。若把锁放进另一处存储（例如复核所在的
+    # PostgreSQL），"复核刚完成、锁还没落下"的那一瞬间，一次 issue 修改会静默
+    # 穿过去，而两边都以为自己是对的。跨存储做不到原子事务，所以让锁跟着
+    # 它保护的数据走（§五十七）。
+    review_locks: Dict[str, Dict[str, Any]] = {}
+    raw_locks = raw.get("review_locks")
+    if isinstance(raw_locks, dict):
+        for job_id, item in raw_locks.items():
+            normalized_job_id = str(job_id or "").strip()
+            if not normalized_job_id or not isinstance(item, dict):
+                continue
+            review_locks[normalized_job_id] = {
+                "job_id": normalized_job_id,
+                "slot_id": str(item.get("slot_id") or "").strip() or None,
+                "review_session_id": str(item.get("review_session_id") or "").strip() or None,
+                "analysis_basis_token": str(item.get("analysis_basis_token") or "").strip() or None,
+                "completed_by": str(item.get("completed_by") or "").strip() or None,
+                "completed_at": str(item.get("completed_at") or "").strip() or _now(),
+            }
+
     return {
         "issues": issues,
         "packages": packages,
+        "review_locks": review_locks,
         "updated_at": raw.get("updated_at") or None,
         "revision": revision,
     }
@@ -185,6 +211,7 @@ def _write_state(state: Dict[str, Any]) -> Dict[str, Any]:
     payload = {
         "issues": state["issues"],
         "packages": state["packages"],
+        "review_locks": state.get("review_locks") or {},
         "updated_at": _now(),
         "revision": int(state.get("revision") or 0) + 1,
     }
@@ -404,6 +431,49 @@ def _find_issue(payload: Dict[str, Any], issue_id: str) -> Optional[Dict[str, An
                 found = _find(issues.get(key))
                 if found:
                     return found
+    return _find_structured_review_item(payload, issue_id)
+
+
+def _find_structured_review_item(
+    payload: Dict[str, Any], issue_id: str
+) -> Optional[Dict[str, Any]]:
+    """在结构化待复核项里定位问题（WP3-A）。
+
+    为什么必须补这一条：审核工作台会把 ``structured_ingest.review_items``
+    渲染成问题卡片（"结构化识别待复核：T1"），用户点「确认/忽略」时提交的
+    ``issue_id`` 就是这些条目的 id。而 ``ai_findings`` / ``rule_findings`` /
+    ``issues`` 里**没有**这些 id，于是更新请求会以 404 结束、界面上什么也没发生：
+    用户以为处理过了，实际状态仍是待处理。
+
+    这条路径缺失时，完成门禁若要按"结构化待复核也必须有人表态"来判定，
+    这份材料就永远完不成复核——前端挂着一条谁也处理不了的问题。
+    因此定位与门禁必须同时覆盖同一批问题（``review_problem_set`` 是唯一权威）。
+
+    id 的合成规则与 ``review_problem_set`` / 前端 ``toUiProblems`` 逐字同源：
+    真数据里 ``review_items`` 都自带 id，合成只用于缺 id 的历史数据。
+    """
+    from src.services.review_problem_set import collect_review_problems
+
+    job_id = str(payload.get("job_id") or "").strip()
+    for problem in collect_review_problems(
+        job_uuid=job_id,
+        ai_findings=None,
+        rule_findings=None,
+        merged_result=None,
+        structured_ingest=payload.get("structured_ingest"),
+    ):
+        if problem.issue_id != issue_id:
+            continue
+        # 复用既有更新路径：写入的记录字段（title/severity/page）与普通 finding 一致，
+        # 不需要为结构化条目发明第二套记录形态。
+        return {
+            "id": problem.issue_id,
+            "source": problem.source,
+            "rule_id": f"STRUCTURED-{problem.issue_id.split(':')[0].upper()}",
+            "severity": problem.severity or "manual_review",
+            "title": problem.title,
+            "message": problem.title,
+        }
     return None
 
 
@@ -463,6 +533,324 @@ def _can_read_job(user: Dict[str, Any], job_id: str) -> bool:
         return False
 
 
+# ---- 复核编辑锁（WP3-A） ----------------------------------------------------
+
+
+def get_job_issue_decisions(job_id: str) -> Dict[str, str]:
+    """该任务上全部已表态的问题状态 ``{issue_id: status}``（只读）。
+
+    复核完成门禁的输入之一。**不做权限过滤**：调用方（复核服务）已经完成授权
+    （路由层先判槽位可访问再进来），在这里再判一次只会引入第二套授权语义。
+
+    注意返回值里**只有表过态的条目**：没有出现的 issue_id 表示"没有人表过态"，
+    调用方必须按 pending 处理，绝不能把"不在字典里"当成"已完成"。
+    """
+    normalized = str(job_id or "").strip()
+    if not normalized:
+        return {}
+    with _state_lock():
+        state = _read_state()
+    result: Dict[str, str] = {}
+    for record in state["issues"].values():
+        if str(record.get("job_id") or "") != normalized:
+            continue
+        result[str(record.get("issue_id") or "")] = str(record.get("status") or "pending")
+    result.pop("", None)
+    return result
+
+
+#: 问题集合快照的算法版本。改变快照覆盖范围（例如新增一类来源）时必须改动它，
+#: 否则老版本写下的 token 会被误判成"仍然匹配"。
+PROBLEM_SNAPSHOT_ALGORITHM = "sha256(decisions + ignored_issue_ids)"
+
+
+def _decision_pairs(state: Dict[str, Any], job_id: str) -> List[List[str]]:
+    """该任务全部"已表态"的问题，按 issue_id 升序的 ``[issue_id, status]`` 列表。
+
+    排序是必需的：文件里 issue 的插入顺序会随操作历史变化，不排序算出的 token
+    会在**没有任何实质变化**时也变化，把"无关的写入顺序差异"变成假的冲突。
+    """
+    normalized = str(job_id or "").strip()
+    pairs: List[List[str]] = []
+    for record in state["issues"].values():
+        if str(record.get("job_id") or "") != normalized:
+            continue
+        issue_id = str(record.get("issue_id") or "")
+        if not issue_id:
+            continue
+        pairs.append([issue_id, str(record.get("status") or "pending")])
+    pairs.sort(key=lambda item: item[0])
+    return pairs
+
+
+def _ignored_issue_ids_for_job(job_id: str) -> List[str]:
+    """该任务的 legacy 忽略清单（``ignored_issue_ids``），已排序。
+
+    复核的问题集合同时由"workflow 决定"与这份忽略清单决定（见
+    ``review_problem_set``），因此它必须进快照——否则"完成后才想起忽略一条问题"
+    会让已完成复核对应的问题集合发生变化。
+
+    读不到（任务目录不存在、文件损坏）时返回空列表：与
+    ``review_problem_set`` 的取值保持一致，两边算出的 token 才可比。
+    """
+    job_dir = runtime.UPLOAD_ROOT / str(job_id or "").strip()
+    try:
+        return sorted(str(item) for item in runtime.read_ignored_issue_ids(job_dir))
+    except Exception:  # noqa: BLE001 - 忽略清单不是关键路径，读不到按"没有"处理
+        logger.warning("Failed to read ignored issue ids for job %s", job_id, exc_info=True)
+        return []
+
+
+def _problem_snapshot_token(state: Dict[str, Any], job_id: str) -> str:
+    """问题集合快照的指纹：**必须在 ``_state_lock()`` 之内调用。**
+
+    覆盖两项，正是 Completion Gate 判定所消费的全部外部状态：
+
+    - ``(issue_id, status)``：问题被怎么处理了（confirmed / no_issue / ...）；
+    - ``ignored_issue_ids``：legacy 忽略清单（它决定哪些问题不进集合）。
+
+    不含 ``revision``：那是全局的，别的任务的修改会让当前复核被无意义地打断
+    （fail-closed 但噪声大）。按 job 计算即可表达"这个 job 的问题集合变没变"。
+    """
+    payload = {
+        "algorithm": PROBLEM_SNAPSHOT_ALGORITHM,
+        "decisions": _decision_pairs(state, job_id),
+        "ignored_issue_ids": _ignored_issue_ids_for_job(job_id),
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def get_job_problem_snapshot(job_id: str) -> Dict[str, Any]:
+    """读取"该任务当前的问题集合"及其指纹（同一把文件锁之下的**一致**快照）。
+
+    复核服务用它做两件事：判定完成门禁、并在落编辑锁时用 ``token`` 做 CAS。
+    分成两次独立读取就会重新引入 TOCTOU：门禁看到的是一份、落锁时写的是另一份。
+    """
+    normalized = str(job_id or "").strip()
+    if not normalized:
+        return {"decisions": {}, "ignored_issue_ids": [], "token": ""}
+    with _state_lock():
+        state = _read_state()
+        decisions = {
+            issue_id: status for issue_id, status in _decision_pairs(state, normalized)
+        }
+        return {
+            "decisions": decisions,
+            "ignored_issue_ids": _ignored_issue_ids_for_job(normalized),
+            "token": _problem_snapshot_token(state, normalized),
+        }
+
+
+def set_review_lock_if_problem_snapshot_matches(
+    job_id: str,
+    *,
+    expected_token: str,
+    slot_id: Optional[str],
+    review_session_id: Optional[str],
+    analysis_basis_token: Optional[str],
+    completed_by: Optional[str],
+) -> Dict[str, Any]:
+    """**比较后再落锁**：问题集合自门禁判定以来没变才写编辑锁。
+
+    为什么不能"先 get 再 set"：两个操作之间有真实窗口。反例——
+
+        T1 complete：读到 issue-1 = confirmed → 门禁 PASS
+        T2 update_issue：把 issue-1 改回 pending（此刻还没有编辑锁，成功）
+        T1 set_review_lock → 提交
+
+    终态是"复核已完成，但它据以完成的那条问题已经被改回未处理"，
+    而任务书要求复核完成时锁住的问题状态必须就是门禁判定时的那一份。
+
+    比较与写入在**同一把 ``_state_lock()`` 之内**完成，因此窗口不存在：
+    要么 T2 的写入发生在比较之前（token 不同 → 冲突，本次复核失败并回滚），
+    要么发生在比较之后（那时锁已经在文件里，T2 会被 ``review_completed_locked`` 拒绝）。
+
+    返回 ``{"status": "written" | "conflict", ...}``；冲突时**不写锁**。
+    """
+    normalized = str(job_id or "").strip()
+    if not normalized:
+        return {"status": "conflict", "reason": "job_id_required"}
+    with _state_lock():
+        state = _read_state()
+        current_token = _problem_snapshot_token(state, normalized)
+        if not expected_token or str(expected_token) != current_token:
+            # fail-closed：不为"读不到期望 token"或"token 不同"做任何妥协。
+            return {
+                "status": "conflict",
+                "expected_decision_token": str(expected_token or ""),
+                "current_decision_token": current_token,
+            }
+        locks = dict(state.get("review_locks") or {})
+        locks[normalized] = {
+            "job_id": normalized,
+            "slot_id": str(slot_id or "").strip() or None,
+            "review_session_id": str(review_session_id or "").strip() or None,
+            "analysis_basis_token": str(analysis_basis_token or "").strip() or None,
+            "completed_by": str(completed_by or "").strip() or None,
+            "problem_snapshot_token": current_token,
+            "completed_at": _now(),
+        }
+        state["review_locks"] = locks
+        _write_state(state)
+        return {"status": "written", "current_decision_token": current_token}
+
+
+def add_ignored_issue_id(job_id: str, issue_id: str) -> Dict[str, Any]:
+    """在 workflow 文件锁之下把某条问题加入忽略清单（legacy 写入路径）。
+
+    为什么必须走这把锁：Completion Gate 的问题集合快照同时覆盖 workflow 决定与
+    ignored 清单，落锁时的 CAS 也在这把锁之下重算。两边各写各的时，
+    "读 ignored → 判门禁 → 写 review_lock"之间会有窗口。
+
+    顺序也是刻意的：**先判复核锁，再写**。已经完成复核的任务不允许再改问题集合
+    （legacy 忽略端点 ``POST /api/jobs/{id}/issues/ignore`` 至今仍可写，
+    因此它必须与 workflow 决定受同一约束）。
+    """
+    normalized_job = str(job_id or "").strip()
+    normalized_issue = str(issue_id or "").strip()
+    if not normalized_job or not normalized_issue:
+        raise HTTPException(status_code=400, detail="job_id and issue_id are required")
+    with _state_lock():
+        # 复核已在完成时拒绝问题集合变更（与 update_issue 同一语义、同一错误体）。
+        # 这里刻意调用**私有**校验并直接传已读到的 state：公开版会自己去取
+        # ``_state_lock``，在锁内重入同一把文件锁在 Windows 上会直接
+        # PermissionError（同一线程用第二个句柄读同一个锁文件）。
+        _require_issue_mutable(_read_state(), normalized_job)
+        job_dir = runtime.UPLOAD_ROOT / normalized_job
+        ignored = set(runtime.read_ignored_issue_ids(job_dir))
+        ignored.add(normalized_issue)
+        return runtime.write_ignored_issue_ids(job_dir, ignored)
+
+
+def get_review_lock(job_id: str) -> Optional[Dict[str, Any]]:
+    """该任务当前的复核编辑锁（没有则 ``None``）。"""
+    normalized = str(job_id or "").strip()
+    if not normalized:
+        return None
+    with _state_lock():
+        state = _read_state()
+    lock = state.get("review_locks", {}).get(normalized)
+    return copy.deepcopy(lock) if isinstance(lock, dict) else None
+
+
+def set_review_lock(
+    job_id: str,
+    *,
+    slot_id: Optional[str],
+    review_session_id: Optional[str],
+    analysis_basis_token: Optional[str],
+    completed_by: Optional[str],
+) -> Dict[str, Any]:
+    """复核完成时落下编辑锁：该任务的问题在重新开始复核前不可再改。
+
+    锁与 issue 决定写在**同一份文件、同一把文件锁**下，因此"写决定"与"判锁"
+    之间不存在窗口——这正是把它放在这里而不是放到复核库里的原因（§五十七）。
+    """
+    normalized = str(job_id or "").strip()
+    if not normalized:
+        return {}
+    with _state_lock():
+        state = _read_state()
+        locks = dict(state.get("review_locks") or {})
+        locks[normalized] = {
+            "job_id": normalized,
+            "slot_id": str(slot_id or "").strip() or None,
+            "review_session_id": str(review_session_id or "").strip() or None,
+            "analysis_basis_token": str(analysis_basis_token or "").strip() or None,
+            "completed_by": str(completed_by or "").strip() or None,
+            "completed_at": _now(),
+        }
+        state["review_locks"] = locks
+        return _write_state(state)
+
+
+def clear_review_lock(job_id: str) -> Dict[str, Any]:
+    """解除编辑锁（重新开始复核 / 复核失效 / 重新分析时调用）。
+
+    幂等：没有锁时也照样写回一次状态（revision 递增），调用方不需要先判断。
+    """
+    normalized = str(job_id or "").strip()
+    if not normalized:
+        return {}
+    with _state_lock():
+        state = _read_state()
+        locks = dict(state.get("review_locks") or {})
+        locks.pop(normalized, None)
+        state["review_locks"] = locks
+        return _write_state(state)
+
+
+def clear_review_lock_if_matches(
+    job_id: str,
+    *,
+    review_session_id: Optional[str],
+    analysis_basis_token: Optional[str],
+) -> bool:
+    """**比较后再清**：只有当前锁确实是这条会话留下的才删除。
+
+    存在的唯一理由是"PostgreSQL 提交失败后的补偿"：复核完成的顺序是
+    "事务内写下编辑锁 → 提交"。提交失败时数据库已经回滚（会话不是 completed），
+    那条文件锁就成了孤儿，必须清掉；但**不能无条件按 job_id 清**——
+    并发下另一个会话可能已经写下它自己的锁，无条件清会把别人的安全约束一起删掉。
+
+    比较键取 ``(job_id, review_session_id, analysis_basis_token)``：
+    session id 唯一标识"哪一次复核"，basis token 额外确认"是哪一代分析"。
+    两者都不匹配（或文件里已是别的会话）时**不动它**，返回 ``False``。
+
+    整个判断与删除在 ``_state_lock()`` 之内完成，因此与并发写锁互斥——
+    放到锁外做"先读、再比、后删"会留下"读完之后被别人换掉"的窗口。
+
+    返回是否真的删除了锁。
+    """
+    normalized = str(job_id or "").strip()
+    if not normalized:
+        return False
+    expected_session = str(review_session_id or "").strip()
+    expected_basis = str(analysis_basis_token or "").strip()
+    with _state_lock():
+        state = _read_state()
+        locks = dict(state.get("review_locks") or {})
+        current = locks.get(normalized)
+        if not isinstance(current, dict):
+            return False
+        if expected_session and str(current.get("review_session_id") or "").strip() != expected_session:
+            # 文件里已经是别的会话的锁：不删。删了就等于把"复核已完成、问题不可改"
+            # 这条安全约束从后来那次复核身上摘掉。
+            return False
+        if expected_basis and str(current.get("analysis_basis_token") or "").strip() != expected_basis:
+            return False
+        locks.pop(normalized, None)
+        state["review_locks"] = locks
+        _write_state(state)
+        return True
+
+
+def _require_issue_mutable(state: Dict[str, Any], job_id: str) -> None:
+    """复核已完成的任务：拒绝静默修改问题（§五十五/§五十六）。
+
+    为什么推荐"锁定"而不是"自动失效"：``issue_workflow_store`` 是文件存储、
+    Review Session 是 PostgreSQL，一次 issue 更新同时写 JSON + 失效 DB 记录
+    无法构成真正的跨存储原子事务；半成功时"复核说完成、问题却变了"没人能解释。
+    因此这里只做一件事：**先显式重新开始复核，再允许改问题**。
+
+    409 而不是 403：有权限，但当前业务状态不允许（§一百零六）。
+    """
+    lock = (state.get("review_locks") or {}).get(job_id)
+    if not isinstance(lock, dict):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "review_completed_locked",
+            "message": "该材料的复核已完成，请先重新开始复核再修改问题",
+            "review_session_id": lock.get("review_session_id"),
+            "completed_by": lock.get("completed_by"),
+            "completed_at": lock.get("completed_at"),
+        },
+    )
+
+
 async def update_issue(
     user: Dict[str, Any],
     *,
@@ -483,6 +871,9 @@ async def update_issue(
     org_id, org_name = _organization_context(payload)
     with _state_lock():
         state = _read_state()
+        # 判锁必须在**同一把文件锁之内**：放在锁外就等于"查过之后、写入之前"
+        # 有一个窗口，复核可能正好在这个窗口里完成。
+        _require_issue_mutable(state, normalized_job_id)
         key = _workflow_key(normalized_job_id, normalized_issue_id)
         state["issues"][key] = {
             "key": key,
@@ -537,6 +928,12 @@ async def create_package(
     package_id = f"pkg-{int(time.time() * 1000)}-{secrets.token_hex(4)}"
     with _state_lock():
         state = _read_state()
+        # 组包同样会改写问题的处理状态（→ in_package），因此受同一把编辑锁约束：
+        # 复核完成后还能把问题改成"已进整改包"，等于"复核完成后问题不会被静默
+        # 修改"这条规则只挡住了两条路径中的一条。归档/导出的业务逻辑本身不动
+        # （§一百零三），这里只是要求"先重新开始复核"。
+        for job_id in normalized_job_ids:
+            _require_issue_mutable(state, job_id)
         for key, payload, issue in resolved_issues:
             job_id, _, issue_id = key.partition("::")
             org_id, org_name = _organization_context(payload)

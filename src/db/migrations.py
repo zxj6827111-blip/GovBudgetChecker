@@ -1074,6 +1074,149 @@ MIGRATIONS: List[Dict[str, Any]] = [
             "ON fiscal_document_versions(slot_id)",
         ]
     },
+    {
+        "id": "2026-09-22_0020_review_lifecycle",
+        "description": (
+            "人工复核生命周期（WP3-A）：review_sessions 独立业务对象（一条槽位同时"
+            "只能有一个 in_progress），把复核结论从「前端点一下就跳走」变成可持久化、"
+            "可追溯、可失效的服务端事实；同时给 analysis_jobs 增加分析代际"
+            "（analysis_revision + analysis_result_fingerprint），让「同一 job_uuid 的"
+            "重新分析」能与「同一结果的重复落库/重放」区分开。只新增，不改历史迁移。"
+        ),
+        "sql": [
+            # 0019 已声明过扩展；这里再声明一次是为了让"只重放本迁移"也能成功。
+            "CREATE EXTENSION IF NOT EXISTS pgcrypto",
+
+            # ------------------------------------------------------------------
+            # analysis_jobs.analysis_revision —— 分析代际
+            #
+            # 为什么需要它（WP3-A 最关键的一条红线）：
+            # ``_upsert_analysis_job`` 是 ``ON CONFLICT (job_uuid) DO UPDATE``，
+            # ``_upsert_analysis_result`` 是 ``ON CONFLICT (job_id) DO UPDATE``。
+            # 也就是说**同一个 job_uuid 重新分析时，analysis_jobs / analysis_results
+            # 的行是被原地覆盖的**，`job_uuid` 本身不足以区分"分析结果 A"和
+            # "同一 job_uuid 上的重新分析结果 B"。复核会话若只绑 job_uuid，
+            # 重新分析后旧复核会静默继承新结果——一份没被人看过的分析被算作
+            # "已复核完成"。因此必须有显式的代际字段。
+            #
+            # 语义：``analysis_revision`` = 该 job 上**已经落库过结果**的分析代际数，
+            # 0 表示"还没有任何分析结果落库"。它只保证"代际变化"，不代表第几次运行，
+            # 也不允许用 ``updated_at`` 顶替——状态重放、metadata 修复同样会更新
+            # updated_at，用它当 generation 会让恢复动作误伤复核。
+            #
+            # 默认值取 0 而不是 1：这样"首次落库结果"恰好把 0 → 1，
+            # 不会出现"第一次分析就是第 2 代"这种看不出所以然的编号。
+            # 既有历史行保持 0（代际未知），它们下一次真正产出结果时归为第 1 代。
+            "ALTER TABLE analysis_jobs "
+            "ADD COLUMN IF NOT EXISTS analysis_revision INTEGER NOT NULL DEFAULT 0",
+
+            # 当前已落库分析结果的内容指纹（sha256，只覆盖被复核的分析内容，
+            # 不含 progress/timestamp 这类每次都变的字段）。
+            #
+            # 它区分的是两类"又一次落库"：
+            #   - 同一个结果的重复落库 / 断线重放 → 指纹相同 → **不**递增代际；
+            #   - 重新分析产生的新结果（内容可能与上一次逐字相同）→ 指纹在
+            #     "作业被重置为 queued"时已被清空，因此一定会递增。
+            # 只靠内容比较是不够的：重新分析完全可能产出与上一次逐字相同的结果，
+            # 而那也必须让旧复核失效（人看的是"这一次的分析"，不是"看起来一样的字"）。
+            "ALTER TABLE analysis_jobs "
+            "ADD COLUMN IF NOT EXISTS analysis_result_fingerprint TEXT",
+
+            # ------------------------------------------------------------------
+            # review_sessions —— 复核会话：与 issue_workflow record、analysis job
+            # 都不同的独立业务对象。
+            #
+            # 为什么不能复用 issue 级 workflow：一份材料可以 V1 分析→复核完成，
+            # V2 分析→再次复核。issue 级记录只回答"这一条问题被怎么处理了"，
+            # 回答不了"哪一代分析、哪一版文件上的复核结论"。把复核结论塞进
+            # issue 记录里，就等于让"复核完成"这个事实随问题条数变化而漂移。
+            #
+            # 为什么四个字段必须一起绑：``slot_id`` 说是哪条应收材料；
+            # ``document_version_id`` 说是哪一版文件；``analysis_job_uuid`` +
+            # ``analysis_basis_token`` 说是哪一代分析。只绑 job_id 的话，
+            # 同 job 重新分析会让旧复核静默继承新结论（见上）。
+            # ------------------------------------------------------------------
+            """
+            CREATE TABLE IF NOT EXISTS review_sessions (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+                -- 外键用 RESTRICT 而不是 CASCADE：复核历史是审计材料，
+                -- 不允许因为删除槽位/版本而静默消失。真要删就得先显式处理历史。
+                slot_id UUID NOT NULL
+                    REFERENCES material_slots(id) ON DELETE RESTRICT,
+                document_version_id INTEGER NOT NULL
+                    REFERENCES fiscal_document_versions(id) ON DELETE RESTRICT,
+
+                -- 与 fiscal_document_versions.id 一样，这里存的是**字符串** job_uuid：
+                -- 复核上下文是从 analysis_jobs.metadata 里读的 job_uuid，
+                -- 而 analysis_jobs.id 是自增代理键，重放历史数据时不一定稳定。
+                analysis_job_uuid TEXT NOT NULL
+                    REFERENCES analysis_jobs(job_uuid) ON DELETE RESTRICT,
+
+                -- 形如 `<job_uuid>:<analysis_revision>`。它必须能回答
+                -- "现在看到的分析结果，与开始复核时的分析结果是否仍是同一代"。
+                analysis_basis_token TEXT NOT NULL,
+
+                status TEXT NOT NULL DEFAULT 'in_progress'
+                    CONSTRAINT ck_review_sessions_status
+                    CHECK (status IN ('in_progress', 'completed', 'invalidated')),
+
+                started_by TEXT NOT NULL,
+                started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+                completed_by TEXT,
+                completed_at TIMESTAMPTZ,
+
+                invalidated_at TIMESTAMPTZ,
+                invalidated_reason TEXT,
+
+                -- 复核快照（问题计数 + 覆盖摘要）。刻意**不**存整份 finding /
+                -- raw_response：那会让复核记录随着原始分析体积膨胀，而复核
+                -- 结论只需要"当时各状态各有多少条、覆盖到什么程度"。
+                review_result JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+                -- 终态必须自洽：completed 必须有完成人与完成时间且未被失效；
+                -- invalidated 必须有失效时间与失效原因。没有这两条约束，
+                -- 一次写错状态的代码就能造出"已完成但没有完成人"这种
+                -- 无法追溯、却看起来一切正常的记录。
+                CONSTRAINT ck_review_sessions_completed CHECK (
+                    status <> 'completed'
+                    OR (completed_at IS NOT NULL
+                        AND completed_by IS NOT NULL
+                        AND invalidated_at IS NULL)
+                ),
+                CONSTRAINT ck_review_sessions_invalidated CHECK (
+                    status <> 'invalidated'
+                    OR (invalidated_at IS NOT NULL AND invalidated_reason IS NOT NULL)
+                )
+            )
+            """,
+
+            # 一条槽位同时**只能有一个进行中的复核**。
+            #
+            # 这是业务不变式，不只是"性能优化"：两个浏览器同时点"进入审核"
+            # 若能各建一条活动会话，两边的确认/忽略就会写进两条互不知情的
+            # 记录里，最终"复核完成"到底以哪一条为准无法回答。
+            # 用 partial unique index 而不是"应用层先查再写"：后者在并发下
+            # 一定漏（两个事务都查到"没有活动会话"）。应用层照样会先查一次，
+            # 但那次查询只是为了让正常路径不报错，真正的保证在数据库这一层。
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_review_sessions_active "
+            "ON review_sessions (slot_id) WHERE status = 'in_progress'",
+
+            # 历史列表 / 当前会话：按槽位取最近若干条
+            "CREATE INDEX IF NOT EXISTS idx_review_sessions_slot "
+            "ON review_sessions(slot_id, created_at DESC)",
+            # 重分析失效钩子按 job_uuid 定位
+            "CREATE INDEX IF NOT EXISTS idx_review_sessions_job "
+            "ON review_sessions(analysis_job_uuid)",
+            # 版本替换失效钩子按 (槽位, 版本) 定位
+            "CREATE INDEX IF NOT EXISTS idx_review_sessions_version "
+            "ON review_sessions(slot_id, document_version_id)",
+        ]
+    },
 ]
 
 

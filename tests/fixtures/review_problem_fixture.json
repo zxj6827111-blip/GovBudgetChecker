@@ -1,0 +1,173 @@
+{
+  "_comment": [
+    "复核问题集合的**跨语言契约夹具**（WP3-A §四十三）。",
+    "",
+    "同一份夹具被两侧读取：",
+    "  - 后端 src/services/review_problem_set.py（完成门禁的唯一口径）",
+    "  - 前端 app/lib/uiAdapters.ts 的 toUiProblems + reviewWorkbenchAdapters.computeWorkflowStatusCounts",
+    "两侧必须得到完全相同的 issue id 列表与相同的 pending 计数。",
+    "",
+    "为什么必须有它：前端 toUiProblems 与后端完成门禁如果各自维护一套",
+    "「什么算一条待人工处理的问题」，就会出现最危险的一类假完成——",
+    "页面还挂着「结构化识别待复核」，后端却判定问题都处理完了。",
+    "夹具一旦漂移，两侧的用例同时变红。",
+    "decisions 的键是 issue_id（合同层形态）：后端 build_issue_counts 与前端 computeWorkflowStatusCounts 都以 issue_id 取值。持久化文件里用 `<job_id>::<issue_id>` 作为键是存储层细节，不属于本夹具的契约面。"
+  ],
+  "job_uuid": "job-contract-0001",
+  "detail": {
+    "job_id": "job-contract-0001",
+    "status": "done",
+    "result": {
+      "ai_findings": [
+        {
+          "id": "ai-1",
+          "source": "ai",
+          "rule_id": "AI-001",
+          "severity": "high",
+          "title": "AI 问题一",
+          "message": "AI 问题一的说明",
+          "evidence": [
+            {
+              "page": 2,
+              "text": "证据一",
+              "bbox": [
+                1,
+                2,
+                3,
+                4
+              ]
+            }
+          ],
+          "location": {
+            "page": 2,
+            "table": "T1"
+          }
+        },
+        {
+          "id": "ai-degraded",
+          "source": "ai",
+          "rule_id": "AI-002",
+          "severity": "manual_review",
+          "evidence_status": "degraded_missing_evidence",
+          "title": "AI 缺证据问题",
+          "message": "缺证据被降级",
+          "evidence": [
+            {
+              "page": 5,
+              "text": "证据二"
+            }
+          ]
+        }
+      ],
+      "rule_findings": [
+        {
+          "id": "rule-1",
+          "source": "rule",
+          "rule_id": "RULE-001",
+          "severity": "warn",
+          "title": "规则问题一",
+          "message": "规则问题一的说明",
+          "evidence": [
+            {
+              "page": 3,
+              "text": "证据三",
+              "bbox": [
+                5,
+                6,
+                7,
+                8
+              ]
+            }
+          ],
+          "location": {
+            "page": 3,
+            "section": "一、总体情况"
+          }
+        },
+        {
+          "id": "rule-2",
+          "source": "rule",
+          "rule_id": "RULE-002",
+          "severity": "error",
+          "title": "规则问题二",
+          "message": "规则问题二的说明",
+          "evidence": [
+            {
+              "page": 4,
+              "text": "证据四",
+              "bbox": [
+                9,
+                10,
+                11,
+                12
+              ]
+            }
+          ],
+          "location": {
+            "page": 4,
+            "table": "T3"
+          }
+        }
+      ],
+      "merged": {
+        "totals": {
+          "merged": 4
+        }
+      }
+    },
+    "structured_ingest": {
+      "status": "done",
+      "review_items": [
+        {
+          "id": "T1:low_confidence",
+          "type": "low_confidence_table",
+          "severity": "warn",
+          "table_code": "T1",
+          "page_number": 7,
+          "message": "该表识别置信度偏低，建议只复核该表头和关键金额列",
+          "recommended_action": "review_header_and_amount_columns"
+        },
+        {
+          "id": "facts:none",
+          "type": "fact_materialization_empty",
+          "severity": "error",
+          "message": "已识别到表格，但未成功生成结构化 facts",
+          "recommended_action": "review_column_mappings_and_numeric_cells"
+        }
+      ]
+    },
+    "ignored_issue_ids": [
+      "rule-2"
+    ]
+  },
+  "issue_ids_in_order": [
+    "ai-1",
+    "ai-degraded",
+    "rule-1",
+    "T1:low_confidence",
+    "facts:none"
+  ],
+  "blocking_issue_ids_in_order": [
+    "ai-1",
+    "rule-1",
+    "T1:low_confidence",
+    "facts:none"
+  ],
+  "decisions": {
+    "ai-1": "confirmed",
+    "rule-1": "no_issue",
+    "T1:low_confidence": "in_package"
+  },
+  "expected_counts": {
+    "total": 4,
+    "confirmed": 1,
+    "no_issue": 1,
+    "in_package": 1,
+    "pending": 1,
+    "needs_review": 0
+  },
+  "expected_blocking": {
+    "pending_findings": 1,
+    "needs_review_findings": 0
+  }
+}

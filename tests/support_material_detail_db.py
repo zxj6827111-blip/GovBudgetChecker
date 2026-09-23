@@ -413,6 +413,10 @@ class FakeDetailConnection:
                     "updated_at": job.get("updated_at"),
                     "error_message": job.get("error_message"),
                     "metadata": job.get("metadata"),
+                    # 分析代际（WP3-A migration 0020）。假连接必须与真库列名同步：
+                    # 少了这一列，投影校验会直接报"列不存在"，而不是悄悄给 None
+                    # —— 后者会让"复核绑错代际"这类缺陷在测试里看不出来。
+                    "analysis_revision": job.get("analysis_revision"),
                 }
             ),
             "r": (

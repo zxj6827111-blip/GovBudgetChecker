@@ -57,7 +57,11 @@ def test_migration_0019_registered_once():
 def test_migration_0019_runs_after_0018():
     ids = [migration["id"] for migration in MIGRATIONS]
     assert ids.index("2026-08-26_0018_report_scope_key") < ids.index(MIGRATION_ID)
-    assert ids[-1] == MIGRATION_ID, "0019 应当是目前最后一条迁移"
+    # 0019 曾经是最后一条。WP3-A 之后允许出现**更晚的附加迁移**（0020 复核生命周期），
+    # 但绝不允许有编号更小的迁移插到它后面——那意味着历史迁移被改动过，
+    # 而已入库的环境不会重放它，schema 会静默分叉。
+    tail = ids[ids.index(MIGRATION_ID) + 1 :]
+    assert all(item > MIGRATION_ID for item in tail), tail
 
 
 def test_migration_ids_are_unique_and_ordered():

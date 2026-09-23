@@ -68,6 +68,10 @@ class FakeSlotConnection:
         self.slot_key_by_id: Dict[str, str] = {}
         #: fiscal_document_versions.id -> 行
         self.versions: Dict[Any, Dict[str, Any]] = {}
+        #: 复核会话行（``review_sessions``）。绑定路径会在版本指针推进后
+        #: 让钉在旧版本上的会话失效；这里必须如实模拟，否则
+        #: "指针换了但复核没失效"这条静默不一致在测试里根本看不见。
+        self.review_sessions: List[Dict[str, Any]] = []
         #: 被取过的身份 advisory 锁键，用于断言"首次创建前先按身份串行化"
         self.advisory_locks: List[str] = []
         #: 指定 SQL 片段命中时抛异常，用于故障注入
@@ -101,6 +105,7 @@ class FakeSlotConnection:
             "slots_by_key": copy.deepcopy(self.slots_by_key),
             "slot_key_by_id": dict(self.slot_key_by_id),
             "versions": copy.deepcopy(self.versions),
+            "review_sessions": copy.deepcopy(self.review_sessions),
             "next_slot": self._next_slot,
         }
 
@@ -108,6 +113,7 @@ class FakeSlotConnection:
         self.slots_by_key = snapshot["slots_by_key"]
         self.slot_key_by_id = snapshot["slot_key_by_id"]
         self.versions = snapshot["versions"]
+        self.review_sessions = snapshot["review_sessions"]
         self._next_slot = snapshot["next_slot"]
 
     # ---- 故障注入 ----------------------------------------------------------
@@ -191,9 +197,54 @@ class FakeSlotConnection:
         if "UPDATE material_slots" in normalized and "SET applicability_status" in normalized:
             self._set_not_applicable(args[0], args[1])
             return "UPDATE 1"
+        if normalized.startswith("UPDATE review_sessions AS r"):
+            return f"UPDATE {self._invalidate_stale_review_sessions(args[0])}"
         raise UnknownSqlError(f"假连接不认识这条 execute 语句: {normalized[:160]}")
 
     # ---- 内部状态 ----------------------------------------------------------
+
+    def seed_review_session(
+        self,
+        slot_id: Any,
+        document_version_id: Any,
+        *,
+        status: str = "in_progress",
+        **extra: Any,
+    ) -> Dict[str, Any]:
+        """预置一条复核会话（WP3-A）。"""
+        payload = {
+            "id": f"review-{len(self.review_sessions) + 1}",
+            "slot_id": slot_id,
+            "document_version_id": document_version_id,
+            "status": status,
+            "invalidated_reason": None,
+        }
+        payload.update(extra)
+        self.review_sessions.append(payload)
+        return payload
+
+    def _invalidate_stale_review_sessions(self, slot_id: Any) -> int:
+        """模拟自守卫的失效语句：只失效"钉住的版本已不是当前版本"的会话。
+
+        必须逐字复刻 WHERE 语义（含 ``IS DISTINCT FROM`` 对 NULL 的处理），
+        否则"版本指针没动却把复核失效了"或反过来的缺陷都会在测试里被放过。
+        """
+        slot = self._slot_by_id(slot_id)
+        if slot is None:
+            return 0
+        current = slot.get("current_document_version_id")
+        affected = 0
+        for session in self.review_sessions:
+            if session.get("slot_id") != slot_id:
+                continue
+            if session.get("status") not in ("in_progress", "completed"):
+                continue
+            if session.get("document_version_id") == current:
+                continue
+            session["status"] = "invalidated"
+            session["invalidated_reason"] = "document_version_changed"
+            affected += 1
+        return affected
 
     def seed_version(self, version_id: Any, *, created_at: int = 0, **extra: Any) -> None:
         payload = {"id": version_id, "created_at": created_at, "slot_id": None}

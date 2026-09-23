@@ -13,14 +13,23 @@
  * - `/api/jobs/{job_id}`：job detail（复用既有 toUiProblems/toUiTask 提取问题
  *   与元数据，不重新发明提取逻辑）；
  * - `/api/workflow`：问题工作流状态（唯一路径，见 workflow/route.ts 顶部注释）；
+ * - `/api/reviews?job_uuid=...`：**可持久化的复核生命周期**（WP3-A）——
+ *   由服务端把 job 解析到材料槽位，页面据此判定能否复核、为什么不能；
  * - `/api/files/{job_id}/preview`：缩略图与中栏大图（已有接口，无需新增后端）。
  *
- * 「完成复核」按钮的诚实边界：后端没有"标记任务复核完成"的端点（调研阶段确认
- * 过，`api/routes/jobs.py`/`api/routes/workflow.py` 均无此类写操作），因此本按钮
- * 只在全部问题都已确认/忽略（pending=0）时才可点击，点击后返回处理队列——
- * 它是一个诚实的"确认你已经处理完当前列表"的前端把关，不向后端发送任何
- * 声称"审核已完成"的请求，避免承诺系统做不到的事。此为本批已知边界，
- * 已在交付说明中报告。
+ * 「完成复核」的真实语义（WP3-A 起）
+ * ---------------------------------
+ * 此前这个按钮只在 `pending == 0` 时 `router.push("/queue")`，**没有任何后端写入**
+ * ——刷新之后系统并不知道这份材料被复核过。现在它调用
+ * `POST /api/reviews/{slot_id}/complete`，由服务端重算全部门禁：
+ * 版本是否还是那一版、分析代际是否还是那一代、问题是否都有人表过态、
+ * 身份与口径是否已解决、检查覆盖是否可信且没有阻塞义务。
+ *
+ * 三条前端纪律：
+ * 1. 按钮的 disabled 只是**即时提示**（少让用户白跑一趟），能不能完成永远由
+ *    服务端决定——它还知道版本/代际/覆盖这些前端未必知道的事实；
+ * 2. 服务端返回 `blockers` 时必须逐条显示业务原因，不能只显示"HTTP 409"；
+ * 3. 进入工作台可以幂等自动开复核，但**绝不自动完成**：没有待办不等于人已经确认。
  */
 "use client";
 
@@ -32,6 +41,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button } from "@/components/ui";
 import { resolvePollingDecision } from "@/lib/jobPolling";
 import type { Problem } from "@/lib/mock";
+import { describeBlockers, invalidationReasonLabel } from "@/lib/reviewLifecyclePresentation";
 import type { JobDetailRecord, JobSummaryRecord, StructuredIngestRecord } from "@/lib/uiAdapters";
 import { isUiTaskFinished, normalizeUiTaskStatus, toUiProblems } from "@/lib/uiAdapters";
 
@@ -40,6 +50,21 @@ import type { IssueWorkflowAction } from "./IssueCard";
 import { IssuesTab } from "./IssuesTab";
 import { MetadataTab } from "./MetadataTab";
 import { PdfViewerPane } from "./PdfViewerPane";
+import {
+  REVIEW_CONTEXT_UNAVAILABLE_MESSAGE,
+  describeCompletedReview,
+  formatReviewMoment,
+  latestCompletedSession,
+  latestInvalidatedSession,
+  parseReviewErrorDetail,
+  resolveCompleteButtonState,
+  resolveReviewBadge,
+  shouldAutoStartReview,
+  toReviewContextState,
+  type ReviewByJobDataRecord,
+  type ReviewContextState,
+  type ReviewErrorDetail,
+} from "./reviewLifecycleAdapters";
 import {
   computeWorkflowStatusCounts,
   extractTotalPageCount,
@@ -93,9 +118,19 @@ export function ReviewWorkbenchPage() {
   const [noteDialogProblem, setNoteDialogProblem] = useState<Problem | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [isReanalyzing, setIsReanalyzing] = useState(false);
+  /** 复核生命周期上下文（WP3-A）：由服务端把 job 解析到材料槽位后返回。 */
+  const [reviewContext, setReviewContext] = useState<ReviewContextState>({ kind: "loading" });
+  /** 正在提交复核写动作（开始/完成/重开）。 */
+  const [reviewBusy, setReviewBusy] = useState(false);
+  /** 服务端拒绝完成时的业务原因（逐条显示，不是一句"HTTP 409"）。 */
+  const [reviewBlockers, setReviewBlockers] = useState<ReviewErrorDetail | null>(null);
+  /** 复核写动作失败的非门禁原因（网络/权限/服务不可用）。 */
+  const [reviewNotice, setReviewNotice] = useState<string | null>(null);
   /** 无 job 参数时已尝试过自动选择（只试一次，避免每次渲染都重复请求）。 */
   const [autoSelectDone, setAutoSelectDone] = useState(false);
   const loadSeqRef = useRef(0);
+  /** 自动开复核只尝试一次：重复调用虽然幂等，但会让网络面板刷满请求。 */
+  const autoStartTriedRef = useRef(false);
 
   /** 最新 detail 的旁路引用：轮询决策每次续排时实时读取。 */
   const detailRef = useRef<JobDetailRecord | null>(null);
@@ -138,6 +173,88 @@ export function ReviewWorkbenchPage() {
     };
   }, [jobId, autoSelectDone, router]);
 
+  /**
+   * 装载复核生命周期上下文（WP3-A）。
+   *
+   * 必须由服务端把 job 解析到槽位：页面只知道 job_id，而"这次运行属于哪条应收
+   * 材料"只能靠 `structured_ingest.document_version_id` 这条精确链路确定。
+   * 解析不出来（旧任务没有精确版本链路）时**不是错误**：页面显示"仅供查看历史
+   * 审核内容"并关闭完成入口（§七十三）。
+   */
+  const loadReviewContext = useCallback(async (): Promise<ReviewContextState> => {
+    if (!jobId) {
+      return { kind: "unavailable", message: REVIEW_CONTEXT_UNAVAILABLE_MESSAGE };
+    }
+    let payload: ReviewByJobDataRecord | null = null;
+    try {
+      const response = await fetch(`/api/reviews?job_uuid=${encodeURIComponent(jobId)}`, {
+        cache: "no-store",
+      });
+      if (response.ok) {
+        const body = (await response.json()) as { data?: ReviewByJobDataRecord };
+        payload = body.data ?? null;
+      }
+    } catch {
+      payload = null;
+    }
+    const next = toReviewContextState(payload);
+    setReviewContext(next);
+    return next;
+  }, [jobId]);
+
+  /**
+   * 提交一次复核写动作（start / complete / reopen）。
+   *
+   * 返回值把"是否成功 + 业务错误体"一起交给调用方：门禁拒绝与网络失败要分开处理，
+   * 前者要逐条展示 blockers，后者只能说"服务暂时不可用"。
+   */
+  const submitReviewAction = useCallback(
+    async (
+      slotId: string,
+      action: "start" | "complete" | "reopen",
+    ): Promise<{ ok: boolean; detail: ReviewErrorDetail | null }> => {
+      setReviewBusy(true);
+      setReviewNotice(null);
+      try {
+        const response = await fetch(`/api/reviews/${encodeURIComponent(slotId)}/${action}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ job_uuid: jobId }),
+        });
+        if (response.ok) {
+          setReviewBlockers(null);
+          return { ok: true, detail: null };
+        }
+        let body: unknown = null;
+        try {
+          body = await response.json();
+        } catch {
+          body = null;
+        }
+        const parsed = parseReviewErrorDetail(body);
+        if (parsed) {
+          // 门禁拒绝：逐条展示业务原因。只显示"HTTP 409"等于把唯一有用的信息丢掉。
+          setReviewBlockers(parsed);
+          return { ok: false, detail: parsed };
+        }
+        setReviewNotice(
+          response.status === 403
+            ? "没有权限对这条材料执行该操作。"
+            : response.status === 404
+              ? "这条材料的复核上下文已不存在。"
+              : `操作未完成（HTTP ${response.status}）。`,
+        );
+        return { ok: false, detail: null };
+      } catch {
+        setReviewNotice("复核服务暂时不可用，请稍后重试。");
+        return { ok: false, detail: null };
+      } finally {
+        setReviewBusy(false);
+      }
+    },
+    [jobId],
+  );
+
   const loadJobDetail = useCallback(
     async (options: { silent?: boolean } = {}) => {
       if (!jobId) {
@@ -173,10 +290,30 @@ export function ReviewWorkbenchPage() {
       setDetail(jobDetail);
       setProblems(nextProblems);
       setLoading(false);
+
+      // 任务可复核时才解析复核上下文：未分析完成的材料没有可复核的对象，
+      // 此时请求只会换来一个必然失败的 409。自动开复核只尝试一次
+      // （虽然幂等，但重复调用会让网络面板刷满请求）。
+      if (isUiTaskFinished(normalizeUiTaskStatus(jobDetail.status)) && !autoStartTriedRef.current) {
+        autoStartTriedRef.current = true;
+        const context = await loadReviewContext();
+        if (context.kind === "available" && shouldAutoStartReview(context.review)) {
+          const started = await submitReviewAction(context.review.slot_id, "start");
+          if (started.ok) {
+            await loadReviewContext();
+          }
+        }
+      }
     },
-    [jobId],
+    [jobId, loadReviewContext, submitReviewAction],
   );
 
+  /**
+   * 装载问题工作流状态（`/api/workflow` 是问题人工处理状态的**唯一**路径）。
+   *
+   * 只保留当前任务的记录：同一个 store 里混着全部任务的问题决定，
+   * 不过滤会让另一份材料的"已确认"显示在本页上。
+   */
   const loadWorkflow = useCallback(async () => {
     const payload = await fetchJson<WorkflowStateResponse>("/api/workflow", {});
     const issues = payload.issues ?? {};
@@ -195,6 +332,9 @@ export function ReviewWorkbenchPage() {
     setWorkflowNotes(nextNotes);
   }, [jobId]);
 
+  // 首次装载：任务详情 + 问题工作流状态。
+  // 两者都要：只拉详情会让"已确认/已忽略"在刷新后归零（工作流状态是另一条接口），
+  // 用户会以为自己的处理动作丢了。
   useEffect(() => {
     void loadJobDetail();
     void loadWorkflow();
@@ -217,6 +357,11 @@ export function ReviewWorkbenchPage() {
   useEffect(() => {
     setCurrentPage(1);
     setSelectedProblemId(null);
+    // 切换任务时重置复核状态：否则上一条材料的 blockers 会挂在新材料的页面上。
+    autoStartTriedRef.current = false;
+    setReviewBlockers(null);
+    setReviewNotice(null);
+    setReviewContext({ kind: "loading" });
   }, [jobId]);
 
   const totalPages = extractTotalPageCount(detail);
@@ -334,6 +479,36 @@ export function ReviewWorkbenchPage() {
     window.open(`/api/reports/download?job_id=${encodeURIComponent(jobId)}&format=pdf`, "_blank");
   }, [jobId]);
 
+  /**
+   * 完成复核：调服务端门禁，只有服务端说通过才算完成。
+   *
+   * 成功后刷新复核上下文与任务详情：页面必须显示"已完成复核 + 复核人 + 时间"，
+   * 而不是跳走——用户需要看到这件事**真的被记下来了**（这正是此前那个假完成
+   * 缺的东西）。
+   */
+  const handleCompleteReview = useCallback(async () => {
+    if (reviewContext.kind !== "available") {
+      return;
+    }
+    const result = await submitReviewAction(reviewContext.review.slot_id, "complete");
+    if (result.ok) {
+      await loadReviewContext();
+      await loadJobDetail({ silent: true });
+    }
+  }, [loadJobDetail, loadReviewContext, reviewContext, submitReviewAction]);
+
+  /** 重新复核：显式 reopen（旧完成记录转失效，另起一条新会话）。 */
+  const handleReopenReview = useCallback(async () => {
+    if (reviewContext.kind !== "available") {
+      return;
+    }
+    const result = await submitReviewAction(reviewContext.review.slot_id, "reopen");
+    if (result.ok) {
+      await loadReviewContext();
+      await loadJobDetail({ silent: true });
+    }
+  }, [loadJobDetail, loadReviewContext, reviewContext, submitReviewAction]);
+
   if (!jobId) {
     return (
       <div className="flex h-full flex-col items-center justify-center p-8 text-center" data-testid="gbc-review-no-job">
@@ -391,6 +566,23 @@ export function ReviewWorkbenchPage() {
   const filename = String(detail.filename ?? jobId);
   const reportId = String(detail.structured_report_id ?? "").trim();
 
+  const reviewData = reviewContext.kind === "available" ? reviewContext.review : null;
+  const reviewBadge = resolveReviewBadge(reviewData);
+  const completedSummary = describeCompletedReview(latestCompletedSession(reviewData));
+  const invalidated = latestInvalidatedSession(reviewData);
+  const completeButton = resolveCompleteButtonState(reviewData, statusCounts.pending);
+  const blockerLines = describeBlockers(reviewBlockers?.blockers ?? []);
+  /**
+   * 服务端算出的门禁阻塞：**常驻**显示，而不是等用户点了按钮才出现。
+   *
+   * 两个理由：
+   * 1. 按钮在"还有待处理问题"时是 disabled 的，用户根本点不下去——若只在点击
+   *    之后才显示原因，他就只能看着一个灰按钮，不知道还差什么（§七十九）；
+   * 2. 版本已换、分析已重跑这类事实过期，是**打开页面就该知道**的事，
+   *    藏在一个需要点击才能触发的提示里等于没说。
+   */
+  const gateBlockerLines = describeBlockers(reviewData?.completion_gate?.blockers ?? []);
+
   return (
     <div className="flex h-full flex-col overflow-hidden" data-testid="gbc-review-workbench-page">
       <div className="flex shrink-0 items-center justify-between border-b border-border bg-white px-6 py-3">
@@ -410,10 +602,18 @@ export function ReviewWorkbenchPage() {
                 {filename}
               </span>
               <Badge tone={headerBadge.tone}>{headerBadge.label}</Badge>
+              {reviewBadge ? (
+                <span data-testid="gbc-review-lifecycle-badge">
+                  <Badge tone={reviewBadge.tone}>{reviewBadge.label}</Badge>
+                </span>
+              ) : null}
             </div>
             <div className="mt-0.5 text-xs text-slate-400" data-testid="gbc-review-header-meta">
               {reportId ? `报告 ${reportId} · ` : ""}
               {totalPages !== null ? `${totalPages} 页` : "页数未知"}
+              {completedSummary ? (
+                <span data-testid="gbc-review-completed-summary"> · 已完成复核：{completedSummary}</span>
+              ) : null}
             </div>
           </div>
         </div>
@@ -426,15 +626,84 @@ export function ReviewWorkbenchPage() {
           </Button>
           <Button
             variant="primary"
-            onClick={() => router.push("/queue" as Route)}
-            disabled={statusCounts.pending > 0}
+            onClick={() =>
+              void (completeButton.completed ? handleReopenReview() : handleCompleteReview())
+            }
+            disabled={
+              reviewBusy ||
+              reviewContext.kind !== "available" ||
+              (!completeButton.completed && !completeButton.enabled)
+            }
             data-testid="gbc-review-complete"
-            title={statusCounts.pending > 0 ? "还有待处理问题，无法标记复核完成" : undefined}
+            title={
+              reviewContext.kind !== "available"
+                ? REVIEW_CONTEXT_UNAVAILABLE_MESSAGE
+                : completeButton.hint || undefined
+            }
           >
-            完成复核
+            {reviewBusy ? "提交中…" : completeButton.label}
           </Button>
         </div>
       </div>
+
+      {/* 复核生命周期的状态与拒绝原因：都必须出现在页面上，而不是只留在控制台。
+          「为什么不能完成复核」是这个页面最有价值的信息，只显示 HTTP 409 等于
+          把它丢掉。*/}
+      {reviewContext.kind === "unavailable" ? (
+        <div
+          className="shrink-0 border-b border-amber-200 bg-amber-50 px-6 py-2 text-xs text-amber-800"
+          data-testid="gbc-review-context-unavailable"
+        >
+          {reviewContext.message}
+        </div>
+      ) : null}
+      {invalidated && !completedSummary ? (
+        <div
+          className="shrink-0 border-b border-amber-200 bg-amber-50 px-6 py-2 text-xs text-amber-800"
+          data-testid="gbc-review-invalidated-notice"
+        >
+          {invalidationReasonLabel(invalidated.invalidated_reason) ||
+            "复核已失效，需要重新复核"}{" "}
+        </div>
+      ) : null}
+      {reviewNotice ? (
+        <div
+          className="shrink-0 border-b border-rose-200 bg-rose-50 px-6 py-2 text-xs text-rose-700"
+          data-testid="gbc-review-action-notice"
+        >
+          {reviewNotice}
+        </div>
+      ) : null}
+      {blockerLines.length > 0 ? (
+        <div
+          className="shrink-0 border-b border-rose-200 bg-rose-50 px-6 py-2 text-xs text-rose-700"
+          data-testid="gbc-review-complete-blockers"
+        >
+          <span className="font-medium">当前无法完成复核：</span>
+          <ul className="mt-1 list-disc pl-5">
+            {blockerLines.map((line) => (
+              <li key={line} data-testid="gbc-review-complete-blocker-item">
+                {line}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {gateBlockerLines.length > 0 ? (
+        <div
+          className="shrink-0 border-b border-amber-200 bg-amber-50 px-6 py-2 text-xs text-amber-800"
+          data-testid="gbc-review-gate-blockers"
+        >
+          <span className="font-medium">当前无法完成复核：</span>
+          <ul className="mt-1 list-disc pl-5">
+            {gateBlockerLines.map((line) => (
+              <li key={line} data-testid="gbc-review-gate-blocker-item">
+                {line}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="grid flex-1 grid-cols-[220px_1fr_360px] overflow-hidden">
         <div className="overflow-hidden border-r border-border bg-white">
@@ -499,7 +768,9 @@ export function ReviewWorkbenchPage() {
 
       <div className="flex shrink-0 items-center justify-between border-t border-border bg-white px-6 py-2 text-xs text-slate-500">
         <div data-testid="gbc-review-status-bar-counts">
-          已确认 {statusCounts.confirmed} · 已忽略 {statusCounts.ignored} · 待处理 {statusCounts.pending}
+          已确认 {statusCounts.confirmed} · 已忽略 {statusCounts.ignored} · 已进整改包{" "}
+          {statusCounts.inPackage} · 待复核 {statusCounts.needsReview} · 待处理{" "}
+          {statusCounts.pending}
         </div>
         <div data-testid="gbc-review-status-bar-saved-at">
           {lastSavedAt ? `自动保存于 ${formatSavedAtTime(lastSavedAt)}` : "尚无保存记录"}
