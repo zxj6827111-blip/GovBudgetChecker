@@ -347,7 +347,7 @@ test.describe("Review lifecycle (WP3-A)", () => {
     await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核已失效");
   });
 
-  test("阻塞义务：还有 2 项检查义务未完成时禁止完成，并说出条数", async ({ page }) => {
+  test("阻塞义务：还有 2 项检查义务待人工补核时禁止完成，并说出条数", async ({ page }) => {
     const state = freshState({
       activeSession: buildSession(),
       completionBlockers: [{ code: "blocking_obligations", count: 2 }],
@@ -358,8 +358,9 @@ test.describe("Review lifecycle (WP3-A)", () => {
     await page.goto(`/review?job=${JOB_ID}`);
 
     const blockers = page.getByTestId("gbc-review-gate-blockers");
-    await expect(blockers).toContainText("还有 2 项检查义务未完成");
-    // 能力边界要如实说明，不能让用户以为"处理完问题就能完成"
+    // WP3-B：文案必须说出条数，且指路到「检查补核」页签（能力已交付，
+    // 不再是"该能力将在人工补核流程中处理"这种期货话术）。
+    await expect(blockers).toContainText("还有 2 项检查义务待人工补核");
     await expect(blockers).toContainText("人工补核");
 
     // 按钮此时应当是灰的（即时提示）：点不动也是被禁止完成的正确表现之一

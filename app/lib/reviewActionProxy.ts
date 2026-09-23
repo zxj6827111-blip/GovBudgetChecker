@@ -55,3 +55,46 @@ export async function proxyReviewAction(
     return NextResponse.json({ detail: "review service unavailable" }, { status: 502 });
   }
 }
+
+/**
+ * 人工补核写动作的代理（WP3-B）：`PUT /api/reviews/{slotId}/obligations/{obligationId}`。
+ *
+ * 与 ``proxyReviewAction`` 共用同一份透传纪律（请求体原样、状态码原样、
+ * 409 的 blockers / current_revision 不许被吞），只是方法与路径形态不同——
+ * 义务 id 进路径，决定进请求体。
+ */
+export async function proxyObligationDecision(
+  request: NextRequest,
+  slotId: string,
+  obligationId: string,
+): Promise<Response> {
+  const auth = await requireBackendAuthHeaders({ "Content-Type": "application/json" });
+  if (!auth.ok) {
+    return auth.response;
+  }
+
+  const upstreamUrl = new URL(
+    `${apiBase}/api/reviews/${encodeURIComponent(slotId)}/obligations/${encodeURIComponent(obligationId)}`,
+  );
+
+  try {
+    const response = await fetchWithTimeout(upstreamUrl.toString(), {
+      method: "PUT",
+      cache: "no-store",
+      headers: auth.headers,
+      body: await request.text(),
+    });
+    return new NextResponse(await response.text(), {
+      status: response.status,
+      headers: {
+        "Content-Type": response.headers.get("content-type") ?? "application/json",
+      },
+    });
+  } catch (error) {
+    console.error("Obligation decision proxy failed", {
+      obligation_id: obligationId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return NextResponse.json({ detail: "review service unavailable" }, { status: 502 });
+  }
+}

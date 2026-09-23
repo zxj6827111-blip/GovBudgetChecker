@@ -1217,6 +1217,89 @@ MIGRATIONS: List[Dict[str, Any]] = [
             "ON review_sessions(slot_id, document_version_id)",
         ]
     },
+    {
+        "id": "2026-09-23_0021_review_obligation_decisions",
+        "description": (
+            "人工补核决定（WP3-B）：review_obligation_decisions 把「检查义务的人工处理"
+            "结论」持久化为绑定 review_session 的数据库事实。此前 coverage 的阻塞义务"
+            "只能整体卡住复核完成（blocking_obligations 门禁），没有任何人工补核入口；"
+            "本迁移之后，完成门禁承认 verified_ok / verified_issue / not_applicable "
+            "三种人工结论，pending（含无记录）继续阻塞。只新增，不改历史迁移 0019/0020。"
+        ),
+        "sql": [
+            # 只重放本迁移时也需要 pgcrypto 的 gen_random_uuid()。
+            "CREATE EXTENSION IF NOT EXISTS pgcrypto",
+
+            # ------------------------------------------------------------------
+            # review_obligation_decisions —— 一条检查义务在一次复核会话上的人工结论。
+            #
+            # 为什么绑定 review_session 而不是 (obligation_id, job_uuid)：
+            # 同一份材料可能有 V1 复核、V2 复核、同一 job_uuid 上的多个分析代际，
+            # 只有「哪一次复核」能回答"这项补核结论是在什么上下文里做出的"。
+            # 会话失效（版本替换/重新分析/显式重开）之后，它的决定留在表里供审计
+            # 追溯，但不再参与完成门禁——门禁只读**当前有效会话**的决定。
+            #
+            # 为什么 obligation_id 是 TEXT 而不是外键：义务编号（OBL-*）属于
+            # 代码内的版本化清单（check_obligations.OBLIGATION_CATALOG），
+            # 随检查能力演进；落成数据库外键反而会让"本文库升级了检查清单"
+            # 被历史决定卡住。
+            # ------------------------------------------------------------------
+            """
+            CREATE TABLE IF NOT EXISTS review_obligation_decisions (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+                -- 与 review_sessions 同一条纪律：审计材料，RESTRICT 而不是 CASCADE。
+                review_session_id UUID NOT NULL
+                    REFERENCES review_sessions(id) ON DELETE RESTRICT,
+                slot_id UUID NOT NULL
+                    REFERENCES material_slots(id) ON DELETE RESTRICT,
+
+                obligation_id TEXT NOT NULL,
+
+                -- 四态口径见 src/schemas/review_lifecycle.py：
+                -- pending（待处理，含"没有记录"）/ verified_ok（人工补核通过）/
+                -- verified_issue（人工确认存在问题）/ not_applicable（人工判定不适用）。
+                -- 三个 verified_* / not_applicable 才算"已处理"；它们只能由人工
+                -- 显式写入，任何自动推导（覆盖不可用→不适用、取数不足→没问题、
+                -- AI 通过→没问题）都被禁止。
+                decision TEXT NOT NULL
+                    CONSTRAINT ck_review_obligation_decisions_value
+                    CHECK (decision IN (
+                        'pending', 'verified_ok', 'verified_issue', 'not_applicable'
+                    )),
+
+                -- 复核人写的依据与证据指引（页码/表名/问题编号等）。
+                note TEXT,
+                evidence_reference TEXT,
+
+                reviewer TEXT NOT NULL,
+                reviewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+                -- 乐观锁代数：每次写入 +1。改写已有决定必须带
+                -- ``expected_revision``，带错由 ``WHERE revision = $n`` 命中 0 行
+                -- 拒绝——不允许静默覆盖另一个复核人的结论。
+                revision INTEGER NOT NULL DEFAULT 1
+                    CONSTRAINT ck_review_obligation_decisions_revision
+                    CHECK (revision >= 1),
+
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+
+            # 一次复核会话内，同一义务**至多一条**决定。
+            #
+            # 与 uq_review_sessions_active 同一条纪律：应用层当然可以"先查再写"，
+            # 但并发下它一定漏；唯一约束才是最终保证。两个复核人同时对同一义务
+            # 首次表态时，后到者拿唯一冲突 → 409，而不是静默覆盖先到者的结论。
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_review_obligation_decisions_scope "
+            "ON review_obligation_decisions (review_session_id, obligation_id)",
+
+            # 门禁/详情按会话取全部决定；审计/排障按槽位回看历史决定。
+            "CREATE INDEX IF NOT EXISTS idx_review_obligation_decisions_slot "
+            "ON review_obligation_decisions (slot_id, review_session_id)",
+        ]
+    },
 ]
 
 

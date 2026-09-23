@@ -39,6 +39,8 @@ from api.routes import reviews as reviews_routes
 from src.schemas.review_lifecycle import (
     CompletionGate,
     CurrentAnalysisRef,
+    ObligationDecisionData,
+    ObligationDecisionRecord,
     ReviewBlocker,
     ReviewContextData,
     ReviewByJobData,
@@ -74,19 +76,36 @@ class UnknownReviewSqlError(AssertionError):
 
 
 class MinimalSlotConnection:
-    """只认识 ``SELECT <槽位列> FROM material_slots WHERE id = $1`` 的假连接。"""
+    """授权链路需要的最小假连接。
 
-    def __init__(self, rows: List[Dict[str, Any]]) -> None:
+    认识两条语句（都是**真实路由会发**的）：
+
+    1. ``SELECT <槽位列> FROM material_slots WHERE id = $1``（槽位权限）；
+    2. 版本-运行联合查询（写路径在省略 job_uuid 时用它解析当前分析，
+       见 ``load_version_run_rows``；独立评审 P1 修复后这条语句在写路径上）。
+
+    对不认识的 SQL 直接报错：静默返回空结果会让"权限谓词漏接线"
+    表现为"用例通过"。
+    """
+
+    def __init__(
+        self,
+        rows: List[Dict[str, Any]],
+        run_rows: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    ) -> None:
         self.rows = rows
+        self.run_rows = run_rows or {}
         self.calls: List[tuple] = []
 
     async def fetch(self, sql: str, *args: Any) -> List[Dict[str, Any]]:
         normalized = " ".join(str(sql or "").split())
         self.calls.append((normalized, args))
-        if "FROM material_slots" not in normalized or "WHERE id = $1" not in normalized:
-            raise UnknownReviewSqlError(f"假连接不认识这条 fetch 语句: {normalized[:160]}")
         slot_id = args[0]
-        return [dict(row) for row in self.rows if str(row.get("slot_id")) == str(slot_id)]
+        if "FROM material_slots" in normalized and "WHERE id = $1" in normalized:
+            return [dict(row) for row in self.rows if str(row.get("slot_id")) == str(slot_id)]
+        if "FROM fiscal_document_versions" in normalized and "analysis_jobs" in normalized:
+            return [dict(row) for row in self.run_rows.get(str(slot_id), [])]
+        raise UnknownReviewSqlError(f"假连接不认识这条 fetch 语句: {normalized[:160]}")
 
 
 def _slot_row(slot_id: str, *, subject_org_id: str) -> Dict[str, Any]:
@@ -99,6 +118,32 @@ def _slot_row(slot_id: str, *, subject_org_id: str) -> Dict[str, Any]:
         "current_document_version_id": 11,
         "status": "review_required",
         "status_reason": "findings_pending",
+    }
+
+
+def _run_row(job_uuid: str = "job-1", version_id: int = 11) -> Dict[str, Any]:
+    """当前分析运行行（形状与 ``load_version_run_rows`` 的投影一致）。
+
+    只有授权链路会用到它：把 job_uuid 解析出来后，任务权限判定读的是
+    任务目录里的 status.json（job-1 属 unit-user 名下，见 fixture）。
+    """
+    return {
+        "document_version_id": version_id,
+        "id": 501,
+        "job_uuid": job_uuid,
+        "status": "done",
+        "mode": "dual",
+        "started_at": NOW,
+        "completed_at": NOW,
+        "created_at": NOW,
+        "updated_at": NOW,
+        "error_message": None,
+        "metadata": '{"structured_ingest": {"document_version_id": 11}, "result_meta": {}}',
+        "analysis_revision": 1,
+        "result_id": 9001,
+        "ai_findings": [],
+        "rule_findings": [],
+        "merged_result": {},
     }
 
 
@@ -168,7 +213,12 @@ def client(tmp_path, monkeypatch, org_tree):
             _slot_row(SLOT_MINE, subject_org_id=org_tree["sub_unit"]),
             _slot_row(SLOT_SIBLING, subject_org_id=org_tree["sibling_unit"]),
             _slot_row(SLOT_OTHER_DISTRICT, subject_org_id=org_tree["other_unit"]),
-        ]
+        ],
+        run_rows={
+            SLOT_MINE: [_run_row()],
+            SLOT_SIBLING: [_run_row()],
+            SLOT_OTHER_DISTRICT: [_run_row()],
+        },
     )
 
     async def _open():
@@ -395,17 +445,20 @@ def test_malformed_body_is_422(client):
 
 
 def test_empty_body_is_accepted(client, monkeypatch):
-    """请求体是可选的：工作台只带 job_uuid，也可以什么都不带。"""
+    """请求体是可选的；省略 job_uuid 时服务端自行解析当前分析并
+    把 candidate 传给 service 二次校验（独立评审 P1：省略 ≠ 免权限）。"""
     token = _admin(client)
+    captured: List[Optional[str]] = []
 
     async def _start(conn, slot_id, *, actor, job_uuid=None):
-        assert job_uuid is None
+        captured.append(job_uuid)
         return _mutation_data()
 
     monkeypatch.setattr(review_lifecycle_service, "start_review", _start)
     response = client.post(f"/api/reviews/{SLOT_MINE}/start", headers=_headers(token))
     assert response.status_code == 200, response.text
     assert response.json()["data"]["session"]["review_session_id"] == "sess-1"
+    assert captured == ["job-1"], "服务端必须把解析出的当前分析传给 service"
 
 
 # ==== 按任务解析上下文 ======================================================
@@ -577,3 +630,267 @@ def test_review_slot_scope_matrix_admin_can_read_everything(client, org_tree, st
     token = _admin(client)
     for slot_id in (SLOT_MINE, SLOT_SIBLING, SLOT_OTHER_DISTRICT):
         assert _read_review(client, token, slot_id) == 200
+
+
+# ==== 人工补核接口（WP3-B） ===================================================
+
+
+def _decision_data(**overrides) -> ObligationDecisionData:
+    payload: Dict[str, Any] = {
+        "slot_id": SLOT_MINE,
+        "current_document_version_id": 11,
+        "session": _session(),
+        "decision": ObligationDecisionRecord(
+            review_session_id="sess-1",
+            slot_id=SLOT_MINE,
+            obligation_id="OBL-SG-COMPLETION",
+            decision="verified_ok",
+            note="已人工核对三公表与说明",
+            evidence_reference="第 12 页",
+            reviewer="admin",
+            reviewed_at=NOW.isoformat(),
+            revision=1,
+        ),
+        "completion_gate": CompletionGate(can_complete=True, blockers=[]),
+        "blockers": [],
+    }
+    payload.update(overrides)
+    return ObligationDecisionData(**payload)
+
+
+def test_obligation_decision_requires_login(client, monkeypatch):
+    monkeypatch.setenv("TESTING", "false")
+    response = client.put(
+        f"/api/reviews/{SLOT_MINE}/obligations/OBL-SG-COMPLETION",
+        json={"decision": "verified_ok"},
+    )
+    assert response.status_code == 401
+
+
+def test_obligation_decision_sibling_slot_is_forbidden(client, org_tree):
+    """IDOR：补核接口不得绕过槽位权限（任务书 §十四，与 start/complete 同一入口判定）。"""
+    token = _unit_user(client, [org_tree["sub_unit"]])
+    response = client.put(
+        f"/api/reviews/{SLOT_SIBLING}/obligations/OBL-SG-COMPLETION",
+        headers=_headers(token),
+        json={"decision": "verified_ok"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "slot access denied"
+
+
+def test_obligation_decision_invalid_value_is_422(client):
+    """decision 只能是四态之一；拼错的状态码不能静默放行（参数问题 → 422）。"""
+    token = _admin(client)
+    response = client.put(
+        f"/api/reviews/{SLOT_MINE}/obligations/OBL-SG-COMPLETION",
+        headers=_headers(token),
+        json={"decision": "approved"},
+    )
+    assert response.status_code == 422
+
+
+def test_obligation_decision_success_returns_gate(client, monkeypatch):
+    token = _admin(client)
+
+    async def _decide(conn, slot_id, *, obligation_id, decision, actor, **kwargs):
+        assert slot_id == SLOT_MINE
+        assert obligation_id == "OBL-SG-COMPLETION"
+        assert decision == "verified_ok"
+        return _decision_data()
+
+    monkeypatch.setattr(review_lifecycle_service, "decide_obligation", _decide)
+    response = client.put(
+        f"/api/reviews/{SLOT_MINE}/obligations/OBL-SG-COMPLETION",
+        headers=_headers(token),
+        json={"decision": "verified_ok", "note": "已人工核对", "job_uuid": "job-1"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["data"]["decision"]["decision"] == "verified_ok"
+    assert body["data"]["completion_gate"]["can_complete"] is True
+
+
+def test_obligation_decision_conflict_is_structured_409(client, monkeypatch):
+    """并发/过期写入：detail 带 error 与 current_revision，前端据此提示刷新。"""
+    token = _admin(client)
+
+    async def _conflict(conn, slot_id, *, obligation_id, decision, actor, **kwargs):
+        raise review_lifecycle_service.ReviewLifecycleError(
+            409,
+            "obligation_decision_conflict",
+            "该义务的补核状态已变化，请刷新后重试",
+            current_revision=3,
+        )
+
+    monkeypatch.setattr(review_lifecycle_service, "decide_obligation", _conflict)
+    response = client.put(
+        f"/api/reviews/{SLOT_MINE}/obligations/OBL-SG-COMPLETION",
+        headers=_headers(token),
+        json={"decision": "verified_ok", "expected_revision": 1},
+    )
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["error"] == "obligation_decision_conflict"
+    assert detail["current_revision"] == 3
+
+
+def test_rejected_obligation_decision_is_audited(client, monkeypatch, tmp_path):
+    """被拒绝的补核尝试也要留痕（成功审计唯一写入口在服务层，路由只记拒绝）。"""
+    import json as _json
+
+    audit_path = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    token = _admin(client)
+
+    async def _blocked(conn, slot_id, *, obligation_id, decision, actor, **kwargs):
+        raise review_lifecycle_service.ReviewLifecycleError(
+            409, "review_not_active", "请先开始复核，再处理检查义务"
+        )
+
+    monkeypatch.setattr(review_lifecycle_service, "decide_obligation", _blocked)
+    response = client.put(
+        f"/api/reviews/{SLOT_MINE}/obligations/OBL-SG-COMPLETION",
+        headers=_headers(token),
+        json={"decision": "verified_ok"},
+    )
+    assert response.status_code == 409
+
+    events = [
+        _json.loads(line)
+        for line in audit_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    rejected = [item for item in events if item["result"] == "rejected"]
+    assert rejected
+    assert rejected[-1]["action"] == "obligation.review"
+    assert rejected[-1]["details"]["obligation_id"] == "OBL-SG-COMPLETION"
+    assert rejected[-1]["details"]["error"] == "review_not_active"
+
+
+def test_successful_obligation_decision_is_not_audited_in_route(client, monkeypatch, tmp_path):
+    """与 start/complete/reopen 同一纪律：成功审计只有服务层一个写入口。"""
+    audit_path = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    token = _admin(client)
+
+    async def _decide(conn, slot_id, *, obligation_id, decision, actor, **kwargs):
+        return _decision_data()
+
+    monkeypatch.setattr(review_lifecycle_service, "decide_obligation", _decide)
+    response = client.put(
+        f"/api/reviews/{SLOT_MINE}/obligations/OBL-SG-COMPLETION",
+        headers=_headers(token),
+        json={"decision": "verified_ok"},
+    )
+    assert response.status_code == 200, response.text
+    assert not audit_path.exists(), "成功路径不允许在路由层再写一条审计"
+
+
+# ==== 写路径授权反例（独立评审 P1，任务书 §六-§九） ==============================
+
+
+def _reviewer_without_job_access(client, org_tree) -> str:
+    """有 SLOT_MINE 的槽位权限，但对 job-1（unit-user 名下）没有任务权限。"""
+    return _unit_user(client, [org_tree["sub_unit"]], name="reviewer-b")
+
+
+def test_writes_without_job_uuid_still_require_job_access(client, org_tree, monkeypatch):
+    """§六-A/B/C：省略 job_uuid 不再跳过任务层检查——四条写路径全部 403。"""
+    token = _reviewer_without_job_access(client, org_tree)
+    hits: List[str] = []
+
+    async def _record(*args: Any, **kwargs: Any):
+        hits.append("called")
+        raise AssertionError("权限没拦住，service 不该被调用")
+
+    monkeypatch.setattr(review_lifecycle_service, "start_review", _record)
+    monkeypatch.setattr(review_lifecycle_service, "complete_review", _record)
+    monkeypatch.setattr(review_lifecycle_service, "reopen_review", _record)
+    monkeypatch.setattr(review_lifecycle_service, "decide_obligation", _record)
+
+    responses = [
+        client.post(f"/api/reviews/{SLOT_MINE}/start", headers=_headers(token), json={}),
+        client.post(f"/api/reviews/{SLOT_MINE}/complete", headers=_headers(token), json={}),
+        client.post(f"/api/reviews/{SLOT_MINE}/reopen", headers=_headers(token), json={}),
+        client.put(
+            f"/api/reviews/{SLOT_MINE}/obligations/OBL-A",
+            headers=_headers(token),
+            json={"decision": "verified_ok", "note": "已核对"},
+        ),
+    ]
+    for response in responses:
+        assert response.status_code == 403, response.text
+        assert response.json()["detail"] == "job access denied"
+    assert hits == [], "403 必须由路由层承担，service 一次都不许进"
+
+
+def test_explicit_unauthorized_job_uuid_is_still_403(client, org_tree):
+    """§七：显式声明一个无权的 job，403（与"服务端自己解析"口径一致）。"""
+    token = _reviewer_without_job_access(client, org_tree)
+    response = client.post(
+        f"/api/reviews/{SLOT_MINE}/start",
+        headers=_headers(token),
+        json={"job_uuid": "job-1"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "job access denied"
+
+
+def test_job_slot_mismatch_stays_409_for_double_authorized_user(client, org_tree, monkeypatch):
+    """§八：同一用户同时拥有 Slot 权限与 Job-B 权限，组合仍然 409。"""
+    token = _unit_user(client, [org_tree["sub_unit"]], name="unit-user")  # 拥有 job-1 与 job-other
+
+    async def _mismatch(conn, slot_id, *, actor, job_uuid=None):
+        # service 的真实校验（``_require_job_belongs_to_state``）由
+        # tests/test_obligation_review_pg.py::test_stale_job_claim_is_rejected_without_mutation
+        # 在真库上逐条断言无写入；这里锁的是路由到服务的接线：
+        assert job_uuid == "job-other", "候选 job 必须原样传给 service 再校验"
+        raise review_lifecycle_service.ReviewLifecycleError(
+            409, "review_context_mismatch", "该任务不是这条材料当前的复核对象"
+        )
+
+    monkeypatch.setattr(review_lifecycle_service, "start_review", _mismatch)
+    response = client.post(
+        f"/api/reviews/{SLOT_MINE}/start",
+        headers=_headers(token),
+        json={"job_uuid": "job-other"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "review_context_mismatch"
+
+
+def test_resolved_candidate_that_no_longer_matches_is_409(client, monkeypatch):
+    """§九：路由解析出 Job-A 并有权限；若 service 事务内看到的已是 Job-B，
+    必须以 ``review_context_mismatch`` 收尾（真库层另有无写入断言）。"""
+    token = _admin(client)
+
+    async def _stale(conn, slot_id, *, actor, job_uuid=None):
+        # 路由解析出来的 candidate 到达 service 时被当前事实顶替
+        assert job_uuid == "job-1"
+        raise review_lifecycle_service.ReviewLifecycleError(
+            409, "review_context_mismatch", "该任务不是这条材料当前的复核对象"
+        )
+
+    monkeypatch.setattr(review_lifecycle_service, "complete_review", _stale)
+    response = client.post(f"/api/reviews/{SLOT_MINE}/complete", headers=_headers(token), json={})
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "review_context_mismatch"
+
+
+def test_write_without_resolvable_current_analysis_is_409(client, monkeypatch):
+    """当前版本还没有可复核分析时，服务端解析不出 candidate ⇒ 409 review_context_unavailable。"""
+    token = _admin(client)
+
+    from src.services import review_context_query
+
+    async def _no_analysis(conn, slot_row):
+        return review_context_query.ReviewAnalysis(
+            document_version_id=11, unavailable_reason="none_for_current_version"
+        )
+
+    # 解析不出当前分析 ⇒ 候选为空 ⇒ 路由层直接 409，不进 service
+    monkeypatch.setattr(review_context_query, "resolve_current_analysis", _no_analysis)
+    response = client.post(f"/api/reviews/{SLOT_MINE}/complete", headers=_headers(token), json={})
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "review_context_unavailable"

@@ -38,7 +38,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ---- 会话状态 --------------------------------------------------------------
 
@@ -99,6 +99,63 @@ ERROR_REVIEW_LOCK_UNAVAILABLE = "review_lock_unavailable"
 #: 完成门禁判定所用的"问题集合快照"在落编辑锁之前发生了变化（issue 被改状态、
 #: 或被加入忽略清单）。fail-closed：不写锁、回滚、请用户刷新后重新确认。
 ERROR_REVIEW_WORKFLOW_CHANGED = "review_workflow_changed"
+
+# ---- 人工补核决定（WP3-B） ---------------------------------------------------
+#
+# 词汇口径（先查仓库既有命名，再定新词）：
+#
+# - ``pending`` 与 issue 域（``ISSUE_STATUSES``）同词同义：没有任何人表过态。
+#   数据库里**没有这一行**就是 pending——不存的"待处理"与存下来的"待处理"
+#   对门禁完全一致，避免"有没有记录"改变语义。
+# - ``not_applicable`` 与引擎义务状态（``check_obligations.OBLIGATION_NOT_APPLICABLE``）
+#   同词同义：不适用。区别只在判定者——这里是**人工**判定不适用，引擎那边是
+#   规则/画像判定不适用。两个命名空间不混用，但措辞不另造。
+# - ``verified_ok`` / ``verified_issue`` 是补核动作的两个结论：人工核对后确认
+#   "该项检查义务实际已履行、无问题"，或"确认这里确实存在问题（已知晓/已记录）"。
+#   不借用 issue 域的 ``confirmed`` / ``no_issue``：义务不是问题，
+#   "确认一条义务"与"确认一个问题"是两个业务动作，用词分开才能让审计一眼区分。
+#
+# 禁止自动关闭（任务书红线）：``verified_ok`` / ``verified_issue`` /
+# ``not_applicable`` 只能由人工显式写入；任何"覆盖不可用→不适用""
+# 取数不足→没问题""AI 通过→没问题"的自动推导都不允许存在。
+OBLIGATION_DECISION_PENDING = "pending"
+OBLIGATION_DECISION_VERIFIED_OK = "verified_ok"
+OBLIGATION_DECISION_VERIFIED_ISSUE = "verified_issue"
+OBLIGATION_DECISION_NOT_APPLICABLE = "not_applicable"
+
+OBLIGATION_DECISIONS: tuple = (
+    OBLIGATION_DECISION_PENDING,
+    OBLIGATION_DECISION_VERIFIED_OK,
+    OBLIGATION_DECISION_VERIFIED_ISSUE,
+    OBLIGATION_DECISION_NOT_APPLICABLE,
+)
+
+#: 视为"已处理"的决定。之外的取值（``pending``、**没有记录**、任何未知值）
+#: 全部阻塞完成门禁——与 ``_problem_blockers`` 同一条纪律：把不认识的值当成
+#: "已解决"等于让一个拼错的状态码静默放行复核。
+RESOLVED_OBLIGATION_DECISIONS: frozenset = frozenset(
+    {
+        OBLIGATION_DECISION_VERIFIED_OK,
+        OBLIGATION_DECISION_VERIFIED_ISSUE,
+        OBLIGATION_DECISION_NOT_APPLICABLE,
+    }
+)
+
+#: 业务错误码（HTTP 409 + ``detail.error``），沿用 ``review_*`` 前缀风格。
+#: 没有活动会话时不能补核：决定必须挂在"当前这一次复核"上，先开始再处理。
+ERROR_REVIEW_NOT_ACTIVE = "review_not_active"
+#: 目标义务当前不由引擎判定为阻塞未完成（可能已自动完成或不适用）——
+#: 它没有东西需要人工表态。拒绝写入，避免"给一条已完成义务补核"这种
+#: 自己和自己打架的记录。
+ERROR_OBLIGATION_NOT_BLOCKING = "obligation_not_blocking"
+#: 并发/过期写入被拒：首次创建撞了唯一约束，或更新时 ``expected_revision``
+#: 与库里的 ``revision`` 不一致。客户端必须刷新后重试——**不允许**静默覆盖
+#: 另一个复核人的决定。
+ERROR_OBLIGATION_DECISION_CONFLICT = "obligation_decision_conflict"
+#: resolved 决定缺必要依据（HTTP 422）。请求结构合法但缺业务必填字段属于
+#: 输入校验，不用 409。零依据放行意味着"点一下「不适用」、不写任何说明，
+#: 阻塞义务就消失"——对审计系统不可接受（任务书 §十）。
+ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED = "obligation_decision_evidence_required"
 
 
 class ReviewBlocker(BaseModel):
@@ -184,6 +241,119 @@ class ReviewContextData(BaseModel):
     job_uuid: Optional[str] = None
 
 
+# ---- 人工补核（WP3-B）：obligation 级人工决定 --------------------------------
+#
+# 数据归属（任务书红线）：每条决定**必须**绑定 ``review_session_id``——
+# 同一份材料可以 V1 复核、V2 复核、多个分析代际，"obligation_id + job_uuid"
+# 的关联方式无法区分"这是哪一次复核上的补核结论"。``obligation_id`` 只在
+# 会话内有意义（它指向该会话钉住的分析代际上的义务账本实例）。
+
+
+class ObligationDecisionRecord(BaseModel):
+    """一条人工补核决定的对外形态（对应表 ``review_obligation_decisions``）。"""
+
+    review_session_id: str
+    slot_id: str
+    obligation_id: str
+    decision: str = Field(description="pending / verified_ok / verified_issue / not_applicable")
+    note: Optional[str] = None
+    evidence_reference: Optional[str] = None
+    reviewer: str
+    reviewed_at: str
+    #: 乐观锁代数：每次写入 +1。更新已有决定必须带上它，带错一律 409
+    #: （``obligation_decision_conflict``）——不允许静默覆盖别人的决定。
+    revision: int
+
+
+class ObligationReviewItem(BaseModel):
+    """复核视角的一条检查义务：引擎判定的未完成实例 + 当前会话的人工决定。
+
+    ``decision=None`` 就是"待处理"（数据库里没有这一行），与显式存一条
+    ``pending`` 语义完全一致——门禁只关心"有没有已解决决定"，不关心
+    待处理是哪种写法。
+    """
+
+    obligation_id: str
+    group_id: Optional[str] = None
+    group_title: Optional[str] = None
+    title: Optional[str] = None
+    #: 引擎判定状态（not_executed / insufficient_data / …），机器码，中文在展示层。
+    status: str
+    reason: Optional[str] = None
+    reason_label: Optional[str] = None
+    detail: Optional[str] = None
+    #: 当前有效会话上的人工决定；None = 尚无记录（待处理）。
+    decision: Optional[str] = None
+    decision_revision: Optional[int] = None
+    decided_by: Optional[str] = None
+    decided_at: Optional[str] = None
+    note: Optional[str] = None
+    evidence_reference: Optional[str] = None
+
+
+class ObligationReviewBlock(BaseModel):
+    """``GET /api/reviews*`` 里的人工补核块。
+
+    只包含**当前会话需要人工处理**的义务（引擎判阻塞 ∧ 未完成），并叠加上
+    当前有效会话已经写下的决定。已自动完成的义务在材料详情的覆盖页展示，
+    不属于这里的待办清单。
+
+    ``available=false`` 时 ``items=[]`` 且 ``pending_total=None``：
+    "覆盖不可用"与"0 项待补核"在数字上不能长得一样（与 CoverageBlock 同一纪律）。
+    """
+
+    available: bool = False
+    reason: Optional[str] = None
+    pending_total: Optional[int] = Field(
+        default=None, description="尚无已解决决定的阻塞义务条数；覆盖不可用时为 null"
+    )
+    items: List[ObligationReviewItem] = Field(default_factory=list)
+
+
+class ObligationDecisionRequest(BaseModel):
+    """``PUT /api/reviews/{slot_id}/obligations/{obligation_id}`` 的请求体。
+
+    - ``decision`` 只允许四个取值，违例 422（参数问题）；
+    - 首次表态不传 ``expected_revision``；改写已有决定必须带上读到的
+      ``revision``，带错/缺省一律 409——**禁止**在不知情时覆盖他人的决定
+      （并发红线，任务书 § 十五）；
+    - ``job_uuid`` 与 ``ReviewActionRequest`` 的口径一致：只被当作"待核对的声明"，
+      服务端自行验证它属于这条槽位且正是当前分析。
+    """
+
+    decision: str
+    note: Optional[str] = Field(default=None, max_length=500)
+    evidence_reference: Optional[str] = Field(default=None, max_length=200)
+    expected_revision: Optional[int] = Field(default=None, ge=1)
+    job_uuid: Optional[str] = None
+
+    @field_validator("decision")
+    @classmethod
+    def _decision_must_be_known(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if normalized not in OBLIGATION_DECISIONS:
+            raise ValueError(
+                "decision must be one of: " + ", ".join(OBLIGATION_DECISIONS)
+            )
+        return normalized
+
+
+class ObligationDecisionData(BaseModel):
+    """补核写入的响应体：决定本身 + 重算后的门禁（与 ``ReviewMutationData`` 同构）。"""
+
+    slot_id: str
+    current_document_version_id: Optional[int] = None
+    session: ReviewSessionSummary
+    decision: ObligationDecisionRecord
+    completion_gate: CompletionGate
+    blockers: List[ReviewBlocker] = Field(default_factory=list)
+
+
+class ObligationDecisionResponse(BaseModel):
+    ok: bool = True
+    data: ObligationDecisionData
+
+
 class ReviewLifecycleData(BaseModel):
     """``GET /api/reviews*`` 的统一响应体。"""
 
@@ -193,6 +363,9 @@ class ReviewLifecycleData(BaseModel):
     current_session: Optional[ReviewSessionSummary] = None
     history: List[ReviewHistoryItem] = Field(default_factory=list)
     completion_gate: CompletionGate
+    #: 人工补核块（WP3-B）。注意它**不是**覆盖台账的替代品：材料详情页的
+    #: CoverageTab 展示全量义务，这里只给"本次复核要人工处理的待办"。
+    obligation_review: ObligationReviewBlock = Field(default_factory=ObligationReviewBlock)
 
 
 class ReviewByJobData(BaseModel):
@@ -285,6 +458,22 @@ __all__ = [
     "ERROR_REVIEW_COMPLETED_LOCKED",
     "ERROR_REVIEW_LOCK_UNAVAILABLE",
     "ERROR_REVIEW_WORKFLOW_CHANGED",
+    "OBLIGATION_DECISION_PENDING",
+    "OBLIGATION_DECISION_VERIFIED_OK",
+    "OBLIGATION_DECISION_VERIFIED_ISSUE",
+    "OBLIGATION_DECISION_NOT_APPLICABLE",
+    "OBLIGATION_DECISIONS",
+    "RESOLVED_OBLIGATION_DECISIONS",
+    "ERROR_REVIEW_NOT_ACTIVE",
+    "ERROR_OBLIGATION_NOT_BLOCKING",
+    "ERROR_OBLIGATION_DECISION_CONFLICT",
+    "ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED",
+    "ObligationDecisionRecord",
+    "ObligationReviewItem",
+    "ObligationReviewBlock",
+    "ObligationDecisionRequest",
+    "ObligationDecisionData",
+    "ObligationDecisionResponse",
     "ReviewBlocker",
     "CompletionGate",
     "CurrentAnalysisRef",

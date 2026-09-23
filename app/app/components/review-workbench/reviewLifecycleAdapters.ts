@@ -21,7 +21,7 @@ import {
   invalidationReasonLabel,
   reviewStatusLabel,
   reviewStatusTone,
-} from "@/lib/reviewLifecyclePresentation";
+} from "../../../lib/reviewLifecyclePresentation";
 
 /** 门禁阻塞。 */
 export interface ReviewBlockerRecord {
@@ -87,6 +87,34 @@ export interface ReviewContextRecord {
   job_uuid: string | null;
 }
 
+/** 人工补核（WP3-B）的一条义务：引擎判定的阻塞实例 + 当前会话的人工决定。 */
+export interface ObligationReviewItemRecord {
+  obligation_id: string;
+  group_id: string | null;
+  group_title: string | null;
+  title: string | null;
+  /** 引擎判定状态（not_executed / insufficient_data / …），机器码。 */
+  status: string;
+  reason: string | null;
+  reason_label: string | null;
+  detail: string | null;
+  /** 当前有效会话上的人工决定；null = 尚无记录（待处理）。 */
+  decision: string | null;
+  decision_revision: number | null;
+  decided_by: string | null;
+  decided_at: string | null;
+  note: string | null;
+  evidence_reference: string | null;
+}
+
+/** `obligation_review` 块。`available=false` 时 items 必为空、pending_total 为 null。 */
+export interface ObligationReviewBlockRecord {
+  available: boolean;
+  reason: string | null;
+  pending_total: number | null;
+  items: ObligationReviewItemRecord[];
+}
+
 /** `GET /api/reviews/{slot_id}` 的数据体。 */
 export interface ReviewLifecycleDataRecord {
   slot_id: string;
@@ -95,6 +123,130 @@ export interface ReviewLifecycleDataRecord {
   current_session: ReviewSessionRecord | null;
   history: ReviewHistoryRecord[];
   completion_gate: ReviewCompletionGateRecord;
+  /**
+   * 人工补核块（WP3-B）。旧后端/旧 mock 可能没有该字段——按"无待办"处理，
+   * 不能因为字段缺失就把面板当成"0 项待补核"渲染出来骗人的反方向是
+   * "字段缺失 ⇒ 不渲染面板"，与 available=false 的语义一致。
+   */
+  obligation_review?: ObligationReviewBlockRecord | null;
+}
+
+/** 已处理的人工决定取值（与后端 ``RESOLVED_OBLIGATION_DECISIONS`` 逐字一致）。 */
+export const RESOLVED_OBLIGATION_DECISIONS = [
+  "verified_ok",
+  "verified_issue",
+  "not_applicable",
+] as const;
+
+/** 这条义务在当前会话上是否已被人工处理（待处理 = 无记录 / pending / 未知值）。 */
+export function isObligationHandled(item: ObligationReviewItemRecord | null | undefined): boolean {
+  const decision = String(item?.decision ?? "").trim();
+  return (RESOLVED_OBLIGATION_DECISIONS as readonly string[]).includes(decision);
+}
+
+/** 待补核条数：服务端给了 pending_total 就用它（权威），否则按 items 推一遍。 */
+export function pendingObligationCount(
+  review: ReviewLifecycleDataRecord | null | undefined,
+): number | null {
+  const block = review?.obligation_review;
+  if (!block || !block.available) {
+    return null;
+  }
+  if (typeof block.pending_total === "number" && Number.isFinite(block.pending_total)) {
+    return block.pending_total;
+  }
+  return (block.items ?? []).filter((item) => !isObligationHandled(item)).length;
+}
+
+/**
+ * 当前是否允许在前端发起补核（与「完成复核」按钮同一纪律：
+ * 按钮 disabled 只是即时提示，真正的判定永远在服务端）。
+ * 没有进行中的会话时没有可表态的对象——必须先「开始复核」。
+ */
+export function canDecideObligations(
+  review: ReviewLifecycleDataRecord | null | undefined,
+): boolean {
+  return review?.current_session?.status === "in_progress";
+}
+
+/**
+ * 依据纪律（WP3-B 评审整改）：resolved 决定不允许"零依据"放行。
+ * 与服务端 ``_obligation_evidence_error`` 逐字一致——这里只做**即时提示**，
+ * 真正的判定永远在服务端（任务书 §十三/§十五）。
+ */
+export interface ObligationEvidencePolicy {
+  /** note 是否必填。 */
+  noteRequired: boolean;
+  /** evidence_reference 单独即可满足要求（仅 verified_ok）。 */
+  evidenceAloneSatisfies: boolean;
+  /** 该决定的依据提示语。 */
+  hint: string;
+}
+
+export function obligationEvidencePolicy(decision: string | null | undefined): ObligationEvidencePolicy {
+  switch (String(decision ?? "").trim()) {
+    case "verified_ok":
+      return {
+        noteRequired: false,
+        evidenceAloneSatisfies: true,
+        hint: "须填写补核说明或证据位置（页码/表名/章节）",
+      };
+    case "verified_issue":
+      return {
+        noteRequired: true,
+        evidenceAloneSatisfies: false,
+        hint: "须写明发现了什么问题（补核说明必填）",
+      };
+    case "not_applicable":
+      return {
+        noteRequired: true,
+        evidenceAloneSatisfies: false,
+        hint: "须写明不适用的原因（补核说明必填）",
+      };
+    default:
+      // pending（置回待处理）与未知值都不要求依据。
+      return { noteRequired: false, evidenceAloneSatisfies: false, hint: "" };
+  }
+}
+
+/** 当前填写是否满足该决定的依据纪律（前端即时提示用；服务端仍会再判一次）。 */
+export function obligationEvidenceSatisfied(
+  decision: string | null | undefined,
+  note: string,
+  evidenceReference: string,
+): boolean {
+  const policy = obligationEvidencePolicy(decision);
+  const hasNote = note.trim().length > 0;
+  const hasEvidence = evidenceReference.trim().length > 0;
+  if (policy.evidenceAloneSatisfies && hasEvidence) {
+    return true;
+  }
+  if (policy.noteRequired) {
+    return hasNote;
+  }
+  // verified_ok：note 或 evidence 任一；pending / 未知值：无要求
+  const requiresAny = String(decision ?? "").trim() === "verified_ok";
+  return requiresAny ? hasNote || hasEvidence : true;
+}
+
+/** 补核写入的响应体（与后端 ObligationDecisionData 对齐）。 */
+export interface ObligationDecisionDataRecord {
+  slot_id: string;
+  current_document_version_id: number | null;
+  session: ReviewSessionRecord;
+  decision: {
+    review_session_id: string;
+    slot_id: string;
+    obligation_id: string;
+    decision: string;
+    note: string | null;
+    evidence_reference: string | null;
+    reviewer: string;
+    reviewed_at: string;
+    revision: number;
+  };
+  completion_gate: ReviewCompletionGateRecord;
+  blockers: ReviewBlockerRecord[];
 }
 
 /** `GET /api/reviews?job_uuid=` 的数据体。 */
