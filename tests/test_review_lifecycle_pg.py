@@ -190,18 +190,46 @@ async def _insert_result(
 
 
 def _coverage_payload(*, blocking_total: int = 0, applicable: int = 42) -> Dict[str, Any]:
+    """构造一份落库形态的覆盖台账。
+
+    WP3-B 起完成门禁的"待补核"口径从 ``instances`` 推导（不再只读
+    ``blocking_total`` 计数），因此阻塞义务必须给出真实实例——否则门禁
+    统计的"未处理条数"与账本上能看见的条目会对不上。
+    """
+    instances = [
+        {
+            "obligation_id": f"OBL-BLOCKING-{index}",
+            "group_id": "TABLE_CROSS",
+            "group_title": "表间关系",
+            "title": f"阻塞义务 {index}",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "reason_label": "未执行",
+            "detail": "测试用阻塞义务（尚无规则实现）",
+            "checkers": [],
+            "missing_checkers": ["V33-TEST-MISSING"],
+            "depends_on": [],
+            "input_gaps": [],
+            "evidence_kind": "document_level",
+            "basis": "测试依据",
+            "gap_note": "测试缺口",
+            "requires_ai": False,
+            "blocks_gate": True,
+        }
+        for index in range(blocking_total)
+    ]
     return {
         "obligation_coverage": {
             "catalog_version": "test-catalog",
             "catalog_fingerprint": "fingerprint",
             "applicable_total": applicable,
-            "completed_total": applicable,
+            "completed_total": applicable - blocking_total,
             "not_applicable_total": 0,
-            "unresolved_total": 0,
+            "unresolved_total": blocking_total,
             "blocking_total": blocking_total,
-            "by_reason": {},
+            "by_reason": ({"not_executed": blocking_total} if blocking_total else {}),
             "by_group": [],
-            "instances": [],
+            "instances": instances,
         }
     }
 

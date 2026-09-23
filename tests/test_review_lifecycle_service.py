@@ -125,6 +125,8 @@ def _state(
     decisions: Optional[Dict[str, str]] = None,
     coverage_available: bool = True,
     coverage_blocking_total: Optional[int] = 0,
+    coverage_items: Optional[List[Any]] = None,
+    obligation_decisions: Optional[Dict[str, Dict[str, Any]]] = None,
     slot_row: Optional[Dict[str, Any]] = None,
 ) -> ReviewState:
     analysis = analysis or _analysis()
@@ -145,6 +147,8 @@ def _state(
         decisions=dict(decisions or {}),
         coverage_available=coverage_available,
         coverage_blocking_total=coverage_blocking_total,
+        coverage_items=list(coverage_items or []),
+        obligation_decisions=dict(obligation_decisions or {}),
     )
 
 
@@ -413,11 +417,132 @@ def test_gate_blocks_on_unavailable_coverage():
     assert _codes(state) == ["coverage_unavailable"]
 
 
+def _obligation_item(
+    obligation_id: str, *, status: str = "not_executed", blocks_gate: bool = True
+) -> Any:
+    """WP3-B：门禁的"待补核"口径从覆盖台账实例推导，因此用例给出真实实例。"""
+    from src.schemas.material_detail import CoverageObligationItem
+
+    return CoverageObligationItem(
+        obligation_id=obligation_id,
+        group_id="TABLE_CROSS",
+        group_title="表间关系",
+        title=f"义务 {obligation_id}",
+        status=status,
+        reason=status if status != "completed" else None,
+        reason_label=None,
+        detail="",
+        blocks_gate=blocks_gate,
+        requires_ai=False,
+        input_gaps=[],
+    )
+
+
+def _decision(decision: str, *, revision: int = 1, reviewer: str = "r") -> Dict[str, Any]:
+    return {
+        "decision_record_id": f"dec-{revision}",
+        "obligation_id": "OBL-X",
+        "decision": decision,
+        "revision": revision,
+        "reviewer": reviewer,
+        "reviewed_at": NOW,
+        "note": None,
+        "evidence_reference": None,
+    }
+
+
 def test_gate_blocks_on_blocking_obligations_with_count():
-    state = _state(active=_session(), coverage_available=True, coverage_blocking_total=2)
+    items = [_obligation_item("OBL-1"), _obligation_item("OBL-2")]
+    state = _state(
+        active=_session(),
+        coverage_available=True,
+        coverage_blocking_total=2,
+        coverage_items=items,
+    )
     gate = review_lifecycle_service.evaluate_completion_gate(state)
     assert [item.code for item in gate.blockers] == ["blocking_obligations"]
     assert gate.blockers[0].count == 2
+
+
+def test_gate_counts_only_unhandled_obligations():
+    """WP3-B：verified_ok / verified_issue / not_applicable 视为已处理，pending 继续阻塞。"""
+    items = [
+        _obligation_item("OBL-1"),
+        _obligation_item("OBL-2"),
+        _obligation_item("OBL-3"),
+        _obligation_item("OBL-4"),
+    ]
+    decisions = {
+        "OBL-1": _decision("verified_ok"),
+        "OBL-2": _decision("verified_issue"),
+        "OBL-3": _decision("not_applicable"),
+        # OBL-4 没有任何记录 → 仍然待处理
+    }
+    state = _state(
+        active=_session(),
+        coverage_available=True,
+        coverage_blocking_total=4,
+        coverage_items=items,
+        obligation_decisions=decisions,
+    )
+    gate = review_lifecycle_service.evaluate_completion_gate(state)
+    assert [item.code for item in gate.blockers] == ["blocking_obligations"]
+    assert gate.blockers[0].count == 1
+    assert not gate.can_complete
+
+
+def test_gate_passes_when_all_blocking_obligations_handled():
+    items = [_obligation_item("OBL-1"), _obligation_item("OBL-2")]
+    decisions = {
+        "OBL-1": _decision("verified_ok"),
+        "OBL-2": _decision("verified_issue"),
+    }
+    state = _state(
+        active=_session(),
+        coverage_available=True,
+        coverage_blocking_total=2,
+        coverage_items=items,
+        obligation_decisions=decisions,
+    )
+    assert _codes(state) == []
+
+
+def test_gate_treats_explicit_pending_and_unknown_decisions_as_blocking():
+    """显式 pending 与拼错的决定值都不能静默放行（与问题决定同一纪律）。"""
+    items = [_obligation_item("OBL-1"), _obligation_item("OBL-2"), _obligation_item("OBL-3")]
+    decisions = {
+        "OBL-1": _decision("pending"),
+        "OBL-2": _decision("approved"),  # 未知值 → 照样阻塞
+        "OBL-3": _decision("verified_ok"),
+    }
+    state = _state(
+        active=_session(),
+        coverage_available=True,
+        coverage_blocking_total=3,
+        coverage_items=items,
+        obligation_decisions=decisions,
+    )
+    gate = review_lifecycle_service.evaluate_completion_gate(state)
+    assert [item.code for item in gate.blockers] == ["blocking_obligations"]
+    assert gate.blockers[0].count == 2
+
+
+def test_gate_ignores_decisions_for_non_blocking_obligations():
+    """已完成/不适用义务上的决定属误植（正常路径写不进去），不得影响门禁止数。"""
+    items = [
+        _obligation_item("OBL-DONE", status="completed"),
+        _obligation_item("OBL-NA", status="not_applicable", blocks_gate=False),
+        _obligation_item("OBL-1"),
+    ]
+    decisions = {"OBL-1": _decision("verified_ok")}
+    state = _state(
+        active=_session(),
+        coverage_available=True,
+        coverage_blocking_total=1,
+        coverage_items=items,
+        obligation_decisions=decisions,
+    )
+    assert _codes(state) == []
 
 
 def test_blocker_order_puts_stale_facts_before_content():

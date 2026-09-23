@@ -39,6 +39,8 @@ from api.routes import reviews as reviews_routes
 from src.schemas.review_lifecycle import (
     CompletionGate,
     CurrentAnalysisRef,
+    ObligationDecisionData,
+    ObligationDecisionRecord,
     ReviewBlocker,
     ReviewContextData,
     ReviewByJobData,
@@ -577,3 +579,158 @@ def test_review_slot_scope_matrix_admin_can_read_everything(client, org_tree, st
     token = _admin(client)
     for slot_id in (SLOT_MINE, SLOT_SIBLING, SLOT_OTHER_DISTRICT):
         assert _read_review(client, token, slot_id) == 200
+
+
+# ==== 人工补核接口（WP3-B） ===================================================
+
+
+def _decision_data(**overrides) -> ObligationDecisionData:
+    payload: Dict[str, Any] = {
+        "slot_id": SLOT_MINE,
+        "current_document_version_id": 11,
+        "session": _session(),
+        "decision": ObligationDecisionRecord(
+            review_session_id="sess-1",
+            slot_id=SLOT_MINE,
+            obligation_id="OBL-SG-COMPLETION",
+            decision="verified_ok",
+            note="已人工核对三公表与说明",
+            evidence_reference="第 12 页",
+            reviewer="admin",
+            reviewed_at=NOW.isoformat(),
+            revision=1,
+        ),
+        "completion_gate": CompletionGate(can_complete=True, blockers=[]),
+        "blockers": [],
+    }
+    payload.update(overrides)
+    return ObligationDecisionData(**payload)
+
+
+def test_obligation_decision_requires_login(client, monkeypatch):
+    monkeypatch.setenv("TESTING", "false")
+    response = client.put(
+        f"/api/reviews/{SLOT_MINE}/obligations/OBL-SG-COMPLETION",
+        json={"decision": "verified_ok"},
+    )
+    assert response.status_code == 401
+
+
+def test_obligation_decision_sibling_slot_is_forbidden(client, org_tree):
+    """IDOR：补核接口不得绕过槽位权限（任务书 §十四，与 start/complete 同一入口判定）。"""
+    token = _unit_user(client, [org_tree["sub_unit"]])
+    response = client.put(
+        f"/api/reviews/{SLOT_SIBLING}/obligations/OBL-SG-COMPLETION",
+        headers=_headers(token),
+        json={"decision": "verified_ok"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "slot access denied"
+
+
+def test_obligation_decision_invalid_value_is_422(client):
+    """decision 只能是四态之一；拼错的状态码不能静默放行（参数问题 → 422）。"""
+    token = _admin(client)
+    response = client.put(
+        f"/api/reviews/{SLOT_MINE}/obligations/OBL-SG-COMPLETION",
+        headers=_headers(token),
+        json={"decision": "approved"},
+    )
+    assert response.status_code == 422
+
+
+def test_obligation_decision_success_returns_gate(client, monkeypatch):
+    token = _admin(client)
+
+    async def _decide(conn, slot_id, *, obligation_id, decision, actor, **kwargs):
+        assert slot_id == SLOT_MINE
+        assert obligation_id == "OBL-SG-COMPLETION"
+        assert decision == "verified_ok"
+        return _decision_data()
+
+    monkeypatch.setattr(review_lifecycle_service, "decide_obligation", _decide)
+    response = client.put(
+        f"/api/reviews/{SLOT_MINE}/obligations/OBL-SG-COMPLETION",
+        headers=_headers(token),
+        json={"decision": "verified_ok", "note": "已人工核对", "job_uuid": "job-1"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["data"]["decision"]["decision"] == "verified_ok"
+    assert body["data"]["completion_gate"]["can_complete"] is True
+
+
+def test_obligation_decision_conflict_is_structured_409(client, monkeypatch):
+    """并发/过期写入：detail 带 error 与 current_revision，前端据此提示刷新。"""
+    token = _admin(client)
+
+    async def _conflict(conn, slot_id, *, obligation_id, decision, actor, **kwargs):
+        raise review_lifecycle_service.ReviewLifecycleError(
+            409,
+            "obligation_decision_conflict",
+            "该义务的补核状态已变化，请刷新后重试",
+            current_revision=3,
+        )
+
+    monkeypatch.setattr(review_lifecycle_service, "decide_obligation", _conflict)
+    response = client.put(
+        f"/api/reviews/{SLOT_MINE}/obligations/OBL-SG-COMPLETION",
+        headers=_headers(token),
+        json={"decision": "verified_ok", "expected_revision": 1},
+    )
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["error"] == "obligation_decision_conflict"
+    assert detail["current_revision"] == 3
+
+
+def test_rejected_obligation_decision_is_audited(client, monkeypatch, tmp_path):
+    """被拒绝的补核尝试也要留痕（成功审计唯一写入口在服务层，路由只记拒绝）。"""
+    import json as _json
+
+    audit_path = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    token = _admin(client)
+
+    async def _blocked(conn, slot_id, *, obligation_id, decision, actor, **kwargs):
+        raise review_lifecycle_service.ReviewLifecycleError(
+            409, "review_not_active", "请先开始复核，再处理检查义务"
+        )
+
+    monkeypatch.setattr(review_lifecycle_service, "decide_obligation", _blocked)
+    response = client.put(
+        f"/api/reviews/{SLOT_MINE}/obligations/OBL-SG-COMPLETION",
+        headers=_headers(token),
+        json={"decision": "verified_ok"},
+    )
+    assert response.status_code == 409
+
+    events = [
+        _json.loads(line)
+        for line in audit_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    rejected = [item for item in events if item["result"] == "rejected"]
+    assert rejected
+    assert rejected[-1]["action"] == "obligation.review"
+    assert rejected[-1]["details"]["obligation_id"] == "OBL-SG-COMPLETION"
+    assert rejected[-1]["details"]["error"] == "review_not_active"
+
+
+def test_successful_obligation_decision_is_not_audited_in_route(client, monkeypatch, tmp_path):
+    """与 start/complete/reopen 同一纪律：成功审计只有服务层一个写入口。"""
+    audit_path = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    token = _admin(client)
+
+    async def _decide(conn, slot_id, *, obligation_id, decision, actor, **kwargs):
+        return _decision_data()
+
+    monkeypatch.setattr(review_lifecycle_service, "decide_obligation", _decide)
+    response = client.put(
+        f"/api/reviews/{SLOT_MINE}/obligations/OBL-SG-COMPLETION",
+        headers=_headers(token),
+        json={"decision": "verified_ok"},
+    )
+    assert response.status_code == 200, response.text
+    assert not audit_path.exists(), "成功路径不允许在路由层再写一条审计"
