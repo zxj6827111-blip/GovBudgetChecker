@@ -51,6 +51,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
+from src.db.transaction import in_transaction
 
 from src.schemas.material_slot import slot_identity_is_resolved
 from src.schemas.review_lifecycle import (
@@ -71,6 +72,7 @@ from src.schemas.review_lifecycle import (
     ERROR_REVIEW_CONTEXT_MISMATCH,
     ERROR_REVIEW_CONTEXT_UNAVAILABLE,
     ERROR_REVIEW_LOCK_UNAVAILABLE,
+    ERROR_REVIEW_WORKFLOW_CHANGED,
     ERROR_START_BLOCKED,
     INVALIDATION_REASON_ANALYSIS_BASIS_CHANGED,
     INVALIDATION_REASON_ANALYSIS_RESTARTED,
@@ -151,6 +153,9 @@ class ReviewState:
     history: List[Dict[str, Any]] = field(default_factory=list)
     problems: List[ReviewProblem] = field(default_factory=list)
     decisions: Dict[str, str] = field(default_factory=dict)
+    #: 门禁判定所用的"问题集合快照"指纹（workflow 决定 + legacy 忽略清单）。
+    #: 落编辑锁时用它做 CAS：只有集合没变才允许宣告复核完成。
+    problem_snapshot_token: str = ""
     coverage_available: bool = False
     coverage_blocking_total: Optional[int] = None
 
@@ -330,6 +335,23 @@ def _compensate_lock_writes(effects: _CommitEffects) -> None:
             )
 
 
+def _issue_decision_snapshot(job_uuid: str) -> Dict[str, Any]:
+    """该任务当前的问题集合快照：``{decisions, ignored_issue_ids, token}``。
+
+    调用方（``_load_problem_set``）只用它的 ``decisions`` 与 ``token``。
+    读取发生在 ``issue_workflow_store`` 的文件锁之内，因此"决定"与"忽略清单"
+    是同一时刻的一致视图。读不到时返回空快照 + 空 token：
+    空 token 会让落锁时的 CAS 必然冲突（fail-closed），而不是把"读不到"当成"没问题"。
+    """
+    from src.services import issue_workflow_store
+
+    try:
+        return issue_workflow_store.get_job_problem_snapshot(job_uuid)
+    except Exception:  # noqa: BLE001 - 读不到就按空快照 + 空 token 处理（fail-closed）
+        logger.warning("Failed to read problem snapshot for job %s", job_uuid, exc_info=True)
+        return {"decisions": {}, "ignored_issue_ids": [], "token": ""}
+
+
 def _load_problem_set(state: ReviewState) -> None:
     """装载复核问题集合与工作流决定。
 
@@ -341,16 +363,19 @@ def _load_problem_set(state: ReviewState) -> None:
     if not job_uuid:
         return
     result_row = state.analysis.result_row or {}
+    snapshot = _issue_decision_snapshot(job_uuid)
+    ignored = _ignored_issue_ids(job_uuid)
     problems = collect_review_problems(
         job_uuid=job_uuid,
         ai_findings=result_row.get("ai_findings"),
         rule_findings=result_row.get("rule_findings"),
         merged_result=result_row.get("merged_result"),
         structured_ingest=state.analysis.structured_ingest,
-        ignored_issue_ids=_ignored_issue_ids(job_uuid),
+        ignored_issue_ids=ignored,
     )
     state.problems = problems
-    state.decisions = _issue_decisions(job_uuid)
+    state.decisions = dict(snapshot.get("decisions") or {})
+    state.problem_snapshot_token = str(snapshot.get("token") or "")
 
 
 def _ignored_issue_ids(job_uuid: str) -> List[str]:
@@ -661,6 +686,28 @@ def _require_job_belongs_to_state(state: ReviewState, job_uuid: str) -> None:
 # "文件副作用只在提交成功之后做"。
 
 
+def _require_autocommit(conn: Any, *, operation: str) -> None:
+    """复核 mutation 只能跑在**自动提交连接**上（自己拥有事务与提交时点）。
+
+    为什么在代码里拒绝而不是写在文档里：``transaction_scope`` 在已有外层
+    事务时会直接复用——此时复核函数返回时 PostgreSQL **还没有提交**，但
+    ``_mutation_scope`` 已经把文件副作用执行了；调用方随后回滚，就重新造出
+    上一轮刚修好的分裂：
+
+        数据库：复核没完成
+        文件：编辑锁已写/已清，audit 已记 success
+
+    SAVEPOINT 不能用：RELEASE SAVEPOINT **不是** commit，复核的成败仍由
+    外层事务决定。因此 public mutation 在最开始（**任何 DB 写入与文件副作用
+    之前**）就 fail-fast。
+    """
+    if in_transaction(conn):
+        raise RuntimeError(
+            f"{operation} requires an autocommit connection; it owns its "
+            "PostgreSQL transaction boundary (don't nest)"
+        )
+
+
 async def start_review(
     conn: Any,
     slot_id: str,
@@ -668,6 +715,7 @@ async def start_review(
     actor: str,
     job_uuid: Optional[str] = None,
 ) -> ReviewMutationData:
+    _require_autocommit(conn, operation="start_review")
     """开（或复用）复核会话。
 
     三个必须同时成立的性质：
@@ -799,6 +847,7 @@ async def _insert_session_resilient(
 async def complete_review(
     conn: Any, slot_id: str, *, actor: str, job_uuid: Optional[str] = None
 ) -> ReviewMutationData:
+    _require_autocommit(conn, operation="complete_review")
     """完成复核：只有门禁全通过才写完成记录。
 
     **幂等**：同一个会话重复 complete 返回已经完成的同一结果，不新建第二条
@@ -914,6 +963,7 @@ async def complete_review(
 async def reopen_review(
     conn: Any, slot_id: str, *, actor: str, job_uuid: Optional[str] = None
 ) -> ReviewMutationData:
+    _require_autocommit(conn, operation="reopen_review")
     """显式重开复核：旧 completed 会话转为 ``invalidated``，另起一条新会话。
 
     "重新复核"必须是用户的**显式动作**（§七十六）：打开页面就把 completed
@@ -999,6 +1049,7 @@ async def reopen_review(
 async def invalidate_review(
     conn: Any, slot_id: str, *, reason: Optional[str] = None, actor: str = "system"
 ) -> int:
+    _require_autocommit(conn, operation="invalidate_review")
     """让该槽位上"已经对不上当前事实"的会话失效，并把槽位状态交回状态机重算。
 
     失效的判据是两个，任一成立即失效（原因码分别记录，因为用户要做的动作不同）：
@@ -1234,6 +1285,9 @@ def _set_workflow_lock_or_raise(
        它没落下就不允许宣称复核完成。
     3. **记下锁的身份**（job + session + basis），供提交失败时精确补偿。
        无条件按 job 清锁会在并发下误删后来会话留下的锁。
+    4. **CAS**：写入之前先比对问题集合快照。若快照已变（别人把 issue 改回
+       待处理，或把它加入忽略清单），**不写锁**，抛 409 review_workflow_changed。
+       比较与写入在同一把 ``_state_lock`` 之下完成（``set_review_lock_if_problem_snapshot_matches``）。
     """
     from src.services import issue_workflow_store
 
@@ -1241,8 +1295,9 @@ def _set_workflow_lock_or_raise(
     review_session_id = str(session.get("review_session_id") or "")
     basis_token = str(session.get("analysis_basis_token") or "")
     try:
-        issue_workflow_store.set_review_lock(
+        outcome = issue_workflow_store.set_review_lock_if_problem_snapshot_matches(
             job_uuid,
+            expected_token=state.problem_snapshot_token,
             slot_id=state.slot_id,
             review_session_id=review_session_id,
             analysis_basis_token=basis_token,
@@ -1259,6 +1314,19 @@ def _set_workflow_lock_or_raise(
             ERROR_REVIEW_LOCK_UNAVAILABLE,
             "无法记录复核锁定状态，本次复核未完成，请稍后重试",
         ) from exc
+
+    if str(outcome.get("status") or "") != "written":
+        # 门禁判定所用的问题集合在落锁之前变了（有人改了 issue 状态，或把它加进
+        # 忽略清单）。这时**不能**让本次复核成立：它锁住的将不再是被判定的那份问题集合。
+        # 放回问题集合并让外层回滚。
+        raise ReviewLifecycleError(
+            409,
+            ERROR_REVIEW_WORKFLOW_CHANGED,
+            "问题处理状态已发生变化，请刷新后重新确认",
+            expected_problem_token=str(outcome.get("expected_decision_token") or ""),
+            current_problem_token=str(outcome.get("current_decision_token") or ""),
+        )
+
     effects.lock_writes.append(
         {
             "job_uuid": job_uuid,
