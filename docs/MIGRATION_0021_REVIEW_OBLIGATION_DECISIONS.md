@@ -59,3 +59,63 @@ CREATE UNIQUE INDEX uq_review_obligation_decisions_scope
 随 `run_migrations()` 自动应用；从已有 0020 的库升级只新增本表与两个索引，
 重复执行幂等（`CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`）。
 CI 的 "DB migrations (fresh database + idempotency)" 步骤本轮起覆盖本迁移。
+
+## 回滚
+
+**顺序不能颠倒**：`review_obligation_decisions` 的外键分别指向
+`review_sessions`（0020）与 `material_slots`（0019）。
+如果数据库已应用到 0021，整体回滚必须严格逆序：
+
+```
+撤 0021 → 撤 0020（docs/MIGRATION_0020_REVIEW_LIFECYCLE.md）
+        → 撤 0019（docs/MIGRATION_0019_MATERIAL_SLOTS.md）
+```
+
+即：**必须先撤本迁移，再回滚 0020**；直接删 `review_sessions` 或
+`material_slots` 都会被 `review_obligation_decisions` 的外键以
+`DependentObjectsStillExist` 拒绝（ON DELETE RESTRICT 是有意为之，
+见「四条设计纪律」）。
+
+### 回滚 SQL
+
+```sql
+-- 1) 删掉人工补核决定表（历史补核结论随之全部丢失，不可恢复）
+DROP TABLE IF EXISTS review_obligation_decisions;
+
+-- 2) 抹掉迁移记录。schema 名按实际部署的 PG_SCHEMA 替换（默认 public）
+DELETE FROM public.schema_migrations
+WHERE id = '2026-09-23_0021_review_obligation_decisions';
+```
+
+本迁移不改任何既有表，因此回滚不涉及 `ALTER TABLE`。索引随表一并消失。
+**禁止用 `DROP TABLE ... CASCADE` 偷过**：CASCADE 会把依赖对象一起静默删除，
+文档（及回填测试）将无法证明回滚者真的理解依赖顺序。
+
+### 回滚的影响面
+
+| 对象 | 回滚后 | 是否可恢复 |
+| --- | --- | --- |
+| 人工补核结论（`review_obligation_decisions` 的行，含 `decision` / `reviewer` / `reviewed_at` / `note` / `evidence_reference` / `revision`） | **全部丢失** | 否。人工结论没有任何其他存储，回滚即永久失去"谁凭什么依据处理了哪条义务" |
+| `review_sessions` / `material_slots` / `fiscal_document_versions` 行数据 | **完全不变** | 不适用——回滚不触碰这些行 |
+| 原始材料、分析结果、问题记录 | 完全不变 | 不适用 |
+
+一句话：**回滚只丢人工补核结论本身，不丢复核会话、槽位台账或任何原始材料。**
+
+### 回滚前建议
+
+```sql
+COPY (
+  SELECT *
+  FROM review_obligation_decisions
+) TO '/tmp/review_obligation_decisions_backup.csv'
+CSV HEADER;
+```
+
+### 真库验证
+
+`tests/test_material_slot_migration_pg.py::test_rollback_restores_previous_shape_without_losing_versions`
+把 0021 → 0020 → 0019 三步回滚语句逐条原样执行，断言四张表（本表 +
+review_sessions + material_sources + material_slots）、0020 的两列、0019 的
+`slot_id` 列与三条迁移记录全部消失、原始文件版本一条不少，且重跑
+`run_migrations()` 后全部恢复。该用例已纳入 CI 真 PostgreSQL 硬门
+（`-m real_database`）。
