@@ -1,9 +1,9 @@
 {
   "baseline_version": 1,
   "source": {
-    "commit": "99aa692fd039201e5baa0bb930d9e97ec87bbaf2",
+    "commit": "a9fdb8ec3cdc91c3a7be3b3ec5d9ee8ecb898cc8",
     "branch": "fix/obligation-cross-san-gong",
-    "dirty": "true"
+    "dirty": "false"
   },
   "profile_resolver_version": "document-profile-v1",
   "obligation_catalog_version": "obligations-v3",
