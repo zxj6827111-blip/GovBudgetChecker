@@ -282,11 +282,12 @@ async def test_status_check_constraint_rejects_unknown_value(db):
 
 
 async def test_rollback_restores_previous_shape_without_losing_versions(db):
-    """回滚 SQL（见 docs/MIGRATION_0019_MATERIAL_SLOTS.md）必须真的可执行。
+    """回滚 SQL（见 docs/MIGRATION_0019/0020/0021 三份文档）必须真的可执行。
 
     文档里写的回滚语句如果从没跑过，就只是"看起来能回滚"。
-    这条用例把那段 SQL 原样执行，并断言两件事：
-    新增对象确实消失，**原始文件版本的账一条没少**。
+    这条用例把三条迁移的回滚 SQL 按逆序原样执行，并断言三件事：
+    新增对象确实消失，**原始文件版本的账一条没少**；
+    重跑迁移后表、列、迁移记录与原版本记录全部恢复。
     """
     schema, pool = db
     await run_migrations()
@@ -323,11 +324,25 @@ async def test_rollback_restores_previous_shape_without_losing_versions(db):
 
         # --- 文档中记录的回滚 SQL，逐条原样执行 ---
         #
-        # 顺序必须是**逆序**：0020 的 review_sessions 外键指向 material_slots，
-        # 0019 的 fiscal_document_versions.slot_id 也指向它。因此先撤 0020，
-        # 再撤 0019；直接删 material_slots 会被 DependentObjectsStillExist 拒绝。
-        # 这条用例的真实价值就在于"文档里写的回滚语句真的跑过"——
-        # 新增了依赖对象之后仍然照原样跑，正是它要发现的那类问题。
+        # 顺序必须是**逆序** 0021 → 0020 → 0019：
+        # 0021 的 review_obligation_decisions 外键指向 review_sessions 与
+        # material_slots；0020 的 review_sessions 外键指向 material_slots 与
+        # fiscal_document_versions；0019 的 fiscal_document_versions.slot_id
+        # 同样指向 material_slots。任何一步越过都触发 DependentObjectsStillExist
+        # （这正是本用例要守住的红线）。
+        # 禁止用 CASCADE 偷过——那会让"我们真的理解依赖顺序"无从证明。
+        #
+        # Step 1/3 —— 撤 0021（docs/MIGRATION_0021_REVIEW_OBLIGATION_DECISIONS.md）
+        await connection.execute("DROP TABLE IF EXISTS review_obligation_decisions")
+        await connection.execute(
+            f'DELETE FROM "{schema}".schema_migrations WHERE id = $1',
+            "2026-09-23_0021_review_obligation_decisions",
+        )
+        assert await connection.fetchval(
+            "SELECT to_regclass($1) IS NOT NULL", f'"{schema}".review_obligation_decisions'
+        ) is False
+
+        # Step 2/3 —— 撤 0020（docs/MIGRATION_0020_REVIEW_LIFECYCLE.md）
         await connection.execute("DROP TABLE IF EXISTS review_sessions")
         await connection.execute(
             "ALTER TABLE analysis_jobs DROP COLUMN IF EXISTS analysis_result_fingerprint"
@@ -339,6 +354,19 @@ async def test_rollback_restores_previous_shape_without_losing_versions(db):
             f'DELETE FROM "{schema}".schema_migrations WHERE id = $1',
             "2026-09-22_0020_review_lifecycle",
         )
+        assert await connection.fetchval(
+            "SELECT to_regclass($1) IS NOT NULL", f'"{schema}".review_sessions'
+        ) is False
+        assert await connection.fetchval(
+            """
+            SELECT COUNT(*) FROM information_schema.columns
+            WHERE table_schema = $1 AND table_name = 'analysis_jobs'
+              AND column_name IN ('analysis_revision', 'analysis_result_fingerprint')
+            """,
+            schema,
+        ) == 0
+
+        # Step 3/3 —— 撤 0019（docs/MIGRATION_0019_MATERIAL_SLOTS.md）
         await connection.execute(
             "ALTER TABLE fiscal_document_versions DROP COLUMN IF EXISTS slot_id"
         )
@@ -348,12 +376,24 @@ async def test_rollback_restores_previous_shape_without_losing_versions(db):
             f'DELETE FROM "{schema}".schema_migrations WHERE id = $1', MIGRATION_ID
         )
 
+        # 三条迁移的对象全部消失
+        for table in (
+            "review_obligation_decisions",
+            "review_sessions",
+            "material_sources",
+            "material_slots",
+        ):
+            assert await connection.fetchval(
+                "SELECT to_regclass($1) IS NOT NULL", f'"{schema}".{table}'
+            ) is False, table
         assert await connection.fetchval(
-            "SELECT to_regclass($1) IS NOT NULL", f'"{schema}".material_slots'
-        ) is False
-        assert await connection.fetchval(
-            "SELECT to_regclass($1) IS NOT NULL", f'"{schema}".material_sources'
-        ) is False
+            """
+            SELECT COUNT(*) FROM information_schema.columns
+            WHERE table_schema = $1 AND table_name = 'fiscal_document_versions'
+              AND column_name = 'slot_id'
+            """,
+            schema,
+        ) == 0
         # 原始文件版本的账一条没少 —— 这是回滚安全性的核心断言
         assert await connection.fetchval(
             "SELECT COUNT(*) FROM fiscal_document_versions WHERE id = $1", version_id
@@ -361,16 +401,61 @@ async def test_rollback_restores_previous_shape_without_losing_versions(db):
         assert await connection.fetchval(
             "SELECT COUNT(*) FROM fiscal_documents WHERE id = $1", document_id
         ) == 1
-        # 迁移记录被抹掉后，重跑迁移应当能重新建起来
-        assert await connection.fetchval(
-            f'SELECT COUNT(*) FROM "{schema}".schema_migrations WHERE id = $1', MIGRATION_ID
-        ) == 0
+        # 三条迁移记录必须一条不留——只删表不删记录会让 run_migrations 误判已应用
+        for migration_id in (
+            MIGRATION_ID,
+            "2026-09-22_0020_review_lifecycle",
+            "2026-09-23_0021_review_obligation_decisions",
+        ):
+            assert await connection.fetchval(
+                f'SELECT COUNT(*) FROM "{schema}".schema_migrations WHERE id = $1',
+                migration_id,
+            ) == 0
 
+    # 迁移记录被抹掉后，重跑迁移应当把全链路重新建起来
     await run_migrations()
     async with _conn(schema, pool) as connection:
+        for table in (
+            "material_slots",
+            "material_sources",
+            "review_sessions",
+            "review_obligation_decisions",
+        ):
+            assert await connection.fetchval(
+                "SELECT to_regclass($1) IS NOT NULL", f'"{schema}".{table}'
+            ) is True, table
         assert await connection.fetchval(
-            "SELECT to_regclass($1) IS NOT NULL", f'"{schema}".material_slots'
-        ) is True
+            """
+            SELECT COUNT(*) FROM information_schema.columns
+            WHERE table_schema = $1 AND table_name = 'fiscal_document_versions'
+              AND column_name = 'slot_id'
+            """,
+            schema,
+        ) == 1
+        assert await connection.fetchval(
+            """
+            SELECT COUNT(*) FROM information_schema.columns
+            WHERE table_schema = $1 AND table_name = 'analysis_jobs'
+              AND column_name IN ('analysis_revision', 'analysis_result_fingerprint')
+            """,
+            schema,
+        ) == 2
+        for migration_id in (
+            MIGRATION_ID,
+            "2026-09-22_0020_review_lifecycle",
+            "2026-09-23_0021_review_obligation_decisions",
+        ):
+            assert await connection.fetchval(
+                f'SELECT COUNT(*) FROM "{schema}".schema_migrations WHERE id = $1',
+                migration_id,
+            ) == 1
+        # rollback → rerun 不得损伤历史材料账
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM fiscal_document_versions WHERE id = $1", version_id
+        ) == 1
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM fiscal_documents WHERE id = $1", document_id
+            ) == 1
 
 
 async def test_deleting_a_slot_keeps_document_versions(db):

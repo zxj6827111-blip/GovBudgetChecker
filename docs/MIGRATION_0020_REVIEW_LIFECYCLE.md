@@ -105,7 +105,14 @@ CONSTRAINT ck_review_sessions_invalidated CHECK (
 
 ## 回滚 SQL
 
-**顺序不能颠倒**：`review_sessions` 的两个外键指向 `material_slots` 与
+**先看依赖链**：如果数据库已应用 `2026-09-23_0021_review_obligation_decisions`，
+**必须先执行 0021 的回滚**（`review_obligation_decisions` 的外键指向
+`review_sessions`，直接走下文的 `DROP TABLE review_sessions` 会被
+`DependentObjectsStillExist` 拒绝），再执行本页回滚。三条迁移的整体顺序是
+`0021 → 0020 → 0019`——见 `docs/MIGRATION_0021_REVIEW_OBLIGATION_DECISIONS.md`
+的「回滚」一节，本页不重复那段 SQL。
+
+**本页语句的顺序也不能颠倒**：`review_sessions` 的两个外键指向 `material_slots` 与
 `fiscal_document_versions`，必须先撤 0020 再撤 0019，否则
 `DROP TABLE material_slots` 会被 `DependentObjectsStillExist` 拒绝。
 

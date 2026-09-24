@@ -71,9 +71,23 @@
 
 ### 回滚 SQL
 
-**顺序不能颠倒。** `fiscal_document_versions.slot_id` 的外键指向 `material_slots`，
-先删表会被 PostgreSQL 以 `DependentObjectsStillExist` 拒绝（本步骤已在真库实测过，
-第一次尝试就是按"先删子表"的直觉写的，被数据库挡下后才改成本顺序）。
+**先看依赖链**：如果数据库已应用到 `2026-09-23_0021_review_obligation_decisions`，
+整体回滚必须严格逆序：
+
+```
+撤 0021（docs/MIGRATION_0021_REVIEW_OBLIGATION_DECISIONS.md）
+→ 撤 0020（docs/MIGRATION_0020_REVIEW_LIFECYCLE.md）
+→ 最后撤本页 0019
+```
+
+`review_obligation_decisions` / `review_sessions` 的外键都指向
+`material_slots`，越过任何一步都会被 `DependentObjectsStillExist` 拒绝。
+0019 自己的回滚 SQL 不变。
+
+**本页语句的顺序也不能颠倒。** `fiscal_document_versions.slot_id` 的外键指向
+`material_slots`，先删表会被 PostgreSQL 以 `DependentObjectsStillExist` 拒绝
+（本步骤已在真库实测过，第一次尝试就是按"先删子表"的直觉写的，被数据库挡下后
+才改成本顺序）。
 
 ```sql
 -- 1) 先解除引用：删掉指向 material_slots 的外键列。

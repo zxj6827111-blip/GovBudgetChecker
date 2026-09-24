@@ -88,18 +88,20 @@ jobs:
         run: python -m pytest
 
       # WP3-A：复核生命周期全是"锁 + 会话 + 指纹 + 文件"的并发一致性。
-      # WP3-B：人工补核决定同样有"唯一约束 + 乐观锁 + 会话绑定"的真库语义，
+      # WP3-B：人工补核决定同样有"唯一约束 + 乐观锁 + 会话绑定"的真库语义；
+      # 材料槽位迁移在真库验证 0021 → 0020 → 0019 逆序回滚链（禁 CASCADE），
       # 一起进硬门禁（要求 0 skipped，不许退回"默认全 skip、等于没测"）。
       # ``pytest -m real_database`` 默认 skip 是因为 conftest 摘掉了 DATABASE_URL，
       # 必须有这一步显式连真库，否则生产的 CAS、外层事务门禁、并发锁定、
       # 代际不变量永远不会被 CI 真正跑过——这正是上一轮的教训。
-      - name: Review lifecycle (real PostgreSQL)
+      - name: Review and migration lifecycle (real PostgreSQL)
         env:
           TESTING: "true"
           GOVBUDGET_TEST_DATABASE_URL: postgresql://govbudget_ci:govbudget_ci@localhost:5432/fiscal_ci
         run: >-
           python -m pytest tests/test_review_lifecycle_pg.py
-          tests/test_obligation_review_pg.py -q -m real_database
+          tests/test_obligation_review_pg.py
+          tests/test_material_slot_migration_pg.py -q -m real_database
 
       # Task 15.2 / 缺口 P2-03：从空库跑全量迁移，并断言重复执行幂等
       # （第二遍不得再应用任何迁移）。这是重复部署与回滚的前提。
