@@ -7025,21 +7025,28 @@ class R33CrossSanGongEcon(Rule):
         item_groups: Dict[str, str] = {}
         for subject, key in _SAN_GONG_SUBJECT_KEYS.items():
             group = groups.get(subject)
+            is_item = key in _SAN_GONG_ITEM_KEYS
             if group is None:
-                unresolved.append(f"三公表未识别到「{subject}」列组")
-                if key in _SAN_GONG_ITEM_KEYS:
+                # 四个业务项缺列组 → 该项不可比较（记账 + 阻塞该项）。
+                # 「合计」「小计」两个汇总结缺列组本身不阻塞比较：它们只在
+                # "有空白单元格需要确认成 0" 时才必需，缺了会让勾稽复算失败，
+                # 由下面 _blank_cells_confirmed 报出。若四个分项都是明确数值，
+                # 一份没有小计列组的三公表照样可以逐项比对，不该被判取数不足。
+                if is_item:
+                    unresolved.append(f"三公表未识别到「{subject}」列组")
                     blocked.add(key)
                 continue
             column = group.columns.get("final")
             if column is None:
-                unresolved.append(f"三公表「{subject}」列组未登记决算数列")
-                if key in _SAN_GONG_ITEM_KEYS:
+                if is_item:
+                    unresolved.append(f"三公表「{subject}」列组未登记决算数列")
                     blocked.add(key)
                 continue
             value, state = _three_public_cell_value(data_row.cells, int(column))
             if state == "unreadable":
-                unresolved.append(f"三公表「{subject}」决算数单元格无法解析为金额")
-                blocked.add(key)
+                if is_item:
+                    unresolved.append(f"三公表「{subject}」决算数单元格无法解析为金额")
+                    blocked.add(key)
                 continue
             if state == "blank":
                 blank_keys.add(key)

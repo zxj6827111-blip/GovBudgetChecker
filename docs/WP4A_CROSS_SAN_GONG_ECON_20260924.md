@@ -109,7 +109,7 @@ python scripts/check_coverage_baseline.py --assert-gaps 7   # 退出码 0
 
 ## 8. truth 回归与变异验证（任务书 §十三/§十四/§二十四）
 
-冻结真值夹具：`tests/fixtures/cross_san_gong_truth_page_data.json`
+用例 27 条（`tests/test_cross_san_gong_econ.py`）。冻结真值夹具：`tests/fixtures/cross_san_gong_truth_page_data.json`
 （宜川样张 41 页的 page_texts/page_tables，源 SHA 与夹具内容 SHA 双锁；
 本地有真实 PDF 时另做 SHA 交叉校验）。
 
@@ -122,6 +122,7 @@ python scripts/check_coverage_baseline.py --assert-gaps 7   # 退出码 0
 | 误配反例 | 出国/接待金额对调后按业务项身份报（13.24 vs 0.30 报在公务接待费） | 通过 |
 | 车道隔离 | 金额移入另一栏后不再认领，不产生假冲突 | 通过 |
 | 不可比较 | 表缺失、列组重名、单位缺失、年度不可确认、非数值单元格、勾稽不成立的空白 | 均取数不足 |
+| 汇总结缺失 | 三公表无「小计」列组但四分项都是明确数值 → 照样逐项比较；既有空白又无小计 → 空白项取数不足 | 通过 |
 | 部分取数不足 | 已确认冲突以 `partial_issues` 保留，整体记 `insufficient_data` | 通过 |
 | 注册与台账 | final 注册表含该 checker、budget 不含；回执六态映射；门禁待补核集合随状态变化 | 通过 |
 | 端到端 | 走真实 final 规则集执行，三条冲突仍在 findings 与 `outcomes`（status=fail） | 通过 |
@@ -131,14 +132,16 @@ python scripts/check_coverage_baseline.py --assert-gaps 7   # 退出码 0
 | 变异 | 期望 | 实测 |
 | --- | --- | --- |
 | 把 checker 从 `ALL_RULES` 撤下 | 端到端用例红 | **1 failed**（`test_truth_defect_survives_the_real_final_pipeline`） |
-| 把 FIN_06 的经济分类身份改错（出国↔接待名称对调） | 真值用例 + 误配反例红 | **2 failed** |
-| 还原 | 全绿 | 4 passed |
+| 把 FIN_06 的经济分类身份改错（接待行指向出国科目名） | 真值/误配/端到端用例红 | **3 failed** |
+| 把比较方向写反（`部分 ≤ 整体` 改成 `相等才放行`） | 真值用例红 | **1 failed** |
+| 空白单元格跳过勾稽确认直接当 0 | 勾稽用例红 | **1 failed** |
+| 还原 | 全绿 | 6 passed |
 
 ## 9. 验证汇总
 
 | 检查 | 结果 |
 | --- | --- |
-| 全量 `pytest` | **1895 passed / 135 skipped**（改前 1868/135；本机同一环境对照） |
+| 全量 `pytest` | **1897 passed / 135 skipped**（改前 1868/135；本机同一环境对照） |
 | `ruff check .` | All checks passed |
 | `mypy api src tests` | Success: no issues found in **247** source files |
 | `scripts/check_log_message_safety.py` | 通过 |
@@ -149,6 +152,7 @@ python scripts/check_coverage_baseline.py --assert-gaps 7   # 退出码 0
 | 前端 `npm run test:unit` | 全部子套件通过 |
 | 前端 `npm run build` | 通过 |
 | E2E | **198 passed / 18 skipped**（首轮 1 条 `report-actions` 勾选用例失败，单跑与复跑均通过，属既有偶发） |
+| GitHub CI（PR #48） | test-and-build **SUCCESS**：Ruff / 日志安全 / 环境对账 / Compose / Mypy / Pytest（1896 passed, 134 skipped，Linux+3.11）/ 真库 Review lifecycle（70 passed）/ 迁移幂等 / 回放门禁 / 前端 unit / Build / E2E（198 passed, 18 skipped） |
 | `check_coverage_baseline.py --assert-gaps 7` | 退出码 0 |
 
 ## 10. 明确不做（任务书 §二十一/§二十二）

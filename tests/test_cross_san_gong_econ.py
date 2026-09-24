@@ -409,6 +409,47 @@ def test_non_numeric_cell_in_amount_column_defers(truth):
         _run(_clone(truth, mutate))
 
 
+def _retitle_vehicle_subtotal(payload: Dict[str, Any]) -> None:
+    """把「小计」列组标题改掉，模拟不列小计列组的三公表。"""
+    page_tables = payload["page_tables"]
+    _replace_cell(page_tables, PAGE_FIN_07, 2, 4, "公车费用")
+
+
+def test_missing_vehicle_subtotal_column_does_not_block_explicit_items(truth):
+    """三公表没有「小计」列组，但四个分项都是明确数值：照样逐项比较。
+
+    汇总结（合计/小计）只在"有空白单元格需要确认为 0"时才必需；把它们
+    无条件当成前提条件，会让不含小计列组的合规三公表永远记取数不足。
+    """
+
+    def mutate(payload: Dict[str, Any]) -> None:
+        _retitle_vehicle_subtotal(payload)
+        row = _fin07_amount_row(payload["page_tables"])
+        # 出国与购置由空白改为明确 0.00 → 不再需要勾稽复算
+        _replace_cell(payload["page_tables"], PAGE_FIN_07, row, 3, "0.00")
+        _replace_cell(payload["page_tables"], PAGE_FIN_07, row, 7, "0.00")
+
+    issues = _run(_clone(truth, mutate))
+    assert set(_by_item(issues)) == {"overseas", "vehicle_operation", "reception"}
+
+
+def test_missing_vehicle_subtotal_plus_blank_cell_defers(truth):
+    """既没有小计列组、又有空白单元格：空白无法确认为 0 → 该项取数不足。"""
+
+    def mutate(payload: Dict[str, Any]) -> None:
+        _retitle_vehicle_subtotal(payload)
+        row = _fin07_amount_row(payload["page_tables"])
+        _replace_cell(payload["page_tables"], PAGE_FIN_07, row, 3, "0.00")
+
+    with pytest.raises(RuleDeferred) as excinfo:
+        _run(_clone(truth, mutate))
+    # 公务用车购置仍为空白且勾稽复算不可能 → 不参与正式比较
+    partial = list(getattr(excinfo.value, "partial_issues", []) or [])
+    assert "vehicle_purchase" not in {
+        issue.location["san_gong_item"] for issue in partial
+    }
+
+
 def test_blank_cell_is_zero_only_when_the_table_closes(truth):
     """空白单元格要靠本表勾稽确认为 0；勾稽不成立时不得当 0 用。
 
