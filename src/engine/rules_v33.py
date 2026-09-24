@@ -7320,6 +7320,709 @@ class R33CrossSanGongEcon(Rule):
         return "\n".join(lines)
 
 
+# ==================================================================================
+# 表文：基金/国资决算表 × 对应情况说明 逐项一致性（V33-TXT-FUND-DETAIL）
+#
+# 业务关系与可比性（为什么只有"逐项"可判）
+# ------------------------------------------------------------------
+# 《政府性基金预算财政拨款收入支出决算表》(FIN_08) 与《国有资本经营预算财政
+# 拨款收入支出决算表》(FIN_09) 的「本年支出」按功能分类逐项列示；对应的
+# "情况说明"章节在「支出具体情况如下」之后逐项写明 X（类）Y（款）Z（项）金额。
+# 同一业务项的两侧金额必须一致。真值：2026-09-16 人工判定 Y03（宜川路街道
+# 2025 年度决算）——P25 表内 2219899 其他住房保障支出本年支出 105.00 万元，
+# P37 说明第八节写 135.00 万元（差 30.00，且大于说明自述支出总额 105.00），
+# 系统曾漏报（outputs/sample_validation_20260916/comparison.md Y03，程度：高）。
+#
+# 为什么"逐项"必须按功能分类身份配对，不能按总额或数字就近：
+# 说明段同时出现 收入总额、支出总额、项金额、年初预算、支出决算、同比增减
+# （Y03 同段就有 105/105/135/0.00/135 五个数）——只有「X（类）Y（款）Z（项）
+# <金额>」句式同时携带完整的业务项身份与支出明细口径；配对依据是表内 7 位
+# 功能分类编码的三级层级名称逐级全匹配，任一层名称对不上即不可比。总额比对
+# 已由 V33-101~108 系（单点/总额）承担，本规则不重复（任务纪律：禁止再造总
+# 额 checker）。
+# ==================================================================================
+
+_TXT_FUND_OBLIGATION_ID = "OBL-TXT-FUND-DETAIL"
+
+#: (scope 键, scope 名称, 表名, 表别名, 说明章节标题关键词)
+_TXT_FUND_SCOPES: Tuple[Tuple[str, str, str, Tuple[str, ...], Tuple[str, ...]], ...] = (
+    (
+        "gov_fund",
+        "政府性基金",
+        NINE_TABLES[7]["name"],
+        tuple(NINE_TABLES[7]["aliases"]),
+        ("政府性基金", "收入支出决算情况说明"),
+    ),
+    (
+        "state_capital",
+        "国有资本经营",
+        NINE_TABLES[8]["name"],
+        tuple(NINE_TABLES[8]["aliases"]),
+        ("国有资本经营", "收入支出决算情况说明"),
+    ),
+)
+
+#: 说明侧「无相关收支」等效表述（去空白后包含即命中）。
+#: 注意：只有当**表侧**列有非零金额时才构成矛盾；不得反过来凭说明里的一个
+#: "无"字把整个 scope 判不适用——空表 + 无收支说明同时成立才是该 scope 无
+#: 比较对象的证据（V33-109 另行负责空表说明缺失）。
+_TXT_FUND_NEGATIVE_STATEMENTS: Dict[str, Tuple[str, ...]] = {
+    "gov_fund": ("无政府性基金预算财政拨款收入和支出", "无政府性基金预算财政拨款收支"),
+    "state_capital": ("无国有资本经营预算财政拨款收入和支出", "无国有资本经营预算财政拨款收支"),
+}
+
+#: 支出明细引导语（含变体）——说明项金额的口径锚（本年支出决算明细段）
+_TXT_FUND_BREAKDOWN_RE = re.compile(r"支\s*出\s*(?:具\s*体\s*)?情\s*况\s*如\s*下")
+
+#: 项级说明句：类（类）款（款）项（项）金额+单位。名称段允许内部换行
+#: （PDF 软换行把"其他住房保障支出"拆成两行），但不允许跨过句读边界与括号
+#: ——否则引导语会被并进名称段。金额必须自带单位字样：不带单位的裸数字
+#: 多为年份/编号/占比，一律不绑定。
+_TXT_FUND_ITEM_RE = re.compile(
+    r"(?P<klass>[^，。；：:、（）()]{1,40}?)\s*（\s*类\s*）\s*"
+    r"(?P<kuan>[^，。；：:、（）()]{1,60}?)\s*（\s*款\s*）\s*"
+    r"(?P<xiang>[^，。；：:、（）()]{1,60}?)\s*（\s*项\s*）\s*"
+    r"[，,]?\s*(?P<amount>\d[\d,，]*(?:\.\d+)?)\s*"
+    r"(?P<unit>万\s*元|亿\s*元|元)"
+)
+
+#: 说明句前缀里的显式年份（期间锚）：与材料年度不同的年份出现在同一句里，
+#: 说明该句可能在描述另一期间——不跨期绑定。
+_TXT_FUND_YEAR_RE = re.compile(r"(?:19|20)\d{2}")
+
+#: 单位归一（AGENTS.md v3_3_portable 口径）：元 = 0.0001 万元、亿元 = 10000 万元
+_TXT_FUND_UNIT_TO_WAN: Dict[str, Decimal] = {
+    "万元": Decimal("1"),
+    "元": Decimal("0.0001"),
+    "亿元": Decimal("10000"),
+}
+
+
+def _txt_fund_norm(text: Any) -> str:
+    """基金/国资业务项名称与单位归一：去空白（PDF 断行）+ 全半角括号统一。
+
+    只做无损归一，不做模糊匹配——历史缺陷正是"名称近似就当同一项"。
+    """
+    return re.sub(r"\s+", "", str(text or "")).replace("（", "(").replace("）", ")")
+
+
+def _txt_fund_display(value: Decimal) -> str:
+    """万元口径两位小数显示（与公开表显示精度一致；normalize 会把 30.00 变 3E+1，不用）。"""
+    return str(value.quantize(Decimal("0.01")))
+
+
+def _txt_fund_merged_pages(doc: Document) -> Tuple[str, List[int]]:
+    """合并页文本并记录每页起始偏移（说明句 → 物理页码 反查用）。"""
+    texts = [str(item or "") for item in (getattr(doc, "page_texts", []) or [])]
+    offsets: List[int] = []
+    parts: List[str] = []
+    cursor = 0
+    for text in texts:
+        offsets.append(cursor)
+        parts.append(text)
+        cursor += len(text) + 1  # 与 "\n".join 的分隔符对齐
+    return "\n".join(parts), offsets
+
+
+def _txt_fund_page_for(offsets: List[int], position: int) -> int:
+    """字符偏移 → 物理页（1 基）：最后一个起始偏移不晚于 position 的页。"""
+    page = 0
+    for index, offset in enumerate(offsets):
+        if offset <= position:
+            page = index + 1
+        else:
+            break
+    return page
+
+
+def _txt_fund_section(
+    merged: str, offsets: List[int], keywords: Tuple[str, ...]
+) -> Optional[Dict[str, Any]]:
+    """定位资金性质对应的情况说明章节。
+
+    复用 narration.find_section_scope_with_title 的"取正文最长"启发式排除目录
+    页同名行干扰；章节标题页码由标题串在正文起点前的最后一次出现反查（目录中
+    的同名行在更早处，rfind 取后者即真实章节标题）。
+    """
+    from src.utils.narration import find_section_scope_with_title
+
+    found = find_section_scope_with_title(merged, list(keywords))
+    if not found:
+        return None
+    title, body, start, _end = found
+    title_pos = merged.rfind(title, 0, start)
+    return {
+        "title": title,
+        "body": body,
+        "body_start": start,
+        "normalized": _txt_fund_norm(body),
+        "page": _txt_fund_page_for(offsets, title_pos if title_pos >= 0 else start),
+    }
+
+
+def _txt_fund_tables_by_alias(doc: Document, aliases: Tuple[str, ...]) -> List[Any]:
+    """按表名别名枚举全部命中的结构化表（0 张或多张都如实返回）。
+
+    匹配口径与 ``_find_parsed_table`` 同源（title 含别名 / 锚点表名含别名 /
+    表起始页页文本含别名），但不做"第一个命中即返回"——同一份材料出现两张
+    同名表是身份歧义，必须让调用方记取数不足，而不是随手取第一张。
+    """
+    tables = getattr(doc, "parsed_tables", None)
+    if not isinstance(tables, dict):
+        return []
+    page_texts = getattr(doc, "page_texts", []) or []
+    matched: List[Any] = []
+    for table in tables.values():
+        title = getattr(table, "title", "") or ""
+        anchor = getattr(table, "anchor_table_name", "") or ""
+        start_page = int((getattr(table, "page_span", (0, 0)) or (0, 0))[0] or 0)
+        page_hit = (
+            0 < start_page <= len(page_texts)
+            and any(alias in (page_texts[start_page - 1] or "") for alias in aliases)
+        )
+        if any(alias in title or alias in anchor for alias in aliases) or page_hit:
+            matched.append(table)
+    return matched
+
+
+def _txt_fund_table_columns(table: Any) -> Tuple[Optional[Dict[str, int]], str]:
+    """定位基金/国资表的关键列（编码/名称/本年支出·功能分类合计）。
+
+    不读 semantic_columns：真值样张 P25 的「合计/基本支出/项目支出」子表头
+    与合计行金额同在一行，被数据行守卫挡下后 semantic_columns 为空；P26 虽然
+    登记了 total=[0,4]，但 [0] 是行标签列（已知陷阱）。两种版式都必须从表头
+    行 + 功能分类子表头行走同一条显式定位路。
+    """
+    header_rows = [row for row in table.rows if row.row_role == "header"]
+    if not header_rows:
+        return None, "未解析到表头行"
+    code_col: Optional[int] = None
+    name_col: Optional[int] = None
+    expend_col: Optional[int] = None
+    year_end_col: Optional[int] = None
+    for row in header_rows:
+        for index, cell in enumerate(row.cells):
+            text = _txt_fund_norm(cell.text)
+            if not text:
+                continue
+            if code_col is None and "编码" in text:
+                code_col = index
+            if name_col is None and "科目名称" in text:
+                name_col = index
+            if expend_col is None and text in ("本年支出", "本年支出合计"):
+                expend_col = index
+            if year_end_col is None and "年末结转" in text:
+                year_end_col = index
+    missing = [
+        label
+        for label, value in (
+            ("科目编码", code_col),
+            ("科目名称", name_col),
+            ("本年支出", expend_col),
+            ("年末结转和结余", year_end_col),
+        )
+        if value is None
+    ]
+    if missing:
+        return None, "表头未定位到「" + "」「".join(missing) + "」列"
+    assert expend_col is not None and year_end_col is not None
+    if year_end_col <= expend_col:
+        return None, "「本年支出」与「年末结转和结余」列位序不成立"
+    # 功能分类子表头行：本年支出列段内同现「基本支出/项目支出」，段内「合计」
+    # 即本年支出合计列（P25 的子表头在合计行上、P26 在空合计行上，同一路径）。
+    # 「合计」子列与「本年支出」超级表头同位（合并单元格抽取落在组首列），区间
+    # 下界必须含 expend_col，否则永远扫不到它。
+    total_col: Optional[int] = None
+    for row in table.rows:
+        texts = [_txt_fund_norm(cell.text) for cell in row.cells]
+        has_basic = any(
+            t == "基本支出" and expend_col <= i < year_end_col for i, t in enumerate(texts)
+        )
+        has_project = any(
+            t == "项目支出" and expend_col <= i < year_end_col for i, t in enumerate(texts)
+        )
+        if not (has_basic and has_project):
+            continue
+        totals = [i for i, t in enumerate(texts) if t == "合计" and expend_col <= i < year_end_col]
+        if len(totals) > 1:
+            return None, "本年支出列段内「合计」子表头出现多次，列身份有歧义"
+        if totals:
+            total_col = totals[0]
+            break
+    if total_col is None:
+        return None, "「本年支出」列段内未定位到功能分类「合计」子表头"
+    assert code_col is not None and name_col is not None
+    return {"code": code_col, "name": name_col, "expend_total": total_col}, ""
+
+
+def _txt_fund_table_items(
+    table: Any, columns: Dict[str, int]
+) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    """取表内功能分类行（编码/名称/本年支出金额）与 编码→名称 层级表。
+
+    金额单元格读 ParsedCell.number（三态）：空白/文本不转 0，保持 None
+    交给调用方按"不可读"处理。
+    """
+    name_col = columns["name"]
+    total_col = columns["expend_total"]
+    table_page = int((getattr(table, "page_span", (0, 0)) or (0, 0))[0] or 0)
+    hierarchy: Dict[str, str] = {}
+    items: List[Dict[str, Any]] = []
+    for row in table.rows:
+        if row.row_role == "header":
+            continue
+        code = str(row.code or "").strip()
+        if not code or not code.isdigit():
+            continue
+        name = ""
+        if 0 <= name_col < len(row.cells):
+            name = _txt_fund_norm(row.cells[name_col].text)
+        hierarchy[code] = name
+        amount = None
+        page = table_page
+        if 0 <= total_col < len(row.cells):
+            cell = row.cells[total_col]
+            amount = cell.number
+            page = int(getattr(cell, "page", None) or table_page)
+        items.append({"code": code, "name": name, "amount": amount, "page": page})
+    return items, hierarchy
+
+
+def _txt_fund_match_item(
+    items: List[Dict[str, Any]],
+    hierarchy: Dict[str, str],
+    klass: str,
+    kuan: str,
+    xiang: str,
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    """三级层级名称逐级全匹配定位唯一表行；0 行/多行/层级不全都不可比。
+
+    说明侧只有名称没有编码，身份锚是"表内编码层级推导出的名称链"：项级行
+    （7 位编码）的款层（code[:5]）与类层（code[:3]）行名称必须逐级相等。
+    只凭项级名称相等不认——那是 Mutation A 要拦的误配形态。
+    """
+    same_name = [item for item in items if len(item["code"]) == 7 and item["name"] == xiang]
+    hits: List[Dict[str, Any]] = []
+    incomplete = False
+    for item in same_name:
+        kuan_name = hierarchy.get(item["code"][:5])
+        klass_name = hierarchy.get(item["code"][:3])
+        if kuan_name is None or klass_name is None:
+            incomplete = True
+            continue
+        if kuan_name == kuan and klass_name == klass:
+            hits.append(item)
+    if len(hits) > 1:
+        return None, "命中多行，无法确定取哪一行"
+    if hits and len(same_name) > len(hits):
+        return None, "同名项级行存在类/款层级不全的行，业务身份无法闭环"
+    if hits:
+        return hits[0], ""
+    if incomplete:
+        return None, "表内项级行存在，但类/款层级行缺失，三级业务身份无法闭环"
+    return None, "未在表内定位到同名同级的功能分类项"
+
+
+def _txt_fund_bind_statements(
+    body: str, fiscal_year: Optional[int]
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """绑定说明章节里的项级支出金额句。
+
+    一条说明句要成为正式比较的说明侧证据，必须同时满足四个锚：
+    - 业务项锚：完整三级「X（类）Y（款）Z（项）」身份；
+    - 口径锚：落在「支出具体情况如下（含变体）」之后的支出明细段里
+      （同段还有收入总额/年初预算/同比增减，都不能当项金额）；
+    - 期间锚：句前缀不出现与材料年度不同的显式年份；
+    - 单位锚：金额自带单位字样且在归一口径内。
+    任一锚不成立 → 不绑定并记录原因（fail-closed，不出正式结论）。
+    """
+    markers = [m.start() for m in _TXT_FUND_BREAKDOWN_RE.finditer(body)]
+    bindings: List[Dict[str, Any]] = []
+    blocked: List[str] = []
+    amounts_by_item: Dict[str, List[str]] = {}
+    for m in _TXT_FUND_ITEM_RE.finditer(body):
+        klass = _txt_fund_norm(m.group("klass"))
+        kuan = _txt_fund_norm(m.group("kuan"))
+        xiang = _txt_fund_norm(m.group("xiang"))
+        amount_text = re.sub(r"[,，\s]", "", m.group("amount"))
+        unit = _txt_fund_norm(m.group("unit"))
+        label = f"{klass}（类）{kuan}（款）{xiang}（项）"
+        if not any(pos < m.start() for pos in markers):
+            blocked.append(
+                f"说明句「{label}…」未落在「支出具体情况如下」支出明细段内，"
+                "支出决算口径不可确认"
+            )
+            continue
+        # 期间锚：句读边界截出的前缀**或项名本身**出现异年 → 不跨期绑定。
+        # 项名可能自带年份前缀（「2024年度住房保障支出（类）」——年份被名称段
+        # 吸收时前缀检查扫不到，必须两处都查）。
+        prefix = body[max(0, m.start() - 40):m.start()]
+        cut = max(prefix.rfind(ch) for ch in "。；：！？\n")
+        if cut >= 0:
+            prefix = prefix[cut + 1:]
+        foreign_years = sorted(
+            {
+                int(found)
+                for found in _TXT_FUND_YEAR_RE.findall(prefix + klass)
+                if fiscal_year is not None and int(found) != fiscal_year
+            }
+        )
+        if fiscal_year is None or foreign_years:
+            blocked.append(
+                f"说明句「{label}…」所在句含与材料年度（{fiscal_year}）"
+                f"不同的年份 {foreign_years}，不跨期绑定"
+            )
+            continue
+        factor = _TXT_FUND_UNIT_TO_WAN.get(unit)
+        if factor is None:
+            blocked.append(f"说明句「{label}…」金额单位「{unit}」不在归一口径内")
+            continue
+        try:
+            amount = Decimal(amount_text)
+        except Exception:  # pragma: no cover - 正则已保证数字形态
+            blocked.append(f"说明句「{label}…」金额无法解析为数值")
+            continue
+        scale = len(amount_text.split(".", 1)[1]) if "." in amount_text else 0
+        key = f"{klass}|{kuan}|{xiang}"
+        amounts_by_item.setdefault(key, []).append(amount_text)
+        bindings.append(
+            {
+                "klass": klass,
+                "kuan": kuan,
+                "xiang": xiang,
+                "label": label,
+                "amount": amount,
+                "unit": unit,
+                "scale": scale,
+                "offset": m.start(),
+                "span": m.group(0),
+            }
+        )
+    # 同一业务项出现多个不同金额：取哪个无从证明（同段矛盾归其它规则）→ 不比较该项
+    deduped: List[Dict[str, Any]] = []
+    processed: Set[str] = set()
+    for binding in bindings:
+        key = f"{binding['klass']}|{binding['kuan']}|{binding['xiang']}"
+        if len(set(amounts_by_item[key])) > 1:
+            blocked.append(
+                f"说明对「{binding['label']}」给出了多个不同金额"
+                f"（{'、'.join(dict.fromkeys(amounts_by_item[key]))}），"
+                "无法确定与本表比较的金额（同段矛盾请先人工复核）"
+            )
+            continue
+        if key in processed:
+            continue
+        processed.add(key)
+        deduped.append(binding)
+    return deduped, list(dict.fromkeys(blocked))
+
+
+class R33TxtFundDetail(Rule):
+    """政府性基金(FIN_08)/国有资本经营(FIN_09)决算表 × 对应说明 逐项支出一致性。
+
+    只做一件事：把说明章节「支出具体情况如下」段里以完整类/款/项身份列示的
+    支出金额，逐一与表内同一功能分类项的「本年支出」决算金额比对；不一致即
+    报，finding 带齐两侧表身份、页码、科目编码/名称、两侧金额、差额、单位、
+    年度与资金性质（义务编号可对照台账）。
+
+    每个 fund scope 独立判适用性（缺 FIN_09 表不得拖垮基金 scope，反之亦然）；
+    表身份/列身份/科目身份/金额单位/财政年度任一确认不了就 fail-closed 记取
+    数不足，已确认的冲突经 partial_issues 保留，不被部分取数不足吞掉。
+    """
+
+    code, severity = "V33-TXT-FUND-DETAIL", "error"
+    desc = "政府性基金/国有资本经营决算表与对应说明逐项支出一致性"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        if not _ensure_parsed_tables(doc):
+            raise RuleDeferred(self.code, "结构化表模型不可用（page_tables/page_texts 不足）")
+        merged, offsets = _txt_fund_merged_pages(doc)
+        issues: List[Issue] = []
+        unresolved: List[str] = []
+        for scope in _TXT_FUND_SCOPES:
+            self._apply_scope(doc, scope, merged, offsets, issues, unresolved)
+        if unresolved:
+            raise RuleDeferred(
+                self.code,
+                "；".join(dict.fromkeys(unresolved)),
+                partial_issues=issues,
+                unresolved_reasons=list(dict.fromkeys(unresolved)),
+            )
+        return issues
+
+    # ---- 内部：单 scope ----
+
+    def _apply_scope(
+        self,
+        doc: Document,
+        scope: Tuple[str, str, str, Tuple[str, ...], Tuple[str, ...]],
+        merged: str,
+        offsets: List[int],
+        issues: List[Issue],
+        unresolved: List[str],
+    ) -> None:
+        scope_key, scope_label, table_title, aliases, section_keywords = scope
+        section = _txt_fund_section(merged, offsets, section_keywords)
+
+        # 表身份：枚举**全部**命中表（_find_parsed_table 每 alias 只回第一个命中，
+        # 同名两张表会漏检歧义）；命中 0 张 = 表缺失，>1 张 = 身份歧义。
+        matched = _txt_fund_tables_by_alias(doc, aliases)
+        if len(matched) > 1:
+            unresolved.append(
+                f"{scope_label}：《{table_title}》结构化表命中 {len(matched)} 张，表身份有歧义"
+            )
+            return
+        table = matched[0] if matched else None
+
+        if table is None:
+            # 表缺失本身归九表在位检查；但说明已列示项级金额而表缺失时，
+            # 本义务确实无从核对 → 记取数不足（不是静默通过）。
+            if section is not None and _TXT_FUND_ITEM_RE.search(section["body"]):
+                unresolved.append(
+                    f"{scope_label}：说明章节列示了项级金额，但未定位到"
+                    f"《{table_title}》结构化表，无法逐项核对"
+                )
+            return
+
+        parse_errors = list(getattr(table, "parse_errors", None) or [])
+        if parse_errors:
+            unresolved.append(
+                f"《{table_title}》解析存在不确定："
+                + "；".join(str(item) for item in parse_errors[:3])
+            )
+            return
+
+        columns, column_error = _txt_fund_table_columns(table)
+        if columns is None:
+            unresolved.append(f"《{table_title}》{column_error}")
+            return
+        items, hierarchy = _txt_fund_table_items(table, columns)
+        readable = [item for item in items if item["amount"] is not None]
+        has_data = any(item["amount"] != 0 for item in readable)
+
+        if not has_data:
+            # 空表：本 scope 无逐项比较对象（空表说明缺失归 V33-109）。但说明
+            # 列示了项级金额而表无数据时，两侧矛盾到无法逐项核对 → 记取数不足。
+            if section is not None and _TXT_FUND_ITEM_RE.search(section["body"]):
+                unresolved.append(
+                    f"{scope_label}：说明章节列示了项级金额，但《{table_title}》"
+                    "未取到任何金额，无法逐项核对"
+                )
+            return
+
+        table_page = int((getattr(table, "page_span", (0, 0)) or (0, 0))[0] or 0)
+        if section is None:
+            unresolved.append(
+                f"{scope_label}：《{table_title}》（第{table_page}页）列有支出金额，"
+                f"但未定位到「{section_keywords[0]}…{section_keywords[1]}」说明章节"
+            )
+            return
+
+        year = _resolve_fiscal_year(doc, (table_page, section["page"]))
+        if year is None:
+            unresolved.append(f"{scope_label}：未能确认材料财政年度，期间一致性不可确认")
+            return
+
+        table_unit = _resolve_table_unit(doc, table_page)
+        table_factor = _TXT_FUND_UNIT_TO_WAN.get(_txt_fund_norm(table_unit or ""))
+        if table_factor is None:
+            unresolved.append(
+                f"{scope_label}：《{table_title}》金额单位未识别或不在归一口径"
+                f"（{table_unit or '未识别'}），无法形成正式比较"
+            )
+            return
+
+        # 表有数据 + 说明称"无相关收支"：两侧不能同时成立（正式矛盾）
+        negatives = _TXT_FUND_NEGATIVE_STATEMENTS[scope_key]
+        if any(phrase in section["normalized"] for phrase in negatives):
+            total_wan = sum(
+                (item["amount"] for item in readable), Decimal("0")
+            ) * table_factor
+            message = (
+                f"{scope_label}支出表文矛盾：说明章节（第{section['page']}页）称"
+                f"「无{scope_label}预算财政拨款收入和支出」，但《{table_title}》"
+                f"第{table_page}页列示了 {len(readable)} 个功能分类项"
+                f"（本年支出合计 {_txt_fund_display(total_wan)} 万元）。"
+                "表与说明不能同时成立，需人工复核表与说明底稿。"
+            )
+            location = {
+                "table": table_title,
+                "page": table_page,
+                "pages": sorted({table_page, section["page"]}),
+                "fund_scope": scope_label,
+                "obligation_id": _TXT_FUND_OBLIGATION_ID,
+                "table_amount": str(total_wan),
+                "unit": "万元",
+                "fiscal_year": year,
+                "table_refs": [
+                    {
+                        "role": "表格",
+                        "table": table_title,
+                        "page": table_page,
+                        "field": "本年支出（功能分类合计）",
+                    },
+                    {
+                        "role": "情况说明",
+                        "section": section["title"],
+                        "page": section["page"],
+                    },
+                ],
+            }
+            evidence = "\n".join(
+                [
+                    f"表格侧：《{table_title}》（第{table_page}页，本年支出·功能分类合计）",
+                    f"说明侧：{section['title']}（第{section['page']}页）",
+                    f"表格列示功能分类项 {len(readable)} 个，本年支出合计 "
+                    f"{_txt_fund_display(total_wan)} 万元",
+                    "说明称「无" + scope_label + "预算财政拨款收入和支出」",
+                    f"财政年度：{year}；资金性质：{scope_label}预算财政拨款",
+                    "可比口径：同一单位同一年度同一资金性质，表与说明对"
+                    "「是否存在相关收支」给出相反结论。",
+                ]
+            )
+            issues.append(
+                self._issue(message, location, severity="error", evidence_text=evidence)
+            )
+            return
+
+        bindings, blocked = _txt_fund_bind_statements(section["body"], year)
+        if blocked:
+            unresolved.extend(f"{scope_label}：{reason}" for reason in blocked)
+        if not bindings:
+            unresolved.append(
+                f"{scope_label}：《{table_title}》（第{table_page}页）列有支出金额，"
+                "但说明章节无可绑定的项级支出表述"
+            )
+            return
+
+        for binding in bindings:
+            item, match_error = _txt_fund_match_item(
+                items, hierarchy, binding["klass"], binding["kuan"], binding["xiang"]
+            )
+            if item is None:
+                unresolved.append(
+                    f"{scope_label}：说明项「{binding['label']}」{match_error}，该句不形成正式比较"
+                )
+                continue
+            if item["amount"] is None:
+                unresolved.append(
+                    f"{scope_label}：表内「{item['code']} {item['name']}」的本年支出"
+                    "单元格不可读（空白不按 0 处理），该业务项不形成正式比较"
+                )
+                continue
+            table_wan = item["amount"] * table_factor
+            narrative_wan = binding["amount"] * _TXT_FUND_UNIT_TO_WAN[binding["unit"]]
+            envelope = compute_dynamic_envelope(
+                [
+                    (_display_scale(item["amount"]), _txt_fund_norm(table_unit or "")),
+                    (binding["scale"], binding["unit"]),
+                ]
+            )
+            diff = abs(table_wan - narrative_wan)
+            if diff <= Decimal("0.0000001"):
+                continue
+            narrative_page = _txt_fund_page_for(
+                offsets, section["body_start"] + binding["offset"]
+            )
+            location = {
+                "table": table_title,
+                "page": int(item["page"]),
+                "pages": sorted({int(item["page"]), narrative_page}),
+                "row": f"{item['code']} {item['name']}",
+                "code": item["code"],
+                "field": "本年支出（功能分类合计）",
+                "fund_scope": scope_label,
+                "obligation_id": _TXT_FUND_OBLIGATION_ID,
+                "table_amount": str(item["amount"]),
+                "narrative_amount": str(binding["amount"]),
+                "narrative_page": narrative_page,
+                "narrative_section": section["title"],
+                "difference": _txt_fund_display(diff),
+                "unit": "万元",
+                "fiscal_year": year,
+                "table_refs": [
+                    {
+                        "role": "表格",
+                        "table": table_title,
+                        "page": int(item["page"]),
+                        "row": f"{item['code']} {item['name']}",
+                        "code": item["code"],
+                        "field": "本年支出（功能分类合计）",
+                    },
+                    {
+                        "role": "情况说明",
+                        "section": section["title"],
+                        "page": narrative_page,
+                        "span": binding["span"],
+                    },
+                ],
+            }
+            if diff <= envelope:
+                issues.append(
+                    self._issue(
+                        f"{scope_label}支出说明「{binding['label']}」表列示 {item['amount']} "
+                        f"{table_unit}，说明写 {binding['amount']} {binding['unit']}，相差 "
+                        f"{_txt_fund_display(diff)} 万元，在显示舍入包络"
+                        f"（{_txt_fund_display(envelope)} 万元）内，可能为取整误差。",
+                        location,
+                        severity="info",
+                        evidence_text=self._txt_fund_evidence(
+                            scope_label, table_title, table_unit,
+                            section["title"], item, binding,
+                            narrative_page, diff, year,
+                        ),
+                    )
+                )
+                continue
+            issues.append(
+                self._issue(
+                    f"{scope_label}支出说明不一致：功能分类项「{binding['label']}」在"
+                    f"《{table_title}》（第{item['page']}页，本年支出·功能分类合计）列示 "
+                    f"{item['amount']} {table_unit}，但「{section['title']}」"
+                    f"（第{narrative_page}页）写 {binding['amount']} {binding['unit']}，"
+                    f"相差 {_txt_fund_display(diff)} 万元（{year} 年度）。"
+                    "表与说明不能同时成立，现有材料无法判定哪一侧有误，"
+                    "需人工复核表与说明底稿。",
+                    location,
+                    severity="error",
+                    evidence_text=self._txt_fund_evidence(
+                        scope_label, table_title, table_unit,
+                        section["title"], item, binding,
+                        narrative_page, diff, year,
+                    ),
+                )
+            )
+
+    # ---- 内部：finding 证据 ----
+
+    def _txt_fund_evidence(
+        self,
+        scope_label: str,
+        table_title: str,
+        table_unit: str,
+        section_title: str,
+        item: Dict[str, Any],
+        binding: Dict[str, Any],
+        narrative_page: int,
+        diff: Decimal,
+        year: int,
+    ) -> str:
+        return "\n".join(
+            [
+                f"表格侧：《{table_title}》（第{item['page']}页，本年支出·功能分类合计）",
+                f"说明侧：{section_title}（第{narrative_page}页）",
+                f"业务项：{item['code']} {item['name']}（{binding['label']}）",
+                f"表格金额：{item['amount']} {table_unit}",
+                f"说明金额：{binding['amount']} {binding['unit']}"
+                f"（原文：{binding['span']}）",
+                f"差额：{_txt_fund_display(diff)} 万元",
+                f"财政年度：{year}；单位：万元；资金性质：{scope_label}预算财政拨款",
+                "可比口径：两侧均为本年度" + scope_label + "预算财政拨款的本年"
+                "支出决算数，同一功能分类项。",
+            ]
+        )
+
+
 ALL_RULES = [
     R33001_CoverYearUnit(),
     R33002_NineTablesCheck(),
@@ -7375,6 +8078,7 @@ ALL_RULES = [
     R33204_InterTable_T2_T4(),
     # WP4-A：三公经费表 × 基本支出经济分类表（跨表资金来源一致性）
     R33CrossSanGongEcon(),
+    R33TxtFundDetail(),
     R33233_DetailRowFormulaConsistency(),
     R33234_NarrativePercentConsistency(),
     R33235_NarrativeAmountConsistency(),
