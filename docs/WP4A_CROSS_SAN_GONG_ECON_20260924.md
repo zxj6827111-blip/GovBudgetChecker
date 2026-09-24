@@ -103,7 +103,9 @@ python scripts/check_coverage_baseline.py --assert-gaps 7   # 退出码 0
 
 **未改 `docs/baselines/wp0_coverage_baseline.json`**（WP0 比较基准，不是答案文件）。
 本轮能力结果另存为 `docs/baselines/wp4a_coverage_current_20260924.json`，
-两份文件并存，互不覆盖。
+两份文件并存，互不覆盖。该文件由脚本 `--write` 生成，`source.commit` 记录生成时刻的
+代码提交（`99aa692`）；`dirty=true` 是因为该文件自身当时尚未入库，不代表工作树有
+未记录的业务改动。
 
 ## 8. truth 回归与变异验证（任务书 §十三/§十四/§二十四）
 
