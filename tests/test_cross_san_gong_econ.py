@@ -310,7 +310,7 @@ def test_amounts_are_bound_by_business_identity_not_proximity(truth):
 
 
 def test_vehicle_purchase_binds_through_the_310_economic_class(truth):
-    """公务用车购置（310 资本性支出类）也要按业务项绑定，不能只看 302 类。"""
+    """公务用车购置（31013 资本性支出）也按「名称 + 精确编码」绑定，不能只扫 302 类。"""
 
     def mutate(payload: Dict[str, Any]) -> None:
         page_tables = payload["page_tables"]
@@ -339,6 +339,127 @@ def test_amount_in_the_other_lane_is_not_bound_to_this_item(truth):
 
     issues = _run(_clone(truth, mutate))
     assert set(_by_item(issues)) == {"vehicle_operation", "reception"}
+
+
+# ---------------------------------------------------------------------------
+# 精确经济分类代码：名称 + 编码必须同时成立（同类错码 / 缺码 → 取数不足）
+# ---------------------------------------------------------------------------
+
+#: 真值样张 FIN_06 的续页（基本支出表跨 22-23 页，合并后的续页行单元格带真实页码）
+PAGE_FIN_06_CONTINUATION = 23
+
+
+def test_each_business_item_binds_its_exact_economic_code(truth):
+    """原始真值继续全部命中精确编码：30212 / 30217 / 30231 / 31013。
+
+    三项冲突 finding 的 code 必须分别是 30212/30217/30231；
+    31013（公务用车购置）由 test_vehicle_purchase_binds_through_the_310_economic_class 守住。
+    """
+    items = _by_item(_run(_document(truth)))
+    assert items["overseas"].location["code"] == "30212"
+    assert items["reception"].location["code"] == "30217"
+    assert items["vehicle_operation"].location["code"] == "30231"
+
+
+def test_same_class_wrong_code_is_an_identity_conflict_not_a_finding(truth):
+    """Case A：「30231 公务接待费」——同 302 类但编码指向别的业务项。
+
+    若只判 302 类级前缀，30231（公务用车运行维护费）会被当成接待费继续比，
+    产生 8.31 > 0.30 的假正式 finding。正确做法：名称与精确编码必须同时成立，
+    否则记取数不足；其余已确认冲突（出国/运行维护）经 partial_issues 保留。
+    """
+
+    def mutate(payload: Dict[str, Any]) -> None:
+        page_tables = payload["page_tables"]
+        row = _find_row(page_tables, PAGE_FIN_06, "公务接待费")
+        _replace_cell(page_tables, PAGE_FIN_06, row, 3, "30231")  # 原值 30217
+
+    with pytest.raises(RuleDeferred) as excinfo:
+        _run(_clone(truth, mutate))
+    assert excinfo.value.status == "insufficient_data"
+    reason = f"{excinfo.value.detail} {' '.join(excinfo.value.unresolved_reasons or [])}"
+    assert "expected 30217" in reason
+    assert "actual 30231" in reason
+
+    partial = _by_item(getattr(excinfo.value, "partial_issues", []) or [])
+    assert set(partial) == {"overseas", "vehicle_operation"}, (
+        "一项错码不得吞掉其它已确认冲突，也不得给 reception 出正式 finding"
+    )
+
+
+def test_missing_code_never_produces_a_formal_finding(truth):
+    """Case B：名称命中但编码清空了——不能凭名称"看起来对"就放行正式比较。
+
+    编码不识别时该项记取数不足；若其它业务项已有确认冲突，经
+    partial_issues 保留，不因一项缺码整体开天窗。
+    """
+
+    def mutate(payload: Dict[str, Any]) -> None:
+        page_tables = payload["page_tables"]
+        row = _find_row(page_tables, PAGE_FIN_06, "因公出国")
+        _replace_cell(page_tables, PAGE_FIN_06, row, 3, "")  # 原值 30212
+
+    with pytest.raises(RuleDeferred) as excinfo:
+        _run(_clone(truth, mutate))
+    assert excinfo.value.status == "insufficient_data"
+    reason = f"{excinfo.value.detail} {' '.join(excinfo.value.unresolved_reasons or [])}"
+    assert "expected 30212" in reason
+
+    partial = _by_item(getattr(excinfo.value, "partial_issues", []) or [])
+    assert "overseas" not in partial
+    assert set(partial) == {"vehicle_operation", "reception"}
+
+
+# ---------------------------------------------------------------------------
+# 证据页码：跨页表的续页行，finding 必须写单元格的真实页
+# ---------------------------------------------------------------------------
+
+
+def test_finding_uses_the_actual_cell_page_of_a_continued_row(truth):
+    """基本支出表的行续到第 23 页：证据不得落成表起始页 22。
+
+    真值样张的 FIN_06 本来就跨 22-23 两页（合并后 31021/31022 等行的页码是 23）。
+    变异把「公务接待费」从 P22 挪到 P23 的既有数据行上（表头签名不动，
+    结构化 continuation 合并照旧成立），冲突结论不变，但证据必须改写
+    单元格的真实页：FIN_06 第 23 页、FIN_07 第 24 页。
+
+    注：接收行只能用 P23 的 detail 行（原 31022 无形资产购置）。该续页的
+    前两行被结构化层归类为 header（续页盲行是解析层的已知形态，见交付文档
+    残余风险），与"真实页码"这一资产无关。
+    """
+
+    def mutate(payload: Dict[str, Any]) -> None:
+        page_tables = payload["page_tables"]
+        row = _find_row(page_tables, PAGE_FIN_06, "公务接待费")
+        for col in (3, 4, 5):  # P22 上接待费的右栏（编码/名称/金额）清掉
+            _replace_cell(page_tables, PAGE_FIN_06, row, col, "")
+        # P23 续页第一行 detail 行（原 31022 无形资产购置，无金额）换成接待费
+        _replace_cell(page_tables, PAGE_FIN_06_CONTINUATION, 2, 3, "30217")
+        _replace_cell(page_tables, PAGE_FIN_06_CONTINUATION, 2, 4, "公务接待费")
+        _replace_cell(page_tables, PAGE_FIN_06_CONTINUATION, 2, 5, "8.31")
+
+    issues = _run(_clone(truth, mutate))
+    items = _by_item(issues)
+    assert set(items) == {"overseas", "vehicle_operation", "reception"}, (
+        "换一页后三项 Y02 冲突仍应全部命中"
+    )
+
+    reception = items["reception"]
+    assert reception.location["page"] == PAGE_FIN_06_CONTINUATION  # 23
+    assert reception.location["pages"] == [PAGE_FIN_06_CONTINUATION, PAGE_FIN_07]
+    refs = {ref["role"]: ref for ref in reception.location["table_refs"]}
+    assert refs["基本支出经济分类"]["page"] == PAGE_FIN_06_CONTINUATION
+    assert refs["三公经费"]["page"] == PAGE_FIN_07
+
+    evidence = reception.evidence_text or ""
+    assert f"第{PAGE_FIN_06_CONTINUATION}页" in evidence
+    assert f"第{PAGE_FIN_07}页" in evidence
+    assert f"第{PAGE_FIN_06}页" not in evidence, "续页证据不得错标成表起始页"
+    assert f"第{PAGE_FIN_06}页" not in reception.message
+
+    # 仍在 P22 的两项不受续页影响
+    for key in ("overseas", "vehicle_operation"):
+        assert items[key].location["page"] == PAGE_FIN_06
 
 
 # ---------------------------------------------------------------------------

@@ -6666,15 +6666,21 @@ class R33246_DomesticReceptionDisclosure(Rule):
 # （宜川路街道 2025 年度决算 P22 基本支出表 vs P24 三公表，人工判定"高"）。
 # ==================================================================================
 
-#: 三公经费业务项：(台账用键, 三公表列组主体, 基本支出表科目名称等价写法, 经济分类类级)
+#: 三公经费业务项：(台账用键, 三公表列组主体, 基本支出表科目名称等价写法, 精确经济分类代码)
+#:
 #: 两张表对同一业务项的写法有固定差异（「…费」/「…费用」、公务用车购置/公务用车购置费），
 #: 因此逐项登记**等价写法**；归一化后必须精确命中，不做模糊匹配——历史缺陷正是
 #: "数字看起来接近就配一对、名字近似就当同一项"。
+#:
+#: 第四列是**精确经济分类代码**（不是"302/310 类级前缀"）：R2 评审 P1 收口——
+#: 名称与编码必须**同时**成立才允许形成正式跨表比较。「30217 公务接待费」成立，
+#: 「30231 公务接待费」是 identity conflict（同属 302 类不代表可互认）；名称命中
+#: 但编码无法识别时，该项记取数不足而不是带着"编码未识别"出正式 finding。
 _SAN_GONG_ECON_ITEM_SPECS: Tuple[Tuple[str, str, Tuple[str, ...], str], ...] = (
-    ("overseas", "因公出国（境）费", ("因公出国（境）费用",), "302"),
-    ("vehicle_purchase", "公务用车购置费", ("公务用车购置",), "310"),
-    ("vehicle_operation", "公务用车运行维护费", ("公务用车运行维护费",), "302"),
-    ("reception", "公务接待费", ("公务接待费",), "302"),
+    ("overseas", "因公出国（境）费", ("因公出国（境）费用",), "30212"),
+    ("vehicle_purchase", "公务用车购置费", ("公务用车购置",), "31013"),
+    ("vehicle_operation", "公务用车运行维护费", ("公务用车运行维护费",), "30231"),
+    ("reception", "公务接待费", ("公务接待费",), "30217"),
 )
 
 
@@ -6820,17 +6826,34 @@ def _econ_lanes(table: Any) -> Tuple[List[Tuple[int, int]], str]:
     return lanes, ""
 
 
+def _econ_item_code_matches(code: str, expected_code: str) -> bool:
+    """精确经济分类代码判定。
+
+    主机码必须等于登记码；更深的 7 位展开码是同一业务项的下级子目，
+    允许通过。除此之外（哪怕同属一个 3 位类级）一律视为身份冲突——
+    「30231」不能因为是 302 类就冒认「30217 公务接待费」的比较资格。
+    """
+    return code == expected_code or (
+        len(code) > len(expected_code) and code.startswith(expected_code)
+    )
+
+
 def _econ_item_amount_from_lane(
     cells: List[Any],
     lane: Tuple[int, int],
     names: Tuple[str, ...],
-    econ_class: str,
+    expected_code: str,
 ) -> Optional[Dict[str, Any]]:
     """在一条车道内按科目名称取该业务项的金额/编码；不匹配返回 None。
 
     名称必须完全落在车道内（[起点, 金额列) 的文本单元格拼接），因此相邻车道
-    的名称不会被认领；科目编码只在**车道首部**的整数字段里认，且只用于
-    交叉校验经济分类类级——不参与金额取值。
+    的名称不会被认领；科目编码只在**车道首部**的整数字段里认，不参与金额取值。
+
+    编码语义（fail-closed）：
+    - 名称命中 + 编码 == 精确登记码（或其下级展开码）→ 正常返回；
+    - 名称命中 + 编码指向别的业务项 → ``conflict``（identity conflict）；
+    - 名称命中 + 编码无法识别 → ``code_missing=True``——由调用方记取数不足，
+      不允许形成带"编码未识别"说法的正式 finding（证据契约要求可追溯）。
     """
     start, amount_col = lane
     if amount_col >= len(cells):
@@ -6840,25 +6863,43 @@ def _econ_item_amount_from_lane(
     )
     if not label or label not in names:
         return None
-    code: Optional[str] = None
+    # 编码在车道内有两种真实版式：单格（"30212"）与拆格（"302" + "12" 类款两列）。
+    # 顺序拼接**名称文本出现之前**的整数字段得到完整编码；拼接结果长度不在
+    # 3/5/7（类/款/展开码）的视为**编码缺失**（code_missing），交给调用方记
+    # 取数不足——比"取第一个整数就停"严格，但只在名称已命中的行上才走到这里。
+    code_parts: List[str] = []
     for cell in cells[start:amount_col]:
+        if cell.text:
+            break
         number = cell.number
         if number is None or number != number.to_integral_value():
             continue
-        digits = str(int(number))
-        if len(digits) in (3, 5, 7):
-            code = digits
-        break
-    if code is not None and not code.startswith(econ_class):
-        # 名称命中，但同行编码属于别的经济分类类级：两栏身份不一致，
+        code_parts.append(str(int(number)))
+    code: Optional[str] = None
+    if code_parts:
+        joined = "".join(code_parts)
+        if len(joined) in (3, 5, 7):
+            code = joined
+    if code is None:
+        return {
+            "amount": cells[amount_col].number,
+            "page": cells[amount_col].page or cells[start].page,
+            "code": "",
+            "name": label,
+            "conflict": "",
+            "code_missing": True,
+        }
+    if not _econ_item_code_matches(code, expected_code):
+        # 名称命中，但同行编码指向**另一个**业务项：两栏身份不一致，
         # 无法确认这一行到底记的是哪个业务项 → 交给调用方记取数不足。
         return {
-            "conflict": f"{code} {label}（名称指向 {econ_class} 类，行内编码指向别类）",
+            "conflict": f"{code} {label}（expected {expected_code}，actual {code}："
+                        "行内编码与名称指向不同业务项）",
         }
     return {
         "amount": cells[amount_col].number,
         "page": cells[amount_col].page or cells[start].page,
-        "code": code or "",
+        "code": code,
         "name": label,
         "conflict": "",
     }
@@ -6990,7 +7031,7 @@ class R33CrossSanGongEcon(Rule):
         # 用集合逐项记账而不是拿原因文本做子串匹配——后者会把"别项的失败"错连到本项。
         blocked: Set[str] = set()
         basic: Dict[str, Dict[str, Any]] = {}
-        for key, subject, names, econ_class in _SAN_GONG_ECON_ITEM_SPECS:
+        for key, subject, names, expected_code in _SAN_GONG_ECON_ITEM_SPECS:
             normalized_names = tuple(_normalize_item_label(name) for name in names)
             found: List[Dict[str, Any]] = []
             conflict = ""
@@ -6998,7 +7039,9 @@ class R33CrossSanGongEcon(Rule):
                 for row in table6.rows:
                     if row.row_role == "header":
                         continue
-                    hit = _econ_item_amount_from_lane(row.cells, lane, normalized_names, econ_class)
+                    hit = _econ_item_amount_from_lane(
+                        row.cells, lane, normalized_names, expected_code
+                    )
                     if hit is None:
                         continue
                     if hit.get("conflict"):
@@ -7008,6 +7051,8 @@ class R33CrossSanGongEcon(Rule):
                 if conflict:
                     break
             if conflict:
+                # 名称与精确编码不共指同一业务项（如「30231 公务接待费」）：
+                # 同属一个 3 位类级也不得继续比较
                 unresolved.append(f"基本支出表「{subject}」身份不一致：{conflict}")
                 blocked.add(key)
                 continue
@@ -7015,11 +7060,22 @@ class R33CrossSanGongEcon(Rule):
                 unresolved.append(f"基本支出表「{subject}」命中 {len(found)} 行，无法确定取哪一行")
                 blocked.add(key)
                 continue
+            if found and found[0].get("code_missing"):
+                # 名称命中但具体经济分类编码无法确认：业务项身份不能只凭名称成立，
+                # 该项不形成正式 finding（也不往证据里写"编码未识别"）；
+                # 其余已确认冲突仍经末尾的 partial_issues 保留，不被吞掉。
+                unresolved.append(
+                    f"基本支出表「{subject}」名称命中，但具体经济分类编码无法确认"
+                    f"（expected {expected_code}），该业务项不形成正式跨表比较"
+                )
+                blocked.add(key)
+                continue
             if found:
                 basic[key] = found[0]
 
         # ---- 三公表（FIN_07）：逐业务项取决算数列 ----
         three_public: Dict[str, Decimal] = {}
+        three_public_pages: Dict[str, int] = {}
         blank_keys: Set[str] = set()
         scales: Dict[str, int] = {}
         item_groups: Dict[str, str] = {}
@@ -7056,6 +7112,13 @@ class R33CrossSanGongEcon(Rule):
             else:
                 scales[key] = _display_scale(value)
             three_public[key] = value
+            # 证据页码以金额单元格的真实页为准（跨页表不得落成表起始页）
+            evidence_cell = (
+                data_row.cells[int(column)]
+                if 0 <= int(column) < len(data_row.cells)
+                else None
+            )
+            three_public_pages[key] = int(getattr(evidence_cell, "page", None) or page7)
             item_groups[key] = subject
 
         # 空白单元格当 0 用之前，先用本表勾稽确认：合计 = 出国 + 公车小计 + 接待，
@@ -7074,7 +7137,7 @@ class R33CrossSanGongEcon(Rule):
 
         # ---- 逐业务项比较：部分 ≤ 整体 ----
         issues: List[Issue] = []
-        for key, subject, _names, _cls in _SAN_GONG_ECON_ITEM_SPECS:
+        for key, subject, _names, _expected_code in _SAN_GONG_ECON_ITEM_SPECS:
             if key in blocked or key not in three_public:
                 continue
             hit = basic.get(key)
@@ -7083,6 +7146,9 @@ class R33CrossSanGongEcon(Rule):
                 continue
             total = three_public[key]
             component: Decimal = hit["amount"]
+            # 证据页码 = 证据所在单元格的真实页（续页行不得标成表起始页）
+            basic_page = int(hit.get("page") or page6)
+            three_page = int(three_public_pages.get(key) or page7)
             if component <= total:
                 continue
             envelope = compute_dynamic_envelope(
@@ -7095,25 +7161,25 @@ class R33CrossSanGongEcon(Rule):
                         f"三公经费「{subject}」基本支出分项与本表决算数相差 {excess.normalize()} "
                         f"{unit}，在显示舍入包络（{envelope.normalize()} {unit}）内，可能为取整误差。",
                         self._location(hit, subject, key, total, component, excess, unit, year,
-                                       page6, page7, key in blank_keys),
+                                       basic_page, three_page, key in blank_keys),
                         severity="info",
                         evidence_text=self._evidence(hit, subject, total, component, excess, unit,
-                                                     year, page6, page7, key in blank_keys),
+                                                     year, basic_page, three_page, key in blank_keys),
                     )
                 )
                 continue
             issues.append(
                 self._issue(
                     f"跨表资金来源冲突：「{subject}」在基本支出经济分类表列示 {component} {unit}"
-                    f"（{hit.get('code') or '编码未识别'}，第{page6}页决算数），大于三公经费支出决算表"
-                    f"第{page7}页同一业务项的决算数 {total} {unit}，差额 {excess.normalize()} {unit}"
+                    f"（{hit.get('code') or '编码未识别'}，第{basic_page}页决算数），大于三公经费支出决算表"
+                    f"第{three_page}页同一业务项的决算数 {total} {unit}，差额 {excess.normalize()} {unit}"
                     f"（{year} 年度）。基本支出是三公经费的组成部分，部分大于整体时两表不能同时成立；"
                     "现有材料无法判定哪一侧有误，需人工复核两表底稿。",
                     self._location(hit, subject, key, total, component, excess, unit, year,
-                                   page6, page7, key in blank_keys),
+                                   basic_page, three_page, key in blank_keys),
                     severity="error",
                     evidence_text=self._evidence(hit, subject, total, component, excess, unit,
-                                                 year, page6, page7, key in blank_keys),
+                                                 year, basic_page, three_page, key in blank_keys),
                 )
             )
 
@@ -7181,15 +7247,15 @@ class R33CrossSanGongEcon(Rule):
         excess: Decimal,
         unit: str,
         year: int,
-        page6: int,
-        page7: int,
+        basic_page: int,
+        three_public_page: int,
         from_blank: bool,
     ) -> Dict[str, Any]:
         code = str(hit.get("code") or "")
         return {
             "table": _FIN_06_TABLE_TITLE,
-            "page": page6,
-            "pages": [page6, page7],
+            "page": basic_page,
+            "pages": sorted({basic_page, three_public_page}),
             "row": f"{code} {hit.get('name') or subject}".strip(),
             "field": subject,
             "code": code,
@@ -7205,7 +7271,7 @@ class R33CrossSanGongEcon(Rule):
                 {
                     "role": "基本支出经济分类",
                     "table": _FIN_06_TABLE_TITLE,
-                    "page": page6,
+                    "page": basic_page,
                     "row": f"{code} {hit.get('name') or subject}".strip(),
                     "code": code,
                     "field": "决算数",
@@ -7213,7 +7279,7 @@ class R33CrossSanGongEcon(Rule):
                 {
                     "role": "三公经费",
                     "table": _FIN_07_TABLE_TITLE,
-                    "page": page7,
+                    "page": three_public_page,
                     "field": subject,
                     "col": "决算数",
                 },
@@ -7229,14 +7295,14 @@ class R33CrossSanGongEcon(Rule):
         excess: Decimal,
         unit: str,
         year: int,
-        page6: int,
-        page7: int,
+        basic_page: int,
+        three_public_page: int,
         from_blank: bool,
     ) -> str:
         code = str(hit.get("code") or "编码未识别")
         lines = [
-            f"基本支出经济分类表：{_FIN_06_TABLE_TITLE}（第{page6}页，决算数）",
-            f"三公经费支出决算表：{_FIN_07_TABLE_TITLE}（第{page7}页，决算数）",
+            f"基本支出经济分类表：{_FIN_06_TABLE_TITLE}（第{basic_page}页，决算数）",
+            f"三公经费支出决算表：{_FIN_07_TABLE_TITLE}（第{three_public_page}页，决算数）",
             f"业务项：{subject}",
             f"基本支出表：{code} {hit.get('name') or subject} = {component} {unit}",
             f"三公经费表：{subject} = {total} {unit}",

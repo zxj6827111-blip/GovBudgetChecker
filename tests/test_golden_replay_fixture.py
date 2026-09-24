@@ -177,6 +177,28 @@ def test_structured_delta_restricted_to_migrated_rules():
     assert changed == 1, "removed 口径只统计迁移集内变化"
 
 
+def test_structured_parsing_consumers_stay_inside_the_migrated_set():
+    """structured 解析覆盖率的分子必须是「runner 真执行 ∩ 真消费 parsed_tables」。
+
+    replay 直接把 STRUCTURED_PARSING_CONSUMERS 算进 structured_coverage；
+    登记一条 runner 并不执行的规则会把分子抬高，还会把
+    「登记在适配器但输入仍为 legacy」的条数少报 1（WP4-A R2 评审指出的失真）。
+    WP4-A 的 V33-CROSS-SAN-GONG-ECON 在生产 legacy 主路径中内部自建
+    parsed_tables，WP5 迁移进 runner 之前不得计入 structured coverage。
+    """
+    from src.engine.structured_rules import (
+        STRUCTURED_MIGRATED_RULES,
+        STRUCTURED_PARSING_CONSUMERS,
+    )
+
+    assert set(STRUCTURED_PARSING_CONSUMERS) <= set(STRUCTURED_MIGRATED_RULES), (
+        "解析消费集合不能超出 runner 实际执行集，否则 coverage 虚高"
+    )
+    assert "V33-CROSS-SAN-GONG-ECON" not in STRUCTURED_PARSING_CONSUMERS, (
+        "WP4-A 规则未接入 structured runner，WP5 前不得计入覆盖率分子"
+    )
+
+
 def test_structured_delta_surfaces_out_of_scope_new_rules():
     """适配器漂移（新规则真实执行但未登记迁移集）不得静默丢弃。
 

@@ -51,12 +51,17 @@ STRUCTURED_MIGRATED_RULES: Tuple[str, ...] = (
 )
 
 # 真实消费 parsed_tables 的规则（structured 解析覆盖率的分子）
+#
+# 注意（WP4-A R2 评审收口）：V33-CROSS-SAN-GONG-ECON **不**登记在这里。
+# 它在生产 legacy 主路径中由规则内部自建并消费 parsed_tables
+# （rules_v33._ensure_parsed_tables），但尚未接入 structured shadow runner：
+# 既不在 STRUCTURED_MIGRATED_RULES，run_structured_rules 的默认执行列表也不含它。
+# 把它计入本集合会把 replay 的 structured_coverage 分子抬高，并把
+# "登记在适配器但输入仍为 legacy 表征"的条数从 8 错报成 7——
+# 等 WP5 真正把它迁移进 STRUCTURED_MIGRATED_RULES 与 runner 执行列表之后，
+# 再一并登记进本集合；覆盖率只统计"真执行 ∩ 真消费"的交集。
 STRUCTURED_PARSING_CONSUMERS: Tuple[str, ...] = (
     "V33-115",  # R3 P0-2：_apply_structured 从 ParsedRow/ParsedCell 三态取数
-    # WP4-A：三公经费跨表一致性只消费结构化事实（列组主体 + final 列 + 车道 +
-    # 三态单元格），主链路未挂 parsed_tables 时由规则自建
-    # （rules_v33._ensure_parsed_tables），不退回全文正则或按数字距离猜列。
-    "V33-CROSS-SAN-GONG-ECON",
 )
 
 # 科目域（与 common_rules._code_domain 口径一致）
