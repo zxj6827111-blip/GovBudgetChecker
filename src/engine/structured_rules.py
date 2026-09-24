@@ -53,6 +53,10 @@ STRUCTURED_MIGRATED_RULES: Tuple[str, ...] = (
 # 真实消费 parsed_tables 的规则（structured 解析覆盖率的分子）
 STRUCTURED_PARSING_CONSUMERS: Tuple[str, ...] = (
     "V33-115",  # R3 P0-2：_apply_structured 从 ParsedRow/ParsedCell 三态取数
+    # WP4-A：三公经费跨表一致性只消费结构化事实（列组主体 + final 列 + 车道 +
+    # 三态单元格），主链路未挂 parsed_tables 时由规则自建
+    # （rules_v33._ensure_parsed_tables），不退回全文正则或按数字距离猜列。
+    "V33-CROSS-SAN-GONG-ECON",
 )
 
 # 科目域（与 common_rules._code_domain 口径一致）
