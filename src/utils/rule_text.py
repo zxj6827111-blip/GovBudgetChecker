@@ -10,6 +10,7 @@ _RULE_TITLE_OVERRIDES = {
     "BUD-109": "预算编制说明功能分类类款项名称与T5不一致",
     "V33-227": "说明5功能分类类款项名称与T5不一致",
     "V33-CROSS-SAN-GONG-ECON": "基本支出三公分项超过三公经费表同项决算数",
+    "V33-TXT-FUND-DETAIL": "基金/国资决算表与对应说明同一功能分类项金额不一致",
 }
 
 
@@ -53,6 +54,13 @@ def default_rule_suggestion(rule_code: str, page: Optional[int]) -> str:
         return (
             f"请逐项核对“三公”表与“其他相关情况说明”金额口径{page_hint}，"
             "尤其确认公务用车运行费是否一致，再统一正文与表格。"
+        )
+    if normalized_rule == "V33-TXT-FUND-DETAIL":
+        return (
+            "请对照《政府性基金预算财政拨款收入支出决算表》/《国有资本经营预算财政"
+            f"拨款收入支出决算表》与对应情况说明{page_hint}：以表内同一功能分类项"
+            "（类/款/项编码与名称逐级核对）的本年支出决算数为准，复核说明中该业务项"
+            "金额及说明自述收支总额，再统一表与说明。"
         )
     if normalized_rule == "V33-CROSS-SAN-GONG-ECON":
         return (

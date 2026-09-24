@@ -332,10 +332,12 @@ def test_kind_conflict_detail_names_only_truly_conflicting_candidates():
 
 
 def test_rule_not_in_registry_is_reported_as_unimplemented():
+    # WP4-B 后 OBL-TXT-FUND-DETAIL 已收口，改用仍未实现的 OBL-SG-COMPLETION
+    # 作缺口示例（coverage gaps 7→6 后剩余缺口之一）。
     ledger = build_obligation_ledger(_profile("final"), report_kind="final")
-    gap = _instance(ledger, "OBL-TXT-FUND-DETAIL")
+    gap = _instance(ledger, "OBL-SG-COMPLETION")
     assert gap["status"] == OBLIGATION_NOT_IMPLEMENTED
-    assert gap["missing_checkers"] == ["V33-TXT-FUND-DETAIL"]
+    assert gap["missing_checkers"] == ["V33-SG-COMPLETION"]
     assert gap["gap_note"]
 
 

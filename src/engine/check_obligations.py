@@ -73,7 +73,9 @@ from src.schemas.document_profile import DocumentProfile
 #: v3（2026-09-24 WP4-A）：OBL-CROSS-SAN-GONG-ECON 的实现缺口补齐——
 #: checker 从 pending_checkers 转为真实 checker（V33-CROSS-SAN-GONG-ECON），
 #: 依赖表从 FIN_07 修正为 FIN_06+FIN_07（该义务本就是跨这两张表）。
-OBLIGATION_CATALOG_VERSION = "obligations-v3"
+#: v4（2026-09-24 WP4-B）：OBL-TXT-FUND-DETAIL 的实现缺口补齐——
+#: checker 从 pending_checkers 转为真实 checker（V33-TXT-FUND-DETAIL）。
+OBLIGATION_CATALOG_VERSION = "obligations-v4"
 
 # ---- 实例状态 ---------------------------------------------------------------
 
@@ -548,12 +550,14 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         group_id=GROUP_TABLE_TEXT,
         title="政府性基金/国有资本经营表 与 对应说明逐项一致",
         report_kinds=_FINAL_ONLY,
-        # 本轮样张真实漏报：基金表金额（105）与说明金额（135）不一致未被报告。
-        # 现有实现只做单点总额比对，未做逐项比对。
-        pending_checkers=("V33-TXT-FUND-DETAIL",),
+        checkers_by_kind=_final("V33-TXT-FUND-DETAIL"),
         depends_on=("table:FIN_08", "table:FIN_09"),
-        basis="AGENTS.md 决算必查勾稽 D-008/D-009：基金与国资表须与说明一致",
-        gap_note="缺少基金表/国资表与对应说明之间的逐项金额比对",
+        basis=(
+            "AGENTS.md 决算必查勾稽 D-008/D-009：基金与国资表的「本年支出」须与"
+            "对应说明「支出具体情况如下」段逐项一致（类/款/项身份全匹配后比金额）。"
+            "真值：2026-09-16 人工判定 Y03（宜川路街道 2025 年度决算 P25 表内"
+            " 2219899=105.00 vs P37 说明写 135.00，差 30.00 万元）曾漏报"
+        ),
     ),
     # ---- 文内关系 ----
     Obligation(
