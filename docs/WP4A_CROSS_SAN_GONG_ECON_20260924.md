@@ -55,6 +55,8 @@ FIN_07 三公经费决算数（财政拨款全口径 = 基本支出 + 项目支�
 **fail-closed 清单**（任一项不成立就不产生正式 finding，记 `insufficient_data`/解析歧义）：
 表身份、列组身份、费用项身份、车道归属、金额列身份、金额单位、财政年度、
 两表任一 `parse_errors` 非空、金额单元格出现非数值文本。
+**R2 起另增两项**：费用项的精确经济分类代码身份（错码=identity conflict、
+缺码=取数不足，均不产生正式 finding，详见 §12.1）。
 
 **空白单元格确认为 0 的条件**（不是猜测）：三公表两条等式在显示舍入包络内成立
 ——`合计 = 因公出国（境）费 + 公务用车购置及运行维护费小计 + 公务接待费`、
@@ -67,9 +69,11 @@ FIN_07 三公经费决算数（财政拨款全口径 = 基本支出 + 项目支�
 ## 5. 输出与证据（任务书 §十一/§十二）
 
 每条 finding 携带：规则编号、义务编号（`OBL-CROSS-SAN-GONG-ECON`）、两侧业务项、
-两侧金额、差额、单位、财政年度、两侧表身份与页码（`location.pages = [22, 24]`、
-`table_refs` 逐侧带 role/table/page/row/code/field）、FIN_06 经济分类编码与科目名称、
-以及「哪一侧有误无法判定、需人工复核」的明示。信息不足时不给结论性措辞。
+两侧金额、差额、单位、财政年度、两侧表身份与页码（真值样张为
+`location.pages = [22, 24]`；页码取证据所在单元格的真实页，续页行标续页——详见
+§12.2）、`table_refs` 逐侧带 role/table/page/row/code/field、FIN_06 经济分类编码
+（精确代码，如 `30217`）与科目名称、以及「哪一侧有误无法判定、需人工复核」的明示。
+信息不足时不给结论性措辞。
 
 ## 6. 清单与台账（任务书 §十六/§十七）
 
@@ -103,9 +107,13 @@ python scripts/check_coverage_baseline.py --assert-gaps 7   # 退出码 0
 
 **未改 `docs/baselines/wp0_coverage_baseline.json`**（WP0 比较基准，不是答案文件）。
 本轮能力结果另存为 `docs/baselines/wp4a_coverage_current_20260924.json`，
-两份文件并存，互不覆盖。该文件由脚本 `--write` 生成，`source.commit` 记录生成时刻的
-代码提交（`99aa692`）；`dirty=true` 是因为该文件自身当时尚未入库，不代表工作树有
-未记录的业务改动。
+两份文件并存，互不覆盖。
+
+生成口径（R2 收口后修订）：全部业务代码与测试先入库（commit 记为
+`WP4A_CODE_SHA`），工作树干净后从该提交生成 snapshot（`source.commit =
+WP4A_CODE_SHA`、`dirty=false`），snapshot 与文档再单独成一次提交。
+最终 HEAD 是它之后的文档提交是正常的——**不**为了让 snapshot 的 commit
+等于最终 HEAD 形成循环更新。
 
 ## 8. truth 回归与变异验证（任务书 §十三/§十四/§二十四）
 
@@ -163,12 +171,14 @@ python scripts/check_coverage_baseline.py --assert-gaps 7   # 退出码 0
 
 ## 11. 残留与风险
 
-1. **真库 `tests/test_material_slot_migration_pg.py` 有 1 条既有失败**
-   （`test_rollback_restores_previous_shape_without_losing_versions`：
+1. **PRE_EXISTING_MAINLINE_TEST_DEBT（主线测试债）**：
+   真库 `tests/test_material_slot_migration_pg.py` 的
+   `test_rollback_restores_previous_shape_without_losing_versions` 失败——
    `DROP TABLE review_sessions` 被 WP3-B 新增的
-   `review_obligation_decisions.review_session_id` 外键挡住）。已在**未修改基线**
-   上复现同样失败，不属本 PR 引入，本 PR 也不修（不在范围内，且改它属于 WP3-B 的
-   迁移回滚口径问题）。
+   `review_obligation_decisions.review_session_id` 外键挡住。
+   已在**未修改基线**上复现同样失败，确认不是 PR #48 引入；本 PR 不修
+   （属 WP3-B 迁移回滚口径问题）。**PR #48 合并后应单独开一个小 PR 修，
+   并在 WP4-B 开始前清掉。**
 2. **本机 3000 端口被另一个无关 Next 应用占用**，E2E 用
    `E2E_BASE_URL=http://127.0.0.1:3100` 运行；CI 使用默认端口，不受影响。
 3. **空白单元格确认 0 的边界**：只在本表两条勾稽等式于显示舍入包络内成立时才认。
@@ -176,3 +186,95 @@ python scripts/check_coverage_baseline.py --assert-gaps 7   # 退出码 0
    不猜 0）。
 4. **规则只做「部分 ≤ 整体」**：不判"项目支出里应列多少"，也不判"哪一侧有误"——
    人工判定原文明确"不能仅凭 PDF 确定哪侧正确"，finding 因此不替审校人下结论。
+
+## 12. R2 独立评审整改（2026-09-24 第二轮）
+
+R2 评审确认主体设计后，指出三处一致性 P1 与一处 provenance P2。本节记录
+整改事实；旧文（§4/§8/§9）为 R1 现场，保留作历史对照，以本节数字为准。
+
+### 12.1 业务项身份 = 名称 + 精确经济分类代码（P1）
+
+`_SAN_GONG_ECON_ITEM_SPECS` 第四列由类级前缀（302/310）改为**精确代码**：
+overseas `30212`、vehicle_purchase `31013`、vehicle_operation `30231`、
+reception `30217`。正式比较要求**名称命中且编码精确命中**
+（编码更长时允许是登记码的下级展开码，如 `3021701`）。
+
+- **同类错码 → identity conflict**：「30231 公务接待费」不因为同属 302 类
+  而被当作接待费比较；该项记 `insufficient_data`，原因显式给出
+  `expected 30217 / actual 30231`。其余已确认冲突经 `partial_issues` 保留。
+- **缺码 → 取数不足**：名称命中但编码无法识别时，该项不形成正式 finding，
+  也不往证据里写"编码未识别"；其余已确认冲突同样经 `partial_issues` 保留。
+- **编码形态兼容**：基本支出表的编码有单格（`30212`，宜川样张）与拆格
+  （`302`+`12` 类款两列，生态环境局样张）两种版式。实现按**车道内、
+  名称文本之前的整数字段顺序拼接**识别完整编码，拼接结果长度不在 3/5/7
+  的按缺码处理（fail-closed）。R1 实现取"lane 内第一个整数"在拆格版式下
+  只会拿到类级 `302`，恰好被旧的类级前缀校验掩盖——R2 答辩要求精确代码后
+  这一偷工路径自然暴露并被堵上。
+
+### 12.2 finding 使用真实单元格页码（P1）
+
+`location.page` / `location.pages` / `table_refs[].page` / message /
+evidence 一律使用**证据所在单元格的真实页**（`ParsedCell.page`），不再是
+表起始页：FIN_06 侧 `basic_page = hit["page"]`（续页行如实标续页页码），
+FIN_07 侧 `three_page = 决算数单元格.page`。新增续页测试：把接待费挪到
+P23 detail 行后，`location.page == 23`、`pages == [23, 24]`，
+evidence 出现「第23页」「第24页」且不出现「第22页」。
+
+### 12.3 structured 覆盖口径诚实化（P1/P2）
+
+从 `STRUCTURED_PARSING_CONSUMERS` 移除 `V33-CROSS-SAN-GONG-ECON`：
+该 checker 在生产 legacy 主路径中由 `_ensure_parsed_tables()` 内部自建并
+消费 parsed_tables，但**尚未接入 structured shadow runner**（不在
+`STRUCTURED_MIGRATED_RULES`，`run_structured_rules` 默认也不执行它）。
+留在消费集合里会把 replay 的 `structured_coverage` 分子抬高、并把
+"登记在适配器但输入仍为 legacy"的条数从 8 错报成 7。WP5 真正迁移进
+runner 之前不得计入。新增 invariant 测试守口径：
+
+```
+set(STRUCTURED_PARSING_CONSUMERS) <= set(STRUCTURED_MIGRATED_RULES)
+且 V33-CROSS-SAN-GONG-ECON 不在消费集合
+```
+
+规则内部的 parsed_tables 消费（`_ensure_parsed_tables`、列组、
+semantic_columns、车道、三态单元格）**继续保留**——"消费结构化事实"与
+"计入 structured 迁移覆盖率"是两个概念。
+
+### 12.4 R2 新增回归用例
+
+| 用例 | 断言 | 结果 |
+| --- | --- | --- |
+| 各业务项绑定精确代码 | Y02 三项 code 恰为 30212/30217/30231（31013 由购置用例守） | 通过 |
+| Case A 同类错码 | 30217 改成 30231 → `insufficient_data`，原因含 expected/actual，partial_issues 保留出国+运行维护，reception 不出正式 finding | 通过 |
+| Case B 缺码 | 30212 清空 → overseas 不出正式 finding，partial 保留另两项 | 通过 |
+| 续页证据页 | 接待费挪入 P23 detail 行：page=23 / pages=[23,24] / refs 23·24 / evidence 未见第22页 | 通过 |
+| structured 口径 invariant | consumers ⊆ migrated 且不含本规则 | 通过 |
+
+变异验证（临时退源码、跑完即还原）在此前 4 项之上新增两项：
+
+| 变异 | 期望 | 实测 |
+| --- | --- | --- |
+| Mutation E：精确代码判定退化为 302 类级前缀 | Case A 用例红 | **1 failed**（未 raise RuleDeferred——错码被错误放行），还原后绿 |
+| Mutation F：`basic_page` 退化为表起始页 | 续页证据用例红 | **1 failed**（page 落成 22≠23），还原后绿 |
+
+### 12.5 本轮验证汇总（R2 收口后）
+
+| 检查 | 结果 |
+| --- | --- |
+| 全量 `pytest` | **1902 passed / 135 skipped** |
+| `ruff check .` | All checks passed |
+| `mypy api src tests` | Success: no issues found in **247** source files |
+| 真库 Review lifecycle（`-m real_database`，本机 16） | **70 passed / 0 skipped** |
+| 前端 `npm run test:unit` | 全部子套件通过 |
+| 前端 `npm run build` | 通过 |
+| E2E（`E2E_BASE_URL=http://127.0.0.1:3100`） | **198 passed** |
+| `check_replay_thresholds.py --uploads tests/fixtures/replay/pass` | 通过 |
+| `check_coverage_baseline.py --assert-gaps 7` | 退出码 0，剩余缺口清单与 §7 一致 |
+| Mutation E / F | 均红 → 还原后绿 |
+
+### 12.6 续页盲行（解析层已知形态，非本 PR 范围）
+
+真值样张 FIN_06 续页（P23）的前两行被结构化层归类为 `header`（续页缺自身
+表头时的启发式归位）：`detail` 行之外的这项划分与本规则无关，但值得记录——
+若业务项行恰好落在续页盲行位置，规则会取数不足而非错报（fail-closed 仍成立：
+第 12.1 节的错码/缺码测试证明不会因"猜错身份"出假 finding）。该形态属于
+WP5/解析层清单，不在本轮修改。
