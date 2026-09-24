@@ -92,7 +92,7 @@ def order_and_number_issues(doc, issues):
 # engine/rules_v33.py  —— v3.3 规则（修正版）
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Tuple, TypedDict
+from typing import FrozenSet, List, Dict, Any, Optional, Set, Tuple, TypedDict
 
 import os
 import re
@@ -6643,6 +6643,683 @@ class R33246_DomesticReceptionDisclosure(Rule):
         return issues
 
 
+# ==================================================================================
+# 跨表：三公经费表 × 基本支出经济分类表（V33-CROSS-SAN-GONG-ECON）
+#
+# 业务关系与可比性（为什么只有"逐业务项的部分 ≤ 整体"可判定）
+# ------------------------------------------------------------------
+# 《财政拨款“三公”经费支出决算表》(FIN_07) 的“决算数”是**财政拨款全口径**的
+# 三公经费支出——基本支出 + 项目支出。
+# 《一般公共预算财政拨款基本支出决算表》(FIN_06) 是按经济分类列示的**基本支出**
+# 决算明细；其中 302-12 因公出国（境）费用、302-17 公务接待费、
+# 302-31 公务用车运行维护费、310-13 公务用车购置，与三公表的四个业务项
+# 指向同一笔费用的两种归集口径：一个是整体，一个是它的基本支出部分。
+#
+# 因此这两张表的可比关系是**单向包含**（部分 ≤ 整体），不是相等：
+#   - 要求相等，会把"项目支出里列支的三公"误判成跨表差异；
+#   - 而"基本支出部分 > 三公经费（含项目支出的全口径）"在任何口径下都不成立，
+#     这正是本规则要报的硬矛盾。
+# 由此也能看出为什么**不能**拿"三公经费合计"去比"经济分类表总计"：总额之间
+# 差着基本/项目两个层级，只有逐业务项的包含关系有业务依据（任务书 §六）。
+#
+# 真值来源：outputs/sample_validation_20260916/comparison.md 的 Y02
+# （宜川路街道 2025 年度决算 P22 基本支出表 vs P24 三公表，人工判定"高"）。
+# ==================================================================================
+
+#: 三公经费业务项：(台账用键, 三公表列组主体, 基本支出表科目名称等价写法, 精确经济分类代码)
+#:
+#: 两张表对同一业务项的写法有固定差异（「…费」/「…费用」、公务用车购置/公务用车购置费），
+#: 因此逐项登记**等价写法**；归一化后必须精确命中，不做模糊匹配——历史缺陷正是
+#: "数字看起来接近就配一对、名字近似就当同一项"。
+#:
+#: 第四列是**精确经济分类代码**（不是"302/310 类级前缀"）：R2 评审 P1 收口——
+#: 名称与编码必须**同时**成立才允许形成正式跨表比较。「30217 公务接待费」成立，
+#: 「30231 公务接待费」是 identity conflict（同属 302 类不代表可互认）；名称命中
+#: 但编码无法识别时，该项记取数不足而不是带着"编码未识别"出正式 finding。
+_SAN_GONG_ECON_ITEM_SPECS: Tuple[Tuple[str, str, Tuple[str, ...], str], ...] = (
+    ("overseas", "因公出国（境）费", ("因公出国（境）费用",), "30212"),
+    ("vehicle_purchase", "公务用车购置费", ("公务用车购置",), "31013"),
+    ("vehicle_operation", "公务用车运行维护费", ("公务用车运行维护费",), "30231"),
+    ("reception", "公务接待费", ("公务接待费",), "30217"),
+)
+
+
+def _normalize_item_label(text: Any) -> str:
+    """业务项名称归一：去空白 + 全角括号统一。
+
+    只做这两件**无损**的事：表格单元格里的换行/续行空格（"公务用车运行维\\n护费"）
+    与全半角括号差异不改变业务项身份；不做模糊匹配，不做同义词替换。
+    """
+    return re.sub(r"\s+", "", str(text or "")).replace("（", "(").replace("）", ")")
+
+
+#: 三公表自身勾稽的两条等式（用于把"空白单元格"确认为 0）
+_SAN_GONG_TOTAL_KEY = "合计"
+_SAN_GONG_VEHICLE_SUBTOTAL_KEY = "小计"
+
+#: 三公表列组主体键（**已归一化**）→ 台账用键。
+#: 归一化必须与 ``_three_public_column_groups`` 用同一函数，否则列组查不到。
+_SAN_GONG_SUBJECT_KEYS: Dict[str, str] = {
+    _normalize_item_label(_SAN_GONG_TOTAL_KEY): "total",
+    _normalize_item_label(_SAN_GONG_VEHICLE_SUBTOTAL_KEY): "vehicle_subtotal",
+}
+for _key, _subject, _names, _cls in _SAN_GONG_ECON_ITEM_SPECS:
+    _SAN_GONG_SUBJECT_KEYS[_normalize_item_label(_subject)] = _key
+del _key, _subject, _names, _cls
+
+#: 四个业务项（不含合计/小计两个汇总结）——"某项列组缺失只阻塞该项"靠它区分
+_SAN_GONG_ITEM_KEYS: FrozenSet[str] = frozenset(
+    key for key, _subject, _names, _cls in _SAN_GONG_ECON_ITEM_SPECS
+)
+
+#: 两张来源表的业务表名（与 NINE_TABLES 的九表口径同源；FIN_06 别名收窄为
+#: 基本支出决算表本身，避免"基本支出"这类词把别的表吸进来）
+_FIN_06_TABLE_TITLE = "一般公共预算财政拨款基本支出决算表"
+_FIN_07_TABLE_TITLE = "财政拨款“三公”经费支出决算表"
+_FIN_06_TABLE_ALIASES: Tuple[str, ...] = tuple(NINE_TABLES[5]["aliases"])
+_FIN_07_TABLE_ALIASES: Tuple[str, ...] = tuple(NINE_TABLES[6]["aliases"])
+
+#: 本规则对应的检查义务编号（写进 finding，使问题与台账实例可对照）
+_OBLIGATION_ID = "OBL-CROSS-SAN-GONG-ECON"
+
+
+def _display_scale(value: Decimal) -> int:
+    """数值在原文里的显示小数位（'' 显示为 0 位）——动态舍入包络的输入。"""
+    exponent = value.as_tuple().exponent
+    if isinstance(exponent, int) and exponent < 0:
+        return -exponent
+    return 0
+
+
+def _ensure_parsed_tables(doc: Document) -> bool:
+    """确保文档挂载了结构化表模型（ParsedTable），返回是否可用。
+
+    生产主链路（pipeline / engine_rule_runner）目前只挂 page_texts/page_tables，
+    parsed_tables 仅由 structured/shadow 入口构建（结构化消费收敛是 WP5 的范围）。
+    本规则是**结构化事实消费者**：无挂载时用同一套 ``build_parsed_tables``
+    自建一次（纯函数、确定性），不退回"全文正则抓数字 / 按数字距离猜列"的
+    旧表征。已挂载时一律复用，保证同一份材料只有一份结构化事实。
+    """
+    tables = getattr(doc, "parsed_tables", None)
+    if isinstance(tables, dict) and tables:
+        return True
+    from .structured_rules import build_parsed_tables
+
+    try:
+        doc.parsed_tables = build_parsed_tables(
+            getattr(doc, "page_tables", []) or [],
+            getattr(doc, "page_texts", []) or [],
+        )
+    except Exception:  # noqa: BLE001 - 解析层失败按取数不足处理，不得当成通过
+        return False
+    return bool(getattr(doc, "parsed_tables", None))
+
+
+def _cross_table_by_alias(doc: Document, aliases: Tuple[str, ...]):
+    """按表名身份定位**唯一**一张结构化表；命中 0 张或多张都返回 None。
+
+    多张 = 表身份有歧义（同一份材料里出现两张同名表），此时宁可记取数不足，
+    也不能随手取第一张——取错表会让整条跨表比较落在不同的表上。
+    """
+    hits: Dict[int, Any] = {}
+    for alias in aliases:
+        table = _find_parsed_table(doc, alias)
+        if table is not None:
+            hits[id(table)] = table
+    if len(hits) == 1:
+        return next(iter(hits.values()))
+    return None
+
+
+def _resolve_fiscal_year(doc: Document, pages: Tuple[int, ...]) -> Optional[int]:
+    """解析材料财政年度：优先规则已定的 dominant_year，否则取前 3 页与两张表所在页。
+
+    年份无法确认（或出现并列最高频的不同年份）时返回 None，调用方按取数不足处理：
+    跨表比较的前提是期间一致，期间不确定就不该产出正式结论。
+    """
+    dominant = getattr(doc, "dominant_year", None)
+    if isinstance(dominant, int):
+        return dominant
+    years_per_page = getattr(doc, "years_per_page", None) or []
+    scan = {0, 1, 2, *(page - 1 for page in pages)}
+    candidates: List[int] = []
+    for index in sorted(scan):
+        if 0 <= index < len(years_per_page):
+            candidates.extend(int(year) for year in (years_per_page[index] or []))
+    if not candidates:
+        return None
+    ranked = Counter(candidates).most_common()
+    if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+        return None
+    return int(ranked[0][0])
+
+
+def _resolve_table_unit(doc: Document, page: int) -> Optional[str]:
+    """取某页声明的金额单位（单位：万元/元/亿元）；未声明返回 None。"""
+    units = getattr(doc, "units_per_page", None)
+    if isinstance(units, list) and 0 < page <= len(units) and units[page - 1]:
+        return str(units[page - 1])
+    texts = getattr(doc, "page_texts", None)
+    if isinstance(texts, list) and 0 < page <= len(texts):
+        return extract_money_unit(texts[page - 1] or "")
+    return None
+
+
+def _econ_lanes(table: Any) -> Tuple[List[Tuple[int, int]], str]:
+    """基本支出经济分类表的"车道"：相邻两个决算数列之间的列区间。
+
+    结构化层已把「决算数」列的**全部位置**登记在 ``semantic_columns['final']``
+    （样张 P22 为 [2, 5]：左栏第 2 列、右栏第 5 列；P15 双栏版为 [3, 7]）。
+    车道 = (起点列, 金额列]，同一车道内的科目编码/名称与金额属于同一行业务项；
+    跨车道的数字不得互相认领（"当前为空就向右取数字"的历史缺陷形态）。
+    """
+    amount_cols = sorted({int(col) for col in (table.semantic_columns.get("final") or [])})
+    if not amount_cols:
+        return [], "基本支出表未登记「决算数」列（semantic_columns.final 为空）"
+    lanes: List[Tuple[int, int]] = []
+    previous = -1
+    for amount_col in amount_cols:
+        if amount_col <= previous:
+            continue
+        lanes.append((previous + 1, amount_col))
+        previous = amount_col
+    return lanes, ""
+
+
+def _econ_item_code_matches(code: str, expected_code: str) -> bool:
+    """精确经济分类代码判定。
+
+    主机码必须等于登记码；更深的 7 位展开码是同一业务项的下级子目，
+    允许通过。除此之外（哪怕同属一个 3 位类级）一律视为身份冲突——
+    「30231」不能因为是 302 类就冒认「30217 公务接待费」的比较资格。
+    """
+    return code == expected_code or (
+        len(code) > len(expected_code) and code.startswith(expected_code)
+    )
+
+
+def _econ_item_amount_from_lane(
+    cells: List[Any],
+    lane: Tuple[int, int],
+    names: Tuple[str, ...],
+    expected_code: str,
+) -> Optional[Dict[str, Any]]:
+    """在一条车道内按科目名称取该业务项的金额/编码；不匹配返回 None。
+
+    名称必须完全落在车道内（[起点, 金额列) 的文本单元格拼接），因此相邻车道
+    的名称不会被认领；科目编码只在**车道首部**的整数字段里认，不参与金额取值。
+
+    编码语义（fail-closed）：
+    - 名称命中 + 编码 == 精确登记码（或其下级展开码）→ 正常返回；
+    - 名称命中 + 编码指向别的业务项 → ``conflict``（identity conflict）；
+    - 名称命中 + 编码无法识别 → ``code_missing=True``——由调用方记取数不足，
+      不允许形成带"编码未识别"说法的正式 finding（证据契约要求可追溯）。
+    """
+    start, amount_col = lane
+    if amount_col >= len(cells):
+        return None
+    label = _normalize_item_label(
+        "".join(cell.text or "" for cell in cells[start:amount_col] if cell.text)
+    )
+    if not label or label not in names:
+        return None
+    # 编码在车道内有两种真实版式：单格（"30212"）与拆格（"302" + "12" 类款两列）。
+    # 顺序拼接**名称文本出现之前**的整数字段得到完整编码；拼接结果长度不在
+    # 3/5/7（类/款/展开码）的视为**编码缺失**（code_missing），交给调用方记
+    # 取数不足——比"取第一个整数就停"严格，但只在名称已命中的行上才走到这里。
+    code_parts: List[str] = []
+    for cell in cells[start:amount_col]:
+        if cell.text:
+            break
+        number = cell.number
+        if number is None or number != number.to_integral_value():
+            continue
+        code_parts.append(str(int(number)))
+    code: Optional[str] = None
+    if code_parts:
+        joined = "".join(code_parts)
+        if len(joined) in (3, 5, 7):
+            code = joined
+    if code is None:
+        return {
+            "amount": cells[amount_col].number,
+            "page": cells[amount_col].page or cells[start].page,
+            "code": "",
+            "name": label,
+            "conflict": "",
+            "code_missing": True,
+        }
+    if not _econ_item_code_matches(code, expected_code):
+        # 名称命中，但同行编码指向**另一个**业务项：两栏身份不一致，
+        # 无法确认这一行到底记的是哪个业务项 → 交给调用方记取数不足。
+        return {
+            "conflict": f"{code} {label}（expected {expected_code}，actual {code}："
+                        "行内编码与名称指向不同业务项）",
+        }
+    return {
+        "amount": cells[amount_col].number,
+        "page": cells[amount_col].page or cells[start].page,
+        "code": code,
+        "name": label,
+        "conflict": "",
+    }
+
+
+def _three_public_column_groups(table: Any) -> Tuple[Dict[str, Any], List[str]]:
+    """三公表列组：主体标签 → 列组。同名重复出现按列身份歧义记账。"""
+    groups: Dict[str, Any] = {}
+    reasons: List[str] = []
+    for group in table.column_groups:
+        subject = _normalize_item_label(group.subject)
+        if not subject:
+            continue
+        if subject in groups:
+            reasons.append(f"三公表「{group.subject}」列组重复出现，列身份有歧义")
+            continue
+        groups[subject] = group
+    return groups, reasons
+
+
+def _three_public_data_row(table: Any) -> Tuple[Optional[Any], str]:
+    """三公表的数据行：无标签行且唯一。
+
+    表头/科目名/「预算数决算数」标签行都带文本标签，唯一无标签行才是金额行。
+    出现 0 行或 2 行以上（无法确定取哪一行）都按取数不足返回。
+    """
+    rows = [
+        row
+        for row in table.rows
+        if row.row_role != "header" and not _normalize_item_label(row.label)
+    ]
+    if not rows:
+        return None, "三公表未找到无标签金额行"
+    if len(rows) > 1:
+        return None, f"三公表有 {len(rows)} 个无标签金额行，无法确定取哪一行"
+    return rows[0], ""
+
+
+def _three_public_cell_value(cells: List[Any], column: int) -> Tuple[Optional[Decimal], str]:
+    """读取三公表某列单元格：(金额, 状态)，状态 ∈ value / blank / unreadable。"""
+    if column < 0 or column >= len(cells):
+        return None, "unreadable"
+    cell = cells[column]
+    if cell.number is not None:
+        return cell.number, "value"
+    text = str(cell.text or "").strip()
+    if not text or text in _DASHES:
+        # 空白/破折号在官方表里表示"无此项"，但**必须**由本表勾稽确认后才能当 0 用
+        return None, "blank"
+    return None, "unreadable"
+
+
+class R33CrossSanGongEcon(Rule):
+    """三公经费表（FIN_07）× 基本支出经济分类表（FIN_06）跨表资金来源一致性。
+
+    只做一件事：对三公表的四个业务项，逐一确认基本支出表同业务项的经济分类
+    决算数**不大于**三公表该业务项的决算数（部分 ≤ 整体）。超出即报，并在
+    finding 里带齐两侧表身份、页码、业务项、编码、两侧金额、差额、单位与年度。
+
+    失败即关闭（fail-closed）：表身份、列身份、费用项身份、金额单位、财政年度
+    任一项确认不了，就不产生正式 finding，而是记取数不足/解析歧义，让人工复核。
+    """
+
+    code, severity = "V33-CROSS-SAN-GONG-ECON", "error"
+    desc = "三公经费表 与 基本支出经济分类表 跨表资金来源一致性"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        if not _ensure_parsed_tables(doc):
+            raise RuleDeferred(self.code, "结构化表模型不可用（page_tables/page_texts 不足）")
+
+        unresolved: List[str] = []
+        table6 = _cross_table_by_alias(doc, _FIN_06_TABLE_ALIASES)
+        table7 = _cross_table_by_alias(doc, _FIN_07_TABLE_ALIASES)
+        if table6 is None:
+            unresolved.append(f"未定位到唯一的《{_FIN_06_TABLE_TITLE}》结构化表")
+        if table7 is None:
+            unresolved.append(f"未定位到唯一的《{_FIN_07_TABLE_TITLE}》结构化表")
+        if unresolved:
+            raise RuleDeferred(self.code, "；".join(unresolved))
+
+        for table in (table6, table7):
+            errors = list(getattr(table, "parse_errors", None) or [])
+            if errors:
+                # 解析器已明确报告结构不确定（行宽不一致等），不得在不确定的表上出正式结论
+                unresolved.append(
+                    f"《{table.anchor_table_name or table.title}》解析存在不确定："
+                    + "；".join(str(item) for item in errors[:3])
+                )
+
+        page6 = int((getattr(table6, "page_span", (0, 0)) or (0, 0))[0])
+        page7 = int((getattr(table7, "page_span", (0, 0)) or (0, 0))[0])
+        year = _resolve_fiscal_year(doc, (page6, page7))
+        if year is None:
+            unresolved.append("未能确认材料财政年度（期间一致性不可确认）")
+
+        unit6 = _resolve_table_unit(doc, page6)
+        unit7 = _resolve_table_unit(doc, page7)
+        if not unit6 or not unit7:
+            unresolved.append(
+                f"金额单位未识别（基本支出表={unit6 or '未识别'}，三公经费表={unit7 or '未识别'}）"
+            )
+        elif unit6 != unit7:
+            unresolved.append(f"两表金额单位不一致（{unit6} / {unit7}）")
+        unit = unit6 if unit6 and unit6 == unit7 else ""
+
+        lanes, lane_error = _econ_lanes(table6)
+        if lane_error:
+            unresolved.append(lane_error)
+
+        groups, group_errors = _three_public_column_groups(table7)
+        unresolved.extend(group_errors)
+        data_row = None
+        if not group_errors:
+            data_row, row_error = _three_public_data_row(table7)
+            if row_error:
+                unresolved.append(row_error)
+
+        if unresolved:
+            # 单位/年度/车道/列组任一不成立，跨表比较根本无从下手：不产生任何
+            # finding，整体记取数不足（此处尚无已确认冲突，无需 partial_issues）
+            raise RuleDeferred(
+                self.code,
+                "；".join(dict.fromkeys(unresolved)),
+                unresolved_reasons=list(dict.fromkeys(unresolved)),
+            )
+
+        # ---- 基本支出表（FIN_06）：逐业务项按车道取金额 ----
+        # blocked：该业务项的比较被明确判定为不可用（身份冲突/命中多行/列组缺列…）。
+        # 用集合逐项记账而不是拿原因文本做子串匹配——后者会把"别项的失败"错连到本项。
+        blocked: Set[str] = set()
+        basic: Dict[str, Dict[str, Any]] = {}
+        for key, subject, names, expected_code in _SAN_GONG_ECON_ITEM_SPECS:
+            normalized_names = tuple(_normalize_item_label(name) for name in names)
+            found: List[Dict[str, Any]] = []
+            conflict = ""
+            for lane in lanes:
+                for row in table6.rows:
+                    if row.row_role == "header":
+                        continue
+                    hit = _econ_item_amount_from_lane(
+                        row.cells, lane, normalized_names, expected_code
+                    )
+                    if hit is None:
+                        continue
+                    if hit.get("conflict"):
+                        conflict = str(hit["conflict"])
+                        break
+                    found.append(hit)
+                if conflict:
+                    break
+            if conflict:
+                # 名称与精确编码不共指同一业务项（如「30231 公务接待费」）：
+                # 同属一个 3 位类级也不得继续比较
+                unresolved.append(f"基本支出表「{subject}」身份不一致：{conflict}")
+                blocked.add(key)
+                continue
+            if len(found) > 1:
+                unresolved.append(f"基本支出表「{subject}」命中 {len(found)} 行，无法确定取哪一行")
+                blocked.add(key)
+                continue
+            if found and found[0].get("code_missing"):
+                # 名称命中但具体经济分类编码无法确认：业务项身份不能只凭名称成立，
+                # 该项不形成正式 finding（也不往证据里写"编码未识别"）；
+                # 其余已确认冲突仍经末尾的 partial_issues 保留，不被吞掉。
+                unresolved.append(
+                    f"基本支出表「{subject}」名称命中，但具体经济分类编码无法确认"
+                    f"（expected {expected_code}），该业务项不形成正式跨表比较"
+                )
+                blocked.add(key)
+                continue
+            if found:
+                basic[key] = found[0]
+
+        # ---- 三公表（FIN_07）：逐业务项取决算数列 ----
+        three_public: Dict[str, Decimal] = {}
+        three_public_pages: Dict[str, int] = {}
+        blank_keys: Set[str] = set()
+        scales: Dict[str, int] = {}
+        item_groups: Dict[str, str] = {}
+        for subject, key in _SAN_GONG_SUBJECT_KEYS.items():
+            group = groups.get(subject)
+            is_item = key in _SAN_GONG_ITEM_KEYS
+            if group is None:
+                # 四个业务项缺列组 → 该项不可比较（记账 + 阻塞该项）。
+                # 「合计」「小计」两个汇总结缺列组本身不阻塞比较：它们只在
+                # "有空白单元格需要确认成 0" 时才必需，缺了会让勾稽复算失败，
+                # 由下面 _blank_cells_confirmed 报出。若四个分项都是明确数值，
+                # 一份没有小计列组的三公表照样可以逐项比对，不该被判取数不足。
+                if is_item:
+                    unresolved.append(f"三公表未识别到「{subject}」列组")
+                    blocked.add(key)
+                continue
+            column = group.columns.get("final")
+            if column is None:
+                if is_item:
+                    unresolved.append(f"三公表「{subject}」列组未登记决算数列")
+                    blocked.add(key)
+                continue
+            value, state = _three_public_cell_value(data_row.cells, int(column))
+            if state == "unreadable":
+                if is_item:
+                    unresolved.append(f"三公表「{subject}」决算数单元格无法解析为金额")
+                    blocked.add(key)
+                continue
+            if state == "blank":
+                blank_keys.add(key)
+                # 勾稽确认后才成立的"无此项=0"；按公开表显示精度写 0.00，
+                # 使 finding 里的金额写法与文档中的决算数口径一致
+                value = Decimal("0.00")
+            else:
+                scales[key] = _display_scale(value)
+            three_public[key] = value
+            # 证据页码以金额单元格的真实页为准（跨页表不得落成表起始页）
+            evidence_cell = (
+                data_row.cells[int(column)]
+                if 0 <= int(column) < len(data_row.cells)
+                else None
+            )
+            three_public_pages[key] = int(getattr(evidence_cell, "page", None) or page7)
+            item_groups[key] = subject
+
+        # 空白单元格当 0 用之前，先用本表勾稽确认：合计 = 出国 + 公车小计 + 接待，
+        # 公车小计 = 购置 + 运行维护。两式不成立时"空白=0"只是猜测，必须记账。
+        if blank_keys:
+            confirmed, closure_note = self._blank_cells_confirmed(
+                three_public, item_groups, blank_keys, scales, unit
+            )
+            if not confirmed:
+                unresolved.append(
+                    "三公表分项单元格为空白且本表勾稽不成立（"
+                    + closure_note
+                    + "），空白无法确认为 0"
+                )
+                blocked.update(blank_keys)
+
+        # ---- 逐业务项比较：部分 ≤ 整体 ----
+        issues: List[Issue] = []
+        for key, subject, _names, _expected_code in _SAN_GONG_ECON_ITEM_SPECS:
+            if key in blocked or key not in three_public:
+                continue
+            hit = basic.get(key)
+            if hit is None or hit.get("amount") is None:
+                # 基本支出表未列该业务项金额：没有可比的"部分"，跳过（不伪造 0）
+                continue
+            total = three_public[key]
+            component: Decimal = hit["amount"]
+            # 证据页码 = 证据所在单元格的真实页（续页行不得标成表起始页）
+            basic_page = int(hit.get("page") or page6)
+            three_page = int(three_public_pages.get(key) or page7)
+            if component <= total:
+                continue
+            envelope = compute_dynamic_envelope(
+                [(scales.get(key, 2), unit), (_display_scale(component), unit)]
+            )
+            excess = component - total
+            if excess <= envelope:
+                issues.append(
+                    self._issue(
+                        f"三公经费「{subject}」基本支出分项与本表决算数相差 {excess.normalize()} "
+                        f"{unit}，在显示舍入包络（{envelope.normalize()} {unit}）内，可能为取整误差。",
+                        self._location(hit, subject, key, total, component, excess, unit, year,
+                                       basic_page, three_page, key in blank_keys),
+                        severity="info",
+                        evidence_text=self._evidence(hit, subject, total, component, excess, unit,
+                                                     year, basic_page, three_page, key in blank_keys),
+                    )
+                )
+                continue
+            issues.append(
+                self._issue(
+                    f"跨表资金来源冲突：「{subject}」在基本支出经济分类表列示 {component} {unit}"
+                    f"（{hit.get('code') or '编码未识别'}，第{basic_page}页决算数），大于三公经费支出决算表"
+                    f"第{three_page}页同一业务项的决算数 {total} {unit}，差额 {excess.normalize()} {unit}"
+                    f"（{year} 年度）。基本支出是三公经费的组成部分，部分大于整体时两表不能同时成立；"
+                    "现有材料无法判定哪一侧有误，需人工复核两表底稿。",
+                    self._location(hit, subject, key, total, component, excess, unit, year,
+                                   basic_page, three_page, key in blank_keys),
+                    severity="error",
+                    evidence_text=self._evidence(hit, subject, total, component, excess, unit,
+                                                 year, basic_page, three_page, key in blank_keys),
+                )
+            )
+
+        if unresolved:
+            # 已确认的冲突必须保留（不能因部分取数不足被吞掉），整体状态记取数不足
+            raise RuleDeferred(
+                self.code,
+                "；".join(dict.fromkeys(unresolved)),
+                partial_issues=issues,
+                unresolved_reasons=list(dict.fromkeys(unresolved)),
+            )
+        return issues
+
+    # ---- 内部：勾稽确认空白单元格 ----
+
+    def _blank_cells_confirmed(
+        self,
+        values: Dict[str, Decimal],
+        item_groups: Dict[str, str],
+        blank_keys: set,
+        scales: Dict[str, int],
+        unit: str,
+    ) -> Tuple[bool, str]:
+        """三公表两条等式是否成立（空白按 0 代入）→ 空白能否确认为 0。"""
+        required = ("total", "vehicle_subtotal")
+        if any(key not in values for key in required):
+            return False, "缺合计/公车小计列组，无法复算"
+        equations = (
+            ("total", ("overseas", "vehicle_subtotal", "reception")),
+            ("vehicle_subtotal", ("vehicle_purchase", "vehicle_operation")),
+        )
+        notes: List[str] = []
+        for lhs_key, rhs_keys in equations:
+            if lhs_key not in values:
+                return False, f"{item_groups.get(lhs_key, lhs_key)} 未取到"
+            missing = [key for key in rhs_keys if key not in values]
+            if missing:
+                return False, f"{item_groups.get(lhs_key, lhs_key)} 的分项未取全"
+            lhs = values[lhs_key]
+            rhs = sum((values[key] for key in rhs_keys), Decimal("0"))
+            gap = abs(lhs - rhs)
+            terms = [
+                (scales.get(key, 2), unit)
+                for key in (lhs_key, *rhs_keys)
+                if key not in blank_keys
+            ]
+            envelope = compute_dynamic_envelope(terms)
+            notes.append(
+                f"{item_groups.get(lhs_key, lhs_key)} {lhs.normalize()} vs "
+                f"{rhs.normalize()}（差 {gap.normalize()}，包络 {envelope.normalize()}）"
+            )
+            if gap > envelope:
+                return False, "；".join(notes)
+        return True, "；".join(notes)
+
+    # ---- 内部：finding 定位与证据 ----
+
+    def _location(
+        self,
+        hit: Dict[str, Any],
+        subject: str,
+        key: str,
+        total: Decimal,
+        component: Decimal,
+        excess: Decimal,
+        unit: str,
+        year: int,
+        basic_page: int,
+        three_public_page: int,
+        from_blank: bool,
+    ) -> Dict[str, Any]:
+        code = str(hit.get("code") or "")
+        return {
+            "table": _FIN_06_TABLE_TITLE,
+            "page": basic_page,
+            "pages": sorted({basic_page, three_public_page}),
+            "row": f"{code} {hit.get('name') or subject}".strip(),
+            "field": subject,
+            "code": code,
+            "san_gong_item": key,
+            "obligation_id": _OBLIGATION_ID,
+            "basic_amount": str(component),
+            "three_public_amount": str(total),
+            "difference": str(excess),
+            "unit": unit,
+            "fiscal_year": year,
+            "three_public_amount_from_blank": from_blank,
+            "table_refs": [
+                {
+                    "role": "基本支出经济分类",
+                    "table": _FIN_06_TABLE_TITLE,
+                    "page": basic_page,
+                    "row": f"{code} {hit.get('name') or subject}".strip(),
+                    "code": code,
+                    "field": "决算数",
+                },
+                {
+                    "role": "三公经费",
+                    "table": _FIN_07_TABLE_TITLE,
+                    "page": three_public_page,
+                    "field": subject,
+                    "col": "决算数",
+                },
+            ],
+        }
+
+    def _evidence(
+        self,
+        hit: Dict[str, Any],
+        subject: str,
+        total: Decimal,
+        component: Decimal,
+        excess: Decimal,
+        unit: str,
+        year: int,
+        basic_page: int,
+        three_public_page: int,
+        from_blank: bool,
+    ) -> str:
+        code = str(hit.get("code") or "编码未识别")
+        lines = [
+            f"基本支出经济分类表：{_FIN_06_TABLE_TITLE}（第{basic_page}页，决算数）",
+            f"三公经费支出决算表：{_FIN_07_TABLE_TITLE}（第{three_public_page}页，决算数）",
+            f"业务项：{subject}",
+            f"基本支出表：{code} {hit.get('name') or subject} = {component} {unit}",
+            f"三公经费表：{subject} = {total} {unit}",
+            f"差额：{excess.normalize()} {unit}（基本支出分项 − 三公经费决算数）",
+            f"财政年度：{year}；单位：{unit}",
+            "可比口径：两份表都是同一财政拨款口径下的决算数；基本支出是三公经费"
+            "（含项目支出）的组成部分，可比关系为「分项 ≤ 合计」。",
+        ]
+        if from_blank:
+            lines.append(
+                "说明：三公经费表该业务项单元格为空白，已按本表勾稽"
+                "（合计 = 出国费 + 公务用车购置及运行维护费小计 + 公务接待费；"
+                "小计 = 公务用车购置费 + 公务用车运行维护费）确认为 0。"
+            )
+        return "\n".join(lines)
+
+
 ALL_RULES = [
     R33001_CoverYearUnit(),
     R33002_NineTablesCheck(),
@@ -6696,6 +7373,8 @@ ALL_RULES = [
     R33224_Narrative7_T7(),
     # 补充 - 表间勾稽
     R33204_InterTable_T2_T4(),
+    # WP4-A：三公经费表 × 基本支出经济分类表（跨表资金来源一致性）
+    R33CrossSanGongEcon(),
     R33233_DetailRowFormulaConsistency(),
     R33234_NarrativePercentConsistency(),
     R33235_NarrativeAmountConsistency(),

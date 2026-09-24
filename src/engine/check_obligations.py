@@ -70,7 +70,10 @@ from src.schemas.document_profile import DocumentProfile
 #: v2（2026-09-17 独立验收整改）：拆出零基数同比复算缺口（OBL-TREND-ZERO-BASE），
 #: 收窄 OBL-TREND-COMPARATIVE-LOGIC 的 basis 使其与 CMM-005 实际能力一致，
 #: 文种冲突单独登记为阻塞实例（OBL-PROFILE-KIND-CONFLICT）。
-OBLIGATION_CATALOG_VERSION = "obligations-v2"
+#: v3（2026-09-24 WP4-A）：OBL-CROSS-SAN-GONG-ECON 的实现缺口补齐——
+#: checker 从 pending_checkers 转为真实 checker（V33-CROSS-SAN-GONG-ECON），
+#: 依赖表从 FIN_07 修正为 FIN_06+FIN_07（该义务本就是跨这两张表）。
+OBLIGATION_CATALOG_VERSION = "obligations-v3"
 
 # ---- 实例状态 ---------------------------------------------------------------
 
@@ -449,12 +452,15 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         group_id=GROUP_CROSS,
         title="三公经费表 与 财政拨款经济分类表 资金来源一致性",
         report_kinds=_FINAL_ONLY,
-        # 本轮样张真实漏报：三公经费表与经济分类表冲突未被报告。
-        # 现有 V33-244 只看三公表内部，跨表的资金来源一致性尚无实现。
-        pending_checkers=("V33-CROSS-SAN-GONG-ECON",),
-        depends_on=("table:FIN_07",),
-        basis="三公经费属财政拨款支出，两表同口径金额须互相印证",
-        gap_note="缺少三公经费表与财政拨款经济分类表之间的跨表资金来源一致性检查",
+        checkers_by_kind=_final("V33-CROSS-SAN-GONG-ECON"),
+        depends_on=("table:FIN_06", "table:FIN_07"),
+        basis=(
+            "基本支出（FIN_06《一般公共预算财政拨款基本支出决算表》经济分类）是财政拨款"
+            "“三公”经费（FIN_07《财政拨款“三公”经费支出决算表》，含项目支出）的组成部分，"
+            "逐业务项须满足「基本支出分项 ≤ 三公经费决算数」——反向即两表口径不能同时成立。"
+            "真值：2026-09-16 人工判定 Y02（宜川路街道 2025 年度决算 P22/P24，"
+            "出国 13.24>0、接待 8.31>0.30、车辆运行 81.11>19.56 万元）曾漏报"
+        ),
     ),
     # ---- 表文关系 ----
     Obligation(

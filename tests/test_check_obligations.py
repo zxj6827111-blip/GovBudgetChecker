@@ -333,10 +333,65 @@ def test_kind_conflict_detail_names_only_truly_conflicting_candidates():
 
 def test_rule_not_in_registry_is_reported_as_unimplemented():
     ledger = build_obligation_ledger(_profile("final"), report_kind="final")
-    gap = _instance(ledger, "OBL-CROSS-SAN-GONG-ECON")
+    gap = _instance(ledger, "OBL-TXT-FUND-DETAIL")
     assert gap["status"] == OBLIGATION_NOT_IMPLEMENTED
-    assert gap["missing_checkers"] == ["V33-CROSS-SAN-GONG-ECON"]
+    assert gap["missing_checkers"] == ["V33-TXT-FUND-DETAIL"]
     assert gap["gap_note"]
+
+
+def test_implemented_checker_is_no_longer_a_gap_and_records_its_receipt():
+    """WP4-A：OBL-CROSS-SAN-GONG-ECON 的实现缺口已补齐。
+
+    这条义务此前是 ``not_implemented``（checker 只写在 pending_checkers 里）。
+    现在 checker 真实注册：无回执时是 ``not_executed``（跑了才有结论），
+    有回执时按回执落状态，不再报"尚未实现"。
+    """
+    assert "V33-CROSS-SAN-GONG-ECON" in registered_rule_ids("final")
+
+    instance = _instance(
+        build_obligation_ledger(_profile("final"), report_kind="final"),
+        "OBL-CROSS-SAN-GONG-ECON",
+    )
+    assert instance["status"] == OBLIGATION_NOT_EXECUTED
+    assert instance["missing_checkers"] == []
+    assert instance["gap_note"] == ""
+    assert set(instance["depends_on"]) == {"table:FIN_06", "table:FIN_07"}
+
+    receipt = _instance(
+        build_obligation_ledger(
+            _profile("final"),
+            report_kind="final",
+            rule_execution_summary=_receipt({"V33-CROSS-SAN-GONG-ECON": "fail"}),
+        ),
+        "OBL-CROSS-SAN-GONG-ECON",
+    )
+    assert receipt["status"] == OBLIGATION_COMPLETED
+    assert "V33-CROSS-SAN-GONG-ECON=fail" in receipt["detail"]
+
+
+def test_withdrawing_the_checker_puts_the_obligation_back_as_a_gap(monkeypatch):
+    """变异验证：规则从注册表撤下 → 该义务必须回到 not_implemented。
+
+    否则"缺口数下降"可能来自清单改动，而不是真实能力增加。
+    """
+    from src.engine import rules_v33
+
+    monkeypatch.setattr(
+        rules_v33,
+        "ALL_RULES",
+        [
+            rule
+            for rule in rules_v33.ALL_RULES
+            if getattr(rule, "code", "") != "V33-CROSS-SAN-GONG-ECON"
+        ],
+    )
+    assert "V33-CROSS-SAN-GONG-ECON" not in registered_rule_ids("final")
+    instance = _instance(
+        build_obligation_ledger(_profile("final"), report_kind="final"),
+        "OBL-CROSS-SAN-GONG-ECON",
+    )
+    assert instance["status"] == OBLIGATION_NOT_IMPLEMENTED
+    assert instance["missing_checkers"] == ["V33-CROSS-SAN-GONG-ECON"]
 
 
 def test_ai_obligation_does_not_block_unless_ai_is_required():
