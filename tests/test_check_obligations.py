@@ -265,26 +265,35 @@ def test_fail_on_one_checker_still_counts_the_check_as_done():
     assert direction["status"] == OBLIGATION_COMPLETED
 
 
-def test_zero_base_recompute_is_a_declared_gap_not_a_claimed_capability():
-    """零基数同比复算未实现，必须登记为缺口而不是挂在 CMM-005 名下。
+def test_zero_base_recompute_requires_cmm007_receipt_not_cmm005():
+    """零基数复算由 CMM-007 承担；CMM-005 的回执不得被读作该能力。
 
     独立验收 2026-09-17：OBL-TREND-COMPARATIVE-LOGIC 曾宣称"零基数不得
     表述为增长百分比"，但 CMM-005 只查"当前为 0 却写增加"。样张漏报
     （宜川接待费 0.30/增加 0.30、文旅 0.40/增加 0.40，均写"增长100%"）
-    证明该子能力不存在。不得用规则名或规则存在证明语义覆盖。
+    证明该子能力不存在，遂拆出 OBL-TREND-ZERO-BASE 并登记缺口。
+    WP4-D（2026-09-25）落地 CMM-007 后缺口收口：能力真实存在，但完成
+    必须由 CMM-007 自己的回执驱动——只有 CMM-005=pass 时不得 completed。
     """
     ledger = build_obligation_ledger(
         _profile("final"),
         report_kind="final",
         rule_execution_summary=_receipt({"CMM-005": "pass"}),
     )
-    gap = _instance(ledger, "OBL-TREND-ZERO-BASE")
-    assert gap["status"] == OBLIGATION_NOT_IMPLEMENTED
-    assert gap["missing_checkers"] == ["CMM-007"]
-    assert "增长100%" in gap["gap_note"]
-    assert "OBL-TREND-ZERO-BASE" in ledger["blocking_obligation_ids"]
+    instance = _instance(ledger, "OBL-TREND-ZERO-BASE")
+    assert instance["status"] != OBLIGATION_COMPLETED, (
+        "CMM-005 的回执不得被读作零基数复算能力（2026-09-17 验收教训）"
+    )
+
+    completed = build_obligation_ledger(
+        _profile("final"),
+        report_kind="final",
+        rule_execution_summary=_receipt({"CMM-005": "pass", "CMM-007": "fail"}),
+    )
+    done = _instance(completed, "OBL-TREND-ZERO-BASE")
+    assert done["status"] == OBLIGATION_COMPLETED
     # 拆分后，CMM-005 的完成不再被读作"零基数复算已具备"
-    logic = _instance(ledger, "OBL-TREND-COMPARATIVE-LOGIC")
+    logic = _instance(completed, "OBL-TREND-COMPARATIVE-LOGIC")
     assert logic["status"] == OBLIGATION_COMPLETED
     assert "零基数不得表述为增长百分比" not in logic["basis"]
 

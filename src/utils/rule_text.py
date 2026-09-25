@@ -12,6 +12,7 @@ _RULE_TITLE_OVERRIDES = {
     "V33-CROSS-SAN-GONG-ECON": "基本支出三公分项超过三公经费表同项决算数",
     "V33-TXT-FUND-DETAIL": "基金/国资决算表与对应说明同一功能分类项金额不一致",
     "V33-NARRATIVE-INDICATOR-REPEAT": "文内同一指标重复披露金额不一致",
+    "CMM-007": "同比零基数/增减额与增长百分比复算不一致",
 }
 
 
@@ -69,6 +70,13 @@ def default_rule_suggestion(rule_code: str, page: Optional[int]) -> str:
             "同一业务项、同一期间、同一单位（不得拿预算数/上年数/增减额互比），"
             "再翻底稿确认正确金额并同步修改两处披露"
             "（系统只能确认两处不能同时成立，不能自动判断哪一处正确）。"
+        )
+    if normalized_rule == "CMM-007":
+        return (
+            "请按“基期=本期−增加额（或本期+减少额）”复算：若基期为 0，删除或改写"
+            "“增长/下降X%”这类有限百分比（同比百分比在基期为 0 时不存在定义）；"
+            "若基期非 0，用 (本期−基期)/基期 复算百分比并核对方向。系统只能确认"
+            "本期金额、增减额与百分比三者不能同时成立，不能自动判断哪一处正确。"
         )
     if normalized_rule == "V33-CROSS-SAN-GONG-ECON":
         return (
