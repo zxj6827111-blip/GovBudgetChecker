@@ -77,7 +77,9 @@ from src.schemas.document_profile import DocumentProfile
 #: checker 从 pending_checkers 转为真实 checker（V33-TXT-FUND-DETAIL）。
 #: v5（2026-09-25 WP4-C）：OBL-NARRATIVE-INDICATOR-REPEAT 的实现缺口补齐——
 #: checker 从 pending_checkers 转为真实 checker（V33-NARRATIVE-INDICATOR-REPEAT）。
-OBLIGATION_CATALOG_VERSION = "obligations-v5"
+#: v6（2026-09-25 WP4-D）：OBL-TREND-ZERO-BASE 的实现缺口补齐——
+#: checker 从 pending_checkers 转为真实 checker（CMM-007，budget+final 通用）。
+OBLIGATION_CATALOG_VERSION = "obligations-v6"
 
 # ---- 实例状态 ---------------------------------------------------------------
 
@@ -643,14 +645,10 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         # 增加 0.30 万元，文旅接待费 0.40 万元、增加 0.40 万元，两份材料
         # 都写“增长100%”——本期等于增加额说明基期为 0，此时不存在可比
         # 增长率。CMM-005 只查“当前为0却写增加”，覆盖不了这一类。
-        pending_checkers=("CMM-007",),
+        checkers_by_kind=_both(("CMM-007",), ("CMM-007",)),
         basis=(
             "本期金额等于增加金额时基期为0，不得表述为“增长X%”；"
             "增减额与增长百分比须可由基期/本期金额复算"
-        ),
-        gap_note=(
-            "缺少“基期=本期-增减额”的复算检查：本期=增加额（基期为0）"
-            "却写“增长100%”的表述未报告（样张：宜川 0.30/0.30、文旅 0.40/0.40）"
         ),
     ),
     Obligation(

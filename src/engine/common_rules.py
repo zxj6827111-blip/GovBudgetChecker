@@ -1,11 +1,26 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .amount_math import compute_dynamic_envelope
 from .budget_rules import find_budget_anchors
 from .rule_outcome import RuleDeferred, RuleNotApplicable
-from .rules_v33 import Document, Issue, Rule, find_table_anchors
+from .rules_v33 import (
+    Document,
+    Issue,
+    Rule,
+    find_table_anchors,
+    _TXT_FUND_UNIT_TO_WAN,
+    _nar_repeat_section_of,
+    _nar_repeat_sections,
+    _resolve_fiscal_year,
+    _txt_fund_display,
+    _txt_fund_merged_pages,
+    _txt_fund_norm,
+    _txt_fund_page_for,
+)
 from src.services.document_profile_resolver import resolve_report_kind_from_path
 from src.utils.narration import merge_soft_wrapped_lines as _merge_soft_wrapped_lines_shared
 
@@ -909,6 +924,482 @@ class CMM006_IncomeExpenseTrendConsistency(Rule):
         return issues
 
 
+# ============================================================================
+# WP4-D：同比基期/本期/增减额与增长百分比的确定性复算（CMM-007，预/决算通用）
+#
+# 真值（2026-09-17 独立验收真实反例，当时均未报告）：
+# - 宜川 P36：公务接待费本期 0.3 万元、比上年增加 0.3 万元，却写「增长100%」
+#   ——复算基期 0.3−0.3=0，同比百分比不存在有限定义；
+# - 文旅 P28：公务接待费本期 0.40 万元、增加 0.40 万元，「增长100%」——同理。
+# 证据链与设计口径：docs/WP4D_ZERO_BASE_20260925.md。
+#
+# 边界（不重复造轮子）：CMM-005 管"当前为0却写增加"等模板/方向异常；
+# V33-234 / BUD-111 管"显式基期+本期+百分比"复算（基期为 0 时跳过）——
+# 零基数与"本期+增减额+百分比"复算此前无人覆盖。百分比容差复用仓库统一
+# 策略值（abs 0.5pp / 相对 1%，BUD-111/V33-234 同款），金额侧 Decimal +
+# 显示半步长包络（compute_dynamic_envelope），不自造容差。
+# ============================================================================
+
+_CMM007_OBLIGATION_ID = "OBL-TREND-ZERO-BASE"
+
+#: 同比变化语义单元：指标 (口径后缀)? (比20XX年度)? 方向词(幅/了)? 金额 单位，
+#: 同句读单元内再接 (增长|下降|提高|降低)X%。谓词与口径词字符间容忍 PDF
+#: 软换行（宜川原文「支出决算增\n加 0.3 万元，增长 100%」）。句读（。；）
+#: 不可跨越——三数必须同属一个语义单元，禁止跨句拼接。
+_CMM007_UNIT_RE = re.compile(
+    r"(?P<ind>[一-龥（）“”]{2,30}?)\s*"
+    r"(?:支\s*出\s*决\s*算\s*数|支\s*出\s*决\s*算|决\s*算\s*数|决\s*算|支\s*出|预\s*算)?"
+    r"(?:\s*比\s*(?P<base_year>20\d{2})\s*年(?:度)?)?"
+    r"\s*(?P<verb>增\s*加|减\s*少|增\s*长|下\s*降)(?:幅|了)?\s*"
+    r"(?P<delta>\d[\d,，.]*)\s*(?P<dunit>万\s*元|亿\s*元|元)"
+    r"[^。；]{0,12}?"
+    r"(?P<pverb>增\s*长|下\s*降|提\s*高|降\s*低)(?:幅|了)?\s*(?P<pct>\d[\d,，.]*)\s*%"
+)
+
+#: 同节本期金额披露：指标 (口径后缀)? (为|是)? 金额 单位。
+_CMM007_CURRENT_RE = re.compile(
+    r"(?P<ind>[一-龥（）“”]{2,30}?)\s*"
+    r"(?:支\s*出\s*决\s*算\s*数|支\s*出\s*决\s*算|决\s*算\s*数|决\s*算|支\s*出|预\s*算)?"
+    r"(?:\s*(?:为|是))?\s*"
+    r"(?P<amt>\d[\d,，.]*)\s*(?P<aunit>万\s*元|亿\s*元|元)"
+)
+
+#: 显式基期披露：上年/上年度/20XX年度 的指标金额。
+_CMM007_EXPLICIT_PRIOR_RE = re.compile(
+    r"(?:上\s*年(?:度|同期)?|(?P<pyear>20\d{2})\s*年(?:度)?)\s*(?:的)?\s*"
+    r"(?P<ind>[一-龥（）“”]{2,30}?)\s*"
+    r"(?:支\s*出\s*决\s*算\s*数|支\s*出\s*决\s*算|决\s*算\s*数|决\s*算|支\s*出|预\s*算)?"
+    r"(?:\s*(?:为|是))?\s*"
+    r"(?P<amt>\d[\d,，.]*)\s*(?P<aunit>万\s*元|亿\s*元|元)"
+)
+
+#: 指标名归一：去时间/比较前缀（本年/比上年…）与口径后缀（支出决算/决算/
+#: 支出/预算）——身份是业务项，口径（预算/决算）是绑定槽位自己的属性。
+_CMM007_IND_PREFIX_RE = re.compile(r"^(?:比\s*)?(?:上\s*年(?:度|同期)?|本\s*年(?:度)?)+")
+_CMM007_IND_SUFFIX_RE = re.compile(
+    r"(?:支\s*出\s*决\s*算\s*数|支\s*出\s*决\s*算|决\s*算\s*数|决\s*算|支\s*出|预\s*算)$"
+)
+
+#: 上年/基期标记（本期披露候选的拒绝条件：上年口径的金额不是本期）
+_CMM007_PRIOR_MARK_RE = re.compile(r"上\s*年(?:度|同期)?|以前年度|(20\d{2})\s*年(?:度)?")
+
+_CMM007_UP_VERBS = ("增加", "增长", "提高")
+_CMM007_DOWN_VERBS = ("减少", "下降", "降低")
+
+
+def _cmm007_clean_amount(text: str) -> str:
+    return re.sub(r"[,，\s]", "", text or "")
+
+
+def _cmm007_scale(cleaned: str) -> int:
+    return len(cleaned.split(".", 1)[1]) if "." in cleaned else 0
+
+
+def _cmm007_canon(name: str) -> str:
+    """指标身份归一：去前缀/后缀后必须仍有业务项名，否则为空（拒绝绑定）。"""
+    text = _CMM007_IND_PREFIX_RE.sub("", _txt_fund_norm(name))
+    while True:
+        stripped = _CMM007_IND_SUFFIX_RE.sub("", text)
+        if stripped == text:
+            return stripped
+        text = stripped
+
+
+def _cmm007_verb_direction(verb: str) -> str:
+    normalized = re.sub(r"\s+", "", verb)
+    return "up" if normalized in _CMM007_UP_VERBS else "down"
+
+
+def _cmm007_clause_marked_prior(merged: str, start: int, year: int) -> bool:
+    """句读前缀（16 字符窗）出现上年/基期年度标记 → 该披露是基期口径。"""
+    prefix = merged[max(0, start - 16):start]
+    cut = max(prefix.rfind(ch) for ch in "。；，、：")
+    if cut >= 0:
+        prefix = prefix[cut + 1:]
+    match = _CMM007_PRIOR_MARK_RE.search(prefix)
+    if match is None:
+        return False
+    found_year = match.group(1)
+    return found_year is None or int(found_year) == year - 1
+
+
+class CMM007_ZeroBaseTrendRecompute(Rule):
+    """同比基期/本期/增减额与增长百分比的确定性复算（零基数）。
+
+    只绑定完整语义单元：同节内"指标 + 本期金额"配"（比20XX年度）增加/减少
+    X 万元，增长/下降 Y%"。增加 → 基期 = 本期 − X；减少 → 基期 = 本期 + X。
+    基期在显示精度包络内为 0 却声明有限百分比 → 正式 finding（同比百分比
+    无定义）；基期非 0 → 复算方向与百分比；显式基期与推导基期冲突 → 四元
+    矛盾 finding。完成率/占比/持平/模板残留不归本规则（CMM-005 与其它义务）。
+    """
+
+    code, severity = "CMM-007", "error"
+    desc = "同比基期/本期/增减额与增长百分比的确定性复算（零基数）"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        merged, offsets = _txt_fund_merged_pages(doc)
+        if not merged.strip():
+            raise RuleDeferred(
+                self.code,
+                "未提取到正文文本，同比复算无从检查",
+                unresolved_reasons=["未提取到正文文本"],
+            )
+        sections = _nar_repeat_sections(merged, doc, offsets)
+        heading_pages = tuple(
+            {_txt_fund_page_for(offsets, start) for _, start, _ in sections}
+        )
+        year = _resolve_fiscal_year(doc, heading_pages)
+        if year is None:
+            raise RuleDeferred(
+                self.code,
+                "未能确认材料财政年度，同比期间不可确认",
+                unresolved_reasons=["未能确认材料财政年度"],
+            )
+
+        issues: List[Issue] = []
+        unresolved: List[str] = []
+        currents, priors = self._collect_amounts(merged, offsets, sections, year, unresolved)
+
+        for match in _CMM007_UNIT_RE.finditer(merged):
+            canon = _cmm007_canon(match.group("ind"))
+            section_title, section_start = _nar_repeat_section_of(sections, match.start())
+            base_year = match.group("base_year")
+            if base_year is not None and int(base_year) != year - 1:
+                continue  # 与材料年度不衔接的比较窗口：已解决的"不可比"
+            if not canon:
+                # 比较句自身无指标身份（如「比上年预算增加…」承接式）时，
+                # 继承同句读单元内唯一一个已接受本期披露的指标——只允许
+                # 同句承接，禁止跨句拼接；非空 canon 无本期披露则 fail-closed
+                canon = self._inherit_same_clause(
+                    merged, match.start(), currents, section_start
+                )
+            if not canon:
+                continue
+            key = (canon, section_start)
+            candidates = currents.get(key)
+            if not candidates:
+                continue  # 无可验证的本期金额 → fail-closed 不比
+            if not self._candidates_agree(candidates):
+                unresolved.append(
+                    f"指标「{canon}」在本节存在多个不一致的本期金额披露，"
+                    "无法确定比较基期（parse_ambiguity）"
+                )
+                continue
+            current = candidates[0]
+            delta_text = _cmm007_clean_amount(match.group("delta"))
+            delta_unit = _txt_fund_norm(match.group("dunit"))
+            delta_factor = _TXT_FUND_UNIT_TO_WAN.get(delta_unit)
+            current_factor = _TXT_FUND_UNIT_TO_WAN.get(current["unit"])
+            if delta_factor is None or current_factor is None:
+                unresolved.append(
+                    f"指标「{canon}」同比句金额单位不在归一口径内，不形成正式比较"
+                )
+                continue
+            direction = _cmm007_verb_direction(match.group("verb"))
+            delta_wan = Decimal(delta_text) * delta_factor
+            current_wan = Decimal(current["amount"]) * current_factor
+            sign = 1 if direction == "down" else -1
+            derived_prior = current_wan + sign * delta_wan
+
+            prior_candidates = priors.get(key)
+            explicit_prior = None
+            if prior_candidates:
+                if not self._candidates_agree(prior_candidates):
+                    unresolved.append(
+                        f"指标「{canon}」在本节存在多个不一致的上年基期披露，"
+                        "基期交叉验证不可完成（parse_ambiguity）"
+                    )
+                else:
+                    explicit_prior = prior_candidates[0]
+                    explicit_wan = Decimal(explicit_prior["amount"]) * _TXT_FUND_UNIT_TO_WAN.get(
+                        explicit_prior["unit"], Decimal("1")
+                    )
+                    envelope = compute_dynamic_envelope(
+                        [
+                            (current["scale"], current["unit"]),
+                            (_cmm007_scale(delta_text), delta_unit),
+                            (explicit_prior["scale"], explicit_prior["unit"]),
+                        ]
+                    )
+                    if abs(explicit_wan - derived_prior) > envelope:
+                        issues.append(
+                            self._issue(
+                                f"同比基期交叉矛盾（{canon}）：上年披露"
+                                f" {explicit_prior['amount']} {explicit_prior['unit']}，"
+                                f"但按本期 {current['amount']} {current['unit']}、"
+                                f"{match.group('verb')}{delta_text} {delta_unit} 推导基期为"
+                                f" {_txt_fund_display(derived_prior)} 万元，四个数字"
+                                "不能同时成立，需人工复核底稿。",
+                                self._location(
+                                    sections, offsets, match, canon, current,
+                                    delta_text, delta_unit, direction, derived_prior,
+                                    year,
+                                    explicit_prior=explicit_prior["amount"],
+                                ),
+                                severity="error",
+                                evidence_text=self._evidence(
+                                    match, current, explicit_prior=explicit_prior
+                                ),
+                            )
+                        )
+                        continue
+
+            amount_envelope = compute_dynamic_envelope(
+                [(current["scale"], current["unit"]), (_cmm007_scale(delta_text), delta_unit)]
+            )
+            pct_text = _cmm007_clean_amount(match.group("pct"))
+            pct_verb = _cmm007_verb_direction(match.group("pverb"))
+
+            if abs(derived_prior) <= amount_envelope:
+                issues.append(
+                    self._issue(
+                        f"同比零基数百分比无定义（{canon}）：本期"
+                        f" {current['amount']} {current['unit']}，{match.group('verb')}"
+                        f" {delta_text} {delta_unit}，复算基期为 0，却声明"
+                        f"「{re.sub(r'[（），,]','',match.group('pverb'))}{match.group('pct')}%」"
+                        "——分母为 0，同比百分比不存在有限定义。本期金额、增减额"
+                        "与增长百分比三者不能同时成立，需人工复核底稿。",
+                        self._location(
+                            sections, offsets, match, canon, current, delta_text,
+                            delta_unit, direction, derived_prior, year, zero_base=True,
+                        ),
+                        severity="error",
+                        evidence_text=self._evidence(match, current),
+                    )
+                )
+                continue
+
+            if direction != pct_verb:
+                issues.append(
+                    self._issue(
+                        f"同比方向矛盾（{canon}）：本期 {current['amount']}"
+                        f" {current['unit']}、{match.group('verb')} {delta_text}"
+                        f" {delta_unit}，却写「{re.sub(r'[（]，,]','',match.group('pverb'))}"
+                        f"{match.group('pct')}%」——金额增减方向与百分比方向相反，"
+                        "两处披露不能同时成立，需人工复核底稿。",
+                        self._location(
+                            sections, offsets, match, canon, current, delta_text,
+                            delta_unit, direction, derived_prior, year,
+                            direction_conflict=True,
+                            recomputed=self._recompute(current_wan, derived_prior),
+                        ),
+                        severity="error",
+                        evidence_text=self._evidence(match, current),
+                    )
+                )
+                continue
+
+            recomputed = self._recompute(current_wan, derived_prior)
+            declared = Decimal(pct_text)
+            tolerance = max(
+                Decimal("0.5"),
+                abs(recomputed) * Decimal("0.01"),
+                abs(declared) * Decimal("0.01"),
+            )
+            diff = abs(declared - recomputed)
+            if diff <= tolerance:
+                continue
+            severity = "error" if diff > Decimal("1.0") else "warn"
+            issues.append(
+                self._issue(
+                    f"增减额与同比百分比复算不一致（{canon}）：本期"
+                    f" {current['amount']} {current['unit']}、{match.group('verb')}"
+                    f" {delta_text} {delta_unit}，复算基期"
+                    f" {_txt_fund_display(derived_prior)} 万元，应为"
+                    f"{re.sub(r'[（]，,]','',match.group('pverb'))}{_txt_fund_display(recomputed)}%"
+                    f"，声明 {match.group('pct')}%，相差 {_txt_fund_display(diff)} 个百分点。"
+                    "本期金额、增减额与增长百分比三者不能同时成立，需人工复核底稿。",
+                    self._location(
+                        sections, offsets, match, canon, current, delta_text, delta_unit,
+                        direction, derived_prior, year,
+                        recomputed=_txt_fund_display(recomputed),
+                    ),
+                    severity=severity,
+                    evidence_text=self._evidence(match, current),
+                )
+            )
+
+        if unresolved:
+            reasons = list(dict.fromkeys(unresolved))
+            raise RuleDeferred(
+                self.code,
+                "；".join(reasons),
+                partial_issues=issues,
+                unresolved_reasons=reasons,
+            )
+        return issues
+
+    # ---- 内部：同节金额披露收集 ----
+
+    def _collect_amounts(
+        self,
+        merged: str,
+        offsets: List[int],
+        sections: List[Tuple[str, int, int]],
+        year: int,
+        unresolved: List[str],
+    ) -> Tuple[Dict[Tuple[str, int], List[Dict[str, Any]]], Dict[Tuple[str, int], List[Dict[str, Any]]]]:
+        currents: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
+        priors: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
+        for match in _CMM007_CURRENT_RE.finditer(merged):
+            entry = self._amount_entry(merged, offsets, sections, match)
+            if entry is None:
+                continue
+            if re.match(r"^(?:上\s*年|以前)", entry["raw_ind"]) or _cmm007_clause_marked_prior(
+                merged, match.start(), year
+            ):
+                continue  # 上年口径披露不是本期金额
+            currents.setdefault(entry["key"], []).append(entry)
+        for match in _CMM007_EXPLICIT_PRIOR_RE.finditer(merged):
+            entry = self._amount_entry(merged, offsets, sections, match)
+            if entry is None:
+                continue
+            pyear = match.group("pyear")
+            if pyear is not None and int(pyear) != year - 1:
+                continue  # 与材料年度不衔接的基期年：不作为本材料基期
+            priors.setdefault(entry["key"], []).append(entry)
+        return currents, priors
+
+    def _amount_entry(
+        self,
+        merged: str,
+        offsets: List[int],
+        sections: List[Tuple[str, int, int]],
+        match: Any,
+    ) -> Optional[Dict[str, Any]]:
+        raw_ind = match.group("ind")
+        canon = _cmm007_canon(raw_ind)
+        if not canon:
+            return None  # 归一后为空 = 纯口径/时间词，无业务项身份
+        amount = _cmm007_clean_amount(match.group("amt"))
+        unit = _txt_fund_norm(match.group("aunit"))
+        if _TXT_FUND_UNIT_TO_WAN.get(unit) is None:
+            return None
+        section_title, section_start = _nar_repeat_section_of(sections, match.start())
+        return {
+            "key": (canon, section_start),
+            "raw_ind": raw_ind,
+            "canon": canon,
+            "amount": amount,
+            "unit": unit,
+            "scale": _cmm007_scale(amount),
+            "page": _txt_fund_page_for(offsets, match.start()),
+            "section": section_title,
+            "span": re.sub(r"\s+", "", merged[match.start():match.end()]),
+            "start": match.start(),
+            "end": match.end(),
+        }
+
+    def _candidates_agree(self, candidates: List[Dict[str, Any]]) -> bool:
+        values = {
+            Decimal(item["amount"]) * _TXT_FUND_UNIT_TO_WAN.get(item["unit"], Decimal("1"))
+            for item in candidates
+        }
+        return len(values) == 1
+
+    def _inherit_same_clause(
+        self,
+        merged: str,
+        unit_start: int,
+        currents: Dict[Tuple[str, int], List[Dict[str, Any]]],
+        section_start: int,
+    ) -> str:
+        """比较句自身无指标身份时，继承同句读单元（无。；隔断）内唯一的
+        本期披露的指标名——承接式同句绑定，不跨句拼接。"""
+        clause_start = merged.rfind("。", 0, unit_start)
+        semi = merged.rfind("；", 0, unit_start)
+        clause_start = max(clause_start, semi)
+        inherited: List[str] = []
+        for key, items in currents.items():
+            if key[1] != section_start:
+                continue
+            for item in items:
+                if clause_start < item["end"] <= unit_start:
+                    inherited.append(key[0])
+                    break
+        unique = set(inherited)
+        return inherited[0] if len(unique) == 1 else ""
+
+    # ---- 内部：finding 组装 ----
+
+    def _recompute(self, current_wan: Decimal, derived_prior: Decimal) -> Decimal:
+        return abs(current_wan - derived_prior) / abs(derived_prior) * Decimal("100")
+
+    def _location(
+        self,
+        sections: List[Tuple[str, int, int]],
+        offsets: List[int],
+        match: Any,
+        canon: str,
+        current: Dict[str, Any],
+        delta_text: str,
+        delta_unit: str,
+        direction: str,
+        derived_prior: Decimal,
+        year: int,
+        zero_base: bool = False,
+        direction_conflict: bool = False,
+        recomputed: Optional[str] = None,
+        explicit_prior: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        unit_page = _txt_fund_page_for(offsets, match.start())
+        section_title, _ = _nar_repeat_section_of(sections, match.start())
+        location: Dict[str, Any] = {
+            "page": unit_page,
+            "pages": sorted({unit_page, current["page"]}),
+            "section": section_title,
+            "indicator": canon,
+            "current_amount": current["amount"],
+            "direction": re.sub(r"\s+", "", match.group("verb")),
+            "delta_amount": delta_text,
+            "delta_unit": delta_unit,
+            "derived_prior": _txt_fund_display(derived_prior),
+            "declared_percent": _cmm007_clean_amount(match.group("pct")),
+            "unit": "万元",
+            "fiscal_year": year,
+            "obligation_id": _CMM007_OBLIGATION_ID,
+            "zero_base": zero_base,
+            "direction_conflict": direction_conflict,
+            "table_refs": [
+                {
+                    "role": "增减句",
+                    "page": unit_page,
+                    "section": section_title,
+                    "span": re.sub(r"\s+", "", match.group(0)),
+                },
+                {
+                    "role": "本期披露",
+                    "page": current["page"],
+                    "section": current["section"],
+                    "span": current["span"],
+                },
+            ],
+        }
+        if recomputed is not None:
+            location["recomputed_percent"] = recomputed
+        if explicit_prior is not None:
+            location["explicit_prior"] = explicit_prior
+        return location
+
+    def _evidence(
+        self,
+        match: Any,
+        current: Dict[str, Any],
+        explicit_prior: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        lines = [
+            f"增减句：{match.group(0)}",
+            f"本期披露：{current['span']}（第{current['page']}页）",
+            f"口径：本期金额与增减额均为本年支出/预算口径，同比基期按"
+            f"{match.group('verb')}反推",
+        ]
+        if explicit_prior is not None:
+            lines.append(
+                f"上年基期披露：{explicit_prior['span']}（第{explicit_prior['page']}页）"
+            )
+        return "\n".join(lines)
+
+
 ALL_COMMON_RULES: List[Rule] = [
     CMM001_ThreePublicNarrativeConsistency(),
     CMM002_TextAnomalyRule(),
@@ -916,4 +1407,5 @@ ALL_COMMON_RULES: List[Rule] = [
     CMM004_CodeMirrorConsistency(),
     CMM005_ComparativeNarrativeLogic(),
     CMM006_IncomeExpenseTrendConsistency(),
+    CMM007_ZeroBaseTrendRecompute(),
 ]
