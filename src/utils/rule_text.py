@@ -13,6 +13,7 @@ _RULE_TITLE_OVERRIDES = {
     "V33-TXT-FUND-DETAIL": "基金/国资决算表与对应说明同一功能分类项金额不一致",
     "V33-NARRATIVE-INDICATOR-REPEAT": "文内同一指标重复披露金额不一致",
     "CMM-007": "同比零基数/增减额与增长百分比复算不一致",
+    "V33-TREND-COMPLETION-RATE": "预算完成率分母为0/分母身份/复算不一致",
 }
 
 
@@ -70,6 +71,14 @@ def default_rule_suggestion(rule_code: str, page: Optional[int]) -> str:
             "同一业务项、同一期间、同一单位（不得拿预算数/上年数/增减额互比），"
             "再翻底稿确认正确金额并同步修改两处披露"
             "（系统只能确认两处不能同时成立，不能自动判断哪一处正确）。"
+        )
+    if normalized_rule == "V33-TREND-COMPLETION-RATE":
+        return (
+            "请按「完成率=支出决算÷声明分母×100」复算：若声明的年初预算为 0，"
+            "删除或改写「完成年初预算的X%」（分母为 0 时完成率不存在定义），"
+            "如实际按全年/调整预算口径计算，应改写声明中的分母表述；若分母非 0，"
+            "用声明分母复算百分比并核对数值。系统只能确认分母、支出决算与完成率"
+            "三者不能同时成立，不能自动判断哪一处正确。"
         )
     if normalized_rule == "CMM-007":
         return (
