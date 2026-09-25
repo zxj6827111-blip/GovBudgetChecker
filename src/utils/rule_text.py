@@ -11,6 +11,7 @@ _RULE_TITLE_OVERRIDES = {
     "V33-227": "说明5功能分类类款项名称与T5不一致",
     "V33-CROSS-SAN-GONG-ECON": "基本支出三公分项超过三公经费表同项决算数",
     "V33-TXT-FUND-DETAIL": "基金/国资决算表与对应说明同一功能分类项金额不一致",
+    "V33-NARRATIVE-INDICATOR-REPEAT": "文内同一指标重复披露金额不一致",
 }
 
 
@@ -61,6 +62,13 @@ def default_rule_suggestion(rule_code: str, page: Optional[int]) -> str:
             f"拨款收入支出决算表》与对应情况说明{page_hint}：以表内同一功能分类项"
             "（类/款/项编码与名称逐级核对）的本年支出决算数为准，复核说明中该业务项"
             "金额及说明自述收支总额，再统一表与说明。"
+        )
+    if normalized_rule == "V33-NARRATIVE-INDICATOR-REPEAT":
+        return (
+            "请对照两处披露原文核对同一指标的本年支出决算口径：先确认两处是否"
+            "同一业务项、同一期间、同一单位（不得拿预算数/上年数/增减额互比），"
+            "再翻底稿确认正确金额并同步修改两处披露"
+            "（系统只能确认两处不能同时成立，不能自动判断哪一处正确）。"
         )
     if normalized_rule == "V33-CROSS-SAN-GONG-ECON":
         return (

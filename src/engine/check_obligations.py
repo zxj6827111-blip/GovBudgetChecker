@@ -75,7 +75,9 @@ from src.schemas.document_profile import DocumentProfile
 #: 依赖表从 FIN_07 修正为 FIN_06+FIN_07（该义务本就是跨这两张表）。
 #: v4（2026-09-24 WP4-B）：OBL-TXT-FUND-DETAIL 的实现缺口补齐——
 #: checker 从 pending_checkers 转为真实 checker（V33-TXT-FUND-DETAIL）。
-OBLIGATION_CATALOG_VERSION = "obligations-v4"
+#: v5（2026-09-25 WP4-C）：OBL-NARRATIVE-INDICATOR-REPEAT 的实现缺口补齐——
+#: checker 从 pending_checkers 转为真实 checker（V33-NARRATIVE-INDICATOR-REPEAT）。
+OBLIGATION_CATALOG_VERSION = "obligations-v5"
 
 # ---- 实例状态 ---------------------------------------------------------------
 
@@ -589,11 +591,13 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         group_id=GROUP_NARRATIVE,
         title="同段/跨段同一指标重复披露的一致性",
         report_kinds=_FINAL_ONLY,
-        # 本轮样张真实漏报：职业年金 257.14 与 245.53 在同一材料内两处披露不一致。
-        # 现有实现只比较"说明 vs 表格"，不比较"文内两处披露"。
-        pending_checkers=("V33-NARRATIVE-INDICATOR-REPEAT",),
+        # 本轮样张真实漏报：S03 石泉职业年金 257.14 与 245.53（P32/P33，同一
+        # 条目两处披露，高）；Y07 宜川职业年金 269.85 与 269.86（P31，低）。
+        # V33-235（OBL-NARRATIVE-AMOUNT）按页切段只认「N、」形态且 0.05 自造
+        # 容差，两条真值均漏；本 checker 用合并文本 + 指标身份模型补齐文内
+        # 重复披露比较（与 V33-235 在窄区有界重叠，报告层归并）。
+        checkers_by_kind=_final("V33-NARRATIVE-INDICATOR-REPEAT"),
         basis="同一指标在同一材料内多处披露时必须一致",
-        gap_note="缺少文内（同段/跨段）同一指标重复披露的一致性检查",
     ),
     Obligation(
         obligation_id="OBL-NARRATIVE-TOC",

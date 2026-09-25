@@ -8023,6 +8023,620 @@ class R33TxtFundDetail(Rule):
         )
 
 
+# ============================================================================
+# WP4-C：文内同一指标重复披露一致性（V33-NARRATIVE-INDICATOR-REPEAT，final only）
+#
+# 真值（2026-09-16 人工复核批次，均为系统当时漏报）：
+# - S03（高）：石泉路街道 2025 年度决算 P32 职业年金条目首句 257.14 万元 vs
+#   P33 同条目「支出决算为 245.53 万元」，差 11.61（完成率 93.57% 对应 257.14，
+#   245.53/274.82 仅 89.34%）。
+# - Y07（低）：宜川路街道 2025 年度决算 P31 条目 15 首句 269.85 vs
+#   「支出决算为 269.86」，差 0.01——人工判定「同一指标抄写不一致，不是合计
+#   舍入尾差」；差值恰在两侧显示精度的动态舍入包络内 → info 报告。
+# 证据链与设计口径：docs/WP4C_NARRATIVE_REPEAT_20260925.md。
+#
+# 与 V33-235（OBL-NARRATIVE-AMOUNT 的登记 checker）的边界：V33-235 是按页切段、
+# 只认「N、」形态、0.05 自造容差的同条点状检查，两条真值都漏（跨页断条目/
+# 形态不符/容差吞小差）。本规则用合并文本 + 身份模型做一般化检查，按纪律
+# 不动 V33-235；两者在「同页 + N、形态 + 差>0.05」窄区有界重叠，报告层按
+# 同组归并，规则间互不去重。
+# ============================================================================
+
+_NAR_REPEAT_OBLIGATION_ID = "OBL-NARRATIVE-INDICATOR-REPEAT"
+
+#: 决算情况说明章节标题（合并文本切节用；目录页标题不切节——沿用 V33-235
+#: 的目录页守卫口径）
+_NAR_REPEAT_SECTION_RE = re.compile(r"[一二三四五六七八九十]+、[^\n。；]{2,40}说明")
+
+#: 类款项条目句：沿用 WP4-B 的三级身份形态，放宽闭引号（石泉样张是
+#: 「（项）"257.14 万元」的引号形态）。名称段允许内部换行（PDF 软换行）。
+_NAR_REPEAT_ITEM_RE = re.compile(
+    r"(?P<klass>[^，。；：:、（）()“”]{1,40}?)\s*（\s*类\s*）\s*"
+    r"(?P<kuan>[^，。；：:、（）()“”]{1,60}?)\s*（\s*款\s*）\s*"
+    r"(?P<xiang>[^，。；：:、（）()“”]{1,60}?)\s*（\s*项\s*）\s*"
+    r"[\"”』」]?\s*[，,]?\s*(?P<amount>\d[\d,，]*(?:\.\d+)?)\s*"
+    r"(?P<unit>万\s*元|亿\s*元|元)"
+)
+
+#: 条目内显式决算金额：measure 锚与比较伙伴（宜川 Y07 原文软换行成
+#: 「支\n出决算为」，measure 词字符间必须容忍空白）
+_NAR_REPEAT_EXPLICIT_RE = re.compile(
+    r"(?P<lead>支\s*出\s*决\s*算\s*为)\s*(?P<amount>\d[\d,，]*(?:\.\d+)?)\s*"
+    r"(?P<unit>万\s*元|亿\s*元|元)"
+)
+
+#: 裸名+期间前缀（合同路径）：「本年[X]金额单位」「上年[X]金额单位」
+_NAR_REPEAT_BARE_PERIOD_RE = re.compile(
+    r"(?P<period>本年(?:度)?|上年(?:度)?|去年同期)(?P<name>[一-龥]{2,24})"
+    r"(?P<amount>\d[\d,，]*(?:\.\d+)?)\s*(?P<unit>万\s*元|亿\s*元|元)"
+)
+
+#: 裸名+角色后缀（合同路径）：「[X](年初预算|预算|支出决算|决算|支出)(为)?金额单位」
+_NAR_REPEAT_BARE_ROLE_RE = re.compile(
+    r"(?P<name>[一-龥]{2,24}?)(?P<role>年初预算|全年预算|预算|支出决算|决算|支出)"
+    r"(?:为)?\s*(?P<amount>\d[\d,，]*(?:\.\d+)?)\s*(?P<unit>万\s*元|亿\s*元|元)"
+)
+
+#: 同句承接式角色句（合同路径）：「，决算257.14万元」承接同句前一个裸名披露
+_NAR_REPEAT_CONTINUATION_RE = re.compile(
+    r"[，；、]\s*(?P<role>支出决算|决算|年初预算|预算)(?:为)?\s*"
+    r"(?P<amount>\d[\d,，]*(?:\.\d+)?)\s*(?P<unit>万\s*元|亿\s*元|元)"
+)
+
+#: 金额+单位候选（歧义检测用；单位锚要求自带单位字样）
+_NAR_REPEAT_BARE_AMOUNT_RE = re.compile(
+    r"(?<![\d.])(?P<amount>\d[\d,，]*(?:\.\d+)?)\s*(?:万\s*元|亿\s*元|元)"
+)
+
+#: 槽位竞争候选只认「纯连接符相连的紧邻金额」（和/及/、/，…），中间出现
+#: 任何 CJK 词语（如「，比上年」「，主要用于发放」）就不是同一槽位的竞争者
+_NAR_REPEAT_CONJUNCTIVE_RE = re.compile(r"^(?:[和及与或、，,]|\s)*$")
+
+#: 通用结构词：这些类目名在文内合法地多次出现不同数值（总口径 vs 明细），
+#: 一律拒绝裸名互比（Mutation B 要拦的正是"只按关键词聚合"的形态）
+_NAR_REPEAT_GENERIC_TERM_RE = re.compile(
+    r"基本支出|项目支出|工资福利支出|商品和服务支出|对个人和家庭的补助|"
+    r"人员经费|公用经费|基本建设|对企事业单位的补贴|债务付息|其他支出|"
+    r"其他收入|支出合计|收入合计|结转|结余|合计|总计"
+)
+_NAR_REPEAT_GENERIC_NAME_RE = re.compile(
+    r"^(?:基本|项目|人员|公用|其他|合计|总计|收入|支出|结转|结余)$"
+)
+
+#: 裸名里的关系/增减动词、引导语与时间词：出现即拒绝（「比上年减少」的名称
+#: 段是谓语；「当年/今年/年度」是时间词不是指标名——生态样张 P24 的
+#: 「当年支出决算为 213.10」曾被当成指标「当年」误配）
+_NAR_REPEAT_NAME_REFUSE_RE = re.compile(
+    r"比|较|增加|减少|增长|下降|提高|降低|回落|上升|其中|主要|用于|情况|如下|"
+    r"当年|今年|历年|往年|同期|年度|截至|截止"
+)
+
+#: 条目边界：类款项三级结构（**不要求紧跟金额**）或章节标题。条目范围按它
+#: 切割——「无首句金额」条目（文旅局/生态形态：『（项），主要用于…年初
+#: 预算为 X，当年支出决算为 Y』）的下一条目，其「支出决算为」不得泄漏进
+#: 上一条目与别的金额错配（石泉 P39 的 1.53 曾因此错配给 P38 的 98.23）
+_NAR_REPEAT_ENTRY_BOUNDARY_RE = re.compile(
+    r"[^，。；：:、（）()“”]{1,40}?\s*（\s*类\s*）[^。；]{0,80}?（\s*款\s*）"
+    r"[^。；]{0,80}?（\s*项\s*）"
+    r"|[一二三四五六七八九十]+、[^\n。；]{2,40}说明"
+)
+
+#: 上年口径负面前缀：出现即视为 prior，不参与 current 比较
+_NAR_REPEAT_PRIOR_PREFIX_RE = re.compile(r"上\s*年(?:度|同期)?|以前年度")
+
+
+def _nar_repeat_sections(
+    merged: str, doc: Document, offsets: List[int]
+) -> List[Tuple[str, int, int]]:
+    """决算情况说明章节切分：[(标题, 起始偏移, 终止偏移)]。
+
+    目录页（前 120 字含「目录」）上的同名标题行不作为章节边界——它是目录
+    条目，不是正文标题。
+    """
+    texts = [str(item or "") for item in (getattr(doc, "page_texts", []) or [])]
+    toc_pages = {
+        index for index, text in enumerate(texts) if "目录" in text[:120]
+    }
+    starts: List[Tuple[str, int]] = []
+    for match in _NAR_REPEAT_SECTION_RE.finditer(merged):
+        page = _txt_fund_page_for(offsets, match.start())
+        if (page - 1) in toc_pages:
+            continue
+        starts.append((match.group(0).strip(), match.start()))
+    sections: List[Tuple[str, int, int]] = []
+    for idx, (title, start) in enumerate(starts):
+        end = starts[idx + 1][1] if idx + 1 < len(starts) else len(merged)
+        sections.append((title, start, end))
+    return sections
+
+
+def _nar_repeat_section_of(
+    sections: List[Tuple[str, int, int]], position: int
+) -> Tuple[str, int]:
+    """偏移 → (章节标题, 章节起始偏移)；无章节标题时给未命名兜底。"""
+    for title, start, end in reversed(sections):
+        if start <= position < end:
+            return title, start
+    return "（未定位到章节标题）", 0
+
+
+def _nar_repeat_foreign_year(merged: str, start: int, names: str, year: int) -> bool:
+    """期间锚：句读边界前缀或名称段出现与材料年度不同的显式年份 → 异期句。
+
+    名称段也要查——WP4-B 教训：项名可能吸收年份前缀（「2024年度住房保障
+    支出（类）」），只扫句前缀会漏。
+    """
+    prefix = merged[max(0, start - 40):start]
+    cut = max(prefix.rfind(ch) for ch in "。；：！？\n")
+    if cut >= 0:
+        prefix = prefix[cut + 1:]
+    found = _TXT_FUND_YEAR_RE.findall(prefix + str(names or ""))
+    return any(int(value) != year for value in found)
+
+
+def _nar_repeat_slot_ambiguous(merged: str, end: int) -> bool:
+    """槽位歧义：金额单位后仅隔纯连接符又紧跟一个「金额+单位」候选。
+
+    「本年职业年金245.53万元和257.14万元」——两个都可能是当前实际金额且
+    无法证明哪个对应指标 → parse_ambiguity（禁止取最近/首个/最大）。
+    中间隔着 CJK 词语的（「，比上年245.53」「，主要用于发放300」）不是同
+    一槽位的竞争者。
+    """
+    window = merged[end:end + 24]
+    candidate = _NAR_REPEAT_BARE_AMOUNT_RE.search(window)
+    if candidate is None:
+        return False
+    return _NAR_REPEAT_CONJUNCTIVE_RE.match(window[:candidate.start()]) is not None
+
+
+class R33NarrativeIndicatorRepeat(Rule):
+    """文内同一指标（同段/跨段）重复披露一致性。
+
+    只比较"文内 current actual"披露：同一指标（类/款/项三级身份，或带角色
+    词的裸名身份——后者仅限同章节互比）在本年度决算口径下的多处披露金额
+    必须一致。预算数/上年数/增减额/百分比/数量只识别、不参与比较；身份任
+    一要素确认不了 → fail-closed（不绑定，或 parse_ambiguity 记取数不足），
+    绝不做"关键词附近出现两个数字就报错"。
+    """
+
+    code, severity = "V33-NARRATIVE-INDICATOR-REPEAT", "error"
+    desc = "文内同一指标（同段/跨段）重复披露一致性"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        merged, offsets = _txt_fund_merged_pages(doc)
+        if not merged.strip():
+            raise RuleDeferred(
+                self.code,
+                "未提取到正文文本，文内重复披露无从检查",
+                unresolved_reasons=["未提取到正文文本"],
+            )
+        sections = _nar_repeat_sections(merged, doc, offsets)
+        heading_pages = tuple(
+            {_txt_fund_page_for(offsets, start) for _, start, _ in sections}
+        )
+        year = _resolve_fiscal_year(doc, heading_pages)
+        if year is None:
+            raise RuleDeferred(
+                self.code,
+                "未能确认材料财政年度，文内重复披露的期间一致性不可确认",
+                unresolved_reasons=["未能确认材料财政年度"],
+            )
+
+        issues: List[Issue] = []
+        unresolved: List[str] = []
+        triple_occs, dynamic_generic = self._triple_occurrences(
+            merged, offsets, sections, year, unresolved
+        )
+        bare_occs = self._bare_occurrences(
+            merged, offsets, sections, year, unresolved, dynamic_generic
+        )
+        issues.extend(self._compare(triple_occs + bare_occs, year))
+        if unresolved:
+            reasons = list(dict.fromkeys(unresolved))
+            raise RuleDeferred(
+                self.code,
+                "；".join(reasons),
+                partial_issues=issues,
+                unresolved_reasons=reasons,
+            )
+        return issues
+
+    # ---- 内部：三级身份披露（条目首句 + 显式支出决算为） ----
+
+    def _triple_occurrences(
+        self,
+        merged: str,
+        offsets: List[int],
+        sections: List[Tuple[str, int, int]],
+        year: int,
+        unresolved: List[str],
+    ) -> Tuple[List[Dict[str, Any]], set]:
+        items = list(_NAR_REPEAT_ITEM_RE.finditer(merged))
+        dynamic_generic: set = set()
+        for match in items:
+            dynamic_generic.add(_txt_fund_norm(match.group("klass")))
+            dynamic_generic.add(_txt_fund_norm(match.group("kuan")))
+
+        occurrences: List[Dict[str, Any]] = []
+        boundaries = [
+            boundary.start()
+            for boundary in _NAR_REPEAT_ENTRY_BOUNDARY_RE.finditer(merged)
+        ]
+        for idx, match in enumerate(items):
+            # 条目范围 = 下一边界（下一个三级结构——无论它有没有首句金额——
+            # 或下一章节标题），防止无首句金额条目的「支出决算为」泄漏进本条目
+            next_boundary = next(
+                (pos for pos in boundaries if pos > match.end()), len(merged)
+            )
+            entry_end = min(
+                items[idx + 1].start() if idx + 1 < len(items) else len(merged),
+                next_boundary,
+            )
+            names = match.group("klass") + match.group("kuan") + match.group("xiang")
+            if _nar_repeat_foreign_year(merged, match.start(), names, year):
+                # 异期条目是已解决的"不可比"，不是取数不足
+                continue
+            # measure 锚：条目内必须有显式「支出决算为」——决算支出明细条目
+            # 模板自证；没有它，条目首句金额的决算口径无法证明（fail-closed）
+            explicit_matches = list(
+                _NAR_REPEAT_EXPLICIT_RE.finditer(merged, match.end(), entry_end)
+            )
+            if not explicit_matches:
+                continue
+            identity = (
+                "triple",
+                "|".join(
+                    _txt_fund_norm(match.group(key))
+                    for key in ("klass", "kuan", "xiang")
+                ),
+            )
+            indicator = _txt_fund_norm(match.group("xiang"))
+            section_title, _ = _nar_repeat_section_of(sections, match.start())
+            self._push_occurrence(
+                occurrences, unresolved, merged, offsets,
+                match_offset=match.start("amount"),
+                identity=identity,
+                indicator=indicator,
+                role="current",
+                amount_text=match.group("amount"),
+                unit_text=match.group("unit"),
+                span_start=match.start(),
+                span_end=match.end(),
+                section_title=section_title,
+            )
+            for explicit in explicit_matches:
+                # finditer(merged, pos, endpos) 的匹配位置是绝对偏移，不要再加
+                # 条目起点——加了会把页码算到文档末尾（双重偏移缺陷）
+                lead_start = explicit.start()
+                if _NAR_REPEAT_PRIOR_PREFIX_RE.search(
+                    merged[max(0, lead_start - 12):lead_start]
+                ):
+                    continue
+                if _nar_repeat_foreign_year(
+                    merged, lead_start, explicit.group("lead"), year
+                ):
+                    continue
+                if _nar_repeat_slot_ambiguous(merged, explicit.end()):
+                    unresolved.append(
+                        f"说明句「{indicator}」的「支出决算为」金额后紧邻第二个候选"
+                        "金额，无法确定指标金额（parse_ambiguity）"
+                    )
+                    continue
+                self._push_occurrence(
+                    occurrences, unresolved, merged, offsets,
+                    match_offset=explicit.start("amount"),
+                    identity=identity,
+                    indicator=indicator,
+                    role="current",
+                    amount_text=explicit.group("amount"),
+                    unit_text=explicit.group("unit"),
+                    span_start=explicit.start(),
+                    span_end=explicit.end(),
+                    section_title=section_title,
+                )
+        return occurrences, dynamic_generic
+
+    # ---- 内部：裸名披露（带角色/期间词；仅同章节互比） ----
+
+    def _bare_occurrences(
+        self,
+        merged: str,
+        offsets: List[int],
+        sections: List[Tuple[str, int, int]],
+        year: int,
+        unresolved: List[str],
+        dynamic_generic: set,
+    ) -> List[Dict[str, Any]]:
+        occurrences: List[Dict[str, Any]] = []
+        # 同句承接的锚：最近一个已绑裸名披露（句读重置；跨句不承接）
+        last_bound: Optional[Tuple[str, int]] = None
+
+        period_spans = [
+            match.span() for match in _NAR_REPEAT_BARE_PERIOD_RE.finditer(merged)
+        ]
+
+        def bind_bare(
+            indicator: str,
+            name_part: str,
+            role: str,
+            section_pos: int,
+            **payload: Any,
+        ) -> None:
+            nonlocal last_bound
+            # 谓语/引导语/通用结构词/类款级名 一律拒绝裸名互比（fail-closed，
+            # 不产生正式比较；这是 Mutation B"只按关键词聚合"的反面）
+            if _NAR_REPEAT_NAME_REFUSE_RE.search(name_part):
+                last_bound = None
+                return
+            if _NAR_REPEAT_GENERIC_NAME_RE.match(name_part):
+                last_bound = None
+                return
+            if _NAR_REPEAT_GENERIC_TERM_RE.search(indicator):
+                last_bound = None
+                return
+            if indicator in dynamic_generic:
+                # 类/款级名称：本文档 P1 条目已证明它是结构类目，裸名数字天然
+                # 可能指不同下级口径，不互比
+                last_bound = None
+                return
+            if role != "current":
+                last_bound = (indicator, int(payload["span_end"]))
+                return
+            self._push_occurrence(
+                occurrences, unresolved, merged, offsets,
+                indicator=indicator, role="current", **payload
+            )
+            last_bound = (indicator, int(payload["span_end"]))
+
+        for match in _NAR_REPEAT_BARE_PERIOD_RE.finditer(merged):
+            period = match.group("period")
+            role = "current" if period.startswith("本年") else "prior"
+            name = match.group("name")
+            if role == "current" and _nar_repeat_foreign_year(
+                merged, match.start(), name, year
+            ):
+                last_bound = None
+                continue
+            if role == "current" and _nar_repeat_slot_ambiguous(merged, match.end()):
+                unresolved.append(
+                    f"说明句「{name}」同句存在紧邻的第二个候选金额，"
+                    "无法确定指标金额（parse_ambiguity）"
+                )
+                last_bound = None
+                continue
+            section_title, section_start = _nar_repeat_section_of(sections, match.start())
+            bind_bare(
+                indicator=name,
+                name_part=name,
+                role=role,
+                section_pos=match.start(),
+                match_offset=match.start("amount"),
+                identity=("bare", name, section_start),
+                amount_text=match.group("amount"),
+                unit_text=match.group("unit"),
+                span_start=match.start(),
+                span_end=match.end(),
+                section_title=section_title,
+            )
+
+        role_spans = [
+            match.span() for match in _NAR_REPEAT_BARE_ROLE_RE.finditer(merged)
+        ]
+        for match in _NAR_REPEAT_BARE_ROLE_RE.finditer(merged):
+            if any(start < match.end() and match.start() < end for start, end in period_spans):
+                continue  # 已被期间前缀式绑定，防同一段双记
+            name = match.group("name")
+            role_word = match.group("role")
+            if role_word in {"预算", "年初预算", "全年预算"}:
+                role = "budget"
+                indicator = name
+                identity_name = name
+            elif role_word in {"决算", "支出决算"}:
+                role = "current"
+                indicator = name
+                identity_name = name
+            else:  # 支出：指标名本身以「支出」结尾（如 职业年金缴费支出）
+                role = "current"
+                indicator = name + "支出"
+                identity_name = name + "支出"
+            # 名称段吸收的「本年」前缀归一（「本年职业年金缴费支出」与
+            # 「职业年金缴费支出」是同一身份）；「上年」保留（异期间不合并）
+            if identity_name.startswith(("本年", "本年度")):
+                identity_name = identity_name[len("本年度"):] if identity_name.startswith("本年度") else identity_name[len("本年"):]
+            if _NAR_REPEAT_PRIOR_PREFIX_RE.match(indicator):
+                role = "prior"
+            if role == "current" and _nar_repeat_foreign_year(
+                merged, match.start(), name, year
+            ):
+                last_bound = None
+                continue
+            if role == "current" and _nar_repeat_slot_ambiguous(merged, match.end()):
+                unresolved.append(
+                    f"说明句「{indicator}」同句存在紧邻的第二个候选金额，"
+                    "无法确定指标金额（parse_ambiguity）"
+                )
+                last_bound = None
+                continue
+            section_title, section_start = _nar_repeat_section_of(sections, match.start())
+            bind_bare(
+                indicator=indicator,
+                name_part=name,
+                role=role,
+                section_pos=match.start(),
+                match_offset=match.start("amount"),
+                identity=("bare", identity_name, section_start),
+                amount_text=match.group("amount"),
+                unit_text=match.group("unit"),
+                span_start=match.start(),
+                span_end=match.end(),
+                section_title=section_title,
+            )
+
+        # 承接式：仅承接同句（无句读隔断）最近一个已绑裸名的指标身份
+        owned_spans = period_spans + role_spans
+        for match in _NAR_REPEAT_CONTINUATION_RE.finditer(merged):
+            if any(start < match.end() and match.start() < end for start, end in owned_spans):
+                continue
+            if last_bound is None:
+                continue
+            indicator, bound_end = last_bound
+            if "。" in merged[bound_end:match.start()]:
+                continue
+            role_word = match.group("role")
+            if role_word in {"预算", "年初预算"}:
+                continue  # 预算承接不参与 current 比较
+            if _nar_repeat_foreign_year(merged, match.start(), role_word, year):
+                continue
+            if _nar_repeat_slot_ambiguous(merged, match.end()):
+                unresolved.append(
+                    f"说明句「{indicator}」同句存在紧邻的第二个候选金额，"
+                    "无法确定指标金额（parse_ambiguity）"
+                )
+                continue
+            section_title, section_start = _nar_repeat_section_of(sections, match.start())
+            self._push_occurrence(
+                occurrences, unresolved, merged, offsets,
+                match_offset=match.start("amount"),
+                identity=("bare", indicator, section_start),
+                indicator=indicator,
+                role="current",
+                amount_text=match.group("amount"),
+                unit_text=match.group("unit"),
+                span_start=match.start(),
+                span_end=match.end(),
+                section_title=section_title,
+            )
+        return occurrences
+
+    # ---- 内部：occurrence 组装与单位/精度 ----
+
+    def _push_occurrence(
+        self,
+        occurrences: List[Dict[str, Any]],
+        unresolved: List[str],
+        merged: str,
+        offsets: List[int],
+        match_offset: int,
+        identity: Any,
+        indicator: str,
+        role: str,
+        amount_text: str,
+        unit_text: str,
+        span_start: int,
+        span_end: int,
+        section_title: str,
+    ) -> None:
+        cleaned = re.sub(r"[,，\s]", "", amount_text)
+        unit = _txt_fund_norm(unit_text)
+        factor = _TXT_FUND_UNIT_TO_WAN.get(unit)
+        if factor is None:
+            unresolved.append(
+                f"说明句「{indicator}」金额单位「{unit_text}」不在归一口径内，不形成正式比较"
+            )
+            return
+        try:
+            amount = Decimal(cleaned)
+        except Exception:  # pragma: no cover - 正则已保证数字形态
+            unresolved.append(f"说明句「{indicator}」金额无法解析为数值")
+            return
+        scale = len(cleaned.split(".", 1)[1]) if "." in cleaned else 0
+        occurrences.append(
+            {
+                "identity": identity,
+                "indicator": indicator,
+                "role": role,
+                "amount_text": cleaned,
+                "unit": unit,
+                "scale": scale,
+                "wan": amount * factor,
+                "page": _txt_fund_page_for(offsets, match_offset),
+                "span": merged[span_start:span_end].replace("\n", " ").strip(),
+                "section": section_title,
+            }
+        )
+
+    # ---- 内部：同身份 current 披露两两比较 ----
+
+    def _compare(self, occurrences: List[Dict[str, Any]], year: int) -> List[Issue]:
+        issues: List[Issue] = []
+        groups: Dict[Any, List[Dict[str, Any]]] = {}
+        for occurrence in occurrences:
+            groups.setdefault(occurrence["identity"], []).append(occurrence)
+        for group in groups.values():
+            current = [item for item in group if item["role"] == "current"]
+            if len(current) < 2:
+                continue
+            worst_pair: Optional[Tuple[Dict[str, Any], Dict[str, Any]]] = None
+            worst_diff = Decimal("0")
+            for i in range(len(current)):
+                for j in range(i + 1, len(current)):
+                    diff = abs(current[i]["wan"] - current[j]["wan"])
+                    if diff > worst_diff:
+                        worst_pair = (current[i], current[j])
+                        worst_diff = diff
+            if worst_pair is None or worst_diff == 0:
+                continue
+            first, second = worst_pair
+            envelope = compute_dynamic_envelope(
+                [(first["scale"], first["unit"]), (second["scale"], second["unit"])]
+            )
+            severity = "info" if worst_diff <= envelope else "error"
+            indicator = first["indicator"]
+            message = (
+                f"文内同一指标重复披露不一致（{indicator}）：第{first['page']}页披露"
+                f" {first['amount_text']} {first['unit']}，第{second['page']}页披露"
+                f" {second['amount_text']} {second['unit']}，相差"
+                f" {_txt_fund_display(worst_diff)} 万元。同一指标在同一口径"
+                "（本年支出决算）下两处披露不能同时成立，需人工复核底稿确认正确金额。"
+            )
+            if severity == "info":
+                message += (
+                    f"相差在显示舍入包络（{_txt_fund_display(envelope)} 万元）内，"
+                    "可能为取整误差或抄写差异，需人工复核。"
+                )
+            location = {
+                "page": first["page"],
+                "pages": sorted({first["page"], second["page"]}),
+                "indicator": indicator,
+                "measure": "本年支出决算",
+                "period": f"{year} 年度",
+                "unit": "万元",
+                "value_a": first["amount_text"],
+                "value_b": second["amount_text"],
+                "difference": _txt_fund_display(worst_diff),
+                "fiscal_year": year,
+                "obligation_id": _NAR_REPEAT_OBLIGATION_ID,
+                "section_a": first["section"],
+                "section_b": second["section"],
+                "table_refs": [
+                    {
+                        "role": "披露A",
+                        "page": first["page"],
+                        "section": first["section"],
+                        "span": first["span"],
+                    },
+                    {
+                        "role": "披露B",
+                        "page": second["page"],
+                        "section": second["section"],
+                        "span": second["span"],
+                    },
+                ],
+            }
+            evidence = "\n".join(
+                [
+                    f"披露A（第{first['page']}页，{first['section']}）：{first['span']}",
+                    f"披露B（第{second['page']}页，{second['section']}）：{second['span']}",
+                    f"指标：{indicator}；口径：本年支出决算；期间：{year} 年度；单位：万元",
+                    f"差额：{_txt_fund_display(worst_diff)} 万元",
+                ]
+            )
+            issues.append(
+                self._issue(message, location, severity=severity, evidence_text=evidence)
+            )
+        return issues
+
+
 ALL_RULES = [
     R33001_CoverYearUnit(),
     R33002_NineTablesCheck(),
@@ -8079,6 +8693,7 @@ ALL_RULES = [
     # WP4-A：三公经费表 × 基本支出经济分类表（跨表资金来源一致性）
     R33CrossSanGongEcon(),
     R33TxtFundDetail(),
+    R33NarrativeIndicatorRepeat(),
     R33233_DetailRowFormulaConsistency(),
     R33234_NarrativePercentConsistency(),
     R33235_NarrativeAmountConsistency(),
