@@ -79,7 +79,8 @@ def test_baseline_kind_counts_are_self_consistent(kind):
 def test_baseline_gap_list_matches_catalog():
     baseline = _load_baseline_module().build_baseline()
     gaps = baseline["unimplemented_checks"]
-    assert gaps
+    # WP4-H 收口后清单内已无 pending 义务（gaps 为空是合法状态）——
+    # 不变式是"基线缺口列表与清单 pending 集合完全一致"，而非非空。
     assert {item["obligation_id"] for item in gaps} == {
         item.obligation_id
         for item in check_obligations.OBLIGATION_CATALOG

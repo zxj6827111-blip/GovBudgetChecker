@@ -143,8 +143,8 @@ def test_san_gong_is_expanded_into_six_instances():
 
 
 def test_all_rules_pass_leaves_only_implementation_gaps():
-    # WP4-G 收口后 final 车道已无"尚未实现"缺口（coverage gaps 2→1，
-    # 剩余缺口 OBL-PERF-PHASE-AMOUNT 在 budget 车道）。
+    # WP4-H 收口后 final 与 budget 两条车道均已无"尚未实现"缺口
+    # （coverage gaps 1→0，全部确定性义务都有真实 checker）。
     final_ledger = build_obligation_ledger(
         _profile("final"), report_kind="final", rule_execution_summary=_all_pass("final")
     )
@@ -161,7 +161,9 @@ def test_all_rules_pass_leaves_only_implementation_gaps():
         report_kind="budget",
         rule_execution_summary=_all_pass("budget"),
     )
-    assert budget_ledger["by_reason"]["not_implemented"] > 0
+    assert budget_ledger["by_reason"].get("not_implemented", 0) == 0, (
+        "budget 出现尚未实现义务——WP4-H 收口后不允许再出现"
+    )
     assert budget_ledger["completed_total"] == (
         budget_ledger["applicable_total"] - budget_ledger["unresolved_total"]
     )
@@ -355,14 +357,24 @@ def test_kind_conflict_detail_names_only_truly_conflicting_candidates():
     assert "page_text=" not in conflict["detail"], "同向的 page_text 候选不应出现在冲突明细"
 
 
-def test_rule_not_in_registry_is_reported_as_unimplemented():
-    # WP4-G 后 OBL-SG-COMPLETION 已收口，改用剩余唯一缺口
-    # OBL-PERF-PHASE-AMOUNT 作缺口示例（coverage gaps 2→1）。
+def test_rule_not_in_registry_is_reported_as_unimplemented(monkeypatch):
+    # WP4-H 收口后清单已无真实 pending 缺口，用"从注册表撤下已实现
+    # checker"验证同一语义：checker 不在注册表 → 义务记为未实现。
+    from src.engine import budget_rules
+
+    monkeypatch.setattr(
+        budget_rules,
+        "ALL_BUDGET_RULES",
+        [
+            rule
+            for rule in budget_rules.ALL_BUDGET_RULES
+            if getattr(rule, "code", "") != "V33-PERF-PHASE-AMOUNT"
+        ],
+    )
     ledger = build_obligation_ledger(_profile("budget"), report_kind="budget")
     gap = _instance(ledger, "OBL-PERF-PHASE-AMOUNT")
     assert gap["status"] == OBLIGATION_NOT_IMPLEMENTED
-    assert gap["missing_checkers"] == ["BUD-PERF-PHASE-AMOUNT"]
-    assert gap["gap_note"]
+    assert gap["missing_checkers"] == ["V33-PERF-PHASE-AMOUNT"]
 
 
 def test_implemented_checker_is_no_longer_a_gap_and_records_its_receipt():
