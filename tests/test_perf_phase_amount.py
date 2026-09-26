@@ -433,11 +433,12 @@ def test_mutation_a_deleting_project_identity_must_be_red(monkeypatch):
     assert issues[0].location["project"] == "乙项目"
     assert issues[0].location["amount_b"] == "1,200,000.00"
 
-    # 模拟变异：配对退化为位置 zip（项目身份被删除）
+    # 模拟变异：配对退化为位置 zip（项目身份被删除；strict=False 保留
+    # 原始位置配对语义——长度不等也不报错，正如被删除身份后的行为）
     monkeypatch.setattr(
         budget_rules_module,
         "_pair_perf_records",
-        lambda sections, forms: (list(zip(sections, forms)), []),
+        lambda sections, forms: (list(zip(sections, forms, strict=False)), []),
     )
     mutated = _apply(_two_project_doc())
     assert len(mutated) == 1
