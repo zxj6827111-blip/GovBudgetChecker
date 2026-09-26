@@ -42,15 +42,18 @@ from src.services.document_profile_resolver import resolve_document_profile  # n
 
 
 def _profile(kind: str = "final", level: str | None = None) -> DocumentProfile:
+    # 页面文本与文种保持同向：决算文本会把 budget profile 判回 final
+    # （kind_disagreement），budget 用例必须喂预算文本。
+    doc_noun = "部门决算" if kind == "final" else "部门预算"
     label_line = {
         "unit": "决算单位：某街道办事处",
         "department": "决算主管部门：某局",
         "government": "2024年某区政府决算",
     }.get(level or "", "")
-    pages = [f"2024年度部门决算\n{label_line}"] if label_line else ["2024年度部门决算"]
+    pages = [f"2024年度{doc_noun}\n{label_line}"] if label_line else [f"2024年度{doc_noun}"]
     profile = resolve_document_profile(
         doc_type="dept_final" if kind == "final" else "dept_budget",
-        filename=f"2024年度{'部门决算' if kind == 'final' else '部门预算'}.pdf",
+        filename=f"2024年度{doc_noun}.pdf",
         page_texts=pages,
     )
     assert profile.kind == kind
@@ -140,15 +143,27 @@ def test_san_gong_is_expanded_into_six_instances():
 
 
 def test_all_rules_pass_leaves_only_implementation_gaps():
-    ledger = build_obligation_ledger(
+    # WP4-G 收口后 final 车道已无"尚未实现"缺口（coverage gaps 2→1，
+    # 剩余缺口 OBL-PERF-PHASE-AMOUNT 在 budget 车道）。
+    final_ledger = build_obligation_ledger(
         _profile("final"), report_kind="final", rule_execution_summary=_all_pass("final")
     )
-    reasons = set(ledger["by_reason"])
-    assert reasons <= {"not_implemented", "ai_not_run"}
-    assert ledger["by_reason"]["not_implemented"] > 0
-    # 所有"已实现"的义务都完成了，剩下的全是真实缺口
-    assert ledger["completed_total"] == (
-        ledger["applicable_total"] - ledger["unresolved_total"]
+    assert set(final_ledger["by_reason"]) <= {"ai_not_run"}, (
+        "final 出现非 AI 未执行的未完成——出现新的实现缺口或六态错记"
+    )
+    assert final_ledger["by_reason"].get("not_implemented", 0) == 0
+    assert final_ledger["completed_total"] == (
+        final_ledger["applicable_total"] - final_ledger["unresolved_total"]
+    )
+
+    budget_ledger = build_obligation_ledger(
+        _profile("budget"),
+        report_kind="budget",
+        rule_execution_summary=_all_pass("budget"),
+    )
+    assert budget_ledger["by_reason"]["not_implemented"] > 0
+    assert budget_ledger["completed_total"] == (
+        budget_ledger["applicable_total"] - budget_ledger["unresolved_total"]
     )
 
 
@@ -341,12 +356,12 @@ def test_kind_conflict_detail_names_only_truly_conflicting_candidates():
 
 
 def test_rule_not_in_registry_is_reported_as_unimplemented():
-    # WP4-B 后 OBL-TXT-FUND-DETAIL 已收口，改用仍未实现的 OBL-SG-COMPLETION
-    # 作缺口示例（coverage gaps 7→6 后剩余缺口之一）。
-    ledger = build_obligation_ledger(_profile("final"), report_kind="final")
-    gap = _instance(ledger, "OBL-SG-COMPLETION")
+    # WP4-G 后 OBL-SG-COMPLETION 已收口，改用剩余唯一缺口
+    # OBL-PERF-PHASE-AMOUNT 作缺口示例（coverage gaps 2→1）。
+    ledger = build_obligation_ledger(_profile("budget"), report_kind="budget")
+    gap = _instance(ledger, "OBL-PERF-PHASE-AMOUNT")
     assert gap["status"] == OBLIGATION_NOT_IMPLEMENTED
-    assert gap["missing_checkers"] == ["V33-SG-COMPLETION"]
+    assert gap["missing_checkers"] == ["BUD-PERF-PHASE-AMOUNT"]
     assert gap["gap_note"]
 
 
