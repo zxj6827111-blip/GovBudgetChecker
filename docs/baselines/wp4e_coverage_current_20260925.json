@@ -1,7 +1,7 @@
 {
   "baseline_version": 1,
   "source": {
-    "commit": "569f8a21d1328d41200a75008eb4e52ebfc759dd",
+    "commit": "f49202e941d297cdd5e3202d04f3f5f1e051a058",
     "branch": "fix/obligation-completion-rate",
     "dirty": "false"
   },
