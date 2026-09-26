@@ -8637,6 +8637,862 @@ class R33NarrativeIndicatorRepeat(Rule):
         return issues
 
 
+# ============================================================================
+# WP4-E：预算完成率分母口径与确定性复算（V33-TREND-COMPLETION-RATE，final only）
+#
+# 政策合同正例（POLICY_CONTRACT，非真实样张）：AGENTS.md R004 / rules/v3_3.yaml
+# R004——「年初预算为0…支出决算为307.82万元，完成年初预算的95.89%」：分母为
+# 0 时完成率不存在有限定义。仓库全部真实样张（宜川/石泉/文旅/普陀/长风/9-05
+# 生态）的零预算条目都合规地写「决算数大于预算数的主要原因」，未出现
+# 「零分母+完成率」正例，如实按政策合同正例登记，不伪造成真实漏报。
+# 真实负例（REAL）：DOC-20260905-001 P21 总述句 4628.17/4733.14/102.27%；
+# 石泉 P33 公益性岗位补贴 256/200.18/78.20%、P34 其他城市生活救助 30/30/100%；
+# 宜川 P28 总述 20707.11/20218.21/98%（复算 97.64%，容差内）；文旅 P22 总述
+# 27780.16/24535.67/88.32%。石泉死亡抚恤「年初预算为 0 元」跨页无完成率
+# 声明 → 合规 0 finding。证据链：docs/WP4E_COMPLETION_RATE_20260925.md。
+#
+# 与 V33-234（OBL-NARRATIVE-AMOUNT 的登记 checker）的边界：其完成率分支
+# （_FINAL_COMPLETION_PERCENT_RE）只认「年初预算(数)?为 X 万元…决算为 Y 万元
+# …完成(年初)?预算的 Z%」邻近窗口三元组，以下形态漏检——本规则补：
+#   1)「年初预算为0」（无万元后缀）与「年初预算为 0 元」（元单位），恰是
+#     R004 零分母的典型披露形态；
+#   2)「完成全年/调整预算的X%」整句不在其匹配范围，分母身份切换后的
+#     复算无人验证；
+#   3) 条目内同身份多个不一致预算无 parse_ambiguity 处理。
+# 本规则不做「完成率偏离100%未说明原因」的 warn（V33-234 既有职责），
+# 标准三元组形态与其有界重叠、报告层互不去重（同 WP4-C 对 V33-235 的纪律）。
+# ============================================================================
+
+_WP4E_OBLIGATION_ID = "OBL-TREND-COMPLETION-RATE"
+
+#: 完成率声明句（动词形态）：「完成（年初|全年|调整|）预算(数)?(的比重)?为?P%」。
+#: 可选字素（数/的/的比重/为）一律前置 \s*——PDF 软换行会把「决算␊为」拆行，
+#: 不容忍空白就会漏掉真实形态（宜川 Y07 教训）。同比句（比上年增长100%，
+#: CMM-007 领域）与占比句（占X的P%）都不带「完成…预算」锚，不进本 matcher
+#: （Mutation D 看守该边界）。
+_WP4E_CLAIM_RE = re.compile(
+    r"完\s*成\s*(?P<denom>年初\s*预\s*算|全年\s*预\s*算|调整\s*预\s*算|预\s*算)"
+    r"(?:\s*数)?(?:\s*的\s*比\s*重)?(?:\s*的)?(?:\s*为)?\s*"
+    r"(?P<pct>\d[\d,，]*(?:\.\d+)?)\s*%"
+)
+
+#: 完成率声明句（名词形态）：「（年初|全年|调整|）预算完成率为?P%」。
+_WP4E_CLAIM_NOUN_RE = re.compile(
+    r"(?P<denom>年初\s*预\s*算|全年\s*预\s*算|调整\s*预\s*算|预\s*算)\s*完\s*成\s*率"
+    r"(?:\s*为)?\s*(?P<pct>\d[\d,，]*(?:\.\d+)?)\s*%"
+)
+
+#: 分母披露：「（年初|全年|调整|）预算(数)?（为|是）?金额（单位可选）」。
+#: 政策例句「年初预算为0」无单位后缀；石泉零预算条目用「0 元」——单位可选，
+#: 零值与换算因子无关，非零缺省单位按万元（叙事主流口径）。「预算(数)?」为
+#: 泛身份，只在与完成率声明同句读单元时绑定，避免表格表头「预算数\n0.00」
+#: 误入；「决算数大于预算数的主要原因」类无金额句读不命中。
+_WP4E_BUDGET_RE = re.compile(
+    r"(?P<role>年初\s*预\s*算(?:\s*数)?|全年\s*预\s*算(?:\s*数)?|调整\s*预\s*算(?:\s*数)?|预\s*算(?:\s*数)?)"
+    r"\s*(?:为|是)?\s*(?P<amount>\d(?:[\d,，]*\d)?(?:\.\d+)?|零)\s*(?P<unit>万\s*元|亿\s*元|元)?"
+)
+
+#: 分子披露：「（支出）决算(数)?（为|是）?金额（单位可选）」。排除「收入
+#: 决算」（收入侧不是支出完成率的分子）；measure 词容忍软换行（宜川 Y07
+#: 教训：「支␊出决算为」「决算␊为」）。
+_WP4E_ACTUAL_RE = re.compile(
+    r"(?<!收入)(?:支\s*出\s*)?决\s*算(?:\s*数)?\s*(?:为|是)?\s*(?P<amount>\d(?:[\d,，]*\d)?(?:\.\d+)?)\s*"
+    r"(?P<unit>万\s*元|亿\s*元|元)?"
+)
+
+#: 条目边界：类款项三级结构（复用 WP4-C 切分纪律）+「X、…说明」章节标题
+#: + 行首「（X）小节标题」（宜川/普陀/文旅总述句都在「（三）」小节内，
+#: 小节边界防止「（一）（二）」小节的披露错配给总述句）。目录页自身不含
+#: 完成率声明，误切只影响绑定窗口大小、方向为 fail-closed。
+_WP4E_ENTRY_RE = re.compile(
+    r"[^，。；：:、（）()“”]{1,40}?\s*（\s*类\s*）[^。；]{0,80}?（\s*款\s*）"
+    r"[^。；]{0,80}?（\s*项\s*）"
+    r"|[一二三四五六七八九十]+、[^\n。；]{2,40}说明"
+    r"|(?:^|\n)\s*[（(][一二三四五六七八九十\d]{1,3}[）)]\s*[^\n。；，,]{2,40}"
+)
+
+#: 句读边界（clause 切分）：句号/分号/叹问号。逗号不算——「年初预算为X万元，
+#: 支出决算为Y万元，完成年初预算的Z%」是同句三元组主形态，跨句读拼接反而
+#: 放宽了绑定纪律。
+_WP4E_CLAUSE_BREAK_RE = re.compile(r"[。；;！？]")
+
+#: 子句边界（sub-clause 切分）：句读符 + 逗号/顿号/冒号。分项完成率声明
+#: （「…，其中：因公出国…决算为 0.00 万元，完成预算的 0.00%」）与总额声明
+#: 同处一个句读单元，靠子句边界把「分子/分母」就近绑定，防止总额分母错绑
+#: 给分项声明（三公 82.68% 的分母是车辆预算而非三公总额预算）。
+_WP4E_SUBCLAUSE_BREAK_RE = re.compile(r"[。；;！？，,、：:]")
+
+#: 章节导语的指标主语截取锚：铺垫文本（claim 前）在第一个分母/分子引导词
+#: 处截断，取其前的名词主语（「一般公共预算财政拨款支出年初预算为…」→
+#: 指标为「一般公共预算财政拨款支出」）。软换行先整体去空白再截，避免
+#: 「决算␊为 16.95」把「为 16.95 万元」当成指标名。
+_WP4E_HEAD_CUT_RE = re.compile(
+    r"年初\s*预\s*算|全年\s*预\s*算|调整\s*预\s*算|预\s*算(?:\s*数)?|支\s*出\s*决\s*算|决\s*算"
+)
+
+#: 条目类款项头（不要求紧邻首句金额——「（项），主要用于…年初预算为X」
+#: 形态的条目没有首句金额，指标名仍须可提取）。
+_WP4E_ITEM_HEAD_RE = re.compile(
+    r"(?P<klass>[^，。；：:、（）()“”]{1,40}?)\s*（\s*类\s*）"
+    r"(?P<kuan>[^，。；：:、（）()“”]{1,60}?)\s*（\s*款\s*）"
+    r"(?P<xiang>[^，。；：:、（）()“”]{1,60}?)\s*（\s*项\s*）"
+)
+
+
+def _wp4e_clause_head(merged: str, position: int) -> str:
+    """披露/声明所在句读单元的指标主语：句读起点到披露位置、去空白、
+    在第一个分母/分子引导词处截断。空主语（铺垫直接以引导词开头）合法——
+    同为空视为同一（无）身份。"""
+    breaks = [
+        b.end() for b in _WP4E_CLAUSE_BREAK_RE.finditer(merged, 0, position)
+    ]
+    clause_start = breaks[-1] if breaks else 0
+    head = re.sub(r"\s+", "", merged[clause_start:position])
+    cut = _WP4E_HEAD_CUT_RE.search(head)
+    if cut is not None:
+        head = head[:cut.start()]
+    return head[-40:] if len(head) > 40 else head
+
+_WP4E_LIST_PREFIX_RE = re.compile(r"^[（(][一二三四五六七八九十\d]{1,3}[）)]\s*")
+
+#: 完成率声明身份 → 归一身份键；「预算」缺省身份记空串（由同句显式披露补全）。
+_WP4E_CLAIM_ROLES: Dict[str, str] = {
+    "年初预算": "年初预算",
+    "全年预算": "全年预算",
+    "调整预算": "调整预算",
+    "预算": "",
+}
+
+
+def _wp4e_claim_role(denom_text: str) -> str:
+    return _WP4E_CLAIM_ROLES.get(_txt_fund_norm(denom_text), "")
+
+
+def _wp4e_role_key(role_text: str) -> str:
+    """分母披露身份归一：「年初预算数」并入「年初预算」；「预算/预算数」为泛身份。"""
+    norm = _txt_fund_norm(role_text)
+    for key in ("年初预算", "全年预算", "调整预算"):
+        if norm.startswith(key):
+            return key
+    return ""
+
+
+def _wp4e_amount(text: str) -> Optional[Decimal]:
+    """完成率分母/分子金额解析：「零」等价表述归 0；千分位逗号按 to_decimal 口径剔除。"""
+    if text == "零":
+        return Decimal("0")
+    try:
+        return Decimal(str(text).strip().replace(",", "").replace("，", ""))
+    except Exception:  # noqa: BLE001 - Decimal 解析失败的兜底，与 to_decimal 同口径
+        return None
+
+
+class R33TrendCompletionRate(Rule):
+    """预算完成率分母口径与确定性复算（OBL-TREND-COMPLETION-RATE）。
+
+    只绑定完整业务语义单元：同条目内「分母身份披露 + 支出决算披露 + 完成
+    率声明」三要素。声明的分母身份（年初/全年/调整预算）必须与实际计算
+    所用分母一致：分母为 0 时完成率无定义（R004），声明数值与其它身份的
+    复算吻合时报分母身份错误；非零分母按 支出决算/分母×100 确定性复算。
+    显式身份允许条目内承接绑定（披露在声明之前），泛身份只认同句；任何
+    身份/金额无法唯一确定时 fail-closed（parse_ambiguity / insufficient_data），
+    绝不跨条目拼接数字。同比（CMM-007）与占比（V33-234 等）不归本规则。
+    """
+
+    code, severity = "V33-TREND-COMPLETION-RATE", "error"
+    desc = "预算完成率分母口径与确定性复算（R004 零分母/分母身份/复算）"
+
+    #: 百分比容差：仓库统一策略（V33-234/BUD-111 同款 abs 0.5pp / 相对 1%），
+    #: Decimal 化沿用 CMM-007 的既有实现形态。分母为 0 是定义问题，不经容差
+    #: 放行；金额显示舍入的传播在常规量级下不超过该容差，不再叠加金额包络
+    #: （避免第三套百分比容差）。
+    _PCT_ATOL = Decimal("0.5")
+    _PCT_RTOL = Decimal("0.01")
+
+    def apply(self, doc: Document) -> List[Issue]:
+        merged, offsets = _txt_fund_merged_pages(doc)
+        if not merged.strip():
+            raise RuleDeferred(
+                self.code,
+                "未提取到正文文本，完成率复算无从检查",
+                unresolved_reasons=["未提取到正文文本"],
+            )
+        sections = _nar_repeat_sections(merged, doc, offsets)
+        heading_pages = tuple(
+            {_txt_fund_page_for(offsets, start) for _, start, _ in sections}
+        )
+        year = _resolve_fiscal_year(doc, heading_pages)
+        # 完成率是期间敏感检查：完成率声明与分母/分子披露必须同属材料财政
+        # 年度。年度无法确认时期间一致性不可证明，不得生成正式 finding
+        # （fail-closed，与 CMM-007 / WP4-C 的年度门禁同纪律）。
+        if year is None:
+            raise RuleDeferred(
+                self.code,
+                "未能确认材料财政年度，预算完成率的期间一致性不可确认",
+                unresolved_reasons=[
+                    "未能确认材料财政年度，预算完成率的期间一致性不可确认"
+                ],
+            )
+
+        claims = self._collect_claims(merged, offsets, sections, year)
+        if not claims:
+            return []  # 材料无完成率声明：无可检查对象，按 PASS 结案
+        issues: List[Issue] = []
+        unresolved: List[str] = []
+        budgets = self._collect_budgets(merged, offsets, sections, year, claims)
+        actuals, openings = self._collect_actuals(
+            merged, offsets, sections, year, claims
+        )
+        boundaries = [b.start() for b in _WP4E_ENTRY_RE.finditer(merged)]
+
+        for claim in claims:
+            self._bind_entry(claim, boundaries, merged)
+            self._check_claim(claim, budgets, actuals, openings, year, issues, unresolved)
+
+        if unresolved:
+            reasons = list(dict.fromkeys(unresolved))
+            raise RuleDeferred(
+                self.code,
+                "；".join(reasons),
+                partial_issues=issues,
+                unresolved_reasons=reasons,
+            )
+        return issues
+
+    # ---- 内部：声明/披露收集 ----
+
+    def _collect_claims(
+        self,
+        merged: str,
+        offsets: List[int],
+        sections: List[Tuple[str, int, int]],
+        year: Optional[int],
+    ) -> List[Dict[str, Any]]:
+        claims: List[Dict[str, Any]] = []
+        for pattern in (_WP4E_CLAIM_RE, _WP4E_CLAIM_NOUN_RE):
+            for match in pattern.finditer(merged):
+                pct = _wp4e_amount(match.group("pct"))
+                if pct is None:
+                    continue
+                if year is not None and _nar_repeat_foreign_year(
+                    merged, match.start(), match.group("denom"), year
+                ):
+                    continue  # 异期声明是已解决的"不可比"，不跨期绑定
+                section_title, section_start = _nar_repeat_section_of(
+                    sections, match.start()
+                )
+                claims.append(
+                    {
+                        "start": match.start(),
+                        "end": match.end(),
+                        "page": _txt_fund_page_for(offsets, match.start()),
+                        "section": section_title,
+                        "section_start": section_start,
+                        "role_key": _wp4e_claim_role(match.group("denom")),
+                        "pct": pct,
+                        "pct_text": re.sub(r"[\s,，]", "", match.group("pct")),
+                        "phrase": _txt_fund_norm(match.group(0)),
+                        "clause_start": 0,
+                        "entry_start": 0,
+                        "entry_end": len(merged),
+                        "indicator": "",
+                        "segments": [],
+                        "clause_head": "",
+                    }
+                )
+        claims.sort(key=lambda item: item["start"])
+        return claims
+
+    def _collect_budgets(
+        self,
+        merged: str,
+        offsets: List[int],
+        sections: List[Tuple[str, int, int]],
+        year: Optional[int],
+        claims: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        for match in _WP4E_BUDGET_RE.finditer(merged):
+            if any(
+                match.start() < claim["end"] and claim["start"] < match.end()
+                for claim in claims
+            ):
+                continue  # 声明句内的「预算+数字」（如「完成预算102.27%」）不是披露
+            if year is not None and _nar_repeat_foreign_year(
+                merged, match.start(), match.group("role"), year
+            ):
+                continue
+            entry = self._disclosure_entry(merged, offsets, sections, match)
+            if entry is None:
+                continue
+            entry["role_key"] = _wp4e_role_key(match.group("role"))
+            items.append(entry)
+        return items
+
+    def _collect_actuals(
+        self,
+        merged: str,
+        offsets: List[int],
+        sections: List[Tuple[str, int, int]],
+        year: Optional[int],
+        claims: List[Dict[str, Any]],
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """返回 (显式决算披露, 条目首句金额)。
+
+        条目首句金额（「（类）（款）（项）」X 万元）是本年支出决算的合法
+        披露形态（WP4-C 按 role=current 收集，口径一致）——同条目内它与
+        「支出决算为 Y」矛盾时（石泉 S03：首句 257.14 vs 决算 245.53），
+        完成率分子存在两个不一致候选，必须 parse_ambiguity 而不是任选其一
+        复算（否则会把按首句自洽的完成率 93.57% 误判成复算不一致）。
+        """
+        items: List[Dict[str, Any]] = []
+        for match in _WP4E_ACTUAL_RE.finditer(merged):
+            if any(
+                match.start() < claim["end"] and claim["start"] < match.end()
+                for claim in claims
+            ):
+                continue
+            if year is not None and _nar_repeat_foreign_year(
+                merged, match.start(), "决算", year
+            ):
+                continue
+            entry = self._disclosure_entry(merged, offsets, sections, match)
+            if entry is None:
+                continue
+            entry["role_key"] = ""
+            items.append(entry)
+        openings: List[Dict[str, Any]] = []
+        for match in _NAR_REPEAT_ITEM_RE.finditer(merged):
+            if year is not None and _nar_repeat_foreign_year(
+                merged, match.start(), match.group("xiang"), year
+            ):
+                continue
+            entry = self._opening_entry(merged, offsets, sections, match)
+            if entry is not None:
+                openings.append(entry)
+        return items, openings
+
+    def _opening_entry(
+        self,
+        merged: str,
+        offsets: List[int],
+        sections: List[Tuple[str, int, int]],
+        match: Any,
+    ) -> Optional[Dict[str, Any]]:
+        amount = _wp4e_amount(match.group("amount"))
+        raw_unit = _txt_fund_norm(match.group("unit")) if match.group("unit") else None
+        factor = _TXT_FUND_UNIT_TO_WAN.get(raw_unit) if raw_unit else None
+        if amount is None or raw_unit is None or factor is None:
+            return None  # 条目首句金额的单位锚是正则强制的，缺角即不形成披露
+        section_title, section_start = _nar_repeat_section_of(
+            sections, match.start("amount")
+        )
+        return {
+            "wan": amount * factor,
+            "amount_text": re.sub(r"\s+", "", match.group("amount")),
+            "raw_unit": raw_unit,
+            "unit_confirmed": True,
+            "page": _txt_fund_page_for(offsets, match.start("amount")),
+            "section": section_title,
+            "section_start": section_start,
+            "span": re.sub(r"\s+", "", match.group(0)),
+            "start": match.start("amount"),
+            "end": match.end(),
+            "clause_head": _wp4e_clause_head(merged, match.start("amount")),
+        }
+
+    def _disclosure_entry(
+        self,
+        merged: str,
+        offsets: List[int],
+        sections: List[Tuple[str, int, int]],
+        match: Any,
+    ) -> Optional[Dict[str, Any]]:
+        # 单位纪律（R2 整改）：非零金额缺单位不得默认「万元」——0 元 = 0
+        # 万元 = 0 亿元，零值豁免单位缺失；非零缺单位保留披露（wan=None），
+        # 由绑定层 fail-closed（insufficient_data），绝不按「叙事主流口径」
+        # 猜测归一。原文单位（raw_unit）与归一结果分开保存，evidence 不伪造
+        # 原文写了「万元」。
+        amount = _wp4e_amount(match.group("amount"))
+        if amount is None:
+            return None
+        raw_unit = _txt_fund_norm(match.group("unit")) if match.group("unit") else None
+        factor = _TXT_FUND_UNIT_TO_WAN.get(raw_unit) if raw_unit else None
+        if raw_unit is not None and factor is None:
+            return None  # 单位显式但不在归一口径内，不形成正式披露
+        if raw_unit is None:
+            wan = Decimal("0") if amount == 0 else None
+        else:
+            wan = amount * factor
+        section_title, section_start = _nar_repeat_section_of(sections, match.start())
+        return {
+            "wan": wan,
+            "amount_text": re.sub(r"\s+", "", match.group("amount")),
+            "raw_unit": raw_unit,
+            "unit_confirmed": raw_unit is not None,
+            "page": _txt_fund_page_for(offsets, match.start()),
+            "section": section_title,
+            "section_start": section_start,
+            "span": re.sub(r"\s+", "", match.group(0)),
+            "start": match.start(),
+            "end": match.end(),
+            "clause_head": _wp4e_clause_head(merged, match.start()),
+        }
+
+    # ---- 内部：条目绑定 ----
+
+    def _bind_entry(
+        self,
+        claim: Dict[str, Any],
+        boundaries: List[int],
+        merged: str,
+    ) -> None:
+        prior = [pos for pos in boundaries if pos <= claim["start"]]
+        nxt = [pos for pos in boundaries if pos > claim["start"]]
+        claim["entry_start"] = prior[-1] if prior else 0
+        claim["entry_end"] = nxt[0] if nxt else len(merged)
+        breaks = [
+            b.end()
+            for b in _WP4E_CLAUSE_BREAK_RE.finditer(
+                merged, claim["entry_start"], claim["start"]
+            )
+        ]
+        claim["clause_start"] = breaks[-1] if breaks else claim["entry_start"]
+        # claim 所在句读单元内的子句分段（按逗号/顿号/冒号再切），从 claim 侧
+        # 由近及远排列——标准句式「决算为X万元，完成预算的Y%」的分子总在
+        # 紧邻的上一段，逐段就近绑定防止把更早的无关披露错配进来。
+        cuts = [claim["clause_start"]]
+        cuts.extend(
+            b.end()
+            for b in _WP4E_SUBCLAUSE_BREAK_RE.finditer(
+                merged, claim["clause_start"], claim["start"]
+            )
+        )
+        cuts.append(claim["start"])
+        claim["segments"] = [
+            (cuts[idx], cuts[idx + 1]) for idx in range(len(cuts) - 2, -1, -1)
+        ]
+        claim["indicator"] = self._indicator(merged, claim)
+
+    def _indicator(self, merged: str, claim: Dict[str, Any]) -> str:
+        entry_start = claim["entry_start"]
+        item = _WP4E_ITEM_HEAD_RE.match(merged, entry_start)
+        if item is None:
+            item = _WP4E_ITEM_HEAD_RE.search(
+                merged, entry_start, min(entry_start + 200, len(merged))
+            )
+        if item is not None and item.start() < claim["start"]:
+            claim["clause_head"] = _txt_fund_norm(item.group("xiang"))
+            return claim["clause_head"]
+        head = re.sub(r"\s+", "", merged[claim["clause_start"]:claim["start"]])
+        cut = _WP4E_HEAD_CUT_RE.search(head)
+        if cut is not None:
+            head = head[:cut.start()]
+        head = _WP4E_LIST_PREFIX_RE.sub("", head)
+        head = re.sub(r"^其中[:：]", "", head)
+        head = head[-40:] if len(head) > 40 else head
+        claim["clause_head"] = head
+        return head or "未定位条目"
+
+    # ---- 内部：判定 ----
+
+    def _check_claim(
+        self,
+        claim: Dict[str, Any],
+        budgets: List[Dict[str, Any]],
+        actuals: List[Dict[str, Any]],
+        openings: List[Dict[str, Any]],
+        year: Optional[int],
+        issues: List[Issue],
+        unresolved: List[str],
+    ) -> None:
+        indicator = claim["indicator"] or "未定位条目"
+
+        # ---- 分母：claim 句读单元内按子句段由近及远，找到即停 ----
+        denom: Optional[Dict[str, Any]] = None
+        denom_state = "missing"
+        for seg_start, seg_end in claim["segments"]:
+            pool_at = [
+                budget
+                for budget in budgets
+                if budget["start"] < claim["start"]
+                and budget["section_start"] == claim["section_start"]
+                and seg_start <= budget["start"] < seg_end
+            ]
+            if claim["role_key"]:
+                cands = [
+                    budget for budget in pool_at
+                    if budget["role_key"] == claim["role_key"]
+                ]
+            else:
+                explicit = [budget for budget in pool_at if budget["role_key"]]
+                if len({budget["role_key"] for budget in explicit}) > 1:
+                    unresolved.append(
+                        f"完成率声明「{claim['phrase']}」同句存在多种预算身份披露，"
+                        "分母身份无法唯一确定（parse_ambiguity）"
+                    )
+                    return
+                cands = explicit or pool_at
+            denom, denom_state = self._pick_unique(cands)
+            if denom_state != "missing":
+                break
+        if denom is None:
+            # ---- 分母条目内承接：句读单元之前的披露须与 claim 同指标主语 ----
+            # 主语对齐是承接绑定的安全边界：分项声明（三公车辆 82.68%）不会
+            # 错绑条目内总额预算（总额主语不同）；主语一致的多个候选（Case J）
+            # 才会形成 parse_ambiguity，绝不取首个/最近。
+            pool_entry = [
+                budget
+                for budget in budgets
+                if budget["start"] < claim["start"]
+                and budget["section_start"] == claim["section_start"]
+                and claim["entry_start"] <= budget["start"] < claim["clause_start"]
+                and (
+                    not budget["clause_head"]
+                    or budget["clause_head"] == claim["clause_head"]
+                )
+            ]
+            if claim["role_key"]:
+                cands = [
+                    budget for budget in pool_entry
+                    if budget["role_key"] == claim["role_key"]
+                ]
+            else:
+                explicit = [budget for budget in pool_entry if budget["role_key"]]
+                if len({budget["role_key"] for budget in explicit}) > 1:
+                    unresolved.append(
+                        f"完成率声明「{claim['phrase']}」条目内存在多种预算身份披露，"
+                        "分母身份无法唯一确定（parse_ambiguity）"
+                    )
+                    return
+                cands = explicit or pool_entry
+            denom, denom_state = self._pick_unique(cands)
+        if denom_state == "ambiguous":
+            unresolved.append(
+                f"「{indicator}」的{claim['role_key'] or '预算'}存在多个不一致披露，"
+                "完成率分母无法唯一确定（parse_ambiguity）"
+            )
+            return
+        if denom is None:
+            # fail-closed 不比：声明未配套披露可绑定的分母（与 CMM-007
+            # 「无可验证金额 → 不比」同纪律；表格内分母的表-文勾稽属其它义务）
+            return
+        role_label = claim["role_key"] or denom["role_key"] or "预算"
+
+        # 分母单位纪律：非零披露未显式金额单位 → 无法归一复算，
+        # fail-closed（零值豁免：0 元 = 0 万元 = 0 亿元，wan 为 0 不落此处）
+        if denom["wan"] is None:
+            unresolved.append(
+                f"「{indicator}」的{role_label}披露「{denom['span']}」未显式金额单位，"
+                "无法归一复算（insufficient_data）"
+            )
+            return
+
+        # ---- 分子：句读单元内逐段就近；全部段空才条目内承接 ----
+        actual: Optional[Dict[str, Any]] = None
+        actual_state = "missing"
+        for seg_start, seg_end in claim["segments"]:
+            cands = [
+                actual
+                for actual in actuals
+                if actual["start"] < claim["start"]
+                and actual["section_start"] == claim["section_start"]
+                and seg_start <= actual["start"] < seg_end
+            ]
+            actual, actual_state = self._pick_unique(cands)
+            if actual_state != "missing":
+                break
+        if actual_state == "missing":
+            cands = [
+                actual
+                for actual in actuals
+                if actual["start"] < claim["start"]
+                and actual["section_start"] == claim["section_start"]
+                and claim["entry_start"] <= actual["start"] < claim["clause_start"]
+                and (
+                    not actual["clause_head"]
+                    or actual["clause_head"] == claim["clause_head"]
+                )
+            ]
+            actual, actual_state = self._pick_unique(cands)
+
+        # ---- 分子交叉验证：条目首句金额也是本年支出决算披露 ----
+        # 条目首句「（类）（款）（项）」X 万元与本条目显式「支出决算为 Y」
+        # 矛盾（石泉 S03：257.14 vs 245.53）时，完成率分子无法唯一确定——
+        # 矛盾本身由 V33-NARRATIVE-INDICATOR-REPEAT 报告，这里只 fail-closed
+        # 不比，绝不任选其一复算（否则按首句自洽的 93.57% 会被误判）。
+        entry_prefix_actuals = [
+            actual
+            for actual in actuals
+            if actual["start"] < claim["start"]
+            and actual["section_start"] == claim["section_start"]
+            and claim["entry_start"] <= actual["start"] < claim["clause_start"]
+        ]
+        entry_prefix_openings = [
+            opening
+            for opening in openings
+            if opening["start"] < claim["start"]
+            and opening["section_start"] == claim["section_start"]
+            and claim["entry_start"] <= opening["start"] < claim["clause_start"]
+        ]
+        cross_values = {
+            item["wan"] for item in entry_prefix_actuals + entry_prefix_openings
+        }
+        if actual is not None:
+            cross_values.add(actual["wan"])
+        if len(cross_values) > 1:
+            unresolved.append(
+                f"「{indicator}」的本年支出决算存在多个不一致披露"
+                "（含条目首句金额），完成率分子无法唯一确定（parse_ambiguity）"
+            )
+            return
+        if actual is None and len(cross_values) == 1:
+            # 句读单元内无显式「决算为」披露时，条目首句金额按承接语义绑定为分子
+            sole = (entry_prefix_actuals + entry_prefix_openings)[0]
+            actual = {
+                **sole,
+                "span": f"{sole['span']}（条目首句金额，按本年支出决算承接）",
+            }
+
+        others = [
+            budget
+            for budget in budgets
+            if budget["start"] < claim["start"]
+            and budget["section_start"] == claim["section_start"]
+            and claim["clause_start"] <= budget["start"]
+            and budget["role_key"]
+            and budget["wan"] is not None
+            and budget["role_key"] != role_label
+            and budget["wan"] != denom["wan"]
+        ]
+
+        if denom["wan"] == 0:
+            conflict = self._identity_hit(claim, actual, others)
+            if conflict is not None:
+                other, alt = conflict
+                issues.append(
+                    self._issue(
+                        f"完成率分母身份错误（{indicator}）：声明「{claim['phrase']}」，"
+                        f"但{role_label}为 0（不能作有效分母）；声明数值实际与"
+                        f"{other['role_key']}（{_txt_fund_display(other['wan'])} 万元）"
+                        f"的复算（{_txt_fund_display(alt)}%）吻合——原文声明的分母"
+                        "身份与实际计算所用分母不一致，需人工复核底稿。",
+                        self._location(
+                            claim, denom, actual, year, role_label,
+                            recomputed="undefined", difference="undefined",
+                            identity_conflict=True, alternative=other,
+                        ),
+                        severity="error",
+                        evidence_text=self._evidence(claim, denom, actual, other, alt),
+                    )
+                )
+            else:
+                issues.append(
+                    self._issue(
+                        f"完成率分母为0（{indicator}）：{role_label}为0，无法作为"
+                        f"「{claim['phrase']}」的有效分母；当前披露的有限完成率"
+                        "没有数学定义。若实际按其它口径（如全年预算）计算，应"
+                        "改写声明中的分母表述并复核底稿。",
+                        self._location(
+                            claim, denom, actual, year, role_label,
+                            recomputed="undefined", difference="undefined",
+                        ),
+                        severity="error",
+                        evidence_text=self._evidence(claim, denom, actual),
+                    )
+                )
+            return
+
+        if actual is None:
+            # fail-closed 不比：分母非零但句读单元/条目内无支出决算披露可复算
+            return
+        if actual["wan"] is None:
+            # 分子单位纪律：非零决算披露未显式金额单位 → 无法归一复算
+            unresolved.append(
+                f"「{indicator}」的支出决算披露「{actual['span']}」未显式金额单位，"
+                "无法归一复算（insufficient_data）"
+            )
+            return
+        expected = actual["wan"] / denom["wan"] * Decimal("100")
+        if self._pct_close(claim["pct"], expected):
+            return  # 数学一致：原因说明缺失归 V33-234 既有 warn，本规则不重复报
+        conflict = self._identity_hit(claim, actual, others)
+        if conflict is not None:
+            other, alt = conflict
+            issues.append(
+                self._issue(
+                    f"完成率分母身份错误（{indicator}）：声明「{claim['phrase']}」，按"
+                    f"{role_label}（{_txt_fund_display(denom['wan'])} 万元）复算应为"
+                    f"{_txt_fund_display(expected)}%；声明数值实际与{other['role_key']}"
+                    f"（{_txt_fund_display(other['wan'])} 万元）的复算"
+                    f"（{_txt_fund_display(alt)}%）吻合——原文声明的分母身份与实际"
+                    "计算所用分母不一致，需人工复核底稿。",
+                    self._location(
+                        claim, denom, actual, year, role_label,
+                        recomputed=_txt_fund_display(expected),
+                        difference=_txt_fund_display(abs(claim["pct"] - expected)),
+                        identity_conflict=True, alternative=other,
+                    ),
+                    severity="error",
+                    evidence_text=self._evidence(claim, denom, actual, other, alt),
+                )
+            )
+            return
+        issues.append(
+            self._issue(
+                f"完成率复算不一致（{indicator}）：{role_label}"
+                f"{_txt_fund_display(denom['wan'])} 万元、支出决算"
+                f"{_txt_fund_display(actual['wan'])} 万元，按声明分母复算应为"
+                f"{_txt_fund_display(expected)}%，当前写为 {claim['pct_text']}%，"
+                f"相差 {_txt_fund_display(abs(claim['pct'] - expected))} 个百分点。"
+                "分母、支出决算与完成率三者不能同时成立，需人工复核底稿。",
+                self._location(
+                    claim, denom, actual, year, role_label,
+                    recomputed=_txt_fund_display(expected),
+                    difference=_txt_fund_display(abs(claim["pct"] - expected)),
+                ),
+                severity="error",
+                evidence_text=self._evidence(claim, denom, actual),
+            )
+        )
+
+    def _pick_unique(
+        self, candidates: List[Dict[str, Any]]
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
+        """绑定候选定夺：空 → (None, "missing")；唯一值 → (首个, "ok")；
+        多个不一致值 → (None, "ambiguous")。禁止取最近/取首个来"解决"歧义。"""
+        if not candidates:
+            return None, "missing"
+        if len({item["wan"] for item in candidates}) > 1:
+            return None, "ambiguous"
+        return candidates[0], "ok"
+
+    def _identity_hit(
+        self,
+        claim: Dict[str, Any],
+        actual: Optional[Dict[str, Any]],
+        others: List[Dict[str, Any]],
+    ) -> Optional[Tuple[Dict[str, Any], Decimal]]:
+        """声明数值与「声明身份之外的其它预算身份」复算吻合 → 分母身份错误证据。
+
+        身份交叉要用 actual 参与金额计算，其单位必须已确认（R2 整改：非零
+        缺单位的 actual 不进入交叉复算；R004 零分母 finding 本身不依赖
+        actual 数值，actual 仍只作为证据展示）。"""
+        if actual is None or actual["wan"] is None:
+            return None
+        for other in sorted(others, key=lambda item: item["start"]):
+            if other["wan"] > 0:
+                alt = actual["wan"] / other["wan"] * Decimal("100")
+                if self._pct_close(claim["pct"], alt):
+                    return other, alt
+        return None
+
+    def _pct_close(self, declared: Decimal, recomputed: Decimal) -> bool:
+        """仓库统一百分比容差（V33-234/BUD-111 同款 abs 0.5pp / 相对 1%，Decimal 化）。"""
+        tolerance = max(
+            self._PCT_ATOL,
+            abs(recomputed) * self._PCT_RTOL,
+            abs(declared) * self._PCT_RTOL,
+        )
+        return abs(declared - recomputed) <= tolerance
+
+    # ---- 内部：finding 组装 ----
+
+    def _location(
+        self,
+        claim: Dict[str, Any],
+        denom: Dict[str, Any],
+        actual: Optional[Dict[str, Any]],
+        year: Optional[int],
+        role_label: str,
+        recomputed: str,
+        difference: str,
+        identity_conflict: bool = False,
+        alternative: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        pages = {claim["page"], denom["page"]}
+        refs = [
+            {
+                "role": "完成率声明",
+                "page": claim["page"],
+                "section": claim["section"],
+                "span": claim["phrase"],
+            },
+            {
+                "role": "分母披露",
+                "page": denom["page"],
+                "section": denom["section"],
+                "span": denom["span"],
+            },
+        ]
+        if actual is not None:
+            pages.add(actual["page"])
+            refs.append(
+                {
+                    "role": "分子披露",
+                    "page": actual["page"],
+                    "section": actual["section"],
+                    "span": actual["span"],
+                }
+            )
+        location: Dict[str, Any] = {
+            "page": claim["page"],
+            "pages": sorted(pages),
+            "section": claim["section"],
+            "indicator": claim["indicator"] or "未定位条目",
+            "denominator_type": role_label,
+            "denominator_amount": denom["amount_text"],
+            "denominator_unit": denom["raw_unit"],  # 原文单位；None = 未显式披露
+            "denominator_unit_confirmed": denom["unit_confirmed"],
+            "normalized_denominator_wan": _txt_fund_display(denom["wan"]),
+            "actual_amount": actual["amount_text"] if actual else None,
+            "actual_unit": actual["raw_unit"] if actual else None,
+            "actual_unit_confirmed": actual["unit_confirmed"] if actual else None,
+            "normalized_actual_wan": (
+                _txt_fund_display(actual["wan"])
+                if actual is not None and actual["wan"] is not None
+                else None
+            ),
+            "declared_completion_rate": claim["pct_text"],
+            "recomputed_completion_rate": recomputed,
+            "difference_pp": difference,
+            "fiscal_year": year,
+            "unit": "万元",  # 归一计算口径（与原文单位区分，不伪造原文写了万元）
+            "obligation_id": _WP4E_OBLIGATION_ID,
+            "zero_denominator": denom["wan"] == 0,
+            "identity_conflict": identity_conflict,
+            "table_refs": refs,
+        }
+        if alternative is not None:
+            location["alternative_denominator"] = {
+                "type": alternative["role_key"],
+                "amount_wan": _txt_fund_display(alternative["wan"]),
+            }
+        return location
+
+    def _evidence(
+        self,
+        claim: Dict[str, Any],
+        denom: Dict[str, Any],
+        actual: Optional[Dict[str, Any]],
+        alternative: Optional[Dict[str, Any]] = None,
+        alt_percent: Optional[Decimal] = None,
+    ) -> str:
+        lines = [
+            f"完成率声明：{claim['phrase']}（第{claim['page']}页）",
+            f"分母披露：{denom['span']}（第{denom['page']}页）",
+        ]
+        if actual is not None:
+            lines.append(f"分子披露：{actual['span']}（第{actual['page']}页）")
+        lines.append("口径：完成率=支出决算/声明分母×100；分母为0时完成率无定义")
+        if alternative is not None and alt_percent is not None:
+            lines.append(
+                f"身份交叉：{alternative['span']}（第{alternative['page']}页）复算为"
+                f"{_txt_fund_display(alt_percent)}%"
+            )
+        return "\n".join(lines)
+
+
 ALL_RULES = [
     R33001_CoverYearUnit(),
     R33002_NineTablesCheck(),
@@ -8694,6 +9550,7 @@ ALL_RULES = [
     R33CrossSanGongEcon(),
     R33TxtFundDetail(),
     R33NarrativeIndicatorRepeat(),
+    R33TrendCompletionRate(),
     R33233_DetailRowFormulaConsistency(),
     R33234_NarrativePercentConsistency(),
     R33235_NarrativeAmountConsistency(),

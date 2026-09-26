@@ -79,7 +79,9 @@ from src.schemas.document_profile import DocumentProfile
 #: checker 从 pending_checkers 转为真实 checker（V33-NARRATIVE-INDICATOR-REPEAT）。
 #: v6（2026-09-25 WP4-D）：OBL-TREND-ZERO-BASE 的实现缺口补齐——
 #: checker 从 pending_checkers 转为真实 checker（CMM-007，budget+final 通用）。
-OBLIGATION_CATALOG_VERSION = "obligations-v6"
+#: v7（2026-09-25 WP4-E）：OBL-TREND-COMPLETION-RATE 的实现缺口补齐——
+#: checker 从 pending_checkers 转为真实 checker（V33-TREND-COMPLETION-RATE）。
+OBLIGATION_CATALOG_VERSION = "obligations-v7"
 
 # ---- 实例状态 ---------------------------------------------------------------
 
@@ -657,9 +659,10 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         title="预算完成率分母口径与复算",
         report_kinds=_FINAL_ONLY,
         # AGENTS.md R004：年初预算为 0 却写"完成年初预算的 X%"属明显口径错误。
-        pending_checkers=("V33-TREND-COMPLETION-RATE",),
+        # WP4-E 补齐 V33-234 漏检的三类形态：无万元后缀/元单位的零分母披露、
+        # 「完成全年/调整预算」的分母身份切换复算、条目内多候选预算歧义。
+        checkers_by_kind=_final("V33-TREND-COMPLETION-RATE"),
         basis="预算完成率须明确分母口径，且分母为 0 时不得给出完成率",
-        gap_note="缺少预算完成率的分母口径校验与复算（R004 类缺陷）",
     ),
     # ---- 披露与表达 ----
     Obligation(
