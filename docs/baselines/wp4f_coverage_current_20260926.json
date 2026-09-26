@@ -1,0 +1,729 @@
+{
+  "baseline_version": 1,
+  "source": {
+    "commit": "4722d86c12371c22bf4258b5e7c51526745beecd",
+    "branch": "fix/obligation-percent-unit",
+    "dirty": "false"
+  },
+  "profile_resolver_version": "document-profile-v1",
+  "obligation_catalog_version": "obligations-v8",
+  "obligation_catalog_fingerprint": "b449497a33d4826f",
+  "catalog_self_check": [],
+  "unimplemented_checks": [
+    {
+      "obligation_id": "OBL-SG-COMPLETION",
+      "group_id": "SAN_GONG",
+      "group_title": "三公经费",
+      "title": "三公经费预算数与决算数对比及说明",
+      "pending_checkers": "V33-SG-COMPLETION",
+      "report_kinds": "final",
+      "basis": "AGENTS.md 决算必查勾稽 D-007：预算数与决算数对比须与说明一致",
+      "gap_note": "缺少三公经费预算数/决算数对比与说明一致性检查"
+    },
+    {
+      "obligation_id": "OBL-PERF-PHASE-AMOUNT",
+      "group_id": "PERFORMANCE",
+      "group_title": "绩效披露",
+      "title": "绩效阶段金额与项目集合口径说明",
+      "pending_checkers": "BUD-PERF-PHASE-AMOUNT",
+      "report_kinds": "budget",
+      "basis": "绩效阶段金额与项目集合口径不一致时须给出解释，不得直接判等",
+      "gap_note": "缺少绩效阶段金额与项目集合/预算版本口径的说明性校验"
+    }
+  ],
+  "kinds": {
+    "budget": {
+      "rule_registry": {
+        "count": 24,
+        "fingerprint": "60fe7df3d98b7762"
+      },
+      "structural_ceiling": {
+        "gap_obligation_total": 1,
+        "implemented_obligation_total": 22,
+        "ceiling_rate": 0.9565
+      },
+      "coverage": {
+        "catalog_version": "obligations-v8",
+        "catalog_fingerprint": "b449497a33d4826f",
+        "applicable_total": 23,
+        "completed_total": 0,
+        "not_applicable_total": 0,
+        "unresolved_total": 23,
+        "blocking_total": 22,
+        "coverage_rate": 0.0,
+        "auto_completion_rate": 0.0435,
+        "by_reason": {
+          "not_executed": 21,
+          "not_implemented": 1,
+          "ai_not_run": 1
+        },
+        "by_reason_labels": {
+          "not_executed": "未执行",
+          "not_implemented": "尚未实现",
+          "ai_not_run": "语义模型未执行"
+        },
+        "by_group": [
+          {
+            "group_id": "DOC_STRUCTURE",
+            "group_title": "文档结构与必备要素",
+            "applicable": 2,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 2
+          },
+          {
+            "group_id": "CORE_TABLES",
+            "group_title": "核心表完整性",
+            "applicable": 1,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 1
+          },
+          {
+            "group_id": "TABLE_INTERNAL",
+            "group_title": "表内关系",
+            "applicable": 3,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 3
+          },
+          {
+            "group_id": "TABLE_CROSS",
+            "group_title": "表间关系",
+            "applicable": 1,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 1
+          },
+          {
+            "group_id": "TABLE_TEXT",
+            "group_title": "表文关系",
+            "applicable": 2,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 2
+          },
+          {
+            "group_id": "NARRATIVE",
+            "group_title": "文内关系",
+            "applicable": 2,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 2
+          },
+          {
+            "group_id": "RATIO_TREND",
+            "group_title": "比例与变动",
+            "applicable": 3,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 3
+          },
+          {
+            "group_id": "DISCLOSURE",
+            "group_title": "披露与表达",
+            "applicable": 6,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 6
+          },
+          {
+            "group_id": "SAN_GONG",
+            "group_title": "三公经费",
+            "applicable": 1,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 1
+          },
+          {
+            "group_id": "PERFORMANCE",
+            "group_title": "绩效披露",
+            "applicable": 2,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 2
+          }
+        ],
+        "instances": [
+          {
+            "obligation_id": "OBL-STRUCT-COVER",
+            "group_id": "DOC_STRUCTURE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-STRUCT-BUDGET-TABLES",
+            "group_id": "CORE_TABLES",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT",
+            "group_id": "DISCLOSURE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-STRUCT-TERMINOLOGY",
+            "group_id": "DISCLOSURE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-STRUCT-PLACEHOLDER",
+            "group_id": "DISCLOSURE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-STRUCT-PUNCTUATION",
+            "group_id": "DISCLOSURE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-INTERNAL-T1-BUDGET",
+            "group_id": "TABLE_INTERNAL",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-INTERNAL-T3-BUDGET-TOTAL",
+            "group_id": "TABLE_INTERNAL",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-INTERNAL-DETAIL-ROW",
+            "group_id": "TABLE_INTERNAL",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-CROSS-BUDGET-TABLES",
+            "group_id": "TABLE_CROSS",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-TXT-BUDGET",
+            "group_id": "TABLE_TEXT",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-TXT-BUDGET-NAME",
+            "group_id": "TABLE_TEXT",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-NARRATIVE-BUDGET-AMOUNT",
+            "group_id": "NARRATIVE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-NARRATIVE-CODE-NAME",
+            "group_id": "NARRATIVE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-NARRATIVE-TOC",
+            "group_id": "DOC_STRUCTURE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-TREND-DIRECTION",
+            "group_id": "RATIO_TREND",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-TREND-COMPARATIVE-LOGIC",
+            "group_id": "RATIO_TREND",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-TREND-ZERO-BASE",
+            "group_id": "RATIO_TREND",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-DISCLOSURE-PERCENT-UNIT",
+            "group_id": "DISCLOSURE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-SG-BUDGET-TABLE",
+            "group_id": "SAN_GONG",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-PERF-TARGET",
+            "group_id": "PERFORMANCE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-PERF-PHASE-AMOUNT",
+            "group_id": "PERFORMANCE",
+            "status": "not_implemented",
+            "reason": "not_implemented",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-AI-SEMANTIC-REVIEW",
+            "group_id": "DISCLOSURE",
+            "status": "ai_not_run",
+            "reason": "ai_not_run",
+            "blocks_gate": false
+          }
+        ]
+      }
+    },
+    "final": {
+      "rule_registry": {
+        "count": 64,
+        "fingerprint": "08c4028a39e89d38"
+      },
+      "structural_ceiling": {
+        "gap_obligation_total": 1,
+        "implemented_obligation_total": 43,
+        "ceiling_rate": 0.9773
+      },
+      "coverage": {
+        "catalog_version": "obligations-v8",
+        "catalog_fingerprint": "b449497a33d4826f",
+        "applicable_total": 44,
+        "completed_total": 0,
+        "not_applicable_total": 0,
+        "unresolved_total": 44,
+        "blocking_total": 43,
+        "coverage_rate": 0.0,
+        "auto_completion_rate": 0.0227,
+        "by_reason": {
+          "not_executed": 42,
+          "not_implemented": 1,
+          "ai_not_run": 1
+        },
+        "by_reason_labels": {
+          "not_executed": "未执行",
+          "not_implemented": "尚未实现",
+          "ai_not_run": "语义模型未执行"
+        },
+        "by_group": [
+          {
+            "group_id": "DOC_STRUCTURE",
+            "group_title": "文档结构与必备要素",
+            "applicable": 1,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 1
+          },
+          {
+            "group_id": "CORE_TABLES",
+            "group_title": "核心表完整性",
+            "applicable": 1,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 1
+          },
+          {
+            "group_id": "TABLE_INTERNAL",
+            "group_title": "表内关系",
+            "applicable": 7,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 7
+          },
+          {
+            "group_id": "TABLE_CROSS",
+            "group_title": "表间关系",
+            "applicable": 8,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 8
+          },
+          {
+            "group_id": "TABLE_TEXT",
+            "group_title": "表文关系",
+            "applicable": 8,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 8
+          },
+          {
+            "group_id": "NARRATIVE",
+            "group_title": "文内关系",
+            "applicable": 3,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 3
+          },
+          {
+            "group_id": "RATIO_TREND",
+            "group_title": "比例与变动",
+            "applicable": 4,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 4
+          },
+          {
+            "group_id": "DISCLOSURE",
+            "group_title": "披露与表达",
+            "applicable": 6,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 6
+          },
+          {
+            "group_id": "SAN_GONG",
+            "group_title": "三公经费",
+            "applicable": 6,
+            "completed": 0,
+            "not_applicable": 0,
+            "unresolved": 6
+          }
+        ],
+        "instances": [
+          {
+            "obligation_id": "OBL-STRUCT-COVER",
+            "group_id": "DOC_STRUCTURE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-STRUCT-NINE-TABLES",
+            "group_id": "CORE_TABLES",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT",
+            "group_id": "DISCLOSURE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-STRUCT-TERMINOLOGY",
+            "group_id": "DISCLOSURE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-STRUCT-PLACEHOLDER",
+            "group_id": "DISCLOSURE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-STRUCT-PUNCTUATION",
+            "group_id": "DISCLOSURE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-STRUCT-NUMBER-VALIDITY",
+            "group_id": "TABLE_INTERNAL",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-INTERNAL-T1-BALANCE",
+            "group_id": "TABLE_INTERNAL",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-INTERNAL-T2-TOTAL",
+            "group_id": "TABLE_INTERNAL",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-INTERNAL-T3-TOTAL",
+            "group_id": "TABLE_INTERNAL",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-INTERNAL-BASIC-EXPENSE",
+            "group_id": "TABLE_INTERNAL",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-INTERNAL-DETAIL-ROW",
+            "group_id": "TABLE_INTERNAL",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-INTERNAL-TABLE-TOTAL",
+            "group_id": "TABLE_INTERNAL",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-CROSS-T1-T2",
+            "group_id": "TABLE_CROSS",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-CROSS-T1-T3",
+            "group_id": "TABLE_CROSS",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-CROSS-T4-T5",
+            "group_id": "TABLE_CROSS",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-CROSS-T5-T6",
+            "group_id": "TABLE_CROSS",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-CROSS-T2-T4",
+            "group_id": "TABLE_CROSS",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-CROSS-FISCAL-TOTAL",
+            "group_id": "TABLE_CROSS",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-CROSS-T1-IDENTITY",
+            "group_id": "TABLE_CROSS",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-CROSS-SAN-GONG-ECON",
+            "group_id": "TABLE_CROSS",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-TXT-T1",
+            "group_id": "TABLE_TEXT",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-TXT-T2",
+            "group_id": "TABLE_TEXT",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-TXT-T3",
+            "group_id": "TABLE_TEXT",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-TXT-T4",
+            "group_id": "TABLE_TEXT",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-TXT-T5",
+            "group_id": "TABLE_TEXT",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-TXT-T6",
+            "group_id": "TABLE_TEXT",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-TXT-T7",
+            "group_id": "TABLE_TEXT",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-TXT-FUND-DETAIL",
+            "group_id": "TABLE_TEXT",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-NARRATIVE-AMOUNT",
+            "group_id": "NARRATIVE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-NARRATIVE-CODE-NAME",
+            "group_id": "NARRATIVE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-NARRATIVE-INDICATOR-REPEAT",
+            "group_id": "NARRATIVE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-TREND-DIRECTION",
+            "group_id": "RATIO_TREND",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-TREND-COMPARATIVE-LOGIC",
+            "group_id": "RATIO_TREND",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-TREND-ZERO-BASE",
+            "group_id": "RATIO_TREND",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-TREND-COMPLETION-RATE",
+            "group_id": "RATIO_TREND",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-DISCLOSURE-PERCENT-UNIT",
+            "group_id": "DISCLOSURE",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-SG-DISCLOSURE",
+            "group_id": "SAN_GONG",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-SG-TOTAL",
+            "group_id": "SAN_GONG",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-SG-ITEMS",
+            "group_id": "SAN_GONG",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-SG-COMPLETION",
+            "group_id": "SAN_GONG",
+            "status": "not_implemented",
+            "reason": "not_implemented",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-SG-YOY",
+            "group_id": "SAN_GONG",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-SG-TABLE-TEXT",
+            "group_id": "SAN_GONG",
+            "status": "not_executed",
+            "reason": "not_executed",
+            "blocks_gate": true
+          },
+          {
+            "obligation_id": "OBL-AI-SEMANTIC-REVIEW",
+            "group_id": "DISCLOSURE",
+            "status": "ai_not_run",
+            "reason": "ai_not_run",
+            "blocks_gate": false
+          }
+        ]
+      }
+    }
+  }
+}

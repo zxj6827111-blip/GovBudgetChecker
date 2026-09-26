@@ -81,7 +81,10 @@ from src.schemas.document_profile import DocumentProfile
 #: checker 从 pending_checkers 转为真实 checker（CMM-007，budget+final 通用）。
 #: v7（2026-09-25 WP4-E）：OBL-TREND-COMPLETION-RATE 的实现缺口补齐——
 #: checker 从 pending_checkers 转为真实 checker（V33-TREND-COMPLETION-RATE）。
-OBLIGATION_CATALOG_VERSION = "obligations-v7"
+#: v8（2026-09-26 WP4-F）：OBL-DISCLOSURE-PERCENT-UNIT 的实现缺口补齐——
+#: checker 从 pending_checkers 转为真实 checker（V33-DISCLOSURE-PERCENT-UNIT，
+#: budget+final 通用，common registry）。
+OBLIGATION_CATALOG_VERSION = "obligations-v8"
 
 # ---- 实例状态 ---------------------------------------------------------------
 
@@ -670,10 +673,15 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         group_id=GROUP_DISCLOSURE,
         title="百分比写法完整（不得漏百分号）",
         report_kinds=_BOTH,
-        # 本轮样张真实漏报："占76.23"缺少百分号未被报告。
-        pending_checkers=("V33-DISCLOSURE-PERCENT-UNIT",),
+        # 样张真实漏报（Y08，宜川 P28）：「城乡社区支出(类)15411.43 万元，
+        # 占 76.23」缺百分号，同枚举句其余 8 项结构占比全部带 %，当时系统
+        # 未报告。WP4-F 补齐：占/占比/比重/比例四类占比谓词 + 数值后缺
+        # 百分比单位（%/％/百分之）的披露形态；占地/占用、非百分比单位、
+        # 数字错位串、中文百分数、个百分点 fail-closed 排除。
+        checkers_by_kind=_both(
+            ("V33-DISCLOSURE-PERCENT-UNIT",), ("V33-DISCLOSURE-PERCENT-UNIT",)
+        ),
         basis="占比表述必须带百分号，否则口径不明",
-        gap_note="缺少'占 XX.XX'漏百分号等百分比写法完整性检查",
     ),
     Obligation(
         obligation_id="OBL-SG-DISCLOSURE",
