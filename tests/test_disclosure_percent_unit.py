@@ -403,6 +403,112 @@ def test_line_end_predicate_before_plain_number_row_is_fail_closed():
     assert issues == []
 
 
+# ---------------------------------------------------------------------------
+# R2 P1 整改：occurrence 级 dedup（同页同谓词同数值的不同 occurrence 各自成
+# finding，只有同一物理 occurrence 的主扫描/跨行双命中才合并）
+# ---------------------------------------------------------------------------
+
+
+def test_r2_same_page_same_value_two_occurrences_both_report():
+    """任务 §七（重复值测试 A）：同页两处「占76.23」→ 2 findings，
+    source location 与 evidence span 均不同，不得被粗去重吞掉第二条。"""
+    issues = _run(
+        "货物类支出占76.23，相关情况另述。\n服务类支出占76.23，相关情况另述。"
+    )
+    assert len(issues) == 2, [getattr(i, "message", "") for i in issues]
+    first, second = issues
+    for issue in issues:
+        assert issue.location["numeric_text"] == "76.23"
+        assert issue.location["predicate"] == "占"
+    assert first.location["source_start"] != second.location["source_start"]
+    assert first.location["source_end"] != second.location["source_end"]
+    assert first.evidence_text != second.evidence_text
+
+
+def test_r2_same_page_same_value_different_sections_both_report():
+    """任务 §八（重复值测试 B）：同页不同章节的两处「占76.23」→ 2 findings，
+    section 各自归属，不得合并。"""
+    page = (
+        "一、政府采购情况说明\n货物支出占76.23，相关情况另述。\n"
+        "二、资产情况说明\n固定资产占76.23，相关情况另述。"
+    )
+    issues = _run(page)
+    assert len(issues) == 2, [getattr(i, "message", "") for i in issues]
+    sections = {issue.location["section"] for issue in issues}
+    assert sections == {"一、政府采购情况说明", "二、资产情况说明"}
+    starts = [issue.location["source_start"] for issue in issues]
+    assert starts == sorted(starts)
+
+
+def test_r2_same_page_same_composite_predicate_two_occurrences():
+    """任务 §九（重复值测试 C）：同页两处「占比76.23」→ 2 findings，
+    复合谓词同样不被粗去重。"""
+    issues = _run("货物支出占比76.23。\n服务支出占比76.23。")
+    assert len(issues) == 2
+    assert {issue.location["predicate"] for issue in issues} == {"占比"}
+    assert (
+        issue.location["source_start"] for issue in issues
+    )
+
+
+def test_r2_main_scan_and_line_break_same_occurrence_stay_merged():
+    """任务 §六：主扫描与跨行补绑定命中同一物理 occurrence 时仍只 1 finding
+    （单通道后由匹配唯一性结构性保证，测试锁死防回归）。"""
+    issues = _run("货物类支出占\n76.23，其他支出另述。")
+    assert len(issues) == 1
+    assert issues[0].location["line_break"] is True
+    assert issues[0].location["source_end"] > issues[0].location["source_start"]
+
+
+# ---------------------------------------------------------------------------
+# R2 P1 整改：line-break finding 的 section 必须 occurrence-local
+# ---------------------------------------------------------------------------
+
+
+def test_r2_section_a_line_break_section_is_occurrence_local():
+    """任务 §十四（section test A）：line-break 命中在（一）内、页尾还有
+    （二）→ section 必须是（一），绝不能取整页最后一个章节。"""
+    page = (
+        "（一）政府采购情况说明\n货物支出占\n76.23，相关情况另述。\n"
+        "（二）资产情况说明\n固定资产管理情况正常。"
+    )
+    issues = _run(page)
+    assert len(issues) == 1
+    assert issues[0].location["section"] == "（一）政府采购情况说明"
+    assert issues[0].location["line_break"] is True
+
+
+def test_r2_section_b_two_line_break_occurrences_keep_own_sections():
+    """任务 §十五（section test B）：同页两个 line-break occurrence 分属
+    （一）（二）→ 2 findings，各自 section 不串。"""
+    page = (
+        "（一）政府采购情况说明\n货物支出占\n76.23，相关情况另述。\n"
+        "（二）资产情况说明\n固定资产占\n55.50，相关情况另述。"
+    )
+    issues = _run(page)
+    assert len(issues) == 2, [getattr(i, "message", "") for i in issues]
+    by_value = {issue.location["numeric_text"]: issue for issue in issues}
+    assert by_value["76.23"].location["section"] == "（一）政府采购情况说明"
+    assert by_value["55.50"].location["section"] == "（二）资产情况说明"
+
+
+def test_r2_section_c_no_heading_before_candidate_stays_none():
+    """任务 §十六（section test C）：candidate 之前无章节标题 → section=None，
+    不得借用 candidate 之后的（一）章节。"""
+    page = "货物支出占\n76.23，情况另述。\n（一）后续章节说明\n其它内容正常。"
+    issues = _run(page)
+    assert len(issues) == 1
+    assert issues[0].location["section"] is None
+
+
+def test_r2_same_line_section_is_also_occurrence_local():
+    """同行命中的 section 同样只向前取（candidate 前的标题），页尾章节不回溯。"""
+    page = "（一）政府采购情况说明\n货物支出占76.23，情况另述。\n（二）资产情况说明"
+    issues = _run(page)
+    assert len(issues) == 1
+    assert issues[0].location["section"] == "（一）政府采购情况说明"
+
+
 def test_no_text_defers_instead_of_passing():
     """全文档无文本 → RuleDeferred（insufficient_data），不得静默通过。"""
     doc = build_document(path="empty.pdf", page_texts=["", ""], page_tables=[], filesize=0)

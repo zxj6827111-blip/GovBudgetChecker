@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from .amount_math import compute_dynamic_envelope
 from .budget_rules import find_budget_anchors
@@ -22,7 +22,10 @@ from .rules_v33 import (
     _txt_fund_page_for,
 )
 from src.services.document_profile_resolver import resolve_report_kind_from_path
-from src.utils.narration import merge_soft_wrapped_lines as _merge_soft_wrapped_lines_shared
+from src.utils.narration import (
+    _NEW_PARAGRAPH_RE,
+    merge_soft_wrapped_lines as _merge_soft_wrapped_lines_shared,
+)
 
 _AMOUNT = r"([0-9][0-9,]*\.?[0-9]*)"
 
@@ -1421,13 +1424,22 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
 
 _WP4F_OBLIGATION_ID = "OBL-DISCLOSURE-PERCENT-UNIT"
 
-#: 占比谓词 + 数值。复合谓词（占比/比重/比例）先于单字「占」；「占」以负向
-#: 前瞻排除「占地/占用」复合词（面积/金额语义，AGENTS.md 决算占比口径之外的
-#: 高频误报源）。谓词与数值间容忍「为/是/达到/达」及 PDF 软换行空白。
+#: 谓词与数值之间的空隙：行内空白，或**恰一次**换行（PDF 软换行把「占」留在
+#: 行尾、数值换到次行行首，任务 §二十二）。空行（两个换行）不跨越——与共享
+#: merge 纪律的空行断段、跨页 fail-closed 语义对齐。
+_WP4F_GAP = r"(?:[ \t]*\n)?[ \t]*"
+
+#: 占比谓词 + 数值（page 级单通道）。复合谓词（占比/比重/比例）先于单字
+#: 「占」；「占」以负向前瞻排除「占地/占用」复合词（面积/金额语义）。谓词
+#: 与数值间容忍「为/是/达到/达」（自身也可跨一次软换行）与空隙。在页面原文
+#: 上扫描：每个匹配即一个物理 occurrence，identity = (page, start, end)。
 _WP4F_PRED_RE = re.compile(
     r"(?P<pred>占比|比重|比例|占(?![地用]))"
-    r"(?:\s*(?:为|是|达到|达)\s*)?"
-    r"\s*(?P<num>\d+(?:\.\d+)?)"
+    + _WP4F_GAP
+    + r"(?:(?:为|是|达到|达)"
+    + _WP4F_GAP
+    + r")?"
+    + r"(?P<num>\d+(?:\.\d+)?)"
 )
 
 #: 数值后百分比单位在场（合规）：ASCII %、全角 ％、中文「百分之」、
@@ -1449,24 +1461,26 @@ _WP4F_NON_PCT_UNIT_RE = re.compile(
     r"|号|倍|折|成|岁)"
 )
 
-#: 中文序号章节标题（section 定位用，仅作证据辅助；定位不到不伪造）。
+#: 中文序号章节标题（**行首锚**，section 定位用）：每个 candidate 只允许
+#: 向前取自己 source_start 之前最近的标题（任务 §十二/§十三），不得借用
+#: 后文或整页最后一个章节；定位不到不伪造（None）。alternation 长词在前，
+#: 避免「…情况说明」被截断成「…情况」。
 _WP4F_SECTION_HEAD_RE = re.compile(
-    r"(?:[一二三四五六七八九十]{1,3}\s*、|[(（][一二三四五六七八九十\d]{1,3}[)）])"
-    r"[^。；，,]{2,45}?(?:情况|说明|分析)"
+    r"^(?:[一二三四五六七八九十]{1,3}\s*、|[(（][一二三四五六七八九十\d]{1,3}[)）])"
+    r"[^。；，,]{2,45}?(?:情况说明|情况|说明|分析)",
+    re.M,
 )
 
-#: 行尾谓词：PDF 软换行把「占」留在行尾、数值换到次行行首的形态
-#: （任务 §二十二）。行尾以「占地/占用」结尾时行尾字符是地/用，不匹配。
+#: 行尾谓词（跨行防线的通道归属判定用）：数字行上一非空行以占比谓词结尾，
+#: 才是旧 line-break 补扫描通道的形态。
 _WP4F_LINE_END_PRED_RE = re.compile(
-    r"(?:占比|比重|比例|占)(?:\s*(?:为|是|达到|达)\s*)?$"
+    r"(?:占比|比重|比例|占)(?:[ \t]*(?:为|是|达到|达)[ \t]*)?$"
 )
-
-#: 次行行首数值。
-_WP4F_LINE_START_NUM_RE = re.compile(r"^\s*(?P<num>\d+(?:\.\d+)?)")
 
 #: 纯数值行（只含数字/小数点/千分位/百分号/空白/句读）：表格提取层的
-#: 表头行与数据行线性化形态（财政局 2024 P21 实测）——行尾谓词与纯
-#: 数值行之间不做绑定，fail-closed。
+#: 表头行与数据行线性化形态（财政局 2024 P21 实测）——仅在「跨行 + 数字行
+#: 是条目形态（merge 必断段，主扫描不可能命中）+ 上一非空行尾含谓词」的
+#: line-break 通道形态下 fail-closed，不挡同行主扫描形态。
 _WP4F_PLAIN_NUMBER_LINE_RE = re.compile(r"^[\d.,，%\s；;]+$")
 
 #: 证据片段前后保留的上下文字符数。
@@ -1477,16 +1491,51 @@ def _wp4f_norm(value: str) -> str:
     return re.sub(r"\s+", "", value or "")
 
 
+class _Wp4fPageLine(NamedTuple):
+    """页面物理行：raw 起止偏移 + strip 后内容及其在原文中的起始偏移。"""
+
+    start: int
+    end: int
+    stripped: str
+    stripped_start: int
+
+
+def _wp4f_page_lines(page_text: str) -> List[_Wp4fPageLine]:
+    """按 keepends 切物理行并保留原文偏移（occurrence 定位与 section 回溯共用）。"""
+    lines: List[_Wp4fPageLine] = []
+    cursor = 0
+    for raw in page_text.splitlines(True):
+        start = cursor
+        cursor += len(raw)
+        stripped = raw.strip()
+        lines.append(
+            _Wp4fPageLine(
+                start=start,
+                end=cursor,
+                stripped=stripped,
+                stripped_start=start + (len(raw) - len(raw.lstrip())),
+            )
+        )
+    return lines
+
+
 class R33DisclosurePercentUnit(Rule):
     """百分比写法完整性：占比谓词 + 数值后缺百分比单位。
 
-    只绑定「占/占比/比重/比例」谓词与其后紧邻数值（同一软换行合并段落内，
-    段落边界即句读边界——跨页由逐页处理天然 fail-closed）。数值后：
-    %/％/‰/百分之/个百分点 在场 → 合规；紧跟另一数字或千分位 → 列错位
-    伪绑定 fail-closed；明确非百分比单位 → 金额/面积/数量披露，0 finding；
-    其余（句读/段尾/普通中文接续）→ 缺百分号 finding。数值 < 1 的小数比例
-    形态无法证明作者意图，文案只说「披露口径不明确」，不得断言换算结果。
-    76.234% 等精度问题归 V33-232（百分比两位小数精度），本规则不重叠。
+    在页面原文上单通道扫描（R1 的 merge 段主扫描 + line-break 补扫描双通道
+    在 R2 合并：page 级 pattern 的空隙容忍"行内空白或恰一次软换行"，其匹配
+    集与旧双通道的物理 occurrence 集合一一对应），每个匹配即一个物理
+    occurrence，identity = (page, source_start, source_end)——同页同谓词
+    同数值的不同 occurrence 各自成 finding，不会互相吞并（R2 P1 整改）。
+    后缀判定：%/％/‰/百分之/个百分点 在场 → 合规；紧跟另一数字或千分位 →
+    列错位伪绑定 fail-closed；明确非百分比单位 → 金额/面积/数量披露，0
+    finding；数值所在行尾结束（rest 为空）时向后看下一个非空行——条目形态
+    （merge 必断段）或无次行 → finding，行首数字 → 延续 skip，其余按次行
+    开头判定——精确复刻旧 merge 段内 rest 的段边界语义。跨行形态且数字行
+    是条目形态时叠加纯数值行防线（表格线性化 fail-closed，仅此通道，不挡
+    同行形态）。数值 < 1 的小数比例形态无法证明作者意图，文案只说「披露
+    口径不明确」，不得断言换算结果。76.234% 等精度问题归 V33-232，本规则
+    不重叠。
     """
 
     code, severity = "V33-DISCLOSURE-PERCENT-UNIT", "info"
@@ -1505,68 +1554,131 @@ class R33DisclosurePercentUnit(Rule):
         fiscal_year = _resolve_fiscal_year(doc, ())
 
         issues: List[Issue] = []
-        seen: set = set()
         for page_idx, page_text in enumerate(page_texts, start=1):
-            paragraphs = _merge_soft_wrapped_lines(page_text)
-            section: Optional[str] = None
-            for para in paragraphs:
-                head = _WP4F_SECTION_HEAD_RE.search(para)
-                if head:
-                    section = _wp4f_norm(head.group())
-                for match in _WP4F_PRED_RE.finditer(para):
-                    issue = self._evaluate(
-                        doc, para, match, page_idx, section, fiscal_year,
-                        line_break=False,
-                    )
-                    if issue is not None and self._dedup_key(issue) not in seen:
-                        seen.add(self._dedup_key(issue))
-                        issues.append(issue)
-            for issue in self._evaluate_line_break_hits(
-                doc, page_text, page_idx, section, fiscal_year
-            ):
-                if self._dedup_key(issue) not in seen:
-                    seen.add(self._dedup_key(issue))
+            if not page_text.strip():
+                continue
+            lines = _wp4f_page_lines(page_text)
+            headings = [
+                (head.start(), _wp4f_norm(head.group()))
+                for head in _WP4F_SECTION_HEAD_RE.finditer(page_text)
+            ]
+            for match in _WP4F_PRED_RE.finditer(page_text):
+                issue = self._evaluate(
+                    doc, page_text, lines, headings, match, page_idx, fiscal_year
+                )
+                if issue is not None:
                     issues.append(issue)
         return issues
 
     @staticmethod
-    def _dedup_key(issue: Issue) -> tuple:
-        location = issue.location or {}
-        return (
-            location.get("page"),
-            location.get("predicate"),
-            location.get("numeric_text"),
-        )
+    def _section_for(
+        headings: List[Tuple[int, str]], position: int
+    ) -> Optional[str]:
+        """occurrence 之前最近的行首章节标题（严格 start < position，只向前；
+        找不到为 None，不借用后文或整页最后一个标题——任务 §十二/§十三）。"""
+        result: Optional[str] = None
+        for start, text in headings:
+            if start < position:
+                result = text
+            else:
+                break
+        return result
+
+    @staticmethod
+    def _line_at(lines: List[_Wp4fPageLine], position: int) -> int:
+        """position 所在物理行下标（lines 按 start 升序，空页不调用）。"""
+        low, high = 0, len(lines) - 1
+        while low < high:
+            mid = (low + high + 1) // 2
+            if lines[mid].start <= position:
+                low = mid
+            else:
+                high = mid - 1
+        return low
+
+    @staticmethod
+    def _next_nonempty_line(
+        lines: List[_Wp4fPageLine], index: int
+    ) -> Optional[_Wp4fPageLine]:
+        for line in lines[index + 1:]:
+            if line.stripped:
+                return line
+        return None
 
     def _evaluate(
         self,
         doc: Document,
-        para: str,
+        page_text: str,
+        lines: List[_Wp4fPageLine],
+        headings: List[Tuple[int, str]],
         match: Any,
         page: int,
-        section: Optional[str],
         fiscal_year: Optional[int],
-        line_break: bool,
     ) -> Optional[Issue]:
-        rest = para[match.end():]
-        verdict = self._classify(rest)
-        if verdict == "compliant":
-            return None
-        if verdict == "skip":
+        num_start = match.start("num")
+        num_end = match.end("num")
+        gap_text = match.group(0)[: num_start - match.start()]
+        crossed = "\n" in gap_text
+
+        line_idx = self._line_at(lines, num_start)
+        line = lines[line_idx]
+        stripped = line.stripped
+        rest_inline = stripped[num_end - line.stripped_start:]
+
+        # 跨行 + 数字行是条目形态（merge 必断段，主扫描通道不可能命中）+
+        # 上一非空行尾含谓词 = 旧 line-break 通道形态：叠加纯数值行防线。
+        if (
+            crossed
+            and _NEW_PARAGRAPH_RE.match(stripped)
+            and _WP4F_PLAIN_NUMBER_LINE_RE.match(stripped)
+        ):
+            prev_line = next(
+                (
+                    item
+                    for item in reversed(lines[:line_idx])
+                    if item.stripped
+                ),
+                None,
+            )
+            if prev_line is not None and _WP4F_LINE_END_PRED_RE.search(
+                prev_line.stripped
+            ):
+                return None  # 表格线性化形态，fail-closed
+
+        if rest_inline.strip():
+            verdict = self._classify(rest_inline)
+        else:
+            # 数值在行尾结束：后缀语义延伸到下一个非空行的开头——
+            # 条目形态即 merge 段边界（旧段内 rest 到此为止）→ finding；
+            # 行首数字是数字串延续（列错位）→ skip；其余按次行开头判定。
+            next_line = self._next_nonempty_line(lines, line_idx)
+            if next_line is None or _NEW_PARAGRAPH_RE.match(next_line.stripped):
+                verdict = "finding"
+            elif next_line.stripped[:1].isdigit() or _WP4F_DIGIT_RUN_RE.match(
+                next_line.stripped
+            ):
+                verdict = "skip"
+            else:
+                verdict = self._classify(next_line.stripped)
+        if verdict != "finding":
             return None
 
-        predicate = _wp4f_norm(match.group("pred"))
-        numeric_text = _wp4f_norm(match.group("num"))
+        source_start = match.start()
+        source_end = match.end()
         return self._build_issue(
             doc,
-            span=para[max(0, match.start() - _WP4F_SPAN_CONTEXT):match.end() + _WP4F_SPAN_CONTEXT],
-            predicate=predicate,
-            numeric_text=numeric_text,
+            span=page_text[
+                max(0, source_start - _WP4F_SPAN_CONTEXT):
+                source_end + _WP4F_SPAN_CONTEXT
+            ],
+            predicate=_wp4f_norm(match.group("pred")),
+            numeric_text=_wp4f_norm(match.group("num")),
             page=page,
-            section=section,
+            section=self._section_for(headings, source_start),
             fiscal_year=fiscal_year,
-            pos=match.start(),
-            line_break=line_break,
+            source_start=source_start,
+            source_end=source_end,
+            line_break=crossed,
         )
 
     @staticmethod
@@ -1581,53 +1693,6 @@ class R33DisclosurePercentUnit(Rule):
             return "skip"  # 明确非百分比单位：金额/面积/数量/时长披露
         return "finding"
 
-    def _evaluate_line_break_hits(
-        self,
-        doc: Document,
-        page_text: str,
-        page: int,
-        section: Optional[str],
-        fiscal_year: Optional[int],
-    ) -> List[Issue]:
-        """行尾谓词 + 次行行首数值的跨行绑定（软换行形态，任务 §二十二）。
-
-        项目共享 merge 纪律把行首「76.23」判为新段起点（条目形态），主扫描
-        在该形态下 fail-closed；这里用原始行结构补绑：行尾谓词 + 次行行首
-        数值、且次行不是纯数值行（表格线性化 fail-closed）。绑定后仍走同一
-        后缀分类，不产生独立判定口径。
-        """
-        lines = [line.strip() for line in page_text.splitlines()]
-        issues: List[Issue] = []
-        for index in range(len(lines) - 1):
-            tail = lines[index]
-            nxt = lines[index + 1]
-            if not tail or not nxt:
-                continue
-            if not _WP4F_LINE_END_PRED_RE.search(tail):
-                continue
-            num_match = _WP4F_LINE_START_NUM_RE.match(nxt)
-            if not num_match:
-                continue
-            if _WP4F_PLAIN_NUMBER_LINE_RE.match(nxt):
-                continue  # 表格线性化形态，fail-closed
-            verdict = self._classify(nxt[num_match.end():])
-            if verdict != "finding":
-                continue
-            issues.append(
-                self._build_issue(
-                    doc,
-                    span=f"{tail[-_WP4F_SPAN_CONTEXT:]}\n{nxt[:num_match.end() + _WP4F_SPAN_CONTEXT]}",
-                    predicate=_wp4f_norm(_WP4F_LINE_END_PRED_RE.search(tail).group()),
-                    numeric_text=_wp4f_norm(num_match.group("num")),
-                    page=page,
-                    section=section,
-                    fiscal_year=fiscal_year,
-                    pos=-1,
-                    line_break=True,
-                )
-            )
-        return issues
-
     def _build_issue(
         self,
         doc: Document,
@@ -1637,13 +1702,18 @@ class R33DisclosurePercentUnit(Rule):
         page: int,
         section: Optional[str],
         fiscal_year: Optional[int],
-        pos: int,
+        source_start: int,
+        source_end: int,
         line_break: bool,
     ) -> Issue:
         value = Decimal(numeric_text)
         location: Dict[str, Any] = {
             "page": page,
-            "pos": pos,
+            "pos": source_start,
+            # 物理 occurrence 身份（page_text 坐标系）：dedup / 证据定位 /
+            # section 解析共用同一身份，不再维护独立的位置推断（任务 §十八）。
+            "source_start": source_start,
+            "source_end": source_end,
             "obligation_id": _WP4F_OBLIGATION_ID,
             "predicate": predicate,
             "numeric_text": numeric_text,

@@ -1,13 +1,85 @@
 # WP4-F：百分比写法完整性（V33-DISCLOSURE-PERCENT-UNIT）
 
-- 日期：2026-09-26（R1 交付）
+- 日期：2026-09-26（R1 交付）/ 2026-09-26（R2 独立评审整改）
 - 分支：`fix/obligation-percent-unit`（基线 = main 6538e36，即 PR #54 WP4-E 合并后）
 - obligation：`OBL-DISCLOSURE-PERCENT-UNIT`（GROUP_DISCLOSURE，budget + final）
 - checker：`V33-DISCLOSURE-PERCENT-UNIT` / `R33DisclosurePercentUnit`（src/engine/common_rules.py）
 - 覆盖缺口：3 → **2**（剩余 OBL-SG-COMPLETION / OBL-PERF-PHASE-AMOUNT）
-- catalog：obligations-v7 → **obligations-v8**
+- catalog：obligations-v7 → **obligations-v8**（R2 不递增，见 §〇）
 
-## 〇、一句话
+## 〇、R2 独立评审整改（2026-09-26，两个 P1 合并前阻塞项）
+
+独立评审确认核心 Truth / registry / coverage / CI 均成立，但存在两个 P1，
+本轮整改（不推翻 R1 已确认的谓词与防线设计）：
+
+### P1-A：粗 dedup 吞掉同页同值的不同 occurrence（正式漏报）
+
+R1 的 `_dedup_key = (page, predicate, numeric_text)` 把「同页、同谓词、同
+数值、但不同原文位置」的第二条 finding 静默吞掉（如同一页两处
+`货物支出占76.23` / `服务支出占76.23`）。dedup 的唯一合法职责是合并
+**同一物理 occurrence 的主扫描与 line-break 双命中**，不能按值合并。
+
+整改：**主扫描与 line-break 双通道合并为单通道 page 级扫描**——
+
+- `_WP4F_PRED_RE` 改为 page 级形态：谓词与数值之间的空隙容忍「行内空白或
+  **恰一次**换行」（空行不跨越，与共享 merge 纪律的空行断段语义对齐）；
+  verb（为/是/达到/达）自身也可跨一次软换行。该 pattern 在页面原文上的
+  匹配集与旧双通道的物理 occurrence 集合一一对应（逐形态推演见测试）。
+- 每个 finding 携带 **source identity**：`location.source_start /
+  source_end`（page_text 物理偏移，任务 §三/§十八）。同一 occurrence
+  只扫描一次，主扫描+跨行双命中合并由匹配唯一性**结构性保证**（旧 dedup
+  集合删除；任务 §六 的"占\n76.23"仍恰好 1 finding，测试锁死）。
+- 主扫描的 para-local offset 不再存在（任务 §四 消除），line-break 的
+  `pos=-1` 不再存在（任务 §五 消除）——dedup / 证据定位 / section 解析
+  共用同一物理身份，不维护三套位置推断。
+
+**rest 后缀语义精确复刻旧双通道**（不因重算 source offsets 把列错位/
+纯数值行防线重新引入，任务 §二十/§二十一）：
+
+- 数值所在**行内**后缀 → `_classify`（compliant / skip / finding）。
+- 数值在行尾结束（行内 rest 为空）→ 看下一个非空行开头：无次行或**条目
+  形态**（`_NEW_PARAGRAPH_RE`，即 merge 必断段的段边界）→ finding；行首
+  数字 → 数字串延续 skip；其余按次行开头判定。这与旧 merge 段内 rest 的
+  段边界语义逐场景等价（"货物支出占76.23⏎5.33%"条目断段 → finding，
+  与旧一致；"占76.23⏎25万元"数字延续 → skip，与旧一致）。
+- **纯数值行防线收窄到旧 line-break 通道**：仅当「跨行 + 数字行是条目
+  形态 + 上一非空行以占比谓词结尾」时应用（表格线性化 fail-closed）；
+  同行形态与 verb 独立行形态不受影响（旧主扫描通道语义保真）。
+
+### P1-B：line-break finding 的 section 取整页最后一个标题（provenance 错误）
+
+R1 把遍历完整页后**最后**一个 section 传给整页 line-break 扫描——命中在
+（一）内、页尾有（二）时被记录为（二）。整改（任务 §十二/§十三）：
+
+- `_WP4F_SECTION_HEAD_RE` 加**行首锚**（`^` + re.M）在页面原文上预计算
+  标题位置列表；每个 candidate 只取 `start < source_start` 的最近标题
+  （**只向前**，禁止借用后文/整页最后标题）；找不到为 None 不伪造。
+- alternation 长词在前（`情况说明|情况|说明|分析`），修复「…情况说明」
+  被非贪婪截断成「…情况」的既有问题（TRUTH-F01 的「…结构情况」不受影响）。
+- 同行命中的 section 同样 occurrence-local（同一函数，无第二套逻辑）。
+
+### R2 测试与 Mutation
+
+新增 8 条（41 条全绿）：重复值 A/B/C（任务 §七/§八/§九，2 findings +
+source_start 不同 + span 不同 + section 各自归属）、主+跨行同 occurrence
+仍 1 finding（§六）、section test A/B/C（§十四/§十五/§十六）、同行
+section occurrence-local。真实语料回归：仅宜川 1 真命中、0 误报（不变）。
+
+| Mutation | 变异 | 结果 |
+| --- | --- | --- |
+| F | 恢复旧粗 dedup `(page, predicate, numeric_text)` | 重复值 A 场景 2→1，测试必红 ✓ 现场打红还原 |
+| G | 恢复 page-final section | section A 场景（一）→（二）、section B 双 occurrence 串 section，测试必红 ✓ 现场打红还原 |
+
+### R2 不变量（全部复核通过）
+
+TRUTH-F01 恰好 1 finding（P28 / section=（二）一般公共预算财政拨款支出
+决算结构情况 / 占 / 76.23 / info / fiscal_year=2025 / unit_present=False）；
+财政局 2024 列错位 0 finding；纯数值行 0 finding；V33-232 边界
+（占76.234%）0 finding；全角 %/中文百分数/占地/占用/个百分点/金额单位
+全部 0 finding；catalog 仍 obligations-v8（R2 不递增）；coverage 仍
+2 gaps。
+
+## 摘要
 
 政府预决算材料中「城乡社区支出(类)15411.43 万元，占 76.23」这类**占比谓词 +
 数值但缺百分号**的披露形态，此前系统全量漏报。WP4-F 新增通用 checker：
