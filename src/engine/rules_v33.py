@@ -8822,6 +8822,17 @@ class R33TrendCompletionRate(Rule):
             {_txt_fund_page_for(offsets, start) for _, start, _ in sections}
         )
         year = _resolve_fiscal_year(doc, heading_pages)
+        # 完成率是期间敏感检查：完成率声明与分母/分子披露必须同属材料财政
+        # 年度。年度无法确认时期间一致性不可证明，不得生成正式 finding
+        # （fail-closed，与 CMM-007 / WP4-C 的年度门禁同纪律）。
+        if year is None:
+            raise RuleDeferred(
+                self.code,
+                "未能确认材料财政年度，预算完成率的期间一致性不可确认",
+                unresolved_reasons=[
+                    "未能确认材料财政年度，预算完成率的期间一致性不可确认"
+                ],
+            )
 
         claims = self._collect_claims(merged, offsets, sections, year)
         if not claims:
@@ -8969,17 +8980,18 @@ class R33TrendCompletionRate(Rule):
         match: Any,
     ) -> Optional[Dict[str, Any]]:
         amount = _wp4e_amount(match.group("amount"))
-        unit = _txt_fund_norm(match.group("unit"))
-        factor = _TXT_FUND_UNIT_TO_WAN.get(unit)
-        if amount is None or factor is None:
-            return None
+        raw_unit = _txt_fund_norm(match.group("unit")) if match.group("unit") else None
+        factor = _TXT_FUND_UNIT_TO_WAN.get(raw_unit) if raw_unit else None
+        if amount is None or raw_unit is None or factor is None:
+            return None  # 条目首句金额的单位锚是正则强制的，缺角即不形成披露
         section_title, section_start = _nar_repeat_section_of(
             sections, match.start("amount")
         )
         return {
             "wan": amount * factor,
             "amount_text": re.sub(r"\s+", "", match.group("amount")),
-            "unit": unit,
+            "raw_unit": raw_unit,
+            "unit_confirmed": True,
             "page": _txt_fund_page_for(offsets, match.start("amount")),
             "section": section_title,
             "section_start": section_start,
@@ -8996,16 +9008,28 @@ class R33TrendCompletionRate(Rule):
         sections: List[Tuple[str, int, int]],
         match: Any,
     ) -> Optional[Dict[str, Any]]:
+        # 单位纪律（R2 整改）：非零金额缺单位不得默认「万元」——0 元 = 0
+        # 万元 = 0 亿元，零值豁免单位缺失；非零缺单位保留披露（wan=None），
+        # 由绑定层 fail-closed（insufficient_data），绝不按「叙事主流口径」
+        # 猜测归一。原文单位（raw_unit）与归一结果分开保存，evidence 不伪造
+        # 原文写了「万元」。
         amount = _wp4e_amount(match.group("amount"))
-        unit = _txt_fund_norm(match.group("unit")) if match.group("unit") else "万元"
-        factor = _TXT_FUND_UNIT_TO_WAN.get(unit)
-        if amount is None or factor is None:
-            return None  # 数字/单位无法识别：不形成正式披露（绑定层按取数不足处理）
+        if amount is None:
+            return None
+        raw_unit = _txt_fund_norm(match.group("unit")) if match.group("unit") else None
+        factor = _TXT_FUND_UNIT_TO_WAN.get(raw_unit) if raw_unit else None
+        if raw_unit is not None and factor is None:
+            return None  # 单位显式但不在归一口径内，不形成正式披露
+        if raw_unit is None:
+            wan = Decimal("0") if amount == 0 else None
+        else:
+            wan = amount * factor
         section_title, section_start = _nar_repeat_section_of(sections, match.start())
         return {
-            "wan": amount * factor,
+            "wan": wan,
             "amount_text": re.sub(r"\s+", "", match.group("amount")),
-            "unit": unit,
+            "raw_unit": raw_unit,
+            "unit_confirmed": raw_unit is not None,
             "page": _txt_fund_page_for(offsets, match.start()),
             "section": section_title,
             "section_start": section_start,
@@ -9155,6 +9179,15 @@ class R33TrendCompletionRate(Rule):
             return
         role_label = claim["role_key"] or denom["role_key"] or "预算"
 
+        # 分母单位纪律：非零披露未显式金额单位 → 无法归一复算，
+        # fail-closed（零值豁免：0 元 = 0 万元 = 0 亿元，wan 为 0 不落此处）
+        if denom["wan"] is None:
+            unresolved.append(
+                f"「{indicator}」的{role_label}披露「{denom['span']}」未显式金额单位，"
+                "无法归一复算（insufficient_data）"
+            )
+            return
+
         # ---- 分子：句读单元内逐段就近；全部段空才条目内承接 ----
         actual: Optional[Dict[str, Any]] = None
         actual_state = "missing"
@@ -9228,6 +9261,7 @@ class R33TrendCompletionRate(Rule):
             and budget["section_start"] == claim["section_start"]
             and claim["clause_start"] <= budget["start"]
             and budget["role_key"]
+            and budget["wan"] is not None
             and budget["role_key"] != role_label
             and budget["wan"] != denom["wan"]
         ]
@@ -9271,6 +9305,13 @@ class R33TrendCompletionRate(Rule):
 
         if actual is None:
             # fail-closed 不比：分母非零但句读单元/条目内无支出决算披露可复算
+            return
+        if actual["wan"] is None:
+            # 分子单位纪律：非零决算披露未显式金额单位 → 无法归一复算
+            unresolved.append(
+                f"「{indicator}」的支出决算披露「{actual['span']}」未显式金额单位，"
+                "无法归一复算（insufficient_data）"
+            )
             return
         expected = actual["wan"] / denom["wan"] * Decimal("100")
         if self._pct_close(claim["pct"], expected):
@@ -9332,8 +9373,12 @@ class R33TrendCompletionRate(Rule):
         actual: Optional[Dict[str, Any]],
         others: List[Dict[str, Any]],
     ) -> Optional[Tuple[Dict[str, Any], Decimal]]:
-        """声明数值与「声明身份之外的其它预算身份」复算吻合 → 分母身份错误证据。"""
-        if actual is None:
+        """声明数值与「声明身份之外的其它预算身份」复算吻合 → 分母身份错误证据。
+
+        身份交叉要用 actual 参与金额计算，其单位必须已确认（R2 整改：非零
+        缺单位的 actual 不进入交叉复算；R004 零分母 finding 本身不依赖
+        actual 数值，actual 仍只作为证据展示）。"""
+        if actual is None or actual["wan"] is None:
             return None
         for other in sorted(others, key=lambda item: item["start"]):
             if other["wan"] > 0:
@@ -9397,13 +9442,22 @@ class R33TrendCompletionRate(Rule):
             "indicator": claim["indicator"] or "未定位条目",
             "denominator_type": role_label,
             "denominator_amount": denom["amount_text"],
-            "denominator_unit": "万元",
+            "denominator_unit": denom["raw_unit"],  # 原文单位；None = 未显式披露
+            "denominator_unit_confirmed": denom["unit_confirmed"],
+            "normalized_denominator_wan": _txt_fund_display(denom["wan"]),
             "actual_amount": actual["amount_text"] if actual else None,
+            "actual_unit": actual["raw_unit"] if actual else None,
+            "actual_unit_confirmed": actual["unit_confirmed"] if actual else None,
+            "normalized_actual_wan": (
+                _txt_fund_display(actual["wan"])
+                if actual is not None and actual["wan"] is not None
+                else None
+            ),
             "declared_completion_rate": claim["pct_text"],
             "recomputed_completion_rate": recomputed,
             "difference_pp": difference,
             "fiscal_year": year,
-            "unit": "万元",
+            "unit": "万元",  # 归一计算口径（与原文单位区分，不伪造原文写了万元）
             "obligation_id": _WP4E_OBLIGATION_ID,
             "zero_denominator": denom["wan"] == 0,
             "identity_conflict": identity_conflict,

@@ -611,3 +611,166 @@ def test_withdrawing_the_checker_puts_the_obligation_back_as_a_gap(monkeypatch):
     instance = _obligation_instance(ledger)
     assert instance["status"] == OBLIGATION_NOT_IMPLEMENTED
     assert instance["missing_checkers"] == [RULE_ID]
+
+
+# ---------------------------------------------------------------------------
+# R2 整改 P1-A：财政年度无法确认时 fail-closed（任务 §二~六）
+# ---------------------------------------------------------------------------
+
+
+def _no_year_doc(*sections: str) -> Any:
+    """无任何可确认财政年度的合成材料：封面与正文都不含年份。"""
+    return build_document(
+        path="no-year-completion-rate.pdf",
+        page_texts=["某某局部门决算公开", *sections],
+        page_tables=[],
+        filesize=0,
+    )
+
+
+def test_no_year_material_defers_before_any_finding():
+    """任务 §四：完成率复算会得出 error 的材料（100/90/110%），但整份
+    Document 无任何可确认财政年度 → 必须 RuleDeferred insufficient_data、
+    partial_issues 为空——期间敏感检查不得在期间身份不明时正式比较。"""
+    doc = _no_year_doc(
+        _final_page(
+            "1、行政运行（类）综合（款）行政运行（项），主要用于日常运转。"
+            "年初预算为100万元，支出决算为90万元，完成年初预算的110%。"
+        )
+    )
+    with pytest.raises(RuleDeferred) as excinfo:
+        _run(doc)
+    assert excinfo.value.status == "insufficient_data"
+    assert "财政年度" in excinfo.value.detail
+    assert excinfo.value.partial_issues == []
+
+
+def test_no_year_zero_denominator_still_defers_not_reports():
+    """任务 §五：R004 零分母文本（数学上明显错误）在年度未知时同样必须
+    deferred、partial_issues 为空——不能因为数学明显错误就绕过期间身份。"""
+    doc = _no_year_doc(
+        _final_page(
+            "1、行政运行（类）综合（款）行政运行（项），主要用于日常运转。"
+            "年初预算为0，支出决算为307.82万元，完成年初预算的95.89%。"
+        )
+    )
+    with pytest.raises(RuleDeferred) as excinfo:
+        _run(doc)
+    assert excinfo.value.status == "insufficient_data"
+    assert excinfo.value.partial_issues == []
+
+
+# ---------------------------------------------------------------------------
+# R2 整改 P1-B：非零金额缺单位不得默认「万元」（任务 §七~二十一）
+# ---------------------------------------------------------------------------
+
+
+def test_unit_case_a_nonzero_denominator_missing_unit_defers():
+    """任务 §十六：分母「年初预算为100」未显式单位、分子有万元 → 不得默认
+    万元后正式复算，必须 insufficient_data、0 partial_issues。"""
+    doc = _contract_doc(
+        _final_page(
+            "1、行政运行（类）综合（款）行政运行（项），主要用于日常运转。"
+            "年初预算为100，支出决算为90万元，完成年初预算的110%。"
+        )
+    )
+    with pytest.raises(RuleDeferred) as excinfo:
+        _run(doc)
+    assert excinfo.value.status == "insufficient_data"
+    detail = f"{excinfo.value.detail} {' '.join(excinfo.value.unresolved_reasons or [])}"
+    assert "未显式金额单位" in detail
+    assert excinfo.value.partial_issues == []
+
+
+def test_unit_case_b_nonzero_actual_missing_unit_defers():
+    """任务 §十七：分子「支出决算为90」未显式单位、分母有万元 → 同样
+    insufficient_data、0 partial_issues。"""
+    doc = _contract_doc(
+        _final_page(
+            "1、行政运行（类）综合（款）行政运行（项），主要用于日常运转。"
+            "年初预算为100万元，支出决算为90，完成年初预算的110%。"
+        )
+    )
+    with pytest.raises(RuleDeferred) as excinfo:
+        _run(doc)
+    assert excinfo.value.status == "insufficient_data"
+    detail = f"{excinfo.value.detail} {' '.join(excinfo.value.unresolved_reasons or [])}"
+    assert "未显式金额单位" in detail
+    assert excinfo.value.partial_issues == []
+
+
+def test_unit_case_c_both_missing_unit_defers():
+    """任务 §十八：分母与分子都未显式单位 → deferred；不得因为数字比例
+    恰好能算（90/100）而形成正式判断。"""
+    doc = _contract_doc(
+        _final_page(
+            "1、行政运行（类）综合（款）行政运行（项），主要用于日常运转。"
+            "年初预算为100，支出决算为90，完成年初预算的110%。"
+        )
+    )
+    with pytest.raises(RuleDeferred) as excinfo:
+        _run(doc)
+    assert excinfo.value.status == "insufficient_data"
+    assert excinfo.value.partial_issues == []
+
+
+def test_zero_denominator_without_unit_still_hits_r004():
+    """任务 §十九：零值豁免——「年初预算为0」无单位仍必须命中 R004
+    （0 元 = 0 万元 = 0 亿元，零值不受单位换算影响），且 evidence 不伪造
+    原文写了万元：denominator_unit 为 None、归一值单独记录。"""
+    doc = _contract_doc(
+        _final_page(
+            "1、行政运行（类）综合（款）行政运行（项），主要用于日常运转。"
+            "年初预算为0，支出决算为307.82万元，完成年初预算的95.89%。"
+        )
+    )
+    issues = _run(doc)
+    assert len(issues) == 1
+    issue = issues[0]
+    assert issue.severity == "error"
+    assert issue.location["zero_denominator"] is True
+    assert issue.location["denominator_unit"] is None, "原文未写单位，不得伪造"
+    assert issue.location["denominator_unit_confirmed"] is False
+    assert issue.location["normalized_denominator_wan"] == "0.00"
+    assert issue.location["actual_unit"] == "万元"
+    assert issue.location["actual_unit_confirmed"] is True
+    assert issue.location["normalized_actual_wan"] == "307.82"
+    assert issue.location["unit"] == "万元", "顶层 unit 是归一计算口径"
+
+
+def test_explicit_yuan_unit_normalizes_to_wan():
+    """任务 §二十：非零显式元单位换算——1000000元=100 万元、90 万元决算、
+    90% → 0 finding。证明单位纪律不是「必须万元」，而是「必须可归一」。"""
+    doc = _contract_doc(
+        _final_page(
+            "1、行政运行（类）综合（款）行政运行（项），主要用于日常运转。"
+            "年初预算为1000000元，支出决算为90万元，完成年初预算的90%。"
+        )
+    )
+    assert _run(doc) == []
+
+
+def test_explicit_yi_unit_normalizes_to_wan():
+    """任务 §二十一：亿元换算——1亿元=10000 万元、9000 万元决算、90% → 0 finding。"""
+    doc = _contract_doc(
+        _final_page(
+            "1、行政运行（类）综合（款）行政运行（项），主要用于日常运转。"
+            "年初预算为1亿元，支出决算为9000万元，完成年初预算的90%。"
+        )
+    )
+    assert _run(doc) == []
+
+
+def test_zero_yuan_unit_r004_kept():
+    """任务 §二十上：显式元单位的零分母（真实石泉形态）继续命中 R004。"""
+    doc = _contract_doc(
+        _final_page(
+            "1、行政运行（类）综合（款）行政运行（项），主要用于日常运转。"
+            "年初预算为 0 元，支出决算为177.17万元，完成年初预算的50%。"
+        )
+    )
+    issues = _run(doc)
+    assert len(issues) == 1
+    assert issues[0].location["zero_denominator"] is True
+    assert issues[0].location["denominator_unit"] == "元"
+    assert issues[0].location["normalized_denominator_wan"] == "0.00"

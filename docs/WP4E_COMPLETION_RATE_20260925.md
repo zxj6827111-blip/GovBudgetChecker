@@ -1,10 +1,69 @@
 # WP4-E：预算完成率分母口径与确定性复算（V33-TREND-COMPLETION-RATE）
 
-- 日期：2026-09-25
+- 日期：2026-09-25（R1 交付）/ 2026-09-26（R2 独立评审整改）
 - 分支：`fix/obligation-completion-rate`（基线 = main 93c0ca0，即 PR #53 WP4-D 合并后）
 - obligation：`OBL-TREND-COMPLETION-RATE`（GROUP_TREND，final only）
 - checker：`V33-TREND-COMPLETION-RATE` / `R33TrendCompletionRate`（src/engine/rules_v33.py）
 - 覆盖缺口：4 → **3**（剩余 OBL-DISCLOSURE-PERCENT-UNIT / OBL-SG-COMPLETION / OBL-PERF-PHASE-AMOUNT）
+
+## 〇、R2 独立评审整改（2026-09-26，两个 fail-closed 阻塞项）
+
+独立评审确认主体设计与 CI 通过，但存在两个合并前阻塞项，本轮整改（不推翻
+已确认正确的设计）：
+
+### P1-A：财政年度无法确认时必须 fail-closed
+
+完成率是**期间敏感**检查。R1 实现在 `year is None` 时仍继续收集并可能输出
+`fiscal_year=None` 的正式 finding——期间一致性未证明时不得正式比较。
+
+整改：`apply()` 在解析年度后直接
+`RuleDeferred("未能确认材料财政年度，预算完成率的期间一致性不可确认")`
+（status=insufficient_data，与 CMM-007 / WP4-C 的年度门禁同纪律），
+在任何 claim 收集与 finding 生成之前。
+
+新增防线（测试锁定）：
+- no-year 材料 + 100/90/110% 复算明显错误 → RuleDeferred、partial_issues=[]
+  （不得输出「完成率复算不一致」error）；
+- no-year 材料 + R004 零分母文本 → 同样 deferred、partial=[]——不能因为
+  数学明显错误就绕过期间身份。
+
+Mutation F：临时移除年度门禁 → 两条 no-year 防线测试打红；还原后全绿。
+
+### P1-B：非零金额缺单位不得默认「万元」
+
+R1 的 `_disclosure_entry` 把缺单位金额默认为万元（未经证据归一，违反
+fail-closed）。整改为最小安全方案：
+
+- **金额 entry 保存真实单位状态**：`raw_unit`（原文单位，None=未显式披露）、
+  `unit_confirmed`、`wan`（归一万元值；非零缺单位为 `None`，不猜测）。
+- **零值豁免**：0 元 = 0 万元 = 0 亿元——`年初预算为0/0.0/0.00/零`（无单位）
+  继续 wan=0 正常参与 R004 判定，不因单位整改退化。
+- **非零缺单位 → insufficient_data**：分母或分子任一侧非零且未显式单位，
+  正式复算前 unresolved（RuleDeferred），绝不默认万元、绝不正式 finding。
+  单位负例 A（分母缺单位）/B（分子缺单位）/C（双侧缺单位）全部测试锁定
+  为 RuleDeferred、partial_issues=[]。
+- **evidence 不伪造原文单位**：`_location` 区分 `denominator_unit`（原文
+  单位，可为 None）/`denominator_unit_confirmed`/`normalized_denominator_wan`
+  （归一值）与 `actual_unit`/`actual_unit_confirmed`/`normalized_actual_wan`；
+  顶层 `unit` 仍是归一计算口径「万元」。R004 finding 中「年初预算为0」的
+  denominator_unit 如实为 null。
+- **身份交叉复算的单位要求**：`_identity_hit` 用 actual 参与金额计算，
+  actual 缺单位（wan=None）时不进入交叉复算；R004 零分母 finding 本身不
+  依赖 actual 数值，actual 仅作证据展示（任务 §十五）。
+- **显式元/亿元继续归一**：1000000元→100 万元、1亿元→10000 万元换算
+  正例测试锁定——单位纪律是「必须可归一」，不是「必须万元」。
+
+未复用 `_resolve_table_unit`（页面声明单位解析）：其作用域与提取语义对本
+场景未经验证，按任务 §十一「优先最小安全方案」执行；上下文单位作为后续
+可选增强另议（需证明单位来源、作用页/章节、适用范围）。
+
+Mutation G：临时恢复 `raw_unit or "万元"` → 单位负例 A 打红；还原后全绿。
+
+### R2 回归确认（不退化清单）
+
+Case F（全年合法）/Case G（身份错误）/Case J（多候选 parse_ambiguity）、
+石泉 S03（首句金额交叉验证，矛盾归 WP4-C）、四份真实 fixture 负例、
+R004 政策合同、Mutation A~E 全部既有防线——36 项测试全绿不退化。
 
 ## 一、Truth Discovery 结论
 
@@ -129,6 +188,8 @@ error/warn/info，critical 不存在于该 schema，不得静默降成 low/warn�
 | C | `_pct_close` 恒 True（取消真正复算） | test_case_d_wrong_rate_is_a_finding | **红**（1 failed）→ 还原绿 |
 | D | CLAIM_RE 纳入同比句（比上年增长X%） | test_case_h_yoy_percent_is_not_completion_rate | **红**（matcher 结构断言拦截）→ 还原绿 |
 | E | 从 ALL_RULES 撤出 final 注册 | test_withdrawing_the_checker_puts_the_obligation_back_as_a_gap（monkeypatch 自动化）+ truth pipeline 断言 | 常绿守卫：撤出后 registry/ledger/缺口三面全红 |
+| F | 移除 fiscal-year gate（R2） | test_no_year_material_defers_before_any_finding | **红**（1 failed）→ 还原绿 |
+| G | 恢复缺单位默认万元（R2） | test_unit_case_a_nonzero_denominator_missing_unit_defers | **红**（1 failed）→ 还原绿 |
 
 ## 七、登记
 
@@ -148,13 +209,12 @@ error/warn/info，critical 不存在于该 schema，不得静默降成 low/warn�
 - 不动：CMM-007 / V33-234 / BUD-111 / V33-NARRATIVE-INDICATOR-REPEAT 的
   原义务映射与行为；WP5/其余 3 缺口不碰。
 
-## 八、验证记录（本分支）
+## 八、验证记录（R2 分支最终状态）
 
-- `pytest tests/test_completion_rate_recompute.py`：27 passed。
-- `python scripts/check_coverage_baseline.py --assert-gaps 3`：PASS
-  （final 未实现缺口 2 项中 OBL-TREND-COMPLETION-RATE 已收口；
-  剩余恰好 OBL-DISCLOSURE-PERCENT-UNIT / OBL-SG-COMPLETION / OBL-PERF-PHASE-AMOUNT）。
-- `ruff check`（4 个改动文件）：All checks passed。
-- `mypy`（rules_v33 / check_obligations / rule_text）：no issues。
-- 完整回归（pytest 全量 / 真库硬门 / 前端 / E2E / business replay）见
-  PR 描述与本文件提交后的 CI。
+- `pytest tests/test_completion_rate_recompute.py`：**36 passed**（R1 27 项 +
+  R2 新增 9 项：no-year 两防线、单位负例 A/B/C、零分母无单位+单位字段断言、
+  元/亿元换算正例、零元 R004）。
+- `python scripts/check_coverage_baseline.py --assert-gaps 3`：PASS。
+- `ruff check` / `mypy`：全绿。
+- 完整回归（全量 pytest / 真库硬门 / 前端 / E2E / business replay / GitHub
+  CI）见 PR #54 的 R2 提交记录。
