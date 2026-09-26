@@ -6644,6 +6644,260 @@ class R33246_DomesticReceptionDisclosure(Rule):
 
 
 # ==================================================================================
+# WP4-G：三公经费说明四项细化披露完整性（V33-SG-COMPLETION，final only）
+#
+# 检查对象（Truth 规则冻结，不与其他三公义务混用）
+# ------------------------------------------------------------------
+# 只检查**三公经费支出决算情况说明章节内部**四项（因公出国（境）费 /
+# 公务用车购置费 / 公务用车运行维护费 / 公务接待费）的细化披露是否在
+# 场；表格数值不参与判定——表格分项齐备归 V33-244（OBL-SG-ITEMS），
+# 表文金额一致归 V33-108/V33-224（OBL-SG-TABLE-TEXT），国内接待批次/
+# 人次归 V33-246（OBL-SG-DISCLOSURE），金额勾稽归 V33-121/V33-244
+# （OBL-SG-TOTAL）。本规则补的是官方检查表口径：说明须把四项逐项
+# 写出来（"是否细化'公务用车购置及运行费'：公开'公务用车购置费'、
+# '公务用车运行费'"），合并披露"购置及运行维护费"是合法三项口径，
+# 但不能当作购置费已细化。
+#
+# 真值（REAL，官方人工检查表，2026-09-16 重跑系统未报告）
+# ------------------------------------------------------------------
+# 宜川路街道 2025 年度决算（41 页，SHA ``f809eef2…``）官方检查表
+# 《…宜川路街道办事处（部门决算）检查表.xlsx》"是否合格=否"行：
+# 「是否细化'公务用车购置及运行费'：公开'公务用车购置费'、
+# '公务用车运行费'→ 否；问题1：第三部分缺少以下'三公'经费细化披露
+# 字段：公务用车购置费。」对照样张 P36：说明（二）2 只写"公务用车
+# 购置及运行维护费支出 19.56 万元。其中：公务用车运行维护支出
+# 19.56 万元…"，购置费既无金额也无未发生说明。同批检查表另有
+# 因公出国团组数、公务用车购置数两行"否"——团组/购置**数**属数量
+# 要素，本地披露标准未定（comparison.md 对同类问题判"待裁决"），
+# 本轮只收编四项金额披露，不越界到数量要素。
+#
+# 未发生 vs 未披露（任务 §七）
+# ------------------------------------------------------------------
+# 金额为 0（"支出为0万元"）、明示未发生（"未发生/未新增/未购置/
+# 无…"）、与上年持平，都算披露完整；只有既无金额又无等效说明才算
+# 缺失。章节内"无三公经费"整体说明或三公合计披露为 0 时四项视为
+# 已披露（等效说明覆盖全项）。
+# ==================================================================================
+
+_WP4G_OBLIGATION_ID = "OBL-SG-COMPLETION"
+
+#: 金额披露形态（只判定"金额在场"，不做数值勾稽）：数字 + 万元/万/元。
+#: 口语句式「支出0.3万」（裸"万"无"元"）与「0.00万元」同为金额披露。
+_WP4G_AMOUNT_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(万元|万|元)")
+
+#: 公务用车购置的**单独披露**词干：主体词后不得紧跟「及」——合并披露
+#: 「公务用车购置及运行维护费」合法（检查表三项口径行判"合格"），
+#: 不能当作购置费已细化（宜川真值正是被合并形态掩盖）。
+_WP4G_PURCHASE_STEM_RE = re.compile(r"公务用车购置(?!及)")
+
+#: 购置未发生/零值等效语境：允许不带"公务用车购置"完整词干——文旅
+#: （一）同比段写「2025 年未新增公务用车」（该分句同时含合并主体），
+#: 同样构成购置披露。
+_WP4G_PURCHASE_NOT_OCCURRED_RE = re.compile(
+    r"未(?:新增|购置|新购|发生)[^。；，,]{0,6}公务用车"
+    r"|公务用车购置[^。；，,]{0,8}(?:未发生|无)"
+)
+
+#: 未发生/零值等效语境（与主体词干同分句在场即算披露）。
+_WP4G_NOT_OCCURRED_RE = re.compile(r"未发生|未安排|未支出|未新购|无支出|持平|无")
+
+#: 章节"无三公"整体等效说明（一句话覆盖四项；AGENTS.md：没有三公
+#: 支出时应有"无此项"或等效说明）。
+_WP4G_GLOBAL_NONE_RE = re.compile(
+    r"(?:无|未发生|未安排|未支出)[^。；，,]{0,6}三公"
+    r"|三公[^。；，,]{0,6}(?:无|未发生|未安排|未支出)"
+)
+
+#: 三公合计支出/决算披露为 0：四项决算必然为 0，视同已披露。只认
+#: 零值金额跟随决算/支出语境的形态——"年初预算为 5.00 万元，支出决算
+#: 为 0 万元"里非零的预算数不构成触发。零值金额锚定：数字必须以 0
+#: 开头（"10.00 万元"里嵌在 10 里的 0 不算）、小数段只能全零（0.30
+#: 不算 0）、且必须带单位（裸数字不认，与 extract_amounts 口径一致）。
+_WP4G_GLOBAL_ZERO_RE = re.compile(
+    r"(?:决算|支出)[^。；，,]{0,6}?(?<![\d,.])0(?:[,.]0+)?\s*(?:万元|万|元)"
+)
+
+#: 四项判定规格：(item_key, 台账标签, 缺失时证据定位词干, 证据回退词干)。
+#: 购置项的证据词干**包含**合并形态——合并披露段正是购置细化应出现
+#: 的位置（宜川 P36「2、公务用车购置及运行维护费支出 19.56 万元」）。
+_WP4G_ITEM_SPECS: Tuple[Tuple[str, str, str, str], ...] = (
+    ("overseas", "因公出国（境）费", "因公出国", "因公出国"),
+    ("vehicle_purchase", "公务用车购置费", "公务用车购置", "公务用车"),
+    ("vehicle_operation", "公务用车运行维护费", "公务用车运行", "公务用车"),
+    ("reception", "公务接待费", "公务接待", "公务接待"),
+)
+
+#: 各项期望披露（finding 的 expected disclosure，任务 §八：不写无法定位的
+#: "三公经费不完整"）。
+_WP4G_EXPECTED_DISCLOSURE = {
+    "overseas": "说明应写明因公出国（境）费的支出金额",
+    "vehicle_purchase": (
+        "说明应在「公务用车购置及运行维护费」下细化披露公务用车购置费的支出金额"
+    ),
+    "vehicle_operation": "说明应细化披露公务用车运行维护费的支出金额",
+    "reception": "说明应写明公务接待费的支出金额",
+}
+
+
+def _wp4g_amounts_wan(clause: str) -> List[Decimal]:
+    """分句内金额（统一万元）；裸「万」按万元口径。"""
+    values: List[Decimal] = []
+    for match in _WP4G_AMOUNT_RE.finditer(str(clause or "")):
+        number = Decimal(match.group(1).replace(",", ""))
+        unit = match.group(2)
+        values.append(number if unit in ("万元", "万") else number * Decimal("0.0001"))
+    return values
+
+
+class R33SGCompletion(Rule):
+    """三公经费说明四项细化披露完整性（含公务用车购置费细化）。
+
+    在「三公经费…决算情况说明」主章节完整范围内（find_section_scope，
+    含（一）（二）子章节，与 V33-245/246 同源）逐分句判定四项披露：
+    金额（含 0）、未发生/持平等效说明任一在场即完整；合并披露
+    「公务用车购置及运行维护费」不满足购置费细化。每项独立出 finding，
+    带台账标签（three_public_item）、期望/实际披露与证据段落。整章
+    "无三公"说明或三公合计披露为 0 时四项视为已披露。
+    """
+
+    code, severity = "V33-SG-COMPLETION", "medium"
+    desc = "三公经费说明四项细化披露完整性（出国/购置/运行/接待）"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        page_texts = [str(item or "") for item in (doc.page_texts or [])]
+        if not any(text.strip() for text in page_texts):
+            raise RuleDeferred(
+                self.code,
+                "未提取到正文文本，三公披露完整性无从检查",
+                unresolved_reasons=["未提取到正文文本"],
+            )
+        merged = merge_page_texts(doc.page_texts)
+        # 章节限定（同 V33-245/246）：找不到章节 → 证据不足，禁止全文
+        # 回退——章节整体缺失是结构性问题，不在本规则里出确定性结论。
+        from src.utils.narration import find_section_scope_with_title
+
+        found = find_section_scope_with_title(merged, ["三公"])
+        if not found:
+            raise RuleDeferred(self.code, detail="未找到三公经费说明章节")
+        section_title, scope, _start, _end = found
+        section_tag = f"【章节:{(section_title or '').strip()[:40]}】" if section_title else ""
+        paras = merge_soft_wrapped_lines(scope)
+
+        disclosed = self._collect_disclosed(paras)
+        issues: List[Issue] = []
+        for item_key, label, evidence_stem, fallback_stem in _WP4G_ITEM_SPECS:
+            if item_key in disclosed:
+                continue
+            evidence_para = self._evidence_para(
+                paras, evidence_stem, fallback_stem
+            )
+            actual = self._actual_disclosure(item_key, evidence_para)
+            page = R33245_ThreePublicDirectionContradiction._locate_page(
+                doc, evidence_para[:40]
+            )
+            issues.append(self._issue(
+                f"三公经费披露完整性：「{label}」在三公经费支出决算情况说明中"
+                f"未细化披露。期望：{_WP4G_EXPECTED_DISCLOSURE[item_key]}"
+                f"（金额为 0 或未发生的也应明示）。实际：{actual}。"
+                "请核实原稿并补充细化披露。",
+                {
+                    "page": page,
+                    "pos": 0,
+                    "obligation_id": _WP4G_OBLIGATION_ID,
+                    "three_public_item": label,
+                    "item_key": item_key,
+                    "section": (section_title or "").strip()[:60] or None,
+                    "expected_disclosure": _WP4G_EXPECTED_DISCLOSURE[item_key],
+                    "actual_disclosure": actual,
+                },
+                severity="medium",
+                evidence_text=f"{section_tag}{evidence_para[:200]}",
+                section_id=section_title,
+            ))
+        return issues
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _collect_disclosed(paras: List[str]) -> Set[str]:
+        """逐分句判定四项披露状态，返回已披露 item_key 集合。"""
+        disclosed: Set[str] = set()
+        for para in paras:
+            clauses = split_clauses(para)
+            # 主体沿分句继承（与事实抽取同一口径）：全局"无三公/合计为 0"
+            # 等效说明只在**合计主体**分句上判定——项级主体（公务接待等）
+            # 分句里的"无公务接待开支""支出决算 0 万元"只覆盖该项，
+            # 不得把整章当等效说明（石泉"无公务接待开支"实测分句）。
+            inherited_subject = ""
+            global_none = False
+            for clause in clauses:
+                subject = next(
+                    (
+                        token
+                        for token in ("因公出国", "公务用车", "公务接待", "三公")
+                        if token in clause
+                    ),
+                    inherited_subject,
+                )
+                inherited_subject = subject
+                if subject != "三公":
+                    continue
+                if _WP4G_GLOBAL_NONE_RE.search(clause) or _WP4G_GLOBAL_ZERO_RE.search(
+                    clause
+                ):
+                    global_none = True
+                    break
+            if global_none:
+                disclosed.update(item_key for item_key, *_rest in _WP4G_ITEM_SPECS)
+                continue
+            for clause in clauses:
+                compact = re.sub(r"\s+", "", clause)
+                if not compact:
+                    continue
+                has_amount = bool(_wp4g_amounts_wan(clause))
+                not_occurred = bool(_WP4G_NOT_OCCURRED_RE.search(compact))
+                if "因公出国" in compact and (has_amount or not_occurred):
+                    disclosed.add("overseas")
+                if "公务接待" in compact and (has_amount or not_occurred):
+                    disclosed.add("reception")
+                if "公务用车运行" in compact and (has_amount or not_occurred):
+                    disclosed.add("vehicle_operation")
+                if (
+                    _WP4G_PURCHASE_STEM_RE.search(compact)
+                    and (has_amount or not_occurred)
+                ) or _WP4G_PURCHASE_NOT_OCCURRED_RE.search(compact):
+                    disclosed.add("vehicle_purchase")
+        return disclosed
+
+    @staticmethod
+    def _evidence_para(paras: List[str], stem: str, fallback_stem: str) -> str:
+        """缺失项的证据段落：优先含该词语干的最后一段（缺失披露应出现
+        的最近语境），逐级回退到领域词干、三公章节首段、章节头部。
+        证据不足时不伪造——章节头保底让 finding 仍可定位。"""
+        for candidate_stem in (stem, fallback_stem):
+            for para in reversed(paras):
+                if candidate_stem in para:
+                    return para
+        for para in reversed(paras):
+            if "三公" in para:
+                return para
+        return paras[0] if paras else ""
+
+    @staticmethod
+    def _actual_disclosure(item_key: str, evidence_para: str) -> str:
+        """finding 的 actual disclosure：区分"仅有合并披露"与"整项缺席"。"""
+        if item_key == "vehicle_purchase" and "公务用车购置" in evidence_para:
+            return (
+                "说明仅披露「公务用车购置及运行维护费」合并金额，"
+                "未细化到公务用车购置费"
+            )
+        label = dict(
+            (item_key_, label_)
+            for item_key_, label_, _stem, _fallback in _WP4G_ITEM_SPECS
+        )[item_key]
+        return f"三公经费支出决算情况说明章节内未见「{label}」的金额披露或未发生说明"
+
+
+# ==================================================================================
 # 跨表：三公经费表 × 基本支出经济分类表（V33-CROSS-SAN-GONG-ECON）
 #
 # 业务关系与可比性（为什么只有"逐业务项的部分 ≤ 整体"可判定）
@@ -9532,6 +9786,8 @@ ALL_RULES = [
     # 文字规范/披露完整性（样张整改新增）
     R33245_ThreePublicDirectionContradiction(),
     R33246_DomesticReceptionDisclosure(),
+    # WP4-G：三公经费说明四项细化披露完整性（含公务用车购置费细化）
+    R33SGCompletion(),
     R33242_Table4_ComprehensiveCheck(),
     R33240_Table2_IncomeAdvancedCheck(),
     R33241_Table3_ExpenseAdvancedCheck(),

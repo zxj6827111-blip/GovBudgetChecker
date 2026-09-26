@@ -715,10 +715,15 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         group_id=GROUP_SAN_GONG,
         title="三公经费预算数与决算数对比及说明",
         report_kinds=_FINAL_ONLY,
-        pending_checkers=("V33-SG-COMPLETION",),
+        # WP4-G：官方检查表真实漏报收口。宜川路街道 2025 年度决算
+        # （SHA f809eef2…）检查表「是否细化"公务用车购置及运行费"」=否——
+        # 说明（二）只披露合并金额与运行维护子项，公务用车购置费整段
+        # 未披露，2026-09-16 重跑系统未报告。检查对象冻结为三公说明
+        # 章节内部四项细化披露；表格数值不参与判定（表文一致性归
+        # OBL-SG-TABLE-TEXT，表格分项齐备归 OBL-SG-ITEMS）。
+        checkers_by_kind=_final("V33-SG-COMPLETION"),
         depends_on=("table:FIN_07",),
         basis="AGENTS.md 决算必查勾稽 D-007：预算数与决算数对比须与说明一致",
-        gap_note="缺少三公经费预算数/决算数对比与说明一致性检查",
     ),
     Obligation(
         obligation_id="OBL-SG-YOY",
