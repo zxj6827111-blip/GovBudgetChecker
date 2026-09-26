@@ -61,7 +61,9 @@ RULE_ID = "V33-PERF-PHASE-AMOUNT"
 OBLIGATION_ID = "OBL-PERF-PHASE-AMOUNT"
 
 FIXTURE = ROOT / "tests" / "fixtures" / "perf_phase_amount_truth_page_data.json"
-FIXTURE_SHA = "feaa4bf7d3bcc832bf4184db543d800748cb1e9355d48608fdd1418bc77f1c02"
+#: 换行归一化（LF）内容哈希——双锁对 autocrlf 检出免疫（本地 CRLF 与仓库
+#: blob LF 的 sha256 不同，归一后一致：402c3103…，见 PR #40 教训）。
+FIXTURE_SHA = "402c3103394d9b392605c258e2951728ee617fdce1a73816ed4b725c5d18bad6"
 
 #: 三份真实源 PDF 的 SHA256（ Truth Discovery 冻结，与 uploads 内文件一致）
 WENLV_SHA = "19447c3cec309322ad786b14f5cb751424a1bfe2a1f3c4c3a96d035440665cf9"
@@ -90,7 +92,8 @@ WENLV_TRUTH_CHUNK = (
 
 def _load_fixture() -> Dict[str, Dict[str, Any]]:
     assert FIXTURE.exists(), f"真值冻结夹具缺失: {FIXTURE}"
-    digest = hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
+    raw = FIXTURE.read_bytes().replace(b"\r\n", b"\n")
+    digest = hashlib.sha256(raw).hexdigest()
     assert digest == FIXTURE_SHA, (
         "夹具内容哈希不符（perf_phase_amount_truth_page_data.json）——"
         "夹具被修改或需重新生成"
