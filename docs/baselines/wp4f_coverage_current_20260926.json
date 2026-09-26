@@ -1,7 +1,7 @@
 {
   "baseline_version": 1,
   "source": {
-    "commit": "1e54f865543493010eae7c90efc2ee0ccaf0f5e8",
+    "commit": "4722d86c12371c22bf4258b5e7c51526745beecd",
     "branch": "fix/obligation-percent-unit",
     "dirty": "false"
   },
