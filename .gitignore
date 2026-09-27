@@ -106,6 +106,15 @@ corpus/DOC-20260905-001/*
 !corpus/DOC-20260905-001/golden.json
 !corpus/DOC-20260905-001/ANNOTATIONS.md
 
+# WP4-I 第一期基准语料（DOC-B1-###）：登记 manifest 与人工标注（golden/
+# ANNOTATIONS）入库，sample.pdf 等原始材料一律不入库（bench_register.py
+# 只落本机）。标注冻结纪律见 docs/WP4-I_BENCHMARK_PLAN.md §3.2。
+!corpus/manifest.csv
+!corpus/DOC-B1-*/
+corpus/DOC-B1-/*
+!corpus/DOC-B1-*/golden.json
+!corpus/DOC-B1-*/ANNOTATIONS.md
+
 # 一次性排查脚本与 pytest 临时产物，不入库。
 # scratch/ 内含批次整改的临时校验脚本与 pytest 工作目录（2600+ 文件、21MB），
 # scratch_inventory_out.txt 是规则清单的一次性导出结果，两者都会随批次推进快速过期。

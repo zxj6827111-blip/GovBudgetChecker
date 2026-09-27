@@ -1,0 +1,233 @@
+{
+  "docs_total": 1,
+  "docs_evaluated": 1,
+  "docs_unannotated": [],
+  "evaluated_doc_ids": [
+    "DOC-20260905-001"
+  ],
+  "failures": [],
+  "totals": {
+    "tp": 3,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "fpr_operational": 0.0,
+    "fp_density": 0.0,
+    "acceptable_violations": 0,
+    "negative_violation_rate": 0.0,
+    "hint_groups_hit": 3,
+    "hint_groups_total": 3
+  },
+  "rule_level": {
+    "V33-001": {
+      "findings": 1,
+      "tp": 1,
+      "fp": 0,
+      "precision": 1.0
+    },
+    "V33-117": {
+      "findings": 2,
+      "tp": 2,
+      "fp": 0,
+      "precision": 1.0
+    },
+    "V33-120": {
+      "findings": 2,
+      "tp": 2,
+      "fp": 0,
+      "precision": 1.0
+    },
+    "V33-245": {
+      "findings": 1,
+      "tp": 1,
+      "fp": 0,
+      "precision": 1.0
+    },
+    "V33-246": {
+      "findings": 1,
+      "tp": 1,
+      "fp": 0,
+      "precision": 1.0
+    }
+  },
+  "zero_trigger_rules": {
+    "final": [
+      "V33-002",
+      "V33-003",
+      "V33-004",
+      "V33-005",
+      "V33-101",
+      "V33-102",
+      "V33-103",
+      "V33-104",
+      "V33-105",
+      "V33-106",
+      "V33-107",
+      "V33-108",
+      "V33-109",
+      "V33-110",
+      "V33-111",
+      "V33-112",
+      "V33-113",
+      "V33-115",
+      "V33-119",
+      "V33-121",
+      "V33-122",
+      "V33-114",
+      "V33-200",
+      "V33-201",
+      "V33-202",
+      "V33-203",
+      "V33-243",
+      "V33-214",
+      "V33-244",
+      "V33-SG-COMPLETION",
+      "V33-242",
+      "V33-240",
+      "V33-241",
+      "V33-225",
+      "V33-226",
+      "V33-220",
+      "V33-221",
+      "V33-222",
+      "V33-227",
+      "V33-223",
+      "V33-224",
+      "V33-204",
+      "V33-CROSS-SAN-GONG-ECON",
+      "V33-TXT-FUND-DETAIL",
+      "V33-NARRATIVE-INDICATOR-REPEAT",
+      "V33-TREND-COMPLETION-RATE",
+      "V33-233",
+      "V33-234",
+      "V33-235",
+      "V33-236",
+      "V33-230",
+      "V33-232"
+    ],
+    "common": [
+      "CMM-001",
+      "CMM-002",
+      "CMM-003",
+      "CMM-004",
+      "CMM-005",
+      "CMM-006",
+      "CMM-007",
+      "V33-DISCLOSURE-PERCENT-UNIT"
+    ]
+  },
+  "kind_accuracy": {
+    "total": 1,
+    "correct": 1,
+    "rate": 1.0,
+    "mismatches": []
+  },
+  "status_distribution": {
+    "pass": 46,
+    "fail": 5,
+    "not_applicable": 1,
+    "insufficient_data": 13,
+    "parse_error": 0,
+    "execution_error": 0
+  },
+  "obligation_ledger": {
+    "completion_rate": 0.7209,
+    "totals": {
+      "applicable": 43,
+      "completed": 31,
+      "unresolved": 12
+    },
+    "by_group": {
+      "DOC_STRUCTURE": {
+        "applicable": 1,
+        "completed": 1,
+        "unresolved": 0,
+        "completion_rate": 1.0
+      },
+      "CORE_TABLES": {
+        "applicable": 1,
+        "completed": 1,
+        "unresolved": 0,
+        "completion_rate": 1.0
+      },
+      "TABLE_INTERNAL": {
+        "applicable": 7,
+        "completed": 5,
+        "unresolved": 2,
+        "completion_rate": 0.7143
+      },
+      "TABLE_CROSS": {
+        "applicable": 8,
+        "completed": 7,
+        "unresolved": 1,
+        "completion_rate": 0.875
+      },
+      "TABLE_TEXT": {
+        "applicable": 8,
+        "completed": 1,
+        "unresolved": 7,
+        "completion_rate": 0.125
+      },
+      "NARRATIVE": {
+        "applicable": 2,
+        "completed": 2,
+        "unresolved": 0,
+        "completion_rate": 1.0
+      },
+      "RATIO_TREND": {
+        "applicable": 4,
+        "completed": 4,
+        "unresolved": 0,
+        "completion_rate": 1.0
+      },
+      "DISCLOSURE": {
+        "applicable": 6,
+        "completed": 5,
+        "unresolved": 1,
+        "completion_rate": 0.8333
+      },
+      "SAN_GONG": {
+        "applicable": 6,
+        "completed": 5,
+        "unresolved": 1,
+        "completion_rate": 0.8333
+      }
+    }
+  },
+  "stratified": {
+    "by_subset": {
+      "final-main": {
+        "docs": 1,
+        "tp": 3,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      }
+    },
+    "by_region": {
+      "anchor": {
+        "docs": 1,
+        "tp": 3,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      }
+    },
+    "by_report_kind_true": {
+      "final": {
+        "docs": 1,
+        "tp": 3,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      }
+    }
+  },
+  "generated_at": "2026-09-28 00:59:23",
+  "replay_dir": "E:\\Software Development\\GovBudgetChecker\\GovBudgetChecker\\outputs\\benchmark\\20260928-005910",
+  "mode": "auto"
+}
