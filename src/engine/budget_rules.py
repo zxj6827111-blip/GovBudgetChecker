@@ -1759,6 +1759,26 @@ class BUD104_T9Formula(Rule):
         return issues
 
 
+def _budget_table_has_nonzero_amount(rows: List[List[Any]]) -> bool:
+    """表格是否存在非零金额（MR-4 口径门槛用）。
+
+    跳过表头文本、科目编码（3/5/7 位纯数字，仓库通行约定）与百分比
+    单元格；任一真实金额非零即返回 True。
+    """
+    for row in rows:
+        for cell in row:
+            text = str(cell or "").strip()
+            if not text:
+                continue
+            compact = text.replace(",", "")
+            if compact.isdigit() and len(compact) in (3, 5, 7):
+                continue  # 科目编码列
+            v = parse_number(text)
+            if v is not None and abs(v) > 1e-9 and not text.endswith("%"):
+                return True
+    return False
+
+
 class BUD105_CrossTableChecks(Rule):
     code, severity = "BUD-105", "error"
     desc = "表间勾稽关系检查"
@@ -1770,6 +1790,7 @@ class BUD105_CrossTableChecks(Rule):
         t4_rows, t4_page = _get_budget_table_rows(doc, anchors, "BUD_T4")
         t3_rows, t3_page = _get_budget_table_rows(doc, anchors, "BUD_T3")
         t5_rows, t5_page = _get_budget_table_rows(doc, anchors, "BUD_T5")
+        t6_rows, _t6_page = _get_budget_table_rows(doc, anchors, "BUD_T6")
         t8_rows, t8_page = _get_budget_table_rows(doc, anchors, "BUD_T8")
 
         issues: List[Issue] = []
@@ -1873,41 +1894,90 @@ class BUD105_CrossTableChecks(Rule):
                 t3_tot_sv, t3_bas_sv, t3_prj_sv = _extract_total_basic_project_strict(t3_rows, default_unit=t3_unit)
                 t5_tot_sv, t5_bas_sv, t5_prj_sv = _extract_total_basic_project_strict(t5_rows, default_unit=t5_unit)
 
-                for (name, sv3, sv5) in [("合计", t3_tot_sv, t5_tot_sv), ("基本支出", t3_bas_sv, t5_bas_sv), ("项目支出", t3_prj_sv, t5_prj_sv)]:
-                    if sv3 and sv5 and sv3.is_numeric and sv5.is_numeric:
-                        env = compute_dynamic_envelope([sv3, sv5])
-                        diff_l, diff_v = classify_amount_diff(sv3.decimal_val, sv5.decimal_val, 1, envelope=env)
-                        if diff_l == "mismatch":
-                            max_scale = max(sv3.scale_digits, sv5.scale_digits, 2)
-                            location = _make_cross_table_location(
-                                _make_location_ref(
-                                    role="T3",
-                                    page=t3_page,
-                                    table="BUD_T3",
-                                    row="合计",
+                # MR-4（2026-09-28）对偶口径门槛：T3 支出总表是**全口径**，
+                # T5 一般公共预算功能分类表是**一般公共口径**——两者可比的
+                # 前提是「全口径 == 一般公共口径」，即：
+                #   (a) T3 合计 == T4 财政拨款收入总计（无事业收入等非财拨来源）；
+                #   (b) BUD_T6 政府性基金支出表不存在或全零（财拨内无基金分出）。
+                # 任一不成立即识别不出「同一口径的两个总计」，T3↔T5 差额是
+                # 口径差不是材料错误，RuleDeferred 转人工（建管委 2026 预算
+                # 实测：全口径 328,661.81 vs 一般公共 49,376.11，差额
+                # 279,285.70 恰为政府性基金支出，被误报 27.9 亿级不一致）。
+                caliber_notes: List[str] = []
+                comparable = True
+                t4_inc_gate = None
+                if t4_rows:
+                    t4_unit_gate = (
+                        doc.units_per_page[t4_page - 1]
+                        if t4_page and (t4_page - 1) < len(doc.units_per_page)
+                        else None
+                    )
+                    if t4_unit_gate:
+                        t4_inc_gate, _ = _extract_t4_strict(t4_rows, default_unit=t4_unit_gate)
+                if (
+                    t4_inc_gate is not None
+                    and t4_inc_gate.is_numeric
+                    and t3_tot_sv is not None
+                    and t3_tot_sv.is_numeric
+                ):
+                    env_gate = compute_dynamic_envelope([t3_tot_sv, t4_inc_gate])
+                    caliber_level, _ = classify_amount_diff(
+                        t3_tot_sv.decimal_val, t4_inc_gate.decimal_val, 1, envelope=env_gate
+                    )
+                    if caliber_level == "mismatch":
+                        comparable = False
+                        caliber_notes.append(
+                            f"T3合计({t3_tot_sv.decimal_val})≠T4财政拨款收入总计"
+                            f"({t4_inc_gate.decimal_val})，支出总表含非财拨来源"
+                        )
+                # T4 缺失/不可解析时不启用门槛：没有口径差的正面证据就保持
+                # 原比较行为（Batch-B R5/R6 纪律——部分列缺失不得吞掉已可
+                # 确认的总量不一致），避免把既有回归打成 Deferred。
+                if t6_rows and _budget_table_has_nonzero_amount(t6_rows):
+                    comparable = False
+                    caliber_notes.append(
+                        "存在政府性基金预算支出（BUD_T6 非零），T5 仅覆盖一般公共口径"
+                    )
+                if not comparable:
+                    unresolved_reasons.append(
+                        "T3↔T5对偶口径不可比（" + "；".join(caliber_notes) + "），差额属口径差，转人工"
+                    )
+                else:
+                    for (name, sv3, sv5) in [("合计", t3_tot_sv, t5_tot_sv), ("基本支出", t3_bas_sv, t5_bas_sv), ("项目支出", t3_prj_sv, t5_prj_sv)]:
+                        if sv3 and sv5 and sv3.is_numeric and sv5.is_numeric:
+                            env = compute_dynamic_envelope([sv3, sv5])
+                            diff_l, diff_v = classify_amount_diff(sv3.decimal_val, sv5.decimal_val, 1, envelope=env)
+                            if diff_l == "mismatch":
+                                max_scale = max(sv3.scale_digits, sv5.scale_digits, 2)
+                                location = _make_cross_table_location(
+                                    _make_location_ref(
+                                        role="T3",
+                                        page=t3_page,
+                                        table="BUD_T3",
+                                        row="合计",
+                                        field=name,
+                                        value=float(sv3.decimal_val),
+                                    ),
+                                    _make_location_ref(
+                                        role="T5",
+                                        page=t5_page,
+                                        table="BUD_T5",
+                                        row="合计",
+                                        field=name,
+                                        value=float(sv5.decimal_val),
+                                    ),
                                     field=name,
-                                    value=float(sv3.decimal_val),
-                                ),
-                                _make_location_ref(
-                                    role="T5",
-                                    page=t5_page,
-                                    table="BUD_T5",
                                     row="合计",
-                                    field=name,
-                                    value=float(sv5.decimal_val),
-                                ),
-                                field=name,
-                                row="合计",
-                            )
-                            issues.append(
-                                self._issue(
-                                    f"T3与T5{name}不一致: T3={sv3.decimal_val:.{max_scale}f}, T5={sv5.decimal_val:.{max_scale}f} (差额={diff_v:.{max_scale}f})",
-                                    location,
-                                    severity="error",
                                 )
-                            )
-                    else:
-                        unresolved_reasons.append(f"T3与T5{name}数值缺失")
+                                issues.append(
+                                    self._issue(
+                                        f"T3与T5{name}不一致: T3={sv3.decimal_val:.{max_scale}f}, T5={sv5.decimal_val:.{max_scale}f} (差额={diff_v:.{max_scale}f})",
+                                        location,
+                                        severity="error",
+                                    )
+                                )
+                        else:
+                            unresolved_reasons.append(f"T3与T5{name}数值缺失")
         else:
             unresolved_reasons.append("BUD_T3或BUD_T5表格缺失，无法核验T3↔T5勾稽")
 
