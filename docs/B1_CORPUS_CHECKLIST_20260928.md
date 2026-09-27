@@ -8,6 +8,12 @@
 
 ## 一、既有资产 7 份（PDF 均已在本机定位，签署后即登记）
 
+> **登记进度（2026-09-28）**：第 1~7 份已全部登记入 `corpus/manifest.csv`
+> （DOC-20260905-001 + DOC-B1-001~006，SHA 与源 PDF 逐一核对；PDF 只落本机
+> `corpus/<DOC-ID>/sample.pdf`，不入库——入库边界由
+> `tests/test_corpus_ingest_guards.py` 守护）。首轮「修复前/修复后」对照结果
+> 见 `docs/B1_BENCH_DELTA_20260928.md`；本节其余待签字项不受影响。
+
 | # | 材料 | 源 PDF SHA-256（前 12 位） | 位置 | 拟登记子集 | 文种真值 |
 |---|---|---|---|---|---|
 | 1 | 生态环境局 2025 年度部门决算（golden DOC-20260905-001） | `113b98bb5df1` | corpus + uploads/3f44e78b… | final-main | final |

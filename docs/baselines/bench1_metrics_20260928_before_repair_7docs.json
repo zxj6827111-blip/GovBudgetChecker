@@ -1,7 +1,14 @@
 {
-  "docs_total": 1,
+  "docs_total": 7,
   "docs_evaluated": 1,
-  "docs_unannotated": [],
+  "docs_unannotated": [
+    "DOC-B1-001",
+    "DOC-B1-002",
+    "DOC-B1-003",
+    "DOC-B1-004",
+    "DOC-B1-005",
+    "DOC-B1-006"
+  ],
   "evaluated_doc_ids": [
     "DOC-20260905-001"
   ],
@@ -51,12 +58,35 @@
       "precision": 1.0
     }
   },
+  "zero_trigger_scope": "全部重放材料（无标注依赖）",
+  "rule_trigger_counts": {
+    "BUD-105": 2,
+    "BUD-107": 2,
+    "CMM-002": 2,
+    "CMM-005": 1,
+    "CMM-007": 2,
+    "V33-001": 1,
+    "V33-005": 2,
+    "V33-117": 2,
+    "V33-120": 55,
+    "V33-202": 1,
+    "V33-222": 1,
+    "V33-241": 2,
+    "V33-243": 1,
+    "V33-244": 5,
+    "V33-245": 1,
+    "V33-246": 2,
+    "V33-CROSS-SAN-GONG-ECON": 3,
+    "V33-DISCLOSURE-PERCENT-UNIT": 1,
+    "V33-NARRATIVE-INDICATOR-REPEAT": 2,
+    "V33-SG-COMPLETION": 1,
+    "V33-TXT-FUND-DETAIL": 1
+  },
   "zero_trigger_rules": {
     "final": [
       "V33-002",
       "V33-003",
       "V33-004",
-      "V33-005",
       "V33-101",
       "V33-102",
       "V33-103",
@@ -77,27 +107,18 @@
       "V33-114",
       "V33-200",
       "V33-201",
-      "V33-202",
       "V33-203",
-      "V33-243",
       "V33-214",
-      "V33-244",
-      "V33-SG-COMPLETION",
       "V33-242",
       "V33-240",
-      "V33-241",
       "V33-225",
       "V33-226",
       "V33-220",
       "V33-221",
-      "V33-222",
       "V33-227",
       "V33-223",
       "V33-224",
       "V33-204",
-      "V33-CROSS-SAN-GONG-ECON",
-      "V33-TXT-FUND-DETAIL",
-      "V33-NARRATIVE-INDICATOR-REPEAT",
       "V33-TREND-COMPLETION-RATE",
       "V33-233",
       "V33-234",
@@ -106,92 +127,110 @@
       "V33-230",
       "V33-232"
     ],
+    "budget": [
+      "BUD-001",
+      "BUD-002",
+      "BUD-003",
+      "BUD-101",
+      "BUD-102",
+      "BUD-103",
+      "BUD-104",
+      "BUD-106",
+      "BUD-108",
+      "BUD-109",
+      "BUD-110",
+      "BUD-111",
+      "BUD-112",
+      "BUD-113"
+    ],
     "common": [
       "CMM-001",
-      "CMM-002",
       "CMM-003",
       "CMM-004",
-      "CMM-005",
-      "CMM-006",
-      "CMM-007",
-      "V33-DISCLOSURE-PERCENT-UNIT"
+      "CMM-006"
     ]
   },
   "kind_accuracy": {
-    "total": 1,
-    "correct": 1,
+    "total": 7,
+    "correct": 7,
     "rate": 1.0,
     "mismatches": []
   },
   "status_distribution": {
-    "pass": 46,
-    "fail": 5,
-    "not_applicable": 1,
-    "insufficient_data": 13,
+    "pass": 233,
+    "fail": 27,
+    "not_applicable": 4,
+    "insufficient_data": 68,
     "parse_error": 0,
     "execution_error": 0
   },
   "obligation_ledger": {
-    "completion_rate": 0.7209,
+    "completion_rate": 0.7344,
     "totals": {
-      "applicable": 43,
-      "completed": 31,
-      "unresolved": 12
+      "applicable": 241,
+      "completed": 177,
+      "unresolved": 64
     },
     "by_group": {
       "DOC_STRUCTURE": {
-        "applicable": 1,
-        "completed": 1,
+        "applicable": 10,
+        "completed": 10,
         "unresolved": 0,
         "completion_rate": 1.0
       },
       "CORE_TABLES": {
-        "applicable": 1,
-        "completed": 1,
+        "applicable": 7,
+        "completed": 7,
         "unresolved": 0,
         "completion_rate": 1.0
       },
       "TABLE_INTERNAL": {
-        "applicable": 7,
-        "completed": 5,
-        "unresolved": 2,
-        "completion_rate": 0.7143
+        "applicable": 37,
+        "completed": 34,
+        "unresolved": 3,
+        "completion_rate": 0.9189
       },
       "TABLE_CROSS": {
-        "applicable": 8,
-        "completed": 7,
-        "unresolved": 1,
-        "completion_rate": 0.875
+        "applicable": 35,
+        "completed": 28,
+        "unresolved": 7,
+        "completion_rate": 0.8
       },
       "TABLE_TEXT": {
-        "applicable": 8,
-        "completed": 1,
-        "unresolved": 7,
-        "completion_rate": 0.125
+        "applicable": 38,
+        "completed": 3,
+        "unresolved": 35,
+        "completion_rate": 0.0789
       },
       "NARRATIVE": {
-        "applicable": 2,
-        "completed": 2,
+        "applicable": 14,
+        "completed": 14,
         "unresolved": 0,
         "completion_rate": 1.0
       },
       "RATIO_TREND": {
-        "applicable": 4,
-        "completed": 4,
-        "unresolved": 0,
-        "completion_rate": 1.0
+        "applicable": 25,
+        "completed": 23,
+        "unresolved": 2,
+        "completion_rate": 0.92
       },
       "DISCLOSURE": {
-        "applicable": 6,
-        "completed": 5,
-        "unresolved": 1,
+        "applicable": 42,
+        "completed": 35,
+        "unresolved": 7,
         "completion_rate": 0.8333
       },
       "SAN_GONG": {
+        "applicable": 27,
+        "completed": 23,
+        "unresolved": 4,
+        "completion_rate": 0.8519
+      },
+      "PERFORMANCE": {
         "applicable": 6,
-        "completed": 5,
-        "unresolved": 1,
-        "completion_rate": 0.8333
+        "completed": 0,
+        "unresolved": 6,
+        "completion_rate": 0.0
       }
     }
   },
@@ -227,7 +266,7 @@
       }
     }
   },
-  "generated_at": "2026-09-28 00:59:23",
-  "replay_dir": "E:\\Software Development\\GovBudgetChecker\\GovBudgetChecker\\outputs\\benchmark\\20260928-005910",
+  "generated_at": "2026-09-28 07:10:56",
+  "replay_dir": "E:\\Software Development\\GovBudgetChecker\\GovBudgetChecker\\outputs\\benchmark\\20260928-070407",
   "mode": "auto"
 }
