@@ -329,12 +329,36 @@ async def test_pipeline_marks_scanned_document_as_review_required(tmp_path, monk
 async def test_pipeline_clean_document_with_unimplemented_checks_is_not_done(
     tmp_path, monkeypatch
 ):
-    """干净材料 + 全部适用规则执行完毕，仍不能算"检查完整"。
+    """干净材料 + 全部适用规则执行完毕，存在"尚未实现"义务时不能算"检查完整"。
 
-    这是本次整改的核心断言：当前预算口径下仍有尚未实现的检查义务
-    （如"占 XX.XX"漏百分号、绩效阶段金额口径），它们不是"没问题"，
-    而是"没查"。门禁必须保留 review_required，否则漏查会被当成通过。
+    历史前提：预算口径曾有尚未实现的检查义务（"占 XX.XX"漏百分号、绩效
+    阶段金额口径），它们不是"没问题"，而是"没查"。WP4-F/WP4-H 已把这些
+    缺口逐条真实补齐（不删分母），因此用合成 pending 义务锁住同一门禁
+    语义：只要清单里存在未实现项，门禁必须保留 review_required。
     """
+    from dataclasses import replace as dc_replace
+
+    pending_target = next(
+        item
+        for item in check_obligations.OBLIGATION_CATALOG
+        if "budget" in item.report_kinds and not item.requires_ai
+    )
+    with_pending = dc_replace(
+        pending_target,
+        checkers_by_kind={},
+        pending_checkers=("BUD-SYNTHETIC-GAP",),
+        gap_note="合成缺口：验证未实现义务阻塞门禁",
+    )
+    monkeypatch.setattr(
+        check_obligations,
+        "OBLIGATION_CATALOG",
+        tuple(
+            with_pending if item is pending_target else item
+            for item in check_obligations.OBLIGATION_CATALOG
+        ),
+        raising=True,
+    )
+
     job_dir = _prepare_job(
         tmp_path,
         "job-clean",

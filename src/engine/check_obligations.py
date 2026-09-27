@@ -84,7 +84,10 @@ from src.schemas.document_profile import DocumentProfile
 #: v8（2026-09-26 WP4-F）：OBL-DISCLOSURE-PERCENT-UNIT 的实现缺口补齐——
 #: checker 从 pending_checkers 转为真实 checker（V33-DISCLOSURE-PERCENT-UNIT，
 #: budget+final 通用，common registry）。
-OBLIGATION_CATALOG_VERSION = "obligations-v8"
+#: v9（2026-09-26 WP4-H）：OBL-PERF-PHASE-AMOUNT 的实现缺口补齐（最后一个）——
+#: checker 从 pending_checkers 转为真实 checker（V33-PERF-PHASE-AMOUNT，
+#: budget 专用，budget registry）。至此清单内全部确定性义务均有实现。
+OBLIGATION_CATALOG_VERSION = "obligations-v9"
 
 # ---- 实例状态 ---------------------------------------------------------------
 
@@ -765,10 +768,18 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         group_id=GROUP_PERFORMANCE,
         title="绩效阶段金额与项目集合口径说明",
         report_kinds=_BUDGET_ONLY,
-        # plan §4：项目数相同不代表项目集合、预算版本相同，缺依据时只能要求解释。
-        pending_checkers=("BUD-PERF-PHASE-AMOUNT",),
+        # WP4-H：真实漏报收口。文旅局 2026 部门预算（SHA 19447c3c…）P27
+        # 「真如海心剧院精装修工程项目经费情况说明」——「年度预算安排」
+        # 小节只有可研批复总投资 13526.06 万元（累计口径）与「2025 年安排
+        # 建设资金 5000 万元」（往年口径），2026 年度金额整体缺失且无口径
+        # 说明，历史系统对该义务无任何 checker（pending），漏报。负例锚：
+        # 建管委「兰溪路-真南路下立交工程」22,614.51 万元 ↔ 申报表
+        # 226,145,100.00 元（归一一致）、城管执法局「拆违经费」349.80 万元
+        # ↔ 3,498,000.00 元。阶段身份红线：申报表「项目资金总额」在阶段性
+        # 项目上是跨年累计口径，禁止与年度金额直接比较（plan §4：项目数
+        # 相同不代表项目集合、预算版本相同，缺依据时只能要求解释）。
+        checkers_by_kind=_budget("V33-PERF-PHASE-AMOUNT"),
         basis="绩效阶段金额与项目集合口径不一致时须给出解释，不得直接判等",
-        gap_note="缺少绩效阶段金额与项目集合/预算版本口径的说明性校验",
     ),
     # ---- AI 语义义务（候选提出，不作确定性结论） ----
     Obligation(
