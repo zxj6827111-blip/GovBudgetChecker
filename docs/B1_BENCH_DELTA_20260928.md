@@ -126,3 +126,27 @@ python .tmp/wt-lane1/scripts/run_benchmark.py \
   S2 新收的 23 份外部材料上。
 - **未覆盖**：扫描观察集（scan-watch）本次为空——可读性闸门的效果只在
   单元测试中验证（MR-3），没有真实扫描件语料。
+
+## 八、度量口径：benchmark 与生产路径的等价面（已实测并加锁）
+
+S4 的精度指标全部取自 `run_benchmark`，而用户在界面里看到的是
+`build_issues_payload` 的 `issues` 分桶。两者只有 finding 集合一致，
+基准测出来的精度才代表生产行为。实测结论（golden 样张页数据）：
+
+| 面 | 结果 |
+|---|---|
+| finding 条数 | 7 vs 7，一致 |
+| 规则多重集 | 逐条一致（`build_issues_payload` 只做 dict 化 + severity 归一，**不过滤、不去重**） |
+| severity | 归一为 error/warn/info 三桶（`high`→error；`medium`/`manual_review`→warn；`info`→info），分桶不是二次筛选 |
+| rule_execution_summary | 原样透传（`executed = pass+fail+n/a`；`unresolved_total` = 三种未执行之和 = `unresolved_rules` 条数） |
+
+因此本报告的 finding 计数与用户在界面上所见**同源同量**，精度可比。
+
+**故意保留的一处差异**：MR-3 的文档级可读性闸门在 `api/main.py` 里于
+`build_issues_payload` **之后**施加，benchmark 路径不含闸门——scan-watch
+材料在基准里会显示闸门前的条目。scan-watch 不进主指标，故对 P/R 无影响；
+但要让基准反映"扫描件只出一条转人工评语"的真实行为，需在 run_benchmark
+侧对齐闸门（列为 S4 待办，PR #59 合入后随之生效）。
+
+等价性由 `tests/test_bench_production_parity.py` 锁定（**变异验证**：给
+`build_issues_payload` 加一行 `info` 过滤，2 条转红）。
