@@ -32,6 +32,12 @@ python .tmp/wt-lane1/scripts/run_benchmark.py \
 两跑均 `7 docs, 0 failures`，`parse_error = execution_error = 0`（确定性纯规则，
 禁 AI，无网络）。
 
+> **节点粒度说明**：方案 S4 期望「修复前 / 每 MR 后 / 全部后」。车道1 的
+> MR-1/2/3 落成**单个提交** `9949dea`（MR-4 另为 `4d6662c`），因此可跑的节点
+> 只有「`main`」与「全部修复后」两个——逐 MR 中间态无法从现有历史切出，
+> 未做拆分重写（重写会动已 push 的分支历史）。若需要 MR 级归因，可用
+> `git worktree` 分别取两个 commit 各跑一轮，本工具链已支持。
+
 ## 二、逐份结果
 
 | 材料 | findings 前→后 | unresolved 前→后 | 说明 |
