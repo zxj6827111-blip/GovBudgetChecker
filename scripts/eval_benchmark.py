@@ -63,13 +63,16 @@ def _registry_codes() -> Dict[str, List[str]]:
 
 def _load_replay_meta(replay_path: Path) -> Dict[str, Any]:
     payload = json.loads(replay_path.read_text(encoding="utf-8"))
+    legacy = payload.get("legacy") or {}
     return {
         "doc_id": str(payload.get("doc_id") or replay_path.stem),
         "sha256": str(payload.get("sha256") or ""),
         "report_kind_resolved": str(payload.get("report_kind_resolved") or ""),
         "rule_execution_summary": payload.get("rule_execution_summary") or {},
         "obligation_ledger": payload.get("obligation_ledger") or {},
-        "finding_total": int(payload.get("legacy", {}).get("finding_total")
+        # 无标注依赖的触发观测（零触发清单用；不等同于评测面的 rule_counts）
+        "rule_counts": legacy.get("rule_counts") or {},
+        "finding_total": int(legacy.get("finding_total")
                              or len(payload.get("findings") or [])),
     }
 
@@ -139,7 +142,15 @@ def aggregate(doc_entries: List[Dict[str, Any]], registry: Dict[str, List[str]])
         }
 
     # —— 零触发清单：按文种适用分母，重放 findings 里从未出现的规则码 ——
-    triggered = set(rule_level)
+    # 触发观测不依赖标注：分母必须是**全部重放材料**。S1 首版误用 rule_level
+    # （只统计已标注面），1/7 已标注时把「未标注材料上的触发」全记成零触发
+    # （final 52 条），与本节语义相反。
+    triggered: set = set()
+    rule_trigger_counts: Dict[str, int] = {}
+    for e in doc_entries:
+        for rule, count in (e.get("replay_meta", {}).get("rule_counts") or {}).items():
+            triggered.add(rule)
+            rule_trigger_counts[rule] = rule_trigger_counts.get(rule, 0) + int(count)
     zero_trigger: Dict[str, List[str]] = {}
     kind_docs: Dict[str, int] = {}
     for e in doc_entries:
@@ -240,6 +251,8 @@ def aggregate(doc_entries: List[Dict[str, Any]], registry: Dict[str, List[str]])
             "hint_groups_total": sum(r["hint_groups_total"] for r in (e["eval_report"] for e in evaluated)),
         },
         "rule_level": rule_level,
+        "zero_trigger_scope": "全部重放材料（无标注依赖）",
+        "rule_trigger_counts": dict(sorted(rule_trigger_counts.items())),
         "zero_trigger_rules": zero_trigger,
         "kind_accuracy": {
             "total": kind_total,

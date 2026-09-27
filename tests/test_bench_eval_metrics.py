@@ -34,7 +34,16 @@ def _eval_report(tp_rules, fp_rules, *, fn=1, hint_groups_hit=1, hint_groups_tot
     }
 
 
-def _entry(doc_id, *, manifest, resolved, summary, ledger_groups, eval_report=None):
+def _entry(doc_id, *, manifest, resolved, summary, ledger_groups, eval_report=None,
+           rule_counts=None):
+    """逐份重放条目。
+
+    ``rule_counts`` 是**无标注依赖**的触发观测（真实重放里等于该份 findings
+    的规则计数，已标注与未标注材料都有值）；不显式给时按 eval_report 的
+    规则计数回填，与真实产物形状一致。
+    """
+    if rule_counts is None:
+        rule_counts = dict((eval_report or {}).get("rule_counts") or {})
     entry = {
         "doc_id": doc_id,
         "manifest": manifest,
@@ -42,6 +51,7 @@ def _entry(doc_id, *, manifest, resolved, summary, ledger_groups, eval_report=No
             "report_kind_resolved": resolved,
             "rule_execution_summary": summary,
             "obligation_ledger": {"by_group": ledger_groups},
+            "rule_counts": rule_counts,
         },
     }
     if eval_report is not None:
@@ -203,3 +213,47 @@ def test_aggregate_does_not_mutate_entries():
     snapshot = copy.deepcopy(entries)
     aggregate(entries, REGISTRY)
     assert entries == snapshot
+
+
+def test_zero_trigger_scope_covers_unannotated_replay():
+    """零触发清单必须看**全部重放材料**，不能只看已标注面。
+
+    反例来由（真缺陷）：S1 首版用 rule_level（只由已标注材料构建）算零触发，
+    7 份材料只标注了 1 份时，另外 6 份上的触发被全部记成"零触发"
+    （final 域 52 条），与本节"重放 findings 里从未出现"的语义相反。
+    """
+    entries = [
+        # 已标注：只触发 V33-101
+        _entry(
+            "DOC-B1-001",
+            manifest={"doc_id": "DOC-B1-001", "report_kind_true": "final",
+                      "subset": "final-main", "region": "anchor"},
+            resolved="final",
+            summary={"pass": 1, "fail": 0, "not_applicable": 0,
+                     "insufficient_data": 0, "parse_error": 0, "execution_error": 0},
+            ledger_groups=[],
+            eval_report=_eval_report(["V33-101"], []),
+        ),
+        # 未标注：重放里触发了 V33-201（无 eval_report，只有触发观测）
+        _entry(
+            "DOC-B1-002",
+            manifest={"doc_id": "DOC-B1-002", "report_kind_true": "final",
+                      "subset": "final-main", "region": "anchor"},
+            resolved="final",
+            summary={"pass": 1, "fail": 0, "not_applicable": 0,
+                     "insufficient_data": 0, "parse_error": 0, "execution_error": 0},
+            ledger_groups=[],
+            rule_counts={"V33-201": 2},
+        ),
+    ]
+    report = aggregate(entries, REGISTRY)
+
+    # V33-201 只在未标注材料上触发——不得进零触发清单
+    assert "V33-201" not in report["zero_trigger_rules"]["final"]
+    # V33-102 / V33-227 全量重放里从未触发——仍在清单里
+    assert "V33-102" in report["zero_trigger_rules"]["final"]
+    assert "V33-227" in report["zero_trigger_rules"]["final"]
+    # 触发观测是标签无关面：全量计数如实导出
+    assert report["rule_trigger_counts"]["V33-201"] == 2
+    assert report["rule_trigger_counts"]["V33-101"] == 1
+    assert report["zero_trigger_scope"] == "全部重放材料（无标注依赖）"
