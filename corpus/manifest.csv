@@ -1,2 +1,8 @@
 doc_id,sha256,report_kind_true,subset,region,depth,source_url,pages,text_chars,registered_at,notes
 DOC-20260905-001,113b98bb5df18c264f9c589a1034d3bfc27ed65562b4bbbe72bfd33420f912c7,final,final-main,anchor,,golden-corpus 既有资产,31,16832,2026-09-28 00:59:10,
+DOC-B1-001,f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03,final,final-main,anchor,,本机既有资产（非公开 URL）,41,19661,2026-09-28 07:03:28,既有资产（Y02 真值样张）；来源：本机 uploads/putuo_final_samples
+DOC-B1-002,e8315830f800e58038b19bfd0f1e36f5930d9da72a22c3e79f781036bd5289a4,final,final-main,anchor,,本机既有资产（非公开 URL）,44,21380,2026-09-28 07:03:36,既有资产（S03 真值样张）；来源：本机 uploads/putuo_final_samples
+DOC-B1-003,74e6afd06669098f57391a13dad63a6f2a15cac620ac9f32018e79649fe6a367,final,final-main,anchor,,本机既有资产（非公开 URL）,33,16498,2026-09-28 07:03:38,既有资产（真值 Y07/文旅级联样张）；来源：本机 uploads/putuo_final_samples
+DOC-B1-004,73528f0b78d178bd83d9b65bcaa77d30269f5e0f67f6ceb6064b819ae479e16a,budget,budget-main,anchor,,本机既有资产（非公开 URL）,24,16268,2026-09-28 07:03:46,既有资产（BUD-105 口径样张）；来源：本机 uploads
+DOC-B1-005,c56f4368be5dbf51c88214f1260ecb97ce57fe77950df18dc33d184f40b24d93,budget,budget-main,anchor,,本机既有资产（非公开 URL）,24,10881,2026-09-28 07:03:47,既有资产；来源：本机 uploads
+DOC-B1-006,19447c3cec309322ad786b14f5cb751424a1bfe2a1f3c4c3a96d035440665cf9,budget,budget-main,anchor,,本机既有资产（非公开 URL）,27,12758,2026-09-28 07:03:49,既有资产；来源：本机 uploads
