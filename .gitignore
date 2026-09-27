@@ -52,6 +52,8 @@ api/database.db
 *.log
 .ruff_cache/
 .trae/
+# ZCode 本地会话产物（plans/ 等）
+.zcode/
 
 
 # Local data and temporary files
