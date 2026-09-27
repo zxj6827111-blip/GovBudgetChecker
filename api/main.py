@@ -26,7 +26,11 @@ from src.engine.check_obligations import (
     attach_obligation_ids,
     build_obligation_ledger,
 )
-from src.engine.pipeline import build_document, build_issues_payload
+from src.engine.pipeline import (
+    apply_readability_gate,
+    build_document,
+    build_issues_payload,
+)
 from src.engine.rule_outcome import STATUS_INSUFFICIENT_DATA
 from src.services.document_profile_resolver import resolve_document_profile
 from src.services.evidence_guard import (
@@ -1450,6 +1454,9 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                     report_kind,
                     RULES_TIMEOUT_SEC,
                 )
+                # MR-3（2026-09-27）：文档级可读性闸门——扫描件/低覆盖材料的
+                # error 级假阳性整体转人工，防止"扫描件静默漏检却报高危矛盾"
+                apply_readability_gate(payload_issues, page_assessment)
             except RuleExecutionTimeout as exc:
                 provider_stats.append(
                     {

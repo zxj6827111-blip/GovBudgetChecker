@@ -1,0 +1,558 @@
+{
+  "documents": [
+    {
+      "doc_id": "SAMPLE-YICHUAN-2025-FINAL",
+      "fixture": "tests/fixtures/cross_san_gong_truth_page_data.json",
+      "findings_total": 34,
+      "findings_by_severity": {
+        "error": 5,
+        "warn": 0,
+        "info": 28
+      },
+      "unresolved_total": 12,
+      "unresolved_rules": [
+        {
+          "rule_id": "V33-101",
+          "status": "insufficient_data",
+          "detail": "收入支出决算总表关键行缺失: 本年支出,结余分配,年末结转和结余",
+          "unresolved_reasons": [
+            "收入支出决算总表关键行缺失: 本年支出,结余分配,年末结转和结余"
+          ]
+        },
+        {
+          "rule_id": "V33-102",
+          "status": "insufficient_data",
+          "detail": "总体情况说明未提取到支出合计金额",
+          "unresolved_reasons": [
+            "总体情况说明未提取到支出合计金额"
+          ]
+        },
+        {
+          "rule_id": "V33-103",
+          "status": "insufficient_data",
+          "detail": "说明文本中未提取到本年收入合计; 收入决算表缺少关键行: 财政拨款收入",
+          "unresolved_reasons": [
+            "说明文本中未提取到本年收入合计",
+            "收入决算表缺少关键行: 财政拨款收入"
+          ]
+        },
+        {
+          "rule_id": "V33-104",
+          "status": "insufficient_data",
+          "detail": "说明文本中未提取到本年支出合计; 支出决算表缺少关键行: 基本支出; 说明文本中未提取到基本支出; 支出决算表缺少关键行: 项目支出; 说明文本中未提取到项目支出",
+          "unresolved_reasons": [
+            "说明文本中未提取到本年支出合计",
+            "支出决算表缺少关键行: 基本支出",
+            "说明文本中未提取到基本支出",
+            "支出决算表缺少关键行: 项目支出",
+            "说明文本中未提取到项目支出"
+          ]
+        },
+        {
+          "rule_id": "V33-105",
+          "status": "insufficient_data",
+          "detail": "财政拨款收入支出决算总表未找到支出合计/总计行",
+          "unresolved_reasons": [
+            "财政拨款收入支出决算总表未找到支出合计/总计行"
+          ]
+        },
+        {
+          "rule_id": "V33-106",
+          "status": "insufficient_data",
+          "detail": "一般公共预算财政拨款支出决算表未提取到合计金额",
+          "unresolved_reasons": [
+            "一般公共预算财政拨款支出决算表未提取到合计金额"
+          ]
+        },
+        {
+          "rule_id": "V33-107",
+          "status": "insufficient_data",
+          "detail": "基本支出决算表缺少关键行: 人员经费,公用经费",
+          "unresolved_reasons": [
+            "基本支出决算表缺少关键行: 人员经费,公用经费"
+          ]
+        },
+        {
+          "rule_id": "V33-108",
+          "status": "insufficient_data",
+          "detail": "三公经费支出决算表未提取到预算数或决算数合计行",
+          "unresolved_reasons": [
+            "三公经费支出决算表未提取到预算数或决算数合计行"
+          ]
+        },
+        {
+          "rule_id": "V33-226",
+          "status": "insufficient_data",
+          "detail": "收入决算情况说明中未提取到有效金额",
+          "unresolved_reasons": [
+            "收入决算情况说明中未提取到有效金额"
+          ]
+        },
+        {
+          "rule_id": "V33-227",
+          "status": "insufficient_data",
+          "detail": "说明文本中未提取到功能分类科目提及",
+          "unresolved_reasons": [
+            "说明文本中未提取到功能分类科目提及"
+          ]
+        },
+        {
+          "rule_id": "V33-224",
+          "status": "insufficient_data",
+          "detail": "一般公共预算财政拨款\"三公\"经费支出决算表(T7)缺失",
+          "unresolved_reasons": [
+            "一般公共预算财政拨款\"三公\"经费支出决算表(T7)缺失"
+          ]
+        },
+        {
+          "rule_id": "CMM-001",
+          "status": "insufficient_data",
+          "detail": "未提取到三公经费情况说明数值",
+          "unresolved_reasons": [
+            "未提取到三公经费情况说明数值"
+          ]
+        }
+      ],
+      "outcome_stats": {
+        "total_rules": 65,
+        "executed": 53,
+        "pass": 43,
+        "fail": 9,
+        "not_applicable": 1,
+        "insufficient_data": 12,
+        "parse_error": 0,
+        "execution_error": 0,
+        "partial_findings_total": 0
+      }
+    },
+    {
+      "doc_id": "SAMPLE-SHIQUAN-2025-FINAL",
+      "fixture": "tests/fixtures/shiquan_narrative_truth_page_data.json",
+      "findings_total": 16,
+      "findings_by_severity": {
+        "error": 4,
+        "warn": 0,
+        "info": 11
+      },
+      "unresolved_total": 14,
+      "unresolved_rules": [
+        {
+          "rule_id": "V33-101",
+          "status": "insufficient_data",
+          "detail": "收入支出决算总表关键行缺失: 本年支出,结余分配,年末结转和结余",
+          "unresolved_reasons": [
+            "收入支出决算总表关键行缺失: 本年支出,结余分配,年末结转和结余"
+          ]
+        },
+        {
+          "rule_id": "V33-102",
+          "status": "insufficient_data",
+          "detail": "总体情况说明未提取到支出合计金额",
+          "unresolved_reasons": [
+            "总体情况说明未提取到支出合计金额"
+          ]
+        },
+        {
+          "rule_id": "V33-103",
+          "status": "insufficient_data",
+          "detail": "说明文本中未提取到本年收入合计; 收入决算表缺少关键行: 财政拨款收入; 说明文本中未提取到财政拨款收入",
+          "unresolved_reasons": [
+            "说明文本中未提取到本年收入合计",
+            "收入决算表缺少关键行: 财政拨款收入",
+            "说明文本中未提取到财政拨款收入"
+          ]
+        },
+        {
+          "rule_id": "V33-104",
+          "status": "insufficient_data",
+          "detail": "说明文本中未提取到本年支出合计; 支出决算表缺少关键行: 基本支出; 说明文本中未提取到基本支出; 支出决算表缺少关键行: 项目支出; 说明文本中未提取到项目支出",
+          "unresolved_reasons": [
+            "说明文本中未提取到本年支出合计",
+            "支出决算表缺少关键行: 基本支出",
+            "说明文本中未提取到基本支出",
+            "支出决算表缺少关键行: 项目支出",
+            "说明文本中未提取到项目支出"
+          ]
+        },
+        {
+          "rule_id": "V33-105",
+          "status": "insufficient_data",
+          "detail": "财政拨款收入支出决算总表未找到支出合计/总计行",
+          "unresolved_reasons": [
+            "财政拨款收入支出决算总表未找到支出合计/总计行"
+          ]
+        },
+        {
+          "rule_id": "V33-106",
+          "status": "insufficient_data",
+          "detail": "一般公共预算财政拨款支出决算表未提取到合计金额",
+          "unresolved_reasons": [
+            "一般公共预算财政拨款支出决算表未提取到合计金额"
+          ]
+        },
+        {
+          "rule_id": "V33-107",
+          "status": "insufficient_data",
+          "detail": "基本支出决算表缺少关键行: 公用经费",
+          "unresolved_reasons": [
+            "基本支出决算表缺少关键行: 公用经费"
+          ]
+        },
+        {
+          "rule_id": "V33-108",
+          "status": "insufficient_data",
+          "detail": "三公经费支出决算表未提取到预算数或决算数合计行",
+          "unresolved_reasons": [
+            "三公经费支出决算表未提取到预算数或决算数合计行"
+          ]
+        },
+        {
+          "rule_id": "V33-226",
+          "status": "insufficient_data",
+          "detail": "收入决算情况说明中未提取到有效金额",
+          "unresolved_reasons": [
+            "收入决算情况说明中未提取到有效金额"
+          ]
+        },
+        {
+          "rule_id": "V33-227",
+          "status": "insufficient_data",
+          "detail": "说明文本中未提取到功能分类科目提及",
+          "unresolved_reasons": [
+            "说明文本中未提取到功能分类科目提及"
+          ]
+        },
+        {
+          "rule_id": "V33-223",
+          "status": "insufficient_data",
+          "detail": "未提取到基本支出情况说明中的人员经费或公用经费",
+          "unresolved_reasons": [
+            "未提取到基本支出情况说明中的人员经费或公用经费"
+          ]
+        },
+        {
+          "rule_id": "V33-224",
+          "status": "insufficient_data",
+          "detail": "一般公共预算财政拨款\"三公\"经费支出决算表(T7)缺失",
+          "unresolved_reasons": [
+            "一般公共预算财政拨款\"三公\"经费支出决算表(T7)缺失"
+          ]
+        },
+        {
+          "rule_id": "V33-TREND-COMPLETION-RATE",
+          "status": "insufficient_data",
+          "detail": "「机关事业单位职业年金缴费支出」的本年支出决算存在多个不一致披露（含条目首句金额），完成率分子无法唯一确定（parse_ambiguity）",
+          "unresolved_reasons": [
+            "「机关事业单位职业年金缴费支出」的本年支出决算存在多个不一致披露（含条目首句金额），完成率分子无法唯一确定（parse_ambiguity）"
+          ]
+        },
+        {
+          "rule_id": "CMM-001",
+          "status": "insufficient_data",
+          "detail": "未提取到三公经费情况说明数值",
+          "unresolved_reasons": [
+            "未提取到三公经费情况说明数值"
+          ]
+        }
+      ],
+      "outcome_stats": {
+        "total_rules": 65,
+        "executed": 51,
+        "pass": 45,
+        "fail": 5,
+        "not_applicable": 1,
+        "insufficient_data": 14,
+        "parse_error": 0,
+        "execution_error": 0,
+        "partial_findings_total": 0
+      }
+    },
+    {
+      "doc_id": "SAMPLE-WENLV-2025-FINAL",
+      "fixture": "tests/fixtures/wenlv_narrative_truth_page_data.json",
+      "findings_total": 27,
+      "findings_by_severity": {
+        "error": 4,
+        "warn": 16,
+        "info": 7
+      },
+      "unresolved_total": 14,
+      "unresolved_rules": [
+        {
+          "rule_id": "V33-101",
+          "status": "insufficient_data",
+          "detail": "收入支出决算总表关键行缺失: 本年支出,结余分配,年末结转和结余",
+          "unresolved_reasons": [
+            "收入支出决算总表关键行缺失: 本年支出,结余分配,年末结转和结余"
+          ]
+        },
+        {
+          "rule_id": "V33-102",
+          "status": "insufficient_data",
+          "detail": "总体情况说明未提取到支出合计金额",
+          "unresolved_reasons": [
+            "总体情况说明未提取到支出合计金额"
+          ]
+        },
+        {
+          "rule_id": "V33-103",
+          "status": "insufficient_data",
+          "detail": "说明文本中未提取到本年收入合计; 收入决算表缺少关键行: 财政拨款收入",
+          "unresolved_reasons": [
+            "说明文本中未提取到本年收入合计",
+            "收入决算表缺少关键行: 财政拨款收入"
+          ]
+        },
+        {
+          "rule_id": "V33-104",
+          "status": "insufficient_data",
+          "detail": "说明文本中未提取到本年支出合计; 支出决算表缺少关键行: 基本支出; 说明文本中未提取到基本支出; 支出决算表缺少关键行: 项目支出; 说明文本中未提取到项目支出",
+          "unresolved_reasons": [
+            "说明文本中未提取到本年支出合计",
+            "支出决算表缺少关键行: 基本支出",
+            "说明文本中未提取到基本支出",
+            "支出决算表缺少关键行: 项目支出",
+            "说明文本中未提取到项目支出"
+          ]
+        },
+        {
+          "rule_id": "V33-105",
+          "status": "insufficient_data",
+          "detail": "财政拨款收入支出决算总表未找到支出合计/总计行",
+          "unresolved_reasons": [
+            "财政拨款收入支出决算总表未找到支出合计/总计行"
+          ]
+        },
+        {
+          "rule_id": "V33-106",
+          "status": "insufficient_data",
+          "detail": "一般公共预算财政拨款支出决算表未提取到合计金额",
+          "unresolved_reasons": [
+            "一般公共预算财政拨款支出决算表未提取到合计金额"
+          ]
+        },
+        {
+          "rule_id": "V33-107",
+          "status": "insufficient_data",
+          "detail": "基本支出决算表缺少关键行: 公用经费",
+          "unresolved_reasons": [
+            "基本支出决算表缺少关键行: 公用经费"
+          ]
+        },
+        {
+          "rule_id": "V33-108",
+          "status": "insufficient_data",
+          "detail": "三公经费支出决算表未提取到预算数或决算数合计行",
+          "unresolved_reasons": [
+            "三公经费支出决算表未提取到预算数或决算数合计行"
+          ]
+        },
+        {
+          "rule_id": "V33-226",
+          "status": "insufficient_data",
+          "detail": "收入决算情况说明中未提取到有效金额",
+          "unresolved_reasons": [
+            "收入决算情况说明中未提取到有效金额"
+          ]
+        },
+        {
+          "rule_id": "V33-227",
+          "status": "insufficient_data",
+          "detail": "说明文本中未提取到功能分类科目提及",
+          "unresolved_reasons": [
+            "说明文本中未提取到功能分类科目提及"
+          ]
+        },
+        {
+          "rule_id": "V33-223",
+          "status": "insufficient_data",
+          "detail": "未提取到基本支出情况说明中的人员经费或公用经费",
+          "unresolved_reasons": [
+            "未提取到基本支出情况说明中的人员经费或公用经费"
+          ]
+        },
+        {
+          "rule_id": "V33-224",
+          "status": "insufficient_data",
+          "detail": "一般公共预算财政拨款\"三公\"经费支出决算表(T7)缺失",
+          "unresolved_reasons": [
+            "一般公共预算财政拨款\"三公\"经费支出决算表(T7)缺失"
+          ]
+        },
+        {
+          "rule_id": "V33-TXT-FUND-DETAIL",
+          "status": "insufficient_data",
+          "detail": "政府性基金：《政府性基金预算财政拨款收入支出决算表》（第19页）列有支出金额，但说明章节无可绑定的项级支出表述",
+          "unresolved_reasons": [
+            "政府性基金：《政府性基金预算财政拨款收入支出决算表》（第19页）列有支出金额，但说明章节无可绑定的项级支出表述"
+          ]
+        },
+        {
+          "rule_id": "CMM-001",
+          "status": "insufficient_data",
+          "detail": "未提取到三公经费情况说明数值",
+          "unresolved_reasons": [
+            "未提取到三公经费情况说明数值"
+          ]
+        }
+      ],
+      "outcome_stats": {
+        "total_rules": 65,
+        "executed": 51,
+        "pass": 44,
+        "fail": 6,
+        "not_applicable": 1,
+        "insufficient_data": 14,
+        "parse_error": 0,
+        "execution_error": 0,
+        "partial_findings_total": 0
+      }
+    },
+    {
+      "doc_id": "DOC-20260905-001",
+      "fixture": "tests/fixtures/sample_page_data.json",
+      "findings_total": 7,
+      "findings_by_severity": {
+        "error": 0,
+        "warn": 0,
+        "info": 3
+      },
+      "unresolved_total": 13,
+      "unresolved_rules": [
+        {
+          "rule_id": "V33-101",
+          "status": "insufficient_data",
+          "detail": "收入支出决算总表关键行缺失: 本年支出,结余分配,年末结转和结余",
+          "unresolved_reasons": [
+            "收入支出决算总表关键行缺失: 本年支出,结余分配,年末结转和结余"
+          ]
+        },
+        {
+          "rule_id": "V33-102",
+          "status": "insufficient_data",
+          "detail": "总体情况说明未提取到支出合计金额",
+          "unresolved_reasons": [
+            "总体情况说明未提取到支出合计金额"
+          ]
+        },
+        {
+          "rule_id": "V33-103",
+          "status": "insufficient_data",
+          "detail": "收入决算表缺少关键行: 收入合计; 说明文本中未提取到本年收入合计; 收入决算表缺少关键行: 财政拨款收入; 说明文本中未提取到财政拨款收入",
+          "unresolved_reasons": [
+            "收入决算表缺少关键行: 收入合计",
+            "说明文本中未提取到本年收入合计",
+            "收入决算表缺少关键行: 财政拨款收入",
+            "说明文本中未提取到财政拨款收入"
+          ]
+        },
+        {
+          "rule_id": "V33-104",
+          "status": "insufficient_data",
+          "detail": "支出决算表缺少关键行: 本年支出合计; 说明文本中未提取到本年支出合计; 支出决算表缺少关键行: 基本支出; 说明文本中未提取到基本支出; 支出决算表缺少关键行: 项目支出; 说明文本中未提取到项目支出",
+          "unresolved_reasons": [
+            "支出决算表缺少关键行: 本年支出合计",
+            "说明文本中未提取到本年支出合计",
+            "支出决算表缺少关键行: 基本支出",
+            "说明文本中未提取到基本支出",
+            "支出决算表缺少关键行: 项目支出",
+            "说明文本中未提取到项目支出"
+          ]
+        },
+        {
+          "rule_id": "V33-105",
+          "status": "insufficient_data",
+          "detail": "财政拨款收入支出决算总表未找到支出合计/总计行",
+          "unresolved_reasons": [
+            "财政拨款收入支出决算总表未找到支出合计/总计行"
+          ]
+        },
+        {
+          "rule_id": "V33-107",
+          "status": "insufficient_data",
+          "detail": "基本支出决算表缺少关键行: 人员经费,公用经费",
+          "unresolved_reasons": [
+            "基本支出决算表缺少关键行: 人员经费,公用经费"
+          ]
+        },
+        {
+          "rule_id": "V33-108",
+          "status": "insufficient_data",
+          "detail": "三公经费支出决算表未提取到预算数或决算数合计行",
+          "unresolved_reasons": [
+            "三公经费支出决算表未提取到预算数或决算数合计行"
+          ]
+        },
+        {
+          "rule_id": "V33-240",
+          "status": "insufficient_data",
+          "detail": "T2存在跨页列不一致/漂移，无法可靠抽取层级关系",
+          "unresolved_reasons": [
+            "T2存在跨页列不一致/漂移，无法可靠抽取层级关系"
+          ]
+        },
+        {
+          "rule_id": "V33-241",
+          "status": "insufficient_data",
+          "detail": "T3存在跨页列不一致/漂移，无法可靠抽取层级关系",
+          "unresolved_reasons": [
+            "T3存在跨页列不一致/漂移，无法可靠抽取层级关系"
+          ]
+        },
+        {
+          "rule_id": "V33-226",
+          "status": "insufficient_data",
+          "detail": "收入决算情况说明中未提取到有效金额",
+          "unresolved_reasons": [
+            "收入决算情况说明中未提取到有效金额"
+          ]
+        },
+        {
+          "rule_id": "V33-227",
+          "status": "insufficient_data",
+          "detail": "说明文本中未提取到功能分类科目提及",
+          "unresolved_reasons": [
+            "说明文本中未提取到功能分类科目提及"
+          ]
+        },
+        {
+          "rule_id": "V33-224",
+          "status": "insufficient_data",
+          "detail": "一般公共预算财政拨款\"三公\"经费支出决算表(T7)缺失",
+          "unresolved_reasons": [
+            "一般公共预算财政拨款\"三公\"经费支出决算表(T7)缺失"
+          ]
+        },
+        {
+          "rule_id": "CMM-001",
+          "status": "insufficient_data",
+          "detail": "未提取到三公经费情况说明数值",
+          "unresolved_reasons": [
+            "未提取到三公经费情况说明数值"
+          ]
+        }
+      ],
+      "outcome_stats": {
+        "total_rules": 65,
+        "executed": 52,
+        "pass": 46,
+        "fail": 5,
+        "not_applicable": 1,
+        "insufficient_data": 13,
+        "parse_error": 0,
+        "execution_error": 0,
+        "partial_findings_total": 0
+      }
+    }
+  ],
+  "totals": {
+    "unresolved_total": 53,
+    "findings_total": 84
+  },
+  "fixture_shas": {
+    "tests/fixtures/cross_san_gong_truth_page_data.json": "45d761f3e3b7dc2ac023f1224bf4f02f7496860cca33b9f925ac8da991dcab4c",
+    "tests/fixtures/shiquan_narrative_truth_page_data.json": "be8abd4685bc0de3fc2b87b91e0f3d32e79a50e369c9e4dc7aa3cfe5c28272d7",
+    "tests/fixtures/wenlv_narrative_truth_page_data.json": "07813ae61b04cf9f3afd2bf93c69b357ff9aeefee3ba6a893b34d77d956e8252",
+    "tests/fixtures/sample_page_data.json": "2f862419dde3d04326125c9f4c45f9171c9c45af303c49a350b3be998ec31de1"
+  }
+}

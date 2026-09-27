@@ -451,3 +451,82 @@ def build_issues_payload(
         "issues": buckets,
         "rule_execution_summary": summarize_rule_outcomes(outcomes),
     }
+
+
+#: MR-3 文档级可读性闸门的覆盖率阈值（与 api 层质量门的 low_page_coverage
+#: 语义对齐；规则引擎不 import api，阈值在此常量声明）
+_READABILITY_COVERAGE_THRESHOLD = 0.8
+
+
+def apply_readability_gate(
+    payload: Dict[str, Any],
+    page_assessment: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """MR-3（2026-09-27「查得准」A 档）：扫描件/低覆盖材料的误报闸门。
+
+    实测：模拟扫描件（无文本层）上规则仍跑出 10 条 error 级假阳性——
+    缺表/缺章节/勾稽不平等结论都建立在读不到的页面上，属于"解析不可信"
+    而非材料错误。本闸门在 page_coverage < 0.8 或存在扫描页时，把 error 级
+    finding 全量降级为一条 manual_review（"材料可读性不足，转人工判读"），
+    原始 finding 压入 ``readability_gate.suppressed`` 供调试，不进主列表。
+
+    page_assessment 未提供或可读性正常时为 no-op，历史调用方行为不变。
+    warn/info 不动：它们本来就不进 fail 口径，且降低可见噪声不是本闸门目标。
+    """
+    if not isinstance(page_assessment, dict):
+        return payload
+    try:
+        coverage = float(page_assessment.get("page_coverage") or 0.0)
+        scanned = int(page_assessment.get("scanned_page_count") or 0)
+    except (TypeError, ValueError):
+        return payload
+    if coverage >= _READABILITY_COVERAGE_THRESHOLD and scanned == 0:
+        return payload
+
+    issues = payload.get("issues")
+    if not isinstance(issues, dict):
+        return payload
+    error_items = issues.get("error") or []
+    if not error_items:
+        return payload
+
+    issues["error"] = []
+    gate = payload.setdefault(
+        "readability_gate",
+        {
+            "page_coverage": coverage,
+            "scanned_page_count": scanned,
+            "suppressed": [],
+        },
+    )
+    gate["suppressed"].extend(error_items)
+    suppressed_ids = {item.get("id") for item in error_items if isinstance(item, dict)}
+
+    manual_item: Dict[str, Any] = {
+        "id": "READABILITY-GATE-1",
+        "source": "rule",
+        "rule": "READABILITY-GATE",
+        "rule_id": "READABILITY-GATE",
+        # 与 DOC-TYPE-UNKNOWN 同口径：manual_review 归一进 warn 分桶
+        "severity": "manual_review",
+        "title": "材料可读性不足，检查结果要求人工判读",
+        "message": (
+            f"材料文本覆盖率 {coverage:.0%}（扫描页 {scanned} 页）低于可信阈值，"
+            f"规则基于残缺文本产生的 {len(error_items)} 条错误级结论已整体转人工复核，"
+            "不作为材料问题呈现。建议补充可读文本层后重新检查。"
+        ),
+        "evidence": [],
+        "location": {"page": 1, "pos": 0},
+        "bbox": None,
+        "suggestion": "人工核对原件；如需系统复审请提供带文本层的 PDF。",
+        "tags": ["READABILITY-GATE"],
+        "metrics": {"suppressed_error_count": len(error_items)},
+        "created_at": int(time.time()),
+        "rule_version": DEFAULT_RULE_SET_VERSION,
+        "model_version": None,
+        "prompt_version": None,
+        "engine_version": ENGINE_VERSION,
+        "suppressed_issue_ids": sorted(x for x in suppressed_ids if x),
+    }
+    issues.setdefault("warn", []).append(manual_item)
+    return payload
