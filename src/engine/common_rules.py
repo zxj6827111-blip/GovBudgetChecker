@@ -12,6 +12,7 @@ from .rules_v33 import (
     Issue,
     Rule,
     find_table_anchors,
+    _get_table_rows,
     _TXT_FUND_UNIT_TO_WAN,
     _nar_repeat_section_of,
     _nar_repeat_sections,
@@ -24,6 +25,7 @@ from .rules_v33 import (
 from src.services.document_profile_resolver import resolve_report_kind_from_path
 from src.utils.narration import (
     _NEW_PARAGRAPH_RE,
+    merge_page_texts,
     merge_soft_wrapped_lines as _merge_soft_wrapped_lines_shared,
 )
 
@@ -260,11 +262,283 @@ def _sentence_around(text: str, start: int, end: int) -> str:
     return sentence
 
 
+# ---------------------------------------------------------------------------
+# B 档一期 MR-B4（2026-09-29）：CMM-001 决算侧新管线。
+# 根因四实证（4/4 决算冻结夹具复验）：旧说明侧 6 字段正则全部要求
+# 「字段名+金额+万元」连续形态，而 PDF 断行把「因公出国（境）/费决算为」
+# 「0.3 万/元」劈开、词形写「购置及运行维护费」，正则全失配 → 0/6 字段
+# → insufficient。另：旧表侧「取数字最多的行按位置硬映射」对 12 列表七
+# 会把决算合计映射到「出国」列（误报雷），本管线换严格网格。
+# ---------------------------------------------------------------------------
+
+#: 字段谓词链：费(支出)?(决算|预算)?(数)?(为|是)? 金额 万元——
+#: 容忍「费决算为」「费支出决算」「费支出」等形态；「增加/减少」等
+#: 同比谓词不在链内，天然不会误配同比变化句（决算增加 0.3 ≠ 决算为 0.3）。
+_NAR_PRED = r"(?:支出)?(?:决算|预算)?(?:数)?(?:为|是)?"
+_NAR_AMT = r"([0-9][0-9,，]*\.?[0-9]*)\s*万\s*元"
+
+_NAR_TOTAL_BUDGET_RE = re.compile(
+    r"(?:年初预算|预算数|预算)(?:数)?(?:为|是)?\s*" + _NAR_AMT
+)
+_NAR_TOTAL_FINAL_RE = re.compile(
+    r"(?:支出决算|决算数|决算)(?:数)?(?:为|是)?\s*" + _NAR_AMT
+)
+_NAR_ABROAD_RE = re.compile(r"因公出国（境）?费" + _NAR_PRED + r"\s*" + _NAR_AMT)
+_NAR_CAR_TOTAL_RE = re.compile(r"公务用车购置及运行(?:维护)?费" + _NAR_PRED + r"\s*" + _NAR_AMT)
+_NAR_CAR_BUY_RE = re.compile(r"公务用车购置(?:费|支出)(?:为|是)?\s*" + _NAR_AMT)
+_NAR_CAR_RUN_RE = re.compile(r"公务用车运行(?:维护)?(?:费|支出)(?:为|是)?\s*" + _NAR_AMT)
+_NAR_RECEPTION_RE = re.compile(r"公务接待费" + _NAR_PRED + r"\s*" + _NAR_AMT)
+
+#: 表七 12 列 → 特征名（预算/决算 × 合计|出国|车小|购置|运行|接待）
+_T7_COL_MAPPING = {
+    0: (0, 0), 1: (0, 1), 2: (1, 0), 3: (1, 1), 4: (2, 0), 5: (2, 1),
+    6: (3, 0), 7: (3, 1), 8: (4, 0), 9: (4, 1), 10: (5, 0), 11: (5, 1),
+}
+_T7_FEATURES = ("total", "abroad", "car_sub", "car_buy", "car_run", "reception")
+
+
+def _nar_amount_to_decimal(raw: str) -> Optional[Decimal]:
+    text = str(raw or "").strip().replace(",", "").replace("，", "")
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", text):
+        return None
+    return Decimal(text)
+
+
+def _nar_first_decimal(text: str, pattern: "re.Pattern[str]") -> Optional[Decimal]:
+    m = pattern.search(text)
+    if not m:
+        return None
+    return _nar_amount_to_decimal(m.group(1))
+
+
+def _nar_pick(*vals: Optional[Decimal]) -> Optional[Decimal]:
+    """取第一个非 None 值——不能用 `or`：Decimal("0") 为 falsy，
+    会把合法的 0 万元（「因公出国 0 万元」）误当缺失回退到其它段
+    （石泉接待 0 被回退成 1.53 的实测根因）。"""
+    for v in vals:
+        if v is not None:
+            return v
+    return None
+
+
+def _locked_three_public_section(merged_all: str) -> str:
+    """锁定三公经费情况说明正文段（取**最后一个**含万元内容的候选——
+    目录候选无万元自然出局）；锁定失败返回空串，由调用方回退旧路径。
+
+    候选只认主章节「X、」裸形态：若把「（一）总体…（二）具体…」子标题
+    也当候选，「（二）」会作为最后候选把 (一) 总体段截掉（宜川实测），
+    总额提取随之丢失。
+    """
+    best = ""
+    for m in re.finditer(
+        r"(?:^|\n)[一二三四五六七八九十]+、[^\n]{0,40}三公[^\n]{0,40}说明",
+        merged_all,
+    ):
+        rest = merged_all[m.end():]
+        m_next = re.search(r"(?:^|\n)[一二三四五六七八九十]+、", rest)
+        seg = rest[: m_next.start()] if m_next else rest[:4000]
+        if "万元" in seg and len(seg) > 40:
+            best = seg
+    return best
+
+
+def _extract_three_public_narrative_v2(section_text: str) -> Dict[str, Optional[Decimal]]:
+    """段内软接合后的三公说明提取（Decimal，万元）。
+
+    总额取自（一）总体情况说明段；分项取自（二）具体情况说明段——
+    （二）是分项的权威披露面。石泉样张（一）写接待决算 1.53、（二）写 0，
+    表内亦为 0：(一) 侧矛盾由 V33-244 专项承担，CMM-001 锚定（二）避免
+    同源双报。某段缺失时整段回退到全文。
+    """
+    m_overall = re.search(r"[（(]一[)）][^\n]{0,40}总体情况说明", section_text)
+    m_detail = re.search(r"[（(]二[)）][^\n]{0,40}具体情况说明", section_text)
+    overall = section_text[m_overall.end(): m_detail.start()] if m_overall else section_text
+    detail = section_text[m_detail.end():] if m_detail else section_text
+
+    joined_overall = "\n".join(_merge_soft_wrapped_lines_shared(overall))
+    joined_detail = "\n".join(_merge_soft_wrapped_lines_shared(detail))
+
+    return {
+        "total_budget": _nar_first_decimal(joined_overall, _NAR_TOTAL_BUDGET_RE),
+        "total_final": _nar_first_decimal(joined_overall, _NAR_TOTAL_FINAL_RE),
+        "abroad": _nar_pick(
+            _nar_first_decimal(joined_detail, _NAR_ABROAD_RE),
+            _nar_first_decimal(joined_overall, _NAR_ABROAD_RE),
+        ),
+        "car_total": _nar_pick(
+            _nar_first_decimal(joined_detail, _NAR_CAR_TOTAL_RE),
+            _nar_first_decimal(joined_overall, _NAR_CAR_TOTAL_RE),
+        ),
+        "car_buy": _nar_pick(
+            _nar_first_decimal(joined_detail, _NAR_CAR_BUY_RE),
+            _nar_first_decimal(joined_overall, _NAR_CAR_BUY_RE),
+        ),
+        "car_run": _nar_pick(
+            _nar_first_decimal(joined_detail, _NAR_CAR_RUN_RE),
+            _nar_first_decimal(joined_overall, _NAR_CAR_RUN_RE),
+        ),
+        "reception": _nar_pick(
+            _nar_first_decimal(joined_detail, _NAR_RECEPTION_RE),
+            _nar_first_decimal(joined_overall, _NAR_RECEPTION_RE),
+        ),
+    }
+
+
+def _t7_cell_to_decimal(cell: Any) -> Optional[Decimal]:
+    text = str(cell or "").strip().replace(",", "").replace("，", "")
+    if not text or text in {"-", "—", "–"}:
+        return None
+    if not re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", text):
+        return None
+    return Decimal(text)
+
+
+def _extract_t7_strict_grid(rows: Any) -> Optional[Dict[str, Dict[str, Optional[Decimal]]]]:
+    """表七 12 列双口径严格网格（空白单元格 → None，不做位置硬猜）。
+
+    数据行取「预算数/决算数」表头行的下一行（与 V33-244 同一定位规则）。
+    表内标注「单位：万元」，说明侧同为万元口径，直接比较。
+    """
+    if not rows:
+        return None
+    data_row = None
+    for r_idx, row in enumerate(rows):
+        row_txt = "".join([str(c) for c in row if c])
+        if "预算数" in row_txt or "决算数" in row_txt:
+            if r_idx + 1 < len(rows):
+                data_row = rows[r_idx + 1]
+            break
+    if data_row is None:
+        data_row = rows[-1]
+    if not data_row:
+        return None
+
+    grid: Dict[str, Dict[str, Optional[Decimal]]] = {
+        "budget": {name: None for name in _T7_FEATURES},
+        "final": {name: None for name in _T7_FEATURES},
+    }
+    for col_idx, (feat_idx, type_idx) in _T7_COL_MAPPING.items():
+        if col_idx < len(data_row):
+            value = _t7_cell_to_decimal(data_row[col_idx])
+            if value is not None:
+                key = "budget" if type_idx == 0 else "final"
+                grid[key][_T7_FEATURES[feat_idx]] = value
+    return grid
+
+
 class CMM001_ThreePublicNarrativeConsistency(Rule):
     code, severity = "CMM-001", "warn"
     desc = "\u4e09\u516c\u8868\u4e0e\u60c5\u51b5\u8bf4\u660e\u4e00\u81f4\u6027\uff08\u9884/\u51b3\u7b97\u901a\u7528\uff09"
 
+    #: 表七锚点（弯/直引号双变体，决算材料实测锚点为弯引号）
+    _T7_ANCHORS = (
+        "一般公共预算财政拨款“三公”经费支出决算表",
+        '一般公共预算财政拨款"三公"经费支出决算表',
+    )
+
     def apply(self, doc: Document) -> List[Issue]:
+        # B 档一期 MR-B4：决算材料（存在表七）走新管线——说明侧段内软接合
+        # + 谓词链/词形容忍（Decimal）× 表七严格网格；预算材料与无表七
+        # 材料保持旧路径（预算三份样张当前 pass，行为零变更）。
+        kind = _infer_report_kind(doc)
+        t7_rows = None
+        if kind != "budget":
+            for anchor in self._T7_ANCHORS:
+                t7_rows = _get_table_rows(doc, anchor)
+                if t7_rows:
+                    break
+        if kind == "budget" or not t7_rows:
+            return self._apply_legacy(doc)
+        return self._apply_final(doc, t7_rows)
+
+    def _apply_final(self, doc: Document, t7_rows: Any) -> List[Issue]:
+        grid = _extract_t7_strict_grid(t7_rows)
+        if grid is None:
+            return self._apply_legacy(doc)
+
+        merged_all = merge_page_texts(_page_texts(doc))
+        section = _locked_three_public_section(merged_all)
+        if not section:
+            return self._apply_legacy(doc)
+        nar = _extract_three_public_narrative_v2(section)
+
+        # 表格页码：表七数据行所在页（evidence 定位用）
+        table_page = None
+        texts = _page_texts(doc)
+        for idx, pt in enumerate(texts):
+            if any(anchor in pt for anchor in self._T7_ANCHORS):
+                table_page = idx + 1
+                break
+
+        # (说明字段, 表列, 显示名)——分项均为决算口径；(一) 总额双口径
+        checks = [
+            ("total_budget", grid["budget"]["total"], "三公合计（预算）"),
+            ("total_final", grid["final"]["total"], "三公合计（决算）"),
+            ("abroad", grid["final"]["abroad"], "因公出国（境）费"),
+            ("car_total", grid["final"]["car_sub"], "公务用车小计"),
+            ("car_buy", grid["final"]["car_buy"], "公务用车购置费"),
+            ("car_run", grid["final"]["car_run"], "公务用车运行费"),
+            ("reception", grid["final"]["reception"], "公务接待费"),
+        ]
+        compared = 0
+        missing_nar: List[str] = []
+        blank_cells: List[str] = []
+        issues: List[Issue] = []
+        for key, tab, label in checks:
+            val = nar.get(key)
+            if val is None:
+                missing_nar.append(label)
+                continue
+            if tab is None:
+                # 表内留空：V33-244 Case A/B 已就此出建议性提示，CMM-001
+                # 不重复报（留痕于证据面），也不算取数失败。
+                blank_cells.append(label)
+                continue
+            compared += 1
+            if abs(val - tab) <= Decimal("0.01"):
+                continue
+            severity = "error" if key == "car_run" else "warn"
+            message = f"三公表与说明不一致：{label}说明={val}万元，表内={tab}万元"
+            if key == "car_run":
+                message += "；建议：请统一“公务用车运行费”在表格与情况说明中的金额口径"
+            issues.append(
+                self._issue(
+                    message,
+                    {"page": table_page or 1},
+                    severity,
+                    evidence_text=(
+                        f"narrative={val}, table={tab}, field={label}"
+                        + (f"（说明未提及：{'、'.join(missing_nar)}）" if missing_nar else "")
+                        + (f"（表内留空：{'、'.join(blank_cells)}）" if blank_cells else "")
+                    ),
+                )
+            )
+
+        # 说明侧内部勾稽：公车小计 = 购置 + 运行（三者齐备才判）
+        ct, cb, cr = nar.get("car_total"), nar.get("car_buy"), nar.get("car_run")
+        if None not in (ct, cb, cr) and abs(ct - (cb + cr)) > Decimal("0.01"):
+            issues.append(
+                self._issue(
+                    "三公文字说明内部勾稽不一致：公车小计≠购置费+运行费",
+                    {"page": table_page or 1},
+                    "warn",
+                    evidence_text=f"car_total={ct}, car_buy={cb}, car_run={cr}",
+                )
+            )
+
+        if compared == 0:
+            raise RuleDeferred(
+                self.code,
+                detail=(
+                    "三公表×说明无可比对字段：说明未提及 "
+                    f"{('、'.join(missing_nar)) or '全部字段'}，"
+                    f"表内留空 {'、'.join(blank_cells) if blank_cells else '—'}"
+                ),
+                unresolved_reasons=["三公表×说明无可比对字段（缺项明细见 detail）"],
+            )
+        return issues
+
+    def _apply_legacy(self, doc: Document) -> List[Issue]:
         texts = _page_texts(doc)
         if not texts:
             raise RuleDeferred(
