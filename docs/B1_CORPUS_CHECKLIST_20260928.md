@@ -83,13 +83,17 @@
 ## 三、签署后即执行的收灌动作（S1 工具已就绪）
 
 ```bash
-# 每份材料一条登记命令（示例）：
+# 新增材料（编号自动续到下一个空位；已占用的 DOC-B1-001~006 勿复用）：
 python scripts/bench_register.py --pdf <材料.pdf> \
-    --doc-id DOC-B1-001 --report-kind-true final --subset final-main \
-    --region anchor --source-url <URL>
-# 既有 7 份用 --doc-id 复用原编号（示例）：
-python scripts/bench_register.py --pdf corpus/DOC-20260905-001/sample.pdf \
-    --doc-id DOC-20260905-001 --report-kind-true final --subset final-main
+    --report-kind-true final --subset final-main --region anchor --source-url <URL>
+# 指定编号时（按 §2.1 分层固定编号）：
+python scripts/bench_register.py --pdf <材料.pdf> --doc-id DOC-B1-007 \
+    --report-kind-true budget --subset budget-unit --source-url <URL>
+# 登记幂等：同一 SHA 重复登记会被拒（防错源）
+python scripts/bench_register.py --list        # 查看已登记台账
+
+# ⚠️ 登记后**先别跑** run_benchmark：L1 标注完成前跑一次，材料就失去盲标资格
+# （本机 27/30 已因此非盲）。标注完成后再执行下一行：
 python scripts/run_benchmark.py     # 全量纯规则重放（确定性，禁 AI）
 ```
 
