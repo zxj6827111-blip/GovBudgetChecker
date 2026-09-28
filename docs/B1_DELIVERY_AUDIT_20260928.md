@@ -25,6 +25,27 @@ docs/baselines/bench1_metrics_20260928_after_repair_7docs.json
 docs/baselines/bench1_metrics_20260928_merge_preview_7docs.json
 ```
 
+### 〇·一、四个工具的**可执行**用法（照抄即可，参数已与工具 `--help` 对齐）
+
+```bash
+# ① 登记（S2）——★ --depth 必填，否则 §4.4 的 by_depth 分层会全是 unset
+python scripts/bench_register.py --pdf <材料.pdf>     --report-kind-true final --subset final-main --region anchor     --depth L2 --source-url <URL>
+python scripts/bench_register.py --list          # 查看已登记台账
+
+# ② 纯规则重放（S4）——无参数即全量；产物落 outputs/benchmark/<ts>/
+python scripts/run_benchmark.py
+
+# ③ 聚合评测（S4）——--output 可省略（默认 docs/baselines/bench1_metrics_<date>.json）
+python scripts/eval_benchmark.py --replay-dir outputs/benchmark/<ts>     --output docs/baselines/bench1_metrics_<date>.json [--markdown <汇总.md>]
+
+# ④ FP/FN 人工归因工作表（S4 归因）——二选一：--replay-dir（现场评测）或 --eval-dir（已有报告）
+python scripts/bench_fpfn_sheet.py --replay-dir outputs/benchmark/<ts>     --corpus corpus --out outputs/benchmark/<ts>/fpfn_sheet.csv
+```
+
+> 归因回填后**重跑 ③** 即得修订后指标（消费 `annotation_version`）。工具 ④ 只导出工作表，
+> 不做任何自动归因——FP 枚举 `rule-logic / parsing / exemption-gap / annotation-miss`、
+> FN 枚举 `no-rule / rule-defect / parsing`。
+
 ## 一、量化验收表（方案原文逐行）
 
 | 方案验收行 | 基线 | 目标 | 实测 | 状态 | 证据 |

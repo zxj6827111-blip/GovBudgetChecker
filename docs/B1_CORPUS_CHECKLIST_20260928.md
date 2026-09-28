@@ -34,7 +34,7 @@
 > 原清单本节要求「余下 23 份由用户采集」。盘点后此前提不成立：
 > `uploads/` 里已有 **30 份**未登记可用材料（决算 6 + 预算 24），外采缺口收敛到
 > **9–13 份**，且剩下的恰好是原清单里必须外采的分层。逐份 SHA/年度/页数/结构见
-> `docs/B1_CANDIDATE_INVENTORY_20260928.md`。
+（**含本机路径** `path` 列在 `docs/B1_CANDIDATE_INVENTORY_20260928.csv`——登记时按 SHA 到该列取绝对/相对路径即可，不必手工找文件）。
 
 **原配额（保留备查，已被下表取代）**：决算 final-main +14（合计 18）、预算 budget-main
 +6（合计 9）、clean-contrast ≥9、probe-region ≈9（外省 2–3 省市）、scan-watch ≤3、
