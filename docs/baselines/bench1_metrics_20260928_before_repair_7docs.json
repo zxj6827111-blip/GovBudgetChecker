@@ -24,7 +24,12 @@
     "acceptable_violations": 0,
     "negative_violation_rate": 0.0,
     "hint_groups_hit": 3,
-    "hint_groups_total": 3
+    "hint_groups_total": 3,
+    "severity_accuracy": 1.0,
+    "page_accuracy": 1.0,
+    "locatable_evidence_rate": 1.0,
+    "defect_groups_hit": 3,
+    "defect_groups_total": 3
   },
   "rule_level": {
     "V33-001": {
@@ -57,6 +62,425 @@
       "fp": 0,
       "precision": 1.0
     }
+  },
+  "rule_hit_rate": {
+    "BUD-001": {
+      "applicable_docs": 3,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "BUD-002": {
+      "applicable_docs": 3,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "BUD-003": {
+      "applicable_docs": 3,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "BUD-101": {
+      "applicable_docs": 3,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "BUD-102": {
+      "applicable_docs": 3,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "BUD-103": {
+      "applicable_docs": 3,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "BUD-104": {
+      "applicable_docs": 3,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "BUD-105": {
+      "applicable_docs": 3,
+      "hit_docs": 1,
+      "hit_rate": 0.3333
+    },
+    "BUD-106": {
+      "applicable_docs": 3,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "BUD-107": {
+      "applicable_docs": 3,
+      "hit_docs": 1,
+      "hit_rate": 0.3333
+    },
+    "BUD-108": {
+      "applicable_docs": 3,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "BUD-109": {
+      "applicable_docs": 3,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "BUD-110": {
+      "applicable_docs": 3,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "BUD-111": {
+      "applicable_docs": 3,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "BUD-112": {
+      "applicable_docs": 3,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "BUD-113": {
+      "applicable_docs": 3,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "CMM-001": {
+      "applicable_docs": 7,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "CMM-002": {
+      "applicable_docs": 7,
+      "hit_docs": 2,
+      "hit_rate": 0.2857
+    },
+    "CMM-003": {
+      "applicable_docs": 7,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "CMM-004": {
+      "applicable_docs": 7,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "CMM-005": {
+      "applicable_docs": 7,
+      "hit_docs": 1,
+      "hit_rate": 0.1429
+    },
+    "CMM-006": {
+      "applicable_docs": 7,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "CMM-007": {
+      "applicable_docs": 7,
+      "hit_docs": 2,
+      "hit_rate": 0.2857
+    },
+    "V33-001": {
+      "applicable_docs": 4,
+      "hit_docs": 1,
+      "hit_rate": 0.25
+    },
+    "V33-002": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-003": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-004": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-005": {
+      "applicable_docs": 4,
+      "hit_docs": 1,
+      "hit_rate": 0.25
+    },
+    "V33-101": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-102": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-103": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-104": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-105": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-106": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-107": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-108": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-109": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-110": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-111": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-112": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-113": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-114": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-115": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-117": {
+      "applicable_docs": 4,
+      "hit_docs": 1,
+      "hit_rate": 0.25
+    },
+    "V33-119": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-120": {
+      "applicable_docs": 4,
+      "hit_docs": 4,
+      "hit_rate": 1.0
+    },
+    "V33-121": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-122": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-200": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-201": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-202": {
+      "applicable_docs": 4,
+      "hit_docs": 1,
+      "hit_rate": 0.25
+    },
+    "V33-203": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-204": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-214": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-220": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-221": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-222": {
+      "applicable_docs": 4,
+      "hit_docs": 1,
+      "hit_rate": 0.25
+    },
+    "V33-223": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-224": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-225": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-226": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-227": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-230": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-232": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-233": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-234": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-235": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-236": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-240": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-241": {
+      "applicable_docs": 4,
+      "hit_docs": 1,
+      "hit_rate": 0.25
+    },
+    "V33-242": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-243": {
+      "applicable_docs": 4,
+      "hit_docs": 1,
+      "hit_rate": 0.25
+    },
+    "V33-244": {
+      "applicable_docs": 4,
+      "hit_docs": 2,
+      "hit_rate": 0.5
+    },
+    "V33-245": {
+      "applicable_docs": 4,
+      "hit_docs": 1,
+      "hit_rate": 0.25
+    },
+    "V33-246": {
+      "applicable_docs": 4,
+      "hit_docs": 2,
+      "hit_rate": 0.5
+    },
+    "V33-CROSS-SAN-GONG-ECON": {
+      "applicable_docs": 4,
+      "hit_docs": 1,
+      "hit_rate": 0.25
+    },
+    "V33-DISCLOSURE-PERCENT-UNIT": {
+      "applicable_docs": 7,
+      "hit_docs": 1,
+      "hit_rate": 0.1429
+    },
+    "V33-NARRATIVE-INDICATOR-REPEAT": {
+      "applicable_docs": 4,
+      "hit_docs": 2,
+      "hit_rate": 0.5
+    },
+    "V33-PERF-PHASE-AMOUNT": {
+      "applicable_docs": 3,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-SG-COMPLETION": {
+      "applicable_docs": 4,
+      "hit_docs": 1,
+      "hit_rate": 0.25
+    },
+    "V33-TREND-COMPLETION-RATE": {
+      "applicable_docs": 4,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-TXT-FUND-DETAIL": {
+      "applicable_docs": 4,
+      "hit_docs": 1,
+      "hit_rate": 0.25
+    }
+  },
+  "engine_fingerprint": {
+    "rules_sha256": "5adf97f8803fd37a059a477ac2f033bab68844d24f6dde1f7025c565c1c4529c",
+    "rule_inventory_sha256": "7241a74a14e56ec66b7bc464c5bbf5e20e5cfd7d7b8d7783fb16792c89fb8465",
+    "rules_count": 81,
+    "git_head": "28d7ebb",
+    "git_dirty": true
   },
   "zero_trigger_scope": "全部重放材料（无标注依赖）",
   "rule_trigger_counts": {
@@ -141,7 +565,8 @@
       "BUD-110",
       "BUD-111",
       "BUD-112",
-      "BUD-113"
+      "BUD-113",
+      "V33-PERF-PHASE-AMOUNT"
     ],
     "common": [
       "CMM-001",
@@ -264,9 +689,19 @@
         "precision": 1.0,
         "recall": 1.0
       }
+    },
+    "by_depth": {
+      "unset": {
+        "docs": 1,
+        "tp": 3,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      }
     }
   },
-  "generated_at": "2026-09-28 07:10:56",
-  "replay_dir": "E:\\Software Development\\GovBudgetChecker\\GovBudgetChecker\\outputs\\benchmark\\20260928-070407",
+  "generated_at": "2026-09-28 10:16:12",
+  "replay_dir": "E:\\Software Development\\GovBudgetChecker\\GovBudgetChecker\\outputs\\benchmark3\\20260928-101249",
   "mode": "auto"
 }

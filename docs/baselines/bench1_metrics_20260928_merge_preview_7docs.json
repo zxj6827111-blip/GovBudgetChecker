@@ -456,8 +456,8 @@
     },
     "V33-PERF-PHASE-AMOUNT": {
       "applicable_docs": 3,
-      "hit_docs": 0,
-      "hit_rate": 0.0
+      "hit_docs": 1,
+      "hit_rate": 0.3333
     },
     "V33-SG-COMPLETION": {
       "applicable_docs": 4,
@@ -476,10 +476,10 @@
     }
   },
   "engine_fingerprint": {
-    "rules_sha256": "7cd4c0d66fa7586bc1f7ff89155d4426fa8c3d5cbf1365b58bc976c2596cd0c5",
-    "rule_inventory_sha256": "7241a74a14e56ec66b7bc464c5bbf5e20e5cfd7d7b8d7783fb16792c89fb8465",
-    "rules_count": 81,
-    "git_head": "4d6662c",
+    "rules_sha256": "09a5b4a30501821a8492800f3abe04089b50ec22ef9dd91b7b06a2f539ccbd06",
+    "rule_inventory_sha256": "1391641aa0af7f3a8f8c51cb4fb3182edcae008896787179547ae443236a8d71",
+    "rules_count": 82,
+    "git_head": "cb961ec",
     "git_dirty": true
   },
   "zero_trigger_scope": "全部重放材料（无标注依赖）",
@@ -500,6 +500,7 @@
     "V33-CROSS-SAN-GONG-ECON": 3,
     "V33-DISCLOSURE-PERCENT-UNIT": 1,
     "V33-NARRATIVE-INDICATOR-REPEAT": 2,
+    "V33-PERF-PHASE-AMOUNT": 1,
     "V33-SG-COMPLETION": 1,
     "V33-TXT-FUND-DETAIL": 1
   },
@@ -565,8 +566,7 @@
       "BUD-110",
       "BUD-111",
       "BUD-112",
-      "BUD-113",
-      "V33-PERF-PHASE-AMOUNT"
+      "BUD-113"
     ],
     "common": [
       "CMM-001",
@@ -582,19 +582,19 @@
     "mismatches": []
   },
   "status_distribution": {
-    "pass": 274,
-    "fail": 25,
+    "pass": 275,
+    "fail": 26,
     "not_applicable": 4,
-    "insufficient_data": 29,
+    "insufficient_data": 30,
     "parse_error": 0,
     "execution_error": 0
   },
   "obligation_ledger": {
-    "completion_rate": 0.8672,
+    "completion_rate": 0.8755,
     "totals": {
       "applicable": 241,
-      "completed": 209,
-      "unresolved": 32
+      "completed": 211,
+      "unresolved": 30
     },
     "by_group": {
       "DOC_STRUCTURE": {
@@ -653,9 +653,9 @@
       },
       "PERFORMANCE": {
         "applicable": 6,
-        "completed": 0,
-        "unresolved": 6,
-        "completion_rate": 0.0
+        "completed": 2,
+        "unresolved": 4,
+        "completion_rate": 0.3333
       }
     }
   },
@@ -702,6 +702,6 @@
     }
   },
   "generated_at": "2026-09-28 10:16:13",
-  "replay_dir": "E:\\Software Development\\GovBudgetChecker\\GovBudgetChecker\\outputs\\benchmark3-after\\20260928-101350",
+  "replay_dir": "E:\\Software Development\\GovBudgetChecker\\GovBudgetChecker\\outputs\\benchmark3-merge-b\\20260928-101523",
   "mode": "auto"
 }
