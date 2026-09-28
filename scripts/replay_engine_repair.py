@@ -59,11 +59,12 @@ def replay_one(alias: str, rel_path: str, payload: Dict[str, Any]) -> Dict[str, 
     issues, outcomes = run_rules_with_outcomes(doc, use_ai_assist=False, report_kind="final")
     summary = summarize_rule_outcomes(outcomes)
 
-    sev_counts = {"error": 0, "warn": 0, "info": 0}
+    # 按实际出现的严重度累计（medium 等白名单外级别不得静默丢弃，
+    # 否则 by_severity 之和 < findings_total，快照自相矛盾）
+    sev_counts: Dict[str, int] = {}
     for issue in issues:
-        sev = str(getattr(issue, "severity", "") or "").lower()
-        if sev in sev_counts:
-            sev_counts[sev] += 1
+        sev = str(getattr(issue, "severity", "") or "").lower() or "unknown"
+        sev_counts[sev] = sev_counts.get(sev, 0) + 1
 
     return {
         "doc_id": payload.get("doc_id"),

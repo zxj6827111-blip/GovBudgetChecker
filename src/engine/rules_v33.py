@@ -5341,6 +5341,8 @@ class R33244_Table7_ThreePublicAdvancedCheck(Rule):
         ]
 
         reported_cells = set() # (key, t7_idx)
+        # 补 0 建议聚类池：(列名, 科目名, Case)——Case A/B 的 info 聚合为一条
+        fill_zero_pool: List[Tuple[str, str, str]] = []
 
         # Rule 3: 非负性检查
         for key in ["budget", "final"]:
@@ -5369,12 +5371,8 @@ class R33244_Table7_ThreePublicAdvancedCheck(Rule):
                     ))
                     reported_cells.add((key, t7_idx))
                 else:
-                    # Case A: 说明为0，表内为空 -> Info
-                    issues.append(self._issue(
-                        f"【表七】建议规范补0：说明提到{lbl}{label_col}为0，建议表内Cells填入'0.00'保持一致。",
-                        {"item": lbl, "type": key}, "info",
-                        evidence_text="文档说明：0\n表格数据：空白"
-                    ))
+                    # Case A: 说明为0，表内为空 -> Info（入聚类池，压减·限定版统一发射）
+                    fill_zero_pool.append((label_col, lbl, "A"))
                     reported_cells.add((key, t7_idx))
             else:
                 if abs(data_val - nar_v) > 0.01:
@@ -5394,11 +5392,28 @@ class R33244_Table7_ThreePublicAdvancedCheck(Rule):
                 item_names = ["因公出国", "公务用车", "公务接待"]
                 for i_idx, d_idx in enumerate([1, 2, 5]):
                     if data["is_empty"][key][d_idx] and (key, d_idx) not in reported_cells:
-                        issues.append(self._issue(
-                            f"【表七】建议分项补0：{col_label}{item_names[i_idx]}项为空，虽可推导闭合，但建议补填'0.00'以避歧义。",
-                            {"type": key, "item": item_names[i_idx]}, "info",
-                            evidence_text=f"表格：三公经费表\n列：{col_label}{item_names[i_idx]} 为空"
-                        ))
+                        # Case B: 可推导闭合但留空 -> Info（入聚类池，压减·限定版统一发射）
+                        fill_zero_pool.append((col_label, item_names[i_idx], "B"))
+
+        # 压减·限定版（2026-09-28 裁决）：Case A（说明为0）与 Case B（可推导闭合）
+        # 的补 0 建议是同一问题类——「单元格留空未填 0.00」，仅列不同。按 MR-2
+        # 「同类提示聚合成一条、计数与明细表达」的既有口径合并发射：
+        # 宜川样张 2→1（输出总数 13→12，达验收行 ≤12）、石泉样张 2→1。
+        # Case C（说明非0表内空白）的 error 与表文不符 error 不参与合并。
+        if fill_zero_pool:
+            detail = "、".join(f"{col}{item}" for col, item, _case in fill_zero_pool)
+            issues.append(self._issue(
+                f"【表七】三公经费表共{len(fill_zero_pool)}处单元格留空"
+                f"（说明为0或可推导闭合），建议补填'0.00'保持一致：{detail}（明细见证据）。",
+                {"count": len(fill_zero_pool),
+                 "cells": [{"item": item, "col": col, "case": case}
+                           for col, item, case in fill_zero_pool]},
+                "info",
+                evidence_text="\n".join(
+                    f"列：{col}{item} 为空（{'说明为0，建议规范补0' if case == 'A' else '可推导闭合，建议分项补0'}）"
+                    for col, item, case in fill_zero_pool
+                ),
+            ))
 
         return issues
 

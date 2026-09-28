@@ -8,13 +8,19 @@
   golden 样张上可执行（insufficient → pass）
 - 文旅局 1700.57 级联误报（V33-005×2 + V33-202 error）→ 0 条；
   解析结构性矛盾按 MR-1c 哨兵转 insufficient_data（人工复核）
-- 宜川输出总数 34 → 13。方案目标 ≤12，差 1 条的构成说明：13 条中
-  5 error + 1 medium + 5 info 为 WP4-A/B/D/E/F/G 设计内真实发现
-  （跨表三公、基金说明、零基数同比、披露规范类），1 warn 为 V33-227
-  命中的真实科目名不一致（说明"文化体育与传媒支出" vs 表格
-  "文化旅游体育与传媒支出"，归一空白后核对原文确认），1 info 为
-  V33-120 聚类结果。MR-1 红线是不动这些车道的设计行为。
+- 宜川输出总数 34 → 12（≤12 达标）。12 条构成：5 error + 1 medium +
+  2 info 为各车道设计内真实发现（WP4-A 跨表三公 ×3、WP4-B 基金说明、
+  WP4-D 零基数同比、WP4-G 三公细化、WP4-F 百分比单位、WP4-C 重复
+  披露），1 warn 为 V33-227 命中的真实科目名不一致（说明"文化体育
+  与传媒支出" vs 表格"文化旅游体育与传媒支出"，归一空白后核对原文
+  确认），1 info 为 V33-243（表六 302 明细不平，文档自身不平），
+  1 info 为 V33-120 聚类结果，1 info 为 V33-244 补0建议聚类
+  （压减·限定版，2026-09-28 用户裁决：Case A/B 同科目两列提示合并
+  为一条计数+明细提示；V33-243/227 真发现不压减）。
+  MR-1 红线是不动这些车道的设计行为。
 - V33-120 舍入聚类：宜川 23 条 info → 1 条（count 标注、明细保留）
+- V33-244 补0建议聚类：宜川 2 条 info → 1 条（count=2、逐格明细）；
+  石泉同款 2→1（其公务接待表文不符 error 为真发现，不参与合并）
 - MR-3 扫描闸门：error 级整体转人工；可读性正常时严格 no-op
 
 夹具哈希沿用 WP4-H 的换行归一口径（autocrlf 双锁免疫，PR #40 教训）。
@@ -69,7 +75,7 @@ FIXTURE_SHAS = {
 BEFORE_SNAPSHOT = ROOT / "tests/fixtures/engine_repair_estimate_before_20260927.json"
 AFTER_SNAPSHOT = ROOT / "tests/fixtures/engine_repair_estimate_after_20260927.json"
 BEFORE_SHA = "e447a31325ce88692d6cded6f86a3d591ad5c2c93c56a6b4c9d5c56ef8d61831"
-AFTER_SHA = "9d2352e9fc1edae0a1f4326b6c0bdd22e042c010e27683bae80f33e2047fb53c"
+AFTER_SHA = "f0d77580268fb64c75ba2297785e0c17ac2716b970bbb9de35ef6cac15871b41"
 
 #: V33-101~108：本改造的核心取数修复面（4 份样张 unresolved 必须清零）
 CORE_RULES = [f"V33-10{i}" for i in range(1, 9)]
@@ -202,12 +208,52 @@ def test_wenlv_cascade_errors_zero(replays):
 
 
 # ---------------------------------------------------------------------------
-# MR-1 验收：宜川输出总数 34 → ≤13（方案目标 ≤12，构成说明见模块 docstring）
+# MR-1 验收：宜川输出总数 34 → ≤12（压减·限定版 2026-09-28 裁决后达标）
 # ---------------------------------------------------------------------------
 
 
 def test_yichuan_output_budget(replays):
-    assert len(replays["yichuan"]["issues"]) <= 13
+    assert len(replays["yichuan"]["issues"]) <= 12
+
+
+# ---------------------------------------------------------------------------
+# 压减·限定版（2026-09-28 裁决）：V33-244 补0建议聚类（2 条 info → 1 条）
+# ---------------------------------------------------------------------------
+
+
+def test_v33_244_blank_cell_advisories_clustered(replays):
+    """Case A（说明为0）与 Case B（可推导闭合）是同一问题类：单元格留空
+    未填 0.00，仅列不同。合并为一条计数+明细提示（MR-2 同款口径），
+    且 Case C 的 error（说明非0表内空白/表文不符）不参与合并。"""
+    issues = replays["yichuan"]["issues"]
+    v244 = [i for i in issues if getattr(i, "rule", "") == "V33-244"]
+    assert len(v244) == 1, f"宜川 V33-244 应聚类为 1 条，实际 {len(v244)}"
+    finding = v244[0]
+    assert finding.severity == "info"
+    assert finding.location.get("count") == 2
+    cells = finding.location.get("cells") or []
+    assert {(c["item"], c["col"]) for c in cells} == {
+        ("因公出国", "决算"), ("因公出国", "预算"),
+    }
+    assert {c["case"] for c in cells} == {"A", "B"}
+    assert "补填'0.00'" in str(getattr(finding, "message", ""))
+    # 逐格明细保留在证据（可追溯到列与归类原因）
+    ev = str(getattr(finding, "evidence_text", ""))
+    assert "决算因公出国" in ev and "预算因公出国" in ev
+    # 石泉：2 条 info 聚合为 1 条；其公务接待表文不符 error 是真发现，保留
+    s_issues = replays["shiquan"]["issues"]
+    s_v244_info = [
+        i for i in s_issues
+        if getattr(i, "rule", "") == "V33-244"
+        and str(getattr(i, "severity", "")).lower() == "info"
+    ]
+    assert len(s_v244_info) == 1 and s_v244_info[0].location.get("count") == 2
+    s_errors = [
+        i for i in s_issues
+        if getattr(i, "rule", "") == "V33-244"
+        and str(getattr(i, "severity", "")).lower() == "error"
+    ]
+    assert len(s_errors) == 1 and "公务接待" in str(getattr(s_errors[0], "message", ""))
 
 
 # ---------------------------------------------------------------------------

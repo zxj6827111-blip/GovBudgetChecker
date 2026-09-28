@@ -3,11 +3,12 @@
     {
       "doc_id": "SAMPLE-YICHUAN-2025-FINAL",
       "fixture": "tests/fixtures/cross_san_gong_truth_page_data.json",
-      "findings_total": 13,
+      "findings_total": 12,
       "findings_by_severity": {
+        "info": 5,
         "error": 5,
-        "warn": 1,
-        "info": 6
+        "medium": 1,
+        "warn": 1
       },
       "unresolved_total": 1,
       "unresolved_rules": [
@@ -35,11 +36,12 @@
     {
       "doc_id": "SAMPLE-SHIQUAN-2025-FINAL",
       "fixture": "tests/fixtures/shiquan_narrative_truth_page_data.json",
-      "findings_total": 9,
+      "findings_total": 8,
       "findings_by_severity": {
+        "info": 2,
         "error": 4,
-        "warn": 1,
-        "info": 3
+        "medium": 1,
+        "warn": 1
       },
       "unresolved_total": 2,
       "unresolved_rules": [
@@ -77,9 +79,8 @@
       "fixture": "tests/fixtures/wenlv_narrative_truth_page_data.json",
       "findings_total": 2,
       "findings_by_severity": {
-        "error": 1,
         "warn": 1,
-        "info": 0
+        "error": 1
       },
       "unresolved_total": 7,
       "unresolved_rules": [
@@ -157,9 +158,10 @@
       "fixture": "tests/fixtures/sample_page_data.json",
       "findings_total": 7,
       "findings_by_severity": {
-        "error": 0,
-        "warn": 0,
-        "info": 3
+        "high": 1,
+        "manual_review": 1,
+        "info": 3,
+        "medium": 2
       },
       "unresolved_total": 4,
       "unresolved_rules": [
@@ -211,7 +213,7 @@
   ],
   "totals": {
     "unresolved_total": 14,
-    "findings_total": 31
+    "findings_total": 29
   },
   "fixture_shas": {
     "tests/fixtures/cross_san_gong_truth_page_data.json": "45d761f3e3b7dc2ac023f1224bf4f02f7496860cca33b9f925ac8da991dcab4c",
