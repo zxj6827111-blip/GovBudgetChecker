@@ -476,10 +476,10 @@
     }
   },
   "engine_fingerprint": {
-    "rules_sha256": "7cd4c0d66fa7586bc1f7ff89155d4426fa8c3d5cbf1365b58bc976c2596cd0c5",
+    "rules_sha256": "8b56499df2d951e6c490559abf9a911cdee157f52d2732bef7bb397a77195985",
     "rule_inventory_sha256": "7241a74a14e56ec66b7bc464c5bbf5e20e5cfd7d7b8d7783fb16792c89fb8465",
     "rules_count": 81,
-    "git_head": "4d6662c",
+    "git_head": "2b05aeb",
     "git_dirty": true
   },
   "zero_trigger_scope": "全部重放材料（无标注依赖）",
@@ -701,7 +701,7 @@
       }
     }
   },
-  "generated_at": "2026-09-28 10:16:13",
-  "replay_dir": "E:\\Software Development\\GovBudgetChecker\\GovBudgetChecker\\outputs\\benchmark3-after\\20260928-101350",
+  "generated_at": "2026-09-28 12:02:09",
+  "replay_dir": "E:\\Software Development\\GovBudgetChecker\\GovBudgetChecker\\outputs\\benchmark4-after\\20260928-120052",
   "mode": "auto"
 }

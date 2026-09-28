@@ -57,7 +57,14 @@ python .tmp/wt-lane1/scripts/run_benchmark.py \
 预算上仍是 `insufficient_data`（T1/T4 取数缺口），这正是
 `docs/WP4-I_RULE_IMPROVEMENT_LIST_20260928.md` §二 T1 的第一条。
 
-对应快照：`docs/baselines/bench1_metrics_20260928_{before_repair,mr123,after_repair}_7docs.json`。
+对应快照：`docs/baselines/bench1_metrics_20260928_{before_repair,mr123,after_repair,merge_preview}_7docs.json`。
+每份快照都绑定**引擎指纹**（§6.7：源码哈希 + 规则清单哈希 + git head/dirty）。
+
+> **指纹口径说明（2026-09-28 实测）**：指纹哈希的是引擎源码**字节**，所以**纯文档改动
+> 也会翻转**——车道1 加了一处 docstring 订正后 head 由 `4d6662c` 变为 `2b05aeb`，
+> 指纹 `7cd4c0d6…` → `8b56499d…`，但**重跑 7 份材料的 findings/unresolved 逐份完全
+> 一致**（已实测比对）。这是刻意的保守选择：宁可对文档改动过敏，也不放过任何一次
+> 真实行为变化。快照 `after_repair` 已按 `2b05aeb` 重生成。
 
 ## 二、逐份结果
 
@@ -179,8 +186,20 @@ fail-closed 拒答，见 §四 与改进清单 T2）。
   跑过，**保留 L2 资格**（用旧输出做候选清单）。运行纪律：打算用于 L2 的材料，
   登记后不许跑 `run_benchmark`，等 `truth_frozen_at` 写入后再跑。
   详见 `docs/B1_CANDIDATE_INVENTORY_20260928.md` §二·五。
-- **未覆盖**：扫描观察集（scan-watch）本次为空——可读性闸门的效果只在
-  单元测试中验证（MR-3），没有真实扫描件语料。
+- **扫描维度的证据已在 2026-09-28 补强**：语料里仍**没有外部采集的真实扫描件**，
+  但用**真实版式派生**的扫描件（把样张前 8 页保留文本、其余页栅格化）做了端到端
+  验证，并冻结为夹具 `tests/fixtures/scan_sim_mixed_page_data.json`：
+
+  | 形态 | 文种识别 | error 级 | 闸门后 |
+  |---|---|---|---|
+  | **部分扫描**（有文本、表页被拍） | 成功（final） | **9 条** | **0 条** + 1 条转人工 |
+  | **整份扫描**（无文本层） | 失败（kind=unknown） | 0 条（只跑 8 条通用规则） | 不适用 |
+
+  两个结论：① 方案 MR-3 的「模拟扫描件约 10 条 error」在**部分扫描**形态下复现
+  （实测 9 条），闸门把它压成 0 条 + 1 条转人工，验收行成立；② **MR-1 修不掉这个
+  假阳性**（闸门前仍是 9 条），所以 MR-3 的闸门是必需的那一道、不是冗余。
+  另：整份扫描件走的是「文种识别失败 + 质量门」路径，与闸门无关——这条口径原先
+  在闸门 docstring 里写反了，已订正。
 
 ## 八、度量口径：benchmark 与生产路径的等价面（已实测并加锁）
 
