@@ -24,6 +24,21 @@
 
 ## 一、范围与状态
 
+### 红线合规（文件级审计，可复核）
+
+`git diff --name-only main...<branch>` 全部改动文件清单：
+
+| 分支 | 改动文件 | 是否触碰禁区 |
+|---|---|---|
+| `fix/engine-parse-20260927`（车道1） | `.github/workflows/ci.yml`、`api/main.py`、`scripts/replay_engine_repair.py`、`src/engine/{rules_v33,budget_rules,pipeline}.py`、5 个 tests/fixtures | 否——`api/main.py` 只改质量门（方案明文允许），无 migration/台账/WP3/AI/前端 |
+| `feat/bench-wp4i`（车道2） | 7 份 docs、4 个 scripts、6 个 tests、`corpus/manifest.csv`、`.gitignore` | 否——纯新增只读产物 |
+
+对两个分支的 diff 做关键词扫描（`material_slot` / `alembic` / `migration` / `db/schema`
+/ `provider` / `ai_findings` / 前端 `next/|.tsx` / 复核生命周期），**代码命中为空**；
+唯一命中是盘点文档里叙述性提到 `ai_findings` 为空这一观察事实。
+
+即：**DB 零改动、材料台账与复核生命周期与 AI 服务与前端均未触碰**——与方案红线一致。
+
 | 项 | 状态 |
 |---|---|
 | 语料 | 已登记 **7 份**（DOC-20260905-001 + DOC-B1-001~006）；本机另有 **30 份**可用未登记；外采缺口 **9–13 份** |
