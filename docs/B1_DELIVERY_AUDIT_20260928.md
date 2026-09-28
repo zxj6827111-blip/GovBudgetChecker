@@ -45,6 +45,14 @@ python scripts/bench_fpfn_sheet.py --replay-dir outputs/benchmark/<ts>     --cor
 > 归因回填后**重跑 ③** 即得修订后指标（消费 `annotation_version`）。工具 ④ 只导出工作表，
 > 不做任何自动归因——FP 枚举 `rule-logic / parsing / exemption-gap / annotation-miss`、
 > FN 枚举 `no-rule / rule-defect / parsing`。
+>
+> **工具 ④ 已在真实产物上实跑验证（2026-09-28）**：`--replay-dir` 与 `--eval-dir`
+> 两条分支都能产出合法 CSV（前者当前 FP=0/FN=0，后者在旧报告上给出 FN=3——说明有 FN
+> 时确实会出行）。两条使用注意：
+> ① **当前跑出 0 行不是坏了**：7 份语料只有 golden 一份带标注，且那份 P=R=1.0，本来就
+> 没有 FP/FN 可归因；S3 标注铺开后才会有行。
+> ② `--eval-dir` 要指向**单次**评测的报告目录——它会把目录内所有报告一起消费，把不同
+> 引擎版本的报告堆在一处会混算（`outputs/benchmark/<ts>/eval` 这种一次一目录的约定即可）。
 
 ## 一、量化验收表（方案原文逐行）
 
