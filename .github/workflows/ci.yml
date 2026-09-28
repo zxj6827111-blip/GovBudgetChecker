@@ -156,3 +156,38 @@ jobs:
         env:
           CI: "true"
         run: npm --prefix app run test:e2e
+
+  # MR-5（2026-09-27「查得准」A 档）：引擎修复快速回归报告位。
+  # 4 份冻结决算样张的重放指标（unresolved/findings/文种分布）非阻断输出，
+  # 起手窗口只作报告；接入稳定 3 批后再升格为硬门禁。
+  # 精确验收（unresolved ≤15、文旅级联=0、V33-120 聚类等）由
+  # tests/test_engine_repair_20260927.py 在主 test-and-build 的 pytest 中硬门禁。
+  bench-repair-regression:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.3.0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Replay frozen finals (report only)
+        run: |
+          python scripts/replay_engine_repair.py \
+            --output outputs/engine_repair/regression_report.json --print-summary
+
+      - name: Upload regression report
+        uses: actions/upload-artifact@v4.6.0
+        with:
+          name: bench-repair-regression
+          path: outputs/engine_repair/regression_report.json
