@@ -121,12 +121,18 @@
 ```bash
 # 新增材料（编号自动续到下一个空位；已占用的 DOC-B1-001~006 勿复用）：
 python scripts/bench_register.py --pdf <材料.pdf> \
-    --report-kind-true final --subset final-main --region anchor --source-url <URL>
+    --report-kind-true final --subset final-main --region anchor \
+    --depth L2 --source-url <URL>
 # 指定编号时（按 §2.1 分层固定编号）：
 python scripts/bench_register.py --pdf <材料.pdf> --doc-id DOC-B1-007 \
-    --report-kind-true budget --subset budget-unit --source-url <URL>
+    --report-kind-true budget --subset budget-unit --depth L2 --source-url <URL>
 # 登记幂等：同一 SHA 重复登记会被拒（防错源）
 python scripts/bench_register.py --list        # 查看已登记台账
+
+# ★ `--depth` 别漏：它决定 §4.4 的「标注深度」分层报告——登记时留空的话，
+#   eval_benchmark 的 by_depth 会全是 unset，L1 与 L2 两层的指标就分不出来。
+#   建议：保留 L2 资格的材料（L1 底稿里 `L2资格=是`）标 --depth L2；
+#         已登记 7 份（当前引擎输出已公开、只作锚定观察面）标 --depth L1。
 
 # ⚠️ 登记后**先别跑** run_benchmark：按方案 §3.2.2，禁止的是「当前代码输出可见」，
 # 一跑当前引擎该材料就只能当 L1/锚定观察面了（已登记 7 份即因此 L2 不可盲）。
@@ -213,6 +219,7 @@ location_key(sec|toc|tbl|xtbl:锚文本) / expected_severity / evidence / confid
       空表/无此项路径必须覆盖 V33-109/BUD-106）
 - [ ] **budget-unit 点名清单**：确认 §2.1 的 8 份（含原「替补位」两份，已改为正式入集）
 - [ ] **`obligation_group` 标注字段**：同意随 S1 采用（§3.1）
+- [ ] **登记时标 `--depth`**：确认按 §三 示例给各材料标 L1/L2（留空则 §4.4 标注深度分层为空）
 
 签字后：S2 收灌（本机 21 份中 **7 份已登记**，余 14 份签字后即可登记：final-main
 本机新增 5 + budget-main 新增 1 + budget-unit 8）→ S3 盲标（L1 全量 + L2 从保留

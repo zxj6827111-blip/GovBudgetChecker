@@ -203,10 +203,17 @@ def test_subset_whitelist_covers_checklist_and_stays_closed(tmp_path, monkeypatc
         import re
 
         text = checklist.read_text(encoding="utf-8")
-        used = set(re.findall(r"--subset\s+([a-z-]+)", text))
-        assert used, "签字单里应至少有一条 --subset 示例"
-        missing = used - set(bench_register.SUBSETS)
-        assert not missing, f"签字单用了白名单外的子集值: {sorted(missing)}"
+        used_subsets = set(re.findall(r"--subset\s+([a-z-]+)", text))
+        assert used_subsets, "签字单里应至少有一条 --subset 示例"
+        assert not (used_subsets - set(bench_register.SUBSETS)), (
+            f"签字单用了白名单外的子集值: {sorted(used_subsets - set(bench_register.SUBSETS))}"
+        )
+        # --depth 同理：留空会让 §4.4 的 by_depth 分层失去意义，写错值会被工具拒
+        used_depths = set(re.findall(r"--depth\s+([A-Za-z0-9]+)", text))
+        assert used_depths, "签字单应示范 --depth（否则 by_depth 分层会被漏掉）"
+        assert not (used_depths - set(bench_register.DEPTHS)), (
+            f"签字单用了白名单外的 depth: {sorted(used_depths - set(bench_register.DEPTHS))}"
+        )
 
     # 2) 白名单里的每个值都能真正登记成功（自洽）
     monkeypatch.setattr(bench_register, "probe_pdf", lambda _p: {"pages": 20, "text_chars": 9999})
