@@ -49,7 +49,8 @@
 
 | 阶段 | 要求 | 产物 | 状态 |
 |---|---|---|---|
-| S1 工具 | 4 脚本 + 单测 | `bench_register` / `run_benchmark` / `eval_benchmark` / `bench_fpfn_sheet` + 6 个测试文件 | ✅ |
+| S1 工具 | 4 脚本 + 单测 | `bench_register` / `run_benchmark` / `eval_benchmark` / `bench_fpfn_sheet` + 7 个测试文件 | ✅ |
+| S1 可复现性 | §6.7「同输入同输出，支持后续回归对比」 | **确定性实测**：两个独立进程（`PYTHONHASHSEED=0/1`）重放同一夹具，findings（含顺序）、六态摘要、义务账本、文种、sha256、引擎指纹**逐项一致**；两次完整 benchmark 亦逐份一致，唯一差异是时间戳目录与 `generated_at`（设计如此） | ✅ |
 | S1 合规 | 按方案 §4/§5/§6 的指标与指纹 | **补齐** Rule Hit Rate、severity/page/可定位率（TP 加权）、`by_depth`、**引擎指纹**（§6.7） | ✅ |
 | S2 语料 | 30 份 | **7 份已登记**；本机可用 32 份（含 samples 补录）；外采缺口收敛到 9–13 份 | ⚠️ **待签字 + 外采** |
 | S2 签字单 | 构成与配比确认 | `B1_CORPUS_CHECKLIST_20260928.md`（可勾选；含 §2.1.1 类型配额与条件性表格覆盖） | ⚠️ **未签字** |
