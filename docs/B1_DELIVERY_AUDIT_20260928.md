@@ -61,14 +61,17 @@ python scripts/bench_fpfn_sheet.py --replay-dir outputs/benchmark/<ts>     --cor
 | 4 份决算 unresolved | 53 | ≤15 | **14** | ✅ | `docs/baselines/bench1_metrics_20260928_*_7docs.json`（7 份语料全量重放） |
 | V33-101 core D-001 恒等式可执行 | insufficient | 出 pass/fail | **pass** | ✅ | `pytest -k v33_101` → 5 passed（`2b05aeb` 重跑） |
 | 文旅局 1700.57 级联误报 | 4 条 error | 0 | 级联 3 条消失，余 1 条 CMM-007 为另一规则真阳性 | ✅ | `pytest -k wenlv_cascade` → 1 passed；`B1_BENCH_DELTA` §二 |
-| **宜川输出总数** | 34 | **≤12** | **13** | ❌ **差 1 条，待裁决** | `pytest -k yichuan_output_budget` 锁 13；逐条取证见 `B1_YICHUAN_13_EVIDENCE` |
-| golden 评测不劣化 | TP=3/3, hint=3/3, FP=0 | 不劣化 | **TP=3 FP=0 FN=0，hint 3/3（证据面 4/4），GATE-PASS** | ✅ | `2b05aeb` 重跑 |
+| **宜川输出总数** | 34 | **≤12** | **12** | ✅ **压减·限定版落地** | 用户裁决（2026-09-28）：合并 V33-244 同科目两列补0提示（13→12），落地于 PR #59 `d2bd4c4`；逐条取证见 `B1_YICHUAN_13_EVIDENCE` §四 |
+| golden 评测不劣化 | TP=3/3, hint=3/3, FP=0 | 不劣化 | **TP=3 FP=0 FN=0，hint 3/3（证据面 4/4），GATE-PASS** | ✅ | `2b05aeb` 重跑；`d2bd4c4` 后金标含 V33-244=0，门禁复验不动 |
 | 扫描模拟件 error 级 | 10 | 0 | **9 → 0**（部分扫描形态，闸门后 0 + 1 条转人工） | ✅ | `tests/fixtures/scan_sim_mixed_page_data.json` + 端到端用例 |
 | CI 全绿 + 新 FIXTURE 固化 | 全绿 | 全绿 | 两 PR 双绿；`bench-repair-regression` 非阻断（`continue-on-error: true` 已核实） | ✅ | PR #59 / #60 checks |
 | 精度（仅当 S4 完成后） | 未知 | P≥0.75 / R≥0.65 | **未测** | 🔒 **依赖 S3 盲标** | 7 份中仅 1 份有 golden，拒绝提前宣称 |
 
-> **本表唯一未达标项就是「宜川 ≤12」**。它不是解析问题：13 条逐条取证后，
-> **没有一条能靠已授权的解析层修复去掉**（详见下节）。
+> 量化验收行现已**全部达标或按序推进**（原唯一未达标项「宜川 ≤12」已于
+> 2026-09-28 经用户裁决「压减·限定版」闭合：13 条逐条取证确认全部为真发现
+> 或设计内输出，唯一可安全压减的 V33-244 同科目两列提示已合并，13→12；
+> 详见 `B1_YICHUAN_13_EVIDENCE` §四）。仍开放的两行是流程依赖：精度行
+> 等 S3 盲标，CI 行随提交持续复验。
 
 ## 二、MR-1~MR-5 交付对账
 
@@ -91,9 +94,10 @@ python scripts/bench_fpfn_sheet.py --replay-dir outputs/benchmark/<ts>     --cor
 | V33-227（科目名不一致） | 真发现（表格「文化旅游体育与传媒支出」vs 说明「文化体育与传媒支出」） | ❌ 不该去掉 |
 | 其余 9 条 | WP4-A/B/C/D/E/F/G 已文档化真值 + MR-2 设计内输出 | ❌ 不该去掉 |
 
-**待裁决两条路**（PR #59 `issuecomment-5858350680`）：
-**「豁免」**＝维持 ≤13 并在报告里如实标注差 1 条；**「压减」**＝仅合并 V33-244 两条
-同科目提示 → **12 达标**（石泉同规则 9→7，golden 不含 V33-244 故门禁不受影响）。
+**裁决结果（2026-09-28）**：用户选**「压减·限定版」**，已落地于 PR #59 `d2bd4c4`——
+仅合并 V33-244 两条同科目提示 → **12 达标**（石泉同规则 info 2→1，总 9→8；
+其第 3 条为表文不符 error 真发现保留；golden 不含 V33-244 故门禁不受影响）。
+取证与落地详情见 `B1_YICHUAN_13_EVIDENCE` §五。
 
 ## 四、车道2（WP4-I）交付对账
 
