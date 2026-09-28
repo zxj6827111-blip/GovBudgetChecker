@@ -58,7 +58,19 @@ MANIFEST_FIELDS = [
 ]
 
 #: 合法子集标记（WP4-I 方案 §2.5；region 是 锚定/探针 的分层键）
-SUBSETS = ("final-main", "budget-main", "scan-watch", "clean-contrast", "probe-region")
+#: 合法子集标记。
+#: 前 5 个来自 WP4-I 方案 §2.5 的枚举；``budget-unit`` 是**本项目的显式扩展**——
+#: 单位级预算与部门级预算粒度不同、且普陀区单位预算为同一模板（核心表标题命中集合
+#: 完全相同），混入 budget-main 会让该层的规则级 precision 被样本相关性带偏。
+#: 分层报告时 budget-unit 单列，不与部门级混算。
+SUBSETS = (
+    "final-main",
+    "budget-main",
+    "budget-unit",
+    "scan-watch",
+    "clean-contrast",
+    "probe-region",
+)
 REGIONS = ("anchor", "probe")
 DEPTHS = ("", "L1", "L2")
 KINDS = ("final", "budget", "unknown")

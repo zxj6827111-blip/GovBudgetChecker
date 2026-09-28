@@ -187,3 +187,50 @@ def test_engine_fingerprint_is_stable_and_rule_sensitive():
         rules_v33.ALL_RULES = original
     assert after["rule_inventory_sha256"] != first["rule_inventory_sha256"]
     assert bench_register.engine_fingerprint()["rule_inventory_sha256"] == first["rule_inventory_sha256"]
+
+
+def test_subset_whitelist_covers_checklist_and_stays_closed(tmp_path, monkeypatch):
+    """子集白名单：必须含签字单用到的每一个值，且仍然拒绝未登记的值。
+
+    来由（真缺陷）：签字单 §2.1/§3 让用户用 `--subset budget-unit` 登记单位级预算，
+    但白名单只有方案 §2.5 的 5 个值——照单执行会**当场失败**。`budget-unit` 是本项目的
+    显式扩展（单位级与部门级粒度不同、且同模板，混算会污染规则级 precision），
+    已加入白名单。
+    """
+    # 1) 签字单里出现过的子集值都必须在白名单内（防止文档与工具再次漂移）
+    checklist = (bench_register._REPO_ROOT / "docs" / "B1_CORPUS_CHECKLIST_20260928.md")
+    if checklist.exists():
+        import re
+
+        text = checklist.read_text(encoding="utf-8")
+        used = set(re.findall(r"--subset\s+([a-z-]+)", text))
+        assert used, "签字单里应至少有一条 --subset 示例"
+        missing = used - set(bench_register.SUBSETS)
+        assert not missing, f"签字单用了白名单外的子集值: {sorted(missing)}"
+
+    # 2) 白名单里的每个值都能真正登记成功（自洽）
+    monkeypatch.setattr(bench_register, "probe_pdf", lambda _p: {"pages": 20, "text_chars": 9999})
+    for index, subset in enumerate(bench_register.SUBSETS):
+        pdf = tmp_path / f"doc{index}.pdf"
+        pdf.write_bytes(f"%PDF-1.4 fake {index}".encode())
+        corpus = tmp_path / f"corpus{index}"
+        row = bench_register.register_pdf(
+            pdf,
+            report_kind_true="budget",
+            subset=subset,
+            corpus_dir=corpus,
+            manifest_path=corpus / "manifest.csv",
+        )
+        assert row["subset"] == subset
+
+    # 3) 未登记的值仍然被拒（白名单不能变成"什么都收"）
+    bad_pdf = tmp_path / "bad.pdf"
+    bad_pdf.write_bytes(b"%PDF-1.4 fake bad")
+    with pytest.raises(SystemExit):
+        bench_register.register_pdf(
+            bad_pdf,
+            report_kind_true="budget",
+            subset="not-a-subset",
+            corpus_dir=tmp_path / "corpus-bad",
+            manifest_path=tmp_path / "corpus-bad" / "manifest.csv",
+        )
