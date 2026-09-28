@@ -148,3 +148,42 @@ def test_manifest_load_roundtrip(bench_env, tmp_path):
     assert rows[0]["region"] == "probe"
     assert rows[0]["depth"] == "L2"
     assert json.dumps(rows[0], ensure_ascii=False)  # 行内容 JSON 可序列化
+
+
+def test_engine_fingerprint_is_stable_and_rule_sensitive():
+    """引擎指纹（§6.7）：同规则集稳定，规则集一变必须变。
+
+    这是「换了 checker 要能归因」的最小保证——若规则改了而指纹不变，报告
+    就无法说明「这次指标变化是不是换了引擎」。
+    """
+    first = bench_register.engine_fingerprint()
+    second = bench_register.engine_fingerprint()
+    assert first["rules_sha256"] == second["rules_sha256"]
+    assert first["rules_count"] > 0
+    assert set(first) == {
+        "rules_sha256", "rule_inventory_sha256", "rules_count", "git_head", "git_dirty",
+    }
+    assert len(first["rules_sha256"]) == 64 and len(first["rule_inventory_sha256"]) == 64
+    # 两个哈希分工不同：源码哈希抓**行为**变化，清单哈希抓**规则码/严重度**漂移，
+    # 二者不应偶然相等（相等说明其中一个退化成了另一个）
+    assert first["rules_sha256"] != first["rule_inventory_sha256"]
+
+    # 变异：把某条规则的严重度改掉，**清单指纹**必须随之改变
+    from src.engine import rules_v33
+
+    class _Mutated:
+        def __init__(self, code, severity):
+            self.code = code
+            self.severity = severity
+
+    original = list(rules_v33.ALL_RULES)
+    assert original, "规则注册表不应为空"
+    head = original[0]
+    mutated = [_Mutated(getattr(head, "code", ""), "篡改严重度")] + original[1:]
+    try:
+        rules_v33.ALL_RULES = mutated
+        after = bench_register.engine_fingerprint()
+    finally:
+        rules_v33.ALL_RULES = original
+    assert after["rule_inventory_sha256"] != first["rule_inventory_sha256"]
+    assert bench_register.engine_fingerprint()["rule_inventory_sha256"] == first["rule_inventory_sha256"]

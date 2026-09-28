@@ -37,7 +37,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from scripts.bench_register import load_manifest  # noqa: E402
+from scripts.bench_register import engine_fingerprint, load_manifest  # noqa: E402
 from scripts.replay_golden_corpus import (  # noqa: E402
     _load_corpus_inputs,
     load_page_tables,
@@ -105,6 +105,8 @@ def _replay_one(
             "elapsed_ms": elapsed_ms,
         },
         # —— WP4-I 特有观测面 ——
+        # §6.7 引擎指纹：与 doc_id + sha256 一起构成可归因的最小绑定
+        "engine_fingerprint": engine_fingerprint(),
         "report_kind_resolved": resolved_kind,
         "rule_execution_summary": summary,
         "obligation_ledger": ledger,
@@ -228,6 +230,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
         encoding="utf-8",
     )
+    fp = engine_fingerprint()
+    print(f"engine: rules_sha256={fp['rules_sha256'][:12]}… "
+          f"head={fp['git_head'] or 'n/a'} dirty={fp['git_dirty']}")
     print(f"written: {out_dir} ({len(results)} docs, {len(failures)} failures)")
     return 1 if failures and not results else 0
 

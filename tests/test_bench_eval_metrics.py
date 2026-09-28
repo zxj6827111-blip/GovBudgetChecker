@@ -13,8 +13,14 @@ import copy
 from scripts.eval_benchmark import aggregate
 
 
-def _eval_report(tp_rules, fp_rules, *, fn=1, hint_groups_hit=1, hint_groups_total=2):
-    """构造 evaluate() 返回形状的最小报告。"""
+def _eval_report(tp_rules, fp_rules, *, fn=1, hint_groups_hit=1, hint_groups_total=2,
+                 severity_accuracy=None, page_accuracy=None, locatable_evidence_rate=None,
+                 defect_groups_hit=(), defect_groups_total=0):
+    """构造 evaluate() 返回形状的最小报告。
+
+    辅助指标（severity/page/可定位率）只在评测面有 TP 时有意义，故默认 None，
+    由用例按需给值——聚合侧对 None 的处理必须与真实报告一致（跳过而非当 0）。
+    """
     rule_counts = {}
     for rule in tp_rules:
         rule_counts[rule] = rule_counts.get(rule, 0) + 1
@@ -26,6 +32,12 @@ def _eval_report(tp_rules, fp_rules, *, fn=1, hint_groups_hit=1, hint_groups_tot
         "fn": fn,
         "hint_groups_hit": hint_groups_hit,
         "hint_groups_total": hint_groups_total,
+        "severity_accuracy": severity_accuracy,
+        "page_accuracy": page_accuracy,
+        "locatable_evidence_rate": locatable_evidence_rate,
+        # 真实形状：命中组是 id 列表，总数是计数
+        "defect_groups_hit": list(defect_groups_hit),
+        "defect_groups_total": defect_groups_total,
         "rule_counts": rule_counts,
         "matched": [{"matched_rule": rule} for rule in tp_rules],
         "hint_hits": [],
@@ -35,7 +47,7 @@ def _eval_report(tp_rules, fp_rules, *, fn=1, hint_groups_hit=1, hint_groups_tot
 
 
 def _entry(doc_id, *, manifest, resolved, summary, ledger_groups, eval_report=None,
-           rule_counts=None):
+           rule_counts=None, fingerprint=None):
     """逐份重放条目。
 
     ``rule_counts`` 是**无标注依赖**的触发观测（真实重放里等于该份 findings
@@ -52,6 +64,7 @@ def _entry(doc_id, *, manifest, resolved, summary, ledger_groups, eval_report=No
             "rule_execution_summary": summary,
             "obligation_ledger": {"by_group": ledger_groups},
             "rule_counts": rule_counts,
+            "engine_fingerprint": fingerprint,
         },
     }
     if eval_report is not None:
@@ -257,3 +270,123 @@ def test_zero_trigger_scope_covers_unannotated_replay():
     assert report["rule_trigger_counts"]["V33-201"] == 2
     assert report["rule_trigger_counts"]["V33-101"] == 1
     assert report["zero_trigger_scope"] == "全部重放材料（无标注依赖）"
+
+
+def test_spec_rule_hit_rate_and_weighted_aux_metrics():
+    """WP4-I §4.2 Rule Hit Rate、§4.3 辅助指标 TP 加权、§4.4 标注深度分层。
+
+    反例价值：辅助指标若用算术平均，一份只命中 1 个真值的材料会与一份命中
+    3 个的材料等权，把比率带偏——本用例的加权值 0.25 与算术均值 0.5 不同，
+    用来锁死「必须 TP 加权」。
+    """
+    entries = [
+        _entry(
+            "DOC-B1-001",
+            manifest={"doc_id": "DOC-B1-001", "report_kind_true": "final",
+                      "subset": "final-main", "region": "anchor", "depth": "L2"},
+            resolved="final",
+            summary={"pass": 1, "fail": 0, "not_applicable": 0,
+                     "insufficient_data": 0, "parse_error": 0, "execution_error": 0},
+            ledger_groups=[],
+            eval_report=_eval_report(["V33-101"], [], severity_accuracy=1.0,
+                                     page_accuracy=1.0, locatable_evidence_rate=1.0,
+                                     defect_groups_hit=("T1",), defect_groups_total=1),
+        ),
+        _entry(
+            "DOC-B1-002",
+            manifest={"doc_id": "DOC-B1-002", "report_kind_true": "final",
+                      "subset": "final-main", "region": "anchor", "depth": "L1"},
+            resolved="final",
+            summary={"pass": 1, "fail": 0, "not_applicable": 0,
+                     "insufficient_data": 0, "parse_error": 0, "execution_error": 0},
+            ledger_groups=[],
+            eval_report=_eval_report(["V33-101", "V33-102", "V33-103"], [],
+                                     severity_accuracy=0.0, page_accuracy=0.0,
+                                     locatable_evidence_rate=0.0,
+                                     defect_groups_hit=(), defect_groups_total=2),
+        ),
+    ]
+    report = aggregate(entries, REGISTRY)
+    totals = report["totals"]
+
+    # §4.3：TP 加权（(1×1.0 + 3×0.0)/4 = 0.25），不是算术平均 0.5
+    assert totals["severity_accuracy"] == 0.25
+    assert totals["page_accuracy"] == 0.25
+    assert totals["locatable_evidence_rate"] == 0.25
+    # 真值组命中合计
+    assert totals["defect_groups_hit"] == 1
+    assert totals["defect_groups_total"] == 3
+
+    # §4.2 Rule Hit Rate：分母是文种适用材料数，分子是触发材料数
+    assert report["rule_hit_rate"]["V33-101"] == {
+        "applicable_docs": 2, "hit_docs": 2, "hit_rate": 1.0,
+    }
+    assert report["rule_hit_rate"]["V33-201"]["hit_rate"] == 0.0
+    # 无适用材料的文种：0/0 记 None，不伪造成 0
+    assert report["rule_hit_rate"]["BUD-105"]["applicable_docs"] == 0
+    assert report["rule_hit_rate"]["BUD-105"]["hit_rate"] is None
+
+    # §4.4 标注深度分层
+    assert set(report["stratified"]["by_depth"]) == {"L1", "L2"}
+    assert report["stratified"]["by_depth"]["L2"]["tp"] == 1
+    assert report["stratified"]["by_depth"]["L1"]["tp"] == 3
+
+
+def test_aux_metrics_skip_docs_without_tp():
+    """无 TP 的材料（比率无意义）不得把辅助指标拉成 0。"""
+    entries = [
+        _entry(
+            "DOC-B1-001",
+            manifest={"doc_id": "DOC-B1-001", "report_kind_true": "final",
+                      "subset": "final-main", "region": "anchor", "depth": "L1"},
+            resolved="final",
+            summary={"pass": 1, "fail": 0, "not_applicable": 0,
+                     "insufficient_data": 0, "parse_error": 0, "execution_error": 0},
+            ledger_groups=[],
+            eval_report=_eval_report([], [], fn=0, severity_accuracy=0.0,
+                                     page_accuracy=0.0, locatable_evidence_rate=0.0),
+        ),
+    ]
+    report = aggregate(entries, REGISTRY)
+    assert report["totals"]["severity_accuracy"] is None
+    assert report["totals"]["page_accuracy"] is None
+
+
+def _fp(digest):
+    return {"rules_sha256": digest, "rules_count": 82, "git_head": "abc1234", "git_dirty": False}
+
+
+def _plain_entry(doc_id, fingerprint):
+    return _entry(
+        doc_id,
+        manifest={"doc_id": doc_id, "report_kind_true": "final",
+                  "subset": "final-main", "region": "anchor", "depth": "L1"},
+        resolved="final",
+        summary={"pass": 1, "fail": 0, "not_applicable": 0,
+                 "insufficient_data": 0, "parse_error": 0, "execution_error": 0},
+        ledger_groups=[],
+        fingerprint=fingerprint,
+    )
+
+
+def test_engine_fingerprint_comes_from_replay_and_flags_mixing():
+    """§6.7：快照的引擎指纹必须取自**重放产物**，并检出混用引擎的聚合。
+
+    反例价值：若指纹取自当前工作树，历史重放会被盖上今天的指纹——归因就成了
+    伪造；若混用两代引擎的产物却不报警，总指标会把两代行为平均成一个无意义值。
+    """
+    # 单一引擎：原样绑定
+    report = aggregate([_plain_entry("DOC-B1-001", _fp("a" * 64))], REGISTRY)
+    assert report["engine_fingerprint"]["rules_sha256"] == "a" * 64
+
+    # 混用两代引擎：不绑定 + 显式冲突清单（不静默合并）
+    mixed = aggregate(
+        [_plain_entry("DOC-B1-001", _fp("a" * 64)), _plain_entry("DOC-B1-002", _fp("b" * 64))],
+        REGISTRY,
+    )
+    assert mixed["engine_fingerprint"] is None
+    assert len(mixed["engine_fingerprint_conflict"]) == 2
+
+    # 历史重放（早于 §6.7）：如实记 None + 说明，不猜
+    legacy = aggregate([_plain_entry("DOC-B1-001", None)], REGISTRY)
+    assert legacy["engine_fingerprint"] is None

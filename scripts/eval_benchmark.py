@@ -36,7 +36,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from scripts.bench_register import load_manifest  # noqa: E402
+from scripts.bench_register import engine_fingerprint, load_manifest  # noqa: E402
 from scripts.evaluate_golden_corpus import evaluate  # noqa: E402
 
 
@@ -72,6 +72,8 @@ def _load_replay_meta(replay_path: Path) -> Dict[str, Any]:
         "obligation_ledger": payload.get("obligation_ledger") or {},
         # 无标注依赖的触发观测（零触发清单用；不等同于评测面的 rule_counts）
         "rule_counts": legacy.get("rule_counts") or {},
+        # 引擎指纹随重放产物走（run_benchmark 写入）；历史重放可能没有
+        "engine_fingerprint": payload.get("engine_fingerprint"),
         "finding_total": int(legacy.get("finding_total")
                              or len(payload.get("findings") or [])),
     }
@@ -81,6 +83,42 @@ def _safe_div(numerator: float, denominator: float) -> Optional[float]:
     if not denominator:
         return None
     return round(numerator / denominator, 4)
+
+
+def _fingerprints(doc_entries: List[Dict[str, Any]]) -> List[str]:
+    """各份重放携带的引擎指纹（去重前的规范串），历史重放可能为空。"""
+    seen = []
+    for e in doc_entries:
+        fp = (e.get("replay_meta") or {}).get("engine_fingerprint")
+        if fp:
+            seen.append(json.dumps(fp, sort_keys=True, ensure_ascii=False))
+    return seen
+
+
+def _single_fingerprint(doc_entries: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """全量重放同源时返回该指纹，否则 None（混用或未记录）。"""
+    seen = _fingerprints(doc_entries)
+    if len(set(seen)) != 1:
+        return None
+    for e in doc_entries:
+        fp = (e.get("replay_meta") or {}).get("engine_fingerprint")
+        if fp:
+            return fp
+    return None
+
+
+def _fingerprint_diagnostics(doc_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """指纹侧的如实记录：未记录 → 说明；混用 → 冲突清单（不静默合并）。"""
+    seen = _fingerprints(doc_entries)
+    if not seen:
+        return {"engine_fingerprint_note": "历史重放未记录引擎指纹（早于 §6.7 落地的产物）"}
+    distinct = sorted(set(seen))
+    if len(distinct) > 1:
+        return {
+            "engine_fingerprint_conflict": distinct,
+            "engine_fingerprint_note": "本次聚合混用了多个引擎版本，总指标不可归因",
+        }
+    return {}
 
 
 def aggregate(doc_entries: List[Dict[str, Any]], registry: Dict[str, List[str]]) -> Dict[str, Any]:
@@ -111,6 +149,31 @@ def aggregate(doc_entries: List[Dict[str, Any]], registry: Dict[str, List[str]])
         round(acceptable_violation_count / acceptable_annotation_count, 4)
         if acceptable_annotation_count
         else None
+    )
+
+    # —— §4.3 辅助指标：severity/page/证据可定位率（TP 加权，与逐份报告同源） ——
+    # 逐份报告只给比率，聚合必须是 TP 加权而非算术平均——否则一份只命中 1 个
+    # 真值的材料与一份命中 20 个的材料权重相同，会把辅助指标带偏。
+    def _tp_weighted(ratio_key: str) -> Optional[float]:
+        numerator = 0.0
+        denominator = 0
+        for e in evaluated:
+            report = e["eval_report"]
+            tp_count = int(report.get("tp") or 0)
+            ratio = report.get(ratio_key)
+            if tp_count and ratio is not None:
+                numerator += float(ratio) * tp_count
+                denominator += tp_count
+        return _safe_div(numerator, denominator) if denominator else None
+
+    # 真值组命中率（defect 侧，与 hint 侧并列；§4.1 按 truth_id 组计）
+    # 注意真实形状：evaluator 的 defect_groups_hit 是**列表**（命中组 id），
+    # defect_groups_total 才是计数——首版把前者当计数会 TypeError。
+    defect_groups_hit = sum(
+        len(r.get("defect_groups_hit") or []) for r in (e["eval_report"] for e in evaluated)
+    )
+    defect_groups_total = sum(
+        int(r.get("defect_groups_total") or 0) for r in (e["eval_report"] for e in evaluated)
     )
 
     # —— 规则级：findings / TP（按 matched_rule）/ FP ——
@@ -147,10 +210,36 @@ def aggregate(doc_entries: List[Dict[str, Any]], registry: Dict[str, List[str]])
     # （final 52 条），与本节语义相反。
     triggered: set = set()
     rule_trigger_counts: Dict[str, int] = {}
+    fired_docs: Dict[str, set] = {}
     for e in doc_entries:
         for rule, count in (e.get("replay_meta", {}).get("rule_counts") or {}).items():
             triggered.add(rule)
             rule_trigger_counts[rule] = rule_trigger_counts.get(rule, 0) + int(count)
+            fired_docs.setdefault(rule, set()).add(e["doc_id"])
+
+    # —— §4.2 Rule Hit Rate：触发该规则的材料数 / 适用材料数 ——
+    # 「适用」按文种分母（决算规则只对决算材料计；common 对全部登记材料计）。
+    kind_of = {
+        e["doc_id"]: str(e.get("manifest", {}).get("report_kind_true") or "")
+        for e in doc_entries
+    }
+    applicable_docs: Dict[str, set] = {}
+    for kind, codes in registry.items():
+        if kind == "common":
+            targets = {doc_id for doc_id, k in kind_of.items() if k}
+        else:
+            targets = {doc_id for doc_id, k in kind_of.items() if k == kind}
+        for code in codes:
+            applicable_docs.setdefault(code, set()).update(targets)
+    rule_hit_rate: Dict[str, Dict[str, Any]] = {}
+    for code in sorted(applicable_docs):
+        docs = applicable_docs[code]
+        hit = len(fired_docs.get(code, set()) & docs)
+        rule_hit_rate[code] = {
+            "applicable_docs": len(docs),
+            "hit_docs": hit,
+            "hit_rate": _safe_div(hit, len(docs)),
+        }
     zero_trigger: Dict[str, List[str]] = {}
     kind_docs: Dict[str, int] = {}
     for e in doc_entries:
@@ -249,8 +338,19 @@ def aggregate(doc_entries: List[Dict[str, Any]], registry: Dict[str, List[str]])
                 int(r["hint_groups_hit"]) for r in (e["eval_report"] for e in evaluated)
             ),
             "hint_groups_total": sum(r["hint_groups_total"] for r in (e["eval_report"] for e in evaluated)),
+            # §4.3 辅助指标（TP 加权）
+            "severity_accuracy": _tp_weighted("severity_accuracy"),
+            "page_accuracy": _tp_weighted("page_accuracy"),
+            "locatable_evidence_rate": _tp_weighted("locatable_evidence_rate"),
+            "defect_groups_hit": defect_groups_hit,
+            "defect_groups_total": defect_groups_total,
         },
         "rule_level": rule_level,
+        "rule_hit_rate": rule_hit_rate,
+        # §6.7 引擎指纹：取自**重放产物**而非当前工作树（否则历史重放会被盖上
+        # 今天的指纹＝伪造归因）。混用多代引擎时拒答单一指纹并给出冲突清单。
+        "engine_fingerprint": _single_fingerprint(doc_entries),
+        **_fingerprint_diagnostics(doc_entries),
         "zero_trigger_scope": "全部重放材料（无标注依赖）",
         "rule_trigger_counts": dict(sorted(rule_trigger_counts.items())),
         "zero_trigger_rules": zero_trigger,
@@ -270,6 +370,8 @@ def aggregate(doc_entries: List[Dict[str, Any]], registry: Dict[str, List[str]])
             "by_subset": _stratify("subset"),
             "by_region": _stratify("region"),
             "by_report_kind_true": _stratify("report_kind_true"),
+            # §4.4 标注深度维度（L1/L2；登记时为空则落 unset）
+            "by_depth": _stratify("depth"),
         },
     }
 
@@ -373,6 +475,9 @@ def main() -> int:
     registry = _registry_codes()
     report = aggregate(entries, registry)
     report["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if report.get("engine_fingerprint_conflict"):
+        print(f"⚠️ 本次聚合混用了 {len(report['engine_fingerprint_conflict'])} 个引擎版本"
+              "——指标不可归因，请统一重跑")
     report["replay_dir"] = str(replay_dir)
     report["mode"] = args.mode
 

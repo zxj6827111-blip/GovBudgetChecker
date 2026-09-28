@@ -103,6 +103,75 @@ def next_doc_id(manifest_path: Path = MANIFEST_PATH) -> str:
     return f"DOC-B1-{seq + 1:03d}"
 
 
+def engine_fingerprint() -> dict:
+    """引擎指纹（WP4-I §6.7：评测报告须绑定 doc_id + sha256 + **引擎指纹**）。
+
+    两个互补维度：
+    - ``rules_sha256``：三个规则注册表（final/budget/common）的「规则码:严重度」
+      排序后哈希。与 git 无关——worktree、打包分发、无 .git 环境都能得到同一值；
+      规则集一变指纹就变，这正是「换了 checker 要能归因」的要点。
+    - ``git_head`` / ``git_dirty``：本次测量的代码版本与工作树是否干净。
+      历史快照若产自未提交的工作树，这里会如实带 dirty=True。
+    """
+    import hashlib
+    import subprocess
+
+    from src.engine.budget_rules import ALL_BUDGET_RULES
+    from src.engine.common_rules import ALL_COMMON_RULES
+    from src.engine.rules_v33 import ALL_RULES as FINAL_ALL_RULES
+
+    parts = []
+    rule_count = 0
+    for tag, rules in (
+        ("final", FINAL_ALL_RULES),
+        ("budget", ALL_BUDGET_RULES),
+        ("common", ALL_COMMON_RULES),
+    ):
+        codes = sorted(
+            f"{getattr(item, 'code', '')}:{getattr(item, 'severity', '')}" for item in rules
+        )
+        rule_count += len(codes)
+        parts.append(f"{tag}=" + ",".join(codes))
+    inventory = hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+    # 行为指纹必须哈希**引擎源码**：只哈希「规则码:严重度」清单对本次改造
+    # （MR-1 双栏取数 / MR-2 舍入聚类 / MR-4 口径门槛）完全不敏感——三种引擎
+    # 会算出同一个清单哈希，指纹随之失去归因能力（实测踩过：三节点同为 7241a74a）。
+    source = hashlib.sha256()
+    for rel in (
+        "src/engine/rules_v33.py",
+        "src/engine/budget_rules.py",
+        "src/engine/common_rules.py",
+        "src/engine/pipeline.py",
+    ):
+        path = _REPO_ROOT / rel
+        source.update(rel.encode("utf-8"))
+        source.update(path.read_bytes() if path.exists() else b"<missing>")
+    digest = source.hexdigest()
+
+    head = ""
+    dirty = False
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=_REPO_ROOT, capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=_REPO_ROOT, capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        dirty = bool(status)
+    except OSError:
+        pass  # 无 git 环境：指纹仍有 rules_sha256 可用
+    return {
+        "rules_sha256": digest,
+        "rule_inventory_sha256": inventory,
+        "rules_count": rule_count,
+        "git_head": head,
+        "git_dirty": dirty,
+    }
+
+
 def probe_pdf(pdf_path: Path) -> dict:
     """页数与文本层探测（复用 replay_golden_corpus 的 pdfplumber 装载）。"""
     texts = load_page_texts(pdf_path)
