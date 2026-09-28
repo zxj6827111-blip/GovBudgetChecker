@@ -14,6 +14,7 @@
 |---|---|---|
 | 引擎 | `main`（经 `feat/bench-wp4i`，无 MR-1~MR-4） | `fix/engine-parse-20260927` HEAD `4d6662c` |
 | 工具 | `bench_register/run_benchmark/eval_benchmark`（PR #60 版） | 同左（临时拷入 worktree，未提交） |
+| 节点 | `main` → `9949dea`(MR-1/2/3) → `4d6662c`(+MR-4)，共三跑 | 同左 |
 | 语料 | `corpus/manifest.csv` 登记 7 份（SHA 与源 PDF 绑定） | 同左 |
 
 ```bash
@@ -32,11 +33,31 @@ python .tmp/wt-lane1/scripts/run_benchmark.py \
 两跑均 `7 docs, 0 failures`，`parse_error = execution_error = 0`（确定性纯规则，
 禁 AI，无网络）。
 
-> **节点粒度说明**：方案 S4 期望「修复前 / 每 MR 后 / 全部后」。车道1 的
-> MR-1/2/3 落成**单个提交** `9949dea`（MR-4 另为 `4d6662c`），因此可跑的节点
-> 只有「`main`」与「全部修复后」两个——逐 MR 中间态无法从现有历史切出，
-> 未做拆分重写（重写会动已 push 的分支历史）。若需要 MR 级归因，可用
-> `git worktree` 分别取两个 commit 各跑一轮，本工具链已支持。
+> **节点粒度**：方案 S4 期望「修复前 / 每 MR 后 / 全部后」。车道1 的历史是
+> `9949dea`（MR-1/2/3 合为一个提交）→ `f14616d`（MR-5 CI job）→ `4d6662c`（MR-4），
+> 因此**能切的节点是三个**：`main` → `9949dea`（MR-1/2/3）→ `4d6662c`（+MR-4）。
+> MR-1/2/3 之间的中间态无法切出（未重写已 push 的历史）。
+
+### 三个节点逐份对照
+
+| 材料 | main findings/unresolved | MR-1/2/3 | +MR-4（全量） |
+|---|---|---|---|
+| DOC-20260905-001 生态环境局 | 7 / 13 | 7 / 4 | 7 / 4 |
+| DOC-B1-001 宜川路街道 | 34 / 12 | 13 / 1 | 13 / 1 |
+| DOC-B1-002 石泉路街道 | 16 / 14 | 9 / 2 | 9 / 2 |
+| DOC-B1-003 文化和旅游局 | 27 / 14 | 2 / 7 | 2 / 7 |
+| DOC-B1-004 建管委 2026 预算 | 4 / 5 | **4** / 5 | **2** / 5 |
+| DOC-B1-005 城管执法局预算 | 1 / 4 | 1 / 4 | 1 / 4 |
+| DOC-B1-006 文化和旅游局预算 | 1 / 6 | 1 / 6 | 1 / 6 |
+| **合计** | **90 / 68** | **37 / 29** | **35 / 29** |
+
+**归因结论**：MR-1/2/3 承担了几乎全部效果（90→37 findings、68→29 unresolved）；
+**MR-4 的独立贡献只有一条**——建管委的 `BUD-105 ×2` 误报消失（4→2），
+且 unresolved 不变（5）：它**止住了误报，但没有让规则跑通**——BUD-105 在 3/3 份
+预算上仍是 `insufficient_data`（T1/T4 取数缺口），这正是
+`docs/WP4-I_RULE_IMPROVEMENT_LIST_20260928.md` §二 T1 的第一条。
+
+对应快照：`docs/baselines/bench1_metrics_20260928_{before_repair,mr123,after_repair}_7docs.json`。
 
 ## 二、逐份结果
 
