@@ -6,9 +6,23 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from rapidfuzz import fuzz
 
-from .rules_v33 import Document, Issue, Rule, normalize_text, parse_number
+from .rules_v33 import (
+    Document,
+    Issue,
+    Rule,
+    normalize_text,
+    parse_number,
+    _resolve_fiscal_year,
+    _txt_fund_merged_pages,
+    _txt_fund_page_for,
+)
 from .amount_math import classify_amount_diff, compute_dynamic_envelope
-from .rule_outcome import RuleDeferred, RuleOutcomeSignal, STATUS_INSUFFICIENT_DATA
+from .rule_outcome import (
+    RuleDeferred,
+    RuleNotApplicable,
+    RuleOutcomeSignal,
+    STATUS_INSUFFICIENT_DATA,
+)
 from .field_extractor import (
     STATUS_MISSING_COLUMN,
     STATUS_OUT_OF_BOUNDS,
@@ -2590,6 +2604,472 @@ class BUD113_DocumentScopeTerminology(Rule):
         return issues
 
 
+# ---------- WP4-H：项目绩效阶段金额披露一致性（OBL-PERF-PHASE-AMOUNT） ----------
+
+#: 项目经费情况说明标题：`<项目名>项目经费情况说明` 或裸标题 `项目经费情况说明`。
+#: 排除目录行（行内含引导点 …）——目录条目不是正文标题。
+_PERF_EXPENSE_HEADING_RE = re.compile(r"^([^\n…]{2,60}?项目经费情况说明)[ \t]*$", re.M)
+#: 申报表年度资金两处口径标签（优先「年度资金申请总额」，回退「当年财政拨款」）。
+_PERF_FORM_ANNUAL_APPLY_RE = re.compile(r"年度资金申请总额\s*([\d,]+(?:\.\d+)?)")
+_PERF_FORM_ANNUAL_ALLOC_RE = re.compile(r"当年财政拨款\s*([\d,]+(?:\.\d+)?)")
+_PERF_FORM_TOTAL_RE = re.compile(r"项目资金总额\s*([\d,]+(?:\.\d+)?)")
+#: 申报表金额单位声明（建管委/城管执法局样张均为「项目资金（元）」）。
+_PERF_FORM_UNIT_RE = re.compile(r"项目资金\s*[（(]\s*(元|万元|亿元)\s*[）)]")
+#: 累计/阶段总口径标记——出现即该金额不得与年度金额比较。
+_PERF_CUMULATIVE_RE = re.compile(r"总投资|批复|概算|估算|资金总额|累计|分期|分阶段")
+#: 「年度安排缺失但有等效说明」的豁免（避免对"不再安排"类材料误报）。
+_PERF_NO_ARRANGE_RE = re.compile(
+    r"不(?:再|新增)?安排|无(?:新增|预算)?安排|已(?:经)?在上?年(?:度)?安排|资金已落实"
+)
+#: 口径差异解释标记（PA-2 豁免：义务 basis 要求"不一致时须给出解释"）。
+_PERF_EXPLAIN_RE = re.compile(r"原因|因为|由于|口径|不含|另有|分年|分期|结转|追加|调整")
+#: 金额 + 显式单位（单位不明不进比较——Case F fail-closed）。
+_PERF_MONEY_RE = re.compile(r"(?<![\d.,])([\d,]+(?:\.\d+)?)(万元|亿元|元)(?!\d)")
+_PERF_YEAR_TOKEN_RE = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
+_PERF_UNIT_TO_WAN = {
+    "万元": Decimal("1"),
+    "亿元": Decimal("10000"),
+    "元": Decimal("0.0001"),
+}
+
+
+def _perf_scale_digits(raw: str) -> int:
+    """原始金额文本的小数位数（'22,614.51'→2；'795'→0）——显示舍入包络用。"""
+    return len(raw.split(".", 1)[1]) if "." in raw else 0
+
+
+def _perf_norm_name(name: Optional[str]) -> str:
+    """项目身份归一：去空白/换行（申报表单元格换行拆名，如
+    「兰溪路-真南路下立交工\\n程」）。"""
+    return re.sub(r"\s+", "", str(name or ""))
+
+
+def _perf_classify_sentence(sentence: str, year: Optional[int]) -> str:
+    """年度预算安排小节内单句金额的口径分类。
+
+    累计标记优先（总投资/批复/概算/估算/资金总额等——真值文旅局
+    「可研批复总投资为13526.06万元」即此形态）；其次句内显式年份与
+    材料年度不同 → 往年（「2025年安排建设资金5000万元」）；材料年度
+    未确认时句内年份一律口径待定（fail-closed）；其余归年度（小节
+    标题本身就是年度口径，覆盖「795万元」「本年度…349.80万元」等）。
+    """
+    if _PERF_CUMULATIVE_RE.search(sentence):
+        return "cumulative"
+    years = [int(value) for value in _PERF_YEAR_TOKEN_RE.findall(sentence)]
+    if year is not None:
+        if any(value != year for value in years):
+            return "prior"
+        if years:
+            return "annual"
+    elif years:
+        return "unknown"
+    return "annual"
+
+
+def _perf_expense_sections(
+    merged: str, offsets: List[int], doc: Document
+) -> List[Dict[str, Any]]:
+    """切出正文中的项目经费情况说明章节（目录页同名行排除，与
+    _nar_repeat_sections 同款启发式）。
+
+    章节终止于下一个说明标题或「财政项目支出绩效目标申报表」标题——
+    最后一个说明章节若放任到文末，会把申报表页整体吸进章节文本，
+    表格固定字段（如「上年结转资金」）会误触发解释豁免（实测缺陷）。
+    """
+    texts = [str(item or "") for item in (getattr(doc, "page_texts", []) or [])]
+    toc_pages = {index for index, text in enumerate(texts) if "目录" in text[:120]}
+    starts: List[Tuple[str, int]] = []
+    for match in _PERF_EXPENSE_HEADING_RE.finditer(merged):
+        page = _txt_fund_page_for(offsets, match.start())
+        if (page - 1) in toc_pages:
+            continue
+        starts.append((match.group(1).strip(), match.start()))
+    sections: List[Dict[str, Any]] = []
+    for idx, (title, start) in enumerate(starts):
+        candidates = [len(merged)]
+        if idx + 1 < len(starts):
+            candidates.append(starts[idx + 1][1])
+        form_pos = merged.find("财政项目支出绩效目标申报表", start + 1)
+        if form_pos > start:
+            candidates.append(form_pos)
+        end = min(candidates)
+        heading = title[: -len("项目经费情况说明")].strip()
+        sections.append(
+            {
+                "name": heading or None,
+                "title": title,
+                "start": start,
+                "end": end,
+                "text": merged[start:end],
+            }
+        )
+    return sections
+
+
+def _pair_perf_records(
+    sections: List[Dict[str, Any]], forms: List[Dict[str, Any]]
+) -> Tuple[List[Tuple[Dict[str, Any], Dict[str, Any]]], List[str]]:
+    """项目身份配对（Mutation A 锁定点）。
+
+    - 名称归一相等或互相包含才可比；单说明×单申报表允许无名称兜底
+      （城管执法局形态：说明标题不署项目名）。
+    - 同一说明命中多张申报表 → 阶段归属歧义，整体不比较。
+    - 禁止按位置/顺序配对：跨项目配对会把甲项目的年度金额和乙项目的
+      申报表凑成一对，制造跨项目误报。
+    """
+    if len(sections) == 1 and len(forms) == 1:
+        return [(sections[0], forms[0])], []
+    pairs: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    ambiguous: List[str] = []
+    used: set = set()
+    for section in sections:
+        name = _perf_norm_name(section["name"])
+        if not name:
+            continue
+        matches = [
+            (idx, form)
+            for idx, form in enumerate(forms)
+            if idx not in used
+            and form.get("name")
+            and (name == form["name"] or name in form["name"] or form["name"] in name)
+        ]
+        if len(matches) > 1:
+            ambiguous.append(section["name"] or name)
+            continue
+        if len(matches) == 1:
+            idx, form = matches[0]
+            pairs.append((section, form))
+            used.add(idx)
+    return pairs, ambiguous
+
+
+class R33PerfPhaseAmount(Rule):
+    """项目绩效目标/阶段性目标金额披露一致性（V33-PERF-PHASE-AMOUNT）。
+
+    WP4-H 收口 OBL-PERF-PHASE-AMOUNT（budget only）。两条确定性检查面：
+
+    PA-1 阶段口径错配：项目经费情况说明的「年度预算安排」小节存在金额，
+    但全部为累计/往年口径（可研批复总投资、2025 年安排等），本年度金额
+    缺失且无等效说明。真值（REAL）：文旅局 2026 部门预算 P27 真如海心
+    剧院精装修工程——只有"可研批复总投资 13526.06 万元（=11668.67+
+    1213.29+644.10，内部自洽）+ 2025 年安排建设资金 5000 万元"，2026 年
+    度金额整体缺失，历史系统漏报。
+
+    PA-2 同项目年度金额不一致：项目经费情况说明「年度预算安排」金额 ↔
+    同项目「财政项目支出绩效目标申报表」年度资金申请总额/当年财政拨款，
+    单位归一（元→万元）后超显示舍入包络且未解释 → finding。负例锚
+    （REAL）：建管委「兰溪路-真南路下立交工程」22,614.51 万元 ↔
+    226,145,100.00 元一致；城管执法局「拆违经费」349.80 万元 ↔
+    3,498,000.00 元一致。
+
+    阶段身份红线（义务 basis"不得直接判等"的具体化）：
+    - 申报表「项目资金总额」在项目性质=阶段性项目时是跨年累计口径，
+      禁止与年度金额比较（Case D）；
+    - 同项目多张申报表（一期/二期等）阶段归属不可确认时不比较（Case C）；
+    - 项目身份（名称归一）无法确认、单位未声明时不比较（Case F），
+      一律 fail-closed 记 insufficient_data，不产出确定性结论。
+    聚合面（绩效涉及资金 vs 表内项目支出）归 BUD-108，本规则不重复。
+    """
+
+    code, severity = "V33-PERF-PHASE-AMOUNT", "medium"
+    desc = "项目绩效阶段金额披露一致性（说明年度安排↔绩效申报表年度资金）"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        merged, offsets = _txt_fund_merged_pages(doc)
+        if not merged.strip():
+            raise RuleDeferred(
+                self.code,
+                "未提取到正文文本，绩效阶段金额一致性无从检查",
+                unresolved_reasons=["未提取到正文文本"],
+            )
+
+        sections = _perf_expense_sections(merged, offsets, doc)
+        forms = self._collect_forms(doc)
+        if not sections and not forms:
+            # 两种披露形态都不存在：检查对象整体缺席，是不适用而非数据不足。
+            raise RuleNotApplicable(
+                self.code,
+                detail="未找到项目经费情况说明或绩效目标申报表，绩效阶段金额检查不适用",
+            )
+
+        heading_pages = tuple(
+            _txt_fund_page_for(offsets, section["start"]) for section in sections
+        )
+        year = _resolve_fiscal_year(doc, heading_pages)
+        issues: List[Issue] = []
+        unresolved: List[str] = []
+        if year is None:
+            unresolved.append(
+                "未能确认材料财政年度，年度/往年/累计口径不可区分（parse_ambiguity）"
+            )
+
+        annual_amounts: Dict[int, Dict[str, Any]] = {}
+        for idx, section in enumerate(sections):
+            findings, annual, section_unresolved = self._check_narrative_side(
+                section, year, offsets
+            )
+            issues.extend(findings)
+            if annual is not None:
+                annual_amounts[idx] = annual
+            unresolved.extend(section_unresolved)
+
+        pairs, ambiguous = _pair_perf_records(sections, forms)
+        for name in ambiguous:
+            unresolved.append(
+                f"项目「{name}」存在多张绩效目标申报表（一期/二期等阶段归属"
+                "不可确认），不做阶段金额比较"
+            )
+        for section, form in pairs:
+            annual = None
+            for idx, section_item in enumerate(sections):
+                if section_item is section:
+                    annual = annual_amounts.get(idx)
+                    break
+            self._compare_annual(
+                section, form, annual, year, offsets, issues, unresolved
+            )
+
+        # 未配对成功的说明侧：单侧披露无比较面，不产结论也不算缺口——
+        # 多项目材料只公开重点项目说明是常态，不构成 insufficient_data。
+        if unresolved:
+            reasons = list(dict.fromkeys(unresolved))
+            raise RuleDeferred(
+                self.code,
+                "；".join(reasons),
+                partial_issues=issues,
+                unresolved_reasons=reasons,
+            )
+        return issues
+
+    # ------------------------------------------------------------------
+    def _check_narrative_side(
+        self,
+        section: Dict[str, Any],
+        year: Optional[int],
+        offsets: List[int],
+    ) -> Tuple[List[Issue], Optional[Dict[str, Any]], List[str]]:
+        """PA-1：年度预算安排小节的口径分类与本年度金额缺失判定。
+
+        返回 (findings, 年度金额描述或 None, unresolved)。
+        """
+        chunk = self._annual_chunk(section, year)
+        if chunk is None or not chunk["amounts"]:
+            # 小节缺席或无金额（如"按照财政安排年度预算，按季度拨付"）：
+            # 金额一致性无检查面，不在本规则产出结论。
+            return [], None, []
+        if year is None:
+            # 财政年度未确认时金额口径不可分类——fail-closed。
+            return [], None, []
+        amounts = chunk["amounts"]
+        annual = next((item for item in amounts if item["kind"] == "annual"), None)
+        if annual is not None:
+            return [], annual, []
+        if _PERF_NO_ARRANGE_RE.search(chunk["text"]):
+            return [], None, []
+
+        disclosed = "、".join(
+            f"{item['raw']}{item['unit']}（{item['kind_label']}）" for item in amounts
+        )
+        page = _txt_fund_page_for(offsets, chunk["start"])
+        project = section["name"] or "（未署项目名）"
+        issues = [
+            self._issue(
+                f"「{project}」项目经费情况说明的「年度预算安排」小节未披露"
+                f"本年度（{year}）金额，仅见{disclosed}，阶段/累计口径与年度"
+                "口径的差异未作说明。请补充本年度安排金额或说明口径。",
+                {
+                    "page": page,
+                    "pos": 0,
+                    "section": section["title"],
+                    "project": project,
+                    "predicate": "annual_amount_missing",
+                    "disclosed_amounts": disclosed,
+                    "fiscal_year": year,
+                    "obligation_id": "OBL-PERF-PHASE-AMOUNT",
+                },
+                severity="medium",
+                evidence_text=f"【章节:{section['title']}】{chunk['text'][:200]}",
+                section_id=section["title"],
+            )
+        ]
+        return issues, None, []
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _annual_chunk(
+        section: Dict[str, Any], year: Optional[int]
+    ) -> Optional[Dict[str, Any]]:
+        """定位「年度预算安排」小节并抽取金额（逐句口径分类）。"""
+        anchor = section["text"].find("年度预算安排")
+        if anchor < 0:
+            return None
+        start = section["start"] + anchor
+        rest = section["text"][anchor + len("年度预算安排"):]
+        stop = len(rest)
+        for marker in ("绩效目标", "详见", "申报表"):
+            pos = rest.find(marker)
+            if 0 <= pos < stop:
+                stop = pos
+        body = rest[:stop]
+        if not body.strip():
+            return None
+        amounts: List[Dict[str, Any]] = []
+        # 逐句口径分类：句子以。；；换行切分，金额归属其所在句；
+        # 绝不跨句拼接数字（WP4-C 教训）。
+        sentences = re.split(r"([。；；\n])", body)
+        cursor = 0
+        for idx in range(0, len(sentences) - 1, 2):
+            sentence = sentences[idx]
+            offset_in_body = cursor
+            cursor += len(sentence) + len(sentences[idx + 1])
+            for match in _PERF_MONEY_RE.finditer(sentence):
+                raw, unit = match.group(1), match.group(2)
+                kind = _perf_classify_sentence(sentence, year)
+                kind_label = {
+                    "annual": "年度",
+                    "cumulative": "累计/阶段总",
+                    "prior": "往年",
+                    "unknown": "口径待定",
+                }[kind]
+                amounts.append(
+                    {
+                        "raw": raw,
+                        "unit": unit,
+                        "scale": _perf_scale_digits(raw),
+                        "kind": kind,
+                        "kind_label": kind_label,
+                        "value": Decimal(raw.replace(",", ""))
+                        * _PERF_UNIT_TO_WAN[unit],
+                        "pos": start
+                        + len("年度预算安排")
+                        + offset_in_body
+                        + match.start(),
+                    }
+                )
+        return {"text": body, "amounts": amounts, "start": start}
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _collect_forms(doc: Document) -> List[Dict[str, Any]]:
+        """逐页解析「财政项目支出绩效目标申报表」块（表格页文本形态）。"""
+        forms: List[Dict[str, Any]] = []
+        for pidx, text in enumerate(doc.page_texts or []):
+            page_text = str(text or "")
+            if "财政项目支出绩效目标申报表" not in page_text:
+                continue
+            name_match = re.search(r"项目名称\s*\n(.*?)\n项目性质", page_text, re.S)
+            nature_match = re.search(r"项目性质\s*\n(.*?)\n项目类别", page_text, re.S)
+            unit_match = _PERF_FORM_UNIT_RE.search(page_text)
+            annual_match = _PERF_FORM_ANNUAL_APPLY_RE.search(page_text)
+            if annual_match is None:
+                annual_match = _PERF_FORM_ANNUAL_ALLOC_RE.search(page_text)
+            total_match = _PERF_FORM_TOTAL_RE.search(page_text)
+            forms.append(
+                {
+                    "name": _perf_norm_name(name_match.group(1)) if name_match else None,
+                    "staged": bool(nature_match and "阶段" in nature_match.group(1)),
+                    "page": pidx + 1,
+                    "unit": unit_match.group(1) if unit_match else None,
+                    "annual_raw": annual_match.group(1) if annual_match else None,
+                    "total_raw": total_match.group(1) if total_match else None,
+                    "text": page_text,
+                }
+            )
+        return forms
+
+    # ------------------------------------------------------------------
+    def _compare_annual(
+        self,
+        section: Dict[str, Any],
+        form: Dict[str, Any],
+        annual: Optional[Dict[str, Any]],
+        year: Optional[int],
+        offsets: List[int],
+        issues: List[Issue],
+        unresolved: List[str],
+    ) -> None:
+        """PA-2：同项目说明年度金额 ↔ 申报表年度资金（年度↔年度，禁止跨口径）。"""
+        project = section["name"] or form.get("name") or "（未署项目名）"
+        if form["annual_raw"] is None:
+            if form["staged"] and form["total_raw"] is not None:
+                unresolved.append(
+                    f"项目「{project}」为阶段性项目，申报表仅披露累计口径"
+                    f"项目资金总额（{form['total_raw']}），不得与年度金额直接"
+                    "比较，且年度资金未披露"
+                )
+            else:
+                unresolved.append(
+                    f"项目「{project}」申报表未披露年度资金申请总额/当年财政"
+                    "拨款，年度金额不可比"
+                )
+            return
+        if form["unit"] is None:
+            unresolved.append(
+                f"项目「{project}」申报表金额单位未声明（缺「项目资金（元）」"
+                "类标注），归一比较不可完成"
+            )
+            return
+        if annual is None:
+            # 说明侧无年度金额：PA-1 已按口径错配处理（或小节无金额不归
+            # 本规则），此处无比较面。
+            return
+        annual_wan = Decimal(form["annual_raw"].replace(",", "")) * _PERF_UNIT_TO_WAN[
+            form["unit"]
+        ]
+        narrative_wan = annual["value"]
+        diff = abs(narrative_wan - annual_wan)
+        envelope = compute_dynamic_envelope(
+            [
+                (annual["scale"], annual["unit"]),
+                (_perf_scale_digits(form["annual_raw"]), form["unit"]),
+            ]
+        )
+        if diff <= envelope:
+            return
+        # 解释豁免只看说明侧散文：申报表固定字段（如「上年结转资金 0」）
+        # 是表格标签不是差异解释，不得触发豁免。
+        if _PERF_EXPLAIN_RE.search(section["text"]):
+            return
+        page = _txt_fund_page_for(offsets, annual["pos"])
+        diff_display = diff.quantize(Decimal("0.01"))
+        issues.append(
+            self._issue(
+                f"「{project}」绩效阶段金额不一致：项目经费情况说明「年度预算"
+                f"安排」{annual['raw']}{annual['unit']}"
+                f"（={narrative_wan.quantize(Decimal('0.01'))} 万元）与财政项目"
+                f"支出绩效目标申报表年度资金申请总额 {form['annual_raw']}"
+                f"{form['unit']}（={annual_wan.quantize(Decimal('0.01'))} 万元）"
+                f"相差 {diff_display} 万元，且未说明口径差异。"
+                "请核实同项目同年度金额，或补充差异原因说明。",
+                {
+                    "page": page,
+                    "pos": 0,
+                    "section": section["title"],
+                    "project": project,
+                    "phase": "年度（当年）",
+                    "amount_a": annual["raw"],
+                    "unit_a": annual["unit"],
+                    "amount_a_wan": str(narrative_wan.quantize(Decimal("0.01"))),
+                    "amount_b": form["annual_raw"],
+                    "unit_b": form["unit"],
+                    "amount_b_wan": str(annual_wan.quantize(Decimal("0.01"))),
+                    "diff_wan": str(diff_display),
+                    "form_page": form["page"],
+                    "fiscal_year": year,
+                    "comparison": "annual_vs_annual",
+                    "obligation_id": "OBL-PERF-PHASE-AMOUNT",
+                },
+                severity="high",
+                evidence_text=(
+                    f"【章节:{section['title']}】年度预算安排 {annual['raw']}"
+                    f"{annual['unit']}；【申报表 p{form['page']}】年度资金申请"
+                    f"总额 {form['annual_raw']}{form['unit']}"
+                ),
+                section_id=section["title"],
+            )
+        )
+
+
 ALL_BUDGET_RULES: List[Rule] = [
     BUD001_StructureAndAnchors(),
     BUD002_PlaceholderCheck(),
@@ -2607,4 +3087,6 @@ ALL_BUDGET_RULES: List[Rule] = [
     BUD111_ComparativePercentConsistency(),
     BUD112_ItemAmountConsistency(),
     BUD113_DocumentScopeTerminology(),
+    # WP4-H：项目绩效阶段金额披露一致性（OBL-PERF-PHASE-AMOUNT，budget only）
+    R33PerfPhaseAmount(),
 ]
