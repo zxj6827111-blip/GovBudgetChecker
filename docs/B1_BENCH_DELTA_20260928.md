@@ -129,6 +129,30 @@ python .tmp/wt-lane1/scripts/run_benchmark.py \
 `bench_register/run_benchmark` 走 PDF→页面表→引擎）独立得到，排除了原
 `replay_engine_repair.py` 单点脚本算错的可能。
 
+### 五·一、MR-1 验收里「V33-101~105 清零」的逐规则取证
+
+MR-1 验收原文：「4 份决算重放后：V33-101/102/103/104/105 维 unresolved 全部清零
+（16/16 → 0）；V33-107/108、CMM-001 澄清明确状态」。逐规则状态（修复后引擎）：
+
+| 规则 | 生态环境局 | 宜川 | 石泉 | 文旅 | 未决 |
+|---|---|---|---|---|---|
+| V33-101 | pass | pass | pass | pass | **0/4** |
+| V33-102 | pass | pass | pass | pass | **0/4** |
+| V33-103 | pass | pass | pass | pass | **0/4** |
+| V33-104 | pass | pass | pass | pass | **0/4** |
+| V33-105 | pass | pass | pass | pass | **0/4** |
+| V33-106 | pass | pass | pass | insufficient_data | 1/4 |
+| V33-107 | pass | pass | pass | pass | 0/4 |
+| V33-108 | pass | pass | pass | pass | 0/4 |
+| CMM-001 | insufficient_data | insufficient_data | insufficient_data | insufficient_data | 4/4 |
+
+结论：**V33-101~105 合计未决 0/16，与验收目标「16/16 → 0」精确对应**；
+V33-107/108 全 pass；CMM-001 四份全为 `insufficient_data`，原因明确
+（「未提取到三公经费情况说明数值」）——属「澄清明确状态」而非静默漏报，
+并已列入 `docs/WP4-I_RULE_IMPROVEMENT_LIST_20260928.md` §二 T1 改进面。
+V33-106 的 1/4 未决在文旅局，原因是材料 T5 合计与分项不同源（结构矛盾哨兵按
+fail-closed 拒答，见 §四 与改进清单 T2）。
+
 ## 六、本次对照暴露的工具面缺陷（已修）
 
 1. **`.gitignore` 漏通配符**：`corpus/DOC-B1-/*` 缺目录段 `*`，对
