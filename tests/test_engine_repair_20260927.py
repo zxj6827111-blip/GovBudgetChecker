@@ -33,6 +33,7 @@ import pytest
 from src.engine.pipeline import (  # noqa: E402
     apply_readability_gate,
     build_document,
+    build_issues_payload,
     run_rules_with_outcomes,
 )
 from src.engine.rule_outcome import (  # noqa: E402
@@ -432,3 +433,87 @@ def test_scan_gate_noop_for_readable_docs():
     # 未提供 page_assessment 时同样 no-op
     out2 = apply_readability_gate(payload, None)
     assert out2["issues"]["error"]
+
+
+# —— MR-3 端到端：真实版式派生的扫描件（非合成 payload）——
+
+SCAN_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "scan_sim_mixed_page_data.json"
+
+
+def _scan_assessment(page_texts: List[str], page_tables: List[Any]) -> Dict[str, Any]:
+    """复刻 api/main.py 的页可读性评估口径（min_chars=80；有表格单元格不算低文本页）。"""
+    min_chars = 80
+    low_text_pages: List[int] = []
+    scanned_pages: List[int] = []
+    for index, text in enumerate(page_texts):
+        char_count = len("".join(str(text or "").split()))
+        rows = page_tables[index] if index < len(page_tables) else None
+        cell_count = sum(
+            1 for row in (rows or []) for cell in row if cell and str(cell).strip()
+        )
+        if char_count >= min_chars or cell_count > 0:
+            continue
+        low_text_pages.append(index + 1)
+        if char_count == 0 and cell_count == 0:
+            scanned_pages.append(index + 1)
+    page_count = len(page_texts)
+    return {
+        "page_count": page_count,
+        "low_text_pages": low_text_pages,
+        "low_text_page_count": len(low_text_pages),
+        "scanned_pages": scanned_pages,
+        "scanned_page_count": len(scanned_pages),
+        "page_coverage": round((page_count - len(low_text_pages)) / page_count, 4)
+        if page_count
+        else 0.0,
+    }
+
+
+def test_scan_sim_mixed_end_to_end_gate_zeroes_errors():
+    """MR-3 端到端（真实版式派生夹具）：error 级 9 → 0，只留一条转人工评语。
+
+    夹具 `fixtures/scan_sim_mixed_page_data.json` 派生自 corpus/DOC-B1-001/sample.pdf：
+    前 8 页保留文本层、第 9 页起全部栅格化（无文本、无表格）。这条与前面两条合成
+    payload 用例互补——它锁的是**真实场景**：文种识别成功、规则真的跑起来、并基于
+    残缺数据报出 error 级假阳性；这正是方案 MR-3 所说「实测模拟扫描件 ~10 条 error」
+    的形态（本夹具实测 9 条）。**MR-1 修不掉这个假阳性**（闸门前仍是 9 条），
+    所以可读性闸门是必需的那一道，不是冗余。
+    """
+    fixture = json.loads(SCAN_FIXTURE.read_text(encoding="utf-8"))
+    page_texts = fixture["page_texts"]
+    page_tables = fixture["page_tables"]
+
+    # 夹具形状：只有前 kept_text_pages 页有文本，其余为扫描页
+    assert sum(1 for t in page_texts if (t or "").strip()) == fixture["kept_text_pages"]
+    assert len(page_texts) == fixture["page_count"]
+
+    doc = build_document(
+        path="scan-sim-mixed.pdf",
+        page_texts=page_texts,
+        page_tables=json.loads(json.dumps(page_tables)),
+        filesize=0,
+    )
+    # 前提 1：文种识别成功（否则决算规则根本不跑，用例就失去意义）。
+    # 注意 report_kind 由**规则执行时**置位，build_document 之后仍为 None——
+    # 这条断言必须放在 run_rules_with_outcomes 之后（首版放在前面，直接红了）。
+    raw_issues, _outcomes = run_rules_with_outcomes(doc, use_ai_assist=False)
+    assert getattr(doc, "report_kind", "") == "final"
+    # 前提 2：确实报出 error 级假阳性（量级与方案记载的 ~10 条一致）
+    errors = [
+        issue for issue in raw_issues
+        if str(getattr(issue, "severity", "")).lower() in ("error", "high", "critical")
+    ]
+    assert len(errors) >= 5, f"夹具形态变了：error 级只剩 {len(errors)} 条"
+
+    assessment = _scan_assessment(page_texts, page_tables)
+    assert assessment["page_coverage"] < 0.8
+
+    payload = build_issues_payload(doc, use_ai_assist=False)
+    assert len(payload["issues"]["error"]) == len(errors)
+
+    gated = apply_readability_gate(payload, assessment)
+    assert gated["issues"]["error"] == []
+    gate_items = [i for i in gated["issues"]["warn"] if i["rule"] == "READABILITY-GATE"]
+    assert len(gate_items) == 1
+    assert gate_items[0]["severity"] == "manual_review"
+    assert len(gated["readability_gate"]["suppressed"]) == len(errors)
