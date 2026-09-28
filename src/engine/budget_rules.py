@@ -23,6 +23,7 @@ from .rule_outcome import (
     RuleOutcomeSignal,
     STATUS_INSUFFICIENT_DATA,
 )
+from src.utils.narration import merge_soft_wrapped_lines
 from .field_extractor import (
     STATUS_MISSING_COLUMN,
     STATUS_OUT_OF_BOUNDS,
@@ -1271,6 +1272,19 @@ _FUNCTIONAL_NARRATIVE_ENTRY_RE = re.compile(
     re.M,
 )
 
+# B 档一期 MR-B4（2026-09-29）：说明侧常见**无编码**形态
+# 「类名（类）款名（款）项名（项）」（建管委/城管/文旅局 2026 预算实测）。
+# 编码须回 T5 功能分类表按「类名+款名+项名」归一匹配回溯；解析不出唯一
+# 项级条目时跳过，宁漏报不误报——基金/国资条目不在 T5 属正常形态，
+# 不得据此判「名称不一致」。
+_FUNCTIONAL_NARRATIVE_PLAIN_ENTRY_RE = re.compile(
+    r"(?:^|\n)\s*(?:\d+\s*[、.．]\s*)?"
+    r"[“\"]?(?P<class_name>[^（()）\n]{1,40}?)\s*[（(]\s*类\s*[）)]\s*"
+    r"[“\"]?(?P<section_name>[^（()）\n]{1,60}?)\s*[（(]\s*款\s*[）)]\s*"
+    r"[“\"]?(?P<item_name>[^（()）\n]{1,80}?)\s*[（(]\s*项\s*[）)]",
+    re.M,
+)
+
 
 def _format_functional_code(code: str) -> str:
     if len(code) == 3:
@@ -1371,8 +1385,40 @@ def _candidate_budget_explanation_pages(
     return candidates
 
 
+def _resolve_plain_functional_mention(
+    name_index: Dict[str, Dict[str, str]],
+    class_name: str,
+    section_name: str,
+    item_name: str,
+) -> Optional[str]:
+    """无编码提及回码：按「类名+款名+项名」归一匹配 T5 索引，唯一命中才返回。"""
+    item_target = _normalize_functional_name(item_name)
+    class_target = _normalize_functional_name(class_name)
+    section_target = _normalize_functional_name(section_name)
+    if not (item_target and class_target and section_target):
+        return None
+    hits: List[str] = []
+    for code, entry in name_index.items():
+        if entry.get("level") != "项":
+            continue
+        if _normalize_functional_name(entry.get("name", "")) != item_target:
+            continue
+        cls = name_index.get(code[:3])
+        sec = name_index.get(code[:5])
+        if not cls or not sec:
+            continue
+        if _normalize_functional_name(cls.get("name", "")) != class_target:
+            continue
+        if _normalize_functional_name(sec.get("name", "")) != section_target:
+            continue
+        hits.append(code)
+    return hits[0] if len(hits) == 1 else None
+
+
 def _extract_budget_functional_narrative_mentions(
-    doc: Document, anchors: Dict[str, List[int]]
+    doc: Document,
+    anchors: Dict[str, List[int]],
+    name_index: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> Dict[str, List[Dict[str, str]]]:
     mentions: Dict[str, List[Dict[str, str]]] = {}
     for page_num, text in _candidate_budget_explanation_pages(doc, anchors):
@@ -1407,6 +1453,35 @@ def _extract_budget_functional_narrative_mentions(
                         "page": str(page_num),
                         "name": name,
                         "level": level,
+                        "snippet": snippet,
+                    }
+                )
+        # B 档一期 MR-B4：无编码「类名（类）款名（款）项名（项）」形态，
+        # 由调用方传入 T5 名称索引回码；解析不出唯一项级条目则跳过。
+        if name_index:
+            for match in _FUNCTIONAL_NARRATIVE_PLAIN_ENTRY_RE.finditer(text):
+                code = _resolve_plain_functional_mention(
+                    name_index,
+                    match.group("class_name"),
+                    match.group("section_name"),
+                    match.group("item_name"),
+                )
+                if not code:
+                    continue
+                name = str(match.group("item_name") or "").strip(" 　：:；;，,。.")
+                snippet = _snippet(text, match.start(), match.end(), radius=40).replace("\n", " ").strip()
+                bucket = mentions.setdefault(code, [])
+                if any(
+                    item.get("page") == str(page_num)
+                    and normalize_text(item.get("name", "")) == normalize_text(name)
+                    for item in bucket
+                ):
+                    continue
+                bucket.append(
+                    {
+                        "page": str(page_num),
+                        "name": name,
+                        "level": "项",
                         "snippet": snippet,
                     }
                 )
@@ -2453,6 +2528,14 @@ class BUD108_PerformanceTargetConsistency(Rule):
         issues: List[Issue] = []
 
         all_text = "\n".join(doc.page_texts)
+        # B 档一期 MR-B4：绩效说明金额常被 PDF 断行劈开（建管委样张 P22 把
+        # 「…编报绩效目标的项目247个，涉及项目预算资金314,076.90万元」从
+        # 「涉/及」中间断开），行级正则跨不过去。先做**段内**软接合
+        # （merge_soft_wrapped_lines 保持段落边界，不跨句接合，防跨句假匹配）。
+        all_text = "\n".join(
+            "\n".join(merge_soft_wrapped_lines(str(pt or "")))
+            for pt in doc.page_texts
+        )
         _, perf_amount_wy, perf_line = _extract_performance_summary_metrics(all_text)
         if perf_amount_wy is None:
             raise RuleDeferred(
@@ -2470,9 +2553,21 @@ class BUD108_PerformanceTargetConsistency(Rule):
             )
 
         _, _, t3_project = _extract_total_basic_project(t3_rows)
-        unit = doc.units_per_page[t3_page - 1] if (t3_page - 1) < len(doc.units_per_page) else None
+        unit = _resolve_table_unit(doc, t3_page)
         t3_project_wy = _to_wanyuan(t3_project, unit)
         if t3_project_wy is None:
+            if not _budget_table_has_total_row(t3_rows):
+                # B 档一期 MR-B2：T3 无「合计/总计」行属结构性缺失（财务收支
+                # 预算模板，DOC-B1-006 实测），绩效↔项目支出口径比较不适用；
+                # 绩效说明侧金额已成功提取，证据随 not_applicable 留痕，
+                # 不得伪装成取数失败挂 insufficient。
+                raise RuleNotApplicable(
+                    self.code,
+                    detail=(
+                        f"绩效目标说明金额已提取（{perf_amount_wy:.2f}万元），"
+                        "但T3无「合计/总计」行、项目支出无法提取，口径比较不适用"
+                    ),
+                )
             raise RuleDeferred(
                 self.code,
                 detail="BUD_T3未能提取到项目支出金额",
@@ -2538,7 +2633,9 @@ class BUD109_FunctionalClassificationNameConsistency(Rule):
                 unresolved_reasons=["BUD_T5未能提取到功能分类科目行"],
             )
 
-        narrative_mentions = _extract_budget_functional_narrative_mentions(doc, anchors)
+        narrative_mentions = _extract_budget_functional_narrative_mentions(
+            doc, anchors, name_index=table_entries
+        )
         if not narrative_mentions:
             raise RuleDeferred(
                 self.code,
