@@ -1,0 +1,137 @@
+# 「查得准」A 档交付对账表（2026-09-28）
+
+> 用途：把方案里**每一条可验收的要求**逐条映射到「产物 → 证据 → 状态」，供签字/评审
+> 逐条核对。凡未达标的**照实标注**，不用"基本完成"这类模糊词。
+> 状态口径：✅ 达标 ｜ ⚠️ 待用户输入 ｜ ❌ 未达标 ｜ 🔒 未测（依赖前置）
+
+## 〇、执行前提（**先看这条再照表跑命令**）
+
+验收表里的 `pytest tests/test_engine_repair_20260927.py ...`、`tests/test_bud105_dual_caliber.py`、
+`scripts/replay_engine_repair.py`、`tests/fixtures/scan_sim_mixed_page_data.json`
+**目前只在车道1 分支 `fix/engine-parse-20260927`（PR #59）上**，合并后才进 main。
+在车道2 或 main 上照表跑会报「文件不存在」——先切分支或用 worktree：
+
+```bash
+git worktree add .tmp/lane1 fix/engine-parse-20260927   # 或 git checkout fix/engine-parse-20260927
+cd .tmp/lane1 && pytest tests/test_engine_repair_20260927.py -k v33_101
+```
+
+四份快照文件名（本表引用）：
+
+```
+docs/baselines/bench1_metrics_20260928_before_repair_7docs.json
+docs/baselines/bench1_metrics_20260928_mr123_7docs.json
+docs/baselines/bench1_metrics_20260928_after_repair_7docs.json
+docs/baselines/bench1_metrics_20260928_merge_preview_7docs.json
+```
+
+### 〇·一、四个工具的**可执行**用法（照抄即可，参数已与工具 `--help` 对齐）
+
+```bash
+# ① 登记（S2）——★ --depth 必填，否则 §4.4 的 by_depth 分层会全是 unset
+python scripts/bench_register.py --pdf <材料.pdf>     --report-kind-true final --subset final-main --region anchor     --depth L2 --source-url <URL>
+python scripts/bench_register.py --list          # 查看已登记台账
+
+# ② 纯规则重放（S4）——无参数即全量；产物落 outputs/benchmark/<ts>/
+python scripts/run_benchmark.py
+
+# ③ 聚合评测（S4）——--output 可省略（默认 docs/baselines/bench1_metrics_<date>.json）
+python scripts/eval_benchmark.py --replay-dir outputs/benchmark/<ts>     --output docs/baselines/bench1_metrics_<date>.json [--markdown <汇总.md>]
+
+# ④ FP/FN 人工归因工作表（S4 归因）——二选一：--replay-dir（现场评测）或 --eval-dir（已有报告）
+python scripts/bench_fpfn_sheet.py --replay-dir outputs/benchmark/<ts>     --corpus corpus --out outputs/benchmark/<ts>/fpfn_sheet.csv
+```
+
+> 归因回填后**重跑 ③** 即得修订后指标（消费 `annotation_version`）。工具 ④ 只导出工作表，
+> 不做任何自动归因——FP 枚举 `rule-logic / parsing / exemption-gap / annotation-miss`、
+> FN 枚举 `no-rule / rule-defect / parsing`。
+>
+> **工具 ④ 已在真实产物上实跑验证（2026-09-28）**：`--replay-dir` 与 `--eval-dir`
+> 两条分支都能产出合法 CSV（前者当前 FP=0/FN=0，后者在旧报告上给出 FN=3——说明有 FN
+> 时确实会出行）。两条使用注意：
+> ① **当前跑出 0 行不是坏了**：7 份语料只有 golden 一份带标注，且那份 P=R=1.0，本来就
+> 没有 FP/FN 可归因；S3 标注铺开后才会有行。
+> ② `--eval-dir` 要指向**单次**评测的报告目录——它会把目录内所有报告一起消费，把不同
+> 引擎版本的报告堆在一处会混算（`outputs/benchmark/<ts>/eval` 这种一次一目录的约定即可）。
+
+## 一、量化验收表（方案原文逐行）
+
+| 方案验收行 | 基线 | 目标 | 实测 | 状态 | 证据 |
+|---|---|---|---|---|---|
+| 4 份决算 unresolved | 53 | ≤15 | **14** | ✅ | `docs/baselines/bench1_metrics_20260928_*_7docs.json`（7 份语料全量重放） |
+| V33-101 core D-001 恒等式可执行 | insufficient | 出 pass/fail | **pass** | ✅ | `pytest -k v33_101` → 5 passed（`2b05aeb` 重跑） |
+| 文旅局 1700.57 级联误报 | 4 条 error | 0 | 级联 3 条消失，余 1 条 CMM-007 为另一规则真阳性 | ✅ | `pytest -k wenlv_cascade` → 1 passed；`B1_BENCH_DELTA` §二 |
+| **宜川输出总数** | 34 | **≤12** | **12** | ✅ **压减·限定版落地** | 用户裁决（2026-09-28）：合并 V33-244 同科目两列补0提示（13→12），落地于 PR #59 `d2bd4c4`；逐条取证见 `B1_YICHUAN_13_EVIDENCE` §四 |
+| golden 评测不劣化 | TP=3/3, hint=3/3, FP=0 | 不劣化 | **TP=3 FP=0 FN=0，hint 3/3（证据面 4/4），GATE-PASS** | ✅ | `2b05aeb` 重跑；`d2bd4c4` 后金标含 V33-244=0，门禁复验不动 |
+| 扫描模拟件 error 级 | 10 | 0 | **9 → 0**（部分扫描形态，闸门后 0 + 1 条转人工） | ✅ | `tests/fixtures/scan_sim_mixed_page_data.json` + 端到端用例 |
+| CI 全绿 + 新 FIXTURE 固化 | 全绿 | 全绿 | 两 PR 双绿；`bench-repair-regression` 非阻断（`continue-on-error: true` 已核实） | ✅ | PR #59 / #60 checks |
+| 精度（仅当 S4 完成后） | 未知 | P≥0.75 / R≥0.65 | **未测** | 🔒 **依赖 S3 盲标** | 7 份中仅 1 份有 golden，拒绝提前宣称 |
+
+> 量化验收行现已**全部达标或按序推进**（原唯一未达标项「宜川 ≤12」已于
+> 2026-09-28 经用户裁决「压减·限定版」闭合：13 条逐条取证确认全部为真发现
+> 或设计内输出，唯一可安全压减的 V33-244 同科目两列提示已合并，13→12；
+> 详见 `B1_YICHUAN_13_EVIDENCE` §四）。仍开放的两行是流程依赖：精度行
+> 等 S3 盲标，CI 行随提交持续复验。
+
+## 二、MR-1~MR-5 交付对账
+
+| MR | 要求 | 产物 | 状态 |
+|---|---|---|---|
+| MR-1 | 双栏取数 / 续页锚点界合并 / 合计列头定位 + 结构矛盾哨兵 | `rules_v33.py`（`_row_value_v2` 等）、`tests/test_engine_repair_20260927.py` | ✅ |
+| MR-1 验收 | V33-101~105 未决 **16/16 → 0**；V33-107/108、CMM-001 澄清 | 逐规则状态表（`B1_BENCH_DELTA` §五·一）：**未决 0/16**；107/108 全 pass；CMM-001 4/4 insufficient 且原因明确 | ✅ |
+| MR-1 验收 | 文旅局 V33-202 级联不再上报 | 固化用例（冻结页数据，不依赖 PDF） | ✅ |
+| MR-2 | V33-120 舍入聚类（同表/同差/同页域合并，明细保留） | 宜川 23 条 → 1 条 `info`（message 带「共23处」，evidence 保留 23 组明细） | ✅ |
+| MR-3 | 文档级可读性闸门 | `apply_readability_gate` + 2 条合成用例 + **真实版式派生端到端夹具**；口径 writeup 已订正 | ✅ |
+| MR-4（默认执行） | BUD-105 对偶口径门槛 | `budget_rules.py` + `tests/test_bud105_dual_caliber.py`；建管委 `BUD-105×2` 误报消失 | ✅ |
+| MR-5 | golden 校准不劣化 + 快速回归集 + CI 非阻断 job | `.github/workflows/ci.yml`（`bench-repair-regression`，`continue-on-error: true`） | ✅ |
+
+## 三、宜川 13 条：为什么没到 ≤12（逐条取证）
+
+| 条 | 结论 | 能否靠已授权修复去掉 |
+|---|---|---|
+| V33-243【表六】302 明细不平 | **文档自身不平**：PDF 第 22 页印着 `30299 其他商品和服务支出 1,844.57`＝302 合计；四份横向对比只有宜川不闭合（明细 3,689.14＝2×1,844.57），而 `302+310=1,915.30=公用经费合计` 证明 302 合计本身没错 | ❌ 不该去掉 |
+| V33-244 ×2（因公出国单元格留空） | **忠实于原文**：PDF 第 24 页该科目**预算数与决算数两格确实空白**，说明侧写「0.00 万元」 | ❌ 只能合并（需授权） |
+| V33-227（科目名不一致） | 真发现（表格「文化旅游体育与传媒支出」vs 说明「文化体育与传媒支出」） | ❌ 不该去掉 |
+| 其余 9 条 | WP4-A/B/C/D/E/F/G 已文档化真值 + MR-2 设计内输出 | ❌ 不该去掉 |
+
+**裁决结果（2026-09-28）**：用户选**「压减·限定版」**，已落地于 PR #59 `d2bd4c4`——
+仅合并 V33-244 两条同科目提示 → **12 达标**（石泉同规则 info 2→1，总 9→8；
+其第 3 条为表文不符 error 真发现保留；golden 不含 V33-244 故门禁不受影响）。
+取证与落地详情见 `B1_YICHUAN_13_EVIDENCE` §五。
+
+## 四、车道2（WP4-I）交付对账
+
+| 阶段 | 要求 | 产物 | 状态 |
+|---|---|---|---|
+| S1 工具 | 4 脚本 + 单测 | `bench_register` / `run_benchmark` / `eval_benchmark` / `bench_fpfn_sheet` + 7 个测试文件 | ✅ |
+| S1 可复现性 | §6.7「同输入同输出，支持后续回归对比」 | **确定性实测**：两个独立进程（`PYTHONHASHSEED=0/1`）重放同一夹具，findings（含顺序）、六态摘要、义务账本、文种、sha256、引擎指纹**逐项一致**；两次完整 benchmark 亦逐份一致，唯一差异是时间戳目录与 `generated_at`（设计如此） | ✅ |
+| S1 合规 | 按方案 §4/§5/§6 的指标与指纹 | **补齐** Rule Hit Rate、severity/page/可定位率（TP 加权）、`by_depth`、**引擎指纹**（§6.7） | ✅ |
+| S2 语料 | 30 份 | **7 份已登记**；本机可用 32 份（含 samples 补录）；外采缺口收敛到 9–13 份 | ⚠️ **待签字 + 外采** |
+| S2 签字单 | 构成与配比确认 | `B1_CORPUS_CHECKLIST_20260928.md`（可勾选；含 §2.1.1 类型配额与条件性表格覆盖） | ⚠️ **未签字** |
+| S3 盲标 | L1 全量 + L2 深标 20 份 | **L1 底稿 38 份**已出（`B1_L1_DRAFT_20260928.csv`，带出处/置信/L2 资格）；L2 待人工 | ⚠️ **待用户复核定稿** |
+| S4 评测 | 每个修复节点一轮 | **四个节点快照**（before / MR-1/2/3 / 全部 / 合并预演），全部绑定引擎指纹 | ✅ |
+| S5 报告 | 《基准报告 + 规则改进清单》 | **改进清单已交付**（含预算侧取数三根因）；报告为 v0 前置版（精度行未测） | ⚠️ 精度行待 S3 |
+| S5「四问」 | 方案未定义 | 已提交**自拟待确认版**（精度召回 / 漏检误报主因 / 零触发与迁移 / B 档 C 档启动） | ⚠️ 待确认 |
+
+## 五、红线合规（文件级审计）
+
+`git diff --name-only main...<branch>` + 关键词扫描（`material_slot` / `alembic` /
+`migration` / `db/schema` / `provider` / `ai_findings` / 前端 / 复核生命周期）：
+**代码命中为空**。车道1 只动 `ci.yml`、`api/main.py`（质量门）、
+`scripts/replay_engine_repair.py`、`src/engine` 三文件与 tests/fixtures；车道2 只动
+docs/scripts/tests/corpus manifest/.gitignore。**DB 零改动。**
+
+## 六、方案里三处需要澄清/修订的原文（已如实记录）
+
+1. `scripts/evaluate_golden_corpus.py --mode legacy --doc X` **按原文不可执行**，必须带 `--replay <重放产物>`。
+2. `make test` 目标存在，但本机未装 `make`（CI 直接跑底层命令）。
+3. S5 的「四问」**全库无定义**（仅在 §7 那一行出现）；审计报告里是「五个维度」，对不上。
+
+## 七、剩下需要你的三件事
+
+1. **PR #59 回复「压减」或「豁免」**（推荐限定版压减）。
+2. **S2 勾选签字 + 外采**：外省探针 ≈9 / **真实**扫描件 ≤3 / 2023 年度决算 3–4 /
+   2025 年度预算 ≈6 / 绩效目标表 1–2 份（附来源 URL）。
+3. **S3 定稿**：L1 底稿复核 + L2 20 份深标（含「L2 底稿由谁出」的选择）+ 确认「四问」。
+
+前两件到位即可启动 S2 收灌 → S3 → S4 精度行 → 正式 S5 报告。
