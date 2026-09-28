@@ -197,7 +197,7 @@ fail-closed 拒答，见 §四 与改进清单 T2）。
   详见 `docs/B1_CANDIDATE_INVENTORY_20260928.md` §二·五。
 - **扫描维度的证据已在 2026-09-28 补强**：语料里仍**没有外部采集的真实扫描件**，
   但用**真实版式派生**的扫描件（把样张前 8 页保留文本、其余页栅格化）做了端到端
-  验证，并冻结为夹具 `tests/fixtures/scan_sim_mixed_page_data.json`：
+  验证，并冻结为夹具 `tests/fixtures/scan_sim_mixed_page_data.json`（**车道1 分支**，PR #59 合并后进 main）：
 
   | 形态 | 文种识别 | error 级 | 闸门后 |
   |---|---|---|---|

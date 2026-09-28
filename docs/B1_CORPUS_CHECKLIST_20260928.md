@@ -245,4 +245,4 @@ location_key(sec|toc|tbl|xtbl:锚文本) / expected_severity / evidence / confid
 也可能来自不同导出，无法归因，**不能当受控对照**。它们只能算两份独立材料。
 
 **受控对照应由「同一份 PDF 派生」的夹具来做**（本项目已有先例：
-`tests/fixtures/scan_sim_mixed_page_data.json` —— 由真实材料派生、需求明确、结论可归因）。
+`tests/fixtures/scan_sim_mixed_page_data.json`（**车道1 分支**，PR #59 合并后进 main） —— 由真实材料派生、需求明确、结论可归因）。

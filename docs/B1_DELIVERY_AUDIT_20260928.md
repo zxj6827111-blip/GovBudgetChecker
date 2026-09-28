@@ -4,6 +4,27 @@
 > 逐条核对。凡未达标的**照实标注**，不用"基本完成"这类模糊词。
 > 状态口径：✅ 达标 ｜ ⚠️ 待用户输入 ｜ ❌ 未达标 ｜ 🔒 未测（依赖前置）
 
+## 〇、执行前提（**先看这条再照表跑命令**）
+
+验收表里的 `pytest tests/test_engine_repair_20260927.py ...`、`tests/test_bud105_dual_caliber.py`、
+`scripts/replay_engine_repair.py`、`tests/fixtures/scan_sim_mixed_page_data.json`
+**目前只在车道1 分支 `fix/engine-parse-20260927`（PR #59）上**，合并后才进 main。
+在车道2 或 main 上照表跑会报「文件不存在」——先切分支或用 worktree：
+
+```bash
+git worktree add .tmp/lane1 fix/engine-parse-20260927   # 或 git checkout fix/engine-parse-20260927
+cd .tmp/lane1 && pytest tests/test_engine_repair_20260927.py -k v33_101
+```
+
+四份快照文件名（本表引用）：
+
+```
+docs/baselines/bench1_metrics_20260928_before_repair_7docs.json
+docs/baselines/bench1_metrics_20260928_mr123_7docs.json
+docs/baselines/bench1_metrics_20260928_after_repair_7docs.json
+docs/baselines/bench1_metrics_20260928_merge_preview_7docs.json
+```
+
 ## 一、量化验收表（方案原文逐行）
 
 | 方案验收行 | 基线 | 目标 | 实测 | 状态 | 证据 |
