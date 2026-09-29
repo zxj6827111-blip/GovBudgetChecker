@@ -7,6 +7,81 @@
 > 登记纪律：每份登记 sha256（重复源拒绝）、来源 URL、子集标记；PDF 永不入 git；
 > 金标纪律——L2 标注必须在系统输出生成前完成。
 
+## 〇、2026-09-30 收灌更新（V2.0 整改 · WP-C1 前半执行记录）
+
+> 执行依据：`docs/GovBudgetChecker_系统整改PLAN_V2.0_20260930.md` §4 WP-C1。
+> 本节只记事实，不取代 §四 的签字项；各签字项的**默认处置**见下，签字时改判即可。
+
+**登记进度**：本机入集 23 份中 **9 份已登记**——既有 7 份（§一）+
+本次 2 份（`DOC-B1-007` 财政局2024「测试问题版本」、`DOC-B1-008` 区委社会工作部
+2024，SHA 逐份核对通过，`--depth L2`）。当前台账见 `corpus/manifest.csv`（9 行）。
+
+**挂起 14 份（源 PDF 不在本机）**：盘点 CSV 的路径为原采集机（Windows）路径；
+本机 `uploads/` 目录为空（2026-09-30 核查），14 份配额内材料（final-main 补充 5 +
+budget-main 1 + budget-unit 8）**无法通过 fail-closed 的 SHA 核验**，按纪律
+不登记、不编造。全部 40 份材料的逐份状态（已登记 9 / 挂起 14 / 未入集候选 17 /
+golden 1）见 **`docs/B1_L2_CANDIDATES_20260930.csv`**；uploads/ 从原机同步到本机后，
+按下述命令块原样补登（编号自动续 DOC-B1-009~022，登记幂等按 SHA 拒重复）：
+
+```bash
+# ── 14 份待补登命令（uploads/ 同步后逐条执行；sha256 前 12 位为核对锚）──
+python scripts/bench_register.py --pdf "uploads/e51c4622de6c5afb379131e63adc7794/上海市普陀区人民政府办公室 2024 年度部门决算.pdf" \
+    --report-kind-true final --subset final-main --region anchor --depth L2 \
+    --source-url "本机既有资产（非公开 URL）" --notes "政府办2024 部门决算；S2 §2.1 final-main 补充"   # 95ded2d8d439
+python scripts/bench_register.py --pdf "uploads/0bbe710bc1e814a82716b6e779822529/上海市普陀区人民政府办公室 2025 年度单位决算.pdf" \
+    --report-kind-true final --subset final-main --region anchor --depth L2 \
+    --source-url "本机既有资产（非公开 URL）" --notes "政府办2025 单位决算；S2 §2.1 final-main 补充"   # 4b23e89f2874
+python scripts/bench_register.py --pdf "uploads/putuo_final_samples/上海市普陀区规划和自然资源局 2024 年度部门决算.pdf" \
+    --report-kind-true final --subset final-main --region anchor --depth L2 \
+    --source-url "本机既有资产（非公开 URL）" --notes "规资局2024 默认版（版次B f2546b57 留候选，签字可换）"   # 631ac4422779
+python scripts/bench_register.py --pdf "uploads/putuo_final_samples/上海市普陀区财政局 2024 年度部门决算.pdf" \
+    --report-kind-true final --subset final-main --region anchor --depth L2 \
+    --source-url "本机既有资产（非公开 URL）" --notes "财政局2024 good 版；与测试问题版非受控对照（§3.2 订正）"   # d45e923176f9
+python scripts/bench_register.py --pdf "uploads/putuo_final_samples/上海市普陀区人民政府长风街道办事处 2025 年度决算.pdf" \
+    --report-kind-true final --subset final-main --region anchor --depth L2 \
+    --source-url "本机既有资产（非公开 URL）" --notes "长风2025 部门决算"   # 6807f563289f
+python scripts/bench_register.py --pdf "uploads/5756d4572f314fe41b25101099b413c5/上海市普陀区民政局2026年部门预算.pdf" \
+    --report-kind-true budget --subset budget-main --region anchor --depth L2 \
+    --source-url "本机既有资产（非公开 URL）" --notes "民政局2026 部门预算；budget-main 新增"   # 7bcbfe675c7f
+python scripts/bench_register.py --pdf "uploads/4b848c5be1f8e5ebf42913df25ee468e/曹杨新村街道(本部)_上海市普陀区人民政府曹杨新村街道办事处2026年单位预算.pdf" \
+    --report-kind-true budget --subset budget-unit --region anchor --depth L2 \
+    --source-url "本机既有资产（非公开 URL）" --notes "budget-unit 点名#1（街道本级）"   # b28efae1567d
+python scripts/bench_register.py --pdf "uploads/81dc2c0a38d3a189fcdccf5d622d051a/上海市普陀区曹杨新村街道社区事务受理服务中心_上海市普陀区曹杨新村街道社区事务受理服务中心2026年单位预算.pdf" \
+    --report-kind-true budget --subset budget-unit --region anchor --depth L2 \
+    --source-url "本机既有资产（非公开 URL）" --notes "budget-unit 点名#2"   # bf9a525b1275
+python scripts/bench_register.py --pdf "uploads/29c416c8655926ca08f4ac846f196ee3/上海市普陀区长寿路街道综合行政执法队_上海市普陀区长寿路街道综合行政执法队2026年单位预算.pdf" \
+    --report-kind-true budget --subset budget-unit --region anchor --depth L2 \
+    --source-url "本机既有资产（非公开 URL）" --notes "budget-unit 点名#3"   # b1acc00a05a3
+python scripts/bench_register.py --pdf "uploads/ad90e15463c576fba3628adae42434de/上海市普陀区建设和管理委员会2026年度单位预算.pdf" \
+    --report-kind-true budget --subset budget-unit --region anchor --depth L2 \
+    --source-url "本机既有资产（非公开 URL）" --notes "budget-unit 点名#4（委办局本级）"   # 0b3e393a26a0
+python scripts/bench_register.py --pdf "uploads/436b43bb38275cb58ec660faf9505451/上海市普陀区城市管理行政执法局2026年度单位预算公开.pdf" \
+    --report-kind-true budget --subset budget-unit --region anchor --depth L2 \
+    --source-url "本机既有资产（非公开 URL）" --notes "budget-unit 点名#5（委办局本级）"   # a69cfe01fc30
+python scripts/bench_register.py --pdf "uploads/c9e52f8ba924739a7e762c29dfc6eb26/上海市普陀区民政局（本级）2026年度单位预算.pdf" \
+    --report-kind-true budget --subset budget-unit --region anchor --depth L2 \
+    --source-url "本机既有资产（非公开 URL）" --notes "budget-unit 点名#6"   # 5c7634c49f10
+python scripts/bench_register.py --pdf "uploads/d6b77713dee43abf5f3d17656a4806d8/上海市普陀区市政水务管理中心2026年单位预算.pdf" \
+    --report-kind-true budget --subset budget-unit --region anchor --depth L2 \
+    --source-url "本机既有资产（非公开 URL）" --notes "budget-unit 点名#7（事业单位）"   # 599f30b52b35
+python scripts/bench_register.py --pdf "uploads/6367f31f1d95b6ef862044b3c2a85724/上海市普陀区社会福利院2026年度单位预算.pdf" \
+    --report-kind-true budget --subset budget-unit --region anchor --depth L2 \
+    --source-url "本机既有资产（非公开 URL）" --notes "budget-unit 点名#8（事业单位）"   # 7b81978361fa
+```
+
+**各签字项默认处置（2026-09-30）**：
+
+| 签字项（§四） | 默认处置 |
+|---|---|
+| 外采 4 行（probe-region / scan-watch / 2023 决算 / 预算 2025） | **deferred → WP11**（`docs/GovBudgetChecker_系统整改PLAN_V2.0_20260930.md` §4 WP11；材料到位前 C 档不启动） |
+| 规资局版次（§2.2 第 3 条） | 默认取 `631ac442`（putuo_final_samples 版，文本层更全：16203 vs 13655 字符）；版次 B `f2546b57` 留候选清单，签字可换（登记按 SHA 幂等，删行重登即可） |
+| 来源 URL | 本机材料一律如实记「本机既有资产（非公开 URL）」 |
+| L2 盲标口径 / budget-unit 分层 / 标注规范 | 按 §2.2.1 与 `docs/B1_ANNOTATION_SPEC_L1L2_20260930.md` 执行；L2 候选清单见 `docs/B1_L2_CANDIDATES_20260930.csv` |
+
+**运行纪律留痕**：本次登记运行只写了 manifest（9 行）与 `corpus/DOC-B1-007/008/`
+的 sample.pdf 落位，**未对任何材料执行 `run_benchmark`**（含既有 7 份）；
+14 份挂起材料因源文件不在本机，同样零次执行。
+
 ## 一、既有资产 7 份（**已登记**，2026-09-28）
 
 > **登记进度（2026-09-28）**：第 1~7 份已全部登记入 `corpus/manifest.csv`
@@ -50,10 +125,10 @@
 | final-main 补充（**`samples/` 漏项，本轮补入**） | 财政局2024「测试问题版本」`6a2eb6044359`、区委社会工作部2024 `44874c062a89` | +2 | 本机 | ❓ 同上 |
 | clean-contrast | 财政局2024 good 版（`d45e923176f9`）可作干净对照；**但它与「测试问题版本」（`6a2eb6044359`）版式/表数不同（16 vs 12 表、25 vs 26 页、体积差 10 倍），不构成受控对照对**（见 §3.2 订正）；其余仍需逐份读材料判定 | 待定 | 本机 | — |
 | **本机小计** | 其中 7 份已登记（§一），余 16 份待登记 | **23** | | |
-| probe-region | 外省 2–3 省市，单独分层报告 | ≈9 | **外采** | ✅ 必填 |
-| scan-watch | 纯扫描件（文本层缺失） | ≤3 | **外采** | ✅ 必填 |
-| final 2023 年度切片 | 同比类规则的跨年切片 | 3–4 | **外采** | ✅ 必填 |
-| **预算 2025 年度**（§2.4 要求 ≈6） | 本机 24 份预算**全是 2026 年度**，一份 2025 年度都没有 | ≈6 | **外采** | ✅ 必填 |
+| probe-region | 外省 2–3 省市，单独分层报告 | ≈9 | **外采**（deferred→WP11，2026-09-30） | ✅ 必填 |
+| scan-watch | 纯扫描件（文本层缺失） | ≤3 | **外采**（deferred→WP11，2026-09-30） | ✅ 必填 |
+| final 2023 年度切片 | 同比类规则的跨年切片 | 3–4 | **外采**（deferred→WP11，2026-09-30） | ✅ 必填 |
+| **预算 2025 年度**（§2.4 要求 ≈6） | 本机 24 份预算**全是 2026 年度**，一份 2025 年度都没有 | ≈6 | **外采**（deferred→WP11，2026-09-30） | ✅ 必填 |
 
 ### 2.1.1 方案 §2.2 的类型配额与条件性表格覆盖（**原先漏列，补上**）
 

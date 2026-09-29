@@ -6,3 +6,5 @@ DOC-B1-003,74e6afd06669098f57391a13dad63a6f2a15cac620ac9f32018e79649fe6a367,fina
 DOC-B1-004,73528f0b78d178bd83d9b65bcaa77d30269f5e0f67f6ceb6064b819ae479e16a,budget,budget-main,anchor,,本机既有资产（非公开 URL）,24,16268,2026-09-28 07:03:46,既有资产（BUD-105 口径样张）；来源：本机 uploads
 DOC-B1-005,c56f4368be5dbf51c88214f1260ecb97ce57fe77950df18dc33d184f40b24d93,budget,budget-main,anchor,,本机既有资产（非公开 URL）,24,10881,2026-09-28 07:03:47,既有资产；来源：本机 uploads
 DOC-B1-006,19447c3cec309322ad786b14f5cb751424a1bfe2a1f3c4c3a96d035440665cf9,budget,budget-main,anchor,,本机既有资产（非公开 URL）,27,12758,2026-09-28 07:03:49,既有资产；来源：本机 uploads
+DOC-B1-007,6a2eb604435934e74841b798cc9b764919a84ee1bade05adc07669d029a68e83,final,final-main,anchor,L2,本机既有资产（非公开 URL）,26,10836,2026-09-30 02:30:09,samples/bad 补录（S2 §2.1）；bad 版已知问题；与 good 版 d45e923176f9 非受控对照（B1_CORPUS_CHECKLIST §3.2 订正）
+DOC-B1-008,44874c062a89c26ea6d94e4e6e7dccdaa136642c2c9bbb560ed21b33039b0597,final,final-main,anchor,L2,本机既有资产（非公开 URL）,24,9846,2026-09-30 02:30:10,samples/bad 补录（S2 §2.1）；samples/manifest.yaml 期望 missing-tables-bad（旧码 ZB-002，用前需旧→现码映射）
