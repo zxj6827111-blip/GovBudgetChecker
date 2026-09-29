@@ -451,3 +451,91 @@ def build_issues_payload(
         "issues": buckets,
         "rule_execution_summary": summarize_rule_outcomes(outcomes),
     }
+
+
+#: MR-3 文档级可读性闸门的覆盖率阈值（与 api 层质量门的 low_page_coverage
+#: 语义对齐；规则引擎不 import api，阈值在此常量声明）
+_READABILITY_COVERAGE_THRESHOLD = 0.8
+
+
+def apply_readability_gate(
+    payload: Dict[str, Any],
+    page_assessment: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """MR-3（2026-09-27「查得准」A 档）：扫描件/低覆盖材料的误报闸门。
+
+    要拦的形态是**部分扫描**：材料仍有文本层（文种识别成功、规则真的跑起来），
+    但表页被拍成图片——规则基于残缺数据报出 error 级假阳性（缺表/缺章节/勾稽
+    不平），属于"解析不可信"而非材料错误。实测口径见
+    ``tests/fixtures/scan_sim_mixed_page_data.json``（派生自实际样张：前 8 页保留
+    文本、其余栅格化）：**闸门前 9 条 error → 闸门后 0 条 + 1 条转人工**。
+
+    ⚠️ 口径澄清（2026-09-28 实测）：**整份**无文本层时不是这个形态——文种识别会
+    失败，引擎只跑通用规则（8 条），本就不产生 error 级假阳性（实测 0 条）。
+    所以本闸门不是"无文本层"路径的兜底，而是"有文本但覆盖不足"路径的兜底；
+    整份扫描件由文种识别失败 + 质量门负责。两种形态都有测试覆盖。
+
+    本闸门在 page_coverage < 0.8 或存在扫描页时，把 error 级 finding 全量降级为
+    一条 manual_review（"材料可读性不足，转人工判读"），原始 finding 压入
+    ``readability_gate.suppressed`` 供调试，不进主列表。
+
+    page_assessment 未提供或可读性正常时为 no-op，历史调用方行为不变。
+    warn/info 不动：它们本来就不进 fail 口径，且降低可见噪声不是本闸门目标。
+    """
+    if not isinstance(page_assessment, dict):
+        return payload
+    try:
+        coverage = float(page_assessment.get("page_coverage") or 0.0)
+        scanned = int(page_assessment.get("scanned_page_count") or 0)
+    except (TypeError, ValueError):
+        return payload
+    if coverage >= _READABILITY_COVERAGE_THRESHOLD and scanned == 0:
+        return payload
+
+    issues = payload.get("issues")
+    if not isinstance(issues, dict):
+        return payload
+    error_items = issues.get("error") or []
+    if not error_items:
+        return payload
+
+    issues["error"] = []
+    gate = payload.setdefault(
+        "readability_gate",
+        {
+            "page_coverage": coverage,
+            "scanned_page_count": scanned,
+            "suppressed": [],
+        },
+    )
+    gate["suppressed"].extend(error_items)
+    suppressed_ids = {item.get("id") for item in error_items if isinstance(item, dict)}
+
+    manual_item: Dict[str, Any] = {
+        "id": "READABILITY-GATE-1",
+        "source": "rule",
+        "rule": "READABILITY-GATE",
+        "rule_id": "READABILITY-GATE",
+        # 与 DOC-TYPE-UNKNOWN 同口径：manual_review 归一进 warn 分桶
+        "severity": "manual_review",
+        "title": "材料可读性不足，检查结果要求人工判读",
+        "message": (
+            f"材料文本覆盖率 {coverage:.0%}（扫描页 {scanned} 页）低于可信阈值，"
+            f"规则基于残缺文本产生的 {len(error_items)} 条错误级结论已整体转人工复核，"
+            "不作为材料问题呈现。建议补充可读文本层后重新检查。"
+        ),
+        "evidence": [],
+        "location": {"page": 1, "pos": 0},
+        "bbox": None,
+        "suggestion": "人工核对原件；如需系统复审请提供带文本层的 PDF。",
+        "tags": ["READABILITY-GATE"],
+        "metrics": {"suppressed_error_count": len(error_items)},
+        "created_at": int(time.time()),
+        "rule_version": DEFAULT_RULE_SET_VERSION,
+        "model_version": None,
+        "prompt_version": None,
+        "engine_version": ENGINE_VERSION,
+        "suppressed_issue_ids": sorted(x for x in suppressed_ids if x),
+    }
+    issues.setdefault("warn", []).append(manual_item)
+    return payload

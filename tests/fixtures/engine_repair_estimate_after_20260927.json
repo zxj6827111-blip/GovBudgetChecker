@@ -1,0 +1,224 @@
+{
+  "documents": [
+    {
+      "doc_id": "SAMPLE-YICHUAN-2025-FINAL",
+      "fixture": "tests/fixtures/cross_san_gong_truth_page_data.json",
+      "findings_total": 12,
+      "findings_by_severity": {
+        "info": 5,
+        "error": 5,
+        "medium": 1,
+        "warn": 1
+      },
+      "unresolved_total": 1,
+      "unresolved_rules": [
+        {
+          "rule_id": "CMM-001",
+          "status": "insufficient_data",
+          "detail": "未提取到三公经费情况说明数值",
+          "unresolved_reasons": [
+            "未提取到三公经费情况说明数值"
+          ]
+        }
+      ],
+      "outcome_stats": {
+        "total_rules": 65,
+        "executed": 64,
+        "pass": 53,
+        "fail": 10,
+        "not_applicable": 1,
+        "insufficient_data": 1,
+        "parse_error": 0,
+        "execution_error": 0,
+        "partial_findings_total": 0
+      }
+    },
+    {
+      "doc_id": "SAMPLE-SHIQUAN-2025-FINAL",
+      "fixture": "tests/fixtures/shiquan_narrative_truth_page_data.json",
+      "findings_total": 8,
+      "findings_by_severity": {
+        "info": 2,
+        "error": 4,
+        "medium": 1,
+        "warn": 1
+      },
+      "unresolved_total": 2,
+      "unresolved_rules": [
+        {
+          "rule_id": "V33-TREND-COMPLETION-RATE",
+          "status": "insufficient_data",
+          "detail": "「机关事业单位职业年金缴费支出」的本年支出决算存在多个不一致披露（含条目首句金额），完成率分子无法唯一确定（parse_ambiguity）",
+          "unresolved_reasons": [
+            "「机关事业单位职业年金缴费支出」的本年支出决算存在多个不一致披露（含条目首句金额），完成率分子无法唯一确定（parse_ambiguity）"
+          ]
+        },
+        {
+          "rule_id": "CMM-001",
+          "status": "insufficient_data",
+          "detail": "未提取到三公经费情况说明数值",
+          "unresolved_reasons": [
+            "未提取到三公经费情况说明数值"
+          ]
+        }
+      ],
+      "outcome_stats": {
+        "total_rules": 65,
+        "executed": 63,
+        "pass": 56,
+        "fail": 6,
+        "not_applicable": 1,
+        "insufficient_data": 2,
+        "parse_error": 0,
+        "execution_error": 0,
+        "partial_findings_total": 0
+      }
+    },
+    {
+      "doc_id": "SAMPLE-WENLV-2025-FINAL",
+      "fixture": "tests/fixtures/wenlv_narrative_truth_page_data.json",
+      "findings_total": 2,
+      "findings_by_severity": {
+        "warn": 1,
+        "error": 1
+      },
+      "unresolved_total": 7,
+      "unresolved_rules": [
+        {
+          "rule_id": "V33-005",
+          "status": "insufficient_data",
+          "detail": "P16 表格1 列3：合计1700.57 < 最大分项24535.67; P16 表格1 列5：合计1700.57 < 最大分项14735.31",
+          "unresolved_reasons": [
+            "表内合计小于最大分项（疑似解析错位，共2处），转人工复核"
+          ]
+        },
+        {
+          "rule_id": "V33-106",
+          "status": "insufficient_data",
+          "detail": "T5 合计小于表内最大分项，解析结构性矛盾",
+          "unresolved_reasons": [
+            "T5 合计小于表内最大分项（疑似解析错位），转人工复核"
+          ]
+        },
+        {
+          "rule_id": "V33-120",
+          "status": "insufficient_data",
+          "detail": "一般公共预算财政拨款支出决算表 合计(1700.57)小于表内最大分项，解析结构性矛盾",
+          "unresolved_reasons": [
+            "一般公共预算财政拨款支出决算表 合计小于表内最大分项（疑似解析错位），本表校验转人工"
+          ]
+        },
+        {
+          "rule_id": "V33-202",
+          "status": "insufficient_data",
+          "detail": "T5 合计(1700.57)小于表内最大分项，解析结构性矛盾",
+          "unresolved_reasons": [
+            "T5 合计小于表内最大分项（疑似解析错位），转人工复核"
+          ]
+        },
+        {
+          "rule_id": "V33-222",
+          "status": "insufficient_data",
+          "detail": "T5 合计(1700.57)小于表内最大分项，解析结构性矛盾",
+          "unresolved_reasons": [
+            "T5 合计小于表内最大分项（疑似解析错位），转人工复核"
+          ]
+        },
+        {
+          "rule_id": "V33-TXT-FUND-DETAIL",
+          "status": "insufficient_data",
+          "detail": "政府性基金：《政府性基金预算财政拨款收入支出决算表》（第19页）列有支出金额，但说明章节无可绑定的项级支出表述",
+          "unresolved_reasons": [
+            "政府性基金：《政府性基金预算财政拨款收入支出决算表》（第19页）列有支出金额，但说明章节无可绑定的项级支出表述"
+          ]
+        },
+        {
+          "rule_id": "CMM-001",
+          "status": "insufficient_data",
+          "detail": "未提取到三公经费情况说明数值",
+          "unresolved_reasons": [
+            "未提取到三公经费情况说明数值"
+          ]
+        }
+      ],
+      "outcome_stats": {
+        "total_rules": 65,
+        "executed": 58,
+        "pass": 55,
+        "fail": 2,
+        "not_applicable": 1,
+        "insufficient_data": 7,
+        "parse_error": 0,
+        "execution_error": 0,
+        "partial_findings_total": 0
+      }
+    },
+    {
+      "doc_id": "DOC-20260905-001",
+      "fixture": "tests/fixtures/sample_page_data.json",
+      "findings_total": 7,
+      "findings_by_severity": {
+        "high": 1,
+        "manual_review": 1,
+        "info": 3,
+        "medium": 2
+      },
+      "unresolved_total": 4,
+      "unresolved_rules": [
+        {
+          "rule_id": "V33-240",
+          "status": "insufficient_data",
+          "detail": "T2存在跨页列不一致/漂移，无法可靠抽取层级关系",
+          "unresolved_reasons": [
+            "T2存在跨页列不一致/漂移，无法可靠抽取层级关系"
+          ]
+        },
+        {
+          "rule_id": "V33-241",
+          "status": "insufficient_data",
+          "detail": "T3存在跨页列不一致/漂移，无法可靠抽取层级关系",
+          "unresolved_reasons": [
+            "T3存在跨页列不一致/漂移，无法可靠抽取层级关系"
+          ]
+        },
+        {
+          "rule_id": "V33-227",
+          "status": "insufficient_data",
+          "detail": "说明文本中未提取到功能分类科目提及",
+          "unresolved_reasons": [
+            "说明文本中未提取到功能分类科目提及"
+          ]
+        },
+        {
+          "rule_id": "CMM-001",
+          "status": "insufficient_data",
+          "detail": "未提取到三公经费情况说明数值",
+          "unresolved_reasons": [
+            "未提取到三公经费情况说明数值"
+          ]
+        }
+      ],
+      "outcome_stats": {
+        "total_rules": 65,
+        "executed": 61,
+        "pass": 55,
+        "fail": 5,
+        "not_applicable": 1,
+        "insufficient_data": 4,
+        "parse_error": 0,
+        "execution_error": 0,
+        "partial_findings_total": 0
+      }
+    }
+  ],
+  "totals": {
+    "unresolved_total": 14,
+    "findings_total": 29
+  },
+  "fixture_shas": {
+    "tests/fixtures/cross_san_gong_truth_page_data.json": "45d761f3e3b7dc2ac023f1224bf4f02f7496860cca33b9f925ac8da991dcab4c",
+    "tests/fixtures/shiquan_narrative_truth_page_data.json": "be8abd4685bc0de3fc2b87b91e0f3d32e79a50e369c9e4dc7aa3cfe5c28272d7",
+    "tests/fixtures/wenlv_narrative_truth_page_data.json": "07813ae61b04cf9f3afd2bf93c69b357ff9aeefee3ba6a893b34d77d956e8252",
+    "tests/fixtures/sample_page_data.json": "2f862419dde3d04326125c9f4c45f9171c9c45af303c49a350b3be998ec31de1"
+  }
+}
