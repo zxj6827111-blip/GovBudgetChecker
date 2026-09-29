@@ -456,7 +456,7 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
         if grid is None:
             return self._apply_legacy(doc)
 
-        merged_all = merge_page_texts(_page_texts(doc))
+        merged_all = "\n".join(_page_texts(doc))
         section = _locked_three_public_section(merged_all)
         if not section:
             return self._apply_legacy(doc)
