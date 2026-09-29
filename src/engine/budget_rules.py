@@ -23,6 +23,7 @@ from .rule_outcome import (
     RuleOutcomeSignal,
     STATUS_INSUFFICIENT_DATA,
 )
+from src.utils.narration import merge_soft_wrapped_lines
 from .field_extractor import (
     STATUS_MISSING_COLUMN,
     STATUS_OUT_OF_BOUNDS,
@@ -476,6 +477,91 @@ def _to_wanyuan(v: Optional[float], unit: Optional[str]) -> Optional[float]:
     return v * factor
 
 
+# B 档一期 MR-B1（2026-09-29）：表页单位解析。
+# 现状断环复核（合并基线实测）：DOC-B1-004/005/006 的表页 units_per_page
+# 均已正确识别为「元」，dominant_unit=None——「被当成万元」的量级错在
+# 本仓库当前代码上未复现。本助手把三道证据按可靠度排序收口：
+#   1. 页级标注 units_per_page（extract_money_unit 已覆盖）；
+#   2. 表题邻近 ±2 行的「单位：X」标注（页级标注缺失时的兜底，
+#      防 dominant_unit 被封面页带偏）；
+#   3. dominant_unit。
+# 全部落空返回 None——调用方必须 fail-closed（RuleDeferred），不得默认万元。
+_UNIT_NEAR_TITLE_RE = re.compile(r"单位[:：]\s*(亿元|万元|元)")
+_TABLE_TITLE_LINE_RE = re.compile(
+    r"[\u4e00-\u9fa5A-Za-z0-9（）()“”\"'·、]{2,40}(?:总表|预算表|决算表|收支表|收入表|支出表|经费预算)\s*$"
+)
+
+
+def _unit_from_table_title_context(page_text: str) -> Optional[str]:
+    """在表题行 ±2 行内找「单位：X」标注；找不到返回 None。"""
+    if not page_text:
+        return None
+    lines = [str(ln or "").strip() for ln in str(page_text).splitlines()]
+    for i, line in enumerate(lines):
+        if not line or not _TABLE_TITLE_LINE_RE.search(line):
+            continue
+        for j in range(max(0, i - 2), min(len(lines), i + 3)):
+            m = _UNIT_NEAR_TITLE_RE.search(lines[j])
+            if m:
+                return m.group(1)
+    return None
+
+
+def _resolve_table_unit(doc: Document, page: Optional[int]) -> Optional[str]:
+    """解析表页金额单位；不确定时返回 None，由调用方 fail-closed。"""
+    units_per_page = getattr(doc, "units_per_page", None) or []
+    if page and 1 <= page <= len(units_per_page):
+        unit = units_per_page[page - 1]
+        if unit:
+            return unit
+    page_texts = getattr(doc, "page_texts", None) or []
+    if page and 1 <= page <= len(page_texts):
+        near = _unit_from_table_title_context(page_texts[page - 1] or "")
+        if near:
+            return near
+    dominant = getattr(doc, "dominant_unit", None)
+    return dominant or None
+
+
+def _text_vs_table_envelope(text_sv: StrictValue, table_sv: StrictValue) -> Decimal:
+    """文本↔表格比较的显示包络。
+
+    B 档一期 MR-B2（2026-09-29）：说明文本常把金额**截断**成整万元显示
+    （「328,661.80822 万元」→「328,661 万元」，建管委样张 P7 实测），
+    截断尾差可吃满 1 个文本显示单位，半步长包络（0.5 万）会把纯显示
+    截断误报成「文本与表不一致」。文本侧为整万元（scale=0）且表格侧
+    更精细时，包络放宽一个半步长（合计≈1 个文本单位）；真实差异
+    ≥1 万仍判 mismatch。两侧精度同阶或文本更细时维持原包络不放宽。
+    """
+    base = compute_dynamic_envelope([text_sv, table_sv])
+    if (
+        text_sv.is_numeric
+        and int(getattr(text_sv, "scale_digits", 0) or 0) == 0
+        and int(getattr(table_sv, "scale_digits", 0) or 0) >= 1
+    ):
+        return base + Decimal("0.5")
+    return base
+
+
+def _budget_table_has_total_row(rows: Sequence[Sequence[Any]]) -> bool:
+    """表内是否存在「合计/总计」标签行（与 T3/T8 严格提取器的行条件一致）。
+
+    B 档一期 MR-B2：用于区分「取数失败」与「材料结构性缺失合计行」——
+    DOC-B1-006 财务收支预算模板的 T3/T5/T6/T8 实测无总计行，该形态下
+    表间勾稽不适用，不得伪装成取数失败挂 insufficient 转人工。
+    """
+    for row in rows:
+        txt = _row_text(row)
+        if "合计" not in txt and "总计" not in txt:
+            continue
+        _first_cell = str(row[0] if row else "").strip()
+        if _first_cell.isdigit() and len(_first_cell) in (3, 5, 7):
+            continue
+        if any(parse_strict_cell(c, default_unit="万元").is_numeric for c in row if c):
+            return True
+    return False
+
+
 def _dynamic_half_unit_tol(a: float, b: float) -> float:
     """P1-2b: Return half-unit tolerance based on displayed decimal places of both values."""
     from decimal import Decimal as _D
@@ -579,6 +665,10 @@ def _extract_t1_t4_strict_totals(
     期间判定只依据真正的表头行：含数值单元格（金额/科目编码）的数据行一律不参与，
     防止数据金额中的四位片段（如 2050.00）被误当作期间年份污染 max_year。
     期间无法判定时（多数值列且无任何期间语义），取数一律 fail-closed 返回 None，不得猜列。
+    例外（B 档一期 MR-B2，2026-09-29）：候选列中存在**唯一**表头恰为「合计/总计」
+    的列时按该列取数——T4 五列横表 `项目|预算数|项目|合计|一般公共预算|政府性基金
+    预算|国有资本经营预算` 无任何期间词，此前整表 fail-closed；合计列是表头明示的
+    总量列，不属于猜列。仍不唯一则继续 fail-closed。
     """
     income_val: Optional[StrictValue] = None
     expense_val: Optional[StrictValue] = None
@@ -590,6 +680,7 @@ def _extract_t1_t4_strict_totals(
     col_is_prior = [False] * max_len
     col_is_current = [False] * max_len
     col_is_amount = [False] * max_len
+    col_is_total_header = [False] * max_len
 
     header_years: List[int] = []
     col_years: List[Optional[int]] = [None] * max_len
@@ -618,6 +709,10 @@ def _extract_t1_t4_strict_totals(
         if any(parse_strict_cell(c, default_unit=default_unit).is_numeric for c in str_r if c):
             continue
         header_rows.append(str_r)
+        # MR-B2：表头恰为「合计/总计」的列是表头明示的总量列（T4 五列横表）
+        for ci, txt in enumerate(str_r):
+            if txt in ("合计", "总计") and ci < max_len:
+                col_is_total_header[ci] = True
 
     for str_r in header_rows:
         for ci, txt in enumerate(str_r):
@@ -674,7 +769,12 @@ def _extract_t1_t4_strict_totals(
             elif len(candidate_cols) == 1:
                 target_ci = candidate_cols[0]
             else:
-                return None
+                # MR-B2：期间语义缺失时，唯一的「合计/总计」表头列仍可定位
+                # （T4 五列横表的支出侧合计）；不唯一则继续 fail-closed。
+                total_cols = [ci for ci in candidate_cols if col_is_total_header[ci]]
+                if len(total_cols) != 1:
+                    return None
+                target_ci = total_cols[0]
 
             # “唯一但明确为 prior”仍不是 current，不能靠排除法借用上期金额。
             if col_is_prior[target_ci]:
@@ -1172,6 +1272,19 @@ _FUNCTIONAL_NARRATIVE_ENTRY_RE = re.compile(
     re.M,
 )
 
+# B 档一期 MR-B4（2026-09-29）：说明侧常见**无编码**形态
+# 「类名（类）款名（款）项名（项）」（建管委/城管/文旅局 2026 预算实测）。
+# 编码须回 T5 功能分类表按「类名+款名+项名」归一匹配回溯；解析不出唯一
+# 项级条目时跳过，宁漏报不误报——基金/国资条目不在 T5 属正常形态，
+# 不得据此判「名称不一致」。
+_FUNCTIONAL_NARRATIVE_PLAIN_ENTRY_RE = re.compile(
+    r"(?:^|\n)\s*(?:\d+\s*[、.．]\s*)?"
+    r"[“\"]?(?P<class_name>[^（()）\n]{1,40}?)\s*[（(]\s*类\s*[）)]\s*"
+    r"[“\"]?(?P<section_name>[^（()）\n]{1,60}?)\s*[（(]\s*款\s*[）)]\s*"
+    r"[“\"]?(?P<item_name>[^（()）\n]{1,80}?)\s*[（(]\s*项\s*[）)]",
+    re.M,
+)
+
 
 def _format_functional_code(code: str) -> str:
     if len(code) == 3:
@@ -1272,8 +1385,40 @@ def _candidate_budget_explanation_pages(
     return candidates
 
 
+def _resolve_plain_functional_mention(
+    name_index: Dict[str, Dict[str, str]],
+    class_name: str,
+    section_name: str,
+    item_name: str,
+) -> Optional[str]:
+    """无编码提及回码：按「类名+款名+项名」归一匹配 T5 索引，唯一命中才返回。"""
+    item_target = _normalize_functional_name(item_name)
+    class_target = _normalize_functional_name(class_name)
+    section_target = _normalize_functional_name(section_name)
+    if not (item_target and class_target and section_target):
+        return None
+    hits: List[str] = []
+    for code, entry in name_index.items():
+        if entry.get("level") != "项":
+            continue
+        if _normalize_functional_name(entry.get("name", "")) != item_target:
+            continue
+        cls = name_index.get(code[:3])
+        sec = name_index.get(code[:5])
+        if not cls or not sec:
+            continue
+        if _normalize_functional_name(cls.get("name", "")) != class_target:
+            continue
+        if _normalize_functional_name(sec.get("name", "")) != section_target:
+            continue
+        hits.append(code)
+    return hits[0] if len(hits) == 1 else None
+
+
 def _extract_budget_functional_narrative_mentions(
-    doc: Document, anchors: Dict[str, List[int]]
+    doc: Document,
+    anchors: Dict[str, List[int]],
+    name_index: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> Dict[str, List[Dict[str, str]]]:
     mentions: Dict[str, List[Dict[str, str]]] = {}
     for page_num, text in _candidate_budget_explanation_pages(doc, anchors):
@@ -1308,6 +1453,35 @@ def _extract_budget_functional_narrative_mentions(
                         "page": str(page_num),
                         "name": name,
                         "level": level,
+                        "snippet": snippet,
+                    }
+                )
+        # B 档一期 MR-B4：无编码「类名（类）款名（款）项名（项）」形态，
+        # 由调用方传入 T5 名称索引回码；解析不出唯一项级条目则跳过。
+        if name_index:
+            for match in _FUNCTIONAL_NARRATIVE_PLAIN_ENTRY_RE.finditer(text):
+                code = _resolve_plain_functional_mention(
+                    name_index,
+                    match.group("class_name"),
+                    match.group("section_name"),
+                    match.group("item_name"),
+                )
+                if not code:
+                    continue
+                name = str(match.group("item_name") or "").strip(" 　：:；;，,。.")
+                snippet = _snippet(text, match.start(), match.end(), radius=40).replace("\n", " ").strip()
+                bucket = mentions.setdefault(code, [])
+                if any(
+                    item.get("page") == str(page_num)
+                    and normalize_text(item.get("name", "")) == normalize_text(name)
+                    for item in bucket
+                ):
+                    continue
+                bucket.append(
+                    {
+                        "page": str(page_num),
+                        "name": name,
+                        "level": "项",
                         "snippet": snippet,
                     }
                 )
@@ -1547,7 +1721,7 @@ class BUD101_T1Balance(Rule):
                 unresolved_reasons=["未找到部门收支总表(T1)表格数据"],
             )
 
-        unit = (doc.units_per_page[page - 1] if page and page <= len(doc.units_per_page) else None) or doc.dominant_unit
+        unit = _resolve_table_unit(doc, page)
         if not unit:
             raise RuleDeferred(
                 self.code,
@@ -1598,7 +1772,7 @@ class BUD102_T3TotalFormula(Rule):
                 unresolved_reasons=["未找到支出预算总表(T3)表格数据"],
             )
 
-        unit = (doc.units_per_page[page - 1] if page and page <= len(doc.units_per_page) else None) or doc.dominant_unit
+        unit = _resolve_table_unit(doc, page)
         if not unit:
             raise RuleDeferred(
                 self.code,
@@ -1651,7 +1825,7 @@ class BUD103_T8TotalFormula(Rule):
                 unresolved_reasons=["未找到一般公共预算基本支出表(T8)表格数据"],
             )
 
-        unit = (doc.units_per_page[page - 1] if page and page <= len(doc.units_per_page) else None) or doc.dominant_unit
+        unit = _resolve_table_unit(doc, page)
         if not unit:
             raise RuleDeferred(
                 self.code,
@@ -1812,8 +1986,8 @@ class BUD105_CrossTableChecks(Rule):
 
         # 检查对 1: T1 ↔ T4 (收入总计、支出总计)
         if t1_rows and t4_rows:
-            t1_unit = doc.units_per_page[t1_page - 1] if t1_page and (t1_page - 1) < len(doc.units_per_page) else None
-            t4_unit = doc.units_per_page[t4_page - 1] if t4_page and (t4_page - 1) < len(doc.units_per_page) else None
+            t1_unit = _resolve_table_unit(doc, t1_page)
+            t4_unit = _resolve_table_unit(doc, t4_page)
             if not t1_unit:
                 unresolved_reasons.append("BUD_T1单位未识别")
             if not t4_unit:
@@ -1897,8 +2071,8 @@ class BUD105_CrossTableChecks(Rule):
 
         # 检查对 2: T3 ↔ T5 (合计、基本支出、项目支出)
         if t3_rows and t5_rows:
-            t3_unit = doc.units_per_page[t3_page - 1] if t3_page and (t3_page - 1) < len(doc.units_per_page) else None
-            t5_unit = doc.units_per_page[t5_page - 1] if t5_page and (t5_page - 1) < len(doc.units_per_page) else None
+            t3_unit = _resolve_table_unit(doc, t3_page)
+            t5_unit = _resolve_table_unit(doc, t5_page)
             if not t3_unit:
                 unresolved_reasons.append("BUD_T3单位未识别")
             if not t5_unit:
@@ -1908,97 +2082,152 @@ class BUD105_CrossTableChecks(Rule):
                 t3_tot_sv, t3_bas_sv, t3_prj_sv = _extract_total_basic_project_strict(t3_rows, default_unit=t3_unit)
                 t5_tot_sv, t5_bas_sv, t5_prj_sv = _extract_total_basic_project_strict(t5_rows, default_unit=t5_unit)
 
-                # MR-4（2026-09-28）对偶口径门槛：T3 支出总表是**全口径**，
-                # T5 一般公共预算功能分类表是**一般公共口径**——两者可比的
-                # 前提是「全口径 == 一般公共口径」，即：
-                #   (a) T3 合计 == T4 财政拨款收入总计（无事业收入等非财拨来源）；
-                #   (b) BUD_T6 政府性基金支出表不存在或全零（财拨内无基金分出）。
-                # 任一不成立即识别不出「同一口径的两个总计」，T3↔T5 差额是
-                # 口径差不是材料错误，RuleDeferred 转人工（建管委 2026 预算
-                # 实测：全口径 328,661.81 vs 一般公共 49,376.11，差额
-                # 279,285.70 恰为政府性基金支出，被误报 27.9 亿级不一致）。
-                caliber_notes: List[str] = []
-                comparable = True
-                t4_inc_gate = None
-                if t4_rows:
-                    t4_unit_gate = (
-                        doc.units_per_page[t4_page - 1]
-                        if t4_page and (t4_page - 1) < len(doc.units_per_page)
-                        else None
-                    )
-                    if t4_unit_gate:
-                        t4_inc_gate, _ = _extract_t4_strict(t4_rows, default_unit=t4_unit_gate)
-                if (
-                    t4_inc_gate is not None
-                    and t4_inc_gate.is_numeric
-                    and t3_tot_sv is not None
-                    and t3_tot_sv.is_numeric
-                ):
-                    env_gate = compute_dynamic_envelope([t3_tot_sv, t4_inc_gate])
-                    caliber_level, _ = classify_amount_diff(
-                        t3_tot_sv.decimal_val, t4_inc_gate.decimal_val, 1, envelope=env_gate
-                    )
-                    if caliber_level == "mismatch":
-                        comparable = False
-                        caliber_notes.append(
-                            f"T3合计({t3_tot_sv.decimal_val})≠T4财政拨款收入总计"
-                            f"({t4_inc_gate.decimal_val})，支出总表含非财拨来源"
-                        )
-                # T4 缺失/不可解析时不启用门槛：没有口径差的正面证据就保持
-                # 原比较行为（Batch-B R5/R6 纪律——部分列缺失不得吞掉已可
-                # 确认的总量不一致），避免把既有回归打成 Deferred。
-                if t6_rows and _budget_table_has_nonzero_amount(t6_rows):
-                    comparable = False
-                    caliber_notes.append(
-                        "存在政府性基金预算支出（BUD_T6 非零），T5 仅覆盖一般公共口径"
-                    )
-                if not comparable:
-                    unresolved_reasons.append(
-                        "T3↔T5对偶口径不可比（" + "；".join(caliber_notes) + "），差额属口径差，转人工"
-                    )
+                # B 档一期 MR-B2（2026-09-29）：结构性缺失先于口径门槛。
+                # 材料的 T3/T5 若根本没有「合计/总计」行（DOC-B1-006 财务收支
+                # 预算模板实测整套表无总计行），该检查对**不适用**——这与
+                # 「取数失败」必须区分，后者才挂 insufficient 转人工；
+                # 结构性缺失由 BUD-102/103 的 insufficient 承载信号。
+                if not _budget_table_has_total_row(t3_rows) or not _budget_table_has_total_row(t5_rows):
+                    pass  # 结构性缺失：T3↔T5 勾稽不适用，静默跳过
                 else:
-                    for (name, sv3, sv5) in [("合计", t3_tot_sv, t5_tot_sv), ("基本支出", t3_bas_sv, t5_bas_sv), ("项目支出", t3_prj_sv, t5_prj_sv)]:
-                        if sv3 and sv5 and sv3.is_numeric and sv5.is_numeric:
-                            env = compute_dynamic_envelope([sv3, sv5])
-                            diff_l, diff_v = classify_amount_diff(sv3.decimal_val, sv5.decimal_val, 1, envelope=env)
-                            if diff_l == "mismatch":
-                                max_scale = max(sv3.scale_digits, sv5.scale_digits, 2)
-                                location = _make_cross_table_location(
-                                    _make_location_ref(
-                                        role="T3",
-                                        page=t3_page,
-                                        table="BUD_T3",
-                                        row="合计",
-                                        field=name,
-                                        value=float(sv3.decimal_val),
-                                    ),
-                                    _make_location_ref(
-                                        role="T5",
-                                        page=t5_page,
-                                        table="BUD_T5",
-                                        row="合计",
-                                        field=name,
-                                        value=float(sv5.decimal_val),
-                                    ),
-                                    field=name,
-                                    row="合计",
+                    # MR-4（2026-09-28）对偶口径门槛：T3 支出总表是**全口径**，
+                    # T5 一般公共预算功能分类表是**一般公共口径**——两者可比的
+                    # 前提是「全口径 == 一般公共口径」，即：
+                    #   (a) T3 合计 == T4 财政拨款收入总计（无事业收入等非财拨来源）；
+                    #   (b) BUD_T6 政府性基金支出表不存在或全零（财拨内无基金分出）。
+                    # 任一不成立即识别不出「同一口径的两个总计」，T3↔T5 差额是
+                    # 口径差不是材料错误，RuleDeferred 转人工（建管委 2026 预算
+                    # 实测：全口径 328,661.81 vs 一般公共 49,376.11，差额
+                    # 279,285.70 恰为政府性基金支出，被误报 27.9 亿级不一致）。
+                    caliber_notes: List[str] = []
+                    comparable = True
+                    caliber_verified = False
+                    t4_inc_gate = None
+                    if t4_rows:
+                        t4_unit_gate = _resolve_table_unit(doc, t4_page)
+                        if t4_unit_gate:
+                            t4_inc_gate, _ = _extract_t4_strict(t4_rows, default_unit=t4_unit_gate)
+                    if (
+                        t4_inc_gate is not None
+                        and t4_inc_gate.is_numeric
+                        and t3_tot_sv is not None
+                        and t3_tot_sv.is_numeric
+                    ):
+                        env_gate = compute_dynamic_envelope([t3_tot_sv, t4_inc_gate])
+                        caliber_level, _ = classify_amount_diff(
+                            t3_tot_sv.decimal_val, t4_inc_gate.decimal_val, 1, envelope=env_gate
+                        )
+                        if caliber_level == "mismatch":
+                            comparable = False
+                            caliber_notes.append(
+                                f"T3合计({t3_tot_sv.decimal_val})≠T4财政拨款收入总计"
+                                f"({t4_inc_gate.decimal_val})，支出总表含非财拨来源"
+                            )
+                    # T4 缺失/不可解析时不启用门槛：没有口径差的正面证据就保持
+                    # 原比较行为（Batch-B R5/R6 纪律——部分列缺失不得吞掉已可
+                    # 确认的总量不一致），避免把既有回归打成 Deferred。
+                    if t6_rows and _budget_table_has_nonzero_amount(t6_rows):
+                        # B 档一期 MR-B2：门槛从「T6 非零即转人工」升级为
+                        # 「差额=T6 已实证才放行」。T3−T5 恰等于 T6 政府性基金
+                        # 支出合计（动态包络内）→ 口径差被正面证据证实，两表
+                        # 本不可比且相互印证，直接放行（不产 error 也不挂
+                        # unresolved）；差额对不上 T6 或 T6 金额取不到 → 保持
+                        # RuleDeferred，绝不拿口径差名义吞掉真差异。
+                        t6_verified = False
+                        if (
+                            t3_tot_sv is not None and t3_tot_sv.is_numeric
+                            and t5_tot_sv is not None and t5_tot_sv.is_numeric
+                        ):
+                            t6_unit_gate = _resolve_table_unit(doc, _t6_page)
+                            if t6_unit_gate:
+                                t6_total_sv, _, _ = _extract_total_basic_project_strict(
+                                    t6_rows, default_unit=t6_unit_gate
                                 )
-                                issues.append(
-                                    self._issue(
-                                        f"T3与T5{name}不一致: T3={sv3.decimal_val:.{max_scale}f}, T5={sv5.decimal_val:.{max_scale}f} (差额={diff_v:.{max_scale}f})",
-                                        location,
-                                        severity="error",
-                                    )
+                            else:
+                                t6_total_sv = None
+                            if t6_total_sv is not None and t6_total_sv.is_numeric:
+                                _, caliber_diff_val = classify_amount_diff(
+                                    t3_tot_sv.decimal_val,
+                                    t5_tot_sv.decimal_val,
+                                    1,
+                                    envelope=compute_dynamic_envelope([t3_tot_sv, t5_tot_sv]),
                                 )
+                                env_t6 = compute_dynamic_envelope([t3_tot_sv, t6_total_sv])
+                                t6_level, _ = classify_amount_diff(
+                                    caliber_diff_val, t6_total_sv.decimal_val, 1, envelope=env_t6
+                                )
+                                if t6_level in ("ok", "rounding_hint"):
+                                    t6_verified = True
+                        if t6_verified:
+                            caliber_verified = True
+                            comparable = True
                         else:
-                            unresolved_reasons.append(f"T3与T5{name}数值缺失")
+                            comparable = False
+                            if t3_tot_sv is not None and t3_tot_sv.is_numeric and t5_tot_sv is not None and t5_tot_sv.is_numeric:
+                                _, diff_show = classify_amount_diff(
+                                    t3_tot_sv.decimal_val,
+                                    t5_tot_sv.decimal_val,
+                                    1,
+                                    envelope=compute_dynamic_envelope([t3_tot_sv, t5_tot_sv]),
+                                )
+                                caliber_notes.append(
+                                    f"T3−T5差额({diff_show})未获 T6 政府性基金支出金额实证"
+                                )
+                            else:
+                                caliber_notes.append(
+                                    "存在政府性基金预算支出（BUD_T6 非零），T5 仅覆盖一般公共口径"
+                                )
+                    if not comparable:
+                        unresolved_reasons.append(
+                            "T3↔T5对偶口径不可比（" + "；".join(caliber_notes) + "），差额属口径差，转人工"
+                        )
+                    elif caliber_verified:
+                        # T3−T5 == T6 已实证：全口径 vs 一般公共口径本不可比，
+                        # 逐字段比较不适用（不产 error、不挂 unresolved）。
+                        pass
+                    else:
+                        for (name, sv3, sv5) in [("合计", t3_tot_sv, t5_tot_sv), ("基本支出", t3_bas_sv, t5_bas_sv), ("项目支出", t3_prj_sv, t5_prj_sv)]:
+                            if sv3 and sv5 and sv3.is_numeric and sv5.is_numeric:
+                                env = compute_dynamic_envelope([sv3, sv5])
+                                diff_l, diff_v = classify_amount_diff(sv3.decimal_val, sv5.decimal_val, 1, envelope=env)
+                                if diff_l == "mismatch":
+                                    max_scale = max(sv3.scale_digits, sv5.scale_digits, 2)
+                                    location = _make_cross_table_location(
+                                        _make_location_ref(
+                                            role="T3",
+                                            page=t3_page,
+                                            table="BUD_T3",
+                                            row="合计",
+                                            field=name,
+                                            value=float(sv3.decimal_val),
+                                        ),
+                                        _make_location_ref(
+                                            role="T5",
+                                            page=t5_page,
+                                            table="BUD_T5",
+                                            row="合计",
+                                            field=name,
+                                            value=float(sv5.decimal_val),
+                                        ),
+                                        field=name,
+                                        row="合计",
+                                    )
+                                    issues.append(
+                                        self._issue(
+                                            f"T3与T5{name}不一致: T3={sv3.decimal_val:.{max_scale}f}, T5={sv5.decimal_val:.{max_scale}f} (差额={diff_v:.{max_scale}f})",
+                                            location,
+                                            severity="error",
+                                        )
+                                    )
+                            else:
+                                unresolved_reasons.append(f"T3与T5{name}数值缺失")
         else:
             unresolved_reasons.append("BUD_T3或BUD_T5表格缺失，无法核验T3↔T5勾稽")
 
         # 检查对 3: T3 ↔ T8 (T3基本支出 ↔ T8合计)
         if t3_rows and t8_rows:
-            t3_unit = doc.units_per_page[t3_page - 1] if t3_page and (t3_page - 1) < len(doc.units_per_page) else None
-            t8_unit = doc.units_per_page[t8_page - 1] if t8_page and (t8_page - 1) < len(doc.units_per_page) else None
+            t3_unit = _resolve_table_unit(doc, t3_page)
+            t8_unit = _resolve_table_unit(doc, t8_page)
             if not t3_unit:
                 unresolved_reasons.append("BUD_T3单位未识别")
             if not t8_unit:
@@ -2008,7 +2237,11 @@ class BUD105_CrossTableChecks(Rule):
                 _, t3_bas_sv, _ = _extract_total_basic_project_strict(t3_rows, default_unit=t3_unit)
                 t8_tot_sv, _, _ = _extract_t8_strict(t8_rows, default_unit=t8_unit)
 
-                if t3_bas_sv and t8_tot_sv and t3_bas_sv.is_numeric and t8_tot_sv.is_numeric:
+                # B 档一期 MR-B2：T3/T8 无「合计/总计」行属结构性缺失（DOC-B1-006
+                # 财务收支预算模板实测），检查对不适用；与取数失败严格区分。
+                if not _budget_table_has_total_row(t3_rows) or not _budget_table_has_total_row(t8_rows):
+                    pass
+                elif t3_bas_sv and t8_tot_sv and t3_bas_sv.is_numeric and t8_tot_sv.is_numeric:
                     env = compute_dynamic_envelope([t3_bas_sv, t8_tot_sv])
                     diff_l8, diff_v8 = classify_amount_diff(t3_bas_sv.decimal_val, t8_tot_sv.decimal_val, 1, envelope=env)
                     if diff_l8 == "mismatch":
@@ -2142,7 +2375,7 @@ class BUD107_TextTableConsistency(Rule):
 
         if t1_rows and t1_page:
             checked_count += 1
-            unit = doc.units_per_page[t1_page - 1] if (t1_page - 1) < len(doc.units_per_page) else None
+            unit = _resolve_table_unit(doc, t1_page)
             if not unit:
                 unresolved_reasons.append("T1单位未识别")
             else:
@@ -2161,7 +2394,7 @@ class BUD107_TextTableConsistency(Rule):
                 if t1_inc_sv is None or text_inc_sv is None:
                     unresolved_reasons.append("T1收入预算或文本未提取到")
                 else:
-                    env = compute_dynamic_envelope([t1_inc_sv, text_inc_sv])
+                    env = _text_vs_table_envelope(text_inc_sv, t1_inc_sv)
                     diff_l, diff_v = classify_amount_diff(text_inc_sv.decimal_val, t1_inc_sv.decimal_val, 1, envelope=env)
                     if diff_l == "mismatch":
                         max_scale = max(t1_inc_sv.scale_digits, text_inc_sv.scale_digits, 2)
@@ -2176,7 +2409,7 @@ class BUD107_TextTableConsistency(Rule):
                 if t1_exp_sv is None or text_exp_sv is None:
                     unresolved_reasons.append("T1支出预算或文本未提取到")
                 else:
-                    env_e = compute_dynamic_envelope([t1_exp_sv, text_exp_sv])
+                    env_e = _text_vs_table_envelope(text_exp_sv, t1_exp_sv)
                     diff_le, diff_ve = classify_amount_diff(text_exp_sv.decimal_val, t1_exp_sv.decimal_val, 1, envelope=env_e)
                     if diff_le == "mismatch":
                         max_scale = max(t1_exp_sv.scale_digits, text_exp_sv.scale_digits, 2)
@@ -2192,7 +2425,7 @@ class BUD107_TextTableConsistency(Rule):
 
         if t4_rows and t4_page:
             checked_count += 1
-            unit = doc.units_per_page[t4_page - 1] if (t4_page - 1) < len(doc.units_per_page) else None
+            unit = _resolve_table_unit(doc, t4_page)
             if not unit:
                 unresolved_reasons.append("T4单位未识别")
             else:
@@ -2205,7 +2438,7 @@ class BUD107_TextTableConsistency(Rule):
                 if t4_exp_sv is None or text_fin_exp_sv is None:
                     unresolved_reasons.append("T4财政拨款支出或文本未提取到")
                 else:
-                    env = compute_dynamic_envelope([t4_exp_sv, text_fin_exp_sv])
+                    env = _text_vs_table_envelope(text_fin_exp_sv, t4_exp_sv)
                     diff_l, diff_v = classify_amount_diff(text_fin_exp_sv.decimal_val, t4_exp_sv.decimal_val, 1, envelope=env)
                     if diff_l == "mismatch":
                         max_scale = max(t4_exp_sv.scale_digits, text_fin_exp_sv.scale_digits, 2)
@@ -2221,7 +2454,7 @@ class BUD107_TextTableConsistency(Rule):
 
         t9_rows, t9_page = _get_budget_table_rows(doc, anchors, "BUD_T9", include_continuation=False)
         if t9_rows and t9_page:
-            unit = doc.units_per_page[t9_page - 1] if (t9_page - 1) < len(doc.units_per_page) else None
+            unit = _resolve_table_unit(doc, t9_page)
             if not unit:
                 unresolved_reasons.append("BUD_T9单位未识别")
             else:
@@ -2261,7 +2494,7 @@ class BUD107_TextTableConsistency(Rule):
                         if text_sv is None or table_sv is None or not text_sv.is_numeric or not table_sv.is_numeric:
                             unresolved_reasons.append(f"T9 {label}文本或表格数值缺失")
                             continue
-                        env = compute_dynamic_envelope([text_sv, table_sv])
+                        env = _text_vs_table_envelope(text_sv, table_sv)
                         diff_l, diff_v = classify_amount_diff(text_sv.decimal_val, table_sv.decimal_val, 1, envelope=env)
                         if diff_l == "mismatch":
                             max_scale = max(text_sv.scale_digits, table_sv.scale_digits, 2)
@@ -2295,6 +2528,14 @@ class BUD108_PerformanceTargetConsistency(Rule):
         issues: List[Issue] = []
 
         all_text = "\n".join(doc.page_texts)
+        # B 档一期 MR-B4：绩效说明金额常被 PDF 断行劈开（建管委样张 P22 把
+        # 「…编报绩效目标的项目247个，涉及项目预算资金314,076.90万元」从
+        # 「涉/及」中间断开），行级正则跨不过去。先做**段内**软接合
+        # （merge_soft_wrapped_lines 保持段落边界，不跨句接合，防跨句假匹配）。
+        all_text = "\n".join(
+            "\n".join(merge_soft_wrapped_lines(str(pt or "")))
+            for pt in doc.page_texts
+        )
         _, perf_amount_wy, perf_line = _extract_performance_summary_metrics(all_text)
         if perf_amount_wy is None:
             raise RuleDeferred(
@@ -2312,9 +2553,21 @@ class BUD108_PerformanceTargetConsistency(Rule):
             )
 
         _, _, t3_project = _extract_total_basic_project(t3_rows)
-        unit = doc.units_per_page[t3_page - 1] if (t3_page - 1) < len(doc.units_per_page) else None
+        unit = _resolve_table_unit(doc, t3_page)
         t3_project_wy = _to_wanyuan(t3_project, unit)
         if t3_project_wy is None:
+            if not _budget_table_has_total_row(t3_rows):
+                # B 档一期 MR-B2：T3 无「合计/总计」行属结构性缺失（财务收支
+                # 预算模板，DOC-B1-006 实测），绩效↔项目支出口径比较不适用；
+                # 绩效说明侧金额已成功提取，证据随 not_applicable 留痕，
+                # 不得伪装成取数失败挂 insufficient。
+                raise RuleNotApplicable(
+                    self.code,
+                    detail=(
+                        f"绩效目标说明金额已提取（{perf_amount_wy:.2f}万元），"
+                        "但T3无「合计/总计」行、项目支出无法提取，口径比较不适用"
+                    ),
+                )
             raise RuleDeferred(
                 self.code,
                 detail="BUD_T3未能提取到项目支出金额",
@@ -2380,7 +2633,9 @@ class BUD109_FunctionalClassificationNameConsistency(Rule):
                 unresolved_reasons=["BUD_T5未能提取到功能分类科目行"],
             )
 
-        narrative_mentions = _extract_budget_functional_narrative_mentions(doc, anchors)
+        narrative_mentions = _extract_budget_functional_narrative_mentions(
+            doc, anchors, name_index=table_entries
+        )
         if not narrative_mentions:
             raise RuleDeferred(
                 self.code,

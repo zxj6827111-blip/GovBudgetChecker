@@ -9,7 +9,16 @@ T3=328661.81, T5=49376.11 (差额=279285.70)」。实测根因是**口径差**�
 修复：BUD-105 在 T3↔T5 比较前做对偶口径门槛——
   (a) T3 合计 == T4 财政拨款收入总计（无事业收入等非财拨来源）；
   (b) BUD_T6 政府性基金支出表不存在或全零。
-任一不成立即 RuleDeferred 转人工，不得产出 error（方案 §MR-4）。
+任一不成立即识别不出「同一口径的两个总计」，T3↔T5 差额是口径差。
+
+B 档一期（2026-09-29，MR-B2）演进：门槛从「T6 非零即转人工」升级为
+「差额=T6 已实证才放行」——T3−T5 恰等于 T6 政府性基金支出合计（动态
+包络内）时口径差获正面证据，两表相互印证，直接放行（pass、无 finding）；
+差额对不上 T6 或 T6 金额取不到 → 保持 RuleDeferred（见
+test_bud105_gate_keeps_deferred_when_diff_not_t6 变异锁）。同批修好
+T4 五列横表严格取数（表头「合计」列定位），T1↔T4 检查对真实可核。
+三份预算材料的 T3/T5/T8 若整体无「合计/总计」行（DOC-B1-006 财务收支
+预算模板实测），检查对结构性不适用，与取数失败严格区分。
 
 夹具为建管委 2026 年度部门预算公开 PDF 的解析产物（公开材料，经
 scripts/build_sample_fixture.py 冻结，SHA 双锁：源 PDF + 夹具本体，
@@ -51,6 +60,12 @@ def _load_fixture() -> Dict[str, Any]:
 
 
 @pytest.fixture(scope="module")
+def budget_payload() -> Dict[str, Any]:
+    """夹具原始 payload（不重放）——供保护路径的变异测试改动表格后重建文档。"""
+    return _load_fixture()
+
+
+@pytest.fixture(scope="module")
 def budget_replay() -> Dict[str, Any]:
     payload = _load_fixture()
     doc = build_document(
@@ -82,31 +97,79 @@ def test_bud105_jianguanwei_cascade_zero(budget_replay):
         )
 
 
-def test_bud105_deferred_with_caliber_reason(budget_replay):
-    """门槛路径：BUD-105 六态为 insufficient_data，原因精确指向口径根因。"""
+def test_bud105_resolved_after_verified_caliber_and_t4_fix(budget_replay):
+    """B 档一期（2026-09-29）演进后的锁定行为：
+
+    - MR-B2 修好 T4 五列横表取数后，T1↔T4 支出总计可核且一致；
+    - T3↔T5 差额 279,285.70 == T6 政府性基金支出合计（含项目字段），
+      口径差获**正面实证** → 按红线「有正面口径差证据才降级」直接放行；
+    - BUD-105 六态为 pass（无 finding、无 unresolved）——口径一致本就
+      无事可报，静默通过；差额=T6 的验证路径由
+      test_bud105_gate_keeps_deferred_when_diff_not_t6 变异锁定。
+    """
+    summary = budget_replay["summary"]
+    assert summary["rule_statuses"].get("BUD-105") == "pass"
     unresolved = {
         item.get("rule_id"): item
-        for item in budget_replay["summary"]["unresolved_rules"]
+        for item in summary["unresolved_rules"]
     }
-    assert "BUD-105" in unresolved
-    item = unresolved["BUD-105"]
-    assert item["status"] == "insufficient_data"
-    reasons = "；".join(str(r) for r in (item.get("unresolved_reasons") or []))
-    assert "对偶口径不可比" in reasons
-    assert "BUD_T6 非零" in reasons
+    assert "BUD-105" not in unresolved
 
 
-def test_bud105_other_check_pairs_still_run(budget_replay):
-    """门槛不得顺带关闭其它检查对：T1↔T4 检查面仍在（其 unresolved 理由
-    来自既有的 T4 支出总计严格提取局限，与本门槛无关）。"""
-    unresolved = {
-        item.get("rule_id"): item
-        for item in budget_replay["summary"]["unresolved_rules"]
-    }
-    reasons = "；".join(
-        str(r) for r in (unresolved.get("BUD-105", {}).get("unresolved_reasons") or [])
+def test_bud105_gate_keeps_deferred_when_diff_not_t6(budget_payload):
+    """保护路径变异锁：把 T6 合计金额改小使 T3−T5 ≠ T6 → 口径差失去
+    正面实证 → BUD-105 必须 Deferred（不得静默吞掉真差异）。"""
+    payload = json.loads(json.dumps(budget_payload))
+    replaced = 0
+    for table in payload["page_tables"]:
+        if not isinstance(table, list):
+            continue
+        for row in table:
+            if not isinstance(row, list):
+                continue
+            for ci, cell in enumerate(row):
+                if cell and "2,792,857,000" in str(cell):
+                    row[ci] = "2,000,000,000.00"
+                    replaced += 1
+    assert replaced >= 1, "夹具中未找到 T6 政府性基金合计单元格"
+
+    doc = build_document(
+        path=f"{DOC_ID}.pdf",
+        page_texts=list(payload["page_texts"]),
+        page_tables=json.loads(json.dumps(payload["page_tables"])),
+        filesize=0,
     )
-    assert "T1与T4支出总计数值缺失" in reasons
+    issues, outcomes = run_rules_with_outcomes(doc, use_ai_assist=False, report_kind="budget")
+    summary = summarize_rule_outcomes(outcomes)
+    unresolved = {
+        item.get("rule_id"): item
+        for item in summary["unresolved_rules"]
+    }
+    assert "BUD-105" in unresolved, "差额≠T6 时 BUD-105 必须 Deferred 转人工"
+    reasons = "；".join(str(r) for r in (unresolved["BUD-105"].get("unresolved_reasons") or []))
+    assert "对偶口径不可比" in reasons
+    assert "未获 T6 政府性基金支出金额实证" in reasons
+    # 差额不得以 error finding 呈现
+    errors = [
+        i for i in issues
+        if getattr(i, "rule", "") == "BUD-105"
+        and str(getattr(i, "severity", "")).lower() == "error"
+    ]
+    assert not errors
+
+
+def test_bud105_t1_t4_pair_resolves_after_t4_fix(budget_replay):
+    """MR-B2 修好 T4 五列横表后，T1↔T4 支出总计检查对必须真实可核
+    （旧锁「T1与T4支出总计数值缺失」随取数修复废止）。"""
+    statuses = budget_replay["summary"]["rule_statuses"]
+    assert statuses.get("BUD-105") == "pass"
+    # BUD-107 同样吃到 T4 修复（T4↔文本可核）且不再产出截断误报
+    bud107 = [
+        i for i in budget_replay["issues"] if getattr(i, "rule", "") == "BUD-107"
+    ]
+    assert not bud107, "BUD-107 仍有 finding: " + "; ".join(
+        str(getattr(i, "message", ""))[:80] for i in bud107
+    )
 
 
 def test_fixture_source_sha_pinned():

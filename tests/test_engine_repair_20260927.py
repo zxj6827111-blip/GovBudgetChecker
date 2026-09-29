@@ -150,9 +150,12 @@ def test_unresolved_total_le_15(replays):
     assert len(CORE_RULES) == 8
     total = sum(len(r["unresolved"]) for r in replays.values())
     assert total <= 15, f"unresolved 总数 {total} 超出验收线 15"
-    after = _load_snapshot(AFTER_SNAPSHOT, AFTER_SHA)
-    assert total == after["totals"]["unresolved_total"], (
-        "unresolved 总数与验收快照不符——引擎行为的计划外变更需重走验收"
+    # 2026-09-29 MR-B 批次计划内收敛：4 份决算 unresolved 14 → ≤10（实测 10），
+    # 验收重走并固化于 tests/test_budget_intake_20260929.py（BUD-105/107/108/109
+    # 全出真实判定，其余规则不得上升）。09-27 快照（14）保留为历史基线，其文件
+    # 内容仍由 test_acceptance_snapshots_pinned 锁定。
+    assert total <= 10, (
+        f"unresolved 总数 {total} 超出 MR-B 收敛后的验收线 10（计划外回升需重走验收）"
     )
 
 
