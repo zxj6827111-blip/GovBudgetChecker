@@ -755,3 +755,74 @@ def test_tp_pin_cmm007_009_wrong_base_period():
     assert hits[0].severity == "error"
     assert hits[0].location.get("page") in (39, 40)
 
+
+
+# ---------------------------------------------------------------------------
+# MR-P5b：V33-234 完成率配对——软折行关键词容忍 +「其中：」总-分界
+# （028 号残留 FP 闭环：页内折行「决\n算」让总句预算 68.60 跳过总句决算
+# 62.07 而拼到出国子项 40.87/92.68%，误报 59.58%≠92.68%）
+# ---------------------------------------------------------------------------
+
+
+def test_p5b_v33_234_soft_wrap_qizhong_no_mispairing():
+    """折行「决\\n算」+「其中：」总-分结构：总句自洽即零报告。"""
+    from src.engine.rules_v33 import R33234_NarrativePercentConsistency
+
+    page = (
+        "13、住房保障支出(类)住房改革支出（款）购房补贴（项）。\n"
+        "主要用于：向符合条件职工发放的用于购买住房的补贴。年初预\n"
+        "算为 295 万元，支出决算为 261.85 万元。决算数小于预算数的\n"
+        "主要原因：管委会购房补贴按实际情况支出。\n"
+        "七、财政拨款“三公”经费支出决算情况说明\n"
+        "（一）“三公”经费财政拨款支出决算总体情况说明。\n"
+        "“三公”经费财政拨款支出年初预算为 68.60 万元，支出决\n"
+        "算为 62.07 万元，完成预算的 90.48%，其中：因公出国（境）\n"
+        "费决算为 40.87 万元，完成预算的 92.68%；公务用车购置及运\n"
+        "行维护费支出决算为 21.20 万元，完成预算的 85.00%。\n"
+        "2025 年度“三公”经费支出决算数小于预算数的主要原因：落实过紧日子要求。\n"
+    )
+    doc = _doc_from_pages(page)
+    issues = list(R33234_NarrativePercentConsistency().apply(doc))
+    assert issues == [], [str(i.message)[:100] for i in issues]
+
+
+def test_p5b_v33_234_real_mismatch_same_clause_still_reported():
+    """同句真实不符仍报错：295→261.85 写 80.00%（应 88.76%）。"""
+    from src.engine.rules_v33 import R33234_NarrativePercentConsistency
+
+    page = (
+        "13、住房保障支出(类)住房改革支出（款）购房补贴（项）。\n"
+        "主要用于：发放购房补贴。年初预算为 295 万元，支出决算为\n"
+        "261.85 万元，完成预算的 80.00%。\n"
+    )
+    doc = _doc_from_pages(page)
+    issues = list(R33234_NarrativePercentConsistency().apply(doc))
+    hits = [i for i in issues if "88.76" in str(i.message)]
+    assert hits and hits[0].severity == "error", [str(i.message)[:100] for i in issues]
+
+
+def test_p5b_v33_234_reason_continues_on_next_page_no_false_warn():
+    """宜川形态（按真实分页复刻）：死亡抚恤 0.00 预算条目独占页段并自带原因；
+    三公总句完成率自洽（63.11%）但页尾截断，原因句在下一页开头——
+    不得报「未说明原因」，也不得跨页把 0.00 与 63.11% 拼接。"""
+    from src.engine.rules_v33 import R33234_NarrativePercentConsistency
+
+    p1 = (
+        "35、社会保障和就业支出（类）抚恤（款）死亡抚恤（项）196.51 万元。\n"
+        "主要用于：死亡抚恤发放。年初预算为 0.00 万元，支出决算为 196.51 万元。\n"
+        "决算数大于预算数的主要原因：项目特殊性年初不做预算。\n"
+    )
+    p2 = (
+        "（一）“三公”经费财政拨款支出决算总体情况说明。\n"
+        "“三公”经费财政拨款支出年初预算为 31.47 万元，支出决\n"
+        "算为 19.86 万元，完成预算的 63.11%，其中：因公出国（境）\n"
+        "费决算为 0.00 万元；公务用车购置及运行维护费支出决算为"
+    )
+    p3 = (
+        "19.56 万元，完成预算的 63.76%；公务接待费支出决算为 0.3 万\n"
+        "元，完成预算的 37.5%。2025 年度“三公”经费支出决算数小于\n"
+        "预算数的主要原因：严控“三公”经费支出、对公车严格管理、节约用车。\n"
+    )
+    doc = _doc_from_pages(p1, p2, p3)
+    issues = list(R33234_NarrativePercentConsistency().apply(doc))
+    assert issues == [], [str(i.message)[:100] for i in issues]

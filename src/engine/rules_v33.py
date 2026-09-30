@@ -7487,25 +7487,39 @@ def _extract_final_formula_rows(rows: List[List[str]]) -> Tuple[List[Dict[str, A
 
 
 _FINAL_ITEM_START_RE = re.compile(r"(?:(?<=\n)|^|\s{2,})(?P<marker>\d+\u3001)")
+# 关键词内允许软换行：文本层页内折行会把「决算 / 预算」拆成「决\n算」，
+# 若不容忍则配对会跨越「其中：」落到子项金额上
+# （MR-P5b，028 号材料 p23 实证：总句预算 68.60 被拼到出国决算 40.87）。
 _FINAL_PREV_YEAR_PERCENT_RE = re.compile(
-    r"(?P<prev_year>20\d{2})\s*年(?:度)?(?:[^。；\n]{0,20})?(?:决算数|支出决算|收入决算|执行数)?\s*为\s*"
+    r"(?P<prev_year>20\d{2})\s*年(?:度)?(?:[^。；\n]{0,20})?(?:决\s*算\s*数|支\s*出\s*决\s*算|收\s*入\s*决\s*算|执\s*行\s*数)?\s*为\s*"
     r"(?P<prev>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元"
     r"[\s\S]{0,120}?"
-    r"(?:20\d{2}\s*年(?:度)?(?:[^。；\n]{0,20})?)?(?:支出)?决算(?:数)?\s*为\s*"
+    r"(?:20\d{2}\s*年(?:度)?(?:[^。；\n]{0,20})?)?(?:支\s*出)?决\s*算(?:\s*数)?\s*为\s*"
     r"(?P<curr>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元"
     r"[\s\S]{0,120}?"
-    r"(?:比|较)(?P=prev_year)\s*年(?:度)?(?:[^。；\n]{0,20})?(?:决算数|支出决算|收入决算|执行数)?\s*"
+    r"(?:比|较)(?P=prev_year)\s*年(?:度)?(?:[^。；\n]{0,20})?(?:决\s*算\s*数|支\s*出\s*决\s*算|收\s*入\s*决\s*算|执\s*行\s*数)?\s*"
     r"(?P<direction>增加|减少)\s*(?P<pct>[0-9][0-9,]*(?:\.[0-9]+)?)%",
     re.S,
 )
 _FINAL_COMPLETION_PERCENT_RE = re.compile(
-    r"年初预算(?:数)?\s*为\s*(?P<budget>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元"
+    r"年初预\s*算(?:\s*数)?\s*为\s*(?P<budget>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元"
     r"[\s\S]{0,120}?"
-    r"(?:支出)?决算(?:数)?\s*为\s*(?P<final>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元"
+    r"(?:支\s*出)?决\s*算(?:\s*数)?\s*为\s*(?P<final>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元"
     r"[\s\S]{0,80}?"
-    r"(?:完成|占)(?:年初)?预算(?:的比重)?(?:的)?\s*(?P<pct>[0-9][0-9,]*(?:\.[0-9]+)?)%",
+    r"(?:完\s*成|占)(?:年初)?预\s*算(?:的比重)?(?:的)?\s*(?P<pct>[0-9][0-9,]*(?:\.[0-9]+)?)%",
     re.S,
 )
+
+
+def _completion_match_crosses_qizhong(match: "re.Match[str]") -> bool:
+    """配对是否跨越「其中：」总-分界限（总句预算不得在子项金额上复算完成率）。"""
+    span = match.string[match.start() : match.end()]
+    qizhong_pos = span.find("其中")
+    if qizhong_pos < 0:
+        return False
+    budget_rel = match.end("budget") - match.start()
+    final_rel = match.start("final") - match.start()
+    return budget_rel < qizhong_pos < final_rel
 _FINAL_COMPLETION_REASON_RE = re.compile(
     r"主要原因(?:是|为)?|原因(?:是|为|如下)|由于|主要系|系因|受[^。；;\n]{0,60}影响|"
     r"(?:^|[。；;，,\s])因(?!公)[^。；;\n]{1,80}",
@@ -7513,11 +7527,20 @@ _FINAL_COMPLETION_REASON_RE = re.compile(
 )
 
 
-def _completion_rate_has_reason(segment: str, match: re.Match[str]) -> bool:
+def _completion_rate_has_reason(
+    segment: str, match: re.Match[str], *, tail: str = ""
+) -> bool:
     window_start = max(0, match.start() - 80)
     window_end = min(len(segment), match.end() + 160)
     window = segment[window_start:window_end]
-    return _FINAL_COMPLETION_REASON_RE.search(window) is not None
+    if _FINAL_COMPLETION_REASON_RE.search(window):
+        return True
+    # MR-P5b：句子在页尾被截断（段尾即页尾）时，原因句可能续在下一页开头，
+    # 续看下页起始避免误报「未说明原因」（宜川 p35→p36 实证）。
+    if tail and match.end() >= len(segment) - 60:
+        if _FINAL_COMPLETION_REASON_RE.search(tail[:240]):
+            return True
+    return False
 _FINAL_ITEM_OPENING_AMOUNT_RE = re.compile(
     r"(?:^|\s)\d+\u3001[\s\S]{0,160}?(?P<front>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元",
     re.S,
@@ -7671,6 +7694,9 @@ class R33234_NarrativePercentConsistency(Rule):
                 reported_pct = parse_number(match.group("pct"))
                 if budget_val is None or final_val is None or reported_pct is None:
                     continue
+                if _completion_match_crosses_qizhong(match):
+                    # 总句预算跨「其中：」拼到子项决算：与 V33-TREND 同纪律，拒配
+                    continue
                 if budget_val <= 0:
                     issues.append(
                         self._issue(
@@ -7684,9 +7710,12 @@ class R33234_NarrativePercentConsistency(Rule):
 
                 expected_pct = final_val / budget_val * 100.0
                 if tolerant_equal(reported_pct, expected_pct, atol=0.5, rtol=0.01):
+                    next_page_text = (
+                        doc.page_texts[page_num] if page_num < len(doc.page_texts) else ""
+                    )
                     if (
                         not tolerant_equal(expected_pct, 100.0, atol=0.5, rtol=0.0)
-                        and not _completion_rate_has_reason(segment, match)
+                        and not _completion_rate_has_reason(segment, match, tail=next_page_text)
                     ):
                         issues.append(
                             self._issue(
