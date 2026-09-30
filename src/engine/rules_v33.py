@@ -883,139 +883,230 @@ class R33005_TableTotalConsistency(Rule):
     _TOTAL_RE = re.compile(r"^(合计|总计)$")
     _EXCLUDE_HEAD = ("其中", "小计", "分项", "人员经费合计", "公用经费合计")
 
+    @staticmethod
+    def _is_headless_table(table: List[List[str]]) -> bool:
+        """MR-P3a：续页无头碎片判定——首行首格为数值、且首行无表头关键词。
+
+        跨页表的续页碎片（表五/表六/表八尾部+合计行）首行是数据行：旧实现
+        把它的数值单元格当「列名」（探针 18 条 FP 的「（列：15,265.70）」即
+        此形态），并只对碎片内的分项求和去比合计行。有表头关键词的首页表
+        不受影响。
+        """
+        if not table or not table[0]:
+            return False
+        row0 = table[0]
+        joined = "".join(str(c or "") for c in row0)
+        if any(
+            kw in joined
+            for kw in ("项目", "科目", "名称", "金额", "合计", "决算数", "预算数", "单位")
+        ):
+            return False
+        for cell in row0:
+            text = str(cell or "").strip()
+            if not text:
+                continue
+            compact = text.replace(",", "").replace("，", "")
+            return compact.replace(".", "", 1).isdigit()
+        return False
+
+    def _check_one_table(
+        self,
+        table: List[List[str]],
+        loc_desc: str,
+        page: int,
+        loc_base: Dict[str, Any],
+    ) -> Tuple[List[Issue], List[str], bool]:
+        """对单张（逻辑）表做「合计 vs 分项和」检查；返回 (issues, contradictions, counted)。"""
+        issues: List[Issue] = []
+        contradictions: List[str] = []
+        money_col_hint = ("金额", "合计", "本年收入", "本年支出", "决算数", "预算数")
+
+        header = [str(x or "") for x in (table[0] if table else [])]
+        header_join = "".join(header)
+
+        # 左右两栏（收入+支出）总表：跳过
+        if ("收入" in header_join) and ("支出" in header_join):
+            return issues, contradictions, False
+
+        # 找“合计/总计”行（第一列严格等于）
+        total_row_idx = None
+        for r, row in enumerate(table):
+            head = str((row[0] if row else "") or "").strip()
+            if head in self._EXCLUDE_HEAD:
+                continue
+            if self._TOTAL_RE.match(head):
+                total_row_idx = r
+                break
+        if total_row_idx is None or total_row_idx < 2:
+            return issues, contradictions, False
+
+        # 选择金额相关的列（优先表头关键词）
+        ncols = max(len(row) for row in table)
+        cand_cols: List[int] = []
+        for c in range(1, ncols):
+            headc = header[c] if c < len(header) else ""
+            if any(h in headc for h in money_col_hint):
+                cand_cols.append(c)
+        if not cand_cols:
+            for c in range(1, ncols):
+                cnt = 0
+                for r in range(0, total_row_idx):
+                    cell = table[r][c] if c < len(table[r]) else None
+                    v = parse_number(cell)
+                    if v is not None and not looks_like_percent(cell):
+                        cnt += 1
+                if cnt >= 3:
+                    cand_cols.append(c)
+        if not cand_cols:
+            return issues, contradictions, False
+
+        # 功能分类层级：只累计叶子行
+        code_rows: List[Tuple[int, str]] = []
+        for r in range(1, total_row_idx):
+            row = table[r]
+            name0 = str((row[0] if row else "") or "")
+            m = re.match(r"^\s*(\d{3,7})", name0)
+            if m:
+                code_rows.append((r, m.group(1)))
+        leaf_len = max((len(c) for _, c in code_rows), default=None)
+
+        for c in cand_cols:
+            total_cell = table[total_row_idx][c] if c < len(table[total_row_idx]) else None
+            total_val = parse_number(total_cell)
+            if total_val is None or looks_like_percent(total_cell):
+                continue
+
+            parts: List[float] = []
+            for r in range(1, total_row_idx):
+                headr = str((table[r][0] if 0 < len(table[r]) else "") or "")
+                if headr in self._EXCLUDE_HEAD or self._TOTAL_RE.match(headr.strip()):
+                    continue
+                if leaf_len is not None:
+                    m = re.match(r"^\s*(\d{3,7})", headr)
+                    if not (m and len(m.group(1)) == leaf_len):
+                        continue
+                cell = table[r][c] if c < len(table[r]) else None
+                v = parse_number(cell)
+                if v is not None and not looks_like_percent(cell):
+                    parts.append(float(v))
+            if len(parts) < 1:
+                continue
+
+            sum_val = float(np.nansum(parts))
+            tol = max(1.0, abs(sum_val) * 0.001)
+            diff = abs(sum_val - (total_val or 0.0))
+            if diff > tol and (total_val == 0 or diff / max(abs(total_val), 1e-6) > 0.5):
+                # MR-1c 哨兵：合计 < 该列最大分项 = 加法合计的数学矛盾
+                # → 解析错位（跨页串行/列漂移）而非材料错误，转人工
+                # （科目编码列按 3/5/7 位约定排除，编码不当分项）
+                col_max = None
+                for r in range(1, total_row_idx):
+                    cell_chk = table[r][c] if c < len(table[r]) else None
+                    if cell_chk is None or looks_like_percent(cell_chk):
+                        continue
+                    compact_chk = str(cell_chk).strip().replace(",", "")
+                    if compact_chk.isdigit() and len(compact_chk) in (3, 5, 7):
+                        continue
+                    v_chk = parse_number(cell_chk)
+                    if v_chk is not None and (col_max is None or float(v_chk) > col_max):
+                        col_max = float(v_chk)
+                if col_max is not None and float(total_val) + 0.01 < col_max:
+                    contradictions.append(
+                        f"{loc_desc} 列{c + 1}：合计{total_val} < 最大分项{col_max}"
+                    )
+                    continue
+
+                # Construct richer issue info
+                col_name = header[c] if c < len(header) else f"第{c+1}列"
+
+                # Build detailed evidence text
+                ev_lines = []
+                ev_lines.append(f"表格位置：{loc_desc}")
+                ev_lines.append(f"检查列名：{col_name}")
+                ev_lines.append(f"表头概览：{' | '.join(header[:5])}..." if len(header)>5 else f"表头概览：{' | '.join(header)}")
+
+                # Add total row context
+                row_cells = [str(x or "") for x in table[total_row_idx]]
+                row_str = " | ".join(row_cells[:8]) + ("..." if len(row_cells)>8 else "")
+                ev_lines.append(f"合计行内容：{row_str}")
+
+                ev_lines.append(f"数值明细：合计值={total_val}, 分项累加={sum_val}")
+                ev_lines.append(f"差异={round(diff, 2)} (允许范围 ±{round(tol, 2)})")
+
+                loc = dict(loc_base)
+                loc.update({"col": c + 1, "total_row": total_row_idx + 1})
+                issues.append(self._issue(
+                    f"{loc_desc}（列：{col_name}） “合计”与分项和不一致：合计={total_val}，分项和={sum_val}（容忍±{round(tol, 2)}）",
+                    loc,
+                    severity="error",
+                    evidence_text="\n".join(ev_lines)
+                ))
+        return issues, contradictions, True
+
     def apply(self, doc: Document) -> List[Issue]:
         issues: List[Issue] = []
-        money_col_hint = ("金额", "合计", "本年收入", "本年支出", "决算数", "预算数")
         checked_tables = 0
         # MR-1c：解析结构性矛盾收集（合计 < 最大分项）
         contradictions: List[str] = []
 
+        # MR-P3a：同一逻辑表的跨页续页碎片不再单独检查（旧实现只加总碎片行
+        # 去比合计行 + 以数值当列名）。凡锚定逻辑表的页域内存在无头碎片的，
+        # 先按 anchor_extent 合并整表语义检查一次；其页域的逐页检查跳过。
+        whole_checked_pages: set = set()
+        anchors = _ensure_table_anchors(doc)
+        for name, pages in anchors.items():
+            if not pages:
+                continue
+            anchor_p = min(pages)
+            later = sorted({pg for pgs in anchors.values() for pg in pgs if pg > anchor_p})
+            end_p = (later[0] - 1) if later else len(doc.page_tables)
+            span_pages = list(range(anchor_p, min(end_p, len(doc.page_tables)) + 1))
+            has_headless_fragment = any(
+                self._is_headless_table(t)
+                for pg in span_pages[1:]
+                if pg - 1 < len(doc.page_tables)
+                for t in doc.page_tables[pg - 1]
+            )
+            if not has_headless_fragment or anchor_p - 1 >= len(doc.page_tables):
+                continue
+            merge_meta: Dict[str, Any] = {}
+            rows = _get_table_rows(doc, name, anchor_extent=True, merge_meta=merge_meta)
+            if merge_meta.get("width_drift"):
+                # 列宽漂移：整表合并不可信，碎片按无头守卫跳过（不硬合）
+                continue
+            if not rows or len(rows) < 3:
+                continue
+            t_issues, t_contra, counted = self._check_one_table(
+                rows, loc_desc=name, page=anchor_p, loc_base={"page": anchor_p, "table": name}
+            )
+            issues.extend(t_issues)
+            contradictions.extend(t_contra)
+            if counted:
+                checked_tables += 1
+            whole_checked_pages.update(pg - 1 for pg in span_pages)
+
         for pidx, tables in enumerate(doc.page_tables):
+            # 已按整表语义检查过的页域：逐页检查跳过（防同表重复报）
+            if pidx in whole_checked_pages:
+                continue
             for tindex, table in enumerate(tables):
                 if not table or len(table) < 3:
                     continue
-
-                header = [str(x or "") for x in (table[0] if table else [])]
-                header_join = "".join(header)
-
-                # 左右两栏（收入+支出）总表：跳过
-                if ("收入" in header_join) and ("支出" in header_join):
+                # MR-P3a：无头碎片（首行首格为数值）——列身份不可知，禁止
+                # 数值当列名；也不得对碎片分项单独求和比合计（跨页断裂假不平）
+                if self._is_headless_table(table):
                     continue
 
-                # 找“合计/总计”行（第一列严格等于）
-                total_row_idx = None
-                for r, row in enumerate(table):
-                    head = str((row[0] if row else "") or "").strip()
-                    if head in self._EXCLUDE_HEAD:
-                        continue
-                    if self._TOTAL_RE.match(head):
-                        total_row_idx = r
-                        break
-                if total_row_idx is None or total_row_idx < 2:
-                    continue
-
-                checked_tables += 1
-
-                # 选择金额相关的列（优先表头关键词）
-                ncols = max(len(row) for row in table)
-                cand_cols: List[int] = []
-                for c in range(1, ncols):
-                    headc = header[c] if c < len(header) else ""
-                    if any(h in headc for h in money_col_hint):
-                        cand_cols.append(c)
-                if not cand_cols:
-                    for c in range(1, ncols):
-                        cnt = 0
-                        for r in range(0, total_row_idx):
-                            cell = table[r][c] if c < len(table[r]) else None
-                            v = parse_number(cell)
-                            if v is not None and not looks_like_percent(cell):
-                                cnt += 1
-                        if cnt >= 3:
-                            cand_cols.append(c)
-                if not cand_cols:
-                    continue
-
-                # 功能分类层级：只累计叶子行
-                code_rows: List[Tuple[int, str]] = []
-                for r in range(1, total_row_idx):
-                    row = table[r]
-                    name0 = str((row[0] if row else "") or "")
-                    m = re.match(r"^\s*(\d{3,7})", name0)
-                    if m:
-                        code_rows.append((r, m.group(1)))
-                leaf_len = max((len(c) for _, c in code_rows), default=None)
-
-                for c in cand_cols:
-                    total_cell = table[total_row_idx][c] if c < len(table[total_row_idx]) else None
-                    total_val = parse_number(total_cell)
-                    if total_val is None or looks_like_percent(total_cell):
-                        continue
-
-                    parts: List[float] = []
-                    for r in range(1, total_row_idx):
-                        headr = str((table[r][0] if 0 < len(table[r]) else "") or "")
-                        if headr in self._EXCLUDE_HEAD or self._TOTAL_RE.match(headr.strip()):
-                            continue
-                        if leaf_len is not None:
-                            m = re.match(r"^\s*(\d{3,7})", headr)
-                            if not (m and len(m.group(1)) == leaf_len):
-                                continue
-                        cell = table[r][c] if c < len(table[r]) else None
-                        v = parse_number(cell)
-                        if v is not None and not looks_like_percent(cell):
-                            parts.append(float(v))
-                    if len(parts) < 1:
-                        continue
-
-                    sum_val = float(np.nansum(parts))
-                    tol = max(1.0, abs(sum_val) * 0.001)
-                    diff = abs(sum_val - (total_val or 0.0))
-                    if diff > tol and (total_val == 0 or diff / max(abs(total_val), 1e-6) > 0.5):
-                        # MR-1c 哨兵：合计 < 该列最大分项 = 加法合计的数学矛盾
-                        # → 解析错位（跨页串行/列漂移）而非材料错误，转人工
-                        # （科目编码列按 3/5/7 位约定排除，编码不当分项）
-                        col_max = None
-                        for r in range(1, total_row_idx):
-                            cell_chk = table[r][c] if c < len(table[r]) else None
-                            if cell_chk is None or looks_like_percent(cell_chk):
-                                continue
-                            compact_chk = str(cell_chk).strip().replace(",", "")
-                            if compact_chk.isdigit() and len(compact_chk) in (3, 5, 7):
-                                continue
-                            v_chk = parse_number(cell_chk)
-                            if v_chk is not None and (col_max is None or float(v_chk) > col_max):
-                                col_max = float(v_chk)
-                        if col_max is not None and float(total_val) + 0.01 < col_max:
-                            contradictions.append(
-                                f"P{pidx + 1} 表格{tindex + 1} 列{c + 1}：合计{total_val} < 最大分项{col_max}"
-                            )
-                            continue
-
-                        # Construct richer issue info
-                        col_name = header[c] if c < len(header) else f"第{c+1}列"
-                        loc_desc = f"P{pidx + 1} 表格{tindex + 1}（列：{col_name}）"
-                        
-                        # Build detailed evidence text
-                        ev_lines = []
-                        ev_lines.append(f"表格位置：第 {pidx + 1} 页, 第 {tindex + 1} 个表格")
-                        ev_lines.append(f"检查列名：{col_name}")
-                        ev_lines.append(f"表头概览：{' | '.join(header[:5])}..." if len(header)>5 else f"表头概览：{' | '.join(header)}")
-                        
-                        # Add total row context
-                        row_cells = [str(x or "") for x in table[total_row_idx]]
-                        row_str = " | ".join(row_cells[:8]) + ("..." if len(row_cells)>8 else "")
-                        ev_lines.append(f"合计行内容：{row_str}")
-                        
-                        ev_lines.append(f"数值明细：合计值={total_val}, 分项累加={sum_val}")
-                        ev_lines.append(f"差异={round(diff, 2)} (允许范围 ±{round(tol, 2)})")
-                        
-                        issues.append(self._issue(
-                            f"{loc_desc} “合计”与分项和不一致：合计={total_val}，分项和={sum_val}（容忍±{round(tol, 2)}）",
-                            {"page": pidx + 1, "table_index": tindex, "col": c + 1, "total_row": total_row_idx + 1},
-                            severity="error",
-                            evidence_text="\n".join(ev_lines)
-                        ))
+                t_issues, t_contra, counted = self._check_one_table(
+                    table,
+                    loc_desc=f"P{pidx + 1} 表格{tindex + 1}",
+                    page=pidx + 1,
+                    loc_base={"page": pidx + 1, "table_index": tindex},
+                )
+                issues.extend(t_issues)
+                contradictions.extend(t_contra)
+                if counted:
+                    checked_tables += 1
         if checked_tables == 0:
             raise RuleDeferred(
                 self.code,
@@ -6906,7 +6997,19 @@ def _extract_header_labels(rows: List[List[str]], depth: int = 3) -> List[str]:
     return headers
 
 
-def _extract_final_formula_rows(rows: List[List[str]]) -> List[Dict[str, Any]]:
+def _extract_final_formula_rows(rows: List[List[str]]) -> Tuple[List[Dict[str, Any]], bool]:
+    """决算明细行抽取：返回 (entries, headers_resolved)。
+
+    MR-P3a：表头关键词（合计/基本支出/项目支出/科目名称）命中才比对；
+    定位不到列时返回 ``([], False)``，调用方必须 RuleDeferred（fail-closed），
+    禁止把数据行当列名按位置猜列（旧「按位置兜底取列」已删——013/015/028
+    探针 9 条 FP 的共因）。
+
+    跨页续行宽收缩（类|款|项编码列收缩，10 列→8 列）的行按行自适应取列
+    （``_adaptive_value_cols``），不再按锚定页列位读窄行——旧实现把名称列
+    读成基本支出金额、合计列读成项目支出金额（013 p15 行 210：
+    1,113.39=1,106.19+7.20 实证自洽却被报勾稽错误）。
+    """
     headers = _extract_header_labels(rows, depth=3)
     norm_headers = [normalize_text(header) for header in headers]
 
@@ -6929,38 +7032,37 @@ def _extract_final_formula_rows(rows: List[List[str]]) -> List[Dict[str, Any]]:
         elif idx_total is None and ("合计" in header) and ("基本支出" not in header) and ("项目支出" not in header):
             idx_total = idx
 
-    if idx_name is None and len(headers) > 3:
-        idx_name = 3
-    if idx_total is None and len(headers) > 4:
-        idx_total = 4
-    if idx_basic is None and len(headers) > 5:
-        idx_basic = 5
-    if idx_project is None and len(headers) > 6:
-        idx_project = 6
-    if None in (idx_total, idx_basic, idx_project):
-        return []
-    if idx_name is None:
-        return []
+    # MR-P3a：删「按位置兜底取列」——表头关键词命中才比对，否则 fail-closed
+    if None in (idx_total, idx_basic, idx_project, idx_name):
+        return [], False
 
     extracted: List[Dict[str, Any]] = []
+    header_width = len(headers)
     start_row = min(3, len(rows))
     for row in rows[start_row:]:
         cells = [str(cell or "").strip() for cell in row]
-        needed_indexes = [idx_total, idx_basic, idx_project, idx_name]
-        if any(idx is None or idx >= len(cells) for idx in needed_indexes):
-            continue
-
         class_code = cells[0] if cells else ""
         if not re.fullmatch(r"\d{3}", class_code):
             continue
 
-        name = cells[idx_name]
+        if len(cells) == header_width:
+            name = cells[idx_name] if idx_name < len(cells) else ""
+            total = parse_number(cells[idx_total]) if idx_total < len(cells) else None
+            basic = parse_number(cells[idx_basic]) if idx_basic < len(cells) else None
+            project = parse_number(cells[idx_project]) if idx_project < len(cells) else None
+        else:
+            # 跨页续行：列语义整体位移，按行自适应定位（名称/合计/基本/项目）
+            adaptive = _adaptive_value_cols(row)
+            if adaptive is None:
+                continue
+            name_col, t_col, b_col, p_col = adaptive
+            name = cells[name_col] if name_col < len(cells) else ""
+            total = parse_number(cells[t_col]) if t_col < len(cells) else None
+            basic = parse_number(cells[b_col]) if b_col < len(cells) else None
+            project = parse_number(cells[p_col]) if p_col < len(cells) else None
         if not name or ("\u5408\u8ba1" in name) or ("\u603b\u8ba1" in name):
             continue
 
-        total = parse_number(cells[idx_total])
-        basic = parse_number(cells[idx_basic])
-        project = parse_number(cells[idx_project])
         if total is None or basic is None or project is None:
             continue
 
@@ -6980,7 +7082,7 @@ def _extract_final_formula_rows(rows: List[List[str]]) -> List[Dict[str, Any]]:
                 "project": float(project),
             }
         )
-    return extracted
+    return extracted, True
 
 
 _FINAL_ITEM_START_RE = re.compile(r"(?:(?<=\n)|^|\s{2,})(?P<marker>\d+\u3001)")
@@ -7078,7 +7180,15 @@ class R33233_DetailRowFormulaConsistency(Rule):
                 continue
             found_any = True
             table_page = _get_first_anchor_page(doc, table_name) or 1
-            for entry in _extract_final_formula_rows(rows):
+            entries, headers_resolved = _extract_final_formula_rows(rows)
+            if not headers_resolved:
+                # MR-P3a：表头关键词定位不到 合计/基本支出/项目支出 列 →
+                # fail-closed 转人工（禁止按位置猜测取列）
+                unresolved.append(
+                    f"{table_name} 表头关键词无法定位合计/基本支出/项目支出列，明细勾稽按位置猜测已禁用"
+                )
+                continue
+            for entry in entries:
                 calc = entry["basic"] + entry["project"]
                 if tolerant_equal(entry["total"], calc, atol=1.0, rtol=0.001):
                     continue

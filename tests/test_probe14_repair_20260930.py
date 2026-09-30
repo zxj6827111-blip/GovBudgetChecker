@@ -31,8 +31,10 @@ if str(ROOT) not in sys.path:
 
 from src.engine.rule_outcome import RuleDeferred  # noqa: E402
 from src.engine.rules_v33 import (  # noqa: E402
+    R33005_TableTotalConsistency,
     R33200_InterTable_T1_T2,
     R33201_InterTable_T1_T3,
+    R33233_DetailRowFormulaConsistency,
     R33TrendCompletionRate,
     _two_sided_side_value,
     build_document,
@@ -271,6 +273,119 @@ def test_p2_total_rate_claim_still_binds_total_disclosures():
     doc.page_texts[-1] = doc.page_texts[-1].replace("80.72%", "90.00%")
     issues = R33TrendCompletionRate().apply(doc)
     assert any("90.00" in str(getattr(i, "location", {}).get("declared_completion_rate", "")) for i in issues)
+
+
+# ---------------------------------------------------------------------------
+# MR-P3a：V33-005 跨页断裂/无头碎片 + V33-233 列身份
+# ---------------------------------------------------------------------------
+
+
+def test_p3a_headless_fragment_detection():
+    """无头碎片判定：首行首格为数值 → True；带表头关键词 → False。"""
+    rule = R33005_TableTotalConsistency()
+    assert rule._is_headless_table(
+        [["2140112", "公路运输管理", "24,758.24", "15,265.70", "9,492.53"]]
+    )
+    assert not rule._is_headless_table(
+        [["项目", "", "本年支出合计", "基本支出", "项目支出"]]
+    )
+    assert not rule._is_headless_table([])
+    assert not rule._is_headless_table([[]])
+
+
+def test_p3a_v33_005_fragment_merged_into_whole_table():
+    """正例（探针 009 p23 形态）：跨页续页碎片不再单独检查——整表按
+    anchor_extent 合并后自洽 → 0 finding（旧实现报「列：15,265.70」假不平）。"""
+    header = ["功能分类科目编码", "科目名称", "本年支出合计", "基本支出", "项目支出"]
+    anchor_rows = [
+        header,
+        ["功能分类科目编码", "科目名称", "", "", ""],
+        ["201", "一般公共服务支出", "300.00", "100.00", "200.00"],
+        ["合计", "", "400.00", "150.00", "250.00"],
+    ]
+    fragment = [
+        ["202", "外交支出", "100.00", "50.00", "50.00"],
+        ["合计", "", "500.00", "200.00", "300.00"],
+    ]
+    doc = build_document(
+        path="p3a-whole-table.pdf",
+        page_texts=["某某局 2025 年度部门决算公开", "五、支出决算表", "（续表）"],
+        page_tables=[[], [anchor_rows], [fragment]],
+        filesize=0,
+    )
+    issues = R33005_TableTotalConsistency().apply(doc)
+    assert issues == [], [getattr(i, "message", "") for i in issues]
+
+
+def test_p3a_v33_005_real_whole_table_mismatch_still_reported():
+    """正例（防哑）：整表真实不平仍报 error，且归并为整表 1 条（碎片页
+    不再重复报）。"""
+    anchor_rows = [
+        ["功能分类科目编码", "科目名称", "本年支出合计", "基本支出", "项目支出"],
+        ["201", "一般公共服务支出", "100.00", "100.00", "0.00"],
+        ["合计", "", "500.00", "100.00", "400.00"],
+    ]
+    fragment = [["202", "外交支出", "10.00", "10.00", "0.00"]]
+    doc = build_document(
+        path="p3a-real-mismatch.pdf",
+        page_texts=["某某局 2025 年度部门决算公开", "五、支出决算表", "（续表）"],
+        page_tables=[[], [anchor_rows], [fragment]],
+        filesize=0,
+    )
+    issues = R33005_TableTotalConsistency().apply(doc)
+    assert len(issues) == 1
+    assert issues[0].severity == "error"
+    assert "支出决算表" in issues[0].message
+
+
+def test_p3a_v33_233_narrow_continuation_rows_read_adaptively():
+    """正例（探针 013 p15 形态）：锚定页 10 列、续页 8 列——窄行按行自适应
+    取列，1,113.39=1,106.19+7.20 自洽 → 0 finding（旧实现把名称读成
+    1,106.19、合计读成 7.20 报 4 条假勾稽）。"""
+    wide_header = [
+        ["项目", "", "", "", "本年支出合计", "基本支出", "项目支出", "上缴上级支出", "经营支出", "对附属单位补助支出"],
+        ["功能分类科目编码", "", "", "科目名称", "", "", "", "", "", ""],
+        ["类", "款", "项", "合计", "决算数", "决算数", "决算数", "决算数", "决算数", "决算数"],
+    ]
+    rows = [
+        *wide_header,
+        ["201", "", "", "一般公共服务支出", "300.00", "200.00", "100.00", "0.00", "0.00", "0.00"],
+        ["210", "卫生健康支出", "1,113.39", "1,106.19", "7.20", "0.00", "0.00", "0.00"],
+    ]
+    t5_rows = [
+        ["项目", "", "本年支出合计", "基本支出", "项目支出"],
+        ["功能分类科目编码", "科目名称", "", "", ""],
+        ["201", "一般公共服务支出", "300.00", "200.00", "100.00"],
+    ]
+    doc = build_document(
+        path="p3a-narrow-rows.pdf",
+        page_texts=[
+            "某某局 2025 年度部门决算公开",
+            "三、支出决算表",
+            "五、一般公共预算财政拨款支出决算表",
+        ],
+        page_tables=[[], [rows], [t5_rows]],
+        filesize=0,
+    )
+    issues = R33233_DetailRowFormulaConsistency().apply(doc)
+    assert issues == [], [getattr(i, "message", "") for i in issues]
+
+
+def test_p3a_v33_233_unresolved_headers_fail_closed():
+    """反例：表头关键词定位不到 合计/基本支出/项目支出 → RuleDeferred
+    （fail-closed），不再按位置兜底取列。"""
+    rows = [
+        ["甲", "乙", "丙"],
+        ["210", "卫生健康支出", "1,113.39"],
+    ]
+    doc = build_document(
+        path="p3a-no-headers.pdf",
+        page_texts=["某某局 2025 年度部门决算公开", "三、支出决算表"],
+        page_tables=[[[], rows]],
+        filesize=0,
+    )
+    with pytest.raises(RuleDeferred):
+        R33233_DetailRowFormulaConsistency().apply(doc)
 
 
 # ---------------------------------------------------------------------------
