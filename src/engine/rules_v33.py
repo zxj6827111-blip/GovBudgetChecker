@@ -4992,6 +4992,105 @@ class R33211_T3_RowTotal(Rule):
 _AMOUNT_DIFF_EPS = 1e-6
 
 
+# MR-P3b：纵向汇总的解析漏行哨兵。科目编码在页文本可见、表格解析却缺失
+# （行粘页码/跨页漏行）时，层级汇总建立在残缺行集上，任何「父≠子之和」
+# 都可能是解析损失而非材料错误——必须 fail-closed 转人工，不得报 error
+# （探针 009 V33-240×2 / V33-241×3、025 V33-241×1 实证）。
+_TEXT_CODE_RE = re.compile(r"(?<![\d.])(\d{3,9})(?=\s*[一-龥])")
+
+
+def _table_full_extent_span(doc: Document, table_name: str) -> Tuple[int, int]:
+    """full_extent 语义的页域（锚点页 → 下一任意表锚点前一页）。"""
+    p = _get_first_anchor_page(doc, table_name)
+    if not p:
+        return 0, 0
+    anchors = _ensure_table_anchors(doc)
+    later = sorted({pg for pages in anchors.values() for pg in pages if pg > p})
+    end_page = (later[0] - 1) if later else len(doc.page_tables)
+    return p, min(end_page, len(doc.page_texts))
+
+
+def _text_codes_in_span(doc: Document, p_start: int, p_end: int) -> Dict[str, int]:
+    """页文本中的科目编码候选 → 首见页码。
+
+    3/5/7 位直取；6/8/9 位按「行粘页码剥离」感知——剥 1~3 位前导页码数字
+    后须为合法 5/7 位码（探针 009 p11「11」+2101101 案例）。仅作漏行证据，
+    不回填表格数据。
+    """
+    found: Dict[str, int] = {}
+    if p_start < 1:
+        return found
+    for pg in range(p_start, min(p_end, len(doc.page_texts)) + 1):
+        for line in str(doc.page_texts[pg - 1] or "").splitlines():
+            for m in _TEXT_CODE_RE.finditer(line):
+                token = m.group(1)
+                if len(token) in (3, 5, 7):
+                    found.setdefault(token, pg)
+                elif len(token) in (6, 8, 9):
+                    for cut in range(1, 4):
+                        rest = token[cut:]
+                        if len(rest) in (5, 7) and rest.isdigit():
+                            found.setdefault(rest, pg)
+    return found
+
+
+def _missing_code_evidence(
+    doc: Document,
+    table_name: str,
+    rows: List[List[str]],
+    mismatched_parents: set,
+) -> List[str]:
+    """纵向汇总候选失衡的漏行取证：失衡父科目前缀下、页文本可见而表格
+    解析缺失的科目编码列表（code@page）。空列表 = 无漏行证据，失衡可按
+    材料真实差异报告。"""
+    if not mismatched_parents:
+        return []
+    row_codes: set = set()
+    for row in rows:
+        for cell in row[:4]:
+            s = str(cell or "").strip()
+            if s.isdigit() and len(s) in (3, 5, 7):
+                row_codes.add(s)
+    p_start, p_end = _table_full_extent_span(doc, table_name)
+    text_codes = _text_codes_in_span(doc, p_start, p_end)
+    evidence: List[str] = []
+    for code, pg in sorted(text_codes.items(), key=lambda kv: (kv[1], kv[0])):
+        if code in row_codes:
+            continue
+        if any(
+            parent == "TOTAL" or code.startswith(parent)
+            for parent in mismatched_parents
+        ):
+            evidence.append(f"{code}(p{pg})")
+    return evidence
+
+
+def _raise_deferred_on_missing_rows(
+    code: str,
+    doc: Document,
+    table_label: str,
+    rows: List[List[str]],
+    mismatched_parents: set,
+    partial_issues: List[Issue],
+) -> None:
+    """存在漏行证据时 fail-closed：转人工并附正面取证（漏行 code@page）。"""
+    evidence = _missing_code_evidence(doc, table_label, rows, mismatched_parents)
+    if not evidence:
+        return
+    shown = "、".join(evidence[:8]) + ("…" if len(evidence) > 8 else "")
+    raise RuleDeferred(
+        code,
+        detail=(
+            f"{table_label} 纵向汇总检测到页文本可见而表格解析缺失的科目编码"
+            f"（疑似行粘页码/跨页漏行）：{shown}，层级汇总建立在残缺行集上"
+        ),
+        partial_issues=partial_issues,
+        unresolved_reasons=[
+            f"{table_label} 纵向汇总疑似解析漏行（{shown}），转人工复核"
+        ],
+    )
+
+
 class R33240_Table2_IncomeAdvancedCheck(Rule):
     """表二（收入决算表）高级校验：横向求和(强校验0.01) + 纵向层级汇总(容差校验0.01)"""
     code, severity = "V33-240", "error"
@@ -5117,11 +5216,14 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
                         evidence_text=f"表格：收入决算表\n行号：{r_idx+1}\n行内容：{row_txt[:100]}...\n合计值：{total_val}\n分项之和：{source_sum} ({source_detail})"
                     ))
         
-        # D. 纵向层级汇总校验（0.01容差）
+        # D. 纵向层级汇总校验（0.01容差）——MR-P3b：候选先收集，漏行取证后
+        # 放行；失衡父科目前缀下存在「页文本可见而表格解析缺失」的科目编码
+        # （行粘页码/跨页漏行）时 fail-closed 转人工，不报 error
+        vertical_candidates: List[Dict[str, Any]] = []
         level_1 = [k for k, v in hierarchy_data.items() if v["level"] == 1]
         level_2 = [k for k, v in hierarchy_data.items() if v["level"] == 2]
         level_3 = [k for k, v in hierarchy_data.items() if v["level"] == 3]
-        
+
         for parent_code in level_2:
             parent = hierarchy_data[parent_code]
             children = [hierarchy_data[c] for c in level_3 if c.startswith(parent_code)]
@@ -5130,12 +5232,12 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
                 # 统一舍入包络分级：0.0x 级尾差属显示舍入（V33-120 已出提示），不再按 error 误报
                 diff_level, diff = classify_amount_diff(parent["total"], child_sum, n_children=len(children))
                 if diff_level == "mismatch":
-                    issues.append(self._issue(
-                        f"【收入决算表】款级({parent_code} {parent['name']})纵向汇总不平：款({parent['total']:.2f}) ≠ 项之和({child_sum:.2f})，差额={diff:.2f}",
-                        {"table": "收入决算表", "code": parent_code, "diff": diff, "type": "vertical"}, "error",
-                        evidence_text=f"表格：收入决算表\n科目：{parent_code} {parent['name']}\n该科目金额：{parent['total']}\n下级科目之和：{child_sum}"
-                    ))
-        
+                    vertical_candidates.append({
+                        "parent": parent_code, "name": parent["name"],
+                        "total": parent["total"], "child_sum": child_sum, "diff": diff,
+                        "kind": "款级", "self_label": "款", "child_label": "项之和",
+                    })
+
         for parent_code in level_1:
             parent = hierarchy_data[parent_code]
             children = [hierarchy_data[c] for c in level_2 if c.startswith(parent_code)]
@@ -5143,23 +5245,41 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
                 child_sum = sum(c["total"] for c in children)
                 diff_level, diff = classify_amount_diff(parent["total"], child_sum, n_children=len(children))
                 if diff_level == "mismatch":
-                    issues.append(self._issue(
-                        f"【收入决算表】类级({parent_code} {parent['name']})纵向汇总不平：类({parent['total']:.2f}) ≠ 款之和({child_sum:.2f})，差额={diff:.2f}",
-                        {"table": "收入决算表", "code": parent_code, "diff": diff, "type": "vertical"}, "error",
-                        evidence_text=f"表格：收入决算表\n科目：{parent_code} {parent['name']}\n该科目金额：{parent['total']}\n下级科目之和：{child_sum}"
-                    ))
-        
+                    vertical_candidates.append({
+                        "parent": parent_code, "name": parent["name"],
+                        "total": parent["total"], "child_sum": child_sum, "diff": diff,
+                        "kind": "类级", "self_label": "类", "child_label": "款之和",
+                    })
+
         total_row = hierarchy_data.get("TOTAL")
         if total_row and level_1:
             level_1_sum = sum(hierarchy_data[c]["total"] for c in level_1)
             diff_level, diff = classify_amount_diff(total_row["total"], level_1_sum, n_children=len(level_1))
             if diff_level == "mismatch":
+                vertical_candidates.append({
+                    "parent": "TOTAL", "name": "合计",
+                    "total": total_row["total"], "child_sum": level_1_sum, "diff": diff,
+                    "kind": "合计行", "self_label": "合计", "child_label": "各类之和",
+                })
+
+        if vertical_candidates:
+            parents = {c["parent"] for c in vertical_candidates}
+            _raise_deferred_on_missing_rows(
+                self.code, doc, "收入决算表", t2_rows, parents, issues
+            )
+            for cand in vertical_candidates:
                 issues.append(self._issue(
-                    f"【收入决算表】合计行纵向汇总不平：合计({total_row['total']:.2f}) ≠ 各类之和({level_1_sum:.2f})，差额={diff:.2f}",
-                    {"table": "收入决算表", "diff": diff, "type": "vertical_total"}, "error",
-                    evidence_text=f"表格：收入决算表\n合计行金额：{total_row['total']}\n类级科目汇总：{level_1_sum}"
+                    f"【收入决算表】{cand['kind']}({cand['parent']} {cand['name']})纵向汇总不平："
+                    f"{cand['self_label']}({cand['total']:.2f}) ≠ {cand['child_label']}({cand['child_sum']:.2f})，差额={cand['diff']:.2f}",
+                    {"table": "收入决算表", "code": cand["parent"], "diff": cand["diff"], "type": "vertical"
+                     if cand["kind"] != "合计行" else "vertical_total"},
+                    "error",
+                    evidence_text=(
+                        f"表格：收入决算表\n科目：{cand['parent']} {cand['name']}\n"
+                        f"该科目金额：{cand['total']}\n下级科目之和：{cand['child_sum']}"
+                    ),
                 ))
-        
+
         return issues
 
 
@@ -5171,6 +5291,8 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
     TOTAL_COL_KEYWORDS = ["合计", "本年支出合计", "支出合计"]
     BASIC_COL_KEYWORDS = ["基本支出"]
     PROJECT_COL_KEYWORDS = ["项目支出"]
+    # MR-P3b：合计的其余组成口径列（有则纳入横向求和）
+    EXTRA_COL_KEYWORDS = ("上缴上级支出", "经营支出", "对附属单位补助支出", "补助附属单位支出")
     
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
@@ -5186,6 +5308,7 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
         col_project_idx = -1
         col_code_indices = []  # 编码列（类/款/项）
         col_name_idx = -1
+        col_extra_cols: List[Tuple[int, str]] = []  # MR-P3b：口径列 (索引, 标签)
         
         for r_idx, row in enumerate(t3_rows[:5]):
             row_txt = "".join([str(c) for c in row if c])
@@ -5211,6 +5334,12 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
                         col_code_indices.append(c_idx)
                     if col_name_idx == -1 and ("科目名称" in cell_str or "名称" in cell_str):
                         col_name_idx = c_idx
+                    # MR-P3b：口径列补全（上缴上级/经营/对附属单位补助）
+                    for extra_kw in self.EXTRA_COL_KEYWORDS:
+                        if extra_kw in cell_str and not any(
+                            ci == c_idx for ci, _ in col_extra_cols
+                        ):
+                            col_extra_cols.append((c_idx, extra_kw))
         
         # Default layout: [类, 款, 项, 名称, 合计, 基本, 项目]
         if col_total_idx == -1:
@@ -5296,6 +5425,16 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
                 v = parse_number(row[col_project_idx])
                 if v is not None:
                     project_val = v
+
+            # MR-P3b：口径列补全——上缴上级支出/经营支出/对附属单位补助支出
+            # 属合计的组成部分（026 探针：合计=基本+项目+经营 38.26 表自洽），
+            # 缺了它们横向公式必然「不平」
+            extra_vals: List[Tuple[str, float]] = []
+            for extra_idx, extra_label in col_extra_cols:
+                if extra_idx < len(row):
+                    v = parse_number(row[extra_idx])
+                    if v is not None and v != 0.0:
+                        extra_vals.append((extra_label, v))
             
             if code or level == 0:
                 hierarchy_data[code if code else f"ROW_{r_idx}"] = {
@@ -5304,23 +5443,31 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
                     "row_idx": r_idx + 1, "code": code
                 }
             
-            # C. 横向求和校验（0.01容差）：合计 = 基本 + 项目
+            # C. 横向求和校验（0.01容差）：合计 = 基本 + 项目 +（有则加）口径列
             if level >= 0 and total_val > 0.01:
-                calc_sum = basic_val + project_val
+                calc_sum = basic_val + project_val + sum(v for _, v in extra_vals)
                 diff = abs(total_val - calc_sum)
-                
+
                 if diff > 0.01 + _AMOUNT_DIFF_EPS:
+                    extra_part = "".join(
+                        f"+{label}({v:.2f})" for label, v in extra_vals
+                    )
+                    extra_detail = "".join(
+                        f"\n{label}：{v:.2f}" for label, v in extra_vals
+                    )
                     issues.append(self._issue(
-                        f"【支出决算表】第{r_idx+1}行横向求和不平：合计({total_val:.2f}) ≠ 基本({basic_val:.2f})+项目({project_val:.2f})={calc_sum:.2f}，差额={diff:.2f}。科目：{code} {name}",
+                        f"【支出决算表】第{r_idx+1}行横向求和不平：合计({total_val:.2f}) ≠ 基本({basic_val:.2f})+项目({project_val:.2f}){extra_part}={calc_sum:.2f}，差额={diff:.2f}。科目：{code} {name}",
                         {"table": "支出决算表", "row": r_idx+1, "code": code, "diff": diff}, "error",
-                        evidence_text=f"表格：支出决算表\n行号：{r_idx+1}\n科目：{code} {name}\n合计：{total_val}\n基本支出：{basic_val}\n项目支出：{project_val}"
+                        evidence_text=f"表格：支出决算表\n行号：{r_idx+1}\n科目：{code} {name}\n合计：{total_val}\n基本支出：{basic_val}\n项目支出：{project_val}{extra_detail}"
                     ))
         
-        # D. 纵向层级汇总校验（0.01容差）
+        # D. 纵向层级汇总校验（0.01容差）——MR-P3b：候选先收集，漏行取证后
+        # 放行（同 V33-240 的 fail-closed 纪律）
+        vertical_candidates: List[Dict[str, Any]] = []
         level_1 = [k for k, v in hierarchy_data.items() if v["level"] == 1]
         level_2 = [k for k, v in hierarchy_data.items() if v["level"] == 2]
         level_3 = [k for k, v in hierarchy_data.items() if v["level"] == 3]
-        
+
         for parent_code in level_2:
             parent = hierarchy_data[parent_code]
             children = [hierarchy_data[c] for c in level_3 if c.startswith(parent_code)]
@@ -5329,12 +5476,12 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
                 # 统一舍入包络分级：0.0x 级尾差属显示舍入（V33-120 已出提示），不再按 error 误报
                 diff_level, diff = classify_amount_diff(parent["total"], child_sum, n_children=len(children))
                 if diff_level == "mismatch":
-                    issues.append(self._issue(
-                        f"【支出决算表】款级({parent_code} {parent['name']})纵向汇总不平：款({parent['total']:.2f}) ≠ 项之和({child_sum:.2f})，差额={diff:.2f}",
-                        {"table": "支出决算表", "code": parent_code, "diff": diff, "type": "vertical"}, "error",
-                        evidence_text=f"表格：支出决算表\n科目：{parent_code} {parent['name']}\n款金额：{parent['total']}\n下级项之和：{child_sum}"
-                    ))
-        
+                    vertical_candidates.append({
+                        "parent": parent_code, "name": parent["name"],
+                        "total": parent["total"], "child_sum": child_sum, "diff": diff,
+                        "kind": "款级", "self_label": "款", "child_label": "项之和",
+                    })
+
         for parent_code in level_1:
             parent = hierarchy_data[parent_code]
             children = [hierarchy_data[c] for c in level_2 if c.startswith(parent_code)]
@@ -5342,23 +5489,41 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
                 child_sum = sum(c["total"] for c in children)
                 diff_level, diff = classify_amount_diff(parent["total"], child_sum, n_children=len(children))
                 if diff_level == "mismatch":
-                    issues.append(self._issue(
-                        f"【支出决算表】类级({parent_code} {parent['name']})纵向汇总不平：类({parent['total']:.2f}) ≠ 款之和({child_sum:.2f})，差额={diff:.2f}",
-                        {"table": "支出决算表", "code": parent_code, "diff": diff, "type": "vertical"}, "error",
-                        evidence_text=f"表格：支出决算表\n科目：{parent_code} {parent['name']}\n类金额：{parent['total']}\n下级款之和：{child_sum}"
-                    ))
-        
+                    vertical_candidates.append({
+                        "parent": parent_code, "name": parent["name"],
+                        "total": parent["total"], "child_sum": child_sum, "diff": diff,
+                        "kind": "类级", "self_label": "类", "child_label": "款之和",
+                    })
+
         total_row = hierarchy_data.get("TOTAL")
         if total_row and level_1:
             level_1_sum = sum(hierarchy_data[c]["total"] for c in level_1)
             diff_level, diff = classify_amount_diff(total_row["total"], level_1_sum, n_children=len(level_1))
             if diff_level == "mismatch":
+                vertical_candidates.append({
+                    "parent": "TOTAL", "name": "合计",
+                    "total": total_row["total"], "child_sum": level_1_sum, "diff": diff,
+                    "kind": "合计行", "self_label": "合计", "child_label": "各类之和",
+                })
+
+        if vertical_candidates:
+            parents = {c["parent"] for c in vertical_candidates}
+            _raise_deferred_on_missing_rows(
+                self.code, doc, "支出决算表", t3_rows, parents, issues
+            )
+            for cand in vertical_candidates:
                 issues.append(self._issue(
-                    f"【支出决算表】合计行纵向汇总不平：合计({total_row['total']:.2f}) ≠ 各类之和({level_1_sum:.2f})，差额={diff:.2f}",
-                    {"table": "支出决算表", "diff": diff, "type": "vertical_total"}, "error",
-                    evidence_text=f"表格：支出决算表\n合计行金额：{total_row['total']}\n各一级科目汇总：{level_1_sum}"
+                    f"【支出决算表】{cand['kind']}({cand['parent']} {cand['name']})纵向汇总不平："
+                    f"{cand['self_label']}({cand['total']:.2f}) ≠ {cand['child_label']}({cand['child_sum']:.2f})，差额={cand['diff']:.2f}",
+                    {"table": "支出决算表", "code": cand["parent"], "diff": cand["diff"],
+                     "type": "vertical" if cand["kind"] != "合计行" else "vertical_total"},
+                    "error",
+                    evidence_text=(
+                        f"表格：支出决算表\n科目：{cand['parent']} {cand['name']}\n"
+                        f"{cand['self_label']}金额：{cand['total']}\n下级科目之和：{cand['child_sum']}"
+                    ),
                 ))
-        
+
         return issues
 
 

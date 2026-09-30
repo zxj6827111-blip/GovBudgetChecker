@@ -35,6 +35,8 @@ from src.engine.rules_v33 import (  # noqa: E402
     R33200_InterTable_T1_T2,
     R33201_InterTable_T1_T3,
     R33233_DetailRowFormulaConsistency,
+    R33240_Table2_IncomeAdvancedCheck,
+    R33241_Table3_ExpenseAdvancedCheck,
     R33TrendCompletionRate,
     _two_sided_side_value,
     build_document,
@@ -386,6 +388,96 @@ def test_p3a_v33_233_unresolved_headers_fail_closed():
     )
     with pytest.raises(RuleDeferred):
         R33233_DetailRowFormulaConsistency().apply(doc)
+
+
+# ---------------------------------------------------------------------------
+# MR-P3b：V33-240/241 口径列补全 + 纵向漏行 fail-closed
+# ---------------------------------------------------------------------------
+
+
+def test_p3b_v33_241_extra_scope_columns_close_horizontal():
+    """正例（探针 026 形态）：合计=基本+项目+经营支出 38.26 表自洽 →
+    横向公式纳入口径列后 0 finding（旧实现报 4 条假不平）。"""
+    rows = [
+        ["项目", "", "本年支出合计", "基本支出", "项目支出", "上缴上级支出", "经营支出", "对附属单位补助支出"],
+        ["功能分类科目编码", "科目名称", "", "", "", "", "", ""],
+        ["合计", "", "112,586.95", "47,927.50", "64,621.18", "", "38.26", ""],
+        ["201", "一般公共服务支出", "112,586.95", "47,927.50", "64,621.18", "", "38.26", ""],
+    ]
+    doc = build_document(
+        path="p3b-extra-cols.pdf",
+        page_texts=["某某局 2025 年度部门决算公开", "三、支出决算表"],
+        page_tables=[[], [rows]],
+        filesize=0,
+    )
+    issues = R33241_Table3_ExpenseAdvancedCheck().apply(doc)
+    assert issues == [], [getattr(i, "message", "") for i in issues]
+
+
+def test_p3b_v33_240_genuine_horizontal_mismatch_still_reported():
+    """正例（防哑，探针 019 形态）：合计列漏加其他收入 14.05/13.00 的真实
+    横向不平必须保留为 error（V33-240 家族最重要的正向钉线）。"""
+    t2_rows = [
+        ["项目", "本年收入合计", "财政拨款收入", "上级补助收入", "事业收入", "经营收入", "附属单位上缴收入", "其他收入"],
+        ["功能分类科目编码", "科目名称", "", "", "", "", "", ""],
+        ["合计", "141009.68", "140995.63", "0.00", "0.00", "0.00", "0.00", "14.05"],
+        ["201", "140995.63", "140995.63", "0.00", "0.00", "0.00", "0.00", "14.05"],
+        ["206", "14.05", "0.00", "0.00", "0.00", "0.00", "0.00", "14.05"],
+    ]
+    doc = build_document(
+        path="p3b-real-horizontal.pdf",
+        page_texts=["某某局 2025 年度部门决算公开", "二、收入决算表"],
+        page_tables=[[], [t2_rows]],
+        filesize=0,
+    )
+    issues = R33240_Table2_IncomeAdvancedCheck().apply(doc)
+    assert len(issues) == 1
+    assert issues[0].severity == "error"
+    assert "14.05" in issues[0].message
+
+
+def test_p3b_vertical_mismatch_with_text_visible_missing_code_defers():
+    """反例（探针 009 形态）：款金额 ≠ 项之和，但缺失项的编码在页文本
+    可见（跨页漏行）→ RuleDeferred fail-closed，不报 error。"""
+    t3_rows = [
+        ["项目", "", "本年支出合计", "基本支出", "项目支出"],
+        ["功能分类科目编码", "科目名称", "", "", ""],
+        ["21401", "公路水路运输", "348,979.41", "51,126.93", "297,852.48"],
+        ["2140101", "行政运行", "31,075.00", "30,995.60", "79.40"],
+    ]
+    doc = build_document(
+        path="p3b-missing-row.pdf",
+        page_texts=[
+            "某某局 2025 年度部门决算公开",
+            "三、支出决算表",
+            "2140106 公路养护 193,201.13 0.00 193,201.13",
+        ],
+        page_tables=[[], [t3_rows], []],
+        filesize=0,
+    )
+    with pytest.raises(RuleDeferred) as excinfo:
+        R33241_Table3_ExpenseAdvancedCheck().apply(doc)
+    assert "2140106" in str(excinfo.value.detail)
+
+
+def test_p3b_vertical_mismatch_without_missing_code_still_reported():
+    """正例（探针 020 类级 208 形态）：文本与表格一致、无漏行证据时，
+    纵向失衡照常报 error（不得以 fail-closed 吞掉真实不平）。"""
+    t3_rows = [
+        ["项目", "", "本年支出合计", "基本支出", "项目支出"],
+        ["功能分类科目编码", "科目名称", "", "", ""],
+        ["208", "社会保障和就业支出", "164,977.86", "95,823.79", "69,154.06"],
+        ["20805", "行政事业单位养老支出", "15,366.12", "15,366.12", "0.00"],
+        ["2080501", "行政单位离退休", "15,366.12", "15,366.12", "0.00"],
+    ]
+    doc = build_document(
+        path="p3b-real-vertical.pdf",
+        page_texts=["某某局 2025 年度部门决算公开", "三、支出决算表"],
+        page_tables=[[], [t3_rows], []],
+        filesize=0,
+    )
+    issues = R33241_Table3_ExpenseAdvancedCheck().apply(doc)
+    assert any("纵向汇总不平" in getattr(i, "message", "") for i in issues)
 
 
 # ---------------------------------------------------------------------------
