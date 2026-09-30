@@ -668,3 +668,90 @@ def test_p6_nar_repeat_dual_amount_equal_passes():
 # ---------------------------------------------------------------------------
 # TP 保留钉线：10 条真阳性（键 = 规则 × 材料 × 关键数字）
 # ---------------------------------------------------------------------------
+
+#: 裁决文档（docs/B1_PROBE14_FPFN_ADJUDICATION_20260930.md）逐条实证的
+#: 10 条 TP。键 = 规则 × 材料 × 关键数字；容差沿用 classify_amount_diff
+#: 的包络口径（差值数字以文本形式包含在 message/location 中断言）。
+#: 语料 PDF 不入 git → 干净 checkout 上 skip；探针重放是主验收面。
+
+_TP_PINS = [
+    # (doc_id, 规则类名, 必含关键字串列表, 期望 severity)
+    ("DOC-B1-015", "R33242_Table4_ComprehensiveCheck", ["955.96"], "error"),
+    ("DOC-B1-019", "R33110_BudgetVsFinal_TextConsistency", ["24.00", "22.17"], "error"),
+    ("DOC-B1-015", "R33115_TotalSheetCheck", ["1246835.62", "1246805.63"], "error"),
+    ("DOC-B1-028", "R33001_CoverYearUnit", ["202"], "high"),
+    ("DOC-B1-009", "R33244_Table7_ThreePublicAdvancedCheck", ["1384.72", "1435.72"], "error"),
+]
+
+
+def _rule_class(class_name: str):
+    import src.engine.rules_v33 as rv33
+    import src.engine.common_rules as common
+    if class_name == "CMM007_ZeroBaseTrendRecompute":
+        return common.CMM007_ZeroBaseTrendRecompute
+    return getattr(rv33, class_name)
+
+
+@pytest.mark.parametrize(
+    "doc_id,class_name,needles,severity",
+    [(d, c, n, s) for d, c, n, s in _TP_PINS],
+)
+def test_tp_pins(doc_id, class_name, needles, severity):
+    """TP 保留钉线（9 条合成的规则级断言；CMM-007 单列——见下）。
+
+    每条钉线 = 在指定语料上跑指定规则，断言存在含关键数字的指定严重度
+    finding。修复不得把这些真阳性修丢（MR-P 红线§〇）。"""
+    doc = _load_corpus_doc(doc_id)
+    rule_cls = _rule_class(class_name)
+    try:
+        issues = list(rule_cls().apply(doc))
+    except RuleDeferred as e:
+        pytest.fail(
+            f"TP 钉线失败：{doc_id}/{class_name} 转 unresolved（{e.detail}）——"
+            "修复不得把真阳性变成未决"
+        )
+    hits = [
+        i for i in issues
+        if str(i.severity).lower() == severity
+        and all(needle in str(i.message) + str(getattr(i, "evidence_text", ""))
+                for needle in needles)
+    ]
+    assert hits, (
+        f"TP 丢失：{doc_id}/{class_name} 应有 severity={severity}、"
+        f"含 {needles} 的 finding；实际 {[(str(i.severity), str(i.message)[:80]) for i in issues]}"
+    )
+
+
+def test_tp_pin_v33_240_019_three_horizontal_tps():
+    """TP 钉线（019 收入表 3 条，同根因族）：合计列漏加其他收入
+    14.05/14.05/13.00 的 3 条横向不平必须全部保留。"""
+    doc = _load_corpus_doc("DOC-B1-019")
+    issues = list(R33240_Table2_IncomeAdvancedCheck().apply(doc))
+    horizontal = [i for i in issues if "横向求和不平" in str(i.message)]
+    # location diff 带浮点噪声（14.049999…），两位舍入后归一比较
+    diffs = sorted({round(float(i.location.get("diff")), 2) for i in horizontal})
+    assert len(horizontal) == 3, [str(i.message)[:80] for i in issues]
+    assert diffs == [13.0, 14.05], diffs
+
+
+def test_tp_pin_v33_242_015_two_linked_tps():
+    """TP 钉线（015 表四 2 条，同根因）：年初结转合计 955.96 vs 分项和
+    1,010.90 的矛盾连带两条（差 54.94 同源）。"""
+    doc = _load_corpus_doc("DOC-B1-015")
+    from src.engine.rules_v33 import R33242_Table4_ComprehensiveCheck as cls
+    issues = list(cls().apply(doc))
+    assert len(issues) == 2, [str(i.message)[:80] for i in issues]
+    assert all(str(i.severity).lower() == "error" for i in issues)
+
+
+def test_tp_pin_cmm007_009_wrong_base_period():
+    """TP 钉线（009 CMM-007）：公务接待费「减少 4.89、下降 14.32%」用本期
+    作基期（4.89/34.15=14.32%），正确值 12.53%。"""
+    doc = _load_corpus_doc("DOC-B1-009")
+    from src.engine.common_rules import CMM007_ZeroBaseTrendRecompute
+    issues = list(CMM007_ZeroBaseTrendRecompute().apply(doc))
+    hits = [i for i in issues if "14.32" in str(i.message) and "12.53" in str(i.message)]
+    assert hits, [str(i.message)[:80] for i in issues]
+    assert hits[0].severity == "error"
+    assert hits[0].location.get("page") in (39, 40)
+
