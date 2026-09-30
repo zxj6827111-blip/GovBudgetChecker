@@ -3225,6 +3225,95 @@ def _find_label_value(
     return None
 
 
+def _two_sided_header_spans(
+    rows: List[List[str]], scan_rows: int = 4
+) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:
+    """双栏总表表头定位（MR-P1）：返回 ((收入侧起,收), (支出侧起,止)) 列区间。
+
+    收入支出决算总表的表头首行是「收入 |  | 支出 | 」、次行「项目 | 决算数 |
+    项目 | 决算数」——照 R33202 的表头关键词定位模式扫描前几行，进入编号
+    数据行区即停；「收入/支出」侧身份定位不到时返回 None，调用方不得据此
+    两侧混猜。
+    """
+    income_span: Optional[Tuple[int, int]] = None
+    expense_span: Optional[Tuple[int, int]] = None
+    for row in rows[:scan_rows]:
+        first_cell = str(row[0] or "").strip() if row else ""
+        if re.match(r"^[一二三四五六七八九十]+、", first_cell) or first_cell in ("合计", "总计"):
+            break  # 已进入数据行区，停止表头扫描
+        width = len(row)
+        if width < 2:
+            continue
+        mid = width // 2
+        for ci, cell in enumerate(row):
+            text = str(cell or "").strip()
+            # 只认短侧名词（收入/支出/收入项目…）；带 决算/预算/编码/名称 等字样
+            # 的是列头细节，不是侧身份锚
+            if not text or len(text) > 6 or any(
+                bad in text for bad in ("决算", "预算", "编码", "名称", "科目", "项目")
+            ):
+                continue
+            span = (0, mid) if ci < mid else (mid, width)
+            if "收入" in text and income_span is None:
+                income_span = span
+            elif "支出" in text and expense_span is None:
+                expense_span = span
+        if income_span and expense_span:
+            break
+    if income_span and expense_span:
+        return income_span, expense_span
+    return None
+
+
+def _two_sided_side_value(
+    rows: List[List[str]],
+    label: str,
+    side: str,
+) -> Optional[float]:
+    """双栏总表按侧取数（MR-P1，fail-closed）。
+
+    收入支出决算总表是「收入|支出」双栏布局，同一行左右两半各有一组
+    （标签, 决算数）。旧实现整行 ``max(vals)``，把另一侧金额当成本侧取走
+    （探针 009/019 等实测：收入侧取到支出数、支出侧取到收入数）。
+
+    取数纪律：
+      1. 数值只允许取自 **标签单元格所在半行**（``_split_two_sided_row`` 拆半）；
+      2. 表头能定位「收入/支出」侧区间时，额外校验标签所在半行与请求侧一致；
+      3. 半行内取不到数值或侧身份冲突 → 返回 None，调用方必须
+         ``RuleDeferred``（fail-closed），禁止两侧混猜。
+    """
+    if side not in ("income", "expense"):
+        raise ValueError(f"side 必须是 income/expense，收到 {side!r}")
+    spans = _two_sided_header_spans(rows)
+    want_span: Optional[Tuple[int, int]] = None
+    if spans is not None:
+        want_span = spans[0] if side == "income" else spans[1]
+    for row in rows:
+        label_cells = [
+            ci for ci, cell in enumerate(row) if label in str(cell or "")
+        ]
+        if not label_cells:
+            continue
+        left, right = _split_two_sided_row(row)
+        for ci in label_cells:
+            half, half_offset = (left, 0) if ci < len(left) else (right, len(left))
+            if not half:
+                continue
+            # 表头侧身份交叉校验：标签必须落在请求侧的列区间内
+            if want_span is not None and not (
+                want_span[0] <= ci < want_span[1]
+            ):
+                continue
+            in_half = ci - half_offset
+            value = _half_first_number(half, in_half + 1)
+            if value is None and in_half > 0:
+                value = _half_first_number(half, 0)
+            if value is not None:
+                return value
+        return None  # 标签行存在但本侧取不到数：fail-closed，不扫下一行混猜
+    return None
+
+
 # 舍入包络提示的 severity
 _ROUNDING_HINT_SEVERITY = "info"
 
@@ -4265,15 +4354,18 @@ class R33200_InterTable_T1_T2(Rule):
                 unresolved_reasons=[f"表缺失或无可解析行: {','.join(missing)}"],
             )
         
-        # 查找T1的"本年收入合计"
-        t1_income = 0.0
+        # 查找T1的"本年收入合计"（MR-P1：双栏布局按列身份取数，fail-closed）。
+        # 旧实现整行 max(vals)，「收入|支出」双栏行把支出侧金额当收入侧取走
+        # （探针 009/014/017/020/026 实测）。
+        t1_income: Optional[float] = None
+        label_seen = False
         for row in t1_rows:
             row_txt = "".join([str(c) for c in row if c])
             if "本年收入合计" in row_txt:
-                vals = _parse_row_values(row)
-                if vals: t1_income = max(vals)
+                label_seen = True
+                t1_income = _two_sided_side_value(t1_rows, "本年收入合计", "income")
                 break
-        
+
         # 查找T2的"合计"行
         t2_income = 0.0
         for row in t2_rows:
@@ -4282,8 +4374,16 @@ class R33200_InterTable_T1_T2(Rule):
                 vals = _parse_row_values(row)
                 if vals: t2_income = max(vals)
                 break
-        
-        if t1_income > 0.01 and t2_income > 0.01:
+
+        if label_seen and t1_income is None:
+            raise RuleDeferred(
+                self.code,
+                detail="总表「本年收入合计」行的金额无法按列身份确定（收入|支出双栏布局，禁止两侧混猜）",
+                unresolved_reasons=[
+                    "总表「本年收入合计」行的金额无法按列身份确定（收入|支出双栏布局，需人工判读）"
+                ],
+            )
+        if t1_income is not None and t1_income > 0.01 and t2_income > 0.01:
             if abs(t1_income - t2_income) > 0.01:
                 issues.append(self._issue(
                     f"T1↔T2收入合计不一致：T1={t1_income:.2f}, T2={t2_income:.2f}",
@@ -4310,18 +4410,20 @@ class R33201_InterTable_T1_T3(Rule):
                 unresolved_reasons=["表缺失或无可解析行: 收入支出决算总表(T1)"],
             )
         
-        # 查找T1的"本年支出合计"
-        t1_expense = 0.0
+        # 查找T1的"本年支出合计"（MR-P1：双栏布局按列身份取数，fail-closed，
+        # 同 R33200 的收入侧修复——旧 max(vals) 把收入侧金额当支出侧取走）。
+        t1_expense: Optional[float] = None
+        expense_label_seen = False
         for row in t1_rows:
             row_txt = "".join([str(c) for c in row if c])
             if "本年支出合计" in row_txt:
-                vals = _parse_row_values(row)
-                if vals: t1_expense = max(vals)
+                expense_label_seen = True
+                t1_expense = _two_sided_side_value(t1_rows, "本年支出合计", "expense")
                 break
         
         # T3缺失检查
         if not t3_rows:
-            if t1_expense > 0.01:
+            if t1_expense is not None and t1_expense > 0.01:
                 issues.append(self._issue(
                     f"T3(支出决算表)缺失，无法与T1支出合计({t1_expense:.2f})进行勾稽",
                     {"t1_expense": t1_expense}, "error"
@@ -4332,7 +4434,15 @@ class R33201_InterTable_T1_T3(Rule):
                 partial_issues=issues,
                 unresolved_reasons=["支出决算表(T3)缺失"],
             )
-        
+        if expense_label_seen and t1_expense is None:
+            raise RuleDeferred(
+                self.code,
+                detail="总表「本年支出合计」行的金额无法按列身份确定（收入|支出双栏布局，禁止两侧混猜）",
+                unresolved_reasons=[
+                    "总表「本年支出合计」行的金额无法按列身份确定（收入|支出双栏布局，需人工判读）"
+                ],
+            )
+
         # 查找T3的"合计"行
         t3_expense = 0.0
         for row in t3_rows:
@@ -4341,8 +4451,8 @@ class R33201_InterTable_T1_T3(Rule):
                 vals = _parse_row_values(row)
                 if vals: t3_expense = max(vals)
                 break
-        
-        if t1_expense > 0.01 and t3_expense > 0.01:
+
+        if t1_expense is not None and t1_expense > 0.01 and t3_expense > 0.01:
             if abs(t1_expense - t3_expense) > 0.01:
                 issues.append(self._issue(
                     f"T1↔T3支出合计不一致：T1={t1_expense:.2f}, T3={t3_expense:.2f}",
