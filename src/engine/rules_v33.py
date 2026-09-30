@@ -662,27 +662,90 @@ class R33114_EmptyTableStatementCheck(Rule):
     code, severity = "V33-114", "error"
     desc = "空表说明检查"
 
+    #: 空表类型 → 识别关键词（与 R33109 的 keyword 集合对齐）
+    _TABLE_KEYWORDS = {
+        "三公": ["三公"],
+        "政府性基金": ["政府性基金"],
+        "国有资本经营": ["国有资本经营", "国有资本"],
+    }
+
+    @staticmethod
+    def _extract_organization(doc: Document) -> Optional[str]:
+        """从页文本提取发布单位（「部门：XXX」「XXX财政局/委员会/局」锚）。
+
+        取不到返回 None——建议文案退化为通式，绝不硬编码特定单位名
+        （探针裁决：旧实现对其他单位建议写「上海市普陀区财政局」）。
+        """
+        for page_text in doc.page_texts:
+            text = str(page_text or "")
+            m = re.search(r"部\s*门[：:]\s*([^\s，,。；]{4,40}?)(?:\s|$|20\d{2})", text)
+            if m:
+                return m.group(1).strip()
+        return None
+
+    def _has_statement(self, page_text: str, table_name: str) -> bool:
+        """空表说明识别：句式集合对齐 R33109（2026-09-30 探针裁决）。
+
+        旧实现要求同页同时出现「注：」与「无数据」——「说明：XXX本年度没有
+        …故本表无数据」句式（013/028 实证）被漏判为缺失而误报。
+        """
+        keywords = ["相关"]
+        for prefix, kws in self._TABLE_KEYWORDS.items():
+            if prefix in table_name:
+                keywords = kws
+                break
+        for kw in keywords:
+            # 方法1（R33109）：「注：…无(关键词)…故本表无数据」
+            if re.search(
+                rf"注[：:].{{0,30}}{kw}.{{0,50}}(无|空表|不存在|无数据|故本表无数据)",
+                page_text,
+                flags=re.S | re.M,
+            ):
+                return True
+            # 方法2（R33109）：「故本表无数据」+ 页首表名锚
+            if re.search(r"故本表无数据", page_text) and kw in page_text[:200]:
+                return True
+            # 方法3：「（本年度）没有…收支/支出」+「故本表无数据」（说明：前缀形态）
+            if re.search(
+                rf"(?:本年度|本年)?没有[^。]{{0,60}}{kw}[^。]{{0,40}}故本表无数据",
+                page_text,
+                flags=re.S,
+            ):
+                return True
+        # 通式兜底：「本年度没有…收入和支出，故本表无数据」（表名关键词
+        # 可能在换行/断字中，但同页存在该表且说明自述无收支）
+        if re.search(
+            r"没有[^。]{0,60}(收入和支出|收支)[^。]{0,20}故本表无数据",
+            page_text,
+            flags=re.S,
+        ):
+            return True
+        return False
+
     def apply(self, doc: Document) -> List[Issue]:
         """检查空表是否缺少相应的说明"""
         issues: List[Issue] = []
-        
+        org = self._extract_organization(doc)
+        org_label = org if org else "本单位"
+
         # 定义需要检查的空表
         empty_tables = [
             '财政拨款"三公"经费支出决算表',
-            '财政拨款"三公"经费支出决算表',  # 兼容不同的引号
+            '财政拨款“三公”经费支出决算表',  # 兼容不同的引号
             '政府性基金预算财政拨款收入支出决算表',
             '国有资本经营预算财政拨款收入支出决算表',
         ]
-        
+
         # 遍历所有页面
         for page_num, page_text in enumerate(doc.page_texts):
+            page_text = str(page_text or "")
             # 检查是否包含空表
             for table_name in empty_tables:
                 if table_name in page_text:
                     # 检查表格是否为空（只有表头，没有数据）
                     tables = doc.page_tables[page_num] if page_num < len(doc.page_tables) else []
                     is_empty_table = False
-                    
+
                     if tables:
                         for table in tables:
                             # 检查表格是否为空（只有表头，没有数据）
@@ -690,46 +753,43 @@ class R33114_EmptyTableStatementCheck(Rule):
                             rows = len(table)
                             if rows == 0:
                                 continue
-                            
+
                             cols = max(len(row) for row in table) if table else 0
-                            
+
                             # 检查非空单元格的数量
                             non_empty_cells = 0
                             for row in table:
                                 for cell in row:
                                     if cell and str(cell).strip():
                                         non_empty_cells += 1
-                            
+
                             # 如果非空单元格数量小于等于列数，且表格行数较少，则认为是空表
                             # 或者如果非空单元格数量小于等于2*列数，且表格行数较少，则认为是空表
                             if rows <= 5 and non_empty_cells <= 2 * cols:
                                 is_empty_table = True
                                 break
-                    
+
                     if is_empty_table:
-                        # 检查是否有相应的说明
-                        has_statement = False
-                        # 检查是否有"注："和"无数据"的说明
-                        if "注：" in page_text and "无数据" in page_text:
-                            has_statement = True
-                        
-                        if not has_statement:
-                            # 根据不同的表格，生成不同的说明语句
-                            if '财政拨款"三公"经费支出决算表' in table_name:
-                                expected_statement = '注：上海市普陀区财政局无财政拨款"三公"经费支出，故本表无数据。'
-                            elif '政府性基金预算财政拨款收入支出决算表' in table_name:
-                                expected_statement = "注：上海市普陀区财政局无政府性基金预算财政拨款支出，故本表无数据。"
-                            elif '国有资本经营预算财政拨款收入支出决算表' in table_name:
-                                expected_statement = "注：上海市普陀区财政局无国有资本经营预算财政拨款支出，故本表无数据。"
-                            else:
-                                expected_statement = "注：上海市普陀区财政局无相关支出，故本表无数据。"
-                            
-                            issues.append(self._issue(
-                                f"空表缺少说明：{table_name}为空表，但缺少相应的说明。建议添加：{expected_statement}",
-                                {"page": page_num + 1, "table": table_name},
-                                severity="error"
-                            ))
-        
+                        if self._has_statement(page_text, table_name):
+                            continue
+
+                        # 根据不同的表格，生成不同的说明语句（单位名取材料识别值，
+                        # 取不到用通式，不硬编码任何特定单位）
+                        if "三公" in table_name:
+                            expected_statement = f'注：{org_label}无财政拨款"三公"经费支出，故本表无数据。'
+                        elif "政府性基金" in table_name:
+                            expected_statement = f"注：{org_label}无政府性基金预算财政拨款支出，故本表无数据。"
+                        elif "国有资本经营" in table_name:
+                            expected_statement = f"注：{org_label}无国有资本经营预算财政拨款支出，故本表无数据。"
+                        else:
+                            expected_statement = f"注：{org_label}无相关支出，故本表无数据。"
+
+                        issues.append(self._issue(
+                            f"空表缺少说明：{table_name}为空表，但缺少相应的说明。建议添加：{expected_statement}",
+                            {"page": page_num + 1, "table": table_name},
+                            severity="error"
+                        ))
+
         return issues
 
 class R33002_NineTablesCheck(Rule):
@@ -2785,9 +2845,32 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
         2. 章节内切分句，构成滑动窗口：预算金额分句 → 向后找决算金额分句
            → 向后找方向词分句；窗口遇到下一个「预算为/决算为」即截断；
         3. 三者齐备才判定，缺失一律跳过（不得伪造）。
+
+        MR-P5：finding 页码定位改为「证据句所在页」——段级偏移映射反查
+        （_txt_fund_page_for 同款），不再回退「首个含预算值/决算数的页」
+        （探针 019 实证：真证据在 p25，旧实现标 p7）。
         """
         issues: List[Issue] = []
-        merged = merge_page_texts(doc.page_texts)
+        # 段级合并 + 段→页映射（与 merge_page_texts 同口径，位置可反查页码）
+        paragraphs: List[Tuple[str, int]] = []
+        for pi, page_text in enumerate(doc.page_texts):
+            for para in merge_soft_wrapped_lines(str(page_text or "")):
+                paragraphs.append((para, pi + 1))
+        merged = "\n".join(para for para, _ in paragraphs)
+        para_starts: List[Tuple[int, int]] = []
+        _cursor = 0
+        for para, page_no in paragraphs:
+            para_starts.append((_cursor, page_no))
+            _cursor += len(para) + 1
+
+        def _page_of(position: int) -> int:
+            page = 1
+            for start, page_no in para_starts:
+                if start <= position:
+                    page = page_no
+                else:
+                    break
+            return page
 
         start_match = self._SEC_START.search(merged)
         if not start_match:
@@ -2797,9 +2880,17 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
                 unresolved_reasons=["未找到一般公共预算财政拨款支出决算情况说明章节"],
             )
         next_sec = self._NEXT_SEC.search(merged, start_match.end())
-        sec_text = merged[start_match.end(): next_sec.start() if next_sec else len(merged)]
+        sec_start = start_match.end()
+        sec_text = merged[sec_start: next_sec.start() if next_sec else len(merged)]
 
-        clauses = split_clauses(sec_text)
+        # 分句 + 分句在 merged 中的绝对偏移（split_clauses 同口径切分）
+        clauses: List[str] = []
+        clause_positions: List[int] = []
+        for m in re.finditer(r"[^。；;！!？?\n，、]+", sec_text):
+            token = m.group(0).strip()
+            if token:
+                clauses.append(token)
+                clause_positions.append(sec_start + m.start())
         _BUDGET_MARKS = ("年初预算为", "年初预算数为", "预算数为", "预算为", "年初预算")
         _FINAL_MARKS = ("支出决算为", "决算数为", "决算为", "支出决算")
         _DIRECTION_WORDS = ("大于", "小于", "等于", "持平")
@@ -2825,6 +2916,7 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
             # 向后有限窗口找决算金额与方向词
             final_val = None
             direction = None
+            direction_clause_idx = -1
             window = 0
             j = i + 1
             while j < len(clauses) and window < 6:
@@ -2843,6 +2935,7 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
                     hit = next((w for w in _DIRECTION_WORDS if w in nxt), None)
                     if hit:
                         direction = "等于" if hit in ("持平",) else hit
+                        direction_clause_idx = j
                         break
                     if clause_amount(nxt, _BUDGET_MARKS) is not None or clause_amount(nxt, _FINAL_MARKS) is not None:
                         # 真正进入下一条金额配对仍未见方向词 → 放弃本窗口
@@ -2858,13 +2951,15 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
                 elif final_val < budget_val:
                     actual = "小于"
                 if actual != direction:
-                    # 页码定位：在原文页中检索证据片段
+                    # MR-P5：页码 = 证据（方向表述句）所在页；取不到时回退
+                    # 决算金额分句页、章节起始页
+                    if direction_clause_idx >= 0:
+                        page = _page_of(clause_positions[direction_clause_idx])
+                    elif j - 1 < len(clause_positions):
+                        page = _page_of(clause_positions[j - 1])
+                    else:
+                        page = _page_of(sec_start)
                     clip = f"年初预算{budget_val:.2f} 决算{final_val:.2f} 表述{direction}"
-                    page = 1
-                    for pi, page_text in enumerate(doc.page_texts):
-                        if str(budget_val) in page_text.replace(",", "") or "决算数" in page_text:
-                            page = pi + 1
-                            break
                     issues.append(self._issue(
                         f"预算数与决算数比较不一致：预算数{budget_val:.2f}，决算数{final_val:.2f}，实际{actual}，但文本表述为{direction}。",
                         {"page": page},
@@ -2889,29 +2984,44 @@ class R33111_IncomeExpenseTotalCheck(Rule):
     desc = "收入支出总计为0万元异常检测"
 
     def apply(self, doc: Document) -> List[Issue]:
-        """检测收入支出总计为0万元的异常情况"""
+        """检测收入支出总计为0万元的异常情况
+
+        MR-P5（探针 017/020 误报修复）：
+        - 负向断言：匹配的「0」不得是更大金额的尾数（「234,283.60 万元」
+          的尾 0 曾被当成「总计为 0 万元」命中）；
+        - 窗口约束：总计词与 0 之间只允许短语（为/是/共），禁止跨过数字；
+        - 自拒：匹配上下文自身出现非零总计披露时放弃该命中（证据自洽校验）。
+        """
         issues: List[Issue] = []
-        
-        # 编译正则表达式，匹配带空格或不带空格的"0万元"
-        zero_total_pattern = re.compile(r"收入支出总[计合].*?0\s*万元")
-        
+
+        # 匹配「总计(为|是)? 0 万元」：0 前不得是数字/小数点/千分位（负向断言），
+        # 总计词与 0 之间只允许短语（为/是/共），禁止跨过数字
+        zero_total_pattern = re.compile(
+            r"收入支出总[计合][^。；\d]{0,6}?(?<![\d.,，])0\s*万\s*元"
+        )
+        # 上下文自拒：非零总计披露（总计词后直接跟非零金额）
+        nonzero_total_pattern = re.compile(
+            r"总[计合][^。；\d]{0,4}?[1-9][\d,，]*(?:\.\d+)?\s*万?元"
+        )
+
         # 遍历所有页面，查找收入支出总计为0万元的情况
         for page_num in range(len(doc.page_texts)):
             page_text = doc.page_texts[page_num]
-            
-            # 使用正则表达式匹配，支持带空格或不带空格的"0万元"
-            m = zero_total_pattern.search(page_text)
-            if m:
+
+            for m in zero_total_pattern.finditer(page_text):
                 start = max(0, m.start() - 50)
                 end = min(len(page_text), m.end() + 50)
                 snippet = page_text[start:end].replace('\n', ' ')
+                # 自拒：上下文自身含非零总计披露 → 证据自洽，不报
+                if nonzero_total_pattern.search(snippet):
+                    continue
                 issues.append(self._issue(
                     "收入支出总计为0万元，可能存在数据异常。",
                     {"page": page_num + 1},
                     severity="critical",
                     evidence_text=f"发现异常数值上下文：...{snippet}..."
                 ))
-        
+
         return issues
 
 

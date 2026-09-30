@@ -35,6 +35,9 @@ from src.engine.rules_v33 import (  # noqa: E402
     R33200_InterTable_T1_T2,
     R33201_InterTable_T1_T3,
     R33233_DetailRowFormulaConsistency,
+    R33110_BudgetVsFinal_TextConsistency,
+    R33111_IncomeExpenseTotalCheck,
+    R33114_EmptyTableStatementCheck,
     R33240_Table2_IncomeAdvancedCheck,
     R33241_Table3_ExpenseAdvancedCheck,
     R33TrendCompletionRate,
@@ -481,6 +484,107 @@ def test_p3b_vertical_mismatch_without_missing_code_still_reported():
     )
     issues = R33241_Table3_ExpenseAdvancedCheck().apply(doc)
     assert any("纵向汇总不平" in getattr(i, "message", "") for i in issues)
+
+
+# ---------------------------------------------------------------------------
+# MR-P5：V33-114/111/110 说明域三规则
+# ---------------------------------------------------------------------------
+
+
+def _empty_table_page(statement: str = "", org: str = "上海市某某委员会") -> str:
+    """空表页形态（013/028 探针版式）：表名 + 部门行 +（可选）说明句。"""
+    page = (
+        "国有资本经营预算财政拨款收入支出决算表\n"
+        f"部门：{org} 2025年度 金额单位：万元\n"
+        "项目 本年支出 功能分类科目编码 科目名称\n"
+    )
+    if statement:
+        page += statement + "\n"
+    return page
+
+
+def test_p5_v33_114_statement_without_note_prefix_recognized():
+    """反例（探针 013/028 形态）：「说明：XXX本年度没有…故本表无数据」
+    （无「注：」前缀）是合法空表说明 → 0 finding（旧实现误报缺失）。"""
+    doc = build_document(
+        path="p5-114-statement.pdf",
+        page_texts=[
+            "某某局 2025 年度部门决算公开",
+            _empty_table_page("说明：上海市某某委员会本年度没有国有资本经营预算财政拨款收入和支出，故本表无数据。"),
+        ],
+        page_tables=[[], [[["项目", "本年支出"], ["合计", ""]]]],
+        filesize=0,
+    )
+    issues = R33114_EmptyTableStatementCheck().apply(doc)
+    assert issues == [], [getattr(i, "message", "") for i in issues]
+
+
+def test_p5_v33_114_missing_statement_still_reported_with_generic_org():
+    """正例（防哑）+ 文案修复：真缺失仍报 error；建议文案使用材料识别的
+    单位名，识别不到时用通式——不得硬编码任何特定单位名。"""
+    doc = build_document(
+        path="p5-114-missing.pdf",
+        page_texts=[
+            "某某局 2025 年度部门决算公开",
+            _empty_table_page(),
+        ],
+        page_tables=[[], [[["项目", "本年支出"], ["合计", ""]]]],
+        filesize=0,
+    )
+    issues = R33114_EmptyTableStatementCheck().apply(doc)
+    assert len(issues) == 1
+    assert issues[0].severity == "error"
+    msg = str(issues[0].message)
+    assert "上海市某某委员会" in msg  # 取自「部门：」行
+    assert "普陀区" not in msg  # 硬编码旧文案必须消失
+
+
+def test_p5_v33_111_nonzero_total_context_self_rejects():
+    """反例（探针 017/020 形态）：「总计 234,283.60 万元」的尾 0 不构成
+    「总计为 0 万元」→ 0 finding（旧正则 .*? 吞数字尾零）。"""
+    doc = build_document(
+        path="p5-111-nonzero.pdf",
+        page_texts=[
+            "某某局 2025 年度部门决算公开",
+            "一、收入支出决算总体情况说明\n上海市数据局 2025 年度财政拨款收入支出总计 234,283.60 万元。与 2024 年度相比，财政拨款收入支出总计增加 21,305.97 万元，增长 10.00%。",
+        ],
+        page_tables=[[]],
+        filesize=0,
+    )
+    assert R33111_IncomeExpenseTotalCheck().apply(doc) == []
+
+
+def test_p5_v33_111_real_zero_total_still_reported():
+    """正例（防哑）：真实的「收入支出总计为0万元」仍报 critical。"""
+    doc = build_document(
+        path="p5-111-zero.pdf",
+        page_texts=[
+            "某某局 2025 年度部门决算公开",
+            "一、收入支出决算总体情况说明\n本单位 2025 年度收入支出总计为0万元。",
+        ],
+        page_tables=[[]],
+        filesize=0,
+    )
+    issues = R33111_IncomeExpenseTotalCheck().apply(doc)
+    assert len(issues) == 1 and issues[0].severity == "critical"
+
+
+def test_p5_v33_110_finding_page_points_to_evidence_clause():
+    """MR-P5 页码定位：方向表述句在第 3 页 → finding 标 p3（旧实现标首个
+    含「决算数」的页/章节首页）。探针 019 实证 p7→p25。"""
+    doc = build_document(
+        path="p5-110-page.pdf",
+        page_texts=[
+            "某某局 2025 年度部门决算公开",
+            "三、一般公共预算财政拨款支出决算情况说明\n行政运行（项）。年初预算为24.00万元，支出决算为22.17万元，",
+            "决算数大于预算数的主要原因：项目支出调整。",
+        ],
+        page_tables=[[]],
+        filesize=0,
+    )
+    issues = R33110_BudgetVsFinal_TextConsistency().apply(doc)
+    assert len(issues) == 1
+    assert issues[0].location["page"] == 3
 
 
 # ---------------------------------------------------------------------------
