@@ -411,7 +411,10 @@ def test_p3b_v33_241_extra_scope_columns_close_horizontal():
         filesize=0,
     )
     issues = R33241_Table3_ExpenseAdvancedCheck().apply(doc)
-    assert issues == [], [getattr(i, "message", "") for i in issues]
+    # 口径列纳入后勾稽成立：无 error；0.01 级浮点尾差按 MR-P4 降为聚类 info
+    errors = [i for i in issues if str(i.severity).lower() == "error"]
+    assert errors == [], [getattr(i, "message", "") for i in errors]
+    assert all("舍入包络差异" in str(i.message) for i in issues)
 
 
 def test_p3b_v33_240_genuine_horizontal_mismatch_still_reported():

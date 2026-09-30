@@ -100,7 +100,7 @@ from collections import Counter, defaultdict
 from decimal import Decimal
 import numpy as np
 
-from .amount_math import classify_amount_diff, compute_dynamic_envelope, half_unit_for_term
+from .amount_math import classify_amount_diff, compute_dynamic_envelope, half_unit_for_term, rounding_envelope
 from .rule_outcome import RuleDeferred, RuleExecutionError, RuleOutcomeSignal, STATUS_INSUFFICIENT_DATA
 from .field_extractor import (
     extract_row_strict,
@@ -4662,10 +4662,20 @@ class R33202_InterTable_T4_T5(Rule):
             )
 
         if t4_general_expense > 0.01 and t5_total > 0.01:
-            if abs(t4_general_expense - t5_total) > 0.01:
+            # MR-P4：0.0x 级尾差按统一舍入包络降为 info（探针 020 差 0.02 实证）
+            t4t5_level, t4t5_diff = _aggregate_diff_class(
+                t4_general_expense, t5_total, n_children=1
+            )
+            if t4t5_level == "mismatch":
                 issues.append(self._issue(
                     f"T4↔T5一般公共支出不一致：T4={t4_general_expense:.2f}, T5={t5_total:.2f}",
                     {"t4": t4_general_expense, "t5": t5_total}, "error",
+                    evidence_text=f"表4(财政拨款总表) 一般公共预算支出: {t4_general_expense}\n表5(一般公共支出表) 合计: {t5_total}"
+                ))
+            elif t4t5_level == "rounding_hint":
+                issues.append(self._issue(
+                    f"T4↔T5一般公共支出相差 {t4t5_diff:.2f} 万元，在显示舍入包络内，可能为取整误差，建议复核。",
+                    {"t4": t4_general_expense, "t5": t5_total}, "info",
                     evidence_text=f"表4(财政拨款总表) 一般公共预算支出: {t4_general_expense}\n表5(一般公共支出表) 合计: {t5_total}"
                 ))
         return issues
@@ -4991,6 +5001,27 @@ class R33211_T3_RowTotal(Rule):
 # 加一个远小于显示精度（0.01 万元）的容差，只吃掉浮点噪声，不改变阈值语义。
 _AMOUNT_DIFF_EPS = 1e-6
 
+# MR-P4：合计类差异的舍入提示包络下限（探针裁决 §四.4：差 ≤0.05 万元的
+# 合计类差异统一进 hint 包络，不得 error；超 0.05 仍按动态包络判 mismatch）。
+# 仅作用于 P4 点名的合计类比较位（V33-244/202/241 横向），历史静默区
+# （|diff| ≤ 0.01，旧实现不产 finding）保持静默，只降级旧 error 带。
+_AGGREGATE_HINT_FLOOR = Decimal("0.01") * 5
+
+
+def _aggregate_diff_class(a, b, n_children: int) -> Tuple[str, Decimal]:
+    """P4 点名合计类比较位的统一分级：0.05 包络下限 + 旧静默区守门。
+
+    返回 (level, diff)；level ∈ ok / silent_rounding / rounding_hint / mismatch
+    ——silent_rounding 表示 (0, 0.01] 历史静默区（维持不出 finding）。
+    """
+    envelope = rounding_envelope(n_children)
+    if envelope < _AGGREGATE_HINT_FLOOR:
+        envelope = _AGGREGATE_HINT_FLOOR
+    level, diff = classify_amount_diff(a, b, n_children=n_children, envelope=envelope)
+    if level == "rounding_hint" and diff <= Decimal("0.01"):
+        return "silent_rounding", diff
+    return level, diff
+
 
 # MR-P3b：纵向汇总的解析漏行哨兵。科目编码在页文本可见、表格解析却缺失
 # （行粘页码/跨页漏行）时，层级汇总建立在残缺行集上，任何「父≠子之和」
@@ -5296,6 +5327,8 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
     
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
+        # MR-P4：舍入包络提示聚类池（同差值合一条 info，V33-120 池模式）
+        v241_rounding_pool: List[Tuple[float, str]] = []
         t3_rows = _get_table_rows(doc, "支出决算表", full_extent=True)
 
         if not t3_rows or len(t3_rows) < 3:
@@ -5443,12 +5476,14 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
                     "row_idx": r_idx + 1, "code": code
                 }
             
-            # C. 横向求和校验（0.01容差）：合计 = 基本 + 项目 +（有则加）口径列
+            # C. 横向求和校验（MR-P4：统一舍入包络分级）：合计 = 基本 + 项目 +（有则加）口径列
             if level >= 0 and total_val > 0.01:
                 calc_sum = basic_val + project_val + sum(v for _, v in extra_vals)
-                diff = abs(total_val - calc_sum)
+                diff_level, diff = _aggregate_diff_class(
+                    total_val, calc_sum, n_children=2 + len(extra_vals)
+                )
 
-                if diff > 0.01 + _AMOUNT_DIFF_EPS:
+                if diff_level == "mismatch":
                     extra_part = "".join(
                         f"+{label}({v:.2f})" for label, v in extra_vals
                     )
@@ -5460,7 +5495,27 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
                         {"table": "支出决算表", "row": r_idx+1, "code": code, "diff": diff}, "error",
                         evidence_text=f"表格：支出决算表\n行号：{r_idx+1}\n科目：{code} {name}\n合计：{total_val}\n基本支出：{basic_val}\n项目支出：{project_val}{extra_detail}"
                     ))
+                elif diff_level == "rounding_hint":
+                    v241_rounding_pool.append((
+                        float(diff),
+                        f"第{r_idx+1}行({code} {name})：合计({total_val:.2f}) vs 基本+项目+口径列({calc_sum:.2f})，差 {diff:.2f}",
+                    ))
         
+        # MR-P4：舍入级差异聚类发射（先于纵向段——若纵向漏行哨兵转人工，
+        # 已确认的舍入提示经 partial_issues 保留）
+        if v241_rounding_pool:
+            round_groups: Dict[str, List[Tuple[float, str]]] = defaultdict(list)
+            for item in v241_rounding_pool:
+                round_groups[f"{item[0]:.2f}"].append(item)
+            for key in sorted(round_groups):
+                items = round_groups[key]
+                issues.append(self._issue(
+                    f"【支出决算表】共{len(items)}处相差 {key} 万元的舍入包络差异，"
+                    "可能为显示取整误差（明细见证据）。",
+                    {"count": len(items)}, "info",
+                    evidence_text="\n---\n".join(it[1] for it in items),
+                ))
+
         # D. 纵向层级汇总校验（0.01容差）——MR-P3b：候选先收集，漏行取证后
         # 放行（同 V33-240 的 fail-closed 纪律）
         vertical_candidates: List[Dict[str, Any]] = []
@@ -5588,31 +5643,47 @@ class R33244_Table7_ThreePublicAdvancedCheck(Rule):
 
         fill_data(data_row)
 
+        # MR-P4：统一舍入包络——0.0x 级合计尾差是显示舍入（classify_amount_diff
+        # 半单位动态包络），不再按 error 报；同差值聚类为 1 条 info（V33-120 池模式）
+        v244_rounding_pool: List[Tuple[float, str]] = []
+
         # --- B. 结构闭合逻辑校验 (强校验) ---
         for key in ["budget", "final"]:
             label = "预算" if key == "budget" else "决算"
             vals = data[key]
             # [total, abroad, car_sub, car_purch, car_run, reception]
             total, abroad, car_sub, car_purch, car_run, reception = vals
-            
+
             # 1. 车小计 = 购置 + 运行
             if not data["is_empty"][key][4] or car_purch > 0 or car_run > 0:
                 calc_sub = car_purch + car_run
-                if abs(car_sub - calc_sub) > 0.01:
+                diff_level, sub_diff = _aggregate_diff_class(car_sub, calc_sub, n_children=2)
+                if diff_level == "mismatch":
                     issues.append(self._issue(
                         f"【表七】{label}公务用车小计不平：报表({car_sub:.2f}) != 购置({car_purch:.2f}) + 运行({car_run:.2f})",
                         {"type": label}, "error",
                         evidence_text=f"表格：三公经费表\n类型：{label}\n用车小计：{car_sub}\n计算：购置({car_purch}) + 运行({car_run}) = {calc_sub}"
                     ))
-            
+                elif diff_level == "rounding_hint":
+                    v244_rounding_pool.append((
+                        float(sub_diff),
+                        f"{label}用车小计：报表({car_sub:.2f}) vs 购置({car_purch:.2f})+运行({car_run:.2f})，差 {sub_diff:.2f}",
+                    ))
+
             # 2. 合计 = 出国 + 车小计 + 接待
             if not data["is_empty"][key][0] or abroad > 0 or car_sub > 0 or reception > 0:
                 calc_total = abroad + car_sub + reception
-                if abs(total - calc_total) > 0.01:
+                diff_level, total_diff = _aggregate_diff_class(total, calc_total, n_children=3)
+                if diff_level == "mismatch":
                     issues.append(self._issue(
                         f"【表七】{label}三公合计不平：报表({total:.2f}) != 出国({abroad:.2f}) + 用车({car_sub:.2f}) + 接待({reception:.2f})",
                         {"type": label}, "error",
                         evidence_text=f"表格：三公经费表\n类型：{label}\n合计：{total}\n计算：出国({abroad}) + 用车({car_sub}) + 接待({reception}) = {calc_total}"
+                    ))
+                elif diff_level == "rounding_hint":
+                    v244_rounding_pool.append((
+                        float(total_diff),
+                        f"{label}合计：报表({total:.2f}) vs 出国({abroad:.2f})+用车({car_sub:.2f})+接待({reception:.2f})，差 {total_diff:.2f}",
                     ))
 
         # --- C. 表文一致性与空值智控 (Case A/B/C) ---
@@ -5671,16 +5742,25 @@ class R33244_Table7_ThreePublicAdvancedCheck(Rule):
                         "error",
                         evidence_text=f"文字说明：{standard_nar_final_total}\n表格数据：空白",
                     ))
-            elif abs(data_val - standard_nar_final_total) > 0.01:
-                issues.append(self._issue(
-                    (
-                        "【表七】三公经费合计决算数表文不符："
-                        f"报表={data_val:.2f}万元，说明={standard_nar_final_total:.2f}万元。"
-                    ),
-                    {"item": "三公经费合计", "type": "final"},
-                    "error",
-                    evidence_text=f"文字说明：{standard_nar_final_total}\n表格数据：{data_val}",
-                ))
+            else:
+                nar_diff_level, nar_diff = _aggregate_diff_class(
+                    data_val, standard_nar_final_total, n_children=1
+                )
+                if nar_diff_level == "mismatch":
+                    issues.append(self._issue(
+                        (
+                            "【表七】三公经费合计决算数表文不符："
+                            f"报表={data_val:.2f}万元，说明={standard_nar_final_total:.2f}万元。"
+                        ),
+                        {"item": "三公经费合计", "type": "final"},
+                        "error",
+                        evidence_text=f"文字说明：{standard_nar_final_total}\n表格数据：{data_val}",
+                    ))
+                elif nar_diff_level == "rounding_hint":
+                    v244_rounding_pool.append((
+                        float(nar_diff),
+                        f"合计决算数表文：报表({data_val:.2f}) vs 说明({standard_nar_final_total:.2f})，差 {nar_diff:.2f}",
+                    ))
 
         # 事实取值：科目基数（决算/预算口径），取不到 → None → 对应校验跳过
         nar_f_total = fact_final.get("三公经费合计")
@@ -5741,11 +5821,18 @@ class R33244_Table7_ThreePublicAdvancedCheck(Rule):
                     fill_zero_pool.append((label_col, lbl, "A"))
                     reported_cells.add((key, t7_idx))
             else:
-                if abs(data_val - nar_v) > 0.01:
+                pair_level, pair_diff = _aggregate_diff_class(data_val, nar_v, n_children=1)
+                if pair_level == "mismatch":
                     issues.append(self._issue(
                         f"【表七】{lbl}{label_col}表文不符：报表({data_val:.2f}) != 说明({nar_v:.2f})",
                         {"item": lbl, "type": key}, "error",
                         evidence_text=f"文档说明：{nar_v}\n表格数据：{data_val}"
+                    ))
+                    reported_cells.add((key, t7_idx))
+                elif pair_level == "rounding_hint":
+                    v244_rounding_pool.append((
+                        float(pair_diff),
+                        f"{lbl}{label_col}表文：报表({data_val:.2f}) vs 说明({nar_v:.2f})，差 {pair_diff:.2f}",
                     ))
                     reported_cells.add((key, t7_idx))
 
@@ -5780,6 +5867,20 @@ class R33244_Table7_ThreePublicAdvancedCheck(Rule):
                     for col, item, case in fill_zero_pool
                 ),
             ))
+
+        # MR-P4：舍入级差异聚类发射（同差值合一条 info，V33-120 池模式）
+        if v244_rounding_pool:
+            round_groups: Dict[str, List[Tuple[float, str]]] = defaultdict(list)
+            for item in v244_rounding_pool:
+                round_groups[f"{item[0]:.2f}"].append(item)
+            for key in sorted(round_groups):
+                items = round_groups[key]
+                issues.append(self._issue(
+                    f"【表七】共{len(items)}处相差 {key} 万元的舍入包络差异，"
+                    "可能为显示取整误差（明细见证据）。",
+                    {"count": len(items)}, "info",
+                    evidence_text="\n---\n".join(it[1] for it in items),
+                ))
 
         return issues
 
