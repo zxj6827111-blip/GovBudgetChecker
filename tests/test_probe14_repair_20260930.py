@@ -213,5 +213,66 @@ def test_p1_v33_201_side_value_on_probe_shape():
 
 
 # ---------------------------------------------------------------------------
+# MR-P2：V33-TREND-COMPLETION-RATE 分子/分母同科目绑定（其中：总-分层级纪律）
+# ---------------------------------------------------------------------------
+
+
+def _san_gong_page(item_budget_clause: str = "") -> Any:
+    """三公总体情况说明的真实句式形态（探针 009/019 版式）。
+
+    item_budget_clause 为空 → 分项无自身预算披露（fail-closed 形态）；
+    非空 → 分项带自身预算（正向绑定形态）。
+    """
+    return _doc_from_pages(
+        "七、财政拨款“三公”经费支出决算情况说明\n"
+        "（一）“三公”经费财政拨款支出决算总体情况说明。\n"
+        "“三公”经费财政拨款支出年初预算为 1,435.72 万元，支出决算为\n"
+        "1,158.99 万元，完成预算的 80.72%，其中：因公出国（境）费"
+        f"{item_budget_clause}决算为 370.23 万元，完成预算的 80.92%；\n"
+        "公务用车购置及运行维护费支出决算为 754.61 万元，完成预算的 88.50%；\n"
+        "公务接待费支出决算为 34.15 万元，完成预算的 27.20%。"
+    )
+
+
+def test_p2_subitem_rate_not_bound_to_total_budget():
+    """反例（探针 009 实证形态）：分项完成率 80.92% 的分项预算未在叙事
+    披露时，不得把「其中：」之前的总句年初预算 1,435.72 拼给分项声明
+    （旧实现复算 25.79% 报假矛盾）。总-分层级配对不齐 → 不报。"""
+    assert R33TrendCompletionRate().apply(_san_gong_page()) == []
+
+
+def test_p2_subitem_rate_binds_own_budget_after_where():
+    """正例：分项自身预算在「其中：」之后披露时照常复算；写错必报。"""
+    doc = _san_gong_page("年初预算为 457.55 万元，")
+    issues = R33TrendCompletionRate().apply(doc)
+    # 370.23/457.55 = 80.914…% ≈ 80.92% → 数学一致，0 finding
+    assert issues == [], [getattr(i, "message", "") for i in issues]
+
+
+def test_p2_subitem_rate_wrong_own_budget_is_reported():
+    """正例（防哑）：分项预算披露后完成率写错 → 恰好 1 条 error，且
+    复算按分项自身分母（457.55），不是总句 1,435.72。"""
+    doc = _san_gong_page("年初预算为 457.55 万元，")
+    # 改完成率为 30%（≈370.23/1435.72 的假口径）→ 必须报，recomputed≈80.91
+    doc.page_texts[-1] = doc.page_texts[-1].replace("80.92%", "30.00%")
+    issues = R33TrendCompletionRate().apply(doc)
+    assert len(issues) == 1
+    assert issues[0].severity == "error"
+    # 复算按分项自身分母 457.55（370.23/457.55=80.92%），不是总句 1,435.72（25.79%）
+    assert "80.92" in str(issues[0].location.get("recomputed_completion_rate", ""))
+    assert "457.55" in str(issues[0].location.get("denom_amount", "")) or "457.55" in str(issues[0].message)
+
+
+def test_p2_total_rate_claim_still_binds_total_disclosures():
+    """总句完成率 80.72% 与总句预算/决算同句绑定不受影响（1,158.99/1,435.72
+    = 80.72% 材料自洽；总句是设计内正例）。"""
+    doc = _san_gong_page()
+    # 单独放大总句为错误口径验证总句仍被复算：把 80.72% 改成 90%
+    doc.page_texts[-1] = doc.page_texts[-1].replace("80.72%", "90.00%")
+    issues = R33TrendCompletionRate().apply(doc)
+    assert any("90.00" in str(getattr(i, "location", {}).get("declared_completion_rate", "")) for i in issues)
+
+
+# ---------------------------------------------------------------------------
 # TP 保留钉线：10 条真阳性（键 = 规则 × 材料 × 关键数字）
 # ---------------------------------------------------------------------------

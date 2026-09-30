@@ -10221,9 +10221,38 @@ class R33TrendCompletionRate(Rule):
             )
         )
         cuts.append(claim["start"])
-        claim["segments"] = [
+        segments = [
             (cuts[idx], cuts[idx + 1]) for idx in range(len(cuts) - 2, -1, -1)
         ]
+        # MR-P2：总-分层级纪律。「其中：」是总述句与分项列举的边界——
+        # 声明位于「其中」之后的属于子项完成率，只允许绑定「其中」之后
+        # 的子项披露；「其中」之前的总述预算/决算（如三公总额 1,435.72）
+        # 不得跨层级拼给子项声明（探针 14 条 FP 的根因：子项完成率
+        # 80.92% 错绑总句年初预算复算出假矛盾）。
+        where = merged.rfind("其中", claim["clause_start"], claim["start"])
+        if where >= 0:
+            sub_level = where + len("其中")
+            while sub_level < claim["start"] and merged[sub_level] in "：:、，, \u3000":
+                sub_level += 1
+            claim["sub_level_start"] = sub_level
+            claim["segments"] = [
+                (max(seg_start, sub_level), seg_end)
+                for seg_start, seg_end in segments
+                if seg_end > sub_level
+            ]
+        else:
+            claim["sub_level_start"] = None
+            claim["segments"] = segments
+        # 条目级兜底池的同款边界：条目内更早句里的「其中」列举同样是总分界，
+        # 跨句承接绑定不得越过它去拿总述句的披露（取距声明最近的「其中」）
+        where_entry = merged.rfind("其中", claim["entry_start"], claim["start"])
+        if where_entry >= 0:
+            sub_level_entry = where_entry + len("其中")
+            while sub_level_entry < claim["start"] and merged[sub_level_entry] in "：:、，, \u3000":
+                sub_level_entry += 1
+            claim["entry_sub_level_start"] = sub_level_entry
+        else:
+            claim["entry_sub_level_start"] = None
         claim["indicator"] = self._indicator(merged, claim)
 
     def _indicator(self, merged: str, claim: Dict[str, Any]) -> str:
@@ -10293,12 +10322,18 @@ class R33TrendCompletionRate(Rule):
             # 主语对齐是承接绑定的安全边界：分项声明（三公车辆 82.68%）不会
             # 错绑条目内总额预算（总额主语不同）；主语一致的多个候选（Case J）
             # 才会形成 parse_ambiguity，绝不取首个/最近。
+            # MR-P2：条目内「其中」列举同样是总分界——承接绑定不得越过
+            # entry_sub_level_start 去拿总述句的预算（跨「总-分」层级拼接禁令）。
             pool_entry = [
                 budget
                 for budget in budgets
                 if budget["start"] < claim["start"]
                 and budget["section_start"] == claim["section_start"]
                 and claim["entry_start"] <= budget["start"] < claim["clause_start"]
+                and (
+                    claim["entry_sub_level_start"] is None
+                    or budget["start"] >= claim["entry_sub_level_start"]
+                )
                 and (
                     not budget["clause_head"]
                     or budget["clause_head"] == claim["clause_head"]
@@ -10361,6 +10396,10 @@ class R33TrendCompletionRate(Rule):
                 if actual["start"] < claim["start"]
                 and actual["section_start"] == claim["section_start"]
                 and claim["entry_start"] <= actual["start"] < claim["clause_start"]
+                and (
+                    claim["entry_sub_level_start"] is None
+                    or actual["start"] >= claim["entry_sub_level_start"]
+                )
                 and (
                     not actual["clause_head"]
                     or actual["clause_head"] == claim["clause_head"]
