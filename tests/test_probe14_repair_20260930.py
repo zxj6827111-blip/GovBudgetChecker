@@ -36,6 +36,8 @@ from src.engine.rules_v33 import (  # noqa: E402
     R33201_InterTable_T1_T3,
     R33233_DetailRowFormulaConsistency,
     R33110_BudgetVsFinal_TextConsistency,
+    R33113_PunctuationCheck,
+    R33NarrativeIndicatorRepeat,
     R33111_IncomeExpenseTotalCheck,
     R33114_EmptyTableStatementCheck,
     R33240_Table2_IncomeAdvancedCheck,
@@ -585,6 +587,82 @@ def test_p5_v33_110_finding_page_points_to_evidence_clause():
     issues = R33110_BudgetVsFinal_TextConsistency().apply(doc)
     assert len(issues) == 1
     assert issues[0].location["page"] == 3
+
+
+# ---------------------------------------------------------------------------
+# MR-P6：漏报补规则（同字重复 + 紧邻双数并列）
+# ---------------------------------------------------------------------------
+
+
+def test_p6_v33_113_duplicate_char_words():
+    """FN 补规则（探针 009 p39 实证）：「原因是是」单字重复 → low finding；
+    跨软换行的「原因是⏎是」同样命中。"""
+    doc = build_document(
+        path="p6-dup.pdf",
+        page_texts=[
+            "某某局 2025 年度部门决算公开",
+            "因公出国（境）费支出增加的主要原因是\n是根据年度外事工作安排。",
+        ],
+        page_tables=[[]],
+        filesize=0,
+    )
+    issues = [
+        i for i in R33113_PunctuationCheck().apply(doc)
+        if "重复用词" in str(i.message)
+    ]
+    assert len(issues) == 1
+    assert issues[0].severity == "low"
+    assert "是是" in str(issues[0].message)
+
+
+def test_p6_v33_113_duplicate_char_word_guards():
+    """合法组合不得误报：现在在/不了了之/参与与。"""
+    doc = build_document(
+        path="p6-dup-guard.pdf",
+        page_texts=[
+            "某某局 2025 年度部门决算公开",
+            "现在在编人员 20 人；对历史遗留问题不了了之不是办法；参与与协调工作。",
+        ],
+        page_tables=[[]],
+        filesize=0,
+    )
+    issues = [
+        i for i in R33113_PunctuationCheck().apply(doc)
+        if "重复用词" in str(i.message)
+    ]
+    assert issues == [], [getattr(i, "message", "") for i in issues]
+
+
+def test_p6_nar_repeat_dual_amount_mismatch():
+    """FN 补规则（探针 019 p27 实证）：「增加 133.07（133.08）万元」双数
+    并列且不等 → medium，提示人工确认哪个数对（跨软换行动词亦命中）。"""
+    doc = build_document(
+        path="p6-dual.pdf",
+        page_texts=[
+            "某某局 2025 年度部门决算公开",
+            "2025 年度“三公”经费财政拨款支出决算数比 2024 年度增\n加 133.07（133.08）万元，增长 4.12%。",
+        ],
+        page_tables=[[]],
+        filesize=0,
+    )
+    issues = R33NarrativeIndicatorRepeat().apply(doc)
+    assert len(issues) == 1
+    assert issues[0].severity == "medium"
+    assert "133.07" in str(issues[0].message) and "133.08" in str(issues[0].message)
+
+
+def test_p6_nar_repeat_dual_amount_equal_passes():
+    """括注两数相等（同值异写）不报。"""
+    doc = build_document(
+        path="p6-dual-equal.pdf",
+        page_texts=[
+            "某某局 2025 年度部门决算公开",
+            "2025 年度支出决算比 2024 年度增加 100.00（100.0）万元。",
+        ],
+        page_tables=[[]],
+        filesize=0,
+    )
+    assert R33NarrativeIndicatorRepeat().apply(doc) == []
 
 
 # ---------------------------------------------------------------------------

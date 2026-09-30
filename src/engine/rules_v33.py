@@ -3076,6 +3076,15 @@ class R33112_PlaceholderCheck(Rule):
         return issues
 
 
+#: MR-P6：同字重复词检测的虚词字表（可配）。只收单字虚词——「刚刚/渐渐/
+#: 一一」等叠词天然合法，不入表；「现在在」「参与与」「不了了之」等合法
+#: 组合由负向断言排除。
+_DUPLICATE_CHAR_CLASS = "是的了在与和或及并经由按据对从向"
+_DUPLICATE_CHAR_RE = re.compile(
+    r"(?<!现)(?<!实)(?<!正)(?<!参)(?<!不)(?<!未)([" + _DUPLICATE_CHAR_CLASS + r"])\1"
+)
+
+
 class R33113_PunctuationCheck(Rule):
     code, severity = "V33-113", "warn"
     desc = "标点符号问题检测"
@@ -3166,7 +3175,23 @@ class R33113_PunctuationCheck(Rule):
                 #                 {"page": page_num + 1, "pos": len(line) - len(stripped_line) + len(stripped_line)},
                 #                 severity="warn"
                 #             ))
-        
+
+            # 4. MR-P6（探针漏报补规则）：同字重复词（AGENTS.md R003 类）。
+            # 探针 009 p39「主要原因是是」（跨软换行）「原因是是落实」系统
+            # 0 命中——旧检查只覆盖重复标点，且按行检查抓不到跨行重复。
+            # 在软换行恢复后的段落上按可配词表检查虚词单字重复，
+            # severity low；「现在在/参与与/不了了之」等合法组合用负向断言排除。
+            for para in merge_soft_wrapped_lines(page_text):
+                for dup_match in _DUPLICATE_CHAR_RE.finditer(para):
+                    ctx_s = max(0, dup_match.start() - 20)
+                    ctx_e = min(len(para), dup_match.end() + 20)
+                    issues.append(self._issue(
+                        f"重复用词：{dup_match.group(0)}，疑似衍字，建议删除一个。",
+                        {"page": page_num + 1, "pos": dup_match.start()},
+                        severity="low",
+                        evidence_text=para[ctx_s:ctx_e],
+                    ))
+
         return issues
 
 # ==================================================================================
@@ -9762,6 +9787,16 @@ _NAR_REPEAT_ENTRY_BOUNDARY_RE = re.compile(
 #: 上年口径负面前缀：出现即视为 prior，不参与 current 比较
 _NAR_REPEAT_PRIOR_PREFIX_RE = re.compile(r"上\s*年(?:度|同期)?|以前年度")
 
+#: MR-P6（探针漏报补规则）：紧邻双数并列「增加 A（B）万元」——同一增减额
+#: 同句写出两个不一致的数值（探针 019 p27 实证：「增加 133.07（133.08）
+#: 万元」，133.08 恰为分项复算真值）。括注必须是纯数字+同一单位才入检，
+#: 排除「100（第二笔）」类非数字括注。
+_NAR_REPEAT_DUAL_AMOUNT_RE = re.compile(
+    r"(?P<verb>增\s*加|减\s*少|增\s*长|下\s*降|提\s*高|降\s*低)\s*"
+    r"(?P<a>\d[\d,，]*(?:\.\d+)?)\s*[（(]\s*(?P<b>\d[\d,，]*(?:\.\d+)?)\s*[）)]\s*"
+    r"(?P<unit>万\s*元|亿\s*元|元)"
+)
+
 
 def _nar_repeat_sections(
     merged: str, doc: Document, offsets: List[int]
@@ -9869,6 +9904,7 @@ class R33NarrativeIndicatorRepeat(Rule):
             merged, offsets, sections, year, unresolved, dynamic_generic
         )
         issues.extend(self._compare(triple_occs + bare_occs, year))
+        issues.extend(self._check_dual_amounts(merged, offsets))
         if unresolved:
             reasons = list(dict.fromkeys(unresolved))
             raise RuleDeferred(
@@ -9876,6 +9912,44 @@ class R33NarrativeIndicatorRepeat(Rule):
                 "；".join(reasons),
                 partial_issues=issues,
                 unresolved_reasons=reasons,
+            )
+        return issues
+
+    # ---- 内部：MR-P6 紧邻双数并列 ----
+
+    def _check_dual_amounts(
+        self, merged: str, offsets: List[int]
+    ) -> List[Issue]:
+        """「增加 A（B）万元」紧邻双数且不等 → medium，提示人工确认哪个数对。
+
+        同一事实同句并列两个数值，系统无法判定哪个正确（不任选其一），
+        属数字一致性缺陷；period 绑定不必要——两个数自相矛盾与年度无关。
+        """
+        issues: List[Issue] = []
+        seen: set = set()
+        for match in _NAR_REPEAT_DUAL_AMOUNT_RE.finditer(merged):
+            raw_unit = _txt_fund_norm(match.group("unit"))
+            factor = _TXT_FUND_UNIT_TO_WAN.get(raw_unit)
+            if factor is None:
+                continue
+            wan_a = _wp4e_amount(match.group("a")) * factor
+            wan_b = _wp4e_amount(match.group("b")) * factor
+            if wan_a is None or wan_b is None or wan_a == wan_b:
+                continue
+            start = match.start("a")
+            if start in seen:
+                continue
+            seen.add(start)
+            verb_clean = re.sub(r"\s+", "", match.group("verb"))
+            issues.append(
+                self._issue(
+                    f"同一{verb_clean}额存在两个并列数值"
+                    f"「{match.group('a')}（{match.group('b')}）{raw_unit}」，"
+                    "两数不一致，无法判定哪个为正确值，需人工复核底稿确认。",
+                    {"page": _txt_fund_page_for(offsets, start)},
+                    severity="medium",
+                    evidence_text=re.sub(r"\s+", "", match.group(0)),
+                )
             )
         return issues
 
