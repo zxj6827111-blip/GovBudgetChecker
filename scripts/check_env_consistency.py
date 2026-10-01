@@ -36,7 +36,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-CODE_ROOTS: Sequence[str] = ("api", "src", "scripts")
+CODE_ROOTS: Sequence[str] = ("api", "src", "scripts", "ocr_service")
 COMPOSE_FILES: Sequence[str] = ("docker-compose.yml", "docker-compose.ai.yml")
 ENV_EXAMPLE = ".env.example"
 

@@ -61,6 +61,7 @@ from api.queue_runtime import (
 from api.routes import register_routes
 
 from src.services.analyze_dual import DualModeAnalyzer
+from src.services.ocr_pipeline import maybe_ocr_scanned_pages
 from src.services.analysis_result_store import (
     persist_analysis_job_snapshot,
     sync_pending_analysis_snapshots,
@@ -373,8 +374,8 @@ def _assess_page_extraction(
 ) -> Dict[str, Any]:
     """评估每页文本抽取质量，识别疑似扫描页与低文本页。
 
-    本轮不做自动 OCR：这里只负责"检测 + 算覆盖率"，
-    是否转人工复核由任务级质量门禁（Task 3）决定。
+    此函数只负责"检测 + 算原生文本/表格覆盖率"。OCR 候选单独保存在
+    ParseArtifact；在置信度、表头口径和复识别校验完成前，不降低本门禁风险。
 
     判定口径：
       - 去空白字符数低于阈值、且未抽到任何非空表格单元格 -> 低文本页；
@@ -487,7 +488,7 @@ def _evaluate_quality_gate(
 
     触发人工复核的条件（任一命中即转）：
       1. 页面文本覆盖率低于阈值；
-      2. 存在疑似扫描页（本轮不做 OCR，必然漏检）；
+      2. 存在疑似扫描页（OCR 未通过确定性使用校验，内容尚未参与规则）；
       3. 报告类型无法识别（unknown 只跑了通用规则，专项规则未覆盖）；
       4. 年度无法识别（同比/口径类判断失去基准）；
       5. AI 被配置为必需能力却失败（legacy 参数路径）；
@@ -541,7 +542,7 @@ def _evaluate_quality_gate(
                 "code": "scanned_pages_detected",
                 "message": (
                     f"检测到 {scanned_page_count} 页疑似扫描页/无文本层，"
-                    "当前未启用 OCR，这些页面内容未参与审核"
+                    "OCR结果尚未通过置信度、口径绑定及复识别校验，内容未参与确定性规则检查"
                 ),
                 "pages": (page_assessment.get("scanned_pages") or [])[:50],
             }
@@ -1231,8 +1232,13 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                 )
                 parse_artifact_obj = None
 
-        # 扫描页/低文本页检测：本轮只检测不 OCR，结果先落状态供前端与后续门禁使用
+        # 扫描页/低文本页检测：结果先落状态供前端与后续门禁使用
         page_assessment = _assess_page_extraction(page_texts, page_tables)
+        # OCR（ZC-02 / SYS-10）：默认关闭；显式启用且存在扫描页时按页补识别。
+        # 结果只登记进统一解析对象与 meta，原生文本层不被覆盖（冲突保留）。
+        ocr_summary = await maybe_ocr_scanned_pages(
+            str(pdf_path), page_assessment, parse_artifact_obj
+        )
         if page_assessment["low_text_page_count"]:
             logger.warning(
                 "job %s low-text pages detected: coverage=%.4f scanned=%d pages=%s",
@@ -1674,6 +1680,9 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             )
         runtime.write_structured_ingest_payload(job_dir, structured_ingest_summary)
         result["meta"]["structured_ingest"] = structured_ingest_summary
+        if ocr_summary is not None:
+            # ZC-02：OCR 摘要（页级状态、低分块计数、原生/OCR 冲突）如实落账
+            result["meta"]["ocr"] = ocr_summary
         # 解析质量以结构化入库结果为准重新评估（含缺表/歧义/facts 信号）
         result["meta"]["parser_quality"] = _assess_parser_quality(
             page_assessment, structured_ingest_summary
@@ -1863,4 +1872,3 @@ async def _run_pipeline_body(job_dir: Path) -> None:
 
 runtime.set_pipeline_runner(_run_pipeline)
 register_routes(app)
-

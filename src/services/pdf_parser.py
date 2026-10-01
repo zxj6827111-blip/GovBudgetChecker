@@ -69,7 +69,7 @@ TITLE_LINE_PATTERN = re.compile(r"(预算表|决算表|总表|经费预算表|�
 TITLE_NOISE_PATTERN = re.compile(r"^(编制部门|编制单位|单位[:：])")
 
 #: 解析器指纹：表抽取策略组合变化时必须更新（缓存按指纹失效）
-PARSER_FINGERPRINT = "pdfplumber-cells-v2-zc01"
+PARSER_FINGERPRINT = "pdfplumber-cells-v3-zc02"
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +87,7 @@ from src.schemas.parse_artifact import (  # noqa: E402,F401
     ParsePageState,
     ParsedCell,
     ParsedTable,
+    ParsedTextBlock,
     dumps_decimal,
     parse_decimal,
 )
@@ -201,6 +202,7 @@ class PDFParser:
     ) -> ParseArtifact:
         """从已打开的 pdfplumber 句柄构建解析对象（供子进程复用同一次打开）。"""
         page_states: List[ParsePageState] = []
+        text_blocks: List[ParsedTextBlock] = []
         fragments: List[ParsedTable] = []
 
         page_count = len(pdf.pages)
@@ -212,8 +214,34 @@ class PDFParser:
                     has_text_layer=bool(page_text),
                     text_chars=len(page_text),
                     is_scanned=not bool(page_text),
+                    rotation=int(getattr(page, "rotation", 0) or 0),
                 )
             )
+            # 保留原生文字块及其页坐标，供规则上下文与证据层共享。
+            # 文本抽取异常时只影响该页文字块，不丢弃可用的表格片段。
+            try:
+                words = page.extract_words() or []
+            except Exception:
+                words = []
+            for word_index, word in enumerate(words):
+                text = str(word.get("text") or "").strip()
+                if not text:
+                    continue
+                bbox_values = [word.get("x0"), word.get("top"), word.get("x1"), word.get("bottom")]
+                try:
+                    bbox = tuple(float(value) for value in bbox_values)
+                except (TypeError, ValueError):
+                    bbox = None
+                text_blocks.append(
+                    ParsedTextBlock(
+                        block_uid=f"native-p{page_number}-w{word_index}",
+                        page_number=page_number,
+                        text=text,
+                        bbox=bbox if bbox and bbox[2] > bbox[0] and bbox[3] > bbox[1] else None,
+                        confidence=None,
+                        extraction_method="native_text",
+                    )
+                )
             fragments.extend(self._extract_tables_from_page(page, page_number))
 
         merged = self._coalesce_tables(fragments)
@@ -225,6 +253,7 @@ class PDFParser:
             ocr_model_fingerprint=ocr_model_fingerprint,
             page_count=page_count,
             page_states=page_states,
+            text_blocks=text_blocks,
             # 合并后的逻辑表作为片段承载（ZC-02 再把片段与实例分开建模）
             table_fragments=merged,
             logical_tables=[

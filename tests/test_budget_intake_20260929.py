@@ -154,7 +154,9 @@ def final_replays() -> Dict[str, Dict[str, Any]]:
 EXPECTED_BUD_STATUS = {
     "jianguanwei": {"BUD-105": "pass", "BUD-107": "pass", "BUD-108": "fail", "BUD-109": "pass"},
     "chengguan": {"BUD-105": "pass", "BUD-107": "pass", "BUD-108": "fail", "BUD-109": "pass"},
-    "wenlvju": {"BUD-105": "pass", "BUD-107": "pass", "BUD-108": "not_applicable", "BUD-109": "pass"},
+    # ZC-02（SYS-02）多页续表恢复后：T3 第三页行被读全，
+    # BUD-108 从 not_applicable（缺数据结构性不适用）变为真实 pass
+    "wenlvju": {"BUD-105": "pass", "BUD-107": "pass", "BUD-108": "pass", "BUD-109": "pass"},
 }
 
 
@@ -178,7 +180,9 @@ def test_bud_105_107_108_109_real_judgments(budget_replays, alias):
 EXPECTED_BUD_UNRESOLVED = {
     "jianguanwei": {"V33-PERF-PHASE-AMOUNT", "CMM-005"},
     "chengguan": set(),
-    "wenlvju": {"BUD-102", "BUD-103"},
+    # ZC-02 多页续表恢复后：BUD-102/103 所需的合计行在第三页被找回，
+    # 不再取数失败（旧行为"只读前两页"锁定的 insufficient 已解除）
+    "wenlvju": set(),
 }
 
 
@@ -200,19 +204,16 @@ def test_budget_unresolved_total_le_6(budget_replays):
 
 
 def test_wenlvju_structural_absence_documented(budget_replays):
-    """文旅局样张 T3/T8 无「合计/总计」行：fail-closed 如实挂 insufficient，
-    且 BUD-108 以 not_applicable 留痕（不是取数失败）。"""
+    """ZC-02 后文旅局样张的新事实：T3/T8 跨三页，第三页的合计行被
+    续表恢复找回，BUD-102/103/108 全部真实完成（旧锁定为 insufficient/
+    not_applicable，是"只读前两页"漏读第三页的产物，已按新契约订正）。"""
     summary = budget_replays["wenlvju"]["summary"]
-    unresolved = {
-        item.get("rule_id"): item for item in summary["unresolved_rules"]
-    }
-    assert "BUD-102" in unresolved and "T3未找到合计" in str(
-        unresolved["BUD-102"].get("detail")
-    )
-    assert "BUD-103" in unresolved and "T8未找到合计" in str(
-        unresolved["BUD-103"].get("detail")
-    )
-    assert summary["rule_statuses"].get("BUD-108") == "not_applicable"
+    statuses = summary["rule_statuses"]
+    assert statuses.get("BUD-102") == "pass"
+    assert statuses.get("BUD-103") == "pass"
+    assert statuses.get("BUD-108") == "pass"
+    unresolved = {item.get("rule_id") for item in summary["unresolved_rules"]}
+    assert "BUD-102" not in unresolved and "BUD-103" not in unresolved
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,33 @@ services:
       timeout: 5s
       retries: 5
 
+  # ZC-02：本地 OCR（PaddleOCR CPU，初始化后离线使用）。
+  # 默认不随基础设施启动：`docker compose --profile ocr up -d ocr`。
+  # 模型目录按 sha256 清单预置到 ./models/，缺失时容器启动即失败（不联网下载）。
+  ocr:
+    profiles:
+      - ocr
+    build:
+      context: .
+      dockerfile: Dockerfile.ocr
+    container_name: fiscal_ocr
+    ports:
+      - "127.0.0.1:9010:9010"
+    environment:
+      OCR_CPU_THREADS: "4"
+      OCR_SERVICE_PORT: "9010"
+      OCR_MODEL_MANIFEST: /models/MANIFEST.sha256
+      PADDLE_HOME: /models
+    volumes:
+      - ./models:/models:ro
+    networks:
+      - ocr_offline
+    restart: unless-stopped
+
+networks:
+  ocr_offline:
+    internal: true
+
 volumes:
   fiscal_pgdata:
     driver: local

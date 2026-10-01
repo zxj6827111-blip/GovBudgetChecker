@@ -376,8 +376,13 @@ def resolve_document_profile(
     # 机构名里出现"人民政府"极常见（如"…人民政府石泉路街道办事处（本级）"
     # 是街道单位的预算），据此判成政府级会把部门的材料错分成政府口径，
     # 比识别不到更危险。政府级材料的标题会直接写"政府预算/政府决算"。
-    if any(token in normalize_cover_line(cover_title) for token in _GOVERNMENT_LABEL_TOKENS):
-        scope_hint = "government"
+    normalized_title = normalize_cover_line(cover_title)
+    if any(token in normalized_title for token in _GOVERNMENT_LABEL_TOKENS):
+        # ZC-02（SYS-17）：连写封面"上海市普陀区财政局2024年度部门决算"是
+        # 财政局自身的**部门决算**，不是政府总决算——标题明示"部门"时，
+        # 机构名里的"财政局"不得把主体覆盖成政府级。
+        if "部门" not in normalized_title:
+            scope_hint = "government"
 
     # 主体层级：政府级 > 封面标签/标题 > 机构名后缀推断。
     level_candidates: List[Tuple[str, Any, str]] = []

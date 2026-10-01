@@ -402,6 +402,154 @@ def _largest_table_on_page(tables: Sequence[Sequence[Sequence[Any]]]) -> Optiona
     return [[str(c or "").strip() for c in row] for row in largest]
 
 
+# ---------------------------------------------------------------------------
+# ZC-02（SYS-02）：目标表按表种语义绑定，删除"本页最大表"选择。
+# 每个预算表种给出内容签名词：签名是表内容（表头/行标签）层面的证据，
+# 与页级表题锚（find_budget_anchors）互补。同页多表时按签名命中数选择；
+# 无任何证据或并列时 fail-closed 返回 None（转未完成），不猜最大表。
+# ---------------------------------------------------------------------------
+_BUDGET_TABLE_SIGNATURES: Dict[str, Tuple[str, ...]] = {
+    "BUD_T1": ("收入总计", "支出总计", "收入预算", "支出预算"),
+    "BUD_T2": ("本年收入合计", "财政拨款收入", "事业收入", "上年结转"),
+    "BUD_T3": ("本年支出合计", "基本支出", "项目支出", "财政拨款支出"),
+    "BUD_T4": ("财政拨款收支", "财政拨款收入", "财政拨款支出", "年初结转和结余"),
+    "BUD_T5": ("科目编码", "功能分类", "类", "款", "项"),
+    "BUD_T6": ("经济分类", "工资福利支出", "商品和服务支出", "对个人和家庭的补贴"),
+    "BUD_T7": ("政府采购", "货物", "工程", "服务"),
+    "BUD_T8": ("政府性基金", "基金预算"),
+    "BUD_T9": ("国有资本经营", "国有资本"),
+}
+
+#: 续表身份校验的最小证据：列数一致，且表头文本重合或数据行延续
+_CONTINUATION_MIN_OVERLAP = 0.6
+
+
+def _table_signature_score(rows: Sequence[Sequence[Any]], table_key: str) -> int:
+    """按表种签名词给表内容打分。"""
+    tokens = _BUDGET_TABLE_SIGNATURES.get(table_key)
+    if not tokens or not rows:
+        return 0
+    text = "".join(
+        str(cell or "").strip() for row in rows[:6] for cell in row if str(cell or "").strip()
+    )
+    return sum(1 for token in tokens if token in text)
+
+
+def _select_target_table_on_page(
+    tables: Sequence[Sequence[Sequence[Any]]],
+    table_key: str,
+) -> Optional[List[List[str]]]:
+    """同页多表时按目标表种签名绑定；无法区分时 fail-closed 返回 None。"""
+    if not tables:
+        return None
+    if len(tables) == 1:
+        return [[str(c or "").strip() for c in row] for row in tables[0]]
+
+    scored = [(table, _table_signature_score(table, table_key)) for table in tables]
+    best_score = max(score for _table, score in scored)
+    if best_score <= 0:
+        # 同页多表但无任何签名证据：无法证明哪张是目标表
+        return None
+    hits = [table for table, score in scored if score == best_score]
+    if len(hits) > 1:
+        # 并列：无法证明唯一目标身份
+        return None
+    return [[str(c or "").strip() for c in row] for row in hits[0]]
+
+
+def _table_header_texts(rows: Sequence[Sequence[Any]], header_rows: int = 1) -> List[str]:
+    headers: List[str] = []
+    for row in rows[:header_rows]:
+        for cell in row:
+            text = str(cell or "").strip()
+            if text:
+                headers.append(text)
+    return headers
+
+
+def _continuation_identity_matches(main_rows: Sequence[Sequence[Any]], next_table: Sequence[Sequence[Any]]) -> bool:
+    """续表身份校验（ZC-02）：列数一致，且表头重合或为纯数据延续行。
+
+    不以"出现合计行"或"拼接后金额相等"作为闭合依据（任务包 §三 ZC-02 #4）：
+    金额相等恰恰可能是错拼，只允许结构与列语义证据。
+    """
+    if not main_rows or not next_table:
+        return False
+    main_cols = max((len(row) for row in main_rows[:3]), default=0)
+    next_cols = max((len(row) for row in next_table[:3]), default=0)
+    if main_cols == 0 or next_cols == 0 or main_cols != next_cols:
+        return False
+
+    def _row_has_numeric(row: Sequence[Any]) -> bool:
+        return any(
+            str(cell or "")
+            .strip()
+            .replace(",", "")
+            .replace(".", "")
+            .isdigit()
+            for cell in row
+        )
+
+    # 以**首行**判定续页形态：首行含数值 = 数据延续页（无表头）；
+    # 首行无数值 = 带表头的新页，必须通过表头重合校验。
+    next_is_data = bool(next_table) and _row_has_numeric(next_table[0])
+    main_header = set(_table_header_texts(main_rows))
+    next_header = set(_table_header_texts(next_table)) if not next_is_data else set()
+
+    if main_header and next_header:
+        overlap = len(main_header & next_header) / max(len(main_header), len(next_header))
+        if overlap >= _CONTINUATION_MIN_OVERLAP:
+            return True
+        # 下一页带不同表头：身份冲突，不得拼接
+        return False
+    if next_is_data:
+        # 纯数据延续：列数一致 + 含数值行即认可
+        return True
+    # 双方都提不出表头/数据证据：无法证明延续身份
+    return False
+
+
+def _get_budget_table_rows(
+    doc: Document,
+    anchors: Dict[str, List[int]],
+    table_key: str,
+    include_continuation: bool = True,
+) -> Tuple[Optional[List[List[str]]], Optional[int]]:
+    page = _first_anchor_page(anchors, table_key)
+    if not page:
+        return None, None
+
+    if page > len(doc.page_tables):
+        return None, page
+
+    # ZC-02：签名绑定目标表，不再默认"本页最大表"
+    main_table = _select_target_table_on_page(doc.page_tables[page - 1], table_key)
+    if not main_table:
+        return None, page
+
+    rows = main_table
+    if include_continuation and not _has_total_row(rows):
+        # ZC-02：多页续表逐页恢复，续页必须通过身份校验（列语义/表头）；
+        # 身份冲突（下一页是另一张表）时停止拼接，保留已确认部分。
+        current_page = page
+        while current_page < len(doc.page_tables):
+            next_table = _select_target_table_on_page(
+                doc.page_tables[current_page], table_key
+            )
+            if next_table is None:
+                next_table = _largest_table_on_page(doc.page_tables[current_page])
+            if not next_table:
+                break
+            if not _continuation_identity_matches(rows, next_table):
+                break
+            rows = rows + next_table
+            current_page += 1
+            if _has_total_row(rows):
+                break
+
+    return rows, page
+
+
 def _has_total_row(rows: Sequence[Sequence[Any]]) -> bool:
     for row in rows[-8:]:
         txt = _row_text(row)
@@ -612,34 +760,6 @@ def _first_anchor_page(anchors: Dict[str, List[int]], key: str) -> Optional[int]
     if not pages:
         return None
     return min(pages)
-
-
-def _get_budget_table_rows(
-    doc: Document,
-    anchors: Dict[str, List[int]],
-    table_key: str,
-    include_continuation: bool = True,
-) -> Tuple[Optional[List[List[str]]], Optional[int]]:
-    page = _first_anchor_page(anchors, table_key)
-    if not page:
-        return None, None
-
-    if page > len(doc.page_tables):
-        return None, page
-
-    main_table = _largest_table_on_page(doc.page_tables[page - 1])
-    if not main_table:
-        return None, page
-
-    rows = main_table
-    if include_continuation and not _has_total_row(rows) and page < len(doc.page_tables):
-        next_table = _largest_table_on_page(doc.page_tables[page])
-        if next_table:
-            rows = rows + next_table
-
-    return rows, page
-
-
 
 
 def _is_table_boundary_cell(c: str) -> bool:

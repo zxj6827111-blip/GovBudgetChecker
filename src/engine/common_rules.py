@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from decimal import Decimal
-from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 from .amount_math import compute_dynamic_envelope
 from .budget_rules import find_budget_anchors
@@ -131,75 +131,111 @@ def _extract_three_public_narrative(text: str) -> Dict[str, Optional[float]]:
     }
 
 
-def _extract_number_row_from_line(line: str) -> Optional[List[float]]:
-    raw_values = re.findall(r"[0-9][0-9,]*\.?[0-9]*", line)
-    if len(raw_values) < 6:
+# ---------------------------------------------------------------------------
+# ZC-02（SYS-04）：三公表格数值改为语义列映射。
+# 旧实现按"数字最多的一行 + 固定位置（合计、出国、接待、公车小计、购置、
+# 运行）"取数，合法列序变化（如「合计、出国、公车小计、购置、运行、接待」）
+# 会产生 4 条错配报警。现在：表头文本 → 字段 语义匹配后按列取数；
+# 匹配不到语义的列不参与判定，宁缺毋错。
+# ---------------------------------------------------------------------------
+
+#: 表头语义匹配表：顺序敏感——更具体的模式在前（car_total 必须先于
+#: car_buy / car_run，「机关运行」必须先于泛化「运行」）。
+_THREE_PUBLIC_HEADER_MATCHERS: Sequence[Tuple[str, Sequence[str]]] = (
+    ("org_run", ("机关运行",)),
+    ("car_total", ("购置及运行", "购置及运行维护")),
+    ("car_buy", ("购置费", "购置")),
+    ("car_run", ("运行维护费", "运行费", "运行")),
+    ("reception", ("公务接待", "接待")),
+    ("abroad", ("因公出国", "出国")),
+    ("total", ("合计", "总计")),
+)
+
+
+def _match_three_public_header(raw_text: Any) -> Optional[str]:
+    compact = _compact_text(str(raw_text or ""))
+    if not compact:
         return None
-    values: List[float] = []
-    for item in raw_values:
-        value = _to_float(item)
-        if value is None:
-            continue
-        values.append(value)
-    return values if len(values) >= 6 else None
+    for field, tokens in _THREE_PUBLIC_HEADER_MATCHERS:
+        if any(token in compact for token in tokens):
+            return field
+    return None
 
 
-def _extract_three_public_table_values_from_text(page_text: str) -> Optional[List[float]]:
-    best: Optional[List[float]] = None
-    best_score = -1
-    for line in page_text.splitlines():
-        nums = _extract_number_row_from_line(line)
-        if not nums:
-            continue
-        score = len(nums) + (1 if "." in line else 0)
-        if score > best_score:
-            best = nums
-            best_score = score
-    return best
-
-
-def _extract_three_public_table_values_from_tables(page_tables: Any) -> Optional[List[float]]:
+def _extract_three_public_table_values_semantic(
+    page_tables: Any,
+) -> Optional[Dict[str, Optional[float]]]:
+    """从表结构中按表头语义提取三公数值；无语义证据时返回 None（不猜位）。"""
     if not isinstance(page_tables, list):
         return None
-    best: Optional[List[float]] = None
-    best_score = -1
+    best: Optional[Dict[str, Optional[float]]] = None
+    best_matched = 0
     for table in page_tables:
-        if not isinstance(table, list):
+        if not isinstance(table, list) or len(table) < 2:
             continue
-        for row in table:
+        # 找表头行：前 4 行中非数值单元格最多的行
+        header_idx = 0
+        header_non_numeric = -1
+        for row_idx, row in enumerate(table[:4]):
             if not isinstance(row, list):
                 continue
-            nums: List[float] = []
-            for cell in row:
-                value = _to_float(cell)
-                if value is not None:
-                    nums.append(value)
-            if len(nums) < 6:
+            non_numeric = sum(1 for cell in row if _to_float(cell) is None and str(cell or "").strip())
+            if non_numeric > header_non_numeric:
+                header_non_numeric = non_numeric
+                header_idx = row_idx
+        header_row = table[header_idx] if isinstance(table[header_idx], list) else []
+        if not header_row:
+            continue
+        field_by_col: Dict[int, str] = {}
+        for col_idx, cell in enumerate(header_row):
+            field = _match_three_public_header(cell)
+            if field and field not in field_by_col.values():
+                field_by_col[col_idx] = field
+        # 至少：合计 + 两个分项（与 _has_three_public_core_fields 同口径）
+        if "total" not in field_by_col.values() or len(field_by_col) < 3:
+            continue
+        for row in table[header_idx + 1 :]:
+            if not isinstance(row, list):
                 continue
-            score = len(nums)
-            if score > best_score:
-                best = nums
-                best_score = score
+            values: Dict[str, Optional[float]] = {
+                "total": None,
+                "abroad": None,
+                "reception": None,
+                "car_total": None,
+                "car_buy": None,
+                "car_run": None,
+                "org_run": None,
+            }
+            matched = 0
+            for col_idx, field in field_by_col.items():
+                value = _to_float(row[col_idx]) if col_idx < len(row) else None
+                if value is not None:
+                    values[field] = value
+                    matched += 1
+            if values.get("total") is None:
+                continue
+            if best is None or matched > best_matched:
+                best = values
+                best_matched = matched
     return best
 
 
-def _map_three_public_values(values: Sequence[float]) -> Dict[str, Optional[float]]:
-    keys = (
-        "total",
-        "abroad",
-        "reception",
-        "car_total",
-        "car_buy",
-        "car_run",
-        "org_run",
+def _has_three_public_core_fields(values: Mapping[str, Optional[float]]) -> bool:
+    """至少要有合计 + 两个分项（出国/接待/公车任二）才承认这次提取。"""
+    if values.get("total") is None:
+        return False
+    sub_hits = sum(
+        1 for key in ("abroad", "reception", "car_total") if values.get(key) is not None
     )
-    mapped: Dict[str, Optional[float]] = {}
-    for idx, key in enumerate(keys):
-        mapped[key] = values[idx] if idx < len(values) else None
-    return mapped
+    return sub_hits >= 2
 
 
 def _find_three_public_table(doc: Document) -> Tuple[Optional[int], Optional[Dict[str, Optional[float]]]]:
+    """定位三公经费表并按语义提取表侧数值（ZC-02 / SYS-04）。
+
+    顺序：表头语义映射的表结构提取优先；无表结构时退化为"三公表页文本的
+    标签化提取"（与说明侧同一套标签谓词，位置无关）。固定位置映射已删除。
+    """
     texts = _page_texts(doc)
     tables = _page_tables(doc)
 
@@ -213,14 +249,15 @@ def _find_three_public_table(doc: Document) -> Tuple[Optional[int], Optional[Dic
         if "\u76ee\u5f55" in page_text[:120]:
             continue
 
-        from_text = _extract_three_public_table_values_from_text(page_text)
-        if from_text is not None:
-            return idx + 1, _map_three_public_values(from_text)
-
         if idx < len(tables):
-            from_table = _extract_three_public_table_values_from_tables(tables[idx])
-            if from_table is not None:
-                return idx + 1, _map_three_public_values(from_table)
+            from_table = _extract_three_public_table_values_semantic(tables[idx])
+            if from_table is not None and _has_three_public_core_fields(from_table):
+                return idx + 1, from_table
+
+        # ZC-02 纪律：表侧数值只来自表结构的语义列映射。
+        # 不回退到"表页文本的标签化提取"——说明侧已消费同一批文本，
+        # 再拿来当表侧会造成"自己和自己比"的假一致，掩蔽真实差异；
+        # 表结构缺失时宁可记"未定位到三公经费表格数值"（fail-closed）。
     return None, None
 
 

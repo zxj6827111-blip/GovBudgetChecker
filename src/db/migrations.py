@@ -1454,6 +1454,16 @@ MIGRATIONS: List[Dict[str, Any]] = [
             "ALTER TABLE fact_fiscal_line_items ADD COLUMN IF NOT EXISTS instance_uid TEXT",
         ]
     },
+    {
+        "id": "2026-10-01_0023_parse_text_and_ocr_candidates",
+        "description": "Persist unified native/OCR text blocks, OCR table candidates, and page coordinate transforms",
+        "sql": [
+            "ALTER TABLE parse_runs ADD COLUMN IF NOT EXISTS text_blocks JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE parse_runs ADD COLUMN IF NOT EXISTS ocr_table_candidates JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE parse_runs ADD COLUMN IF NOT EXISTS coordinate_space TEXT NOT NULL DEFAULT 'pdf_page_points'",
+            "ALTER TABLE parse_runs ADD COLUMN IF NOT EXISTS coordinate_transforms JSONB NOT NULL DEFAULT '{}'::jsonb",
+        ],
+    },
 ]
 
 

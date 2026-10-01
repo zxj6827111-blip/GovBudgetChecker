@@ -629,13 +629,18 @@ def test_budget_functional_classification_name_rule_ignores_matching_names() -> 
 
 
 def test_common_three_public_narrative_rule_detects_run_fee_mismatch() -> None:
+    """真实差异正例：表内购置/运行与说明不一致必须报 error。
+
+    ZC-02（SYS-04）：固定位置取数已删除——三公表以带表头的表结构构造
+    （真实 PDF 的形态），语义列映射读取字段；裸数字文本行无法证明列
+    语义，按任务纪律转未完成，不再按位置猜列。
+    """
     page_texts = [
         "2026年区级单位预算",
         "\n".join(
             [
                 "2026年单位“三公”经费和机关运行经费预算表",
                 "单位:万元",
-                "2.68 0 0 2.68 0 2.68 0",
             ]
         ),
         "\n".join(
@@ -647,10 +652,23 @@ def test_common_three_public_narrative_rule_detects_run_fee_mismatch() -> None:
             ]
         ),
     ]
+    # 表结构：旧版固有序（合计、出国、接待、公车小计、购置、运行、机关运行）
+    three_public_table = [
+        [
+            "合计",
+            "因公出国（境）费",
+            "公务接待费",
+            "公务用车购置及运行费",
+            "其中：购置费",
+            "其中：运行费",
+            "机关运行经费",
+        ],
+        ["2.68", "0", "0", "2.68", "0", "2.68", "0"],
+    ]
     doc = build_document(
         path="unit-2026-budget.pdf",
         page_texts=page_texts,
-        page_tables=[[], [], []],
+        page_tables=[[], [three_public_table], []],
         filesize=100,
     )
 

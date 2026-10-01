@@ -85,11 +85,7 @@ def _build_pair(ai_severity: str, rule_severity: str, ai_amount: float = 100, ru
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="SYS-02：页级表题锚未绑定目标表，同页最大表覆盖小目标表（归属 ZC-02 目标表绑定）",
-)
-def test_xfail_largest_table_misbinding() -> None:
+def test_fixed_zc02_largest_table_misbinding() -> None:
     """目标表较小、无关采购表较大：应选目标表，不选最大表。"""
     small = [["项目", "预算数", "项目", "预算数"], ["收入总计", "100.00", "支出总计", "100.00"]]
     large = [
@@ -105,11 +101,7 @@ def test_xfail_largest_table_misbinding() -> None:
     assert rows == small, "必须选中目标表而不是同页最大的无关表"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="SYS-02：跨页恢复只拼下一页最大表，会把另一张表接成续表（归属 ZC-02 跨页表实例）",
-)
-def test_xfail_next_page_different_table_merged_as_continuation() -> None:
+def test_fixed_zc02_next_page_different_table_merged_as_continuation() -> None:
     """下一页是另一张表：不得拼成续表。
 
     触发路径（budget_rules._get_budget_table_rows）：目标页表格没有合计行时，
@@ -159,11 +151,7 @@ def test_xfail_previous_year_narrative_misbinding() -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="SYS-04：三公旧路径固定按数字位置取值，合法列序变化产生错配（归属 ZC-02 语义列映射）",
-)
-def test_xfail_three_public_column_order() -> None:
+def test_fixed_zc02_three_public_column_order() -> None:
     """合法列序「合计、出国、公车小计、购置、运行、接待」不得产生错配报警。"""
     text = (
         "2026年部门“三公”经费和机关运行经费预算表\n单位：万元\n"

@@ -259,6 +259,70 @@ class ParsedTable:
 
 
 @dataclass
+class ParsedTextBlock:
+    """原始页文字块，供规则上下文和证据定位共同引用。"""
+
+    block_uid: str
+    page_number: int
+    text: str
+    bbox: Optional[Tuple[float, float, float, float]] = None
+    confidence: Optional[float] = None
+    extraction_method: str = "native_text"
+
+    def to_dict(self) -> Dict[str, Any]:
+        data = dataclasses.asdict(self)
+        data["bbox"] = list(self.bbox) if self.bbox else None
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ParsedTextBlock":
+        bbox = data.get("bbox")
+        return cls(
+            block_uid=str(data.get("block_uid") or uuid.uuid4().hex),
+            page_number=int(data.get("page_number") or 1),
+            text=str(data.get("text") or ""),
+            bbox=tuple(float(item) for item in bbox) if bbox else None,
+            confidence=_opt_float(data.get("confidence")),
+            extraction_method=str(data.get("extraction_method") or "native_text"),
+        )
+
+
+@dataclass
+class OcrTableCandidate:
+    """OCR 提取的候选表格；未完成身份及逐格置信度校验前不得参与规则计算。"""
+
+    candidate_uid: str
+    page_number: int
+    rows: List[List[str]]
+    render_bbox: Optional[Tuple[float, float, float, float]] = None
+    page_bbox: Optional[Tuple[float, float, float, float]] = None
+    coordinate_transform_id: Optional[str] = None
+    verification_status: str = "unverified"
+    extraction_method: str = "ocr"
+
+    def to_dict(self) -> Dict[str, Any]:
+        data = dataclasses.asdict(self)
+        data["render_bbox"] = list(self.render_bbox) if self.render_bbox else None
+        data["page_bbox"] = list(self.page_bbox) if self.page_bbox else None
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "OcrTableCandidate":
+        render_bbox = data.get("render_bbox")
+        page_bbox = data.get("page_bbox")
+        return cls(
+            candidate_uid=str(data.get("candidate_uid") or uuid.uuid4().hex),
+            page_number=int(data.get("page_number") or 1),
+            rows=[[str(cell or "") for cell in row] for row in data.get("rows") or []],
+            render_bbox=tuple(float(item) for item in render_bbox) if render_bbox else None,
+            page_bbox=tuple(float(item) for item in page_bbox) if page_bbox else None,
+            coordinate_transform_id=_opt_str(data.get("coordinate_transform_id")),
+            verification_status=str(data.get("verification_status") or "unverified"),
+            extraction_method=str(data.get("extraction_method") or "ocr"),
+        )
+
+
+@dataclass
 class LogicalTableInstance:
     """跨页逻辑表实例：同种表可有多个独立实例（ZC-01 / SYS-16）。
 
@@ -413,6 +477,10 @@ class ParsePageState:
     is_scanned: bool = False
     rotation: int = 0
     note: str = ""
+    ocr_status: str = "not_run"
+    ocr_text_chars: int = 0
+    ocr_table_count: int = 0
+    ocr_error: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)
@@ -426,6 +494,10 @@ class ParsePageState:
             is_scanned=bool(data.get("is_scanned")),
             rotation=int(data.get("rotation") or 0),
             note=str(data.get("note") or ""),
+            ocr_status=str(data.get("ocr_status") or "not_run"),
+            ocr_text_chars=int(data.get("ocr_text_chars") or 0),
+            ocr_table_count=int(data.get("ocr_table_count") or 0),
+            ocr_error=_opt_str(data.get("ocr_error")),
         )
 
 
@@ -445,6 +517,8 @@ class ParseArtifact:
     parse_run_uid: str = field(default_factory=lambda: uuid.uuid4().hex)
     page_count: int = 0
     page_states: List[ParsePageState] = field(default_factory=list)
+    text_blocks: List[ParsedTextBlock] = field(default_factory=list)
+    ocr_table_candidates: List[OcrTableCandidate] = field(default_factory=list)
     table_fragments: List[ParsedTable] = field(default_factory=list)
     logical_tables: List[LogicalTableInstance] = field(default_factory=list)
     #: bbox 坐标系描述（统一 PDF 页面坐标；渲染/旋转/裁剪变换在此登记）
@@ -461,6 +535,8 @@ class ParseArtifact:
             "parse_run_uid": self.parse_run_uid,
             "page_count": self.page_count,
             "page_states": [page.to_dict() for page in self.page_states],
+            "text_blocks": [block.to_dict() for block in self.text_blocks],
+            "ocr_table_candidates": [table.to_dict() for table in self.ocr_table_candidates],
             "table_fragments": [fragment.to_dict() for fragment in self.table_fragments],
             "logical_tables": [instance.to_dict() for instance in self.logical_tables],
             "coordinate_space": self.coordinate_space,
@@ -478,6 +554,10 @@ class ParseArtifact:
             parse_run_uid=str(data.get("parse_run_uid") or uuid.uuid4().hex),
             page_count=int(data.get("page_count") or 0),
             page_states=[ParsePageState.from_dict(item) for item in data.get("page_states") or []],
+            text_blocks=[ParsedTextBlock.from_dict(item) for item in data.get("text_blocks") or []],
+            ocr_table_candidates=[
+                OcrTableCandidate.from_dict(item) for item in data.get("ocr_table_candidates") or []
+            ],
             table_fragments=[ParsedTable.from_dict(item) for item in data.get("table_fragments") or []],
             logical_tables=[
                 LogicalTableInstance.from_dict(item) for item in data.get("logical_tables") or []

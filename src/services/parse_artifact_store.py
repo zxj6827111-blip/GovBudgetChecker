@@ -26,10 +26,12 @@ from src.schemas.parse_artifact import (
     EvidenceRef,
     FiscalFact,
     LogicalTableInstance,
+    OcrTableCandidate,
     ParseArtifact,
     ParsePageState,
     ParsedCell,
     ParsedTable,
+    ParsedTextBlock,
 )
 
 logger = logging.getLogger(__name__)
@@ -99,8 +101,9 @@ async def persist_parse_artifact(
             INSERT INTO parse_runs (
                 parse_run_uid, document_version_id, source_file_hash,
                 parser_name, parser_fingerprint, config_fingerprint,
-                ocr_model_fingerprint, page_count, page_states, status
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'completed')
+                ocr_model_fingerprint, page_count, page_states, text_blocks,
+                ocr_table_candidates, coordinate_space, coordinate_transforms, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'completed')
             ON CONFLICT (parse_run_uid) DO UPDATE
                 SET parse_run_uid = EXCLUDED.parse_run_uid
             RETURNING id
@@ -114,6 +117,10 @@ async def persist_parse_artifact(
             artifact.ocr_model_fingerprint,
             artifact.page_count,
             _json([page.to_dict() for page in artifact.page_states]),
+            _json([block.to_dict() for block in artifact.text_blocks]),
+            _json([table.to_dict() for table in artifact.ocr_table_candidates]),
+            artifact.coordinate_space,
+            _json(artifact.coordinate_transforms),
         )
         parse_run_id = int(row["id"])
 
@@ -174,6 +181,38 @@ async def persist_parse_artifact(
                 cell.extraction_method,
                 cell.row_span,
                 cell.col_span,
+            )
+
+        for block in artifact.text_blocks:
+            evidence = EvidenceRef(
+                file_hash=artifact.source_file_hash,
+                physical_page=block.page_number,
+                source_block_id=block.block_uid,
+                quote=block.text,
+                bbox=block.bbox,
+                source_method=block.extraction_method,
+                verification_status="unverified",
+                location_level="exact_span" if block.bbox else "unresolved",
+            )
+            await conn.execute(
+                """
+                INSERT INTO parse_evidence (
+                    parse_run_id, evidence_id, file_hash, physical_page,
+                    source_block_id, quote, bbox, source_method,
+                    verification_status, location_level
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                ON CONFLICT (parse_run_id, evidence_id) DO NOTHING
+                """,
+                parse_run_id,
+                evidence.evidence_id,
+                evidence.file_hash,
+                evidence.physical_page,
+                evidence.source_block_id,
+                evidence.quote,
+                _bbox_to_json(evidence.bbox),
+                evidence.source_method,
+                evidence.verification_status,
+                evidence.location_level,
             )
 
     return parse_run_id
@@ -266,6 +305,14 @@ async def load_parse_artifact(conn: asyncpg.Connection, parse_run_id: int) -> Pa
     page_states = [
         ParsePageState.from_dict(item)
         for item in json.loads(run["page_states"] or "[]")
+    ]
+    text_blocks = [
+        ParsedTextBlock.from_dict(item)
+        for item in json.loads(run["text_blocks"] or "[]")
+    ]
+    ocr_table_candidates = [
+        OcrTableCandidate.from_dict(item)
+        for item in json.loads(run["ocr_table_candidates"] or "[]")
     ]
     instance_rows = await conn.fetch(
         "SELECT * FROM parse_table_instances WHERE parse_run_id = $1 ORDER BY id",
@@ -365,8 +412,12 @@ async def load_parse_artifact(conn: asyncpg.Connection, parse_run_id: int) -> Pa
         parse_run_uid=run["parse_run_uid"],
         page_count=run["page_count"] or 0,
         page_states=page_states,
+        text_blocks=text_blocks,
+        ocr_table_candidates=ocr_table_candidates,
         table_fragments=fragments,
         logical_tables=logical_tables,
+        coordinate_space=run["coordinate_space"] or "pdf_page_points",
+        coordinate_transforms=json.loads(run["coordinate_transforms"] or "{}"),
     )
 
 
