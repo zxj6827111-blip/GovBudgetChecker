@@ -8,6 +8,7 @@ from api.routes.activity import router as activity_router
 from api.routes.analyze import router as analyze_router
 from api.routes.auth import router as auth_router
 from api.routes.config import router as config_router
+from api.routes.corrections import router as corrections_router
 from api.routes.files import router as files_router
 from api.routes.health import router as health_router
 from api.routes.jobs import router as jobs_router
@@ -36,6 +37,7 @@ def register_routes(app: FastAPI) -> None:
     app.include_router(organizations_router)
     app.include_router(ps_shared_router)
     app.include_router(files_router)
+    app.include_router(corrections_router)
     app.include_router(reports_router)
     app.include_router(reviews_router)
     app.include_router(rules_router)
