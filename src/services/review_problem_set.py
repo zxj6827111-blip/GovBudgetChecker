@@ -199,6 +199,30 @@ def _display_issues(
     merged_ids = [_text(item) for item in _json_list(merged.get("merged_ids"))]
     merged_ids = [item for item in merged_ids if item]
 
+    if _text(merged.get("merge_policy_version")) == "fact-check-relation-v1":
+        by_id = {
+            _issue_id_of(item): item
+            for item in source_issues
+            if _issue_id_of(item)
+        }
+        selected = [by_id[item] for item in merged_ids if item in by_id]
+        review_ids = [
+            _text(item)
+            for item in [
+                *_json_list(merged.get("candidate_issue_ids")),
+                *_json_list(merged.get("manual_review_issue_ids")),
+            ]
+            if _text(item)
+        ]
+        seen = {_issue_id_of(item) for item in selected}
+        for review_id in review_ids:
+            candidate = by_id.get(review_id)
+            if candidate is None or review_id in seen:
+                continue
+            selected.append({**candidate, "_merge_candidate_review": True})
+            seen.add(review_id)
+        return selected
+
     if merged_ids and source_issues:
         by_id: Dict[str, Dict[str, Any]] = {}
         for item in source_issues:
@@ -318,7 +342,14 @@ def collect_review_problems(
                 severity=_text(item.get("severity")),
                 # 结构化待复核项没有 evidence_status，恒为正式项；
                 # finding 是否正式由 evidence guard 唯一决定。
-                is_formal=True if structured_item else is_formal_finding(item),
+                is_formal=(
+                    True
+                    if structured_item
+                    else (
+                        not bool(item.get("_merge_candidate_review"))
+                        and is_formal_finding(item)
+                    )
+                ),
             )
         )
     return problems

@@ -255,6 +255,14 @@ class IssueItem(BaseModel):
         default_factory=list, description="该问题关联的检查义务编号"
     )
 
+    # ZC-06：双路结果只有在双方显式携带同一检查关系和同一组财政事实身份时
+    # 才能合并。标题、页码、相同金额及展示文本不得充当事实身份。
+    check_relation_id: Optional[str] = Field(
+        default=None, description="检查关系身份；AI/规则候选的业务关联键"
+    )
+    fact_ids: List[str] = Field(default_factory=list, description="关联财政事实身份")
+    evidence_ids: List[str] = Field(default_factory=list, description="显式关联的来源证据身份")
+
     display: Optional[IssueDisplay] = Field(default=None, description="可直接展示的问题信息")
 
     @model_validator(mode="after")
@@ -287,7 +295,15 @@ class ConflictItem(BaseModel):
     key: str = Field(..., description="冲突键")
     ai_issue: Optional[str] = Field(None, description="AI问题ID")
     rule_issue: Optional[str] = Field(None, description="规则问题ID")
-    reason: Literal["value-mismatch", "missing", "page-mismatch"] = Field(..., description="冲突原因")
+    reason: Literal[
+        "value-mismatch",
+        "missing",
+        "page-mismatch",
+        "severity-mismatch",
+        "semantic-mismatch",
+        "evidence-mismatch",
+        "ambiguous-relation",
+    ] = Field(..., description="冲突原因")
     details: Dict[str, Any] = Field(default_factory=dict, description="冲突详情")
     
     # 新增字段
@@ -309,6 +325,17 @@ class MergedSummary(BaseModel):
     # 新增字段
     ai_only: List[IssueItem] = Field(default_factory=list, description="仅AI发现")
     rule_only: List[IssueItem] = Field(default_factory=list, description="仅规则发现")
+    relations: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="按显式检查关系与财政事实 ID 建立的来源关系及裁决状态",
+    )
+    candidate_issue_ids: List[str] = Field(
+        default_factory=list, description="仅 AI 候选项 ID；需人工/规则确认"
+    )
+    manual_review_issue_ids: List[str] = Field(
+        default_factory=list, description="存在关系歧义、需人工判读的 finding ID"
+    )
+    merge_policy_version: str = Field(default="legacy", description="合并策略版本")
 
 
 class DualModeResponse(BaseModel):

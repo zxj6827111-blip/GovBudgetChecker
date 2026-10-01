@@ -113,6 +113,84 @@ assert.deepEqual(
   "ignored issues should still be removed after merged issue projection",
 );
 
+const relationV2Candidates = toUiProblems({
+  job_id: "job-relation-v2-candidate",
+  result: {
+    ai_findings: [baseDetail.result.ai_findings[0]],
+    rule_findings: [],
+    merged: {
+      totals: { ai: 1, rule: 0, merged: 0, conflicts: 0, agreements: 0 },
+      merge_policy_version: "fact-check-relation-v1",
+      merged_ids: [],
+      candidate_issue_ids: ["ai-1"],
+      manual_review_issue_ids: [],
+    },
+  },
+  review_report: {
+    issues: [],
+    tips: [],
+    manual_review: [
+      {
+        record_type: "ai_candidate",
+        id: "ai-1",
+        title: "AI issue 1",
+        message: "等待业务确认的模型候选",
+        finding: {
+          ...baseDetail.result.ai_findings[0],
+          location: { page: 1 },
+          evidence: [{ page: 1, text: "候选引用原文" }],
+        },
+      },
+    ],
+  },
+} as any);
+assert.equal(relationV2Candidates.length, 1);
+assert.equal(relationV2Candidates[0].id, "ai-1");
+assert.equal(
+  relationV2Candidates[0].severity,
+  "manual_review",
+  "AI-only findings must be rendered in the manual-review bucket, not as formal issues",
+);
+assert.equal(relationV2Candidates[0].snippet, "候选引用原文");
+
+const mergeConflict = toUiProblems({
+  job_id: "job-relation-v2-conflict",
+  result: { ai_findings: [], rule_findings: [], merged: { merge_policy_version: "fact-check-relation-v1", merged_ids: [] } },
+  review_report: {
+    issues: [],
+    tips: [],
+    manual_review: [
+      {
+        record_type: "merge_conflict",
+        id: "merge-conflict:rel-1",
+        title: "AI 与规则结果存在冲突",
+        message: "双方引用不同原始证据，需复核。",
+        ai_finding: {
+          id: "ai-side",
+          location: { page: 2 },
+          evidence: [{ page: 2, text: "AI 引用", bbox: [1, 2, 3, 4], location_level: "exact_span", verification_status: "verified" }],
+        },
+        rule_finding: {
+          id: "rule-side",
+          location: { page: 3 },
+          evidence: [{ page: 3, text: "规则引用", bbox: [5, 6, 7, 8], location_level: "exact_cell", verification_status: "verified" }],
+        },
+      },
+    ],
+  },
+} as any);
+assert.equal(mergeConflict.length, 1);
+assert.deepEqual(
+  mergeConflict[0].evidenceRefs.map((ref) => ref.page),
+  [2, 3],
+  "merge conflict should preserve both source page references for review",
+);
+assert.deepEqual(
+  mergeConflict[0].evidenceRefs.map((ref) => ref.bbox),
+  [[1, 2, 3, 4], [5, 6, 7, 8]],
+  "only source-provided verified exact evidence boxes may be carried through",
+);
+
 const nameAlignmentProblems = toUiProblems({
   job_id: "job-name-alignment-001",
   result: {

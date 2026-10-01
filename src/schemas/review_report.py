@@ -20,6 +20,8 @@ class ReviewReport:
     check_receipts: List[Dict[str, Any]] = field(default_factory=list)
     obligation_coverage: Any = None
     human_decisions: List[Dict[str, Any]] = field(default_factory=list)
+    merge_conflicts: List[Dict[str, Any]] = field(default_factory=list)
+    candidate_findings: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)
@@ -38,6 +40,8 @@ class ReviewReport:
             check_receipts=_mapping_list(payload.get("check_receipts")),
             obligation_coverage=payload.get("obligation_coverage"),
             human_decisions=_mapping_list(payload.get("human_decisions")),
+            merge_conflicts=_mapping_list(payload.get("merge_conflicts")),
+            candidate_findings=_mapping_list(payload.get("candidate_findings")),
         )
 
 
@@ -71,6 +75,50 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
         {"record_type": "review_reason", **item}
         for item in _mapping_list(payload.get("review_reasons"))
     ]
+    merged = _mapping(result.get("merged"))
+    merge_conflicts = _mapping_list(merged.get("conflicts"))
+    candidate_ids = {
+        str(item).strip()
+        for item in merged.get("candidate_issue_ids", [])
+        if str(item or "").strip()
+    } if isinstance(merged.get("candidate_issue_ids"), list) else set()
+    source_by_id = {
+        str(item.get("id") or ""): item
+        for key in ("ai_findings", "rule_findings")
+        for item in _mapping_list(result.get(key))
+        if item.get("id")
+    }
+    candidate_findings = [
+        {
+            "issue_id": candidate_id,
+            "status": "candidate_pending_confirmation",
+            "finding": source_by_id[candidate_id],
+        }
+        for candidate_id in sorted(candidate_ids)
+        if candidate_id in source_by_id
+    ]
+    for candidate in candidate_findings:
+        finding = candidate["finding"]
+        manual_review.append(
+            {
+                "record_type": "ai_candidate",
+                "id": candidate["issue_id"],
+                "title": finding.get("title") or "AI 候选发现待确认",
+                "message": finding.get("message") or "该模型候选尚未与确定性规则结果建立事实关系。",
+                "suggestion": "核对原始证据及财政事实后确认；该候选不计入正式问题。",
+                **candidate,
+            }
+        )
+    for conflict in merge_conflicts:
+        manual_review.append(
+            {
+                "record_type": "merge_conflict",
+                "id": f"merge-conflict:{conflict.get('key') or len(manual_review)}",
+                "title": "AI 与规则结果存在冲突",
+                "message": "模型候选与确定性规则结论不一致，保留双方原始结果待人工复核。",
+                **conflict,
+            }
+        )
     structured_ingest = payload.get("structured_ingest")
     if not isinstance(structured_ingest, Mapping):
         structured_ingest = _mapping(result.get("structured_ingest"))
@@ -125,11 +173,41 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
         check_receipts=_mapping_list(meta.get("check_receipts")),
         obligation_coverage=coverage if isinstance(coverage, (dict, list)) else None,
         human_decisions=_mapping_list(payload.get("human_decisions")),
+        merge_conflicts=merge_conflicts,
+        candidate_findings=candidate_findings,
     )
     return report.to_dict()
 
 
 def _collect_findings(result: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    merged = _mapping(result.get("merged"))
+    if str(merged.get("merge_policy_version") or "") == "fact-check-relation-v1":
+        source: List[Dict[str, Any]] = []
+        seen_source = set()
+        for key in ("ai_findings", "rule_findings"):
+            for item in _mapping_list(result.get(key)):
+                issue_id = str(item.get("id") or "")
+                if issue_id and issue_id not in seen_source:
+                    seen_source.add(issue_id)
+                    source.append(item)
+        by_id = {str(item.get("id") or ""): item for item in source if item.get("id")}
+        candidate_ids = {
+            str(item).strip()
+            for item in merged.get("candidate_issue_ids", [])
+            if str(item or "").strip()
+        } if isinstance(merged.get("candidate_issue_ids"), list) else set()
+        if isinstance(merged.get("manual_review_issue_ids"), list):
+            candidate_ids.update(
+                str(item).strip()
+                for item in merged.get("manual_review_issue_ids", [])
+                if str(item or "").strip()
+            )
+        return [
+            by_id[issue_id]
+            for issue_id in merged.get("merged_ids", [])
+            if str(issue_id) in by_id and str(issue_id) not in candidate_ids
+        ]
+
     issues_payload = result.get("issues")
     if isinstance(issues_payload, Mapping):
         raw = issues_payload.get("all")

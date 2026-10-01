@@ -625,6 +625,17 @@ function collectDisplayIssues(result: Record<string, unknown>): Record<string, u
     ? merged.merged_ids.map((item) => String(item ?? "").trim()).filter(Boolean)
     : [];
 
+  if (merged.merge_policy_version === "fact-check-relation-v1") {
+    const issueById = new Map<string, Record<string, unknown>>();
+    for (const issue of sourceIssues) {
+      const issueId = String(issue.id ?? "").trim();
+      if (issueId && !issueById.has(issueId)) issueById.set(issueId, issue);
+    }
+    return dedupeIssuesById(
+      mergedIds.map((mergedId) => issueById.get(mergedId)).filter(isRecord),
+    );
+  }
+
   if (mergedIds.length > 0 && sourceIssues.length > 0) {
     const issueById = new Map<string, Record<string, unknown>>();
     for (const issue of sourceIssues) {
@@ -711,15 +722,66 @@ function collectReviewReportManualIssues(reviewReport: Record<string, unknown>):
   return manualItems.flatMap((item, index) => {
     const recordType = String(item.record_type ?? "review_reason");
     if (recordType === "unfinished_check") return [];
+    const candidateFinding = isRecord(item.finding) ? item.finding : {};
+    const mergeSides = recordType === "merge_conflict"
+      ? [
+          { role: "AI", finding: isRecord(item.ai_finding) ? item.ai_finding : {} },
+          { role: "规则", finding: isRecord(item.rule_finding) ? item.rule_finding : {} },
+        ].filter(({ finding }) => Object.keys(finding).length > 0)
+      : [];
+    const sideEvidence: Array<Record<string, unknown>> = mergeSides.flatMap(({ role, finding }) =>
+      Array.isArray(finding.evidence)
+        ? finding.evidence.filter(isRecord).map((evidence, index) => ({
+            ...evidence,
+            source_side: role,
+            source_side_index: index + 1,
+          }))
+        : [],
+    );
+    const candidateLocation = isRecord(candidateFinding.location)
+      ? candidateFinding.location
+      : mergeSides
+          .map(({ finding }) => isRecord(finding.location) ? finding.location : null)
+          .find((location) => location !== null) ?? {};
     const rawPage = toNumber(item.page ?? item.page_number);
-    const page = rawPage > 0 ? rawPage : undefined;
+    const candidatePage = toNumber(
+      candidateFinding.page_number ?? candidateLocation.page,
+    );
+    const page = rawPage > 0 ? rawPage : candidatePage > 0 ? candidatePage : undefined;
     const title = String(
-      item.title ?? item.code ?? item.obligation_id ?? "待人工复核事项",
+      item.title ?? candidateFinding.title ?? item.code ?? item.obligation_id ?? "待人工复核事项",
     ).trim();
-    const message = String(item.message ?? item.detail ?? item.reason ?? "需人工复核后确认。").trim();
-    const location: Record<string, unknown> = {};
+    const message = String(
+      item.message ?? candidateFinding.message ?? item.detail ?? item.reason ?? "需人工复核后确认。",
+    ).trim();
+    const location: Record<string, unknown> = { ...candidateLocation };
     if (page) location.page = page;
     if (item.table_code) location.table = String(item.table_code);
+    if (mergeSides.length > 0) {
+      const tableRefs = sideEvidence.flatMap((evidence, index) => {
+        const evidencePage = toNumber(evidence.page ?? evidence.physical_page);
+        if (evidencePage <= 0) return [];
+        const locationLevel = String(evidence.location_level ?? "unresolved");
+        const verificationStatus = String(evidence.verification_status ?? "unverified");
+        const bbox =
+          ["exact_cell", "exact_span"].includes(locationLevel)
+          && verificationStatus === "verified"
+          && Array.isArray(evidence.bbox)
+            ? evidence.bbox.map((value) => Number(value))
+            : undefined;
+        return [{
+          role: `${String(evidence.source_side)} 证据 ${String(evidence.source_side_index)}`,
+          page: Math.floor(evidencePage),
+          table: String(evidence.table ?? ""),
+          section: String(evidence.section ?? ""),
+          location_level: locationLevel,
+          verification_status: verificationStatus,
+          bbox,
+          index,
+        }];
+      });
+      if (tableRefs.length > 0) location.table_refs = tableRefs;
+    }
     const id = String(item.id ?? `${recordType}:${item.code ?? item.obligation_id ?? index}`);
     return [{
       id,
@@ -729,8 +791,12 @@ function collectReviewReportManualIssues(reviewReport: Record<string, unknown>):
       title,
       message,
       location,
-      evidence: [],
-      suggestion: String(item.suggestion ?? item.recommended_action ?? "核对原始材料后确认。"),
+      evidence: Array.isArray(candidateFinding.evidence)
+        ? candidateFinding.evidence.filter(isRecord)
+        : sideEvidence,
+      suggestion: String(
+        item.suggestion ?? candidateFinding.suggestion ?? item.recommended_action ?? "核对原始材料后确认。",
+      ),
     }];
   });
 }

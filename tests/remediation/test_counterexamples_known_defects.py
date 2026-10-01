@@ -1,9 +1,10 @@
 """评估报告反例的缺陷索引（ZCode 整改任务包 §四.1）。
 
-本文件把 2026-10-01 可用性评估中已复现的 5 类规则反例与 4 类合并/定位反例
-固化为仓库测试。**这些反例当前仍未修复**，因此统一标 ``xfail(strict=True)``：
+本文件把 2026-10-01 可用性评估中已复现的规则反例与合并/定位反例
+固化为仓库测试。未修复项标 ``xfail(strict=True)``；所属阶段修复后移除标记，
+转为普通回归：
 
-- 每条反例注明归属整改阶段（ZC-02/ZC-03/ZC-04/ZC-06）；
+- 每条反例注明归属整改阶段（ZC-02/ZC-03/ZC-04）；
 - 归属阶段修复后测试转为 XPASS，strict 模式会让套件失败，
   提醒删除标记并把测试转为正式回归；
 - 证据类反例（无页码兜底、999 页、生成说明当原文）已在 ZC-00 修复，
@@ -59,7 +60,12 @@ def _run_one(doc: Any, rule: Any) -> Dict[str, Any]:
 
 def _build_pair(ai_severity: str, rule_severity: str, ai_amount: float = 100, rule_amount: float = 100):
     shared: Dict[str, Any] = dict(
-        title="同一标题", message="检测金额不一致", location={"page": 2}, tags=["R"]
+        title="同一标题",
+        message="检测金额不一致",
+        location={"page": 2},
+        tags=["R"],
+        check_relation_id="C-001:total",
+        fact_ids=["fact-three-public-total"],
     )
     ai = IssueItem(
         id="AI",
@@ -242,11 +248,7 @@ def test_xfail_project_policy_conditional_tables() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="SYS-06：合并代表项恒选 AI ID，规则侧更强证据被隐藏（归属 ZC-06 合并机制）",
-)
-def test_xfail_weaker_ai_replaces_stronger_rule() -> None:
+def test_fixed_zc06_weaker_ai_does_not_replace_stronger_rule() -> None:
     """AI medium vs 规则 high：合并代表项不得丢失规则来源的更强证据。"""
     ai, rule = _build_pair("medium", "high")
     merged = FindingsMerger(AnalysisConfig()).merge_findings([ai], [rule])
@@ -255,11 +257,7 @@ def test_xfail_weaker_ai_replaces_stronger_rule() -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="SYS-06：金额冲突因键名错位同时计入 agreement（归属 ZC-06 冲突键）",
-)
-def test_xfail_value_conflict_also_counted_as_agreement() -> None:
+def test_fixed_zc06_value_conflict_is_not_also_counted_as_agreement() -> None:
     """AI 100 vs 规则 90：冲突不得同时统计为一致。"""
     ai, rule = _build_pair("high", "high", 100, 90)
     merged = FindingsMerger(AnalysisConfig()).merge_findings([ai], [rule])
@@ -267,11 +265,7 @@ def test_xfail_value_conflict_also_counted_as_agreement() -> None:
     assert len(merged.agreements) == 0, "同一匹配对冲突与一致互斥"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="SYS-06：严重度冲突被静默计入 agreement，冲突与一致不互斥（归属 ZC-06 合并机制）",
-)
-def test_xfail_severity_conflict_counted_as_agreement() -> None:
+def test_fixed_zc06_severity_conflict_is_reviewed_without_batch_failure() -> None:
     """AI medium vs 规则 high：严重度冲突不得计为一致，必须进入冲突/待复核。
 
     当前行为（2026-10-01 实测）：severity 不同的匹配对既不记冲突也不降级，
