@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 from .amount_math import compute_dynamic_envelope
+from .rule_policy import amount_difference_exceeds_policy, percentage_difference_exceeds_policy
 from .budget_rules import find_budget_anchors
 from .rule_outcome import RuleDeferred, RuleNotApplicable
 from .rules_v33 import (
@@ -1437,7 +1438,7 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
                             (explicit_prior["scale"], explicit_prior["unit"]),
                         ]
                     )
-                    if abs(explicit_wan - derived_prior) > envelope:
+                    if amount_difference_exceeds_policy(abs(explicit_wan - derived_prior), envelope):
                         issues.append(
                             self._issue(
                                 f"同比基期交叉矛盾（{canon}）：上年披露"
@@ -1507,13 +1508,8 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
 
             recomputed = self._recompute(current_wan, derived_prior)
             declared = Decimal(pct_text)
-            tolerance = max(
-                Decimal("0.5"),
-                abs(recomputed) * Decimal("0.01"),
-                abs(declared) * Decimal("0.01"),
-            )
             diff = abs(declared - recomputed)
-            if diff <= tolerance:
+            if not percentage_difference_exceeds_policy(diff):
                 continue
             severity = "error" if diff > Decimal("1.0") else "warn"
             issues.append(

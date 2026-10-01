@@ -593,10 +593,18 @@ class CheckReceipt:
     status: str = "insufficient_data"
     incomplete_reason: Optional[str] = None
     issue_refs: List[str] = field(default_factory=list)
+    obligation_id: Optional[str] = None
+    evaluation_basis: str = "fiscal_fact"
+    fact_migration_status: str = "complete"
+    policy_version: str = "v3_3_portable"
 
     def __post_init__(self) -> None:
         if self.status not in SUB_CHECK_STATUSES:
             raise ValueError(f"invalid sub-check status: {self.status}")
+        if self.evaluation_basis not in {"fiscal_fact", "legacy_document", "ai_candidate"}:
+            raise ValueError(f"invalid evaluation_basis: {self.evaluation_basis}")
+        if self.fact_migration_status not in {"complete", "pending", "not_applicable"}:
+            raise ValueError(f"invalid fact_migration_status: {self.fact_migration_status}")
 
     def to_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)
@@ -613,6 +621,10 @@ class CheckReceipt:
             status=str(data.get("status") or "insufficient_data"),
             incomplete_reason=_opt_str(data.get("incomplete_reason")),
             issue_refs=[str(i) for i in data.get("issue_refs") or []],
+            obligation_id=_opt_str(data.get("obligation_id")),
+            evaluation_basis=str(data.get("evaluation_basis") or "fiscal_fact"),
+            fact_migration_status=str(data.get("fact_migration_status") or "complete"),
+            policy_version=str(data.get("policy_version") or "v3_3_portable"),
         )
 
 

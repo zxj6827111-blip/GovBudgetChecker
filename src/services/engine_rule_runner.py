@@ -9,9 +9,8 @@ import uuid
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from src.schemas.issues import JobContext, AnalysisConfig, IssueItem
-from src.engine.rules_v33 import ALL_RULES as FINAL_ALL_RULES, build_document, Issue, Document
-from src.engine.budget_rules import ALL_BUDGET_RULES
-from src.engine.common_rules import ALL_COMMON_RULES
+from src.engine.rules_v33 import build_document, Issue, Document
+from src.engine.rule_registry import all_rule_ids, select_rules
 from src.engine.rule_outcome import (
     RuleOutcome,
     RuleOutcomeSignal,
@@ -208,14 +207,10 @@ class EngineRuleRunner:
         document: Optional[Document] = None,
     ) -> List[Any]:
         report_kind = self._resolve_report_kind(job_context, document)
-        if report_kind == "budget":
-            return [*ALL_BUDGET_RULES, *ALL_COMMON_RULES]
-        if report_kind == "final":
-            return [*FINAL_ALL_RULES, *ALL_COMMON_RULES]
         # A material whose type cannot be established must not be checked
         # against either type-specific rule set.  Common rules still provide
         # low-risk feedback while the UI requests human confirmation.
-        return list(ALL_COMMON_RULES)
+        return select_rules(report_kind)
 
     async def run_rules(
         self, job_context: JobContext, rules: List[Dict[str, Any]], config: AnalysisConfig
@@ -567,12 +562,9 @@ async def run_engine_rules(
 
 def get_available_rules() -> List[str]:
     """Return all available engine rule codes."""
-    return [rule.code for rule in (ALL_BUDGET_RULES + FINAL_ALL_RULES + ALL_COMMON_RULES)]
+    return all_rule_ids()
 
 
 def validate_rule_id(rule_id: str) -> bool:
     """楠岃瘉瑙勫垯ID鏄惁鏈夋晥"""
-    return any(
-        rule.code == rule_id or rule_id in rule.code
-        for rule in (ALL_BUDGET_RULES + FINAL_ALL_RULES + ALL_COMMON_RULES)
-    )
+    return any(code == rule_id or rule_id in code for code in all_rule_ids())

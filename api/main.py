@@ -24,8 +24,11 @@ if _ROOT not in _sys.path:
 
 from src.engine.check_obligations import (
     attach_obligation_ids,
+    build_check_receipts,
     build_obligation_ledger,
 )
+from src.engine.rule_policy import PORTABLE_RULE_POLICY_VERSION
+from src.engine.rule_registry import RULE_REGISTRY_VERSION
 from src.engine.pipeline import (
     apply_readability_gate,
     build_document,
@@ -1734,6 +1737,14 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             structured_ingest=structured_ingest_summary,
         )
         result["meta"]["obligation_coverage"] = obligation_coverage
+        result["meta"]["check_receipts"] = build_check_receipts(
+            result,
+            report_kind=report_kind,
+            rule_execution_summary=result["meta"].get("rule_execution_summary"),
+            obligation_coverage=obligation_coverage,
+        )
+        result["meta"]["rule_registry_version"] = RULE_REGISTRY_VERSION
+        result["meta"]["rule_policy_version"] = PORTABLE_RULE_POLICY_VERSION
         result["meta"]["document_profile"] = document_profile.to_dict()
         logger.info(
             "job %s check coverage: applicable=%s completed=%s unresolved=%s blocking=%s",

@@ -1,22 +1,26 @@
-"""金额计算统一口径：Decimal + 显示舍入包络。
+"""金额计算统一口径：Decimal + 显示舍入包络 + portable 政策容差。
 
 /docs/SYSTEM_ISSUES_HANDOFF_2026-09-05.md 验收口径：
 0.01 万元级尾差（如合计 1,367.76 vs 分项之和 1,367.75）是显示舍入造成的
 正常现象，不应判硬错误，但应输出「可能为取整误差」提示。
 
 包络模型：父项与 n 个子项各自按两位小数显示时，最大累计舍入误差为
-(n + 1) × 0.005 万元（每个显示值最多偏 0.005）。
+(n + 1) × 0.005 万元（每个显示值最多偏 0.005）。超过包络但不超过
+0.5 万元仍按 AGENTS.md v3_3_portable 容差通过。
 
-- |diff| ≤ 0.5×tolerance_scale... 具体分级：
+- 具体分级：
   - ``ok``：diff == 0（或 < 1e-9）；
   - ``rounding_hint``：0 < |diff| ≤ envelope(n) → 输出 info 提示；
-  - ``mismatch``：|diff| > envelope(n) → 确定性错误。
+  - ``within_policy_tolerance``：超包络但不超过 0.5 万元 → 按政策通过；
+  - ``mismatch``：|diff| > max(envelope(n), 0.5 万元) → 确定性错误。
 """
 
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Optional, Sequence, Tuple
+
+from .rule_policy import AMOUNT_TOLERANCE_WAN, amount_difference_exceeds_policy
 
 # 显示精度：万元口径保留两位小数（预决算公开表的标准显示格式）
 _DISPLAY_QUANT = Decimal("0.01")
@@ -133,7 +137,8 @@ def classify_amount_diff(
     返回 (level, diff)：
     - ``ok``：完全一致；
     - ``rounding_hint``：包络内 → 应输出 info「可能为取整误差」；
-    - ``mismatch``：超包络 → 确定性差异。
+    - ``within_policy_tolerance``：超显示舍入包络但不超过 0.5 万元政策容差；
+    - ``mismatch``：超出 max(0.5 万元, 显示舍入包络)。
     """
     parent_d = to_decimal(parent)
     children_d = to_decimal(children_sum)
@@ -146,11 +151,13 @@ def classify_amount_diff(
         envelope = rounding_envelope(n_children)
     if diff <= envelope:
         return "rounding_hint", diff
+    if not amount_difference_exceeds_policy(diff, envelope):
+        return "within_policy_tolerance", diff
     return "mismatch", diff
 
 
-def amounts_equal(left, right, tolerance: str = "0.005") -> bool:
-    """两金额在显示舍入意义下是否相等（默认 0.005 万元）。"""
+def amounts_equal(left, right, tolerance: str = "0.5") -> bool:
+    """两万元口径金额是否在 portable 绝对政策容差内（默认 0.5 万元）。"""
     a = to_decimal(left)
     b = to_decimal(right)
     if a is None or b is None:

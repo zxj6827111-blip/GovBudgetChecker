@@ -101,6 +101,7 @@ from decimal import Decimal
 import numpy as np
 
 from .amount_math import classify_amount_diff, compute_dynamic_envelope, half_unit_for_term, rounding_envelope
+from .rule_policy import amount_difference_exceeds_policy, percentage_difference_exceeds_policy
 from .rule_outcome import RuleDeferred, RuleExecutionError, RuleOutcomeSignal, STATUS_INSUFFICIENT_DATA
 from .field_extractor import (
     extract_row_strict,
@@ -6727,7 +6728,7 @@ class R33220_Narrative3_T3(Rule):
                 n_basic_dec = nar_basic.decimal_val or Decimal("0")
                 env_basic = half_unit_for_term(nar_basic.scale_digits, nar_basic.unit) + half_unit_for_term(table_basic.scale_digits, table_basic.unit)
                 diff_b = abs(t_basic_dec - n_basic_dec)
-                if diff_b > env_basic:
+                if amount_difference_exceeds_policy(diff_b, env_basic):
                     max_scale_b = max(nar_basic.scale_digits, table_basic.scale_digits, 2)
                     location = _make_issue_location(
                         _make_location_ref(
@@ -6767,7 +6768,7 @@ class R33220_Narrative3_T3(Rule):
                 n_proj_dec = nar_project.decimal_val or Decimal("0")
                 env_proj = half_unit_for_term(nar_project.scale_digits, nar_project.unit) + half_unit_for_term(table_project.scale_digits, table_project.unit)
                 diff_p = abs(t_proj_dec - n_proj_dec)
-                if diff_p > env_proj:
+                if amount_difference_exceeds_policy(diff_p, env_proj):
                     max_scale_p = max(nar_project.scale_digits, table_project.scale_digits, 2)
                     location = _make_issue_location(
                         _make_location_ref(
@@ -7676,7 +7677,9 @@ class R33234_NarrativePercentConsistency(Rule):
                     continue
                 expected_direction = "增加" if diff > 0 else "减少"
                 expected_pct = abs(diff) / prev * 100.0
-                if direction == expected_direction and tolerant_equal(reported_pct, expected_pct, atol=0.5, rtol=0.01):
+                if direction == expected_direction and not percentage_difference_exceeds_policy(
+                    abs(reported_pct - expected_pct)
+                ):
                     continue
 
                 issues.append(
@@ -7709,12 +7712,12 @@ class R33234_NarrativePercentConsistency(Rule):
                     continue
 
                 expected_pct = final_val / budget_val * 100.0
-                if tolerant_equal(reported_pct, expected_pct, atol=0.5, rtol=0.01):
+                if not percentage_difference_exceeds_policy(abs(reported_pct - expected_pct)):
                     next_page_text = (
                         doc.page_texts[page_num] if page_num < len(doc.page_texts) else ""
                     )
                     if (
-                        not tolerant_equal(expected_pct, 100.0, atol=0.5, rtol=0.0)
+                        percentage_difference_exceeds_policy(abs(expected_pct - 100.0))
                         and not _completion_rate_has_reason(segment, match, tail=next_page_text)
                     ):
                         issues.append(
@@ -8860,6 +8863,8 @@ class R33CrossSanGongEcon(Rule):
                     )
                 )
                 continue
+            if not amount_difference_exceeds_policy(excess, envelope):
+                continue
             issues.append(
                 self._issue(
                     f"跨表资金来源冲突：「{subject}」在基本支出经济分类表列示 {component} {unit}"
@@ -8923,7 +8928,7 @@ class R33CrossSanGongEcon(Rule):
                 f"{item_groups.get(lhs_key, lhs_key)} {lhs.normalize()} vs "
                 f"{rhs.normalize()}（差 {gap.normalize()}，包络 {envelope.normalize()}）"
             )
-            if gap > envelope:
+            if amount_difference_exceeds_policy(gap, envelope):
                 return False, "；".join(notes)
         return True, "；".join(notes)
 
@@ -9666,6 +9671,8 @@ class R33TxtFundDetail(Rule):
                     )
                 )
                 continue
+            if not amount_difference_exceeds_policy(diff, envelope):
+                continue
             issues.append(
                 self._issue(
                     f"{scope_label}支出说明不一致：功能分类项「{binding['label']}」在"
@@ -10321,6 +10328,8 @@ class R33NarrativeIndicatorRepeat(Rule):
             envelope = compute_dynamic_envelope(
                 [(first["scale"], first["unit"]), (second["scale"], second["unit"])]
             )
+            if worst_diff > envelope and not amount_difference_exceeds_policy(worst_diff, envelope):
+                continue
             severity = "info" if worst_diff <= envelope else "error"
             indicator = first["indicator"]
             message = (
@@ -10543,12 +10552,9 @@ class R33TrendCompletionRate(Rule):
     code, severity = "V33-TREND-COMPLETION-RATE", "error"
     desc = "预算完成率分母口径与确定性复算（R004 零分母/分母身份/复算）"
 
-    #: 百分比容差：仓库统一策略（V33-234/BUD-111 同款 abs 0.5pp / 相对 1%），
-    #: Decimal 化沿用 CMM-007 的既有实现形态。分母为 0 是定义问题，不经容差
-    #: 放行；金额显示舍入的传播在常规量级下不超过该容差，不再叠加金额包络
-    #: （避免第三套百分比容差）。
-    _PCT_ATOL = Decimal("0.5")
-    _PCT_RTOL = Decimal("0.01")
+    #: portable 百分比绝对容差为 0.1 个百分点；分母为 0 是定义问题，不经
+    #: 容差放行。金额显示舍入的传播不再通过相对误差扩大百分比容差。
+    _PCT_ATOL = Decimal("0.1")
 
     def apply(self, doc: Document) -> List[Issue]:
         merged, offsets = _txt_fund_merged_pages(doc)
@@ -11168,13 +11174,10 @@ class R33TrendCompletionRate(Rule):
         return None
 
     def _pct_close(self, declared: Decimal, recomputed: Decimal) -> bool:
-        """仓库统一百分比容差（V33-234/BUD-111 同款 abs 0.5pp / 相对 1%，Decimal 化）。"""
-        tolerance = max(
-            self._PCT_ATOL,
-            abs(recomputed) * self._PCT_RTOL,
-            abs(declared) * self._PCT_RTOL,
+        """按 v3_3_portable 的 0.1 个百分点绝对容差比较。"""
+        return not percentage_difference_exceeds_policy(
+            abs(declared - recomputed), self._PCT_ATOL
         )
-        return abs(declared - recomputed) <= tolerance
 
     # ---- 内部：finding 组装 ----
 

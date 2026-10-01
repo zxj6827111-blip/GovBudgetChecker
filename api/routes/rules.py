@@ -35,6 +35,8 @@ import yaml
 from fastapi import APIRouter, Query, Request
 
 from api.auth_utils import require_admin
+from src.engine.rule_policy import PORTABLE_RULE_POLICY_VERSION
+from src.engine.rule_registry import RULE_REGISTRY_VERSION, rule_catalog
 from src.utils.provenance import ENGINE_VERSION
 
 router = APIRouter()
@@ -109,7 +111,18 @@ async def get_rules_version(request: Request) -> Dict[str, Any]:
         ),
         "rule_entry_count": len(rules_list) if rules_list is not None else None,
         "engine_version": ENGINE_VERSION,
+        "runtime_rule_registry_version": RULE_REGISTRY_VERSION,
+        "runtime_rule_registry_count": rule_catalog()["total"],
+        "runtime_rule_evaluation_basis": "legacy_document",
+        "runtime_rule_policy_version": PORTABLE_RULE_POLICY_VERSION,
     }
+
+
+@router.get("/api/rules/engine-catalog")
+async def get_engine_rule_catalog(request: Request) -> Dict[str, Any]:
+    """当前生产 Python 规则到实现、义务及迁移状态的目录。"""
+    require_admin(request)
+    return rule_catalog()
 
 
 @router.get("/api/rules/entries")

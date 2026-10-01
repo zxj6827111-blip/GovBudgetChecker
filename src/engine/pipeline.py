@@ -12,8 +12,6 @@ from src.services.document_profile_resolver import (
     resolve_report_kind_from_path,
 )
 
-from .budget_rules import ALL_BUDGET_RULES
-from .common_rules import ALL_COMMON_RULES
 from .rule_outcome import (
     RuleDeferred,
     RuleNotApplicable,
@@ -27,12 +25,10 @@ from .rule_outcome import (
     summarize_rule_outcomes,
 )
 from .rules_v33 import (
-    ALL_RULES as FINAL_ALL_RULES,
-)
-from .rules_v33 import (
     Issue,
     order_and_number_issues,
 )
+from .rule_registry import select_rules, select_specific_rules
 from .rules_v33 import (
     build_document as _build_document,
 )
@@ -64,11 +60,7 @@ def _resolve_report_kind(doc: Any, report_kind: Optional[str] = None) -> str:
 
 def _rule_set_for_kind(kind: str) -> List[Any]:
     """按文种选择专项规则集。识别不了文种就不选专项规则，只跑通用规则。"""
-    if kind == "budget":
-        return ALL_BUDGET_RULES
-    if kind == "final":
-        return FINAL_ALL_RULES
-    return []
+    return select_specific_rules(kind)
 
 
 def run_rules(
@@ -108,7 +100,7 @@ def run_rules_with_outcomes(
     else:
         selected_rules = [
             *_rule_set_for_kind(resolved_kind),
-            *ALL_COMMON_RULES,
+            *select_rules("unknown"),
         ]
     issues: List[Issue] = []
     outcomes: List[RuleOutcome] = []

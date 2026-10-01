@@ -63,6 +63,7 @@ from src.engine.rule_outcome import (
     STATUS_PARSE_ERROR,
     STATUS_PASS,
 )
+from src.schemas.parse_artifact import CheckReceipt
 from src.schemas.document_profile import DocumentProfile
 
 #: 义务清单版本。清单增删条目、调整 checkers 或适用条件时必须递增，
@@ -947,27 +948,10 @@ class ObligationInstance:
 
 
 def _registry_rule_ids(report_kind: str) -> FrozenSet[str]:
-    """按文种返回当前已注册的规则编号集合。
+    """按文种从唯一生产规则目录获取编号，惰性导入以规避初始化环。"""
+    from src.engine.rule_registry import registered_rule_ids as _registered_rule_ids
 
-    惰性导入：``src/engine/pipeline.py`` 在模块层就导入规则表，
-    本模块被 pipeline 的调用方（api/main.py）使用，顶层导入会形成环。
-    """
-    ids: List[str] = []
-    if report_kind == "budget":
-        from src.engine.budget_rules import ALL_BUDGET_RULES
-
-        ids = [getattr(rule, "code", "") for rule in ALL_BUDGET_RULES]
-    elif report_kind == "final":
-        from src.engine.rules_v33 import ALL_RULES
-
-        ids = [getattr(rule, "code", "") for rule in ALL_RULES]
-    try:
-        from src.engine.common_rules import ALL_COMMON_RULES
-
-        ids = [*ids, *(getattr(rule, "code", "") for rule in ALL_COMMON_RULES)]
-    except Exception:  # pragma: no cover - 规则表缺失时不影响台账结构
-        pass
-    return frozenset(str(item) for item in ids if item)
+    return _registered_rule_ids(report_kind)
 
 
 def registered_rule_ids(report_kind: str) -> FrozenSet[str]:
@@ -1358,6 +1342,89 @@ def build_obligation_ledger(
         )
 
     return _build_summary(instances, notes)
+
+
+def build_check_receipts(
+    result: Mapping[str, Any],
+    *,
+    report_kind: str,
+    rule_execution_summary: Optional[Mapping[str, Any]],
+    obligation_coverage: Optional[Mapping[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Materialize auditable receipts for each declared obligation/checker pair.
+
+    Current production rules still consume the legacy ``Document`` model. The
+    receipt says so explicitly and leaves fact ids empty; it must not be read as
+    evidence that a FiscalFact-based relation has already been migrated.
+    """
+    from src.engine.rule_registry import registered_rule_ids as registry_rule_ids
+    from src.services.evidence_guard import iter_findings
+
+    statuses = _rule_statuses(rule_execution_summary)
+    registry = registry_rule_ids(report_kind)
+    findings_by_pair: Dict[Tuple[str, str], List[str]] = {}
+    for finding in iter_findings(result):
+        rule_id = str(finding.get("rule_id") or finding.get("rule") or "")
+        finding_id = str(finding.get("id") or "")
+        if not rule_id or not finding_id:
+            continue
+        obligation_ids = finding.get("obligation_ids")
+        if isinstance(obligation_ids, list):
+            for obligation_id in obligation_ids:
+                findings_by_pair.setdefault((str(obligation_id), rule_id), []).append(
+                    finding_id
+                )
+
+    receipt_items: List[Dict[str, Any]] = []
+    instances = (
+        obligation_coverage.get("instances", [])
+        if isinstance(obligation_coverage, Mapping)
+        else []
+    )
+    for instance in instances:
+        if not isinstance(instance, Mapping):
+            continue
+        if str(instance.get("status") or "") == OBLIGATION_NOT_APPLICABLE:
+            continue
+        obligation_id = str(instance.get("obligation_id") or "")
+        checker_ids = list(instance.get("checkers") or [])
+        checker_ids.extend(str(item) for item in instance.get("missing_checkers") or [])
+        for raw_rule_id in dict.fromkeys(str(item) for item in checker_ids if item):
+            if raw_rule_id not in registry:
+                status = STATUS_INSUFFICIENT_DATA
+                incomplete_reason = "义务清单声明了该检查，但唯一规则目录中没有对应实现"
+            else:
+                status = statuses.get(raw_rule_id, STATUS_INSUFFICIENT_DATA)
+                incomplete_reason = None
+                if raw_rule_id not in statuses:
+                    incomplete_reason = "规则未出现在本次执行摘要中，不能以缺回执推断通过"
+                elif status not in KNOWN_RULE_STATUSES:
+                    status = STATUS_INSUFFICIENT_DATA
+                    incomplete_reason = "规则回执状态不在六态定义内"
+                elif status in _RULE_STATUS_TO_OBLIGATION_REASON:
+                    incomplete_reason = f"底层规则状态为 {status}，检查未完成"
+
+            receipt = CheckReceipt(
+                rule_id=raw_rule_id,
+                sub_check_id=f"{obligation_id}:{raw_rule_id}",
+                required_fact_ids=[],
+                operand_fact_ids=[],
+                formula=None,
+                tolerance={
+                    "configured_amount_tolerance_wan": "0.5",
+                    "configured_percentage_point_tolerance": "0.1",
+                    "rounding_envelope_wan": None,
+                    "actual_envelope_source": "not_exposed_by_legacy_rule",
+                },
+                status=status,
+                incomplete_reason=incomplete_reason,
+                issue_refs=list(dict.fromkeys(findings_by_pair.get((obligation_id, raw_rule_id), []))),
+                obligation_id=obligation_id or None,
+                evaluation_basis="legacy_document",
+                fact_migration_status="pending",
+            )
+            receipt_items.append(receipt.to_dict())
+    return receipt_items
 
 
 def obligation_ids_for_rule(rule_id: Any) -> List[str]:

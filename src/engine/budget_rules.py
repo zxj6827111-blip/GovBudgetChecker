@@ -17,6 +17,7 @@ from .rules_v33 import (
     _txt_fund_page_for,
 )
 from .amount_math import classify_amount_diff, compute_dynamic_envelope
+from .rule_policy import amount_difference_exceeds_policy, percentage_difference_exceeds_policy
 from .rule_outcome import (
     RuleDeferred,
     RuleNotApplicable,
@@ -1866,7 +1867,7 @@ class BUD101_T1Balance(Rule):
         inc_d = v_inc.decimal_val or Decimal("0")
         exp_d = v_exp.decimal_val or Decimal("0")
         diff = abs(inc_d - exp_d)
-        if diff > envelope:
+        if amount_difference_exceeds_policy(diff, envelope):
             max_scale = max(v_inc.scale_digits, v_exp.scale_digits, 2)
             return [
                 self._issue(
@@ -1919,7 +1920,7 @@ class BUD102_T3TotalFormula(Rule):
         calc = (v_basic.decimal_val or Decimal("0")) + (v_project.decimal_val or Decimal("0"))
         tot = v_total.decimal_val or Decimal("0")
         diff = abs(tot - calc)
-        if diff > envelope:
+        if amount_difference_exceeds_policy(diff, envelope):
             max_scale = max(v_total.scale_digits, v_basic.scale_digits, v_project.scale_digits, 2)
             return [
                 self._issue(
@@ -1972,7 +1973,7 @@ class BUD103_T8TotalFormula(Rule):
         calc = (v_personnel.decimal_val or Decimal("0")) + (v_public.decimal_val or Decimal("0"))
         tot = v_total.decimal_val or Decimal("0")
         diff = abs(tot - calc)
-        if diff > envelope:
+        if amount_difference_exceeds_policy(diff, envelope):
             max_scale = max(v_total.scale_digits, v_personnel.scale_digits, v_public.scale_digits, 2)
             return [
                 self._issue(
@@ -2023,7 +2024,7 @@ class BUD104_T9Formula(Rule):
                 rhs = ab + rec + cs
                 env1 = compute_dynamic_envelope([strict_v["total"], strict_v["abroad"], strict_v["reception"], strict_v["car_sub"]])
                 diff_val = abs(tot - rhs)
-                if diff_val > env1:
+                if amount_difference_exceeds_policy(diff_val, env1):
                     max_scale1 = max(strict_v["total"].scale_digits, strict_v["abroad"].scale_digits, strict_v["reception"].scale_digits, strict_v["car_sub"].scale_digits, 2)
                     issues.append(
                         self._issue(
@@ -2046,7 +2047,7 @@ class BUD104_T9Formula(Rule):
                 car_calc = cb + cr
                 env2 = compute_dynamic_envelope([strict_v["car_sub"], strict_v["car_buy"], strict_v["car_run"]])
                 diff_val2 = abs(car_sub - car_calc)
-                if diff_val2 > env2:
+                if amount_difference_exceeds_policy(diff_val2, env2):
                     max_scale2 = max(strict_v["car_sub"].scale_digits, strict_v["car_buy"].scale_digits, strict_v["car_run"].scale_digits, 2)
                     issues.append(
                         self._issue(
@@ -2932,7 +2933,9 @@ class BUD111_ComparativePercentConsistency(Rule):
                 expected_direction = "增加" if amount_diff > 0 else "减少"
                 expected_pct = abs(amount_diff) / prev * 100.0
                 direction_ok = reported_direction == expected_direction
-                pct_ok = _is_close(reported_pct, expected_pct, abs_tol=0.5, rel_tol=0.01)
+                pct_ok = not percentage_difference_exceeds_policy(
+                    abs(reported_pct - expected_pct)
+                )
                 if direction_ok and pct_ok:
                     continue
 
@@ -3469,7 +3472,7 @@ class R33PerfPhaseAmount(Rule):
                 (_perf_scale_digits(form["annual_raw"]), form["unit"]),
             ]
         )
-        if diff <= envelope:
+        if not amount_difference_exceeds_policy(diff, envelope):
             return
         # 解释豁免只看说明侧散文：申报表固定字段（如「上年结转资金 0」）
         # 是表格标签不是差异解释，不得触发豁免。

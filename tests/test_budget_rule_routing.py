@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
 
 from src.engine import common_rules as common_rules_mod
 from src.engine import pipeline
+from src.engine import rule_registry
 from src.engine.budget_rules import (
     BUD001_StructureAndAnchors,
     BUD002_PlaceholderCheck,
@@ -54,8 +55,8 @@ class _DummyRule:
 
 
 def test_pipeline_routes_budget_rules(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(pipeline, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
-    monkeypatch.setattr(pipeline, "FINAL_ALL_RULES", [_DummyRule("FIN-DUMMY")])
+    monkeypatch.setattr(rule_registry.budget_rules, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
+    monkeypatch.setattr(rule_registry.rules_v33, "ALL_RULES", [_DummyRule("FIN-DUMMY")])
 
     doc = SimpleNamespace(path="sample.pdf", page_texts=["预算"], page_tables=[[]])
     issues = pipeline.run_rules(doc, use_ai_assist=False, report_kind="budget")
@@ -68,9 +69,9 @@ def test_pipeline_routes_budget_rules(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_pipeline_keeps_unknown_document_out_of_budget_and_final_rules(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(pipeline, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
-    monkeypatch.setattr(pipeline, "FINAL_ALL_RULES", [_DummyRule("FIN-DUMMY")])
-    monkeypatch.setattr(pipeline, "ALL_COMMON_RULES", [_DummyRule("COMMON-DUMMY")])
+    monkeypatch.setattr(rule_registry.budget_rules, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
+    monkeypatch.setattr(rule_registry.rules_v33, "ALL_RULES", [_DummyRule("FIN-DUMMY")])
+    monkeypatch.setattr(rule_registry.common_rules, "ALL_COMMON_RULES", [_DummyRule("COMMON-DUMMY")])
     doc = SimpleNamespace(path="material.pdf", page_texts=["公开材料"], page_tables=[[]])
 
     issues = pipeline.run_rules(doc, use_ai_assist=False, report_kind="unknown")
@@ -82,9 +83,9 @@ def test_pipeline_keeps_unknown_document_out_of_budget_and_final_rules(
 def test_pipeline_does_not_use_repository_directory_to_route_budget_rules(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(pipeline, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
-    monkeypatch.setattr(pipeline, "FINAL_ALL_RULES", [_DummyRule("FIN-DUMMY")])
-    monkeypatch.setattr(pipeline, "ALL_COMMON_RULES", [])
+    monkeypatch.setattr(rule_registry.budget_rules, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
+    monkeypatch.setattr(rule_registry.rules_v33, "ALL_RULES", [_DummyRule("FIN-DUMMY")])
+    monkeypatch.setattr(rule_registry.common_rules, "ALL_COMMON_RULES", [])
     doc = SimpleNamespace(
         path=r"E:\\Software Development\\GovBudgetChecker\\uploads\\plain.pdf",
         page_texts=["决算公开材料"],
@@ -101,8 +102,8 @@ def test_pipeline_does_not_use_repository_directory_to_route_budget_rules(
 async def test_engine_rule_runner_routes_budget_rules(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(runner_mod, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
-    monkeypatch.setattr(runner_mod, "FINAL_ALL_RULES", [_DummyRule("FIN-DUMMY")])
+    monkeypatch.setattr(rule_registry.budget_rules, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
+    monkeypatch.setattr(rule_registry.rules_v33, "ALL_RULES", [_DummyRule("FIN-DUMMY")])
 
     runner = runner_mod.EngineRuleRunner()
     doc = build_document(
@@ -143,9 +144,9 @@ async def test_engine_rule_runner_routes_budget_rules(
 async def test_engine_rule_runner_uses_metadata_for_final_report_under_budget_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(runner_mod, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
-    monkeypatch.setattr(runner_mod, "FINAL_ALL_RULES", [_DummyRule("FIN-DUMMY")])
-    monkeypatch.setattr(runner_mod, "ALL_COMMON_RULES", [])
+    monkeypatch.setattr(rule_registry.budget_rules, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
+    monkeypatch.setattr(rule_registry.rules_v33, "ALL_RULES", [_DummyRule("FIN-DUMMY")])
+    monkeypatch.setattr(rule_registry.common_rules, "ALL_COMMON_RULES", [])
 
     runner = runner_mod.EngineRuleRunner()
     doc = build_document(
@@ -184,9 +185,9 @@ async def test_engine_rule_runner_shares_resolved_kind_with_rule_bodies(
     不得再按文件名猜出 budget——同一份 PDF 在两个环节拿到互斥的检查
     配置，正是此前主流程/通用规则互斥结论的成因。
     """
-    monkeypatch.setattr(runner_mod, "ALL_BUDGET_RULES", [])
-    monkeypatch.setattr(runner_mod, "FINAL_ALL_RULES", [])
-    monkeypatch.setattr(runner_mod, "ALL_COMMON_RULES", [])
+    monkeypatch.setattr(rule_registry.budget_rules, "ALL_BUDGET_RULES", [])
+    monkeypatch.setattr(rule_registry.rules_v33, "ALL_RULES", [])
+    monkeypatch.setattr(rule_registry.common_rules, "ALL_COMMON_RULES", [])
 
     runner = runner_mod.EngineRuleRunner()
     doc = build_document(
@@ -230,7 +231,7 @@ def test_budget_t1_balance_rule_detects_mismatch() -> None:
     table = [
         ["本年收入", "", "本年支出", ""],
         ["项目", "预算数", "项目", "预算数"],
-        ["收入总计", "100", "支出总计", "90"],
+        ["收入总计", "1000000", "支出总计", "900000"],
     ]
     doc = build_document(
         path="budget.pdf",
@@ -1023,8 +1024,8 @@ def test_pipeline_budget_name_mismatch_uses_specific_title_and_suggestion(
                 )
             ]
 
-    monkeypatch.setattr(pipeline, "ALL_BUDGET_RULES", [_Budget109Only()])
-    monkeypatch.setattr(pipeline, "ALL_COMMON_RULES", [])
+    monkeypatch.setattr(rule_registry.budget_rules, "ALL_BUDGET_RULES", [_Budget109Only()])
+    monkeypatch.setattr(rule_registry.common_rules, "ALL_COMMON_RULES", [])
 
     doc = build_document(
         path="sample_budget.pdf",
