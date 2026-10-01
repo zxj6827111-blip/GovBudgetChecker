@@ -8,7 +8,9 @@
   golden 样张上可执行（insufficient → pass）
 - 文旅局 1700.57 级联误报（V33-005×2 + V33-202 error）→ 0 条；
   解析结构性矛盾按 MR-1c 哨兵转 insufficient_data（人工复核）
-- 宜川输出总数 34 → 12（≤12 达标）。12 条构成：5 error + 1 medium +
+- 宜川历史输出总数 34 → 12（当时容差）。按 portable 0.1pp 容差，
+  车辆同比差 0.20pp 现另有 1 条有效提示，总数门槛更新为 ≤13。
+  原 12 条构成：5 error + 1 medium +
   2 info 为各车道设计内真实发现（WP4-A 跨表三公 ×3、WP4-B 基金说明、
   WP4-D 零基数同比、WP4-G 三公细化、WP4-F 百分比单位、WP4-C 重复
   披露），1 warn 为 V33-227 命中的真实科目名不一致（说明"文化体育
@@ -216,7 +218,9 @@ def test_wenlv_cascade_errors_zero(replays):
 
 
 def test_yichuan_output_budget(replays):
-    assert len(replays["yichuan"]["issues"]) <= 12
+    # Portable percentage tolerance is 0.1pp: the 0.20pp vehicle delta is a
+    # valid additional warning on top of the prior 12-item sample baseline.
+    assert len(replays["yichuan"]["issues"]) <= 13
 
 
 # ---------------------------------------------------------------------------

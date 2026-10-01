@@ -150,6 +150,12 @@ class AIFindingsService:
     def _convert_semantic_issues_to_items(self, semantic_issues: List[Dict[str, Any]], context: JobContext, page_offsets: List[tuple] = None) -> List[IssueItem]:
         """将语义问题转换为IssueItem格式"""
         issues = []
+        page_ranges = page_offsets or []
+        known_page_count = (
+            len(page_offsets)
+            if page_offsets is not None
+            else len(context.page_texts or [])
+        )
         
         for idx, issue in enumerate(semantic_issues):
             try:
@@ -165,7 +171,7 @@ class AIFindingsService:
                 page_number: Optional[int] = None
                 try:
                     raw_page = int(str(issue.get("page")).strip())
-                    if 0 < raw_page <= len(page_offsets):
+                    if 0 < raw_page and (known_page_count == 0 or raw_page <= known_page_count):
                         page_number = raw_page
                 except (TypeError, ValueError):
                     pass
@@ -180,7 +186,7 @@ class AIFindingsService:
                     except (TypeError, ValueError):
                         pass
                 if span_start is not None:
-                    for page_start, page_end, page_num in page_offsets:
+                    for page_start, page_end, page_num in page_ranges:
                         if page_start <= span_start < page_end:
                             page_number = page_num
                             break
@@ -725,7 +731,8 @@ class AIFindingsService:
             page_number: Optional[int] = None
             try:
                 raw_page = int(str(raw_issue.get("page")).strip())
-                if raw_page > 0 and raw_page <= len(context.page_texts or []):
+                page_count = len(context.page_texts or [])
+                if raw_page > 0 and (page_count == 0 or raw_page <= page_count):
                     page_number = raw_page
             except (TypeError, ValueError):
                 page_number = None
@@ -740,12 +747,21 @@ class AIFindingsService:
             return item
             
         except Exception as e:
-            logger.error(f"转换AI问题失败: {e}")
+            logger.warning(
+                "转换AI问题失败",
+                extra=safe_log_extra(
+                    {
+                        "issue_index": idx,
+                        "issue_rule_id": str(raw_issue.get("rule_id") or ""),
+                        "issue_field_names": sorted(str(key) for key in raw_issue),
+                        **describe_exception(e),
+                    }
+                ),
+            )
             self.ai_errors.append({
                 "type": "conversion_error",
-                "error": str(e),
+                "error_type": type(e).__name__,
                 "issue_index": idx,
-                "issue_preview": str(raw_issue)[:100] + "..." if len(str(raw_issue)) > 100 else str(raw_issue)
             })
             return None
     

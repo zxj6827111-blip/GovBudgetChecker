@@ -1,4 +1,4 @@
-"""WP1 不破坏既有接口：路由面冻结 + 入库集成只做加法。
+"""既有上传/任务/分析接口保持稳定，新增复核 API 必须明确登记。
 
 本轮新增的是业务数据底座，既有上传/任务/分析/组织接口的行为必须一字不动。
 "没有改动"这种话不能只靠 review 声称，所以这里把接口面固化成清单：
@@ -15,7 +15,8 @@ os.environ.setdefault("TESTING", "true")
 
 from api.main import app  # noqa: E402
 
-#: 上传 / 任务 / 分析 / 文件 / 组织 相关接口的冻结清单（2026-09-21 @ 4a1cabf 基线）。
+#: 上传 / 任务 / 分析 / 文件 / 组织 接口清单。ZC-05 明确新增证据读取、
+#: 追加校正及反馈三条路由；其余接口继续保持冻结。
 FROZEN_ROUTES = frozenset(
     {
         ("POST", "/api/documents/preflight"),
@@ -32,6 +33,9 @@ FROZEN_ROUTES = frozenset(
         ("GET", "/api/jobs/{job_id}/status"),
         ("GET", "/jobs/{job_id}/status"),
         ("GET", "/api/jobs/{job_id}/review"),
+        ("GET", "/api/jobs/{job_id}/evidence/{evidence_id}"),
+        ("POST", "/api/jobs/{job_id}/corrections"),
+        ("POST", "/api/jobs/{job_id}/feedback"),
         ("GET", "/api/jobs/{job_id}/structured-ingest"),
         ("GET", "/api/jobs/{job_id}/org-suggestions"),
         ("DELETE", "/api/jobs/{job_id}"),

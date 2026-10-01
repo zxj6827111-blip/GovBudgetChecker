@@ -12,6 +12,10 @@ from src.services.document_profile_resolver import (
     resolve_report_kind_from_path,
 )
 
+from . import budget_rules as _budget_rules
+from . import common_rules as _common_rules
+from . import rules_v33 as _final_rules
+
 from .rule_outcome import (
     RuleDeferred,
     RuleNotApplicable,
@@ -34,6 +38,15 @@ from .rules_v33 import (
 )
 # re-export for existing callers importing build_document from this module
 build_document = _build_document
+
+# Backwards-compatible patch point used by existing callers/tests. The source
+# list remains the canonical common-rule family registered by rule_registry.
+ALL_COMMON_RULES = _common_rules.ALL_COMMON_RULES
+ALL_BUDGET_RULES = _budget_rules.ALL_BUDGET_RULES
+FINAL_ALL_RULES = _final_rules.ALL_RULES
+_INITIAL_COMMON_RULES = ALL_COMMON_RULES
+_INITIAL_BUDGET_RULES = ALL_BUDGET_RULES
+_INITIAL_FINAL_RULES = FINAL_ALL_RULES
 
 
 def _resolve_report_kind(doc: Any, report_kind: Optional[str] = None) -> str:
@@ -60,7 +73,18 @@ def _resolve_report_kind(doc: Any, report_kind: Optional[str] = None) -> str:
 
 def _rule_set_for_kind(kind: str) -> List[Any]:
     """按文种选择专项规则集。识别不了文种就不选专项规则，只跑通用规则。"""
+    if kind == "budget" and ALL_BUDGET_RULES is not _INITIAL_BUDGET_RULES:
+        return ALL_BUDGET_RULES
+    if kind == "final" and FINAL_ALL_RULES is not _INITIAL_FINAL_RULES:
+        return FINAL_ALL_RULES
     return select_specific_rules(kind)
+
+
+def _common_rule_set() -> List[Any]:
+    """Use registry routing in production; honor legacy monkeypatch hooks in tests."""
+    if ALL_COMMON_RULES is not _INITIAL_COMMON_RULES:
+        return ALL_COMMON_RULES
+    return select_rules("unknown")
 
 
 def run_rules(
@@ -100,7 +124,7 @@ def run_rules_with_outcomes(
     else:
         selected_rules = [
             *_rule_set_for_kind(resolved_kind),
-            *select_rules("unknown"),
+            *_common_rule_set(),
         ]
     issues: List[Issue] = []
     outcomes: List[RuleOutcome] = []
@@ -232,10 +256,10 @@ def _infer_issue_page(
     evidence_list: List[Dict[str, Any]],
     doc: Any = None,
 ) -> Optional[int]:
-    """Resolve a primary page from explicit finding evidence only.
+    """Resolve a page from explicit refs, or one unique exact table anchor.
 
-    Table names and section labels do not identify a unique physical page, so
-    this function never searches document anchors as a fallback.
+    A table label can provide a page only when it maps to exactly one physical
+    page. Fuzzy/partial names and multi-page anchors remain unresolved.
     """
     pages = _location_pages(location)
     if pages:
@@ -244,6 +268,15 @@ def _infer_issue_page(
         item_pages = _location_pages(item)
         if item_pages:
             return item_pages[0]
+
+    table_name = str(location.get("table") or "").strip()
+    anchors = getattr(doc, "anchors", None)
+    if table_name and "/" not in table_name and isinstance(anchors, dict):
+        raw_pages = anchors.get(table_name)
+        if isinstance(raw_pages, (list, tuple)):
+            anchor_pages = _location_pages({"pages": raw_pages})
+            if len(anchor_pages) == 1:
+                return anchor_pages[0]
 
     return None
 

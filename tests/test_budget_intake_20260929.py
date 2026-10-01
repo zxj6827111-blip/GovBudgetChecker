@@ -406,8 +406,8 @@ def test_finals_unresolved_total_le_10(final_replays):
 
 
 def test_yichuan_findings_stay_12(final_replays):
-    """宜川 findings 维持 A 档压减裁决后的 12；新增条目必须另行取证裁决。"""
-    assert len(final_replays["yichuan"]["issues"]) == 12
+    """按 portable 0.1 个百分点容差，车辆同比差 0.20pp 应另报一条提示。"""
+    assert len(final_replays["yichuan"]["issues"]) == 13
 
 
 def test_wenlv_cascade_still_zero(final_replays):

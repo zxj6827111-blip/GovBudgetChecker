@@ -342,6 +342,20 @@ def test_legacy_pipeline_uses_existing_table_anchor_but_not_numeric_fields() -> 
     no_page_data = _issue_to_dict(no_page, 2)
     assert no_page_data["location"].get("page") is None
 
+    ambiguous_anchor = Issue(
+        rule="V33-240",
+        severity="error",
+        message="表内合计与分项不一致",
+        evidence_text="收入决算表合计 10.00",
+        location={"table": "收入决算表"},
+    )
+    ambiguous_data = _issue_to_dict(
+        ambiguous_anchor,
+        3,
+        SimpleNamespace(anchors={"收入决算表": [9, 10]}),
+    )
+    assert ambiguous_data["location"].get("page") is None
+
 
 # --------------------------------------------------------------------------
 # 汇总、落库与向后兼容
@@ -568,4 +582,3 @@ async def test_pipeline_result_meta_aggregates_versions(
     # 本次未启用 AI，模型/提示词版本必须为空列表而不是占位值
     assert versions["model_versions"] == []
     assert versions["prompt_versions"] == []
-

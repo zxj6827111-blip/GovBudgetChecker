@@ -124,15 +124,17 @@ def _zero_hits(issues: List[Any]) -> List[Any]:
 
 
 def test_truth_a_yichuan_reports_exactly_the_zero_base_conflict(yichuan):
-    """Truth A：宜川 P36 接待费 0.3/增加0.3/增长100% → 恰好 1 条 error finding。
-
-    同页其余同比句在仓库统一容差内自洽（车辆 15.51% vs 15.31% 差 0.20pp
-    < 0.5pp 不报）——本测试同时锁死"不误报"。
+    """零基数错误保留；portable 0.1pp 容差另报 0.20pp 车辆同比差异。
     """
     issues = _run(_document(yichuan))
 
-    assert len(issues) == 1, [getattr(i, "message", "") for i in issues]
-    issue = issues[0]
+    zero_base_issues = _zero_hits(issues)
+    assert len(zero_base_issues) == 1, [getattr(i, "message", "") for i in issues]
+    assert len(issues) == 2, [getattr(i, "message", "") for i in issues]
+    percentage_issue = next(issue for issue in issues if issue not in zero_base_issues)
+    assert percentage_issue.severity == "warn"
+    assert "相差 0.20 个百分点" in percentage_issue.message
+    issue = zero_base_issues[0]
     assert issue.rule == RULE_ID
     assert issue.severity == "error", "零基数百分比属明确数学口径错误，不得降级"
 
