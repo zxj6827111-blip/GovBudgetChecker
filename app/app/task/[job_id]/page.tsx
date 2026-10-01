@@ -167,7 +167,8 @@ export default function TaskDetail() {
     [filteredProblems, selectedProblemId]
   );
   const effectiveReanalyzeUseAiAssist =
-    reanalyzeUseAiAssist ?? (typeof jobDetail?.use_ai_assist === "boolean" ? jobDetail.use_ai_assist : true);
+    // ZC-00：默认关闭 AI 分析——无任何已保存偏好时不再回退到 true
+    reanalyzeUseAiAssist ?? (typeof jobDetail?.use_ai_assist === "boolean" ? jobDetail.use_ai_assist : false);
 
   const handleReanalyze = async () => {
     if (isReanalyzing || task?.status === "analyzing") {

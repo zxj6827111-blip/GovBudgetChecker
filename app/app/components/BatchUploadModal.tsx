@@ -443,7 +443,7 @@ export default function BatchUploadModal({
     orgUnitId,
     defaultDocType,
     useLocalRules = true,
-    useAiAssist = true,
+    useAiAssist = false,
     onClose,
     onComplete,
 }: BatchUploadModalProps) {

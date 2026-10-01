@@ -59,7 +59,7 @@ def _reason_codes(gate: Dict[str, Any]) -> List[str]:
 # 单条校验：正例与反例
 # --------------------------------------------------------------------------
 def test_finding_with_page_and_text_is_complete() -> None:
-    complete, missing = evaluate_finding_evidence(
+    complete, missing, _verification = evaluate_finding_evidence(
         {
             "page_number": 12,
             "evidence": [{"page": 12, "text": "合计 35.20，其中因公出国 10.00"}],
@@ -71,7 +71,7 @@ def test_finding_with_page_and_text_is_complete() -> None:
 
 
 def test_finding_with_only_bbox_is_complete() -> None:
-    complete, missing = evaluate_finding_evidence(
+    complete, missing, _verification = evaluate_finding_evidence(
         {"page_number": 3, "bbox": [10.0, 20.0, 120.0, 40.0], "evidence": []}
     )
     assert complete is True
@@ -79,7 +79,7 @@ def test_finding_with_only_bbox_is_complete() -> None:
 
 
 def test_finding_without_any_evidence_is_incomplete() -> None:
-    complete, missing = evaluate_finding_evidence(
+    complete, missing, _verification = evaluate_finding_evidence(
         {"page_number": 5, "title": "疑似口径不一致", "evidence": []}
     )
     assert complete is False
@@ -88,7 +88,7 @@ def test_finding_without_any_evidence_is_incomplete() -> None:
 
 
 def test_finding_without_page_is_incomplete() -> None:
-    complete, missing = evaluate_finding_evidence(
+    complete, missing, _verification = evaluate_finding_evidence(
         {"page_number": 0, "location": {}, "evidence": [{"text": "有原文但定位不到页"}]}
     )
     assert complete is False
@@ -97,14 +97,14 @@ def test_finding_without_page_is_incomplete() -> None:
 
 def test_blank_text_does_not_count_as_evidence() -> None:
     """反例：空白字符串不算证据，避免"填了字段就算有证据"。"""
-    complete, _missing = evaluate_finding_evidence(
+    complete, _missing, _verification = evaluate_finding_evidence(
         {"page_number": 2, "text_snippet": "   ", "evidence": [{"text": ""}]}
     )
     assert complete is False
 
 
 def test_invalid_bbox_does_not_count() -> None:
-    complete, missing = evaluate_finding_evidence(
+    complete, missing, _verification = evaluate_finding_evidence(
         {"page_number": 2, "bbox": [1, 2, 3], "evidence": []}
     )
     assert complete is False
@@ -113,7 +113,7 @@ def test_invalid_bbox_does_not_count() -> None:
 
 def test_nonfinite_or_reversed_bbox_does_not_count() -> None:
     for bbox in ([1, 2, float("nan"), 4], [10, 20, 5, 30]):
-        complete, missing = evaluate_finding_evidence(
+        complete, missing, _verification = evaluate_finding_evidence(
             {"page_number": 2, "bbox": bbox, "evidence": []}
         )
         assert complete is False
@@ -121,7 +121,7 @@ def test_nonfinite_or_reversed_bbox_does_not_count() -> None:
 
 
 def test_explicit_cross_page_location_is_usable_but_scalar_page_count_is_not() -> None:
-    complete, _missing = evaluate_finding_evidence(
+    complete, _missing, _verification = evaluate_finding_evidence(
         {
             "location": {"pages": [3, 5]},
             "evidence": [{"text": "跨页勾稽证据"}],
@@ -129,7 +129,7 @@ def test_explicit_cross_page_location_is_usable_but_scalar_page_count_is_not() -
     )
     assert complete is True
 
-    incomplete, missing = evaluate_finding_evidence(
+    incomplete, missing, _verification = evaluate_finding_evidence(
         {
             "location": {"pages": 5},
             "evidence": [{"text": "文档共 5 页"}],
@@ -415,7 +415,9 @@ def _run_legacy_pipeline(
         },
     )
 
-    full_text = "一般公共预算财政拨款支出预算表" * 10
+    # ZC-00 证据核验：页文本必须真的包含 finding 引用的原文，否则
+    # 证据门会按"原文不存在"判失败——本用例只测完整率管道，故补齐引用。
+    full_text = "一般公共预算财政拨款支出预算表" * 10 + "\n合计 35.20"
     monkeypatch.setattr(pipeline_mod.pdfplumber, "open", lambda _path: _FakePdf(1))
     monkeypatch.setattr(
         pipeline_mod, "_extract_visible_text_from_page", lambda _page: full_text
@@ -474,8 +476,10 @@ async def test_pipeline_reports_evidence_completeness(
                 "id": "C-001-1",
                 "source": "rule",
                 "severity": "error",
-                "location": {"page": 12},
-                "evidence": [{"page": 12, "text": "合计 35.20"}],
+                # ZC-00：夹具假 PDF 只有 1 页，页码必须落在真实页数内，
+                # 且引用文本已在 _run_legacy_pipeline 的页文本中补齐。
+                "location": {"page": 1},
+                "evidence": [{"page": 1, "text": "合计 35.20"}],
             }
         ],
     )

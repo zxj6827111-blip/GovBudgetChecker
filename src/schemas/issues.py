@@ -198,7 +198,9 @@ class IssueItem(BaseModel):
     created_at: float = Field(default_factory=time.time, description="创建时间戳")
     
     # 新增字段以支持更丰富的数据结构
-    page_number: int = Field(default=1, description="页码")
+    # 页码未知必须保持 None（ZC-00 / SYS-07）：历史默认值 1 会把"不知道第几页"
+    # 伪装成"第 1 页"，制造看似完整的假证据。展示层负责把 None 渲染成"未定位"。
+    page_number: Optional[int] = Field(default=None, description="页码（无法定位时为 None，不得默认第 1 页）")
     bbox: Optional[List[float]] = Field(default=None, description="边界框 [x1, y1, x2, y2]")
     amount: Optional[float] = Field(default=None, description="金额")
     percentage: Optional[float] = Field(default=None, description="百分比")
@@ -341,7 +343,9 @@ class JobContext(BaseModel):
 class AnalysisConfig(BaseModel):
     """分析配置"""
     dual_mode: bool = Field(default=True, description="是否启用双模式")
-    ai_enabled: bool = Field(default=True, description="是否启用AI分析")
+    # ZC-00：AI 分析/定位/失败回退默认全部关闭——不配置真实模型服务时，
+    # 任何调用方不显式开启就不会发出模型请求，启动也不要求 AI 密钥。
+    ai_enabled: bool = Field(default=False, description="是否启用AI分析（默认关闭）")
     rule_enabled: bool = Field(default=True, description="是否启用规则分析")
     merge_enabled: bool = Field(default=True, description="是否启用结果合并")
     
@@ -358,9 +362,9 @@ class AnalysisConfig(BaseModel):
     
     # 兼容双模式与引擎运行器所需的扩展字段
     rules_version: str = Field(default="v3_3", description="规则版本（如 v3_3）")
-    enable_ai_analysis: bool = Field(default=True, description="是否启用AI分析（双模式分支开关）")
-    enable_ai_locator: bool = Field(default=True, description="是否启用AI定位增强（将AI帮助用于定位证据）")
-    ai_fallback_on_error: bool = Field(default=True, description="AI分析失败时是否静默回退到仅规则模式")
+    enable_ai_analysis: bool = Field(default=False, description="是否启用AI分析（双模式分支开关，默认关闭）")
+    enable_ai_locator: bool = Field(default=False, description="是否启用AI定位增强（默认关闭）")
+    ai_fallback_on_error: bool = Field(default=False, description="AI分析失败时是否静默回退到仅规则模式（默认关闭）")
     record_rule_failures: bool = Field(default=False, description="是否将规则执行失败记录为问题项")
 
 
@@ -496,7 +500,7 @@ def create_default_config() -> AnalysisConfig:
     """创建默认配置"""
     return AnalysisConfig(
         dual_mode=True,
-        ai_enabled=True,
+        ai_enabled=False,
         rule_enabled=True,
         merge_enabled=True,
         title_similarity_threshold=0.85,  # 调宽阈值，让AI结果更容易显示
@@ -508,8 +512,8 @@ def create_default_config() -> AnalysisConfig:
         ai_temperature=0.1,
         # 新增字段默认值，保证与双模式分析器兼容
         rules_version="v3_3",
-        enable_ai_analysis=True,
-        enable_ai_locator=True,
-        ai_fallback_on_error=True,
+        enable_ai_analysis=False,
+        enable_ai_locator=False,
+        ai_fallback_on_error=False,
         record_rule_failures=False
     )

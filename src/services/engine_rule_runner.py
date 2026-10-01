@@ -60,28 +60,36 @@ class EngineRuleRunner:
         return severity_map.get(value, "medium")
 
     @staticmethod
-    def _normalize_page(page: Any) -> int:
+    def _normalize_page(page: Any) -> Optional[int]:
+        """页码归一：只接受正整数，未知/无效一律返回 None。
+
+        ZC-00（SYS-07）：禁止把未知页码折算成第 1 页——那会让"没有定位"伪装成
+        "定位在第 1 页"，下游证据门和质量门都会被假页码污染。None 会一路保留，
+        由展示层渲染为"未定位"。
+        """
         if isinstance(page, bool):
-            return 1
+            return None
         if isinstance(page, int):
-            return page if page > 0 else 1
+            return page if page > 0 else None
         try:
             parsed = int(str(page).strip())
-            return parsed if parsed > 0 else 1
-        except Exception:
-            return 1
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
 
-    def _build_evidence_list(self, issue: Issue, page_number: int) -> List[Dict[str, Any]]:
-        text = (
-            getattr(issue, "evidence_text", None)
-            or getattr(issue, "description", None)
-            or issue.message
-        )
-        evidence_item: Dict[str, Any] = {
-            "page": page_number,
-            "text": text,
-            "text_snippet": text,
-        }
+    def _build_evidence_list(self, issue: Issue, page_number: Optional[int]) -> List[Dict[str, Any]]:
+        """构造证据列表：只携带真实原文引用，绝不用问题说明冒充原文。
+
+        ZC-00（SYS-07）：此前 text 缺失时回退到 description/message——那把规则的
+        判定说明当成"原文摘录"输出，制造看似有据可查的问题项。现在没有
+        evidence_text（规则给出的命中原文）就保持证据文本为空，由证据门按
+        "缺原文"记录；页码未知时保持 None，不默认第 1 页。
+        """
+        text = str(getattr(issue, "evidence_text", None) or "").strip()
+        evidence_item: Dict[str, Any] = {"page": page_number}
+        if text:
+            evidence_item["text"] = text
+            evidence_item["text_snippet"] = text
         bbox = getattr(issue, "bbox", None)
         if bbox:
             evidence_item["bbox"] = bbox
@@ -107,14 +115,18 @@ class EngineRuleRunner:
         page_number = self._normalize_page(
             location.get("page", getattr(issue, "page_number", None))
         )
-        location.setdefault("page", page_number)
+        if page_number is not None:
+            location.setdefault("page", page_number)
+        else:
+            # 未知页码保持缺失：location.page 与 page_number 都不落第 1 页
+            location.pop("page", None)
 
         resolved_rule_id = str(rule_id or getattr(issue, "rule", "") or "UNKNOWN")
         title = infer_rule_title(resolved_rule_id, getattr(issue, "message", "") or "")
         suggestion: Optional[str] = getattr(issue, "suggestion", None) or default_rule_suggestion(
             resolved_rule_id, page_number
         )
-        if "page" not in raw_location and "pages" not in location:
+        if page_number is None or ("page" not in raw_location and "pages" not in location):
             suggestion = (
                 f"{suggestion} 当前页码未精确定位，可结合证据片段检索原文复核。"
                 if suggestion
@@ -363,7 +375,9 @@ class EngineRuleRunner:
                         extra=safe_log_extra({"rule_id": rule_id, **describe_exception(e)}),
                     )
 
-                    # 鍒涘缓澶辫触璁板綍
+                    # 创建失败记录。ZC-00（SYS-07）：执行失败记录是系统生成的事件，
+                    # 不允许伪造"第 1 页 + 错误消息即原文"的证据——页码保持缺失、
+                    # 证据列表留空，让证据门按缺证据如实记账。
                     if config.record_rule_failures:
                         failure_item = IssueItem(
                             id=str(uuid.uuid4()),
@@ -372,15 +386,9 @@ class EngineRuleRunner:
                             title=f"Rule execution failed: {rule_obj.desc}",
                             message=f"Rule execution error: {str(e)}",
                             severity="low",
-                            location={"page": 1},
-                            page_number=1,
-                            evidence=[
-                                {
-                                    "page": 1,
-                                    "text": f"Execution error: {str(e)}",
-                                    "text_snippet": f"Execution error: {str(e)}",
-                                }
-                            ],
+                            location={},
+                            page_number=None,
+                            evidence=[],
                             why_not=f"EXECUTION_ERROR: {str(e)}",
                             rule_version=rule_version,
                             engine_version=ENGINE_VERSION,

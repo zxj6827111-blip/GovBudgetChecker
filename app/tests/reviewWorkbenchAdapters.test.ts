@@ -15,6 +15,7 @@ import {
   isProblemDegraded,
   pickAutoSelectJob,
   resolveProblemTargetPage,
+  shouldDrawProblemOverlay,
   resolveWorkbenchHeaderBadge,
   sortProblemsForReview,
   ThumbnailLoadScheduler,
@@ -216,6 +217,21 @@ function runSyncAssertions(): void {
     "REGRESSION: 页码未知时必须返回 null，调用方不得猜测跳到某一页",
   );
   assert.equal(resolveProblemTargetPage(makeProblem({ page: 0 })), null, "页码 0 不是合法页码");
+
+  // --- shouldDrawProblemOverlay：ZC-00（SYS-11）高亮框只画在问题所属页 -------
+
+  assert.equal(shouldDrawProblemOverlay(makeProblem({ page: 3, bbox: [10, 20, 120, 40] }), 3), true);
+  assert.equal(
+    shouldDrawProblemOverlay(makeProblem({ page: 3, bbox: [10, 20, 120, 40] }), 4),
+    false,
+    "REGRESSION: 翻到其他页后旧问题的框不得继续绘制",
+  );
+  assert.equal(
+    shouldDrawProblemOverlay(makeProblem({ page: undefined, bbox: [10, 20, 120, 40] }), 2),
+    false,
+    "REGRESSION: 无页码问题不得在当前页绘制高亮框（不得猜页）",
+  );
+  assert.equal(shouldDrawProblemOverlay(null, 2), false);
 
   // --- deriveStageHistory：5 态阶段记录派生（不含 OCR），失败/未知语义反例 ---
 

@@ -569,7 +569,8 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
   const [notice, setNotice] = useState<Notice | null>(null);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isRunningReanalyzeAll, setIsRunningReanalyzeAll] = useState(false);
-  const [reanalyzeUseAiAssist, setReanalyzeUseAiAssist] = useState(true);
+  // ZC-00：批量重分析默认不请求 AI
+  const [reanalyzeUseAiAssist, setReanalyzeUseAiAssist] = useState(false);
   const [hasConfiguredReanalyzeUseAiAssist, setHasConfiguredReanalyzeUseAiAssist] = useState(false);
   const [isRepairingLinks, setIsRepairingLinks] = useState(false);
   const [isRematching, setIsRematching] = useState(false);

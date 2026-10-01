@@ -151,7 +151,7 @@ export function QueuePage() {
         const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/reanalyze`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode: "dual", use_local_rules: true, use_ai_assist: true }),
+          body: JSON.stringify({ mode: "dual", use_local_rules: true, use_ai_assist: false }),
         });
         if (response.ok) {
           await loadJobs();

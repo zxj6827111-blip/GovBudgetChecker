@@ -32,7 +32,7 @@ bbox 与证据文本二者取其一，是因为大量规则命中能定位页码
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 #: 缺证据的 AI 问题被降级后写入的状态值
 EVIDENCE_STATUS_DEGRADED = "degraded_missing_evidence"
@@ -40,6 +40,19 @@ EVIDENCE_STATUS_DEGRADED = "degraded_missing_evidence"
 EVIDENCE_STATUS_COMPLETE = "complete"
 #: 规则来源缺证据时的标记（仍计入正式问题，只是带告警）
 EVIDENCE_STATUS_RULE_WARNING = "incomplete_rule_warning"
+
+# ---- 引用真实性核验（ZC-00 / SYS-07）----
+# "有证据字段"不等于"有真实证据"：页码必须落在真实页数内，原文引用必须能在
+# 所称页面的文本层中找到。无法核验（无文本层/未提供页文本）不算失败，但要
+# 如实记录，不允许把"未核验"当"已核验"输出。
+EVIDENCE_VERIFICATION_VERIFIED = "verified"      # 原文引用已在所称页面文本中命中
+EVIDENCE_VERIFICATION_UNVERIFIED = "unverified"  # 结构完整但无法核验（已记录原因）
+EVIDENCE_VERIFICATION_FAILED = "failed"          # 核验失败：页码越界或原文不存在
+
+#: 页码超出文档真实页数
+REASON_PAGE_OUT_OF_RANGE = "page_out_of_range"
+#: 原文引用在所称页面文本层中找不到
+REASON_TEXT_NOT_FOUND_ON_PAGE = "text_not_found_on_page"
 
 #: 文档级规则编号：结构性"缺章节/缺表/页数体量"判定，finding 天然
 #: 没有单一页码；完整率统计时单独计数，不进入可定位类分母。
@@ -130,9 +143,8 @@ def _has_evidence_text(finding: Mapping[str, Any]) -> bool:
         for key in _EVIDENCE_TEXT_KEYS:
             if str(item.get(key) or "").strip():
                 return True
-    display = finding.get("display")
-    if isinstance(display, Mapping) and str(display.get("evidence_text") or "").strip():
-        return True
+    # 注意：不查询 display.evidence_text——display 可能由 message 派生（历史快照），
+    # 而 message 是问题说明不是原文。引用 display 判定证据完整就是让"说明充当原文"。
     return False
 
 
@@ -145,28 +157,173 @@ def _has_bbox(finding: Mapping[str, Any]) -> bool:
     return any(_is_valid_bbox(item.get("bbox")) for item in _evidence_items(finding))
 
 
-def evaluate_finding_evidence(finding: Mapping[str, Any]) -> Tuple[bool, List[str]]:
-    """校验单条 finding 的证据链。
+def _normalise_for_match(text: str) -> str:
+    """引用匹配归一：只折叠空白，不改动数字、小数点、负号、单位或百分号。
+
+    PDF 文本抽取会在任意位置插入换行/空格，引用与页面文本的逐字比较必须在
+    去空白后进行；除此之外不做任何字符改写，避免把"核验通过"变成"改写通过"。
+    """
+    return "".join(str(text or "").split())
+
+
+def _claimed_pages(finding: Mapping[str, Any]) -> List[int]:
+    """收集 finding 声称的全部页码（页码信号 + 证据条目页码）。"""
+    pages: List[int] = []
+    primary = _positive_int(finding.get("page_number"))
+    if primary is not None:
+        pages.append(primary)
+    location = finding.get("location")
+    if isinstance(location, Mapping):
+        page = _positive_int(location.get("page"))
+        if page is not None:
+            pages.append(page)
+        raw_pages = location.get("pages")
+        if isinstance(raw_pages, (list, tuple)):
+            for item in raw_pages:
+                page = _positive_int(item)
+                if page is not None:
+                    pages.append(page)
+        table_refs = location.get("table_refs")
+        if isinstance(table_refs, (list, tuple)):
+            for ref in table_refs:
+                if not isinstance(ref, Mapping):
+                    continue
+                page = _positive_int(ref.get("page"))
+                if page is not None:
+                    pages.append(page)
+    for item in _evidence_items(finding):
+        page = _positive_int(item.get("page"))
+        if page is not None:
+            pages.append(page)
+    return sorted(set(pages))
+
+
+def _page_text(page_texts: Optional[Sequence[str]], page: int) -> str:
+    """取指定物理页（1 起）的文本层；越界或未提供返回空串。"""
+    if not page_texts:
+        return ""
+    if page < 1 or page > len(page_texts):
+        return ""
+    return str(page_texts[page - 1] or "")
+
+
+def _quote_found_on_pages(quote: str, pages: Sequence[int], page_texts: Sequence[str]) -> bool:
+    """在给定页面集合的文本层中查找归一化引用。"""
+    needle = _normalise_for_match(quote)
+    if not needle:
+        return False
+    for page in pages:
+        haystack = _normalise_for_match(_page_text(page_texts, page))
+        if haystack and needle in haystack:
+            return True
+    return False
+
+
+def evaluate_finding_evidence(
+    finding: Mapping[str, Any],
+    *,
+    document_page_count: Optional[int] = None,
+    page_texts: Optional[Sequence[str]] = None,
+) -> Tuple[bool, List[str], Dict[str, Any]]:
+    """校验单条 finding 的证据链，含真实页数边界与原文引用核验。
+
+    Args:
+        finding: 待校验的 finding 字典。
+        document_page_count: 文档真实物理页数；提供后页码越界视为证据无效。
+        page_texts: 逐页文本层（下标 0 = 第 1 页）；提供后原文引用必须能在
+            所称页面文本中命中，否则视为证据无效。扫描页等无文本层的情况
+            记为"无法核验"，不判失败。
 
     Returns:
-        ``(证据是否完整, 缺失原因码列表)``。原因码取值：
-        ``missing_page`` / ``missing_evidence_text`` / ``missing_bbox``。
-        证据完整时也可能返回 ``missing_bbox``——它只说明"没有坐标"，不影响完整性判定。
+        ``(证据是否完整, 缺失原因码列表, 核验结果)``。结构缺失原因码：
+        ``missing_page`` / ``missing_evidence_text`` / ``missing_bbox``；
+        核验失败原因码：``page_out_of_range`` / ``text_not_found_on_page``。
+        证据完整时也可能返回 ``missing_bbox``——它只说明"没有坐标"，
+        不影响完整性判定。核验结果 ``status`` 取
+        ``verified`` / ``unverified`` / ``failed``，``reasons`` 记录
+        无法核验的具体原因。
     """
     missing: List[str] = []
+    verification: Dict[str, Any] = {
+        "status": EVIDENCE_VERIFICATION_UNVERIFIED,
+        "reasons": [],
+        "checked_pages": [],
+    }
+
+    claimed_pages = _claimed_pages(finding)
     has_page = _has_page(finding)
+
+    # ---- 真实页数边界核验 ----
+    out_of_range: List[int] = []
+    if document_page_count is not None and document_page_count > 0:
+        out_of_range = [page for page in claimed_pages if page > document_page_count]
+        if out_of_range:
+            # 页码越界 = 引用指向不存在的页面，页码信号不可信
+            has_page = False
+            missing.append(REASON_PAGE_OUT_OF_RANGE)
+            verification["reasons"].append(
+                f"{REASON_PAGE_OUT_OF_RANGE}: {out_of_range} > {document_page_count}"
+            )
+
+    # ---- 原文引用核验 ----
+    quotes: List[str] = []
+    if str(finding.get("text_snippet") or "").strip():
+        quotes.append(str(finding["text_snippet"]).strip())
+    for item in _evidence_items(finding):
+        for key in _EVIDENCE_TEXT_KEYS:
+            text = str(item.get(key) or "").strip()
+            if text:
+                quotes.append(text)
+
+    if page_texts:
+        verification["checked_pages"] = list(claimed_pages)
+        if not quotes:
+            # 无引用可核验（纯 bbox/纯页码）：保持 unverified，如实记录
+            verification["reasons"].append("no_quote_text_to_verify")
+        else:
+            searchable_pages = claimed_pages or []
+            found = any(
+                _quote_found_on_pages(quote, searchable_pages, page_texts)
+                for quote in quotes
+            )
+            if found:
+                verification["status"] = EVIDENCE_VERIFICATION_VERIFIED
+            elif not searchable_pages:
+                # 没有页码信号可定位文本页：无法核验，不算失败
+                verification["reasons"].append("no_page_signal_for_quote_check")
+            elif not any(
+                _normalise_for_match(_page_text(page_texts, page))
+                for page in searchable_pages
+            ):
+                # 所称页面全部没有文本层（扫描页）：无法核验，不算失败
+                verification["reasons"].append("claimed_pages_have_no_text_layer")
+            else:
+                # 页面有文本层但引用不存在：伪造原文
+                missing.append(REASON_TEXT_NOT_FOUND_ON_PAGE)
+                verification["reasons"].append(REASON_TEXT_NOT_FOUND_ON_PAGE)
+
     has_text = _has_evidence_text(finding)
     has_bbox = _has_bbox(finding)
 
     if not has_page:
-        missing.append("missing_page")
+        if REASON_PAGE_OUT_OF_RANGE not in missing:
+            missing.append("missing_page")
     if not has_text:
         missing.append("missing_evidence_text")
     if not has_bbox:
         missing.append("missing_bbox")
 
-    complete = has_page and (has_text or has_bbox)
-    return complete, missing
+    if REASON_TEXT_NOT_FOUND_ON_PAGE in missing or REASON_PAGE_OUT_OF_RANGE in missing:
+        verification["status"] = EVIDENCE_VERIFICATION_FAILED
+
+    # 核验失败（伪造原文/页码越界）直接使证据无效，即使结构字段齐全
+    complete = (
+        has_page
+        and (has_text or has_bbox)
+        and REASON_TEXT_NOT_FOUND_ON_PAGE not in missing
+        and REASON_PAGE_OUT_OF_RANGE not in missing
+    )
+    return complete, missing, verification
 
 
 def is_document_level_finding(finding: Mapping[str, Any]) -> bool:
@@ -276,11 +433,18 @@ def _finding_ref(finding: Mapping[str, Any], missing: List[str]) -> Dict[str, An
     }
 
 
-def apply_evidence_completeness(result: Dict[str, Any]) -> Dict[str, Any]:
+def apply_evidence_completeness(
+    result: Dict[str, Any],
+    *,
+    document_page_count: Optional[int] = None,
+    page_texts: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
     """就地校验结果中的全部 finding，并返回 ``evidence_completeness`` 度量。
 
     副作用：缺证据的 AI finding 会被降级（修改 severity/tags/evidence_status）。
-    规则 finding 只打标记与告警，不改 severity。
+    规则 finding 只打标记与告警，不改 severity。每条 finding 会写入
+    ``evidence_verification``（verified/unverified/failed 及原因），
+    "结构完整"与"引用已核实"分别记账。
 
     完整率两层口径（B1 调整）：
     - ``completeness_rate``：全量分母（含文档级 finding），趋势对照用；
@@ -293,12 +457,28 @@ def apply_evidence_completeness(result: Dict[str, Any]) -> Dict[str, Any]:
     locatable_total = 0
     locatable_complete_count = 0
     document_level_total = 0
+    verified_count = 0
+    unverified_count = 0
+    failed_count = 0
     degraded: List[Dict[str, Any]] = []
     rule_warnings: List[Dict[str, Any]] = []
 
     for finding in iter_findings(result):
         total += 1
-        complete, missing = evaluate_finding_evidence(finding)
+        complete, missing, verification = evaluate_finding_evidence(
+            finding,
+            document_page_count=document_page_count,
+            page_texts=page_texts,
+        )
+        finding["evidence_verification"] = dict(verification)
+        status = str(verification.get("status") or "")
+        if status == EVIDENCE_VERIFICATION_VERIFIED:
+            verified_count += 1
+        elif status == EVIDENCE_VERIFICATION_FAILED:
+            failed_count += 1
+        else:
+            unverified_count += 1
+
         source = str(finding.get("source") or "").strip().lower()
 
         if complete:
@@ -336,6 +516,9 @@ def apply_evidence_completeness(result: Dict[str, Any]) -> Dict[str, Any]:
         if locatable_total
         else None,
         "document_level_total": document_level_total,
+        "verified_count": verified_count,
+        "unverified_count": unverified_count,
+        "failed_count": failed_count,
         "degraded_count": len(degraded),
         "rule_warning_count": len(rule_warnings),
         "formal_issue_total": formal_total,

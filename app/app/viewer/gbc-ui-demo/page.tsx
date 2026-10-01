@@ -1855,7 +1855,7 @@ export default function GovBudgetCheckerLiveUiDemo() {
   const reanalyzeJob = useCallback(async (job: JobSummaryRecord) => {
     setOperationBusy(true);
     try {
-      const response = await fetch(`/api/jobs/${encodeURIComponent(job.job_id)}/reanalyze`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "dual", use_local_rules: true, use_ai_assist: true }) });
+      const response = await fetch(`/api/jobs/${encodeURIComponent(job.job_id)}/reanalyze`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "dual", use_local_rules: true, use_ai_assist: false }) });
       if (!response.ok) throw new Error(await readErrorMessage(response));
       pushToast("已启动重新分析");
       await refreshAll();

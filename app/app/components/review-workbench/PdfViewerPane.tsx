@@ -21,6 +21,7 @@ import {
   getProblemOverlayLabelStyle,
   getProblemOverlayStyle,
 } from "../task-review/problemPreview";
+import { shouldDrawProblemOverlay } from "./reviewWorkbenchAdapters";
 import type { Problem } from "../../../lib/mock";
 import { computeOverlayBoxAtScale } from "./reviewWorkbenchAdapters";
 
@@ -65,8 +66,12 @@ export function PdfViewerPane({ jobId, totalPages, currentPage, onPageChange, hi
     setImageLoadFailed(false);
   }, [imageUrl]);
 
-  const overlayBox = highlightedProblem
-    ? computeOverlayBoxAtScale(highlightedProblem.bbox, naturalSize, renderScale)
+  // ZC-00（SYS-11）：高亮框必须属于当前页才绘制；无页码问题不绘制。
+  const overlayProblem = shouldDrawProblemOverlay(highlightedProblem, currentPage)
+    ? highlightedProblem
+    : null;
+  const overlayBox = overlayProblem
+    ? computeOverlayBoxAtScale(overlayProblem.bbox, naturalSize, renderScale)
     : null;
 
   const canGoPrev = currentPage > 1;
@@ -144,7 +149,7 @@ export function PdfViewerPane({ jobId, totalPages, currentPage, onPageChange, hi
             />
           )}
 
-          {overlayBox && highlightedProblem ? (
+          {overlayBox && overlayProblem ? (
             <>
               <div
                 className="pointer-events-none absolute z-20"
@@ -152,7 +157,7 @@ export function PdfViewerPane({ jobId, totalPages, currentPage, onPageChange, hi
                 data-testid="gbc-review-evidence-label"
               >
                 <div className="inline-flex max-w-full items-center gap-1 rounded-md border border-warning-600 bg-warning-100 px-2 py-1 text-[11px] font-medium text-warning-700 shadow-sm">
-                  问题证据 · {highlightedProblem.ruleId}
+                  问题证据 · {overlayProblem.ruleId}
                 </div>
               </div>
               <div

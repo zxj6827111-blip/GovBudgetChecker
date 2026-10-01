@@ -1037,7 +1037,8 @@ async def _run_pipeline_body(job_dir: Path) -> None:
         # 读取检测模式配置
         status_file = job_dir / "status.json"
         use_local_rules = True
-        use_ai_assist = True
+        # ZC-00：默认关闭 AI 分析——上传链路未显式请求 AI 时不得调用模型服务。
+        use_ai_assist = False
         mode = "legacy"  # 默认为旧模式
         fiscal_year = None
         doc_type = None
@@ -1050,7 +1051,8 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             try:
                 status_data = json.loads(status_file.read_text(encoding="utf-8"))
                 use_local_rules = status_data.get("use_local_rules", True)
-                use_ai_assist = status_data.get("use_ai_assist", True)
+                # ZC-00：缺省视为不请求 AI，旧任务显式写 true 才会请求
+                use_ai_assist = status_data.get("use_ai_assist", False)
                 mode = status_data.get("mode", "legacy")
                 fiscal_year = status_data.get("fiscal_year")
                 doc_type = status_data.get("doc_type")
@@ -1636,7 +1638,13 @@ async def _run_pipeline_body(job_dir: Path) -> None:
 
         # 证据链完整性校验（P0-07）：落库前逐条校验证据，
         # 缺证据的 AI 问题就地降级为待复核，规则问题只记录告警。
-        evidence_completeness = apply_evidence_completeness(result)
+        # ZC-00（SYS-07）：同时传入真实页数与逐页文本层——证据门据 此
+        # 核验页码越界与原文引用真实性，无法核验的条目如实记录原因。
+        evidence_completeness = apply_evidence_completeness(
+            result,
+            document_page_count=len(page_texts) if page_texts else None,
+            page_texts=page_texts if page_texts else None,
+        )
         result["meta"]["evidence_completeness"] = evidence_completeness
         if evidence_completeness["degraded_count"] or evidence_completeness["rule_warning_count"]:
             logger.warning(

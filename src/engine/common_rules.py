@@ -915,10 +915,12 @@ class CMM004_CodeMirrorConsistency(Rule):
         issues: List[Issue] = []
         anchors = find_table_anchors(doc)
         candidate_pages = []
-        for table_name in ("\u6536\u5165\u51b3\u7b97\u8868", "\u652f\u51fa\u51b3\u7b97\u8868", "\u6536\u5165\u652f\u51fa\u51b3\u7b97\u603b\u8868"):
+        for table_name in ("\u6536\u5165\u51b3\u7b97\u8868", "\u652f\u51fa\u51b3\u7b97\u8868", "\u6536\u5165\u652f\u51fa\u603b\u8868"):
             candidate_pages.extend(anchors.get(table_name, []))
-        page_number = min(candidate_pages) if candidate_pages else 1
-        base_location = {"page": page_number, "table": "\u6536\u5165/\u652f\u51fa\u603b\u8868"}
+        # ZC-00（SYS-07）：定位不到总表页时保持缺页，不伪装成第 1 页
+        base_location: Dict[str, Any] = {"table": "\u6536\u5165/\u652f\u51fa\u603b\u8868"}
+        if candidate_pages:
+            base_location["page"] = min(candidate_pages)
 
         for code in diffs:
             income_value = income[code]

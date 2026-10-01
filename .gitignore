@@ -34,6 +34,7 @@ uploads/
 # test files (exclude tests/ directory)
 test_*.py
 !tests/test_*.py
+!tests/remediation/test_*.py
 test_*.txt
 big.bin
 not.pdf.txt

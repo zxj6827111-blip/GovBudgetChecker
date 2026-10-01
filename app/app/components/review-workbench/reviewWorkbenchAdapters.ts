@@ -209,6 +209,22 @@ export function resolveProblemTargetPage(problem: Problem): number | null {
   return null;
 }
 
+/** ZC-00（SYS-11）：高亮框只画在问题所属页上。
+ *  bbox 是页面局部坐标，翻到其他页后继续绘制必然错位；问题没有有效页码时
+ *  不绘制（不得猜页）。PdfViewerPane 与任务详情页共用这条判定。 */
+export function shouldDrawProblemOverlay(
+  problem: Problem | null | undefined,
+  currentPage: number,
+): boolean {
+  if (!problem || typeof currentPage !== "number" || !Number.isFinite(currentPage)) {
+    return false;
+  }
+  if (typeof problem.page !== "number" || !Number.isFinite(problem.page) || problem.page <= 0) {
+    return false;
+  }
+  return problem.page === currentPage;
+}
+
 // ---------------------------------------------------------------------------
 // 阶段记录 tab（Task 6.4，接第一批 Task 3 的阶段数据）
 // ---------------------------------------------------------------------------

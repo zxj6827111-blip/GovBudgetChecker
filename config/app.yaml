@@ -3,7 +3,7 @@
 # 双模式开关
 dual_mode:
   enabled: true                    # 是否启用双模式
-  ai_enabled: true                 # 是否启用AI分析
+  ai_enabled: false                # 是否启用AI分析（ZC-00 默认关闭，显式配置 true 才调用模型）
   rule_enabled: true               # 是否启用规则分析
   merge_enabled: true              # 是否启用结果合并
 

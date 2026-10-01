@@ -690,16 +690,20 @@ class AIFindingsService:
     def _convert_ai_issue(self, raw_issue: Dict[str, Any], context: JobContext, idx: int) -> Optional[IssueItem]:
         """转换AI问题为IssueItem"""
         try:
-            page_number = 1
+            # ZC-00（SYS-07）：AI 没给出有效页码时保持 None，不得默认第 1 页——
+            # 假页码会让证据门把无定位条目当成已定位。
+            page_number: Optional[int] = None
             try:
-                page_number = int(raw_issue.get("page") or 1)
-            except Exception:
-                page_number = 1
+                raw_page = int(str(raw_issue.get("page")).strip())
+                if raw_page > 0:
+                    page_number = raw_page
+            except (TypeError, ValueError):
+                page_number = None
             item = self._build_ai_issue_item(
                 raw_issue=raw_issue,
                 context=context,
                 idx=idx,
-                page_number=page_number if page_number > 0 else 1,
+                page_number=page_number,
             )
             if "category" in raw_issue:
                 item.tags = list(dict.fromkeys([*item.tags, str(raw_issue["category"])]))

@@ -428,7 +428,9 @@ def test_report_download_word_format_handles_empty_results(
         node.text or ""
         for node in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t")
     )
-    assert "未发现明显问题" in document_text
+    # ZC-00（SYS-12）：旧版结果无覆盖台账，零问题不得写"未发现明显问题"
+    assert "未发现明显问题" not in document_text
+    assert "问题列表为空" in document_text
 
 
 # ---------------------------------------------------------------------------

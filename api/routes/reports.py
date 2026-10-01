@@ -43,6 +43,7 @@ _DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessing
 _ERROR_SEVERITIES = {"critical", "high", "error"}
 _RISK_SEVERITIES = {"medium", "warn", "warning"}
 _CSV_FIELDNAMES: List[str] = [
+    "record_type",
     "规则编号",
     "标题",
     "摘要",
@@ -516,6 +517,66 @@ def _build_check_scope_export(status_payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _build_export_conclusion(status_payload: Dict[str, Any], issue_count: int) -> Dict[str, Any]:
+    """推导导出用的检查结论措辞（ZC-00 / SYS-12）。
+
+    "问题列表为空"必须区分两种情况：
+    - 检查确实完整完成且未发现问题 → 允许"已完成检查范围内未发现问题"；
+    - 存在未完成检查（或旧版记录无法证明完整性）→ 必须写明结论受限，
+      不得输出"未发现明显问题"。
+    """
+    scope = _build_check_scope_export(status_payload)
+    unfinished = scope.get("unfinished_checks")
+    analysis_conclusion = str(status_payload.get("analysis_conclusion") or "").strip()
+
+    unfinished_items: List[Dict[str, Any]] = []
+    coverage_known: Optional[bool] = None
+    if isinstance(unfinished, list):
+        unfinished_items = unfinished
+        coverage_known = True
+    else:
+        # "旧版未记录"：没有检查覆盖台账，无法证明检查是否完整
+        coverage_known = False
+
+    is_complete: Optional[bool]
+    if coverage_known is False or analysis_conclusion == "incomplete":
+        is_complete = False
+    elif coverage_known is True and unfinished_items:
+        is_complete = False
+    elif analysis_conclusion == "no_findings" and coverage_known is True and not unfinished_items:
+        is_complete = True
+    elif analysis_conclusion == "findings_detected":
+        # 已检出问题的任务，问题列表非空；范围说明照常给出
+        is_complete = not unfinished_items if coverage_known else False
+    else:
+        # 结论字段缺失且无覆盖台账：按"无法确认完整"处理
+        is_complete = None if coverage_known is None else False
+
+    return {
+        "scope": scope,
+        "unfinished_items": unfinished_items,
+        "coverage_known": coverage_known,
+        "is_complete": is_complete,
+        "conclusion_scope": scope.get("conclusion_scope") or "旧版未记录",
+    }
+
+
+def _zero_issue_wording(conclusion: Dict[str, Any]) -> str:
+    """零问题结论措辞：完整完成才允许有限范围的无问题结论。"""
+    if conclusion["is_complete"] is True:
+        return "当前已完成的检查范围内未发现问题。"
+    if conclusion["coverage_known"] is False:
+        return (
+            "问题列表为空。本次结果为旧版记录，未包含检查覆盖台账，"
+            "无法据此判断检查范围是否完整；问题列表为空不代表材料没有问题。"
+        )
+    unfinished_items = conclusion["unfinished_items"]
+    return (
+        f"问题列表为空，但本次检查未完成（{len(unfinished_items)} 项检查未完成），"
+        "不能据此给出完整结论。请结合未完成事项人工复核后再下结论。"
+    )
+
+
 def _enrich_issue(item: Dict[str, Any]) -> Dict[str, Any]:
     enriched = dict(item)
     if not isinstance(enriched.get("display"), dict):
@@ -559,6 +620,9 @@ def _build_csv_row(issue: Dict[str, Any]) -> Dict[str, Any]:
     role_summary = export_location.get("role_summary") or ""
     suggestion = _resolve_suggestion(enriched)
     row = {
+        # record_type（ZC-00）：区分问题行与摘要行；ZC-04 将扩展为
+        # 摘要/问题/提示/待复核/检查五类完整记录
+        "record_type": "issue",
         "规则编号": enriched.get("rule_id") or enriched.get("rule") or "",
         "标题": enriched.get("title") or "",
         "摘要": display.get("summary") or enriched.get("title") or "",
@@ -629,6 +693,41 @@ def _build_csv_row(issue: Dict[str, Any]) -> Dict[str, Any]:
     return {key: row.get(key, "") for key in _CSV_FIELDNAMES}
 
 
+def _build_csv_summary_row(
+    job_id: str,
+    status_payload: Dict[str, Any],
+    issue_count: int,
+) -> Dict[str, Any]:
+    """零问题时输出一条摘要记录（ZC-00 / SYS-12）。
+
+    CSV 是纯行式结构，没有正文可写说明文字；若零问题时不输出任何行，
+    接收方会把空表格读成"材料没有问题"。摘要行把结论限制写进
+    标题/摘要/建议三个语义最稳的列，其余列留空。
+    """
+    conclusion = _build_export_conclusion(status_payload, issue_count)
+    wording = _zero_issue_wording(conclusion) if issue_count == 0 else ""
+    suggestion_text = (
+        "请同时核对检查范围与未完成事项，再决定是否采信本清单。"
+        if conclusion["is_complete"] is not True
+        else "本次已完成检查范围内未发现问题。"
+    )
+    row: Dict[str, Any] = {key: "" for key in _CSV_FIELDNAMES}
+    row.update(
+        {
+            "record_type": "summary",
+            "规则编号": "SUMMARY",
+            "标题": wording or f"共导出 {issue_count} 条问题",
+            "摘要": wording or f"共导出 {issue_count} 条问题",
+            "建议": suggestion_text,
+            "title": wording or f"共导出 {issue_count} 条问题",
+            "summary": wording or f"共导出 {issue_count} 条问题",
+            "suggestion": suggestion_text,
+            "message": wording or "",
+        }
+    )
+    return {key: row.get(key, "") for key in _CSV_FIELDNAMES}
+
+
 def _xml_escape(value: Any) -> str:
     text = str(value if value is not None else "")
     return (
@@ -692,6 +791,9 @@ def _build_docx_document_xml(
     risk_count = sum(1 for item in enriched_issues if _issue_bucket(item) == "风险提示")
     suggestion_count = sum(1 for item in enriched_issues if _issue_bucket(item) == "规范性建议")
     check_time = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    export_conclusion = _build_export_conclusion(status_payload, len(enriched_issues))
+    conclusion_scope_text = str(export_conclusion["conclusion_scope"])
+    scope = export_conclusion["scope"]
     body: List[str] = [
         _docx_paragraph("预决算公开材料审校报告", style="Title"),
         _docx_paragraph("基本信息", style="Heading1"),
@@ -706,11 +808,22 @@ def _build_docx_document_xml(
                 ("规范性建议数量", str(suggestion_count)),
             ]
         ),
+        # ZC-00（SYS-12）：结论与检查范围同源输出，"没列出的问题"不能被读成"查过了"
+        _docx_paragraph("检查结论与范围", style="Heading1"),
+        _docx_table(
+            [
+                ("结论作用域", conclusion_scope_text),
+                ("材料类型", str(scope.get("report_kind") or "旧版未记录")),
+                ("检查范围说明", str(scope.get("coverage_note") or "")),
+            ]
+        ),
         _docx_paragraph("问题清单", style="Heading1"),
     ]
 
     if not enriched_issues:
-        body.append(_docx_paragraph("未发现明显问题"))
+        # ZC-00（SYS-12）：存在未完成检查（或旧版记录无法证明完整性）时，
+        # 禁止输出"未发现明显问题"——空问题列表不等于材料没有问题。
+        body.append(_docx_paragraph(_zero_issue_wording(export_conclusion)))
     else:
         issue_index = 1
         for bucket in ("错误", "风险提示", "规范性建议"):
@@ -743,6 +856,25 @@ def _build_docx_document_xml(
                 ]
                 body.append(_docx_table(rows))
                 issue_index += 1
+
+    # 未完成检查清单：无论是否有问题，接收方都需要知道"哪些没查完"
+    if export_conclusion["coverage_known"] is False:
+        body.append(_docx_paragraph("检查覆盖台账", style="Heading2"))
+        body.append(_docx_paragraph("旧版未记录：本次结果未包含检查覆盖台账，无法列出未完成事项。"))
+    elif export_conclusion["unfinished_items"]:
+        body.append(_docx_paragraph("未完成检查事项", style="Heading2"))
+        unfinished_rows = [("序号", "检查项", "状态", "原因", "说明")]
+        for index, item in enumerate(export_conclusion["unfinished_items"], start=1):
+            unfinished_rows.append(
+                (
+                    str(index),
+                    str(item.get("group_title") or item.get("title") or item.get("obligation_id") or ""),
+                    str(item.get("status") or ""),
+                    str(item.get("reason_label") or ""),
+                    str(item.get("detail") or item.get("gap_note") or ""),
+                )
+            )
+        body.append(_docx_table(unfinished_rows))
 
     document_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -1132,13 +1264,81 @@ def _draw_page_legend(page: Any, entries: Sequence[Dict[str, Any]], fitz: Any) -
         )
 
 
+def _create_zero_issue_appendix_pdf(
+    job_id: str,
+    status_payload: Dict[str, Any],
+) -> Optional[Path]:
+    """零问题但检查未完成时，给标注副本追加一页系统生成的结论附录（ZC-00 / SYS-12）。
+
+    只写副本，不修改原件；附录页顶部明确标注"系统生成附录"。
+    检查确实完整完成时返回 None——直接交付原件即可，不需要空结论页。
+    """
+    conclusion = _build_export_conclusion(status_payload, 0)
+    if conclusion["is_complete"] is True:
+        return None
+
+    try:
+        import fitz
+    except Exception:
+        return None
+
+    source_pdf = _resolve_source_pdf(job_id, status_payload)
+    if source_pdf is None:
+        return None
+    output_path = (runtime.UPLOAD_ROOT / job_id / "annotated.pdf").resolve()
+    if output_path.exists():
+        output_path.unlink()
+
+    lines: List[str] = ["系统生成附录 · 检查结论限制", ""]
+    lines.append("本次检查的问题列表为空，但不代表材料没有问题：")
+    if conclusion["coverage_known"] is False:
+        lines.append("· 本次结果为旧版记录，未包含检查覆盖台账，无法判断检查范围是否完整。")
+    else:
+        unfinished_items = conclusion["unfinished_items"]
+        lines.append(f"· 尚有 {len(unfinished_items)} 项检查未完成，不能据此给出完整结论。")
+        lines.append("")
+        lines.append("未完成事项：")
+        for index, item in enumerate(unfinished_items[:20], start=1):
+            title = str(
+                item.get("group_title")
+                or item.get("title")
+                or item.get("obligation_id")
+                or ""
+            )
+            reason = str(item.get("reason_label") or item.get("status") or "")
+            detail = str(item.get("detail") or item.get("gap_note") or "")
+            entry = f"{index}. {title}"
+            if reason:
+                entry += f"（{reason}）"
+            if detail:
+                entry += f"：{detail}"
+            lines.append(entry[:120])
+        if len(unfinished_items) > 20:
+            lines.append(f"…… 其余 {len(unfinished_items) - 20} 项略，详见 JSON/Word 导出。")
+    lines.append("")
+    lines.append("请人工复核未完成事项后再下结论。")
+
+    try:
+        with fitz.open(str(source_pdf)) as document:
+            page = document.new_page()
+            cursor_y = 72.0
+            for line in lines:
+                page.insert_text((60.0, cursor_y), line, fontsize=11, fontname="china-s")
+                cursor_y += 18.0
+            document.save(str(output_path), garbage=4, deflate=True)
+    except Exception:
+        logger.exception("Failed to build zero-issue appendix pdf for job %s", job_id)
+        return None
+    return output_path
+
+
 def _create_annotated_pdf(
     job_id: str,
     status_payload: Dict[str, Any],
     issues: Sequence[Dict[str, Any]],
 ) -> Optional[Path]:
     if not issues:
-        return None
+        return _create_zero_issue_appendix_pdf(job_id, status_payload)
 
     try:
         import fitz
@@ -1220,6 +1420,10 @@ async def download_report(
             fieldnames=_CSV_FIELDNAMES,
         )
         writer.writeheader()
+        # ZC-00（SYS-12）：零问题也必须有摘要记录——空 CSV 会被读成"材料没问题"，
+        # 未完成检查存在时必须把结论限制写给接收方。
+        if not issues:
+            writer.writerow(_build_csv_summary_row(job_id, status_payload, 0))
         for item in issues:
             writer.writerow(_build_csv_row(item))
 
