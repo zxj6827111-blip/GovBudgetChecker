@@ -26,7 +26,7 @@ _RULE_PREFIX = {
 def interpret_ai_issue(
     raw_issue: Mapping[str, Any],
     *,
-    page_number: int,
+    page_number: Optional[int],
     fallback_rule_id: str,
 ) -> Dict[str, Any]:
     issue_type = _compact_text(
@@ -149,16 +149,20 @@ def normalize_ai_severity(value: Any, default: str = "medium") -> str:
 
 def _build_location(
     *,
-    page_number: int,
+    page_number: Optional[int],
     table_or_section: str,
     check_name: str,
     raw_issue: Mapping[str, Any],
 ) -> Dict[str, Any]:
-    location: Dict[str, Any] = {
-        "page": page_number,
-        "span_start": _span_value(raw_issue.get("span"), 0),
-        "span_end": _span_value(raw_issue.get("span"), 1),
-    }
+    location: Dict[str, Any] = {}
+    if page_number is not None and page_number > 0:
+        location["page"] = page_number
+    span_start = _span_value(raw_issue.get("span"), 0)
+    span_end = _span_value(raw_issue.get("span"), 1)
+    if span_start is not None:
+        location["span_start"] = span_start
+    if span_end is not None:
+        location["span_end"] = span_end
     if check_name:
         location["check"] = check_name
     if table_or_section:
@@ -227,7 +231,7 @@ def _build_message(
     *,
     normalized_kind: str,
     title: str,
-    page_number: int,
+    page_number: Optional[int],
     table_or_section: str,
     quote: str,
     context: str,
@@ -438,10 +442,12 @@ def _comparison_text(*, actual: str, expected: str, difference: str) -> str:
     return "，".join(parts)
 
 
-def _format_scope(*, page_number: int, table_or_section: str) -> str:
-    if table_or_section:
-        return f"第{page_number}页“{table_or_section}”"
-    return f"第{page_number}页"
+def _format_scope(*, page_number: Optional[int], table_or_section: str) -> str:
+    if page_number is not None and page_number > 0:
+        if table_or_section:
+            return f"第{page_number}页“{table_or_section}”"
+        return f"第{page_number}页"
+    return f"“{table_or_section}”" if table_or_section else "当前材料"
 
 
 def _quote_text(value: str) -> str:

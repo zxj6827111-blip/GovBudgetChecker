@@ -420,13 +420,28 @@ def test_pdf_zero_issue_incomplete_builds_appendix_copy(tmp_path) -> None:
     assert "三公经费分项核对" in appendix_text
 
 
-def test_pdf_zero_issue_complete_returns_no_appendix(tmp_path) -> None:
-    """检查确实完整完成：不需要空结论附录页。"""
-    pytest.importorskip("fitz")
+def test_pdf_zero_issue_complete_still_gets_complete_report_appendix(tmp_path, monkeypatch) -> None:
+    """完整零问题报告也要有系统生成的完整 PDF 附录。"""
+    fitz = pytest.importorskip("fitz")
     from api.routes import reports
 
+    upload_root = tmp_path / "uploads"
+    job_dir = upload_root / "job-zc00-pdf"
+    job_dir.mkdir(parents=True)
+    source_path = job_dir / "source.pdf"
+    document = fitz.open()
+    document.new_page()
+    document.save(str(source_path))
+    document.close()
+    monkeypatch.setattr(reports.runtime, "UPLOAD_ROOT", upload_root)
     payload = _status_payload(unfinished=[], analysis_conclusion="no_findings")
-    assert reports._create_zero_issue_appendix_pdf("job-zc00-pdf", payload) is None
+    appendix_path = reports._create_zero_issue_appendix_pdf("job-zc00-pdf", payload)
+    assert appendix_path is not None
+    with fitz.open(str(appendix_path)) as annotated:
+        assert annotated.page_count == 2
+        appendix_text = annotated[-1].get_text()
+    assert "系统生成附录" in appendix_text
+    assert "检查范围已完成" in appendix_text
 
 
 # ---------------------------------------------------------------------------

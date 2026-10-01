@@ -75,6 +75,8 @@ def test_report_download_pdf_contains_multi_ref_labels(tmp_path: Path, monkeypat
                                     "section": "Narrative Ref",
                                     "field": "FIELD_ALPHA",
                                     "bbox": [72, 61, 150, 79],
+                                    "location_level": "exact_span",
+                                    "verification_status": "verified",
                                 },
                                 {
                                     "role": "REF-B",
@@ -82,10 +84,14 @@ def test_report_download_pdf_contains_multi_ref_labels(tmp_path: Path, monkeypat
                                     "table": "Budget Ref",
                                     "field": "FIELD_BETA",
                                     "bbox": [72, 61, 140, 79],
+                                    "location_level": "exact_span",
+                                    "verification_status": "verified",
                                 },
                             ],
                         },
                         "bbox": [72, 61, 150, 79],
+                        "location_level": "exact_span",
+                        "verification_status": "verified",
                         "evidence": [{"page": 1, "text": "FIELD_ALPHA 100"}],
                         "metrics": {},
                         "tags": [],
@@ -157,11 +163,15 @@ def test_report_download_json_and_csv_include_structured_location_fields(
                                     "row": "ROW_A",
                                     "field": "Field A",
                                     "bbox": [72, 61, 135, 79],
+                                    "location_level": "exact_cell",
+                                    "verification_status": "verified",
                                 }
                             ],
                         },
                         "bbox": [72, 61, 135, 79],
-                        "evidence": [{"page": 1, "text": "ROW_A 100", "bbox": [72, 61, 135, 79]}],
+                        "location_level": "exact_cell",
+                        "verification_status": "verified",
+                        "evidence": [{"page": 1, "text": "ROW_A 100", "bbox": [72, 61, 135, 79], "location_level": "exact_cell", "verification_status": "verified"}],
                         "metrics": {},
                         "tags": [],
                         "suggestion": "Check source values",
@@ -193,7 +203,7 @@ def test_report_download_json_and_csv_include_structured_location_fields(
     text = report_csv.content.decode("utf-8-sig")
     rows = list(csv.DictReader(io.StringIO(text)))
     assert rows
-    row = rows[0]
+    row = next(item for item in rows if item["record_type"] == "issue")
     assert "规则编号" in row
     assert "严重级别" in row
     assert "table_refs" in row
@@ -294,9 +304,10 @@ def test_report_download_uses_merged_issue_projection_without_double_counting(
     assert report_csv.status_code == 200
     text = report_csv.content.decode("utf-8-sig")
     rows = list(csv.DictReader(io.StringIO(text)))
-    assert len(rows) == 2
-    assert [row["rule_id"] for row in rows] == ["AI-1", "RULE-3"]
-    assert [row["严重级别"] for row in rows] == ["高", "中"]
+    issue_rows = [row for row in rows if row["record_type"] == "issue"]
+    assert len(rows) == 3
+    assert [row["rule_id"] for row in issue_rows] == ["AI-1", "RULE-3"]
+    assert [row["严重级别"] for row in issue_rows] == ["高", "中"]
 
 
 def test_report_export_includes_structured_review_item_without_fake_page(

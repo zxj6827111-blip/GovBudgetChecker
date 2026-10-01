@@ -20,6 +20,7 @@ export interface IssuesTabProps {
   workflowStatusByIssueId: Record<string, string>;
   onAction: (problem: Problem, action: IssueWorkflowAction) => void;
   submittingIssueId: string | null;
+  onSelectEvidenceRef: (problem: Problem, refKey: string) => void;
 }
 
 export function IssuesTab({
@@ -29,6 +30,7 @@ export function IssuesTab({
   workflowStatusByIssueId,
   onAction,
   submittingIssueId,
+  onSelectEvidenceRef,
 }: IssuesTabProps) {
   const formalCount = countFormalProblems(problems);
   const sortedProblems = sortProblemsForReview(problems);
@@ -52,6 +54,7 @@ export function IssuesTab({
               workflowStatus={workflowStatusByIssueId[problem.id] ?? null}
               onSelect={() => onSelectProblem(problem.id)}
               onAction={(action) => onAction(problem, action)}
+              onSelectEvidenceRef={(refKey) => onSelectEvidenceRef(problem, refKey)}
               isSubmitting={submittingIssueId === problem.id}
             />
           ))}

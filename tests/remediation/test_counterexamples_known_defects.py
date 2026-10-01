@@ -289,11 +289,7 @@ def test_xfail_severity_conflict_counted_as_agreement() -> None:
     assert len(merged.conflicts) == 1, "严重度冲突必须进入冲突列表/待复核"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="SYS-11：表名兜底可拼出 bbox，只找到表名时目标数字不存在（归属 ZC-04 定位等级）",
-)
-def test_xfail_table_title_fallback_returns_bbox_without_target_fact(tmp_path) -> None:
+def test_zc04_table_title_fallback_does_not_return_bbox_without_target_fact(tmp_path) -> None:
     """只找到表名、目标数字不存在：只能区域导航，不得伪装精确 bbox。
 
     反例：页面上有表名「收入决算表」但不含目标行「本年收入合计 888.00」——

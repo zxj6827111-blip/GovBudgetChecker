@@ -25,7 +25,7 @@ def _create_pdf(path: Path, lines_per_page: list[list[str]], *, fontname: str = 
         document.close()
 
 
-def test_pdf_bbox_locator_finds_bbox_from_structured_row(tmp_path: Path) -> None:
+def test_pdf_bbox_locator_does_not_infer_bbox_from_structured_row(tmp_path: Path) -> None:
     pdf_path = tmp_path / "sample.pdf"
     _create_pdf(
         pdf_path,
@@ -65,12 +65,14 @@ def test_pdf_bbox_locator_finds_bbox_from_structured_row(tmp_path: Path) -> None
     finally:
         locator.close()
 
-    assert updated.bbox is not None
-    assert updated.evidence[0]["bbox"] == updated.bbox
-    assert updated.location["table_refs"][0]["bbox"] == updated.bbox
+    assert updated.bbox is None
+    assert updated.evidence[0].get("bbox") is None
+    assert updated.location["table_refs"][0].get("bbox") is None
+    assert updated.location_level == "region"
+    assert updated.verification_status == "unverified"
 
 
-def test_pdf_bbox_locator_populates_each_table_ref_bbox(tmp_path: Path) -> None:
+def test_pdf_bbox_locator_keeps_refs_as_region_navigation_without_source_boxes(tmp_path: Path) -> None:
     pdf_path = tmp_path / "multi-ref.pdf"
     _create_pdf(
         pdf_path,
@@ -118,15 +120,16 @@ def test_pdf_bbox_locator_populates_each_table_ref_bbox(tmp_path: Path) -> None:
 
     refs = updated.location["table_refs"]
     assert len(refs) == 2
-    assert refs[0]["bbox"] is not None
-    assert refs[1]["bbox"] is not None
+    assert refs[0].get("bbox") is None
+    assert refs[1].get("bbox") is None
     assert refs[0]["page"] == 1
     assert refs[1]["page"] == 2
-    assert updated.bbox == refs[0]["bbox"]
-    assert updated.evidence[0]["bbox"] == refs[0]["bbox"]
+    assert updated.bbox is None
+    assert updated.evidence[0].get("bbox") is None
+    assert all(ref["location_level"] == "region" for ref in refs)
 
 
-def test_pdf_bbox_locator_uses_row_field_intersection_for_table_cells(tmp_path: Path) -> None:
+def test_pdf_bbox_locator_does_not_infer_table_cell_bbox(tmp_path: Path) -> None:
     pdf_path = tmp_path / "budget-cell.pdf"
     _create_pdf(
         pdf_path,
@@ -172,26 +175,103 @@ def test_pdf_bbox_locator_uses_row_field_intersection_for_table_cells(tmp_path: 
     finally:
         locator.close()
 
-    assert updated.bbox is not None
+    assert updated.bbox is None
+    assert updated.evidence[0].get("bbox") is None
+    assert updated.location["table_refs"][0].get("bbox") is None
+
+
+def test_pdf_bbox_locator_preserves_verified_exact_bbox_within_page(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "verified.pdf"
+    _create_pdf(pdf_path, [["Verified source text"]])
+    item = IssueItem(
+        id="rule:test:verified-bbox",
+        source="rule",
+        rule_id="TEST-BBOX",
+        severity="high",
+        title="Verified bbox",
+        message="Verified bbox",
+        evidence=[{"page": 1, "text": "Verified source text"}],
+        location={"page": 1},
+        bbox=[70, 60, 220, 80],
+        location_level="exact_span",
+        verification_status="verified",
+    )
+
+    locator = PDFBBoxLocator(str(pdf_path))
+    try:
+        updated = locator.locate(item)
+    finally:
+        locator.close()
+
+    assert updated.bbox == [70.0, 60.0, 220.0, 80.0]
+    assert updated.location_level == "exact_span"
+    assert updated.verification_status == "verified"
+    assert updated.evidence[0].get("bbox") is None
+
+
+def test_pdf_bbox_locator_promotes_source_verified_evidence_bbox(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "verified-evidence.pdf"
+    _create_pdf(pdf_path, [["Verified source text"]])
+    item = IssueItem(
+        id="rule:test:verified-evidence-bbox",
+        source="rule",
+        rule_id="TEST-BBOX",
+        severity="high",
+        title="Verified evidence bbox",
+        message="Verified evidence bbox",
+        evidence=[
+            {
+                "page": 1,
+                "text": "Verified source text",
+                "bbox": [70, 60, 220, 80],
+                "location_level": "exact_span",
+                "verification_status": "verified",
+            }
+        ],
+        location={"page": 1},
+    )
+
+    locator = PDFBBoxLocator(str(pdf_path))
+    try:
+        updated = locator.locate(item)
+    finally:
+        locator.close()
+
+    assert updated.bbox == [70.0, 60.0, 220.0, 80.0]
     assert updated.evidence[0]["bbox"] == updated.bbox
-    assert updated.location["table_refs"][0]["bbox"] is not None
+    assert updated.location_level == "exact_span"
+    assert updated.verification_status == "verified"
 
 
-def test_pdf_bbox_locator_expands_budget_table_code_to_alias_terms() -> None:
-    locator = PDFBBoxLocator("missing.pdf")
-    terms = locator._expand_table_terms("BUD_T3")
-    assert "BUD_T3" in terms
-    assert any("支出预算总表" in term for term in terms)
+def test_pdf_bbox_locator_rejects_out_of_range_verified_bbox(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "verified-out-of-range.pdf"
+    _create_pdf(pdf_path, [["Only one page"]])
+    item = IssueItem(
+        id="rule:test:out-of-range-bbox",
+        source="rule",
+        rule_id="TEST-BBOX",
+        severity="high",
+        title="Out of range bbox",
+        message="Out of range bbox",
+        evidence=[{"page": 2, "text": "Only one page"}],
+        location={"page": 2},
+        bbox=[70, 60, 220, 80],
+        location_level="exact_span",
+        verification_status="verified",
+    )
+
+    locator = PDFBBoxLocator(str(pdf_path))
+    try:
+        updated = locator.locate(item)
+    finally:
+        locator.close()
+
+    assert updated.bbox is None
+    assert updated.location_level == "unresolved"
+    assert updated.verification_status == "unverified"
 
 
-def test_pdf_bbox_locator_prefers_rule_anchor_over_cross_line_evidence(tmp_path: Path) -> None:
-    """V33-001 年度缺位回归：规则给出的精确锚词必须优先于跨行拼接的 evidence 切分词。
-
-    旧实现把 evidence_text 按标点切词后在页面上全文搜索，跨行拼接出的碎片词
-    （如「收入支出决算总体情况说明」）可能先在别的行命中，实测把「202 年度」
-    的问题标到了「一、收入支出决算总体情况说明」这一行。location 增加 anchor
-    字段（命中文本本身）后，必须精确命中 anchor 所在行。
-    """
+def test_pdf_bbox_locator_keeps_anchor_finding_unresolved_without_source_span(tmp_path: Path) -> None:
     pdf_path = tmp_path / "anchor.pdf"
     # 目标行（含「202 年度」）在前（y≈72），干扰行在后（y≈90）。
     # 中文必须用内置 CJK 字体写入，默认 helv 会把中文字符丢弃导致 search_for 落空。
@@ -227,14 +307,12 @@ def test_pdf_bbox_locator_prefers_rule_anchor_over_cross_line_evidence(tmp_path:
     finally:
         locator.close()
 
-    assert updated.bbox is not None
-    # 目标行 y≈72（_create_pdf 第一行起点），干扰行 y≈90（第二行起点）。
-    # bbox 的 y0 必须落在目标行附近，而不是被切分词带到干扰行。
-    assert updated.bbox[1] < 80, f"bbox 应命中「202 年度」所在行，实际落在 {updated.bbox}"
+    assert updated.bbox is None
+    assert updated.location_level == "unresolved"
 
 
 @pytest.mark.asyncio
-async def test_engine_rule_runner_populates_bbox_for_rule_findings(tmp_path: Path) -> None:
+async def test_engine_rule_runner_keeps_rule_findings_unlocated_without_source_bbox(tmp_path: Path) -> None:
     pdf_path = tmp_path / "runner.pdf"
     _create_pdf(
         pdf_path,
@@ -294,8 +372,9 @@ async def test_engine_rule_runner_populates_bbox_for_rule_findings(tmp_path: Pat
 
     assert findings
     finding = findings[0]
-    assert finding.bbox is not None
-    assert finding.evidence[0]["bbox"] == finding.bbox
+    assert finding.bbox is None
+    assert finding.evidence[0].get("bbox") is None
+    assert finding.location_level == "region"
 
 
 @pytest.mark.asyncio

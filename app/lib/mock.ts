@@ -2,6 +2,17 @@ import type { SeverityCode } from "./issueSeverity";
 
 export type Severity = SeverityCode;
 
+export interface ProblemEvidenceRef {
+  key: string;
+  role: string;
+  page: number;
+  locationText: string;
+  valueText?: string;
+  bbox?: number[];
+  locationLevel: string;
+  verificationStatus: string;
+}
+
 export interface Problem {
   id: string;
   ruleId: string;
@@ -20,6 +31,7 @@ export interface Problem {
   status: 'pending' | 'resolved' | 'ignored';
   source?: string;
   bbox?: number[];
+  evidenceRefs?: ProblemEvidenceRef[];
   jobId?: string;
   expectedName?: string;
   actualName?: string;

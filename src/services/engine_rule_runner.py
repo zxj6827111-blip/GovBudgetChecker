@@ -89,8 +89,21 @@ class EngineRuleRunner:
         if text:
             evidence_item["text"] = text
             evidence_item["text_snippet"] = text
-        bbox = getattr(issue, "bbox", None)
-        if bbox:
+        location = getattr(issue, "location", {}) or {}
+        location_level = str(getattr(issue, "location_level", None) or "unresolved")
+        if location_level not in {"exact_cell", "exact_span"}:
+            location_level = str(location.get("location_level") or location_level)
+        verification_status = str(getattr(issue, "verification_status", None) or "unverified")
+        if verification_status != "verified":
+            verification_status = str(location.get("verification_status") or verification_status)
+        bbox = getattr(issue, "bbox", None) or location.get("bbox")
+        evidence_item["location_level"] = location_level
+        evidence_item["verification_status"] = verification_status
+        if (
+            bbox
+            and location_level in {"exact_cell", "exact_span"}
+            and verification_status == "verified"
+        ):
             evidence_item["bbox"] = bbox
         return [evidence_item]
 
@@ -132,6 +145,18 @@ class EngineRuleRunner:
                 else "当前页码未精确定位，可结合证据片段检索原文复核。"
             )
 
+        location_level = str(getattr(issue, "location_level", None) or "unresolved")
+        if location_level not in {"exact_cell", "exact_span"}:
+            location_level = str(location.get("location_level") or location_level)
+        verification_status = str(getattr(issue, "verification_status", None) or "unverified")
+        if verification_status != "verified":
+            verification_status = str(location.get("verification_status") or verification_status)
+        source_bbox = getattr(issue, "bbox", None) or location.get("bbox")
+        exact_verified = (
+            location_level in {"exact_cell", "exact_span"}
+            and verification_status == "verified"
+        )
+
         return IssueItem(
             id=str(uuid.uuid4()),
             source="rule",
@@ -142,6 +167,9 @@ class EngineRuleRunner:
             evidence=self._build_evidence_list(issue, page_number),
             location=location,
             page_number=page_number,
+            bbox=source_bbox if exact_verified else None,
+            location_level=location_level,
+            verification_status=verification_status,
             suggestion=suggestion,
             tags=[resolved_rule_id] if resolved_rule_id else [],
             # 版本留痕（P2-02）：规则来源的 finding 记录本次实际使用的规则集版本

@@ -116,6 +116,7 @@ export function ReviewWorkbenchPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [activeTab, setActiveTab] = useState<RightTabId>("issues");
   const [selectedProblemId, setSelectedProblemId] = useState<string | null>(null);
+  const [selectedEvidenceRefKey, setSelectedEvidenceRefKey] = useState<string | null>(null);
   const [workflowIssues, setWorkflowIssues] = useState<Record<string, WorkflowIssueRecord>>({});
   const [workflowNotes, setWorkflowNotes] = useState<Record<string, string>>({});
   const [submittingIssueId, setSubmittingIssueId] = useState<string | null>(null);
@@ -396,8 +397,15 @@ export function ReviewWorkbenchPage() {
     [problems, selectedProblemId],
   );
 
+  const highlightedProblem = useMemo(() => {
+    if (!selectedProblem || !selectedEvidenceRefKey) return selectedProblem;
+    const ref = selectedProblem.evidenceRefs?.find((item) => item.key === selectedEvidenceRefKey);
+    return ref ? { ...selectedProblem, page: ref.page, bbox: ref.bbox } : selectedProblem;
+  }, [selectedProblem, selectedEvidenceRefKey]);
+
   const handleSelectProblem = useCallback((problemId: string) => {
     setSelectedProblemId(problemId);
+    setSelectedEvidenceRefKey(null);
     const target = problems.find((problem) => problem.id === problemId);
     if (target) {
       const targetPage = resolveProblemTargetPage(target);
@@ -406,6 +414,13 @@ export function ReviewWorkbenchPage() {
       }
     }
   }, [problems]);
+
+  const handleSelectEvidenceRef = useCallback((problem: Problem, refKey: string) => {
+    const ref = problem.evidenceRefs?.find((item) => item.key === refKey);
+    setSelectedProblemId(problem.id);
+    setSelectedEvidenceRefKey(refKey);
+    if (ref) setCurrentPage(ref.page);
+  }, []);
 
   const mutateWorkflow = useCallback(
     async (problem: Problem, status: string, note?: string) => {
@@ -825,7 +840,7 @@ export function ReviewWorkbenchPage() {
             totalPages={totalPages}
             currentPage={currentPage}
             onPageChange={(page) => setCurrentPage(Math.max(1, page))}
-            highlightedProblem={selectedProblem}
+            highlightedProblem={highlightedProblem}
           />
         </div>
 
@@ -856,6 +871,7 @@ export function ReviewWorkbenchPage() {
                 workflowStatusByIssueId={workflowStatusByIssueId}
                 onAction={handleIssueAction}
                 submittingIssueId={submittingIssueId}
+                onSelectEvidenceRef={handleSelectEvidenceRef}
               />
             ) : activeTab === "obligations" && obligationReview ? (
               <ObligationsTab

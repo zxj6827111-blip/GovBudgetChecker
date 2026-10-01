@@ -39,10 +39,11 @@ export interface IssueCardProps {
   workflowStatus: string | null;
   onSelect: () => void;
   onAction: (action: IssueWorkflowAction) => void;
+  onSelectEvidenceRef?: (refKey: string) => void;
   isSubmitting: boolean;
 }
 
-export function IssueCard({ problem, isActive, workflowStatus, onSelect, onAction, isSubmitting }: IssueCardProps) {
+export function IssueCard({ problem, isActive, workflowStatus, onSelect, onAction, onSelectEvidenceRef, isSubmitting }: IssueCardProps) {
   const severityCode = normalizeSeverityCode(problem.severity);
   const severityMeta = getSeverityMeta(problem.severity, problem.severityLabel);
   const degraded = isProblemDegraded(problem);
@@ -90,6 +91,23 @@ export function IssueCard({ problem, isActive, workflowStatus, onSelect, onActio
       {problem.snippet ? (
         <div className="mb-2 rounded-md bg-surface-100 px-2.5 py-2 text-xs leading-relaxed text-slate-600">
           “{problem.snippet}”
+        </div>
+      ) : null}
+
+      {problem.evidenceRefs && problem.evidenceRefs.length > 0 ? (
+        <div className="mb-2 flex flex-wrap gap-1.5" onClick={(event) => event.stopPropagation()}>
+          {problem.evidenceRefs.map((ref) => (
+            <button
+              key={ref.key}
+              type="button"
+              onClick={() => onSelectEvidenceRef?.(ref.key)}
+              data-testid={`gbc-review-evidence-ref-${problem.id}-${ref.key}`}
+              className="rounded border border-info-200 bg-info-50 px-2 py-1 text-[11px] text-info-700 hover:bg-info-100"
+              title={ref.locationText}
+            >
+              查看 {ref.role} · 第 {ref.page} 页{ref.bbox ? " · 精确定位" : " · 区域导航"}
+            </button>
+          ))}
         </div>
       ) : null}
 

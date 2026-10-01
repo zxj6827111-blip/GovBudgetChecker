@@ -29,7 +29,7 @@ def _create_pdf(path: Path, lines_per_page: list[list[str]]) -> None:
         document.close()
 
 
-def test_pdf_bbox_locator_finds_bbox_from_ai_quote_text(tmp_path: Path) -> None:
+def test_pdf_bbox_locator_does_not_infer_bbox_from_ai_quote_text(tmp_path: Path) -> None:
     pdf_path = tmp_path / "ai-quote.pdf"
     page_text = "Performance target differs from T3 project expense: desc=43.60, T3=48.59"
     _create_pdf(pdf_path, [[page_text, "Please explain if the metrics use different scopes"]])
@@ -60,12 +60,13 @@ def test_pdf_bbox_locator_finds_bbox_from_ai_quote_text(tmp_path: Path) -> None:
     finally:
         locator.close()
 
-    assert updated.bbox is not None
-    assert updated.evidence[0]["bbox"] == updated.bbox
+    assert updated.bbox is None
+    assert updated.evidence[0].get("bbox") is None
+    assert updated.location_level == "unresolved"
 
 
 @pytest.mark.asyncio
-async def test_ai_findings_service_populates_bbox_from_semantic_quote(
+async def test_ai_findings_service_does_not_infer_bbox_from_semantic_quote(
     tmp_path: Path,
 ) -> None:
     pdf_path = tmp_path / "ai-service.pdf"
@@ -101,8 +102,9 @@ async def test_ai_findings_service_populates_bbox_from_semantic_quote(
     finding = findings[0]
     assert finding.page_number == 1
     assert finding.evidence[0]["page"] == 1
-    assert finding.bbox is not None
-    assert finding.evidence[0]["bbox"] == finding.bbox
+    assert finding.bbox is None
+    assert finding.evidence[0].get("bbox") is None
+    assert finding.location_level == "unresolved"
 
 
 @pytest.mark.asyncio

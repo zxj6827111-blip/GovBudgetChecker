@@ -226,56 +226,17 @@ def _location_pages(location: Dict[str, Any]) -> List[int]:
     return pages
 
 
-def _anchor_page_for_table(doc: Any, table_name: Any) -> Optional[int]:
-    """Resolve a table location against the document's existing anchors.
-
-    A table name must match an existing anchor key after whitespace
-    normalization. If no anchor exists, the page remains unknown rather than
-    being guessed from an unrelated numeric field.
-    """
-    anchors = getattr(doc, "anchors", None)
-    if not isinstance(anchors, dict):
-        return None
-    target = re.sub(r"\s+", "", str(table_name or ""))
-    if not target:
-        return None
-    candidates: List[int] = []
-    for anchor_name, raw_pages in anchors.items():
-        normalized = re.sub(r"\s+", "", str(anchor_name or ""))
-        if not normalized or not (
-            target == normalized or target in normalized or normalized in target
-        ):
-            continue
-        if not isinstance(raw_pages, (list, tuple)):
-            continue
-        for raw_page in raw_pages:
-            if isinstance(raw_page, bool):
-                continue
-            try:
-                page = int(raw_page)
-            except (TypeError, ValueError):
-                continue
-            if page > 0:
-                candidates.append(page)
-    return min(candidates) if candidates else None
-
-
-_RULE_TABLE_HINTS: Dict[str, Tuple[str, ...]] = {
-    # 这些规则的 finding 可能只带业务字段，但规则本身有明确的表域；
-    # 只有在文档锚点已存在时才用锚点补页码。
-    "V33-200": ("收入支出决算总表", "收入决算表"),
-    "V33-201": ("收入支出决算总表", "支出决算表"),
-    "V33-244": ('一般公共预算财政拨款“三公”经费支出决算表',),
-}
-
-
 def _infer_issue_page(
     issue: Any,
     location: Dict[str, Any],
     evidence_list: List[Dict[str, Any]],
     doc: Any = None,
 ) -> Optional[int]:
-    """Resolve a primary page from explicit finding evidence only."""
+    """Resolve a primary page from explicit finding evidence only.
+
+    Table names and section labels do not identify a unique physical page, so
+    this function never searches document anchors as a fallback.
+    """
     pages = _location_pages(location)
     if pages:
         return pages[0]
@@ -284,20 +245,6 @@ def _infer_issue_page(
         if item_pages:
             return item_pages[0]
 
-    table_names: List[str] = []
-    table = location.get("table")
-    if isinstance(table, str):
-        table_names.extend(part.strip() for part in table.split(" / ") if part.strip())
-    rule_code = str(
-        (issue.get("rule_id") or issue.get("rule") or "")
-        if isinstance(issue, dict)
-        else (getattr(issue, "rule", "") or "")
-    ).strip()
-    table_names.extend(_RULE_TABLE_HINTS.get(rule_code, ()))
-    for table_name in table_names:
-        page = _anchor_page_for_table(doc, table_name)
-        if page is not None:
-            return page
     return None
 
 
@@ -331,13 +278,33 @@ def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
         evidence_list = (
             issue.get("evidence") if isinstance(issue.get("evidence"), list) else []
         )
-        bbox = _normalize_bbox(issue.get("bbox"))
+        location_level = str(issue.get("location_level") or "unresolved")
+        if location_level not in {"exact_cell", "exact_span"}:
+            location_level = str(location.get("location_level") or location_level)
+        verification_status = str(issue.get("verification_status") or "unverified")
+        if verification_status != "verified":
+            verification_status = str(location.get("verification_status") or verification_status)
+        bbox = (
+            _normalize_bbox(issue.get("bbox") or location.get("bbox"))
+            if location_level in {"exact_cell", "exact_span"} and verification_status == "verified"
+            else None
+        )
     else:
         rule_code = str(getattr(issue, "rule", "") or "").strip()
         location = dict(getattr(issue, "location", None) or {})
         message = str(getattr(issue, "message", "") or "").strip()
         evidence_text = getattr(issue, "evidence_text", None)
-        bbox = _normalize_bbox(location.get("bbox"))
+        location_level = str(getattr(issue, "location_level", None) or "unresolved")
+        if location_level not in {"exact_cell", "exact_span"}:
+            location_level = str(location.get("location_level") or location_level)
+        verification_status = str(getattr(issue, "verification_status", None) or "unverified")
+        if verification_status != "verified":
+            verification_status = str(location.get("verification_status") or verification_status)
+        bbox = (
+            _normalize_bbox(location.get("bbox"))
+            if location_level in {"exact_cell", "exact_span"} and verification_status == "verified"
+            else None
+        )
         evidence_list = []
         if evidence_text:
             evidence_list.append(
@@ -346,6 +313,8 @@ def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
                     "text": str(evidence_text),
                     "text_snippet": str(evidence_text),
                     "bbox": bbox,
+                    "location_level": location_level,
+                    "verification_status": verification_status,
                 }
             )
 
@@ -363,15 +332,20 @@ def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
     for ev in evidence:
         if _normalize_page(ev) is None and page is not None:
             ev["page"] = page
-    if not evidence:
-        evidence = [
-            {
-                "page": page,
-                "text": message,
-                "text_snippet": _strip_list_prefix(message)[:200],
-                "bbox": bbox,
-            }
-        ]
+        if not (
+            str(ev.get("location_level") or "") in {"exact_cell", "exact_span"}
+            and str(ev.get("verification_status") or "") == "verified"
+        ):
+            ev.pop("bbox", None)
+            ev.setdefault("location_level", "unresolved")
+            ev.setdefault("verification_status", "unverified")
+
+    if location_level not in {"exact_cell", "exact_span"} or verification_status != "verified":
+        has_region = any(location.get(key) for key in ("table", "section", "row", "field"))
+        location_level = "region" if has_region else "unresolved"
+        location.pop("bbox", None)
+    location["location_level"] = location_level
+    location["verification_status"] = verification_status
 
     suggestion = (
         issue.get("suggestion") if isinstance(issue, dict) else None
@@ -393,6 +367,8 @@ def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
         "evidence": evidence,
         "location": location,
         "bbox": bbox,
+        "location_level": location_level,
+        "verification_status": verification_status,
         "suggestion": str(suggestion),
         "tags": [rule_code],
         "metrics": {},

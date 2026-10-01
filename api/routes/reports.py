@@ -86,6 +86,8 @@ _CSV_FIELDNAMES: List[str] = [
     "detail_lines",
     "evidence_text",
     "bbox",
+    "location_level",
+    "verification_status",
     "table_ref_count",
     "evidence_role_summary",
     "table_refs",
@@ -108,6 +110,14 @@ _CSV_FIELDNAMES: List[str] = [
     "source_of_truth",
     "关联检查项",
     "obligation_ids",
+    "check_id",
+    "check_status",
+    "incomplete_reason",
+    "formula",
+    "tolerance",
+    "issue_refs",
+    "evaluation_basis",
+    "fact_migration_status",
 ]
 
 
@@ -198,6 +208,22 @@ def _extract_structured_review_issues(status_payload: Dict[str, Any]) -> List[Di
 
 
 def _extract_issues(status_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    review_report = status_payload.get("review_report")
+    if isinstance(review_report, dict) and isinstance(review_report.get("issues"), list):
+        canonical = [item for item in review_report["issues"] if isinstance(item, dict)]
+        tips = review_report.get("tips")
+        if isinstance(tips, list):
+            canonical.extend(item for item in tips if isinstance(item, dict))
+        deduped: List[Dict[str, Any]] = []
+        seen_ids = set()
+        for item in canonical:
+            item_id = str(item.get("id") or "").strip()
+            if item_id and item_id in seen_ids:
+                continue
+            if item_id:
+                seen_ids.add(item_id)
+            deduped.append(item)
+        return deduped
     result = status_payload.get("result")
     structured_issues = _extract_structured_review_issues(status_payload)
     if not isinstance(result, dict):
@@ -286,7 +312,13 @@ def _normalize_table_refs(raw_refs: Any) -> List[Dict[str, Any]]:
             "code": str(item.get("code") or "").strip(),
             "subject": str(item.get("subject") or "").strip(),
             "value": item.get("value"),
-            "bbox": _normalize_bbox(item.get("bbox")),
+            "bbox": (
+                _normalize_bbox(item.get("bbox"))
+                if _has_verified_exact_location(item)
+                else None
+            ),
+            "location_level": str(item.get("location_level") or "unresolved"),
+            "verification_status": str(item.get("verification_status") or "unverified"),
         }
         refs.append({key: value for key, value in ref.items() if value not in (None, "", [])})
     return refs
@@ -365,14 +397,20 @@ def _build_export_location(issue: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     primary_bbox = (
-        _normalize_bbox(issue.get("bbox"))
-        or (_normalize_bbox(refs[0].get("bbox")) if refs else None)
-        or (
-            _normalize_bbox(evidence[0].get("bbox"))
-            if evidence and isinstance(evidence[0], dict)
-            else None
-        )
+        _normalize_bbox(issue.get("bbox")) if _has_verified_exact_location(issue) else None
     )
+    if primary_bbox is None:
+        primary_bbox = next(
+            (
+                _normalize_bbox(ref.get("bbox"))
+                for ref in refs
+                if _has_verified_exact_location(ref) and _normalize_bbox(ref.get("bbox"))
+            ),
+            None,
+        )
+    if primary_bbox is None and evidence and isinstance(evidence[0], dict):
+        if _has_verified_exact_location(evidence[0]):
+            primary_bbox = _normalize_bbox(evidence[0].get("bbox"))
 
     export_location = {
         "page": pages[0] if pages else None,
@@ -389,12 +427,25 @@ def _build_export_location(issue: Dict[str, Any]) -> Dict[str, Any]:
         "code_level": str(location.get("code_level") or "").strip() or None,
         "source_of_truth": str(location.get("source_of_truth") or "").strip() or None,
         "bbox": primary_bbox,
+        "location_level": str(
+            issue.get("location_level") or location.get("location_level") or "unresolved"
+        ),
+        "verification_status": str(
+            issue.get("verification_status") or location.get("verification_status") or "unverified"
+        ),
         "table_ref_count": len(refs),
         "role_summary": _build_role_summary(refs, fallback=location),
         "table_refs": refs,
     }
 
     return {key: value for key, value in export_location.items() if value not in (None, "", [])}
+
+
+def _has_verified_exact_location(source: Dict[str, Any]) -> bool:
+    return (
+        str(source.get("location_level") or "") in {"exact_cell", "exact_span"}
+        and str(source.get("verification_status") or "") == "verified"
+    )
 
 
 def _build_role_summary(
@@ -469,6 +520,33 @@ def _build_check_scope_export(status_payload: Dict[str, Any]) -> Dict[str, Any]:
     旧任务（本次整改前的结果）没有 ``check_coverage`` / ``document_profile``，
     这里明确写成 ``"旧版未记录"``，而不是补一个空的"已完成"。
     """
+    review_report = status_payload.get("review_report")
+    if isinstance(review_report, dict):
+        conclusion = review_report.get("conclusion")
+        conclusion = conclusion if isinstance(conclusion, dict) else {}
+        coverage = review_report.get("obligation_coverage")
+        metadata = review_report.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        manual_review = review_report.get("manual_review")
+        manual_review = manual_review if isinstance(manual_review, list) else []
+        unfinished = [
+            item for item in manual_review
+            if isinstance(item, dict) and item.get("record_type") == "unfinished_check"
+        ]
+        return {
+            "conclusion_scope": conclusion.get("conclusion_scope") or "旧版未记录",
+            "profile_status": metadata.get("profile_status") or "旧版未记录",
+            "report_kind": metadata.get("report_kind") or "旧版未记录",
+            "check_coverage": coverage if isinstance(coverage, dict) else "旧版未记录",
+            "unfinished_checks": unfinished if isinstance(coverage, dict) else "旧版未记录",
+            "document_profile": metadata,
+            "coverage_note": (
+                "本次结果为旧版记录，未包含检查覆盖台账，无法据此判断检查范围是否完整"
+                if not isinstance(coverage, dict)
+                else "“未发现问题”仅表示在本次已完成的检查范围内未发现问题"
+            ),
+        }
+
     result = status_payload.get("result")
     result = result if isinstance(result, dict) else {}
     meta = result.get("meta")
@@ -665,6 +743,8 @@ def _build_csv_row(issue: Dict[str, Any]) -> Dict[str, Any]:
         "detail_lines": detail_lines,
         "evidence_text": display.get("evidence_text") or "",
         "bbox": bbox_text,
+        "location_level": export_location.get("location_level") or "unresolved",
+        "verification_status": export_location.get("verification_status") or "unverified",
         "table_ref_count": export_location.get("table_ref_count") or 0,
         "evidence_role_summary": role_summary,
         "table_refs": table_refs_text,
@@ -876,6 +956,48 @@ def _build_docx_document_xml(
             )
         body.append(_docx_table(unfinished_rows))
 
+    review_report = status_payload.get("review_report")
+    if isinstance(review_report, dict):
+        manual_review = review_report.get("manual_review")
+        manual_review = (
+            [item for item in manual_review if isinstance(item, dict)]
+            if isinstance(manual_review, list)
+            else []
+        )
+        if manual_review:
+            body.append(_docx_paragraph("待人工复核", style="Heading1"))
+            rows = [("类型", "项目", "状态", "原因/说明")]
+            for item in manual_review:
+                rows.append(
+                    (
+                        str(item.get("record_type") or "复核事项"),
+                        str(item.get("title") or item.get("code") or item.get("obligation_id") or ""),
+                        str(item.get("status") or ""),
+                        str(item.get("message") or item.get("detail") or item.get("reason") or ""),
+                    )
+                )
+            body.append(_docx_table(rows))
+        receipts = review_report.get("check_receipts")
+        receipts = (
+            [item for item in receipts if isinstance(item, dict)]
+            if isinstance(receipts, list)
+            else []
+        )
+        if receipts:
+            body.append(_docx_paragraph("检查回执", style="Heading1"))
+            rows = [("检查项", "规则", "状态", "依据", "未完成原因")]
+            for receipt in receipts:
+                rows.append(
+                    (
+                        str(receipt.get("sub_check_id") or ""),
+                        str(receipt.get("rule_id") or ""),
+                        str(receipt.get("status") or ""),
+                        str(receipt.get("evaluation_basis") or ""),
+                        str(receipt.get("incomplete_reason") or ""),
+                    )
+                )
+            body.append(_docx_table(rows))
+
     document_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
@@ -1079,6 +1201,8 @@ def _iter_annotation_targets(issue: Dict[str, Any]) -> List[Dict[str, Any]]:
         for ref in refs:
             if not isinstance(ref, dict):
                 continue
+            if not _has_verified_exact_location(ref):
+                continue
             page = _to_positive_int(ref.get("page"))
             bbox = _normalize_bbox(ref.get("bbox"))
             if not page or not bbox:
@@ -1105,7 +1229,7 @@ def _iter_annotation_targets(issue: Dict[str, Any]) -> List[Dict[str, Any]]:
         return targets
 
     page = _to_positive_int(export_location.get("page"))
-    bbox = _normalize_bbox(export_location.get("bbox"))
+    bbox = _normalize_bbox(export_location.get("bbox")) if _has_verified_exact_location(issue) else None
     if page and bbox:
         return [
             {
@@ -1268,68 +1392,157 @@ def _create_zero_issue_appendix_pdf(
     job_id: str,
     status_payload: Dict[str, Any],
 ) -> Optional[Path]:
-    """零问题但检查未完成时，给标注副本追加一页系统生成的结论附录（ZC-00 / SYS-12）。
+    """零问题报告也生成副本附录，说明检查范围、状态与待复核事项。
 
     只写副本，不修改原件；附录页顶部明确标注"系统生成附录"。
-    检查确实完整完成时返回 None——直接交付原件即可，不需要空结论页。
     """
-    conclusion = _build_export_conclusion(status_payload, 0)
-    if conclusion["is_complete"] is True:
-        return None
-
     try:
         import fitz
     except Exception:
         return None
 
-    source_pdf = _resolve_source_pdf(job_id, status_payload)
+    try:
+        source_pdf = _resolve_source_pdf(job_id, status_payload)
+    except HTTPException:
+        return None
     if source_pdf is None:
         return None
     output_path = (runtime.UPLOAD_ROOT / job_id / "annotated.pdf").resolve()
     if output_path.exists():
         output_path.unlink()
 
-    lines: List[str] = ["系统生成附录 · 检查结论限制", ""]
-    lines.append("本次检查的问题列表为空，但不代表材料没有问题：")
-    if conclusion["coverage_known"] is False:
-        lines.append("· 本次结果为旧版记录，未包含检查覆盖台账，无法判断检查范围是否完整。")
-    else:
-        unfinished_items = conclusion["unfinished_items"]
-        lines.append(f"· 尚有 {len(unfinished_items)} 项检查未完成，不能据此给出完整结论。")
-        lines.append("")
-        lines.append("未完成事项：")
-        for index, item in enumerate(unfinished_items[:20], start=1):
-            title = str(
-                item.get("group_title")
-                or item.get("title")
-                or item.get("obligation_id")
-                or ""
-            )
-            reason = str(item.get("reason_label") or item.get("status") or "")
-            detail = str(item.get("detail") or item.get("gap_note") or "")
-            entry = f"{index}. {title}"
-            if reason:
-                entry += f"（{reason}）"
-            if detail:
-                entry += f"：{detail}"
-            lines.append(entry[:120])
-        if len(unfinished_items) > 20:
-            lines.append(f"…… 其余 {len(unfinished_items) - 20} 项略，详见 JSON/Word 导出。")
-    lines.append("")
-    lines.append("请人工复核未完成事项后再下结论。")
-
     try:
         with fitz.open(str(source_pdf)) as document:
-            page = document.new_page()
-            cursor_y = 72.0
-            for line in lines:
-                page.insert_text((60.0, cursor_y), line, fontsize=11, fontname="china-s")
-                cursor_y += 18.0
+            _append_report_appendix_pages(document, job_id, status_payload, [])
             document.save(str(output_path), garbage=4, deflate=True)
     except Exception:
         logger.exception("Failed to build zero-issue appendix pdf for job %s", job_id)
         return None
     return output_path
+
+
+def _append_report_appendix_pages(
+    document: Any,
+    job_id: str,
+    status_payload: Dict[str, Any],
+    issues: Sequence[Dict[str, Any]],
+) -> None:
+    """Append the canonical report details to the derived PDF, including unlocated items."""
+    report = status_payload.get("review_report")
+    report = report if isinstance(report, dict) else {}
+    conclusion = _build_export_conclusion(status_payload, len(issues))
+    lines: List[str] = ["系统生成附录 · 审校清单", f"任务：{job_id}", ""]
+    if conclusion["is_complete"] is True:
+        lines.append("检查范围已完成。以下问题和提示以本次 ReviewReport 为准。")
+    elif conclusion["coverage_known"] is False:
+        lines.append("检查覆盖范围未记录；问题清单为空不代表材料没有问题。")
+    else:
+        lines.append(
+            f"检查尚未完整完成（{len(conclusion['unfinished_items'])} 项未完成）；问题清单为空不代表材料没有问题。"
+        )
+    lines.append("")
+
+    metadata = report.get("metadata") if isinstance(report.get("metadata"), dict) else {}
+    for label, key in (("材料类型", "report_kind"), ("年度", "year"), ("发布单位", "organization")):
+        value = metadata.get(key)
+        lines.append(f"{label}：{value if value not in (None, '') else '未识别到'}")
+    if not report:
+        lines.append("ReviewReport：旧版未记录")
+
+    tip_ids = {
+        str(item.get("id") or "")
+        for item in report.get("tips", [])
+        if isinstance(item, dict)
+    }
+    lines.extend(["", f"问题与提示（{len(issues)} 项）："])
+    if not issues:
+        lines.append("未发现已确认问题；检查范围和限制见上文及待复核清单。")
+    for index, issue in enumerate(issues, start=1):
+        issue_id = str(issue.get("id") or "")
+        category = "提示" if issue_id in tip_ids else "问题"
+        location = issue.get("location") if isinstance(issue.get("location"), dict) else {}
+        evidence = issue.get("evidence") if isinstance(issue.get("evidence"), list) else []
+        snippet = next(
+            (
+                str(item.get("text_snippet") or item.get("text") or "").strip()
+                for item in evidence
+                if isinstance(item, dict) and str(item.get("text_snippet") or item.get("text") or "").strip()
+            ),
+            str(issue.get("text_snippet") or "").strip(),
+        )
+        page = issue.get("page_number") or location.get("page")
+        lines.extend(
+            [
+                f"{index}. [{category}/{issue.get('severity') or '未标级'}] {issue.get('title') or issue.get('rule_id') or '未命名'}",
+                f"规则：{issue.get('rule_id') or '未识别到'}；页码：{page if page else '未定位'}；定位等级：{issue.get('location_level') or location.get('location_level') or 'unresolved'}",
+                f"说明：{issue.get('message') or '未识别到'}",
+            ]
+        )
+        if snippet:
+            lines.append(f"原文摘录：{snippet}")
+        if issue.get("suggestion"):
+            lines.append(f"建议：{issue.get('suggestion')}")
+        lines.append("")
+
+    manual_review = report.get("manual_review")
+    manual_review = manual_review if isinstance(manual_review, list) else []
+    if not report and conclusion["unfinished_items"]:
+        manual_review = [
+            {
+                "record_type": "unfinished_check",
+                "obligation_id": item.get("obligation_id"),
+                "title": item.get("group_title") or item.get("title"),
+                "status": item.get("status"),
+                "reason": item.get("reason_label") or item.get("status"),
+                "detail": item.get("detail") or item.get("gap_note"),
+            }
+            for item in conclusion["unfinished_items"]
+        ]
+    lines.append(f"待人工复核（{len(manual_review)} 项）：")
+    if not manual_review:
+        lines.append("无已记录的待人工复核项。")
+    for index, item in enumerate(manual_review, start=1):
+        if not isinstance(item, dict):
+            continue
+        title = item.get("group_title") or item.get("title") or item.get("obligation_id") or item.get("code") or "待复核事项"
+        obligation_id = item.get("obligation_id") or item.get("code")
+        detail = item.get("detail") or item.get("reason") or item.get("message") or "未提供原因"
+        lines.append(
+            f"{index}. [{item.get('status') or item.get('record_type') or 'manual_review'}] "
+            + (f"{obligation_id} · " if obligation_id else "")
+            + f"{title}：{detail}"
+        )
+    lines.append("")
+
+    receipts = report.get("check_receipts")
+    receipts = receipts if isinstance(receipts, list) else []
+    lines.append(f"检查回执（{len(receipts)} 项）：")
+    if not receipts:
+        lines.append("未记录子检查回执。")
+    for index, receipt in enumerate(receipts, start=1):
+        if not isinstance(receipt, dict):
+            continue
+        label = receipt.get("sub_check_id") or receipt.get("rule_id") or f"检查项{index}"
+        state = receipt.get("status") or "未记录"
+        reason = receipt.get("incomplete_reason") or ""
+        formula = receipt.get("formula") or ""
+        lines.append(f"{index}. {label}：{state}" + (f"；公式：{formula}" if formula else "") + (f"；未完成原因：{reason}" if reason else ""))
+
+    wrapped: List[str] = []
+    for line in lines:
+        if not line:
+            wrapped.append("")
+            continue
+        wrapped.extend(line[start : start + 58] for start in range(0, len(line), 58))
+    chunk_size = 48
+    for start in range(0, len(wrapped), chunk_size):
+        page = document.new_page()
+        page.insert_text((48, 38), "系统生成附录 · 审校清单", fontsize=9, fontname="china-s", color=(0.35, 0.4, 0.48))
+        y = 64.0
+        for line in wrapped[start : start + chunk_size]:
+            if line:
+                page.insert_text((48, y), line, fontsize=9, fontname="china-s")
+            y += 14.0
 
 
 def _create_annotated_pdf(
@@ -1346,11 +1559,12 @@ def _create_annotated_pdf(
         return None
 
     source_pdf = _resolve_source_pdf(job_id, status_payload)
+    if source_pdf is None:
+        return None
     output_path = (runtime.UPLOAD_ROOT / job_id / "annotated.pdf").resolve()
     if output_path.exists():
         output_path.unlink()
 
-    marker_count = 0
     page_legends: Dict[int, List[Dict[str, Any]]] = {}
     legend_seen: Dict[int, set[tuple[str, str]]] = {}
     with fitz.open(str(source_pdf)) as document:
@@ -1374,16 +1588,13 @@ def _create_annotated_pdf(
                 if legend_key not in legend_seen[page_number]:
                     legend_seen[page_number].add(legend_key)
                     page_legends[page_number].append({"text": entry_text, "color": color})
-                marker_count += 1
-
-        if marker_count == 0:
-            return None
-
         for page_number, entries in page_legends.items():
             if page_number < 1 or page_number > document.page_count:
                 continue
             page = document.load_page(page_number - 1)
             _draw_page_legend(page, entries, fitz)
+
+        _append_report_appendix_pages(document, job_id, status_payload, issues)
 
         document.save(str(output_path), garbage=4, deflate=True)
 
@@ -1398,12 +1609,15 @@ async def download_report(
 ):
     _, _, _, status_payload = require_job_access(request, job_id)
     issues = _extract_issues(status_payload)
+    review_report = status_payload.get("review_report")
+    review_report = review_report if isinstance(review_report, dict) else {}
 
     if format == "json":
         enriched_issues = [_enrich_issue(item) for item in issues]
         payload: Dict[str, Any] = {
             "job_id": job_id,
             "status": status_payload.get("status"),
+            "review_report": review_report or "旧版未记录",
             "issues": enriched_issues,
             "count": len(enriched_issues),
         }
@@ -1420,12 +1634,58 @@ async def download_report(
             fieldnames=_CSV_FIELDNAMES,
         )
         writer.writeheader()
-        # ZC-00（SYS-12）：零问题也必须有摘要记录——空 CSV 会被读成"材料没问题"，
-        # 未完成检查存在时必须把结论限制写给接收方。
-        if not issues:
-            writer.writerow(_build_csv_summary_row(job_id, status_payload, 0))
+        # 所有导出行都来自 ReviewReport。摘要、问题、提示、待复核和检查回执
+        # 使用 record_type 区分；旧任务保留原来的兼容字段与范围说明。
+        writer.writerow(_build_csv_summary_row(job_id, status_payload, len(issues)))
+        tip_ids = {
+            str(item.get("id") or "")
+            for item in review_report.get("tips", [])
+            if isinstance(item, dict)
+        }
         for item in issues:
-            writer.writerow(_build_csv_row(item))
+            row = _build_csv_row(item)
+            if str(item.get("id") or "") in tip_ids:
+                row["record_type"] = "tip"
+            writer.writerow(row)
+        for item in review_report.get("manual_review", []):
+            if not isinstance(item, dict):
+                continue
+            row = {key: "" for key in _CSV_FIELDNAMES}
+            row.update(
+                {
+                    "record_type": "manual_review",
+                    "规则编号": item.get("code") or item.get("obligation_id") or "",
+                    "标题": item.get("title") or item.get("code") or "待人工复核",
+                    "摘要": item.get("message") or item.get("detail") or item.get("reason") or "",
+                    "严重级别": "待人工复核",
+                    "严重级别代码": "manual_review",
+                    "check_status": item.get("status") or "",
+                    "incomplete_reason": item.get("message") or item.get("detail") or item.get("reason") or "",
+                    "suggestion": item.get("suggestion") or "请核对原始材料后确认。",
+                }
+            )
+            writer.writerow(row)
+        for receipt in review_report.get("check_receipts", []):
+            if not isinstance(receipt, dict):
+                continue
+            row = {key: "" for key in _CSV_FIELDNAMES}
+            row.update(
+                {
+                    "record_type": "check",
+                    "check_id": receipt.get("sub_check_id") or "",
+                    "check_status": receipt.get("status") or "",
+                    "incomplete_reason": receipt.get("incomplete_reason") or "",
+                    "rule_id": receipt.get("rule_id") or "",
+                    "规则编号": receipt.get("rule_id") or "",
+                    "obligation_ids": receipt.get("obligation_id") or "",
+                    "formula": receipt.get("formula") or "",
+                    "tolerance": json.dumps(receipt.get("tolerance") or {}, ensure_ascii=False),
+                    "issue_refs": json.dumps(receipt.get("issue_refs") or [], ensure_ascii=False),
+                    "evaluation_basis": receipt.get("evaluation_basis") or "",
+                    "fact_migration_status": receipt.get("fact_migration_status") or "",
+                }
+            )
+            writer.writerow(row)
 
         data = output.getvalue().encode("utf-8-sig")
         return Response(

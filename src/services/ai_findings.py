@@ -151,10 +151,6 @@ class AIFindingsService:
         """将语义问题转换为IssueItem格式"""
         issues = []
         
-        # 如果没有页码偏移量，使用默认值
-        if not page_offsets:
-            page_offsets = [(0, 999999, 1)]
-        
         for idx, issue in enumerate(semantic_issues):
             try:
                 confidence = issue.get("confidence")
@@ -164,16 +160,30 @@ class AIFindingsService:
                 except Exception:
                     pass
 
-                # 根据 span 计算所属页码
-                span = issue.get("span", [0, 0])
-                span_start = int(span[0]) if isinstance(span, list) and len(span) > 0 else 0
-                
-                # 遍历页码偏移量，找到 span 所属的页码
-                page_number = issue.get("page", 1) if isinstance(issue.get("page"), int) else 1
-                for page_start, page_end, page_num in page_offsets:
-                    if span_start >= page_start and span_start < page_end:
-                        page_number = page_num
-                        break
+                # 只有明确的页码或能映射到原始页文本的 span 才携带页码。
+                # 缺少 span 时不把默认偏移 0 误当第一页。
+                page_number: Optional[int] = None
+                try:
+                    raw_page = int(str(issue.get("page")).strip())
+                    if 0 < raw_page <= len(page_offsets):
+                        page_number = raw_page
+                except (TypeError, ValueError):
+                    pass
+
+                span = issue.get("span")
+                span_start: Optional[int] = None
+                if isinstance(span, (list, tuple)) and span:
+                    try:
+                        candidate_start = int(span[0])
+                        if candidate_start >= 0:
+                            span_start = candidate_start
+                    except (TypeError, ValueError):
+                        pass
+                if span_start is not None:
+                    for page_start, page_end, page_num in page_offsets:
+                        if page_start <= span_start < page_end:
+                            page_number = page_num
+                            break
 
                 item = self._build_ai_issue_item(
                     raw_issue=issue,
@@ -212,7 +222,7 @@ class AIFindingsService:
         raw_issue: Dict[str, Any],
         context: JobContext,
         idx: int,
-        page_number: int,
+        page_number: Optional[int],
     ) -> IssueItem:
         fallback_rule_id = f"AI-SEM-{idx:03d}"
         interpreted = interpret_ai_issue(
@@ -224,19 +234,30 @@ class AIFindingsService:
         evidence_text = str(
             interpreted["quote"] or interpreted["context"] or interpreted["original"] or ""
         )
-        evidence = [{
+        evidence_item: Dict[str, Any] = {
             "type": "text_content",
-            "page": page_number,
             "text": evidence_text,
             "text_snippet": evidence_text,
             "original": interpreted["original"],
             "context": interpreted["context"],
             "quote": interpreted["quote"],
-        }]
+        }
+        if page_number is not None:
+            evidence_item["page"] = page_number
+        evidence = [evidence_item]
 
         raw_bbox = raw_issue.get("bbox")
-        if isinstance(raw_bbox, list) and len(raw_bbox) == 4:
+        location_level = str(raw_issue.get("location_level") or "unresolved")
+        verification_status = str(raw_issue.get("verification_status") or "unverified")
+        if (
+            isinstance(raw_bbox, list)
+            and len(raw_bbox) == 4
+            and location_level in {"exact_cell", "exact_span"}
+            and verification_status == "verified"
+        ):
             evidence[0]["bbox"] = raw_bbox
+            evidence[0]["location_level"] = location_level
+            evidence[0]["verification_status"] = verification_status
 
         # 版本留痕（P2-02）：AI finding 记录实际使用的模型与提示词版本。
         # 这里不填 rule_version——本条问题是语义审计提示词产出的，
@@ -255,7 +276,16 @@ class AIFindingsService:
             location=dict(interpreted["location"]),
             metrics=dict(interpreted["metrics"]),
             page_number=page_number,
-            bbox=raw_bbox if isinstance(raw_bbox, list) and len(raw_bbox) == 4 else None,
+            bbox=(
+                raw_bbox
+                if isinstance(raw_bbox, list)
+                and len(raw_bbox) == 4
+                and location_level in {"exact_cell", "exact_span"}
+                and verification_status == "verified"
+                else None
+            ),
+            location_level=location_level,
+            verification_status=verification_status,
             suggestion=str(interpreted["suggestion"]),
             tags=list(
                 dict.fromkeys(
@@ -695,7 +725,7 @@ class AIFindingsService:
             page_number: Optional[int] = None
             try:
                 raw_page = int(str(raw_issue.get("page")).strip())
-                if raw_page > 0:
+                if raw_page > 0 and raw_page <= len(context.page_texts or []):
                     page_number = raw_page
             except (TypeError, ValueError):
                 page_number = None

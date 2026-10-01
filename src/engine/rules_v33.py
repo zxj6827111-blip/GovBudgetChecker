@@ -130,6 +130,8 @@ class Issue:
     message: str
     evidence_text: Optional[str] = None
     location: Dict[str, Any] = field(default_factory=dict)
+    location_level: str = "unresolved"
+    verification_status: str = "unverified"
     # R7 P1-3：finding 的独立章节身份（结构化字段）。此前章节只以
     # 「【章节:…】」文字拼进 evidence_text——评估器无法结构化校验
     # 候选 finding 是否真的产自标注章节（跨章节候选可借主题词混过

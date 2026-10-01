@@ -698,17 +698,57 @@ function collectStructuredReviewIssues(detail: JobDetailRecord): Record<string, 
       title,
       message,
       location,
-      evidence: [{ ...(page ? { page } : {}), text: message, text_snippet: message }],
+    evidence: [],
       suggestion: String(item.recommended_action ?? "核对原始 PDF 对应页的表格标题、金额和单位后确认。").trim(),
     };
   });
 }
 
+function collectReviewReportManualIssues(reviewReport: Record<string, unknown>): Record<string, unknown>[] {
+  const manualItems = Array.isArray(reviewReport.manual_review)
+    ? reviewReport.manual_review.filter(isRecord)
+    : [];
+  return manualItems.flatMap((item, index) => {
+    const recordType = String(item.record_type ?? "review_reason");
+    if (recordType === "unfinished_check") return [];
+    const rawPage = toNumber(item.page ?? item.page_number);
+    const page = rawPage > 0 ? rawPage : undefined;
+    const title = String(
+      item.title ?? item.code ?? item.obligation_id ?? "待人工复核事项",
+    ).trim();
+    const message = String(item.message ?? item.detail ?? item.reason ?? "需人工复核后确认。").trim();
+    const location: Record<string, unknown> = {};
+    if (page) location.page = page;
+    if (item.table_code) location.table = String(item.table_code);
+    const id = String(item.id ?? `${recordType}:${item.code ?? item.obligation_id ?? index}`);
+    return [{
+      id,
+      source: "manual_review",
+      rule_id: String(item.code ?? item.obligation_id ?? recordType.toUpperCase()),
+      severity: "manual_review",
+      title,
+      message,
+      location,
+      evidence: [],
+      suggestion: String(item.suggestion ?? item.recommended_action ?? "核对原始材料后确认。"),
+    }];
+  });
+}
+
 export function toUiProblems(detail: JobDetailRecord, options: { includeEvidencePreview?: boolean } = {}): Problem[] {
   const result = isRecord(detail.result) ? detail.result : {};
+  const reviewReport = isRecord(detail.review_report) ? detail.review_report : {};
+  const canonicalIssues = Array.isArray(reviewReport.issues)
+    ? dedupeIssuesById([
+        ...reviewReport.issues.filter(isRecord),
+        ...(Array.isArray(reviewReport.tips) ? reviewReport.tips.filter(isRecord) : []),
+      ])
+    : null;
   const issues = dedupeIssuesById([
-    ...collectDisplayIssues(result),
-    ...collectStructuredReviewIssues(detail),
+    ...(canonicalIssues ?? collectDisplayIssues(result)),
+    ...(canonicalIssues
+      ? collectReviewReportManualIssues(reviewReport)
+      : collectStructuredReviewIssues(detail)),
   ]);
   const includeEvidencePreview = options.includeEvidencePreview ?? true;
 
@@ -727,10 +767,43 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
       const display = isRecord(issue.display) ? issue.display : {};
       const title = String(issue.title ?? issue.message ?? `问题 ${index + 1}`).trim();
       const resolvedTitle = String(display.summary ?? issue.rule_name ?? title).trim() || title;
-      const snippet = String(
-        evidence?.text_snippet ?? evidence?.text ?? issue.message ?? title,
-      ).trim();
+      const snippet = String(evidence?.text_snippet ?? evidence?.text ?? issue.text_snippet ?? "").trim();
       const location = resolveProblemLocation(issue, page);
+      const rawRefs = Array.isArray(rawLocation.table_refs)
+        ? rawLocation.table_refs.filter(isRecord)
+        : [];
+      const evidenceRefs = rawRefs.flatMap((ref, refIndex) => {
+        const refPage = toNumber(ref.page);
+        if (!Number.isFinite(refPage) || refPage <= 0) return [];
+        const locationLevel = String(ref.location_level ?? "unresolved");
+        const verificationStatus = String(ref.verification_status ?? "unverified");
+        const bbox =
+          ["exact_cell", "exact_span"].includes(locationLevel) && verificationStatus === "verified" && Array.isArray(ref.bbox)
+            ? ref.bbox.map((item) => Number(item))
+            : undefined;
+        const labels = [ref.table, ref.section, ref.row, ref.field]
+          .map((item) => String(item ?? "").trim())
+          .filter(Boolean);
+        return [{
+          key: `${String(ref.role ?? `定位 ${refIndex + 1}`)}|${refPage}|${refIndex}`,
+          role: String(ref.role ?? `定位 ${refIndex + 1}`),
+          page: Math.floor(refPage),
+          locationText: labels.join(" · ") || `第 ${Math.floor(refPage)} 页`,
+          valueText: ref.value === undefined || ref.value === null ? undefined : String(ref.value),
+          bbox,
+          locationLevel,
+          verificationStatus,
+        }];
+      });
+      const issueLocationLevel = String(issue.location_level ?? rawLocation.location_level ?? "unresolved");
+      const issueVerificationStatus = String(issue.verification_status ?? rawLocation.verification_status ?? "unverified");
+      const exactIssueLocation = ["exact_cell", "exact_span"].includes(issueLocationLevel)
+        && issueVerificationStatus === "verified";
+      const evidenceHasExactLocation = Boolean(
+        evidence
+          && ["exact_cell", "exact_span"].includes(String(evidence.location_level ?? ""))
+          && String(evidence.verification_status ?? "") === "verified"
+      );
 
       return {
         id: String(issue.id ?? `${detail.job_id}-issue-${index + 1}`),
@@ -752,11 +825,12 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
         evidenceImage: includeEvidencePreview ? createEvidencePreviewDataUrl(resolvedTitle, snippet, page, location) : "",
         status: "pending",
         source: String(issue.source ?? ""),
-        bbox: Array.isArray(issue.bbox)
+        bbox: exactIssueLocation && Array.isArray(issue.bbox)
           ? issue.bbox.map((item) => Number(item))
-          : Array.isArray(evidence?.bbox)
+          : evidenceHasExactLocation && Array.isArray(evidence?.bbox)
             ? evidence.bbox.map((item) => Number(item))
             : undefined,
+        evidenceRefs,
         expectedName: String(issue.expected_name ?? rawLocation.expected_name ?? ""),
         actualName: String(issue.actual_name ?? rawLocation.actual_name ?? ""),
         codeLevel: String(issue.code_level ?? rawLocation.code_level ?? ""),

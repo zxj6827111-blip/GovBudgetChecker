@@ -214,4 +214,56 @@ assert.equal(
   "task totals must include structured review items instead of hiding them",
 );
 
+const reportIssues = toUiProblems({
+  job_id: "job-review-report-004",
+  result: {
+    issues: {
+      all: [{ id: "legacy-issue", title: "不得作为当前报告来源", message: "legacy" }],
+    },
+  },
+  review_report: {
+    schema_version: 2,
+    issues: [
+      {
+        id: "report-issue",
+        source: "rule",
+        rule_id: "C-001",
+        severity: "high",
+        title: "跨表问题",
+        message: "分项需要人工确认",
+        location: {
+          page: 2,
+          table_refs: [
+            {
+              role: "说明",
+              page: 2,
+              section: "三公经费情况说明",
+              location_level: "exact_span",
+              verification_status: "verified",
+              bbox: [10, 20, 100, 40],
+            },
+            {
+              role: "预算表",
+              page: 7,
+              table: "三公经费预算表",
+              location_level: "region",
+              verification_status: "unverified",
+              bbox: [11, 21, 101, 41],
+            },
+          ],
+        },
+        evidence: [{ page: 2, text: "三公经费合计" }],
+      },
+    ],
+  },
+} as any);
+assert.deepEqual(
+  reportIssues.map((problem) => problem.id),
+  ["report-issue"],
+  "the canonical ReviewReport must override legacy finding projections",
+);
+assert.deepEqual(reportIssues[0].evidenceRefs?.map((ref) => ref.page), [2, 7]);
+assert.deepEqual(reportIssues[0].evidenceRefs?.[0].bbox, [10, 20, 100, 40]);
+assert.equal(reportIssues[0].evidenceRefs?.[1].bbox, undefined, "unverified evidence must not produce a UI highlight");
+
 console.log("uiAdapters dual-mode tests passed");

@@ -202,6 +202,14 @@ class IssueItem(BaseModel):
     # 伪装成"第 1 页"，制造看似完整的假证据。展示层负责把 None 渲染成"未定位"。
     page_number: Optional[int] = Field(default=None, description="页码（无法定位时为 None，不得默认第 1 页）")
     bbox: Optional[List[float]] = Field(default=None, description="边界框 [x1, y1, x2, y2]")
+    location_level: str = Field(
+        default="unresolved",
+        description="定位等级：exact_cell / exact_span / region / unresolved",
+    )
+    verification_status: str = Field(
+        default="unverified",
+        description="来源定位验证状态；只有 verified 的精确定位才可导出 bbox",
+    )
     amount: Optional[float] = Field(default=None, description="金额")
     percentage: Optional[float] = Field(default=None, description="百分比")
     text_snippet: Optional[str] = Field(default=None, description="文本摘录")

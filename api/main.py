@@ -53,6 +53,7 @@ from src.schemas.issues import (
     AnalysisQualityStatus,
     JobStatus,
 )
+from src.schemas.review_report import build_review_report
 from api import runtime
 from api.job_queue import DurableJobQueue
 from api.queue_runtime import (
@@ -1843,6 +1844,7 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             "profile_status": document_profile.profile_status,
             "stage": stage_text,
         }
+        payload["review_report"] = build_review_report(payload)
         _safe_write(job_dir, payload)
         await persist_analysis_job_snapshot(payload, include_results=True)
 
