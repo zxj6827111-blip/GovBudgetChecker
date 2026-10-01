@@ -1300,6 +1300,160 @@ MIGRATIONS: List[Dict[str, Any]] = [
             "ON review_obligation_decisions (slot_id, review_session_id)",
         ]
     },
+    {
+        # ------------------------------------------------------------------
+        # ZC-01：统一解析产物存储（SYS-01/15/16）
+        #
+        # 版本化解析运行 + 表实例 + 单元格 + 事实 + 证据。新唯一键包含
+        # 解析运行与独立表实例，不再以"文档版本、表种、行列号"作为唯一身份；
+        # 同一 PDF 的部门汇总表与本级表、不同年度同种表各自独立成行。
+        # 旧表（fiscal_table_cells / fiscal_table_instances /
+        # fact_fiscal_line_items）保留历史读取与既有消费方，不删不改语义。
+        # ------------------------------------------------------------------
+        "id": "2026-10-01_0022_unified_parse_storage",
+        "description": "Unified parse artifact storage: parse_runs, parse_table_instances, parse_table_cells, parse_facts, parse_evidence; legacy fact table gains normalized_amount/instance_uid",
+        "sql": [
+            """
+            CREATE TABLE IF NOT EXISTS parse_runs (
+                id BIGSERIAL PRIMARY KEY,
+                parse_run_uid TEXT NOT NULL,
+                document_version_id BIGINT NOT NULL,
+                source_file_hash TEXT NOT NULL,
+                parser_name TEXT NOT NULL DEFAULT 'pdfplumber',
+                parser_fingerprint TEXT NOT NULL DEFAULT '',
+                config_fingerprint TEXT NOT NULL DEFAULT '',
+                ocr_model_fingerprint TEXT,
+                page_count INTEGER NOT NULL DEFAULT 0,
+                page_states JSONB,
+                status TEXT NOT NULL DEFAULT 'completed',
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE (parse_run_uid)
+            )
+            """,
+            # 解析缓存命中键：同一原件 + 同一解析器/配置/OCR 指纹 → 复用，不重解析
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_parse_runs_cache_key
+            ON parse_runs (
+                document_version_id,
+                source_file_hash,
+                parser_fingerprint,
+                config_fingerprint,
+                COALESCE(ocr_model_fingerprint, '')
+            )
+            WHERE status = 'completed'
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_parse_runs_version ON parse_runs(document_version_id)",
+            """
+            CREATE TABLE IF NOT EXISTS parse_table_instances (
+                id BIGSERIAL PRIMARY KEY,
+                parse_run_id BIGINT NOT NULL REFERENCES parse_runs(id) ON DELETE CASCADE,
+                instance_uid TEXT NOT NULL,
+                document_version_id BIGINT NOT NULL,
+                table_code TEXT NOT NULL,
+                title TEXT,
+                org_name TEXT,
+                fiscal_year INTEGER,
+                fund_scope TEXT,
+                page_start INTEGER,
+                page_end INTEGER,
+                row_count INTEGER DEFAULT 0,
+                confidence REAL,
+                column_mappings JSONB,
+                identity_conflict BOOLEAN DEFAULT FALSE,
+                conflict_reasons JSONB,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE (parse_run_id, instance_uid)
+            )
+            """,
+            # 表种不再唯一：同文档同表种多实例并存（SYS-16）
+            "CREATE INDEX IF NOT EXISTS idx_parse_table_instances_version_code "
+            "ON parse_table_instances(document_version_id, table_code)",
+            """
+            CREATE TABLE IF NOT EXISTS parse_table_cells (
+                id BIGSERIAL PRIMARY KEY,
+                parse_run_id BIGINT NOT NULL REFERENCES parse_runs(id) ON DELETE CASCADE,
+                instance_uid TEXT NOT NULL,
+                row_idx INTEGER NOT NULL,
+                col_idx INTEGER NOT NULL,
+                raw_text TEXT,
+                normalized_text TEXT,
+                numeric_value DOUBLE PRECISION,
+                normalized_value_wan NUMERIC,
+                unit_hint TEXT,
+                presence TEXT,
+                page_number INTEGER,
+                bbox JSONB,
+                is_header BOOLEAN DEFAULT FALSE,
+                confidence REAL,
+                extraction_method TEXT,
+                row_span INTEGER DEFAULT 1,
+                col_span INTEGER DEFAULT 1,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE (parse_run_id, instance_uid, row_idx, col_idx)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_parse_table_cells_run "
+            "ON parse_table_cells(parse_run_id, instance_uid)",
+            """
+            CREATE TABLE IF NOT EXISTS parse_facts (
+                id BIGSERIAL PRIMARY KEY,
+                parse_run_id BIGINT NOT NULL REFERENCES parse_runs(id) ON DELETE CASCADE,
+                fact_uid TEXT NOT NULL,
+                instance_uid TEXT,
+                table_code TEXT,
+                indicator TEXT,
+                org_name TEXT,
+                org_scope TEXT,
+                fiscal_year INTEGER,
+                period TEXT,
+                fund_scope TEXT,
+                budget_stage TEXT,
+                subject_code TEXT,
+                subject_name TEXT,
+                classification_level INTEGER,
+                parent_subject_code TEXT,
+                hierarchy_path JSONB,
+                raw_value TEXT,
+                unit TEXT,
+                display_precision INTEGER,
+                normalized_value NUMERIC,
+                recognition_status TEXT DEFAULT 'unverified',
+                confidence REAL,
+                evidence_ids JSONB,
+                extra_dims JSONB,
+                row_order INTEGER,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE (parse_run_id, fact_uid)
+            )
+            """,
+            # 事实身份唯一性由应用层按 identity_key 判定；DB 层给常用查询建索引
+            "CREATE INDEX IF NOT EXISTS idx_parse_facts_identity "
+            "ON parse_facts(parse_run_id, org_name, fiscal_year, indicator, subject_code)",
+            """
+            CREATE TABLE IF NOT EXISTS parse_evidence (
+                id BIGSERIAL PRIMARY KEY,
+                parse_run_id BIGINT NOT NULL REFERENCES parse_runs(id) ON DELETE CASCADE,
+                evidence_id TEXT NOT NULL,
+                file_hash TEXT NOT NULL,
+                physical_page INTEGER,
+                printed_page TEXT,
+                source_cell_id TEXT,
+                source_block_id TEXT,
+                quote TEXT,
+                bbox JSONB,
+                source_method TEXT DEFAULT 'native_text',
+                verification_status TEXT NOT NULL DEFAULT 'unverified',
+                location_level TEXT DEFAULT 'unresolved',
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE (parse_run_id, evidence_id)
+            )
+            """,
+            # 旧事实表补归一值列：历史读取兼容，归一值只对新写入回填，
+            # 迁移不伪造历史数据（任务包 §三 ZC-01 迁移要求）
+            "ALTER TABLE fact_fiscal_line_items ADD COLUMN IF NOT EXISTS normalized_amount NUMERIC",
+            "ALTER TABLE fact_fiscal_line_items ADD COLUMN IF NOT EXISTS instance_uid TEXT",
+        ]
+    },
 ]
 
 

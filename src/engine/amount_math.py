@@ -38,6 +38,43 @@ def to_decimal(value) -> Optional[Decimal]:
         return None
 
 
+#: 金额单位 → 万元换算系数（ZC-01 / SYS-15：等值不同单位必须归一到同一金额）
+_WAN_FACTORS = {
+    "元": Decimal("0.0001"),
+    "万元": Decimal("1"),
+    "千元": Decimal("0.1"),
+    "百万元": Decimal("100"),
+    "亿元": Decimal("10000"),
+}
+
+
+def normalize_amount_to_wan(value, unit: Optional[str] = None) -> Optional[Decimal]:
+    """把任意单位的金额换算到万元口径（Decimal），失败返回 None。
+
+    ``value`` 可以是数字、数字字符串或带单位后缀的原文（如 ``"1,234.56万元"``）；
+    显式传入 ``unit`` 时优先于原文内嵌单位。
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    effective_unit = unit
+    if not effective_unit:
+        for token in ("百万元", "亿元", "万元", "千元", "元"):
+            if token in text:
+                effective_unit = token
+                text = text.replace(token, "")
+                break
+    number = to_decimal(text)
+    if number is None:
+        return None
+    if not effective_unit or effective_unit not in _WAN_FACTORS:
+        # 无单位信息时不猜口径——返回 None 而不是默认万元（识别状态交给调用方标记）
+        return None
+    return number * _WAN_FACTORS[effective_unit]
+
+
 def display_round(value: Decimal) -> Decimal:
     """按公开表显示精度四舍五入（两位小数）。"""
     return value.quantize(_DISPLAY_QUANT, rounding=ROUND_HALF_UP)

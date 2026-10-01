@@ -11,6 +11,8 @@ import copy
 import hashlib
 import io
 import json
+import uuid
+from datetime import datetime, timezone
 import logging
 import os
 import re
@@ -273,6 +275,103 @@ def read_json_file(
     except Exception:
         logger.exception("Failed to read JSON file: %s", path)
     return default
+
+
+#: 触发版本化分析快照的终态集合：
+#: 任务处理状态与审校结论分别表达（ZC-01），但只有终态才值得留版本快照
+TERMINAL_ANALYSIS_STATUSES = frozenset({"done", "review_required", "degraded", "error"})
+
+
+def write_analysis_revision_snapshot(
+    job_dir: Path,
+    payload: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """把终态结果写入版本化目录，并原子更新当前版本指针（ZC-01）。
+
+    - 目录：``uploads/<job>/analysis_versions/rev-<时间戳>-<随机>/status.json``；
+    - 指针：``analysis_versions/current.json``（temp 文件 + os.replace 原子替换）；
+    - 重分析只追加新版本目录，不删除、不覆盖旧快照；读取方据 current.json
+      定位当前版本，历史版本永远可回放。
+    返回指针内容；任何失败返回 None 且不抛异常（快照是增强能力，
+    不得影响 status.json 主链路）。
+    """
+    try:
+        status = str(payload.get("status") or "").strip()
+        if status not in TERMINAL_ANALYSIS_STATUSES:
+            return None
+        versions_dir = job_dir / "analysis_versions"
+        versions_dir.mkdir(parents=True, exist_ok=True)
+        revision_id = (
+            "rev-"
+            + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+            + "-"
+            + uuid.uuid4().hex[:8]
+        )
+        revision_dir = versions_dir / revision_id
+        revision_dir.mkdir(parents=True, exist_ok=False)
+        write_json_file(revision_dir / "status.json", payload)
+
+        pointer = {
+            "revision_id": revision_id,
+            "status": status,
+            "written_at": datetime.now(timezone.utc).isoformat(),
+            "analysis_conclusion": payload.get("analysis_conclusion"),
+        }
+        pointer_path = versions_dir / "current.json"
+        tmp_fd, tmp_name = tempfile.mkstemp(suffix=".tmp", dir=str(versions_dir))
+        tmp_path = Path(tmp_name)
+        try:
+            os.write(tmp_fd, json.dumps(pointer, ensure_ascii=False).encode("utf-8"))
+            os.fsync(tmp_fd)
+            os.close(tmp_fd)
+            tmp_fd = None
+            os.replace(str(tmp_path), str(pointer_path))
+        except BaseException:
+            if tmp_fd is not None:
+                try:
+                    os.close(tmp_fd)
+                except Exception:
+                    pass
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise
+        return pointer
+    except Exception as exc:
+        logger.warning(
+            "analysis revision snapshot failed for %s: %s",
+            getattr(job_dir, "name", job_dir),
+            exc,
+        )
+        return None
+
+
+def read_analysis_revision_pointer(job_dir: Path) -> Optional[Dict[str, Any]]:
+    """读取当前分析版本指针；不存在或损坏返回 None（不猜测）。"""
+    pointer_path = job_dir / "analysis_versions" / "current.json"
+    return read_json_file(pointer_path, default=None)
+
+
+def list_analysis_revisions(job_dir: Path) -> List[Dict[str, Any]]:
+    """列出全部历史分析版本（旧快照保留，供回放与审计）。"""
+    versions_dir = job_dir / "analysis_versions"
+    if not versions_dir.is_dir():
+        return []
+    revisions: List[Dict[str, Any]] = []
+    for entry in sorted(versions_dir.iterdir()):
+        if not entry.is_dir() or not entry.name.startswith("rev-"):
+            continue
+        payload = read_json_file(entry / "status.json", default=None)
+        if isinstance(payload, dict):
+            revisions.append(
+                {
+                    "revision_id": entry.name,
+                    "status": payload.get("status"),
+                    "analysis_conclusion": payload.get("analysis_conclusion"),
+                }
+            )
+    return revisions
 
 
 def write_json_file(path: Path, payload: Dict[str, Any]) -> None:

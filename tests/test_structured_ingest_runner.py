@@ -310,14 +310,34 @@ def _install_runner_stubs(
         events.append("allocate_material_slot")
         return dict(resolved_slot)
 
+    async def _find_cached_parse_run(*_args, **_kwargs):
+        events.append("parse_cache_lookup")
+        return None
+
+    async def _load_parse_artifact(_conn, _run_id):
+        raise AssertionError("cache miss must not load stored artifact")
+
+    async def _persist_parse_artifact(*_args, **_kwargs):
+        events.append("persist_unified_storage")
+        return 77
+
+    async def _persist_facts_and_evidence(*_args, **_kwargs):
+        return 0
+
     class _Parser:
         def __init__(self, _conn):
             pass
 
-        async def parse_pdf(self, _path, _version_id):
-            events.append("parse_pdf")
+        def build_parse_artifact(self, _path, *, config_fingerprint=""):
+            events.append("build_parse_artifact")
             if parse_error is not None:
                 raise parse_error
+            from src.schemas.parse_artifact import ParseArtifact
+
+            return ParseArtifact(source_file_hash="d" * 64, page_count=1)
+
+        async def persist_artifact_to_legacy_tables(self, _version_id, _artifact):
+            events.append("persist_legacy_cells")
             return {"success": True, "tables_count": 2, "unknown_tables": []}
 
     class _Recognizer:
@@ -359,6 +379,10 @@ def _install_runner_stubs(
     monkeypatch.setattr(runner, "_ensure_document_version", _ensure_document_version)
     monkeypatch.setattr(runner, "_allocate_material_slot", _allocate_material_slot)
     monkeypatch.setattr(runner, "PDFParser", _Parser)
+    monkeypatch.setattr(runner, "find_cached_parse_run", _find_cached_parse_run)
+    monkeypatch.setattr(runner, "load_parse_artifact", _load_parse_artifact)
+    monkeypatch.setattr(runner, "persist_parse_artifact", _persist_parse_artifact)
+    monkeypatch.setattr(runner, "persist_facts_and_evidence", _persist_facts_and_evidence)
     monkeypatch.setattr(runner, "TableRecognizer", _Recognizer)
     monkeypatch.setattr(runner, "FiscalFactMaterializer", _Materializer)
     monkeypatch.setattr(runner, "PSSharedSchemaSync", _PsSync)
@@ -390,10 +414,15 @@ async def test_material_slot_is_allocated_before_pdf_parsing(monkeypatch, tmp_pa
         metadata=_ingest_metadata(pdf_path),
     )
 
-    assert events[:3] == [
+    # ZC-01 起：解析 = build_parse_artifact（唯一一次开 PDF），
+    # 旧表写入由 artifact 适配产出，统一存储随后幂等落库
+    assert events[:6] == [
         "ensure_document_version",
         "allocate_material_slot",
-        "parse_pdf",
+        "parse_cache_lookup",
+        "build_parse_artifact",
+        "persist_unified_storage",
+        "persist_legacy_cells",
     ], f"主链路顺序不对: {events}"
     assert calls["allocate"] == 1, "一份分析只允许分配一次槽位"
     assert payload["status"] == "done"
@@ -428,7 +457,7 @@ async def test_parser_failure_keeps_material_slot_context(monkeypatch, tmp_path)
     # 解析失败不得触发第二次分配：槽位不依赖解析结果
     assert calls["allocate"] == 1
     assert events.count("allocate_material_slot") == 1
-    assert events.count("parse_pdf") == 1
+    assert events.count("build_parse_artifact") == 1
 
 
 async def test_material_slot_failure_does_not_block_structured_ingest(monkeypatch, tmp_path):

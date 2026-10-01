@@ -289,6 +289,9 @@ def _safe_write(job_dir: Path, payload: Dict[str, Any]) -> None:
                 )
 
         runtime.write_json_file(status_file, merged_payload)
+        # ZC-01：终态结果额外写入版本化快照 + 原子当前指针；
+        # 重分析追加新版本目录，不删除旧快照。失败不影响主链路。
+        runtime.write_analysis_revision_snapshot(job_dir, merged_payload)
     except Exception as e:
         (job_dir / "status_error.log").write_text(str(e), encoding="utf-8")
 
@@ -1136,14 +1139,38 @@ async def _run_pipeline_body(job_dir: Path) -> None:
         )
 
         def _sync_parse_pdf():
+            # ZC-01：线程池路径同样在一次 pdfplumber.open 内产出统一解析对象
             p_texts = []
             p_tables = []
             f_size = pdf_path.stat().st_size
+            import hashlib
+
+            from src.services.pdf_parser import PDFParser as _CellParser
+
+            digest = hashlib.sha256()
+            with pdf_path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            file_hash = digest.hexdigest()
+            cell_parser = _CellParser(None)
+            artifact_payload = None
             with pdfplumber.open(str(pdf_path)) as pdf:
                 for p in pdf.pages:
                     p_texts.append(_extract_visible_text_from_page(p))
                     p_tables.append(_extract_tables_from_page(p))
-            return p_texts, p_tables, f_size
+                # ZC-01：同一句柄额外产出统一解析对象。产物失败不阻断主链
+                # 解析——结构化入库会回退到独立解析（与旧行为一致）。
+                try:
+                    artifact = cell_parser.build_parse_artifact_from_handle(
+                        pdf, file_hash=file_hash
+                    )
+                    artifact_payload = artifact.to_dict()
+                except Exception:
+                    logger.warning(
+                        "unified parse artifact build failed; ingest will parse independently",
+                        extra=safe_log_extra({"job_id": job_dir.name}),
+                    )
+            return p_texts, p_tables, f_size, artifact_payload
 
         loop = asyncio.get_running_loop()
         loop = asyncio.get_running_loop()
@@ -1185,10 +1212,24 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             page_texts = parsed["page_texts"]
             page_tables = parsed["page_tables"]
             filesize = parsed["filesize"]
+            parse_artifact_payload = parsed.get("parse_artifact")
         else:
-            page_texts, page_tables, filesize = await loop.run_in_executor(
-                None, _sync_parse_pdf
+            page_texts, page_tables, filesize, parse_artifact_payload = (
+                await loop.run_in_executor(None, _sync_parse_pdf)
             )
+        # 统一解析对象（ZC-01）：结构化入库消费它，不再重开 PDF 第二遍
+        parse_artifact_obj = None
+        if isinstance(parse_artifact_payload, dict):
+            try:
+                from src.schemas.parse_artifact import ParseArtifact as _ParseArtifact
+
+                parse_artifact_obj = _ParseArtifact.from_dict(parse_artifact_payload)
+            except Exception:
+                logger.warning(
+                    "parse artifact deserialization failed; ingest will parse independently",
+                    extra=safe_log_extra({"job_id": job_dir.name}),
+                )
+                parse_artifact_obj = None
 
         # 扫描页/低文本页检测：本轮只检测不 OCR，结果先落状态供前端与后续门禁使用
         page_assessment = _assess_page_extraction(page_texts, page_tables)
@@ -1612,6 +1653,7 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                     job_id=job_dir.name,
                     pdf_path=pdf_path,
                     metadata=structured_metadata,
+                    parse_artifact=parse_artifact_obj,
                 )
             else:
                 structured_ingest_summary = {
@@ -1628,6 +1670,7 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                 job_id=job_dir.name,
                 pdf_path=pdf_path,
                 metadata=structured_metadata,
+                parse_artifact=parse_artifact_obj,
             )
         runtime.write_structured_ingest_payload(job_dir, structured_ingest_summary)
         result["meta"]["structured_ingest"] = structured_ingest_summary

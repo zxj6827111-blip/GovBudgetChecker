@@ -17,7 +17,14 @@ from src.db.migrations import run_migrations
 from src.schemas.organization import Organization
 from src.services.fiscal_fact_materializer import FiscalFactMaterializer
 from src.services.org_storage import get_org_storage
-from src.services.pdf_parser import PDFParser
+from src.services.parse_artifact_store import (
+    find_cached_parse_run,
+    load_parse_artifact,
+    persist_facts_and_evidence,
+    persist_parse_artifact,
+)
+from src.services.pdf_parser import PARSER_FINGERPRINT, PDFParser
+from src.schemas.parse_artifact import ParseArtifact
 from src.services.ps_schema_sync import PSSharedSchemaSync
 from src.services.table_recognizer import TableRecognizer
 from src.utils.report_year import parse_report_year
@@ -143,6 +150,9 @@ async def run_structured_ingest(
     job_id: str,
     pdf_path: Path,
     metadata: Dict[str, Any],
+    *,
+    parse_artifact: Optional["ParseArtifact"] = None,
+    parse_config_fingerprint: str = "",
 ) -> Dict[str, Any]:
     """结构化入库主链路。
 
@@ -154,6 +164,11 @@ async def run_structured_ingest(
     错误返回必须保留已经建立的 ``document_version_id`` 与 ``material_slot``：
     没有这两个字段，调用方只能看到一个"什么都没发生"的失败，
     无从判断材料到底进没进台账。
+
+    ZC-01（SYS-01）：``parse_artifact`` 允许调用方传入主链已生成的统一解析
+    对象——入库只消费该对象，**不再重开 PDF 解析第二遍**。未传入时先查
+    解析缓存（按原件哈希 + 解析器 + 配置指纹），命中即从统一存储重建；
+    都没有才实际解析一次并落库。无数据库时整体 skipped 的行为不变。
     """
     if not await ensure_structured_ingest_ready():
         return {
@@ -211,8 +226,55 @@ async def run_structured_ingest(
             document_version_id=version_id,
         )
 
+        # ---- ZC-01：一次解析、全程消费 ----
+        # 1) 查解析缓存（原件哈希+解析器+配置+OCR 指纹）：命中则复用既有
+        #    解析运行，既不重开 PDF 也不新建运行；
+        # 2) 调用方已带 artifact（主链产物）→ 直接消费，不重开 PDF；
+        # 3) 都没有 → 实际解析一次，并把产物写入统一存储（幂等）。
+        # 旧表由 artifact 适配写入（persist_artifact_to_legacy_tables）。
+        parse_run_id: Optional[int] = None
+        cached_run_id = await find_cached_parse_run(
+            conn,
+            document_version_id=version_id,
+            source_file_hash=checksum,
+            parser_fingerprint=PARSER_FINGERPRINT,
+            config_fingerprint=parse_config_fingerprint,
+            ocr_model_fingerprint=None,
+        )
+        if cached_run_id is not None:
+            parse_run_id = cached_run_id
+            if parse_artifact is None:
+                parse_artifact = await load_parse_artifact(conn, cached_run_id)
+
         parser = PDFParser(conn)
-        parse_result = await parser.parse_pdf(str(pdf_path), version_id)
+        if parse_artifact is None:
+            # 缓存未命中且调用方未带产物：这是唯一一次真正打开 PDF
+            parse_artifact = parser.build_parse_artifact(
+                str(pdf_path), config_fingerprint=parse_config_fingerprint
+            )
+            # 以真实原件哈希为准（metadata.checksum 缺失时 checksum 即文件哈希）
+            parse_artifact.source_file_hash = checksum
+
+        if parse_run_id is None:
+            try:
+                parse_run_id = await persist_parse_artifact(
+                    conn,
+                    parse_artifact,
+                    document_version_id=version_id,
+                    org_name=org_name,
+                    fiscal_year=fiscal_year,
+                )
+            except Exception:
+                # 统一存储写入失败不阻断既有入库链路，但必须留痕
+                logger.exception(
+                    "persist_parse_artifact failed for document_version %s", version_id
+                )
+                parse_run_id = None
+
+        # 旧表兼容写入：由统一解析对象适配产出，不再重开 PDF（ZC-01 / SYS-01）
+        parse_result = await parser.persist_artifact_to_legacy_tables(
+            version_id, parse_artifact
+        )
 
         recognizer = TableRecognizer(conn)
         instances = await recognizer.recognize_tables(version_id)
@@ -220,6 +282,30 @@ async def run_structured_ingest(
 
         materializer = FiscalFactMaterializer(conn)
         materialize_result = await materializer.materialize(version_id)
+
+        # 统一事实：从 artifact 直接物化 FiscalFact（含身份+归一值+证据），
+        # 与旧表物化并行落库；两条路径来自同一份解析对象（不再二次解析）。
+        fiscal_facts_count = 0
+        if parse_run_id is not None:
+            try:
+                fiscal_facts = _materialize_fiscal_facts_from_artifact(
+                    parse_artifact,
+                    org_name=org_name,
+                    fiscal_year=fiscal_year,
+                    doc_type=doc_type,
+                    file_hash=checksum,
+                )
+                fiscal_facts_count = await persist_facts_and_evidence(
+                    conn,
+                    parse_run_id=parse_run_id,
+                    facts=fiscal_facts,
+                    file_hash=checksum,
+                )
+            except Exception:
+                logger.exception(
+                    "unified fact materialization failed for document_version %s",
+                    version_id,
+                )
         document_profile = _detect_document_profile(pdf_path)
         ps_sync_summary: Dict[str, Any]
         try:
@@ -269,6 +355,9 @@ async def run_structured_ingest(
             "tables_count": int(parse_result.get("tables_count") or 0),
             "recognized_tables": len(instances),
             "facts_count": int(materialize_result.get("facts_count") or 0),
+            # 统一事实存储（ZC-01）：FiscalFact 身份+归一值+证据的落库条数
+            "unified_facts_count": int(fiscal_facts_count or 0),
+            "parse_run_id": parse_run_id,
             "unknown_tables": parse_result.get("unknown_tables") or [],
             "missing_optional_tables": missing_optional_tables,
             "low_confidence_tables": materialize_result.get("low_confidence_tables") or [],
@@ -862,3 +951,90 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _materialize_fiscal_facts_from_artifact(
+    artifact: "ParseArtifact",
+    *,
+    org_name: Optional[str],
+    fiscal_year: Optional[int],
+    doc_type: Optional[str],
+    file_hash: str,
+):
+    """把统一解析对象物化为 FiscalFact 列表（ZC-01 / SYS-15/16）。
+
+    每个逻辑表实例独立物化：实例身份（instance_uid）+ 主体/年度 + 资金范围
+    进入事实身份，同文档同种表的不同实例不互相覆盖。
+    """
+    from src.services.fiscal_fact_materializer import FiscalFactMaterializer
+    from src.services.table_recognizer import TABLE_RECOGNITION_RULES
+
+    materializer = FiscalFactMaterializer(None)
+    budget_stage = {"budget": "年初预算", "final": "决算"}.get(
+        str(doc_type or "").strip().lower(), None
+    )
+    facts = []
+    for instance in artifact.logical_tables:
+        fragment = next(
+            (
+                item
+                for item in artifact.table_fragments
+                if item.fragment_uid in instance.fragment_uids
+            ),
+            None,
+        )
+        if fragment is None:
+            continue
+        mappings = (
+            [dict(item) for item in instance.column_mappings]
+            or _canonical_mappings_for_fragment(fragment, instance.table_code)
+        )
+        facts.extend(
+            materializer.build_fiscal_facts_for_table(
+                fragment,
+                mappings,
+                org_name=instance.org_name or org_name,
+                fiscal_year=instance.fiscal_year or fiscal_year,
+                period="本年",
+                budget_stage=budget_stage,
+                instance_uid=instance.instance_uid,
+                file_hash=file_hash,
+            )
+        )
+    return facts
+
+
+def _canonical_mappings_for_fragment(fragment: Any, table_code: str) -> List[Dict[str, Any]]:
+    """按表片段表头与九表规则的 measure_aliases 推导列映射（纯函数）。
+
+    与 TableRecognizer 的语义一致：canonical_measure 由表头别名匹配得到，
+    而不是按列序号猜。匹配不到的列不进入映射。
+    """
+    from src.services.fiscal_table_rules import NINE_TABLE_RULES
+
+    rule = NINE_TABLE_RULES.get(table_code)
+    if rule is None or not fragment.rows:
+        return []
+
+    header_rows = [row for row in fragment.rows[:3] if row]
+    if not header_rows:
+        return []
+    col_count = max(len(row) for row in header_rows)
+    headers = [
+        "".join(str(row[col]) for row in header_rows if col < len(row)).strip()
+        for col in range(col_count)
+    ]
+    mappings: List[Dict[str, Any]] = []
+    for measure, aliases in (rule.measure_aliases or {}).items():
+        for col, header_text in enumerate(headers):
+            if any(alias and str(alias) in header_text for alias in aliases):
+                mappings.append(
+                    {
+                        "source_col_idx": col,
+                        "canonical_measure": measure,
+                        "source_col_name": header_text,
+                        "confidence": 0.9,
+                    }
+                )
+                break
+    return mappings

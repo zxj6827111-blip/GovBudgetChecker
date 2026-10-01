@@ -283,7 +283,15 @@ async def _run_pipeline_capturing_metadata(
         return_value={"status": "skipped", "review_item_count": 0, "review_items": []}
     )
 
-    async def _capture(*, job_id: str, pdf_path: Path, metadata: Dict[str, Any]):
+    # ZC-01：run_structured_ingest 新增 parse_artifact 关键字参数——
+    # 管线现在把主链统一解析对象一并交给入库（本用例只关心 metadata 画像）
+    async def _capture(
+        *,
+        job_id: str,
+        pdf_path: Path,
+        metadata: Dict[str, Any],
+        **_kwargs,
+    ):
         captured.update(metadata)
         return await ingest_mock(job_id=job_id, pdf_path=pdf_path, metadata=metadata)
 

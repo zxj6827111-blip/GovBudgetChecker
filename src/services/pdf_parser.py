@@ -4,7 +4,7 @@ Structured PDF parser for fiscal tables.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 import json
 import logging
 from pathlib import Path
@@ -68,37 +68,28 @@ NUMERIC_PATTERN = re.compile(
 TITLE_LINE_PATTERN = re.compile(r"(预算表|决算表|总表|经费预算表|经费支出表|分类预算表)")
 TITLE_NOISE_PATTERN = re.compile(r"^(编制部门|编制单位|单位[:：])")
 
-
-@dataclass
-class ParsedCell:
-    row_idx: int
-    col_idx: int
-    raw_text: str
-    normalized_text: str
-    numeric_value: Optional[float]
-    page_number: int
-    bbox: Optional[Tuple[float, float, float, float]]
-    is_header: bool
-    confidence: float
-    unit_hint: Optional[str]
-    extraction_method: str
-    row_span: int = 1
-    col_span: int = 1
+#: 解析器指纹：表抽取策略组合变化时必须更新（缓存按指纹失效）
+PARSER_FINGERPRINT = "pdfplumber-cells-v2-zc01"
 
 
-@dataclass
-class ParsedTable:
-    table_code: str
-    title: str
-    page_number: int
-    table_index: int
-    bbox: Tuple[float, float, float, float]
-    header_row_count: int
-    confidence: float
-    extraction_method: str
-    unit_hint: Optional[str]
-    rows: List[List[str]]
-    cells: List[ParsedCell]
+# ---------------------------------------------------------------------------
+# 统一解析契约（ZC-01）：ParsedCell/ParsedTable 的权威定义收敛到
+# src/schemas/parse_artifact.py，规则、证据、入库共用同一套对象。
+# 这里按原导入路径兼容导出，既有消费方 import 路径不变。
+# ---------------------------------------------------------------------------
+from src.schemas.parse_artifact import (  # noqa: E402,F401
+    CellPresence,
+    CheckReceipt,
+    EvidenceRef,
+    FiscalFact,
+    LogicalTableInstance,
+    ParseArtifact,
+    ParsePageState,
+    ParsedCell,
+    ParsedTable,
+    dumps_decimal,
+    parse_decimal,
+)
 
 
 class PDFParser:
@@ -154,6 +145,137 @@ class PDFParser:
                             low_confidence_tables += 1
         except Exception as exc:
             logger.exception("Failed to parse PDF %s", pdf_path)
+            errors.append(str(exc))
+
+        return {
+            "success": not errors,
+            "tables_count": tables_count,
+            "cells_count": cells_count,
+            "recognized_tables": recognized_tables,
+            "unknown_tables": unknown_tables,
+            "low_confidence_tables": low_confidence_tables,
+            "errors": errors or None,
+        }
+
+    def build_parse_artifact(
+        self,
+        pdf_path: str,
+        *,
+        config_fingerprint: str = "",
+        ocr_model_fingerprint: Optional[str] = None,
+    ) -> ParseArtifact:
+        """打开一次 PDF，产出统一解析对象（不访问数据库，纯函数式）。
+
+        ZC-01（SYS-01）：规则、证据、结构化入库共用这一份产物；
+        之后的持久化、物化都只消费 artifact，不再重开 PDF。
+        """
+        import hashlib
+
+        import pdfplumber
+
+        path = Path(pdf_path)
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {pdf_path}")
+
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        file_hash = digest.hexdigest()
+
+        with pdfplumber.open(path) as pdf:
+            return self.build_parse_artifact_from_handle(
+                pdf,
+                file_hash=file_hash,
+                config_fingerprint=config_fingerprint,
+                ocr_model_fingerprint=ocr_model_fingerprint,
+            )
+
+    def build_parse_artifact_from_handle(
+        self,
+        pdf: Any,
+        *,
+        file_hash: str,
+        config_fingerprint: str = "",
+        ocr_model_fingerprint: Optional[str] = None,
+    ) -> ParseArtifact:
+        """从已打开的 pdfplumber 句柄构建解析对象（供子进程复用同一次打开）。"""
+        page_states: List[ParsePageState] = []
+        fragments: List[ParsedTable] = []
+
+        page_count = len(pdf.pages)
+        for page_number, page in enumerate(pdf.pages, start=1):
+            page_text = (page.extract_text() or "").strip()
+            page_states.append(
+                ParsePageState(
+                    page_number=page_number,
+                    has_text_layer=bool(page_text),
+                    text_chars=len(page_text),
+                    is_scanned=not bool(page_text),
+                )
+            )
+            fragments.extend(self._extract_tables_from_page(page, page_number))
+
+        merged = self._coalesce_tables(fragments)
+        return ParseArtifact(
+            source_file_hash=file_hash,
+            parser_name="pdfplumber",
+            parser_fingerprint=PARSER_FINGERPRINT,
+            config_fingerprint=config_fingerprint,
+            ocr_model_fingerprint=ocr_model_fingerprint,
+            page_count=page_count,
+            page_states=page_states,
+            # 合并后的逻辑表作为片段承载（ZC-02 再把片段与实例分开建模）
+            table_fragments=merged,
+            logical_tables=[
+                LogicalTableInstance(
+                    instance_uid=table.fragment_uid,
+                    table_code=table.table_code,
+                    title=table.title,
+                    fragment_uids=[table.fragment_uid],
+                    page_start=table.page_number,
+                    page_end=table.page_number,
+                    row_count=len(table.rows),
+                    confidence=table.confidence,
+                )
+                for table in merged
+            ],
+        )
+
+    async def persist_artifact_to_legacy_tables(
+        self, document_version_id: int, artifact: ParseArtifact
+    ) -> Dict[str, Any]:
+        """把统一解析对象适配写入旧表（fiscal_table_cells），并返回 parse_pdf 同构摘要。
+
+        ZC-01（SYS-01）：结构化入库不再重开 PDF；旧表保留历史读取与既有
+        消费方，写入内容来自 artifact 的同一批单元格——两条存储路径共享
+        一份解析事实，不产生第二套解析语义。
+        """
+        await self._clear_existing_cells(document_version_id)
+
+        tables_count = 0
+        cells_count = 0
+        recognized_tables = 0
+        low_confidence_tables = 0
+        unknown_tables: List[str] = []
+        errors: List[str] = []
+
+        try:
+            for table in artifact.table_fragments:
+                await self._save_table_cells(document_version_id, table)
+                tables_count += 1
+                cells_count += len(table.cells)
+                if table.table_code.startswith("UNKNOWN_"):
+                    unknown_tables.append(table.table_code)
+                else:
+                    recognized_tables += 1
+                if table.confidence < 0.8:
+                    low_confidence_tables += 1
+        except Exception as exc:
+            logger.exception(
+                "Failed to persist artifact to legacy tables for version %s",
+                document_version_id,
+            )
             errors.append(str(exc))
 
         return {

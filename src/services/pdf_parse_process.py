@@ -31,6 +31,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 import multiprocessing
 import os
 import time
@@ -201,6 +204,21 @@ def _pdf_parse_worker(
         text_chars = 0
         table_cells = 0
 
+        # ZC-01（SYS-01）：同一次 pdfplumber.open 同时产出规则用的
+        # page_texts/page_tables 与统一解析对象（单元格级），后续结构化入库
+        # 只消费该对象，不再第二次打开 PDF。
+        import hashlib
+
+        from src.schemas.parse_artifact import ParseArtifact
+        from src.services.pdf_parser import PARSER_FINGERPRINT, PDFParser
+
+        cell_parser = PDFParser(None)
+        digest = hashlib.sha256()
+        with Path(pdf_path).open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        file_hash = digest.hexdigest()
+
         with pdfplumber.open(pdf_path) as pdf:
             page_count = len(pdf.pages)
             if page_count > max_pages:
@@ -227,12 +245,26 @@ def _pdf_parse_worker(
                 page_texts.append(text)
                 page_tables.append(tables)
 
+            try:
+                parse_artifact = cell_parser.build_parse_artifact_from_handle(
+                    pdf,
+                    file_hash=file_hash,
+                )
+            except BaseException:
+                # 产物构建失败不否定文本/表格抽取本身；结构化入库回退独立解析
+                logger.warning(
+                    "in-process parse artifact build failed; ingest will parse independently"
+                )
+                parse_artifact = None
+
         connection.send(
             (
                 "ok",
                 {
                     "page_texts": page_texts,
                     "page_tables": page_tables,
+                    "parse_artifact": parse_artifact.to_dict() if parse_artifact else None,
+                    "parse_artifact_fingerprint": PARSER_FINGERPRINT,
                     "filesize": file_size,
                     "page_count": len(page_texts),
                     "text_chars": text_chars,

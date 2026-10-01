@@ -4,19 +4,42 @@ Materialize structured fiscal facts from parsed table cells.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 import json
 import logging
 import re
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 import asyncpg
 
+from src.engine.amount_math import normalize_amount_to_wan
+from src.schemas.parse_artifact import EvidenceRef, FiscalFact, ParsedTable, dumps_decimal
 from src.services.fiscal_table_rules import NINE_TABLE_RULES, normalize_text
 
 logger = logging.getLogger(__name__)
 
 CODE_PATTERN = re.compile(r"^\d{3,12}$")
+
+#: 表种 → 资金范围（只按表种语义映射，不做无据推断）
+_FUND_SCOPE_BY_TABLE_KEYWORD = (
+    ("基金", "government_fund"),
+    ("国有资本", "state_owned"),
+)
+
+
+def infer_fund_scope(table_code: str, title: str = "") -> Optional[str]:
+    """按表种/表题关键词推断资金范围；无证据时返回 None（不猜）。"""
+    haystack = f"{table_code} {title}"
+    if "基金" in haystack or table_code.startswith("FIN_08"):
+        return "government_fund"
+    if "国有资本" in haystack or table_code.startswith("FIN_09"):
+        return "state_owned"
+    if "一般公共预算" in haystack or table_code.startswith(
+        ("BUD_T2", "BUD_T3", "BUD_T4", "BUD_T5", "FIN_05")
+    ):
+        return "general_public_budget"
+    return None
 
 
 @dataclass
@@ -420,3 +443,135 @@ class FiscalFactMaterializer:
             VALUES ({placeholders})
         """
         await self.conn.execute(query, *values)
+
+    # ------------------------------------------------------------------
+    # ZC-01：统一财政事实构建（身份 + 原值 + 万元归一值 + 证据）
+    # ------------------------------------------------------------------
+    def build_fiscal_facts_for_table(
+        self,
+        table: ParsedTable,
+        mappings: Sequence[Mapping[str, Any]],
+        *,
+        org_name: Optional[str] = None,
+        org_scope: Optional[str] = None,
+        fiscal_year: Optional[int] = None,
+        period: Optional[str] = "本年",
+        budget_stage: Optional[str] = None,
+        instance_uid: Optional[str] = None,
+        file_hash: str = "",
+    ) -> List[FiscalFact]:
+        """从统一解析对象构建 FiscalFact 列表（不访问数据库，纯函数式）。
+
+        - 事实身份包含主体/年度/资金范围/指标/科目/表实例；金额不参与身份。
+        - 原始值（raw_text）与单位保留不改写；normalized_value 为万元 Decimal。
+        - 每条事实携带证据引用（单元格原文 + 页码 + bbox），
+          证据默认 ``verification_status="unverified"``——"已验证"只能由
+          真实核验（ZC-00 证据门/人工）写入，不随解析自动获得。
+        """
+        if table.table_code not in NINE_TABLE_RULES:
+            return []
+
+        legacy_facts = self.build_facts_for_table(
+            table_code=table.table_code,
+            cells=[dataclasses.asdict(cell) for cell in table.cells],
+            mappings=[dict(mapping) for mapping in mappings],
+            table_confidence=table.confidence,
+        )
+        if not legacy_facts:
+            return []
+
+        rule = NINE_TABLE_RULES[table.table_code]
+        fund_scope = infer_fund_scope(table.table_code, table.title)
+
+        # 行→单元格索引，用于给每条事实定位证据与原始字符串
+        cells_by_row: Dict[int, List[Any]] = {}
+        for cell in table.cells:
+            cells_by_row.setdefault(cell.row_idx, []).append(cell)
+
+        facts: List[FiscalFact] = []
+        for legacy in legacy_facts:
+            row_cells = cells_by_row.get(legacy.row_order, [])
+            measure_cell = next(
+                (
+                    cell
+                    for cell in row_cells
+                    if cell.numeric_value is not None
+                    and abs(cell.numeric_value - float(legacy.amount)) < 1e-9
+                ),
+                None,
+            )
+            raw_value = (
+                str(measure_cell.raw_text).strip()
+                if measure_cell is not None and str(measure_cell.raw_text or "").strip()
+                else None
+            )
+            unit = None
+            normalized = None
+            if measure_cell is not None:
+                unit = measure_cell.unit_hint or None
+                # 优先用单元格已归一的值；无单位时不猜口径
+                if measure_cell.normalized_value_wan is not None:
+                    normalized = measure_cell.normalized_value_wan
+                elif raw_value and unit:
+                    normalized = normalize_amount_to_wan(raw_value, unit)
+            if normalized is None:
+                # 兜底：表级 unit_hint（"单位：万元"行）对字面值归一
+                unit = unit or table.unit_hint
+                normalized = normalize_amount_to_wan(float(legacy.amount), unit) if unit else None
+
+            raw_text_for_precision = raw_value or ""
+            decimals = raw_text_for_precision.split(".")[-1] if "." in raw_text_for_precision else ""
+            evidence = EvidenceRef(
+                file_hash=file_hash,
+                physical_page=legacy.source_page_number,
+                source_cell_id=(
+                    f"{table.fragment_uid}:r{measure_cell.row_idx}c{measure_cell.col_idx}"
+                    if measure_cell is not None
+                    else None
+                ),
+                quote=raw_value or "",
+                bbox=measure_cell.bbox if measure_cell is not None else None,
+                source_method="native_text",
+                verification_status="unverified",
+                location_level="exact_cell" if measure_cell is not None and measure_cell.bbox else "unresolved",
+            )
+
+            facts.append(
+                FiscalFact(
+                    fact_uid=f"{table.fragment_uid}:{legacy.row_order}:{legacy.measure}",
+                    indicator=str(legacy.measure),
+                    raw_value=raw_value,
+                    unit=unit,
+                    normalized_value=normalized,
+                    display_precision=len(decimals) if decimals else (0 if raw_value else None),
+                    org_name=org_name,
+                    org_scope=org_scope,
+                    fiscal_year=fiscal_year,
+                    period=period,
+                    fund_scope=fund_scope,
+                    budget_stage=budget_stage,
+                    subject_code=legacy.classification_code,
+                    subject_name=legacy.classification_name or None,
+                    classification_level=legacy.classification_level,
+                    parent_subject_code=legacy.parent_classification_code,
+                    hierarchy_path=list(legacy.hierarchy_path),
+                    table_code=table.table_code,
+                    instance_uid=instance_uid,
+                    row_order=legacy.row_order,
+                    recognition_status=(
+                        "low_confidence"
+                        if table.confidence < 0.8 or legacy.parse_confidence < 0.8
+                        else "unverified"
+                    ),
+                    confidence=legacy.parse_confidence,
+                    evidence_ids=[evidence.evidence_id],
+                    extra_dims={
+                        "classification_type": legacy.classification_type,
+                        "statement_code": legacy.statement_code,
+                        "source_header": (legacy.extra_dims or {}).get("source_header"),
+                        "unit_hint": (legacy.extra_dims or {}).get("unit_hint"),
+                        "rule_classification": rule.classification_type,
+                    },
+                )
+            )
+        return facts
