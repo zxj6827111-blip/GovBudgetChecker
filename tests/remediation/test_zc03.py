@@ -21,8 +21,24 @@ def test_canonical_registry_routes_every_production_family() -> None:
     assert len(select_rules("budget")) == 25
     assert len(select_rules("final")) == 65
     assert len(select_rules("unknown")) == 8
-    assert all(item["evaluation_basis"] == "legacy_document" for item in catalog["rules"])
-    assert all(item["fact_migration"] == "pending" for item in catalog["rules"])
+    # AC-01：已迁移规则以统一事实为输入（fact_inputs 非空、migration=complete），
+    # 其余规则仍是 legacy_document/pending——目录必须如实区分两种口径。
+    migrated = {
+        "BUD-107",
+        "CMM-001",
+        "V33-103",
+        "V33-104",
+        "V33-214",
+    }
+    for item in catalog["rules"]:
+        if item["rule_id"] in migrated:
+            assert item["evaluation_basis"] == "fiscal_fact", item
+            assert item["fact_migration"] == "complete", item
+            assert item["fact_inputs"], item
+        else:
+            assert item["evaluation_basis"] == "legacy_document", item
+            assert item["fact_migration"] == "pending", item
+            assert item["fact_inputs"] == [], item
     assert all("implementation" in item and "obligation_ids" in item for item in catalog["rules"])
 
 

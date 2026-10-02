@@ -134,11 +134,7 @@ def test_fixed_zc02_next_page_different_table_merged_as_continuation() -> None:
         assert row not in rows, "另一张表的行不得被拼进目标表"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="SYS-03：BUD-107 全文首次匹配金额，上年说明会与本年表比较（归属 ZC-03 事实绑定）",
-)
-def test_xfail_previous_year_narrative_misbinding() -> None:
+def test_fixed_ac03_previous_year_narrative_misbinding() -> None:
     """上年 213012 万元出现在本年材料前部：不得发生跨年比较。"""
     payload = pytest.importorskip("json")
     fixture_path = REPO_ROOT / "tests" / "fixtures" / "jianguanwei_budget_page_data.json"
@@ -187,11 +183,7 @@ def test_fixed_zc02_three_public_column_order() -> None:
     ), f"合法列序不得产生错配报警：{output['issues']}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="SYS-05：三公只核对合计即记 pass，分项未比对被假通过（归属 ZC-03 子检查回执）",
-)
-def test_xfail_partial_comparison_reported_pass() -> None:
+def test_fixed_ac04_partial_comparison_reported_pass() -> None:
     """文字只披露三公合计 30、表内分项完整：合计可完成，分项子检查不得假通过。
 
     复现自 rules_repro 反例 5：正文风格与反例 4 相同但只写合计金额，
@@ -222,11 +214,7 @@ def test_xfail_partial_comparison_reported_pass() -> None:
             )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUD-001 固定九表与 portable 条件性政策冲突（归属 ZC-03 条件性资金规则）",
-)
-def test_xfail_project_policy_conditional_tables() -> None:
+def test_fixed_ac05_conditional_tables_policy() -> None:
     """材料无政府性基金/国资经营内容：不得无条件报缺表。"""
     from src.engine.budget_rules import BUDGET_TABLE_SPECS
 

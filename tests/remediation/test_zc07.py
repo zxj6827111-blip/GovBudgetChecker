@@ -168,6 +168,26 @@ def test_dataset_binds_replay_to_same_document_hash_and_mode(tmp_path):
     assert not result["metrics_ready"]
 
 
+def _real_e2e_files(tmp_path, job_id: str) -> dict:
+    """AC-14：E2E 证据夹具必须可核验——真实源 PDF/导出/非空 trace 及其哈希。"""
+    source = tmp_path / f"source-{job_id}.pdf"
+    source.write_bytes(b"%PDF-1.4 real source bytes\n")
+    export = tmp_path / f"export-{job_id}.json"
+    export.write_text('{"issues": []}\n', encoding="utf-8")
+    trace = tmp_path / f"trace-{job_id}.json"
+    trace.write_text(
+        json.dumps({"job_id": job_id, "stages": ["upload", "worker", "ingest", "review"]}),
+        encoding="utf-8",
+    )
+    return {
+        "source_pdf_path": str(source),
+        "source_pdf_sha256": zc07.sha256_file(source),
+        "export_path": str(export),
+        "export_sha256": zc07.sha256_file(export),
+        "trace_path": str(trace),
+    }
+
+
 def test_e2e_evidence_requires_all_real_chain_flags_and_artifact_hash(tmp_path):
     artifact = tmp_path / "trace.json"
     artifact.write_text("{}\n", encoding="utf-8")
@@ -188,8 +208,7 @@ def test_e2e_evidence_requires_all_real_chain_flags_and_artifact_hash(tmp_path):
                     "api_build_revision": "test-revision",
                     "worker_build_revision": "test-revision",
                     "postgres_identity": "isolated-test-db",
-                    "source_pdf_sha256": "a" * 64,
-                    "export_sha256": "b" * 64,
+                    **_real_e2e_files(tmp_path, f"job-{name}"),
                     "reviewed_by": ["reviewer-1"],
                     "status": "passed",
                     "known_issue_detected": True,
@@ -245,8 +264,7 @@ def test_e2e_rejects_correction_without_completed_reanalysis(tmp_path):
             "api_build_revision": "test-revision",
             "worker_build_revision": "test-revision",
             "postgres_identity": "isolated-test-db",
-            "source_pdf_sha256": "a" * 64,
-            "export_sha256": "b" * 64,
+            **_real_e2e_files(tmp_path, f"job-{name}"),
             "reviewed_by": ["reviewer-1"],
             "status": "passed",
             "known_issue_detected": True,

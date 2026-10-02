@@ -1236,6 +1236,7 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                 )
                 parse_artifact_obj = None
 
+
         # 扫描页/低文本页检测：结果先落状态供前端与后续门禁使用
         page_assessment = _assess_page_extraction(page_texts, page_tables)
         # OCR（ZC-02 / SYS-10）：默认关闭；显式启用且存在扫描页时按页补识别。
@@ -1243,6 +1244,85 @@ async def _run_pipeline_body(job_dir: Path) -> None:
         ocr_summary = await maybe_ocr_scanned_pages(
             str(pdf_path), page_assessment, parse_artifact_obj
         )
+
+        # ZC-02（AC-07）：OCR 候选表经列身份/关键数字/置信度复验后晋升为
+        # 可检查事实——与原生表共用同一事实物化路径；未通过者保持候选
+        # （usable_for_rules=false），继续待人工复核。
+        ocr_promotion_summary = None
+        if (
+            parse_artifact_obj is not None
+            and isinstance(ocr_summary, dict)
+            and (ocr_summary.get("table_candidates") or 0) > 0
+        ):
+            try:
+                from src.services.ocr_fact_promotion import promote_ocr_candidates
+
+                ocr_promotion_summary = promote_ocr_candidates(
+                    parse_artifact_obj, file_hash=parse_artifact_obj.source_file_hash
+                )
+                ocr_summary["promotion"] = ocr_promotion_summary
+                if ocr_promotion_summary.get("usable_for_rules"):
+                    ocr_summary["usable_for_rules"] = True
+            except Exception as exc:
+                logger.warning(
+                    "OCR candidate promotion failed; candidates stay review-only",
+                    extra=safe_log_extra({"job_id": job_dir.name, "error": str(exc)}),
+                )
+        # ZC-01（AC-01）：规则执行前生成统一财政事实。与结构化入库共用同一
+        # 物化实现（fact_context），规则、AI、证据、入库消费同一版本；
+        # 不依赖数据库——无库环境同样完成事实审校。
+        fact_context_obj = None
+        fact_context_status = "not_built"
+        if parse_artifact_obj is not None:
+            try:
+                from src.engine.fact_context import build_fact_context_from_artifact
+
+                fact_context_obj = build_fact_context_from_artifact(
+                    parse_artifact_obj,
+                    org_name=organization_name,
+                    fiscal_year=fiscal_year or report_year,
+                    report_kind=report_kind,
+                    doc_type=doc_type,
+                )
+                fact_context_status = (
+                    "built" if fact_context_obj is not None else "no_facts"
+                )
+            except Exception as exc:
+                logger.warning(
+                    "fact context build failed; rules will run on legacy document",
+                    extra=safe_log_extra({"job_id": job_dir.name, "error": str(exc)}),
+                )
+                fact_context_status = "build_failed"
+        # ZC-05（AC-10）：同任务的人工校正覆盖层（重分析场景）在此应用到
+        # 事实——校正不再只是留痕，重跑后规则消费的是校正后的事实版本。
+        fact_overlay_applied = 0
+        if fact_context_obj is not None:
+            try:
+                from src.engine.fact_context import (
+                    apply_fact_overlay,
+                    parse_overlays_from_records,
+                )
+                from src.services.correction_overlay_store import read_jsonl_records
+
+                overlay_records = read_jsonl_records(job_dir / "corrections.jsonl")
+                overlays = parse_overlays_from_records(overlay_records)
+                if overlays:
+                    fact_context_obj = apply_fact_overlay(fact_context_obj, overlays)
+                    fact_overlay_applied = len(overlays)
+            except ValueError as exc:
+                # 校正指向未知事实：重分析不能带着错误覆盖层继续——
+                # 如实转待复核，由人工确认校正目标。
+                fact_overlay_applied = -1
+                logger.warning(
+                    "fact overlay rejected: %s", exc,
+                    extra=safe_log_extra({"job_id": job_dir.name}),
+                )
+                fact_context_status = "overlay_rejected_unknown_fact"
+            except Exception as exc:
+                logger.warning(
+                    "fact overlay application failed",
+                    extra=safe_log_extra({"job_id": job_dir.name, "error": str(exc)}),
+                )
         if page_assessment["low_text_page_count"]:
             logger.warning(
                 "job %s low-text pages detected: coverage=%.4f scanned=%d pages=%s",
@@ -1296,15 +1376,19 @@ async def _run_pipeline_body(job_dir: Path) -> None:
         )
 
         def _sync_build_document():
-            return build_document(
+            document = build_document(
                 path=str(pdf_path),
                 page_texts=page_texts,
                 page_tables=page_tables,
                 filesize=filesize,
             )
+            # ZC-01（AC-01）：统一事实挂上 Document——规则消费与入库同一版本
+            document.fact_context = fact_context_obj
+            return document
 
         doc = await loop.run_in_executor(None, _sync_build_document)
 
+        fact_receipts: List[Dict[str, Any]] = []
         # 双模式分析
         if dual_mode_enabled:
             _safe_write(
@@ -1332,6 +1416,7 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                 page_texts=page_texts,
                 page_tables=page_tables,
                 filesize=filesize,
+                fact_context=fact_context_obj.to_dict() if fact_context_obj is not None else None,
                 meta={
                     "started_at": started,
                     "report_kind": report_kind,
@@ -1404,6 +1489,14 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                     "parser_quality": _assess_parser_quality(
                         page_assessment, None
                     ),
+                    # ZC-01（AC-01）：统一事实版本留痕——事实构建状态、
+                    # 版本令牌与校正覆盖应用数如实上报。
+                    "fact_context": (
+                        fact_context_obj.summary()
+                        if fact_context_obj is not None
+                        else {"status": fact_context_status}
+                    ),
+                    "fact_overlay_applied": fact_overlay_applied,
                     # 版本留痕汇总（P2-02）：从各条 finding 实际写入的版本反向汇总，
                     # 不额外拍一份"声明值"，避免汇总与逐条留痕不一致。
                     "versions": summarize_finding_versions(
@@ -1493,6 +1586,9 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                 },
             )
 
+            # ZC-03（AC-04）：规则写下的关系级子检查回执进入结果元数据，
+            # 供 build_check_receipts 与质量门消费。
+            fact_receipts = []
             # 使用线程池为规则检查设置超时，避免在95%阶段长时间卡住
             provider_stats = []
             try:
@@ -1507,6 +1603,7 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                     report_kind,
                     RULES_TIMEOUT_SEC,
                 )
+                fact_receipts = list(payload_issues.get("fact_receipts") or [])
                 # MR-3（2026-09-27）：文档级可读性闸门——扫描件/低覆盖材料的
                 # error 级假阳性整体转人工，防止"扫描件静默漏检却报高危矛盾"
                 apply_readability_gate(payload_issues, page_assessment)
@@ -1596,6 +1693,12 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                     )
                     or {},
                     "parser_quality": _assess_parser_quality(page_assessment, None),
+                    "fact_context": (
+                        fact_context_obj.summary()
+                        if fact_context_obj is not None
+                        else {"status": fact_context_status}
+                    ),
+                    "fact_overlay_applied": fact_overlay_applied,
                     "versions": summarize_finding_versions(
                         payload_issues["issues"].get("all") or []
                     ),
@@ -1738,11 +1841,13 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             structured_ingest=structured_ingest_summary,
         )
         result["meta"]["obligation_coverage"] = obligation_coverage
+        result["meta"]["fact_receipts"] = fact_receipts
         result["meta"]["check_receipts"] = build_check_receipts(
             result,
             report_kind=report_kind,
             rule_execution_summary=result["meta"].get("rule_execution_summary"),
             obligation_coverage=obligation_coverage,
+            fact_receipts=fact_receipts,
         )
         result["meta"]["rule_registry_version"] = RULE_REGISTRY_VERSION
         result["meta"]["rule_policy_version"] = PORTABLE_RULE_POLICY_VERSION
@@ -1844,6 +1949,23 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             "profile_status": document_profile.profile_status,
             "stage": stage_text,
         }
+        # ZC-05（AC-10）：人工复核决定（issue_workflow 的 confirmed/no_issue
+        # 等终态）投影进统一报告——复核事件按问题+分析版本关联，界面与
+        # 各导出消费同一份报告，不再各看各的状态。
+        try:
+            from src.services.issue_workflow_store import get_job_issue_decisions
+
+            decision_map = get_job_issue_decisions(job_dir.name)
+            if decision_map:
+                payload["human_decisions"] = [
+                    {"issue_id": issue_id, "status": status}
+                    for issue_id, status in sorted(decision_map.items())
+                ]
+        except Exception:
+            logger.warning(
+                "human decisions projection skipped",
+                extra=safe_log_extra({"job_id": job_dir.name}),
+            )
         payload["review_report"] = build_review_report(payload)
         _safe_write(job_dir, payload)
         await persist_analysis_job_snapshot(payload, include_results=True)

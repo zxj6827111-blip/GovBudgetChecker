@@ -172,6 +172,19 @@ class EngineRuleRunner:
             verification_status=verification_status,
             suggestion=suggestion,
             tags=[resolved_rule_id] if resolved_rule_id else [],
+            # AC-11：规则侧关系/事实身份透传（引擎 Issue 未来携带 fact_ids 时
+            # 与 AI 候选建立精确配对；现在保留通道，不再在适配层丢弃）。
+            check_relation_id=str(getattr(issue, "check_relation_id", "") or "") or None,
+            fact_ids=[
+                str(item).strip()
+                for item in (getattr(issue, "fact_ids", None) or [])
+                if str(item).strip()
+            ],
+            evidence_ids=[
+                str(item).strip()
+                for item in (getattr(issue, "evidence_ids", None) or [])
+                if str(item).strip()
+            ],
             # 版本留痕（P2-02）：规则来源的 finding 记录本次实际使用的规则集版本
             # 与引擎版本；模型/提示词版本留空，因为这条问题不经过任何 AI 调用。
             rule_version=rule_version,
@@ -420,6 +433,15 @@ class EngineRuleRunner:
         finally:
             bbox_locator.close()
 
+        # ZC-03（AC-04）：规则执行期间写下的关系级子检查回执随运行摘要暴露，
+        # 供双模式结果与 build_check_receipts 消费（与 legacy payload 同源）。
+        self._stats["fact_receipts"] = list(getattr(document, "fact_receipts", None) or [])
+        if getattr(document, "fact_context", None) is not None:
+            try:
+                self._stats["fact_context_summary"] = document.fact_context.summary()
+            except Exception:
+                pass
+
         logger.info(
             f"Engine rules completed: {len(all_findings)} findings from {len(selected_rules)} rules "
             f"(success: {self._stats['successful_rules']}, failed: {self._stats['failed_rules']})"
@@ -443,12 +465,22 @@ class EngineRuleRunner:
             while len(page_tables) < len(page_texts):
                 page_tables.append([])
 
-            return build_document(
+            document = build_document(
                 path=job_context.pdf_path,
                 page_texts=page_texts,
                 page_tables=page_tables,
                 filesize=getattr(job_context, "filesize", 0) or job_context.meta.get("filesize", 0),
             )
+            # ZC-01（AC-01）：双模式路径消费与 legacy 路径同一版本的统一事实
+            fact_snapshot = getattr(job_context, "fact_context", None)
+            if isinstance(fact_snapshot, dict) and fact_snapshot:
+                try:
+                    from src.engine.fact_context import FactContext
+
+                    document.fact_context = FactContext.from_dict(fact_snapshot)
+                except Exception:  # 事实快照损坏时按 legacy 路径运行，不伪装
+                    document.fact_context = None
+            return document
 
         # 2. 鍥為€€锛氬皾璇曚粠 ocr_text 鍜?tables 鎭㈠锛堝吋瀹规棫鏁版嵁锛?
         if job_context.ocr_text and job_context.tables:

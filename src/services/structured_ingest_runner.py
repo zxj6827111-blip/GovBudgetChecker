@@ -963,11 +963,17 @@ def _materialize_fiscal_facts_from_artifact(
 ):
     """把统一解析对象物化为 FiscalFact 列表（ZC-01 / SYS-15/16）。
 
-    每个逻辑表实例独立物化：实例身份（instance_uid）+ 主体/年度 + 资金范围
-    进入事实身份，同文档同种表的不同实例不互相覆盖。
+    实现收敛到 :mod:`src.engine.fact_context`（AC-01）：规则链与结构化入库
+    消费**同一个**事实构建实现，避免两套物化语义各自演化。每个逻辑表实例
+    独立物化：实例身份（instance_uid）+ 主体/年度 + 资金范围进入事实身份，
+    同文档同种表的不同实例不互相覆盖；跨页实例按合并视图物化，证据保留
+    各自物理页。
     """
+    from src.engine.fact_context import (
+        _canonical_mappings_for_fragment,
+        _fragment_for_instance,
+    )
     from src.services.fiscal_fact_materializer import FiscalFactMaterializer
-    from src.services.table_recognizer import TABLE_RECOGNITION_RULES
 
     materializer = FiscalFactMaterializer(None)
     budget_stage = {"budget": "年初预算", "final": "决算"}.get(
@@ -975,14 +981,7 @@ def _materialize_fiscal_facts_from_artifact(
     )
     facts = []
     for instance in artifact.logical_tables:
-        fragment = next(
-            (
-                item
-                for item in artifact.table_fragments
-                if item.fragment_uid in instance.fragment_uids
-            ),
-            None,
-        )
+        fragment = _fragment_for_instance(artifact, instance)
         if fragment is None:
             continue
         mappings = (
@@ -1007,34 +1006,9 @@ def _materialize_fiscal_facts_from_artifact(
 def _canonical_mappings_for_fragment(fragment: Any, table_code: str) -> List[Dict[str, Any]]:
     """按表片段表头与九表规则的 measure_aliases 推导列映射（纯函数）。
 
-    与 TableRecognizer 的语义一致：canonical_measure 由表头别名匹配得到，
-    而不是按列序号猜。匹配不到的列不进入映射。
+    委托 :mod:`src.engine.fact_context` 的同源实现（AC-01）：列映射语义只有
+    一份，规则链与入库不可能各猜各的。匹配不到的列不进入映射。
     """
-    from src.services.fiscal_table_rules import NINE_TABLE_RULES
+    from src.engine.fact_context import _canonical_mappings_for_fragment as _shared
 
-    rule = NINE_TABLE_RULES.get(table_code)
-    if rule is None or not fragment.rows:
-        return []
-
-    header_rows = [row for row in fragment.rows[:3] if row]
-    if not header_rows:
-        return []
-    col_count = max(len(row) for row in header_rows)
-    headers = [
-        "".join(str(row[col]) for row in header_rows if col < len(row)).strip()
-        for col in range(col_count)
-    ]
-    mappings: List[Dict[str, Any]] = []
-    for measure, aliases in (rule.measure_aliases or {}).items():
-        for col, header_text in enumerate(headers):
-            if any(alias and str(alias) in header_text for alias in aliases):
-                mappings.append(
-                    {
-                        "source_col_idx": col,
-                        "canonical_measure": measure,
-                        "source_col_name": header_text,
-                        "confidence": 0.9,
-                    }
-                )
-                break
-    return mappings
+    return _shared(fragment, table_code)

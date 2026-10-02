@@ -233,6 +233,9 @@ class ParsedTable:
     # ZC-01：片段身份。同一片段内的单元格属于同一 fragment_uid；
     # 跨页合并产生逻辑实例时保留各片段 uid 以便回溯。
     fragment_uid: str = field(default_factory=lambda: uuid.uuid4().hex)
+    # AC-02：合并片段时保留被合并的原始物理片段 uid——逻辑实例可回溯到
+    # 每一页的原始片段，不因合并而丢失来源身份。
+    source_fragment_uids: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         data = dataclasses.asdict(self)
@@ -255,6 +258,7 @@ class ParsedTable:
             rows=[list(map(str, row)) for row in data.get("rows") or []],
             cells=[ParsedCell.from_dict(cell) for cell in data.get("cells") or []],
             fragment_uid=str(data.get("fragment_uid") or uuid.uuid4().hex),
+            source_fragment_uids=[str(item) for item in data.get("source_fragment_uids") or []],
         )
 
 

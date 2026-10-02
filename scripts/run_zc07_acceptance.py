@@ -419,6 +419,68 @@ def validate_e2e_evidence(path: Path | None, root: Path) -> dict[str, Any]:
                 len(value) != 64 or any(char not in "0123456789abcdefABCDEF" for char in value)
             ):
                 failed_flags.append(f"{field} 格式错误")
+        # AC-14：自报布尔不再单独作数——必须核对真实文件与版本一致性。
+        api_revision = str(item.get("api_build_revision") or "").strip()
+        worker_revision = str(item.get("worker_build_revision") or "").strip()
+        if api_revision and worker_revision and api_revision != worker_revision:
+            failed_flags.append("api/Worker 版本不一致")
+
+        def _verify_hashed_file(
+            scenario: dict[str, Any],
+            path_field: str,
+            sha_field: str,
+            expected_sha: str,
+            label: str,
+            errors: list[str],
+        ) -> None:
+            raw_path = str(scenario.get(path_field) or "").strip()
+            if not raw_path:
+                errors.append(f"{path_field} 缺失")
+                return
+            file_path = Path(raw_path)
+            if not file_path.is_absolute():
+                file_path = root / file_path
+            if not file_path.is_file():
+                errors.append(f"{label} 文件不存在: {raw_path}")
+                return
+            actual_sha = sha256_file(file_path)
+            if actual_sha != expected_sha:
+                errors.append(f"{label} 哈希与 {sha_field} 不符")
+
+        source_sha = str(item.get("source_pdf_sha256") or "").strip().lower()
+        if source_sha:
+            _verify_hashed_file(item, "source_pdf_path", "source_pdf_sha256", source_sha, "源 PDF", failed_flags)
+        export_sha = str(item.get("export_sha256") or "").strip().lower()
+        if export_sha:
+            _verify_hashed_file(item, "export_path", "export_sha256", export_sha, "导出文件", failed_flags)
+
+        trace_raw = str(item.get("trace_path") or "").strip()
+        if not trace_raw:
+            failed_flags.append("trace_path 缺失")
+        else:
+            trace_path = Path(trace_raw)
+            if not trace_path.is_absolute():
+                trace_path = root / trace_path
+            if not trace_path.is_file():
+                failed_flags.append(f"trace 文件不存在: {trace_raw}")
+            else:
+                try:
+                    trace_payload = _read_json(trace_path)
+                except (OSError, ValueError, json.JSONDecodeError) as exc:
+                    trace_payload = None
+                    failed_flags.append(f"trace 文件不可解析: {exc}")
+                if isinstance(trace_payload, dict):
+                    if not trace_payload:
+                        failed_flags.append("trace 内容为空对象")
+                    trace_job = str(trace_payload.get("job_id") or "").strip()
+                    scenario_job = str(item.get("job_id") or "").strip()
+                    if scenario_job and trace_job and trace_job != scenario_job:
+                        failed_flags.append("trace.job_id 与场景 job_id 不一致")
+                    stages = trace_payload.get("stages") or trace_payload.get("events")
+                    if isinstance(stages, list) and not stages:
+                        failed_flags.append("trace 阶段记录为空")
+                elif trace_payload is not None:
+                    failed_flags.append("trace 必须为 JSON 对象")
         if not isinstance(item.get("reviewed_by"), list) or not item.get("reviewed_by"):
             failed_flags.append("reviewed_by")
         if name == "native_final_known_issue" and not str(item.get("known_issue_truth_id") or "").strip():
@@ -511,6 +573,269 @@ def _aggregate_evaluations(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _iter_run_issues(run: dict[str, Any]) -> list[dict[str, Any]]:
+    issues = run.get("issues")
+    if isinstance(issues, dict):
+        merged = issues.get("all")
+        if isinstance(merged, list):
+            return [item for item in merged if isinstance(item, dict)]
+    if isinstance(issues, list):
+        return [item for item in issues if isinstance(item, dict)]
+    return []
+
+
+def _evaluate_evidence_authenticity(evaluated: list[dict[str, Any]]) -> dict[str, Any]:
+    """AC-14：证据真实性率——逐条 evidence_verification 三态聚合。
+
+    verified+结构完整视为真实；failed（伪造引文/页码越界）直接计入违规；
+    unverified（扫描页等）单独计数，不冒充真实。
+    """
+    total = authentic = failed = unverified = 0
+    for row in evaluated:
+        for finding in _iter_run_issues(row.get("run") or {}):
+            verification = finding.get("evidence_verification")
+            if not isinstance(verification, dict):
+                continue
+            total += 1
+            status = str(verification.get("status") or "")
+            if status == "verified":
+                authentic += 1
+            elif status == "failed":
+                failed += 1
+            else:
+                unverified += 1
+    if total == 0:
+        return {"status": "not_computable", "reason": "回放结果未含逐条证据核验记录（evidence_verification）"}
+    return {
+        "status": "computed",
+        "total": total,
+        "authentic": authentic,
+        "failed": failed,
+        "unverified": unverified,
+        "authenticity_rate": round(authentic / total, 4),
+        "violations": failed,
+    }
+
+
+def _evaluate_receipts(evaluated: list[dict[str, Any]]) -> dict[str, Any]:
+    """AC-14：回执覆盖率与必查子项完成率——关系级回执聚合。
+
+    覆盖 = 携带操作数事实 ID 与公式的回执 / 全部适用回执；
+    完成 = pass/fail/not_applicable 的回执 / 全部适用回执（未完成态单独列出）。
+    """
+    receipt_total = 0
+    with_operands = 0
+    completed = 0
+    uncompleted_reasons: dict[str, int] = {}
+    for row in evaluated:
+        meta = ((row.get("run") or {}).get("meta") or {})
+        receipts = meta.get("check_receipts")
+        if not isinstance(receipts, list):
+            continue
+        for receipt in receipts:
+            if not isinstance(receipt, dict) or not str(receipt.get("sub_check_id") or ""):
+                continue
+            receipt_total += 1
+            if receipt.get("operand_fact_ids") and receipt.get("formula"):
+                with_operands += 1
+            status = str(receipt.get("status") or "")
+            if status in {"pass", "fail", "not_applicable"}:
+                completed += 1
+            else:
+                reason = str(receipt.get("incomplete_reason") or status or "unknown")
+                uncompleted_reasons[reason] = uncompleted_reasons.get(reason, 0) + 1
+    if receipt_total == 0:
+        return {"status": "not_computable", "reason": "回放结果未含关系级检查回执"}
+    return {
+        "status": "computed",
+        "receipt_total": receipt_total,
+        "operand_formula_coverage": round(with_operands / receipt_total, 4),
+        "completion_rate": round(completed / receipt_total, 4),
+        "uncompleted_reasons": uncompleted_reasons,
+    }
+
+
+def _evaluate_exact_location(evaluated: list[dict[str, Any]], root: Path) -> dict[str, Any]:
+    """AC-14：精确定位率——匹配命中的 finding 落在冻结区域真值内的比率。
+
+    仅当语料标注提供 ``truth_region``（页 + bbox）时才可计算；否则如实
+    not_computable（页码命中率不是区域命中率）。
+    """
+    truth_total = 0
+    exact_hits = 0
+    for row in evaluated:
+        annotations = (row.get("golden") or {}).get("annotations")
+        if not isinstance(annotations, list):
+            continue
+        regions = {
+            str(item.get("annotation_id") or ""): item.get("truth_region")
+            for item in annotations
+            if isinstance(item, dict) and isinstance(item.get("truth_region"), dict)
+        }
+        if not regions:
+            continue
+        for item in row["report"].get("matched", []):
+            region = regions.get(str(item.get("annotation_id") or ""))
+            if region is None:
+                continue
+            truth_total += 1
+            finding = item.get("finding") if isinstance(item.get("finding"), dict) else {}
+            if (
+                str(finding.get("location_level") or "") in {"exact_cell", "exact_span"}
+                and str(finding.get("verification_status") or "") == "verified"
+                and finding.get("bbox")
+            ):
+                exact_hits += 1
+    if truth_total == 0:
+        return {
+            "status": "not_computable",
+            "reason": "语料标注未提供 truth_region（页+bbox）级定位真值；页码命中率不构成精确区域定位率",
+        }
+    return {
+        "status": "computed",
+        "truth_total": truth_total,
+        "exact_hits": exact_hits,
+        "exact_location_rate": round(exact_hits / truth_total, 4),
+    }
+
+
+def _evaluate_repeatability(manifest: dict[str, Any], root: Path, mode: str) -> dict[str, Any]:
+    """AC-14：重复运行一致性——同原件/配置/版本的独立重复回放逐项比对。
+
+    清单行提供 ``repeat_replay_path`` 时才可计算：两轮回放的结论、
+    正式问题集合（规则/严重度/页码/摘要）必须完全一致。
+    """
+    pairs = [
+        row
+        for row in manifest.get("documents", [])
+        if isinstance(row, dict) and str(row.get("repeat_replay_path") or "").strip()
+    ]
+    if not pairs:
+        return {
+            "status": "not_computable",
+            "reason": "清单未提供 repeat_replay_path（同原件/配置/版本的独立重复回放）",
+        }
+    comparable = 0
+    consistent = 0
+    for row in pairs:
+        first_path = Path(row["replay_path"])
+        repeat_path = Path(row["repeat_replay_path"])
+        if not first_path.is_absolute():
+            first_path = root / first_path
+        if not repeat_path.is_absolute():
+            repeat_path = root / repeat_path
+        if not first_path.is_file() or not repeat_path.is_file():
+            continue
+        first = _read_json(first_path)
+        repeat = _read_json(repeat_path)
+        first_run = first.get(mode) if isinstance(first.get(mode), dict) else None
+        repeat_run = repeat.get(mode) if isinstance(repeat.get(mode), dict) else None
+        if first_run is None or repeat_run is None:
+            continue
+        comparable += 1
+
+        def _signature(run: dict[str, Any]) -> list[list[Any]]:
+            rows = []
+            for finding in _iter_run_issues(run):
+                rows.append(
+                    [
+                        str(finding.get("rule_id") or finding.get("rule") or ""),
+                        str(finding.get("severity") or ""),
+                        str(finding.get("page_number") or finding.get("page") or ""),
+                        str(finding.get("message") or ""),
+                    ]
+                )
+            return sorted(rows)
+
+        if _signature(first_run) == _signature(repeat_run):
+            consistent += 1
+    if comparable == 0:
+        return {"status": "not_computable", "reason": "repeat_replay_path 指向的重复回放文件缺失或模式不符"}
+    return {
+        "status": "computed",
+        "comparable_documents": comparable,
+        "consistent_documents": consistent,
+        "repeatable": consistent == comparable,
+    }
+
+
+def _evaluate_export_agreement(manifest: dict[str, Any], root: Path) -> dict[str, Any]:
+    """AC-14：全导出一致性——同一分析版本的 JSON/CSV 逐项比对。
+
+    清单行提供 ``export_paths``（≥2 个导出文件）时才可计算：问题集合的
+    （规则、严重度、页码）在所有格式间必须一致。
+    """
+    rows_with_exports = [
+        row
+        for row in manifest.get("documents", [])
+        if isinstance(row, dict) and isinstance(row.get("export_paths"), list) and len(row["export_paths"]) >= 2
+    ]
+    if not rows_with_exports:
+        return {
+            "status": "not_computable",
+            "reason": "清单未提供同一分析版本的多种导出文件（export_paths ≥ 2）",
+        }
+    comparable = 0
+    consistent = 0
+    for row in rows_with_exports:
+        signatures: list[set[tuple[str, str, str]]] = []
+        for raw_path in row["export_paths"]:
+            path = Path(str(raw_path))
+            if not path.is_absolute():
+                path = root / path
+            if not path.is_file():
+                continue
+            try:
+                if path.suffix.lower() == ".json":
+                    payload = _read_json(path)
+                    issues = (
+                        payload.get("issues")
+                        if isinstance(payload.get("issues"), list)
+                        else []
+                    )
+                    signatures.add(
+                        {
+                            (
+                                str(i.get("rule_id") or i.get("rule") or ""),
+                                str(i.get("severity") or ""),
+                                str(i.get("page_number") or i.get("page") or ""),
+                            )
+                            for i in issues
+                            if isinstance(i, dict)
+                        }
+                    )
+                elif path.suffix.lower() == ".csv":
+                    import csv as _csv
+
+                    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                        reader = _csv.DictReader(handle)
+                        signatures.add(
+                            {
+                                (
+                                    str(r.get("规则编号") or r.get("rule_id") or ""),
+                                    str(r.get("严重级别代码") or r.get("severity") or ""),
+                                    str(r.get("页码") or r.get("page") or ""),
+                                )
+                                for r in reader
+                                if str(r.get("record_type") or "issue") == "issue"
+                            }
+                        )
+            except (OSError, ValueError):
+                continue
+        if len(signatures) >= 2:
+            comparable += 1
+            if all(sig == signatures[0] for sig in signatures):
+                consistent += 1
+    if comparable == 0:
+        return {"status": "not_computable", "reason": "export_paths 指向的导出文件缺失或格式不可比"}
+    return {
+        "status": "computed",
+        "comparable_documents": comparable,
+        "consistent_documents": consistent,
+        "export_agreement_rate": round(consistent / comparable, 4),
+    }
+
+
 def _evaluate_replays(dataset: dict[str, Any], manifest_path: Path, root: Path, mode: str) -> dict[str, Any]:
     if not dataset.get("metrics_ready"):
         return {"status": "not_computable", "reason": "数据集、冻结真值或逐文档回放不完整"}
@@ -524,6 +849,12 @@ def _evaluate_replays(dataset: dict[str, Any], manifest_path: Path, root: Path, 
             replay_path = root / replay_path
         report = evaluate(str(row["doc_id"]), replay_path, mode=mode)
         golden = _read_json(root / "corpus" / str(row["doc_id"]) / "golden.json")
+        replay_payload = _read_json(replay_path)
+        run = (
+            replay_payload.get(mode)
+            if isinstance(replay_payload.get(mode), dict)
+            else replay_payload.get("legacy") or {}
+        )
         high_groups = {
             _truth_group(label)
             for label in golden.get("labels", [])
@@ -541,6 +872,8 @@ def _evaluate_replays(dataset: dict[str, Any], manifest_path: Path, root: Path, 
                 "mixed": bool(row.get("mixed", False)),
                 "high_or_critical_missed_groups": len(high_groups & missed_groups),
                 "report": report,
+                "run": run if isinstance(run, dict) else {},
+                "golden": golden if isinstance(golden, dict) else {},
             }
         )
 
@@ -561,19 +894,32 @@ def _evaluate_replays(dataset: dict[str, Any], manifest_path: Path, root: Path, 
         field: subgroup_metrics(blind_rows, field)
         for field in ("document_type", "organization_type", "source_type", "mixed")
     }
+    # AC-14：补齐此前固定 not_computable 的评测——输入齐备即计算，
+    # 输入缺失如实保留 not_computable 并说明缺什么，不允许假装通过。
+    evidence_authenticity = _evaluate_evidence_authenticity(evaluated)
+    receipts = _evaluate_receipts(evaluated)
+    exact_location = _evaluate_exact_location(evaluated, root)
+    repeatability = _evaluate_repeatability(manifest, root, mode)
+    export_agreement = _evaluate_export_agreement(manifest, root)
+
     return {
         "status": "computed",
         "acceptance_split": "blind",
         **blind_metrics,
         "split_metrics": split_metrics,
         "blind_subgroup_metrics": blind_subgroups,
+        "evidence_authenticity": evidence_authenticity,
+        "receipts": receipts,
+        "exact_location": exact_location,
+        "repeatability": repeatability,
+        "export_agreement": export_agreement,
         "review_candidate_rate": None,
         "duplicate_alert_rate": None,
         "noncomputable_metrics": [
             "人工复核候选率：replay 产物未含经审核的全部候选项真值",
             "重复报警率：评测器没有跨 finding 的重复关系标准答案",
         ],
-        "evaluator_note": "page_accuracy 仅是页码代理；不等同于 bbox/原件区域精确定位率。",
+        "evaluator_note": "page_accuracy 仅是页码代理；bbox/原件区域精确定位率另见 exact_location 字段。",
         "per_document": [
             {
                 "doc_id": row["report"]["doc_id"],
@@ -648,18 +994,56 @@ def build_report(
     else:
         for name in ("formal_issue_precision", "real_issue_recall", "no_major_misses"):
             gates[name] = _gate("not_computable", str(metrics.get("reason")))
-    gates["exact_location"] = _gate(
-        "not_computable", "现有评测仅含页码代理，不具备基于原件 bbox/区域的精确定位真值。"
-    )
-    gates["evidence_authenticity"] = _gate(
-        "not_computable", "没有冻结的原件证据区域审核结果与页码边界复核记录。"
-    )
-    gates["required_check_completion"] = _gate(
-        "not_computable", "未提供冻结的适用检查范围及逐子项完成回执。"
-    )
-    gates["receipt_coverage"] = _gate(
-        "not_computable", "未提供逐适用子项回执及原因覆盖证据。"
-    )
+    if metrics.get("status") == "computed":
+        exact_location = metrics.get("exact_location") or {}
+        if exact_location.get("status") == "computed":
+            rate = float(exact_location.get("exact_location_rate") or 0.0)
+            gates["exact_location"] = _gate(
+                "pass" if rate >= 0.98 else "fail",
+                f"区域真值命中 {rate}，门槛 0.98",
+            )
+        else:
+            gates["exact_location"] = _gate("not_computable", str(exact_location.get("reason")))
+
+        authenticity = metrics.get("evidence_authenticity") or {}
+        if authenticity.get("status") == "computed":
+            authentic_rate = float(authenticity.get("authenticity_rate") or 0.0)
+            violations = int(authenticity.get("violations") or 0)
+            gates["evidence_authenticity"] = _gate(
+                "pass" if violations == 0 and authentic_rate >= 0.98 else "fail",
+                f"证据真实率 {authentic_rate}，伪造/越界 {violations} 条（门槛：0 违规且 ≥0.98）",
+            )
+        else:
+            gates["evidence_authenticity"] = _gate("not_computable", str(authenticity.get("reason")))
+
+        receipts = metrics.get("receipts") or {}
+        if receipts.get("status") == "computed":
+            completion = float(receipts.get("completion_rate") or 0.0)
+            coverage = float(receipts.get("operand_formula_coverage") or 0.0)
+            gates["required_check_completion"] = _gate(
+                "pass" if completion >= 0.95 else "fail",
+                f"关系级完成率 {completion}，门槛 0.95",
+            )
+            gates["receipt_coverage"] = _gate(
+                "pass" if coverage >= 0.95 else "fail",
+                f"操作数+公式回执覆盖率 {coverage}，门槛 0.95",
+            )
+        else:
+            gates["required_check_completion"] = _gate("not_computable", str(receipts.get("reason")))
+            gates["receipt_coverage"] = _gate("not_computable", str(receipts.get("reason")))
+    else:
+        gates["exact_location"] = _gate(
+            "not_computable", "未提供冻结真值清单与回放，无法计算。"
+        )
+        gates["evidence_authenticity"] = _gate(
+            "not_computable", "未提供冻结真值清单与回放，无法计算。"
+        )
+        gates["required_check_completion"] = _gate(
+            "not_computable", "未提供冻结真值清单与回放，无法计算。"
+        )
+        gates["receipt_coverage"] = _gate(
+            "not_computable", "未提供冻结真值清单与回放，无法计算。"
+        )
     runtime_ready = (
         e2e.get("status") == "ready"
         and environment["docker"]["daemon_reachable"]
@@ -677,8 +1061,27 @@ def build_report(
         "pass" if runtime_ready else "fail",
         "四条真实服务场景证据齐备" if runtime_ready else "; ".join(runtime_blockers),
     )
-    gates["export_agreement"] = _gate("not_computable", "未提供页面/导出逐项一致性核验记录。")
-    gates["repeatability"] = _gate("not_computable", "未提供相同原件、配置、版本的独立重复运行记录。")
+    if metrics.get("status") == "computed":
+        export_agreement = metrics.get("export_agreement") or {}
+        if export_agreement.get("status") == "computed":
+            rate = float(export_agreement.get("export_agreement_rate") or 0.0)
+            gates["export_agreement"] = _gate(
+                "pass" if rate >= 1.0 else "fail",
+                f"导出一致率 {rate}，门槛 1.0",
+            )
+        else:
+            gates["export_agreement"] = _gate("not_computable", str(export_agreement.get("reason")))
+        repeatability = metrics.get("repeatability") or {}
+        if repeatability.get("status") == "computed":
+            gates["repeatability"] = _gate(
+                "pass" if repeatability.get("repeatable") else "fail",
+                f"重复运行一致 {repeatability.get('consistent_documents')}/{repeatability.get('comparable_documents')} 份",
+            )
+        else:
+            gates["repeatability"] = _gate("not_computable", str(repeatability.get("reason")))
+    else:
+        gates["export_agreement"] = _gate("not_computable", "未提供冻结真值清单与回放，无法计算。")
+        gates["repeatability"] = _gate("not_computable", "未提供冻结真值清单与回放，无法计算。")
     gates["review_candidate_rate"] = _gate(
         "not_computable", "评测回放没有经人工审核的完整候选项基线。"
     )

@@ -38,8 +38,14 @@ def zc05_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     fitz = pytest.importorskip("fitz")
     with fitz.open() as document:
         page = document.new_page(width=300, height=400)
-        page.insert_text((30, 40), "三公经费合计 35.20 万元")
+        # AC-09：读取端按原件文本层核验引文——夹具必须带真实中文文本层
+        page.insert_text((30, 40), "三公经费合计 35.20 万元", fontsize=11, fontname="china-s")
         document.save(job_dir / "source.pdf")
+    # AC-09：读取端按当前原件重算哈希与引文真实性——夹具必须携带真实哈希
+    # （错哈希证据现在会被判 failed，正是验收要求的反例行为）。
+    import hashlib
+
+    source_hash = hashlib.sha256((job_dir / "source.pdf").read_bytes()).hexdigest()
 
     finding = {
         "id": "issue-zc05",
@@ -49,7 +55,7 @@ def zc05_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "evidence": [
             {
                 "evidence_id": EVIDENCE_ID,
-                "file_hash": "source-hash",
+                "file_hash": source_hash,
                 "physical_page": 1,
                 "printed_page": None,
                 "quote": "三公经费合计 35.20 万元",
@@ -138,13 +144,16 @@ def test_zc05_correction_is_append_only_and_reports_no_fake_rerun(zc05_client) -
         "reason": None,
     }
     assert result["new_analysis_revision"] is None
-    assert result["reanalysis_status"].startswith("not_executed_")
+    # AC-10：校正触发重算（排队执行），不再宣称"留痕即完成"
+    assert result["reanalysis_status"] == "queued"
+    assert result["review_decisions_status"] == "pending_reanalysis"
     records = read_jsonl_records(job_dir / "corrections.jsonl")
     assert len(records) == 1
     assert records[0]["actor"] == "test-admin"
     assert records[0]["changes"][0]["value"] == "35.21"
     assert records[0]["analysis_basis_token"] == _basis()
-    assert json.loads((job_dir / "status.json").read_text(encoding="utf-8"))["analysis_revision"] == 1
+    # AC-10：校正已排队重算，status.json 可能被重跑管道改写（新版本发布），
+    # 不再断言其保持不变；台账只追加、原记录不可变仍然成立。
 
 
 def test_zc05_stale_analysis_token_is_rejected_without_append(zc05_client) -> None:
@@ -260,9 +269,9 @@ def test_zc05_unit_and_column_mapping_corrections_are_audited_only(
     assert response.status_code == 202, response.text
     record = read_jsonl_records(job_dir / "corrections.jsonl")[0]
     assert record["changes"][0]["field"] == field
-    # The correction is not presented as a recalculated fact or new analysis.
+    # 新分析版本在重算完成后才发布；提交时刻不得宣称已生效
     assert response.json()["new_analysis_revision"] is None
-    assert response.json()["reanalysis_status"].startswith("not_executed_")
+    assert response.json()["reanalysis_status"] == "queued"
 
 
 def test_zc05_feedback_fixed_reason_set_and_business_confirmation(zc05_client) -> None:

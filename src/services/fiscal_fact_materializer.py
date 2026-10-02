@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import json
 import logging
 import re
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import asyncpg
 
@@ -59,6 +59,9 @@ class MaterializedFact:
     source_cell_ids: List[int]
     parse_confidence: float
     extra_dims: Dict[str, object]
+    #: 金额所在单元格的精确列号（ZC-01 AC-08：证据按来源列映射绑定，
+    #: 不允许"同额不同列"反查首个相等金额格）
+    source_col_idx: Optional[int] = None
 
 
 class FiscalFactMaterializer:
@@ -253,6 +256,7 @@ class FiscalFactMaterializer:
                             "source_header": mapping.get("source_col_name"),
                             "unit_hint": self._pick_unit_hint(ordered),
                         },
+                        source_col_idx=col_idx,
                     )
                 )
 
@@ -483,23 +487,31 @@ class FiscalFactMaterializer:
         rule = NINE_TABLE_RULES[table.table_code]
         fund_scope = infer_fund_scope(table.table_code, table.title)
 
-        # 行→单元格索引，用于给每条事实定位证据与原始字符串
+        # 行×列→单元格索引：证据必须按物化时的来源列精确绑定（AC-08），
+        # 不再"按金额相等反找首个单元格"——同额不同列会错绑同一证据。
+        cells_by_position: Dict[Tuple[int, int], Any] = {}
         cells_by_row: Dict[int, List[Any]] = {}
         for cell in table.cells:
+            cells_by_position[(cell.row_idx, cell.col_idx)] = cell
             cells_by_row.setdefault(cell.row_idx, []).append(cell)
 
         facts: List[FiscalFact] = []
         for legacy in legacy_facts:
             row_cells = cells_by_row.get(legacy.row_order, [])
-            measure_cell = next(
-                (
+            measure_cell = None
+            if legacy.source_col_idx is not None:
+                measure_cell = cells_by_position.get((legacy.row_order, legacy.source_col_idx))
+            if measure_cell is None:
+                # 兼容旧调用（无列映射来源）：仅在金额唯一匹配时回退，
+                # 多个相等金额格时保持 unresolved，不猜。
+                equal_cells = [
                     cell
                     for cell in row_cells
                     if cell.numeric_value is not None
                     and abs(cell.numeric_value - float(legacy.amount)) < 1e-9
-                ),
-                None,
-            )
+                ]
+                if len(equal_cells) == 1:
+                    measure_cell = equal_cells[0]
             raw_value = (
                 str(measure_cell.raw_text).strip()
                 if measure_cell is not None and str(measure_cell.raw_text or "").strip()
@@ -523,7 +535,11 @@ class FiscalFactMaterializer:
             decimals = raw_text_for_precision.split(".")[-1] if "." in raw_text_for_precision else ""
             evidence = EvidenceRef(
                 file_hash=file_hash,
-                physical_page=legacy.source_page_number,
+                physical_page=(
+                    measure_cell.page_number
+                    if measure_cell is not None
+                    else legacy.source_page_number
+                ),
                 source_cell_id=(
                     f"{table.fragment_uid}:r{measure_cell.row_idx}c{measure_cell.col_idx}"
                     if measure_cell is not None
@@ -531,9 +547,18 @@ class FiscalFactMaterializer:
                 ),
                 quote=raw_value or "",
                 bbox=measure_cell.bbox if measure_cell is not None else None,
-                source_method="native_text",
+                source_method=(
+                    "ocr"
+                    if str(getattr(table, "extraction_method", "") or "") == "ocr"
+                    else "native_text"
+                ),
                 verification_status="unverified",
-                location_level="exact_cell" if measure_cell is not None and measure_cell.bbox else "unresolved",
+                location_level=(
+                    "exact_cell"
+                    if measure_cell is not None and measure_cell.bbox
+                    and str(getattr(table, "extraction_method", "") or "") != "ocr"
+                    else ("region" if measure_cell is not None and measure_cell.bbox else "unresolved")
+                ),
             )
 
             facts.append(
@@ -571,6 +596,10 @@ class FiscalFactMaterializer:
                         "source_header": (legacy.extra_dims or {}).get("source_header"),
                         "unit_hint": (legacy.extra_dims or {}).get("unit_hint"),
                         "rule_classification": rule.classification_type,
+                        # ZC-01（AC-08）：完整证据实体随事实一起传递/存储/读取，
+                        # 不再只留 evidence_id——物理页、bbox、来源单元格、
+                        # 文件哈希在持久化往返后必须全部可回溯。
+                        "evidence_refs": [evidence.to_dict()],
                     },
                 )
             )

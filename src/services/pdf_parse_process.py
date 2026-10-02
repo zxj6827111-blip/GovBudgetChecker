@@ -123,7 +123,13 @@ def _resolve_start_method() -> str:
 
 
 def _apply_memory_limit(memory_mb: int) -> bool:
-    """在子进程内设置地址空间上限。返回是否真的生效（Windows 上恒为 False）。"""
+    """在子进程内设置地址空间上限。返回是否设置成功（Windows 上恒为 False）。
+
+    AC-16：setrlimit 成功 ≠ 内核真的强制执行——macOS/Darwin 接受
+    RLIMIT_AS 设置但 malloc 不受其约束（Linux 容器内则真实生效）。
+    设置成功与否与"是否可强制执行"分别由
+    :func:`probe_memory_limit_enforceable` 探测并如实上报。
+    """
     if os.name == "nt" or memory_mb <= 0:
         return False
     try:
@@ -140,6 +146,53 @@ def _apply_memory_limit(memory_mb: int) -> bool:
         return True
     except (ValueError, OSError):
         return False
+
+
+def probe_memory_limit_enforceable(limit_mb: int = 128) -> bool:
+    """探测当前平台/环境下 RLIMIT_AS 是否真的强制执行（AC-16）。
+
+    fork 一个探针子进程：设置与解析子进程相同的上限后尝试超限分配——
+    抛 MemoryError 说明内核强制执行（Linux 容器路径）；分配成功说明
+    该平台不强制（macOS/Darwin）。探测失败按"不可强制"处理（fail-open
+    到部署层资源上限，如 Docker memory limit）。
+    """
+    if os.name == "nt":
+        return False
+    import multiprocessing as _mp
+
+    ctx = _mp.get_context("fork" if os.name != "nt" else "spawn")
+
+    def _probe_child(connection: Any, mb: int) -> None:
+        try:
+            if not _apply_memory_limit(mb):
+                connection.send(False)
+                return
+            try:
+                blob = bytearray((mb + 64) * 1024 * 1024)
+                blob[0] = 1
+            except MemoryError:
+                connection.send(True)
+                return
+            connection.send(False)
+        except Exception:
+            connection.send(False)
+        finally:
+            connection.close()
+
+    parent_conn, child_conn = ctx.Pipe(duplex=False)
+    process = ctx.Process(target=_probe_child, args=(child_conn, int(limit_mb)), daemon=True)
+    process.start()
+    child_conn.close()
+    try:
+        result = parent_conn.recv()
+    except (EOFError, OSError):
+        result = False
+    finally:
+        parent_conn.close()
+        process.join(timeout=5)
+        if process.is_alive():
+            process.terminate()
+    return bool(result)
 
 
 def _count_table_cells(page_tables: Any) -> int:
@@ -175,6 +228,9 @@ def _pdf_parse_worker(
                 pass
 
         memory_applied = _apply_memory_limit(int(limits.get("memory_mb") or 0))
+        memory_enforced = memory_applied and probe_memory_limit_enforceable(
+            int(limits.get("memory_mb") or 0)
+        )
 
         # 测试钩子：确定性地申请超过上限的内存，验证内存超限被拦。
         burn_mb = os.getenv("PDF_PARSE_TEST_ALLOCATE_MB", "").strip()
@@ -270,6 +326,7 @@ def _pdf_parse_worker(
                     "text_chars": text_chars,
                     "table_cells": table_cells,
                     "memory_limit_applied": memory_applied,
+                    "memory_limit_enforced": memory_enforced,
                 },
             )
         )

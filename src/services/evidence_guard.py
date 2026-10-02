@@ -265,42 +265,57 @@ def evaluate_finding_evidence(
                 f"{REASON_PAGE_OUT_OF_RANGE}: {out_of_range} > {document_page_count}"
             )
 
-    # ---- 原文引用核验 ----
-    quotes: List[str] = []
+    # ---- 原文引用核验（AC-09：逐条证据分别绑定其自称页面） ----
+    # 此前口径是"任一引文在任一所称页命中"——一条真实引文能掩盖另一条
+    # 伪造引文，互换两条证据的页码也照样 verified。现在每条引文必须在其
+    # **自己的**页码集合内命中；任一条失败，整体即失败。
+    quote_bindings: List[Tuple[str, List[int]]] = []
     if str(finding.get("text_snippet") or "").strip():
-        quotes.append(str(finding["text_snippet"]).strip())
+        quote_bindings.append((str(finding["text_snippet"]).strip(), claimed_pages))
     for item in _evidence_items(finding):
+        item_pages = _positive_int(item.get("page"))
+        bound_pages = [item_pages] if item_pages is not None else list(claimed_pages)
         for key in _EVIDENCE_TEXT_KEYS:
             text = str(item.get(key) or "").strip()
             if text:
-                quotes.append(text)
+                quote_bindings.append((text, bound_pages))
 
     if page_texts:
         verification["checked_pages"] = list(claimed_pages)
-        if not quotes:
+        if not quote_bindings:
             # 无引用可核验（纯 bbox/纯页码）：保持 unverified，如实记录
             verification["reasons"].append("no_quote_text_to_verify")
         else:
-            searchable_pages = claimed_pages or []
-            found = any(
-                _quote_found_on_pages(quote, searchable_pages, page_texts)
-                for quote in quotes
-            )
-            if found:
-                verification["status"] = EVIDENCE_VERIFICATION_VERIFIED
-            elif not searchable_pages:
-                # 没有页码信号可定位文本页：无法核验，不算失败
-                verification["reasons"].append("no_page_signal_for_quote_check")
-            elif not any(
-                _normalise_for_match(_page_text(page_texts, page))
-                for page in searchable_pages
-            ):
-                # 所称页面全部没有文本层（扫描页）：无法核验，不算失败
+            failed_bindings: List[int] = []
+            unverifiable_bindings: List[int] = []
+            for index, (quote, bound_pages) in enumerate(quote_bindings):
+                if not bound_pages or not any(
+                    _normalise_for_match(_page_text(page_texts, page)) for page in bound_pages
+                ):
+                    # 该引文绑定的页面无文本层（扫描页）：无法核验
+                    unverifiable_bindings.append(index)
+                    continue
+                if not _quote_found_on_pages(quote, bound_pages, page_texts):
+                    failed_bindings.append(index)
+            if failed_bindings:
+                # 任一引文在自称页面不存在：伪造原文，整体失败（不可被其他真引文掩盖）
+                missing.append(REASON_TEXT_NOT_FOUND_ON_PAGE)
+                verification["reasons"].append(
+                    f"{REASON_TEXT_NOT_FOUND_ON_PAGE}: binding#{failed_bindings}"
+                )
+                verification["failed_bindings"] = failed_bindings
+            elif unverifiable_bindings and len(unverifiable_bindings) == len(quote_bindings):
+                # 全部引文绑定页都无文本层（扫描页）：无法核验，不算失败
                 verification["reasons"].append("claimed_pages_have_no_text_layer")
             else:
-                # 页面有文本层但引用不存在：伪造原文
-                missing.append(REASON_TEXT_NOT_FOUND_ON_PAGE)
-                verification["reasons"].append(REASON_TEXT_NOT_FOUND_ON_PAGE)
+                verification["status"] = EVIDENCE_VERIFICATION_VERIFIED
+                if unverifiable_bindings:
+                    # 混合形态：部分引文核验通过、部分无法核验——整体如实降为
+                    # unverified，并指明哪些绑定未核验。
+                    verification["reasons"].append(
+                        f"partially_unverifiable_bindings:{unverifiable_bindings}"
+                    )
+                    verification["status"] = EVIDENCE_VERIFICATION_UNVERIFIED
 
     has_text = _has_evidence_text(finding)
     has_bbox = _has_bbox(finding)

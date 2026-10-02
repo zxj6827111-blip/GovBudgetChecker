@@ -1,9 +1,10 @@
 """Canonical registry for production Python rule execution.
 
 This registry is the single routing source for the legacy ``Document`` rule
-implementations. ``evaluation_basis`` is intentionally explicit: the current
-rules do not all consume ``FiscalFact`` yet, so callers must not represent this
-registry as a completed fact-based migration.
+implementations. ``evaluation_basis`` is intentionally explicit: rules that
+have not migrated to :class:`FiscalFact` consume the legacy ``Document`` and
+are marked ``fact_migration="pending"``; migrated rules declare their fact
+inputs here and are marked ``complete``.
 """
 
 from __future__ import annotations
@@ -15,6 +16,22 @@ from . import budget_rules, common_rules, rules_v33
 
 RULE_REGISTRY_VERSION = "python-rule-registry-v1"
 EVALUATION_BASIS_LEGACY = "legacy_document"
+EVALUATION_BASIS_FACT = "fiscal_fact"
+
+#: 已迁移到统一财政事实的规则及其事实输入（ZC-01/03，AC-01）。
+#: fact_inputs 以指标名登记；规则在运行时消费 Document.fact_context 中
+#: 同一版本的事实，缺失时回退 legacy 路径并如实记回执。
+FACT_INPUTS_BY_RULE: Dict[str, Tuple[str, ...]] = {
+    "BUD-107": (
+        "FIN_01:income_actual",
+        "FIN_01:expenditure_actual",
+        "FIN_07:budget",
+    ),
+    "CMM-001": ("FIN_07:budget", "FIN_07:actual", "FIN_07:total_actual"),
+    "V33-103": ("FIN_02:total_actual", "FIN_02:fiscal_allocation"),
+    "V33-104": ("FIN_03:total_actual", "FIN_03:basic_actual", "FIN_03:project_actual"),
+    "V33-214": ("FIN_01:income_actual", "FIN_01:expenditure_actual"),
+}
 
 
 @dataclass(frozen=True)
@@ -24,6 +41,8 @@ class RuleRegistration:
     report_kinds: Tuple[str, ...]
     rule_family: str
     evaluation_basis: str = EVALUATION_BASIS_LEGACY
+    fact_inputs: Tuple[str, ...] = ()
+    fact_migration: str = "pending"
 
 
 def _registrations() -> List[RuleRegistration]:
@@ -35,11 +54,18 @@ def _registrations() -> List[RuleRegistration]:
         ("common", ("budget", "final", "unknown"), common_rules.ALL_COMMON_RULES),
     ):
         for rule in rules:
+            rule_id = str(getattr(rule, "code", ""))
+            fact_inputs = FACT_INPUTS_BY_RULE.get(rule_id, ())
             registration = RuleRegistration(
-                rule_id=str(getattr(rule, "code", "")),
+                rule_id=rule_id,
                 implementation=rule,
                 report_kinds=kinds,
                 rule_family=family,
+                evaluation_basis=(
+                    EVALUATION_BASIS_FACT if fact_inputs else EVALUATION_BASIS_LEGACY
+                ),
+                fact_inputs=fact_inputs,
+                fact_migration="complete" if fact_inputs else "pending",
             )
             if not registration.rule_id:
                 raise RuntimeError("rule registry contains an implementation without a code")
@@ -98,8 +124,8 @@ def rule_catalog() -> Dict[str, Any]:
                 "report_kinds": list(item.report_kinds),
                 "evaluation_basis": item.evaluation_basis,
                 "obligation_ids": obligation_ids_for_rule(item.rule_id),
-                "fact_inputs": [],
-                "fact_migration": "pending",
+                "fact_inputs": list(item.fact_inputs),
+                "fact_migration": item.fact_migration,
             }
             for item in _registrations()
         ],

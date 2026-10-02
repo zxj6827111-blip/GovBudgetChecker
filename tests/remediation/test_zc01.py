@@ -647,7 +647,9 @@ async def test_pg_roundtrip_artifact_and_fact_identity() -> None:
         written = await persist_facts_and_evidence(
             conn, parse_run_id=run_id, facts=facts_a + facts_b, file_hash="pg" * 32
         )
-        assert written == len(facts_a) + facts_b
+        # AC-13：written 统计的是成功写入的事实条数，facts_b 是列表——
+        # 断言对两个列表取长度之和，不能 int + list（原断言到达即 TypeError）。
+        assert written == len(facts_a) + len(facts_b)
         rows = await conn.fetch(
             "SELECT org_name, instance_uid FROM parse_facts WHERE parse_run_id=$1",
             run_id,

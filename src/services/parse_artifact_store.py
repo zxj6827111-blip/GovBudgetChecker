@@ -232,24 +232,61 @@ async def persist_facts_and_evidence(
     facts: Sequence[FiscalFact],
     file_hash: str,
 ) -> int:
-    """把 FiscalFact 与其证据引用落库；返回写入条数。幂等（DO NOTHING）。"""
+    """把 FiscalFact 与其证据引用落库；返回写入条数。幂等（DO NOTHING）。
+
+    ZC-01（AC-08）：证据按 ``extra_dims["evidence_refs"]`` 中的完整
+    EvidenceRef 实体写入——物理页、bbox、来源单元格、定位等级与
+    验证状态原样落库；旧格式（只有 evidence_ids）退回 quote+unverified。
+    """
     written = 0
     async with conn.transaction():
         for fact in facts:
+            evidence_refs: List[Dict[str, Any]] = []
+            raw_refs = (fact.extra_dims or {}).get("evidence_refs")
+            if isinstance(raw_refs, list):
+                evidence_refs = [dict(item) for item in raw_refs if isinstance(item, dict)]
+
             evidence_ids = list(fact.evidence_ids)
-            for evidence_id in evidence_ids:
+            if evidence_refs:
+                # 以事实声明的 evidence_ids 为准，补齐丢失的引用实体
+                known = {str(ref.get("evidence_id") or "") for ref in evidence_refs}
+                for evidence_id in evidence_ids:
+                    if evidence_id not in known:
+                        evidence_refs.append(
+                            {
+                                "evidence_id": evidence_id,
+                                "file_hash": file_hash,
+                                "quote": fact.raw_value or "",
+                                "verification_status": "unverified",
+                                "location_level": "unresolved",
+                            }
+                        )
+            for ref in evidence_refs:
+                bbox_value = ref.get("bbox")
                 await conn.execute(
                     """
                     INSERT INTO parse_evidence (
-                        parse_run_id, evidence_id, file_hash, quote,
-                        source_method, verification_status, location_level
-                    ) VALUES ($1, $2, $3, $4, 'native_text', 'unverified', 'unresolved')
+                        parse_run_id, evidence_id, file_hash, physical_page,
+                        printed_page, source_cell_id, source_block_id, quote,
+                        bbox, source_method, verification_status, location_level
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8,
+                        $9::jsonb, $10, $11, $12
+                    )
                     ON CONFLICT (parse_run_id, evidence_id) DO NOTHING
                     """,
                     parse_run_id,
-                    evidence_id,
-                    file_hash,
-                    fact.raw_value or "",
+                    str(ref.get("evidence_id") or ""),
+                    str(ref.get("file_hash") or file_hash),
+                    ref.get("physical_page"),
+                    ref.get("printed_page"),
+                    ref.get("source_cell_id"),
+                    ref.get("source_block_id"),
+                    str(ref.get("quote") if ref.get("quote") is not None else fact.raw_value or ""),
+                    json.dumps(list(bbox_value), ensure_ascii=False) if bbox_value else None,
+                    str(ref.get("source_method") or "native_text"),
+                    str(ref.get("verification_status") or "unverified"),
+                    str(ref.get("location_level") or "unresolved"),
                 )
             await conn.execute(
                 """
@@ -430,3 +467,27 @@ async def load_parse_facts(
         parse_run_id,
     )
     return [dict(row) for row in rows]
+
+
+async def load_parse_evidence(
+    conn: asyncpg.Connection, parse_run_id: int
+) -> List[Dict[str, Any]]:
+    """按解析运行读取完整证据行（含物理页、bbox、来源单元格）。
+
+    ZC-01（AC-08）：证据往返后必须能还原定位实体——读取端返回写入端的
+    全部字段，不再退化为 quote+unresolved。
+    """
+    rows = await conn.fetch(
+        "SELECT * FROM parse_evidence WHERE parse_run_id = $1 ORDER BY id",
+        parse_run_id,
+    )
+    results: List[Dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        if isinstance(item.get("bbox"), str):
+            try:
+                item["bbox"] = json.loads(item["bbox"])
+            except (TypeError, ValueError):
+                pass
+        results.append(item)
+    return results

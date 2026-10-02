@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tup
 
 from .amount_math import compute_dynamic_envelope
 from .rule_policy import amount_difference_exceeds_policy, percentage_difference_exceeds_policy
-from .budget_rules import find_budget_anchors
+from .budget_rules import _append_relation_receipt, _portable_amount_tolerance, find_budget_anchors
 from .rule_outcome import RuleDeferred, RuleNotApplicable
 from .rules_v33 import (
     Document,
@@ -522,35 +522,49 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
         missing_nar: List[str] = []
         blank_cells: List[str] = []
         issues: List[Issue] = []
+        def _receipt(key: str, label: str, status: str, incomplete: Optional[str] = None) -> None:
+            _append_relation_receipt(
+                doc,
+                self.code,
+                f"san_gong:{key}:narrative_vs_table",
+                formula=f"narrative.{key} == table.FIN_07.{key} (万元)",
+                status=status,
+                incomplete_reason=incomplete,
+                tolerance=_portable_amount_tolerance(),
+            )
+
         for key, tab, label in checks:
             val = nar.get(key)
             if val is None:
                 missing_nar.append(label)
+                _receipt(key, label, "not_applicable", f"{label}说明未披露，无可比对操作数")
                 continue
             if tab is None:
                 # 表内留空：V33-244 Case A/B 已就此出建议性提示，CMM-001
                 # 不重复报（留痕于证据面），也不算取数失败。
                 blank_cells.append(label)
+                _receipt(key, label, "not_applicable", f"{label}表内留空（见 V33-244 建议性提示）")
                 continue
             compared += 1
             if abs(val - tab) <= Decimal("0.01"):
+                _receipt(key, label, "pass")
                 continue
             severity = "error" if key == "car_run" else "warn"
             message = f"三公表与说明不一致：{label}说明={val}万元，表内={tab}万元"
             if key == "car_run":
                 message += "；建议：请统一“公务用车运行费”在表格与情况说明中的金额口径"
-            issues.append(
-                self._issue(
-                    message,
-                    {"page": table_page or 1},
-                    severity,
-                    evidence_text=(
-                        f"narrative={val}, table={tab}, field={label}"
-                        + (f"（说明未提及：{'、'.join(missing_nar)}）" if missing_nar else "")
-                        + (f"（表内留空：{'、'.join(blank_cells)}）" if blank_cells else "")
-                    ),
-                )
+            issue = self._issue(
+                message,
+                {"page": table_page or 1},
+                severity,
+                evidence_text=(
+                    f"narrative={val}, table={tab}, field={label}"
+                    + (f"（说明未提及：{'、'.join(missing_nar)}）" if missing_nar else "")
+                    + (f"（表内留空：{'、'.join(blank_cells)}）" if blank_cells else "")
+                ),
             )
+            issues.append(issue)
+            _receipt(key, label, "fail")
 
         # 说明侧内部勾稽：公车小计 = 购置 + 运行（三者齐备才判）
         ct, cb, cr = nar.get("car_total"), nar.get("car_buy"), nar.get("car_run")
@@ -564,6 +578,9 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
                 )
             )
 
+        # SYS-05（AC-04）：分项（出国/公车/接待）未与说明比对时不得记完整
+        # pass——只要有未完成的关系，规则整体转 insufficient_data 并携带
+        # 已确认 partial_issues 与逐项未完成原因。
         if compared == 0:
             raise RuleDeferred(
                 self.code,
@@ -572,7 +589,37 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
                     f"{('、'.join(missing_nar)) or '全部字段'}，"
                     f"表内留空 {'、'.join(blank_cells) if blank_cells else '—'}"
                 ),
+                partial_issues=issues,
                 unresolved_reasons=["三公表×说明无可比对字段（缺项明细见 detail）"],
+            )
+        # SYS-05（AC-04）：合计≠分项。合计可比对不等于分项检查完成；
+        # 全部**分项**关系都无可比对操作数时整项转未完成（携带合计侧
+        # 已确认问题）。个别分项未披露记 not_applicable（披露完整性由
+        # 说明检查线覆盖），不阻塞本规则的比对结论。
+        sub_completed = sum(
+            1
+            for key, _tab, _label in checks
+            if key != "total_budget" and key != "total_final" and nar.get(key) is not None and _tab is not None
+        )
+        sub_keys = {key for key, _tab, _label in checks}
+        sub_completed = sum(
+            1
+            for key, tab, _label in checks
+            if key not in ("total_budget", "total_final")
+            and nar.get(key) is not None
+            and tab is not None
+        )
+        _ = sub_keys
+        if sub_completed == 0:
+            reasons = [
+                *(f"{label}分项说明缺失" for label in missing_nar),
+                *(f"{label}表内留空" for label in blank_cells),
+            ] or ["全部分项关系无可比对操作数"]
+            raise RuleDeferred(
+                self.code,
+                detail=f"三公分项关系均未完成：{'、'.join(reasons[:6])}",
+                partial_issues=issues,
+                unresolved_reasons=reasons,
             )
         return issues
 
@@ -618,8 +665,25 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
             tab = table_values.get(key)
             if nar is None or tab is None:
                 unresolved_reasons.append(f"{labels[key]}分项说明或表格数值缺失")
+                _append_relation_receipt(
+                    doc,
+                    self.code,
+                    f"san_gong:{key}:narrative_vs_table",
+                    formula=f"narrative.{key} == table.{key} (万元)",
+                    status="not_applicable",
+                    incomplete_reason=f"{labels[key]}分项说明或表格数值未披露，无可比对操作数",
+                    tolerance=_portable_amount_tolerance(),
+                )
                 continue
             if _close(nar, tab):
+                _append_relation_receipt(
+                    doc,
+                    self.code,
+                    f"san_gong:{key}:narrative_vs_table",
+                    formula=f"narrative.{key} == table.{key} (万元)",
+                    status="pass",
+                    tolerance=_portable_amount_tolerance(),
+                )
                 continue
             label = labels[key]
             severity = "error" if key == "car_run" else "warn"
@@ -635,6 +699,14 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
                     severity,
                     evidence_text=f"narrative={nar}, table={tab}, field={label}",
                 )
+            )
+            _append_relation_receipt(
+                doc,
+                self.code,
+                f"san_gong:{key}:narrative_vs_table",
+                formula=f"narrative.{key} == table.{key} (万元)",
+                status="fail",
+                tolerance=_portable_amount_tolerance(),
             )
 
         nar_car_total = narrative.get("car_total")
@@ -657,14 +729,21 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
                 )
             )
 
-        if not issues and all(
-            narrative.get(key) is None or table_values.get(key) is None
-            for key in ("total", "abroad", "reception", "car_total", "car_buy", "car_run")
-        ):
+        # SYS-05（AC-04）：合计可比对不等于分项检查完成。分项关系
+        # （出国/公车小计/购置/运行/接待）全部缺操作数时整项转未完成，
+        # 已确认的合计侧问题以 partial_issues 保留。
+        sub_keys = ("abroad", "reception", "car_total", "car_buy", "car_run")
+        sub_completed = sum(
+            1
+            for key in sub_keys
+            if narrative.get(key) is not None and table_values.get(key) is not None
+        )
+        if sub_completed == 0:
             raise RuleDeferred(
                 self.code,
-                detail=f"部分三公数据缺失: {', '.join(unresolved_reasons[:5])}",
-                unresolved_reasons=unresolved_reasons,
+                detail=f"三公分项关系均未完成: {', '.join(unresolved_reasons[:5]) or '无可比分项操作数'}",
+                partial_issues=issues,
+                unresolved_reasons=unresolved_reasons or ["三公分项说明或表格数值缺失"],
             )
 
         return issues

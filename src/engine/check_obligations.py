@@ -62,9 +62,29 @@ from src.engine.rule_outcome import (
     STATUS_NOT_APPLICABLE,
     STATUS_PARSE_ERROR,
     STATUS_PASS,
+    STATUS_PRIORITY,
 )
 from src.schemas.parse_artifact import CheckReceipt
 from src.schemas.document_profile import DocumentProfile
+
+#: 关系级子检查状态 → 聚合优先级（与规则六态共用优先级语义；
+#: parse_error/execution_error/insufficient_data 视为未完成，fail 覆盖 pass）
+_RECEIPT_STATUS_PRIORITY: Dict[str, int] = {
+    "pass": STATUS_PRIORITY.get(STATUS_PASS, 0),
+    "not_applicable": STATUS_PRIORITY.get(STATUS_NOT_APPLICABLE, 10),
+    "fail": STATUS_PRIORITY.get(STATUS_FAIL, 20),
+    "insufficient_data": STATUS_PRIORITY.get(STATUS_INSUFFICIENT_DATA, 30),
+    "parse_error": STATUS_PRIORITY.get(STATUS_PARSE_ERROR, 40),
+    "execution_error": STATUS_PRIORITY.get(STATUS_EXECUTION_ERROR, 50),
+}
+#: 视为"未完成"的子检查状态（聚合时不能把它们并成 pass）
+UNCOMPLETED_RECEIPT_STATUSES = frozenset(
+    {"insufficient_data", "parse_error", "execution_error"}
+)
+#: 规则级视为"未完成"的状态
+UNCOMPLETED_RULE_STATUSES = frozenset(
+    {STATUS_INSUFFICIENT_DATA, STATUS_PARSE_ERROR, STATUS_EXECUTION_ERROR}
+)
 
 #: 义务清单版本。清单增删条目、调整 checkers 或适用条件时必须递增，
 #: 否则历史结论无法回答"当时是按哪版要求判定已检查完整的"。
@@ -1350,12 +1370,18 @@ def build_check_receipts(
     report_kind: str,
     rule_execution_summary: Optional[Mapping[str, Any]],
     obligation_coverage: Optional[Mapping[str, Any]] = None,
+    fact_receipts: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Materialize auditable receipts for each declared obligation/checker pair.
 
-    Current production rules still consume the legacy ``Document`` model. The
-    receipt says so explicitly and leaves fact ids empty; it must not be read as
-    evidence that a FiscalFact-based relation has already been migrated.
+    ZC-03（AC-04）：已迁移到统一事实的规则会在执行时写下**关系级**子检查
+    回执（操作数事实 ID、公式、实际容差、逐关系状态）。这里把两类回执
+    合并呈现：
+
+    - 关系级回执（fact_receipts）原样保留，逐关系可追溯；
+    - 义务×规则配对回执在存在关系级回执时按六态优先级聚合其状态，
+      ``evaluation_basis``/``fact_migration_status``/``tolerance`` 反映实际
+      消费口径，不再一律写 legacy+pending。
     """
     from src.engine.rule_registry import registered_rule_ids as registry_rule_ids
     from src.services.evidence_guard import iter_findings
@@ -1375,6 +1401,49 @@ def build_check_receipts(
                     finding_id
                 )
 
+    # ---- 关系级回执（规则真实写下的子检查） ----
+    relation_receipts: List[Dict[str, Any]] = []
+    # (obligation_id, rule_id) -> [status, ...]，用于聚合义务级状态
+    relation_status_by_pair: Dict[Tuple[str, str], List[str]] = {}
+    fact_basis_by_pair: Dict[Tuple[str, str], bool] = {}
+    for raw_receipt in fact_receipts or []:
+        if not isinstance(raw_receipt, Mapping):
+            continue
+        try:
+            receipt = CheckReceipt.from_dict(dict(raw_receipt))
+        except Exception:
+            continue
+        if not receipt.rule_id or not receipt.sub_check_id:
+            continue
+        if not receipt.obligation_id:
+            obligation_ids = obligation_ids_for_rule(receipt.rule_id)
+            receipt.obligation_id = obligation_ids[0] if obligation_ids else None
+        pair = (receipt.obligation_id or "", receipt.rule_id)
+        relation_status_by_pair.setdefault(pair, []).append(receipt.status)
+        if receipt.evaluation_basis == "fiscal_fact" and receipt.fact_migration_status == "complete":
+            fact_basis_by_pair[pair] = True
+            for issue_ref in receipt.issue_refs:
+                findings_by_pair.setdefault(pair, [])
+                if issue_ref not in findings_by_pair[pair]:
+                    findings_by_pair[pair].append(issue_ref)
+        relation_receipts.append(receipt.to_dict())
+
+    def _aggregate_pair_status(pair: Tuple[str, str], fallback: str) -> Tuple[str, Optional[str]]:
+        sub_statuses = relation_status_by_pair.get(pair) or []
+        if not sub_statuses:
+            return fallback, None
+        worst = max(
+            sub_statuses,
+            key=lambda s: _RECEIPT_STATUS_PRIORITY.get(s, -1),
+        )
+        # 全部子关系完成才聚合为完成；任一未完成如实保留未完成状态
+        reason = None
+        if worst in UNCOMPLETED_RECEIPT_STATUSES:
+            reason = f"存在未完成的关系级子检查（{worst}）"
+        elif fallback in UNCOMPLETED_RULE_STATUSES:
+            reason = f"底层规则状态为 {fallback}，检查未完成"
+        return worst, reason
+
     receipt_items: List[Dict[str, Any]] = []
     instances = (
         obligation_coverage.get("instances", [])
@@ -1390,19 +1459,41 @@ def build_check_receipts(
         checker_ids = list(instance.get("checkers") or [])
         checker_ids.extend(str(item) for item in instance.get("missing_checkers") or [])
         for raw_rule_id in dict.fromkeys(str(item) for item in checker_ids if item):
+            pair = (obligation_id, raw_rule_id)
+            has_relation_receipts = pair in relation_status_by_pair
             if raw_rule_id not in registry:
                 status = STATUS_INSUFFICIENT_DATA
                 incomplete_reason = "义务清单声明了该检查，但唯一规则目录中没有对应实现"
             else:
-                status = statuses.get(raw_rule_id, STATUS_INSUFFICIENT_DATA)
+                fallback_status = statuses.get(raw_rule_id, STATUS_INSUFFICIENT_DATA)
                 incomplete_reason = None
                 if raw_rule_id not in statuses:
                     incomplete_reason = "规则未出现在本次执行摘要中，不能以缺回执推断通过"
-                elif status not in KNOWN_RULE_STATUSES:
-                    status = STATUS_INSUFFICIENT_DATA
+                elif fallback_status not in KNOWN_RULE_STATUSES:
+                    fallback_status = STATUS_INSUFFICIENT_DATA
                     incomplete_reason = "规则回执状态不在六态定义内"
-                elif status in _RULE_STATUS_TO_OBLIGATION_REASON:
-                    incomplete_reason = f"底层规则状态为 {status}，检查未完成"
+                elif fallback_status in _RULE_STATUS_TO_OBLIGATION_REASON:
+                    incomplete_reason = f"底层规则状态为 {fallback_status}，检查未完成"
+                if has_relation_receipts:
+                    status, relation_reason = _aggregate_pair_status(pair, fallback_status)
+                    incomplete_reason = relation_reason or incomplete_reason
+                else:
+                    status = fallback_status
+
+            is_fact_based = fact_basis_by_pair.get(pair, False)
+            tolerance: Dict[str, Any] = {
+                "configured_amount_tolerance_wan": "0.5",
+                "configured_percentage_point_tolerance": "0.1",
+                "rounding_envelope_wan": None,
+                "actual_envelope_source": "not_exposed_by_legacy_rule",
+            }
+            if is_fact_based:
+                tolerance = {
+                    "configured_amount_tolerance_wan": "0.5",
+                    "configured_percentage_point_tolerance": "0.1",
+                    "rounding_envelope_wan": "policy",
+                    "actual_envelope_source": "fact_policy",
+                }
 
             receipt = CheckReceipt(
                 rule_id=raw_rule_id,
@@ -1410,20 +1501,18 @@ def build_check_receipts(
                 required_fact_ids=[],
                 operand_fact_ids=[],
                 formula=None,
-                tolerance={
-                    "configured_amount_tolerance_wan": "0.5",
-                    "configured_percentage_point_tolerance": "0.1",
-                    "rounding_envelope_wan": None,
-                    "actual_envelope_source": "not_exposed_by_legacy_rule",
-                },
+                tolerance=tolerance,
                 status=status,
                 incomplete_reason=incomplete_reason,
-                issue_refs=list(dict.fromkeys(findings_by_pair.get((obligation_id, raw_rule_id), []))),
+                issue_refs=list(dict.fromkeys(findings_by_pair.get(pair, []))),
                 obligation_id=obligation_id or None,
-                evaluation_basis="legacy_document",
-                fact_migration_status="pending",
+                evaluation_basis="fiscal_fact" if is_fact_based else "legacy_document",
+                fact_migration_status="complete" if is_fact_based else "pending",
             )
             receipt_items.append(receipt.to_dict())
+
+    # 关系级回执置于义务级回执之后，逐关系可追溯（AC-04 验收要求）
+    receipt_items.extend(relation_receipts)
     return receipt_items
 
 

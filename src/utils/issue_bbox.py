@@ -1,4 +1,11 @@
-"""Validate source-provided exact bboxes without searching for similar PDF text."""
+"""Validate source-provided exact bboxes; exact positioning must be content-anchored.
+
+AC-09：精确 bbox 不能由模型或输入自报 ``verified`` 便直接采信——每个
+exact/verified 坐标都必须通过"原件内容锚定"核验：bbox 区域内必须能抽取到
+与该证据引文一致的原文（去空白后包含）。无法核验（PDF 缺失、区域无文本、
+引文与区域内容不符）一律降级为 region/unverified，绝不保留"看似精确"的
+坐标。纯坐标（无引文）不允许被认证为精确定位。
+"""
 
 from __future__ import annotations
 
@@ -77,11 +84,13 @@ class PDFBBoxLocator:
                     verification_status = "verified"
                     break
 
+        anchor_quote = self._issue_anchor_quote(issue)
         if (
             bbox
             and bbox_page
             and self._is_verified_exact(location_level, verification_status)
             and self._valid_source_bbox(bbox_page, bbox)
+            and self._region_text_matches(bbox_page, bbox, anchor_quote)
         ):
             issue.bbox = bbox
             issue.page_number = bbox_page
@@ -140,6 +149,8 @@ class PDFBBoxLocator:
                 str(evidence.get("verification_status") or ""),
             )
             and self._valid_source_bbox(page, bbox)
+            # AC-09：内容锚定——区域文本必须与引文一致才算已认证
+            and self._region_text_matches(page, bbox, evidence.get("text") or evidence.get("quote") or evidence.get("text_snippet"))
         )
         if page is not None and self._valid_document_page(page):
             evidence["page"] = page
@@ -153,6 +164,50 @@ class PDFBBoxLocator:
                 evidence["location_level"] = "region"
             evidence["verification_status"] = "unverified"
         return evidence
+
+    def _issue_anchor_quote(self, issue: IssueItem) -> str:
+        """取可用于内容锚定的引文：证据条目的原文，取不到则回退定位行/字段名。"""
+        for item in issue.evidence or []:
+            if isinstance(item, dict):
+                for key in ("text", "quote", "text_snippet"):
+                    text = str(item.get(key) or "").strip()
+                    if text:
+                        return text
+        location = issue.location or {}
+        for key in ("quote", "row", "field"):
+            text = str(location.get(key) or "").strip()
+            if text:
+                return text
+        return ""
+
+    def _region_text_matches(
+        self, page_number: Optional[int], bbox: Optional[List[float]], quote: Any
+    ) -> bool:
+        """bbox 区域内抽取的原文（去空白）必须包含引文（去空白）。
+
+        PDF 不可读/区域无文本/引文为空 → False（不可认证为精确）。
+        """
+        needle = "".join(str(quote or "").split())
+        if not needle or not page_number or not bbox:
+            return False
+        if not self.pdf_path or not Path(self.pdf_path).exists():
+            return False
+        try:
+            document, _fitz = self._load_document()
+            if page_number > len(document):
+                return False
+            page = document[page_number - 1]
+            words = page.get_text("words") or []
+            x0, y0, x1, y1 = bbox
+            region_tokens = [
+                str(word[4] or "")
+                for word in words
+                if not (word[2] < x0 or word[0] > x1 or word[3] < y0 or word[1] > y1)
+            ]
+            haystack = "".join("".join(region_tokens).split())
+            return bool(haystack) and needle in haystack
+        except Exception:
+            return False
 
     def _valid_document_page(self, page_number: int) -> bool:
         if page_number <= 0:

@@ -373,6 +373,11 @@ class JobContext(BaseModel):
     pages: int = Field(default=0, description="页数")
     filesize: int = Field(default=0, description="文件大小")
     meta: Dict[str, Any] = Field(default_factory=dict, description="其他元数据")
+    # ZC-01（AC-01）：统一财政事实上下文（FactContext.to_dict() 形态）。
+    # 双模式路径经此把与 legacy 路径同一版本的事实传给规则链。
+    fact_context: Optional[Dict[str, Any]] = Field(
+        None, description="统一财政事实上下文快照"
+    )
 
 
 class AnalysisConfig(BaseModel):

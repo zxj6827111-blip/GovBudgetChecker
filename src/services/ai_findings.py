@@ -270,6 +270,21 @@ class AIFindingsService:
         # 并非本地规则集里某条规则命中的结果，硬填规则版本会造成误导性归因。
         provenance = read_finding_provenance(raw_issue)
 
+        # AC-11：AI 候选声明的关系与事实身份必须透传到 finding——
+        # 合并器按 (check_relation_id, fact_ids) 建立精确配对；
+        # 丢弃这些字段会让所有候选退化成无法合并的孤立项。
+        candidate_relation_id = str(raw_issue.get("check_relation_id") or "").strip() or None
+        candidate_fact_ids = [
+            str(item).strip()
+            for item in (raw_issue.get("fact_ids") or [])
+            if str(item).strip()
+        ]
+        candidate_evidence_ids = [
+            str(item).strip()
+            for item in (raw_issue.get("evidence_ids") or [])
+            if str(item).strip()
+        ]
+
         return IssueItem(
             id=f"ai_semantic_{context.job_id}_{idx}_{int(time.time())}",
             source="ai",
@@ -304,6 +319,9 @@ class AIFindingsService:
                 )
             ),
             created_at=time.time(),
+            check_relation_id=candidate_relation_id,
+            fact_ids=candidate_fact_ids,
+            evidence_ids=candidate_evidence_ids,
             model_version=provenance["model_version"],
             prompt_version=provenance["prompt_version"],
             engine_version=ENGINE_VERSION,

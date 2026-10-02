@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import uuid
@@ -24,6 +26,8 @@ from src.services.correction_overlay_store import (
     read_jsonl_records,
     report_evidence_ids,
 )
+
+logger = logging.getLogger("api.routes.corrections")
 
 router = APIRouter()
 _SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -313,6 +317,7 @@ def _sanitize_evidence(job_id: str, job_dir: Path, raw: Dict[str, Any]) -> Dict[
         import fitz
 
         pdf_path = runtime.find_first_pdf(job_dir)
+        quote_text = str(result.get("quote") or "").strip()
         with fitz.open(pdf_path) as document:
             if not 1 <= page_number <= document.page_count:
                 raise ValueError("physical page out of range")
@@ -320,6 +325,50 @@ def _sanitize_evidence(job_id: str, job_dir: Path, raw: Dict[str, Any]) -> Dict[
                 rect = document.load_page(page_number - 1).rect
                 if bbox[0] < 0 or bbox[1] < 0 or bbox[2] > rect.width or bbox[3] > rect.height:
                     raise ValueError("bbox exceeds physical page")
+            # AC-09：读取端不回显存储侧的 verified 标签——按当前原件重算：
+            # 1) 文件哈希不匹配 → failed（证据不属于当前原件）；
+            # 2) 引文在自称页不存在 → failed（伪造原文）；
+            # 3) 精确定位还要求 bbox 区域文本包含引文，否则降级 region。
+            claimed_hash = str(result.get("file_hash") or "").strip()
+            if claimed_hash:
+                import hashlib
+
+                digest = hashlib.sha256()
+                with open(pdf_path, "rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                if digest.hexdigest() != claimed_hash:
+                    result["verification_status"] = "failed"
+                    result["location_level"] = "unresolved"
+                    result["validation_note"] = "证据文件哈希与当前原件不一致"
+                    result["preview_url"] = _evidence_preview_url(job_id, result)
+                    return result
+            if quote_text:
+                page_text = document.load_page(page_number - 1).get_text() or ""
+                normalized_page = "".join(page_text.split())
+                normalized_quote = "".join(quote_text.split())
+                quote_found = bool(normalized_page) and normalized_quote in normalized_page
+                if not quote_found:
+                    result["verification_status"] = "failed"
+                    result["location_level"] = "unresolved"
+                    result["validation_note"] = "证据引文在当前原件页面中不存在"
+                    result["preview_url"] = _evidence_preview_url(job_id, result)
+                    return result
+                if (
+                    bbox
+                    and result.get("location_level") in {"exact_cell", "exact_span"}
+                ):
+                    words = document.load_page(page_number - 1).get_text("words") or []
+                    x0, y0, x1, y1 = bbox
+                    region = "".join(
+                        "".join(str(word[4] or "") for word in words
+                                if not (word[2] < x0 or word[0] > x1 or word[3] < y0 or word[1] > y1)).split()
+                    )
+                    if not region or normalized_quote not in region:
+                        result["location_level"] = "region"
+                        if result.get("verification_status") == "verified":
+                            result["verification_status"] = "unverified"
+                        result["validation_note"] = "bbox 区域内容与引文不符，已降级为区域定位"
         result["physical_page"] = page_number
     except ImportError:
         result["physical_page"] = None
@@ -483,6 +532,21 @@ async def create_job_correction(job_id: str, body: CorrectionRequest, request: R
             )
         raise HTTPException(status_code=409, detail="current analysis basis unavailable")
 
+    # ZC-05（AC-10）：校正不再只是留痕——事实改值以不可变覆盖层进入下一轮
+    # 分析，重跑受影响链路后发布新的分析版本（旧版本保留可回放）。
+    reanalysis_status = "queued"
+    runner = runtime.get_pipeline_runner()
+    if runner is None:
+        reanalysis_status = "not_executed_no_pipeline_runner"
+    else:
+        async def _run_reanalysis() -> None:
+            try:
+                await runner(job_dir)
+            except Exception:  # noqa: BLE001 - 后台重算失败由快照状态如实呈现
+                logger.exception("correction reanalysis failed for job %s", job_id)
+
+        asyncio.get_running_loop().create_task(_run_reanalysis())
+
     return {
         "correction_id": record["record_id"],
         "record_status": "append_only_overlay",
@@ -490,9 +554,16 @@ async def create_job_correction(job_id: str, body: CorrectionRequest, request: R
         "analysis_revision": basis.rsplit(":", 1)[-1],
         "new_analysis_revision": None,
         "affected_checks": affected,
-        "reanalysis_status": "not_executed_fact_overlay_not_consumed_by_production_rules",
-        "review_decisions_status": "unchanged_until_new_analysis_is_published",
-        "message": "校正已追加留痕；当前生产规则尚未消费校正覆盖层，未执行局部重算。",
+        "reanalysis_status": reanalysis_status,
+        "review_decisions_status": (
+            "pending_reanalysis" if reanalysis_status == "queued" else "unchanged_until_new_analysis_is_published"
+        ),
+        "message": (
+            "校正已追加留痕，并已触发基于校正后事实的重新分析；"
+            "完成后将发布新的分析版本，旧版本保留可回放。"
+            if reanalysis_status == "queued"
+            else "校正已追加留痕；重算未触发。"
+        ),
     }
 
 

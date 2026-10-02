@@ -254,6 +254,18 @@ def test_text_output_limit_is_enforced(three_page_pdf, monkeypatch):
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows 没有 RLIMIT_AS，内存硬上限不适用")
 def test_memory_limit_is_enforced(three_page_pdf, monkeypatch):
+    # AC-16：先用探针确认本平台内核是否真的强制 RLIMIT_AS——Linux 容器内
+    # 强制执行，超限分配必须 MemoryError（受控终止 + 失败回执）；macOS/Darwin
+    # 接受 setrlimit 但不强制，平台差异如实记录并跳过（目标部署 = Linux
+    # 容器，其保护由本测试在可强制平台上实跑验证）。
+    from src.services.pdf_parse_process import probe_memory_limit_enforceable
+
+    if not probe_memory_limit_enforceable(128):
+        pytest.skip(
+            "RLIMIT_AS 在本平台不被内核强制（macOS/Darwin 或受限沙箱）；"
+            "目标部署（Linux 容器）由内核强制，且支持容器级 memory limit"
+        )
+
     monkeypatch.delenv("PDF_PARSE_TEST_DELAY_SECONDS", raising=False)
     monkeypatch.setenv("PDF_PARSE_TEST_ALLOCATE_MB", "512")
 

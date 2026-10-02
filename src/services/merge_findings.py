@@ -112,9 +112,16 @@ class FindingsMerger:
                 # Multiple candidates for one fact/check relation cannot be
                 # greedily paired. Keep every source item and put the relation
                 # into review with all candidate IDs attached.
+                # AC-11：歧义只影响 AI 侧——规则发现是确定性来源，必须保留在
+                # 正式集合（merged_ids），不得因 AI 重复/更弱候选被移入待复核。
                 conflict_count += 1
                 ambiguous_ai_indices.update(ai_indices)
                 ambiguous_rule_indices.update(rule_indices)
+                rule_representative = (
+                    rule_findings[rule_indices[0]].id if rule_indices else None
+                )
+                if rule_representative:
+                    merged_ids.append(rule_representative)
                 conflict = ConflictItem(
                     key=relation_id,
                     ai_issue=ai_findings[ai_indices[0]].id if ai_indices else None,
@@ -137,7 +144,7 @@ class FindingsMerger:
                         "fact_ids": list(parts[1]),
                         "ai_issue_ids": [ai_findings[index].id for index in ai_indices],
                         "rule_issue_ids": [rule_findings[index].id for index in rule_indices],
-                        "representative_issue_id": None,
+                        "representative_issue_id": rule_representative,
                         "status": "ambiguous",
                         "conflict_reasons": ["ambiguous-relation"],
                     }
@@ -198,9 +205,7 @@ class FindingsMerger:
             )
         for index in rule_unmatched:
             item = rule_findings[index]
-            if index in ambiguous_rule_indices:
-                manual_review_issue_ids.append(item.id)
-                continue
+            # AC-11：规则发现不因关系歧义退出正式集合；歧义留痕在 relation。
             merged_ids.append(item.id)
             parts = _relation_parts(item)
             key = _relation_key(parts) if parts else f"rule-only:{item.id}"
@@ -213,7 +218,9 @@ class FindingsMerger:
                     "rule_issue_ids": [item.id],
                     "representative_issue_id": item.id,
                     "status": "unmatched_rule",
-                    "conflict_reasons": [],
+                    "conflict_reasons": (
+                        ["ambiguous-relation"] if index in ambiguous_rule_indices else []
+                    ),
                 }
             )
 

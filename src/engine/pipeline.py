@@ -448,10 +448,22 @@ def build_issues_payload(
     buckets["all"] = items
     # 规则执行摘要（增量字段，向后兼容）：insufficient/parse/execution_error
     # 不再伪装成 finding，质量门据此 fail-closed
-    return {
+    payload = {
         "issues": buckets,
         "rule_execution_summary": summarize_rule_outcomes(outcomes),
     }
+    # ZC-03（AC-04）：规则写下的关系级子检查回执随 payload 返回——
+    # Document 在子进程内构建，其上的回执必须在这里收割后才传得回来。
+    fact_receipts = list(getattr(doc, "fact_receipts", None) or [])
+    if fact_receipts:
+        payload["fact_receipts"] = fact_receipts
+    fact_context = getattr(doc, "fact_context", None)
+    if fact_context is not None:
+        try:
+            payload["fact_context_summary"] = fact_context.summary()
+        except Exception:
+            payload["fact_context_summary"] = {"error": "summary_failed"}
+    return payload
 
 
 #: MR-3 文档级可读性闸门的覆盖率阈值（与 api 层质量门的 low_page_coverage

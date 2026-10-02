@@ -157,6 +157,13 @@ class Document:
     # 规则体回退到"文件名基名 + 正文首页"推断（独立验收 2026-09-17
     # kind_disagreement 反例的整改）。
     report_kind: Optional[str] = None
+    # ZC-01（AC-01）：统一财政事实上下文——规则执行前从同一次解析的
+    # ParseArtifact 物化，规则、AI、证据、入库消费同一版本。None 表示
+    # 解析对象缺失/无可识别事实，规则回退 legacy 路径并如实留痕。
+    fact_context: Optional[Any] = None
+    # ZC-03（AC-04）：规则在执行中写下的关系级子检查回执
+    # （CheckReceipt.to_dict() 形态），由 build_issues_payload 收集上报。
+    fact_receipts: List[Dict[str, Any]] = field(default_factory=list)
 
 
 # ---------- 工具 ----------
@@ -250,13 +257,27 @@ def majority(items: List[Any]) -> Optional[Any]:
     c = Counter(items).most_common(1)
     return c[0][0] if c else None
 
-# 数值容差比较（±1 或 相对 0.1% 取较大）
+# AC-06（SYS-08）：数值容差比较统一走 v3_3_portable 政策——绝对 0.5 万元，
+# 不再使用"±1 或相对 0.1% 取较大"的旧口径（相对容差会让大额差异漏报）。
+# 旧 atol/rtol 形参仅为调用兼容保留，实际不再参与计算。
 def tolerant_equal(a: Optional[float], b: Optional[float],
                    atol: float = 1.0, rtol: float = 0.001) -> bool:
     if a is None or b is None:
         return False
-    tol = max(atol, abs(a) * rtol, abs(b) * rtol)
-    return abs(a - b) <= tol
+    return not amount_difference_exceeds_policy(Decimal(str(a)) - Decimal(str(b)))
+
+
+def _amount_mismatch(a: Any, b: Any, *, rounding_envelope: Any = None) -> bool:
+    """AC-06：生产金额比较统一政策口径（绝对 0.5 万元 + 独立舍入包络）。
+
+    所有表内/表间/表文的金额相等性判定都必须经由本函数或
+    :func:`classify_amount_diff`，不得再手写 ``_amount_mismatch(a, b)`` 类局部容差。
+    """
+    try:
+        diff = Decimal(str(a)) - Decimal(str(b))
+    except Exception:
+        return False
+    return amount_difference_exceeds_policy(diff, rounding_envelope)
 
 def calculate_dynamic_tolerance(a: float, b: float, base_tol: float = 1.0) -> float:
     """统一的动态容差计算：根据金额级别调整容差"""
@@ -2293,7 +2314,7 @@ class R33103_Income_vs_Text(Rule):
         p_txt = find_percent(sec_text, ["财政拨款收入", "占比", "比重"])
         if p_txt is not None and total and fp:
             p_calc = round(fp / total * 100, 2)
-            if abs(p_calc - p_txt) > 1.0:
+            if percentage_difference_exceeds_policy(abs(Decimal(str(p_calc)) - Decimal(str(p_txt)))):
                 issues.append(self._issue(f"财政拨款收入占比：表算{p_calc}% ≠ 文本{p_txt}%（容忍±1pct）", {"page": p}, "warn"))
 
         if unresolved:
@@ -2375,7 +2396,7 @@ class R33104_Expense_vs_Text(Rule):
             pct_t = find_percent(sec_text, [nm, "占比", "比重"])
             if pct_t is not None and total and a:
                 pct_c = round(a / total * 100, 2)
-                if abs(pct_c - pct_t) > 1.0:
+                if percentage_difference_exceeds_policy(abs(Decimal(str(pct_c)) - Decimal(str(pct_t)))):
                     issues.append(self._issue(f"{nm}占比：表算{pct_c}% ≠ 文本{pct_t}%（容忍±1pct）", {"page": p}, "warn"))
 
         if unresolved:
@@ -2531,7 +2552,7 @@ class R33106_GeneralBudgetStruct(Rule):
                     if section_text:
                         found_pct = find_percent(section_text, [func_name])
                     if found_pct is not None:
-                        if abs(pct - found_pct) > 2.0:
+                        if percentage_difference_exceeds_policy(abs(Decimal(str(pct)) - Decimal(str(found_pct)))):
                             issues.append(self._issue(
                                 f"{func_name}占比：表格计算{pct:.1f}%，文本{found_pct:.1f}%，差异超过2%",
                                 {"page": p, "pos": 0}
@@ -3285,7 +3306,7 @@ def _get_table_rows(
                         continue  # 跨页重复表头
                     if _is_blind_fragment_row(r):
                         continue  # 盲行/换行残片
-                    if modal is not None and abs(len(r) - modal) > 1:
+                    if modal is not None and _amount_mismatch(len(r), modal):
                         # 宽度漂移：不并入并留痕，由调用方决定 RuleDeferred
                         if merge_meta is not None:
                             merge_meta.setdefault(
@@ -3985,7 +4006,7 @@ class R33119_FiscalTotalCheck(Rule):
                     total = vals[-4]
                     sub_total = sum(vals[-3:])
                 
-                if abs(total - sub_total) > 0.05: # 容差
+                if _amount_mismatch(total, sub_total): # 容差
                     row_txt = "".join([str(c) for c in row if c])[:20]
                     issues.append(self._issue(
                         f"行横向校验失败(第{i+1}行 '{row_txt}...'): 合计({total}) != 分项之和({sub_total})",
@@ -4025,7 +4046,10 @@ class R33119_FiscalTotalCheck(Rule):
                 exp = row_exp[idx]
                 end = row_end[idx]
                 
-                if abs((inc + start) - (exp + end)) > 0.05:
+                if _amount_mismatch(
+                    Decimal(str(inc + start)), Decimal(str(exp + end)),
+                    rounding_envelope=rounding_envelope(3),
+                ):
                     issues.append(self._issue(
                         f"列纵向平衡失败({c_name}): 收入({inc})+年初({start}) != 支出({exp})+年末({end})",
                         {"table": table_name, "col": c_name}, "error",
@@ -4613,7 +4637,7 @@ class R33200_InterTable_T1_T2(Rule):
                 ],
             )
         if t1_income is not None and t1_income > 0.01 and t2_income > 0.01:
-            if abs(t1_income - t2_income) > 0.01:
+            if _amount_mismatch(t1_income, t2_income):
                 issues.append(self._issue(
                     f"T1↔T2收入合计不一致：T1={t1_income:.2f}, T2={t2_income:.2f}",
                     {"t1": t1_income, "t2": t2_income}, "error",
@@ -4682,7 +4706,7 @@ class R33201_InterTable_T1_T3(Rule):
                 break
 
         if t1_expense is not None and t1_expense > 0.01 and t3_expense > 0.01:
-            if abs(t1_expense - t3_expense) > 0.01:
+            if _amount_mismatch(t1_expense, t3_expense):
                 issues.append(self._issue(
                     f"T1↔T3支出合计不一致：T1={t1_expense:.2f}, T3={t3_expense:.2f}",
                     {"t1": t1_expense, "t3": t3_expense}, "error",
@@ -4878,7 +4902,7 @@ class R33203_InterTable_T5_T6(Rule):
         t6_basic = sum_301 + sum_302 + sum_303 + sum_310
         
         if t5_basic > 0.01 and t6_basic > 0.01:
-            if abs(t5_basic - t6_basic) > 0.05:  # 允许0.05容差
+            if _amount_mismatch(t5_basic, t6_basic):  # 允许0.05容差
                 issues.append(self._issue(
                     f"T5↔T6基本支出不一致：T5={t5_basic:.2f}, T6={t6_basic:.2f}",
                     {"t5": t5_basic, "t6": t6_basic}, "error",
@@ -4956,7 +4980,7 @@ class R33243_Table6_BasicExpenseAdvancedCheck(Rule):
                 children = [v["val"] for k, v in code_data.items() if k.startswith(p_code) and len(k) > len(p_code)]
                 if children:
                     child_sum = sum(children)
-                    if abs(parent_val - child_sum) > 1.0: # 弱校验
+                    if _amount_mismatch(parent_val, child_sum): # 弱校验
                         issues.append(self._issue(
                             f"【表六】一级科目明细汇总不平({p_code})：一级数({parent_val:.2f}) != 明细和({child_sum:.2f})，差额={abs(parent_val-child_sum):.2f}",
                             {"code": p_code, "severity": "info"}, "info",
@@ -4975,7 +4999,7 @@ class R33243_Table6_BasicExpenseAdvancedCheck(Rule):
         
         if p_total > 0:
             calc_p = s301 + s303
-            if abs(p_total - calc_p) > 0.01:
+            if _amount_mismatch(p_total, calc_p):
                 issues.append(self._issue(
                     f"【表六】人员经费口径错误：人员总计({p_total:.2f}) != 301({s301:.2f}) + 303({s303:.2f}) = {calc_p:.2f}",
                     {"type": "personnel"}, "error",
@@ -4984,7 +5008,7 @@ class R33243_Table6_BasicExpenseAdvancedCheck(Rule):
         
         if u_total > 0:
             calc_u = s302 + s310
-            if abs(u_total - calc_u) > 0.01:
+            if _amount_mismatch(u_total, calc_u):
                 issues.append(self._issue(
                     f"【表六】公用经费口径错误：公用总计({u_total:.2f}) != 302({s302:.2f}) + 310({s310:.2f}) = {calc_u:.2f}",
                     {"type": "public"}, "error",
@@ -4994,7 +5018,7 @@ class R33243_Table6_BasicExpenseAdvancedCheck(Rule):
         # 3. 总额闭合
         b_total = summary_data.get("basic_total", 0.0) or (p_total + u_total)
         l1_grand_sum = s301 + s302 + s303 + s310
-        if abs(b_total - l1_grand_sum) > 0.01 and b_total > 0:
+        if _amount_mismatch(b_total, l1_grand_sum) and b_total > 0:
             issues.append(self._issue(
                 f"【表六】基本支出总结不平：基本支出合计({b_total:.2f}) != 四大一级科目之和({l1_grand_sum:.2f})",
                 {"total": b_total}, "error",
@@ -5046,7 +5070,7 @@ class R33214_T1_TotalBalance(Rule):
                 unresolved_reasons=["收入支出决算总表(T1)未提取到有效收支总计金额"],
             )
 
-        if abs(income_total - expense_total) > 0.01:
+        if _amount_mismatch(income_total, expense_total):
             issues.append(self._issue(
                 f"T1总计不平：收入侧总计({income_total:.2f}) != 支出侧总计({expense_total:.2f})",
                 {"income_total": income_total, "expense_total": expense_total}, "error",
@@ -5086,7 +5110,7 @@ class R33210_T2_RowColumnTotal(Rule):
                     total = sorted_vals[0]
                     parts_sum = sum(sorted_vals[1:])
                     if total > 0.01 and parts_sum > 0.01:
-                        if abs(total - parts_sum) > 0.05:
+                        if _amount_mismatch(total, parts_sum):
                             issues.append(self._issue(
                                 f"T2第{i+1}行合计不平：合计={total:.2f}, 分项和={parts_sum:.2f}",
                                 {"row": i+1, "total": total, "parts": parts_sum}, "warn",
@@ -5124,7 +5148,7 @@ class R33211_T3_RowTotal(Rule):
                     project = sorted_vals[2]
                     if total > 0.01:
                         calc = basic + project
-                        if abs(total - calc) > 0.05:
+                        if _amount_mismatch(total, calc):
                             issues.append(self._issue(
                                 f"T3第{i+1}行合计不平：合计={total:.2f}, 基本+项目={calc:.2f}",
                                 {"row": i+1}, "warn",
@@ -6107,7 +6131,7 @@ class R33242_Table4_ComprehensiveCheck(Rule):
         col_names = ["合计列", "一般公共预算列", "政府性基金列", "国有资本经营列"]
         
         # 1. 总平衡
-        if abs(data_in["total"][0] - data_out["total"][0]) > 0.01 and data_in["total"][0] > 0:
+        if _amount_mismatch(data_in["total"][0], data_out["total"][0]) and data_in["total"][0] > 0:
              issues.append(self._issue(
                 f"【表四】收支总计不平衡：收入侧总计({data_in['total'][0]:.2f}) != 支出侧总计({data_out['total'][0]:.2f})",
                 {"in": data_in["total"][0], "out": data_out["total"][0]}, "error",
@@ -6122,13 +6146,13 @@ class R33242_Table4_ComprehensiveCheck(Rule):
             # 2. 横向 (略)
             
             # 3. 纵向
-            if abs(tin - (op + inc)) > 0.05 and tin > 0: # 稍微放开一点容差，处理四舍五入
+            if _amount_mismatch(tin, (op + inc)) and tin > 0: # 稍微放开一点容差，处理四舍五入
                 issues.append(self._issue(
                     f"【表四】{c_name}收入侧(总={tin:.2f}) != 年初({op:.2f}) + 收入({inc:.2f})",
                     {"col": c_name}, "error",
                     evidence_text=f"表格：财政拨款收入支出决算总表\n列：{c_name}\n收入侧合计：{tin}\n计算：年初({op}) + 收入({inc})"
                 ))
-            if abs(tout - (exp + cl)) > 0.05 and tout > 0:
+            if _amount_mismatch(tout, (exp + cl)) and tout > 0:
                 issues.append(self._issue(
                     f"【表四】{c_name}支出侧(总={tout:.2f}) != 支出({exp:.2f}) + 年末({cl:.2f})",
                     {"col": c_name}, "error",
@@ -6137,7 +6161,7 @@ class R33242_Table4_ComprehensiveCheck(Rule):
                 
             # 4. 变动
             calc_cl = op + inc - exp
-            if abs(cl - calc_cl) > 0.05 and (cl > 0 or abs(calc_cl) > 0.1):
+            if _amount_mismatch(cl, calc_cl) and (cl > 0 or abs(calc_cl) > 0.1):
                 issues.append(self._issue(
                     f"【表四】{c_name}结转变动校验失败：年末({cl:.2f}) vs 计算值({calc_cl:.2f})",
                     {"col": c_name}, "error",
@@ -6192,7 +6216,7 @@ class R33204_InterTable_T2_T4(Rule):
                 break
         
         if t2_fiscal > 0.01 and t4_income > 0.01:
-            if abs(t2_fiscal - t4_income) > 0.05:
+            if _amount_mismatch(t2_fiscal, t4_income):
                 issues.append(self._issue(
                     f"T2↔T4财政拨款收入不一致：T2={t2_fiscal:.2f}, T4={t4_income:.2f}",
                     {"t2": t2_fiscal, "t4": t4_income}, "error",
@@ -6245,7 +6269,7 @@ class R33221_Narrative4_T4(Rule):
                     break
             
             # 收紧容差到 0.01
-            if t4_total > 0.01 and abs(narrative_total - t4_total) > 0.01:
+            if t4_total > 0.01 and _amount_mismatch(narrative_total, t4_total):
                 location = _make_issue_location(
                     _make_location_ref(
                         role="说明4",
@@ -6381,7 +6405,7 @@ class R33222_Narrative5_T5(Rule):
         )
         if total_match:
             nar_total = float(total_match.group(1).replace(",", ""))
-            if t5_total > 0.01 and abs(nar_total - t5_total) > 0.01:
+            if t5_total > 0.01 and _amount_mismatch(nar_total, t5_total):
                 location = _make_issue_location(
                     _make_location_ref(
                         role="说明5",
@@ -6433,7 +6457,7 @@ class R33222_Narrative5_T5(Rule):
             m = pattern.search(target_txt)
             if m:
                 nar_val = float(m.group(1))
-                if abs(nar_val - info['val']) > 0.01:
+                if _amount_mismatch(nar_val, info['val']):
                     location = _make_issue_location(
                         _make_location_ref(
                             role="说明5",
@@ -6904,7 +6928,7 @@ class R33223_Narrative6_T6(Rule):
             if not found_p:
                  # 没找到显式的“人员经费合计”行，尝试用所有301+303推导？比较复杂，暂时报未找到
                  pass 
-            elif abs(nar_personnel - t6_personnel) > 0.01:
+            elif _amount_mismatch(nar_personnel, t6_personnel):
                 location = _make_issue_location(
                     _make_location_ref(
                         role="说明6",
@@ -6934,7 +6958,7 @@ class R33223_Narrative6_T6(Rule):
         
         # 校验公用经费
         if nar_public is not None:
-            if found_pub and abs(nar_public - t6_public) > 0.01:
+            if found_pub and _amount_mismatch(nar_public, t6_public):
                 location = _make_issue_location(
                     _make_location_ref(
                         role="说明6",
@@ -7341,7 +7365,7 @@ class R33225_Narrative1_T1(Rule):
                         break
                 
                 # 收紧容差 0.01
-                if t1_total > 0.01 and abs(narrative_total - t1_total) > 0.01:
+                if t1_total > 0.01 and _amount_mismatch(narrative_total, t1_total):
                     location = _make_issue_location(
                         _make_location_ref(
                             role="说明1",

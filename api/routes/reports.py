@@ -396,24 +396,48 @@ def _build_export_location(issue: Dict[str, Any]) -> Dict[str, Any]:
         issue.get("page_number"),
     )
 
-    primary_bbox = (
-        _normalize_bbox(issue.get("bbox")) if _has_verified_exact_location(issue) else None
+    # AC-12：主页与 bbox 必须同源——bbox 只能取自"恰好位于主页"的来源。
+    # 此前 issue 主页（P1）可以配到第 2 页证据的 bbox，导出摘要自相矛盾。
+    primary_page = (
+        _to_positive_int(location.get("page"))
+        or _to_positive_int(issue.get("page_number"))
+        or (_to_positive_int(refs[0].get("page")) if refs else None)
+        or (
+            _to_positive_int(evidence[0].get("page"))
+            if evidence and isinstance(evidence[0], dict)
+            else None
+        )
+        or (pages[0] if pages else None)
     )
+
+    def _bbox_on_page(source: Dict[str, Any]) -> Optional[List[float]]:
+        if not _has_verified_exact_location(source):
+            return None
+        bbox = _normalize_bbox(source.get("bbox"))
+        if bbox is None:
+            return None
+        page = _to_positive_int(source.get("page"))
+        if page is not None and primary_page is not None and page != primary_page:
+            return None
+        return bbox
+
+    primary_bbox = _bbox_on_page(issue)
+    if primary_bbox is None:
+        primary_bbox = next((_bbox_on_page(ref) for ref in refs if _bbox_on_page(ref)), None)
     if primary_bbox is None:
         primary_bbox = next(
-            (
-                _normalize_bbox(ref.get("bbox"))
-                for ref in refs
-                if _has_verified_exact_location(ref) and _normalize_bbox(ref.get("bbox"))
-            ),
+            (_bbox_on_page(item) for item in evidence if isinstance(item, dict) and _bbox_on_page(item)),
             None,
         )
-    if primary_bbox is None and evidence and isinstance(evidence[0], dict):
-        if _has_verified_exact_location(evidence[0]):
-            primary_bbox = _normalize_bbox(evidence[0].get("bbox"))
+
+    evidence_ids = [
+        str(item.get("evidence_id"))
+        for item in evidence
+        if isinstance(item, dict) and str(item.get("evidence_id") or "").strip()
+    ]
 
     export_location = {
-        "page": pages[0] if pages else None,
+        "page": primary_page if primary_page is not None else (pages[0] if pages else None),
         "pages": pages,
         "table": str(location.get("table") or "").strip() or None,
         "section": str(location.get("section") or "").strip() or None,
@@ -436,6 +460,8 @@ def _build_export_location(issue: Dict[str, Any]) -> Dict[str, Any]:
         "table_ref_count": len(refs),
         "role_summary": _build_role_summary(refs, fallback=location),
         "table_refs": refs,
+        # AC-12：定位对象携带证据身份，页码/bbox/等级/证据ID 同对象输出
+        "evidence_ids": evidence_ids,
     }
 
     return {key: value for key, value in export_location.items() if value not in (None, "", [])}
@@ -605,7 +631,31 @@ def _build_export_conclusion(status_payload: Dict[str, Any], issue_count: int) -
     """
     scope = _build_check_scope_export(status_payload)
     unfinished = scope.get("unfinished_checks")
-    analysis_conclusion = str(status_payload.get("analysis_conclusion") or "").strip()
+    # AC-12：结论单一来源——优先读选定版本 canonical ReviewReport 的结论；
+    # 顶层 analysis_conclusion 只在没有 canonical 结论时兜底，禁止两个来源
+    # 并存时互相矛盾（canonical=incomplete 被顶层 no_findings 覆盖的反例）。
+    review_report = (
+        status_payload.get("review_report")
+        if isinstance(status_payload.get("review_report"), dict)
+        else {}
+    )
+    canonical_conclusion = ""
+    canonical_metadata = (
+        review_report.get("metadata")
+        if isinstance(review_report.get("metadata"), dict)
+        else {}
+    )
+    for source in (
+        review_report.get("conclusion"),
+        canonical_metadata,
+    ):
+        if isinstance(source, dict):
+            canonical_conclusion = str(source.get("analysis_conclusion") or "").strip()
+            if canonical_conclusion:
+                break
+    analysis_conclusion = canonical_conclusion or str(
+        status_payload.get("analysis_conclusion") or ""
+    ).strip()
 
     unfinished_items: List[Dict[str, Any]] = []
     coverage_known: Optional[bool] = None
@@ -1601,13 +1651,52 @@ def _create_annotated_pdf(
     return output_path
 
 
+def _load_revision_payload(job_id: str, analysis_revision: Optional[str]) -> Dict[str, Any]:
+    """按 revision id 读取历史分析版本快照（AC-12：历史版本下载入口）。
+
+    不传 revision 时返回当前 status payload；传入时只接受目录名或
+    analysis_revision 精确匹配，路径穿越被拒绝，找不到返回 404。
+    """
+    if not analysis_revision:
+        return runtime.get_job_status_payload(job_id)
+    revision = str(analysis_revision).strip()
+    if not revision or "/" in revision or "\\" in revision or revision.startswith("."):
+        raise HTTPException(status_code=422, detail="invalid analysis_revision")
+    versions_dir = runtime.UPLOAD_ROOT / job_id / "analysis_versions"
+    candidates: List[Path] = []
+    direct = versions_dir / revision / "status.json"
+    if direct.is_file():
+        candidates.append(direct)
+    if not candidates and versions_dir.is_dir():
+        for revision_dir in versions_dir.glob("rev-*"):
+            path = revision_dir / "status.json"
+            if not path.is_file():
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if str(payload.get("analysis_revision")) == revision:
+                candidates.append(path)
+    if not candidates:
+        raise HTTPException(status_code=404, detail="analysis_revision not found")
+    try:
+        payload = json.loads(candidates[-1].read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="analysis_revision is unreadable") from exc
+    payload.setdefault("job_id", job_id)
+    return payload
+
+
 @router.get("/api/reports/download")
 async def download_report(
     request: Request,
     job_id: str,
     format: str = Query(default="pdf", pattern="^(pdf|json|csv|docx)$"),
+    analysis_revision: Optional[str] = Query(default=None),
 ):
     _, _, _, status_payload = require_job_access(request, job_id)
+    status_payload = _load_revision_payload(job_id, analysis_revision)
     issues = _extract_issues(status_payload)
     review_report = status_payload.get("review_report")
     review_report = review_report if isinstance(review_report, dict) else {}

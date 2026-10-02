@@ -95,8 +95,10 @@ def test_zc06_duplicate_relation_is_ambiguous_and_not_greedily_paired() -> None:
     assert summary.totals["conflicts"] == 1
     assert summary.relations[0]["status"] == "ambiguous"
     assert set(summary.relations[0]["ai_issue_ids"]) == {"ai-1", "ai-2"}
-    assert summary.merged_ids == []
-    assert set(summary.manual_review_issue_ids) == {"ai-1", "ai-2", "rule-1"}
+    # AC-11：歧义只把 AI 侧转待复核；规则发现保留在正式集合
+    assert summary.merged_ids == ["rule-1"]
+    assert summary.relations[0]["representative_issue_id"] == "rule-1"
+    assert set(summary.manual_review_issue_ids) == {"ai-1", "ai-2"}
 
 
 def test_zc06_ai_contract_accepts_only_known_sources_and_keeps_good_items() -> None:

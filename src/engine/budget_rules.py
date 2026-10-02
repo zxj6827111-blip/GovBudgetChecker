@@ -28,6 +28,7 @@ from src.utils.narration import merge_soft_wrapped_lines
 from .field_extractor import (
     STATUS_MISSING_COLUMN,
     STATUS_OUT_OF_BOUNDS,
+    STATUS_VALID,
     StrictValue,
     extract_row_strict,
     find_column_index,
@@ -412,16 +413,23 @@ def _largest_table_on_page(tables: Sequence[Sequence[Sequence[Any]]]) -> Optiona
 # 与页级表题锚（find_budget_anchors）互补。同页多表时按签名命中数选择；
 # 无任何证据或并列时 fail-closed 返回 None（转未完成），不猜最大表。
 # ---------------------------------------------------------------------------
+#: 签名词与 BUDGET_TABLE_SPECS 的表种编号严格对齐（AC-02：此前 T6—T9
+#: 整体错位一格，T9 被写成"国有资本经营"，同页放三公表+国资表时
+#: 国资表按签名胜出并被当作三公表取数）。
 _BUDGET_TABLE_SIGNATURES: Dict[str, Tuple[str, ...]] = {
     "BUD_T1": ("收入总计", "支出总计", "收入预算", "支出预算"),
     "BUD_T2": ("本年收入合计", "财政拨款收入", "事业收入", "上年结转"),
     "BUD_T3": ("本年支出合计", "基本支出", "项目支出", "财政拨款支出"),
     "BUD_T4": ("财政拨款收支", "财政拨款收入", "财政拨款支出", "年初结转和结余"),
     "BUD_T5": ("科目编码", "功能分类", "类", "款", "项"),
-    "BUD_T6": ("经济分类", "工资福利支出", "商品和服务支出", "对个人和家庭的补贴"),
-    "BUD_T7": ("政府采购", "货物", "工程", "服务"),
-    "BUD_T8": ("政府性基金", "基金预算"),
-    "BUD_T9": ("国有资本经营", "国有资本"),
+    # T6 = 政府性基金预算支出功能分类预算表
+    "BUD_T6": ("政府性基金", "基金预算"),
+    # T7 = 国有资本经营预算支出功能分类预算表
+    "BUD_T7": ("国有资本经营", "国有资本"),
+    # T8 = 一般公共预算基本支出经济分类预算表
+    "BUD_T8": ("经济分类", "工资福利支出", "商品和服务支出", "对个人和家庭的补贴"),
+    # T9 = "三公"经费和机关运行经费预算表
+    "BUD_T9": ("三公", "因公出国", "公务用车", "公务接待", "机关运行经费"),
 }
 
 #: 续表身份校验的最小证据：列数一致，且表头文本重合或数据行延续
@@ -437,6 +445,52 @@ def _table_signature_score(rows: Sequence[Sequence[Any]], table_key: str) -> int
         str(cell or "").strip() for row in rows[:6] for cell in row if str(cell or "").strip()
     )
     return sum(1 for token in tokens if token in text)
+
+
+def _alias_to_table_key() -> Dict[str, str]:
+    """表题别名（归一化）→ 表种 key。"""
+    mapping: Dict[str, str] = {}
+    for spec in BUDGET_TABLE_SPECS:
+        key = str(spec["key"])
+        for alias in spec.get("aliases", []):
+            normalized = normalize_text(alias)
+            if normalized:
+                mapping[normalized] = key
+    return mapping
+
+
+def _page_introduces_different_table(
+    doc: Document, page_number: int, table_key: str
+) -> bool:
+    """续页正文是否引入了**另一表种**的表题（AC-02：是则不得拼接）。
+
+    真实续表页常重复同表题（视为延续）；若该页文本出现映射到其它表种
+    的表题别名，说明该页是新表（如同页放 T3 与 T5），必须停止合并。
+    """
+    if page_number < 1 or page_number > len(doc.page_texts):
+        return False
+    text = normalize_text(str(doc.page_texts[page_number - 1] or ""))
+    if not text:
+        return False
+    for alias, key in _alias_to_table_key().items():
+        if alias in text and key != table_key:
+            return True
+    return False
+
+
+def _starts_with_table_title(rows: Sequence[Sequence[Any]]) -> bool:
+    """表格首部是否内嵌独立表题（AC-02：带标题行 = 新的独立表实例）。"""
+    for row in rows[:2]:
+        for cell in row:
+            text = str(cell or "").strip()
+            if not text:
+                continue
+            normalized = normalize_text(text)
+            if not normalized:
+                continue
+            if any(alias and alias in normalized for alias in _BUDGET_TABLE_TITLE_NORMS):
+                return True
+    return False
 
 
 def _select_target_table_on_page(
@@ -537,12 +591,20 @@ def _get_budget_table_rows(
         # 身份冲突（下一页是另一张表）时停止拼接，保留已确认部分。
         current_page = page
         while current_page < len(doc.page_tables):
+            # AC-02：续页歧义必须 fail-closed（转未完成），不得回退猜
+            # 本页最大表——那是"下一页异表直接拼接"反例的根源。
             next_table = _select_target_table_on_page(
                 doc.page_tables[current_page], table_key
             )
-            if next_table is None:
-                next_table = _largest_table_on_page(doc.page_tables[current_page])
             if not next_table:
+                break
+            # AC-02：续页带独立表题（与目标表种同名的新表标题行）说明是
+            # 新的一张表，不是续页——同表头不同实例不得拼接。
+            if _starts_with_table_title(next_table):
+                break
+            # AC-02：续页正文引入了其它表种的表题（如 T3 续页出现 T5 表题），
+            # 说明下一页是新表，不得按同签名拼接。
+            if _page_introduces_different_table(doc, current_page + 1, table_key):
                 break
             if not _continuation_identity_matches(rows, next_table):
                 break
@@ -554,10 +616,23 @@ def _get_budget_table_rows(
     return rows, page
 
 
+def _is_total_row(row: Sequence[Any]) -> bool:
+    """判定"合计行"：行首标签（首个非空单元格）以合计/总计开头。
+
+    AC-02：此前按整行文本包含"合计"判定，导致"合计"作为**列头**（如
+    "项目 | 合计 | ..."）时每一行都被当合计行——续表提前停止拼接。
+    """
+    for cell in row:
+        text = str(cell or "").strip()
+        if not text:
+            continue
+        return text.startswith("\u5408\u8ba1") or text.startswith("\u603b\u8ba1")
+    return False
+
+
 def _has_total_row(rows: Sequence[Sequence[Any]]) -> bool:
     for row in rows[-8:]:
-        txt = _row_text(row)
-        if ("\u5408\u8ba1" in txt) or ("\u603b\u8ba1" in txt):
+        if _is_total_row(row):
             return True
     return False
 
@@ -1005,6 +1080,241 @@ def _extract_text_strict_by_patterns(
             if sv.is_numeric:
                 return sv
     return None
+
+
+# ---------------------------------------------------------------------------
+# ZC-01/03（AC-01/04）：统一事实操作数与关系级回执的规则侧辅助。
+# ---------------------------------------------------------------------------
+
+
+def _portable_amount_tolerance() -> Dict[str, Any]:
+    """统一政策容差的回执记录（v3_3_portable：绝对 0.5 万元 + 舍入包络）。"""
+    return {
+        "configured_amount_tolerance_wan": "0.5",
+        "configured_percentage_point_tolerance": "0.1",
+        "rounding_envelope_wan": "policy",
+        "actual_envelope_source": "fact_policy",
+    }
+
+
+def _doc_fact_receipts(doc: Document) -> List[Dict[str, Any]]:
+    """取（必要时创建）Document 上的关系级回执 accumulating 列表。"""
+    receipts = getattr(doc, "fact_receipts", None)
+    if receipts is None:
+        receipts = []
+        try:
+            doc.fact_receipts = receipts
+        except Exception:
+            pass
+    return receipts
+
+
+def _fact_to_strict_value(fact: Any) -> Optional[StrictValue]:
+    """统一事实 → StrictValue 适配（万元归一值已是 Decimal）。"""
+    if fact is None or fact.normalized_value is None:
+        return None
+    return StrictValue(
+        raw_text=str(fact.raw_value or fact.normalized_value),
+        status=STATUS_VALID,
+        decimal_val=fact.normalized_value,
+        raw_decimal=fact.normalized_value,
+        unit=str(fact.unit or "万元"),
+        scale_digits=fact.display_precision if fact.display_precision is not None else 2,
+    )
+
+
+def _fact_operand_for_indicator(
+    fact_context: Any,
+    indicator: str,
+    *,
+    table_code: Optional[str] = None,
+    subject_tokens: Sequence[str] = (),
+    report_year: Optional[int] = None,
+    budget_stages: Sequence[str] = (),
+) -> Tuple[Optional[StrictValue], Optional[Any], Optional[str]]:
+    """从统一事实上下文取一个确定操作数。
+
+    返回 (StrictValue, fact, block_reason)：
+    - 命中可用事实 → (sv, fact, None)；
+    - 该指标只有不可作操作数的事实（ambiguous/low_confidence）→ (None, fact, 原因)；
+    - 完全没有该指标的事实 → (None, None, None)——调用方走 legacy 路径。
+
+    年度/阶段纪律：事实携带与 report_year 冲突的 fiscal_year、或预算材料中
+    携带"决算"阶段时，不属于本年本口径，跳过（不当作本年操作数）。
+    """
+    if fact_context is None:
+        return None, None, None
+    candidates = []
+    for fact in fact_context.facts:
+        if indicator and fact.indicator != indicator:
+            continue
+        if table_code and fact.table_code != table_code:
+            continue
+        if (
+            report_year is not None
+            and fact.fiscal_year is not None
+            and int(fact.fiscal_year) != int(report_year)
+        ):
+            continue
+        if budget_stages and fact.budget_stage and not any(
+            stage in str(fact.budget_stage) for stage in budget_stages
+        ):
+            continue
+        if subject_tokens:
+            name = normalize_text(str(fact.subject_name or ""))
+            if not any(token in name for token in subject_tokens):
+                continue
+        candidates.append(fact)
+    if not candidates:
+        return None, None, None
+    usable = [item for item in candidates if item.recognition_status in ("unverified", "verified")]
+    if usable:
+        usable.sort(
+            key=lambda item: (item.recognition_status != "verified", item.confidence or 0.0),
+            reverse=True,
+        )
+        top = usable[0]
+        return _fact_to_strict_value(top), top, None
+    blocked = candidates[0]
+    return (
+        None,
+        blocked,
+        f"事实 {blocked.fact_uid} 识别状态为 {blocked.recognition_status}，不能作为确定操作数",
+    )
+
+
+def _append_relation_receipt(
+    doc: Document,
+    rule_id: str,
+    sub_check_id: str,
+    *,
+    operand_fact_ids: Sequence[str] = (),
+    formula: Optional[str] = None,
+    status: str,
+    incomplete_reason: Optional[str] = None,
+    issue_refs: Sequence[str] = (),
+    tolerance: Optional[Dict[str, Any]] = None,
+) -> None:
+    """把一条关系级子检查回执写上 Document（AC-04）。"""
+    from src.engine.fact_context import make_fact_receipt
+
+    _doc_fact_receipts(doc).append(
+        make_fact_receipt(
+            rule_id,
+            sub_check_id,
+            operand_fact_ids=operand_fact_ids,
+            formula=formula,
+            status=status,
+            incomplete_reason=incomplete_reason,
+            issue_refs=issue_refs,
+            tolerance=tolerance,
+        )
+    )
+
+
+# SYS-03（AC-03）：叙述金额必须绑定年度。命中句前文出现明确非本年年度、
+# "上年/上一年/去年/历史"等标记时，该金额属于历史口径，不得参与本年比较。
+_PREVIOUS_YEAR_CONTEXT_TOKENS = ("上年", "上一年", "去年", "历史情况", "历史数据", "历史年度")
+#: 资金口径限定词：T1 收支总表比较的是全口径收支总计，命中句前文出现
+#: 这些限定词说明金额是资金分项（一般公共预算/基金/国资/财政拨款拨款），
+#: 不参与全口径比较（独立验收 AC-03 补充反例的消歧规则）。
+_FUND_SCOPE_QUALIFIER_TOKENS = ("一般公共预算", "政府性基金", "国有资本", "财政拨款")
+_YEAR_BEFORE_PATTERN_RE = re.compile(r"(20\d{2})\s*年[^0-9，。；]{0,12}$")
+
+
+def _sentence_context_before(text: str, start: int, window: int = 48) -> str:
+    """取命中位置之前的短上下文（截到最近的句界，防跨句污染）。"""
+    segment = text[max(0, start - window):start]
+    for sep in ("。", "；", "！", "？", "\n"):
+        idx = segment.rfind(sep)
+        if idx != -1:
+            segment = segment[idx + 1:]
+    return segment
+
+
+def _match_belongs_to_report_year(text: str, match_start: int, report_year: Optional[int]) -> bool:
+    """判断一处叙述金额命中是否属于本年口径。
+
+    - 上下文出现"上年/去年/历史"等标记 → 非本年；
+    - 上下文出现明确年份且 != 本年 → 非本年（如"2025年收入预算…"）；
+    - 上下文出现明确年份且 == 本年 → 本年；
+    - 无任何标记 → 中性候选（交给调用方与其它候选消歧）。
+    """
+    context = _sentence_context_before(text, match_start)
+    if any(token in context for token in _PREVIOUS_YEAR_CONTEXT_TOKENS):
+        return False
+    year_match = _YEAR_BEFORE_PATTERN_RE.search(context)
+    if year_match:
+        try:
+            year = int(year_match.group(1))
+        except ValueError:
+            return True
+        if report_year is not None and year != report_year:
+            return False
+        return True
+    return True
+
+
+def _extract_text_strict_by_patterns_for_year(
+    text: str,
+    patterns: Sequence[str],
+    report_year: Optional[int],
+    default_unit: str = "万元",
+    qualifier_tokens: Sequence[str] = (),
+) -> Tuple[Optional[StrictValue], List[str]]:
+    """按年度绑定提取叙述金额（SYS-03 / AC-03）。
+
+    返回 (StrictValue, notes)。收集全部命中并按年度过滤：
+
+    - 上年/历史口径命中（上下文有"上年/历史"或明确非本年年度）一律排除
+      ——跨年取数误报的根源就在这里；
+    - 剩余候选中优先取上下文不含资金口径限定词（如"一般公共预算/财政拨款"）
+      的全口径候选，且金额全等才采用；
+    - 全口径候选彼此不等或全部带口径限定词时，确定性回退取首个本年候选
+      （与旧版"首个匹配"在本年内部的行为一致，但绝不跨年），并留痕说明。
+
+    这样：历史段位置变化不改变本年结果；本年真实数字差异仍会检出。
+    """
+    notes: List[str] = []
+    year_valid: List[StrictValue] = []
+    unqualified: List[StrictValue] = []
+    historical_count = 0
+    for pat in patterns:
+        for m in re.finditer(pat, text):
+            raw = m.group(1).strip()
+            sv = parse_strict_cell(raw, default_unit=default_unit)
+            if not sv.is_numeric:
+                continue
+            if not _match_belongs_to_report_year(text, m.start(), report_year):
+                historical_count += 1
+                continue
+            context = _sentence_context_before(text, m.start())
+            year_valid.append(sv)
+            if qualifier_tokens and any(token in context for token in qualifier_tokens):
+                continue
+            unqualified.append(sv)
+
+    if historical_count:
+        notes.append(f"已排除 {historical_count} 处上年/历史口径金额")
+    if not year_valid:
+        if historical_count:
+            notes.append("叙述金额均属于历史年度口径，未参与本年比较")
+        return None, notes
+
+    candidates = unqualified or year_valid
+    distinct = {str(item.decimal_val) for item in candidates}
+    if len(distinct) == 1:
+        if unqualified and len(year_valid) > len(unqualified):
+            notes.append("资金口径分项金额未参与全口径比较")
+        return candidates[0], notes
+
+    # 候选值不等：确定性回退取首个本年候选（不跨年），并如实留痕
+    if not unqualified:
+        values = "、".join(sorted(distinct))
+        notes.append(f"本年口径叙述金额存在多个资金口径值（{values}），已取首个本年匹配")
+    else:
+        notes.append("全口径叙述金额存在多个不同值，已取首个无口径限定匹配")
+    return candidates[0], notes
 
 
 
@@ -1666,19 +1976,66 @@ def _infer_budget_scope(doc: Document) -> Optional[str]:
     return None
 
 
+#: 条件性表适用性证据（AC-05）：正向资金内容 → applicable；
+#: 空表/未安排说明 → not_applicable；无任何痕迹 → unknown。
+_CONDITIONAL_POSITIVE_KEYWORDS: Dict[str, Tuple[str, ...]] = {
+    "BUD_T6": ("政府性基金", "基金预算"),
+    "BUD_T7": ("国有资本经营", "国有资本"),
+}
+#: 正面适用证据要求出现资金关键词且伴随预算数额信号（"安排/预算/拨款/收入 +
+#: 数字"），单纯目录或表头提及不算。
+_CONDITIONAL_AMOUNT_HINT_RE = re.compile(
+    r"(?:政府性基金|基金预算|国有资本经营|国有资本)[^。；\n]{0,40}?[0-9][0-9,]*(?:\.[0-9]+)?\s*(?:万元|元|亿元)"
+)
+
+
+def _conditional_table_applicability(table_key: str, all_text: str) -> str:
+    """条件性表三态判定（AC-05）：applicable / not_applicable / unknown。"""
+    keywords = _CONDITIONAL_POSITIVE_KEYWORDS.get(table_key, ())
+    has_keyword = any(token in all_text for token in keywords)
+    if not has_keyword:
+        return "unknown"
+    # 明确"未安排/不涉及/无…安排"说明 → 不涉及（且无金额证据时）
+    phrases = [
+        _EMPTY_TABLE_EXPECTED_PHRASES.get(table_key, ""),
+        "未安排",
+        "不涉及",
+        "无此项",
+    ]
+    phrase_hit = any(phrase and phrase in all_text for phrase in phrases)
+    if _CONDITIONAL_AMOUNT_HINT_RE.search(all_text):
+        return "applicable"
+    if phrase_hit:
+        return "not_applicable"
+    # 有关键词但既无数额也无空表说明：证据不足，不判缺表（降误报）
+    return "unknown"
+
+
 class BUD001_StructureAndAnchors(Rule):
     code, severity = "BUD-001", "error"
     desc = "\u9884\u7b97\u4e5d\u5f20\u8868\u5b8c\u6574\u6027\u4e0e\u5fc5\u5907\u7ae0\u8282\u68c0\u67e5"
+
+    #: 条件性表种（AC-05）：只有存在正面适用证据时才要求出现。
+    _CONDITIONAL_TABLE_KEYS = ("BUD_T6", "BUD_T7")
 
     def apply(self, doc: Document) -> List[Issue]:
         issues: List[Issue] = []
         anchors = find_budget_anchors(doc)
         doc.anchors = anchors
 
+        all_text = "\n".join(str(text or "") for text in doc.page_texts)
         for spec in BUDGET_TABLE_SPECS:
             key = spec["key"]
             if not anchors.get(key):
                 table_name = _table_display_name(key)
+                # SYS-13（AC-05）条件性表政策（portable：有则校验、无则不直接判缺失）：
+                # - unknown（材料无该资金任何痕迹）：不判缺表；
+                # - not_applicable（明确"未安排/不涉及/无…安排"）：不判缺表；
+                # - applicable（确有该资金预算内容）：缺表仍然必须检出。
+                if key in self._CONDITIONAL_TABLE_KEYS:
+                    state = _conditional_table_applicability(key, all_text)
+                    if state != "applicable":
+                        continue
                 issues.append(
                     self._issue(
                         f"\u7f3a\u5931\u9884\u7b97\u8868: {table_name} ({key})",
@@ -2486,12 +2843,24 @@ class BUD107_TextTableConsistency(Rule):
     code, severity = "BUD-107", "warn"
     desc = "表内数字与文字说明一致性"
 
+    #: T9 事实科目名 → 严格值键（预算材料：指标=budget 的行科目）
+    _T9_FACT_SUBJECTS: Dict[str, Tuple[str, ...]] = {
+        "total": ("合计", "总计"),
+        "abroad": ("因公出国",),
+        "reception": ("公务接待",),
+        "org_run": ("机关运行",),
+    }
+
     def apply(self, doc: Document) -> List[Issue]:
         anchors = find_budget_anchors(doc)
         issues: List[Issue] = []
         unresolved_reasons: List[str] = []
         checked_count = 0
 
+        # SYS-03（AC-03）：叙述金额绑定本年度；统一事实（AC-01）优先作为
+        # 表侧操作数；每个表文关系写关系级回执（AC-04）。
+        report_year = _infer_report_year(doc)
+        fact_ctx = getattr(doc, "fact_context", None)
         all_text = "\n".join(doc.page_texts)
 
         t1_rows, t1_page = _get_budget_table_rows(doc, anchors, "BUD_T1")
@@ -2504,19 +2873,59 @@ class BUD107_TextTableConsistency(Rule):
                 unresolved_reasons.append("T1单位未识别")
             else:
                 t1_inc_sv, t1_exp_sv = _extract_t1_strict(t1_rows, default_unit=unit)
-                text_inc_sv = _extract_text_strict_by_patterns(
+                # AC-01：表侧优先取统一事实（收入/支出，万元归一值）
+                fact_inc_sv, fact_inc_ref, fact_inc_block = _fact_operand_for_indicator(
+                    fact_ctx,
+                    "income_actual",
+                    table_code="FIN_01_income_expenditure_total",
+                    report_year=report_year,
+                    budget_stages=("预算",),
+                )
+                if fact_inc_sv is not None:
+                    t1_inc_sv = fact_inc_sv
+                fact_exp_sv, fact_exp_ref, fact_exp_block = _fact_operand_for_indicator(
+                    fact_ctx,
+                    "expenditure_actual",
+                    table_code="FIN_01_income_expenditure_total",
+                    report_year=report_year,
+                    budget_stages=("预算",),
+                )
+                if fact_exp_sv is not None:
+                    t1_exp_sv = fact_exp_sv
+                # AC-03：叙述金额按年度绑定提取，不再全文取首个匹配
+                text_inc_sv, notes_inc = _extract_text_strict_by_patterns_for_year(
                     all_text,
                     [r"收入预算\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
+                    report_year,
                     default_unit="万元",
+                    qualifier_tokens=_FUND_SCOPE_QUALIFIER_TOKENS,
                 )
-                text_exp_sv = _extract_text_strict_by_patterns(
+                text_exp_sv, notes_exp = _extract_text_strict_by_patterns_for_year(
                     all_text,
                     [r"支出预算\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
+                    report_year,
                     default_unit="万元",
+                    qualifier_tokens=_FUND_SCOPE_QUALIFIER_TOKENS,
                 )
+                # 消歧留痕只在提取失败时升格为未完成原因；成功取值时仅是
+                # 信息性说明，不能把"排除了历史/口径分项"当检查未完成。
+                if text_inc_sv is None:
+                    unresolved_reasons.extend(notes_inc)
+                if text_exp_sv is None:
+                    unresolved_reasons.extend(notes_exp)
 
                 if t1_inc_sv is None or text_inc_sv is None:
+                    if fact_inc_block:
+                        unresolved_reasons.append(f"T1收入预算{fact_inc_block}")
                     unresolved_reasons.append("T1收入预算或文本未提取到")
+                    _append_relation_receipt(
+                        doc, self.code, "T1:income_budget:text_vs_table",
+                        operand_fact_ids=[fact_inc_ref.fact_uid] if fact_inc_ref else [],
+                        formula="text.收入预算 == table.T1.收入 (万元)",
+                        status="insufficient_data",
+                        incomplete_reason="T1收入预算或文本未提取到",
+                        tolerance=_portable_amount_tolerance(),
+                    )
                 else:
                     env = _text_vs_table_envelope(text_inc_sv, t1_inc_sv)
                     diff_l, diff_v = classify_amount_diff(text_inc_sv.decimal_val, t1_inc_sv.decimal_val, 1, envelope=env)
@@ -2529,9 +2938,26 @@ class BUD107_TextTableConsistency(Rule):
                                 severity="warn",
                             )
                         )
+                    _append_relation_receipt(
+                        doc, self.code, "T1:income_budget:text_vs_table",
+                        operand_fact_ids=[fact_inc_ref.fact_uid] if fact_inc_ref else [],
+                        formula="text.收入预算 == table.T1.收入 (万元)",
+                        status="fail" if diff_l == "mismatch" else "pass",
+                        tolerance=_portable_amount_tolerance(),
+                    )
 
                 if t1_exp_sv is None or text_exp_sv is None:
+                    if fact_exp_block:
+                        unresolved_reasons.append(f"T1支出预算{fact_exp_block}")
                     unresolved_reasons.append("T1支出预算或文本未提取到")
+                    _append_relation_receipt(
+                        doc, self.code, "T1:expenditure_budget:text_vs_table",
+                        operand_fact_ids=[fact_exp_ref.fact_uid] if fact_exp_ref else [],
+                        formula="text.支出预算 == table.T1.支出 (万元)",
+                        status="insufficient_data",
+                        incomplete_reason="T1支出预算或文本未提取到",
+                        tolerance=_portable_amount_tolerance(),
+                    )
                 else:
                     env_e = _text_vs_table_envelope(text_exp_sv, t1_exp_sv)
                     diff_le, diff_ve = classify_amount_diff(text_exp_sv.decimal_val, t1_exp_sv.decimal_val, 1, envelope=env_e)
@@ -2544,6 +2970,13 @@ class BUD107_TextTableConsistency(Rule):
                                 severity="warn",
                             )
                         )
+                    _append_relation_receipt(
+                        doc, self.code, "T1:expenditure_budget:text_vs_table",
+                        operand_fact_ids=[fact_exp_ref.fact_uid] if fact_exp_ref else [],
+                        formula="text.支出预算 == table.T1.支出 (万元)",
+                        status="fail" if diff_le == "mismatch" else "pass",
+                        tolerance=_portable_amount_tolerance(),
+                    )
         else:
             unresolved_reasons.append("BUD_T1表格未定位到")
 
@@ -2554,13 +2987,24 @@ class BUD107_TextTableConsistency(Rule):
                 unresolved_reasons.append("T4单位未识别")
             else:
                 _, t4_exp_sv = _extract_t4_strict(t4_rows, default_unit=unit)
-                text_fin_exp_sv = _extract_text_strict_by_patterns(
+                # AC-03：叙述金额按年度绑定提取
+                text_fin_exp_sv, notes_t4 = _extract_text_strict_by_patterns_for_year(
                     all_text,
                     [r"财政拨款支出预算\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
+                    report_year,
                     default_unit="万元",
                 )
+                if text_fin_exp_sv is None:
+                    unresolved_reasons.extend(notes_t4)
                 if t4_exp_sv is None or text_fin_exp_sv is None:
                     unresolved_reasons.append("T4财政拨款支出或文本未提取到")
+                    _append_relation_receipt(
+                        doc, self.code, "T4:fiscal_grant_expense:text_vs_table",
+                        formula="text.财政拨款支出预算 == table.T4.支出 (万元)",
+                        status="insufficient_data",
+                        incomplete_reason="T4财政拨款支出或文本未提取到",
+                        tolerance=_portable_amount_tolerance(),
+                    )
                 else:
                     env = _text_vs_table_envelope(text_fin_exp_sv, t4_exp_sv)
                     diff_l, diff_v = classify_amount_diff(text_fin_exp_sv.decimal_val, t4_exp_sv.decimal_val, 1, envelope=env)
@@ -2573,6 +3017,12 @@ class BUD107_TextTableConsistency(Rule):
                                 severity="warn",
                             )
                         )
+                    _append_relation_receipt(
+                        doc, self.code, "T4:fiscal_grant_expense:text_vs_table",
+                        formula="text.财政拨款支出预算 == table.T4.支出 (万元)",
+                        status="fail" if diff_l == "mismatch" else "pass",
+                        tolerance=_portable_amount_tolerance(),
+                    )
         else:
             unresolved_reasons.append("BUD_T4表格未定位到")
 
@@ -2583,40 +3033,84 @@ class BUD107_TextTableConsistency(Rule):
                 unresolved_reasons.append("BUD_T9单位未识别")
             else:
                 t9_strict = _extract_t9_strict_values(t9_rows, default_unit=unit)
+                # AC-01：三公表侧优先取统一事实（FIN_07 预算数行科目）
+                fact_t9: Dict[str, Any] = {}
+                fact_t9_blocked: Dict[str, str] = {}
+                for key, tokens in self._T9_FACT_SUBJECTS.items():
+                    sv, ref, block = _fact_operand_for_indicator(
+                        fact_ctx,
+                        "budget",
+                        table_code="FIN_07_three_public",
+                        subject_tokens=tokens,
+                        report_year=report_year,
+                        budget_stages=("预算",),
+                    )
+                    if sv is not None:
+                        fact_t9[key] = (sv, ref)
+                    elif block:
+                        fact_t9_blocked[key] = block
+                if fact_t9:
+                    for key, (sv, ref) in fact_t9.items():
+                        t9_strict[key] = sv
                 if not t9_strict:
                     unresolved_reasons.append("BUD_T9数值提取失败")
                 else:
                     checked_count += 1
-                    text_total_sv = _extract_text_strict_by_patterns(
+                    # AC-03：三公叙述金额按年度绑定提取
+                    text_total_sv, notes_total = _extract_text_strict_by_patterns_for_year(
                         all_text,
                         [r"三公”?\s*经费预算数(?:为)?\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
+                        report_year,
                         default_unit="万元",
                     )
-                    text_abroad_sv = _extract_text_strict_by_patterns(
+                    text_abroad_sv, notes_abroad = _extract_text_strict_by_patterns_for_year(
                         all_text,
                         [r"因公出国（?境）?费\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
+                        report_year,
                         default_unit="万元",
                     )
-                    text_reception_sv = _extract_text_strict_by_patterns(
+                    text_reception_sv, notes_reception = _extract_text_strict_by_patterns_for_year(
                         all_text,
                         [r"公务接待费\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
+                        report_year,
                         default_unit="万元",
                     )
-                    text_org_run_sv = _extract_text_strict_by_patterns(
+                    text_org_run_sv, notes_org = _extract_text_strict_by_patterns_for_year(
                         all_text,
                         [r"机关运行经费预算(?:为)?\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
+                        report_year,
                         default_unit="万元",
                     )
+                    if text_total_sv is None:
+                        unresolved_reasons.extend(notes_total)
+                    if text_abroad_sv is None:
+                        unresolved_reasons.extend(notes_abroad)
+                    if text_reception_sv is None:
+                        unresolved_reasons.extend(notes_reception)
+                    if text_org_run_sv is None:
+                        unresolved_reasons.extend(notes_org)
 
                     comparisons = [
-                        ("三公合计", text_total_sv, t9_strict.get("total")),
-                        ("因公出国费", text_abroad_sv, t9_strict.get("abroad")),
-                        ("公务接待费", text_reception_sv, t9_strict.get("reception")),
-                        ("机关运行经费", text_org_run_sv, t9_strict.get("org_run")),
+                        ("三公合计", "total", text_total_sv, t9_strict.get("total")),
+                        ("因公出国费", "abroad", text_abroad_sv, t9_strict.get("abroad")),
+                        ("公务接待费", "reception", text_reception_sv, t9_strict.get("reception")),
+                        ("机关运行经费", "org_run", text_org_run_sv, t9_strict.get("org_run")),
                     ]
-                    for label, text_sv, table_sv in comparisons:
+                    for label, key, text_sv, table_sv in comparisons:
+                        fact_ids = [ref.fact_uid] if key in fact_t9 else []
                         if text_sv is None or table_sv is None or not text_sv.is_numeric or not table_sv.is_numeric:
+                            block = fact_t9_blocked.get(key)
+                            if block:
+                                unresolved_reasons.append(f"T9 {label}{block}")
                             unresolved_reasons.append(f"T9 {label}文本或表格数值缺失")
+                            _append_relation_receipt(
+                                doc, self.code, f"T9:{key}:text_vs_table",
+                                operand_fact_ids=fact_ids,
+                                formula=f"text.{label}预算数 == table.T9.{label} (万元)",
+                                status="insufficient_data",
+                                incomplete_reason=f"T9 {label}文本或表格数值缺失",
+                                tolerance=_portable_amount_tolerance(),
+                            )
                             continue
                         env = _text_vs_table_envelope(text_sv, table_sv)
                         diff_l, diff_v = classify_amount_diff(text_sv.decimal_val, table_sv.decimal_val, 1, envelope=env)
@@ -2629,6 +3123,13 @@ class BUD107_TextTableConsistency(Rule):
                                     severity="warn",
                                 )
                             )
+                        _append_relation_receipt(
+                            doc, self.code, f"T9:{key}:text_vs_table",
+                            operand_fact_ids=fact_ids,
+                            formula=f"text.{label}预算数 == table.T9.{label} (万元)",
+                            status="fail" if diff_l == "mismatch" else "pass",
+                            tolerance=_portable_amount_tolerance(),
+                        )
         else:
             unresolved_reasons.append("BUD_T9表格未定位到")
 

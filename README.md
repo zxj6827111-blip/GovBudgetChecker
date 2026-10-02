@@ -193,7 +193,7 @@ docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d --build
 - `PDF_PARSE_MEMORY_MB`：解析子进程地址空间上限（默认 1024，**仅 POSIX 生效**，Windows 无 `RLIMIT_AS`）
 - `PDF_PARSE_MAX_TEXT_CHARS` / `PDF_PARSE_MAX_TABLE_CELLS`：抽取结果体积上限（跨平台）
 - `PG_BIN_DIR`：`scripts/backup_all.py` 查找 `pg_dump`/`psql` 的目录（PATH 里没有时使用）
-- `AI_ASSIST_ENABLED`：是否启用 AI 辅助（默认 `true`）
+- `AI_ASSIST_ENABLED`：是否启用 AI 辅助（默认 `false`——默认部署为"规则 + 本地 OCR"，无需模型密钥与云端请求；AI 专用模式须显式开启）
 - `AI_EXTRACTOR_URL`：AI 抽取服务地址
 - `DATABASE_URL`：可选，配置后 `ready` 会检查可达性
 - `JOB_QUEUE_ENABLED`：任务队列开关（默认开启）
@@ -201,7 +201,7 @@ docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d --build
 ## 生产强化建议
 - 上传产物与任务目录建议放在持久化卷，容器重启后仍可恢复；若上云要做多实例，可进一步接入对象存储。
 - PostgreSQL 保存原件哈希、稳定 `storage_key`、版本、结构化表格/事实和审校结果；原始 PDF 不写入数据库二进制字段，须与数据库一并备份 `UPLOAD_DIR`。
-- `ready` 端点会额外检查上传目录、数据库、AI 服务、队列状态以及审计日志目录是否可写。
+- `ready` 端点会额外检查上传目录、数据库、AI 服务、队列状态以及审计日志目录是否可写（未启用 AI 时相应检查自动跳过，不阻塞就绪）。
 - 登录会话已改为签名令牌；生产环境建议固定配置 `USER_SESSION_SECRET`（或至少保持 `GOVBUDGET_API_KEY` 稳定），避免多 worker / 重启后会话失效。
 - 管理员操作（组织创建/修改/删除、导入、批量重分析、结构化清理）会写入 `AUDIT_LOG_PATH`。
 - 建议把反向代理上传大小限制与 `MAX_UPLOAD_MB`、`MAX_UPLOAD_PAGES` 保持一致。

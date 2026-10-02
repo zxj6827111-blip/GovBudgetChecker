@@ -67,6 +67,10 @@ NUMERIC_PATTERN = re.compile(
 )
 TITLE_LINE_PATTERN = re.compile(r"(预算表|决算表|总表|经费预算表|经费支出表|分类预算表)")
 TITLE_NOISE_PATTERN = re.compile(r"^(编制部门|编制单位|单位[:：])")
+#: 表题中的年份（AC-02 片段身份：年度是逻辑表实例身份的一部分）
+_TITLE_YEAR_RE = re.compile(r"20\d{2}")
+#: 表题中的主体机构 token（AC-02 片段身份：主体是逻辑表实例身份的一部分）
+_TITLE_ORG_RE = re.compile(r"[\u4e00-\u9fa5]{1,8}?(?:局|中心|委员会|办事处|人民政府|管理所|执法队|学校|医院|图书馆|馆|公司)")
 
 #: 解析器指纹：表抽取策略组合变化时必须更新（缓存按指纹失效）
 PARSER_FINGERPRINT = "pdfplumber-cells-v3-zc02"
@@ -257,16 +261,7 @@ class PDFParser:
             # 合并后的逻辑表作为片段承载（ZC-02 再把片段与实例分开建模）
             table_fragments=merged,
             logical_tables=[
-                LogicalTableInstance(
-                    instance_uid=table.fragment_uid,
-                    table_code=table.table_code,
-                    title=table.title,
-                    fragment_uids=[table.fragment_uid],
-                    page_start=table.page_number,
-                    page_end=table.page_number,
-                    row_count=len(table.rows),
-                    confidence=table.confidence,
-                )
+                self._build_logical_instance(table)
                 for table in merged
             ],
         )
@@ -432,6 +427,33 @@ class PDFParser:
             unit_hint=unit_hint,
             rows=rows,
             cells=cells,
+        )
+
+    def _build_logical_instance(self, table: ParsedTable) -> LogicalTableInstance:
+        """为（可能跨页合并后的）片段构建逻辑实例（AC-02 / SYS-16）。
+
+        - ``page_end`` 取单元格真实物理页最大值——此前固定等于起始页，
+          跨页实例的页跨度被写成 1；
+        - 主体与年度从表题解析进入实例身份（识别不到保持 None，不猜）；
+        - 合并过多个物理片段时 ``fragment_uids`` 覆盖全部来源。
+        """
+        cell_pages = [cell.page_number for cell in table.cells if cell.page_number]
+        page_end = max(cell_pages) if cell_pages else table.page_number
+        years = {int(y) for y in _TITLE_YEAR_RE.findall(table.title or "")}
+        fiscal_year = next(iter(sorted(years)), None)
+        return LogicalTableInstance(
+            instance_uid=table.fragment_uid,
+            table_code=table.table_code,
+            title=table.title,
+            fragment_uids=[
+                *(table.source_fragment_uids or []),
+                table.fragment_uid,
+            ],
+            page_start=table.page_number,
+            page_end=page_end,
+            fiscal_year=fiscal_year,
+            row_count=len(table.rows),
+            confidence=table.confidence,
         )
 
     def _coalesce_tables(self, tables: Sequence[ParsedTable]) -> List[ParsedTable]:
@@ -744,6 +766,10 @@ class PDFParser:
         previous_code = previous.table_code
         current_code = current.table_code
         if previous_code == current_code and not previous_code.startswith("UNKNOWN_"):
+            # AC-02（SYS-16）：同表种不等于同实例。相邻两页的表各有独立表题、
+            # 且表题不同（主体/年度/口径不同）时，是两张表，不得合并。
+            if self._fragment_titles_conflict(previous, current):
+                return False
             return True
 
         if current_code.startswith("UNKNOWN_") and not previous_code.startswith("UNKNOWN_"):
@@ -753,6 +779,72 @@ class PDFParser:
             ):
                 return True
 
+        return False
+
+    #: 续表标记：表题正好是"续表"类短语的视为延续，不参与表题差异判定
+    _CONTINUATION_TITLE_PATTERN = re.compile(r"^续?表?\s*(续)?[)）]?$|^\(?续\)?$|续表")
+
+    def _recognized_table_alias(self, title: str) -> Optional[str]:
+        """标题中识别出的规范表名（九表别名）；识别不到返回 None（视为噪声标题）。
+
+        续页顶部常被 _extract_title 抓到残缺文本（如"项目 一般公共预算支出"），
+        不能因噪声标题与主表题不同就拒绝续页合并。
+        """
+        normalized = normalize_text(title or "")
+        if not normalized:
+            return None
+        from src.services.fiscal_table_rules import NINE_TABLE_RULES
+
+        best: Optional[str] = None
+        for rule in NINE_TABLE_RULES.values():
+            for alias in rule.aliases:
+                normalized_alias = normalize_text(alias)
+                if normalized_alias and normalized_alias in normalized:
+                    if best is None or len(normalized_alias) > len(best):
+                        best = normalized_alias
+        return best
+
+    def _fragment_titles_conflict(self, previous: ParsedTable, current: ParsedTable) -> bool:
+        """两片段表题是否指向不同实例（AC-02：主体/年度/标题不同）。
+
+        - 一方无表题、表题为"续表"类标记或**不是可识别的规范表名** →
+          不冲突（真实续页常见噪声标题）；
+        - 双方都是可识别表名但指向不同表种 → 冲突；
+        - 双方同为一种表名且标题年度集合不相交 → 冲突
+          （甲局2024收入表 vs 乙局2025收入表）；
+        - 双方都不是规范表名（如自定义标题）时，去掉年度后归一化文本
+          仍不同 → 冲突。
+        """
+        prev_title = (previous.title or "").strip()
+        cur_title = (current.title or "").strip()
+        if not prev_title or not cur_title:
+            return False
+        if self._CONTINUATION_TITLE_PATTERN.search(prev_title) or self._CONTINUATION_TITLE_PATTERN.search(cur_title):
+            return False
+        prev_alias = self._recognized_table_alias(prev_title)
+        cur_alias = self._recognized_table_alias(cur_title)
+        if prev_alias and cur_alias:
+            if prev_alias != cur_alias:
+                return True
+            prev_years = set(_TITLE_YEAR_RE.findall(prev_title))
+            cur_years = set(_TITLE_YEAR_RE.findall(cur_title))
+            if prev_years and cur_years and not (prev_years & cur_years):
+                return True
+            return False
+        if (prev_alias or cur_alias) and not (prev_alias and cur_alias):
+            # 一方是规范表名、另一方是噪声标题：按延续处理
+            return False
+        # 双方都不是规范表名：只在**主体/年度证据**冲突时才判不同实例。
+        # 页标伪标题（"第一页/第二页"）与普通差异不构成身份冲突——
+        # 否则真实续页会被拆散（既有 chained-continuation 契约）。
+        prev_years = set(_TITLE_YEAR_RE.findall(prev_title))
+        cur_years = set(_TITLE_YEAR_RE.findall(cur_title))
+        if prev_years and cur_years and not (prev_years & cur_years):
+            return True
+        prev_orgs = set(_TITLE_ORG_RE.findall(prev_title))
+        cur_orgs = set(_TITLE_ORG_RE.findall(cur_title))
+        if prev_orgs and cur_orgs and not (prev_orgs & cur_orgs):
+            return True
         return False
 
     def _last_page_number(self, table: ParsedTable) -> int:
@@ -807,6 +899,10 @@ class PDFParser:
             table_code=previous.table_code,
             title=previous.title if self._score_title_line(previous.title, 0) >= self._score_title_line(current.title, 0) else current.title,
             page_number=previous.page_number,
+            source_fragment_uids=[
+                *(previous.source_fragment_uids or [previous.fragment_uid]),
+                *(current.source_fragment_uids or [current.fragment_uid]),
+            ],
             table_index=previous.table_index,
             bbox=previous.bbox,
             header_row_count=previous.header_row_count,

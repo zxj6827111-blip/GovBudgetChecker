@@ -148,7 +148,12 @@ class DualModeAnalyzer:
         
         # 超时设置（120秒）
         TIMEOUT_SECONDS = 120
-        
+
+        # AC-11：部分结果保全——管线后段（合并/定位/快照）异常时，
+        # 已完成的 AI/规则结果不得被整批清空后按空结果重算。
+        completed_ai_findings: List[Any] = []
+        completed_rule_findings: List[Any] = []
+
         try:
             # 1. 加载规则
             rules = await self._load_rules(config.rules_version)
@@ -194,6 +199,7 @@ class DualModeAnalyzer:
                         logger.error(f"Rule analysis failed: {rule_error}")
                     else:
                         rule_findings = rule_result or []
+                        completed_rule_findings = list(rule_findings)
                         logger.info(f"Rule analysis completed, found {len(rule_findings)} issues")
                 except asyncio.TimeoutError:
                     rule_done_at = time.time()
@@ -259,6 +265,7 @@ class DualModeAnalyzer:
                         })
                     else:
                         ai_findings = ai_result or []
+                        completed_ai_findings = list(ai_findings)
                         logger.info(f"AI analysis completed, found {len(ai_findings)} issues")
                 except asyncio.TimeoutError:
                     ai_done_at = time.time()
@@ -385,6 +392,9 @@ class DualModeAnalyzer:
                     # 覆盖缺口（如审计窗口上限触发）：degraded 判定依据
                     "ai_window_errors": list(getattr(self.ai_service, "ai_errors", []) or []) if self.ai_service is not None else [],
                     "rule_execution_summary": rule_execution_summary,
+                    # AC-04：关系级子检查回执与统一事实摘要随结果交付
+                    "fact_receipts": (self.engine_runner.get_stats() or {}).get("fact_receipts", []) if self.engine_runner else [],
+                    "fact_context_summary": (self.engine_runner.get_stats() or {}).get("fact_context_summary") if self.engine_runner else None,
                     "config": config.dict()
                 }
             )
@@ -407,27 +417,39 @@ class DualModeAnalyzer:
                 }
             })
             
-            # 降级：仅返回引擎结果
+            # 降级：引擎结果 + 已完成的 AI 结果一并保留（AC-11 逐条失败隔离）
             try:
-                rule_findings = await self._fallback_engine_only(job_context, config)
+                if not completed_rule_findings:
+                    completed_rule_findings = await self._fallback_engine_only(job_context, config)
                 metrics.total_elapsed_ms = int((time.time() - start_time) * 1000)
-                
+
+                fallback_receipts: List[Dict[str, Any]] = []
+                try:
+                    stats = self.engine_runner.get_stats() if self.engine_runner else {}
+                    fallback_receipts = list((stats or {}).get("fact_receipts") or [])
+                except Exception:
+                    fallback_receipts = []
+                partial = bool(completed_ai_findings)
                 return DualModeResponse(
                     job_id=job_context.job_id,
-                    ai_findings=[],
-                    rule_findings=rule_findings,
+                    ai_findings=completed_ai_findings,
+                    rule_findings=completed_rule_findings,
                     merged=MergedSummary(
-                        totals={"rule_only": len(rule_findings)},
+                        totals={
+                            "rule_only": len(completed_rule_findings),
+                            "ai_preserved": len(completed_ai_findings),
+                        },
                         conflicts=[],
                         agreements=[]
                     ),
                     meta={
                         "elapsed_ms": {"total": metrics.total_elapsed_ms},
                         "error": str(e),
-                        "fallback": "engine_only",
+                        "fallback": "engine_only_partial" if partial else "engine_only",
                         "ai_error": str(e),
                         "rule_error": None,
-                        "provider_stats": []
+                        "provider_stats": [],
+                        "fact_receipts": fallback_receipts,
                     }
                 )
             except Exception as fallback_error:
