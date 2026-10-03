@@ -417,6 +417,10 @@ def _consume_truth_annotations(
                 "severity_ok": _norm_severity(finding.get("severity"))
                 == _norm_severity(annotation.get("expected_severity")),
                 "page_ok": _page_of(finding) == annotation.get("page"),
+                # RC-13：匹配记录携带命中 finding 的定位实体（页/bbox/认证态），
+                # 精确定位率才能对"标准接口构造出的正确命中"评分——只回
+                # annotation 摘要会让定位评测与匹配接口脱节。
+                "finding": finding,
             }
         )
     for group, faces in pending.items():

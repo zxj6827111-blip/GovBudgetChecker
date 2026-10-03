@@ -393,7 +393,6 @@ def test_rc02_true_continuation_merges_with_stable_uid_and_origin() -> None:
 
 def test_rc02_parser_fragment_uids_deterministic_across_reparses() -> None:
     """同一内容重复解析 → 同一片段 UID（RC-10 校正目标稳定的根）。"""
-    parser = PDFParser(None)
     rows = [["项目", "本年收入", "本年支出"], ["合计", "328661.81", "328661.81"]]
     a = _make_fragment("FIN_01_income_expenditure_total", rows, title="收支总表")
     b = _make_fragment("FIN_01_income_expenditure_total", rows, title="收支总表")
@@ -689,6 +688,47 @@ def test_rc09_table_refs_require_content_anchoring(tmp_path: Path) -> None:
     )
     assert blank.get("verification_status") == "unverified"
     assert "bbox" not in blank
+
+
+# ---------------------------------------------------------------------------
+# RC-03：叙述取数的阶段绑定——调整后预算不得充当年初预算操作数
+# ---------------------------------------------------------------------------
+
+
+def test_rc03_adjusted_budget_narrative_not_used_as_initial_operand() -> None:
+    """调整后预算说明位于年初预算说明之前时，本年结果不得被污染。"""
+    from src.engine.budget_rules import (
+        _STAGE_FORBIDDEN_TOKENS,
+        _extract_text_strict_by_patterns_for_year,
+    )
+
+    extract = _extract_text_strict_by_patterns_for_year
+    pattern = [r"收入预算\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"]
+
+    # 调整后在前、年初在后 → 取年初口径
+    value, notes = extract(
+        "2026年调整后收入预算120.00万元。2026年收入预算100.00万元。",
+        pattern,
+        2026,
+        forbidden_tokens=_STAGE_FORBIDDEN_TOKENS,
+    )
+    assert value is not None and value.decimal_val == Decimal("100"), notes
+    assert any("阶段/主体" in note for note in notes)
+
+    # 只有调整后口径 → 如实取不到（转未完成），不得拿调整后充当年初
+    value2, notes2 = extract(
+        "2026年调整后收入预算120.00万元。",
+        pattern,
+        2026,
+        forbidden_tokens=_STAGE_FORBIDDEN_TOKENS,
+    )
+    assert value2 is None and any("阶段/主体" in note for note in notes2)
+
+    # 历史段前移仍排除（既有行为不回归）
+    value3, _ = extract(
+        "2025年收入预算90.00万元。2026年收入预算100.00万元。", pattern, 2026
+    )
+    assert value3 is not None and value3.decimal_val == Decimal("100")
 
 
 # ---------------------------------------------------------------------------

@@ -130,10 +130,16 @@ def interpret_ai_issue(
 
 
 def normalize_ai_severity(value: Any, default: str = "medium") -> str:
+    """模型只做语义候选——业务定级由确定性规则拥有（RC-11）。
+
+    模型声明的 critical/fatal 不采信：critical 定义是"核心表缺失、重大
+    勾稽错误、明显口径错误"，只能由规则与真实勾稽结果认定；模型声明
+    一律封顶为 high，防止单条模型输出把整体结论顶成 critical。
+    """
     raw = str(value or "").strip().lower()
     mapping = {
-        "critical": "critical",
-        "fatal": "critical",
+        "critical": "high",
+        "fatal": "high",
         "error": "high",
         "high": "high",
         "warn": "medium",

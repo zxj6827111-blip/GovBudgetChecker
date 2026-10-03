@@ -1205,6 +1205,8 @@ _PREVIOUS_YEAR_CONTEXT_TOKENS = ("上年", "上一年", "去年", "历史情况"
 #: 这些限定词说明金额是资金分项（一般公共预算/基金/国资/财政拨款拨款），
 #: 不参与全口径比较（独立验收 AC-03 补充反例的消歧规则）。
 _FUND_SCOPE_QUALIFIER_TOKENS = ("一般公共预算", "政府性基金", "国有资本", "财政拨款")
+#: RC-03：阶段排除——年初预算比较不得取"调整后预算/调整预算"口径的说明。
+_STAGE_FORBIDDEN_TOKENS = ("调整后", "调整预算")
 _YEAR_BEFORE_PATTERN_RE = re.compile(r"(20\d{2})\s*年[^0-9，。；]{0,12}$")
 
 
@@ -1247,6 +1249,8 @@ def _extract_text_strict_by_patterns_for_year(
     report_year: Optional[int],
     default_unit: str = "万元",
     qualifier_tokens: Sequence[str] = (),
+    forbidden_tokens: Sequence[str] = (),
+    excluded_org_names: Sequence[str] = (),
 ) -> Tuple[Optional[StrictValue], List[str]]:
     """按年度绑定提取叙述金额（SYS-03 / AC-03）。
 
@@ -1254,6 +1258,9 @@ def _extract_text_strict_by_patterns_for_year(
 
     - 上年/历史口径命中（上下文有"上年/历史"或明确非本年年度）一律排除
       ——跨年取数误报的根源就在这里；
+    - RC-03：上下文含禁用口径词（如"调整后预算"——比对目标是年初预算）
+      或他主体名（如材料为甲局、句中出现乙局）的命中一并排除——阶段与
+      主体不同的说明不得污染本年比较；
     - 剩余候选中优先取上下文不含资金口径限定词（如"一般公共预算/财政拨款"）
       的全口径候选，且金额全等才采用；
     - 全口径候选彼此不等或全部带口径限定词时，确定性回退取首个本年候选
@@ -1265,6 +1272,7 @@ def _extract_text_strict_by_patterns_for_year(
     year_valid: List[StrictValue] = []
     unqualified: List[StrictValue] = []
     historical_count = 0
+    stage_or_org_filtered = 0
     for pat in patterns:
         for m in re.finditer(pat, text):
             raw = m.group(1).strip()
@@ -1275,6 +1283,16 @@ def _extract_text_strict_by_patterns_for_year(
                 historical_count += 1
                 continue
             context = _sentence_context_before(text, m.start())
+            # RC-03：阶段/主体不同的说明不参与本年比较（如"调整后预算"
+            # 不得充当年初预算操作数；他单位金额不得进入本主体比较）。
+            if forbidden_tokens and any(token in context for token in forbidden_tokens):
+                stage_or_org_filtered += 1
+                continue
+            if excluded_org_names and any(
+                org and org in context for org in excluded_org_names
+            ):
+                stage_or_org_filtered += 1
+                continue
             year_valid.append(sv)
             if qualifier_tokens and any(token in context for token in qualifier_tokens):
                 continue
@@ -1282,6 +1300,10 @@ def _extract_text_strict_by_patterns_for_year(
 
     if historical_count:
         notes.append(f"已排除 {historical_count} 处上年/历史口径金额")
+    if stage_or_org_filtered:
+        notes.append(
+            f"已排除 {stage_or_org_filtered} 处阶段/主体不同的说明金额（调整后预算、他单位等）"
+        )
     if not year_valid:
         if historical_count:
             notes.append("叙述金额均属于历史年度口径，未参与本年比较")
@@ -2937,6 +2959,7 @@ class BUD107_TextTableConsistency(Rule):
                     report_year,
                     default_unit="万元",
                     qualifier_tokens=_FUND_SCOPE_QUALIFIER_TOKENS,
+                    forbidden_tokens=_STAGE_FORBIDDEN_TOKENS,
                 )
                 text_exp_sv, notes_exp = _extract_text_strict_by_patterns_for_year(
                     all_text,
@@ -2944,6 +2967,7 @@ class BUD107_TextTableConsistency(Rule):
                     report_year,
                     default_unit="万元",
                     qualifier_tokens=_FUND_SCOPE_QUALIFIER_TOKENS,
+                    forbidden_tokens=_STAGE_FORBIDDEN_TOKENS,
                 )
                 # 消歧留痕只在提取失败时升格为未完成原因；成功取值时仅是
                 # 信息性说明，不能把"排除了历史/口径分项"当检查未完成。
@@ -3031,6 +3055,7 @@ class BUD107_TextTableConsistency(Rule):
                     [r"财政拨款支出预算\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
                     report_year,
                     default_unit="万元",
+                    forbidden_tokens=_STAGE_FORBIDDEN_TOKENS,
                 )
                 if text_fin_exp_sv is None:
                     unresolved_reasons.extend(notes_t4)
@@ -3110,24 +3135,28 @@ class BUD107_TextTableConsistency(Rule):
                     [r"三公”?\s*经费预算数(?:为)?\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
                     report_year,
                     default_unit="万元",
+                    forbidden_tokens=_STAGE_FORBIDDEN_TOKENS,
                 )
                 text_abroad_sv, notes_abroad = _extract_text_strict_by_patterns_for_year(
                     all_text,
                     [r"因公出国（?境）?费\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
                     report_year,
                     default_unit="万元",
+                    forbidden_tokens=_STAGE_FORBIDDEN_TOKENS,
                 )
                 text_reception_sv, notes_reception = _extract_text_strict_by_patterns_for_year(
                     all_text,
                     [r"公务接待费\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
                     report_year,
                     default_unit="万元",
+                    forbidden_tokens=_STAGE_FORBIDDEN_TOKENS,
                 )
                 text_org_run_sv, notes_org = _extract_text_strict_by_patterns_for_year(
                     all_text,
                     [r"机关运行经费预算(?:为)?\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
                     report_year,
                     default_unit="万元",
+                    forbidden_tokens=_STAGE_FORBIDDEN_TOKENS,
                 )
                 if text_total_sv is None:
                     unresolved_reasons.extend(notes_total)

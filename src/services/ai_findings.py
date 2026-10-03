@@ -270,9 +270,10 @@ class AIFindingsService:
         # 并非本地规则集里某条规则命中的结果，硬填规则版本会造成误导性归因。
         provenance = read_finding_provenance(raw_issue)
 
-        # AC-11：AI 候选声明的关系与事实身份必须透传到 finding——
-        # 合并器按 (check_relation_id, fact_ids) 建立精确配对；
-        # 丢弃这些字段会让所有候选退化成无法合并的孤立项。
+        # AC-11/RC-11：候选声明的身份必须过白名单——fact/evidence ID 不在
+        # 当前事实上下文里的（模型幻觉 ID）一律剔除并留计数，不透传给合并器；
+        # 模型声称的 expected/actual 金额只是"模型声称"，不是系统计算结果，
+        # 打上 provenance 标记供界面与导出区分。
         candidate_relation_id = str(raw_issue.get("check_relation_id") or "").strip() or None
         candidate_fact_ids = [
             str(item).strip()
@@ -284,6 +285,42 @@ class AIFindingsService:
             for item in (raw_issue.get("evidence_ids") or [])
             if str(item).strip()
         ]
+        fact_context = getattr(context, "fact_context", None)
+        filtered_metrics = dict(interpreted["metrics"])
+        if fact_context is not None:
+            known_fact_ids = {
+                getattr(fact, "fact_uid", "") for fact in getattr(fact_context, "facts", []) or []
+            }
+            known_evidence_ids = {
+                str(ref.get("evidence_id") or "")
+                for fact in getattr(fact_context, "facts", []) or []
+                for ref in (getattr(fact, "extra_dims", {}) or {}).get("evidence_refs", [])
+                or []
+                if isinstance(ref, dict)
+            }
+            if known_fact_ids:
+                dropped_facts = [i for i in candidate_fact_ids if i not in known_fact_ids]
+                if dropped_facts:
+                    candidate_fact_ids = [i for i in candidate_fact_ids if i in known_fact_ids]
+                    filtered_metrics["ai_candidate_ids_filtered"] = {
+                        "unknown_fact_ids": len(dropped_facts)
+                    }
+            if known_evidence_ids:
+                dropped_evidence = [
+                    i for i in candidate_evidence_ids if i not in known_evidence_ids
+                ]
+                if dropped_evidence:
+                    candidate_evidence_ids = [
+                        i for i in candidate_evidence_ids if i in known_evidence_ids
+                    ]
+                    filter_note = filtered_metrics.setdefault(
+                        "ai_candidate_ids_filtered", {}
+                    )
+                    filter_note["unknown_evidence_ids"] = len(dropped_evidence)
+        if any(
+            key in filtered_metrics for key in ("expected", "actual", "difference")
+        ):
+            filtered_metrics["amounts_provenance"] = "model_claimed_not_verified"
 
         return IssueItem(
             id=f"ai_semantic_{context.job_id}_{idx}_{int(time.time())}",
@@ -295,7 +332,7 @@ class AIFindingsService:
             message=str(interpreted["message"]),
             evidence=evidence,
             location=dict(interpreted["location"]),
-            metrics=dict(interpreted["metrics"]),
+            metrics=dict(filtered_metrics),
             page_number=page_number,
             bbox=(
                 raw_bbox

@@ -166,6 +166,18 @@ def _normalise_for_match(text: str) -> str:
     return "".join(str(text or "").split())
 
 
+def _evidence_page_of(item: Mapping[str, Any]) -> Optional[int]:
+    """证据条目页码：优先 ``page``，统一证据实体回退 ``physical_page``（RC-09）。
+
+    统一证据（EvidenceRef 往返后）只带 ``physical_page``——守卫若只读
+    ``page``，就会静默回退到顶层页码，把跨页证据绑到错误的页上核验。
+    """
+    page = _positive_int(item.get("page"))
+    if page is not None:
+        return page
+    return _positive_int(item.get("physical_page"))
+
+
 def _claimed_pages(finding: Mapping[str, Any]) -> List[int]:
     """收集 finding 声称的全部页码（页码信号 + 证据条目页码）。"""
     pages: List[int] = []
@@ -189,10 +201,12 @@ def _claimed_pages(finding: Mapping[str, Any]) -> List[int]:
                 if not isinstance(ref, Mapping):
                     continue
                 page = _positive_int(ref.get("page"))
+                if page is None:
+                    page = _positive_int(ref.get("physical_page"))
                 if page is not None:
                     pages.append(page)
     for item in _evidence_items(finding):
-        page = _positive_int(item.get("page"))
+        page = _evidence_page_of(item)
         if page is not None:
             pages.append(page)
     return sorted(set(pages))
@@ -273,7 +287,7 @@ def evaluate_finding_evidence(
     if str(finding.get("text_snippet") or "").strip():
         quote_bindings.append((str(finding["text_snippet"]).strip(), claimed_pages))
     for item in _evidence_items(finding):
-        item_pages = _positive_int(item.get("page"))
+        item_pages = _evidence_page_of(item)
         bound_pages = [item_pages] if item_pages is not None else list(claimed_pages)
         for key in _EVIDENCE_TEXT_KEYS:
             text = str(item.get(key) or "").strip()

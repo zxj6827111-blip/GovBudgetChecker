@@ -574,13 +574,23 @@ def _aggregate_evaluations(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _iter_run_issues(run: dict[str, Any]) -> list[dict[str, Any]]:
-    issues = run.get("issues")
-    if isinstance(issues, dict):
-        merged = issues.get("all")
-        if isinstance(merged, list):
-            return [item for item in merged if isinstance(item, dict)]
-    if isinstance(issues, list):
-        return [item for item in issues if isinstance(item, dict)]
+    """按版本化输入契约读取正式问题（RC-13：合法回放不得被当空）。
+
+    接受三种形态：
+    - ``issues``：list 或 {"all": list}（新统一报告）；
+    - ``findings`` / ``rule_findings``：list（正式回放/规则主链产物）。
+    除此之外的结构（如 {"items": ...}）一律不猜——返回空并在调用方
+    以 not_computable/缺记录如实呈现。
+    """
+    for key in ("issues", "findings", "rule_findings"):
+        issues = run.get(key)
+        if isinstance(issues, dict):
+            merged = issues.get("all")
+            if isinstance(merged, list):
+                return [item for item in merged if isinstance(item, dict)]
+            continue
+        if isinstance(issues, list):
+            return [item for item in issues if isinstance(item, dict)]
     return []
 
 
