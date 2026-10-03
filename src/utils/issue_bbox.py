@@ -115,9 +115,23 @@ class PDFBBoxLocator:
         return issue
 
     def _validate_ref(self, raw_ref: Dict[str, Any]) -> Dict[str, Any]:
+        """table_refs 与主证据同一认证门（RC-09：封堵引用旁路）。
+
+        几何合法 + 自报 verified 还不够：必须通过内容锚定（bbox 区域内
+        能抽到与该引用一致的原文）。伪引文、空白 bbox、跨页引用在这里
+        一律降级 region/unverified 并摘除 bbox——下游标注导出只画
+        verified 精确目标，降级即不再被画到原件上。
+        """
         ref = dict(raw_ref)
         page = self._to_positive_int(ref.get("page"))
         bbox = self._normalize_bbox(ref.get("bbox"))
+        quote = ""
+        for key in ("quote", "text", "cell_text", "text_snippet"):
+            candidate = str(ref.get(key) or "").strip()
+            if candidate:
+                quote = candidate
+                break
+        content_anchored = self._region_text_matches(page, bbox, quote)
         if (
             page is None
             or not self._valid_document_page(page)
@@ -126,9 +140,14 @@ class PDFBBoxLocator:
                 str(ref.get("verification_status") or ""),
             )
             or not self._valid_source_bbox(page, bbox)
+            or not content_anchored
         ):
             ref.pop("bbox", None)
-            ref["location_level"] = "region" if ref.get("table") or ref.get("section") else "unresolved"
+            ref["location_level"] = (
+                "region"
+                if (ref.get("table") or ref.get("section") or ref.get("row") or ref.get("field"))
+                else "unresolved"
+            )
             ref["verification_status"] = "unverified"
             if page is None or not self._valid_document_page(page):
                 ref.pop("page", None)

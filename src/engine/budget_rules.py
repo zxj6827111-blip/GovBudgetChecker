@@ -1968,19 +1968,41 @@ _CONDITIONAL_POSITIVE_KEYWORDS: Dict[str, Tuple[str, ...]] = {
     "BUD_T6": ("政府性基金", "基金预算"),
     "BUD_T7": ("国有资本经营", "国有资本"),
 }
-#: 正面适用证据要求出现资金关键词且伴随预算数额信号（"安排/预算/拨款/收入 +
-#: 数字"），单纯目录或表头提及不算。
-_CONDITIONAL_AMOUNT_HINT_RE = re.compile(
-    r"(?:政府性基金|基金预算|国有资本经营|国有资本)[^。；\n]{0,40}?[0-9][0-9,]*(?:\.[0-9]+)?\s*(?:万元|元|亿元)"
+#: RC-05：各表种**自己的**"资金关键词 + 正数金额"证据正则——不再共用一条
+#: 全文正则（旧实现会把基金预算的金额当作国资表也适用的正面证据）。
+_CONDITIONAL_AMOUNT_HINT_RES: Dict[str, re.Pattern] = {
+    key: re.compile(
+        r"(?:" + "|".join(re.escape(token) for token in keywords) + r")"
+        r"[^。；\n]{0,40}?"
+        r"([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:万元|亿元|元)"
+    )
+    for key, keywords in _CONDITIONAL_POSITIVE_KEYWORDS.items()
+}
+#: 句内历史年度标记（与 report_year 不同年份的金额不作本年适用证据）
+_CONDITIONAL_YEAR_TOKEN_RE = re.compile(r"20\d{2}")
+#: 等效负面说明（AGENTS.md：无此项/无相关预算/未安排 均为空表等效证据）
+_CONDITIONAL_NEGATIVE_RE = re.compile(
+    r"(?:无|未)[^。；\n]{0,10}?(?:政府性基金|基金预算|国有资本)"
 )
 
 
-def _conditional_table_applicability(table_key: str, all_text: str) -> str:
-    """条件性表三态判定（AC-05）：applicable / not_applicable / unknown。"""
+def _conditional_table_applicability(
+    table_key: str,
+    all_text: str,
+    report_year: Optional[int] = None,
+) -> str:
+    """条件性表三态判定（AC-05）：applicable / not_applicable / unknown。
+
+    RC-05 收紧：
+    - 正面证据必须命中**本表种**的资金关键词，且金额为正数——0/0.00、
+      历史年度句子、另一表种的金额都不能证明本年适用；
+    - 逐句判定：关键词与金额必须在同一句内，跨句拼接不算。
+    """
     keywords = _CONDITIONAL_POSITIVE_KEYWORDS.get(table_key, ())
     has_keyword = any(token in all_text for token in keywords)
     if not has_keyword:
         return "unknown"
+    amount_re = _CONDITIONAL_AMOUNT_HINT_RES.get(table_key)
     # 明确"未安排/不涉及/无…安排"说明 → 不涉及（且无金额证据时）
     phrases = [
         _EMPTY_TABLE_EXPECTED_PHRASES.get(table_key, ""),
@@ -1988,12 +2010,29 @@ def _conditional_table_applicability(table_key: str, all_text: str) -> str:
         "不涉及",
         "无此项",
     ]
-    phrase_hit = any(phrase and phrase in all_text for phrase in phrases)
-    if _CONDITIONAL_AMOUNT_HINT_RE.search(all_text):
-        return "applicable"
+    phrase_hit = any(phrase and phrase in all_text for phrase in phrases) or bool(
+        _CONDITIONAL_NEGATIVE_RE.search(all_text)
+    )
+    if amount_re is not None:
+        for sentence in re.split(r"[。；\n]", all_text):
+            if not any(token in sentence for token in keywords):
+                continue
+            match = amount_re.search(sentence)
+            if not match:
+                continue
+            try:
+                amount = Decimal(match.group(1).replace(",", ""))
+            except Exception:
+                continue
+            if amount <= 0:
+                continue
+            years = {int(y) for y in _CONDITIONAL_YEAR_TOKEN_RE.findall(sentence)}
+            if years and report_year is not None and int(report_year) not in years:
+                continue
+            return "applicable"
     if phrase_hit:
         return "not_applicable"
-    # 有关键词但既无数额也无空表说明：证据不足，不判缺表（降误报）
+    # 有关键词但既无正数金额也无空表说明：证据不足，不判缺表（降误报）
     return "unknown"
 
 
@@ -2019,7 +2058,9 @@ class BUD001_StructureAndAnchors(Rule):
                 # - not_applicable（明确"未安排/不涉及/无…安排"）：不判缺表；
                 # - applicable（确有该资金预算内容）：缺表仍然必须检出。
                 if key in self._CONDITIONAL_TABLE_KEYS:
-                    state = _conditional_table_applicability(key, all_text)
+                    state = _conditional_table_applicability(
+                        key, all_text, report_year=_infer_report_year(doc)
+                    )
                     if state != "applicable":
                         continue
                 issues.append(

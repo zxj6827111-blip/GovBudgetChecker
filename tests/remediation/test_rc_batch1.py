@@ -32,6 +32,7 @@ from src.engine.rules_v33 import build_document
 from src.schemas.parse_artifact import (
     FiscalFact,
     LogicalTableInstance,
+    OcrTableCandidate,
     ParseArtifact,
     ParsedCell,
     ParsedTable,
@@ -586,3 +587,165 @@ def test_rc12_annotated_pdf_path_is_content_addressed() -> None:
     assert path_a1 != path_b1
     assert path_a1 != path_a2
     assert "job-x" in str(path_a1) and str(path_a1).endswith(".pdf")
+
+
+# ---------------------------------------------------------------------------
+# RC-05：条件性表适用性——金额证据限定本表种/正数/本年
+# ---------------------------------------------------------------------------
+
+
+def test_rc05_conditional_applicability_not_polluted_across_tables() -> None:
+    """基金有预算≠国资适用：金额证据必须绑定本表种资金关键词。"""
+    from src.engine.budget_rules import _conditional_table_applicability
+
+    text = "2026年政府性基金预算拨款120.00万元。国有资本经营预算：未安排。"
+    assert (
+        _conditional_table_applicability("BUD_T6", text, report_year=2026)
+        == "applicable"
+    )
+    assert (
+        _conditional_table_applicability("BUD_T7", text, report_year=2026)
+        == "not_applicable"
+    ), "另一表种的金额不得把'未安排'的国资表判成缺表"
+
+
+def test_rc05_zero_and_historical_amounts_are_not_positive_evidence() -> None:
+    from src.engine.budget_rules import _conditional_table_applicability
+
+    assert _conditional_table_applicability(
+        "BUD_T6", "政府性基金预算0.00万元。", report_year=2026
+    ) == "unknown", "零金额不是本年正面适用证据"
+    assert _conditional_table_applicability(
+        "BUD_T6", "2024年度政府性基金预算拨款50.00万元。", report_year=2026
+    ) == "unknown", "历史年度金额不作本年证据"
+    assert _conditional_table_applicability(
+        "BUD_T6", "本年无政府性基金预算。", report_year=2026
+    ) == "not_applicable", "无预算等效说明 → 不判缺表"
+    assert _conditional_table_applicability(
+        "BUD_T7", "本年无相关内容。", report_year=2026
+    ) == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# RC-09：table_refs 与主证据同一认证门
+# ---------------------------------------------------------------------------
+
+
+def test_rc09_table_refs_require_content_anchoring(tmp_path: Path) -> None:
+    """伪引文/空白 bbox 的 table_refs 必须降级，不得画进标注 PDF。"""
+    import fitz
+
+    pdf_path = tmp_path / "source.pdf"
+    document = fitz.open()
+    page = document.new_page()
+    # china-s 内建中文字体：默认 helvetica 会把 CJK 写成占位符，
+    # 导致 get_text 抽不出原文、内容锚定必然失败
+    page.insert_text((72, 72), "收入合计 100.00 万元", fontname="china-s")
+    document.save(str(pdf_path))
+    document.close()
+
+    from src.utils.issue_bbox import PDFBBoxLocator
+
+    locator = PDFBBoxLocator(str(pdf_path))
+
+    # 真引文+真区域 → 保持 verified
+    good = locator._validate_ref(
+        {
+            "page": 1,
+            "bbox": [70, 60, 220, 84],
+            "quote": "收入合计 100.00 万元",
+            "location_level": "exact_cell",
+            "verification_status": "verified",
+            "table": "收入决算表",
+        }
+    )
+    assert good.get("verification_status") == "verified", good
+    assert good.get("bbox") is not None
+
+    # 伪引文 999 + 自称 verified → 必须降级并摘除 bbox
+    fake = locator._validate_ref(
+        {
+            "page": 1,
+            "bbox": [300, 300, 420, 340],
+            "quote": "999.00",
+            "location_level": "exact_cell",
+            "verification_status": "verified",
+            "table": "收入决算表",
+        }
+    )
+    assert fake.get("verification_status") == "unverified", fake
+    assert "bbox" not in fake, fake
+
+    # 空白 bbox（区域无文本）→ 同样降级
+    blank = locator._validate_ref(
+        {
+            "page": 1,
+            "bbox": [400, 500, 480, 520],
+            "quote": "收入合计 100.00 万元",
+            "location_level": "exact_cell",
+            "verification_status": "verified",
+            "table": "收入决算表",
+        }
+    )
+    assert blank.get("verification_status") == "unverified"
+    assert "bbox" not in blank
+
+
+# ---------------------------------------------------------------------------
+# RC-07：OCR 晋升——表种上下文消歧 + 未认证数字不进确定性勾稽
+# ---------------------------------------------------------------------------
+
+
+def _ocr_artifact(page_text: str) -> ParseArtifact:
+    from src.schemas.parse_artifact import ParsedTextBlock
+
+    return ParseArtifact(
+        source_file_hash="ocr-hash",
+        text_blocks=[
+            ParsedTextBlock(
+                block_uid="b1",
+                page_number=1,
+                text=page_text,
+                extraction_method="ocr",
+            )
+        ],
+        ocr_table_candidates=[
+            OcrTableCandidate(
+                candidate_uid="c1",
+                page_number=1,
+                rows=[["项目", "合计"], ["合计", "120.00"]],
+            )
+        ],
+    )
+
+
+def test_rc07_generic_total_table_not_certified_as_fund_table() -> None:
+    """只有"名称/合计"的通用表 + 页面无基金关键词 → 不得认证为基金表。"""
+    from src.services.ocr_fact_promotion import (
+        promote_ocr_candidates as promote_ocr_facts,
+    )
+
+    artifact = _ocr_artifact("部门收支总体情况")  # 页面上下文不含政府性基金
+    summary = promote_ocr_facts(artifact, file_hash="ocr-hash")
+    assert not summary["promoted_tables"], summary
+    assert any(
+        item.get("reason") == "table_identity_context_missing"
+        for item in summary["rejected_tables"]
+    ), summary
+
+
+def test_rc07_promoted_ocr_facts_stay_low_confidence() -> None:
+    """晋升成功的 OCR 事实保持 low_confidence——未逐格认证不进确定性勾稽。"""
+    from src.services.ocr_fact_promotion import (
+        promote_ocr_candidates as promote_ocr_facts,
+    )
+
+    artifact = _ocr_artifact("2026年政府性基金预算拨款情况")
+    summary = promote_ocr_facts(artifact, file_hash="ocr-hash")
+    assert summary["promoted_tables"], summary
+    context = build_fact_context_from_artifact(artifact, doc_type="final")
+    assert context is not None
+    assert all(
+        fact.recognition_status == "low_confidence" for fact in context.facts
+    ), [f.recognition_status for f in context.facts]
+    assert context.definite_facts() == []

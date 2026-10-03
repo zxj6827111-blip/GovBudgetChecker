@@ -587,16 +587,19 @@ def _iter_run_issues(run: dict[str, Any]) -> list[dict[str, Any]]:
 def _evaluate_evidence_authenticity(evaluated: list[dict[str, Any]]) -> dict[str, Any]:
     """AC-14：证据真实性率——逐条 evidence_verification 三态聚合。
 
-    verified+结构完整视为真实；failed（伪造引文/页码越界）直接计入违规；
-    unverified（扫描页等）单独计数，不冒充真实。
+    RC-13：分母是**全部正式问题**——缺核验记录的问题必须计入
+    ``missing_record``（不算真实），否则"只给 1 条问题配记录"就能
+    把真实性率刷成 1.0。verified+结构完整才算真实；failed（伪造引文/
+    页码越界）与缺记录计入违规。
     """
-    total = authentic = failed = unverified = 0
+    total = authentic = failed = unverified = missing_record = 0
     for row in evaluated:
         for finding in _iter_run_issues(row.get("run") or {}):
+            total += 1
             verification = finding.get("evidence_verification")
             if not isinstance(verification, dict):
+                missing_record += 1
                 continue
-            total += 1
             status = str(verification.get("status") or "")
             if status == "verified":
                 authentic += 1
@@ -605,36 +608,47 @@ def _evaluate_evidence_authenticity(evaluated: list[dict[str, Any]]) -> dict[str
             else:
                 unverified += 1
     if total == 0:
-        return {"status": "not_computable", "reason": "回放结果未含逐条证据核验记录（evidence_verification）"}
+        return {"status": "not_computable", "reason": "回放结果未含正式问题（无证据真实性样本）"}
     return {
         "status": "computed",
         "total": total,
         "authentic": authentic,
         "failed": failed,
         "unverified": unverified,
+        "missing_record": missing_record,
         "authenticity_rate": round(authentic / total, 4),
-        "violations": failed,
+        "violations": failed + missing_record,
     }
 
 
 def _evaluate_receipts(evaluated: list[dict[str, Any]]) -> dict[str, Any]:
     """AC-14：回执覆盖率与必查子项完成率——关系级回执聚合。
 
-    覆盖 = 携带操作数事实 ID 与公式的回执 / 全部适用回执；
-    完成 = pass/fail/not_applicable 的回执 / 全部适用回执（未完成态单独列出）。
+    RC-13：分母优先用冻结真值清单里的 ``applicable_sub_checks``（应检
+    关系全集）；缺回执/重复回执按 (rule_id, sub_check_id) 去重后计入
+    未完成——"只给 1 条 pass 回执"不能再把完成率刷成 1.0。
     """
     receipt_total = 0
     with_operands = 0
     completed = 0
     uncompleted_reasons: dict[str, int] = {}
+    expected_total = 0
+    expected_completed = 0
     for row in evaluated:
         meta = ((row.get("run") or {}).get("meta") or {})
         receipts = meta.get("check_receipts")
-        if not isinstance(receipts, list):
-            continue
-        for receipt in receipts:
-            if not isinstance(receipt, dict) or not str(receipt.get("sub_check_id") or ""):
-                continue
+        seen_keys: set[tuple[str, str]] = set()
+        row_receipts: list[dict[str, Any]] = []
+        if isinstance(receipts, list):
+            for receipt in receipts:
+                if not isinstance(receipt, dict) or not str(receipt.get("sub_check_id") or ""):
+                    continue
+                key = (str(receipt.get("rule_id") or ""), str(receipt.get("sub_check_id") or ""))
+                if key in seen_keys:
+                    continue  # RC-13：汇总/子回执重复出现只计一次
+                seen_keys.add(key)
+                row_receipts.append(receipt)
+        for receipt in row_receipts:
             receipt_total += 1
             if receipt.get("operand_fact_ids") and receipt.get("formula"):
                 with_operands += 1
@@ -644,10 +658,44 @@ def _evaluate_receipts(evaluated: list[dict[str, Any]]) -> dict[str, Any]:
             else:
                 reason = str(receipt.get("incomplete_reason") or status or "unknown")
                 uncompleted_reasons[reason] = uncompleted_reasons.get(reason, 0) + 1
+        golden = row.get("golden") if isinstance(row.get("golden"), dict) else {}
+        expected_ids = golden.get("applicable_sub_checks")
+        if not isinstance(expected_ids, list) or not expected_ids:
+            # RC-13 反例契约：冻结关系全集也可由 run.meta.required_checks 提供
+            expected_ids = meta.get("required_checks")
+        if isinstance(expected_ids, list) and expected_ids:
+            expected_keys = {
+                (str(item).split(":", 1)[0], str(item))
+                if ":" in str(item)
+                else ("", str(item))
+                for item in expected_ids
+            }
+            expected_total += len(expected_keys)
+            covered_statuses = {
+                (str(r.get("rule_id") or ""), str(r.get("sub_check_id") or "")): str(r.get("status") or "")
+                for r in row_receipts
+            }
+            for key in expected_keys:
+                if covered_statuses.get(key) in {"pass", "fail", "not_applicable"}:
+                    expected_completed += 1
+    if expected_total:
+        return {
+            "status": "computed",
+            "denominator": "frozen_applicable_sub_checks",
+            "expected_total": expected_total,
+            "expected_completed": expected_completed,
+            "completion_rate": round(expected_completed / expected_total, 4),
+            "receipt_total": receipt_total,
+            "operand_formula_coverage": round(with_operands / receipt_total, 4)
+            if receipt_total
+            else 0.0,
+            "uncompleted_reasons": uncompleted_reasons,
+        }
     if receipt_total == 0:
         return {"status": "not_computable", "reason": "回放结果未含关系级检查回执"}
     return {
         "status": "computed",
+        "denominator": "issued_receipts",
         "receipt_total": receipt_total,
         "operand_formula_coverage": round(with_operands / receipt_total, 4),
         "completion_rate": round(completed / receipt_total, 4),
@@ -655,11 +703,31 @@ def _evaluate_receipts(evaluated: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _evaluate_exact_location(evaluated: list[dict[str, Any]], root: Path) -> dict[str, Any]:
-    """AC-14：精确定位率——匹配命中的 finding 落在冻结区域真值内的比率。
+def _bbox_overlaps(candidate: Any, truth: Any) -> bool:
+    """候选 bbox 与真值 bbox 的相交面积占比（相对真值）≥ 0.5 视为命中。"""
+    if not isinstance(candidate, (list, tuple)) or not isinstance(truth, (list, tuple)):
+        return False
+    if len(candidate) != 4 or len(truth) != 4:
+        return False
+    try:
+        cx0, cy0, cx1, cy1 = (float(v) for v in candidate)
+        tx0, ty0, tx1, ty1 = (float(v) for v in truth)
+    except (TypeError, ValueError):
+        return False
+    ix0, iy0 = max(cx0, tx0), max(cy0, ty0)
+    ix1, iy1 = min(cx1, tx1), min(cy1, ty1)
+    if ix1 <= ix0 or iy1 <= iy0:
+        return False
+    truth_area = max((tx1 - tx0) * (ty1 - ty0), 1e-6)
+    return ((ix1 - ix0) * (iy1 - iy0)) / truth_area >= 0.5
 
-    仅当语料标注提供 ``truth_region``（页 + bbox）时才可计算；否则如实
-    not_computable（页码命中率不是区域命中率）。
+
+def _evaluate_exact_location(evaluated: list[dict[str, Any]], root: Path) -> dict[str, Any]:
+    """AC-14：精确定位率——finding 的页与区域必须落入冻结真值区域。
+
+    RC-13：不得只看自报 exact/verified/bbox 标签——必须与
+    ``truth_region``（page + bbox）比对：页相同且候选 bbox 与真值
+    bbox 相交面积占真值 ≥ 0.5 才算命中；页错或区域远离即计失败。
     """
     truth_total = 0
     exact_hits = 0
@@ -680,11 +748,15 @@ def _evaluate_exact_location(evaluated: list[dict[str, Any]], root: Path) -> dic
                 continue
             truth_total += 1
             finding = item.get("finding") if isinstance(item.get("finding"), dict) else {}
-            if (
-                str(finding.get("location_level") or "") in {"exact_cell", "exact_span"}
-                and str(finding.get("verification_status") or "") == "verified"
-                and finding.get("bbox")
-            ):
+            candidate_bbox = finding.get("bbox")
+            finding_page = finding.get("page_number") or finding.get("page")
+            truth_page = region.get("page")
+            page_hit = (
+                finding_page is not None
+                and truth_page is not None
+                and int(finding_page) == int(truth_page)
+            )
+            if page_hit and _bbox_overlaps(candidate_bbox, region.get("bbox")):
                 exact_hits += 1
     if truth_total == 0:
         return {
@@ -745,7 +817,17 @@ def _evaluate_repeatability(manifest: dict[str, Any], root: Path, mode: str) -> 
                         str(finding.get("message") or ""),
                     ]
                 )
-            return sorted(rows)
+            # RC-13：结论与问题总数参与一致性——"结论冲突但问题列表同为空"
+            # 的两轮不得判 repeatable
+            rows.sort()
+            rows.append(
+                [
+                    "__conclusion__",
+                    str(run.get("analysis_conclusion") or run.get("status") or ""),
+                    str(len(rows)),
+                ]
+            )
+            return rows
 
         if _signature(first_run) == _signature(repeat_run):
             consistent += 1
@@ -793,7 +875,8 @@ def _evaluate_export_agreement(manifest: dict[str, Any], root: Path) -> dict[str
                         if isinstance(payload.get("issues"), list)
                         else []
                     )
-                    signatures.add(
+                    # RC-13：list 用 append（旧代码误用 set.add 触发 AttributeError）
+                    signatures.append(
                         {
                             (
                                 str(i.get("rule_id") or i.get("rule") or ""),
@@ -809,7 +892,7 @@ def _evaluate_export_agreement(manifest: dict[str, Any], root: Path) -> dict[str
 
                     with path.open("r", encoding="utf-8-sig", newline="") as handle:
                         reader = _csv.DictReader(handle)
-                        signatures.add(
+                        signatures.append(
                             {
                                 (
                                     str(r.get("规则编号") or r.get("rule_id") or ""),
@@ -1082,14 +1165,22 @@ def build_report(
     else:
         gates["export_agreement"] = _gate("not_computable", "未提供冻结真值清单与回放，无法计算。")
         gates["repeatability"] = _gate("not_computable", "未提供冻结真值清单与回放，无法计算。")
-    gates["review_candidate_rate"] = _gate(
-        "not_computable", "评测回放没有经人工审核的完整候选项基线。"
-    )
-    gates["duplicate_alert_rate"] = _gate(
-        "not_computable", "没有重复报警真值关系及独立复核统计。"
-    )
+    #: RC-13：诊断项与正式门项分离——缺真值的统计（候选报警复核率、
+    # 重复报警率）是诊断指标，记录现状但**不参与** all_pass：既不永久
+    # 阻断验收，也不许把缺指标直接当成 pass。
+    diagnostic_metrics = {
+        "review_candidate_rate": "评测回放没有经人工复核的完整候选项基线。",
+        "duplicate_alert_rate": "没有重复报警真值关系及独立复核统计。",
+    }
+    for name, reason in diagnostic_metrics.items():
+        gates[name] = _gate("diagnostic", reason)
 
-    all_pass = all(gate["status"] == "pass" for gate in gates.values())
+    formal_gates = {
+        name: gate
+        for name, gate in gates.items()
+        if name not in diagnostic_metrics
+    }
+    all_pass = all(gate["status"] == "pass" for gate in formal_gates.values())
     try:
         git_result = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "HEAD"],

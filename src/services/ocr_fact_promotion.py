@@ -21,6 +21,7 @@ from src.schemas.parse_artifact import (
     ParsedCell,
     ParsedTable,
 )
+from src.services.pdf_parser import _stable_fragment_uid
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +29,37 @@ logger = logging.getLogger(__name__)
 _PROMOTE_HEADER_CONFIDENCE = 0.75
 #: 数据行金额格可解析率门槛（关键数字复验）
 _PROMOTE_NUMERIC_RATE = 0.5
-#: 晋升表置信度（低于该值的事实会被识别为 low_confidence，不能作确定操作数）
-_PROMOTED_CONFIDENCE = 0.85
+#: 晋升表置信度（RC-07：低于 0.8，物化事实全部 low_confidence——
+#: 未经逐格识别置信度认证的 OCR 数据不进入确定性勾稽）
+_PROMOTED_CONFIDENCE = 0.75
+#: RC-07：表种上下文消歧——资金/口径关键词必须出现在该页 OCR 文本里，
+#: 只凭通用"合计"表头不得唯一认证基金/国资等专项表。
+_TABLE_CONTEXT_KEYWORDS: Dict[str, tuple[str, ...]] = {
+    "FIN_08_gov_fund": ("政府性基金", "基金预算"),
+    "FIN_09_state_capital": ("国有资本",),
+    "FIN_05_general_public_expenditure": ("一般公共预算",),
+    "FIN_04_fiscal_grant_total": ("财政拨款",),
+    "FIN_07_three_public": ("三公", "因公出国", "公务接待", "机关运行"),
+}
+
+
+def _page_context_supports_table(artifact: Any, page_number: int, table_code: str) -> bool:
+    """该页 OCR 文本是否支持该表种身份（RC-07 上下文消歧）。
+
+    - 表种未登记上下文关键词（如收支总表）→ 不拦截；
+    - 登记了关键词但该页 OCR 文本完全不含 → 上下文不支持，拒绝晋升。
+    """
+    keywords = _TABLE_CONTEXT_KEYWORDS.get(table_code)
+    if not keywords:
+        return True
+    page_text = "\n".join(
+        str(getattr(block, "text", "") or "")
+        for block in getattr(artifact, "text_blocks", []) or []
+        if getattr(block, "page_number", None) == page_number
+    )
+    if not page_text:
+        return False
+    return any(token in page_text for token in keywords)
 
 
 #: OCR 页面上的单位声明（与原生解析同一口径，不猜口径）
@@ -183,6 +213,17 @@ def promote_ocr_candidates(
                 }
             )
             continue
+        # RC-07：上下文消歧——通用"名称/合计"表头不得唯一认证专项表种；
+        # 该页 OCR 文本必须出现该表种的资金/口径关键词。
+        if not _page_context_supports_table(artifact, candidate.page_number, table_code):
+            summary["rejected_tables"].append(
+                {
+                    "candidate_uid": candidate.candidate_uid,
+                    "reason": "table_identity_context_missing",
+                    "table_code": table_code,
+                }
+            )
+            continue
         if not mappings:
             summary["rejected_tables"].append(
                 {"candidate_uid": candidate.candidate_uid, "reason": "no_measure_column_mapping"}
@@ -244,11 +285,20 @@ def promote_ocr_candidates(
             table_index=len(getattr(artifact, "table_fragments", []) or []),
             bbox=candidate.page_bbox or (0, 0, 0, 0),
             header_row_count=1,
+            # RC-07：0.75 < 0.8 → 物化事实 low_confidence，不参与确定性勾稽；
+            # 待真实 OCR 逐格置信度接入后按证据认证再晋升操作数资格。
             confidence=_PROMOTED_CONFIDENCE,
             extraction_method="ocr",
             unit_hint=unit_hint,
             rows=rows,
             cells=cells,
+            # RC-10：OCR 片段 UID 同样内容派生，重解析后校正目标不漂移
+            fragment_uid=_stable_fragment_uid(
+                "ocr",
+                candidate.page_number,
+                table_code,
+                rows=rows,
+            ),
         )
         artifact.table_fragments.append(fragment)
         artifact.logical_tables.append(

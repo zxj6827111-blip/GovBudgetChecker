@@ -134,10 +134,22 @@ make e2e
 make test
 ```
 
-## Docker Compose 一键部署（backend + worker + frontend + postgres + ai-extractor）
+## Docker Compose 一键部署（默认规则优先：backend + worker + frontend + postgres，AI 可选叠加）
 
 ```bash
 cp .env.example .env   # 至少填 POSTGRES_*、GOVBUDGET_API_KEY、USER_SESSION_SECRET、DEFAULT_ADMIN_PASSWORD
+docker compose -f docker-compose.yml config --quiet   # 先静态校验
+docker compose -f docker-compose.yml up -d --build
+```
+
+默认链路**不含 AI**：AI 只在请求显式 `use_ai_assist=true` 且开启双模式时启用
+（代码默认 `false`；`.env.example` 默认 `AI_ASSIST_REQUIRED=false`）。没有模型
+密钥、没有 ai-extractor 服务时任务照常完成（规则 + 本地 OCR 全链），不发起云请求。
+
+需要 AI 抽取时（**显式可选**，非默认），再叠加 AI 覆盖文件——该文件强制
+`USE_AI_ASSIST=true` 并要求 `ai-extractor` 就绪：
+
+```bash
 docker compose -f docker-compose.yml -f docker-compose.ai.yml config --quiet   # 先静态校验
 docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d --build
 ```
@@ -150,7 +162,7 @@ docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d --build
 | 服务 | 作用 | 备注 |
 |---|---|---|
 | `postgres` | 结构化数据 | 定义在 `docker-compose.yml` |
-| `ai-extractor` | AI 抽取/语义审计服务 | 仓库自带最小实现，可替换 |
+| `ai-extractor` | AI 抽取/语义审计服务（仅 AI 覆盖模式） | 仓库自带最小实现，可替换 |
 | `backend` | HTTP API，**只入队**（`JOB_QUEUE_ROLE=api`） | 端口 8000 |
 | `worker` | 消费队列跑分析（`JOB_QUEUE_ROLE=worker`） | 无端口，`python -m api.worker` |
 | `frontend` | Next.js 前端 | 端口 3001→3000 |
