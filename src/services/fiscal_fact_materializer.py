@@ -541,7 +541,11 @@ class FiscalFactMaterializer:
                     else legacy.source_page_number
                 ),
                 source_cell_id=(
-                    f"{table.fragment_uid}:r{measure_cell.row_idx}c{measure_cell.col_idx}"
+                    (
+                        f"{measure_cell.origin_fragment_uid or table.fragment_uid}"
+                        f":r{measure_cell.origin_row_idx if measure_cell.origin_row_idx is not None else measure_cell.row_idx}"
+                        f"c{measure_cell.col_idx}"
+                    )
                     if measure_cell is not None
                     else None
                 ),

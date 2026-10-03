@@ -8,7 +8,9 @@ load_dotenv()
 import json
 import time
 import asyncio
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -484,6 +486,7 @@ def _evaluate_quality_gate(
     rule_execution_summary: Optional[Dict[str, Any]] = None,
     doc_type: Optional[str] = None,
     obligation_coverage: Optional[Dict[str, Any]] = None,
+    fact_overlay_report: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """任务级质量门禁：决定终态是 done / degraded / review_required。
 
@@ -587,6 +590,38 @@ def _evaluate_quality_gate(
                 ),
             }
         )
+
+    # ---- RC-10：人工校正未完全生效时，结论必须亮出来而不是静默通过 ----
+    if isinstance(fact_overlay_report, dict):
+        overlay_status = str(fact_overlay_report.get("status") or "")
+        unresolved_overlays = [
+            item
+            for item in (fact_overlay_report.get("unresolved") or [])
+            if isinstance(item, dict)
+        ]
+        blocking_unsupported = [
+            item
+            for item in (fact_overlay_report.get("unsupported") or [])
+            if isinstance(item, dict) and item.get("blocking")
+        ]
+        if overlay_status in {"failed", "partial"} or blocking_unsupported:
+            parts: List[str] = []
+            if unresolved_overlays:
+                parts.append(
+                    f"{len(unresolved_overlays)} 条校正目标无法映射到当前事实版本"
+                )
+            if blocking_unsupported:
+                parts.append(f"{len(blocking_unsupported)} 条身份字段校正未自动生效")
+            review_reasons.append(
+                {
+                    "code": "correction_overlay_incomplete",
+                    "message": (
+                        "人工校正未完全生效："
+                        + "；".join(parts)
+                        + "。相关差异按未校正数据计算，请人工确认校正目标后重新分析"
+                    ),
+                }
+            )
 
     # ---- 结构化入库信号（此前被丢弃，P0 §3.6） ----
     ingest_review_items: List[Dict[str, Any]] = []
@@ -1295,34 +1330,60 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                 fact_context_status = "build_failed"
         # ZC-05（AC-10）：同任务的人工校正覆盖层（重分析场景）在此应用到
         # 事实——校正不再只是留痕，重跑后规则消费的是校正后的事实版本。
+        # RC-10：目标 UID 失效时先做跨解析身份重映射；身份字段类校正记为
+        # "未生效"并转待复核——不能静默丢弃，也不能用未校正事实冒充成功。
         fact_overlay_applied = 0
+        fact_overlay_report: Dict[str, Any] = {"status": "not_requested"}
         if fact_context_obj is not None:
             try:
                 from src.engine.fact_context import (
-                    apply_fact_overlay,
+                    apply_fact_overlays_with_remap,
+                    collect_unsupported_changes,
                     parse_overlays_from_records,
                 )
                 from src.services.correction_overlay_store import read_jsonl_records
 
                 overlay_records = read_jsonl_records(job_dir / "corrections.jsonl")
                 overlays = parse_overlays_from_records(overlay_records)
-                if overlays:
-                    fact_context_obj = apply_fact_overlay(fact_context_obj, overlays)
-                    fact_overlay_applied = len(overlays)
+                unsupported_changes = collect_unsupported_changes(overlay_records)
+                previous_facts = runtime.read_previous_fact_facts(job_dir)
+                if overlays or unsupported_changes:
+                    (
+                        fact_context_obj,
+                        fact_overlay_report,
+                    ) = apply_fact_overlays_with_remap(
+                        fact_context_obj,
+                        overlays,
+                        previous_facts=previous_facts,
+                    )
+                    fact_overlay_applied = int(
+                        fact_overlay_report.get("applied") or 0
+                    )
+                    if unsupported_changes:
+                        fact_overlay_report["unsupported"] = unsupported_changes
             except ValueError as exc:
-                # 校正指向未知事实：重分析不能带着错误覆盖层继续——
-                # 如实转待复核，由人工确认校正目标。
+                # 校正指向未知事实且无法重映射：重分析不能带着失效覆盖层
+                # 继续装成功——如实转待复核，由人工确认校正目标。
                 fact_overlay_applied = -1
+                fact_overlay_report = {
+                    "status": "failed",
+                    "applied": 0,
+                    "unresolved": [{"reason": str(exc)}],
+                }
                 logger.warning(
                     "fact overlay rejected: %s", exc,
                     extra=safe_log_extra({"job_id": job_dir.name}),
                 )
                 fact_context_status = "overlay_rejected_unknown_fact"
             except Exception as exc:
+                fact_overlay_report = {"status": "failed", "applied": 0}
                 logger.warning(
                     "fact overlay application failed",
                     extra=safe_log_extra({"job_id": job_dir.name, "error": str(exc)}),
                 )
+        # RC-10：事实快照（含已应用覆盖层）落盘——下一轮重分析据此做跨
+        # 解析重映射；随分析版本一起归档，保证"该版本当时的事实"可回放。
+        runtime.write_fact_context_snapshot(job_dir, fact_context_obj)
         if page_assessment["low_text_page_count"]:
             logger.warning(
                 "job %s low-text pages detected: coverage=%.4f scanned=%d pages=%s",
@@ -1896,6 +1957,7 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             rule_execution_summary=result["meta"].get("rule_execution_summary"),
             doc_type=doc_type,
             obligation_coverage=obligation_coverage,
+            fact_overlay_report=fact_overlay_report,
         )
         result["meta"]["quality_gate"] = quality_gate
         final_status = quality_gate["status"]
@@ -1921,8 +1983,18 @@ async def _run_pipeline_body(job_dir: Path) -> None:
         else:
             stage_text = "完成"
 
+        # RC-12：版本 ID 在构建统一报告**之前**分配——报告的
+        # analysis_revision 绑定、版本快照目录、analysis_basis_token
+        # 都指向同一个 ID；先建报告后分配会产生 revision=null 的报告。
+        analysis_revision = (
+            "rev-"
+            + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+            + "-"
+            + uuid.uuid4().hex[:8]
+        )
         payload = {
             "job_id": job_dir.name,
+            "analysis_revision": analysis_revision,
             "status": final_status,
             "progress": 100,
             "result": result,
@@ -1936,6 +2008,7 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             "report_year": report_year,
             "report_kind": report_kind,
             "structured_ingest": structured_ingest_summary,
+            "fact_overlay": fact_overlay_report,
             "quality_status": quality_gate["quality_status"],
             "analysis_conclusion": quality_gate["analysis_conclusion"],
             "review_reasons": quality_gate["review_reasons"],

@@ -387,10 +387,21 @@ def test_cmm001_extraction_truth_anchors(alias):
 
 @pytest.mark.parametrize("alias", sorted(FINAL_FIXTURES))
 def test_cmm001_resolved_on_finals(final_replays, alias):
+    """RC-04 新契约：说明侧真实未提及的字段（真值锚=None）必须使该关系
+    转未完成——CMM-001 整体 insufficient_data + 关系级回执留痕，不再用
+    not_applicable 冒充 pass；全部字段都有操作数时才是真实 pass。"""
     summary = final_replays[alias]["summary"]
-    assert summary["rule_statuses"].get("CMM-001") == "pass", (
-        f"{alias}: CMM-001 应为真实判定 pass"
-    )
+    truth = CMM001_TRUTH[alias]
+    missing_fields = [key for key, want in truth.items() if want is None]
+    if missing_fields:
+        assert summary["rule_statuses"].get("CMM-001") == "insufficient_data", (
+            f"{alias}: 说明侧未提及 {missing_fields}，CMM-001 必须转未完成"
+            f"（不得假通过），实际 {summary['rule_statuses'].get('CMM-001')}"
+        )
+    else:
+        assert summary["rule_statuses"].get("CMM-001") == "pass", (
+            f"{alias}: 全部字段真值齐备，CMM-001 应为真实判定 pass"
+        )
     cmm001_findings = [
         i for i in final_replays[alias]["issues"] if getattr(i, "rule", "") == "CMM-001"
     ]
@@ -400,9 +411,11 @@ def test_cmm001_resolved_on_finals(final_replays, alias):
     )
 
 
-def test_finals_unresolved_total_le_10(final_replays):
+def test_finals_unresolved_total_le_11(final_replays):
+    """RC-04 后 yichuan CMM-001 因说明侧确实未提及 car_buy 转未完成（+1）：
+    这是"缺披露不得假通过"的如实代价，未完成合计阈值 10 → 11。"""
     total = sum(r["summary"]["unresolved_total"] for r in final_replays.values())
-    assert total <= 10, f"4 份决算 unresolved 合计 {total} > 10"
+    assert total <= 11, f"4 份决算 unresolved 合计 {total} > 11"
 
 
 def test_yichuan_findings_stay_12(final_replays):

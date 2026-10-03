@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import logging
@@ -1438,6 +1439,33 @@ def _draw_page_legend(page: Any, entries: Sequence[Dict[str, Any]], fitz: Any) -
         )
 
 
+def _annotated_output_path(
+    job_id: str,
+    status_payload: Dict[str, Any],
+    issues: Sequence[Dict[str, Any]],
+) -> Path:
+    """内容寻址的标注 PDF 产物路径（RC-12：防历史/当前/并发导出串版）。
+
+    同一（分析版本 × 问题集）→ 同一文件（可复用，产物不可变）；
+    任一不同 → 不同文件——后生成的导出绝不会覆盖上一个响应尚未
+    发送完的字节。此前两版共用 `annotated.pdf` 单一路径，历史下载
+    与当前下载互相覆盖（复核 RC-12 实证）。
+    """
+    revision = str(status_payload.get("analysis_revision") or "").strip()
+    if not revision:
+        report = status_payload.get("review_report")
+        if isinstance(report, dict):
+            revision = str(report.get("analysis_revision") or "").strip()
+    digest_payload = json.dumps(
+        list(issues), ensure_ascii=False, sort_keys=True, default=str
+    )
+    issues_digest = hashlib.sha256(digest_payload.encode("utf-8")).hexdigest()[:16]
+    slug = revision or "unversioned"
+    for part in ("/", "\\", ".."):
+        slug = slug.replace(part, "_")
+    return (runtime.UPLOAD_ROOT / job_id / f"annotated-{slug}-{issues_digest}.pdf").resolve()
+
+
 def _create_zero_issue_appendix_pdf(
     job_id: str,
     status_payload: Dict[str, Any],
@@ -1457,9 +1485,10 @@ def _create_zero_issue_appendix_pdf(
         return None
     if source_pdf is None:
         return None
-    output_path = (runtime.UPLOAD_ROOT / job_id / "annotated.pdf").resolve()
+    output_path = _annotated_output_path(job_id, status_payload, [])
     if output_path.exists():
-        output_path.unlink()
+        # 产物不可变：同版本同内容直接复用，不重写、不覆盖
+        return output_path
 
     try:
         with fitz.open(str(source_pdf)) as document:
@@ -1611,9 +1640,10 @@ def _create_annotated_pdf(
     source_pdf = _resolve_source_pdf(job_id, status_payload)
     if source_pdf is None:
         return None
-    output_path = (runtime.UPLOAD_ROOT / job_id / "annotated.pdf").resolve()
+    output_path = _annotated_output_path(job_id, status_payload, list(issues))
     if output_path.exists():
-        output_path.unlink()
+        # 产物不可变：同版本同问题集的标注 PDF 直接复用（RC-12）
+        return output_path
 
     page_legends: Dict[int, List[Dict[str, Any]]] = {}
     legend_seen: Dict[int, set[tuple[str, str]]] = {}

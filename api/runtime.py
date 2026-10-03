@@ -282,6 +282,58 @@ def read_json_file(
 TERMINAL_ANALYSIS_STATUSES = frozenset({"done", "review_required", "degraded", "error"})
 
 
+def write_fact_context_snapshot(job_dir: Path, fact_context: Any) -> Optional[Path]:
+    """把当前版本事实快照（含人工覆盖层）原子写入任务目录（RC-10）。
+
+    快照是跨解析重映射的唯一可靠来源：解析器升级后事实 UID 变化时，
+    上一版本的快照提供旧目标 → 身份键 → 新目标的映射依据。
+    任何失败只降级（返回 None），不影响分析主链路。
+    """
+    if fact_context is None:
+        return None
+    try:
+        payload = fact_context.to_dict()
+        write_json_file(job_dir / "fact_context.json", payload)
+        return job_dir / "fact_context.json"
+    except Exception as exc:
+        logger.warning(
+            "fact context snapshot write failed for %s: %s",
+            getattr(job_dir, "name", job_dir),
+            exc,
+        )
+        return None
+
+
+def read_previous_fact_facts(job_dir: Path) -> List[Dict[str, Any]]:
+    """读取上一分析版本的事实快照（dict 列表），供覆盖层跨版本重映射。
+
+    优先读当前指针指向的版本目录内的快照（版本不可变）；没有版本目录
+    时回退任务根目录的临时快照。都没有则返回空列表——重映射退化为
+    "UID 命中即用，失效即转待复核"。
+    """
+    pointer = read_analysis_revision_pointer(job_dir)
+    candidates: List[Path] = []
+    if pointer and str(pointer.get("revision_id") or "").strip():
+        candidates.append(
+            job_dir
+            / "analysis_versions"
+            / str(pointer["revision_id"])
+            / "fact_context.json"
+        )
+    candidates.append(job_dir / "fact_context.json")
+    for candidate in candidates:
+        try:
+            if not candidate.is_file():
+                continue
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        facts = data.get("facts") if isinstance(data, dict) else None
+        if isinstance(facts, list):
+            return [item for item in facts if isinstance(item, dict)]
+    return []
+
+
 def write_analysis_revision_snapshot(
     job_dir: Path,
     payload: Dict[str, Any],
@@ -292,6 +344,9 @@ def write_analysis_revision_snapshot(
     - 指针：``analysis_versions/current.json``（temp 文件 + os.replace 原子替换）；
     - 重分析只追加新版本目录，不删除、不覆盖旧快照；读取方据 current.json
       定位当前版本，历史版本永远可回放。
+    - RC-12：revision ID 由调用方在构建统一报告**之前**分配并写入
+      ``payload["analysis_revision"]``——报告的版本绑定与快照目录必须
+      指向同一个 ID；payload 未携带时才在此分配（兼容旧调用方）。
     返回指针内容；任何失败返回 None 且不抛异常（快照是增强能力，
     不得影响 status.json 主链路）。
     """
@@ -301,15 +356,28 @@ def write_analysis_revision_snapshot(
             return None
         versions_dir = job_dir / "analysis_versions"
         versions_dir.mkdir(parents=True, exist_ok=True)
-        revision_id = (
-            "rev-"
-            + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-            + "-"
-            + uuid.uuid4().hex[:8]
-        )
+        revision_id = str(payload.get("analysis_revision") or "").strip()
+        if not revision_id:
+            revision_id = (
+                "rev-"
+                + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+                + "-"
+                + uuid.uuid4().hex[:8]
+            )
         revision_dir = versions_dir / revision_id
         revision_dir.mkdir(parents=True, exist_ok=False)
         write_json_file(revision_dir / "status.json", payload)
+        # RC-10：事实快照随版本一起归档——历史版本的覆盖层重映射、
+        # 证据绑定核对都依赖"该版本当时的事实"，不能只留结论。
+        fact_snapshot = job_dir / "fact_context.json"
+        if fact_snapshot.is_file():
+            try:
+                shutil.copyfile(fact_snapshot, revision_dir / "fact_context.json")
+            except OSError:
+                logger.warning(
+                    "fact context snapshot copy failed for %s",
+                    getattr(job_dir, "name", job_dir),
+                )
 
         pointer = {
             "revision_id": revision_id,

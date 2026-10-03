@@ -92,7 +92,7 @@ def order_and_number_issues(doc, issues):
 # engine/rules_v33.py  —— v3.3 规则（修正版）
 
 from dataclasses import dataclass, field
-from typing import FrozenSet, List, Dict, Any, Optional, Set, Tuple, TypedDict
+from typing import FrozenSet, List, Dict, Any, Optional, Sequence, Set, Tuple, TypedDict
 
 import os
 import re
@@ -265,6 +265,71 @@ def tolerant_equal(a: Optional[float], b: Optional[float],
     if a is None or b is None:
         return False
     return not amount_difference_exceeds_policy(Decimal(str(a)) - Decimal(str(b)))
+
+
+def _fact_operand_for_v33(
+    fact_context: Any,
+    indicator: str,
+    *,
+    table_code: Optional[str] = None,
+    subject_tokens: Sequence[str] = (),
+    report_year: Optional[int] = None,
+    budget_stages: Sequence[str] = (),
+) -> Tuple[Optional[Decimal], Any, Optional[str]]:
+    """RC-01：统一事实操作数（角色唯一化 + 歧义拒绝），委托 fact_context。
+
+    返回 (万元 Decimal, fact, blocked_reason)——blocked 时调用方必须转
+    未完成，不得静默回退旧表取数。
+    """
+    if fact_context is None:
+        return None, None, None
+    from src.engine.fact_context import resolve_operand
+
+    resolution = resolve_operand(
+        fact_context,
+        indicator,
+        table_code=table_code,
+        subject_tokens=subject_tokens,
+        report_year=report_year,
+        budget_stages=budget_stages,
+    )
+    if resolution.status == "ok":
+        return resolution.value, resolution.fact, None
+    if resolution.status == "blocked":
+        return None, resolution.fact, resolution.reason
+    return None, None, None
+
+
+def _v33_relation_receipt(
+    doc: Document,
+    rule_code: str,
+    sub_check_id: str,
+    *,
+    status: str,
+    operand_fact_ids: Sequence[str] = (),
+    formula: Optional[str] = None,
+    incomplete_reason: Optional[str] = None,
+) -> None:
+    """RC-04：V33 族关系级回执——每条适用关系一条，携带真实操作数 ID。"""
+    from src.engine.fact_context import make_fact_receipt
+
+    receipts = getattr(doc, "fact_receipts", None)
+    if receipts is None:
+        receipts = []
+        try:
+            doc.fact_receipts = receipts
+        except Exception:
+            pass
+    receipts.append(
+        make_fact_receipt(
+            rule_code,
+            sub_check_id,
+            operand_fact_ids=list(operand_fact_ids),
+            formula=formula,
+            status=status,
+            incomplete_reason=incomplete_reason,
+        )
+    )
 
 
 def _amount_mismatch(a: Any, b: Any, *, rounding_envelope: Any = None) -> bool:
@@ -2251,19 +2316,31 @@ class R33103_Income_vs_Text(Rule):
 
     def apply(self, doc: Document) -> List[Issue]:
         issues: List[Issue] = []
+        # RC-01：事实解析前置——统一事实（FIN_02）是表侧第一取数源；
+        # 没有旧二维表、只有事实时同样完成比对，锚点/表格缺失不再直接
+        # 拦截整条规则（事实被识别风险压住时仍须转未完成）。
+        fact_ctx = getattr(doc, "fact_context", None)
+        fact_total, fact_total_ref, fact_total_block = _fact_operand_for_v33(
+            fact_ctx,
+            "total_actual",
+            table_code="FIN_02_income",
+            subject_tokens=("合计", "总计"),
+        )
+        fact_fp, fact_fp_ref, fact_fp_block = _fact_operand_for_v33(
+            fact_ctx,
+            "fiscal_allocation",
+            table_code="FIN_02_income",
+            subject_tokens=("合计", "总计"),
+        )
         p = _get_first_anchor_page(doc, "收入决算表")
-        if not p:
+        t = _largest_table_on_page(doc.page_tables[p - 1]) if p else None
+        if t is None and fact_total is None and fact_fp is None and (
+            fact_total_block is None and fact_fp_block is None
+        ):
             raise RuleDeferred(
                 self.code,
-                detail="未找到收入决算表锚点页",
-                unresolved_reasons=["未找到收入决算表锚点页"],
-            )
-        t = _largest_table_on_page(doc.page_tables[p - 1])
-        if not t:
-            raise RuleDeferred(
-                self.code,
-                detail="收入决算表所在页未解析到有效表格",
-                unresolved_reasons=["收入决算表所在页未解析到有效表格"],
+                detail="未找到收入决算表锚点页且无可用收入事实",
+                unresolved_reasons=["未找到收入决算表锚点页且无可用收入事实"],
             )
         # 章节限定：严格在「收入决算情况说明」章节内查找（MR-1a：页界断号
         # 修复版；旧 find_section_scope_with_title(["收入","决算"]) 会命中
@@ -2282,12 +2359,24 @@ class R33103_Income_vs_Text(Rule):
         # MR-1a：T2 收入决算表是表头式布局——「本年收入合计/财政拨款收入」
         # 是**列头**，值在「合计」行与该列的交点；旧 _row_value 只认 row[0]
         # → 财政拨款收入恒取不到。v2 阶段0 prefer 定位列、阶段2 列头兜底。
+        # 旧表取数保留为事实缺失时的兜底与诊断对照。
         total = _row_value_v2(
             t,
             ("本年收入合计", "本年合计", "合计"),
             prefer_cols=("本年收入合计", "本年合计"),
         )
         fp = _row_value_v2(t, ("财政拨款收入", "一般公共预算财政拨款收入", "财政拨款"))
+
+        # RC-01：事实已在本方法开头解析——这里只做值裁夺：
+        # 命中 → 事实值覆盖旧表取数；被拒 → 转未完成，不静默沿用旧表值。
+        if fact_total is not None:
+            total = float(fact_total)
+        elif fact_total_block is not None:
+            total = None
+        if fact_fp is not None:
+            fp = float(fact_fp)
+        elif fact_fp_block is not None:
+            fp = None
 
         tt = near_number(sec_text, ["本年收入合计", "合计"], target_year=None)
         tf = near_number(sec_text, ["财政拨款收入"], target_year=None)
@@ -2296,20 +2385,62 @@ class R33103_Income_vs_Text(Rule):
         if total is not None and tt is not None:
             if not tolerant_equal(total, tt):
                 issues.append(self._issue(f"收入合计：表{total} ≠ 文本{tt}", {"page": p}, "warn"))
+                _v33_relation_receipt(
+                    doc, self.code, "T2:income_total:text_vs_table",
+                    status="fail",
+                    operand_fact_ids=[fact_total_ref.fact_uid] if fact_total_ref is not None else [],
+                    formula="text.本年收入合计 == table.FIN_02.total_actual (万元)",
+                )
+            else:
+                _v33_relation_receipt(
+                    doc, self.code, "T2:income_total:text_vs_table",
+                    status="pass",
+                    operand_fact_ids=[fact_total_ref.fact_uid] if fact_total_ref is not None else [],
+                    formula="text.本年收入合计 == table.FIN_02.total_actual (万元)",
+                )
         else:
             if total is None:
                 unresolved.append("收入决算表缺少关键行: 收入合计")
             if tt is None:
                 unresolved.append("说明文本中未提取到本年收入合计")
+            _v33_relation_receipt(
+                doc, self.code, "T2:income_total:text_vs_table",
+                status="insufficient_data",
+                operand_fact_ids=[fact_total_ref.fact_uid] if fact_total_ref is not None else [],
+                formula="text.本年收入合计 == table.FIN_02.total_actual (万元)",
+                incomplete_reason="收入合计表侧或说明侧取数失败"
+                + (f"（{fact_total_block}）" if fact_total_block else ""),
+            )
 
         if fp is not None and tf is not None:
             if not tolerant_equal(fp, tf):
                 issues.append(self._issue(f"财政拨款收入：表{fp} ≠ 文本{tf}", {"page": p}, "warn"))
+                _v33_relation_receipt(
+                    doc, self.code, "T2:fiscal_allocation:text_vs_table",
+                    status="fail",
+                    operand_fact_ids=[fact_fp_ref.fact_uid] if fact_fp_ref is not None else [],
+                    formula="text.财政拨款收入 == table.FIN_02.fiscal_allocation (万元)",
+                )
+            else:
+                _v33_relation_receipt(
+                    doc, self.code, "T2:fiscal_allocation:text_vs_table",
+                    status="pass",
+                    operand_fact_ids=[fact_fp_ref.fact_uid] if fact_fp_ref is not None else [],
+                    formula="text.财政拨款收入 == table.FIN_02.fiscal_allocation (万元)",
+                )
         else:
             if fp is None:
                 unresolved.append("收入决算表缺少关键行: 财政拨款收入")
             if tf is None:
                 unresolved.append("说明文本中未提取到财政拨款收入")
+            _v33_relation_receipt(
+                doc, self.code, "T2:fiscal_allocation:text_vs_table",
+                status="insufficient_data",
+                operand_fact_ids=[fact_fp_ref.fact_uid] if fact_fp_ref is not None else [],
+                formula="text.财政拨款收入 == table.FIN_02.fiscal_allocation (万元)",
+                incomplete_reason="财政拨款收入表侧或说明侧取数失败"
+                + (f"（{fact_fp_block}）" if fact_fp_block else ""),
+            )
 
         p_txt = find_percent(sec_text, ["财政拨款收入", "占比", "比重"])
         if p_txt is not None and total and fp:
@@ -2334,19 +2465,45 @@ class R33104_Expense_vs_Text(Rule):
 
     def apply(self, doc: Document) -> List[Issue]:
         issues: List[Issue] = []
+        # RC-01：事实解析前置——统一事实（FIN_03）是表侧第一取数源；
+        # 没有旧二维表、只有事实时同样完成比对；事实被识别风险压住时
+        # 该关系转未完成，不静默沿用旧表值。
+        fact_ctx = getattr(doc, "fact_context", None)
+        fact_total, fact_total_ref, fact_total_block = _fact_operand_for_v33(
+            fact_ctx,
+            "total_actual",
+            table_code="FIN_03_expenditure",
+            subject_tokens=("合计", "总计"),
+        )
+        fact_basic, fact_basic_ref, fact_basic_block = _fact_operand_for_v33(
+            fact_ctx,
+            "basic_actual",
+            table_code="FIN_03_expenditure",
+            subject_tokens=("合计", "总计"),
+        )
+        fact_proj, fact_proj_ref, fact_proj_block = _fact_operand_for_v33(
+            fact_ctx,
+            "project_actual",
+            table_code="FIN_03_expenditure",
+            subject_tokens=("合计", "总计"),
+        )
         p = _get_first_anchor_page(doc, "支出决算表")
-        if not p:
+        t = _largest_table_on_page(doc.page_tables[p - 1]) if p else None
+        if t is None and (
+            fact_total is not None
+            or fact_basic is not None
+            or fact_proj is not None
+            or fact_total_block is not None
+            or fact_basic_block is not None
+            or fact_proj_block is not None
+        ):
+            # 事实可承担表侧取数——无旧表不拦截
+            pass
+        elif t is None:
             raise RuleDeferred(
                 self.code,
-                detail="未找到支出决算表锚点页",
-                unresolved_reasons=["未找到支出决算表锚点页"],
-            )
-        t = _largest_table_on_page(doc.page_tables[p - 1])
-        if not t:
-            raise RuleDeferred(
-                self.code,
-                detail="支出决算表所在页未解析到有效表格",
-                unresolved_reasons=["支出决算表所在页未解析到有效表格"],
+                detail="未找到支出决算表锚点页且无可用支出事实",
+                unresolved_reasons=["未找到支出决算表锚点页且无可用支出事实"],
             )
 
         # 章节限定：严格在「支出决算情况说明」章节内查找（MR-1a：页界断号
@@ -2363,7 +2520,8 @@ class R33104_Expense_vs_Text(Rule):
             )
 
         # MR-1a：T3 支出决算表是表头式布局，「基本支出/项目支出」是列头，
-        # 值在「合计」行与列的交点；v2 阶段2 列头兜底
+        # 值在「合计」行与列的交点；v2 阶段2 列头兜底。
+        # 旧表取数保留为事实缺失时的兜底与诊断对照。
         total = _row_value_v2(
             t,
             ("本年支出合计", "本年合计", "合计"),
@@ -2372,25 +2530,60 @@ class R33104_Expense_vs_Text(Rule):
         basic = _row_value_v2(t, ("基本支出",))
         proj = _row_value_v2(t, ("项目支出",))
 
+        # RC-01：值裁夺——事实命中覆盖旧表；事实被拒置 None 转未完成。
+        if fact_total is not None:
+            total = float(fact_total)
+        elif fact_total_block is not None:
+            total = None
+        if fact_basic is not None:
+            basic = float(fact_basic)
+        elif fact_basic_block is not None:
+            basic = None
+        if fact_proj is not None:
+            proj = float(fact_proj)
+        elif fact_proj_block is not None:
+            proj = None
+
         tt = near_number(sec_text, ["本年支出合计", "合计"], target_year=None)
         tb = near_number(sec_text, ["基本支出"], target_year=None)
         tp = near_number(sec_text, ["项目支出"], target_year=None)
 
         unresolved: List[str] = []
         check_items = [
-            ("本年支出合计", total, tt),
-            ("基本支出", basic, tb),
-            ("项目支出", proj, tp),
+            ("本年支出合计", total, tt, fact_total_ref, fact_total_block, "T3:total_actual:text_vs_table", "text.本年支出合计 == table.FIN_03.total_actual (万元)"),
+            ("基本支出", basic, tb, fact_basic_ref, fact_basic_block, "T3:basic_actual:text_vs_table", "text.基本支出 == table.FIN_03.basic_actual (万元)"),
+            ("项目支出", proj, tp, fact_proj_ref, fact_proj_block, "T3:project_actual:text_vs_table", "text.项目支出 == table.FIN_03.project_actual (万元)"),
         ]
-        for nm, a, b in check_items:
+        for nm, a, b, fact_ref, fact_block, sub_id, formula in check_items:
             if a is not None and b is not None:
                 if not tolerant_equal(a, b):
                     issues.append(self._issue(f"{nm}：表{a} ≠ 文本{b}", {"page": p}, "warn"))
+                    _v33_relation_receipt(
+                        doc, self.code, sub_id,
+                        status="fail",
+                        operand_fact_ids=[fact_ref.fact_uid] if fact_ref is not None else [],
+                        formula=formula,
+                    )
+                else:
+                    _v33_relation_receipt(
+                        doc, self.code, sub_id,
+                        status="pass",
+                        operand_fact_ids=[fact_ref.fact_uid] if fact_ref is not None else [],
+                        formula=formula,
+                    )
             else:
                 if a is None:
                     unresolved.append(f"支出决算表缺少关键行: {nm}")
                 if b is None:
                     unresolved.append(f"说明文本中未提取到{nm}")
+                _v33_relation_receipt(
+                    doc, self.code, sub_id,
+                    status="insufficient_data",
+                    operand_fact_ids=[fact_ref.fact_uid] if fact_ref is not None else [],
+                    formula=formula,
+                    incomplete_reason="表侧或说明侧取数失败"
+                    + (f"（{fact_block}）" if fact_block else ""),
+                )
 
         for nm, a in [("基本支出", basic), ("项目支出", proj)]:
             pct_t = find_percent(sec_text, [nm, "占比", "比重"])
@@ -5035,23 +5228,79 @@ class R33214_T1_TotalBalance(Rule):
 
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
+        # RC-01：事实前置——T1 收支总计优先取统一事实（FIN_01 收入/支出实际，
+        # 合计行角色唯一化）；事实被拒 → 转未完成，不得静默沿用旧表取数。
+        fact_ctx = getattr(doc, "fact_context", None)
+        fact_income, fact_income_ref, fact_income_block = _fact_operand_for_v33(
+            fact_ctx,
+            "income_actual",
+            table_code="FIN_01_income_expenditure_total",
+        )
+        fact_expense, fact_expense_ref, fact_expense_block = _fact_operand_for_v33(
+            fact_ctx,
+            "expenditure_actual",
+            table_code="FIN_01_income_expenditure_total",
+        )
+        _operand_ids = [
+            fact.fact_uid
+            for fact in (fact_income_ref, fact_expense_ref)
+            if fact is not None
+        ]
+        if fact_income is not None and fact_expense is not None:
+            if _amount_mismatch(fact_income, fact_expense):
+                issues.append(self._issue(
+                    f"T1总计不平：收入侧总计({fact_income:.2f}) != 支出侧总计({fact_expense:.2f})",
+                    {"income_total": float(fact_income), "expense_total": float(fact_expense)}, "error",
+                    evidence_text=(
+                        f"事实：收入 {fact_income_ref.fact_uid if fact_income_ref is not None else '-'}"
+                        f"={fact_income}，支出 {fact_expense_ref.fact_uid if fact_expense_ref is not None else '-'}"
+                        f"={fact_expense}"
+                    ),
+                ))
+                _v33_relation_receipt(
+                    doc, self.code, "T1:income_expenditure_total:balance",
+                    status="fail",
+                    operand_fact_ids=_operand_ids,
+                    formula="fact.income_actual == fact.expenditure_actual (万元)",
+                )
+            else:
+                _v33_relation_receipt(
+                    doc, self.code, "T1:income_expenditure_total:balance",
+                    status="pass",
+                    operand_fact_ids=_operand_ids,
+                    formula="fact.income_actual == fact.expenditure_actual (万元)",
+                )
+            return issues
+        blocked_reasons = [
+            *(f"收入总计{fact_income_block}" if fact_income_block else []),
+            *(f"支出总计{fact_expense_block}" if fact_expense_block else []),
+        ]
         t1_rows = _get_table_rows(doc, "收入支出决算总表")
-        
+
         if not t1_rows:
+            if blocked_reasons:
+                _v33_relation_receipt(
+                    doc, self.code, "T1:income_expenditure_total:balance",
+                    status="insufficient_data",
+                    operand_fact_ids=_operand_ids,
+                    formula="fact.income_actual == fact.expenditure_actual (万元)",
+                    incomplete_reason="；".join(blocked_reasons),
+                )
             raise RuleDeferred(
                 self.code,
-                detail="收入支出决算总表(T1)缺失或无可解析行",
-                unresolved_reasons=["收入支出决算总表(T1)缺失或无可解析行"],
+                detail="收入支出决算总表(T1)缺失或无可解析行且无可用总计事实",
+                unresolved_reasons=["收入支出决算总表(T1)缺失或无可解析行且无可用总计事实"]
+                + blocked_reasons,
             )
-        
+
         # 查找收入侧"总计"和支出侧"总计"
         income_total = 0.0
         expense_total = 0.0
-        
+
         for row in t1_rows:
             row_txt = "".join([str(c) for c in row if c])
             vals = _parse_row_values(row)
-            
+
             if "总计" in row_txt and vals:
                 # T1通常是左右并排结构，过滤非数值/零值单元格
                 non_zero = [v for v in vals if v > 0.01]
@@ -5062,8 +5311,16 @@ class R33214_T1_TotalBalance(Rule):
                     # 可能只有一个值，表示收支相等
                     income_total = expense_total = non_zero[0]
                 break
-        
+
         if not (income_total > 0.01 and expense_total > 0.01):
+            if blocked_reasons:
+                _v33_relation_receipt(
+                    doc, self.code, "T1:income_expenditure_total:balance",
+                    status="insufficient_data",
+                    operand_fact_ids=_operand_ids,
+                    formula="fact.income_actual == fact.expenditure_actual (万元)",
+                    incomplete_reason="；".join(blocked_reasons),
+                )
             raise RuleDeferred(
                 self.code,
                 detail="收入支出决算总表(T1)未提取到有效收支总计金额",

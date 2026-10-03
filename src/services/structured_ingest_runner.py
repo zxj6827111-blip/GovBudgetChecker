@@ -233,18 +233,33 @@ async def run_structured_ingest(
         # 3) 都没有 → 实际解析一次，并把产物写入统一存储（幂等）。
         # 旧表由 artifact 适配写入（persist_artifact_to_legacy_tables）。
         parse_run_id: Optional[int] = None
+        # RC-08：缓存键必须与"本次将要消费的解析对象"的指纹一致。
+        # 调用方已带 artifact 时以其自身 config/OCR 指纹为准（那才是这次
+        # 事实的真实来源），不能用固定参数指纹去命中旧 run——否则会把
+        # 新配置/新模型解析出的事实挂到旧 run 上，证据与版本彻底失配。
+        lookup_config_fingerprint = (
+            (parse_artifact.config_fingerprint or parse_config_fingerprint)
+            if parse_artifact is not None
+            else parse_config_fingerprint
+        )
+        lookup_ocr_fingerprint = (
+            parse_artifact.ocr_model_fingerprint
+            if parse_artifact is not None
+            else None
+        )
         cached_run_id = await find_cached_parse_run(
             conn,
             document_version_id=version_id,
             source_file_hash=checksum,
             parser_fingerprint=PARSER_FINGERPRINT,
-            config_fingerprint=parse_config_fingerprint,
-            ocr_model_fingerprint=None,
+            config_fingerprint=lookup_config_fingerprint,
+            ocr_model_fingerprint=lookup_ocr_fingerprint,
         )
         if cached_run_id is not None:
+            # 命中即完整恢复被命中 run 的 artifact——事实物化、证据引用
+            # 全部来自同一 run 的同一份解析对象（RC-08：不旧 run 配新事实）。
             parse_run_id = cached_run_id
-            if parse_artifact is None:
-                parse_artifact = await load_parse_artifact(conn, cached_run_id)
+            parse_artifact = await load_parse_artifact(conn, cached_run_id)
 
         parser = PDFParser(conn)
         if parse_artifact is None:

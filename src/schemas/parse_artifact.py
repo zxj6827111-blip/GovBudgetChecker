@@ -169,6 +169,10 @@ class ParsedCell:
     # 序列化为十进制字符串。
     normalized_value_wan: Optional[Decimal] = None
     presence: str = CellPresence.VALUE
+    # RC-02：合并视图单元格的来源物理身份——证据格 ID 必须能回到
+    # 原页原格，不能指向合并后新造的 ID。单片段表两者为 None（无合并）。
+    origin_fragment_uid: Optional[str] = None
+    origin_row_idx: Optional[int] = None
 
     def __post_init__(self) -> None:
         self.presence = CellPresence.detect(self.raw_text)
@@ -209,6 +213,8 @@ class ParsedCell:
             col_span=int(data.get("col_span") or 1),
             normalized_value_wan=Decimal(str(raw_wan)) if raw_wan is not None else None,
             presence=str(data.get("presence") or CellPresence.VALUE),
+            origin_fragment_uid=_opt_str(data.get("origin_fragment_uid")),
+            origin_row_idx=_opt_int(data.get("origin_row_idx")),
         )
 
 
@@ -525,6 +531,9 @@ class ParseArtifact:
     ocr_table_candidates: List[OcrTableCandidate] = field(default_factory=list)
     table_fragments: List[ParsedTable] = field(default_factory=list)
     logical_tables: List[LogicalTableInstance] = field(default_factory=list)
+    #: RC-02：合并前的不可变物理片段（每页每表一份）。合并视图只允许引用
+    #: 它们（fragment_uids / 单元格 origin_*），不得取而代之。
+    physical_fragments: List[ParsedTable] = field(default_factory=list)
     #: bbox 坐标系描述（统一 PDF 页面坐标；渲染/旋转/裁剪变换在此登记）
     coordinate_space: str = "pdf_page_points"
     coordinate_transforms: Dict[str, Any] = field(default_factory=dict)
@@ -543,6 +552,9 @@ class ParseArtifact:
             "ocr_table_candidates": [table.to_dict() for table in self.ocr_table_candidates],
             "table_fragments": [fragment.to_dict() for fragment in self.table_fragments],
             "logical_tables": [instance.to_dict() for instance in self.logical_tables],
+            "physical_fragments": [
+                fragment.to_dict() for fragment in self.physical_fragments
+            ],
             "coordinate_space": self.coordinate_space,
             "coordinate_transforms": self.coordinate_transforms,
         }
@@ -565,6 +577,9 @@ class ParseArtifact:
             table_fragments=[ParsedTable.from_dict(item) for item in data.get("table_fragments") or []],
             logical_tables=[
                 LogicalTableInstance.from_dict(item) for item in data.get("logical_tables") or []
+            ],
+            physical_fragments=[
+                ParsedTable.from_dict(item) for item in data.get("physical_fragments") or []
             ],
             coordinate_space=str(data.get("coordinate_space") or "pdf_page_points"),
             coordinate_transforms=dict(data.get("coordinate_transforms") or {}),

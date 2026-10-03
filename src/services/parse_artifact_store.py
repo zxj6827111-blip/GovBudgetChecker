@@ -160,8 +160,9 @@ async def persist_parse_artifact(
                     parse_run_id, instance_uid, row_idx, col_idx,
                     raw_text, normalized_text, numeric_value, normalized_value_wan,
                     unit_hint, presence, page_number, bbox, is_header,
-                    confidence, extraction_method, row_span, col_span
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                    confidence, extraction_method, row_span, col_span,
+                    origin_fragment_uid, origin_row_idx
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
                 ON CONFLICT (parse_run_id, instance_uid, row_idx, col_idx) DO NOTHING
                 """,
                 parse_run_id,
@@ -181,6 +182,8 @@ async def persist_parse_artifact(
                 cell.extraction_method,
                 cell.row_span,
                 cell.col_span,
+                cell.origin_fragment_uid,
+                cell.origin_row_idx,
             )
 
         for block in artifact.text_blocks:
@@ -380,6 +383,10 @@ async def load_parse_artifact(conn: asyncpg.Connection, parse_run_id: int) -> Pa
                 extraction_method=row["extraction_method"] or "lines",
                 row_span=row["row_span"] or 1,
                 col_span=row["col_span"] or 1,
+                origin_fragment_uid=(
+                    str(row["origin_fragment_uid"]) if row["origin_fragment_uid"] else None
+                ),
+                origin_row_idx=row["origin_row_idx"],
                 normalized_value_wan=(
                     Decimal(str(row["normalized_value_wan"]))
                     if row["normalized_value_wan"] is not None

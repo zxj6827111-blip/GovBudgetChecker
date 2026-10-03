@@ -156,8 +156,10 @@ def test_unresolved_total_le_15(replays):
     # 验收重走并固化于 tests/test_budget_intake_20260929.py（BUD-105/107/108/109
     # 全出真实判定，其余规则不得上升）。09-27 快照（14）保留为历史基线，其文件
     # 内容仍由 test_acceptance_snapshots_pinned 锁定。
-    assert total <= 10, (
-        f"unresolved 总数 {total} 超出 MR-B 收敛后的验收线 10（计划外回升需重走验收）"
+    # 2026-10-03 RC-04 计划内回升：yichuan CMM-001 说明侧确实未提及公务用车
+    # 购置费（真值锚=None），按"缺披露不得假通过"转 insufficient_data（+1）。
+    assert total <= 11, (
+        f"unresolved 总数 {total} 超出 RC-04 后的验收线 11（计划外回升需重走验收）"
     )
 
 

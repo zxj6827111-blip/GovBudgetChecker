@@ -1394,6 +1394,9 @@ MIGRATIONS: List[Dict[str, Any]] = [
             """,
             "CREATE INDEX IF NOT EXISTS idx_parse_table_cells_run "
             "ON parse_table_cells(parse_run_id, instance_uid)",
+            # RC-02：合并视图单元格的来源物理身份——证据格 ID 可回溯到原页原格
+            "ALTER TABLE parse_table_cells ADD COLUMN IF NOT EXISTS origin_fragment_uid TEXT",
+            "ALTER TABLE parse_table_cells ADD COLUMN IF NOT EXISTS origin_row_idx INTEGER",
             """
             CREATE TABLE IF NOT EXISTS parse_facts (
                 id BIGSERIAL PRIMARY KEY,

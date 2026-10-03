@@ -4,7 +4,7 @@ import re
 from decimal import Decimal
 from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
-from .amount_math import compute_dynamic_envelope
+from .amount_math import classify_amount_diff, compute_dynamic_envelope
 from .rule_policy import amount_difference_exceeds_policy, percentage_difference_exceeds_policy
 from .budget_rules import _append_relation_receipt, _portable_amount_tolerance, find_budget_anchors
 from .rule_outcome import RuleDeferred, RuleNotApplicable
@@ -508,21 +508,60 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
                 table_page = idx + 1
                 break
 
-        # (说明字段, 表列, 显示名)——分项均为决算口径；(一) 总额双口径
+        # RC-01：表侧操作数优先取统一事实（FIN_07 行科目×口径）；
+        # 旧网格降级为诊断对照。事实被识别风险压住 → 该关系转未完成，
+        # 不回退网格值；上下文缺该科目事实 → 允许网格兜底。
+        fact_ctx = getattr(doc, "fact_context", None)
+        fact_operands: Dict[str, Tuple[Any, Any, Optional[str]]] = {}
+        if fact_ctx is not None:
+            from src.engine.fact_context import resolve_operand
+
+            _T7_FACT_KEYS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
+                "total_budget": ("budget", ("合计", "总计")),
+                "total_final": ("actual", ("合计", "总计")),
+                "abroad": ("actual", ("因公出国",)),
+                "car_total": ("actual", ("公务用车购置及运行",)),
+                "car_buy": ("actual", ("公务用车购置",)),
+                "car_run": ("actual", ("公务用车运行",)),
+                "reception": ("actual", ("公务接待",)),
+            }
+            for key, (indicator, tokens) in _T7_FACT_KEYS.items():
+                resolution = resolve_operand(
+                    fact_ctx,
+                    indicator,
+                    table_code="FIN_07_three_public",
+                    subject_tokens=tokens,
+                    budget_stages=("决算",),
+                )
+                fact_operands[key] = (
+                    resolution.value,
+                    resolution.fact,
+                    resolution.reason if resolution.status == "blocked" else None,
+                )
+
+        # (说明字段, 网格路径, 显示名)——分项均为决算口径；(一) 总额双口径
         checks = [
-            ("total_budget", grid["budget"]["total"], "三公合计（预算）"),
-            ("total_final", grid["final"]["total"], "三公合计（决算）"),
-            ("abroad", grid["final"]["abroad"], "因公出国（境）费"),
-            ("car_total", grid["final"]["car_sub"], "公务用车小计"),
-            ("car_buy", grid["final"]["car_buy"], "公务用车购置费"),
-            ("car_run", grid["final"]["car_run"], "公务用车运行费"),
-            ("reception", grid["final"]["reception"], "公务接待费"),
+            ("total_budget", ("budget", "total"), "三公合计（预算）"),
+            ("total_final", ("final", "total"), "三公合计（决算）"),
+            ("abroad", ("final", "abroad"), "因公出国（境）费"),
+            ("car_total", ("final", "car_sub"), "公务用车小计"),
+            ("car_buy", ("final", "car_buy"), "公务用车购置费"),
+            ("car_run", ("final", "car_run"), "公务用车运行费"),
+            ("reception", ("final", "reception"), "公务接待费"),
         ]
         compared = 0
         missing_nar: List[str] = []
         blank_cells: List[str] = []
+        incomplete_relations: List[str] = []
         issues: List[Issue] = []
-        def _receipt(key: str, label: str, status: str, incomplete: Optional[str] = None) -> None:
+
+        def _receipt(
+            key: str,
+            label: str,
+            status: str,
+            incomplete: Optional[str] = None,
+            operand_ids: Sequence[str] = (),
+        ) -> None:
             _append_relation_receipt(
                 doc,
                 self.code,
@@ -531,23 +570,64 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
                 status=status,
                 incomplete_reason=incomplete,
                 tolerance=_portable_amount_tolerance(),
+                operand_fact_ids=list(operand_ids),
             )
 
-        for key, tab, label in checks:
+        for key, grid_path, label in checks:
+            fact_sv, fact_ref, fact_block = fact_operands.get(
+                key, (None, None, None)
+            )
+            operand_ids: List[str] = []
+            if fact_sv is not None:
+                tab = fact_sv
+                if fact_ref is not None:
+                    operand_ids.append(fact_ref.fact_uid)
+            elif fact_block is not None:
+                # RC-01：事实被拒（ambiguous/low_confidence/歧义）→ 该关系
+                # 转未完成，不得回退网格值冒充确定结论。
+                incomplete_relations.append(f"{label}：{fact_block}")
+                _receipt(
+                    key,
+                    label,
+                    "insufficient_data",
+                    fact_block,
+                    operand_ids=[fact_ref.fact_uid] if fact_ref is not None else [],
+                )
+                continue
+            else:
+                tab = grid[grid_path[0]][grid_path[1]]
             val = nar.get(key)
             if val is None:
+                # RC-04：缺披露不能自动等同无此项——说明未提及该字段时
+                # 该关系未完成，不得记 not_applicable 冒充完成。
                 missing_nar.append(label)
-                _receipt(key, label, "not_applicable", f"{label}说明未披露，无可比对操作数")
+                incomplete_relations.append(f"{label}：说明未披露")
+                _receipt(
+                    key,
+                    label,
+                    "insufficient_data",
+                    f"{label}说明未披露，无可比对操作数",
+                    operand_ids=operand_ids,
+                )
                 continue
             if tab is None:
                 # 表内留空：V33-244 Case A/B 已就此出建议性提示，CMM-001
                 # 不重复报（留痕于证据面），也不算取数失败。
                 blank_cells.append(label)
-                _receipt(key, label, "not_applicable", f"{label}表内留空（见 V33-244 建议性提示）")
+                _receipt(
+                    key,
+                    label,
+                    "not_applicable",
+                    f"{label}表内留空（见 V33-244 建议性提示）",
+                    operand_ids=operand_ids,
+                )
                 continue
             compared += 1
-            if abs(val - tab) <= Decimal("0.01"):
-                _receipt(key, label, "pass")
+            # RC-06：统一政策容差（绝对 0.5 万元 + 独立舍入包络），
+            # 不再使用本规则私设的 0.01 万元。
+            diff_label, diff_val = classify_amount_diff(val, tab, 1)
+            if diff_label != "mismatch":
+                _receipt(key, label, "pass", operand_ids=operand_ids)
                 continue
             severity = "error" if key == "car_run" else "warn"
             message = f"三公表与说明不一致：{label}说明={val}万元，表内={tab}万元"
@@ -564,62 +644,31 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
                 ),
             )
             issues.append(issue)
-            _receipt(key, label, "fail")
+            _receipt(key, label, "fail", operand_ids=operand_ids)
 
         # 说明侧内部勾稽：公车小计 = 购置 + 运行（三者齐备才判）
         ct, cb, cr = nar.get("car_total"), nar.get("car_buy"), nar.get("car_run")
-        if None not in (ct, cb, cr) and abs(ct - (cb + cr)) > Decimal("0.01"):
-            issues.append(
-                self._issue(
-                    "三公文字说明内部勾稽不一致：公车小计≠购置费+运行费",
-                    {"page": table_page or 1},
-                    "warn",
-                    evidence_text=f"car_total={ct}, car_buy={cb}, car_run={cr}",
+        if None not in (ct, cb, cr):
+            car_diff_label, car_diff_val = classify_amount_diff(ct, cb + cr, 2)
+            if car_diff_label == "mismatch":
+                issues.append(
+                    self._issue(
+                        "三公文字说明内部勾稽不一致：公车小计≠购置费+运行费",
+                        {"page": table_page or 1},
+                        "warn",
+                        evidence_text=f"car_total={ct}, car_buy={cb}, car_run={cr}",
+                    )
                 )
-            )
 
-        # SYS-05（AC-04）：分项（出国/公车/接待）未与说明比对时不得记完整
-        # pass——只要有未完成的关系，规则整体转 insufficient_data 并携带
-        # 已确认 partial_issues 与逐项未完成原因。
-        if compared == 0:
+        # RC-04：任一应检关系缺操作数（说明未披露/事实被拒）时整规则转
+        # 未完成——已确认的比对差异以 partial_issues 保留，不得因部分
+        # 关系可完成而掩盖漏查；关系级回执已逐条留痕。
+        if incomplete_relations:
             raise RuleDeferred(
                 self.code,
-                detail=(
-                    "三公表×说明无可比对字段：说明未提及 "
-                    f"{('、'.join(missing_nar)) or '全部字段'}，"
-                    f"表内留空 {'、'.join(blank_cells) if blank_cells else '—'}"
-                ),
+                detail=f"三公表×说明存在未完成关系：{'；'.join(incomplete_relations[:6])}",
                 partial_issues=issues,
-                unresolved_reasons=["三公表×说明无可比对字段（缺项明细见 detail）"],
-            )
-        # SYS-05（AC-04）：合计≠分项。合计可比对不等于分项检查完成；
-        # 全部**分项**关系都无可比对操作数时整项转未完成（携带合计侧
-        # 已确认问题）。个别分项未披露记 not_applicable（披露完整性由
-        # 说明检查线覆盖），不阻塞本规则的比对结论。
-        sub_completed = sum(
-            1
-            for key, _tab, _label in checks
-            if key != "total_budget" and key != "total_final" and nar.get(key) is not None and _tab is not None
-        )
-        sub_keys = {key for key, _tab, _label in checks}
-        sub_completed = sum(
-            1
-            for key, tab, _label in checks
-            if key not in ("total_budget", "total_final")
-            and nar.get(key) is not None
-            and tab is not None
-        )
-        _ = sub_keys
-        if sub_completed == 0:
-            reasons = [
-                *(f"{label}分项说明缺失" for label in missing_nar),
-                *(f"{label}表内留空" for label in blank_cells),
-            ] or ["全部分项关系无可比对操作数"]
-            raise RuleDeferred(
-                self.code,
-                detail=f"三公分项关系均未完成：{'、'.join(reasons[:6])}",
-                partial_issues=issues,
-                unresolved_reasons=reasons,
+                unresolved_reasons=incomplete_relations,
             )
         return issues
 

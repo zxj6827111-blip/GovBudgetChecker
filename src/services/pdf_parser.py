@@ -5,6 +5,7 @@ Structured PDF parser for fiscal tables.
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -71,6 +72,21 @@ TITLE_NOISE_PATTERN = re.compile(r"^(编制部门|编制单位|单位[:：])")
 _TITLE_YEAR_RE = re.compile(r"20\d{2}")
 #: 表题中的主体机构 token（AC-02 片段身份：主体是逻辑表实例身份的一部分）
 _TITLE_ORG_RE = re.compile(r"[\u4e00-\u9fa5]{1,8}?(?:局|中心|委员会|办事处|人民政府|管理所|执法队|学校|医院|图书馆|馆|公司)")
+
+
+def _stable_fragment_uid(*parts: Any, rows: Optional[Sequence[Sequence[str]]] = None) -> str:
+    """确定性片段 UID：同一 PDF 同一解析器重复解析得到同一 UID（RC-10）。
+
+    事实 UID、实例 UID、证据格 ID 都由片段 UID 派生——随机 UID 会让
+    人工校正在重解析后找不到目标（AC-10 复核实证的闭环阻断）。
+    UID 只需在同一 artifact 内唯一：跨文件同位同名同内容的碰撞可忽略，
+    且证据 ID 另有原件哈希分量，不依赖片段 UID 的跨文件唯一性。
+    """
+    payload = "|".join(str(part or "") for part in parts)
+    if rows is not None:
+        rows_json = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+        payload += "|" + hashlib.sha1(rows_json.encode("utf-8")).hexdigest()
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
 
 #: 解析器指纹：表抽取策略组合变化时必须更新（缓存按指纹失效）
 PARSER_FINGERPRINT = "pdfplumber-cells-v3-zc02"
@@ -258,8 +274,11 @@ class PDFParser:
             page_count=page_count,
             page_states=page_states,
             text_blocks=text_blocks,
-            # 合并后的逻辑表作为片段承载（ZC-02 再把片段与实例分开建模）
+            # 合并后的逻辑表作为片段承载（跨页续表按重排行号物化）；
+            # RC-02：合并前的物理片段原样保留在 physical_fragments，
+            # 证据格 origin_* 字段可回溯到原页原格。
             table_fragments=merged,
+            physical_fragments=list(fragments),
             logical_tables=[
                 self._build_logical_instance(table)
                 for table in merged
@@ -427,6 +446,9 @@ class PDFParser:
             unit_hint=unit_hint,
             rows=rows,
             cells=cells,
+            fragment_uid=_stable_fragment_uid(
+                "fallback", page_number, table_code, title_line, rows=rows
+            ),
         )
 
     def _build_logical_instance(self, table: ParsedTable) -> LogicalTableInstance:
@@ -441,6 +463,8 @@ class PDFParser:
         page_end = max(cell_pages) if cell_pages else table.page_number
         years = {int(y) for y in _TITLE_YEAR_RE.findall(table.title or "")}
         fiscal_year = next(iter(sorted(years)), None)
+        orgs = _TITLE_ORG_RE.findall(table.title or "")
+        org_name = orgs[0].strip() if orgs else None
         return LogicalTableInstance(
             instance_uid=table.fragment_uid,
             table_code=table.table_code,
@@ -451,6 +475,7 @@ class PDFParser:
             ],
             page_start=table.page_number,
             page_end=page_end,
+            org_name=org_name,
             fiscal_year=fiscal_year,
             row_count=len(table.rows),
             confidence=table.confidence,
@@ -517,6 +542,12 @@ class PDFParser:
             unit_hint=unit_hint,
             rows=rows,
             cells=cells,
+            # RC-10：片段 UID 由（页号×表序×表种×表题×内容）派生——同一份
+            # PDF 重复解析得到同一 UID，事实 UID 与证据格 ID 随之稳定，
+            # 人工校正在重解析后仍能命中目标。
+            fragment_uid=_stable_fragment_uid(
+                "t", page_number, table_index, final_code, title, rows=rows
+            ),
         )
 
     def _build_cells(
@@ -762,6 +793,10 @@ class PDFParser:
             return False
         if not self._compatible_column_count(previous, current):
             return False
+        # RC-02：单位口径冲突（万元 vs 元）的两段不是同一实例的续页——
+        # 合并会让归一值出现数量级差错。
+        if self._unit_hints_conflict(previous, current):
+            return False
 
         previous_code = previous.table_code
         current_code = current.table_code
@@ -830,6 +865,14 @@ class PDFParser:
             cur_years = set(_TITLE_YEAR_RE.findall(cur_title))
             if prev_years and cur_years and not (prev_years & cur_years):
                 return True
+            # RC-02：同表种同年但主体不同（甲局 vs 乙局）是两张表，
+            # 不得合并成一个逻辑实例。
+            prev_orgs = set(_TITLE_ORG_RE.findall(prev_title))
+            cur_orgs = set(_TITLE_ORG_RE.findall(cur_title))
+            if prev_orgs and cur_orgs and not (prev_orgs & cur_orgs):
+                return True
+            if self._unit_hints_conflict(previous, current):
+                return True
             return False
         if (prev_alias or cur_alias) and not (prev_alias and cur_alias):
             # 一方是规范表名、另一方是噪声标题：按延续处理
@@ -880,11 +923,50 @@ class PDFParser:
         numeric_ratio = sum(1 for value in values if self._looks_numeric(value)) / len(values)
         return numeric_ratio >= 0.35
 
+    #: 单位口径提取：从 unit_hint/表题中识别"单位：万元/元/亿元"。
+    _UNIT_HINT_VALUE_RE = re.compile(r"(亿元|万元|千元|元)")
+
+    def _unit_hints_conflict(self, previous: ParsedTable, current: ParsedTable) -> bool:
+        """两片段的单位口径是否冲突（都是显式单位且不同时为冲突）。
+
+        续页通常不带单位行，只有一方有单位时视为延续；两方都有且不同
+        （万元 vs 元）才是冲突——不得自动换算，不得合并。
+        """
+        prev_unit = self._explicit_unit_hint(previous)
+        cur_unit = self._explicit_unit_hint(current)
+        if prev_unit and cur_unit:
+            return prev_unit != cur_unit
+        return False
+
+    def _explicit_unit_hint(self, table: ParsedTable) -> Optional[str]:
+        candidate = str(getattr(table, "unit_hint", None) or "").strip()
+        match = self._UNIT_HINT_VALUE_RE.search(candidate)
+        if match:
+            return match.group(1)
+        return None
+
     def _append_table(self, previous: ParsedTable, current: ParsedTable) -> ParsedTable:
         skip_rows = self._repeated_header_rows(previous, current)
         base_row_count = len(previous.rows)
         appended_rows = previous.rows + current.rows[skip_rows:]
-        appended_cells = list(previous.cells)
+        appended_cells: List[ParsedCell] = []
+        prev_default_origin = (
+            previous.source_fragment_uids[0]
+            if len(previous.source_fragment_uids or []) == 1
+            else previous.fragment_uid
+        )
+        for cell in previous.cells:
+            if cell.origin_fragment_uid is None:
+                # 首段自身也可能已被并过一轮；无 origin 的格子属于当前视图自身
+                appended_cells.append(
+                    replace(
+                        cell,
+                        origin_fragment_uid=prev_default_origin,
+                        origin_row_idx=cell.row_idx,
+                    )
+                )
+            else:
+                appended_cells.append(replace(cell))
         for cell in current.cells:
             if cell.row_idx < skip_rows:
                 continue
@@ -892,17 +974,30 @@ class PDFParser:
                 replace(
                     cell,
                     row_idx=base_row_count + (cell.row_idx - skip_rows),
+                    # RC-02：合并视图的格子保留来源物理片段与原始行号，
+                    # 证据格 ID 由此可以回到原页原格。
+                    origin_fragment_uid=(
+                        cell.origin_fragment_uid or current.fragment_uid
+                    ),
+                    origin_row_idx=(
+                        cell.origin_row_idx
+                        if cell.origin_row_idx is not None
+                        else cell.row_idx
+                    ),
                 )
             )
 
+        member_uids = sorted(
+            {
+                *(previous.source_fragment_uids or [previous.fragment_uid]),
+                *(current.source_fragment_uids or [current.fragment_uid]),
+            }
+        )
         return ParsedTable(
             table_code=previous.table_code,
             title=previous.title if self._score_title_line(previous.title, 0) >= self._score_title_line(current.title, 0) else current.title,
             page_number=previous.page_number,
-            source_fragment_uids=[
-                *(previous.source_fragment_uids or [previous.fragment_uid]),
-                *(current.source_fragment_uids or [current.fragment_uid]),
-            ],
+            source_fragment_uids=member_uids,
             table_index=previous.table_index,
             bbox=previous.bbox,
             header_row_count=previous.header_row_count,
@@ -911,6 +1006,9 @@ class PDFParser:
             unit_hint=previous.unit_hint or current.unit_hint,
             rows=appended_rows,
             cells=appended_cells,
+            # RC-10：合并视图 UID 由成员 UID 集合派生——成员 UID 已稳定，
+            # 合并 UID 不再随解析次数漂移。
+            fragment_uid=_stable_fragment_uid("merged", *member_uids),
         )
 
     def _repeated_header_rows(self, previous: ParsedTable, current: ParsedTable) -> int:
