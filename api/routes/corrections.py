@@ -303,6 +303,20 @@ def _sanitize_evidence(job_id: str, job_dir: Path, raw: Dict[str, Any]) -> Dict[
     result = dict(raw)
     bbox = _parse_bbox(result.get("bbox"))
     result["bbox"] = bbox
+    # AC-09/RC-09：读取端不回显存储侧 verified——按当前原件重算。
+    # 既无原文引用又无文件哈希的记录无从重算，必须降级 unverified，
+    # 不得因存储侧标签或"无字段可查"而保持 verified。
+    claimed_hash_probe = str(result.get("file_hash") or "").strip()
+    quote_probe = str(result.get("quote") or "").strip()
+    if (
+        not claimed_hash_probe
+        and not quote_probe
+        and result.get("verification_status") == "verified"
+    ):
+        result["verification_status"] = "unverified"
+        result["validation_note"] = (
+            "证据缺原文引用与文件哈希，读取端无法重算认证，不回显 verified"
+        )
     page = result.get("physical_page")
     if isinstance(page, bool):
         page = None
