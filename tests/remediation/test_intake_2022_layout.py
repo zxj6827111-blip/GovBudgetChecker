@@ -45,8 +45,8 @@ def test_cover_without_kind_falls_back_to_part_headings():
         "第三部分 上海市某研究中心2022 年度决算情况说明",
     ])
     silent = _scope_artifact("上海市某研究中心\n2022 年度决算", ["第一部分 概况", "一、主要职能"])
-    assert organization_scope(department) == "department"
-    assert organization_scope(unit) == "unit"
+    assert organization_scope(department) is None  # 部分标题仅为佐证，不能独立证明汇总范围
+    assert organization_scope(unit) is None
     assert organization_scope(silent) is None
 
 
@@ -61,7 +61,7 @@ def test_single_leftover_department_heading_does_not_block_a_unit_material():
     # 规则侧（CMM-018）仍按严格口径判不出，模板混写照常可报。
     assert heading_scope(text, "final") is None
     assert heading_scope(text, "final", majority=True) == "unit"
-    assert organization_scope(_scope_artifact("上海市某学校\n2022 年度决算", body)) == "unit"
+    assert organization_scope(_scope_artifact("上海市某学校\n2022 年度决算", body)) is None
 
 
 def test_cover_kind_still_wins_over_body_headings():

@@ -56,7 +56,7 @@ def test_source_cover_owner_reaches_every_public_fiscal_fact(parsed_cases, case)
     assert profile.organization_name.source == "page_text"
     assert expected in profile.organization_name.evidence
     assert profile.resolver_version == PROFILE_RESOLVER_VERSION
-    assert PROFILE_RESOLVER_VERSION == "document-profile-v5-native-cover-room-owner"
+    assert PROFILE_RESOLVER_VERSION == "document-profile-v6-source-category-conflicts"
     assert context.org_name == expected
     assert len(context.facts) == case["expected_core_facts"]
     assert {fact.org_name for fact in context.facts} == {expected}

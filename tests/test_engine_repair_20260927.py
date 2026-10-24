@@ -601,7 +601,9 @@ def test_scan_sim_mixed_end_to_end_gate_zeroes_errors():
         issue for issue in raw_issues
         if str(getattr(issue, "severity", "")).lower() in ("error", "high", "critical")
     ]
-    assert len(errors) >= 5, f"夹具形态变了：error 级只剩 {len(errors)} 条"
+    # 未读取页面不再制造“缺表”错误；保留三项可复现的实际问题验证降级门。
+    assert len(errors) == 3
+    assert all(issue.rule != "V33-002" for issue in errors)
 
     assessment = _scan_assessment(page_texts, page_tables)
     assert assessment["page_coverage"] < 0.8
