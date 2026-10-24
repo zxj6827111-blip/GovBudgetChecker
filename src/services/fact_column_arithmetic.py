@@ -1,9 +1,4 @@
-"""列身份的算术自检：同一张表多行的合计与分项系统性对不上，说明列映射有误。
-
-原件个别行的勾稽差错交给规则报出；整列映射错位（如把"项"编码列当成金额列、
-叶子列错配）会让大多数行同时失败，这时不能把它当成原件错误报给用户，
-相关列的事实降为待复核，入库回执标记"映射不完整"。
-"""
+"""算术只保留原件问题线索；列身份降级须由独立表头或几何证据证明。"""
 from __future__ import annotations
 
 from collections import defaultdict
@@ -32,10 +27,6 @@ ROW_IDENTITIES = {
     "FIN_08_gov_fund": (("total_actual", _BASIC_PROJECT),),
     "FIN_09_state_capital": (("total_actual", _BASIC_PROJECT),),
 }
-#: 判为列映射问题而不是原件差错，需要：至少 3 行失败、失败行占可核对行一半以上、差额各不相同。
-#: 原件一处数据差错会沿 项→款→类→合计 逐级带上去，但每级差额相同；列错位则每行差额都不一样。
-MIN_FAILED_ROWS = 3
-MIN_FAILED_SHARE = Decimal("0.5")
 
 
 def _row_outcome(group, total, parts):
@@ -125,7 +116,7 @@ def column_arithmetic_conflicts(facts):
 
 
 def constrain_column_arithmetic(facts):
-    """系统性对不上的列降为待复核：规则不再拿它们出确定性结论。
+    """只有独立结构证据支持的列降为待复核，算术不平本身不改变准入。
 
     不用行内恒等式反过来裁定单个存疑金额（如跨格折行的合计）：那样会让同一条
     勾稽规则在这些行上必然成立，查不出原件差错。
@@ -136,8 +127,9 @@ def constrain_column_arithmetic(facts):
     for fact in facts:
         found = [c for c in conflicts.get(fact.instance_uid, []) if fact.indicator in c["indicators"]]
         if found:
-            fact = replace(fact, recognition_status="ambiguous", extra_dims={
-                **fact.extra_dims, "column_identity_status": "arithmetic_conflict",
+            fact = replace(fact, recognition_status=(fact.recognition_status if fact.recognition_status in {"low_confidence", "missing"} else "ambiguous"), extra_dims={
+                **fact.extra_dims, "column_identity_status": (fact.extra_dims.get("column_identity_status")
+                    if fact.extra_dims.get("column_identity_status") not in {None, "bound"} else "arithmetic_conflict"),
                 "column_arithmetic_conflicts": found})
         elif fact.instance_uid in anomalies:
             fact = replace(fact, extra_dims={**fact.extra_dims,

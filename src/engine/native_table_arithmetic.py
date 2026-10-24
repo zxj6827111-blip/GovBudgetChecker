@@ -140,6 +140,8 @@ def finish(rule, issues, unresolved):
 def cluster_source_errors(rule, issues):
     """同表同类多行问题合并，完整保留每行差额、关系与证据。"""
     import copy
+    if rule.code not in {"V33-240", "V33-241", "V33-119"}:
+        return issues
     groups, retained = {}, []
     for issue in issues:
         location = issue.location if isinstance(issue.location, dict) else {}
@@ -153,7 +155,8 @@ def cluster_source_errors(rule, issues):
             retained.extend(group)
             continue
         combined = copy.copy(group[0])
-        combined.message = f"{table_code} 同表多行勾稽不平，可能为原件整列漏填或错位：\n" + "\n".join(issue.message for issue in group)
+        title = group[0].location.get("table") or "当前表格"
+        combined.message = f"{title}多行勾稽不平，可能为原件整列漏填或错位：\n" + "\n".join(issue.message for issue in group)
         combined.evidence_text = "\n".join(issue.evidence_text or issue.message for issue in group)
         combined.location = {**group[0].location,
             "relations": [{"message": issue.message, "relation_id": issue.check_relation_id, "location": issue.location} for issue in group],
@@ -195,7 +198,8 @@ def check_fiscal_grant_arithmetic(rule, doc):
             continue
         checked += 1
         found, missing = relation(rule, doc, key, f"财政拨款收入支出决算总表第{row + 1}行", parent, children)
-        issues.extend(found); unresolved.extend(missing)
+        issues.extend(found)
+        unresolved.extend(missing)
     if not checked and not unresolved:
         unresolved.append("财政拨款总表没有可确认的同一行合计及三个资金分项")
     return finish(rule, issues, unresolved)
