@@ -21,7 +21,7 @@ def read(path):
     return json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
 
 
-def plan_directory(payload):
+def plan_directory(payload, review_groups=()):
     groups, mapping, review = {}, {}, []
     rows = payload.get("organizations", [])
     for org in rows:
@@ -64,6 +64,15 @@ def plan_directory(payload):
                 }
                 for org in values
             )
+    # 验收方的待确认组可以包含“机关/本级”“筹”等实质差别，不能交给等价比较器自动合并。
+    # 此清单只追加人工核查行，完全不参与 mapping 和 cleaned 的计算。
+    for group_index, names in enumerate(review_groups, 1):
+        keys = {normalize_org_name(name) for name in names}
+        for org in rows:
+            if normalize_org_name(org["name"]) in keys:
+                review.append({"kind": "external_group_review", "id": org["id"],
+                               "name": org["name"],
+                               "reason": f"独立清单第{group_index}组：{' / '.join(names)}；仅供核对，不认定等价"})
     retained = []
     for org in rows:
         if org["id"] in mapping:
@@ -136,6 +145,7 @@ def main():
     parser.add_argument(
         "--expected-orgs", type=Path, help="独立清单（JSON 名称数组），只报告缺失，不创建组织"
     )
+    parser.add_argument("--review-groups", type=Path, help="独立冻结的近似名称组（JSON 二维数组），只输出人工核查，不参与合并")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--write-copy", type=Path)
@@ -147,7 +157,7 @@ def main():
     if args.out.resolve().is_relative_to(source):
         parser.error("演练输出不得位于原组织数据目录内")
     payload = read(source / "organizations.json")
-    cleaned, mapping, review = plan_directory(payload)
+    cleaned, mapping, review = plan_directory(payload, read(args.review_groups) if args.review_groups else ())
     if args.expected_orgs:
         expected = read(args.expected_orgs)
         existing_names = {
@@ -189,6 +199,9 @@ def main():
         "database": database,
         "original_count": len(payload.get("organizations", [])),
         "cleaned_count": len(cleaned["organizations"]),
+        "review_groups_source": ({"path": str(args.review_groups.resolve()),
+                                  "sha256": hashlib.sha256(args.review_groups.read_bytes()).hexdigest()}
+                                 if args.review_groups else None),
         "limits": [
             "仅合并同层级同上级格式归一后完全相同的节点",
             "缺失组织必须由用户确认后补录",

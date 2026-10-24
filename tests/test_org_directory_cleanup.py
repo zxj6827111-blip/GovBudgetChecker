@@ -64,3 +64,12 @@ def test_copy_plan_merges_only_strict_duplicates_and_rewrites_all_known_id_field
     assert rewrite_ids(
         {"organization_id": "b", "nested": {"org_id": "b"}, "text": "b"}, mapping
     ) == {"organization_id": "a", "nested": {"org_id": "a"}, "text": "b"}
+
+
+def test_external_review_group_never_authorizes_identity_merge():
+    orgs = [{"id": "a", "name": "甲市局（本级）", "level": "unit", "parent_id": "d"},
+            {"id": "b", "name": "甲市局（机关）", "level": "unit", "parent_id": "d"}]
+    original = {"organizations": orgs}
+    cleaned, mapping, review = plan_directory(original, [[org["name"] for org in orgs]])
+    assert cleaned == original and mapping == {}
+    assert {r["id"] for r in review if r["kind"] == "external_group_review"} == {"a", "b"}
