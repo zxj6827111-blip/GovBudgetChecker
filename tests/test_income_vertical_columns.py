@@ -52,8 +52,13 @@ def test_all_income_columns_execute_vertical_relations_with_scope_pending():
 def test_unknown_source_cell_blocks_only_dependent_relations(monkeypatch):
     monkeypatch.delenv("GOVBUDGET_EMPTY_VALUE_CONVENTIONS", raising=False)
     doc = document(unknown=True)
-    with pytest.raises(RuleDeferred):
+    with pytest.raises(RuleDeferred) as caught:
         R33240_Table2_IncomeAdvancedCheck().apply(doc)
+    clue = next(issue for issue in caught.value.partial_issues if issue.severity == 'manual_review')
+    assert '差额150.00万元' in clue.message and '差额可能由空白或未知格承担' in clue.message
+    missing = clue.location['unknown_operand_cells'][0]
+    assert missing['raw_text'] == '' and missing['normalized_value'] is None
+    assert missing['physical_page'] == 1 and missing['bbox'] and missing['source_cell_id']
     receipts = {row["sub_check_id"]: row for row in doc.fact_receipts}
     assert receipts["FIN_02_income:total:fiscal_allocation"]["status"] == "insufficient_data"
     assert receipts["FIN_02_income:total:business_income"]["status"] == "pass"
