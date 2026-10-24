@@ -295,6 +295,23 @@ def detect_table_code(
     if _is_narrative_text(normalized_title):
         return None, 0.0
 
+    # 缺首字的长表名不能被其内含的短表名抢走。必须有独立列结构佐证。
+    truncated = [(code, alias) for code, rule in NINE_TABLE_RULES.items() for value in rule.aliases
+                 if len(alias := normalize_text(value)) >= 10 and alias not in normalized_title
+                 and any(normalized_title.endswith(alias[cut:]) for cut in (1, 2))]
+    if truncated:
+        code, _alias = max(truncated, key=lambda item: len(item[1]))
+        header = "|".join(normalized_headers)
+        if code.startswith("FIN_04"):
+            supported = sum(word in header for word in ("一般公共预算", "政府性基金", "国有资本经营")) >= 2
+        elif code.startswith("FIN_08"):
+            supported = all(word in header for word in ("年初结转", "本年收入", "本年支出"))
+        elif code.startswith("FIN_07"):
+            supported = any(word in header for word in ("公务用车", "公务接待", "因公出国"))
+        else:
+            supported = False
+        return (code, 0.92) if supported else (None, 0.0)
+
     canonical_hint = next(
         (code for code in NINE_TABLE_RULES if normalize_text(code) == normalized_hint),
         None,

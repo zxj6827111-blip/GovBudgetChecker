@@ -1007,6 +1007,17 @@ def find_table_anchors(doc: Document) -> Dict[str, List[int]]:
                             continue
                         anchors[it["name"]].append(pidx + 1)
                         break
+    artifact = getattr(doc, "parse_artifact", None)
+    if artifact is not None:
+        from src.services.fiscal_table_rules import NINE_TABLE_RULES
+        name_by_code = dict(zip(NINE_TABLE_RULES, (item["name"] for item in NINE_TABLES)))
+        classified = {}
+        for table in artifact.table_fragments:
+            if table.table_code in name_by_code:
+                classified.setdefault(table.page_number, set()).add(name_by_code[table.table_code])
+        for name in anchors:
+            anchors[name] = sorted({page for page in anchors[name] if page not in classified or name in classified[page]}
+                                   | {page for page, names in classified.items() if name in names})
     return anchors
 
 
@@ -1337,6 +1348,18 @@ class R33002_NineTablesCheck(Rule):
                     duplicates.append((nm, pages))
         
         # 缺失
+        if missing:
+            artifact = getattr(doc, "parse_artifact", None)
+            reliable = bool(doc.page_texts) and all(str(text or "").strip() for text in doc.page_texts)
+            if artifact is not None:
+                from src.services.table_reading_assessment import assess_table_reading
+                reliable = reliable and not assess_table_reading(artifact).get("gaps")
+                if artifact.page_states:
+                    reliable = reliable and all(state.has_text_layer or state.ocr_status == "qualified" for state in artifact.page_states)
+            if not reliable:
+                raise RuleDeferred(self.code, "相关页面尚未可靠读全，不能据未检测到表格断言原件缺表")
+            if any(any(b - a > 1 for a, b in zip(sorted(pages), sorted(pages)[1:])) for _name, pages in duplicates):
+                raise RuleDeferred(self.code, "必备表缺失且其他表在不连续页重复出现，表种身份冲突待确认")
         for nm in missing:
             issues.append(self._issue(f"缺失表：{nm}", {"table": nm}, severity="error"))
 
@@ -1377,7 +1400,7 @@ class R33002_NineTablesCheck(Rule):
         expense_table_name = "支出决算表"
         expense_table_pages = anchors.get(expense_table_name, [])
         
-        if expense_table_pages:
+        if expense_table_pages and getattr(doc, "parse_artifact", None) is None:
             # 检查这些页面是否都是具体的分类表
             # 如果所有页面都是具体的分类表，则认为缺少独立的"支出决算表"
             has_independent_table = False

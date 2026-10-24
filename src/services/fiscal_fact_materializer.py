@@ -47,7 +47,7 @@ def infer_fund_scope(table_code: str, title: str = "") -> Optional[str]:
         return "general_public_budget"
     if table_code.startswith('FIN_04'):
         return 'fiscal_appropriation'
-    if table_code.startswith('FIN_07')and '财政拨款' in title:
+    if table_code.startswith('FIN_07'):
         return 'fiscal_appropriation'
     if table_code.startswith(('FIN_01','FIN_02','FIN_03')):
         return 'all_funds'
