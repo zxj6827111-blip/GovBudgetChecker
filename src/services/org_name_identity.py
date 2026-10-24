@@ -10,7 +10,9 @@ from typing import Any, Iterable
 
 def normalize_org_name(value: Any) -> str:
     # 横线的排版字形可不同；只统一等长的 em dash / horizontal bar，不删除字符或身份标记。
-    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(value or ""))).replace("―", "—")
+    name = re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(value or ""))).replace("―", "—")
+    # 双连字符/全角双连字符是中文双破折号的另一排版字形；保留两个字符，不删除名称组成。
+    return re.sub(r"(?<!-)--(?!-)", "——", name)
 
 
 def identity_name(value: Any) -> str:

@@ -43,3 +43,9 @@ def test_candidate_contract():
     assert organization_name({"organization_name": "甲局"}) == "甲局"
     with pytest.raises(ValueError, match="contract conflict"):
         organization_name({"name": "甲局", "organization_name": "乙局"})
+def test_double_dash_typography_preserves_formal_name_and_identity_markers():
+    assert compare_org_names("甲市活动营地--甲园", "甲市活动营地——甲园").equivalent
+    assert compare_org_names("甲市活动营地－－甲园", "甲市活动营地——甲园").equivalent
+    assert not compare_org_names("甲市活动营地-甲园", "甲市活动营地——甲园").equivalent
+    assert not compare_org_names("甲市活动营地--甲园（本级）", "甲市活动营地——甲园").equivalent
+
