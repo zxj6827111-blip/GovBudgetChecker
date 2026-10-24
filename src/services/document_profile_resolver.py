@@ -624,7 +624,7 @@ def detect_cover_facts(page_texts: Sequence[str], directory: Sequence[Any] = ())
             continue
         if re.search(r"20\d{2}(?:年度?)?(?:部门|单位)?$", normalize_cover_line(line)) and index + 1 < len(lines):
             following = normalize_cover_line(lines[index + 1])
-            if following in {"预算", "决算", "部门预算", "部门决算", "单位预算", "单位决算", "年度预算", "年度决算"}:
+            if re.fullmatch(r"(?:年度?)?(?:部门|单位)?(?:预算|决算)", following):
                 cover_title = line + "\n" + lines[index + 1]
                 break
     for line in lines[:20]:
@@ -703,7 +703,8 @@ def detect_cover_facts(page_texts: Sequence[str], directory: Sequence[Any] = ())
                   if re.search(r"20\d{2}", cover_title) else "")
         # 封面主体可能后接多行括号别名。先分离成对括号，再恢复相邻主名称；
         # 括号必须闭合，多个完整机构名并列时不擅自选择。
-        previous = lines[:title_index] if title_index is not None else []
+        previous = [line for line in (lines[:title_index] if title_index is not None else [])
+                    if not re.fullmatch(r"附件(?:\d+|[一二三四五六七八九十]+)?[：:]?", normalize_cover_line(line))]
         block = "".join(normalize_cover_line(line) for line in previous if not line.isdigit()) + prefix
         block = block.replace("（", "(").replace("）", ")")
         # “室”与“局/所”等同为机构后缀；仍只接受年度标题前的封面原文，
@@ -711,8 +712,18 @@ def detect_cover_facts(page_texts: Sequence[str], directory: Sequence[Any] = ())
         suffix = r"(?:委员会|办公厅|办公室|管理局|监督管理局|财政局|局|厅|部|医院|学校|中学|小学|校|幼儿园|红十字会|学院|大学|中心|人民法院|人民检察院|办事处|秘书处|街道|镇|乡|馆|队|会|委|宫|所|站|院|园|政府|室|监狱|团|社|场|台|基地|机关|管理处|营地)"
         def valid(name):
             return bool(re.fullmatch(r"[\u4e00-\u9fff]{3,100}" + suffix, name)) and not re.search(r"^关于|目录|附件|部分|项目支出|情况|说明|预算|决算", name)
-        balanced = block.count("(") == block.count(")") and "(" not in re.sub(r"\([^()]*\)", "", block)
-        clean = re.sub(r"\([^()]*\)", "", block) if balanced else ""
+        # 嵌套括号是正式名称的一部分；栈式验证仅取括号外文本作语法检查，输出仍保留全部原文。
+        depth, balanced, outside = 0, True, []
+        for char in block:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                balanced = balanced and depth >= 0
+            elif depth == 0:
+                outside.append(char)
+        balanced = balanced and depth == 0
+        clean = "".join(outside) if balanced else ""
         clean = re.sub(r"本级$", "", clean)
         adjacent = [normalize_cover_line(line) for line in previous if not line.isdigit()]
         if prefix:
