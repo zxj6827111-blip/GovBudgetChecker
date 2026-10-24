@@ -116,7 +116,9 @@ export default function TaskDetail() {
       }));
 
       setJobDetail(detail);
-      setRevisions(versions.items);
+      // 接口兜底只对"请求失败"生效；拿到 200 但不是 {items:[...]} 时 items 会是
+      // undefined，下面 revisions.length 直接抛错，整页（含全部操作按钮）被卸载。
+      setRevisions(Array.isArray(versions?.items) ? versions.items : []);
       setTask(nextTask);
       setProblems(nextProblems);
       setLoading(false);

@@ -130,8 +130,9 @@ test.describe("检查结果：计数口径与展示分组是两件事", () => {
 
     // 总计取后端权威口径 count_formal_findings：error/warn/info 都算正式 finding
     await expect(page.getByTestId("gbc-material-findings-formal-count")).toContainText("3");
+    // 顶部口径文案改为"只统计正式问题"，信息提示与待人工核验项单独展示。
     await expect(page.getByTestId("gbc-material-findings-formal-count-note")).toContainText(
-      "包含正式问题与信息提示",
+      "仅统计正式问题",
     );
 
     // 用 data-finding-id 计数：卡片内部还有 severity/rule/evidence 等细粒度
