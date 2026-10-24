@@ -77,7 +77,7 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.ai.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.ai.yml config --services | sort > /tmp/compose-services.txt
           cat /tmp/compose-services.txt
-          printf 'ai-extractor\nbackend\nfrontend\npostgres\nworker\n' | diff - /tmp/compose-services.txt
+          printf 'ai-extractor\nbackend\nfrontend\nocr\npostgres\nworker\n' | diff - /tmp/compose-services.txt
 
       - name: Mypy
         run: mypy api src tests

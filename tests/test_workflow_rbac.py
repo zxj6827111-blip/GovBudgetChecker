@@ -58,11 +58,20 @@ def _login(client: TestClient, username: str, password: str) -> str:
 
 
 def _create_org(name: str) -> str:
+    """建一个单位并挂在新建的部门下——目录校验要求 unit 必须有 department 父节点。"""
     storage = runtime.require_org_storage()
+    department = runtime.Organization(
+        id=runtime.Organization.generate_id(f"dept-{name}", "department", None),
+        name=f"dept-{name}",
+        level="department",
+        keywords=[f"dept-{name}"],
+    )
+    storage.add(department)
     org = runtime.Organization(
-        id=runtime.Organization.generate_id(name, "unit", None),
+        id=runtime.Organization.generate_id(name, "unit", department.id),
         name=name,
         level="unit",
+        parent_id=department.id,
         keywords=[name],
     )
     return str(storage.add(org).id)

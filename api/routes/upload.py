@@ -136,7 +136,9 @@ def _collect_org_matches(
             (
                 "cover_field",
                 cover_org_name,
-                " ".join(token for token in (cover_org_label, hint_tokens, first_page_text) if token).strip(),
+                # 提示词只能接在正文之后：封面抽取按首行定位标题，前置会把提示词并进标题行，
+                # 反而让 cover 字段这一路的得分低于文件名回退路（match_basis 被错记成 content_fallback）。
+                "\n".join(token for token in (first_page_text, cover_org_label, hint_tokens) if token).strip(),
             )
         )
 

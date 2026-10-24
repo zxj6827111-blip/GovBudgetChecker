@@ -283,7 +283,7 @@ def _add_catalog_record_and_link(org_id):
     from src.schemas.organization import Organization
 
     store = OrganizationStorage()
-    store.add(Organization(id=org_id, name="并发演练单位" + org_id, level="unit"))
+    store.add(Organization(id=org_id, name="并发演练单位" + org_id, level="unit", parent_id="dept-concurrency"))
     store.link_job("job-" + org_id, org_id)
 
 
@@ -297,7 +297,9 @@ def test_api_worker_catalog_refresh_and_concurrent_writers(tmp_path, monkeypatch
     monkeypatch.setattr(catalog, "ORG_FILE", tmp_path / "organizations.json")
     monkeypatch.setattr(catalog, "LINKS_FILE", tmp_path / "job_org_links.json")
     api, worker = catalog.OrganizationStorage(), catalog.OrganizationStorage()
-    api.add(Organization(id="initial", name="目录演练单位", level="unit"))
+    # 目录校验要求 unit 必须挂在 department 下，先落一个共用上级。
+    api.add(Organization(id="dept-concurrency", name="并发演练部门", level="department"))
+    api.add(Organization(id="initial", name="目录演练单位", level="unit", parent_id="dept-concurrency"))
     assert worker.get_by_id("initial").name == "目录演练单位"
     api.link_job("initial-job", "initial")
     assert worker.get_job_org("initial-job").org_id == "initial"
@@ -309,7 +311,7 @@ def test_api_worker_catalog_refresh_and_concurrent_writers(tmp_path, monkeypatch
         max_workers=4, mp_context=multiprocessing.get_context("fork")
     ) as executor:
         list(executor.map(_add_catalog_record_and_link, ["u" + str(n) for n in range(8)]))
-    assert len(worker.get_all()) == 8
+    assert len(worker.get_all()) == 9  # 1 个共用部门 + 8 个并发写入的单位
     assert all(worker.get_job_org("job-u" + str(n)).org_id == "u" + str(n) for n in range(8))
 
 
