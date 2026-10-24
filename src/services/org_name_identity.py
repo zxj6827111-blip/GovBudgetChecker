@@ -58,20 +58,26 @@ class NameComparison:
     rule: str
 
 
+class OrgNameIndex:
+    """同一目录快照只构建一次索引，避免全量预检出现平方级目录扫描。"""
+    def __init__(self, directory: Iterable[Any] = ()):
+        self.owners: dict[str, set[int]] = {}
+        for index, org in enumerate(directory):
+            for name in _names(org):
+                self.owners.setdefault(_region_key(name), set()).add(index)
+
+    def compare(self, left: Any, right: Any) -> NameComparison:
+        a, b = identity_name(left), identity_name(right)
+        if not a or not b:
+            return NameComparison(False, "empty")
+        if a == b:
+            return NameComparison(True, "format_or_identity_marker")
+        owners_a = self.owners.get(_region_key(a), set())
+        owners_b = self.owners.get(_region_key(b), set())
+        if len(owners_a) == len(owners_b) == 1 and owners_a == owners_b:
+            return NameComparison(True, "unique_directory_alias_or_region")
+        return NameComparison(False, "different_or_ambiguous")
+
+
 def compare_org_names(left: Any, right: Any, directory: Iterable[Any] = ()) -> NameComparison:
-    a, b = identity_name(left), identity_name(right)
-    if not a or not b:
-        return NameComparison(False, "empty")
-    if a == b:
-        return NameComparison(True, "format_or_identity_marker")
-    entries = list(directory)
-    owners_a, owners_b = [], []
-    for org in entries:
-        variants = _names(org)
-        if a in variants or any(_region_key(a) == _region_key(v) for v in variants):
-            owners_a.append(org)
-        if b in variants or any(_region_key(b) == _region_key(v) for v in variants):
-            owners_b.append(org)
-    if len(owners_a) == len(owners_b) == 1 and owners_a[0] is owners_b[0]:
-        return NameComparison(True, "unique_directory_alias_or_region")
-    return NameComparison(False, "different_or_ambiguous")
+    return OrgNameIndex(directory).compare(left, right)
