@@ -360,7 +360,7 @@ class OrgMatcher:
                 return True
         return False
     
-    def suggest_matches(self, filename: str, first_page_text: str = "", top_n: int = 5) -> List[Tuple[Organization, float]]:
+    def suggest_matches(self, filename: str, first_page_text: str = "", top_n: int = 5, *, cover_org_name: str = "", scope_hint: str = "") -> List[Tuple[Organization, float]]:
         """
         返回多个可能的匹配建议
         
@@ -370,16 +370,21 @@ class OrgMatcher:
         raw_search_text = f"{filename} {first_page_text}"
         search_text = self._clean_text(raw_search_text)
         issuer, scope = self._cover_context(first_page_text)
+        issuer, scope = cover_org_name or issuer, scope_hint or scope
         if issuer:
             # 封面已明确主体时，文件名不能覆盖原件身份。
             search_text = self._clean_text(issuer)
             raw_search_text = issuer + {"department": " 部门", "unit": " 单位"}.get(scope, "")
         
         organizations = self.storage.get_all()
+        from src.services.org_name_identity import OrgNameIndex
+        identity_index = OrgNameIndex(organizations)
         matches = []
         
         for org in organizations:
             score = self._calculate_match_score(org, search_text, raw_search_text=raw_search_text)
+            if issuer and identity_index.compare(issuer, org.name).equivalent:
+                score = self._full_name_match_score(org)
             if issuer and scope and org.level in {"department", "unit"} and org.level != scope:
                 score = min(score, 0.5)
             if score > 0:
