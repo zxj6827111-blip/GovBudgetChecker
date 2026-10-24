@@ -783,6 +783,9 @@ def original_org_evidence(page_texts: Sequence[str], directory: Sequence[Any] = 
             match = re.search(r"第[一二三四五六七八九十0-9]+部分(.+?)(?:概况|20\d{2})", compact)
             header = _TABLE_ORG_LABEL_RE.search(line)
             if match or header:
-                evidence.append({"source": "part_heading" if match else "table_header", "page": page,
-                                 "line": line_no, "text": (match or header).group(1).strip()})
+                value = (match or header).group(1).strip()
+                if value in {"部门", "单位", "本部门", "本单位"} or re.search(r"预算|决算", value):
+                    continue
+                evidence.append({"source": ("toc" if "目录" in normalize_cover_line(text) else "part_heading") if match else "table_header", "page": page,
+                                 "line": line_no, "text": value})
     return evidence
