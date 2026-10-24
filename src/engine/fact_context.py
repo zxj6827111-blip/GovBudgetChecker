@@ -106,7 +106,7 @@ def operand_rejection_reason(fact: FiscalFact, organization: Optional[str] = Non
         return f"候选事实识别状态不可作操作数（{fact.recognition_status}）"
     return None
 
-FACT_CONTEXT_VERSION = "fact-context-v2-full-identity"
+FACT_CONTEXT_VERSION = "fact-context-v3-rule-identity-dimensions"
 
 #: 总计角色标记：subject_code 语义值或行科目名中的合计/总计词（RC-01：
 #: 总计必须由行角色唯一确定，不得取首个同指标事实）。

@@ -849,6 +849,7 @@ function collectReviewReportManualIssues(reviewReport: Record<string, unknown>):
     );
     const page = rawPage > 0 ? rawPage : candidatePage > 0 ? candidatePage : undefined;
     const reviewReasonTitles: Record<string, string> = {
+      org_scope_pending: "材料汇总口径待确认",
       ai_failed: "大模型检查未完整完成",
       evidence_incomplete_findings: "大模型发现证据不足",
       rule_evidence_incomplete: "规则问题证据不足",

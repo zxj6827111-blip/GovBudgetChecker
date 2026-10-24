@@ -584,6 +584,12 @@ def _evaluate_quality_gate(
     unbound = reading.get("unbound_money_cells") or []
     fiscal_coverage = reading.get("fiscal_coverage") or {}
     mapping_tables = reading.get("mapping_incomplete_tables") or []
+    if reading.get("org_scope_pending_count"):
+        review_reasons.append({
+            "code": "org_scope_pending",
+            "message": "材料汇总口径待确认；不影响无需该维度的表内勾稽。依赖口径的检查仍列为未完成。",
+            "pending_fact_count": reading["org_scope_pending_count"],
+        })
     if reading_gaps or unbound or mapping_tables:
         named = "、".join(f"第{t.get('page')}页《{t.get('title') or t.get('table_code')}》" for t in mapping_tables[:5])
         review_reasons.append({
