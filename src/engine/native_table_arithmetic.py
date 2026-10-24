@@ -129,11 +129,76 @@ def _literal_fact_refs(facts, doc, relation_label):
 
 
 def finish(rule, issues, unresolved):
+    issues = cluster_source_errors(rule, issues)
     if unresolved:
         reasons = list(dict.fromkeys(unresolved))
         raise RuleDeferred(rule.code, detail='；'.join(reasons), partial_issues=issues,
                            unresolved_reasons=reasons)
     return issues
+
+
+def cluster_source_errors(rule, issues):
+    """同表同类多行问题合并，完整保留每行差额、关系与证据。"""
+    import copy
+    groups, retained = {}, []
+    for issue in issues:
+        location = issue.location if isinstance(issue.location, dict) else {}
+        if issue.severity not in {"error", "warn"} or not location.get("table_code"):
+            retained.append(issue)
+            continue
+        relation_kind = "income_sources" if "income_sources" in str(issue.check_relation_id) else "table_arithmetic"
+        groups.setdefault((location["table_code"], relation_kind), []).append(issue)
+    for (table_code, _kind), group in groups.items():
+        if len(group) == 1:
+            retained.extend(group)
+            continue
+        combined = copy.copy(group[0])
+        combined.message = f"{table_code} 同表多行勾稽不平，可能为原件整列漏填或错位：\n" + "\n".join(issue.message for issue in group)
+        combined.evidence_text = "\n".join(issue.evidence_text or issue.message for issue in group)
+        combined.location = {**group[0].location,
+            "relations": [{"message": issue.message, "relation_id": issue.check_relation_id, "location": issue.location} for issue in group],
+            "operand_refs": [ref for issue in group for ref in issue.location.get("operand_refs", [])],
+            "native_blank_sources": [ref for issue in group for ref in issue.location.get("native_blank_sources", [])]}
+        combined.fact_ids = list(dict.fromkeys(fid for issue in group for fid in issue.fact_ids))
+        combined.evidence_ids = list(dict.fromkeys(eid for issue in group for eid in issue.evidence_ids))
+        combined.check_relation_id = f"{rule.code}:{table_code}:source_errors"
+        retained.append(combined)
+    return retained
+
+
+def check_fiscal_grant_arithmetic(rule, doc):
+    """财政拨款总表按事实列身份取数，缺失分项绝不使用位置推断或补零。"""
+    code = "FIN_04_fiscal_grant_total"
+    facts, error = table_facts(doc, code)
+    if error:
+        return finish(rule, [], [error])
+    issues, unresolved, checked = [], [], 0
+    for row in sorted({fact.row_order for fact in facts if fact.indicator == "expenditure_actual"}, key=str):
+        row_facts = [fact for fact in facts if fact.row_order == row]
+        parent, error = select(doc, row_facts, "expenditure_actual")
+        if error:
+            unresolved.append(error)
+            continue
+        children = []
+        for indicator in ("general_public_budget", "government_fund_budget", "state_capital_budget"):
+            term, missing = select(doc, row_facts, indicator, code=parent.subject_code,
+                                   name=parent.subject_name, allow_native_blank=True)
+            if missing:
+                error = missing
+                unresolved.append(missing)
+            elif term is not None:
+                children.append(term)
+        key = f"{code}:row:{row}"
+        if error:
+            receipt(rule, doc, key, [parent, *children], status="insufficient_data",
+                    formula="expenditure = general + government_fund + state_capital", reason=error)
+            continue
+        checked += 1
+        found, missing = relation(rule, doc, key, f"财政拨款收入支出决算总表第{row + 1}行", parent, children)
+        issues.extend(found); unresolved.extend(missing)
+    if not checked and not unresolved:
+        unresolved.append("财政拨款总表没有可确认的同一行合计及三个资金分项")
+    return finish(rule, issues, unresolved)
 
 
 def cluster_rounding(rule, issues):

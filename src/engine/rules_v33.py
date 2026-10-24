@@ -1042,6 +1042,11 @@ class Rule:
                check_relation_id: Optional[str] = None,
                fact_ids: Optional[Sequence[str]] = None,
                evidence_ids: Optional[Sequence[str]] = None) -> Issue:
+        blanks = (location or {}).get("native_blank_sources") or []
+        if blanks:
+            message += "；以下原件空白格按0参与计算：" + "；".join(
+                f"第{item.get('physical_page')}页 {item.get('source_cell_id')}，依据约定{(item.get('convention') or {}).get('id')}"
+                for item in blanks)
         return Issue(
             rule=self.code,
             severity=severity or self.severity,
@@ -4964,6 +4969,9 @@ class R33119_FiscalTotalCheck(Rule):
     desc = "财政拨款收入支出决算总表勾稽关系 (Table 4)"
 
     def apply(self, doc: Document) -> List[Issue]:
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_table_arithmetic import check_fiscal_grant_arithmetic
+            return check_fiscal_grant_arithmetic(self, doc)
         issues = []
         table_name = "财政拨款收入支出决算总表"
         rows = _get_table_rows(doc, table_name)
@@ -5646,6 +5654,8 @@ class R33122_EmptyTableCheck(Rule):
         issues = []
         # 检查 Table 4 对应的列是否为 0
         t4_rows = _get_table_rows(doc, "财政拨款收入支出决算总表")
+        if not t4_rows:
+            raise RuleDeferred(self.code, "财政拨款总表未读取或列未映射，不能把政府性基金/国有资本口径当作零")
         
         # 检查 Table 4 中 "政府性基金" 和 "国有资本" 列的总和
         sum_gov_fund = 0.0

@@ -98,6 +98,12 @@ def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算
            and _canonical_budget_stage(f.budget_stage) == _canonical_budget_stage(stage) for f in context.facts):
         return None
     sid = cell_id(table, cell)
+    from .cell_value_policy import interpret_cell_value
+    interpreted, _presence, convention = interpret_cell_value(
+        cell.raw_text, native_blank_verified=cell.native_blank_verified,
+        region=context.org_name, year=context.fiscal_year, table_code=table_code, row=row_idx, column=col)
+    if interpreted is None:
+        return None
     physical = [(fragment, c) for fragment in getattr(artifact, 'physical_fragments', [])
                 for c in fragment.cells if cell_id(fragment, c) == sid]
     if len(physical) != 1:
@@ -111,7 +117,8 @@ def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算
                    'bbox': list(cell.bbox), 'presence': 'blank', 'raw_text': '',
                    'table_code': table_code, 'instance_uid': instance.instance_uid,
                    'indicator': indicator, 'subject_code': subject, 'subject_name': name,
-                   'budget_stage': stage, 'basis': 'verified_native_grid_blank_no_recorded_amount'}
+                   'budget_stage': stage, 'basis': 'verified_native_grid_blank_with_scoped_convention',
+                   'convention': convention}
     return NativeBlankTerm(fact_uid='', indicator=indicator, raw_value='', unit=table.unit_hint,
                           normalized_value=Decimal('0'), org_name=context.org_name,
                           org_scope=next((f.org_scope for f in context.facts if f.instance_uid == instance.instance_uid), None),

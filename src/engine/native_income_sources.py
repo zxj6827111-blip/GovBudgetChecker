@@ -32,6 +32,19 @@ def check_income_sources(rule, doc):
             unresolved.extend(errors)
             receipt(rule, doc, key, terms, status='insufficient_data',
                     formula='income = sum(sources)', reason='；'.join(errors))
+            parent = next((term for term in terms if term.indicator == 'total_actual'), None)
+            known = [term for term in terms if term.indicator != 'total_actual']
+            if parent is not None and known and parent.normalized_value != sum(term.normalized_value for term in known):
+                from .native_table_arithmetic import journal
+                from .native_three_public_ratios import operand_ref
+                ids, evidence_ids = journal(rule, doc, terms)
+                message = (f'收入决算表科目{code}：原件合计{parent.normalized_value:.2f}万元，'
+                           f'已确认分项合计{sum(term.normalized_value for term in known):.2f}万元；'
+                           '尚有空白或未知分项，不能认定完整勾稽，待人工复核。' + '；'.join(errors))
+                issues.append(rule._issue(message, {'table_code': CODE, 'code': code,
+                    'operand_refs': [operand_ref(term, 'known') for term in terms]}, 'manual_review',
+                    evidence_text=message, fact_ids=ids, evidence_ids=evidence_ids,
+                    check_relation_id=f'{rule.code}:{key}:incomplete_clue'))
             continue
         found, missing = _compare(rule, doc, '收入决算表', key, code, 'total_actual',
                                   terms[0], terms[1:])

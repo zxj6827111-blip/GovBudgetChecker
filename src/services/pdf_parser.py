@@ -1071,6 +1071,7 @@ class PDFParser:
         # 向量字形和填充图形也可能是没有文本层的数字。表框线仅在边界，
         # 不把整张外框的bbox当作格内墨迹；未知曲线则保守拒绝认证。
         vector_boxes = []
+        background_boxes = []
         for item in getattr(page, 'curves', []) or []:
             try:
                 vector_boxes.append(tuple(float(item[k]) for k in ('x0', 'top', 'x1', 'bottom')))
@@ -1080,7 +1081,7 @@ class PDFParser:
             color = item.get('non_stroking_color')
             if item.get('fill') and color not in (1, 1.0, (1,1,1), [1,1,1]):
                 try:
-                    vector_boxes.append(tuple(float(item[k]) for k in ('x0', 'top', 'x1', 'bottom')))
+                    background_boxes.append(tuple(float(item[k]) for k in ('x0', 'top', 'x1', 'bottom')))
                 except (KeyError, TypeError, ValueError):
                     return
 
@@ -1089,8 +1090,15 @@ class PDFParser:
                     or not cell.bbox or cell.bbox[2] <= cell.bbox[0] or cell.bbox[3] <= cell.bbox[1]):
                 continue
             inner = (cell.bbox[0]+.75, cell.bbox[1]+.75, cell.bbox[2]-.75, cell.bbox[3]-.75)
+            # 覆盖整格的矩形底纹不是字形；格内局部矩形/线段仍属内容，不能认证空白。
+            local_vectors = vector_boxes + [b for b in background_boxes if not (
+                b[0] <= inner[0] and b[1] <= inner[1] and b[2] >= inner[2] and b[3] >= inner[3])]
             if any(min(b[2],inner[2]) > max(b[0],inner[0])
-                   and min(b[3],inner[3]) > max(b[1],inner[1]) for b in vector_boxes):
+                   and min(b[3],inner[3]) > max(b[1],inner[1]) for b in local_vectors):
+                continue
+            if any(inner[0] < (float(line.get('x0', 0)) + float(line.get('x1', 0))) / 2 < inner[2]
+                   and inner[1] < (float(line.get('top', 0)) + float(line.get('bottom', 0))) / 2 < inner[3]
+                   for line in (getattr(page, 'lines', []) or [])):
                 continue
             if not any(min(box[2], cell.bbox[2]) > max(box[0], cell.bbox[0]) + .1
                        and min(box[3], cell.bbox[3]) > max(box[1], cell.bbox[1]) + .1 for box in boxes):
