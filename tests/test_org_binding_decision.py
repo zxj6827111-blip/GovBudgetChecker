@@ -106,3 +106,20 @@ def test_binding_receipt_records_directory_and_comparison_rules():
     assert result["checked_sources"][0]["page"] == 1
     assert any(row["candidate_id"] == "d" and row["equivalent"]
                and row["rule"] == "format_or_identity_marker" for row in result["name_comparisons"])
+
+
+def test_pending_receipt_keeps_audit_at_top_level_and_candidate_contract_small():
+    result = decide(["甲市财政局\n2025年度决算"], [org()])
+    assert result["directory_sha256"] and result["checked_sources"]
+    assert set(result["reasons"][0]["candidates"][0]) == {"id", "name", "level"}
+
+
+def test_explicit_benji_body_does_not_conflict_with_seed_department_in_combined_path():
+    pages = ["甲市财政局\n2025年度单位决算", "第一部分 甲市财政局本级概况"]
+    result = decide(pages, [org()])
+    assert result["decision"] == "needs_confirmation"
+    assert code(result) == "directory_missing_org"
+    assert result["organization_id"] is None
+    result = decide(pages, [org(), org("甲市财政局（本级）", "unit", "u", "d")])
+    assert result["organization_id"] == "u"
+    assert result["match_basis"] == "combined_source_scope"

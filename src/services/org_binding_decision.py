@@ -106,7 +106,6 @@ def decide_auto_binding(
 
     def brief(org):
         return {
-            **audit,
             "id": _field(org, "id"),
             "name": organization_name(org),
             "level": _field(org, "level"),
@@ -114,6 +113,7 @@ def decide_auto_binding(
 
     def defer(code, unmet, related=()):
         return {
+            **audit,
             "decision": "needs_confirmation",
             "organization_id": None,
             "scope": scope,
@@ -164,6 +164,10 @@ def decide_auto_binding(
         for item in evidence:
             value = identity_name(item["text"])
             if identity_index.compare(value, target).equivalent:
+                continue
+            if (scope == "unit" and _field(org, "level") == "department"
+                    and value == target + "(本级)"):
+                # 此处仅识别组合路径的部门种子；后面仍须核验本级单位及父子关系，绝不据此绑定部门。
                 continue
             if value and value in target:  # 抽取截断只作弱证据。
                 continue
