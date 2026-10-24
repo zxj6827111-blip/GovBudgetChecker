@@ -1,4 +1,5 @@
 """组织目录只读演练与副本清洗。仅严格重复可合并；近似项交人工确认。"""
+
 from __future__ import annotations
 
 import argparse
@@ -24,11 +25,27 @@ def plan_directory(payload):
     groups, mapping, review = {}, {}, []
     rows = payload.get("organizations", [])
     for org in rows:
-        groups.setdefault((org["level"], org.get("parent_id"), normalize_org_name(org["name"])), []).append(org)
+        groups.setdefault(
+            (org["level"], org.get("parent_id"), normalize_org_name(org["name"])), []
+        ).append(org)
         if organization_name_warning(org["name"]):
-            review.append({"kind": "tail_warning", "id": org["id"], "name": org["name"], "reason": "需确认名称尾部年度/文种"})
+            review.append(
+                {
+                    "kind": "tail_warning",
+                    "id": org["id"],
+                    "name": org["name"],
+                    "reason": "需确认名称尾部年度/文种",
+                }
+            )
         if org["level"] == "unit" and identity_name(org["name"]).endswith("(部门)"):
-            review.append({"kind": "level_review", "id": org["id"], "name": org["name"], "reason": "层级与名称部门标记冲突，禁止自动改层级"})
+            review.append(
+                {
+                    "kind": "level_review",
+                    "id": org["id"],
+                    "name": org["name"],
+                    "reason": "层级与名称部门标记冲突，禁止自动改层级",
+                }
+            )
     for values in groups.values():
         keep = min(values, key=lambda org: (org.get("created_at", 0), org["id"]))
         mapping.update({org["id"]: keep["id"] for org in values if org["id"] != keep["id"]})
@@ -38,19 +55,36 @@ def plan_directory(payload):
             near.setdefault((org["level"], org.get("parent_id"), variant), []).append(org)
     for values in near.values():
         if len(values) > 1 and len({normalize_org_name(org["name"]) for org in values}) > 1:
-            review.extend({"kind": "identity_variant_review", "id": org["id"], "name": org["name"], "reason": "本级/本部近似项，仅列出供确认"} for org in values)
+            review.extend(
+                {
+                    "kind": "identity_variant_review",
+                    "id": org["id"],
+                    "name": org["name"],
+                    "reason": "本级/本部近似项，仅列出供确认",
+                }
+                for org in values
+            )
     retained = []
     for org in rows:
         if org["id"] in mapping:
             continue
-        retained.append({**org, "parent_id": mapping.get(org.get("parent_id"), org.get("parent_id"))})
+        retained.append(
+            {**org, "parent_id": mapping.get(org.get("parent_id"), org.get("parent_id"))}
+        )
     return {**payload, "organizations": retained}, mapping, review
 
 
 def rewrite_ids(value, mapping):
     if isinstance(value, dict):
-        return {key: (mapping.get(item, item) if key in {"org_id", "organization_id", "department_id", "parent_id"}
-                      and isinstance(item, str) else rewrite_ids(item, mapping)) for key, item in value.items()}
+        return {
+            key: (
+                mapping.get(item, item)
+                if key in {"org_id", "organization_id", "department_id", "parent_id"}
+                and isinstance(item, str)
+                else rewrite_ids(item, mapping)
+            )
+            for key, item in value.items()
+        }
     if isinstance(value, list):
         return [rewrite_ids(item, mapping) for item in value]
     return value
@@ -58,17 +92,36 @@ def rewrite_ids(value, mapping):
 
 async def database_references(dsn, mapping):
     if not dsn:
-        return {"status": "unverified", "reason": "未显式提供只读数据库连接；不能宣称引用已完整核对", "tables": []}
+        return {
+            "status": "unverified",
+            "reason": "未显式提供只读数据库连接；不能宣称引用已完整核对",
+            "tables": [],
+        }
     import asyncpg
+
     conn = await asyncpg.connect(dsn)
     tables = []
     try:
         async with conn.transaction(readonly=True):
-            columns = await conn.fetch("SELECT table_schema, table_name, column_name FROM information_schema.columns WHERE table_schema='public' AND column_name IN ('org_id','organization_id','department_id')")
+            columns = await conn.fetch(
+                "SELECT table_schema, table_name, column_name FROM information_schema.columns WHERE table_schema='public' AND column_name IN ('org_id','organization_id','department_id')"
+            )
             for row in columns:
-                schema, table, column = (str(row[key]).replace('"', '""') for key in ("table_schema", "table_name", "column_name"))
-                found = await conn.fetch(f'SELECT "{column}"::text AS org_id, count(*) AS references FROM "{schema}"."{table}" WHERE "{column}"::text = ANY($1::text[]) GROUP BY "{column}"::text', list(mapping))
-                tables.append({"table": f"{schema}.{table}", "column": column, "references": [dict(item) for item in found]})
+                schema, table, column = (
+                    str(row[key]).replace('"', '""')
+                    for key in ("table_schema", "table_name", "column_name")
+                )
+                found = await conn.fetch(
+                    f'SELECT "{column}"::text AS org_id, count(*) AS references FROM "{schema}"."{table}" WHERE "{column}"::text = ANY($1::text[]) GROUP BY "{column}"::text',
+                    list(mapping),
+                )
+                tables.append(
+                    {
+                        "table": f"{schema}.{table}",
+                        "column": column,
+                        "references": [dict(item) for item in found],
+                    }
+                )
     finally:
         await conn.close()
     return {"status": "checked_read_only", "tables": tables}
@@ -80,7 +133,9 @@ def main():
     parser.add_argument("--uploads-dir", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--database-url-env", help="仅此显式环境变量供只读引用检查，不加载 .env")
-    parser.add_argument("--expected-orgs", type=Path, help="独立清单（JSON 名称数组），只报告缺失，不创建组织")
+    parser.add_argument(
+        "--expected-orgs", type=Path, help="独立清单（JSON 名称数组），只报告缺失，不创建组织"
+    )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--write-copy", type=Path)
@@ -95,10 +150,19 @@ def main():
     cleaned, mapping, review = plan_directory(payload)
     if args.expected_orgs:
         expected = read(args.expected_orgs)
-        existing_names = {normalize_org_name(org["name"]) for org in payload.get("organizations", [])}
+        existing_names = {
+            normalize_org_name(org["name"]) for org in payload.get("organizations", [])
+        }
         for name in expected:
             if normalize_org_name(name) not in existing_names:
-                review.append({"kind": "missing_organization", "id": "", "name": name, "reason": "独立清单要求的组织未在目录中找到，需用户确认补录"})
+                review.append(
+                    {
+                        "kind": "missing_organization",
+                        "id": "",
+                        "name": name,
+                        "reason": "独立清单要求的组织未在目录中找到，需用户确认补录",
+                    }
+                )
     files = [source / "job_org_links.json"]
     if args.uploads_dir:
         files.extend(sorted(args.uploads_dir.rglob("status.json")))
@@ -107,32 +171,63 @@ def main():
         original = read(path)
         replacement = rewrite_ids(original, mapping)
         if replacement != original:
-            references.append({"path": str(path), "old_sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+            references.append(
+                {"path": str(path), "old_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+            )
             changed[path] = replacement
-    database = asyncio.run(database_references(os.environ.get(args.database_url_env) if args.database_url_env else None, mapping))
+    database = asyncio.run(
+        database_references(
+            os.environ.get(args.database_url_env) if args.database_url_env else None, mapping
+        )
+    )
     args.out.mkdir(parents=True, exist_ok=True)
-    report = {"source": str(source), "source_sha256": hashlib.sha256((source / "organizations.json").read_bytes()).hexdigest(),
-              "merge_ids": mapping, "references": references, "database": database,
-              "original_count": len(payload.get("organizations", [])), "cleaned_count": len(cleaned["organizations"]),
-              "limits": ["仅合并同层级同上级格式归一后完全相同的节点", "缺失组织必须由用户确认后补录", "近似别名不自动合并"]}
+    report = {
+        "source": str(source),
+        "source_sha256": hashlib.sha256((source / "organizations.json").read_bytes()).hexdigest(),
+        "merge_ids": mapping,
+        "references": references,
+        "database": database,
+        "original_count": len(payload.get("organizations", [])),
+        "cleaned_count": len(cleaned["organizations"]),
+        "limits": [
+            "仅合并同层级同上级格式归一后完全相同的节点",
+            "缺失组织必须由用户确认后补录",
+            "近似别名不自动合并",
+        ],
+    }
     (args.out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))
     with (args.out / "manual_review.csv").open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["kind", "id", "name", "reason"]); writer.writeheader(); writer.writerows(review)
+        writer = csv.DictWriter(handle, fieldnames=["kind", "id", "name", "reason"])
+        writer.writeheader()
+        writer.writerows(review)
     if args.write_copy:
         target = args.write_copy.resolve()
-        if target == source or target.is_relative_to(source) or source.is_relative_to(target) or target.exists():
+        if (
+            target == source
+            or target.is_relative_to(source)
+            or source.is_relative_to(target)
+            or target.exists()
+        ):
             parser.error("清洗副本须为与原目录互不包含的全新目录")
         target.mkdir(parents=True)
         for name in ("organizations.json", "job_org_links.json"):
             if (source / name).exists():
                 shutil.copy2(source / name, target / name)
-        (target / "organizations.json").write_text(json.dumps(cleaned, ensure_ascii=False, indent=2))
+        (target / "organizations.json").write_text(
+            json.dumps(cleaned, ensure_ascii=False, indent=2)
+        )
         if (source / "job_org_links.json") in changed:
-            (target / "job_org_links.json").write_text(json.dumps(changed[source / "job_org_links.json"], ensure_ascii=False, indent=2))
+            (target / "job_org_links.json").write_text(
+                json.dumps(changed[source / "job_org_links.json"], ensure_ascii=False, indent=2)
+            )
     if args.apply:
         # DB 与文件不能假装原子迁移；有库引用时由后续获批迁移专门处理。
-        if database["status"] != "checked_read_only" or any(row["references"] for row in database["tables"]):
-            parser.error("正式应用被阻止：数据库引用尚未核实或仍需独立迁移。请先审阅演练报告并取得批准")
+        if database["status"] != "checked_read_only" or any(
+            row["references"] for row in database["tables"]
+        ):
+            parser.error(
+                "正式应用被阻止：数据库引用尚未核实或仍需独立迁移。请先审阅演练报告并取得批准"
+            )
         backup = args.out / "backup"
         backup.mkdir(exist_ok=False)
         changed[source / "organizations.json"] = cleaned
@@ -140,13 +235,16 @@ def main():
             for index, (path, value) in enumerate(changed.items()):
                 shutil.copy2(path, backup / str(index))
                 temp = path.with_name(path.name + ".cleanup.tmp")
-                temp.write_text(json.dumps(value, ensure_ascii=False, indent=2)); temp.replace(path)
+                temp.write_text(json.dumps(value, ensure_ascii=False, indent=2))
+                temp.replace(path)
         except Exception:
             for index, path in enumerate(changed):
                 if (backup / str(index)).exists():
                     shutil.copy2(backup / str(index), path)
             raise
-        (backup / "paths.json").write_text(json.dumps([str(p) for p in changed], ensure_ascii=False))
+        (backup / "paths.json").write_text(
+            json.dumps([str(p) for p in changed], ensure_ascii=False)
+        )
     print(json.dumps(report, ensure_ascii=False))
 
 
