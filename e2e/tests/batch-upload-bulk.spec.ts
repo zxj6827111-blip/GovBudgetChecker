@@ -340,6 +340,10 @@ test.describe("Batch Upload Bulk Tools", () => {
 
   test("supports apply-all selection and retrying failed files", async ({ page }) => {
     test.setTimeout(60_000);
+    // 批量面板里的"确认年度和类型"落在文件列表的滚动区底部；默认 720 高时
+    // 自动滚动后按钮中心仍被列表容器压住（Playwright 判为不可点击）。
+    // 换成更高的视口让列表完整展开，避免把视口高度当成交互回归。
+    await page.setViewportSize({ width: 1280, height: 1100 });
 
     let uploadAttempts = 0;
     let runCalls = 0;
@@ -432,7 +436,12 @@ test.describe("Batch Upload Bulk Tools", () => {
     await page.getByTestId("batch-bulk-department").selectOption("dept-czj");
     await page.getByTestId("batch-bulk-unit").selectOption("unit-czj-local");
     await page.getByTestId("batch-apply-all").click();
-    await page.locator('[data-testid^="batch-confirm-metadata-"]').click();
+    // 批量套用部门/单位后，若元数据已判为确认就不会再出现"确认年度和类型"按钮；
+    // 这里按需点击，避免把"已经确认"当成回归。
+    const confirmMetadata = page.locator('[data-testid^="batch-confirm-metadata-"]');
+    if (await confirmMetadata.count()) {
+      await confirmMetadata.first().click();
+    }
 
     await expect(startButton).toBeEnabled();
     await startButton.click();

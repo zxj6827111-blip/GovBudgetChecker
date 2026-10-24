@@ -282,8 +282,15 @@ async function installOrganizationApiMocks(page: Page, state: MockState) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
+        // ImportResult 以 success 为成败判据（src/schemas/organization.py:87），
+        // 少了它页面会把"导入成功"当成失败：报错、不关弹窗、也不刷新目录树。
         body: JSON.stringify({
+          success: true,
+          total: 2,
+          attempted: 2,
           imported: 2,
+          skipped: 0,
+          errors: [],
         }),
       });
       return;

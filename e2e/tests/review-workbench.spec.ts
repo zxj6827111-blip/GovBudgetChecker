@@ -629,7 +629,9 @@ test.describe("Review workbench (Task 6)", () => {
     await page.context().addCookies([sessionCookie]);
     await installReviewWorkbenchMocks(page, { reportYear: 2026, workflowUpdates: [], workflowIssuesState });
     // 补充列表接口 mock：安装顺序在后，优先于通配 mock 生效
-    await page.route("**/api/jobs", async (route) => {
+    // 按 pathname 精确匹配：glob `**/api/jobs` 不匹配 `?view=page&...`，
+    // 而且不能误伤 /api/jobs/{id}、/api/jobs/counts 等子路径。
+    await page.route((url) => url.pathname === "/api/jobs", async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",

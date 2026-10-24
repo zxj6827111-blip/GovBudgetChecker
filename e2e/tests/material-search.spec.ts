@@ -167,6 +167,10 @@ test("Ctrl+K opens the search panel on any workspace page and Escape closes it",
   await page.context().addCookies([sessionCookie]);
   await installSearchMocks(page);
   await page.goto("/materials");
+  // 顶栏（快捷键监听者）在鉴权返回后才挂载；不等它就先按 Ctrl+K，
+  // 冷却/首编译的 CI 上按键会打在尚未挂载的监听器上。
+  await expect(page.getByTestId("gbc-global-search-trigger")).toBeVisible();
+  await page.waitForLoadState("networkidle");
   await expect(page.getByTestId("gbc-global-search-dialog")).toHaveCount(0);
 
   await page.keyboard.press("Control+K");
@@ -180,6 +184,9 @@ test("Ctrl+K opens the search panel on any workspace page and Escape closes it",
 
   // 另一个 workspace 页面同样有效
   await page.goto("/workbench");
+  // 新页面要等组件挂载完（快捷键监听在 effect 里注册），否则按键会丢。
+  await expect(page.getByTestId("gbc-global-search-trigger")).toBeVisible();
+  await page.waitForLoadState("networkidle");
   await page.keyboard.press("Control+K");
   await expect(page.getByTestId("gbc-global-search-dialog")).toBeVisible();
 });
@@ -188,6 +195,8 @@ test("Meta+K opens the panel too (macOS behaviour)", async ({ page }) => {
   await page.context().addCookies([sessionCookie]);
   await installSearchMocks(page);
   await page.goto("/workbench");
+  await expect(page.getByTestId("gbc-global-search-trigger")).toBeVisible();
+  await page.waitForLoadState("networkidle");
 
   await page.keyboard.press("Meta+K");
   await expect(page.getByTestId("gbc-global-search-dialog")).toBeVisible();

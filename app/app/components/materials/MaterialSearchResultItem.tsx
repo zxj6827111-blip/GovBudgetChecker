@@ -27,6 +27,8 @@ export interface MaterialSearchResultItemProps {
   index: number;
   selected: boolean;
   onHover: (index: number) => void;
+  /** 点击任一链接离开面板时调用：面板是 layout 层浮层，不关会盖住目标页面。 */
+  onNavigate?: () => void;
 }
 
 export function MaterialSearchResultItem({
@@ -34,6 +36,7 @@ export function MaterialSearchResultItem({
   index,
   selected,
   onHover,
+  onNavigate,
 }: MaterialSearchResultItemProps) {
   const view: MaterialSearchItemView = describeSearchItem(item);
 
@@ -101,6 +104,7 @@ export function MaterialSearchResultItem({
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <Link
           href={view.openHref as Route}
+          onClick={onNavigate}
           data-testid="gbc-global-search-open-material"
           className="rounded-md border border-border bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
         >
@@ -109,6 +113,7 @@ export function MaterialSearchResultItem({
         {view.reviewHref ? (
           <Link
             href={view.reviewHref as Route}
+            onClick={onNavigate}
             data-testid="gbc-global-search-enter-review"
             className="rounded-md bg-primary-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-primary-700"
           >
