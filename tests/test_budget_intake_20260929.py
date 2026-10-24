@@ -463,9 +463,10 @@ def test_finals_unresolved_total_le_11(final_replays):
         item=next(x for x in final_replays[alias]['summary']['unresolved_rules']if x['rule_id']=='V33-224')
         assert item['status']=='insufficient_data' and item['detail']=='因公出国说明或表内决算金额未唯一识别'
         added+=1
-    item=next(x for x in final_replays['shiquan']['summary']['unresolved_rules']if x['rule_id']=='V33-234')
-    assert '原文包含其他或未确认主体，不能跨主体拼接金额' in item['detail']
-    added+=1
+    # IR-12 读全“主体+2025 / 年度部门决算”封面后，原有未知主体阻断解除；应暴露原件真实完成率问题。
+    assert final_replays['shiquan']['summary']['rule_statuses']['V33-234'] == 'fail'
+    assert any(issue.rule == 'V33-234' and '312.55%' in issue.message
+               and '20.00' in issue.message and '62.51' in issue.message for issue in final_replays['shiquan']['issues'])
     assert total - added <= 11, f"除已核实的原文缺操作数外仍有计划外回升: {total} - {added} > 11"
 
 
