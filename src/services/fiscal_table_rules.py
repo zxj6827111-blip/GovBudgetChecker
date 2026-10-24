@@ -296,7 +296,9 @@ def detect_table_code(
         return None, 0.0
 
     # 缺首字的长表名不能被其内含的短表名抢走。必须有独立列结构佐证。
-    truncated = [(code, alias) for code, rule in NINE_TABLE_RULES.items() for value in rule.aliases
+    truncated = [(code, alias) for code, rule in NINE_TABLE_RULES.items()
+                 if not any(normalize_text(value) in normalized_title for value in rule.aliases)
+                 for value in rule.aliases
                  if len(alias := normalize_text(value)) >= 10 and alias not in normalized_title
                  and any(normalized_title.endswith(alias[cut:]) for cut in (1, 2))]
     if truncated:
