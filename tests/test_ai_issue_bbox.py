@@ -9,6 +9,11 @@ from src.services.ai_findings import AIFindingsService
 from src.utils.issue_bbox import PDFBBoxLocator
 
 
+
+def _ai_enabled_config() -> "AnalysisConfig":
+    """ZC-00 起 AnalysisConfig 默认关闭 AI；本文件测 AI 机制，显式开启。"""
+    return AnalysisConfig(ai_enabled=True, enable_ai_analysis=True, enable_ai_locator=True)
+
 def _create_pdf(path: Path, lines_per_page: list[list[str]]) -> None:
     fitz = pytest.importorskip("fitz")
     document = fitz.open()
@@ -24,7 +29,7 @@ def _create_pdf(path: Path, lines_per_page: list[list[str]]) -> None:
         document.close()
 
 
-def test_pdf_bbox_locator_finds_bbox_from_ai_quote_text(tmp_path: Path) -> None:
+def test_pdf_bbox_locator_does_not_infer_bbox_from_ai_quote_text(tmp_path: Path) -> None:
     pdf_path = tmp_path / "ai-quote.pdf"
     page_text = "Performance target differs from T3 project expense: desc=43.60, T3=48.59"
     _create_pdf(pdf_path, [[page_text, "Please explain if the metrics use different scopes"]])
@@ -55,19 +60,21 @@ def test_pdf_bbox_locator_finds_bbox_from_ai_quote_text(tmp_path: Path) -> None:
     finally:
         locator.close()
 
-    assert updated.bbox is not None
-    assert updated.evidence[0]["bbox"] == updated.bbox
+    assert updated.bbox is None
+    assert updated.evidence[0].get("bbox") is None
+    assert updated.location_level == "unresolved"
 
 
 @pytest.mark.asyncio
-async def test_ai_findings_service_populates_bbox_from_semantic_quote(
-    tmp_path: Path,
+@pytest.mark.parametrize("span_matches_quote", [True, False])
+async def test_ai_findings_service_does_not_infer_bbox_from_semantic_quote(
+    tmp_path: Path, span_matches_quote: bool,
 ) -> None:
     pdf_path = tmp_path / "ai-service.pdf"
     page_text = "Performance target differs from T3 project expense: desc=43.60, T3=48.59"
     _create_pdf(pdf_path, [[page_text]])
 
-    service = AIFindingsService(AnalysisConfig())
+    service = AIFindingsService(_ai_enabled_config())
     service.ai_client.ai_full_report_audit = AsyncMock(
         return_value=[
             {
@@ -77,7 +84,8 @@ async def test_ai_findings_service_populates_bbox_from_semantic_quote(
                 "quote": "Performance target differs from T3 project expense",
                 "context": page_text,
                 "original": page_text,
-                "span": [0, len(page_text)],
+                "span": [0, len("Performance target differs from T3 project expense")
+                         if span_matches_quote else len(page_text)],
                 "suggestion": "Please explain if the metrics use different scopes",
             }
         ]
@@ -94,10 +102,11 @@ async def test_ai_findings_service_populates_bbox_from_semantic_quote(
 
     assert findings
     finding = findings[0]
-    assert finding.page_number == 1
-    assert finding.evidence[0]["page"] == 1
-    assert finding.bbox is not None
-    assert finding.evidence[0]["bbox"] == finding.bbox
+    assert finding.page_number == (1 if span_matches_quote else None)
+    assert finding.evidence[0].get("page") == (1 if span_matches_quote else None)
+    assert finding.bbox is None
+    assert finding.evidence[0].get("bbox") is None
+    assert finding.location_level == "unresolved"
 
 
 @pytest.mark.asyncio
@@ -109,7 +118,7 @@ async def test_ai_findings_service_runs_window_audits_concurrently(
     monkeypatch.setenv("AI_AUDIT_MAX_WINDOWS", "4")
     monkeypatch.setenv("AI_AUDIT_MAX_CONCURRENCY", "2")
 
-    service = AIFindingsService(AnalysisConfig())
+    service = AIFindingsService(_ai_enabled_config())
     active = 0
     max_active = 0
 
@@ -153,7 +162,7 @@ async def test_ai_findings_service_drops_stale_call_ledger_on_entry(
     monkeypatch.setenv("AI_AUDIT_MAX_WINDOWS", "4")
     monkeypatch.setenv("AI_AUDIT_MAX_CONCURRENCY", "2")
 
-    service = AIFindingsService(AnalysisConfig())
+    service = AIFindingsService(_ai_enabled_config())
     # 模拟上一任务异常路径漏 pop 的残留留痕
     service.ai_client.record_call(
         "zhipu", "glm-4.5-flash", finish_reason="stop", content="上一任务的正文"

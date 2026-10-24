@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import type { Route } from "next";
-import { useMemo } from "react";
+import { useMemo, useEffect, useState } from "react";
+import {reportingRequest,type ReportingStatistics} from "./reportingTaskAdapters";
+import { useSearchParams } from "next/navigation";
 
 import { Badge, SectionTitle } from "@/components/ui";
 
@@ -50,11 +52,24 @@ export interface MaterialDetailPageProps {
 }
 
 export function MaterialDetailPage({ slotId, tab = "overview" }: MaterialDetailPageProps) {
+  const search = useSearchParams();
+  const returnTo = search.get("returnTo");
+  // 报送明细与部门报告都可进入材料详情；只接受站内这两类地址。
+  const safeReturn = returnTo && !returnTo.includes("\\") && /^\/(?:materials(?:\?|\/districts\/)|reports(?:[/?]|$))/.test(returnTo) ? returnTo : null;
   const activeTab: MaterialDetailTabKey = resolveDetailTab(tab);
   const url = useMemo(() => `/api/materials/slots/${encodeURIComponent(slotId)}`, [slotId]);
   const response = useMaterialResource<SlotDetailResponse>(url, readSlotDetailPayload);
   const data = response.data?.data ?? null;
   const slot = data?.slot ?? null;
+  const taskId = search.get("task_id") || (safeReturn ? new URLSearchParams(safeReturn.split("?")[1] || "").get("task_id") : null);
+  const [taskContext,setTaskContext] = useState<{ready:boolean;included:boolean;revision:number|null}|null>(null);
+  useEffect(()=>{
+    setTaskContext(null);
+    if(!taskId||!slot)return;
+    const controller=new AbortController();
+    reportingRequest<ReportingStatistics>(`/api/reporting-tasks/${encodeURIComponent(taskId)}/statistics?view=subjects&subject_id=${encodeURIComponent(slot.subject_org_id)}&page_size=100`,{signal:controller.signal}).then(body=>{if(!controller.signal.aborted)setTaskContext({ready:body.meta.baseline_ready,included:body.list.items.some(r=>r.slot_id===slotId),revision:body.meta.roster_revision})}).catch(()=>{});
+    return()=>controller.abort();
+  },[taskId,slotId,slot]);
   const state = useMemo(
     () => presentSlotState(slot, data?.version_total ?? 0),
     [slot, data?.version_total],
@@ -69,6 +84,7 @@ export function MaterialDetailPage({ slotId, tab = "overview" }: MaterialDetailP
 
   return (
     <div className="mx-auto max-w-[1600px] px-6 py-6" data-testid="gbc-material-detail-page">
+      {safeReturn ? <Link href={safeReturn as Route} className="mb-3 block text-sm text-primary-700">{safeReturn.startsWith("/reports") ? "← 返回部门报告" : "← 返回报送明细"}</Link> : null}
       <MaterialBreadcrumb
         entries={breadcrumb.map((entry) => ({
           label: entry.label,
@@ -85,9 +101,7 @@ export function MaterialDetailPage({ slotId, tab = "overview" }: MaterialDetailP
       </div>
 
       <div className="mt-4">
-        <MaterialDataBasisNotice
-          expectedMaterialsReady={response.data?.meta?.expected_materials_ready ?? false}
-        />
+        {taskId ? <p className="rounded border border-border bg-surface-100 p-3 text-xs text-slate-600">{taskContext ? taskContext.ready ? taskContext.included ? `本材料属于当前年度任务已确认应交名单（第${taskContext.revision}版）。报送按有效文件判断，截止时间未知不计逾期。` : "本材料不属于当前任务已发布应交名单，不计入应交与缺交分母。" : "当前年度任务名单尚未发布，应交与缺交总数未知。" : "正在核对当前年度任务的名册归属；未核实前不判断应交完整性。"}</p> : <MaterialDataBasisNotice expectedMaterialsReady={response.data?.meta?.expected_materials_ready ?? false}/> }
       </div>
 
       {response.loading ? (
@@ -208,7 +222,7 @@ export function MaterialDetailPage({ slotId, tab = "overview" }: MaterialDetailP
               return (
                 <Link
                   key={item.key}
-                  href={materialDetailTabHref(slotId, item.key) as Route}
+                  href={(materialDetailTabHref(slotId, item.key) + (safeReturn ? "&returnTo=" + encodeURIComponent(safeReturn) : "")) as Route}
                   scroll={false}
                   aria-current={isActive ? "page" : undefined}
                   data-testid={`gbc-material-detail-tab-${item.key}`}
@@ -234,7 +248,7 @@ export function MaterialDetailPage({ slotId, tab = "overview" }: MaterialDetailP
               <MaterialDetailCoverageTab coverage={data.current_analysis?.coverage ?? null} />
             ) : null}
             {activeTab === "versions" ? (
-              <MaterialDetailVersionsTab slotId={slotId} detail={data} />
+              <MaterialDetailVersionsTab slotId={slotId} detail={data} reviewReturnTo={materialDetailTabHref(slotId, "versions") + (safeReturn ? "&returnTo=" + encodeURIComponent(safeReturn) : "")} />
             ) : null}
             {activeTab === "runs" ? <MaterialDetailRunsTab slotId={slotId} /> : null}
           </div>

@@ -1,0 +1,11 @@
+{
+  "doc_id": null,
+  "sha256": null,
+  "report_kind": null,
+  "truth_frozen_at": null,
+  "reviewed_by": [],
+  "scan_attestations_file": null,
+  "scan_attestations_sha256": null,
+  "labels": [],
+  "applicable_sub_checks": []
+}

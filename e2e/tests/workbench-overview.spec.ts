@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "../../app/node_modules/playwright/test";
+import { readFileSync } from "node:fs";
 
 /**
  * Task 4：工作台总览 e2e 验证。
@@ -22,6 +23,7 @@ interface MockJobsOptions {
   jobs?: Array<Record<string, unknown>>;
   activityStatus?: 200 | 403;
   metricsStatus?: 200 | 403;
+  ledger?: boolean;
 }
 
 const DEFAULT_JOBS: Array<Record<string, unknown>> = [
@@ -31,6 +33,7 @@ const DEFAULT_JOBS: Array<Record<string, unknown>> = [
     status: "review_required",
     quality_status: "review_required",
     organization_name: "市教育局",
+    organization_id: "org-edu",
     report_year: 2026,
     report_kind: "budget",
     merged_issue_total: 6,
@@ -68,6 +71,18 @@ async function installWorkbenchMocks(page: Page, options: MockJobsOptions) {
     const url = new URL(req.url());
     const path = url.pathname;
 
+    // 年度报送功能默认关闭：capabilities 返回 404 时页面回落历史材料查询。
+    // 兜底的 200 {} 会让入口把 enabled 当成 undefined，误判为已启用并渲染新视图，
+    // 于是本用例要断言的台账 testid 一个都不出现。
+    if (url.pathname === "/api/reporting-tasks/capabilities") {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "reporting tasks disabled" }),
+      });
+      return;
+    }
+
     if (path === "/api/auth/me") {
       await route.fulfill({
         status: 200,
@@ -88,6 +103,23 @@ async function installWorkbenchMocks(page: Page, options: MockJobsOptions) {
 
     if (path === "/api/jobs") {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(jobs) });
+      return;
+    }
+
+    if (path === "/api/materials/coverage") {
+      if (!options.ledger) {
+        await route.fulfill({ status: options.isAdmin ? 503 : 403, contentType: "application/json", body: JSON.stringify({ detail: "unavailable" }) });
+      } else {
+        const counts = { not_due: 0, missing: 0, uploaded: 0, processing: 1, review_required: 1, reviewing: 1, completed: 4, not_applicable: 0, mapping_required: 0, failed: 1 };
+        const selected = url.searchParams.get("status");
+        const filtered = selected && selected in counts
+          ? Object.fromEntries(Object.keys(counts).map((key) => [key, key === selected ? counts[key as keyof typeof counts] : 0])) : counts;
+        const total = Object.values(filtered).reduce((sum, count) => sum + count, 0);
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, data: { summary: {
+          slot_total: total, status_counts: filtered, budget_total: total, final_total: 0, unknown_kind_total: 0, due_at_unknown: 0, not_due_confirmed: 0, jurisdiction_unknown_total: 0,
+          expected_total: null, expected_budget_total: null, expected_final_total: null, coverage_rate: null, budget_coverage_rate: null, final_coverage_rate: null, missing_expected_total: null,
+        }, districts: [] }, meta: { data_basis: "existing_slots_only", expected_materials_ready: false, generated_at: new Date().toISOString() } }) });
+      }
       return;
     }
 
@@ -142,6 +174,7 @@ test.describe("Workbench overview (Task 4)", () => {
     await page.context().addCookies([sessionCookie]);
     await installWorkbenchMocks(page, { isAdmin: true });
     await page.goto("/workbench");
+    await page.getByTestId("gbc-cockpit-all").click();
 
     const link = page.getByTestId("gbc-workbench-queue-row-link-job-review");
     await expect(link).toBeVisible();
@@ -152,6 +185,7 @@ test.describe("Workbench overview (Task 4)", () => {
     await page.context().addCookies([sessionCookie]);
     await installWorkbenchMocks(page, { isAdmin: true });
     await page.goto("/workbench");
+    await page.getByTestId("gbc-cockpit-all").click();
 
     await expect(page.getByTestId("gbc-workbench-queue-row-job-review")).toBeVisible();
     await expect(page.getByTestId("gbc-workbench-queue-row-job-analyzing")).toBeVisible();
@@ -166,6 +200,7 @@ test.describe("Workbench overview (Task 4)", () => {
     await page.context().addCookies([sessionCookie]);
     await installWorkbenchMocks(page, { isAdmin: true });
     await page.goto("/workbench");
+    await page.getByTestId("gbc-cockpit-all").click();
 
     await page.getByTestId("gbc-workbench-year-filter").selectOption("unresolved");
 
@@ -178,6 +213,7 @@ test.describe("Workbench overview (Task 4)", () => {
     await page.context().addCookies([sessionCookie]);
     await installWorkbenchMocks(page, { isAdmin: true });
     await page.goto("/workbench");
+    await page.getByTestId("gbc-cockpit-all").click();
 
     const row = page.getByTestId("gbc-workbench-queue-row-job-review");
     await expect(row).toContainText("需要人工复核");
@@ -188,6 +224,7 @@ test.describe("Workbench overview (Task 4)", () => {
     await page.context().addCookies([sessionCookie]);
     await installWorkbenchMocks(page, { isAdmin: true });
     await page.goto("/workbench");
+    await page.getByTestId("gbc-cockpit-all").click();
 
     const row = page.getByTestId("gbc-workbench-queue-row-job-unresolved-year");
     await expect(row).toContainText("未识别到");
@@ -212,6 +249,7 @@ test.describe("Workbench overview (Task 4)", () => {
     await page.context().addCookies([sessionCookie]);
     await installWorkbenchMocks(page, { isAdmin: false });
     await page.goto("/workbench");
+    await page.getByTestId("gbc-cockpit-activity").click();
 
     await expect(page.getByTestId("gbc-workbench-activity-needs-admin")).toBeVisible();
     await expect(page.getByTestId("gbc-workbench-activity-needs-admin")).toContainText("仅管理员可查看");
@@ -222,6 +260,7 @@ test.describe("Workbench overview (Task 4)", () => {
     await page.context().addCookies([sessionCookie]);
     await installWorkbenchMocks(page, { isAdmin: true });
     await page.goto("/workbench");
+    await page.getByTestId("gbc-cockpit-activity").click();
 
     await expect(page.getByTestId("gbc-workbench-activity-list")).toContainText("李审核员确认了 4 条问题并提交复核");
   });
@@ -236,6 +275,7 @@ test.describe("Workbench overview (Task 4)", () => {
     await page.context().addCookies([sessionCookie]);
     await installWorkbenchMocks(page, { isAdmin: true });
     await page.goto("/workbench");
+    await page.getByTestId("gbc-cockpit-all").click();
 
     // review_required 任务：可点链接进入 /review?job=
     const reviewEntry = page.getByTestId("gbc-workbench-queue-review-job-review");
@@ -277,5 +317,94 @@ test.describe("Workbench overview (Task 4)", () => {
     const reviewCard = page.getByTestId("gbc-workbench-kpi-review-required");
     await expect(reviewCard).toContainText("—");
     await expect(reviewCard).not.toContainText(/(^|[^0-9])0([^0-9]|$)/);
+  });
+
+  test("cockpit landing aggregates data without showing department documents", async ({ page }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installWorkbenchMocks(page, { isAdmin: true });
+    await page.goto("/workbench");
+    await expect(page.getByTestId("gbc-cockpit-kpi-total")).toContainText("3");
+    await expect(page.getByTestId("gbc-workbench-page")).not.toContainText("市教育局");
+    await expect(page.getByTestId("gbc-workbench-queue-table")).toHaveCount(0);
+    await expect(page.getByTestId("gbc-cockpit-state-completed")).toContainText("—");
+    await expect(page.getByTestId("gbc-cockpit-ledger-unavailable")).toBeVisible();
+  });
+
+  test("formal review progress comes from the ledger, not analysis statuses", async ({ page }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installWorkbenchMocks(page, { isAdmin: true, ledger: true });
+    await page.goto("/workbench");
+    await expect(page.getByTestId("gbc-cockpit-kpi-total")).toContainText("8");
+    await expect(page.getByTestId("gbc-cockpit-state-completed")).toContainText("4");
+    await expect(page.getByTestId("gbc-cockpit-progress")).toContainText("50%");
+    await expect(page.getByTestId("gbc-workbench-kpi-review-required")).toContainText("2");
+    await page.getByTestId("gbc-cockpit-state-completed").click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    const link = page.getByRole("dialog").getByRole("link", { name: /已完成复核/ });
+    await expect(link).toHaveAttribute("href", "/materials?status=completed");
+    const filteredRequest = page.waitForRequest((request) => request.url().includes("/api/materials/coverage") && request.url().includes("status=completed"));
+    await link.click();
+    await filteredRequest;
+    await expect(page.getByTestId("gbc-material-ledger-page")).toBeVisible();
+  });
+
+  test("low coverage risk opens only affected tasks and restores keyboard focus", async ({ page }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installWorkbenchMocks(page, { isAdmin: true });
+    await page.goto("/workbench");
+    const button = page.getByTestId("gbc-cockpit-risk-low-coverage");
+    await button.click();
+    await expect(page.getByTestId("gbc-workbench-queue-row-job-unresolved-year")).toBeVisible();
+    await expect(page.getByTestId("gbc-workbench-queue-row-job-review")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(button).toBeFocused();
+  });
+
+  test("department coverage opens linked departments with a report shortcut", async ({ page }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installWorkbenchMocks(page, { isAdmin: true });
+    await page.goto("/workbench");
+    await page.getByTestId("gbc-cockpit-kpi-departments").click();
+    const department = page.getByTestId("gbc-cockpit-department-org-edu");
+    await expect(department).toContainText("已关联材料");
+    await expect(department.getByRole("link")).toHaveAttribute("href", "/reports/org-edu");
+  });
+
+  test("trend changes period using event timestamps, and exports a real overview", async ({ page }) => {
+    await page.context().addCookies([sessionCookie]);
+    const now = Date.now();
+    await installWorkbenchMocks(page, { isAdmin: true, jobs: [
+      { job_id: "recent", status: "review_required", created_ts: now / 1000 - 100, analysis_finished_ts: now / 1000 - 20 },
+      { job_id: "old", status: "done", created_ts: now / 1000 - 10 * 86400, updated_ts: now / 1000 - 30 },
+    ] });
+    await page.goto("/workbench");
+    await expect(page.getByTestId("gbc-cockpit-trend-summary")).toContainText("近7日新增 1 个任务 · 1 个结束分析");
+    await page.getByTestId("gbc-cockpit-period-30").click();
+    await expect(page.getByTestId("gbc-cockpit-trend-summary")).toContainText("近30日新增 2 个任务 · 1 个结束分析");
+    const download = page.waitForEvent("download");
+    await page.getByTestId("gbc-cockpit-export").click();
+    const file = await download;
+    expect(file.suggestedFilename()).toMatch(/工作台概览_.*\.csv$/);
+    const path = await file.path();
+    expect(path).not.toBeNull();
+    const csv = readFileSync(path!, "utf8");
+    expect(csv).toContain('"总量","2"');
+    expect(csv).toContain('"已完成人工复核","—"');
+    expect(csv).toContain("不代表人工复核完成");
+  });
+
+  test("dashboard fits the desktop viewport without a document list below the fold", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 768 });
+    await page.context().addCookies([sessionCookie]);
+    await installWorkbenchMocks(page, { isAdmin: true, ledger: true });
+    await page.goto("/workbench");
+    await expect(page.getByTestId("gbc-cockpit-kpi-total")).toContainText("8");
+    const geometry = await page.getByTestId("gbc-workbench-page").evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return { bottom: bounds.bottom, viewport: window.innerHeight, width: element.clientWidth, scroll: element.scrollWidth };
+    });
+    expect(geometry.scroll).toBeLessThanOrEqual(geometry.width);
+    expect(geometry.bottom).toBeLessThanOrEqual(geometry.viewport);
   });
 });

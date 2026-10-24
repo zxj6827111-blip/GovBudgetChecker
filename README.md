@@ -60,10 +60,20 @@ make frontend
 make dev
 ```
 
+后端默认监听 `18743`，以避开常用的 `8000` 端口；可通过环境变量
+`GOVBUDGET_BACKEND_PORT` 覆盖，例如 `GOVBUDGET_BACKEND_PORT=18744 make backend`。
+复制 `.env.example` 到 `.env` 后，`make dev` 和 Docker Compose 也会读取该端口设置。
+
+使用 `npm run dev` 或 `npm run dev:backend` 时，启动器会先检查 `.env` 中的本地
+PostgreSQL 与已启用的 OCR；已有 `fiscal_postgres`、`fiscal_ocr` 容器停止时会自动
+启动并等待就绪，再启动应用。Docker 未启动、容器尚未初始化或 OCR 模型未就绪时，
+启动器会给出明确错误。远程服务不由本地启动器管理；手动管理本地依赖时可设置
+`DEV_START_LOCAL_SERVICES=false`。首次初始化仍按 Docker Compose 部署说明完成。
+
 ### 3. 健康检查
 ```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8000/ready
+curl http://127.0.0.1:18743/health
+curl http://127.0.0.1:18743/ready
 ```
 
 ## 认证说明
@@ -81,7 +91,7 @@ curl http://127.0.0.1:8000/ready
 
 ### 1) 上传文件
 ```bash
-curl -X POST "http://127.0.0.1:8000/upload" \
+curl -X POST "http://127.0.0.1:18743/upload" \
   -H "X-API-Key: dev-local-key" \
   -F "file=@/path/to/sample.pdf;type=application/pdf"
 ```
@@ -89,7 +99,7 @@ curl -X POST "http://127.0.0.1:8000/upload" \
 
 ### 2) 启动分析
 ```bash
-curl -X POST "http://127.0.0.1:8000/api/analyze/<job_id>" \
+curl -X POST "http://127.0.0.1:18743/api/analyze/<job_id>" \
   -H "X-API-Key: dev-local-key" \
   -H "Content-Type: application/json" \
   -d '{"mode":"dual","use_local_rules":true,"use_ai_assist":true}'
@@ -97,22 +107,22 @@ curl -X POST "http://127.0.0.1:8000/api/analyze/<job_id>" \
 
 ### 3) 轮询状态
 ```bash
-curl "http://127.0.0.1:8000/api/jobs/<job_id>/status" \
+curl "http://127.0.0.1:18743/api/jobs/<job_id>/status" \
   -H "X-API-Key: dev-local-key"
 ```
 
 ### 4) 下载报告
 ```bash
 # JSON
-curl "http://127.0.0.1:8000/api/reports/download?job_id=<job_id>&format=json" \
+curl "http://127.0.0.1:18743/api/reports/download?job_id=<job_id>&format=json" \
   -H "X-API-Key: dev-local-key"
 
 # CSV
-curl "http://127.0.0.1:8000/api/reports/download?job_id=<job_id>&format=csv" \
+curl "http://127.0.0.1:18743/api/reports/download?job_id=<job_id>&format=csv" \
   -H "X-API-Key: dev-local-key"
 
 # PDF
-curl -o report.pdf "http://127.0.0.1:8000/api/reports/download?job_id=<job_id>&format=pdf" \
+curl -o report.pdf "http://127.0.0.1:18743/api/reports/download?job_id=<job_id>&format=pdf" \
   -H "X-API-Key: dev-local-key"
 ```
 
@@ -134,12 +144,77 @@ make e2e
 make test
 ```
 
-## Docker Compose 一键部署（backend + worker + frontend + postgres + ai-extractor）
+## Docker Compose 一键部署（默认规则优先：backend + worker + frontend + postgres + OCR，AI 可选叠加）
+
+服务器一次性安装 Docker Engine 和 Compose 插件，准备 `.env`、完整的 `models/`
+离线模型包与持久化数据目录后，在项目根目录执行：
 
 ```bash
-cp .env.example .env   # 至少填 POSTGRES_*、GOVBUDGET_API_KEY、USER_SESSION_SECRET、DEFAULT_ADMIN_PASSWORD
+bash scripts/start-server.sh
+```
+
+该命令构建镜像、启动 PostgreSQL / OCR / API / Worker / 网页，并等待就绪。
+API 的就绪检查包含数据库连接与 Worker 心跳，网页检查包含前后端代理连通性；
+最后核对 OCR 实际模型指纹与配置。默认访问 `http://服务器IP:3001`。
+也可使用 `make server-up`；不启动服务的配置检查为 `make server-check`。
+日常使用已有镜像启动可加 `--no-build`，指定另一份配置可加 `--env-file 路径`。
+
+在系统设置中配置的大模型直接通过其 API 调用，不需要单独启动模型容器；迁移时
+应同时保留 `data/ai-model-settings.json` 和对应 `.key` 文件（或原加密密钥配置）。
+只有使用独立 AI 抽取器时才加 `--ai`。容器已配置 `restart: unless-stopped`；
+Linux 服务器设置 Docker 开机启动后，运行中的服务可随 Docker 恢复，人工停止的
+服务需重新执行启动命令。数据库数据卷及挂载的上传、配置、日志目录独立于镜像。
+本地已有材料迁移到服务器时还须迁移数据库备份、上传文件和数据目录。
+
+下列命令是同一服务栈的原始 Compose 入口：
+
+```bash
+cp .env.example .env   # 填 POSTGRES_*、GOVBUDGET_API_KEY、USER_SESSION_SECRET、DEFAULT_ADMIN_PASSWORD
+docker compose -f docker-compose.yml config --quiet   # 先静态校验
+docker compose -f docker-compose.yml up -d --build --wait --wait-timeout 600
+```
+
+默认链路**不含 AI**：AI 只在请求显式 `use_ai_assist=true` 且开启双模式时启用
+（代码默认 `false`；`.env.example` 默认 `AI_ASSIST_REQUIRED=false`）。没有模型
+密钥、没有 ai-extractor 服务时不会发起云请求；已配置 OCR 模型时由规则与本地 OCR 完成审校。
+
+基础栈默认启用本地 OCR 调用。处理扫描件前须放入审核过的离线模型，并将
+`OCR_MODEL_FINGERPRINT` 配成部署模型清单的 SHA-256。模型缺失或指纹未配置时，
+扫描页不会被当作已识别输入，也不会联网下载模型。
+
+模型准备是一次显式联网操作，与服务启动分开：
+
+```bash
+.venv/bin/python scripts/prepare_ocr_models.py --destination models
+shasum -a 256 models/MANIFEST.sha256
+```
+
+将输出的清单 SHA 配到 `OCR_MODEL_FINGERPRINT`。`models/MODELS.json` 显式绑定
+8 个启用子模型；服务核验全部文件，真实预热成功后才报告 ready。依赖版本由
+`ocr_service/requirements.lock.txt` 约束。服务关闭非线性矫正，推理图像长边最多
+1024 像素，并记录线性缩放；PDF 定位仍使用原件的物理页和 PDF points。
+
+`gbc.ocr.cells.v2` 保留逐格文本、原始片段分数、框、合并关系、模型与输入指纹，
+数字格另发真实裁剪请求复识别。关键分数最低 0.98、单位/主体/年度/阶段明确且
+无冲突时，事实才可参与算式；低分、超时或歧义继续待复核。0.98 尚需独立开发集
+校准，不代表业务准确率。OCR 操作数资格与原件证据认证分别记录。
+
+扫描原件认证使用外部人工冻结记录，模板为
+`docs/acceptance_templates/scan_attestations.template.json`；在 API/Worker 可读的
+共享目录放入记录和复核附件，配置 `OCR_EVIDENCE_ATTESTATIONS_PATH` 与其 SHA
+`OCR_EVIDENCE_ATTESTATIONS_SHA256`。记录须绑定原件、物理页、格子、引文、模型、
+原始响应、整页与裁剪图 SHA，以及真实复核附件。没有该记录时保持 unverified。
+合成契约测试和模型自我比对不能替代人工真值。
+
+第十一轮工程证据及剩余验收条件见
+[整改交接记录](docs/GovBudgetChecker_第十一轮整改交接记录_20261006.md)。
+
+需要 AI 抽取时（**显式可选**，非默认），再叠加 AI 覆盖文件——该文件强制
+`USE_AI_ASSIST=true` 并要求 `ai-extractor` 就绪：
+
+```bash
 docker compose -f docker-compose.yml -f docker-compose.ai.yml config --quiet   # 先静态校验
-docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d --build --wait --wait-timeout 600
 ```
 
 也可以在 `.env` 里写 `COMPOSE_FILE=docker-compose.yml:docker-compose.ai.yml`
@@ -149,11 +224,12 @@ docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d --build
 
 | 服务 | 作用 | 备注 |
 |---|---|---|
-| `postgres` | 结构化数据 | 定义在 `docker-compose.yml` |
-| `ai-extractor` | AI 抽取/语义审计服务 | 仓库自带最小实现，可替换 |
-| `backend` | HTTP API，**只入队**（`JOB_QUEUE_ROLE=api`） | 端口 8000 |
-| `worker` | 消费队列跑分析（`JOB_QUEUE_ROLE=worker`） | 无端口，`python -m api.worker` |
+| `postgres` | 结构化数据 | 默认启动 |
+| `backend` | HTTP API，**只入队**（`JOB_QUEUE_ROLE=api`） | 宿主机默认端口 18743，容器内端口 8000 |
+| `worker` | 消费队列跑分析（`JOB_QUEUE_ROLE=worker`） | 与 API 共享上传卷 |
 | `frontend` | Next.js 前端 | 端口 3001→3000 |
+| `ocr` | 本地离线 OCR | 默认纳入服务栈；须提供 `models/MANIFEST.sha256`、对应权重和匹配的 `OCR_MODEL_FINGERPRINT`。缺失或指纹未配置时扫描页标为不可用/待复核，不联网下载 |
+| `ai-extractor` | AI 抽取/语义审计服务（仅 AI 覆盖模式） | 仓库自带最小实现，可替换 |
 
 `backend` 与 `worker` 必须共享同一个 `UPLOAD_DIR` 卷：队列的 claim 锁是该目录下的文件锁
 （`api/job_queue.py`），不共享会导致同一个任务被重复消费。compose 里两者用同一个 YAML
@@ -193,7 +269,7 @@ docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d --build
 - `PDF_PARSE_MEMORY_MB`：解析子进程地址空间上限（默认 1024，**仅 POSIX 生效**，Windows 无 `RLIMIT_AS`）
 - `PDF_PARSE_MAX_TEXT_CHARS` / `PDF_PARSE_MAX_TABLE_CELLS`：抽取结果体积上限（跨平台）
 - `PG_BIN_DIR`：`scripts/backup_all.py` 查找 `pg_dump`/`psql` 的目录（PATH 里没有时使用）
-- `AI_ASSIST_ENABLED`：是否启用 AI 辅助（默认 `true`）
+- `AI_ASSIST_ENABLED`：是否启用 AI 辅助（默认 `false`——默认部署为"规则 + 本地 OCR"，无需模型密钥与云端请求；AI 专用模式须显式开启）
 - `AI_EXTRACTOR_URL`：AI 抽取服务地址
 - `DATABASE_URL`：可选，配置后 `ready` 会检查可达性
 - `JOB_QUEUE_ENABLED`：任务队列开关（默认开启）
@@ -201,7 +277,7 @@ docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d --build
 ## 生产强化建议
 - 上传产物与任务目录建议放在持久化卷，容器重启后仍可恢复；若上云要做多实例，可进一步接入对象存储。
 - PostgreSQL 保存原件哈希、稳定 `storage_key`、版本、结构化表格/事实和审校结果；原始 PDF 不写入数据库二进制字段，须与数据库一并备份 `UPLOAD_DIR`。
-- `ready` 端点会额外检查上传目录、数据库、AI 服务、队列状态以及审计日志目录是否可写。
+- `ready` 端点会额外检查上传目录、数据库、AI 服务、队列状态以及审计日志目录是否可写（未启用 AI 时相应检查自动跳过，不阻塞就绪）。
 - 登录会话已改为签名令牌；生产环境建议固定配置 `USER_SESSION_SECRET`（或至少保持 `GOVBUDGET_API_KEY` 稳定），避免多 worker / 重启后会话失效。
 - 管理员操作（组织创建/修改/删除、导入、批量重分析、结构化清理）会写入 `AUDIT_LOG_PATH`。
 - 建议把反向代理上传大小限制与 `MAX_UPLOAD_MB`、`MAX_UPLOAD_PAGES` 保持一致。

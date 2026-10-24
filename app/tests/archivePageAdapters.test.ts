@@ -175,13 +175,13 @@ assert.equal(resolvePackageStatusLabel("draft"), "draft · 草稿");
 assert.equal(resolvePackageStatusTone("ready"), "done");
 assert.equal(resolvePackageStatusTone("draft"), "review");
 
-// 下载口径：文件名「{名称}.zip」、请求体 {job_ids}（与旧单体相同）
+// 下载绑定冻结整改包身份，避免 job 重审后归档下载变成最新报告。
 assert.equal(buildPackageDownloadFilename(SAMPLE_STATE.packages[0]), "上海市普陀区教育局整改包.zip");
 assert.equal(
   buildPackageDownloadFilename({ ...SAMPLE_STATE.packages[0], name: "" }),
   "reports-batch.zip",
   "名称缺失时退回默认文件名，不产生 .zip 前空白",
 );
-assert.deepEqual(buildPackageDownloadBody(SAMPLE_STATE.packages[0]), { job_ids: ["job-3"] });
+assert.deepEqual(buildPackageDownloadBody(SAMPLE_STATE.packages[0]), { job_ids: ["job-3"], package_id: "pkg-1" });
 
 console.log("archivePageAdapters.test.ts passed");

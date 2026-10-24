@@ -34,6 +34,7 @@ uploads/
 # test files (exclude tests/ directory)
 test_*.py
 !tests/test_*.py
+!tests/remediation/test_*.py
 test_*.txt
 big.bin
 not.pdf.txt
@@ -66,9 +67,23 @@ X/
 
 # 导出产物（模板、预览图、回放报告等运行时产出，不入版本库）
 outputs/
+models/
+
+# 本地重放/诊断产物（artifacts/ 约 20GB，含 .next 构建缓存与 artifact.json 大文件）
+artifacts/
+
+# 本地助手会话产物
+.mimosa/
+.workbuddy/
+
+# 根级 tsc 增量构建缓存
+/tsconfig.tsbuildinfo
 
 # Runtime data should not be versioned.
 data/*.json
+data/*.key
+data/*.lock
+data/local-audit/
 data/audit/admin-actions.jsonl
 
 # Local runtime artifacts

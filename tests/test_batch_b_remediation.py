@@ -305,10 +305,13 @@ def test_t17_rounding_envelope_boundaries():
     assert l2 == "rounding_hint"
     assert pytest.approx(float(v2), 0.001) == 0.018
 
-    # 3. Exceeds envelope (> 0.020) -> "mismatch"
+    # 3. Above the display envelope: the portable tolerance is 0.01 万元 since
+    #    2026-10-22 (口径决议①), below this envelope, so it is a mismatch.
     l3, v3 = classify_amount_diff(100.00, 100.025, 3)
     assert l3 == "mismatch"
     assert pytest.approx(float(v3), 0.001) == 0.025
+    l4, _ = classify_amount_diff(100.00, 100.55, 3)
+    assert l4 == "mismatch"
 
 
 # ===========================================================================
@@ -337,7 +340,7 @@ def test_t18_precision_and_units():
     # Small difference within dynamic envelope is accepted
     status_hint, _ = classify_amount_diff(Decimal("100.0"), Decimal("100.04"), envelope=env)
     assert status_hint == "rounding_hint"
-    # Large difference exceeding dynamic envelope is flagged as mismatch
+    # Above the dynamic display envelope and the 0.01 万元 policy tolerance.
     status_mismatch, _ = classify_amount_diff(Decimal("100.0"), Decimal("100.08"), envelope=env)
     assert status_mismatch == "mismatch"
 
@@ -632,10 +635,10 @@ def test_remediation_p1_5_bud102_dynamic_envelope():
     )
     assert BUD102_T3TotalFormula().apply(doc_1dec) == []
 
-    # 2. 3-decimal numbers exceeding envelope (100.000 vs 60.000 + 40.010, diff=0.010 > envelope 0.0015)
+    # 2. 3-decimal arithmetic difference of 0.600 万元 exceeds policy tolerance.
     table_3_decimal = [
         ["科目", "合计", "基本支出", "项目支出"],
-        ["合计", "100.000", "60.000", "40.010"],
+        ["合计", "100.000", "60.000", "40.600"],
     ]
     doc_3dec = build_document(
         "b102_3dec.pdf",
@@ -646,7 +649,7 @@ def test_remediation_p1_5_bud102_dynamic_envelope():
     issues_3dec = BUD102_T3TotalFormula().apply(doc_3dec)
     assert len(issues_3dec) == 1
     assert "T3勾稽错误" in issues_3dec[0].message
-    assert "0.01" in issues_3dec[0].message
+    assert "0.60" in issues_3dec[0].message
 
     # 3. Large error: 10000.00 vs 6000.00 + 3995.50 (diff=4.50)
     table_large_err = [
@@ -718,15 +721,15 @@ def test_remediation_r2_settlement_vs_budget_scope_isolation():
     assert "未找到收入决算情况说明章节" in str(exc_info.value)
 
 
-def test_remediation_r2_v220_fine_and_coarse_precision():
-    """R2-P1-3: V33-220 dynamic precision handles fine mismatches and coarse tolerance."""
+def test_remediation_r2_v220_portable_amount_tolerance():
+    """Portable policy accepts sub-0.5 万元 differences and retains coarse checks."""
     narrative_template = (
         "三、支出决算情况说明\n"
         "2025年度支出合计100.00万元，其中：基本支出{basic}万元，占60.00%；项目支出40.00万元，占40.00%。"
     )
     headers = ["功能分类科目编码", "功能分类科目名称", "本年支出合计", "基本支出", "项目支出"]
 
-    # Fine precision: table basic 60.000, narrative basic 60.004 -> diff 0.004 > envelope 0.0010 -> mismatch
+    # Table basic 60.000, narrative basic 60.004 -> within 0.5 万元 policy tolerance.
     text_fine = narrative_template.format(basic="60.004")
     table_fine = [headers, ["合计", "合计", "100.00", "60.000", "40.00"]]
     doc_fine = build_document(
@@ -736,11 +739,7 @@ def test_remediation_r2_v220_fine_and_coarse_precision():
         100,
     )
     issues_fine = R33220_Narrative3_T3().apply(doc_fine)
-    assert len(issues_fine) == 1
-    assert "说明3↔T3基本支出不一致" in issues_fine[0].message
-    assert "60.004" in issues_fine[0].message
-    assert "60.000" in issues_fine[0].message
-    assert "0.004" in issues_fine[0].message
+    assert len(issues_fine) == 0
 
     # Coarse precision: table basic 60.04, narrative basic 60.0 -> diff 0.04 <= envelope 0.055 -> match
     text_coarse = narrative_template.format(basic="60.0")
@@ -759,7 +758,7 @@ def test_remediation_r2_bud103_three_decimals_dynamic_envelope():
     """R2-P1-3: BUD-103 dynamic envelope flags 3-decimal mismatch exceeding tolerance."""
     table_t8 = [
         ["科目名称", "合计", "人员经费", "公用经费"],
-        ["合计", "100.000", "60.000", "39.995"],
+        ["合计", "100.000", "60.000", "39.400"],
     ]
     doc = build_document(
         "bud103_3dec.pdf",
@@ -771,8 +770,8 @@ def test_remediation_r2_bud103_three_decimals_dynamic_envelope():
     assert len(issues) == 1
     assert "T8勾稽错误" in issues[0].message
     assert "100.000" in issues[0].message
-    assert "99.995" in issues[0].message
-    assert "0.005" in issues[0].message
+    assert "99.400" in issues[0].message
+    assert "0.600" in issues[0].message
 
 
 def test_remediation_r2_log_scanner_broad_keyword_exemption():
@@ -971,14 +970,14 @@ def test_remediation_r3_p1_2a_bud105_unit_mismatch_detected():
 # ---------------------------------------------------------------------------
 
 def test_remediation_r3_p1_2b_bud107_three_decimal_mismatch_detected():
-    """T1收入100.000万元，文本100.004万元：差额0.004超过两侧三位精度动态包络0.001，必须检出！"""
+    """T1收入100.000万元，文本100.604万元：差额超过0.5万元政策容差。"""
     t1_table = [
         ["收入总计", "100.000", "支出总计", "100.000"],
     ]
     doc = build_document(
         "bud107_3dp.pdf",
         [
-            "表1 部门财务收支预算总表\n单位：万元\n说明：本年收入预算100.004万元，支出预算100.000万元。",
+            "表1 部门财务收支预算总表\n单位：万元\n说明：本年收入预算100.604万元，支出预算100.000万元。",
         ],
         [[t1_table]],
         100,
@@ -993,7 +992,7 @@ def test_remediation_r3_p1_2b_bud107_three_decimal_mismatch_detected():
 
     inc_issues = [iss for iss in issues if "文本收入预算与T1不一致" in iss.message]
     assert len(inc_issues) == 1, f"Expected 1 income mismatch issue, got {inc_issues}"
-    assert "文本=100.004万元" in inc_issues[0].message
+    assert "文本=100.604万元" in inc_issues[0].message
     assert "表=100.000万元" in inc_issues[0].message
 
 

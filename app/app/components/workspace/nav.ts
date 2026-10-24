@@ -1,5 +1,6 @@
 import {
   Archive,
+  Building2,
   ClipboardCheck,
   FileUp,
   GitBranch,
@@ -14,9 +15,9 @@ import {
 /**
  * 导航结构定义（唯一权威来源）。
  *
- * 当前形态（WP2-C 收口后）：**9 项一级导航**
- * - 「工作区」组 6 项：工作台总览 / 上传中心 / 处理队列 / 审核工作台 /
- *   材料台账 / 导出归档；
+ * 当前形态（WP2-C 收口后）：**10 项一级导航**
+ * - 「工作区」组 7 项：工作台总览 / 上传中心 / 处理队列 / 审核工作台 /
+ *   材料台账 / 部门报告 / 导出归档；
  * - 「管理」组 3 项：质量管理 / 规则与版本 / 系统设置。
  *
  * 两次结构调整的来龙去脉（都是显式决定，不是顺手挪动）：
@@ -66,7 +67,7 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     id: "review",
-    label: "审核工作台",
+    label: "人工复核",
     href: "/review",
     icon: ClipboardCheck,
     group: "workspace",
@@ -75,7 +76,8 @@ export const NAV_ITEMS: NavItem[] = [
   },
   // 「材料台账」（WP2-A 引入，WP2-C 定位于审核工作台之后）：
   // 按地区/主管部门/主体看"应收材料到没到、处理到哪一步"。
-  { id: "materials", label: "材料台账", href: "/materials", icon: Library, group: "workspace", adminOnly: false },
+  { id: "materials", label: "区域报送台账", href: "/materials", icon: Library, group: "workspace", adminOnly: false },
+  { id: "reports", label: "部门报告", href: "/reports", icon: Building2, group: "workspace", adminOnly: false },
   { id: "archive", label: "导出归档", href: "/archive", icon: Archive, group: "workspace", adminOnly: false },
   { id: "quality", label: "质量管理", href: "/quality", icon: ShieldCheck, group: "admin", adminOnly: true },
   { id: "rules", label: "规则与版本", href: "/rules", icon: GitBranch, group: "admin", adminOnly: true },
@@ -86,6 +88,14 @@ export const NAV_GROUP_LABELS: Record<NavGroupId, string> = {
   workspace: "工作区",
   admin: "管理",
 };
+
+/** 客户端独立导航；工作人员原有导航不被替换。 */
+export const SUPERVISOR_NAV_ITEMS: NavItem[] = [
+  { id: "supervision", label: "主管总览", href: "/supervision", icon: LayoutDashboard, group: "workspace", adminOnly: false },
+  { id: "supervision-materials", label: "报送台账", href: "/supervision/materials", icon: Library, group: "workspace", adminOnly: false },
+  { id: "supervision-issues", label: "问题分析", href: "/supervision/issues", icon: ClipboardCheck, group: "workspace", adminOnly: false },
+  { id: "supervision-remediation", label: "整改追踪", href: "/supervision/remediation", icon: GitBranch, group: "workspace", adminOnly: false },
+];
 
 /**
  * 已退出一级导航、但路由仍然可达的兼容入口标题。
@@ -100,7 +110,8 @@ export const LEGACY_ROUTE_LABELS: Record<string, string> = {
 
 /** 供中间件/路由守卫判断某路径是否属于「管理」分组（用于非管理员访问拒绝）。 */
 export function findNavItemByPathname(pathname: string): NavItem | undefined {
-  return NAV_ITEMS.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
+  return [...SUPERVISOR_NAV_ITEMS, ...NAV_ITEMS].sort((a, b) => b.href.length - a.href.length)
+    .find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
 }
 
 export function isAdminOnlyPathname(pathname: string): boolean {

@@ -4,6 +4,7 @@
 """
 import re
 import logging
+import unicodedata
 from typing import Optional, Tuple, List, Set
 from src.schemas.organization import Organization
 from src.services.org_storage import get_org_storage
@@ -51,26 +52,13 @@ class OrgMatcher:
         # 合并文件名和首页文本作为匹配源
         raw_search_text = f"{filename} {first_page_text}"
         
-        # 清理文本
-        search_text = self._clean_text(raw_search_text)
-        
-        best_match: Optional[Organization] = None
-        best_score = 0.0
-        
-        organizations = self.storage.get_all()
-        
-        # 收集所有候选匹配及其分数
-        candidates = []
-        for org in organizations:
-            score = self._calculate_match_score(org, search_text, raw_search_text=raw_search_text)
-            if score > 0:
-                candidates.append((org, score))
-        
-        # 按分数降序排序，分数相同时按名称长度降序（优先最具体的）
-        candidates.sort(key=lambda x: (x[1], len(x[0].name)), reverse=True)
-        
-        if candidates:
-            best_match, best_score = candidates[0]
+        candidates = self.suggest_matches(filename, first_page_text, top_n=2)
+        best_match, best_score = candidates[0] if candidates else (None, 0.0)
+        issuer, _scope = self._cover_context(first_page_text)
+        if len(candidates) > 1 and self._match_sort_key(candidates[0], filename, issuer) == self._match_sort_key(candidates[1], filename, issuer):
+            # 同名异级/异父组织不能依赖目录插入顺序自动选择。
+            logger.info("Ambiguous organization match for '%s'", filename)
+            return None, 0.0
 
         if (
             best_match is not None
@@ -91,6 +79,51 @@ class OrgMatcher:
         
         logger.info(f"No confident match for '{filename}' (best score: {best_score:.2f})")
         return None, 0
+
+    @staticmethod
+    def _literal_name(text: object) -> str:
+        return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(text or "")))
+
+    def _cover_context(self, first_page_text: str) -> Tuple[str, str]:
+        """只取封面主体及年度标题，避免正文中的下属单位干扰归属。"""
+        if not first_page_text.strip():
+            return "", ""
+        from src.services.document_profile_resolver import detect_cover_facts
+
+        facts = detect_cover_facts([first_page_text])
+        title = facts["cover_title"]
+        issuer = facts["cover_org_name"]
+        if not facts["cover_org_label"] and title:
+            lines = [line.strip() for line in first_page_text.splitlines() if line.strip()]
+            title_line = title.splitlines()[0]
+            if title_line in lines[:20]:
+                index = lines.index(title_line)
+                # 保留原件的括号别名、本级标识以及折行名称。
+                prefix = re.split(r"20\d{2}", title_line, maxsplit=1)[0]
+                block = "".join(line for line in lines[:index] if not line.isdigit()) + prefix
+                if 3 <= len(self._literal_name(block)) <= 240 and not re.search(r"目录|目次|情况说明", block):
+                    issuer = block
+        scope = facts["cover_scope_hint"]
+        compact_title = self._literal_name(title)
+        if not scope:
+            if re.search(r"本级|本部", issuer):
+                scope = "unit"
+            elif re.search(r"部门(?:预算|决算)", compact_title):
+                scope = "department"
+            elif re.search(r"单位(?:预算|决算)", compact_title):
+                scope = "unit"
+        return issuer, scope
+
+    def _match_sort_key(self, match: Tuple[Organization, float], filename: str, issuer: str):
+        org, score = match
+        source = issuer or filename
+        literal = self._literal_name(org.name)
+        full_name = bool(literal and literal in self._literal_name(source))
+        raw_name = re.sub(r"\s+", "", org.name)
+        raw_filename = re.sub(r"\s+", "", self._clean_text(filename))
+        raw_issuer = re.sub(r"\s+", "", issuer)
+        exact_spelling = raw_name in {raw_filename, raw_issuer}
+        return (score, full_name, len(literal) if full_name else 0, exact_spelling, len(literal))
     
     def _clean_text(self, text: str) -> str:
         """清理文本"""
@@ -346,17 +379,24 @@ class OrgMatcher:
         """
         raw_search_text = f"{filename} {first_page_text}"
         search_text = self._clean_text(raw_search_text)
+        issuer, scope = self._cover_context(first_page_text)
+        if issuer:
+            # 封面已明确主体时，文件名不能覆盖原件身份。
+            search_text = self._clean_text(issuer)
+            raw_search_text = issuer + {"department": " 部门", "unit": " 单位"}.get(scope, "")
         
         organizations = self.storage.get_all()
         matches = []
         
         for org in organizations:
             score = self._calculate_match_score(org, search_text, raw_search_text=raw_search_text)
+            if issuer and scope and org.level in {"department", "unit"} and org.level != scope:
+                score = min(score, 0.5)
             if score > 0:
                 matches.append((org, score))
         
         # 按分数降序排列
-        matches.sort(key=lambda x: x[1], reverse=True)
+        matches.sort(key=lambda item: self._match_sort_key(item, filename, issuer), reverse=True)
         return matches[:top_n]
 
 

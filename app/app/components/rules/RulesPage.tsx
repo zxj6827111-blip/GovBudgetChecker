@@ -36,6 +36,8 @@ export function RulesPage() {
   const [versionFailed, setVersionFailed] = useState(false);
   const [entries, setEntries] = useState<RulesEntry[]>([]);
   const [entriesTotal, setEntriesTotal] = useState<number | null>(null);
+  // 读取中与"读取失败/无条目"必须区分：加载期间不能先给出"暂无法获取"的结论。
+  const [entriesLoading, setEntriesLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,6 +79,10 @@ export function RulesPage() {
         }
       } catch {
         // 保持空列表：条目区显示"暂无法获取规则条目"降级态。
+      } finally {
+        if (!cancelled) {
+          setEntriesLoading(false);
+        }
       }
     }
 
@@ -148,7 +154,15 @@ export function RulesPage() {
         className="mt-8"
         data-testid="gbc-rules-entries-card"
       >
-        {entries.length === 0 ? (
+        {entries.length === 0 && entriesLoading ? (
+          <div
+            className="rounded-card border border-dashed border-border bg-surface-100 p-6 text-center text-sm text-slate-500"
+            data-testid="gbc-rules-entries-loading"
+            role="status"
+          >
+            正在读取规则条目…
+          </div>
+        ) : entries.length === 0 ? (
           <div
             className="rounded-card border border-dashed border-border bg-surface-100 p-6 text-center text-sm text-slate-500"
             data-testid="gbc-rules-entries-empty"
@@ -209,7 +223,7 @@ export function RulesPage() {
             覆盖率过低，本页不渲染历史版本分布，避免给人&ldquo;全量可追溯&rdquo;的错觉。
           </li>
           <li>
-            本页展示的是**当前生效**的规则集与引擎版本，两者来源不同：
+            本页展示的是<strong className="font-semibold text-slate-700">当前生效</strong>的规则集与引擎版本，两者来源不同：
             前者来自 RULES_FILE 指向的 YAML 文件，后者来自仓库声明的引擎版本
             （provenance.ENGINE_VERSION），均为只读展示。
           </li>

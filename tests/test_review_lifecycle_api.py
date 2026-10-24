@@ -50,6 +50,7 @@ from src.schemas.review_lifecycle import (
 )
 from src.services import org_storage as org_storage_module
 from src.services import review_lifecycle_service
+from src.schemas.review_worklist import ReviewWorklistData
 from src.services.user_store import reset_user_store
 
 API_KEY = os.getenv("GOVBUDGET_API_KEY", "change_me_to_a_strong_secret")
@@ -326,6 +327,45 @@ def test_reviews_require_login(client, monkeypatch):
     assert client.post(f"/api/reviews/{SLOT_MINE}/complete").status_code == 401
     assert client.post(f"/api/reviews/{SLOT_MINE}/reopen").status_code == 401
     assert client.get("/api/reviews", params={"job_uuid": "job-1"}).status_code == 401
+    assert client.get("/api/reviews/worklist").status_code == 401
+
+
+def test_worklist_passes_material_scope_and_job_authorization(client, org_tree, monkeypatch):
+    from api.routes import jobs as job_routes
+
+    token = _unit_user(client, [org_tree["sub_unit"]])
+
+    async def _jobs(request, limit=None, offset=0):
+        return []
+
+    async def _worklist(conn, **kwargs):
+        assert org_tree["sub_unit"] in kwargs["visible_org_ids"]
+        assert org_tree["sibling_unit"] not in kwargs["visible_org_ids"]
+        assert kwargs["job_accessible"]("denied-job") is False
+        return ReviewWorklistData(viewer=kwargs["viewer"])
+
+    monkeypatch.setattr(job_routes, "list_jobs", _jobs)
+    monkeypatch.setattr(reviews_routes, "load_review_worklist", _worklist)
+    monkeypatch.setattr(reviews_routes, "_job_access_ok", lambda user, job_id: False)
+    response = client.get("/api/reviews/worklist", headers=_headers(token))
+    assert response.status_code == 200
+    assert response.json()["data"]["pending_total"] == 0
+
+
+def test_worklist_database_failure_is_503_not_empty_list(client, monkeypatch):
+    from api.routes import jobs as job_routes
+
+    token = _admin(client)
+
+    async def _jobs(request, limit=None, offset=0):
+        return []
+
+    async def _unavailable():
+        raise ConnectionError("database unavailable")
+
+    monkeypatch.setattr(job_routes, "list_jobs", _jobs)
+    monkeypatch.setattr(reviews_routes, "_open_connection", _unavailable)
+    assert client.get("/api/reviews/worklist", headers=_headers(token)).status_code == 503
 
 
 def test_missing_slot_returns_404(client):

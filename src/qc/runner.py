@@ -49,6 +49,8 @@ class QCRunner:
     
     async def execute(self) -> int:
         """Execute all QC rules and return run_id."""
+        from src.qc.source_version_guard import require_legacy_qc_source
+        await require_legacy_qc_source(self.conn, self.document_version_id)
         # Create QC run
         self.run_id = await self.conn.fetchval("""
             INSERT INTO qc_runs_v2 (document_version_id)

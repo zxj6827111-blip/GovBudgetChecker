@@ -73,6 +73,7 @@ export async function GET() {
       if (!localSession.user.is_admin) {
         return forbiddenResponse();
       }
+
       return NextResponse.json({ users: await listLocalUsers() }, { status: 200 });
     }
 
@@ -104,6 +105,7 @@ export async function POST(request: NextRequest) {
       if (!localSession.user.is_admin) {
         return forbiddenResponse();
       }
+      if (body.is_read_only === true) return NextResponse.json({ detail: "主管只读账号需要后端用户服务，当前本地登录模式不支持" }, { status: 503 });
 
       try {
         const user = await createLocalUser({

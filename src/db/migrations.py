@@ -1300,7 +1300,427 @@ MIGRATIONS: List[Dict[str, Any]] = [
             "ON review_obligation_decisions (slot_id, review_session_id)",
         ]
     },
+    {
+        # ------------------------------------------------------------------
+        # ZC-01：统一解析产物存储（SYS-01/15/16）
+        #
+        # 版本化解析运行 + 表实例 + 单元格 + 事实 + 证据。新唯一键包含
+        # 解析运行与独立表实例，不再以"文档版本、表种、行列号"作为唯一身份；
+        # 同一 PDF 的部门汇总表与本级表、不同年度同种表各自独立成行。
+        # 旧表（fiscal_table_cells / fiscal_table_instances /
+        # fact_fiscal_line_items）保留历史读取与既有消费方，不删不改语义。
+        # ------------------------------------------------------------------
+        "id": "2026-10-01_0022_unified_parse_storage",
+        "description": "Unified parse artifact storage: parse_runs, parse_table_instances, parse_table_cells, parse_facts, parse_evidence; legacy fact table gains normalized_amount/instance_uid",
+        "sql": [
+            """
+            CREATE TABLE IF NOT EXISTS parse_runs (
+                id BIGSERIAL PRIMARY KEY,
+                parse_run_uid TEXT NOT NULL,
+                document_version_id BIGINT NOT NULL,
+                source_file_hash TEXT NOT NULL,
+                parser_name TEXT NOT NULL DEFAULT 'pdfplumber',
+                parser_fingerprint TEXT NOT NULL DEFAULT '',
+                config_fingerprint TEXT NOT NULL DEFAULT '',
+                ocr_model_fingerprint TEXT,
+                page_count INTEGER NOT NULL DEFAULT 0,
+                page_states JSONB,
+                status TEXT NOT NULL DEFAULT 'completed',
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE (parse_run_uid)
+            )
+            """,
+            # 解析缓存命中键：同一原件 + 同一解析器/配置/OCR 指纹 → 复用，不重解析
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_parse_runs_cache_key
+            ON parse_runs (
+                document_version_id,
+                source_file_hash,
+                parser_fingerprint,
+                config_fingerprint,
+                COALESCE(ocr_model_fingerprint, '')
+            )
+            WHERE status = 'completed'
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_parse_runs_version ON parse_runs(document_version_id)",
+            """
+            CREATE TABLE IF NOT EXISTS parse_table_instances (
+                id BIGSERIAL PRIMARY KEY,
+                parse_run_id BIGINT NOT NULL REFERENCES parse_runs(id) ON DELETE CASCADE,
+                instance_uid TEXT NOT NULL,
+                document_version_id BIGINT NOT NULL,
+                table_code TEXT NOT NULL,
+                title TEXT,
+                org_name TEXT,
+                fiscal_year INTEGER,
+                fund_scope TEXT,
+                page_start INTEGER,
+                page_end INTEGER,
+                row_count INTEGER DEFAULT 0,
+                confidence REAL,
+                column_mappings JSONB,
+                identity_conflict BOOLEAN DEFAULT FALSE,
+                conflict_reasons JSONB,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE (parse_run_id, instance_uid)
+            )
+            """,
+            # 表种不再唯一：同文档同表种多实例并存（SYS-16）
+            "CREATE INDEX IF NOT EXISTS idx_parse_table_instances_version_code "
+            "ON parse_table_instances(document_version_id, table_code)",
+            """
+            CREATE TABLE IF NOT EXISTS parse_table_cells (
+                id BIGSERIAL PRIMARY KEY,
+                parse_run_id BIGINT NOT NULL REFERENCES parse_runs(id) ON DELETE CASCADE,
+                instance_uid TEXT NOT NULL,
+                row_idx INTEGER NOT NULL,
+                col_idx INTEGER NOT NULL,
+                raw_text TEXT,
+                normalized_text TEXT,
+                numeric_value DOUBLE PRECISION,
+                normalized_value_wan NUMERIC,
+                unit_hint TEXT,
+                presence TEXT,
+                page_number INTEGER,
+                bbox JSONB,
+                is_header BOOLEAN DEFAULT FALSE,
+                confidence REAL,
+                extraction_method TEXT,
+                row_span INTEGER DEFAULT 1,
+                col_span INTEGER DEFAULT 1,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE (parse_run_id, instance_uid, row_idx, col_idx)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_parse_table_cells_run "
+            "ON parse_table_cells(parse_run_id, instance_uid)",
+            # RC-02：合并视图单元格的来源物理身份——证据格 ID 可回溯到原页原格
+            "ALTER TABLE parse_table_cells ADD COLUMN IF NOT EXISTS origin_fragment_uid TEXT",
+            "ALTER TABLE parse_table_cells ADD COLUMN IF NOT EXISTS origin_row_idx INTEGER",
+            """
+            CREATE TABLE IF NOT EXISTS parse_facts (
+                id BIGSERIAL PRIMARY KEY,
+                parse_run_id BIGINT NOT NULL REFERENCES parse_runs(id) ON DELETE CASCADE,
+                fact_uid TEXT NOT NULL,
+                instance_uid TEXT,
+                table_code TEXT,
+                indicator TEXT,
+                org_name TEXT,
+                org_scope TEXT,
+                fiscal_year INTEGER,
+                period TEXT,
+                fund_scope TEXT,
+                budget_stage TEXT,
+                subject_code TEXT,
+                subject_name TEXT,
+                classification_level INTEGER,
+                parent_subject_code TEXT,
+                hierarchy_path JSONB,
+                raw_value TEXT,
+                unit TEXT,
+                display_precision INTEGER,
+                normalized_value NUMERIC,
+                recognition_status TEXT DEFAULT 'unverified',
+                confidence REAL,
+                evidence_ids JSONB,
+                extra_dims JSONB,
+                row_order INTEGER,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE (parse_run_id, fact_uid)
+            )
+            """,
+            # 事实身份唯一性由应用层按 identity_key 判定；DB 层给常用查询建索引
+            "CREATE INDEX IF NOT EXISTS idx_parse_facts_identity "
+            "ON parse_facts(parse_run_id, org_name, fiscal_year, indicator, subject_code)",
+            """
+            CREATE TABLE IF NOT EXISTS parse_evidence (
+                id BIGSERIAL PRIMARY KEY,
+                parse_run_id BIGINT NOT NULL REFERENCES parse_runs(id) ON DELETE CASCADE,
+                evidence_id TEXT NOT NULL,
+                file_hash TEXT NOT NULL,
+                physical_page INTEGER,
+                printed_page TEXT,
+                source_cell_id TEXT,
+                source_block_id TEXT,
+                quote TEXT,
+                bbox JSONB,
+                source_method TEXT DEFAULT 'native_text',
+                verification_status TEXT NOT NULL DEFAULT 'unverified',
+                location_level TEXT DEFAULT 'unresolved',
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE (parse_run_id, evidence_id)
+            )
+            """,
+            # 旧事实表补归一值列：历史读取兼容，归一值只对新写入回填，
+            # 迁移不伪造历史数据（任务包 §三 ZC-01 迁移要求）
+            "ALTER TABLE fact_fiscal_line_items ADD COLUMN IF NOT EXISTS normalized_amount NUMERIC",
+            "ALTER TABLE fact_fiscal_line_items ADD COLUMN IF NOT EXISTS instance_uid TEXT",
+        ]
+    },
+    {
+        "id": "2026-10-01_0023_parse_text_and_ocr_candidates",
+        "description": "Persist unified native/OCR text blocks, OCR table candidates, and page coordinate transforms",
+        "sql": [
+            "ALTER TABLE parse_runs ADD COLUMN IF NOT EXISTS text_blocks JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE parse_runs ADD COLUMN IF NOT EXISTS ocr_table_candidates JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE parse_runs ADD COLUMN IF NOT EXISTS coordinate_space TEXT NOT NULL DEFAULT 'pdf_page_points'",
+            "ALTER TABLE parse_runs ADD COLUMN IF NOT EXISTS coordinate_transforms JSONB NOT NULL DEFAULT '{}'::jsonb",
+        ],
+    },
+    {
+        "id": "2026-10-04_0024_parse_physical_fragment_provenance",
+        "description": "Persist physical table-fragment metadata for faithful parse-cache reconstruction",
+        "sql": [
+            """
+            CREATE TABLE IF NOT EXISTS parse_table_fragments (
+                id BIGSERIAL PRIMARY KEY,
+                parse_run_id BIGINT NOT NULL REFERENCES parse_runs(id) ON DELETE CASCADE,
+                instance_uid TEXT NOT NULL,
+                fragment_uid TEXT NOT NULL,
+                table_code TEXT NOT NULL,
+                title TEXT,
+                page_number INTEGER,
+                table_index INTEGER,
+                bbox JSONB,
+                header_row_count INTEGER DEFAULT 0,
+                confidence REAL,
+                extraction_method TEXT,
+                unit_hint TEXT,
+                UNIQUE (parse_run_id, instance_uid, fragment_uid)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_parse_table_fragments_run_instance ON parse_table_fragments(parse_run_id, instance_uid)",
+        ],
+    },
+    {
+        "id": "2026-10-04_0025_parse_physical_fragment_payload",
+        "description": "Preserve original physical table grids and cells alongside merged views",
+        "sql": [
+            "ALTER TABLE parse_table_fragments ADD COLUMN IF NOT EXISTS raw_rows JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE parse_table_fragments ADD COLUMN IF NOT EXISTS raw_cells JSONB NOT NULL DEFAULT '[]'::jsonb",
+        ],
+    },
+    {
+        "id": "2026-10-06_0026_ocr_cell_provenance",
+        "description": "Persist actual OCR cell protocol, scores and qualification independently of certification",
+        "sql": ["ALTER TABLE parse_table_cells ADD COLUMN IF NOT EXISTS ocr_provenance JSONB NOT NULL DEFAULT '{}'::jsonb"],
+    },
+    {
+        "id": "2026-10-06_0027_scan_evidence_provenance",
+        "description": "Preserve scan provenance for independent evidence certification",
+        "sql": ["ALTER TABLE parse_evidence ADD COLUMN IF NOT EXISTS source_provenance JSONB NOT NULL DEFAULT '{}'::jsonb"],
+    },
+    {
+        "id": "2026-10-07_0028_expected_material_imports",
+        "description": "Atomic expected-material CSV import receipts; slots retain sole material identity",
+        "sql": ["""CREATE TABLE IF NOT EXISTS expected_material_imports (
+            content_sha256 TEXT PRIMARY KEY CHECK (length(content_sha256)=64),
+            source_sha256 TEXT NOT NULL CHECK (length(source_sha256)=64),
+            actor TEXT NOT NULL, receipt JSONB NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""],
+    },
+    {
+        "id": "2026-10-07_0029_parse_original_columns",
+        "description": "Preserve physical column identities when aligning native continuation grids",
+        "sql": ["ALTER TABLE parse_table_cells ADD COLUMN IF NOT EXISTS origin_col_idx INTEGER"],
+    },
+    {
+        "id": "2026-10-13_0030_supervision",
+        "description": "主管端应交清单确认与材料级整改登记，保留历史记录",
+        "sql": [
+            """CREATE TABLE IF NOT EXISTS supervision_baselines (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                scope_org_id TEXT NOT NULL, fiscal_year INTEGER NOT NULL,
+                report_kind TEXT NOT NULL CHECK (report_kind IN ('budget','final')),
+                slot_ids JSONB NOT NULL, confirmed_by TEXT NOT NULL,
+                note TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )""",
+            "CREATE INDEX IF NOT EXISTS ix_supervision_baselines_scope ON supervision_baselines(scope_org_id,fiscal_year,report_kind,created_at DESC)",
+            """CREATE TABLE IF NOT EXISTS supervision_rounds (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                slot_id UUID NOT NULL REFERENCES material_slots(id) ON DELETE RESTRICT,
+                document_version_id INTEGER NOT NULL REFERENCES fiscal_document_versions(id) ON DELETE RESTRICT,
+                feedback_session_id UUID NOT NULL REFERENCES review_sessions(id) ON DELETE RESTRICT,
+                round_number INTEGER NOT NULL CHECK(round_number > 0),
+                submitted_by TEXT NOT NULL, note TEXT NOT NULL,
+                submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                verification_session_id UUID REFERENCES review_sessions(id) ON DELETE RESTRICT,
+                verification_result JSONB,
+                verified_by TEXT, verified_at TIMESTAMPTZ,
+                UNIQUE(slot_id, document_version_id), UNIQUE(slot_id, round_number)
+            )""",
+        ],
+    },
+    {
+        "id": "2026-10-14_0031_complete_parse_snapshot",
+        "description": "Lossless native physical/logical table cache with immutable payload hash",
+        "sql": [
+            "ALTER TABLE parse_runs ADD COLUMN IF NOT EXISTS artifact_snapshot JSONB",
+            "ALTER TABLE parse_runs ADD COLUMN IF NOT EXISTS artifact_snapshot_hash TEXT",
+        ],
+    },
+    {
+        "id": "2026-10-20_0032_immutable_analysis_fact_snapshots",
+        "description": "Immutable raw/effective fiscal facts and revision publication identity",
+        "sql": [
+            """CREATE TABLE IF NOT EXISTS analysis_fact_snapshots (
+                id BIGSERIAL PRIMARY KEY,
+                job_uuid TEXT NOT NULL,
+                revision_id TEXT NOT NULL,
+                parse_run_id BIGINT NOT NULL REFERENCES parse_runs(id) ON DELETE RESTRICT,
+                source_file_hash TEXT NOT NULL,
+                snapshot_hash TEXT NOT NULL,
+                raw_facts_hash TEXT NOT NULL,
+                effective_facts_hash TEXT NOT NULL,
+                payload JSONB NOT NULL,
+                publication_state TEXT NOT NULL DEFAULT 'validated',
+                mirror_pending BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE(job_uuid, revision_id)
+            )""",
+            "ALTER TABLE analysis_jobs ADD COLUMN IF NOT EXISTS current_fact_revision_id TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_analysis_fact_snapshots_job ON analysis_fact_snapshots(job_uuid, created_at)",
+        ],
+    },
+    {
+        "id": "2026-10-20_0033_lossless_qualification_scores",
+        "description": "Preserve binary64 model and native qualification scores without REAL rounding",
+        "sql": [
+            "ALTER TABLE parse_facts ALTER COLUMN confidence TYPE DOUBLE PRECISION USING confidence::double precision",
+            "ALTER TABLE parse_table_cells ALTER COLUMN confidence TYPE DOUBLE PRECISION USING confidence::double precision",
+            "ALTER TABLE parse_table_instances ALTER COLUMN confidence TYPE DOUBLE PRECISION USING confidence::double precision",
+            "ALTER TABLE parse_table_fragments ALTER COLUMN confidence TYPE DOUBLE PRECISION USING confidence::double precision",
+        ],
+    },
+    {
+        'id': '2026-10-20_0034_snapshot_integrity_guards',
+        'description': 'Protect immutable fiscal payloads and retain version-bound analysis results',
+        'sql': [
+            """CREATE TABLE IF NOT EXISTS analysis_revision_results (
+                job_uuid TEXT NOT NULL, revision_id TEXT NOT NULL, core_hash TEXT NOT NULL,
+                payload JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY(job_uuid,revision_id),
+                FOREIGN KEY(job_uuid,revision_id) REFERENCES analysis_fact_snapshots(job_uuid,revision_id)
+            )""",
+            """CREATE OR REPLACE FUNCTION guard_fiscal_snapshot_immutable() RETURNS trigger
+            LANGUAGE plpgsql AS $$ BEGIN
+                IF TG_OP='DELETE' THEN RAISE EXCEPTION 'fiscal snapshot is immutable'; END IF;
+                IF ROW(NEW.id,NEW.job_uuid,NEW.revision_id,NEW.parse_run_id,NEW.source_file_hash,
+                       NEW.snapshot_hash,NEW.raw_facts_hash,NEW.effective_facts_hash,NEW.payload,NEW.created_at)
+                   IS DISTINCT FROM
+                   ROW(OLD.id,OLD.job_uuid,OLD.revision_id,OLD.parse_run_id,OLD.source_file_hash,
+                       OLD.snapshot_hash,OLD.raw_facts_hash,OLD.effective_facts_hash,OLD.payload,OLD.created_at)
+                THEN RAISE EXCEPTION 'fiscal snapshot payload is immutable'; END IF;
+                RETURN NEW;
+            END $$""",
+            'DROP TRIGGER IF EXISTS fiscal_snapshot_immutable ON analysis_fact_snapshots',
+            """CREATE TRIGGER fiscal_snapshot_immutable BEFORE UPDATE OR DELETE ON analysis_fact_snapshots
+               FOR EACH ROW EXECUTE FUNCTION guard_fiscal_snapshot_immutable()""",
+            """CREATE OR REPLACE FUNCTION guard_analysis_revision_immutable() RETURNS trigger
+               LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'analysis revision is immutable'; END $$""",
+            'DROP TRIGGER IF EXISTS analysis_revision_immutable ON analysis_revision_results',
+            """CREATE TRIGGER analysis_revision_immutable BEFORE UPDATE OR DELETE ON analysis_revision_results
+               FOR EACH ROW EXECUTE FUNCTION guard_analysis_revision_immutable()""",
+        ],
+    },
+    {
+        'id': '2026-10-20_0035_published_fact_projections',
+        'description': '有效事实兼容投影与权威分析版本在同一事务发布',
+        'sql': [
+            """CREATE TABLE IF NOT EXISTS published_fact_projections (
+                document_id INTEGER PRIMARY KEY REFERENCES fiscal_documents(id),
+                document_version_id INTEGER NOT NULL REFERENCES fiscal_document_versions(id),
+                job_uuid TEXT NOT NULL, revision_id TEXT NOT NULL,
+                snapshot_hash TEXT NOT NULL, effective_facts_hash TEXT NOT NULL,
+                receipt JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                FOREIGN KEY(job_uuid,revision_id) REFERENCES analysis_fact_snapshots(job_uuid,revision_id)
+            )""",
+            "ALTER TABLE org_dept_annual_report ADD COLUMN IF NOT EXISTS fact_projection JSONB",
+        ],
+    },
+    {
+        'id': '2026-10-20_0036_legacy_projection_archives',
+        'description': '替换当前兼容投影前保留旧行及其数据库身份',
+        'sql': [
+            """CREATE TABLE IF NOT EXISTS legacy_projection_archives (
+                document_version_id INTEGER NOT NULL REFERENCES fiscal_document_versions(id),
+                payload_hash TEXT NOT NULL, payload_text TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY(document_version_id,payload_hash)
+            )""",
+            """CREATE OR REPLACE FUNCTION guard_legacy_projection_archive() RETURNS trigger
+               LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'legacy projection archive is immutable'; END $$""",
+            'DROP TRIGGER IF EXISTS legacy_projection_archive_immutable ON legacy_projection_archives',
+            """CREATE TRIGGER legacy_projection_archive_immutable BEFORE UPDATE OR DELETE ON legacy_projection_archives
+               FOR EACH ROW EXECUTE FUNCTION guard_legacy_projection_archive()""",
+        ],
+    },
+    {
+        'id': '2026-10-20_0037_historical_rebuild_batches',
+        'description': '历史候选版本发布和回滚保留不可变批次记录',
+        'sql': [
+            """CREATE TABLE IF NOT EXISTS analysis_rebuild_events (
+                event_id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, action TEXT NOT NULL,
+                payload JSONB NOT NULL, payload_hash TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )""",
+            """CREATE TRIGGER analysis_rebuild_event_immutable BEFORE UPDATE OR DELETE ON analysis_rebuild_events
+               FOR EACH ROW EXECUTE FUNCTION guard_legacy_projection_archive()""",
+        ],
+    },
+    {
+        # 复核清单、主管端、材料详情按 metadata.structured_ingest.document_version_id 关联
+        # 文件版本；metadata 每行展开约 1.6MB，按表达式关联要把整列逐行解开（复核清单
+        # 两条查询合计约 1.3 秒）。生成列由数据库在写 metadata 时同步计算，与原表达式
+        # 逐字一致：非纯数字的值为 NULL（不参与关联），NUMERIC 避免超长数字串溢出。
+        # 另两列是复核清单摘要读取的两个键，清单不再为它们解开整列 metadata。
+        "id": "2026-10-22_0038_analysis_job_lookup_columns",
+        "description": "Generated lookup columns on analysis_jobs for version joins and worklist summaries",
+        "sql": [
+            """ALTER TABLE analysis_jobs
+                ADD COLUMN IF NOT EXISTS structured_document_version_id NUMERIC GENERATED ALWAYS AS (
+                    CASE WHEN (metadata -> 'structured_ingest' ->> 'document_version_id') ~ '^[0-9]+$'
+                         THEN (metadata -> 'structured_ingest' ->> 'document_version_id')::numeric END
+                ) STORED,
+                ADD COLUMN IF NOT EXISTS result_obligation_coverage JSONB GENERATED ALWAYS AS (
+                    metadata -> 'result_meta' -> 'obligation_coverage'
+                ) STORED,
+                ADD COLUMN IF NOT EXISTS structured_review_items JSONB GENERATED ALWAYS AS (
+                    metadata -> 'structured_ingest' -> 'review_items'
+                ) STORED""",
+            "CREATE INDEX IF NOT EXISTS idx_jobs_structured_version ON analysis_jobs(structured_document_version_id)",
+        ],
+    },
+    {
+        "id": "2026-10-23_0039_material_document_identity",
+        "description": "文件登记按组织身份隔离并提供材料列表轻量授权投影",
+        "sql": [
+            "ALTER TABLE fiscal_documents ADD COLUMN IF NOT EXISTS subject_org_id TEXT NOT NULL DEFAULT ''",
+            # 只回填有且仅有一个槽位主体的文档，歧义历史保留为空，交给归属修复。
+            """UPDATE fiscal_documents d SET subject_org_id=known.subject_org_id FROM (
+                SELECT v.document_id,min(s.subject_org_id) AS subject_org_id
+                FROM fiscal_document_versions v JOIN material_slots s ON s.id=v.slot_id
+                GROUP BY v.document_id HAVING count(DISTINCT s.subject_org_id)=1
+            ) known WHERE known.document_id=d.id AND d.subject_org_id=''""",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_fiscal_documents_subject_year_type ON fiscal_documents "
+            "(org_unit_id,COALESCE(fiscal_year,-1),doc_type,subject_org_id)",
+            "DROP INDEX IF EXISTS uq_fiscal_documents_org_year_type",
+            """ALTER TABLE analysis_jobs
+                ADD COLUMN IF NOT EXISTS access_organization_id TEXT GENERATED ALWAYS AS (metadata->>'organization_id') STORED,
+                ADD COLUMN IF NOT EXISTS access_created_by TEXT GENERATED ALWAYS AS (metadata->>'created_by') STORED,
+                ADD COLUMN IF NOT EXISTS summary_filename TEXT GENERATED ALWAYS AS (metadata->>'filename') STORED,
+                ADD COLUMN IF NOT EXISTS summary_organization_name TEXT GENERATED ALWAYS AS (metadata->>'organization_name') STORED,
+                ADD COLUMN IF NOT EXISTS summary_report_year TEXT GENERATED ALWAYS AS (metadata->>'report_year') STORED,
+                ADD COLUMN IF NOT EXISTS summary_report_kind TEXT GENERATED ALWAYS AS (metadata->>'report_kind') STORED""",
+        ],
+    },
 ]
+
+
+from src.db.reporting_task_migration import MIGRATION as REPORTING_TASK_MIGRATION
+
+MIGRATIONS.append(REPORTING_TASK_MIGRATION)
 
 
 async def ensure_migrations_table(conn: asyncpg.Connection, schema: str):

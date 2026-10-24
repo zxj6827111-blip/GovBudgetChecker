@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { SectionTitle } from "@/components/ui";
-import SystemManagementPanel from "@/components/admin/SystemManagementPanel";
+import SystemManagementPanel, { type OrganizationsLoadStatus } from "@/components/admin/SystemManagementPanel";
 import type { OrganizationRecord } from "@/lib/uiAdapters";
 
 interface OrganizationTreeNode {
@@ -58,6 +58,7 @@ function flattenOrgTree(nodes: OrganizationTreeNode[] | undefined | null): Organ
 
 export function SettingsPage() {
   const [organizations, setOrganizations] = useState<OrganizationRecord[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
 
   const loadOrganizations = useCallback(async () => {
@@ -69,11 +70,15 @@ export function SettingsPage() {
       }
       const payload = (await response.json()) as OrganizationTreeResponse;
       setOrganizations(flattenOrgTree(payload.tree));
+      setLoaded(true);
       setLoadFailed(false);
     } catch {
       setLoadFailed(true);
     }
   }, []);
+
+  // 刷新失败时保留上次成功的列表；从未成功过才算"失败"，避免把空数组显示成 0 个组织。
+  const organizationsStatus: OrganizationsLoadStatus = loaded ? "ready" : loadFailed ? "failed" : "loading";
 
   useEffect(() => {
     void loadOrganizations();
@@ -83,7 +88,7 @@ export function SettingsPage() {
     <div className="p-8" data-testid="gbc-settings-page">
       <SectionTitle
         title="系统设置"
-        desc="组织架构、用户与权限、运维操作、规则包与配置留档（沿用既有系统管理能力）。"
+        desc="管理大模型配置、组织架构、用户权限、规则包和导出模板。"
       />
 
       {loadFailed ? (
@@ -98,6 +103,7 @@ export function SettingsPage() {
       <div className="mt-6">
         <SystemManagementPanel
           organizations={organizations}
+          organizationsStatus={organizationsStatus}
           onRefresh={() => void loadOrganizations()}
         />
       </div>

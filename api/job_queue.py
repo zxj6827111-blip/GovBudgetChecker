@@ -13,7 +13,7 @@ import os
 import secrets
 import time
 from pathlib import Path
-from typing import Awaitable, Callable, Dict, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 
 from api import runtime
 from src.utils.logging_config import log_context, safe_log_extra
@@ -56,6 +56,8 @@ class DurableJobQueue:
             ),
         )
         self._instance_id = f"{os.getpid()}-{secrets.token_hex(8)}"
+        # job_id -> ((mtime_ns, size), status, retry_not_before)：未变化的状态文件不重复解析。
+        self._status_probe_cache: Dict[str, Tuple[Tuple[int, int], str, float]] = {}
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._workers: list[asyncio.Task[None]] = []
         self._poller: Optional[asyncio.Task[None]] = None
@@ -114,17 +116,50 @@ class DurableJobQueue:
         """Requeue pending jobs after process restart."""
         return await self.discover_pending_jobs(mark_requeued=True)
 
+    def _scan_resumable_jobs(self) -> List[Tuple[Path, float, Optional[Dict[str, Any]]]]:
+        """找出状态可续跑的任务：(目录, retry_not_before, 本轮解析到的状态或 None)。
+
+        轮询每 2 秒一次；此前每轮都完整解析全部 status.json（单个可达数 MB，277 个
+        任务合计约 850MB），且在事件循环里同步执行，所有 API 请求随之卡住数秒。
+        这里只在状态文件变化时重新解析，判定只用 status 与 retry_not_before 两个字段。
+        """
+        found: List[Tuple[Path, float, Optional[Dict[str, Any]]]] = []
+        seen: Set[str] = set()
+        for job_dir in runtime.iter_job_dirs():
+            seen.add(job_dir.name)
+            status_file = job_dir / "status.json"
+            try:
+                stat = status_file.stat()
+                signature: Optional[Tuple[int, int]] = (stat.st_mtime_ns, stat.st_size)
+            except OSError:
+                signature = None
+            cached = self._status_probe_cache.get(job_dir.name)
+            status_data: Optional[Dict[str, Any]] = None
+            if signature is not None and cached is not None and cached[0] == signature:
+                state, retry_not_before = cached[1], cached[2]
+            else:
+                status_data = runtime.read_json_file(status_file, default={})
+                state = str(status_data.get("status") or "").lower()
+                retry_not_before = float(status_data.get("retry_not_before") or 0)
+                if signature is not None:
+                    self._status_probe_cache[job_dir.name] = (signature, state, retry_not_before)
+            if state in _RESUMABLE_STATES:
+                found.append((job_dir, retry_not_before, status_data))
+        for job_id in set(self._status_probe_cache) - seen:
+            del self._status_probe_cache[job_id]
+        return found
+
     async def discover_pending_jobs(self, *, mark_requeued: bool = False) -> int:
         """Discover persisted jobs, including jobs submitted after worker startup."""
         resumed = 0
-        for job_dir in runtime.iter_job_dirs():
-            status_file = job_dir / "status.json"
-            status_data = runtime.read_json_file(status_file, default={})
-            state = str(status_data.get("status") or "").lower()
-            if state not in _RESUMABLE_STATES:
+        # 读文件放到线程里，不占用事件循环。
+        for job_dir, retry_not_before, status_data in await asyncio.to_thread(self._scan_resumable_jobs):
+            if retry_not_before > time.time():
                 continue
 
             if mark_requeued:
+                if status_data is None:
+                    status_data = runtime.read_json_file(job_dir / "status.json", default={})
                 self._mark_requeued(job_dir, status_data)
             await self.enqueue(job_dir.name)
             resumed += 1

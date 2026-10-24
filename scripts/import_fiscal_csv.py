@@ -67,14 +67,14 @@ async def ensure_org_and_document(conn) -> int:
     doc_id = await conn.fetchval("""
         INSERT INTO fiscal_documents (org_unit_id, fiscal_year, doc_type)
         VALUES ($1, $2, $3)
-        ON CONFLICT (org_unit_id, fiscal_year, doc_type) DO NOTHING
+        ON CONFLICT (org_unit_id, COALESCE(fiscal_year, -1), doc_type, subject_org_id) DO NOTHING
         RETURNING id
     """, org_id, DEFAULT_FISCAL_YEAR, DEFAULT_DOC_TYPE)
     
     if doc_id is None:
         doc_id = await conn.fetchval("""
             SELECT id FROM fiscal_documents
-            WHERE org_unit_id = $1 AND fiscal_year = $2 AND doc_type = $3
+            WHERE org_unit_id = $1 AND fiscal_year = $2 AND doc_type = $3 AND subject_org_id = ''
         """, org_id, DEFAULT_FISCAL_YEAR, DEFAULT_DOC_TYPE)
     logger.info(f"Document id: {doc_id}")
     

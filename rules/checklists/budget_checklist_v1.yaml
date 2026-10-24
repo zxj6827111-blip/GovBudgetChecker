@@ -1,0 +1,416 @@
+# 预算报告检查点清单（系统默认检查指标）
+# 来源：《普陀区财政预算报告检查点清单（系统核查用）v1.0》；2026-10-22 起作为全系统检查指标，
+# 不按地区单列。每条检查点映射到检查义务（src/engine/check_obligations.py）与规则编号，
+# tests/test_checklist_catalog.py 校验映射完整、义务存在、规则已注册。
+# status: implemented=确定性规则覆盖；partial=部分要素覆盖（见 note）；
+#         ai_assisted=确定性词表提示+AI 语义复核；external=不属 PDF 内容规则（下载环节/上传入口）。
+# decision（非 implemented 条目必填，2026-10-22 用户决议）：closed=按决议不再自动化，
+#         deferred=暂缓待条件具备，ai_only=规则只作提示、进一步判断只交大模型 AI。
+version: checklist-budget-v1
+report_kind: budget
+effective_date: 2026-10-22
+scope: global
+items:
+  - id: A-01
+    dimension: "一、完整性"
+    title: "报告结构齐全"
+    criterion: "各章节标题与内容均存在，报告结构与报告类型（部门／单位）匹配。"
+    status: implemented
+    obligations: [OBL-STRUCT-SECTIONS, OBL-STRUCT-BUDGET-TABLES]
+    rules: [CMM-023, BUD-001]
+  - id: A-02
+    dimension: "一、完整性"
+    title: "封面要素齐备"
+    criterion: "封面同时出现单位全称、“××年区级部门（单位）预算”字样，且“预算主管部门／预算单位”标注正确。"
+    status: implemented
+    obligations: [OBL-STRUCT-COVER]
+    rules: [CMM-019, BUD-003]
+  - id: A-03
+    dimension: "一、完整性"
+    title: "“主要职能”标题及内容"
+    criterion: "标题存在且正文为实际职能描述。"
+    status: implemented
+    obligations: [OBL-STRUCT-SECTIONS, OBL-STRUCT-PLACEHOLDER]
+    rules: [CMM-023, CMM-008]
+  - id: A-04
+    dimension: "一、完整性"
+    title: "“机构设置”标题及内容"
+    criterion: "标题存在，机构数量与实际情况一致，表述与报告类型匹配。"
+    status: partial
+    obligations: [OBL-STRUCT-SECTIONS]
+    rules: [CMM-023]
+    decision: closed
+    note: "“机构设置”标题及内容是否存在已查（CMM-023）；机构数量不做比对——系统按已上传的 PDF 判定哪些单位未上传（2026-10-22 决议）"
+  - id: A-05
+    dimension: "一、完整性"
+    title: "目录与正文标题逐项一致"
+    criterion: "目录与正文逐条比对一致，编号无缺漏。"
+    status: implemented
+    obligations: [OBL-STRUCT-TOC-ALIGN, OBL-NARRATIVE-TOC]
+    rules: [CMM-013, CMM-003, CMM-023]
+  - id: A-06
+    dimension: "一、完整性"
+    title: "预算表清单齐全"
+    criterion: "9张表齐全、名称规范、排列顺序与目录一致，各表结构性行次（含合计行）无缺失。"
+    status: implemented
+    obligations: [OBL-STRUCT-BUDGET-TABLES, OBL-STRUCT-TOC-ALIGN]
+    rules: [BUD-001, CMM-013]
+  - id: A-07
+    dimension: "一、完整性"
+    title: "空表须附“本表无数据”说明"
+    criterion: "空表有内容对应的说明、有数据的表无说明、说明对象无错配。"
+    status: implemented
+    obligations: [OBL-STRUCT-EMPTY-STATEMENT]
+    rules: [BUD-106, CMM-026]
+  - id: A-08
+    dimension: "一、完整性"
+    title: "“其他相关情况说明”内容齐全"
+    criterion: "各小节标题及内容齐全，无整节缺失。"
+    status: implemented
+    obligations: [OBL-STRUCT-SECTIONS, OBL-SG-BUDGET-TABLE]
+    rules: [CMM-023, BUD-001]
+  - id: A-09
+    dimension: "一、完整性"
+    title: "“三公”经费与机关运行经费披露字段齐全"
+    criterion: "各分项及原因说明齐全，与“三公”经费和机关运行经费预算表口径一致。"
+    status: implemented
+    obligations: [OBL-SG-BUDGET-TABLE, OBL-SG-COUNTS]
+    rules: [CMM-001, BUD-104, BUD-107, BUD-115]
+  - id: A-10
+    dimension: "一、完整性"
+    title: "预算编制说明要素齐全"
+    criterion: "上述要素均有实际内容，无整段缺失。"
+    status: implemented
+    obligations: [OBL-TXT-BUDGET-EXPLANATION, OBL-TXT-BUDGET]
+    rules: [BUD-123, BUD-107]
+  - id: A-11
+    dimension: "一、完整性"
+    title: "政府采购预算情况说明齐全"
+    criterion: "总额、三项分项、中小企业及小微企业预留均已披露；无采购预算的已作说明；主体口径与报告类型一致。"
+    status: implemented
+    obligations: [OBL-DISCLOSURE-PROCUREMENT, OBL-STRUCT-SECTIONS]
+    rules: [BUD-121, CMM-023]
+  - id: A-12
+    dimension: "一、完整性"
+    title: "“绩效目标设置情况”与“项目经费情况说明”齐全"
+    criterion: "要素齐全、金额单位正确、无模板提示语残留。"
+    status: implemented
+    obligations: [OBL-PERF-ELEMENTS, OBL-PERF-TARGET, OBL-STRUCT-PLACEHOLDER]
+    rules: [BUD-122, BUD-108, CMM-008]
+  - id: B-01
+    dimension: "二、一致性"
+    title: "单位名称全篇一致且为规范全称"
+    criterion: "全篇名称一致且为规范全称，编制栏均已填写。"
+    status: implemented
+    obligations: [OBL-STRUCT-ORG-NAME, OBL-STRUCT-PUNCTUATION]
+    rules: [CMM-017, CMM-002]
+    note: "规范全称以全文多数写法为准；接入组织台账后可改为以台账全称为准"
+  - id: B-02
+    dimension: "二、一致性"
+    title: "主体口径与层级口径一致"
+    criterion: "主体口径与报告类型匹配、层级口径均为“区级”，全文无混用。"
+    status: implemented
+    obligations: [OBL-STRUCT-TERMINOLOGY]
+    rules: [BUD-113, CMM-018]
+  - id: B-03
+    dimension: "二、一致性"
+    title: "科目名称与预算表一致"
+    criterion: "科目名称逐字一致，层级与预算表口径相符。"
+    status: implemented
+    obligations: [OBL-TXT-BUDGET-NAME]
+    rules: [BUD-109]
+  - id: B-04
+    dimension: "二、一致性"
+    title: "科目编码正确且各表一致"
+    criterion: "编码与名称匹配，跨表一致。"
+    status: partial
+    obligations: [OBL-TEXT-SUBJECT-CODE, OBL-NARRATIVE-CODE-NAME]
+    rules: [CMM-022, CMM-004]
+    decision: deferred
+    note: "功能分类编码-名称全量字典暂缓：待取得权威《政府收支分类科目》后再建立；现只查前导0、经济分类类别、表内重复与文内镜像（2026-10-22 决议）"
+  - id: B-05
+    dimension: "二、一致性"
+    title: "年度表述与报告年度一致"
+    criterion: "非比较语境的年份均为报告年度，比较年度前后统一。"
+    status: implemented
+    obligations: [OBL-TEXT-YEAR, OBL-STRUCT-COVER]
+    rules: [CMM-012, BUD-003, CMM-019]
+  - id: B-06
+    dimension: "二、一致性"
+    title: "正文金额与预算表一致"
+    criterion: "逐项比对一致（合计行容差0.01万元）。"
+    status: implemented
+    obligations: [OBL-TXT-BUDGET, OBL-NARRATIVE-BUDGET-AMOUNT, OBL-TEXT-AMOUNT-UNIT]
+    rules: [BUD-107, BUD-112, CMM-011]
+  - id: B-07
+    dimension: "二、一致性"
+    title: "“三公”经费正文数据与预算表一致"
+    criterion: "逐项（含合计与各分项）一致。"
+    status: implemented
+    obligations: [OBL-SG-BUDGET-TABLE]
+    rules: [CMM-001, BUD-107]
+  - id: B-08
+    dimension: "二、一致性"
+    title: "“财政拨款支出主要内容”与预算表一致"
+    criterion: "科目层级规范（列示到项），名称与金额均与预算表一致。"
+    status: implemented
+    obligations: [OBL-TXT-BUDGET-MAIN-CONTENT, OBL-TXT-BUDGET]
+    rules: [BUD-120, BUD-114]
+  - id: B-09
+    dimension: "二、一致性"
+    title: "增减原因说明与增减方向一致"
+    criterion: "原因说明存在且方向一致，无“基本持平”误用。"
+    status: implemented
+    obligations: [OBL-TREND-COMPARATIVE-LOGIC, OBL-TREND-DIRECTION, OBL-NARRATIVE-BUDGET-AMOUNT]
+    rules: [CMM-005, CMM-006, BUD-111]
+  - id: B-10
+    dimension: "二、一致性"
+    title: "表间同一科目金额一致"
+    criterion: "跨表同一科目金额一致（容差0.01万元）。"
+    status: implemented
+    obligations: [OBL-CROSS-BUDGET-SUBJECT, OBL-CROSS-BUDGET-TABLES]
+    rules: [BUD-119, BUD-105]
+  - id: C-01
+    dimension: "三、数据勾稽"
+    title: "表内合计=各分项之和"
+    criterion: "合计=分项之和（容差0.01万元）。"
+    status: implemented
+    obligations: [OBL-INTERNAL-HIERARCHY-BUDGET, OBL-INTERNAL-DETAIL-ROW]
+    rules: [BUD-118, BUD-110]
+  - id: C-02
+    dimension: "三、数据勾稽"
+    title: "上下级科目（类→款→项）加总一致"
+    criterion: "层级加总一致（容差0.01万元）。"
+    status: implemented
+    obligations: [OBL-INTERNAL-HIERARCHY-BUDGET]
+    rules: [BUD-118]
+  - id: C-03
+    dimension: "三、数据勾稽"
+    title: "收支总表平衡（收入总计=支出总计）"
+    criterion: "两侧相等（容差0.01万元）。"
+    status: implemented
+    obligations: [OBL-INTERNAL-T1-BUDGET, OBL-INTERNAL-T4-BUDGET]
+    rules: [BUD-101, BUD-116]
+  - id: C-04
+    dimension: "三、数据勾稽"
+    title: "财政拨款收支总表与明细表勾稽"
+    criterion: "总表与明细表逐类一致（容差0.01万元）。"
+    status: implemented
+    obligations: [OBL-INTERNAL-T4-BUDGET]
+    rules: [BUD-116]
+  - id: C-05
+    dimension: "三、数据勾稽"
+    title: "基本支出=人员经费+公用经费"
+    criterion: "等式成立（容差0.01万元）。"
+    status: implemented
+    obligations: [OBL-CROSS-BUDGET-TABLES]
+    rules: [BUD-103, BUD-105]
+  - id: C-06
+    dimension: "三、数据勾稽"
+    title: "基本支出+项目支出=合计"
+    criterion: "行列双向等式均成立（容差0.01万元）。"
+    status: implemented
+    obligations: [OBL-INTERNAL-T3-BUDGET-TOTAL, OBL-INTERNAL-DETAIL-ROW]
+    rules: [BUD-102, BUD-110]
+  - id: C-07
+    dimension: "三、数据勾稽"
+    title: "收入总表各来源分项合计=收入总计"
+    criterion: "行列双向加总均等于收入总计（容差0.01万元）。"
+    status: implemented
+    obligations: [OBL-INTERNAL-T2-BUDGET]
+    rules: [BUD-117]
+  - id: C-08
+    dimension: "三、数据勾稽"
+    title: "占比分母口径正确且合计=100%"
+    criterion: "分母口径正确、数值计算正确、合计=100%±0.1%。"
+    status: partial
+    obligations: [OBL-NARRATIVE-SHARE-SUM]
+    rules: [CMM-020]
+    decision: closed
+    note: "占比合计=100%已查（CMM-020）；预算侧逐项分母口径不做自动复算（2026-10-22 决议）"
+  - id: C-09
+    dimension: "三、数据勾稽"
+    title: "增减额与增减率自洽"
+    criterion: "计算正确、精度一致、方向正确。"
+    status: implemented
+    obligations: [OBL-TREND-ZERO-BASE, OBL-NARRATIVE-BUDGET-AMOUNT, OBL-TEXT-AMOUNT-FORMAT]
+    rules: [CMM-007, BUD-111, CMM-010]
+  - id: C-10
+    dimension: "三、数据勾稽"
+    title: "预算编制说明分项加总=所列总额"
+    criterion: "各分项加总与所列总额相等（容差0.01万元）。"
+    status: implemented
+    obligations: [OBL-NARRATIVE-COMPOSITION]
+    rules: [CMM-024]
+  - id: C-11
+    dimension: "三、数据勾稽"
+    title: "“财政拨款支出主要内容”分项加总=财政拨款支出预算总额"
+    criterion: "两者相等（容差0.01万元）。"
+    status: implemented
+    obligations: [OBL-TXT-BUDGET-MAIN-CONTENT]
+    rules: [BUD-120]
+  - id: C-12
+    dimension: "三、数据勾稽"
+    title: "政府采购预算分项加总=总额，且不超总支预算"
+    criterion: "分项加总相等，且各类金额逻辑合理。"
+    status: implemented
+    obligations: [OBL-DISCLOSURE-PROCUREMENT]
+    rules: [BUD-121]
+  - id: C-13
+    dimension: "三、数据勾稽"
+    title: "“三公”经费分项加总=合计"
+    criterion: "分项加总等于合计（容差0.01万元）。"
+    status: implemented
+    obligations: [OBL-SG-BUDGET-TABLE]
+    rules: [BUD-104]
+  - id: C-14
+    dimension: "三、数据勾稽"
+    title: "金额单位统一为“万元”"
+    criterion: "无遗漏或错用“万”字的金额。"
+    status: implemented
+    obligations: [OBL-TEXT-AMOUNT-UNIT]
+    rules: [CMM-011]
+  - id: C-15
+    dimension: "三、数据勾稽"
+    title: "金额数字格式规范"
+    criterion: "格式规范统一。"
+    status: implemented
+    obligations: [OBL-TEXT-AMOUNT-FORMAT]
+    rules: [CMM-010]
+  - id: C-16
+    dimension: "三、数据勾稽"
+    title: "元与万元换算及四舍五入正确"
+    criterion: "换算结果与四舍五入一致，同一项目多处表述一致（合计行容差0.01万元）。"
+    status: implemented
+    obligations: [OBL-TXT-BUDGET]
+    rules: [BUD-107, BUD-114]
+  - id: D-01
+    dimension: "四、文字规范"
+    title: "无错别字"
+    criterion: "无错别字。"
+    status: ai_assisted
+    obligations: [OBL-TEXT-TYPO, OBL-AI-SEMANTIC-REVIEW]
+    rules: [CMM-009]
+    decision: ai_only
+    note: "高精度错词表只作提示；其余错别字只能由大模型 AI 语义复核判断，规则库不再扩展（2026-10-22 决议）"
+  - id: D-02
+    dimension: "四、文字规范"
+    title: "无文字／词组重复"
+    criterion: "无重复字词。"
+    status: implemented
+    obligations: [OBL-STRUCT-PUNCTUATION]
+    rules: [CMM-002]
+  - id: D-03
+    dimension: "四、文字规范"
+    title: "无多字、漏字"
+    criterion: "无多字漏字。"
+    status: ai_assisted
+    obligations: [OBL-TEXT-TYPO]
+    rules: [CMM-009]
+    decision: ai_only
+    note: "“收→收入”“主要用→主要用于”“预算拨→预算拨款”等高频漏字只作提示；一般多字漏字只能由大模型 AI 语义复核判断（2026-10-22 决议）"
+  - id: D-04
+    dimension: "四、文字规范"
+    title: "标点符号使用规范"
+    criterion: "标点规范、成对、体例统一。"
+    status: implemented
+    obligations: [OBL-STRUCT-PUNCTUATION]
+    rules: [CMM-002]
+  - id: D-05
+    dimension: "四、文字规范"
+    title: "无模板残留表述"
+    criterion: "模板语已按实际情况处理，无编辑批注语残留。"
+    status: implemented
+    obligations: [OBL-STRUCT-PLACEHOLDER, OBL-TREND-COMPARATIVE-LOGIC]
+    rules: [CMM-008, CMM-005]
+  - id: D-06
+    dimension: "四、文字规范"
+    title: "无未替换占位符"
+    criterion: "无占位符。"
+    status: implemented
+    obligations: [OBL-STRUCT-PLACEHOLDER]
+    rules: [BUD-002, CMM-008]
+  - id: D-07
+    dimension: "四、文字规范"
+    title: "无自相矛盾表述"
+    criterion: "文内表述前后一致。"
+    status: partial
+    obligations: [OBL-NARRATIVE-BUDGET-AMOUNT, OBL-TREND-DIRECTION, OBL-TREND-COMPARATIVE-LOGIC]
+    rules: [BUD-112, CMM-006, CMM-005]
+    decision: closed
+    note: "同项前后金额与方向矛盾词已查；收入/支出增减额口径不一不做自动判断（2026-10-22 决议）"
+  - id: D-08
+    dimension: "四、文字规范"
+    title: "语句通顺、语义清晰"
+    criterion: "语句通顺。"
+    status: ai_assisted
+    obligations: [OBL-TEXT-TYPO, OBL-TREND-COMPARATIVE-LOGIC, OBL-AI-SEMANTIC-REVIEW]
+    rules: [CMM-009, CMM-005]
+    decision: ai_only
+    note: "固定病句模式只作提示；其余语病只能由大模型 AI 语义复核判断，规则库不再扩展（2026-10-22 决议）"
+  - id: E-01
+    dimension: "五、格式规范"
+    title: "表格框线完整、底纹与字体色规范、表格正常显示"
+    criterion: "框线完整、无明显底纹与彩色字体、版面完整可读。"
+    status: partial
+    obligations: [OBL-STRUCT-VISUAL]
+    rules: [CMM-016]
+    decision: closed
+    note: "彩色字体、彩色底纹、整体横排已查；框线缺失、表格碎片化不做自动检查（2026-10-22 决议）"
+  - id: E-02
+    dimension: "五、格式规范"
+    title: "无空白页、无空表页，页码正常"
+    criterion: "无空白页、页码正常。"
+    status: partial
+    obligations: [OBL-STRUCT-PAGES]
+    rules: [CMM-015]
+    decision: closed
+    note: "空白页、页码连续已查；目录后空表页不检查（2026-10-22 决议）"
+  - id: E-03
+    dimension: "五、格式规范"
+    title: "交付格式为PDF"
+    criterion: "文件为PDF。"
+    status: external
+    obligations: []
+    rules: []
+    decision: closed
+    note: "上传入口只接受 PDF，不属规则库检查内容"
+  - id: E-04
+    dimension: "五、格式规范"
+    title: "标题层级编号连续"
+    criterion: "编号连续、标题完整。"
+    status: implemented
+    obligations: [OBL-STRUCT-NUMBERING]
+    rules: [CMM-014]
+  - id: E-05
+    dimension: "五、格式规范"
+    title: "序号标点与编号体例统一"
+    criterion: "体例统一、标点完整。"
+    status: implemented
+    obligations: [OBL-STRUCT-NUMBERING]
+    rules: [CMM-014]
+  - id: E-06
+    dimension: "五、格式规范"
+    title: "表名与章节标题规范"
+    criterion: "表名与章节标题与规范样张一致。"
+    status: implemented
+    obligations: [OBL-STRUCT-TABLE-NAMES]
+    rules: [CMM-021]
+  - id: F-01
+    dimension: "六、公开合规"
+    title: "部门预算按时公开"
+    criterion: "已公开（是否公开＝“是”）且公开日期≤2026-02-15。"
+    status: external
+    obligations: []
+    rules: []
+    decision: closed
+    note: "公开时限在下载环节自行核查，不属 PDF 内容规则，规则库不检查（2026-10-22 决议）。参考截止日：部门预算 2月15日、单位预算 3月2日、部门决算 8月13日、单位决算 8月28日（以当年通知为准）"
+  - id: F-02
+    dimension: "六、公开合规"
+    title: "单位预算按时公开"
+    criterion: "已公开（是否公开＝“是”）且公开日期≤2026-03-02。"
+    status: external
+    obligations: []
+    rules: []
+    decision: closed
+    note: "公开时限在下载环节自行核查，不属 PDF 内容规则，规则库不检查（2026-10-22 决议）。参考截止日：部门预算 2月15日、单位预算 3月2日、部门决算 8月13日、单位决算 8月28日（以当年通知为准）"

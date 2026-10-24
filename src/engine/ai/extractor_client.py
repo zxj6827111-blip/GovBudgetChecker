@@ -68,7 +68,9 @@ FULL_REPORT_AUDIT_PROMPT_INSTRUCTIONS = """
 1) 只输出 JSON 数组，不要输出任何其他文字；无问题返回 []。
 2) 证据优先：每个问题都必须能在当前窗口内找到原文证据，不臆测、不补数、不编造页码。
 3) 局部窗口限制：不要判断全书缺表、缺章、目录页码整体错误等必须看全书才能确认的问题。
-4) 优先检查以下问题：
+4) 引文必须是从当前窗口逐字复制的一段连续原文；不得改写、拼接不同位置的句子或补入原文没有的词。若无法给出连续原文引文，不输出该问题。
+5) 判断百分比时，先确认原文写的是“完成预算比例”“占总额比例”还是“同比增减比例”，并确认分子、分母口径。只根据明确的同一口径数据复算；不同口径或分母不明确时不报错。
+6) 优先检查以下问题：
    - 同比、占比、完成率、增长率、下降率复算错误
    - 合计与明细勾稽不一致、同条说明前后金额矛盾
    - 增加/减少/增长/下降等方向描述与数字变化方向相反
@@ -76,23 +78,23 @@ FULL_REPORT_AUDIT_PROMPT_INSTRUCTIONS = """
    - 模板残留、占位符、重复表述、残句、异常标点
    - 三公经费、政府性基金、国有资本经营无此项说明缺失
    - 年份冲突、金额单位错误、统计口径冲突、编码与名称用途错配
-5) 容差：万元差值<=0.01、元差值<=100、百分点差值<=0.1 视为一致，不得报错。
-6) 口径保护：政府采购预算、绩效项目资金、一般公共预算、财政拨款等不同口径，除非文本明确要求一致，否则不得直接判错。
-7) OCR 噪声保护：疑似抽取残影、隐藏层重复、跨页断裂不稳定时，优先输出 manual_review 或不输出。
-8) 输出必须使用中文，不得使用其他语言。
+7) 容差：万元差值<=0.01、元差值<=100、百分点差值<=0.1 视为一致，不得报错。
+8) 口径保护：政府采购预算、绩效项目资金、一般公共预算、财政拨款等不同口径，除非文本明确要求一致，否则不得直接判错。
+9) OCR 噪声保护：疑似抽取残影、隐藏层重复、跨页断裂不稳定时，优先输出 manual_review 或不输出。
+10) 输出必须使用中文，不得使用其他语言。
 
 输出字段要求（每个元素必须具备）：
 - problem_type: 字符串，尽量使用 ratio_recalc/sum_mismatch/document_kind_mismatch/placeholder_residue/unit_scope_conflict/duplicate_text/missing_explanation/direction_conflict/code_subject_mismatch/generic
 - original: 字符串，原始问题文本或核心错误表述
 - suggestion: 字符串，简短修正建议
-- span: [start, end] 两个整数，无法定位填 [0,0]
+- span: 引文在当前原文窗口中的字符偏移 [start, end)，从 0 开始；无法逐字核对填 [0,0]
 - context: 字符串，包含关键证据的上下文
 - severity: 仅允许 critical/high/medium/low/info/manual_review
 - confidence: 0-1 数值
 
 建议尽量补充以下字段：
 - quote: 直接命中的原文片段
-- page: 当前窗口内能确定页码时填写
+- page: 按窗口提供的页码映射填写 PDF 物理页码（第一张页面为 1），不能用印刷页脚、目录页码或窗口序号；无法确定填 null
 - table_or_section: 对应表名或说明章节
 - expected: 复核后的正确值
 - actual: 当前文本中的值
@@ -144,7 +146,9 @@ def full_report_audit_prompt_version() -> str:
 class ExtractorConfig:
     """抽取器配置"""
     url: str = field(default_factory=lambda: _read_str_env("AI_EXTRACTOR_URL", DEFAULT_EXTRACTOR_URL))
-    enabled: bool = field(default_factory=lambda: _read_bool_env("AI_ASSIST_ENABLED", True))
+    enabled: bool = field(default_factory=lambda: _read_bool_env("AI_ASSIST_ENABLED", False))
+    direct_only: bool = False
+    max_tokens: Optional[int] = None
     main_model: str = field(default_factory=lambda: _read_str_env("AI_MAIN_MODEL", _read_str_env("AI_EXTRACTOR_MODEL")))
     main_provider: str = field(default_factory=lambda: _read_str_env("AI_MAIN_PROVIDER"))
     audit_provider: str = field(
@@ -481,6 +485,8 @@ class ExtractorClient:
         应用配置读真实 Settings 接口（config/app.yaml 的 ai.max_tokens）。
         """
 
+        if self.config.max_tokens is not None:
+            return self.config.max_tokens
         for env_name in ("AI_AUDIT_MAX_TOKENS", "AI_MAX_TOKENS"):
             raw = os.getenv(env_name)
             if raw is None:
@@ -564,7 +570,11 @@ class ExtractorClient:
             prompt_version=prompt_version,
             source_channel="direct_llm",
         )
-        parsed = self._extract_json_array(content_text) or []
+        parsed = self._extract_json_array(content_text)
+        if self.config.direct_only and (parsed is None or str(finish_reason).lower() in {"length", "max_tokens", "incomplete"}):
+            self.call_ledger[-1]["error"] = "invalid_or_truncated_response"
+            raise ValueError("模型响应格式错误或输出被截断，请调整模型或输出上限")
+        parsed = parsed or []
         normalized: List[Dict[str, Any]] = []
         seen_keys = set()
         for item in parsed:
@@ -620,6 +630,13 @@ class ExtractorClient:
                 max_len = len(section_text)
                 span_start = min(span_start, max_len)
                 span_end = min(span_end, max_len)
+            # 模型给的偏移必须通过原文核验；乱填的 span 不能用于推导 PDF 页码。
+            anchor = quote or original or context
+            span_text = re.sub(r"\s+", "", section_text[span_start:span_end])
+            anchor_text = re.sub(r"\s+", "", anchor or "")
+            if not anchor or span_text != anchor_text:
+                start = section_text.find(anchor) if anchor and section_text.count(anchor) == 1 else -1
+                span_start, span_end = (start, start + len(anchor)) if start >= 0 else (0, 0)
 
             severity = self._normalize_severity(item.get("severity"))
             page = self._normalize_page(item.get("page"))
@@ -916,6 +933,8 @@ class ExtractorClient:
             return []
 
         # 先走直连模型，确保使用全量审查提示词
+        if self.config.direct_only:
+            return await self._direct_semantic_audit(section_text, structured_context=structured_context)
         try:
             direct_result = await self._direct_semantic_audit(
                 section_text, structured_context=structured_context

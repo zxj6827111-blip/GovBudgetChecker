@@ -17,6 +17,7 @@ import {
   presentMaterialScope,
   presentReportKind,
   presentSubjectKind,
+  presentStatusReason,
 } from "@/lib/materialStatusPresentation";
 
 /**
@@ -32,10 +33,7 @@ import {
  *    不能写"从未上传"（§五十八）—— 判断在 `presentSlotState` 一处完成；
  * 3. **`formal_issue_count` 为 null 显示"—"**，为 0 显示 `0`：前者是
  *    "还没算出可确认结论"，后者是"已确认没有正式 finding"（§五十三）。
- *    该字段的口径与审核工作台/质量门禁一致（`count_formal_findings`，
- *    info 计入），因此界面把它叫「正式检查记录」而不是「正式问题」——
- *    「正式问题」是检查结果页里"严重度为 error/warn"那一栏的名字，
- *    两者同名会让用户以为总计漏算了「信息提示」。
+ *    该字段只计入正式问题；信息提示与待人工核验项分别展示。
  */
 export interface MaterialDetailOverviewTabProps {
   data: SlotDetailData;
@@ -103,7 +101,7 @@ export function MaterialDetailOverviewTab({ data, state }: MaterialDetailOvervie
         <div className="flex flex-wrap items-center gap-3">
           <MaterialStatusBadge status={slot.status} testId="gbc-material-overview-status" />
           <span className="text-sm text-slate-600" data-testid="gbc-material-overview-reason">
-            {slot.status_reason ?? "未记录成因"}
+            {presentStatusReason(slot.status_reason) ?? "未记录成因"}
           </span>
         </div>
         {state.detail ? (
@@ -145,7 +143,7 @@ export function MaterialDetailOverviewTab({ data, state }: MaterialDetailOvervie
           value={formatCount(analysis?.formal_issue_count ?? null)}
           desc={
             analysis?.available
-              ? "当前文件版本上已确认的正式 finding（含信息提示；降级待人工核验项不计入）"
+              ? "当前文件版本上已确认的正式问题；信息提示与待人工核验项另行展示"
               : "当前文件版本暂无可确认的分析结果，因此这个数字算不出来"
           }
           tone="danger"

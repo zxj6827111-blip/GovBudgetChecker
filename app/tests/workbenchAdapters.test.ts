@@ -10,6 +10,8 @@ import {
   formatCoveragePercentText,
   formatElapsedText,
   formatPagesText,
+  resolveIssueCountText,
+  resolveFindingCountDetails,
   resolveReviewEntryDecision,
 } from "../app/components/workspace/workbenchAdapters";
 
@@ -273,24 +275,38 @@ assert.equal(formatElapsedText(3660000), "1 时 1 分");
 // 反例：负数（脏数据/时钟回退）必须视为不可信，显示 em dash 而不是负数文案
 assert.equal(formatElapsedText(-5000), "—", "REGRESSION: 负数耗时（脏数据）必须显示 —，不得显示负数");
 
-// --- formatPagesText：页数优先于覆盖率百分比，都没有则 — --------------------
+// --- formatPagesText：原件总页数，不能使用扫描页数量 --------------------
 
-assert.equal(formatPagesText({ job_id: "a", scanned_page_count: 48 } as JobSummaryRecord), "48 页");
+assert.equal(formatPagesText({ job_id: "a", page_count: 48, scanned_page_count: 0 } as JobSummaryRecord), "48 页");
 assert.equal(
   formatPagesText({ job_id: "b", page_coverage: 0.75 } as JobSummaryRecord),
-  "75% 覆盖",
-  "无页数字段时应退回覆盖率百分比",
+  "—",
+  "覆盖率不能当作原件页数",
 );
 assert.equal(
   formatPagesText({ job_id: "c" } as JobSummaryRecord),
   "—",
   "REGRESSION: 页数与覆盖率字段都缺失时必须显示 —，不得显示 0 页",
 );
-// 两者都有时页数优先（更精确的真实数据优先于聚合百分比）
+// 扫描页数量只描述 PDF 中的一部分，不能替代总页数。
 assert.equal(
-  formatPagesText({ job_id: "d", scanned_page_count: 30, page_coverage: 0.9 } as JobSummaryRecord),
+  formatPagesText({ job_id: "d", page_count: 30, scanned_page_count: 2, page_coverage: 0.9 } as JobSummaryRecord),
   "30 页",
 );
+for (const invalid of [undefined, null, 0, -1, 1.5, NaN]) {
+  assert.equal(formatPagesText({ job_id: "unknown", page_count: invalid, scanned_page_count: 0 }), "—");
+}
+assert.equal(formatPagesText({ job_id: "scanned-only", scanned_page_count: 30 }), "—");
+
+const tipsOnly: JobSummaryRecord = { job_id: "tips", review_issue_total: 0, review_candidate_total: 0,
+  tip_total: 5, review_notice_total: 2 };
+assert.equal(resolveIssueCountText(tipsOnly), "0");
+assert.deepEqual(resolveFindingCountDetails(tipsOnly), ["5 条提示", "2 项复核事项"]);
+assert.equal(resolveIssueCountText({ ...tipsOnly, review_issue_total: 2, review_candidate_total: 1 }), "3");
+assert.deepEqual(resolveFindingCountDetails({ ...tipsOnly, review_candidate_total: 1 }),
+  ["5 条提示", "其中 1 条问题待核实", "2 项复核事项"]);
+assert.equal(resolveIssueCountText({ job_id: "unknown" }), "—");
+assert.deepEqual(resolveFindingCountDetails({ job_id: "unknown" }), []);
 
 // --- resolveReviewEntryDecision（修复 B）：审核台入口的可达性判定 -------------
 // 只有"已分析出结果"的任务（completed / review_required）才有可复核内容；

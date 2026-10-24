@@ -198,8 +198,18 @@ class IssueItem(BaseModel):
     created_at: float = Field(default_factory=time.time, description="创建时间戳")
     
     # 新增字段以支持更丰富的数据结构
-    page_number: int = Field(default=1, description="页码")
+    # 页码未知必须保持 None（ZC-00 / SYS-07）：历史默认值 1 会把"不知道第几页"
+    # 伪装成"第 1 页"，制造看似完整的假证据。展示层负责把 None 渲染成"未定位"。
+    page_number: Optional[int] = Field(default=None, description="页码（无法定位时为 None，不得默认第 1 页）")
     bbox: Optional[List[float]] = Field(default=None, description="边界框 [x1, y1, x2, y2]")
+    location_level: str = Field(
+        default="unresolved",
+        description="定位等级：exact_cell / exact_span / region / unresolved",
+    )
+    verification_status: str = Field(
+        default="unverified",
+        description="来源定位验证状态；只有 verified 的精确定位才可导出 bbox",
+    )
     amount: Optional[float] = Field(default=None, description="金额")
     percentage: Optional[float] = Field(default=None, description="百分比")
     text_snippet: Optional[str] = Field(default=None, description="文本摘录")
@@ -245,6 +255,14 @@ class IssueItem(BaseModel):
         default_factory=list, description="该问题关联的检查义务编号"
     )
 
+    # ZC-06：双路结果只有在双方显式携带同一检查关系和同一组财政事实身份时
+    # 才能合并。标题、页码、相同金额及展示文本不得充当事实身份。
+    check_relation_id: Optional[str] = Field(
+        default=None, description="检查关系身份；AI/规则候选的业务关联键"
+    )
+    fact_ids: List[str] = Field(default_factory=list, description="关联财政事实身份")
+    evidence_ids: List[str] = Field(default_factory=list, description="显式关联的来源证据身份")
+
     display: Optional[IssueDisplay] = Field(default=None, description="可直接展示的问题信息")
 
     @model_validator(mode="after")
@@ -277,7 +295,16 @@ class ConflictItem(BaseModel):
     key: str = Field(..., description="冲突键")
     ai_issue: Optional[str] = Field(None, description="AI问题ID")
     rule_issue: Optional[str] = Field(None, description="规则问题ID")
-    reason: Literal["value-mismatch", "missing", "page-mismatch"] = Field(..., description="冲突原因")
+    reason: Literal[
+        "value-mismatch",
+        "missing",
+        "page-mismatch",
+        "severity-mismatch",
+        "semantic-mismatch",
+        "evidence-mismatch",
+        "ambiguous-relation",
+        "relation-evaluation-error",
+    ] = Field(..., description="冲突原因")
     details: Dict[str, Any] = Field(default_factory=dict, description="冲突详情")
     
     # 新增字段
@@ -299,6 +326,17 @@ class MergedSummary(BaseModel):
     # 新增字段
     ai_only: List[IssueItem] = Field(default_factory=list, description="仅AI发现")
     rule_only: List[IssueItem] = Field(default_factory=list, description="仅规则发现")
+    relations: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="按显式检查关系与财政事实 ID 建立的来源关系及裁决状态",
+    )
+    candidate_issue_ids: List[str] = Field(
+        default_factory=list, description="仅 AI 候选项 ID；需人工/规则确认"
+    )
+    manual_review_issue_ids: List[str] = Field(
+        default_factory=list, description="存在关系歧义、需人工判读的 finding ID"
+    )
+    merge_policy_version: str = Field(default="legacy", description="合并策略版本")
 
 
 class DualModeResponse(BaseModel):
@@ -336,12 +374,22 @@ class JobContext(BaseModel):
     pages: int = Field(default=0, description="页数")
     filesize: int = Field(default=0, description="文件大小")
     meta: Dict[str, Any] = Field(default_factory=dict, description="其他元数据")
+    # ZC-01（AC-01）：统一财政事实上下文（FactContext.to_dict() 形态）。
+    # 双模式路径经此把与 legacy 路径同一版本的事实传给规则链。
+    fact_context: Optional[Dict[str, Any]] = Field(
+        None, description="统一财政事实上下文快照"
+    )
+    parse_artifact: Optional[Dict[str, Any]] = Field(
+        None, description="与财政事实同一解析版本的完整表格及原始单元格快照"
+    )
 
 
 class AnalysisConfig(BaseModel):
     """分析配置"""
     dual_mode: bool = Field(default=True, description="是否启用双模式")
-    ai_enabled: bool = Field(default=True, description="是否启用AI分析")
+    # ZC-00：AI 分析/定位/失败回退默认全部关闭——不配置真实模型服务时，
+    # 任何调用方不显式开启就不会发出模型请求，启动也不要求 AI 密钥。
+    ai_enabled: bool = Field(default=False, description="是否启用AI分析（默认关闭）")
     rule_enabled: bool = Field(default=True, description="是否启用规则分析")
     merge_enabled: bool = Field(default=True, description="是否启用结果合并")
     
@@ -353,14 +401,15 @@ class AnalysisConfig(BaseModel):
     
     # AI参数
     ai_timeout: int = Field(default=60, description="AI超时时间（秒）")
+    ai_profile_id: Optional[str] = Field(default=None, description="本次检查选用的模型配置")
     ai_retry: int = Field(default=1, description="AI重试次数")
     ai_temperature: float = Field(default=0.2, description="AI温度参数")
     
     # 兼容双模式与引擎运行器所需的扩展字段
     rules_version: str = Field(default="v3_3", description="规则版本（如 v3_3）")
-    enable_ai_analysis: bool = Field(default=True, description="是否启用AI分析（双模式分支开关）")
-    enable_ai_locator: bool = Field(default=True, description="是否启用AI定位增强（将AI帮助用于定位证据）")
-    ai_fallback_on_error: bool = Field(default=True, description="AI分析失败时是否静默回退到仅规则模式")
+    enable_ai_analysis: bool = Field(default=False, description="是否启用AI分析（双模式分支开关，默认关闭）")
+    enable_ai_locator: bool = Field(default=False, description="是否启用AI定位增强（默认关闭）")
+    ai_fallback_on_error: bool = Field(default=False, description="AI分析失败时是否静默回退到仅规则模式（默认关闭）")
     record_rule_failures: bool = Field(default=False, description="是否将规则执行失败记录为问题项")
 
 
@@ -496,7 +545,7 @@ def create_default_config() -> AnalysisConfig:
     """创建默认配置"""
     return AnalysisConfig(
         dual_mode=True,
-        ai_enabled=True,
+        ai_enabled=False,
         rule_enabled=True,
         merge_enabled=True,
         title_similarity_threshold=0.85,  # 调宽阈值，让AI结果更容易显示
@@ -508,8 +557,8 @@ def create_default_config() -> AnalysisConfig:
         ai_temperature=0.1,
         # 新增字段默认值，保证与双模式分析器兼容
         rules_version="v3_3",
-        enable_ai_analysis=True,
-        enable_ai_locator=True,
-        ai_fallback_on_error=True,
+        enable_ai_analysis=False,
+        enable_ai_locator=False,
+        ai_fallback_on_error=False,
         record_rule_failures=False
     )

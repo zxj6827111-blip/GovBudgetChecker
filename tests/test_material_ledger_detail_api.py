@@ -579,9 +579,8 @@ def test_slot_detail_current_version_and_analysis(client, org_tree):
     analysis = data["current_analysis"]
     assert analysis["available"] is True
     assert analysis["run"]["job_uuid"] == "job-v2"
-    # 权威口径（count_formal_findings）：1 条 high + 1 条 info 都是正式 finding，
-    # 降级的那条不算 → 2。**不是**"正式问题"那一栏的长度（那是 1）。
-    assert analysis["formal_issue_count"] == 2
+    # 权威口径只计入 high；info 与证据降级项分开展示。
+    assert analysis["formal_issue_count"] == 1
     assert [item["finding_id"] for item in analysis["formal_findings"]] == ["f-high"]
     assert [item["finding_id"] for item in analysis["manual_review_items"]] == ["f-degraded"]
     assert [item["finding_id"] for item in analysis["info_findings"]] == ["f-info"]
@@ -882,9 +881,7 @@ def test_runs_api_error_summary_is_null_when_there_is_no_error(client, org_tree,
 def test_slot_detail_formal_issue_count_equals_canonical_count(client, org_tree, fake_db):
     """接口层口径对照：formal_issue_count == count_formal_findings(...)。
 
-    V2 的样本是 1 条 high + 1 条 info（都算正式 finding）+ 1 条降级（不算），
-    因此期望 2；而"正式问题"那一栏只有 1 条 —— 两者必须不同，
-    否则说明又在用展示分组的长度报数。
+    V2 包含 high、info 和降级项各一条，只有 high 计入正式问题。
     """
     from src.services.evidence_guard import count_formal_findings
 
@@ -901,15 +898,13 @@ def test_slot_detail_formal_issue_count_equals_canonical_count(client, org_tree,
             "rule_findings": [item for item in _V2_RULE_FINDINGS],
         }
     )
-    assert expected == 2
+    assert expected == 1
     assert analysis["formal_issue_count"] == expected
     # 展示分组与计数口径是两件事
     assert len(analysis["formal_findings"]) == 1
     assert len(analysis["info_findings"]) == 1
     assert len(analysis["manual_review_items"]) == 1
-    assert analysis["formal_issue_count"] == (
-        len(analysis["formal_findings"]) + len(analysis["info_findings"])
-    )
+    assert analysis["formal_issue_count"] == len(analysis["formal_findings"])
 
 
 #: 与 ``_seed`` 里 V2 结果完全一致的 finding 样本（供权威函数对照）。

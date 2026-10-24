@@ -6,15 +6,17 @@ import {
   computeOverlayBoxAtScale,
   computeWorkflowStatusCounts,
   countFormalProblems,
+  dedupeEvidenceRefsForDisplay,
   deriveStageHistory,
+  extractCheckSubject,
   extractFindingVersions,
   extractTotalPageCount,
   formatMetadataReportKind,
   formatMetadataYear,
   formatVersionList,
   isProblemDegraded,
-  pickAutoSelectJob,
   resolveProblemTargetPage,
+  shouldDrawProblemOverlay,
   resolveWorkbenchHeaderBadge,
   sortProblemsForReview,
   ThumbnailLoadScheduler,
@@ -217,6 +219,21 @@ function runSyncAssertions(): void {
   );
   assert.equal(resolveProblemTargetPage(makeProblem({ page: 0 })), null, "页码 0 不是合法页码");
 
+  // --- shouldDrawProblemOverlay：ZC-00（SYS-11）高亮框只画在问题所属页 -------
+
+  assert.equal(shouldDrawProblemOverlay(makeProblem({ page: 3, bbox: [10, 20, 120, 40] }), 3), true);
+  assert.equal(
+    shouldDrawProblemOverlay(makeProblem({ page: 3, bbox: [10, 20, 120, 40] }), 4),
+    false,
+    "REGRESSION: 翻到其他页后旧问题的框不得继续绘制",
+  );
+  assert.equal(
+    shouldDrawProblemOverlay(makeProblem({ page: undefined, bbox: [10, 20, 120, 40] }), 2),
+    false,
+    "REGRESSION: 无页码问题不得在当前页绘制高亮框（不得猜页）",
+  );
+  assert.equal(shouldDrawProblemOverlay(null, 2), false);
+
   // --- deriveStageHistory：5 态阶段记录派生（不含 OCR），失败/未知语义反例 ---
 
   const successCasePhase3 = deriveStageHistory({ phase: "metadata_recognition", percent: 65 }, null);
@@ -325,6 +342,35 @@ function runSyncAssertions(): void {
   assert.deepEqual(versions?.rule_versions, ["v3_3"]);
   assert.equal(versions?.engine_version, "0.1.0");
 
+  // --- extractCheckSubject：检查主体与所属组织分叉时的冲突提示 ---------------
+
+  assert.equal(extractCheckSubject(null), null);
+  assert.equal(
+    extractCheckSubject({ job_id: "j-1", result: { meta: {} } } as unknown as JobDetailRecord),
+    null,
+    "旧任务没有 check_subject 时不得拿所属组织冒充检查主体",
+  );
+  const detailWithSubject = {
+    job_id: "j-5",
+    result: {
+      meta: {
+        check_subject: {
+          name: "上海市退役军人事务局",
+          conflict: { code: "linked_parent_organization", message: "任务关联的是市级节点“上海市”" },
+        },
+      },
+    },
+  } as unknown as JobDetailRecord;
+  assert.deepEqual(extractCheckSubject(detailWithSubject), {
+    name: "上海市退役军人事务局",
+    conflictMessage: "任务关联的是市级节点“上海市”",
+  });
+  const detailWithoutConflict = {
+    job_id: "j-6",
+    result: { meta: { check_subject: { name: "上海市民政局", conflict: null } } },
+  } as unknown as JobDetailRecord;
+  assert.deepEqual(extractCheckSubject(detailWithoutConflict), { name: "上海市民政局", conflictMessage: null });
+
   assert.equal(formatVersionList(["v3_3"]), "v3_3");
   assert.equal(formatVersionList(["v3_3", "v3_4"]), "v3_3、v3_4");
   assert.equal(formatVersionList([]), "未识别到", "REGRESSION: 空列表必须显示未识别到，不得显示空字符串或占位符");
@@ -410,25 +456,38 @@ function runSyncAssertions(): void {
     "REGRESSION: 降级问题不应计入待处理数，否则底部计数会比审核问题tab的正式问题数更大，造成口径分裂",
   );
 
-  // --- pickAutoSelectJob：侧边栏 /review 直达时的默认任务选择 ----------------
-
-  // 空列表/未拉到数据 → null（保持引导态，不假装有默认任务）
-  assert.equal(pickAutoSelectJob(null), null);
-  assert.equal(pickAutoSelectJob([]), null);
-
-  const jobReview = makeJob({ status: "review_required" });
-  const jobDone = makeJob({ status: "done" });
-  const jobFailed = makeJob({ status: "error" });
-  const jobAnalyzing = makeJob({ status: "processing" });
-  const jobUploaded = makeJob({ status: "uploaded" });
-
-  // 存在待人工复核任务时，必须选最近一个（列表首位），而不是已完成任务
-  assert.equal(pickAutoSelectJob([jobReview, jobDone, jobAnalyzing])?.job_id, jobReview.job_id);
-  // 没有待复核任务时回退到最近一个已跑完的任务（completed/review_required/failed）
-  assert.equal(pickAutoSelectJob([jobDone, jobAnalyzing, jobUploaded])?.job_id, jobDone.job_id);
-  assert.equal(pickAutoSelectJob([jobFailed, jobAnalyzing, jobUploaded])?.job_id, jobFailed.job_id);
-  // 全是进行中/待分析任务时 → null（没有可复核内容，不得跳转）
-  assert.equal(pickAutoSelectJob([jobAnalyzing, jobUploaded]), null);
+  // --- dedupeEvidenceRefsForDisplay：两条关系指向同一单元格时只展示一次
+  const cellRef = (key: string, relationId: string, role: string, subject: string, value: string, bboxTop: number) => ({
+    key,
+    role,
+    relationId,
+    page: 11,
+    locationText: `第 11 页 · 支出决算表 · ${subject} · 决算金额`,
+    valueText: value,
+    bbox: [313, bboxTop, 405.15, bboxTop + 23.5],
+    locationLevel: "exact_cell",
+    verificationStatus: "verified",
+  });
+  const mergedRelationRefs = [
+    cellRef("parent|11|0", "FIN_03_expenditure:21011:total_actual", "parent", "行政事业单位医疗", "12377.54", 183.33000000000004),
+    cellRef("child|11|1", "FIN_03_expenditure:21011:total_actual", "child", "行政单位医疗", "12304.27", 206.83000000000004),
+    cellRef("parent|11|3", "expenditure:vertical:total_actual:21011", "parent", "行政事业单位医疗", "12377.54", 183.33),
+    cellRef("child|11|4", "expenditure:vertical:total_actual:21011", "child", "行政单位医疗", "12304.27", 206.83),
+  ];
+  assert.deepEqual(
+    dedupeEvidenceRefsForDisplay(mergedRelationRefs).map((ref) => ref.key),
+    ["parent|11|0", "child|11|1"],
+    "REGRESSION: 合并关系后同一单元格的证据按钮不得重复出现，保留首次出现的 key",
+  );
+  assert.equal(mergedRelationRefs.length, 4, "去重只作用于展示副本，不改原证据列表");
+  assert.deepEqual(
+    dedupeEvidenceRefsForDisplay([
+      cellRef("parent|11|0", "rel-a", "parent", "行政事业单位医疗", "12377.54", 183.33),
+      cellRef("child|11|1", "rel-b", "child", "行政事业单位医疗", "12377.54", 183.33),
+    ]).map((ref) => ref.key),
+    ["parent|11|0", "child|11|1"],
+    "同一格在不同关系里角色不同（合计项/明细项）时两条都要保留",
+  );
 }
 
 async function main(): Promise<void> {

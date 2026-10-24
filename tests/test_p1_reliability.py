@@ -166,6 +166,7 @@ class TestPipelineTimeout:
         from api import main as pipeline_mod
         from src.services.rule_process import RuleExecutionError
 
+        monkeypatch.setenv('OCR_ENABLED', 'false')
         job_dir = tmp_path / "job-rule-failure"
         job_dir.mkdir()
         (job_dir / "source.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")

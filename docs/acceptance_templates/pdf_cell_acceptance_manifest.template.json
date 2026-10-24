@@ -1,0 +1,9 @@
+{
+  "items": [
+    {
+      "truth": "独立人工标注JSON路径",
+      "snapshot": "对应不可变事实快照JSON路径",
+      "artifact": "对应解析产物JSON路径"
+    }
+  ]
+}

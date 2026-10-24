@@ -25,7 +25,7 @@ uvicorn ai_extractor_service:app --host 0.0.0.0 --port 9009
 ```bash
 GOVBUDGET_AUTH_ENABLED=true GOVBUDGET_API_KEY=dev-local-key \
 AI_ASSIST_ENABLED=true AI_EXTRACTOR_URL=http://127.0.0.1:9009/ai/extract/v1 \
-python -m uvicorn api.main:app --reload --port 8000
+python -m uvicorn api.main:app --reload --port 18743
 ```
 
 Or use Makefile default:
@@ -36,8 +36,8 @@ make backend
 ### 3) Health checks
 ```bash
 curl http://127.0.0.1:9009/health
-curl http://127.0.0.1:8000/api/health
-curl http://127.0.0.1:8000/api/ready
+curl http://127.0.0.1:18743/api/health
+curl http://127.0.0.1:18743/api/ready
 ```
 
 ## Extractor API Contract

@@ -145,14 +145,12 @@ export function MaterialDetailFindingsTab({ analysis }: MaterialDetailFindingsTa
           {formalCount === null
             ? "（当前算不出来）"
             : formalCount === 0
-              ? "（已确认没有正式 finding）"
+              ? "（已确认没有正式问题）"
               : ""}
         </p>
-        {/* 总计口径与工作台/质量门禁完全一致：没有被 evidence guard 降级就是
-            正式 finding，info 也算。因此这里必须说明"包含信息提示"，
-            否则用户会把上面的总计与下面的「信息提示」栏看成两回事。 */}
+        {/* 与详情接口的分组口径一致：正式问题、信息提示、人工核验项分别展示。 */}
         <p className="mt-1 text-xs text-slate-500" data-testid="gbc-material-findings-formal-count-note">
-          包含正式问题与信息提示；证据不足被降级的待人工核验项不计入。
+          仅统计正式问题；信息提示与证据不足的待人工核验项另行展示。
         </p>
       </div>
 

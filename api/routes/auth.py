@@ -87,6 +87,8 @@ def _require_login(request: Request) -> Tuple[Any, str, Dict[str, Any]]:
     # 否则未改密的默认管理员仍能创建账号（缺口 B-07）。
     # 改密相关路径在 PASSWORD_CHANGE_EXEMPT_PATHS 里被放行。
     enforce_password_change(request, user)
+    from api.auth_utils import enforce_read_only
+    enforce_read_only(request, user)
     return store, token, user
 
 
@@ -183,6 +185,7 @@ async def create_user(request: Request):
 
     raw_is_admin = body.get("is_admin", False)
     is_admin = _coerce_bool(raw_is_admin, "is_admin") if "is_admin" in body else False
+    is_read_only = _coerce_bool(body["is_read_only"], "is_read_only") if "is_read_only" in body else False
     organization_ids = _coerce_organization_ids(body.get("organization_ids"))
     _validate_organization_ids_exist(organization_ids)
 
@@ -192,6 +195,7 @@ async def create_user(request: Request):
             password=password,
             is_admin=is_admin,
             organization_ids=organization_ids,
+            is_read_only=is_read_only,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -205,11 +209,14 @@ async def update_user(username: str, request: Request):
     body = await _read_json_body(request)
 
     is_admin: Optional[bool] = None
+    is_read_only: Optional[bool] = None
     is_active: Optional[bool] = None
     password: Optional[str] = None
     organization_ids: Optional[list[str]] = None
     if "is_admin" in body:
         is_admin = _coerce_bool(body.get("is_admin"), "is_admin")
+    if "is_read_only" in body:
+        is_read_only = _coerce_bool(body.get("is_read_only"), "is_read_only")
     if "is_active" in body:
         is_active = _coerce_bool(body.get("is_active"), "is_active")
     if "password" in body:
@@ -220,6 +227,7 @@ async def update_user(username: str, request: Request):
 
     if (
         is_admin is None
+        and is_read_only is None
         and is_active is None
         and password is None
         and organization_ids is None
@@ -233,6 +241,7 @@ async def update_user(username: str, request: Request):
             is_active=is_active,
             password=password,
             organization_ids=organization_ids,
+            is_read_only=is_read_only,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="user not found")

@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock
@@ -49,6 +50,32 @@ GOOD_PAGES = {
 # 检查义务台账要按规则编号逐条核对，内联的"总数桩"无法证明任何一条具体规则
 # 执行过，会让所有义务误落到"未执行"。
 FULLY_EXECUTED_SUMMARY = full_rule_receipt("budget")
+TEST_SOURCE_HASH = hashlib.sha256(b"evidence-completeness-test-source").hexdigest()
+
+
+def _source_ref(
+    page: int,
+    quote: str,
+    *,
+    source_id: str | None = None,
+    bbox=None,
+    file_hash: str = TEST_SOURCE_HASH,
+) -> Dict[str, Any]:
+    source_id = source_id or f"test-page-{page}-block"
+    evidence_id = hashlib.sha1(
+        f"{file_hash}|{page}|{source_id}|{quote}".encode("utf-8")
+    ).hexdigest()[:16]
+    return {
+        "page": page,
+        "physical_page": page,
+        "text": quote,
+        "quote": quote,
+        "file_hash": file_hash,
+        "source_block_id": source_id,
+        "source_identity_status": "verified",
+        "evidence_id": evidence_id,
+        "bbox": bbox,
+    }
 
 
 def _reason_codes(gate: Dict[str, Any]) -> List[str]:
@@ -59,27 +86,29 @@ def _reason_codes(gate: Dict[str, Any]) -> List[str]:
 # 单条校验：正例与反例
 # --------------------------------------------------------------------------
 def test_finding_with_page_and_text_is_complete() -> None:
-    complete, missing = evaluate_finding_evidence(
+    complete, missing, _verification = evaluate_finding_evidence(
         {
             "page_number": 12,
-            "evidence": [{"page": 12, "text": "合计 35.20，其中因公出国 10.00"}],
-        }
+            "evidence": [_source_ref(12, "合计 35.20，其中因公出国 10.00")],
+        },
+        source_file_hash=TEST_SOURCE_HASH,
     )
     assert complete is True
     # 没有坐标只是"无法框选"，不影响可复核性
     assert missing == ["missing_bbox"]
 
 
-def test_finding_with_only_bbox_is_complete() -> None:
-    complete, missing = evaluate_finding_evidence(
+def test_bbox_without_source_quote_is_not_complete() -> None:
+    complete, missing, _verification = evaluate_finding_evidence(
         {"page_number": 3, "bbox": [10.0, 20.0, 120.0, 40.0], "evidence": []}
     )
-    assert complete is True
-    assert missing == ["missing_evidence_text"]
+    assert complete is False
+    assert "missing_evidence_text" in missing
+    assert "missing_or_invalid_source_identity" in missing
 
 
 def test_finding_without_any_evidence_is_incomplete() -> None:
-    complete, missing = evaluate_finding_evidence(
+    complete, missing, _verification = evaluate_finding_evidence(
         {"page_number": 5, "title": "疑似口径不一致", "evidence": []}
     )
     assert complete is False
@@ -88,23 +117,23 @@ def test_finding_without_any_evidence_is_incomplete() -> None:
 
 
 def test_finding_without_page_is_incomplete() -> None:
-    complete, missing = evaluate_finding_evidence(
+    complete, missing, _verification = evaluate_finding_evidence(
         {"page_number": 0, "location": {}, "evidence": [{"text": "有原文但定位不到页"}]}
     )
     assert complete is False
-    assert missing == ["missing_page", "missing_bbox"]
+    assert missing == ["missing_or_invalid_source_identity", "missing_page", "missing_bbox"]
 
 
 def test_blank_text_does_not_count_as_evidence() -> None:
     """反例：空白字符串不算证据，避免"填了字段就算有证据"。"""
-    complete, _missing = evaluate_finding_evidence(
+    complete, _missing, _verification = evaluate_finding_evidence(
         {"page_number": 2, "text_snippet": "   ", "evidence": [{"text": ""}]}
     )
     assert complete is False
 
 
 def test_invalid_bbox_does_not_count() -> None:
-    complete, missing = evaluate_finding_evidence(
+    complete, missing, _verification = evaluate_finding_evidence(
         {"page_number": 2, "bbox": [1, 2, 3], "evidence": []}
     )
     assert complete is False
@@ -113,7 +142,7 @@ def test_invalid_bbox_does_not_count() -> None:
 
 def test_nonfinite_or_reversed_bbox_does_not_count() -> None:
     for bbox in ([1, 2, float("nan"), 4], [10, 20, 5, 30]):
-        complete, missing = evaluate_finding_evidence(
+        complete, missing, _verification = evaluate_finding_evidence(
             {"page_number": 2, "bbox": bbox, "evidence": []}
         )
         assert complete is False
@@ -121,15 +150,16 @@ def test_nonfinite_or_reversed_bbox_does_not_count() -> None:
 
 
 def test_explicit_cross_page_location_is_usable_but_scalar_page_count_is_not() -> None:
-    complete, _missing = evaluate_finding_evidence(
+    complete, _missing, _verification = evaluate_finding_evidence(
         {
             "location": {"pages": [3, 5]},
-            "evidence": [{"text": "跨页勾稽证据"}],
-        }
+            "evidence": [_source_ref(3, "跨页勾稽证据")],
+        },
+        source_file_hash=TEST_SOURCE_HASH,
     )
     assert complete is True
 
-    incomplete, missing = evaluate_finding_evidence(
+    incomplete, missing, _verification = evaluate_finding_evidence(
         {
             "location": {"pages": 5},
             "evidence": [{"text": "文档共 5 页"}],
@@ -159,7 +189,7 @@ def test_ai_finding_without_evidence_is_degraded_and_not_formal() -> None:
                 "source": "ai",
                 "severity": "high",
                 "page_number": 6,
-                "evidence": [{"page": 6, "text": "合计 35.20"}],
+                "evidence": [_source_ref(6, "合计 35.20")],
                 "tags": ["AI检测"],
             },
         ],
@@ -188,7 +218,9 @@ def test_ai_finding_without_evidence_is_degraded_and_not_formal() -> None:
     assert completeness["degraded_count"] == 1
     assert completeness["formal_issue_total"] == 1
     assert completeness["degraded"][0]["id"] == "ai-no-evidence"
-    assert completeness["degraded"][0]["missing"] == ["missing_evidence_text"]
+    assert completeness["degraded"][0]["missing"] == [
+        "missing_or_invalid_source_identity", "missing_evidence_text"
+    ]
 
 
 def test_rule_finding_without_evidence_is_warned_but_stays_formal() -> None:
@@ -225,11 +257,13 @@ def test_legacy_bucket_structure_is_checked_without_double_counting() -> None:
         "source": "rule",
         "severity": "error",
         "location": {"page": 12},
-        "evidence": [{"page": 12, "text": "合计 35.20"}],
+        "evidence": [_source_ref(12, "合计 35.20")],
     }
     result: Dict[str, Any] = {"issues": {"all": [item], "error": [item], "warn": [], "info": []}}
 
-    completeness = apply_evidence_completeness(result)
+    completeness = apply_evidence_completeness(
+        result, source_file_hash=TEST_SOURCE_HASH
+    )
 
     assert completeness["total"] == 1
     assert completeness["completeness_rate"] == 1.0
@@ -290,7 +324,7 @@ def test_document_level_findings_are_counted_separately() -> None:
                 "source": "rule",
                 "severity": "error",
                 "location": {"page": 12},
-                "evidence": [{"page": 12, "text": "合计 35.20"}],
+                "evidence": [_source_ref(12, "合计 35.20")],
             },
         ]
     }
@@ -415,7 +449,9 @@ def _run_legacy_pipeline(
         },
     )
 
-    full_text = "一般公共预算财政拨款支出预算表" * 10
+    # ZC-00 证据核验：页文本必须真的包含 finding 引用的原文，否则
+    # 证据门会按"原文不存在"判失败——本用例只测完整率管道，故补齐引用。
+    full_text = "一般公共预算财政拨款支出预算表" * 10 + "\n合计 35.20"
     monkeypatch.setattr(pipeline_mod.pdfplumber, "open", lambda _path: _FakePdf(1))
     monkeypatch.setattr(
         pipeline_mod, "_extract_visible_text_from_page", lambda _page: full_text
@@ -474,8 +510,15 @@ async def test_pipeline_reports_evidence_completeness(
                 "id": "C-001-1",
                 "source": "rule",
                 "severity": "error",
-                "location": {"page": 12},
-                "evidence": [{"page": 12, "text": "合计 35.20"}],
+                # ZC-00：夹具假 PDF 只有 1 页，页码必须落在真实页数内，
+                # 且引用文本已在 _run_legacy_pipeline 的页文本中补齐。
+                "location": {"page": 1},
+                "evidence": [_source_ref(
+                    1,
+                    "合计 35.20",
+                    source_id="pipeline-page-1",
+                    file_hash=hashlib.sha256(b"%PDF-1.4\n%%EOF\n").hexdigest(),
+                )],
             }
         ],
     )

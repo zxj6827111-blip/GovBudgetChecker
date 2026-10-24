@@ -80,6 +80,8 @@ class QCRunnerV2:
     
     async def execute(self) -> int:
         """Execute all QC rules and return run_id."""
+        from src.qc.source_version_guard import require_legacy_qc_source
+        await require_legacy_qc_source(self.conn, self.document_version_id)
         # Load rule parameters
         await self.load_rule_params()
         

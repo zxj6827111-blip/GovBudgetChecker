@@ -259,6 +259,44 @@ def test_ai_finding_carries_model_and_prompt_version() -> None:
     assert finding.rule_version is None
 
 
+def test_ai_finding_production_path_validates_candidate_source_ids() -> None:
+    """生产转换入口使用统一候选契约，未知事实/证据/关系身份不会透传。"""
+    service = AIFindingsService(AnalysisConfig())
+    context = JobContext(
+        job_id="job-ai-contract",
+        pdf_path="final.pdf",
+        fact_context={
+            "facts": [{
+                "fact_uid": "fact-known",
+                "extra_dims": {"evidence_refs": [{"evidence_id": "evidence-known"}]},
+            }],
+        },
+        meta={"check_receipts": [{"rule_id": "C-001", "sub_check_id": "total"}]},
+    )
+    finding = service._build_ai_issue_item(
+        raw_issue={
+            "original": "三公经费合计 35.20 万元",
+            "context": "三公经费情况说明：三公经费合计 35.20 万元。",
+            "severity": "medium",
+            "candidate_id": "model-candidate-1",
+            "check_relation_id": "C-001:total",
+            "fact_ids": ["fact-known", "fact-model-invented"],
+            "evidence_ids": ["evidence-known", "evidence-model-invented"],
+        },
+        context=context,
+        idx=1,
+        page_number=1,
+    )
+    assert finding.fact_ids == ["fact-known"]
+    assert finding.evidence_ids == ["evidence-known"]
+    assert finding.check_relation_id == "C-001:total"
+    assert finding.metrics["ai_candidate_contract"] == "identity_claims_removed"
+    assert finding.metrics["ai_candidate_ids_filtered"] == {
+        "unknown_fact_ids": 1,
+        "unknown_evidence_ids": 1,
+    }
+
+
 def test_ai_finding_without_provenance_leaves_versions_empty() -> None:
     """来源不明时留 None，不伪造模型/提示词版本。"""
     service = AIFindingsService(AnalysisConfig())
@@ -341,6 +379,20 @@ def test_legacy_pipeline_uses_existing_table_anchor_but_not_numeric_fields() -> 
     )
     no_page_data = _issue_to_dict(no_page, 2)
     assert no_page_data["location"].get("page") is None
+
+    ambiguous_anchor = Issue(
+        rule="V33-240",
+        severity="error",
+        message="表内合计与分项不一致",
+        evidence_text="收入决算表合计 10.00",
+        location={"table": "收入决算表"},
+    )
+    ambiguous_data = _issue_to_dict(
+        ambiguous_anchor,
+        3,
+        SimpleNamespace(anchors={"收入决算表": [9, 10]}),
+    )
+    assert ambiguous_data["location"].get("page") is None
 
 
 # --------------------------------------------------------------------------
@@ -568,4 +620,3 @@ async def test_pipeline_result_meta_aggregates_versions(
     # 本次未启用 AI，模型/提示词版本必须为空列表而不是占位值
     assert versions["model_versions"] == []
     assert versions["prompt_versions"] == []
-

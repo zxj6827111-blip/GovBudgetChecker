@@ -1,0 +1,17 @@
+{
+  "annotation_id": null,
+  "truth_id": null,
+  "truth_group_id": null,
+  "label": null,
+  "expected_severity": null,
+  "allowed_rule_ids": [],
+  "page": null,
+  "location_key": null,
+  "evidence": null,
+  "section_title_phrases_aligned": [],
+  "section_phrases_aligned": [],
+  "truth_region": {
+    "page": null,
+    "bbox": null
+  }
+}

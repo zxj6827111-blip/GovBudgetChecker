@@ -227,7 +227,7 @@ class AIClientConfig:
 class AIClient:
     """AI 客户端 - 容灾回退核心"""
     
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(self, config_path: Optional[str] = None, *, config: Optional[AIClientConfig] = None):
         # 加载配置
         if config_path is None:
             service_dir = Path(__file__).resolve().parent
@@ -242,7 +242,8 @@ class AIClient:
             if config_path is None:
                 config_path = str(candidates[0])
         
-        self.config = AIClientConfig.from_yaml(config_path)
+        self.config = config if config is not None else AIClientConfig.from_yaml(config_path)
+        self._managed_config = config is not None
         
         # 初始化提供商
         self.providers: Dict[str, LLMProvider] = {}
@@ -534,12 +535,18 @@ class AIClient:
                 )
             except LLMError as e:
                 if attempt == max_retries or not self._should_retry(e):
+                    if self._managed_config:
+                        e.message = f"模型请求失败（{e.error_type.value}）"
                     raise e
                 
                 # 指数回退 + 抖动
                 delay = min(2 ** attempt + random.uniform(0, 1), 10)
                 logger.info(f"Retrying {provider.name} after {delay:.1f}s (attempt {attempt + 1}/{max_retries + 1})")
                 await asyncio.sleep(delay)
+            except Exception:
+                if self._managed_config:
+                    raise LLMError(error_type=LLMErrorType.UNKNOWN, message="模型请求异常，请检查接口配置", provider=provider.name) from None
+                raise
         
         # 不应该到达这里
         raise LLMError(

@@ -12,8 +12,10 @@ from src.services.document_profile_resolver import (
     resolve_report_kind_from_path,
 )
 
-from .budget_rules import ALL_BUDGET_RULES
-from .common_rules import ALL_COMMON_RULES
+from . import budget_rules as _budget_rules
+from . import common_rules as _common_rules
+from . import rules_v33 as _final_rules
+
 from .rule_outcome import (
     RuleDeferred,
     RuleNotApplicable,
@@ -27,17 +29,24 @@ from .rule_outcome import (
     summarize_rule_outcomes,
 )
 from .rules_v33 import (
-    ALL_RULES as FINAL_ALL_RULES,
-)
-from .rules_v33 import (
     Issue,
     order_and_number_issues,
 )
+from .rule_registry import select_rules, select_specific_rules
 from .rules_v33 import (
     build_document as _build_document,
 )
 # re-export for existing callers importing build_document from this module
 build_document = _build_document
+
+# Backwards-compatible patch point used by existing callers/tests. The source
+# list remains the canonical common-rule family registered by rule_registry.
+ALL_COMMON_RULES = _common_rules.ALL_COMMON_RULES
+ALL_BUDGET_RULES = _budget_rules.ALL_BUDGET_RULES
+FINAL_ALL_RULES = _final_rules.ALL_RULES
+_INITIAL_COMMON_RULES = ALL_COMMON_RULES
+_INITIAL_BUDGET_RULES = ALL_BUDGET_RULES
+_INITIAL_FINAL_RULES = FINAL_ALL_RULES
 
 
 def _resolve_report_kind(doc: Any, report_kind: Optional[str] = None) -> str:
@@ -64,11 +73,18 @@ def _resolve_report_kind(doc: Any, report_kind: Optional[str] = None) -> str:
 
 def _rule_set_for_kind(kind: str) -> List[Any]:
     """按文种选择专项规则集。识别不了文种就不选专项规则，只跑通用规则。"""
-    if kind == "budget":
+    if kind == "budget" and ALL_BUDGET_RULES is not _INITIAL_BUDGET_RULES:
         return ALL_BUDGET_RULES
-    if kind == "final":
+    if kind == "final" and FINAL_ALL_RULES is not _INITIAL_FINAL_RULES:
         return FINAL_ALL_RULES
-    return []
+    return select_specific_rules(kind)
+
+
+def _common_rule_set() -> List[Any]:
+    """Use registry routing in production; honor legacy monkeypatch hooks in tests."""
+    if ALL_COMMON_RULES is not _INITIAL_COMMON_RULES:
+        return ALL_COMMON_RULES
+    return select_rules("unknown")
 
 
 def run_rules(
@@ -108,8 +124,13 @@ def run_rules_with_outcomes(
     else:
         selected_rules = [
             *_rule_set_for_kind(resolved_kind),
-            *ALL_COMMON_RULES,
+            *_common_rule_set(),
         ]
+        from .rule_registry import restrict_rules_to_profile
+        from src.services.document_profile_resolver import resolve_document_profile
+        profile = getattr(doc, 'document_profile', None) or resolve_document_profile(
+            path=str(getattr(doc, 'path', '') or ''), page_texts=getattr(doc, 'page_texts', []) or [])
+        selected_rules = restrict_rules_to_profile(selected_rules, profile)
     issues: List[Issue] = []
     outcomes: List[RuleOutcome] = []
     if resolved_kind == "unknown":
@@ -127,6 +148,7 @@ def run_rules_with_outcomes(
             getattr(rule_obj, "__class__", object), "code", "UNKNOWN"
         )
         try:
+            doc.current_rule_code = code
             rule = rule_obj() if isinstance(rule_obj, type) else rule_obj
             if hasattr(rule, "apply_with_ai") and use_ai_assist:
                 produced = rule.apply_with_ai(doc, use_ai_assist)
@@ -175,6 +197,8 @@ def run_rules_with_outcomes(
             )
         )
 
+    from .native_issue_dedup import deduplicate_native_issues
+    issues = deduplicate_native_issues(issues, doc)
     return order_and_number_issues(doc, issues), outcomes
 
 
@@ -234,56 +258,17 @@ def _location_pages(location: Dict[str, Any]) -> List[int]:
     return pages
 
 
-def _anchor_page_for_table(doc: Any, table_name: Any) -> Optional[int]:
-    """Resolve a table location against the document's existing anchors.
-
-    A table name must match an existing anchor key after whitespace
-    normalization. If no anchor exists, the page remains unknown rather than
-    being guessed from an unrelated numeric field.
-    """
-    anchors = getattr(doc, "anchors", None)
-    if not isinstance(anchors, dict):
-        return None
-    target = re.sub(r"\s+", "", str(table_name or ""))
-    if not target:
-        return None
-    candidates: List[int] = []
-    for anchor_name, raw_pages in anchors.items():
-        normalized = re.sub(r"\s+", "", str(anchor_name or ""))
-        if not normalized or not (
-            target == normalized or target in normalized or normalized in target
-        ):
-            continue
-        if not isinstance(raw_pages, (list, tuple)):
-            continue
-        for raw_page in raw_pages:
-            if isinstance(raw_page, bool):
-                continue
-            try:
-                page = int(raw_page)
-            except (TypeError, ValueError):
-                continue
-            if page > 0:
-                candidates.append(page)
-    return min(candidates) if candidates else None
-
-
-_RULE_TABLE_HINTS: Dict[str, Tuple[str, ...]] = {
-    # 这些规则的 finding 可能只带业务字段，但规则本身有明确的表域；
-    # 只有在文档锚点已存在时才用锚点补页码。
-    "V33-200": ("收入支出决算总表", "收入决算表"),
-    "V33-201": ("收入支出决算总表", "支出决算表"),
-    "V33-244": ('一般公共预算财政拨款“三公”经费支出决算表',),
-}
-
-
 def _infer_issue_page(
     issue: Any,
     location: Dict[str, Any],
     evidence_list: List[Dict[str, Any]],
     doc: Any = None,
 ) -> Optional[int]:
-    """Resolve a primary page from explicit finding evidence only."""
+    """Resolve a page from explicit refs, or one unique exact table anchor.
+
+    A table label can provide a page only when it maps to exactly one physical
+    page. Fuzzy/partial names and multi-page anchors remain unresolved.
+    """
     pages = _location_pages(location)
     if pages:
         return pages[0]
@@ -292,20 +277,15 @@ def _infer_issue_page(
         if item_pages:
             return item_pages[0]
 
-    table_names: List[str] = []
-    table = location.get("table")
-    if isinstance(table, str):
-        table_names.extend(part.strip() for part in table.split(" / ") if part.strip())
-    rule_code = str(
-        (issue.get("rule_id") or issue.get("rule") or "")
-        if isinstance(issue, dict)
-        else (getattr(issue, "rule", "") or "")
-    ).strip()
-    table_names.extend(_RULE_TABLE_HINTS.get(rule_code, ()))
-    for table_name in table_names:
-        page = _anchor_page_for_table(doc, table_name)
-        if page is not None:
-            return page
+    table_name = str(location.get("table") or "").strip()
+    anchors = getattr(doc, "anchors", None)
+    if table_name and "/" not in table_name and isinstance(anchors, dict):
+        raw_pages = anchors.get(table_name)
+        if isinstance(raw_pages, (list, tuple)):
+            anchor_pages = _location_pages({"pages": raw_pages})
+            if len(anchor_pages) == 1:
+                return anchor_pages[0]
+
     return None
 
 
@@ -339,13 +319,39 @@ def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
         evidence_list = (
             issue.get("evidence") if isinstance(issue.get("evidence"), list) else []
         )
-        bbox = _normalize_bbox(issue.get("bbox"))
+        check_relation_id = str(issue.get("check_relation_id") or "").strip() or None
+        fact_ids = [str(value) for value in issue.get("fact_ids", []) if str(value)]
+        evidence_ids = [str(value) for value in issue.get("evidence_ids", []) if str(value)]
+        location_level = str(issue.get("location_level") or "unresolved")
+        if location_level not in {"exact_cell", "exact_span"}:
+            location_level = str(location.get("location_level") or location_level)
+        verification_status = str(issue.get("verification_status") or "unverified")
+        if verification_status != "verified":
+            verification_status = str(location.get("verification_status") or verification_status)
+        bbox = (
+            _normalize_bbox(issue.get("bbox") or location.get("bbox"))
+            if location_level in {"exact_cell", "exact_span"} and verification_status == "verified"
+            else None
+        )
     else:
         rule_code = str(getattr(issue, "rule", "") or "").strip()
         location = dict(getattr(issue, "location", None) or {})
         message = str(getattr(issue, "message", "") or "").strip()
+        check_relation_id = str(getattr(issue, "check_relation_id", "") or "").strip() or None
+        fact_ids = [str(value) for value in (getattr(issue, "fact_ids", None) or []) if str(value)]
+        evidence_ids = [str(value) for value in (getattr(issue, "evidence_ids", None) or []) if str(value)]
         evidence_text = getattr(issue, "evidence_text", None)
-        bbox = _normalize_bbox(location.get("bbox"))
+        location_level = str(getattr(issue, "location_level", None) or "unresolved")
+        if location_level not in {"exact_cell", "exact_span"}:
+            location_level = str(location.get("location_level") or location_level)
+        verification_status = str(getattr(issue, "verification_status", None) or "unverified")
+        if verification_status != "verified":
+            verification_status = str(location.get("verification_status") or verification_status)
+        bbox = (
+            _normalize_bbox(location.get("bbox"))
+            if location_level in {"exact_cell", "exact_span"} and verification_status == "verified"
+            else None
+        )
         evidence_list = []
         if evidence_text:
             evidence_list.append(
@@ -354,6 +360,8 @@ def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
                     "text": str(evidence_text),
                     "text_snippet": str(evidence_text),
                     "bbox": bbox,
+                    "location_level": location_level,
+                    "verification_status": verification_status,
                 }
             )
 
@@ -371,15 +379,20 @@ def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
     for ev in evidence:
         if _normalize_page(ev) is None and page is not None:
             ev["page"] = page
-    if not evidence:
-        evidence = [
-            {
-                "page": page,
-                "text": message,
-                "text_snippet": _strip_list_prefix(message)[:200],
-                "bbox": bbox,
-            }
-        ]
+        if not (
+            str(ev.get("location_level") or "") in {"exact_cell", "exact_span"}
+            and str(ev.get("verification_status") or "") == "verified"
+        ):
+            ev.pop("bbox", None)
+            ev.setdefault("location_level", "unresolved")
+            ev.setdefault("verification_status", "unverified")
+
+    if location_level not in {"exact_cell", "exact_span"} or verification_status != "verified":
+        has_region = any(location.get(key) for key in ("table", "section", "row", "field"))
+        location_level = "region" if has_region else "unresolved"
+        location.pop("bbox", None)
+    location["location_level"] = location_level
+    location["verification_status"] = verification_status
 
     suggestion = (
         issue.get("suggestion") if isinstance(issue, dict) else None
@@ -401,9 +414,14 @@ def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
         "evidence": evidence,
         "location": location,
         "bbox": bbox,
+        "location_level": location_level,
+        "verification_status": verification_status,
         "suggestion": str(suggestion),
         "tags": [rule_code],
         "metrics": {},
+        "check_relation_id": check_relation_id,
+        "fact_ids": list(dict.fromkeys(fact_ids)),
+        "evidence_ids": list(dict.fromkeys(evidence_ids)),
         "created_at": created_at,
         # 版本留痕（P2-02）：legacy 流水线没有可配置的规则版本入口，
         # 固定使用 rules_v33/budget_rules/common_rules 这套规则模块，
@@ -413,6 +431,11 @@ def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
         "prompt_version": None,
         "engine_version": ENGINE_VERSION,
     }
+    for field in ("related_rule_ids", "check_relation_ids", "merged_issue_ids"):
+        values = location.get(field)
+        if isinstance(values, list) and values:
+            data[field] = list(dict.fromkeys(str(value) for value in values))
+    data["tags"] = list(dict.fromkeys([rule_code, *(data.get("related_rule_ids") or [])]))
     return data
 
 
@@ -423,6 +446,16 @@ def _norm_sev(severity: Optional[str]) -> str:
     if value in {"warn", "warning", "medium", "low", "manual_review"}:
         return "warn"
     return "info"
+
+
+def tag_manual_fill_issues(items: List[Dict[str, Any]], context: Any) -> None:
+    """引用了人工补录数据的结论要标明来源，审核时可回到校正记录核对。"""
+    manual = {fact.fact_uid for fact in (getattr(context, "facts", None) or []) if fact.extra_dims.get("manual_fill")}
+    for item in items:
+        used = [uid for uid in item.get("fact_ids") or [] if uid in manual]
+        if used:
+            item["manual_fill_fact_ids"] = used
+            item["tags"] = list(dict.fromkeys([*item.get("tags", []), "人工补录"]))
 
 
 def build_issues_payload(
@@ -439,18 +472,40 @@ def build_issues_payload(
         for idx, item in enumerate(raw_list, start=1)
     ]
 
+    # Merged findings retain every original relation; each failed receipt
+    # points to the retained exported ID after serialization.
+    from .native_issue_dedup import link_merged_issue_receipts
+    link_merged_issue_receipts(items, getattr(doc, "fact_receipts", None) or [])
+
+    tag_manual_fill_issues(items, getattr(doc, "fact_context", None))
+
     buckets: Dict[str, List[Dict[str, Any]]] = {"error": [], "warn": [], "info": []}
     for item in items:
         bucket = _norm_sev(str(item.get("severity") or ""))
-        item["severity"] = bucket
+        # 分桶不抹除待复核语义，否则未完成提示会被计为正式 warn。
+        if item.get("severity") != "manual_review":
+            item["severity"] = bucket
         buckets[bucket].append(item)
     buckets["all"] = items
     # 规则执行摘要（增量字段，向后兼容）：insufficient/parse/execution_error
     # 不再伪装成 finding，质量门据此 fail-closed
-    return {
+    payload = {
         "issues": buckets,
         "rule_execution_summary": summarize_rule_outcomes(outcomes),
     }
+    # ZC-03（AC-04）：规则写下的关系级子检查回执随 payload 返回——
+    # Document 在子进程内构建，其上的回执必须在这里收割后才传得回来。
+    fact_receipts = list(getattr(doc, "fact_receipts", None) or [])
+    if fact_receipts:
+        payload["fact_receipts"] = fact_receipts
+    fact_context = getattr(doc, "fact_context", None)
+    payload["structured_consumption"] = list(getattr(doc, "structured_consumption", []) or [])
+    if fact_context is not None:
+        try:
+            payload["fact_context_summary"] = fact_context.summary()
+        except Exception:
+            payload["fact_context_summary"] = {"error": "summary_failed"}
+    return payload
 
 
 #: MR-3 文档级可读性闸门的覆盖率阈值（与 api 层质量门的 low_page_coverage

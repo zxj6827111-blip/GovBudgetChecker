@@ -8,7 +8,9 @@ load_dotenv()
 import json
 import time
 import asyncio
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -24,8 +26,11 @@ if _ROOT not in _sys.path:
 
 from src.engine.check_obligations import (
     attach_obligation_ids,
+    build_check_receipts,
     build_obligation_ledger,
 )
+from src.engine.rule_policy import PORTABLE_RULE_POLICY_VERSION
+from src.engine.rule_registry import RULE_REGISTRY_VERSION
 from src.engine.pipeline import (
     apply_readability_gate,
     build_document,
@@ -50,10 +55,12 @@ from src.schemas.issues import (
     AnalysisQualityStatus,
     JobStatus,
 )
+from src.schemas.review_report import build_review_report
 from api import runtime
 from api.job_queue import DurableJobQueue
 from api.queue_runtime import (
     compute_queue_workers,
+    env_flag,
     get_queue_role,
     queue_resume_on_start,
     should_start_local_queue,
@@ -61,6 +68,7 @@ from api.queue_runtime import (
 from api.routes import register_routes
 
 from src.services.analyze_dual import DualModeAnalyzer
+from src.services.ocr_pipeline import maybe_ocr_scanned_pages
 from src.services.analysis_result_store import (
     persist_analysis_job_snapshot,
     sync_pending_analysis_snapshots,
@@ -107,6 +115,30 @@ import logging
 
 logger = logging.getLogger(__name__)
 _workflow_mirror_task: asyncio.Task | None = None
+_job_list_warmup_task: asyncio.Task | None = None
+
+
+async def _warm_job_list_caches() -> None:
+    try:
+        warmed_count = await asyncio.to_thread(runtime.warm_job_list_caches)
+        logger.info("Job list caches warmed for %d jobs", warmed_count)
+    except Exception:
+        logger.exception("Job list cache warm-up failed")
+    # 工作台与质量管理页还会读 /api/metrics：首次汇总要扫描全部任务目录，一并提前做掉。
+    try:
+        from src.services.metrics import collect_metrics_cached
+
+        await asyncio.to_thread(collect_metrics_cached, runtime.UPLOAD_ROOT)
+    except Exception:
+        logger.exception("Metrics cache warm-up failed")
+
+
+def _start_job_list_warmup() -> None:
+    """后台预热任务列表缓存；只读文件，不阻塞启动，worker 进程与测试环境不做。"""
+    global _job_list_warmup_task
+    if get_queue_role() == "worker" or not env_flag("JOB_LIST_CACHE_WARMUP", not env_flag("TESTING", False)):
+        return
+    _job_list_warmup_task = asyncio.create_task(_warm_job_list_caches())
 
 
 async def _sync_persistence_state_on_startup() -> None:
@@ -152,7 +184,11 @@ async def _startup_job_queue() -> None:
 
 
 async def _shutdown_job_queue() -> None:
-    global _workflow_mirror_task
+    global _workflow_mirror_task, _job_list_warmup_task
+    if _job_list_warmup_task is not None:
+        # 线程里的读文件无法中断，这里只是不再等待它的结果。
+        _job_list_warmup_task.cancel()
+        _job_list_warmup_task = None
     if _workflow_mirror_task is not None:
         _workflow_mirror_task.cancel()
         try:
@@ -178,6 +214,7 @@ async def _app_lifespan(_app: FastAPI):
     # 是因为导入期装配会清掉 pytest 的日志 handler。
     configure_logging_from_env("api")
     await _startup_job_queue()
+    _start_job_list_warmup()
     try:
         yield
     finally:
@@ -200,9 +237,10 @@ origins = [
 codespace = os.getenv("CODESPACE_NAME")
 gh_dom = os.getenv("GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN")
 if codespace and gh_dom:
+    backend_port = os.getenv("GOVBUDGET_BACKEND_PORT", "18743")
     origins += [
         f"https://{codespace}-3000.{gh_dom}",
-        f"https://{codespace}-8000.{gh_dom}",
+        f"https://{codespace}-{backend_port}.{gh_dom}",
     ]
 
 extra = os.getenv("ALLOW_ORIGINS", "").strip()
@@ -260,8 +298,20 @@ def _safe_write(job_dir: Path, payload: Dict[str, Any]) -> None:
         existing = runtime.read_json_file(status_file, default={})
         for key, value in runtime.extract_job_status_context(existing).items():
             merged_payload.setdefault(key, value)
+        for key in ("pipeline_budget", "ocr_progress"):
+            if key in existing:
+                merged_payload.setdefault(key, existing[key])
 
         job_status = str(payload.get("status") or "unknown")
+        if job_status in runtime.TERMINAL_ANALYSIS_STATUSES or job_status == "cancelled":
+            from src.services.check_progress import finish_incomplete
+            finish_incomplete(job_dir.name, "cancelled" if job_status == "cancelled" else "failed")
+        if isinstance(merged_payload.get("pipeline_budget"), dict):
+            elapsed_budget = dict(merged_payload["pipeline_budget"])
+            elapsed_budget["elapsed_seconds"] = round(max(0, time.time() - float(elapsed_budget.get("started_at") or time.time())), 2)
+            if job_status in runtime.TERMINAL_ANALYSIS_STATUSES:
+                elapsed_budget.setdefault("outcome", job_status)
+            merged_payload["pipeline_budget"] = elapsed_budget
         stage_text = payload.get("stage")
         if stage_text is not None:
             # 本次写入自带阶段名：正常推进路径，直接解析当前阶段进度。
@@ -289,8 +339,13 @@ def _safe_write(job_dir: Path, payload: Dict[str, Any]) -> None:
                 )
 
         runtime.write_json_file(status_file, merged_payload)
+        # ZC-01：终态结果额外写入版本化快照 + 原子当前指针；
+        # 重分析追加新版本目录，不删除旧快照。失败不影响主链路。
+        runtime.write_analysis_revision_snapshot(job_dir, merged_payload)
     except Exception as e:
         (job_dir / "status_error.log").write_text(str(e), encoding="utf-8")
+        if payload.get("status") in runtime.TERMINAL_ANALYSIS_STATUSES:
+            raise
 
     # 只写结构化元数据（进度、页覆盖率、错误码），不写 PDF 正文与证据原文
     job_status = str(payload.get("status") or "unknown")
@@ -370,8 +425,8 @@ def _assess_page_extraction(
 ) -> Dict[str, Any]:
     """评估每页文本抽取质量，识别疑似扫描页与低文本页。
 
-    本轮不做自动 OCR：这里只负责"检测 + 算覆盖率"，
-    是否转人工复核由任务级质量门禁（Task 3）决定。
+    此函数只负责"检测 + 算原生文本/表格覆盖率"。OCR 候选单独保存在
+    ParseArtifact；在置信度、表头口径和复识别校验完成前，不降低本门禁风险。
 
     判定口径：
       - 去空白字符数低于阈值、且未抽到任何非空表格单元格 -> 低文本页；
@@ -476,6 +531,7 @@ def _evaluate_quality_gate(
     rule_execution_summary: Optional[Dict[str, Any]] = None,
     doc_type: Optional[str] = None,
     obligation_coverage: Optional[Dict[str, Any]] = None,
+    fact_overlay_report: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """任务级质量门禁：决定终态是 done / degraded / review_required。
 
@@ -484,7 +540,7 @@ def _evaluate_quality_gate(
 
     触发人工复核的条件（任一命中即转）：
       1. 页面文本覆盖率低于阈值；
-      2. 存在疑似扫描页（本轮不做 OCR，必然漏检）；
+      2. 存在疑似扫描页（OCR 未通过确定性使用校验，内容尚未参与规则）；
       3. 报告类型无法识别（unknown 只跑了通用规则，专项规则未覆盖）；
       4. 年度无法识别（同比/口径类判断失去基准）；
       5. AI 被配置为必需能力却失败（legacy 参数路径）；
@@ -521,6 +577,42 @@ def _evaluate_quality_gate(
 
     review_reasons: List[Dict[str, Any]] = []
 
+    reading = ((structured_ingest or {}).get("reading_import") or {}).get("reading_quality")
+    if not isinstance(reading, dict):
+        reading = page_assessment.get("table_reading") or {}
+    reading_gaps = reading.get("gaps") or []
+    unbound = reading.get("unbound_money_cells") or []
+    fiscal_coverage = reading.get("fiscal_coverage") or {}
+    mapping_tables = reading.get("mapping_incomplete_tables") or []
+    if reading_gaps or unbound or mapping_tables:
+        named = "、".join(f"第{t.get('page')}页《{t.get('title') or t.get('table_code')}》" for t in mapping_tables[:5])
+        review_reasons.append({
+            "code": "table_reading_incomplete",
+            "message": (f"还有 {len(reading_gaps)} 处表格读取缺口、{len(unbound)} 个金额格待复核"
+                        f"（缺少事实 {fiscal_coverage.get('fact_missing_count', len(unbound))}，"
+                        f"列身份未确认 {fiscal_coverage.get('column_identity_unresolved_count', 0)}，"
+                        f"合计与分项系统性对不上 {fiscal_coverage.get('column_arithmetic_conflict_count', 0)}，"
+                        f"事实冲突 {fiscal_coverage.get('fact_conflict_count', 0)}，"
+                        f"规则准入阻断 {fiscal_coverage.get('rule_blocked_count', 0)}）"
+                        + (f"；映射不完整的表 {len(mapping_tables)} 张：{named}" if mapping_tables else "")
+                        + "，相关检查不能视为已完成"),
+            "pages": sorted({g.get("page") for g in [*reading_gaps, *unbound, *mapping_tables]
+                             if type(g.get("page")) is int}),
+            "reading_gap_count": len(reading_gaps), "unbound_money_cell_count": len(unbound),
+            "mapping_incomplete_tables": mapping_tables,
+            "fiscal_coverage": fiscal_coverage,
+            "recovery": reading.get("recovery") or {},
+        })
+    identity_gaps = {k: v for k, v in (reading.get("fact_identity_gaps") or {}).items() if v}
+    if identity_gaps:
+        review_reasons.append({
+            "code": "fact_identity_incomplete",
+            "message": (f"已入库的财政数据身份不完整（主体为空 {identity_gaps.get('organization_missing', 0)} 条，"
+                        f"科目名称只有编码 {identity_gaps.get('subject_name_is_code', 0)} 条），"
+                        "这些数据不能计为已完成入库"),
+            "fact_identity_gaps": identity_gaps,
+        })
+
     if page_coverage < coverage_threshold:
         review_reasons.append(
             {
@@ -538,7 +630,7 @@ def _evaluate_quality_gate(
                 "code": "scanned_pages_detected",
                 "message": (
                     f"检测到 {scanned_page_count} 页疑似扫描页/无文本层，"
-                    "当前未启用 OCR，这些页面内容未参与审核"
+                    "OCR结果尚未通过置信度、口径绑定及复识别校验，内容未参与确定性规则检查"
                 ),
                 "pages": (page_assessment.get("scanned_pages") or [])[:50],
             }
@@ -580,7 +672,51 @@ def _evaluate_quality_gate(
             }
         )
 
+    # ---- RC-10：人工校正未完全生效时，结论必须亮出来而不是静默通过 ----
+    if isinstance(fact_overlay_report, dict):
+        overlay_status = str(fact_overlay_report.get("status") or "")
+        unresolved_overlays = [
+            item
+            for item in (fact_overlay_report.get("unresolved") or [])
+            if isinstance(item, dict)
+        ]
+        blocking_unsupported = [
+            item
+            for item in (fact_overlay_report.get("unsupported") or [])
+            if isinstance(item, dict) and item.get("blocking")
+        ]
+        if overlay_status in {"failed", "partial"} or blocking_unsupported:
+            parts: List[str] = []
+            if unresolved_overlays:
+                parts.append(
+                    f"{len(unresolved_overlays)} 条校正目标无法映射到当前事实版本"
+                )
+            if blocking_unsupported:
+                fields = sorted({str(item.get("field") or "unknown") for item in blocking_unsupported})
+                parts.append(
+                    f"{len(blocking_unsupported)} 条校正字段未自动生效（{', '.join(fields)}）"
+                )
+            review_reasons.append(
+                {
+                    "code": "correction_overlay_incomplete",
+                    "message": (
+                        "人工校正未完全生效："
+                        + "；".join(parts)
+                        + "。相关差异按未校正数据计算，请人工确认校正目标后重新分析"
+                    ),
+                }
+            )
+
     # ---- 结构化入库信号（此前被丢弃，P0 §3.6） ----
+    if isinstance(structured_ingest, dict) and (
+        structured_ingest.get("status") == "error"
+        or (structured_ingest.get("unified_storage") or {}).get("status") == "error"
+    ):
+        review_reasons.append({
+            "code": "structured_ingest_failed",
+            "message": "本次结构化事实或证据未成功保存，需修复保存失败后重新分析。",
+            "failed_stage": structured_ingest.get("ingest_stage"),
+        })
     ingest_review_items: List[Dict[str, Any]] = []
     if isinstance(structured_ingest, dict) and isinstance(
         structured_ingest.get("review_items"), list
@@ -951,6 +1087,7 @@ def _assess_parser_quality(
     if (
         scanned_page_count > 0
         or facts_empty
+        or (isinstance(structured_ingest, dict) and structured_ingest.get("status") == "error")
         or coverage < _page_coverage_min_ratio()
     ):
         quality = "poor"
@@ -970,6 +1107,54 @@ def _assess_parser_quality(
     }
 
 
+def _resolve_pipeline_budget(job_dir: Path) -> Dict[str, Any]:
+    """The worker's total budget is independent from an HTTP wait deadline.
+
+    Reserve the existing 600 seconds for native parse/rules/ingest and, when OCR
+    is enabled, one 600-second soft page allowance per physical
+    page. The hard wall-clock ceiling stays in place even on oversized inputs.
+    """
+    from src.services.ocr_client import ocr_enabled
+    from src.services.ocr_tiles import PAGE_SOFT_BUDGET
+
+    pages = 0
+    try:
+        pages = runtime.get_pdf_page_count(runtime.find_first_pdf(job_dir))
+    except Exception:
+        pass
+    explicit = os.getenv("PIPELINE_TIMEOUT_SEC", "").strip()
+    ai_budget_seconds = 0
+    status = runtime.read_json_file(job_dir / "status.json", default={})
+    if status.get("use_ai_assist") and status.get("mode") == "dual":
+        from src.services.ai_model_settings import resolve_job_runtime, audit_time_budget
+        try:
+            ai_config = resolve_job_runtime(job_dir.name, status.get("ai_profile_id"))
+            ai_budget_seconds = audit_time_budget(ai_config["timeout_s"] if ai_config else 90)
+        except ValueError:
+            pass
+    default_seconds = 600 + ai_budget_seconds + (int(PAGE_SOFT_BUDGET) * pages if ocr_enabled() else 0)
+    try:
+        seconds = int(explicit) if explicit else default_seconds
+        if seconds <= 0:
+            raise ValueError("non-positive budget")
+    except (TypeError, ValueError):
+        seconds = default_seconds
+        explicit = ""
+    return {
+        "total_seconds": min(seconds, 7200),
+        "hard_limit_seconds": 7200,
+        "cleanup_grace_seconds": 7,
+        "mode": "explicit" if explicit else "page_aware_default",
+        "physical_page_count": pages,
+        "native_stage_reserve_seconds": 600,
+        "ai_budget_seconds": ai_budget_seconds,
+        "ocr_page_seconds": PAGE_SOFT_BUDGET if ocr_enabled() else 0,
+        "elapsed_seconds": 0,
+        "started_at": time.time(),
+        "cancellation_scope": "worker_and_client_requests; OCR service may finish the current bounded inference",
+    }
+
+
 async def _run_pipeline(job_dir: Path) -> None:
     """
     真正的解析管线：
@@ -978,26 +1163,57 @@ async def _run_pipeline(job_dir: Path) -> None:
     - 调用 build_issues_payload 打包返回
     - 写入 status.json（result.summary / result.issues / result.meta）
     """
-    try:
-        PIPELINE_TIMEOUT_SEC = int(os.getenv("PIPELINE_TIMEOUT_SEC", "600"))
-    except Exception:
-        PIPELINE_TIMEOUT_SEC = 600
+    from src.services.analysis_timing import ai_queue_wait_scope
+
+    budget = _resolve_pipeline_budget(job_dir)
+    timeout_seconds = budget["total_seconds"]
+    started = time.monotonic()
+    cancel_path = job_dir / ".cancel-request.json"
+    existing = runtime.read_json_file(job_dir / "status.json", default={})
+    cancel_request = runtime.read_json_file(cancel_path, default={})
+    if float(cancel_request.get("ts") or 0) < float(existing.get("ts") or 0):
+        cancel_path.unlink(missing_ok=True)
+    runtime.write_json_file(job_dir / "status.json", {**existing, "pipeline_budget": budget})
 
     # 绑定 job_id 到日志上下文：本函数内（含被调用栈里任意模块）产生的每条日志
     # 都会自动带上 job_id，实现"全链路可按 job_id 检索"。
     # 用 contextvars 而非全局 LogRecordFactory，队列并发多任务时不会互相串字段。
-    with log_context(job_id=job_dir.name):
+    with log_context(job_id=job_dir.name), ai_queue_wait_scope() as queue_wait:
+        def timing_fields():
+            elapsed = time.monotonic() - started
+            return {
+                "elapsed_seconds": round(elapsed, 2),
+                "ai_queue_wait_seconds": round(queue_wait.elapsed, 2),
+                "active_elapsed_seconds": round(max(0, elapsed - queue_wait.elapsed), 2),
+            }
+
         try:
-            await asyncio.wait_for(
-                _run_pipeline_inner(job_dir),
-                timeout=PIPELINE_TIMEOUT_SEC,
-            )
+            task = asyncio.create_task(_run_pipeline_inner(job_dir))
+            while not task.done():
+                if cancel_path.exists():
+                    raise asyncio.CancelledError("user_cancelled")
+                elapsed = time.monotonic() - started
+                # Default work budgets cover processing, while queue waiting
+                # is charged only against the existing hard wall-clock cap.
+                # Explicit operator deadlines remain strict wall-clock limits.
+                chargeable = elapsed - queue_wait.elapsed if budget["mode"] == "page_aware_default" else elapsed
+                remaining = min(timeout_seconds - chargeable, budget["hard_limit_seconds"] - elapsed)
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                await asyncio.wait({task}, timeout=min(1.0, remaining))
+            await task
+            final_payload = runtime.read_json_file(job_dir / "status.json", default={})
+            outcome = ('pending' if final_payload.get('status') == 'queued' else
+                       'error' if final_payload.get('status') == 'error' else 'completed')
+            _safe_write(job_dir, {**final_payload, "pipeline_budget": {**budget, **timing_fields(), "outcome": outcome}})
         except asyncio.TimeoutError:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
             logger.error(
                 "pipeline timed out after %ss",
-                PIPELINE_TIMEOUT_SEC,
+                timeout_seconds,
                 extra=safe_log_extra(
-                    {"stage": "pipeline_timeout", "timeout_seconds": PIPELINE_TIMEOUT_SEC}
+                    {"stage": "pipeline_timeout", "timeout_seconds": timeout_seconds}
                 ),
             )
             _safe_write(
@@ -1005,7 +1221,10 @@ async def _run_pipeline(job_dir: Path) -> None:
                 {
                     "job_id": job_dir.name,
                     "status": "error",
-                    "error": f"pipeline_timeout_{PIPELINE_TIMEOUT_SEC}s",
+                    "error": f"pipeline_timeout_{timeout_seconds}s",
+                    "pipeline_budget": {**budget, **timing_fields(), "outcome": "timeout"},
+                    "quality_status": AnalysisQualityStatus.REVIEW_REQUIRED.value,
+                    "analysis_conclusion": AnalysisConclusion.ANALYSIS_ERROR.value,
                     "ts": time.time(),
                 },
             )
@@ -1013,6 +1232,19 @@ async def _run_pipeline(job_dir: Path) -> None:
                 runtime.read_json_file(job_dir / "status.json", default={}),
                 include_results=True,
             )
+        except asyncio.CancelledError:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            _safe_write(job_dir, {
+                "job_id": job_dir.name, "status": "error", "error": "pipeline_cancelled",
+                "ts": time.time(), "cancel_requested": True,
+                "pipeline_budget": {**budget, **timing_fields(), "outcome": "cancelled"},
+                "quality_status": AnalysisQualityStatus.REVIEW_REQUIRED.value,
+                "analysis_conclusion": AnalysisConclusion.ANALYSIS_ERROR.value,
+            })
+            await persist_analysis_job_snapshot(runtime.read_json_file(job_dir / "status.json", default={}), include_results=True)
+            if not cancel_path.exists():
+                raise
 
 
 async def _run_pipeline_inner(job_dir: Path) -> None:
@@ -1025,8 +1257,22 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
         await _run_pipeline_body(job_dir)
 
 
-async def _run_pipeline_body(job_dir: Path) -> None:
+async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> None:
     """真正的流水线主体。"""
+    from copy import deepcopy
+    from src.services.analysis_fact_snapshot import make_snapshot, write_snapshot
+    from src.services.analysis_result_store import persist_analysis_job_snapshot as commit_result
+    async def persist_analysis_job_snapshot(payload, *, include_results=False):
+        if not candidate_only:
+            return await commit_result(payload,include_results=include_results)
+        if include_results:
+            if not payload.get('analysis_revision')or not (payload.get('structured_ingest')or{}).get('fact_snapshot'):
+                return False
+            from src.services.historical_rebuild import stage_candidate_result
+            return await stage_candidate_result(payload)
+        return True
+    analysis_revision = "rev-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:8]
+    raw_fact_context_obj = None
     # 提前初始化 provider_stats，确保处理中/失败态也能返回该字段
     provider_stats: List[Dict[str, Any]] = []
     structured_ingest_summary: Dict[str, Any] = {}
@@ -1035,9 +1281,14 @@ async def _run_pipeline_body(job_dir: Path) -> None:
     page_assessment: Dict[str, Any] = _assess_page_extraction([], [])
     try:
         # 读取检测模式配置
+        expected_fact_revision = None
+        if (os.getenv('DATABASE_URL') or '').strip():
+            from src.services.analysis_fact_snapshot import current_revision
+            expected_fact_revision = await current_revision(job_dir.name)
         status_file = job_dir / "status.json"
         use_local_rules = True
-        use_ai_assist = True
+        # ZC-00：默认关闭 AI 分析——上传链路未显式请求 AI 时不得调用模型服务。
+        use_ai_assist = False
         mode = "legacy"  # 默认为旧模式
         fiscal_year = None
         doc_type = None
@@ -1050,9 +1301,10 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             try:
                 status_data = json.loads(status_file.read_text(encoding="utf-8"))
                 use_local_rules = status_data.get("use_local_rules", True)
-                use_ai_assist = status_data.get("use_ai_assist", True)
+                # ZC-00：缺省视为不请求 AI，旧任务显式写 true 才会请求
+                use_ai_assist = status_data.get("use_ai_assist", False)
                 mode = status_data.get("mode", "legacy")
-                fiscal_year = status_data.get("fiscal_year")
+                fiscal_year = runtime.parse_report_year(status_data.get("fiscal_year"))
                 doc_type = status_data.get("doc_type")
                 organization_id = status_data.get("organization_id")
                 organization_name = status_data.get("organization_name")
@@ -1134,14 +1386,38 @@ async def _run_pipeline_body(job_dir: Path) -> None:
         )
 
         def _sync_parse_pdf():
+            # ZC-01：线程池路径同样在一次 pdfplumber.open 内产出统一解析对象
             p_texts = []
             p_tables = []
             f_size = pdf_path.stat().st_size
+            import hashlib
+
+            from src.services.pdf_parser import PDFParser as _CellParser
+
+            digest = hashlib.sha256()
+            with pdf_path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            file_hash = digest.hexdigest()
+            cell_parser = _CellParser(None)
+            artifact_payload = None
             with pdfplumber.open(str(pdf_path)) as pdf:
                 for p in pdf.pages:
                     p_texts.append(_extract_visible_text_from_page(p))
                     p_tables.append(_extract_tables_from_page(p))
-            return p_texts, p_tables, f_size
+                # ZC-01：同一句柄额外产出统一解析对象。产物失败不阻断主链
+                # 解析——结构化入库会回退到独立解析（与旧行为一致）。
+                try:
+                    artifact = cell_parser.build_parse_artifact_from_handle(
+                        pdf, file_hash=file_hash
+                    )
+                    artifact_payload = artifact.to_dict()
+                except Exception:
+                    logger.warning(
+                        "unified parse artifact build failed; ingest will parse independently",
+                        extra=safe_log_extra({"job_id": job_dir.name}),
+                    )
+            return p_texts, p_tables, f_size, artifact_payload
 
         loop = asyncio.get_running_loop()
         loop = asyncio.get_running_loop()
@@ -1183,13 +1459,296 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             page_texts = parsed["page_texts"]
             page_tables = parsed["page_tables"]
             filesize = parsed["filesize"]
+            parse_artifact_payload = parsed.get("parse_artifact")
         else:
-            page_texts, page_tables, filesize = await loop.run_in_executor(
-                None, _sync_parse_pdf
+            page_texts, page_tables, filesize, parse_artifact_payload = (
+                await loop.run_in_executor(None, _sync_parse_pdf)
             )
+        # 统一解析对象（ZC-01）：结构化入库消费它，不再重开 PDF 第二遍
+        parse_artifact_obj = None
+        if isinstance(parse_artifact_payload, dict):
+            try:
+                from src.schemas.parse_artifact import ParseArtifact as _ParseArtifact
 
-        # 扫描页/低文本页检测：本轮只检测不 OCR，结果先落状态供前端与后续门禁使用
+                parse_artifact_obj = _ParseArtifact.from_dict(parse_artifact_payload)
+            except Exception:
+                logger.warning(
+                    "parse artifact deserialization failed; ingest will parse independently",
+                    extra=safe_log_extra({"job_id": job_dir.name}),
+                )
+                parse_artifact_obj = None
+
+
+        # 扫描页/低文本页检测：结果先落状态供前端与后续门禁使用
         page_assessment = _assess_page_extraction(page_texts, page_tables)
+        from src.services.table_reading_assessment import enrich_page_assessment
+        page_assessment = enrich_page_assessment(page_assessment, parse_artifact_obj)
+        # OCR（ZC-02 / SYS-10）：默认关闭；显式启用且存在扫描页时按页补识别。
+        # 结果只登记进统一解析对象与 meta，原生文本层不被覆盖（冲突保留）。
+        async def _ocr_progress(progress):
+            current = runtime.read_json_file(job_dir / "status.json", default={})
+            _safe_write(job_dir, {**current, "status": "processing", "stage": "解析PDF内容", "ocr_progress": progress, "ts": time.time()})
+
+        ocr_summary = await maybe_ocr_scanned_pages(
+            str(pdf_path), page_assessment, parse_artifact_obj,
+            progress_callback=_ocr_progress, checkpoint_path=job_dir / "ocr_checkpoint.json",
+        )
+        if ocr_summary and ocr_summary.get('status') in {'pending','service_unavailable'}:
+            # 软预算只让出执行槽位；未调度区域留在检查点，由持久队列续跑。
+            _safe_write(job_dir, {'job_id':job_dir.name, 'status':'queued',
+                'stage':'扫描页等待续跑', 'ocr_pending':ocr_summary,
+                'retry_not_before':time.time()+(30 if ocr_summary.get('status')=='service_unavailable'else 5), 'quality_status':'incomplete',
+                'analysis_conclusion':'insufficient_evidence', 'ts':time.time()})
+            return
+        if parse_artifact_obj is not None and parse_artifact_obj.reading_assessment and ocr_summary:
+            parse_artifact_obj.reading_assessment["recovery"] = {
+                key: ocr_summary.get(key) for key in ("enabled", "status", "requested_pages", "failed_pages")
+            }
+        if parse_artifact_obj is None and (os.getenv('DATABASE_URL')or'').strip():
+            raise RuntimeError('trusted_analysis_requires_source_bound_parse_artifact: pending_retry')
+        profile_page_texts = list(page_texts)
+        rule_page_texts = list(page_texts)
+        rule_page_tables = [list(tables) for tables in page_tables]
+        from src.services.structure_view import build_structure_view
+
+        structure_view = build_structure_view(page_texts, parse_artifact_obj, page_assessment)
+        if parse_artifact_obj is not None and ocr_summary:
+            for index in range(len(profile_page_texts)):
+                qualified_identity_text = "\n".join(block.text for block in parse_artifact_obj.text_blocks
+                    if block.page_number == index+1 and block.extraction_method == "ocr"
+                    and block.confidence is not None and block.confidence >= .98)
+                profile_page_texts[index] += "\n" + qualified_identity_text
+        operand_profile = resolve_document_profile(filename=pdf_path.name,page_texts=profile_page_texts,
+            explicit_report_kind=report_kind if any(text.strip() for text in page_texts) else None)
+        identity_conflicts = {item.get("field") for item in operand_profile.conflicts}
+        if not organization_name and "organization_name" not in identity_conflicts:
+            organization_name = operand_profile.organization_name.value
+            if not organization_name and parse_artifact_obj is not None:
+                from src.services.ocr_qualification import qualified_ocr_cover_owner
+                organization_name = qualified_ocr_cover_owner(parse_artifact_obj)
+        if not (fiscal_year or report_year) and not {"fiscal_year","report_year"} & identity_conflicts:
+            report_year = operand_profile.year
+        if operand_profile.kind in {"budget","final"}:
+            report_kind = operand_profile.kind
+        # 检查主体与归档关联分开：关联到市/区级上级节点、封面是其下属部门时，
+        # 规则以封面单位为本单位；organization_name 仍是归档关联，入库不变。
+        from src.services.check_subject import resolve_check_subject
+
+        check_subject = resolve_check_subject(
+            organization_id=organization_id,
+            organization_name=organization_name,
+            organization_level=runtime.resolve_organization_level(organization_id),
+            cover_name=operand_profile.organization_name.value,
+            cover_conflicted="organization_name" in identity_conflicts,
+            subject_level=operand_profile.subject_level.value,
+        )
+        check_subject_name = check_subject["name"]
+
+        # ZC-02（AC-07）：OCR 候选表经列身份/关键数字/置信度复验后晋升为
+        # 可检查事实——与原生表共用同一事实物化路径；未通过者保持候选
+        # （usable_for_rules=false），继续待人工复核。
+        ocr_promotion_summary = None
+        if (
+            parse_artifact_obj is not None
+            and isinstance(ocr_summary, dict)
+            and (ocr_summary.get("table_candidates") or 0) > 0
+        ):
+            try:
+                from src.services.ocr_fact_promotion import promote_ocr_candidates
+
+                ocr_promotion_summary = promote_ocr_candidates(
+                    parse_artifact_obj, file_hash=parse_artifact_obj.source_file_hash,
+                    organization=check_subject_name, year=fiscal_year or report_year,
+                    report_kind=report_kind,
+                )
+                ocr_summary["promotion"] = ocr_promotion_summary
+                if ocr_promotion_summary.get("usable_for_rules"):
+                    ocr_summary["usable_for_rules"] = True
+                    for fragment in parse_artifact_obj.table_fragments:
+                        if fragment.extraction_method != "ocr" or fragment.confidence < .98:
+                            continue
+                        index = fragment.page_number-1
+                        if 0 <= index < len(page_texts) and not page_texts[index].strip():
+                            rule_page_tables[index].append(fragment.rows)
+                            rule_page_texts[index] = profile_page_texts[index]
+            except Exception as exc:
+                logger.warning(
+                    "OCR candidate promotion failed; candidates stay review-only",
+                    extra=safe_log_extra({"job_id": job_dir.name, "error": str(exc)}),
+                )
+        page_assessment = enrich_page_assessment(page_assessment, parse_artifact_obj)
+        # ZC-01（AC-01）：规则执行前生成统一财政事实。与结构化入库共用同一
+        # 物化实现（fact_context），规则、AI、证据、入库消费同一版本；
+        # 不依赖数据库——无库环境同样完成事实审校。
+        fact_context_obj = None
+        fact_context_status = "not_built"
+        if parse_artifact_obj is not None:
+            try:
+                from src.engine.fact_context import build_fact_context_from_artifact
+
+                fact_context_obj = build_fact_context_from_artifact(
+                    parse_artifact_obj,
+                    org_name=check_subject_name,
+                    fiscal_year=fiscal_year or report_year,
+                    report_kind=report_kind,
+                    doc_type=doc_type,
+                    require_complete_identity=True,
+                )
+                fact_context_status = (
+                    "built" if fact_context_obj is not None else "no_facts"
+                )
+                if ocr_promotion_summary is not None and fact_context_obj is not None:
+                    from src.engine.fact_context import OPERAND_STATUSES
+                    ocr_promotion_summary["operand_count"] = sum(
+                        fact.recognition_status in OPERAND_STATUSES and
+                        bool(fact.extra_dims.get("ocr_provenance")) for fact in fact_context_obj.facts)
+                    ocr_promotion_summary["usable_for_rules"] = ocr_promotion_summary["operand_count"] > 0
+                    ocr_summary["usable_for_rules"] = ocr_promotion_summary["usable_for_rules"]
+            except Exception as exc:
+                logger.warning(
+                    "fact context build failed; rules will run on legacy document",
+                    extra=safe_log_extra({"job_id": job_dir.name, "error": str(exc)}),
+                )
+                fact_context_status = "build_failed"
+        if parse_artifact_obj is not None:
+            from src.services.table_import_receipt import build_table_import_receipt
+            page_assessment["table_reading"] = build_table_import_receipt(
+                parse_artifact_obj, fact_context_obj.facts if fact_context_obj else [],
+                org_name=check_subject_name,
+            )["reading_quality"]
+        # ZC-05（AC-10）：同任务的人工校正覆盖层（重分析场景）在此应用到
+        # 事实——校正不再只是留痕，重跑后规则消费的是校正后的事实版本。
+        # RC-10：目标 UID 失效时先做跨解析身份重映射；身份字段类校正记为
+        # "未生效"并转待复核——不能静默丢弃，也不能用未校正事实冒充成功。
+        raw_fact_context_obj = deepcopy(fact_context_obj)
+        fact_overlay_applied = 0
+        fact_overlay_report: Dict[str, Any] = {"status": "not_requested"}
+        if fact_context_obj is not None or parse_artifact_obj is not None:
+            try:
+                from src.engine.fact_context import (
+                    apply_table_column_mapping_overlays,
+                    apply_fact_overlays_with_remap,
+                    collect_unsupported_changes,
+                    parse_overlays_from_records,
+                    build_fact_context_from_artifact,
+                )
+                from src.services.correction_overlay_store import read_jsonl_records
+
+                overlay_records = read_jsonl_records(job_dir / "corrections.jsonl")
+                # 人工补录格先写回表格，再应用人工列映射；两者都改变解析输入，事实须整体重建。
+                from src.services.manual_cell_overlay import apply_table_cell_overlays
+                cell_value_report = apply_table_cell_overlays(parse_artifact_obj, overlay_records)
+                column_mapping_report = apply_table_column_mapping_overlays(
+                    parse_artifact_obj, overlay_records
+                )
+                if column_mapping_report.get("applied") or cell_value_report.get("applied"):
+                    from src.services.analysis_fact_snapshot import bind_raw_interpretation
+                    bind_raw_interpretation(parse_artifact_obj, raw_fact_context_obj, {
+                        **column_mapping_report,
+                        "applied": column_mapping_report.get("applied", 0) + cell_value_report.get("applied", 0),
+                        "cell_values": cell_value_report,
+                    })
+                    fact_context_obj = build_fact_context_from_artifact(
+                        parse_artifact_obj,
+                        org_name=check_subject_name,
+                        fiscal_year=fiscal_year or report_year,
+                        report_kind=report_kind,
+                        doc_type=doc_type,
+                        require_complete_identity=True,
+                    )
+                    page_assessment["table_reading"] = build_table_import_receipt(
+                        parse_artifact_obj, fact_context_obj.facts if fact_context_obj else [],
+                        org_name=check_subject_name,
+                    )["reading_quality"]
+                    if fact_context_obj is None:
+                        column_mapping_report.setdefault("unresolved", []).append({
+                            "reason": "应用列映射后仍未生成财政事实",
+                        })
+                has_cell_value_changes = any(
+                    isinstance(change, dict) and str(change.get("field") or "") == "cell_value"
+                    for record in overlay_records
+                    for change in (record.get("changes") if isinstance(record, dict) and isinstance(record.get("changes"), list) else [])
+                )
+                has_column_mapping_changes = any(
+                    isinstance(change, dict)
+                    and str(change.get("field") or "") == "column_mapping"
+                    for record in overlay_records
+                    for change in (record.get("changes") if isinstance(record, dict) and isinstance(record.get("changes"), list) else [])
+                )
+                overlays = parse_overlays_from_records(overlay_records)
+                unsupported_changes = collect_unsupported_changes(overlay_records)
+                previous_facts = runtime.read_previous_fact_facts(job_dir)
+                if fact_context_obj is not None and (overlays or unsupported_changes or has_column_mapping_changes
+                                                     or has_cell_value_changes):
+                    (
+                        fact_context_obj,
+                        fact_overlay_report,
+                    ) = apply_fact_overlays_with_remap(
+                        fact_context_obj,
+                        overlays,
+                        previous_facts=previous_facts,
+                    )
+                    fact_overlay_applied = int(
+                        fact_overlay_report.get("applied") or 0
+                    )
+                elif overlays and fact_context_obj is None:
+                    fact_overlay_report = {
+                        "status": "failed",
+                        "applied": 0,
+                        "unresolved": [{"reason": "校正目标无法应用：当前解析未生成事实"}],
+                    }
+                if unsupported_changes:
+                    fact_overlay_report["unsupported"] = unsupported_changes
+                if has_column_mapping_changes:
+                    fact_overlay_report["column_mapping_overlay"] = column_mapping_report
+                    if column_mapping_report.get("unresolved"):
+                        fact_overlay_report["status"] = (
+                            "partial" if fact_overlay_applied or column_mapping_report.get("applied") else "failed"
+                        )
+                    elif column_mapping_report.get("applied") and fact_overlay_report.get("status") == "not_requested":
+                        fact_overlay_report["status"] = "applied"
+                if has_cell_value_changes:
+                    fact_overlay_report["cell_value_overlay"] = cell_value_report
+                    if cell_value_report.get("unresolved"):
+                        fact_overlay_report.setdefault("unresolved", []).extend(
+                            {**item, "reason": f"补录未生效：{item['reason']}"} for item in cell_value_report["unresolved"])
+                        fact_overlay_report["status"] = "partial" if (
+                            fact_overlay_applied or cell_value_report.get("applied") or column_mapping_report.get("applied")
+                        ) else "failed"
+                    elif cell_value_report.get("applied") and fact_overlay_report.get("status") == "not_requested":
+                        fact_overlay_report["status"] = "applied"
+                if unsupported_changes and any(item.get("blocking") for item in unsupported_changes):
+                    fact_overlay_report["status"] = (
+                        "partial" if fact_overlay_applied else "failed"
+                    )
+            except ValueError as exc:
+                # 校正指向未知事实且无法重映射：重分析不能带着失效覆盖层
+                # 继续装成功——如实转待复核，由人工确认校正目标。
+                fact_overlay_applied = -1
+                fact_overlay_report = {
+                    "status": "failed",
+                    "applied": 0,
+                    "unresolved": [{"reason": str(exc)}],
+                }
+                logger.warning(
+                    "fact overlay rejected: %s", exc,
+                    extra=safe_log_extra({"job_id": job_dir.name}),
+                )
+                fact_context_status = "overlay_rejected_unknown_fact"
+            except Exception as exc:
+                fact_overlay_report = {"status": "failed", "applied": 0}
+                logger.warning(
+                    "fact overlay application failed",
+                    extra=safe_log_extra({"job_id": job_dir.name, "error": str(exc)}),
+                )
+        # RC-10：事实快照（含已应用覆盖层）落盘——下一轮重分析据此做跨
+        # 解析重映射；随分析版本一起归档，保证"该版本当时的事实"可回放。
+        runtime.write_fact_context_snapshot(job_dir, fact_context_obj)
+        if parse_artifact_obj is not None:
+            immutable_fact_snapshot = make_snapshot(job_uuid=job_dir.name,
+                revision_id=analysis_revision, artifact=parse_artifact_obj,
+                raw_context=raw_fact_context_obj, effective_context=fact_context_obj)
+            write_snapshot(job_dir / "fact_snapshots" / (analysis_revision + ".json"), immutable_fact_snapshot)
         if page_assessment["low_text_page_count"]:
             logger.warning(
                 "job %s low-text pages detected: coverage=%.4f scanned=%d pages=%s",
@@ -1216,7 +1775,7 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             explicit_report_kind=report_kind,
             doc_type=str(doc_type) if doc_type is not None else None,
             filename=pdf_path.name,
-            page_texts=page_texts,
+            page_texts=profile_page_texts,
             page_assessment=page_assessment,
         )
         if document_profile.kind in {"budget", "final"}:
@@ -1243,15 +1802,23 @@ async def _run_pipeline_body(job_dir: Path) -> None:
         )
 
         def _sync_build_document():
-            return build_document(
+            document = build_document(
                 path=str(pdf_path),
-                page_texts=page_texts,
-                page_tables=page_tables,
+                page_texts=rule_page_texts,
+                page_tables=rule_page_tables,
                 filesize=filesize,
             )
+            # ZC-01（AC-01）：统一事实挂上 Document——规则消费与入库同一版本
+            document.fact_context = fact_context_obj
+            document.parse_artifact = parse_artifact_obj
+            document.document_profile = document_profile
+            document.structure_view = structure_view
+            return document
 
         doc = await loop.run_in_executor(None, _sync_build_document)
 
+        fact_receipts: List[Dict[str, Any]] = []
+        structured_consumption: List[Dict[str, Any]] = []
         # 双模式分析
         if dual_mode_enabled:
             _safe_write(
@@ -1279,6 +1846,8 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                 page_texts=page_texts,
                 page_tables=page_tables,
                 filesize=filesize,
+                fact_context=fact_context_obj.to_dict() if fact_context_obj is not None else None,
+                parse_artifact=parse_artifact_obj.to_dict() if parse_artifact_obj is not None else None,
                 meta={
                     "started_at": started,
                     "report_kind": report_kind,
@@ -1287,12 +1856,15 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                     "doc_type": doc_type,
                     "organization_id": organization_id,
                     "organization_name": organization_name,
+                    "document_profile": document_profile.model_dump(),
+                    "structure_view": structure_view,
                 },
             )
 
             analysis_config = AnalysisConfig(
                 dual_mode=True,
                 ai_enabled=use_ai_assist,
+                ai_profile_id=status_data.get("ai_profile_id"),
                 rule_enabled=use_local_rules,
                 merge_enabled=True,
                 enable_ai_analysis=use_ai_assist,
@@ -1302,6 +1874,8 @@ async def _run_pipeline_body(job_dir: Path) -> None:
 
             # 执行双模式分析
             dual_result = await dual_analyzer.analyze(job_context, analysis_config)
+            fact_receipts = list(dual_result.meta.get("fact_receipts") or [])
+            structured_consumption = list(dual_result.meta.get("structured_consumption") or [])
             rule_error = str(dual_result.meta.get("rule_error") or "").strip()
             ai_error = str(dual_result.meta.get("ai_error") or "").strip()
             if use_local_rules and rule_error:
@@ -1321,6 +1895,8 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                 provider_stats=dual_result.meta.get("provider_stats") or [],
                 window_errors=dual_result.meta.get("ai_window_errors") or [],
             )
+            from src.services.ai_execution import summarize_ai_diagnostics
+            ai_diagnostics = summarize_ai_diagnostics(dual_result.meta)
             result = {
                 "summary": "",
                 "ai_findings": dual_ai_findings,
@@ -1344,6 +1920,8 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                     "tokens": dual_result.meta.get("tokens", {}),
                     "page_extraction": page_assessment,
                     "ai_execution": ai_execution,
+                    **ai_diagnostics,
+                    "ai_configuration": status_data.get("ai_configuration"),
                     "rule_execution_summary": dual_result.meta.get(
                         "rule_execution_summary"
                     )
@@ -1351,6 +1929,14 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                     "parser_quality": _assess_parser_quality(
                         page_assessment, None
                     ),
+                    # ZC-01（AC-01）：统一事实版本留痕——事实构建状态、
+                    # 版本令牌与校正覆盖应用数如实上报。
+                    "fact_context": (
+                        fact_context_obj.summary()
+                        if fact_context_obj is not None
+                        else {"status": fact_context_status}
+                    ),
+                    "fact_overlay_applied": fact_overlay_applied,
                     # 版本留痕汇总（P2-02）：从各条 finding 实际写入的版本反向汇总，
                     # 不额外拍一份"声明值"，避免汇总与逐条留痕不一致。
                     "versions": summarize_finding_versions(
@@ -1440,6 +2026,9 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                 },
             )
 
+            # ZC-03（AC-04）：规则写下的关系级子检查回执进入结果元数据，
+            # 供 build_check_receipts 与质量门消费。
+            fact_receipts = []
             # 使用线程池为规则检查设置超时，避免在95%阶段长时间卡住
             provider_stats = []
             try:
@@ -1448,12 +2037,17 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                 RULES_TIMEOUT_SEC = 150
 
             try:
+                from src.services.check_progress import update_progress
+                update_progress(job_dir.name, "local", state="running", current_step="正在执行本地规则检查", total=None)
                 payload_issues = await run_rules_in_process(
                     doc,
                     use_ai_assist,
                     report_kind,
                     RULES_TIMEOUT_SEC,
                 )
+                update_progress(job_dir.name, "local", state="completed", current_step="本地规则检查完成")
+                fact_receipts = list(payload_issues.get("fact_receipts") or [])
+                structured_consumption = list(payload_issues.get("structured_consumption") or [])
                 # MR-3（2026-09-27）：文档级可读性闸门——扫描件/低覆盖材料的
                 # error 级假阳性整体转人工，防止"扫描件静默漏检却报高危矛盾"
                 apply_readability_gate(payload_issues, page_assessment)
@@ -1543,6 +2137,12 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                     )
                     or {},
                     "parser_quality": _assess_parser_quality(page_assessment, None),
+                    "fact_context": (
+                        fact_context_obj.summary()
+                        if fact_context_obj is not None
+                        else {"status": fact_context_status}
+                    ),
+                    "fact_overlay_applied": fact_overlay_applied,
                     "versions": summarize_finding_versions(
                         payload_issues["issues"].get("all") or []
                     ),
@@ -1570,6 +2170,10 @@ async def _run_pipeline_body(job_dir: Path) -> None:
         # 任务年度与材料实际年度不一致、以及材料口径。只传最终选中的文种会把
         # 冲突信息丢在门口——本应停在"待人工确认"的材料会被当成已确认。
         # 传的是上面主分析链路已经算好的同一个画像，不重新解析 PDF。
+        if parse_artifact_obj is not None:
+            from src.services.analysis_fact_snapshot import verify_consumed_snapshot
+            verify_consumed_snapshot(immutable_fact_snapshot, artifact=parse_artifact_obj,
+                raw_context=raw_fact_context_obj, effective_context=fact_context_obj)
         structured_metadata = build_ingest_metadata(
             organization_id=organization_id,
             organization_name=organization_name,
@@ -1581,6 +2185,7 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             if "status_data" in locals() and isinstance(status_data, dict)
             else None,
             document_profile=document_profile,
+            check_subject_name=check_subject_name,
         )
         if (os.getenv("DATABASE_URL") or "").strip():
             current_ingest_status = runtime.read_json_file(job_dir / "status.json", default={})
@@ -1605,11 +2210,16 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                     **runtime.extract_job_status_context(current_ingest_status),
                 },
             )
-            if latest_ingest.get("is_latest"):
+            if latest_ingest.get("is_latest") or candidate_only:
                 structured_ingest_summary = await run_structured_ingest(
                     job_id=job_dir.name,
                     pdf_path=pdf_path,
                     metadata=structured_metadata,
+                    parse_artifact=parse_artifact_obj,
+                    raw_fact_context=raw_fact_context_obj,
+                    effective_fact_context=fact_context_obj,
+                    analysis_revision=analysis_revision,
+                    candidate_only=candidate_only,
                 )
             else:
                 structured_ingest_summary = {
@@ -1626,9 +2236,23 @@ async def _run_pipeline_body(job_dir: Path) -> None:
                 job_id=job_dir.name,
                 pdf_path=pdf_path,
                 metadata=structured_metadata,
+                parse_artifact=parse_artifact_obj,
+                raw_fact_context=raw_fact_context_obj,
+                effective_fact_context=fact_context_obj,
+                analysis_revision=analysis_revision,
+                candidate_only=candidate_only,
             )
         runtime.write_structured_ingest_payload(job_dir, structured_ingest_summary)
         result["meta"]["structured_ingest"] = structured_ingest_summary
+        result["meta"]["fact_snapshot"] = structured_ingest_summary.get("fact_snapshot")
+        if parse_artifact_obj is not None:
+            from src.services.recognition_metrics import recognition_state
+            result['meta']['recognition_state']=recognition_state(parse_artifact_obj,structured_ingest_summary.get('fact_snapshot'),fact_context_obj)
+        if os.getenv("DATABASE_URL") and structured_ingest_summary.get("status") in {"error", "skipped"}:
+            raise RuntimeError("trusted_ingest_not_committed: " + str(structured_ingest_summary.get("error") or structured_ingest_summary.get("reason")))
+        if ocr_summary is not None:
+            # ZC-02：OCR 摘要（页级状态、低分块计数、原生/OCR 冲突）如实落账
+            result["meta"]["ocr"] = ocr_summary
         # 解析质量以结构化入库结果为准重新评估（含缺表/歧义/facts 信号）
         result["meta"]["parser_quality"] = _assess_parser_quality(
             page_assessment, structured_ingest_summary
@@ -1636,8 +2260,59 @@ async def _run_pipeline_body(job_dir: Path) -> None:
 
         # 证据链完整性校验（P0-07）：落库前逐条校验证据，
         # 缺证据的 AI 问题就地降级为待复核，规则问题只记录告警。
-        evidence_completeness = apply_evidence_completeness(result)
+        # ZC-00（SYS-07）：同时传入真实页数与逐页文本层——证据门据 此
+        # 核验原件哈希、来源身份、页码与原文引用；无法认证的条目如实降级。
+        source_file_hash = (
+            str(parse_artifact_obj.source_file_hash or "").strip().lower()
+            if parse_artifact_obj is not None
+            else ""
+        )
+        if not source_file_hash:
+            import hashlib
+
+            source_digest = hashlib.sha256()
+            with pdf_path.open("rb") as source_handle:
+                for chunk in iter(lambda: source_handle.read(1024 * 1024), b""):
+                    source_digest.update(chunk)
+            source_file_hash = source_digest.hexdigest()
+        from src.services.rule_source_binding import (
+            bind_ai_literal_sources,
+            bind_rule_sources,
+            verify_bound_ai_locations,
+            verify_bound_rule_locations,
+        )
+
+        result["meta"]["rule_source_binding"] = bind_rule_sources(
+            result, page_texts=page_texts or [], source_file_hash=source_file_hash,
+            artifact=parse_artifact_obj, fact_context=fact_context_obj,
+            consumption=structured_consumption,
+        )
+        # Binding replaces calculated summaries with the original operands.
+        # Authenticate those new per-cell coordinates against the PDF before
+        # evidence completeness and persisted annotation targets are computed.
+        result["meta"]["rule_source_locations"] = verify_bound_rule_locations(
+            result, source_pdf_path=str(pdf_path),
+        )
+        # AI quotes have no trusted native coordinates when emitted by the
+        # model. Bind only a unique literal quote found on its claimed page,
+        # then run the same PDF content/geometry gate used for rule evidence.
+        # A failed/ambiguous quote remains unlocated and is downgraded below.
+        result["meta"]["ai_source_binding"] = bind_ai_literal_sources(
+            result, page_texts=page_texts or [], source_file_hash=source_file_hash,
+        )
+        result["meta"]["ai_source_locations"] = verify_bound_ai_locations(
+            result, source_pdf_path=str(pdf_path),
+        )
+        evidence_completeness = apply_evidence_completeness(
+            result,
+            document_page_count=len(page_texts) if page_texts else None,
+            page_texts=page_texts if page_texts else None,
+            source_file_hash=source_file_hash,
+            source_pdf_path=str(pdf_path),
+        )
         result["meta"]["evidence_completeness"] = evidence_completeness
+        from src.services.text_source_relations import add_text_source_relations
+        add_text_source_relations(result, page_texts=page_texts or [], source_file_hash=source_file_hash)
         if evidence_completeness["degraded_count"] or evidence_completeness["rule_warning_count"]:
             logger.warning(
                 "job %s evidence check: rate=%.4f degraded=%d rule_warnings=%d",
@@ -1674,7 +2349,21 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             structured_ingest=structured_ingest_summary,
         )
         result["meta"]["obligation_coverage"] = obligation_coverage
+        result["meta"]["fact_receipts"] = fact_receipts
+        result["meta"]["structured_consumption"] = structured_consumption
+        result["meta"]["fact_projection_consumers"] = sorted({row["rule_id"] for row in structured_consumption if row.get("rule_id")})
+        result["meta"]["check_receipts"] = build_check_receipts(
+            result,
+            report_kind=report_kind,
+            rule_execution_summary=result["meta"].get("rule_execution_summary"),
+            obligation_coverage=obligation_coverage,
+            fact_receipts=fact_receipts,
+        )
+        result["meta"]["rule_registry_version"] = RULE_REGISTRY_VERSION
+        result["meta"]["rule_policy_version"] = PORTABLE_RULE_POLICY_VERSION
         result["meta"]["document_profile"] = document_profile.to_dict()
+        result["meta"]["check_subject"] = check_subject
+        result["meta"]["structure_view"] = structure_view
         logger.info(
             "job %s check coverage: applicable=%s completed=%s unresolved=%s blocking=%s",
             job_dir.name,
@@ -1719,6 +2408,7 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             rule_execution_summary=result["meta"].get("rule_execution_summary"),
             doc_type=doc_type,
             obligation_coverage=obligation_coverage,
+            fact_overlay_report=fact_overlay_report,
         )
         result["meta"]["quality_gate"] = quality_gate
         final_status = quality_gate["status"]
@@ -1744,8 +2434,14 @@ async def _run_pipeline_body(job_dir: Path) -> None:
         else:
             stage_text = "完成"
 
+        # RC-12：版本 ID 在构建统一报告**之前**分配——报告的
+        # analysis_revision 绑定、版本快照目录、analysis_basis_token
+        # 都指向同一个 ID；先建报告后分配会产生 revision=null 的报告。
         payload = {
+            **runtime.extract_job_status_context(runtime.read_json_file(job_dir / 'status.json', default={})),
             "job_id": job_dir.name,
+            "analysis_revision": analysis_revision,
+            "expected_current_fact_revision_id": expected_fact_revision,
             "status": final_status,
             "progress": 100,
             "result": result,
@@ -1759,6 +2455,7 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             "report_year": report_year,
             "report_kind": report_kind,
             "structured_ingest": structured_ingest_summary,
+            "fact_overlay": fact_overlay_report,
             "quality_status": quality_gate["quality_status"],
             "analysis_conclusion": quality_gate["analysis_conclusion"],
             "review_reasons": quality_gate["review_reasons"],
@@ -1772,8 +2469,26 @@ async def _run_pipeline_body(job_dir: Path) -> None:
             "profile_status": document_profile.profile_status,
             "stage": stage_text,
         }
+        # ZC-05（AC-10）：仅投影与当前问题身份仍一致的版本绑定决定。跨版本
+        # 继承必须同时匹配显式关系、事实ID和证据ID；缺身份或任何一项变化都
+        # 使旧决定失效，防止重算后把旧问题状态贴到新问题上。
+        try:
+            from src.services.issue_workflow_store import project_job_issue_decisions
+
+            payload["human_decisions"] = project_job_issue_decisions(job_dir.name, payload)
+        except Exception:
+            logger.warning(
+                "human decisions projection skipped",
+                extra=safe_log_extra({"job_id": job_dir.name}),
+            )
+        payload["review_report"] = build_review_report(payload)
+        persisted = await persist_analysis_job_snapshot(payload, include_results=True)
+        if (os.getenv("DATABASE_URL") or "").strip() and not persisted:
+            raise RuntimeError("trusted_analysis_result_not_committed: pending_retry")
+        if not candidate_only and (os.getenv("DATABASE_URL") or "").strip() and structured_ingest_summary.get('fact_snapshot'):
+            from src.services.analysis_fact_snapshot import synchronize_published_mirror
+            await synchronize_published_mirror(job_dir.name, job_dir)
         _safe_write(job_dir, payload)
-        await persist_analysis_job_snapshot(payload, include_results=True)
 
     except Exception as e:
         # 只记异常类型与消息，不记 PDF 正文/证据原文
@@ -1812,4 +2527,3 @@ async def _run_pipeline_body(job_dir: Path) -> None:
 
 runtime.set_pipeline_runner(_run_pipeline)
 register_routes(app)
-

@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
+const { ensureDevServices } = require('./dev-services.cjs');
 
 function normalizeWindowsPath(value) {
   if (!value) {
@@ -27,7 +28,7 @@ const pythonCommand = fs.existsSync(venvPython)
   ? venvPython
   : process.platform === 'win32'
     ? 'python.exe'
-    : 'python';
+    : 'python3';
 const frontendCommand = process.platform === 'win32' ? 'cmd.exe' : 'npm';
 const frontendArgs =
   process.platform === 'win32'
@@ -63,6 +64,10 @@ function loadRootEnv(rootDir) {
 }
 
 const rootEnv = loadRootEnv(projectRoot);
+const backendPort =
+  process.env.GOVBUDGET_BACKEND_PORT ||
+  rootEnv.GOVBUDGET_BACKEND_PORT ||
+  '18743';
 
 const sharedEnv = {
   ...process.env,
@@ -160,8 +165,14 @@ function launch(name, command, args, options) {
   return child;
 }
 
-launch('frontend', frontendCommand, frontendArgs, { cwd: frontendCwd });
-launch('backend', pythonCommand, ['-m', 'uvicorn', 'api.main:app', '--reload', '--port', '8000']);
+ensureDevServices(sharedEnv).then(() => {
+  if (shuttingDown) return;
+  launch('frontend', frontendCommand, frontendArgs, { cwd: frontendCwd });
+  launch('backend', pythonCommand, ['-m', 'uvicorn', 'api.main:app', '--reload', '--port', backendPort]);
+}).catch((error) => {
+  process.stderr.write(`[services] ${error.message}\n`);
+  stopChildren(1);
+});
 
 process.on('SIGINT', () => stopChildren(0));
 process.on('SIGTERM', () => stopChildren(0));

@@ -1,0 +1,30 @@
+import assert from "node:assert/strict";
+import { resolveIssueAnchor, toUiProblems } from "../lib/uiAdapters";
+import { classifyFindingSources, computeOverlayBoxAtScale } from "../app/components/review-workbench/reviewWorkbenchAdapters";
+
+const table = { physical_page: 28, page: 28, bbox: [334.2, 202.49, 415.2, 226.99], quote: "234,955.97", location_level: "exact_cell", verification_status: "verified" };
+const narrative = { physical_page: 40, page: 40, bbox: [119.88, 704.15, 452.4, 721.52], quote: "政府性基金预算财政拨款收入 78,656.53 万元", location_level: "exact_span", verification_status: "verified" };
+const raw = { id: "r", source: "rule", rule_id: "V33-248", severity: "high", title: "表文金额不一致", page_number: 40, bbox: narrative.bbox, location_level: "exact_span", verification_status: "verified", evidence: [table, narrative], location: { page: 40 } };
+const anchor = resolveIssueAnchor(raw);
+assert.equal(anchor.page, 40);
+assert.deepEqual(anchor.bbox, narrative.bbox);
+assert.equal(anchor.evidence?.quote, narrative.quote);
+// 无主定位框时从同一条证据同时取得页码和框；保持单元格第28页的横向坐标。
+const fallback = resolveIssueAnchor({ ...raw, bbox: undefined, location_level: "region" });
+assert.equal(fallback.page, 28);
+assert.deepEqual(fallback.bbox, table.bbox);
+const manual = toUiProblems({ job_id: "loc", result: {}, review_report: { issues: [], manual_review: [{ id: "r", record_type: "finding_review_candidate", finding: raw }] } } as any)[0];
+assert.equal(manual.page, 40);
+assert.deepEqual(manual.bbox, narrative.bbox);
+assert.equal(manual.snippet, narrative.quote);
+const hidden = resolveIssueAnchor({ ...raw, source: "ai", source_binding_status: "unresolved" });
+assert.equal(hidden.page, undefined);
+assert.equal(hidden.bbox, undefined);
+assert.equal(computeOverlayBoxAtScale(narrative.bbox, { width: 1348, height: 953 }, 1.6), null, "不能将纵向40页坐标绘制到横向28页底部");
+assert.ok(computeOverlayBoxAtScale(table.bbox, { width: 1348, height: 953 }, 1.6));
+const result = { ai_findings: [{ id: "a" }], rule_findings: [{ id: "r" }], source_overlap_relations: [{ status: "same_occurrence", ai_issue_ids: ["a"], rule_issue_ids: ["r"] }] };
+const source = classifyFindingSources(result);
+assert.equal(source.commonRelations.length, 1);
+assert.equal(source.aiOnlyIssueIds.size, 0);
+assert.equal(source.ruleOnlyIssueIds.size, 0);
+console.log("location consistency tests passed");

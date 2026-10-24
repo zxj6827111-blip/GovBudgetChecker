@@ -66,16 +66,17 @@ def single_page_table(text, table):
 def test_cmm004_same_domain_mismatch_hits():
     """正例：收入侧与支出侧同域编码金额不一致 → 命中。"""
     text = (
-        "收入决算表\n"
+        "部门收入预算总表\n"
         "201 一般公共服务支出 100.00\n"
         "203 海关事务支出 50.00\n"
     )
     text2 = (
-        "支出决算表\n"
+        "部门支出预算总表\n"
         "201 一般公共服务支出 100.00\n"
         "203 海关事务支出 40.00\n"
     )
     doc = make_doc([text, text2], [[], []])
+    doc.report_kind = "budget"
     issues = CMM004_CodeMirrorConsistency().apply(doc)
     assert any("201" in str(i.message) or "203" in str(i.message) for i in issues)
 

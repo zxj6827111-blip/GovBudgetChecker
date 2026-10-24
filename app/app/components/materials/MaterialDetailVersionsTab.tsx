@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 
 import { Badge, Card } from "@/components/ui";
+import { MaterialReviewHistory } from "../reports/MaterialReviewHistory";
 
 import {
   readSlotVersionsPayload,
@@ -39,6 +40,8 @@ export interface MaterialDetailVersionsTabProps {
   slotId: string;
   /** 首屏的详情数据：用来立刻渲染当前版本，不必等第二个请求。 */
   detail: SlotDetailData;
+  /** 复核页“返回”回到的地址（本页版本 Tab）。 */
+  reviewReturnTo?: string;
 }
 
 function VersionCard({ version, testId }: { version: MaterialVersionItem; testId: string }) {
@@ -96,7 +99,7 @@ function VersionCard({ version, testId }: { version: MaterialVersionItem; testId
   );
 }
 
-export function MaterialDetailVersionsTab({ slotId, detail }: MaterialDetailVersionsTabProps) {
+export function MaterialDetailVersionsTab({ slotId, detail, reviewReturnTo }: MaterialDetailVersionsTabProps) {
   const url = useMemo(
     () => `/api/materials/slots/${encodeURIComponent(slotId)}/versions`,
     [slotId],
@@ -220,6 +223,15 @@ export function MaterialDetailVersionsTab({ slotId, detail }: MaterialDetailVers
             </div>
           )
         ) : null}
+      </Card>
+
+      <Card
+        title="分析与复核记录"
+        desc="按文件版本列出分析任务、分析代际与复核结论，可下载各版本原件；新版本不继承旧版本的复核结论"
+        className="lg:col-span-2"
+        data-testid="gbc-material-versions-reviews"
+      >
+        <MaterialReviewHistory slotId={slotId} returnTo={reviewReturnTo ?? `/materials/slots/${encodeURIComponent(slotId)}?tab=versions`} />
       </Card>
     </div>
   );

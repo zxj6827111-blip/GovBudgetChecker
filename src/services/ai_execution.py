@@ -81,12 +81,13 @@ def build_ai_execution(
         record["prompt_version"] = last.get("prompt_version")
         record["finish_reason"] = last.get("finish_reason")
         record["token_usage"] = last.get("token_usage")
-        if windows or fallback:
+        if windows or fallback or ai_error:
             record["state"] = AI_STATE_DEGRADED
             record["error_code"] = error_code or (
-                "audit_window_limit_reached"
-                if windows
-                else "fallback_triggered"
+                _short_error_code(ai_error) if ai_error else
+                next((str(item.get("type")) for item in windows
+                      if item.get("type") and item["type"] != "audit_window_limit_reached"),
+                     "audit_window_limit_reached" if windows else "fallback_triggered")
             )
         else:
             record["state"] = AI_STATE_SUCCEEDED
@@ -144,6 +145,20 @@ def build_ai_execution(
     record["state"] = AI_STATE_NOT_RUN
     record["error_code"] = error_code or "no_call_evidence"
     return record
+
+
+def summarize_ai_diagnostics(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep failure evidence in the final result without copying model prose."""
+    fields = ("provider", "model", "finish_reason", "error", "token_usage", "latency_ms")
+    return {
+        "ai_error": meta.get("ai_error"),
+        "ai_window_errors": list(meta.get("ai_window_errors") or []),
+        "ai_call_summary": [
+            {**{key: item.get(key) for key in fields},
+             "content_length": len(str(item.get("content") or ""))}
+            for item in (meta.get("ai_call_ledger") or []) if isinstance(item, dict)
+        ],
+    }
 
 
 def _call_succeeded(item: Dict[str, Any]) -> bool:

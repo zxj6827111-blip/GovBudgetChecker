@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from starlette.concurrency import run_in_threadpool
 
+from api import runtime
 from api.auth_utils import require_login
 from src.services.audit_log import append_audit_event
 from src.services import issue_workflow_store
@@ -13,9 +15,9 @@ router = APIRouter()
 
 
 @router.get("/api/workflow")
-async def get_workflow(request: Request):
+async def get_workflow(request: Request, job_id: str | None = Query(default=None, min_length=1)):
     _, _, user = require_login(request)
-    return issue_workflow_store.get_visible_state(user)
+    return await run_in_threadpool(issue_workflow_store.get_visible_state, user, job_id=job_id)
 
 
 @router.post("/api/workflow")
@@ -37,6 +39,24 @@ async def mutate_workflow(request: Request):
             issue_id=str(body.get("issue_id") or ""),
             status=str(body.get("status") or ""),
             note=body.get("note") if isinstance(body.get("note"), str) else None,
+        )
+        # Keep the live canonical report in step with the just-persisted decision.
+        # Historical analysis snapshots remain immutable; report downloads project
+        # the same decision only when its revision/identity still matches.
+        normalized_job_id = str(body.get("job_id") or "").strip()
+        status_payload = runtime.get_job_status_payload(normalized_job_id, apply_issue_filters=False)
+        status_payload["human_decisions"] = issue_workflow_store.project_job_issue_decisions(
+            normalized_job_id, status_payload
+        )
+        from src.schemas.review_report import build_review_report
+
+        status_payload["review_report"] = build_review_report(status_payload)
+        runtime.merge_job_status(
+            runtime.UPLOAD_ROOT / normalized_job_id,
+            {
+                "human_decisions": status_payload["human_decisions"],
+                "review_report": status_payload["review_report"],
+            },
         )
         append_audit_event(
             action="workflow.issue.update",

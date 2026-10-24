@@ -3,7 +3,7 @@ const rawApiBase =
   process.env.BACKEND_URL ??
   process.env.API_ORIGIN ??
   process.env.NEXT_PUBLIC_API_BASE ??
-  "http://localhost:8000";
+  `http://localhost:${process.env.GOVBUDGET_BACKEND_PORT ?? "18743"}`;
 
 export const apiBase = rawApiBase.replace(/\/+$/, "");
 

@@ -33,7 +33,8 @@ from scripts.check_env_consistency import (
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_EXPECTED_SERVICES = {"postgres", "ai-extractor", "backend", "worker", "frontend"}
+# ZC-02 新增 ocr 服务（PaddleOCR CPU 容器，profile=ocr，默认不随基础设施启动）
+_EXPECTED_SERVICES = {"postgres", "ai-extractor", "backend", "worker", "frontend", "ocr"}
 
 
 def _load_compose() -> Dict[str, Any]:

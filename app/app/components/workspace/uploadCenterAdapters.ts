@@ -590,12 +590,11 @@ export function formatUploadFailureText(message: UploadFailureMessage): string {
  * - 参数与旧 UI（gbc-ui-demo）及工作台/队列/审核台的 reanalyze 全部一致：
  *   mode="dual"（双轨：本地规则 + AI 合并，analyze_dual 模式；start_analysis
  *   的默认值是 legacy，不传会退回单轨，与系统其他入口不一致），
- *   use_local_rules=true，use_ai_assist=true。
+ *   use_local_rules=true；大模型开关由上传界面或后端已保存的默认配置决定。
  */
 export const ANALYZE_START_REQUEST_BODY = {
   mode: "dual",
   use_local_rules: true,
-  use_ai_assist: true,
 } as const;
 
 /**

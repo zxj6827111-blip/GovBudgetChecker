@@ -17,7 +17,7 @@ from typing import Dict, Any, Optional
 class SmokeTest:
     """冒烟测试类"""
     
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = f"http://localhost:{os.getenv('GOVBUDGET_BACKEND_PORT', '18743')}"):
         self.base_url = base_url.rstrip('/')
         self.session: Optional[aiohttp.ClientSession] = None
         self.results: Dict[str, Any] = {
@@ -457,7 +457,7 @@ async def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Run smoke tests for GovBudgetChecker")
-    parser.add_argument("--url", default="http://localhost:8000", 
+    parser.add_argument("--url", default=f"http://localhost:{os.getenv('GOVBUDGET_BACKEND_PORT', '18743')}", 
                        help="Base URL for the API server")
     parser.add_argument("--timeout", type=int, default=30,
                        help="Request timeout in seconds")

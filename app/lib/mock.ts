@@ -2,6 +2,25 @@ import type { SeverityCode } from "./issueSeverity";
 
 export type Severity = SeverityCode;
 
+export interface ProblemEvidenceRef {
+  key: string;
+  role: string;
+  relationId?: string;
+  operandId?: string;
+  page: number;
+  locationText: string;
+  valueText?: string;
+  bbox?: number[];
+  locationLevel: string;
+  verificationStatus: string;
+}
+
+export interface ProblemRoundingCase {
+  relationId: string;
+  summary: string;
+  operandIds: string[];
+}
+
 export interface Problem {
   id: string;
   ruleId: string;
@@ -19,7 +38,11 @@ export interface Problem {
   evidenceImage: string;
   status: 'pending' | 'resolved' | 'ignored';
   source?: string;
+  /** Verified issue, informational tip, unverified finding, or system notice. */
+  reviewKind?: "issue" | "tip" | "manual_review" | "review_notice";
   bbox?: number[];
+  evidenceRefs?: ProblemEvidenceRef[];
+  roundingCases?: ProblemRoundingCase[];
   jobId?: string;
   expectedName?: string;
   actualName?: string;
@@ -33,10 +56,24 @@ export interface Problem {
    * 不改变旧组件已有行为）。历史产物没有该字段时为 undefined，不视为降级。
    */
   evidenceStatus?: string;
+  /** 结论引用了审核员对照原页补录的数据（后端 manual_fill_fact_ids）。 */
+  usesManualFill?: boolean;
+  /** 模型原先标注的页码；与已核验的实际 PDF 页码分开显示。 */
+  claimedPage?: number;
+  evidenceVerificationStatus?: string;
+  evidenceVerificationReasons?: string[];
+  evidenceMissing?: string[];
+  /** True only after the backend authenticates the original file and reference. */
+  sourceIdentityVerified?: boolean;
+  /** Explicit source provenance used by the review workbench comparison views. */
+  findingSources?: Array<"ai" | "rule">;
+  sourceRelationLabel?: string;
 }
 
 export interface Task {
   id: string;
+  /** 当前页面实际读取的不可变分析版本，导出必须携带同一版本。 */
+  analysisRevision?: string;
   filename: string;
   department: string;
   departmentId?: string;

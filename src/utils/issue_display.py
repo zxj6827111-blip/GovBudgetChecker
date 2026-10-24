@@ -94,6 +94,14 @@ def _build_detail_lines(
 ) -> List[str]:
     lines: List[str] = []
 
+    rounding_cases = location.get("rounding_cases")
+    if isinstance(rounding_cases, (list, tuple)):
+        for case in rounding_cases:
+            if isinstance(case, Mapping):
+                summary = _clean_text(case.get("summary"))
+                if summary:
+                    lines.append(summary)
+
     lines.extend(_build_location_detail_lines(location, page=page))
 
     for source in (message, evidence_text):
@@ -355,6 +363,12 @@ def _build_location_text(
 
 
 def _extract_evidence_text(issue: Mapping[str, Any]) -> str:
+    """提取"原文摘录"：只接受真实原文引用，不回退到 message。
+
+    ZC-00（SYS-07）：message 是问题说明，不是原文。把它填进 evidence_text 会让
+    界面和导出的"原文摘录"栏显示规则自己的判定语句，制造看似有据可查的假证据。
+    证据只来自 evidence 列表里的引用片段或 finding 自身的 text_snippet。
+    """
     evidence = issue.get("evidence")
     if isinstance(evidence, list):
         for item in evidence:
@@ -365,16 +379,19 @@ def _extract_evidence_text(issue: Mapping[str, Any]) -> str:
                 if text:
                     return text
 
-    for key in ("text_snippet", "evidence_text", "message"):
+    for key in ("text_snippet", "evidence_text"):
         text = _clean_text(issue.get(key))
         if text:
-            if key == "message" and text == _clean_text(issue.get("title")):
-                continue
             return text
     return ""
 
 
 def _resolve_page(issue: Mapping[str, Any]) -> Optional[int]:
+    if issue.get("source") == "ai" and issue.get("source_binding_status") == "unresolved":
+        return None
+    primary = _to_positive_int(issue.get("physical_page") or issue.get("page_number"))
+    if primary:
+        return primary
     location = issue.get("location")
     if isinstance(location, Mapping):
         pages = _extract_pages(location)

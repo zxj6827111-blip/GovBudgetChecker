@@ -574,8 +574,9 @@ def test_missing_vehicle_subtotal_plus_blank_cell_defers(truth):
 def test_blank_cell_is_zero_only_when_the_table_closes(truth):
     """空白单元格要靠本表勾稽确认为 0；勾稽不成立时不得当 0 用。
 
-    变异后三公表合计 19.86 ≠ 出国(空白) + 小计 19.56 + 接待(空白)，
-    因此"接待 = 0"无法确认 → 该分项取数不足；但公务用车运行维护费
+    变异后三公表合计 20.10 与出国(空白) + 小计 19.56 + 接待(空白)
+    相差 0.54 万元，超过 0.5 万元政策容差，因此"接待 = 0"无法确认；
+    但公务用车运行维护费
     （两侧都明确）已确认的冲突必须作为 partial finding 保留下来，
     不能被取数不足吞掉。
     """
@@ -584,6 +585,7 @@ def test_blank_cell_is_zero_only_when_the_table_closes(truth):
         page_tables = payload["page_tables"]
         row = _fin07_amount_row(page_tables)
         _replace_cell(page_tables, PAGE_FIN_07, row, 11, "")
+        _replace_cell(page_tables, PAGE_FIN_07, row, 1, "20.10")
 
     with pytest.raises(RuleDeferred) as excinfo:
         _run(_clone(truth, mutate))

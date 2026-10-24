@@ -14,6 +14,8 @@ app/tsconfig.tsbuildinfo
 uploads/
 .tmp/
 logs/
+models/
+outputs/
 
 # VCS & IDE
 .git/

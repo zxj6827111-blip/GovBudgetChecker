@@ -1,0 +1,17 @@
+{
+  "doc_id": null,
+  "split": null,
+  "document_type": null,
+  "organization_type": null,
+  "source_type": null,
+  "mixed": false,
+  "source_pdf": {"path": null, "sha256": null},
+  "official_original": false,
+  "complete_original": false,
+  "source_url": null,
+  "downloaded_at": null,
+  "near_duplicate_group": null,
+  "replay_path": null,
+  "repeat_replay_path": null,
+  "export_paths": []
+}

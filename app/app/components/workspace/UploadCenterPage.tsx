@@ -39,6 +39,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button, SectionTitle } from "@/components/ui";
+import { AIAnalysisOptions, useAIAnalysisOptions } from "@/components/AIAnalysisOptions";
+import AnalysisCheckProgress from "@/components/AnalysisCheckProgress";
+import { useAnalysisJobProgress } from "@/lib/useAnalysisJobProgress";
 
 import { AttributionWizardPanel, type AttributionSelection } from "./AttributionWizardPanel";
 import { UploadBatchPresets, type BatchPresetValues } from "./UploadBatchPresets";
@@ -98,6 +101,9 @@ export function UploadCenterPage() {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const aiOptions = useAIAnalysisOptions();
+  const [startedJobs, setStartedJobs] = useState<{ id: string; filename: string }[]>([]);
+  const liveJobs = useAnalysisJobProgress(startedJobs.map(job => job.id));
 
   useEffect(() => {
     let cancelled = false;
@@ -251,6 +257,7 @@ export function UploadCenterPage() {
   const hasUnresolvedConfirmation = effectiveEntries.some((entry) => entry.status === "needs_confirmation");
 
   const canSubmit =
+    (aiOptions.capabilities !== null || Boolean(aiOptions.error)) &&
     entries.length > 0 &&
     uploadLimitViolations.size === 0 &&
     !hasUnresolvedConfirmation &&
@@ -358,7 +365,7 @@ export function UploadCenterPage() {
           const analyzeResponse = await fetch(`/api/analyze/${encodeURIComponent(jobId)}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(ANALYZE_START_REQUEST_BODY),
+            body: JSON.stringify({ ...ANALYZE_START_REQUEST_BODY, use_ai_assist: aiOptions.enabled, ai_profile_id: aiOptions.enabled ? aiOptions.profileId || null : null }),
           });
           if (!analyzeResponse.ok) {
             const analyzePayload = (await analyzeResponse.json().catch(() => null)) as unknown;
@@ -378,6 +385,7 @@ export function UploadCenterPage() {
             });
             continue;
           }
+          setStartedJobs(old => [...old, { id: jobId!, filename: entry.file.name }]);
           outcomes.push({
             entryId: entry.id,
             filename: entry.file.name,
@@ -432,9 +440,9 @@ export function UploadCenterPage() {
       if (summary.summaryText) {
         // 有失败：留在本页如实呈现，不跳转（跳转会让失败信息随着页面卸载丢失）。
         setSubmitError(summary.summaryText);
-      } else if (summary.uploadedJobIds.length === 1) {
+      } else if (!aiOptions.enabled && summary.uploadedJobIds.length === 1) {
         window.location.assign(`/queue?job=${encodeURIComponent(summary.uploadedJobIds[0])}`);
-      } else if (summary.uploadedJobIds.length > 1) {
+      } else if (!aiOptions.enabled && summary.uploadedJobIds.length > 1) {
         window.location.assign("/queue");
       }
     } catch (error) {
@@ -442,7 +450,7 @@ export function UploadCenterPage() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [attribution, effectivePreflightFor, entries, maxUploadMb, mode, presets]);
+  }, [attribution, effectivePreflightFor, entries, maxUploadMb, mode, presets, aiOptions.enabled, aiOptions.profileId]);
 
   return (
     <div className="p-8" data-testid="gbc-upload-center-page">
@@ -472,6 +480,17 @@ export function UploadCenterPage() {
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[1fr_380px]">
         <div className="space-y-4">
           <UploadDropzone onFilesSelected={handleFilesSelected} maxUploadMb={maxUploadMb} maxUploadPages={maxUploadPages} />
+          <AIAnalysisOptions options={aiOptions} disabled={isSubmitting} />
+          {startedJobs.length > 0 && <section className="space-y-3 rounded-md border border-slate-200 bg-white p-4" data-testid="upload-analysis-progress">
+            <div className="flex justify-between text-sm"><strong>已提交的分析任务</strong><a className="text-primary-600" href="/queue">查看处理队列</a></div>
+            {startedJobs.map(job => <div key={job.id} className="space-y-2">
+              <a href={`/queue?job=${encodeURIComponent(job.id)}`} className="break-all text-sm font-medium text-slate-700">{job.filename}</a>
+              <p className="text-xs text-slate-500">{liveJobs[job.id]?.stage || "等待任务开始"}</p>
+              <AnalysisCheckProgress value={liveJobs[job.id]?.check_progress} />
+              {liveJobs[job.id]?.unavailable && <p className="text-xs text-amber-700">暂时无法读取进度，正在重试。</p>}
+              {liveJobs[job.id]?.status === "error" && <p className="text-xs text-red-600">分析失败，请在任务详情中查看原因。</p>}
+            </div>)}
+          </section>}
 
           {mode === "basic" ? (
             <div className="rounded-card border border-border bg-white p-4">

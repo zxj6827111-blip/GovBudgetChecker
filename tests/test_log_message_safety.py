@@ -27,6 +27,7 @@ import logging
 from typing import Any, Dict, List
 
 import pytest
+from pydantic import ValidationError
 
 from scripts.check_log_message_safety import (
     RISKY_OBJECT_NAMES,
@@ -39,6 +40,7 @@ from scripts.check_log_message_safety import (
 from src.engine.ai import extractor_client as extractor_mod
 from src.schemas.issues import AnalysisConfig, IssueItem, JobContext
 from src.services.ai_findings import AIFindingsService
+import src.services.ai_findings as ai_findings_module
 from src.services.rule_findings import RuleFindingsService
 from src.utils.logging_config import (
     StructuredFormatter,
@@ -216,12 +218,19 @@ def test_fingerprint_for_log_hides_content() -> None:
 # ---------------------------------------------------------------------------
 # 3. 真实调用路径：AI 语义问题转换失败
 # ---------------------------------------------------------------------------
-def test_ai_semantic_conversion_failure_logs_no_document_text(caplog) -> None:
+def test_ai_semantic_conversion_failure_logs_no_document_text(caplog, monkeypatch) -> None:
     caplog.set_level(logging.DEBUG)
     service = AIFindingsService(AnalysisConfig())
     context = JobContext(job_id="job-log-c", pdf_path="", page_texts=[], meta={})
 
-    # bbox 给 4 个非数字字符串 -> IssueItem 校验失败，pydantic 回显 input_value
+    # 注入包含原文的 Pydantic 校验异常，验证异常日志只留类型/指纹，不回显 input_value。
+    def reject_issue_item(**_kwargs):
+        raise ValidationError.from_exception_data(
+            "IssueItem",
+            [{"type": "int_parsing", "loc": ("page_number",), "input": SECRET_EVIDENCE}],
+        )
+
+    monkeypatch.setattr(ai_findings_module, "IssueItem", reject_issue_item)
     semantic_issues: List[Dict[str, Any]] = [
         {
             "rule_id": "AI-SEM-01",
@@ -237,7 +246,7 @@ def test_ai_semantic_conversion_failure_logs_no_document_text(caplog) -> None:
 
     issues = service._convert_semantic_issues_to_items(semantic_issues, context)
 
-    assert issues == [], "这条输入本来就该转换失败，否则测不到失败日志"
+    assert issues == [], "注入的校验失败必须被安全降级"
     assert caplog.records, "转换失败必须留日志"
     for line in _render(caplog.records):
         assert SECRET_EVIDENCE not in line
@@ -589,4 +598,3 @@ raise RuleDeferred('V33-103', detail='ok', partial_issues=issues)
 '''
     signal_violations = check_source(signal_safe)
     assert len(signal_violations) == 0, "RuleDeferred 结构化载荷入参应合法放行"
-

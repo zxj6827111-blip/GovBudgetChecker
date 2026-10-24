@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 import { getDisplayIssueTotal, toUiProblems } from "../lib/uiAdapters";
+import { evidenceExcerptLabel } from "../lib/evidenceIdentity";
 
 const baseDetail = {
   job_id: "job-dual-mode-count-001",
@@ -113,6 +114,84 @@ assert.deepEqual(
   "ignored issues should still be removed after merged issue projection",
 );
 
+const relationV2Candidates = toUiProblems({
+  job_id: "job-relation-v2-candidate",
+  result: {
+    ai_findings: [baseDetail.result.ai_findings[0]],
+    rule_findings: [],
+    merged: {
+      totals: { ai: 1, rule: 0, merged: 0, conflicts: 0, agreements: 0 },
+      merge_policy_version: "fact-check-relation-v1",
+      merged_ids: [],
+      candidate_issue_ids: ["ai-1"],
+      manual_review_issue_ids: [],
+    },
+  },
+  review_report: {
+    issues: [],
+    tips: [],
+    manual_review: [
+      {
+        record_type: "ai_candidate",
+        id: "ai-1",
+        title: "AI issue 1",
+        message: "等待业务确认的模型候选",
+        finding: {
+          ...baseDetail.result.ai_findings[0],
+          location: { page: 1 },
+          evidence: [{ page: 1, text: "候选引用原文" }],
+        },
+      },
+    ],
+  },
+} as any);
+assert.equal(relationV2Candidates.length, 1);
+assert.equal(relationV2Candidates[0].id, "ai-1");
+assert.equal(
+  relationV2Candidates[0].severity,
+  "manual_review",
+  "AI-only findings must be rendered in the manual-review bucket, not as formal issues",
+);
+assert.equal(relationV2Candidates[0].snippet, "候选引用原文");
+
+const mergeConflict = toUiProblems({
+  job_id: "job-relation-v2-conflict",
+  result: { ai_findings: [], rule_findings: [], merged: { merge_policy_version: "fact-check-relation-v1", merged_ids: [] } },
+  review_report: {
+    issues: [],
+    tips: [],
+    manual_review: [
+      {
+        record_type: "merge_conflict",
+        id: "merge-conflict:rel-1",
+        title: "AI 与规则结果存在冲突",
+        message: "双方引用不同原始证据，需复核。",
+        ai_finding: {
+          id: "ai-side",
+          location: { page: 2 },
+          evidence: [{ page: 2, text: "AI 引用", bbox: [1, 2, 3, 4], location_level: "exact_span", verification_status: "verified" }],
+        },
+        rule_finding: {
+          id: "rule-side",
+          location: { page: 3 },
+          evidence: [{ page: 3, text: "规则引用", bbox: [5, 6, 7, 8], location_level: "exact_cell", verification_status: "verified" }],
+        },
+      },
+    ],
+  },
+} as any);
+assert.equal(mergeConflict.length, 1);
+assert.deepEqual(
+  mergeConflict[0].evidenceRefs?.map((ref) => ref.page),
+  [2, 3],
+  "merge conflict should preserve both source page references for review",
+);
+assert.deepEqual(
+  mergeConflict[0].evidenceRefs?.map((ref) => ref.bbox),
+  [[1, 2, 3, 4], [5, 6, 7, 8]],
+  "only source-provided verified exact evidence boxes may be carried through",
+);
+
 const nameAlignmentProblems = toUiProblems({
   job_id: "job-name-alignment-001",
   result: {
@@ -213,5 +292,79 @@ assert.equal(
   24,
   "task totals must include structured review items instead of hiding them",
 );
+
+const reportIssues = toUiProblems({
+  job_id: "job-review-report-004",
+  result: {
+    issues: {
+      all: [{ id: "legacy-issue", title: "不得作为当前报告来源", message: "legacy" }],
+    },
+  },
+  review_report: {
+    schema_version: 2,
+    issues: [
+      {
+        id: "report-issue",
+        source: "rule",
+        rule_id: "C-001",
+        severity: "high",
+        title: "跨表问题",
+        message: "分项需要人工确认",
+        location: {
+          page: 2,
+          table_refs: [
+            {
+              role: "说明",
+              page: 2,
+              section: "三公经费情况说明",
+              location_level: "exact_span",
+              verification_status: "verified",
+              bbox: [10, 20, 100, 40],
+            },
+            {
+              role: "预算表",
+              page: 7,
+              table: "三公经费预算表",
+              location_level: "region",
+              verification_status: "unverified",
+              bbox: [11, 21, 101, 41],
+            },
+          ],
+        },
+        evidence: [{ page: 2, text: "三公经费合计" }],
+      },
+    ],
+  },
+} as any);
+assert.deepEqual(
+  reportIssues.map((problem) => problem.id),
+  ["report-issue"],
+  "the canonical ReviewReport must override legacy finding projections",
+);
+assert.deepEqual(reportIssues[0].evidenceRefs?.map((ref) => ref.page), [2, 7]);
+assert.deepEqual(reportIssues[0].evidenceRefs?.[0].bbox, [10, 20, 100, 40]);
+assert.equal(reportIssues[0].evidenceRefs?.[1].bbox, undefined, "unverified evidence must not produce a UI highlight");
+
+for (const [evidenceStatus, sourceComplete, expected] of [
+  ["complete", true, true],
+  ["complete", false, false],
+  ["incomplete_rule_warning", true, false],
+  [undefined, false, false],
+] as const) {
+  const [problem] = toUiProblems({
+    job_id: "job-source-identity",
+    result: { rule_findings: [{
+      id: "source-identity", source: "rule", rule_id: "SOURCE-IDENTITY", severity: "warn",
+      title: "Amount comparison", message: "Amount comparison", location: { page: 1 },
+      evidence: [{ page: 1, text: "narrative=10, table=20" }],
+      evidence_status: evidenceStatus,
+      evidence_verification: { status: "verified", source_identity_complete: sourceComplete },
+    }] },
+  } as any);
+  assert.equal(problem.sourceIdentityVerified, expected);
+  assert.equal(evidenceExcerptLabel(problem.sourceIdentityVerified === true),
+    expected ? "原文证据" : "候选证据/计算说明（原文绑定未完成）");
+  assert.equal(problem.snippet, "narrative=10, table=20", "retain unverified observations for review without promoting their source status");
+}
 
 console.log("uiAdapters dual-mode tests passed");

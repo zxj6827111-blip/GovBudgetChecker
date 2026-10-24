@@ -5,6 +5,7 @@ import { Maximize2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import type { Problem } from "@/lib/mock";
+import { usePageGeometry } from "@/lib/pageGeometry";
 import { cn } from "@/lib/utils";
 
 import {
@@ -40,9 +41,10 @@ export default function ProblemPreviewFrame({
 }: ProblemPreviewFrameProps) {
   const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null);
   const previewSource = useMemo(() => getProblemPreviewSource(problem), [problem]);
+  const pageGeometry = usePageGeometry(problem.jobId);
   const overlayBox = useMemo(
-    () => getProblemOverlayBox(problem, naturalSize),
-    [naturalSize, problem],
+    () => getProblemOverlayBox(problem, naturalSize, pageGeometry),
+    [naturalSize, problem, pageGeometry],
   );
   const overlayLabel = useMemo(() => getProblemOverlayLabel(problem), [problem]);
 

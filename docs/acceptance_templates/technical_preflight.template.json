@@ -1,0 +1,27 @@
+{
+  "schema_version": "gbc.independent-technical-preflight.v1",
+  "scope": "development_validation_before_independent_blind",
+  "service_receipt": {"path": null, "sha256": null},
+  "original_scanned_budget": {
+    "official_original": false,
+    "synthetic": null,
+    "derived": null,
+    "source_pdf": {"path": null, "sha256": null},
+    "page_count": null,
+    "processed_physical_pages": [],
+    "worker_budget_seconds": null,
+    "elapsed_seconds": null,
+    "result": {"path": null, "sha256": null},
+    "worker_trace": {"path": null, "sha256": null}
+  },
+  "mixed_final_cache": {
+    "source_pdf": {"path": null, "sha256": null},
+    "cache_readback": {"path": null, "sha256": null},
+    "initial_result": {"path": null, "sha256": null},
+    "initial_database": {"path": null, "sha256": null},
+    "corrected_result": {"path": null, "sha256": null},
+    "corrected_database": {"path": null, "sha256": null},
+    "target_fact_uid": null,
+    "expected_corrected_raw_value": null
+  }
+}

@@ -7,6 +7,8 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Download, RefreshCw, FileText, Link2 } from "lucide-react";
 
 import AssociateDialog from "@/components/AssociateDialog";
+import { useAIAnalysisOptions } from "@/components/AIAnalysisOptions";
+import AnalysisCheckProgress from "@/components/AnalysisCheckProgress";
 import ReanalyzeAiToggle from "@/components/ReanalyzeAiToggle";
 import EvidencePanel from "@/components/task-review/EvidencePanel";
 import PDFHighlighter from "@/components/task-review/PDFHighlighter";
@@ -16,8 +18,9 @@ import ReportPreviewModal from "@/components/task-review/ReportPreviewModal";
 import { isHighRiskSeverity } from "@/lib/issueSeverity";
 import type { Problem, Task } from "@/lib/mock";
 import { cn } from "@/lib/utils";
+import { recognitionStateLabel } from "@/lib/reportVersion";
 import type { JobDetailRecord, StructuredIngestRecord } from "@/lib/uiAdapters";
-import { toUiProblems, toUiTask } from "@/lib/uiAdapters";
+import { selectStructuredForJob, toUiProblems, toUiTask } from "@/lib/uiAdapters";
 import {
   buildProblemPreviewUrl,
   normalizeProblemBbox,
@@ -52,11 +55,13 @@ function normalizeProblemSearchValue(value: string): string {
 export default function TaskDetail() {
   const { job_id } = useParams<{ job_id: string }>();
   const router = useRouter();
+  const aiOptions = useAIAnalysisOptions();
   const [task, setTask] = useState<Task | null>(null);
   const [jobDetail, setJobDetail] = useState<JobDetailRecord | null>(null);
   const [problems, setProblems] = useState<Problem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedProblemId, setSelectedProblemId] = useState("");
+  const [selectedEvidenceRef, setSelectedEvidenceRef] = useState<{ problemId: string; refKey: string } | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isViewerOpen, setIsViewerOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
@@ -69,18 +74,22 @@ export default function TaskDetail() {
   const [problemCategory, setProblemCategory] = useState("全部");
   const [highRiskOnly, setHighRiskOnly] = useState(false);
   const [ignoringProblemId, setIgnoringProblemId] = useState<string | null>(null);
+  const [selectedRevision, setSelectedRevision] = useState(() => typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("analysis_revision") ?? "");
+  const [revisions, setRevisions] = useState<Array<{revision_id: string; is_current: boolean; state: string}>>([]);
 
   useEffect(() => {
     let alive = true;
 
     async function load() {
       setLoading(true);
-      const [detail, structured] = await Promise.all([
-        fetchJson<JobDetailRecord | null>(`/api/jobs/${encodeURIComponent(job_id)}`, null),
-        fetchJson<StructuredIngestRecord>(
+      const revisionQuery = selectedRevision ? `?analysis_revision=${encodeURIComponent(selectedRevision)}` : "";
+      const [detail, structured, versions] = await Promise.all([
+        fetchJson<JobDetailRecord | null>(`/api/jobs/${encodeURIComponent(job_id)}${revisionQuery}`, null),
+        selectedRevision ? Promise.resolve({} as StructuredIngestRecord) : fetchJson<StructuredIngestRecord>(
           `/api/jobs/${encodeURIComponent(job_id)}/structured-ingest`,
           {}
         ),
+        fetchJson<{items: typeof revisions}>(`/api/jobs/${encodeURIComponent(job_id)}/analysis-versions`, {items: []}),
       ]);
 
       if (!alive || !detail) {
@@ -93,10 +102,12 @@ export default function TaskDetail() {
         return;
       }
 
-      const nextTask = toUiTask(detail, structured);
+      const boundStructured = selectStructuredForJob(detail, structured);
+      const nextTask = toUiTask(detail, boundStructured);
+      if (selectedRevision) nextTask.analysisRevision = selectedRevision;
       const nextProblems = toUiProblems({
         ...detail,
-        structured_ingest: structured,
+        structured_ingest: boundStructured,
       }).map((problem) => ({
         ...problem,
         jobId: detail.job_id,
@@ -105,6 +116,9 @@ export default function TaskDetail() {
       }));
 
       setJobDetail(detail);
+      // 接口兜底只对"请求失败"生效；拿到 200 但不是 {items:[...]} 时 items 会是
+      // undefined，下面 revisions.length 直接抛错，整页（含全部操作按钮）被卸载。
+      setRevisions(Array.isArray(versions?.items) ? versions.items : []);
       setTask(nextTask);
       setProblems(nextProblems);
       setLoading(false);
@@ -114,7 +128,7 @@ export default function TaskDetail() {
     return () => {
       alive = false;
     };
-  }, [job_id, refreshSeed]);
+  }, [job_id, refreshSeed, selectedRevision]);
 
   const problemCategories = useMemo(() => {
     const categories = new Set<string>();
@@ -166,8 +180,15 @@ export default function TaskDetail() {
     () => filteredProblems.find((problem) => problem.id === selectedProblemId),
     [filteredProblems, selectedProblemId]
   );
+  const highlightedProblem = useMemo(() => {
+    if (!selectedProblem || selectedEvidenceRef?.problemId !== selectedProblem.id) return selectedProblem;
+    const ref = selectedProblem.evidenceRefs?.find((item) => item.key === selectedEvidenceRef.refKey);
+    return ref ? { ...selectedProblem, page: ref.page, bbox: ref.bbox, location: ref.locationText } : selectedProblem;
+  }, [selectedProblem, selectedEvidenceRef]);
   const effectiveReanalyzeUseAiAssist =
-    reanalyzeUseAiAssist ?? (typeof jobDetail?.use_ai_assist === "boolean" ? jobDetail.use_ai_assist : true);
+    reanalyzeUseAiAssist ?? (aiOptions.capabilities
+      ? aiOptions.enabled
+      : typeof jobDetail?.use_ai_assist === "boolean" ? jobDetail.use_ai_assist : false);
 
   const handleReanalyze = async () => {
     if (isReanalyzing || task?.status === "analyzing") {
@@ -189,6 +210,7 @@ export default function TaskDetail() {
         body: JSON.stringify({
           use_local_rules: true,
           use_ai_assist: effectiveReanalyzeUseAiAssist,
+          ai_profile_id: effectiveReanalyzeUseAiAssist ? aiOptions.profileId || null : null,
         }),
       });
 
@@ -357,8 +379,12 @@ export default function TaskDetail() {
     );
   }
 
+  const recognitionLabel = recognitionStateLabel(
+    (jobDetail?.result?.meta as Record<string, unknown> | undefined)?.recognition_state
+  );
+
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-surface-50">
+    <div className="flex h-full flex-col overflow-hidden bg-surface-50" data-analysis-revision={task.analysisRevision}>
       <div className="z-10 flex h-16 shrink-0 items-center justify-between border-b border-border bg-white px-6 shadow-sm">
         <div className="flex items-center gap-4">
           <Link
@@ -388,7 +414,16 @@ export default function TaskDetail() {
                 <span>{task.department}</span>
                 <span className="h-1 w-1 rounded-full bg-slate-300" />
                 <span>{task.year} {task.reportLabel}</span>
+                {revisions.length > 0 && <select aria-label="分析版本" data-testid="analysis-version-selector"
+                  className="max-w-44 rounded border border-border bg-white px-1 text-xs"
+                  value={selectedRevision} onChange={(event) => setSelectedRevision(event.target.value)}>
+                  <option value="">当前版本</option>
+                  {revisions.filter((item) => !item.is_current).map((item) => <option key={item.revision_id} value={item.revision_id}>
+                    {item.state === "validated" ? "候选" : "历史"} · {item.revision_id}
+                  </option>)}
+                </select>}
               </div>
+              {recognitionLabel && <div className="mt-0.5 text-xs text-slate-500" data-testid="recognition-state">{recognitionLabel}</div>}
             </div>
           </div>
         </div>
@@ -426,7 +461,7 @@ export default function TaskDetail() {
             type="button"
             data-testid="task-associate-button"
             onClick={() => setIsAssociateDialogOpen(true)}
-            disabled={isAssociating}
+            disabled={isAssociating || Boolean(selectedRevision)}
             className="flex items-center gap-2 rounded-md border border-border bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Link2 className="h-4 w-4 text-slate-400" />
@@ -436,7 +471,7 @@ export default function TaskDetail() {
             type="button"
             data-testid="task-reanalyze-button"
             onClick={() => void handleReanalyze()}
-            disabled={isReanalyzing || task.status === "analyzing"}
+            disabled={isReanalyzing || task.status === "analyzing" || Boolean(selectedRevision)}
             className="flex items-center gap-2 rounded-md border border-border bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <RefreshCw className="h-4 w-4 text-slate-400" />
@@ -455,13 +490,19 @@ export default function TaskDetail() {
       </div>
 
       <div className="border-b border-border bg-slate-50 px-6 py-3">
+        <AnalysisCheckProgress value={jobDetail?.check_progress} />
         <div className="flex justify-end">
           <ReanalyzeAiToggle
             checked={effectiveReanalyzeUseAiAssist}
             onChange={setReanalyzeUseAiAssist}
+            disabled={Boolean(aiOptions.capabilities && !aiOptions.capabilities.enabled)}
             testId="task-reanalyze-ai-toggle"
             className="w-full max-w-md bg-white"
-            description="重新分析时默认保留本地规则；取消勾选后仅本地解析，不调用 AI。"
+            description={aiOptions.error || (aiOptions.capabilities?.enabled
+              ? aiOptions.enabled
+                ? "重新分析将使用系统当前启用的模型；取消勾选后仅执行本地检查。"
+                : "模型已配置，但本次默认关闭；勾选后重新分析会调用大模型。"
+              : "当前没有可用的大模型配置，重新分析将仅执行本地检查。")}
           />
         </div>
       </div>
@@ -487,12 +528,18 @@ export default function TaskDetail() {
         />
 
         <div className="flex-1 overflow-y-auto bg-slate-50/50 p-6">
-          {selectedProblem ? (
+          {highlightedProblem ? (
             <EvidencePanel
-              problem={selectedProblem}
+              problem={highlightedProblem}
               onOpenViewer={() => setIsViewerOpen(true)}
-              onIgnore={() => void handleIgnoreProblem()}
-              isIgnoring={ignoringProblemId === selectedProblem.id}
+              selectedEvidenceRefKey={selectedEvidenceRef && selectedEvidenceRef.problemId === selectedProblem?.id
+                ? selectedEvidenceRef.refKey
+                : null}
+              onSelectEvidenceRef={(refKey) => {
+                if (selectedProblem) setSelectedEvidenceRef({ problemId: selectedProblem.id, refKey });
+              }}
+              onIgnore={selectedRevision ? undefined : () => void handleIgnoreProblem()}
+              isIgnoring={ignoringProblemId === highlightedProblem.id}
             />
           ) : (
             <div className="flex h-full flex-col items-center justify-center text-slate-400">
@@ -507,9 +554,9 @@ export default function TaskDetail() {
         </div>
       </div>
 
-      {isViewerOpen && selectedProblem ? (
+      {isViewerOpen && highlightedProblem ? (
         <PDFHighlighter
-          problem={selectedProblem}
+          problem={highlightedProblem}
           onClose={() => setIsViewerOpen(false)}
         />
       ) : null}

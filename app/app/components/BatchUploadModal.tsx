@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { isHeadUnit, formatUnitOption } from "../../lib/unitMatch";
+import AnalysisCheckProgress from "@/components/AnalysisCheckProgress";
 
 // ───────────── Types ─────────────
 
@@ -443,7 +444,7 @@ export default function BatchUploadModal({
     orgUnitId,
     defaultDocType,
     useLocalRules = true,
-    useAiAssist = true,
+    useAiAssist,
     onClose,
     onComplete,
 }: BatchUploadModalProps) {
@@ -452,6 +453,48 @@ export default function BatchUploadModal({
     const [orgs, setOrgs] = useState<OrganizationOption[]>([]);
     const [isProcessing, setIsProcessing] = useState(false);
     const [currentIndex, setCurrentIndex] = useState(-1);
+    const [aiCapabilities, setAiCapabilities] = useState<{ enabled: boolean; default_use_ai: boolean; active_profile_id: string | null; profiles: { id: string; name: string; model: string }[] } | null>(null);
+    const [aiEnabled, setAiEnabled] = useState(useAiAssist ?? false);
+    const [aiProfileId, setAiProfileId] = useState("");
+    const [aiConfigError, setAiConfigError] = useState("");
+    const [submittedJobIds, setSubmittedJobIds] = useState<string[]>([]);
+    const [liveJobs, setLiveJobs] = useState<Record<string, { status?: string; check_progress?: unknown; unavailable?: boolean }>>({});
+    useEffect(() => {
+        let cancelled = false;
+        const controller = new AbortController();
+        fetch("/api/ai/capabilities", { cache: "no-store", signal: controller.signal }).then(async res => {
+            if (!res.ok) throw new Error("无法读取大模型配置");
+            const data = await res.json();
+            if (cancelled) return;
+            setAiCapabilities(data);
+            setAiProfileId(data.active_profile_id || "");
+            setAiEnabled(Boolean(data.enabled && (useAiAssist ?? data.default_use_ai)));
+        }).catch(() => { if (!cancelled) { setAiEnabled(false); setAiConfigError("无法读取大模型配置，请刷新后重试。"); } });
+        return () => { cancelled = true; controller.abort(); };
+    }, [useAiAssist]);
+    const pollingKey = submittedJobIds.join(",");
+    useEffect(() => {
+        const pending = new Set(pollingKey.split(",").filter(Boolean));
+        if (!pending.size) return;
+        let cancelled = false;
+        let timer: ReturnType<typeof setTimeout>;
+        const controller = new AbortController();
+        async function poll() {
+            await Promise.allSettled(Array.from(pending).map(async id => {
+                try {
+                    const res = await fetch(`/api/jobs/${encodeURIComponent(id)}/status`, { cache: "no-store", signal: controller.signal });
+                    if (!res.ok) throw new Error("状态读取失败");
+                    const data = await res.json();
+                    if (cancelled) return;
+                    setLiveJobs(old => ({ ...old, [id]: { status: data.status, check_progress: data.check_progress } }));
+                    if (["done", "review_required", "degraded", "error", "cancelled"].includes(data.status)) pending.delete(id);
+                } catch { if (!cancelled) setLiveJobs(old => ({ ...old, [id]: { ...old[id], unavailable: true } })); }
+            }));
+            if (!cancelled && pending.size) timer = setTimeout(() => void poll(), 2000);
+        }
+        void poll();
+        return () => { cancelled = true; clearTimeout(timer); controller.abort(); };
+    }, [pollingKey]);
     const [isDragging, setIsDragging] = useState(false);
     const [isCollectingDrop, setIsCollectingDrop] = useState(false);
     const [selectionNotice, setSelectionNotice] = useState("");
@@ -1491,7 +1534,8 @@ export default function BatchUploadModal({
         const runPayload: Record<string, unknown> = {
             mode: "dual",
             use_local_rules: useLocalRules,
-            use_ai_assist: useAiAssist,
+            use_ai_assist: aiEnabled,
+            ai_profile_id: aiEnabled ? aiProfileId || null : null,
             doc_type: fileItem.docType,
         };
         if (fileItem.year) {
@@ -1602,6 +1646,7 @@ export default function BatchUploadModal({
                         )
                 );
                 successfulJobIds.push(task.versionId);
+                setSubmittedJobIds(old => Array.from(new Set([...old, task.versionId])));
             } catch (error: any) {
                 setFiles((prev) =>
                     prev.map((f) =>
@@ -1620,7 +1665,7 @@ export default function BatchUploadModal({
 
         setIsProcessing(false);
         setCurrentIndex(-1);
-        await onComplete(successfulJobIds);
+        if (!aiEnabled) await onComplete(successfulJobIds);
     };
 
     // ── Stats ──
@@ -1765,6 +1810,14 @@ export default function BatchUploadModal({
                     </button>
                 </div>
 
+                <div className="space-y-2 border-b border-slate-200 bg-slate-50 px-6 py-3" data-testid="batch-ai-options">
+                    <div className="flex flex-wrap items-center gap-3 text-sm">
+                        <span className="font-medium text-slate-700">本地检查：{useLocalRules ? "已启用" : "未启用"}</span>
+                        <label className="flex items-center gap-2"><input type="checkbox" checked={aiEnabled} disabled={isProcessing || submittedJobIds.length > 0 || !aiCapabilities?.enabled} onChange={e => setAiEnabled(e.target.checked)} />大模型检查</label>
+                        {aiEnabled && aiCapabilities?.profiles.length ? <select aria-label="本次检查模型" className="rounded-md border border-slate-300 bg-white px-2 py-1" value={aiProfileId} disabled={isProcessing || submittedJobIds.length > 0} onChange={e => setAiProfileId(e.target.value)}>{aiCapabilities.profiles.map(p => <option key={p.id} value={p.id}>{p.name} · {p.model}</option>)}</select> : null}
+                    </div>
+                    <p className="text-xs text-slate-500">{aiConfigError || (aiCapabilities ? aiCapabilities.enabled ? "大模型会检查文档文本，进度按已处理的文本段更新。" : "大模型尚未启用，请由管理员在系统设置中添加并启用模型。" : "正在读取大模型配置…")} <a className="text-blue-600 underline" href="/settings?section=settings" target="_blank" rel="noreferrer">系统设置</a></p>
+                </div>
                 {/* Drop Zone */}
                 <div className="px-6 pt-4">
                     <div
@@ -1953,6 +2006,11 @@ export default function BatchUploadModal({
 
                                     {/* File Info */}
                                     <div className="flex-1 min-w-0">
+                                        {fileItem.versionId && liveJobs[fileItem.versionId] && <div className="mb-2">
+                                            <AnalysisCheckProgress value={liveJobs[fileItem.versionId].check_progress} />
+                                            {liveJobs[fileItem.versionId].unavailable && <p className="text-xs text-amber-700">暂时无法读取进度，正在重试。</p>}
+                                            {liveJobs[fileItem.versionId].status === "error" && <p className="text-xs text-red-600">分析失败，可在任务详情中查看原因。</p>}
+                                        </div>}
                                         <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate" title={fileItem.filename}>
                                             {fileItem.filename}
                                         </div>
@@ -2182,6 +2240,7 @@ export default function BatchUploadModal({
                 {/* Footer Actions */}
                 <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200/50 dark:border-gray-700/50 mt-2">
                     <div className="flex items-center gap-2">
+                        {!isProcessing && submittedJobIds.length > 0 && <button type="button" onClick={() => void onComplete(submittedJobIds)} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white">查看分析任务</button>}
                         <button
                             onClick={onClose}
                             disabled={isProcessing}
@@ -2207,6 +2266,7 @@ export default function BatchUploadModal({
                             onClick={startProcessing}
                             disabled={
                                 files.filter((f) => f.status === "pending").length === 0 ||
+                                (!aiCapabilities && !aiConfigError) ||
                                 hasPendingPreflight ||
                                 pendingConfirmationCount > 0
                             }

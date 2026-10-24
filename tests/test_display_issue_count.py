@@ -1,14 +1,8 @@
-"""展示层问题计数口径测试（Task A：修复计数口径分裂）。
+"""展示层问题计数口径测试。
 
-要验证的核心命题：列表/统计接口读到的问题数，必须与质量门禁使用的
-`evidence_guard.count_formal_findings` 完全一致，否则会出现
-"任务是 review_required / incomplete，部门统计却显示有 N 个问题"的矛盾。
-
-正反对照：
-- 反例（改动前会失败）：含降级项的产物，展示计数必须扣掉降级项；
-  全部降级时展示计数必须为 0、`has_issues` 为 False。
-- 正例（向后兼容）：历史产物没有 `evidence_status` 字段时，
-  计数必须与改动前保持一致（一条不少）。
+正式问题数沿用 ``evidence_guard.count_formal_findings``；工作台列表数另加
+尚未完成原文身份核验、但仍可供人工确认的候选发现。明确降级的证据、提示
+和系统复核事项不混入材料问题数，但仍在详情中单独展示。
 """
 
 from __future__ import annotations
@@ -81,8 +75,8 @@ def _legacy_result(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def test_display_count_excludes_degraded_findings(tmp_path):
-    """含降级项：展示计数必须与 count_formal_findings 一致，并单独暴露降级条数。"""
+def test_formal_count_excludes_degraded_findings(tmp_path):
+    """正式问题数排除降级项，同时在质量摘要中单独暴露降级条数。"""
     items = [
         _finding("f-1", evidence_status=EVIDENCE_STATUS_COMPLETE),
         _finding("f-2", evidence_status=EVIDENCE_STATUS_DEGRADED, severity="manual_review"),
@@ -118,10 +112,21 @@ def test_all_degraded_findings_report_zero_issues(tmp_path):
     assert summary["formal_issue_total"] == 0
     assert summary["degraded_issue_total"] == 2
     assert summary["has_issues"] is False
-    # 组织/部门统计读的是同一份 summary，这里断言统计口径也归零
+    # 降级发现仍在详情中展示，但单独提示，不混入材料问题数。
+    assert summary["review_candidate_total"] == 0
     assert _extract_summary_issue_total(summary) == 0
     # 终态语义不能被改动影响：review_required 仍然是 incomplete
     assert summary["analysis_conclusion"] == "incomplete"
+
+
+def test_organization_rollup_includes_unverified_finding_candidates():
+    """候选发现虽未正式确认，工作台汇总也不能把有发现的材料显示为 0。"""
+    assert _extract_summary_issue_total({
+        "review_issue_total": 0,
+        "review_candidate_total": 7,
+        "merged_issue_total": 0,
+        "issue_total": 0,
+    }) == 7
 
 
 def test_legacy_result_without_evidence_status_counts_unchanged(tmp_path):
@@ -142,8 +147,8 @@ def test_legacy_result_without_evidence_status_counts_unchanged(tmp_path):
     assert _extract_summary_issue_total(summary) == 2
 
 
-def test_dual_mode_merged_total_excludes_degraded(tmp_path):
-    """双模式：merged 计数也要扣掉降级项，否则部门统计仍会显示"有问题"。"""
+def test_dual_mode_visible_total_excludes_degraded_but_keeps_candidates(tmp_path):
+    """双模式列表统计保留待核实发现，并排除明确降级的发现。"""
     ai_findings = [
         _finding("ai-1", evidence_status=EVIDENCE_STATUS_DEGRADED, severity="manual_review"),
     ]

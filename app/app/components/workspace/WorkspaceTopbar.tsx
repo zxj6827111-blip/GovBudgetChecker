@@ -1,7 +1,10 @@
 "use client";
 
-import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import Link from "next/link";
+import type { Route } from "next";
+import { useEffect, useState, type ReactNode } from "react";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
 import { GlobalMaterialSearch } from "../materials/GlobalMaterialSearch";
 
@@ -32,12 +35,27 @@ function formatUpdatedAt(date: Date): string {
 }
 
 function resolveGroupLabel(pathname: string): string | null {
+  if (pathname.startsWith("/supervision")) return "主管端";
   const navItem = findNavItemByPathname(pathname);
   return navItem ? NAV_GROUP_LABELS[navItem.group] : null;
 }
 
-export function WorkspaceTopbar() {
+export function WorkspaceTopbar({ compact = false, sidebarCollapsed = false, onToggleSidebar, leading }: {
+  compact?: boolean;
+  sidebarCollapsed?: boolean;
+  onToggleSidebar?: () => void;
+  /** 页面自带的标题内容（如复核详情的文件名），排在页面名称之后。 */
+  leading?: ReactNode;
+}) {
   const pathname = usePathname() ?? "";
+  const searchParams = useSearchParams();
+  const supervisorMode = pathname.startsWith("/supervision");
+  const supervisorSearch = new URLSearchParams();
+  for (const key of ["scope_id", "fiscal_year", "report_kind", "task_id", "reporting_year", "jurisdiction_id", "component", "department_id", "subject_id", "status", "keyword", "legacy"]) {
+    const value = searchParams.get(key);
+    if (value) supervisorSearch.set(key, value);
+  }
+  supervisorSearch.set("mode", "materials");
   const [health, setHealth] = useState<ServiceHealthResult>({ state: "unknown", label: "服务状态未知" });
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
 
@@ -78,33 +96,56 @@ export function WorkspaceTopbar() {
         : "bg-slate-400";
 
   return (
-    <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-white px-6">
-      <div>
-        <div className="text-sm text-slate-400" data-testid="gbc-workspace-breadcrumb">
+    <header className={`flex shrink-0 items-center justify-between gap-3 border-b border-border bg-white ${compact ? "h-12 px-3" : "h-16 px-6"}`}>
+      <div className="flex min-w-0 items-center gap-2">
+        {onToggleSidebar ? (
+          <button
+            type="button"
+            onClick={onToggleSidebar}
+            aria-label={sidebarCollapsed ? "展开导航" : "收起导航"}
+            aria-expanded={!sidebarCollapsed}
+            data-testid="gbc-workspace-sidebar-toggle"
+            className="rounded-md p-2 text-slate-500 hover:bg-surface-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+          >
+            {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+          </button>
+        ) : null}
+        <div className="min-w-0">
+        <div className={compact ? "sr-only" : "text-sm text-slate-400"} data-testid="gbc-workspace-breadcrumb">
           {groupLabel ? `${groupLabel} / ` : ""}
           {pageLabel}
         </div>
-        <div className="text-base font-semibold text-slate-900">{pageLabel}</div>
+        {leading ? null : <div className="truncate text-base font-semibold text-slate-900">{pageLabel}</div>}
+        </div>
+        {leading ? (
+          <>
+            <span className="shrink-0 whitespace-nowrap text-sm text-slate-400" aria-hidden="true">{pageLabel} /</span>
+            <div className="flex min-w-0 items-center gap-2">{leading}</div>
+          </>
+        ) : null}
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className={`flex shrink-0 items-center ${compact ? "gap-2" : "gap-4"}`}>
         <div
-          className="flex items-center gap-2 text-sm text-slate-600"
+          className="flex items-center gap-2 whitespace-nowrap text-sm text-slate-600"
           data-testid="gbc-workspace-service-status"
           data-service-state={health.state}
+          title={updatedAt ? `${formatUpdatedAt(updatedAt)} 更新` : undefined}
         >
           <span className={`h-2 w-2 rounded-full ${statusDotClass}`} aria-hidden="true" />
           <span>{health.label}</span>
-          {updatedAt ? <span className="text-slate-400">· {formatUpdatedAt(updatedAt)} 更新</span> : null}
+          {/* 顶栏嵌在半宽栏里时把位置留给页面标题，更新时间改为悬停提示。 */}
+          {updatedAt && !leading ? <span className={compact ? "hidden text-slate-400 lg:inline" : "text-slate-400"}>· {formatUpdatedAt(updatedAt)} 更新</span> : null}
         </div>
 
-        <div className="flex items-center gap-1 border-l border-border pl-4">
-          <GlobalMaterialSearch />
+        <div className={`flex items-center gap-1 border-l border-border ${compact ? "pl-2" : "pl-4"}`}>
+          {supervisorMode ? <Link className="whitespace-nowrap rounded-md p-2 text-sm text-primary-700" href={`/supervision/materials?${supervisorSearch}` as Route}>查找材料</Link> : <GlobalMaterialSearch />}
+          {!supervisorMode ? <>
           <button
             type="button"
             aria-label="通知"
             data-testid="gbc-workspace-action-notification"
-            className="rounded-md p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+            className={`${compact ? "hidden md:block " : ""}whitespace-nowrap rounded-md p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400`}
           >
             通知
           </button>
@@ -112,10 +153,11 @@ export function WorkspaceTopbar() {
             type="button"
             aria-label="帮助"
             data-testid="gbc-workspace-action-help"
-            className="rounded-md p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+            className={`${compact ? "hidden md:block " : ""}whitespace-nowrap rounded-md p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400`}
           >
             帮助
           </button>
+          </> : null}
         </div>
       </div>
     </header>

@@ -158,7 +158,8 @@ export default function DepartmentPageClient() {
   const [isBatchReanalyzing, setIsBatchReanalyzing] = useState(false);
   const [isBatchExporting, setIsBatchExporting] = useState(false);
   const [isBatchZipExporting, setIsBatchZipExporting] = useState(false);
-  const [reanalyzeUseAiAssist, setReanalyzeUseAiAssist] = useState(true);
+  // ZC-00：默认关闭 AI 分析，显式勾选后才请求模型
+  const [reanalyzeUseAiAssist, setReanalyzeUseAiAssist] = useState(false);
   const [hasConfiguredReanalyzeUseAiAssist, setHasConfiguredReanalyzeUseAiAssist] = useState(false);
   const [associatingJobId, setAssociatingJobId] = useState<string | null>(null);
   const [isAssociatingJob, setIsAssociatingJob] = useState(false);

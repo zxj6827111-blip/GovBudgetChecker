@@ -1,0 +1,197 @@
+[
+  {
+    "doc_id": "SH2024N9_02",
+    "filename": "SH2024N9_02_profile.pdf",
+    "fixture_sha256": "e05ec8f2582e23ae5ab76d682e4a2a07f763a8b59119f0c86a5acc7b64987da2",
+    "source_sha256": "5ed377e7f18ff6abb3456eca8d60a95ccbceb594142e0db16f9c6e5fee910177",
+    "source_pdf_relative_to_repo": "outputs/shanghai_2024_new9_acceptance_20261016/documents/SH2024N9_02/source.pdf",
+    "source_pages": [
+      1,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18
+    ],
+    "expected_owner": "上海市人民政府参事室",
+    "expected_core_facts": 206,
+    "source_cover_text": " \n \n \n \n \n \n \n上海市人民政府参事室 \n2024 年度部门决算 \n \n",
+    "source_cover_words": [
+      [
+        117.5,
+        235.3579864501953,
+        477.71600341796875,
+        278.80999755859375,
+        "上海市人民政府参事室",
+        7,
+        0,
+        0
+      ],
+      [
+        140.3000030517578,
+        297.75799560546875,
+        229.65200805664062,
+        341.2099914550781,
+        "2024",
+        8,
+        0,
+        0
+      ],
+      [
+        238.72999572753906,
+        297.75799560546875,
+        454.87396240234375,
+        341.2099914550781,
+        "年度部门决算",
+        8,
+        0,
+        1
+      ]
+    ],
+    "truth_source": "Frozen native source cover before production parser; no tested fact used"
+  },
+  {
+    "doc_id": "SH2024N9_03",
+    "filename": "SH2024N9_03_profile.pdf",
+    "fixture_sha256": "c1ea9126361a921cb1cbf7cdd19cece80261056ceb9471b51c71598db6e6206a",
+    "source_sha256": "7fcedb31371aaa08867bfbbada94a12e4c9d576a6b652965aafba77f7eb78a86",
+    "source_pdf_relative_to_repo": "outputs/shanghai_2024_new9_acceptance_20261016/documents/SH2024N9_03/source.pdf",
+    "source_pages": [
+      1,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+    ],
+    "expected_owner": "上海市人民政府研究室",
+    "expected_core_facts": 203,
+    "source_cover_text": "上海市人民政府研究室\n2024 年度部门决算\n",
+    "source_cover_words": [
+      [
+        117.5999984741211,
+        233.42835998535156,
+        477.8399963378906,
+        269.4283447265625,
+        "上海市人民政府研究室",
+        0,
+        0,
+        0
+      ],
+      [
+        149.15899658203125,
+        280.22833251953125,
+        221.15899658203125,
+        316.22833251953125,
+        "2024",
+        1,
+        0,
+        0
+      ],
+      [
+        230.15899658203125,
+        280.22833251953125,
+        446.2785339355469,
+        316.22833251953125,
+        "年度部门决算",
+        1,
+        0,
+        1
+      ]
+    ],
+    "truth_source": "Frozen native source cover before production parser; no tested fact used"
+  },
+  {
+    "doc_id": "SH2024N9_05",
+    "filename": "SH2024N9_05_profile.pdf",
+    "fixture_sha256": "0a3b8950b74698dc8711f3f4a0c4181eb5dc117a2433fa3fd1f5ea6596901228",
+    "source_sha256": "0a70d15b2fc4d157ed9c3bd814ac52ff8708312e2daba45fd6994a39f84dbb42",
+    "source_pdf_relative_to_repo": "outputs/shanghai_2024_new9_acceptance_20261016/documents/SH2024N9_05/source.pdf",
+    "source_pages": [
+      1,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+    ],
+    "expected_owner": "中共上海市委金融委员会办公室",
+    "expected_core_facts": 629,
+    "source_cover_text": "1\n中共上海市委金融委员会\n办公室\n2024 年度部门决算\n",
+    "source_cover_words": [
+      [
+        294.8399963378906,
+        779.0419921875,
+        300.5639953613281,
+        794.2880249023438,
+        "1",
+        0,
+        0,
+        0
+      ],
+      [
+        99.5999984741211,
+        233.42835998535156,
+        495.71954345703125,
+        269.4283447265625,
+        "中共上海市委金融委员会",
+        1,
+        0,
+        0
+      ],
+      [
+        243.60000610351562,
+        280.22833251953125,
+        351.6000061035156,
+        316.22833251953125,
+        "办公室",
+        2,
+        0,
+        0
+      ],
+      [
+        149.15899658203125,
+        327.0283508300781,
+        221.15899658203125,
+        363.0283508300781,
+        "2024",
+        2,
+        1,
+        0
+      ],
+      [
+        230.15899658203125,
+        327.0283508300781,
+        446.2785339355469,
+        363.0283508300781,
+        "年度部门决算",
+        2,
+        1,
+        1
+      ]
+    ],
+    "truth_source": "Frozen native source cover before production parser; no tested fact used"
+  }
+]

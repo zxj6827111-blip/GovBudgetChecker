@@ -2,9 +2,15 @@
 组织架构存储服务
 使用 JSON 文件存储组织数据
 """
+
 import json
+from contextlib import contextmanager
+from functools import wraps
+import threading
+import time
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -17,7 +23,7 @@ from src.schemas.organization import (
     OrganizationStore,
     OrganizationTree,
 )
-from src.services.org_hierarchy import validate_organization_hierarchy
+from src.services.org_hierarchy import LEVEL_ORDER, validate_organization_hierarchy
 
 logger = logging.getLogger(__name__)
 
@@ -31,24 +37,110 @@ ORG_FILE = DATA_DIR / "organizations.json"
 LINKS_FILE = DATA_DIR / "job_org_links.json"
 
 
+@contextmanager
+def _catalog_lock():
+    """Serialize JSON read/modify/write across API and Worker processes."""
+    path = DATA_DIR / ".organization-store.lock"
+    with path.open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            if not handle.read(1):
+                handle.write(b"0")
+                handle.flush()
+            while True:
+                handle.seek(0)
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.05)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _consistent_catalog(method):
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        with self._catalog_thread_lock:
+            if self._catalog_operation_depth:
+                return method(self, *args, **kwargs)
+            with _catalog_lock():
+                signature = self._disk_signature()
+                if signature != self._catalog_signature:
+                    self._organizations = []
+                    self._links = []
+                    self._load()
+                    self._rebuild_indexes()
+                    self._catalog_signature = signature
+                self._catalog_operation_depth += 1
+                try:
+                    return method(self, *args, **kwargs)
+                finally:
+                    self._catalog_operation_depth -= 1
+                    self._catalog_signature = self._disk_signature()
+
+    return call
+
+
+def _atomic_catalog_json(path, payload):
+    fd, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 class OrganizationStorage:
     """组织架构存储服务"""
-    
+
     def __init__(self):
         self._ensure_data_dir()
+        self._catalog_thread_lock = threading.RLock()
+        self._catalog_operation_depth = 0
+        self._catalog_signature = None
         self._organizations: List[Organization] = []
         self._links: List[JobOrganizationLink] = []
         self._org_by_id: Dict[str, Organization] = {}
         self._children_by_parent: Dict[Optional[str], List[Organization]] = {}
         self._link_by_job: Dict[str, JobOrganizationLink] = {}
         self._jobs_by_org: Dict[str, List[str]] = {}
-        self._load()
-        self._rebuild_indexes()
-    
+        with _catalog_lock():
+            self._load()
+            self._rebuild_indexes()
+            self._catalog_signature = self._disk_signature()
+
+    @staticmethod
+    def _disk_signature():
+        values = []
+        for path in (ORG_FILE, LINKS_FILE):
+            try:
+                stat = path.stat()
+                values.append((stat.st_ino, stat.st_mtime_ns, stat.st_size))
+            except FileNotFoundError:
+                values.append(None)
+        return tuple(values)
+
     def _ensure_data_dir(self):
         """确保数据目录存在"""
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-    
+
     def _load(self):
         """加载数据"""
         # 加载组织数据
@@ -61,7 +153,7 @@ class OrganizationStorage:
             except Exception as e:
                 logger.error(f"Failed to load organizations: {e}")
                 self._organizations = []
-        
+
         # 加载关联数据
         if LINKS_FILE.exists():
             try:
@@ -71,29 +163,22 @@ class OrganizationStorage:
             except Exception as e:
                 logger.error(f"Failed to load links: {e}")
                 self._links = []
-    
+
     def _save_organizations(self):
         """保存组织数据"""
         store = OrganizationStore(
-            organizations=self._organizations,
-            meta={"updated_at": __import__("time").time()}
+            organizations=self._organizations, meta={"updated_at": __import__("time").time()}
         )
-        ORG_FILE.write_text(
-            json.dumps(store.model_dump(), ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-    
+        _atomic_catalog_json(ORG_FILE, store.model_dump())
+
     def _save_links(self):
         """保存关联数据"""
         data = {
             "links": [link.model_dump() for link in self._links],
-            "updated_at": __import__("time").time()
+            "updated_at": __import__("time").time(),
         }
-        LINKS_FILE.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-    
+        _atomic_catalog_json(LINKS_FILE, data)
+
     def _rebuild_indexes(self):
         """Rebuild read-optimized in-memory indexes."""
         self._org_by_id = {org.id: org for org in self._organizations}
@@ -112,23 +197,28 @@ class OrganizationStorage:
         self._jobs_by_org = jobs_by_org
 
     # ==================== 组织 CRUD ====================
-    
+
+    @_consistent_catalog
     def get_all(self) -> List[Organization]:
         """获取所有组织"""
         return self._organizations.copy()
-    
+
+    @_consistent_catalog
     def get_by_id(self, org_id: str) -> Optional[Organization]:
         """根据ID获取组织"""
         return self._org_by_id.get(org_id)
-    
+
+    @_consistent_catalog
     def get_by_level(self, level: str) -> List[Organization]:
         """根据层级获取组织"""
         return [org for org in self._organizations if org.level == level]
-    
+
+    @_consistent_catalog
     def get_children(self, parent_id: Optional[str]) -> List[Organization]:
         """获取子组织"""
         return list(self._children_by_parent.get(parent_id, []))
 
+    @_consistent_catalog
     def get_departments(self) -> List[Organization]:
         """获取所有部门（按名称排序）"""
         departments = [
@@ -136,51 +226,91 @@ class OrganizationStorage:
         ]
         return departments
 
+    @_consistent_catalog
     def get_units_by_department(self, dept_id: str) -> List[Organization]:
         """获取指定部门下的直属单位（按名称排序）"""
         department = self.get_by_id(dept_id)
         if department is None or department.level != OrganizationLevel.DEPARTMENT:
             return []
 
-        units = [
-            org
-            for org in self.get_children(dept_id)
-            if org.level == OrganizationLevel.UNIT
-        ]
+        units = [org for org in self.get_children(dept_id) if org.level == OrganizationLevel.UNIT]
         return units
-    
+
+    @staticmethod
+    def _catalog_errors(organizations: List[Organization]) -> List[str]:
+        errors = list(validate_organization_hierarchy(organizations).errors)
+        by_id = {org.id: org for org in organizations}
+        identities = set()
+        for org in organizations:
+            key = (org.name.strip(), org.level, org.parent_id)
+            if key in identities:
+                errors.append(f"重复组织：{org.name}（{org.level}，上级 {org.parent_id or '无'}）")
+            identities.add(key)
+        # 错误必须能对应到页面上的名称，不能只让管理员看到内部编号。
+        for org_id, org in by_id.items():
+            pattern = rf"(?<![\w-]){re.escape(org_id)}(?![\w-])"
+            errors = [
+                re.sub(pattern, lambda match, _o=org, _i=org_id: f"{_o.name}[{_i}]", error)
+                for error in errors
+            ]
+        return errors
+
+    def _commit_organizations(self, organizations: List[Organization]) -> None:
+        errors = self._catalog_errors(organizations)
+        if errors:
+            raise ValueError("组织层级校验失败：" + "；".join(errors))
+        if organizations == self._organizations:
+            return
+        original = self._organizations
+        self._organizations = organizations
+        self._rebuild_indexes()
+        try:
+            self._save_organizations()
+        except Exception:
+            self._organizations = original
+            self._rebuild_indexes()
+            raise
+
+    @_consistent_catalog
     def add(self, org: Organization) -> Organization:
         """添加组织"""
         # 检查是否已存在
         existing = self.get_by_id(org.id)
         if existing:
             raise ValueError(f"Organization with id {org.id} already exists")
-        
-        self._organizations.append(org)
-        self._rebuild_indexes()
-        self._save_organizations()
+
+        if not org.name.strip():
+            raise ValueError("组织名称不能为空")
+        self._commit_organizations([*self._organizations, org])
         return org
-    
+
+    @_consistent_catalog
     def update(self, org_id: str, updates: Dict[str, Any]) -> Optional[Organization]:
         """更新组织"""
         for i, org in enumerate(self._organizations):
             if org.id == org_id:
                 org_dict = org.model_dump()
                 org_dict.update(updates)
+                # 改名、改层级、改上级都沿用原 ID，历史报告关联才能保持有效。
+                org_dict["id"] = org.id
                 org_dict["updated_at"] = __import__("time").time()
-                self._organizations[i] = Organization(**org_dict)
-                self._rebuild_indexes()
-                self._save_organizations()
-                return self._organizations[i]
+                updated = Organization(**org_dict)
+                if not updated.name.strip():
+                    raise ValueError("组织名称不能为空")
+                candidate = self._organizations.copy()
+                candidate[i] = updated
+                self._commit_organizations(candidate)
+                return updated
         return None
-    
+
+    @_consistent_catalog
     def delete(self, org_id: str) -> bool:
         """删除组织（及其所有子组织）"""
         if org_id not in self._org_by_id:
             return False
 
         to_delete = set()
-        
+
         stack = [org_id]
         while stack:
             current = stack.pop()
@@ -189,10 +319,10 @@ class OrganizationStorage:
             to_delete.add(current)
             for child in self._children_by_parent.get(current, []):
                 stack.append(child.id)
-        
+
         original_count = len(self._organizations)
         self._organizations = [org for org in self._organizations if org.id not in to_delete]
-        
+
         if len(self._organizations) < original_count:
             self._rebuild_indexes()
             self._save_organizations()
@@ -202,7 +332,8 @@ class OrganizationStorage:
             self._save_links()
             return True
         return False
-    
+
+    @_consistent_catalog
     def clear_all(self):
         """清空所有组织"""
         self._organizations = []
@@ -210,9 +341,10 @@ class OrganizationStorage:
         self._rebuild_indexes()
         self._save_organizations()
         self._save_links()
-    
+
     # ==================== 组织树 ====================
-    
+
+    @_consistent_catalog
     def get_tree(self) -> List[OrganizationTree]:
         """获取组织树"""
         # 统计每个组织的任务数和问题数
@@ -220,18 +352,18 @@ class OrganizationStorage:
         issue_counts = {}
         for link in self._links:
             job_counts[link.org_id] = job_counts.get(link.org_id, 0) + 1
-        
+
         def build_tree_node(org: Organization) -> OrganizationTree:
             children = self.get_children(org.id)
             child_nodes = [build_tree_node(child) for child in children]
-            
+
             # 累加子节点的统计
             total_jobs = job_counts.get(org.id, 0)
             total_issues = issue_counts.get(org.id, 0)
             for child in child_nodes:
                 total_jobs += child.job_count
                 total_issues += child.issue_count
-            
+
             return OrganizationTree(
                 id=org.id,
                 name=org.name,
@@ -240,15 +372,16 @@ class OrganizationStorage:
                 parent_id=org.parent_id,
                 children=child_nodes,
                 job_count=total_jobs,
-                issue_count=total_issues
+                issue_count=total_issues,
             )
-        
+
         # 找到根节点（没有父组织的）
         roots = [org for org in self._organizations if org.parent_id is None]
         return [build_tree_node(root) for root in roots]
-    
+
     # ==================== 任务关联 ====================
-    
+
+    @_consistent_catalog
     def link_job(
         self,
         job_id: str,
@@ -265,23 +398,22 @@ class OrganizationStorage:
             self._rebuild_indexes()
             self._save_links()
             return existing_link
-        
+
         # 创建新关联
         link = JobOrganizationLink(
-            job_id=job_id,
-            org_id=org_id,
-            match_type=match_type,
-            confidence=confidence
+            job_id=job_id, org_id=org_id, match_type=match_type, confidence=confidence
         )
         self._links.append(link)
         self._rebuild_indexes()
         self._save_links()
         return link
-    
+
+    @_consistent_catalog
     def get_job_org(self, job_id: str) -> Optional[JobOrganizationLink]:
         """获取任务的组织关联"""
         return self._link_by_job.get(job_id)
-    
+
+    @_consistent_catalog
     def get_org_jobs(self, org_id: str, include_children: bool = True) -> List[str]:
         """获取组织下的所有任务ID"""
         if not include_children:
@@ -308,7 +440,8 @@ class OrganizationStorage:
                 seen_job_ids.add(job_id)
                 result.append(job_id)
         return result
-    
+
+    @_consistent_catalog
     def unlink_job(self, job_id: str) -> bool:
         """取消任务关联"""
         original_count = len(self._links)
@@ -318,7 +451,8 @@ class OrganizationStorage:
             self._save_links()
             return True
         return False
-    
+
+    @_consistent_catalog
     def validate_hierarchy(self) -> Dict[str, Any]:
         """校验组织层级关系。"""
 
@@ -425,45 +559,41 @@ class OrganizationStorage:
             )
         return records
 
-    def _resolve_parent_id(self, parent_name: str) -> Optional[str]:
-        if not parent_name:
-            return None
-
-        candidates = [org for org in self._organizations if org.name == parent_name]
-        if not candidates:
-            return None
-
-        priority = {
-            OrganizationLevel.DEPARTMENT: 0,
-            OrganizationLevel.DISTRICT: 1,
-            OrganizationLevel.CITY: 2,
-            OrganizationLevel.UNIT: 3,
-        }
-        candidates.sort(key=lambda org: priority.get(org.level, 99))
-        return candidates[0].id
-
+    @_consistent_catalog
     def import_from_list(
         self,
         data: List[Dict[str, Any]],
         clear_existing: bool = False,
+        referenced_org_ids: Optional[List[str]] = None,
     ) -> ImportResult:
         """从列表导入组织，支持 `department/unit + parent` 模板。"""
 
-        original_organizations = [org.model_copy(deep=True) for org in self._organizations]
-        if clear_existing:
-            self._organizations = []
-            self._rebuild_indexes()
-
+        # 在独立候选目录中完成整批校验，任何错误都不能留下部分写入。
+        candidate = [] if clear_existing else self._organizations.copy()
+        result = ImportResult(success=False, total=len(data))
         expanded_rows: List[Dict[str, str]] = []
-        for item in data:
+        for index, item in enumerate(data, start=2):
             if not isinstance(item, dict):
+                result.errors.append(f"第 {index} 行不是有效组织记录")
                 continue
-            expanded_rows.extend(self._expand_import_item(item))
+            records = self._expand_import_item(item)
+            if not records:
+                result.errors.append(f"第 {index} 行缺少组织名称，或表头不符合导入模板")
+            expanded_rows.extend(records)
+        if not data:
+            result.errors.append("文件没有可导入的组织记录")
 
-        result = ImportResult(success=True, total=len(data))
-        pending: List[Dict[str, str]] = expanded_rows.copy()
-        pass_count = 0
-        max_passes = 5
+        by_id = {org.id: org for org in candidate}
+        original_by_identity: Dict[tuple, List[Organization]] = {}
+        for org in self._organizations:
+            original_by_identity.setdefault((org.name.strip(), org.level, org.parent_id), []).append(org)
+        by_name: Dict[str, List[Organization]] = {}
+        by_identity: Dict[tuple, List[Organization]] = {}
+        for org in candidate:
+            by_name.setdefault(org.name.strip(), []).append(org)
+            by_identity.setdefault((org.name.strip(), org.level, org.parent_id), []).append(org)
+        # 先建立全部上级，再绑定下级；否则同名上级若出现在后面的行，会被漏判为歧义。
+        pending = sorted(expanded_rows, key=lambda row: LEVEL_ORDER.get(row.get("level", ""), 99))
 
         allowed_levels = {
             OrganizationLevel.CITY,
@@ -472,8 +602,7 @@ class OrganizationStorage:
             OrganizationLevel.UNIT,
         }
 
-        while pending and pass_count < max_passes:
-            pass_count += 1
+        while pending:
             progressed = False
             next_pending: List[Dict[str, str]] = []
 
@@ -484,23 +613,54 @@ class OrganizationStorage:
                 code = row.get("code", "").strip()
 
                 if not name:
-                    result.errors.append(f"缺少名称: {row}")
+                    result.errors.append("存在名称为空的组织记录")
                     result.skipped += 1
                     continue
                 if level not in allowed_levels:
-                    result.errors.append(f"无效层级 '{level}': {row}")
+                    result.errors.append(f"组织“{name}”的层级“{level}”无效，请检查模板中的 level 列")
                     result.skipped += 1
                     continue
 
-                parent_id = self._resolve_parent_id(parent_name)
-                if parent_name and parent_id is None:
-                    next_pending.append(row)
+                parent_id = None
+                if parent_name:
+                    parents = [org for org in by_name.get(parent_name, [])
+                               if (org.level == "department" if level == "unit"
+                                   else LEVEL_ORDER[org.level] < LEVEL_ORDER[level])]
+                    if not parents:
+                        next_pending.append(row)
+                        continue
+                    if len(parents) > 1:
+                        result.errors.append(f"上级组织“{parent_name}”存在多个同名候选，无法确定归属")
+                        result.skipped += 1
+                        continue
+                    parent_id = parents[0].id
+                elif level == "unit":
+                    result.errors.append(f"单位“{name}”必须填写所属部门")
+                    result.skipped += 1
                     continue
 
-                org_id = Organization.generate_id(name, level, parent_id)
-                if any(existing.id == org_id for existing in self._organizations):
+                # 旧目录的 ID 可能采用早期规则；按业务身份复用，不能重新生成同名节点。
+                identity = (name, level, parent_id)
+                existing = by_identity.get(identity, [])
+                if len(existing) > 1:
+                    result.errors.append(f"组织“{name}”在现有目录中重复，请先合并重复节点")
+                    result.skipped += 1
+                    continue
+                if existing:
                     result.skipped += 1
                     progressed = True
+                    continue
+
+                originals = original_by_identity.get(identity, []) if clear_existing else []
+                if len(originals) > 1:
+                    result.errors.append(f"组织“{name}”存在多个历史身份，不能自动替换目录")
+                    result.skipped += 1
+                    continue
+                # 覆盖导入相同组织时也要保留旧 ID，避免目录变了、历史材料仍指向旧 ID。
+                org_id = originals[0].id if originals else Organization.generate_id(name, level, parent_id)
+                if org_id in by_id:
+                    result.errors.append(f"组织“{name}”的编号与现有不同组织冲突")
+                    result.skipped += 1
                     continue
 
                 try:
@@ -513,12 +673,15 @@ class OrganizationStorage:
                         keywords=[name],
                     )
                 except Exception as e:
-                    result.errors.append(f"导入失败: {row}, 错误: {e}")
+                    result.errors.append(f"组织“{name}”的信息无效：{e}")
                     result.skipped += 1
                     continue
 
-                self._organizations.append(org)
-                result.imported += 1
+                candidate.append(org)
+                by_id[org.id] = org
+                by_name.setdefault(name, []).append(org)
+                by_identity[identity] = [org]
+                result.attempted += 1
                 progressed = True
 
             pending = next_pending
@@ -526,25 +689,29 @@ class OrganizationStorage:
                 break
 
         for row in pending:
-            result.errors.append(f"父级未找到，无法导入: {row}")
+            result.errors.append(
+                f"组织“{row['name']}”的父级未找到或层级不符合要求"
+                f"（上级名称：{row['parent_name']}），整批未导入"
+            )
             result.skipped += 1
 
-        validation = validate_organization_hierarchy(self._organizations)
-        if validation.errors:
-            self._organizations = original_organizations
-            self._rebuild_indexes()
-            result.errors.extend([f"层级校验失败: {msg}" for msg in validation.errors])
-            result.success = False
+        result.errors.extend(f"层级校验失败: {message}" for message in self._catalog_errors(candidate))
+        references = {link.org_id for link in self._links} | set(referenced_org_ids or [])
+        new_orphans = sorted((references & {org.id for org in self._organizations}) - set(by_id))
+        if clear_existing and new_orphans:
+            result.errors.append("覆盖目录会使已有报告关联失效（含材料引用），已取消导入；请保留现有组织编号：" + ", ".join(new_orphans[:50]))
+        if result.errors:
             return result
 
-        self._rebuild_indexes()
-        self._save_organizations()
-        result.success = result.imported > 0 and not result.errors
+        self._commit_organizations(candidate)
+        result.imported = result.attempted
+        result.success = True
         return result
 
 
 # 单例实例
 _storage_instance = None
+
 
 def get_org_storage() -> OrganizationStorage:
     """获取组织存储单例"""

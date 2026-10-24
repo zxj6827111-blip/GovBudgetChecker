@@ -1,0 +1,621 @@
+{
+  "docs_total": 14,
+  "docs_evaluated": 0,
+  "docs_unannotated": [
+    "DOC-B1-009",
+    "DOC-B1-010",
+    "DOC-B1-011",
+    "DOC-B1-012",
+    "DOC-B1-013",
+    "DOC-B1-014",
+    "DOC-B1-015",
+    "DOC-B1-017",
+    "DOC-B1-019",
+    "DOC-B1-020",
+    "DOC-B1-025",
+    "DOC-B1-026",
+    "DOC-B1-027",
+    "DOC-B1-028"
+  ],
+  "evaluated_doc_ids": [],
+  "failures": [],
+  "totals": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": null,
+    "recall": null,
+    "fpr_operational": null,
+    "fp_density": null,
+    "acceptable_violations": 0,
+    "negative_violation_rate": null,
+    "hint_groups_hit": 0,
+    "hint_groups_total": 0,
+    "severity_accuracy": null,
+    "page_accuracy": null,
+    "locatable_evidence_rate": null,
+    "defect_groups_hit": 0,
+    "defect_groups_total": 0
+  },
+  "rule_level": {},
+  "rule_hit_rate": {
+    "BUD-001": {
+      "applicable_docs": 0,
+      "hit_docs": 0,
+      "hit_rate": null
+    },
+    "BUD-002": {
+      "applicable_docs": 0,
+      "hit_docs": 0,
+      "hit_rate": null
+    },
+    "BUD-003": {
+      "applicable_docs": 0,
+      "hit_docs": 0,
+      "hit_rate": null
+    },
+    "BUD-101": {
+      "applicable_docs": 0,
+      "hit_docs": 0,
+      "hit_rate": null
+    },
+    "BUD-102": {
+      "applicable_docs": 0,
+      "hit_docs": 0,
+      "hit_rate": null
+    },
+    "BUD-103": {
+      "applicable_docs": 0,
+      "hit_docs": 0,
+      "hit_rate": null
+    },
+    "BUD-104": {
+      "applicable_docs": 0,
+      "hit_docs": 0,
+      "hit_rate": null
+    },
+    "BUD-105": {
+      "applicable_docs": 0,
+      "hit_docs": 0,
+      "hit_rate": null
+    },
+    "BUD-106": {
+      "applicable_docs": 0,
+      "hit_docs": 0,
+      "hit_rate": null
+    },
+    "BUD-107": {
+      "applicable_docs": 0,
+      "hit_docs": 0,
+      "hit_rate": null
+    },
+    "BUD-108": {
+      "applicable_docs": 0,
+      "hit_docs": 0,
+      "hit_rate": null
+    },
+    "BUD-109": {
+      "applicable_docs": 0,
+      "hit_docs": 0,
+      "hit_rate": null
+    },
+    "BUD-110": {
+      "applicable_docs": 0,
+      "hit_docs": 0,
+      "hit_rate": null
+    },
+    "BUD-111": {
+      "applicable_docs": 0,
+      "hit_docs": 0,
+      "hit_rate": null
+    },
+    "BUD-112": {
+      "applicable_docs": 0,
+      "hit_docs": 0,
+      "hit_rate": null
+    },
+    "BUD-113": {
+      "applicable_docs": 0,
+      "hit_docs": 0,
+      "hit_rate": null
+    },
+    "CMM-001": {
+      "applicable_docs": 14,
+      "hit_docs": 1,
+      "hit_rate": 0.0714
+    },
+    "CMM-002": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "CMM-003": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "CMM-004": {
+      "applicable_docs": 14,
+      "hit_docs": 2,
+      "hit_rate": 0.1429
+    },
+    "CMM-005": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "CMM-006": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "CMM-007": {
+      "applicable_docs": 14,
+      "hit_docs": 1,
+      "hit_rate": 0.0714
+    },
+    "V33-001": {
+      "applicable_docs": 14,
+      "hit_docs": 1,
+      "hit_rate": 0.0714
+    },
+    "V33-002": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-003": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-004": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-005": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-101": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-102": {
+      "applicable_docs": 14,
+      "hit_docs": 10,
+      "hit_rate": 0.7143
+    },
+    "V33-103": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-104": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-105": {
+      "applicable_docs": 14,
+      "hit_docs": 11,
+      "hit_rate": 0.7857
+    },
+    "V33-106": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-107": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-108": {
+      "applicable_docs": 14,
+      "hit_docs": 1,
+      "hit_rate": 0.0714
+    },
+    "V33-109": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-110": {
+      "applicable_docs": 14,
+      "hit_docs": 1,
+      "hit_rate": 0.0714
+    },
+    "V33-111": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-112": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-113": {
+      "applicable_docs": 14,
+      "hit_docs": 2,
+      "hit_rate": 0.1429
+    },
+    "V33-114": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-115": {
+      "applicable_docs": 14,
+      "hit_docs": 8,
+      "hit_rate": 0.5714
+    },
+    "V33-117": {
+      "applicable_docs": 14,
+      "hit_docs": 5,
+      "hit_rate": 0.3571
+    },
+    "V33-119": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-120": {
+      "applicable_docs": 14,
+      "hit_docs": 12,
+      "hit_rate": 0.8571
+    },
+    "V33-121": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-122": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-200": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-201": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-202": {
+      "applicable_docs": 14,
+      "hit_docs": 1,
+      "hit_rate": 0.0714
+    },
+    "V33-203": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-204": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-214": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-220": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-221": {
+      "applicable_docs": 14,
+      "hit_docs": 2,
+      "hit_rate": 0.1429
+    },
+    "V33-222": {
+      "applicable_docs": 14,
+      "hit_docs": 1,
+      "hit_rate": 0.0714
+    },
+    "V33-223": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-224": {
+      "applicable_docs": 14,
+      "hit_docs": 3,
+      "hit_rate": 0.2143
+    },
+    "V33-225": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-226": {
+      "applicable_docs": 14,
+      "hit_docs": 1,
+      "hit_rate": 0.0714
+    },
+    "V33-227": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-230": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-232": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-233": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-234": {
+      "applicable_docs": 14,
+      "hit_docs": 1,
+      "hit_rate": 0.0714
+    },
+    "V33-235": {
+      "applicable_docs": 14,
+      "hit_docs": 1,
+      "hit_rate": 0.0714
+    },
+    "V33-236": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-240": {
+      "applicable_docs": 14,
+      "hit_docs": 1,
+      "hit_rate": 0.0714
+    },
+    "V33-241": {
+      "applicable_docs": 14,
+      "hit_docs": 2,
+      "hit_rate": 0.1429
+    },
+    "V33-242": {
+      "applicable_docs": 14,
+      "hit_docs": 1,
+      "hit_rate": 0.0714
+    },
+    "V33-243": {
+      "applicable_docs": 14,
+      "hit_docs": 2,
+      "hit_rate": 0.1429
+    },
+    "V33-244": {
+      "applicable_docs": 14,
+      "hit_docs": 3,
+      "hit_rate": 0.2143
+    },
+    "V33-245": {
+      "applicable_docs": 14,
+      "hit_docs": 1,
+      "hit_rate": 0.0714
+    },
+    "V33-246": {
+      "applicable_docs": 14,
+      "hit_docs": 2,
+      "hit_rate": 0.1429
+    },
+    "V33-CROSS-SAN-GONG-ECON": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-DISCLOSURE-PERCENT-UNIT": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-NARRATIVE-INDICATOR-REPEAT": {
+      "applicable_docs": 14,
+      "hit_docs": 1,
+      "hit_rate": 0.0714
+    },
+    "V33-PERF-PHASE-AMOUNT": {
+      "applicable_docs": 0,
+      "hit_docs": 0,
+      "hit_rate": null
+    },
+    "V33-SG-COMPLETION": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-TREND-COMPLETION-RATE": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    },
+    "V33-TXT-FUND-DETAIL": {
+      "applicable_docs": 14,
+      "hit_docs": 0,
+      "hit_rate": 0.0
+    }
+  },
+  "engine_fingerprint": {
+    "rules_sha256": "5db04c48c18b5c48e9ff4665175951298081050975e46f32083c11ed12458baf",
+    "rule_inventory_sha256": "1391641aa0af7f3a8f8c51cb4fb3182edcae008896787179547ae443236a8d71",
+    "rules_count": 82,
+    "git_head": "b8163c4",
+    "git_dirty": true
+  },
+  "zero_trigger_scope": "全部重放材料（无标注依赖）",
+  "rule_trigger_counts": {
+    "CMM-001": 1,
+    "CMM-004": 11,
+    "CMM-007": 1,
+    "V33-001": 1,
+    "V33-102": 10,
+    "V33-105": 11,
+    "V33-108": 1,
+    "V33-110": 1,
+    "V33-113": 3,
+    "V33-115": 10,
+    "V33-117": 9,
+    "V33-120": 60,
+    "V33-202": 1,
+    "V33-221": 2,
+    "V33-222": 1,
+    "V33-224": 3,
+    "V33-226": 1,
+    "V33-234": 1,
+    "V33-235": 1,
+    "V33-240": 3,
+    "V33-241": 4,
+    "V33-242": 2,
+    "V33-243": 3,
+    "V33-244": 3,
+    "V33-245": 1,
+    "V33-246": 2,
+    "V33-NARRATIVE-INDICATOR-REPEAT": 1
+  },
+  "zero_trigger_rules": {
+    "final": [
+      "V33-002",
+      "V33-003",
+      "V33-004",
+      "V33-005",
+      "V33-101",
+      "V33-103",
+      "V33-104",
+      "V33-106",
+      "V33-107",
+      "V33-109",
+      "V33-111",
+      "V33-112",
+      "V33-119",
+      "V33-121",
+      "V33-122",
+      "V33-114",
+      "V33-200",
+      "V33-201",
+      "V33-203",
+      "V33-214",
+      "V33-SG-COMPLETION",
+      "V33-225",
+      "V33-220",
+      "V33-227",
+      "V33-223",
+      "V33-204",
+      "V33-CROSS-SAN-GONG-ECON",
+      "V33-TXT-FUND-DETAIL",
+      "V33-TREND-COMPLETION-RATE",
+      "V33-233",
+      "V33-236",
+      "V33-230",
+      "V33-232"
+    ],
+    "common": [
+      "CMM-002",
+      "CMM-003",
+      "CMM-005",
+      "CMM-006",
+      "V33-DISCLOSURE-PERCENT-UNIT"
+    ]
+  },
+  "kind_accuracy": {
+    "total": 14,
+    "correct": 14,
+    "rate": 1.0,
+    "mismatches": []
+  },
+  "status_distribution": {
+    "pass": 777,
+    "fail": 78,
+    "not_applicable": 12,
+    "insufficient_data": 43,
+    "parse_error": 0,
+    "execution_error": 0
+  },
+  "obligation_ledger": {
+    "completion_rate": 0.9156,
+    "totals": {
+      "applicable": 604,
+      "completed": 553,
+      "unresolved": 51
+    },
+    "by_group": {
+      "DOC_STRUCTURE": {
+        "applicable": 14,
+        "completed": 14,
+        "unresolved": 0,
+        "completion_rate": 1.0
+      },
+      "CORE_TABLES": {
+        "applicable": 14,
+        "completed": 14,
+        "unresolved": 0,
+        "completion_rate": 1.0
+      },
+      "TABLE_INTERNAL": {
+        "applicable": 98,
+        "completed": 86,
+        "unresolved": 12,
+        "completion_rate": 0.8776
+      },
+      "TABLE_CROSS": {
+        "applicable": 112,
+        "completed": 101,
+        "unresolved": 11,
+        "completion_rate": 0.9018
+      },
+      "TABLE_TEXT": {
+        "applicable": 112,
+        "completed": 99,
+        "unresolved": 13,
+        "completion_rate": 0.8839
+      },
+      "NARRATIVE": {
+        "applicable": 30,
+        "completed": 29,
+        "unresolved": 1,
+        "completion_rate": 0.9667
+      },
+      "RATIO_TREND": {
+        "applicable": 56,
+        "completed": 56,
+        "unresolved": 0,
+        "completion_rate": 1.0
+      },
+      "DISCLOSURE": {
+        "applicable": 84,
+        "completed": 70,
+        "unresolved": 14,
+        "completion_rate": 0.8333
+      },
+      "SAN_GONG": {
+        "applicable": 84,
+        "completed": 84,
+        "unresolved": 0,
+        "completion_rate": 1.0
+      }
+    }
+  },
+  "stratified": {
+    "by_subset": {},
+    "by_region": {},
+    "by_report_kind_true": {},
+    "by_depth": {}
+  },
+  "generated_at": "2026-09-30 18:49:43",
+  "replay_dir": "/Volumes/workSSD/software development/GovBudgetChecker/outputs/benchmark/20260930-184806",
+  "mode": "auto"
+}

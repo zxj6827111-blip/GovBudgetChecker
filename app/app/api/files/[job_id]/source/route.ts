@@ -3,7 +3,7 @@ import { apiBase } from "@/lib/apiBase";
 import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ job_id: string }> }
 ) {
   const auth = await requireBackendAuthHeaders();
@@ -13,13 +13,17 @@ export async function GET(
 
   const jobId = encodeURIComponent((await params).job_id);
   try {
-    const upstream = await fetch(`${apiBase}/api/files/${jobId}/source`, {
+    const upstreamUrl = new URL(`${apiBase}/api/files/${jobId}/source`);
+    const checksum = new URL(req.url).searchParams.get("checksum");
+    if (checksum) upstreamUrl.searchParams.set("checksum", checksum);
+    const upstream = await fetch(upstreamUrl.toString(), {
       cache: "no-store",
       headers: auth.headers,
     });
     if (!upstream.ok) {
+      const error = await upstream.json().catch(() => ({ detail: "原件暂时不可用" }));
       return NextResponse.json(
-        { error: "source file not found" },
+        error,
         { status: upstream.status }
       );
     }

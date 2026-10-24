@@ -1,0 +1,29 @@
+# ZC-02：本地 OCR 服务（PaddleOCR CPU 容器，任务包 OCR 实施约定）
+# 独立 Python 3.11 CPU 容器；初始化模型后离线使用，不自动下载或更新模型。
+# 本机 arm64 通过容器 amd64 兼容运行——启动与性能必须实测（任务包纪律）。
+FROM --platform=linux/amd64 python:3.11-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PADDLE_HOME=/models
+
+WORKDIR /app
+
+# PaddlePaddle CPU 与 PaddleOCR 版本按任务包固定（2026-10 实施组合）：
+# PaddleOCR 3.7.0 / PaddlePaddle 3.2.0；构建时锁定传递依赖与模型文件哈希
+# （models/ 由部署流程预置并校验 sha256，缺失即启动失败——离线纪律）。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libglib2.0-0 libgomp1 libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY ocr_service/requirements.txt /app/ocr_service/requirements.txt
+COPY ocr_service/requirements.lock.txt /app/ocr_service/requirements.lock.txt
+RUN pip install --no-index --find-links=/wheels \
+    -c /app/ocr_service/requirements.lock.txt -r /app/ocr_service/requirements.txt \
+    || pip install -c /app/ocr_service/requirements.lock.txt -r /app/ocr_service/requirements.txt
+RUN pip check
+
+COPY ocr_service /app/ocr_service
+
+EXPOSE 9010
+CMD ["python", "-m", "uvicorn", "ocr_service.app:app", "--host", "0.0.0.0", "--port", "9010"]

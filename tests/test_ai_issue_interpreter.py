@@ -61,6 +61,8 @@ def test_convert_ai_issue_accepts_structured_payload_without_title_or_message() 
     assert item.severity == "manual_review"
     assert item.severity_label == "待人工复核"
     assert item.location["section"] == "预算编制说明"
+    assert item.location["page"] == 3
+    assert item.verification_status == "unverified"
     assert "第3页“预算编制说明”仍存在模板残留、占位符或未清理内容" in item.message
     assert item.suggestion == "请结合原表、原文和截图证据进行人工复核后确认是否需要修改。"
     assert "待人工复核" in item.tags

@@ -128,6 +128,16 @@ export default function Header() {
           >
             系统管理
           </button>
+          {user.is_admin ? (
+            <button
+              type="button"
+              onClick={() => router.push("/supervision")}
+              data-testid="gbc-legacy-supervisor-entry"
+              className="rounded-md px-3 py-1.5 text-sm font-medium text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
+            >
+              主管驾驶舱
+            </button>
+          ) : null}
         </nav>
       </div>
 

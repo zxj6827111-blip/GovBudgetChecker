@@ -1,0 +1,165 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.python-test-deps/
+.wheels/
+.pip-cache/
+.codex_pip_tmp/
+.pytest-tmp/
+.pytest-basetemp-*/
+.pytest-acceptance/
+.pytest-acceptance-*/
+pip_tmp_*/
+piptmpdl_*/
+pytest_basetemp_*/
+pytest_tmp_*/
+test-results/
+.env
+.env.*
+!.env.example
+node_modules/
+app/.next/
+app/.next-*/
+app/.npm-cache/
+app/out/
+app/tsconfig.tsbuildinfo
+.DS_Store
+.pytest_cache/
+tiny.pdf
+
+# uploads
+uploads/
+
+# test files (exclude tests/ directory)
+test_*.py
+!tests/test_*.py
+test_*.txt
+big.bin
+not.pdf.txt
+
+# Local temp directory
+.tmp/
+
+# Fix temp scripts (optional - can commit if useful)
+fix_temp.py
+start_fixed.bat
+
+# Trae & Local dev
+.agent/
+.codegraph/
+api/database.db
+*.log
+.ruff_cache/
+.trae/
+# ZCode 本地会话产物（plans/ 等）
+.zcode/
+
+
+# Local data and temporary files
+local.db
+# 一次性排查用的 payload / 抽样结果（历史上有 tmp_wanli_budget_check.json）
+tmp_*.json
+app/tsc_output.txt
+test_pdfs/
+X/
+
+# 导出产物（模板、预览图、回放报告等运行时产出，不入版本库）
+outputs/
+
+# Runtime data should not be versioned.
+data/*.json
+data/audit/admin-actions.jsonl
+
+# Local runtime artifacts
+.playwright-cli/
+.playwright-mcp/
+output/
+status.txt
+api/dev-*.err
+api/dev-*.out
+app/dev-*.err
+app/dev-*.out
+app/start-*.err
+app/start-*.out
+app/start-capture.err
+app/start-capture.out
+app/sidebar-department.png
+app/sidebar-selected-dept.png
+
+# Root-level local service logs
+start-*.err
+start-*.out
+audit-*.err
+audit-*.out
+
+# Temporary diagnostics and local API/browser captures
+tmp/
+tmp-cookies.txt
+
+# 受保护语料目录（本地人工标注样本，默认不入库）。
+# 例外（GPT5.6 R5 P1-D）：golden.json 与 ANNOTATIONS.md 是评测的
+# 验收输入——不入库则干净 checkout 无法复现 GATE（anchor_phrases_
+# aligned 等标注修订也不在版本库）。PDF/基线转储仍不入库（大文件与
+# 历史产物），仅入库标注文件。
+corpus/*
+!corpus/DOC-20260905-001/
+corpus/DOC-20260905-001/*
+!corpus/DOC-20260905-001/golden.json
+!corpus/DOC-20260905-001/ANNOTATIONS.md
+
+# WP4-I 第一期基准语料（DOC-B1-###）：登记 manifest 与人工标注（golden/
+# ANNOTATIONS）入库，sample.pdf 等原始材料一律不入库（bench_register.py
+# 只落本机）。标注冻结纪律见 docs/WP4-I_BENCHMARK_PLAN.md §3.2。
+!corpus/manifest.csv
+# 注意：内容忽略模式必须写 corpus/DOC-B1-*/*（目录段带通配符）。曾误写成
+# corpus/DOC-B1-/*（缺 *，要求目录名恰好是 "DOC-B1-"），该模式永不匹配，
+# 结果 sample.pdf 等原始材料全部放行、可被 git add 误提交（回归锁见
+# tests/test_corpus_ingest_guards.py）。
+!corpus/DOC-B1-*/
+corpus/DOC-B1-*/*
+!corpus/DOC-B1-*/golden.json
+!corpus/DOC-B1-*/ANNOTATIONS.md
+
+# 一次性排查脚本与 pytest 临时产物，不入库。
+# scratch/ 内含批次整改的临时校验脚本与 pytest 工作目录（2600+ 文件、21MB），
+# scratch_inventory_out.txt 是规则清单的一次性导出结果，两者都会随批次推进快速过期。
+# .pytest-luna-* 是历史测试运行留下的临时目录，此前 git status 因权限无法读取而持续报
+# Permission denied 告警；加入忽略后 git 不再递归扫描，告警消失。
+scratch/
+scratch_inventory_out.txt
+.pytest-luna-*/
+
+# UI 效果图压缩包（3.2MB 二进制，WP2 的参考素材，不入库）。
+# 仓库既有策略是不入库大二进制（见 corpus/*.pdf 的忽略规则）；
+# 压缩包 SHA-256 记录在 docs/MATERIAL_LEDGER_WP0_BASELINE_20260921.md，
+# 需要核对是否为同一份素材时可以复算。
+docs/GovBudgetChecker_UI_FINAL_*.zip
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+allure-results/
+allure-report/
+cdk.out/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

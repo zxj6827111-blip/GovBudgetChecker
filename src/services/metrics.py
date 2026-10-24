@@ -26,9 +26,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from src.schemas.issues import (
     ACTIVE_JOB_STATUSES,
@@ -49,6 +50,11 @@ _DEFAULT_CACHE_TTL_SECONDS = 15.0
 _DEFAULT_MAX_JOBS = 5000
 
 _cache: Dict[str, Any] = {"key": None, "ts": 0.0, "payload": None}
+# 同一时刻只做一次全量汇总；并发请求等它结束后直接命中 TTL 缓存。
+_collect_lock = threading.Lock()
+# 任务目录 -> ((mtime_ns, size), 记录)：TTL 过期后只重新解析有变化的 status.json。
+# 单个 status.json 可达数 MB（277 个任务合计约 850MB），此前每 15 秒全部重读一遍。
+_record_cache: Dict[str, Tuple[Tuple[int, int], Optional[Dict[str, Any]]]] = {}
 
 
 def _env_float(name: str, default: float) -> float:
@@ -281,6 +287,22 @@ def collect_job_metric_record(job_dir: Path) -> Optional[Dict[str, Any]]:
     }
 
 
+def _cached_job_metric_record(
+    job_dir: Path, seen: Dict[str, Tuple[Tuple[int, int], Optional[Dict[str, Any]]]]
+) -> Optional[Dict[str, Any]]:
+    """status.json 的修改时间与大小都没变时复用上次提取的记录（记录只读，不会被改写）。"""
+    try:
+        stat = (job_dir / "status.json").stat()
+    except OSError:
+        return None
+    signature = (stat.st_mtime_ns, stat.st_size)
+    key = job_dir.as_posix()
+    cached = _record_cache.get(key)
+    record = cached[1] if cached is not None and cached[0] == signature else collect_job_metric_record(job_dir)
+    seen[key] = (signature, record)
+    return record
+
+
 def collect_worker_heartbeats(
     uploads_root: Path,
     *,
@@ -363,12 +385,16 @@ def collect_metrics(
 
     records: List[Dict[str, Any]] = []
     skipped = 0
+    seen: Dict[str, Tuple[Tuple[int, int], Optional[Dict[str, Any]]]] = {}
     for job_dir in _iter_job_dirs(uploads_root, limit):
-        record = collect_job_metric_record(job_dir)
+        record = _cached_job_metric_record(job_dir, seen)
         if record is None:
             skipped += 1
             continue
         records.append(record)
+    # 只保留本轮仍存在的任务，已删除任务的记录随之清掉。
+    _record_cache.clear()
+    _record_cache.update(seen)
 
     total = len(records)
 
@@ -558,7 +584,10 @@ def collect_metrics_cached(
     ttl_seconds: Optional[float] = None,
     now: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """带 TTL 缓存的采集入口，防止指标端点被高频抓取时反复全量扫盘。"""
+    """带 TTL 缓存的采集入口，防止指标端点被高频抓取时反复全量扫盘。
+
+    会读文件，调用方在异步接口里应放到线程中执行，不要占用事件循环。
+    """
     reference = time.time() if now is None else now
     ttl = (
         ttl_seconds
@@ -566,21 +595,32 @@ def collect_metrics_cached(
         else _env_float("METRICS_CACHE_TTL_SECONDS", _DEFAULT_CACHE_TTL_SECONDS)
     )
     key = uploads_root.as_posix()
-    cached = _cache.get("payload")
-    if (
-        ttl > 0
-        and cached is not None
-        and _cache.get("key") == key
-        and reference - float(_cache.get("ts") or 0.0) < ttl
-    ):
-        payload = dict(cached)
-        payload["cached"] = True
-        return payload
 
-    payload = collect_metrics(uploads_root, now=reference)
-    _cache["key"] = key
-    _cache["ts"] = reference
-    _cache["payload"] = payload
+    def fresh_cached() -> Optional[Dict[str, Any]]:
+        cached = _cache.get("payload")
+        if (
+            ttl > 0
+            and cached is not None
+            and _cache.get("key") == key
+            and reference - float(_cache.get("ts") or 0.0) < ttl
+        ):
+            payload = dict(cached)
+            payload["cached"] = True
+            return payload
+        return None
+
+    hit = fresh_cached()
+    if hit is not None:
+        return hit
+    with _collect_lock:
+        # 等锁期间别的请求可能已经汇总完毕。
+        hit = fresh_cached()
+        if hit is not None:
+            return hit
+        payload = collect_metrics(uploads_root, now=reference)
+        _cache["key"] = key
+        _cache["ts"] = reference
+        _cache["payload"] = payload
     result = dict(payload)
     result["cached"] = False
     return result
@@ -591,6 +631,7 @@ def reset_metrics_cache() -> None:
     _cache["key"] = None
     _cache["ts"] = 0.0
     _cache["payload"] = None
+    _record_cache.clear()
 
 
 # ---------------------------------------------------------------------------

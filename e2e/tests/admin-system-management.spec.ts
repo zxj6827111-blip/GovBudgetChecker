@@ -360,6 +360,9 @@ async function installAdminMocks(page: Page, state: AdminState) {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
+          // 前端要求"预览响应必须自证是 dry_run"才放行「正式修复」按钮；
+          // 生产接口确实回传 dry_run（api/runtime.py:4153），这里补齐。
+          dry_run: body.dry_run === true,
           candidate_count: 1,
           repaired_count: body.dry_run ? 0 : 1,
           linked_from_status_count: 1,
@@ -381,6 +384,7 @@ async function installAdminMocks(page: Page, state: AdminState) {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
+          dry_run: body.dry_run === true,
           candidate_count: 1,
           updated_count: body.dry_run ? 0 : 1,
           skipped_count: 0,
@@ -509,7 +513,7 @@ test.describe("Admin system management actions", () => {
     await page.getByTestId("admin-users-create").click();
 
     await expect.poll(() => state.userCreates).toEqual([
-      { username: "new-user", password: "secret123", is_admin: false, organization_ids: ["unit-001"] },
+      { username: "new-user", password: "secret123", is_admin: false, is_read_only: false, organization_ids: ["unit-001"] },
     ]);
     await expect(page.getByTestId("admin-users-row-new-user")).toBeVisible();
 
@@ -597,24 +601,35 @@ test.describe("Admin system management actions", () => {
     await page.getByTestId("admin-reanalyze-ai-toggle").uncheck();
     await page.getByTestId("admin-operations-reanalyze-all").click();
     await expect.poll(() => state.reanalyzeAllBodies).toEqual([
-      { latest_per_department: true, use_local_rules: true, use_ai_assist: false },
+      {
+        latest_per_department: true,
+        use_local_rules: true,
+        // 档位由 AI 能力接口决定：本用例的能力响应不含 enabled，
+        // 于是 use_ai_assist 为 undefined（JSON 序列化时被丢掉），
+        // 只有 ai_profile_id 显式写 null。
+        ai_profile_id: null,
+      },
     ]);
     await expect(page.getByTestId("reanalyze-progress-dialog")).toBeVisible();
     await page.getByTestId("reanalyze-progress-close").click();
 
     await page.getByTestId("admin-operations-repair-preview").click();
-    await expect.poll(() => state.repairBodies.at(-1)).toEqual({ dry_run: true });
+    await expect.poll(() => state.repairBodies.at(-1)).toEqual({ dry_run: true, only_unassigned: true });
     await expect(page.getByTestId("admin-operations-repair-results")).toBeVisible();
 
     await page.getByTestId("admin-operations-repair-execute").click();
-    await expect.poll(() => state.repairBodies.at(-1)).toEqual({ dry_run: false });
+    await expect.poll(() => state.repairBodies.at(-1)).toEqual({
+      dry_run: false,
+      only_unassigned: true,
+      job_ids: ["source-job-1"],
+    });
 
     await page.getByTestId("admin-operations-rematch-preview").click();
-    await expect.poll(() => state.rematchBodies.at(-1)).toEqual({ dry_run: true });
+    await expect.poll(() => state.rematchBodies.at(-1)).toEqual({ dry_run: true, only_unassigned: true });
     await expect(page.getByTestId("admin-operations-rematch-results")).toBeVisible();
 
     await page.getByTestId("admin-operations-rematch-execute").click();
-    await expect.poll(() => state.rematchBodies.at(-1)).toEqual({ dry_run: false });
+    await expect.poll(() => state.rematchBodies.at(-1)).toEqual({ dry_run: false, only_unassigned: true, job_ids: ["source-job-1"] });
 
     await page.getByTestId("admin-operations-cleanup-preview").click();
     await expect.poll(() => state.cleanupBodies.at(-1)).toEqual({ dry_run: true });

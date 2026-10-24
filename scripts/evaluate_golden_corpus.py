@@ -364,15 +364,10 @@ def match_annotation(
 
 
 def _truth_group(annotation: Dict[str, Any]) -> str:
-    """真值分组：证据面后缀归一——T4a/T4b 是同一真值 T4 的两个证据面。
+    """Use the same explicit/legacy identity contract as dataset quotas."""
+    from src.services.truth_grouping import canonical_truth_group
 
-    R6 P1-4 冻结语义（ANNOTATIONS.md）：同一真值的多个证据面**任一
-    命中即该真值命中**。分组取 truth_id 去掉尾部小写后缀（T4a→T4、
-    T5b→T5）；无后缀的 truth_id（T1…）组即自身；缺 truth_id 时退回
-    annotation_id。
-    """
-    truth_id = str(annotation.get("truth_id") or annotation.get("annotation_id") or "")
-    return re.sub(r"[a-z]+$", "", truth_id) or truth_id
+    return canonical_truth_group(annotation)
 
 
 def _consume_truth_annotations(
@@ -417,6 +412,10 @@ def _consume_truth_annotations(
                 "severity_ok": _norm_severity(finding.get("severity"))
                 == _norm_severity(annotation.get("expected_severity")),
                 "page_ok": _page_of(finding) == annotation.get("page"),
+                # RC-13：匹配记录携带命中 finding 的定位实体（页/bbox/认证态），
+                # 精确定位率才能对"标准接口构造出的正确命中"评分——只回
+                # annotation 摘要会让定位评测与匹配接口脱节。
+                "finding": finding,
             }
         )
     for group, faces in pending.items():

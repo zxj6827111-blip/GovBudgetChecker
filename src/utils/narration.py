@@ -45,6 +45,12 @@ _AMOUNT_RE = re.compile(
 _YEAR_CONTEXT_RE = re.compile(r"(20\d{2})\s*(?:年度|年)")
 
 
+def normalize_amount_punctuation(text: str) -> str:
+    """Normalize literal numeric punctuation, preserving every digit."""
+    text = re.sub(r"(?<=\d)[，﹐](?=\d{3}(?:[^\d]|$))", ",", str(text or ""))
+    return re.sub(r"(?<=\d)．(?=\d)", ".", text)
+
+
 def merge_soft_wrapped_lines(page_text: str) -> List[str]:
     """把 PDF 软换行合并成逻辑段落。
 
@@ -54,7 +60,8 @@ def merge_soft_wrapped_lines(page_text: str) -> List[str]:
     paragraphs: List[str] = []
     buffer = ""
     for raw_line in str(page_text or "").splitlines():
-        line = raw_line.strip()
+        line = normalize_amount_punctuation(raw_line.strip())
+        line = re.sub(r"(?<=[\u3400-\u9fff])[ \t]+(?=[\u3400-\u9fff])", "", line)
         if not line:
             if buffer:
                 paragraphs.append(buffer)
@@ -174,7 +181,7 @@ def extract_amounts(clause: str) -> List[Tuple[float, str]]:
     - 「20xx年度/年」上下文中的数字不算金额；
     - 单位换算统一到万元（元=0.0001，亿元=10000）。
     """
-    clause = str(clause or "")
+    clause = normalize_amount_punctuation(clause)
     amounts: List[Tuple[float, str]] = []
     for match in _AMOUNT_RE.finditer(clause):
         # 排除年份上下文：数字紧邻 20xx 年/年度 时跳过

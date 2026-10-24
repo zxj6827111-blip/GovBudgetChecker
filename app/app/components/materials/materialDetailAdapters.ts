@@ -793,7 +793,7 @@ export function buildFindingsSections(analysis: AnalysisBlock | null | undefined
       key: "formal",
       title: "正式问题",
       items: analysis.formal_findings ?? [],
-      desc: "证据完整、可作为正式结论的问题。",
+      desc: "后端列入问题清单的条目；原文引用未核实的仍须人工核验。",
     },
     {
       key: "manual_review",

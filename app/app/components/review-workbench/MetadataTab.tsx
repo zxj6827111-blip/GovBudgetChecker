@@ -9,6 +9,7 @@
 
 import type { JobDetailRecord, JobSummaryRecord } from "../../../lib/uiAdapters";
 import {
+  extractCheckSubject,
   extractFindingVersions,
   formatMetadataReportKind,
   formatMetadataYear,
@@ -33,6 +34,7 @@ function MetadataRow({ label, value, testId }: { label: string; value: string; t
 
 export function MetadataTab({ job, detail }: MetadataTabProps) {
   const versions = extractFindingVersions(detail);
+  const checkSubject = extractCheckSubject(detail);
   const reportId = String(job.structured_report_id ?? "").trim() || "未识别到";
 
   return (
@@ -45,6 +47,18 @@ export function MetadataTab({ job, detail }: MetadataTabProps) {
         value={String(job.organization_name ?? "").trim() || "未关联"}
         testId="gbc-review-metadata-organization"
       />
+      {checkSubject ? (
+        <MetadataRow label="检查主体" value={checkSubject.name} testId="gbc-review-metadata-check-subject" />
+      ) : null}
+      {checkSubject?.conflictMessage ? (
+        <div
+          role="note"
+          className="my-2 rounded-md border border-warning-200 bg-warning-50 px-2.5 py-2 text-xs leading-relaxed text-warning-700"
+          data-testid="gbc-review-metadata-check-subject-conflict"
+        >
+          {checkSubject.conflictMessage}
+        </div>
+      ) : null}
       <MetadataRow label="报告编号" value={reportId} testId="gbc-review-metadata-report-id" />
 
       <div className="mb-1 mt-5 text-xs font-semibold uppercase tracking-wide text-slate-400">版本留痕（M2）</div>

@@ -71,6 +71,7 @@ interface ReviewServerState {
   startCalls: number;
   completeCalls: number;
   decideCalls: { obligationId: string; body: Record<string, unknown> }[];
+  systemReviewCodes?: string[];
 }
 
 const RESOLVED = ["verified_ok", "verified_issue", "not_applicable"];
@@ -163,6 +164,7 @@ function buildReviewPayload(state: ReviewServerState) {
 }
 
 async function installMocks(page: Page, state: ReviewServerState) {
+  const workflowIssues: Record<string, Record<string, unknown>> = {};
   const handle = async (route: Route) => {
     const request = route.request();
     const method = request.method().toUpperCase();
@@ -190,13 +192,27 @@ async function installMocks(page: Page, state: ReviewServerState) {
         stage_failed_at: null,
         // 本链路聚焦补核：无 issue 待办，问题侧不得再拖住完成按钮。
         result: { rule_findings: [], meta: { pages: 15 } },
+        ...(state.systemReviewCodes ? { review_report: {
+          issues: [], tips: [],
+          manual_review: state.systemReviewCodes.map((code) => ({
+            record_type: "review_reason", code, message: `系统提示：${code}`,
+          })),
+        } } : {}),
       });
     }
     if (pathname === `/api/jobs/${JOB_ID}/structured-ingest`) {
       return json({ status: "done", review_item_count: 0, review_items: [] });
     }
     if (pathname === "/api/workflow") {
-      return json({ issues: {}, packages: [] });
+      if (method === "POST") {
+        const body = request.postDataJSON() as Record<string, unknown>;
+        const id = String(body.issue_id ?? "");
+        if (!state.systemReviewCodes?.some((code) => id === `review_reason:${code}`)) {
+          return json({ detail: "issue_id does not exist" }, 404);
+        }
+        workflowIssues[id] = { ...body, job_id: JOB_ID };
+      }
+      return json({ issues: workflowIssues, packages: [] });
     }
     if (pathname === "/api/reviews") {
       return json({
@@ -325,12 +341,56 @@ function freshState(): ReviewServerState {
 }
 
 test.describe("人工补核（WP3-B）", () => {
+  test("四张系统提示可处理并保存，完成真实补核后才能结束复核", async ({ page }) => {
+    const state = freshState();
+    state.systemReviewCodes = [
+      "evidence_incomplete_findings", "rule_evidence_incomplete",
+      "rules_insufficient_data", "check_obligations_incomplete",
+    ];
+    state.obligations = [obligationItem("OBL-TXT-T5", "一般公共预算支出决算表与功能分类说明一致")];
+    await page.context().addCookies([sessionCookie]);
+    await installMocks(page, state);
+    await page.goto(`/review?job=${JOB_ID}`);
+    if (!state.activeSession && !state.history.some(item => item.status === "completed")) await page.getByTestId("gbc-review-start").click();
+    await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
+
+    for (const code of state.systemReviewCodes) {
+      const id = `review_reason:${code}`;
+      await page.getByTestId(`gbc-review-issue-confirm-${id}`).click();
+      await expect(page.getByTestId(`gbc-review-issue-card-${id}`)).toHaveCount(0);
+      await expect(page.getByTestId("gbc-review-undo")).toBeEnabled();
+      await expect(page.getByTestId("gbc-review-action-notice")).toHaveCount(0);
+    }
+    await page.reload();
+    await expect(page.getByTestId("gbc-review-issues-empty")).toContainText("当前筛选下已无待处理项");
+    await expect(page.getByTestId("gbc-review-issues-empty")).toContainText("仍有 1 项检查待补核");
+    await page.getByTestId("gbc-review-view-all").click();
+    for (const code of state.systemReviewCodes) {
+      await expect(page.getByTestId(`gbc-review-issue-card-review_reason:${code}`)).toContainText("已确认");
+    }
+    await expect(page.getByTestId("gbc-review-gate-blockers")).toContainText("还有 1 项检查义务待人工补核");
+    await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();
+
+    await page.getByTestId("gbc-review-tab-obligations").click();
+    await page.getByTestId("gbc-obligation-note-OBL-TXT-T5").fill("已人工核对测试材料，记录表文差异");
+    await page.getByTestId("gbc-obligation-evidence-OBL-TXT-T5").fill("测试材料第 12 页表格与第 18 页说明");
+    await page.getByTestId("gbc-obligation-verify-issue-OBL-TXT-T5").click();
+    await expect(page.getByTestId("gbc-obligation-summary")).toContainText("待补核 0 项");
+    await expect(page.getByTestId("gbc-review-complete")).toBeEnabled();
+    await page.getByTestId("gbc-review-complete").click();
+    await expect(page.getByTestId("gbc-review-completed-summary")).toContainText("e2e-reviewer");
+    await page.reload();
+    await expect(page.getByTestId("gbc-review-complete")).toHaveText("重新复核");
+    expect(state.completeCalls).toBe(1);
+  });
+
   test("主链路：补核两项义务 → 门禁放行 → 完成复核", async ({ page }) => {
     const state = freshState();
     await page.context().addCookies([sessionCookie]);
     await installMocks(page, state);
 
     await page.goto(`/review?job=${JOB_ID}`);
+    if (!state.activeSession && !state.history.some(item => item.status === "completed")) await page.getByTestId("gbc-review-start").click();
 
     // 进入工作台即自动开复核（WP3-A 口径），顶部显示"复核中"
     await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
@@ -393,6 +453,7 @@ test.describe("人工补核（WP3-B）", () => {
     await installMocks(page, state);
 
     await page.goto(`/review?job=${JOB_ID}`);
+    if (!state.activeSession && !state.history.some(item => item.status === "completed")) await page.getByTestId("gbc-review-start").click();
     await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
 
     await page.getByTestId("gbc-review-tab-obligations").click();

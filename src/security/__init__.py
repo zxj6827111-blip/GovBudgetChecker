@@ -20,6 +20,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 logger = logging.getLogger(__name__)
 
 API_KEY_HEADER = "X-API-Key"
+SESSION_TOKEN_HEADER = "X-Session-Token"
+#: 前端服务每次转发业务请求前都会先校验一次会话；这类校验只查令牌，不计入限流额度。
+SESSION_CHECK_PATHS = frozenset({"/api/auth/me"})
 API_KEY_ENV = "GOVBUDGET_API_KEY"
 API_KEY_LENGTH = 32
 DEFAULT_RATE_LIMIT = 100
@@ -240,8 +243,18 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         
         client_id = self._get_client_id(request)
-        
-        allowed, remaining = self.manager.check_rate_limit(client_id)
+        api_key = self._extract_api_key(request) if self.config.enabled else None
+        trusted_caller = bool(api_key) and self.manager.validate_key(api_key)
+        session_token = str(request.headers.get(SESSION_TOKEN_HEADER) or "").strip()
+
+        # 网页请求都经前端服务转发，按来源 IP 计数会让全体用户共用一份额度。
+        # 只有持有服务密钥的转发请求才按登录会话分桶；没有密钥的请求仍按 IP 限流。
+        if trusted_caller and request.url.path in SESSION_CHECK_PATHS:
+            allowed, remaining = True, self.config.rate_limit
+        else:
+            bucket = (f"session:{hashlib.sha256(session_token.encode()).hexdigest()[:24]}"
+                      if trusted_caller and session_token else client_id)
+            allowed, remaining = self.manager.check_rate_limit(bucket)
         
         if not allowed:
             logger.warning(f"Rate limit exceeded for client: {client_id}")
@@ -257,7 +270,6 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             )
 
         if self.config.enabled:
-            api_key = self._extract_api_key(request)
             if not api_key:
                 from fastapi.responses import JSONResponse
 
@@ -270,7 +282,7 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                     headers={"WWW-Authenticate": "Bearer"},
                 )
 
-            if not self.manager.validate_key(api_key):
+            if not trusted_caller:
                 logger.warning("Invalid API key attempt from %s", client_id)
                 from fastapi.responses import JSONResponse
 

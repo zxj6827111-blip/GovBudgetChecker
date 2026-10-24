@@ -1,0 +1,5592 @@
+[
+  {
+    "doc_id": "SH2024NEW_02",
+    "filename": "SH2024NEW_02_identity.pdf",
+    "source_pdf_sha256": "57e41caa7bb05e91c741ddd09e4015ae51ef3ae0044a11ec7a9d5a7301c3a2c9",
+    "fixture_sha256": "5248ddac4a7064e0f89abe412c06085dc9809d653f9a406b1f29f25725cc0012",
+    "original_physical_pages": [
+      7,
+      9
+    ],
+    "truth_source": "outputs/shanghai_2024_new10_acceptance_20261015/documents/SH2024NEW_02/source_amount_truth.json",
+    "truth_method": "frozen independent grid/native words; no tested facts read",
+    "expected": [
+      {
+        "truth_id": "SH2024NEW_02:p7r2c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "305,443.51",
+        "bbox": [
+          334.45001220703125,
+          173.03549194335938,
+          386.95001220703125,
+          183.53549194335938
+        ],
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r2c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "284,218.54",
+        "bbox": [
+          412.4000244140625,
+          173.03549194335938,
+          464.9000244140625,
+          183.53549194335938
+        ],
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r2c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "207.02",
+        "bbox": [
+          490.1000061035156,
+          173.03549194335938,
+          521.5999755859375,
+          183.53549194335938
+        ],
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r2c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "14,707.75",
+        "bbox": [
+          538.1499633789062,
+          173.03549194335938,
+          585.3999633789062,
+          183.53549194335938
+        ],
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r2c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "20.00",
+        "bbox": [
+          615.8500366210938,
+          173.03549194335938,
+          642.1000366210938,
+          183.53549194335938
+        ],
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r2c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          173.03549194335938,
+          694.0,
+          183.53549194335938
+        ],
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r2c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "6,290.19",
+        "bbox": [
+          723.9000244140625,
+          173.03549194335938,
+          765.9000244140625,
+          183.53549194335938
+        ],
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r3c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "18,603.36",
+        "bbox": [
+          339.70001220703125,
+          189.1855010986328,
+          386.95001220703125,
+          199.6855010986328
+        ],
+        "expected": {
+          "subject_code": "205",
+          "subject_name": "教育支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r3c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "15,841.72",
+        "bbox": [
+          417.6500244140625,
+          189.1855010986328,
+          464.9000244140625,
+          199.6855010986328
+        ],
+        "expected": {
+          "subject_code": "205",
+          "subject_name": "教育支出",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r3c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          500.6000061035156,
+          189.1855010986328,
+          521.5999755859375,
+          199.6855010986328
+        ],
+        "expected": {
+          "subject_code": "205",
+          "subject_name": "教育支出",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r3c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "813.71",
+        "bbox": [
+          553.8999633789062,
+          189.1855010986328,
+          585.3999633789062,
+          199.6855010986328
+        ],
+        "expected": {
+          "subject_code": "205",
+          "subject_name": "教育支出",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r3c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          621.1000366210938,
+          189.1855010986328,
+          642.1000366210938,
+          199.6855010986328
+        ],
+        "expected": {
+          "subject_code": "205",
+          "subject_name": "教育支出",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r3c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          189.1855010986328,
+          694.0,
+          199.6855010986328
+        ],
+        "expected": {
+          "subject_code": "205",
+          "subject_name": "教育支出",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r3c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "1,947.93",
+        "bbox": [
+          723.9000244140625,
+          189.1855010986328,
+          765.9000244140625,
+          199.6855010986328
+        ],
+        "expected": {
+          "subject_code": "205",
+          "subject_name": "教育支出",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r4c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "18,603.36",
+        "bbox": [
+          339.70001220703125,
+          205.33551025390625,
+          386.95001220703125,
+          215.83551025390625
+        ],
+        "expected": {
+          "subject_code": "20503",
+          "subject_name": "职业教育",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r4c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "15,841.72",
+        "bbox": [
+          417.6500244140625,
+          205.33551025390625,
+          464.9000244140625,
+          215.83551025390625
+        ],
+        "expected": {
+          "subject_code": "20503",
+          "subject_name": "职业教育",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r4c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          500.6000061035156,
+          205.33551025390625,
+          521.5999755859375,
+          215.83551025390625
+        ],
+        "expected": {
+          "subject_code": "20503",
+          "subject_name": "职业教育",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r4c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "813.71",
+        "bbox": [
+          553.8999633789062,
+          205.33551025390625,
+          585.3999633789062,
+          215.83551025390625
+        ],
+        "expected": {
+          "subject_code": "20503",
+          "subject_name": "职业教育",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r4c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          621.1000366210938,
+          205.33551025390625,
+          642.1000366210938,
+          215.83551025390625
+        ],
+        "expected": {
+          "subject_code": "20503",
+          "subject_name": "职业教育",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r4c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          205.33551025390625,
+          694.0,
+          215.83551025390625
+        ],
+        "expected": {
+          "subject_code": "20503",
+          "subject_name": "职业教育",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r4c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "1,947.93",
+        "bbox": [
+          723.9000244140625,
+          205.33551025390625,
+          765.9000244140625,
+          215.83551025390625
+        ],
+        "expected": {
+          "subject_code": "20503",
+          "subject_name": "职业教育",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r5c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "18,603.36",
+        "bbox": [
+          339.70001220703125,
+          221.48550415039062,
+          386.95001220703125,
+          231.98550415039062
+        ],
+        "expected": {
+          "subject_code": "2050302",
+          "subject_name": "中等职业教育",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r5c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "15,841.72",
+        "bbox": [
+          417.6500244140625,
+          221.48550415039062,
+          464.9000244140625,
+          231.98550415039062
+        ],
+        "expected": {
+          "subject_code": "2050302",
+          "subject_name": "中等职业教育",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r5c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          500.6000061035156,
+          221.48550415039062,
+          521.5999755859375,
+          231.98550415039062
+        ],
+        "expected": {
+          "subject_code": "2050302",
+          "subject_name": "中等职业教育",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r5c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "813.71",
+        "bbox": [
+          553.8999633789062,
+          221.48550415039062,
+          585.3999633789062,
+          231.98550415039062
+        ],
+        "expected": {
+          "subject_code": "2050302",
+          "subject_name": "中等职业教育",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r5c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          621.1000366210938,
+          221.48550415039062,
+          642.1000366210938,
+          231.98550415039062
+        ],
+        "expected": {
+          "subject_code": "2050302",
+          "subject_name": "中等职业教育",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r5c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          221.48550415039062,
+          694.0,
+          231.98550415039062
+        ],
+        "expected": {
+          "subject_code": "2050302",
+          "subject_name": "中等职业教育",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r5c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "1,947.93",
+        "bbox": [
+          723.9000244140625,
+          221.48550415039062,
+          765.9000244140625,
+          231.98550415039062
+        ],
+        "expected": {
+          "subject_code": "2050302",
+          "subject_name": "中等职业教育",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r6c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "5,328.84",
+        "bbox": [
+          344.95001220703125,
+          237.635498046875,
+          386.95001220703125,
+          248.135498046875
+        ],
+        "expected": {
+          "subject_code": "206",
+          "subject_name": "科学技术支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r6c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "4,898.83",
+        "bbox": [
+          422.9000244140625,
+          237.635498046875,
+          464.9000244140625,
+          248.135498046875
+        ],
+        "expected": {
+          "subject_code": "206",
+          "subject_name": "科学技术支出",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r6c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "200.00",
+        "bbox": [
+          490.1000061035156,
+          237.635498046875,
+          521.5999755859375,
+          248.135498046875
+        ],
+        "expected": {
+          "subject_code": "206",
+          "subject_name": "科学技术支出",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r6c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "225.64",
+        "bbox": [
+          553.8999633789062,
+          237.635498046875,
+          585.3999633789062,
+          248.135498046875
+        ],
+        "expected": {
+          "subject_code": "206",
+          "subject_name": "科学技术支出",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r6c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          621.1000366210938,
+          237.635498046875,
+          642.1000366210938,
+          248.135498046875
+        ],
+        "expected": {
+          "subject_code": "206",
+          "subject_name": "科学技术支出",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r6c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          237.635498046875,
+          694.0,
+          248.135498046875
+        ],
+        "expected": {
+          "subject_code": "206",
+          "subject_name": "科学技术支出",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r6c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "4.37",
+        "bbox": [
+          744.9000244140625,
+          237.635498046875,
+          765.9000244140625,
+          248.135498046875
+        ],
+        "expected": {
+          "subject_code": "206",
+          "subject_name": "科学技术支出",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r7c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "5,328.84",
+        "bbox": [
+          344.95001220703125,
+          253.7855224609375,
+          386.95001220703125,
+          264.2855224609375
+        ],
+        "expected": {
+          "subject_code": "20603",
+          "subject_name": "应用研究",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r7c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "4,898.83",
+        "bbox": [
+          422.9000244140625,
+          253.7855224609375,
+          464.9000244140625,
+          264.2855224609375
+        ],
+        "expected": {
+          "subject_code": "20603",
+          "subject_name": "应用研究",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r7c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "200.00",
+        "bbox": [
+          490.1000061035156,
+          253.7855224609375,
+          521.5999755859375,
+          264.2855224609375
+        ],
+        "expected": {
+          "subject_code": "20603",
+          "subject_name": "应用研究",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r7c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "225.64",
+        "bbox": [
+          553.8999633789062,
+          253.7855224609375,
+          585.3999633789062,
+          264.2855224609375
+        ],
+        "expected": {
+          "subject_code": "20603",
+          "subject_name": "应用研究",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r7c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          621.1000366210938,
+          253.7855224609375,
+          642.1000366210938,
+          264.2855224609375
+        ],
+        "expected": {
+          "subject_code": "20603",
+          "subject_name": "应用研究",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r7c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          253.7855224609375,
+          694.0,
+          264.2855224609375
+        ],
+        "expected": {
+          "subject_code": "20603",
+          "subject_name": "应用研究",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r7c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "4.37",
+        "bbox": [
+          744.9000244140625,
+          253.7855224609375,
+          765.9000244140625,
+          264.2855224609375
+        ],
+        "expected": {
+          "subject_code": "20603",
+          "subject_name": "应用研究",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r8c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "5,328.84",
+        "bbox": [
+          344.95001220703125,
+          269.93548583984375,
+          386.95001220703125,
+          280.43548583984375
+        ],
+        "expected": {
+          "subject_code": "2060302",
+          "subject_name": "社会公益研究",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r8c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "4,898.83",
+        "bbox": [
+          422.9000244140625,
+          269.93548583984375,
+          464.9000244140625,
+          280.43548583984375
+        ],
+        "expected": {
+          "subject_code": "2060302",
+          "subject_name": "社会公益研究",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r8c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "200.00",
+        "bbox": [
+          490.1000061035156,
+          269.93548583984375,
+          521.5999755859375,
+          280.43548583984375
+        ],
+        "expected": {
+          "subject_code": "2060302",
+          "subject_name": "社会公益研究",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r8c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "225.64",
+        "bbox": [
+          553.8999633789062,
+          269.93548583984375,
+          585.3999633789062,
+          280.43548583984375
+        ],
+        "expected": {
+          "subject_code": "2060302",
+          "subject_name": "社会公益研究",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r8c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          621.1000366210938,
+          269.93548583984375,
+          642.1000366210938,
+          280.43548583984375
+        ],
+        "expected": {
+          "subject_code": "2060302",
+          "subject_name": "社会公益研究",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r8c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          269.93548583984375,
+          694.0,
+          280.43548583984375
+        ],
+        "expected": {
+          "subject_code": "2060302",
+          "subject_name": "社会公益研究",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r8c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "4.37",
+        "bbox": [
+          744.9000244140625,
+          269.93548583984375,
+          765.9000244140625,
+          280.43548583984375
+        ],
+        "expected": {
+          "subject_code": "2060302",
+          "subject_name": "社会公益研究",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r9c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "181,358.33",
+        "bbox": [
+          334.45001220703125,
+          286.08551025390625,
+          386.95001220703125,
+          296.58551025390625
+        ],
+        "expected": {
+          "subject_code": "207",
+          "subject_name": "文化旅游体育与传媒支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r9c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "164,727.40",
+        "bbox": [
+          412.4000244140625,
+          286.08551025390625,
+          464.9000244140625,
+          296.58551025390625
+        ],
+        "expected": {
+          "subject_code": "207",
+          "subject_name": "文化旅游体育与传媒支出",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r9c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "7.02",
+        "bbox": [
+          500.6000061035156,
+          286.08551025390625,
+          521.5999755859375,
+          296.58551025390625
+        ],
+        "expected": {
+          "subject_code": "207",
+          "subject_name": "文化旅游体育与传媒支出",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r9c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "13,548.67",
+        "bbox": [
+          538.1499633789062,
+          286.08551025390625,
+          585.3999633789062,
+          296.58551025390625
+        ],
+        "expected": {
+          "subject_code": "207",
+          "subject_name": "文化旅游体育与传媒支出",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r9c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "20.00",
+        "bbox": [
+          615.8500366210938,
+          286.08551025390625,
+          642.1000366210938,
+          296.58551025390625
+        ],
+        "expected": {
+          "subject_code": "207",
+          "subject_name": "文化旅游体育与传媒支出",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r9c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          286.08551025390625,
+          694.0,
+          296.58551025390625
+        ],
+        "expected": {
+          "subject_code": "207",
+          "subject_name": "文化旅游体育与传媒支出",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r9c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "3,055.23",
+        "bbox": [
+          723.9000244140625,
+          286.08551025390625,
+          765.9000244140625,
+          296.58551025390625
+        ],
+        "expected": {
+          "subject_code": "207",
+          "subject_name": "文化旅游体育与传媒支出",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r10c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "181,358.33",
+        "bbox": [
+          334.45001220703125,
+          302.2355041503906,
+          386.95001220703125,
+          312.7355041503906
+        ],
+        "expected": {
+          "subject_code": "20703",
+          "subject_name": "体育",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r10c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "164,727.40",
+        "bbox": [
+          412.4000244140625,
+          302.2355041503906,
+          464.9000244140625,
+          312.7355041503906
+        ],
+        "expected": {
+          "subject_code": "20703",
+          "subject_name": "体育",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r10c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "7.02",
+        "bbox": [
+          500.6000061035156,
+          302.2355041503906,
+          521.5999755859375,
+          312.7355041503906
+        ],
+        "expected": {
+          "subject_code": "20703",
+          "subject_name": "体育",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r10c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "13,548.67",
+        "bbox": [
+          538.1499633789062,
+          302.2355041503906,
+          585.3999633789062,
+          312.7355041503906
+        ],
+        "expected": {
+          "subject_code": "20703",
+          "subject_name": "体育",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r10c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "20.00",
+        "bbox": [
+          615.8500366210938,
+          302.2355041503906,
+          642.1000366210938,
+          312.7355041503906
+        ],
+        "expected": {
+          "subject_code": "20703",
+          "subject_name": "体育",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r10c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          302.2355041503906,
+          694.0,
+          312.7355041503906
+        ],
+        "expected": {
+          "subject_code": "20703",
+          "subject_name": "体育",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r10c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "3,055.23",
+        "bbox": [
+          723.9000244140625,
+          302.2355041503906,
+          765.9000244140625,
+          312.7355041503906
+        ],
+        "expected": {
+          "subject_code": "20703",
+          "subject_name": "体育",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r11c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "2,924.99",
+        "bbox": [
+          344.95001220703125,
+          318.385498046875,
+          386.95001220703125,
+          328.885498046875
+        ],
+        "expected": {
+          "subject_code": "2070301",
+          "subject_name": "行政运行",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r11c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "2,924.99",
+        "bbox": [
+          422.9000244140625,
+          318.385498046875,
+          464.9000244140625,
+          328.885498046875
+        ],
+        "expected": {
+          "subject_code": "2070301",
+          "subject_name": "行政运行",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r11c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          500.6000061035156,
+          318.385498046875,
+          521.5999755859375,
+          328.885498046875
+        ],
+        "expected": {
+          "subject_code": "2070301",
+          "subject_name": "行政运行",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r11c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          564.3999633789062,
+          318.385498046875,
+          585.3999633789062,
+          328.885498046875
+        ],
+        "expected": {
+          "subject_code": "2070301",
+          "subject_name": "行政运行",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r11c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          621.1000366210938,
+          318.385498046875,
+          642.1000366210938,
+          328.885498046875
+        ],
+        "expected": {
+          "subject_code": "2070301",
+          "subject_name": "行政运行",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r11c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          318.385498046875,
+          694.0,
+          328.885498046875
+        ],
+        "expected": {
+          "subject_code": "2070301",
+          "subject_name": "行政运行",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r11c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          318.385498046875,
+          765.9000244140625,
+          328.885498046875
+        ],
+        "expected": {
+          "subject_code": "2070301",
+          "subject_name": "行政运行",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r12c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "19,631.19",
+        "bbox": [
+          339.70001220703125,
+          334.5355224609375,
+          386.95001220703125,
+          345.0355224609375
+        ],
+        "expected": {
+          "subject_code": "2070305",
+          "subject_name": "体育竞赛",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r12c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "19,631.19",
+        "bbox": [
+          417.6500244140625,
+          334.5355224609375,
+          464.9000244140625,
+          345.0355224609375
+        ],
+        "expected": {
+          "subject_code": "2070305",
+          "subject_name": "体育竞赛",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r12c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          500.6000061035156,
+          334.5355224609375,
+          521.5999755859375,
+          345.0355224609375
+        ],
+        "expected": {
+          "subject_code": "2070305",
+          "subject_name": "体育竞赛",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r12c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          564.3999633789062,
+          334.5355224609375,
+          585.3999633789062,
+          345.0355224609375
+        ],
+        "expected": {
+          "subject_code": "2070305",
+          "subject_name": "体育竞赛",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r12c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          621.1000366210938,
+          334.5355224609375,
+          642.1000366210938,
+          345.0355224609375
+        ],
+        "expected": {
+          "subject_code": "2070305",
+          "subject_name": "体育竞赛",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r12c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          334.5355224609375,
+          694.0,
+          345.0355224609375
+        ],
+        "expected": {
+          "subject_code": "2070305",
+          "subject_name": "体育竞赛",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r12c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          334.5355224609375,
+          765.9000244140625,
+          345.0355224609375
+        ],
+        "expected": {
+          "subject_code": "2070305",
+          "subject_name": "体育竞赛",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r13c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "75,692.22",
+        "bbox": [
+          339.70001220703125,
+          350.68548583984375,
+          386.95001220703125,
+          361.18548583984375
+        ],
+        "expected": {
+          "subject_code": "2070306",
+          "subject_name": "体育训练",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r13c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "73,421.94",
+        "bbox": [
+          417.6500244140625,
+          350.68548583984375,
+          464.9000244140625,
+          361.18548583984375
+        ],
+        "expected": {
+          "subject_code": "2070306",
+          "subject_name": "体育训练",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r13c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          500.6000061035156,
+          350.68548583984375,
+          521.5999755859375,
+          361.18548583984375
+        ],
+        "expected": {
+          "subject_code": "2070306",
+          "subject_name": "体育训练",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r13c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "2,204.75",
+        "bbox": [
+          543.3999633789062,
+          350.68548583984375,
+          585.3999633789062,
+          361.18548583984375
+        ],
+        "expected": {
+          "subject_code": "2070306",
+          "subject_name": "体育训练",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r13c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          621.1000366210938,
+          350.68548583984375,
+          642.1000366210938,
+          361.18548583984375
+        ],
+        "expected": {
+          "subject_code": "2070306",
+          "subject_name": "体育训练",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r13c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          350.68548583984375,
+          694.0,
+          361.18548583984375
+        ],
+        "expected": {
+          "subject_code": "2070306",
+          "subject_name": "体育训练",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r13c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "65.53",
+        "bbox": [
+          739.6500244140625,
+          350.68548583984375,
+          765.9000244140625,
+          361.18548583984375
+        ],
+        "expected": {
+          "subject_code": "2070306",
+          "subject_name": "体育训练",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r14c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "12,217.52",
+        "bbox": [
+          339.70001220703125,
+          366.83551025390625,
+          386.95001220703125,
+          377.33551025390625
+        ],
+        "expected": {
+          "subject_code": "2070307",
+          "subject_name": "体育场馆",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r14c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "7,728.17",
+        "bbox": [
+          422.9000244140625,
+          366.83551025390625,
+          464.9000244140625,
+          377.33551025390625
+        ],
+        "expected": {
+          "subject_code": "2070307",
+          "subject_name": "体育场馆",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r14c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "7.02",
+        "bbox": [
+          500.6000061035156,
+          366.83551025390625,
+          521.5999755859375,
+          377.33551025390625
+        ],
+        "expected": {
+          "subject_code": "2070307",
+          "subject_name": "体育场馆",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r14c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "3,904.32",
+        "bbox": [
+          543.3999633789062,
+          366.83551025390625,
+          585.3999633789062,
+          377.33551025390625
+        ],
+        "expected": {
+          "subject_code": "2070307",
+          "subject_name": "体育场馆",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r14c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          621.1000366210938,
+          366.83551025390625,
+          642.1000366210938,
+          377.33551025390625
+        ],
+        "expected": {
+          "subject_code": "2070307",
+          "subject_name": "体育场馆",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r14c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          366.83551025390625,
+          694.0,
+          377.33551025390625
+        ],
+        "expected": {
+          "subject_code": "2070307",
+          "subject_name": "体育场馆",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r14c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "578.01",
+        "bbox": [
+          734.4000244140625,
+          366.83551025390625,
+          765.9000244140625,
+          377.33551025390625
+        ],
+        "expected": {
+          "subject_code": "2070307",
+          "subject_name": "体育场馆",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r15c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "353.72",
+        "bbox": [
+          355.45001220703125,
+          382.9854736328125,
+          386.95001220703125,
+          393.4854736328125
+        ],
+        "expected": {
+          "subject_code": "2070308",
+          "subject_name": "群众体育",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r15c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "353.72",
+        "bbox": [
+          433.4000244140625,
+          382.9854736328125,
+          464.9000244140625,
+          393.4854736328125
+        ],
+        "expected": {
+          "subject_code": "2070308",
+          "subject_name": "群众体育",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r15c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          500.6000061035156,
+          382.9854736328125,
+          521.5999755859375,
+          393.4854736328125
+        ],
+        "expected": {
+          "subject_code": "2070308",
+          "subject_name": "群众体育",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r15c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          564.3999633789062,
+          382.9854736328125,
+          585.3999633789062,
+          393.4854736328125
+        ],
+        "expected": {
+          "subject_code": "2070308",
+          "subject_name": "群众体育",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r15c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          621.1000366210938,
+          382.9854736328125,
+          642.1000366210938,
+          393.4854736328125
+        ],
+        "expected": {
+          "subject_code": "2070308",
+          "subject_name": "群众体育",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r15c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          382.9854736328125,
+          694.0,
+          393.4854736328125
+        ],
+        "expected": {
+          "subject_code": "2070308",
+          "subject_name": "群众体育",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r15c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          382.9854736328125,
+          765.9000244140625,
+          393.4854736328125
+        ],
+        "expected": {
+          "subject_code": "2070308",
+          "subject_name": "群众体育",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r16c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "229.15",
+        "bbox": [
+          355.45001220703125,
+          399.135498046875,
+          386.95001220703125,
+          409.635498046875
+        ],
+        "expected": {
+          "subject_code": "2070309",
+          "subject_name": "体育交流与合作",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r16c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "229.15",
+        "bbox": [
+          433.4000244140625,
+          399.135498046875,
+          464.9000244140625,
+          409.635498046875
+        ],
+        "expected": {
+          "subject_code": "2070309",
+          "subject_name": "体育交流与合作",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r16c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          500.6000061035156,
+          399.135498046875,
+          521.5999755859375,
+          409.635498046875
+        ],
+        "expected": {
+          "subject_code": "2070309",
+          "subject_name": "体育交流与合作",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r16c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          564.3999633789062,
+          399.135498046875,
+          585.3999633789062,
+          409.635498046875
+        ],
+        "expected": {
+          "subject_code": "2070309",
+          "subject_name": "体育交流与合作",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r16c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          621.1000366210938,
+          399.135498046875,
+          642.1000366210938,
+          409.635498046875
+        ],
+        "expected": {
+          "subject_code": "2070309",
+          "subject_name": "体育交流与合作",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r16c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          399.135498046875,
+          694.0,
+          409.635498046875
+        ],
+        "expected": {
+          "subject_code": "2070309",
+          "subject_name": "体育交流与合作",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r16c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          399.135498046875,
+          765.9000244140625,
+          409.635498046875
+        ],
+        "expected": {
+          "subject_code": "2070309",
+          "subject_name": "体育交流与合作",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r17c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "70,309.54",
+        "bbox": [
+          339.70001220703125,
+          415.2855224609375,
+          386.95001220703125,
+          425.7855224609375
+        ],
+        "expected": {
+          "subject_code": "2070399",
+          "subject_name": "其他体育支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r17c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "60,438.24",
+        "bbox": [
+          417.6500244140625,
+          415.2855224609375,
+          464.9000244140625,
+          425.7855224609375
+        ],
+        "expected": {
+          "subject_code": "2070399",
+          "subject_name": "其他体育支出",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r17c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          500.6000061035156,
+          415.2855224609375,
+          521.5999755859375,
+          425.7855224609375
+        ],
+        "expected": {
+          "subject_code": "2070399",
+          "subject_name": "其他体育支出",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r17c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "7,439.60",
+        "bbox": [
+          543.3999633789062,
+          415.2855224609375,
+          585.3999633789062,
+          425.7855224609375
+        ],
+        "expected": {
+          "subject_code": "2070399",
+          "subject_name": "其他体育支出",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r17c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "20.00",
+        "bbox": [
+          615.8500366210938,
+          415.2855224609375,
+          642.1000366210938,
+          425.7855224609375
+        ],
+        "expected": {
+          "subject_code": "2070399",
+          "subject_name": "其他体育支出",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r17c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          415.2855224609375,
+          694.0,
+          425.7855224609375
+        ],
+        "expected": {
+          "subject_code": "2070399",
+          "subject_name": "其他体育支出",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r17c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "2,411.69",
+        "bbox": [
+          723.9000244140625,
+          415.2855224609375,
+          765.9000244140625,
+          425.7855224609375
+        ],
+        "expected": {
+          "subject_code": "2070399",
+          "subject_name": "其他体育支出",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r18c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "17,954.55",
+        "bbox": [
+          339.70001220703125,
+          431.43548583984375,
+          386.95001220703125,
+          441.93548583984375
+        ],
+        "expected": {
+          "subject_code": "208",
+          "subject_name": "社会保障和就业支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r18c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "17,909.61",
+        "bbox": [
+          417.6500244140625,
+          431.43548583984375,
+          464.9000244140625,
+          441.93548583984375
+        ],
+        "expected": {
+          "subject_code": "208",
+          "subject_name": "社会保障和就业支出",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r18c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          500.6000061035156,
+          431.43548583984375,
+          521.5999755859375,
+          441.93548583984375
+        ],
+        "expected": {
+          "subject_code": "208",
+          "subject_name": "社会保障和就业支出",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r18c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "44.95",
+        "bbox": [
+          559.1499633789062,
+          431.43548583984375,
+          585.3999633789062,
+          441.93548583984375
+        ],
+        "expected": {
+          "subject_code": "208",
+          "subject_name": "社会保障和就业支出",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r18c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          621.1000366210938,
+          431.43548583984375,
+          642.1000366210938,
+          441.93548583984375
+        ],
+        "expected": {
+          "subject_code": "208",
+          "subject_name": "社会保障和就业支出",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r18c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          431.43548583984375,
+          694.0,
+          441.93548583984375
+        ],
+        "expected": {
+          "subject_code": "208",
+          "subject_name": "社会保障和就业支出",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r18c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          431.43548583984375,
+          765.9000244140625,
+          441.93548583984375
+        ],
+        "expected": {
+          "subject_code": "208",
+          "subject_name": "社会保障和就业支出",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r19c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "17,954.55",
+        "bbox": [
+          339.70001220703125,
+          447.58551025390625,
+          386.95001220703125,
+          458.08551025390625
+        ],
+        "expected": {
+          "subject_code": "20805",
+          "subject_name": "行政事业单位养老支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r19c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "17,909.61",
+        "bbox": [
+          417.6500244140625,
+          447.58551025390625,
+          464.9000244140625,
+          458.08551025390625
+        ],
+        "expected": {
+          "subject_code": "20805",
+          "subject_name": "行政事业单位养老支出",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r19c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          500.6000061035156,
+          447.58551025390625,
+          521.5999755859375,
+          458.08551025390625
+        ],
+        "expected": {
+          "subject_code": "20805",
+          "subject_name": "行政事业单位养老支出",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r19c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "44.95",
+        "bbox": [
+          559.1499633789062,
+          447.58551025390625,
+          585.3999633789062,
+          458.08551025390625
+        ],
+        "expected": {
+          "subject_code": "20805",
+          "subject_name": "行政事业单位养老支出",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r19c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          621.1000366210938,
+          447.58551025390625,
+          642.1000366210938,
+          458.08551025390625
+        ],
+        "expected": {
+          "subject_code": "20805",
+          "subject_name": "行政事业单位养老支出",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r19c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          447.58551025390625,
+          694.0,
+          458.08551025390625
+        ],
+        "expected": {
+          "subject_code": "20805",
+          "subject_name": "行政事业单位养老支出",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r19c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          447.58551025390625,
+          765.9000244140625,
+          458.08551025390625
+        ],
+        "expected": {
+          "subject_code": "20805",
+          "subject_name": "行政事业单位养老支出",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r20c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "224.63",
+        "bbox": [
+          355.45001220703125,
+          463.7354736328125,
+          386.95001220703125,
+          474.2354736328125
+        ],
+        "expected": {
+          "subject_code": "2080501",
+          "subject_name": "行政单位离退休",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r20c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "224.63",
+        "bbox": [
+          433.4000244140625,
+          463.7354736328125,
+          464.9000244140625,
+          474.2354736328125
+        ],
+        "expected": {
+          "subject_code": "2080501",
+          "subject_name": "行政单位离退休",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r20c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          500.6000061035156,
+          463.7354736328125,
+          521.5999755859375,
+          474.2354736328125
+        ],
+        "expected": {
+          "subject_code": "2080501",
+          "subject_name": "行政单位离退休",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r20c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          564.3999633789062,
+          463.7354736328125,
+          585.3999633789062,
+          474.2354736328125
+        ],
+        "expected": {
+          "subject_code": "2080501",
+          "subject_name": "行政单位离退休",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r20c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          621.1000366210938,
+          463.7354736328125,
+          642.1000366210938,
+          474.2354736328125
+        ],
+        "expected": {
+          "subject_code": "2080501",
+          "subject_name": "行政单位离退休",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r20c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          463.7354736328125,
+          694.0,
+          474.2354736328125
+        ],
+        "expected": {
+          "subject_code": "2080501",
+          "subject_name": "行政单位离退休",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r20c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          463.7354736328125,
+          765.9000244140625,
+          474.2354736328125
+        ],
+        "expected": {
+          "subject_code": "2080501",
+          "subject_name": "行政单位离退休",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r21c2",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "4,467.46",
+        "bbox": [
+          344.95001220703125,
+          479.885498046875,
+          386.95001220703125,
+          490.385498046875
+        ],
+        "expected": {
+          "subject_code": "2080502",
+          "subject_name": "事业单位离退休",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r21c3",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "4,422.52",
+        "bbox": [
+          422.9000244140625,
+          479.885498046875,
+          464.9000244140625,
+          490.385498046875
+        ],
+        "expected": {
+          "subject_code": "2080502",
+          "subject_name": "事业单位离退休",
+          "indicator": "fiscal_allocation",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r21c4",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          500.6000061035156,
+          479.885498046875,
+          521.5999755859375,
+          490.385498046875
+        ],
+        "expected": {
+          "subject_code": "2080502",
+          "subject_name": "事业单位离退休",
+          "indicator": "superior_subsidy_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r21c5",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "44.95",
+        "bbox": [
+          559.1499633789062,
+          479.885498046875,
+          585.3999633789062,
+          490.385498046875
+        ],
+        "expected": {
+          "subject_code": "2080502",
+          "subject_name": "事业单位离退休",
+          "indicator": "business_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r21c6",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          621.1000366210938,
+          479.885498046875,
+          642.1000366210938,
+          490.385498046875
+        ],
+        "expected": {
+          "subject_code": "2080502",
+          "subject_name": "事业单位离退休",
+          "indicator": "operational_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r21c7",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          673.0,
+          479.885498046875,
+          694.0,
+          490.385498046875
+        ],
+        "expected": {
+          "subject_code": "2080502",
+          "subject_name": "事业单位离退休",
+          "indicator": "subsidiary_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p7r21c8",
+        "source_page": 7,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          479.885498046875,
+          765.9000244140625,
+          490.385498046875
+        ],
+        "expected": {
+          "subject_code": "2080502",
+          "subject_name": "事业单位离退休",
+          "indicator": "other_income",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r2c2",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "311,897.14",
+        "bbox": [
+          334.4499816894531,
+          197.61050415039062,
+          386.95001220703125,
+          208.11050415039062
+        ],
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r2c3",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "104,358.04",
+        "bbox": [
+          405.3500061035156,
+          197.61050415039062,
+          457.8500061035156,
+          208.11050415039062
+        ],
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r2c4",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "207,539.10",
+        "bbox": [
+          483.3000183105469,
+          197.61050415039062,
+          535.7999877929688,
+          208.11050415039062
+        ],
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r2c5",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          592.75,
+          197.61050415039062,
+          613.75,
+          208.11050415039062
+        ],
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "to_superior_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r2c6",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          662.0,
+          197.61050415039062,
+          683.0,
+          208.11050415039062
+        ],
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "operational_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r2c7",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          197.61050415039062,
+          765.9000244140625,
+          208.11050415039062
+        ],
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "subsidiary_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r3c2",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "19,229.52",
+        "bbox": [
+          339.6999816894531,
+          215.66050720214844,
+          386.95001220703125,
+          226.16050720214844
+        ],
+        "expected": {
+          "subject_code": "205",
+          "subject_name": "教育支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r3c3",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "10,220.05",
+        "bbox": [
+          410.6000061035156,
+          215.66050720214844,
+          457.8500061035156,
+          226.16050720214844
+        ],
+        "expected": {
+          "subject_code": "205",
+          "subject_name": "教育支出",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r3c4",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "9,009.47",
+        "bbox": [
+          493.8000183105469,
+          215.66050720214844,
+          535.7999877929688,
+          226.16050720214844
+        ],
+        "expected": {
+          "subject_code": "205",
+          "subject_name": "教育支出",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r3c5",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          592.75,
+          215.66050720214844,
+          613.75,
+          226.16050720214844
+        ],
+        "expected": {
+          "subject_code": "205",
+          "subject_name": "教育支出",
+          "indicator": "to_superior_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r3c6",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          662.0,
+          215.66050720214844,
+          683.0,
+          226.16050720214844
+        ],
+        "expected": {
+          "subject_code": "205",
+          "subject_name": "教育支出",
+          "indicator": "operational_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r3c7",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          215.66050720214844,
+          765.9000244140625,
+          226.16050720214844
+        ],
+        "expected": {
+          "subject_code": "205",
+          "subject_name": "教育支出",
+          "indicator": "subsidiary_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r4c2",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "19,229.52",
+        "bbox": [
+          339.6999816894531,
+          233.71051025390625,
+          386.95001220703125,
+          244.21051025390625
+        ],
+        "expected": {
+          "subject_code": "20503",
+          "subject_name": "职业教育",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r4c3",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "10,220.05",
+        "bbox": [
+          410.6000061035156,
+          233.71051025390625,
+          457.8500061035156,
+          244.21051025390625
+        ],
+        "expected": {
+          "subject_code": "20503",
+          "subject_name": "职业教育",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r4c4",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "9,009.47",
+        "bbox": [
+          493.8000183105469,
+          233.71051025390625,
+          535.7999877929688,
+          244.21051025390625
+        ],
+        "expected": {
+          "subject_code": "20503",
+          "subject_name": "职业教育",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r4c5",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          592.75,
+          233.71051025390625,
+          613.75,
+          244.21051025390625
+        ],
+        "expected": {
+          "subject_code": "20503",
+          "subject_name": "职业教育",
+          "indicator": "to_superior_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r4c6",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          662.0,
+          233.71051025390625,
+          683.0,
+          244.21051025390625
+        ],
+        "expected": {
+          "subject_code": "20503",
+          "subject_name": "职业教育",
+          "indicator": "operational_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r4c7",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          233.71051025390625,
+          765.9000244140625,
+          244.21051025390625
+        ],
+        "expected": {
+          "subject_code": "20503",
+          "subject_name": "职业教育",
+          "indicator": "subsidiary_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r5c2",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "19,229.52",
+        "bbox": [
+          339.6999816894531,
+          251.760498046875,
+          386.95001220703125,
+          262.260498046875
+        ],
+        "expected": {
+          "subject_code": "2050302",
+          "subject_name": "中等职业教育",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r5c3",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "10,220.05",
+        "bbox": [
+          410.6000061035156,
+          251.760498046875,
+          457.8500061035156,
+          262.260498046875
+        ],
+        "expected": {
+          "subject_code": "2050302",
+          "subject_name": "中等职业教育",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r5c4",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "9,009.47",
+        "bbox": [
+          493.8000183105469,
+          251.760498046875,
+          535.7999877929688,
+          262.260498046875
+        ],
+        "expected": {
+          "subject_code": "2050302",
+          "subject_name": "中等职业教育",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r5c5",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          592.75,
+          251.760498046875,
+          613.75,
+          262.260498046875
+        ],
+        "expected": {
+          "subject_code": "2050302",
+          "subject_name": "中等职业教育",
+          "indicator": "to_superior_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r5c6",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          662.0,
+          251.760498046875,
+          683.0,
+          262.260498046875
+        ],
+        "expected": {
+          "subject_code": "2050302",
+          "subject_name": "中等职业教育",
+          "indicator": "operational_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r5c7",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          251.760498046875,
+          765.9000244140625,
+          262.260498046875
+        ],
+        "expected": {
+          "subject_code": "2050302",
+          "subject_name": "中等职业教育",
+          "indicator": "subsidiary_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r6c2",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "5,355.89",
+        "bbox": [
+          344.9499816894531,
+          269.8105163574219,
+          386.95001220703125,
+          280.3105163574219
+        ],
+        "expected": {
+          "subject_code": "206",
+          "subject_name": "科学技术支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r6c3",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "3,325.20",
+        "bbox": [
+          415.8500061035156,
+          269.8105163574219,
+          457.8500061035156,
+          280.3105163574219
+        ],
+        "expected": {
+          "subject_code": "206",
+          "subject_name": "科学技术支出",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r6c4",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "2,030.70",
+        "bbox": [
+          493.8000183105469,
+          269.8105163574219,
+          535.7999877929688,
+          280.3105163574219
+        ],
+        "expected": {
+          "subject_code": "206",
+          "subject_name": "科学技术支出",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r6c5",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          592.75,
+          269.8105163574219,
+          613.75,
+          280.3105163574219
+        ],
+        "expected": {
+          "subject_code": "206",
+          "subject_name": "科学技术支出",
+          "indicator": "to_superior_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r6c6",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          662.0,
+          269.8105163574219,
+          683.0,
+          280.3105163574219
+        ],
+        "expected": {
+          "subject_code": "206",
+          "subject_name": "科学技术支出",
+          "indicator": "operational_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r6c7",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          269.8105163574219,
+          765.9000244140625,
+          280.3105163574219
+        ],
+        "expected": {
+          "subject_code": "206",
+          "subject_name": "科学技术支出",
+          "indicator": "subsidiary_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r7c2",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "5,355.89",
+        "bbox": [
+          344.9499816894531,
+          287.8605041503906,
+          386.95001220703125,
+          298.3605041503906
+        ],
+        "expected": {
+          "subject_code": "20603",
+          "subject_name": "应用研究",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r7c3",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "3,325.20",
+        "bbox": [
+          415.8500061035156,
+          287.8605041503906,
+          457.8500061035156,
+          298.3605041503906
+        ],
+        "expected": {
+          "subject_code": "20603",
+          "subject_name": "应用研究",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r7c4",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "2,030.70",
+        "bbox": [
+          493.8000183105469,
+          287.8605041503906,
+          535.7999877929688,
+          298.3605041503906
+        ],
+        "expected": {
+          "subject_code": "20603",
+          "subject_name": "应用研究",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r7c5",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          592.75,
+          287.8605041503906,
+          613.75,
+          298.3605041503906
+        ],
+        "expected": {
+          "subject_code": "20603",
+          "subject_name": "应用研究",
+          "indicator": "to_superior_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r7c6",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          662.0,
+          287.8605041503906,
+          683.0,
+          298.3605041503906
+        ],
+        "expected": {
+          "subject_code": "20603",
+          "subject_name": "应用研究",
+          "indicator": "operational_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r7c7",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          287.8605041503906,
+          765.9000244140625,
+          298.3605041503906
+        ],
+        "expected": {
+          "subject_code": "20603",
+          "subject_name": "应用研究",
+          "indicator": "subsidiary_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r8c2",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "5,355.89",
+        "bbox": [
+          344.9499816894531,
+          305.9104919433594,
+          386.95001220703125,
+          316.4104919433594
+        ],
+        "expected": {
+          "subject_code": "2060302",
+          "subject_name": "社会公益研究",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r8c3",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "3,325.20",
+        "bbox": [
+          415.8500061035156,
+          305.9104919433594,
+          457.8500061035156,
+          316.4104919433594
+        ],
+        "expected": {
+          "subject_code": "2060302",
+          "subject_name": "社会公益研究",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r8c4",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "2,030.70",
+        "bbox": [
+          493.8000183105469,
+          305.9104919433594,
+          535.7999877929688,
+          316.4104919433594
+        ],
+        "expected": {
+          "subject_code": "2060302",
+          "subject_name": "社会公益研究",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r8c5",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          592.75,
+          305.9104919433594,
+          613.75,
+          316.4104919433594
+        ],
+        "expected": {
+          "subject_code": "2060302",
+          "subject_name": "社会公益研究",
+          "indicator": "to_superior_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r8c6",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          662.0,
+          305.9104919433594,
+          683.0,
+          316.4104919433594
+        ],
+        "expected": {
+          "subject_code": "2060302",
+          "subject_name": "社会公益研究",
+          "indicator": "operational_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r8c7",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          305.9104919433594,
+          765.9000244140625,
+          316.4104919433594
+        ],
+        "expected": {
+          "subject_code": "2060302",
+          "subject_name": "社会公益研究",
+          "indicator": "subsidiary_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r9c2",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "181,541.77",
+        "bbox": [
+          334.4499816894531,
+          323.96051025390625,
+          386.95001220703125,
+          334.46051025390625
+        ],
+        "expected": {
+          "subject_code": "207",
+          "subject_name": "文化旅游体育与传媒支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r9c3",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "62,314.82",
+        "bbox": [
+          410.6000061035156,
+          323.96051025390625,
+          457.8500061035156,
+          334.46051025390625
+        ],
+        "expected": {
+          "subject_code": "207",
+          "subject_name": "文化旅游体育与传媒支出",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r9c4",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "119,226.94",
+        "bbox": [
+          483.3000183105469,
+          323.96051025390625,
+          535.7999877929688,
+          334.46051025390625
+        ],
+        "expected": {
+          "subject_code": "207",
+          "subject_name": "文化旅游体育与传媒支出",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r9c5",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          592.75,
+          323.96051025390625,
+          613.75,
+          334.46051025390625
+        ],
+        "expected": {
+          "subject_code": "207",
+          "subject_name": "文化旅游体育与传媒支出",
+          "indicator": "to_superior_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r9c6",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          662.0,
+          323.96051025390625,
+          683.0,
+          334.46051025390625
+        ],
+        "expected": {
+          "subject_code": "207",
+          "subject_name": "文化旅游体育与传媒支出",
+          "indicator": "operational_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r9c7",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          323.96051025390625,
+          765.9000244140625,
+          334.46051025390625
+        ],
+        "expected": {
+          "subject_code": "207",
+          "subject_name": "文化旅游体育与传媒支出",
+          "indicator": "subsidiary_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r10c2",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "181,541.77",
+        "bbox": [
+          334.4499816894531,
+          342.0105285644531,
+          386.95001220703125,
+          352.5105285644531
+        ],
+        "expected": {
+          "subject_code": "20703",
+          "subject_name": "体育",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r10c3",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "62,314.82",
+        "bbox": [
+          410.6000061035156,
+          342.0105285644531,
+          457.8500061035156,
+          352.5105285644531
+        ],
+        "expected": {
+          "subject_code": "20703",
+          "subject_name": "体育",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r10c4",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "119,226.94",
+        "bbox": [
+          483.3000183105469,
+          342.0105285644531,
+          535.7999877929688,
+          352.5105285644531
+        ],
+        "expected": {
+          "subject_code": "20703",
+          "subject_name": "体育",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r10c5",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          592.75,
+          342.0105285644531,
+          613.75,
+          352.5105285644531
+        ],
+        "expected": {
+          "subject_code": "20703",
+          "subject_name": "体育",
+          "indicator": "to_superior_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r10c6",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          662.0,
+          342.0105285644531,
+          683.0,
+          352.5105285644531
+        ],
+        "expected": {
+          "subject_code": "20703",
+          "subject_name": "体育",
+          "indicator": "operational_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r10c7",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          342.0105285644531,
+          765.9000244140625,
+          352.5105285644531
+        ],
+        "expected": {
+          "subject_code": "20703",
+          "subject_name": "体育",
+          "indicator": "subsidiary_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r11c2",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "2,933.86",
+        "bbox": [
+          344.9499816894531,
+          360.0605163574219,
+          386.95001220703125,
+          370.5605163574219
+        ],
+        "expected": {
+          "subject_code": "2070301",
+          "subject_name": "行政运行",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r11c3",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "2,868.78",
+        "bbox": [
+          415.8500061035156,
+          360.0605163574219,
+          457.8500061035156,
+          370.5605163574219
+        ],
+        "expected": {
+          "subject_code": "2070301",
+          "subject_name": "行政运行",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r11c4",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "65.08",
+        "bbox": [
+          509.5500183105469,
+          360.0605163574219,
+          535.7999877929688,
+          370.5605163574219
+        ],
+        "expected": {
+          "subject_code": "2070301",
+          "subject_name": "行政运行",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r11c5",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          592.75,
+          360.0605163574219,
+          613.75,
+          370.5605163574219
+        ],
+        "expected": {
+          "subject_code": "2070301",
+          "subject_name": "行政运行",
+          "indicator": "to_superior_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r11c6",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          662.0,
+          360.0605163574219,
+          683.0,
+          370.5605163574219
+        ],
+        "expected": {
+          "subject_code": "2070301",
+          "subject_name": "行政运行",
+          "indicator": "operational_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r11c7",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          360.0605163574219,
+          765.9000244140625,
+          370.5605163574219
+        ],
+        "expected": {
+          "subject_code": "2070301",
+          "subject_name": "行政运行",
+          "indicator": "subsidiary_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r12c2",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "19,631.19",
+        "bbox": [
+          339.6999816894531,
+          378.1105041503906,
+          386.95001220703125,
+          388.6105041503906
+        ],
+        "expected": {
+          "subject_code": "2070305",
+          "subject_name": "体育竞赛",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r12c3",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          436.8500061035156,
+          378.1105041503906,
+          457.8500061035156,
+          388.6105041503906
+        ],
+        "expected": {
+          "subject_code": "2070305",
+          "subject_name": "体育竞赛",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r12c4",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "19,631.19",
+        "bbox": [
+          488.5500183105469,
+          378.1105041503906,
+          535.7999877929688,
+          388.6105041503906
+        ],
+        "expected": {
+          "subject_code": "2070305",
+          "subject_name": "体育竞赛",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r12c5",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          592.75,
+          378.1105041503906,
+          613.75,
+          388.6105041503906
+        ],
+        "expected": {
+          "subject_code": "2070305",
+          "subject_name": "体育竞赛",
+          "indicator": "to_superior_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r12c6",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          662.0,
+          378.1105041503906,
+          683.0,
+          388.6105041503906
+        ],
+        "expected": {
+          "subject_code": "2070305",
+          "subject_name": "体育竞赛",
+          "indicator": "operational_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r12c7",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          378.1105041503906,
+          765.9000244140625,
+          388.6105041503906
+        ],
+        "expected": {
+          "subject_code": "2070305",
+          "subject_name": "体育竞赛",
+          "indicator": "subsidiary_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r13c2",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "74,480.63",
+        "bbox": [
+          339.6999816894531,
+          396.1604919433594,
+          386.95001220703125,
+          406.6604919433594
+        ],
+        "expected": {
+          "subject_code": "2070306",
+          "subject_name": "体育训练",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r13c3",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "41,898.59",
+        "bbox": [
+          410.6000061035156,
+          396.1604919433594,
+          457.8500061035156,
+          406.6604919433594
+        ],
+        "expected": {
+          "subject_code": "2070306",
+          "subject_name": "体育训练",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r13c4",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "32,582.04",
+        "bbox": [
+          488.5500183105469,
+          396.1604919433594,
+          535.7999877929688,
+          406.6604919433594
+        ],
+        "expected": {
+          "subject_code": "2070306",
+          "subject_name": "体育训练",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r13c5",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          592.75,
+          396.1604919433594,
+          613.75,
+          406.6604919433594
+        ],
+        "expected": {
+          "subject_code": "2070306",
+          "subject_name": "体育训练",
+          "indicator": "to_superior_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r13c6",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          662.0,
+          396.1604919433594,
+          683.0,
+          406.6604919433594
+        ],
+        "expected": {
+          "subject_code": "2070306",
+          "subject_name": "体育训练",
+          "indicator": "operational_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r13c7",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          396.1604919433594,
+          765.9000244140625,
+          406.6604919433594
+        ],
+        "expected": {
+          "subject_code": "2070306",
+          "subject_name": "体育训练",
+          "indicator": "subsidiary_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r14c2",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "12,113.55",
+        "bbox": [
+          339.6999816894531,
+          414.2104797363281,
+          386.95001220703125,
+          424.7104797363281
+        ],
+        "expected": {
+          "subject_code": "2070307",
+          "subject_name": "体育场馆",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r14c3",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "8,019.84",
+        "bbox": [
+          415.8500061035156,
+          414.2104797363281,
+          457.8500061035156,
+          424.7104797363281
+        ],
+        "expected": {
+          "subject_code": "2070307",
+          "subject_name": "体育场馆",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r14c4",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "4,093.71",
+        "bbox": [
+          493.8000183105469,
+          414.2104797363281,
+          535.7999877929688,
+          424.7104797363281
+        ],
+        "expected": {
+          "subject_code": "2070307",
+          "subject_name": "体育场馆",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r14c5",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          592.75,
+          414.2104797363281,
+          613.75,
+          424.7104797363281
+        ],
+        "expected": {
+          "subject_code": "2070307",
+          "subject_name": "体育场馆",
+          "indicator": "to_superior_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r14c6",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          662.0,
+          414.2104797363281,
+          683.0,
+          424.7104797363281
+        ],
+        "expected": {
+          "subject_code": "2070307",
+          "subject_name": "体育场馆",
+          "indicator": "operational_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r14c7",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          414.2104797363281,
+          765.9000244140625,
+          424.7104797363281
+        ],
+        "expected": {
+          "subject_code": "2070307",
+          "subject_name": "体育场馆",
+          "indicator": "subsidiary_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r15c2",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "353.72",
+        "bbox": [
+          355.4499816894531,
+          432.2605285644531,
+          386.95001220703125,
+          442.7605285644531
+        ],
+        "expected": {
+          "subject_code": "2070308",
+          "subject_name": "群众体育",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r15c3",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          436.8500061035156,
+          432.2605285644531,
+          457.8500061035156,
+          442.7605285644531
+        ],
+        "expected": {
+          "subject_code": "2070308",
+          "subject_name": "群众体育",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r15c4",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "353.72",
+        "bbox": [
+          504.3000183105469,
+          432.2605285644531,
+          535.7999877929688,
+          442.7605285644531
+        ],
+        "expected": {
+          "subject_code": "2070308",
+          "subject_name": "群众体育",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r15c5",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          592.75,
+          432.2605285644531,
+          613.75,
+          442.7605285644531
+        ],
+        "expected": {
+          "subject_code": "2070308",
+          "subject_name": "群众体育",
+          "indicator": "to_superior_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r15c6",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          662.0,
+          432.2605285644531,
+          683.0,
+          442.7605285644531
+        ],
+        "expected": {
+          "subject_code": "2070308",
+          "subject_name": "群众体育",
+          "indicator": "operational_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r15c7",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          432.2605285644531,
+          765.9000244140625,
+          442.7605285644531
+        ],
+        "expected": {
+          "subject_code": "2070308",
+          "subject_name": "群众体育",
+          "indicator": "subsidiary_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r16c2",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "229.15",
+        "bbox": [
+          355.4499816894531,
+          450.3105163574219,
+          386.95001220703125,
+          460.8105163574219
+        ],
+        "expected": {
+          "subject_code": "2070309",
+          "subject_name": "体育交流与合作",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r16c3",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          436.8500061035156,
+          450.3105163574219,
+          457.8500061035156,
+          460.8105163574219
+        ],
+        "expected": {
+          "subject_code": "2070309",
+          "subject_name": "体育交流与合作",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r16c4",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "229.15",
+        "bbox": [
+          504.3000183105469,
+          450.3105163574219,
+          535.7999877929688,
+          460.8105163574219
+        ],
+        "expected": {
+          "subject_code": "2070309",
+          "subject_name": "体育交流与合作",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r16c5",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          592.75,
+          450.3105163574219,
+          613.75,
+          460.8105163574219
+        ],
+        "expected": {
+          "subject_code": "2070309",
+          "subject_name": "体育交流与合作",
+          "indicator": "to_superior_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r16c6",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          662.0,
+          450.3105163574219,
+          683.0,
+          460.8105163574219
+        ],
+        "expected": {
+          "subject_code": "2070309",
+          "subject_name": "体育交流与合作",
+          "indicator": "operational_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r16c7",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          450.3105163574219,
+          765.9000244140625,
+          460.8105163574219
+        ],
+        "expected": {
+          "subject_code": "2070309",
+          "subject_name": "体育交流与合作",
+          "indicator": "subsidiary_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r17c2",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "71,799.67",
+        "bbox": [
+          339.6999816894531,
+          468.3605041503906,
+          386.95001220703125,
+          478.8605041503906
+        ],
+        "expected": {
+          "subject_code": "2070399",
+          "subject_name": "其他体育支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r17c3",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "9,527.61",
+        "bbox": [
+          415.8500061035156,
+          468.3605041503906,
+          457.8500061035156,
+          478.8605041503906
+        ],
+        "expected": {
+          "subject_code": "2070399",
+          "subject_name": "其他体育支出",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r17c4",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "62,272.05",
+        "bbox": [
+          488.5500183105469,
+          468.3605041503906,
+          535.7999877929688,
+          478.8605041503906
+        ],
+        "expected": {
+          "subject_code": "2070399",
+          "subject_name": "其他体育支出",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r17c5",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          592.75,
+          468.3605041503906,
+          613.75,
+          478.8605041503906
+        ],
+        "expected": {
+          "subject_code": "2070399",
+          "subject_name": "其他体育支出",
+          "indicator": "to_superior_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r17c6",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          662.0,
+          468.3605041503906,
+          683.0,
+          478.8605041503906
+        ],
+        "expected": {
+          "subject_code": "2070399",
+          "subject_name": "其他体育支出",
+          "indicator": "operational_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r17c7",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          468.3605041503906,
+          765.9000244140625,
+          478.8605041503906
+        ],
+        "expected": {
+          "subject_code": "2070399",
+          "subject_name": "其他体育支出",
+          "indicator": "subsidiary_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r18c2",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "17,829.31",
+        "bbox": [
+          339.6999816894531,
+          486.4104919433594,
+          386.95001220703125,
+          496.9104919433594
+        ],
+        "expected": {
+          "subject_code": "208",
+          "subject_name": "社会保障和就业支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r18c3",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "17,829.31",
+        "bbox": [
+          410.6000061035156,
+          486.4104919433594,
+          457.8500061035156,
+          496.9104919433594
+        ],
+        "expected": {
+          "subject_code": "208",
+          "subject_name": "社会保障和就业支出",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r18c4",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          514.7999877929688,
+          486.4104919433594,
+          535.7999877929688,
+          496.9104919433594
+        ],
+        "expected": {
+          "subject_code": "208",
+          "subject_name": "社会保障和就业支出",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r18c5",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          592.75,
+          486.4104919433594,
+          613.75,
+          496.9104919433594
+        ],
+        "expected": {
+          "subject_code": "208",
+          "subject_name": "社会保障和就业支出",
+          "indicator": "to_superior_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r18c6",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          662.0,
+          486.4104919433594,
+          683.0,
+          496.9104919433594
+        ],
+        "expected": {
+          "subject_code": "208",
+          "subject_name": "社会保障和就业支出",
+          "indicator": "operational_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_02:p9r18c7",
+        "source_page": 9,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          744.9000244140625,
+          486.4104919433594,
+          765.9000244140625,
+          496.9104919433594
+        ],
+        "expected": {
+          "subject_code": "208",
+          "subject_name": "社会保障和就业支出",
+          "indicator": "subsidiary_actual",
+          "budget_stage": null
+        }
+      }
+    ]
+  },
+  {
+    "doc_id": "SH2024NEW_06",
+    "filename": "SH2024NEW_06_identity.pdf",
+    "source_pdf_sha256": "cd368995c58d99c8ff8ed1a54446d82a5c9d5eebd8c8c594c701b8cf975348ab",
+    "fixture_sha256": "4b89fdae24921122529fbca891209ba77fb2412b0779ed94bd4cfbf21e7ad154",
+    "original_physical_pages": [
+      20,
+      21
+    ],
+    "truth_source": "outputs/shanghai_2024_new10_acceptance_20261015/documents/SH2024NEW_06/source_amount_truth.json",
+    "truth_method": "frozen independent grid/native words; no tested facts read",
+    "expected": [
+      {
+        "truth_id": "SH2024NEW_06:p20r1c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "36,484.51",
+        "bbox": [
+          246.60000610351562,
+          127.26446533203125,
+          293.70166015625,
+          137.71446228027344
+        ],
+        "expected": {
+          "subject_code": "301",
+          "subject_name": "工资福利支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r1c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "10,319.07",
+        "bbox": [
+          454.20001220703125,
+          127.26446533203125,
+          501.3016662597656,
+          137.71446228027344
+        ],
+        "expected": {
+          "subject_code": "302",
+          "subject_name": "商品和服务支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r2c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "4,693.98",
+        "bbox": [
+          251.8800048828125,
+          141.9044647216797,
+          293.70196533203125,
+          152.35446166992188
+        ],
+        "expected": {
+          "subject_code": "30101",
+          "subject_name": "基本工资",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r2c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "518.21",
+        "bbox": [
+          469.91900634765625,
+          141.9044647216797,
+          501.3018798828125,
+          152.35446166992188
+        ],
+        "expected": {
+          "subject_code": "30201",
+          "subject_name": "办公费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r3c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "7,910.14",
+        "bbox": [
+          251.8800048828125,
+          156.54446411132812,
+          293.70196533203125,
+          166.9944610595703
+        ],
+        "expected": {
+          "subject_code": "30102",
+          "subject_name": "津贴补贴",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r3c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "56.50",
+        "bbox": [
+          475.20001220703125,
+          156.54446411132812,
+          501.3031921386719,
+          166.9944610595703
+        ],
+        "expected": {
+          "subject_code": "30202",
+          "subject_name": "印刷费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r4c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "137.84",
+        "bbox": [
+          262.32000732421875,
+          171.06446838378906,
+          293.702880859375,
+          181.51446533203125
+        ],
+        "expected": {
+          "subject_code": "30103",
+          "subject_name": "奖金",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r4c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "50.82",
+        "bbox": [
+          475.20001220703125,
+          171.06446838378906,
+          501.3031921386719,
+          181.51446533203125
+        ],
+        "expected": {
+          "subject_code": "30203",
+          "subject_name": "咨询费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r5c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          272.8800048828125,
+          185.7044677734375,
+          293.7034912109375,
+          196.1544647216797
+        ],
+        "expected": {
+          "subject_code": "30106",
+          "subject_name": "伙食补助费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r5c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "1.17",
+        "bbox": [
+          480.4800109863281,
+          185.7044677734375,
+          501.3034973144531,
+          196.1544647216797
+        ],
+        "expected": {
+          "subject_code": "30204",
+          "subject_name": "手续费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r6c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "11,981.73",
+        "bbox": [
+          246.60000610351562,
+          200.34446716308594,
+          293.70166015625,
+          210.79446411132812
+        ],
+        "expected": {
+          "subject_code": "30107",
+          "subject_name": "绩效工资",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r6c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "34.21",
+        "bbox": [
+          475.20001220703125,
+          200.34446716308594,
+          501.3031921386719,
+          210.79446411132812
+        ],
+        "expected": {
+          "subject_code": "30205",
+          "subject_name": "水费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r7c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "3,410.26",
+        "bbox": [
+          251.8800048828125,
+          221.7044677734375,
+          293.70196533203125,
+          232.1544647216797
+        ],
+        "expected": {
+          "subject_code": "30108",
+          "subject_name": "机关事业单位基本养老保险缴费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r7c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "412.30",
+        "bbox": [
+          469.91900634765625,
+          221.7044677734375,
+          501.3018798828125,
+          232.1544647216797
+        ],
+        "expected": {
+          "subject_code": "30206",
+          "subject_name": "电费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r8c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "1,731.75",
+        "bbox": [
+          251.8800048828125,
+          243.18446350097656,
+          293.70196533203125,
+          253.63446044921875
+        ],
+        "expected": {
+          "subject_code": "30109",
+          "subject_name": "职业年金缴费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r8c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "362.95",
+        "bbox": [
+          469.91900634765625,
+          243.18446350097656,
+          501.3018798828125,
+          253.63446044921875
+        ],
+        "expected": {
+          "subject_code": "30207",
+          "subject_name": "邮电费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r9c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "1,788.60",
+        "bbox": [
+          251.8800048828125,
+          264.5444641113281,
+          293.70196533203125,
+          274.9944763183594
+        ],
+        "expected": {
+          "subject_code": "30110",
+          "subject_name": "职工基本医疗保险缴费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r9c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          480.4800109863281,
+          264.5444641113281,
+          501.3034973144531,
+          274.9944763183594
+        ],
+        "expected": {
+          "subject_code": "30208",
+          "subject_name": "取暖费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r10c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "141.54",
+        "bbox": [
+          262.32000732421875,
+          292.8644714355469,
+          293.702880859375,
+          303.3144836425781
+        ],
+        "expected": {
+          "subject_code": "30111",
+          "subject_name": "公务员医疗补助缴费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r10c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "1,577.69",
+        "bbox": [
+          459.4800109863281,
+          292.8644714355469,
+          501.3019714355469,
+          303.3144836425781
+        ],
+        "expected": {
+          "subject_code": "30209",
+          "subject_name": "物业管理费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r11c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "115.37",
+        "bbox": [
+          262.32000732421875,
+          314.3444519042969,
+          293.702880859375,
+          324.7944641113281
+        ],
+        "expected": {
+          "subject_code": "30112",
+          "subject_name": "其他社会保障缴费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r11c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "263.23",
+        "bbox": [
+          469.91900634765625,
+          314.3444519042969,
+          501.3018798828125,
+          324.7944641113281
+        ],
+        "expected": {
+          "subject_code": "30211",
+          "subject_name": "差旅费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r12c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "2,353.81",
+        "bbox": [
+          251.8800048828125,
+          335.7044677734375,
+          293.70196533203125,
+          346.15447998046875
+        ],
+        "expected": {
+          "subject_code": "30113",
+          "subject_name": "住房公积金",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r12c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "241.15",
+        "bbox": [
+          469.91900634765625,
+          335.7044677734375,
+          501.3018798828125,
+          346.15447998046875
+        ],
+        "expected": {
+          "subject_code": "30212",
+          "subject_name": "因公出国(境)费用",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r13c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          272.8800048828125,
+          357.1834716796875,
+          293.7034912109375,
+          367.63348388671875
+        ],
+        "expected": {
+          "subject_code": "30114",
+          "subject_name": "医疗费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r13c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "555.43",
+        "bbox": [
+          469.91900634765625,
+          357.1834716796875,
+          501.3018798828125,
+          367.63348388671875
+        ],
+        "expected": {
+          "subject_code": "30213",
+          "subject_name": "维修(护)费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r14c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "2,219.51",
+        "bbox": [
+          251.8800048828125,
+          371.7044677734375,
+          293.70196533203125,
+          382.15447998046875
+        ],
+        "expected": {
+          "subject_code": "30199",
+          "subject_name": "其他工资福利支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r14c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "3,159.12",
+        "bbox": [
+          459.4800109863281,
+          371.7044677734375,
+          501.3019714355469,
+          382.15447998046875
+        ],
+        "expected": {
+          "subject_code": "30214",
+          "subject_name": "租赁费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r15c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "1,411.87",
+        "bbox": [
+          251.8800048828125,
+          386.3444519042969,
+          293.70196533203125,
+          396.7944641113281
+        ],
+        "expected": {
+          "subject_code": "303",
+          "subject_name": "对个人和家庭的补助",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r15c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "80.71",
+        "bbox": [
+          475.20001220703125,
+          386.3444519042969,
+          501.3031921386719,
+          396.7944641113281
+        ],
+        "expected": {
+          "subject_code": "30215",
+          "subject_name": "会议费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r16c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "52.20",
+        "bbox": [
+          267.6000061035156,
+          400.98345947265625,
+          293.70318603515625,
+          411.4334716796875
+        ],
+        "expected": {
+          "subject_code": "30301",
+          "subject_name": "离休费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r16c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "96.64",
+        "bbox": [
+          475.20001220703125,
+          400.98345947265625,
+          501.3031921386719,
+          411.4334716796875
+        ],
+        "expected": {
+          "subject_code": "30216",
+          "subject_name": "培训费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r17c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "1,357.88",
+        "bbox": [
+          251.8800048828125,
+          415.62347412109375,
+          293.70196533203125,
+          426.073486328125
+        ],
+        "expected": {
+          "subject_code": "30302",
+          "subject_name": "退休费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r17c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "7.74",
+        "bbox": [
+          480.4800109863281,
+          415.62347412109375,
+          501.3034973144531,
+          426.073486328125
+        ],
+        "expected": {
+          "subject_code": "30217",
+          "subject_name": "公务接待费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r18c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          272.8800048828125,
+          430.26446533203125,
+          293.7034912109375,
+          440.7144775390625
+        ],
+        "expected": {
+          "subject_code": "30303",
+          "subject_name": "退职(役)费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r18c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "15.61",
+        "bbox": [
+          475.20001220703125,
+          430.26446533203125,
+          501.3031921386719,
+          440.7144775390625
+        ],
+        "expected": {
+          "subject_code": "30218",
+          "subject_name": "专用材料费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r19c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          272.8800048828125,
+          444.90447998046875,
+          293.7034912109375,
+          455.3544921875
+        ],
+        "expected": {
+          "subject_code": "30304",
+          "subject_name": "抚恤金",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r19c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          480.4800109863281,
+          444.90447998046875,
+          501.3034973144531,
+          455.3544921875
+        ],
+        "expected": {
+          "subject_code": "30224",
+          "subject_name": "被装购置费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r20c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          272.8800048828125,
+          459.4234619140625,
+          293.7034912109375,
+          469.87347412109375
+        ],
+        "expected": {
+          "subject_code": "30305",
+          "subject_name": "生活补助",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r20c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          480.4800109863281,
+          459.4234619140625,
+          501.3034973144531,
+          469.87347412109375
+        ],
+        "expected": {
+          "subject_code": "30225",
+          "subject_name": "专用燃料费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r21c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          272.8800048828125,
+          474.064453125,
+          293.7034912109375,
+          484.51446533203125
+        ],
+        "expected": {
+          "subject_code": "30306",
+          "subject_name": "救济费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r21c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "107.55",
+        "bbox": [
+          469.91900634765625,
+          474.064453125,
+          501.3018798828125,
+          484.51446533203125
+        ],
+        "expected": {
+          "subject_code": "30226",
+          "subject_name": "劳务费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r22c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          272.8800048828125,
+          488.7044677734375,
+          293.7034912109375,
+          499.15447998046875
+        ],
+        "expected": {
+          "subject_code": "30307",
+          "subject_name": "医疗费补助",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r22c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "587.44",
+        "bbox": [
+          469.91900634765625,
+          488.7044677734375,
+          501.3018798828125,
+          499.15447998046875
+        ],
+        "expected": {
+          "subject_code": "30227",
+          "subject_name": "委托业务费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r23c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          272.8800048828125,
+          503.344482421875,
+          293.7034912109375,
+          513.7944946289062
+        ],
+        "expected": {
+          "subject_code": "30308",
+          "subject_name": "助学金",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r23c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "505.24",
+        "bbox": [
+          469.91900634765625,
+          503.344482421875,
+          501.3018798828125,
+          513.7944946289062
+        ],
+        "expected": {
+          "subject_code": "30228",
+          "subject_name": "工会经费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r24c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.91",
+        "bbox": [
+          272.8800048828125,
+          517.9834594726562,
+          293.7034912109375,
+          528.4334716796875
+        ],
+        "expected": {
+          "subject_code": "30309",
+          "subject_name": "奖励金",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r24c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "705.32",
+        "bbox": [
+          469.91900634765625,
+          517.9834594726562,
+          501.3018798828125,
+          528.4334716796875
+        ],
+        "expected": {
+          "subject_code": "30229",
+          "subject_name": "福利费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r25c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          272.8800048828125,
+          539.344482421875,
+          293.7034912109375,
+          549.7944946289062
+        ],
+        "expected": {
+          "subject_code": "30310",
+          "subject_name": "个人农业生产补贴",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r25c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "154.77",
+        "bbox": [
+          469.91900634765625,
+          539.344482421875,
+          501.3018798828125,
+          549.7944946289062
+        ],
+        "expected": {
+          "subject_code": "30231",
+          "subject_name": "公务用车运行维护费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r26c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          272.8800048828125,
+          560.823486328125,
+          293.7034912109375,
+          571.2734985351562
+        ],
+        "expected": {
+          "subject_code": "30311",
+          "subject_name": "代缴社会保险费",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r26c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "329.89",
+        "bbox": [
+          469.91900634765625,
+          560.823486328125,
+          501.3018798828125,
+          571.2734985351562
+        ],
+        "expected": {
+          "subject_code": "30239",
+          "subject_name": "其他交通费用",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r27c2",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.89",
+        "bbox": [
+          272.8800048828125,
+          582.1834716796875,
+          293.7034912109375,
+          592.6334838867188
+        ],
+        "expected": {
+          "subject_code": "30399",
+          "subject_name": "其他对个人和家庭的补助",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r27c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          480.4800109863281,
+          582.1834716796875,
+          501.3034973144531,
+          592.6334838867188
+        ],
+        "expected": {
+          "subject_code": "30240",
+          "subject_name": "税金及附加费用",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r28c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "495.38",
+        "bbox": [
+          469.91900634765625,
+          610.3844604492188,
+          501.3018798828125,
+          620.83447265625
+        ],
+        "expected": {
+          "subject_code": "30299",
+          "subject_name": "其他商品和服务支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r29c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "737.06",
+        "bbox": [
+          469.91900634765625,
+          631.8644409179688,
+          501.3018798828125,
+          642.314453125
+        ],
+        "expected": {
+          "subject_code": "310",
+          "subject_name": "资本性支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r30c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          480.4800109863281,
+          646.5044555664062,
+          501.3034973144531,
+          656.9544677734375
+        ],
+        "expected": {
+          "subject_code": "31001",
+          "subject_name": "房屋建筑物购建",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r31c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "670.74",
+        "bbox": [
+          469.91900634765625,
+          661.1444702148438,
+          501.3018798828125,
+          671.594482421875
+        ],
+        "expected": {
+          "subject_code": "31002",
+          "subject_name": "办公设备购置",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r32c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "63.92",
+        "bbox": [
+          475.20001220703125,
+          675.6644897460938,
+          501.3031921386719,
+          686.114501953125
+        ],
+        "expected": {
+          "subject_code": "31003",
+          "subject_name": "专用设备购置",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r33c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          480.4800109863281,
+          697.1444702148438,
+          501.3034973144531,
+          707.594482421875
+        ],
+        "expected": {
+          "subject_code": "31007",
+          "subject_name": "信息网络及软件购置更新",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r34c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          480.4800109863281,
+          718.5044555664062,
+          501.3034973144531,
+          728.9544677734375
+        ],
+        "expected": {
+          "subject_code": "31013",
+          "subject_name": "公务用车购置",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r35c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          480.4800109863281,
+          733.2644653320312,
+          501.3034973144531,
+          743.7144775390625
+        ],
+        "expected": {
+          "subject_code": "31019",
+          "subject_name": "其他交通工具购置",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p20r36c5",
+        "source_page": 20,
+        "page": 1,
+        "raw_text": "0.00",
+        "bbox": [
+          480.4800109863281,
+          747.783447265625,
+          501.3034973144531,
+          758.2334594726562
+        ],
+        "expected": {
+          "subject_code": "31021",
+          "subject_name": "文物和陈列品购置",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p21r0c5",
+        "source_page": 21,
+        "page": 2,
+        "raw_text": "0.00",
+        "bbox": [
+          480.4800109863281,
+          74.58446502685547,
+          501.3034973144531,
+          85.03446197509766
+        ],
+        "expected": {
+          "subject_code": "31022",
+          "subject_name": "无形资产购置",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p21r1c5",
+        "source_page": 21,
+        "page": 2,
+        "raw_text": "2.40",
+        "bbox": [
+          480.4800109863281,
+          89.10446166992188,
+          501.3034973144531,
+          99.55445861816406
+        ],
+        "expected": {
+          "subject_code": "31099",
+          "subject_name": "其他资本性支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p21r2c2",
+        "source_page": 21,
+        "page": 2,
+        "raw_text": "37,896.38",
+        "bbox": [
+          246.60000610351562,
+          103.74446868896484,
+          293.70166015625,
+          114.19446563720703
+        ],
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "人员经费合计",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024NEW_06:p21r2c5",
+        "source_page": 21,
+        "page": 2,
+        "raw_text": "11,056.12",
+        "bbox": [
+          454.20001220703125,
+          103.74446868896484,
+          501.3016662597656,
+          114.19446563720703
+        ],
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "公用经费合计",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      }
+    ]
+  }
+]

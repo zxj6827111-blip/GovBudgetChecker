@@ -29,8 +29,12 @@ def _clean_optional_text(value: Optional[str]) -> Optional[str]:
 
 
 def _normalize_org_name(value: Any) -> str:
-    """归一化封面/组织名，只用于防止明显错绑，不用于生成组织身份。"""
-    return re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", "", str(value or "")).casefold()
+    """归一化封面/组织名，只用于防止明显错绑，不用于生成组织身份。
+
+    「本级」「本部」是同一主体的两种写法（封面写本部、组织树写本级），比较前去掉。
+    """
+    name = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", "", str(value or "")).casefold()
+    return re.sub(r"(?:本级|本部)$", "", name) or name
 
 
 def _organization_binding_conflict(
@@ -132,7 +136,9 @@ def _collect_org_matches(
             (
                 "cover_field",
                 cover_org_name,
-                " ".join(token for token in (cover_org_label, hint_tokens, first_page_text) if token).strip(),
+                # 提示词只能接在正文之后：封面抽取按首行定位标题，前置会把提示词并进标题行，
+                # 反而让 cover 字段这一路的得分低于文件名回退路（match_basis 被错记成 content_fallback）。
+                "\n".join(token for token in (first_page_text, cover_org_label, hint_tokens) if token).strip(),
             )
         )
 
@@ -218,10 +224,17 @@ def _inspect_document_preflight(
         scope_hint=str(cover.get("scope_hint") or ""),
         top_n=top_n,
     ) if include_matches else []
+    # 同名的部门与单位（如「本级」单位沿用部门名）打成平手、又没有封面层级可分时，
+    # 只给候选，不自动绑定：扫描件封面读不出字时最容易把单位材料挂到部门上。
+    tied_same_name = len(matches) >= 2 and (
+        float(matches[0][1] or 0.0) == float(matches[1][1] or 0.0)
+        and matches[0][2] == matches[1][2]
+        and _normalize_org_name(getattr(matches[0][0], "name", "")) == _normalize_org_name(getattr(matches[1][0], "name", ""))
+    )
     for index, (org, confidence, match_basis) in enumerate(matches):
         serialized = _serialize_match_candidate(org, confidence, match_basis)
         suggestions.append(serialized)
-        if index == 0 and float(confidence or 0.0) >= 0.6:
+        if index == 0 and float(confidence or 0.0) >= 0.6 and not tied_same_name:
             current = serialized
 
     return {
@@ -472,6 +485,21 @@ async def _handle_upload(
     uploaded["doc_type"] = doc_type
     uploaded["report_year"] = runtime.parse_report_year(fiscal_year)
     uploaded["report_kind"] = str(preflight.get("report_kind") or "unknown")
+    # 登记失败仍保留已收到的原件，在列表中作为待确认记录展示，绝不伪造绑定成功。
+    from src.services.material_upload_registration import register_uploaded_material
+    job_id = str(uploaded["job_id"])
+    metadata = runtime.read_json_file(runtime.UPLOAD_ROOT / job_id / "status.json", default={})
+    try:
+        registration = await register_uploaded_material(job_id,
+            runtime.find_first_pdf(runtime.UPLOAD_ROOT / job_id), metadata)
+    except Exception:
+        logger.exception("Uploaded material registration failed")
+        registration = {"status":"mapping_required","reason":"registration_failed","bound":False}
+    patch = {"material_registration": registration}
+    if registration.get("document_version_id"):
+        patch["structured_ingest"] = {"status":"registered", **registration}
+    runtime.merge_job_status(runtime.UPLOAD_ROOT / job_id, patch)
+    uploaded["material_registration"] = registration
     await persist_analysis_job_snapshot(
         runtime.get_job_status_payload(str(uploaded["job_id"])),
     )

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from api.main import app
 from api import runtime
+from scripts import run_zc07_acceptance as zc07
 
 
 def _create_pdf(path: Path, lines_per_page: list[list[str]]) -> None:
@@ -32,6 +33,50 @@ def _write_status(job_dir: Path, payload: dict) -> None:
         json.dumps(payload, ensure_ascii=False),
         encoding="utf-8",
     )
+
+
+@pytest.mark.parametrize("source_bound", [False, True])
+def test_pdf_and_docx_distinguish_unbound_calculations_from_original_quotes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_bound: bool,
+) -> None:
+    fitz = pytest.importorskip("fitz")
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    job_id = "job-source-label"
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    _create_pdf(job_dir / "source.pdf", [["Original amount 20"]])
+    quote = "Original amount 20" if source_bound else "narrative=10, table=20"
+    issue = {
+        "id": "SOURCE-LABEL-1", "source": "rule", "rule_id": "SOURCE-LABEL",
+        "severity": "warn", "title": "Amount comparison", "message": "Amount comparison",
+        "location": {"page": 1}, "evidence": [{"page": 1, "text": quote}],
+        "evidence_status": "complete" if source_bound else "incomplete_rule_warning",
+        "evidence_verification": {
+            "status": "verified" if source_bound else "unverified",
+            "source_identity_complete": source_bound,
+        },
+    }
+    _write_status(job_dir, {
+        "job_id": job_id, "status": "done", "saved_path": f"{job_id}/source.pdf",
+        "result": {"rule_findings": [issue]},
+    })
+    client = TestClient(app)
+    for suffix in ("pdf", "docx"):
+        response = client.get(f"/api/reports/download?job_id={job_id}&format={suffix}")
+        assert response.status_code == 200
+        if suffix == "pdf":
+            with fitz.open(stream=response.content, filetype="pdf") as doc:
+                text = "\n".join(page.get_text() for page in doc)
+        else:
+            with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+                text = "".join(ET.fromstring(archive.read("word/document.xml")).itertext())
+        assert quote in text
+        if source_bound:
+            assert "原文摘录" in text
+            assert "原文绑定未完成" not in text
+        else:
+            assert "原文绑定未完成" in text
+            assert "原文摘录" not in text
 
 
 def test_report_download_pdf_contains_multi_ref_labels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -60,6 +105,8 @@ def test_report_download_pdf_contains_multi_ref_labels(tmp_path: Path, monkeypat
                 "rule_findings": [
                     {
                         "id": "rule-export-1",
+                        "evidence_status": "complete",
+                        "evidence_verification": {"status": "verified", "source_identity_complete": True},
                         "source": "rule",
                         "rule_id": "TEST-EXPORT",
                         "severity": "high",
@@ -75,6 +122,8 @@ def test_report_download_pdf_contains_multi_ref_labels(tmp_path: Path, monkeypat
                                     "section": "Narrative Ref",
                                     "field": "FIELD_ALPHA",
                                     "bbox": [72, 61, 150, 79],
+                                    "location_level": "exact_span",
+                                    "verification_status": "verified",
                                 },
                                 {
                                     "role": "REF-B",
@@ -82,10 +131,14 @@ def test_report_download_pdf_contains_multi_ref_labels(tmp_path: Path, monkeypat
                                     "table": "Budget Ref",
                                     "field": "FIELD_BETA",
                                     "bbox": [72, 61, 140, 79],
+                                    "location_level": "exact_span",
+                                    "verification_status": "verified",
                                 },
                             ],
                         },
                         "bbox": [72, 61, 150, 79],
+                        "location_level": "exact_span",
+                        "verification_status": "verified",
                         "evidence": [{"page": 1, "text": "FIELD_ALPHA 100"}],
                         "metrics": {},
                         "tags": [],
@@ -132,6 +185,8 @@ def test_report_download_json_and_csv_include_structured_location_fields(
                 "rule_findings": [
                     {
                         "id": "rule-export-2",
+                        "evidence_status": "complete",
+                        "evidence_verification": {"status": "verified", "source_identity_complete": True},
                         "source": "rule",
                         "rule_id": "TEST-STRUCTURED",
                         "severity": "medium",
@@ -157,11 +212,15 @@ def test_report_download_json_and_csv_include_structured_location_fields(
                                     "row": "ROW_A",
                                     "field": "Field A",
                                     "bbox": [72, 61, 135, 79],
+                                    "location_level": "exact_cell",
+                                    "verification_status": "verified",
                                 }
                             ],
                         },
                         "bbox": [72, 61, 135, 79],
-                        "evidence": [{"page": 1, "text": "ROW_A 100", "bbox": [72, 61, 135, 79]}],
+                        "location_level": "exact_cell",
+                        "verification_status": "verified",
+                        "evidence": [{"page": 1, "text": "ROW_A 100", "bbox": [72, 61, 135, 79], "location_level": "exact_cell", "verification_status": "verified"}],
                         "metrics": {},
                         "tags": [],
                         "suggestion": "Check source values",
@@ -193,7 +252,7 @@ def test_report_download_json_and_csv_include_structured_location_fields(
     text = report_csv.content.decode("utf-8-sig")
     rows = list(csv.DictReader(io.StringIO(text)))
     assert rows
-    row = rows[0]
+    row = next(item for item in rows if item["record_type"] == "issue")
     assert "规则编号" in row
     assert "严重级别" in row
     assert "table_refs" in row
@@ -228,6 +287,8 @@ def test_report_download_uses_merged_issue_projection_without_double_counting(
 
     rule_issue = {
         "id": "rule-export-3",
+        "evidence_status": "complete",
+        "evidence_verification": {"status": "verified", "source_identity_complete": True},
         "source": "rule",
         "rule_id": "RULE-3",
         "severity": "medium",
@@ -240,6 +301,8 @@ def test_report_download_uses_merged_issue_projection_without_double_counting(
     }
     ai_issue = {
         "id": "ai-export-1",
+        "evidence_status": "complete",
+        "evidence_verification": {"status": "verified", "source_identity_complete": True},
         "source": "ai",
         "rule_id": "AI-1",
         "severity": "high",
@@ -294,9 +357,10 @@ def test_report_download_uses_merged_issue_projection_without_double_counting(
     assert report_csv.status_code == 200
     text = report_csv.content.decode("utf-8-sig")
     rows = list(csv.DictReader(io.StringIO(text)))
-    assert len(rows) == 2
-    assert [row["rule_id"] for row in rows] == ["AI-1", "RULE-3"]
-    assert [row["严重级别"] for row in rows] == ["高", "中"]
+    issue_rows = [row for row in rows if row["record_type"] == "issue"]
+    assert len(rows) == 3
+    assert [row["rule_id"] for row in issue_rows] == ["AI-1", "RULE-3"]
+    assert [row["严重级别"] for row in issue_rows] == ["高", "中"]
 
 
 def test_report_export_includes_structured_review_item_without_fake_page(
@@ -325,10 +389,15 @@ def test_report_export_includes_structured_review_item_without_fake_page(
 
     response = TestClient(app).get(f"/api/reports/download?job_id={job_id}&format=json")
     assert response.status_code == 200
-    issue = response.json()["issues"][0]
-    assert issue["id"] == "review-1"
-    assert issue["severity"] == "manual_review"
-    assert issue["export_location"].get("page") is None
+    payload = response.json()
+    assert payload["issues"] == []
+    structured_reviews = [
+        item for item in payload["review_report"]["manual_review"]
+        if item.get("record_type") == "structured_review"
+    ]
+    assert structured_reviews[0]["id"] == "review-1"
+    assert structured_reviews[0]["severity"] == "manual_review"
+    assert structured_reviews[0].get("page") is None
 
 
 def test_report_download_word_format_is_supported(
@@ -352,6 +421,8 @@ def test_report_download_word_format_is_supported(
                 "rule_findings": [
                     {
                         "id": "rule-word-1",
+                        "evidence_status": "complete",
+                        "evidence_verification": {"status": "verified", "source_identity_complete": True},
                         "source": "rule",
                         "rule_id": "DOCX-001",
                         "severity": "medium",
@@ -428,7 +499,9 @@ def test_report_download_word_format_handles_empty_results(
         node.text or ""
         for node in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t")
     )
-    assert "未发现明显问题" in document_text
+    # ZC-00（SYS-12）：旧版结果无覆盖台账，零问题不得写"未发现明显问题"
+    assert "未发现明显问题" not in document_text
+    assert "问题列表为空" in document_text
 
 
 # ---------------------------------------------------------------------------
@@ -524,3 +597,117 @@ def test_csv_export_includes_obligation_ids_column() -> None:
     )
     assert legacy["obligation_ids"] == ""
     assert legacy["关联检查项"] == ""
+
+
+def test_r5_07_actual_four_format_downloads_pass_gate_and_tampered_row_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """实际下载字节通过门禁；破坏单条 DOCX 问题语义后必须失败。"""
+    pytest.importorskip("fitz")
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    job_id = "job-r5-export"
+    job_dir = tmp_path / job_id
+    job_dir.mkdir(parents=True)
+    _create_pdf(job_dir / "source.pdf", [["Source material", "R5_EVIDENCE_TOKEN"]])
+    long_reason = "R5_LONG_REASON_" + ("evidence-spans-pages-" * 180)
+    issue = {
+        "id": "issue-r5-export",
+        "rule_id": "R5-TEST",
+        "severity": "high",
+        "title": "R5_ISSUE_TITLE_TOKEN",
+        "message": "R5_MESSAGE_TOKEN",
+        "suggestion": "R5_SUGGESTION_TOKEN",
+        "page_number": 1,
+        "location": {"page": 1, "location_level": "unresolved"},
+        "location_level": "unresolved",
+        "verification_status": "unverified",
+        "check_relation_id": "R5-TEST:relation",
+        "fact_ids": ["fact-r5-export"],
+        "evidence_ids": ["evidence-r5-export"],
+        "evidence": [{
+            "page": 1,
+            "text": "R5_EVIDENCE_TOKEN",
+            "text_snippet": "R5_EVIDENCE_TOKEN",
+        }],
+    }
+    payload = {
+        "job_id": job_id,
+        "filename": "source.pdf",
+        "saved_path": f"{job_id}/source.pdf",
+        "status": "review_required",
+        "quality_status": "review_required",
+        "analysis_conclusion": "incomplete",
+        "analysis_revision": "rev-r5-export",
+        "report_kind": "budget",
+        "document_profile": {
+            "report_kind": {"value": "budget"},
+            "report_year": {"value": 2026},
+            "organization_name": {"value": "测试单位"},
+        },
+        "check_coverage": {"instances": [{
+            "obligation_id": "BUD-03",
+            "title": "预算说明核对",
+            "status": "insufficient_data",
+            "detail": long_reason,
+        }]},
+        "result": {
+            "issues": {"all": [issue]},
+            "meta": {"check_receipts": [{
+                "rule_id": "R5-TEST",
+                "sub_check_id": "R5-TEST:relation",
+                "status": "fail",
+                "formula": "table_value == narrative_value",
+                "operand_fact_ids": ["fact-r5-export"],
+                "required_fact_ids": ["fact-r5-export"],
+                "issue_refs": ["issue-r5-export"],
+                "tolerance": {"amount_wan": "0.5"},
+                "incomplete_reason": "",
+            }]},
+        },
+    }
+    _write_status(job_dir, payload)
+    client = TestClient(app)
+
+    export_paths = []
+    for export_format in ("json", "csv", "docx", "pdf"):
+        response = client.get(
+            f"/api/reports/download?job_id={job_id}&format={export_format}"
+        )
+        assert response.status_code == 200, response.text
+        export_path = tmp_path / f"actual.{export_format}"
+        export_path.write_bytes(response.content)
+        export_paths.append(export_path)
+
+    manifest = {"documents": [{
+        "doc_id": job_id,
+        "export_paths": [str(path) for path in export_paths],
+    }]}
+    gate = zc07._evaluate_export_agreement(manifest, tmp_path)
+    assert gate["status"] == "computed", gate
+    assert gate["consistent_documents"] == 1
+
+    docx_path = next(path for path in export_paths if path.suffix == ".docx")
+    tampered_path = tmp_path / "tampered.docx"
+    with zipfile.ZipFile(docx_path, "r") as source:
+        entries = {name: source.read(name) for name in source.namelist()}
+    document_xml = entries["word/document.xml"].decode("utf-8")
+    assert "R5_MESSAGE_TOKEN" in document_xml
+    entries["word/document.xml"] = document_xml.replace(
+        "R5_MESSAGE_TOKEN", "R5_TAMPERED_MESSAGE"
+    ).encode("utf-8")
+    with zipfile.ZipFile(tampered_path, "w", compression=zipfile.ZIP_DEFLATED) as target:
+        for name, content in entries.items():
+            target.writestr(name, content)
+    tampered_manifest = {
+        "documents": [{
+            "doc_id": job_id,
+            "export_paths": [
+                str(tampered_path if path.suffix == ".docx" else path)
+                for path in export_paths
+            ],
+        }]
+    }
+    rejected = zc07._evaluate_export_agreement(tampered_manifest, tmp_path)
+    assert rejected["status"] == "not_computable"
+    assert "缺少 1 项 canonical 可见语义字段" in rejected["reason"]

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 
 import { WorkspaceShell } from "@/components/workspace/WorkspaceShell";
 
@@ -8,5 +8,5 @@ import { WorkspaceShell } from "@/components/workspace/WorkspaceShell";
  * `app/app/(workspace)/workbench/page.tsx` 对应的真实路径是 `/workbench`。
  */
 export default function WorkspaceLayout({ children }: { children: ReactNode }) {
-  return <WorkspaceShell>{children}</WorkspaceShell>;
+  return <Suspense fallback={<div className="p-6 text-sm text-slate-500">正在加载工作区…</div>}><WorkspaceShell>{children}</WorkspaceShell></Suspense>;
 }

@@ -293,7 +293,12 @@ export function computeUnassociatedOrgRatio(
       unassociated += 1;
     }
   }
-  return round4(unassociated / jobs.length);
+  return unassociatedOrgRatioFromCounts(unassociated, jobs.length);
+}
+
+/** 同上，输入为接口汇总好的未关联任务数与任务总数；总数为 0 时返回 null。 */
+export function unassociatedOrgRatioFromCounts(unassociated: number, total: number): number | null {
+  return total > 0 ? round4(unassociated / total) : null;
 }
 
 // ---------------------------------------------------------------------------

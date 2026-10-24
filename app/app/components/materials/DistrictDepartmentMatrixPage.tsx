@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { Route } from "next";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
 import { Card, SectionTitle, Td, Th } from "@/components/ui";
@@ -42,9 +43,12 @@ export function DistrictDepartmentMatrixPage({
   districtId,
   initialFiscalYear = "",
 }: DistrictDepartmentMatrixPageProps) {
+  const search = useSearchParams();
   const [filters, setFilters] = useState<MaterialFilterState>({
     ...DEFAULT_MATERIAL_FILTERS,
     fiscalYear: initialFiscalYear,
+    reportKind: ["budget", "final"].includes(search.get("kind") || "") ? search.get("kind") as "budget" | "final" : "all",
+    status: ["not_due", "missing", "uploaded", "processing", "review_required", "reviewing", "completed", "not_applicable", "mapping_required", "failed"].includes(search.get("status") || "") ? search.get("status") as MaterialFilterState["status"] : "all",
   });
   const [page, setPage] = useState(1);
   const [keyword, setKeyword] = useState("");
@@ -83,7 +87,7 @@ export function DistrictDepartmentMatrixPage({
   return (
     <div className="mx-auto max-w-[1400px] px-6 py-6" data-testid="gbc-material-district-page">
       <MaterialBreadcrumb
-        entries={[{ label: "材料台账", href: "/materials" }, { label: districtName }]}
+        entries={[{ label: "材料台账", href: `/materials?${new URLSearchParams({legacy:"1",year:effectiveFilters.fiscalYear,kind:effectiveFilters.reportKind,status:effectiveFilters.status})}` }, { label: districtName }]}
       />
 
       <div className="mt-3">
@@ -268,7 +272,7 @@ export function DistrictDepartmentMatrixPage({
                             {canOpen ? (
                               <Link
                                 href={
-                                  `/materials/department/${departmentId}?year=${year.value}` as Route
+                                  `/materials/department/${departmentId}?${new URLSearchParams({ year: year.value, kind: effectiveFilters.reportKind, status: effectiveFilters.status, legacy: "1" })}` as Route
                                 }
                                 data-testid={`${testId}-open`}
                                 className="whitespace-nowrap text-sm text-primary-700 hover:underline"

@@ -3,6 +3,7 @@
 import Image from "next/image";
 
 import { getSeverityMeta } from "@/lib/issueSeverity";
+import { evidenceExcerptLabel, hasVerifiedSourceIdentity } from "@/lib/evidenceIdentity";
 
 import type { IssueItem } from "./IssueTabs";
 import { getIssuePresentation } from "../utils/issuePresentation";
@@ -373,7 +374,7 @@ export default function IssueCard({
 
       {presentation.evidenceText && (
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <div className="mb-2 text-sm font-medium text-slate-800">原文证据</div>
+          <div className="mb-2 text-sm font-medium text-slate-800">{evidenceExcerptLabel(hasVerifiedSourceIdentity(issue))}</div>
           <div className="rounded-lg bg-white px-3 py-2 text-sm leading-6 text-slate-700">
             {presentation.evidenceText}
           </div>

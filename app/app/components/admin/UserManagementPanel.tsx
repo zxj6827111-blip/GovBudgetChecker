@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 type UserRecord = {
   username: string;
   is_admin: boolean;
+  is_read_only?: boolean;
   is_active: boolean;
   organization_ids?: string[];
   created_at: number;
@@ -89,6 +90,7 @@ export default function UserManagementPanel({
   const [newUsername, setNewUsername] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newUserAdmin, setNewUserAdmin] = useState(false);
+  const [newUserReadOnly, setNewUserReadOnly] = useState(false);
   const [newUserOrganizationIds, setNewUserOrganizationIds] = useState<string[]>([]);
   const [scopeEditorUsername, setScopeEditorUsername] = useState<string | null>(null);
   const [scopeDraft, setScopeDraft] = useState<string[]>([]);
@@ -186,6 +188,7 @@ export default function UserManagementPanel({
     username: string,
     payload: {
       is_admin?: boolean;
+      is_read_only?: boolean;
       is_active?: boolean;
       password?: string;
       organization_ids?: string[];
@@ -248,6 +251,7 @@ export default function UserManagementPanel({
           username,
           password: newPassword,
           is_admin: newUserAdmin,
+          is_read_only: newUserReadOnly,
           organization_ids: newUserAdmin ? [] : newUserOrganizationIds,
         }),
       });
@@ -260,6 +264,7 @@ export default function UserManagementPanel({
       setNewUsername("");
       setNewPassword("");
       setNewUserAdmin(false);
+      setNewUserReadOnly(false);
       setNewUserOrganizationIds([]);
       setMessage(`用户 ${payload.username} 已创建`);
       await loadData();
@@ -436,11 +441,12 @@ export default function UserManagementPanel({
                 type="checkbox"
                 data-testid="admin-users-new-admin"
                 checked={newUserAdmin}
-                onChange={(event) => setNewUserAdmin(event.target.checked)}
+                onChange={(event) => { setNewUserAdmin(event.target.checked); if (event.target.checked) setNewUserReadOnly(false); }}
                 disabled={submitting}
               />
               设为管理员
             </label>
+            {!newUserAdmin ? <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" data-testid="admin-users-new-readonly" checked={newUserReadOnly} onChange={event => setNewUserReadOnly(event.target.checked)} disabled={submitting} />主管只读账号（仅查看授权范围）</label> : null}
             {!newUserAdmin ? (
               <div className="space-y-2">
                 <div className="text-sm font-medium text-slate-700">可访问组织范围</div>
@@ -451,7 +457,7 @@ export default function UserManagementPanel({
                   "admin-users-new-org",
                 )}
                 <div className="text-xs text-slate-500">
-                  未选择时仅能访问本人上传的任务。
+                  {newUserReadOnly ? "主管账号必须选择组织范围，不能上传、修改问题或完成复核。" : "未选择时仅能访问本人上传的任务。"}
                 </div>
               </div>
             ) : (
@@ -509,7 +515,7 @@ export default function UserManagementPanel({
                         <td className="px-4 py-3 text-slate-800">{item.username}</td>
                         <td className="px-4 py-3">
                           <span className={`rounded-full px-2 py-1 text-xs ${item.is_admin ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-700"}`}>
-                            {item.is_admin ? "admin" : "user"}
+                            {item.is_read_only ? "主管只读" : item.is_admin ? "管理员" : "审核工作人员"}
                           </span>
                         </td>
                         <td className="px-4 py-3">
@@ -561,11 +567,12 @@ export default function UserManagementPanel({
                               type="button"
                               data-testid={`admin-users-role-${item.username}`}
                               disabled={isBusy}
-                              onClick={() => updateUser(item.username, { is_admin: !item.is_admin }, `${item.username} 的角色已更新`)}
+                              onClick={() => updateUser(item.username, { is_admin: !item.is_admin, ...(item.is_read_only ? { is_read_only: false } : {}) }, `${item.username} 的角色已更新`)}
                               className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-60"
                             >
                               {item.is_admin ? "取消管理员" : "设为管理员"}
                             </button>
+                            {!item.is_admin ? <button type="button" disabled={isBusy} data-testid={`admin-users-readonly-${item.username}`} onClick={() => updateUser(item.username, { is_read_only: !item.is_read_only }, `${item.username} 的只读权限已更新，请重新登录`)} className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-60">{item.is_read_only ? "改为工作人员" : "设为主管只读"}</button> : null}
                             <button
                               type="button"
                               data-testid={`admin-users-active-${item.username}`}

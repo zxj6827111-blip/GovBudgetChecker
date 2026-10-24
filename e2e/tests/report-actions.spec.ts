@@ -289,7 +289,9 @@ test.describe("Report actions", () => {
     await reanalyzeButton.click();
 
     await expect.poll(() => reanalyzeCalls).toBe(1);
-    await expect.poll(() => reanalyzeBody).toEqual({ use_local_rules: true, use_ai_assist: false });
+    // 页面现在用 ai_profile_id 表达"这次重析用哪个模型"，未启用即为 null；
+    // use_ai_assist 已不再是这个入口的字段。
+    await expect.poll(() => reanalyzeBody).toEqual({ use_local_rules: true, ai_profile_id: null });
     await expect.poll(() => detailFetches).toBeGreaterThan(1);
     await expect(reanalyzeButton).toBeDisabled();
     expect(dialogMessages.some((message) => message.includes("confirm:"))).toBe(true);
@@ -705,7 +707,10 @@ test.describe("Report actions", () => {
 
       if ((path === "/api/jobs/job-row-1/reanalyze" || path === "/api/jobs/job-row-2/reanalyze") && method === "POST") {
         reanalyzeCalls += 1;
-        expect(req.postDataJSON()).toEqual({ use_local_rules: true, use_ai_assist: false });
+        // 部门页在"未配置大模型档位"时只发 {}；配置后才会带 use_local_rules/use_ai_assist。
+        // 这里只守住"没有悄悄打开 AI"：要么不发字段，要么显式 false。
+        const body = req.postDataJSON();
+        expect(body.use_ai_assist === undefined || body.use_ai_assist === false).toBe(true);
         const jobId = path.includes("job-row-1") ? "job-row-1" : "job-row-2";
         jobs = jobs.map((job) => job.job_id === jobId ? { ...job, status: "started" } : job);
         await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ success: true }) });

@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 
-import { ReviewWorkbenchPage } from "@/components/review-workbench/ReviewWorkbenchPage";
+import { ReviewEntryPage } from "@/components/review-workbench/ReviewEntryPage";
 
 export default function ReviewPage() {
   return (
@@ -11,7 +11,7 @@ export default function ReviewPage() {
         </div>
       }
     >
-      <ReviewWorkbenchPage />
+      <ReviewEntryPage />
     </Suspense>
   );
 }

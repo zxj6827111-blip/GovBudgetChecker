@@ -1,0 +1,13 @@
+{
+  "type": "synthetic PDF; no department source document copied",
+  "purpose": "single cross-grid decimal tail isolated from unrelated reading gaps",
+  "fixture_sha256": "d0007a97e289580bac3e3f53579332e17f16f0957d3104f6f674c1b7fc9a0dea",
+  "table_code": "FIN_05_general_public_expenditure",
+  "subject_code": "20101",
+  "indicator": "total_actual",
+  "expected_raw_value": "123.45",
+  "horizontal_boundary_y": 200,
+  "head_baseline_y": 195,
+  "tail_baseline_y": 210,
+  "tail_x": 324
+}

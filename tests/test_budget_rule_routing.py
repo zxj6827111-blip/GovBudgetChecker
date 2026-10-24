@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
 
 from src.engine import common_rules as common_rules_mod
 from src.engine import pipeline
+from src.engine import rule_registry
 from src.engine.budget_rules import (
     BUD001_StructureAndAnchors,
     BUD002_PlaceholderCheck,
@@ -33,6 +34,7 @@ from src.engine.common_rules import (
     CMM006_IncomeExpenseTrendConsistency,
 )
 from src.engine.rules_v33 import Issue, build_document
+from src.engine.rule_outcome import RuleDeferred
 from src.schemas.issues import AnalysisConfig, JobContext
 from src.services import engine_rule_runner as runner_mod
 
@@ -54,8 +56,8 @@ class _DummyRule:
 
 
 def test_pipeline_routes_budget_rules(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(pipeline, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
-    monkeypatch.setattr(pipeline, "FINAL_ALL_RULES", [_DummyRule("FIN-DUMMY")])
+    monkeypatch.setattr(rule_registry.budget_rules, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
+    monkeypatch.setattr(rule_registry.rules_v33, "ALL_RULES", [_DummyRule("FIN-DUMMY")])
 
     doc = SimpleNamespace(path="sample.pdf", page_texts=["预算"], page_tables=[[]])
     issues = pipeline.run_rules(doc, use_ai_assist=False, report_kind="budget")
@@ -68,9 +70,9 @@ def test_pipeline_routes_budget_rules(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_pipeline_keeps_unknown_document_out_of_budget_and_final_rules(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(pipeline, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
-    monkeypatch.setattr(pipeline, "FINAL_ALL_RULES", [_DummyRule("FIN-DUMMY")])
-    monkeypatch.setattr(pipeline, "ALL_COMMON_RULES", [_DummyRule("COMMON-DUMMY")])
+    monkeypatch.setattr(rule_registry.budget_rules, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
+    monkeypatch.setattr(rule_registry.rules_v33, "ALL_RULES", [_DummyRule("FIN-DUMMY")])
+    monkeypatch.setattr(rule_registry.common_rules, "ALL_COMMON_RULES", [_DummyRule("COMMON-DUMMY")])
     doc = SimpleNamespace(path="material.pdf", page_texts=["公开材料"], page_tables=[[]])
 
     issues = pipeline.run_rules(doc, use_ai_assist=False, report_kind="unknown")
@@ -82,9 +84,9 @@ def test_pipeline_keeps_unknown_document_out_of_budget_and_final_rules(
 def test_pipeline_does_not_use_repository_directory_to_route_budget_rules(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(pipeline, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
-    monkeypatch.setattr(pipeline, "FINAL_ALL_RULES", [_DummyRule("FIN-DUMMY")])
-    monkeypatch.setattr(pipeline, "ALL_COMMON_RULES", [])
+    monkeypatch.setattr(rule_registry.budget_rules, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
+    monkeypatch.setattr(rule_registry.rules_v33, "ALL_RULES", [_DummyRule("FIN-DUMMY")])
+    monkeypatch.setattr(rule_registry.common_rules, "ALL_COMMON_RULES", [])
     doc = SimpleNamespace(
         path=r"E:\\Software Development\\GovBudgetChecker\\uploads\\plain.pdf",
         page_texts=["决算公开材料"],
@@ -101,8 +103,8 @@ def test_pipeline_does_not_use_repository_directory_to_route_budget_rules(
 async def test_engine_rule_runner_routes_budget_rules(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(runner_mod, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
-    monkeypatch.setattr(runner_mod, "FINAL_ALL_RULES", [_DummyRule("FIN-DUMMY")])
+    monkeypatch.setattr(rule_registry.budget_rules, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
+    monkeypatch.setattr(rule_registry.rules_v33, "ALL_RULES", [_DummyRule("FIN-DUMMY")])
 
     runner = runner_mod.EngineRuleRunner()
     doc = build_document(
@@ -143,9 +145,9 @@ async def test_engine_rule_runner_routes_budget_rules(
 async def test_engine_rule_runner_uses_metadata_for_final_report_under_budget_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(runner_mod, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
-    monkeypatch.setattr(runner_mod, "FINAL_ALL_RULES", [_DummyRule("FIN-DUMMY")])
-    monkeypatch.setattr(runner_mod, "ALL_COMMON_RULES", [])
+    monkeypatch.setattr(rule_registry.budget_rules, "ALL_BUDGET_RULES", [_DummyRule("BUD-DUMMY")])
+    monkeypatch.setattr(rule_registry.rules_v33, "ALL_RULES", [_DummyRule("FIN-DUMMY")])
+    monkeypatch.setattr(rule_registry.common_rules, "ALL_COMMON_RULES", [])
 
     runner = runner_mod.EngineRuleRunner()
     doc = build_document(
@@ -184,9 +186,9 @@ async def test_engine_rule_runner_shares_resolved_kind_with_rule_bodies(
     不得再按文件名猜出 budget——同一份 PDF 在两个环节拿到互斥的检查
     配置，正是此前主流程/通用规则互斥结论的成因。
     """
-    monkeypatch.setattr(runner_mod, "ALL_BUDGET_RULES", [])
-    monkeypatch.setattr(runner_mod, "FINAL_ALL_RULES", [])
-    monkeypatch.setattr(runner_mod, "ALL_COMMON_RULES", [])
+    monkeypatch.setattr(rule_registry.budget_rules, "ALL_BUDGET_RULES", [])
+    monkeypatch.setattr(rule_registry.rules_v33, "ALL_RULES", [])
+    monkeypatch.setattr(rule_registry.common_rules, "ALL_COMMON_RULES", [])
 
     runner = runner_mod.EngineRuleRunner()
     doc = build_document(
@@ -230,7 +232,7 @@ def test_budget_t1_balance_rule_detects_mismatch() -> None:
     table = [
         ["本年收入", "", "本年支出", ""],
         ["项目", "预算数", "项目", "预算数"],
-        ["收入总计", "100", "支出总计", "90"],
+        ["收入总计", "1000000", "支出总计", "900000"],
     ]
     doc = build_document(
         path="budget.pdf",
@@ -629,13 +631,18 @@ def test_budget_functional_classification_name_rule_ignores_matching_names() -> 
 
 
 def test_common_three_public_narrative_rule_detects_run_fee_mismatch() -> None:
+    """真实差异正例：表内购置/运行与说明不一致必须报 error。
+
+    ZC-02（SYS-04）：固定位置取数已删除——三公表以带表头的表结构构造
+    （真实 PDF 的形态），语义列映射读取字段；裸数字文本行无法证明列
+    语义，按任务纪律转未完成，不再按位置猜列。
+    """
     page_texts = [
         "2026年区级单位预算",
         "\n".join(
             [
                 "2026年单位“三公”经费和机关运行经费预算表",
                 "单位:万元",
-                "2.68 0 0 2.68 0 2.68 0",
             ]
         ),
         "\n".join(
@@ -647,14 +654,32 @@ def test_common_three_public_narrative_rule_detects_run_fee_mismatch() -> None:
             ]
         ),
     ]
+    # 表结构：旧版固有序（合计、出国、接待、公车小计、购置、运行、机关运行）
+    three_public_table = [
+        [
+            "合计",
+            "因公出国（境）费",
+            "公务接待费",
+            "公务用车购置及运行费",
+            "其中：购置费",
+            "其中：运行费",
+            "机关运行经费",
+        ],
+        ["2.68", "0", "0", "2.68", "0", "2.68", "0"],
+    ]
     doc = build_document(
         path="unit-2026-budget.pdf",
         page_texts=page_texts,
-        page_tables=[[], [], []],
+        page_tables=[[], [three_public_table], []],
         filesize=100,
     )
 
-    issues = CMM001_ThreePublicNarrativeConsistency().apply(doc)
+    try:
+        issues = CMM001_ThreePublicNarrativeConsistency().apply(doc)
+    except RuleDeferred as deferred:
+        # The mismatch remains visible as a partial finding, while the missing
+        # legally required abroad category correctly keeps CMM-001 unresolved.
+        issues = deferred.partial_issues
 
     assert issues
     assert any(
@@ -1005,8 +1030,8 @@ def test_pipeline_budget_name_mismatch_uses_specific_title_and_suggestion(
                 )
             ]
 
-    monkeypatch.setattr(pipeline, "ALL_BUDGET_RULES", [_Budget109Only()])
-    monkeypatch.setattr(pipeline, "ALL_COMMON_RULES", [])
+    monkeypatch.setattr(rule_registry.budget_rules, "ALL_BUDGET_RULES", [_Budget109Only()])
+    monkeypatch.setattr(rule_registry.common_rules, "ALL_COMMON_RULES", [])
 
     doc = build_document(
         path="sample_budget.pdf",

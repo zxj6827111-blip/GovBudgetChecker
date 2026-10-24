@@ -254,6 +254,18 @@ def test_text_output_limit_is_enforced(three_page_pdf, monkeypatch):
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows 没有 RLIMIT_AS，内存硬上限不适用")
 def test_memory_limit_is_enforced(three_page_pdf, monkeypatch):
+    # AC-16：先用探针确认本平台内核是否真的强制 RLIMIT_AS——Linux 容器内
+    # 强制执行，超限分配必须 MemoryError（受控终止 + 失败回执）；macOS/Darwin
+    # 接受 setrlimit 但不强制，平台差异如实记录并跳过（目标部署 = Linux
+    # 容器，其保护由本测试在可强制平台上实跑验证）。
+    from src.services.pdf_parse_process import probe_memory_limit_enforceable
+
+    if not probe_memory_limit_enforceable(128):
+        pytest.skip(
+            "RLIMIT_AS 在本平台不被内核强制（macOS/Darwin 或受限沙箱）；"
+            "目标部署（Linux 容器）由内核强制，且支持容器级 memory limit"
+        )
+
     monkeypatch.delenv("PDF_PARSE_TEST_DELAY_SECONDS", raising=False)
     monkeypatch.setenv("PDF_PARSE_TEST_ALLOCATE_MB", "512")
 
@@ -406,6 +418,28 @@ def _seed_uploads(root: Path) -> Dict[str, str]:
         path.write_text(content, encoding="utf-8")
         digests[relative] = backup_all.sha256_file(path)
     return digests
+
+
+def test_history_hardlinks_are_backed_up_as_regular_files_and_symlinks_stay_rejected(tmp_path):
+    import tarfile
+    from scripts import backup_all
+    uploads=tmp_path/'uploads'
+    uploads.mkdir()
+    original=uploads/'status.json'
+    original.write_bytes(b'{"history":true}')
+    history=uploads/'history'
+    history.mkdir()
+    os.link(original,history/'status.json')
+    target=tmp_path/'uploads.tar.gz'
+    result=backup_all.archive_uploads(uploads,target)
+    assert result['file_count']==2
+    with tarfile.open(target,'r:gz')as tar:
+        regular=[m for m in tar.getmembers()if not m.isdir()]
+        assert len(regular)==2 and all(m.isfile()for m in regular)
+        assert all(tar.extractfile(m).read()==original.read_bytes()for m in regular)
+    (uploads/'unsafe-link').symlink_to(original)
+    with pytest.raises(backup_all.BackupError,match='链接'):
+        backup_all.archive_uploads(uploads,tmp_path/'unsafe.tar.gz')
 
 
 def test_backup_covers_all_three_artifacts(tmp_path):

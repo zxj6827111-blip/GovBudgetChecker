@@ -35,6 +35,8 @@ class PSSharedSchemaSync:
         pdf_path: Path,
         checksum: str,
         organization_id: Optional[str] = None,
+        fact_snapshot: Optional[Dict[str, Any]] = None,
+        file_size_bytes: Optional[int] = None,
     ) -> Dict[str, Any]:
         scope = self.resolve_scope(
             org_name=org_name,
@@ -57,6 +59,9 @@ class PSSharedSchemaSync:
                 "department_name": str(scope.get("department_name") or ""),
                 "unit_name": str(scope.get("unit_name") or ""),
             }
+        if fact_snapshot is None:
+            from src.qc.source_version_guard import require_legacy_qc_source
+            await require_legacy_qc_source(self.conn, document_version_id)
         department_name = str(scope["department_name"])
         unit_name = str(scope["unit_name"])
         department_id = await self._ensure_department(
@@ -86,7 +91,7 @@ class PSSharedSchemaSync:
                 scope_key,
                 pdf_path.name,
             )
-        report_id = await self._upsert_report(
+        report_kwargs = dict(
             department_id=department_id,
             unit_id=unit_id,
             fiscal_year=fiscal_year,
@@ -95,6 +100,24 @@ class PSSharedSchemaSync:
             checksum=checksum,
             scope_key=scope_key,
         )
+        previous_archive_hash=None
+        if fact_snapshot is not None:
+            previous_id=await self.conn.fetchval('SELECT id FROM org_dept_annual_report WHERE department_id=$1 '
+                'AND unit_id=$2 AND year IS NOT DISTINCT FROM $3 AND report_type=$4 AND scope_key=$5 FOR UPDATE',
+                department_id,unit_id,fiscal_year,report_type,scope_key)
+            if previous_id:
+                collision=await self.conn.fetchval('SELECT EXISTS(SELECT 1 FROM published_fact_projections p '
+                    "WHERE p.receipt->>'shared_report_id'=$1 AND p.document_id!=(SELECT document_id FROM fiscal_document_versions WHERE id=$2))",
+                    str(previous_id),document_version_id)
+                if collision:raise ValueError('shared report scope belongs to a different fiscal document')
+                from src.services.fact_compatibility_projection import archive_legacy_projection
+                previous_archive_hash=await archive_legacy_projection(self.conn,document_version_id,checksum,
+                                                                       shared_report_ids=[previous_id])
+        if file_size_bytes is not None:
+            report_kwargs['file_size_bytes'] = file_size_bytes
+        report_id = await self._upsert_report(**report_kwargs)
+
+        snapshot_kwargs = {'fact_snapshot': fact_snapshot} if fact_snapshot is not None else {}
 
         table_count = await self._sync_table_data(
             report_id=report_id,
@@ -102,6 +125,7 @@ class PSSharedSchemaSync:
             fiscal_year=fiscal_year,
             report_type=report_type,
             document_version_id=document_version_id,
+            **snapshot_kwargs,
         )
         line_item_count = await self._sync_line_items(
             report_id=report_id,
@@ -109,11 +133,19 @@ class PSSharedSchemaSync:
             fiscal_year=fiscal_year,
             report_type=report_type,
             document_version_id=document_version_id,
+            **snapshot_kwargs,
         )
+
+        if fact_snapshot is not None:
+            from src.services.fact_compatibility_projection import snapshot_reference, verify_shared_fact_projection
+            await self.conn.execute('UPDATE org_dept_annual_report SET fact_projection=$2::jsonb WHERE id=$1',
+                                    report_id, json.dumps(snapshot_reference(fact_snapshot)))
+            await verify_shared_fact_projection(self.conn, report_id, fact_snapshot)
 
         return {
             "status": "done",
             "report_id": str(report_id),
+            'previous_archive_hash':previous_archive_hash,
             "department_name": department_name,
             "unit_name": unit_name,
             "report_type": report_type,
@@ -624,6 +656,7 @@ class PSSharedSchemaSync:
         pdf_path: Path,
         checksum: str,
         scope_key: str = "",
+        file_size_bytes: Optional[int] = None,
     ):
         return await self.conn.fetchval(
             """
@@ -655,7 +688,7 @@ class PSSharedSchemaSync:
             pdf_path.name,
             str(pdf_path),
             checksum,
-            int(pdf_path.stat().st_size),
+            int(file_size_bytes if file_size_bytes is not None else pdf_path.stat().st_size),
             scope_key,
         )
 
@@ -666,11 +699,28 @@ class PSSharedSchemaSync:
         fiscal_year: Optional[int],
         report_type: str,
         document_version_id: int,
+        fact_snapshot: Optional[Dict[str, Any]] = None,
     ) -> int:
         await self.conn.execute(
             "DELETE FROM org_dept_table_data WHERE report_id = $1",
             report_id,
         )
+        if fact_snapshot is not None:
+            from src.services.fact_compatibility_projection import snapshot_table_payloads
+            payloads = snapshot_table_payloads(fact_snapshot)
+            for payload in payloads:
+                await self.conn.execute('''INSERT INTO org_dept_table_data
+                    (report_id,department_id,year,report_type,table_key,table_title,page_numbers,row_count,col_count,data_json)
+                    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)''',
+                    report_id,department_id,fiscal_year,report_type,payload['table_key'],payload['table_title'],
+                    payload['page_numbers'],payload['row_count'],payload['col_count'],
+                    json.dumps(payload['data_json'],ensure_ascii=False))
+            actual = await self.conn.fetch('SELECT table_key,data_json FROM org_dept_table_data WHERE report_id=$1', report_id)
+            expected = {p['table_key']: p['data_json'] for p in payloads}
+            decoded = {r['table_key']: json.loads(r['data_json']) if isinstance(r['data_json'],str) else r['data_json'] for r in actual}
+            if decoded != expected:
+                raise ValueError('shared table projection readback differs from effective snapshot')
+            return len(payloads)
         instances = await self.conn.fetch(
             """
             SELECT table_code, source_title
@@ -797,23 +847,28 @@ class PSSharedSchemaSync:
         fiscal_year: Optional[int],
         report_type: str,
         document_version_id: int,
+        fact_snapshot: Optional[Dict[str, Any]] = None,
     ) -> int:
         await self.conn.execute(
             "DELETE FROM org_dept_line_items WHERE report_id = $1",
             report_id,
         )
-        fact_rows = await self.conn.fetch(
-            """
-            SELECT table_code, row_order, classification_type, classification_code,
-                   classification_name, measure, amount, source_page_number,
-                   parse_confidence, extra_dims
-            FROM fact_fiscal_line_items
-            WHERE document_version_id = $1
-            ORDER BY table_code, row_order, classification_code NULLS FIRST, measure
-            """,
-            document_version_id,
-        )
-        line_items = self.build_line_item_rows([dict(row) for row in fact_rows])
+        if fact_snapshot is None:
+            fact_rows = await self.conn.fetch(
+                """
+                SELECT table_code, row_order, classification_type, classification_code,
+                       classification_name, measure, amount, source_page_number,
+                       parse_confidence, extra_dims
+                FROM fact_fiscal_line_items
+                WHERE document_version_id = $1
+                ORDER BY table_code, row_order, classification_code NULLS FIRST, measure
+                """,
+                document_version_id,
+            )
+            line_items = self.build_line_item_rows([dict(row) for row in fact_rows])
+        else:
+            from src.services.fact_compatibility_projection import snapshot_line_item_rows
+            line_items = snapshot_line_item_rows(fact_snapshot)
         for item in line_items:
             await self.conn.execute(
                 """

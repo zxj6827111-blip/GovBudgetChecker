@@ -58,11 +58,20 @@ def _login(client: TestClient, username: str, password: str) -> str:
 
 
 def _create_org(name: str) -> str:
+    """建一个单位并挂在新建的部门下——目录校验要求 unit 必须有 department 父节点。"""
     storage = runtime.require_org_storage()
+    department = runtime.Organization(
+        id=runtime.Organization.generate_id(f"dept-{name}", "department", None),
+        name=f"dept-{name}",
+        level="department",
+        keywords=[f"dept-{name}"],
+    )
+    storage.add(department)
     org = runtime.Organization(
-        id=runtime.Organization.generate_id(name, "unit", None),
+        id=runtime.Organization.generate_id(name, "unit", department.id),
         name=name,
         level="unit",
+        parent_id=department.id,
         keywords=[name],
     )
     return str(storage.add(org).id)
@@ -76,6 +85,7 @@ def _create_job(job_id: str, owner: str, org_id: str, issue_id: str) -> None:
         {
             "job_id": job_id,
             "status": "done",
+            "analysis_revision": f"rev-{job_id}",
             "created_by": owner,
             "organization_id": org_id,
             "organization_name": f"organization-{org_id}",
@@ -168,6 +178,12 @@ def test_remediation_package_rejects_cross_org_jobs_and_is_not_leaked(client: Te
     assert denied.status_code == 403
 
     admin_token = _login(client, "admin", ADMIN_PASSWORD)
+    for job_id, issue_id in (("job-a", "issue-a"), ("job-b", "issue-b")):
+        confirmed = client.post(
+            "/api/workflow", headers=_headers(admin_token),
+            json={"action": "update_issue", "job_id": job_id, "issue_id": issue_id, "status": "confirmed"},
+        )
+        assert confirmed.status_code == 200, confirmed.text
     created = client.post(
         "/api/workflow",
         headers=_headers(admin_token),
@@ -184,3 +200,57 @@ def test_remediation_package_rejects_cross_org_jobs_and_is_not_leaked(client: Te
     assert visible.status_code == 200
     assert visible.json()["packages"] == []
     assert set(visible.json()["issues"]) == {"job-a::issue-a"}
+
+
+def test_system_review_reasons_can_be_saved_and_read_back(client: TestClient):
+    """系统提示只存在于规范报告，不能因缺少原始 finding 而拒绝卡片操作。"""
+    org_id = _create_org("system-review-unit")
+    _create_job("job-system-review", "seed", org_id, "unused-finding")
+    codes = [
+        "evidence_incomplete_findings",
+        "rule_evidence_incomplete",
+        "rules_insufficient_data",
+        "check_obligations_incomplete",
+    ]
+    runtime.merge_job_status(runtime.UPLOAD_ROOT / "job-system-review", {
+        "result": {"issues": {"all": []}},
+        "review_reasons": [{"code": code, "message": f"待人工复核：{code}"} for code in codes],
+    })
+    token = _login(client, "admin", ADMIN_PASSWORD)
+    for index, code in enumerate(codes):
+        issue_id = f"review_reason:{code}"
+        status = "confirmed" if index % 2 == 0 else "no_issue"
+        response = client.post("/api/workflow", headers=_headers(token), json={
+            "action": "update_issue", "job_id": "job-system-review",
+            "issue_id": issue_id, "status": status, "note": "已核对该系统提示及其涉及范围",
+        })
+        assert response.status_code == 200, response.text
+        record = response.json()["issues"][f"job-system-review::{issue_id}"]
+        assert record["status"] == status
+        assert record["severity"] == "manual_review"
+
+    visible = client.get("/api/workflow", headers=_headers(token)).json()["issues"]
+    assert set(visible) == {f"job-system-review::review_reason:{code}" for code in codes}
+    assert all(record["note"] == "已核对该系统提示及其涉及范围" for record in visible.values())
+    report = runtime.get_job_status_payload("job-system-review")["review_report"]
+    assert report["issues"] == []
+    assert report["conclusion"]["review_issue_total"] == 0
+
+
+def test_system_review_lookup_rejects_unknown_ids_and_unfinished_checks(client: TestClient):
+    org_id = _create_org("system-review-lookup-unit")
+    _create_job("job-system-review-lookup", "seed", org_id, "known-issue")
+    runtime.merge_job_status(runtime.UPLOAD_ROOT / "job-system-review-lookup", {
+        "review_reasons": [{"code": "rules_insufficient_data", "message": "取数不足"}],
+        "check_coverage": {"instances": [{
+            "obligation_id": "OBL-TXT-T5", "status": "insufficient_data",
+            "title": "表文一致性", "reason": "insufficient_data",
+        }]},
+    })
+    token = _login(client, "admin", ADMIN_PASSWORD)
+    for issue_id in ("review_reason:unknown", "unfinished_check:OBL-TXT-T5"):
+        response = client.post("/api/workflow", headers=_headers(token), json={
+            "action": "update_issue", "job_id": "job-system-review-lookup",
+            "issue_id": issue_id, "status": "confirmed",
+        })
+        assert response.status_code == 404

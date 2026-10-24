@@ -301,6 +301,10 @@ def test_batch_rematch_preview_and_apply_updates_auto_association(tmp_path: Path
     assert correct_org is not None
 
     class _FakeMatcher:
+        def match(self, filename: str, first_page_text: str = ""):
+            _ = (filename, first_page_text)
+            return correct_org, 0.96
+
         def suggest_matches(self, filename: str, first_page_text: str = "", top_n: int = 5):
             _ = (filename, first_page_text, top_n)
             return [(correct_org, 0.96)]

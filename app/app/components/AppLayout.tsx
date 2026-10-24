@@ -19,10 +19,13 @@ interface AppLayoutProps {
 // 否则会出现新旧两套导航同屏叠加。旧入口（gbc-ui-demo、task/[job_id] 等）
 // 保持不动，仍走旧版 chrome，直到 Task 10 统一收尾时再下线。
 const WORKSPACE_ROUTE_PREFIXES = [
+  "/supervision",
   "/workbench",
   "/upload",
   "/queue",
   "/review",
+  "/materials",
+  "/reports",
   "/history",
   "/quality",
   "/rules",

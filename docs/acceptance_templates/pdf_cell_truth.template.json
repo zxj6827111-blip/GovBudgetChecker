@@ -1,0 +1,38 @@
+{
+  "_说明": "仅为空白标注格式，不是真值。独立看原件逐格填写；全部可读金额及空白完成后才能置 annotation_complete=true，严禁复制生产解析结果。",
+  "source_file_hash": "",
+  "split": "independent_acceptance",
+  "review_status": "draft",
+  "production_output_used_as_truth": false,
+  "annotation_complete": false,
+  "report_kind": "budget 或 final",
+  "material_group": "native 或 clear_scan 或 difficult_readable",
+  "region": "",
+  "year": null,
+  "cells": [],
+  "_单格字段示例": {
+    "occurrence_id": "每次出现的独立编号",
+    "physical_page": null,
+    "bbox": [
+      null,
+      null,
+      null,
+      null
+    ],
+    "legibility": "readable 或 unreadable",
+    "literal_kind": "amount 或 blank 或 dash 或 not_applicable",
+    "raw_value": "原件字面值，空白不填0",
+    "unit": "原件单位",
+    "org_name": "",
+    "org_scope": "department 或 unit",
+    "fiscal_year": null,
+    "period": "本年",
+    "fund_scope": "all_funds / fiscal_appropriation / general_public_budget / government_fund / state_owned",
+    "budget_stage": "年初预算 / 调整后预算 / 全年预算 / 决算",
+    "table_code": "",
+    "indicator": "",
+    "subject_code": null,
+    "subject_name": "",
+    "column_identity": "完整原始表头路径"
+  }
+}

@@ -430,7 +430,7 @@ def test_cross_page_entry_binds_via_merged_text():
 
 def test_san_gong_item_rate_without_item_budget_is_not_bound_to_total():
     """三公真实形态：分项完成率（车辆 82.68%）的分项预算未在叙事披露，
-    不得把同条目内的三公总额预算 21 错绑给分项声明 → fail-closed 不比。"""
+    不得把同条目内的三公总额预算 21 错绑给分项声明 → 未完成，不伪造比较结论。"""
     doc = _contract_doc(
         _final_page(
             "七、财政拨款“三公”经费支出决算情况说明",
@@ -441,7 +441,10 @@ def test_san_gong_item_rate_without_item_budget_is_not_bound_to_total():
             "支出决算为 16.95 万元，完成预算的 82.68%。",
         )
     )
-    assert _run(doc) == []
+    with pytest.raises(RuleDeferred) as excinfo:
+        _run(doc)
+    assert excinfo.value.partial_issues == []
+    assert "预算分母" in excinfo.value.detail
 
 
 # ---------------------------------------------------------------------------
@@ -451,20 +454,28 @@ def test_san_gong_item_rate_without_item_budget_is_not_bound_to_total():
 
 def test_real_sample_doc_positive_passes(sample):
     """DOC-20260905-001（REAL）：P21 总述句 102.27%、P26 三公 80.71% 均
-    复算一致；无分项预算的分项声明 fail-closed 不比 → 全文档 0 finding。"""
-    issues = _run(_document(sample))
-    assert issues == [], [getattr(i, "message", "") for i in issues]
+    复算一致；无分项预算的分项声明 未完成；保留全文档 0 finding，但不得记全部通过。"""
+    with pytest.raises(RuleDeferred) as excinfo:
+        _run(_document(sample))
+    assert excinfo.value.partial_issues == []
+    assert "预算分母" in excinfo.value.detail
 
 
 def test_real_yichuan_summary_rate_passes(yichuan):
-    """宜川（REAL）：P28 总述 20707.11/20218.21/98%，复算 97.64%，在
-    abs 0.5pp / 相对 1% 容差内 → 0 finding。"""
-    assert _run(_document(yichuan)) == []
+    """宜川（REAL）：有可复算的总述；部分三公分项预算未披露，
+    必须返回未完成且不伪造 finding。"""
+    with pytest.raises(RuleDeferred) as excinfo:
+        _run(_document(yichuan))
+    assert excinfo.value.partial_issues == []
+    assert "预算分母" in excinfo.value.detail
 
 
 def test_real_wenlv_summary_rate_passes(wenlv):
-    """文旅（REAL）：P22 总述 27780.16/24535.67/88.32% 复算一致 → 0 finding。"""
-    assert _run(_document(wenlv)) == []
+    """文旅（REAL）：总述复算一致；部分三公分项预算缺失仍须未完成。"""
+    with pytest.raises(RuleDeferred) as excinfo:
+        _run(_document(wenlv))
+    assert excinfo.value.partial_issues == []
+    assert "预算分母" in excinfo.value.detail
 
 
 def test_real_shiquan_rates_pass_and_zero_budget_entry_not_flagged(shiquan):

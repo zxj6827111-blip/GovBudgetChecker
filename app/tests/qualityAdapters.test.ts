@@ -12,6 +12,7 @@ import {
   deriveStructuralGateVerdict,
   deriveStructuralGates,
   formatRatioPercentText,
+  unassociatedOrgRatioFromCounts,
   type QualityMetricsResponse,
 } from "../app/components/quality/qualityAdapters";
 
@@ -278,5 +279,9 @@ for (const note of DISABLED_METRIC_NOTES) {
     );
   }
 }
+
+// 接口汇总后的同口径换算：总数为 0 时未知，不是 0%。
+assert.equal(unassociatedOrgRatioFromCounts(1, 3), 0.3333);
+assert.equal(unassociatedOrgRatioFromCounts(0, 0), null);
 
 console.log("qualityAdapters.test.ts: all assertions passed");

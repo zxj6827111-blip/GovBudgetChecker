@@ -1,0 +1,5 @@
+{
+  "synthetic": true,
+  "purpose": "Two independent native printing rows must not merge",
+  "sha256": "88df309e0d02ae3696e81b5f446381810d75f9708546b82ab6f78d004f0950c3"
+}

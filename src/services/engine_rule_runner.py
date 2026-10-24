@@ -9,9 +9,9 @@ import uuid
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from src.schemas.issues import JobContext, AnalysisConfig, IssueItem
-from src.engine.rules_v33 import ALL_RULES as FINAL_ALL_RULES, build_document, Issue, Document
-from src.engine.budget_rules import ALL_BUDGET_RULES
-from src.engine.common_rules import ALL_COMMON_RULES
+from src.services.check_progress import update_progress
+from src.engine.rules_v33 import build_document, Issue, Document
+from src.engine.rule_registry import all_rule_ids, select_rules
 from src.engine.rule_outcome import (
     RuleOutcome,
     RuleOutcomeSignal,
@@ -60,30 +60,51 @@ class EngineRuleRunner:
         return severity_map.get(value, "medium")
 
     @staticmethod
-    def _normalize_page(page: Any) -> int:
+    def _normalize_page(page: Any) -> Optional[int]:
+        """页码归一：只接受正整数，未知/无效一律返回 None。
+
+        ZC-00（SYS-07）：禁止把未知页码折算成第 1 页——那会让"没有定位"伪装成
+        "定位在第 1 页"，下游证据门和质量门都会被假页码污染。None 会一路保留，
+        由展示层渲染为"未定位"。
+        """
         if isinstance(page, bool):
-            return 1
+            return None
         if isinstance(page, int):
-            return page if page > 0 else 1
+            return page if page > 0 else None
         try:
             parsed = int(str(page).strip())
-            return parsed if parsed > 0 else 1
-        except Exception:
-            return 1
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
 
-    def _build_evidence_list(self, issue: Issue, page_number: int) -> List[Dict[str, Any]]:
-        text = (
-            getattr(issue, "evidence_text", None)
-            or getattr(issue, "description", None)
-            or issue.message
-        )
-        evidence_item: Dict[str, Any] = {
-            "page": page_number,
-            "text": text,
-            "text_snippet": text,
-        }
-        bbox = getattr(issue, "bbox", None)
-        if bbox:
+    def _build_evidence_list(self, issue: Issue, page_number: Optional[int]) -> List[Dict[str, Any]]:
+        """构造证据列表：只携带真实原文引用，绝不用问题说明冒充原文。
+
+        ZC-00（SYS-07）：此前 text 缺失时回退到 description/message——那把规则的
+        判定说明当成"原文摘录"输出，制造看似有据可查的问题项。现在没有
+        evidence_text（规则给出的命中原文）就保持证据文本为空，由证据门按
+        "缺原文"记录；页码未知时保持 None，不默认第 1 页。
+        """
+        text = str(getattr(issue, "evidence_text", None) or "").strip()
+        evidence_item: Dict[str, Any] = {"page": page_number}
+        if text:
+            evidence_item["text"] = text
+            evidence_item["text_snippet"] = text
+        location = getattr(issue, "location", {}) or {}
+        location_level = str(getattr(issue, "location_level", None) or "unresolved")
+        if location_level not in {"exact_cell", "exact_span"}:
+            location_level = str(location.get("location_level") or location_level)
+        verification_status = str(getattr(issue, "verification_status", None) or "unverified")
+        if verification_status != "verified":
+            verification_status = str(location.get("verification_status") or verification_status)
+        bbox = getattr(issue, "bbox", None) or location.get("bbox")
+        evidence_item["location_level"] = location_level
+        evidence_item["verification_status"] = verification_status
+        if (
+            bbox
+            and location_level in {"exact_cell", "exact_span"}
+            and verification_status == "verified"
+        ):
             evidence_item["bbox"] = bbox
         return [evidence_item]
 
@@ -107,19 +128,35 @@ class EngineRuleRunner:
         page_number = self._normalize_page(
             location.get("page", getattr(issue, "page_number", None))
         )
-        location.setdefault("page", page_number)
+        if page_number is not None:
+            location.setdefault("page", page_number)
+        else:
+            # 未知页码保持缺失：location.page 与 page_number 都不落第 1 页
+            location.pop("page", None)
 
         resolved_rule_id = str(rule_id or getattr(issue, "rule", "") or "UNKNOWN")
         title = infer_rule_title(resolved_rule_id, getattr(issue, "message", "") or "")
         suggestion: Optional[str] = getattr(issue, "suggestion", None) or default_rule_suggestion(
             resolved_rule_id, page_number
         )
-        if "page" not in raw_location and "pages" not in location:
+        if page_number is None or ("page" not in raw_location and "pages" not in location):
             suggestion = (
                 f"{suggestion} 当前页码未精确定位，可结合证据片段检索原文复核。"
                 if suggestion
                 else "当前页码未精确定位，可结合证据片段检索原文复核。"
             )
+
+        location_level = str(getattr(issue, "location_level", None) or "unresolved")
+        if location_level not in {"exact_cell", "exact_span"}:
+            location_level = str(location.get("location_level") or location_level)
+        verification_status = str(getattr(issue, "verification_status", None) or "unverified")
+        if verification_status != "verified":
+            verification_status = str(location.get("verification_status") or verification_status)
+        source_bbox = getattr(issue, "bbox", None) or location.get("bbox")
+        exact_verified = (
+            location_level in {"exact_cell", "exact_span"}
+            and verification_status == "verified"
+        )
 
         return IssueItem(
             id=str(uuid.uuid4()),
@@ -131,8 +168,24 @@ class EngineRuleRunner:
             evidence=self._build_evidence_list(issue, page_number),
             location=location,
             page_number=page_number,
+            bbox=source_bbox if exact_verified else None,
+            location_level=location_level,
+            verification_status=verification_status,
             suggestion=suggestion,
             tags=[resolved_rule_id] if resolved_rule_id else [],
+            # AC-11：规则侧关系/事实身份透传（引擎 Issue 未来携带 fact_ids 时
+            # 与 AI 候选建立精确配对；现在保留通道，不再在适配层丢弃）。
+            check_relation_id=str(getattr(issue, "check_relation_id", "") or "") or None,
+            fact_ids=[
+                str(item).strip()
+                for item in (getattr(issue, "fact_ids", None) or [])
+                if str(item).strip()
+            ],
+            evidence_ids=[
+                str(item).strip()
+                for item in (getattr(issue, "evidence_ids", None) or [])
+                if str(item).strip()
+            ],
             # 版本留痕（P2-02）：规则来源的 finding 记录本次实际使用的规则集版本
             # 与引擎版本；模型/提示词版本留空，因为这条问题不经过任何 AI 调用。
             rule_version=rule_version,
@@ -171,6 +224,35 @@ class EngineRuleRunner:
                 continue
         return findings, conversion_errors
 
+    @staticmethod
+    def _link_relation_receipts(
+        document: Optional[Document],
+        rule_id: str,
+        receipt_start: int,
+        findings: List[IssueItem],
+    ) -> None:
+        """Bind failed relation receipts to the exact findings emitted for them."""
+        if document is None:
+            return
+        receipts = getattr(document, "fact_receipts", None)
+        if not isinstance(receipts, list):
+            return
+        finding_ids_by_relation: Dict[str, List[str]] = {}
+        for finding in findings:
+            relation_id = str(getattr(finding, "check_relation_id", "") or "").strip()
+            finding_id = str(getattr(finding, "id", "") or "").strip()
+            if relation_id and finding_id:
+                finding_ids_by_relation.setdefault(relation_id, []).append(finding_id)
+        for receipt in receipts[max(0, receipt_start):]:
+            if not isinstance(receipt, dict) or str(receipt.get("rule_id") or "") != rule_id:
+                continue
+            if str(receipt.get("status") or "") != "fail":
+                continue
+            relation_id = f"{rule_id}:{str(receipt.get('sub_check_id') or '')}"
+            refs = finding_ids_by_relation.get(relation_id, [])
+            if refs:
+                receipt["issue_refs"] = list(dict.fromkeys([*(receipt.get("issue_refs") or []), *refs]))
+
     def _resolve_report_kind(
         self,
         job_context: JobContext,
@@ -196,14 +278,10 @@ class EngineRuleRunner:
         document: Optional[Document] = None,
     ) -> List[Any]:
         report_kind = self._resolve_report_kind(job_context, document)
-        if report_kind == "budget":
-            return [*ALL_BUDGET_RULES, *ALL_COMMON_RULES]
-        if report_kind == "final":
-            return [*FINAL_ALL_RULES, *ALL_COMMON_RULES]
         # A material whose type cannot be established must not be checked
         # against either type-specific rule set.  Common rules still provide
         # low-risk feedback while the UI requests human confirmation.
-        return list(ALL_COMMON_RULES)
+        return select_rules(report_kind)
 
     async def run_rules(
         self, job_context: JobContext, rules: List[Dict[str, Any]], config: AnalysisConfig
@@ -227,7 +305,18 @@ class EngineRuleRunner:
         # 独立验收 2026-09-17 kind_disagreement 反例整改）。
         if document is not None:
             document.report_kind = report_kind
+            profile_snapshot = (job_context.meta or {}).get("document_profile")
+            if isinstance(profile_snapshot, dict):
+                from src.schemas.document_profile import DocumentProfile
+
+                document.document_profile = DocumentProfile.model_validate(profile_snapshot)
         selected_rules = self._select_rule_set(job_context, document)
+        from src.engine.rule_registry import restrict_rules_to_profile
+        from src.services.document_profile_resolver import resolve_document_profile
+        profile = getattr(document, 'document_profile', None) or resolve_document_profile(
+            path=str(getattr(document, 'path', '') or ''), page_texts=getattr(document, 'page_texts', []) or [])
+        selected_rules = restrict_rules_to_profile(selected_rules, profile)
+        update_progress(job_context.job_id, "local", state="running", total=len(selected_rules), completed=0, current_step="开始本地规则检查")
         # 版本留痕（P2-02）：本次实际生效的规则集版本，逐条写进 finding。
         rule_version = str(getattr(config, "rules_version", "") or "").strip() or None
 
@@ -248,13 +337,15 @@ class EngineRuleRunner:
         bbox_locator = PDFBBoxLocator(job_context.pdf_path)
         try:
             # Execute selected rule set.
-            for rule_obj in selected_rules:
+            for rule_index, rule_obj in enumerate(selected_rules):
                 rule_id = rule_obj.code
+                receipt_start = len(getattr(document, "fact_receipts", []) or []) if document is not None else 0
 
                 try:
                     start_time = time.time()
 
                     # 鐩存帴璋冪敤瑙勫垯瀵硅薄鐨刟pply鏂规硶
+                    document.current_rule_code = rule_id
                     issues = rule_obj.apply(document)
 
                     int((time.time() - start_time) * 1000)
@@ -266,6 +357,7 @@ class EngineRuleRunner:
                         rule_version=rule_version,
                         bbox_locator=bbox_locator,
                     )
+                    self._link_relation_receipts(document, rule_id, receipt_start, findings)
 
                     if conversion_errors:
                         # 规则本身跑完不等于结果可信：只要有一条 issue 在
@@ -309,6 +401,7 @@ class EngineRuleRunner:
                         rule_version=rule_version,
                         bbox_locator=bbox_locator,
                     )
+                    self._link_relation_receipts(document, rule_id, receipt_start, findings)
 
                     all_findings.extend(findings)
                     self._stats["total_findings"] += len(findings)
@@ -363,7 +456,9 @@ class EngineRuleRunner:
                         extra=safe_log_extra({"rule_id": rule_id, **describe_exception(e)}),
                     )
 
-                    # 鍒涘缓澶辫触璁板綍
+                    # 创建失败记录。ZC-00（SYS-07）：执行失败记录是系统生成的事件，
+                    # 不允许伪造"第 1 页 + 错误消息即原文"的证据——页码保持缺失、
+                    # 证据列表留空，让证据门按缺证据如实记账。
                     if config.record_rule_failures:
                         failure_item = IssueItem(
                             id=str(uuid.uuid4()),
@@ -372,22 +467,31 @@ class EngineRuleRunner:
                             title=f"Rule execution failed: {rule_obj.desc}",
                             message=f"Rule execution error: {str(e)}",
                             severity="low",
-                            location={"page": 1},
-                            page_number=1,
-                            evidence=[
-                                {
-                                    "page": 1,
-                                    "text": f"Execution error: {str(e)}",
-                                    "text_snippet": f"Execution error: {str(e)}",
-                                }
-                            ],
+                            location={},
+                            page_number=None,
+                            evidence=[],
                             why_not=f"EXECUTION_ERROR: {str(e)}",
                             rule_version=rule_version,
                             engine_version=ENGINE_VERSION,
                         )
                         all_findings.append(failure_item)
+                finally:
+                    update_progress(job_context.job_id, "local", completed=rule_index + 1, failed=self._stats["failed_rules"], current_step=f"已检查 {rule_index + 1}/{len(selected_rules)} 条规则（{rule_id}）")
         finally:
             bbox_locator.close()
+
+        # ZC-03（AC-04）：规则执行期间写下的关系级子检查回执随运行摘要暴露，
+        # 供双模式结果与 build_check_receipts 消费（与 legacy payload 同源）。
+        self._stats["structured_consumption"] = list(getattr(document, "structured_consumption", None) or [])
+        from src.engine.native_issue_dedup import deduplicate_native_issues
+        all_findings = deduplicate_native_issues(all_findings, document)
+        self._stats["total_findings"] = len(all_findings)
+        self._stats["fact_receipts"] = list(getattr(document, "fact_receipts", None) or [])
+        if getattr(document, "fact_context", None) is not None:
+            try:
+                self._stats["fact_context_summary"] = document.fact_context.summary()
+            except Exception:
+                pass
 
         logger.info(
             f"Engine rules completed: {len(all_findings)} findings from {len(selected_rules)} rules "
@@ -412,12 +516,39 @@ class EngineRuleRunner:
             while len(page_tables) < len(page_texts):
                 page_tables.append([])
 
-            return build_document(
+            document = build_document(
                 path=job_context.pdf_path,
                 page_texts=page_texts,
                 page_tables=page_tables,
                 filesize=getattr(job_context, "filesize", 0) or job_context.meta.get("filesize", 0),
             )
+            document.structure_view = job_context.meta.get("structure_view")
+            # ZC-01（AC-01）：双模式路径消费与 legacy 路径同一版本的统一事实
+            fact_snapshot = getattr(job_context, "fact_context", None)
+            if isinstance(fact_snapshot, dict) and fact_snapshot:
+                try:
+                    from src.engine.fact_context import FactContext
+
+                    document.fact_context = FactContext.from_dict(fact_snapshot)
+                except Exception as exc:
+                    # 显式绑定的快照损坏不同于没有事实，不能借缺事实降级绕过版本约束。
+                    if job_context.parse_artifact is not None:
+                        raise ValueError("规则解析产物绑定的财政事实快照损坏") from exc
+                    # 未绑定解析产物的旧任务仍沿用已有降级行为。
+                    document.fact_context = None
+            artifact_snapshot = job_context.parse_artifact
+            if artifact_snapshot is not None:
+                from src.schemas.parse_artifact import ParseArtifact
+
+                artifact = ParseArtifact.from_dict(artifact_snapshot)
+                context = getattr(document, "fact_context", None)
+                # 无财政事实是可降级的取数不足；只有已有事实与解析版本冲突才拒绝执行。
+                if context is not None and (artifact.source_file_hash, artifact.parse_run_uid) != (
+                    context.file_hash, context.parse_run_uid
+                ):
+                    raise ValueError("规则解析产物与当前财政事实版本不一致")
+                document.parse_artifact = artifact
+            return document
 
         # 2. 鍥為€€锛氬皾璇曚粠 ocr_text 鍜?tables 鎭㈠锛堝吋瀹规棫鏁版嵁锛?
         if job_context.ocr_text and job_context.tables:
@@ -559,12 +690,9 @@ async def run_engine_rules(
 
 def get_available_rules() -> List[str]:
     """Return all available engine rule codes."""
-    return [rule.code for rule in (ALL_BUDGET_RULES + FINAL_ALL_RULES + ALL_COMMON_RULES)]
+    return all_rule_ids()
 
 
 def validate_rule_id(rule_id: str) -> bool:
     """楠岃瘉瑙勫垯ID鏄惁鏈夋晥"""
-    return any(
-        rule.code == rule_id or rule_id in rule.code
-        for rule in (ALL_BUDGET_RULES + FINAL_ALL_RULES + ALL_COMMON_RULES)
-    )
+    return any(code == rule_id or rule_id in code for code in all_rule_ids())

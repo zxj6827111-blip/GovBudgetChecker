@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import math
 from typing import Dict, Iterable, List, Optional
 
 import asyncpg
@@ -37,6 +38,8 @@ class TableInstance:
     row_start: Optional[int]
     row_end: Optional[int]
     column_mappings: List[ColumnMapping]
+    source_table_code: Optional[str] = None
+    native_identity: bool = False
 
 
 def _build_legacy_rules() -> Dict[str, Dict[str, object]]:
@@ -65,7 +68,8 @@ class TableRecognizer:
     async def recognize_tables(self, document_version_id: int) -> List[TableInstance]:
         cells = await self.conn.fetch(
             """
-            SELECT table_code, row_idx, col_idx, raw_text, page_number
+            SELECT table_code, row_idx, col_idx, raw_text, page_number,
+                   confidence, extraction_method
             FROM fiscal_table_cells
             WHERE document_version_id = $1
             ORDER BY table_code, row_idx, col_idx
@@ -94,7 +98,7 @@ class TableRecognizer:
                 instance.confidence,
             )
 
-        return recognized
+        return self._select_best_instances(recognized)
 
     def _recognize_single_table(
         self,
@@ -104,11 +108,22 @@ class TableRecognizer:
         title = self._extract_title(cells)
         header_columns = self._extract_header_columns(cells)
         headers = [header for _, header in header_columns]
-        table_code, confidence = detect_table_code(
-            title=title,
-            headers=headers,
-            source_hint=source_table_code,
+        source_confidence = self._source_confidence(cells)
+        native_identity = source_table_code in NINE_TABLE_RULES and any(
+            cell.get("extraction_method") in {"lines", "lines_strict", "native_footer"}
+            and str(cell["raw_text"] or "").strip()
+            for cell in cells
         )
+        if native_identity and source_confidence is not None and source_confidence >= 0.8:
+            # The primary parser has the title and physical grid. The first
+            # cell row here may instead be a header such as "较上年增减".
+            table_code, confidence = source_table_code, source_confidence
+        else:
+            table_code, confidence = detect_table_code(
+                title=title,
+                headers=headers,
+                source_hint=source_table_code,
+            )
 
         if table_code is None:
             logger.warning(
@@ -117,6 +132,10 @@ class TableRecognizer:
                 title[:80],
             )
             return None
+
+        if source_confidence is not None:
+            confidence = (source_confidence if source_table_code == table_code
+                          else min(confidence, source_confidence))
 
         measure_columns = self._detect_measure_columns(cells)
         column_mappings = self._create_column_mappings(
@@ -134,7 +153,51 @@ class TableRecognizer:
             row_start=min(int(cell["row_idx"]) for cell in cells),
             row_end=max(int(cell["row_idx"]) for cell in cells),
             column_mappings=column_mappings,
+            source_table_code=source_table_code,
+            native_identity=native_identity and source_table_code == table_code,
         )
+
+    def _source_confidence(self, cells: Iterable[asyncpg.Record]) -> Optional[float]:
+        values: List[float] = []
+        for cell in cells:
+            if not str(cell["raw_text"] or "").strip():
+                continue
+            value = cell.get("confidence")
+            if value is None:
+                continue
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value) and 0 <= value <= 1:
+                values.append(value)
+        # Coalesced continuations retain the confidence of their physical
+        # cells. A weak continuation must not downgrade the recognized head.
+        return min(max(values), 0.99) if values else None
+
+    def _select_best_instances(self, instances: Iterable[TableInstance]) -> List[TableInstance]:
+        """Legacy storage allows one instance per code, so choose it explicitly.
+
+        Do not blend columns or locations from unrelated same-code candidates.
+        Real continuations have already been coalesced by the primary parser.
+        """
+        selected: Dict[str, TableInstance] = {}
+
+        def rank(instance: TableInstance) -> tuple:
+            return (
+                instance.native_identity and instance.confidence >= 0.8,
+                instance.confidence,
+                len(instance.column_mappings),
+                instance.source_table_code == instance.table_code,
+                -(instance.page_number if instance.page_number is not None else float("inf")),
+                instance.source_title,
+            )
+
+        for instance in instances:
+            existing = selected.get(instance.table_code)
+            if existing is None or rank(instance) > rank(existing):
+                selected[instance.table_code] = instance
+        return list(selected.values())
 
     def _extract_title(self, cells: Iterable[asyncpg.Record]) -> str:
         title_cells = sorted(
@@ -360,6 +423,9 @@ class TableRecognizer:
         document_version_id: int,
         instances: List[TableInstance],
     ) -> None:
+        # Apply the same selection at the write boundary as at recognition;
+        # callers can supply candidates directly and in any order.
+        instances = self._select_best_instances(instances)
         await self.conn.execute(
             """
             DELETE FROM fiscal_column_mappings

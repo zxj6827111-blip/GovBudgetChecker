@@ -45,6 +45,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -58,6 +59,7 @@ MANIFEST_NAME = "manifest.json"
 DATABASE_ARTIFACT = "database.sql.gz"
 UPLOADS_ARTIFACT = "uploads.tar.gz"
 AUDIT_ARTIFACT = "audit-log"
+STATE_ARTIFACT = "application-state.tar.gz"
 
 #: pg 客户端工具的常见安装位置（PATH 里没有时按序探测）
 _PG_BIN_CANDIDATES = (
@@ -198,9 +200,13 @@ def archive_uploads(uploads_dir: Path, target: Path) -> Dict[str, Any]:
     started = time.time()
     file_count = 0
     total_bytes = 0
-    with tarfile.open(target, "w:gz") as tar:
+    # 历史证据采用硬链接节省磁盘；备份应保存每条路径的普通文件内容。
+    # 下方仍逐项拒绝符号链接，恢复器无需放宽对归档链接成员的安全限制。
+    with tarfile.open(target, "w:gz", dereference=True) as tar:
         for path in sorted(uploads_dir.rglob("*")):
             relative = path.relative_to(uploads_dir).as_posix()
+            if path.is_symlink():
+                raise BackupError(f"源目录存在链接，不能完整备份：{relative}")
             if path.is_file():
                 file_count += 1
                 total_bytes += path.stat().st_size
@@ -232,6 +238,7 @@ def copy_audit_log(audit_log_path: Path, target_dir: Path) -> Dict[str, Any]:
 
     target = target_dir / audit_log_path.name
     shutil.copy2(audit_log_path, target)
+    target.chmod(0o600)
     with target.open("r", encoding="utf-8", errors="replace") as handle:
         line_count = sum(1 for _ in handle)
     return {
@@ -245,6 +252,73 @@ def copy_audit_log(audit_log_path: Path, target_dir: Path) -> Dict[str, Any]:
     }
 
 
+def application_state_paths() -> Dict[str, Path]:
+    """These files are runtime authorities outside UPLOAD_DIR, not DB mirrors."""
+    data = (
+        Path(tempfile.gettempdir()) / "govbudgetchecker_test_data"
+        if os.getenv("TESTING", "").lower() in {"true", "1", "yes"}
+        else _REPO_ROOT / "data"
+    )
+    return {
+        "job_org_links.json": Path(os.getenv("ORG_DATA_DIR", str(data))) / "job_org_links.json",
+        "organizations.json": Path(os.getenv("ORG_DATA_DIR", str(data))) / "organizations.json",
+        "users.json": Path(
+            os.getenv("USER_FILE", str(Path(os.getenv("USER_DATA_DIR", str(data))) / "users.json"))
+        ),
+    }
+
+
+def archive_application_state(target: Path) -> Dict[str, Any]:
+    files = {}
+    with tarfile.open(target, "w:gz", dereference=True) as tar:
+        for name, path in application_state_paths().items():
+            if path.is_symlink():
+                raise BackupError(f"应用状态文件是链接，拒绝备份：{name}")
+            files[name] = {"present": path.is_file()}
+            if path.is_file():
+                files[name]["sha256"] = sha256_file(path)
+                tar.add(path, arcname=name, recursive=False)
+    target.chmod(0o600)
+    return {
+        "artifact": target.name,
+        "bytes": target.stat().st_size,
+        "sha256": sha256_file(target),
+        "files": files,
+    }
+
+
+def restore_application_state(archive: Path, target_dir: Path) -> Dict[str, Any]:
+    info = load_manifest(archive).get("artifacts", {}).get("application_state")
+    if not info:
+        raise BackupError("旧备份不包含组织/用户文件，无法完整恢复应用状态")
+    target_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with tarfile.open(archive / STATE_ARTIFACT, "r:gz") as tar:
+        members = tar.getmembers()
+        seen = set()
+        for member in members:
+            if (
+                member.name not in {"organizations.json", "users.json", "job_org_links.json"}
+                or not member.isfile()
+                or member.name in seen
+            ):
+                raise BackupError("应用状态归档存在异常成员")
+            target = target_dir / member.name
+            if target.exists() or target.is_symlink():
+                raise BackupError(f"应用状态恢复目标已存在：{target}")
+            seen.add(member.name)
+        for member in members:
+            source = tar.extractfile(member)
+            if source is None:
+                raise BackupError("无法读取应用状态归档成员")
+            target = target_dir / member.name
+            with target.open("xb") as sink:
+                shutil.copyfileobj(source, sink)
+            target.chmod(0o600)
+            if sha256_file(target) != info["files"][member.name]["sha256"]:
+                raise BackupError("应用状态恢复后的文件哈希不一致")
+    return {"target": str(target_dir), "files": sorted(seen), "verified": True}
+
+
 def create_backup(
     output: Path,
     *,
@@ -253,7 +327,11 @@ def create_backup(
     audit_log_path: Path,
     include_database: bool = True,
 ) -> Dict[str, Any]:
-    output.mkdir(parents=True, exist_ok=True)
+    if output.resolve().is_relative_to(uploads_dir.resolve()):
+        raise BackupError("备份输出不能位于上传源目录内")
+    output.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if (output / MANIFEST_NAME).exists():
+        raise BackupError("备份目标已有归档，请使用新的目录")
     manifest: Dict[str, Any] = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "tool": "scripts/backup_all.py",
@@ -261,16 +339,11 @@ def create_backup(
         "artifacts": {},
     }
 
-    manifest["artifacts"]["uploads"] = archive_uploads(
-        uploads_dir, output / UPLOADS_ARTIFACT
-    )
-    manifest["artifacts"]["audit_log"] = copy_audit_log(
-        audit_log_path, output / AUDIT_ARTIFACT
-    )
+    manifest["artifacts"]["application_state"] = archive_application_state(output / STATE_ARTIFACT)
+    manifest["artifacts"]["uploads"] = archive_uploads(uploads_dir, output / UPLOADS_ARTIFACT)
+    manifest["artifacts"]["audit_log"] = copy_audit_log(audit_log_path, output / AUDIT_ARTIFACT)
     if include_database and database_url.strip():
-        manifest["artifacts"]["database"] = dump_database(
-            database_url, output / DATABASE_ARTIFACT
-        )
+        manifest["artifacts"]["database"] = dump_database(database_url, output / DATABASE_ARTIFACT)
     else:
         manifest["artifacts"]["database"] = {
             "artifact": DATABASE_ARTIFACT,
@@ -283,6 +356,9 @@ def create_backup(
         encoding="utf-8",
         newline="\n",
     )
+    for artifact in output.iterdir():
+        if artifact.is_file():
+            artifact.chmod(0o600)
     return manifest
 
 
@@ -310,7 +386,15 @@ def verify_backup(archive: Path) -> Dict[str, Any]:
         if info.get("present") is False:
             results[name] = {"status": "absent", "note": info.get("note")}
             continue
-        artifact_path = archive / str(info.get("artifact") or "")
+        artifact_name = str(info.get("artifact") or "")
+        if (
+            not artifact_name
+            or "\\" in artifact_name
+            or Path(artifact_name).is_absolute()
+            or not (archive / artifact_name).resolve().is_relative_to(archive.resolve())
+        ):
+            raise BackupError("备份清单存在越界构件路径")
+        artifact_path = archive / artifact_name
         if not artifact_path.is_file():
             results[name] = {"status": "missing", "path": artifact_path.as_posix()}
             ok = False
@@ -334,12 +418,20 @@ def restore_uploads(archive: Path, target_dir: Path) -> Dict[str, Any]:
     if not source.is_file():
         raise BackupError(f"归档缺少 {UPLOADS_ARTIFACT}")
     target_dir.mkdir(parents=True, exist_ok=True)
+    if any(target_dir.iterdir()):
+        raise BackupError("上传恢复目标必须为空，避免覆盖既有文件")
     with tarfile.open(source, "r:gz") as tar:
         for member in tar.getmembers():
             # 防路径穿越：拒绝绝对路径与 .. 跳出目标目录的成员
             member_path = (target_dir / member.name).resolve()
-            if not str(member_path).startswith(str(target_dir.resolve())):
+            if (
+                not member_path.is_relative_to(target_dir.resolve())
+                or "\\" in member.name
+                or Path(member.name).is_absolute()
+            ):
                 raise BackupError(f"归档中存在越界路径，已中止：{member.name}")
+            if not (member.isfile() or member.isdir()):
+                raise BackupError(f"归档中存在链接或特殊文件，已中止：{member.name}")
         tar.extractall(str(target_dir))
     restored = [path for path in target_dir.rglob("*") if path.is_file()]
     return {
@@ -382,6 +474,7 @@ def restore_database(archive: Path, database_url: str) -> Dict[str, Any]:
         assert process.stdin is not None
         shutil.copyfileobj(handle, process.stdin)
         process.stdin.close()
+        process.stdin = None
         stdout, stderr = process.communicate()
     if process.returncode != 0:
         raise BackupError(
@@ -471,6 +564,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     restore.add_argument("--database-url", default=None)
     restore.add_argument("--audit-log", default=None)
     restore.add_argument(
+        "--state-dir",
+        default=None,
+        help="组织/用户文件恢复目录；重启时将 ORG_DATA_DIR 和 USER_DATA_DIR 指向这里",
+    )
+    restore.add_argument(
         "--force",
         action="store_true",
         help="允许恢复到当前环境正在使用的 UPLOAD_DIR / DATABASE_URL / AUDIT_LOG_PATH",
@@ -508,6 +606,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             target_database_url=args.database_url,
             target_audit_log=target_audit,
         )
+        if args.state_dir and not args.force:
+            state_target = Path(args.state_dir).expanduser().resolve()
+            if any(
+                _same_path(state_target / name, path)
+                for name, path in application_state_paths().items()
+            ):
+                problems.append("--state-dir 指向当前组织或用户文件目录")
         if problems:
             print("拒绝恢复，目标指向当前环境正在使用的数据：", file=sys.stderr)
             for problem in problems:
@@ -522,6 +627,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
 
         result: Dict[str, Any] = {"archive": archive.as_posix(), "verified": True}
+        if args.state_dir:
+            result["application_state"] = restore_application_state(
+                archive, Path(args.state_dir).expanduser()
+            )
         if target_uploads is not None:
             result["uploads"] = restore_uploads(archive, target_uploads)
         if args.database_url:

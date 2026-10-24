@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
 import { zhCN } from "date-fns/locale";
+import { getDisplayIssueTotal } from "@/lib/uiAdapters";
 import ActionAccordion from "./ActionAccordion";
 
 interface UnitItem {
@@ -41,6 +42,8 @@ interface JobSummary {
   report_kind?: "budget" | "final" | "unknown";
   doc_type?: string | null;
   issue_total?: number;
+  review_issue_total?: number;
+  review_candidate_total?: number;
   merged_issue_total?: number;
   merged_issue_conflicts?: number;
   merged_issue_agreements?: number;
@@ -88,11 +91,6 @@ const getPreferredUnit = (units: UnitItem[]): UnitItem | null => {
   if (baseUnit) return baseUnit;
   if (units.length === 1) return units[0];
   return null;
-};
-
-const getDisplayIssueTotal = (job: Pick<JobSummary, "merged_issue_total" | "issue_total" | "review_item_count">) => {
-  const inspected = typeof job.merged_issue_total === "number" ? job.merged_issue_total : job.issue_total || 0;
-  return inspected + (job.review_item_count || 0);
 };
 
 interface OrganizationDetailViewProps {

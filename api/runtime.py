@@ -11,11 +11,14 @@ import copy
 import hashlib
 import io
 import json
+import uuid
+from datetime import datetime, timezone
 import logging
 import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Optional, Set
@@ -106,10 +109,28 @@ _pipeline_runner: Optional[Callable[[Path], Awaitable[None]]] = None
 _job_queue: Optional["DurableJobQueue"] = None
 _JOB_SUMMARY_CACHE: Dict[str, Dict[str, Any]] = {}
 _JOB_SUMMARY_CACHE_MAX_SIZE = 2048
+# 复核判定只影响对应任务的摘要（apply_job_issue_filters 只读本任务的判定）。以全局
+# .issue_workflow.json 的签名做缓存键会让任何一次判定使全部摘要失效，277 个任务冷重建实测约 8 秒。
+_WORKFLOW_JOB_SIGNATURES: Dict[str, Any] = {"file": None, "by_job": {}}
+_WORKFLOW_JOB_SIGNATURES_LOCK = threading.Lock()
+# 授权只看状态文件里的归属字段；按状态文件签名缓存，复核清单不必逐个重读数 MB 的 status.json。
+_JOB_ACCESS_FIELDS_CACHE: Dict[str, Dict[str, Any]] = {}
+_JOB_ACCESS_FIELD_KEYS = (
+    "job_id",
+    "organization_id",
+    "organization_match_type",
+    "organization_match_confidence",
+    "created_by",
+)
 STRUCTURED_INGEST_FILENAME = "structured_ingest.json"
 IGNORED_ISSUES_FILENAME = "ignored_issues.json"
 PERSISTENCE_STATE_FILENAME = "persistence.json"
 JOB_STATUS_CONTEXT_KEYS = (
+    "use_local_rules",
+    "use_ai_assist",
+    "ai_profile_id",
+    "ai_configuration",
+    "mode",
     "filename",
     "size",
     "saved_path",
@@ -135,6 +156,8 @@ JOB_STATUS_CONTEXT_KEYS = (
 )
 ACTIVE_ANALYSIS_STATUSES = {"queued", "processing", "running"}
 REANALYZE_EPHEMERAL_FILES = {
+    "check_progress.json",
+    "ai_config_snapshot.json",
     STRUCTURED_INGEST_FILENAME,
     IGNORED_ISSUES_FILENAME,
     "annotated.pdf",
@@ -275,8 +298,214 @@ def read_json_file(
     return default
 
 
+#: 触发版本化分析快照的终态集合：
+#: 任务处理状态与审校结论分别表达（ZC-01），但只有终态才值得留版本快照
+TERMINAL_ANALYSIS_STATUSES = frozenset({"done", "review_required", "degraded", "error"})
+
+
+def write_fact_context_snapshot(job_dir: Path, fact_context: Any) -> Optional[Path]:
+    """把当前版本事实快照（含人工覆盖层）原子写入任务目录（RC-10）。
+
+    快照是跨解析重映射的唯一可靠来源：解析器升级后事实 UID 变化时，
+    上一版本的快照提供旧目标 → 身份键 → 新目标的映射依据。
+    任何失败只降级（返回 None），不影响分析主链路。
+    """
+    if fact_context is None:
+        return None
+    try:
+        payload = fact_context.to_dict()
+        write_json_file(job_dir / "fact_context.json", payload)
+        return job_dir / "fact_context.json"
+    except Exception as exc:
+        logger.warning(
+            "fact context snapshot write failed for %s: %s",
+            getattr(job_dir, "name", job_dir),
+            exc,
+        )
+        return None
+
+
+def read_previous_fact_facts(job_dir: Path) -> List[Dict[str, Any]]:
+    """读取上一分析版本的事实快照（dict 列表），供覆盖层跨版本重映射。
+
+    优先读当前指针指向的版本目录内的快照（版本不可变）；没有版本目录
+    时回退任务根目录的临时快照。都没有则返回空列表——重映射退化为
+    "UID 命中即用，失效即转待复核"。
+    """
+    pointer = read_analysis_revision_pointer(job_dir)
+    candidates: List[Path] = []
+    if pointer and str(pointer.get("revision_id") or "").strip():
+        candidates.append(
+            job_dir
+            / "analysis_versions"
+            / str(pointer["revision_id"])
+            / "fact_context.json"
+        )
+    candidates.append(job_dir / "fact_context.json")
+    for candidate in candidates:
+        try:
+            if not candidate.is_file():
+                continue
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        facts = data.get("facts") if isinstance(data, dict) else None
+        if isinstance(facts, list):
+            return [item for item in facts if isinstance(item, dict)]
+    return []
+
+
+def write_analysis_revision_snapshot(
+    job_dir: Path,
+    payload: Dict[str, Any],
+    *, publish_pointer: Optional[bool] = None,
+) -> Optional[Dict[str, Any]]:
+    """把终态结果写入版本化目录，并原子更新当前版本指针（ZC-01）。
+
+    - 目录：``uploads/<job>/analysis_versions/rev-<时间戳>-<随机>/status.json``；
+    - 指针：``analysis_versions/current.json``（temp 文件 + os.replace 原子替换）；
+    - 重分析只追加新版本目录，不删除、不覆盖旧快照；读取方据 current.json
+      定位当前版本，历史版本永远可回放。
+    - RC-12：revision ID 由调用方在构建统一报告**之前**分配并写入
+      ``payload["analysis_revision"]``——报告的版本绑定与快照目录必须
+      指向同一个 ID；payload 未携带时才在此分配（兼容旧调用方）。
+    返回指针内容；任何失败返回 None 且不抛异常（快照是增强能力，
+    不得影响 status.json 主链路）。
+    """
+    try:
+        status = str(payload.get("status") or "").strip()
+        if status not in TERMINAL_ANALYSIS_STATUSES:
+            return None
+        versions_dir = job_dir / "analysis_versions"
+        versions_dir.mkdir(parents=True, exist_ok=True)
+        revision_id = str(payload.get("analysis_revision") or "").strip()
+        if not revision_id:
+            revision_id = (
+                "rev-"
+                + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+                + "-"
+                + uuid.uuid4().hex[:8]
+            )
+        revision_dir = versions_dir / revision_id
+        revision_dir.mkdir(parents=True, exist_ok=True)
+        stored_status = revision_dir / "status.json"
+        if stored_status.exists():
+            previous = read_json_file(stored_status, default={})
+            if previous != payload:
+                from src.services.analysis_result_store import compute_analysis_result_fingerprint
+                if (previous.get('analysis_revision') != payload.get('analysis_revision')
+                        or compute_analysis_result_fingerprint(previous) != compute_analysis_result_fingerprint(payload)):
+                    raise ValueError("immutable analysis revision already contains different result")
+                # 计时、进度和投影的复核状态不重写首次归档的业务报告。
+                payload = previous
+                status = str(previous.get('status') or status)
+        if not stored_status.exists():
+            write_json_file(stored_status, payload)
+        # RC-10：事实快照随版本一起归档——历史版本的覆盖层重映射、
+        # 证据绑定核对都依赖"该版本当时的事实"，不能只留结论。
+        fact_snapshot = job_dir / "fact_context.json"
+        if fact_snapshot.is_file() and not (revision_dir / 'fact_context.json').exists() and not (payload.get('structured_ingest') or {}).get('fact_snapshot'):
+            try:
+                shutil.copyfile(fact_snapshot, revision_dir / "fact_context.json")
+            except OSError:
+                logger.warning(
+                    "fact context snapshot copy failed for %s",
+                    getattr(job_dir, "name", job_dir),
+                )
+
+        immutable_snapshot = job_dir / "fact_snapshots" / (revision_id + ".json")
+        if immutable_snapshot.is_file():
+            from src.services.analysis_fact_snapshot import validate_snapshot, write_snapshot
+            snapshot = json.loads(immutable_snapshot.read_text(encoding="utf-8"))
+            validate_snapshot(snapshot)
+            if snapshot["revision_id"] != revision_id or snapshot["job_uuid"] != job_dir.name:
+                raise ValueError("analysis revision and fiscal snapshot differ")
+            write_snapshot(revision_dir / 'fact_snapshot.json', snapshot)
+            archived_context = revision_dir / 'fact_context.json'
+            if archived_context.exists():
+                if read_json_file(archived_context, default={}) != snapshot['effective_context']:
+                    raise ValueError('immutable historical fact context differs from its snapshot')
+            else:
+                write_json_file(archived_context, snapshot['effective_context'])
+        pointer = {
+            "revision_id": revision_id,
+            "status": status,
+            "written_at": datetime.now(timezone.utc).isoformat(),
+            "analysis_conclusion": payload.get("analysis_conclusion"),
+        }
+        if publish_pointer is None:
+            publish_pointer = not (os.getenv('DATABASE_URL') and
+                (payload.get('structured_ingest') or {}).get('fact_snapshot'))
+        if not publish_pointer:
+            return {**pointer, 'mirror_pending': True}
+        pointer_path = versions_dir / "current.json"
+        tmp_fd, tmp_name = tempfile.mkstemp(suffix=".tmp", dir=str(versions_dir))
+        tmp_path = Path(tmp_name)
+        try:
+            os.write(tmp_fd, json.dumps(pointer, ensure_ascii=False).encode("utf-8"))
+            os.fsync(tmp_fd)
+            os.close(tmp_fd)
+            tmp_fd = None
+            os.replace(str(tmp_path), str(pointer_path))
+        except BaseException:
+            if tmp_fd is not None:
+                try:
+                    os.close(tmp_fd)
+                except Exception:
+                    pass
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise
+        return pointer
+    except Exception as exc:
+        logger.warning(
+            "analysis revision snapshot failed for %s: %s",
+            getattr(job_dir, "name", job_dir),
+            exc,
+        )
+        if (payload.get('structured_ingest') or {}).get('fact_snapshot'):
+            raise
+        return None
+
+
+def read_analysis_revision_pointer(job_dir: Path) -> Optional[Dict[str, Any]]:
+    """读取当前分析版本指针；不存在或损坏返回 None（不猜测）。"""
+    pointer_path = job_dir / "analysis_versions" / "current.json"
+    return read_json_file(pointer_path, default=None)
+
+
+def list_analysis_revisions(job_dir: Path) -> List[Dict[str, Any]]:
+    """列出全部历史分析版本（旧快照保留，供回放与审计）。"""
+    versions_dir = job_dir / "analysis_versions"
+    if not versions_dir.is_dir():
+        return []
+    revisions: List[Dict[str, Any]] = []
+    for entry in sorted(versions_dir.iterdir()):
+        if not entry.is_dir() or not entry.name.startswith("rev-"):
+            continue
+        payload = read_json_file(entry / "status.json", default=None)
+        if isinstance(payload, dict):
+            revisions.append(
+                {
+                    "revision_id": entry.name,
+                    "status": payload.get("status"),
+                    "analysis_conclusion": payload.get("analysis_conclusion"),
+                }
+            )
+    return revisions
+
+
 def write_json_file(path: Path, payload: Dict[str, Any]) -> None:
     """Write JSON payload atomically via unique temp file + rename."""
+    def decimal_default(value):
+        from decimal import Decimal
+
+        if isinstance(value, Decimal) and value.is_finite():
+            return str(value)
+        raise TypeError(f"Unsupported JSON value: {type(value).__name__}")
+
     tmp_fd = None
     tmp_path = None
     try:
@@ -284,7 +513,7 @@ def write_json_file(path: Path, payload: Dict[str, Any]) -> None:
             suffix=".tmp", dir=str(path.parent)
         )
         tmp_path = Path(tmp_name)
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        data = json.dumps(payload, ensure_ascii=False, default=decimal_default).encode("utf-8")
         os.write(tmp_fd, data)
         os.fsync(tmp_fd)
         os.close(tmp_fd)
@@ -358,31 +587,21 @@ def get_ignored_issues_path(job_dir: Path) -> Path:
 
 
 def read_ignored_issues_payload(job_dir: Path) -> Dict[str, Any]:
-    payload = read_json_file(get_ignored_issues_path(job_dir), default={})
-    return payload if isinstance(payload, dict) else {}
+    """Compatibility view of the authoritative, current-version workflow decisions."""
+    from src.services.issue_workflow_store import get_job_ignored_issue_ids
+
+    return {"issue_ids": sorted(get_job_ignored_issue_ids(job_dir.name)), "authority": "workflow"}
 
 
 def read_ignored_issue_ids(job_dir: Path) -> Set[str]:
-    payload = read_ignored_issues_payload(job_dir)
-    raw_ids = payload.get("issue_ids")
-    if not isinstance(raw_ids, list):
-        return set()
-    ignored: Set[str] = set()
-    for item in raw_ids:
-        issue_id = str(item or "").strip()
-        if issue_id:
-            ignored.add(issue_id)
-    return ignored
+    return set(read_ignored_issues_payload(job_dir)["issue_ids"])
 
 
 def write_ignored_issue_ids(job_dir: Path, issue_ids: Set[str]) -> Dict[str, Any]:
-    payload = {
-        "issue_ids": sorted({str(item).strip() for item in issue_ids if str(item).strip()}),
-        "updated_at": time.time(),
-    }
-    write_json_file(get_ignored_issues_path(job_dir), payload)
-    invalidate_job_summary_cache(job_dir.name)
-    return payload
+    """Legacy callers now update workflow; never create ignored_issues.json."""
+    from src.services.issue_workflow_store import set_job_ignored_issue_ids
+
+    return set_job_ignored_issue_ids(job_dir.name, issue_ids)
 
 
 def _filter_issue_list(items: Any, ignored_ids: Set[str]) -> Any:
@@ -508,11 +727,13 @@ def apply_job_issue_filters(job_dir: Path, payload: Dict[str, Any]) -> Dict[str,
     if not isinstance(payload, dict):
         return payload
 
-    ignored_ids = read_ignored_issue_ids(job_dir)
+    from src.services.issue_workflow_store import get_job_ignored_issue_ids
+
+    ignored_ids = get_job_ignored_issue_ids(job_dir.name, payload=payload)
     if not ignored_ids:
         next_payload = dict(payload)
-        next_payload.setdefault("ignored_issue_ids", [])
-        next_payload.setdefault("ignored_issue_count", 0)
+        next_payload["ignored_issue_ids"] = []
+        next_payload["ignored_issue_count"] = 0
         return next_payload
 
     filtered = copy.deepcopy(payload)
@@ -527,40 +748,17 @@ def apply_job_issue_filters(job_dir: Path, payload: Dict[str, Any]) -> Dict[str,
     return filtered
 
 
-def ignore_job_issue(job_id: str, issue_id: str) -> Dict[str, Any]:
-    job_dir = UPLOAD_ROOT / job_id
-    if not job_dir.exists():
-        raise HTTPException(status_code=404, detail="job_id does not exist")
-
-    normalized_issue_id = str(issue_id or "").strip()
-    if not normalized_issue_id:
-        raise HTTPException(status_code=400, detail="issue_id is required")
-
-    status_file = job_dir / "status.json"
-    raw_payload = read_json_file(status_file, default={})
-    known_issue_ids = _collect_issue_ids_from_container(raw_payload)
-    result_payload = raw_payload.get("result")
-    if isinstance(result_payload, dict):
-        known_issue_ids.update(_collect_issue_ids_from_container(result_payload))
-
-    ignored_ids = read_ignored_issue_ids(job_dir)
-    if normalized_issue_id not in known_issue_ids and normalized_issue_id not in ignored_ids:
-        raise HTTPException(status_code=404, detail="issue_id does not exist")
-
-    # 写入必须走 workflow 存储的文件锁（WP3-A）：
-    #   - 复核完成门禁的问题集合同时覆盖"workflow 决定"与"忽略清单"，
-    #     而落编辑锁时的 CAS 也在那把锁之下重算快照；两边各写各的会有窗口；
-    #   - 该锁之下还会先判复核锁：已完成的复核不允许再改问题集合
-    #     （409 review_completed_locked）。
-    # 延迟导入的理由与 _invalidate_reviews_before_analysis_start 相同：
-    # issue_workflow_store 在模块级 import 本模块，这里必须等到调用时再导入。
+def ignore_job_issue(
+    job_id: str, issue_id: str, *, user: Optional[Dict[str, Any]] = None,
+    note: Optional[str] = None,
+) -> Dict[str, Any]:
     from src.services.issue_workflow_store import add_ignored_issue_id
 
-    add_ignored_issue_id(job_id, normalized_issue_id)
-
+    add_ignored_issue_id(job_id, issue_id, user=user, note=note)
     payload = get_job_status_payload(job_id)
-    payload["ignored_issue_id"] = normalized_issue_id
+    payload["ignored_issue_id"] = str(issue_id).strip()
     return payload
+
 
 
 def _enrich_job_organization_context(job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1017,6 +1215,21 @@ def _resolve_department_name(department_id: Optional[str]) -> Optional[str]:
     except Exception:
         logger.exception("Failed to resolve department name for cleanup scope %s", normalized_id)
         return None
+
+
+def resolve_organization_level(organization_id: Any) -> Optional[str]:
+    """组织树中的层级（city/district/department/unit）；查不到返回 None。"""
+    normalized_id = str(organization_id or "").strip()
+    if not normalized_id or not ORG_AVAILABLE:
+        return None
+    try:
+        org = require_org_storage().get_by_id(normalized_id)
+    except Exception:
+        logger.exception("Failed to resolve organization level for %s", normalized_id)
+        return None
+    if org is None:
+        return None
+    return str(getattr(org, "level", "") or "").strip() or None
 
 
 #: 已绑定 Material Slot 的文件版本禁止由旧结构化清理链路删除。
@@ -1536,6 +1749,53 @@ async def cleanup_structured_ingest_history(
     }
 
 
+def _workflow_job_signature(job_id: str) -> str:
+    """本任务复核判定的指纹，作为摘要缓存键的一部分。
+
+    判定事件由 decision_events 与旧格式 issues 两处推导（见 issue_workflow_store
+    的 _normalize_state），因此两处中属于本任务的原始条目都纳入指纹。全局文件
+    变化时只重算一次各任务指纹，未被改动的任务摘要继续命中缓存。
+    """
+    workflow_path = UPLOAD_ROOT / ".issue_workflow.json"
+    try:
+        stat = workflow_path.stat()
+    except OSError:
+        return "missing"
+    file_signature = (str(workflow_path), stat.st_mtime_ns, stat.st_size)
+    with _WORKFLOW_JOB_SIGNATURES_LOCK:
+        if _WORKFLOW_JOB_SIGNATURES["file"] != file_signature:
+            state = read_json_file(workflow_path, default={})
+            grouped: Dict[str, List[str]] = {}
+            if isinstance(state, dict):
+                raw_events = state.get("decision_events")
+                raw_issues = state.get("issues")
+                entries: List[Any] = list(raw_events) if isinstance(raw_events, list) else []
+                if isinstance(raw_issues, dict):
+                    entries.extend(raw_issues.values())
+                for entry in entries:
+                    if isinstance(entry, dict):
+                        grouped.setdefault(str(entry.get("job_id") or "").strip(), []).append(
+                            json.dumps(entry, sort_keys=True, ensure_ascii=False, default=str)
+                        )
+            _WORKFLOW_JOB_SIGNATURES["file"] = file_signature
+            _WORKFLOW_JOB_SIGNATURES["by_job"] = {
+                job: hashlib.sha256("\n".join(items).encode("utf-8")).hexdigest()
+                for job, items in grouped.items()
+            }
+        return _WORKFLOW_JOB_SIGNATURES["by_job"].get(job_id, "")
+
+
+def _remember_job_access_fields(job_id: str, signature: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
+    entry = {
+        "signature": signature,
+        "fields": {key: payload[key] for key in _JOB_ACCESS_FIELD_KEYS if key in payload},
+    }
+    _JOB_ACCESS_FIELDS_CACHE[job_id] = entry
+    if len(_JOB_ACCESS_FIELDS_CACHE) > _JOB_SUMMARY_CACHE_MAX_SIZE:
+        _JOB_ACCESS_FIELDS_CACHE.pop(next(iter(_JOB_ACCESS_FIELDS_CACHE)))
+    return entry
+
+
 def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     """Build a job summary payload for list APIs."""
     status_file = job_dir / "status.json"
@@ -1587,6 +1847,8 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     except Exception:
         pass
 
+    workflow_signature = _workflow_job_signature(job_dir.name)
+
     persistence_path = job_dir / PERSISTENCE_STATE_FILENAME
     try:
         if persistence_path.exists():
@@ -1596,7 +1858,11 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     except Exception:
         pass
 
+    from src.services.check_progress import FILENAME, read_progress
+    progress_path = job_dir / FILENAME
+    progress_mtime = progress_path.stat().st_mtime_ns if progress_path.exists() else 0
     cache_key = (
+        progress_mtime,
         status_mtime_ns,
         status_size,
         filename,
@@ -1606,6 +1872,7 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         structured_size,
         ignored_mtime_ns,
         ignored_size,
+        workflow_signature,
         persistence_mtime_ns,
         persistence_size,
     )
@@ -1615,10 +1882,11 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         if isinstance(cached_summary, dict):
             return dict(cached_summary)
 
-    status_data = _enrich_job_organization_context(
-        job_dir.name,
-        read_json_file(status_file, default={}),
-    )
+    raw_status = read_json_file(status_file, default={})
+    if isinstance(raw_status, dict) and raw_status and status_mtime_ns >= 0:
+        # 摘要已经解析过状态文件，顺手记住授权字段，复核清单的权限判断不必再读一遍。
+        _remember_job_access_fields(job_dir.name, (status_mtime_ns, status_size), raw_status)
+    status_data = _enrich_job_organization_context(job_dir.name, raw_status)
     status_data = apply_job_issue_filters(job_dir, status_data)
     created_ts = get_job_created_timestamp(job_dir, status_data)
     updated_ts = get_job_quick_timestamp(job_dir)
@@ -2011,6 +2279,14 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     if merged_issue_total <= 0:
         merged_issue_total = issue_total
 
+    # Rebuild the visible counts for historical snapshots too. A global
+    # review reason or rounding tip must not inflate the material issue count.
+    from src.schemas.review_report import build_review_report, review_report_counts
+
+    review_counts = review_report_counts(
+        build_review_report(status_data), status_data.get("ignored_issue_ids") or []
+    )
+
     ai_participated = bool(use_ai_assist) and (
         dual_mode_enabled
         or ai_issue_total > 0
@@ -2024,18 +2300,28 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
 
     summary = {
         "job_id": job_dir.name,
+        'analysis_revision': status_data.get('analysis_revision'),
+        'fact_snapshot': result_meta.get('fact_snapshot') or structured_ingest.get('fact_snapshot'),
         "filename": filename,
         "status": status,
         "progress": progress,
         "ts": ts,
         "created_ts": created_ts,
         "updated_ts": updated_ts,
+        # 趋势只使用真实结束时间；运行中的任务不能带入上一轮分析的旧时间。
+        "analysis_finished_ts": (
+            _parse_positive_timestamp(finished_at)
+            if status in {"done", "completed", "review_required", "degraded"}
+            else None
+        ),
         "mode": mode,
         "dual_mode_enabled": dual_mode_enabled,
         "stage": stage,
         # Task 3：per-job 规范阶段进度（见 src/services/pipeline_stages.py）。
         # 未知/尚未写入时保持 None，前端必须显示"—"，不得补 0 或猜测值。
         "stage_progress": status_data.get("stage_progress"),
+        "check_progress": read_progress(job_dir),
+        "ai_profile_id": status_data.get("ai_profile_id"),
         # 失败任务的阶段归因：只在该任务确实失败过时才会有值，正常/进行中任务
         # 该字段不存在（不是显式的 None，是 status_data 里本来就没有这个键）。
         "stage_failed_at": status_data.get("stage_failed_at"),
@@ -2047,6 +2333,7 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
             explicit_conclusion=status_data.get("analysis_conclusion"),
         ),
         "review_reasons": status_data.get("review_reasons") or [],
+        "page_count": get_job_document_page_count(status_data, pdf_path),
         "page_coverage": status_data.get("page_coverage"),
         "scanned_page_count": status_data.get("scanned_page_count"),
         "report_year": report_year,
@@ -2058,9 +2345,12 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "issue_error": issue_error,
         "issue_warn": issue_warn,
         "issue_info": issue_info,
-        # 与 evidence_guard.count_formal_findings 同口径的显式字段：
-        # issue_total 已排除降级项，这里再单独暴露一份，便于下游明确引用口径。
-        "formal_issue_total": issue_total,
+        # 正式问题和可见材料问题分别计数，均以当前规范报告为准。
+        "formal_issue_total": review_counts["formal_issue_total"],
+        "review_issue_total": review_counts["review_issue_total"],
+        "review_candidate_total": review_counts["review_candidate_total"],
+        "tip_total": review_counts["tip_total"],
+        "review_notice_total": review_counts["review_notice_total"],
         "degraded_issue_total": degraded_issue_total,
         "has_issues": issue_total > 0,
         "merged_issue_total": merged_issue_total,
@@ -2128,6 +2418,22 @@ def iter_job_dirs() -> List[Path]:
         and not path.name.startswith(".")
         and _looks_like_job_dir(path)
     ]
+
+
+def warm_job_list_caches() -> int:
+    """预热任务摘要与授权字段缓存，返回处理的任务数。
+
+    冷缓存时第一次任务列表/复核清单请求要解析全部 status.json（277 个任务实测约 8 秒），
+    启动后在后台线程先做一遍，用户的第一次请求就能直接命中缓存。单个任务失败不影响其他任务。
+    """
+    count = 0
+    for job_dir in iter_job_dirs():
+        try:
+            collect_job_summary(job_dir)
+            count += 1
+        except Exception:
+            logger.exception("Failed to warm job summary cache for %s", job_dir.name)
+    return count
 
 
 def _looks_like_job_dir(path: Path) -> bool:
@@ -2335,6 +2641,30 @@ def get_pdf_page_count(pdf_path: Path) -> int:
         document.close()
 
 
+def get_job_document_page_count(payload: Dict[str, Any], pdf_path: Optional[Path] = None) -> Optional[int]:
+    """Return physical PDF pages; scanned pages and finding pages are not totals."""
+    if pdf_path is not None:
+        try:
+            count = get_pdf_page_count(pdf_path)
+            if count > 0:
+                return count
+        except Exception:
+            pass
+    result = payload.get("result")
+    meta = result.get("meta") if isinstance(result, dict) else {}
+    meta = meta if isinstance(meta, dict) else {}
+    extraction = meta.get("page_extraction")
+    extraction = extraction if isinstance(extraction, dict) else {}
+    for value in (meta.get("pages"), extraction.get("page_count"), payload.get("page_count")):
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int) and value > 0:
+            return value
+        if isinstance(value, str) and value.strip().isdigit() and int(value.strip()) > 0:
+            return int(value.strip())
+    return None
+
+
 def find_duplicate_upload(
     *,
     checksum: str,
@@ -2513,7 +2843,54 @@ async def store_upload_file(
     return {**payload, **extract_job_status_context(status_payload)}
 
 
-def get_job_status_payload(job_id: str) -> Dict[str, Any]:
+def get_job_access_payload(job_id: str) -> Dict[str, Any]:
+    """授权只读取任务归属；不能为检查权限解析 PDF、定位证据或重建报告。"""
+    job_dir = UPLOAD_ROOT / job_id
+    if not job_dir.is_dir():
+        raise HTTPException(status_code=404, detail="job_id does not exist")
+    status_file = job_dir / "status.json"
+    if not status_file.exists():
+        return {"job_id": job_id, "status": "processing", "progress": 0}
+    try:
+        payload = json.loads(status_file.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("invalid job status")
+        # 保留详情所用的组织绑定优先级及 created_by，权限口径不变。
+        return _enrich_job_organization_context(job_id, payload)
+    except Exception as error:
+        raise HTTPException(status_code=500, detail="Failed to read job access context") from error
+
+
+def get_job_access_context(job_id: str) -> Dict[str, Any]:
+    """只含授权字段（归属组织、上传人）的任务上下文，判定口径同 get_job_access_payload。
+
+    原始字段按 status.json 的 (mtime, size) 缓存；组织绑定仍每次现查，改链或改名
+    立即生效。目录缺失、状态文件缺失或损坏的处理与 get_job_access_payload 一致。
+    """
+    job_dir = UPLOAD_ROOT / job_id
+    if not job_dir.is_dir():
+        raise HTTPException(status_code=404, detail="job_id does not exist")
+    status_file = job_dir / "status.json"
+    try:
+        stat = status_file.stat()
+    except FileNotFoundError:
+        return {"job_id": job_id, "status": "processing", "progress": 0}
+    except OSError as error:
+        raise HTTPException(status_code=500, detail="Failed to read job access context") from error
+    signature = (stat.st_mtime_ns, stat.st_size)
+    cached = _JOB_ACCESS_FIELDS_CACHE.get(job_id)
+    if cached is None or cached.get("signature") != signature:
+        try:
+            payload = json.loads(status_file.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("invalid job status")
+        except Exception as error:
+            raise HTTPException(status_code=500, detail="Failed to read job access context") from error
+        cached = _remember_job_access_fields(job_id, signature, payload)
+    return _enrich_job_organization_context(job_id, dict(cached["fields"]))
+
+
+def get_job_status_payload(job_id: str, *, apply_issue_filters: bool = True) -> Dict[str, Any]:
     """Read job status payload by id."""
     job_dir = UPLOAD_ROOT / job_id
     if not job_dir.exists():
@@ -2523,12 +2900,37 @@ def get_job_status_payload(job_id: str) -> Dict[str, Any]:
         return {"job_id": job_id, "status": "processing", "progress": 0}
     try:
         payload = json.loads(status_file.read_text(encoding="utf-8"))
+        from src.services.check_progress import read_progress
+        payload["check_progress"] = read_progress(job_dir)
         structured = read_structured_ingest_payload(job_dir)
         if structured:
             payload.setdefault("structured_ingest", structured)
         payload = _enrich_job_organization_context(job_id, payload)
         payload = _lift_result_payload(payload)
-        return apply_job_issue_filters(job_dir, payload)
+        if apply_issue_filters:
+            payload = apply_job_issue_filters(job_dir, payload)
+        try:
+            source_pdf = find_first_pdf(job_dir)
+        except (FileNotFoundError, ValueError, OSError):
+            source_pdf = None
+        payload["page_count"] = get_job_document_page_count(payload, source_pdf)
+        if source_pdf and str(payload.get("status") or "").strip().lower() in TERMINAL_ANALYSIS_STATUSES:
+            try:
+                from src.services.ai_evidence_location import enrich_ai_evidence_locations
+
+                payload = enrich_ai_evidence_locations(payload, source_pdf)
+            except Exception:
+                # 定位失败不影响查看原有结果，也不使用未核验框替代真实证据。
+                logger.exception("AI evidence location recovery failed for job %s", job_id)
+        # The queue summary is rebuilt from the current findings, while older
+        # status.json files may still contain a review_report serialized by a
+        # previous analysis version. Rebuild terminal reports here as well so
+        # detail/status consumers and the queue use the same current source.
+        if str(payload.get("status") or "").strip().lower() in TERMINAL_ANALYSIS_STATUSES:
+            from src.schemas.review_report import build_review_report
+
+            payload["review_report"] = build_review_report(payload)
+        return payload
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to read job status: {e}"
@@ -2649,6 +3051,8 @@ async def start_analysis(
     status_file = job_dir / "status.json"
     body = body or {}
     existing_status = read_json_file(status_file, default={})
+    if existing_status.get('status')in ACTIVE_ANALYSIS_STATUSES:
+        raise HTTPException(409,'job is already queued or being analyzed')
 
     # 分析请求契约（P0，docs/SYSTEM_ISSUES_HANDOFF_2026-09-05.md §3.5）：
     # - mode 只接受 legacy / dual / structured（structured 为历史存储值，
@@ -2659,7 +3063,7 @@ async def start_analysis(
     # - 布尔参数统一经 normalize_request_flag 真值归一（字符串 "true"/"1"
     #   与 True 等价、未知取值 422），杜绝 is True 身份判断被字符串绕过；
     # - legacy 必须启用本地规则（否则无任何检查能力）；
-    # - dual + use_ai_assist=true 才运行 AI；dual 默认请求 AI。
+    # - dual + use_ai_assist=true 才运行 AI；未传开关时读取系统设置中的默认值。
     mode = str(body.get("mode", "legacy")).strip().lower() or "legacy"
     if mode not in {"legacy", "dual", "structured"}:
         raise HTTPException(
@@ -2697,8 +3101,23 @@ async def start_analysis(
                     "enable it or use mode='legacy'"
                 ),
             )
-        use_ai_assist = True if ai_assist_flag is None else ai_assist_flag
+        from src.services.ai_model_settings import capabilities
+        use_ai_assist = capabilities()["default_use_ai"] if ai_assist_flag is None else ai_assist_flag
     use_local_rules = True if local_rules_flag is None else local_rules_flag
+    if not use_local_rules and not use_ai_assist:
+        raise HTTPException(422, "请至少启用本地检查或大模型检查")
+    ai_profile_id = body.get("ai_profile_id") or None
+    ai_runtime = None
+    selected_model = None
+    if use_ai_assist:
+        from src.services.ai_model_settings import resolve_runtime
+        try:
+            ai_runtime = resolve_runtime(ai_profile_id)
+            if ai_runtime:
+                ai_profile_id = ai_runtime["id"]
+                selected_model = ai_runtime["model"]
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     fiscal_year = (
         body.get("fiscal_year")
         if body.get("fiscal_year") is not None
@@ -2769,6 +3188,8 @@ async def start_analysis(
         "message": "analysis task queued",
         "use_local_rules": use_local_rules,
         "use_ai_assist": use_ai_assist,
+        "ai_profile_id": ai_profile_id,
+        "ai_configuration": {key: ai_runtime[key] for key in ("id", "name", "model", "revision")} if ai_runtime else None,
         "mode": mode,
         "fiscal_year": fiscal_year,
         "doc_type": doc_type,
@@ -2778,8 +3199,14 @@ async def start_analysis(
         "report_kind": report_kind,
         "ts": time.time(),
     }
+    from src.services.legacy_history_guard import archive_before_reanalysis
+    archive_before_reanalysis(job_dir,REANALYZE_EPHEMERAL_FILES)
     try:
+        from src.services.ai_model_settings import save_job_snapshot
+        save_job_snapshot(job_dir, ai_runtime)
         write_json_file(status_file, payload)
+        from src.services.check_progress import initialize_progress
+        initialize_progress(job_id, use_local_rules, use_ai_assist, selected_model)
         # WP3-A：任何一次分析启动之前，先让上一次的复核立刻失效。
         # 挂在这里而不是某个具体路由，是为了让"从队列点开始分析"这条路径
         # 也走同一套失效逻辑（详见 _invalidate_reviews_before_analysis_start）。
@@ -2824,7 +3251,7 @@ async def reanalyze_job(
         raise HTTPException(status_code=404, detail="source job_id does not exist")
 
     try:
-        find_first_pdf(source_job_dir)
+        protected_source_pdf=find_first_pdf(source_job_dir).resolve()
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="source job PDF does not exist") from exc
 
@@ -2833,28 +3260,25 @@ async def reanalyze_job(
     if current_status in ACTIVE_ANALYSIS_STATUSES:
         raise HTTPException(status_code=409, detail="job is already being analyzed")
 
-    for filename in REANALYZE_EPHEMERAL_FILES:
-        target_path = source_job_dir / filename
-        try:
-            if target_path.exists():
-                target_path.unlink()
-        except Exception:
-            logger.exception("Failed to clear stale reanalyze artifact %s", target_path)
-
     body = dict(body or {})
     if "use_local_rules" not in body:
         body["use_local_rules"] = bool(source_status.get("use_local_rules", True))
     if "mode" not in body:
-        body["mode"] = str(source_status.get("mode") or "legacy")
+        body["mode"] = "dual" if normalize_request_flag(body.get("use_ai_assist"), "use_ai_assist") is True else str(source_status.get("mode") or "legacy")
     if "use_ai_assist" not in body:
-        # 请求契约：legacy 不请求 AI，只有 dual 才沿用/默认请求 AI；
-        # 否则旧任务（legacy + use_ai_assist=true 旧默认值）重分析会直接 422。
-        # structured 模式保留原值（历史行为，结构化入库不消耗该标志）。
+        # UI 未显式指定时，dual 重分析遵循当前系统默认模型设置；这样切换模型后
+        # 可直接重跑旧任务。若系统默认关闭，则保留任务之前的 AI 选择。
+        # legacy 不请求 AI；structured 模式保留原值（结构化入库不消耗该标志）。
         # 历史 status.json 均为布尔值（分析请求经 normalize_request_flag
         # 归一后持久化），此处 bool() 是防御性收尾而非真值解析。
         resolved_mode = str(body["mode"])
         if resolved_mode == "dual":
-            body["use_ai_assist"] = bool(source_status.get("use_ai_assist", True))
+            from src.services.ai_model_settings import capabilities
+
+            body["use_ai_assist"] = bool(
+                capabilities()["default_use_ai"]
+                or source_status.get("use_ai_assist", False)
+            )
         elif resolved_mode == "legacy":
             body["use_ai_assist"] = False
         else:
@@ -2865,6 +3289,35 @@ async def reanalyze_job(
         body["doc_type"] = source_status.get("doc_type")
     if "report_year" not in body and source_status.get("report_year") is not None:
         body["report_year"] = source_status.get("report_year")
+
+    # 配置不可用时保留已有结果和进度，避免一次失败的模型切换清掉旧产物。
+    selected_mode = str(body.get("mode") or "legacy").strip().lower()
+    if selected_mode not in {"legacy", "dual", "structured"}:
+        raise HTTPException(422, "无效的分析模式")
+    ai_flag = normalize_request_flag(body.get("use_ai_assist"), "use_ai_assist")
+    local_flag = normalize_request_flag(body.get("use_local_rules"), "use_local_rules")
+    if ai_flag:
+        if selected_mode != "dual":
+            raise HTTPException(422, "大模型检查需要使用 dual 模式")
+        from src.services.ai_model_settings import resolve_runtime
+        try:
+            resolve_runtime(body.get("ai_profile_id") or None)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    if selected_mode == "dual" and not get_settings().is_dual_mode_enabled():
+        raise HTTPException(422, "双模式检查未启用")
+    if local_flag is False and (selected_mode == "legacy" or not ai_flag):
+        raise HTTPException(422, "请至少启用本地检查或大模型检查")
+    from src.services.legacy_history_guard import archive_before_reanalysis
+    archive_before_reanalysis(source_job_dir,REANALYZE_EPHEMERAL_FILES)
+    for filename in REANALYZE_EPHEMERAL_FILES:
+        target_path = source_job_dir / filename
+        if target_path.resolve()==protected_source_pdf:
+            continue  # 用户原件可以就叫 report.pdf / annotated.pdf，不能当派生产物删掉。
+        try:
+            target_path.unlink(missing_ok=True)
+        except Exception:
+            logger.exception("Failed to clear stale reanalyze artifact %s", target_path)
 
     started = await start_analysis(source_job_id, body)
     return {
@@ -3100,6 +3553,19 @@ async def reanalyze_all_jobs(body: Optional[Dict[str, Any]] = None) -> Dict[str,
     }
 
 
+def _organization_batch_job_ids(body: Dict[str, Any]) -> Optional[Set[str]]:
+    """执行时可限定预览确认的任务，避免处理预览之后新上传的报告。"""
+    if "job_ids" not in body:
+        return None
+    values = body["job_ids"]
+    if not isinstance(values, list) or any(
+        not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value)
+        for value in values
+    ):
+        raise HTTPException(status_code=422, detail="job_ids 必须是有效任务 ID 列表")
+    return set(values)
+
+
 def rematch_job_organizations(body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Preview or apply organization re-matching for existing jobs."""
     if not ORG_AVAILABLE:
@@ -3110,6 +3576,8 @@ def rematch_job_organizations(body: Optional[Dict[str, Any]] = None) -> Dict[str
     request_body = dict(body or {})
     dry_run = bool(request_body.get("dry_run", True))
     include_manual = bool(request_body.get("include_manual", False))
+    only_unassigned = bool(request_body.get("only_unassigned", False))
+    scoped_job_ids = _organization_batch_job_ids(request_body)
 
     try:
         minimum_confidence = float(request_body.get("minimum_confidence", 0.6))
@@ -3178,33 +3646,34 @@ def rematch_job_organizations(body: Optional[Dict[str, Any]] = None) -> Dict[str
     def _pick_best_match(pdf_path: Path) -> tuple[Optional[Any], float]:
         nonlocal fast_path_hits, pdf_text_fallback_hits
 
-        filename_matches = matcher.suggest_matches(pdf_path.name, "", top_n=1)
-        if filename_matches:
-            candidate, confidence = filename_matches[0]
-            numeric_confidence = round(float(confidence), 4)
-            if numeric_confidence >= minimum_confidence:
-                fast_path_hits += 1
-                return candidate, numeric_confidence
-
         first_page_text = extract_pdf_first_page_text(pdf_path)
-        pdf_text_fallback_hits += 1
-        matches_with_text = matcher.suggest_matches(pdf_path.name, first_page_text, top_n=1)
-        if not matches_with_text:
-            return None, 0.0
-        candidate, confidence = matches_with_text[0]
+        if first_page_text.strip():
+            pdf_text_fallback_hits += 1
+        else:
+            fast_path_hits += 1
+        candidate, confidence = matcher.match(pdf_path.name, first_page_text)
         return candidate, round(float(confidence), 4)
 
     for job_dir in sorted(iter_job_dirs(), key=get_job_quick_timestamp, reverse=True):
+        if scoped_job_ids is not None and job_dir.name not in scoped_job_ids:
+            continue
         scanned_count += 1
         job_id = job_dir.name
         try:
             pdf_path = find_first_pdf(job_dir)
             status_payload = _enrich_job_organization_context(
                 job_id,
-                get_job_status_payload(job_id),
+                read_json_file(job_dir / "status.json", default={}),
             )
 
+            if status_payload.get("status") in ACTIVE_ANALYSIS_STATUSES:
+                skipped.append({"job_id": job_id, "filename": pdf_path.name, "reason": "analysis_active", "detail": "报告正在分析，待结束后再匹配归属"})
+                continue
+
             current_org_id = str(status_payload.get("organization_id") or "").strip()
+            if only_unassigned and current_org_id:
+                skipped.append({"job_id": job_id, "filename": pdf_path.name, "reason": "already_assigned", "detail": "报告已有归属，本次只处理待确认归属报告"})
+                continue
             current_match_type = str(
                 status_payload.get("organization_match_type") or ""
             ).strip().lower()
@@ -3240,7 +3709,7 @@ def rematch_job_organizations(body: Optional[Dict[str, Any]] = None) -> Dict[str
                         "job_id": job_id,
                         "filename": pdf_path.name,
                         "reason": "no_match",
-                        "detail": "没有找到可用的组织匹配建议",
+                        "detail": "未找到归属明确的组织，请核对封面名称、目录层级或同名候选",
                         "current": _serialize_org_brief(
                             current_org_id,
                             match_type=current_match_type or None,
@@ -3376,6 +3845,7 @@ def rematch_job_organizations(body: Optional[Dict[str, Any]] = None) -> Dict[str
         "status": "preview" if dry_run else "applied",
         "dry_run": dry_run,
         "include_manual": include_manual,
+        "only_unassigned": only_unassigned,
         "minimum_confidence": minimum_confidence,
         "department_id": scoped_department_id or None,
         "department_name": scoped_department_name or None,
@@ -3403,6 +3873,8 @@ def repair_missing_job_organization_links(
 
     request_body = dict(body or {})
     dry_run = bool(request_body.get("dry_run", True))
+    only_unassigned = bool(request_body.get("only_unassigned", False))
+    scoped_job_ids = _organization_batch_job_ids(request_body)
 
     try:
         minimum_confidence = float(request_body.get("minimum_confidence", 0.6))
@@ -3463,32 +3935,31 @@ def repair_missing_job_organization_links(
     def _pick_best_match(pdf_path: Path) -> tuple[Optional[Any], float]:
         nonlocal fast_path_hits, pdf_text_fallback_hits
 
-        filename_matches = matcher.suggest_matches(pdf_path.name, "", top_n=1)
-        if filename_matches:
-            candidate, confidence = filename_matches[0]
-            numeric_confidence = round(float(confidence), 4)
-            if numeric_confidence >= minimum_confidence:
-                fast_path_hits += 1
-                return candidate, numeric_confidence
-
         first_page_text = extract_pdf_first_page_text(pdf_path)
-        pdf_text_fallback_hits += 1
-        matches_with_text = matcher.suggest_matches(pdf_path.name, first_page_text, top_n=1)
-        if not matches_with_text:
-            return None, 0.0
-
-        candidate, confidence = matches_with_text[0]
+        if first_page_text.strip():
+            pdf_text_fallback_hits += 1
+        else:
+            fast_path_hits += 1
+        candidate, confidence = matcher.match(pdf_path.name, first_page_text)
         return candidate, round(float(confidence), 4)
 
     for job_dir in sorted(iter_job_dirs(), key=get_job_quick_timestamp, reverse=True):
+        if scoped_job_ids is not None and job_dir.name not in scoped_job_ids:
+            continue
         scanned_count += 1
         job_id = job_dir.name
         try:
             pdf_path = find_first_pdf(job_dir)
             status_payload = _enrich_job_organization_context(
                 job_id,
-                get_job_status_payload(job_id),
+                read_json_file(job_dir / "status.json", default={}),
             )
+            if status_payload.get("status") in ACTIVE_ANALYSIS_STATUSES:
+                skipped.append({"job_id": job_id, "filename": pdf_path.name, "reason": "analysis_active", "detail": "报告正在分析，待结束后再匹配归属"})
+                continue
+            if only_unassigned and status_payload.get("organization_id"):
+                skipped.append({"job_id": job_id, "filename": pdf_path.name, "reason": "already_assigned", "detail": "报告已有归属，本次只处理待确认归属报告"})
+                continue
 
             department = resolve_job_department_context(
                 job_id,
@@ -3548,6 +4019,10 @@ def repair_missing_job_organization_links(
                 )
                 continue
 
+            if current_match_type == "manual":
+                skipped.append({"job_id": job_id, "filename": pdf_path.name, "reason": "manual_locked", "detail": "当前为手动关联，请人工确认后调整"})
+                continue
+
             target_org_id = ""
             target_confidence = current_confidence if current_confidence > 0 else 1.0
             action = ""
@@ -3566,7 +4041,7 @@ def repair_missing_job_organization_links(
                             "job_id": job_id,
                             "filename": pdf_path.name,
                             "reason": "no_match",
-                            "detail": "unable to infer organization from filename or first-page text",
+                            "detail": "未找到归属明确的组织，请核对封面名称、目录层级或同名候选",
                             "current": _serialize_org_brief(
                                 linked_org_id or status_org_id,
                                 match_type=current_match_type or None,
@@ -3676,6 +4151,7 @@ def repair_missing_job_organization_links(
     return {
         "status": "preview" if dry_run else "applied",
         "dry_run": dry_run,
+        "only_unassigned": only_unassigned,
         "minimum_confidence": minimum_confidence,
         "department_id": scoped_department_id or None,
         "department_name": scoped_department_name or None,

@@ -29,6 +29,8 @@ import StructuredCleanupDialog, {
 } from "@/components/StructuredCleanupDialog";
 import AnalysisResultsPanel from "@/components/admin/AnalysisResultsPanel";
 import UserManagementPanel from "@/components/admin/UserManagementPanel";
+import AIModelSettingsPanel from "@/components/admin/AIModelSettingsPanel";
+import { useAIAnalysisOptions } from "@/components/AIAnalysisOptions";
 import type { OrganizationRecord } from "@/lib/uiAdapters";
 
 type AdminSection =
@@ -54,6 +56,7 @@ type Notice = {
 };
 
 type RematchPreviewPayload = {
+  dry_run?: boolean;
   candidate_count?: number;
   updated_count?: number;
   skipped_count?: number;
@@ -66,6 +69,7 @@ type RematchPreviewPayload = {
 };
 
 type LinkRepairPreviewPayload = {
+  dry_run?: boolean;
   candidate_count?: number;
   repaired_count?: number;
   linked_from_status_count?: number;
@@ -100,12 +104,16 @@ type ConfigItem = {
   data: Record<string, unknown>;
 };
 
+/** 组织列表的读取状态：读取中或失败时概览不得把空数组当成"0 个组织"展示。 */
+export type OrganizationsLoadStatus = "loading" | "ready" | "failed";
+
 type SystemManagementPanelProps = {
   organizations: OrganizationRecord[];
+  organizationsStatus?: OrganizationsLoadStatus;
   onRefresh?: () => Promise<void> | void;
 };
 
-const TERMINAL_STATUSES = new Set(["done", "completed", "error", "failed"]);
+const TERMINAL_STATUSES = new Set(["done", "completed", "review_required", "degraded", "error", "failed", "cancelled"]);
 
 const SECTIONS: Array<{
   id: AdminSection;
@@ -120,7 +128,7 @@ const SECTIONS: Array<{
   { id: "analysis", label: "分析结果", description: "AI 与规则分析结果入库查看", icon: FileText },
   { id: "rules", label: "规则包与口径", description: "规则包版本、启用状态和说明", icon: KeyRound },
   { id: "mappings", label: "材料类型与字段映射", description: "材料类型、字段别名和表格映射", icon: SlidersHorizontal },
-  { id: "settings", label: "系统参数与导出模板", description: "参数记录和导出模板配置", icon: FileCog },
+  { id: "settings", label: "大模型与系统参数", description: "大模型配置、系统参数和导出模板", icon: FileCog },
 ];
 
 function cn(...items: Array<string | false | null | undefined>): string {
@@ -239,7 +247,8 @@ function ResultList({
   items: Array<Record<string, unknown>>;
   emptyText: string;
 }) {
-  const rows = items.slice(0, 8);
+  const [showAll, setShowAll] = useState(false);
+  const rows = showAll ? items : items.slice(0, 8);
   return (
     <div className="rounded-md border border-slate-200 bg-white">
       <div className="border-b border-slate-200 px-4 py-3 text-sm font-black text-slate-900">
@@ -257,9 +266,18 @@ function ResultList({
               <div className="mt-1 text-slate-600">
                 {String(item.detail || item.reason || item.action || item.status || "没有更多说明")}
               </div>
+              {item.suggested && typeof item.suggested === "object" ? <div className="mt-1 text-slate-700">
+                建议归属：{Array.from(new Set([
+                  (item.suggested as Record<string, unknown>).department_name,
+                  (item.suggested as Record<string, unknown>).organization_name,
+                ].filter(Boolean).map(String))).join(" / ")}
+              </div> : null}
             </div>
           ))
         )}
+        {items.length > 8 ? <button type="button" className="text-primary-700" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "收起" : `查看全部 ${items.length} 项`}
+        </button> : null}
       </div>
     </div>
   );
@@ -267,13 +285,21 @@ function ResultList({
 
 function OverviewSection({
   organizations,
+  organizationsStatus,
   setSection,
 }: {
   organizations: OrganizationRecord[];
+  organizationsStatus: OrganizationsLoadStatus;
   setSection: (section: AdminSection) => void;
 }) {
-  const totalIssues = organizations.reduce((sum, org) => sum + Number(org.issue_count ?? 0), 0);
-  const totalJobs = organizations.reduce((sum, org) => sum + Number(org.job_count ?? 0), 0);
+  // 概览不再展示"关联任务 / 待处理问题 / 配置域"三个数：组织列表按 stats=none 读取，
+  // 不含任务数与问题数，汇总结果恒为 0；"配置域"是写死的常量。没有真实来源的数不展示。
+  const organizationMetric =
+    organizationsStatus === "ready"
+      ? `${organizations.length} 个组织`
+      : organizationsStatus === "failed"
+        ? "组织读取失败"
+        : "组织读取中…";
   const cards: Array<{
     id: AdminSection;
     icon: typeof Settings;
@@ -281,36 +307,17 @@ function OverviewSection({
     desc: string;
     metric: string;
   }> = [
-    { id: "organization", icon: FolderTree, title: "组织与单位", desc: "维护部门、单位、导入模板和删除影响范围。", metric: `${organizations.length} 个组织` },
+    { id: "organization", icon: FolderTree, title: "组织与单位", desc: "维护部门、单位、导入模板和删除影响范围。", metric: organizationMetric },
     { id: "users", icon: UserCog, title: "用户与权限", desc: "管理账号、管理员角色、启停和密码重置。", metric: "账号权限" },
-    { id: "operations", icon: Database, title: "运维操作", desc: "上传、重分析、缺失关联修复和结构化清理。", metric: `${totalJobs} 个任务` },
-    { id: "analysis", icon: FileText, title: "分析结果", desc: "查看 AI、规则与结构化入库结果。", metric: `${totalIssues} 个问题` },
+    { id: "operations", icon: Database, title: "运维操作", desc: "上传、重分析、缺失关联修复和结构化清理。", metric: "上传与修复" },
+    { id: "analysis", icon: FileText, title: "分析结果", desc: "查看 AI、规则与结构化入库结果。", metric: "结果查询" },
     { id: "rules", icon: KeyRound, title: "规则包与口径", desc: "维护规则包说明、版本和启用状态。", metric: "配置留档" },
     { id: "mappings", icon: SlidersHorizontal, title: "材料类型与字段映射", desc: "维护材料类型、字段别名和表格映射。", metric: "配置留档" },
-    { id: "settings", icon: FileCog, title: "系统参数与导出模板", desc: "维护参数和导出模板描述。", metric: "配置留档" },
+    { id: "settings", icon: FileCog, title: "大模型与系统参数", desc: "配置模型和导出模板。", metric: "模型配置" },
   ];
 
   return (
     <div className="space-y-5">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-md border border-slate-200 bg-white p-5">
-          <div className="text-sm text-slate-500">组织数量</div>
-          <div className="mt-2 text-3xl font-black text-slate-950">{organizations.length}</div>
-        </div>
-        <div className="rounded-md border border-slate-200 bg-white p-5">
-          <div className="text-sm text-slate-500">关联任务</div>
-          <div className="mt-2 text-3xl font-black text-slate-950">{totalJobs}</div>
-        </div>
-        <div className="rounded-md border border-slate-200 bg-white p-5">
-          <div className="text-sm text-slate-500">待处理问题</div>
-          <div className="mt-2 text-3xl font-black text-red-600">{totalIssues}</div>
-        </div>
-        <div className="rounded-md border border-slate-200 bg-white p-5">
-          <div className="text-sm text-slate-500">配置域</div>
-          <div className="mt-2 text-3xl font-black text-blue-700">4</div>
-        </div>
-      </div>
-
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {cards.map((card) => {
           const Icon = card.icon;
@@ -359,7 +366,11 @@ function OrganizationSection({
   };
 
   const handleCreateDepartment = async () => {
-    const parentOrg = selectedOrg && selectedOrg.level !== "unit" ? selectedOrg : null;
+    if (selectedOrg && !["city", "district"].includes(selectedOrg.level)) {
+      setNotice({ tone: "error", message: "部门下请新增单位；新建部门请先选择市、区或全部组织。" });
+      return;
+    }
+    const parentOrg = selectedOrg;
     const name = window.prompt(
       parentOrg ? `请输入“${parentOrg.name}”下级部门名称` : "请输入新部门名称",
     );
@@ -490,7 +501,8 @@ function OrganizationSection({
     }
   };
 
-  const createDepartmentParent = selectedOrg && selectedOrg.level !== "unit" ? selectedOrg : null;
+  const canCreateDepartment = !selectedOrg || ["city", "district"].includes(selectedOrg.level);
+  const createDepartmentParent = canCreateDepartment ? selectedOrg : null;
 
   return (
     <div className="space-y-4">
@@ -515,8 +527,9 @@ function OrganizationSection({
                   type="button"
                   onClick={() => void handleCreateDepartment()}
                   data-testid="admin-org-create-department"
-                  title={createDepartmentParent ? `在“${createDepartmentParent.name}”下新建部门` : "新建顶层部门"}
-                  className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700"
+                  disabled={!canCreateDepartment}
+                  title={!canCreateDepartment ? "部门下请新增单位；请选择市、区或全部组织后新建部门" : createDepartmentParent ? `在“${createDepartmentParent.name}”下新建部门` : "新建顶层部门"}
+                  className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Plus className="h-4 w-4" />
                   {createDepartmentParent ? "新建下级部门" : "新建部门"}
@@ -569,8 +582,7 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
   const [notice, setNotice] = useState<Notice | null>(null);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isRunningReanalyzeAll, setIsRunningReanalyzeAll] = useState(false);
-  const [reanalyzeUseAiAssist, setReanalyzeUseAiAssist] = useState(true);
-  const [hasConfiguredReanalyzeUseAiAssist, setHasConfiguredReanalyzeUseAiAssist] = useState(false);
+  const aiOptions = useAIAnalysisOptions();
   const [isRepairingLinks, setIsRepairingLinks] = useState(false);
   const [isRematching, setIsRematching] = useState(false);
   const [isLoadingCleanupPreview, setIsLoadingCleanupPreview] = useState(false);
@@ -633,10 +645,11 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
 
   const reanalyzeAllRequestBody: Record<string, unknown> = {
     latest_per_department: true,
+    use_local_rules: true,
   };
-  if (hasConfiguredReanalyzeUseAiAssist) {
-    reanalyzeAllRequestBody.use_local_rules = true;
-    reanalyzeAllRequestBody.use_ai_assist = reanalyzeUseAiAssist;
+  if (aiOptions.capabilities) {
+    reanalyzeAllRequestBody.use_ai_assist = aiOptions.enabled;
+    reanalyzeAllRequestBody.ai_profile_id = aiOptions.enabled ? aiOptions.profileId || null : null;
   }
 
   const runReanalyzeAll = async () => {
@@ -663,19 +676,24 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
   };
 
   const previewRepairLinks = async (dryRun: boolean) => {
+    if (!dryRun && repairPreview?.dry_run !== true) return;
     setIsRepairingLinks(true);
     setNotice(null);
     try {
-      const { response, payload } = await postJson<LinkRepairPreviewPayload>("/api/jobs/repair-missing-links", { dry_run: dryRun });
+      const { response, payload } = await postJson<LinkRepairPreviewPayload>("/api/jobs/repair-missing-links", {
+        dry_run: dryRun,
+        only_unassigned: true,
+        ...(!dryRun ? { job_ids: (repairPreview?.repairs ?? []).map((item) => String(item.job_id)) } : {}),
+      });
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
       setRepairPreview(payload);
       setNotice({
-        tone: dryRun ? "info" : "success",
+        tone: dryRun ? "info" : payload.failed_count ? "error" : "success",
         message: dryRun
-          ? `已生成缺失关联预览，共 ${payload.candidate_count ?? 0} 条候选记录。`
-          : `缺失关联修复完成，成功修复 ${payload.repaired_count ?? 0} 条记录。`,
+          ? `已预览 ${payload.candidate_count ?? 0} 条待归属记录，尚未保存归属。核对下方建议后点击“正式修复”。`
+          : `已保存 ${payload.repaired_count ?? 0} 条报告归属，失败 ${payload.failed_count ?? 0} 条。`,
       });
       if (!dryRun) {
         await onRefresh?.();
@@ -688,19 +706,24 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
   };
 
   const previewRematchOrganizations = async (dryRun: boolean) => {
+    if (!dryRun && rematchPreview?.dry_run !== true) return;
     setIsRematching(true);
     setNotice(null);
     try {
-      const { response, payload } = await postJson<RematchPreviewPayload>("/api/jobs/rematch-organizations", { dry_run: dryRun });
+      const { response, payload } = await postJson<RematchPreviewPayload>("/api/jobs/rematch-organizations", {
+        dry_run: dryRun,
+        only_unassigned: true,
+        ...(!dryRun ? { job_ids: (rematchPreview?.matches ?? []).map((item) => String(item.job_id)) } : {}),
+      });
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
       setRematchPreview(payload);
       setNotice({
-        tone: dryRun ? "info" : "success",
+        tone: dryRun ? "info" : payload.failed_count ? "error" : "success",
         message: dryRun
-          ? `已生成组织重匹配预览，共 ${payload.candidate_count ?? 0} 条候选记录。`
-          : `组织重匹配完成，更新 ${payload.updated_count ?? 0} 条记录。`,
+          ? `已预览 ${payload.candidate_count ?? 0} 条待归属记录，尚未保存归属。核对下方建议后点击“正式执行”。`
+          : `已保存 ${payload.updated_count ?? 0} 条报告归属，失败 ${payload.failed_count ?? 0} 条。`,
       });
       if (!dryRun) {
         await onRefresh?.();
@@ -777,15 +800,16 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
           <div className="p-5">
             <p className="text-sm leading-6 text-slate-600">触发各组织当前最新报告重新分析，并显示实时状态。</p>
             <ReanalyzeAiToggle
-              checked={reanalyzeUseAiAssist}
-              onChange={(checked) => {
-                setReanalyzeUseAiAssist(checked);
-                setHasConfiguredReanalyzeUseAiAssist(true);
-              }}
-              disabled={isRunningReanalyzeAll}
+              checked={aiOptions.enabled}
+              onChange={aiOptions.setEnabled}
+              disabled={isRunningReanalyzeAll || !aiOptions.capabilities?.enabled}
               className="mt-4 bg-white"
               testId="admin-reanalyze-ai-toggle"
-              description="按组织批量重分析会使用这个设置；取消勾选后仅本地解析。"
+              description={aiOptions.error || (aiOptions.capabilities?.enabled
+                ? aiOptions.enabled
+                  ? "本次批量重分析将使用系统当前启用的模型；取消勾选后仅执行本地检查。"
+                  : "模型已配置，但本次默认关闭；勾选后批量重分析会调用大模型。"
+                : "当前没有可用的大模型配置，重分析将仅执行本地检查。")}
             />
             <button
               type="button"
@@ -802,12 +826,12 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
 
         <Card title="修复缺失关联">
           <div className="p-5">
-            <p className="text-sm leading-6 text-slate-600">修复磁盘里存在、前台却看不到的报告与组织关系。</p>
+            <p className="text-sm leading-6 text-slate-600">为“待确认归属”的历史报告补充组织关联。先预览并核对建议，再正式保存。</p>
             <div className="mt-5 flex flex-wrap gap-3">
               <button type="button" data-testid="admin-operations-repair-preview" onClick={() => void previewRepairLinks(true)} disabled={isRepairingLinks} className="rounded-md border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700 disabled:opacity-60">
                 预览修复
               </button>
-              <button type="button" data-testid="admin-operations-repair-execute" onClick={() => void previewRepairLinks(false)} disabled={isRepairingLinks} className="rounded-md bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">
+              <button type="button" data-testid="admin-operations-repair-execute" onClick={() => void previewRepairLinks(false)} disabled={isRepairingLinks || repairPreview?.dry_run !== true || !repairPreview.candidate_count} className="rounded-md bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">
                 正式修复
               </button>
             </div>
@@ -816,12 +840,12 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
 
         <Card title="组织重新匹配">
           <div className="p-5">
-            <p className="text-sm leading-6 text-slate-600">在组织导入、改名后批量恢复历史报告的关联结果。</p>
+            <p className="text-sm leading-6 text-slate-600">组织导入后，为“待确认归属”报告重新匹配；已有归属的报告会跳过。预览不会保存归属。</p>
             <div className="mt-5 flex flex-wrap gap-3">
               <button type="button" data-testid="admin-operations-rematch-preview" onClick={() => void previewRematchOrganizations(true)} disabled={isRematching} className="rounded-md border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700 disabled:opacity-60">
                 预览匹配
               </button>
-              <button type="button" data-testid="admin-operations-rematch-execute" onClick={() => void previewRematchOrganizations(false)} disabled={isRematching} className="rounded-md bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">
+              <button type="button" data-testid="admin-operations-rematch-execute" onClick={() => void previewRematchOrganizations(false)} disabled={isRematching || rematchPreview?.dry_run !== true || !rematchPreview.candidate_count} className="rounded-md bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">
                 正式执行
               </button>
             </div>
@@ -872,8 +896,8 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
             <ResultMetrics testId="admin-operations-rematch-results" metrics={[
               { label: "候选记录", value: rematchPreview.candidate_count ?? 0 },
               { label: "已更新", value: rematchPreview.updated_count ?? 0 },
-              { label: "文件名直匹配", value: rematchPreview.fast_path_hits ?? 0 },
-              { label: "首页文本回退", value: rematchPreview.pdf_text_fallback_hits ?? 0 },
+              { label: "无封面文字", value: rematchPreview.fast_path_hits ?? 0 },
+              { label: "封面文字核验", value: rematchPreview.pdf_text_fallback_hits ?? 0 },
               { label: "跳过", value: rematchPreview.skipped_count ?? 0 },
               { label: "失败", value: rematchPreview.failed_count ?? 0 },
             ]} />
@@ -1177,11 +1201,12 @@ function ConfigPanel({
 function SettingsTemplatesSection() {
   return (
     <div className="space-y-5">
+      <AIModelSettingsPanel />
       <ConfigPanel
         collection="system-settings"
-        title="系统参数"
+        title="其他参数留档"
         description="第一版仅保存后台配置记录，不改变运行时环境变量或真实审校逻辑。"
-        placeholder={{ key: "AI_ASSIST_ENABLED", value: "true", scope: "runtime-note" }}
+        placeholder={{ key: "备注", value: "", scope: "note" }}
       />
       <ConfigPanel
         collection="export-templates"
@@ -1195,6 +1220,7 @@ function SettingsTemplatesSection() {
 
 export default function SystemManagementPanel({
   organizations,
+  organizationsStatus = "ready",
   onRefresh,
 }: SystemManagementPanelProps) {
   const [activeSection, setActiveSection] = useState<AdminSection>("overview");
@@ -1262,7 +1288,7 @@ export default function SystemManagementPanel({
           </div>
         </header>
 
-        {activeSection === "overview" ? <OverviewSection organizations={organizations} setSection={setActiveSection} /> : null}
+        {activeSection === "overview" ? <OverviewSection organizations={organizations} organizationsStatus={organizationsStatus} setSection={setActiveSection} /> : null}
         {activeSection === "organization" ? (
           <OrganizationSection organizations={organizations} onRefresh={onRefresh} />
         ) : null}

@@ -81,6 +81,26 @@ export function resolvePollingDecision(
   return { kind: "stop" };
 }
 
+/**
+ * 服务端汇总版的轮询决策：分页后页面只拿到一页任务，"还有没有在跑的"
+ * 由接口按全部可见任务统计（api/job_list_query.polling_activity，口径同上）。
+ * 未拿到汇总（null）同样按 active 处理，失败后继续重试。
+ */
+export function resolvePollingDecisionFromActivity(
+  activity: { running: number; waiting: number } | null | undefined,
+): PollingDecision {
+  if (!activity) {
+    return { kind: "active", intervalMs: ACTIVE_POLL_INTERVAL_MS };
+  }
+  if (activity.running > 0) {
+    return { kind: "active", intervalMs: ACTIVE_POLL_INTERVAL_MS };
+  }
+  if (activity.waiting > 0) {
+    return { kind: "waiting", intervalMs: WAITING_POLL_INTERVAL_MS };
+  }
+  return { kind: "stop" };
+}
+
 /** 可注入的环境（默认绑定 window/document，SSR 或测试环境可替换）。 */
 export interface JobPollingEnvironment {
   setTimeoutFn: (callback: () => void, ms: number) => unknown;

@@ -166,7 +166,7 @@ export function pendingObligationCount(
 export function canDecideObligations(
   review: ReviewLifecycleDataRecord | null | undefined,
 ): boolean {
-  return review?.current_session?.status === "in_progress";
+  return review?.current_session?.status === "in_progress" && sessionMatchesCurrentBasis(review.current_session, review);
 }
 
 /**
@@ -349,10 +349,10 @@ export function latestCompletedSession(
   if (!review) {
     return null;
   }
-  if (review.current_session?.status === "completed") {
+  if (review.current_session?.status === "completed" && sessionMatchesCurrentBasis(review.current_session, review)) {
     return review.current_session;
   }
-  return review.history.find((item) => item.status === "completed") ?? null;
+  return review.history.find((item) => item.status === "completed" && sessionMatchesCurrentBasis(item, review)) ?? null;
 }
 
 /** 最近一次失效记录（用于展示"为什么需要重新复核"）。 */
@@ -378,7 +378,7 @@ export function hasCompletedReviewForCurrentBasis(
   if (!review) {
     return false;
   }
-  if (review.current_session?.status === "completed") {
+  if (review.current_session?.status === "completed" && sessionMatchesCurrentBasis(review.current_session, review)) {
     return true;
   }
   const basis = String(review.current_analysis?.analysis_basis_token ?? "").trim();
@@ -386,20 +386,20 @@ export function hasCompletedReviewForCurrentBasis(
     return false;
   }
   return review.history.some(
-    (item) => item.status === "completed" && String(item.analysis_basis_token ?? "").trim() === basis,
+    (item) => item.status === "completed" && sessionMatchesCurrentBasis(item, review),
   );
 }
 
 /**
- * 进入工作台时是否应当自动开始复核（§七十四）。
+ * 用户能否显式开始复核。浏览页面不执行此动作。
  *
- * 四个条件同时成立才自动开：有可复核的当前分析、有活动会话之外的空位
+ * 条件同时成立才显示开始入口：有可复核的当前分析、有活动会话之外的空位
  * （即当前没有进行中的会话）、当前代际上还没有完成记录。
  *
  * **绝不自动完成**（§三十三）：进入工作台只是"准备复核"，
  * 完成必须由人显式点击。
  */
-export function shouldAutoStartReview(
+export function canStartReview(
   review: ReviewLifecycleDataRecord | null | undefined,
 ): boolean {
   if (!review) {
@@ -408,11 +408,26 @@ export function shouldAutoStartReview(
   if (!review.current_analysis?.completed) {
     return false;
   }
-  if (review.current_session) {
+  if (review.current_session && sessionMatchesCurrentBasis(review.current_session, review)) {
     return false;
   }
   return !hasCompletedReviewForCurrentBasis(review);
 }
+
+export function sessionMatchesCurrentBasis(
+  session: ReviewSessionRecord | ReviewHistoryRecord,
+  review: ReviewLifecycleDataRecord,
+): boolean {
+  const analysis = review.current_analysis;
+  return Boolean(analysis.analysis_basis_token)
+    && session.document_version_id === review.current_document_version_id
+    && session.document_version_id === analysis.document_version_id
+    && session.analysis_job_uuid === analysis.job_uuid
+    && session.analysis_basis_token === analysis.analysis_basis_token;
+}
+
+/** 兼容旧调用名；只判定按钮可用性，不再由页面自动执行。 */
+export const shouldAutoStartReview = canStartReview;
 
 /** 顶部复核徽章：色调取值域与 Badge 组件一致（不得自造 tone）。 */
 export interface ReviewBadgeRecord {
@@ -428,8 +443,12 @@ export function resolveReviewBadge(
     return null;
   }
   const session = review.current_session;
-  if (session) {
+  if (session && sessionMatchesCurrentBasis(session, review)) {
     return { tone: reviewStatusTone(session.status), label: reviewStatusLabel(session.status) };
+  }
+  const completed = latestCompletedSession(review);
+  if (completed) {
+    return { tone: reviewStatusTone(completed.status), label: reviewStatusLabel(completed.status) };
   }
   const invalidated = latestInvalidatedSession(review);
   if (invalidated) {
@@ -438,10 +457,6 @@ export function resolveReviewBadge(
       tone: reviewStatusTone(invalidated.status),
       label: reason ? `复核已失效 · ${reason}` : "复核已失效",
     };
-  }
-  const completed = latestCompletedSession(review);
-  if (completed) {
-    return { tone: reviewStatusTone(completed.status), label: reviewStatusLabel(completed.status) };
   }
   return null;
 }

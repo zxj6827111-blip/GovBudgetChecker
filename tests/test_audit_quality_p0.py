@@ -439,18 +439,21 @@ async def test_start_analysis_legacy_defaults_to_no_ai(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_start_analysis_dual_defaults_to_ai_requested(tmp_path, monkeypatch):
+@pytest.mark.parametrize("default_use_ai", [False, True])
+async def test_start_analysis_dual_respects_system_ai_default(tmp_path, monkeypatch, default_use_ai):
     monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
     monkeypatch.setattr(runtime, "_pipeline_runner", _dummy_runner)
     monkeypatch.setattr(runtime, "_job_queue", _DummyQueue())
     monkeypatch.setattr(runtime, "persist_analysis_job_snapshot", _fake_persist)
     monkeypatch.setattr(runtime, "get_settings", lambda: _settings_with_dual(True))
+    monkeypatch.setattr("src.services.ai_model_settings.capabilities", lambda: {"default_use_ai": default_use_ai})
+    monkeypatch.setattr("src.services.ai_model_settings.resolve_runtime", lambda *_args: None)
 
     _prepare_job(tmp_path)
     await runtime.start_analysis("job-contract", {"mode": "dual"})
     status = runtime.read_json_file(tmp_path / "job-contract" / "status.json")
     assert status["mode"] == "dual"
-    assert status["use_ai_assist"] is True
+    assert status["use_ai_assist"] is default_use_ai
 
 
 # ---------------------------------------------------------------------------

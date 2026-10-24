@@ -130,8 +130,9 @@ test.describe("检查结果：计数口径与展示分组是两件事", () => {
 
     // 总计取后端权威口径 count_formal_findings：error/warn/info 都算正式 finding
     await expect(page.getByTestId("gbc-material-findings-formal-count")).toContainText("3");
+    // 顶部口径文案改为"只统计正式问题"，信息提示与待人工核验项单独展示。
     await expect(page.getByTestId("gbc-material-findings-formal-count-note")).toContainText(
-      "包含正式问题与信息提示",
+      "仅统计正式问题",
     );
 
     // 用 data-finding-id 计数：卡片内部还有 severity/rule/evidence 等细粒度
@@ -404,6 +405,17 @@ test.describe("受限授权与错误态", () => {
     await page.context().addCookies([sessionCookie]);
     await page.route("**/api/**", async (route) => {
       const url = new URL(route.request().url());
+    // 年度报送功能默认关闭：capabilities 返回 404 时页面回落历史材料查询。
+    // 兜底的 200 {} 会让入口把 enabled 当成 undefined，误判为已启用并渲染新视图，
+    // 于是本用例要断言的台账 testid 一个都不出现。
+    if (url.pathname === "/api/reporting-tasks/capabilities") {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "reporting tasks disabled" }),
+      });
+      return;
+    }
       if (url.pathname === "/api/auth/me") {
         await route.fulfill({
           status: 200,

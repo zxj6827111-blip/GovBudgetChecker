@@ -83,6 +83,7 @@ export interface MaterialSlotSummary {
 }
 
 export interface MaterialCoverageSummary extends ExpectedCoverageFields {
+  uploaded_total?: number | null;
   slot_total: number;
   status_counts: MaterialStatusCounts;
   budget_total: number;
@@ -211,7 +212,7 @@ export interface MaterialKpiDefinition {
    * `status_counts.not_due`：后者含"截止时间未知"的槽位，把未知当已知正是
    * 本轮要修掉的口径错误；两者也不能相减反推（due_at_unknown 与任意状态并存）。
    */
-  fromSummary: (summary: MaterialCoverageSummary) => number;
+  fromSummary: (summary: MaterialCoverageSummary) => number | null;
   testId: string;
 }
 
@@ -232,7 +233,7 @@ export const MATERIAL_KPIS: MaterialKpiDefinition[] = [
   {
     key: "uploaded",
     label: "已上传",
-    fromSummary: (summary) => summary.status_counts.uploaded,
+    fromSummary: (summary) => summary.uploaded_total ?? null,
     testId: "gbc-material-kpi-uploaded",
   },
   {
@@ -277,7 +278,7 @@ export const MATERIAL_KPIS: MaterialKpiDefinition[] = [
 export interface MaterialKpiValue {
   key: string;
   label: string;
-  value: number;
+  value: number | null;
   testId: string;
 }
 

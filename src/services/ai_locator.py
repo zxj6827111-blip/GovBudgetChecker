@@ -25,10 +25,10 @@ class LocationCandidate:
 class AILocator:
     """AI 定位器"""
     
-    def __init__(self):
-        self.ai_client = AIClient()
-        self.locator_model = os.getenv("AI_LOCATOR_MODEL", "").strip() or None
-        self.locator_provider = os.getenv("AI_LOCATOR_PROVIDER", "").strip() or None
+    def __init__(self, client=None, model=None, provider=None):
+        self.ai_client = client or AIClient()
+        self.locator_model = model or os.getenv("AI_LOCATOR_MODEL", "").strip() or None
+        self.locator_provider = provider or os.getenv("AI_LOCATOR_PROVIDER", "").strip() or None
     
     async def enhance_finding(self, 
                              job_context: JobContext,

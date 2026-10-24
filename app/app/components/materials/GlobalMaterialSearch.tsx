@@ -346,6 +346,7 @@ export function GlobalMaterialSearch({ fetchImpl }: GlobalMaterialSearchProps = 
                       index={index}
                       selected={index === selected}
                       onHover={setSelected}
+                      onNavigate={close}
                     />
                   ))}
                 </ul>

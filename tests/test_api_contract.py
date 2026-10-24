@@ -147,6 +147,7 @@ def test_local_rule_issue_can_be_ignored(monkeypatch, tmp_path: Path):
     issue_id = "rule:V33-001:abcd1234"
     status_payload = {
         "job_id": job_id,
+        "analysis_revision": "ignore-rev-1",
         "status": "done",
         "progress": 100,
         "filename": "local-rule-ignore.pdf",
@@ -272,17 +273,29 @@ def test_job_status_endpoint_lifts_dual_mode_findings(monkeypatch, tmp_path: Pat
     assert payload["meta"]["elapsed_ms"]["ai"] == 1000
 
 
+def _create_unit_with_department(client: TestClient, name: str) -> dict:
+    """目录校验要求 unit 挂在 department 下，这里按前端真实流程先建部门再建单位。"""
+    suffix = uuid.uuid4().hex[:8]
+    create_dept = client.post(
+        "/api/organizations",
+        json={"name": f"归属部门-{suffix}", "level": "department"},
+    )
+    assert create_dept.status_code == 200, create_dept.text
+    create_unit = client.post(
+        "/api/organizations",
+        json={"name": name, "level": "unit", "parent_id": create_dept.json()["id"]},
+    )
+    assert create_unit.status_code == 200, create_unit.text
+    return create_unit.json()
+
+
 def test_document_upload_rejects_duplicate_same_org_scope(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
     tmp_path.mkdir(parents=True, exist_ok=True)
 
     client = TestClient(app)
-    create_org = client.post(
-        "/api/organizations",
-        json={"name": f"重复检测单位-{uuid.uuid4().hex[:8]}", "level": "unit"},
-    )
-    assert create_org.status_code == 200
-    org_id = create_org.json()["id"]
+    create_org = _create_unit_with_department(client, f"重复检测单位-{uuid.uuid4().hex[:8]}")
+    org_id = create_org["id"]
 
     upload_payload = {
         "org_unit_id": org_id,
@@ -341,12 +354,7 @@ def test_document_upload_rejects_pdf_exceeding_page_limit(monkeypatch, tmp_path)
 def test_organization_association_flow():
     client = TestClient(app)
 
-    create_org = client.post(
-        "/api/organizations",
-        json={"name": f"测试单位-{uuid.uuid4().hex[:8]}", "level": "unit"},
-    )
-    assert create_org.status_code == 200
-    org = create_org.json()
+    org = _create_unit_with_department(client, f"测试单位-{uuid.uuid4().hex[:8]}")
     org_id = org["id"]
 
     upload = client.post(
@@ -487,12 +495,7 @@ def test_departments_list_and_tree_use_aggregated_merged_issue_total(monkeypatch
 def test_organization_jobs_filters_stale_links_without_mutating_links():
     client = TestClient(app)
 
-    create_org = client.post(
-        "/api/organizations",
-        json={"name": f"stale-job-org-{uuid.uuid4().hex[:8]}", "level": "unit"},
-    )
-    assert create_org.status_code == 200
-    org_id = create_org.json()["id"]
+    org_id = _create_unit_with_department(client, f"stale-job-org-{uuid.uuid4().hex[:8]}")["id"]
 
     stale_job_id = f"missing-{uuid.uuid4().hex[:12]}"
     runtime.require_org_storage().link_job(stale_job_id, org_id)
@@ -853,7 +856,8 @@ def test_job_issue_ignore_endpoint_returns_filtered_status(monkeypatch, tmp_path
     runtime.write_json_file(job_dir / "status.json", {"job_id": "job-issue", "status": "done"})
     client = TestClient(app)
 
-    def _fake_ignore(job_id: str, issue_id: str):
+    def _fake_ignore(job_id: str, issue_id: str, *, user=None, note=None):
+        assert isinstance(user, dict)
         assert job_id == "job-issue"
         assert issue_id == "ai:001"
         return {

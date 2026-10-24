@@ -41,6 +41,8 @@ export type IssueItem = {
   percentage?: number;
   text_snippet?: string;
   why_not?: string;
+  evidence_status?: string;
+  evidence_verification?: { status?: string; source_identity_complete?: boolean };
   display?: {
     summary?: string;
     page_text?: string;
@@ -54,7 +56,14 @@ export type ConflictItem = {
   key: string;
   ai_issue?: string;
   rule_issue?: string;
-  reason: "value-mismatch" | "missing" | "page-mismatch";
+  reason:
+    | "value-mismatch"
+    | "missing"
+    | "page-mismatch"
+    | "severity-mismatch"
+    | "semantic-mismatch"
+    | "evidence-mismatch"
+    | "ambiguous-relation";
 };
 
 export type MergedSummary = {
@@ -68,6 +77,9 @@ export type MergedSummary = {
   conflicts: ConflictItem[];
   agreements: string[];
   merged_ids?: string[];
+  candidate_issue_ids?: string[];
+  manual_review_issue_ids?: string[];
+  merge_policy_version?: string;
 };
 
 export type DualModeResult = {
@@ -307,6 +319,15 @@ function projectMergedIssues(
   const mergedIds = Array.isArray(merged?.merged_ids)
     ? merged.merged_ids.map((id: string) => String(id || "").trim()).filter(Boolean)
     : [];
+
+  if (merged?.merge_policy_version === "fact-check-relation-v1") {
+    const issueById = new Map<string, IssueItem>();
+    for (const issue of dedupedSourceIssues) {
+      const issueId = String(issue.id || "").trim();
+      if (issueId && !issueById.has(issueId)) issueById.set(issueId, issue);
+    }
+    return mergedIds.map((id) => issueById.get(id)).filter(Boolean) as IssueItem[];
+  }
 
   if (!mergedIds.length) {
     return dedupedSourceIssues;

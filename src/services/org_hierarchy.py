@@ -73,6 +73,8 @@ def validate_organization_hierarchy(organizations: Iterable[Any]) -> HierarchyVa
         parent_id = org.get("parent_id")
         level = str(org.get("level"))
         if not parent_id:
+            if level == "unit":
+                result.errors.append(f"unit organization {org_id} must be under a department")
             continue
 
         parent_id = str(parent_id)

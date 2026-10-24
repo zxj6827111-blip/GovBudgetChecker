@@ -190,7 +190,8 @@ def main() -> int:
     parser.add_argument("--job-id", help="要排查的任务 ID")
     parser.add_argument("--org-id", help="组织 ID；不传时会尝试从任务详情自动推断")
     parser.add_argument("--frontend-url", default=os.getenv("DIAG_FRONTEND_URL", "http://127.0.0.1:3001"))
-    parser.add_argument("--backend-url", default=os.getenv("DIAG_BACKEND_URL", "http://127.0.0.1:8000"))
+    default_backend_url = f"http://127.0.0.1:{os.getenv('GOVBUDGET_BACKEND_PORT', '18743')}"
+    parser.add_argument("--backend-url", default=os.getenv("DIAG_BACKEND_URL", default_backend_url))
     parser.add_argument("--compose-file", default="docker-compose.ai.yml")
     parser.add_argument(
         "--api-key",

@@ -500,6 +500,37 @@ def test_metrics_cache_returns_cached_payload(tmp_path):
         reset_metrics_cache()
 
 
+def test_metrics_rescan_parses_only_changed_status_files(tmp_path, monkeypatch):
+    """TTL 过期后的重扫不再重新解析未变化的 status.json（单个可达数 MB）。"""
+    import src.services.metrics as metrics_module
+
+    reset_metrics_cache()
+    try:
+        _write_job(tmp_path, "job-1", status="done")
+        _write_job(tmp_path, "job-2", status="queued")
+        parsed: List[str] = []
+        original = metrics_module.collect_job_metric_record
+        monkeypatch.setattr(metrics_module, "collect_job_metric_record",
+                            lambda job_dir: parsed.append(job_dir.name) or original(job_dir))
+
+        assert collect_metrics(tmp_path, now=FIXED_NOW)["jobs"]["total"] == 2
+        assert sorted(parsed) == ["job-1", "job-2"]
+
+        parsed.clear()
+        assert collect_metrics(tmp_path, now=FIXED_NOW)["jobs"]["total"] == 2
+        assert parsed == [], "未变化的任务直接复用上次的记录"
+
+        _write_job(tmp_path, "job-2", status="error", ts=FIXED_NOW - 5)
+        (tmp_path / "job-1" / "status.json").unlink()
+        (tmp_path / "job-1").rmdir()
+        result = collect_metrics(tmp_path, now=FIXED_NOW)
+        assert parsed == ["job-2"]
+        assert result["jobs"]["total"] == 1 and result["quality"]["error_jobs"]["count"] == 1
+        assert list(metrics_module._record_cache) == [(tmp_path / "job-2").as_posix()], "已删除任务的记录要清掉"
+    finally:
+        reset_metrics_cache()
+
+
 # ---------------------------------------------------------------------------
 # 4. Prometheus 渲染
 # ---------------------------------------------------------------------------

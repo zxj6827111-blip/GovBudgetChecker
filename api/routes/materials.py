@@ -35,6 +35,7 @@ import logging
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 
 from api import material_access, runtime
 from api.auth_utils import require_login, user_can_access_job
@@ -86,6 +87,136 @@ from src.services.material_search_query_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _report_job_is_accessible(user: Any, payload: dict) -> bool:
+    if bool(user.get("is_admin")):
+        return True
+    # 旧数据库摘要可能缺上传人或仍是旧组织；与原件/复核入口使用同一实时授权来源。
+    # 此入口按状态文件签名缓存，只读授权字段，不重建报告或发现。
+    from api.routes.reviews import _job_access_ok
+    return _job_access_ok(user, str(payload.get("job_id") or payload.get("job_uuid") or ""))
+
+
+def _report_source_availability(item: dict, *, history: bool = False) -> None:
+    """只检查当前页/展开版本的原件入口，不让上传目录大小决定列表速度。"""
+    versions = item.get("versions", []) if history else [item.get("current_version")]
+    for version in versions:
+        if not version or not version.get("source_job_id"):
+            continue
+        try:
+            runtime.find_first_pdf(runtime.UPLOAD_ROOT / version["source_job_id"])
+        except (FileNotFoundError, OSError):
+            version["source_job_id"] = None
+            version["source_unavailable_reason"] = "source_not_found"
+    if not item.get("slot_id") and item.get("job_id"):
+        try:
+            runtime.find_first_pdf(runtime.UPLOAD_ROOT / item["job_id"])
+        except (FileNotFoundError, OSError):
+            item["original_checksum"] = None
+
+
+@router.get("/api/materials/reports")
+async def department_material_reports(
+    request: Request, org: str = "", org_scope: str = Query("exact", pattern="^(exact|descendants)$"),
+    year: str = Query("", pattern="^(|unknown|20[0-9]{2})$"),
+    kind: str = Query("all", pattern="^(all|budget|final|unknown)$"),
+    review: str = Query("all", pattern="^(all|pending|in_progress|completed|invalidated|waiting_analysis|history_only)$"),
+    q: str = Query("", max_length=200), page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    management_scope: str = Query("all", pattern="^(all|city|district)$"),
+    management_region: str = "",
+    report_category: str = Query("all", pattern="^(all|department|units)$"),
+):
+    from src.services.material_report_query import load_report_rows, load_unlinked_reports, report_page, management_organization_ids
+    from api.job_list_query import descendant_organization_ids
+    _, _, user = require_login(request)
+    scope = _build_access_scope(user)
+    records = runtime.require_org_storage().get_all()
+    catalog_ids = {str(r.id) for r in records}
+    management_ids = None
+    if management_scope != "all":
+        management_ids = management_organization_ids(records, management_scope)
+        if management_region:
+            _require_container_access(scope, management_region, "organization access denied")
+            management_ids &= set(descendant_organization_ids(records, management_region))
+    org_ids = None
+    if org and org != "unassigned":
+        _require_container_access(scope, org, "organization access denied")
+        org_ids = set(descendant_organization_ids(records, org)) if org_scope == "descendants" else {org}
+    async def load(conn):
+        def accessible(payload):
+            return _report_job_is_accessible(user, payload)
+        items = await load_report_rows(conn, visible_org_ids=scope.visible_org_ids, job_accessible=accessible)
+        items += await load_unlinked_reports(conn, job_accessible=accessible)
+        if not items and not scope.unrestricted and not scope.has_any_visible_org:
+            raise HTTPException(403, "no organization authorized for this account")
+        unassigned_total = sum(not item.get("slot_id") or item.get("mapping_required")
+                               or item.get("organization_id") not in catalog_ids for item in items)
+        # 先按授权读取，再限定管理范围，确保列表、年份、目录计数采用同一口径。
+        if management_ids is not None:
+            items = [item for item in items if item.get("organization_id") in management_ids]
+        result = report_page(items, organization_ids=org_ids, unassigned=org == "unassigned",
+            catalog_ids=catalog_ids, year=year, kind=kind, keyword=q, review=review,
+            page=page, page_size=page_size, report_category=report_category)
+        # 待确认归属没有可靠的市/区身份，只能单独按原授权范围呈现。
+        result["unassigned_total"] = unassigned_total
+        for item in result["items"]:
+            _report_source_availability(item)
+        return result
+    return {"ok": True, "data": await _with_connection(load)}
+
+
+@router.get("/api/materials/reports/{slot_id}/history")
+async def department_material_history(slot_id: str, request: Request):
+    from src.services.material_report_query import load_report_rows
+    _, _, user = require_login(request)
+    scope = _build_access_scope(user)
+    async def load(conn):
+        row = await MaterialDetailQueryService(conn).load_slot_row(slot_id)
+        material_access.require_slot_access(scope, row, slot_id)
+        items = await load_report_rows(conn, visible_org_ids=scope.visible_org_ids,
+            job_accessible=lambda payload: _report_job_is_accessible(user, payload), slot_id=slot_id)
+        if items:
+            _report_source_availability(items[0], history=True)
+        return {"slot_id": slot_id, "versions": items[0]["versions"] if items else []}
+    return {"ok": True, "data": await _with_connection(load)}
+
+
+class ExpectedCsvRequest(BaseModel):
+    csv_text: str = Field(max_length=1_000_000)
+    preview_sha256: str = ""
+
+
+def _expected_csv_context(request: Request):
+    from src.services.material_slot_resolver import load_org_records
+    _, _, user = require_login(request)
+    scope = _build_access_scope(user)
+    if not scope.unrestricted and not scope.has_any_visible_org:
+        raise HTTPException(403, "no organization authorized for this account")
+    return user, scope, load_org_records()
+
+
+@router.get("/api/materials/expected/template")
+async def expected_csv_template(request: Request):
+    from fastapi.responses import Response
+    from src.services.expected_material_import import COLUMNS
+    _expected_csv_context(request)
+    return Response("\ufeff" + ",".join(COLUMNS) + "\r\n", media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="expected_materials.csv"'})
+
+
+@router.post("/api/materials/expected/preview")
+async def preview_expected_csv(request: Request, body: ExpectedCsvRequest):
+    from src.services.expected_material_import import preview_csv
+    _, scope, records = _expected_csv_context(request)
+    return preview_csv(body.csv_text, records, scope.visible_org_ids)
+
+
+@router.post("/api/materials/expected/import")
+async def import_expected_csv(request: Request, body: ExpectedCsvRequest):
+    from src.services.expected_material_import import import_csv
+    user, scope, records = _expected_csv_context(request)
+    return await _with_connection(lambda conn: import_csv(conn, text=body.csv_text, preview_sha256=body.preview_sha256, org_records=records, visible_org_ids=scope.visible_org_ids, actor=str(user.get("username") or user.get("id") or "")))
 
 #: 区县级矩阵的默认/最大分页。上限 100 与仓库既有列表接口一致。
 DEFAULT_PAGE_SIZE = 50

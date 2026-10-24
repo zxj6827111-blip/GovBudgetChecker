@@ -24,7 +24,7 @@ import { requireBackendAuthHeaders } from "@/lib/routeAuth";
  */
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const auth = await requireBackendAuthHeaders({
     "Content-Type": "application/json",
   });
@@ -33,7 +33,10 @@ export async function GET() {
   }
 
   try {
-    const response = await fetchWithTimeout(`${apiBase}/api/workflow`, {
+    const url = new URL(`${apiBase}/api/workflow`);
+    const jobId = request.nextUrl.searchParams.get("job_id");
+    if (jobId !== null) url.searchParams.set("job_id", jobId);
+    const response = await fetchWithTimeout(url.toString(), {
       cache: "no-store",
       headers: auth.headers,
     });

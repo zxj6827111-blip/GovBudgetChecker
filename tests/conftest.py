@@ -79,11 +79,13 @@ def _is_scrubbed(name: str) -> bool:
 
 
 @pytest.fixture(autouse=True)
-def isolate_ai_and_secret_env(monkeypatch):
+def isolate_ai_and_secret_env(monkeypatch, tmp_path):
     """无条件摘除 AI/provider/密钥类环境变量，防止 .env 泄漏影响用例。"""
     affected = [name for name in list(os.environ) if _is_scrubbed(name)]
     for name in affected:
         monkeypatch.delenv(name, raising=False)
+    # 管理界面保存的配置优先于环境变量，也必须与开发者真实配置隔离。
+    monkeypatch.setenv("AI_MODEL_SETTINGS_PATH", str(tmp_path / "ai-model-settings.json"))
     yield
 
 

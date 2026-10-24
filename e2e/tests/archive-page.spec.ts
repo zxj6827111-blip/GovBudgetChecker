@@ -138,6 +138,7 @@ test.describe("Archive page (Task 9)", () => {
 
     await page.goto("/viewer/gbc-ui-demo?page=archive");
     await expect(page).toHaveURL(/\/archive$/, { timeout: 15_000 });
+    expect(new URL(page.url()).origin).toBe(new URL(String(test.info().project.use.baseURL)).origin);
     await expect(page.getByTestId("gbc-archive-page")).toBeVisible({ timeout: 15_000 });
   });
 

@@ -296,7 +296,11 @@ def _read_audit_events(path: Any) -> List[Dict[str, Any]]:
 async def test_migration_0021_creates_decision_table(review_db):
     """0021 已随整套迁移应用：表、唯一约束、CHECK 都在。"""
     schema, pool = review_db
-    assert MIGRATIONS[-1]["id"] == MIGRATION_ID  # 追加在末尾，没有插到历史迁移中间
+    ids = [migration["id"] for migration in MIGRATIONS]
+    assert ids.count(MIGRATION_ID) == 1
+    index = ids.index(MIGRATION_ID)
+    assert ids[index - 1] == "2026-09-22_0020_review_lifecycle"
+    assert all(migration_id > MIGRATION_ID for migration_id in ids[index + 1:])
 
     async with _conn(schema, pool) as conn:
         applied = await conn.fetchval(

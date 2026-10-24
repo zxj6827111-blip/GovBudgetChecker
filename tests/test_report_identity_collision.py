@@ -35,6 +35,8 @@ class _FakeReportTable:
         self.insert_count = 0
 
     async def fetchval(self, query: str, *args):
+        if 'to_regclass' in query:
+            return None  # 这些用例覆盖尚未接入快照的历史共享表。
         assert "INSERT INTO org_dept_annual_report" in query
         assert "COALESCE(year, -1), report_type, scope_key" in query
         department_id, unit_id, year, report_type = args[0], args[1], args[2], args[3]

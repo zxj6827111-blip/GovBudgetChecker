@@ -5,11 +5,8 @@
 A. **正式 finding 计数必须等于仓库唯一权威口径**
    ``analysis_jobs`` 的正式 finding 定义在 ``src/services/evidence_guard.py``：
    ``count_formal_findings`` / ``is_formal_finding``。权威语义是
-   "只要没有被 evidence guard 降级就属于正式 finding"，``error`` / ``warn`` /
-   ``info`` 三种严重度**都算**。
-   材料详情页把正式 finding 按严重度拆成「正式问题 / 信息提示」两个**展示分组**，
-   但 ``formal_issue_count`` 必须直接取权威函数的结果 —— 用 ``len(正式问题那一栏)``
-   对外报数，会让同一份分析在审核工作台/质量门禁与材料详情上给出两个问题数。
+   信息提示与人工复核事项不计入正式问题。材料详情必须直接取权威函数的结果，
+   并将正式问题、人工复核、信息提示分开展示。
 
 B. **处理记录不回显任何原始 error_message**
    ``_safe_error_summary`` 采用 fail-closed：只要数据库里存在非空 error_message，
@@ -101,10 +98,7 @@ def _detail(service: MaterialDetailQueryService):
 
 
 def test_formal_issue_count_matches_canonical_count_formal_findings():
-    """评审给的三条样本：high（formal）、info（formal）、降级（非 formal）。
-
-    权威口径下期望是 **2**（high + info），而不是"error/warn 那一栏"的 1。
-    """
+    """high 计入正式问题；info 与降级项单独展示，不计入。"""
     ai_findings = [
         _finding("A", "high"),
         _finding("B", "info"),
@@ -115,12 +109,12 @@ def test_formal_issue_count_matches_canonical_count_formal_findings():
     expected = count_formal_findings(
         {"ai_findings": ai_findings, "rule_findings": rule_findings}
     )
-    assert expected == 2
+    assert expected == 1
     assert count_canonical_formal_findings(ai_findings, rule_findings) == expected
 
 
-def test_formal_info_is_counted_but_still_presented_in_info_bucket():
-    """info 计入计数，但在页面上仍单独成「信息提示」分组。"""
+def test_info_is_not_counted_but_still_presented_in_info_bucket():
+    """info 不计入正式问题，也不应误放进人工复核。"""
     ai_findings = [_finding("A", "high"), _finding("B", "info")]
     formal, manual_review, info_items = partition_findings(ai_findings, [])
 
@@ -129,10 +123,9 @@ def test_formal_info_is_counted_but_still_presented_in_info_bucket():
     assert manual_review == []
 
     canonical = count_canonical_formal_findings(ai_findings, [])
-    assert canonical == 2
-    assert len(formal) + len(info_items) == canonical
-    # 关键反例：用"正式问题那一栏"报数会得到 1，与权威口径不一致。
-    assert len(formal) != canonical
+    assert canonical == 1
+    assert len(formal) == canonical
+    assert len(formal) + len(info_items) == len(ai_findings)
 
 
 def test_degraded_finding_is_not_counted_as_formal():
@@ -185,7 +178,7 @@ def test_slot_detail_formal_issue_count_equals_canonical_function():
     analysis = _detail(service).current_analysis
 
     expected = count_formal_findings({"ai_findings": ai_findings, "rule_findings": []})
-    assert expected == 2
+    assert expected == 1
     assert analysis.available is True
     assert analysis.formal_issue_count == expected
 
@@ -194,10 +187,7 @@ def test_slot_detail_formal_issue_count_equals_canonical_function():
     assert [item.finding_id for item in analysis.info_findings] == ["B"]
     assert [item.finding_id for item in analysis.manual_review_items] == ["C"]
 
-    # 恒等式：总计 = 正式问题 + 信息提示
-    assert analysis.formal_issue_count == (
-        len(analysis.formal_findings) + len(analysis.info_findings)
-    )
+    assert analysis.formal_issue_count == len(analysis.formal_findings)
 
 
 def test_slot_detail_count_matches_canonical_across_severity_shapes():
@@ -218,16 +208,12 @@ def test_slot_detail_count_matches_canonical_across_severity_shapes():
 
 
 def test_slot_detail_zero_is_canonical_and_not_the_formal_bucket_length():
-    """全是 info 时：权威计数是 N（不是 0），而"正式问题"那一栏是空的。
-
-    这条专门堵住"用正式问题栏长度报数"的实现：那样会得到 0，
-    页面就会在明明有正式 finding 的情况下显示"已确认没有正式 finding"。
-    """
+    """全是 info 时正式问题数为零，但所有信息提示仍保留。"""
     ai_findings = [_finding("A", "info"), _finding("B", "info")]
     service = _analysis_conn(ai_findings=ai_findings, rule_findings=[])
     analysis = _detail(service).current_analysis
 
-    assert analysis.formal_issue_count == 2
+    assert analysis.formal_issue_count == 0
     assert analysis.formal_findings == []
     assert len(analysis.info_findings or []) == 2
 

@@ -8,7 +8,9 @@
   golden 样张上可执行（insufficient → pass）
 - 文旅局 1700.57 级联误报（V33-005×2 + V33-202 error）→ 0 条；
   解析结构性矛盾按 MR-1c 哨兵转 insufficient_data（人工复核）
-- 宜川输出总数 34 → 12（≤12 达标）。12 条构成：5 error + 1 medium +
+- 宜川历史输出总数 34 → 12（当时容差）。按 portable 0.1pp 容差，
+  车辆同比差 0.20pp 现另有 1 条有效提示，总数门槛更新为 ≤13。
+  原 12 条构成：5 error + 1 medium +
   2 info 为各车道设计内真实发现（WP4-A 跨表三公 ×3、WP4-B 基金说明、
   WP4-D 零基数同比、WP4-G 三公细化、WP4-F 百分比单位、WP4-C 重复
   披露），1 warn 为 V33-227 命中的真实科目名不一致（说明"文化体育
@@ -149,13 +151,54 @@ def test_acceptance_snapshots_pinned():
 def test_unresolved_total_le_15(replays):
     assert len(CORE_RULES) == 8
     total = sum(len(r["unresolved"]) for r in replays.values())
-    assert total <= 15, f"unresolved 总数 {total} 超出验收线 15"
+    planned_missing = 0
+    for alias in ("golden", "yichuan", "wenlv", "shiquan"):
+        item = replays[alias]["unresolved"]["V33-TREND-COMPLETION-RATE"]
+        assert "预算分母" in item["detail"]
+        if alias == "shiquan":
+            assert "公共法律服务" in item["detail"]
+            assert "本年支出决算存在多个不一致披露" in item["detail"]
+        planned_missing += 1
+    # New fact-bound checks cannot run from a frozen legacy page-data replay
+    # which intentionally has no ParseArtifact/FactContext. Assert those exact
+    # input gaps rather than increasing the existing regression threshold.
+    for alias in ("golden", "yichuan", "wenlv", "shiquan"):
+        # V33-252（2026-10-22 清单 C-04）同样只读当前统一事实。
+        for rule in ("V33-248", "V33-249", "V33-252"):
+            item = replays[alias]["unresolved"].get(rule)
+            if item:
+                assert item["detail"] == "缺少当前版本财政事实"
+                planned_missing += 1
+    item = replays["yichuan"]["unresolved"]["V33-250"]
+    assert '评级数量之和小于总数' in item['detail'] and '不能补零' in item['detail']
+    planned_missing += 1
+    for alias in ('yichuan','shiquan'):
+        item=replays[alias]['unresolved']['V33-224']
+        assert item['status']=='insufficient_data' and item['detail']=='因公出国说明或表内决算金额未唯一识别'
+        planned_missing+=1
+    item=replays['shiquan']['unresolved']['V33-234']
+    assert '原文包含其他或未确认主体，不能跨主体拼接金额' in item['detail']
+    planned_missing+=1
+    assert total - planned_missing <= 15, f"排除已核实缺分项预算后 unresolved {total} 超出验收线"
     # 2026-09-29 MR-B 批次计划内收敛：4 份决算 unresolved 14 → ≤10（实测 10），
     # 验收重走并固化于 tests/test_budget_intake_20260929.py（BUD-105/107/108/109
     # 全出真实判定，其余规则不得上升）。09-27 快照（14）保留为历史基线，其文件
     # 内容仍由 test_acceptance_snapshots_pinned 锁定。
-    assert total <= 10, (
-        f"unresolved 总数 {total} 超出 MR-B 收敛后的验收线 10（计划外回升需重走验收）"
+    # 2026-10-03 RC-04 计划内回升：yichuan CMM-001 说明侧确实未提及公务用车
+    # 购置费（真值锚=None），按"缺披露不得假通过"转 insufficient_data（+1）。
+    # R17 重核原文后取消把空白结转当零的假通过。严格锁定这三项，
+    # 其余 RC-04 基线仍不许回升；夹具与历史快照 SHA 保持原样。
+    blank_carry = 0
+    for alias in ['yichuan', 'shiquan', 'wenlv']:
+        item = replays[alias]['unresolved']['V33-242']
+        assert '空白或未绑定，不能当作零复算' in item['detail']
+        rows = _get_table_rows(replays[alias]['doc'], '财政拨款收入支出决算总表')
+        carry = next(row for row in rows if '年初财政拨款结转和结余' in str(row[0]))
+        assert not str(carry[1] or '').strip()
+        assert all(not str(v or '').strip() for v in carry[3:7])
+        blank_carry += 1
+    assert total - blank_carry - planned_missing <= 11, (
+        f"除原文空白结转与缺分项预算外仍有计划外回升: {total} - {blank_carry} - {planned_missing} > 11"
     )
 
 
@@ -216,7 +259,13 @@ def test_wenlv_cascade_errors_zero(replays):
 
 
 def test_yichuan_output_budget(replays):
-    assert len(replays["yichuan"]["issues"]) <= 12
+    # Portable percentage tolerance is 0.1pp: the 0.20pp vehicle delta is a
+    # valid additional warning on top of the prior 12-item sample baseline.
+    # 2026-10-22 检查点清单（CMM-013 缺“第二部分”、V33-251 具体情况差 4.20 万元）另计。
+    issues = replays["yichuan"]["issues"]
+    checklist = [i for i in issues if getattr(i, "rule", "") in {"CMM-013", "V33-251"}]
+    assert len(checklist) == 2
+    assert len(issues) - len(checklist) <= 13
 
 
 # ---------------------------------------------------------------------------

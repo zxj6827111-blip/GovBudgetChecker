@@ -163,13 +163,14 @@ def test_bud105_t1_t4_pair_resolves_after_t4_fix(budget_replay):
     （旧锁「T1与T4支出总计数值缺失」随取数修复废止）。"""
     statuses = budget_replay["summary"]["rule_statuses"]
     assert statuses.get("BUD-105") == "pass"
-    # BUD-107 同样吃到 T4 修复（T4↔文本可核）且不再产出截断误报
+    # BUD-107 同样吃到 T4 修复（T4↔文本可核）。2026-10-22 口径决议①补充
+    # （清单 C-16“不得截尾”）后，「328,661万元」对表内 328,661.81 万元属截尾，
+    # 收入、支出、财政拨款支出三处各报一条，且写明四舍五入应为 328662。
     bud107 = [
         i for i in budget_replay["issues"] if getattr(i, "rule", "") == "BUD-107"
     ]
-    assert not bud107, "BUD-107 仍有 finding: " + "; ".join(
-        str(getattr(i, "message", ""))[:80] for i in bud107
-    )
+    assert len(bud107) == 3, "; ".join(str(getattr(i, "message", ""))[:80] for i in bud107)
+    assert all("应为328662万元" in str(getattr(i, "message", "")) for i in bud107)
 
 
 def test_fixture_source_sha_pinned():
