@@ -1010,7 +1010,7 @@ def find_table_anchors(doc: Document) -> Dict[str, List[int]]:
     artifact = getattr(doc, "parse_artifact", None)
     if artifact is not None:
         from src.services.fiscal_table_rules import NINE_TABLE_RULES
-        name_by_code = dict(zip(NINE_TABLE_RULES, (item["name"] for item in NINE_TABLES)))
+        name_by_code = dict(zip(NINE_TABLE_RULES, (item["name"] for item in NINE_TABLES), strict=True))
         classified = {}
         for table in artifact.table_fragments:
             if table.table_code in name_by_code:
@@ -1363,7 +1363,7 @@ class R33002_NineTablesCheck(Rule):
                     reliable = reliable and all(state.has_text_layer or state.ocr_status == "qualified" for state in artifact.page_states)
             if not reliable:
                 raise RuleDeferred(self.code, "相关页面尚未可靠读全，不能据未检测到表格断言原件缺表")
-            if any(any(b - a > 1 for a, b in zip(sorted(pages), sorted(pages)[1:])) for _name, pages in duplicates):
+            if any(any(b - a > 1 for a, b in zip(sorted(pages), sorted(pages)[1:], strict=False)) for _name, pages in duplicates):
                 raise RuleDeferred(self.code, "必备表缺失且其他表在不连续页重复出现，表种身份冲突待确认")
         for nm in missing:
             issues.append(self._issue(f"缺失表：{nm}", {"table": nm}, severity="error"))
@@ -4197,6 +4197,7 @@ def _get_table_rows(
     full_extent: bool = False,
     anchor_extent: bool = False,
     merge_meta: Optional[Dict[str, Any]] = None,
+    strict_unknown_values: bool = False,
 ) -> Optional[List[List[str]]]:
     """获取指定表格的所有行数据，支持跨页表格读取。
 
@@ -4221,7 +4222,8 @@ def _get_table_rows(
     """
     from .fact_table_projection import fact_bound_table_rows, ProjectionUnavailable
     try:
-        projected = fact_bound_table_rows(doc, table_name)
+        projected = fact_bound_table_rows(doc, table_name, strict_unknown_values=(strict_unknown_values or
+            getattr(doc, "current_rule_code", None) in {"V33-005", "V33-119", "V33-120", "V33-122", "V33-240", "V33-241"}))
     except ProjectionUnavailable as exc:
         raise RuleDeferred("structured_table_projection", str(exc)) from exc
     if projected is not None:
@@ -5653,9 +5655,16 @@ class R33122_EmptyTableCheck(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
         # 检查 Table 4 对应的列是否为 0
-        t4_rows = _get_table_rows(doc, "财政拨款收入支出决算总表")
+        t4_rows = _get_table_rows(doc, "财政拨款收入支出决算总表", strict_unknown_values=True)
         if not t4_rows:
             raise RuleDeferred(self.code, "财政拨款总表未读取或列未映射，不能把政府性基金/国有资本口径当作零")
+        if getattr(doc, "parse_artifact", None) is not None:
+            context = getattr(doc, "fact_context", None)
+            from .fact_context import operand_rejection_reason
+            usable_funds = {fact.indicator for fact in (context.facts if context else [])
+                            if fact.table_code == "FIN_04_fiscal_grant_total" and not operand_rejection_reason(fact)}
+            if not {"government_fund_budget", "state_capital_budget"}.issubset(usable_funds):
+                raise RuleDeferred(self.code, "总表资金分列缺少明确可用数值，空白或未映射不能当作零")
         
         # 检查 Table 4 中 "政府性基金" 和 "国有资本" 列的总和
         sum_gov_fund = 0.0

@@ -9,15 +9,47 @@ SOURCES = ('fiscal_allocation', 'superior_subsidy_income', 'business_income',
            'operational_income', 'subsidiary_income', 'other_income')
 
 
+def missing_header_findings(rule, doc):
+    """只报告有原格空白证明的金额列表头缺失，不按勾稽反推缺失的列名。"""
+    artifact = getattr(doc, 'parse_artifact', None)
+    if artifact is None:
+        return []
+    issues = []
+    for table in artifact.table_fragments:
+        if table.table_code != CODE:
+            continue
+        from src.services.fiscal_column_identity import canonical_column_mappings
+        from src.services.fiscal_table_rules import NINE_TABLE_RULES
+        mappings = canonical_column_mappings(table, NINE_TABLE_RULES[CODE])
+        mapped = {item['source_col_idx'] for item in mappings}
+        labels = {col for item in mappings for col in item.get('source_label_cols', [])}
+        numeric = {cell.col_idx for cell in table.cells if cell.row_idx >= table.header_row_count and cell.numeric_value is not None}
+        for col in sorted(numeric - mapped - labels):
+            blanks = [cell for cell in table.cells if cell.col_idx == col and cell.row_idx < table.header_row_count
+                      and cell.bbox and cell.native_blank_verified and not cell.raw_text.strip()]
+            if len(blanks) != 1:
+                continue
+            cell = blanks[0]
+            message = f'收入决算表第{col + 1}列表头在原件中为空白，相关金额列身份未确认；未代填列名，请人工复核。'
+            issues.append(rule._issue(message, {'table_code': CODE, 'table': table.title,
+                'page': cell.page_number, 'bbox': list(cell.bbox), 'header_observations': [{
+                    'source_cell_id': f'{table.fragment_uid}:r{cell.row_idx}c{cell.col_idx}',
+                    'file_hash': artifact.source_file_hash, 'page': cell.page_number,
+                    'bbox': list(cell.bbox), 'raw_text': '', 'native_blank_verified': True}]},
+                'manual_review', evidence_text=message))
+    return issues
+
+
 def check_income_sources(rule, doc):
+    header_issues = missing_header_findings(rule, doc)
     view, error = _table_view(doc, CODE)
     if error:
-        return finish(rule, [], [error])
+        return finish(rule, header_issues, [error])
     instance, table, _, _, rows, facts = view
     mappings = _column_mappings_for_instance(instance, table)
     roles = [m['canonical_measure'] for m in mappings]
     if any(roles.count(role) != 1 for role in ('total_actual', *SOURCES)):
-        return finish(rule, [], ['收入表来源列未绑定至唯一已确认模板'])
+        return finish(rule, header_issues, ['收入表来源列未绑定至唯一已确认模板'])
     issues, unresolved = [], []
     for code in rows:
         terms, errors = [], []
@@ -51,7 +83,8 @@ def check_income_sources(rule, doc):
         issues.extend(found)
         unresolved.extend(missing)
     try:
-        issues.extend(check_native_detail_tables(rule, doc, table_codes=(CODE,)))
+        # 收入来源列同样需要纵向核对；不能用合计列已通过替代其他列的实际检查。
+        issues.extend(check_native_detail_tables(rule, doc, table_codes=(CODE,), include_income_sources=True))
     except RuleDeferred as signal:
         issues.extend(signal.partial_issues)
         unresolved.extend(signal.unresolved_reasons or [signal.detail])

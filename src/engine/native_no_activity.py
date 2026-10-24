@@ -16,7 +16,7 @@ def empty_three_public_evidence(doc):
     for stage in ('年初预算', '决算'):
         for indicator in ('total_actual', 'overseas', 'vehicle_purchase_operation',
                           'vehicle_purchase', 'vehicle_operation', 'reception'):
-            term = blank_term(doc, 'FIN_07_three_public', indicator, code='total', stage=stage)
+            term = blank_term(doc, 'FIN_07_three_public', indicator, code='total', stage=stage, calculation=False)
             if term is None:
                 return None
             terms.append(term)

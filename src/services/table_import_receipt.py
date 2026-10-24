@@ -184,7 +184,12 @@ def build_table_import_receipt(artifact, facts, *, org_name=None):
         present = columns_bound = admitted = conflicts = blocked = 0
         for cell in table.cells:
             if cell.numeric_value is None:
-                continue
+                from src.engine.fiscal_lexeme import lex_numeric
+                invalid_amount = (cell.row_idx >= table.header_row_count and cell.col_idx in mapping_by_col
+                                  and re.search(r"\d", cell.raw_text or "")
+                                  and lex_numeric(cell.raw_text).kind == "invalid")
+                if not invalid_amount:
+                    continue
             cid = source_cell_id(table, cell)
             observed_ids.add(cid)
             observation = {"source_cell_id": cid, "raw_text": cell.raw_text,

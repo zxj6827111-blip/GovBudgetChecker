@@ -575,6 +575,8 @@ class FiscalFactMaterializer:
                 if measure_cell is not None and str(measure_cell.raw_text or "").strip()
                 else None
             )
+            from src.engine.fiscal_lexeme import lex_numeric
+            literal_invalid = bool(raw_value and lex_numeric(raw_value).kind == "invalid")
             unit = None
             normalized = None
             if measure_cell is not None:
@@ -617,6 +619,9 @@ class FiscalFactMaterializer:
                 and not native_conflict and bool(raw_value)
                 and normalize_text(''.join(str(p.get('text') or '') for p in native_sources)) == normalize_text(raw_value)
                 ) or (is_manual_source and bool(raw_value))
+            if literal_invalid:
+                normalized = None
+                amount_usable = False
             native_evidence_qualified = (native_literal_bound and column_identity_safe and not missing_subject_code
                 and table.confidence >= .8 and amount_usable
                 and bool(legacy.classification_code or legacy.classification_name)

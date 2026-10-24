@@ -39,7 +39,7 @@ class ProjectionUnavailable(ValueError):
     pass
 
 
-def fact_bound_table_rows(doc, table_name):
+def fact_bound_table_rows(doc, table_name, *, strict_unknown_values=False):
     artifact = getattr(doc, "parse_artifact", None)
     context = getattr(doc, "fact_context", None)
     if artifact is None:
@@ -101,7 +101,7 @@ def fact_bound_table_rows(doc, table_name):
             continue
         if not str(cell.raw_text or "").strip():
             # 有金额的业务行中，缺失分项不能被旧规则的 `or 0` 静默吞掉。
-            if any(c.numeric_value is not None and c.col_idx in measure_columns
+            if strict_unknown_values and any(c.numeric_value is not None and c.col_idx in measure_columns
                    for c in table.cells if c.row_idx == cell.row_idx):
                 raise ProjectionUnavailable(f"{table_name} 第{cell.row_idx + 1}行第{cell.col_idx + 1}列为空白，不能按零计算")
             continue
@@ -111,7 +111,9 @@ def fact_bound_table_rows(doc, table_name):
                 and cell.raw_text.strip() in {'-', '—', '–', '－'}):
             # 保留原件破折号的展示角色，不要求它拥有数字事实，也不将其转换成零。
             # 后续需要金额的关系仍会如实报取数不足。
-            raise ProjectionUnavailable(f"{table_name} 第{cell.row_idx + 1}行第{cell.col_idx + 1}列为横线，计算含义未确认")
+            if strict_unknown_values:
+                raise ProjectionUnavailable(f"{table_name} 第{cell.row_idx + 1}行第{cell.col_idx + 1}列为横线，计算含义未确认")
+            continue
         cell_id = f"{cell.origin_fragment_uid or table.fragment_uid}:r{cell.origin_row_idx if cell.origin_row_idx is not None else cell.row_idx}c{cell.origin_col_idx if cell.origin_col_idx is not None else cell.col_idx}"
         facts = by_cell.get(cell_id, [])
         if len(facts) != 1:
