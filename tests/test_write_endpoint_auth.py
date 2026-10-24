@@ -92,6 +92,7 @@ def _create_owned_job(upload_root: Path, job_id: str, username: str) -> Path:
     job_dir = _create_job(upload_root, job_id)
     payload = runtime.read_json_file(job_dir / "status.json", default={})
     payload["created_by"] = username
+    payload["analysis_revision"] = "ignore-auth-rev-1"
     runtime.write_json_file(job_dir / "status.json", payload)
     return job_dir
 

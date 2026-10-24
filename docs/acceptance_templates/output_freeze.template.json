@@ -1,0 +1,12 @@
+{
+  "schema_version": "gbc.independent-output-freeze.v1",
+  "run_id": null,
+  "frozen_at": null,
+  "source_snapshot_sha256": null,
+  "model_manifest_sha256": null,
+  "configuration_fingerprint": null,
+  "dataset_manifest_sha256": null,
+  "overlay_manifest_sha256": null,
+  "blind_doc_ids": [],
+  "output_manifest": {"path": null, "sha256": null}
+}

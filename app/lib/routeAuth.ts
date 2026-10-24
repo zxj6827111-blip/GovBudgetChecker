@@ -20,11 +20,21 @@ export type BackendAuthResult =
   | AuthenticatedBackendHeaders
   | AuthenticationFailure;
 
-function authFailure(detail: string, status = 401): AuthenticationFailure {
+function authFailure(detail: string, status = 401, headers?: HeadersInit): AuthenticationFailure {
   return {
     ok: false,
-    response: NextResponse.json({ detail }, { status }),
+    response: NextResponse.json({ detail }, { status, headers }),
   };
+}
+
+export const RATE_LIMITED_DETAIL = "当前操作请求过于频繁，后端暂时限流。请稍等一分钟后重试。";
+
+/** 后端限流时会话校验没有失败也没有不可用：原样回 429 和重试时间，不能改报 503 或未登录。 */
+export function rateLimitedResponse(retryAfter: string | null): NextResponse {
+  return NextResponse.json(
+    { detail: RATE_LIMITED_DETAIL },
+    { status: 429, headers: retryAfter ? { "Retry-After": retryAfter } : undefined },
+  );
 }
 
 function buildBackendHeaders(
@@ -72,6 +82,9 @@ export async function requireBackendAuthHeaders(
 
     if (response.status === 401 || response.status === 403) {
       return authFailure("not logged in");
+    }
+    if (response.status === 429) {
+      return { ok: false, response: rateLimitedResponse(response.headers.get("Retry-After")) };
     }
     if (!response.ok) {
       return authFailure("session validation unavailable", 503);

@@ -45,6 +45,9 @@ _JSON_PATH_RE = re.compile(
     r"\(j\.metadata\s*->\s*'structured_ingest'\s*->>\s*'document_version_id'\)"
 )
 _NUMERIC_GUARD_RE = re.compile(rf"{_JSON_PATH_RE.pattern}\s*~\s*'\^\[0-9\]\+\$'")
+#: 版本 join 按生成列关联（migration 0038：与上面"数字守卫 + 路径"同一表达式，
+#: 非纯数字为 NULL）。假连接用 ``_structured_version_id`` 复现这一生成规则。
+_RUN_VERSION_JOIN_RE = re.compile(r"ON\s+j\.structured_document_version_id\s*=\s*v\.id::numeric")
 
 _SLOT_WHERE_RE = re.compile(r"FROM material_slots\s+WHERE\s+(?P<column>[a-z_]+)\s*=\s*\$1")
 _SOURCE_WHERE_RE = re.compile(r"FROM material_sources\s+WHERE\s+(?P<column>[a-z_]+)\s*=\s*\$1")
@@ -347,10 +350,10 @@ class FakeDetailConnection:
     def _fetch_version_run_join(self, sql: str, args: tuple) -> List[Dict[str, Any]]:
         if _JOIN_WHERE_RE.search(sql) is None:
             raise UnknownDetailSqlError(f"版本 join 查询的 WHERE 形态不认识: {sql[:200]}")
-        if _NUMERIC_GUARD_RE.search(sql) is None:
+        if _RUN_VERSION_JOIN_RE.search(sql) is None and _NUMERIC_GUARD_RE.search(sql) is None:
             raise UnknownDetailSqlError(
-                "版本 join 查询缺少 document_version_id 的数字守卫："
-                "非数字 metadata 会在真库上抛 cast 异常"
+                "版本 join 查询必须按生成列 structured_document_version_id 关联"
+                "（或带 document_version_id 的数字守卫）：非数字 metadata 不能参与关联"
             )
         slot_id = args[0]
         rows: List[Dict[str, Any]] = []

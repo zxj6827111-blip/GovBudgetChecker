@@ -1,10 +1,13 @@
+import { countsFromJobs, type JobPageQuery, type JobPageView } from "../../../lib/jobListViews";
 import type { JobSummaryRecord } from "../../../lib/uiAdapters";
-import { normalizeUiTaskStatus } from "../../../lib/uiAdapters";
+import { getDisplayIssueTotal, normalizeUiTaskStatus } from "../../../lib/uiAdapters";
 
 import {
+  collectAvailableYears,
   filterWorkbenchQueue,
   type WorkbenchStatusFilter,
 } from "../workspace/workbenchAdapters";
+import { canRunQueueJob } from "./queueBatchActions";
 
 /**
  * 处理队列全量页（Task 8.1）的纯逻辑层：多维筛选、排序、分页。
@@ -45,6 +48,33 @@ export const DEFAULT_QUEUE_FILTERS: QueuePageFilters = {
   reportKind: "all",
   stage: "all",
 };
+
+/** 从复核详情返回时恢复筛选；URL 只承担列表上下文，不参与权限判定。 */
+export function queueFiltersFromQuery(params: Pick<URLSearchParams, "get">): QueuePageFilters {
+  const status = params.get("status") ?? "all";
+  const kind = params.get("kind") ?? "all";
+  const stage = params.get("stage") ?? "all";
+  return {
+    keyword: params.get("q") ?? params.get("job") ?? "", year: params.get("year") ?? "",
+    organizationId: params.get("org") ?? "",
+    status: ["all", "review_required", "pending_analysis", "analyzing", "failed", "completed"].includes(status) ? status as WorkbenchStatusFilter : "all",
+    reportKind: ["all", "budget", "final", "unknown"].includes(kind) ? kind as QueueReportKindFilter : "all",
+    stage: Object.prototype.hasOwnProperty.call(QUEUE_STAGE_FILTER_LABELS, stage) ? stage as QueueStageFilter : "all",
+  };
+}
+
+export function queueReturnPath(filters: QueuePageFilters, sort: QueueSortKey, page: number): string {
+  const params = new URLSearchParams();
+  if (filters.keyword) params.set("q", filters.keyword);
+  if (filters.year) params.set("year", filters.year);
+  if (filters.organizationId) params.set("org", filters.organizationId);
+  if (filters.status !== "all") params.set("status", filters.status);
+  if (filters.reportKind !== "all") params.set("kind", filters.reportKind);
+  if (filters.stage !== "all") params.set("stage", filters.stage);
+  if (sort !== "updated_desc") params.set("sort", sort);
+  if (page > 1) params.set("page", String(page));
+  return `/queue${params.size ? `?${params}` : ""}`;
+}
 
 /** 当前阶段筛选值的展示名（与 PipelineStage 中文标签一致 + 未知）。 */
 export const QUEUE_STAGE_FILTER_LABELS: Record<QueueStageFilter, string> = {
@@ -116,15 +146,7 @@ export const QUEUE_SORT_LABELS: Record<QueueSortKey, string> = {
 };
 
 function resolveIssueCount(job: JobSummaryRecord): number {
-  const merged = job.merged_issue_total;
-  if (typeof merged === "number" && Number.isFinite(merged)) {
-    return merged;
-  }
-  const legacy = job.issue_total;
-  if (typeof legacy === "number" && Number.isFinite(legacy)) {
-    return legacy;
-  }
-  return 0;
+  return getDisplayIssueTotal(job);
 }
 
 function resolveElapsedMs(job: JobSummaryRecord): number {
@@ -183,6 +205,64 @@ export function paginateJobs<T>(
     total,
     page: clampedPage,
     pageCount,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 服务端分页（/api/jobs?view=page）
+// ---------------------------------------------------------------------------
+
+/** 队列筛选条件 → 接口查询参数。组织只匹配该组织本身，与 filterWorkbenchQueue 一致。 */
+export function queuePageQuery(
+  filters: QueuePageFilters,
+  sortKey: QueueSortKey,
+  page: number,
+  pageSize: number,
+): JobPageQuery {
+  return {
+    keyword: filters.keyword,
+    status: filters.status,
+    year: filters.year,
+    kind: filters.reportKind,
+    stage: filters.stage,
+    organizationId: filters.organizationId,
+    sort: sortKey,
+    page,
+    pageSize,
+    include: ["runnable"],
+  };
+}
+
+/**
+ * 后端未升级（/api/jobs 仍返回全量数组）时按原口径在本地算出同样形状的分页视图。
+ * 年份选项沿用原行为：来自全部任务，不随组织筛选收窄。
+ */
+export function buildQueuePageViewLocally(
+  jobs: JobSummaryRecord[],
+  filters: QueuePageFilters,
+  sortKey: QueueSortKey,
+  page: number,
+  pageSize: number,
+): JobPageView {
+  const filtered = filterQueueJobs(jobs, filters);
+  const pagination = paginateJobs(sortQueueJobs(filtered, sortKey), page, pageSize);
+  const counts = countsFromJobs(jobs);
+  return {
+    items: pagination.items,
+    total: pagination.total,
+    page: pagination.page,
+    page_size: pageSize,
+    page_count: pagination.pageCount,
+    years: collectAvailableYears(jobs),
+    has_unknown_year: jobs.some((job) => job.report_year === null || job.report_year === undefined),
+    job_total: counts.total,
+    status_counts: counts.status_counts,
+    activity: counts.activity,
+    runnable: filtered.filter(canRunQueueJob).map((job) => ({
+      job_id: String(job.job_id),
+      filename: job.filename ?? null,
+      status: job.status ?? null,
+    })),
   };
 }
 

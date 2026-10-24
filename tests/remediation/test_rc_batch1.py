@@ -9,7 +9,9 @@ RC-10（校正闭环）、RC-12（版本与导出防串版）。全部合成输�
 
 from __future__ import annotations
 
+import hashlib
 from copy import deepcopy
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List
@@ -17,11 +19,13 @@ from typing import Any, Dict, List
 import pytest
 
 from src.engine.budget_rules import BUD107_TextTableConsistency
+from src.engine.common_rules import CMM001_ThreePublicNarrativeConsistency
 from src.engine.fact_context import (
     FactContext,
     FactOverlay,
     apply_fact_overlay,
     apply_fact_overlays_with_remap,
+    apply_table_column_mapping_overlays,
     build_fact_context_from_artifact,
     collect_unsupported_changes,
     parse_overlays_from_records,
@@ -148,6 +152,41 @@ def _fact(uid: str, indicator: str, value: Decimal, subject: str = "合计",
     )
 
 
+def test_rc10_partial_column_mapping_keeps_untouched_measure_facts() -> None:
+    """局部人工映射只替换目标列，未触及的收/支事实继续物化。"""
+    fragment = _make_fragment(
+        "FIN_01_income_expenditure_total",
+        [
+            ["项目", "本年收入", "本年支出"],
+            ["合计", "100.00", "90.00"],
+            ["其他", "20.00", "18.00"],
+        ],
+    )
+    instance = _instance_for(fragment)
+    artifact = _artifact_with([fragment], [instance])
+    before = build_fact_context_from_artifact(artifact, doc_type="final")
+    assert before is not None and len(before.facts) == 4
+
+    result = apply_table_column_mapping_overlays(
+        artifact,
+        [{
+            "record_id": "corr-income-col",
+            "changes": [{
+                "target_type": "table_instance",
+                "target_id": instance.instance_uid,
+                "field": "column_mapping",
+                "value": {"canonical_measure": "income_actual", "source_col_idx": 1},
+                "evidence_ids": ["evidence-header-income"],
+            }],
+        }],
+    )
+    after = build_fact_context_from_artifact(artifact, doc_type="final")
+    assert result["applied"] == 1 and result["unresolved"] == []
+    assert after is not None and len(after.facts) == 4
+    assert sum(fact.indicator == "income_actual" for fact in after.facts) == 2
+    assert sum(fact.indicator == "expenditure_actual" for fact in after.facts) == 2
+
+
 # ---------------------------------------------------------------------------
 # RC-01：操作数选择——verified 优先、总计角色唯一化、歧义拒绝
 # ---------------------------------------------------------------------------
@@ -221,6 +260,100 @@ def test_rc01_ambiguous_total_blocks_rule_not_silent_pick() -> None:
     assert resolution.reason and "人工消歧" in resolution.reason
 
 
+def test_rc01_blocked_total_cannot_fall_back_to_verified_detail() -> None:
+    """总计候选被阻断时，即使明细可用也必须待复核。"""
+    import dataclasses
+
+    total = dataclasses.replace(
+        _fact("total", "income_actual", Decimal("100"), status="ambiguous"),
+        budget_stage="年初预算",
+    )
+    detail = dataclasses.replace(
+        _fact("detail", "income_actual", Decimal("50"), subject="事业收入", status="verified"),
+        budget_stage="年初预算",
+    )
+    resolution = resolve_operand(
+        FactContext(facts=[total, detail]),
+        "income_actual",
+        budget_stages=("预算",),
+    )
+    assert resolution.status == "blocked"
+
+
+def test_rc03_budget_stage_matching_is_exact() -> None:
+    """请求预算应绑定年初预算，不能把调整后预算当作同阶段。"""
+    import dataclasses
+
+    context = FactContext(facts=[
+        dataclasses.replace(
+            _fact("adjusted", "income_actual", Decimal("120")),
+            budget_stage="调整后预算",
+        ),
+        dataclasses.replace(
+            _fact("initial", "income_actual", Decimal("100")),
+            budget_stage="年初预算",
+        ),
+    ])
+    resolution = resolve_operand(context, "income_actual", budget_stages=("预算",))
+    assert resolution.status == "ok"
+    assert resolution.fact is not None and resolution.fact.fact_uid == "initial"
+    assert resolution.value == Decimal("100")
+
+
+def test_rc12_new_decision_does_not_change_historical_projection(monkeypatch) -> None:
+    """新分析版本的决定追加保存，旧版本报告仍投影原决定。"""
+    from contextlib import nullcontext
+    import json
+
+    from src.services import issue_workflow_store as workflow
+
+    def issue(value: str, fact_id: str, evidence_id: str) -> Dict[str, Any]:
+        item = {
+            "id": "ISSUE-1",
+            "rule_id": "BUD-107",
+            "title": "收入预算差异",
+            "severity": "high",
+            "message": f"实际金额 {value}",
+            "check_relation_id": "BUD-107:T1",
+            "fact_ids": [fact_id],
+            "evidence_ids": [evidence_id],
+        }
+        return item
+
+    old_issue = issue("100", "fact-old", "evidence-old")
+    new_issue = issue("110", "fact-new", "evidence-new")
+    state: Dict[str, Any] = {"decision_events": [], "issues": {}}
+    first = workflow._append_decision_event(state, {
+        "job_id": "JOB-1", "issue_id": "ISSUE-1", "status": "confirmed",
+        "analysis_revision": "rev-1", "check_relation_id": old_issue["check_relation_id"],
+        "fact_ids": old_issue["fact_ids"], "evidence_ids": old_issue["evidence_ids"],
+        "identity_fingerprint": workflow.issue_identity_fingerprint(old_issue),
+    })
+    old_payload = {"analysis_revision": "rev-1", "issues": [old_issue]}
+    monkeypatch.setattr(workflow, "_read_state", lambda: state)
+    monkeypatch.setattr(workflow, "_state_lock", nullcontext)
+    before = workflow.project_job_issue_decisions("JOB-1", old_payload)
+    before_digest = hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest()
+    assert before[0]["status"] == "confirmed"
+
+    second = workflow._append_decision_event(state, {
+        "job_id": "JOB-1", "issue_id": "ISSUE-1", "status": "no_issue",
+        "analysis_revision": "rev-3", "check_relation_id": new_issue["check_relation_id"],
+        "fact_ids": new_issue["fact_ids"], "evidence_ids": new_issue["evidence_ids"],
+        "identity_fingerprint": workflow.issue_identity_fingerprint(new_issue),
+    })
+    after = workflow.project_job_issue_decisions("JOB-1", old_payload)
+    after_digest = hashlib.sha256(json.dumps(after, sort_keys=True).encode()).hexdigest()
+    current = workflow.project_job_issue_decisions(
+        "JOB-1", {"analysis_revision": "rev-3", "issues": [new_issue]}
+    )
+    assert first["decision_revision"] == "1" and second["decision_revision"] == "2"
+    assert len(state["decision_events"]) == 2
+    assert after[0]["status"] == "confirmed"
+    assert after_digest == before_digest
+    assert current[0]["status"] == "no_issue"
+
+
 def test_rc01_bud107_blocked_fact_must_not_fall_back_to_legacy_pass() -> None:
     """BUD-107：事实被识别风险压住 → 整关系转未完成，不得回退旧表值
     返回 pass（复核反例：歧义/低置信事实被拒后仍用旧表值）。"""
@@ -236,6 +369,7 @@ def test_rc01_bud107_blocked_fact_must_not_fall_back_to_legacy_pass() -> None:
         org_name="测试局",
         report_kind="budget",
         doc_type="budget",
+        fiscal_year=2026,
     )
     assert context is not None
     # 人为把收入事实压成 low_confidence——旧表里 100 仍在，不得静默沿用
@@ -284,8 +418,10 @@ def test_rc01_bud107_fact_only_path_without_legacy_table() -> None:
     )
     doc.fact_context = FactContext(
         facts=[
-            _fact("i1", "income_actual", Decimal("100")),
-            _fact("e1", "expenditure_actual", Decimal("90")),
+            replace(_fact("i1", "income_actual", Decimal("100")),
+                fiscal_year=2026,budget_stage='年初预算'),
+            replace(_fact("e1", "expenditure_actual", Decimal("90")),
+                fiscal_year=2026,budget_stage='年初预算'),
         ]
     )
     output = _run_one(doc, BUD107_TextTableConsistency())
@@ -414,7 +550,7 @@ def test_rc02_parser_fragment_uids_deterministic_across_reparses() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rc08_cache_lookup_uses_passed_artifact_fingerprints(monkeypatch) -> None:
+async def test_rc08_cache_lookup_uses_passed_artifact_fingerprints(monkeypatch, tmp_path) -> None:
     """缓存键必须取调用方 artifact 自身的 config/OCR 指纹（复核：固定参数
     指纹 + OCR=None 会把新配置事实挂到旧 run）。"""
     import src.services.structured_ingest_runner as runner
@@ -452,8 +588,11 @@ async def test_rc08_cache_lookup_uses_passed_artifact_fingerprints(monkeypatch) 
     monkeypatch.setattr(runner, "_allocate_material_slot", _fake_material_slot)
     monkeypatch.setattr(runner, "DatabaseConnection", _StubDatabase)
 
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"%PDF-1.4\n%%EOF")
+    checksum = runner._sha256_file(source)
     artifact = ParseArtifact(
-        source_file_hash="hash",
+        source_file_hash=checksum,
         config_fingerprint="cfg-new",
         ocr_model_fingerprint="ocr-new",
         table_fragments=[],
@@ -461,12 +600,14 @@ async def test_rc08_cache_lookup_uses_passed_artifact_fingerprints(monkeypatch) 
     )
     result = await runner.run_structured_ingest(
         "job-x",
-        Path("unused.pdf"),
-        {"organization_name": "测试局", "checksum": "f" * 64},
+        source,
+        {"organization_name": "测试局", "checksum": checksum},
         parse_artifact=artifact,
         parse_config_fingerprint="cfg-old-param",
     )
     assert captured, "缓存查询必须发生"
+    assert captured["parser_fingerprint"] == runner.PARSER_FINGERPRINT
+    assert captured["parser_fingerprint"] != "pdfplumber-cells-v4-identity-boundaries"
     assert captured["config_fingerprint"] == "cfg-new", captured
     assert captured["ocr_model_fingerprint"] == "ocr-new", captured
     assert result.get("status") == "error"
@@ -501,6 +642,10 @@ def test_rc10_identity_remap_recovers_target_across_parses() -> None:
     """UID 失效时按事实身份键唯一命中重映射；歧义/缺失转未完成，不猜。"""
     old_fact = _fact("old-uid", "income_actual", Decimal("100"))
     new_context = FactContext(facts=[_fact("new-uid", "income_actual", Decimal("100"))])
+    refs = [{'file_hash':'frozen-source','physical_page':1,'source_cell_id':'grid:r1c2','bbox':[1,2,3,4]}]
+    old_fact.extra_dims['evidence_refs'] = refs
+    new_context.facts[0].extra_dims['evidence_refs'] = refs
+    new_context.file_hash = 'frozen-source'
     overlays = [FactOverlay(fact_uid="old-uid", raw_value="90")]
 
     new_context, report = apply_fact_overlays_with_remap(
@@ -524,7 +669,7 @@ def test_rc10_identity_remap_recovers_target_across_parses() -> None:
 
 
 def test_rc10_unsupported_identity_fields_are_recorded_not_dropped() -> None:
-    """身份字段（year/org/scope/indicator）校正必须显式记账为未生效。"""
+    """身份字段及暂不支持的人工定位校正必须显式阻断并待复核。"""
     records = [
         {
             "changes": [
@@ -537,7 +682,8 @@ def test_rc10_unsupported_identity_fields_are_recorded_not_dropped() -> None:
     unsupported = collect_unsupported_changes(records)
     assert [item["field"] for item in unsupported] == ["year", "manual_location"]
     assert unsupported[0]["blocking"] is True
-    assert unsupported[1]["blocking"] is False
+    assert unsupported[1]["blocking"] is True
+    assert "未生效" in unsupported[1]["reason"]
 
 
 # ---------------------------------------------------------------------------
@@ -633,6 +779,7 @@ def test_rc05_zero_and_historical_amounts_are_not_positive_evidence() -> None:
 def test_rc09_table_refs_require_content_anchoring(tmp_path: Path) -> None:
     """伪引文/空白 bbox 的 table_refs 必须降级，不得画进标注 PDF。"""
     import fitz
+    import hashlib
 
     pdf_path = tmp_path / "source.pdf"
     document = fitz.open()
@@ -646,16 +793,26 @@ def test_rc09_table_refs_require_content_anchoring(tmp_path: Path) -> None:
     from src.utils.issue_bbox import PDFBBoxLocator
 
     locator = PDFBBoxLocator(str(pdf_path))
+    source_hash = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
+    source_cell_id = "page-1-cell-1"
+    quote = "收入合计 100.00 万元"
+    evidence_id = hashlib.sha1(
+        f"{source_hash}|1|{source_cell_id}|{quote}".encode("utf-8")
+    ).hexdigest()[:16]
 
     # 真引文+真区域 → 保持 verified
     good = locator._validate_ref(
         {
             "page": 1,
             "bbox": [70, 60, 220, 84],
-            "quote": "收入合计 100.00 万元",
+            "quote": quote,
             "location_level": "exact_cell",
             "verification_status": "verified",
             "table": "收入决算表",
+            "file_hash": source_hash,
+            "physical_page": 1,
+            "source_cell_id": source_cell_id,
+            "evidence_id": evidence_id,
         }
     )
     assert good.get("verification_status") == "verified", good
@@ -670,6 +827,10 @@ def test_rc09_table_refs_require_content_anchoring(tmp_path: Path) -> None:
             "location_level": "exact_cell",
             "verification_status": "verified",
             "table": "收入决算表",
+            "file_hash": source_hash,
+            "physical_page": 1,
+            "source_cell_id": source_cell_id,
+            "evidence_id": evidence_id,
         }
     )
     assert fake.get("verification_status") == "unverified", fake
@@ -684,6 +845,10 @@ def test_rc09_table_refs_require_content_anchoring(tmp_path: Path) -> None:
             "location_level": "exact_cell",
             "verification_status": "verified",
             "table": "收入决算表",
+            "file_hash": source_hash,
+            "physical_page": 1,
+            "source_cell_id": source_cell_id,
+            "evidence_id": evidence_id,
         }
     )
     assert blank.get("verification_status") == "unverified"
@@ -731,6 +896,123 @@ def test_rc03_adjusted_budget_narrative_not_used_as_initial_operand() -> None:
     assert value3 is not None and value3.decimal_val == Decimal("100")
 
 
+def test_rc03_short_other_organization_names_are_filtered_from_narrative_operands() -> None:
+    """短名“乙单位/乙局”明确指向他主体时，不得污染本单位的预算取数。"""
+    from src.engine.budget_rules import (
+        _other_document_org_names,
+        _extract_text_strict_by_patterns_for_year,
+    )
+
+    text = (
+        "乙单位收入预算90.00万元。\n"
+        "2026年乙局支出预算80.00万元。\n"
+        "2026年本单位收入预算100.00万元，支出预算110.00万元。"
+    )
+    other_orgs = _other_document_org_names(text, "甲单位")
+    assert {"乙单位", "乙局"}.issubset(set(other_orgs))
+
+    # 年份后的“部门”属于表名，且“单位：万元”是单位标注，都不能误识别成组织。
+    table_heading = "2026年部门预算收支总表\n单位：万元\n收入预算90.00万元。"
+    assert "年部门" not in _other_document_org_names(table_heading, "甲单位")
+
+    income, _income_notes = _extract_text_strict_by_patterns_for_year(
+        text,
+        [r"收入预算\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
+        2026,
+        excluded_org_names=other_orgs,
+    )
+    expense, _expense_notes = _extract_text_strict_by_patterns_for_year(
+        text,
+        [r"支出预算\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],
+        2026,
+        excluded_org_names=other_orgs,
+    )
+    assert income is not None and income.decimal_val == Decimal("100")
+    assert expense is not None and expense.decimal_val == Decimal("110")
+
+
+def test_r5_05_unprefixed_education_bureau_amount_is_excluded_in_bud107() -> None:
+    """教育局简称出现在本单位说明前时，实际 BUD-107 仍取本单位金额。"""
+    text = (
+        "2026年部门财务收支预算总表\n单位：万元\n"
+        "教育局2026年收入预算213012.00万元。\n"
+        "本单位2026年收入预算328661.81万元，支出预算328661.81万元。"
+    )
+    table = [[
+        ["项目", "预算数", "项目", "预算数"],
+        ["收入总计", "328661.81", "支出总计", "328661.81"],
+    ]]
+    doc = build_document(
+        "本单位2026年部门预算.pdf", [text], [table], 100
+    )
+
+    output = _run_one(doc, BUD107_TextTableConsistency())
+
+    assert not any("文本收入预算与T1不一致" in issue.message for issue in output["issues"])
+    income_receipt = next(
+        item for item in output["receipts"]
+        if item.get("sub_check_id") == "T1:income_budget:text_vs_table"
+    )
+    assert income_receipt["status"] == "pass"
+
+
+@pytest.mark.parametrize(("table_total", "expected_status"), [(30, "pass"), (31, "fail")])
+def test_r5_03_mixed_three_public_operands_never_claim_complete_fact_migration(
+    table_total: int, expected_status: str
+) -> None:
+    """只物化接待费时，旧表总计变化应影响勾稽但不能伪称全事实计算。"""
+    text_page = (
+        "2026年部门预算说明\n"
+        "三公经费预算数为30万元。因公出国（境）费2万元，"
+        "公务用车购置及运行费18万元，其中购置费0万元，运行费18万元，"
+        "公务接待费10万元。"
+    )
+    table_page = "2026年三公经费和机关运行经费预算表\n单位：万元"
+    table = [[
+        ["合计", "因公出国（境）费", "公务接待费", "公务用车购置及运行费", "购置费", "运行费", "机关运行经费"],
+        [str(table_total), "2", "10", "18", "0", "18", "0"],
+    ]]
+    doc = build_document(
+        "unit-2026-budget.pdf", [text_page, table_page], [[], table], 100
+    )
+    doc.fact_context = FactContext(
+        facts=[FiscalFact(
+            fact_uid="fact-reception-only",
+            indicator="budget",
+            raw_value="10",
+            unit="万元",
+            normalized_value=Decimal("10"),
+            subject_name="公务接待费",
+            table_code="FIN_07_three_public",
+            fiscal_year=2026,
+            budget_stage="年初预算",
+            recognition_status="verified",
+            confidence=0.99,
+            evidence_ids=["evidence-reception-only"],
+        )],
+        fiscal_year=2026,
+        report_kind="budget",
+    )
+
+    output = _run_one(doc, CMM001_ThreePublicNarrativeConsistency())
+    relation = next(
+        item for item in output["receipts"]
+        if item.get("sub_check_id") == "san_gong:table_total_balance"
+    )
+
+    assert relation["status"] == expected_status
+    assert relation["evaluation_basis"] == "legacy_document"
+    assert relation["fact_migration_status"] == "pending"
+    assert relation["operand_fact_ids"] == ["fact-reception-only"]
+    assert relation["required_operand_roles"] == ["total", "abroad", "car_total", "reception"]
+    assert relation["operand_sources"] == {
+        "total": "legacy_table",
+        "abroad": "legacy_table",
+        "car_total": "legacy_table",
+        "reception": "fiscal_fact:fact-reception-only",
+    }
+
+
 # ---------------------------------------------------------------------------
 # RC-07：OCR 晋升——表种上下文消歧 + 未认证数字不进确定性勾稽
 # ---------------------------------------------------------------------------
@@ -774,18 +1056,17 @@ def test_rc07_generic_total_table_not_certified_as_fund_table() -> None:
     ), summary
 
 
-def test_rc07_promoted_ocr_facts_stay_low_confidence() -> None:
-    """晋升成功的 OCR 事实保持 low_confidence——未逐格认证不进确定性勾稽。"""
+def test_rc07_ocr_without_physical_identity_cannot_materialize() -> None:
+    """只有表种线索、无原件/页/请求身份的旧候选，不创建金额事实。"""
     from src.services.ocr_fact_promotion import (
         promote_ocr_candidates as promote_ocr_facts,
     )
 
     artifact = _ocr_artifact("2026年政府性基金预算拨款情况")
     summary = promote_ocr_facts(artifact, file_hash="ocr-hash")
-    assert summary["promoted_tables"], summary
+    assert not summary["promoted_tables"], summary
+    assert any(item.get("reason") == "physical_page_identity_not_bound"
+               for item in summary["rejected_tables"]), summary
     context = build_fact_context_from_artifact(artifact, doc_type="final")
-    assert context is not None
-    assert all(
-        fact.recognition_status == "low_confidence" for fact in context.facts
-    ), [f.recognition_status for f in context.facts]
-    assert context.definite_facts() == []
+    assert context is None
+    assert not artifact.table_fragments and not artifact.logical_tables

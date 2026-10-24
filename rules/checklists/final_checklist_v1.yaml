@@ -1,0 +1,407 @@
+# 决算报告检查点清单（系统默认检查指标）
+# 来源：《普陀区财政决算报告检查点清单（系统核查用）v1.0》；2026-10-22 起作为全系统检查指标，
+# 不按地区单列。每条检查点映射到检查义务（src/engine/check_obligations.py）与规则编号，
+# tests/test_checklist_catalog.py 校验映射完整、义务存在、规则已注册。
+# status: implemented=确定性规则覆盖；partial=部分要素覆盖（见 note）；
+#         ai_assisted=确定性词表提示+AI 语义复核；external=不属 PDF 内容规则（下载环节/上传入口）。
+# decision（非 implemented 条目必填，2026-10-22 用户决议）：closed=按决议不再自动化，
+#         deferred=暂缓待条件具备，ai_only=规则只作提示、进一步判断只交大模型 AI。
+version: checklist-final-v1
+report_kind: final
+effective_date: 2026-10-22
+scope: global
+items:
+  - id: A-01
+    dimension: "一、完整性"
+    title: "报告四大部分齐全"
+    criterion: "四个部分标题及内容均存在。"
+    status: implemented
+    obligations: [OBL-STRUCT-SECTIONS, OBL-STRUCT-TOC-ALIGN]
+    rules: [CMM-023, CMM-013]
+  - id: A-02
+    dimension: "一、完整性"
+    title: "封面要素齐备"
+    criterion: "封面同时出现单位全称与“YYYY年度决算”。如果是部门决算报告，则需要显示“YYYY年度部门决算”"
+    status: implemented
+    obligations: [OBL-STRUCT-COVER]
+    rules: [V33-001, CMM-019]
+  - id: A-03
+    dimension: "一、完整性"
+    title: "“主要职能”标题及内容"
+    criterion: "标题存在且正文为实际职能描述。"
+    status: implemented
+    obligations: [OBL-STRUCT-SECTIONS, OBL-STRUCT-PLACEHOLDER]
+    rules: [CMM-023, CMM-008]
+  - id: A-04
+    dimension: "一、完整性"
+    title: "“机构设置/部门决算单位构成”标题及内容"
+    criterion: "标题存在且目录、正文表述一致。"
+    status: implemented
+    obligations: [OBL-STRUCT-SECTIONS, OBL-STRUCT-TOC-ALIGN]
+    rules: [CMM-023, CMM-013]
+  - id: A-05
+    dimension: "一、完整性"
+    title: "目录与正文标题逐项一致"
+    criterion: "逐条比对一致。"
+    status: implemented
+    obligations: [OBL-STRUCT-TOC-ALIGN]
+    rules: [CMM-013]
+  - id: A-06
+    dimension: "一、完整性"
+    title: "决算表清单齐全"
+    criterion: "上述表格均存在（无数据的表可留空但须附说明）。"
+    status: implemented
+    obligations: [OBL-STRUCT-NINE-TABLES]
+    rules: [V33-002]
+  - id: A-07
+    dimension: "一、完整性"
+    title: "空表须附“本表无数据”说明"
+    criterion: "空表有说明、有数据的表无说明。"
+    status: implemented
+    obligations: [OBL-STRUCT-EMPTY-STATEMENT]
+    rules: [V33-114, V33-109, V33-122, CMM-026]
+  - id: A-08
+    dimension: "一、完整性"
+    title: "“三公”经费细化披露字段齐全"
+    criterion: "8项字段按要求逐项披露。"
+    status: implemented
+    obligations: [OBL-SG-COMPLETION, OBL-SG-COUNTS, OBL-SG-DISCLOSURE]
+    rules: [V33-SG-COMPLETION, V33-246]
+  - id: A-09
+    dimension: "一、完整性"
+    title: "支出情况说明覆盖全部科目（无漏项）"
+    criterion: "列示科目与决算表一致，无遗漏。"
+    status: implemented
+    obligations: [OBL-TXT-FINAL-DETAIL, OBL-TXT-T5]
+    rules: [V33-251, V33-222, V33-227]
+  - id: A-10
+    dimension: "一、完整性"
+    title: "支出结构说明涵盖全部科目且占比合计=100%"
+    criterion: "科目齐全，占比合计=100%±0.1%。"
+    status: implemented
+    obligations: [OBL-NARRATIVE-SHARE-SUM, OBL-TXT-T5]
+    rules: [CMM-020, V33-106]
+  - id: A-11
+    dimension: "一、完整性"
+    title: "国有资产占有使用情况说明"
+    criterion: "该章节存在且有实质内容。"
+    status: implemented
+    obligations: [OBL-STRUCT-SECTIONS]
+    rules: [CMM-023]
+  - id: A-12
+    dimension: "一、完整性"
+    title: "政府采购支出情况说明"
+    criterion: "章节存在，金额单位正确、加总正确。"
+    status: implemented
+    obligations: [OBL-STRUCT-SECTIONS, OBL-NARRATIVE-AMOUNT]
+    rules: [CMM-023, V33-234]
+  - id: B-01
+    dimension: "二、一致性"
+    title: "单位名称全篇一致且为规范全称"
+    criterion: "全篇一致且为规范全称。"
+    status: implemented
+    obligations: [OBL-STRUCT-ORG-NAME, OBL-STRUCT-PUNCTUATION]
+    rules: [CMM-017, CMM-002]
+    note: "规范全称以全文多数写法为准；接入组织台账后可改为以台账全称为准"
+  - id: B-02
+    dimension: "二、一致性"
+    title: "主体口径一致（部门/单位）"
+    criterion: "口径与报告类型匹配，无混用。"
+    status: implemented
+    obligations: [OBL-STRUCT-TERMINOLOGY]
+    rules: [V33-236, CMM-018]
+  - id: B-03
+    dimension: "二、一致性"
+    title: "科目名称与本报告决算表一致"
+    criterion: "科目名称与本报告决算表一致。"
+    status: implemented
+    obligations: [OBL-TXT-T5]
+    rules: [V33-227]
+  - id: B-04
+    dimension: "二、一致性"
+    title: "科目代码正确且与各表一致"
+    criterion: "代码与名称匹配，跨表一致。"
+    status: partial
+    obligations: [OBL-TEXT-SUBJECT-CODE, OBL-NARRATIVE-CODE-NAME]
+    rules: [CMM-022, CMM-004]
+    decision: deferred
+    note: "功能分类编码-名称全量字典暂缓：待取得权威《政府收支分类科目》后再建立；现只查经济分类类别、表内重复与文内镜像（2026-10-22 决议）"
+  - id: B-05
+    dimension: "二、一致性"
+    title: "年度表述与报告年度一致"
+    criterion: "非比较语境的年份均为报告年度。"
+    status: implemented
+    obligations: [OBL-TEXT-YEAR, OBL-STRUCT-COVER]
+    rules: [CMM-012, V33-001]
+  - id: B-06
+    dimension: "二、一致性"
+    title: "正文金额与决算表一致"
+    criterion: "逐项比对一致（合计容差0.01万元）。"
+    status: implemented
+    obligations: [OBL-TXT-T1, OBL-TXT-T2, OBL-TXT-T3, OBL-TXT-T5, OBL-TXT-T6, OBL-TXT-T7]
+    rules: [V33-225, V33-226, V33-220, V33-222, V33-223, V33-224]
+  - id: B-07
+    dimension: "二、一致性"
+    title: "“三公”正文数据与“三公”经费支出决算表一致"
+    criterion: "逐项一致。"
+    status: implemented
+    obligations: [OBL-SG-TABLE-TEXT]
+    rules: [V33-108, V33-224, CMM-001]
+  - id: B-08
+    dimension: "二、一致性"
+    title: "绩效评级项目数合计=自评项目总数"
+    criterion: "两者相等。"
+    status: implemented
+    obligations: [OBL-NARRATIVE-AMOUNT]
+    rules: [V33-250]
+  - id: B-09
+    dimension: "二、一致性"
+    title: "绩效“0个项目”时涉及金额为0"
+    criterion: "数量与金额逻辑一致。"
+    status: implemented
+    obligations: [OBL-PERF-ZERO-COUNT]
+    rules: [CMM-025]
+  - id: B-10
+    dimension: "二、一致性"
+    title: "表间同一科目金额一致"
+    criterion: "跨表同科目金额一致。"
+    status: implemented
+    obligations: [OBL-CROSS-T1-T2, OBL-CROSS-T1-T3, OBL-NARRATIVE-CODE-NAME]
+    rules: [V33-200, V33-201, CMM-004]
+    note: "收入表与支出表同科目差额超 max(1万元,10%) 列待人工复核（口径决议⑤）"
+  - id: C-01
+    dimension: "三、数据勾稽"
+    title: "表内合计=各分项之和"
+    criterion: "合计=分项之和（容差0.01万元）。"
+    status: implemented
+    obligations: [OBL-INTERNAL-TABLE-TOTAL, OBL-INTERNAL-T2-TOTAL, OBL-INTERNAL-T3-TOTAL]
+    rules: [V33-005, V33-240, V33-241, V33-233]
+  - id: C-02
+    dimension: "三、数据勾稽"
+    title: "上下级科目（类→款→项）加总一致"
+    criterion: "层级加总一致（容差0.01万元）。"
+    status: implemented
+    obligations: [OBL-INTERNAL-TABLE-TOTAL, OBL-INTERNAL-T2-TOTAL]
+    rules: [V33-120, V33-240, V33-241]
+  - id: C-03
+    dimension: "三、数据勾稽"
+    title: "收支总表平衡（收入+年初结转=支出+年末结转）"
+    criterion: "左右两侧平衡。"
+    status: implemented
+    obligations: [OBL-INTERNAL-T1-BALANCE, OBL-CROSS-T1-IDENTITY]
+    rules: [V33-214, V33-101, V33-115]
+  - id: C-04
+    dimension: "三、数据勾稽"
+    title: "财政拨款收支总表与明细表勾稽"
+    criterion: "总表与明细表一致。"
+    status: implemented
+    obligations: [OBL-CROSS-T4-T5, OBL-CROSS-T4-FUNDS, OBL-TXT-T4]
+    rules: [V33-202, V33-252, V33-242]
+  - id: C-05
+    dimension: "三、数据勾稽"
+    title: "基本支出=人员经费+公用经费"
+    criterion: "等式成立。"
+    status: implemented
+    obligations: [OBL-INTERNAL-BASIC-EXPENSE, OBL-CROSS-T5-T6]
+    rules: [V33-243, V33-117, V33-203]
+  - id: C-06
+    dimension: "三、数据勾稽"
+    title: "基本支出+项目支出=本年支出合计"
+    criterion: "等式成立。"
+    status: implemented
+    obligations: [OBL-INTERNAL-T3-TOTAL, OBL-INTERNAL-DETAIL-ROW]
+    rules: [V33-241, V33-233]
+  - id: C-07
+    dimension: "三、数据勾稽"
+    title: "占比分母口径正确"
+    criterion: "按本年支出合计计算且数值正确。"
+    status: implemented
+    obligations: [OBL-NARRATIVE-AMOUNT]
+    rules: [V33-249]
+  - id: C-08
+    dimension: "三、数据勾稽"
+    title: "完成率=决算数÷预算数"
+    criterion: "计算正确且与正文数据一致。应该考虑决算数和预算数的四舍五入造成的误差范围"
+    status: implemented
+    obligations: [OBL-TREND-COMPLETION-RATE, OBL-NARRATIVE-AMOUNT]
+    rules: [V33-TREND-COMPLETION-RATE, V33-234]
+  - id: C-09
+    dimension: "三、数据勾稽"
+    title: "同比增减额与增减率自洽"
+    criterion: "按上年数为分母计算正确。"
+    status: implemented
+    obligations: [OBL-NARRATIVE-AMOUNT, OBL-TREND-ZERO-BASE]
+    rules: [V33-234, CMM-007]
+  - id: C-10
+    dimension: "三、数据勾稽"
+    title: "决算数与预算数大小关系表述正确"
+    criterion: "方向表述与数值关系一致。"
+    status: implemented
+    obligations: [OBL-TREND-COMPARATIVE-LOGIC]
+    rules: [CMM-005, V33-110]
+  - id: C-11
+    dimension: "三、数据勾稽"
+    title: "情况说明分项加总=所列总额（年初预算）"
+    criterion: "两者相等。"
+    status: implemented
+    obligations: [OBL-TXT-FINAL-DETAIL]
+    rules: [V33-251]
+  - id: C-12
+    dimension: "三、数据勾稽"
+    title: "情况说明分项加总=所列总额（支出决算）"
+    criterion: "两者相等。"
+    status: implemented
+    obligations: [OBL-TXT-FINAL-DETAIL]
+    rules: [V33-251]
+  - id: C-13
+    dimension: "三、数据勾稽"
+    title: "政府采购支出分项加总=总额"
+    criterion: "等式成立且单位正确。"
+    status: implemented
+    obligations: [OBL-NARRATIVE-AMOUNT]
+    rules: [V33-234]
+  - id: C-14
+    dimension: "三、数据勾稽"
+    title: "金额单位统一为“万元”"
+    criterion: "无遗漏“万”字的金额。"
+    status: implemented
+    obligations: [OBL-TEXT-AMOUNT-UNIT, OBL-TXT-T1]
+    rules: [CMM-011, V33-225]
+  - id: C-15
+    dimension: "三、数据勾稽"
+    title: "金额数字格式规范"
+    criterion: "格式规范统一。"
+    status: implemented
+    obligations: [OBL-TEXT-AMOUNT-FORMAT]
+    rules: [CMM-010]
+  - id: C-16
+    dimension: "三、数据勾稽"
+    title: "同一段各项占比合计=100%"
+    criterion: "合计=100%±0.1%。"
+    status: implemented
+    obligations: [OBL-TXT-T7, OBL-NARRATIVE-SHARE-SUM]
+    rules: [V33-224, CMM-020]
+  - id: D-01
+    dimension: "四、文字规范"
+    title: "无错别字"
+    criterion: "无错别字。"
+    status: ai_assisted
+    obligations: [OBL-TEXT-TYPO, OBL-AI-SEMANTIC-REVIEW]
+    rules: [CMM-009]
+    decision: ai_only
+    note: "高精度错词表只作提示；其余错别字只能由大模型 AI 语义复核判断，规则库不再扩展（2026-10-22 决议）"
+  - id: D-02
+    dimension: "四、文字规范"
+    title: "无文字/词组重复"
+    criterion: "无重复。"
+    status: implemented
+    obligations: [OBL-STRUCT-PUNCTUATION]
+    rules: [V33-113, CMM-002]
+  - id: D-03
+    dimension: "四、文字规范"
+    title: "无多字、漏字"
+    criterion: "无多字漏字。"
+    status: implemented
+    obligations: [OBL-STRUCT-PUNCTUATION, OBL-TEXT-TYPO]
+    rules: [V33-113, CMM-002, CMM-009]
+  - id: D-04
+    dimension: "四、文字规范"
+    title: "标点符号使用规范"
+    criterion: "标点规范。"
+    status: implemented
+    obligations: [OBL-STRUCT-PUNCTUATION]
+    rules: [V33-113, CMM-002]
+  - id: D-05
+    dimension: "四、文字规范"
+    title: "无模板残留表述"
+    criterion: "模板语已按实际情况处理。"
+    status: implemented
+    obligations: [OBL-STRUCT-PLACEHOLDER, OBL-TREND-COMPARATIVE-LOGIC]
+    rules: [CMM-008, CMM-005]
+  - id: D-06
+    dimension: "四、文字规范"
+    title: "无未替换占位符"
+    criterion: "无占位符。"
+    status: implemented
+    obligations: [OBL-STRUCT-PLACEHOLDER]
+    rules: [V33-112, CMM-008]
+  - id: D-07
+    dimension: "四、文字规范"
+    title: "无自相矛盾表述"
+    criterion: "表述一致。"
+    status: implemented
+    obligations: [OBL-TREND-DIRECTION, OBL-TREND-COMPARATIVE-LOGIC]
+    rules: [V33-245, CMM-005, V33-110]
+  - id: D-08
+    dimension: "四、文字规范"
+    title: "语句通顺、语义清晰"
+    criterion: "语句通顺。"
+    status: ai_assisted
+    obligations: [OBL-TEXT-TYPO, OBL-AI-SEMANTIC-REVIEW]
+    rules: [CMM-009]
+    decision: ai_only
+    note: "固定病句模式只作提示；其余语病只能由大模型 AI 语义复核判断，规则库不再扩展（2026-10-22 决议）"
+  - id: E-01
+    dimension: "五、格式规范"
+    title: "表格框线完整"
+    criterion: "无框线缺失。"
+    status: partial
+    obligations: [OBL-STRUCT-VISUAL]
+    rules: [CMM-016]
+    decision: closed
+    note: "彩色字体、彩色底纹、整体横排已查；框线缺失不做自动检查（2026-10-22 决议）"
+  - id: E-02
+    dimension: "五、格式规范"
+    title: "无空白页、页码正常"
+    criterion: "无空白页、页码正常。"
+    status: implemented
+    obligations: [OBL-STRUCT-PAGES]
+    rules: [CMM-015]
+  - id: E-03
+    dimension: "五、格式规范"
+    title: "交付格式为PDF"
+    criterion: "文件为PDF。"
+    status: external
+    obligations: []
+    rules: []
+    decision: closed
+    note: "上传入口只接受 PDF，不属规则库检查内容"
+  - id: E-04
+    dimension: "五、格式规范"
+    title: "标题层级编号连续"
+    criterion: "编号连续无缺。"
+    status: implemented
+    obligations: [OBL-STRUCT-NUMBERING]
+    rules: [CMM-014]
+  - id: E-05
+    dimension: "五、格式规范"
+    title: "序号标点与编号体例统一"
+    criterion: "体例统一、标点完整。"
+    status: implemented
+    obligations: [OBL-STRUCT-NUMBERING]
+    rules: [CMM-014]
+  - id: E-06
+    dimension: "五、格式规范"
+    title: "表名与章节标题规范"
+    criterion: "标题规范。"
+    status: implemented
+    obligations: [OBL-STRUCT-TABLE-NAMES]
+    rules: [CMM-021]
+  - id: F-01
+    dimension: "六、公开合规"
+    title: "部门决算公开日期合规"
+    criterion: "公开日期≤2026-08-13。"
+    status: external
+    obligations: []
+    rules: []
+    decision: closed
+    note: "公开时限在下载环节自行核查，不属 PDF 内容规则，规则库不检查（2026-10-22 决议）。参考截止日：部门预算 2月15日、单位预算 3月2日、部门决算 8月13日、单位决算 8月28日（以当年通知为准）"
+  - id: F-02
+    dimension: "六、公开合规"
+    title: "单位决算公开日期合规"
+    criterion: "公开日期≤2026-08-28。"
+    status: external
+    obligations: []
+    rules: []
+    decision: closed
+    note: "公开时限在下载环节自行核查，不属 PDF 内容规则，规则库不检查（2026-10-22 决议）。参考截止日：部门预算 2月15日、单位预算 3月2日、部门决算 8月13日、单位决算 8月28日（以当年通知为准）"

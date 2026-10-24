@@ -16,7 +16,11 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import re
 import logging
+import math
+from dataclasses import replace
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -37,6 +41,31 @@ from src.schemas.parse_artifact import (
 logger = logging.getLogger(__name__)
 
 
+def artifact_payload_hash(payload: Dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                                     separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+
+
+def _restore_snapshot(run) -> Optional[ParseArtifact]:
+    """金额/文字/合并占位/物理来源均来自原始快照，不由 SQL 格子猜回表头。"""
+    if run.get("artifact_snapshot") is None:
+        version = re.match(r"pdfplumber-cells-v(\d+)", str(run.get("parser_fingerprint") or ""))
+        if version and int(version[1]) >= 17:
+            raise ValueError("complete parse snapshot missing")
+        return None  # 旧运行保留兼容读取；新解析指纹会重新建立完整快照。
+    payload = _decode_jsonb(run["artifact_snapshot"], dict, field="artifact_snapshot")
+    if not run.get("artifact_snapshot_hash") or artifact_payload_hash(payload) != run["artifact_snapshot_hash"]:
+        raise ValueError("complete parse snapshot hash mismatch")
+    for field in ("source_file_hash", "parse_run_uid", "parser_name", "parser_fingerprint",
+                  "config_fingerprint", "ocr_model_fingerprint", "page_count"):
+        if payload.get(field) != run.get(field):
+            raise ValueError(f"complete parse snapshot identity mismatch: {field}")
+    artifact = ParseArtifact.from_dict(payload)
+    if artifact.to_dict() != payload:
+        raise ValueError("complete parse snapshot roundtrip mismatch")
+    return artifact
+
+
 def _bbox_to_json(bbox) -> Optional[str]:
     if not bbox:
         return None
@@ -47,6 +76,38 @@ def _json(value: Any) -> Optional[str]:
     if value is None:
         return None
     return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _decode_jsonb(value: Any, expected_type: type, *, field: str) -> Any:
+    """Handle both asyncpg's default JSON text and a configured JSON codec.
+
+    JSON null/SQL NULL means an empty collection. Other scalar/collection types
+    are corruption, not empty metadata: fail the cache read instead of silently
+    dropping source provenance.
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid JSONB for {field}") from exc
+    if value is None:
+        return expected_type()
+    if not isinstance(value, expected_type):
+        raise ValueError(f"invalid JSONB object type for {field}: expected {expected_type.__name__}")
+    return value
+
+
+def _decode_bbox(value: Any, *, field: str) -> Optional[tuple]:
+    if value is None or value == "null":
+        return None
+    values = _decode_jsonb(value, list, field=field)
+    try:
+        box = tuple(float(item) for item in values)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid JSONB coordinates for {field}") from exc
+    if len(box) != 4 or not all(math.isfinite(item) for item in box):
+        raise ValueError(f"invalid JSONB coordinates for {field}")
+    return box
 
 
 async def find_cached_parse_run(
@@ -94,6 +155,11 @@ async def persist_parse_artifact(
     缓存命中（同指纹已完成运行）由调用方先用 :func:`find_cached_parse_run`
     判断，避免重复解析。
     """
+    from src.utils.report_year import parse_report_year
+
+    fiscal_year = parse_report_year(fiscal_year)
+    snapshot = artifact.to_dict()
+    snapshot_hash = artifact_payload_hash(snapshot)
     parse_run_id: Optional[int] = None
     async with conn.transaction():
         row = await conn.fetchrow(
@@ -102,11 +168,12 @@ async def persist_parse_artifact(
                 parse_run_uid, document_version_id, source_file_hash,
                 parser_name, parser_fingerprint, config_fingerprint,
                 ocr_model_fingerprint, page_count, page_states, text_blocks,
-                ocr_table_candidates, coordinate_space, coordinate_transforms, status
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'completed')
+                ocr_table_candidates, coordinate_space, coordinate_transforms,
+                artifact_snapshot, artifact_snapshot_hash, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'completed')
             ON CONFLICT (parse_run_uid) DO UPDATE
                 SET parse_run_uid = EXCLUDED.parse_run_uid
-            RETURNING id
+            RETURNING id, artifact_snapshot_hash
             """,
             artifact.parse_run_uid,
             document_version_id,
@@ -121,8 +188,12 @@ async def persist_parse_artifact(
             _json([table.to_dict() for table in artifact.ocr_table_candidates]),
             artifact.coordinate_space,
             _json(artifact.coordinate_transforms),
+            _json(snapshot),
+            snapshot_hash,
         )
         parse_run_id = int(row["id"])
+        if row["artifact_snapshot_hash"] != snapshot_hash:
+            raise ValueError("parse_run_uid already binds a different or legacy artifact")
 
         for instance in artifact.logical_tables:
             await conn.execute(
@@ -141,7 +212,7 @@ async def persist_parse_artifact(
                 instance.table_code,
                 instance.title,
                 instance.org_name or org_name,
-                instance.fiscal_year or fiscal_year,
+                parse_report_year(instance.fiscal_year) or fiscal_year,
                 instance.fund_scope,
                 instance.page_start,
                 instance.page_end,
@@ -152,6 +223,41 @@ async def persist_parse_artifact(
                 _json(instance.conflict_reasons),
             )
 
+        physical_by_uid = {
+            str(fragment.fragment_uid): fragment
+            for fragment in (artifact.physical_fragments or artifact.table_fragments)
+            if fragment.fragment_uid
+        }
+        for instance in artifact.logical_tables:
+            for fragment_uid in dict.fromkeys(instance.fragment_uids or [instance.instance_uid]):
+                fragment = physical_by_uid.get(str(fragment_uid))
+                if fragment is None:
+                    continue
+                await conn.execute(
+                    """
+                    INSERT INTO parse_table_fragments (
+                        parse_run_id, instance_uid, fragment_uid, table_code, title,
+                        page_number, table_index, bbox, header_row_count, confidence,
+                        extraction_method, unit_hint, raw_rows, raw_cells
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                    ON CONFLICT (parse_run_id, instance_uid, fragment_uid) DO NOTHING
+                    """,
+                    parse_run_id,
+                    instance.instance_uid,
+                    str(fragment_uid),
+                    fragment.table_code,
+                    fragment.title,
+                    fragment.page_number,
+                    fragment.table_index,
+                    _bbox_to_json(fragment.bbox),
+                    fragment.header_row_count,
+                    fragment.confidence,
+                    fragment.extraction_method,
+                    fragment.unit_hint,
+                    _json(fragment.rows),
+                    _json([cell.to_dict() for cell in fragment.cells]),
+                )
+
         for fragment, cell in artifact.cells():
             instance_uid = _instance_uid_for(artifact, fragment)
             await conn.execute(
@@ -161,8 +267,8 @@ async def persist_parse_artifact(
                     raw_text, normalized_text, numeric_value, normalized_value_wan,
                     unit_hint, presence, page_number, bbox, is_header,
                     confidence, extraction_method, row_span, col_span,
-                    origin_fragment_uid, origin_row_idx
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                    origin_fragment_uid, origin_row_idx, ocr_provenance, origin_col_idx
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
                 ON CONFLICT (parse_run_id, instance_uid, row_idx, col_idx) DO NOTHING
                 """,
                 parse_run_id,
@@ -184,6 +290,8 @@ async def persist_parse_artifact(
                 cell.col_span,
                 cell.origin_fragment_uid,
                 cell.origin_row_idx,
+                _json(cell.ocr_provenance),
+                cell.origin_col_idx,
             )
 
         for block in artifact.text_blocks:
@@ -271,10 +379,10 @@ async def persist_facts_and_evidence(
                     INSERT INTO parse_evidence (
                         parse_run_id, evidence_id, file_hash, physical_page,
                         printed_page, source_cell_id, source_block_id, quote,
-                        bbox, source_method, verification_status, location_level
+                        bbox, source_method, verification_status, location_level, source_provenance
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8,
-                        $9::jsonb, $10, $11, $12
+                        $9::jsonb, $10, $11, $12, $13::jsonb
                     )
                     ON CONFLICT (parse_run_id, evidence_id) DO NOTHING
                     """,
@@ -290,6 +398,7 @@ async def persist_facts_and_evidence(
                     str(ref.get("source_method") or "native_text"),
                     str(ref.get("verification_status") or "unverified"),
                     str(ref.get("location_level") or "unresolved"),
+                    _json(ref.get("source_provenance") or {}),
                 )
             await conn.execute(
                 """
@@ -342,22 +451,49 @@ async def load_parse_artifact(conn: asyncpg.Connection, parse_run_id: int) -> Pa
     if run is None:
         raise ValueError(f"parse_run not found: {parse_run_id}")
 
+    snapshot = _restore_snapshot(run)
+    if snapshot is not None:
+        # 快照和可查询投影必须都完整。只对数量做检查不够：逐格对照文字、
+        # 原始金额、来源位置和表头角色，防止静默少写或覆盖。
+        stored = await conn.fetch("SELECT * FROM parse_table_cells WHERE parse_run_id = $1", parse_run_id)
+        expected = {(_instance_uid_for(snapshot, table), cell.row_idx, cell.col_idx): cell
+                    for table, cell in snapshot.cells()}
+        if len(expected) != len(snapshot.cells()) or len(stored) != len(expected):
+            raise ValueError("complete parse cell projection count mismatch")
+        for row in stored:
+            cell = expected.pop((row["instance_uid"], row["row_idx"], row["col_idx"]), None)
+            if cell is None or any(row[field] != getattr(cell, field) for field in (
+                "raw_text", "normalized_text", "numeric_value", "page_number", "is_header",
+                "row_span", "col_span", "unit_hint", "origin_fragment_uid", "origin_row_idx", "origin_col_idx",
+            )) or _decode_bbox(row["bbox"], field="parse_table_cells.bbox") != cell.bbox:
+                raise ValueError("complete parse cell projection content mismatch")
+        return snapshot
+
     page_states = [
         ParsePageState.from_dict(item)
-        for item in json.loads(run["page_states"] or "[]")
+        for item in _decode_jsonb(run["page_states"], list, field="page_states")
     ]
     text_blocks = [
         ParsedTextBlock.from_dict(item)
-        for item in json.loads(run["text_blocks"] or "[]")
+        for item in _decode_jsonb(run["text_blocks"], list, field="text_blocks")
     ]
     ocr_table_candidates = [
         OcrTableCandidate.from_dict(item)
-        for item in json.loads(run["ocr_table_candidates"] or "[]")
+        for item in _decode_jsonb(run["ocr_table_candidates"], list, field="ocr_table_candidates")
     ]
     instance_rows = await conn.fetch(
         "SELECT * FROM parse_table_instances WHERE parse_run_id = $1 ORDER BY id",
         parse_run_id,
     )
+    physical_fragment_rows = await conn.fetch(
+        "SELECT * FROM parse_table_fragments WHERE parse_run_id = $1 ORDER BY id",
+        parse_run_id,
+    )
+    physical_meta_by_instance: Dict[str, Dict[str, Any]] = {}
+    for row in physical_fragment_rows:
+        physical_meta_by_instance.setdefault(str(row["instance_uid"]), {})[
+            str(row["fragment_uid"])
+        ] = dict(row)
     cell_rows = await conn.fetch(
         """
         SELECT * FROM parse_table_cells WHERE parse_run_id = $1
@@ -376,7 +512,7 @@ async def load_parse_artifact(conn: asyncpg.Connection, parse_run_id: int) -> Pa
                 normalized_text=row["normalized_text"] or "",
                 numeric_value=row["numeric_value"],
                 page_number=row["page_number"] or 1,
-                bbox=tuple(row["bbox"]) if row["bbox"] else None,
+                bbox=_decode_bbox(row["bbox"], field="parse_table_cells.bbox"),
                 is_header=bool(row["is_header"]),
                 confidence=float(row["confidence"] or 0.0),
                 unit_hint=row["unit_hint"],
@@ -387,43 +523,116 @@ async def load_parse_artifact(conn: asyncpg.Connection, parse_run_id: int) -> Pa
                     str(row["origin_fragment_uid"]) if row["origin_fragment_uid"] else None
                 ),
                 origin_row_idx=row["origin_row_idx"],
+                origin_col_idx=row.get("origin_col_idx"),
                 normalized_value_wan=(
                     Decimal(str(row["normalized_value_wan"]))
                     if row["normalized_value_wan"] is not None
                     else None
                 ),
                 presence=row["presence"] or "value",
+                ocr_provenance=_decode_jsonb(row.get("ocr_provenance"), dict, field="ocr_provenance"),
             )
         )
 
     fragments: List[ParsedTable] = []
+    physical_fragments: List[ParsedTable] = []
+    physical_uids_by_instance: Dict[str, List[str]] = {}
     for row in instance_rows:
         instance_cells = cells_by_instance.get(row["instance_uid"], [])
         # bbox 以该片段首个非空单元格近似（缓存重建场景仅用于导航）
-        bbox = next(
-            (cell.bbox for cell in instance_cells if cell.bbox), (0.0, 0.0, 0.0, 0.0)
-        )
+        logical_boxes = [cell.bbox for cell in instance_cells if cell.bbox]
+        logical_bbox = (
+            min(box[0] for box in logical_boxes), min(box[1] for box in logical_boxes),
+            max(box[2] for box in logical_boxes), max(box[3] for box in logical_boxes),
+        ) if logical_boxes else (0.0, 0.0, 0.0, 0.0)
         rows_grid: List[List[str]] = []
         by_row: Dict[int, List[ParsedCell]] = {}
         for cell in instance_cells:
             by_row.setdefault(cell.row_idx, []).append(cell)
+        logical_width = max((cell.col_idx + 1 for cell in instance_cells), default=0)
         for row_idx in sorted(by_row):
-            ordered = sorted(by_row[row_idx], key=lambda item: item.col_idx)
-            rows_grid.append([cell.raw_text for cell in ordered])
+            values = [""] * logical_width
+            for cell in by_row[row_idx]:
+                values[cell.col_idx] = cell.raw_text
+            rows_grid.append(values)
+        by_physical: Dict[str, List[ParsedCell]] = {}
+        for cell in instance_cells:
+            physical_uid = str(cell.origin_fragment_uid or row["instance_uid"])
+            restored_cell = replace(
+                cell,
+                row_idx=(cell.origin_row_idx if cell.origin_row_idx is not None else cell.row_idx),
+                col_idx=(cell.origin_col_idx if cell.origin_col_idx is not None else cell.col_idx),
+                origin_fragment_uid=None,
+                origin_row_idx=None,
+                origin_col_idx=None,
+            )
+            by_physical.setdefault(physical_uid, []).append(restored_cell)
+        physical_uids = sorted(by_physical)
+        physical_uids_by_instance[str(row["instance_uid"])] = physical_uids
+        for physical_uid, physical_cells in by_physical.items():
+            physical_meta = physical_meta_by_instance.get(str(row["instance_uid"]), {}).get(physical_uid, {})
+            physical_rows: Dict[int, List[ParsedCell]] = {}
+            for cell in physical_cells:
+                physical_rows.setdefault(cell.row_idx, []).append(cell)
+            physical_grid = [
+                [cell.raw_text for cell in sorted(physical_rows[row_idx], key=lambda item: item.col_idx)]
+                for row_idx in sorted(physical_rows)
+            ]
+            boxes = [cell.bbox for cell in physical_cells if cell.bbox]
+            physical_bbox = (
+                min(box[0] for box in boxes), min(box[1] for box in boxes),
+                max(box[2] for box in boxes), max(box[3] for box in boxes),
+            ) if boxes else (0.0, 0.0, 0.0, 0.0)
+            methods = {str(cell.extraction_method or "stored") for cell in physical_cells}
+            extraction_method = (
+                "mixed" if len(methods) > 1 else next(iter(methods), "stored")
+            )
+            header_rows = [cell.row_idx for cell in physical_cells if cell.is_header]
+            raw_rows = _decode_jsonb(physical_meta.get("raw_rows"), list, field="raw_rows")
+            raw_cells = _decode_jsonb(physical_meta.get("raw_cells"), list, field="raw_cells")
+            restored_cells = (
+                [ParsedCell.from_dict(item) for item in raw_cells if isinstance(item, dict)]
+                if isinstance(raw_cells, list) and raw_cells
+                else physical_cells
+            )
+            physical_fragments.append(
+                ParsedTable(
+                    table_code=row["table_code"],
+                    title=physical_meta.get("title") or row["title"] or "",
+                    page_number=physical_meta.get("page_number") or min((cell.page_number for cell in physical_cells), default=row["page_start"] or 1),
+                    table_index=physical_meta.get("table_index") or 0,
+                    bbox=_decode_bbox(physical_meta.get("bbox"), field="parse_table_fragments.bbox") or physical_bbox,
+                    header_row_count=(
+                        physical_meta.get("header_row_count")
+                        if physical_meta.get("header_row_count") is not None
+                        else (max(header_rows) + 1 if header_rows else 0)
+                    ),
+                    confidence=float(physical_meta.get("confidence") or row["confidence"] or 0.0),
+                    extraction_method=physical_meta.get("extraction_method") or extraction_method,
+                    unit_hint=physical_meta.get("unit_hint") or next((cell.unit_hint for cell in physical_cells if cell.unit_hint), None),
+                    rows=[list(values) for values in raw_rows] if raw_rows else physical_grid,
+                    cells=restored_cells,
+                    fragment_uid=physical_uid,
+                )
+            )
+
+        methods = {str(cell.extraction_method or "stored") for cell in instance_cells}
+        extraction_method = "mixed" if len(methods) > 1 else next(iter(methods), "stored")
         fragments.append(
             ParsedTable(
                 table_code=row["table_code"],
                 title=row["title"] or "",
                 page_number=row["page_start"] or 1,
                 table_index=0,
-                bbox=bbox,
-                header_row_count=0,
+                bbox=logical_bbox,
+                header_row_count=max((cell.row_idx + 1 for cell in instance_cells if cell.is_header), default=0),
                 confidence=float(row["confidence"] or 0.0),
-                extraction_method="stored",
-                unit_hint=None,
+                extraction_method=extraction_method,
+                unit_hint=next((cell.unit_hint for cell in instance_cells if cell.unit_hint), None),
                 rows=rows_grid,
                 cells=instance_cells,
                 fragment_uid=row["instance_uid"],
+                source_fragment_uids=[uid for uid in physical_uids if uid != str(row["instance_uid"])],
             )
         )
 
@@ -432,7 +641,10 @@ async def load_parse_artifact(conn: asyncpg.Connection, parse_run_id: int) -> Pa
             instance_uid=row["instance_uid"],
             table_code=row["table_code"],
             title=row["title"] or "",
-            fragment_uids=[row["instance_uid"]],
+            fragment_uids=list(dict.fromkeys([
+                *physical_uids_by_instance.get(str(row["instance_uid"]), []),
+                str(row["instance_uid"]),
+            ])),
             page_start=row["page_start"] or 1,
             page_end=row["page_end"] or 1,
             org_name=row["org_name"],
@@ -440,9 +652,9 @@ async def load_parse_artifact(conn: asyncpg.Connection, parse_run_id: int) -> Pa
             fund_scope=row["fund_scope"],
             row_count=row["row_count"] or 0,
             confidence=float(row["confidence"] or 0.0),
-            column_mappings=json.loads(row["column_mappings"] or "[]"),
+            column_mappings=_decode_jsonb(row["column_mappings"], list, field="column_mappings"),
             identity_conflict=bool(row["identity_conflict"]),
-            conflict_reasons=json.loads(row["conflict_reasons"] or "[]"),
+            conflict_reasons=_decode_jsonb(row["conflict_reasons"], list, field="conflict_reasons"),
         )
         for row in instance_rows
     ]
@@ -460,8 +672,9 @@ async def load_parse_artifact(conn: asyncpg.Connection, parse_run_id: int) -> Pa
         ocr_table_candidates=ocr_table_candidates,
         table_fragments=fragments,
         logical_tables=logical_tables,
+        physical_fragments=physical_fragments,
         coordinate_space=run["coordinate_space"] or "pdf_page_points",
-        coordinate_transforms=json.loads(run["coordinate_transforms"] or "{}"),
+        coordinate_transforms=_decode_jsonb(run["coordinate_transforms"], dict, field="coordinate_transforms"),
     )
 
 

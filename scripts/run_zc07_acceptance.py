@@ -15,18 +15,23 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
 import uuid
+import zipfile
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+from src.schemas.review_report import normalize_manual_review
+from src.services.truth_grouping import canonical_truth_group
 
 SPLITS = {"development", "blind"}
 REPORT_KINDS = {"budget", "final"}
@@ -101,7 +106,7 @@ def _inventory(root: Path) -> dict[str, Any]:
             if golden.get("truth_frozen_at") and golden.get("reviewed_by"):
                 human_reviewed += 1
                 defect_ids = {
-                    str(label.get("truth_id") or label.get("annotation_id") or "")
+                    canonical_truth_group(label)
                     for label in labels
                     if isinstance(label, dict) and label.get("label") == "defect"
                 }
@@ -164,7 +169,9 @@ def _environment(root: Path) -> dict[str, Any]:
         "ocr": {
             "model_manifest_exists": ocr_service_configured,
             "manifest_path": _repo_relative(ocr_manifest, root),
-            "status": "ready" if ocr_service_configured else "missing",
+            "status": "manifest_present" if ocr_service_configured else "missing",
+            "runtime_verified": False,
+            "note": "本预检只盘点清单；真实启动、预热和逐格推理由独立实跑回执证明",
         },
     }
 
@@ -296,7 +303,7 @@ def validate_dataset_manifest(path: Path, root: Path, mode: str = "legacy") -> d
         if split in SPLITS:
             labels = golden.get("labels") if isinstance(golden.get("labels"), list) else []
             groups = {
-                str(label.get("truth_id") or label.get("annotation_id") or "")
+                canonical_truth_group(label)
                 for label in labels
                 if isinstance(label, dict) and label.get("label") == "defect"
             }
@@ -594,7 +601,83 @@ def _iter_run_issues(run: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-def _evaluate_evidence_authenticity(evaluated: list[dict[str, Any]]) -> dict[str, Any]:
+def _authenticated_reference(item: Any, source_sha: str, pdf_path: Optional[Path],
+                             scan_manifest: Optional[dict] = None) -> bool:
+    if not isinstance(item, dict):
+        return False
+    file_hash = str(item.get("file_hash") or "").strip().lower()
+    physical_page = item.get("physical_page")
+    source_id = str(item.get("source_cell_id") or item.get("source_block_id") or "").strip()
+    quote = str(item.get("quote") or "").strip()
+    evidence_id = str(item.get("evidence_id") or "").strip().lower()
+    if (
+        not re.fullmatch(r"[0-9a-f]{64}", file_hash)
+        or file_hash != source_sha
+        or not isinstance(physical_page, int)
+        or isinstance(physical_page, bool)
+        or physical_page < 1
+        or not source_id
+        or not quote
+        or not re.fullmatch(r"[0-9a-f]{16}", evidence_id)
+        or str(item.get("verification_status") or "") != "verified"
+    ):
+        return False
+    expected_id = hashlib.sha1(
+        "|".join((file_hash, str(physical_page), source_id, quote)).encode("utf-8")
+    ).hexdigest()[:16]
+    if evidence_id != expected_id or pdf_path is None or not pdf_path.is_file():
+        return False
+    if item.get("source_method") == "ocr":
+        from src.services.scan_evidence_certification import verify_scan_reference
+        return verify_scan_reference(item,pdf_path,scan_manifest)
+    try:
+        import fitz
+
+        with fitz.open(pdf_path) as document:
+            if physical_page > document.page_count:
+                return False
+            page = document.load_page(physical_page - 1)
+            page_text = "".join((page.get_text() or "").split())
+            needle = "".join(quote.split())
+            if not needle or needle not in page_text:
+                return False
+            if item.get("location_level") in {"exact_cell", "exact_span"}:
+                bbox = item.get("bbox")
+                if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+                    return False
+                x0, y0, x1, y1 = (float(value) for value in bbox)
+                rect = page.rect
+                if x0 < rect.x0 or y0 < rect.y0 or x1 > rect.x1 or y1 > rect.y1:
+                    return False
+                words = page.get_text("words") or []
+                region = "".join(
+                    "".join(str(word[4] or "") for word in words
+                            if not (word[2] < x0 or word[0] > x1 or word[3] < y0 or word[1] > y1)).split()
+                )
+                if needle not in region:
+                    return False
+        return True
+    except (ImportError, OSError, TypeError, ValueError):
+        return False
+
+
+def _frozen_scan_manifest(golden: dict, root: Path, doc_id: str) -> Optional[dict]:
+    from src.services.scan_evidence_certification import load_attestations
+    name = str(golden.get("scan_attestations_file") or "")
+    digest = str(golden.get("scan_attestations_sha256") or "")
+    if not name or Path(name).is_absolute() or not re.fullmatch(r"[a-f0-9]{64}", digest):
+        return None
+    corpus_root = (root / "corpus").resolve()
+    directory = (corpus_root / doc_id).resolve()
+    if corpus_root not in directory.parents:
+        return None
+    path = (directory / name).resolve()
+    if directory not in path.parents:
+        return None
+    return load_attestations(path,digest)
+
+
+def _evaluate_evidence_authenticity(evaluated: list[dict[str, Any]], root: Path) -> dict[str, Any]:
     """AC-14：证据真实性率——逐条 evidence_verification 三态聚合。
 
     RC-13：分母是**全部正式问题**——缺核验记录的问题必须计入
@@ -602,8 +685,15 @@ def _evaluate_evidence_authenticity(evaluated: list[dict[str, Any]]) -> dict[str
     把真实性率刷成 1.0。verified+结构完整才算真实；failed（伪造引文/
     页码越界）与缺记录计入违规。
     """
-    total = authentic = failed = unverified = missing_record = 0
+    total = authentic = failed = unverified = missing_record = source_identity_failures = 0
     for row in evaluated:
+        golden = row.get("golden") if isinstance(row.get("golden"), dict) else {}
+        source_sha = str(golden.get("sha256") or "").strip().lower()
+        doc_id = str(row.get("doc_id") or row.get("report", {}).get("doc_id") or "")
+        source_candidates = sorted((root / "corpus" / doc_id).glob("*.pdf")) if doc_id else []
+        source_pdfs = [path for path in source_candidates if path.is_file() and source_sha and sha256_file(path) == source_sha]
+        source_pdf = source_pdfs[0] if len(source_pdfs) == 1 else None
+        scan_manifest = _frozen_scan_manifest(golden,root,doc_id)
         for finding in _iter_run_issues(row.get("run") or {}):
             total += 1
             verification = finding.get("evidence_verification")
@@ -611,8 +701,17 @@ def _evaluate_evidence_authenticity(evaluated: list[dict[str, Any]]) -> dict[str
                 missing_record += 1
                 continue
             status = str(verification.get("status") or "")
-            if status == "verified":
+            evidence = finding.get("evidence")
+            if not isinstance(evidence, list):
+                evidence = []
+            identity_complete = bool(evidence) and all(
+                _authenticated_reference(item, source_sha, source_pdf,scan_manifest) for item in evidence
+            )
+            if status == "verified" and identity_complete:
                 authentic += 1
+            elif status == "verified":
+                unverified += 1
+                source_identity_failures += 1
             elif status == "failed":
                 failed += 1
             else:
@@ -626,6 +725,7 @@ def _evaluate_evidence_authenticity(evaluated: list[dict[str, Any]]) -> dict[str
         "failed": failed,
         "unverified": unverified,
         "missing_record": missing_record,
+        "source_identity_failures": source_identity_failures,
         "authenticity_rate": round(authentic / total, 4),
         "violations": failed + missing_record,
     }
@@ -644,20 +744,31 @@ def _evaluate_receipts(evaluated: list[dict[str, Any]]) -> dict[str, Any]:
     uncompleted_reasons: dict[str, int] = {}
     expected_total = 0
     expected_completed = 0
+    expected_receipt_covered = 0
+    expected_with_operands = 0
+    denominator_errors: list[str] = []
+    conflicting_receipts: list[str] = []
     for row in evaluated:
+        doc_id = str(row.get("doc_id") or row.get("report", {}).get("doc_id") or "unknown")
         meta = ((row.get("run") or {}).get("meta") or {})
         receipts = meta.get("check_receipts")
-        seen_keys: set[tuple[str, str]] = set()
-        row_receipts: list[dict[str, Any]] = []
+        receipts_by_key: dict[tuple[str, str], list[dict[str, Any]]] = {}
         if isinstance(receipts, list):
             for receipt in receipts:
                 if not isinstance(receipt, dict) or not str(receipt.get("sub_check_id") or ""):
                     continue
                 key = (str(receipt.get("rule_id") or ""), str(receipt.get("sub_check_id") or ""))
-                if key in seen_keys:
-                    continue  # RC-13：汇总/子回执重复出现只计一次
-                seen_keys.add(key)
-                row_receipts.append(receipt)
+                receipts_by_key.setdefault(key, []).append(receipt)
+        row_receipts: list[dict[str, Any]] = []
+        for key, duplicates in receipts_by_key.items():
+            signatures = {
+                json.dumps(receipt, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+                for receipt in duplicates
+            }
+            if len(signatures) > 1:
+                conflicting_receipts.append(f"{doc_id}:{key[0]}:{key[1]}")
+                continue
+            row_receipts.append(duplicates[0])
         for receipt in row_receipts:
             receipt_total += 1
             if receipt.get("operand_fact_ids") and receipt.get("formula"):
@@ -671,45 +782,77 @@ def _evaluate_receipts(evaluated: list[dict[str, Any]]) -> dict[str, Any]:
         golden = row.get("golden") if isinstance(row.get("golden"), dict) else {}
         expected_ids = golden.get("applicable_sub_checks")
         if not isinstance(expected_ids, list) or not expected_ids:
-            # RC-13 反例契约：冻结关系全集也可由 run.meta.required_checks 提供
-            expected_ids = meta.get("required_checks")
-        if isinstance(expected_ids, list) and expected_ids:
-            expected_keys = {
-                (str(item).split(":", 1)[0], str(item))
-                if ":" in str(item)
-                else ("", str(item))
-                for item in expected_ids
-            }
+            denominator_errors.append(f"{doc_id}: 缺少非空冻结 applicable_sub_checks 分母")
+            continue
+        if isinstance(expected_ids, list):
+            expected_keys: set[tuple[str, str]] = set()
+            for index, item in enumerate(expected_ids):
+                if isinstance(item, dict):
+                    rule_id = item["rule_id"].strip() if isinstance(item.get("rule_id"), str) else ""
+                    sub_id = item["sub_check_id"].strip() if isinstance(item.get("sub_check_id"), str) else ""
+                else:
+                    raw_id = item.strip() if isinstance(item, str) else ""
+                    separator = "::" if "::" in raw_id else ":"
+                    rule_id, _, sub_id = raw_id.partition(separator)
+                    rule_id, sub_id = rule_id.strip(), sub_id.strip()
+                if not rule_id or not sub_id:
+                    denominator_errors.append(f"{doc_id}: applicable_sub_checks[{index}] 缺少 rule_id/sub_check_id")
+                    continue
+                key = (rule_id, sub_id)
+                if key in expected_keys:
+                    denominator_errors.append(f"{doc_id}: 冻结适用关系重复 {rule_id}:{sub_id}")
+                expected_keys.add(key)
             expected_total += len(expected_keys)
             covered_statuses = {
                 (str(r.get("rule_id") or ""), str(r.get("sub_check_id") or "")): str(r.get("status") or "")
                 for r in row_receipts
             }
             for key in expected_keys:
-                if covered_statuses.get(key) in {"pass", "fail", "not_applicable"}:
+                matching_receipt = next(
+                    (receipt for receipt in row_receipts
+                     if (str(receipt.get("rule_id") or ""), str(receipt.get("sub_check_id") or "")) == key),
+                    None,
+                )
+                status = covered_statuses.get(key, "")
+                incomplete_reason = str((matching_receipt or {}).get("incomplete_reason") or "").strip()
+                status_is_valid = status in {
+                    "pass", "fail", "not_applicable", "insufficient_data", "parse_error", "execution_error"
+                }
+                reason_is_complete = status in {"pass", "fail", "not_applicable"} or bool(incomplete_reason)
+                if matching_receipt and status_is_valid and reason_is_complete:
+                    expected_receipt_covered += 1
+                if status in {"pass", "fail", "not_applicable"}:
                     expected_completed += 1
+                if matching_receipt and matching_receipt.get("operand_fact_ids") and matching_receipt.get("formula"):
+                    expected_with_operands += 1
+    if denominator_errors or conflicting_receipts:
+        details = [*denominator_errors, *(
+            f"{item}: 同一关系存在冲突回执" for item in conflicting_receipts
+        )]
+        return {
+            "status": "not_computable",
+            "reason": "；".join(details[:12]),
+            "denominator_errors": denominator_errors,
+            "conflicting_receipts": conflicting_receipts,
+            "receipt_total": receipt_total,
+        }
     if expected_total:
         return {
             "status": "computed",
             "denominator": "frozen_applicable_sub_checks",
             "expected_total": expected_total,
             "expected_completed": expected_completed,
+            "expected_receipt_covered": expected_receipt_covered,
             "completion_rate": round(expected_completed / expected_total, 4),
+            "receipt_coverage_rate": round(expected_receipt_covered / expected_total, 4),
             "receipt_total": receipt_total,
-            "operand_formula_coverage": round(with_operands / receipt_total, 4)
-            if receipt_total
-            else 0.0,
+            "operand_formula_coverage": round(expected_with_operands / expected_total, 4),
             "uncompleted_reasons": uncompleted_reasons,
         }
-    if receipt_total == 0:
-        return {"status": "not_computable", "reason": "回放结果未含关系级检查回执"}
     return {
-        "status": "computed",
-        "denominator": "issued_receipts",
+        "status": "not_computable",
+        "reason": "冻结 applicable_sub_checks 总数为 0；不能用实际回执数量推定完成率",
         "receipt_total": receipt_total,
-        "operand_formula_coverage": round(with_operands / receipt_total, 4),
-        "completion_rate": round(completed / receipt_total, 4),
-        "uncompleted_reasons": uncompleted_reasons,
     }
 
 
@@ -741,33 +884,112 @@ def _evaluate_exact_location(evaluated: list[dict[str, Any]], root: Path) -> dic
     """
     truth_total = 0
     exact_hits = 0
+    missing_truth_regions: list[str] = []
     for row in evaluated:
-        annotations = (row.get("golden") or {}).get("annotations")
-        if not isinstance(annotations, list):
+        golden = row.get("golden") or {}
+        source_sha = str(golden.get("sha256") or "").strip().lower()
+        doc_id = str(row.get("doc_id") or row.get("report", {}).get("doc_id") or "")
+        source_candidates = sorted((root / "corpus" / doc_id).glob("*.pdf")) if doc_id else []
+        source_pdfs = [
+            path for path in source_candidates
+            if path.is_file() and source_sha and sha256_file(path) == source_sha
+        ]
+        source_pdf = source_pdfs[0] if len(source_pdfs) == 1 else None
+        annotations = golden.get("annotations")
+        if isinstance(golden.get("labels"), list):
+            target_annotations = [
+                item for item in golden["labels"]
+                if isinstance(item, dict) and item.get("label") == "defect"
+            ]
+        elif isinstance(annotations, list):
+            target_annotations = [item for item in annotations if isinstance(item, dict)]
+        else:
             continue
-        regions = {
-            str(item.get("annotation_id") or ""): item.get("truth_region")
-            for item in annotations
-            if isinstance(item, dict) and isinstance(item.get("truth_region"), dict)
-        }
-        if not regions:
+        if not target_annotations:
             continue
-        for item in row["report"].get("matched", []):
-            region = regions.get(str(item.get("annotation_id") or ""))
-            if region is None:
+        regions: dict[str, dict[str, Any]] = {}
+        truth_total += len(target_annotations)
+        for item in target_annotations:
+            annotation_id = str(item.get("annotation_id") or "").strip()
+            region = item.get("truth_region")
+            if not annotation_id or not isinstance(region, dict):
+                missing_truth_regions.append(f"{doc_id}:{annotation_id or '(缺 annotation_id)'}")
                 continue
-            truth_total += 1
-            finding = item.get("finding") if isinstance(item.get("finding"), dict) else {}
-            candidate_bbox = finding.get("bbox")
-            finding_page = finding.get("page_number") or finding.get("page")
+            regions[annotation_id] = region
+        matched_by_annotation: dict[str, list[dict[str, Any]]] = {}
+        for item in row["report"].get("matched", []):
+            if isinstance(item, dict):
+                matched_by_annotation.setdefault(str(item.get("annotation_id") or ""), []).append(item)
+        for annotation_id, region in regions.items():
+            matches = matched_by_annotation.get(annotation_id, [])
+            if len(matches) != 1:
+                continue
+            finding = matches[0].get("finding") if isinstance(matches[0].get("finding"), dict) else {}
+            location = finding.get("location") if isinstance(finding.get("location"), dict) else {}
+            candidate_bbox = finding.get("bbox") or location.get("bbox")
+            finding_page = finding.get("page_number") or finding.get("page") or location.get("page")
             truth_page = region.get("page")
-            page_hit = (
-                finding_page is not None
-                and truth_page is not None
-                and int(finding_page) == int(truth_page)
+            try:
+                page_hit = finding_page is not None and truth_page is not None and int(finding_page) == int(truth_page)
+            except (TypeError, ValueError):
+                page_hit = False
+            location_level = str(finding.get("location_level") or "")
+            verification_status = str(finding.get("verification_status") or "")
+            evidence = finding.get("evidence")
+            authenticated = (
+                isinstance(evidence, list)
+                and bool(evidence)
+                and all(_authenticated_reference(item, source_sha, source_pdf,
+                        _frozen_scan_manifest(golden,root,doc_id)) for item in evidence)
             )
-            if page_hit and _bbox_overlaps(candidate_bbox, region.get("bbox")):
+            candidate_box = None
+            try:
+                candidate_box = tuple(round(float(value), 4) for value in candidate_bbox)
+            except (TypeError, ValueError):
+                pass
+            exact_source_match = False
+            if candidate_box and isinstance(evidence, list):
+                for evidence_item in evidence:
+                    if not isinstance(evidence_item, dict):
+                        continue
+                    if (
+                        str(evidence_item.get("location_level") or "") not in {"exact_cell", "exact_span"}
+                        or str(evidence_item.get("verification_status") or "") != "verified"
+                        or evidence_item.get("physical_page") != finding_page
+                    ):
+                        continue
+                    try:
+                        evidence_box = tuple(round(float(value), 4) for value in evidence_item.get("bbox", []))
+                    except (TypeError, ValueError):
+                        continue
+                    if len(evidence_box) == 4 and evidence_box == candidate_box:
+                        exact_source_match = True
+                        break
+            precise = (
+                location_level in {"exact_cell", "exact_span"}
+                and verification_status == "verified"
+                and authenticated
+                and exact_source_match
+            )
+            bounded = False
+            try:
+                cx0, cy0, cx1, cy1 = (float(v) for v in candidate_bbox)
+                tx0, ty0, tx1, ty1 = (float(v) for v in region.get("bbox"))
+                candidate_area = max(0.0, cx1 - cx0) * max(0.0, cy1 - cy0)
+                truth_area = max(0.0, tx1 - tx0) * max(0.0, ty1 - ty0)
+                bounded = truth_area > 0 and candidate_area <= truth_area * 4
+            except (TypeError, ValueError):
+                bounded = False
+            if precise and bounded and page_hit and _bbox_overlaps(candidate_bbox, region.get("bbox")):
                 exact_hits += 1
+    if missing_truth_regions:
+        return {
+            "status": "not_computable",
+            "truth_total": truth_total,
+            "exact_hits": exact_hits,
+            "missing_truth_regions": missing_truth_regions,
+            "reason": "冻结缺陷真值未全部提供 truth_region（页+bbox）；不能缩小定位分母",
+        }
     if truth_total == 0:
         return {
             "status": "not_computable",
@@ -784,21 +1006,101 @@ def _evaluate_exact_location(evaluated: list[dict[str, Any]], root: Path) -> dic
 def _evaluate_repeatability(manifest: dict[str, Any], root: Path, mode: str) -> dict[str, Any]:
     """AC-14：重复运行一致性——同原件/配置/版本的独立重复回放逐项比对。
 
-    清单行提供 ``repeat_replay_path`` 时才可计算：两轮回放的结论、
-    正式问题集合（规则/严重度/页码/摘要）必须完全一致。
+    两轮必须提供相同的原件 SHA、配置指纹和版本指纹。比较完整问题、事实/
+    证据身份、精确位置、关系回执和完成状态；缺基线时不能判 repeatable。
     """
     pairs = [
         row
         for row in manifest.get("documents", [])
         if isinstance(row, dict) and str(row.get("repeat_replay_path") or "").strip()
     ]
-    if not pairs:
+    document_count = sum(1 for row in manifest.get("documents", []) if isinstance(row, dict))
+    if not pairs or len(pairs) != document_count:
         return {
             "status": "not_computable",
-            "reason": "清单未提供 repeat_replay_path（同原件/配置/版本的独立重复回放）",
+            "reason": (
+                f"盲测文档仅 {len(pairs)}/{document_count} 份提供 repeat_replay_path；"
+                "每份均须提供同原件/配置/版本的独立重复回放"
+            ),
         }
     comparable = 0
     consistent = 0
+    unavailable: list[str] = []
+
+    def _basis(payload: dict[str, Any], run: dict[str, Any]) -> dict[str, str]:
+        value = payload.get("repeatability_basis")
+        if not isinstance(value, dict):
+            meta = run.get("meta") if isinstance(run.get("meta"), dict) else {}
+            value = meta.get("repeatability_basis")
+        if not isinstance(value, dict):
+            return {}
+        return {
+            key: str(value.get(key) or "").strip()
+            for key in ("source_sha256", "configuration_fingerprint", "version_fingerprint")
+        }
+
+    def _signature(run: dict[str, Any]) -> str:
+        issue_rows: list[dict[str, Any]] = []
+        for finding in _iter_run_issues(run):
+            location = finding.get("location") if isinstance(finding.get("location"), dict) else {}
+            issue_rows.append({
+                "id": str(finding.get("id") or ""),
+                "rule_id": str(finding.get("rule_id") or finding.get("rule") or ""),
+                "severity": str(finding.get("severity") or ""),
+                "title": str(finding.get("title") or ""),
+                "message": str(finding.get("message") or ""),
+                "page": finding.get("page_number") or finding.get("page") or location.get("page"),
+                "bbox": finding.get("bbox") or location.get("bbox"),
+                "location_level": finding.get("location_level") or location.get("location_level"),
+                "verification_status": finding.get("verification_status") or location.get("verification_status"),
+                "check_relation_id": finding.get("check_relation_id"),
+                "fact_ids": sorted(str(value) for value in finding.get("fact_ids", []) if str(value)),
+                "evidence_ids": sorted(str(value) for value in finding.get("evidence_ids", []) if str(value)),
+                "evidence_status": finding.get("evidence_status"),
+                "evidence_verification": finding.get("evidence_verification"),
+                "evidence": finding.get("evidence"),
+                "evidence_refs": finding.get("evidence_refs"),
+                "metrics": finding.get("metrics"),
+                "human_decision": finding.get("human_decision"),
+            })
+        issue_rows.sort(key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True, default=str))
+        meta = run.get("meta") if isinstance(run.get("meta"), dict) else {}
+        receipts = meta.get("check_receipts")
+        if not isinstance(receipts, list):
+            receipts = []
+        normalized_receipts = [
+            {
+                "rule_id": item.get("rule_id"),
+                "sub_check_id": item.get("sub_check_id"),
+                "status": item.get("status"),
+                "incomplete_reason": item.get("incomplete_reason"),
+                "formula": item.get("formula"),
+                "required_fact_ids": sorted(str(value) for value in item.get("required_fact_ids", []) if str(value)),
+                "operand_fact_ids": sorted(str(value) for value in item.get("operand_fact_ids", []) if str(value)),
+                "issue_refs": sorted(str(value) for value in item.get("issue_refs", []) if str(value)),
+                "tolerance": item.get("tolerance"),
+                "evaluation_basis": item.get("evaluation_basis"),
+                "fact_migration_status": item.get("fact_migration_status"),
+            }
+            for item in receipts if isinstance(item, dict)
+        ]
+        normalized_receipts.sort(key=lambda item: (str(item.get("rule_id")), str(item.get("sub_check_id"))))
+        context = meta.get("fact_context")
+        stable_context = {
+            key: context.get(key)
+            for key in ("context_version", "file_hash", "version_token", "fact_count", "recognition_statuses", "operand_count", "non_operand_count", "overlay_count")
+        } if isinstance(context, dict) else None
+        return json.dumps({
+            "conclusion": str(run.get("analysis_conclusion") or run.get("status") or ""),
+            "issue_rows": issue_rows,
+            "check_receipts": normalized_receipts,
+            "required_checks": run.get("required_checks"),
+            # parse_run_uid may fall back to a fresh UUID; the value token is
+            # derived from fact identity/value/status and excludes that run ID.
+            "fact_context": stable_context,
+            "fact_overlay_applied": meta.get("fact_overlay_applied"),
+        }, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
     for row in pairs:
         first_path = Path(row["replay_path"])
         repeat_path = Path(row["repeat_replay_path"])
@@ -807,42 +1109,60 @@ def _evaluate_repeatability(manifest: dict[str, Any], root: Path, mode: str) -> 
         if not repeat_path.is_absolute():
             repeat_path = root / repeat_path
         if not first_path.is_file() or not repeat_path.is_file():
+            unavailable.append(f"{row.get('doc_id')}: 双轮回放文件缺失")
+            continue
+        if first_path.samefile(repeat_path):
+            unavailable.append(f"{row.get('doc_id')}: 同一回放文件不能作为第二次独立运行")
             continue
         first = _read_json(first_path)
         repeat = _read_json(repeat_path)
+        first_run_id = str(first.get("run_id") or "").strip()
+        repeat_run_id = str(repeat.get("run_id") or "").strip()
+        if not first_run_id or not repeat_run_id or first_run_id == repeat_run_id:
+            unavailable.append(f"{row.get('doc_id')}: 必须提供两个不同的实际 run_id，复制同一次运行不能算重跑")
+            continue
+        try:
+            first_time = datetime.fromisoformat(str(first.get("executed_at") or "").replace("Z", "+00:00"))
+            repeat_time = datetime.fromisoformat(str(repeat.get("executed_at") or "").replace("Z", "+00:00"))
+            if first_time.tzinfo is None or repeat_time.tzinfo is None or first_time == repeat_time:
+                raise ValueError("distinct timezone-aware run timestamps required")
+        except ValueError:
+            unavailable.append(f"{row.get('doc_id')}: 缺少两次独立运行的带时区 executed_at")
+            continue
         first_run = first.get(mode) if isinstance(first.get(mode), dict) else None
         repeat_run = repeat.get(mode) if isinstance(repeat.get(mode), dict) else None
         if first_run is None or repeat_run is None:
+            unavailable.append(f"{row.get('doc_id')}: 缺少指定模式 {mode} 的双轮回放")
+            continue
+        first_basis = _basis(first, first_run)
+        repeat_basis = _basis(repeat, repeat_run)
+        required_basis = ("source_sha256", "configuration_fingerprint", "version_fingerprint")
+        expected_source_sha = str(row.get("golden_sha256") or "").strip().lower()
+        if not expected_source_sha:
+            try:
+                golden_path = root / "corpus" / str(row.get("doc_id") or "") / "golden.json"
+                expected_source_sha = str(_read_json(golden_path).get("sha256") or "").strip().lower()
+            except (OSError, ValueError, json.JSONDecodeError):
+                expected_source_sha = ""
+        if (
+            any(not first_basis.get(key) or not repeat_basis.get(key) for key in required_basis)
+            or first_basis != repeat_basis
+            or (expected_source_sha and first_basis.get("source_sha256", "").lower() != expected_source_sha)
+        ):
+            unavailable.append(f"{row.get('doc_id')}: 缺少或不匹配原件/配置/版本基线")
             continue
         comparable += 1
-
-        def _signature(run: dict[str, Any]) -> list[list[Any]]:
-            rows = []
-            for finding in _iter_run_issues(run):
-                rows.append(
-                    [
-                        str(finding.get("rule_id") or finding.get("rule") or ""),
-                        str(finding.get("severity") or ""),
-                        str(finding.get("page_number") or finding.get("page") or ""),
-                        str(finding.get("message") or ""),
-                    ]
-                )
-            # RC-13：结论与问题总数参与一致性——"结论冲突但问题列表同为空"
-            # 的两轮不得判 repeatable
-            rows.sort()
-            rows.append(
-                [
-                    "__conclusion__",
-                    str(run.get("analysis_conclusion") or run.get("status") or ""),
-                    str(len(rows)),
-                ]
-            )
-            return rows
-
         if _signature(first_run) == _signature(repeat_run):
             consistent += 1
     if comparable == 0:
-        return {"status": "not_computable", "reason": "repeat_replay_path 指向的重复回放文件缺失或模式不符"}
+        return {"status": "not_computable", "reason": "；".join(unavailable) or "repeat_replay_path 指向的重复回放文件缺失或模式不符"}
+    if unavailable:
+        return {
+            "status": "not_computable",
+            "reason": "部分重复回放缺少可信的同源同配置同版本基线：" + "；".join(unavailable[:8]),
+            "comparable_documents": comparable,
+            "consistent_documents": consistent,
+        }
     return {
         "status": "computed",
         "comparable_documents": comparable,
@@ -852,75 +1172,510 @@ def _evaluate_repeatability(manifest: dict[str, Any], root: Path, mode: str) -> 
 
 
 def _evaluate_export_agreement(manifest: dict[str, Any], root: Path) -> dict[str, Any]:
-    """AC-14：全导出一致性——同一分析版本的 JSON/CSV 逐项比对。
-
-    清单行提供 ``export_paths``（≥2 个导出文件）时才可计算：问题集合的
-    （规则、严重度、页码）在所有格式间必须一致。
-    """
+    """比较 canonical JSON/CSV 语义，并校验 PDF/DOCX 指向同一报告版本。"""
     rows_with_exports = [
         row
         for row in manifest.get("documents", [])
-        if isinstance(row, dict) and isinstance(row.get("export_paths"), list) and len(row["export_paths"]) >= 2
+        if isinstance(row, dict)
     ]
     if not rows_with_exports:
         return {
             "status": "not_computable",
-            "reason": "清单未提供同一分析版本的多种导出文件（export_paths ≥ 2）",
+            "reason": "盲测清单没有文档，无法核对完整导出集合",
         }
     comparable = 0
     consistent = 0
+    errors: list[str] = []
+
+    def _list_field(value: Any, label: str) -> list[Any]:
+        if not isinstance(value, list):
+            raise ValueError(f"{label} 必须为数组")
+        return value
+
+    def _canonical_issue(item: dict[str, Any]) -> tuple[Any, ...]:
+        location = item.get("location") if isinstance(item.get("location"), dict) else {}
+        bbox = item.get("bbox") or location.get("bbox")
+        if isinstance(bbox, str):
+            bbox = json.loads(bbox) if bbox else None
+        bbox_key = tuple(round(float(value), 2) for value in bbox) if isinstance(bbox, (list, tuple)) and len(bbox) == 4 else None
+        facts = item.get("fact_ids", [])
+        evidence = item.get("evidence_ids", [])
+        if not isinstance(facts, list) or not isinstance(evidence, list):
+            raise ValueError("fact_ids/evidence_ids 必须为数组")
+        decision = item.get("human_decision") if isinstance(item.get("human_decision"), dict) else {}
+        return (
+            str(item.get("id") or item.get("issue_id") or ""),
+            str(item.get("rule_id") or item.get("rule") or ""),
+            str(item.get("title") or ""),
+            str(item.get("severity") or ""),
+            str(item.get("message") or ""),
+            str(item.get("page_number") or item.get("page") or location.get("page") or ""),
+            bbox_key,
+            str(item.get("location_level") or location.get("location_level") or ""),
+            str(item.get("verification_status") or location.get("verification_status") or ""),
+            str(item.get("check_relation_id") or ""),
+            tuple(sorted(str(value) for value in facts if str(value))),
+            tuple(sorted(str(value) for value in evidence if str(value))),
+            str(decision.get("status") or ""),
+            str(decision.get("note") or ""),
+            str(decision.get("decision_revision") or ""),
+            str(decision.get("actor") or ""),
+            str(decision.get("inherited", "")).lower(),
+            str(decision.get("identity_fingerprint") or ""),
+        )
+
+    def _canonical_decision(item: dict[str, Any]) -> tuple[Any, ...]:
+        facts, evidence = item.get("fact_ids"), item.get("evidence_ids")
+        if not isinstance(facts, list) or not isinstance(evidence, list):
+            raise ValueError("人工决定 fact_ids/evidence_ids 必须为数组")
+        return (
+            str(item.get("issue_id") or ""), str(item.get("status") or ""),
+            str(item.get("note") or ""), str(item.get("analysis_revision") or ""),
+            str(item.get("decision_revision") or ""), str(item.get("actor") or ""),
+            str(item.get("inherited", "")).lower(), str(item.get("check_relation_id") or ""),
+            tuple(sorted(str(value) for value in facts if str(value))),
+            tuple(sorted(str(value) for value in evidence if str(value))),
+            str(item.get("identity_fingerprint") or ""),
+        )
+
+    def _csv_json_list(value: Any, label: str) -> list[Any]:
+        raw = str(value or "").strip()
+        if not raw:
+            return []
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            raise ValueError(f"CSV {label} 不是 JSON 数组")
+        return parsed
+
+    def _report_digest(report: dict[str, Any]) -> str:
+        canonical = json.dumps(
+            report,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def _embedded_digest(path: Path) -> str:
+        try:
+            if path.suffix.lower() == ".docx":
+                import zipfile
+
+                with zipfile.ZipFile(path) as archive:
+                    document_xml = archive.read("word/document.xml").decode("utf-8")
+                match = re.search(r"REVIEW_REPORT_SHA256:\s*([a-fA-F0-9]{64})", document_xml)
+                if not match:
+                    raise ValueError("DOCX 缺少 canonical ReviewReport 指纹")
+                return match.group(1).lower()
+            if path.suffix.lower() == ".pdf":
+                try:
+                    import fitz
+                except Exception as exc:
+                    raise ValueError("当前环境没有 PDF 文本读取器，无法认证 PDF 导出指纹") from exc
+                with fitz.open(str(path)) as document:
+                    text = "\n".join(page.get_text() for page in document)
+                normalized = re.sub(r"\s+", "", text)
+                match = re.search(r"REVIEW_REPORT_SHA256:([a-fA-F0-9]{64})", normalized)
+                if not match:
+                    raise ValueError("PDF 缺少 canonical ReviewReport 指纹")
+                return match.group(1).lower()
+            raise ValueError(f"不支持认证的格式：{path.suffix}")
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"{path.suffix.upper()} 文件损坏或不可读取：{type(exc).__name__}") from exc
+
+    def _validate_visible_export(path: Path, report: dict[str, Any]) -> None:
+        """Check that DOCX/PDF contains the canonical rows, not only its digest."""
+        suffix = path.suffix.lower()
+        try:
+            if suffix == ".docx":
+                import xml.etree.ElementTree as _ET
+                with zipfile.ZipFile(path) as archive:
+                    xml_bytes = archive.read("word/document.xml")
+                root_element = _ET.fromstring(xml_bytes)
+                visible_text = "".join(root_element.itertext())
+            elif suffix == ".pdf":
+                import fitz
+                with fitz.open(str(path)) as document:
+                    visible_text = "\n".join(page.get_text() for page in document)
+            else:
+                return
+        except Exception as exc:
+            raise ValueError(f"无法读取{suffix.upper()}正文进行语义核对：{type(exc).__name__}") from exc
+
+        compact = re.sub(r"\s+", "", visible_text)
+        if suffix == ".pdf":
+            # The generated appendix repeats this exact header between wrapped
+            # lines. Removing it restores long canonical reasons that cross pages.
+            compact = compact.replace("系统生成附录·审校清单", "")
+        collections = {
+            "ISSUE_ID": [
+                *(
+                    report.get("issues", [])
+                    if isinstance(report.get("issues"), list)
+                    else []
+                ),
+                *(
+                    report.get("tips", [])
+                    if isinstance(report.get("tips"), list)
+                    else []
+                ),
+            ],
+            "DECISION_ID": report.get("human_decisions", []),
+            "MANUAL_ID": report.get("manual_review", []),
+            "CHECK_ID": report.get("check_receipts", []),
+        }
+        for marker, items in collections.items():
+            if not isinstance(items, list):
+                raise ValueError(f"ReviewReport.{marker} 对应字段必须为数组")
+            values: list[str] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                if marker == "ISSUE_ID":
+                    value = str(item.get("id") or "")
+                elif marker == "DECISION_ID":
+                    value = str(item.get("issue_id") or "")
+                elif marker == "MANUAL_ID":
+                    value = str(item.get("id") or item.get("obligation_id") or item.get("code") or "")
+                else:
+                    value = f"{item.get('rule_id') or ''}:{item.get('sub_check_id') or ''}"
+                if value:
+                    values.append(value)
+            actual_values = sorted(re.findall(rf"{marker}\|([^|]*)\|", compact))
+            if actual_values != sorted(values):
+                raise ValueError(f"{suffix.upper()} {marker} 数量或身份与 ReviewReport 不一致")
+
+        def _token(value: Any) -> str:
+            return re.sub(r"\s+", "", str(value or ""))
+
+        expected_tokens: list[str] = []
+        for marker in ("issues", "tips"):
+            items = report.get(marker, [])
+            if not isinstance(items, list):
+                raise ValueError(f"ReviewReport.{marker} 必须为数组")
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                location = item.get("location") if isinstance(item.get("location"), dict) else {}
+                evidence = item.get("evidence") if isinstance(item.get("evidence"), list) else []
+                snippet = next((ref.get("text_snippet") or ref.get("text") for ref in evidence if isinstance(ref, dict) and (ref.get("text_snippet") or ref.get("text"))), "")
+                expected_tokens.extend((
+                    item.get("title") or item.get("rule_id") or item.get("message"),
+                    item.get("rule_id"),
+                    item.get("message"),
+                    item.get("suggestion"),
+                    item.get("page_number") or item.get("page") or location.get("page"),
+                    item.get("bbox") or location.get("bbox"),
+                    item.get("severity"),
+                    item.get("location_level") or location.get("location_level"),
+                    item.get("verification_status") or location.get("verification_status"),
+                    item.get("check_relation_id"),
+                    snippet,
+                ))
+                for key in ("fact_ids", "evidence_ids"):
+                    if isinstance(item.get(key), list):
+                        expected_tokens.extend(item[key])
+        for item in report.get("human_decisions", []):
+            if isinstance(item, dict):
+                expected_tokens.extend(item.get(key) for key in (
+                    "status", "note", "analysis_revision", "decision_revision", "actor", "identity_fingerprint"
+                ))
+                expected_tokens.extend(item.get("fact_ids", []) if isinstance(item.get("fact_ids"), list) else [])
+                expected_tokens.extend(item.get("evidence_ids", []) if isinstance(item.get("evidence_ids"), list) else [])
+        for item in report.get("manual_review", []):
+            if isinstance(item, dict):
+                title = normalize_manual_review(item)["display_title"]
+                if suffix == ".docx":
+                    detail = item.get("message") or item.get("detail") or item.get("reason")
+                else:
+                    detail = item.get("detail") or item.get("reason") or item.get("message")
+                expected_tokens.extend((item.get("record_type"), title, item.get("status"), detail))
+        for item in report.get("check_receipts", []):
+            if isinstance(item, dict):
+                expected_tokens.extend((
+                    item.get("rule_id"), item.get("sub_check_id"), item.get("status"),
+                    item.get("formula") if suffix == ".pdf" else item.get("formula") or item.get("evaluation_basis"),
+                    item.get("incomplete_reason"),
+                    item.get("tolerance"),
+                ))
+                for key in ("operand_fact_ids", "required_fact_ids", "issue_refs"):
+                    if isinstance(item.get(key), list):
+                        expected_tokens.extend(item[key])
+        missing_tokens = [
+            token for value in expected_tokens
+            if (token := _token(value)) and token not in compact
+        ]
+        if missing_tokens:
+            raise ValueError(f"{suffix.upper()} 缺少 {len(missing_tokens)} 项 canonical 可见语义字段")
+
+        # Global token presence is not enough: it lets two issue rows exchange
+        # their messages/amounts while the document still contains every token.
+        markers = list(re.finditer(r"(?:ISSUE_ID|DECISION_ID|MANUAL_ID|CHECK_ID)\|[^|]*\|", compact))
+        issues = [
+            item
+            for key in ("issues", "tips")
+            for item in (report.get(key) if isinstance(report.get(key), list) else [])
+            if isinstance(item, dict)
+        ]
+        for item in issues:
+            issue_id = str(item.get("id") or "")
+            marker_text = f"ISSUE_ID|{issue_id}|"
+            starts = [match.start() for match in markers if match.group(0) == marker_text]
+            if len(starts) != 1:
+                raise ValueError(f"{suffix.upper()} 问题 {issue_id} 的 ID 标记不唯一")
+            start = starts[0]
+            following = [match.start() for match in markers if match.start() > start]
+            segment = compact[start:min(following) if following else len(compact)]
+            location = item.get("location") if isinstance(item.get("location"), dict) else {}
+            evidence = item.get("evidence") if isinstance(item.get("evidence"), list) else []
+            snippet = next(
+                (
+                    ref.get("text_snippet") or ref.get("text")
+                    for ref in evidence
+                    if isinstance(ref, dict) and (ref.get("text_snippet") or ref.get("text"))
+                ),
+                "",
+            )
+            row_values = [
+                item.get("rule_id") or item.get("rule"),
+                item.get("title") or item.get("message"),
+                item.get("message"),
+                item.get("suggestion"),
+                item.get("severity"),
+                item.get("check_relation_id"),
+                item.get("page_number") or item.get("page") or location.get("page"),
+                snippet,
+                *(_list_field(item.get("fact_ids", []), "issue.fact_ids")),
+                *(_list_field(item.get("evidence_ids", []), "issue.evidence_ids")),
+            ]
+            decision = item.get("human_decision") if isinstance(item.get("human_decision"), dict) else {}
+            row_values.extend((decision.get("status"), decision.get("note")))
+            missing_row_tokens = [
+                token for value in row_values
+                if (token := _token(value)) and token not in segment
+            ]
+            if missing_row_tokens:
+                raise ValueError(f"{suffix.upper()} 问题 {issue_id} 的行内容与 canonical 问题不一致")
+
+        for decision in report.get("human_decisions", []):
+            if not isinstance(decision, dict):
+                continue
+            issue_id = str(decision.get("issue_id") or "")
+            marker_text = f"DECISION_ID|{issue_id}|"
+            starts = [match.start() for match in markers if match.group(0) == marker_text]
+            if len(starts) != 1:
+                raise ValueError(f"{suffix.upper()} 人工决定 {issue_id} 的 ID 标记不唯一")
+            start = starts[0]
+            following = [match.start() for match in markers if match.start() > start]
+            segment = compact[start:min(following) if following else len(compact)]
+            values = [decision.get(key) for key in (
+                "status", "note", "analysis_revision", "decision_revision", "actor", "identity_fingerprint",
+            )]
+            for key in ("fact_ids", "evidence_ids"):
+                values.extend(_list_field(decision.get(key, []), f"decision.{key}"))
+            if any((token := _token(value)) and token not in segment for value in values):
+                raise ValueError(f"{suffix.upper()} 人工决定 {issue_id} 的行内容与 canonical 决定不一致")
+
     for row in rows_with_exports:
-        signatures: list[set[tuple[str, str, str]]] = []
-        for raw_path in row["export_paths"]:
+        document_error_start = len(errors)
+        export_paths = row.get("export_paths")
+        if not isinstance(export_paths, list):
+            errors.append(f"{row.get('doc_id')}: 缺少 export_paths；每份盲测文档都必须提供 JSON/CSV/DOCX/PDF")
+            continue
+        found: dict[str, list[dict[str, Any]]] = {".json": [], ".csv": []}
+        format_digests: dict[str, list[str]] = {".json": [], ".csv": [], ".docx": [], ".pdf": []}
+        canonical_reports: list[dict[str, Any]] = []
+        semantic_paths: list[Path] = []
+        for raw_path in export_paths:
+            if isinstance(raw_path, dict):
+                raw_path = raw_path.get("path") or ""
             path = Path(str(raw_path))
             if not path.is_absolute():
                 path = root / path
             if not path.is_file():
+                errors.append(f"{row.get('doc_id')}: 导出文件缺失 {raw_path}")
                 continue
             try:
-                if path.suffix.lower() == ".json":
+                suffix = path.suffix.lower()
+                if suffix == ".json":
                     payload = _read_json(path)
-                    issues = (
-                        payload.get("issues")
-                        if isinstance(payload.get("issues"), list)
-                        else []
-                    )
-                    # RC-13：list 用 append（旧代码误用 set.add 触发 AttributeError）
-                    signatures.append(
-                        {
-                            (
-                                str(i.get("rule_id") or i.get("rule") or ""),
-                                str(i.get("severity") or ""),
-                                str(i.get("page_number") or i.get("page") or ""),
-                            )
-                            for i in issues
-                            if isinstance(i, dict)
-                        }
-                    )
-                elif path.suffix.lower() == ".csv":
+                    report = payload.get("review_report")
+                    if not isinstance(report, dict) or report.get("schema_version") != 2:
+                        raise ValueError("canonical review_report/schema_version=2 缺失")
+                    revision = str(report.get("analysis_revision") or "")
+                    if not revision or str(payload.get("analysis_revision") or "") != revision:
+                        raise ValueError("analysis_revision 缺失或与 canonical report 不一致")
+                    issues = _list_field(report.get("issues"), "review_report.issues")
+                    tips = _list_field(report.get("tips"), "review_report.tips")
+                    decisions = _list_field(report.get("human_decisions"), "review_report.human_decisions")
+                    manual_review = _list_field(report.get("manual_review"), "review_report.manual_review")
+                    receipts = _list_field(report.get("check_receipts"), "review_report.check_receipts")
+                    if not isinstance(report.get("conclusion"), dict):
+                        raise ValueError("review_report.conclusion 缺失")
+                    report_digest = _report_digest(report)
+                    if str(payload.get("review_report_sha256") or "").lower() != report_digest:
+                        raise ValueError("JSON review_report_sha256 与 canonical ReviewReport 不符")
+                    canonical_reports.append(report)
+                    format_digests[".json"].append(report_digest)
+                    found[".json"].append({
+                        "revision": revision,
+                        "issues": sorted(
+                            (_canonical_issue(item) for item in issues + tips if isinstance(item, dict)),
+                            key=lambda value: json.dumps(value, ensure_ascii=False, sort_keys=True, default=str),
+                        ),
+                        "decisions": sorted(_canonical_decision(item) for item in decisions if isinstance(item, dict)),
+                        "manual": sorted((
+                            str(item.get("record_type") or "manual_review"),
+                            str(item.get("id") or ""), str(item.get("obligation_id") or ""),
+                            str(item.get("code") or ""), normalize_manual_review(item)["title"],
+                            str(item.get("status") or ""),
+                            str(item.get("message") or item.get("detail") or item.get("reason") or ""),
+                        ) for item in manual_review if isinstance(item, dict)),
+                        "receipts": sorted((
+                            str(item.get("rule_id") or ""), str(item.get("sub_check_id") or ""),
+                            str(item.get("status") or ""), str(item.get("incomplete_reason") or ""),
+                            str(item.get("formula") or ""),
+                            tuple(sorted(str(value) for value in item.get("operand_fact_ids", []) if str(value))),
+                            tuple(sorted(str(value) for value in item.get("issue_refs", []) if str(value))),
+                        ) for item in receipts if isinstance(item, dict)),
+                        "conclusion": json.dumps(report["conclusion"], ensure_ascii=False, sort_keys=True, default=str),
+                    })
+                elif suffix == ".csv":
                     import csv as _csv
 
                     with path.open("r", encoding="utf-8-sig", newline="") as handle:
                         reader = _csv.DictReader(handle)
-                        signatures.append(
-                            {
-                                (
-                                    str(r.get("规则编号") or r.get("rule_id") or ""),
-                                    str(r.get("严重级别代码") or r.get("severity") or ""),
-                                    str(r.get("页码") or r.get("page") or ""),
-                                )
-                                for r in reader
-                                if str(r.get("record_type") or "issue") == "issue"
-                            }
-                        )
-            except (OSError, ValueError):
-                continue
-        if len(signatures) >= 2:
-            comparable += 1
-            if all(sig == signatures[0] for sig in signatures):
-                consistent += 1
+                        required_columns = {
+                            "record_type", "issue_id", "rule_id", "title", "severity", "page", "bbox",
+                            "location_level", "verification_status", "check_relation_id", "fact_ids",
+                            "evidence_ids", "human_decision", "human_decision_note", "decision_revision",
+                            "decision_actor", "decision_inherited", "analysis_revision", "analysis_conclusion",
+                            "decision_identity_fingerprint",
+                            "review_report_sha256",
+                            "quality_status", "conclusion_scope", "manual_review_type", "check_id",
+                            "check_status", "incomplete_reason", "formula", "operand_fact_ids", "issue_refs",
+                            "conclusion_json",
+                        }
+                        if not reader.fieldnames or not required_columns.issubset(set(reader.fieldnames)):
+                            raise ValueError("CSV schema 缺少完整 canonical 字段")
+                        csv_rows = list(reader)
+                    summaries = [item for item in csv_rows if item.get("record_type") == "summary"]
+                    if len(summaries) != 1:
+                        raise ValueError("CSV 必须且只能包含一条 summary 行")
+                    revision = str(summaries[0].get("analysis_revision") or "")
+                    if not revision:
+                        raise ValueError("CSV summary 缺少 analysis_revision")
+                    report_digest = str(summaries[0].get("review_report_sha256") or "").lower()
+                    if not re.fullmatch(r"[a-f0-9]{64}", report_digest):
+                        raise ValueError("CSV summary 缺少有效 ReviewReport 指纹")
+                    format_digests[".csv"].append(report_digest)
+                    issue_rows = [item for item in csv_rows if item.get("record_type") in {"issue", "tip"}]
+                    csv_issues = []
+                    for item in issue_rows:
+                        csv_issues.append((
+                            str(item.get("issue_id") or ""), str(item.get("rule_id") or ""),
+                            str(item.get("title") or ""), str(item.get("severity") or ""),
+                            str(item.get("message") or ""), str(item.get("page") or ""),
+                            tuple(round(float(value), 2) for value in _csv_json_list(item.get("bbox"), "bbox")) if item.get("bbox") else None,
+                            str(item.get("location_level") or ""), str(item.get("verification_status") or ""),
+                            str(item.get("check_relation_id") or ""),
+                            tuple(sorted(str(value) for value in _csv_json_list(item.get("fact_ids"), "fact_ids"))),
+                            tuple(sorted(str(value) for value in _csv_json_list(item.get("evidence_ids"), "evidence_ids"))),
+                            str(item.get("human_decision") or ""), str(item.get("human_decision_note") or ""),
+                            str(item.get("decision_revision") or ""), str(item.get("decision_actor") or ""),
+                            str(item.get("decision_inherited") or "").lower(),
+                            str(item.get("decision_identity_fingerprint") or ""),
+                        ))
+                    csv_decisions = []
+                    for item in csv_rows:
+                        if item.get("record_type") != "human_decision":
+                            continue
+                        csv_decisions.append((
+                            str(item.get("issue_refs") or ""), str(item.get("human_decision") or ""),
+                            str(item.get("human_decision_note") or ""), str(item.get("analysis_revision") or ""),
+                            str(item.get("decision_revision") or ""), str(item.get("decision_actor") or ""),
+                            str(item.get("decision_inherited") or "").lower(), str(item.get("check_relation_id") or ""),
+                            tuple(sorted(str(value) for value in _csv_json_list(item.get("fact_ids"), "fact_ids"))),
+                            tuple(sorted(str(value) for value in _csv_json_list(item.get("evidence_ids"), "evidence_ids"))),
+                            str(item.get("decision_identity_fingerprint") or ""),
+                        ))
+                    csv_manual = [item for item in csv_rows if item.get("record_type") == "manual_review"]
+                    csv_receipts = [item for item in csv_rows if item.get("record_type") == "check"]
+                    found[".csv"].append({
+                        "revision": revision,
+                        "issues": sorted(
+                            csv_issues,
+                            key=lambda value: json.dumps(value, ensure_ascii=False, sort_keys=True, default=str),
+                        ),
+                        "decisions": sorted(csv_decisions),
+                        "manual": sorted((
+                            str(item.get("manual_review_type") or "manual_review"),
+                            str(item.get("issue_id") or ""),
+                            str(item.get("obligation_ids") or ""), str(item.get("规则编号") or ""),
+                            str(item.get("title") or ""), str(item.get("check_status") or ""),
+                            str(item.get("incomplete_reason") or item.get("摘要") or ""),
+                        ) for item in csv_manual),
+                        "receipts": sorted((
+                            str(item.get("rule_id") or ""), str(item.get("check_id") or ""),
+                            str(item.get("check_status") or ""), str(item.get("incomplete_reason") or ""),
+                            str(item.get("formula") or ""),
+                            tuple(sorted(str(value) for value in _csv_json_list(item.get("operand_fact_ids"), "operand_fact_ids"))),
+                            tuple(sorted(str(value) for value in _csv_json_list(item.get("issue_refs"), "issue_refs"))),
+                        ) for item in csv_receipts),
+                        "conclusion": json.dumps(
+                            json.loads(summaries[0].get("conclusion_json") or "{}"),
+                            ensure_ascii=False, sort_keys=True, default=str,
+                        ),
+                    })
+                elif suffix in {".docx", ".pdf"}:
+                    format_digests[suffix].append(_embedded_digest(path))
+                    semantic_paths.append(path)
+                else:
+                    raise ValueError(f"不支持的交付格式：{suffix or '(无扩展名)'}")
+            except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                errors.append(f"{row.get('doc_id')}: {path.name}: {exc}")
+        if len(canonical_reports) == 1:
+            for semantic_path in semantic_paths:
+                try:
+                    _validate_visible_export(semantic_path, canonical_reports[0])
+                except (OSError, ValueError, TypeError) as exc:
+                    errors.append(f"{row.get('doc_id')}: {semantic_path.name}: {exc}")
+        elif canonical_reports:
+            errors.append(f"{row.get('doc_id')}: 必须且只能提供一个 canonical JSON 报告用于 DOCX/PDF 语义核对")
+        missing_formats = [suffix for suffix, values in format_digests.items() if len(values) != 1]
+        if missing_formats:
+            errors.append(
+                f"{row.get('doc_id')}: export_paths 必须各提供一个 JSON/CSV/DOCX/PDF；缺少或重复：{','.join(missing_formats)}"
+            )
+        if not found[".json"] or not found[".csv"]:
+            errors.append(f"{row.get('doc_id')}: 必须同时提供 canonical JSON 和 CSV")
+            continue
+        json_revisions = {str(item.get("revision") or "") for item in found[".json"]}
+        csv_revisions = {str(item.get("revision") or "") for item in found[".csv"]}
+        if len(json_revisions) != 1 or len(csv_revisions) != 1 or json_revisions != csv_revisions:
+            errors.append(f"{row.get('doc_id')}: JSON/CSV 的 analysis_revision 不一致或重复导出版本不唯一")
+        signatures = found[".json"] + found[".csv"]
+        comparable += 1
+        all_digests = [values[0] for values in format_digests.values() if len(values) == 1]
+        if (
+            len(errors) == document_error_start
+            and all(signature == signatures[0] for signature in signatures)
+            and len(all_digests) == 4
+            and all(value == all_digests[0] for value in all_digests)
+        ):
+            consistent += 1
     if comparable == 0:
-        return {"status": "not_computable", "reason": "export_paths 指向的导出文件缺失或格式不可比"}
+        return {"status": "not_computable", "reason": "；".join(errors[:8]) or "export_paths 指向的导出文件缺失或格式不可比"}
+    if errors:
+        return {
+            "status": "not_computable",
+            "reason": "导出结构不完整或不一致：" + "；".join(errors[:8]),
+            "comparable_documents": comparable,
+            "consistent_documents": consistent,
+        }
     return {
         "status": "computed",
         "comparable_documents": comparable,
@@ -989,11 +1744,24 @@ def _evaluate_replays(dataset: dict[str, Any], manifest_path: Path, root: Path, 
     }
     # AC-14：补齐此前固定 not_computable 的评测——输入齐备即计算，
     # 输入缺失如实保留 not_computable 并说明缺什么，不允许假装通过。
-    evidence_authenticity = _evaluate_evidence_authenticity(evaluated)
-    receipts = _evaluate_receipts(evaluated)
-    exact_location = _evaluate_exact_location(evaluated, root)
-    repeatability = _evaluate_repeatability(manifest, root, mode)
-    export_agreement = _evaluate_export_agreement(manifest, root)
+    blind_manifest = {
+        **manifest,
+        "documents": [item for item in manifest.get("documents", []) if isinstance(item, dict) and item.get("split") == "blind"],
+    }
+    blind_evaluated = [row for row in evaluated if row["split"] == "blind"]
+    development_evaluated = [row for row in evaluated if row["split"] == "development"]
+    evidence_authenticity = _evaluate_evidence_authenticity(blind_evaluated, root)
+    receipts = _evaluate_receipts(blind_evaluated)
+    exact_location = _evaluate_exact_location(blind_evaluated, root)
+    repeatability = _evaluate_repeatability(blind_manifest, root, mode)
+    export_agreement = _evaluate_export_agreement(blind_manifest, root)
+    development_diagnostics = {
+        "evidence_authenticity": _evaluate_evidence_authenticity(development_evaluated, root),
+        "receipts": _evaluate_receipts(development_evaluated),
+        "exact_location": _evaluate_exact_location(development_evaluated, root),
+        "split": "development",
+        "does_not_contribute_to_release_gates": True,
+    }
 
     return {
         "status": "computed",
@@ -1006,6 +1774,7 @@ def _evaluate_replays(dataset: dict[str, Any], manifest_path: Path, root: Path, 
         "exact_location": exact_location,
         "repeatability": repeatability,
         "export_agreement": export_agreement,
+        "development_diagnostics": development_diagnostics,
         "review_candidate_rate": None,
         "duplicate_alert_rate": None,
         "noncomputable_metrics": [
@@ -1101,10 +1870,14 @@ def build_report(
         authenticity = metrics.get("evidence_authenticity") or {}
         if authenticity.get("status") == "computed":
             authentic_rate = float(authenticity.get("authenticity_rate") or 0.0)
-            violations = int(authenticity.get("violations") or 0)
+            violations = int(
+                authenticity.get("failed", 0)
+                + authenticity.get("unverified", 0)
+                + authenticity.get("missing_record", 0)
+            )
             gates["evidence_authenticity"] = _gate(
-                "pass" if violations == 0 and authentic_rate >= 0.98 else "fail",
-                f"证据真实率 {authentic_rate}，伪造/越界 {violations} 条（门槛：0 违规且 ≥0.98）",
+                "pass" if violations == 0 and authentic_rate >= 1.0 else "fail",
+                f"证据真实率 {authentic_rate}，未认证/伪造/缺记录 {violations} 条（门槛：全部正式引用均可认证）",
             )
         else:
             gates["evidence_authenticity"] = _gate("not_computable", str(authenticity.get("reason")))
@@ -1112,14 +1885,14 @@ def build_report(
         receipts = metrics.get("receipts") or {}
         if receipts.get("status") == "computed":
             completion = float(receipts.get("completion_rate") or 0.0)
-            coverage = float(receipts.get("operand_formula_coverage") or 0.0)
+            coverage = float(receipts.get("receipt_coverage_rate") or 0.0)
             gates["required_check_completion"] = _gate(
                 "pass" if completion >= 0.95 else "fail",
                 f"关系级完成率 {completion}，门槛 0.95",
             )
             gates["receipt_coverage"] = _gate(
-                "pass" if coverage >= 0.95 else "fail",
-                f"操作数+公式回执覆盖率 {coverage}，门槛 0.95",
+                "pass" if coverage >= 1.0 else "fail",
+                f"冻结适用关系的状态/未完成原因覆盖率 {coverage}，门槛 1.0；操作数+公式诊断值 {receipts.get('operand_formula_coverage')}",
             )
         else:
             gates["required_check_completion"] = _gate("not_computable", str(receipts.get("reason")))

@@ -12,6 +12,20 @@ import { test, expect } from "../../app/node_modules/playwright/test";
  *    ——只测"头存在"是不够的，CSP 打断渲染时头一样存在。
  */
 test.describe("Security response headers", () => {
+  test("anonymous login redirect retains the requesting origin and encoded next path", async ({ page }) => {
+    const response = await page.request.get("/review?filter=high", { maxRedirects: 0 });
+    expect(response.status()).toBe(307);
+    const location = response.headers()["location"];
+    const requestedOrigin = new URL(String(test.info().project.use.baseURL)).origin;
+    const target = new URL(location, requestedOrigin);
+    expect(target.pathname).toBe("/login");
+    expect(target.origin).toBe(requestedOrigin);
+    expect(target.searchParams.get("next")).toBe("/review?filter=high");
+    expect(response.headers()["x-content-type-options"]).toBe("nosniff");
+    await page.goto("/review?filter=high");
+    await expect(page).toHaveURL(target.toString());
+  });
+
   test("login page carries security headers and renders without CSP violations", async ({
     page,
   }) => {

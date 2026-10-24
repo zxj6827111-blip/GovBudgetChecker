@@ -81,6 +81,7 @@ export async function PATCH(
       if (!localSession.user.is_admin) {
         return forbiddenResponse();
       }
+      if ("is_read_only" in body) return NextResponse.json({ detail: "主管只读角色需要后端用户服务，当前本地登录模式不支持" }, { status: 503 });
 
       const updates: { is_admin?: boolean; is_active?: boolean; password?: string; organization_ids?: string[] } = {};
       try {

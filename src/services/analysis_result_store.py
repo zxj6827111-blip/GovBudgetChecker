@@ -116,15 +116,18 @@ async def persist_analysis_job_snapshot(
                 status = str(payload.get("status") or "").strip().lower()
                 if include_results:
                     await _upsert_analysis_result(conn, job_db_id, payload)
+                    from src.services.analysis_fact_snapshot import publish_snapshot
+                    await publish_snapshot(conn, payload)
                 elif status in _ACTIVE_JOB_STATUSES:
-                    await conn.execute("DELETE FROM analysis_results WHERE job_id = $1", job_db_id)
+                    await conn.execute("DELETE FROM analysis_results WHERE job_id = $1 AND EXISTS "
+                                       "(SELECT 1 FROM analysis_jobs WHERE id=$1 AND current_fact_revision_id IS NULL)", job_db_id)
                     # 作业被重置为"待跑/在跑"：分析结果被作废，同时清掉结果指纹。
                     # 这样**下一次真正落库的结果**必定递增分析代际——哪怕它与上一代
                     # 逐字相同。重新分析意味着"请重新看这一次的分析"，而不是
                     # "看一份看起来一样的旧结论"（详见 migration 0020 的注释）。
                     await conn.execute(
                         "UPDATE analysis_jobs SET analysis_result_fingerprint = NULL, "
-                        "updated_at = NOW() WHERE id = $1",
+                        "updated_at = NOW() WHERE id = $1 AND current_fact_revision_id IS NULL",
                         job_db_id,
                     )
                 await _backfill_structured_document_version_metadata(conn, payload)
@@ -318,6 +321,8 @@ def compute_analysis_result_fingerprint(payload: Dict[str, Any]) -> str:
         value = result_payload.get(key, payload.get(key))
         content[key] = value if value is not None else None
     content["obligation_coverage"] = meta.get("obligation_coverage")
+    if meta.get('fact_snapshot'):
+        content['fact_snapshot'] = meta['fact_snapshot']
     canonical = json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

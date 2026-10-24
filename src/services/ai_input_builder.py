@@ -112,9 +112,8 @@ def _fact_summary(page_texts: Sequence[str]) -> List[str]:
             else:
                 metric = "决算"
             page = _locate_page(page_texts, clause)
-            facts.append(
-                f"[事实] {subject_hint} | {metric}={value:.2f}{unit} (P{page}) | 依据: {clause[:36]}"
-            )
+            page_label = f"P{page}" if page is not None else "页码未定位"
+            facts.append(f"[事实] {subject_hint} | {metric}={value:.2f}{unit} ({page_label}) | 依据: {clause[:36]}")
             count += 1
             if count >= 6:
                 break
@@ -124,12 +123,11 @@ def _fact_summary(page_texts: Sequence[str]) -> List[str]:
     return lines
 
 
-def _locate_page(page_texts: Sequence[str], clause: str) -> int:
-    key = re.sub(r"\s+", "", clause)[:18]
-    for idx, text in enumerate(page_texts or []):
-        if key and key in re.sub(r"\s+", "", text or ""):
-            return idx + 1
-    return 1
+def _locate_page(page_texts: Sequence[str], clause: str) -> Optional[int]:
+    key = re.sub(r"\s+", "", clause)
+    pages = [idx + 1 for idx, text in enumerate(page_texts or [])
+             if key and key in re.sub(r"\s+", "", text or "")]
+    return pages[0] if len(pages) == 1 else None
 
 
 def build_structured_context(

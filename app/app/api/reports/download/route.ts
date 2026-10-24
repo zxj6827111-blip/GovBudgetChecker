@@ -21,6 +21,8 @@ export async function GET(req: NextRequest) {
     if (format) {
       params.set("format", format);
     }
+    const revision = req.nextUrl.searchParams.get("analysis_revision");
+    if (revision !== null) params.set("analysis_revision", revision);
     const upstream = await fetch(
       `${apiBase}/api/reports/download?${params.toString()}`,
       {

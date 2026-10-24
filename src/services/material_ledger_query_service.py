@@ -283,6 +283,7 @@ def _accumulate(bucket: Dict[str, Any], row: Dict[str, Any]) -> None:
     """
     count = int(row.get("slot_count") or 0)
     bucket["slot_total"] += count
+    bucket["uploaded_total"] += int(row.get("uploaded_count") or 0)
     bucket["status_counts"][_require_status(row.get("status"))] += count
 
     report_kind = str(row.get("report_kind") or "")
@@ -310,6 +311,7 @@ def _max_moment(current: Optional[datetime], candidate: Any) -> Optional[datetim
 def new_bucket() -> Dict[str, Any]:
     return {
         "slot_total": 0,
+        "uploaded_total": 0,
         "status_counts": empty_status_counts(),
         "budget_total": 0,
         "final_total": 0,
@@ -361,6 +363,7 @@ class MaterialLedgerQueryService:
                    report_kind,
                    status,
                    COUNT(*)::int AS slot_count,
+                   COUNT(*) FILTER (WHERE current_document_version_id IS NOT NULL)::int AS uploaded_count,
                    COUNT(*) FILTER (WHERE due_at IS NULL)::int AS due_at_unknown_count,
                    COUNT(*) FILTER (
                        WHERE status = 'not_due' AND status_reason = 'due_not_reached'
@@ -377,6 +380,7 @@ class MaterialLedgerQueryService:
             SELECT report_kind,
                    status,
                    COUNT(*)::int AS slot_count,
+                   COUNT(*) FILTER (WHERE current_document_version_id IS NOT NULL)::int AS uploaded_count,
                    COUNT(*) FILTER (WHERE due_at IS NULL)::int AS due_at_unknown_count,
                    COUNT(*) FILTER (
                        WHERE status = 'not_due' AND status_reason = 'due_not_reached'
@@ -447,6 +451,7 @@ class MaterialLedgerQueryService:
         items.sort(key=lambda item: _sort_key(item.district_name, item.district_id))
 
         summary = MaterialCoverageSummary(
+            uploaded_total=summary_bucket["uploaded_total"],
             slot_total=summary_bucket["slot_total"],
             status_counts=_status_counts(summary_bucket),
             budget_total=summary_bucket["budget_total"],
@@ -500,6 +505,7 @@ class MaterialLedgerQueryService:
                    report_kind,
                    status,
                    COUNT(*)::int AS slot_count,
+                   COUNT(*) FILTER (WHERE current_document_version_id IS NOT NULL)::int AS uploaded_count,
                    COUNT(*) FILTER (WHERE due_at IS NULL)::int AS due_at_unknown_count,
                    COUNT(*) FILTER (
                        WHERE status = 'not_due' AND status_reason = 'due_not_reached'

@@ -24,7 +24,7 @@ usage() {
 环境变量：
   GOVBUDGET_API_KEY / BACKEND_API_KEY  自动作为 --api-key
   DIAG_FRONTEND_URL                    默认前端地址，未设时为 http://127.0.0.1:3001
-  DIAG_BACKEND_URL                     默认后端地址，未设时为 http://127.0.0.1:8000
+  DIAG_BACKEND_URL                     默认后端地址，未设时为 http://127.0.0.1:18743
   DIAG_COMPOSE_FILE                    默认 compose 文件，未设时为 docker-compose.ai.yml
 EOF
 }
@@ -49,7 +49,8 @@ if [[ $# -gt 0 && "${1:-}" != --* ]]; then
 fi
 
 FRONTEND_URL="${DIAG_FRONTEND_URL:-http://127.0.0.1:3001}"
-BACKEND_URL="${DIAG_BACKEND_URL:-http://127.0.0.1:8000}"
+BACKEND_PORT="${GOVBUDGET_BACKEND_PORT:-18743}"
+BACKEND_URL="${DIAG_BACKEND_URL:-http://127.0.0.1:${BACKEND_PORT}}"
 COMPOSE_FILE="${DIAG_COMPOSE_FILE:-docker-compose.ai.yml}"
 API_KEY="${DIAG_API_KEY:-${GOVBUDGET_API_KEY:-${BACKEND_API_KEY:-}}}"
 

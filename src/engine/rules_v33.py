@@ -96,12 +96,17 @@ from typing import FrozenSet, List, Dict, Any, Optional, Sequence, Set, Tuple, T
 
 import os
 import re
+import unicodedata
 from collections import Counter, defaultdict
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import numpy as np
 
 from .amount_math import classify_amount_diff, compute_dynamic_envelope, half_unit_for_term, rounding_envelope
-from .rule_policy import amount_difference_exceeds_policy, percentage_difference_exceeds_policy
+from .rule_policy import (
+    AMOUNT_TOLERANCE_WAN,
+    amount_difference_exceeds_policy,
+    percentage_difference_exceeds_policy,
+)
 from .rule_outcome import RuleDeferred, RuleExecutionError, RuleOutcomeSignal, STATUS_INSUFFICIENT_DATA
 from .field_extractor import (
     extract_row_strict,
@@ -116,6 +121,7 @@ from src.utils.narration import (
     extract_three_public_facts,
     merge_page_texts,
     merge_soft_wrapped_lines,
+    normalize_amount_punctuation,
     split_clauses,
     split_numbered_sections,
 )
@@ -137,6 +143,10 @@ class Issue:
     # 候选 finding 是否真的产自标注章节（跨章节候选可借主题词混过
     # 锚点）。section_id 携带规则层 scope 定位到的章节标题原文。
     section_id: Optional[str] = None
+    # RC-04：finding 与关系级检查回执、财政事实显式绑定，不能靠规则编号猜。
+    check_relation_id: Optional[str] = None
+    fact_ids: List[str] = field(default_factory=list)
+    evidence_ids: List[str] = field(default_factory=list)
 
 @dataclass
 class Document:
@@ -161,6 +171,11 @@ class Document:
     # ParseArtifact 物化，规则、AI、证据、入库消费同一版本。None 表示
     # 解析对象缺失/无可识别事实，规则回退 legacy 路径并如实留痕。
     fact_context: Optional[Any] = None
+    parse_artifact: Optional[Any] = None
+    # Consume the same resolved owner/year as the API and dual-mode runner.
+    document_profile: Optional[Any] = None
+    # 表/章节存在性使用独立视图；未获数字资格的 OCR 不进入金额规则文本。
+    structure_view: Optional[Dict[str, Any]] = None
     # ZC-03（AC-04）：规则在执行中写下的关系级子检查回执
     # （CheckReceipt.to_dict() 形态），由 build_issues_payload 收集上报。
     fact_receipts: List[Dict[str, Any]] = field(default_factory=list)
@@ -257,14 +272,18 @@ def majority(items: List[Any]) -> Optional[Any]:
     c = Counter(items).most_common(1)
     return c[0][0] if c else None
 
-# AC-06（SYS-08）：数值容差比较统一走 v3_3_portable 政策——绝对 0.5 万元，
+# AC-06（SYS-08）：数值容差比较统一走 v3_3_portable 政策（rule_policy.AMOUNT_TOLERANCE_WAN），
 # 不再使用"±1 或相对 0.1% 取较大"的旧口径（相对容差会让大额差异漏报）。
-# 旧 atol/rtol 形参仅为调用兼容保留，实际不再参与计算。
+# 旧 atol/rtol 形参仅为调用兼容保留，实际不再参与计算。``terms`` 为参与比较
+# 的显示值个数（a 是 n 项之和时传 n），用于保留显示舍入包络；浮点求和尾差
+# （14107.449999999999）先归一到 6 位小数，避免恰好 0.01 被判超限。
 def tolerant_equal(a: Optional[float], b: Optional[float],
-                   atol: float = 1.0, rtol: float = 0.001) -> bool:
+                   atol: float = 1.0, rtol: float = 0.001, *, terms: int = 1) -> bool:
     if a is None or b is None:
         return False
-    return not amount_difference_exceeds_policy(Decimal(str(a)) - Decimal(str(b)))
+    quant = Decimal("0.000001")
+    diff = Decimal(str(a)).quantize(quant) - Decimal(str(b)).quantize(quant)
+    return not amount_difference_exceeds_policy(diff, rounding_envelope(terms))
 
 
 def _fact_operand_for_v33(
@@ -273,6 +292,7 @@ def _fact_operand_for_v33(
     *,
     table_code: Optional[str] = None,
     subject_tokens: Sequence[str] = (),
+    subject_names: Sequence[str] = (),
     report_year: Optional[int] = None,
     budget_stages: Sequence[str] = (),
 ) -> Tuple[Optional[Decimal], Any, Optional[str]]:
@@ -290,6 +310,7 @@ def _fact_operand_for_v33(
         indicator,
         table_code=table_code,
         subject_tokens=subject_tokens,
+        subject_names=subject_names,
         report_year=report_year,
         budget_stages=budget_stages,
     )
@@ -298,6 +319,408 @@ def _fact_operand_for_v33(
     if resolution.status == "blocked":
         return None, resolution.fact, resolution.reason
     return None, None, None
+
+
+def _v33_fact_identity(*facts: Any) -> Tuple[List[str], List[str]]:
+    fact_ids: List[str] = []
+    evidence_ids: List[str] = []
+    for fact in facts:
+        if fact is None:
+            continue
+        fact_id = str(getattr(fact, "fact_uid", "") or "").strip()
+        if fact_id:
+            fact_ids.append(fact_id)
+        evidence_ids.extend(
+            str(item).strip()
+            for item in (getattr(fact, "evidence_ids", None) or [])
+            if str(item).strip()
+        )
+    return list(dict.fromkeys(fact_ids)), list(dict.fromkeys(evidence_ids))
+
+
+def _v33_table_operand_ref(table_code: str, indicator: str, value: Any,
+                           *, subject_code: Optional[str] = None,
+                           subject_name: Optional[str] = None,
+                           role: str, relation_id: str = "") -> Dict[str, Any]:
+    """保留计算实际采用的语义操作数，证据绑定不得通过金额反查行。"""
+    ref = {"table_code": table_code, "indicator": indicator, "value": str(value),
+           "value_unit": "万元", "budget_stage": "决算", "role": role,
+           "relation_id": relation_id, "operand_id": f"{relation_id}:{role}:{subject_code or subject_name}"}
+    if subject_code is not None:
+        ref["subject_code"] = subject_code
+    if subject_name is not None:
+        ref["subject_name"] = subject_name
+    return ref
+
+
+_RATIO_CLAIM_RE = re.compile(
+    # Keep numeric/qualified explicit denominators for semantic validation.
+    # They must not disappear as "no ratio" merely because an amount occurs.
+    r"(?:占比|比重|占)(?:[^%％。；;\n]{0,120}?)"
+    r"(-?\d+(?:\.\d+)?)\s*[%％]"
+)
+
+
+_PERCENTAGE_INDICATORS = (
+    "一般公共预算财政拨款收入", "政府性基金预算财政拨款收入",
+    "国有资本经营预算财政拨款收入", "财政拨款收入", "财政拨款",
+    "上级补助收入", "事业收入", "经营收入", "附属单位上缴收入", "其他收入",
+    "本年收入合计", "本年支出合计", "基本支出", "项目支出",
+    # 上海 2022 版写“本年收入 X 万元”“本年支出 X 万元”，不带“合计”：它们是总额指标，
+    # 不是主体限定；不认作指标时“支出”会被当成未知主体，整句比例转人工。
+    "本年收入", "本年支出",
+    "人员经费", "公用经费", "因公出国（境）费", "公务接待费",
+    "公务用车购置及运行费", "公务用车购置费", "公务用车运行费",
+)
+
+
+@dataclass(frozen=True)
+class IndicatorPercentage:
+    status: str
+    value: Optional[Decimal] = None
+    # Offsets are relative to the supplied narrative, not PDF coordinates.
+    spans: Tuple[Tuple[int, int], ...] = ()
+    quotes: Tuple[str, ...] = ()
+    reason: Optional[str] = None
+    denominators: Tuple[str, ...] = ()
+    subjects: Tuple[str, ...] = ()
+
+
+def _percentage_document_context(doc: Document, scope: str) -> Dict[str, Any]:
+    from src.services.document_profile_resolver import resolve_document_profile
+    from src.engine.budget_rules import _document_org_aliases
+
+    profile = getattr(doc, "document_profile", None)
+    if profile is None:
+        profile = resolve_document_profile(
+            path=doc.path, page_texts=doc.page_texts,
+            explicit_report_kind=getattr(doc, "report_kind", None),
+        )
+        doc.document_profile = profile
+    if isinstance(profile, dict):
+        from src.schemas.document_profile import DocumentProfile
+        profile = DocumentProfile.model_validate(profile)
+    owner = str(profile.organization_name.value or "").strip() or None
+    if any(item.get("field") == "organization_name" for item in profile.conflicts):
+        owner = None
+    # Align alias scopes to the same soft-wrapped section text supplied below.
+    source = merge_page_texts(doc.page_texts)
+    source = re.sub(r"(\d)[ \t]*\r?\n[ \t]*(\d)", r"\1\2", source)
+    source = re.sub(r"([^\n。；;！!？\d])[ \t]*\r?\n[ \t]*(\d)", r"\1\2", source)
+    offset = source.find(scope)
+    aliases = _document_org_aliases(source, owner, profile.year) if offset >= 0 else []
+    return {
+        "organization_name": owner,
+        "report_year": getattr(doc, "_narrative_target_year", profile.year),
+        "reference_year": profile.year,
+        "report_kind": getattr(getattr(profile, "report_kind", None), "value", None),
+        "owner_aliases": [{**item, "start": item["start"] - offset, "end": item["end"] - offset}
+                          for item in aliases],
+    }
+
+
+def _percentage_subject(
+    prefix: str, *, offset: int, organization_name: Optional[str],
+    owner_aliases: Sequence[Dict[str, Any]],
+    report_year: Optional[int] = None,
+    report_kind: Optional[str] = None,
+    reference_year: Optional[int] = None,
+) -> Tuple[str, str, int]:
+    """Resolve explicit and inherited comma-clause subjects before a metric.
+
+    Full names are compared exactly. A subordinate suffix must not match its
+    parent's name, and aliases are usable only within their declaration scope.
+    Unknown qualifiers stay unresolved rather than becoming an implicit owner.
+    """
+    self_names = ("本单位", "本部门", "我单位", "我部门")
+    names = sorted({*self_names, *(item["name"] for item in owner_aliases),
+                    *([organization_name] if organization_name else [])}, key=len, reverse=True)
+    entities = r"[\u4e00-\u9fffA-Za-z]{1,60}?(?:委员会|办公室|人民政府|中心|学校|医院|机构|集团|单位|部门|局|委|办|部)"
+    name_pattern = "(?:" + "|".join(re.escape(name) for name in names) + "|" + entities + ")"
+    pattern = re.compile(
+        r"^\s*(?:(?:[一二三四五六七八九十]+[、.．])?(?:收入|支出)决算情况说明\s*)?"
+        r"(?:其中|包括|以及|此外|与|和|由)*\s*(?:20\d{2}\s*年|本年|今年|上年|去年|年初预算|全年预算|预算数|决算数)*\s*(?P<name>" + name_pattern + r")"
+        r"(?:的)?\s*(?:20\d{2}\s*年|本年|今年|上年|去年|年初预算|全年预算|预算数|决算数)*\s*"
+        r"(?=$|[0-9]|" + "|".join(re.escape(item) for item in _PERCENTAGE_INDICATORS) + r")"
+    )
+    state, subject, start = "implicit", "", len(prefix)
+    reference_year = reference_year if reference_year is not None else report_year
+    year, year_start = reference_year, None
+    stage, stage_start = None, None
+    # Thousands separators remain in their amount token. Clause commas split
+    # only when either adjacent character is not a digit. Keep original offsets.
+    boundaries = list(re.finditer(r"(?<!\d)[,，:：]|[,，:：](?!\d)", prefix))
+    segments = []
+    segment_start = 0
+    for boundary in [*boundaries, None]:
+        segment_end = boundary.start() if boundary is not None else len(prefix)
+        # finditer with bounds preserves offsets into the original sentence.
+        segments.extend(re.compile(r"[\s\S]+").finditer(prefix, segment_start, segment_end))
+        segment_start = boundary.end() if boundary is not None else len(prefix)
+    for segment in segments:
+        # Identity is inherited across amount clauses, with explicit resets.
+        # A year is a time anchor, never evidence that a subject was resolved.
+        part = re.split(r"占比|比重|占", segment.group(), maxsplit=1)[0]
+        explicit_year_in_clause = False
+        for anchor in re.finditer(r"(20\d{2})\s*年|本年|今年|上年|去年|往年", part):
+            token = anchor.group()
+            if anchor.group(1):
+                year = int(anchor.group(1))
+                explicit_year_in_clause = True
+            elif token == "本年":
+                # A metric label (本年收入/支出) inherits the narrative year.
+                # An explicit 本年 qualifier in a later clause resets it;
+                # within a clause an explicit 20xx年 remains authoritative.
+                metric_label = re.match(r"\s*(?:收入|支出)", part[anchor.end():])
+                if not explicit_year_in_clause and not metric_label:
+                    year = reference_year
+            else:
+                year = (reference_year if token == "今年" else
+                        reference_year - 1 if reference_year and token in {"上年", "去年"} else -1)
+            year_start = segment.start() + anchor.start()
+        for anchor in re.finditer(r"年初预算|全年预算|预算数|决算数", part):
+            stage = "final" if anchor.group() == "决算数" else "budget"
+            stage_start = segment.start() + anchor.start()
+        match = pattern.match(part)
+        if not match:
+            # Strip only recognised temporal/connective qualifiers. Unknown
+            # words before an indicator/amount remain an unresolved subject,
+            # including names such as 中学 that are absent from suffix lists.
+            qualifier = re.sub(r"^\s*(?:其中|包括|以及|此外|与|和|由)*\s*", "", part)
+            qualifier = re.sub(r"^(?:[一二三四五六七八九十]+[、.．])?(?:收入|支出)决算情况说明\s*", "", qualifier)
+            indicator = re.search("|".join(re.escape(item) for item in _PERCENTAGE_INDICATORS), qualifier)
+            if indicator:
+                qualifier = qualifier[:indicator.start()]
+            qualifier = re.sub(r"(?:20\d{2}\s*年|本年|今年|上年|去年|往年|年初预算|全年预算|预算数|决算数)", "", qualifier)
+            qualifier = re.split(r"-?\d+(?:[,，]\d{3})*(?:\.\d+)?\s*(?:亿元|万元|元)|(?:占比|比重|占)", qualifier)[0].strip()
+            if qualifier:
+                state, subject, start = "unknown", part.strip(), segment.start()
+            continue
+        subject = match.group("name")
+        start = segment.start() + match.start()
+        alias_is_active = any(
+            item["name"] == subject and item["start"] <= offset + start < item["end"]
+            for item in owner_aliases
+        )
+        if subject in self_names or (organization_name and subject == organization_name) or alias_is_active:
+            state = "self"
+        else:
+            state = "foreign" if organization_name else "unknown"
+    anchors = [anchor for anchor in (year_start, stage_start) if anchor is not None]
+    if anchors:
+        start = min(start, *anchors)
+    if ((year is not None and report_year is not None and year != report_year)
+            or (stage is not None and report_kind is not None and stage != report_kind)):
+        state, subject = "unknown", prefix[start:].strip()
+    elif anchors and not subject:
+        subject = prefix[start:].strip()
+    return state, subject, start
+
+
+def _percentage_denominator(raw: str, allowed: Sequence[str]) -> Tuple[bool, str]:
+    """Only a complete, equivalent denominator can use the default table total."""
+    phrase = re.sub(r"^(?:占比|比重|占)", "", raw).strip()
+    phrase = re.sub(r"(?:的)?(?:比例|比重)?(?:为|是)?\s*$", "", phrase).strip()
+    compact = re.sub(r"\s+", "", phrase)
+    if not compact:
+        return True, ""
+    return compact in {re.sub(r"\s+", "", item) for item in allowed}, phrase
+
+
+def _resolve_indicator_percentage(
+    text: str,
+    indicator_aliases: Sequence[str],
+    denominator_aliases: Sequence[str] = (),
+    *,
+    organization_name: Optional[str] = None,
+    owner_aliases: Sequence[Dict[str, Any]] = (),
+    report_year: Optional[int] = None,
+    report_kind: Optional[str] = None,
+    reference_year: Optional[int] = None,
+) -> IndicatorPercentage:
+    """Bind a claim to its nearest numerator before 占, preserving commas.
+
+    A denominator after 占 does not become the numerator. Conflicting claims,
+    unknown intervening amounts/subjects and incompatible explicit denominators
+    are unresolved, rather than silently accepted as absent or the first value.
+    """
+    aliases = tuple(sorted({item for item in indicator_aliases if item}, key=len, reverse=True))
+    if not aliases:
+        return IndicatorPercentage("not_applicable")
+    indicators = sorted(set(_PERCENTAGE_INDICATORS) | set(aliases), key=len, reverse=True)
+    indicator_re = re.compile("|".join(re.escape(item) for item in indicators))
+    claims: List[Decimal] = []
+    spans: List[Tuple[int, int]] = []
+    quotes: List[str] = []
+    denominators: List[str] = []
+    subjects: List[str] = []
+    reasons: List[str] = []
+    accepted: List[Tuple[Tuple[int, int], str, str, str]] = []
+    excluded_foreign = False
+    uncertain = False
+    for sentence_match in re.finditer(r"[^。！？!?；;\n]+", str(text or "")):
+        sentence = sentence_match.group()
+        for ratio in _RATIO_CLAIM_RE.finditer(sentence):
+            preceding = list(indicator_re.finditer(sentence, 0, ratio.start()))
+            if not preceding or preceding[-1].group() not in aliases:
+                continue
+            owner = preceding[-1]
+            bridge = sentence[owner.end():ratio.start()]
+            subject_state, subject, subject_start = _percentage_subject(
+                sentence[:owner.start()], offset=sentence_match.start(),
+                organization_name=organization_name, owner_aliases=owner_aliases,
+                report_year=report_year,
+                report_kind=report_kind, reference_year=reference_year,
+            )
+            quote_start = subject_start if subject else owner.start()
+            spans.append((sentence_match.start() + quote_start, sentence_match.start() + ratio.end()))
+            quotes.append(sentence[quote_start:ratio.end()])
+            subjects.append(subject)
+            denominator_ok, denominator = _percentage_denominator(
+                sentence[ratio.start():ratio.start(1)], denominator_aliases,
+            )
+            denominators.append(denominator)
+            if subject_state == "foreign":
+                excluded_foreign = True
+                reasons.append(f"比例主体“{subject}”不是本单位“{organization_name}”")
+                continue
+            if subject_state == "unknown":
+                excluded_foreign = True
+                reasons.append(f"比例主体限定“{subject}”无法与本单位画像或有来源简称确认")
+                continue
+            # One amount is allowed for the owning indicator; a second amount
+            # or named subject signals an intervening, unrecognised metric.
+            amounts = re.findall(r"-?\d+(?:\.\d+)?\s*(?:亿元|万元|元)", bridge)
+            subject_change = re.search(
+                r"[,，、]\s*[\u4e00-\u9fff]{1,20}(?:局|委|办|中心|学校|医院|单位|部门)", bridge
+            )
+            if not denominator_ok:
+                uncertain = True
+                reasons.append(f"显式分母“{denominator}”不是该关系的本年总额口径或无法唯一确认")
+                continue
+            if len(amounts) > 1 or subject_change or re.search(
+                r"其中|分别|两项|二者|合计|上年|去年|同比", bridge
+            ):
+                uncertain = True
+                reasons.append("比例归属、桥接主体或同比口径无法唯一确认")
+                continue
+            claims.append(Decimal(ratio.group(1)))
+            accepted.append((spans[-1], quotes[-1], denominator, subject))
+    if uncertain or len(set(claims)) > 1 or (excluded_foreign and not claims):
+        if len(set(claims)) > 1:
+            reasons.append("同指标存在相互冲突的本单位比例声明")
+        return IndicatorPercentage(
+            "ambiguous", spans=tuple(spans), quotes=tuple(quotes),
+            reason="；".join(dict.fromkeys(reasons)) + "；原文：" + "；".join(quotes),
+            denominators=tuple(denominators), subjects=tuple(subjects),
+        )
+    if not claims:
+        return IndicatorPercentage("not_applicable")
+    # A foreign statement may coexist with a usable current-owner claim, but
+    # must not become evidence for the current owner's numeric finding.
+    return IndicatorPercentage("ok", claims[0], tuple(item[0] for item in accepted),
+                               tuple(item[1] for item in accepted),
+                               denominators=tuple(item[2] for item in accepted),
+                               subjects=tuple(item[3] for item in accepted))
+
+
+def _find_indicator_percentage(text: str, indicator_aliases: Sequence[str]) -> Optional[Decimal]:
+    """Compatibility accessor; production rules also consume the resolution state."""
+    return _resolve_indicator_percentage(text, indicator_aliases).value
+
+
+def _bound_narrative_amount(doc: Document, text: str, aliases: Sequence[str]) -> Optional[float]:
+    """Amounts and percentages share the same subject/year/stage scope.
+
+    Only a unique current-owner disclosure is usable. Past or foreign amounts
+    do not compete with an independently confirmed current-owner amount.
+    """
+    # A thousands separator is part of the amount, not a scope boundary.
+    text = re.sub(
+        r"(?<![\d.])[+-]?\d{1,3}(?:[,，]\d{3})+(?:\.\d+)?(?!\d)",
+        lambda match: match.group().replace(",", "").replace("，", ""),
+        text,
+    )
+    context = _percentage_document_context(doc, text)
+    indicators = sorted(set(_PERCENTAGE_INDICATORS) | set(aliases), key=len, reverse=True)
+    pattern = re.compile("|".join(re.escape(item) for item in indicators))
+    values = set()
+    for sentence_match in re.finditer(r"[^。！？!?；;\n]+", text):
+        sentence = sentence_match.group()
+        for metric in pattern.finditer(sentence):
+            if metric.group() not in aliases:
+                continue
+            state, _subject, _start = _percentage_subject(
+                sentence[:metric.start()], offset=sentence_match.start(), **context,
+            )
+            if state in {"unknown", "foreign"}:
+                continue
+            end = re.search(r"[，,]", sentence[metric.end():])
+            clause = sentence[metric.start():metric.end() + end.start()] if end else sentence[metric.start():]
+            amount = near_number(clause, [metric.group()], target_year=None)
+            if amount is not None:
+                values.add(amount)
+    return next(iter(values)) if len(values) == 1 else None
+
+
+def _historical_narrative_checks(doc: Document, rule: Any, text: str) -> List[Issue]:
+    """Compare explicit historical claims only with same-year, same-owner facts.
+
+    The current document year remains the reference for 本年/上年. Historical
+    relations have separate IDs; no current table or legacy fallback is used.
+    """
+    import copy
+    from src.engine.fact_context import FactContext, resolve_operand
+
+    context = getattr(doc, "fact_context", None)
+    scope = _percentage_document_context(doc, text)
+    current_year, owner = scope["reference_year"], scope["organization_name"]
+    if context is None or current_year is None or owner is None:
+        return []
+    years = {int(value) for value in re.findall(r"(20\d{2})\s*年", text)}
+    if re.search(r"上年|去年", text):
+        years.add(current_year - 1)
+    years.discard(current_year)
+    income = rule.code == "V33-103"
+    table_code = "FIN_02_income" if income else "FIN_03_expenditure"
+    denominator = ("本年收入合计", "本年收入", "本年收入总额", "本年总收入", "收入总额", "总收入", "总收入合计", "收入合计") if income else ("本年支出合计", "本年支出", "本年支出总额", "本年总支出", "支出总额", "总支出", "支出合计")
+    metrics = (("fiscal_allocation", ("一般公共预算财政拨款收入", "财政拨款收入")),) if income else (("basic_actual", ("基本支出",)), ("project_actual", ("项目支出",)))
+    issues = []
+    for year in sorted(years):
+        facts = [fact for fact in context.facts if fact.fiscal_year == year
+                 and fact.org_name == owner and fact.table_code == table_code
+                 and fact.budget_stage in {"决算", "决算数", "上年决算", "上年决算数"}]
+        if not facts:
+            continue
+        year_context = FactContext(facts=facts, org_name=owner, fiscal_year=year, report_kind="final")
+        view = copy.copy(doc)
+        view._narrative_target_year = year
+        year_scope = _percentage_document_context(view, text)
+        total = resolve_operand(year_context, "total_actual", table_code=table_code,
+                                subject_tokens=("合计", "总计"), report_year=year)
+        for indicator, aliases in metrics:
+            numerator = resolve_operand(year_context, indicator, table_code=table_code,
+                                        subject_tokens=("合计", "总计"), report_year=year)
+            amount = _bound_narrative_amount(view, text, aliases)
+            claim = _resolve_indicator_percentage(text, aliases, denominator, **year_scope)
+            for relation, value in (("amount", amount), ("share", claim.value)):
+                if value is None:
+                    continue
+                sub_id = f"historical:{year}:{indicator}:{relation}"
+                operands = [numerator.fact] + ([total.fact] if relation == "share" else [])
+                usable = numerator.ok and (relation == "amount" or (total.ok and total.value != 0))
+                expected = numerator.value if relation == "amount" else (numerator.value * Decimal(100) / total.value if usable else None)
+                differs = usable and (not tolerant_equal(expected, value) if relation == "amount" else percentage_difference_exceeds_policy(abs(expected - value)))
+                fact_ids, evidence_ids = _v33_fact_identity(*operands)
+                _v33_relation_receipt(doc, rule.code, sub_id, status="fail" if differs else "pass" if usable else "insufficient_data",
+                    operand_fact_ids=fact_ids, formula=f"{year} same-owner final {indicator} {relation}",
+                    incomplete_reason=None if usable else f"{year}年同主体决算事实不唯一或缺少非零分母")
+                if differs:
+                    issues.append(rule._issue(f"{year}年{aliases[-1]}{relation}：表算{expected} ≠ 文本{value}",
+                        {"page": getattr(numerator.fact, "page_number", None)}, "warn",
+                        evidence_text="；".join(claim.quotes) if claim.quotes else text,
+                        check_relation_id=f"{rule.code}:{sub_id}", fact_ids=fact_ids, evidence_ids=evidence_ids))
+    return issues
 
 
 def _v33_relation_receipt(
@@ -309,6 +732,8 @@ def _v33_relation_receipt(
     operand_fact_ids: Sequence[str] = (),
     formula: Optional[str] = None,
     incomplete_reason: Optional[str] = None,
+    cell_observations: Sequence[Dict[str, Any]] = (),
+    disclosure_sources: Sequence[Dict[str, Any]] = (),
 ) -> None:
     """RC-04：V33 族关系级回执——每条适用关系一条，携带真实操作数 ID。"""
     from src.engine.fact_context import make_fact_receipt
@@ -328,18 +753,21 @@ def _v33_relation_receipt(
             formula=formula,
             status=status,
             incomplete_reason=incomplete_reason,
+            cell_observations=cell_observations,
+            disclosure_sources=disclosure_sources,
         )
     )
 
 
 def _amount_mismatch(a: Any, b: Any, *, rounding_envelope: Any = None) -> bool:
-    """AC-06：生产金额比较统一政策口径（绝对 0.5 万元 + 独立舍入包络）。
+    """AC-06：生产金额比较统一政策口径（统一政策容差 + 独立舍入包络）。
 
     所有表内/表间/表文的金额相等性判定都必须经由本函数或
     :func:`classify_amount_diff`，不得再手写 ``_amount_mismatch(a, b)`` 类局部容差。
     """
     try:
-        diff = Decimal(str(a)) - Decimal(str(b))
+        quant = Decimal("0.000001")  # 浮点求和尾差不得把恰好容差的差额判超限
+        diff = Decimal(str(a)).quantize(quant) - Decimal(str(b)).quantize(quant)
     except Exception:
         return False
     return amount_difference_exceeds_policy(diff, rounding_envelope)
@@ -599,7 +1027,10 @@ class Rule:
                location: Optional[Dict[str, Any]] = None,
                severity: Optional[str] = None,
                evidence_text: Optional[str] = None,
-               section_id: Optional[str] = None) -> Issue:
+               section_id: Optional[str] = None,
+               check_relation_id: Optional[str] = None,
+               fact_ids: Optional[Sequence[str]] = None,
+               evidence_ids: Optional[Sequence[str]] = None) -> Issue:
         return Issue(
             rule=self.code,
             severity=severity or self.severity,
@@ -607,6 +1038,9 @@ class Rule:
             evidence_text=evidence_text,
             location=location or {},
             section_id=section_id,
+            check_relation_id=check_relation_id,
+            fact_ids=[str(item) for item in (fact_ids or []) if str(item)],
+            evidence_ids=[str(item) for item in (evidence_ids or []) if str(item)],
         )
 
 
@@ -1076,6 +1510,13 @@ class R33005_TableTotalConsistency(Rule):
         # 左右两栏（收入+支出）总表：跳过
         if ("收入" in header_join) and ("支出" in header_join):
             return issues, contradictions, False
+        # 续页可能没有表头；左右总表的同一行仍有两组「总计/金额」。
+        # 这类表应由财政收支关系处理，不能把本年合计和末尾总计再次相加。
+        for row in table:
+            totals = [i for i, value in enumerate(row) if self._TOTAL_RE.fullmatch(str(value or '').strip())]
+            if any(any(parse_number(v) is not None for v in row[left + 1:right])
+                   for left, right in zip(totals, totals[1:])):
+                return issues, contradictions, False
 
         # 找“合计/总计”行（第一列严格等于）
         total_row_idx = None
@@ -1086,7 +1527,7 @@ class R33005_TableTotalConsistency(Rule):
             if self._TOTAL_RE.match(head):
                 total_row_idx = r
                 break
-        if total_row_idx is None or total_row_idx < 2:
+        if total_row_idx is None:
             return issues, contradictions, False
 
         # 选择金额相关的列（优先表头关键词）
@@ -1099,7 +1540,7 @@ class R33005_TableTotalConsistency(Rule):
         if not cand_cols:
             for c in range(1, ncols):
                 cnt = 0
-                for r in range(0, total_row_idx):
+                for r in range(len(table)):
                     cell = table[r][c] if c < len(table[r]) else None
                     v = parse_number(cell)
                     if v is not None and not looks_like_percent(cell):
@@ -1111,13 +1552,14 @@ class R33005_TableTotalConsistency(Rule):
 
         # 功能分类层级：只累计叶子行
         code_rows: List[Tuple[int, str]] = []
-        for r in range(1, total_row_idx):
+        for r in range(len(table)):
             row = table[r]
             name0 = str((row[0] if row else "") or "")
             m = re.match(r"^\s*(\d{3,7})", name0)
             if m:
                 code_rows.append((r, m.group(1)))
-        leaf_len = max((len(c) for _, c in code_rows), default=None)
+        from src.services.fiscal_code_hierarchy import leaf_codes
+        leaves = leaf_codes([code for _, code in code_rows]) if code_rows else None
 
         for c in cand_cols:
             total_cell = table[total_row_idx][c] if c < len(table[total_row_idx]) else None
@@ -1126,13 +1568,13 @@ class R33005_TableTotalConsistency(Rule):
                 continue
 
             parts: List[float] = []
-            for r in range(1, total_row_idx):
+            for r in range(len(table)):
                 headr = str((table[r][0] if 0 < len(table[r]) else "") or "")
                 if headr in self._EXCLUDE_HEAD or self._TOTAL_RE.match(headr.strip()):
                     continue
-                if leaf_len is not None:
+                if leaves is not None:
                     m = re.match(r"^\s*(\d{3,7})", headr)
-                    if not (m and len(m.group(1)) == leaf_len):
+                    if not (m and m.group(1) in leaves):
                         continue
                 cell = table[r][c] if c < len(table[r]) else None
                 v = parse_number(cell)
@@ -1193,6 +1635,11 @@ class R33005_TableTotalConsistency(Rule):
         return issues, contradictions, True
 
     def apply(self, doc: Document) -> List[Issue]:
+        if (getattr(doc, 'parse_artifact', None) is not None
+                and getattr(getattr(doc, 'fact_context', None), 'report_kind', None) == 'final'):
+            # 原生主链从当前有效事实计算；兼容页表只供没有事实快照的旧文档读取。
+            from .native_hierarchy_checks import check_native_detail_tables
+            return check_native_detail_tables(self, doc)
         issues: List[Issue] = []
         checked_tables = 0
         # MR-1c：解析结构性矛盾收集（合计 < 最大分项）
@@ -1239,6 +1686,9 @@ class R33005_TableTotalConsistency(Rule):
             if pidx in whole_checked_pages:
                 continue
             for tindex, table in enumerate(tables):
+                from .native_hierarchy_checks import is_native_bilateral_summary_fragment
+                if is_native_bilateral_summary_fragment(doc, pidx + 1, tindex):
+                    continue
                 if not table or len(table) < 3:
                     continue
                 # MR-P3a：无头碎片（首行首格为数值）——列身份不可知，禁止
@@ -1716,6 +2166,8 @@ def _get_sentence_years(sent: str) -> List[str]:
 
 def _extract_amount_from_segment(seg: str, keywords: List[str]) -> Optional[Tuple[Decimal, int, str]]:
     """P1-1: Extract amount closest to keywords, scoped to the same comma-clause first."""
+    seg = normalize_amount_punctuation(seg)
+    seg = re.sub(r"(?<=[\u3400-\u9fff])[ \t]+(?=[\u3400-\u9fff])", "", seg)
     kw_spans: List[Tuple[int, int]] = []
     for kw in keywords:
         for m in re.finditer(re.escape(kw), seg):
@@ -1912,6 +2364,14 @@ def _find_text_page_after(doc: Document, snippet: Optional[str], start_page: int
     return None
 
 
+#: 不带类/款/项标记的写法（上海 2022 部分单位）：“社会保障和就业支出-行政事业单位养老支出-行政单位离退休”。
+#: 类名一律以“支出”结尾，连接号可为 - — － –，可带引号；只按项名唯一定位编码。
+_FUNCTIONAL_NARRATIVE_DASH_RE = re.compile(
+    r"(?:^|\n|(?<=[。；;：:、]))\s*(?:\d+\s*[、.．]?\s*)?[“\"]?\s*"
+    r"(?P<class_name>[\u4e00-\u9fff]{1,28}支出)\s*[-—－–]\s*"
+    r"(?P<section_name>[\u4e00-\u9fff（）()]{2,40}?)\s*[-—－–]\s*"
+    r"(?P<item_name>[\u4e00-\u9fff（）()]{2,60}?)\s*[”\"]?\s*(?=[。.]|主要用于)",
+)
 _FUNCTIONAL_NARRATIVE_ENTRY_RE = re.compile(
     r"(?:^|\n)\s*(?:\d+\s*[、.．]\s*)?"
     r"(?P<class_name>[^（）()\n]{1,40}?)\s*[（(]\s*(?:(?P<class_code>\d{3})\s*)?类\s*[）)]\s*"
@@ -1943,6 +2403,16 @@ def _normalize_functional_name(name: str) -> str:
 def _functional_name_matches(table_name: str, narrative_name: str) -> bool:
     left = _normalize_functional_name(table_name)
     right = _normalize_functional_name(narrative_name)
+    return bool(left and right and left == right)
+
+
+def _functional_name_identical(table_name: str, narrative_name: str) -> bool:
+    """判定用严格比对（口径决议③）：只做全半角/空白归一与首尾引号剥离，
+    不去“支出/预算/决算”后缀——后缀差异属“名称多/少字”，须报出。"""
+    def strict(value: str) -> str:
+        return normalize_text(value or "").strip("“”\"「」『』 ")
+
+    left, right = strict(table_name), strict(narrative_name)
     return bool(left and right and left == right)
 
 
@@ -2016,7 +2486,8 @@ def _extract_functional_name_index(rows: List[List[str]]) -> Dict[str, Dict[str,
         cells = [str(cell or "").strip() for cell in row]
         if len(cells) < 2:
             continue
-        code0, name = cells[0], cells[1]
+        code0 = cells[0]
+        name = next((value for value in cells[1:4] if value and parse_number(value) is None), "")
         if not name or name in {"项目", "科目名称", "功能分类科目名称", "类", "款", "项", "合计"}:
             continue
         if parse_number(name) is not None:
@@ -2092,20 +2563,42 @@ def _extract_final_functional_narrative_mentions(
     mentions: Dict[str, List[Dict[str, str]]] = {}
     by_section_item, by_item = _build_functional_item_name_index(table_entries)
 
-    for page_num, text in enumerate(doc.page_texts, start=1):
-        if not text or ("类）" not in text and "类)" not in text and "（类）" not in text and "(类)" not in text):
+    # T5 only pairs with its own general-public-budget explanation. A fund
+    # item with the same leaf name cannot establish a different 款 identity.
+    scoped_pages = list(doc.page_texts)
+    if getattr(doc, "parse_artifact", None) is not None:
+        merged, offsets = _txt_fund_merged_pages(doc)
+        # 2022 版三公章节标题也带“一般公共预算”，不能顶替说明五。
+        sections = [section for section in _nar_repeat_sections(merged, doc, offsets)
+                    if "一般公共预算" in section[0] and "支出决算" in section[0]
+                    and "基本支出" not in section[0] and "三公" not in section[0]]
+        if not sections:
+            return mentions
+        _, begin, end = sections[-1]
+        scoped_pages = [merged[max(offset, begin):min(offset+len(str(text or "")), end)]
+                        if max(offset, begin) < min(offset+len(str(text or "")), end) else ""
+                        for offset, text in zip(offsets, doc.page_texts, strict=False)]
+
+    for page_num, text in enumerate(scoped_pages, start=1):
+        if not text:
             continue
 
-        for match in _FUNCTIONAL_NARRATIVE_ENTRY_RE.finditer(text):
-            class_name = str(match.group("class_name") or "").strip(" 　：:；;，,。.")
-            section_name = str(match.group("section_name") or "").strip(" 　：:；;，,。.")
-            item_name = str(match.group("item_name") or "").strip(" 　：:；;，,。.")
+        if getattr(doc, "parse_artifact", None) is not None:
+            text = "\n".join(merge_soft_wrapped_lines(text))
+
+        entries = sorted([*_FUNCTIONAL_NARRATIVE_ENTRY_RE.finditer(text),
+                          *_FUNCTIONAL_NARRATIVE_DASH_RE.finditer(text)], key=lambda m: m.start())
+        for match in entries:
+            groups = match.groupdict()
+            class_name = str(groups.get("class_name") or "").strip(" 　：:；;，,。.")
+            section_name = str(groups.get("section_name") or "").strip(" 　：:；;，,。.")
+            item_name = str(groups.get("item_name") or "").strip(" 　：:；;，,。.")
             if not class_name or not section_name or not item_name:
                 continue
 
-            class_code = str(match.group("class_code") or "").strip()
-            section_code = str(match.group("section_code") or "").strip()
-            item_code = str(match.group("item_code") or "").strip()
+            class_code = str(groups.get("class_code") or "").strip()
+            section_code = str(groups.get("section_code") or "").strip()
+            item_code = str(groups.get("item_code") or "").strip()
 
             matched_codes: Optional[Tuple[str, str, str]] = None
             if class_code and section_code and item_code:
@@ -2157,6 +2650,7 @@ def _extract_final_functional_narrative_mentions(
                         "name": raw_name,
                         "level": level,
                         "snippet": snippet,
+                        "source_span": match.group(),
                     }
                 )
 
@@ -2169,6 +2663,9 @@ class R33101_TotalSheet_Identity(Rule):
     desc = "收入支出决算总表：支出列恒等式"
 
     def apply(self, doc: Document) -> List[Issue]:
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_summary_checks import check_total_expenditure_balance
+            return check_total_expenditure_balance(self, doc)
         issues: List[Issue] = []
         p = _get_first_anchor_page(doc, "收入支出决算总表")
         if not p:
@@ -2216,10 +2713,12 @@ class R33101_TotalSheet_Identity(Rule):
         try:
             bn_f, jy_f, jz_f, total_f = float(bn), float(jy), float(jz), float(total)
             sum_val = bn_f + jy_f + jz_f
-            if not tolerant_equal(total_f, sum_val):
+            if not tolerant_equal(total_f, sum_val, terms=3):
                 issues.append(self._issue(
                     f"总表支出恒等式不成立：支出合计={total_f} vs 本年支出{bn_f}+结余分配{jy_f}+年末结转{jz_f}={sum_val}",
-                    {"page": p}, "error",
+                    {"page": p, "table": "收入支出决算总表",
+                     "identity_operands": {"总计": str(total), "本年支出合计": str(bn),
+                                           "结余分配": str(jy), "年末结转和结余": str(jz)}}, "error",
                     evidence_text=f"表格：P{p} 收入支出决算总表\n计算明细：\n本年支出({bn}) + 结余分配({jy}) + 年末结转({jz}) = {sum_val}\n表内支出合计 = {total}"
                 ))
         except Exception as e:
@@ -2249,8 +2748,8 @@ class R33102_TotalSheet_vs_Text(Rule):
                     unresolved_reasons=["未找到收入支出决算总表锚点页"],
                 )
 
-            # 2) 取该页最大的一张表
-            table = _largest_table_on_page(doc.page_tables[p - 1])
+            # 2) 生产路径仅消费当前事实绑定的总表投影。
+            table = _get_table_rows(doc, "收入支出决算总表", anchor_extent=True)
             if not table:
                 raise RuleDeferred(
                     self.code,
@@ -2258,11 +2757,12 @@ class R33102_TotalSheet_vs_Text(Rule):
                     unresolved_reasons=["收入支出决算总表所在页未解析到有效表格"],
                 )
 
-            # 3) 从表中提取"支出合计"（MR-1a：v2 只认右半区标签，语义=
-            #    「本年支出合计」行，不再靠"合计"子串误命中本年收入合计行）
-            total_expense = _row_value_v2(
-                table, ("支出合计", "支出总计"), side="right"
-            )
+            # 3) 总计与本年合计是不同口径；先取右侧总计，再用同口径说明。
+            total_expense = _row_value_v2(table, ("支出总计", "总计"), side="right")
+            narrative_aliases = ["收入支出总计", "支出总计"]
+            if total_expense is None:
+                total_expense = _row_value_v2(table, ("本年支出合计", "支出合计"), side="right")
+                narrative_aliases = ["本年支出合计", "支出合计"]
             if total_expense is None:
                 raise RuleDeferred(
                     self.code,
@@ -2276,11 +2776,13 @@ class R33102_TotalSheet_vs_Text(Rule):
             #    target_year 固定 None：章节范围已限定，而全量运行时
             #    dominant_year 会被前置规则置位，年度过滤分支反而把
             #    同比句（"比 2024 年度减少…"）的数字抓进来——宜川实测）
-            scope = _final_section_scope(doc, ("收入支出决算总体情况说明",))
+            scope = _final_section_scope(
+                doc, ("收入支出决算总体情况说明",), exclude_tokens=("财政拨款", "政府性基金", "国有资本"),
+            )
             found_num = (
                 near_number(
                     scope or "",
-                    ["收入支出总计", "支出总计", "总计"],
+                    narrative_aliases,
                     target_year=None,
                 )
                 if scope
@@ -2325,12 +2827,16 @@ class R33103_Income_vs_Text(Rule):
             "total_actual",
             table_code="FIN_02_income",
             subject_tokens=("合计", "总计"),
+            report_year=_percentage_document_context(doc, "")["report_year"],
+            budget_stages=("决算",),
         )
         fact_fp, fact_fp_ref, fact_fp_block = _fact_operand_for_v33(
             fact_ctx,
             "fiscal_allocation",
             table_code="FIN_02_income",
             subject_tokens=("合计", "总计"),
+            report_year=_percentage_document_context(doc, "")["report_year"],
+            budget_stages=("决算",),
         )
         p = _get_first_anchor_page(doc, "收入决算表")
         t = _largest_table_on_page(doc.page_tables[p - 1]) if p else None
@@ -2378,13 +2884,19 @@ class R33103_Income_vs_Text(Rule):
         elif fact_fp_block is not None:
             fp = None
 
-        tt = near_number(sec_text, ["本年收入合计", "合计"], target_year=None)
-        tf = near_number(sec_text, ["财政拨款收入"], target_year=None)
+        tt = _bound_narrative_amount(doc, sec_text, ("本年收入合计", "收入合计", "本年收入"))
+        tf = _bound_narrative_amount(doc, sec_text, ("一般公共预算财政拨款收入", "财政拨款收入"))
 
         unresolved: List[str] = []
         if total is not None and tt is not None:
             if not tolerant_equal(total, tt):
-                issues.append(self._issue(f"收入合计：表{total} ≠ 文本{tt}", {"page": p}, "warn"))
+                fact_ids, evidence_ids = _v33_fact_identity(fact_total_ref)
+                issues.append(self._issue(
+                    f"收入合计：表{total} ≠ 文本{tt}", {"page": p}, "warn",
+                    check_relation_id=f"{self.code}:T2:income_total:text_vs_table",
+                    fact_ids=fact_ids,
+                    evidence_ids=evidence_ids,
+                ))
                 _v33_relation_receipt(
                     doc, self.code, "T2:income_total:text_vs_table",
                     status="fail",
@@ -2400,7 +2912,7 @@ class R33103_Income_vs_Text(Rule):
                 )
         else:
             if total is None:
-                unresolved.append("收入决算表缺少关键行: 收入合计")
+                unresolved.append(fact_total_block or "收入决算表缺少关键行: 收入合计")
             if tt is None:
                 unresolved.append("说明文本中未提取到本年收入合计")
             _v33_relation_receipt(
@@ -2414,7 +2926,13 @@ class R33103_Income_vs_Text(Rule):
 
         if fp is not None and tf is not None:
             if not tolerant_equal(fp, tf):
-                issues.append(self._issue(f"财政拨款收入：表{fp} ≠ 文本{tf}", {"page": p}, "warn"))
+                fact_ids, evidence_ids = _v33_fact_identity(fact_fp_ref)
+                issues.append(self._issue(
+                    f"财政拨款收入：表{fp} ≠ 文本{tf}", {"page": p}, "warn",
+                    check_relation_id=f"{self.code}:T2:fiscal_allocation:text_vs_table",
+                    fact_ids=fact_ids,
+                    evidence_ids=evidence_ids,
+                ))
                 _v33_relation_receipt(
                     doc, self.code, "T2:fiscal_allocation:text_vs_table",
                     status="fail",
@@ -2430,7 +2948,7 @@ class R33103_Income_vs_Text(Rule):
                 )
         else:
             if fp is None:
-                unresolved.append("收入决算表缺少关键行: 财政拨款收入")
+                unresolved.append(fact_fp_block or "收入决算表缺少关键行: 财政拨款收入")
             if tf is None:
                 unresolved.append("说明文本中未提取到财政拨款收入")
             _v33_relation_receipt(
@@ -2442,11 +2960,65 @@ class R33103_Income_vs_Text(Rule):
                 + (f"（{fact_fp_block}）" if fact_fp_block else ""),
             )
 
-        p_txt = find_percent(sec_text, ["财政拨款收入", "占比", "比重"])
-        if p_txt is not None and total and fp:
-            p_calc = round(fp / total * 100, 2)
-            if percentage_difference_exceeds_policy(abs(Decimal(str(p_calc)) - Decimal(str(p_txt)))):
-                issues.append(self._issue(f"财政拨款收入占比：表算{p_calc}% ≠ 文本{p_txt}%（容忍±1pct）", {"page": p}, "warn"))
+        percentage_relation = f"{self.code}:T2:fiscal_allocation:share_of_income_total"
+        percentage_claim = _resolve_indicator_percentage(
+            sec_text,
+            ("一般公共预算财政拨款收入", "财政拨款收入", "财政拨款"),
+            ("本年收入合计", "本年收入", "本年收入总额", "本年总收入", "收入总额", "总收入", "总收入合计", "收入合计"),
+            **_percentage_document_context(doc, sec_text),
+        )
+        p_txt = percentage_claim.value
+        if percentage_claim.status == "ambiguous":
+            unresolved.append(percentage_claim.reason or "财政拨款收入比例归属不明")
+            _v33_relation_receipt(
+                doc, self.code, "T2:fiscal_allocation:share_of_income_total",
+                status="insufficient_data",
+                formula="fiscal_allocation / income_total * 100 == narrative percentage",
+                incomplete_reason=percentage_claim.reason,
+            )
+        elif p_txt is None:
+            _v33_relation_receipt(
+                doc, self.code, "T2:fiscal_allocation:share_of_income_total",
+                status="not_applicable",
+                formula="fiscal_allocation / income_total * 100 == narrative percentage",
+                incomplete_reason="收入说明未披露财政拨款收入占比",
+            )
+        elif total is None or fp is None or Decimal(str(total)) == 0:
+            fact_ids, _ = _v33_fact_identity(fact_total_ref, fact_fp_ref)
+            unresolved.append("财政拨款收入占比已披露，但表侧分子或非零分母无法确认")
+            _v33_relation_receipt(
+                doc, self.code, "T2:fiscal_allocation:share_of_income_total",
+                status="insufficient_data",
+                operand_fact_ids=fact_ids,
+                formula="fiscal_allocation / income_total * 100 == narrative percentage",
+                incomplete_reason="表侧财政拨款收入或收入合计缺失/为零"
+                + ("（" + "；".join(reason for reason in (fact_total_block, fact_fp_block) if reason) + "）"
+                   if fact_total_block or fact_fp_block else ""),
+            )
+        else:
+            calculated = (
+                Decimal(str(fp)) * Decimal("100") / Decimal(str(total))
+            ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            fact_ids, evidence_ids = _v33_fact_identity(fact_fp_ref, fact_total_ref)
+            differs = percentage_difference_exceeds_policy(abs(calculated - p_txt))
+            if differs:
+                issues.append(self._issue(
+                    f"财政拨款收入占比：表算{calculated}% ≠ 文本{p_txt}%（容差0.1个百分点）",
+                    {"page": p}, "warn",
+                    evidence_text="；".join(percentage_claim.quotes),
+                    check_relation_id=percentage_relation,
+                    fact_ids=fact_ids,
+                    evidence_ids=evidence_ids,
+                ))
+            _v33_relation_receipt(
+                doc, self.code, "T2:fiscal_allocation:share_of_income_total",
+                status="fail" if differs else "pass",
+                operand_fact_ids=fact_ids,
+                formula="fiscal_allocation / income_total * 100 == narrative percentage",
+                incomplete_reason=None,
+            )
+
+        issues.extend(_historical_narrative_checks(doc, self, sec_text))
 
         if unresolved:
             raise RuleDeferred(
@@ -2474,18 +3046,24 @@ class R33104_Expense_vs_Text(Rule):
             "total_actual",
             table_code="FIN_03_expenditure",
             subject_tokens=("合计", "总计"),
+            report_year=_percentage_document_context(doc, "")["report_year"],
+            budget_stages=("决算",),
         )
         fact_basic, fact_basic_ref, fact_basic_block = _fact_operand_for_v33(
             fact_ctx,
             "basic_actual",
             table_code="FIN_03_expenditure",
             subject_tokens=("合计", "总计"),
+            report_year=_percentage_document_context(doc, "")["report_year"],
+            budget_stages=("决算",),
         )
         fact_proj, fact_proj_ref, fact_proj_block = _fact_operand_for_v33(
             fact_ctx,
             "project_actual",
             table_code="FIN_03_expenditure",
             subject_tokens=("合计", "总计"),
+            report_year=_percentage_document_context(doc, "")["report_year"],
+            budget_stages=("决算",),
         )
         p = _get_first_anchor_page(doc, "支出决算表")
         t = _largest_table_on_page(doc.page_tables[p - 1]) if p else None
@@ -2544,9 +3122,9 @@ class R33104_Expense_vs_Text(Rule):
         elif fact_proj_block is not None:
             proj = None
 
-        tt = near_number(sec_text, ["本年支出合计", "合计"], target_year=None)
-        tb = near_number(sec_text, ["基本支出"], target_year=None)
-        tp = near_number(sec_text, ["项目支出"], target_year=None)
+        tt = _bound_narrative_amount(doc, sec_text, ("本年支出合计", "支出合计", "本年支出"))
+        tb = _bound_narrative_amount(doc, sec_text, ("基本支出",))
+        tp = _bound_narrative_amount(doc, sec_text, ("项目支出",))
 
         unresolved: List[str] = []
         check_items = [
@@ -2557,7 +3135,13 @@ class R33104_Expense_vs_Text(Rule):
         for nm, a, b, fact_ref, fact_block, sub_id, formula in check_items:
             if a is not None and b is not None:
                 if not tolerant_equal(a, b):
-                    issues.append(self._issue(f"{nm}：表{a} ≠ 文本{b}", {"page": p}, "warn"))
+                    fact_ids, evidence_ids = _v33_fact_identity(fact_ref)
+                    issues.append(self._issue(
+                        f"{nm}：表{a} ≠ 文本{b}", {"page": p}, "warn",
+                        check_relation_id=f"{self.code}:{sub_id}",
+                        fact_ids=fact_ids,
+                        evidence_ids=evidence_ids,
+                    ))
                     _v33_relation_receipt(
                         doc, self.code, sub_id,
                         status="fail",
@@ -2573,7 +3157,7 @@ class R33104_Expense_vs_Text(Rule):
                     )
             else:
                 if a is None:
-                    unresolved.append(f"支出决算表缺少关键行: {nm}")
+                    unresolved.append(fact_block or f"支出决算表缺少关键行: {nm}")
                 if b is None:
                     unresolved.append(f"说明文本中未提取到{nm}")
                 _v33_relation_receipt(
@@ -2585,12 +3169,66 @@ class R33104_Expense_vs_Text(Rule):
                     + (f"（{fact_block}）" if fact_block else ""),
                 )
 
-        for nm, a in [("基本支出", basic), ("项目支出", proj)]:
-            pct_t = find_percent(sec_text, [nm, "占比", "比重"])
-            if pct_t is not None and total and a:
-                pct_c = round(a / total * 100, 2)
-                if percentage_difference_exceeds_policy(abs(Decimal(str(pct_c)) - Decimal(str(pct_t)))):
-                    issues.append(self._issue(f"{nm}占比：表算{pct_c}% ≠ 文本{pct_t}%（容忍±1pct）", {"page": p}, "warn"))
+        for nm, a, fact_ref, relation_suffix in (
+            ("基本支出", basic, fact_basic_ref, "basic_share_of_expense_total"),
+            ("项目支出", proj, fact_proj_ref, "project_share_of_expense_total"),
+        ):
+            relation_sub_id = f"T3:{relation_suffix}"
+            relation_id = f"{self.code}:{relation_sub_id}"
+            percentage_claim = _resolve_indicator_percentage(
+                sec_text, (nm,), ("本年支出合计", "本年支出", "支出合计", "支出总额", "总支出"),
+                **_percentage_document_context(doc, sec_text),
+            )
+            pct_t = percentage_claim.value
+            if percentage_claim.status == "ambiguous":
+                unresolved.append(f"{nm}：{percentage_claim.reason}")
+                _v33_relation_receipt(
+                    doc, self.code, relation_sub_id, status="insufficient_data",
+                    formula=f"{nm} / expense_total * 100 == narrative percentage",
+                    incomplete_reason=percentage_claim.reason,
+                )
+                continue
+            if pct_t is None:
+                _v33_relation_receipt(
+                    doc, self.code, relation_sub_id,
+                    status="not_applicable",
+                    formula=f"{nm} / expense_total * 100 == narrative percentage",
+                    incomplete_reason=f"支出说明未披露{nm}占比",
+                )
+                continue
+            if a is None or total is None or Decimal(str(total)) == 0:
+                fact_ids, _ = _v33_fact_identity(fact_ref, fact_total_ref)
+                unresolved.append(f"{nm}占比已披露，但表侧分子或非零分母无法确认")
+                _v33_relation_receipt(
+                    doc, self.code, relation_sub_id,
+                    status="insufficient_data",
+                    operand_fact_ids=fact_ids,
+                    formula=f"{nm} / expense_total * 100 == narrative percentage",
+                    incomplete_reason="表侧金额缺失或支出合计为零",
+                )
+                continue
+            calculated = (
+                Decimal(str(a)) * Decimal("100") / Decimal(str(total))
+            ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            fact_ids, evidence_ids = _v33_fact_identity(fact_ref, fact_total_ref)
+            differs = percentage_difference_exceeds_policy(abs(calculated - pct_t))
+            if differs:
+                issues.append(self._issue(
+                    f"{nm}占比：表算{calculated}% ≠ 文本{pct_t}%（容差0.1个百分点）",
+                    {"page": p}, "warn",
+                    evidence_text="；".join(percentage_claim.quotes),
+                    check_relation_id=relation_id,
+                    fact_ids=fact_ids,
+                    evidence_ids=evidence_ids,
+                ))
+            _v33_relation_receipt(
+                doc, self.code, relation_sub_id,
+                status="fail" if differs else "pass",
+                operand_fact_ids=fact_ids,
+                formula=f"{nm} / expense_total * 100 == narrative percentage",
+            )
+
+        issues.extend(_historical_narrative_checks(doc, self, sec_text))
 
         if unresolved:
             raise RuleDeferred(
@@ -2608,6 +3246,9 @@ class R33105_FinGrantTotal_vs_Text(Rule):
     desc = "财政拨款收入支出决算总表 ↔ 总体情况说明"
 
     def apply(self, doc: Document) -> List[Issue]:
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_table_text import check_fiscal_grant_total
+            return check_fiscal_grant_total(self, doc)
         issues: List[Issue] = []
         p = _get_first_anchor_page(doc, "财政拨款收入支出决算总表")
         if not p:
@@ -2630,7 +3271,12 @@ class R33105_FinGrantTotal_vs_Text(Rule):
         # 旧实现 row[0] 只能命中「收入总计」或取不到，最右取数还会错拿
         # 政府性基金列（105.00）。v2 side="right" 从标签右侧第一个数值取，
         # 命中的就是支出合计列
-        total = _row_value_v2(t, ("支出合计", "支出总计", "总计"), side="right")
+        # 收支总计 includes carryover; 本年支出合计 has a different basis.
+        total_rows = [row for row in t if any(normalize_text(str(cell or "")) in {"总计", "支出总计"}
+                                            for cell in row)]
+        total = _row_value_v2(total_rows, ("支出总计", "总计"), side="right")
+        if total is None:
+            total = _row_value_v2(t, ("支出合计",), side="right")
         if total is None:
             raise RuleDeferred(
                 self.code,
@@ -2723,12 +3369,38 @@ class R33106_GeneralBudgetStruct(Rule):
             )
             found_num: Optional[float] = None
             if section_text:
-                candidate = amount_in_section(
+                # 标题和「财政拨款支出：」只是范围锚点，不能借下一分句的
+                # 功能科目金额充当总体数。只接受同一主体后直接明示的决算金额。
+                total_statement = re.search(
+                    r"一\s*般\s*公\s*共\s*预\s*算\s*财\s*政\s*拨\s*款\s*支\s*出"
+                    r"(?:\s*决\s*算(?:\s*数)?)?(?:\s*(?:合\s*计|总\s*计))?"
+                    r"\s*(?:为|是|共)?\s*(?P<amount>[0-9][0-9,，]*(?:\.[0-9]+)?)"
+                    r"\s*(?:亿元|万元|元)",
                     section_text,
-                    ["财政拨款支出"],
                 )
-                if candidate is not None:
-                    found_num = float(candidate)
+                if total_statement:
+                    amounts = extract_amounts(total_statement.group(0))
+                    if amounts:
+                        found_num = float(amounts[0][0])
+                if found_num is None:
+                    overall_heading = re.search(
+                        r"[（(]\s*一\s*[）)]\s*(?:一般公共预算财政拨款)?支出决算总体情况",
+                        section_text,
+                    )
+                    if overall_heading:
+                        overall_body = section_text[overall_heading.end():]
+                        next_subsection = re.search(r"[（(]\s*[二三四五六七八九十]+\s*[）)]", overall_body)
+                        if next_subsection:
+                            overall_body = overall_body[:next_subsection.start()]
+                        statement = re.search(
+                            r"支\s*出\s*决\s*算(?:\s*数)?\s*(?:为|是|共)?\s*"
+                            r"[0-9][0-9,，]*(?:\.[0-9]+)?\s*(?:亿元|万元|元)",
+                            overall_body,
+                        )
+                        if statement:
+                            amounts = extract_amounts(statement.group(0))
+                            if amounts:
+                                found_num = float(amounts[0][0])
             if found_num is not None:
                 if not tolerant_equal(total_val, found_num):
                     issues.append(self._issue(
@@ -2751,6 +3423,13 @@ class R33106_GeneralBudgetStruct(Rule):
                                 {"page": p, "pos": 0}
                             ))
 
+            if found_num is None:
+                raise RuleDeferred(
+                    self.code,
+                    detail="说明未明示一般公共预算财政拨款支出总体金额，不能以结构分项替代",
+                    partial_issues=issues,
+                    unresolved_reasons=["未找到同一总体主体直接披露的决算金额"],
+                )
             return issues
         except (RuleDeferred, RuleExecutionError):
             raise
@@ -2758,6 +3437,23 @@ class R33106_GeneralBudgetStruct(Rule):
             raise RuleExecutionError(self.code, "规则执行异常：maximum recursion depth exceeded")
         except Exception as e:
             raise RuleExecutionError(self.code, f"规则执行异常：{str(e)}")
+
+
+def _sentence_with_number(doc: Document, text: str, value: Any) -> Tuple[Optional[str], Optional[int]]:
+    """说明原文中含该数值的整句及其物理页，作可核验证据；找不到返回 (None, None)。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None, None
+    for token in (f"{number:,.2f}", f"{number:.2f}", f"{number:,.1f}", f"{number:.1f}", f"{number:g}"):
+        index = (text or "").find(token)
+        if index < 0:
+            continue
+        start = max(text.rfind("。", 0, index) + 1, index - 80)
+        end = text.find("。", index)
+        quote = text[start:(len(text) if end < 0 else end + 1)].strip()
+        return quote, _find_text_page_after(doc, quote[:30])
+    return None, None
 
 
 class R33107_BasicExpense_Check(Rule):
@@ -2813,8 +3509,12 @@ class R33107_BasicExpense_Check(Rule):
             else None
         )
         if t_total is not None:
-            if not tolerant_equal(total, t_total):
-                issues.append(self._issue(f"基本支出合计：表算{total} ≠ 文本{t_total}", {"page": p}, "warn"))
+            if not tolerant_equal(total, t_total, terms=2):
+                quote, quote_page = _sentence_with_number(doc, sec_text, t_total)
+                issues.append(self._issue(
+                    f"基本支出合计：表算{total:.2f} ≠ 文本{t_total}",
+                    {"page": quote_page or p}, "warn", evidence_text=quote,
+                ))
         else:
             raise RuleDeferred(
                 self.code,
@@ -2830,6 +3530,9 @@ class R33108_ThreePublic_vs_Text(Rule):
     desc = "三公经费：表 ↔ “总体情况说明”"
 
     def apply(self, doc: Document) -> List[Issue]:
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_table_text import check_three_public_totals
+            return check_three_public_totals(self, doc)
         issues: List[Issue] = []
         p = _get_first_anchor_page(doc, "一般公共预算财政拨款“三公”经费支出决算表")
         if not p:
@@ -3132,6 +3835,7 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
 
             # 向后有限窗口找决算金额与方向词
             final_val = None
+            final_clause_idx = -1
             direction = None
             direction_clause_idx = -1
             window = 0
@@ -3142,6 +3846,7 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
                     candidate = clause_amount(nxt, _FINAL_MARKS)
                     if candidate is not None:
                         final_val = candidate
+                        final_clause_idx = j
                         j += 1
                         window += 1
                         continue
@@ -3176,10 +3881,24 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
                         page = _page_of(clause_positions[j - 1])
                     else:
                         page = _page_of(sec_start)
-                    clip = f"年初预算{budget_val:.2f} 决算{final_val:.2f} 表述{direction}"
+                    # The direction sentence may repeat for several subjects
+                    # on the same page. Include its own amounts so the source
+                    # binder can distinguish this claim from adjacent items.
+                    claim_start = final_clause_idx
+                    if _page_of(clause_positions[i]) == page:
+                        claim_start = i
+                    clip = merged[
+                        clause_positions[claim_start]:
+                        clause_positions[direction_clause_idx] + len(clauses[direction_clause_idx])
+                    ].strip()
+                    refs = [{"role": "比较表述", "page": page, "span": clip}] + [
+                        {"role": role, "page": _page_of(clause_positions[index]), "span": clauses[index]}
+                        for role, index in [("年初预算", i), ("支出决算", final_clause_idx)]
+                        if index >= 0
+                    ]
                     issues.append(self._issue(
                         f"预算数与决算数比较不一致：预算数{budget_val:.2f}，决算数{final_val:.2f}，实际{actual}，但文本表述为{direction}。",
-                        {"page": page},
+                        {"page": page, "table_refs": refs},
                         severity="error",
                         evidence_text=clip,
                     ))
@@ -3415,6 +4134,34 @@ class R33113_PunctuationCheck(Rule):
 # 辅助函数
 # ==================================================================================
 
+def _unique_native_row_quote(cells, page_texts, page):
+    """Find one exact source-page span matching parsed cells, ignoring layout spacing.
+
+    Thousands separators can be present in native PDF text but absent from table
+    cells. The match ignores whitespace/commas, then returns the untouched literal
+    page substring for the source-evidence binder.
+    """
+    if type(page) is not int or not 1 <= page <= len(page_texts):
+        return None
+
+    def indexed(value):
+        chars, positions = [], []
+        for index, char in enumerate(str(value or "")):
+            for normalized in unicodedata.normalize("NFKC", char):
+                if normalized.isspace() or normalized in {",", "，"}:
+                    continue
+                chars.append(normalized)
+                positions.append(index)
+        return "".join(chars), positions
+
+    expected, _ = indexed("".join(str(cell or "") for cell in cells))
+    text = str(page_texts[page - 1] or "")
+    haystack, positions = indexed(text)
+    if not expected or haystack.count(expected) != 1:
+        return None
+    start = haystack.index(expected)
+    return text[positions[start]:positions[start + len(expected) - 1] + 1]
+
 def _get_table_rows(
     doc: Document,
     table_name: str,
@@ -3444,6 +4191,13 @@ def _get_table_rows(
     放宽页界会改变其它规则的输入（实测会新暴露 V33-202/V33-222/V33-119 的
     口径与列选择缺陷），故仅由已按全表语义校验的 V33-120 显式启用。
     """
+    from .fact_table_projection import fact_bound_table_rows, ProjectionUnavailable
+    try:
+        projected = fact_bound_table_rows(doc, table_name)
+    except ProjectionUnavailable as exc:
+        raise RuleDeferred("structured_table_projection", str(exc)) from exc
+    if projected is not None:
+        return projected or None
     p = _get_first_anchor_page(doc, table_name)
     if not p:
         return None
@@ -3825,7 +4579,15 @@ def _final_section_scope(
       2. 行尾续行融合：行尾为非句末标点且次行以数字开头（"人员经费\\n12192.15 万元"）。
     仅在章节范围内修复，不触碰 merge_page_texts 的全局页界语义。
     """
-    raw = merge_page_texts(doc.page_texts)
+    page_texts = doc.page_texts
+    if getattr(doc, "parse_artifact", None) is not None:
+        page_texts = []
+        for page_number, text in enumerate(doc.page_texts, 1):
+            lines = str(text or "").splitlines()
+            if lines and lines[-1].strip() == str(page_number):
+                lines.pop()  # A literal trailing physical page label is not an amount.
+            page_texts.append("\n".join(lines))
+    raw = merge_page_texts(page_texts)
     title_pat = re.compile(
         r"(?:^|\n)\s*(?:[一二三四五六七八九十]+、|\d{1,2}、)"
         r"[^。；;！!？?\n]{0,60}(?:说明|情况)"
@@ -3916,16 +4678,10 @@ def _extract_standard_three_public_total(section: str, fiscal_type: str) -> Opti
             continue
         if not any(token in sentence for token in ("经费", "合计", "支出")):
             continue
-        target_text = sentence
-        direct_match = re.search(r"(?<!上年)决算数(?:为|是)?\s*" + _STANDARD_AMOUNT + r"\s*万元", sentence)
-        amount_match = direct_match
-        if amount_match is None and fiscal_type in sentence:
-            fiscal_pos = sentence.find(fiscal_type)
-            if fiscal_pos >= 0:
-                target_text = sentence[fiscal_pos:]
-                amount_match = re.search(_STANDARD_AMOUNT, target_text)
-        if amount_match is None:
-            amount_match = re.search(_STANDARD_AMOUNT, target_text)
+        amount_match = re.search(
+            re.escape(fiscal_type) + r"(?:数)?(?:为|是|合计)?\s*" + _STANDARD_AMOUNT + r"\s*万元",
+            sentence,
+        )
         if not amount_match:
             continue
         value = parse_number(amount_match.group(1))
@@ -3974,7 +4730,7 @@ class R33115_TotalSheetCheck(Rule):
         # 优先走命名行取值（ParsedCell 三态杜绝标签误读 0.0）；legacy
         # 文本行路径保留为无挂载时的回退——单一规则两条输入表征过渡。
         structured = _find_parsed_table(doc, table_name)
-        if structured is not None and structured.rows:
+        if getattr(doc, "parse_artifact", None) is None and structured is not None and structured.rows:
             return self._apply_structured(doc, structured)
         rows = _get_table_rows(doc, table_name)
         if not rows:
@@ -4006,6 +4762,21 @@ class R33115_TotalSheetCheck(Rule):
         income_total = side_total("income")
         expense_total = side_total("expense")
 
+        def source_location(side, total, components=()):
+            indicator = "income_actual" if side == "income" else "expenditure_actual"
+            refs = [_v33_table_operand_ref("FIN_01_income_expenditure_total", indicator, total,
+                        subject_name="总计", role=f"{side}_total")]
+            refs.extend(_v33_table_operand_ref("FIN_01_income_expenditure_total", indicator, value,
+                        subject_name=label, role=f"{side}_component")
+                        for label, value in components)
+            return {"table": table_name, "page": page, "operand_refs": refs}
+
+        balance_location = {"table": table_name, "page": page, "operand_refs": [
+            _v33_table_operand_ref("FIN_01_income_expenditure_total", indicator, value,
+                                  subject_name="总计", role=role)
+            for indicator, value, role in (("income_actual", income_total, "income_total"),
+                ("expenditure_actual", expense_total, "expense_total"))]}
+
         # 校验1：表底平衡（收入总计 = 支出总计）
         # 任一侧缺失 → 无法判定，跳过（不伪造 0.0 参与比较）
         if income_total is not None and expense_total is not None:
@@ -4013,13 +4784,13 @@ class R33115_TotalSheetCheck(Rule):
             if level == "mismatch":
                 issues.append(self._issue(
                     f"总表平衡性错误：收入总计({income_total:.2f}) != 支出总计({expense_total:.2f})",
-                    {"table": table_name, "page": page}, "error",
+                    balance_location, "error",
                     evidence_text=f"表格：{table_name}\n收入总计：{income_total}\n支出总计：{expense_total}"
                 ))
             elif level == "rounding_hint":
                 issues.append(self._issue(
                     f"总表平衡存在 {diff:.2f} 万元差异，在显示舍入包络内，可能为取整误差，建议复核。",
-                    {"table": table_name, "page": page}, "info",
+                    balance_location, "info",
                     evidence_text=f"表格：{table_name}\n收入总计：{income_total}\n支出总计：{expense_total}"
                 ))
 
@@ -4036,13 +4807,13 @@ class R33115_TotalSheetCheck(Rule):
                 detail = " + ".join(f"{name}({v:.2f})" for name, v in income_components)
                 issues.append(self._issue(
                     f"收入侧平衡错误：计算值({calc:.2f}) != 收入总计({income_total:.2f})。公式：{detail}",
-                    {"table": table_name, "page": page}, "error",
+                    source_location("income", income_total, income_components), "error",
                     evidence_text=f"表格：{table_name}\n{detail}\n收入总计：{income_total}"
                 ))
             elif level == "rounding_hint":
                 issues.append(self._issue(
                     f"收入侧合计与分项存在 {diff:.2f} 万元差异，在显示舍入包络内，可能为取整误差。",
-                    {"table": table_name, "page": page}, "info",
+                    source_location("income", income_total, income_components), "info",
                     evidence_text=f"表格：{table_name}\n收入总计：{income_total}\n分项之和：{calc}"
                 ))
 
@@ -4058,13 +4829,13 @@ class R33115_TotalSheetCheck(Rule):
                 detail = " + ".join(f"{name}({v:.2f})" for name, v in expense_components)
                 issues.append(self._issue(
                     f"支出侧平衡错误：计算值({calc:.2f}) != 支出总计({expense_total:.2f})。公式：{detail}",
-                    {"table": table_name, "page": page}, "error",
+                    source_location("expense", expense_total, expense_components), "error",
                     evidence_text=f"表格：{table_name}\n{detail}\n支出总计：{expense_total}"
                 ))
             elif level == "rounding_hint":
                 issues.append(self._issue(
                     f"支出侧合计与分项存在 {diff:.2f} 万元差异，在显示舍入包络内，可能为取整误差。",
-                    {"table": table_name, "page": page}, "info",
+                    source_location("expense", expense_total, expense_components), "info",
                     evidence_text=f"表格：{table_name}\n支出总计：{expense_total}\n分项之和：{calc}"
                 ))
 
@@ -4199,7 +4970,7 @@ class R33119_FiscalTotalCheck(Rule):
                     total = vals[-4]
                     sub_total = sum(vals[-3:])
                 
-                if _amount_mismatch(total, sub_total): # 容差
+                if _amount_mismatch(total, sub_total, rounding_envelope=rounding_envelope(3)):
                     row_txt = "".join([str(c) for c in row if c])[:20]
                     issues.append(self._issue(
                         f"行横向校验失败(第{i+1}行 '{row_txt}...'): 合计({total}) != 分项之和({sub_total})",
@@ -4291,13 +5062,13 @@ class R33120_DetailTableCheck(Rule):
         return mapping
 
     def apply(self, doc: Document) -> List[Issue]:
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_hierarchy_checks import check_native_detail_tables
+            return check_native_detail_tables(self, doc)
         issues = []
-        # MR-2（2026-09-27「查得准」A 档）：舍入包络提示聚类池。
-        # 同一差值的舍入条目合并为一条 finding（count 标注条目数，
-        # 原始条目保留在 evidence 明细）——23 条 0.01 在用户眼里是一条
-        # 「取整误差」而不是 23 个问题。分簇键取差值：若再按表分簇，
-        # 宜川样张仍剩 3 条，达不到降噪目标；表/科目维度保留在明细可追溯。
-        rounding_pool: List[Tuple[float, str, str, int]] = []
+        # MR-2：舍入包络提示可以按差额合并，但摘要必须列出每个表、科目和
+        # 关系ID。原来只写“共 N 处”，把实际位置埋在证据串中，复核人无法逐项定位。
+        rounding_pool: List[Tuple[float, str, str, int, List[Dict[str, Any]], str]] = []
         target_tables = ["收入决算表", "支出决算表", "一般公共预算财政拨款支出决算表"]
         table_totals: Dict[str, _TableTotalsRecord] = {}
         found_any_table = False
@@ -4311,6 +5082,14 @@ class R33120_DetailTableCheck(Rule):
             found_any_table = True
             page = _get_first_anchor_page(doc, table_name) or 1
 
+            source_code = {"收入决算表": "FIN_02_income", "支出决算表": "FIN_03_expenditure",
+                "一般公共预算财政拨款支出决算表": "FIN_05_general_public_expenditure"}[table_name]
+            def refs_for_relation(parent_code, parent_amount, child_items, measure="total_actual"):
+                relation_id = f"{source_code}:{parent_code}:{measure}"
+                return [_v33_table_operand_ref(source_code, measure, amount, subject_code=code,
+                            role="parent" if i == 0 else "child", relation_id=relation_id)
+                        for i, (code, amount) in enumerate([(parent_code, parent_amount)] + list(child_items))]
+
             # 跨页列宽漂移（HANDOFF §3.1C）：续页把「类|款|项」三列编码合并成
             # 一列，行宽变窄。处置：以众数宽度为基准做**逻辑列重映射**——
             # 尾部金额列按"行宽差"对齐（src = j + len(row) - modal_width），
@@ -4321,6 +5100,7 @@ class R33120_DetailTableCheck(Rule):
                 continue
 
             header_cols = self._header_columns(rows)
+            native_layout = getattr(doc, "parse_artifact", None) is not None
             # 合计列：优先取语义表头；取不到则放弃层级校验（不做位置猜测）
             col_total = header_cols.get("total")
 
@@ -4369,14 +5149,14 @@ class R33120_DetailTableCheck(Rule):
                 # 列位按行自适应：跨页续表会整体左移名称/金额列（宽度不变、语义变），
                 # 固定列位会把续页的「基本/项目」当成「合计」（长风样张根因）
                 adaptive = _adaptive_value_cols(row)
-                if adaptive is not None:
+                if col_total is not None and (native_layout or adaptive is None):
+                    src = col_total + shift
+                    if 0 <= src < len(cells) and cells[src] is not None:
+                        amount = Decimal(str(cells[src]))
+                elif adaptive is not None:
                     t_col = adaptive[1]
                     if 0 <= t_col < len(cells) and cells[t_col] is not None:
                         amount = Decimal(str(cells[t_col]))
-                elif col_total is not None:
-                    src = col_total + shift  # modal 列在当前行中的下标（窄行 shift<0）
-                    if 0 <= src < len(cells) and cells[src] is not None:
-                        amount = Decimal(str(cells[src]))
                 elif len(cells) > 4:
                     # 无语义表头时，取该行最后一个数值（None 安全，仍不做 0 填充）
                     tail = [v for v in cells if v is not None]
@@ -4425,13 +5205,16 @@ class R33120_DetailTableCheck(Rule):
                 if not children:
                     continue
                 child_sum = sum(children, Decimal("0"))
+                relation_refs = refs_for_relation(parent_code, parent_amt,
+                    [(code, amount) for code, amount in hierarchy.items()
+                     if len(code) == target_len and code.startswith(parent_code)])
                 level, diff = classify_amount_diff(
                     parent_amt, child_sum, n_children=len(children)
                 )
                 if level == "mismatch":
                     issues.append(self._issue(
                         f"层级校验失败({parent_code}): 父级金额({parent_amt:.2f}) != 子级之和({child_sum:.2f})",
-                        {"table": table_name, "code": parent_code, "page": page}, "warn",
+                        {"table": table_name, "code": parent_code, "page": page, "operand_refs": relation_refs}, "warn",
                         evidence_text=f"表格：{table_name}\n父级科目：{parent_code} (金额 {parent_amt:.2f})\n子级科目之和：{child_sum:.2f}"
                     ))
                 elif level == "rounding_hint":
@@ -4441,7 +5224,7 @@ class R33120_DetailTableCheck(Rule):
                          f"{table_name}科目 {parent_code} 与其明细之和相差 {diff:.2f} 万元，"
                          "在显示舍入包络内，可能为取整误差。",
                          f"{table_name}\n{parent_code}：{parent_amt:.2f}\n明细之和：{child_sum:.2f}",
-                         page)
+                         page, relation_refs, table_name)
                     )
 
             # 列合计校验（T2 类差异）：最低级科目行按列求和 vs 合计行对应列。
@@ -4451,12 +5234,17 @@ class R33120_DetailTableCheck(Rule):
             # （长风样张 4 条「合计行列校验失败」误报根因）。
             # 合计行无名称列（纯数字）时，其数值单元格依序对应 合计/基本/项目。
             if hierarchy and total_row_values and total_row_cells is not None:
-                lowest_level = max(row_code_level.values())
-                lowest_codes = [
-                    c for c, lvl in row_code_level.items() if lvl == lowest_level
-                ]
+                # Sum each root once. Some legitimate rows stop at 款/类;
+                # selecting only the globally deepest level omits those rows.
+                lowest_codes = [c for c in row_code_level
+                                if not any(c.startswith(parent) and c != parent
+                                           for parent in row_code_level)]
+                if not native_layout:
+                    lowest_level = max(row_code_level.values())
+                    lowest_codes = [c for c, level in row_code_level.items() if level == lowest_level]
                 role_sums: Dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
                 role_counts: Dict[str, int] = defaultdict(int)
+                role_children: Dict[str, List[Tuple[str, Decimal]]] = defaultdict(list)
                 adaptive_ok = 0
                 for row in rows:
                     cells = _row_numbers(row)
@@ -4469,30 +5257,40 @@ class R33120_DetailTableCheck(Rule):
                     if code not in lowest_codes:
                         continue
                     adaptive = _adaptive_value_cols(row)
-                    if adaptive is None:
+                    if header_cols and (native_layout or adaptive is None):
+                        role_cols = [(role, col + len(row) - modal_width) for role, col in header_cols.items()]
+                    elif adaptive is not None:
+                        role_cols = zip(("total", "basic", "project"), adaptive[1:])
+                    else:
                         continue
                     adaptive_ok += 1
-                    _name_col, t_col, b_col, p_col = adaptive
-                    for role, c_idx in (("total", t_col), ("basic", b_col), ("project", p_col)):
+                    for role, c_idx in role_cols:
                         if 0 <= c_idx < len(cells) and cells[c_idx] is not None:
                             role_sums[role] += Decimal(str(cells[c_idx]))
                             role_counts[role] += 1
+                            role_children[role].append((code, Decimal(str(cells[c_idx]))))
 
                 if adaptive_ok:
                     # 合计行：数值单元格依序对应 合计/基本/项目（缺则跳过该角色）
                     total_cells = _row_numbers(total_row_cells)
-                    total_numeric = [v for v in total_cells if v is not None]
-                    for role, total_value in zip(
-                        ("total", "basic", "project"), total_numeric, strict=False
-                    ):
+                    if header_cols and native_layout:
+                        total_roles = [(role, total_row_values.get(col)) for role, col in header_cols.items()]
+                    else:
+                        total_roles = list(zip(("total", "basic", "project"),
+                                               [v for v in total_cells if v is not None], strict=False))
+                    for role, total_value in total_roles:
+                        if total_value is None or not role_counts.get(role):
+                            continue
                         n = role_counts.get(role, 1)
+                        measure = {"total": "total_actual", "basic": "basic_actual", "project": "project_actual"}[role]
+                        relation_refs = refs_for_relation("total", total_value, role_children[role], measure)
                         level, diff = classify_amount_diff(
                             total_value, role_sums[role], n_children=max(n, 1)
                         )
                         if level == "mismatch":
                             issues.append(self._issue(
                                 f"{table_name}合计行列校验失败：合计({total_value:.2f}) != 明细之和({role_sums[role]:.2f})",
-                                {"table": table_name, "column": role, "page": page}, "warn",
+                                {"table": table_name, "column": role, "page": page, "operand_refs": relation_refs}, "warn",
                                 evidence_text=f"表格：{table_name}\n合计值：{total_value:.2f}\n明细之和：{role_sums[role]:.2f}"
                             ))
                         elif level == "rounding_hint":
@@ -4502,7 +5300,7 @@ class R33120_DetailTableCheck(Rule):
                                  f"{table_name}合计行与明细之和相差 {diff:.2f} 万元，"
                                  "在显示舍入包络内，可能为取整误差。",
                                  f"{table_name}\n合计值：{total_value:.2f}\n明细之和：{role_sums[role]:.2f}",
-                                 page)
+                                 page, relation_refs, table_name)
                             )
                 table_totals[table_name] = {
                     "total_row": {i: float(v) for i, v in total_row_values.items()},
@@ -4529,7 +5327,11 @@ class R33120_DetailTableCheck(Rule):
                     issues.append(self._issue(
                         f"支出决算表与一般公共预算财政拨款支出决算表同口径列相差 {diff:.2f} 万元"
                         "（可能为取整误差或口径差异），需人工复核。",
-                        {"table": "支出决算表↔一般公共预算财政拨款支出决算表", "page": _get_first_anchor_page(doc, "支出决算表") or 1}, "manual_review",
+                        {"table": "支出决算表↔一般公共预算财政拨款支出决算表", "page": _get_first_anchor_page(doc, "支出决算表") or 1,
+                         "operand_refs": [_v33_table_operand_ref(code,
+                             {"total": "total_actual", "basic": "basic_actual", "project": "project_actual"}[role],
+                             value, subject_code="total", role=code)
+                             for code, value in (("FIN_03_expenditure", v3), ("FIN_05_general_public_expenditure", v5))]}, "manual_review",
                         evidence_text=f"支出决算表：{v3:.2f}\n一般公共预算财政拨款支出决算表：{v5:.2f}"
                     ))
 
@@ -4543,17 +5345,43 @@ class R33120_DetailTableCheck(Rule):
 
         # MR-2：舍入提示聚类发射（按差值分簇；一条 finding 汇总同差条目）
         if rounding_pool:
-            groups: Dict[str, List[Tuple[float, str, str, int]]] = defaultdict(list)
+            groups: Dict[str, List[Tuple[float, str, str, int, List[Dict[str, Any]], str]]] = defaultdict(list)
             for item in rounding_pool:
                 groups[f"{item[0]:.2f}"].append(item)
             for key in sorted(groups):
                 items = groups[key]
-                # 同簇页域取最小页；明细保留全部 表名/科目/金额
-                rep_page = min(it[3] for it in items)
+                tables = list(dict.fromkeys(it[5] for it in items if it[5]))
+                pages = sorted({it[3] for it in items if it[3] > 0})
+                rounding_cases = []
+                for index, item in enumerate(items, start=1):
+                    refs = item[4]
+                    relation_id = next((str(ref.get("relation_id")) for ref in refs
+                                        if ref.get("relation_id")), f"rounding-case-{index}")
+                    measure = refs[0].get("indicator") if refs else ""
+                    measure_label = {
+                        "total_actual": "决算金额",
+                        "basic_actual": "基本支出决算",
+                        "project_actual": "项目支出决算",
+                        "income_actual": "收入决算金额",
+                        "expenditure_actual": "支出决算金额",
+                    }.get(str(measure), str(measure or ""))
+                    measure_suffix = f"；字段：{measure_label}" if measure_label else ""
+                    case_evidence = item[2].replace(chr(10), "；")
+                    rounding_cases.append({
+                        "relation_id": relation_id,
+                        "summary": f"{index}. {item[1].rstrip('。')}{measure_suffix}；依据：{case_evidence}",
+                        "table": item[5],
+                        "pages": [item[3]] if item[3] > 0 else [],
+                        "operand_ids": [str(ref.get("operand_id")) for ref in refs if ref.get("operand_id")],
+                    })
+                tables_text = "、".join(tables) if tables else "未识别到具体表名"
+                case_text = "\n".join(case["summary"] for case in rounding_cases)
                 issues.append(self._issue(
                     f"收支决算明细表共{len(items)}处相差 {key} 万元的舍入包络差异，"
-                    "可能为显示取整误差（明细见证据）。",
-                    {"tables": "收支决算表族", "page": rep_page, "count": len(items)}, "info",
+                    f"可能为显示取整误差。相关表：{tables_text}。差异位置：\n{case_text}",
+                    {"table": tables_text, "tables": tables, "page": pages[0] if pages else None,
+                     "pages": pages, "count": len(items), "rounding_cases": rounding_cases,
+                     "operand_refs": [ref for item in items for ref in item[4]]}, "info",
                     evidence_text="\n---\n".join(it[2] for it in items)
                 ))
 
@@ -4572,6 +5400,9 @@ class R33117_BasicExpenseClassification(Rule):
     }
 
     def apply(self, doc: Document) -> List[Issue]:
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_table_arithmetic import check_basic_economics
+            return check_basic_economics(self, doc)
         issues = []
         table_name = "一般公共预算财政拨款基本支出决算表"
         rows = _get_table_rows(doc, table_name)
@@ -4593,6 +5424,8 @@ class R33117_BasicExpenseClassification(Rule):
         # 累加，把款级明细重复计入类级合计，得到 3309.02 这类凭空累加值
         # （HANDOFF §3.1B）。
         class_amounts: Dict[str, Decimal] = {}
+        class_halves: Dict[str, List[str]] = {}
+        code_halves: Dict[str, List[str]] = {}
         children_by_class: Dict[str, List[Decimal]] = defaultdict(list)
 
         for row in kept:
@@ -4601,6 +5434,8 @@ class R33117_BasicExpenseClassification(Rule):
                 if not half:
                     continue
                 c1 = str(half[0] or "").strip()
+                if c1.isdigit() and len(c1) in (3, 5, 7):
+                    code_halves[c1] = [str(cell or "") for cell in half]
                 if not (c1.isdigit() and len(c1) == 3 and "300" <= c1 <= "399"):
                     # 半行起点不是类码：合并单元格续行或文本行，跳过
                     continue
@@ -4615,9 +5450,11 @@ class R33117_BasicExpenseClassification(Rule):
                 value = _half_first_number(half, 1)
                 if value is not None and c1 not in class_amounts:
                     class_amounts[c1] = Decimal(str(value))
+                    class_halves[c1] = [str(cell or "") for cell in half]
 
         # 显式合计行（标签与数值同半行取值，不做跨半行猜测）
         explicit: Dict[str, Decimal] = {}
+        explicit_halves: Dict[str, List[str]] = {}
         for row in kept:
             left, right = _split_two_sided_row(row)
             for half in (left, right):
@@ -4627,6 +5464,7 @@ class R33117_BasicExpenseClassification(Rule):
                         value = _half_first_number(half, 1)
                         if value is not None:
                             explicit[label] = Decimal(str(value))
+                            explicit_halves[label] = [str(cell or "") for cell in half]
 
         # 类级金额缺失时无法判定 → 跳过（不伪造数值）
         def class_sum(codes) -> Optional[Decimal]:
@@ -4646,10 +5484,64 @@ class R33117_BasicExpenseClassification(Rule):
             n = len(codes)
             level, diff = classify_amount_diff(explicit_value, computed, n_children=n)
             if level == "mismatch":
+                location = {"table": table_name, "page": page}
+                evidence_text = (
+                    f"表格：{table_name}\n显式合计行：{label}={explicit_value:.2f}\n"
+                    f"类级科目之和：{computed:.2f}"
+                )
+                if label == "公用经费":
+                    source_refs = []
+                    source_rows = [
+                        ("公用经费合计", explicit_halves.get("公用经费合计")),
+                        ("302 商品和服务支出", class_halves.get("302")),
+                        ("310 房屋建筑物购建", class_halves.get("310")),
+                        ("30299 资本性支出", code_halves.get("30299")),
+                        ("31001 办公设备购置", code_halves.get("31001")),
+                        ("31002 专用设备购置", code_halves.get("31002")),
+                    ]
+                    for role, half in source_rows:
+                        quote = _unique_native_row_quote(half or [], doc.page_texts, page)
+                        if quote is None:
+                            source_refs = []
+                            break
+                        source_refs.append({
+                            "table": table_name,
+                            "role": role,
+                            "page": page,
+                            "span": quote,
+                        })
+                    if len(source_refs) == len(source_rows):
+                        location["table_refs"] = source_refs
+                        evidence_text = "\n".join(ref["span"] for ref in source_refs)
+                        detail_310 = sum(
+                            (
+                                Decimal(str(value))
+                                for code, half in code_halves.items()
+                                if code.startswith("310") and len(code) == 5
+                                for value in [_half_first_number(half, 1)]
+                                if value is not None
+                            ),
+                            Decimal("0"),
+                        )
+                        amount_30299 = _half_first_number(code_halves.get("30299", []), 1)
+                        duplicate_detail = (
+                            f"且310类小计为{class_amounts.get('310', Decimal('0')):.2f}，"
+                            f"其下明细合计{detail_310:.2f}；30299行另列{amount_30299:.2f}万元。"
+                            if amount_30299 is not None
+                            else f"且310类小计为{class_amounts.get('310', Decimal('0')):.2f}，"
+                                 f"其下明细合计{detail_310:.2f}。"
+                        )
+                        message = (
+                            f"公用经费合计({explicit_value:.2f})与302、310类级之和({computed:.2f})"
+                            f"不一致，相差{diff:.2f}万元；{duplicate_detail}请核对相关金额是否错列或重复列示。"
+                        )
+                    else:
+                        message = f"{label}校验失败：显式合计({explicit_value:.2f}) != 类级之和({computed:.2f})"
+                else:
+                    message = f"{label}校验失败：显式合计({explicit_value:.2f}) != 类级之和({computed:.2f})"
                 issues.append(self._issue(
-                    f"{label}校验失败：显式合计({explicit_value:.2f}) != 类级之和({computed:.2f})",
-                    {"table": table_name, "page": page}, "warn",
-                    evidence_text=f"表格：{table_name}\n显式合计行：{label}={explicit_value:.2f}\n类级科目之和：{computed:.2f}"
+                    message,
+                    location, "warn", evidence_text=evidence_text
                 ))
             elif level == "rounding_hint":
                 issues.append(self._issue(
@@ -4914,6 +5806,9 @@ class R33202_InterTable_T4_T5(Rule):
     desc = "表间勾稽：T4一般公共支出↔T5合计"
 
     def apply(self, doc: Document) -> List[Issue]:
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_summary_checks import check_grant_general_vs_function_total
+            return check_grant_general_vs_function_total(self, doc)
         issues = []
         t4_rows = _get_table_rows(doc, "财政拨款收入支出决算总表", anchor_extent=True)
         merge_meta: Dict[str, Any] = {}
@@ -5114,6 +6009,9 @@ class R33243_Table6_BasicExpenseAdvancedCheck(Rule):
     desc = "基本支出决算表：经济分类口径与人员/公用汇总校验"
 
     def apply(self, doc: Document) -> List[Issue]:
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_table_arithmetic import check_basic_economics
+            return check_basic_economics(self, doc)
         issues = []
         t6_rows = _get_table_rows(doc, "一般公共预算财政拨款基本支出决算表")
         
@@ -5166,14 +6064,14 @@ class R33243_Table6_BasicExpenseAdvancedCheck(Rule):
         # --- B. 执行三组校验 ---
         lvl1_codes = ["301", "302", "303", "307", "310", "399"] # 基本支出常见一级科目
         
-        # 1. 明细归集 (弱校验，容差1.0)
+        # 1. 明细归集（统一政策容差 + 明细项显示舍入包络）
         for p_code in lvl1_codes:
             if p_code in code_data:
                 parent_val = code_data[p_code]["val"]
                 children = [v["val"] for k, v in code_data.items() if k.startswith(p_code) and len(k) > len(p_code)]
                 if children:
                     child_sum = sum(children)
-                    if _amount_mismatch(parent_val, child_sum): # 弱校验
+                    if _amount_mismatch(parent_val, child_sum, rounding_envelope=rounding_envelope(len(children))):
                         issues.append(self._issue(
                             f"【表六】一级科目明细汇总不平({p_code})：一级数({parent_val:.2f}) != 明细和({child_sum:.2f})，差额={abs(parent_val-child_sum):.2f}",
                             {"code": p_code, "severity": "info"}, "info",
@@ -5192,7 +6090,7 @@ class R33243_Table6_BasicExpenseAdvancedCheck(Rule):
         
         if p_total > 0:
             calc_p = s301 + s303
-            if _amount_mismatch(p_total, calc_p):
+            if _amount_mismatch(p_total, calc_p, rounding_envelope=rounding_envelope(2)):
                 issues.append(self._issue(
                     f"【表六】人员经费口径错误：人员总计({p_total:.2f}) != 301({s301:.2f}) + 303({s303:.2f}) = {calc_p:.2f}",
                     {"type": "personnel"}, "error",
@@ -5201,7 +6099,7 @@ class R33243_Table6_BasicExpenseAdvancedCheck(Rule):
         
         if u_total > 0:
             calc_u = s302 + s310
-            if _amount_mismatch(u_total, calc_u):
+            if _amount_mismatch(u_total, calc_u, rounding_envelope=rounding_envelope(2)):
                 issues.append(self._issue(
                     f"【表六】公用经费口径错误：公用总计({u_total:.2f}) != 302({s302:.2f}) + 310({s310:.2f}) = {calc_u:.2f}",
                     {"type": "public"}, "error",
@@ -5211,7 +6109,7 @@ class R33243_Table6_BasicExpenseAdvancedCheck(Rule):
         # 3. 总额闭合
         b_total = summary_data.get("basic_total", 0.0) or (p_total + u_total)
         l1_grand_sum = s301 + s302 + s303 + s310
-        if _amount_mismatch(b_total, l1_grand_sum) and b_total > 0:
+        if _amount_mismatch(b_total, l1_grand_sum, rounding_envelope=rounding_envelope(4)) and b_total > 0:
             issues.append(self._issue(
                 f"【表六】基本支出总结不平：基本支出合计({b_total:.2f}) != 四大一级科目之和({l1_grand_sum:.2f})",
                 {"total": b_total}, "error",
@@ -5235,11 +6133,13 @@ class R33214_T1_TotalBalance(Rule):
             fact_ctx,
             "income_actual",
             table_code="FIN_01_income_expenditure_total",
+            subject_names=("总计", "收入总计", "支出总计", "合计"),
         )
         fact_expense, fact_expense_ref, fact_expense_block = _fact_operand_for_v33(
             fact_ctx,
             "expenditure_actual",
             table_code="FIN_01_income_expenditure_total",
+            subject_names=("总计", "收入总计", "支出总计", "合计"),
         )
         _operand_ids = [
             fact.fact_uid
@@ -5247,6 +6147,11 @@ class R33214_T1_TotalBalance(Rule):
             if fact is not None
         ]
         if fact_income is not None and fact_expense is not None:
+            relation_sub_id = "T1:income_expenditure_total:balance"
+            relation_id = f"{self.code}:{relation_sub_id}"
+            fact_ids, evidence_ids = _v33_fact_identity(
+                fact_income_ref, fact_expense_ref
+            )
             if _amount_mismatch(fact_income, fact_expense):
                 issues.append(self._issue(
                     f"T1总计不平：收入侧总计({fact_income:.2f}) != 支出侧总计({fact_expense:.2f})",
@@ -5256,25 +6161,49 @@ class R33214_T1_TotalBalance(Rule):
                         f"={fact_income}，支出 {fact_expense_ref.fact_uid if fact_expense_ref is not None else '-'}"
                         f"={fact_expense}"
                     ),
+                    check_relation_id=relation_id,
+                    fact_ids=fact_ids,
+                    evidence_ids=evidence_ids,
                 ))
                 _v33_relation_receipt(
-                    doc, self.code, "T1:income_expenditure_total:balance",
+                    doc, self.code, relation_sub_id,
                     status="fail",
                     operand_fact_ids=_operand_ids,
                     formula="fact.income_actual == fact.expenditure_actual (万元)",
                 )
             else:
                 _v33_relation_receipt(
-                    doc, self.code, "T1:income_expenditure_total:balance",
+                    doc, self.code, relation_sub_id,
                     status="pass",
                     operand_fact_ids=_operand_ids,
                     formula="fact.income_actual == fact.expenditure_actual (万元)",
                 )
             return issues
         blocked_reasons = [
-            *(f"收入总计{fact_income_block}" if fact_income_block else []),
-            *(f"支出总计{fact_expense_block}" if fact_expense_block else []),
+            reason
+            for reason in (
+                f"收入总计{fact_income_block}" if fact_income_block else None,
+                f"支出总计{fact_expense_block}" if fact_expense_block else None,
+            )
+            if reason
         ]
+        if blocked_reasons:
+            # 候选事实存在但不可信时，旧表格解析值不能作为“确定回退”；
+            # 否则风险事实会被同一份表的旧解析再次洗成 completed。
+            _v33_relation_receipt(
+                doc,
+                self.code,
+                "T1:income_expenditure_total:balance",
+                status="insufficient_data",
+                operand_fact_ids=_operand_ids,
+                formula="fact.income_actual == fact.expenditure_actual (万元)",
+                incomplete_reason="；".join(blocked_reasons),
+            )
+            raise RuleDeferred(
+                self.code,
+                detail="T1收支总计事实被识别风险阻断，不回退旧表解析值",
+                unresolved_reasons=blocked_reasons,
+            )
         t1_rows = _get_table_rows(doc, "收入支出决算总表")
 
         if not t1_rows:
@@ -5327,13 +6256,25 @@ class R33214_T1_TotalBalance(Rule):
                 unresolved_reasons=["收入支出决算总表(T1)未提取到有效收支总计金额"],
             )
 
+        relation_sub_id = "T1:income_expenditure_total:balance"
+        relation_id = f"{self.code}:{relation_sub_id}"
         if _amount_mismatch(income_total, expense_total):
             issues.append(self._issue(
                 f"T1总计不平：收入侧总计({income_total:.2f}) != 支出侧总计({expense_total:.2f})",
                 {"income_total": income_total, "expense_total": expense_total}, "error",
-                evidence_text=f"表格：收入支出决算总表\n收入侧总计：{income_total}\n支出侧总计：{expense_total}"
+                evidence_text=f"表格：收入支出决算总表\n收入侧总计：{income_total}\n支出侧总计：{expense_total}",
+                check_relation_id=relation_id,
             ))
-        
+            legacy_status = "fail"
+        else:
+            legacy_status = "pass"
+        _v33_relation_receipt(
+            doc,
+            self.code,
+            relation_sub_id,
+            status=legacy_status,
+            formula="table.T1.income_total == table.T1.expenditure_total (万元)",
+        )
         return issues
 
 
@@ -5367,7 +6308,7 @@ class R33210_T2_RowColumnTotal(Rule):
                     total = sorted_vals[0]
                     parts_sum = sum(sorted_vals[1:])
                     if total > 0.01 and parts_sum > 0.01:
-                        if _amount_mismatch(total, parts_sum):
+                        if _amount_mismatch(total, parts_sum, rounding_envelope=rounding_envelope(len(sorted_vals) - 1)):
                             issues.append(self._issue(
                                 f"T2第{i+1}行合计不平：合计={total:.2f}, 分项和={parts_sum:.2f}",
                                 {"row": i+1, "total": total, "parts": parts_sum}, "warn",
@@ -5405,7 +6346,7 @@ class R33211_T3_RowTotal(Rule):
                     project = sorted_vals[2]
                     if total > 0.01:
                         calc = basic + project
-                        if _amount_mismatch(total, calc):
+                        if _amount_mismatch(total, calc, rounding_envelope=rounding_envelope(2)):
                             issues.append(self._issue(
                                 f"T3第{i+1}行合计不平：合计={total:.2f}, 基本+项目={calc:.2f}",
                                 {"row": i+1}, "warn",
@@ -5542,7 +6483,7 @@ def _raise_deferred_on_missing_rows(
 
 
 class R33240_Table2_IncomeAdvancedCheck(Rule):
-    """表二（收入决算表）高级校验：横向求和(强校验0.01) + 纵向层级汇总(容差校验0.01)"""
+    """表二横向求和与纵向层级汇总；使用统一金额容差与显示舍入包络。"""
     code, severity = "V33-240", "error"
     desc = "收入决算表：横向求和与纵向层级校验"
 
@@ -5551,10 +6492,48 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
         "附属单位上缴收入", "其他收入"
     ]
     TOTAL_COLUMN_KEYWORDS = ["本年收入合计", "收入合计", "合计"]
+
+    @staticmethod
+    def _native_row_quote(row, page_texts):
+        """Return one literal page-text span matching a parsed table row.
+
+        Table extraction may omit thousands separators and whitespace, so those
+        presentation characters are ignored for matching. The returned quote is
+        sliced from the original page text and is therefore suitable for the
+        source binder's stricter native-span verification.
+        """
+        def indexed(value):
+            chars, positions = [], []
+            for index, char in enumerate(str(value or "")):
+                for normalized in unicodedata.normalize("NFKC", char):
+                    if normalized.isspace() or normalized in {",", "，"}:
+                        continue
+                    chars.append(normalized)
+                    positions.append(index)
+            return "".join(chars), positions
+
+        expected, _ = indexed("".join(str(cell) for cell in row if cell))
+        if not expected:
+            return None
+        matches = []
+        for page, page_text in enumerate(page_texts or [], start=1):
+            haystack, positions = indexed(page_text)
+            if haystack.count(expected) != 1:
+                continue
+            start = haystack.index(expected)
+            begin, end = positions[start], positions[start + len(expected) - 1] + 1
+            matches.append((page, str(page_text)[begin:end]))
+        return matches[0] if len(matches) == 1 else None
     
     def apply(self, doc: Document) -> List[Issue]:
+        if (getattr(doc, 'parse_artifact', None) is not None
+                and getattr(getattr(doc, 'fact_context', None), 'report_kind', None) == 'final'):
+            from .native_income_sources import check_income_sources
+            return check_income_sources(self, doc)
         issues = []
         t2_rows = _get_table_rows(doc, "收入决算表", full_extent=True)
+        unresolved = []
+        missing_total = False
 
         if not t2_rows or len(t2_rows) < 3:
             raise RuleDeferred(self.code, detail="未找到有效的收入决算表或行数不足(<3)")
@@ -5565,9 +6544,13 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
         col_sources = {}
         col_code_idx = -1
         col_name_idx = -1
+
+        def header_text(cell):
+            # 原页列身份不随 PDF 表头的软换行改变；保留物理列索引再匹配名称。
+            return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(cell or "")))
         
         for r_idx, row in enumerate(t2_rows[:5]):
-            row_txt = "".join([str(c) for c in row if c])
+            row_txt = "".join(header_text(c) for c in row)
             # 表头常跨两行：首行「项目/本年收入合计/财政拨款收入…」，次行「功能分类科目编码/科目名称」。
             # 旧实现命中首行即 break，编码列/名称列永远取不到（col_code_idx 恒为 -1），
             # 所有数据行 code 为空、level=-1，横向与层级校验整段被跳过（实际只查过 TOTAL 行）。
@@ -5576,7 +6559,7 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
                 if header_row_idx == -1:
                     header_row_idx = r_idx
                 for c_idx, cell in enumerate(row):
-                    cell_str = str(cell).strip() if cell else ""
+                    cell_str = header_text(cell)
                     if col_total_idx == -1:
                         for kw in self.TOTAL_COLUMN_KEYWORDS:
                             if kw in cell_str:
@@ -5610,10 +6593,10 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
         for r_idx, row in enumerate(t2_rows):
             if r_idx <= header_row_idx:
                 continue
-            row_txt = "".join([str(c) for c in row if c])
+            row_txt = "".join(header_text(c) for c in row)
             if any(k in row_txt for k in ("本年收入", "财政拨款", "科目编码", "科目名称")):
                 for c_idx, cell in enumerate(row):
-                    cell_str = str(cell).strip() if cell else ""
+                    cell_str = header_text(cell)
                     if col_total_idx != -1 and any(kw == cell_str for kw in self.TOTAL_COLUMN_KEYWORDS) and c_idx != col_total_idx:
                         raise RuleDeferred(self.code, detail="T2存在跨页同宽列序变化/换列漂移，无法可靠抽取层级关系")
                     for kw, expected_c in col_sources.items():
@@ -5642,6 +6625,11 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
             
             vals = _parse_row_values(row)
             total_val = vals[col_total_idx] if col_total_idx < len(vals) else 0.0
+
+            if level >= 0 and parse_number(row[col_total_idx] if col_total_idx < len(row) else None) is None:
+                unresolved.append(f"收入决算表第{r_idx + 1}行（{code}）合计未识别，不能完成横向及层级比较")
+                missing_total = True
+                continue
             
             source_vals = {}
             for src_name, src_idx in col_sources.items():
@@ -5654,18 +6642,55 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
                 }
             
             # C. 横向求和校验（0.01容差）
+            missing_sources = [
+                source for source, col in col_sources.items()
+                if parse_number(row[col] if col < len(row) else None) is None
+            ] if level >= 0 else []
+            if missing_sources:
+                # 原页空白、破折号及未识别均不是明确的 0；合计有效仍可参加纵向比较。
+                unresolved.append(
+                    f"收入决算表第{r_idx + 1}行（{code}）来源列{'、'.join(missing_sources)}"
+                    "为空白或未识别，未以空白补零，横向比较未完成"
+                )
+                continue
             if level >= 0 and (total_val > 0.01 or sum(source_vals.values()) > 0.01):
                 source_sum = sum(source_vals.values())
                 diff = abs(total_val - source_sum)
                 
-                if diff > 0.01 + _AMOUNT_DIFF_EPS:
+                diff_level, _ = _aggregate_diff_class(total_val, source_sum, len(source_vals))
+                if diff_level == "mismatch":
                     source_detail = ", ".join([f"{k}={v:.2f}" for k, v in source_vals.items() if v != 0])
+                    native_quote = self._native_row_quote(row, doc.page_texts)
+                    location = {"table": "收入决算表", "row": r_idx+1, "code": code, "diff": diff}
+                    evidence_text = (
+                        f"表格：收入决算表\n行号：{r_idx+1}\n行内容：{row_txt[:100]}...\n"
+                        f"合计值：{total_val}\n分项之和：{source_sum} ({source_detail})"
+                    )
+                    if native_quote is not None:
+                        source_page, source_span = native_quote
+                        location.update(
+                            page=source_page,
+                            table_refs=[{
+                                "table": "收入决算表",
+                                "row": str(r_idx + 1),
+                                "code": code,
+                                "role": "收入决算表原始数据行",
+                                "page": source_page,
+                                "span": source_span,
+                            }],
+                        )
+                        evidence_text = source_span
                     issues.append(self._issue(
                         f"【收入决算表】第{r_idx+1}行横向求和不平：本年收入合计({total_val:.2f}) ≠ 各来源之和({source_sum:.2f})，差额={diff:.2f}。明细：{source_detail}。科目：{code} {name}",
-                        {"table": "收入决算表", "row": r_idx+1, "code": code, "diff": diff}, "error",
-                        evidence_text=f"表格：收入决算表\n行号：{r_idx+1}\n行内容：{row_txt[:100]}...\n合计值：{total_val}\n分项之和：{source_sum} ({source_detail})"
+                        location, "error", evidence_text=evidence_text
                     ))
         
+        if missing_total:
+            raise RuleDeferred(
+                self.code, detail="；".join(unresolved), partial_issues=issues,
+                unresolved_reasons=unresolved,
+            )
+
         # D. 纵向层级汇总校验（0.01容差）——MR-P3b：候选先收集，漏行取证后
         # 放行；失衡父科目前缀下存在「页文本可见而表格解析缺失」的科目编码
         # （行粘页码/跨页漏行）时 fail-closed 转人工，不报 error
@@ -5714,9 +6739,16 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
 
         if vertical_candidates:
             parents = {c["parent"] for c in vertical_candidates}
-            _raise_deferred_on_missing_rows(
-                self.code, doc, "收入决算表", t2_rows, parents, issues
-            )
+            try:
+                _raise_deferred_on_missing_rows(
+                    self.code, doc, "收入决算表", t2_rows, parents, issues
+                )
+            except RuleDeferred as signal:
+                reasons = unresolved + list(signal.unresolved_reasons or [signal.detail])
+                raise RuleDeferred(
+                    self.code, detail="；".join(reasons), partial_issues=signal.partial_issues,
+                    unresolved_reasons=reasons,
+                ) from signal
             for cand in vertical_candidates:
                 issues.append(self._issue(
                     f"【收入决算表】{cand['kind']}({cand['parent']} {cand['name']})纵向汇总不平："
@@ -5730,6 +6762,11 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
                     ),
                 ))
 
+        if unresolved:
+            raise RuleDeferred(
+                self.code, detail="；".join(unresolved), partial_issues=issues,
+                unresolved_reasons=unresolved,
+            )
         return issues
 
 
@@ -5745,6 +6782,9 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
     EXTRA_COL_KEYWORDS = ("上缴上级支出", "经营支出", "对附属单位补助支出", "补助附属单位支出")
     
     def apply(self, doc: Document) -> List[Issue]:
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_table_arithmetic import check_expenditure_arithmetic
+            return check_expenditure_arithmetic(self, doc)
         issues = []
         # MR-P4：舍入包络提示聚类池（同差值合一条 info，V33-120 池模式）
         v241_rounding_pool: List[Tuple[float, str]] = []
@@ -6014,6 +7054,9 @@ class R33244_Table7_ThreePublicAdvancedCheck(Rule):
     desc = "三公经费表：双口径结构闭合与表文一致性校验"
 
     def apply(self, doc: Document) -> List[Issue]:
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_table_arithmetic import check_three_public_arithmetic
+            return check_three_public_arithmetic(self, doc)
         issues = []
         t7_rows = _get_table_rows(doc, '一般公共预算财政拨款“三公”经费支出决算表')
         if not t7_rows:
@@ -6129,6 +7172,14 @@ class R33244_Table7_ThreePublicAdvancedCheck(Rule):
             ]
             three_public_section = "\n".join(candidate_paras)
 
+        actual_section = _final_section_scope(doc, (
+            '财政拨款“三公”经费支出决算情况说明',
+            '财政拨款"三公"经费支出决算情况说明',
+            '“三公”经费支出决算情况说明',
+        ))
+        if actual_section:
+            three_public_section = actual_section
+
         nar_facts = extract_three_public_facts(three_public_section)
         # 表文对比只使用"基数"事实（决算/预算），同比变化句金额不得参与
         fact_final: Dict[str, float] = {}
@@ -6148,6 +7199,7 @@ class R33244_Table7_ThreePublicAdvancedCheck(Rule):
         if standard_nar_final_total is None:
             standard_nar_final_total = fact_final.get("三公经费合计")
         if standard_nar_final_total is not None:
+            fact_final["三公经费合计"] = standard_nar_final_total
             data_val = data["final"][0]
             is_empty = data["is_empty"]["final"][0]
             if is_empty:
@@ -6316,6 +7368,9 @@ class R33242_Table4_ComprehensiveCheck(Rule):
     desc = "财政拨款总表：全口径及结构内勾稽校验"
 
     def apply(self, doc: Document) -> List[Issue]:
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_summary_checks import check_grant_summary
+            return check_grant_summary(self, doc)
         issues = []
         t4_rows = _get_table_rows(doc, "财政拨款收入支出决算总表")
         
@@ -6326,8 +7381,9 @@ class R33242_Table4_ComprehensiveCheck(Rule):
         num_cols = len(t4_rows[0])
         is_split = num_cols >= 7 
         
-        data_in = {"opening": [0.0]*4, "income": [0.0]*4, "total": [0.0]*4}
-        data_out = {"expense": [0.0]*4, "closing": [0.0]*4, "total": [0.0]*4}
+        data_in = {"opening": [None]*4, "income": [None]*4, "total": [None]*4}
+        data_out = {"expense": [None]*4, "closing": [None]*4, "total": [None]*4}
+        unresolved = []
 
         # --- B. 逐行解析数据 (智能逻辑) ---
         # 收入侧逻辑：第一个出现的 "一、一般" 通常是本年收入，直到看到 "年初结转" 标志
@@ -6337,11 +7393,11 @@ class R33242_Table4_ComprehensiveCheck(Rule):
         for r_idx, row in enumerate(t4_rows):
             row_txt = "".join([str(c) for c in row if c]).replace(" ", "")
             nums = _parse_row_values(row)
-            if not nums: continue
+            if not nums and not is_split: continue
             
             if is_split:
                 l_text = str(row[0]) if row[0] else ""
-                l_val = parse_number(row[1]) or 0.0 if len(row) > 1 else 0.0
+                l_val = parse_number(row[1]) if len(row) > 1 else None
                 
                 # 状态切换
                 if "年初" in l_text and "结转" in l_text:
@@ -6358,12 +7414,14 @@ class R33242_Table4_ComprehensiveCheck(Rule):
                 elif "政府性基金" in l_text: data_in[context_in][2] = l_val
                 elif "国有资本" in l_text: data_in[context_in][3] = l_val
 
-                # 支出侧 (右侧通常较规整，取最后4个数值)
-                if "本年支出合计" in row_txt: data_out["expense"] = nums[-4:] if len(nums) >= 4 else [0.0]*4
-                elif "年末" in row_txt and "结转" in row_txt: data_out["closing"] = nums[-4:] if len(nums) >= 4 else [0.0]*4
-                elif "总计" in row_txt:
-                    # 如果一行有两个"总计"或数值较多，右侧数值块归支出
-                    if len(nums) >= 4: data_out["total"] = nums[-4:]
+                # Monetary columns keep their declared positions even when a
+                # fund cell is blank. Compressed numeric lists move income or
+                # general-public values into a different expense column.
+                r_text = str(row[2] or "") if len(row) > 2 else ""
+                right_values = [parse_number(row[col]) if col < len(row) else None for col in (3, 4, 5, 6)]
+                if "本年支出合计" in r_text: data_out["expense"] = right_values
+                elif "年末" in r_text and "结转" in r_text: data_out["closing"] = right_values
+                elif "总计" in r_text: data_out["total"] = right_values
             
             else:
                 # 紧凑布局逻辑
@@ -6377,18 +7435,19 @@ class R33242_Table4_ComprehensiveCheck(Rule):
                     else: target = data_out["total"]
                 
                 if target is not None:
-                    row_nums = nums[-4:] if len(nums) >= 4 else ([nums[0]] + [0.0]*3 if nums else [0.0]*4)
+                    row_nums = ([parse_number(cell) for cell in row[-4:]] if len(row) >= 5
+                                else [nums[0], None, None, None])
                     for i in range(min(len(row_nums), 4)): target[i] = row_nums[i]
 
         # --- C. 结果回填与校验 ---
         # 如果合计行没填，通过分项补全（仅用于内部校验）
         for d in [data_in["opening"], data_in["income"], data_out["expense"], data_out["closing"]]:
-            if d[0] == 0 and sum(d[1:]) > 0: d[0] = sum(d[1:])
+            if d[0] is None and all(v is not None for v in d[1:]): d[0] = sum(d[1:])
 
         col_names = ["合计列", "一般公共预算列", "政府性基金列", "国有资本经营列"]
         
         # 1. 总平衡
-        if _amount_mismatch(data_in["total"][0], data_out["total"][0]) and data_in["total"][0] > 0:
+        if all(v is not None for v in (data_in["total"][0], data_out["total"][0])) and _amount_mismatch(data_in["total"][0], data_out["total"][0]) and data_in["total"][0] > 0:
              issues.append(self._issue(
                 f"【表四】收支总计不平衡：收入侧总计({data_in['total'][0]:.2f}) != 支出侧总计({data_out['total'][0]:.2f})",
                 {"in": data_in["total"][0], "out": data_out["total"][0]}, "error",
@@ -6403,13 +7462,13 @@ class R33242_Table4_ComprehensiveCheck(Rule):
             # 2. 横向 (略)
             
             # 3. 纵向
-            if _amount_mismatch(tin, (op + inc)) and tin > 0: # 稍微放开一点容差，处理四舍五入
+            if all(v is not None for v in (tin, op, inc)) and _amount_mismatch(tin, (op + inc), rounding_envelope=rounding_envelope(2)) and tin > 0:
                 issues.append(self._issue(
                     f"【表四】{c_name}收入侧(总={tin:.2f}) != 年初({op:.2f}) + 收入({inc:.2f})",
                     {"col": c_name}, "error",
                     evidence_text=f"表格：财政拨款收入支出决算总表\n列：{c_name}\n收入侧合计：{tin}\n计算：年初({op}) + 收入({inc})"
                 ))
-            if _amount_mismatch(tout, (exp + cl)) and tout > 0:
+            if all(v is not None for v in (tout, exp, cl)) and _amount_mismatch(tout, (exp + cl), rounding_envelope=rounding_envelope(2)) and tout > 0:
                 issues.append(self._issue(
                     f"【表四】{c_name}支出侧(总={tout:.2f}) != 支出({exp:.2f}) + 年末({cl:.2f})",
                     {"col": c_name}, "error",
@@ -6417,14 +7476,20 @@ class R33242_Table4_ComprehensiveCheck(Rule):
                 ))
                 
             # 4. 变动
+            if any(v is None for v in (op, inc, exp, cl)):
+                if any(v is not None and v != 0 for v in (op, inc, exp, cl)):
+                    unresolved.append(f"{c_name} 的年初/收入/支出/年末字段存在空白或未绑定，不能当作零复算")
+                continue
             calc_cl = op + inc - exp
-            if _amount_mismatch(cl, calc_cl) and (cl > 0 or abs(calc_cl) > 0.1):
+            if _amount_mismatch(cl, calc_cl, rounding_envelope=rounding_envelope(3)) and (cl > 0 or abs(calc_cl) > 0.1):
                 issues.append(self._issue(
                     f"【表四】{c_name}结转变动校验失败：年末({cl:.2f}) vs 计算值({calc_cl:.2f})",
                     {"col": c_name}, "error",
                     evidence_text=f"表格：财政拨款收入支出决算总表\n列：{c_name}\n表内年末结转：{cl}\n计算（年初+收入-支出）：{calc_cl}"
                 ))
 
+        if unresolved:
+            raise RuleDeferred(self.code, detail="; ".join(unresolved), partial_issues=issues, unresolved_reasons=unresolved)
         return issues
 
 
@@ -6488,6 +7553,9 @@ class R33221_Narrative4_T4(Rule):
     desc = "说明4↔T4财政拨款总计与结转校验"
 
     def apply(self, doc: Document) -> List[Issue]:
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_table_text import check_fiscal_grant_total
+            return check_fiscal_grant_total(self, doc)
         issues = []
         import re
 
@@ -6513,6 +7581,14 @@ class R33221_Narrative4_T4(Rule):
                 if total_match:
                     narrative_total = float(total_match.group(1).replace(",", ""))
                     narrative_page = pidx + 1
+
+        if getattr(doc, "parse_artifact", None) is not None:
+            scope = _final_section_scope(doc, ("财政拨款收入支出决算总体情况说明",))
+            value = near_number(scope or "", ["财政拨款收入支出总计", "收入支出总计", "总计"])
+            if value is None:
+                raise RuleDeferred(self.code, detail="说明4章节未披露可绑定的财政拨款总计金额")
+            narrative_total = value
+            narrative_page = _find_text_page_after(doc, "财政拨款收入支出决算总体情况说明")
 
         t4_page = _get_first_anchor_page(doc, "财政拨款收入支出决算总表")
         t4_rows = _get_table_rows(doc, "财政拨款收入支出决算总表")
@@ -6562,6 +7638,9 @@ class R33222_Narrative5_T5(Rule):
     desc = "说明5↔T5一般公共预算支出结构校验"
 
     def apply(self, doc: Document) -> List[Issue]:
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_final_disclosure import check_function_disclosures
+            return check_function_disclosures(self, doc)
         issues = []
         import re
 
@@ -6639,11 +7718,10 @@ class R33222_Narrative5_T5(Rule):
             )
 
         # 2. 在文本中搜索 T5 存在的类级科目
-        target_txt = ""
+        target_txt = _final_section_scope(doc, ("一般公共预算财政拨款支出决算情况说明",)) or ""
         narrative_pages: List[int] = []
         for pidx, txt in enumerate(doc.page_texts):
             if "一般公共预算" in txt and ("支出决算" in txt or "财政拨款支出" in txt) and "情况说明" in txt:
-                target_txt += txt + "\n" # 拼接相关文本，防止分页截断
                 narrative_pages.append(pidx + 1)
         
         if not target_txt:
@@ -6657,16 +7735,19 @@ class R33222_Narrative5_T5(Rule):
         # 会命中同页说明一「收入支出总计 26591.08 万元」（含年初结转的另一口径），
         # 导致说明侧取数错误（文旅局样张）。负向断言排除「…支出年初预算为」。
         total_match = re.search(
-            r'一般公共预算财政拨款支出(?!\s*年初预算)[^\d]{0,20}(\d[\d,]*(?:\.\d+)?)\s*万元',
+            r'一般公共预算财政拨款支出(?!\s*年初预算)[^\d]{0,20}(\d[\d,，]*(?:\.\d+)?)\s*万元',
             target_txt,
         )
         if total_match:
-            nar_total = float(total_match.group(1).replace(",", ""))
+            nar_total = float(total_match.group(1).replace(",", "").replace("，", ""))
+            quote = re.sub(r"\s+", "", total_match.group())
+            source_pages = [index + 1 for index, text in enumerate(doc.page_texts)
+                            if quote in re.sub(r"\s+", "", text or "")]
             if t5_total > 0.01 and _amount_mismatch(nar_total, t5_total):
                 location = _make_issue_location(
                     _make_location_ref(
                         role="说明5",
-                        page=narrative_pages[0] if narrative_pages else None,
+                        page=source_pages[0] if len(source_pages) == 1 else None,
                         section="说明5（一般公共预算支出）",
                         field="支出总额",
                         value=nar_total,
@@ -6679,7 +7760,7 @@ class R33222_Narrative5_T5(Rule):
                         field="合计",
                         value=t5_total,
                     ),
-                    pages=narrative_pages,
+                    pages=source_pages,
                     table="一般公共预算财政拨款支出决算表",
                     section="说明5（一般公共预算支出）",
                     row="合计",
@@ -6797,7 +7878,7 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
             mismatched_mentions = [
                 mention
                 for mention in narrative_mentions.get(code, [])
-                if not _functional_name_matches(table_entry["name"], mention["name"])
+                if not _functional_name_identical(table_entry["name"], mention["name"])
             ]
             if not mismatched_mentions:
                 continue
@@ -6859,18 +7940,30 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
                     }
                 )
 
+                if getattr(doc, "parse_artifact", None) is not None:
+                    from .native_name_evidence import functional_name_refs
+                    source_refs = functional_name_refs(doc, code, table_entry["name"], mention)
+                    if source_refs:
+                        location["table_refs"] = source_refs
+                        location["page"] = source_refs[0]["page"]
+                        location["pages"] = sorted({ref["page"] for ref in source_refs})
+
                 evidence_text = (
                     f"编码：{row_label}\n"
                     f"表格名称：{table_entry['name']}\n"
                     f"说明名称：{narrative_name}\n"
                     f"说明片段：{mention.get('snippet', '')}"
                 )
+                suffix_only = _functional_name_matches(table_entry["name"], narrative_name)
+                # 表格名称在格内折行（“一般公共服务\n支出”），提示语里按原文连写。
+                shown_table_name = re.sub(r"\s+", "", table_entry["name"])
                 issues.append(
                     self._issue(
                         f"说明5{level}级科目名称与T5不一致（{row_label}）："
-                        f"表格“{table_entry['name']}”，说明“{narrative_name}”",
+                        f"表格“{shown_table_name}”，说明“{narrative_name}”"
+                        + ("（名称多/少“支出/决算”等字）" if suffix_only else ""),
                         location,
-                        severity="warn",
+                        severity="low" if suffix_only else "warn",
                         evidence_text=evidence_text,
                     )
                 )
@@ -7251,209 +8344,123 @@ class R33224_Narrative7_T7(Rule):
     code, severity = "V33-224", "warn"
     desc = "说明7↔T7三公经费预决算及分项校验"
 
+    def _apply_current_facts(self, doc: Document) -> List[Issue]:
+        if getattr(doc, 'parse_artifact', None) is not None:
+            from .native_table_text import check_three_public_details
+            return check_three_public_details(self, doc, require_vehicle_details=False, check_percentages=True)
+        from .common_rules import _extract_three_public_narrative_v2, three_public_narrative_refs
+
+        scope = _final_section_scope(doc, ("三公",))
+        if not scope:
+            raise RuleDeferred(self.code, detail="未找到三公经费说明正文")
+        narrative = _extract_three_public_narrative_v2(scope)
+        if narrative.get("car_total") is None and all(narrative.get(key) is not None for key in ("car_buy", "car_run")):
+            narrative["car_total"] = narrative["car_buy"] + narrative["car_run"]
+        checks = [("total_final", "三公合计", "total_actual", (), ("合计", "总计")),
+                  ("abroad", "因公出国（境）费", "overseas", ("因公出国",), ()),
+                  ("car_total", "公务用车购置及运行费", "vehicle_purchase_operation", ("公务用车购置及运行",), ()),
+                  ("reception", "公务接待费", "reception", ("公务接待",), ())]
+        issues, unresolved = [], []
+        for key, label, indicator, tokens, names in checks:
+            value, fact, reason = _fact_operand_for_v33(
+                getattr(doc, "fact_context", None), indicator, table_code="FIN_07_three_public",
+                budget_stages=("决算",))
+            if value is None and reason is None:
+                value, fact, reason = _fact_operand_for_v33(
+                    getattr(doc, "fact_context", None), "actual", table_code="FIN_07_three_public",
+                    subject_tokens=tokens, subject_names=names, budget_stages=("决算",))
+            claim = narrative.get(key)
+            fact_ids, evidence_ids = _v33_fact_identity(fact)
+            if fact_ids:
+                if getattr(doc, "structured_consumption", None) is None:
+                    doc.structured_consumption = []
+                doc.structured_consumption.append({
+                    "rule_id": self.code, "table_code": "FIN_07_three_public",
+                    "fact_uids": fact_ids, "fact_version": doc.fact_context.version_token,
+                    "normalized_unit": "万元",
+                })
+            sub_id = f"san_gong:{key}:narrative_vs_actual"
+            if claim is None or value is None:
+                detail = f"{label}：{reason or ('说明未披露决算金额' if claim is None else '表内没有唯一当前决算事实')}"
+                unresolved.append(detail)
+                _v33_relation_receipt(doc, self.code, sub_id, status="insufficient_data",
+                                      operand_fact_ids=fact_ids, formula="narrative.actual == table.actual (万元)",
+                                      incomplete_reason=detail)
+                continue
+            mismatch = amount_difference_exceeds_policy(abs(value - claim))
+            if mismatch:
+                from .native_three_public_ratios import operand_ref
+
+                source_refs = three_public_narrative_refs(doc, scope, key)
+                if not source_refs and key == "car_total":
+                    source_refs = (three_public_narrative_refs(doc, scope, "car_buy")
+                                   + three_public_narrative_refs(doc, scope, "car_run"))
+                if not source_refs:
+                    detail = f"{label}说明金额无法绑定到原文"
+                    unresolved.append(detail)
+                    _v33_relation_receipt(doc, self.code, sub_id, status="insufficient_data",
+                                          operand_fact_ids=fact_ids, incomplete_reason=detail)
+                    continue
+                page = source_refs[0]["page"] if source_refs else None
+                issues.append(self._issue(
+                    f"说明7↔T7{label}决算金额不一致：说明={claim:.2f}万元，表内={value:.2f}万元",
+                    {"page": page, "table": "财政拨款“三公”经费支出决算表", "field": label,
+                     "operand_refs": [operand_ref(fact, "表7决算金额")], "table_refs": source_refs,
+                     "fact_context_version_token": doc.fact_context.version_token}, "warn",
+                    evidence_text="\n".join(ref["span"] for ref in source_refs),
+                    check_relation_id=f"{self.code}:{sub_id}", fact_ids=fact_ids, evidence_ids=evidence_ids))
+            _v33_relation_receipt(doc, self.code, sub_id, status="fail" if mismatch else "pass",
+                                  operand_fact_ids=fact_ids, formula="narrative.actual == table.actual (万元)")
+        from .native_three_public_ratios import check_shares
+        share_issues, share_unresolved = check_shares(
+            self, doc, scope, getattr(getattr(doc, "fact_context", None), "fiscal_year", None)
+        ) if getattr(doc, "parse_artifact", None) is not None else ([], [])
+        issues.extend(share_issues)
+        unresolved.extend(share_unresolved)
+        if unresolved:
+            raise RuleDeferred(self.code, detail="；".join(unresolved), partial_issues=issues, unresolved_reasons=unresolved)
+        return issues
+
     def apply(self, doc: Document) -> List[Issue]:
-        issues = []
-        import re
-
+        if getattr(doc, "parse_artifact", None) is not None or getattr(doc, "fact_context", None) is not None:
+            return self._apply_current_facts(doc)
+        # Older callers without a fiscal snapshot still require a semantic
+        # budget/actual column identity. Missing columns are unfinished checks,
+        # never evidence that the document contains an inconsistent amount.
+        from .common_rules import (
+            _extract_three_public_narrative_v2, _extract_t7_strict_grid,
+            three_public_narrative_refs,
+        )
+        scope = _final_section_scope(doc, ("三公",))
+        if not scope:
+            raise RuleDeferred(self.code, detail="未找到三公经费说明正文")
+        narrative = _extract_three_public_narrative_v2(scope)
         _ensure_table_anchors(doc)
-        # 1. 提取叙述数据：限定在「三公」经费支出决算情况说明章节内
-        # （旧实现取首个含"三公"的页——可能是目录页）；提取不到回退旧行为
-        target_txt = _final_section_scope(doc, ("三公",)) or ""
-        narrative_page: Optional[int] = None
-        if target_txt:
-            for pidx, txt in enumerate(doc.page_texts):
-                if "三公" in txt and ("支出决算" in txt or "年初预算" in txt):
-                    narrative_page = pidx + 1
-                    break
-        else:
-            for pidx, txt in enumerate(doc.page_texts):
-                if "三公" in txt and ("情况说明" in txt or "经费支出" in txt):
-                    target_txt = txt  # 简单取最后一页匹配到的？通常只有一处
-                    narrative_page = pidx + 1
-                    break
-        
-        if not target_txt:
-            raise RuleDeferred(
-                self.code,
-                detail="未找到三公经费情况说明文本",
-                unresolved_reasons=["未找到三公经费情况说明文本"],
-            )
-
-        # 提取逻辑：
-        # 针对每个分项，找“预算为XX万元”、“决算为XX万元”
-        # 这比较难，因为行文可能是 "因公出国费预算XX万元...决算XX万元" 
-        # 也可能是 "三公经费支出XX万元...其中：因公出国XX万元" (只提决算)
-        
-        # 尝试提取决算数 (通常格式：XXX支出 XXX 万元)
-        # 这是一个简化处理，实际NLP更复杂。我们使用简单的“关键词附近找数字”策略
-        
-        def find_val_near_key(text, keywords):
-            # 找到关键词最后出现的位置，向后找数字
-            best_pos = -1
-            for k in keywords:
-                p = text.find(k)
-                if p > best_pos: best_pos = p
-            
-            if best_pos == -1: return None
-            
-            # 截取关键词后的一段文字
-            sub = text[best_pos:best_pos+100]
-            # 找第一个金额 "XXX 万元"
-            m = re.search(r'(\d+\.?\d*)\s*万元', sub)
-            if m:
-                return float(m.group(1))
-            return None
-
-        # 提取各项决算数
-        nar_final_total = find_val_near_key(target_txt, ['三公经费支出', '合计'])
-        nar_final_abroad = find_val_near_key(target_txt, ['因公出国'])
-        nar_final_car = find_val_near_key(target_txt, ['公务用车购置及运行', '公务用车'])
-        nar_final_recept = find_val_near_key(target_txt, ['公务接待'])
-
-        # 2. 获取 T7 数据（MR-1：锚点名同时试弯引号/直引号两种变体——
-        # 4 份冻结样张的锚点均为弯引号“三公”，旧实现只用直引号恒查不到）
-        t7_page = _get_first_anchor_page(
-            doc, '一般公共预算财政拨款“三公”经费支出决算表'
-        ) or _get_first_anchor_page(
-            doc, '一般公共预算财政拨款"三公"经费支出决算表'
-        )
-        t7_rows = _get_table_rows(
-            doc, '一般公共预算财政拨款“三公”经费支出决算表'
-        ) or _get_table_rows(
-            doc, '一般公共预算财政拨款"三公"经费支出决算表'
-        )
-        if not t7_rows:
-            raise RuleDeferred(
-                self.code,
-                detail='一般公共预算财政拨款"三公"经费支出决算表(T7)缺失',
-                unresolved_reasons=['一般公共预算财政拨款"三公"经费支出决算表(T7)缺失'],
-            )
-        
-        # T7 结构：... | 因公出国 | 公务用车(小计) | ... | 公务接待
-        # 同样难以通过列索引定位，尝试通过表头匹配
-        # 或者直接找行中的关键词（如果是转置表？）——通常T7是宽表，一行表头，一行数据
-        # 也不排除是清单式。这里假设是标准宽表，最后一行是决算数
-        
-        # 策略：扫描所有行，找到包含数据的行，解析出所有数值
-        # 然后尝试匹配
-        
-        t7_vals = []
-        for row in t7_rows:
-            vs = _parse_row_values(row)
-            if vs: t7_vals.extend(vs)
-        
-        # 校验合计
-        if nar_final_total is not None:
-             # 在表内找是否存在该值 (0.01容差)
-             if not any(abs(v - nar_final_total) <= 0.01 for v in t7_vals):
-                 location = _make_issue_location(
-                     _make_location_ref(
-                         role="说明7",
-                         page=narrative_page,
-                         section="说明7（三公经费情况）",
-                         field="三公经费合计",
-                         value=nar_final_total,
-                     ),
-                     _make_location_ref(
-                         role="T7",
-                         page=t7_page,
-                         table='一般公共预算财政拨款"三公"经费支出决算表',
-                         row="合计",
-                         field="三公经费合计",
-                     ),
-                     table='一般公共预算财政拨款"三公"经费支出决算表',
-                     section="说明7（三公经费情况）",
-                     row="合计",
-                     field="三公经费合计",
-                 )
-                 issues.append(self._issue(
-                     f"说明7↔T7三公合计不一致：说明={nar_final_total:.2f}, T7未找到对应值",
-                     location, "warn",
-                     evidence_text=f"文档说明(三公合计)：{nar_final_total}\n表7内所有数值：{t7_vals}"
-                 ))
-        
-        # 校验分项 (仅当分项值 > 0 时)
-        # 出国
-        if nar_final_abroad is not None and nar_final_abroad > 0:
-            if not any(abs(v - nar_final_abroad) <= 0.01 for v in t7_vals):
-                 location = _make_issue_location(
-                     _make_location_ref(
-                         role="说明7",
-                         page=narrative_page,
-                         section="说明7（三公经费情况）",
-                         field="因公出国",
-                         value=nar_final_abroad,
-                     ),
-                     _make_location_ref(
-                         role="T7",
-                         page=t7_page,
-                         table='一般公共预算财政拨款"三公"经费支出决算表',
-                         field="因公出国",
-                     ),
-                     table='一般公共预算财政拨款"三公"经费支出决算表',
-                     section="说明7（三公经费情况）",
-                     field="因公出国",
-                 )
-                 issues.append(self._issue(
-                     f"说明7↔T7因公出国不一致：说明={nar_final_abroad:.2f}",
-                     location, "warn",
-                     evidence_text=f"文档说明(因公出国)：{nar_final_abroad}\n表7内数据未找到匹配值"
-                 ))
-
-        # 用车
-        if nar_final_car is not None and nar_final_car > 0:
-            if not any(abs(v - nar_final_car) <= 0.01 for v in t7_vals):
-                 location = _make_issue_location(
-                     _make_location_ref(
-                         role="说明7",
-                         page=narrative_page,
-                         section="说明7（三公经费情况）",
-                         field="公务用车",
-                         value=nar_final_car,
-                     ),
-                     _make_location_ref(
-                         role="T7",
-                         page=t7_page,
-                         table='一般公共预算财政拨款"三公"经费支出决算表',
-                         field="公务用车",
-                     ),
-                     table='一般公共预算财政拨款"三公"经费支出决算表',
-                     section="说明7（三公经费情况）",
-                     field="公务用车",
-                 )
-                 issues.append(self._issue(
-                     f"说明7↔T7公务用车不一致：说明={nar_final_car:.2f}",
-                     location, "warn",
-                     evidence_text=f"文档说明(公务用车)：{nar_final_car}\n表7内数据未找到匹配值"
-                 ))
-                 
-        # 接待
-        if nar_final_recept is not None and nar_final_recept > 0:
-            if not any(abs(v - nar_final_recept) <= 0.01 for v in t7_vals):
-                 location = _make_issue_location(
-                     _make_location_ref(
-                         role="说明7",
-                         page=narrative_page,
-                         section="说明7（三公经费情况）",
-                         field="公务接待",
-                         value=nar_final_recept,
-                     ),
-                     _make_location_ref(
-                         role="T7",
-                         page=t7_page,
-                         table='一般公共预算财政拨款"三公"经费支出决算表',
-                         field="公务接待",
-                     ),
-                     table='一般公共预算财政拨款"三公"经费支出决算表',
-                     section="说明7（三公经费情况）",
-                     field="公务接待",
-                 )
-                 issues.append(self._issue(
-                     f"说明7↔T7公务接待不一致：说明={nar_final_recept:.2f}",
-                     location, "warn",
-                     evidence_text=f"文档说明(公务接待)：{nar_final_recept}\n表7内数据未找到匹配值"
-                 ))
-
+        title = '一般公共预算财政拨款“三公”经费支出决算表'
+        rows = _get_table_rows(doc, title) or _get_table_rows(doc, title.replace('“', '"').replace('”', '"'))
+        grid = _extract_t7_strict_grid(rows)
+        if grid is None:
+            raise RuleDeferred(self.code, detail="三公表缺少可识别的预算/决算列")
+        issues, unresolved = [], []
+        for key, column, label in [("total_final", "total", "三公合计"),
+                                   ("abroad", "abroad", "因公出国"),
+                                   ("car_total", "car_sub", "公务用车"),
+                                   ("reception", "reception", "公务接待")]:
+            claim, value = narrative.get(key), grid["final"].get(column)
+            if claim is None or value is None:
+                unresolved.append(f"{label}说明或表内决算金额未唯一识别")
+                continue
+            if not amount_difference_exceeds_policy(abs(claim - value)):
+                continue
+            refs = three_public_narrative_refs(doc, scope, key)
+            issues.append(self._issue(
+                f"说明7↔T7{label}决算金额不一致：说明={claim:.2f}万元，表内={value:.2f}万元",
+                {"page": refs[0]["page"] if refs else None, "table": title,
+                 "field": label, "table_refs": refs}, "manual_review",
+                evidence_text="\n".join(ref["span"] for ref in refs)))
+        if unresolved:
+            raise RuleDeferred(self.code, detail="；".join(unresolved),
+                               partial_issues=issues, unresolved_reasons=unresolved)
         return issues
 
 
@@ -7463,6 +8470,9 @@ class R33226_Narrative2_T2(Rule):
     desc = "说明2↔T2收入决算金额结构校验"
 
     def apply(self, doc: Document) -> List[Issue]:
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_table_text import check_income_structure
+            return check_income_structure(self, doc)
         issues = []
         import re
 
@@ -7697,6 +8707,8 @@ def _extract_final_formula_rows(rows: List[List[str]]) -> Tuple[List[Dict[str, A
     """
     headers = _extract_header_labels(rows, depth=3)
     norm_headers = [normalize_text(header) for header in headers]
+    extra_columns = {idx: header for idx, header in enumerate(norm_headers)
+                     if any(token in header for token in ("上缴上级支出", "经营支出", "对附属单位补助支出"))}
 
     idx_total: Optional[int] = None
     idx_basic: Optional[int] = None
@@ -7735,7 +8747,10 @@ def _extract_final_formula_rows(rows: List[List[str]]) -> Tuple[List[Dict[str, A
             total = parse_number(cells[idx_total]) if idx_total < len(cells) else None
             basic = parse_number(cells[idx_basic]) if idx_basic < len(cells) else None
             project = parse_number(cells[idx_project]) if idx_project < len(cells) else None
+            extra = [parse_number(cells[col]) if col < len(cells) else None for col in extra_columns]
         else:
+            if extra_columns:
+                continue  # Extra monetary columns cannot be realigned by position.
             # 跨页续行：列语义整体位移，按行自适应定位（名称/合计/基本/项目）
             adaptive = _adaptive_value_cols(row)
             if adaptive is None:
@@ -7745,6 +8760,7 @@ def _extract_final_formula_rows(rows: List[List[str]]) -> Tuple[List[Dict[str, A
             total = parse_number(cells[t_col]) if t_col < len(cells) else None
             basic = parse_number(cells[b_col]) if b_col < len(cells) else None
             project = parse_number(cells[p_col]) if p_col < len(cells) else None
+            extra = []
         if not name or ("\u5408\u8ba1" in name) or ("\u603b\u8ba1" in name):
             continue
 
@@ -7765,12 +8781,14 @@ def _extract_final_formula_rows(rows: List[List[str]]) -> Tuple[List[Dict[str, A
                 "total": float(total),
                 "basic": float(basic),
                 "project": float(project),
+                "other_expenditure": sum(value for value in extra if value is not None),
+                "other_expenditure_complete": all(value is not None for value in extra),
             }
         )
     return extracted, True
 
 
-_FINAL_ITEM_START_RE = re.compile(r"(?:(?<=\n)|^|\s{2,})(?P<marker>\d+\u3001)")
+_FINAL_ITEM_START_RE = re.compile(r"(?:(?<=\n)|^|\s{2,})(?P<marker>\d+[、.．])(?!\d)")
 # 关键词内允许软换行：文本层页内折行会把「决算 / 预算」拆成「决\n算」，
 # 若不容忍则配对会跨越「其中：」落到子项金额上
 # （MR-P5b，028 号材料 p23 实证：总句预算 68.60 被拼到出国决算 40.87）。
@@ -7847,10 +8865,26 @@ def _iter_final_narrative_segments(doc: Document) -> List[Tuple[int, str]]:
         for idx, match in enumerate(matches):
             start = match.start("marker")
             end = matches[idx + 1].start("marker") if idx + 1 < len(matches) else len(text)
+            # 数字科目项的最后一项常与下一主章节同页。主章节的预算/决算
+            # 不属于前项，不能沿用前项科目身份或借它的原因说明完成率。
+            next_section = re.search(
+                r"(?:^|\n)\s*[一二三四五六七八九十]+、[^\n。；;]{0,70}(?:说明|情况)",
+                text[start:end],
+            )
+            if next_section:
+                end = start + next_section.start()
             segment = text[start:end].strip()
             if not segment:
                 continue
-            if ("\u51b3\u7b97" not in segment) and ("\u9884\u7b97" not in segment) and ("%" not in segment):
+            # 科目项可能仅写「公务接待费支出39.76万元」，决算身份来自上层
+            # 章节。截断后仍保留这类有明确单位的金额段；缺同项配对时不比较，
+            # 也不借下一章节的决算金额补齐。
+            if (
+                ("\u51b3\u7b97" not in segment)
+                and ("\u9884\u7b97" not in segment)
+                and ("%" not in segment)
+                and not extract_amounts(segment)
+            ):
                 continue
             segments.append((page_num, segment))
     return segments
@@ -7858,7 +8892,7 @@ def _iter_final_narrative_segments(doc: Document) -> List[Tuple[int, str]]:
 
 def _final_segment_subject(segment: str) -> str:
     head = re.split(r"[\u3002\uff1b;\n]", segment, maxsplit=1)[0].strip()
-    head = re.sub(r"^\d+\u3001", "", head).strip()
+    head = re.sub(r"^\d+[、.．]", "", head).strip()
     return head[:80] if len(head) > 80 else head
 
 
@@ -7897,13 +8931,16 @@ class R33233_DetailRowFormulaConsistency(Rule):
                 )
                 continue
             for entry in entries:
-                calc = entry["basic"] + entry["project"]
-                if tolerant_equal(entry["total"], calc, atol=1.0, rtol=0.001):
+                calc = entry["basic"] + entry["project"] + entry.get("other_expenditure", 0)
+                if tolerant_equal(entry["total"], calc, atol=1.0, rtol=0.001, terms=3):
+                    continue
+                if not entry.get("other_expenditure_complete", True):
+                    unresolved.append(f"{table_name} {entry['row_label']} 的其他支出分项有空白，不能据此断言基本加项目等于全部支出")
                     continue
                 row_page = _find_text_page_after(doc, entry.get("row_text", ""), start_page=table_page) or table_page
                 issues.append(
                     self._issue(
-                        f"{table_name}明细行勾稽错误（{entry['row_label']}）：合计={entry['total']:.2f}，基本+项目={calc:.2f}",
+                        f"{table_name}明细行勾稽错误（{entry['row_label']}）：合计={entry['total']:.2f}，基本+项目+其他支出分项={calc:.2f}",
                         {
                             "page": row_page,
                             "table": table_name,
@@ -7936,13 +8973,23 @@ class R33234_NarrativePercentConsistency(Rule):
     desc = "决算说明同比/完成率百分比复算"
 
     def apply(self, doc: Document) -> List[Issue]:
-        issues: List[Issue] = []
+        from .native_narrative_quality import check_quality_relations
+        issues, quality_unresolved = check_quality_relations(self, doc)
+        from .native_disclosure_semantics import check_disclosure_semantics
+        semantic_issues, semantic_unresolved = check_disclosure_semantics(self, doc)
+        issues.extend(semantic_issues)
+        from .native_narrative_checks import check_narrative_relations
+        relationship_issues, unresolved = check_narrative_relations(self, doc)
+        issues.extend(relationship_issues)
+        unresolved.extend(quality_unresolved)
+        unresolved.extend(semantic_unresolved)
         segments = list(_iter_final_narrative_segments(doc))
         if not segments:
             raise RuleDeferred(
                 self.code,
                 detail="未提取到决算情况说明分段文本",
-                unresolved_reasons=["未提取到决算情况说明分段文本"],
+                partial_issues=issues,
+                unresolved_reasons=["未提取到决算情况说明分段文本", *unresolved],
             )
         for page_num, segment in segments:
             subject = _final_segment_subject(segment)
@@ -7996,9 +9043,17 @@ class R33234_NarrativePercentConsistency(Rule):
 
                 expected_pct = final_val / budget_val * 100.0
                 if not percentage_difference_exceeds_policy(abs(reported_pct - expected_pct)):
-                    next_page_text = (
-                        doc.page_texts[page_num] if page_num < len(doc.page_texts) else ""
-                    )
+                    page_text = doc.page_texts[page_num - 1]
+                    segment_end = page_text.rfind(segment) + len(segment)
+                    # 只有确在物理页尾结束的科目项才可续读次页；若该项已被
+                    # 同页主章节截断，次页三公原因不能替前面的购房项补说明。
+                    at_page_end = re.fullmatch(r"\s*(?:\d{1,3})?\s*", page_text[segment_end:])
+                    next_page_text = doc.page_texts[page_num] if at_page_end and page_num < len(doc.page_texts) else ""
+                    if next_page_text:
+                        next_page_text = re.split(
+                            r"(?:^|\n)\s*(?:\d+[、.．]|[一二三四五六七八九十]+、|[（(][一二三四五六七八九十]+[）)])",
+                            next_page_text, maxsplit=1,
+                        )[0]
                     if (
                         percentage_difference_exceeds_policy(abs(expected_pct - 100.0))
                         and not _completion_rate_has_reason(segment, match, tail=next_page_text)
@@ -8022,6 +9077,9 @@ class R33234_NarrativePercentConsistency(Rule):
                         evidence_text=segment.replace("\n", " "),
                     )
                 )
+        if unresolved:
+            raise RuleDeferred(self.code, detail="；".join(unresolved), partial_issues=issues,
+                               unresolved_reasons=unresolved)
         return issues
 
 
@@ -8039,6 +9097,10 @@ class R33235_NarrativeAmountConsistency(Rule):
                 unresolved_reasons=["未提取到决算情况说明分段文本"],
             )
         for page_num, segment in segments:
+            segment = re.split(
+                r"(?:^|\n)\s*[一二三四五六七八九十]+、[^\n。；;]{0,60}(?:说明|情况)",
+                segment, maxsplit=1,
+            )[0]
             front_match = _FINAL_ITEM_OPENING_AMOUNT_RE.search(segment)
             final_match = _FINAL_ITEM_DECISION_AMOUNT_RE.search(segment)
             if not front_match or not final_match:
@@ -8049,8 +9111,13 @@ class R33235_NarrativeAmountConsistency(Rule):
             # （开头无金额，文旅局样张格式），首个数字会是**年初预算**——拿它和决算比必然
             # 不等，曾一次性产出 20 条误报。故开头金额落在"年初预算"之后的一律不判。
             # 注意：PDF 软换行会在字间插空格（"年 初预算"、"年初预 算为"），
-            # 定位"年初预算"必须允许字符间空白，否则守卫失效。
-            budget_hint = re.search(r"年\s*初\s*预\s*算", segment)
+            # 也可能明确写作“年初部门预算/年初单位预算”；这些仍是预算阶段。
+            # “全年预算为 X 万元”“调整后预算”同属预算阶段（容差收紧到 0.01
+            # 万元后，普陀样张「全年预算为18.12万元，支出决算为17.70万元」暴露）。
+            budget_hint = re.search(
+                r"(?:年\s*初|全\s*年|调\s*整\s*(?:后\s*)?)\s*(?:(?:部\s*门|单\s*位)\s*)?预\s*算",
+                segment,
+            )
             if budget_hint and front_match.start("front") > budget_hint.start():
                 continue
 
@@ -8080,6 +9147,14 @@ class R33236_DocumentScopeTerminology(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         scope = _infer_final_scope(doc)
         if not scope:
+            # 封面只写“××年度决算”（上海 2022 单位决算）时，按目录与各部分标题判口径，
+            # 与 CMM-018 同一严格口径。
+            from src.services.fiscal_source_scope import heading_scope
+
+            scope = heading_scope("\n".join(list(doc.page_texts or [])[1:]), "final")
+        if not scope:
+            if not any(re.search(r"(?:部门|单位)决算安排", text or "") for text in doc.page_texts):
+                return []  # 两种“…决算安排”都没写，口径不影响本规则结论
             raise RuleDeferred(
                 self.code,
                 detail="未能识别决算材料口径（部门决算或单位决算）",
@@ -8155,9 +9230,10 @@ class R33232_PercentagePrecision(Rule):
             for pidx, txt in enumerate(doc.page_texts):
                 # 查找所有百分比
                 pct_pattern = r'(\d+\.?\d*)\s*%'
-                matches = re.findall(pct_pattern, txt)
+                matches = re.finditer(pct_pattern, txt)
                 
-                for pct_str in matches:
+                for match in matches:
+                    pct_str = match.group(1)
                     try:
                         float(pct_str)
                     except ValueError:
@@ -8168,8 +9244,10 @@ class R33232_PercentagePrecision(Rule):
                         if decimal_places > 2:
                             issues.append(self._issue(
                                 f"规范性提示：第{pidx+1}页发现超过两位小数的百分比({pct_str}%)，建议四舍五入。",
-                                {"page": pidx + 1, "pct": pct_str}, "info",
-                                evidence_text=f"发现位置：P{pidx+1}\n百分比数值：{pct_str}%"
+                                {"page": pidx + 1, "pct": pct_str,
+                                 "table_refs": [{"page": pidx + 1, "role": "百分比精度",
+                                                 "span": match.group(0)}]}, "info",
+                                evidence_text=match.group(0)
                             ))
             
             return issues
@@ -8231,6 +9309,9 @@ class R33245_ThreePublicDirectionContradiction(Rule):
                 if not subject:
                     continue
                 direction = clause_direction(clause)
+                # “基本持平”是近似描述，不能推导为严格零增长。
+                if direction == "flat" and re.search(r"(?:基本|大体|大致|总体|相对)\s*持平", clause):
+                    continue
                 if direction:
                     directions[subject].append((direction, clause))
 
@@ -8300,35 +9381,62 @@ class R33246_DomesticReceptionDisclosure(Rule):
         # - 只按分句判：会把「接待外宾 0 批次、0 人次」拆出的「0 人次」误判成国内
         #   （语料 T6 漏报）。
         # 状态机：遇 外宾/境外/国外 置外事口径，遇 国内/公务接待 切回国内，
-        #         计数词归属当时的口径；句子边界处重置为国内。
+        #         计数词归属当时的口径；跨句外宾分项保留口径直到明确切换。
         def _para_disclosure(para: str) -> Tuple[bool, bool]:
-            domestic = False
+            domestic_counts = set()
             foreign = False
+            state_foreign = False
             for sentence in re.split(r"[。；;！!]", para):
-                state_foreign = False
                 for clause in split_clauses(sentence):
                     compact_c = re.sub(r"\s+", "", clause)
                     if not compact_c:
                         continue
-                    if "外宾" in compact_c or "境外" in compact_c or "国外" in compact_c:
+                    counts = set()
+                    for label, aliases in (("批次", ("批次",)), ("人次", ("人次", "人数"))):
+                        if any(re.search(r"\d+(?:[,，]\d{3})*(?:个)?" + alias + "|" + alias + r"\d+(?:[,，]\d{3})*", compact_c) for alias in aliases):
+                            counts.add(label)
+                    # 原文也会用「国内公务接待共18次、114人次」。只在明确
+                    # 接待主体下接受「次」，并排除人次，不能拿任意次数补披露。
+                    if re.search(
+                        r"(?:国内公务接待|公务接待|接待外宾|外宾接待)(?:共|计|合计)?"
+                        r"\d+(?:[,，]\d{3})*次(?!数)",
+                        compact_c,
+                    ):
+                        counts.add("批次")
+                    if (counts or re.match(r"(?:其中[：:]?)?(?:接待外宾|境外|国外)", compact_c)) and any(
+                        word in compact_c for word in ("外宾", "境外", "国外", "外事")
+                    ):
                         state_foreign = True
-                    if "国内" in compact_c or "公务接待" in compact_c:
+                    if "国内" in compact_c or (
+                        "公务接待" in compact_c
+                        and not any(word in compact_c for word in ("外宾", "境外", "国外", "外事"))
+                    ):
                         state_foreign = False
-                    if "批次" in compact_c or "人次" in compact_c:
+                    if counts:
                         if state_foreign:
                             foreign = True
                         else:
-                            domestic = True
-            return domestic, foreign
+                            domestic_counts.update(counts)
+            return domestic_counts == {"批次", "人次"}, foreign
 
         # 披露完整性按**整个三公章节**判定：国内批次/人次只要在任一段落披露过即完整。
         # 长风样张把说明拆成两段（前段只有金额、后段才有「1 批次、7 人次」），
         # 逐段判定会对前段重复产出误报。
         candidate_paras: List[str] = []
         section_domestic = False
+        reception_context = False
+        reception_paras: List[str] = []
         for para in merge_soft_wrapped_lines(scope_text):
-            if "公务接待" not in para:
+            item = re.match(r"\s*\d+[、.．]\s*(因公出国|公务用车|公务接待)", para)
+            if item:
+                reception_context = item.group(1) == "公务接待"
+            if "国内公务接待" in para:
+                reception_context = True
+            if "公务接待" not in para and not (
+                reception_context and any(word in para for word in ("接待", "批次", "人次"))
+            ):
                 continue
+            reception_paras.append(para)
             clauses = split_clauses(para)
             # 该段是否为公务接待具体说明（含批次/人次语境或接待支出语境）
             if not any("批次" in clause or "人次" in clause or "国内公务接待" in clause for clause in clauses):
@@ -8337,6 +9445,12 @@ class R33246_DomesticReceptionDisclosure(Rule):
             para_domestic, _para_foreign = _para_disclosure(para)
             if para_domestic:
                 section_domestic = True
+
+        # Counts may follow the amount in a separate sentence/soft-wrapped
+        # paragraph. Read only the anchored reception scope; foreign-only
+        # counts keep their own subject and cannot complete domestic disclosure.
+        if reception_paras:
+            section_domestic = section_domestic or _para_disclosure("。".join(reception_paras))[0]
 
         if section_domestic:
             return issues
@@ -8538,6 +9652,13 @@ class R33SGCompletion(Rule):
                 evidence_text=f"{section_tag}{evidence_para[:200]}",
                 section_id=section_title,
             ))
+        # 口径决议④（清单 A-08 八字段）：金额驱动的数量要素与车辆保有量。
+        from .three_public_counts import count_issues
+
+        issues.extend(count_issues(
+            self, doc, report_kind="final", scope=scope, section_title=section_title,
+            locate_page=R33245_ThreePublicDirectionContradiction._locate_page,
+        ))
         return issues
 
     # ------------------------------------------------------------------
@@ -8662,6 +9783,28 @@ _SAN_GONG_ECON_ITEM_SPECS: Tuple[Tuple[str, str, Tuple[str, ...], str], ...] = (
 )
 
 
+#: 2025 版部门支出经济分类把 302 款重新编号（30209 差旅费、30211 因公出国（境）费用、
+#: 30216 公务接待费、30229 公务用车运行维护费）。版本按材料自身判断，不按年度：
+#: 同期的预算仍用旧编码，只在本表差旅费印为 30209 时才改用新编码。
+_SAN_GONG_ECON_CODES_2025 = {"overseas": "30211", "vehicle_operation": "30229", "reception": "30216"}
+
+
+def _econ_table_uses_2025_codes(table6: Any) -> bool:
+    """本表差旅费的编码（名称前连续的整数格拼接，单格或类款拆格）是否为 30209。"""
+    for row in table6.rows:
+        parts: List[str] = []
+        for cell in row.cells:
+            if cell.text:
+                # 拆格的款编码按数值读成 9，须补回两位（"302" + "09"）。
+                code = parts[0] + "".join(part.zfill(2) for part in parts[1:]) if parts else ""
+                if _normalize_item_label(cell.text) == "差旅费" and code == "30209":
+                    return True
+                parts = []
+            elif cell.number is not None and cell.number == cell.number.to_integral_value():
+                parts.append(str(int(cell.number)))
+    return False
+
+
 def _normalize_item_label(text: Any) -> str:
     """业务项名称归一：去空白 + 全角括号统一。
 
@@ -8718,6 +9861,15 @@ def _ensure_parsed_tables(doc: Document) -> bool:
     自建一次（纯函数、确定性），不退回"全文正则抓数字 / 按数字距离猜列"的
     旧表征。已挂载时一律复用，保证同一份材料只有一份结构化事实。
     """
+    artifact = getattr(doc, "parse_artifact", None)
+    if artifact is not None:
+        from .native_rule_tables import build_native_rule_tables
+
+        identity = (artifact.parse_run_uid, getattr(getattr(doc, "fact_context", None), "version_token", None))
+        if getattr(doc, "parsed_tables_identity", None) != identity:
+            doc.parsed_tables = build_native_rule_tables(doc)
+            doc.parsed_tables_identity = identity
+        return bool(doc.parsed_tables)
     tables = getattr(doc, "parsed_tables", None)
     if isinstance(tables, dict) and tables:
         return True
@@ -8889,6 +10041,8 @@ def _three_public_column_groups(table: Any) -> Tuple[Dict[str, Any], List[str]]:
     reasons: List[str] = []
     for group in table.column_groups:
         subject = _normalize_item_label(group.subject)
+        if subject == _normalize_item_label("公务用车运行费"):
+            subject = _normalize_item_label("公务用车运行维护费")
         if not subject:
             continue
         if subject in groups:
@@ -9009,7 +10163,10 @@ class R33CrossSanGongEcon(Rule):
         # 用集合逐项记账而不是拿原因文本做子串匹配——后者会把"别项的失败"错连到本项。
         blocked: Set[str] = set()
         basic: Dict[str, Dict[str, Any]] = {}
+        codes_2025 = _econ_table_uses_2025_codes(table6)
         for key, subject, names, expected_code in _SAN_GONG_ECON_ITEM_SPECS:
+            if codes_2025:
+                expected_code = _SAN_GONG_ECON_CODES_2025.get(key, expected_code)
             normalized_names = tuple(_normalize_item_label(name) for name in names)
             found: List[Dict[str, Any]] = []
             conflict = ""
@@ -9362,8 +10519,13 @@ _TXT_FUND_ITEM_RE = re.compile(
     r"(?P<klass>[^，。；：:、（）()]{1,40}?)\s*（\s*类\s*）\s*"
     r"(?P<kuan>[^，。；：:、（）()]{1,60}?)\s*（\s*款\s*）\s*"
     r"(?P<xiang>[^，。；：:、（）()]{1,60}?)\s*（\s*项\s*）\s*"
+    # Standard numbered explanations disclose the item decision after its
+    # purpose and initial budget. Only the explicit 支出决算锚可取金额；
+    # never cross another item or a 其中 decomposition to obtain that number.
+    r"(?:[。.]\s*(?:(?![（(]\s*(?:类|款|项)\s*[）)]|其中|\n\s*\d+[、.．]).){0,260}?"
+    r"支\s*出\s*决\s*算(?:\s*数)?\s*(?:为)?\s*)?"
     r"[，,]?\s*(?P<amount>\d[\d,，]*(?:\.\d+)?)\s*"
-    r"(?P<unit>万\s*元|亿\s*元|元)"
+    r"(?P<unit>万\s*元|亿\s*元|元)", re.S
 )
 
 #: 说明句前缀里的显式年份（期间锚）：与材料年度不同的年份出现在同一句里，
@@ -9413,6 +10575,22 @@ def _txt_fund_page_for(offsets: List[int], position: int) -> int:
         else:
             break
     return page
+
+
+def _txt_fund_body_without_page_footers(doc, section, offsets):
+    """只遮掉与物理页相符的末行页码，保留长度以回到未经改写的原文证据。"""
+    body = list(section['body'])
+    start = section['body_start']
+    for number, page in enumerate(getattr(doc, 'page_texts', []) or [], 1):
+        text = str(page or '')
+        footer = re.search(r'(?:^|\n)[ \t]*(\d+)[ \t]*$', text)
+        if footer is None or int(footer.group(1)) != number:
+            continue
+        for position in range(offsets[number - 1] + footer.start(1), offsets[number - 1] + footer.end(1)):
+            local = position - start
+            if 0 <= local < len(body):
+                body[local] = ' '
+    return ''.join(body)
 
 
 def _txt_fund_section(
@@ -9523,7 +10701,7 @@ def _txt_fund_table_columns(table: Any) -> Tuple[Optional[Dict[str, int]], str]:
         )
         if not (has_basic and has_project):
             continue
-        totals = [i for i, t in enumerate(texts) if t == "合计" and expend_col <= i < year_end_col]
+        totals = [i for i, t in enumerate(texts) if t in {"合计", "小计"} and expend_col <= i < year_end_col]
         if len(totals) > 1:
             return None, "本年支出列段内「合计」子表头出现多次，列身份有歧义"
         if totals:
@@ -9604,7 +10782,7 @@ def _txt_fund_match_item(
 
 
 def _txt_fund_bind_statements(
-    body: str, fiscal_year: Optional[int]
+    body: str, fiscal_year: Optional[int], *, source_body: Optional[str] = None
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
     """绑定说明章节里的项级支出金额句。
 
@@ -9675,7 +10853,7 @@ def _txt_fund_bind_statements(
                 "unit": unit,
                 "scale": scale,
                 "offset": m.start(),
-                "span": m.group(0),
+                "span": (source_body[m.start():m.end()] if source_body is not None else m.group(0)),
             }
         )
     # 同一业务项出现多个不同金额：取哪个无从证明（同段矛盾归其它规则）→ 不比较该项
@@ -9743,6 +10921,22 @@ class R33TxtFundDetail(Rule):
     ) -> None:
         scope_key, scope_label, table_title, aliases, section_keywords = scope
         section = _txt_fund_section(merged, offsets, section_keywords)
+
+        # Native empty tables plus a literal no-budget disclosure have no item
+        # amounts to compare. Do not require a numeric-column parser to certify
+        # that disclosure or manufacture zero facts from blank cells.
+        artifact = getattr(doc, "parse_artifact", None)
+        if artifact is not None and (section is None or not _TXT_FUND_ITEM_RE.search(section["body"])):
+            from src.engine.fact_context import _fragment_for_instance
+            from src.services.fiscal_empty_disclosure import disclosed_empty_fiscal_table
+
+            code = "FIN_08_gov_fund" if scope_key == "gov_fund" else "FIN_09_state_capital"
+            candidates = [(instance, _fragment_for_instance(artifact, instance))
+                          for instance in artifact.logical_tables if instance.table_code == code]
+            candidates = [(instance, fragment) for instance, fragment in candidates
+                          if fragment is not None and fragment.extraction_method != "page_text_fallback"]
+            if len(candidates) == 1 and disclosed_empty_fiscal_table(doc, *candidates[0]):
+                return
 
         # 表身份：枚举**全部**命中表（_find_parsed_table 每 alias 只回第一个命中，
         # 同名两张表会漏检歧义）；命中 0 张 = 表缺失，>1 张 = 身份歧义。
@@ -9865,7 +11059,8 @@ class R33TxtFundDetail(Rule):
             )
             return
 
-        bindings, blocked = _txt_fund_bind_statements(section["body"], year)
+        binding_body = _txt_fund_body_without_page_footers(doc, section, offsets)
+        bindings, blocked = _txt_fund_bind_statements(binding_body, year, source_body=section['body'])
         if blocked:
             unresolved.extend(f"{scope_label}：{reason}" for reason in blocked)
         if not bindings:
@@ -10028,7 +11223,10 @@ _NAR_REPEAT_OBLIGATION_ID = "OBL-NARRATIVE-INDICATOR-REPEAT"
 
 #: 决算情况说明章节标题（合并文本切节用；目录页标题不切节——沿用 V33-235
 #: 的目录页守卫口径）
-_NAR_REPEAT_SECTION_RE = re.compile(r"[一二三四五六七八九十]+、[^\n。；]{2,40}说明")
+#: 长标题在窄版面里会软换行（上海 2022：“七、一般公共预算财政拨款“三公”经费支出决算情况说\n明”），
+#: 允许标题内一次换行；换行后只能再接极短的标题尾，不吞正文。
+_NAR_REPEAT_SECTION_RE = re.compile(
+    r"[一二三四五六七八九十]+、[^\n。；]{2,40}?(?:说\n?明|\n[^\n。；，,]{0,8}?说明)")
 
 #: 类款项条目句：沿用 WP4-B 的三级身份形态，放宽闭引号（石泉样张是
 #: 「（项）"257.14 万元」的引号形态）。名称段允许内部换行（PDF 软换行）。
@@ -10134,7 +11332,7 @@ def _nar_repeat_sections(
         page = _txt_fund_page_for(offsets, match.start())
         if (page - 1) in toc_pages:
             continue
-        starts.append((match.group(0).strip(), match.start()))
+        starts.append((re.sub(r"\s+", "", match.group(0)), match.start()))
     sections: List[Tuple[str, int, int]] = []
     for idx, (title, start) in enumerate(starts):
         end = starts[idx + 1][1] if idx + 1 < len(starts) else len(merged)
@@ -10239,10 +11437,11 @@ class R33NarrativeIndicatorRepeat(Rule):
     def _check_dual_amounts(
         self, merged: str, offsets: List[int]
     ) -> List[Issue]:
-        """「增加 A（B）万元」紧邻双数且不等 → medium，提示人工确认哪个数对。
+        """「增加 A（B）万元」紧邻双数且不等 → medium 或舍入提示。
 
         同一事实同句并列两个数值，系统无法判定哪个正确（不任选其一），
-        属数字一致性缺陷；period 绑定不必要——两个数自相矛盾与年度无关。
+        属数字一致性线索；差额不超过统一政策容差时按可能取整误差
+        输出提示，不计为实质问题。period 绑定不必要——两数的差异与年度无关。
         """
         issues: List[Issue] = []
         seen: set = set()
@@ -10260,13 +11459,20 @@ class R33NarrativeIndicatorRepeat(Rule):
                 continue
             seen.add(start)
             verb_clean = re.sub(r"\s+", "", match.group("verb"))
+            difference = abs(wan_a - wan_b)
+            within_rounding_tolerance = difference <= AMOUNT_TOLERANCE_WAN
+            severity = "info" if within_rounding_tolerance else "medium"
+            note = (
+                f"差额{difference:.2f}万元，在默认金额容差内，可能为取整误差，列为提示。"
+                if within_rounding_tolerance
+                else "两数差额超过默认金额容差，需人工核对底稿确认正确值。"
+            )
             issues.append(
                 self._issue(
                     f"同一{verb_clean}额存在两个并列数值"
-                    f"「{match.group('a')}（{match.group('b')}）{raw_unit}」，"
-                    "两数不一致，无法判定哪个为正确值，需人工复核底稿确认。",
+                    f"「{match.group('a')}（{match.group('b')}）{raw_unit}」，{note}",
                     {"page": _txt_fund_page_for(offsets, start)},
-                    severity="medium",
+                    severity=severity,
                     evidence_text=re.sub(r"\s+", "", match.group(0)),
                 )
             )
@@ -10722,7 +11928,10 @@ _WP4E_CLAIM_NOUN_RE = re.compile(
 #: 误入；「决算数大于预算数的主要原因」类无金额句读不命中。
 _WP4E_BUDGET_RE = re.compile(
     r"(?P<role>年初\s*预\s*算(?:\s*数)?|全年\s*预\s*算(?:\s*数)?|调整\s*预\s*算(?:\s*数)?|预\s*算(?:\s*数)?)"
-    r"\s*(?:为|是)?\s*(?P<amount>\d(?:[\d,，]*\d)?(?:\.\d+)?|零)\s*(?P<unit>万\s*元|亿\s*元|元)?"
+    # A native text layer may insert a horizontal gap inside the leading
+    # thousands group: 1 10,210.99. Only accept a complete 1–3 digit group,
+    # retaining the literal comma-separated groups; do not join amount columns.
+    r"\s*(?:为|是)?\s*(?P<amount>(?:\d[ \t]+\d{1,2}|\d{2}[ \t]+\d)(?:[,，]\d{3})+(?:\.\d+)?|\d(?:[\d,，]*\d)?(?:\.\d+)?|零)\s*(?P<unit>万\s*元|亿\s*元|元)?"
 )
 
 #: 分子披露：「（支出）决算(数)?（为|是）?金额（单位可选）」。排除「收入
@@ -10814,6 +12023,8 @@ def _wp4e_amount(text: str) -> Optional[Decimal]:
     """完成率分母/分子金额解析：「零」等价表述归 0；千分位逗号按 to_decimal 口径剔除。"""
     if text == "零":
         return Decimal("0")
+    if re.fullmatch(r"(?:\d[ \t]+\d{1,2}|\d{2}[ \t]+\d)(?:[,，]\d{3})+(?:\.\d+)?", str(text)):
+        text = re.sub(r"[ \t]+", "", text)
     try:
         return Decimal(str(text).strip().replace(",", "").replace("，", ""))
     except Exception:  # noqa: BLE001 - Decimal 解析失败的兜底，与 to_decimal 同口径
@@ -10877,6 +12088,13 @@ class R33TrendCompletionRate(Rule):
 
         for claim in claims:
             self._bind_entry(claim, boundaries, merged)
+            from .native_three_public_ratios import completion_claim
+            native_result = completion_claim(self, doc, claim, merged, year)
+            if native_result is not None:
+                findings, missing = native_result
+                issues.extend(findings)
+                unresolved.extend(missing)
+                continue
             self._check_claim(claim, budgets, actuals, openings, year, issues, unresolved)
 
         if unresolved:
@@ -11239,8 +12457,9 @@ class R33TrendCompletionRate(Rule):
             )
             return
         if denom is None:
-            # fail-closed 不比：声明未配套披露可绑定的分母（与 CMM-007
-            # 「无可验证金额 → 不比」同纪律；表格内分母的表-文勾稽属其它义务）
+            unresolved.append(
+                f"「{indicator}」完成率声明未找到同业务口径的预算分母（insufficient_data）"
+            )
             return
         role_label = claim["role_key"] or denom["role_key"] or "预算"
 
@@ -11373,7 +12592,7 @@ class R33TrendCompletionRate(Rule):
             return
 
         if actual is None:
-            # fail-closed 不比：分母非零但句读单元/条目内无支出决算披露可复算
+            unresolved.append(f"「{indicator}」完成率声明未找到同业务口径的决算分子（insufficient_data）")
             return
         if actual["wan"] is None:
             # 分子单位纪律：非零决算披露未显式金额单位 → 无法归一复算
@@ -11559,6 +12778,33 @@ class R33TrendCompletionRate(Rule):
         return "\n".join(lines)
 
 
+class R33248_FundTotals(Rule):
+    code, severity = "V33-248", "warn"
+    desc = "政府性基金说明本年收入支出总额与原表一致"
+
+    def apply(self, doc):
+        from .native_final_disclosure import check_fund_totals
+        return check_fund_totals(self, doc)
+
+
+class R33249_FinalExpenditureShares(Rule):
+    code, severity = "V33-249", "warn"
+    desc = "一般公共预算支出占本年支出的比例复算"
+
+    def apply(self, doc):
+        from .native_final_disclosure import check_final_expenditure_shares
+        return check_final_expenditure_shares(self, doc)
+
+
+class R33250_PerformanceCounts(Rule):
+    code, severity = "V33-250", "warn"
+    desc = "绩效自评项目数量与评级分项之和一致"
+
+    def apply(self, doc):
+        from .native_final_disclosure import check_performance_counts
+        return check_performance_counts(self, doc)
+
+
 ALL_RULES = [
     R33001_CoverYearUnit(),
     R33002_NineTablesCheck(),
@@ -11626,4 +12872,12 @@ ALL_RULES = [
     # P3 - 规范性提示
     R33230_EmptyZeroHint(),
     R33232_PercentagePrecision(),
+    R33248_FundTotals(),
+    R33249_FinalExpenditureShares(),
+    R33250_PerformanceCounts(),
 ]
+
+# 2026-10-22 检查点清单全系统默认（docs/PUTUO_CHECKLIST_GAP_ANALYSIS_20261022.md）：
+# 决算 A-09/C-11/C-12（具体情况逐项、加总与漏列）、C-04（基金/国资列 ↔ FIN_08/09）。
+# 只导入模块：先导入清单模块时本模块尚未执行完，规则由清单模块在加载完成后自行登记（幂等）。
+from . import checklist_final_rules as _checklist_final_rules  # noqa: E402,F401

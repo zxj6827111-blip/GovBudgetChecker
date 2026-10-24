@@ -66,8 +66,9 @@ def test_pdf_bbox_locator_does_not_infer_bbox_from_ai_quote_text(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("span_matches_quote", [True, False])
 async def test_ai_findings_service_does_not_infer_bbox_from_semantic_quote(
-    tmp_path: Path,
+    tmp_path: Path, span_matches_quote: bool,
 ) -> None:
     pdf_path = tmp_path / "ai-service.pdf"
     page_text = "Performance target differs from T3 project expense: desc=43.60, T3=48.59"
@@ -83,7 +84,8 @@ async def test_ai_findings_service_does_not_infer_bbox_from_semantic_quote(
                 "quote": "Performance target differs from T3 project expense",
                 "context": page_text,
                 "original": page_text,
-                "span": [0, len(page_text)],
+                "span": [0, len("Performance target differs from T3 project expense")
+                         if span_matches_quote else len(page_text)],
                 "suggestion": "Please explain if the metrics use different scopes",
             }
         ]
@@ -100,8 +102,8 @@ async def test_ai_findings_service_does_not_infer_bbox_from_semantic_quote(
 
     assert findings
     finding = findings[0]
-    assert finding.page_number == 1
-    assert finding.evidence[0]["page"] == 1
+    assert finding.page_number == (1 if span_matches_quote else None)
+    assert finding.evidence[0].get("page") == (1 if span_matches_quote else None)
     assert finding.bbox is None
     assert finding.evidence[0].get("bbox") is None
     assert finding.location_level == "unresolved"

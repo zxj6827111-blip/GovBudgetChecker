@@ -9,6 +9,7 @@ import uuid
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from src.schemas.issues import JobContext, AnalysisConfig, IssueItem
+from src.services.check_progress import update_progress
 from src.engine.rules_v33 import build_document, Issue, Document
 from src.engine.rule_registry import all_rule_ids, select_rules
 from src.engine.rule_outcome import (
@@ -223,6 +224,35 @@ class EngineRuleRunner:
                 continue
         return findings, conversion_errors
 
+    @staticmethod
+    def _link_relation_receipts(
+        document: Optional[Document],
+        rule_id: str,
+        receipt_start: int,
+        findings: List[IssueItem],
+    ) -> None:
+        """Bind failed relation receipts to the exact findings emitted for them."""
+        if document is None:
+            return
+        receipts = getattr(document, "fact_receipts", None)
+        if not isinstance(receipts, list):
+            return
+        finding_ids_by_relation: Dict[str, List[str]] = {}
+        for finding in findings:
+            relation_id = str(getattr(finding, "check_relation_id", "") or "").strip()
+            finding_id = str(getattr(finding, "id", "") or "").strip()
+            if relation_id and finding_id:
+                finding_ids_by_relation.setdefault(relation_id, []).append(finding_id)
+        for receipt in receipts[max(0, receipt_start):]:
+            if not isinstance(receipt, dict) or str(receipt.get("rule_id") or "") != rule_id:
+                continue
+            if str(receipt.get("status") or "") != "fail":
+                continue
+            relation_id = f"{rule_id}:{str(receipt.get('sub_check_id') or '')}"
+            refs = finding_ids_by_relation.get(relation_id, [])
+            if refs:
+                receipt["issue_refs"] = list(dict.fromkeys([*(receipt.get("issue_refs") or []), *refs]))
+
     def _resolve_report_kind(
         self,
         job_context: JobContext,
@@ -275,7 +305,18 @@ class EngineRuleRunner:
         # 独立验收 2026-09-17 kind_disagreement 反例整改）。
         if document is not None:
             document.report_kind = report_kind
+            profile_snapshot = (job_context.meta or {}).get("document_profile")
+            if isinstance(profile_snapshot, dict):
+                from src.schemas.document_profile import DocumentProfile
+
+                document.document_profile = DocumentProfile.model_validate(profile_snapshot)
         selected_rules = self._select_rule_set(job_context, document)
+        from src.engine.rule_registry import restrict_rules_to_profile
+        from src.services.document_profile_resolver import resolve_document_profile
+        profile = getattr(document, 'document_profile', None) or resolve_document_profile(
+            path=str(getattr(document, 'path', '') or ''), page_texts=getattr(document, 'page_texts', []) or [])
+        selected_rules = restrict_rules_to_profile(selected_rules, profile)
+        update_progress(job_context.job_id, "local", state="running", total=len(selected_rules), completed=0, current_step="开始本地规则检查")
         # 版本留痕（P2-02）：本次实际生效的规则集版本，逐条写进 finding。
         rule_version = str(getattr(config, "rules_version", "") or "").strip() or None
 
@@ -296,13 +337,15 @@ class EngineRuleRunner:
         bbox_locator = PDFBBoxLocator(job_context.pdf_path)
         try:
             # Execute selected rule set.
-            for rule_obj in selected_rules:
+            for rule_index, rule_obj in enumerate(selected_rules):
                 rule_id = rule_obj.code
+                receipt_start = len(getattr(document, "fact_receipts", []) or []) if document is not None else 0
 
                 try:
                     start_time = time.time()
 
                     # 鐩存帴璋冪敤瑙勫垯瀵硅薄鐨刟pply鏂规硶
+                    document.current_rule_code = rule_id
                     issues = rule_obj.apply(document)
 
                     int((time.time() - start_time) * 1000)
@@ -314,6 +357,7 @@ class EngineRuleRunner:
                         rule_version=rule_version,
                         bbox_locator=bbox_locator,
                     )
+                    self._link_relation_receipts(document, rule_id, receipt_start, findings)
 
                     if conversion_errors:
                         # 规则本身跑完不等于结果可信：只要有一条 issue 在
@@ -357,6 +401,7 @@ class EngineRuleRunner:
                         rule_version=rule_version,
                         bbox_locator=bbox_locator,
                     )
+                    self._link_relation_receipts(document, rule_id, receipt_start, findings)
 
                     all_findings.extend(findings)
                     self._stats["total_findings"] += len(findings)
@@ -430,11 +475,17 @@ class EngineRuleRunner:
                             engine_version=ENGINE_VERSION,
                         )
                         all_findings.append(failure_item)
+                finally:
+                    update_progress(job_context.job_id, "local", completed=rule_index + 1, failed=self._stats["failed_rules"], current_step=f"已检查 {rule_index + 1}/{len(selected_rules)} 条规则（{rule_id}）")
         finally:
             bbox_locator.close()
 
         # ZC-03（AC-04）：规则执行期间写下的关系级子检查回执随运行摘要暴露，
         # 供双模式结果与 build_check_receipts 消费（与 legacy payload 同源）。
+        self._stats["structured_consumption"] = list(getattr(document, "structured_consumption", None) or [])
+        from src.engine.native_issue_dedup import deduplicate_native_issues
+        all_findings = deduplicate_native_issues(all_findings, document)
+        self._stats["total_findings"] = len(all_findings)
         self._stats["fact_receipts"] = list(getattr(document, "fact_receipts", None) or [])
         if getattr(document, "fact_context", None) is not None:
             try:
@@ -471,6 +522,7 @@ class EngineRuleRunner:
                 page_tables=page_tables,
                 filesize=getattr(job_context, "filesize", 0) or job_context.meta.get("filesize", 0),
             )
+            document.structure_view = job_context.meta.get("structure_view")
             # ZC-01（AC-01）：双模式路径消费与 legacy 路径同一版本的统一事实
             fact_snapshot = getattr(job_context, "fact_context", None)
             if isinstance(fact_snapshot, dict) and fact_snapshot:
@@ -478,8 +530,24 @@ class EngineRuleRunner:
                     from src.engine.fact_context import FactContext
 
                     document.fact_context = FactContext.from_dict(fact_snapshot)
-                except Exception:  # 事实快照损坏时按 legacy 路径运行，不伪装
+                except Exception as exc:
+                    # 显式绑定的快照损坏不同于没有事实，不能借缺事实降级绕过版本约束。
+                    if job_context.parse_artifact is not None:
+                        raise ValueError("规则解析产物绑定的财政事实快照损坏") from exc
+                    # 未绑定解析产物的旧任务仍沿用已有降级行为。
                     document.fact_context = None
+            artifact_snapshot = job_context.parse_artifact
+            if artifact_snapshot is not None:
+                from src.schemas.parse_artifact import ParseArtifact
+
+                artifact = ParseArtifact.from_dict(artifact_snapshot)
+                context = getattr(document, "fact_context", None)
+                # 无财政事实是可降级的取数不足；只有已有事实与解析版本冲突才拒绝执行。
+                if context is not None and (artifact.source_file_hash, artifact.parse_run_uid) != (
+                    context.file_hash, context.parse_run_uid
+                ):
+                    raise ValueError("规则解析产物与当前财政事实版本不一致")
+                document.parse_artifact = artifact
             return document
 
         # 2. 鍥為€€锛氬皾璇曚粠 ocr_text 鍜?tables 鎭㈠锛堝吋瀹规棫鏁版嵁锛?

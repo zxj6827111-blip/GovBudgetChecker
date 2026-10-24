@@ -1,5 +1,39 @@
 import type { Problem, Task } from "@/lib/mock";
 import { getSeverityMeta, normalizeSeverityCode } from "./issueSeverity";
+import { hasVerifiedSourceIdentity } from "./evidenceIdentity";
+import { displayedAnalysisRevision, fileAnalysisRevision } from "./reportVersion";
+
+const TABLE_CODE_LABELS: Record<string, string> = {
+  FIN_01_income_expenditure_total: "收入支出决算总表",
+  FIN_02_income: "收入决算表",
+  FIN_03_expenditure: "支出决算表",
+  FIN_04_fiscal_grant_total: "财政拨款收入支出决算总表",
+  FIN_05_general_public_expenditure: "一般公共预算财政拨款支出决算表",
+  FIN_06_basic_expenditure: "一般公共预算财政拨款基本支出决算表",
+  FIN_07_three_public: "财政拨款“三公”经费支出决算表",
+  FIN_08_gov_fund: "政府性基金预算财政拨款收入支出决算表",
+  FIN_09_state_capital: "国有资本经营预算财政拨款收入支出决算表",
+};
+
+const MEASURE_LABELS: Record<string, string> = {
+  total_actual: "决算金额",
+  basic_actual: "基本支出决算",
+  project_actual: "项目支出决算",
+  income_actual: "收入决算金额",
+  expenditure_actual: "支出决算金额",
+  total_budget: "预算金额",
+  budget_amount: "预算金额",
+};
+
+function displayTableName(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  return TABLE_CODE_LABELS[raw] ?? raw;
+}
+
+function displayMeasureName(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  return MEASURE_LABELS[raw] ?? raw;
+}
 
 export interface OrganizationRecord {
   id: string;
@@ -19,11 +53,17 @@ export interface JobSummaryRecord {
   progress?: number;
   created_ts?: number;
   updated_ts?: number;
+  /** 来自当前分析结果的真实结束时间，不能用 updated_ts 代替。 */
+  analysis_finished_ts?: number | null;
   ts?: number;
   report_year?: number | null;
   report_kind?: "budget" | "final" | "unknown";
   doc_type?: string | null;
   issue_total?: number;
+  review_issue_total?: number;
+  review_candidate_total?: number;
+  tip_total?: number;
+  review_notice_total?: number;
   issue_error?: number;
   issue_warn?: number;
   issue_info?: number;
@@ -44,6 +84,7 @@ export interface JobSummaryRecord {
   quality_status?: "complete" | "degraded" | "review_required" | string | null;
   analysis_conclusion?: "findings_detected" | "no_findings" | "incomplete" | "analysis_error" | string | null;
   review_reasons?: unknown;
+  page_count?: number | null;
   page_coverage?: number | null;
   scanned_page_count?: number | null;
   stage?: string | null;
@@ -296,8 +337,17 @@ export function getUiTaskStatusMeta(
 }
 
 export function getDisplayIssueTotal(
-  job: Pick<JobSummaryRecord, "merged_issue_total" | "issue_total" | "review_item_count">,
+  job: Pick<JobSummaryRecord, "review_issue_total" | "review_candidate_total" | "merged_issue_total" | "issue_total" | "review_item_count">,
 ): number {
+  const hasReviewCounts =
+    (typeof job.review_issue_total === "number" && Number.isFinite(job.review_issue_total))
+    || (typeof job.review_candidate_total === "number" && Number.isFinite(job.review_candidate_total));
+  if (hasReviewCounts) {
+    // Queue totals include source-verified findings and findings that still need
+    // source verification. The detail view labels the latter separately, but
+    // omitting them here made many non-empty documents appear to have 0 issues.
+    return toNumber(job.review_issue_total, 0) + toNumber(job.review_candidate_total, 0);
+  }
   const merged = Number(job.merged_issue_total);
   const ruleAndAiTotal = Number.isFinite(merged) ? merged : toNumber(job.issue_total, 0);
   return ruleAndAiTotal + toNumber(job.review_item_count, 0);
@@ -344,7 +394,18 @@ function resolvePipelineStepStatus(job: JobSummaryRecord, structured: Structured
   return { parse, extract, review, report };
 }
 
-function getStructuredPayload(job: JobSummaryRecord, structured?: StructuredIngestRecord): StructuredIngestRecord {
+export function selectStructuredForJob(job: JobSummaryRecord, structured?: StructuredIngestRecord): StructuredIngestRecord {
+  const revision = displayedAnalysisRevision(job);
+  const embedded = isRecord(job.structured_ingest) ? job.structured_ingest as StructuredIngestRecord : undefined;
+  const snapshotRevision = (value?: StructuredIngestRecord) => {
+    const snapshot = value?.fact_snapshot;
+    return isRecord(snapshot) ? fileAnalysisRevision(snapshot.revision_id) : undefined;
+  };
+  if (revision && (isRecord(job.fact_snapshot) || snapshotRevision(embedded) || snapshotRevision(structured))) {
+    if (snapshotRevision(embedded) === revision) return embedded!;
+    if (snapshotRevision(structured) === revision) return structured!;
+    return {}; // 两次请求恰好跨过发布时刻，不能把另一版复核项混进来。
+  }
   if (structured && Object.keys(structured).length > 0) {
     return structured;
   }
@@ -353,6 +414,8 @@ function getStructuredPayload(job: JobSummaryRecord, structured?: StructuredInge
   }
   return {};
 }
+
+const getStructuredPayload = selectStructuredForJob;
 
 function stripFileExtension(filename: string): string {
   return filename.replace(/\.[^.]+$/u, "").trim();
@@ -484,6 +547,8 @@ export function toUiTask(job: JobSummaryRecord, structuredInput?: StructuredInge
   task.qualityStatus = normalizeUiQualityStatus(job.quality_status);
   task.analysisConclusion = normalizeAnalysisConclusion(job.analysis_conclusion);
   task.reviewReasons = extractReviewReasonMessages(job.review_reasons);
+  const revision = displayedAnalysisRevision(job);
+  if (revision) task.analysisRevision = revision;
 
   return task;
 }
@@ -524,10 +589,43 @@ function mapSeverity(value: unknown): Problem["severity"] {
 }
 
 function getPageNumber(issue: Record<string, unknown>): number | undefined {
-  const evidence = Array.isArray(issue.evidence) ? issue.evidence.find(isRecord) : null;
   const location = isRecord(issue.location) ? issue.location : null;
-  const page = toNumber(evidence?.page ?? (location ? location.page : undefined) ?? issue.page);
+  const page = toNumber(issue.physical_page ?? issue.page_number ?? location?.page ?? issue.page);
   return page > 0 ? page : undefined;
+}
+
+/** 页码、框和引文必须来自同一个定位对象，不能把另一页的框嫁接到首条证据。 */
+export function resolveIssueAnchor(issue: Record<string, unknown>): {
+  page?: number; bbox?: number[]; evidence: Record<string, unknown> | null;
+} {
+  const location = isRecord(issue.location) ? issue.location : {};
+  const evidence = Array.isArray(issue.evidence) ? issue.evidence.filter(isRecord) : [];
+  if (issue.source === "ai" && issue.source_binding_status === "unresolved") {
+    return { evidence: evidence[0] ?? null };
+  }
+  const isExact = (item: Record<string, unknown>) =>
+    ["exact_cell", "exact_span"].includes(String(item.location_level ?? ""))
+    && item.verification_status === "verified"
+    && Array.isArray(item.bbox) && item.bbox.length === 4;
+  const root = { ...location, ...issue,
+    bbox: issue.bbox ?? location.bbox,
+    location_level: issue.location_level ?? location.location_level,
+    verification_status: issue.verification_status ?? location.verification_status,
+  };
+  const page = getPageNumber(issue);
+  if (page && isExact(root)) {
+    const matching = evidence.find((item) => getPageNumber({ ...item, page_number: item.physical_page ?? item.page }) === page
+      && JSON.stringify(item.bbox) === JSON.stringify(root.bbox));
+    return { page, bbox: (root.bbox as unknown[]).map(Number), evidence: matching ?? null };
+  }
+  const exact = evidence.find((item) => isExact(item) && toNumber(item.physical_page ?? item.page) > 0);
+  const anchor = exact ?? evidence.find((item) => toNumber(item.physical_page ?? item.page) > 0);
+  if (anchor) return {
+    page: toNumber(anchor.physical_page ?? anchor.page),
+    bbox: exact ? (exact.bbox as unknown[]).map(Number) : undefined,
+    evidence: anchor,
+  };
+  return { page, evidence: evidence[0] ?? null };
 }
 
 export function resolveProblemLocation(issue: Record<string, unknown>, page?: number): string {
@@ -688,9 +786,10 @@ function collectStructuredReviewIssues(detail: JobDetailRecord): Record<string, 
     const tableCode = String(item.table_code ?? "").trim();
     const itemType = String(item.type ?? "review").trim() || "review";
     const rawId = String(item.id ?? "").trim();
+    // id 合成仍用原始表代码，与后端 review_problem_set 逐字一致；只有标题换成中文表名。
     const id = rawId || `${detail.job_id}:structured-review:${itemType}:${tableCode || "document"}:${page ?? "unlocated"}:${index + 1}`;
     const title = tableCode
-      ? `结构化识别待复核：${tableCode}`
+      ? `结构化识别待复核：${displayTableName(tableCode)}`
       : "结构化识别结果待复核";
     const message = String(item.message ?? "该项材料识别结果需要人工确认后再作为审校依据。").trim();
     const location: Record<string, unknown> = {};
@@ -709,7 +808,7 @@ function collectStructuredReviewIssues(detail: JobDetailRecord): Record<string, 
       title,
       message,
       location,
-    evidence: [],
+      evidence: [],
       suggestion: String(item.recommended_action ?? "核对原始 PDF 对应页的表格标题、金额和单位后确认。").trim(),
     };
   });
@@ -722,6 +821,7 @@ function collectReviewReportManualIssues(reviewReport: Record<string, unknown>):
   return manualItems.flatMap((item, index) => {
     const recordType = String(item.record_type ?? "review_reason");
     if (recordType === "unfinished_check") return [];
+    const isFindingCandidate = recordType === "finding_review_candidate" || recordType === "ai_candidate";
     const candidateFinding = isRecord(item.finding) ? item.finding : {};
     const mergeSides = recordType === "merge_conflict"
       ? [
@@ -748,8 +848,18 @@ function collectReviewReportManualIssues(reviewReport: Record<string, unknown>):
       candidateFinding.page_number ?? candidateLocation.page,
     );
     const page = rawPage > 0 ? rawPage : candidatePage > 0 ? candidatePage : undefined;
+    const reviewReasonTitles: Record<string, string> = {
+      ai_failed: "大模型检查未完整完成",
+      evidence_incomplete_findings: "大模型发现证据不足",
+      rule_evidence_incomplete: "规则问题证据不足",
+      rules_insufficient_data: "部分规则检查数据不足",
+      check_obligations_incomplete: "仍有必查事项未完成",
+    };
+    const code = String(item.code ?? "");
     const title = String(
-      item.title ?? candidateFinding.title ?? item.code ?? item.obligation_id ?? "待人工复核事项",
+      recordType === "review_reason"
+        ? reviewReasonTitles[code] ?? item.display_title ?? item.title ?? code
+        : item.title ?? candidateFinding.title ?? item.code ?? item.obligation_id ?? "待人工复核事项",
     ).trim();
     const message = String(
       item.message ?? candidateFinding.message ?? item.detail ?? item.reason ?? "需人工复核后确认。",
@@ -785,19 +895,82 @@ function collectReviewReportManualIssues(reviewReport: Record<string, unknown>):
     const id = String(item.id ?? `${recordType}:${item.code ?? item.obligation_id ?? index}`);
     return [{
       id,
-      source: "manual_review",
-      rule_id: String(item.code ?? item.obligation_id ?? recordType.toUpperCase()),
+      source: String(candidateFinding.source ?? (isFindingCandidate ? "ai" : "manual_review")),
+      review_kind: isFindingCandidate ? "manual_review" : "review_notice",
+      rule_id: String(candidateFinding.rule_id ?? item.code ?? item.obligation_id ?? recordType.toUpperCase()),
       severity: "manual_review",
       title,
       message,
       location,
+      page_number: candidateFinding.page_number ?? page,
+      bbox: candidateFinding.bbox,
+      location_level: candidateFinding.location_level,
+      verification_status: candidateFinding.verification_status,
       evidence: Array.isArray(candidateFinding.evidence)
         ? candidateFinding.evidence.filter(isRecord)
         : sideEvidence,
+      evidence_status: candidateFinding.evidence_status,
+      source_binding_status: candidateFinding.source_binding_status,
+      claimed_page_number: candidateFinding.claimed_page_number,
+      evidence_missing: candidateFinding.evidence_missing,
+      evidence_verification: candidateFinding.evidence_verification,
       suggestion: String(
         item.suggestion ?? candidateFinding.suggestion ?? item.recommended_action ?? "核对原始材料后确认。",
       ),
     }];
+  });
+}
+
+function annotateFindingSources(
+  problems: Problem[],
+  result: Record<string, unknown>,
+): Problem[] {
+  const aiFindings = Array.isArray(result.ai_findings) ? result.ai_findings.filter(isRecord) : [];
+  const ruleFindings = Array.isArray(result.rule_findings) ? result.rule_findings.filter(isRecord) : [];
+  const aiIds = new Set(aiFindings.map((item) => String(item.id ?? "").trim()).filter(Boolean));
+  const ruleIds = new Set(ruleFindings.map((item) => String(item.id ?? "").trim()).filter(Boolean));
+  const relationByIssueId = new Map<string, string>();
+  const merged = isRecord(result.merged) ? result.merged : {};
+  const relations = [
+    ...(Array.isArray(merged.relations) ? merged.relations.filter(isRecord) : []),
+    ...(Array.isArray(result.source_overlap_relations) ? result.source_overlap_relations.filter(isRecord) : []),
+  ];
+  for (const relation of relations) {
+    const aiIssueIds = Array.isArray(relation.ai_issue_ids) ? relation.ai_issue_ids : [];
+    const ruleIssueIds = Array.isArray(relation.rule_issue_ids) ? relation.rule_issue_ids : [];
+    if (aiIssueIds.length === 0 || ruleIssueIds.length === 0) continue;
+    const status = String(relation.status ?? "");
+    const label = status === "same_occurrence" ? "共同发现 · 同一处重复用词" : status === "agreement"
+      ? "共同发现 · 两侧一致"
+      : status === "conflict"
+        ? "共同发现 · 结论不一致"
+        : status === "ambiguous"
+          ? "共同发现 · 关系待核实"
+          : status === "execution_error"
+            ? "共同发现 · 对照失败"
+            : "共同发现";
+    for (const id of [...aiIssueIds, ...ruleIssueIds]) {
+      const key = String(id ?? "").trim();
+      if (key) relationByIssueId.set(key, label);
+    }
+  }
+
+  return problems.map((problem) => {
+    const relationLabel = relationByIssueId.get(problem.id);
+    if (relationLabel) {
+      return {
+        ...problem,
+        findingSources: ["ai", "rule"],
+        sourceRelationLabel: relationLabel,
+      };
+    }
+    if (aiIds.has(problem.id) || problem.source === "ai") {
+      return { ...problem, findingSources: ["ai"] };
+    }
+    if (ruleIds.has(problem.id) || problem.source === "rule") {
+      return { ...problem, findingSources: ["rule"] };
+    }
+    return problem;
   });
 }
 
@@ -824,22 +997,22 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
       : [],
   );
 
-  return issues
+  const mappedProblems: Problem[] = issues
     .filter((issue) => !ignored.has(String(issue.id ?? "")))
     .map((issue, index) => {
-      const page = getPageNumber(issue);
-      const evidence = Array.isArray(issue.evidence) ? issue.evidence.find(isRecord) : null;
+      const anchor = resolveIssueAnchor(issue);
+      const { page, evidence } = anchor;
       const rawLocation = isRecord(issue.location) ? issue.location : {};
       const display = isRecord(issue.display) ? issue.display : {};
       const title = String(issue.title ?? issue.message ?? `问题 ${index + 1}`).trim();
       const resolvedTitle = String(display.summary ?? issue.rule_name ?? title).trim() || title;
-      const snippet = String(evidence?.text_snippet ?? evidence?.text ?? issue.text_snippet ?? "").trim();
+      const snippet = String(evidence?.quote ?? evidence?.text_snippet ?? evidence?.text ?? issue.text_snippet ?? "").trim();
       const location = resolveProblemLocation(issue, page);
       const rawRefs = Array.isArray(rawLocation.table_refs)
         ? rawLocation.table_refs.filter(isRecord)
         : [];
       const evidenceRefs = rawRefs.flatMap((ref, refIndex) => {
-        const refPage = toNumber(ref.page);
+        const refPage = toNumber(ref.physical_page ?? ref.page);
         if (!Number.isFinite(refPage) || refPage <= 0) return [];
         const locationLevel = String(ref.location_level ?? "unresolved");
         const verificationStatus = String(ref.verification_status ?? "unverified");
@@ -847,30 +1020,39 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
           ["exact_cell", "exact_span"].includes(locationLevel) && verificationStatus === "verified" && Array.isArray(ref.bbox)
             ? ref.bbox.map((item) => Number(item))
             : undefined;
-        const labels = [ref.table, ref.section, ref.row, ref.field]
+        const labels = [displayTableName(ref.table), ref.section, ref.row, displayMeasureName(ref.field),
+          ref.code ?? ref.subject_code, ref.subject_name ?? ref.subject]
           .map((item) => String(item ?? "").trim())
-          .filter(Boolean);
+          .filter((item, labelIndex, all) => Boolean(item) && all.indexOf(item) === labelIndex);
         return [{
           key: `${String(ref.role ?? `定位 ${refIndex + 1}`)}|${refPage}|${refIndex}`,
           role: String(ref.role ?? `定位 ${refIndex + 1}`),
+          relationId: ref.relation_id == null ? undefined : String(ref.relation_id),
+          operandId: ref.operand_id == null ? undefined : String(ref.operand_id),
           page: Math.floor(refPage),
-          locationText: labels.join(" · ") || `第 ${Math.floor(refPage)} 页`,
-          valueText: ref.value === undefined || ref.value === null ? undefined : String(ref.value),
+          locationText: [`第 ${Math.floor(refPage)} 页`, ...labels].join(" · "),
+          valueText: ref.current_value !== undefined && ref.current_value !== null
+            ? String(ref.current_value)
+            : ref.value === undefined || ref.value === null ? undefined : String(ref.value),
           bbox,
           locationLevel,
           verificationStatus,
         }];
       });
-      const issueLocationLevel = String(issue.location_level ?? rawLocation.location_level ?? "unresolved");
-      const issueVerificationStatus = String(issue.verification_status ?? rawLocation.verification_status ?? "unverified");
-      const exactIssueLocation = ["exact_cell", "exact_span"].includes(issueLocationLevel)
-        && issueVerificationStatus === "verified";
-      const evidenceHasExactLocation = Boolean(
-        evidence
-          && ["exact_cell", "exact_span"].includes(String(evidence.location_level ?? ""))
-          && String(evidence.verification_status ?? "") === "verified"
-      );
-
+      const roundingCases = Array.isArray(rawLocation.rounding_cases)
+        ? rawLocation.rounding_cases.filter(isRecord).flatMap((item, caseIndex) => {
+            const relationId = String(item.relation_id ?? "").trim();
+            const summary = String(item.summary ?? "").trim();
+            if (!summary) return [];
+            return [{
+              relationId: relationId || `rounding-case-${caseIndex + 1}`,
+              summary,
+              operandIds: Array.isArray(item.operand_ids)
+                ? item.operand_ids.map((value) => String(value))
+                : [],
+            }];
+          })
+        : [];
       return {
         id: String(issue.id ?? `${detail.job_id}-issue-${index + 1}`),
         ruleId: String(issue.rule_id ?? issue.rule ?? "UNKNOWN"),
@@ -891,17 +1073,69 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
         evidenceImage: includeEvidencePreview ? createEvidencePreviewDataUrl(resolvedTitle, snippet, page, location) : "",
         status: "pending",
         source: String(issue.source ?? ""),
-        bbox: exactIssueLocation && Array.isArray(issue.bbox)
-          ? issue.bbox.map((item) => Number(item))
-          : evidenceHasExactLocation && Array.isArray(evidence?.bbox)
-            ? evidence.bbox.map((item) => Number(item))
-            : undefined,
+        reviewKind: issue.review_kind === "review_notice" || issue.source === "structured_ingest"
+          ? "review_notice"
+          : issue.review_kind === "manual_review"
+            || (mapSeverity(issue.severity) !== "info" && !hasVerifiedSourceIdentity(issue))
+            ? "manual_review"
+            : mapSeverity(issue.severity) === "info" ? "tip" : "issue",
+        bbox: anchor.bbox,
         evidenceRefs,
+        roundingCases,
         expectedName: String(issue.expected_name ?? rawLocation.expected_name ?? ""),
         actualName: String(issue.actual_name ?? rawLocation.actual_name ?? ""),
         codeLevel: String(issue.code_level ?? rawLocation.code_level ?? ""),
         sourceOfTruth: String(issue.source_of_truth ?? rawLocation.source_of_truth ?? ""),
         evidenceStatus: issue.evidence_status ? String(issue.evidence_status) : undefined,
+        usesManualFill: Array.isArray(issue.manual_fill_fact_ids) && issue.manual_fill_fact_ids.length > 0,
+        claimedPage: toNumber(issue.claimed_page_number) > 0 ? toNumber(issue.claimed_page_number) : undefined,
+        evidenceVerificationStatus: isRecord(issue.evidence_verification)
+          ? String(issue.evidence_verification.status ?? "") || undefined
+          : undefined,
+        evidenceVerificationReasons: isRecord(issue.evidence_verification)
+          && Array.isArray(issue.evidence_verification.reasons)
+          ? issue.evidence_verification.reasons.map((reason) => String(reason)).filter(Boolean)
+          : undefined,
+        evidenceMissing: Array.isArray(issue.evidence_missing)
+          ? issue.evidence_missing.map((reason) => String(reason)).filter(Boolean)
+          : undefined,
+        sourceIdentityVerified: hasVerifiedSourceIdentity(issue),
       };
     });
+  return annotateFindingSources(mappedProblems, result);
+}
+
+/**
+ * Convert one raw dual-mode source bucket into review-workbench cards.
+ * The normal review list intentionally follows review_report/merged_ids. This
+ * source-specific projection is for comparison views, so AI-only candidates
+ * remain inspectable even when they are not part of the formal merged review set.
+ */
+export function toUiSourceProblems(
+  detail: JobDetailRecord,
+  source: "ai" | "rule",
+  options: { includeEvidencePreview?: boolean } = {},
+): Problem[] {
+  const result = isRecord(detail.result) ? detail.result : {};
+  const field = source === "ai" ? "ai_findings" : "rule_findings";
+  const sourceBucket = result[field];
+  const findings: Record<string, unknown>[] = Array.isArray(sourceBucket) ? sourceBucket.filter(isRecord) : [];
+  const sourceResult = {
+    ai_findings: source === "ai" ? findings : [],
+    rule_findings: source === "rule" ? findings : [],
+    merged: {
+      merge_policy_version: "fact-check-relation-v1",
+      merged_ids: findings.map((item) => String(item.id ?? "").trim()).filter(Boolean),
+    },
+  };
+
+  return toUiProblems(
+    {
+      ...detail,
+      result: sourceResult,
+      review_report: {},
+      structured_ingest: {},
+    } as JobDetailRecord,
+    options,
+  );
 }

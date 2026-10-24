@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { useMemo, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
+import { toPreviewBbox, usePageGeometry } from "@/lib/pageGeometry";
 
 const PREVIEW_SCALE = 1.6;
 
@@ -25,7 +26,8 @@ export default function ViewerPage() {
   const jobId = routeParams.job_id;
   const searchParams = useSearchParams();
   const page = toPositivePage(searchParams.get("page"));
-  const bbox = parseBbox(searchParams.get("bbox"));
+  const pageGeometry = usePageGeometry(jobId);
+  const bbox = toPreviewBbox(parseBbox(searchParams.get("bbox")) ?? undefined, page, pageGeometry);
   const title = searchParams.get("title") || "问题高亮查看";
   const location = searchParams.get("location") || "";
   const [zoom, setZoom] = useState(100);

@@ -1,14 +1,48 @@
-# PostgreSQL for GovBudgetChecker.
-# Copy .env.example to .env and set POSTGRES_USER / POSTGRES_PASSWORD first.
-# Start: docker compose up -d
-# Stop: docker compose down
+# 默认无 AI 的服务栈：PostgreSQL + API + Worker + Web + 本地 OCR。
+# 先复制 .env.example 并设置强口令；OCR 离线模型须按部署说明预置到 ./models。
+
+x-app-env: &app-env
+  AI_ASSIST_ENABLED: "false"
+  AI_MODEL_SETTINGS_PATH: /app/data/ai-model-settings.json
+  AI_ASSIST_REQUIRED: "false"
+  AI_EXTRACTOR_URL: http://127.0.0.1:9009/ai/extract/v1
+  OCR_SERVICE_URL: http://ocr:9010
+  OCR_ENABLED: ${OCR_ENABLED:-true}
+  OCR_MODEL_FINGERPRINT: ${OCR_MODEL_FINGERPRINT:-}
+  OCR_TILE_WIDTH: ${OCR_TILE_WIDTH:-512}
+  OCR_TILE_HEIGHT: ${OCR_TILE_HEIGHT:-512}
+  OCR_FIRST_PASS_MODE: ${OCR_FIRST_PASS_MODE:-text}
+  OCR_DOCUMENT_SOFT_BUDGET_SEC: ${OCR_DOCUMENT_SOFT_BUDGET_SEC:-600}
+  OCR_EVIDENCE_ATTESTATIONS_PATH: ${OCR_EVIDENCE_ATTESTATIONS_PATH:-}
+  OCR_EVIDENCE_ATTESTATIONS_SHA256: ${OCR_EVIDENCE_ATTESTATIONS_SHA256:-}
+  UPLOAD_DIR: /app/uploads
+  DOCUMENT_STORAGE_BACKEND: filesystem
+  RULES_FILE: /app/rules/v3_3.yaml
+  GOVBUDGET_AUTH_ENABLED: "true"
+  GOVBUDGET_API_KEY: ${GOVBUDGET_API_KEY:?Set GOVBUDGET_API_KEY in .env}
+  USER_SESSION_SECRET: ${USER_SESSION_SECRET:?Set USER_SESSION_SECRET in .env}
+  DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:?Set DEFAULT_ADMIN_PASSWORD in .env}
+  DATABASE_URL: postgresql://${POSTGRES_USER:?Set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-fiscal_db}
+  PG_SCHEMA: ${PG_SCHEMA:-public}
+  READY_REQUIRE_DATABASE: "true"
+  READY_REQUIRE_AI_EXTRACTOR: "false"
+  AUDIT_LOG_PATH: /app/logs/admin-actions.jsonl
+  LOG_JSON: ${LOG_JSON:-true}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  METRICS_API_TOKEN: ${METRICS_API_TOKEN:-}
+
+x-app-volumes: &app-volumes
+  - ${HOST_DATA_DIR:-./data}:/app/data
+  - ${HOST_LOGS_DIR:-./logs}:/app/logs
+  - ${HOST_SAMPLES_DIR:-./samples}:/app/samples
+  - ${HOST_UPLOADS_DIR:-./uploads}:/app/uploads
 
 services:
   postgres:
     image: postgres:16
     container_name: fiscal_postgres
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
@@ -22,12 +56,69 @@ services:
       timeout: 5s
       retries: 5
 
-  # ZC-02：本地 OCR（PaddleOCR CPU，初始化后离线使用）。
-  # 默认不随基础设施启动：`docker compose --profile ocr up -d ocr`。
-  # 模型目录按 sha256 清单预置到 ./models/，缺失时容器启动即失败（不联网下载）。
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "${GOVBUDGET_BACKEND_PORT:-18743}:8000"
+    environment:
+      <<: *app-env
+      JOB_QUEUE_ROLE: api
+      JOB_QUEUE_INLINE_FALLBACK: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ocr:
+        condition: service_healthy
+    volumes: *app-volumes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready', timeout=10)"]
+      start_period: 60s
+      interval: 10s
+      timeout: 15s
+      retries: 12
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: ["python", "-m", "api.worker"]
+    environment:
+      <<: *app-env
+      JOB_QUEUE_ROLE: worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ocr:
+        condition: service_healthy
+    volumes: *app-volumes
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3000"
+    environment:
+      BACKEND_URL: http://backend:8000
+      GOVBUDGET_API_KEY: ${GOVBUDGET_API_KEY:?Set GOVBUDGET_API_KEY in .env}
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health', {signal: AbortSignal.timeout(10000)}).then(r => {if (!r.ok) process.exit(1)}).catch(() => process.exit(1))"]
+      start_period: 30s
+      interval: 10s
+      timeout: 15s
+      retries: 6
+
+  # 服务默认纳入无 AI 栈。OCR 必须使用本地校验过的模型包；模型缺失时
+  # /health 明确返回 models_ready=false，扫描件端点返回 503，不会联网下载。
   ocr:
-    profiles:
-      - ocr
     build:
       context: .
       dockerfile: Dockerfile.ocr
@@ -35,19 +126,21 @@ services:
     ports:
       - "127.0.0.1:9010:9010"
     environment:
-      OCR_CPU_THREADS: "4"
+      # 扫描页识别需要单独 ≥8GiB 内存、≥4 核；见 .env.example 的 OCR 资源说明。
+      OCR_CPU_THREADS: ${OCR_CPU_THREADS:-4}
+      OCR_ENABLE_MKLDNN: ${OCR_ENABLE_MKLDNN:-false}
       OCR_SERVICE_PORT: "9010"
       OCR_MODEL_MANIFEST: /models/MANIFEST.sha256
       PADDLE_HOME: /models
     volumes:
       - ./models:/models:ro
-    networks:
-      - ocr_offline
     restart: unless-stopped
-
-networks:
-  ocr_offline:
-    internal: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request; d=json.load(urllib.request.urlopen('http://localhost:9010/health', timeout=5)); assert d['models_ready']"]
+      start_period: 120s
+      interval: 10s
+      timeout: 10s
+      retries: 12
 
 volumes:
   fiscal_pgdata:

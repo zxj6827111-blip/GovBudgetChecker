@@ -172,6 +172,7 @@ const counts = {
 };
 const kpis = buildMaterialKpis({
   slot_total: 55,
+  uploaded_total: 29,
   // 刻意让"状态机事实"与"确认未到期"不同：not_due=1 里有 1 条其实是"截止时间未知"
   not_due_confirmed: 0,
   status_counts: counts,
@@ -191,7 +192,7 @@ const kpis = buildMaterialKpis({
 const kpiOf = (key: string) => kpis.find((kpi) => kpi.key === key)?.value;
 
 assert.equal(kpiOf("slot_total"), 55, "已建材料取 slot_total");
-assert.equal(kpiOf("uploaded"), 3);
+assert.equal(kpiOf("uploaded"), 29, "已上传按文件事实，包含处理中、已复核和失败状态");
 assert.equal(kpiOf("review"), 11, "待复核 = review_required + reviewing");
 assert.equal(kpiOf("completed"), 7);
 assert.equal(kpiOf("mapping_required"), 9);

@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import type { Route } from "next";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Card, Metric, SectionTitle } from "@/components/ui";
 import { UNKNOWN_METRIC_TEXT, formatMaterialTimestamp } from "@/lib/materialStatusPresentation";
 
 import { MaterialDataBasisNotice } from "./MaterialDataBasisNotice";
+import { ExpectedMaterialImport } from "./ExpectedMaterialImport";
 import { MaterialFilterBar } from "./MaterialFilterBar";
 import {
   DEFAULT_MATERIAL_FILTERS,
@@ -20,6 +21,7 @@ import {
   type MaterialFilterState,
 } from "./materialLedgerAdapters";
 import { useMaterialResource } from "./useMaterialResource";
+import { ReportingTaskEntry } from "./ReportingTaskEntry";
 
 /**
  * MaterialLedgerPage（页面 06）：材料台账首页。
@@ -32,8 +34,16 @@ import { useMaterialResource } from "./useMaterialResource";
  * 2. 区县卡片的"完整率"在没有应收基线时显示 `—`，不显示 0%、更不按现有槽位反推一个比例；
  * 3. `not_applicable`（人工确认不适用）不并入任何"缺失"类 KPI。
  */
-export function MaterialLedgerPage() {
+function LegacyMaterialLedgerPage() {
   const [filters, setFilters] = useState<MaterialFilterState>(DEFAULT_MATERIAL_FILTERS);
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const status = query.get("status");
+    setFilters(value => ({...value, fiscalYear: query.get("year") || "", reportKind: ["budget","final"].includes(query.get("kind") || "") ? query.get("kind") as "budget"|"final" : "all"}));
+    // 驾驶舱下钻只接受既有状态，未知 URL 参数不能变成新的业务状态。
+    const allowed = ["not_due", "missing", "uploaded", "processing", "review_required", "reviewing", "completed", "not_applicable", "mapping_required", "failed"];
+    if (status && allowed.includes(status)) setFilters((value) => ({ ...value, status: status as MaterialFilterState["status"] }));
+  }, []);
   const year = normalizeFiscalYearInput(filters.fiscalYear);
 
   const effectiveFilters = useMemo<MaterialFilterState>(
@@ -70,6 +80,7 @@ export function MaterialLedgerPage() {
       <div className="mt-4">
         <MaterialDataBasisNotice expectedMaterialsReady={body?.meta?.expected_materials_ready ?? false} />
       </div>
+      <ExpectedMaterialImport onImported={response.reload} />
 
       <div className="mt-5">
         <MaterialFilterBar
@@ -165,7 +176,7 @@ export function MaterialLedgerPage() {
                       key={row.districtId}
                       href={
                         `/materials/district/${row.districtId}${
-                          effectiveFilters.fiscalYear ? `?year=${effectiveFilters.fiscalYear}` : ""
+                          `?${new URLSearchParams({ legacy: "1", ...(effectiveFilters.fiscalYear ? { year: effectiveFilters.fiscalYear } : {}), kind: effectiveFilters.reportKind, status: effectiveFilters.status })}`
                         }` as Route
                       }
                       data-testid={`gbc-material-district-card-${row.districtId}`}
@@ -230,6 +241,10 @@ export function MaterialLedgerPage() {
       ) : null}
     </div>
   );
+}
+
+export function MaterialLedgerPage() {
+  return <ReportingTaskEntry legacy={<LegacyMaterialLedgerPage />} />;
 }
 
 export default MaterialLedgerPage;

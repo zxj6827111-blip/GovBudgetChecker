@@ -9,7 +9,7 @@ S4 的精度指标全部取自 ``run_benchmark``，而用户在生产里看到�
 实测等价面（本测试固化）：
 - finding 条数一致、规则多重集一致（``build_issues_payload`` 只做 dict 化
   与 severity 归一，不过滤不去重）；
-- severity 经 ``_norm_sev`` 归一为 error/warn/info 三桶。
+- severity 经 ``_norm_sev`` 落入 error/warn/info 三桶，待复核保留 manual_review。
 
 已知且**故意保留**的差异（不在本测试断言范围内）：
 - MR-3 的文档级可读性闸门在 ``api/main.py`` 里于 ``build_issues_payload``
@@ -62,14 +62,15 @@ def test_payload_severity_is_normalized_into_three_buckets() -> None:
     items = payload["issues"]["all"]
 
     for item in items:
-        assert item["severity"] in {"error", "warn", "info"}
+        assert item["severity"] in {"error", "warn", "info", "manual_review"}
     # 桶内容与 all 完全一致（分桶不是二次筛选）
     bucket_total = sum(len(payload["issues"][name]) for name in ("error", "warn", "info"))
     assert bucket_total == len(items)
 
     # 归一映射逐条对得上（raw severity → 三桶），且分桶按归一后的值落位
     expected = Counter(
-        engine_pipeline._norm_sev(str(getattr(issue, "severity", ""))) for issue in raw
+        "manual_review" if issue.severity == "manual_review" else engine_pipeline._norm_sev(str(issue.severity))
+        for issue in raw
     )
     assert Counter(item["severity"] for item in items) == expected
 

@@ -117,10 +117,15 @@ def _run(*page_texts: str, page_tables: List[Any] | None = None) -> List[Any]:
 
 
 def _hits(issues: List[Any], item_key: str | None = None) -> List[Any]:
+    """四项金额披露 finding（带 item_key）。2026-10-22 口径决议④新增的数量要素
+    finding（带 count_field，含始终要求的车辆保有量）另由
+    tests/test_checklist_policy_20261022.py 覆盖，不计入本文件的金额披露合同。"""
     return [
         issue
         for issue in issues
-        if issue.rule == RULE_ID and (item_key is None or issue.location.get("item_key") == item_key)
+        if issue.rule == RULE_ID
+        and issue.location.get("item_key")
+        and (item_key is None or issue.location.get("item_key") == item_key)
     ]
 
 

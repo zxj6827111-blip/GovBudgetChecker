@@ -303,6 +303,7 @@ class ConflictItem(BaseModel):
         "semantic-mismatch",
         "evidence-mismatch",
         "ambiguous-relation",
+        "relation-evaluation-error",
     ] = Field(..., description="冲突原因")
     details: Dict[str, Any] = Field(default_factory=dict, description="冲突详情")
     
@@ -378,6 +379,9 @@ class JobContext(BaseModel):
     fact_context: Optional[Dict[str, Any]] = Field(
         None, description="统一财政事实上下文快照"
     )
+    parse_artifact: Optional[Dict[str, Any]] = Field(
+        None, description="与财政事实同一解析版本的完整表格及原始单元格快照"
+    )
 
 
 class AnalysisConfig(BaseModel):
@@ -397,6 +401,7 @@ class AnalysisConfig(BaseModel):
     
     # AI参数
     ai_timeout: int = Field(default=60, description="AI超时时间（秒）")
+    ai_profile_id: Optional[str] = Field(default=None, description="本次检查选用的模型配置")
     ai_retry: int = Field(default=1, description="AI重试次数")
     ai_temperature: float = Field(default=0.2, description="AI温度参数")
     

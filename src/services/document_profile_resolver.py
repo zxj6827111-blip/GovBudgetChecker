@@ -53,6 +53,7 @@ from src.schemas.document_profile import (
     SOURCE_EXPLICIT,
     SOURCE_FILENAME,
     SOURCE_PAGE_TEXT,
+    SOURCE_TABLE_TITLE,
     SOURCE_UNRESOLVED,
     DocumentProfile,
     ProfileField,
@@ -108,6 +109,20 @@ def normalize_cover_line(raw: Any) -> str:
     return re.sub(r"\s+", "", str(raw or "").strip())
 
 
+def government_mixed_period_title(page_texts: Sequence[str]) -> str:
+    """原件会议标题与受政府委托的正文共同证明政府混合期间报告。"""
+    first = str(page_texts[0] or '') if page_texts else ''
+    heading = normalize_cover_line('\n'.join(first.splitlines()[:12]))
+    match = re.search(r'关于[\u4e00-\u9fff]{2,40}20\d{2}年(?:财政)?决算(?:和|及|与)'
+                      r'20\d{2}年(?:上半年|下半年)?预算执行情况(?:的)?报告', heading)
+    body = normalize_cover_line(first)
+    if (match and '人民代表大会' in body
+            and re.search(r'受[^。；]{0,20}人民政府委托', body)
+            and not re.search(r'部门决算|单位决算|决算主管部门|决算单位', heading)):
+        return match.group()
+    return ''
+
+
 def _split_basename(path: str) -> str:
     """跨平台取文件名基名。
 
@@ -125,11 +140,19 @@ def _detect_cover_scope_hint(text: str) -> Optional[str]:
     compact = normalize_cover_line(text)
     if not compact:
         return None
-    if "\u4e3b\u7ba1\u90e8\u95e8" in compact or "\u90e8\u95e8\u9884\u7b97" in compact or "\u90e8\u95e8\u51b3\u7b97" in compact:
+    if (
+        "\u4e3b\u7ba1\u90e8\u95e8" in compact
+        or "\u90e8\u95e8\u9884\u7b97" in compact
+        or "\u90e8\u95e8\u51b3\u7b97" in compact
+    ):
         return "department"
     if "\u9884\u7b97\u5355\u4f4d" in compact or "\u51b3\u7b97\u5355\u4f4d" in compact:
         return "unit"
-    if "\u5355\u4f4d\u9884\u7b97" in compact or "\u5355\u4f4d\u51b3\u7b97" in compact or "\u672c\u7ea7" in compact:
+    if (
+        "\u5355\u4f4d\u9884\u7b97" in compact
+        or "\u5355\u4f4d\u51b3\u7b97" in compact
+        or "\u672c\u7ea7" in compact
+    ):
         return "unit"
     if "\u90e8\u95e8" in compact:
         return "department"
@@ -218,14 +241,10 @@ def _pick(
         if chosen is None:
             chosen = (source, normalized_value, evidence)
             continue
-        rejected.append(
-            {"source": source, "value": normalized_value, "evidence": evidence}
-        )
+        rejected.append({"source": source, "value": normalized_value, "evidence": evidence})
     if chosen is None:
         return ProfileField(value=None, source=SOURCE_UNRESOLVED)
-    return ProfileField(
-        value=chosen[1], source=chosen[0], evidence=chosen[2], rejected=rejected
-    )
+    return ProfileField(value=chosen[1], source=chosen[0], evidence=chosen[2], rejected=rejected)
 
 
 def _detect_fund_scopes(page_texts: Sequence[str], table_titles: Sequence[str]) -> List[str]:
@@ -244,7 +263,9 @@ def _detect_fund_scopes(page_texts: Sequence[str], table_titles: Sequence[str]) 
     return found
 
 
-def _detect_caliber(page_texts: Sequence[str], cover_title: str, table_titles: Sequence[str]) -> Optional[str]:
+def _detect_caliber(
+    page_texts: Sequence[str], cover_title: str, table_titles: Sequence[str]
+) -> Optional[str]:
     head = "\n".join([cover_title, *table_titles, *(page_texts[:2] if page_texts else [])])
     if not head:
         return None
@@ -327,6 +348,10 @@ def resolve_document_profile(
         cover_org_name = facts["cover_org_name"] or cover_org_name
         cover_org_label = facts["cover_org_label"] or cover_org_label
         cover_scope_hint = cover_scope_hint or (facts["cover_scope_hint"] or None)
+    elif not cover_org_name and pages:
+        facts = detect_cover_facts(pages)
+        cover_org_name = facts["cover_org_name"]
+        cover_org_label = cover_org_label or facts["cover_org_label"]
 
     explicit = str(explicit_report_kind or "").strip().lower()
     explicit_kind = explicit if explicit in REPORT_KINDS and explicit != "unknown" else None
@@ -371,12 +396,17 @@ def resolve_document_profile(
                 }
             )
 
-    scope_hint = str(cover_scope_hint or "").strip() or (_detect_cover_scope_hint(cover_title) or "")
+    scope_hint = str(cover_scope_hint or "").strip() or (
+        _detect_cover_scope_hint(cover_title) or ""
+    )
     # 政府层级只从**封面标题**判定，不看机构名。
     # 机构名里出现"人民政府"极常见（如"…人民政府石泉路街道办事处（本级）"
     # 是街道单位的预算），据此判成政府级会把部门的材料错分成政府口径，
     # 比识别不到更危险。政府级材料的标题会直接写"政府预算/政府决算"。
     normalized_title = normalize_cover_line(cover_title)
+    mixed_government_title = government_mixed_period_title(pages)
+    if mixed_government_title and not cover_org_label:
+        scope_hint = 'government'
     if any(token in normalized_title for token in _GOVERNMENT_LABEL_TOKENS):
         # ZC-02（SYS-17）：连写封面"上海市普陀区财政局2024年度部门决算"是
         # 财政局自身的**部门决算**，不是政府总决算——标题明示"部门"时，
@@ -387,7 +417,8 @@ def resolve_document_profile(
     # 主体层级：政府级 > 封面标签/标题 > 机构名后缀推断。
     level_candidates: List[Tuple[str, Any, str]] = []
     if scope_hint:
-        level_candidates.append((SOURCE_COVER_TITLE, scope_hint, f"封面提示：{scope_hint}"))
+        level_candidates.append((SOURCE_COVER_TITLE, scope_hint,
+                                 f"原件会议报告标题：{mixed_government_title}" if mixed_government_title else f"封面提示：{scope_hint}"))
     subject_level = _pick(
         "subject_level",
         tuple(level_candidates),
@@ -415,11 +446,13 @@ def resolve_document_profile(
         evidence="显式指定" if year_source == SOURCE_EXPLICIT and parsed_year else "",
     )
 
+    table_org_name, table_org_pages = _table_header_org(pages)
     organization = _pick(
         "organization_name",
-        (
-            (SOURCE_COVER_LABEL, str(cover_org_name or "").strip(), f"封面标签：{cover_org_label}"),
-        ),
+        ((SOURCE_COVER_LABEL if cover_org_label else SOURCE_PAGE_TEXT,
+          str(cover_org_name or "").strip(),
+          f"封面标签：{cover_org_label}" if cover_org_label else f"封面原文：{cover_org_name}"),
+         (SOURCE_TABLE_TITLE, table_org_name, f"表页编制部门标签一致：{table_org_pages}页")),
     )
     caliber_value = _detect_caliber(pages, cover_title, titles)
     caliber = ProfileField(
@@ -442,9 +475,7 @@ def resolve_document_profile(
         evidence="封面或文件名中的行政区划名" if jurisdiction_value else "",
     )
 
-    quality_value = _detect_extraction_quality(
-        page_assessment, threshold=text_coverage_threshold
-    )
+    quality_value = _detect_extraction_quality(page_assessment, threshold=text_coverage_threshold)
     extraction_quality = ProfileField(
         value=quality_value,
         source=SOURCE_DERIVED if quality_value else SOURCE_UNRESOLVED,
@@ -454,7 +485,10 @@ def resolve_document_profile(
     resolved_kind = str(report_kind.value or "unknown")
     resolved_level = str(subject_level.value or "unknown")
 
-    if resolved_kind == "unknown":
+    if mixed_government_title and resolved_level == 'government':
+        profile_status = PROFILE_STATUS_PARTIAL
+        unsupported_reason = 'government_mixed_period_report'
+    elif resolved_kind == "unknown":
         profile_status = PROFILE_STATUS_UNRESOLVED
         unsupported_reason = "report_kind_unresolved"
     elif conflicts:
@@ -518,6 +552,33 @@ def resolve_report_kind_from_path(
     return profile.kind
 
 
+_TABLE_ORG_LABEL_RE = re.compile(r"(?:编制部门|编制单位)[：:]\s*([^\s：:]+)")
+
+
+def _table_header_org(page_texts: Sequence[str]) -> Tuple[str, int]:
+    """封面没有主体时的标签兜底：各表页「编制部门：X」一致才采用。
+
+    这是表页明示的标签，不是从正文提及或文件名推断；至少两页出现且只有
+    一个取值，否则不取（多主体汇总材料由封面或人工确认）。
+    """
+    names = [match.group(1).strip()
+             for text in list(page_texts)[1:]
+             for match in _TABLE_ORG_LABEL_RE.finditer(str(text or ""))
+             if match.group(1).strip()]
+    if len(names) >= 2 and len(set(names)) == 1:
+        return names[0], len(names)
+    return "", 0
+
+
+#: 封面单位名折行判断用的机构后缀：名称未以后缀收尾、接上下一行短残段后才收尾，就是折行。
+_COVER_ORG_SUFFIX_RE = re.compile(
+    r"(?:委员会|办公厅|办公室|局|厅|部|医院|学校|校|幼儿园|学院|大学|中心|院|所|站|馆|队|会|委|室|处|团|社|台|场|园|宫)\)?$")
+
+
+def _open_brackets(text: str) -> int:
+    return text.count("（") + text.count("(") - text.count("）") - text.count(")")
+
+
 def detect_cover_facts(page_texts: Sequence[str]) -> Dict[str, str]:
     """从首页提取封面原始事实（标题、机构名、标签、层级提示）。
 
@@ -529,7 +590,15 @@ def detect_cover_facts(page_texts: Sequence[str]) -> Dict[str, str]:
     lines = [line.strip() for line in first_page_text.splitlines() if line.strip()]
 
     cover_title = ""
+    for index, line in enumerate(lines[:19]):
+        if re.search(r"20\d{2}年度?(?:部门|单位)?$", normalize_cover_line(line)) and index + 1 < len(lines):
+            following = normalize_cover_line(lines[index + 1])
+            if following in {"预算", "决算", "部门预算", "部门决算", "单位预算", "单位决算"}:
+                cover_title = line + "\n" + lines[index + 1]
+                break
     for line in lines[:20]:
+        if cover_title:
+            break
         compact = normalize_cover_line(line)
         if not compact:
             continue
@@ -548,7 +617,7 @@ def detect_cover_facts(page_texts: Sequence[str]) -> Dict[str, str]:
     cover_org_name = ""
     cover_org_label = ""
     scope_hint: Optional[str] = None
-    for line in lines[:40]:
+    for index, line in enumerate(lines[:40]):
         compact = normalize_cover_line(line)
         if not compact:
             continue
@@ -559,12 +628,87 @@ def detect_cover_facts(page_texts: Sequence[str]) -> Dict[str, str]:
             remainder = re.sub(r"^[\uff1a:]+", "", remainder).strip()
             if not remainder:
                 continue
+            # 长名称在括号内折行（「…上海渔港监督\n局）」）：只续接到括号闭合，续行不能另起标签。
+            for following in lines[index + 1:index + 3]:
+                following = normalize_cover_line(following)
+                if re.search(r"[:：]", following) or len(following) > 30 or re.search(r"\d", following):
+                    break
+                # 「…综合执\n法大队」：括号已闭合时，只有接上短残段才以机构后缀收尾才续接。
+                broken_name = (not _COVER_ORG_SUFFIX_RE.search(remainder) and len(following) <= 6
+                               and _COVER_ORG_SUFFIX_RE.search(remainder + following))
+                if _open_brackets(remainder) <= 0 and not broken_name:
+                    break
+                remainder += following
             cover_org_name = remainder
             cover_org_label = label
             scope_hint = label_scope
             break
         if cover_org_name:
             break
+
+    # Publisher labels state an owner directly but do not, by themselves,
+    # determine budget versus final. Keep the existing four labels first.
+    if not cover_org_name:
+        candidates = []
+        for line in lines[:40]:
+            match = re.fullmatch(
+                r"(编制部门|编制单位|发布单位)[：:]([^：:]+)", normalize_cover_line(line)
+            )
+            if match and match.group(2).strip():
+                candidates.append(match.groups())
+        if len({name for _label, name in candidates}) == 1:
+            cover_org_label, cover_org_name = candidates[0]
+            scope_hint = {"编制部门": "department", "编制单位": "unit"}.get(cover_org_label)
+
+    if not cover_org_name and cover_title:
+        # Unlabelled covers put the actual publisher immediately before the
+        # annual heading. Never infer it from a filename or later body mentions.
+        title_index = next((i for i, line in enumerate(lines[:20]) if line == cover_title.splitlines()[0]), None)
+        prefix = (re.split(r"20\d{2}", normalize_cover_line(cover_title), maxsplit=1)[0]
+                  if re.search(r"20\d{2}", cover_title) else "")
+        # 封面主体可能后接多行括号别名。先分离成对括号，再恢复相邻主名称；
+        # 括号必须闭合，多个完整机构名并列时不擅自选择。
+        previous = lines[:title_index] if title_index is not None else []
+        block = "".join(normalize_cover_line(line) for line in previous if not line.isdigit()) + prefix
+        block = block.replace("（", "(").replace("）", ")")
+        # “室”与“局/所”等同为机构后缀；仍只接受年度标题前的封面原文，
+        # 并沿用下方的多主体/括号完整性检查，不能从正文或文件名补出发布者。
+        suffix = r"(?:委员会|办公厅|办公室|管理局|监督管理局|财政局|局|厅|部|医院|学校|中学|小学|校|幼儿园|红十字会|学院|大学|中心|人民法院|人民检察院|办事处|秘书处|街道|镇|乡|馆|队|会|委|宫|所|站|院|园|政府|室|监狱|团|社|场|台|基地)"
+        def valid(name):
+            return bool(re.fullmatch(r"[\u4e00-\u9fff]{3,100}" + suffix, name)) and not re.search(r"^关于|目录|附件|部分|项目支出|情况|说明|预算|决算", name)
+        balanced = block.count("(") == block.count(")") and "(" not in re.sub(r"\([^()]*\)", "", block)
+        clean = re.sub(r"\([^()]*\)", "", block) if balanced else ""
+        clean = re.sub(r"本级$", "", clean)
+        adjacent = [normalize_cover_line(line) for line in previous if not line.isdigit()]
+        if prefix:
+            adjacent.append(prefix)
+        full_names = [name for name in adjacent if valid(name)]
+        standalone_names = [name for name in adjacent
+                            if re.fullmatch(r"[\u4e00-\u9fff]{1,100}" + suffix, name)
+                            and not re.search(r"目录|附件|部分|项目支出|情况|说明|预算|决算", name)
+                            # “办公室/研究室”等短后缀行不能独立指明机构，
+                            # 否则给室后缀补覆盖会把原有“委员会\n办公室”误拆为两家。
+                            and not (name.endswith("室") and not valid(name))
+                            and not name.endswith(("人民政府", "区委", "县委", "市委", "省委", "党委", "街道", "镇", "乡"))]
+        # 人大封面经常在“人民代表大会/常务委员会办公室”之间断行。
+        # 后半是同一机构的职能后缀，不能当作第二个独立发布机构。
+        if (len(adjacent) >= 2 and adjacent[-2].endswith("人民代表大会")
+                and adjacent[-1] == "常务委员会办公室"):
+            standalone_names = [clean]
+        # 跨行主名称的前半可能本身也是机构后缀（基金会/幼儿园）。仅当
+        # 该封面原文组合在后续概况/表目录的主体标题中再次明确出现才合并。
+        corroborated = valid(clean) and any(re.search(
+            r"(?:第一部分|第二部分|编制单位[:：]|发布单位[:：])" + re.escape(clean) + r"(?:概况|20\d{2})",
+            normalize_cover_line(page),
+        ) for page in pages[1:3])
+        # 一个主名称加括号别名，或本级口径括号，主体取括号外原文。
+        if balanced and "(" in block and valid(clean) and len(set(standalone_names)) <= 1:
+            cover_org_name = clean
+        elif (len(set(standalone_names)) <= 1 or corroborated) and valid(clean):
+            # 单独的地域/人民政府行只允许与紧接的机构名组成原文。
+            cover_org_name = clean
+        elif len(set(full_names)) == 1:
+            cover_org_name = full_names[0]
 
     return {
         "cover_title": cover_title,

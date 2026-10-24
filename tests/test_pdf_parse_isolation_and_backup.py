@@ -420,6 +420,25 @@ def _seed_uploads(root: Path) -> Dict[str, str]:
     return digests
 
 
+def test_history_hardlinks_are_backed_up_as_regular_files_and_symlinks_stay_rejected(tmp_path):
+    import tarfile
+    from scripts import backup_all
+    uploads=tmp_path/'uploads';uploads.mkdir()
+    original=uploads/'status.json';original.write_bytes(b'{"history":true}')
+    history=uploads/'history';history.mkdir()
+    os.link(original,history/'status.json')
+    target=tmp_path/'uploads.tar.gz'
+    result=backup_all.archive_uploads(uploads,target)
+    assert result['file_count']==2
+    with tarfile.open(target,'r:gz')as tar:
+        regular=[m for m in tar.getmembers()if not m.isdir()]
+        assert len(regular)==2 and all(m.isfile()for m in regular)
+        assert all(tar.extractfile(m).read()==original.read_bytes()for m in regular)
+    (uploads/'unsafe-link').symlink_to(original)
+    with pytest.raises(backup_all.BackupError,match='链接'):
+        backup_all.archive_uploads(uploads,tmp_path/'unsafe.tar.gz')
+
+
 def test_backup_covers_all_three_artifacts(tmp_path):
     uploads = tmp_path / "uploads"
     digests = _seed_uploads(uploads)

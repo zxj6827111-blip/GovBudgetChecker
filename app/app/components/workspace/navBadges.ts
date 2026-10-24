@@ -1,10 +1,11 @@
+import type { JobCountsView } from "../../../lib/jobListViews";
 import { normalizeUiTaskStatus } from "../../../lib/uiAdapters";
 import type { JobSummaryRecord } from "../../../lib/uiAdapters";
 
 import type { NavBadgeKey } from "./nav";
 
 /**
- * 从真实任务列表计算导航角标数字。
+ * 处理角标来自分析运行；复核角标必须由清单服务的材料生命周期计数提供。
  *
  * 关键约束（任务书"角标接真实计数，无数据显示空而非 0"）：
  * - 输入为 null/undefined（尚未拉到数据，例如请求中或请求失败）时，
@@ -15,24 +16,27 @@ import type { NavBadgeKey } from "./nav";
  */
 export type NavBadgeCounts = Partial<Record<NavBadgeKey, number>>;
 
-export function computeNavBadgeCounts(jobs: JobSummaryRecord[] | null | undefined): NavBadgeCounts {
+export function computeNavBadgeCounts(jobs: JobSummaryRecord[] | null | undefined, reviewPendingCount?: number): NavBadgeCounts {
+  const reviewCounts = typeof reviewPendingCount === "number" ? { review_required: reviewPendingCount } : {};
   if (jobs === null || jobs === undefined) {
-    return {};
+    return reviewCounts;
   }
 
   let analyzing = 0;
-  let reviewRequired = 0;
   for (const job of jobs) {
     const status = normalizeUiTaskStatus(job.status);
     if (status === "analyzing") {
       analyzing += 1;
-    } else if (status === "review_required") {
-      reviewRequired += 1;
     }
   }
 
   return {
     analyzing,
-    review_required: reviewRequired,
+    ...reviewCounts,
   };
+}
+
+/** 接口汇总版：counts 为 null（请求中或失败）时同样不渲染处理角标。 */
+export function navBadgeCountsFromJobCounts(counts: JobCountsView | null | undefined): NavBadgeCounts {
+  return counts ? { analyzing: counts.status_counts.analyzing } : {};
 }

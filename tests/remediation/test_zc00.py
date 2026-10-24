@@ -17,6 +17,7 @@ SYS-12（Word 零问题写"未发现明显问题"、下载不保留未完成范�
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -44,6 +45,24 @@ TWO_PAGE_TEXTS = [
     "一、收入支出决算总体情况说明\n本年收入合计 100.00 万元。",
     "二、三公经费支出决算情况说明\n三公经费合计 35.20 万元。",
 ]
+TEST_SOURCE_HASH = hashlib.sha256(b"zc00-evidence-test-source").hexdigest()
+
+
+def _source_ref(page: int, quote: str, *, source_id: str | None = None) -> Dict[str, Any]:
+    source_id = source_id or f"page-{page}-text-block"
+    evidence_id = hashlib.sha1(
+        f"{TEST_SOURCE_HASH}|{page}|{source_id}|{quote}".encode("utf-8")
+    ).hexdigest()[:16]
+    return {
+        "page": page,
+        "physical_page": page,
+        "text": quote,
+        "quote": quote,
+        "file_hash": TEST_SOURCE_HASH,
+        "source_block_id": source_id,
+        "source_identity_status": "verified",
+        "evidence_id": evidence_id,
+    }
 
 
 def test_two_page_doc_referencing_page_999_fails_verification() -> None:
@@ -53,7 +72,7 @@ def test_two_page_doc_referencing_page_999_fails_verification() -> None:
         "source": "rule",
         "rule_id": "C-001",
         "page_number": 999,
-        "evidence": [{"page": 999, "text": "三公经费合计 35.20 万元"}],
+        "evidence": [_source_ref(999, "三公经费合计 35.20 万元")],
     }
     complete, missing, verification = evaluate_finding_evidence(
         finding, document_page_count=2, page_texts=TWO_PAGE_TEXTS
@@ -70,7 +89,7 @@ def test_quote_missing_from_claimed_page_fails_verification() -> None:
         "source": "ai",
         "rule_id": "AI-SEM-1",
         "page_number": 2,
-        "evidence": [{"page": 2, "text": "差旅费 88.88 万元"}],
+        "evidence": [_source_ref(2, "差旅费 88.88 万元")],
     }
     complete, missing, verification = evaluate_finding_evidence(
         finding, document_page_count=2, page_texts=TWO_PAGE_TEXTS
@@ -87,10 +106,11 @@ def test_quote_verified_on_claimed_page_passes() -> None:
         "source": "rule",
         "rule_id": "C-001",
         "page_number": 2,
-        "evidence": [{"page": 2, "text": "三公经费合计  35.20 万元。"}],
+        "evidence": [_source_ref(2, "三公经费合计  35.20 万元。")],
     }
     complete, missing, verification = evaluate_finding_evidence(
-        finding, document_page_count=2, page_texts=TWO_PAGE_TEXTS
+        finding, document_page_count=2, page_texts=TWO_PAGE_TEXTS,
+        source_file_hash=TEST_SOURCE_HASH,
     )
     assert complete is True
     assert verification["status"] == "verified"
@@ -104,10 +124,11 @@ def test_scanned_page_without_text_layer_is_unverified_not_failed() -> None:
         "source": "rule",
         "rule_id": "C-001",
         "page_number": 1,
-        "evidence": [{"page": 1, "text": "本年收入合计 100.00 万元"}],
+        "evidence": [_source_ref(1, "本年收入合计 100.00 万元")],
     }
     complete, _missing, verification = evaluate_finding_evidence(
-        finding, document_page_count=1, page_texts=[""]  # 扫描页：无文本层
+        finding, document_page_count=1, page_texts=[""],
+        source_file_hash=TEST_SOURCE_HASH,  # 扫描页：无文本层
     )
     assert complete is True
     assert verification["status"] == "unverified"
@@ -121,9 +142,11 @@ def test_no_page_texts_available_records_unverified() -> None:
         "source": "rule",
         "rule_id": "C-001",
         "page_number": 3,
-        "evidence": [{"page": 3, "text": "合计 35.20"}],
+        "evidence": [_source_ref(3, "合计 35.20")],
     }
-    complete, _missing, verification = evaluate_finding_evidence(finding)
+    complete, _missing, verification = evaluate_finding_evidence(
+        finding, source_file_hash=TEST_SOURCE_HASH
+    )
     assert complete is True
     assert verification["status"] == "unverified"
 
@@ -137,19 +160,20 @@ def test_apply_completeness_records_verification_counts() -> None:
                 "source": "rule",
                 "rule_id": "C-001",
                 "page_number": 2,
-                "evidence": [{"page": 2, "text": "三公经费合计 35.20 万元"}],
+                "evidence": [_source_ref(2, "三公经费合计 35.20 万元")],
             },
             {
                 "id": "beyond",
                 "source": "rule",
                 "rule_id": "C-001",
                 "page_number": 999,
-                "evidence": [{"page": 999, "text": "三公经费合计 35.20 万元"}],
+                "evidence": [_source_ref(999, "三公经费合计 35.20 万元")],
             },
         ]
     }
     completeness = apply_evidence_completeness(
-        result, document_page_count=2, page_texts=TWO_PAGE_TEXTS
+        result, document_page_count=2, page_texts=TWO_PAGE_TEXTS,
+        source_file_hash=TEST_SOURCE_HASH,
     )
     assert completeness["total"] == 2
     assert completeness["complete"] == 1
@@ -540,6 +564,8 @@ async def test_pipeline_default_status_never_requests_model(
 
     from api import main as pipeline_mod, runtime
 
+    # 本用例验证默认不请求语义 AI；扫描队列另有专门的续跑合同。
+    monkeypatch.setenv('OCR_ENABLED', 'false')
     attempts = _install_external_connect_guard(monkeypatch)
 
     job_dir = tmp_path / "job-ai-off"
@@ -603,7 +629,8 @@ async def test_dual_analyzer_ai_switch_off_by_default(
     )
     ai_calls: List[Any] = []
 
-    async def _stub_ai(_ctx: Any, _rules: Any, _cfg: Any) -> List[Any]:
+    async def _stub_ai(_ctx: Any, _rules: Any, _cfg: Any, *, timeout_seconds: int) -> List[Any]:
+        assert timeout_seconds > 0
         ai_calls.append(1)
         return []
 

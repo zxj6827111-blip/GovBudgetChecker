@@ -30,6 +30,7 @@ from src.engine.budget_rules import (
     BUD101_T1Balance,
     _extract_t4_strict,
     _resolve_table_unit,
+    _classify_text_vs_table,
     _text_vs_table_envelope,
 )
 from src.engine.common_rules import (
@@ -152,7 +153,9 @@ def final_replays() -> Dict[str, Dict[str, Any]]:
 #: BUD-108 在文旅局样张上绩效说明金额已提取、T3 无合计行，
 #: 口径比较结构性不适用（证据随 detail 留痕）。
 EXPECTED_BUD_STATUS = {
-    "jianguanwei": {"BUD-105": "pass", "BUD-107": "pass", "BUD-108": "fail", "BUD-109": "pass"},
+    # 口径决议①补充（C-16）：建管委说明把 328,661.81 万元写成「328,661万元」（截尾），
+    # BUD-107 由 pass 改为 fail——撤销 MR-B2 对整万元截断的容忍。
+    "jianguanwei": {"BUD-105": "pass", "BUD-107": "fail", "BUD-108": "fail", "BUD-109": "pass"},
     "chengguan": {"BUD-105": "pass", "BUD-107": "pass", "BUD-108": "fail", "BUD-109": "pass"},
     # ZC-02（SYS-02）多页续表恢复后：T3 第三页行被读全，
     # BUD-108 从 not_applicable（缺数据结构性不适用）变为真实 pass
@@ -182,7 +185,8 @@ EXPECTED_BUD_UNRESOLVED = {
     "chengguan": set(),
     # ZC-02 多页续表恢复后：BUD-102/103 所需的合计行在第三页被找回，
     # 不再取数失败（旧行为"只读前两页"锁定的 insufficient 已解除）
-    "wenlvju": set(),
+    # P3既无文本也无表格，不能证明完整结构缺失；金额续表校验仍已完成。
+    "wenlvju": {"BUD-001"},
 }
 
 
@@ -300,9 +304,11 @@ def test_t4_total_column_not_unique_fail_closed():
     assert exp is None or not exp.is_numeric
 
 
-def test_text_vs_table_envelope_absorbs_truncation():
-    """文本整万元截断显示（328,661.80822 →「328,661万元」）属显示舍入，
-    不得报「文本与表不一致」；真实差异 ≥1 万仍判 mismatch。"""
+def test_text_vs_table_truncation_is_reported_after_c16():
+    """2026-10-22 口径决议①补充（清单 C-16“不得截尾”）：表比正文更精细时，
+    正文须等于表内金额按正文精度四舍五入的结果。建管委「328,661万元」对应
+    表内 328,661.80822 万元，四舍五入应为 328,662，属截尾——原 MR-B2 的
+    包络放宽已撤销；真实差异同样判 mismatch。"""
     text_sv = StrictValue(
         raw_text="328,661", status=STATUS_VALID,
         decimal_val=Decimal("328661"), unit="万元", scale_digits=0,
@@ -311,21 +317,27 @@ def test_text_vs_table_envelope_absorbs_truncation():
         raw_text="3,286,618,082.20", status=STATUS_VALID,
         decimal_val=Decimal("328661.80822"), unit="元", scale_digits=2,
     )
-    env = _text_vs_table_envelope(text_sv, table_sv)
-    level, _ = classify_amount_diff(
-        text_sv.decimal_val, table_sv.decimal_val, 1, envelope=env
+    level, _, rounded = _classify_text_vs_table(
+        text_sv, table_sv, _text_vs_table_envelope(text_sv, table_sv)
     )
-    assert level in ("ok", "rounding_hint")
+    assert level == "mismatch"
+    assert rounded == Decimal("328662")
+
+    correct_sv = StrictValue(
+        raw_text="328,662", status=STATUS_VALID,
+        decimal_val=Decimal("328662"), unit="万元", scale_digits=0,
+    )
+    assert _classify_text_vs_table(
+        correct_sv, table_sv, _text_vs_table_envelope(correct_sv, table_sv)
+    )[0] == "ok"
 
     real_sv = StrictValue(
         raw_text="3,288,618,082.20", status=STATUS_VALID,
         decimal_val=Decimal("328861.80822"), unit="元", scale_digits=2,
     )
-    level2, _ = classify_amount_diff(
-        text_sv.decimal_val, real_sv.decimal_val, 1,
-        envelope=_text_vs_table_envelope(text_sv, real_sv),
-    )
-    assert level2 == "mismatch"
+    assert _classify_text_vs_table(
+        text_sv, real_sv, _text_vs_table_envelope(text_sv, real_sv)
+    )[0] == "mismatch"
 
 
 # ---------------------------------------------------------------------------
@@ -412,15 +424,62 @@ def test_cmm001_resolved_on_finals(final_replays, alias):
 
 
 def test_finals_unresolved_total_le_11(final_replays):
-    """RC-04 后 yichuan CMM-001 因说明侧确实未提及 car_buy 转未完成（+1）：
-    这是"缺披露不得假通过"的如实代价，未完成合计阈值 10 → 11。"""
+    """R17 重核原文：三份表四的结转金额为空，不能当作零报通过。
+
+    仅允许三个有冻结原文证据的 V33-242 回升；其余 RC-04 基线仍 ≤11。
+    """
     total = sum(r["summary"]["unresolved_total"] for r in final_replays.values())
-    assert total <= 11, f"4 份决算 unresolved 合计 {total} > 11"
+    added = 0
+    for alias in ['yichuan', 'shiquan', 'wenlv']:
+        unresolved = final_replays[alias]['summary']['unresolved_rules']
+        item = next(x for x in unresolved if x['rule_id'] == 'V33-242')
+        assert '空白或未绑定，不能当作零复算' in item['detail']
+        added += 1
+    # R18：冻结夹具未提供三公分项预算与统一事实，不能把未比较记通过。
+    for alias in ["golden", "yichuan", "wenlv", "shiquan"]:
+        item = next(x for x in final_replays[alias]["summary"]["unresolved_rules"]
+                    if x["rule_id"] == "V33-TREND-COMPLETION-RATE")
+        assert item["status"] == "insufficient_data" and "预算分母" in item["detail"]
+        if alias == "shiquan":
+            assert "公共法律服务" in item["detail"]
+            assert "本年支出决算存在多个不一致披露" in item["detail"]
+        added += 1
+    # These old page-data fixtures have no current native fact context. Keep
+    # the original threshold for other rules, while proving the new input gaps.
+    for alias in ("golden", "yichuan", "wenlv", "shiquan"):
+        # V33-252（2026-10-22 清单 C-04）同样只读当前统一事实。
+        for rule in ("V33-248", "V33-249", "V33-252"):
+            item = next((x for x in final_replays[alias]["summary"]["unresolved_rules"]
+                         if x["rule_id"] == rule), None)
+            if item:
+                assert item["detail"] == "缺少当前版本财政事实"
+                added += 1
+    item = next(x for x in final_replays["yichuan"]["summary"]["unresolved_rules"]
+                if x["rule_id"] == "V33-250")
+    assert '评级数量之和小于总数' in item['detail'] and '不能补零' in item['detail']
+    added += 1
+    # 老page-data没有物理空格证明：说明中的零不能替代原表留空的出国决算格。
+    for alias in ('yichuan','shiquan'):
+        item=next(x for x in final_replays[alias]['summary']['unresolved_rules']if x['rule_id']=='V33-224')
+        assert item['status']=='insufficient_data' and item['detail']=='因公出国说明或表内决算金额未唯一识别'
+        added+=1
+    item=next(x for x in final_replays['shiquan']['summary']['unresolved_rules']if x['rule_id']=='V33-234')
+    assert '原文包含其他或未确认主体，不能跨主体拼接金额' in item['detail']
+    added+=1
+    assert total - added <= 11, f"除已核实的原文缺操作数外仍有计划外回升: {total} - {added} > 11"
 
 
 def test_yichuan_findings_stay_12(final_replays):
-    """按 portable 0.1 个百分点容差，车辆同比差 0.20pp 应另报一条提示。"""
-    assert len(final_replays["yichuan"]["issues"]) == 13
+    """按 portable 0.1 个百分点容差，车辆同比差 0.20pp 应另报一条提示。
+
+    2026-10-22 清单全系统默认后另有两条真实发现：正文决算表标题缺“第二部分”
+    字样（CMM-013，清单决算 A-01）、具体情况逐项支出决算合计 20214.01 万元与
+    总额 20218.21 万元差 4.20 万元（V33-251，清单决算 C-12）。
+    """
+    issues = final_replays["yichuan"]["issues"]
+    checklist = sorted(i.rule for i in issues if i.rule in {"CMM-013", "V33-251"})
+    assert checklist == ["CMM-013", "V33-251"]
+    assert len(issues) - len(checklist) == 13
 
 
 def test_wenlv_cascade_still_zero(final_replays):

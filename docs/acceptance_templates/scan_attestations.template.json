@@ -1,0 +1,23 @@
+{
+  "schema_version": "gbc.scan.attestations.v1",
+  "frozen_at": null,
+  "reviewed_by": null,
+  "generated_by": "independent_human_review",
+  "regions": [
+    {
+      "file_hash": null,
+      "physical_page": null,
+      "bbox": null,
+      "quote": null,
+      "source_cell_id": null,
+      "model_fingerprint": null,
+      "raw_prediction_sha256": null,
+      "render_dpi": 300,
+      "render_sha256": null,
+      "crop_sha256": null,
+      "reviewed_by": null,
+      "review_record_path": null,
+      "review_record_sha256": null
+    }
+  ]
+}

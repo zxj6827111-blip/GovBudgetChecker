@@ -25,6 +25,7 @@ import uuid
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from src.schemas.source_reconstruction import SourceToken, CellCandidate, ResolvedLogicalCell
 
 # ---------------------------------------------------------------------------
 # 六态子检查状态（任务包 §二.2，ZC-03 的回执消费此常量）
@@ -69,6 +70,7 @@ class EvidenceRef:
     source_method: str = "native_text"
     verification_status: str = "unverified"
     location_level: str = "unresolved"
+    source_provenance: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.source_method not in EVIDENCE_SOURCE_METHODS:
@@ -117,6 +119,7 @@ class EvidenceRef:
             source_method=str(data.get("source_method") or "native_text"),
             verification_status=str(data.get("verification_status") or "unverified"),
             location_level=str(data.get("location_level") or "unresolved"),
+            source_provenance=dict(data.get("source_provenance") or {}),
         )
 
 
@@ -173,17 +176,25 @@ class ParsedCell:
     # 原页原格，不能指向合并后新造的 ID。单片段表两者为 None（无合并）。
     origin_fragment_uid: Optional[str] = None
     origin_row_idx: Optional[int] = None
+    ocr_provenance: Dict[str, Any] = field(default_factory=dict)
+    # Logical column alignment must never change the physical evidence ID.
+    origin_col_idx: Optional[int] = None
+    # 仅原生闭合网格且格内无文字、无覆盖图像时确认；空白仍不改写为金额 0。
+    native_blank_verified: bool = False
+    # 行高不足时文字可能跨横线；保留网格初次抽取及真实字符来源，金额格不改写。
+    grid_raw_text: Optional[str] = None
+    native_text_sources: List[Dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.presence = CellPresence.detect(self.raw_text)
         # ZC-01（SYS-15）：单位换算在解析时完成一次——numeric_value 是页面字面值，
         # normalized_value_wan 是万元口径归一值；无单位信息时不猜口径（保持 None）。
         if self.normalized_value_wan is None and self.unit_hint and self.numeric_value is not None:
-            from src.engine.amount_math import normalize_amount_to_wan
+            from src.engine.fiscal_lexeme import amount_in_wan
 
-            self.normalized_value_wan = normalize_amount_to_wan(
-                self.numeric_value, self.unit_hint
-            )
+            # 先用原字符串转 Decimal，不能让 float 丢失大金额末位。
+            # 特殊记号沿用解析器已确认的数值，原文仍完整保留。
+            self.normalized_value_wan = amount_in_wan(self.raw_text, self.unit_hint)
 
     def to_dict(self) -> Dict[str, Any]:
         data = dataclasses.asdict(self)
@@ -215,6 +226,12 @@ class ParsedCell:
             presence=str(data.get("presence") or CellPresence.VALUE),
             origin_fragment_uid=_opt_str(data.get("origin_fragment_uid")),
             origin_row_idx=_opt_int(data.get("origin_row_idx")),
+            ocr_provenance=dict(data.get("ocr_provenance") or {}),
+            origin_col_idx=_opt_int(data.get("origin_col_idx")),
+            native_blank_verified=data.get("native_blank_verified") is True,
+            # 空字符串是原生网格的真实空白；None表示没有保存原始网格文字。
+            grid_raw_text=str(data["grid_raw_text"]) if data.get("grid_raw_text") is not None else None,
+            native_text_sources=[dict(item) for item in data.get("native_text_sources") or [] if isinstance(item, dict)],
         )
 
 
@@ -261,7 +278,8 @@ class ParsedTable:
             confidence=float(data.get("confidence") or 0.0),
             extraction_method=str(data.get("extraction_method") or "lines"),
             unit_hint=_opt_str(data.get("unit_hint")),
-            rows=[list(map(str, row)) for row in data.get("rows") or []],
+            # None 是原件合并单元格的占位，空字符串是实际空白格；回读不可混为一谈。
+            rows=[[None if cell is None else str(cell) for cell in row] for row in data.get("rows") or []],
             cells=[ParsedCell.from_dict(cell) for cell in data.get("cells") or []],
             fragment_uid=str(data.get("fragment_uid") or uuid.uuid4().hex),
             source_fragment_uids=[str(item) for item in data.get("source_fragment_uids") or []],
@@ -309,6 +327,9 @@ class OcrTableCandidate:
     coordinate_transform_id: Optional[str] = None
     verification_status: str = "unverified"
     extraction_method: str = "ocr"
+    cells: List[Dict[str, Any]] = field(default_factory=list)
+    provenance: Dict[str, Any] = field(default_factory=dict)
+    mapping_status: str = "unavailable"
 
     def to_dict(self) -> Dict[str, Any]:
         data = dataclasses.asdict(self)
@@ -329,6 +350,9 @@ class OcrTableCandidate:
             coordinate_transform_id=_opt_str(data.get("coordinate_transform_id")),
             verification_status=str(data.get("verification_status") or "unverified"),
             extraction_method=str(data.get("extraction_method") or "ocr"),
+            cells=[dict(cell) for cell in data.get("cells") or []],
+            provenance=dict(data.get("provenance") or {}),
+            mapping_status=str(data.get("mapping_status") or "unavailable"),
         )
 
 
@@ -468,8 +492,18 @@ class FiscalFact:
             self.budget_stage,
             self.indicator,
             self.subject_code,
+            self.table_code,
+            (self.subject_name, self.physical_source_key(), self.row_order) if not self.subject_code else None,
+            self.extra_dims.get('amount_year', self.fiscal_year),
+            self.extra_dims.get('as_of'),
             self.instance_uid,
         )
+
+    def physical_source_key(self) -> Tuple[Any, ...]:
+        refs = self.extra_dims.get('evidence_refs') or []
+        return tuple(sorted((str(ref.get('file_hash') or ''), _opt_int(ref.get('physical_page')) or 0,
+                             str(ref.get('source_cell_id') or ref.get('source_block_id') or ''),
+                             tuple(ref.get('bbox') or ())) for ref in refs))
 
 
 # ---------------------------------------------------------------------------
@@ -525,6 +559,13 @@ class ParseArtifact:
     config_fingerprint: str = ""
     ocr_model_fingerprint: Optional[str] = None
     parse_run_uid: str = field(default_factory=lambda: uuid.uuid4().hex)
+    schema_version: str = ""
+    processing_manifest: Dict[str, Any] = field(default_factory=dict)
+    source_tokens: List[SourceToken] = field(default_factory=list)
+    cell_candidates: List[CellCandidate] = field(default_factory=list)
+    resolved_cells: List[ResolvedLogicalCell] = field(default_factory=list)
+    reconstruction_decisions: List[Dict[str, Any]] = field(default_factory=list)
+    source_fragments: List[Dict[str, Any]] = field(default_factory=list)
     page_count: int = 0
     page_states: List[ParsePageState] = field(default_factory=list)
     text_blocks: List[ParsedTextBlock] = field(default_factory=list)
@@ -537,9 +578,14 @@ class ParseArtifact:
     #: bbox 坐标系描述（统一 PDF 页面坐标；渲染/旋转/裁剪变换在此登记）
     coordinate_space: str = "pdf_page_points"
     coordinate_transforms: Dict[str, Any] = field(default_factory=dict)
+    # 原始闭合网格独立存档。抽取策略和逻辑视图可以变化，原件矩阵不可丢失；
+    # 它不参与实例/事实推断，防止原网格与修复视图被误当成两张业务表。
+    source_grids: List[ParsedTable] = field(default_factory=list)
+    #: 原页表题、图像和金额位置线索；不代表已完成独立准确率验收。
+    reading_assessment: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data = {
             "source_file_hash": self.source_file_hash,
             "parser_name": self.parser_name,
             "parser_fingerprint": self.parser_fingerprint,
@@ -557,12 +603,35 @@ class ParseArtifact:
             ],
             "coordinate_space": self.coordinate_space,
             "coordinate_transforms": self.coordinate_transforms,
+            "source_grids": [table.to_dict() for table in self.source_grids],
         }
+        for key in ("source_tokens", "cell_candidates", "resolved_cells"):
+            if getattr(self, key):
+                data[key] = [item.to_dict() for item in getattr(self, key)]
+        if self.reconstruction_decisions:
+            data["reconstruction_decisions"] = self.reconstruction_decisions
+        if self.source_fragments:
+            data['source_fragments'] = self.source_fragments
+        if self.schema_version:
+            data["schema_version"] = self.schema_version
+        if self.processing_manifest:
+            data["processing_manifest"] = self.processing_manifest
+        # 空字段不写出，保证旧完整快照仍能原样回读。
+        if self.reading_assessment:
+            data["reading_assessment"] = self.reading_assessment
+        return data
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ParseArtifact":
         return cls(
             source_file_hash=str(data.get("source_file_hash") or ""),
+            schema_version=str(data.get("schema_version") or ""),
+            source_tokens=[SourceToken(**v) for v in data.get("source_tokens", [])],
+            cell_candidates=[CellCandidate(**v) for v in data.get("cell_candidates", [])],
+            resolved_cells=[ResolvedLogicalCell(**v) for v in data.get("resolved_cells", [])],
+            reconstruction_decisions=list(data.get("reconstruction_decisions") or []),
+            source_fragments=list(data.get('source_fragments') or []),
+            processing_manifest=dict(data.get("processing_manifest") or {}),
             parser_name=str(data.get("parser_name") or "pdfplumber"),
             parser_fingerprint=str(data.get("parser_fingerprint") or ""),
             config_fingerprint=str(data.get("config_fingerprint") or ""),
@@ -583,6 +652,8 @@ class ParseArtifact:
             ],
             coordinate_space=str(data.get("coordinate_space") or "pdf_page_points"),
             coordinate_transforms=dict(data.get("coordinate_transforms") or {}),
+            source_grids=[ParsedTable.from_dict(item) for item in data.get("source_grids") or []],
+            reading_assessment=dict(data.get("reading_assessment") or {}),
         )
 
     def cells(self) -> List[Tuple[ParsedTable, ParsedCell]]:
@@ -607,6 +678,8 @@ class CheckReceipt:
     sub_check_id: str
     required_fact_ids: List[str] = field(default_factory=list)
     operand_fact_ids: List[str] = field(default_factory=list)
+    required_operand_roles: List[str] = field(default_factory=list)
+    operand_sources: Dict[str, str] = field(default_factory=dict)
     formula: Optional[str] = None
     tolerance: Dict[str, Any] = field(default_factory=dict)
     status: str = "insufficient_data"
@@ -616,6 +689,8 @@ class CheckReceipt:
     evaluation_basis: str = "fiscal_fact"
     fact_migration_status: str = "complete"
     policy_version: str = "v3_3_portable"
+    cell_observations: List[Dict[str, Any]] = field(default_factory=list)
+    disclosure_sources: List[Dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.status not in SUB_CHECK_STATUSES:
@@ -635,6 +710,10 @@ class CheckReceipt:
             sub_check_id=str(data.get("sub_check_id") or ""),
             required_fact_ids=[str(i) for i in data.get("required_fact_ids") or []],
             operand_fact_ids=[str(i) for i in data.get("operand_fact_ids") or []],
+            required_operand_roles=[str(i) for i in data.get("required_operand_roles") or []],
+            operand_sources={str(k): str(v) for k, v in (data.get("operand_sources") or {}).items()},
+            cell_observations=[dict(item) for item in data.get("cell_observations") or [] if isinstance(item, dict)],
+            disclosure_sources=[dict(item) for item in data.get("disclosure_sources") or [] if isinstance(item, dict)],
             formula=_opt_str(data.get("formula")),
             tolerance=dict(data.get("tolerance") or {}),
             status=str(data.get("status") or "insufficient_data"),

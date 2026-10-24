@@ -396,7 +396,7 @@ async def test_reanalyze_job_refreshes_same_job_and_reuses_analysis_context(tmp_
             "fiscal_year": "2025",
             "doc_type": "dept_budget",
             "report_year": 2025,
-            "use_local_rules": False,
+            "use_local_rules": True,
             # 请求契约（P0）：structured/legacy 模式不请求 AI，旧值 true 会被 422
             "use_ai_assist": False,
             "mode": "structured",
@@ -418,7 +418,7 @@ async def test_reanalyze_job_refreshes_same_job_and_reuses_analysis_context(tmp_
     assert status["fiscal_year"] == "2025"
     assert status["doc_type"] == "dept_budget"
     assert status["report_year"] == 2025
-    assert status["use_local_rules"] is False
+    assert status["use_local_rules"] is True
     assert status["use_ai_assist"] is False
     assert status["mode"] == "structured"
 
@@ -1554,6 +1554,7 @@ def test_ignore_job_issue_filters_ai_findings_and_summary(tmp_path, monkeypatch)
         job_dir / "status.json",
         {
             "job_id": "job-ignore",
+            "analysis_revision": "ignore-runtime-rev-1",
             "status": "done",
             "quality_status": "degraded",
             "progress": 100,

@@ -14,7 +14,7 @@ from typing import Any, Dict, FrozenSet, List, Tuple
 
 from . import budget_rules, common_rules, rules_v33
 
-RULE_REGISTRY_VERSION = "python-rule-registry-v1"
+RULE_REGISTRY_VERSION = "python-rule-registry-v2-profile-scope"
 EVALUATION_BASIS_LEGACY = "legacy_document"
 EVALUATION_BASIS_FACT = "fiscal_fact"
 
@@ -25,12 +25,15 @@ FACT_INPUTS_BY_RULE: Dict[str, Tuple[str, ...]] = {
     "BUD-107": (
         "FIN_01:income_actual",
         "FIN_01:expenditure_actual",
+        'FIN_04:expenditure_actual',
         "FIN_07:budget",
     ),
     "CMM-001": ("FIN_07:budget", "FIN_07:actual", "FIN_07:total_actual"),
     "V33-103": ("FIN_02:total_actual", "FIN_02:fiscal_allocation"),
     "V33-104": ("FIN_03:total_actual", "FIN_03:basic_actual", "FIN_03:project_actual"),
     "V33-214": ("FIN_01:income_actual", "FIN_01:expenditure_actual"),
+    "V33-248": ("FIN_08:income_actual", "FIN_08:total_actual"),
+    "V33-249": ("FIN_05:total_actual", "FIN_03:total_actual"),
 }
 
 
@@ -79,6 +82,14 @@ def select_rules(report_kind: str) -> List[Any]:
     """Return canonical execution order for a known kind, or common rules only."""
     kind = str(report_kind or "unknown").strip().lower()
     return [*select_specific_rules(kind), *common_rules.ALL_COMMON_RULES]
+
+
+def restrict_rules_to_profile(rules, profile):
+    """检查能力与报告口径一致；排除专项检查时账本必须保留能力缺口。"""
+    if getattr(profile, 'unsupported_reason', None) == 'government_mixed_period_report':
+        # 重复词检查不需要部门九表，也不将不同期间的金额串起来复算。
+        return [rule for rule in rules if getattr(rule, 'code', None) == 'CMM-002']
+    return rules
 
 
 def select_specific_rules(report_kind: str) -> List[Any]:

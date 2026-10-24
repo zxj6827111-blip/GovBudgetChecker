@@ -125,6 +125,18 @@ async def get_engine_rule_catalog(request: Request) -> Dict[str, Any]:
     return rule_catalog()
 
 
+@router.get("/api/rules/checklists")
+async def get_rule_checklists(request: Request) -> Dict[str, Any]:
+    """检查点清单（全系统默认检查指标）及其到检查义务、规则的映射与覆盖统计。"""
+    require_admin(request)
+    from src.engine.checklist_catalog import CHECKLIST_FILES, checklist_coverage, validate_checklist
+
+    return {
+        kind: {**checklist_coverage(kind), "self_check": validate_checklist(kind)}
+        for kind in CHECKLIST_FILES
+    }
+
+
 @router.get("/api/rules/entries")
 async def get_rules_entries(
     request: Request,

@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -23,6 +24,27 @@ def _create_pdf(path: Path, lines_per_page: list[list[str]], *, fontname: str = 
         document.save(path)
     finally:
         document.close()
+
+
+def _verified_source_evidence(pdf_path: Path, quote: str, bbox: list[float]) -> dict:
+    source_hash = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
+    source_block_id = "page-1-block-1"
+    evidence_id = hashlib.sha1(
+        f"{source_hash}|1|{source_block_id}|{quote}".encode("utf-8")
+    ).hexdigest()[:16]
+    return {
+        "page": 1,
+        "physical_page": 1,
+        "text": quote,
+        "quote": quote,
+        "file_hash": source_hash,
+        "source_block_id": source_block_id,
+        "source_identity_status": "verified",
+        "evidence_id": evidence_id,
+        "bbox": bbox,
+        "location_level": "exact_span",
+        "verification_status": "verified",
+    }
 
 
 def test_pdf_bbox_locator_does_not_infer_bbox_from_structured_row(tmp_path: Path) -> None:
@@ -190,7 +212,9 @@ def test_pdf_bbox_locator_preserves_verified_exact_bbox_within_page(tmp_path: Pa
         severity="high",
         title="Verified bbox",
         message="Verified bbox",
-        evidence=[{"page": 1, "text": "Verified source text"}],
+        evidence=[_verified_source_evidence(
+            pdf_path, "Verified source text", [70, 60, 220, 80]
+        )],
         location={"page": 1},
         bbox=[70, 60, 220, 80],
         location_level="exact_span",
@@ -206,7 +230,7 @@ def test_pdf_bbox_locator_preserves_verified_exact_bbox_within_page(tmp_path: Pa
     assert updated.bbox == [70.0, 60.0, 220.0, 80.0]
     assert updated.location_level == "exact_span"
     assert updated.verification_status == "verified"
-    assert updated.evidence[0].get("bbox") is None
+    assert updated.evidence[0]["bbox"] == updated.bbox
 
 
 def test_pdf_bbox_locator_promotes_source_verified_evidence_bbox(tmp_path: Path) -> None:
@@ -219,15 +243,9 @@ def test_pdf_bbox_locator_promotes_source_verified_evidence_bbox(tmp_path: Path)
         severity="high",
         title="Verified evidence bbox",
         message="Verified evidence bbox",
-        evidence=[
-            {
-                "page": 1,
-                "text": "Verified source text",
-                "bbox": [70, 60, 220, 80],
-                "location_level": "exact_span",
-                "verification_status": "verified",
-            }
-        ],
+        evidence=[_verified_source_evidence(
+            pdf_path, "Verified source text", [70, 60, 220, 80]
+        )],
         location={"page": 1},
     )
 

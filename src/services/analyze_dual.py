@@ -10,6 +10,11 @@ from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 import json
+import copy
+from src.services.check_progress import update_progress, finish_incomplete, progress_scope
+from src.services.ai_execution import build_ai_execution
+from src.services.analysis_timing import record_ai_queue_wait
+from src.services.rule_process import run_engine_rules_in_process
 
 from src.schemas.issues import JobContext, AnalysisConfig, DualModeResponse, MergedSummary, IssueItem
 from src.services.ai_findings import AIFindingsService
@@ -115,13 +120,37 @@ class DualModeAnalyzer:
     def __init__(self):
         self.ai_service = None  # 延迟初始化
         self.engine_runner = EngineRuleRunner()
-        self.ai_locator = AILocator() if AILocator is not None else None
+        self.ai_locator = None
         self.ai_sequential_enabled = (
             os.getenv("AI_SEQUENTIAL_MODE", "true").strip().lower()
             not in {"0", "false", "no", "off"}
         )
     
-    async def analyze(self, 
+    async def analyze(self, job_context: JobContext, config: Optional[AnalysisConfig] = None) -> DualModeResponse:
+        # 配置、调用留痕、规则回执均按任务隔离，切换模型只影响后续任务。
+        config = (config or AnalysisConfig()).model_copy(deep=True)
+        scoped = copy.copy(self)
+        scoped.engine_runner = copy.copy(self.engine_runner)
+        scoped._runtime_ai_config = None
+        scoped._runtime_ai_error = None
+        if config.ai_enabled:
+            from src.services.ai_model_settings import resolve_job_runtime, create_client
+            try:
+                scoped._runtime_ai_config = resolve_job_runtime(job_context.job_id, config.ai_profile_id)
+                if scoped._runtime_ai_config:
+                    runtime = scoped._runtime_ai_config
+                    config.ai_timeout = runtime["timeout_s"]
+                    update_progress(job_context.job_id, "ai", model=runtime["model"], profile_id=runtime["id"], profile_name=runtime["name"], config_revision=runtime["revision"])
+                    if config.enable_ai_locator and AILocator:
+                        scoped.ai_locator = AILocator(client=create_client(runtime), model=runtime["model"], provider="managed")
+                elif config.enable_ai_locator and AILocator:
+                    scoped.ai_locator = AILocator()
+            except ValueError as exc:
+                scoped._runtime_ai_error = str(exc)
+        with progress_scope(job_context.job_id):
+            return await scoped._analyze(job_context, config)
+
+    async def _analyze(self,
                      job_context: JobContext,
                      config: Optional[AnalysisConfig] = None) -> DualModeResponse:
         """
@@ -146,13 +175,22 @@ class DualModeAnalyzer:
         rule_started_at = None
         rule_done_at = None
         
-        # 超时设置（120秒）
-        TIMEOUT_SECONDS = 120
+        # 按模型单次超时、文本分段和重试计算预算。
+        from src.services.ai_model_settings import audit_time_budget
+        TIMEOUT_SECONDS = audit_time_budget(config.ai_timeout)
+        try:
+            RULE_TIMEOUT_SECONDS = max(1, int(os.getenv("RULES_TIMEOUT_SEC", "150")))
+        except ValueError:
+            RULE_TIMEOUT_SECONDS = 150
 
         # AC-11：部分结果保全——管线后段（合并/定位/快照）异常时，
         # 已完成的 AI/规则结果不得被整批清空后按空结果重算。
         completed_ai_findings: List[Any] = []
         completed_rule_findings: List[Any] = []
+        ai_task = None
+        rule_task = None
+        rule_enabled = bool(config.rule_enabled)
+        rule_error = None
 
         try:
             # 1. 加载规则
@@ -174,7 +212,14 @@ class DualModeAnalyzer:
             rule_enabled = bool(config.rule_enabled)
 
             ai_task = (
-                asyncio.create_task(self._run_ai_analysis(job_context, ai_rules, config))
+                asyncio.create_task(
+                    self._run_ai_analysis(
+                        job_context,
+                        ai_rules,
+                        config,
+                        timeout_seconds=TIMEOUT_SECONDS,
+                    )
+                )
                 if ai_enabled
                 else None
             )
@@ -192,7 +237,7 @@ class DualModeAnalyzer:
             
             if rule_task is not None:
                 try:
-                    rule_result = await asyncio.wait_for(rule_task, timeout=30)  # 规则 30 秒超时
+                    rule_result = await asyncio.wait_for(rule_task, timeout=RULE_TIMEOUT_SECONDS)
                     rule_done_at = time.time()
                     if isinstance(rule_result, Exception):
                         rule_error = str(rule_result)
@@ -203,7 +248,7 @@ class DualModeAnalyzer:
                         logger.info(f"Rule analysis completed, found {len(rule_findings)} issues")
                 except asyncio.TimeoutError:
                     rule_done_at = time.time()
-                    rule_error = "规则分析超时(30s)"
+                    rule_error = f"规则分析超时({RULE_TIMEOUT_SECONDS}s)"
                     logger.warning(rule_error)
                 except Exception as e:
                     rule_done_at = time.time()
@@ -221,10 +266,14 @@ class DualModeAnalyzer:
             if rule_enabled and rule_task is None:
                 rule_error = "未加载到可执行的本地规则"
             if rule_enabled and rule_error:
+                update_progress(job_context.job_id, "local", state="failed", current_step="本地规则检查失败")
                 if ai_task is not None and not ai_task.done():
                     ai_task.cancel()
                     await asyncio.gather(ai_task, return_exceptions=True)
                 raise RuntimeError(f"local_rules_failed:{rule_error}")
+            if rule_enabled:
+                failed = (self.engine_runner.get_stats() or {}).get("failed_rules", 0)
+                update_progress(job_context.job_id, "local", state="degraded" if failed else "completed", current_step="部分规则执行失败，需复核" if failed else "本地规则检查完成")
             
             # 2. 规则完成后立即发布快照（前端可先看到规则结果）
             save_snapshot(job_context.job_id, {
@@ -251,7 +300,11 @@ class DualModeAnalyzer:
 
             if ai_task is not None:
                 try:
-                    ai_result = await asyncio.wait_for(ai_task, timeout=TIMEOUT_SECONDS - 30)  # 剩余时间给 AI
+                    # _run_ai_analysis waits for the global sequential-LLM
+                    # queue before starting its own audit timeout. Wrapping the
+                    # whole task here would charge queue latency against this
+                    # document's budget and cancel late jobs in a batch.
+                    ai_result = await ai_task
                     ai_done_at = time.time()
                     if isinstance(ai_result, Exception):
                         ai_error = str(ai_result)
@@ -265,11 +318,12 @@ class DualModeAnalyzer:
                         })
                     else:
                         ai_findings = ai_result or []
+                        ai_error = getattr(self, "_ai_run_error", None)
                         completed_ai_findings = list(ai_findings)
                         logger.info(f"AI analysis completed, found {len(ai_findings)} issues")
                 except asyncio.TimeoutError:
                     ai_done_at = time.time()
-                    ai_error = f"AI分析超时({TIMEOUT_SECONDS - 30}s)"
+                    ai_error = f"AI分析超时({TIMEOUT_SECONDS}s)"
                     logger.warning(ai_error)
                 except Exception as e:
                     ai_done_at = time.time()
@@ -297,6 +351,10 @@ class DualModeAnalyzer:
                         })
             
             metrics.ai_findings_count = len(ai_findings)
+            if ai_enabled:
+                window_errors = list(getattr(self.ai_service, "ai_errors", []) or []) if self.ai_service else []
+                execution = build_ai_execution(True, ai_error=ai_error or "", call_ledger=ai_call_ledger, window_errors=window_errors)
+                ai_progress_state = {"succeeded": "completed", "degraded": "degraded"}.get(execution["state"], "failed")
             metrics.ai_elapsed_ms = int((ai_done_at - ai_started_at) * 1000)
             
             # 无论任何一支失败都要落快照
@@ -319,9 +377,12 @@ class DualModeAnalyzer:
             
             # 4. 处理 AI 定位增强
             if config.enable_ai_locator:
+                update_progress(job_context.job_id, "ai", current_step="文本检查已结束，正在完成证据定位")
                 rule_findings = await self._enhance_with_ai_locator(
                     job_context, rule_findings, metrics
                 )
+            if ai_enabled:
+                update_progress(job_context.job_id, "ai", state=ai_progress_state, current_step={"failed": "大模型检查失败，请检查连接、密钥及模型响应", "degraded": "部分文本未完成检查，需复核", "completed": "大模型检查完成"}[ai_progress_state])
             
             # 5. 合并结果
             merge_start = time.time()
@@ -394,12 +455,17 @@ class DualModeAnalyzer:
                     "rule_execution_summary": rule_execution_summary,
                     # AC-04：关系级子检查回执与统一事实摘要随结果交付
                     "fact_receipts": (self.engine_runner.get_stats() or {}).get("fact_receipts", []) if self.engine_runner else [],
+                    "structured_consumption": (self.engine_runner.get_stats() or {}).get("structured_consumption", []) if self.engine_runner else [],
                     "fact_context_summary": (self.engine_runner.get_stats() or {}).get("fact_context_summary") if self.engine_runner else None,
                     "config": config.dict()
                 }
             )
             
+        except asyncio.CancelledError:
+            finish_incomplete(job_context.job_id, state="cancelled")
+            raise
         except Exception as e:
+            finish_incomplete(job_context.job_id)
             logger.error(f"Dual mode analysis failed: {e}", exc_info=True)
             
             # 保存错误快照
@@ -416,6 +482,11 @@ class DualModeAnalyzer:
                     "last_heartbeat": time.time()
                 }
             })
+
+            # 本地规则是请求的必执行分支；超时/失败不能在同一任务里无界重跑，
+            # 也不能用回退成功掩盖本次失败。由管线记录错误后再显式重分析。
+            if rule_enabled and rule_error:
+                raise
             
             # 降级：引擎结果 + 已完成的 AI 结果一并保留（AC-11 逐条失败隔离）
             try:
@@ -437,24 +508,49 @@ class DualModeAnalyzer:
                     merged=MergedSummary(
                         totals={
                             "rule_only": len(completed_rule_findings),
-                            "ai_preserved": len(completed_ai_findings),
+                            "ai_candidates_preserved": len(completed_ai_findings),
                         },
                         conflicts=[],
-                        agreements=[]
+                        agreements=[],
+                        merged_ids=[
+                            str(item.id)
+                            for item in completed_rule_findings
+                            if getattr(item, "id", None)
+                        ],
+                        candidate_issue_ids=[
+                            str(item.id)
+                            for item in completed_ai_findings
+                            if getattr(item, "id", None)
+                        ],
+                        merge_policy_version="fact-check-relation-v1",
                     ),
                     meta={
                         "elapsed_ms": {"total": metrics.total_elapsed_ms},
                         "error": str(e),
                         "fallback": "engine_only_partial" if partial else "engine_only",
                         "ai_error": str(e),
+                        "merge_error": str(e),
+                        "ai_candidates_require_confirmation": bool(completed_ai_findings),
                         "rule_error": None,
                         "provider_stats": [],
                         "fact_receipts": fallback_receipts,
+                        "structured_consumption": (self.engine_runner.get_stats() or {}).get("structured_consumption", []) if self.engine_runner else [],
+                        "rule_execution_summary": self.engine_runner.get_rule_execution_summary() if self.engine_runner else {},
                     }
                 )
             except Exception as fallback_error:
                 logger.error(f"Fallback analysis also failed: {fallback_error}")
                 raise e
+        finally:
+            # The pipeline may be cancelled while it is still awaiting local
+            # rules. Its AI task must not outlive the parent or retain a queue
+            # ticket and block later documents.
+            children = [task for task in (ai_task, rule_task) if task is not None]
+            for task in children:
+                if not task.done():
+                    task.cancel()
+            if children:
+                await asyncio.gather(*children, return_exceptions=True)
     
     async def _load_rules(self, rules_version: str) -> List[Dict[str, Any]]:
         """加载规则"""
@@ -588,9 +684,13 @@ class DualModeAnalyzer:
     async def _run_ai_analysis(self, 
                               job_context: JobContext,
                               ai_rules: List[Dict[str, Any]],
-                              config: AnalysisConfig) -> List[IssueItem]:
+                              config: AnalysisConfig,
+                              timeout_seconds: Optional[int] = None) -> List[IssueItem]:
         """运行 AI 分析"""
+        self._ai_run_error = None
         if not ai_rules:
+            self._ai_run_error = "未加载到大模型检查规则"
+            update_progress(job_context.job_id, "ai", state="failed", current_step="未加载到大模型检查规则")
             return []
 
         queue_token = f"{job_context.job_id}:{time.time_ns()}"
@@ -598,6 +698,7 @@ class DualModeAnalyzer:
         try:
             if self.ai_sequential_enabled:
                 queue_pos = await self._enqueue_ai_ticket(queue_token)
+                update_progress(job_context.job_id, "ai", state="queued", queue_position=queue_pos, current_step=f"大模型排队中（前方 {queue_pos - 1} 个任务）")
                 if queue_pos > 1:
                     save_snapshot(
                         job_context.job_id,
@@ -611,7 +712,8 @@ class DualModeAnalyzer:
                             },
                         },
                     )
-                await self._wait_for_ai_turn(queue_token, job_context.job_id)
+                with record_ai_queue_wait():
+                    await self._wait_for_ai_turn(queue_token, job_context.job_id)
                 save_snapshot(
                     job_context.job_id,
                     {
@@ -626,15 +728,41 @@ class DualModeAnalyzer:
                 )
 
             # 延迟初始化AI服务
+            if getattr(self, "_runtime_ai_error", None):
+                raise ValueError(self._runtime_ai_error)
             if self.ai_service is None:
-                self.ai_service = AIFindingsService(config)
+                self.ai_service = AIFindingsService(config, runtime_config=getattr(self, "_runtime_ai_config", None))
+            update_progress(job_context.job_id, "ai", state="running", queue_position=0, current_step="正在准备大模型检查")
             
             # 使用AI服务进行分析（串行模式下保证同一时刻仅1个AI任务）
-            if self.ai_sequential_enabled:
-                async with self._ai_runner_lock:
-                    return await self.ai_service.analyze(job_context)
-            return await self.ai_service.analyze(job_context)
+            async def run_analysis() -> List[IssueItem]:
+                if self.ai_sequential_enabled:
+                    async with self._ai_runner_lock:
+                        return await self.ai_service.analyze(job_context)
+                return await self.ai_service.analyze(job_context)
+
+            if timeout_seconds is None:
+                return await run_analysis()
+            try:
+                # Begin this task's audit budget after it has acquired its
+                # queue ticket; time spent behind other documents is not part
+                # of this document's model-check runtime.
+                return await asyncio.wait_for(run_analysis(), timeout=timeout_seconds)
+            except asyncio.TimeoutError:
+                update_progress(
+                    job_context.job_id,
+                    "ai",
+                    state="failed",
+                    current_step=f"大模型检查超时（{timeout_seconds}s）",
+                )
+                raise
+        except asyncio.TimeoutError:
+            # Overall audit timeouts must remain visible even when ordinary AI
+            # errors are configured to fall back to local-rule-only results.
+            raise
         except Exception as e:
+            self._ai_run_error = str(e) or type(e).__name__
+            update_progress(job_context.job_id, "ai", state="failed", current_step="大模型检查失败，请检查配置或连接")
             logger.error(f"AI analysis failed: {e}")
             if config.ai_fallback_on_error:
                 return []
@@ -651,10 +779,12 @@ class DualModeAnalyzer:
         """运行引擎分析"""
         if not config.rule_enabled:
             return []
-        return await self.engine_runner.run_rules(
-            job_context=job_context,
-            rules=engine_rules,
-            config=config
+        try:
+            timeout_seconds = max(1, int(os.getenv("RULES_TIMEOUT_SEC", "150")))
+        except ValueError:
+            timeout_seconds = 150
+        return await run_engine_rules_in_process(
+            self.engine_runner, job_context, engine_rules, config, timeout_seconds,
         )
 
     async def _enqueue_ai_ticket(self, token: str) -> int:
@@ -674,6 +804,7 @@ class DualModeAnalyzer:
                 queue_pos = self._ai_wait_queue.index(token) + 1
             now = time.time()
             if queue_pos and queue_pos > 1 and (now - last_emit) >= 1.5:
+                update_progress(job_id, "ai", queue_position=queue_pos, current_step=f"大模型排队中（前方 {queue_pos - 1} 个任务）")
                 save_snapshot(
                     job_id,
                     {
@@ -738,11 +869,7 @@ class DualModeAnalyzer:
         rules = await self._load_rules(config.rules_version)
         _, engine_rules = self._separate_rules(rules)
         
-        return await self.engine_runner.run_rules(
-            job_context=job_context,
-            rules=engine_rules,
-            config=config
-        )
+        return await self._run_engine_analysis(job_context, engine_rules, config)
 
 
 # 便捷函数

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 import { getDisplayIssueTotal, toUiProblems } from "../lib/uiAdapters";
+import { evidenceExcerptLabel } from "../lib/evidenceIdentity";
 
 const baseDetail = {
   job_id: "job-dual-mode-count-001",
@@ -181,12 +182,12 @@ const mergeConflict = toUiProblems({
 } as any);
 assert.equal(mergeConflict.length, 1);
 assert.deepEqual(
-  mergeConflict[0].evidenceRefs.map((ref) => ref.page),
+  mergeConflict[0].evidenceRefs?.map((ref) => ref.page),
   [2, 3],
   "merge conflict should preserve both source page references for review",
 );
 assert.deepEqual(
-  mergeConflict[0].evidenceRefs.map((ref) => ref.bbox),
+  mergeConflict[0].evidenceRefs?.map((ref) => ref.bbox),
   [[1, 2, 3, 4], [5, 6, 7, 8]],
   "only source-provided verified exact evidence boxes may be carried through",
 );
@@ -343,5 +344,27 @@ assert.deepEqual(
 assert.deepEqual(reportIssues[0].evidenceRefs?.map((ref) => ref.page), [2, 7]);
 assert.deepEqual(reportIssues[0].evidenceRefs?.[0].bbox, [10, 20, 100, 40]);
 assert.equal(reportIssues[0].evidenceRefs?.[1].bbox, undefined, "unverified evidence must not produce a UI highlight");
+
+for (const [evidenceStatus, sourceComplete, expected] of [
+  ["complete", true, true],
+  ["complete", false, false],
+  ["incomplete_rule_warning", true, false],
+  [undefined, false, false],
+] as const) {
+  const [problem] = toUiProblems({
+    job_id: "job-source-identity",
+    result: { rule_findings: [{
+      id: "source-identity", source: "rule", rule_id: "SOURCE-IDENTITY", severity: "warn",
+      title: "Amount comparison", message: "Amount comparison", location: { page: 1 },
+      evidence: [{ page: 1, text: "narrative=10, table=20" }],
+      evidence_status: evidenceStatus,
+      evidence_verification: { status: "verified", source_identity_complete: sourceComplete },
+    }] },
+  } as any);
+  assert.equal(problem.sourceIdentityVerified, expected);
+  assert.equal(evidenceExcerptLabel(problem.sourceIdentityVerified === true),
+    expected ? "原文证据" : "候选证据/计算说明（原文绑定未完成）");
+  assert.equal(problem.snippet, "narrative=10, table=20", "retain unverified observations for review without promoting their source status");
+}
 
 console.log("uiAdapters dual-mode tests passed");

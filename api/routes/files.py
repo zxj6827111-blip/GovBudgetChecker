@@ -7,6 +7,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 from api import runtime
 from api.auth_utils import require_job_access
@@ -73,6 +74,36 @@ def _expand_bbox(
     ]
 
 
+def _native_to_viewport(page):
+    """解析坐标（pdfplumber 的 MediaBox 顶部坐标）→ 预览图所用的可见页坐标。
+
+    MediaBox 原点不是 (0, 0) 时两者相差一个平移；证据框按解析坐标存储，画框前必须换算。
+    """
+    from src.services.input_geometry import Affine, page_viewport_to_native
+
+    try:
+        transform = page_viewport_to_native(page).inverse()
+    except ValueError:
+        return None
+    identity = Affine().values()
+    return None if all(abs(v - i) < 1e-6 for v, i in zip(transform.values(), identity)) else transform
+
+
+def _page_geometry(pdf_path: Path) -> dict:
+    try:
+        import fitz  # PyMuPDF
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="PyMuPDF is not installed") from exc
+    pages = {}
+    with fitz.open(pdf_path) as document:
+        for index, page in enumerate(document, start=1):
+            transform = _native_to_viewport(page)
+            if transform is not None:
+                pages[str(index)] = transform.values()
+    return {"source_space": "native_rotated_mediabox_points", "target_space": "preview_page_points",
+            "native_to_preview": pages}
+
+
 def _render_preview_png(
     pdf_path: Path,
     *,
@@ -92,6 +123,9 @@ def _render_preview_png(
 
         page = document.load_page(page_number - 1)
         page_rect = page.rect
+        transform = _native_to_viewport(page)
+        if bbox and transform is not None:
+            bbox = transform.box(bbox)
         clamped_bbox = _clamp_bbox(
             bbox,
             page_width=float(page_rect.width),
@@ -113,9 +147,16 @@ def _render_preview_png(
 
 
 @router.get("/api/files/{job_id}/source")
-async def get_source_pdf(job_id: str, request: Request):
-    require_job_access(request, job_id)
+async def get_source_pdf(job_id: str, request: Request, checksum: Optional[str] = Query(None, pattern="^[a-f0-9]{64}$")):
+    require_job_access(request, job_id, include_detail=False)
     pdf_path = _resolve_source_pdf(job_id)
+    if checksum:
+        import hashlib
+        def digest():
+            with pdf_path.open("rb") as handle:
+                return hashlib.file_digest(handle, "sha256").hexdigest()
+        if await run_in_threadpool(digest) != checksum:
+            raise HTTPException(409, "原件与所选文件版本不一致，请刷新材料后重试")
     return FileResponse(str(pdf_path), media_type="application/pdf", filename=pdf_path.name)
 
 
@@ -128,10 +169,10 @@ async def get_source_preview(
     padding: float = Query(default=24.0, ge=0.0, le=200.0),
     scale: float = Query(default=2.0, ge=0.5, le=4.0),
 ):
-    require_job_access(request, job_id)
+    require_job_access(request, job_id, include_detail=False)
     pdf_path = _resolve_source_pdf(job_id)
     parsed_bbox = _parse_bbox_query(bbox)
-    png_bytes = _render_preview_png(
+    png_bytes = await run_in_threadpool(_render_preview_png,
         pdf_path,
         page_number=page,
         bbox=parsed_bbox,
@@ -143,3 +184,11 @@ async def get_source_preview(
         media_type="image/png",
         headers={"Cache-Control": "no-store"},
     )
+
+
+@router.get("/api/files/{job_id}/page-geometry")
+async def get_page_geometry(request: Request, job_id: str):
+    """只列出解析坐标与预览坐标不一致的页；前端在预览图上画框前按此换算。"""
+    require_job_access(request, job_id, include_detail=False)
+    pdf_path = _resolve_source_pdf(job_id)
+    return await run_in_threadpool(_page_geometry, pdf_path)

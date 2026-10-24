@@ -1,5 +1,29 @@
 import type { JobSummaryRecord } from "../../../lib/uiAdapters";
-import { normalizeUiTaskStatus } from "../../../lib/uiAdapters";
+import { getDisplayIssueTotal, normalizeUiTaskStatus } from "../../../lib/uiAdapters";
+
+/** 与审核台采用同一材料问题数；缺少计数信息时保留未知态。 */
+export function resolveIssueCountText(job: JobSummaryRecord): string {
+  const hasCount = [job.review_issue_total, job.review_candidate_total, job.merged_issue_total, job.issue_total]
+    .some((value) => typeof value === "number" && Number.isFinite(value));
+  return hasCount ? String(getDisplayIssueTotal(job)) : "—";
+}
+
+/** 与详情的提示、候选材料发现及复核事项分别对应，避免零问题掩盖非空结果。 */
+export function resolveFindingCountDetails(job: JobSummaryRecord): string[] {
+  const details: string[] = [];
+  if (typeof job.tip_total === "number" && Number.isInteger(job.tip_total) && job.tip_total >= 0) {
+    details.push(`${job.tip_total} 条提示`);
+  }
+  if (typeof job.review_candidate_total === "number" && Number.isInteger(job.review_candidate_total)
+      && job.review_candidate_total > 0) {
+    details.push(`其中 ${job.review_candidate_total} 条问题待核实`);
+  }
+  if (typeof job.review_notice_total === "number" && Number.isInteger(job.review_notice_total)
+      && job.review_notice_total > 0) {
+    details.push(`${job.review_notice_total} 项复核事项`);
+  }
+  return details;
+}
 
 /**
  * 工作台总览（Task 4）的纯逻辑层：KPI 聚合、页面覆盖率聚合、质量告警派生、
@@ -155,7 +179,12 @@ export interface QualityAlert {
 }
 
 export interface QualityAlertInputs {
-  jobs: JobSummaryRecord[] | null | undefined;
+  jobs?: JobSummaryRecord[] | null | undefined;
+  /**
+   * 已由接口汇总好的覆盖率不足任务数（/api/jobs?view=overview 的 low_coverage_count）。
+   * 给出时直接使用，与工作台"页面覆盖率不足"明细同一口径；未给出时按 jobs 统计。
+   */
+  lowCoverageCount?: number;
   /** /api/metrics 的 quality.unknown_report_kind 字段。 */
   unknownReportKindRatio: number | null | undefined;
   /** /api/metrics 的 jobs.total 字段：比例类告警的判定分母，用于小样本抑制。 */
@@ -185,9 +214,9 @@ export interface QualityAlertInputs {
  */
 export function deriveQualityAlerts(inputs: QualityAlertInputs): QualityAlert[] {
   const alerts: QualityAlert[] = [];
-  const jobs = inputs.jobs ?? [];
+  const jobs = inputs.lowCoverageCount === undefined ? inputs.jobs ?? [] : [];
 
-  let lowCoverageCount = 0;
+  let lowCoverageCount = inputs.lowCoverageCount ?? 0;
   for (const job of jobs) {
     const raw = job.page_coverage;
     if (raw === null || raw === undefined) {
@@ -358,15 +387,11 @@ export function formatElapsedText(elapsedMs: JobSummaryRecord["elapsed_ms"]): st
   return remainingMinutes > 0 ? `${hours} 时 ${remainingMinutes} 分` : `${hours} 小时`;
 }
 
-/** 页数/覆盖率文案：页数已知时优先显示页数，否则退回覆盖率百分比，都没有则"—"。 */
+/** 页数只使用原件总页数；扫描页数和覆盖率不能替代它。 */
 export function formatPagesText(job: JobSummaryRecord): string {
-  const pageCoverage = job.page_coverage;
-  const scannedPages = job.scanned_page_count;
-  if (typeof scannedPages === "number" && Number.isFinite(scannedPages)) {
-    return `${scannedPages} 页`;
-  }
-  if (typeof pageCoverage === "number" && Number.isFinite(pageCoverage)) {
-    return `${Math.round(pageCoverage * 100)}% 覆盖`;
+  const pages = job.page_count;
+  if (typeof pages === "number" && Number.isInteger(pages) && pages > 0) {
+    return `${pages} 页`;
   }
   return "—";
 }

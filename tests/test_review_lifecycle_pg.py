@@ -276,6 +276,20 @@ async def _make_reviewable_slot(
             job_uuid,
             json.dumps(payload, ensure_ascii=False),
         )
+    # 与真实发布保持一致：PG 结果和本地工作流依据同一分析版本。
+    # 旧 fixture 只写数据库，导致严格版本门禁正确地拒绝无版本的决定。
+    from api import runtime
+
+    (runtime.UPLOAD_ROOT / job_uuid).mkdir(parents=True, exist_ok=True)
+    runtime.write_json_file(
+        runtime.UPLOAD_ROOT / job_uuid / "status.json",
+        {
+            "job_id": job_uuid, "status": job_status, "analysis_revision": "1",
+            "created_by": "unit-user",
+            "result": {"ai_findings": findings or [], "rule_findings": []},
+            "structured_ingest": {"document_version_id": version_id, "review_items": review_items or []},
+        },
+    )
     return {"slot_id": slot_id, "version_id": version_id, "job_uuid": job_uuid, "job_id": job_id}
 
 
@@ -312,6 +326,7 @@ def _write_decisions(decisions: Dict[str, str]) -> None:
             "organization_id": None,
             "organization_name": None,
             "note": None,
+            "analysis_revision": str(runtime.get_job_status_payload(job_id).get("analysis_revision") or ""),
             "updated_at": "2026-09-22T00:00:00Z",
         }
     runtime.write_json_file(
@@ -332,7 +347,10 @@ def _write_ignored(decisions_job_id: str, issue_ids: List[str]) -> None:
 
     job_dir = runtime.UPLOAD_ROOT / decisions_job_id
     job_dir.mkdir(parents=True, exist_ok=True)
-    runtime.write_json_file(job_dir / "ignored_issues.json", {"issue_ids": issue_ids})
+    runtime.write_json_file(job_dir / "ignored_issues.json", {
+        "issue_ids": issue_ids,
+        "analysis_revision": runtime.get_job_status_payload(decisions_job_id, apply_issue_filters=False).get("analysis_revision"),
+    })
 
 
 @pytest.fixture
@@ -1086,6 +1104,7 @@ async def test_completed_review_locks_issue_mutation_until_reopen(review_db):
             {
                 "job_id": ctx["job_uuid"],
                 "status": "done",
+                "analysis_revision": "1",
                 "result": {"rule_findings": [_finding("rule-1")], "ai_findings": []},
             },
         )
@@ -1964,6 +1983,7 @@ def _write_job_payload(job_uuid: str, finding_id: str) -> None:
         {
             "job_id": job_uuid,
             "status": "done",
+            "analysis_revision": "1",
             "created_by": "unit-user",
             "result": {
                 "rule_findings": [
@@ -2105,6 +2125,9 @@ async def test_create_package_cannot_change_the_locked_problem_set(review_db, mo
         await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
 
     user = {"username": "unit-user", "is_admin": True}
+    await issue_workflow_store.update_issue(
+        user, job_id=ctx["job_uuid"], issue_id="rule-1", status="confirmed", note=None
+    )
     await issue_workflow_store.create_package(
         user,
         name="整改包",

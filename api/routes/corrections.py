@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import uuid
@@ -33,8 +34,9 @@ router = APIRouter()
 _SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 CORRECTION_FIELDS = frozenset(
-    {"raw_value", "unit", "year", "org", "scope", "indicator", "column_mapping", "manual_location"}
+    {"raw_value", "unit", "year", "org", "scope", "indicator", "column_mapping", "cell_value", "manual_location"}
 )
+TABLE_FIELDS = frozenset({"column_mapping", "cell_value"})
 FEEDBACK_REASONS = frozenset(
     {
         "parse_error",
@@ -60,16 +62,19 @@ class CorrectionChange(BaseModel):
         "scope",
         "indicator",
         "column_mapping",
+        "cell_value",
         "manual_location",
     ]
     value: Any
     evidence_ids: List[StrictStr] = Field(default_factory=list, max_length=10)
+    # 对照原页提交的位置（物理页 + bbox）；服务端校验后生成人工证据，可代替 evidence_ids。
+    location: Optional[Dict[str, Any]] = None
 
     @model_validator(mode="after")
     def validate_change(self) -> "CorrectionChange":
-        if self.field == "column_mapping" and self.target_type != "table_instance":
-            raise ValueError("column_mapping corrections must target a table_instance")
-        if self.field != "column_mapping" and self.target_type != "fact":
+        if self.field in TABLE_FIELDS and self.target_type != "table_instance":
+            raise ValueError(f"{self.field} corrections must target a table_instance")
+        if self.field not in TABLE_FIELDS and self.target_type != "fact":
             raise ValueError("fact field corrections must target a fact")
         if self.field == "year":
             if isinstance(self.value, bool) or not isinstance(self.value, int) or not 1900 <= self.value <= 2200:
@@ -77,13 +82,19 @@ class CorrectionChange(BaseModel):
         elif self.field == "column_mapping":
             if not isinstance(self.value, dict) or not self.value:
                 raise ValueError("column_mapping correction must be a non-empty object")
+        elif self.field == "cell_value":
+            value = self.value if isinstance(self.value, dict) else {}
+            row, col, text = value.get("row_idx"), value.get("col_idx"), value.get("raw_value")
+            if (isinstance(row, bool) or isinstance(col, bool) or not isinstance(row, int) or not isinstance(col, int)
+                    or row < 0 or col < 0 or not isinstance(text, str) or not text.strip() or len(text) > 100):
+                raise ValueError("cell_value correction needs row_idx, col_idx and a raw_value of 1-100 characters")
         elif self.field == "manual_location":
             if not isinstance(self.value, dict):
                 raise ValueError("manual_location correction must be an object")
         elif not isinstance(self.value, str) or not self.value.strip():
             raise ValueError(f"{self.field} correction must be a non-empty string")
-        if self.field != "manual_location" and not self.evidence_ids:
-            raise ValueError("correction requires at least one evidence_id")
+        if self.field != "manual_location" and not self.evidence_ids and not self.location:
+            raise ValueError("correction requires at least one evidence_id or an original-page location")
         return self
 
 
@@ -131,37 +142,23 @@ def _validate_job_id(job_id: str) -> None:
 
 
 def _revision_payload(job_id: str, revision: Optional[str]) -> Dict[str, Any]:
-    job_dir = _job_dir(job_id)
-    if not revision:
-        return runtime.get_job_status_payload(job_id)
+    # 旧协议历史与报告下载共用原始字节摘要校验，不能另开不校验的证据入口。
+    from api.routes.reports import _load_revision_payload
+    return _load_revision_payload(job_id, revision)
 
-    versions_dir = job_dir / "analysis_versions"
-    safe_revision = str(revision).strip()
-    if not safe_revision or "/" in safe_revision or "\\" in safe_revision or safe_revision.startswith("."):
-        raise HTTPException(status_code=422, detail="invalid analysis_revision")
-    candidates: List[Path] = []
-    direct = versions_dir / safe_revision / "status.json"
-    if direct.is_file():
-        candidates.append(direct)
-    if not candidates and versions_dir.is_dir():
-        for revision_dir in versions_dir.glob("rev-*"):
-            path = revision_dir / "status.json"
-            if not path.is_file():
-                continue
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if str(payload.get("analysis_revision")) == safe_revision:
-                candidates.append(path)
-    if not candidates:
-        raise HTTPException(status_code=404, detail="analysis_revision not found")
-    try:
-        payload = json.loads(candidates[-1].read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=500, detail="analysis_revision is unreadable") from exc
-    payload.setdefault("job_id", job_id)
-    return payload
+
+async def _bound_evidence_payload(job_id: str, revision: Optional[str]) -> Dict[str, Any]:
+    if os.getenv('DATABASE_URL'):
+        from src.services.analysis_fact_snapshot import read_database_result
+        try:
+            payload = await read_database_result(job_id, revision)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        if payload is not None:
+            return payload
+    return _revision_payload(job_id, revision)
 
 
 def _document_version_id(payload: Dict[str, Any]) -> Optional[int]:
@@ -200,7 +197,7 @@ async def _load_persisted_evidence(payload: Dict[str, Any], evidence_id: str) ->
             """
             SELECT pe.evidence_id, pe.file_hash, pe.physical_page, pe.printed_page,
                    pe.source_cell_id, pe.source_block_id, pe.quote, pe.bbox,
-                   pe.source_method, pe.verification_status, pe.location_level
+                   pe.source_method, pe.verification_status, pe.location_level, pe.source_provenance
             FROM parse_evidence pe
             JOIN parse_runs pr ON pr.id = pe.parse_run_id
             WHERE pe.evidence_id = $1 AND pr.document_version_id = $2
@@ -232,7 +229,7 @@ def _parse_bbox(value: Any) -> Optional[List[float]]:
         bbox = [float(item) for item in value]
     except (TypeError, ValueError):
         return None
-    if bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
+    if not all(math.isfinite(item) for item in bbox) or bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
         return None
     return bbox
 
@@ -303,19 +300,17 @@ def _sanitize_evidence(job_id: str, job_dir: Path, raw: Dict[str, Any]) -> Dict[
     result = dict(raw)
     bbox = _parse_bbox(result.get("bbox"))
     result["bbox"] = bbox
-    # AC-09/RC-09：读取端不回显存储侧 verified——按当前原件重算。
-    # 既无原文引用又无文件哈希的记录无从重算，必须降级 unverified，
-    # 不得因存储侧标签或"无字段可查"而保持 verified。
+    # AC-09/RC-09：读取端不回显存储侧 verified——同一条证据必须同时绑定
+    # 原件哈希、物理页、来源 cell/block 和原文引文，缺任一项均不能认证。
     claimed_hash_probe = str(result.get("file_hash") or "").strip()
     quote_probe = str(result.get("quote") or "").strip()
-    if (
-        not claimed_hash_probe
-        and not quote_probe
-        and result.get("verification_status") == "verified"
+    source_id_probe = str(result.get("source_cell_id") or result.get("source_block_id") or "")
+    if result.get("verification_status") == "verified" and (
+        not claimed_hash_probe or not quote_probe or not source_id_probe
     ):
         result["verification_status"] = "unverified"
         result["validation_note"] = (
-            "证据缺原文引用与文件哈希，读取端无法重算认证，不回显 verified"
+            "证据缺少原件哈希、原文引文或来源 cell/block 身份，读取端不回显 verified"
         )
     page = result.get("physical_page")
     if isinstance(page, bool):
@@ -344,6 +339,7 @@ def _sanitize_evidence(job_id: str, job_dir: Path, raw: Dict[str, Any]) -> Dict[
             # 2) 引文在自称页不存在 → failed（伪造原文）；
             # 3) 精确定位还要求 bbox 区域文本包含引文，否则降级 region。
             claimed_hash = str(result.get("file_hash") or "").strip()
+            expected_evidence_id = ""
             if claimed_hash:
                 import hashlib
 
@@ -351,12 +347,35 @@ def _sanitize_evidence(job_id: str, job_dir: Path, raw: Dict[str, Any]) -> Dict[
                 with open(pdf_path, "rb") as handle:
                     for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                         digest.update(chunk)
-                if digest.hexdigest() != claimed_hash:
+                if digest.hexdigest() != claimed_hash.lower():
                     result["verification_status"] = "failed"
                     result["location_level"] = "unresolved"
                     result["validation_note"] = "证据文件哈希与当前原件不一致"
                     result["preview_url"] = _evidence_preview_url(job_id, result)
                     return result
+            if claimed_hash and quote_text and source_id_probe:
+                import hashlib
+
+                expected_evidence_id = hashlib.sha1(
+                    "|".join((claimed_hash.lower(), str(page_number), source_id_probe, str(result.get("quote") or ""))).encode("utf-8")
+                ).hexdigest()[:16]
+                if str(result.get("evidence_id") or "").strip().lower() != expected_evidence_id:
+                    result["verification_status"] = "unverified"
+                    if result.get("location_level") in {"exact_cell", "exact_span"}:
+                        result["location_level"] = "region"
+                        result["bbox"] = None
+                    result["validation_note"] = "证据 ID 与原件哈希、物理页、来源对象和原文引文不匹配"
+            if result.get("source_method") == "ocr":
+                from src.services.scan_evidence_certification import load_attestations, verify_scan_reference
+                certified = bool(expected_evidence_id and result.get("evidence_id") == expected_evidence_id
+                                 and verify_scan_reference(result, pdf_path, load_attestations()))
+                result["verification_status"] = "verified" if certified else "unverified"
+                if not certified:
+                    result["location_level"] = "region" if bbox else "unresolved"
+                result["validation_note"] = "扫描区域已按独立冻结人工记录核验" if certified else "扫描证据缺少匹配的独立冻结人工认证"
+                result["physical_page"] = page_number
+                result["preview_url"] = _evidence_preview_url(job_id, result)
+                return result
             if quote_text:
                 page_text = document.load_page(page_number - 1).get_text() or ""
                 normalized_page = "".join(page_text.split())
@@ -383,6 +402,14 @@ def _sanitize_evidence(job_id: str, job_dir: Path, raw: Dict[str, Any]) -> Dict[
                         if result.get("verification_status") == "verified":
                             result["verification_status"] = "unverified"
                         result["validation_note"] = "bbox 区域内容与引文不符，已降级为区域定位"
+            if not claimed_hash or not quote_text or not source_id_probe or str(result.get("evidence_id") or "").strip().lower() != expected_evidence_id:
+                result["verification_status"] = "unverified"
+                if result.get("location_level") in {"exact_cell", "exact_span"}:
+                    result["location_level"] = "region"
+                    result["bbox"] = None
+                result["validation_note"] = (
+                    "原件哈希、原文引文和来源 cell/block 必须同时存在才能认证证据"
+                )
         result["physical_page"] = page_number
     except ImportError:
         result["physical_page"] = None
@@ -448,7 +475,7 @@ async def get_job_evidence(
     """Read one evidence reference, optionally from a retained analysis snapshot."""
     _validate_job_id(job_id)
     _, _, _, _ = require_job_access(request, job_id)
-    payload = _revision_payload(job_id, analysis_revision)
+    payload = await _bound_evidence_payload(job_id, analysis_revision)
     if analysis_revision:
         revision_key = (
             str(analysis_revision)
@@ -496,7 +523,15 @@ async def create_job_correction(job_id: str, body: CorrectionRequest, request: R
                         },
                     )
                 current_evidence_ids.add(evidence_id)
-        normalized_change = change.model_dump()
+        normalized_change = change.model_dump(exclude_none=True)
+        if change.location is not None:
+            location_evidence = _validate_manual_location(job_id, job_dir, change.location)
+            manual_evidence.append(location_evidence)
+            normalized_change["evidence_ids"] = [*change.evidence_ids, location_evidence["evidence_id"]]
+            normalized_change["location"] = {
+                "physical_page": location_evidence["physical_page"],
+                "bbox": location_evidence["bbox"],
+            }
         if change.field == "manual_location":
             location_evidence = _validate_manual_location(job_id, job_dir, change.value)
             manual_evidence.append(location_evidence)
@@ -553,6 +588,18 @@ async def create_job_correction(job_id: str, body: CorrectionRequest, request: R
     if runner is None:
         reanalysis_status = "not_executed_no_pipeline_runner"
     else:
+        from api import queue_runtime
+        if queue_runtime.queue_enabled() or not queue_runtime.allow_inline_fallback():
+            # Use the same dispatch and review invalidation policy as Analyze.
+            # In API role this persists queued status for the separate Worker.
+            await runtime.reanalyze_job(job_id)
+            return {
+                "correction_id": record["record_id"], "record_status": "append_only_overlay",
+                "analysis_basis_token": basis, "analysis_revision": basis.rsplit(":",1)[-1],
+                "new_analysis_revision": None, "affected_checks": affected,
+                "reanalysis_status": "queued", "review_decisions_status": "pending_reanalysis",
+                "message": "校正已追加留痕并排队重分析；完成后发布新版本，旧版本保留可回放。",
+            }
         async def _run_reanalysis() -> None:
             try:
                 await runner(job_dir)
@@ -630,4 +677,49 @@ async def create_job_feedback(job_id: str, body: FeedbackRequest, request: Reque
         "feedback_status": record["feedback_status"],
         "analysis_basis_token": basis,
         "message": "反馈已记录，需经业务确认后才能用于标准答案或规则修订。",
+    }
+
+
+_TARGET_TABLE_KEYS = (
+    "fragment_uid", "instance_uid", "table_code", "title", "page", "bbox", "header_row_count",
+    "extraction_method", "scope", "mapping_status", "column_mappings", "rows", "row_boxes", "unresolved_money_cells",
+    "unqualified_ocr_cells", "arithmetic_conflicts",
+)
+
+
+@router.get("/api/jobs/{job_id}/correction-targets")
+async def get_correction_targets(job_id: str, request: Request) -> Dict[str, Any]:
+    """List what the reviewer can fix by hand: alerted tables, unread regions and prior corrections."""
+    _validate_job_id(job_id)
+    _, _, _, payload = require_job_access(request, job_id)
+    from src.services.fiscal_table_rules import NINE_TABLE_RULES
+
+    job_dir = _job_dir(job_id)
+    receipt = ((payload.get("structured_ingest") or {}).get("reading_import") or {})
+    reading = receipt.get("reading_quality") or {}
+    tables = []
+    for table in receipt.get("tables") or []:
+        if not isinstance(table, dict) or "rows" not in table:
+            continue
+        rule = NINE_TABLE_RULES.get(str(table.get("table_code") or ""))
+        tables.append({key: table.get(key) for key in _TARGET_TABLE_KEYS} | {
+            "measure_options": [
+                {"measure": measure, "label": aliases[0] if aliases else measure}
+                for measure, aliases in (rule.measure_aliases.items() if rule else [])
+            ],
+        })
+    history = [
+        {"record_id": record.get("record_id"), "actor": record.get("actor"), "reason": record.get("reason"),
+         "created_at": record.get("created_at"), "changes": record.get("changes") or []}
+        for record in read_jsonl_records(job_dir / "corrections.jsonl")
+    ]
+    return {
+        "job_id": job_id,
+        "analysis_basis_token": current_analysis_basis_token(job_id, job_dir),
+        "reading_status": reading.get("status"),
+        "tables": tables,
+        "gaps": [gap for gap in reading.get("gaps") or [] if isinstance(gap, dict)],
+        "orphaned_amounts": receipt.get("orphaned_physical_amounts") or [],
+        "overlay_status": payload.get("fact_overlay"),
+        "history": history[-50:],
     }

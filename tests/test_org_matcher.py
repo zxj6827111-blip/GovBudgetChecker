@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 from src.schemas.organization import Organization
 from src.services import org_matcher as org_matcher_module
@@ -15,6 +16,15 @@ def _patch_storage_paths(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(org_storage_module, "LINKS_FILE", data_dir / "job_org_links.json")
     monkeypatch.setattr(org_storage_module, "_storage_instance", None)
     monkeypatch.setattr(org_matcher_module, "_matcher_instance", None)
+
+
+def _load_legacy_organization(storage, org):
+    # 匹配器仍需支持历史平铺目录；新增入口已禁止创建此类无合法上级的数据。
+    records = [item.model_dump() for item in storage.get_all()]
+    records.append(org.model_dump())
+    org_storage_module.ORG_FILE.write_text(json.dumps({"organizations": records}), encoding="utf-8")
+    storage.get_all()
+    return org
 
 
 def test_org_matcher_prefers_unit_when_filename_mentions_unit(tmp_path: Path, monkeypatch):
@@ -99,15 +109,13 @@ def test_org_matcher_prefers_street_office_over_generic_government_office_unit(t
             keywords=["普陀区"],
         )
     )
-    storage.add(
-        Organization(
-            id="unit-office",
-            name="上海市普陀区人民政府办公室",
-            level="unit",
-            parent_id=district.id,
-            code="U-OFFICE",
-            keywords=["上海市普陀区人民政府", "上海市普陀区人民政府办公室"],
-        )
+    legacy_office = Organization(
+        id="unit-office",
+        name="上海市普陀区人民政府办公室",
+        level="unit",
+        parent_id=district.id,
+        code="U-OFFICE",
+        keywords=["上海市普陀区人民政府", "上海市普陀区人民政府办公室"],
     )
     street = storage.add(
         Organization(
@@ -119,6 +127,7 @@ def test_org_matcher_prefers_street_office_over_generic_government_office_unit(t
             keywords=["上海市普陀区人民政府万里街道", "上海市普陀区人民政府万里街道办事处"],
         )
     )
+    _load_legacy_organization(storage, legacy_office)
 
     matcher = org_matcher_module.OrgMatcher()
 
@@ -262,7 +271,7 @@ def test_org_matcher_handles_parenthetical_aliases_from_org_master(tmp_path: Pat
     _patch_storage_paths(tmp_path, monkeypatch)
     storage = org_storage_module.OrganizationStorage()
 
-    center = storage.add(
+    center = _load_legacy_organization(storage,
         Organization(
             id="unit-shirong",
             name="上海市普陀区市容管理中心（上海市普陀区景观建设中心）",
@@ -288,7 +297,7 @@ def test_org_matcher_handles_bureau_name_when_master_has_enforcement_brigade_suf
     _patch_storage_paths(tmp_path, monkeypatch)
     storage = org_storage_module.OrganizationStorage()
 
-    bureau = storage.add(
+    bureau = _load_legacy_organization(storage,
         Organization(
             id="unit-chengguan",
             name="上海市普陀区城市管理行政执法局执法大队",

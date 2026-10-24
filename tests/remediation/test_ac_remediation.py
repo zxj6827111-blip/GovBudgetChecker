@@ -226,7 +226,8 @@ def test_ac02_t9_binds_three_public_table_not_state_capital_on_same_page() -> No
 
 
 def test_ac02_conditional_tables_unknown_state_not_reported_missing() -> None:
-    """条件性表：材料无基金/国资内容时不判缺表；确有基金内容缺表仍要检出。"""
+    """2026-10-22 口径决议②：T6/T7 一律必备——无基金/国资痕迹时缺表也报
+    （high）；确有基金内容缺表同样检出。函数名保留以便追溯原 AC-02 用例。"""
     titles = [
         "部门预算收支总表",
         "部门收入预算总表",
@@ -243,7 +244,8 @@ def test_ac02_conditional_tables_unknown_state_not_reported_missing() -> None:
         for issue in output["issues"]
         if any(key in issue.message for key in ("BUD_T6", "BUD_T7"))
     ]
-    assert not conditional_hits, "unknown 状态不得直接判条件性表缺失"
+    assert len(conditional_hits) == 2, "决议②：九张表必备，unknown 状态缺表也须报出"
+    assert {issue.severity for issue in conditional_hits} == {"error"}
 
     # 确有基金预算内容但缺表：必须检出（正例）
     doc_fund = build_document(
@@ -324,12 +326,12 @@ def test_ac04_cmm001_writes_relation_receipts_and_defers_partial() -> None:
 
 
 def test_ac06_portable_tolerance_boundaries_in_production_rules() -> None:
-    """0.5 万元边界内外与 0.1 个百分点边界内外——生产比较统一政策口径。"""
-    assert tolerant_equal(1000.0, 1000.5) is True, "0.5 边界内允许"
-    assert tolerant_equal(1000.0, 1000.51) is False, "超过 0.5 必须报（旧相对容差漏报）"
+    """0.01 万元边界内外（2026-10-22 口径决议①）与 0.1 个百分点边界内外。"""
+    assert tolerant_equal(1000.0, 1000.01) is True, "0.01 边界内允许"
+    assert tolerant_equal(1000.0, 1000.02) is False, "超过 0.01 必须报"
     assert tolerant_equal(1000.0, 1000.6) is False, "V33-103 的 1000 vs 1000.60 反例"
-    assert tolerant_equal(100.0, 100.10) is True, "旧 0.01 局部容差把舍入当错误"
-    assert tolerant_equal(100.0, 100.50) is True
+    assert tolerant_equal(100.0, 100.10) is False, "0.10 已超出统一政策容差"
+    assert tolerant_equal(100.0, 100.02, terms=3) is True, "三项加总的显示舍入包络 0.02 内允许"
     assert tolerant_equal(100.0, 100.51) is False
     assert percentage_difference_exceeds_policy("0.1") is False
     assert percentage_difference_exceeds_policy("0.1001") is True
@@ -412,7 +414,7 @@ def test_ac10_overlay_changes_fact_values_and_version_token() -> None:
     assert new_value == Decimal("90.0"), "校正后事实值必须变化（重算输入随之变化）"
     assert new_context.version_token != context.version_token, "事实版本令牌必须不同"
     assert new_context.facts[0].recognition_status == "verified"
-    assert new_context.facts[0].extra_dims["pre_correction_values"][0]["normalized_value"] == "100.0"
+    assert Decimal(new_context.facts[0].extra_dims["pre_correction_values"][0]["normalized_value"]) == Decimal("100.00")
 
 
 def test_ac10_overlay_rejects_unknown_fact_target() -> None:

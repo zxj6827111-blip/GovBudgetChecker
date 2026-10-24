@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 
 #: 画像解析器版本。画像结构或候选优先级变更时必须递增，
 #: 否则历史结果无法回答"这条结论是按哪版识别口径产生的"。
-PROFILE_RESOLVER_VERSION = "document-profile-v1"
+PROFILE_RESOLVER_VERSION = "document-profile-v5-native-cover-room-owner"
 
 # ---- 维度取值域 -------------------------------------------------------------
 

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from src.schemas.issues import AnalysisConfig, IssueItem
+import pytest
+
+from src.schemas.issues import AnalysisConfig, IssueItem, JobContext
+from src.services.ai_findings import AIFindingsService
 from src.services.ai_candidate_contract import validate_ai_candidate_batch
 from src.services.merge_findings import FindingsMerger
 from src.schemas.review_report import build_review_report
@@ -101,6 +104,56 @@ def test_zc06_duplicate_relation_is_ambiguous_and_not_greedily_paired() -> None:
     assert set(summary.manual_review_issue_ids) == {"ai-1", "ai-2"}
 
 
+def test_zc06_relation_failure_isolated_from_other_relation_pairs(monkeypatch) -> None:
+    ai_bad = _finding(
+        issue_id="ai-bad",
+        source="ai",
+        check_relation_id="D-005:bad-relation",
+        fact_ids=["fact-bad"],
+    )
+    rule_bad = _finding(
+        issue_id="rule-bad",
+        source="rule",
+        check_relation_id="D-005:bad-relation",
+        fact_ids=["fact-bad"],
+    )
+    ai_good = _finding(
+        issue_id="ai-good",
+        source="ai",
+        check_relation_id="D-005:good-relation",
+        fact_ids=["fact-good"],
+    )
+    rule_good = _finding(
+        issue_id="rule-good",
+        source="rule",
+        check_relation_id="D-005:good-relation",
+        fact_ids=["fact-good"],
+    )
+    original = FindingsMerger._check_relation_conflict
+
+    def _fail_one_relation(ai, rule, relation_id):
+        if rule.id == "rule-bad":
+            raise ValueError("injected per-relation failure")
+        return original(ai, rule, relation_id)
+
+    monkeypatch.setattr(
+        FindingsMerger, "_check_relation_conflict", staticmethod(_fail_one_relation)
+    )
+    summary = FindingsMerger(AnalysisConfig()).merge_findings(
+        [ai_bad, ai_good], [rule_bad, rule_good]
+    )
+
+    by_rule = {item["rule_issue_ids"][0]: item for item in summary.relations}
+    assert by_rule["rule-bad"]["status"] == "execution_error"
+    assert by_rule["rule-bad"]["conflict_reasons"] == ["relation-evaluation-error"]
+    assert by_rule["rule-good"]["status"] == "agreement"
+    assert summary.merged_ids == ["rule-bad", "rule-good"]
+    assert summary.candidate_issue_ids == ["ai-bad"]
+    assert summary.manual_review_issue_ids == ["ai-bad"]
+    assert summary.totals["ai_only"] == 1
+    assert summary.totals["conflicts"] == 1
+
+
 def test_zc06_ai_contract_accepts_only_known_sources_and_keeps_good_items() -> None:
     result = validate_ai_candidate_batch(
         {
@@ -149,6 +202,125 @@ def test_zc06_ai_contract_forbids_top_level_numeric_conclusion_fields() -> None:
     assert result["rejected"][0]["error"] == "unexpected_batch_fields"
 
 
+@pytest.mark.parametrize(
+    "candidate_overrides",
+    [
+        {
+            "fact_ids": ["fact-total-2025", "fact-invented"],
+            "evidence_ids": ["ev-known"],
+        },
+        {
+            "fact_ids": ["fact-total-2025"],
+            "evidence_ids": ["ev-known"],
+            "fact_candidates": [{"field": "raw_value", "value": 100, "evidence_ids": ["ev-known"]}],
+        },
+        {
+            "fact_ids": ["fact-total-2025"],
+            "evidence_ids": ["ev-known"],
+            "fact_candidates": [{
+                "field": "raw_value",
+                "value": "100",
+                "evidence_ids": ["ev-known", "ev-other-fact"],
+            }],
+        },
+        {"fact_ids": ["fact-total-2025"], "evidence_ids": []},
+    ],
+)
+def test_zc06_rejected_production_candidates_cannot_enter_agreement(candidate_overrides) -> None:
+    service = AIFindingsService(AnalysisConfig())
+    context = JobContext(
+        job_id="job-r5-ai",
+        pdf_path="final.pdf",
+        fact_context={
+            "facts": [{
+                "fact_uid": "fact-total-2025",
+                "evidence_ids": ["ev-known"],
+            }, {
+                "fact_uid": "fact-other",
+                "evidence_ids": ["ev-other-fact"],
+            }],
+        },
+        meta={"check_receipts": [{"rule_id": "D-005", "sub_check_id": "expense-total"}]},
+    )
+    candidate = service._build_ai_issue_item(
+        raw_issue={
+            "original": "一般公共预算支出合计100万元",
+            "context": "支出决算说明：一般公共预算支出合计100万元。",
+            "severity": "high",
+            "candidate_id": "candidate-r5",
+            "check_relation_id": "D-005:expense-total",
+            "fact_ids": ["fact-total-2025"],
+            "evidence_ids": ["ev-known"],
+            **candidate_overrides,
+        },
+        context=context,
+        idx=1,
+        page_number=1,
+    )
+    rule = _finding(
+        issue_id="rule-r5",
+        source="rule",
+        fact_ids=["fact-total-2025"],
+        check_relation_id="D-005:expense-total",
+        value="100",
+    )
+
+    summary = FindingsMerger(AnalysisConfig()).merge_findings([candidate], [rule])
+
+    assert candidate.metrics["ai_candidate_contract_state"] == "rejected"
+    assert candidate.metrics["ai_merge_eligible"] is False
+    assert summary.agreements == []
+    assert summary.merged_ids == ["rule-r5"]
+    assert candidate.id in summary.candidate_issue_ids
+    assert candidate.id in summary.manual_review_issue_ids
+    assert any(item["status"] == "rejected_candidate" for item in summary.relations)
+
+
+def test_zc06_valid_production_candidate_with_fact_bound_evidence_can_agree() -> None:
+    candidate = AIFindingsService(AnalysisConfig())._build_ai_issue_item(
+        raw_issue={
+            "original": "一般公共预算支出合计100万元",
+            "context": "支出决算说明：一般公共预算支出合计100万元。",
+            "severity": "high",
+            "candidate_id": "candidate-r5-valid",
+            "check_relation_id": "D-005:expense-total",
+            "fact_ids": ["fact-total-2025"],
+            "evidence_ids": ["ev-known"],
+        },
+        context=JobContext(
+            job_id="job-r5-ai-valid",
+            pdf_path="final.pdf",
+            fact_context={"facts": [{
+                "fact_uid": "fact-total-2025",
+                "evidence_ids": ["ev-known"],
+            }]},
+            meta={"check_receipts": [{"rule_id": "D-005", "sub_check_id": "expense-total"}]},
+        ),
+        idx=1,
+        page_number=1,
+    )
+    assert candidate.metrics["ai_candidate_contract_state"] == "accepted"
+    assert candidate.metrics["ai_merge_eligible"] is True
+    candidate = candidate.model_copy(
+        update={"metrics": {**candidate.metrics, "total": "100"}}
+    )
+    rule = _finding(
+        issue_id="rule-r5-valid",
+        source="rule",
+        fact_ids=["fact-total-2025"],
+        check_relation_id="D-005:expense-total",
+        value="100",
+    )
+    rule = rule.model_copy(
+        update={
+            "evidence_ids": ["ev-known"],
+            "evidence": [{"evidence_id": "ev-known", "page": 1, "text": "合计 100"}],
+        }
+    )
+    summary = FindingsMerger(AnalysisConfig()).merge_findings([candidate], [rule])
+    assert len(summary.agreements) == 1
+
+
 def test_zc06_review_report_separates_ai_candidates_and_preserves_conflicts() -> None:
     ai = _finding(issue_id="ai-candidate", source="ai")
     rule = _finding(issue_id="rule-formal", source="rule")
@@ -163,6 +335,8 @@ def test_zc06_review_report_separates_ai_candidates_and_preserves_conflicts() ->
     }
     ai_dict = ai.model_dump()
     rule_dict = rule.model_dump()
+    rule_dict["evidence_status"] = "complete"
+    rule_dict["evidence_verification"] = {"status": "verified", "source_identity_complete": True}
     payload = {
         "job_id": "job-zc06",
         "status": "review_required",

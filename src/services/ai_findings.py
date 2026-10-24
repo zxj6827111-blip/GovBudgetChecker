@@ -7,14 +7,16 @@ import json
 import time
 import asyncio
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Mapping, Optional
 import traceback
 import re
 
 from src.schemas.issues import IssueItem, JobContext, AnalysisConfig
-from src.engine.ai.extractor_client import ExtractorClient  # 复用现有AI客户端
+from src.engine.ai.extractor_client import ExtractorClient, ExtractorConfig
+from src.services.check_progress import update_progress
 from src.services.ai_issue_interpreter import interpret_ai_issue, normalize_ai_severity
 from src.services.ai_input_builder import build_structured_context
+from src.services.ai_candidate_contract import validate_ai_candidate_batch
 from src.utils.logging_config import describe_exception, safe_log_extra
 from src.utils.provenance import ENGINE_VERSION, read_finding_provenance
 
@@ -24,9 +26,17 @@ logger = logging.getLogger(__name__)
 class AIFindingsService:
     """AI检查服务"""
     
-    def __init__(self, config: AnalysisConfig):
+    def __init__(self, config: AnalysisConfig, runtime_config: Optional[dict] = None):
         self.config = config
         self.ai_client = ExtractorClient()  # 复用现有AI客户端
+        if runtime_config:
+            from src.services.ai_model_settings import create_client
+            self.ai_client = ExtractorClient(ExtractorConfig(
+                enabled=True, direct_only=True, audit_provider="managed", main_provider="managed",
+                audit_model=runtime_config["model"], main_model=runtime_config["model"],
+                timeout=runtime_config["timeout_s"], max_tokens=runtime_config["max_tokens"],
+            ))
+            self.ai_client._direct_ai_client = create_client(runtime_config)
         self.ai_errors = []  # 聚合AI错误信息
         self.audit_window_chars = self._read_int_env("AI_AUDIT_WINDOW_CHARS", 12000, 2000)
         self.audit_overlap_chars = self._read_int_env("AI_AUDIT_WINDOW_OVERLAP", 1200, 200)
@@ -44,6 +54,7 @@ class AIFindingsService:
             return []
         
         start_time = time.time()
+        self._progress_job_id = context.job_id
         logger.info(f"开始AI分析: job_id={context.job_id}")
 
         # 重置错误计数
@@ -77,6 +88,7 @@ class AIFindingsService:
                 current_offset = page_end + 1  # +1 for \n separator
             
             all_text = "\n".join(page_texts)
+            self.page_offsets = page_offsets
             if not all_text.strip():
                 logger.warning("文档文本为空，跳过AI语义审计")
                 return []
@@ -178,10 +190,17 @@ class AIFindingsService:
 
                 span = issue.get("span")
                 span_start: Optional[int] = None
-                if isinstance(span, (list, tuple)) and span:
+                full_text = "\n".join(context.page_texts or [])
+                anchor = str(issue.get("quote") or issue.get("original") or "")
+                if isinstance(span, (list, tuple)) and len(span) == 2:
                     try:
                         candidate_start = int(span[0])
-                        if candidate_start >= 0:
+                        # [0, 0] 是提取器的未命中占位符，不能映射成第 1 页。
+                        candidate_end = int(span[1])
+                        actual_span = full_text[candidate_start:candidate_end]
+                        if (0 <= candidate_start < candidate_end <= len(full_text)
+                                and anchor.strip()
+                                and re.sub(r"\s+", "", actual_span) == re.sub(r"\s+", "", anchor)):
                             span_start = candidate_start
                     except (TypeError, ValueError):
                         pass
@@ -275,48 +294,160 @@ class AIFindingsService:
         # 模型声称的 expected/actual 金额只是"模型声称"，不是系统计算结果，
         # 打上 provenance 标记供界面与导出区分。
         candidate_relation_id = str(raw_issue.get("check_relation_id") or "").strip() or None
-        candidate_fact_ids = [
-            str(item).strip()
-            for item in (raw_issue.get("fact_ids") or [])
-            if str(item).strip()
-        ]
-        candidate_evidence_ids = [
-            str(item).strip()
-            for item in (raw_issue.get("evidence_ids") or [])
-            if str(item).strip()
-        ]
+        raw_fact_ids = raw_issue.get("fact_ids", [])
+        raw_evidence_ids = raw_issue.get("evidence_ids", [])
         fact_context = getattr(context, "fact_context", None)
         filtered_metrics = dict(interpreted["metrics"])
-        if fact_context is not None:
-            known_fact_ids = {
-                getattr(fact, "fact_uid", "") for fact in getattr(fact_context, "facts", []) or []
-            }
-            known_evidence_ids = {
-                str(ref.get("evidence_id") or "")
-                for fact in getattr(fact_context, "facts", []) or []
-                for ref in (getattr(fact, "extra_dims", {}) or {}).get("evidence_refs", [])
-                or []
-                if isinstance(ref, dict)
-            }
-            if known_fact_ids:
-                dropped_facts = [i for i in candidate_fact_ids if i not in known_fact_ids]
-                if dropped_facts:
-                    candidate_fact_ids = [i for i in candidate_fact_ids if i in known_fact_ids]
-                    filtered_metrics["ai_candidate_ids_filtered"] = {
-                        "unknown_fact_ids": len(dropped_facts)
-                    }
-            if known_evidence_ids:
-                dropped_evidence = [
-                    i for i in candidate_evidence_ids if i not in known_evidence_ids
+        if isinstance(raw_issue.get("page"), int) and raw_issue["page"] > 0:
+            filtered_metrics["ai_reported_page"] = raw_issue["page"]
+        fact_context_data = (
+            fact_context if isinstance(fact_context, Mapping) else {}
+        )
+        raw_facts = fact_context_data.get("facts")
+        raw_facts = raw_facts if isinstance(raw_facts, list) else []
+        known_fact_ids: set[str] = set()
+        known_evidence_ids: set[str] = set()
+        known_relation_ids: set[str] = set()
+        evidence_ids_by_fact: Dict[str, set[str]] = {}
+        for fact in raw_facts:
+            if not isinstance(fact, Mapping):
+                continue
+            fact_uid = str(fact.get("fact_uid") or "").strip()
+            if fact_uid:
+                known_fact_ids.add(fact_uid)
+                evidence_ids_by_fact.setdefault(fact_uid, set())
+            evidence_ids = fact.get("evidence_ids")
+            if isinstance(evidence_ids, list):
+                normalized_evidence = {
+                    str(item).strip() for item in evidence_ids if str(item).strip()
+                }
+                known_evidence_ids.update(normalized_evidence)
+                if fact_uid:
+                    evidence_ids_by_fact[fact_uid].update(normalized_evidence)
+            extra_dims = fact.get("extra_dims") if isinstance(fact.get("extra_dims"), Mapping) else {}
+            refs = extra_dims.get("evidence_refs")
+            if isinstance(refs, list):
+                ref_ids = {
+                    str(ref.get("evidence_id") or "").strip()
+                    for ref in refs
+                    if isinstance(ref, Mapping) and str(ref.get("evidence_id") or "").strip()
+                }
+                known_evidence_ids.update(ref_ids)
+                if fact_uid:
+                    evidence_ids_by_fact[fact_uid].update(ref_ids)
+        for source in (fact_context_data, getattr(context, "meta", {})):
+            source = source if isinstance(source, Mapping) else {}
+            receipts = source.get("check_receipts") or source.get("required_checks")
+            if not isinstance(receipts, list):
+                continue
+            for item in receipts:
+                if isinstance(item, Mapping):
+                    relation = str(item.get("check_relation_id") or "").strip()
+                    if not relation and item.get("rule_id") and item.get("sub_check_id"):
+                        relation = f"{item['rule_id']}:{item['sub_check_id']}"
+                    if relation:
+                        known_relation_ids.add(relation)
+                elif isinstance(item, str) and item.strip():
+                    known_relation_ids.add(item.strip())
+
+        candidate_id = str(raw_issue.get("candidate_id") or f"{context.job_id}:semantic:{idx}").strip()
+        contract_candidate: Dict[str, Any] = {
+            "candidate_id": candidate_id,
+            "fact_ids": raw_fact_ids,
+            "evidence_ids": raw_evidence_ids,
+            "fact_candidates": raw_issue.get("fact_candidates", []),
+            "semantic_uncertainties": raw_issue.get("semantic_uncertainties", []),
+        }
+        if "check_relation_id" in raw_issue:
+            contract_candidate["check_relation_id"] = raw_issue.get("check_relation_id")
+        contract = validate_ai_candidate_batch(
+            {"candidates": [contract_candidate]},
+            allowed_fact_ids=known_fact_ids,
+            allowed_evidence_ids=known_evidence_ids,
+            allowed_relation_ids=known_relation_ids,
+        )
+        accepted_candidates = contract.get("accepted") or []
+        contract_accepted = bool(accepted_candidates)
+        validated = accepted_candidates[0] if contract_accepted else {}
+        candidate_relation_id = None
+        rejection_reasons: List[str] = []
+        if contract_accepted:
+            candidate_fact_ids = list(validated.get("fact_ids") or [])
+            candidate_evidence_ids = list(validated.get("evidence_ids") or [])
+            candidate_relation_id = validated.get("check_relation_id")
+            if candidate_relation_id and candidate_fact_ids:
+                submitted_evidence = set(candidate_evidence_ids)
+                unanchored_facts = [
+                    fact_id for fact_id in candidate_fact_ids
+                    if not (submitted_evidence & evidence_ids_by_fact.get(fact_id, set()))
                 ]
-                if dropped_evidence:
-                    candidate_evidence_ids = [
-                        i for i in candidate_evidence_ids if i in known_evidence_ids
-                    ]
-                    filter_note = filtered_metrics.setdefault(
-                        "ai_candidate_ids_filtered", {}
-                    )
-                    filter_note["unknown_evidence_ids"] = len(dropped_evidence)
+                if not candidate_evidence_ids or unanchored_facts:
+                    contract_accepted = False
+                    rejection_reasons.append("fact_evidence_mismatch")
+            if contract_accepted and candidate_relation_id and candidate_fact_ids:
+                linked_evidence = set().union(
+                    *(evidence_ids_by_fact.get(fact_id, set()) for fact_id in candidate_fact_ids)
+                )
+                for fact_candidate in validated.get("fact_candidates") or []:
+                    candidate_fact_evidence = set(fact_candidate.get("evidence_ids") or [])
+                    if (
+                        not candidate_fact_evidence
+                        or not candidate_fact_evidence.issubset(linked_evidence)
+                        or not (candidate_fact_evidence & submitted_evidence)
+                    ):
+                        contract_accepted = False
+                        rejection_reasons.append("candidate_value_evidence_mismatch")
+                        break
+
+        def _safe_candidate_ids(value: Any, allowed: set[str]) -> List[str]:
+            if not isinstance(value, list):
+                return []
+            return list(dict.fromkeys(
+                str(item).strip() for item in value
+                if str(item).strip() and str(item).strip() in allowed
+            ))
+
+        filter_note: Dict[str, int] = {}
+        if contract_accepted:
+            contract_state = "accepted"
+        else:
+            candidate_fact_ids = _safe_candidate_ids(raw_fact_ids, known_fact_ids)
+            candidate_evidence_ids = _safe_candidate_ids(raw_evidence_ids, known_evidence_ids)
+            if isinstance(raw_fact_ids, list):
+                filter_note["unknown_fact_ids"] = len(raw_fact_ids) - len(candidate_fact_ids)
+            elif raw_fact_ids not in (None, []):
+                filter_note["invalid_fact_ids_field"] = 1
+            if isinstance(raw_evidence_ids, list):
+                filter_note["unknown_evidence_ids"] = len(raw_evidence_ids) - len(candidate_evidence_ids)
+            elif raw_evidence_ids not in (None, []):
+                filter_note["invalid_evidence_ids_field"] = 1
+            candidate_relation_id = raw_issue.get("check_relation_id")
+            if candidate_relation_id and candidate_relation_id not in known_relation_ids:
+                candidate_relation_id = None
+                filter_note["unknown_relation_ids"] = 1
+            rejected = (contract.get("rejected") or [{}])[0]
+            if rejected.get("error") != "unknown_source_reference":
+                filter_note["contract_rejections"] = 1
+            if not rejection_reasons:
+                raw_error = rejected.get("error")
+                rejection_reasons.append(
+                    raw_error if isinstance(raw_error, str) else "candidate_schema_invalid"
+                )
+            if raw_issue.get("fact_candidates"):
+                filter_note["rejected_fact_candidates"] = len(raw_issue.get("fact_candidates")) if isinstance(raw_issue.get("fact_candidates"), list) else 1
+            contract_state = "rejected"
+        if filter_note:
+            filtered_metrics["ai_candidate_ids_filtered"] = filter_note
+        filtered_metrics["ai_candidate_id"] = candidate_id
+        filtered_metrics["ai_candidate_contract"] = "accepted" if contract_accepted else "identity_claims_removed"
+        filtered_metrics["ai_candidate_contract_state"] = contract_state
+        filtered_metrics["ai_merge_eligible"] = contract_accepted
+        if not contract_accepted:
+            filtered_metrics["ai_candidate_rejection_reasons"] = list(dict.fromkeys(rejection_reasons))
+        if contract_accepted and validated.get("semantic_uncertainties"):
+            filtered_metrics["ai_semantic_uncertainties"] = validated["semantic_uncertainties"]
+        if contract_accepted and validated.get("fact_candidates"):
+            filtered_metrics["ai_fact_candidates"] = validated["fact_candidates"]
         if any(
             key in filtered_metrics for key in ("expected", "actual", "difference")
         ):
@@ -393,8 +524,14 @@ class AIFindingsService:
             return []
 
         semaphore = asyncio.Semaphore(self.audit_max_concurrency)
+        completed = 0
+        failed = 0
+        job_id = getattr(self, "_progress_job_id", None)
+        if job_id:
+            update_progress(job_id, "ai", state="running", total=len(windows), completed=0, current_step="正在检查文本", unit="段文本")
 
         async def audit_one(window_idx: int, window_start: int, window_text: str) -> List[Dict[str, Any]]:
+            nonlocal completed, failed
             import hashlib
 
             window_hash = hashlib.sha1(
@@ -405,9 +542,15 @@ class AIFindingsService:
                     window_issues = await self.ai_client.ai_full_report_audit(
                         window_text,
                         window_hash,
-                        structured_context=getattr(self, "structured_context", None),
+                        structured_context=self._window_page_context(window_start, len(window_text))
+                            + (getattr(self, "structured_context", None) or ""),
                     )
+                except asyncio.CancelledError:
+                    failed += 1
+                    self.ai_errors.append({"type": "audit_window_cancelled", "window_index": window_idx, "message": "检查超时或已取消", "timestamp": time.time()})
+                    raise
                 except Exception as exc:
+                    failed += 1
                     logger.warning("AI window audit failed: window=%s error=%s", window_idx, exc)
                     self.ai_errors.append(
                         {
@@ -419,6 +562,10 @@ class AIFindingsService:
                         }
                     )
                     return []
+                finally:
+                    completed += 1
+                    if job_id:
+                        update_progress(job_id, "ai", completed=completed, failed=failed, current_step=f"已处理 {completed}/{len(windows)} 段文本")
 
             for issue in window_issues:
                 self._shift_issue_span(issue, window_start, total_text_len)
@@ -429,6 +576,16 @@ class AIFindingsService:
             for window_idx, (window_start, window_text) in enumerate(windows)
         ]
         return await asyncio.gather(*tasks)
+
+    def _window_page_context(self, start: int, length: int) -> str:
+        lines = ["【当前原文窗口的 PDF 物理页码映射】",
+                 "以下区间为当前窗口从 0 开始的字符偏移 [start,end)，页码从 PDF 第一张页面计为 1。",
+                 "span 必须对应逐字引文；page 根据区间填写，不使用页脚、目录页码或窗口序号。无法确定填 null。"]
+        for page_start, page_end, page in getattr(self, "page_offsets", []):
+            lo, hi = max(start, page_start), min(start + length, page_end)
+            if lo < hi:
+                lines.append(f"[{lo - start},{hi - start}) = PDF 第 {page} 页")
+        return "\n".join(lines) + "\n【页码映射结束】\n"
 
     @staticmethod
     def _read_int_env(name: str, default: int, min_value: int) -> int:

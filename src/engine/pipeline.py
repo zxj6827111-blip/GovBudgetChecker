@@ -126,6 +126,11 @@ def run_rules_with_outcomes(
             *_rule_set_for_kind(resolved_kind),
             *_common_rule_set(),
         ]
+        from .rule_registry import restrict_rules_to_profile
+        from src.services.document_profile_resolver import resolve_document_profile
+        profile = getattr(doc, 'document_profile', None) or resolve_document_profile(
+            path=str(getattr(doc, 'path', '') or ''), page_texts=getattr(doc, 'page_texts', []) or [])
+        selected_rules = restrict_rules_to_profile(selected_rules, profile)
     issues: List[Issue] = []
     outcomes: List[RuleOutcome] = []
     if resolved_kind == "unknown":
@@ -143,6 +148,7 @@ def run_rules_with_outcomes(
             getattr(rule_obj, "__class__", object), "code", "UNKNOWN"
         )
         try:
+            doc.current_rule_code = code
             rule = rule_obj() if isinstance(rule_obj, type) else rule_obj
             if hasattr(rule, "apply_with_ai") and use_ai_assist:
                 produced = rule.apply_with_ai(doc, use_ai_assist)
@@ -191,6 +197,8 @@ def run_rules_with_outcomes(
             )
         )
 
+    from .native_issue_dedup import deduplicate_native_issues
+    issues = deduplicate_native_issues(issues, doc)
     return order_and_number_issues(doc, issues), outcomes
 
 
@@ -311,6 +319,9 @@ def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
         evidence_list = (
             issue.get("evidence") if isinstance(issue.get("evidence"), list) else []
         )
+        check_relation_id = str(issue.get("check_relation_id") or "").strip() or None
+        fact_ids = [str(value) for value in issue.get("fact_ids", []) if str(value)]
+        evidence_ids = [str(value) for value in issue.get("evidence_ids", []) if str(value)]
         location_level = str(issue.get("location_level") or "unresolved")
         if location_level not in {"exact_cell", "exact_span"}:
             location_level = str(location.get("location_level") or location_level)
@@ -326,6 +337,9 @@ def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
         rule_code = str(getattr(issue, "rule", "") or "").strip()
         location = dict(getattr(issue, "location", None) or {})
         message = str(getattr(issue, "message", "") or "").strip()
+        check_relation_id = str(getattr(issue, "check_relation_id", "") or "").strip() or None
+        fact_ids = [str(value) for value in (getattr(issue, "fact_ids", None) or []) if str(value)]
+        evidence_ids = [str(value) for value in (getattr(issue, "evidence_ids", None) or []) if str(value)]
         evidence_text = getattr(issue, "evidence_text", None)
         location_level = str(getattr(issue, "location_level", None) or "unresolved")
         if location_level not in {"exact_cell", "exact_span"}:
@@ -405,6 +419,9 @@ def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
         "suggestion": str(suggestion),
         "tags": [rule_code],
         "metrics": {},
+        "check_relation_id": check_relation_id,
+        "fact_ids": list(dict.fromkeys(fact_ids)),
+        "evidence_ids": list(dict.fromkeys(evidence_ids)),
         "created_at": created_at,
         # 版本留痕（P2-02）：legacy 流水线没有可配置的规则版本入口，
         # 固定使用 rules_v33/budget_rules/common_rules 这套规则模块，
@@ -414,6 +431,11 @@ def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
         "prompt_version": None,
         "engine_version": ENGINE_VERSION,
     }
+    for field in ("related_rule_ids", "check_relation_ids", "merged_issue_ids"):
+        values = location.get(field)
+        if isinstance(values, list) and values:
+            data[field] = list(dict.fromkeys(str(value) for value in values))
+    data["tags"] = list(dict.fromkeys([rule_code, *(data.get("related_rule_ids") or [])]))
     return data
 
 
@@ -424,6 +446,16 @@ def _norm_sev(severity: Optional[str]) -> str:
     if value in {"warn", "warning", "medium", "low", "manual_review"}:
         return "warn"
     return "info"
+
+
+def tag_manual_fill_issues(items: List[Dict[str, Any]], context: Any) -> None:
+    """引用了人工补录数据的结论要标明来源，审核时可回到校正记录核对。"""
+    manual = {fact.fact_uid for fact in (getattr(context, "facts", None) or []) if fact.extra_dims.get("manual_fill")}
+    for item in items:
+        used = [uid for uid in item.get("fact_ids") or [] if uid in manual]
+        if used:
+            item["manual_fill_fact_ids"] = used
+            item["tags"] = list(dict.fromkeys([*item.get("tags", []), "人工补录"]))
 
 
 def build_issues_payload(
@@ -440,10 +472,19 @@ def build_issues_payload(
         for idx, item in enumerate(raw_list, start=1)
     ]
 
+    # Merged findings retain every original relation; each failed receipt
+    # points to the retained exported ID after serialization.
+    from .native_issue_dedup import link_merged_issue_receipts
+    link_merged_issue_receipts(items, getattr(doc, "fact_receipts", None) or [])
+
+    tag_manual_fill_issues(items, getattr(doc, "fact_context", None))
+
     buckets: Dict[str, List[Dict[str, Any]]] = {"error": [], "warn": [], "info": []}
     for item in items:
         bucket = _norm_sev(str(item.get("severity") or ""))
-        item["severity"] = bucket
+        # 分桶不抹除待复核语义，否则未完成提示会被计为正式 warn。
+        if item.get("severity") != "manual_review":
+            item["severity"] = bucket
         buckets[bucket].append(item)
     buckets["all"] = items
     # 规则执行摘要（增量字段，向后兼容）：insufficient/parse/execution_error
@@ -458,6 +499,7 @@ def build_issues_payload(
     if fact_receipts:
         payload["fact_receipts"] = fact_receipts
     fact_context = getattr(doc, "fact_context", None)
+    payload["structured_consumption"] = list(getattr(doc, "structured_consumption", []) or [])
     if fact_context is not None:
         try:
             payload["fact_context_summary"] = fact_context.summary()

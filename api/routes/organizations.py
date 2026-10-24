@@ -9,6 +9,7 @@ import time
 from typing import Annotated, Any, Dict, List, Tuple
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import JSONResponse
 
 from api.auth_utils import require_admin, require_login, user_can_access_job, user_can_access_org
 from api import runtime
@@ -52,10 +53,16 @@ def _split_existing_job_ids(job_ids: List[str]) -> Tuple[List[str], List[str]]:
 
 
 def _extract_summary_issue_total(summary: Dict[str, Any]) -> int:
-    merged_issue_total = summary.get("merged_issue_total")
-    if merged_issue_total is None:
-        merged_issue_total = summary.get("issue_total")
+    merged_issue_total = summary.get("review_issue_total")
     try:
+        candidate_total = summary.get("review_candidate_total")
+        if merged_issue_total is not None or candidate_total is not None:
+            # Keep candidate findings visible in organization rollups. They are
+            # not formally verified yet, but must not disappear from totals.
+            return int(merged_issue_total or 0) + int(candidate_total or 0)
+        merged_issue_total = summary.get("merged_issue_total")
+        if merged_issue_total is None:
+            merged_issue_total = summary.get("issue_total")
         return int(merged_issue_total or 0)
     except Exception:
         return 0
@@ -306,7 +313,10 @@ async def create_organization(request: Request):
         raise HTTPException(status_code=400, detail=f"invalid organization payload: {e}") from e
 
     storage = runtime.require_org_storage()
-    created = storage.add(org)
+    try:
+        created = storage.add(org)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     _clear_department_stats_cache()
     append_audit_event(
         action="organization.create",
@@ -355,7 +365,15 @@ async def update_organization(org_id: str, request: Request):
     if name not in seen_keywords:
         keywords.append(name)
 
-    updated = storage.update(org_id, {"name": name, "keywords": keywords})
+    updates: Dict[str, Any] = {"name": name, "keywords": keywords}
+    if "level" in body:
+        updates["level"] = str(body["level"]).strip()
+    if "parent_id" in body:
+        updates["parent_id"] = str(body["parent_id"]).strip() if body["parent_id"] else None
+    try:
+        updated = storage.update(org_id, updates)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not updated:
         raise HTTPException(status_code=404, detail="organization not found")
     _clear_department_stats_cache()
@@ -366,7 +384,7 @@ async def update_organization(org_id: str, request: Request):
         resource_type="organization",
         resource_id=str(updated.id),
         resource_name=str(updated.name),
-        details={"level": str(getattr(updated, "level", ""))},
+        details={"level": str(getattr(updated, "level", "")), "parent_id": updated.parent_id},
     )
     return runtime.to_dict(updated)
 
@@ -520,9 +538,14 @@ async def import_organizations(
 
     rows: List[Dict[str, Any]] = []
     if filename.endswith(".csv"):
-        text = raw.decode("utf-8-sig", errors="ignore")
-        reader = csv.DictReader(io.StringIO(text))
-        rows = [dict(row) for row in reader if row]
+        try:
+            text = raw.decode("utf-8-sig")
+            reader = csv.DictReader(io.StringIO(text), strict=True)
+            rows = [dict(row) for row in reader if any(str(value or "").strip() for value in row.values())]
+        except (UnicodeDecodeError, csv.Error) as exc:
+            raise HTTPException(status_code=400, detail="CSV 编码或格式错误，请保存为 UTF-8 CSV") from exc
+        if any(None in row for row in rows):
+            raise HTTPException(status_code=422, detail="CSV 存在多余列，请检查逗号和引号")
     elif filename.endswith(".xlsx"):
         try:
             import openpyxl
@@ -549,22 +572,39 @@ async def import_organizations(
     else:
         raise HTTPException(status_code=400, detail="only .csv/.xlsx are supported")
 
-    result = storage.import_from_list(rows, clear_existing=clear_existing)
-    _clear_department_stats_cache()
+    referenced_org_ids = []
+    if clear_existing and os.getenv("DATABASE_URL"):
+        from api.material_access import with_connection
+        async def references(conn):
+            records = await conn.fetch("""SELECT DISTINCT org_id FROM (
+                SELECT subject_org_id AS org_id FROM material_slots
+                UNION SELECT department_org_id FROM material_slots
+                UNION SELECT jurisdiction_org_id FROM material_slots
+                UNION SELECT metadata->>'organization_id' FROM analysis_jobs
+            ) refs WHERE org_id IS NOT NULL""")
+            return [str(record["org_id"]) for record in records]
+        # 数据库不可用时不允许跳过引用检查，否则会制造新的悬空归属。
+        referenced_org_ids = await with_connection(references)
+    result = storage.import_from_list(rows, clear_existing=clear_existing,
+                                     referenced_org_ids=referenced_org_ids)
+    if result.success and (result.imported > 0 or clear_existing):
+        _clear_department_stats_cache()
     result_payload = runtime.to_dict(result)
     append_audit_event(
         action="organization.import",
         actor=str(user.get("username") or ""),
-        result="success",
+        result="success" if result.success else "failure",
         resource_type="organization_import",
         resource_name=file.filename or "",
         details={
             "clear_existing": bool(clear_existing),
             "imported": int(result_payload.get("imported") or 0),
+            "attempted": int(result_payload.get("attempted") or 0),
+            "skipped": int(result_payload.get("skipped") or 0),
             "errors": result_payload.get("errors") or [],
         },
     )
-    return result_payload
+    return JSONResponse(result_payload, status_code=200 if result.success else 422)
 
 
 @router.get("/api/organizations/{org_id}/jobs")

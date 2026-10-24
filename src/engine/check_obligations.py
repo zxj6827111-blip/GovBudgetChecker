@@ -66,6 +66,7 @@ from src.engine.rule_outcome import (
 )
 from src.schemas.parse_artifact import CheckReceipt
 from src.schemas.document_profile import DocumentProfile
+from src.engine.rule_policy import AMOUNT_TOLERANCE_WAN
 
 #: 关系级子检查状态 → 聚合优先级（与规则六态共用优先级语义；
 #: parse_error/execution_error/insufficient_data 视为未完成，fail 覆盖 pass）
@@ -108,7 +109,9 @@ UNCOMPLETED_RULE_STATUSES = frozenset(
 #: v9（2026-09-26 WP4-H）：OBL-PERF-PHASE-AMOUNT 的实现缺口补齐（最后一个）——
 #: checker 从 pending_checkers 转为真实 checker（V33-PERF-PHASE-AMOUNT，
 #: budget 专用，budget registry）。至此清单内全部确定性义务均有实现。
-OBLIGATION_CATALOG_VERSION = "obligations-v9"
+#: v12（2026-10-22 检查点清单全系统默认）：清单 106 项内容检查点落地为
+#: CMM-008~026、BUD-116~123、V33-251/252，并扩展封面/占位/口径/空表义务的 checker。
+OBLIGATION_CATALOG_VERSION = "obligations-v12-checklist-global-20261022"
 
 # ---- 实例状态 ---------------------------------------------------------------
 
@@ -272,9 +275,12 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         group_id=GROUP_STRUCTURE,
         title="封面要素：年度、单位、文种、金额单位",
         report_kinds=_BOTH,
-        checkers_by_kind=_both(("V33-001",), ("BUD-003",)),
+        checkers_by_kind=_both(("V33-001", "CMM-019"), ("BUD-003", "CMM-019")),
         evidence_kind=EVIDENCE_DOCUMENT_LEVEL,
-        basis="预决算公开材料须在封面标明年度、编制单位与文种，金额单位须与表格一致",
+        basis=(
+            "预决算公开材料须在封面标明年度、编制单位与文种，金额单位须与表格一致；"
+            "封面须含单位全称、报告年度与部门/单位文种标识（清单 A-02）"
+        ),
     ),
     Obligation(
         obligation_id="OBL-STRUCT-NINE-TABLES",
@@ -303,25 +309,25 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         group_id=GROUP_DISCLOSURE,
         title="空表/无此项的规范说明",
         report_kinds=_BOTH,
-        checkers_by_kind=_both(("V33-114", "V33-109", "V33-122"), ("BUD-106",)),
+        checkers_by_kind=_both(("V33-114", "V33-109", "V33-122", "CMM-026"), ("BUD-106", "CMM-026")),
         evidence_kind=EVIDENCE_DOCUMENT_LEVEL,
-        basis="无此项或空表必须给出说明，且说明与所涉表名一致（不得套用模板）",
+        basis="无此项或空表必须给出说明，且说明与所涉表名一致（不得套用模板）；有数据的表不得保留空表说明（清单 A-07）",
     ),
     Obligation(
         obligation_id="OBL-STRUCT-TERMINOLOGY",
         group_id=GROUP_DISCLOSURE,
         title="文种口径用语一致性（部门/单位不得混用）",
         report_kinds=_BOTH,
-        checkers_by_kind=_both(("V33-236",), ("BUD-113",)),
-        basis="单位预算材料中出现'部门预算安排'等表述属口径混用",
+        checkers_by_kind=_both(("V33-236", "CMM-018"), ("BUD-113", "CMM-018")),
+        basis="单位预算材料中出现'部门预算安排'等表述属口径混用；本部门/本单位不得混用，区级材料不得套用市级口径（清单 B-02）",
     ),
     Obligation(
         obligation_id="OBL-STRUCT-PLACEHOLDER",
         group_id=GROUP_DISCLOSURE,
         title="占位符与模板残留",
         report_kinds=_BOTH,
-        checkers_by_kind=_both(("V33-112",), ("BUD-002",)),
-        basis="XX、××、某某等占位符不得出现在正式公开材料中",
+        checkers_by_kind=_both(("V33-112", "CMM-008"), ("BUD-002", "CMM-008")),
+        basis="XX、××、某某等占位符不得出现在正式公开材料中；二选一模板语、编辑批注与模板提示语须清理（清单 D-05/D-06）",
     ),
     Obligation(
         obligation_id="OBL-STRUCT-PUNCTUATION",
@@ -329,7 +335,7 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         title="标点与文字表达异常（重复标点、重复词、中英标点混用）",
         report_kinds=_BOTH,
         checkers_by_kind=_both(("V33-113", "CMM-002"), ("CMM-002",)),
-        basis="重复词、连续句号、英文逗号等属表达类缺陷",
+        basis="重复词、连续句号、英文逗号、括号不配对、文号格式等属表达类缺陷（清单 D-02/D-04）",
     ),
     Obligation(
         obligation_id="OBL-STRUCT-NUMBER-VALIDITY",
@@ -468,10 +474,10 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
     Obligation(
         obligation_id="OBL-CROSS-T1-IDENTITY",
         group_id=GROUP_CROSS,
-        title="收支总表主体识别与口径一致性",
+        title="收支决算总表：支出总计与本年支出、结余分配及年末结转一致",
         report_kinds=_FINAL_ONLY,
         checkers_by_kind=_final("V33-101"),
-        basis="总表须能确认所属主体与口径，否则不可与其他表比对",
+        basis="总表支出总计 = 本年支出合计 + 结余分配 + 年末结转和结余",
     ),
     Obligation(
         obligation_id="OBL-CROSS-BUDGET-TABLES",
@@ -528,7 +534,7 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
     Obligation(
         obligation_id="OBL-TXT-T4",
         group_id=GROUP_TABLE_TEXT,
-        title="财政拨款收支总表 与 对应说明一致",
+        title="财政拨款收支总表与对应说明一致（含表内收支平衡）",
         report_kinds=_FINAL_ONLY,
         checkers_by_kind=_final("V33-105", "V33-221", "V33-242"),
         depends_on=("table:FIN_04",),
@@ -557,7 +563,7 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         group_id=GROUP_TABLE_TEXT,
         title="三公经费支出决算表 与 三公说明一致",
         report_kinds=_FINAL_ONLY,
-        checkers_by_kind=_final("V33-108", "V33-224"),
+        checkers_by_kind=_final("V33-108", "V33-224", "CMM-001"),
         depends_on=("table:FIN_07",),
         basis="AGENTS.md 决算必查勾稽 D-007",
     ),
@@ -566,8 +572,11 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         group_id=GROUP_TABLE_TEXT,
         title="预算表与预算编制说明文字数字一致",
         report_kinds=_BUDGET_ONLY,
-        checkers_by_kind=_budget("BUD-107"),
-        basis="预算编制说明中的金额须与对应表格一致",
+        checkers_by_kind=_budget("BUD-107", "BUD-114"),
+        basis=(
+            "预算编制说明中的金额须与对应表格一致；表为元、正文为万元时须按四舍五入"
+            "换算，不得截尾（2026-10-22 口径决议①补充，清单 B-08/C-16）"
+        ),
     ),
     Obligation(
         obligation_id="OBL-TXT-BUDGET-NAME",
@@ -583,7 +592,7 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         group_id=GROUP_TABLE_TEXT,
         title="政府性基金/国有资本经营表 与 对应说明逐项一致",
         report_kinds=_FINAL_ONLY,
-        checkers_by_kind=_final("V33-TXT-FUND-DETAIL"),
+        checkers_by_kind=_final("V33-TXT-FUND-DETAIL", "V33-248"),
         depends_on=("table:FIN_08", "table:FIN_09"),
         basis=(
             "AGENTS.md 决算必查勾稽 D-008/D-009：基金与国资表的「本年支出」须与"
@@ -598,7 +607,7 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         group_id=GROUP_NARRATIVE,
         title="文字说明中的金额与占比可复算",
         report_kinds=_FINAL_ONLY,
-        checkers_by_kind=_final("V33-235", "V33-234", "V33-232"),
+        checkers_by_kind=_final("V33-235", "V33-234", "V33-232", "V33-249", "V33-250"),
         basis="说明中的金额、占比须能由表格数据复算得出",
     ),
     Obligation(
@@ -750,6 +759,18 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         basis="AGENTS.md 决算必查勾稽 D-007：预算数与决算数对比须与说明一致",
     ),
     Obligation(
+        obligation_id="OBL-SG-COUNTS",
+        group_id=GROUP_SAN_GONG,
+        title="三公经费数量要素披露（购置数、团组/人数、接待批次/人数、车辆保有量）",
+        report_kinds=_BOTH,
+        checkers_by_kind=_both(("V33-SG-COMPLETION",), ("BUD-115",)),
+        depends_on=("table:FIN_07",),
+        basis=(
+            "2026-10-22 口径决议④（清单决算 A-08、预算 A-09）：三公表对应项金额大于 0 时"
+            "须披露数量，金额为 0 或写明未发生视为已披露；车辆保有量始终要求"
+        ),
+    ),
+    Obligation(
         obligation_id="OBL-SG-YOY",
         group_id=GROUP_SAN_GONG,
         title="三公经费同比变化方向与原因",
@@ -762,7 +783,7 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         group_id=GROUP_SAN_GONG,
         title="三公经费表 与 三公说明 金额一致",
         report_kinds=_FINAL_ONLY,
-        checkers_by_kind=_final("V33-108", "V33-224"),
+        checkers_by_kind=_final("V33-108", "V33-224", "CMM-001"),
         depends_on=("table:FIN_07",),
         basis="AGENTS.md 表-说明配对：三公经费支出决算表对应七、三公经费说明",
     ),
@@ -801,6 +822,212 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         # 相同不代表项目集合、预算版本相同，缺依据时只能要求解释）。
         checkers_by_kind=_budget("V33-PERF-PHASE-AMOUNT"),
         basis="绩效阶段金额与项目集合口径不一致时须给出解释，不得直接判等",
+    ),
+    # ---- 2026-10-22 检查点清单（全系统默认检查指标） ----
+    Obligation(
+        obligation_id="OBL-STRUCT-SECTIONS",
+        group_id=GROUP_STRUCTURE,
+        title="报告结构与章节模板齐全（主要职能、机构设置、名词解释、四部分等）",
+        report_kinds=_BOTH,
+        checkers_by_kind=_both(("CMM-023",), ("CMM-023",)),
+        evidence_kind=EVIDENCE_DOCUMENT_LEVEL,
+        basis="清单预算 A-01/A-03/A-04/A-08/A-11/A-12、决算 A-01/A-03/A-04/A-11/A-12：各章节标题与内容不得缺失",
+    ),
+    Obligation(
+        obligation_id="OBL-STRUCT-TOC-ALIGN",
+        group_id=GROUP_STRUCTURE,
+        title="目录与正文标题逐项一致（名称、编号、顺序）",
+        report_kinds=_BOTH,
+        checkers_by_kind=_both(("CMM-013",), ("CMM-013",)),
+        basis="清单 A-05、决算 A-04：目录所列标题须与正文各级标题一致",
+    ),
+    Obligation(
+        obligation_id="OBL-STRUCT-TABLE-NAMES",
+        group_id=GROUP_CORE_TABLES,
+        title="表名与规范表名一致",
+        report_kinds=_BOTH,
+        checkers_by_kind=_both(("CMM-021",), ("CMM-021",)),
+        basis="清单 E-06：表名不得多字、少字或误用部门/单位前缀",
+    ),
+    Obligation(
+        obligation_id="OBL-STRUCT-NUMBERING",
+        group_id=GROUP_STRUCTURE,
+        title="标题层级编号连续、同级编号体例统一",
+        report_kinds=_BOTH,
+        checkers_by_kind=_both(("CMM-014",), ("CMM-014",)),
+        basis="清单 E-04/E-05：编号不得跳号、重号，同级序号体例统一",
+    ),
+    Obligation(
+        obligation_id="OBL-STRUCT-PAGES",
+        group_id=GROUP_STRUCTURE,
+        title="无空白页、页码连续",
+        report_kinds=_BOTH,
+        checkers_by_kind=_both(("CMM-015",), ("CMM-015",)),
+        basis="清单 E-02：正文不得出现空白页，页码须连续",
+    ),
+    Obligation(
+        obligation_id="OBL-STRUCT-VISUAL",
+        group_id=GROUP_STRUCTURE,
+        title="版面规范（彩色字体、彩色底纹、整体横排）",
+        report_kinds=_BOTH,
+        checkers_by_kind=_both(("CMM-016",), ("CMM-016",)),
+        basis="清单 E-01：不得使用彩色底纹与彩色字体，文字页不得整体横向显示",
+    ),
+    Obligation(
+        obligation_id="OBL-STRUCT-ORG-NAME",
+        group_id=GROUP_DISCLOSURE,
+        title="单位名称全篇一致且为规范全称、编制栏不为空",
+        report_kinds=_BOTH,
+        checkers_by_kind=_both(("CMM-017",), ("CMM-017",)),
+        basis="清单 B-01：封面、目录、正文、表头编制栏单位名称须统一完整",
+    ),
+    Obligation(
+        obligation_id="OBL-TEXT-TYPO",
+        group_id=GROUP_DISCLOSURE,
+        title="错别字、漏字与病句（确定性词表）",
+        report_kinds=_BOTH,
+        checkers_by_kind=_both(("CMM-009",), ("CMM-009",)),
+        basis="清单 D-01/D-03/D-08：高精度词表确定性检出，其余交 AI 语义复核（OBL-AI-SEMANTIC-REVIEW）",
+    ),
+    Obligation(
+        obligation_id="OBL-TEXT-AMOUNT-FORMAT",
+        group_id=GROUP_DISCLOSURE,
+        title="金额数字格式规范（千分位、小数点、小数位）",
+        report_kinds=_BOTH,
+        checkers_by_kind=_both(("CMM-010",), ("CMM-010",)),
+        basis="清单 C-15：半角千分位、无句点分隔与双小数点，小数位统一两位",
+    ),
+    Obligation(
+        obligation_id="OBL-TEXT-AMOUNT-UNIT",
+        group_id=GROUP_DISCLOSURE,
+        title="说明正文金额单位为万元（漏写“万”字）",
+        report_kinds=_BOTH,
+        checkers_by_kind=_both(("CMM-011",), ("CMM-011",)),
+        basis="清单 C-14 / AGENTS.md R001：正文金额统一为万元",
+    ),
+    Obligation(
+        obligation_id="OBL-TEXT-YEAR",
+        group_id=GROUP_DISCLOSURE,
+        title="年度表述与报告年度一致（比较年度、报告语境年度、年份笔误）",
+        report_kinds=_BOTH,
+        checkers_by_kind=_both(("CMM-012",), ("CMM-012",)),
+        basis="清单 B-05：非比较语境年份为报告年度，比较年度为上一年度",
+    ),
+    Obligation(
+        obligation_id="OBL-TEXT-SUBJECT-CODE",
+        group_id=GROUP_DISCLOSURE,
+        title="科目编码格式正确、与名称匹配、表内不重复",
+        report_kinds=_BOTH,
+        checkers_by_kind=_both(("CMM-022",), ("CMM-022",)),
+        basis="清单 B-04：编码含前导0、经济分类编码类别与名称一致、同表编码不重复",
+    ),
+    Obligation(
+        obligation_id="OBL-NARRATIVE-SHARE-SUM",
+        group_id=GROUP_NARRATIVE,
+        title="并列列示的各项占比合计为100%",
+        report_kinds=_BOTH,
+        checkers_by_kind=_both(("CMM-020",), ("CMM-020",)),
+        basis="清单预算 C-08、决算 A-10/C-16：并列各项占比合计=100%±0.1%",
+    ),
+    Obligation(
+        obligation_id="OBL-NARRATIVE-COMPOSITION",
+        group_id=GROUP_NARRATIVE,
+        title="说明中总额与所列构成项加总一致",
+        report_kinds=_BOTH,
+        checkers_by_kind=_both(("CMM-024",), ("CMM-024",)),
+        basis="清单 C-10：收入来源、支出构成、财政拨款三类分项加总须等于所列总额",
+    ),
+    Obligation(
+        obligation_id="OBL-PERF-ZERO-COUNT",
+        group_id=GROUP_PERFORMANCE,
+        title="绩效项目数为0时涉及金额为0",
+        report_kinds=_BOTH,
+        checkers_by_kind=_both(("CMM-025",), ("CMM-025",)),
+        basis="清单决算 B-09：项目数为0个时涉及预算金额应为0万元",
+    ),
+    Obligation(
+        obligation_id="OBL-INTERNAL-T4-BUDGET",
+        group_id=GROUP_INTERNAL,
+        title="财政拨款收支预算总表收支平衡、三列等于功能分类表合计",
+        report_kinds=_BUDGET_ONLY,
+        checkers_by_kind=_budget("BUD-116"),
+        depends_on=("table:BUD_T4",),
+        basis="清单预算 C-03/C-04",
+    ),
+    Obligation(
+        obligation_id="OBL-INTERNAL-T2-BUDGET",
+        group_id=GROUP_INTERNAL,
+        title="收入预算总表各来源加总等于合计",
+        report_kinds=_BUDGET_ONLY,
+        checkers_by_kind=_budget("BUD-117"),
+        depends_on=("table:BUD_T2",),
+        basis="清单预算 C-07",
+    ),
+    Obligation(
+        obligation_id="OBL-INTERNAL-HIERARCHY-BUDGET",
+        group_id=GROUP_INTERNAL,
+        title="预算功能分类表类→款→项逐级加总与合计行",
+        report_kinds=_BUDGET_ONLY,
+        checkers_by_kind=_budget("BUD-118"),
+        basis="清单预算 C-01/C-02",
+    ),
+    Obligation(
+        obligation_id="OBL-CROSS-BUDGET-SUBJECT",
+        group_id=GROUP_CROSS,
+        title="预算表间同一科目金额一致",
+        report_kinds=_BUDGET_ONLY,
+        checkers_by_kind=_budget("BUD-119"),
+        basis="清单预算 B-10",
+    ),
+    Obligation(
+        obligation_id="OBL-TXT-BUDGET-MAIN-CONTENT",
+        group_id=GROUP_TABLE_TEXT,
+        title="财政拨款支出主要内容细化到项、分项加总等于财政拨款支出预算",
+        report_kinds=_BUDGET_ONLY,
+        checkers_by_kind=_budget("BUD-120"),
+        basis="清单预算 B-08/C-11",
+    ),
+    Obligation(
+        obligation_id="OBL-DISCLOSURE-PROCUREMENT",
+        group_id=GROUP_DISCLOSURE,
+        title="政府采购预算要素齐全、分项加总等于总额",
+        report_kinds=_BUDGET_ONLY,
+        checkers_by_kind=_budget("BUD-121"),
+        basis="清单预算 A-11/C-12",
+    ),
+    Obligation(
+        obligation_id="OBL-PERF-ELEMENTS",
+        group_id=GROUP_PERFORMANCE,
+        title="绩效目标设置要素与项目经费情况说明七要素",
+        report_kinds=_BUDGET_ONLY,
+        checkers_by_kind=_budget("BUD-122"),
+        basis="清单预算 A-12",
+    ),
+    Obligation(
+        obligation_id="OBL-TXT-BUDGET-EXPLANATION",
+        group_id=GROUP_TABLE_TEXT,
+        title="预算编制说明要素齐全",
+        report_kinds=_BUDGET_ONLY,
+        checkers_by_kind=_budget("BUD-123"),
+        basis="清单预算 A-10：收入来源、财政拨款三类、增减原因、财政拨款支出主要内容",
+    ),
+    Obligation(
+        obligation_id="OBL-TXT-FINAL-DETAIL",
+        group_id=GROUP_TABLE_TEXT,
+        title="支出决算具体情况逐项细化到项、分项加总、不漏列",
+        report_kinds=_FINAL_ONLY,
+        checkers_by_kind=_final("V33-251"),
+        depends_on=("table:FIN_05",),
+        basis="清单决算 A-09/C-11/C-12",
+    ),
+    Obligation(
+        obligation_id="OBL-CROSS-T4-FUNDS",
+        group_id=GROUP_CROSS,
+        title="财政拨款收支总表基金/国资列与对应决算表一致",
+        report_kinds=_FINAL_ONLY,
+        checkers_by_kind=_final("V33-252"),
+        depends_on=("table:FIN_04", "table:FIN_08", "table:FIN_09"),
+        basis="清单决算 C-04",
     ),
     # ---- AI 语义义务（候选提出，不作确定性结论） ----
     Obligation(
@@ -1017,6 +1244,21 @@ def expand_obligations(
     kind = str(report_kind or (profile.kind if profile else "") or "unknown").strip().lower()
     notes: List[str] = []
     instances: List[ObligationInstance] = []
+
+    if profile is not None and profile.unsupported_reason == 'government_mixed_period_report':
+        # 政府财政决算与下一年预算执行同册，部门九表不构成其检查范围。
+        # 尚无政府分期间完整检查器时明确保留能力缺口，不能因少跑规则报通过。
+        instances.append(ObligationInstance(
+            obligation_id='OBL-GOVERNMENT-MIXED-SCOPE', group_id=GROUP_STRUCTURE,
+            group_title=OBLIGATION_GROUP_TITLES[GROUP_STRUCTURE],
+            title='政府财政报告分期间完整检查', status=OBLIGATION_NOT_IMPLEMENTED,
+            reason=OBLIGATION_NOT_IMPLEMENTED,
+            detail='原件为政府财政决算及下一年度预算执行报告，须分期间检查；当前部门九表检查器不适用，政府报告完整检查尚未实现',
+            evidence_kind=EVIDENCE_DOCUMENT_LEVEL,
+            basis=profile.subject_level.evidence,
+        ))
+        notes.append('government_mixed_period_report: 政府报告完整检查尚未实现，不能视为检查通过')
+        return instances, notes
 
     if kind not in {"budget", "final"}:
         # 文种未识别：不能展开专项义务，但也绝不允许出现"0 条义务、完成率 100%"。
@@ -1390,22 +1632,31 @@ def build_check_receipts(
     registry = registry_rule_ids(report_kind)
     findings_by_pair: Dict[Tuple[str, str], List[str]] = {}
     for finding in iter_findings(result):
-        rule_id = str(finding.get("rule_id") or finding.get("rule") or "")
+        rule_ids = _finding_rule_ids(finding)
         finding_id = str(finding.get("id") or "")
-        if not rule_id or not finding_id:
+        if not rule_ids or not finding_id:
             continue
         obligation_ids = finding.get("obligation_ids")
         if isinstance(obligation_ids, list):
-            for obligation_id in obligation_ids:
-                findings_by_pair.setdefault((str(obligation_id), rule_id), []).append(
-                    finding_id
-                )
+            for rule_id in rule_ids:
+                owned = set(obligation_ids_for_rule(rule_id))
+                # Callers may supply a versioned/custom obligation ledger.
+                # Honor its declared checker pairing as well as the built-in
+                # catalog; never drop an existing explicit receipt link.
+                for instance in (obligation_coverage or {}).get("instances", []):
+                    if isinstance(instance, Mapping) and rule_id in instance.get("checkers", []):
+                        owned.add(str(instance.get("obligation_id") or ""))
+                for obligation_id in obligation_ids:
+                    if obligation_id in owned:
+                        findings_by_pair.setdefault((str(obligation_id), rule_id), []).append(
+                            finding_id
+                        )
 
     # ---- 关系级回执（规则真实写下的子检查） ----
     relation_receipts: List[Dict[str, Any]] = []
     # (obligation_id, rule_id) -> [status, ...]，用于聚合义务级状态
     relation_status_by_pair: Dict[Tuple[str, str], List[str]] = {}
-    fact_basis_by_pair: Dict[Tuple[str, str], bool] = {}
+    relation_receipts_by_pair: Dict[Tuple[str, str], List[CheckReceipt]] = {}
     for raw_receipt in fact_receipts or []:
         if not isinstance(raw_receipt, Mapping):
             continue
@@ -1415,25 +1666,32 @@ def build_check_receipts(
             continue
         if not receipt.rule_id or not receipt.sub_check_id:
             continue
-        if not receipt.obligation_id:
-            obligation_ids = obligation_ids_for_rule(receipt.rule_id)
-            receipt.obligation_id = obligation_ids[0] if obligation_ids else None
-        pair = (receipt.obligation_id or "", receipt.rule_id)
-        relation_status_by_pair.setdefault(pair, []).append(receipt.status)
-        if receipt.evaluation_basis == "fiscal_fact" and receipt.fact_migration_status == "complete":
-            fact_basis_by_pair[pair] = True
-            for issue_ref in receipt.issue_refs:
+        # Shared rules may cover more than one obligation and more than one
+        # document kind. Project each relation only onto this run's selected
+        # obligations; the first global reverse mapping can be a budget item.
+        selected_ids = {item.obligation_id for item in OBLIGATION_CATALOG
+                        if report_kind in item.report_kinds}
+        targets = ([receipt.obligation_id] if receipt.obligation_id else
+                   [key for key in obligation_ids_for_rule(receipt.rule_id) if key in selected_ids])
+        for obligation_id in targets or [None]:
+            projected = CheckReceipt.from_dict(receipt.to_dict())
+            projected.obligation_id = obligation_id
+            pair = (obligation_id or "", projected.rule_id)
+            relation_status_by_pair.setdefault(pair, []).append(projected.status)
+            relation_receipts_by_pair.setdefault(pair, []).append(projected)
+            for issue_ref in projected.issue_refs:
                 findings_by_pair.setdefault(pair, [])
                 if issue_ref not in findings_by_pair[pair]:
                     findings_by_pair[pair].append(issue_ref)
-        relation_receipts.append(receipt.to_dict())
+            relation_receipts.append(projected.to_dict())
 
     def _aggregate_pair_status(pair: Tuple[str, str], fallback: str) -> Tuple[str, Optional[str]]:
         sub_statuses = relation_status_by_pair.get(pair) or []
         if not sub_statuses:
             return fallback, None
+        applicable_statuses = [status for status in sub_statuses if status != STATUS_NOT_APPLICABLE]
         worst = max(
-            sub_statuses,
+            applicable_statuses or [STATUS_NOT_APPLICABLE],
             key=lambda s: _RECEIPT_STATUS_PRIORITY.get(s, -1),
         )
         # 全部子关系完成才聚合为完成；任一未完成如实保留未完成状态
@@ -1480,20 +1738,41 @@ def build_check_receipts(
                 else:
                     status = fallback_status
 
-            is_fact_based = fact_basis_by_pair.get(pair, False)
+            pair_relations = relation_receipts_by_pair.get(pair, [])
+            applicable_relations = [
+                item for item in pair_relations if item.status != STATUS_NOT_APPLICABLE
+            ]
+            # An aggregate is fact-based only when every applicable relation
+            # actually consumed at least one identified fact. A single migrated
+            # sub-check must not relabel legacy-grid passes in the same rule as
+            # fiscal-fact completion.
+            is_fact_based = bool(applicable_relations) and all(
+                item.evaluation_basis == "fiscal_fact"
+                and item.fact_migration_status == "complete"
+                and bool(item.operand_fact_ids)
+                for item in applicable_relations
+            )
             tolerance: Dict[str, Any] = {
-                "configured_amount_tolerance_wan": "0.5",
+                "configured_amount_tolerance_wan": str(AMOUNT_TOLERANCE_WAN),
                 "configured_percentage_point_tolerance": "0.1",
                 "rounding_envelope_wan": None,
                 "actual_envelope_source": "not_exposed_by_legacy_rule",
             }
             if is_fact_based:
-                tolerance = {
-                    "configured_amount_tolerance_wan": "0.5",
-                    "configured_percentage_point_tolerance": "0.1",
-                    "rounding_envelope_wan": "policy",
-                    "actual_envelope_source": "fact_policy",
+                per_relation_tolerance = {
+                    item.sub_check_id: item.tolerance for item in applicable_relations
                 }
+                distinct_tolerances = {
+                    json.dumps(item.tolerance, ensure_ascii=False, sort_keys=True)
+                    for item in applicable_relations
+                }
+                if len(distinct_tolerances) == 1:
+                    tolerance = dict(applicable_relations[0].tolerance)
+                else:
+                    tolerance = {
+                        "actual_envelope_source": "per_relation_receipts",
+                        "relation_tolerances": per_relation_tolerance,
+                    }
 
             receipt = CheckReceipt(
                 rule_id=raw_rule_id,
@@ -1531,6 +1810,18 @@ def obligation_ids_for_rule(rule_id: Any) -> List[str]:
     ]
 
 
+def _finding_rule_ids(finding: Mapping[str, Any]) -> List[str]:
+    """去重后仍保留每条真实关联规则，不把其他义务错误挂到主规则。"""
+    location = finding.get("location")
+    location = location if isinstance(location, Mapping) else {}
+    values = [finding.get("rule_id") or finding.get("rule")]
+    for owner in (finding, location):
+        related = owner.get("related_rule_ids")
+        if isinstance(related, (list, tuple)):
+            values.extend(related)
+    return list(dict.fromkeys(str(value).strip().upper() for value in values if value))
+
+
 def attach_obligation_ids(result: Mapping[str, Any]) -> int:
     """就地给结果中的 finding 标注关联义务编号，返回被标注的条数。
 
@@ -1541,8 +1832,8 @@ def attach_obligation_ids(result: Mapping[str, Any]) -> int:
 
     attached = 0
     for finding in iter_findings(result):
-        rule_id = finding.get("rule_id") or finding.get("rule")
-        ids = obligation_ids_for_rule(rule_id)
+        ids = list(dict.fromkeys(item for rule_id in _finding_rule_ids(finding)
+                                for item in obligation_ids_for_rule(rule_id)))
         if not ids:
             continue
         existing = finding.get("obligation_ids")

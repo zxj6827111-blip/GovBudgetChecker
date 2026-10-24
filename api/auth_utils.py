@@ -60,7 +60,15 @@ def require_login(request: Request) -> Tuple[Any, str, Dict[str, Any]]:
     if user is None:
         raise HTTPException(status_code=401, detail="invalid or expired session")
     enforce_password_change(request, user)
+    enforce_read_only(request, user)
     return store, token, user
+
+
+def enforce_read_only(request: Request, user: Dict[str, Any]) -> None:
+    """主管账号只允许读取和维护自身登录信息，直接请求写接口同样拒绝。"""
+    if (user.get("is_read_only") and request.method not in {"GET", "HEAD", "OPTIONS"}
+            and request.url.path not in PASSWORD_CHANGE_EXEMPT_PATHS):
+        raise HTTPException(status_code=403, detail="supervisor account is read-only")
 
 
 def require_admin(request: Request) -> Tuple[Any, str, Dict[str, Any]]:
@@ -141,6 +149,10 @@ def user_can_access_job(user: Dict[str, Any], job_payload: Dict[str, Any]) -> bo
     if job_org_id and user_can_access_org(user, job_org_id):
         return True
 
+    # 客户范围只由组织授权决定，不用上传人兜底扩大其可见数据。
+    if user.get("is_read_only"):
+        return False
+
     owner = str(job_payload.get("created_by") or "").strip().lower()
     if not owner:
         # Legacy jobs without an owner must not become visible to every user.
@@ -153,9 +165,12 @@ def user_can_access_job(user: Dict[str, Any], job_payload: Dict[str, Any]) -> bo
 def require_job_access(
     request: Request,
     job_id: str,
+    *,
+    include_detail: bool = True,
 ) -> Tuple[Any, str, Dict[str, Any], Dict[str, Any]]:
     store, token, user = require_login(request)
-    payload = runtime.get_job_status_payload(job_id)
+    # 文件与结构化侧车只需要归属鉴权，不应因此定位所有 AI 证据或重建报告。
+    payload = runtime.get_job_status_payload(job_id) if include_detail else runtime.get_job_access_payload(job_id)
     if not user_can_access_job(user, payload):
         raise HTTPException(status_code=403, detail="job access denied")
     return store, token, user, payload

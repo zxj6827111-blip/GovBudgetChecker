@@ -9,9 +9,8 @@
  *   经 StageProgress 组件渲染，未知态由该组件内部的 isProgressUnknown 处理，
  *   本文件不重新判定 null——避免出现"两处判断逻辑，一处漏改就产生分裂"。
  * - 质量状态徽章：review_required 必须显示"需要人工复核"，不可显示"分析完成"。
- * - 问题数：直接读 merged_issue_total（后端 _partition_findings 已按
- *   is_formal_finding 过滤，是 count_formal_findings 同一口径），不在前端自己
- *   用 len(issues) 另算。
+ * - 问题数：与审核台采用 review_issue_total，包含待人工确认的材料问题；
+ *   提示和系统复核事项单独计数。
  * - 年份未识别显示"未识别到"，不显示 2000 或留空猜测。
  * - 耗时：读 job.elapsed_ms（runtime.collect_job_summary 已按 finished_at-started_at
  *   优先、elapsed_ms.total 兜底的口径计算好），null/undefined 时显示"—"，
@@ -20,16 +19,19 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import type { Route } from "next";
-import type { ReactNode } from "react";
-import { MoreHorizontal } from "lucide-react";
+import { useEffect, useRef, type ReactNode } from "react";
+import { ClipboardCheck, RefreshCw } from "lucide-react";
 
 import { Badge, StageProgress, Td, Th } from "@/components/ui";
+import AnalysisCheckProgress from "@/components/AnalysisCheckProgress";
 import type { BadgeTone } from "@/components/ui";
 import type { JobSummaryRecord } from "@/lib/uiAdapters";
 import { normalizeUiTaskStatus } from "@/lib/uiAdapters";
+import { reviewDetailPath } from "../review-workbench/reviewListAdapters";
 
-import { formatElapsedText, formatPagesText, resolveReviewEntryDecision } from "./workbenchAdapters";
+import { formatElapsedText, formatPagesText, resolveIssueCountText, resolveFindingCountDetails, resolveReviewEntryDecision } from "./workbenchAdapters";
 
 interface StageProgressPayload {
   phase?: string | null;
@@ -119,22 +121,11 @@ function formatDocTypeLabel(job: JobSummaryRecord): string {
   return "待复核";
 }
 
-/** 问题数：merged_issue_total 是唯一口径（对照 count_formal_findings），缺失显示 —。 */
-function resolveIssueCountText(job: JobSummaryRecord): string {
-  const merged = job.merged_issue_total;
-  if (typeof merged === "number" && Number.isFinite(merged)) {
-    return String(merged);
-  }
-  const legacy = job.issue_total;
-  if (typeof legacy === "number" && Number.isFinite(legacy)) {
-    return String(legacy);
-  }
-  return "—";
-}
-
 export interface WorkbenchQueueTableProps {
   jobs: JobSummaryRecord[];
-  onReanalyze: (jobId: string) => void;
+  /** 报告目录默认折叠检查明细，保留阶段与质量状态，避免每行占用过多高度。 */
+  collapsibleChecks?: boolean;
+  onReanalyze?: (jobId: string) => void;
   /**
    * 修复 3：可选的「开始分析」回调——只对 uploaded（待分析）态的行渲染入口，
    * 与修复 2 的上传触发分析走同一条链路（POST /api/analyze/{job_id}）。
@@ -142,10 +133,19 @@ export interface WorkbenchQueueTableProps {
   onStartAnalysis?: (jobId: string) => void;
   /**
    * 可选：自定义操作列内容（Task 8.2 任务历史页用它在操作列渲染
-   * 报告下载入口）。不传时保持默认的"更多操作"按钮（调用 onReanalyze），
-   * 工作台/处理队列页的行为不变。
+   * 报告下载入口）。不传时显示明确的"重新分析"按钮（调用 onReanalyze）。
    */
   renderRowActions?: (job: JobSummaryRecord) => ReactNode;
+  selection?: {
+    selectedIds: ReadonlySet<string>;
+    canSelect: (job: JobSummaryRecord) => boolean;
+    onToggleJob: (jobId: string) => void;
+    onTogglePage: (jobIds: string[], selected: boolean) => void;
+    disabled?: boolean;
+  };
+  actionsDisabled?: boolean;
+  busyJobIds?: ReadonlySet<string>;
+  reviewReturnTo?: string;
 }
 
 /**
@@ -157,7 +157,7 @@ export interface WorkbenchQueueTableProps {
  * 高亮/筛选语义（必须保留），整行点击会让两个导航语义互相踩踏；显式按钮
  * 可见性最好、可键盘访问、还能对"未分析完成"的任务干净地禁用并说明原因。
  */
-function ReviewEntryLink({ job }: { job: JobSummaryRecord }) {
+function ReviewEntryLink({ job, returnTo }: { job: JobSummaryRecord; returnTo: string }) {
   const jobId = String(job.job_id ?? "");
   const decision = resolveReviewEntryDecision(job);
   if (!decision.canEnter) {
@@ -166,32 +166,48 @@ function ReviewEntryLink({ job }: { job: JobSummaryRecord }) {
         type="button"
         disabled
         title={decision.reason ?? undefined}
-        aria-label={`任务 ${jobId} ${decision.reason ?? "暂不能进入审核台"}`}
+        aria-label={`任务 ${job.filename ?? jobId} 暂不能进入人工复核：${decision.reason ?? "当前不可复核"}`}
         data-testid={`gbc-workbench-queue-review-${jobId}`}
-        className="cursor-not-allowed rounded-md px-2 py-1 text-xs font-medium text-slate-300"
+        className="inline-flex cursor-not-allowed items-center gap-1.5 whitespace-nowrap rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-slate-300"
       >
-        复核
+        <ClipboardCheck className="h-3.5 w-3.5" aria-hidden="true" />
+        暂不可复核
       </button>
     );
   }
   return (
     <Link
-      href={`/review?job=${encodeURIComponent(jobId)}` as Route}
-      aria-label={`进入任务 ${jobId} 的审核工作台`}
+      href={reviewDetailPath(jobId, returnTo) as Route}
+      aria-label={`进入任务 ${job.filename ?? jobId} 的人工复核工作台`}
+      title="进入人工复核工作台，查看问题、填写复核意见并完成复核"
       data-testid={`gbc-workbench-queue-review-${jobId}`}
-      className="rounded-md border border-border px-2 py-1 text-xs font-medium text-primary-700 transition-colors hover:border-primary-300 hover:bg-primary-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+      className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-primary-700 transition-colors hover:border-primary-300 hover:bg-primary-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
     >
-      复核
+      <ClipboardCheck className="h-3.5 w-3.5" aria-hidden="true" />
+      查看复核材料
     </Link>
   );
 }
 
 export function WorkbenchQueueTable({
   jobs,
+  collapsibleChecks = false,
   onReanalyze,
   onStartAnalysis,
   renderRowActions,
+  selection,
+  actionsDisabled = false,
+  busyJobIds,
+  reviewReturnTo,
 }: WorkbenchQueueTableProps) {
+  const pathname = usePathname() ?? "/queue";
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  const selectableIds = selection ? jobs.filter(selection.canSelect).map((job) => String(job.job_id)) : [];
+  const selectedPageCount = selectableIds.filter((id) => selection?.selectedIds.has(id)).length;
+  const allSelected = selectableIds.length > 0 && selectedPageCount === selectableIds.length;
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = selectedPageCount > 0 && !allSelected;
+  }, [selectedPageCount, allSelected]);
   if (jobs.length === 0) {
     return (
       <div
@@ -208,12 +224,26 @@ export function WorkbenchQueueTable({
       <table className="w-full border-collapse text-left" data-testid="gbc-workbench-queue-table">
         <thead>
           <tr>
+            {selection ? (
+              <Th className="w-10">
+                <input
+                  ref={selectAllRef}
+                  type="checkbox"
+                  aria-label="选择本页可运行任务"
+                  checked={allSelected}
+                  disabled={selection.disabled || selectableIds.length === 0}
+                  onChange={(event) => selection.onTogglePage(selectableIds, event.target.checked)}
+                  data-testid="gbc-queue-select-page"
+                  className="h-4 w-4 accent-primary-600"
+                />
+              </Th>
+            ) : null}
             <Th>文档</Th>
             <Th>当前阶段</Th>
             <Th>质量状态</Th>
             <Th>耗时</Th>
             <Th>页数</Th>
-            <Th>问题数</Th>
+            <Th>问题 / 提示</Th>
             <Th className="text-right">操作</Th>
           </tr>
         </thead>
@@ -222,9 +252,25 @@ export function WorkbenchQueueTable({
             const stageProgress = readStageProgress(job);
             const qualityBadge = resolveQualityBadge(job);
             const jobId = String(job.job_id ?? "");
+            const issueCountText = resolveIssueCountText(job);
             const isPendingAnalysis = normalizeUiTaskStatus(job.status) === "pending_analysis";
+            const checkTracks = job.check_progress as { local?: unknown; ai?: unknown } | null | undefined;
             return (
               <tr key={jobId} data-testid={`gbc-workbench-queue-row-${jobId}`} className="hover:bg-surface-100">
+                {selection ? (
+                  <Td>
+                    <input
+                      type="checkbox"
+                      aria-label={`选择任务 ${job.filename ?? jobId}`}
+                      checked={selection.selectedIds.has(jobId)}
+                      disabled={selection.disabled || !selection.canSelect(job)}
+                      title={!selection.canSelect(job) ? "正在运行或状态未识别的任务不能重复提交" : undefined}
+                      onChange={() => selection.onToggleJob(jobId)}
+                      data-testid={`gbc-queue-select-${jobId}`}
+                      className="h-4 w-4 accent-primary-600"
+                    />
+                  </Td>
+                ) : null}
                 <Td>
                   <Link
                     href={`/queue?job=${encodeURIComponent(jobId)}` as Route}
@@ -245,23 +291,37 @@ export function WorkbenchQueueTable({
                     tone={resolveStageTone(job)}
                     data-testid={`gbc-workbench-queue-stage-${jobId}`}
                   />
+                  {collapsibleChecks && (checkTracks?.local || checkTracks?.ai) ? (
+                    <details className="mt-2 text-xs text-slate-500" data-testid={`gbc-report-check-details-${jobId}`}>
+                      <summary className="cursor-pointer rounded text-primary-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400">检查详情</summary>
+                      <AnalysisCheckProgress value={job.check_progress} compact />
+                    </details>
+                  ) : <AnalysisCheckProgress value={job.check_progress} compact />}
                 </Td>
                 <Td>
                   <Badge tone={qualityBadge.tone}>{qualityBadge.label}</Badge>
                 </Td>
                 <Td data-testid={`gbc-workbench-queue-elapsed-${jobId}`}>{formatElapsedText(job.elapsed_ms)}</Td>
-                <Td>{formatPagesText(job)}</Td>
-                <Td>{resolveIssueCountText(job)}</Td>
+                <Td data-testid={`gbc-workbench-queue-pages-${jobId}`}>{formatPagesText(job)}</Td>
+                <Td data-testid={`gbc-workbench-queue-findings-${jobId}`}>
+                  <div className="whitespace-nowrap font-medium">
+                    {issueCountText === "—" ? "—" : `${issueCountText} 问题`}
+                  </div>
+                  {resolveFindingCountDetails(job).map((text) => (
+                    <div key={text} className="mt-0.5 whitespace-nowrap text-xs text-slate-500">{text}</div>
+                  ))}
+                </Td>
                 <Td className="text-right">
-                  <span className="inline-flex items-center justify-end gap-1">
-                    <ReviewEntryLink job={job} />
+                  <span className="inline-flex items-center justify-end gap-2">
+                    <ReviewEntryLink job={job} returnTo={reviewReturnTo ?? pathname} />
                     {isPendingAnalysis && onStartAnalysis ? (
                       <button
                         type="button"
                         onClick={() => onStartAnalysis(jobId)}
+                        disabled={actionsDisabled || busyJobIds?.has(jobId)}
                         aria-label={`开始分析任务 ${jobId}`}
                         data-testid={`gbc-workbench-queue-start-${jobId}`}
-                        className="rounded-md border border-border px-2 py-1 text-xs font-medium text-primary-700 transition-colors hover:border-primary-300 hover:bg-primary-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+                        className="rounded-md border border-border px-2 py-1 text-xs font-medium text-primary-700 transition-colors hover:border-primary-300 hover:bg-primary-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         开始分析
                       </button>
@@ -271,12 +331,15 @@ export function WorkbenchQueueTable({
                     ) : (
                       <button
                         type="button"
-                        onClick={() => onReanalyze(jobId)}
-                        aria-label={`对任务 ${jobId} 执行操作`}
+                        onClick={() => onReanalyze?.(jobId)}
+                        disabled={!onReanalyze || actionsDisabled || busyJobIds?.has(jobId) || normalizeUiTaskStatus(job.status) === "analyzing"}
+                        aria-label={`重新分析任务 ${job.filename ?? jobId}`}
+                        title="重新运行本地检查，并按系统当前设置决定是否调用大模型"
                         data-testid={`gbc-workbench-queue-actions-${jobId}`}
-                        className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+                        className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:border-primary-300 hover:bg-primary-50 hover:text-primary-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+                        <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                        重新分析
                       </button>
                     )}
                   </span>

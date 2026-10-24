@@ -784,6 +784,15 @@ export async function installDetailMocks(page: Page, options: DetailMockOptions 
       });
       return;
     }
+    if (path.startsWith("/api/materials/reports/") && path.endsWith("/history")) {
+      // 材料详情“版本与来源”的分析与复核记录；本组用例不涉及复核历史。
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true, data: { slot_id: decodeURIComponent(path.split("/")[4] ?? ""), versions: [] } }),
+      });
+      return;
+    }
     if (path.startsWith("/api/materials/slots/")) {
       const rest = path.slice("/api/materials/slots/".length).split("/");
       const slotId = decodeURIComponent(rest[0] ?? "");

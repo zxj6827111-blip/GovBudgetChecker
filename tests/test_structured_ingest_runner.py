@@ -1,3 +1,4 @@
+from unittest.mock import AsyncMock
 """
 Tests for structured ingest runner safeguards.
 """
@@ -285,6 +286,7 @@ def _install_runner_stubs(
     from src.services import structured_ingest_runner as runner
 
     calls = {"allocate": 0}
+    stored_artifacts = []
     fake_conn = SimpleNamespace(name="fake-conn")
     resolved_slot = dict(
         slot_result
@@ -315,10 +317,13 @@ def _install_runner_stubs(
         return None
 
     async def _load_parse_artifact(_conn, _run_id):
-        raise AssertionError("cache miss must not load stored artifact")
+        events.append("readback_unified_storage")
+        from src.schemas.parse_artifact import ParseArtifact
+        return ParseArtifact.from_dict(stored_artifacts[-1].to_dict())
 
     async def _persist_parse_artifact(*_args, **_kwargs):
         events.append("persist_unified_storage")
+        stored_artifacts.append(_args[1])
         return 77
 
     async def _persist_facts_and_evidence(*_args, **_kwargs):
@@ -334,7 +339,7 @@ def _install_runner_stubs(
                 raise parse_error
             from src.schemas.parse_artifact import ParseArtifact
 
-            return ParseArtifact(source_file_hash="d" * 64, page_count=1)
+            return ParseArtifact(source_file_hash=runner._sha256_file(Path(_path)), page_count=1)
 
         async def persist_artifact_to_legacy_tables(self, _version_id, _artifact):
             events.append("persist_legacy_cells")
@@ -383,6 +388,7 @@ def _install_runner_stubs(
     monkeypatch.setattr(runner, "load_parse_artifact", _load_parse_artifact)
     monkeypatch.setattr(runner, "persist_parse_artifact", _persist_parse_artifact)
     monkeypatch.setattr(runner, "persist_facts_and_evidence", _persist_facts_and_evidence)
+    monkeypatch.setattr(runner, "verify_persisted_facts", AsyncMock(return_value={"verified": True, "facts_count": 0}))
     monkeypatch.setattr(runner, "TableRecognizer", _Recognizer)
     monkeypatch.setattr(runner, "FiscalFactMaterializer", _Materializer)
     monkeypatch.setattr(runner, "PSSharedSchemaSync", _PsSync)
@@ -395,7 +401,7 @@ def _ingest_metadata(pdf_path: Path) -> Dict[str, Any]:
         "report_year": "2024",
         "report_kind": "final",
         "doc_type": "dept_final",
-        "checksum": "d" * 64,
+        "checksum": structured_ingest_runner._sha256_file(pdf_path),
         "filename": pdf_path.name,
     }
 
@@ -416,12 +422,13 @@ async def test_material_slot_is_allocated_before_pdf_parsing(monkeypatch, tmp_pa
 
     # ZC-01 起：解析 = build_parse_artifact（唯一一次开 PDF），
     # 旧表写入由 artifact 适配产出，统一存储随后幂等落库
-    assert events[:6] == [
+    assert events[:7] == [
         "ensure_document_version",
         "allocate_material_slot",
         "parse_cache_lookup",
         "build_parse_artifact",
         "persist_unified_storage",
+        "readback_unified_storage",
         "persist_legacy_cells",
     ], f"主链路顺序不对: {events}"
     assert calls["allocate"] == 1, "一份分析只允许分配一次槽位"

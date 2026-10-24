@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -25,11 +26,12 @@ from src.services.correction_overlay_store import (
 API_KEY = os.getenv("GOVBUDGET_API_KEY", "change_me_to_a_strong_secret")
 JOB_ID = "zc05-job"
 REVISION_ID = "rev-20261002T120000-abc12345"
-EVIDENCE_ID = "evidence-zc05-1"
+EVIDENCE_ID = ""
 
 
 @pytest.fixture
 def zc05_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    global EVIDENCE_ID
     upload_root = tmp_path / "uploads"
     upload_root.mkdir()
     monkeypatch.setattr(runtime, "UPLOAD_ROOT", upload_root)
@@ -43,9 +45,12 @@ def zc05_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         document.save(job_dir / "source.pdf")
     # AC-09：读取端按当前原件重算哈希与引文真实性——夹具必须携带真实哈希
     # （错哈希证据现在会被判 failed，正是验收要求的反例行为）。
-    import hashlib
-
     source_hash = hashlib.sha256((job_dir / "source.pdf").read_bytes()).hexdigest()
+    source_cell_id = "zc05:page-1:cell-1"
+    quote = "三公经费合计 35.20 万元"
+    EVIDENCE_ID = hashlib.sha1(
+        f"{source_hash}|1|{source_cell_id}|{quote}".encode("utf-8")
+    ).hexdigest()[:16]
 
     finding = {
         "id": "issue-zc05",
@@ -58,7 +63,9 @@ def zc05_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 "file_hash": source_hash,
                 "physical_page": 1,
                 "printed_page": None,
-                "quote": "三公经费合计 35.20 万元",
+                "quote": quote,
+                "source_cell_id": source_cell_id,
+                "source_identity_status": "verified",
                 "bbox": [25, 20, 190, 50],
                 "source_method": "native_text",
                 "verification_status": "verified",

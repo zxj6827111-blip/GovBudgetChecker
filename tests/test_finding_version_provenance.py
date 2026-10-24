@@ -259,6 +259,44 @@ def test_ai_finding_carries_model_and_prompt_version() -> None:
     assert finding.rule_version is None
 
 
+def test_ai_finding_production_path_validates_candidate_source_ids() -> None:
+    """生产转换入口使用统一候选契约，未知事实/证据/关系身份不会透传。"""
+    service = AIFindingsService(AnalysisConfig())
+    context = JobContext(
+        job_id="job-ai-contract",
+        pdf_path="final.pdf",
+        fact_context={
+            "facts": [{
+                "fact_uid": "fact-known",
+                "extra_dims": {"evidence_refs": [{"evidence_id": "evidence-known"}]},
+            }],
+        },
+        meta={"check_receipts": [{"rule_id": "C-001", "sub_check_id": "total"}]},
+    )
+    finding = service._build_ai_issue_item(
+        raw_issue={
+            "original": "三公经费合计 35.20 万元",
+            "context": "三公经费情况说明：三公经费合计 35.20 万元。",
+            "severity": "medium",
+            "candidate_id": "model-candidate-1",
+            "check_relation_id": "C-001:total",
+            "fact_ids": ["fact-known", "fact-model-invented"],
+            "evidence_ids": ["evidence-known", "evidence-model-invented"],
+        },
+        context=context,
+        idx=1,
+        page_number=1,
+    )
+    assert finding.fact_ids == ["fact-known"]
+    assert finding.evidence_ids == ["evidence-known"]
+    assert finding.check_relation_id == "C-001:total"
+    assert finding.metrics["ai_candidate_contract"] == "identity_claims_removed"
+    assert finding.metrics["ai_candidate_ids_filtered"] == {
+        "unknown_fact_ids": 1,
+        "unknown_evidence_ids": 1,
+    }
+
+
 def test_ai_finding_without_provenance_leaves_versions_empty() -> None:
     """来源不明时留 None，不伪造模型/提示词版本。"""
     service = AIFindingsService(AnalysisConfig())

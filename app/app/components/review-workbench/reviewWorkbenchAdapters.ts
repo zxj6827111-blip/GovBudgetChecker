@@ -16,7 +16,7 @@
 import type { Problem } from "../../../lib/mock";
 import type { JobDetailRecord, JobSummaryRecord } from "../../../lib/uiAdapters";
 import { isUiTaskFinished, normalizeUiTaskStatus } from "../../../lib/uiAdapters";
-import { normalizeProblemBbox } from "../task-review/problemPreview";
+import { computeVerifiedOverlayBox } from "../task-review/problemPreview";
 import type { OverlayBox } from "../task-review/problemPreview";
 
 // ---------------------------------------------------------------------------
@@ -188,16 +188,7 @@ export function computeOverlayBoxAtScale(
   naturalSize: { width: number; height: number } | null,
   renderScale: number,
 ): OverlayBox | null {
-  const normalized = normalizeProblemBbox(bbox);
-  if (!normalized || !naturalSize || naturalSize.width <= 0 || naturalSize.height <= 0) {
-    return null;
-  }
-  return {
-    leftPct: ((normalized[0] * renderScale) / naturalSize.width) * 100,
-    topPct: ((normalized[1] * renderScale) / naturalSize.height) * 100,
-    widthPct: (((normalized[2] - normalized[0]) * renderScale) / naturalSize.width) * 100,
-    heightPct: (((normalized[3] - normalized[1]) * renderScale) / naturalSize.height) * 100,
-  };
+  return computeVerifiedOverlayBox(bbox, naturalSize, renderScale);
 }
 
 /** 从 Problem.location（"第 N 页"文案，来自 resolveProblemLocation）或 page 字段
@@ -331,26 +322,129 @@ export function deriveStageHistory(
 // 问题计数与排序（必须与 count_formal_findings 同口径，不得前端另算）
 // ---------------------------------------------------------------------------
 
-/**
- * 从真实 Problem 列表统计"审核问题（N）"的 N。
- *
- * 关键约束：这里只是对已经过后端 count_formal_findings 口径过滤后的
- * problems.length 做直接计数——toUiProblems() 消费的 job detail 里，
- * 降级条目已经在后端 apply_evidence_completeness/is_formal_finding 判定阶段
- * 被标记（evidence_status=degraded_missing_evidence），但 toUiProblems 本身
- * 不会因为 evidenceStatus 存在就过滤掉这条 Problem——降级问题仍然要展示给
- * 用户（带降级标识，见任务书"用户有权知道哪条证据不完整"），只是不计入
- * 正式问题数。因此本函数显式排除 evidenceStatus 为降级标记的条目，
- * 与后端 is_formal_finding 判定同一个字符串常量。
- */
+/** Formal workflow counts are narrower than the visible material issue list. */
 export const EVIDENCE_STATUS_DEGRADED = "degraded_missing_evidence";
 
+export function problemReviewKind(problem: Problem): "issue" | "tip" | "manual_review" | "review_notice" {
+  if (problem.reviewKind) return problem.reviewKind;
+  if (problem.source === "manual_review" || problem.source === "structured_ingest") return "review_notice";
+  return problem.severity === "info" ? "tip" : "issue";
+}
+
+export function isFormalProblem(problem: Problem): boolean {
+  if (problem.source === "structured_ingest") return true;
+  // Match backend evidence_guard.is_formal_finding: source identity affects
+  // whether the row is a verified issue or a review candidate, but a human
+  // decision still participates in the workflow unless evidence was explicitly
+  // degraded or the row is informational/manual-review severity.
+  return problem.severity !== "info"
+    && problem.severity !== "manual_review"
+    && problem.evidenceStatus !== EVIDENCE_STATUS_DEGRADED;
+}
+
 export function countFormalProblems(problems: Problem[]): number {
-  return problems.filter((problem) => problem.evidenceStatus !== EVIDENCE_STATUS_DEGRADED).length;
+  return problems.filter(isFormalProblem).length;
 }
 
 export function isProblemDegraded(problem: Problem): boolean {
   return problem.evidenceStatus === EVIDENCE_STATUS_DEGRADED;
+}
+
+/**
+ * 证据定位按"物理位置"去重后再展示。
+ *
+ * 同一问题可能由多条勾稽关系合并而来（如 `FIN_03_expenditure:21011:total_actual`
+ * 与 `expenditure:vertical:total_actual:21011`），两组 table_refs 指向完全相同的
+ * 单元格，原样渲染会出现两组一模一样的"查看 合计项…"按钮。
+ *
+ * 只在展示层去重、保留首次出现的 ref（及其 key），不改 problem.evidenceRefs 本身：
+ * 取整说明仍按 relationId/operandId 关联各自的 ref。角色不同（同一格在一条关系里是
+ * 合计项、在另一条里是明细项）视为不同条目，照常展示。
+ */
+export function dedupeEvidenceRefsForDisplay<T extends NonNullable<Problem["evidenceRefs"]>[number]>(refs: T[]): T[] {
+  const seen = new Set<string>();
+  return refs.filter((ref) => {
+    const bboxKey = ref.bbox?.map((value) => value.toFixed(1)).join(",") ?? "";
+    const identity = [ref.role, ref.page, ref.locationText, ref.valueText ?? "", bboxKey].join("|");
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
+export interface FindingSourceRelation {
+  aiIssueIds: string[];
+  ruleIssueIds: string[];
+  status: string;
+}
+
+export interface FindingSourceClassification {
+  commonIssueIds: Set<string>;
+  aiOnlyIssueIds: Set<string>;
+  ruleOnlyIssueIds: Set<string>;
+  commonRelations: FindingSourceRelation[];
+}
+
+/**
+ * Classify dual-mode findings only through backend-provided fact/check relations.
+ * Similar titles or nearby page numbers are not enough to call two findings common.
+ */
+export function classifyFindingSources(resultValue: unknown): FindingSourceClassification {
+  const result = resultValue && typeof resultValue === "object" && !Array.isArray(resultValue)
+    ? resultValue as Record<string, unknown>
+    : {};
+  const merged = result.merged && typeof result.merged === "object" && !Array.isArray(result.merged)
+    ? result.merged as Record<string, unknown>
+    : {};
+  const aiFindings = Array.isArray(result.ai_findings) ? result.ai_findings : [];
+  const ruleFindings = Array.isArray(result.rule_findings) ? result.rule_findings : [];
+  const commonIssueIds = new Set<string>();
+  const aiOnlyIssueIds = new Set<string>();
+  const ruleOnlyIssueIds = new Set<string>();
+  const commonRelations: FindingSourceRelation[] = [];
+  const relatedAiIds = new Set<string>();
+  const relatedRuleIds = new Set<string>();
+
+  const relations = [
+    ...(Array.isArray(merged.relations) ? merged.relations : []),
+    ...(Array.isArray(result.source_overlap_relations) ? result.source_overlap_relations : []),
+  ];
+  for (const value of relations) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const relation = value as Record<string, unknown>;
+    const aiIssueIds = Array.isArray(relation.ai_issue_ids)
+      ? relation.ai_issue_ids.map((id) => String(id ?? "").trim()).filter(Boolean)
+      : [];
+    const ruleIssueIds = Array.isArray(relation.rule_issue_ids)
+      ? relation.rule_issue_ids.map((id) => String(id ?? "").trim()).filter(Boolean)
+      : [];
+    const status = String(relation.status ?? "unknown");
+    if (aiIssueIds.length > 0 && ruleIssueIds.length > 0) {
+      aiIssueIds.forEach((id) => { commonIssueIds.add(id); relatedAiIds.add(id); });
+      ruleIssueIds.forEach((id) => { commonIssueIds.add(id); relatedRuleIds.add(id); });
+      commonRelations.push({ aiIssueIds, ruleIssueIds, status });
+    } else if (aiIssueIds.length > 0) {
+      aiIssueIds.forEach((id) => { aiOnlyIssueIds.add(id); relatedAiIds.add(id); });
+    } else if (ruleIssueIds.length > 0) {
+      ruleIssueIds.forEach((id) => { ruleOnlyIssueIds.add(id); relatedRuleIds.add(id); });
+    }
+  }
+
+  for (const value of aiFindings) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const id = String((value as Record<string, unknown>).id ?? "").trim();
+    if (id && !relatedAiIds.has(id)) aiOnlyIssueIds.add(id);
+  }
+  for (const value of ruleFindings) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const id = String((value as Record<string, unknown>).id ?? "").trim();
+    if (id && !relatedRuleIds.has(id)) ruleOnlyIssueIds.add(id);
+  }
+
+  // Remove any stale one-sided membership if the same finding participates in
+  // a confirmed two-source relation elsewhere in the payload.
+  commonIssueIds.forEach((id) => { aiOnlyIssueIds.delete(id); ruleOnlyIssueIds.delete(id); });
+  return { commonIssueIds, aiOnlyIssueIds, ruleOnlyIssueIds, commonRelations };
 }
 
 /** 问题卡默认排序：按页码升序，页码缺失的排最后（不能定位页码的问题不应该
@@ -391,6 +485,37 @@ export function extractTotalPageCount(detail: JobDetailRecord | null | undefined
 // ---------------------------------------------------------------------------
 // 元数据 tab（M2 版本留痕首次前端露面）
 // ---------------------------------------------------------------------------
+
+export interface CheckSubjectSummary {
+  /** 规则视为"本单位"的名称；与所属组织不同时说明检查改用了封面单位。 */
+  name: string;
+  /** 检查主体与任务关联组织的冲突说明；无冲突为 null。 */
+  conflictMessage: string | null;
+}
+
+/** 从 result.meta.check_subject 提取检查主体；旧任务没有该字段时返回 null，
+ *  元数据页不显示这一行，而不是拿所属组织冒充检查主体。 */
+export function extractCheckSubject(detail: JobDetailRecord | null | undefined): CheckSubjectSummary | null {
+  const meta = (detail?.result as Record<string, unknown> | undefined)?.meta;
+  if (!meta || typeof meta !== "object") {
+    return null;
+  }
+  const subject = (meta as Record<string, unknown>).check_subject;
+  if (!subject || typeof subject !== "object") {
+    return null;
+  }
+  const record = subject as Record<string, unknown>;
+  const name = String(record.name ?? "").trim();
+  if (!name) {
+    return null;
+  }
+  const conflict = record.conflict;
+  const message =
+    conflict && typeof conflict === "object"
+      ? String((conflict as Record<string, unknown>).message ?? "").trim()
+      : "";
+  return { name, conflictMessage: message || null };
+}
 
 export interface FindingVersionsSummary {
   rule_versions?: string[];
@@ -530,7 +655,7 @@ export function computeWorkflowStatusCounts(
   problems: Problem[],
   workflowRecords: Record<string, WorkflowIssueRecord>,
 ): WorkflowStatusCounts {
-  const formalProblems = problems.filter((problem) => !isProblemDegraded(problem));
+  const formalProblems = problems.filter(isFormalProblem);
   let confirmed = 0;
   let ignored = 0;
   let inPackage = 0;
@@ -554,30 +679,4 @@ export function computeWorkflowStatusCounts(
     formalProblems.length - confirmed - ignored - inPackage - needsReview,
   );
   return { confirmed, ignored, inPackage, needsReview, pending };
-}
-
-// ---------------------------------------------------------------------------
-// 审核工作台无任务参数时的自动选择（侧边栏 /review 直达）
-// ---------------------------------------------------------------------------
-
-/**
- * 从任务列表中挑选审核工作台默认进入的任务。
- *
- * 侧边栏「审核工作台」href 是 /review（不带 job 参数），直接点击时页面没有
- * 可渲染内容。这里挑选"最近一个待人工复核任务"作为默认进入项；没有待复核
- * 任务时回退到最近一个已跑完（completed/review_required/failed）的任务，
- * 让用户能继续查看历史结论；两者都没有时返回 null，由页面保持引导态。
- *
- * 输入 jobs 应为 /api/jobs 返回顺序（按 updated 倒序），因此 find 到的
- * 第一个即最近的一个。
- */
-export function pickAutoSelectJob(jobs: JobSummaryRecord[] | null | undefined): JobSummaryRecord | null {
-  if (!Array.isArray(jobs) || jobs.length === 0) {
-    return null;
-  }
-  return (
-    jobs.find((job) => normalizeUiTaskStatus(job.status) === "review_required") ??
-    jobs.find((job) => isUiTaskFinished(normalizeUiTaskStatus(job.status))) ??
-    null
-  );
 }

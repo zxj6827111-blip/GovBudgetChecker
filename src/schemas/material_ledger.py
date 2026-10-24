@@ -238,6 +238,7 @@ class MaterialCoverageSummary(ExpectedCoverageFields):
     """全局口径统计（首页 KPI 与第一屏的数字来源）。"""
 
     slot_total: int
+    uploaded_total: Optional[int] = None
     status_counts: MaterialStatusCounts
     #: 按文种拆分。注意：``slot_total = budget_total + final_total + unknown_kind_total``，
     #: 文种未识别/存在冲突的槽位不会被塞进预算或决算任何一边。

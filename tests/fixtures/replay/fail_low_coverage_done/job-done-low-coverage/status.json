@@ -20,7 +20,13 @@
                 40
               ],
               "page": 1,
-              "text": "合计 35.20，其中因公出国 10.00"
+              "text": "合计 35.20，其中因公出国 10.00",
+              "physical_page": 1,
+              "quote": "合计 35.20，其中因公出国 10.00",
+              "file_hash": "39cbe2e39d4c955c671f159bd6ac06d2ee551cec0309232c1557b91010be88ef",
+              "source_block_id": "fixture:rule-C-001:page:1:span:1",
+              "source_identity_status": "verified",
+              "evidence_id": "c7c99c72f1bd005d"
             }
           ],
           "evidence_status": "complete",
@@ -45,7 +51,13 @@
                 40
               ],
               "page": 2,
-              "text": "合计 35.20，其中因公出国 10.00"
+              "text": "合计 35.20，其中因公出国 10.00",
+              "physical_page": 2,
+              "quote": "合计 35.20，其中因公出国 10.00",
+              "file_hash": "39cbe2e39d4c955c671f159bd6ac06d2ee551cec0309232c1557b91010be88ef",
+              "source_block_id": "fixture:rule-C-002:page:2:span:1",
+              "source_identity_status": "verified",
+              "evidence_id": "efb4db69e4a9a398"
             }
           ],
           "evidence_status": "complete",

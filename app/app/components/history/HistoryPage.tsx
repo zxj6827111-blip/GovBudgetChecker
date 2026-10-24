@@ -4,8 +4,9 @@
  * 复用：
  * - WorkbenchQueueTable（通过新增的 renderRowActions 可选 prop 在操作列
  *   渲染报告下载入口，默认行为不变，工作台/处理队列页零影响）；
- * - 与处理队列页完全一致的筛选器（filterHistoryJobs = 终态过滤 +
- *   filterQueueJobs 六维筛选）与排序、分页逻辑（queuePageAdapters）；
+ * - 与处理队列页完全一致的筛选器与排序，外加只看终态任务；筛选、排序、分页由
+ *   /api/jobs?view=page&scope=finished 在服务端完成（口径同 filterHistoryJobs），
+ *   后端未升级时回退到本地同口径计算；
  * - OrganizationFilterSelect。
  *
  * 报告下载接既有 /api/reports/download（支持 pdf/cvs/json 三种格式，
@@ -15,18 +16,17 @@
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { SectionTitle } from "@/components/ui";
-import { resolvePollingDecision } from "@/lib/jobPolling";
+import { publishJobCounts } from "@/lib/jobListEvents";
+import { resolvePollingDecisionFromActivity } from "@/lib/jobPolling";
 import type { JobSummaryRecord } from "@/lib/uiAdapters";
 
 import {
   DEFAULT_QUEUE_FILTERS,
   QUEUE_SORT_LABELS,
   QUEUE_STAGE_FILTER_LABELS,
-  paginateJobs,
-  sortQueueJobs,
   type QueuePageFilters,
   type QueueReportKindFilter,
   type QueueSortKey,
@@ -35,13 +35,15 @@ import {
 import { OrganizationFilterSelect } from "../workspace/OrganizationFilterSelect";
 import { PollRefreshStatus } from "../workspace/PollRefreshStatus";
 import { WorkbenchQueueTable } from "../workspace/WorkbenchQueueTable";
+import { useJobPageLoader } from "../workspace/useJobPageLoader";
 import { useJobPolling } from "../workspace/useJobPolling";
-import { collectAvailableYears, type WorkbenchStatusFilter } from "../workspace/workbenchAdapters";
+import type { WorkbenchStatusFilter } from "../workspace/workbenchAdapters";
 import {
   REPORT_DOWNLOAD_FORMATS,
+  buildHistoryPageViewLocally,
   buildReportDownloadUrl,
-  countTerminalJobs,
-  filterHistoryJobs,
+  historyPageQuery,
+  terminalCountFromStatusCounts,
 } from "./historyPageAdapters";
 
 const PAGE_SIZE = 20;
@@ -70,43 +72,56 @@ const STAGE_OPTIONS: Array<{ value: QueueStageFilter; label: string }> = (
   Object.keys(QUEUE_STAGE_FILTER_LABELS) as QueueStageFilter[]
 ).map((key) => ({ value: key, label: QUEUE_STAGE_FILTER_LABELS[key] }));
 
+interface HistoryQueryKey {
+  filters: QueuePageFilters;
+  sortKey: QueueSortKey;
+  page: number;
+}
+
+const toHistoryQuery = (key: HistoryQueryKey) => historyPageQuery(key.filters, key.sortKey, key.page, PAGE_SIZE);
+const buildHistoryLocally = (jobs: JobSummaryRecord[], key: HistoryQueryKey) =>
+  buildHistoryPageViewLocally(jobs, key.filters, key.sortKey, key.page, PAGE_SIZE);
+
 export function HistoryPage() {
-  const [jobs, setJobs] = useState<JobSummaryRecord[] | null>(null);
   const [filters, setFilters] = useState<QueuePageFilters>(DEFAULT_QUEUE_FILTERS);
   const [sortKey, setSortKey] = useState<QueueSortKey>("updated_desc");
   const [page, setPage] = useState(1);
 
-  /** 最新 jobs 的旁路引用：轮询决策每次续排时实时读取，不受闭包过期影响。 */
-  const jobsRef = useRef<JobSummaryRecord[] | null>(null);
-  jobsRef.current = jobs;
-
   /** 修复 1：任务历史页同样接轮询——终态任务列表需要感知"还在跑的任务跑完了"
-   *  （跑完才会出现在历史里）。失败时抛错（由轮询层上报并继续重试），保持旧数据。 */
-  const loadJobs = useCallback(async () => {
-    const response = await fetch("/api/jobs", { cache: "no-store" });
-    if (!response.ok) {
-      throw new Error(`/api/jobs 返回 HTTP ${response.status}`);
-    }
-    const payload = (await response.json()) as JobSummaryRecord[] | { items?: JobSummaryRecord[] };
-    const next = Array.isArray(payload) ? payload : payload.items ?? [];
-    // 必须在 setJobs 之外同步更新旁路引用：轮询决策在 fetch 返回的同一微任务里
-    // 立即执行（早于 React 重渲染），走渲染期赋值会让终态判定晚一个周期、
-    // 多打一次后端。
-    jobsRef.current = next;
-    setJobs(next);
-  }, []);
+   *  （跑完才会出现在历史里）。只取当前一页加全量汇总；失败时抛错（由轮询层上报
+   *  并继续重试），保持旧数据。 */
+  const loader = useJobPageLoader<HistoryQueryKey>({
+    initialKey: { filters, sortKey, page },
+    toQuery: toHistoryQuery,
+    buildLocally: buildHistoryLocally,
+    onLoaded: (next) => publishJobCounts({ total: next.job_total, status_counts: next.status_counts, activity: next.activity }),
+    onPageClamped: setPage,
+  });
+  const { view, viewRef } = loader;
 
   const polling = useJobPolling({
-    fetcher: loadJobs,
-    decide: useCallback(() => resolvePollingDecision(jobsRef.current), []),
+    fetcher: loader.load,
+    decide: useCallback(() => resolvePollingDecisionFromActivity(viewRef.current?.activity), [viewRef]),
   });
+  const refreshNow = polling.refreshNow;
 
-  const availableYears = useMemo(() => collectAvailableYears(jobs), [jobs]);
-  const terminalCount = useMemo(() => countTerminalJobs(jobs), [jobs]);
+  // 筛选、排序或翻页后重新取数；关键词输入稍作停顿再请求，避免每敲一个字打一次后端。
+  const { keyRef, setKey } = loader;
+  const lastKeywordRef = useRef(filters.keyword);
+  useEffect(() => {
+    const current = keyRef.current;
+    if (current.filters === filters && current.sortKey === sortKey && current.page === page) return;
+    const delay = filters.keyword !== lastKeywordRef.current ? 300 : 0;
+    lastKeywordRef.current = filters.keyword;
+    const timer = window.setTimeout(() => {
+      setKey({ filters, sortKey, page });
+      refreshNow();
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [filters, sortKey, page, keyRef, setKey, refreshNow]);
 
-  const filteredJobs = useMemo(() => filterHistoryJobs(jobs, filters), [jobs, filters]);
-  const sortedJobs = useMemo(() => sortQueueJobs(filteredJobs, sortKey), [filteredJobs, sortKey]);
-  const pagination = useMemo(() => paginateJobs(sortedJobs, page, PAGE_SIZE), [sortedJobs, page]);
+  const availableYears = view?.years ?? [];
+  const terminalCount = terminalCountFromStatusCounts(view?.status_counts);
 
   const updateFilters = useCallback((patch: Partial<QueuePageFilters>) => {
     setFilters((prev) => ({ ...prev, ...patch }));
@@ -139,7 +154,7 @@ export function HistoryPage() {
     <div className="p-8" data-testid="gbc-history-page">
       <SectionTitle
         title="任务历史"
-        desc={`已完成、待人工复核与失败任务的检索；每个任务可下载 PDF / CSV / JSON 格式报告（当前共 ${terminalCount} 个终态任务）。`}
+        desc={`已完成、待人工复核与失败任务的检索；每个任务可下载 PDF / CSV / JSON 格式报告（${terminalCount === null ? "正在统计终态任务" : `当前共 ${terminalCount} 个终态任务`}）。`}
       />
 
       <div
@@ -245,7 +260,7 @@ export function HistoryPage() {
 
       <div className="mb-3 flex items-center justify-between text-sm text-slate-500">
         <span data-testid="gbc-history-result-count">
-          共 {pagination.total} 个终态任务（总 {jobs?.length ?? 0} 个任务）
+          {view ? `共 ${view.total} 个终态任务（总 ${view.job_total} 个任务）` : "正在统计任务…"}
         </span>
         <PollRefreshStatus
           lastSyncedAt={polling.lastSyncedAt}
@@ -254,23 +269,23 @@ export function HistoryPage() {
           onRefresh={polling.refreshNow}
           testIdPrefix="gbc-history-refresh"
         />
-        {pagination.pageCount > 1 ? (
+        {view && view.page_count > 1 ? (
           <span data-testid="gbc-history-pagination-info">
-            第 {pagination.page} / {pagination.pageCount} 页
+            第 {view.page} / {view.page_count} 页
           </span>
         ) : null}
       </div>
 
-      {jobs === null ? (
+      {view === null ? (
         <div
           className="rounded-card border border-dashed border-border bg-white p-8 text-center text-sm text-slate-500"
-          data-testid="gbc-history-loading"
+          data-testid={loader.error ? "gbc-history-load-failed" : "gbc-history-loading"}
         >
-          正在加载任务历史…
+          {loader.error ?? "正在加载任务历史…"}
         </div>
       ) : (
         <WorkbenchQueueTable
-          jobs={pagination.items}
+          jobs={view.items}
           onReanalyze={() => {
             // 历史页的操作列渲染下载入口（renderRowActions），此回调不会被触发，
             // 但 prop 保持必填以兼容组件签名。
@@ -279,12 +294,12 @@ export function HistoryPage() {
         />
       )}
 
-      {pagination.pageCount > 1 ? (
+      {view && view.page_count > 1 ? (
         <div className="mt-4 flex items-center justify-end gap-2" data-testid="gbc-history-pagination">
           <button
             type="button"
             onClick={() => setPage((prev) => Math.max(1, prev - 1))}
-            disabled={pagination.page <= 1}
+            disabled={view.page <= 1}
             data-testid="gbc-history-prev-page"
             className="rounded-md border border-border bg-white px-3 py-1.5 text-sm text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -292,8 +307,8 @@ export function HistoryPage() {
           </button>
           <button
             type="button"
-            onClick={() => setPage((prev) => Math.min(pagination.pageCount, prev + 1))}
-            disabled={pagination.page >= pagination.pageCount}
+            onClick={() => setPage((prev) => Math.min(view.page_count, prev + 1))}
+            disabled={view.page >= view.page_count}
             data-testid="gbc-history-next-page"
             className="rounded-md border border-border bg-white px-3 py-1.5 text-sm text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
           >

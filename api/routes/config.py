@@ -15,13 +15,17 @@ router = APIRouter()
 @router.get("/config")
 @router.get("/api/config")
 async def get_config():
-    ai_enabled = os.getenv("AI_ASSIST_ENABLED", "true").lower() == "true"
+    from src.services.ai_model_settings import capabilities
+    ai_capabilities = capabilities()
+    ai_enabled = ai_capabilities["enabled"]
     ai_extractor_url = os.getenv("AI_EXTRACTOR_URL", "http://127.0.0.1:9009/ai/extract/v1")
     queue_enabled = queue_runtime.queue_enabled()
     queue_role = queue_runtime.get_queue_role()
     return {
         "ai_enabled": ai_enabled,
         "ai_assist_enabled": ai_enabled,
+        "ai_model": ai_capabilities["model"],
+        "ai_configuration_source": ai_capabilities["source"],
         "ai_extractor_url": ai_extractor_url,
         "auth_enabled": bool(runtime.security_config.enabled) if runtime.security_config else False,
         "queue_enabled": queue_enabled,

@@ -217,7 +217,11 @@ async def resolve_current_analysis(conn: Any, slot_row: Dict[str, Any]) -> Revie
             unavailable_reason=ANALYSIS_REASON_NONE_FOR_CURRENT_VERSION,
         )
 
-    row = dict(current_run)
+    return analysis_from_run_row(dict(current_run), current_pointer)
+
+
+def analysis_from_run_row(row: Dict[str, Any], current_pointer: int) -> ReviewAnalysis:
+    """详情与复核清单共享运行投影，避免一处把未落库结果误判成分析完成。"""
     status = str(row.get("status") or "").strip() or None
     normalized_status = normalize_job_status(status)
     metadata = _json_dict(row.get("metadata"))

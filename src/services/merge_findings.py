@@ -81,6 +81,12 @@ class FindingsMerger:
         relation_parts: Dict[str, Tuple[str, Tuple[str, ...]]] = {}
 
         for index, finding in enumerate(ai_findings):
+            metrics = finding.metrics if isinstance(finding.metrics, Mapping) else {}
+            if (
+                metrics.get("ai_merge_eligible") is False
+                or metrics.get("ai_candidate_contract_state") == "rejected"
+            ):
+                continue
             parts = _relation_parts(finding)
             if parts:
                 key = _relation_key(parts)
@@ -102,6 +108,9 @@ class FindingsMerger:
         conflict_count = 0
         ambiguous_ai_indices: set[int] = set()
         ambiguous_rule_indices: set[int] = set()
+        failed_relation_ai_indices: set[int] = set()
+        candidate_issue_ids: List[str] = []
+        manual_review_issue_ids: List[str] = []
 
         for key in sorted(set(ai_by_relation) & set(rule_by_relation)):
             ai_indices = ai_by_relation[key]
@@ -158,11 +167,37 @@ class FindingsMerger:
             matched_rule.add(rule_index)
             merged_ids.append(rule_item.id)
 
-            conflict = self._check_relation_conflict(ai_item, rule_item, relation_id)
+            try:
+                conflict = self._check_relation_conflict(ai_item, rule_item, relation_id)
+            except Exception as exc:
+                # A malformed candidate or unexpected metric must not abort
+                # adjudication of unrelated relations. Keep the deterministic
+                # rule finding formal; quarantine only this AI pairing and
+                # record a relation-scoped failure without copying model text.
+                logger.error(
+                    "AI/rule relation evaluation failed",
+                    extra={"relation_id": relation_id, "error_type": type(exc).__name__},
+                )
+                conflict = ConflictItem(
+                    key=relation_id,
+                    ai_issue=ai_item.id,
+                    rule_issue=rule_item.id,
+                    reason="relation-evaluation-error",
+                    reasons=["relation-evaluation-error"],
+                    details={"error_type": type(exc).__name__},
+                    ai_finding=ai_item,
+                    rule_finding=rule_item,
+                    recommended_action="manual_review",
+                )
+                conflict_count += 1
+                failed_relation_ai_indices.add(ai_index)
+                candidate_issue_ids.append(ai_item.id)
+                manual_review_issue_ids.append(ai_item.id)
             reasons = list(conflict.reasons) if conflict else []
             if conflict:
                 conflicts.append(conflict)
-                conflict_count += 1
+                if "relation-evaluation-error" not in reasons:
+                    conflict_count += 1
             else:
                 agreements.append(relation_id)
             relations.append(
@@ -173,19 +208,27 @@ class FindingsMerger:
                     "ai_issue_ids": [ai_item.id],
                     "rule_issue_ids": [rule_item.id],
                     "representative_issue_id": rule_item.id,
-                    "status": "conflict" if conflict else "agreement",
+                    "status": (
+                        "execution_error"
+                        if "relation-evaluation-error" in reasons
+                        else "conflict" if conflict else "agreement"
+                    ),
                     "conflict_reasons": reasons,
                 }
             )
 
         ai_unmatched = [index for index in range(len(ai_findings)) if index not in matched_ai]
         rule_unmatched = [index for index in range(len(rule_findings)) if index not in matched_rule]
-        candidate_issue_ids: List[str] = []
-        manual_review_issue_ids: List[str] = []
-
         for index in ai_unmatched:
             item = ai_findings[index]
             candidate_issue_ids.append(item.id)
+            metrics = item.metrics if isinstance(item.metrics, Mapping) else {}
+            rejected_candidate = (
+                metrics.get("ai_merge_eligible") is False
+                or metrics.get("ai_candidate_contract_state") == "rejected"
+            )
+            if rejected_candidate:
+                manual_review_issue_ids.append(item.id)
             if index in ambiguous_ai_indices:
                 manual_review_issue_ids.append(item.id)
                 continue
@@ -199,8 +242,12 @@ class FindingsMerger:
                     "ai_issue_ids": [item.id],
                     "rule_issue_ids": [],
                     "representative_issue_id": None,
-                    "status": "ai_candidate",
-                    "conflict_reasons": [],
+                    "status": "rejected_candidate" if rejected_candidate else "ai_candidate",
+                    "conflict_reasons": (
+                        list(metrics.get("ai_candidate_rejection_reasons") or ["candidate-contract-rejected"])
+                        if rejected_candidate
+                        else []
+                    ),
                 }
             )
         for index in rule_unmatched:
@@ -232,7 +279,7 @@ class FindingsMerger:
             "merged": len(merged_ids),
             "conflicts": conflict_count,
             "agreements": len(agreements),
-            "ai_only": len(ai_unmatched),
+            "ai_only": len(ai_unmatched) + len(failed_relation_ai_indices),
             "rule_only": len(rule_unmatched),
         }
         logger.info("Relation merge complete: %s", totals)
@@ -241,7 +288,10 @@ class FindingsMerger:
             conflicts=conflicts,
             agreements=agreements,
             merged_ids=merged_ids,
-            ai_only=[ai_findings[index] for index in ai_unmatched],
+            ai_only=[
+                ai_findings[index]
+                for index in sorted(set(ai_unmatched) | failed_relation_ai_indices)
+            ],
             rule_only=[rule_findings[index] for index in rule_unmatched],
             relations=relations,
             candidate_issue_ids=list(dict.fromkeys(candidate_issue_ids)),

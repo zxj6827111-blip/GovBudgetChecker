@@ -1,0 +1,16 @@
+{
+  "doc_id": null,
+  "sha256": null,
+  "run_id": null,
+  "executed_at": null,
+  "repeatability_basis": {
+    "source_sha256": null,
+    "configuration_fingerprint": null,
+    "version_fingerprint": null
+  },
+  "legacy": {
+    "analysis_conclusion": null,
+    "findings": [],
+    "meta": {"check_receipts": []}
+  }
+}

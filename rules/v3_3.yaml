@@ -6,6 +6,7 @@ profiles:
 notes:
 - 本文件整合：预算 v3_3 规则 + 九张表与说明一一对应 + 决算专项勾稽联动。
 - 可按 profiles 选择性启用；公共的归一化/证据输出在各子块内已配置。
+- 2026-10-22 起检查点清单作为全系统默认检查指标：rules/checklists/budget_checklist_v1.yaml、final_checklist_v1.yaml（条目→检查义务→规则编号，实现见 src/engine/checklist_*.py）。
 budget:
   version: v3_3
   effective_date: 2025-09-15
@@ -44,7 +45,7 @@ budget:
         万元: 1
         亿元: 10000
     numeric_tolerance:
-      amount_equal_tolerance_in_万元: 0.5
+      amount_equal_tolerance_in_万元: 0.01
       ratio_percentage_tolerance: 0.1
   identification:
     from_pdf_cover:
@@ -282,7 +283,7 @@ table_explanation_alignment:
   allow_consolidated_explanation: false
   title_distance_max: 2
   enforce_numeric_consistency: true
-  numeric_tolerance_in_万元: 0.5
+  numeric_tolerance_in_万元: 0.01
   ratio_percentage_tolerance: 0.1
   mapping:
   - table_key: 收支总表
@@ -450,7 +451,7 @@ decision:
     units:
       base_unit: 万元
     numeric_tolerance:
-      amount_equal_tolerance_in_万元: 0.5
+      amount_equal_tolerance_in_万元: 0.01
       ratio_percentage_tolerance: 0.1
     functional_code_norm:
       class_len: 3

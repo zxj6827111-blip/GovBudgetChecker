@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from api.routes.activity import router as activity_router
+from api.routes.ai_models import router as ai_models_router
 from api.routes.analyze import router as analyze_router
 from api.routes.auth import router as auth_router
 from api.routes.config import router as config_router
@@ -21,6 +22,8 @@ from api.routes.reviews import router as reviews_router
 from api.routes.rules import router as rules_router
 from api.routes.upload import router as upload_router
 from api.routes.workflow import router as workflow_router
+from api.routes.supervision import router as supervision_router
+from api.routes.reporting_tasks import router as reporting_tasks_router
 
 
 def register_routes(app: FastAPI) -> None:
@@ -31,6 +34,7 @@ def register_routes(app: FastAPI) -> None:
     app.include_router(auth_router)
     app.include_router(upload_router)
     app.include_router(config_router)
+    app.include_router(ai_models_router)
     app.include_router(analyze_router)
     app.include_router(jobs_router)
     app.include_router(materials_router)
@@ -42,3 +46,5 @@ def register_routes(app: FastAPI) -> None:
     app.include_router(reviews_router)
     app.include_router(rules_router)
     app.include_router(workflow_router)
+    app.include_router(supervision_router)
+    app.include_router(reporting_tasks_router)

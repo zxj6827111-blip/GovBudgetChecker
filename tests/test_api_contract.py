@@ -147,6 +147,7 @@ def test_local_rule_issue_can_be_ignored(monkeypatch, tmp_path: Path):
     issue_id = "rule:V33-001:abcd1234"
     status_payload = {
         "job_id": job_id,
+        "analysis_revision": "ignore-rev-1",
         "status": "done",
         "progress": 100,
         "filename": "local-rule-ignore.pdf",
@@ -853,7 +854,8 @@ def test_job_issue_ignore_endpoint_returns_filtered_status(monkeypatch, tmp_path
     runtime.write_json_file(job_dir / "status.json", {"job_id": "job-issue", "status": "done"})
     client = TestClient(app)
 
-    def _fake_ignore(job_id: str, issue_id: str):
+    def _fake_ignore(job_id: str, issue_id: str, *, user=None, note=None):
+        assert isinstance(user, dict)
         assert job_id == "job-issue"
         assert issue_id == "ai:001"
         return {

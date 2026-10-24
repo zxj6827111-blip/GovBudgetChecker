@@ -5,10 +5,14 @@ import {
   DEFAULT_QUEUE_FILTERS,
 } from "../app/components/queue/queuePageAdapters";
 import {
+  buildHistoryPageViewLocally,
   buildReportDownloadUrl,
   countTerminalJobs,
   filterHistoryJobs,
+  historyPageQuery,
+  terminalCountFromStatusCounts,
 } from "../app/components/history/historyPageAdapters";
+import { jobPageSearchParams } from "../lib/jobListViews";
 
 // 本文件测试 Task 8.2 任务历史页的纯逻辑层：终态过滤（completed/
 // review_required/failed，复用 isUiTaskFinished 同源口径）与报告下载 URL 构造。
@@ -81,5 +85,20 @@ assert.equal(
   "/api/reports/download?job_id=job%2F001%3Fa%3D1&format=pdf",
   "jobId 必须经 encodeURIComponent 编码",
 );
+
+// --- 服务端分页（/api/jobs?view=page&scope=finished） ------------------------------
+
+assert.equal(
+  jobPageSearchParams(historyPageQuery({ ...DEFAULT_QUEUE_FILTERS, status: "failed" }, "issues_desc", 2, 20)).toString(),
+  "view=page&page=2&page_size=20&status=failed&sort=issues_desc&scope=finished",
+  "历史页只看终态任务，且不需要队列的可运行列表",
+);
+const localHistory = buildHistoryPageViewLocally(mixedJobs, DEFAULT_QUEUE_FILTERS, "updated_desc", 1, 2);
+assert.deepEqual(localHistory.items.map((job) => job.job_id), ["j-done", "j-review"]);
+assert.equal(localHistory.total, 3);
+assert.equal(localHistory.page_count, 2);
+assert.equal(localHistory.job_total, 5, "总任务数含仍在运行的任务");
+assert.equal(terminalCountFromStatusCounts(localHistory.status_counts), countTerminalJobs(mixedJobs));
+assert.equal(terminalCountFromStatusCounts(null), null, "未拉到数据时是未知，不是 0");
 
 console.log("historyPageAdapters.test.ts: all assertions passed");

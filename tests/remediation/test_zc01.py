@@ -327,7 +327,8 @@ def test_fund_scope_inference_from_table_semantics() -> None:
     assert infer_fund_scope("FIN_08_gov_fund") == "government_fund"
     assert infer_fund_scope("FIN_09_state_capital") == "state_owned"
     assert infer_fund_scope("BUD_T2", "一般公共预算支出表") == "general_public_budget"
-    assert infer_fund_scope("FIN_01_income_expenditure_total") is None
+    assert infer_fund_scope("FIN_01_income_expenditure_total") == 'all_funds'
+    assert infer_fund_scope("UNKNOWN") is None
 
 
 def test_check_receipt_six_state_contract() -> None:
@@ -381,6 +382,25 @@ def test_build_parse_artifact_single_pass(tmp_path: Path) -> None:
     restored = ParseArtifact.from_dict(artifact.to_dict())
     assert restored.page_count == artifact.page_count
     assert len(restored.table_fragments) == len(artifact.table_fragments)
+
+
+def test_parser_cache_fingerprint_invalidates_pre_structural_row_runs() -> None:
+    """结构行语义改变后，解析缓存必须绕过旧 v4/v5/v6 产物。"""
+    from src.services.input_processing_identity import processing_manifest
+    import re
+    assert re.fullmatch(r'pdfplumber-cells-v27-trusted-input-[0-9a-f]{16}',PARSER_FINGERPRINT)
+    assert PARSER_FINGERPRINT != "pdfplumber-cells-v25-native-tail-and-dimension-identity"
+    assert PARSER_FINGERPRINT != "pdfplumber-cells-v24-continuation-and-fiscal-coverage"
+    assert PARSER_FINGERPRINT != "pdfplumber-cells-v23-native-structure-recovery"
+    assert PARSER_FINGERPRINT != "pdfplumber-cells-v16-mixed-cell-role-and-empty-grid-shadow"
+    assert PARSER_FINGERPRINT != "pdfplumber-cells-v13-native-wrapped-row-dimensions"
+    assert PARSER_FINGERPRINT != "pdfplumber-cells-v12-open-top-wrapped-row-and-ledger-columns"
+    assert PARSER_FINGERPRINT != "pdfplumber-cells-v11-native-continuation-columns"
+    assert PARSER_FINGERPRINT != "pdfplumber-cells-v10-independent-column-identity"
+    assert PARSER_FINGERPRINT != "pdfplumber-cells-v7-critical-cells-grid-dedup"
+    assert PARSER_FINGERPRINT != "pdfplumber-cells-v6-structural-row-roles"
+    assert PARSER_FINGERPRINT != "pdfplumber-cells-v5-physical-fragments-and-continuations"
+    assert PARSER_FINGERPRINT != "pdfplumber-cells-v4-identity-boundaries"
 
 
 @pytest.mark.asyncio
@@ -457,6 +477,10 @@ async def test_ingest_consumes_provided_artifact_without_reparse(monkeypatch, tm
         events.append("persist_unified_storage")
         return 88
 
+    async def _load_parse_artifact(_conn, _run_id):
+        events.append("readback_unified_storage")
+        return ParseArtifact.from_dict(artifact.to_dict())
+
     async def _persist_facts(*_args, **_kwargs):
         events.append("persist_unified_facts")
         return 0
@@ -505,7 +529,10 @@ async def test_ingest_consumes_provided_artifact_without_reparse(monkeypatch, tm
     monkeypatch.setattr(runner, "_backfill_local_organization_catalog", lambda **_k: {})
     monkeypatch.setattr(runner, "find_cached_parse_run", _find_cached)
     monkeypatch.setattr(runner, "persist_parse_artifact", _persist_parse_artifact)
+    monkeypatch.setattr(runner, "load_parse_artifact", _load_parse_artifact)
     monkeypatch.setattr(runner, "persist_facts_and_evidence", _persist_facts)
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(runner, 'verify_persisted_facts', AsyncMock(return_value={'verified': True}))
     monkeypatch.setattr(runner, "PDFParser", _Parser)
     monkeypatch.setattr(runner, "TableRecognizer", _Recognizer)
     monkeypatch.setattr(runner, "FiscalFactMaterializer", _Materializer)
@@ -513,6 +540,7 @@ async def test_ingest_consumes_provided_artifact_without_reparse(monkeypatch, tm
 
     pdf_path = tmp_path / "sample.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    artifact.source_file_hash = runner._sha256_file(pdf_path)
 
     payload = await runner.run_structured_ingest(
         job_id="job-zc01-artifact",
@@ -521,7 +549,7 @@ async def test_ingest_consumes_provided_artifact_without_reparse(monkeypatch, tm
             "organization_name": "某局",
             "report_year": "2024",
             "doc_type": "dept_final",
-            "checksum": "f" * 64,
+            "checksum": artifact.source_file_hash,
             "filename": pdf_path.name,
         },
         parse_artifact=artifact,
@@ -534,6 +562,7 @@ async def test_ingest_consumes_provided_artifact_without_reparse(monkeypatch, tm
         "allocate_material_slot",
         "parse_cache_lookup",
         "persist_unified_storage",
+        "readback_unified_storage",
         "persist_legacy_cells",
         "persist_unified_facts",
     ]
@@ -549,10 +578,8 @@ async def test_ingest_consumes_provided_artifact_without_reparse(monkeypatch, tm
     reason="需要 GOVBUDGET_TEST_DATABASE_URL（任务包：真实库验证缺环境时保持未验收）",
 )
 @pytest.mark.asyncio
-async def test_pg_roundtrip_artifact_and_fact_identity() -> None:
+async def test_pg_roundtrip_artifact_and_fact_identity(real_database_url) -> None:
     """真实库：空库迁移 → 产物落库 → 缓存命中 → 幂等重放 → 实例独立。"""
-    import os
-
     import asyncpg
 
     from src.db.connection import DatabaseConnection
@@ -564,20 +591,26 @@ async def test_pg_roundtrip_artifact_and_fact_identity() -> None:
         persist_parse_artifact,
     )
 
-    url = os.environ["GOVBUDGET_TEST_DATABASE_URL"]
+    url = real_database_url
+    await DatabaseConnection.initialize(url)
     conn = await asyncpg.connect(url)
     try:
         await run_migrations()
 
+        org_id = await conn.fetchval(
+            "INSERT INTO org_units (org_name) VALUES ('PG验证局') "
+            "ON CONFLICT (org_name) DO UPDATE SET org_name=EXCLUDED.org_name RETURNING id"
+        )
         await conn.execute(
             """
-            INSERT INTO fiscal_documents (org_name, fiscal_year, doc_type)
-            VALUES ('PG验证局', 2024, 'dept_final')
+            INSERT INTO fiscal_documents (org_unit_id, fiscal_year, doc_type)
+            VALUES ($1, 2024, 'dept_final')
             ON CONFLICT DO NOTHING
-            """
+            """, org_id
         )
         doc = await conn.fetchrow(
-            "SELECT id FROM fiscal_documents WHERE org_name='PG验证局' LIMIT 1"
+            "SELECT id FROM fiscal_documents WHERE org_unit_id=$1 AND fiscal_year=2024 AND doc_type='dept_final'",
+            org_id,
         )
         await conn.execute(
             """
@@ -658,6 +691,7 @@ async def test_pg_roundtrip_artifact_and_fact_identity() -> None:
         assert orgs == {"部门汇总", "本级"}, "不同主体的事实不得互相覆盖"
     finally:
         await conn.close()
+        await DatabaseConnection.close()
 
 
 # ---------------------------------------------------------------------------

@@ -17,16 +17,16 @@ import { resolveServiceHealthState } from "../app/components/workspace/serviceHe
 
 assert.equal(
   NAV_ITEMS.length,
-  9,
-  "REGRESSION: 一级导航必须恰好 9 项（6 工作区 + 3 管理）",
+  10,
+  "REGRESSION: 一级导航必须恰好 10 项（7 工作区 + 3 管理）",
 );
 
 const workspaceItems = NAV_ITEMS.filter((item) => item.group === "workspace");
 const adminItems = NAV_ITEMS.filter((item) => item.group === "admin");
 assert.equal(
   workspaceItems.length,
-  6,
-  "工作区组应有 工作台总览/上传中心/处理队列/审核工作台/材料台账/导出归档 = 6 项",
+  7,
+  "工作区组应有 工作台总览/上传中心/处理队列/审核工作台/材料台账/部门报告/导出归档 = 7 项",
 );
 assert.equal(adminItems.length, 3, "管理组应有质量管理/规则与版本/系统设置 3 项");
 
@@ -69,7 +69,7 @@ assert.equal(isAdminOnlyPathname("/materials/district/d-1"), false, "子路径�
 const workspaceOrder = workspaceItems.map((item) => item.id);
 assert.deepEqual(
   workspaceOrder,
-  ["workbench", "upload", "queue", "review", "materials", "archive"],
+  ["workbench", "upload", "queue", "review", "materials", "reports", "archive"],
   "REGRESSION: 工作区顺序必须是 …审核工作台 → 材料台账 → 导出归档",
 );
 assert.ok(
@@ -89,7 +89,7 @@ assert.equal(
   "REGRESSION: 已退出一级导航的路径不能显示裸路径，必须有正式标题",
 );
 assert.equal(resolveNavLabel("/workbench"), "工作台总览", "一级导航项仍用导航里的标题");
-assert.equal(resolveNavLabel("/materials/slots/slot-1"), "材料台账", "子路径继承父导航项标题");
+assert.equal(resolveNavLabel("/materials/slots/slot-1"), "区域报送台账", "子路径继承父导航项标题");
 assert.equal(resolveNavLabel("/unknown-route"), "/unknown-route", "未知路由原样显示，不编名字");
 assert.equal(isLegacyRoutePathname("/history"), true);
 assert.equal(isLegacyRoutePathname("/history/job-1"), true, "子路径也算兼容入口");
@@ -126,7 +126,7 @@ assert.deepEqual(
 // 空数组是"真实拉到数据、且确认当前没有任何任务"，必须返回真实的 0，不是空对象
 assert.deepEqual(
   computeNavBadgeCounts([]),
-  { analyzing: 0, review_required: 0 },
+  { analyzing: 0 },
   "REGRESSION: 空数组是真实的零计数，必须显示 0，不能和 null/undefined 混为一谈",
 );
 
@@ -140,7 +140,7 @@ const mixedJobs = [
 ] as Array<{ job_id: string; status: string }>;
 assert.deepEqual(
   computeNavBadgeCounts(mixedJobs),
-  { analyzing: 2, review_required: 2 },
+  { analyzing: 2 },
   "processing/queued 归入 analyzing；review_required/needs_review 归入 review_required；done/error 不计入任何角标",
 );
 
@@ -151,7 +151,7 @@ assert.deepEqual(
   { state: "healthy", label: "服务正常" },
 );
 assert.deepEqual(
-  resolveServiceHealthState({ ok: false, status: 502 }, { status: "down", error: "connect failed" }),
+  resolveServiceHealthState({ ok: false, status: 502 }, { status: "down" }),
   { state: "unhealthy", label: "服务异常" },
   "REGRESSION: 后端 502 时必须显示服务异常，不得显示服务正常",
 );

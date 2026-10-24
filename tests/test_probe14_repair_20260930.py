@@ -243,17 +243,26 @@ def _san_gong_page(item_budget_clause: str = "") -> Any:
     )
 
 
+def _completion_findings_with_missing_item_budgets(doc):
+    # 无表、无分项预算的文本夹具必须未完成；已确认的问题仍保留。
+    with pytest.raises(RuleDeferred) as error:
+        R33TrendCompletionRate().apply(doc)
+    assert error.value.status == "insufficient_data"
+    assert "预算分母" in error.value.detail
+    return error.value.partial_issues
+
+
 def test_p2_subitem_rate_not_bound_to_total_budget():
     """反例（探针 009 实证形态）：分项完成率 80.92% 的分项预算未在叙事
     披露时，不得把「其中：」之前的总句年初预算 1,435.72 拼给分项声明
     （旧实现复算 25.79% 报假矛盾）。总-分层级配对不齐 → 不报。"""
-    assert R33TrendCompletionRate().apply(_san_gong_page()) == []
+    assert _completion_findings_with_missing_item_budgets(_san_gong_page()) == []
 
 
 def test_p2_subitem_rate_binds_own_budget_after_where():
     """正例：分项自身预算在「其中：」之后披露时照常复算；写错必报。"""
     doc = _san_gong_page("年初预算为 457.55 万元，")
-    issues = R33TrendCompletionRate().apply(doc)
+    issues = _completion_findings_with_missing_item_budgets(doc)
     # 370.23/457.55 = 80.914…% ≈ 80.92% → 数学一致，0 finding
     assert issues == [], [getattr(i, "message", "") for i in issues]
 
@@ -264,7 +273,7 @@ def test_p2_subitem_rate_wrong_own_budget_is_reported():
     doc = _san_gong_page("年初预算为 457.55 万元，")
     # 改完成率为 30%（≈370.23/1435.72 的假口径）→ 必须报，recomputed≈80.91
     doc.page_texts[-1] = doc.page_texts[-1].replace("80.92%", "30.00%")
-    issues = R33TrendCompletionRate().apply(doc)
+    issues = _completion_findings_with_missing_item_budgets(doc)
     assert len(issues) == 1
     assert issues[0].severity == "error"
     # 复算按分项自身分母 457.55（370.23/457.55=80.92%），不是总句 1,435.72（25.79%）
@@ -278,7 +287,7 @@ def test_p2_total_rate_claim_still_binds_total_disclosures():
     doc = _san_gong_page()
     # 单独放大总句为错误口径验证总句仍被复算：把 80.72% 改成 90%
     doc.page_texts[-1] = doc.page_texts[-1].replace("80.72%", "90.00%")
-    issues = R33TrendCompletionRate().apply(doc)
+    issues = _completion_findings_with_missing_item_budgets(doc)
     assert any("90.00" in str(getattr(i, "location", {}).get("declared_completion_rate", "")) for i in issues)
 
 
@@ -635,7 +644,7 @@ def test_p6_v33_113_duplicate_char_word_guards():
 
 def test_p6_nar_repeat_dual_amount_mismatch():
     """FN 补规则（探针 019 p27 实证）：「增加 133.07（133.08）万元」双数
-    并列且不等 → medium，提示人工确认哪个数对（跨软换行动词亦命中）。"""
+    差额在 portable 0.5 万元容差内，保留为信息提示。"""
     doc = build_document(
         path="p6-dual.pdf",
         page_texts=[
@@ -647,8 +656,20 @@ def test_p6_nar_repeat_dual_amount_mismatch():
     )
     issues = R33NarrativeIndicatorRepeat().apply(doc)
     assert len(issues) == 1
-    assert issues[0].severity == "medium"
+    assert issues[0].severity == "info"
     assert "133.07" in str(issues[0].message) and "133.08" in str(issues[0].message)
+
+
+def test_p6_nar_repeat_dual_amount_exceeds_portable_tolerance():
+    doc = build_document(
+        path="p6-dual-mismatch.pdf",
+        page_texts=["某某局 2025 年度部门决算公开", "2025 年度支出决算比 2024 年度增加 133.07（134.08）万元。"],
+        page_tables=[[]],
+        filesize=0,
+    )
+    issues = R33NarrativeIndicatorRepeat().apply(doc)
+    assert len(issues) == 1
+    assert issues[0].severity == "medium"
 
 
 def test_p6_nar_repeat_dual_amount_equal_passes():

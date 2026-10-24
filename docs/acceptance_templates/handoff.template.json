@@ -1,0 +1,31 @@
+{
+  "schema_version": "gbc.independent-handoff.v1",
+  "status": "pending_human_completion",
+  "roles": {
+    "developers": [],
+    "custodians": [],
+    "annotators": [],
+    "independent_reviewers": [],
+    "executors": []
+  },
+  "role_signoff": {"path": null, "sha256": null},
+  "access_review": {"path": null, "sha256": null},
+  "development_exclusions": {"path": null, "sha256": null},
+  "corpus_intake": {"path": null, "sha256": null},
+  "near_duplicate_review": {"path": null, "sha256": null},
+  "disagreement_review": {"path": null, "sha256": null},
+  "freeze_record": {"path": null, "sha256": null},
+  "freeze_signoff": {"path": null, "sha256": null},
+  "truth_seal": {"path": null, "sha256": null},
+  "frozen_identities": {
+    "source_snapshot": {"path": null, "sha256": null},
+    "model_manifest": {"path": null, "sha256": null},
+    "configuration": {"path": null, "sha256": null},
+    "evaluator": {"path": null, "sha256": null},
+    "dataset_manifest": {"path": null, "sha256": null},
+    "overlay_manifest": {"path": null, "sha256": null}
+  },
+  "technical_preflight": {"path": null, "sha256": null},
+  "output_freezes": [],
+  "truth_release": {"path": null, "sha256": null}
+}

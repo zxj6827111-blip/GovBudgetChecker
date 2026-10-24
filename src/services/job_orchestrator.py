@@ -196,6 +196,9 @@ class JobOrchestrator:
             # Get job info
             job = await self.conn.fetchrow("SELECT * FROM jobs WHERE id = $1", job_id)
             version_id = job['document_version_id']
+            # 新分析只能从不可变有效快照发布；旧流水线不得先清空其当前投影。
+            from src.qc.source_version_guard import require_legacy_qc_source
+            await require_legacy_qc_source(self.conn, version_id)
             
             # Get version and file path
             version = await self.conn.fetchrow("""

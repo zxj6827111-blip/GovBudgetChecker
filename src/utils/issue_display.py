@@ -94,6 +94,14 @@ def _build_detail_lines(
 ) -> List[str]:
     lines: List[str] = []
 
+    rounding_cases = location.get("rounding_cases")
+    if isinstance(rounding_cases, (list, tuple)):
+        for case in rounding_cases:
+            if isinstance(case, Mapping):
+                summary = _clean_text(case.get("summary"))
+                if summary:
+                    lines.append(summary)
+
     lines.extend(_build_location_detail_lines(location, page=page))
 
     for source in (message, evidence_text):
@@ -379,6 +387,11 @@ def _extract_evidence_text(issue: Mapping[str, Any]) -> str:
 
 
 def _resolve_page(issue: Mapping[str, Any]) -> Optional[int]:
+    if issue.get("source") == "ai" and issue.get("source_binding_status") == "unresolved":
+        return None
+    primary = _to_positive_int(issue.get("physical_page") or issue.get("page_number"))
+    if primary:
+        return primary
     location = issue.get("location")
     if isinstance(location, Mapping):
         pages = _extract_pages(location)

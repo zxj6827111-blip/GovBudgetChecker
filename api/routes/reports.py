@@ -6,9 +6,9 @@ import csv
 import hashlib
 import io
 import json
+import os
 import logging
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -41,10 +41,12 @@ _SEVERITY_LABELS: Dict[str, str] = {
     "manual_review": "待人工复核",
 }
 _DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+_PDF_EXPORT_RENDERER_VERSION = "canonical-v3-manual-suggestions"
 _ERROR_SEVERITIES = {"critical", "high", "error"}
 _RISK_SEVERITIES = {"medium", "warn", "warning"}
 _CSV_FIELDNAMES: List[str] = [
     "record_type",
+    "issue_id",
     "规则编号",
     "标题",
     "摘要",
@@ -117,9 +119,40 @@ _CSV_FIELDNAMES: List[str] = [
     "formula",
     "tolerance",
     "issue_refs",
+    "operand_fact_ids",
+    "required_fact_ids",
     "evaluation_basis",
     "fact_migration_status",
+    "analysis_revision",
+    "check_relation_id",
+    "fact_ids",
+    "evidence_ids",
+    "human_decision",
+    "human_decision_note",
+    "decision_revision",
+    "decision_actor",
+    "decision_inherited",
+    "decision_identity_fingerprint",
+    "review_report_sha256",
+    "quality_status",
+    "analysis_conclusion",
+    "conclusion_scope",
+    "manual_review_type",
+    "conclusion_json",
 ]
+
+
+def _review_report_sha256(status_payload: Dict[str, Any]) -> str:
+    """Stable identity for the canonical ReviewReport rendered by every export."""
+    report = status_payload.get("review_report")
+    canonical = json.dumps(
+        report if isinstance(report, dict) else {},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _normalize_bbox(raw: Any) -> Optional[List[float]]:
@@ -312,7 +345,9 @@ def _normalize_table_refs(raw_refs: Any) -> List[Dict[str, Any]]:
             "field": str(item.get("field") or "").strip(),
             "code": str(item.get("code") or "").strip(),
             "subject": str(item.get("subject") or "").strip(),
-            "value": item.get("value"),
+            "value": item.get("current_value", item.get("value")),
+            "relation_id": str(item.get("relation_id") or "").strip(),
+            "operand_id": str(item.get("operand_id") or "").strip(),
             "bbox": (
                 _normalize_bbox(item.get("bbox"))
                 if _has_verified_exact_location(item)
@@ -335,6 +370,18 @@ def _resolve_text_snippet(issue: Dict[str, Any]) -> str:
             if snippet:
                 return snippet
     return str(issue.get("text_snippet") or "").strip()
+
+
+def _evidence_excerpt_label(issue: Dict[str, Any]) -> str:
+    verification = issue.get("evidence_verification")
+    if (
+        issue.get("evidence_status") in {"complete", "verified"}
+        and isinstance(verification, dict)
+        and verification.get("status") == "verified"
+        and verification.get("source_identity_complete") is True
+    ):
+        return "原文摘录"
+    return "候选证据/计算说明（原文绑定未完成）"
 
 
 def _resolve_suggestion(issue: Dict[str, Any]) -> str:
@@ -726,6 +773,22 @@ def _enrich_issue(item: Dict[str, Any]) -> Dict[str, Any]:
     return enriched
 
 
+def _manual_finding_details(item: Dict[str, Any]) -> List[tuple[str, str]]:
+    """待核实发现仍导出完整证据与定位，同时保留候选证据标签。"""
+    finding = item.get("finding")
+    if not isinstance(finding, dict):
+        return []
+    enriched = _enrich_issue(finding)
+    display = enriched.get("display") or {}
+    return [
+        ("规则编号", str(finding.get("rule_id") or "")),
+        ("定位", str(enriched.get("location_text") or "当前无法定位")),
+        (_evidence_excerpt_label(finding), _resolve_text_snippet(finding)),
+        ("逐项定位", "\n".join(str(line) for line in display.get("detail_lines") or [])),
+        ("建议处理方式", _resolve_suggestion(finding) or _resolve_suggestion(item)),
+    ]
+
+
 def _build_csv_row(issue: Dict[str, Any]) -> Dict[str, Any]:
     enriched = _enrich_issue(issue)
     display = enriched.get("display") if isinstance(enriched.get("display"), dict) else {}
@@ -748,10 +811,12 @@ def _build_csv_row(issue: Dict[str, Any]) -> Dict[str, Any]:
     table_refs_text = json.dumps(export_location.get("table_refs", []), ensure_ascii=False)
     role_summary = export_location.get("role_summary") or ""
     suggestion = _resolve_suggestion(enriched)
+    human_decision = enriched.get("human_decision") if isinstance(enriched.get("human_decision"), dict) else {}
     row = {
         # record_type（ZC-00）：区分问题行与摘要行；ZC-04 将扩展为
         # 摘要/问题/提示/待复核/检查五类完整记录
         "record_type": "issue",
+        "issue_id": enriched.get("id") or "",
         "规则编号": enriched.get("rule_id") or enriched.get("rule") or "",
         "标题": enriched.get("title") or "",
         "摘要": display.get("summary") or enriched.get("title") or "",
@@ -820,6 +885,16 @@ def _build_csv_row(issue: Dict[str, Any]) -> Dict[str, Any]:
         # "这条问题属于哪一项检查"，而不必让接收方按规则编号反查。
         "关联检查项": _format_obligation_ids(enriched),
         "obligation_ids": _format_obligation_ids(enriched),
+        "analysis_revision": human_decision.get("analysis_revision") or enriched.get("analysis_revision") or "",
+        "check_relation_id": enriched.get("check_relation_id") or "",
+        "fact_ids": json.dumps(enriched.get("fact_ids") or [], ensure_ascii=False),
+        "evidence_ids": json.dumps(enriched.get("evidence_ids") or [], ensure_ascii=False),
+        "human_decision": human_decision.get("status") or "",
+        "human_decision_note": human_decision.get("note") or "",
+        "decision_revision": human_decision.get("decision_revision") or "",
+        "decision_actor": human_decision.get("actor") or "",
+        "decision_inherited": human_decision.get("inherited", ""),
+        "decision_identity_fingerprint": human_decision.get("identity_fingerprint") or "",
     }
     return {key: row.get(key, "") for key in _CSV_FIELDNAMES}
 
@@ -843,6 +918,8 @@ def _build_csv_summary_row(
         else "本次已完成检查范围内未发现问题。"
     )
     row: Dict[str, Any] = {key: "" for key in _CSV_FIELDNAMES}
+    review_report = status_payload.get("review_report")
+    review_conclusion = review_report.get("conclusion") if isinstance(review_report, dict) else None
     row.update(
         {
             "record_type": "summary",
@@ -854,6 +931,12 @@ def _build_csv_summary_row(
             "summary": wording or f"共导出 {issue_count} 条问题",
             "suggestion": suggestion_text,
             "message": wording or "",
+            "analysis_revision": status_payload.get("analysis_revision") or "",
+            "review_report_sha256": _review_report_sha256(status_payload),
+            "quality_status": status_payload.get("quality_status") or "",
+            "analysis_conclusion": status_payload.get("analysis_conclusion") or "",
+            "conclusion_scope": status_payload.get("conclusion_scope") or "",
+            "conclusion_json": json.dumps(review_conclusion or {}, ensure_ascii=False, sort_keys=True),
         }
     )
     return {key: row.get(key, "") for key in _CSV_FIELDNAMES}
@@ -890,7 +973,10 @@ def _docx_paragraph(text: Any, *, style: Optional[str] = None) -> str:
 
 
 def _docx_table_cell(text: Any) -> str:
-    safe_text = _xml_escape(_docx_text(text, limit=1200))
+    # Canonical export checks compare complete record fields across JSON/CSV/
+    # DOCX/PDF. A short per-cell cap silently erased long manual-review reasons
+    # and made a real DOCX differ from the ReviewReport it claimed to represent.
+    safe_text = _xml_escape(_docx_text(text, limit=250_000))
     return f'<w:tc><w:p><w:r><w:t xml:space="preserve">{safe_text}</w:t></w:r></w:p></w:tc>'
 
 
@@ -899,7 +985,13 @@ def _docx_table(rows: Sequence[Sequence[Any]]) -> str:
     for row in rows:
         cells = "".join(_docx_table_cell(cell) for cell in row)
         row_xml.append(f"<w:tr>{cells}</w:tr>")
-    return "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr>" + "".join(row_xml) + "</w:tbl>"
+    if rows and all(len(row) == 2 for row in rows):
+        grid = '<w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="7026"/></w:tblGrid>'
+        properties = '<w:tblW w:w="9026" w:type="dxa"/><w:tblLayout w:type="fixed"/>'
+    else:
+        grid = ""
+        properties = '<w:tblW w:w="0" w:type="auto"/>'
+    return "<w:tbl><w:tblPr>" + properties + "</w:tblPr>" + grid + "".join(row_xml) + "</w:tbl>"
 
 
 def _issue_bucket(issue: Dict[str, Any]) -> str:
@@ -917,21 +1009,23 @@ def _build_docx_document_xml(
     status_payload: Dict[str, Any],
     issues: Sequence[Dict[str, Any]],
 ) -> str:
+    from src.schemas.review_report import normalize_manual_review
+
     enriched_issues = [_enrich_issue(item) for item in issues]
     error_count = sum(1 for item in enriched_issues if _issue_bucket(item) == "错误")
     risk_count = sum(1 for item in enriched_issues if _issue_bucket(item) == "风险提示")
     suggestion_count = sum(1 for item in enriched_issues if _issue_bucket(item) == "规范性建议")
-    check_time = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
     export_conclusion = _build_export_conclusion(status_payload, len(enriched_issues))
     conclusion_scope_text = str(export_conclusion["conclusion_scope"])
     scope = export_conclusion["scope"]
     body: List[str] = [
         _docx_paragraph("预决算公开材料审校报告", style="Title"),
+        _docx_paragraph(f"REVIEW_REPORT_SHA256: {_review_report_sha256(status_payload)}"),
         _docx_paragraph("基本信息", style="Heading1"),
         _docx_table(
             [
                 ("文件名称", _source_filename(status_payload, job_id)),
-                ("检查时间", check_time),
+                ("分析版本", str(status_payload.get("analysis_revision") or "旧版未记录")),
                 ("检查模式", str(status_payload.get("mode") or status_payload.get("check_mode") or "自动审校")),
                 ("问题总数", str(len(enriched_issues))),
                 ("错误数量", str(error_count)),
@@ -976,15 +1070,33 @@ def _build_docx_document_xml(
                 evidence = _resolve_text_snippet(issue) or str(display.get("evidence_text") or "").strip()
                 suggestion = _resolve_suggestion(issue) or "请结合原文和表格数据复核，并按公开口径修正。"
                 rows = [
+                    ("问题编号", f"ISSUE_ID|{issue.get('id') or ''}|"),
                     ("序号", str(issue_index)),
                     ("问题等级", bucket),
                     ("规则编号", rule_id),
                     ("问题标题", title),
                     ("问题说明", message),
                     ("证据页码", page),
-                    ("原文摘录", evidence),
+                    (
+                        "定位等级/坐标",
+                        f"{issue.get('location_level') or export_location.get('location_level') or 'unresolved'} / "
+                        f"{issue.get('bbox') or export_location.get('bbox') or '当前无法定位'}",
+                    ),
+                    (
+                        "关系与证据身份",
+                        f"severity={issue.get('severity') or ''}; verification={issue.get('verification_status') or export_location.get('verification_status') or ''}; "
+                        f"{issue.get('check_relation_id') or ''} / facts={issue.get('fact_ids') or []} / "
+                        f"evidence={issue.get('evidence_ids') or []}",
+                    ),
+                    (_evidence_excerpt_label(issue), evidence),
                     ("建议处理方式", suggestion),
                 ]
+                decision = issue.get("human_decision")
+                if isinstance(decision, dict):
+                    rows.extend([
+                        ("人工处理状态", str(decision.get("status") or "")),
+                        ("人工复核说明", str(decision.get("note") or "")),
+                    ])
                 body.append(_docx_table(rows))
                 issue_index += 1
 
@@ -994,21 +1106,38 @@ def _build_docx_document_xml(
         body.append(_docx_paragraph("旧版未记录：本次结果未包含检查覆盖台账，无法列出未完成事项。"))
     elif export_conclusion["unfinished_items"]:
         body.append(_docx_paragraph("未完成检查事项", style="Heading2"))
-        unfinished_rows = [("序号", "检查项", "状态", "原因", "说明")]
         for index, item in enumerate(export_conclusion["unfinished_items"], start=1):
-            unfinished_rows.append(
-                (
-                    str(index),
-                    str(item.get("group_title") or item.get("title") or item.get("obligation_id") or ""),
-                    str(item.get("status") or ""),
-                    str(item.get("reason_label") or ""),
-                    str(item.get("detail") or item.get("gap_note") or ""),
-                )
-            )
-        body.append(_docx_table(unfinished_rows))
+            body.append(_docx_table([
+                ("记录类型", "unfinished_check"),
+                ("序号", str(index)),
+                ("检查项", str(item.get("group_title") or item.get("title") or item.get("obligation_id") or "")),
+                ("状态", str(item.get("status") or "")),
+                ("原因", str(item.get("reason_label") or "")),
+                ("说明", str(item.get("detail") or item.get("gap_note") or "")),
+            ]))
 
     review_report = status_payload.get("review_report")
     if isinstance(review_report, dict):
+        human_decisions = review_report.get("human_decisions")
+        human_decisions = (
+            [item for item in human_decisions if isinstance(item, dict)]
+            if isinstance(human_decisions, list)
+            else []
+        )
+        if human_decisions:
+            body.append(_docx_paragraph("人工处理决定", style="Heading1"))
+            for item in human_decisions:
+                body.append(_docx_table([
+                    ("问题编号", f"DECISION_ID|{item.get('issue_id') or ''}|"),
+                    ("处理状态", str(item.get("status") or "")),
+                    ("复核说明", str(item.get("note") or "")),
+                    ("分析版本", str(item.get("analysis_revision") or "")),
+                    ("决定版本", str(item.get("decision_revision") or "")),
+                    ("复核人", str(item.get("actor") or "")),
+                    ("跨版本继承", str(item.get("inherited", ""))),
+                    ("事实/证据ID", f"facts={item.get('fact_ids') or []}; evidence={item.get('evidence_ids') or []}"),
+                    ("身份指纹", str(item.get("identity_fingerprint") or "")),
+                ]))
         manual_review = review_report.get("manual_review")
         manual_review = (
             [item for item in manual_review if isinstance(item, dict)]
@@ -1017,17 +1146,15 @@ def _build_docx_document_xml(
         )
         if manual_review:
             body.append(_docx_paragraph("待人工复核", style="Heading1"))
-            rows = [("类型", "项目", "状态", "原因/说明")]
             for item in manual_review:
-                rows.append(
-                    (
-                        str(item.get("record_type") or "复核事项"),
-                        str(item.get("title") or item.get("code") or item.get("obligation_id") or ""),
-                        str(item.get("status") or ""),
-                        str(item.get("message") or item.get("detail") or item.get("reason") or ""),
-                    )
-                )
-            body.append(_docx_table(rows))
+                body.append(_docx_table([
+                    ("项目", f"MANUAL_ID|{item.get('id') or item.get('obligation_id') or item.get('code') or ''}| "
+                     f"{normalize_manual_review(item)['display_title']}"),
+                    ("类型", str(item.get("record_type") or "复核事项")),
+                    ("状态", str(item.get("status") or "")),
+                    ("原因/说明", str(item.get("message") or item.get("detail") or item.get("reason") or "")),
+                    *_manual_finding_details(item),
+                ]))
         receipts = review_report.get("check_receipts")
         receipts = (
             [item for item in receipts if isinstance(item, dict)]
@@ -1036,18 +1163,17 @@ def _build_docx_document_xml(
         )
         if receipts:
             body.append(_docx_paragraph("检查回执", style="Heading1"))
-            rows = [("检查项", "规则", "状态", "依据", "未完成原因")]
             for receipt in receipts:
-                rows.append(
-                    (
-                        str(receipt.get("sub_check_id") or ""),
-                        str(receipt.get("rule_id") or ""),
-                        str(receipt.get("status") or ""),
-                        str(receipt.get("evaluation_basis") or ""),
-                        str(receipt.get("incomplete_reason") or ""),
-                    )
-                )
-            body.append(_docx_table(rows))
+                body.append(_docx_table([
+                    ("检查项", f"CHECK_ID|{receipt.get('rule_id') or ''}:{receipt.get('sub_check_id') or ''}|"),
+                    ("规则", str(receipt.get("rule_id") or "")),
+                    ("状态", str(receipt.get("status") or "")),
+                    ("公式/依据", str(receipt.get("formula") or receipt.get("evaluation_basis") or "")),
+                    ("操作数事实ID", str(receipt.get("operand_fact_ids") or receipt.get("required_fact_ids") or [])),
+                    ("问题引用ID", str(receipt.get("issue_refs") or [])),
+                    ("容差", str(receipt.get("tolerance") or {})),
+                    ("未完成原因", str(receipt.get("incomplete_reason") or "")),
+                ]))
 
     document_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -1105,11 +1231,19 @@ def _create_docx_report(
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("[Content_Types].xml", content_types_xml)
-        archive.writestr("_rels/.rels", rels_xml)
-        archive.writestr("word/document.xml", document_xml)
-        archive.writestr("word/styles.xml", styles_xml)
-        archive.writestr("word/_rels/document.xml.rels", document_rels_xml)
+        for name, content in (
+            ("[Content_Types].xml", content_types_xml),
+            ("_rels/.rels", rels_xml),
+            ("word/document.xml", document_xml),
+            ("word/styles.xml", styles_xml),
+            ("word/_rels/document.xml.rels", document_rels_xml),
+        ):
+            # ZIP metadata must not change the bytes of an immutable historical report.
+            entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            entry.compress_type = zipfile.ZIP_DEFLATED
+            entry.create_system = 3
+            entry.external_attr = 0o600 << 16
+            archive.writestr(entry, content)
     return buffer.getvalue()
 
 
@@ -1309,15 +1443,34 @@ def _build_annotation_label(
 
     role = str(target.get("role") or "").strip()
     if role:
-        parts.append(role)
+        parts.append({"parent": "合计项", "child": "明细项"}.get(role, role))
 
-    rule_id = str(issue.get("rule_id") or issue.get("rule") or "").strip()
-    if rule_id:
-        parts.append(rule_id)
-    else:
-        title = str(issue.get("title") or "").strip()
-        if title:
-            parts.append(title[:20])
+    row = str(target.get("row") or target.get("subject") or "").strip()
+    code = str(target.get("code") or "").strip()
+    if code and code not in row:
+        row = f"{code} {row}".strip()
+    if row:
+        parts.append(row[:20])
+
+    field = str(target.get("field") or "").strip()
+    field = {
+        "total_actual": "决算金额",
+        "basic_actual": "基本支出决算",
+        "project_actual": "项目支出决算",
+        "income_actual": "收入决算金额",
+        "expenditure_actual": "支出决算金额",
+    }.get(field, field)
+    if field:
+        parts.append(field)
+
+    if not row:
+        rule_id = str(issue.get("rule_id") or issue.get("rule") or "").strip()
+        if rule_id:
+            parts.append(rule_id)
+        else:
+            title = str(issue.get("title") or "").strip()
+            if title:
+                parts.append(title[:20])
 
     label = " | ".join(parts)
     return label[:48]
@@ -1360,19 +1513,23 @@ def _build_legend_text(issue: Dict[str, Any], target: Dict[str, Any], *, label: 
     severity_label = str(issue.get("severity_label") or _severity_label(issue.get("severity")))
     if severity_label:
         parts.append(f"\u7ea7\u522b:{severity_label}")
-    for key, prefix in (
-        ("field", "字段"),
-        ("row", "行"),
-        ("table", "表"),
-        ("section", "章节"),
-        ("code", "编码"),
-        ("subject", "科目"),
-    ):
-        value = str(target.get(key) or "").strip()
-        if value:
-            parts.append(f"{prefix}:{value}")
-            break
-    return " | ".join(parts)[:42]
+    row = str(target.get("row") or target.get("subject") or "").strip()
+    code = str(target.get("code") or "").strip()
+    if code and code not in row:
+        row = f"{code} {row}".strip()
+    if row:
+        parts.append(f"行:{row}")
+    field = str(target.get("field") or "").strip()
+    field = {
+        "total_actual": "决算金额",
+        "basic_actual": "基本支出决算",
+        "project_actual": "项目支出决算",
+        "income_actual": "收入决算金额",
+        "expenditure_actual": "支出决算金额",
+    }.get(field, field)
+    if field:
+        parts.append(f"字段:{field}")
+    return " | ".join(parts)[:72]
 
 
 def _draw_page_legend(page: Any, entries: Sequence[Dict[str, Any]], fitz: Any) -> None:
@@ -1457,7 +1614,14 @@ def _annotated_output_path(
         if isinstance(report, dict):
             revision = str(report.get("analysis_revision") or "").strip()
     digest_payload = json.dumps(
-        list(issues), ensure_ascii=False, sort_keys=True, default=str
+        {
+            "issues": list(issues),
+            "review_report_sha256": _review_report_sha256(status_payload),
+            "renderer_version": _PDF_EXPORT_RENDERER_VERSION,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
     )
     issues_digest = hashlib.sha256(digest_payload.encode("utf-8")).hexdigest()[:16]
     slug = revision or "unversioned"
@@ -1507,10 +1671,19 @@ def _append_report_appendix_pages(
     issues: Sequence[Dict[str, Any]],
 ) -> None:
     """Append the canonical report details to the derived PDF, including unlocated items."""
+    import fitz
+    from src.schemas.review_report import normalize_manual_review
     report = status_payload.get("review_report")
     report = report if isinstance(report, dict) else {}
     conclusion = _build_export_conclusion(status_payload, len(issues))
     lines: List[str] = ["系统生成附录 · 审校清单", f"任务：{job_id}", ""]
+    decisions = report.get("human_decisions")
+    decisions_by_issue = {
+        str(item.get("issue_id") or ""): item
+        for item in decisions
+        if isinstance(item, dict) and str(item.get("issue_id") or "")
+    } if isinstance(decisions, list) else {}
+    lines.append(f"REVIEW_REPORT_SHA256: {_review_report_sha256(status_payload)}")
     if conclusion["is_complete"] is True:
         lines.append("检查范围已完成。以下问题和提示以本次 ReviewReport 为准。")
     elif conclusion["coverage_known"] is False:
@@ -1519,6 +1692,30 @@ def _append_report_appendix_pages(
         lines.append(
             f"检查尚未完整完成（{len(conclusion['unfinished_items'])} 项未完成）；问题清单为空不代表材料没有问题。"
         )
+    decisions = report.get("human_decisions")
+    if isinstance(decisions, list) and decisions:
+        lines.extend(["", "人工处理决定："])
+        for decision in decisions:
+            if not isinstance(decision, dict):
+                continue
+            lines.append(
+                "DECISION_ID|" + str(decision.get("issue_id") or "") + "| " + " · ".join(
+                    str(value)
+                    for value in (
+                        decision.get("issue_id"),
+                        decision.get("status"),
+                        decision.get("note"),
+                        decision.get("analysis_revision"),
+                        decision.get("decision_revision"),
+                        decision.get("actor"),
+                        decision.get("inherited"),
+                        decision.get("fact_ids"),
+                        decision.get("evidence_ids"),
+                        decision.get("identity_fingerprint"),
+                    )
+                    if value
+                )
+            )
     lines.append("")
 
     metadata = report.get("metadata") if isinstance(report.get("metadata"), dict) else {}
@@ -1550,15 +1747,24 @@ def _append_report_appendix_pages(
             str(issue.get("text_snippet") or "").strip(),
         )
         page = issue.get("page_number") or location.get("page")
+        human_decision = issue.get("human_decision") if isinstance(issue.get("human_decision"), dict) else decisions_by_issue.get(issue_id, {})
+        decision_summary = "；".join(
+            str(value).strip()
+            for value in (human_decision.get("status"), human_decision.get("note"))
+            if str(value or "").strip()
+        )
         lines.extend(
             [
-                f"{index}. [{category}/{issue.get('severity') or '未标级'}] {issue.get('title') or issue.get('rule_id') or '未命名'}",
-                f"规则：{issue.get('rule_id') or '未识别到'}；页码：{page if page else '未定位'}；定位等级：{issue.get('location_level') or location.get('location_level') or 'unresolved'}",
+                f"ISSUE_ID|{issue_id}|",
+                f"{index}. [{category}] {issue.get('title') or issue.get('rule_id') or '未命名'}；严重度={issue.get('severity') or '未标级'}",
+                f"规则：{issue.get('rule_id') or '未识别到'}；页码：{page if page else '未定位'}；定位等级：{issue.get('location_level') or location.get('location_level') or 'unresolved'}；验证：{issue.get('verification_status') or location.get('verification_status') or ''}；坐标：{issue.get('bbox') or location.get('bbox') or '当前无法定位'}",
+                f"关系/事实/证据身份：{issue.get('check_relation_id') or ''}；{issue.get('fact_ids') or []}；{issue.get('evidence_ids') or []}",
                 f"说明：{issue.get('message') or '未识别到'}",
+                f"人工处理决定：{decision_summary or '未记录'}",
             ]
         )
         if snippet:
-            lines.append(f"原文摘录：{snippet}")
+            lines.append(f"{_evidence_excerpt_label(issue)}：{snippet}")
         if issue.get("suggestion"):
             lines.append(f"建议：{issue.get('suggestion')}")
         lines.append("")
@@ -1583,14 +1789,17 @@ def _append_report_appendix_pages(
     for index, item in enumerate(manual_review, start=1):
         if not isinstance(item, dict):
             continue
-        title = item.get("group_title") or item.get("title") or item.get("obligation_id") or item.get("code") or "待复核事项"
+        title = normalize_manual_review(item)["display_title"]
         obligation_id = item.get("obligation_id") or item.get("code")
         detail = item.get("detail") or item.get("reason") or item.get("message") or "未提供原因"
         lines.append(
-            f"{index}. [{item.get('status') or item.get('record_type') or 'manual_review'}] "
+            f"{index}. [类型：{item.get('record_type') or 'manual_review'}] "
+            + f"[状态：{item.get('status') or '未记录'}] "
+            + f"MANUAL_ID|{item.get('id') or item.get('obligation_id') or item.get('code') or ''}| "
             + (f"{obligation_id} · " if obligation_id else "")
             + f"{title}：{detail}"
         )
+        lines.extend(f"{label}：{value}" for label, value in _manual_finding_details(item) if value)
     lines.append("")
 
     receipts = report.get("check_receipts")
@@ -1605,7 +1814,16 @@ def _append_report_appendix_pages(
         state = receipt.get("status") or "未记录"
         reason = receipt.get("incomplete_reason") or ""
         formula = receipt.get("formula") or ""
-        lines.append(f"{index}. {label}：{state}" + (f"；公式：{formula}" if formula else "") + (f"；未完成原因：{reason}" if reason else ""))
+        lines.append(
+            f"CHECK_ID|{receipt.get('rule_id') or ''}:{receipt.get('sub_check_id') or ''}| "
+            + f"{index}. {label}：{state}"
+            + (f"；公式：{formula}" if formula else "")
+            + (f"；未完成原因：{reason}" if reason else "")
+        )
+        lines.append(
+            f"操作数事实ID：{receipt.get('operand_fact_ids') or receipt.get('required_fact_ids') or []}；"
+            f"问题引用ID：{receipt.get('issue_refs') or []}；容差：{receipt.get('tolerance') or {}}"
+        )
 
     wrapped: List[str] = []
     for line in lines:
@@ -1614,14 +1832,19 @@ def _append_report_appendix_pages(
             continue
         wrapped.extend(line[start : start + 58] for start in range(0, len(line), 58))
     chunk_size = 48
+    font = fitz.Font("china-s")
     for start in range(0, len(wrapped), chunk_size):
         page = document.new_page()
         page.insert_text((48, 38), "系统生成附录 · 审校清单", fontsize=9, fontname="china-s", color=(0.35, 0.4, 0.48))
+        writer = fitz.TextWriter(page.rect)
         y = 64.0
         for line in wrapped[start : start + chunk_size]:
             if line:
-                page.insert_text((48, y), line, fontsize=9, fontname="china-s")
+                # TextWriter supplies fallback glyphs for e.g. the mathematical
+                # minus sign U+2212, which the CJK CID insert_text path drops.
+                writer.append((48, y), line, fontsize=9, font=font)
             y += 14.0
+        writer.write_text(page)
 
 
 def _create_annotated_pdf(
@@ -1711,11 +1934,29 @@ def _load_revision_payload(job_id: str, analysis_revision: Optional[str]) -> Dic
     if not candidates:
         raise HTTPException(status_code=404, detail="analysis_revision not found")
     try:
-        payload = json.loads(candidates[-1].read_text(encoding="utf-8"))
+        raw=candidates[-1].read_bytes()
+        legacy_manifest=candidates[-1].parent/'legacy_archive_manifest.json'
+        if legacy_manifest.is_file():
+            record=json.loads(legacy_manifest.read_text())
+            if (hashlib.sha256(raw).hexdigest()!=record.get('files',{}).get('status.json')
+                or hashlib.sha256(json.dumps(record['files'],sort_keys=True).encode()).hexdigest()!=record.get('archive_sha256')):
+                raise HTTPException(409,'historical original report integrity failed')
+        payload = json.loads(raw)
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=500, detail="analysis_revision is unreadable") from exc
     payload.setdefault("job_id", job_id)
     return payload
+
+
+def _hydrate_version_bound_decisions(job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Include current audited decisions only when bound to this report revision/identity."""
+    from src.schemas.review_report import build_review_report
+    from src.services.issue_workflow_store import project_job_issue_decisions
+
+    hydrated = dict(payload)
+    hydrated["human_decisions"] = project_job_issue_decisions(job_id, hydrated)
+    hydrated["review_report"] = build_review_report(hydrated)
+    return hydrated
 
 
 @router.get("/api/reports/download")
@@ -1726,7 +1967,20 @@ async def download_report(
     analysis_revision: Optional[str] = Query(default=None),
 ):
     _, _, _, status_payload = require_job_access(request, job_id)
-    status_payload = _load_revision_payload(job_id, analysis_revision)
+    if analysis_revision and ("/" in analysis_revision or "\\" in analysis_revision or analysis_revision.startswith('.')):
+        raise HTTPException(status_code=422,detail='invalid analysis_revision')
+    if os.getenv('DATABASE_URL'):
+        from src.services.analysis_fact_snapshot import read_database_result
+        try:
+            published = await read_database_result(job_id,analysis_revision)
+        except ValueError as exc:
+            raise HTTPException(status_code=409,detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503,detail=str(exc)) from exc
+        status_payload = published if published is not None else _load_revision_payload(job_id,analysis_revision)
+    else:
+        status_payload = _load_revision_payload(job_id, analysis_revision)
+    status_payload = _hydrate_version_bound_decisions(job_id, status_payload)
     issues = _extract_issues(status_payload)
     review_report = status_payload.get("review_report")
     review_report = review_report if isinstance(review_report, dict) else {}
@@ -1736,7 +1990,14 @@ async def download_report(
         payload: Dict[str, Any] = {
             "job_id": job_id,
             "status": status_payload.get("status"),
+            "analysis_revision": status_payload.get("analysis_revision"),
+            "review_report_sha256": _review_report_sha256(status_payload),
             "review_report": review_report or "旧版未记录",
+            "human_decisions": (
+                review_report.get("human_decisions", [])
+                if isinstance(review_report, dict)
+                else []
+            ),
             "issues": enriched_issues,
             "count": len(enriched_issues),
         }
@@ -1766,16 +2027,45 @@ async def download_report(
             if str(item.get("id") or "") in tip_ids:
                 row["record_type"] = "tip"
             writer.writerow(row)
-        for item in review_report.get("manual_review", []):
+        for item in review_report.get("human_decisions", []):
             if not isinstance(item, dict):
                 continue
             row = {key: "" for key in _CSV_FIELDNAMES}
+            row.update({
+                "record_type": "human_decision",
+                "issue_refs": item.get("issue_id") or "",
+                "human_decision": item.get("status") or "",
+                "human_decision_note": item.get("note") or "",
+                "analysis_revision": item.get("analysis_revision") or "",
+                "decision_revision": item.get("decision_revision") or "",
+                "decision_actor": item.get("actor") or "",
+                "decision_inherited": item.get("inherited", ""),
+                "decision_identity_fingerprint": item.get("identity_fingerprint") or "",
+                "check_relation_id": item.get("check_relation_id") or "",
+                "fact_ids": json.dumps(item.get("fact_ids") or [], ensure_ascii=False),
+                "evidence_ids": json.dumps(item.get("evidence_ids") or [], ensure_ascii=False),
+            })
+            writer.writerow(row)
+        for item in review_report.get("manual_review", []):
+            if not isinstance(item, dict):
+                continue
+            from src.schemas.review_report import normalize_manual_review
+            manual_title = normalize_manual_review(item)["title"]
+            manual_detail = item.get("message") or item.get("detail") or item.get("reason") or ""
+            finding = item.get("finding")
+            row = (_build_csv_row(_enrich_issue(finding)) if isinstance(finding, dict)
+                   else {key: "" for key in _CSV_FIELDNAMES})
             row.update(
                 {
                     "record_type": "manual_review",
-                    "规则编号": item.get("code") or item.get("obligation_id") or "",
-                    "标题": item.get("title") or item.get("code") or "待人工复核",
-                    "摘要": item.get("message") or item.get("detail") or item.get("reason") or "",
+                    "manual_review_type": item.get("record_type") or "manual_review",
+                    "issue_id": item.get("id") or "",
+                    "obligation_ids": item.get("obligation_id") or "",
+                    "规则编号": item.get("code") or (finding.get("rule_id") if isinstance(finding, dict) else "") or "",
+                    "标题": manual_title,
+                    "title": manual_title,
+                    "摘要": manual_detail,
+                    "message": manual_detail,
                     "严重级别": "待人工复核",
                     "严重级别代码": "manual_review",
                     "check_status": item.get("status") or "",
@@ -1800,6 +2090,8 @@ async def download_report(
                     "formula": receipt.get("formula") or "",
                     "tolerance": json.dumps(receipt.get("tolerance") or {}, ensure_ascii=False),
                     "issue_refs": json.dumps(receipt.get("issue_refs") or [], ensure_ascii=False),
+                    "operand_fact_ids": json.dumps(receipt.get("operand_fact_ids") or [], ensure_ascii=False),
+                    "required_fact_ids": json.dumps(receipt.get("required_fact_ids") or [], ensure_ascii=False),
                     "evaluation_basis": receipt.get("evaluation_basis") or "",
                     "fact_migration_status": receipt.get("fact_migration_status") or "",
                 }
@@ -1840,7 +2132,7 @@ async def download_report(
 
 @router.post("/api/reports/download-batch")
 async def download_reports_batch(body: Dict[str, Any], request: Request):
-    require_login(request)
+    _, _, user = require_login(request)
     raw_job_ids = body.get("job_ids")
     if not isinstance(raw_job_ids, list):
         raise HTTPException(status_code=400, detail="job_ids must be a list")
@@ -1857,6 +2149,15 @@ async def download_reports_batch(body: Dict[str, Any], request: Request):
     if not job_ids:
         raise HTTPException(status_code=400, detail="job_ids is required")
 
+    package_id = str(body.get("package_id") or "").strip()
+    archived_payloads = None
+    if package_id:
+        from src.services.issue_workflow_store import get_package_report_payloads
+
+        archived_payloads = get_package_report_payloads(user, package_id)
+        if set(job_ids) != set(archived_payloads):
+            raise HTTPException(status_code=409, detail={"error": "package_job_set_mismatch"})
+
     archive_buffer = io.BytesIO()
     exported: List[Dict[str, Any]] = []
     failed: List[Dict[str, Any]] = []
@@ -1866,6 +2167,8 @@ async def download_reports_batch(body: Dict[str, Any], request: Request):
         for job_id in job_ids:
             try:
                 _, _, _, status_payload = require_job_access(request, job_id)
+                if archived_payloads is not None:
+                    status_payload = archived_payloads[job_id]
                 issues = _extract_issues(status_payload)
                 annotated_pdf = _create_annotated_pdf(job_id, status_payload, issues)
                 report_pdf = annotated_pdf or _resolve_report_pdf(job_id, status_payload)
@@ -1881,6 +2184,7 @@ async def download_reports_batch(body: Dict[str, Any], request: Request):
                         "job_id": job_id,
                         "filename": zip_name,
                         "annotated": annotated_pdf is not None,
+                        "analysis_revision": status_payload.get("analysis_revision"),
                     }
                 )
             except HTTPException as exc:
@@ -1908,6 +2212,7 @@ async def download_reports_batch(body: Dict[str, Any], request: Request):
             json.dumps(
                 {
                     "requested_count": len(job_ids),
+                    "package_id": package_id or None,
                     "exported_count": len(exported),
                     "failed_count": len(failed),
                     "exported": exported,

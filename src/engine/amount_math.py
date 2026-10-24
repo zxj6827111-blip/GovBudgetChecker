@@ -6,13 +6,14 @@
 
 包络模型：父项与 n 个子项各自按两位小数显示时，最大累计舍入误差为
 (n + 1) × 0.005 万元（每个显示值最多偏 0.005）。超过包络但不超过
-0.5 万元仍按 AGENTS.md v3_3_portable 容差通过。
+政策容差（``rule_policy.AMOUNT_TOLERANCE_WAN``，2026-10-22 起为 0.01 万元）
+仍按 AGENTS.md v3_3_portable 容差通过。
 
 - 具体分级：
   - ``ok``：diff == 0（或 < 1e-9）；
   - ``rounding_hint``：0 < |diff| ≤ envelope(n) → 输出 info 提示；
-  - ``within_policy_tolerance``：超包络但不超过 0.5 万元 → 按政策通过；
-  - ``mismatch``：|diff| > max(envelope(n), 0.5 万元) → 确定性错误。
+  - ``within_policy_tolerance``：超包络但不超过政策容差 → 按政策通过；
+  - ``mismatch``：|diff| > max(envelope(n), 政策容差) → 确定性错误。
 """
 
 from __future__ import annotations
@@ -84,6 +85,48 @@ def display_round(value: Decimal) -> Decimal:
     return value.quantize(_DISPLAY_QUANT, rounding=ROUND_HALF_UP)
 
 
+#: 原始单位 → 换算到万元时小数位的增量（元→万元多 4 位，亿元→万元少 4 位）。
+_WAN_SCALE_SHIFT = {"元": 4, "千元": 1, "万元": 0, "百万元": -2, "亿元": -4}
+
+
+def wan_scale(scale_digits: Any, unit: Optional[str]) -> Optional[int]:
+    """原始显示小数位数换算成万元口径下的小数位数；单位未知返回 None。"""
+    shift = _WAN_SCALE_SHIFT.get(str(unit or "").strip())
+    if shift is None:
+        return None
+    try:
+        return max(0, int(scale_digits)) + shift
+    except (TypeError, ValueError):
+        return None
+
+
+def classify_display_conversion(
+    text_wan: Any,
+    text_scale: Any,
+    table_wan: Any,
+    table_wan_scale: Optional[int],
+) -> Tuple[str, Optional[Decimal]]:
+    """清单 C-16：正文万元数须等于表内金额按正文精度 ROUND_HALF_UP 的结果。
+
+    只在表侧比正文更精细时适用（典型：预算表单位为元、正文写万元两位小数）。
+    返回 ``(state, expected)``：``ok`` / ``mismatch`` 时 expected 为按正文精度
+    四舍五入后的表内金额；表侧不比正文精细或取数不全时为 ``not_applicable``。
+    截尾（102.2257→102.22）与进位错误都判 mismatch，不受政策容差豁免。
+    """
+    text_d = to_decimal(text_wan)
+    table_d = to_decimal(table_wan)
+    try:
+        scale = int(text_scale)
+    except (TypeError, ValueError):
+        return "not_applicable", None
+    if text_d is None or table_d is None or table_wan_scale is None or scale < 0:
+        return "not_applicable", None
+    if table_wan_scale <= scale:
+        return "not_applicable", None
+    expected = table_d.quantize(Decimal(1).scaleb(-scale), rounding=ROUND_HALF_UP)
+    return ("ok" if text_d == expected else "mismatch"), expected
+
+
 def half_unit_for_term(scale_digits: int, unit: str = "万元") -> Decimal:
     """计算单个数值在万元口径下的最大显示舍入半步长。
 
@@ -137,8 +180,8 @@ def classify_amount_diff(
     返回 (level, diff)：
     - ``ok``：完全一致；
     - ``rounding_hint``：包络内 → 应输出 info「可能为取整误差」；
-    - ``within_policy_tolerance``：超显示舍入包络但不超过 0.5 万元政策容差；
-    - ``mismatch``：超出 max(0.5 万元, 显示舍入包络)。
+    - ``within_policy_tolerance``：超显示舍入包络但不超过政策容差；
+    - ``mismatch``：超出 max(政策容差, 显示舍入包络)。
     """
     parent_d = to_decimal(parent)
     children_d = to_decimal(children_sum)
@@ -156,10 +199,10 @@ def classify_amount_diff(
     return "mismatch", diff
 
 
-def amounts_equal(left, right, tolerance: str = "0.5") -> bool:
-    """两万元口径金额是否在 portable 绝对政策容差内（默认 0.5 万元）。"""
+def amounts_equal(left, right, tolerance: Any = AMOUNT_TOLERANCE_WAN) -> bool:
+    """两万元口径金额是否在 portable 绝对政策容差内（默认取统一政策容差）。"""
     a = to_decimal(left)
     b = to_decimal(right)
     if a is None or b is None:
         return False
-    return abs(a - b) <= Decimal(tolerance)
+    return abs(a - b) <= Decimal(str(tolerance))

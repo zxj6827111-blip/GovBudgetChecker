@@ -84,6 +84,17 @@ function isPublicPath(pathname: string): boolean {
   return false;
 }
 
+function requestOriginUrl(request: NextRequest): URL {
+  const url = new URL(request.url);
+  const host = request.headers.get("host");
+  // Keep the public Host rather than Next's internal listening hostname.
+  // Accept only an authority, never credentials, paths or a query string.
+  if (host && /^(?:\[[0-9a-f:.]+\]|[a-z0-9.-]+)(?::\d{1,5})?$/i.test(host)) {
+    url.host = host;
+  }
+  return url;
+}
+
 export function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
 
@@ -91,7 +102,7 @@ export function middleware(request: NextRequest) {
   // 已由新 UI 的 /archive 承接（能力迁移完成），老链接不得 404 也不得留在旧页。
   // 其余旧单体入口（默认页/上传/任务等）保持可访问，Task 10 收尾时统一处理。
   if (pathname === "/viewer/gbc-ui-demo" && request.nextUrl.searchParams.get("page") === "archive") {
-    const archiveUrl = request.nextUrl.clone();
+    const archiveUrl = requestOriginUrl(request);
     archiveUrl.pathname = "/archive";
     archiveUrl.search = "";
     return withSecurityHeaders(NextResponse.redirect(archiveUrl));
@@ -112,7 +123,7 @@ export function middleware(request: NextRequest) {
     );
   }
 
-  const loginUrl = request.nextUrl.clone();
+  const loginUrl = requestOriginUrl(request);
   loginUrl.pathname = "/login";
   const nextPath = `${pathname}${search}`;
   if (nextPath && nextPath !== "/") {

@@ -14,10 +14,10 @@ import re
 from typing import Any, List, Optional
 
 #: 四位年份，如 2025；限定 20xx 是因为预决算材料不会出现其他世纪
-_YEAR_4_RE = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
+_YEAR_4_RE = re.compile(r"(?<!\d)(?<!\d[.,，])(20\d{2})(?!\d|[.,，]\d)")
 #: 两位年份简写，仅在紧跟"年/年度/预算/决算/budget/final..."等年份语境时才认
 _YEAR_2_RE = re.compile(
-    r"(?<!\d)(\d{2})(?=\s*(?:\u5e74|\u5e74\u5ea6|\u9884\u7b97|\u51b3\u7b97|budget|final|settlement|accounts|$))",
+    r"(?<!\d)(?<!\d[.,，])(\d{2})(?=\s*(?:\u5e74|\u5e74\u5ea6|\u9884\u7b97|\u51b3\u7b97|budget|final|settlement|accounts|$))",
     re.I,
 )
 

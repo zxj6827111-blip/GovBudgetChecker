@@ -26,7 +26,9 @@ class AICandidateFinding(BaseModel):
     candidate_id: StrictStr = Field(min_length=1, max_length=200)
     check_relation_id: Optional[StrictStr] = Field(default=None, max_length=200)
     fact_ids: List[StrictStr] = Field(default_factory=list, max_length=100)
-    evidence_ids: List[StrictStr] = Field(min_length=1, max_length=50)
+    # Text-only semantic candidates can be kept as unverified AI suggestions.
+    # Any IDs they do claim still have to resolve to this document's evidence.
+    evidence_ids: List[StrictStr] = Field(default_factory=list, max_length=50)
     fact_candidates: List[CandidateFact] = Field(default_factory=list, max_length=50)
     semantic_uncertainties: List[StrictStr] = Field(default_factory=list, max_length=50)
 
@@ -43,6 +45,7 @@ def validate_ai_candidate_batch(
     *,
     allowed_fact_ids: Iterable[str],
     allowed_evidence_ids: Iterable[str],
+    allowed_relation_ids: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     """Validate candidates independently so one malformed item cannot erase a batch."""
     if not isinstance(payload, Mapping):
@@ -77,6 +80,11 @@ def validate_ai_candidate_batch(
 
     allowed_facts: Set[str] = {str(item) for item in allowed_fact_ids if str(item)}
     allowed_evidence: Set[str] = {str(item) for item in allowed_evidence_ids if str(item)}
+    allowed_relations: Optional[Set[str]] = (
+        {str(item) for item in allowed_relation_ids if str(item)}
+        if allowed_relation_ids is not None
+        else None
+    )
     candidates = payload.get("candidates")
     if not isinstance(candidates, list):
         return {
@@ -95,7 +103,13 @@ def validate_ai_candidate_batch(
             for fact_candidate in candidate.fact_candidates:
                 evidence_ids.update(fact_candidate.evidence_ids)
             unknown_evidence = sorted(evidence_ids - allowed_evidence)
-            if unknown_facts or unknown_evidence:
+            unknown_relation = (
+                candidate.check_relation_id
+                if candidate.check_relation_id and allowed_relations is not None
+                and candidate.check_relation_id not in allowed_relations
+                else None
+            )
+            if unknown_facts or unknown_evidence or unknown_relation:
                 rejected.append(
                     {
                         "index": index,
@@ -103,6 +117,7 @@ def validate_ai_candidate_batch(
                         "error": "unknown_source_reference",
                         "unknown_fact_ids": unknown_facts,
                         "unknown_evidence_ids": unknown_evidence,
+                        "unknown_relation_id": unknown_relation,
                     }
                 )
                 continue

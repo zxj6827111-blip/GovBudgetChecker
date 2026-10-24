@@ -495,6 +495,27 @@ def test_fin09_consistent_contract_reports_nothing():
     assert _run(_document(_contract_payload("50.00"))) == []
 
 
+def test_matching_physical_footer_does_not_pollute_cross_page_item_identity():
+    data = _contract_payload('50.00')
+    split = data['page_texts'][2].index('（项）')
+    data['page_texts'][2], tail = data['page_texts'][2][:split], data['page_texts'][2][split:]
+    data['page_texts'][2] += '\n3'
+    data['page_texts'].append(tail)
+    data['page_tables'].append([])
+    assert _run(_document(data)) == []
+
+
+def test_a_different_number_in_the_name_is_not_discarded_as_a_footer():
+    data = _contract_payload('50.00')
+    split = data['page_texts'][2].index('（项）')
+    data['page_texts'][2], tail = data['page_texts'][2][:split], data['page_texts'][2][split:]
+    data['page_texts'][2] += '\n13'
+    data['page_texts'].append(tail)
+    data['page_tables'].append([])
+    with pytest.raises(RuleDeferred):
+        _run(_document(data))
+
+
 def test_fin09_mismatch_contract_reports_item_conflict():
     """FIN_09 逐项冲突路径：表 50.00 vs 说明 80.00 → 1 条 error，资金性质=国有资本经营。"""
     issues = _run(_document(_contract_payload("80.00")))
@@ -572,7 +593,7 @@ def test_obligation_gap_is_closed_and_receipt_drives_status():
     assert set(instance["depends_on"]) == {"table:FIN_08", "table:FIN_09"}
 
     completed = build_obligation_ledger(
-        None, report_kind="final", rule_execution_summary=_profile_receipt("fail")
+        None, report_kind="final", rule_execution_summary={"rule_statuses": {"V33-TXT-FUND-DETAIL": "fail", "V33-248": "pass"}}
     )
     receipt = _instance(completed)
     assert receipt["status"] == OBLIGATION_COMPLETED

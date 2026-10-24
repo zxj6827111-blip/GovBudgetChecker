@@ -20,6 +20,8 @@ def test_zc04_review_report_is_the_shared_issue_and_receipt_source() -> None:
         "severity": "high",
         "title": "三公合计异常",
         "message": "表内勾稽未通过",
+        "evidence_status": "complete",
+        "evidence_verification": {"status": "verified", "source_identity_complete": True},
     }
     payload = {
         "job_id": "job-zc04",
@@ -53,10 +55,18 @@ def test_zc04_review_report_is_the_shared_issue_and_receipt_source() -> None:
 
     assert report["schema_version"] == 2
     assert report["metadata"]["year"] == 2025
-    assert report["issues"] == [finding]
+    assert len(report["issues"]) == 1
+    assert {key: report["issues"][0][key] for key in finding} == finding
     assert report["check_receipts"] == payload["result"]["meta"]["check_receipts"]
     assert any(item.get("obligation_id") == "BUD-03" for item in report["manual_review"])
     assert _extract_issues(exported_payload) == report["issues"]
+
+    # 未完成原文核验的同一发现必须进入候选区，不能成为已确认问题。
+    finding["evidence_verification"]["source_identity_complete"] = False
+    unverified = build_review_report(payload)
+    assert unverified["issues"] == []
+    assert any(item.get("record_type") == "finding_review_candidate" and item.get("id") == finding["id"]
+               for item in unverified["manual_review"])
 
 
 def test_zc04_unverified_table_ref_bbox_is_removed_from_exports() -> None:

@@ -14,8 +14,8 @@ export default function ReanalyzeAiToggle({
   checked,
   onChange,
   disabled = false,
-  title = "启用 AI 重新解析",
-  description = "取消勾选后仅执行本地规则分析，不调用 AI。",
+  title = "启用大模型检查",
+  description = "使用系统设置中的默认模型进行检查，可在设置中更换模型。",
   className,
   testId,
 }: ReanalyzeAiToggleProps) {

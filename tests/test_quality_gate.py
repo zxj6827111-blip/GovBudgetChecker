@@ -67,6 +67,34 @@ def test_gate_pass_with_findings_yields_done_and_findings_detected():
     assert gate["review_reasons"] == []
 
 
+def test_unsupported_manual_location_correction_forces_review_required():
+    gate = _evaluate_quality_gate(
+        page_assessment=GOOD_PAGES,
+        report_kind="budget",
+        report_year=2026,
+        ai_requested=False,
+        ai_degraded=False,
+        issue_total=1,
+        fact_overlay_report={
+            "status": "failed",
+            "applied": 0,
+            "unsupported": [{
+                "field": "manual_location",
+                "blocking": True,
+                "reason": "人工定位覆盖未自动生效",
+            }],
+        },
+    )
+
+    assert gate["status"] == "review_required"
+    assert gate["analysis_conclusion"] == "incomplete"
+    correction_reason = next(
+        item for item in gate["review_reasons"]
+        if item["code"] == "correction_overlay_incomplete"
+    )
+    assert "manual_location" in correction_reason["message"]
+
+
 def test_gate_pass_without_findings_yields_no_findings_not_bare_done():
     gate = _evaluate_quality_gate(
         page_assessment=GOOD_PAGES,
@@ -298,6 +326,8 @@ def _patch_pipeline(monkeypatch, page_texts, issues_payload, report_kind="budget
 
 @pytest.mark.asyncio
 async def test_pipeline_marks_scanned_document_as_review_required(tmp_path, monkeypatch):
+    # 明确禁用 OCR 的人工复核模式；服务暂不可用时应保留排队，不能算处理完。
+    monkeypatch.setenv('OCR_ENABLED', 'false')
     job_dir = _prepare_job(
         tmp_path,
         "job-scanned",
@@ -323,6 +353,22 @@ async def test_pipeline_marks_scanned_document_as_review_required(tmp_path, monk
     assert payload["scanned_page_count"] == 2
     assert "scanned_pages_detected" in [r["code"] for r in payload["review_reasons"]]
     assert payload["stage"] == "完成（需人工复核）"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('ocr_status', ['pending', 'service_unavailable'])
+async def test_unfinished_ocr_is_queued_and_does_not_execute_rules(tmp_path, monkeypatch, ocr_status):
+    job_dir = _prepare_job(tmp_path, 'ocr-wait', {'status': 'queued', 'mode': 'legacy',
+        'use_local_rules': True, 'use_ai_assist': False})
+    _patch_pipeline(monkeypatch, ['', ''], {'all': [], 'error': [], 'warn': [], 'info': []})
+    monkeypatch.setattr(pipeline_mod, 'maybe_ocr_scanned_pages', AsyncMock(return_value={
+        'status': ocr_status, 'failed_pages': [1, 2]}))
+    await pipeline_mod._run_pipeline_inner(job_dir)
+    payload = runtime.read_json_file(job_dir / 'status.json', default={})
+    assert payload['status'] == 'queued' and payload.get('progress', 0) < 100
+    assert payload['ocr_pending']['failed_pages'] == [1, 2]
+    assert payload.get('result') is None
+    pipeline_mod.run_rules_in_process.assert_not_awaited()
 
 
 @pytest.mark.asyncio

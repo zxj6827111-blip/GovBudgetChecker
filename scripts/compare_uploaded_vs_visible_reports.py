@@ -85,7 +85,7 @@ def parse_args() -> argparse.Namespace:
         "--backend-base",
         default="",
         help=(
-            "Optional backend base URL, for example http://127.0.0.1:8000 . "
+            "Optional backend base URL, for example http://127.0.0.1:18743 . "
             "The script will query /api/jobs and /api/organizations/{id}/jobs."
         ),
     )

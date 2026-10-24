@@ -305,9 +305,10 @@ def test_t17_rounding_envelope_boundaries():
     assert l2 == "rounding_hint"
     assert pytest.approx(float(v2), 0.001) == 0.018
 
-    # 3. Above the display envelope but within portable 0.5 万元 tolerance.
+    # 3. Above the display envelope: the portable tolerance is 0.01 万元 since
+    #    2026-10-22 (口径决议①), below this envelope, so it is a mismatch.
     l3, v3 = classify_amount_diff(100.00, 100.025, 3)
-    assert l3 == "within_policy_tolerance"
+    assert l3 == "mismatch"
     assert pytest.approx(float(v3), 0.001) == 0.025
     l4, _ = classify_amount_diff(100.00, 100.55, 3)
     assert l4 == "mismatch"
@@ -339,9 +340,9 @@ def test_t18_precision_and_units():
     # Small difference within dynamic envelope is accepted
     status_hint, _ = classify_amount_diff(Decimal("100.0"), Decimal("100.04"), envelope=env)
     assert status_hint == "rounding_hint"
-    # Above the dynamic display envelope, but still inside policy tolerance.
+    # Above the dynamic display envelope and the 0.01 万元 policy tolerance.
     status_mismatch, _ = classify_amount_diff(Decimal("100.0"), Decimal("100.08"), envelope=env)
-    assert status_mismatch == "within_policy_tolerance"
+    assert status_mismatch == "mismatch"
 
 
 # ===========================================================================

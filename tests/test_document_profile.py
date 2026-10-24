@@ -352,7 +352,8 @@ def test_extract_cover_metadata_keeps_legacy_keys_and_adds_profile():
         assert key in cover, key
     assert cover["report_kind"] == "budget"
     assert cover["scope_hint"] == "unit"
-    assert cover["profile"]["resolver_version"] == "document-profile-v1"
+    from src.schemas.document_profile import PROFILE_RESOLVER_VERSION
+    assert cover["profile"]["resolver_version"] == PROFILE_RESOLVER_VERSION
     assert cover["profile_status"] in {"resolved", "partial", "unresolved"}
 
 

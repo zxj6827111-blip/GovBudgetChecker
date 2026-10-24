@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
 from src.schemas.parse_artifact import (
@@ -22,6 +23,8 @@ from src.schemas.parse_artifact import (
     ParsedTable,
 )
 from src.services.pdf_parser import _stable_fragment_uid
+from src.services.fiscal_row_roles import is_index_header
+from src.services.fiscal_table_rules import normalize_text
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +34,6 @@ _PROMOTE_HEADER_CONFIDENCE = 0.75
 _PROMOTE_NUMERIC_RATE = 0.5
 #: 晋升表置信度（RC-07：低于 0.8，物化事实全部 low_confidence——
 #: 未经逐格识别置信度认证的 OCR 数据不进入确定性勾稽）
-_PROMOTED_CONFIDENCE = 0.75
 #: RC-07：表种上下文消歧——资金/口径关键词必须出现在该页 OCR 文本里，
 #: 只凭通用"合计"表头不得唯一认证基金/国资等专项表。
 _TABLE_CONTEXT_KEYWORDS: Dict[str, tuple[str, ...]] = {
@@ -89,21 +91,47 @@ def _detect_unit_hint_from_blocks(artifact: Any, page_number: int) -> Optional[s
     return None
 
 
+def _source_title(artifact,candidate,table_code):
+    from src.services.fiscal_table_rules import detect_table_code
+    from src.services.ocr_qualification import bound_ocr_block
+    page_box=candidate.page_bbox
+    if not page_box:return None
+    blocks=[b for b in artifact.text_blocks if b.page_number==candidate.page_number and b.bbox
+        and b.bbox[1]<page_box[1] and b.bbox[2]>page_box[0]and b.bbox[0]<page_box[2]
+        and (b.extraction_method=='native_text'or b.extraction_method=='ocr'
+             and(b.confidence or 0)>=.98 and bound_ocr_block(b,artifact))]
+    blocks.sort(key=lambda b:(b.bbox[1],b.bbox[0]));matches=[]
+    for start in range(len(blocks)):
+        group=[]
+        for block in blocks[start:start+3]:
+            if group and block.bbox[1]-group[-1].bbox[3]>24:break
+            group.append(block);text=''.join(b.text for b in group)
+            detected,score=detect_table_code(text,[])
+            if detected==table_code and score>=.8:matches.append((max(b.bbox[3]for b in group),text))
+    if not matches:return None
+    closest=max(y for y,_ in matches)
+    titles={text for y,text in matches if y==closest}
+    # 同一标题可由单块或带相邻编制信息的组合得到；只选被其他匹配包含的最短原文。
+    titles={t for t in titles if not any(other!=t and other in t for other in titles)}
+    return next(iter(titles))if len(titles)==1 else None
+
+
 def _numeric_parseable(text: str) -> bool:
-    value = str(text or "").strip().replace(",", "").replace("，", "")
-    for unit_token in ("万元", "亿元", "千元", "点", "元"):
-        if value.endswith(unit_token):
-            value = value[: -len(unit_token)]
-    if not value:
-        return False
-    try:
-        float(value)
-        return True
-    except ValueError:
-        return False
+    return _ocr_number(text) is not None
 
 
-def _detect_table_identity(rows: List[List[str]]) -> tuple[Optional[str], float, Dict[str, List[Dict[str, Any]]]]:
+def _ocr_number(text: str) -> Optional[float]:
+    import math
+    from src.engine.fiscal_lexeme import lex_numeric
+    value=lex_numeric(text)
+    if value.kind not in {'number','amount'}:return None
+    number = float(value.value)
+    return number if math.isfinite(number) else None
+
+
+def _detect_table_identity(
+    rows: List[List[str]],
+) -> tuple[Optional[str], float, Dict[str, List[Dict[str, Any]]]]:
     """按表头行匹配九表规则，返回 (table_code, confidence, canonical mappings)。
 
     表头窗口按数据特征选择：若第 2 行已含数值单元格，说明只有 1 行表头，
@@ -115,8 +143,10 @@ def _detect_table_identity(rows: List[List[str]]) -> tuple[Optional[str], float,
         return None, 0.0, {}
 
     header_depth = 1
-    if len(rows) > 1 and not any(_numeric_parseable(cell) for cell in rows[1]):
-        header_depth = 2
+    while header_depth < min(len(rows), 8) and not any(
+        _numeric_parseable(cell) for cell in rows[header_depth]
+    ):
+        header_depth += 1
     header_rows = [row for row in rows[:header_depth] if row]
     if not header_rows:
         return None, 0.0, {}
@@ -173,10 +203,62 @@ def _detect_table_identity(rows: List[List[str]]) -> tuple[Optional[str], float,
     return best_code, best_score, best_mappings
 
 
+_TOTAL_ROW_LABELS = {"合计", "总计", "收入总计", "支出总计"}
+
+
+def _ocr_continues(parser: Any, previous: ParsedTable, current: ParsedTable) -> bool:
+    """扫描件续页：紧邻下一页、同表种、列数一致、表题不冲突，且前段还没到合计行。"""
+    if (current.page_number - parser._last_page_number(previous) != 1
+            or current.table_code != previous.table_code
+            or {len(row) for row in previous.rows} != {len(row) for row in current.rows}):
+        return False
+    last = next((row for row in reversed(previous.rows) if any(str(v or "").strip() for v in row)), [])
+    if any(normalize_text(str(v or "")) in _TOTAL_ROW_LABELS for v in last):
+        return False
+    titled = [t for t in (previous, current) if not t.title.startswith("OCR候选表:")]
+    return len(titled) < 2 or not parser._fragment_titles_conflict(previous, current)
+
+
+def _join_ocr_continuations(artifact: Any, fragments: List[ParsedTable]) -> None:
+    """同一张表在扫描件里跨页时，按原生续表的拼接方式接成一个逻辑表。
+
+    每页一个逻辑实例会让规则看到两张同种表而整体放弃核对。物理片段与来源索引
+    保持逐页原样，只替换逻辑视图；拼接沿用原生续表的去重复表头与原格回溯。
+    """
+    from src.services.pdf_parser import PDFParser
+
+    parser = PDFParser(None)
+    groups: List[List[ParsedTable]] = []
+    for fragment in sorted(fragments, key=lambda item: (item.page_number, item.bbox[1])):
+        if groups and _ocr_continues(parser, groups[-1][-1], fragment):
+            groups[-1].append(fragment)
+        else:
+            groups.append([fragment])
+    for members in (group for group in groups if len(group) > 1):
+        merged = members[0]
+        for member in members[1:]:
+            merged = parser._append_table(merged, member)
+        uids = {member.fragment_uid for member in members}
+        first = next(t for t in artifact.logical_tables if t.instance_uid == members[0].fragment_uid)
+        index = next(i for i, t in enumerate(artifact.table_fragments) if t.fragment_uid in uids)
+        artifact.table_fragments = [t for t in artifact.table_fragments if t.fragment_uid not in uids]
+        artifact.table_fragments.insert(index, merged)
+        artifact.logical_tables = [t for t in artifact.logical_tables if t.instance_uid not in uids]
+        artifact.logical_tables.append(LogicalTableInstance(
+            instance_uid=merged.fragment_uid, table_code=merged.table_code, title=merged.title,
+            fragment_uids=[*merged.source_fragment_uids, merged.fragment_uid],
+            page_start=members[0].page_number, page_end=members[-1].page_number,
+            row_count=len(merged.rows), confidence=min(member.confidence for member in members),
+            org_name=first.org_name, fiscal_year=first.fiscal_year, column_mappings=first.column_mappings))
+
+
 def promote_ocr_candidates(
     artifact: Any,
     *,
     file_hash: str = "",
+    organization: Optional[str] = None,
+    year: Optional[int] = None,
+    report_kind: Optional[str] = None,
 ) -> Dict[str, Any]:
     """把通过复验的 OCR 候选表晋升进统一解析对象（就地追加）。
 
@@ -186,15 +268,47 @@ def promote_ocr_candidates(
     summary: Dict[str, Any] = {
         "promoted_tables": [],
         "rejected_tables": [],
+        "candidate_materialized": False,
         "usable_for_rules": False,
+        "operand_count": 0,
+        "fused_cells": [],
+        "native_conflicts": [],
     }
     if artifact is None:
         return summary
 
     candidates: List[OcrTableCandidate] = list(getattr(artifact, "ocr_table_candidates", []) or [])
     promoted_uids: set[str] = set()
+    promoted_fragments=[]
+    from src.services.ocr_grid_reconstruction import GRID_PROTOCOL
+    grid_candidates=[c for c in candidates if c.provenance.get('schema_version')==GRID_PROTOCOL]
 
     for candidate in candidates:
+        if candidate.provenance.get('schema_version')!=GRID_PROTOCOL and candidate.page_bbox:
+            area=(candidate.page_bbox[2]-candidate.page_bbox[0])*(candidate.page_bbox[3]-candidate.page_bbox[1])
+            shadows=[g for g in grid_candidates if g.page_number==candidate.page_number and g.page_bbox
+                and area>0 and max(0,min(g.page_bbox[2],candidate.page_bbox[2])-max(g.page_bbox[0],candidate.page_bbox[0]))
+                *max(0,min(g.page_bbox[3],candidate.page_bbox[3])-max(g.page_bbox[1],candidate.page_bbox[1]))/area>=.95]
+            if shadows:
+                summary['rejected_tables'].append({'candidate_uid':candidate.candidate_uid,
+                    'reason':'model_projection_of_independent_grid','grid_candidate_uids':[g.candidate_uid for g in shadows]})
+                continue
+        from src.services.table_reading_assessment import intersects, selected_tables
+        overlaps_native = candidate.page_bbox and any(
+            table.extraction_method != "ocr" and intersects(table.bbox, candidate.page_bbox)
+            and any(cell.page_number == candidate.page_number for cell in table.cells)
+            for table in selected_tables(artifact)
+        )
+        if overlaps_native and (candidate.mapping_status != 'mapped' or not candidate.cells):
+            summary['rejected_tables'].append({'candidate_uid':candidate.candidate_uid,
+                                               'reason':'native_table_overlap_requires_review'})
+            continue
+        # Work on one snapshot; qualification and materialisation consume the
+        # same source-bound cell objects, including merged-cell geometry.
+        candidate = deepcopy(candidate)
+        from src.services.ocr_qualification import bound_table
+
+        canonical, _ = bound_table(candidate, artifact)
         rows = [list(row) for row in candidate.rows or []]
         if len(rows) < 2:
             summary["rejected_tables"].append(
@@ -202,7 +316,16 @@ def promote_ocr_candidates(
             )
             continue
 
-        table_code, confidence, mappings = _detect_table_identity(rows)
+        # 合并表头只在身份视图传播，不修改原始 rows 或逐格字面。
+        identity_rows=deepcopy(rows)
+        first_data=next((i for i,row in enumerate(rows)if any(_numeric_parseable(c)for c in row)),1)
+        for cell in candidate.cells:
+            if cell.get('row_idx',0)>=first_data:continue
+            for r in range(cell['row_idx'],min(first_data,cell['row_idx']+cell.get('row_span',1))):
+                for c in range(cell['col_idx'],cell['col_idx']+cell.get('col_span',1)):
+                    if r<len(identity_rows)and c<len(identity_rows[r])and not identity_rows[r][c]:
+                        identity_rows[r][c]=cell.get('raw_text','')
+        table_code, confidence, mappings = _detect_table_identity(identity_rows)
         if not table_code or confidence < _PROMOTE_HEADER_CONFIDENCE:
             summary["rejected_tables"].append(
                 {
@@ -251,18 +374,64 @@ def promote_ocr_candidates(
             )
             continue
 
+        if overlaps_native:
+            from src.services.native_ocr_fusion import fuse_overlapping_cells
+            fusion=fuse_overlapping_cells(artifact,candidate,table_code=table_code,mappings=mappings,
+                organization=organization,year=year,report_kind=report_kind)
+            summary['fused_cells'].extend(fusion['fused_cells'])
+            summary['native_conflicts'].extend(fusion['conflicts'])
+            summary['rejected_tables'].append({'candidate_uid':candidate.candidate_uid,
+                'reason':'native_cells_fused'if fusion['fused_cells']else'native_table_overlap_requires_review',
+                'cell_rejections':fusion['rejected']})
+            continue
+
         # 构建物理片段（与原生表同构）并晋升进 artifact
-        unit_hint = _detect_unit_hint_from_blocks(artifact, candidate.page_number)
+        from src.services.ocr_qualification import page_binding_reasons, qualification
+
+        qualified = qualification(
+            candidate, artifact, organization=organization, year=year, report_kind=report_kind
+        )
+        identity_reasons = page_binding_reasons(candidate, artifact)
+        if identity_reasons:
+            summary["rejected_tables"].append({
+                "candidate_uid": candidate.candidate_uid,
+                "reason": "physical_page_identity_not_bound",
+                "operand_qualification": qualified,
+            })
+            continue
+        if canonical is not None:
+            rows = canonical["rows"]
+            source_cells = canonical["cells"]
+        else:
+            source_cells = candidate.cells
+        # The physical page comes from the renderer/request identity. A mutable
+        # candidate page must never relabel a saved source response.
+        source_page = qualified.get("physical_page") or candidate.page_number
+        header_row_count = next(
+            (
+                index for index, row in enumerate(rows)
+                if not is_index_header(row) and any(_numeric_parseable(cell) for cell in row)
+            ),
+            1,
+        )
+        unit_hint = qualified["unit"] or _detect_unit_hint_from_blocks(
+            artifact, candidate.page_number
+        )
+        original_cells = {(cell.get("row_idx"), cell.get("col_idx")): cell for cell in source_cells}
+        cell_qualifications = {
+            (cell["row_idx"], cell["col_idx"]): qualification(
+                candidate, artifact, organization=organization, year=year,
+                report_kind=report_kind, cell_position=(cell["row_idx"], cell["col_idx"]),
+            )
+            for cell in source_cells
+            if cell.get("col_idx") in measure_cols and cell.get("row_idx", 0) >= header_row_count
+            and not is_index_header(rows[cell["row_idx"]]) and _numeric_parseable(cell.get("raw_text", ""))
+        }
         cells: List[ParsedCell] = []
         for row_idx, row in enumerate(rows):
             for col_idx, raw in enumerate(row):
                 text = str(raw or "").strip()
-                numeric = None
-                if _numeric_parseable(text):
-                    try:
-                        numeric = float(text.replace(",", "").replace("，", ""))
-                    except ValueError:
-                        numeric = None
+                numeric = _ocr_number(text)
                 cells.append(
                     ParsedCell(
                         row_idx=row_idx,
@@ -270,24 +439,37 @@ def promote_ocr_candidates(
                         raw_text=text,
                         normalized_text=text,
                         numeric_value=numeric,
-                        page_number=candidate.page_number,
-                        bbox=candidate.page_bbox,
-                        is_header=(row_idx == 0),
-                        confidence=round(confidence, 4),
+                        page_number=source_page,
+                        bbox=tuple(original_cells[(row_idx, col_idx)]["page_bbox"])
+                        if original_cells.get((row_idx, col_idx), {}).get("page_bbox")
+                        else None,
+                        is_header=row_idx < header_row_count or is_index_header(row),
+                        confidence=float(
+                            original_cells.get((row_idx, col_idx), {}).get("score") or 0
+                        ),
                         unit_hint=unit_hint,
                         extraction_method="ocr",
+                        row_span=int(
+                            original_cells.get((row_idx, col_idx), {}).get("row_span") or 1
+                        ),
+                        col_span=int(
+                            original_cells.get((row_idx, col_idx), {}).get("col_span") or 1
+                        ),
+                        ocr_provenance={
+                            "qualification": cell_qualifications.get((row_idx, col_idx), qualified),
+                            "source": candidate.provenance,
+                            "cell": original_cells.get((row_idx, col_idx), {}),
+                        },
                     )
                 )
         fragment = ParsedTable(
             table_code=table_code,
-            title=f"OCR候选表:{table_code}",
-            page_number=candidate.page_number,
+            title=_source_title(artifact,candidate,table_code)or f"OCR候选表:{table_code}",
+            page_number=source_page,
             table_index=len(getattr(artifact, "table_fragments", []) or []),
             bbox=candidate.page_bbox or (0, 0, 0, 0),
-            header_row_count=1,
-            # RC-07：0.75 < 0.8 → 物化事实 low_confidence，不参与确定性勾稽；
-            # 待真实 OCR 逐格置信度接入后按证据认证再晋升操作数资格。
-            confidence=_PROMOTED_CONFIDENCE,
+            header_row_count=header_row_count,
+            confidence=max([result["minimum_score"] for result in cell_qualifications.values() if result["status"] == "qualified"], default=qualified["minimum_score"] if qualified["status"] == "qualified" else 0),
             extraction_method="ocr",
             unit_hint=unit_hint,
             rows=rows,
@@ -295,23 +477,31 @@ def promote_ocr_candidates(
             # RC-10：OCR 片段 UID 同样内容派生，重解析后校正目标不漂移
             fragment_uid=_stable_fragment_uid(
                 "ocr",
-                candidate.page_number,
+                source_page,
                 table_code,
                 rows=rows,
             ),
         )
         artifact.table_fragments.append(fragment)
+        promoted_fragments.append(fragment)
+        # 混合页也须保存 OCR 的物理来源，不能只保存合并后的逻辑表。
+        # 否则数据库回读时，金额虽在事实中却无法回到同一原始单元格。
+        artifact.physical_fragments.append(deepcopy(fragment))
         artifact.logical_tables.append(
             LogicalTableInstance(
                 instance_uid=fragment.fragment_uid,
                 table_code=table_code,
                 title=fragment.title,
                 fragment_uids=[fragment.fragment_uid],
-                page_start=candidate.page_number,
-                page_end=candidate.page_number,
+                page_start=source_page,
+                page_end=source_page,
                 row_count=len(rows),
-                confidence=_PROMOTED_CONFIDENCE,
-                column_mappings=mappings,
+                confidence=fragment.confidence,
+                org_name=organization,
+                fiscal_year=year,
+                column_mappings=[
+                    {**mapping, "confidence": fragment.confidence} for mapping in mappings
+                ],
             )
         )
         promoted_uids.add(candidate.candidate_uid)
@@ -321,14 +511,36 @@ def promote_ocr_candidates(
                 "table_code": table_code,
                 "confidence": round(confidence, 4),
                 "fragment_uid": fragment.fragment_uid,
+                "operand_qualification": qualified,
             }
         )
 
     if promoted_uids:
-        summary["usable_for_rules"] = True
+        # 来源索引和逻辑格也进入统一主干，不能只追加二维表和事实。
+        from copy import copy
+        from src.services.source_reconstruction import attach_reconstruction
+        projection=copy(artifact);projection.table_fragments=promoted_fragments
+        attach_reconstruction(projection,promoted_fragments)
+        for field,key in [('source_tokens','token_uid'),('cell_candidates','candidate_uid'),('resolved_cells','logical_cell_uid')]:
+            existing=getattr(artifact,field);known={getattr(item,key)for item in existing}
+            existing.extend(item for item in getattr(projection,field)if getattr(item,key)not in known)
+        _join_ocr_continuations(artifact, promoted_fragments)
+        # 候选物化与资格分开；完整逐格来源及复验通过才可作操作数。
+        summary["candidate_materialized"] = True
+        summary["usable_for_rules"] = any(
+            item["operand_qualification"]["status"] == "qualified"
+            for item in summary["promoted_tables"]
+        )
+        summary["operand_count"] = 0
         logger.info(
             "OCR candidates promoted: %s",
             sorted(promoted_uids),
             extra={"stage": "ocr_fact_promotion"},
         )
+    if summary['fused_cells']:
+        summary['candidate_materialized']=True
+        summary['usable_for_rules']=True
+    if promoted_uids or summary['fused_cells'] or summary['native_conflicts']:
+        from src.services.input_processing_identity import artifact_content_hash
+        artifact.parse_run_uid=artifact_content_hash(artifact)[:32]
     return summary

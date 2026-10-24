@@ -349,80 +349,46 @@ def test_ocr_result_normalisation_and_error_isolation() -> None:
 
 
 def test_ocr_pipeline_runs_when_enabled_and_preserves_native(monkeypatch, tmp_path) -> None:
-    """启用 OCR：扫描页被识别；有残缺原生文本层时冲突如实记录、不覆盖。"""
-    import asyncio
+    """合成控制：真实切块适配器保留原生正文，未完成页继续待处理。"""
+    import asyncio,hashlib
+    from src.services import ocr_pipeline,ocr_tiled_pipeline
+    from src.services.ocr_tiles import make_tile,digest
+    from src.schemas.parse_artifact import ParsedTextBlock,ParseArtifact,ParsePageState
+    monkeypatch.setenv('OCR_ENABLED','true')
+    monkeypatch.setenv('OCR_MODEL_FINGERPRINT','a'*64)
+    path=_make_pdf(tmp_path,[['残缺文本'],[]])
+    artifact=ParseArtifact(source_file_hash=hashlib.sha256(path.read_bytes()).hexdigest(),page_count=2,
+        page_states=[ParsePageState(1,has_text_layer=True,text_chars=4),
+                     ParsePageState(2,has_text_layer=False,text_chars=0,is_scanned=True)],
+        text_blocks=[ParsedTextBlock('native-1',1,'残缺文本',None,.99,'native_text')])
+    monkeypatch.setattr(ocr_pipeline,'check_ocr_health',AsyncMock(return_value={
+        'ok':True,'model_fingerprint':'a'*64,'pipeline_fingerprint':'b'*64}))
+    calls=[]
+    async def tiles(image,**kw):
+        page=kw['page'];calls.append(page)
+        box=(0,0,400,200)
+        req=make_tile(image,box,parent_sha='c'*64,file_hash=artifact.source_file_hash,
+                      page=page,pixel_to_pdf=kw['pixel_to_pdf'])
+        state={'status':'completed'if page==1 else'pending','pending':[]if page==1 else[box],
+               'unresolved':[],'regions':{},'identity':{'tile_boxes':[box]},
+               'completed':{req.context['tile_id']:{'context':req.context}}if page==1 else{},
+               'elapsed_seconds':.1}
+        result=OcrPageResult(page,blocks=[OcrBlock('合计100.00',.99,[5,5,200,25],page)],
+            tables=[{'rows':[['项目','金额'],['合计','100.00']],'bbox':[0,0,400,200],'cells':[]}],
+            provenance={'raw_prediction_sha256':digest({'synthetic':True})})
+        return ([(req.context,result)]if page==1 else[]),[],state
+    monkeypatch.setattr(ocr_tiled_pipeline,'recognize_tiles',tiles)
+    summary=asyncio.run(ocr_pipeline.maybe_ocr_scanned_pages(str(path),{'scanned_pages':[1,2]},
+        artifact,checkpoint_path=tmp_path/'checkpoint.json'))
+    assert summary['status']=='pending' and summary['failed_pages']==[2]
+    assert calls==[1,2] and summary['usable_for_rules'] is False
+    assert artifact.text_blocks[0].text=='残缺文本'
+    assert len(artifact.text_blocks)==2 and artifact.text_blocks[1].confidence==.99
+    assert artifact.page_states[0].text_chars==4
+    assert artifact.page_states[1].ocr_status=='pending'
+    assert len(artifact.ocr_table_candidates)==1
+    assert artifact.ocr_table_candidates[0].verification_status=='unverified'
 
-    from src.services import ocr_pipeline
-    from src.schemas.parse_artifact import ParseArtifact, ParsePageState
-
-    monkeypatch.setenv("OCR_ENABLED", "true")
-    monkeypatch.setenv("OCR_MODEL_FINGERPRINT", "a" * 64)
-
-    # 2 页 PDF：第 1 页有少量原生文本（残缺），第 2 页纯扫描
-    fitz = pytest.importorskip("fitz")
-    pdf_path = tmp_path / "scan.pdf"
-    document = fitz.open()
-    page = document.new_page()
-    page.insert_text((72, 72), "残缺文本", fontsize=12, fontname="china-s")
-    document.new_page()
-    document.save(str(pdf_path))
-    document.close()
-
-    artifact = ParseArtifact(source_file_hash="x" * 64, page_count=2)
-    artifact.page_states = [
-        ParsePageState(page_number=1, has_text_layer=True, text_chars=4),
-        ParsePageState(page_number=2, has_text_layer=False, text_chars=0, is_scanned=True),
-    ]
-
-    captured: Dict[str, Any] = {}
-
-    async def fake_health():
-        return {"ok": True, "model_fingerprint": "a" * 64}
-
-    monkeypatch.setattr(ocr_pipeline, "check_ocr_health", fake_health)
-
-    async def fake_ocr_pages(images, page_numbers, **_kwargs):
-        captured["pages"] = list(page_numbers)
-        return [
-            OcrPageResult(
-                page_number=page_numbers[0],
-                blocks=[
-                    OcrBlock(
-                        text="收入支出决算总表 合计 100.00",
-                        score=0.99,
-                        bbox=[300.0, 300.0, 800.0, 340.0],
-                    )
-                ],
-                tables=[{"rows": [["项目", "金额"], ["合计", "100.00"]], "bbox": [280.0, 280.0, 900.0, 600.0]}],
-            ),
-            OcrPageResult(page_number=page_numbers[1], error="TimeoutError"),
-        ]
-
-    monkeypatch.setattr(ocr_pipeline, "ocr_pages", fake_ocr_pages)
-
-    summary = asyncio.run(
-        ocr_pipeline.maybe_ocr_scanned_pages(
-            str(pdf_path),
-            {"scanned_pages": [1, 2]},
-            artifact,
-        )
-    )
-
-    assert summary is not None and summary["status"] == "partial"
-    assert captured["pages"] == [1, 2]
-    assert summary["failed_pages"] == [2]
-    # 原生文本层与 OCR 并存 → 冲突登记，而非静默覆盖
-    assert summary["conflicts"] == [
-        {"page": 1, "native_chars": 4, "ocr_chars": len("收入支出决算总表 合计 100.00")}
-    ]
-    states = {state.page_number: state for state in artifact.page_states}
-    assert states[1].note == "ocr_applied"
-    assert states[1].text_chars == 4, "原生文本层不得被 OCR 改写"
-    assert states[1].ocr_status == "candidate_only"
-    assert len(artifact.text_blocks) == 1
-    assert artifact.text_blocks[0].confidence == 0.99
-    assert len(artifact.ocr_table_candidates) == 1
-    assert artifact.ocr_table_candidates[0].verification_status == "unverified"
 
 
 def test_ocr_requires_pinned_model_fingerprint(monkeypatch) -> None:
@@ -489,7 +455,7 @@ def test_ppstructure_response_preserves_table_rows_and_confidence() -> None:
     assert result["tables"][0]["rows"] == [["项目", "金额"], ["合计", "100.00"]]
 
 
-def test_model_manifest_requires_matching_complete_files(tmp_path: Path) -> None:
+def test_model_manifest_requires_matching_complete_files(tmp_path: Path, monkeypatch) -> None:
     """离线模型目录的每个文件均须出现在匹配的 SHA256 manifest。"""
     import hashlib
 
@@ -500,6 +466,8 @@ def test_model_manifest_requires_matching_complete_files(tmp_path: Path) -> None
     digest = hashlib.sha256(model.read_bytes()).hexdigest()
     manifest = tmp_path / "MANIFEST.sha256"
     manifest.write_text(f"{digest}  {model.name}\n", encoding="utf-8")
+    # 项目 .env 可能声明容器中的 /models 路径；此测试只能验证临时模型包。
+    monkeypatch.setenv("OCR_MODEL_MANIFEST", str(manifest))
     assert _verify_model_manifest(str(tmp_path)) == hashlib.sha256(manifest.read_bytes()).hexdigest()
 
     model.write_bytes(b"changed model")
@@ -507,29 +475,41 @@ def test_model_manifest_requires_matching_complete_files(tmp_path: Path) -> None
         _verify_model_manifest(str(tmp_path))
 
 
-def test_ocr_client_uses_service_multipart_contract() -> None:
-    """OCR 客户端按服务端 UploadFile 契约发送 multipart/form-data。"""
-    import asyncio
-
+def test_ocr_client_uses_service_multipart_contract(monkeypatch) -> None:
+    """新推理发送真实v3图块身份，旧协议仅供历史读取。"""
+    import asyncio,json
+    from PIL import Image
     from src.services.ocr_client import ocr_page
-
+    from src.services.ocr_tiles import make_tile,digest
+    from src.services.input_geometry import Affine
+    from ocr_service.protocol import PROTOCOL_VERSION
+    req=make_tile(Image.new('RGB',(20,12),'white'),(0,0,20,12),parent_sha='a'*64,
+                  file_hash='b'*64,page=3,pixel_to_pdf=Affine())
+    monkeypatch.setenv('OCR_MODEL_FINGERPRINT','c'*64)
+    raw={'overall_ocr_res':{'rec_texts':['合计']}}
     class Response:
-        def raise_for_status(self):
-            return None
-
+        def raise_for_status(self):pass
         def json(self):
-            return {"blocks": [{"text": "合计", "score": 0.99, "bbox": [1, 2, 3, 4]}]}
-
+            return {'schema_version':PROTOCOL_VERSION,'tile_context':req.context,
+                'completeness':{'scope':'tile'},'source_size_px':[20,12],
+                'model_input_size_px':[32,32],'detector_requested_limit_px':32,
+                'detector_tensor_sizes_px':[[32,32]],'detector_input_verified':True,
+                'inference_padding_px':[0,0,12,20],
+                'input_resize_applied':False,'prediction_coordinate_scale':[1.,1.],
+                'input_sha256':req.context['input_sha256'],'raw_prediction':raw,
+                'raw_prediction_sha256':digest(raw),'model_fingerprint':'c'*64,
+                'pipeline_fingerprint':'d'*64,'blocks':[{'text':'合计','score':.99,'bbox':[1,2,3,4]}]}
     class Client:
-        async def post(self, url, **kwargs):
-            assert url.endswith("/ocr")
-            assert kwargs["files"]["image"] == ("page-3.png", b"png-bytes", "image/png")
-            assert kwargs["params"]["deskew"] == "false"
+        async def post(self,url,**kw):
+            assert url.endswith('/ocr')
+            assert kw['files']['image']==('page-3.png',req.image,'image/png')
+            assert json.loads(kw['data']['tile_context'])==req.context
+            assert kw['params']['deskew']=='false'
             return Response()
+    result=asyncio.run(ocr_page(Client(),image_png=req.image,page_number=3,tile_context=req.context))
+    assert result.ok,result.error
+    assert result.blocks[0].text=='合计'
 
-    result = asyncio.run(ocr_page(Client(), image_png=b"png-bytes", page_number=3))
-    assert result.ok
-    assert result.blocks[0].text == "合计"
 
 
 def test_ocr_service_accepts_multipart_and_returns_ppstructure(monkeypatch) -> None:
@@ -541,7 +521,8 @@ def test_ocr_service_accepts_multipart_and_returns_ppstructure(monkeypatch) -> N
     from ocr_service import app as service_module
 
     class Predictor:
-        def predict(self, *, input):
+        def predict(self, *, input, use_table_orientation_classify):
+            assert use_table_orientation_classify is False
             assert input.shape[:2] == (12, 20)
             return [
                 {

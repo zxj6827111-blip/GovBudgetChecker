@@ -3,6 +3,7 @@
 import hashlib
 import json
 from pathlib import Path
+import pytest
 
 from scripts import run_zc07_acceptance as zc07
 
@@ -33,6 +34,80 @@ def test_default_preflight_writes_nonpassing_report(tmp_path, monkeypatch):
     assert report["dataset"]["status"] == "missing"
     assert report["e2e"]["status"] == "missing"
     assert report["exit_code"] == 2
+
+
+def test_receipt_gate_rejects_a_document_missing_its_frozen_denominator():
+    rows = [
+        {"doc_id": "DOC-1", "golden": {"applicable_sub_checks": ["R-1:S-1"]}, "run": {"meta": {}}},
+        {"doc_id": "DOC-2", "golden": {}, "run": {"meta": {}}},
+    ]
+    result = zc07._evaluate_receipts(rows)
+    assert result["status"] == "not_computable"
+    assert any("DOC-2" in item for item in result["denominator_errors"])
+
+
+def test_receipt_gate_rejects_conflicting_duplicate_relation_receipts():
+    rows = [{
+        "doc_id": "DOC-1",
+        "golden": {"applicable_sub_checks": ["R-1:S-1"]},
+        "run": {"meta": {"check_receipts": [
+            {"rule_id": "R-1", "sub_check_id": "S-1", "status": "pass"},
+            {"rule_id": "R-1", "sub_check_id": "S-1", "status": "execution_error"},
+        ]}},
+    }]
+    result = zc07._evaluate_receipts(rows)
+    assert result["status"] == "not_computable"
+    assert result["conflicting_receipts"] == ["DOC-1:R-1:S-1"]
+
+
+def test_exact_location_denominator_keeps_annotations_missing_truth_regions(tmp_path):
+    rows = [{
+        "doc_id": "DOC-1",
+        "golden": {"labels": [
+            {"label": "defect", "annotation_id": "A-1", "truth_region": {"page": 1, "bbox": [1, 1, 5, 5]}},
+            {"label": "defect", "annotation_id": "A-2"},
+        ]},
+        "report": {"matched": []},
+    }]
+    result = zc07._evaluate_exact_location(rows, tmp_path)
+    assert result["status"] == "not_computable"
+    assert result["truth_total"] == 2
+    assert result["missing_truth_regions"] == ["DOC-1:A-2"]
+
+
+@pytest.mark.parametrize("change", ["tolerance", "quote"])
+def test_repeatability_compares_full_receipt_and_evidence_semantics(tmp_path, change):
+    source_sha = "a" * 64
+    basis = {
+        "source_sha256": source_sha,
+        "configuration_fingerprint": "config-v1",
+        "version_fingerprint": "engine-v1",
+    }
+    first = {
+        "run_id": "isolated-first", "executed_at": "2026-10-06T01:00:00+08:00",
+        "repeatability_basis": basis,
+        "legacy": {
+            "meta": {"check_receipts": [{
+                "rule_id": "R-1", "sub_check_id": "S-1", "status": "pass",
+                "tolerance": {"amount_wan": "0.5"}, "operand_fact_ids": ["F-1"],
+            }]},
+            "issues": [{"id": "I-1", "evidence": [{"quote": "金额 100.00"}]}],
+        },
+    }
+    repeat = json.loads(json.dumps(first))
+    repeat.update(run_id="isolated-repeat", executed_at="2026-10-06T02:00:00+08:00")
+    if change == "tolerance":
+        repeat["legacy"]["meta"]["check_receipts"][0]["tolerance"] = {"amount_wan": "99"}
+    else:
+        repeat["legacy"]["issues"][0]["evidence"][0]["quote"] = "金额 101.00"
+    _write_json(tmp_path / "first.json", first)
+    _write_json(tmp_path / "repeat.json", repeat)
+    result = zc07._evaluate_repeatability({"documents": [{
+        "doc_id": "DOC-1", "golden_sha256": source_sha,
+        "replay_path": "first.json", "repeat_replay_path": "repeat.json",
+    }]}, tmp_path, "legacy")
+    assert result["status"] == "computed"
+    assert result["repeatable"] is False
 
 
 def test_dataset_requires_frozen_reviewed_source_pdf_and_strata(tmp_path):

@@ -1,15 +1,16 @@
-.PHONY: dev backend backend-api backend-noauth worker frontend frontend-build lint log-safety env-check typecheck unit e2e test install setup-python perf-baseline perf-check
+.PHONY: dev server-up server-check backend backend-api backend-noauth worker frontend frontend-build lint log-safety env-check typecheck unit e2e test install setup-python perf-baseline perf-check
 
 PYTHON ?= $(if $(wildcard .venv/Scripts/python.exe),.venv/Scripts/python.exe,.venv/bin/python)
+GOVBUDGET_BACKEND_PORT ?= 18743
 
 backend:
-	GOVBUDGET_AUTH_ENABLED=$${GOVBUDGET_AUTH_ENABLED:-true} GOVBUDGET_RATE_LIMIT=$${GOVBUDGET_RATE_LIMIT:-2000} $(PYTHON) -m uvicorn api.main:app --reload --port 8000
+	GOVBUDGET_AUTH_ENABLED=$${GOVBUDGET_AUTH_ENABLED:-true} GOVBUDGET_RATE_LIMIT=$${GOVBUDGET_RATE_LIMIT:-2000} $(PYTHON) -m uvicorn api.main:app --reload --port $(GOVBUDGET_BACKEND_PORT)
 
 backend-api:
-	JOB_QUEUE_ROLE=api JOB_QUEUE_INLINE_FALLBACK=false GOVBUDGET_AUTH_ENABLED=$${GOVBUDGET_AUTH_ENABLED:-true} GOVBUDGET_RATE_LIMIT=$${GOVBUDGET_RATE_LIMIT:-2000} $(PYTHON) -m uvicorn api.main:app --reload --port 8000
+	JOB_QUEUE_ROLE=api JOB_QUEUE_INLINE_FALLBACK=false GOVBUDGET_AUTH_ENABLED=$${GOVBUDGET_AUTH_ENABLED:-true} GOVBUDGET_RATE_LIMIT=$${GOVBUDGET_RATE_LIMIT:-2000} $(PYTHON) -m uvicorn api.main:app --reload --port $(GOVBUDGET_BACKEND_PORT)
 
 backend-noauth:
-	GOVBUDGET_AUTH_ENABLED=false $(PYTHON) -m uvicorn api.main:app --reload --port 8000
+	GOVBUDGET_AUTH_ENABLED=false $(PYTHON) -m uvicorn api.main:app --reload --port $(GOVBUDGET_BACKEND_PORT)
 
 worker:
 	JOB_QUEUE_ROLE=worker GOVBUDGET_AUTH_ENABLED=$${GOVBUDGET_AUTH_ENABLED:-true} GOVBUDGET_RATE_LIMIT=$${GOVBUDGET_RATE_LIMIT:-2000} $(PYTHON) -m api.worker
@@ -19,6 +20,12 @@ frontend:
 
 dev:
 	npm run dev
+
+server-up:
+	bash scripts/start-server.sh
+
+server-check:
+	bash scripts/start-server.sh --check
 
 lint:
 	$(PYTHON) -m ruff check .

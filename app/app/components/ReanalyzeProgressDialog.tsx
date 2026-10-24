@@ -1,4 +1,5 @@
 "use client";
+import AnalysisCheckProgress from "@/components/AnalysisCheckProgress";
 
 import { useEffect } from "react";
 
@@ -40,6 +41,7 @@ export type ReanalyzeBatchPayload = {
 };
 
 export type ReanalyzeLiveStatus = {
+  check_progress?: unknown;
   job_id: string;
   status?: string | null;
   progress?: number | null;
@@ -56,7 +58,7 @@ interface ReanalyzeProgressDialogProps {
   onClose: () => void;
 }
 
-const TERMINAL_STATUSES = new Set(["done", "completed", "error", "failed"]);
+const TERMINAL_STATUSES = new Set(["done", "completed", "review_required", "degraded", "error", "failed", "cancelled"]);
 
 function formatCount(value?: number | null) {
   return typeof value === "number" ? value.toLocaleString() : "--";
@@ -273,6 +275,7 @@ export default function ReanalyzeProgressDialog({
                               <div className="mt-1 text-xs text-slate-500">进度 {progressValue}%</div>
                             </div>
                           ) : null}
+                          <AnalysisCheckProgress value={item.live?.check_progress} />
                           {item.live?.error || item.live?.failure_reason ? (
                             <div className="mt-2 text-sm text-rose-700">
                               {item.live.error || item.live.failure_reason}

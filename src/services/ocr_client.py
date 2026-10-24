@@ -18,10 +18,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
+from ocr_service.protocol import PROTOCOL_VERSION, valid_bbox, valid_score
 
 #: 关键数字进入确定性数值判定的最低识别分数（任务包 OCR 约定）
 KEY_NUMBER_MIN_SCORE = 0.98
@@ -58,6 +61,7 @@ class OcrPageResult:
     tables: List[Dict[str, Any]] = field(default_factory=list)
     elapsed_ms: int = 0
     error: Optional[str] = None
+    provenance: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -78,6 +82,7 @@ class OcrPageResult:
             "tables": self.tables,
             "elapsed_ms": self.elapsed_ms,
             "error": self.error,
+            "provenance": self.provenance,
         }
 
 
@@ -99,15 +104,15 @@ def _normalise_blocks(raw: Any, page_number: int) -> List[OcrBlock]:
             continue
         text = str(item.get("text") or "")
         try:
-            score = float(item.get("score", 0.0))
+            score = valid_score(item.get("score"))
         except (TypeError, ValueError):
             score = 0.0
         bbox = item.get("bbox")
         blocks.append(
             OcrBlock(
                 text=text,
-                score=score,
-                bbox=[float(v) for v in bbox] if isinstance(bbox, (list, tuple)) and len(bbox) == 4 else None,
+                score=score if score is not None else 0.0,
+                bbox=valid_bbox(bbox),
                 page_number=page_number,
             )
         )
@@ -120,6 +125,8 @@ async def ocr_page(
     image_png: bytes,
     page_number: int,
     timeout_seconds: float = DEFAULT_PAGE_TIMEOUT_SECONDS,
+    region_only: bool = False,
+    tile_context: Optional[Dict[str, Any]] = None,
 ) -> OcrPageResult:
     """识别单页图像（PNG 字节流）。失败返回带 error 的结果，不抛异常。"""
     import time
@@ -129,11 +136,72 @@ async def ocr_page(
         response = await client.post(
             f"{ocr_base_url()}/ocr",
             files={"image": (f"page-{page_number}.png", image_png, "image/png")},
-            params={"deskew": "false"},  # 非线性矫正关闭（任务包约定）
+            data={"tile_context": json.dumps(tile_context, ensure_ascii=False)} if tile_context else {},
+            params={"deskew": "false", **({"region_only": "true"} if region_only else {})},
             timeout=timeout_seconds,
         )
         response.raise_for_status()
         payload = response.json()
+        provenance = {}
+        if payload.get("schema_version") != PROTOCOL_VERSION:
+            raise ValueError("historical OCR protocol cannot serve new inference")
+        if payload.get("schema_version") == PROTOCOL_VERSION:
+            if not tile_context or payload.get("tile_context") != tile_context:
+                raise ValueError("OCR tile context mismatch")
+            from ocr_service.protocol import validate_tile_context
+            validate_tile_context(tile_context, image_png, payload.get("source_size_px", []))
+            if payload.get("prediction_coordinate_scale") != [1.0, 1.0]:
+                raise ValueError("OCR v3 must not downscale input")
+            size = payload.get('source_size_px', [])
+            padding = [0,0,(-size[0])%32,(-size[1])%32] if len(size)==2 else []
+            expected_input = [size[0]+padding[2],size[1]+padding[3]] if padding else []
+            if (payload.get('model_input_size_px') != expected_input
+                    or payload.get('inference_padding_px') != padding
+                    or payload.get('detector_input_verified') is not True
+                    or not payload.get('detector_tensor_sizes_px')
+                    or payload['detector_tensor_sizes_px'][0] != expected_input
+                    or payload.get('input_resize_applied') is not False
+                    or payload.get('detector_requested_limit_px') != max(expected_input or [0])):
+                raise ValueError('OCR full-resolution model input not confirmed')
+            input_sha = hashlib.sha256(image_png).hexdigest()
+            raw_sha = hashlib.sha256(
+                json.dumps(
+                    payload.get("raw_prediction"),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode()
+            ).hexdigest()
+            expected_model = os.getenv("OCR_MODEL_FINGERPRINT", "").strip().lower()
+            if (
+                payload.get("input_sha256") != input_sha
+                or payload.get("raw_prediction_sha256") != raw_sha
+            ):
+                raise ValueError("OCR response input/raw fingerprint mismatch")
+            if not expected_model or payload.get("model_fingerprint") != expected_model:
+                raise ValueError("OCR response model fingerprint mismatch")
+            provenance = {
+                key: payload[key]
+                for key in [
+                    "schema_version",
+                    "tile_context",
+                    "completeness",
+                    "model_input_size_px",
+                    "detector_tensor_sizes_px",
+                    "detector_input_verified",
+                    "inference_padding_px",
+                    "detector_requested_limit_px",
+                    "input_resize_applied",
+                    "input_sha256",
+                    "model_fingerprint",
+                    "pipeline_fingerprint",
+                    "prediction_coordinate_scale",
+                    "source_size_px",
+                    "raw_prediction",
+                    "raw_prediction_sha256",
+                ]
+            }
         blocks = _normalise_blocks(payload.get("blocks"), page_number)
         tables = payload.get("tables") if isinstance(payload.get("tables"), list) else []
         return OcrPageResult(
@@ -141,6 +209,7 @@ async def ocr_page(
             blocks=blocks,
             tables=[table for table in tables if isinstance(table, dict)],
             elapsed_ms=int((time.monotonic() - started) * 1000),
+            provenance=provenance,
         )
     except Exception as exc:
         return OcrPageResult(
@@ -193,6 +262,7 @@ async def check_ocr_health(timeout_seconds: float = 5.0) -> Dict[str, Any]:
                 "engine": payload.get("engine"),
                 "models_ready": models_ready,
                 "model_fingerprint": model_fingerprint,
+                "pipeline_fingerprint": payload.get("pipeline_fingerprint"),
             }
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}

@@ -155,6 +155,7 @@ class UserStore:
         return {
             "username": str(user.get("username") or ""),
             "is_admin": bool(user.get("is_admin")),
+            "is_read_only": bool(user.get("is_read_only", False)),
             "is_active": bool(user.get("is_active", True)),
             # 历史 users.json 没有该字段时按 False 处理：既有账号不会突然被锁在改密页
             "must_change_password": bool(user.get("must_change_password", False)),
@@ -204,6 +205,7 @@ class UserStore:
             "username": str(user.get("username") or ""),
             "password_hash": str(user.get("password_hash") or ""),
             "is_admin": bool(user.get("is_admin")),
+            "is_read_only": bool(user.get("is_read_only", False)),
             "is_active": bool(user.get("is_active", True)),
             "must_change_password": bool(user.get("must_change_password", False)),
             "organization_ids": UserStore._normalize_organization_ids(
@@ -243,8 +245,17 @@ class UserStore:
 
         try:
             iterations = int(iterations_text)
-            salt = base64.urlsafe_b64decode(salt_text.encode("ascii"))
-            expected = base64.urlsafe_b64decode(digest_text.encode("ascii"))
+            # The frontend's local password-change path emits unpadded base64url,
+            # while Python's urlsafe_b64decode requires the padding to be restored.
+            # Normalize both fields so hashes written by either implementation work.
+            salt_encoded = salt_text.encode("ascii")
+            digest_encoded = digest_text.encode("ascii")
+            salt = base64.urlsafe_b64decode(
+                salt_encoded + b"=" * (-len(salt_encoded) % 4)
+            )
+            expected = base64.urlsafe_b64decode(
+                digest_encoded + b"=" * (-len(digest_encoded) % 4)
+            )
         except Exception:
             return False
 
@@ -428,6 +439,7 @@ class UserStore:
                             "username": username,
                             "password_hash": password_hash,
                             "is_admin": bool(row.get("is_admin", False)),
+                            "is_read_only": bool(row.get("is_read_only", False)),
                             "is_active": bool(row.get("is_active", True)),
                             # 向后兼容：历史记录没有该字段时按 False，
                             # 已有账号不会因为升级而突然被要求改密
@@ -574,10 +586,13 @@ class UserStore:
         password: str,
         is_admin: bool = False,
         organization_ids: Optional[List[str]] = None,
+        is_read_only: bool = False,
     ) -> Dict[str, Any]:
         clean_username = self._validate_username(username)
         clean_password = self._validate_new_password(password)
         clean_organization_ids = self._validate_organization_ids(organization_ids)
+        if is_read_only and (is_admin or not clean_organization_ids):
+            raise ValueError("supervisor requires organization scope and cannot be admin")
         canonical = self._normalize_username(clean_username)
         now = time.time()
 
@@ -590,6 +605,7 @@ class UserStore:
                 "username": clean_username,
                 "password_hash": self._hash_password(clean_password),
                 "is_admin": bool(is_admin),
+                "is_read_only": bool(is_read_only),
                 "is_active": True,
                 # 管理员创建的账号不强制改密（本轮只覆盖默认管理员首登，见 docs）
                 "must_change_password": False,
@@ -608,6 +624,7 @@ class UserStore:
         is_active: Optional[bool] = None,
         password: Optional[str] = None,
         organization_ids: Optional[List[str]] = None,
+        is_read_only: Optional[bool] = None,
     ) -> Dict[str, Any]:
         canonical = self._normalize_username(self._validate_username(username))
 
@@ -617,8 +634,20 @@ class UserStore:
             if user is None:
                 raise KeyError("user not found")
 
+            # 先验证组合，再修改对象，避免失败时留下部分角色变更。
+            next_read_only = bool(user.get("is_read_only")) if is_read_only is None else bool(is_read_only)
+            next_admin = bool(user.get("is_admin")) if is_admin is None else bool(is_admin)
+            next_scope = user.get("organization_ids") if organization_ids is None else self._validate_organization_ids(organization_ids)
+            if next_read_only and (next_admin or not next_scope):
+                raise ValueError("supervisor requires organization scope and cannot be admin")
+            if user.get("is_admin") and not next_admin and user.get("is_active", True) and self._active_admin_count_locked() <= 1:
+                raise ValueError("at least one active admin must remain")
             changed = False
             should_revoke_sessions = False
+            if is_read_only is not None and bool(user.get("is_read_only")) != bool(is_read_only):
+                user["is_read_only"] = bool(is_read_only)
+                changed = True
+                should_revoke_sessions = True
 
             if is_admin is not None:
                 new_is_admin = bool(is_admin)

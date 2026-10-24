@@ -4,7 +4,7 @@ import re
 from decimal import Decimal
 from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
-from .amount_math import classify_amount_diff, compute_dynamic_envelope
+from .amount_math import classify_amount_diff, compute_dynamic_envelope, rounding_envelope
 from .rule_policy import amount_difference_exceeds_policy, percentage_difference_exceeds_policy
 from .budget_rules import _append_relation_receipt, _portable_amount_tolerance, find_budget_anchors
 from .rule_outcome import RuleDeferred, RuleNotApplicable
@@ -192,7 +192,7 @@ def _extract_three_public_table_values_semantic(
             field = _match_three_public_header(cell)
             if field and field not in field_by_col.values():
                 field_by_col[col_idx] = field
-        # 至少：合计 + 两个分项（与 _has_three_public_core_fields 同口径）
+        # 至少三列具备可读语义，允许金额行缺格时由规则逐项记未完成。
         if "total" not in field_by_col.values() or len(field_by_col) < 3:
             continue
         for row in table[header_idx + 1 :]:
@@ -222,13 +222,11 @@ def _extract_three_public_table_values_semantic(
 
 
 def _has_three_public_core_fields(values: Mapping[str, Optional[float]]) -> bool:
-    """至少要有合计 + 两个分项（出国/接待/公车任二）才承认这次提取。"""
-    if values.get("total") is None:
-        return False
-    sub_hits = sum(
-        1 for key in ("abroad", "reception", "car_total") if values.get(key) is not None
+    """至少识别到一个语义数值后交给规则记录缺项，不能静默丢弃部分表。"""
+    return any(
+        values.get(key) is not None
+        for key in ("total", "abroad", "reception", "car_total", "car_buy", "car_run")
     )
-    return sub_hits >= 2
 
 
 def _find_three_public_table(doc: Document) -> Tuple[Optional[int], Optional[Dict[str, Optional[float]]]]:
@@ -262,10 +260,19 @@ def _find_three_public_table(doc: Document) -> Tuple[Optional[int], Optional[Dic
     return None, None
 
 
-def _close(a: Optional[float], b: Optional[float], tol: float = 0.01) -> bool:
+def _close(
+    a: Optional[float], b: Optional[float], tol: Optional[float] = None, terms: int = 1
+) -> bool:
+    """统一政策口径的金额近似相等：阈值 = max(政策容差, terms 项显示舍入包络)。
+
+    Decimal 计算，避免 0.3−0.29 这类浮点尾差把恰好 0.01 的差判成超限。
+    """
     if a is None or b is None:
         return False
-    return abs(a - b) <= tol
+    diff = abs(Decimal(str(a)) - Decimal(str(b)))
+    if tol is not None:
+        return diff <= Decimal(str(tol))
+    return not amount_difference_exceeds_policy(diff, rounding_envelope(terms))
 
 
 def _compact_text(text: str) -> str:
@@ -312,7 +319,7 @@ def _sentence_around(text: str, start: int, end: int) -> str:
 #: 字段谓词链：费(支出)?(决算|预算)?(数)?(为|是)? 金额 万元——
 #: 容忍「费决算为」「费支出决算」「费支出」等形态；「增加/减少」等
 #: 同比谓词不在链内，天然不会误配同比变化句（决算增加 0.3 ≠ 决算为 0.3）。
-_NAR_PRED = r"(?:支出)?(?:决算|预算)?(?:数)?(?:为|是)?"
+_NAR_PRED = r"(?:支出)?(?:决算)?(?:数)?(?:为|是)?"
 _NAR_AMT = r"([0-9][0-9,，]*\.?[0-9]*)\s*万\s*元"
 
 _NAR_TOTAL_BUDGET_RE = re.compile(
@@ -323,8 +330,8 @@ _NAR_TOTAL_FINAL_RE = re.compile(
 )
 _NAR_ABROAD_RE = re.compile(r"因公出国（境）?费" + _NAR_PRED + r"\s*" + _NAR_AMT)
 _NAR_CAR_TOTAL_RE = re.compile(r"公务用车购置及运行(?:维护)?费" + _NAR_PRED + r"\s*" + _NAR_AMT)
-_NAR_CAR_BUY_RE = re.compile(r"公务用车购置(?:费|支出)(?:为|是)?\s*" + _NAR_AMT)
-_NAR_CAR_RUN_RE = re.compile(r"公务用车运行(?:维护)?(?:费|支出)(?:为|是)?\s*" + _NAR_AMT)
+_NAR_CAR_BUY_RE = re.compile(r"公务用车购置(?:费|支出)" + _NAR_PRED + r"\s*" + _NAR_AMT)
+_NAR_CAR_RUN_RE = re.compile(r"公务用车运行(?:维护)?(?:费|支出)" + _NAR_PRED + r"\s*" + _NAR_AMT)
 _NAR_RECEPTION_RE = re.compile(r"公务接待费" + _NAR_PRED + r"\s*" + _NAR_AMT)
 
 #: 表七 12 列 → 特征名（预算/决算 × 合计|出国|车小|购置|运行|接待）
@@ -347,6 +354,21 @@ def _nar_first_decimal(text: str, pattern: "re.Pattern[str]") -> Optional[Decima
     if not m:
         return None
     return _nar_amount_to_decimal(m.group(1))
+
+
+def _nar_total_match(text: str, pattern: "re.Pattern[str]"):
+    from .native_three_public_ratios import subject_before
+
+    for match in pattern.finditer(text):
+        indicator, start = subject_before(text[:match.start()])
+        if indicator == "total_actual":
+            return match, start
+    return None, None
+
+
+def _nar_total_decimal(text: str, pattern: "re.Pattern[str]") -> Optional[Decimal]:
+    match, _ = _nar_total_match(text, pattern)
+    return _nar_amount_to_decimal(match.group(1)) if match else None
 
 
 def _nar_pick(*vals: Optional[Decimal]) -> Optional[Decimal]:
@@ -388,6 +410,7 @@ def _extract_three_public_narrative_v2(section_text: str) -> Dict[str, Optional[
     表内亦为 0：(一) 侧矛盾由 V33-244 专项承担，CMM-001 锚定（二）避免
     同源双报。某段缺失时整段回退到全文。
     """
+    section_text = re.sub(r"\(cid:\d+\)", "", section_text)
     m_overall = re.search(r"[（(]一[)）][^\n]{0,40}总体情况说明", section_text)
     m_detail = re.search(r"[（(]二[)）][^\n]{0,40}具体情况说明", section_text)
     overall = section_text[m_overall.end(): m_detail.start()] if m_overall else section_text
@@ -397,8 +420,8 @@ def _extract_three_public_narrative_v2(section_text: str) -> Dict[str, Optional[
     joined_detail = "\n".join(_merge_soft_wrapped_lines_shared(detail))
 
     return {
-        "total_budget": _nar_first_decimal(joined_overall, _NAR_TOTAL_BUDGET_RE),
-        "total_final": _nar_first_decimal(joined_overall, _NAR_TOTAL_FINAL_RE),
+        "total_budget": _nar_total_decimal(joined_overall, _NAR_TOTAL_BUDGET_RE),
+        "total_final": _nar_total_decimal(joined_overall, _NAR_TOTAL_FINAL_RE),
         "abroad": _nar_pick(
             _nar_first_decimal(joined_detail, _NAR_ABROAD_RE),
             _nar_first_decimal(joined_overall, _NAR_ABROAD_RE),
@@ -429,6 +452,45 @@ def _t7_cell_to_decimal(cell: Any) -> Optional[Decimal]:
     if not re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", text):
         return None
     return Decimal(text)
+
+
+def three_public_narrative_refs(doc: Any, scope: str, key: str) -> List[Dict[str, Any]]:
+    """Use the same predicates and detail/overall priority as amount extraction.
+
+    Source ranges retain physical pages and literal quotes, including commas.
+    A table value never determines where to look in the narrative.
+    """
+    import unicodedata
+    from .native_narrative_checks import _Text
+
+    patterns = {"total_final": _NAR_TOTAL_FINAL_RE, "abroad": _NAR_ABROAD_RE,
+                "car_total": _NAR_CAR_TOTAL_RE, "car_buy": _NAR_CAR_BUY_RE,
+                "car_run": _NAR_CAR_RUN_RE, "reception": _NAR_RECEPTION_RE}
+    if key not in patterns:
+        return []
+    text = _Text.from_pages(doc.page_texts)
+    compact_scope = "".join(unicodedata.normalize("NFKC", scope).split())
+    start = text.compact.rfind(compact_scope)
+    if start < 0 or not compact_scope:
+        return []
+    detail = re.search(r"\(二\)[^。]{0,40}具体情况说明", compact_scope)
+    overall = re.search(r"\(一\)[^。]{0,40}总体情况说明", compact_scope)
+    overall_start = overall.end() if overall else 0
+    overall_end = detail.start() if detail else len(compact_scope)
+    segments = [(overall_start, overall_end)]
+    if key != "total_final" and detail:
+        segments.insert(0, (detail.end(), len(compact_scope)))
+    pattern = re.compile(unicodedata.normalize("NFKC", patterns[key].pattern))
+    for left, right in segments:
+        if key == "total_final":
+            match, subject_start = _nar_total_match(compact_scope[left:right], pattern)
+            if match:
+                return text.refs(start + left + subject_start, start + left + match.end(), "说明决算金额")
+            continue
+        match = pattern.search(compact_scope, left, right)
+        if match:
+            return text.refs(start + match.start(), start + match.end(), "说明决算金额")
+    return []
 
 
 def _extract_t7_strict_grid(rows: Any) -> Optional[Dict[str, Dict[str, Optional[Decimal]]]]:
@@ -490,6 +552,9 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
         return self._apply_final(doc, t7_rows)
 
     def _apply_final(self, doc: Document, t7_rows: Any) -> List[Issue]:
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_table_text import check_three_public_details
+            return check_three_public_details(self, doc)
         grid = _extract_t7_strict_grid(t7_rows)
         if grid is None:
             return self._apply_legacy(doc)
@@ -499,6 +564,14 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
         if not section:
             return self._apply_legacy(doc)
         nar = _extract_three_public_narrative_v2(section)
+        if nar.get("car_total") is None and all(
+            nar.get(key) is not None for key in ("car_buy", "car_run")
+        ):
+            nar["car_total"] = nar["car_buy"] + nar["car_run"]
+        if grid["final"].get("car_sub") is None and all(
+            grid["final"].get(key) is not None for key in ("car_buy", "car_run")
+        ):
+            grid["final"]["car_sub"] = grid["final"]["car_buy"] + grid["final"]["car_run"]
 
         # 表格页码：表七数据行所在页（evidence 定位用）
         table_page = None
@@ -521,17 +594,19 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
                 "total_final": ("actual", ("合计", "总计")),
                 "abroad": ("actual", ("因公出国",)),
                 "car_total": ("actual", ("公务用车购置及运行",)),
-                "car_buy": ("actual", ("公务用车购置",)),
+                # 单项必须使用具体科目名，避免“购置”子串命中“购置及运行”合并项。
+                "car_buy": ("actual", ("公务用车购置费",)),
                 "car_run": ("actual", ("公务用车运行",)),
                 "reception": ("actual", ("公务接待",)),
             }
             for key, (indicator, tokens) in _T7_FACT_KEYS.items():
+                stage = "年初预算" if key == "total_budget" else "决算"
                 resolution = resolve_operand(
                     fact_ctx,
                     indicator,
                     table_code="FIN_07_three_public",
                     subject_tokens=tokens,
-                    budget_stages=("决算",),
+                    budget_stages=(stage,),
                 )
                 fact_operands[key] = (
                     resolution.value,
@@ -610,20 +685,30 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
                     operand_ids=operand_ids,
                 )
                 continue
-            if tab is None:
-                # 表内留空：V33-244 Case A/B 已就此出建议性提示，CMM-001
-                # 不重复报（留痕于证据面），也不算取数失败。
-                blank_cells.append(label)
+            if tab is None and val == 0 and key not in {"total_budget", "total_final"}:
+                # Zero is an explicit no-expenditure statement. For a blank
+                # detail cell, the matching narrative zero is sufficient to
+                # classify this item as not applicable; nonzero text against a
+                # blank cell remains unresolved below.
+                grid[grid_path[0]][grid_path[1]] = Decimal("0")
                 _receipt(
                     key,
                     label,
                     "not_applicable",
-                    f"{label}表内留空（见 V33-244 建议性提示）",
+                    "说明明确为0且表格该分项留空，按无此项处理",
                     operand_ids=operand_ids,
                 )
                 continue
+            if tab is None:
+                # 表内留空且说明有金额，不得把缺操作数记成已完成；只有双方
+                # 都明确为零/无此项时才允许不适用。
+                blank_cells.append(label)
+                reason = f"{label}表内留空，无法与已披露的说明金额核对"
+                incomplete_relations.append(reason)
+                _receipt(key, label, "insufficient_data", reason, operand_ids=operand_ids)
+                continue
             compared += 1
-            # RC-06：统一政策容差（绝对 0.5 万元 + 独立舍入包络），
+            # RC-06：统一政策容差（rule_policy.AMOUNT_TOLERANCE_WAN + 独立舍入包络），
             # 不再使用本规则私设的 0.01 万元。
             diff_label, diff_val = classify_amount_diff(val, tab, 1)
             if diff_label != "mismatch":
@@ -633,6 +718,9 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
             message = f"三公表与说明不一致：{label}说明={val}万元，表内={tab}万元"
             if key == "car_run":
                 message += "；建议：请统一“公务用车运行费”在表格与情况说明中的金额口径"
+            relation_id = f"{self.code}:san_gong:{key}:narrative_vs_table"
+            fact_ids = [fact_ref.fact_uid] if fact_ref is not None else []
+            evidence_ids = list(getattr(fact_ref, "evidence_ids", []) or []) if fact_ref is not None else []
             issue = self._issue(
                 message,
                 {"page": table_page or 1},
@@ -642,6 +730,9 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
                     + (f"（说明未提及：{'、'.join(missing_nar)}）" if missing_nar else "")
                     + (f"（表内留空：{'、'.join(blank_cells)}）" if blank_cells else "")
                 ),
+                check_relation_id=relation_id,
+                fact_ids=fact_ids,
+                evidence_ids=evidence_ids,
             )
             issues.append(issue)
             _receipt(key, label, "fail", operand_ids=operand_ids)
@@ -649,6 +740,7 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
         # 说明侧内部勾稽：公车小计 = 购置 + 运行（三者齐备才判）
         ct, cb, cr = nar.get("car_total"), nar.get("car_buy"), nar.get("car_run")
         if None not in (ct, cb, cr):
+            relation_id = f"{self.code}:san_gong:narrative_car_balance"
             car_diff_label, car_diff_val = classify_amount_diff(ct, cb + cr, 2)
             if car_diff_label == "mismatch":
                 issues.append(
@@ -657,8 +749,155 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
                         {"page": table_page or 1},
                         "warn",
                         evidence_text=f"car_total={ct}, car_buy={cb}, car_run={cr}",
+                        check_relation_id=relation_id,
                     )
                 )
+            _append_relation_receipt(
+                doc,
+                self.code,
+                "san_gong:narrative_car_balance",
+                formula="narrative.car_total == narrative.car_buy + narrative.car_run (万元)",
+                status="fail" if car_diff_label == "mismatch" else "pass",
+                tolerance=_portable_amount_tolerance(),
+            )
+        else:
+            _append_relation_receipt(
+                doc,
+                self.code,
+                "san_gong:narrative_car_balance",
+                formula="narrative.car_total == narrative.car_buy + narrative.car_run (万元)",
+                status="not_applicable",
+                incomplete_reason="未同时披露公车小计、购置费和运行费",
+                tolerance=_portable_amount_tolerance(),
+            )
+
+        # 三公经费总额必须等于三项法定分项之和；无论正文或表格缺项，都留下
+        # 明确的关系级未完成回执，不以文字/表格的局部一致冒充总额勾稽完成。
+        table_sum_values: Dict[str, Optional[Decimal]] = {}
+        table_sum_fact_refs: Dict[str, Any] = {}
+        table_sum_blocked: Dict[str, Optional[str]] = {}
+        for key, grid_key in (
+            ("total_final", "total"),
+            ("abroad", "abroad"),
+            ("car_total", "car_sub"),
+            ("reception", "reception"),
+        ):
+            fact_value, fact_ref, blocked_reason = fact_operands.get(
+                key, (None, None, None)
+            )
+            if fact_value is not None:
+                table_sum_values[key] = fact_value
+                table_sum_fact_refs[key] = fact_ref
+            elif blocked_reason:
+                # 被事实层识别风险阻断时，不以同一张表的旧网格值绕过阻断。
+                table_sum_values[key] = None
+                table_sum_blocked[key] = blocked_reason
+            elif key == "car_total":
+                # 先等购置/运行事实尝试构成小计，再决定是否使用旧网格值。
+                table_sum_values[key] = None
+                table_sum_fact_refs[key] = None
+            else:
+                table_sum_values[key] = grid["final"].get(grid_key)
+                table_sum_fact_refs[key] = None
+
+        # 公车小计可由两个明确事实相加；如果其中任一事实因识别风险被阻断，
+        # 不用旧表格值替代该关系操作数。
+        if table_sum_values.get("car_total") is None:
+            buy_value, buy_ref, buy_block = fact_operands.get(
+                "car_buy", (None, None, None)
+            )
+            run_value, run_ref, run_block = fact_operands.get(
+                "car_run", (None, None, None)
+            )
+            if buy_block or run_block:
+                table_sum_blocked["car_total"] = buy_block or run_block
+            elif buy_value is not None and run_value is not None:
+                table_sum_values["car_total"] = buy_value + run_value
+                table_sum_fact_refs["car_total"] = (buy_ref, run_ref)
+            elif not table_sum_blocked.get("car_total"):
+                table_sum_values["car_total"] = grid["final"].get("car_sub")
+
+        for side, values, suffix in (
+            ("说明", nar, "narrative_total_balance"),
+            ("表格", table_sum_values, "table_total_balance"),
+        ):
+            required = ("total_final", "abroad", "car_total", "reception")
+            missing = [key for key in required if values.get(key) is None]
+            relation_id = f"{self.code}:san_gong:{suffix}"
+            fact_ids: List[str] = []
+            if side == "表格":
+                for key in required:
+                    fact_ref = table_sum_fact_refs.get(key)
+                    fact_refs = fact_ref if isinstance(fact_ref, tuple) else (fact_ref,)
+                    fact_ids.extend(
+                        item.fact_uid for item in fact_refs if item is not None
+                    )
+            car_value_key = "car_total"
+            if missing:
+                missing_labels = {
+                    "total_final": "三公合计",
+                    "abroad": "因公出国（境）费",
+                    "car_total": "公务用车小计",
+                    "reception": "公务接待费",
+                }
+                blocked_reasons = (
+                    [table_sum_blocked[key] for key in missing if table_sum_blocked.get(key)]
+                    if side == "表格"
+                    else []
+                )
+                blocked_reason = "；".join(blocked_reasons)
+                reason = blocked_reason or (
+                    f"{side}缺少三公合计或分项："
+                    f"{'、'.join(missing_labels[key] for key in missing)}"
+                )
+                incomplete_relations.append(reason)
+                _append_relation_receipt(
+                    doc,
+                    self.code,
+                    f"san_gong:{suffix}",
+                    formula="total == abroad + car_total + reception (万元)",
+                    status="insufficient_data",
+                    incomplete_reason=reason,
+                    operand_fact_ids=fact_ids,
+                    tolerance=_portable_amount_tolerance(),
+                )
+                continue
+            components = (
+                values["abroad"] + values[car_value_key] + values["reception"]
+            )
+            diff_label, _ = classify_amount_diff(values["total_final"], components, 3)
+            if diff_label == "mismatch":
+                evidence_ids = []
+                if side == "表格":
+                    for key in required:
+                        fact_ref = table_sum_fact_refs.get(key)
+                        fact_refs = fact_ref if isinstance(fact_ref, tuple) else (fact_ref,)
+                        for item in fact_refs:
+                            evidence_ids.extend(
+                                list(getattr(item, "evidence_ids", []) or [])
+                                if item is not None
+                                else []
+                            )
+                issues.append(
+                    self._issue(
+                        f"三公经费{side}内部勾稽不一致：合计={values['total_final']}万元，法定分项之和={components}万元",
+                        {"page": table_page or 1},
+                        "warn",
+                        evidence_text=f"total={values['total_final']}; abroad={values['abroad']}; car_total={values[car_value_key]}; reception={values['reception']}",
+                        check_relation_id=relation_id,
+                        fact_ids=fact_ids,
+                        evidence_ids=evidence_ids,
+                    )
+                )
+            _append_relation_receipt(
+                doc,
+                self.code,
+                f"san_gong:{suffix}",
+                formula="total == abroad + car_total + reception (万元)",
+                status="fail" if diff_label == "mismatch" else "pass",
+                operand_fact_ids=fact_ids,
+                tolerance=_portable_amount_tolerance(),
+            )
 
         # RC-04：任一应检关系缺操作数（说明未披露/事实被拒）时整规则转
         # 未完成——已确认的比对差异以 partial_issues 保留，不得因部分
@@ -673,8 +912,42 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
         return issues
 
     def _apply_legacy(self, doc: Document) -> List[Issue]:
+        is_budget = _infer_report_kind(doc) == "budget"
+        labels = {
+            "total": "三公合计",
+            "abroad": "因公出国（境）费",
+            "reception": "公务接待费",
+            "car_total": "公务用车购置及运行费",
+            "car_buy": "公务用车购置费",
+            "car_run": "公务用车运行费",
+        }
+        check_keys = tuple(labels)
+
+        def _record_missing_relations(reason: str) -> None:
+            for key, label in labels.items():
+                _append_relation_receipt(
+                    doc,
+                    self.code,
+                    f"san_gong:{key}:narrative_vs_table",
+                    formula=f"narrative.{key} == table.{key} (万元)",
+                    status="insufficient_data",
+                    incomplete_reason=f"{label}：{reason}",
+                    tolerance=_portable_amount_tolerance(),
+                )
+            for relation_suffix in ("narrative_total_balance", "table_total_balance"):
+                _append_relation_receipt(
+                    doc,
+                    self.code,
+                    f"san_gong:{relation_suffix}",
+                    formula="total == abroad + car_total + reception (万元)",
+                    status="insufficient_data",
+                    incomplete_reason=reason,
+                    tolerance=_portable_amount_tolerance(),
+                )
+
         texts = _page_texts(doc)
         if not texts:
+            _record_missing_relations("未提取到可用正文")
             raise RuleDeferred(
                 self.code,
                 detail="未提取到正文页面",
@@ -683,44 +956,103 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
 
         full_text = "\n".join(texts)
         narrative = _extract_three_public_narrative(full_text)
-        if all(value is None for value in narrative.values()):
+        if all(value is None for value in narrative.values()) and not is_budget:
+            _record_missing_relations("三公说明未披露可比较金额")
             raise RuleDeferred(
                 self.code,
                 detail="未提取到三公经费情况说明数值",
                 unresolved_reasons=["未提取到三公经费情况说明数值"],
             )
 
+        fact_ctx = getattr(doc, "fact_context", None)
         table_page, table_values = _find_three_public_table(doc)
         if table_values is None:
-            raise RuleDeferred(
-                self.code,
-                detail="未定位到三公经费表格数值",
-                unresolved_reasons=["未定位到三公经费表格数值"],
-            )
+            if is_budget and fact_ctx is not None:
+                # 事实表可独立提供带身份的操作数；部分原生/表格解析失败时
+                # 继续事实检查，剩余缺项仍以 insufficient_data 留痕。
+                table_values = {
+                    key: None for key in ("total", "abroad", "reception", "car_total", "car_buy", "car_run")
+                }
+            else:
+                _record_missing_relations("三公表缺失或没有可解析数值")
+                raise RuleDeferred(
+                    self.code,
+                    detail="未定位到三公经费表格数值",
+                    unresolved_reasons=["未定位到三公经费表格数值"],
+                )
 
+        # 预算路径也优先消费同一批财政事实。事实已存在但被识别风险阻断时
+        # 不能回退到旧表格解析值，避免风险值被旧路径“洗成”确定结果。
+        fact_ids_by_key: Dict[str, str] = {}
+        fact_evidence_ids_by_key: Dict[str, List[str]] = {}
+        fact_blocked: List[str] = []
+        fact_blocked_by_key: Dict[str, str] = {}
+        if fact_ctx is not None and _infer_report_kind(doc) == "budget":
+            from src.engine.fact_context import resolve_operand
+
+            fact_subjects = {
+                "total": ("合计", "总计"),
+                "abroad": ("因公出国",),
+                "car_total": ("公务用车购置及运行",),
+                "car_buy": ("公务用车购置费",),
+                "car_run": ("公务用车运行费",),
+                "reception": ("公务接待费",),
+            }
+            for key, tokens in fact_subjects.items():
+                resolution = resolve_operand(
+                    fact_ctx,
+                    "budget",
+                    table_code="FIN_07_three_public",
+                    subject_tokens=tokens,
+                    report_year=getattr(fact_ctx, "fiscal_year", None),
+                    budget_stages=("年初预算", "预算"),
+                )
+                if resolution.status == "blocked":
+                    reason = f"三公{key}事实不可作操作数：{resolution.reason}"
+                    fact_blocked.append(reason)
+                    fact_blocked_by_key[key] = reason
+                    # Do not let the older parsed value replace a risk-blocked fact.
+                    table_values[key] = None
+                elif resolution.status == "ok" and resolution.value is not None:
+                    table_values[key] = float(resolution.value)
+                    if resolution.fact is not None:
+                        fact_ids_by_key[key] = resolution.fact.fact_uid
+                        fact_evidence_ids_by_key[key] = list(resolution.fact.evidence_ids or [])
         issues: List[Issue] = []
         unresolved_reasons: List[str] = []
-        labels = {
-            "total": "三公合计",
-            "abroad": "因公出国（境）费",
-            "reception": "公务接待费",
-            "car_total": "公务用车小计",
-            "car_buy": "公务用车购置费",
-            "car_run": "公务用车运行费",
-        }
-
-        for key in ("total", "abroad", "reception", "car_total", "car_buy", "car_run"):
+        incomplete_relations: List[str] = []
+        unresolved_reasons.extend(fact_blocked)
+        # 若预算表只列购置与运行两项，则按同表同单位合成法定公务用车小计；
+        # 明示的小计始终优先，且购置/运行仍单独核验。
+        car_total_from_components = False
+        if table_values.get("car_total") is None and all(
+            table_values.get(key) is not None for key in ("car_buy", "car_run")
+        ):
+            table_values["car_total"] = float(table_values["car_buy"]) + float(table_values["car_run"])
+            car_total_from_components = True
+        if narrative.get("car_total") is None and all(
+            narrative.get(key) is not None for key in ("car_buy", "car_run")
+        ):
+            narrative["car_total"] = float(narrative["car_buy"]) + float(narrative["car_run"])
+        for key in check_keys:
             nar = narrative.get(key)
             tab = table_values.get(key)
             if nar is None or tab is None:
-                unresolved_reasons.append(f"{labels[key]}分项说明或表格数值缺失")
+                missing_reason = f"{labels[key]}分项说明或表格数值缺失"
+                unresolved_reasons.append(missing_reason)
+                if key in {"total", "abroad", "reception", "car_total"} or key in fact_blocked_by_key:
+                    incomplete_relations.append(fact_blocked_by_key.get(key) or missing_reason)
                 _append_relation_receipt(
                     doc,
                     self.code,
                     f"san_gong:{key}:narrative_vs_table",
                     formula=f"narrative.{key} == table.{key} (万元)",
-                    status="not_applicable",
-                    incomplete_reason=f"{labels[key]}分项说明或表格数值未披露，无可比对操作数",
+                    status="insufficient_data",
+                    incomplete_reason=(
+                        fact_blocked_by_key.get(key)
+                        or f"{labels[key]}分项说明或表格数值未披露，无可比对操作数"
+                    ),
+                    operand_fact_ids=[fact_ids_by_key[key]] if key in fact_ids_by_key else [],
                     tolerance=_portable_amount_tolerance(),
                 )
                 continue
@@ -731,6 +1063,7 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
                     f"san_gong:{key}:narrative_vs_table",
                     formula=f"narrative.{key} == table.{key} (万元)",
                     status="pass",
+                    operand_fact_ids=[fact_ids_by_key[key]] if key in fact_ids_by_key else [],
                     tolerance=_portable_amount_tolerance(),
                 )
                 continue
@@ -747,6 +1080,9 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
                     {"page": table_page or 1},
                     severity,
                     evidence_text=f"narrative={nar}, table={tab}, field={label}",
+                    check_relation_id=f"{self.code}:san_gong:{key}:narrative_vs_table",
+                    fact_ids=[fact_ids_by_key[key]] if key in fact_ids_by_key else [],
+                    evidence_ids=fact_evidence_ids_by_key.get(key, []),
                 )
             )
             _append_relation_receipt(
@@ -755,44 +1091,178 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
                 f"san_gong:{key}:narrative_vs_table",
                 formula=f"narrative.{key} == table.{key} (万元)",
                 status="fail",
+                operand_fact_ids=[fact_ids_by_key[key]] if key in fact_ids_by_key else [],
                 tolerance=_portable_amount_tolerance(),
             )
 
-        nar_car_total = narrative.get("car_total")
-        nar_car_buy = narrative.get("car_buy")
-        nar_car_run = narrative.get("car_run")
-        if (
-            nar_car_total is not None
-            and nar_car_buy is not None
-            and nar_car_run is not None
-            and not _close(nar_car_total, nar_car_buy + nar_car_run)
-        ):
-            issues.append(
-                self._issue(
-                    "三公文字说明内部勾稽不一致：公车小计≠购置费+运行费",
-                    {"page": table_page or 1},
-                    "warn",
-                    evidence_text=(
-                        f"car_total={nar_car_total}, car_buy={nar_car_buy}, car_run={nar_car_run}"
-                    ),
+        for side, values in (("narrative", narrative), ("table", table_values)):
+            relation_id = f"{self.code}:san_gong:{side}_car_total_balance"
+            subtotal, purchase, operation = (
+                values.get("car_total"), values.get("car_buy"), values.get("car_run")
+            )
+            operand_ids: List[str] = []
+            evidence_ids: List[str] = []
+            if side == "table":
+                component_keys = (
+                    ("car_buy", "car_run")
+                    if car_total_from_components else ("car_total", "car_buy", "car_run")
                 )
+                for key in component_keys:
+                    if fact_ids_by_key.get(key):
+                        operand_ids.append(fact_ids_by_key[key])
+                        evidence_ids.extend(fact_evidence_ids_by_key.get(key, []))
+            if subtotal is None or purchase is None or operation is None:
+                reason = f"{side}缺少公车小计、购置费或运行费操作数"
+                blocked_reasons = [
+                    fact_blocked_by_key[key]
+                    for key in ("car_total", "car_buy", "car_run")
+                    if side == "table" and fact_blocked_by_key.get(key)
+                ]
+                blocked = bool(blocked_reasons)
+                _append_relation_receipt(
+                    doc, self.code, f"san_gong:{side}_car_total_balance",
+                    formula="car_total == car_buy + car_run (万元)",
+                    status="insufficient_data" if blocked else "not_applicable",
+                    incomplete_reason=("；".join(blocked_reasons) or reason) if blocked else "未同时披露公车小计、购置费和运行费",
+                    operand_fact_ids=operand_ids,
+                    tolerance=_portable_amount_tolerance(),
+                )
+                if blocked:
+                    incomplete_relations.append("；".join(blocked_reasons))
+                continue
+            balanced = _close(subtotal, purchase + operation, terms=2)
+            if not balanced:
+                issues.append(
+                    self._issue(
+                        f"三公{('文字说明' if side == 'narrative' else '预算表')}内部勾稽不一致：公车小计≠购置费+运行费",
+                        {"page": table_page or 1},
+                        "warn",
+                        evidence_text=(
+                            f"car_total={subtotal}, car_buy={purchase}, car_run={operation}"
+                        ),
+                        check_relation_id=relation_id,
+                        fact_ids=operand_ids,
+                        evidence_ids=list(dict.fromkeys(evidence_ids)),
+                    )
+                )
+            _append_relation_receipt(
+                doc, self.code, f"san_gong:{side}_car_total_balance",
+                formula="car_total == car_buy + car_run (万元)",
+                status="pass" if balanced else "fail",
+                operand_fact_ids=operand_ids,
+                tolerance=_portable_amount_tolerance(),
             )
 
-        # SYS-05（AC-04）：合计可比对不等于分项检查完成。分项关系
-        # （出国/公车小计/购置/运行/接待）全部缺操作数时整项转未完成，
-        # 已确认的合计侧问题以 partial_issues 保留。
-        sub_keys = ("abroad", "reception", "car_total", "car_buy", "car_run")
-        sub_completed = sum(
-            1
-            for key in sub_keys
-            if narrative.get(key) is not None and table_values.get(key) is not None
-        )
-        if sub_completed == 0:
+        if is_budget:
+            required_sum_keys = ("abroad", "car_total", "reception")
+            for side, values, relation_suffix in (
+                ("文字说明", narrative, "narrative_total_balance"),
+                ("预算表", table_values, "table_total_balance"),
+            ):
+                relation_id = f"{self.code}:san_gong:{relation_suffix}"
+                operands = ["total", *required_sum_keys]
+                missing = [key for key in operands if values.get(key) is None]
+                fact_operands: List[str] = []
+                sum_evidence_ids: List[str] = []
+                operand_sources: Dict[str, str] = {}
+                all_operands_fact_backed = side == "预算表"
+                if side == "预算表":
+                    for key in operands:
+                        if key == "car_total" and car_total_from_components and not fact_ids_by_key.get(key):
+                            component_keys = ("car_buy", "car_run")
+                        else:
+                            component_keys = (key,)
+                        role_fact_ids = [
+                            fact_ids_by_key[item]
+                            for item in component_keys
+                            if fact_ids_by_key.get(item)
+                        ]
+                        role_is_fact_backed = len(role_fact_ids) == len(component_keys)
+                        if role_is_fact_backed:
+                            operand_sources[key] = "fiscal_fact:" + "+".join(role_fact_ids)
+                        else:
+                            operand_sources[key] = "legacy_table"
+                            all_operands_fact_backed = False
+                        fact_operands.extend(
+                            role_fact_ids
+                        )
+                        for item in component_keys:
+                            sum_evidence_ids.extend(fact_evidence_ids_by_key.get(item, []))
+                else:
+                    all_operands_fact_backed = False
+                    operand_sources = {key: "narrative_text" for key in operands}
+                relation_provenance = {
+                    "required_operand_roles": operands,
+                    "operand_sources": operand_sources,
+                    "evaluation_basis": "fiscal_fact" if all_operands_fact_backed else "legacy_document",
+                    "fact_migration_status": "complete" if all_operands_fact_backed else "pending",
+                }
+                if missing:
+                    reason = f"{side}缺少三公合计或法定分项：{'、'.join(labels[key] for key in missing)}"
+                    _append_relation_receipt(
+                        doc,
+                        self.code,
+                        f"san_gong:{relation_suffix}",
+                        formula="total == abroad + car_total + reception (万元)",
+                        status="insufficient_data",
+                        incomplete_reason=reason,
+                        operand_fact_ids=fact_operands,
+                        tolerance=_portable_amount_tolerance(),
+                        **relation_provenance,
+                    )
+                    incomplete_relations.append(reason)
+                    continue
+                components = sum(float(values[key]) for key in required_sum_keys)
+                total = float(values["total"])
+                if _close(total, components, terms=len(required_sum_keys)):
+                    _append_relation_receipt(
+                        doc,
+                        self.code,
+                        f"san_gong:{relation_suffix}",
+                        formula="total == abroad + car_total + reception (万元)",
+                        status="pass",
+                        operand_fact_ids=fact_operands,
+                        tolerance=_portable_amount_tolerance(),
+                        **relation_provenance,
+                    )
+                    continue
+                issues.append(
+                    self._issue(
+                        f"三公经费{side}内部勾稽不一致：合计={total:.2f}万元，法定分项之和={components:.2f}万元",
+                        {"page": table_page or 1},
+                        "warn",
+                        evidence_text=f"total={total}; abroad={values['abroad']}; car_total={values['car_total']}; reception={values['reception']}",
+                        check_relation_id=relation_id,
+                        fact_ids=fact_operands,
+                        evidence_ids=sum_evidence_ids,
+                    )
+                )
+                _append_relation_receipt(
+                    doc,
+                    self.code,
+                    f"san_gong:{relation_suffix}",
+                    formula="total == abroad + car_total + reception (万元)",
+                    status="fail",
+                    operand_fact_ids=fact_operands,
+                    tolerance=_portable_amount_tolerance(),
+                    **relation_provenance,
+                )
+
+        # 三项法定分项（出国、公车、接待）都必须有双方操作数；金额差异可保留，
+        # 同时将缺字段关系留在未完成集合中。
+        required_keys = ("total", "abroad", "car_total", "reception")
+        missing_required = [
+            labels[key]
+            for key in required_keys
+            if narrative.get(key) is None or table_values.get(key) is None
+        ]
+        if missing_required or incomplete_relations:
+            incomplete_detail = incomplete_relations or missing_required
             raise RuleDeferred(
                 self.code,
-                detail=f"三公分项关系均未完成: {', '.join(unresolved_reasons[:5]) or '无可比分项操作数'}",
+                detail=f"三公必需分项关系未完成: {', '.join(incomplete_detail)}",
                 partial_issues=issues,
-                unresolved_reasons=unresolved_reasons or ["三公分项说明或表格数值缺失"],
+                unresolved_reasons=unresolved_reasons or [f"{key}说明或表格数值缺失" for key in missing_required],
             )
 
         return issues
@@ -811,12 +1281,13 @@ class CMM002_TextAnomalyRule(Rule):
     desc = "\u91cd\u590d\u8bcd/\u6807\u70b9\u5f02\u5e38\u68c0\u67e5\uff08\u9884/\u51b3\u7b97\u901a\u7528\uff09"
 
     def apply(self, doc: Document) -> List[Issue]:
-        issues: List[Issue] = []
-        duplicate_patterns: Sequence[Tuple[str, str]] = (
-            (r"\u9884\u7b97\u9884\u7b97", "\u7591\u4f3c\u91cd\u590d\u8bcd\uff1a\u201c\u9884\u7b97\u9884\u7b97\u201d"),
-            (r"\u51b3\u7b97\u51b3\u7b97", "\u7591\u4f3c\u91cd\u590d\u8bcd\uff1a\u201c\u51b3\u7b97\u51b3\u7b97\u201d"),
-            (r"\u8d22\u653f\u62e8\u6b3e\u8d22\u653f\u62e8\u6b3e", "\u7591\u4f3c\u91cd\u590d\u8bcd\uff1a\u201c\u8d22\u653f\u62e8\u6b3e\u8d22\u653f\u62e8\u6b3e\u201d"),
-        )
+        # \u6e05\u5355 D-02/D-03/D-04\uff082026-10-22 \u5168\u7cfb\u7edf\u9ed8\u8ba4\uff09\uff1a\u8bcd\u7ec4/\u5355\u5b57\u91cd\u590d\u3001\u6807\u70b9\u8fde\u7528\u3001
+        # \u82f1\u6587\u53e5\u70b9\u3001\u6587\u53f7\u683c\u5f0f\u4e0e\u62ec\u53f7\u914d\u5bf9\u3002\u539f\u6709\u201c\u9884\u7b97\u9884\u7b97/\u51b3\u7b97\u51b3\u7b97/\u8d22\u653f\u62e8\u6b3e\u8d22\u653f\u62e8\u6b3e\u201d
+        # \u4e09\u4e2a\u56fa\u5b9a\u8bcd\u5df2\u88ab\u901a\u7528\u91cd\u590d\u68c0\u6d4b\u8986\u76d6\u3002
+        from .checklist_text_rules import checklist_text_anomaly_issues
+
+        issues: List[Issue] = checklist_text_anomaly_issues(self, doc)
+        duplicate_patterns: Sequence[Tuple[str, str]] = ()
         punctuation_pattern = re.compile(r"[\u4e00-\u9fff],\s*[0-9]")
         abnormal_punctuation_patterns: Sequence[Tuple[re.Pattern[str], str]] = (
             (re.compile(r"\u3002{2,}"), "\u7591\u4f3c\u8fde\u7eed\u53e5\u53f7"),
@@ -842,6 +1313,11 @@ class CMM002_TextAnomalyRule(Rule):
                     )
 
             for match in punctuation_pattern.finditer(page_text):
+                # A standalone final line is commonly the printed page number.
+                # Do not reinterpret that footer as an amount after a soft wrap;
+                # an actual wrapped amount with its unit still passes this guard.
+                if "\n" in match.group(0) and re.fullmatch(r"[0-9]*\s*", page_text[match.end():]):
+                    continue
                 span = (match.start(), match.end())
                 if span in seen:
                     continue
@@ -1042,7 +1518,13 @@ class CMM004_CodeMirrorConsistency(Rule):
     code, severity = "CMM-004", "warn"
     desc = "\u6536\u5165/\u652f\u51fa\u603b\u8868\u7c7b\u6b3e\u9879\u7f16\u7801\u4e0e\u91d1\u989d\u955c\u50cf\u4e00\u81f4\u6027"
 
+    #: 口径决议⑤：决算同科目收入≠支出只作待人工复核提示的差额门槛。
+    _FINAL_REVIEW_MIN_WAN = Decimal("1")
+    _FINAL_REVIEW_MIN_SHARE = Decimal("0.10")
+
     def apply(self, doc: Document) -> List[Issue]:
+        if _infer_report_kind(doc) == "final":
+            return self._final_income_expense_review(doc)
         income, expense = _extract_code_amount_pairs(_page_texts(doc))
         if len(income) < 2 or len(expense) < 2:
             raise RuleDeferred(
@@ -1073,7 +1555,7 @@ class CMM004_CodeMirrorConsistency(Rule):
             )
 
         diffs = [
-            code for code in common if abs(income[code] - expense[code]) > 1e-6
+            code for code in common if not _close(income[code], expense[code])
         ]
         only_income = sorted(set(income) - set(expense))
         only_expense = sorted(set(expense) - set(income))
@@ -1125,11 +1607,97 @@ class CMM004_CodeMirrorConsistency(Rule):
 
         return issues
 
+    def _final_income_expense_review(self, doc: Document) -> List[Issue]:
+        """决算：同一功能科目收入决算表与支出决算表差额较大时提示人工复核。
+
+        决算同科目收入与支出可因结转结余合理不等，不存在镜像相等关系，
+        所以只在差额超过 max(1 万元, 10%) 时报 manual_review（口径决议⑤，
+        清单决算 B-10），不计入错误；只在最细一级报出，避免类/款/项重复。
+        """
+        from .fact_context import _canonical_budget_stage, operand_rejection_reason
+        from .native_table_arithmetic import table_facts
+
+        income_facts, blocked_in = table_facts(doc, "FIN_02_income")
+        expense_facts, blocked_out = table_facts(doc, "FIN_03_expenditure")
+        if blocked_in or blocked_out:
+            raise RuleNotApplicable(
+                self.code,
+                "决算同科目收入与支出可因结转结余不同，只做逐科目对照复核提示；"
+                f"收入/支出决算表事实不可用：{blocked_in or blocked_out}",
+            )
+        org_name = getattr(doc.fact_context, "org_name", None)
+
+        def by_code(facts):
+            picked: Dict[str, List[Any]] = {}
+            for fact in facts:
+                code = str(fact.subject_code or "")
+                if (fact.indicator != "total_actual" or not code.isdigit() or len(code) not in (3, 5, 7)
+                        or fact.normalized_value is None or fact.period not in (None, "本年")
+                        or _canonical_budget_stage(fact.budget_stage) != "决算"
+                        or operand_rejection_reason(fact, org_name)):
+                    continue
+                picked.setdefault(code, []).append(fact)
+            return {code: items[0] for code, items in picked.items() if len(items) == 1}
+
+        income, expense = by_code(income_facts), by_code(expense_facts)
+        flagged: Dict[str, Tuple[Any, Any, Decimal]] = {}
+        for code in sorted(set(income) & set(expense)):
+            inc = Decimal(str(income[code].normalized_value))
+            exp = Decimal(str(expense[code].normalized_value))
+            diff = abs(inc - exp)
+            if diff > max(self._FINAL_REVIEW_MIN_WAN, max(abs(inc), abs(exp)) * self._FINAL_REVIEW_MIN_SHARE):
+                flagged[code] = (income[code], expense[code], diff)
+
+        from .native_table_arithmetic import receipt
+        from .native_three_public_ratios import operand_ref
+
+        issues: List[Issue] = []
+        for code, (inc_fact, exp_fact, diff) in flagged.items():
+            if any(other != code and other.startswith(code) for other in flagged):
+                continue
+            facts = (inc_fact, exp_fact)
+            pages = sorted({ref.get("physical_page") for fact in facts
+                            for ref in (fact.extra_dims or {}).get("evidence_refs", [])
+                            if ref.get("physical_page")})
+            relation = f"final_income_expense:{code}"
+            fact_ids, evidence_ids = receipt(
+                self, doc, relation, list(facts), status="fail",
+                formula="收入决算表.本年收入合计 ≈ 支出决算表.本年支出合计（差额 > max(1万元, 10%) 提示复核）",
+            )
+            message = (
+                f"同一科目在收入决算表与支出决算表金额差异较大（{code} {inc_fact.subject_name or ''}）："
+                f"收入{inc_fact.normalized_value:.2f}万元、支出{exp_fact.normalized_value:.2f}万元，"
+                f"相差{diff:.2f}万元。可能因结转结余造成，请人工核对。"
+            )
+            issues.append(
+                self._issue(
+                    message,
+                    {"page": pages[0] if pages else None, "pages": pages, "subject_code": code,
+                     "table": "收入决算表↔支出决算表",
+                     "operand_refs": [
+                         {**operand_ref(fact, role), "operand_id": f"{code}:{role}",
+                          "relation_id": relation,
+                          "evidence_refs": list((fact.extra_dims or {}).get("evidence_refs", []))}
+                         for fact, role in ((inc_fact, "income"), (exp_fact, "expense"))
+                     ],
+                     "fact_context_version_token": getattr(doc.fact_context, "version_token", None)},
+                    "manual_review",
+                    evidence_text=message,
+                    check_relation_id=f"{self.code}:{relation}",
+                    fact_ids=fact_ids,
+                    evidence_ids=evidence_ids,
+                )
+            )
+        return issues
+
 
 _ZERO_INCREASE_PATTERN = re.compile(
     r"([一-龥]{0,24}?拨款支出预算)0(?:\.0+)?万元，比20\d{2}年预算增加([0-9][0-9,]*\.?[0-9]*)万元"
 )
-_ABNORMAL_DELTA_WORDING_PATTERN = re.compile(r"(增加|减少)持平")
+#: 方向矛盾词（清单 B-09 / D-07 / D-08）：“增加持平”“增加减少”“减增加”。
+_ABNORMAL_DELTA_WORDING_PATTERN = re.compile(
+    r"(?:增加|减少)持平|增加减少|减少增加|增长下降|下降增长|(?<![增])减增加|(?<![增])增减少"
+)
 _BUDGET_FINAL_DIRECTION_RE = re.compile(
     r"(?:^|[。；;\n])(?P<segment>[^。；;\n]{0,80}?"
     r"年初预算(?:数)?(?:为|是)?\s*(?P<budget>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元"
@@ -1155,7 +1723,7 @@ def _direction_from_word(word: str) -> Optional[str]:
 
 
 def _expected_budget_final_direction(budget: float, final: float) -> str:
-    if abs(final - budget) <= 0.01:
+    if _close(final, budget):
         return "flat"
     return "up" if final > budget else "down"
 
@@ -1387,12 +1955,16 @@ class CMM006_IncomeExpenseTrendConsistency(Rule):
 
 _CMM007_OBLIGATION_ID = "OBL-TREND-ZERO-BASE"
 
+# 指标本身也可能跨软换行，必须完整取名，不能只把“费”与别项的“费”绑定。
+# 只容忍指标字符之间的空白，不跨越标点及数字所界定的语义单元。
+_CMM007_INDICATOR = r"[一-龥（）“”](?:\s*[一-龥（）“”]){1,29}?"
+
 #: 同比变化语义单元：指标 (口径后缀)? (比20XX年度)? 方向词(幅/了)? 金额 单位，
 #: 同句读单元内再接 (增长|下降|提高|降低)X%。谓词与口径词字符间容忍 PDF
 #: 软换行（宜川原文「支出决算增\n加 0.3 万元，增长 100%」）。句读（。；）
 #: 不可跨越——三数必须同属一个语义单元，禁止跨句拼接。
 _CMM007_UNIT_RE = re.compile(
-    r"(?P<ind>[一-龥（）“”]{2,30}?)\s*"
+    rf"(?P<ind>{_CMM007_INDICATOR})\s*"
     r"(?:支\s*出\s*决\s*算\s*数|支\s*出\s*决\s*算|决\s*算\s*数|决\s*算|支\s*出|预\s*算)?"
     r"(?:\s*比\s*(?P<base_year>20\d{2})\s*年(?:度)?)?"
     r"\s*(?P<verb>增\s*加|减\s*少|增\s*长|下\s*降)(?:幅|了)?\s*"
@@ -1403,7 +1975,7 @@ _CMM007_UNIT_RE = re.compile(
 
 #: 同节本期金额披露：指标 (口径后缀)? (为|是)? 金额 单位。
 _CMM007_CURRENT_RE = re.compile(
-    r"(?P<ind>[一-龥（）“”]{2,30}?)\s*"
+    rf"(?P<ind>{_CMM007_INDICATOR})\s*"
     r"(?:支\s*出\s*决\s*算\s*数|支\s*出\s*决\s*算|决\s*算\s*数|决\s*算|支\s*出|预\s*算)?"
     r"(?:\s*(?:为|是))?\s*"
     r"(?P<amt>\d[\d,，.]*)\s*(?P<aunit>万\s*元|亿\s*元|元)"
@@ -1412,7 +1984,7 @@ _CMM007_CURRENT_RE = re.compile(
 #: 显式基期披露：上年/上年度/20XX年度 的指标金额。
 _CMM007_EXPLICIT_PRIOR_RE = re.compile(
     r"(?:上\s*年(?:度|同期)?|(?P<pyear>20\d{2})\s*年(?:度)?)\s*(?:的)?\s*"
-    r"(?P<ind>[一-龥（）“”]{2,30}?)\s*"
+    rf"(?P<ind>{_CMM007_INDICATOR})\s*"
     r"(?:支\s*出\s*决\s*算\s*数|支\s*出\s*决\s*算|决\s*算\s*数|决\s*算|支\s*出|预\s*算)?"
     r"(?:\s*(?:为|是))?\s*"
     r"(?P<amt>\d[\d,，.]*)\s*(?P<aunit>万\s*元|亿\s*元|元)"
@@ -1503,10 +2075,21 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
 
         issues: List[Issue] = []
         unresolved: List[str] = []
-        currents, priors = self._collect_amounts(merged, offsets, sections, year, unresolved)
+        # 允许指标内部软换行后，章节标题不能与下一行指标粘为一个长名称。
+        # 仅遮蔽已识别的标题，字符数不变，所有正文命中位置仍对应原页文本。
+        scan_chars = list(merged)
+        for title, start, _ in sections:
+            scan_chars[start:start + len(title)] = "。" * len(title)
+        scan_text = "".join(scan_chars)
+        currents, priors = self._collect_amounts(scan_text, offsets, sections, year, unresolved)
 
-        for match in _CMM007_UNIT_RE.finditer(merged):
+        for match in _CMM007_UNIT_RE.finditer(scan_text):
             canon = _cmm007_canon(match.group("ind"))
+            if canon and len(canon) < 2:
+                unresolved.append(
+                    f"同比指标「{canon}」仅有名称尾字，缺少完整业务身份，拒绝跨项取数（parse_ambiguity）"
+                )
+                continue
             section_title, section_start = _nar_repeat_section_of(sections, match.start())
             base_year = match.group("base_year")
             if base_year is not None and int(base_year) != year - 1:
@@ -1709,8 +2292,8 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
     ) -> Optional[Dict[str, Any]]:
         raw_ind = match.group("ind")
         canon = _cmm007_canon(raw_ind)
-        if not canon:
-            return None  # 归一后为空 = 纯口径/时间词，无业务项身份
+        if len(canon) < 2:
+            return None  # 纯口径/时间词或单字尾部均不足以独立确认业务项身份。
         amount = _cmm007_clean_amount(match.group("amt"))
         unit = _txt_fund_norm(match.group("aunit"))
         if _TXT_FUND_UNIT_TO_WAN.get(unit) is None:
@@ -2195,3 +2778,54 @@ ALL_COMMON_RULES: List[Rule] = [
     CMM007_ZeroBaseTrendRecompute(),
     R33DisclosurePercentUnit(),
 ]
+
+# 2026-10-22 检查点清单全系统默认（预/决算通用）：文字、结构、主体身份、内容与版面。
+from .checklist_text_rules import (  # noqa: E402
+    CMM008_TemplateResidue,
+    CMM009_TypoLexicon,
+    CMM010_AmountFormat,
+    CMM011_AmountUnitWan,
+    CMM012_YearExpression,
+)
+from .checklist_structure_rules import (  # noqa: E402
+    CMM013_TocHeadingAlignment,
+    CMM014_HeadingNumbering,
+    CMM015_PageIntegrity,
+    CMM016_VisualStyle,
+)
+from .checklist_identity_rules import (  # noqa: E402
+    CMM017_OrgNameConsistency,
+    CMM018_ScopeTerminology,
+    CMM019_CoverElements,
+)
+from .checklist_content_rules import (  # noqa: E402
+    CMM020_ShareSum,
+    CMM021_TableTitleNormative,
+    CMM022_SubjectCodeFormat,
+    CMM023_SectionTemplate,
+    CMM024_CompositionSum,
+    CMM025_PerformanceZeroCount,
+)
+from .checklist_final_rules import CMM026_EmptyNoteOnDataTable  # noqa: E402
+
+ALL_COMMON_RULES.extend([
+    CMM008_TemplateResidue(),
+    CMM009_TypoLexicon(),
+    CMM010_AmountFormat(),
+    CMM011_AmountUnitWan(),
+    CMM012_YearExpression(),
+    CMM013_TocHeadingAlignment(),
+    CMM014_HeadingNumbering(),
+    CMM015_PageIntegrity(),
+    CMM016_VisualStyle(),
+    CMM017_OrgNameConsistency(),
+    CMM018_ScopeTerminology(),
+    CMM019_CoverElements(),
+    CMM020_ShareSum(),
+    CMM021_TableTitleNormative(),
+    CMM022_SubjectCodeFormat(),
+    CMM023_SectionTemplate(),
+    CMM024_CompositionSum(),
+    CMM025_PerformanceZeroCount(),
+    CMM026_EmptyNoteOnDataTable(),
+])

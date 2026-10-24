@@ -19,6 +19,8 @@ from api.main import app  # noqa: E402
 #: 追加校正及反馈三条路由；其余接口继续保持冻结。
 FROZEN_ROUTES = frozenset(
     {
+        # R14-04：扫描管线协作取消的已登记接口；保留精确路由集合保护。
+        ("POST", "/api/jobs/{job_id}/cancel"),
         ("POST", "/api/documents/preflight"),
         ("POST", "/api/documents/upload"),
         ("POST", "/api/documents/{version_id}/run"),
@@ -35,8 +37,13 @@ FROZEN_ROUTES = frozenset(
         ("GET", "/api/jobs/{job_id}/review"),
         ("GET", "/api/jobs/{job_id}/evidence/{evidence_id}"),
         ("POST", "/api/jobs/{job_id}/corrections"),
+        ("GET", "/api/jobs/{job_id}/correction-targets"),
         ("POST", "/api/jobs/{job_id}/feedback"),
         ("GET", "/api/jobs/{job_id}/structured-ingest"),
+        ("GET", "/api/jobs/{job_id}/fact-snapshot"),
+        ("GET", "/api/jobs/{job_id}/analysis-versions"),
+        ("GET", "/api/jobs/{job_id}/preserved-analyses"),
+        ("GET", "/api/jobs/{job_id}/preserved-analyses/{archive_id}/{filename}"),
         ("GET", "/api/jobs/{job_id}/org-suggestions"),
         ("DELETE", "/api/jobs/{job_id}"),
         ("POST", "/api/jobs/{job_id}/associate"),
@@ -49,6 +56,8 @@ FROZEN_ROUTES = frozenset(
         ("POST", "/api/jobs/batch-delete"),
         ("GET", "/api/files/{job_id}/source"),
         ("GET", "/api/files/{job_id}/preview"),
+        # 证据框坐标换算（MediaBox 原点非零的 PDF），只读。
+        ("GET", "/api/files/{job_id}/page-geometry"),
         ("GET", "/api/organizations"),
         ("GET", "/api/organizations/list"),
         ("POST", "/api/organizations"),
@@ -122,6 +131,11 @@ MATERIAL_LEDGER_ROUTES = frozenset(
         ("GET", "/api/materials/slots/{slot_id}/versions"),
         ("GET", "/api/materials/slots/{slot_id}/runs"),
         ("GET", "/api/materials/search"),
+        ("GET", "/api/materials/reports"),
+        ("GET", "/api/materials/reports/{slot_id}/history"),
+        ("GET", "/api/materials/expected/template"),
+        ("POST", "/api/materials/expected/preview"),
+        ("POST", "/api/materials/expected/import"),
     }
 )
 
@@ -135,15 +149,27 @@ def test_material_http_route_surface_is_exactly_the_planned_set():
     复核生命周期（WP3）、应收基线（WP9）的接口**不在本轮范围内**，
     多出来就会被这条测试拦住。
     """
-    actual = {row for row in _route_surface() if "/materials" in row[1]}
+    # 主管端也包含 /materials 子路径，但不属于材料台账的接口族。
+    actual = {row for row in _route_surface() if row[1].startswith("/api/materials/")}
     assert actual == MATERIAL_LEDGER_ROUTES, (
         f"材料台账接口面与计划不一致：多了 {sorted(actual - MATERIAL_LEDGER_ROUTES)}；"
         f"少了 {sorted(MATERIAL_LEDGER_ROUTES - actual)}"
     )
     assert all(
-        method == "GET" for method, _ in actual
-    ), "本轮的材料接口全部是只读 GET：写入路径属于 WP3/WP9"
-    assert len(actual) == 8
+        method == "GET" for method, path in actual if "/expected/" not in path
+    ), "既有台账接口仍为只读；WP9 写入仅限已登记的 expected 路径"
+    assert len(actual) == 13
+
+
+def test_supervision_http_route_surface_is_registered():
+    actual = {row for row in _route_surface() if row[1].startswith("/api/supervision")}
+    assert actual == {
+        ("GET", "/api/supervision"),
+        ("POST", "/api/supervision/baselines"),
+        ("GET", "/api/supervision/materials/{slot_id}"),
+        ("POST", "/api/supervision/materials/{slot_id}/rounds"),
+        ("POST", "/api/supervision/materials/{slot_id}/rounds/{round_id}/verify"),
+    }
 
 
 # ==== 入库集成只做加法，且可关闭 ============================================

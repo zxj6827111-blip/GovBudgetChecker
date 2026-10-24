@@ -1,0 +1,15 @@
+{
+  "schema_version": "gbc.current-ingest-query.v1",
+  "job_id": null,
+  "analysis_revision": null,
+  "parse_run_id": null,
+  "document_version_id": null,
+  "source_sha256": null,
+  "query_timestamp": null,
+  "facts_count": null,
+  "evidence_count": null,
+  "original_database_rows": {"path": null, "sha256": null},
+  "correction_ledger": {"path": null, "sha256": null},
+  "fact_context": {"path": null, "sha256": null},
+  "corrected_fact_rows": []
+}

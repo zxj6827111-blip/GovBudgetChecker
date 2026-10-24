@@ -33,3 +33,37 @@
 - 历史导入会把可确认的封面年度、材料类型和自动匹配机构写入迁移审计字段；原先标记为 `manual` 或 `confirmed` 的机构、年度和类型不会被自动覆盖。发生冲突时写入 `historical_metadata_correction` 和 `metadata_reanalysis_required=true`，必须在人工确认后重新分析，旧规则结果不会被伪装成新结果。
 - `--apply` 输出 `failed_job_ids`。只要有任务或工作流镜像失败，进程以非零退出；发布或迁移验收应以该字段为空为准。
 - 数据库可用但原始上传目录丢失时，持久化任务列表接口仍可用于检索任务与结果；恢复原 PDF 页面预览则仍需要同步恢复 `UPLOAD_DIR` 卷。
+
+## 2026-10-07 恢复范围补齐
+
+组织和用户的文件权威源不在 `UPLOAD_DIR` 内，不能仅用数据库镜像恢复：
+`ORG_DATA_DIR/organizations.json`、`ORG_DATA_DIR/job_org_links.json` 和
+`USER_FILE`（默认 `USER_DATA_DIR/users.json`）现在随同备份写入
+`application-state.tar.gz`。组织目录读写通过跨进程锁、磁盘版本刷新和原子替换协调，
+避免 API 新建组织后 Worker 仍使用旧目录，或并发任务关联互相覆盖。
+
+完整恢复须同时指定四项目标，例如：
+
+```bash
+.venv/bin/python scripts/backup_all.py restore --archive /absolute/path/archive \
+  --uploads-dir /temporary/restore/uploads \
+  --database-url "$RECOVERY_DATABASE_URL" \
+  --audit-log /temporary/restore/audit.jsonl \
+  --state-dir /temporary/restore/state
+```
+
+重启时把 `UPLOAD_DIR`、`DATABASE_URL`、`AUDIT_LOG_PATH` 指向恢复目标，
+把 `ORG_DATA_DIR`、`USER_DATA_DIR` 指向 `state`；如设置了 `USER_FILE`，
+将其指向恢复的 `state/users.json`。部署密钥由原有安全配置单独提供，
+不写入备份清单或验收报告。只恢复某一构件属于部分恢复，不能宣布完整恢复。
+
+备份前暂停写入或使用一致性快照；本轮演练先停止一次性 API、Worker 和前端，
+再备份、校验并恢复到另一个临时数据库和空目录。恢复前校验构件哈希，
+拒绝路径穿越、链接和特殊成员；上传和应用状态目标拒绝覆盖已有内容。
+备份目录默认权限为 `0700`，构件及包含密码哈希的应用状态文件为 `0600`。
+旧备份缺少应用状态时必须明确补齐，不能把启动时重新创建账号当作恢复成功。
+
+本轮原始演练记录在 `outputs/completion_20261007_round17/extended_preflight_v5/`。
+检查覆盖全部数据库表的行数/有序 JSON 摘要、全部上传文件 SHA、审计 SHA、
+应用状态 SHA、重启登录、组织加载、阻塞复核状态及四格式导出 SHA。
+更大真实材料批次的最终演练记录以第十七轮报告所引用的最终回执为准。

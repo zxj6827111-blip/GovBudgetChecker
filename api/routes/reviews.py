@@ -51,6 +51,8 @@ from src.schemas.review_lifecycle import (
 from src.services import review_context_query, review_lifecycle_service
 from src.services.audit_log import append_audit_event
 from src.services.material_detail_query_service import MaterialDetailQueryService
+from src.schemas.review_worklist import ReviewWorklistResponse
+from src.services.review_worklist_service import load_review_worklist
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +90,9 @@ def _job_access_ok(user: Any, job_uuid: str) -> bool:
     if not normalized:
         return True
     try:
-        payload = runtime.get_job_status_payload(normalized)
+        # 复核清单会对每份材料调用一次：只取授权字段并按状态文件签名缓存，
+        # 不再每次解析整份 status.json（单个可达数 MB）。
+        payload = runtime.get_job_access_context(normalized)
     except HTTPException:
         return False
     return user_can_access_job(user, payload)
@@ -194,6 +198,21 @@ async def _require_slot_readable(user: Any, slot_id: str) -> None:
         )
 
     await _with_connection(_load)
+
+
+@router.get("/api/reviews/worklist", response_model=ReviewWorklistResponse)
+async def get_review_worklist(request: Request) -> ReviewWorklistResponse:
+    """一级人工复核入口：同时按材料范围与当前分析任务授权，浏览无写入。"""
+    from api.routes.jobs import list_jobs
+
+    _, _, user = require_login(request)
+    scope = material_access.build_access_scope(user)
+    jobs = await list_jobs(request, limit=None, offset=0)
+    data = await _with_connection(lambda conn: load_review_worklist(
+        conn, jobs=jobs, visible_org_ids=scope.visible_org_ids,
+        job_accessible=lambda job_id: _job_access_ok(user, job_id), viewer=_actor(user),
+    ))
+    return ReviewWorklistResponse(data=data)
 
 
 @router.get("/api/reviews/{slot_id}", response_model=ReviewLifecycleResponse)

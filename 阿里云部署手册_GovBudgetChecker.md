@@ -14,8 +14,8 @@
 * **22** 端口：SSH 远程登录必需。
 * **80** 端口：HTTP Web 服务（如使用 Nginx 反代 frontend）。
 * **443** 端口：HTTPS 访问（推荐生产使用）。
-* *(可选但在调试期推荐)* **3000** 端口：Frontend 直接访问端口。
-* *(可选但在调试期推荐)* **8000** 端口：Backend API 直接访问端口。
+* *(可选但在调试期推荐)* **3001** 端口：Docker Frontend 直接访问端口。
+* *(可选但在调试期推荐)* **18743** 端口：Backend API 默认宿主机访问端口（可用 `GOVBUDGET_BACKEND_PORT` 修改；容器内仍为 8000）。
 * *(可选但在调试期推荐)* **9009** 端口：AI-Extractor 监控端口。
 
 ---
@@ -111,46 +111,52 @@ mkdir -p data logs samples uploads
 ## 第四阶段：一键启动与部署验证
 
 ### 1. 构建并启动容器
-GovBudgetChecker 整体架构拆分成了 `postgres`、`ai-extractor`、`backend`、`worker`、`frontend`，
-分别定义在 `docker-compose.yml`（postgres）与 `docker-compose.ai.yml`（其余四个）中，部署时两份文件一起用。
+默认完整服务栈为 `postgres`、`ocr`、`backend`、`worker`、`frontend`，
+统一定义在 `docker-compose.yml`。系统设置中配置的大模型直接调用其 API；
+仅需要独立 AI 抽取器时才叠加 `docker-compose.ai.yml`。
 其中 `backend` 只入队（`JOB_QUEUE_ROLE=api`）、`worker` 负责消费队列（`JOB_QUEUE_ROLE=worker`），
 两者共享同一个 `uploads` 卷；缺了 `worker`，任务只会一直停在 `queued`。
 
 请在项目根目录（`/opt/GovBudgetChecker`）运行：
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.ai.yml build
-docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d
+bash scripts/start-server.sh
 ```
+首次部署须填写 `.env` 的数据库、会话密钥和管理员配置，并将完整离线 OCR 模型包
+放到 `models/`，将 `models/MANIFEST.sha256` 的 SHA-256 填入 `OCR_MODEL_FINGERPRINT`。
+启动入口等待数据库、OCR、Worker 与前端就绪后才报告成功。
+只检查配置使用 `bash scripts/start-server.sh --check`；使用已有镜像可加 `--no-build`。
+需要独立 AI 抽取器时使用 `bash scripts/start-server.sh --ai`。
 *注：由于是在国内阿里云服务器部署，如果你未配置 Docker 国内加速镜像源，`build` 过程下载 python/node 的基础镜像可能会稍慢，请耐心等待。*
 
 ### 2. 查看容器状态和日志
 观察所有容器是否都是 `Up` (或者 `healthy`) 状态：
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.ai.yml ps
+docker compose -f docker-compose.yml ps
 ```
 
 检查 `backend` 的运行日志（非常重要，它是核心业务）：
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.ai.yml logs -f backend
+docker compose -f docker-compose.yml logs -f backend worker
 ```
-> 如果没看到崩溃重启或者报错信息，说明后端已成功连上 AI 提取器并启动完毕。
+> 应结合 `healthy` 状态及 `/ready` 验证依赖，不能仅凭没有报错日志判断就绪。
 
 ### 3. 可用性冒烟测试
 可以直接在服务器上请求一下本地的健康检查接口验证服务连通性：
 ```bash
 # 测试后端健康状态
-curl -sS http://localhost:8000/health
+curl -fsS http://localhost:18743/ready
 
 # 测试前端连通性
-curl -I http://localhost:3000
+curl -fsS http://localhost:3001/api/health
 ```
-如果都返回正常的 200 代码，说明核心系统已经正式跑起来了。
+返回 200 表示当前核心服务链路就绪；业务效果仍需上传实际材料验证。
 
 ---
 
 ## 第五阶段：生产级优化 (可选，但极度推荐)
 
-由于通过 Docker 我们暴露了 3000 和 8000 端口，生产环境下直接让用户打 IP:3000 非常不优雅而且不够安全。推荐在一台服务器上部署 **Nginx** 作为主入口并配置域名 HTTPS。
+网页宿主机端口为 `3001`，后端宿主机端口为 `18743`。需要域名访问时，可以部署
+**Nginx** 作为主入口并配置 HTTPS；数据库的 `5432` 只绑定本机。
 
 ### 1. 安装 Nginx
 ```bash
@@ -171,7 +177,7 @@ server {
 
     # 代理到前端页面
     location / {
-        proxy_pass http://127.0.0.1:3000;
+        proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -182,7 +188,7 @@ server {
     # （可选）代理到后端API，假如前端是同一个域名，API可以放在 /api/ 下路由
     # 需要注意在之前前端的环境变量里配置好外部调用的正确路径。
     # location /api/ {
-    #     proxy_pass http://127.0.0.1:8000/api/;
+    #     proxy_pass http://127.0.0.1:18743/api/;
     #     proxy_set_header Host $host;
     # }
 }

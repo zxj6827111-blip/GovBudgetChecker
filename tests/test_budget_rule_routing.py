@@ -34,6 +34,7 @@ from src.engine.common_rules import (
     CMM006_IncomeExpenseTrendConsistency,
 )
 from src.engine.rules_v33 import Issue, build_document
+from src.engine.rule_outcome import RuleDeferred
 from src.schemas.issues import AnalysisConfig, JobContext
 from src.services import engine_rule_runner as runner_mod
 
@@ -673,7 +674,12 @@ def test_common_three_public_narrative_rule_detects_run_fee_mismatch() -> None:
         filesize=100,
     )
 
-    issues = CMM001_ThreePublicNarrativeConsistency().apply(doc)
+    try:
+        issues = CMM001_ThreePublicNarrativeConsistency().apply(doc)
+    except RuleDeferred as deferred:
+        # The mismatch remains visible as a partial finding, while the missing
+        # legally required abroad category correctly keeps CMM-001 unresolved.
+        issues = deferred.partial_issues
 
     assert issues
     assert any(

@@ -6,6 +6,7 @@ import { apiBase } from "@/lib/apiBase";
 import { backendAuthHeaders } from "@/lib/backendAuth";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { readLocalSession, readSessionToken } from "@/lib/localAuthSession";
+import { rateLimitedResponse } from "@/lib/routeAuth";
 
 type AdminAccessSuccess = {
   ok: true;
@@ -27,6 +28,12 @@ function failure(detail: string, status: number): AdminAccessFailure {
   };
 }
 
+class BackendRateLimited extends Error {
+  constructor(readonly retryAfter: string | null) {
+    super("backend rate limited");
+  }
+}
+
 async function readBackendUser(sessionToken: string): Promise<{ username?: string; is_admin?: boolean } | null> {
   const response = await fetchWithTimeout(
     `${apiBase}/api/auth/me`,
@@ -39,6 +46,10 @@ async function readBackendUser(sessionToken: string): Promise<{ username?: strin
     },
     5000,
   );
+  if (response.status === 429) {
+    // 限流不等于会话失效：报未登录会让前端把用户踢回登录页。
+    throw new BackendRateLimited(response.headers.get("Retry-After"));
+  }
   if (!response.ok) {
     return null;
   }
@@ -81,7 +92,10 @@ export async function requireAdminAccess(options?: { adminOnly?: boolean }): Pro
       actor: backendUser.username || "backend-user",
       isAdmin,
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof BackendRateLimited) {
+      return { ok: false, response: rateLimitedResponse(error.retryAfter) };
+    }
     return failure("session validation unavailable", 503);
   }
 }

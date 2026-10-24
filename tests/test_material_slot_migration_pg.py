@@ -1462,10 +1462,19 @@ def _patch_smoke_pipeline(monkeypatch, *, parser_error: Optional[BaseException] 
         def __init__(self, _conn):
             pass
 
-        async def parse_pdf(self, _path, _version_id):
+        def build_parse_artifact(self, _path, *, config_fingerprint=None):
+            from src.schemas.parse_artifact import ParseArtifact
+            from src.services.pdf_parser import PARSER_FINGERPRINT
+
             calls["parse"] += 1
             if parser_error is not None:
                 raise parser_error
+            return ParseArtifact(
+                source_file_hash="", parser_fingerprint=PARSER_FINGERPRINT,
+                config_fingerprint=config_fingerprint or "",
+            )
+
+        async def persist_artifact_to_legacy_tables(self, _version_id, _artifact):
             return {"success": True, "tables_count": 1, "unknown_tables": []}
 
     class _Recognizer:
@@ -1646,4 +1655,3 @@ async def test_run_structured_ingest_rerun_reuses_single_slot_on_real_db(
             "SELECT COUNT(*) FROM material_slots WHERE current_document_version_id = $1",
             version_id,
         ) == 1
-

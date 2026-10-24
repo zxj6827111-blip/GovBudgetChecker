@@ -2,6 +2,10 @@
 
 Runtime checks import these constants instead of copying tolerances into each
 checker. Amounts are in 万元 and percentages are compared in percentage points.
+
+2026-10-22 口径决议①：普陀预决算检查点清单作为全系统检查指标，金额政策
+容差由 0.5 万元收紧为 0.01 万元；显示舍入包络照旧保留（判定阈值取二者
+较大值）。见 docs/PUTUO_CHECKLIST_GAP_ANALYSIS_20261022.md §2。
 """
 
 from __future__ import annotations
@@ -10,7 +14,7 @@ from decimal import Decimal
 from typing import Any, Optional, Tuple
 
 PORTABLE_RULE_POLICY_VERSION = "v3_3_portable"
-AMOUNT_TOLERANCE_WAN = Decimal("0.5")
+AMOUNT_TOLERANCE_WAN = Decimal("0.01")
 PERCENTAGE_POINT_TOLERANCE = Decimal("0.1")
 
 

@@ -1,0 +1,2728 @@
+[
+  {
+    "filename": "SH2024_01_continuation.pdf",
+    "kind": "continuation",
+    "source_doc_id": "SH2024_01",
+    "source_pdf_sha256": "1231769e53b25841b6e2d77c16d9381b9529a7242cdf0e40007fb647d34145ec",
+    "fixture_sha256": "40f6156a068b3f87fbf93c9b01761efe5801bc976c805737391883b609d17dec",
+    "source_pages": [
+      17,
+      18
+    ],
+    "expected": [
+      {
+        "truth_id": "SH2024_01:00833",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          335.8800048828125,
+          76.51995086669922,
+          349.79412841796875,
+          83.49079895019531
+        ],
+        "raw_text": "7.49",
+        "expected": {
+          "subject_code": "21505",
+          "subject_name": "工业和信息产业监管",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00834",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          410.8800048828125,
+          76.51995086669922,
+          424.79412841796875,
+          83.49079895019531
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "21505",
+          "subject_name": "工业和信息产业监管",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00835",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          487.44000244140625,
+          76.51995086669922,
+          501.3541259765625,
+          83.49079895019531
+        ],
+        "raw_text": "7.49",
+        "expected": {
+          "subject_code": "21505",
+          "subject_name": "工业和信息产业监管",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00836",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          335.8800048828125,
+          91.63895416259766,
+          349.79412841796875,
+          98.60980224609375
+        ],
+        "raw_text": "6.20",
+        "expected": {
+          "subject_code": "2150517",
+          "subject_name": "产业发展",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00837",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          410.8800048828125,
+          91.63895416259766,
+          424.79412841796875,
+          98.60980224609375
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2150517",
+          "subject_name": "产业发展",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00838",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          487.44000244140625,
+          91.63895416259766,
+          501.3541259765625,
+          98.60980224609375
+        ],
+        "raw_text": "6.20",
+        "expected": {
+          "subject_code": "2150517",
+          "subject_name": "产业发展",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00839",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          335.8800048828125,
+          106.75995635986328,
+          349.79412841796875,
+          113.73080444335938
+        ],
+        "raw_text": "1.29",
+        "expected": {
+          "subject_code": "2150599",
+          "subject_name": "其他工业和信息产业监管支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00840",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          410.8800048828125,
+          106.75995635986328,
+          424.79412841796875,
+          113.73080444335938
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2150599",
+          "subject_name": "其他工业和信息产业监管支出",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00841",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          487.44000244140625,
+          106.75995635986328,
+          501.3541259765625,
+          113.73080444335938
+        ],
+        "raw_text": "1.29",
+        "expected": {
+          "subject_code": "2150599",
+          "subject_name": "其他工业和信息产业监管支出",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00842",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          318.3590087890625,
+          121.87995147705078,
+          349.7919616699219,
+          128.85079956054688
+        ],
+        "raw_text": "16,153.66",
+        "expected": {
+          "subject_code": "221",
+          "subject_name": "住房保障支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00843",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          393.3590087890625,
+          121.87995147705078,
+          424.7919616699219,
+          128.85079956054688
+        ],
+        "raw_text": "16,153.66",
+        "expected": {
+          "subject_code": "221",
+          "subject_name": "住房保障支出",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00844",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          487.44000244140625,
+          121.87995147705078,
+          501.3541259765625,
+          128.85079956054688
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "221",
+          "subject_name": "住房保障支出",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00845",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          318.3590087890625,
+          136.9999542236328,
+          349.7919616699219,
+          143.97079467773438
+        ],
+        "raw_text": "16,153.66",
+        "expected": {
+          "subject_code": "22102",
+          "subject_name": "住房改革支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00846",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          393.3590087890625,
+          136.9999542236328,
+          424.7919616699219,
+          143.97079467773438
+        ],
+        "raw_text": "16,153.66",
+        "expected": {
+          "subject_code": "22102",
+          "subject_name": "住房改革支出",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00847",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          487.44000244140625,
+          136.9999542236328,
+          501.3541259765625,
+          143.97079467773438
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "22102",
+          "subject_name": "住房改革支出",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00848",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          321.8399963378906,
+          152.1199493408203,
+          349.7932434082031,
+          159.09078979492188
+        ],
+        "raw_text": "7,606.75",
+        "expected": {
+          "subject_code": "2210201",
+          "subject_name": "住房公积金",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00849",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          396.8399963378906,
+          152.1199493408203,
+          424.7932434082031,
+          159.09078979492188
+        ],
+        "raw_text": "7,606.75",
+        "expected": {
+          "subject_code": "2210201",
+          "subject_name": "住房公积金",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00850",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          487.44000244140625,
+          152.1199493408203,
+          501.3541259765625,
+          159.09078979492188
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2210201",
+          "subject_name": "住房公积金",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00851",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          321.8399963378906,
+          167.1199493408203,
+          349.7932434082031,
+          174.09078979492188
+        ],
+        "raw_text": "8,546.91",
+        "expected": {
+          "subject_code": "2210203",
+          "subject_name": "购房补贴",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00852",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          396.8399963378906,
+          167.1199493408203,
+          424.7932434082031,
+          174.09078979492188
+        ],
+        "raw_text": "8,546.91",
+        "expected": {
+          "subject_code": "2210203",
+          "subject_name": "购房补贴",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00853",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          487.44000244140625,
+          167.1199493408203,
+          501.3541259765625,
+          174.09078979492188
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2210203",
+          "subject_name": "购房补贴",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00854",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          314.8800048828125,
+          182.23895263671875,
+          349.79266357421875,
+          189.2097930908203
+        ],
+        "raw_text": "291,858.57",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00855",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          389.8800048828125,
+          182.23895263671875,
+          424.79266357421875,
+          189.2097930908203
+        ],
+        "raw_text": "108,158.96",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_01:00856",
+        "page": 2,
+        "source_page": 18,
+        "bbox": [
+          466.44000244140625,
+          182.23895263671875,
+          501.3526611328125,
+          189.2097930908203
+        ],
+        "raw_text": "183,699.61",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      }
+    ]
+  },
+  {
+    "filename": "SH2024_14_continuation.pdf",
+    "kind": "continuation",
+    "source_doc_id": "SH2024_14",
+    "source_pdf_sha256": "c648a732eb055d2fcf3f4abacb4aca32de8cf91e577e8f55d13de81463ae2bad",
+    "fixture_sha256": "37a929850011959a78a091ef883b273ae6d280e1e47d3919dbfa982ce99e7c60",
+    "source_pages": [
+      19,
+      20
+    ],
+    "expected": [
+      {
+        "truth_id": "SH2024_14:01025",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          328.79998779296875,
+          76.51396942138672,
+          349.67352294921875,
+          83.46397399902344
+        ],
+        "raw_text": "106.15",
+        "expected": {
+          "subject_code": "2130199",
+          "subject_name": "其他农业农村支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01026",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          407.3999938964844,
+          76.51396942138672,
+          424.7938232421875,
+          83.46397399902344
+        ],
+        "raw_text": "99.99",
+        "expected": {
+          "subject_code": "2130199",
+          "subject_name": "其他农业农村支出",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01027",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          487.44000244140625,
+          76.51396942138672,
+          501.3541259765625,
+          83.46397399902344
+        ],
+        "raw_text": "6.17",
+        "expected": {
+          "subject_code": "2130199",
+          "subject_name": "其他农业农村支出",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01028",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          314.8800048828125,
+          91.63297271728516,
+          349.79266357421875,
+          98.58297729492188
+        ],
+        "raw_text": "738,653.94",
+        "expected": {
+          "subject_code": "215",
+          "subject_name": "资源勘探工业信息等支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01029",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          393.3590087890625,
+          91.63297271728516,
+          424.7919616699219,
+          98.58297729492188
+        ],
+        "raw_text": "16,626.42",
+        "expected": {
+          "subject_code": "215",
+          "subject_name": "资源勘探工业信息等支出",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01030",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          466.44000244140625,
+          91.63297271728516,
+          501.3526611328125,
+          98.58297729492188
+        ],
+        "raw_text": "722,027.53",
+        "expected": {
+          "subject_code": "215",
+          "subject_name": "资源勘探工业信息等支出",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01031",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          314.8800048828125,
+          106.75397491455078,
+          349.79266357421875,
+          113.7039794921875
+        ],
+        "raw_text": "704,965.04",
+        "expected": {
+          "subject_code": "21505",
+          "subject_name": "工业和信息产业监管",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01032",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          393.3590087890625,
+          106.75397491455078,
+          424.7919616699219,
+          113.7039794921875
+        ],
+        "raw_text": "12,735.29",
+        "expected": {
+          "subject_code": "21505",
+          "subject_name": "工业和信息产业监管",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01033",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          466.44000244140625,
+          106.75397491455078,
+          501.3526611328125,
+          113.7039794921875
+        ],
+        "raw_text": "692,229.75",
+        "expected": {
+          "subject_code": "21505",
+          "subject_name": "工业和信息产业监管",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01034",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          328.79998779296875,
+          121.87397003173828,
+          349.67352294921875,
+          128.823974609375
+        ],
+        "raw_text": "328.56",
+        "expected": {
+          "subject_code": "2150501",
+          "subject_name": "行政运行",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01035",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          410.8800048828125,
+          121.87397003173828,
+          424.79412841796875,
+          128.823974609375
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2150501",
+          "subject_name": "行政运行",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01036",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          480.4800109863281,
+          121.87397003173828,
+          501.3535461425781,
+          128.823974609375
+        ],
+        "raw_text": "328.56",
+        "expected": {
+          "subject_code": "2150501",
+          "subject_name": "行政运行",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01037",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          318.3590087890625,
+          136.9939727783203,
+          349.7919616699219,
+          143.9439697265625
+        ],
+        "raw_text": "17,693.93",
+        "expected": {
+          "subject_code": "2150502",
+          "subject_name": "一般行政管理事务",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01038",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          403.79998779296875,
+          136.9939727783203,
+          424.67352294921875,
+          143.9439697265625
+        ],
+        "raw_text": "215.32",
+        "expected": {
+          "subject_code": "2150502",
+          "subject_name": "一般行政管理事务",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01039",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          469.91900634765625,
+          136.9939727783203,
+          501.3519592285156,
+          143.9439697265625
+        ],
+        "raw_text": "17,478.61",
+        "expected": {
+          "subject_code": "2150502",
+          "subject_name": "一般行政管理事务",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01040",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          318.3590087890625,
+          152.1139678955078,
+          349.7919616699219,
+          159.06396484375
+        ],
+        "raw_text": "12,580.27",
+        "expected": {
+          "subject_code": "2150508",
+          "subject_name": "无线电及信息通信监管",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01041",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          396.8399963378906,
+          152.1139678955078,
+          424.7932434082031,
+          159.06396484375
+        ],
+        "raw_text": "1,647.88",
+        "expected": {
+          "subject_code": "2150508",
+          "subject_name": "无线电及信息通信监管",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01042",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          469.91900634765625,
+          152.1139678955078,
+          501.3519592285156,
+          159.06396484375
+        ],
+        "raw_text": "10,932.39",
+        "expected": {
+          "subject_code": "2150508",
+          "subject_name": "无线电及信息通信监管",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01043",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          314.8800048828125,
+          167.1139678955078,
+          349.79266357421875,
+          174.06396484375
+        ],
+        "raw_text": "674,052.67",
+        "expected": {
+          "subject_code": "2150517",
+          "subject_name": "产业发展",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01044",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          393.3590087890625,
+          167.1139678955078,
+          424.7919616699219,
+          174.06396484375
+        ],
+        "raw_text": "10,562.48",
+        "expected": {
+          "subject_code": "2150517",
+          "subject_name": "产业发展",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01045",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          466.44000244140625,
+          167.1139678955078,
+          501.3526611328125,
+          174.06396484375
+        ],
+        "raw_text": "663,490.19",
+        "expected": {
+          "subject_code": "2150517",
+          "subject_name": "产业发展",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01046",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          328.79998779296875,
+          182.23297119140625,
+          349.67352294921875,
+          189.18296813964844
+        ],
+        "raw_text": "309.61",
+        "expected": {
+          "subject_code": "2150550",
+          "subject_name": "事业运行",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01047",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          403.79998779296875,
+          182.23297119140625,
+          424.67352294921875,
+          189.18296813964844
+        ],
+        "raw_text": "309.61",
+        "expected": {
+          "subject_code": "2150550",
+          "subject_name": "事业运行",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01048",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          487.44000244140625,
+          182.23297119140625,
+          501.3541259765625,
+          189.18296813964844
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2150550",
+          "subject_name": "事业运行",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01049",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          318.3590087890625,
+          197.35397338867188,
+          349.7919616699219,
+          204.30397033691406
+        ],
+        "raw_text": "33,275.90",
+        "expected": {
+          "subject_code": "21508",
+          "subject_name": "支持中小企业发展和管理支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01050",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          396.8399963378906,
+          197.35397338867188,
+          424.7932434082031,
+          204.30397033691406
+        ],
+        "raw_text": "3,891.13",
+        "expected": {
+          "subject_code": "21508",
+          "subject_name": "支持中小企业发展和管理支出",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01051",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          469.91900634765625,
+          197.35397338867188,
+          501.3519592285156,
+          204.30397033691406
+        ],
+        "raw_text": "29,384.78",
+        "expected": {
+          "subject_code": "21508",
+          "subject_name": "支持中小企业发展和管理支出",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01052",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          318.3590087890625,
+          212.47396850585938,
+          349.7919616699219,
+          219.42396545410156
+        ],
+        "raw_text": "27,451.00",
+        "expected": {
+          "subject_code": "2150805",
+          "subject_name": "中小企业发展专项",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01053",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          410.8800048828125,
+          212.47396850585938,
+          424.79412841796875,
+          219.42396545410156
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2150805",
+          "subject_name": "中小企业发展专项",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01054",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          469.91900634765625,
+          212.47396850585938,
+          501.3519592285156,
+          219.42396545410156
+        ],
+        "raw_text": "27,451.00",
+        "expected": {
+          "subject_code": "2150805",
+          "subject_name": "中小企业发展专项",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01055",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          321.8399963378906,
+          227.59397888183594,
+          349.7932434082031,
+          234.54397583007812
+        ],
+        "raw_text": "5,824.90",
+        "expected": {
+          "subject_code": "2150899",
+          "subject_name": "其他支持中小企业发展和管理支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01056",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          396.8399963378906,
+          227.59397888183594,
+          424.7932434082031,
+          234.54397583007812
+        ],
+        "raw_text": "3,891.13",
+        "expected": {
+          "subject_code": "2150899",
+          "subject_name": "其他支持中小企业发展和管理支出",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01057",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          473.3999938964844,
+          227.59397888183594,
+          501.3532409667969,
+          234.54397583007812
+        ],
+        "raw_text": "1,933.78",
+        "expected": {
+          "subject_code": "2150899",
+          "subject_name": "其他支持中小企业发展和管理支出",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01058",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          328.79998779296875,
+          242.71397399902344,
+          349.67352294921875,
+          249.66397094726562
+        ],
+        "raw_text": "413.00",
+        "expected": {
+          "subject_code": "21599",
+          "subject_name": "其他资源勘探工业信息等支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01059",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          410.8800048828125,
+          242.71397399902344,
+          424.79412841796875,
+          249.66397094726562
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "21599",
+          "subject_name": "其他资源勘探工业信息等支出",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01060",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          480.4800109863281,
+          242.71397399902344,
+          501.3535461425781,
+          249.66397094726562
+        ],
+        "raw_text": "413.00",
+        "expected": {
+          "subject_code": "21599",
+          "subject_name": "其他资源勘探工业信息等支出",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01061",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          328.79998779296875,
+          257.7139892578125,
+          349.67352294921875,
+          264.6639709472656
+        ],
+        "raw_text": "413.00",
+        "expected": {
+          "subject_code": "2159999",
+          "subject_name": "其他资源勘探工业信息等支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01062",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          410.8800048828125,
+          257.7139892578125,
+          424.79412841796875,
+          264.6639709472656
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2159999",
+          "subject_name": "其他资源勘探工业信息等支出",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01063",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          480.4800109863281,
+          257.7139892578125,
+          501.3535461425781,
+          264.6639709472656
+        ],
+        "raw_text": "413.00",
+        "expected": {
+          "subject_code": "2159999",
+          "subject_name": "其他资源勘探工业信息等支出",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01064",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          321.8399963378906,
+          272.8329772949219,
+          349.7932434082031,
+          279.782958984375
+        ],
+        "raw_text": "4,725.55",
+        "expected": {
+          "subject_code": "221",
+          "subject_name": "住房保障支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01065",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          396.8399963378906,
+          272.8329772949219,
+          424.7932434082031,
+          279.782958984375
+        ],
+        "raw_text": "4,725.55",
+        "expected": {
+          "subject_code": "221",
+          "subject_name": "住房保障支出",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01066",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          487.44000244140625,
+          272.8329772949219,
+          501.3541259765625,
+          279.782958984375
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "221",
+          "subject_name": "住房保障支出",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01067",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          321.8399963378906,
+          287.9539794921875,
+          349.7932434082031,
+          294.9039611816406
+        ],
+        "raw_text": "4,725.55",
+        "expected": {
+          "subject_code": "22102",
+          "subject_name": "住房改革支出",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01068",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          396.8399963378906,
+          287.9539794921875,
+          424.7932434082031,
+          294.9039611816406
+        ],
+        "raw_text": "4,725.55",
+        "expected": {
+          "subject_code": "22102",
+          "subject_name": "住房改革支出",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01069",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          487.44000244140625,
+          287.9539794921875,
+          501.3541259765625,
+          294.9039611816406
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "22102",
+          "subject_name": "住房改革支出",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01070",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          321.8399963378906,
+          303.073974609375,
+          349.7932434082031,
+          310.0239562988281
+        ],
+        "raw_text": "3,213.44",
+        "expected": {
+          "subject_code": "2210201",
+          "subject_name": "住房公积金",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01071",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          396.8399963378906,
+          303.073974609375,
+          424.7932434082031,
+          310.0239562988281
+        ],
+        "raw_text": "3,213.44",
+        "expected": {
+          "subject_code": "2210201",
+          "subject_name": "住房公积金",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01072",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          487.44000244140625,
+          303.073974609375,
+          501.3541259765625,
+          310.0239562988281
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2210201",
+          "subject_name": "住房公积金",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01073",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          321.8399963378906,
+          318.1929931640625,
+          349.7932434082031,
+          325.1429748535156
+        ],
+        "raw_text": "1,512.11",
+        "expected": {
+          "subject_code": "2210203",
+          "subject_name": "购房补贴",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01074",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          396.8399963378906,
+          318.1929931640625,
+          424.7932434082031,
+          325.1429748535156
+        ],
+        "raw_text": "1,512.11",
+        "expected": {
+          "subject_code": "2210203",
+          "subject_name": "购房补贴",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01075",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          487.44000244140625,
+          318.1929931640625,
+          501.3541259765625,
+          325.1429748535156
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2210203",
+          "subject_name": "购房补贴",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01076",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          307.79998779296875,
+          333.3139953613281,
+          349.67205810546875,
+          340.26397705078125
+        ],
+        "raw_text": "1,342,363.79",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "total_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01077",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          393.3590087890625,
+          333.3139953613281,
+          424.7919616699219,
+          340.26397705078125
+        ],
+        "raw_text": "66,005.37",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "basic_actual",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01078",
+        "page": 2,
+        "source_page": 20,
+        "bbox": [
+          459.4800109863281,
+          333.3139953613281,
+          501.3520812988281,
+          340.26397705078125
+        ],
+        "raw_text": "1,276,358.44",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "project_actual",
+          "budget_stage": null
+        }
+      }
+    ]
+  },
+  {
+    "filename": "SH2024_04_balance.pdf",
+    "kind": "balance",
+    "source_doc_id": "SH2024_04",
+    "source_pdf_sha256": "e2b975db7e303787a11e75c7d811ffc403881768d5ddd6eedaa882c6514016ea",
+    "fixture_sha256": "ab37602b840a780946e8210142483ddc79175832a7aa260f2412f4ff9c66e45e",
+    "source_pages": [
+      25
+    ],
+    "expected": [
+      {
+        "truth_id": "SH2024_04:01044",
+        "page": 1,
+        "source_page": 25,
+        "bbox": [
+          310.79998779296875,
+          191.3990020751953,
+          328.8586120605469,
+          200.42601013183594
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_04:01046",
+        "page": 1,
+        "source_page": 25,
+        "bbox": [
+          724.7999877929688,
+          191.3990020751953,
+          742.8585815429688,
+          200.42601013183594
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_04:01047",
+        "page": 1,
+        "source_page": 25,
+        "bbox": [
+          310.79998779296875,
+          215.87799072265625,
+          328.8586120605469,
+          224.90499877929688
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "212",
+          "subject_name": "城乡社区支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_04:01052",
+        "page": 1,
+        "source_page": 25,
+        "bbox": [
+          724.7999877929688,
+          215.87799072265625,
+          742.8585815429688,
+          224.90499877929688
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "212",
+          "subject_name": "城乡社区支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_04:01053",
+        "page": 1,
+        "source_page": 25,
+        "bbox": [
+          310.79998779296875,
+          243.95899963378906,
+          328.8586120605469,
+          252.9860076904297
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "21213",
+          "subject_name": "城市基础设施配套费安排的支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_04:01058",
+        "page": 1,
+        "source_page": 25,
+        "bbox": [
+          724.7999877929688,
+          243.95899963378906,
+          742.8585815429688,
+          252.9860076904297
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "21213",
+          "subject_name": "城市基础设施配套费安排的支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_04:01059",
+        "page": 1,
+        "source_page": 25,
+        "bbox": [
+          310.79998779296875,
+          272.1590270996094,
+          328.8586120605469,
+          281.1860046386719
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2121301",
+          "subject_name": "城市公共设施",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_04:01064",
+        "page": 1,
+        "source_page": 25,
+        "bbox": [
+          724.7999877929688,
+          272.1590270996094,
+          742.8585815429688,
+          281.1860046386719
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2121301",
+          "subject_name": "城市公共设施",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      }
+    ]
+  },
+  {
+    "filename": "SH2024_09_balance.pdf",
+    "kind": "balance",
+    "source_doc_id": "SH2024_09",
+    "source_pdf_sha256": "2974ea305a88e3d9de260906507ff52358b00012e1367cae3c47f2fd43b94590",
+    "fixture_sha256": "1ca9994a12c2df1fdadb3023fba50a37c0dc67e1af08b831490174ffffadbea3",
+    "source_pages": [
+      21
+    ],
+    "expected": [
+      {
+        "truth_id": "SH2024_09:00848",
+        "page": 1,
+        "source_page": 21,
+        "bbox": [
+          308.0899963378906,
+          232.21438598632812,
+          328.1900329589844,
+          242.17437744140625
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_09:00853",
+        "page": 1,
+        "source_page": 21,
+        "bbox": [
+          745.9000244140625,
+          232.21438598632812,
+          765.9999389648438,
+          242.17437744140625
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_09:00854",
+        "page": 1,
+        "source_page": 21,
+        "bbox": [
+          308.0899963378906,
+          260.17437744140625,
+          328.1900329589844,
+          270.1343688964844
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "215",
+          "subject_name": "资源勘探工业信息等支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_09:00859",
+        "page": 1,
+        "source_page": 21,
+        "bbox": [
+          745.9000244140625,
+          260.17437744140625,
+          765.9999389648438,
+          270.1343688964844
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "215",
+          "subject_name": "资源勘探工业信息等支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_09:00860",
+        "page": 1,
+        "source_page": 21,
+        "bbox": [
+          308.0899963378906,
+          295.2143859863281,
+          328.1900329589844,
+          305.17437744140625
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "21598",
+          "subject_name": "超长期特别国债安排的支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_09:00865",
+        "page": 1,
+        "source_page": 21,
+        "bbox": [
+          745.9000244140625,
+          295.2143859863281,
+          765.9999389648438,
+          305.17437744140625
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "21598",
+          "subject_name": "超长期特别国债安排的支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_09:00866",
+        "page": 1,
+        "source_page": 21,
+        "bbox": [
+          308.0899963378906,
+          324.1543884277344,
+          328.1900329589844,
+          334.1143798828125
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2159802",
+          "subject_name": "制造业",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_09:00871",
+        "page": 1,
+        "source_page": 21,
+        "bbox": [
+          745.9000244140625,
+          324.1543884277344,
+          765.9999389648438,
+          334.1143798828125
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2159802",
+          "subject_name": "制造业",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      }
+    ]
+  },
+  {
+    "filename": "SH2024_10_balance.pdf",
+    "kind": "balance",
+    "source_doc_id": "SH2024_10",
+    "source_pdf_sha256": "5125c6e73d8c8a958e25aa4428579964867566227ff506917e00645b0dae6c81",
+    "fixture_sha256": "8d56a7880ff7631e80e558e41016de580bde7ecd992df1c26a2f9cb88f1ab721",
+    "source_pages": [
+      26
+    ],
+    "expected": [
+      {
+        "truth_id": "SH2024_10:01223",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          333.3590087890625,
+          179.9534454345703,
+          354.423095703125,
+          190.43479919433594
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01228",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          737.5189819335938,
+          179.9534454345703,
+          758.5831298828125,
+          190.43479919433594
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01229",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          333.3590087890625,
+          199.8734588623047,
+          354.423095703125,
+          210.3548126220703
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "205",
+          "subject_name": "教育支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01234",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          739.2000122070312,
+          199.8734588623047,
+          760.1438598632812,
+          210.3548126220703
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "205",
+          "subject_name": "教育支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01235",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          333.3590087890625,
+          219.67344665527344,
+          354.423095703125,
+          230.15480041503906
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "20598",
+          "subject_name": "超长期特别国债安排的支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01240",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          739.2000122070312,
+          219.67344665527344,
+          760.1438598632812,
+          230.15480041503906
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "20598",
+          "subject_name": "超长期特别国债安排的支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01241",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          333.3590087890625,
+          239.47344970703125,
+          354.423095703125,
+          249.95480346679688
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2059802",
+          "subject_name": "高等教育",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01246",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          739.2000122070312,
+          239.47344970703125,
+          760.1438598632812,
+          249.95480346679688
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2059802",
+          "subject_name": "高等教育",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01247",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          333.3590087890625,
+          259.3934326171875,
+          354.423095703125,
+          269.8747863769531
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "229",
+          "subject_name": "其他支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01252",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          739.2000122070312,
+          259.3934326171875,
+          760.1438598632812,
+          269.8747863769531
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "229",
+          "subject_name": "其他支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01253",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          333.3590087890625,
+          279.19244384765625,
+          354.423095703125,
+          289.6737976074219
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "22960",
+          "subject_name": "彩票公益金安排的支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01258",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          739.2000122070312,
+          279.19244384765625,
+          760.1438598632812,
+          289.6737976074219
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "22960",
+          "subject_name": "彩票公益金安排的支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01259",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          333.3590087890625,
+          299.1134338378906,
+          354.423095703125,
+          309.59478759765625
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2296003",
+          "subject_name": "用于体育事业的彩票公益金支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01264",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          739.2000122070312,
+          299.1134338378906,
+          760.1438598632812,
+          309.59478759765625
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2296003",
+          "subject_name": "用于体育事业的彩票公益金支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01265",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          333.3590087890625,
+          318.9134521484375,
+          354.423095703125,
+          329.3948059082031
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2296004",
+          "subject_name": "用于教育事业的彩票公益金支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01270",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          739.2000122070312,
+          318.9134521484375,
+          760.1438598632812,
+          329.3948059082031
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2296004",
+          "subject_name": "用于教育事业的彩票公益金支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01271",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          333.3590087890625,
+          338.71343994140625,
+          354.423095703125,
+          349.1947937011719
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "22998",
+          "subject_name": "超长期特别国债安排的其他支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01276",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          739.2000122070312,
+          338.71343994140625,
+          760.1438598632812,
+          349.1947937011719
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "22998",
+          "subject_name": "超长期特别国债安排的其他支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01277",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          333.3590087890625,
+          358.6324462890625,
+          354.423095703125,
+          369.1138000488281
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2299899",
+          "subject_name": "其他支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_10:01282",
+        "page": 1,
+        "source_page": 26,
+        "bbox": [
+          739.2000122070312,
+          358.6324462890625,
+          760.1438598632812,
+          369.1138000488281
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2299899",
+          "subject_name": "其他支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      }
+    ]
+  },
+  {
+    "filename": "SH2024_11_balance.pdf",
+    "kind": "balance",
+    "source_doc_id": "SH2024_11",
+    "source_pdf_sha256": "522f386494e31d23b4ca943c12abb68a2a8b5bc25a0ba34b8993173fb7656ac5",
+    "fixture_sha256": "220bbd25092bf0cd830c0668dc60d0563bc9a1fa1b6677972d6969e000d91045",
+    "source_pages": [
+      24
+    ],
+    "expected": [
+      {
+        "truth_id": "SH2024_11:00986",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          285.9590148925781,
+          181.39035034179688,
+          327.9012756347656,
+          191.84034729003906
+        ],
+        "raw_text": "1,782.05",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_11:00991",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          723.8400268554688,
+          181.39035034179688,
+          765.782470703125,
+          191.84034729003906
+        ],
+        "raw_text": "1,782.15",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_11:00992",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          285.9590148925781,
+          200.82936096191406,
+          327.9012756347656,
+          211.27935791015625
+        ],
+        "raw_text": "1,782.05",
+        "expected": {
+          "subject_code": "229",
+          "subject_name": "其他支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_11:00997",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          723.8400268554688,
+          200.82936096191406,
+          765.782470703125,
+          211.27935791015625
+        ],
+        "raw_text": "1,782.15",
+        "expected": {
+          "subject_code": "229",
+          "subject_name": "其他支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_11:00998",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          296.5199890136719,
+          234.55035400390625,
+          327.9028625488281,
+          245.00035095214844
+        ],
+        "raw_text": "148.74",
+        "expected": {
+          "subject_code": "22908",
+          "subject_name": "彩票发行销售机构业务费安排的支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_11:01003",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          734.4000244140625,
+          234.55035400390625,
+          765.7830200195312,
+          245.00035095214844
+        ],
+        "raw_text": "148.84",
+        "expected": {
+          "subject_code": "22908",
+          "subject_name": "彩票发行销售机构业务费安排的支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_11:01004",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          301.79998779296875,
+          274.5103454589844,
+          327.9031677246094,
+          284.9603271484375
+        ],
+        "raw_text": "11.23",
+        "expected": {
+          "subject_code": "2290804",
+          "subject_name": "福利彩票销售机构的业务费支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_11:01009",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          739.6799926757812,
+          274.5103454589844,
+          765.7832641601562,
+          284.9603271484375
+        ],
+        "raw_text": "11.33",
+        "expected": {
+          "subject_code": "2290804",
+          "subject_name": "福利彩票销售机构的业务费支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_11:01010",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          296.5199890136719,
+          306.67034912109375,
+          327.9028625488281,
+          317.1203308105469
+        ],
+        "raw_text": "137.51",
+        "expected": {
+          "subject_code": "2290808",
+          "subject_name": "彩票市场调控资金支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_11:01015",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          734.4000244140625,
+          306.67034912109375,
+          765.7830200195312,
+          317.1203308105469
+        ],
+        "raw_text": "137.51",
+        "expected": {
+          "subject_code": "2290808",
+          "subject_name": "彩票市场调控资金支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_11:01016",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          285.9590148925781,
+          338.9503479003906,
+          327.9012756347656,
+          349.40032958984375
+        ],
+        "raw_text": "1,633.31",
+        "expected": {
+          "subject_code": "22960",
+          "subject_name": "彩票公益金安排的支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_11:01021",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          723.8400268554688,
+          338.9503479003906,
+          765.782470703125,
+          349.40032958984375
+        ],
+        "raw_text": "1,633.31",
+        "expected": {
+          "subject_code": "22960",
+          "subject_name": "彩票公益金安排的支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_11:01022",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          285.9590148925781,
+          371.1103515625,
+          327.9012756347656,
+          381.5603332519531
+        ],
+        "raw_text": "1,621.87",
+        "expected": {
+          "subject_code": "2296002",
+          "subject_name": "用于社会福利的彩票公益金支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_11:01027",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          723.8400268554688,
+          371.1103515625,
+          765.782470703125,
+          381.5603332519531
+        ],
+        "raw_text": "1,621.87",
+        "expected": {
+          "subject_code": "2296002",
+          "subject_name": "用于社会福利的彩票公益金支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_11:01028",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          301.79998779296875,
+          411.0703430175781,
+          327.9031677246094,
+          421.52032470703125
+        ],
+        "raw_text": "11.44",
+        "expected": {
+          "subject_code": "2296099",
+          "subject_name": "用于其他社会公益事业的彩票公益金支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_11:01033",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          739.6799926757812,
+          411.0703430175781,
+          765.7832641601562,
+          421.52032470703125
+        ],
+        "raw_text": "11.44",
+        "expected": {
+          "subject_code": "2296099",
+          "subject_name": "用于其他社会公益事业的彩票公益金支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      }
+    ]
+  },
+  {
+    "filename": "SH2024_13_balance.pdf",
+    "kind": "balance",
+    "source_doc_id": "SH2024_13",
+    "source_pdf_sha256": "df849a81640b5384df5bf3c1d29287b73100bb2da198e6b7e446ccbd0071ebec",
+    "fixture_sha256": "fdc2e8c310b163dc4c5570d130fa302767f515aa876b4e969fe8996a3b99a2f6",
+    "source_pages": [
+      21
+    ],
+    "expected": [
+      {
+        "truth_id": "SH2024_13:01209",
+        "page": 1,
+        "source_page": 21,
+        "bbox": [
+          321.239990234375,
+          232.3343963623047,
+          341.2142639160156,
+          242.28439331054688
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_13:01214",
+        "page": 1,
+        "source_page": 21,
+        "bbox": [
+          745.9190063476562,
+          232.3343963623047,
+          765.8932495117188,
+          242.28439331054688
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_13:01215",
+        "page": 1,
+        "source_page": 21,
+        "bbox": [
+          321.239990234375,
+          255.1343994140625,
+          341.2142639160156,
+          265.08441162109375
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "206",
+          "subject_name": "科学技术支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_13:01220",
+        "page": 1,
+        "source_page": 21,
+        "bbox": [
+          745.9190063476562,
+          255.1343994140625,
+          765.8932495117188,
+          265.08441162109375
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "206",
+          "subject_name": "科学技术支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_13:01221",
+        "page": 1,
+        "source_page": 21,
+        "bbox": [
+          321.239990234375,
+          276.6134033203125,
+          341.2142639160156,
+          286.56341552734375
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "20698",
+          "subject_name": "超长期特别国债安排的支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_13:01226",
+        "page": 1,
+        "source_page": 21,
+        "bbox": [
+          745.9190063476562,
+          276.6134033203125,
+          765.8932495117188,
+          286.56341552734375
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "20698",
+          "subject_name": "超长期特别国债安排的支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_13:01227",
+        "page": 1,
+        "source_page": 21,
+        "bbox": [
+          321.239990234375,
+          295.33441162109375,
+          341.2142639160156,
+          305.284423828125
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2069802",
+          "subject_name": "应用研究",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_13:01232",
+        "page": 1,
+        "source_page": 21,
+        "bbox": [
+          745.9190063476562,
+          295.33441162109375,
+          765.8932495117188,
+          305.284423828125
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2069802",
+          "subject_name": "应用研究",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      }
+    ]
+  },
+  {
+    "filename": "SH2024_14_balance.pdf",
+    "kind": "balance",
+    "source_doc_id": "SH2024_14",
+    "source_pdf_sha256": "c648a732eb055d2fcf3f4abacb4aca32de8cf91e577e8f55d13de81463ae2bad",
+    "fixture_sha256": "138581eeefcaccea499cbf7464d47da761c7e4a24b894b937a69ee372f9f6a50",
+    "source_pages": [
+      24
+    ],
+    "expected": [
+      {
+        "truth_id": "SH2024_14:01158",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          308.0400085449219,
+          213.1343994140625,
+          327.89398193359375,
+          223.0843963623047
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01163",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          745.9190063476562,
+          213.1343994140625,
+          765.77294921875,
+          223.0843963623047
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "total",
+          "subject_name": "合计",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01164",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          308.0400085449219,
+          235.09439086914062,
+          327.89398193359375,
+          245.0443878173828
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "211",
+          "subject_name": "节能环保支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01169",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          745.9190063476562,
+          235.09439086914062,
+          765.77294921875,
+          245.0443878173828
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "211",
+          "subject_name": "节能环保支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01170",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          308.0400085449219,
+          263.2944030761719,
+          327.89398193359375,
+          273.2444152832031
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "21198",
+          "subject_name": "超长期特别国债安排的支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01175",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          745.9190063476562,
+          263.2944030761719,
+          765.77294921875,
+          273.2444152832031
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "21198",
+          "subject_name": "超长期特别国债安排的支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01176",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          308.0400085449219,
+          291.494384765625,
+          327.89398193359375,
+          301.44439697265625
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2119899",
+          "subject_name": "其他节能环保支出",
+          "indicator": "beginning_balance",
+          "budget_stage": null
+        }
+      },
+      {
+        "truth_id": "SH2024_14:01181",
+        "page": 1,
+        "source_page": 24,
+        "bbox": [
+          745.9190063476562,
+          291.494384765625,
+          765.77294921875,
+          301.44439697265625
+        ],
+        "raw_text": "0.00",
+        "expected": {
+          "subject_code": "2119899",
+          "subject_name": "其他节能环保支出",
+          "indicator": "ending_balance",
+          "budget_stage": null
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,36 @@
+{
+  "purpose": "仅裁切原页，保留原生文字与坐标；金额与科目真值不读取规则输出。",
+  "documents": [
+    {
+      "doc_id": "SH2024N9_03",
+      "source_sha256": "7fcedb31371aaa08867bfbbada94a12e4c9d576a6b652965aafba77f7eb78a86",
+      "physical_pages": [
+        20,
+        21
+      ],
+      "fixture": "SH2024N9_03.pdf",
+      "fixture_sha256": "b55e1ea73d47e2ef2b8d6e7d6c80c471c3d7e072583c8c0e3b1a44c4032ba3da"
+    },
+    {
+      "doc_id": "SH2024N9_02",
+      "source_sha256": "5ed377e7f18ff6abb3456eca8d60a95ccbceb594142e0db16f9c6e5fee910177",
+      "physical_pages": [
+        22,
+        23,
+        24
+      ],
+      "fixture": "SH2024N9_02.pdf",
+      "fixture_sha256": "06b9c4d8c9bcd53b6d7128cc0583b4dc90f7001e3bdcf0aa93686eb21cfbf04c"
+    },
+    {
+      "doc_id": "SH2024N9_04",
+      "source_sha256": "84c72a918b0d08d3f6a55e709174b0045e1040ad815193fadf3ee630d2116494",
+      "physical_pages": [
+        9,
+        14
+      ],
+      "fixture": "SH2024N9_04.pdf",
+      "fixture_sha256": "0b0bea9871568c5158d1ef5257018f87b94150cc17eced32995296dc6aa7d2ff"
+    }
+  ]
+}

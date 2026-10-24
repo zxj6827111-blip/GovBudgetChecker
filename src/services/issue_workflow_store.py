@@ -13,7 +13,7 @@ import secrets
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from fastapi import HTTPException
 
@@ -24,6 +24,7 @@ from src.services.analysis_result_store import ensure_analysis_persistence_ready
 
 
 _LOCK = threading.RLock()
+_LOCK_DEPTH = threading.local()
 _VALID_STATUSES = {"pending", "confirmed", "no_issue", "needs_review", "in_package"}
 logger = logging.getLogger(__name__)
 _PERSISTENCE_FILENAME = ".issue_workflow_persistence.json"
@@ -66,6 +67,13 @@ def _record_persistence_state(status: str, error: str = "") -> None:
 def _state_lock():
     """Serialize read-modify-write operations across all backend workers."""
     with _LOCK:
+        if getattr(_LOCK_DEPTH, "depth", 0):
+            _LOCK_DEPTH.depth += 1
+            try:
+                yield
+            finally:
+                _LOCK_DEPTH.depth -= 1
+            return
         lock_path = _store_path().with_suffix(".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+b") as handle:
@@ -88,9 +96,11 @@ def _state_lock():
                 import fcntl
 
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            _LOCK_DEPTH.depth = 1
             try:
                 yield
             finally:
+                _LOCK_DEPTH.depth = 0
                 handle.seek(0)
                 if os.name == "nt":
                     msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
@@ -113,6 +123,26 @@ def _strings(value: Any) -> List[str]:
             seen.add(text)
             result.append(text)
     return result
+
+
+def issue_identity_fingerprint(issue: Dict[str, Any]) -> str:
+    """Stable semantic identity for deciding whether review can cross revisions."""
+    location = issue.get("location") if isinstance(issue.get("location"), dict) else {}
+    metrics = issue.get("metrics") if isinstance(issue.get("metrics"), dict) else {}
+    payload = {
+        "rule_id": str(issue.get("rule_id") or issue.get("rule") or ""),
+        "title": str(issue.get("title") or ""),
+        "severity": str(issue.get("severity") or ""),
+        "message": str(issue.get("message") or ""),
+        "page": issue.get("page_number") or issue.get("page") or location.get("page"),
+        "bbox": issue.get("bbox") or location.get("bbox"),
+        "check_relation_id": str(issue.get("check_relation_id") or ""),
+        "fact_ids": sorted(_strings(issue.get("fact_ids"))),
+        "evidence_ids": sorted(_strings(issue.get("evidence_ids"))),
+        "metrics": metrics,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _normalize_state(value: Any) -> Dict[str, Any]:
@@ -140,6 +170,16 @@ def _normalize_state(value: Any) -> Dict[str, Any]:
                 "organization_id": str(item.get("organization_id") or "").strip() or None,
                 "organization_name": str(item.get("organization_name") or "").strip() or None,
                 "note": str(item.get("note") or "").strip() or None,
+                "analysis_revision": str(item.get("analysis_revision") or "").strip() or None,
+                "decision_revision": str(item.get("decision_revision") or "").strip() or None,
+                "decision_actor": str(item.get("decision_actor") or "").strip() or None,
+                "hide_from_results": bool(item.get("hide_from_results", False)),
+                "decision_origin": str(item.get("decision_origin") or "workflow"),
+                "migration_id": item.get("migration_id"),
+                "check_relation_id": str(item.get("check_relation_id") or "").strip() or None,
+                "fact_ids": _strings(item.get("fact_ids")),
+                "evidence_ids": _strings(item.get("evidence_ids")),
+                "identity_fingerprint": str(item.get("identity_fingerprint") or "").strip() or None,
                 "updated_at": str(item.get("updated_at") or "").strip() or _now(),
             }
 
@@ -161,6 +201,7 @@ def _normalize_state(value: Any) -> Dict[str, Any]:
                     "organization_name": str(item.get("organization_name") or "").strip() or None,
                     "job_ids": _strings(item.get("job_ids")),
                     "issue_keys": _strings(item.get("issue_keys")),
+                    "report_snapshots": copy.deepcopy(item.get("report_snapshots")) if isinstance(item.get("report_snapshots"), dict) else {},
                     "status": status if status in {"draft", "ready", "submitted"} else "draft",
                     "created_at": str(item.get("created_at") or "").strip() or _now(),
                     "updated_at": str(item.get("updated_at") or "").strip() or _now(),
@@ -170,6 +211,47 @@ def _normalize_state(value: Any) -> Dict[str, Any]:
         revision = max(0, int(raw.get("revision") or 0))
     except (TypeError, ValueError):
         revision = 0
+
+    decision_events: List[Dict[str, Any]] = []
+    raw_events = raw.get("decision_events")
+    if isinstance(raw_events, list):
+        for item in raw_events:
+            if not isinstance(item, dict):
+                continue
+            job_id = str(item.get("job_id") or "").strip()
+            issue_id = str(item.get("issue_id") or "").strip()
+            status = str(item.get("status") or "pending").strip()
+            if not job_id or not issue_id or status not in _VALID_STATUSES:
+                continue
+            event = dict(item)
+            event["job_id"] = job_id
+            event["issue_id"] = issue_id
+            event["status"] = status
+            event["decision_revision"] = str(item.get("decision_revision") or "1")
+            event["fact_ids"] = _strings(item.get("fact_ids"))
+            event["evidence_ids"] = _strings(item.get("evidence_ids"))
+            decision_events.append(event)
+    # Upgrade pre-event stores without discarding their latest decisions.
+    event_keys = {
+        (
+            item["job_id"], item["issue_id"],
+            str(item.get("analysis_revision") or ""),
+            str(item.get("identity_fingerprint") or ""),
+        )
+        for item in decision_events
+    }
+    for record in issues.values():
+        event_key = (
+            record["job_id"], record["issue_id"],
+            str(record.get("analysis_revision") or ""),
+            str(record.get("identity_fingerprint") or ""),
+        )
+        if event_key in event_keys:
+            continue
+        event = copy.deepcopy(record)
+        event["decision_revision"] = event.get("decision_revision") or "1"
+        decision_events.append(event)
+        event_keys.add(event_key)
 
     # 复核编辑锁（WP3-A）：{job_id: {...}}。
     #
@@ -196,8 +278,10 @@ def _normalize_state(value: Any) -> Dict[str, Any]:
 
     return {
         "issues": issues,
+        "decision_events": decision_events,
         "packages": packages,
         "review_locks": review_locks,
+        "legacy_ignore_migrations": copy.deepcopy(raw.get("legacy_ignore_migrations")) if isinstance(raw.get("legacy_ignore_migrations"), dict) else {},
         "updated_at": raw.get("updated_at") or None,
         "revision": revision,
     }
@@ -210,8 +294,10 @@ def _read_state() -> Dict[str, Any]:
 def _write_state(state: Dict[str, Any]) -> Dict[str, Any]:
     payload = {
         "issues": state["issues"],
+        "decision_events": state.get("decision_events") or [],
         "packages": state["packages"],
         "review_locks": state.get("review_locks") or {},
+        "legacy_ignore_migrations": state.get("legacy_ignore_migrations") or {},
         "updated_at": _now(),
         "revision": int(state.get("revision") or 0) + 1,
     }
@@ -404,6 +490,24 @@ async def sync_workflow_recovery_state() -> bool:
     return await persist_workflow_state(state)
 
 
+#: ``project_job_issue_decisions`` 读取的报告位置（``analysis_revision`` 与下面
+#: ``_find_issue`` 及其两个子查找用到的全部容器）。主管端只把这些路径从
+#: ``analysis_results.raw_response``（每行展开约 3MB）投影出来再交给它；
+#: 查找位置有增减时必须同步改这里，tests/test_supervision_query.py 会比对两者结果。
+DECISION_PAYLOAD_PATHS: Tuple[Tuple[str, ...], ...] = (
+    ("analysis_revision",),
+    ("job_id",),
+    ("ai_findings",),
+    ("rule_findings",),
+    ("issues",),
+    ("result", "ai_findings"),
+    ("result", "rule_findings"),
+    ("result", "issues"),
+    ("structured_ingest", "review_items"),
+    ("review_report", "manual_review"),
+)
+
+
 def _find_issue(payload: Dict[str, Any], issue_id: str) -> Optional[Dict[str, Any]]:
     def _find(items: Any) -> Optional[Dict[str, Any]]:
         if not isinstance(items, list):
@@ -431,7 +535,55 @@ def _find_issue(payload: Dict[str, Any], issue_id: str) -> Optional[Dict[str, An
                 found = _find(issues.get(key))
                 if found:
                     return found
-    return _find_structured_review_item(payload, issue_id)
+    return _find_structured_review_item(payload, issue_id) or _find_report_review_item(payload, issue_id)
+
+
+def _find_report_review_item(payload: Dict[str, Any], issue_id: str) -> Optional[Dict[str, Any]]:
+    """定位规范报告里的复核卡片，与前端 collectReviewReportManualIssues 同源。
+
+    系统提示与合并冲突没有原始 finding，必须按当前报告中的真实条目定位，
+    不能仅凭客户端提交了 review_reason 前缀就接受。未完成检查只允许走补核接口。
+    """
+    report = payload.get("review_report")
+    if not isinstance(report, dict) or not isinstance(report.get("manual_review"), list):
+        return None
+    items = [item for item in report["manual_review"] if isinstance(item, dict)]
+    reason_titles = {
+        "ai_failed": "大模型检查未完整完成",
+        "evidence_incomplete_findings": "大模型发现证据不足",
+        "rule_evidence_incomplete": "规则问题证据不足",
+        "rules_insufficient_data": "部分规则检查数据不足",
+        "check_obligations_incomplete": "仍有必查事项未完成",
+    }
+    for index, item in enumerate(items):
+        record_type = str(item.get("record_type") or "review_reason")
+        if record_type == "unfinished_check":
+            continue
+        identity = item.get("id")
+        if identity is None:
+            # 与前端 ?? 的兜底顺序一致；索引属于过滤后的完整 manual_review 列表，
+            # 不能先排除 unfinished_check 再编号，否则历史卡片的 id 会发生偏移。
+            key = item.get("code")
+            if key is None:
+                key = item.get("obligation_id")
+            identity = f"{record_type}:{key if key is not None else index}"
+        if str(identity).strip() != issue_id:
+            continue
+        finding = item.get("finding") if isinstance(item.get("finding"), dict) else {}
+        title = item.get("title") or finding.get("title") or item.get("code") or "待人工复核事项"
+        if record_type == "review_reason":
+            title = reason_titles.get(str(item.get("code") or ""), title)
+        return {
+            **finding,
+            "id": issue_id,
+            "source": finding.get("source") or "manual_review",
+            "rule_id": finding.get("rule_id") or item.get("code") or item.get("obligation_id") or record_type.upper(),
+            "severity": "manual_review",
+            "title": str(title),
+            "message": str(item.get("message") or finding.get("message") or item.get("detail") or item.get("reason") or "需人工复核后确认。"),
+            "location": item.get("location") or finding.get("location") or {},
+        }
+    return None
 
 
 def _find_structured_review_item(
@@ -478,7 +630,7 @@ def _find_structured_review_item(
 
 
 def _job_and_issue(user: Dict[str, Any], job_id: str, issue_id: str) -> tuple[Dict[str, Any], Dict[str, Any]]:
-    payload = runtime.get_job_status_payload(job_id)
+    payload = runtime.get_job_status_payload(job_id, apply_issue_filters=False)
     if not user_can_access_job(user, payload):
         raise HTTPException(status_code=403, detail="job access denied")
     issue = _find_issue(payload, issue_id)
@@ -504,31 +656,93 @@ def _issue_page(issue: Dict[str, Any]) -> Optional[int]:
     return None
 
 
-def get_visible_state(user: Dict[str, Any]) -> Dict[str, Any]:
+def get_visible_state(user: Dict[str, Any], *, job_id: Optional[str] = None) -> Dict[str, Any]:
+    requested_job = str(job_id or "").strip() or None
+    if job_id is not None and requested_job is None:
+        raise HTTPException(status_code=400, detail="job_id must not be blank")
+    if requested_job is not None:
+        # 即使该任务尚无决定，也必须鉴权，不能把越权任务伪装成空工作流。
+        if not user_can_access_job(user, runtime.get_job_access_payload(requested_job)):
+            raise HTTPException(status_code=403, detail="job access denied")
     with _state_lock():
         state = _read_state()
         visible_issues: Dict[str, Dict[str, Any]] = {}
         visible_job_ids: Set[str] = set()
+        current_decisions: Dict[str, Dict[str, str]] = {}
+        job_payloads: Dict[str, Optional[Dict[str, Any]]] = {}
         for key, record in state["issues"].items():
-            try:
-                payload = runtime.get_job_status_payload(record["job_id"])
-            except HTTPException:
+            record_job = record["job_id"]
+            if requested_job is not None and record_job != requested_job:
+                continue
+            if record_job not in job_payloads:
+                try:
+                    job_payloads[record_job] = runtime.get_job_status_payload(record_job, apply_issue_filters=False)
+                except HTTPException:
+                    job_payloads[record_job] = None
+            payload = job_payloads[record_job]
+            if payload is None:
                 continue
             if user_can_access_job(user, payload):
-                visible_issues[key] = copy.deepcopy(record)
+                if _find_issue(payload, record["issue_id"]) is None:
+                    continue
+                if record_job not in current_decisions:
+                    # setdefault 的默认表达式也会每次执行；直接复用同一份详情投影。
+                    current_decisions[record_job] = {
+                        item["issue_id"]: item["status"]
+                        for item in project_job_issue_decisions(record_job, payload, _state=state)
+                    }
+                visible = copy.deepcopy(record)
+                visible["status"] = current_decisions[record_job].get(record["issue_id"], "pending")
+                visible_issues[key] = visible
                 visible_job_ids.add(record["job_id"])
         packages = [
             copy.deepcopy(package)
             for package in state["packages"]
             if package["job_ids"]
+            and (requested_job is None or requested_job in package["job_ids"])
             and all(job_id in visible_job_ids or _can_read_job(user, job_id) for job_id in package["job_ids"])
         ]
+        # The UI receives the immutable identity, not all archived report bodies.
+        for package in packages:
+            snapshots = package.pop("report_snapshots", {})
+            package["analysis_revisions"] = {
+                job_id: entry.get("payload", {}).get("analysis_revision")
+                for job_id, entry in snapshots.items() if isinstance(entry, dict) and isinstance(entry.get("payload"), dict)
+            }
         return {"issues": visible_issues, "packages": packages, "updated_at": state.get("updated_at")}
+
+
+def _package_payload_sha(payload: Dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+
+
+def get_package_report_payloads(user: Dict[str, Any], package_id: str) -> Dict[str, Dict[str, Any]]:
+    """Read frozen report bodies; never substitute a current analysis for an archive."""
+    with _state_lock():
+        state = _read_state()
+    package = next((item for item in state["packages"] if item["id"] == package_id), None)
+    if package is None:
+        raise HTTPException(status_code=404, detail="package not found")
+    for job_id in package["job_ids"]:
+        if not _can_read_job(user, job_id):
+            raise HTTPException(status_code=403, detail="job access denied")
+    snapshots = package.get("report_snapshots") or {}
+    if not snapshots:
+        raise HTTPException(status_code=409, detail={"error": "package_snapshot_missing", "message": "旧整改包未记录冻结报告，请从已确认问题重新生成。"})
+    if set(snapshots) != set(package["job_ids"]):
+        raise HTTPException(status_code=409, detail={"error": "package_snapshot_invalid"})
+    result = {}
+    for job_id, entry in snapshots.items():
+        payload = entry.get("payload") if isinstance(entry, dict) else None
+        if not isinstance(payload, dict) or payload.get("job_id") != job_id or not payload.get("analysis_revision") or entry.get("sha256") != _package_payload_sha(payload):
+            raise HTTPException(status_code=409, detail={"error": "package_snapshot_invalid"})
+        result[job_id] = copy.deepcopy(payload)
+    return result
 
 
 def _can_read_job(user: Dict[str, Any], job_id: str) -> bool:
     try:
-        return user_can_access_job(user, runtime.get_job_status_payload(job_id))
+        return user_can_access_job(user, runtime.get_job_status_payload(job_id, apply_issue_filters=False))
     except HTTPException:
         return False
 
@@ -537,7 +751,7 @@ def _can_read_job(user: Dict[str, Any], job_id: str) -> bool:
 
 
 def get_job_issue_decisions(job_id: str) -> Dict[str, str]:
-    """该任务上全部已表态的问题状态 ``{issue_id: status}``（只读）。
+    """返回仍绑定到当前问题身份的人工决定 ``{issue_id: status}``。
 
     复核完成门禁的输入之一。**不做权限过滤**：调用方（复核服务）已经完成授权
     （路由层先判槽位可访问再进来），在这里再判一次只会引入第二套授权语义。
@@ -550,55 +764,170 @@ def get_job_issue_decisions(job_id: str) -> Dict[str, str]:
         return {}
     with _state_lock():
         state = _read_state()
-    result: Dict[str, str] = {}
-    for record in state["issues"].values():
-        if str(record.get("job_id") or "") != normalized:
-            continue
-        result[str(record.get("issue_id") or "")] = str(record.get("status") or "pending")
-    result.pop("", None)
-    return result
+        return {
+            issue_id: status
+            for issue_id, status in _decision_pairs(state, normalized)
+        }
 
 
-#: 问题集合快照的算法版本。改变快照覆盖范围（例如新增一类来源）时必须改动它，
-#: 否则老版本写下的 token 会被误判成"仍然匹配"。
-PROBLEM_SNAPSHOT_ALGORITHM = "sha256(decisions + ignored_issue_ids)"
-
-
-def _decision_pairs(state: Dict[str, Any], job_id: str) -> List[List[str]]:
-    """该任务全部"已表态"的问题，按 issue_id 升序的 ``[issue_id, status]`` 列表。
-
-    排序是必需的：文件里 issue 的插入顺序会随操作历史变化，不排序算出的 token
-    会在**没有任何实质变化**时也变化，把"无关的写入顺序差异"变成假的冲突。
-    """
+def get_job_issue_decision_records(job_id: str) -> Dict[str, Dict[str, Any]]:
+    """Return the persisted, version-bound decision records for one job."""
     normalized = str(job_id or "").strip()
-    pairs: List[List[str]] = []
+    if not normalized:
+        return {}
+    with _state_lock():
+        state = _read_state()
+    result: Dict[str, Dict[str, Any]] = {}
     for record in state["issues"].values():
         if str(record.get("job_id") or "") != normalized:
             continue
         issue_id = str(record.get("issue_id") or "")
-        if not issue_id:
-            continue
-        pairs.append([issue_id, str(record.get("status") or "pending")])
-    pairs.sort(key=lambda item: item[0])
-    return pairs
+        if issue_id:
+            result[issue_id] = copy.deepcopy(record)
+    return result
 
 
-def _ignored_issue_ids_for_job(job_id: str) -> List[str]:
-    """该任务的 legacy 忽略清单（``ignored_issue_ids``），已排序。
-
-    复核的问题集合同时由"workflow 决定"与这份忽略清单决定（见
-    ``review_problem_set``），因此它必须进快照——否则"完成后才想起忽略一条问题"
-    会让已完成复核对应的问题集合发生变化。
-
-    读不到（任务目录不存在、文件损坏）时返回空列表：与
-    ``review_problem_set`` 的取值保持一致，两边算出的 token 才可比。
-    """
-    job_dir = runtime.UPLOAD_ROOT / str(job_id or "").strip()
-    try:
-        return sorted(str(item) for item in runtime.read_ignored_issue_ids(job_dir))
-    except Exception:  # noqa: BLE001 - 忽略清单不是关键路径，读不到按"没有"处理
-        logger.warning("Failed to read ignored issue ids for job %s", job_id, exc_info=True)
+def project_job_issue_decisions(
+    job_id: str, payload: Dict[str, Any], *, _state: Optional[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
+    """Project only decisions that still match this report revision or issue identity."""
+    revision = str(payload.get("analysis_revision") or "")
+    normalized_job_id = str(job_id or "").strip()
+    if not revision:
         return []
+    if _state is None:
+        with _state_lock():
+            state = _read_state()
+            _migrate_legacy_ignored_locked(state, normalized_job_id)
+    else:
+        # The package writer already holds the inter-process file lock.
+        state = _state
+    events_by_issue: Dict[str, List[Dict[str, Any]]] = {}
+    for event in state.get("decision_events", []):
+        if str(event.get("job_id") or "") == normalized_job_id:
+            events_by_issue.setdefault(str(event.get("issue_id") or ""), []).append(event)
+    projected: List[Dict[str, Any]] = []
+    for issue_id in sorted(events_by_issue):
+        issue = _find_issue(payload, issue_id)
+        if issue is None:
+            continue
+        issue_fingerprint = issue_identity_fingerprint(issue)
+        facts = sorted(_strings(issue.get("fact_ids")))
+        evidence = sorted(_strings(issue.get("evidence_ids")))
+        matching_events = []
+        for event in events_by_issue[issue_id]:
+            same_revision = bool(revision and str(event.get("analysis_revision") or "") == revision)
+            same_identity = bool(
+                event.get("check_relation_id")
+                and event.get("check_relation_id") == issue.get("check_relation_id")
+                and facts
+                and sorted(_strings(event.get("fact_ids"))) == facts
+                and evidence
+                and sorted(_strings(event.get("evidence_ids"))) == evidence
+                and event.get("identity_fingerprint") == issue_fingerprint
+            )
+            # An ignore is an explicit judgment for one analysis. Reusing an ID,
+            # or even its evidence identity, cannot silently carry that judgment.
+            if str(event.get("status")) == "no_issue":
+                applies = same_revision and (
+                    not event.get("identity_fingerprint")
+                    or event.get("identity_fingerprint") == issue_fingerprint
+                )
+            else:
+                applies = same_revision or same_identity
+            if applies:
+                matching_events.append((same_revision, event))
+        if not matching_events:
+            continue
+        # Prefer the decision recorded for this exact analysis. Otherwise the
+        # latest identity-compatible event may be inherited by a rerun.
+        _, record = max(
+            matching_events,
+            key=lambda pair: (
+                pair[0],
+                int(str(pair[1].get("decision_revision") or "0"))
+                if str(pair[1].get("decision_revision") or "0").isdigit() else 0,
+                str(pair[1].get("updated_at") or ""),
+            ),
+        )
+        same_revision = bool(revision and str(record.get("analysis_revision") or "") == revision)
+        projected.append(
+            {
+                "issue_id": issue_id,
+                "status": str(record.get("status") or "pending"),
+                "note": record.get("note"),
+                "analysis_revision": revision or str(record.get("analysis_revision") or ""),
+                "decision_revision": str(record.get("decision_revision") or "1"),
+                "inherited": not same_revision,
+                "actor": record.get("decision_actor"),
+                "hide_from_results": bool(record.get("hide_from_results", False)),
+                "decision_origin": record.get("decision_origin") or "workflow",
+                "migration_id": record.get("migration_id"),
+                "check_relation_id": issue.get("check_relation_id"),
+                "fact_ids": facts,
+                "evidence_ids": evidence,
+                "identity_fingerprint": issue_identity_fingerprint(issue),
+            }
+        )
+    return projected
+
+
+def _append_decision_event(state: Dict[str, Any], record: Dict[str, Any]) -> Dict[str, Any]:
+    """Append one immutable workflow decision and return it with a per-issue revision."""
+    events = state.setdefault("decision_events", [])
+    key = _workflow_key(str(record.get("job_id") or ""), str(record.get("issue_id") or ""))
+    prior = [
+        event for event in events
+        if isinstance(event, dict)
+        and str(event.get("job_id") or "") == str(record.get("job_id") or "")
+        and str(event.get("issue_id") or "") == str(record.get("issue_id") or "")
+    ]
+    revisions = [
+        int(str(event.get("decision_revision") or "0"))
+        for event in prior if str(event.get("decision_revision") or "0").isdigit()
+    ]
+    event = copy.deepcopy(record)
+    event["decision_revision"] = str(max(revisions, default=0) + 1)
+    event["event_id"] = f"{key}::{event['decision_revision']}"
+    events.append(event)
+    return event
+
+
+#: 问题集合快照的算法版本。改变快照覆盖范围（例如新增一类来源）时必须改动它，
+#: 否则老版本写下的 token 会被误判成"仍然匹配"。
+PROBLEM_SNAPSHOT_ALGORITHM = "sha256(version_bound_workflow_decisions + hidden_no_issue_ids):v2"
+
+
+def _problem_snapshot_components(state: Dict[str, Any], job_id: str) -> Dict[str, Any]:
+    """在同一把锁内只投影一次，保持原报告的版本与问题指纹匹配规则。"""
+    if not any(str(event.get("job_id") or "") == job_id for event in state.get("decision_events", [])):
+        # 没有人工决定时无需加载报告；待处理问题仍由调用方按分析结果计算。
+        return {"decisions": [], "ignored_issue_ids": []}
+    try:
+        payload = runtime.get_job_status_payload(job_id, apply_issue_filters=False)
+    except HTTPException:
+        return {"decisions": [], "ignored_issue_ids": []}
+    projected = project_job_issue_decisions(job_id, payload, _state=state)
+    return {
+        "decisions": sorted([[item["issue_id"], item["status"]] for item in projected], key=lambda pair: pair[0]),
+        "ignored_issue_ids": sorted(item["issue_id"] for item in projected
+                                    if item["status"] == "no_issue" and item["hide_from_results"]),
+    }
+
+
+def _decision_pairs(state: Dict[str, Any], job_id: str) -> List[List[str]]:
+    """Current-version decisions, using the raw report to retain hidden findings."""
+    return _problem_snapshot_components(state, job_id)["decisions"]
+
+
+def _ignored_issue_ids_for_job(state: Dict[str, Any], job_id: str) -> List[str]:
+    return _problem_snapshot_components(state, job_id)["ignored_issue_ids"]
+
+
+def _snapshot_token_from_components(components: Dict[str, Any]) -> str:
+    payload = {"algorithm": PROBLEM_SNAPSHOT_ALGORITHM, **components}
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _problem_snapshot_token(state: Dict[str, Any], job_id: str) -> str:
@@ -607,18 +936,12 @@ def _problem_snapshot_token(state: Dict[str, Any], job_id: str) -> str:
     覆盖两项，正是 Completion Gate 判定所消费的全部外部状态：
 
     - ``(issue_id, status)``：问题被怎么处理了（confirmed / no_issue / ...）；
-    - ``ignored_issue_ids``：legacy 忽略清单（它决定哪些问题不进集合）。
+    - ``ignored_issue_ids``：同一工作流中当前版本的隐藏决定。
 
     不含 ``revision``：那是全局的，别的任务的修改会让当前复核被无意义地打断
     （fail-closed 但噪声大）。按 job 计算即可表达"这个 job 的问题集合变没变"。
     """
-    payload = {
-        "algorithm": PROBLEM_SNAPSHOT_ALGORITHM,
-        "decisions": _decision_pairs(state, job_id),
-        "ignored_issue_ids": _ignored_issue_ids_for_job(job_id),
-    }
-    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return _snapshot_token_from_components(_problem_snapshot_components(state, job_id))
 
 
 def get_job_problem_snapshot(job_id: str) -> Dict[str, Any]:
@@ -632,13 +955,12 @@ def get_job_problem_snapshot(job_id: str) -> Dict[str, Any]:
         return {"decisions": {}, "ignored_issue_ids": [], "token": ""}
     with _state_lock():
         state = _read_state()
-        decisions = {
-            issue_id: status for issue_id, status in _decision_pairs(state, normalized)
-        }
+        _migrate_legacy_ignored_locked(state, normalized)
+        components = _problem_snapshot_components(state, normalized)
         return {
-            "decisions": decisions,
-            "ignored_issue_ids": _ignored_issue_ids_for_job(normalized),
-            "token": _problem_snapshot_token(state, normalized),
+            "decisions": dict(components["decisions"]),
+            "ignored_issue_ids": components["ignored_issue_ids"],
+            "token": _snapshot_token_from_components(components),
         }
 
 
@@ -673,6 +995,7 @@ def set_review_lock_if_problem_snapshot_matches(
         return {"status": "conflict", "reason": "job_id_required"}
     with _state_lock():
         state = _read_state()
+        _migrate_legacy_ignored_locked(state, normalized)
         current_token = _problem_snapshot_token(state, normalized)
         if not expected_token or str(expected_token) != current_token:
             # fail-closed：不为"读不到期望 token"或"token 不同"做任何妥协。
@@ -696,31 +1019,165 @@ def set_review_lock_if_problem_snapshot_matches(
         return {"status": "written", "current_decision_token": current_token}
 
 
-def add_ignored_issue_id(job_id: str, issue_id: str) -> Dict[str, Any]:
-    """在 workflow 文件锁之下把某条问题加入忽略清单（legacy 写入路径）。
+def _decision_record(
+    payload: Dict[str, Any], issue: Dict[str, Any], *, status: str,
+    actor: Optional[str], note: Optional[str], hide_from_results: bool = False,
+    origin: str = "workflow", migration_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    revision = str(payload.get("analysis_revision") or "").strip()
+    if not revision:
+        raise HTTPException(status_code=409, detail={"error": "analysis_identity_required", "message": "当前分析未记录版本，不能认定问题已处理"})
+    job_id, issue_id = str(payload["job_id"]), str(issue["id"])
+    org_id, org_name = _organization_context(payload)
+    return {
+        "key": _workflow_key(job_id, issue_id), "job_id": job_id, "issue_id": issue_id,
+        "status": status, "title": str(issue.get("title") or issue.get("message") or "").strip() or None,
+        "severity": str(issue.get("severity") or "").strip() or None, "page": _issue_page(issue),
+        "organization_id": org_id, "organization_name": org_name, "note": str(note or "").strip() or None,
+        "analysis_revision": revision, "decision_actor": actor,
+        "check_relation_id": str(issue.get("check_relation_id") or "").strip() or None,
+        "fact_ids": _strings(issue.get("fact_ids")), "evidence_ids": _strings(issue.get("evidence_ids")),
+        "identity_fingerprint": issue_identity_fingerprint(issue), "hide_from_results": hide_from_results,
+        "decision_origin": origin, "migration_id": migration_id, "updated_at": _now(),
+    }
 
-    为什么必须走这把锁：Completion Gate 的问题集合快照同时覆盖 workflow 决定与
-    ignored 清单，落锁时的 CAS 也在这把锁之下重算。两边各写各的时，
-    "读 ignored → 判门禁 → 写 review_lock"之间会有窗口。
 
-    顺序也是刻意的：**先判复核锁，再写**。已经完成复核的任务不允许再改问题集合
-    （legacy 忽略端点 ``POST /api/jobs/{id}/issues/ignore`` 至今仍可写，
-    因此它必须与 workflow 决定受同一约束）。
+def _record_decision(state: Dict[str, Any], record: Dict[str, Any]) -> None:
+    event = _append_decision_event(state, record)
+    record["decision_revision"] = event["decision_revision"]
+    state["issues"][record["key"]] = record
+
+
+def _migrate_legacy_ignored_locked(state: Dict[str, Any], job_id: str) -> bool:
+    """Import explicitly version-bound legacy IDs once; quarantine unbound IDs.
+
+    The hash receipt and original bytes survive the rename. A crash after the
+    workflow commit simply retries the rename, without appending decisions twice.
     """
-    normalized_job = str(job_id or "").strip()
-    normalized_issue = str(issue_id or "").strip()
-    if not normalized_job or not normalized_issue:
-        raise HTTPException(status_code=400, detail="job_id and issue_id are required")
+    path = runtime.get_ignored_issues_path(runtime.UPLOAD_ROOT / job_id)
+    if not path.is_file():
+        return False
+    source = path.read_bytes()
+    digest = hashlib.sha256(source).hexdigest()
+    migration_id = f"{job_id}::{digest}"
+    archive_path = path.with_name(f"ignored_issues.migrated.{digest}.json")
+    receipts = state.setdefault("legacy_ignore_migrations", {})
+    if migration_id not in receipts:
+        try:
+            legacy = json.loads(source)
+        except (ValueError, UnicodeDecodeError):
+            legacy = None
+        revision = str(legacy.get("analysis_revision") or "").strip() if isinstance(legacy, dict) else ""
+        raw_ids = _strings(legacy.get("issue_ids")) if isinstance(legacy, dict) else []
+        bound = None
+        if revision:
+            try:
+                current = runtime.get_job_status_payload(job_id, apply_issue_filters=False)
+            except HTTPException:
+                current = {}
+            if str(current.get("analysis_revision") or "") == revision:
+                bound = current
+            else:
+                for snapshot in (runtime.UPLOAD_ROOT / job_id / "analysis_versions").glob("*/status.json"):
+                    candidate = runtime.read_json_file(snapshot, default={})
+                    if isinstance(candidate, dict) and candidate.get("job_id") == job_id and candidate.get("analysis_revision") == revision:
+                        bound = candidate
+                        break
+        outcomes = []
+        for issue_id in raw_ids:
+            issue = _find_issue(bound, issue_id) if isinstance(bound, dict) else None
+            reason = None
+            if not revision:
+                reason = "analysis_identity_missing"
+            elif bound is None:
+                reason = "analysis_snapshot_unavailable"
+            elif issue is None:
+                reason = "issue_not_in_bound_analysis"
+            elif (state.get("review_locks") or {}).get(job_id):
+                reason = "review_completed_locked"
+            elif any(event.get("job_id") == job_id and event.get("issue_id") == issue_id and event.get("analysis_revision") == revision for event in state.get("decision_events", [])):
+                reason = "authoritative_decision_already_present"
+            if reason:
+                outcomes.append({"issue_id": issue_id, "status": "retained_for_audit", "reason": reason})
+                continue
+            record = _decision_record(bound, issue, status="no_issue", actor=None,
+                                      note=legacy.get("note"), hide_from_results=True,
+                                      origin="legacy_migration", migration_id=migration_id)
+            _record_decision(state, record)
+            outcomes.append({"issue_id": issue_id, "status": "imported"})
+        receipts[migration_id] = {"job_id": job_id, "source_path": str(path), "archive_path": str(archive_path),
+                                  "sha256": digest, "analysis_revision": revision or None,
+                                  "source_payload": legacy, "migrated_at": _now(), "outcomes": outcomes}
+        written = _write_state(state)
+        state.update(written)
+        runtime.invalidate_job_summary_cache(job_id)
+        _record_persistence_state("pending_retry", "legacy workflow migration requires mirror sync")
+    if archive_path.exists():
+        if archive_path.read_bytes() != source:
+            raise HTTPException(status_code=409, detail={"error": "legacy_ignore_archive_conflict"})
+        path.unlink()
+    else:
+        path.rename(archive_path)
+    return True
+
+
+def get_job_ignored_issue_ids(job_id: str, *, payload: Optional[Dict[str, Any]] = None) -> Set[str]:
+    normalized = str(job_id or "").strip()
     with _state_lock():
-        # 复核已在完成时拒绝问题集合变更（与 update_issue 同一语义、同一错误体）。
-        # 这里刻意调用**私有**校验并直接传已读到的 state：公开版会自己去取
-        # ``_state_lock``，在锁内重入同一把文件锁在 Windows 上会直接
-        # PermissionError（同一线程用第二个句柄读同一个锁文件）。
-        _require_issue_mutable(_read_state(), normalized_job)
-        job_dir = runtime.UPLOAD_ROOT / normalized_job
-        ignored = set(runtime.read_ignored_issue_ids(job_dir))
-        ignored.add(normalized_issue)
-        return runtime.write_ignored_issue_ids(job_dir, ignored)
+        state = _read_state()
+        _migrate_legacy_ignored_locked(state, normalized)
+        if payload is None:
+            try:
+                payload = runtime.get_job_status_payload(normalized, apply_issue_filters=False)
+            except HTTPException:
+                return set()
+        return {item["issue_id"] for item in project_job_issue_decisions(normalized, payload, _state=state)
+                if item["status"] == "no_issue" and item["hide_from_results"]}
+
+
+def set_job_ignored_issue_ids(
+    job_id: str, issue_ids: Set[str], *, user: Optional[Dict[str, Any]] = None,
+    note: Optional[str] = None, append: bool = False,
+) -> Dict[str, Any]:
+    """Compatibility mutation with one authority, version binding and completion lock."""
+    normalized = str(job_id or "").strip()
+    requested = {str(item).strip() for item in issue_ids if str(item).strip()}
+    with _state_lock():
+        state = _read_state()
+        _require_issue_mutable(state, normalized)
+        payload = runtime.get_job_status_payload(normalized, apply_issue_filters=False)
+        if user is not None and not user_can_access_job(user, payload):
+            raise HTTPException(status_code=403, detail="job access denied")
+        _migrate_legacy_ignored_locked(state, normalized)
+        current = {item["issue_id"] for item in project_job_issue_decisions(normalized, payload, _state=state)
+                   if item["status"] == "no_issue" and item["hide_from_results"]}
+        target = current | requested if append else requested
+        # Validate the whole batch before the first write.
+        resolved = {}
+        for issue_id in current | target:
+            issue = _find_issue(payload, issue_id)
+            if issue is None:
+                raise HTTPException(status_code=404, detail="issue_id does not exist")
+            resolved[issue_id] = issue
+        actor = str((user or {}).get("username") or (user or {}).get("user_id") or "").strip() or None
+        for issue_id in sorted((target - current) | (current - target)):
+            record = _decision_record(payload, resolved[issue_id], status="no_issue" if issue_id in target else "pending",
+                                      actor=actor, note=note, hide_from_results=issue_id in target, origin="legacy_api")
+            _record_decision(state, record)
+        if target != current:
+            _write_state(state)
+            _record_persistence_state("pending_retry", "workflow decision requires mirror sync")
+            runtime.invalidate_job_summary_cache(normalized)
+        return {"issue_ids": sorted(target), "authority": "workflow", "updated_at": _now()}
+
+
+def add_ignored_issue_id(
+    job_id: str, issue_id: str, *, user: Optional[Dict[str, Any]] = None, note: Optional[str] = None,
+) -> Dict[str, Any]:
+    normalized_issue = str(issue_id or "").strip()
+    if not str(job_id or "").strip() or not normalized_issue:
+        raise HTTPException(status_code=400, detail="job_id and issue_id are required")
+    return set_job_ignored_issue_ids(job_id, {normalized_issue}, user=user, note=note, append=True)
 
 
 def get_review_lock(job_id: str) -> Optional[Dict[str, Any]]:
@@ -867,28 +1324,17 @@ async def update_issue(
     if normalized_status not in _VALID_STATUSES:
         raise HTTPException(status_code=400, detail="invalid workflow status")
 
-    payload, issue = _job_and_issue(user, normalized_job_id, normalized_issue_id)
-    org_id, org_name = _organization_context(payload)
     with _state_lock():
         state = _read_state()
-        # 判锁必须在**同一把文件锁之内**：放在锁外就等于"查过之后、写入之前"
-        # 有一个窗口，复核可能正好在这个窗口里完成。
         _require_issue_mutable(state, normalized_job_id)
-        key = _workflow_key(normalized_job_id, normalized_issue_id)
-        state["issues"][key] = {
-            "key": key,
-            "job_id": normalized_job_id,
-            "issue_id": normalized_issue_id,
-            "status": normalized_status,
-            "title": str(issue.get("title") or issue.get("message") or "").strip() or None,
-            "severity": str(issue.get("severity") or "").strip() or None,
-            "page": _issue_page(issue),
-            "organization_id": org_id,
-            "organization_name": org_name,
-            "note": str(note or "").strip() or None,
-            "updated_at": _now(),
-        }
+        payload, issue = _job_and_issue(user, normalized_job_id, normalized_issue_id)
+        _migrate_legacy_ignored_locked(state, normalized_job_id)
+        record = _decision_record(payload, issue, status=normalized_status,
+                                  actor=str(user.get("username") or user.get("user_id") or user.get("id") or "").strip() or None,
+                                  note=note)
+        _record_decision(state, record)
         next_state = _write_state(state)
+        runtime.invalidate_job_summary_cache(normalized_job_id)
     await persist_workflow_state(next_state)
     return next_state
 
@@ -907,7 +1353,7 @@ async def create_package(
 
     job_payloads: Dict[str, Dict[str, Any]] = {}
     for job_id in normalized_job_ids:
-        payload = runtime.get_job_status_payload(job_id)
+        payload = runtime.get_job_status_payload(job_id, apply_issue_filters=False)
         if not user_can_access_job(user, payload):
             raise HTTPException(status_code=403, detail="job access denied")
         job_payloads[job_id] = payload
@@ -934,10 +1380,30 @@ async def create_package(
         # （§一百零三），这里只是要求"先重新开始复核"。
         for job_id in normalized_job_ids:
             _require_issue_mutable(state, job_id)
+        snapshots = {}
+        for job_id in normalized_job_ids:
+            current = runtime.get_job_status_payload(job_id, apply_issue_filters=False)
+            if not current.get("analysis_revision") or current.get("analysis_revision") != job_payloads[job_id].get("analysis_revision"):
+                raise HTTPException(status_code=409, detail={"error": "package_revision_changed"})
+            job_payloads[job_id] = current
+        for key, old_payload, old_issue in resolved_issues:
+            job_id, _, issue_id = key.partition("::")
+            current_issue = _find_issue(job_payloads[job_id], issue_id)
+            record = state["issues"].get(key, {})
+            decisions = dict(_decision_pairs(state, job_id))
+            if current_issue is None or issue_identity_fingerprint(current_issue) != issue_identity_fingerprint(old_issue) or decisions.get(issue_id) != "confirmed" or record.get("identity_fingerprint") != issue_identity_fingerprint(current_issue):
+                raise HTTPException(status_code=409, detail={"error": "package_requires_confirmed_findings", "message": "仅可打包当前分析中已确认的问题。"})
+        from src.schemas.review_report import build_review_report
+
+        for job_id, payload in job_payloads.items():
+            frozen = copy.deepcopy(payload)
+            frozen["human_decisions"] = project_job_issue_decisions(job_id, frozen, _state=state)
+            frozen["review_report"] = build_review_report(frozen)
+            snapshots[job_id] = {"payload": frozen, "sha256": _package_payload_sha(frozen)}
         for key, payload, issue in resolved_issues:
             job_id, _, issue_id = key.partition("::")
             org_id, org_name = _organization_context(payload)
-            state["issues"][key] = {
+            record = {
                 "key": key,
                 "job_id": job_id,
                 "issue_id": issue_id,
@@ -948,8 +1414,17 @@ async def create_package(
                 "organization_id": org_id,
                 "organization_name": org_name,
                 "note": state["issues"].get(key, {}).get("note"),
+                "analysis_revision": str(payload.get("analysis_revision") or "").strip() or None,
+                "decision_actor": str(user.get("username") or user.get("user_id") or user.get("id") or "").strip() or None,
+                "check_relation_id": str(issue.get("check_relation_id") or "").strip() or None,
+                "fact_ids": _strings(issue.get("fact_ids")),
+                "evidence_ids": _strings(issue.get("evidence_ids")),
+                "identity_fingerprint": issue_identity_fingerprint(issue),
                 "updated_at": now,
             }
+            event = _append_decision_event(state, record)
+            record["decision_revision"] = event["decision_revision"]
+            state["issues"][key] = record
         record = {
             "id": package_id,
             "name": str(name or "").strip() or "Remediation package",
@@ -957,6 +1432,7 @@ async def create_package(
             "organization_name": organization_name,
             "job_ids": normalized_job_ids,
             "issue_keys": normalized_issue_keys,
+            "report_snapshots": snapshots,
             "status": "ready",
             "created_at": now,
             "updated_at": now,

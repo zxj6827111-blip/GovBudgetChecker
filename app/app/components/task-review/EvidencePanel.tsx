@@ -1,6 +1,7 @@
 import { getSeverityMeta } from "@/lib/issueSeverity";
-import type { Problem } from "@/lib/mock";
+import type { Problem, ProblemEvidenceRef } from "@/lib/mock";
 import { cn } from "@/lib/utils";
+import { evidenceExcerptLabel } from "@/lib/evidenceIdentity";
 
 import ProblemPreviewFrame from "./ProblemPreviewFrame";
 import { buildProblemPdfPageUrl } from "./problemPreview";
@@ -8,6 +9,8 @@ import { buildProblemPdfPageUrl } from "./problemPreview";
 interface EvidencePanelProps {
   problem: Problem;
   onOpenViewer: () => void;
+  onSelectEvidenceRef?: (refKey: string) => void;
+  selectedEvidenceRefKey?: string | null;
   onIgnore?: () => void;
   isIgnoring?: boolean;
 }
@@ -15,11 +18,49 @@ interface EvidencePanelProps {
 export default function EvidencePanel({
   problem,
   onOpenViewer,
+  onSelectEvidenceRef,
+  selectedEvidenceRefKey,
   onIgnore,
   isIgnoring = false,
 }: EvidencePanelProps) {
   const sourcePdfUrl = buildProblemPdfPageUrl(problem.jobId, problem.page);
   const severityMeta = getSeverityMeta(problem.severity, problem.severityLabel);
+  const evidenceRefGroups = problem.roundingCases?.map((roundingCase) => {
+    let refs = (problem.evidenceRefs ?? []).filter((ref) =>
+      (ref.relationId && ref.relationId === roundingCase.relationId)
+      || (ref.operandId && roundingCase.operandIds.includes(ref.operandId)),
+    );
+    if (refs.length === 0 && problem.roundingCases?.length === 1) {
+      refs = problem.evidenceRefs ?? [];
+    }
+    return { key: roundingCase.relationId, summary: roundingCase.summary, refs };
+  }) ?? [];
+
+  const renderEvidenceRef = (ref: ProblemEvidenceRef) => {
+    const roleLabel = ref.role === "parent" ? "合计项"
+      : ref.role === "child" ? "明细项"
+        : ref.role;
+    return (
+      <button
+        key={ref.key}
+        type="button"
+        onClick={() => onSelectEvidenceRef?.(ref.key)}
+        data-testid={`task-evidence-ref-${problem.id}-${ref.key}`}
+        aria-pressed={selectedEvidenceRefKey === ref.key}
+        className={cn(
+          "rounded-lg border px-3 py-2 text-left text-xs leading-relaxed transition-colors",
+          selectedEvidenceRefKey === ref.key
+            ? "border-primary-400 bg-primary-50 text-primary-800"
+            : "border-slate-200 bg-white text-slate-700 hover:border-primary-300 hover:bg-primary-50/50",
+        )}
+      >
+        <span className="font-medium">{roleLabel}</span>
+        <span> · {ref.locationText}</span>
+        {ref.valueText ? <span> · 金额 {ref.valueText} 万元</span> : null}
+        {ref.bbox ? <span className="text-success-700"> · 可精确框选</span> : null}
+      </button>
+    );
+  };
 
   return (
     <div className="flex h-full flex-1 flex-col overflow-hidden rounded-xl border border-border bg-white shadow-sm">
@@ -90,6 +131,27 @@ export default function EvidencePanel({
           </ul>
         </div>
 
+        {problem.roundingCases && problem.roundingCases.length > 0 ? (
+          <section className="rounded-xl border border-warning-200 bg-warning-50/50 p-6">
+            <h4 className="mb-3 text-base font-medium text-slate-800">表内差异位置</h4>
+            <div className="space-y-3">
+              {evidenceRefGroups.map((group) => (
+                <div key={group.key} className="rounded-lg border border-warning-200 bg-white p-3">
+                  <p className="mb-2 text-sm leading-relaxed text-slate-700">{group.summary}</p>
+                  {group.refs.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">{group.refs.map(renderEvidenceRef)}</div>
+                  ) : <p className="text-xs text-slate-500">当前无法定位到对应原始单元格。</p>}
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : problem.evidenceRefs && problem.evidenceRefs.length > 0 ? (
+          <section className="rounded-xl border border-slate-200 bg-slate-50 p-6">
+            <h4 className="mb-3 text-base font-medium text-slate-800">表格定位</h4>
+            <div className="flex flex-wrap gap-2">{problem.evidenceRefs.map(renderEvidenceRef)}</div>
+          </section>
+        ) : null}
+
         <div className="rounded-xl border border-danger-100 bg-danger-50/30 p-6">
           <div className="mb-1 flex items-center justify-between">
             <h4 className="text-base font-medium text-danger-900">证据预览</h4>
@@ -134,7 +196,7 @@ export default function EvidencePanel({
         </div>
 
         <div className="rounded-xl border border-slate-100 bg-slate-50 p-6">
-          <h4 className="mb-4 text-base font-medium text-slate-700">原文证据</h4>
+          <h4 className="mb-4 text-base font-medium text-slate-700">{evidenceExcerptLabel(problem.sourceIdentityVerified === true)}</h4>
           <div className="rounded-xl border border-slate-200 bg-white p-5 text-sm leading-relaxed text-slate-700 shadow-sm">
             {problem.snippet}
           </div>

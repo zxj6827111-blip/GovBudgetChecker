@@ -20,6 +20,7 @@
 import { FormEvent, useEffect, useState } from "react";
 
 import { DEFAULT_NEXT_PATH, normalizeNextPath } from "@/lib/loginNextPath";
+import { supervisorLoginPath } from "@/lib/supervisorLoginPath";
 
 export default function LoginPage() {
   const [nextPath, setNextPath] = useState(DEFAULT_NEXT_PATH);
@@ -57,7 +58,7 @@ export default function LoginPage() {
         };
 
         if (!cancelled && response.ok && payload.user) {
-          window.location.assign(nextPath);
+          window.location.assign(supervisorLoginPath(nextPath, payload.user));
           return;
         }
       } catch {
@@ -111,7 +112,7 @@ export default function LoginPage() {
         return;
       }
 
-      window.location.assign(nextPath);
+      window.location.assign(supervisorLoginPath(nextPath, payload.user));
     } catch (e) {
       setError(e instanceof Error ? e.message : "登录失败");
     } finally {

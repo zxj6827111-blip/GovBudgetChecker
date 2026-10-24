@@ -134,6 +134,26 @@ def test_fixed_zc02_next_page_different_table_merged_as_continuation() -> None:
         assert row not in rows, "另一张表的行不得被拼进目标表"
 
 
+def test_fixed_zc02_old_budget_path_rejects_supplemental_table_with_overlapping_headers() -> None:
+    """政府采购表与预算总表共用多个列名，也不能仅凭表头重合当续表。"""
+    target_page = [
+        ["项目", "预算数", "项目", "预算数"],
+        ["收入总计", "100.00", "支出总计", "100.00"],
+    ]
+    purchase_page = [
+        ["项目", "预算数", "项目", "采购预算数"],
+        ["办公设备购置", "60.00", "专用设备", "60.00"],
+    ]
+    doc = build_document(
+        "budget.pdf",
+        ["部门财务收支预算总表", "政府采购预算表"],
+        [[target_page], [purchase_page]],
+        0,
+    )
+    rows, _page = _get_budget_table_rows(doc, {"BUD_T1": [1]}, "BUD_T1")
+    assert rows == target_page
+
+
 def test_fixed_ac03_previous_year_narrative_misbinding() -> None:
     """上年 213012 万元出现在本年材料前部：不得发生跨年比较。"""
     payload = pytest.importorskip("json")
@@ -215,7 +235,7 @@ def test_fixed_ac04_partial_comparison_reported_pass() -> None:
 
 
 def test_fixed_ac05_conditional_tables_policy() -> None:
-    """材料无政府性基金/国资经营内容：不得无条件报缺表。"""
+    """2026-10-22 口径决议②：九张表必备，材料无基金/国资内容时 T6/T7 缺表也报。"""
     from src.engine.budget_rules import BUDGET_TABLE_SPECS
 
     titles = [
@@ -228,7 +248,7 @@ def test_fixed_ac05_conditional_tables_policy() -> None:
         for i in output["issues"]
         if any(key in str(i["message"]) for key in ("BUD_T6", "BUD_T7"))
     ]
-    assert not conditional_hits, "无正面适用证据时不得直接判条件性表缺失"
+    assert len(conditional_hits) == 2, "决议②：无正面适用证据时 T6/T7 缺表也须报出"
 
 
 # ---------------------------------------------------------------------------

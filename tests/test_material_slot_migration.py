@@ -73,7 +73,7 @@ def test_migration_ids_are_unique_and_ordered():
 # ==== 幂等：每条语句都必须可重复执行 ========================================
 
 
-@pytest.mark.parametrize("index", range(len(MIGRATIONS[-1]["sql"])))
+@pytest.mark.parametrize("index", range(len(_migration()["sql"])))
 def test_every_statement_is_idempotent(index: int):
     """逐条检查：不允许出现"再跑一次就报错"的语句。
 
@@ -82,7 +82,7 @@ def test_every_statement_is_idempotent(index: int):
     CREATE OR REPLACE / SET 类语句。这里选择"白名单"而不是"黑名单"：
     新增语句时必须显式想清楚它能不能重放。
     """
-    statement = MIGRATIONS[-1]["sql"][index]
+    statement = _migration()["sql"][index]
     normalized = " ".join(statement.split())
 
     allowed_prefixes = (

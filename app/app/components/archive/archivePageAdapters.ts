@@ -222,6 +222,6 @@ export function buildPackageDownloadFilename(pkg: RemediationPackageRecord): str
 }
 
 /** 整改包的下载请求体：旧单体按 job_ids 调 /api/reports/download-batch。 */
-export function buildPackageDownloadBody(pkg: RemediationPackageRecord): { job_ids: string[] } {
-  return { job_ids: normalizeStringArray(pkg.job_ids) };
+export function buildPackageDownloadBody(pkg: RemediationPackageRecord): { job_ids: string[]; package_id: string } {
+  return { job_ids: normalizeStringArray(pkg.job_ids), package_id: pkg.id };
 }

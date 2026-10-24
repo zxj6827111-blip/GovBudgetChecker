@@ -21,20 +21,89 @@
 from __future__ import annotations
 
 import dataclasses
+import copy
 import hashlib
 import json
+import re
+import unicodedata
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from src.schemas.parse_artifact import EvidenceRef, FiscalFact, ParseArtifact
+
+from .rule_policy import AMOUNT_TOLERANCE_WAN
 
 #: 不能作为确定操作数的识别状态（AC-01：引用即转未完成）
 NON_OPERAND_STATUSES = frozenset({"ambiguous", "low_confidence", "missing"})
 #: 可作为确定操作数的状态（unverified = 解析层事实，证据门另行把关）
 OPERAND_STATUSES = frozenset({"unverified", "verified"})
 
-FACT_CONTEXT_VERSION = "fact-context-v1"
+
+def normalized_amount_is_usable(value: Any) -> bool:
+    """An operand must already have a finite amount in the declared 万元 field."""
+    if value is None or isinstance(value, bool):
+        return False
+    try:
+        return Decimal(str(value)).is_finite()
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+
+
+def _organization_key(value: Any) -> str:
+    return "".join(unicodedata.normalize("NFKC", str(value or "")).split())
+
+
+_FISCAL_TITLE_BOUNDARY = (
+    r"(?:20\d{2}|年度|年初|调整后|全年|本年|上年|收入|支出|收支|一般公共预算|财政拨款|政府性基金|国有资本|"
+    r"部门(?:预算|决算)|单位(?:预算|决算)|预算|决算)"
+)
+_TITLE_OWNER_PREFIX_RE = re.compile(
+    r"^(.+(?:局|中心|委员会|办事处|人民政府|管理所|执法队|学校|医院|图书馆|馆|公司))"
+    r"(?=" + _FISCAL_TITLE_BOUNDARY + r")"
+)
+
+
+def _owner_rejection_reason(fact: FiscalFact, organization: Optional[str]) -> Optional[str]:
+    expected = _organization_key(organization)
+    actual = _organization_key(fact.org_name)
+    if not expected:
+        return None
+    # The legacy title extractor can save a shortened name or a leading 年.
+    # Accept the full document owner only when the original table title binds it
+    # at the start, immediately followed by a year or a fiscal table label.
+    # A parent name inside a subordinate's longer name does not establish this.
+    title = _organization_key((fact.extra_dims or {}).get("source_table_title"))
+    title = re.sub(r"^(?:20\d{2}年(?:度)?)+", "", title)
+    original_owner = _TITLE_OWNER_PREFIX_RE.match(title)
+    if original_owner and original_owner.group(1) != expected:
+        return (
+            "候选事实原始表题主体与当前材料主体不一致："
+            f"{original_owner.group(1)} ≠ {organization}"
+        )
+    if not actual or expected == actual:
+        return None
+    if title.startswith(expected) and re.match(_FISCAL_TITLE_BOUNDARY, title[len(expected):]):
+        return None
+    return f"候选事实主体与当前材料主体不一致：{fact.org_name} ≠ {organization}"
+
+
+def operand_rejection_reason(fact: FiscalFact, organization: Optional[str] = None) -> Optional[str]:
+    """Canonical amount/subject admission shared by selection and fact views."""
+    if fact.extra_dims.get('identity_incomplete')or fact.extra_dims.get('logical_identity_conflict'):
+        return '候选事实的完整业务身份未确认'
+    if fact.extra_dims.get("table_reading_status") == "incomplete":
+        return "来源表仍有未完成读取的区域，不能据此确认勾稽结论"
+    owner_reason = _owner_rejection_reason(fact, organization)
+    if owner_reason:
+        return owner_reason
+    if not normalized_amount_is_usable(fact.normalized_value):
+        return "候选事实缺少可用万元归一金额，单位或数值口径未确认"
+    if fact.recognition_status not in OPERAND_STATUSES:
+        return f"候选事实识别状态不可作操作数（{fact.recognition_status}）"
+    return None
+
+FACT_CONTEXT_VERSION = "fact-context-v2-full-identity"
 
 #: 总计角色标记：subject_code 语义值或行科目名中的合计/总计词（RC-01：
 #: 总计必须由行角色唯一确定，不得取首个同指标事实）。
@@ -95,10 +164,34 @@ def _fact_matches_year_stage(
     ):
         return False
     if budget_stages:
-        fact_stage = str(getattr(fact, "budget_stage", None) or "").strip()
-        if fact_stage and not any(stage in fact_stage for stage in budget_stages):
+        fact_stage = _canonical_budget_stage(getattr(fact, "budget_stage", None))
+        requested_stages = {_canonical_budget_stage(stage) for stage in budget_stages}
+        requested_stages.discard("")
+        # Stage names are a closed vocabulary. In particular, the generic word
+        # "预算" means the initial budget and must never match "调整后预算".
+        if requested_stages and fact_stage not in requested_stages:
             return False
     return True
+
+
+def _canonical_budget_stage(value: Any) -> str:
+    """Normalize known budget stages without substring matching."""
+    text = "".join(str(value or "").strip().split())
+    text = text.replace("（", "(").replace("）", ")")
+    aliases = {
+        "预算": "年初预算",
+        "年初预算数": "年初预算",
+        "预算数": "年初预算",
+        "调整预算": "调整后预算",
+        "调整预算数": "调整后预算",
+        "调整后预算数": "调整后预算",
+        "全年预算数": "全年预算",
+        "决算数": "决算",
+        "本年决算": "决算",
+        "本年决算数": "决算",
+        "上年决算数": "上年决算",
+    }
+    return aliases.get(text, text)
 
 
 def resolve_operand(
@@ -108,8 +201,13 @@ def resolve_operand(
     table_code: Optional[str] = None,
     subject_code: Optional[str] = None,
     subject_tokens: Sequence[str] = (),
+    subject_names: Sequence[str] = (),
     report_year: Optional[int] = None,
     budget_stages: Sequence[str] = (),
+    fund_scope: Optional[str] = None,
+    period: Optional[str] = None,
+    org_scope: Optional[str] = None,
+    instance_uid: Optional[str] = None,
 ) -> OperandResolution:
     """从事实上下文解析一个确定操作数（角色唯一化 + 歧义拒绝）。
 
@@ -118,32 +216,69 @@ def resolve_operand(
     2. 只有 ``unverified``/``verified`` 可作操作数，其余候选使裁决 blocked；
     3. 存在总计角色事实时只从总计角色中选；多个总计候选值不同 → blocked
        （歧义）；无总计角色且多个可用候选值不同 → blocked；
-    4. 同值多候选不歧义，按 verified > 总计角色 > 层级 > 置信度取一。
+    4. 同值但完整身份不同仍是歧义；相同身份的重复证据才可合并选择。
     """
     if context is None:
         return OperandResolution(status="missing", reason="fact context absent")
     candidates: List[FiscalFact] = []
+    unresolved_scope: List[FiscalFact] = []
     for fact in context.facts:
         if indicator and fact.indicator != indicator:
             continue
         if table_code and fact.table_code != table_code:
             continue
+        if any(expected is not None and getattr(fact,key,None)is not None and getattr(fact,key,None)!=expected for key,expected in (
+            ('fund_scope',fund_scope),('period',period),('org_scope',org_scope),('instance_uid',instance_uid))):
+            continue
         if subject_code and fact.subject_code != subject_code:
+            continue
+        if subject_names and str(fact.subject_name or '').strip() not in subject_names:
             continue
         if subject_tokens:
             name = str(fact.subject_name or "").strip()
             if not any(token in name for token in subject_tokens):
                 continue
+        if report_year is not None and fact.fiscal_year is not None and int(fact.fiscal_year)!=int(report_year):
+            continue
+        if ((budget_stages and not getattr(fact,'budget_stage',None))
+                or (report_year is not None and fact.fiscal_year is None)
+                or any(expected is not None and getattr(fact,key,None)is None for key,expected in (
+                    ('fund_scope',fund_scope),('period',period),('org_scope',org_scope),('instance_uid',instance_uid)))):
+            unresolved_scope.append(fact)
+            continue
         if not _fact_matches_year_stage(
             fact, report_year=report_year, budget_stages=budget_stages
         ):
             continue
         candidates.append(fact)
+    if unresolved_scope:
+        return OperandResolution(status='blocked',fact=unresolved_scope[0],
+            reason='存在年度、阶段或业务范围未确认的候选事实，不能唯一绑定取数口径',
+            candidate_uids=tuple(f.fact_uid for f in candidates+unresolved_scope))
     if not candidates:
         return OperandResolution(status="missing", reason="no candidate fact")
 
-    blocked = [f for f in candidates if f.recognition_status not in OPERAND_STATUSES]
-    usable = [f for f in candidates if f.recognition_status in OPERAND_STATUSES]
+    owned_candidates = [
+        fact for fact in candidates if _owner_rejection_reason(fact, context.org_name) is None
+    ]
+    if not owned_candidates:
+        return OperandResolution(
+            status="blocked", fact=candidates[0],
+            reason=_owner_rejection_reason(candidates[0], context.org_name),
+            candidate_uids=tuple(fact.fact_uid for fact in candidates),
+        )
+    candidates = owned_candidates
+
+    # Decide the semantic role before filtering by recognition status. A blocked
+    # total must not disappear and let a verified detail silently stand in for it.
+    totals = [f for f in candidates if is_total_role_fact(f)]
+    role_candidates = totals if totals else candidates
+    blocked = [f for f in role_candidates if operand_rejection_reason(f, context.org_name)]
+    usable = [f for f in role_candidates if not operand_rejection_reason(f, context.org_name)]
+    if blocked and usable:
+        return OperandResolution(status='blocked',fact=blocked[0],
+            reason='同一取数范围内仍有未裁定候选，不能只选择可用候选宣称身份唯一',
+            candidate_uids=tuple(f.fact_uid for f in role_candidates))
     if not usable:
         first = blocked[0]
         uids = ",".join(f.fact_uid for f in blocked[:4])
@@ -151,22 +286,22 @@ def resolve_operand(
             status="blocked",
             fact=first,
             reason=(
-                f"候选事实识别状态不可作操作数（{first.recognition_status}）：{uids}"
+                f"{operand_rejection_reason(first, context.org_name)}：{uids}"
             ),
             candidate_uids=tuple(f.fact_uid for f in candidates),
         )
 
-    totals = [f for f in usable if is_total_role_fact(f)]
-    pool = totals if totals else usable
-    distinct_values = {str(f.normalized_value) for f in pool if f.normalized_value is not None}
-    if len(pool) > 1 and len(distinct_values) > 1:
+    pool = usable
+    distinct_values = {f.normalized_value for f in pool if f.normalized_value is not None}
+    identities = {f.identity_key() for f in pool}
+    if len(pool) > 1 and (len(distinct_values) > 1 or len(identities) > 1):
         detail = ", ".join(
             f"{f.fact_uid}={f.normalized_value}" for f in pool[:4]
         )
         return OperandResolution(
             status="blocked",
             reason=(
-                "同指标多个候选值不同且无法唯一确定总计角色，须人工消歧：" + detail
+                "同指标多个候选身份或值不同，无法唯一确定操作数，须人工消歧：" + detail
             ),
             candidate_uids=tuple(f.fact_uid for f in candidates),
         )
@@ -189,19 +324,8 @@ def resolve_operand(
 
 def _fact_value_token(fact: FiscalFact) -> str:
     """参与版本令牌的值签名：身份 + 归一值 + 识别状态。"""
-    normalized = (
-        str(fact.normalized_value) if fact.normalized_value is not None else ""
-    )
-    payload = "|".join(
-        str(part)
-        for part in (
-            fact.fact_uid,
-            fact.recognition_status,
-            normalized,
-            fact.raw_value or "",
-        )
-    )
-    return payload
+    # 身份、证据和资格变化即使金额不变，也必须产生新的消费版本。
+    return json.dumps(fact.to_dict(), ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
 @dataclass
@@ -222,6 +346,7 @@ class FactContext:
     overlay_records: List[Dict[str, Any]] = field(default_factory=list)
     version_token: str = ""
     context_version: str = FACT_CONTEXT_VERSION
+    org_scope: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.version_token:
@@ -263,10 +388,10 @@ class FactContext:
 
     def definite_facts(self) -> List[FiscalFact]:
         """可作为确定操作数的事实（排除 ambiguous/low_confidence/missing）。"""
-        return [fact for fact in self.facts if fact.recognition_status in OPERAND_STATUSES]
+        return [fact for fact in self.facts if not operand_rejection_reason(fact, self.org_name)]
 
     def non_operand_facts(self) -> List[FiscalFact]:
-        return [fact for fact in self.facts if fact.recognition_status in NON_OPERAND_STATUSES]
+        return [fact for fact in self.facts if operand_rejection_reason(fact, self.org_name)]
 
     def usable_for_rules(self) -> bool:
         """是否有可用的确定操作数（全部事实都被识别风险压住时为 False）。"""
@@ -285,26 +410,8 @@ class FactContext:
         若该指标只存在不可作操作数的事实，返回命中事实但值为 None——
         调用方必须转未完成，不得把 None 当 0。
         """
-        candidates = self.facts_by_indicator(
-            indicator, table_code=table_code, subject_code=subject_code
-        )
-        if not candidates:
-            return None, None
-        usable = [f for f in candidates if f.recognition_status in OPERAND_STATUSES]
-        if not usable:
-            return None, candidates[0]
-        # RC-01：verified 优先于 unverified（识别分数不再反超验证状态），
-        # 同状态下总计角色优先、层级更高优先、识别分数只作末位 tie-break。
-        usable.sort(
-            key=lambda f: (
-                f.recognition_status != "verified",
-                not is_total_role_fact(f),
-                -(f.classification_level or 99),
-                -(f.confidence or 0.0),
-            )
-        )
-        top = usable[0]
-        return top.normalized_value, top
+        result = resolve_operand(self, indicator, table_code=table_code, subject_code=subject_code)
+        return result.value, result.fact
 
     def summary(self) -> Dict[str, Any]:
         statuses: Dict[str, int] = {}
@@ -328,6 +435,7 @@ class FactContext:
             "file_hash": self.file_hash,
             "parse_run_uid": self.parse_run_uid,
             "org_name": self.org_name,
+            "org_scope": self.org_scope,
             "fiscal_year": self.fiscal_year,
             "report_kind": self.report_kind,
             "budget_stage": self.budget_stage,
@@ -343,6 +451,7 @@ class FactContext:
             file_hash=str(data.get("file_hash") or ""),
             parse_run_uid=str(data.get("parse_run_uid") or ""),
             org_name=data.get("org_name"),
+            org_scope=data.get('org_scope'),
             fiscal_year=data.get("fiscal_year"),
             report_kind=data.get("report_kind"),
             budget_stage=data.get("budget_stage"),
@@ -351,7 +460,7 @@ class FactContext:
         )
 
     def compute_version_token(self) -> str:
-        payload = ";".join(_fact_value_token(fact) for fact in self.facts)
+        payload = ";".join(_fact_value_token(fact) for fact in sorted(self.facts, key=lambda f: f.fact_uid))
         return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
 
 
@@ -367,6 +476,7 @@ def build_fact_context_from_artifact(
     fiscal_year: Optional[int] = None,
     report_kind: Optional[str] = None,
     doc_type: Optional[str] = None,
+    require_complete_identity: bool = False,
 ) -> Optional[FactContext]:
     """从统一解析对象构建规则侧事实上下文（不访问数据库）。
 
@@ -378,11 +488,14 @@ def build_fact_context_from_artifact(
         return None
 
     from src.services.fiscal_fact_materializer import FiscalFactMaterializer
+    from src.services.document_profile_resolver import _kind_from_doc_type
     from src.services.table_recognizer import TABLE_RECOGNITION_RULES  # noqa: F401  (保证规则表已加载)
 
     materializer = FiscalFactMaterializer(None)
+    from src.services.fiscal_source_scope import organization_scope
+    org_scope=organization_scope(artifact)
     budget_stage = {"budget": "年初预算", "final": "决算"}.get(
-        str(doc_type or "").strip().lower(), None
+        _kind_from_doc_type(report_kind or doc_type), None
     )
     facts: List[FiscalFact] = []
     for instance in artifact.logical_tables:
@@ -392,31 +505,87 @@ def build_fact_context_from_artifact(
         mappings = _column_mappings_for_instance(instance, fragment)
         if not mappings:
             continue
-        facts.extend(
-            materializer.build_fiscal_facts_for_table(
-                fragment,
-                mappings,
-                org_name=instance.org_name or org_name,
-                fiscal_year=instance.fiscal_year or fiscal_year,
-                period="本年",
-                budget_stage=budget_stage,
-                instance_uid=instance.instance_uid,
-                file_hash=artifact.source_file_hash,
-            )
+        local_scope=organization_scope(artifact,local_title=fragment.title)
+        from types import SimpleNamespace
+        if (_owner_rejection_reason(SimpleNamespace(org_name=instance.org_name,
+            extra_dims={'source_table_title':fragment.title}),org_name)
+            and not any(word in fragment.title for word in ('部门预算','部门决算','单位预算','单位决算'))):
+            local_scope=None
+        materialized = materializer.build_fiscal_facts_for_table(
+            fragment,
+            mappings,
+            org_name=instance.org_name or org_name,
+            org_scope=local_scope,
+            fiscal_year=instance.fiscal_year or fiscal_year,
+            period="本年",
+            budget_stage=budget_stage,
+            instance_uid=instance.instance_uid,
+            file_hash=artifact.source_file_hash,
         )
+        mapping_by_measure = {
+            str(item.get("canonical_measure") or ""): item
+            for item in mappings
+            if isinstance(item, dict)
+        }
+        for fact in materialized:
+            mapping = mapping_by_measure.get(fact.indicator, {})
+            header = str(fact.extra_dims.get("source_header") or mapping.get("source_col_name") or "")
+            stage = _stage_for_fact(fact.indicator, header, report_kind or doc_type, budget_stage)
+            if instance.identity_conflict:
+                fact=dataclasses.replace(fact,recognition_status='ambiguous',extra_dims={**fact.extra_dims,
+                    'logical_identity_conflict':list(instance.conflict_reasons)or['logical_table_identity_conflict']})
+            if require_complete_identity and (not fact.org_name or fact.fiscal_year is None or not fact.org_scope
+                or not fact.fund_scope or not stage or not fact.instance_uid):
+                fact=dataclasses.replace(fact,recognition_status='ambiguous',extra_dims={**fact.extra_dims,
+                    'identity_incomplete':True,'identity_policy':'trusted_complete_fiscal_identity_v1'})
+            facts.append(dataclasses.replace(fact, budget_stage=stage))
 
     if not facts:
         return None
 
+    from src.services.fact_column_arithmetic import constrain_column_arithmetic
+    from src.services.table_reading_assessment import constrain_reading_facts
+    from src.services.manual_cell_overlay import mark_manual_facts
+    facts = mark_manual_facts(artifact, constrain_column_arithmetic(constrain_reading_facts(artifact, facts)))
     return FactContext(
         facts=facts,
         file_hash=artifact.source_file_hash,
         parse_run_uid=artifact.parse_run_uid,
         org_name=org_name,
+        org_scope=org_scope,
         fiscal_year=fiscal_year,
         report_kind=report_kind,
         budget_stage=budget_stage,
     )
+
+
+def _stage_for_fact(
+    indicator: str, source_header: str, doc_type: Optional[str], default_stage: Optional[str]
+) -> Optional[str]:
+    """Assign stage from each measure column, not from the document as a whole."""
+    header = "".join(str(source_header or "").split())
+    if any(token in header for token in ("调整后", "调整预算")):
+        return "调整后预算"
+    if "全年预算" in header:
+        return "全年预算"
+    if "年初预算" in header:
+        return "年初预算"
+    if "上年" in header and "决算" in header:
+        return "上年决算"
+    is_budget_measure = (indicator == "budget" or indicator.endswith("_budget")) and indicator not in {
+        "general_public_budget", "government_fund_budget", "state_capital_budget"
+    }
+    if "预算数" in header and "决算数" not in header:
+        is_budget_measure = True
+    from src.services.document_profile_resolver import _kind_from_doc_type
+    kind = _kind_from_doc_type(doc_type)
+    if is_budget_measure:
+        # A department final account commonly carries the original annual budget
+        # beside the final amount; those columns need separate stage identities.
+        return "年初预算" if kind == "final" else (default_stage or "年初预算")
+    if kind == "final":
+        return "决算"
+    return default_stage
 
 
 def _fragment_for_instance(artifact: ParseArtifact, instance: Any):
@@ -481,10 +650,23 @@ def _combine_fragments(instance: Any, fragments: Sequence[Any]):
 
 
 def _column_mappings_for_instance(instance: Any, fragment: Any) -> List[Dict[str, Any]]:
-    """列映射：优先实例自带映射，缺省时按表头别名推导（与入库同源）。"""
-    if getattr(instance, "column_mappings", None):
-        return [dict(item) for item in instance.column_mappings]
-    return _canonical_mappings_for_fragment(fragment, instance.table_code)
+    """从完整自动映射开始，再逐项应用实例上的人工覆盖。"""
+    mappings = _canonical_mappings_for_fragment(fragment, instance.table_code)
+    for override in getattr(instance, "column_mappings", []) or []:
+        if not isinstance(override, dict):
+            continue
+        try:
+            source_col_idx = int(override.get("source_col_idx"))
+        except (TypeError, ValueError):
+            source_col_idx = None
+        measure = str(override.get("canonical_measure") or "")
+        mappings = [
+            item for item in mappings
+            if (source_col_idx is None or item.get("source_col_idx") != source_col_idx)
+            and (not measure or str(item.get("canonical_measure") or "") != measure)
+        ]
+        mappings.append(dict(override))
+    return mappings
 
 
 def _canonical_mappings_for_fragment(fragment: Any, table_code: str) -> List[Dict[str, Any]]:
@@ -500,37 +682,10 @@ def _canonical_mappings_for_fragment(fragment: Any, table_code: str) -> List[Dic
     if rule is None or not fragment.rows:
         return []
 
-    header_row_count = max(1, min(int(getattr(fragment, "header_row_count", 1) or 1), 3))
-    header_rows = [row for row in fragment.rows[:header_row_count] if row]
-    if not header_rows:
-        return []
-    col_count = max(len(row) for row in header_rows)
-    headers = [
-        "".join(str(row[col]) for row in header_rows if col < len(row)).strip()
-        for col in range(col_count)
-    ]
-    mappings: List[Dict[str, Any]] = []
-    for measure, aliases in (rule.measure_aliases or {}).items():
-        # 同名列优先精确匹配，再退子串——避免"合计"命中"项目合计说明"类列
-        best_col: Optional[int] = None
-        best_exact = False
-        for col, header_text in enumerate(headers):
-            hit = any(alias and str(alias) == header_text for alias in aliases)
-            substring = any(alias and str(alias) in header_text for alias in aliases)
-            if hit and (best_col is None or not best_exact):
-                best_col, best_exact = col, True
-            elif substring and best_col is None:
-                best_col, best_exact = col, False
-        if best_col is not None:
-            mappings.append(
-                {
-                    "source_col_idx": best_col,
-                    "canonical_measure": measure,
-                    "source_col_name": headers[best_col],
-                    "confidence": 0.9,
-                }
-            )
-    return mappings
+    from src.services.fiscal_column_identity import canonical_column_mappings
+
+    return canonical_column_mappings(fragment, rule)
+
 
 
 # ---------------------------------------------------------------------------
@@ -609,12 +764,14 @@ def apply_fact_overlay(
         idx = next(i for i, item in enumerate(new_facts) if item.fact_uid == overlay.fact_uid)
         previous = new_facts[idx]
         normalized = overlay.normalized_value
-        if normalized is None and overlay.raw_value is not None:
+        corrected_raw = overlay.raw_value if overlay.raw_value is not None else previous.raw_value
+        corrected_unit = overlay.unit or previous.unit
+        if normalized is None and corrected_raw is not None:
             from src.engine.amount_math import normalize_amount_to_wan
 
-            # 校正自带口径单位时按校正单位换算；否则用事实自身单位（RC-10）。
+            # 单位校正即使没有新 raw_value 也要重算原始值，不能只生成空覆盖。
             normalized = normalize_amount_to_wan(
-                overlay.raw_value, overlay.unit or target.unit
+                corrected_raw, corrected_unit
             )
         if normalized is None:
             raise ValueError(
@@ -623,7 +780,7 @@ def apply_fact_overlay(
         record = overlay.to_record()
         record["normalized_value"] = str(normalized)
         applied.append(record)
-        extra = dict(previous.extra_dims or {})
+        extra = copy.deepcopy(previous.extra_dims or {})
         pre_correction = extra.setdefault("pre_correction_values", [])
         pre_correction.append(
             {
@@ -633,6 +790,7 @@ def apply_fact_overlay(
                     else None
                 ),
                 "raw_value": previous.raw_value,
+                "unit": previous.unit,
                 "recognition_status": previous.recognition_status,
             }
         )
@@ -642,8 +800,9 @@ def apply_fact_overlay(
         new_facts[idx] = dataclasses.replace(
             previous,
             normalized_value=normalized,
-            raw_value=overlay.raw_value if overlay.raw_value is not None else previous.raw_value,
-            recognition_status="verified",
+            raw_value=corrected_raw,
+            unit=corrected_unit,
+            recognition_status='ambiguous'if extra.get('identity_incomplete')else'verified',
             extra_dims=extra,
         )
 
@@ -652,6 +811,7 @@ def apply_fact_overlay(
         file_hash=context.file_hash,
         parse_run_uid=context.parse_run_uid,
         org_name=context.org_name,
+        org_scope=context.org_scope,
         fiscal_year=context.fiscal_year,
         report_kind=context.report_kind,
         budget_stage=context.budget_stage,
@@ -729,12 +889,249 @@ def parse_overlays_from_records(records: Iterable[Dict[str, Any]]) -> List[FactO
                 overlay.normalized_value = bucket["normalized_value"]
             overlay.raw_value = bucket.get("raw_value")
             overlay.unit = bucket.get("unit")
-            if overlay.normalized_value is None and not overlay.raw_value:
-                # 该事实的变更里没有任何可换算的值（例如只改了单位）——
-                # 不产生静默空覆盖，交给 collect_unsupported_changes 记账。
+            raw_value_present = (
+                overlay.raw_value is not None
+                and str(overlay.raw_value).strip() != ""
+            )
+            if overlay.normalized_value is None and not raw_value_present and not overlay.unit:
+                # 没有任何事实值字段的记录不能形成覆盖层。
                 continue
             overlays.append(overlay)
     return overlays
+
+
+def apply_table_column_mapping_overlays(
+    artifact: Any, records: Iterable[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Apply audited human column mappings to matching parsed table instances."""
+    from src.services.fiscal_table_rules import NINE_TABLE_RULES, normalize_text
+
+    report: Dict[str, Any] = {"applied": 0, "unresolved": [], "targets": []}
+    instances = list(getattr(artifact, "logical_tables", []) or []) if artifact is not None else []
+    fragments = list(getattr(artifact, "table_fragments", []) or []) if artifact is not None else []
+    fragment_by_uid = {str(item.fragment_uid): item for item in fragments if getattr(item, "fragment_uid", None)}
+    for record in records or []:
+        if not isinstance(record, dict):
+            continue
+        record_id = str(record.get("record_id") or "")
+        changes = record.get("changes")
+        for change in changes if isinstance(changes, list) else []:
+            if not isinstance(change, dict) or str(change.get("field") or "") != "column_mapping":
+                continue
+            target_id = str(change.get("target_id") or "").strip()
+            target_type = str(change.get("target_type") or "")
+            candidates = []
+            if target_type == "table_instance":
+                for item in instances:
+                    identities = {str(getattr(item, "instance_uid", ""))}
+                    identities.update(
+                        str(uid) for uid in (getattr(item, "fragment_uids", []) or [])
+                    )
+                    if target_id in identities:
+                        candidates.append(item)
+            if len(candidates) != 1:
+                report["unresolved"].append({
+                    "target_id": target_id,
+                    "reason": "表实例身份未唯一匹配" if candidates else "表实例不存在",
+                    "record_id": record_id,
+                })
+                continue
+            instance = candidates[0]
+            table_rule = NINE_TABLE_RULES.get(str(getattr(instance, "table_code", "")))
+            if table_rule is None:
+                report["unresolved"].append({
+                    "target_id": target_id,
+                    "reason": "表种未登记，无法校验规范指标",
+                    "record_id": record_id,
+                })
+                continue
+            value = change.get("value")
+            raw_mappings: List[Dict[str, Any]] = []
+            if isinstance(value, dict) and isinstance(value.get("mappings"), list):
+                raw_mappings = [item for item in value["mappings"] if isinstance(item, dict)]
+                if len(raw_mappings) != len(value["mappings"]):
+                    report["unresolved"].append({
+                        "target_id": target_id,
+                        "reason": "mappings 列表中的每一项都必须是对象",
+                        "record_id": record_id,
+                    })
+                    continue
+            elif isinstance(value, dict) and "canonical_measure" in value and "source_col_idx" in value:
+                raw_mappings = [value]
+            elif isinstance(value, dict):
+                raw_mappings = [
+                    {"canonical_measure": key, "source_col_idx": column}
+                    for key, column in value.items()
+                ]
+            if not raw_mappings:
+                report["unresolved"].append({
+                    "target_id": target_id,
+                    "reason": "列映射必须提供 canonical_measure 与 source_col_idx",
+                    "record_id": record_id,
+                })
+                continue
+
+            fragments_for_instance = [
+                fragment_by_uid[uid]
+                for uid in (getattr(instance, "fragment_uids", []) or [])
+                if uid in fragment_by_uid
+            ]
+            if not fragments_for_instance:
+                report["unresolved"].append({
+                    "target_id": target_id,
+                    "reason": "表实例没有可核对的解析片段",
+                    "record_id": record_id,
+                })
+                continue
+            def _headers_for(fragment: Any) -> List[str]:
+                depth = max(1, min(int(getattr(fragment, "header_row_count", 1) or 1), 3))
+                rows = [row for row in fragment.rows[:depth] if row]
+                count = max((len(row) for row in rows), default=0)
+                return [
+                    "".join(str(row[index] or "") for row in rows if index < len(row)).strip()
+                    for index in range(count)
+                ]
+
+            fragment_headers = [
+                (fragment, _headers_for(fragment)) for fragment in fragments_for_instance
+            ]
+            headers = fragment_headers[0][1]
+            header_count = len(headers)
+            normalized_mappings: List[Dict[str, Any]] = []
+            used_measures: set[str] = set()
+            used_columns: set[int] = set()
+            errors: List[str] = []
+            for mapping in raw_mappings:
+                raw_measure = str(mapping.get("canonical_measure") or "").strip()
+                candidates_for_measure = [
+                    measure for measure, aliases in table_rule.measure_aliases.items()
+                    if raw_measure == measure
+                    or normalize_text(raw_measure) in {normalize_text(alias) for alias in aliases}
+                ]
+                if len(candidates_for_measure) != 1:
+                    errors.append(f"指标{raw_measure or '未填写'}无法唯一映射到表种规范项")
+                    continue
+                raw_col = mapping.get("source_col_idx")
+                if isinstance(raw_col, bool) or not isinstance(raw_col, int):
+                    errors.append("source_col_idx 必须为非负整数")
+                    continue
+                source_col_idx = raw_col
+                if source_col_idx < 0 or source_col_idx >= header_count:
+                    errors.append(f"source_col_idx={source_col_idx} 超出表头列范围")
+                    continue
+                source_col_name = str(mapping.get("source_col_name") or headers[source_col_idx]).strip()
+                if source_col_idx in used_columns:
+                    errors.append(f"第{source_col_idx}列被重复映射")
+                    continue
+                canonical_measure = candidates_for_measure[0]
+                if canonical_measure in used_measures:
+                    errors.append(f"规范指标{canonical_measure}被重复映射")
+                    continue
+                mismatched_fragment = next(
+                    (
+                        fragment for fragment, fragment_header in fragment_headers
+                        if source_col_idx >= len(fragment_header)
+                        or normalize_text(fragment_header[source_col_idx]) != normalize_text(source_col_name)
+                    ),
+                    None,
+                )
+                if (
+                    normalize_text(source_col_name) != normalize_text(headers[source_col_idx])
+                    or mismatched_fragment is not None
+                ):
+                    errors.append(f"第{source_col_idx}列列名与解析表头不一致")
+                    continue
+                used_columns.add(source_col_idx)
+                used_measures.add(canonical_measure)
+                has_numeric_data = any(
+                    source_col_idx < len(row)
+                    and str(row[source_col_idx] or "").strip()
+                    and _numeric_string_for_mapping(row[source_col_idx])
+                    for fragment, fragment_header in fragment_headers
+                    for row in fragment.rows[
+                        max(1, min(int(getattr(fragment, "header_row_count", 1) or 1), 3)):
+                    ]
+                    if source_col_idx < len(fragment_header)
+                )
+                if not has_numeric_data:
+                    errors.append(f"第{source_col_idx}列没有可解析金额单元格")
+                    continue
+                normalized_mappings.append({
+                    "source_col_idx": source_col_idx,
+                    "source_col_name": source_col_name,
+                    "canonical_measure": canonical_measure,
+                    "confidence": 1.0,
+                    "mapping_source": "human_correction",
+                    "correction_record_id": record_id,
+                    "correction_evidence_ids": [
+                        str(value) for value in change.get("evidence_ids", []) if str(value)
+                    ],
+                })
+            if errors or not normalized_mappings:
+                report["unresolved"].append({
+                    "target_id": target_id,
+                    "reason": "；".join(errors) or "没有有效列映射",
+                    "record_id": record_id,
+                })
+                continue
+            # Start from the complete effective map (header-derived mappings plus
+            # prior manual overrides). Replacing one column must not erase every
+            # untouched measure merely because the instance now has an override.
+            merged = _column_mappings_for_instance(instance, fragments_for_instance[0])
+            for mapping in normalized_mappings:
+                def _source_col_index(item: Dict[str, Any]) -> Optional[int]:
+                    raw = item.get("source_col_idx")
+                    if isinstance(raw, bool):
+                        return None
+                    try:
+                        return int(raw)
+                    except (TypeError, ValueError):
+                        return None
+
+                merged = [
+                    item for item in merged
+                    if _source_col_index(item) != mapping["source_col_idx"]
+                    and str(item.get("canonical_measure") or "") != mapping["canonical_measure"]
+                ]
+                merged.append(mapping)
+            instance.column_mappings = merged
+            report["applied"] += 1
+            report["targets"].append({
+                "target_id": target_id,
+                "record_id": record_id,
+                "mapping_count": len(normalized_mappings),
+            })
+    if report["applied"]:
+        # 人工列身份也属于解析配置。同样的覆盖可复用缓存，修改覆盖必须创建新运行，
+        # 否则规则消费的新映射会在结构化入库时被旧缓存静默替换。
+        base_config = re.sub(
+            r":column-mapping-v1:[0-9a-f]{64}$", "", artifact.config_fingerprint or ""
+        )
+        mappings = sorted(
+            ({"instance_uid": instance.instance_uid, "column_mappings": instance.column_mappings}
+             for instance in instances),
+            key=lambda item: item["instance_uid"],
+        )
+        mapping_digest = hashlib.sha256(
+            json.dumps(mappings, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        artifact.config_fingerprint = f"{base_config}:column-mapping-v1:{mapping_digest}"
+        artifact.parse_run_uid = hashlib.sha256("|".join((
+            artifact.source_file_hash, artifact.parser_fingerprint,
+            artifact.config_fingerprint, artifact.ocr_model_fingerprint or "",
+        )).encode()).hexdigest()[:32]
+    return report
+
+
+def _numeric_string_for_mapping(value: Any) -> bool:
+    text = str(value or "").strip().replace(",", "").replace("，", "")
+    if text in {"-", "—", "–"}:
+        return True
+    try:
+        Decimal(text)
+        return True
+    except Exception:
+        return False
 
 
 #: 覆盖层不消费的 fact 校正字段 →（是否阻断、原因说明）。
@@ -756,13 +1153,9 @@ UNSUPPORTED_FACT_FIELDS: Dict[str, Dict[str, str]] = {
         "blocking": "true",
         "reason": "指标属于事实身份，覆盖层不改身份；该校正未生效，需通过重新解析或反馈管线处理",
     },
-    "column_mapping": {
-        "blocking": "false",
-        "reason": "列映射校正面向表实例管线，不进入事实值覆盖层",
-    },
     "manual_location": {
-        "blocking": "false",
-        "reason": "人工定位由证据重绑定管线消费，不改变事实值",
+        "blocking": "true",
+        "reason": "当前重分析管线尚未消费人工定位覆盖；本轮校正未生效，需待证据重绑定完成后复核",
     },
 }
 
@@ -783,15 +1176,19 @@ def collect_unsupported_changes(records: Iterable[Dict[str, Any]]) -> List[Dict[
         for change in changes:
             if not isinstance(change, dict):
                 continue
-            if str(change.get("target_type") or "fact").strip() != "fact":
-                continue
+            target_type = str(change.get("target_type") or "fact").strip()
             field = str(change.get("field") or "").strip()
             meta = UNSUPPORTED_FACT_FIELDS.get(field)
+            if target_type == "table_instance" and field == "column_mapping":
+                continue
+            if target_type != "fact":
+                continue
             if meta is None:
                 continue
             unsupported.append(
                 {
                     "target_id": str(change.get("target_id") or ""),
+                    "target_type": target_type,
                     "field": field,
                     "blocking": meta["blocking"] == "true",
                     "reason": meta["reason"],
@@ -830,40 +1227,25 @@ def remap_overlay_targets(
     unresolved: List[Dict[str, Any]] = []
     rewritten = 0
     for overlay in overlays:
-        if context.fact_by_uid(overlay.fact_uid) is not None:
-            remapped.append(overlay)
-            continue
         old_fact = old_by_uid.get(overlay.fact_uid)
         if old_fact is None:
-            unresolved.append(
-                {
-                    "fact_uid": overlay.fact_uid,
-                    "reason": "目标不在上一版本事实快照中，无法跨版本映射",
-                }
-            )
-            continue
-        matches = by_identity.get(old_fact.identity_key()) or []
-        if len(matches) != 1:
-            # 放宽一档：实例身份（instance_uid）可能因表格分组变化而漂移
-            relaxed = tuple(old_fact.identity_key()[:-1])
-            relaxed_map: Dict[Tuple[Any, ...], List[FiscalFact]] = {}
-            for fact in context.facts:
-                relaxed_map.setdefault(fact.identity_key()[:-1], []).append(fact)
-            matches = relaxed_map.get(relaxed) or []
+            # 当前版本新建的覆盖可以直达；存在历史目标则必须同时核对来源。
+            matches = [f for f in context.facts if f.fact_uid == overlay.fact_uid]
+        else:
+            anchor = old_fact.physical_source_key()
+            matches = [f for f in by_identity.get(old_fact.identity_key(), [])
+                       if anchor and f.physical_source_key() == anchor
+                       and all(r[0] == context.file_hash and r[1] > 0 and (r[2] or r[3]) for r in anchor)]
         if len(matches) == 1:
             remapped.append(
                 dataclasses.replace(overlay, fact_uid=matches[0].fact_uid)
             )
-            rewritten += 1
+            rewritten += matches[0].fact_uid != overlay.fact_uid
         else:
             unresolved.append(
                 {
                     "fact_uid": overlay.fact_uid,
-                    "reason": (
-                        f"按身份键找到 {len(matches)} 个候选，无法唯一映射"
-                        if matches
-                        else "当前版本不存在同身份事实"
-                    ),
+                    "reason": "业务身份及原件位置不能同时唯一匹配，禁止自动迁移",
                 }
             )
     return remapped, unresolved, rewritten
@@ -930,34 +1312,58 @@ def make_fact_receipt(
     incomplete_reason: Optional[str] = None,
     issue_refs: Sequence[str] = (),
     obligation_id: Optional[str] = None,
+    required_operand_roles: Sequence[str] = (),
+    operand_sources: Optional[Dict[str, str]] = None,
+    evaluation_basis: Optional[str] = None,
+    fact_migration_status: Optional[str] = None,
+    cell_observations: Sequence[Dict[str, Any]] = (),
+    disclosure_sources: Sequence[Dict[str, Any]] = (),
 ) -> Dict[str, Any]:
     """构造一条关系级 CheckReceipt（dict 形态，规则直接写入 doc.fact_receipts）。
 
-    容差缺省记录统一政策（v3_3_portable）：绝对 0.5 万元 + 独立舍入包络；
+    容差缺省记录统一政策（v3_3_portable）：rule_policy.AMOUNT_TOLERANCE_WAN + 独立舍入包络；
     规则实际使用了其它容差时必须显式传入并说明来源。
     """
     from src.schemas.parse_artifact import CheckReceipt
 
+    operand_ids = list(dict.fromkeys(str(item) for item in operand_fact_ids if str(item)))
+    if evaluation_basis is None or fact_migration_status is None:
+        if operand_ids:
+            default_basis = "fiscal_fact"
+            default_migration_status = "complete"
+        else:
+            # Legacy grid/text values can still produce a valid rule result, but
+            # that does not mean the fiscal-fact migration consumed an operand.
+            default_basis = "legacy_document"
+            default_migration_status = "not_applicable" if status == "not_applicable" else "pending"
+        evaluation_basis = evaluation_basis or default_basis
+        fact_migration_status = fact_migration_status or default_migration_status
     receipt = CheckReceipt(
         rule_id=str(rule_id),
         sub_check_id=str(sub_check_id),
-        required_fact_ids=[str(item) for item in required_fact_ids],
-        operand_fact_ids=[str(item) for item in operand_fact_ids],
+        required_fact_ids=[str(item) for item in required_fact_ids]
+        or list(operand_ids),
+        operand_fact_ids=operand_ids,
+        required_operand_roles=list(dict.fromkeys(str(item) for item in required_operand_roles if str(item))),
+        operand_sources={str(key): str(value) for key, value in (operand_sources or {}).items()},
+        cell_observations=[dict(item) for item in cell_observations],
+        disclosure_sources=[dict(item) for item in disclosure_sources],
         formula=formula,
         tolerance=dict(
             tolerance
             or {
-                "configured_amount_tolerance_wan": "0.5",
+                "configured_amount_tolerance_wan": str(AMOUNT_TOLERANCE_WAN),
                 "configured_percentage_point_tolerance": "0.1",
-                "rounding_envelope_wan": "policy",
-                "actual_envelope_source": "fact_policy",
+                "rounding_envelope_wan": "0",
+                "effective_amount_threshold_wan": str(AMOUNT_TOLERANCE_WAN),
+                "actual_envelope_source": "portable_policy",
             }
         ),
         status=status,
         incomplete_reason=incomplete_reason,
         issue_refs=[str(item) for item in issue_refs],
         obligation_id=obligation_id,
-        evaluation_basis="fiscal_fact",
-        fact_migration_status="complete",
+        evaluation_basis=evaluation_basis,
+        fact_migration_status=fact_migration_status,
     )
     return receipt.to_dict()

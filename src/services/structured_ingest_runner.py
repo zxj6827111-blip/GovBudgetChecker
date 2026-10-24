@@ -5,6 +5,8 @@ Run structured ingest against PostgreSQL without affecting legacy checks.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
+from copy import deepcopy
 import hashlib
 import logging
 import os
@@ -16,6 +18,7 @@ from src.db.connection import DatabaseConnection
 from src.db.migrations import run_migrations
 from src.schemas.organization import Organization
 from src.services.fiscal_fact_materializer import FiscalFactMaterializer
+from src.services.fiscal_table_rules import NINE_TABLE_RULES
 from src.services.org_storage import get_org_storage
 from src.services.parse_artifact_store import (
     find_cached_parse_run,
@@ -24,7 +27,9 @@ from src.services.parse_artifact_store import (
     persist_parse_artifact,
 )
 from src.services.pdf_parser import PARSER_FINGERPRINT, PDFParser
-from src.schemas.parse_artifact import ParseArtifact
+from src.schemas.parse_artifact import ParseArtifact, ParsedTable
+from src.services.input_processing_identity import artifact_content_hash, journal_cache_conflict, processing_config_fingerprint
+from src.services.analysis_fact_snapshot import (verify_persisted_facts, make_snapshot, persist_snapshot)
 from src.services.ps_schema_sync import PSSharedSchemaSync
 from src.services.table_recognizer import TableRecognizer
 from src.utils.report_year import parse_report_year
@@ -47,6 +52,55 @@ CONDITIONAL_TABLES = (
     "FIN_08_gov_fund",
     "FIN_09_state_capital",
 )
+
+
+def _legacy_artifact_projection(artifact: ParseArtifact) -> tuple[ParseArtifact, List[Dict[str, Any]]]:
+    """Select existing logical tables for the one-code legacy schema.
+
+    Keep the unified artifact and its independent instance identities intact.
+    Page-text fallbacks are discovery candidates, not a grid to overwrite a
+    resolved logical table with. Multiple genuine instances cannot be flattened
+    into one legacy table, even when their amounts happen to agree.
+    """
+    by_code: Dict[str, List[ParsedTable]] = {}
+    for table in artifact.table_fragments:
+        by_code.setdefault(table.table_code, []).append(table)
+    projected: List[ParsedTable] = []
+    review_items: List[Dict[str, Any]] = []
+    for code, tables in by_code.items():
+        candidates = [table for table in tables if table.extraction_method != "page_text_fallback"]
+        if code not in NINE_TABLE_RULES:
+            projected.extend(candidates)
+            continue
+        logical_instances = [
+            instance for instance in artifact.logical_tables
+            if instance.table_code == code and any(
+                table.fragment_uid in instance.fragment_uids
+                or table.fragment_uid == instance.instance_uid
+                for table in candidates
+            )
+        ]
+        conflicts = any(instance.identity_conflict for instance in logical_instances)
+        if len(candidates) == 1 and not conflicts and len(logical_instances) <= 1:
+            projected.append(candidates[0])
+            continue
+        reason = ("logical_identity_conflict" if conflicts else
+                  "multiple_logical_instances" if len(candidates) > 1 or len(logical_instances) > 1 else
+                  "only_page_text_candidates")
+        review_items.append({
+            "id": f"{code}:legacy_projection",
+            "type": "legacy_table_projection_unavailable",
+            "severity": "warn",
+            "table_code": code,
+            "recognition_status": "manual_review",
+            "reason": reason,
+            "page_numbers": sorted({table.page_number for table in tables}),
+            "instance_uids": [instance.instance_uid for instance in logical_instances],
+            "message": "该表存在独立实例或缺少可靠表格来源，旧表兼容口径无法安全合并，待人工复核",
+            "recommended_action": "review_logical_table_identity",
+        })
+    projected.sort(key=lambda table: (table.page_number, table.table_index, table.fragment_uid))
+    return replace(artifact, table_fragments=projected), review_items
 
 
 async def close_structured_ingest_resources() -> None:
@@ -91,6 +145,7 @@ def build_ingest_metadata(
     report_kind: Any = None,
     checksum: Any = None,
     document_profile: Any = None,
+    check_subject_name: Any = None,
 ) -> Dict[str, Any]:
     """构建结构化入库的元数据。
 
@@ -109,10 +164,15 @@ def build_ingest_metadata(
 
     ``document_profile`` 既有的**输出**字段（``canonical_nine_table`` 这类
     结构化解析类型字符串）与本函数的**输入**参数是两回事，不要混淆。
+
+    ``check_subject_name`` 是规则视为本单位的名称（见
+    ``src/services/check_subject.py``）：只用于事实主体判定与读取回执，
+    文档归档仍按 ``organization_name``。
     """
     payload: Dict[str, Any] = {
         "organization_id": organization_id,
         "organization_name": organization_name,
+        "check_subject_name": check_subject_name,
         "fiscal_year": fiscal_year,
         "doc_type": doc_type,
         "report_year": report_year,
@@ -153,6 +213,10 @@ async def run_structured_ingest(
     *,
     parse_artifact: Optional["ParseArtifact"] = None,
     parse_config_fingerprint: str = "",
+    raw_fact_context: Any = None,
+    effective_fact_context: Any = None,
+    analysis_revision: str = "",
+    candidate_only: bool = False,
 ) -> Dict[str, Any]:
     """结构化入库主链路。
 
@@ -175,11 +239,13 @@ async def run_structured_ingest(
             "job_id": job_id,
             "status": "skipped",
             "reason": "database_unavailable",
+            "storage_consistent": False,
             "review_item_count": 0,
             "review_items": [],
         }
 
     conn = None
+    storage_tx = None
     # 下面这些值在 try 之外声明并逐步填充：任何一步抛错时，错误结果里仍要能
     # 回答"是哪份材料""文档版本建了没有""槽位分到没有"。
     org_name: Optional[str] = None
@@ -187,14 +253,32 @@ async def run_structured_ingest(
     doc_type: Optional[str] = None
     document_info: Optional[Dict[str, int]] = None
     material_slot: Optional[Dict[str, Any]] = None
+    ingest_stage = "setup"
+    parse_run_id: Optional[int] = None
     try:
+        ingest_stage = "source_identity_verification"
+        checksum = _sha256_file(pdf_path)
+        supplied_checksum = str(metadata.get("checksum") or "").strip().lower()
+        if supplied_checksum and supplied_checksum != checksum:
+            raise ValueError("source_file_hash_mismatch: upload metadata differs from original file")
+        if parse_artifact is not None and parse_artifact.source_file_hash != checksum:
+            raise ValueError("source_file_hash_mismatch: supplied artifact differs from original file")
         conn = await DatabaseConnection.acquire()
-        checksum = metadata.get("checksum") or _sha256_file(pdf_path)
         org_name = _normalize_org_name(metadata.get("organization_name"), pdf_path)
         fiscal_year = _parse_year(metadata.get("report_year") or metadata.get("fiscal_year"))
         doc_type = str(metadata.get("doc_type") or metadata.get("report_kind") or "unknown")
 
-        document_info = await _ensure_document_version(
+        if candidate_only:
+            existing = await conn.fetch('''SELECT v.id AS document_version_id,v.document_id,d.org_unit_id
+                FROM fiscal_document_versions v JOIN fiscal_documents d ON d.id=v.document_id
+                JOIN org_units o ON o.id=d.org_unit_id
+                WHERE v.file_hash=$1 AND d.fiscal_year IS NOT DISTINCT FROM $2
+                  AND d.doc_type=$3 AND o.org_name=$4 AND d.subject_org_id=$5''', checksum,fiscal_year,doc_type,org_name,str(metadata.get('organization_id') or ''))
+            if len(existing) > 1:
+                raise ValueError('candidate original document identity is ambiguous')
+            document_info = dict(existing[0]) if existing else None
+        if document_info is None:
+            document_info = await _ensure_document_version(
             conn=conn,
             org_name=org_name,
             fiscal_year=fiscal_year,
@@ -205,7 +289,8 @@ async def run_structured_ingest(
             original_filename=str(metadata.get("filename") or pdf_path.name),
             file_size_bytes=_resolve_file_size(pdf_path, metadata),
             content_type=str(metadata.get("content_type") or "application/pdf"),
-        )
+            subject_org_id=str(metadata.get("organization_id") or ""),
+            )
         version_id = document_info["document_version_id"]
 
         # 材料槽位：文件版本一旦建立就立即尝试进入材料台账，**不等解析结果**。
@@ -219,12 +304,15 @@ async def run_structured_ingest(
         # 二次分配会把"何时进入台账"重新绑回解析是否成功。
         # 槽位仍是旁路能力，safe_* 版本不抛异常——它失败只在结果里留下一条
         # error 摘要，不阻断解析/识别/物化/入库主流程。
-        material_slot = await _allocate_material_slot(
-            conn=conn,
-            metadata=metadata,
-            checksum=checksum,
-            document_version_id=version_id,
-        )
+        if not candidate_only:
+            material_slot = await _allocate_material_slot(
+                conn=conn, metadata=metadata, checksum=checksum,
+                document_version_id=version_id)
+
+        if analysis_revision:
+            # 文档/材料登记已完成；一版解析、原始事实和有效快照必须同事务落地。
+            storage_tx = conn.transaction()
+            await storage_tx.start()
 
         # ---- ZC-01：一次解析、全程消费 ----
         # 1) 查解析缓存（原件哈希+解析器+配置+OCR 指纹）：命中则复用既有
@@ -232,7 +320,6 @@ async def run_structured_ingest(
         # 2) 调用方已带 artifact（主链产物）→ 直接消费，不重开 PDF；
         # 3) 都没有 → 实际解析一次，并把产物写入统一存储（幂等）。
         # 旧表由 artifact 适配写入（persist_artifact_to_legacy_tables）。
-        parse_run_id: Optional[int] = None
         # RC-08：缓存键必须与"本次将要消费的解析对象"的指纹一致。
         # 调用方已带 artifact 时以其自身 config/OCR 指纹为准（那才是这次
         # 事实的真实来源），不能用固定参数指纹去命中旧 run——否则会把
@@ -240,7 +327,7 @@ async def run_structured_ingest(
         lookup_config_fingerprint = (
             (parse_artifact.config_fingerprint or parse_config_fingerprint)
             if parse_artifact is not None
-            else parse_config_fingerprint
+            else processing_config_fingerprint(parse_config_fingerprint)
         )
         lookup_ocr_fingerprint = (
             parse_artifact.ocr_model_fingerprint
@@ -251,15 +338,25 @@ async def run_structured_ingest(
             conn,
             document_version_id=version_id,
             source_file_hash=checksum,
-            parser_fingerprint=PARSER_FINGERPRINT,
+            parser_fingerprint=(parse_artifact.parser_fingerprint or PARSER_FINGERPRINT) if parse_artifact is not None else PARSER_FINGERPRINT,
             config_fingerprint=lookup_config_fingerprint,
             ocr_model_fingerprint=lookup_ocr_fingerprint,
         )
         if cached_run_id is not None:
             # 命中即完整恢复被命中 run 的 artifact——事实物化、证据引用
             # 全部来自同一 run 的同一份解析对象（RC-08：不旧 run 配新事实）。
-            parse_run_id = cached_run_id
-            parse_artifact = await load_parse_artifact(conn, cached_run_id)
+            ingest_stage = "unified_cache_readback"
+            cached_artifact = await load_parse_artifact(conn, cached_run_id)
+            if parse_artifact is not None:
+                if artifact_content_hash(parse_artifact) != artifact_content_hash(cached_artifact):
+                    journal = journal_cache_conflict(job_id, parse_artifact, cached_artifact)
+                    raise ValueError("cache_key_conflict: cached artifact differs from supplied current artifact; evidence=" + journal)
+                # 主链已执行规则的产物不能被旧run替换；同内容的新尝试有独立run身份。
+                if parse_artifact.parse_run_uid == cached_artifact.parse_run_uid:
+                    parse_run_id = cached_run_id
+            else:
+                parse_artifact = cached_artifact
+                parse_run_id = cached_run_id
 
         parser = PDFParser(conn)
         if parse_artifact is None:
@@ -267,64 +364,92 @@ async def run_structured_ingest(
             parse_artifact = parser.build_parse_artifact(
                 str(pdf_path), config_fingerprint=parse_config_fingerprint
             )
-            # 以真实原件哈希为准（metadata.checksum 缺失时 checksum 即文件哈希）
-            parse_artifact.source_file_hash = checksum
+        # 缓存和新解析都必须证明来自当前字节，不能把调用方的哈希写回产物掩盖差异。
+        if parse_artifact.source_file_hash != checksum:
+            raise ValueError("source_file_hash_mismatch: parsed or cached artifact differs from original file")
 
         if parse_run_id is None:
-            try:
-                parse_run_id = await persist_parse_artifact(
-                    conn,
-                    parse_artifact,
-                    document_version_id=version_id,
-                    org_name=org_name,
-                    fiscal_year=fiscal_year,
-                )
-            except Exception:
-                # 统一存储写入失败不阻断既有入库链路，但必须留痕
-                logger.exception(
-                    "persist_parse_artifact failed for document_version %s", version_id
-                )
-                parse_run_id = None
+            ingest_stage = "unified_artifact_write"
+            parse_run_id = await persist_parse_artifact(
+                conn, parse_artifact, document_version_id=version_id,
+                org_name=org_name, fiscal_year=fiscal_year,
+            )
+
+        ingest_stage = "unified_artifact_readback"
+        stored_artifact = await load_parse_artifact(conn, parse_run_id)
+        if stored_artifact.to_dict() != parse_artifact.to_dict():
+            raise RuntimeError("unified artifact readback differs from complete parser output")
 
         # 旧表兼容写入：由统一解析对象适配产出，不再重开 PDF（ZC-01 / SYS-01）
-        parse_result = await parser.persist_artifact_to_legacy_tables(
-            version_id, parse_artifact
-        )
-
-        recognizer = TableRecognizer(conn)
-        instances = await recognizer.recognize_tables(version_id)
-        await recognizer.save_table_instances(version_id, instances)
-
-        materializer = FiscalFactMaterializer(conn)
-        materialize_result = await materializer.materialize(version_id)
+        ingest_stage = "legacy_table_write"
+        if candidate_only or analysis_revision:
+            # 候选版本只能追加解析运行和不可变快照，不能清空当前旧表或同步台账。
+            parse_result = {'success': True, 'tables_count': len(parse_artifact.table_fragments),
+                            'unknown_tables': [t.table_code for t in parse_artifact.table_fragments
+                                               if t.table_code.startswith('UNKNOWN_')]}
+            instances = list(parse_artifact.logical_tables)
+            materialize_result = {'facts_count': 0, 'low_confidence_tables': []}
+        else:
+            legacy_artifact, legacy_review_items = _legacy_artifact_projection(parse_artifact)
+            parse_result = await parser.persist_artifact_to_legacy_tables(version_id, legacy_artifact)
+            parse_result['legacy_projection_review_items'] = legacy_review_items
+            recognizer = TableRecognizer(conn)
+            instances = await recognizer.recognize_tables(version_id)
+            await recognizer.save_table_instances(version_id, instances)
+            materializer = FiscalFactMaterializer(conn)
+            materialize_result = await materializer.materialize(version_id)
 
         # 统一事实：从 artifact 直接物化 FiscalFact（含身份+归一值+证据），
         # 与旧表物化并行落库；两条路径来自同一份解析对象（不再二次解析）。
-        fiscal_facts_count = 0
-        if parse_run_id is not None:
-            try:
-                fiscal_facts = _materialize_fiscal_facts_from_artifact(
-                    parse_artifact,
-                    org_name=org_name,
-                    fiscal_year=fiscal_year,
-                    doc_type=doc_type,
-                    file_hash=checksum,
-                )
-                fiscal_facts_count = await persist_facts_and_evidence(
-                    conn,
-                    parse_run_id=parse_run_id,
-                    facts=fiscal_facts,
-                    file_hash=checksum,
-                )
-            except Exception:
-                logger.exception(
-                    "unified fact materialization failed for document_version %s",
-                    version_id,
-                )
+        ingest_stage = "unified_fact_materialization"
+        if raw_fact_context is not None:
+            from src.services.analysis_fact_snapshot import context_is_source_bound
+            if not context_is_source_bound(parse_artifact, raw_fact_context, raw=True):
+                raise ValueError("supplied raw fact context differs from current artifact")
+            fiscal_facts = list(raw_fact_context.facts)
+        else:
+            from src.engine.fact_context import build_fact_context_from_artifact
+            raw_fact_context = build_fact_context_from_artifact(
+                parse_artifact, org_name=_text_or_none(metadata.get("check_subject_name")) or org_name,
+                fiscal_year=fiscal_year,
+                doc_type=doc_type, report_kind=metadata.get("report_kind"),
+                require_complete_identity=bool(analysis_revision or candidate_only))
+            fiscal_facts = list(raw_fact_context.facts) if raw_fact_context else []
+        if effective_fact_context is None:
+            effective_fact_context = raw_fact_context
+        if candidate_only or analysis_revision:
+            materialize_result['facts_count'] = len(fiscal_facts)
+        ingest_stage = "unified_facts_evidence_write"
+        fiscal_facts_count = await persist_facts_and_evidence(
+            conn, parse_run_id=parse_run_id, facts=fiscal_facts, file_hash=checksum,
+        )
+        if fiscal_facts_count != len(fiscal_facts):
+            raise RuntimeError("unified facts write count does not match current materialized facts")
+        ingest_stage = "unified_facts_readback"
+        storage_verification = await verify_persisted_facts(
+            conn, parse_run_id=parse_run_id, facts=fiscal_facts)
+        snapshot_summary = None
+        if analysis_revision:
+            ingest_stage = "analysis_fact_snapshot"
+            snapshot = make_snapshot(job_uuid=job_id, revision_id=analysis_revision,
+                artifact=parse_artifact, raw_context=raw_fact_context,
+                effective_context=effective_fact_context)
+            snapshot_summary = await persist_snapshot(conn, snapshot=snapshot, parse_run_id=parse_run_id)
+        if storage_tx is not None:
+            await storage_tx.commit()
+            storage_tx = None
+        from src.services.table_import_receipt import build_table_import_receipt
+        # 回执要反映人工补录、列映射和改值之后的实际入库状态，否则校正永远消不掉读取报警。
+        receipt_facts = list(effective_fact_context.facts) if effective_fact_context is not None else fiscal_facts
+        reading_import = build_table_import_receipt(
+            parse_artifact, receipt_facts,
+            org_name=_text_or_none(metadata.get("check_subject_name")) or org_name)
+        reading_import["storage_roundtrip_verified"] = True
         document_profile = _detect_document_profile(pdf_path)
         ps_sync_summary: Dict[str, Any]
         try:
-            ps_sync_summary = await PSSharedSchemaSync(conn).sync(
+            ps_sync_summary = ({'status': 'pending_publication', 'source': 'effective_fact_snapshot'}
+                               if analysis_revision else {'status': 'skipped_candidate'}) if (candidate_only or analysis_revision) else await PSSharedSchemaSync(conn).sync(
                 document_version_id=version_id,
                 org_name=org_name,
                 fiscal_year=fiscal_year,
@@ -342,7 +467,7 @@ async def run_structured_ingest(
                 "status": "error",
                 "error": str(exc),
             }
-        local_org_backfill = _backfill_local_organization_catalog(
+        local_org_backfill = None if (candidate_only or analysis_revision) else _backfill_local_organization_catalog(
             org_name=org_name,
             pdf_path=pdf_path,
             ps_sync_summary=ps_sync_summary,
@@ -355,6 +480,7 @@ async def run_structured_ingest(
             materialize_result=materialize_result,
             pdf_path=pdf_path,
         )
+        review_items.extend(_reading_review_items(reading_import["reading_quality"]))
         recognized_codes = {instance.table_code for instance in instances}
         missing_optional_tables = [
             code for code in CONDITIONAL_TABLES if code not in recognized_codes
@@ -373,6 +499,20 @@ async def run_structured_ingest(
             # 统一事实存储（ZC-01）：FiscalFact 身份+归一值+证据的落库条数
             "unified_facts_count": int(fiscal_facts_count or 0),
             "parse_run_id": parse_run_id,
+            "fact_snapshot": snapshot_summary,
+            "storage_verification": storage_verification,
+            "reading_import": reading_import,
+            "unified_storage": {"status": "completed", "artifact_status": "completed",
+                                "facts_status": "completed", "evidence_status": "completed",
+                                "parse_run_id": parse_run_id, "document_version_id": version_id,
+                                "expected_facts_count": len(fiscal_facts)},
+            "parse_cache_hit": cached_run_id is not None,
+            "cache_readback": {"cache_hit": cached_run_id is not None,
+                               "cell_provenance_decoded": cached_run_id is not None,
+                               "parse_run_id": cached_run_id},
+            "parse_cache": {"hit": cached_run_id is not None, "readback_completed": cached_run_id is not None,
+                            "restored_cell_count": len(parse_artifact.cells()) if cached_run_id is not None else 0,
+                            "restored_ocr_provenance_cells": sum(bool(cell.ocr_provenance) for _, cell in parse_artifact.cells()) if cached_run_id is not None else 0},
             "unknown_tables": parse_result.get("unknown_tables") or [],
             "missing_optional_tables": missing_optional_tables,
             "low_confidence_tables": materialize_result.get("low_confidence_tables") or [],
@@ -391,11 +531,17 @@ async def run_structured_ingest(
             payload["errors"] = parse_result["errors"]
         return payload
     except Exception as exc:
+        if storage_tx is not None:
+            await storage_tx.rollback()
+            storage_tx = None
         logger.exception("Structured ingest failed for job %s", job_id)
         error_payload: Dict[str, Any] = {
             "job_id": job_id,
             "status": "error",
             "error": str(exc),
+            "ingest_stage": ingest_stage,
+            "unified_storage": {"status": "error", "failed_stage": ingest_stage,
+                                "parse_run_id": parse_run_id},
             "review_item_count": 1,
             "review_items": [
                 {
@@ -436,6 +582,7 @@ async def _ensure_document_version(
     original_filename: str,
     file_size_bytes: int,
     content_type: str,
+    subject_org_id: str = "",
 ) -> Dict[str, int]:
     org_id = await conn.fetchval(
         """
@@ -451,15 +598,16 @@ async def _ensure_document_version(
     # 若沿用 (org_unit_id, fiscal_year, doc_type) 会让年份未知的文档每次都新插一行。
     document_id = await conn.fetchval(
         """
-        INSERT INTO fiscal_documents (org_unit_id, fiscal_year, doc_type)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (org_unit_id, COALESCE(fiscal_year, -1), doc_type)
+        INSERT INTO fiscal_documents (org_unit_id, fiscal_year, doc_type, subject_org_id)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (org_unit_id, COALESCE(fiscal_year, -1), doc_type, subject_org_id)
         DO UPDATE SET doc_type = EXCLUDED.doc_type
         RETURNING id
         """,
         org_id,
         fiscal_year,
         doc_type,
+        subject_org_id,
     )
     version_id = await conn.fetchval(
         """
@@ -569,13 +717,118 @@ def _resolve_file_size(pdf_path: Path, metadata: Dict[str, Any]) -> int:
         return 0
 
 
+def _union_box(boxes: Sequence[Any]) -> Optional[List[float]]:
+    valid = [box for box in boxes if isinstance(box, (list, tuple)) and len(box) == 4]
+    if not valid:
+        return None
+    return [min(b[0] for b in valid), min(b[1] for b in valid),
+            max(b[2] for b in valid), max(b[3] for b in valid)]
+
+
+def _page_ranges(pages: Sequence[int]) -> str:
+    """[1, 2, 3, 5] → "1–3、5"。"""
+    spans: List[List[int]] = []
+    for page in sorted(set(pages)):
+        if spans and page == spans[-1][1] + 1:
+            spans[-1][1] = page
+        else:
+            spans.append([page, page])
+    return "、".join(f"{a}" if a == b else f"{a}–{b}" for a, b in spans)
+
+
+def _cell_ref(cell: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: cell.get(key) for key in ("source_cell_id", "page", "bbox", "raw_text", "reason")}
+
+
+def _reading_review_items(reading_quality: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """读取回执 → 待复核项：读取缺口按页汇总，未绑定金额格按表汇总。
+
+    一张表列映射不完整、一页取词出缺口，都是同一个根因；逐格各挂一条会把一张表
+    变成上百条待办，人工实际只需按表 / 按页核一次。逐格位置仍保留在
+    ``cells`` / ``regions`` 里供定位；只有一处时沿用原单条 id，已有决定不失效。
+    """
+    items: List[Dict[str, Any]] = []
+    gaps_by_page: Dict[int, List[Dict[str, Any]]] = {}
+    image_gaps: List[Dict[str, Any]] = []
+    for gap in reading_quality.get("gaps", []):
+        if gap["reason"] == "image_region_not_structured":
+            image_gaps.append(gap)  # 扫描件逐页都是同一原因：整份只挂一条
+        else:
+            gaps_by_page.setdefault(gap["page"], []).append(gap)
+    if image_gaps:
+        pages = sorted({g["page"] for g in image_gaps})
+        digest = hashlib.sha1("|".join(sorted(g["id"] for g in image_gaps)).encode()).hexdigest()[:12]
+        items.append({
+            "id": image_gaps[0]["id"] if len(image_gaps) == 1 else f"reading:images:{digest}",
+            "type": "table_reading_gap", "severity": "warn",
+            "page_number": pages[0], "page_numbers": pages,
+            "reason": "image_region_not_structured",
+            "bbox": image_gaps[0]["bbox"] if len(image_gaps) == 1 else None,
+            "regions": [{key: g[key] for key in ("id", "page", "reason", "bbox") if key in g} for g in image_gaps],
+            "message": (f"第 {_page_ranges(pages)} 页为图片或扫描内容（共 {len(image_gaps)} 处），"
+                        "尚未完成结构化读取，补识别尚未通过验证"),
+            "recommended_action": "inspect_original_table_reading"})
+    for page, gaps in sorted(gaps_by_page.items()):
+        tables = sorted({g["table_code"] for g in gaps if g.get("table_code")})
+        digest = hashlib.sha1("|".join(sorted(g["id"] for g in gaps)).encode()).hexdigest()[:12]
+        items.append({
+            "id": gaps[0]["id"] if len(gaps) == 1 else f"reading:p{page}:gaps:{digest}",
+            "type": "table_reading_gap", "severity": "warn",
+            **({"table_code": tables[0]} if len(tables) == 1 else {}),
+            "page_number": page, "page_numbers": [page],
+            "reason": ",".join(sorted({g["reason"] for g in gaps})),
+            "bbox": _union_box([g["bbox"] for g in gaps]),
+            "regions": [{key: g[key] for key in ("id", "reason", "bbox", "raw_text") if key in g} for g in gaps],
+            "message": (f"第 {page} 页存在未完成结构化读取的表格区域，补识别尚未通过验证" if len(gaps) == 1
+                        else f"第 {page} 页有 {len(gaps)} 处表格区域未完成结构化读取，补识别尚未通过验证"),
+            "recommended_action": "inspect_original_table_reading"})
+
+    tables = reading_quality.get("mapping_incomplete_tables", [])
+    cells_by_table: Dict[str, List[Dict[str, Any]]] = {table["fragment_uid"]: [] for table in tables}
+    loose: Dict[tuple, List[Dict[str, Any]]] = {}
+    for cell in reading_quality.get("unbound_money_cells", []):
+        if cell.get("fragment_uid") in cells_by_table:
+            cells_by_table[cell["fragment_uid"]].append(cell)
+        else:
+            loose.setdefault((cell.get("table_code") or "", cell.get("page")), []).append(cell)
+    for table in tables:
+        cells = cells_by_table[table["fragment_uid"]]
+        arithmetic = "；合计与分项在多行系统性对不上，列映射可能错位" if table["arithmetic_conflicts"] else ""
+        items.append({"id": f"reading:mapping:{table['fragment_uid']}",
+            "type": "table_mapping_incomplete", "severity": "warn", "table_code": table["table_code"],
+            "page_number": table["page"],
+            "page_numbers": sorted({table["page"], *(c["page"] for c in cells if isinstance(c.get("page"), int))}),
+            "reason": ",".join(sorted(table["reasons"])) or "column_arithmetic_conflict",
+            "cells": [_cell_ref(c) for c in cells],
+            "message": (f"第 {table['page']} 页《{table['title'] or table['table_code']}》映射不完整："
+                        f"{table['unresolved_money_cell_count']} 个金额格没有对应到列含义{arithmetic}，"
+                        "相关检查不能视为已完成"),
+            "recommended_action": "inspect_table_column_mapping"})
+    # 不属于任何映射不完整表的金额（如逻辑视图丢失的原物理格），按表种 + 页汇总。
+    for (table_code, page), cells in sorted(loose.items(), key=lambda item: (item[0][0], item[0][1] or 0)):
+        single = len(cells) == 1
+        digest = hashlib.sha1("|".join(sorted(c["source_cell_id"] for c in cells)).encode()).hexdigest()[:12]
+        items.append({
+            "id": (f"reading:unbound:{cells[0]['source_cell_id']}" if single
+                   else f"reading:unbound:{table_code or 'document'}:p{page}:{digest}"),
+            "type": "source_cell_unbound", "severity": "warn", "table_code": table_code or None,
+            "page_number": page, "page_numbers": [page],
+            "bbox": cells[0]["bbox"] if single else _union_box([c["bbox"] for c in cells]),
+            "reason": ",".join(sorted({c["reason"] for c in cells})),
+            "cells": [_cell_ref(c) for c in cells],
+            "message": (f"第 {page} 页金额 {cells[0]['raw_text']} 已保存，科目、列归属或规则准入需要复核" if single
+                        else f"第 {page} 页有 {len(cells)} 个金额已保存，科目、列归属或规则准入需要复核"),
+            "recommended_action": "inspect_original_cell_identity"})
+    return items
+
+
 def _build_review_items(
     parse_result: Dict[str, Any],
     table_instances: Sequence[Any],
     materialize_result: Dict[str, Any],
     pdf_path: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
-    review_items: List[Dict[str, Any]] = []
+    review_items: List[Dict[str, Any]] = list(parse_result.get("legacy_projection_review_items") or [])
     instance_by_code = {instance.table_code: instance for instance in table_instances}
     recognized_codes = set(instance_by_code)
     core_coverage = len(recognized_codes.intersection(CORE_TABLES))
@@ -617,9 +870,11 @@ def _build_review_items(
             )
 
     for table_code in low_confidence_tables:
-        if suppress_low_confidence_review:
-            continue
         instance = instance_by_code.get(table_code)
+        if suppress_low_confidence_review and not getattr(instance, "source_table_code", None):
+            continue
+        # A real source-bound low-confidence table remains reviewable even
+        # when the other core tables are stable. Coverage cannot verify it.
         review_items.append(
             {
                 "id": f"{table_code}:low_confidence",
@@ -989,10 +1244,11 @@ def _materialize_fiscal_facts_from_artifact(
         _fragment_for_instance,
     )
     from src.services.fiscal_fact_materializer import FiscalFactMaterializer
+    from src.services.document_profile_resolver import _kind_from_doc_type
 
     materializer = FiscalFactMaterializer(None)
     budget_stage = {"budget": "年初预算", "final": "决算"}.get(
-        str(doc_type or "").strip().lower(), None
+        _kind_from_doc_type(doc_type), None
     )
     facts = []
     for instance in artifact.logical_tables:
@@ -1015,7 +1271,9 @@ def _materialize_fiscal_facts_from_artifact(
                 file_hash=file_hash,
             )
         )
-    return facts
+    from src.services.fact_column_arithmetic import constrain_column_arithmetic
+    from src.services.table_reading_assessment import constrain_reading_facts
+    return constrain_column_arithmetic(constrain_reading_facts(artifact, facts))
 
 
 def _canonical_mappings_for_fragment(fragment: Any, table_code: str) -> List[Dict[str, Any]]:

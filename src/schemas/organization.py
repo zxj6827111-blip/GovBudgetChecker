@@ -87,6 +87,7 @@ class ImportResult(BaseModel):
     success: bool
     total: int = 0
     imported: int = 0
+    attempted: int = 0
     skipped: int = 0
     errors: List[str] = Field(default_factory=list)
 

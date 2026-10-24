@@ -14,6 +14,7 @@ import {
 
 import { normalizeSeverityCode } from "@/lib/issueSeverity";
 import { cn } from "@/lib/utils";
+import { reportDownloadUrl } from "@/lib/reportVersion";
 
 interface ReportPreviewModalProps {
   task: any;
@@ -65,7 +66,7 @@ export default function ReportPreviewModal({ task, problems, onClose }: ReportPr
     setIsDownloading(true);
     try {
       const response = await fetch(
-        `/api/reports/download?job_id=${encodeURIComponent(task.id)}&format=pdf`,
+        reportDownloadUrl(task.id, "pdf", task.analysisRevision),
         {
           cache: "no-store",
         }
@@ -282,8 +283,39 @@ export default function ReportPreviewModal({ task, problems, onClose }: ReportPr
                         <span className="mb-1 block text-xs font-bold uppercase tracking-wider text-slate-500">
                           问题描述
                         </span>
-                        <p className="text-sm leading-relaxed text-slate-800">{problem.description}</p>
+                        <p className="whitespace-pre-line text-sm leading-relaxed text-slate-800">{problem.description}</p>
                       </div>
+
+                      {Array.isArray(problem.roundingCases) && problem.roundingCases.length > 0 ? (
+                        <div className="mb-4 rounded-md border border-warning-200 bg-warning-50/50 p-3">
+                          <div className="mb-2 text-xs font-bold text-slate-700">表内差异位置</div>
+                          <div className="space-y-2">
+                            {problem.roundingCases.map((roundingCase: any) => {
+                              const refs = (Array.isArray(problem.evidenceRefs) ? problem.evidenceRefs : []).filter((ref: any) =>
+                                (ref.relationId && ref.relationId === roundingCase.relationId)
+                                || (ref.operandId && Array.isArray(roundingCase.operandIds)
+                                  && roundingCase.operandIds.includes(ref.operandId)),
+                              );
+                              return (
+                                <div key={roundingCase.relationId} className="rounded border border-warning-200 bg-white p-2">
+                                  <p className="text-xs leading-relaxed text-slate-700">{roundingCase.summary}</p>
+                                  {refs.length > 0 ? (
+                                    <ul className="mt-1 list-inside list-disc text-[11px] leading-relaxed text-slate-600">
+                                      {refs.map((ref: any) => (
+                                        <li key={ref.key}>
+                                          {ref.role === "parent" ? "合计项" : ref.role === "child" ? "明细项" : ref.role}
+                                          {ref.locationText ? ` · ${ref.locationText}` : ` · 第 ${ref.page} 页`}
+                                          {ref.valueText ? ` · 金额 ${ref.valueText} 万元` : ""}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : null}
 
                       {problem.evidenceImage ? (
                         <div className="mb-4 overflow-hidden rounded-md border border-slate-200">

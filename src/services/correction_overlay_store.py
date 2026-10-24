@@ -131,6 +131,7 @@ def affected_check_ids(check_receipts: Any, target_ids: Iterable[str]) -> Dict[s
         "target_fact_id",
         "fact_ids",
         "required_fact_ids",
+        "operand_fact_ids",
         "operand_fact_uids",
         "operand_ids",
     }

@@ -97,12 +97,12 @@ def test_build_issue_display_formats_multi_page_location():
 
 def test_cmm004_emits_granular_findings():
     doc = Document(
-        path="sample_final.pdf",
+        path="sample_budget.pdf",
         pages=2,
         filesize=1024,
         page_texts=[
-            "\u6536\u5165\u51b3\u7b97\u8868\n208 \u6536\u5165\u4e00 18843998.0\n208 05 06 \u6536\u5165\u4e8c 302986.0\n208 05 99 \u6536\u5165\u4e09 100.0",
-            "\u652f\u51fa\u51b3\u7b97\u8868\n208 \u652f\u51fa\u4e00 1843998.0\n208 05 06 \u652f\u51fa\u4e8c 3029866.0\n209 05 99 \u652f\u51fa\u4e09 120.0",
+            "部门收入预算总表\n208 \u6536\u5165\u4e00 18843998.0\n208 05 06 \u6536\u5165\u4e8c 302986.0\n208 05 99 \u6536\u5165\u4e09 100.0",
+            "部门支出预算总表\n208 \u652f\u51fa\u4e00 1843998.0\n208 05 06 \u652f\u51fa\u4e8c 3029866.0\n209 05 99 \u652f\u51fa\u4e09 120.0",
         ],
         page_tables=[[], []],
         units_per_page=[None, None],
@@ -121,5 +121,5 @@ def test_cmm004_emits_granular_findings():
     assert "\u7c7b\u6b3e\u9879\u7f16\u7801 2090599 \u4ec5\u51fa\u73b0\u5728\u652f\u51fa\u8868" in messages
 
     issue_map = {issue.message: issue for issue in issues}
-    assert issue_map["\u7c7b\u6b3e\u9879\u7f16\u7801 208 \u91d1\u989d\u4e0d\u4e00\u81f4"].location["page"] == 1
+    assert issue_map["\u7c7b\u6b3e\u9879\u7f16\u7801 208 \u91d1\u989d\u4e0d\u4e00\u81f4"].location.get("page") is None
     assert issue_map["\u7c7b\u6b3e\u9879\u7f16\u7801 208 \u91d1\u989d\u4e0d\u4e00\u81f4"].location["table"] == "\u6536\u5165/\u652f\u51fa\u603b\u8868"

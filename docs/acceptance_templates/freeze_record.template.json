@@ -1,0 +1,32 @@
+{
+  "schema_version": "gbc.independent-freeze-record.v1",
+  "status": "pending_human_completion",
+  "custodian": null,
+  "annotators": [],
+  "independent_reviewers": [],
+  "frozen_at": null,
+  "truth_sealed_at": null,
+  "code_frozen_at": null,
+  "dataset_manifest_sha256": null,
+  "source_snapshot_sha256": null,
+  "model_manifest_sha256": null,
+  "pipeline_fingerprint": null,
+  "configuration_fingerprint": null,
+  "overlay_manifest_sha256": null,
+  "evaluator_sha256": null,
+  "near_duplicate_review": {
+    "review_record_path": null,
+    "review_record_sha256": null,
+    "group_assignments": [],
+    "development_blind_overlap_resolved": false
+  },
+  "disagreement_review": {
+    "review_record_path": null,
+    "review_record_sha256": null,
+    "resolved": false
+  },
+  "blind_truth_access_before_code_freeze": null,
+  "output_frozen_before_truth_release": false,
+  "signoff_record_path": null,
+  "signoff_record_sha256": null
+}

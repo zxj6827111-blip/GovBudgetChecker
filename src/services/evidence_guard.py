@@ -10,10 +10,9 @@
 - **规则 finding 缺证据**：保留为正式问题（规则是确定性判定，其 message 本身
   带有可复核的判定依据），但记录告警明细，供后续修规则用。
 
-判定口径（与 PLAN "校验 page_number 与 evidence_text/bbox 非空" 对齐）：
-页码可用 **且**（证据文本可用 **或** bbox 可用）才算证据完整。
-bbox 与证据文本二者取其一，是因为大量规则命中能定位页码与原文片段但拿不到坐标，
-而少数版式类问题只有坐标；只要能把人带回原文的某一处，就算可复核。
+判定口径：页码可用 **且** 原文证据文本可用才算证据完整。bbox 只能说明
+几何位置，不能单独证明该位置属于原件中的哪段内容；纯坐标 finding 必须降级，
+直到具备可核对的原文引文。bbox 仍用于精确定位与另行评测。
 
 文档级规则单列（B1 口径调整，2026-08-28）：``BUD-001``（缺预算表/缺必备说明
 章节）是结构性"有没有"判定，问题本身不指向某一页，页码天然缺失——把它们与
@@ -31,7 +30,9 @@ bbox 与证据文本二者取其一，是因为大量规则命中能定位页码
 
 from __future__ import annotations
 
+import hashlib
 import math
+import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 #: 缺证据的 AI 问题被降级后写入的状态值
@@ -45,9 +46,9 @@ EVIDENCE_STATUS_RULE_WARNING = "incomplete_rule_warning"
 # "有证据字段"不等于"有真实证据"：页码必须落在真实页数内，原文引用必须能在
 # 所称页面的文本层中找到。无法核验（无文本层/未提供页文本）不算失败，但要
 # 如实记录，不允许把"未核验"当"已核验"输出。
-EVIDENCE_VERIFICATION_VERIFIED = "verified"      # 原文引用已在所称页面文本中命中
+EVIDENCE_VERIFICATION_VERIFIED = "verified"  # 原文引用已在所称页面文本中命中
 EVIDENCE_VERIFICATION_UNVERIFIED = "unverified"  # 结构完整但无法核验（已记录原因）
-EVIDENCE_VERIFICATION_FAILED = "failed"          # 核验失败：页码越界或原文不存在
+EVIDENCE_VERIFICATION_FAILED = "failed"  # 核验失败：页码越界或原文不存在
 
 #: 页码超出文档真实页数
 REASON_PAGE_OUT_OF_RANGE = "page_out_of_range"
@@ -60,7 +61,8 @@ REASON_TEXT_NOT_FOUND_ON_PAGE = "text_not_found_on_page"
 # 单一证据面：BUD-001 缺表/缺章节、V33-002 九表集合缺失/顺序、
 # V33-003 文件页数/体积阈值。把它们硬塞进可定位分母会把“天然无
 # 单页定位”伪装成证据缺口；其余规则缺页仍必须计入缺口。
-DOCUMENT_LEVEL_RULE_IDS = frozenset({"BUD-001", "V33-002", "V33-003"})
+#: CMM-023（2026-10-22）：章节缺失同属“有没有”判定。
+DOCUMENT_LEVEL_RULE_IDS = frozenset({"BUD-001", "V33-002", "V33-003", "CMM-023"})
 
 #: 降级条目附加的标签，便于前端与导出识别
 EVIDENCE_DEGRADED_TAG = "证据不足待复核"
@@ -131,9 +133,7 @@ def _has_page(finding: Mapping[str, Any]) -> bool:
                     _positive_int(page) is not None for page in ref_pages
                 ):
                     return True
-    return any(
-        _positive_int(item.get("page")) is not None for item in _evidence_items(finding)
-    )
+    return any(_evidence_page_of(item) is not None for item in _evidence_items(finding))
 
 
 def _has_evidence_text(finding: Mapping[str, Any]) -> bool:
@@ -176,6 +176,39 @@ def _evidence_page_of(item: Mapping[str, Any]) -> Optional[int]:
     if page is not None:
         return page
     return _positive_int(item.get("physical_page"))
+
+
+def _source_identities_complete(
+    finding: Mapping[str, Any], expected_file_hash: Optional[str]
+) -> bool:
+    """Require every quoted reference to bind to the current source and stable span ID."""
+    evidence = _evidence_items(finding)
+    if not evidence:
+        return False
+    expected_hash = str(expected_file_hash or "").strip().lower()
+    for item in evidence:
+        file_hash = str(item.get("file_hash") or "").strip().lower()
+        physical_page = _positive_int(item.get("physical_page"))
+        source_id = str(item.get("source_cell_id") or item.get("source_block_id") or "").strip()
+        quote = str(item.get("quote") or "")
+        evidence_id = str(item.get("evidence_id") or "").strip().lower()
+        if (
+            not re.fullmatch(r"[0-9a-f]{64}", file_hash)
+            or (expected_hash and file_hash != expected_hash)
+            or physical_page is None
+            or _evidence_page_of(item) != physical_page
+            or not source_id
+            or not quote.strip()
+            or item.get("source_identity_status") != "verified"
+            or not re.fullmatch(r"[0-9a-f]{16}", evidence_id)
+        ):
+            return False
+        expected_id = hashlib.sha1(
+            "|".join((file_hash, str(physical_page), source_id, quote)).encode("utf-8")
+        ).hexdigest()[:16]
+        if evidence_id != expected_id:
+            return False
+    return True
 
 
 def _claimed_pages(finding: Mapping[str, Any]) -> List[int]:
@@ -238,6 +271,8 @@ def evaluate_finding_evidence(
     *,
     document_page_count: Optional[int] = None,
     page_texts: Optional[Sequence[str]] = None,
+    source_file_hash: Optional[str] = None,
+    source_pdf_path: Optional[str] = None,
 ) -> Tuple[bool, List[str], Dict[str, Any]]:
     """校验单条 finding 的证据链，含真实页数边界与原文引用核验。
 
@@ -283,17 +318,58 @@ def evaluate_finding_evidence(
     # 此前口径是"任一引文在任一所称页命中"——一条真实引文能掩盖另一条
     # 伪造引文，互换两条证据的页码也照样 verified。现在每条引文必须在其
     # **自己的**页码集合内命中；任一条失败，整体即失败。
-    quote_bindings: List[Tuple[str, List[int]]] = []
+    # Certification belongs to this reference, never to a (quote, page) cache.
+    quote_bindings: List[Tuple[str, List[int], bool, bool]] = []
+    evidence = _evidence_items(finding)
+    certified_scan_refs: set[int] = set()
+    if source_pdf_path:
+        from src.services.scan_evidence_certification import (
+            load_attestations,
+            verify_scan_reference,
+        )
+
+        attestations = load_attestations()
+        for index, item in enumerate(evidence):
+            if _source_identities_complete(
+                {"evidence": [item]}, source_file_hash
+            ) and verify_scan_reference(dict(item), source_pdf_path, attestations):
+                certified_scan_refs.add(index)
+                item["verification_status"] = "verified"
+            elif item.get("source_method") == "ocr":
+                item["verification_status"] = "unverified"
     if str(finding.get("text_snippet") or "").strip():
-        quote_bindings.append((str(finding["text_snippet"]).strip(), claimed_pages))
-    for item in _evidence_items(finding):
+        # A finding-level snippet has no cell identity. Treat it as a redundant
+        # display field only when every reference carrying it is certified.
+        snippet = str(finding["text_snippet"]).strip()
+        matching = [
+            index
+            for index, item in enumerate(evidence)
+            if _normalise_for_match(str(item.get("quote") or "")) == _normalise_for_match(snippet)
+        ]
+        certified = bool(matching) and all(index in certified_scan_refs for index in matching)
+        quote_bindings.append((snippet, claimed_pages, certified, False))
+    for index, item in enumerate(evidence):
         item_pages = _evidence_page_of(item)
         bound_pages = [item_pages] if item_pages is not None else list(claimed_pages)
         for key in _EVIDENCE_TEXT_KEYS:
             text = str(item.get(key) or "").strip()
             if text:
-                quote_bindings.append((text, bound_pages))
+                quote_bindings.append(
+                    (
+                        text,
+                        bound_pages,
+                        index in certified_scan_refs
+                        and text == str(item.get("quote") or "").strip(),
+                        item.get("source_method") == "ocr",
+                    )
+                )
 
+    if (
+        not page_texts
+        and quote_bindings
+        and all(certified for quote, pages, certified, is_ocr in quote_bindings)
+    ):
+        verification["status"] = EVIDENCE_VERIFICATION_VERIFIED
     if page_texts:
         verification["checked_pages"] = list(claimed_pages)
         if not quote_bindings:
@@ -302,9 +378,15 @@ def evaluate_finding_evidence(
         else:
             failed_bindings: List[int] = []
             unverifiable_bindings: List[int] = []
-            for index, (quote, bound_pages) in enumerate(quote_bindings):
-                if not bound_pages or not any(
-                    _normalise_for_match(_page_text(page_texts, page)) for page in bound_pages
+            for index, (quote, bound_pages, certified, is_ocr) in enumerate(quote_bindings):
+                if certified:
+                    continue
+                if (
+                    is_ocr
+                    or not bound_pages
+                    or not any(
+                        _normalise_for_match(_page_text(page_texts, page)) for page in bound_pages
+                    )
                 ):
                     # 该引文绑定的页面无文本层（扫描页）：无法核验
                     unverifiable_bindings.append(index)
@@ -333,6 +415,15 @@ def evaluate_finding_evidence(
 
     has_text = _has_evidence_text(finding)
     has_bbox = _has_bbox(finding)
+    source_identity_complete = _source_identities_complete(finding, source_file_hash)
+    verification["source_identity_complete"] = source_identity_complete
+    if not source_identity_complete:
+        missing.append("missing_or_invalid_source_identity")
+        verification["reasons"].append(
+            "source_file_hash/physical_page/source_id/quote/evidence_id 未完整绑定到当前原件"
+        )
+        if verification["status"] == EVIDENCE_VERIFICATION_VERIFIED:
+            verification["status"] = EVIDENCE_VERIFICATION_UNVERIFIED
 
     if not has_page:
         if REASON_PAGE_OUT_OF_RANGE not in missing:
@@ -348,7 +439,8 @@ def evaluate_finding_evidence(
     # 核验失败（伪造原文/页码越界）直接使证据无效，即使结构字段齐全
     complete = (
         has_page
-        and (has_text or has_bbox)
+        and has_text
+        and source_identity_complete
         and REASON_TEXT_NOT_FOUND_ON_PAGE not in missing
         and REASON_PAGE_OUT_OF_RANGE not in missing
     )
@@ -374,9 +466,11 @@ def is_formal_finding(finding: Any) -> bool:
     """
     if isinstance(finding, Mapping):
         status = str(finding.get("evidence_status") or "").strip()
+        severity = str(finding.get("severity") or "").strip()
     else:
         status = str(getattr(finding, "evidence_status", "") or "").strip()
-    return status != EVIDENCE_STATUS_DEGRADED
+        severity = str(getattr(finding, "severity", "") or "").strip()
+    return status != EVIDENCE_STATUS_DEGRADED and severity.lower() not in {"manual_review", "info"}
 
 
 def count_formal_findings(result: Any) -> int:
@@ -467,6 +561,8 @@ def apply_evidence_completeness(
     *,
     document_page_count: Optional[int] = None,
     page_texts: Optional[Sequence[str]] = None,
+    source_file_hash: Optional[str] = None,
+    source_pdf_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """就地校验结果中的全部 finding，并返回 ``evidence_completeness`` 度量。
 
@@ -498,6 +594,8 @@ def apply_evidence_completeness(
             finding,
             document_page_count=document_page_count,
             page_texts=page_texts,
+            source_file_hash=source_file_hash,
+            source_pdf_path=source_pdf_path,
         )
         finding["evidence_verification"] = dict(verification)
         status = str(verification.get("status") or "")
@@ -513,7 +611,8 @@ def apply_evidence_completeness(
         if complete:
             complete_count += 1
             # 只在没有既有状态时补写，避免覆盖上一轮已判定的降级态
-            finding.setdefault("evidence_status", EVIDENCE_STATUS_COMPLETE)
+            if not finding.get("evidence_status"):
+                finding["evidence_status"] = EVIDENCE_STATUS_COMPLETE
         else:
             blocking = [code for code in missing if code != "missing_bbox"] or list(missing)
             if source == "ai":

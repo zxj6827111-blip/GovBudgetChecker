@@ -19,10 +19,12 @@ export async function POST(request: NextRequest) {
     } catch {
       data = { raw: text };
     }
-    if (response.ok) {
+    if (response.ok && data.success === true && Number(data.imported || 0) > 0) {
       invalidateLocalDataCache();
     }
-    return NextResponse.json(data, { status: response.status });
+    return NextResponse.json(data, {
+      status: response.ok && data.success !== true ? 422 : response.status,
+    });
   } catch (error) {
     console.error("Failed to import organizations:", error);
     return NextResponse.json(

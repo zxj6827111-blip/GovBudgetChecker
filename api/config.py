@@ -11,7 +11,7 @@ DEFAULT_RULES_FILE = Path(os.getenv("RULES_FILE", "rules/v3_3.yaml"))
 DEFAULT_RULES_FILE_STR = DEFAULT_RULES_FILE.as_posix()
 
 # AI辅助配置
-# ZC-00：默认关闭 AI 分析——启动不要求 AI 服务或密钥，显式设置 AI_ASSIST_ENABLED=true 才启用。
+# 默认关闭 AI；保存界面配置后，以界面开关为准，否则兼容环境变量。
 AI_ASSIST_ENABLED = os.getenv("AI_ASSIST_ENABLED", "false").lower() == "true"
 AI_EXTRACTOR_URL = os.getenv("AI_EXTRACTOR_URL", "http://127.0.0.1:9009/ai/extract/v1")
 
@@ -29,7 +29,8 @@ class AppConfig:
         """Load configuration from environment variables."""
 
         rules_file = Path(os.getenv("RULES_FILE", str(DEFAULT_RULES_FILE)))
-        ai_assist_enabled = os.getenv("AI_ASSIST_ENABLED", "false").lower() == "true"
+        from src.services.ai_model_settings import capabilities
+        ai_assist_enabled = capabilities()["enabled"]
         ai_extractor_url = os.getenv("AI_EXTRACTOR_URL", "http://127.0.0.1:9009/ai/extract/v1")
         
         return cls(

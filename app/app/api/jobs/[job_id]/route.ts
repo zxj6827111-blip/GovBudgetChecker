@@ -7,7 +7,7 @@ import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ job_id: string }> }
 ) {
   const auth = await requireBackendAuthHeaders();
@@ -17,7 +17,10 @@ export async function GET(
 
   const jobId = encodeURIComponent((await params).job_id);
   try {
-    const res = await fetchWithTimeout(`${apiBase}/api/jobs/${jobId}`, {
+    const url = new URL(`${apiBase}/api/jobs/${jobId}`);
+    const revision = request.nextUrl.searchParams.get("analysis_revision");
+    if (revision) url.searchParams.set("analysis_revision", revision);
+    const res = await fetchWithTimeout(url.toString(), {
       cache: "no-store",
       headers: auth.headers,
     });

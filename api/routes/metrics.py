@@ -23,6 +23,7 @@ import os
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from starlette.concurrency import run_in_threadpool
 
 from api import runtime
 from api.auth_utils import require_admin
@@ -79,7 +80,8 @@ async def metrics(request: Request, response: Response) -> Any:
         raise HTTPException(status_code=404, detail="metrics endpoint is disabled")
 
     auth_mode = authorize_metrics_request(request)
-    payload: Dict[str, Any] = collect_metrics_cached(runtime.UPLOAD_ROOT)
+    # 缓存过期时要扫描全部任务目录：放到线程里，不让其他请求跟着等。
+    payload: Dict[str, Any] = await run_in_threadpool(collect_metrics_cached, runtime.UPLOAD_ROOT)
 
     fmt = str(request.query_params.get("format") or "json").strip().lower()
     if fmt in {"prometheus", "prom", "text"}:

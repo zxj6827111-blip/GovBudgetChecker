@@ -179,6 +179,13 @@ async function installMocks(page: Page, state: ReviewServerState) {
           job_id: String(body.job_id ?? ""),
           status: String(body.status ?? ""),
         };
+        // 夹具只有 FIN-1 一项正式问题；服务端在人工处理后重算问题阻塞，
+        // 检查补核等其他阻塞继续保留，页面须重新读取才能看到这次变化。
+        if (issueId === "FIN-1" && ["confirmed", "no_issue", "in_package"].includes(String(body.status))) {
+          state.completionBlockers = state.completionBlockers.filter(
+            (blocker) => !["pending_findings", "needs_review_findings"].includes(blocker.code),
+          );
+        }
       }
       return json({ issues: workflowIssues, packages: [] });
     }
@@ -273,17 +280,24 @@ function freshState(overrides: Partial<ReviewServerState> = {}): ReviewServerSta
 }
 
 test.describe("Review lifecycle (WP3-A)", () => {
-  test("主链路：进入→自动开复核→确认问题→完成→刷新仍显示已完成", async ({ page }) => {
-    const state = freshState();
+  test("主链路：进入→显式开始复核→确认问题→完成→刷新仍显示已完成", async ({ page }) => {
+    const state = freshState({ completionBlockers: [{ code: "pending_findings", count: 1 }] });
     await page.context().addCookies([sessionCookie]);
     await installMocks(page, state);
 
     await page.goto(`/review?job=${JOB_ID}`);
+    if (state.autoStartAllowed && !state.activeSession && !state.history.some(item => item.status === "completed")) {
+      await expect(page.getByTestId("gbc-review-preview-notice")).toBeVisible();
+      expect(state.startCalls).toBe(0);
+      await page.getByTestId("gbc-review-start").click();
+    }
 
-    // 1. 进入工作台即幂等开复核（§七十四），页面显示"复核中"
+    // 1. 显式开始后才显示复核中，浏览预览不会写入会话
     await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible();
     await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
     expect(state.startCalls).toBeGreaterThan(0);
+    await expect(page.getByTestId("gbc-review-gate-blockers")).toContainText("还有 1 项问题待处理");
+    await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();
 
     // 2. 逐个确认问题
     const issuesTab = page.getByTestId("gbc-review-tab-issues");
@@ -291,6 +305,8 @@ test.describe("Review lifecycle (WP3-A)", () => {
     await page.getByTestId("gbc-review-issue-card-FIN-1").click();
     await page.getByTestId("gbc-review-issue-confirm-FIN-1").click();
     await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("已确认 1");
+    await expect(page.getByTestId("gbc-review-gate-blockers")).toHaveCount(0);
+    await expect(page.getByTestId("gbc-review-complete")).toBeEnabled();
 
     // 3. 完成复核必须真的打到后端（整改前这里只是 router.push("/queue")）
     await page.getByTestId("gbc-review-complete").click();
@@ -303,6 +319,92 @@ test.describe("Review lifecycle (WP3-A)", () => {
     await expect(page.getByTestId("gbc-review-complete")).toHaveText("重新复核");
   });
 
+  test("忽略最后一项后无需刷新即可完成，刷新仍保留决定", async ({ page }) => {
+    const state = freshState({ completionBlockers: [{ code: "pending_findings", count: 1 }] });
+    await page.context().addCookies([sessionCookie]);
+    await installMocks(page, state);
+    await page.goto(`/review?job=${JOB_ID}`);
+    if (state.autoStartAllowed && !state.activeSession && !state.history.some(item => item.status === "completed")) {
+      await expect(page.getByTestId("gbc-review-preview-notice")).toBeVisible();
+      expect(state.startCalls).toBe(0);
+      await page.getByTestId("gbc-review-start").click();
+    }
+
+    await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
+    await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();
+    await page.getByTestId("gbc-review-issue-ignore-FIN-1").click();
+    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("已忽略 1");
+    await expect(page.getByTestId("gbc-review-gate-blockers")).toHaveCount(0);
+    await expect(page.getByTestId("gbc-review-complete")).toBeEnabled();
+
+    await page.reload();
+    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("已忽略 1");
+    await expect(page.getByTestId("gbc-review-complete")).toBeEnabled();
+  });
+
+  test("确认问题后只消除问题阻塞，未补核义务仍禁止完成", async ({ page }) => {
+    const state = freshState({
+      activeSession: buildSession(),
+      completionBlockers: [
+        { code: "pending_findings", count: 1 },
+        { code: "blocking_obligations", count: 1 },
+      ],
+    });
+    await page.context().addCookies([sessionCookie]);
+    await installMocks(page, state);
+    await page.goto(`/review?job=${JOB_ID}`);
+    if (state.autoStartAllowed && !state.activeSession && !state.history.some(item => item.status === "completed")) {
+      await expect(page.getByTestId("gbc-review-preview-notice")).toBeVisible();
+      expect(state.startCalls).toBe(0);
+      await page.getByTestId("gbc-review-start").click();
+    }
+
+    const blockers = page.getByTestId("gbc-review-gate-blockers");
+    await expect(blockers).toContainText("还有 1 项问题待处理");
+    await expect(blockers).toContainText("还有 1 项检查义务待人工补核");
+    await page.getByTestId("gbc-review-issue-confirm-FIN-1").click();
+    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("已确认 1");
+    await expect(blockers).not.toContainText("问题待处理");
+    await expect(blockers).toContainText("还有 1 项检查义务待人工补核");
+    await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();
+    expect(state.completeCalls).toBe(0);
+  });
+
+  for (const failure of ["rejected", "network"] as const) {
+    test(`问题保存失败（${failure}）显示原因，不伪装已处理或允许完成`, async ({ page }) => {
+      const state = freshState({ completionBlockers: [{ code: "pending_findings", count: 1 }] });
+      await page.context().addCookies([sessionCookie]);
+      await installMocks(page, state);
+      await page.route("**/api/workflow", async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        if (failure === "network") return route.abort("failed");
+        return route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({
+            detail: { error: "analysis_identity_required", message: "当前分析未记录版本，不能认定问题已处理" },
+          }),
+        });
+      });
+      await page.goto(`/review?job=${JOB_ID}`);
+    if (state.autoStartAllowed && !state.activeSession && !state.history.some(item => item.status === "completed")) {
+      await expect(page.getByTestId("gbc-review-preview-notice")).toBeVisible();
+      expect(state.startCalls).toBe(0);
+      await page.getByTestId("gbc-review-start").click();
+    }
+      await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
+      await page.getByTestId("gbc-review-issue-confirm-FIN-1").click();
+
+      await expect(page.getByTestId("gbc-review-action-notice")).toContainText(
+        failure === "network" ? "服务暂时不可用" : "当前分析未记录版本，不能认定问题已处理",
+      );
+      await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).not.toContainText("已确认");
+      await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("待处理 1");
+      await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();
+      expect(state.completeCalls).toBe(0);
+    });
+  }
+
   test("版本替换：完成被拒，页面说明「材料文件已更新，请重新复核」", async ({ page }) => {
     const state = freshState({
       activeSession: buildSession(),
@@ -312,6 +414,11 @@ test.describe("Review lifecycle (WP3-A)", () => {
     await installMocks(page, state);
 
     await page.goto(`/review?job=${JOB_ID}`);
+    if (state.autoStartAllowed && !state.activeSession && !state.history.some(item => item.status === "completed")) {
+      await expect(page.getByTestId("gbc-review-preview-notice")).toBeVisible();
+      expect(state.startCalls).toBe(0);
+      await page.getByTestId("gbc-review-start").click();
+    }
     await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
 
     // 门禁阻塞必须**常驻**显示：按钮在"还有待处理问题"时是灰的，
@@ -340,6 +447,11 @@ test.describe("Review lifecycle (WP3-A)", () => {
     await installMocks(page, state);
 
     await page.goto(`/review?job=${JOB_ID}`);
+    if (state.autoStartAllowed && !state.activeSession && !state.history.some(item => item.status === "completed")) {
+      await expect(page.getByTestId("gbc-review-preview-notice")).toBeVisible();
+      expect(state.startCalls).toBe(0);
+      await page.getByTestId("gbc-review-start").click();
+    }
 
     await expect(page.getByTestId("gbc-review-invalidated-notice")).toContainText(
       "分析结果已更新，需要重新复核",
@@ -356,6 +468,11 @@ test.describe("Review lifecycle (WP3-A)", () => {
     await installMocks(page, state);
 
     await page.goto(`/review?job=${JOB_ID}`);
+    if (state.autoStartAllowed && !state.activeSession && !state.history.some(item => item.status === "completed")) {
+      await expect(page.getByTestId("gbc-review-preview-notice")).toBeVisible();
+      expect(state.startCalls).toBe(0);
+      await page.getByTestId("gbc-review-start").click();
+    }
 
     const blockers = page.getByTestId("gbc-review-gate-blockers");
     // WP3-B：文案必须说出条数，且指路到「检查补核」页签（能力已交付，
@@ -384,6 +501,11 @@ test.describe("Review lifecycle (WP3-A)", () => {
     await installMocks(page, state);
 
     await page.goto(`/review?job=${JOB_ID}`);
+    if (state.autoStartAllowed && !state.activeSession && !state.history.some(item => item.status === "completed")) {
+      await expect(page.getByTestId("gbc-review-preview-notice")).toBeVisible();
+      expect(state.startCalls).toBe(0);
+      await page.getByTestId("gbc-review-start").click();
+    }
     // 打开页面不会自动把 completed 改回 reviewing（§七十六）
     await expect(page.getByTestId("gbc-review-completed-summary")).toContainText("已完成复核");
     expect(state.startCalls).toBe(0);

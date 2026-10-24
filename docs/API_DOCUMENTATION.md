@@ -6,7 +6,7 @@
 
 ## 基础信息
 
-- **基础URL**: `http://localhost:8000`
+- **基础URL**: `http://localhost:18743`（本机开发默认端口，可用 `GOVBUDGET_BACKEND_PORT` 覆盖）
 - **API版本**: v1
 - **内容类型**: `application/json` 或 `multipart/form-data`
 - **字符编码**: UTF-8
@@ -77,7 +77,7 @@
 
 **请求示例**:
 ```bash
-curl -X POST "http://localhost:8000/analyze" \
+curl -X POST "http://localhost:18743/analyze" \
   -F "file=@budget_report.pdf" \
   -F "mode=dual"
 ```
@@ -497,7 +497,7 @@ import requests
 import json
 
 # 基础配置
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:18743"
 headers = {"Accept": "application/json"}
 
 # 上传文件进行双模式分析
@@ -639,3 +639,20 @@ document.getElementById('fileInput').addEventListener('change', async (event) =>
 ---
 
 **注意**: 本API文档会随着系统更新而持续完善，请关注版本变更说明。
+
+## 可信 PDF 事实及分析版本接口
+
+以下接口沿用任务访问权限；历史/候选读取不会切换当前版本。新分析使用数据库当前事实指针作为权威，文件为可重试镜像。
+
+- `GET /api/jobs/{job_id}/fact-snapshot?view=raw|effective&revision_id=...&offset=0&limit=1000`：读取指定不可变快照的原始或有效事实；省略 `revision_id` 时读取当前版本。返回快照、事实摘要及分页信息。人工列映射前的原始解释有独立来源摘要，不能用校正后结果替换。
+- `GET /api/jobs/{job_id}/analysis-versions`：列出可读取的当前、历史及候选分析，包含版本状态及当前版本标志。
+- `GET /api/jobs/{job_id}?analysis_revision=...`：查看该版本的任务及报告；不把历史结果与当前结构化查询拼接。
+- `GET /api/jobs/{job_id}/preserved-analyses`：列出旧协议任务重分析前按原始字节归档的文件。
+- `GET /api/jobs/{job_id}/preserved-analyses/{archive_id}/{filename}`：只读下载白名单内且摘要校验通过的历史文件。
+- 报告下载沿用 `analysis_revision` 参数，JSON/CSV/Word/PDF 必须读取同一版本。摘要校验失败、未知版本、无权限须拒绝读取，不能静默回退当前报告。
+
+`check_coverage` 仍表示检查完成率。`result.meta.recognition_state` 只报告已恢复、待裁定、待处理及存储一致性；没有独立逐格真值时 `recognition_accuracy` 和正确自动恢复覆盖率为空值。
+
+OCR 未完成或服务暂不可用时任务保持 `queued`，携带 `ocr_pending` 和 `retry_not_before`。文档单轮软预算默认 600 秒，到限保存检查点并后台续跑；未开始区域不计作完成。实际恢复时间由页数、块数和本机资源决定，不适用上文基础接口的简化超时描述。
+
+历史候选重建与发布工具为 `scripts/rebuild_trusted_pdf_history.py`。`inventory/build/resume` 不切换当前结果；`publish` 要求与原件及快照摘要绑定的明确验收记录，每批最多 20 份。`rollback/sync` 用于撤回及文件镜像重试，原件、旧快照和人工记录保留。操作前应备份并核对验收库，不能对未验收候选自动发布。

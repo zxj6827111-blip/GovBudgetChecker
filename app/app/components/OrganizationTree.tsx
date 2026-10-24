@@ -206,7 +206,7 @@ function getNodeBadge(node: OrganizationNode) {
 }
 
 function getNodeLevelLabel(level: string) {
-  return level === "department" ? "部门" : level === "unit" ? "单位" : "组织";
+  return level === "city" ? "市" : level === "district" ? "区" : level === "department" ? "部门" : level === "unit" ? "单位" : "组织";
 }
 
 export default function OrganizationTree({
@@ -356,7 +356,8 @@ export default function OrganizationTree({
     () => (selectedOrgId ? findNodeById(tree, selectedOrgId) : null),
     [selectedOrgId, tree],
   );
-  const createDepartmentParent = selectedNode && selectedNode.level !== "unit" ? selectedNode : null;
+  const canCreateDepartment = !selectedNode || ["city", "district"].includes(selectedNode.level);
+  const createDepartmentParent = canCreateDepartment ? selectedNode : null;
 
   const allExpandableNodesExpanded = useMemo(
     () => expandableNodeIds.length > 0 && expandableNodeIds.every((id) => expanded[id]),
@@ -406,11 +407,14 @@ export default function OrganizationTree({
         body: formData,
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
+      if (!response.ok || payload.success !== true) {
         throw new Error(parseErrorMessage(payload, "导入失败"));
       }
 
-      window.alert(`导入成功，共导入 ${payload.imported ?? 0} 个组织。`);
+      const importMessage = Number(payload.imported || 0) > 0
+        ? `导入成功，新增 ${payload.imported} 个组织，已存在跳过 ${payload.skipped ?? 0} 个。`
+        : `目录已是最新，本次没有新增组织，已存在跳过 ${payload.skipped ?? 0} 个。`;
+      window.alert(`${importMessage}\n历史报告不会自动归属。请到“运维操作 → 组织重新匹配”，先预览，再正式执行以保存报告归属。`);
       setShowImporter(false);
       await loadOrganizations();
       await onChanged?.();
@@ -422,6 +426,10 @@ export default function OrganizationTree({
   const handleCreateOrg = async () => {
     if (!isAdmin) {
       window.alert("仅管理员可以创建部门");
+      return;
+    }
+    if (!canCreateDepartment) {
+      window.alert("部门下请新增单位；新建部门请先选择市、区或全部组织。");
       return;
     }
 
@@ -702,8 +710,9 @@ export default function OrganizationTree({
                   setModalInputValue("");
                 }}
                 data-testid="organization-tree-create-department"
-                className="ml-2 rounded p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-indigo-600"
-                title={createDepartmentParent ? `在“${createDepartmentParent.name}”下新建部门` : "新建顶层部门"}
+                disabled={!canCreateDepartment}
+                className="ml-2 rounded p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-50"
+                title={!canCreateDepartment ? "部门下请新增单位；请选择市、区或全部组织后新建部门" : createDepartmentParent ? `在“${createDepartmentParent.name}”下新建部门` : "新建顶层部门"}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />

@@ -1,0 +1,44 @@
+[
+  {
+    "fixture": "research23.pdf",
+    "original": "/Users/zhangxingjin/Desktop/决算测试上海市/2023/上海市人民政府研究室.pdf",
+    "sha256": "5d74fe19e01d6cbc38cac36a435b0e5dbe13b1faf50b0d874db0eae26974755e",
+    "year": 2023,
+    "organization": "上海市人民政府研究室"
+  },
+  {
+    "fixture": "research24.pdf",
+    "original": "/Users/zhangxingjin/Desktop/决算测试上海市/2024/上海市人民政府研究室.pdf",
+    "sha256": "7fcedb31371aaa08867bfbbada94a12e4c9d576a6b652965aafba77f7eb78a86",
+    "year": 2024,
+    "organization": "上海市人民政府研究室"
+  },
+  {
+    "fixture": "finance24.pdf",
+    "original": "/Users/zhangxingjin/Desktop/决算测试上海市/2024/上海市地方金融监督管理局.pdf",
+    "sha256": "0a70d15b2fc4d157ed9c3bd814ac52ff8708312e2daba45fd6994a39f84dbb42",
+    "year": 2024,
+    "organization": "上海市地方金融监督管理局"
+  },
+  {
+    "fixture": "commerce25.pdf",
+    "original": "/Users/zhangxingjin/Desktop/决算测试上海市/2025/上海市商务委员会.pdf",
+    "sha256": "3b951d52bc0e4b58f401cfe5dc3ecfed9af8c148c2cbeda9df0ae0f50cfd583f",
+    "year": 2025,
+    "organization": "上海市商务委员会"
+  },
+  {
+    "fixture": "farm23.pdf",
+    "original": "/Users/zhangxingjin/Desktop/决算测试上海市/2023/上海市农场管理局.pdf",
+    "sha256": "184960c753ce609e7b611857b774a833b60d13c5d5b8f55f871ffb5e3adeac2c",
+    "year": 2023,
+    "organization": "上海市农场管理局"
+  },
+  {
+    "fixture": "chemical23.pdf",
+    "original": "/Users/zhangxingjin/Desktop/决算测试上海市/2023/上海化学工业区管理委员会.pdf",
+    "sha256": "0b9c33d440d92e9b9217149a3a5e621851dcdc95e3e3f41f2f0b883f833e92ed",
+    "year": 2023,
+    "organization": "上海化学工业区管理委员会"
+  }
+]

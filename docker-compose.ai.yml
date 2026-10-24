@@ -109,7 +109,7 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     ports:
-      - "8000:8000"
+      - "${GOVBUDGET_BACKEND_PORT:-18743}:8000"
     environment:
       <<: *app-env
       # 只入队、不在请求线程里跑分析：重解析不再拖慢 HTTP 延迟（README「Split Deployment」）。
@@ -124,10 +124,11 @@ services:
     volumes: *app-volumes
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready', timeout=10)"]
+      start_period: 60s
+      interval: 10s
+      timeout: 15s
+      retries: 12
 
   worker:
     # 缺口 B-10：README 早已声明 api/worker 分离模式，但此前任何 compose 里都没有

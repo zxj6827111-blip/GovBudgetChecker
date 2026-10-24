@@ -82,7 +82,11 @@ from src.schemas.material_detail import (
     TimelineYearRow,
     UnitTimelineData,
 )
-from src.services.evidence_guard import count_formal_findings, is_formal_finding
+from src.services.evidence_guard import (
+    EVIDENCE_STATUS_DEGRADED,
+    count_formal_findings,
+    is_formal_finding,
+)
 from src.services.material_ledger_query_service import _slot_summary
 
 #: 证据文本在详情里的截断长度。证据原文属于 `/api/jobs/{id}` 的职责，
@@ -97,6 +101,20 @@ _STRUCTURED_VERSION_JSON_PATH = "(j.metadata -> 'structured_ingest' ->> 'documen
 #: 没有这个守卫，一条被写坏的 metadata 会让整条查询抛 cast 异常，
 #: 而不是"这次运行不参与关联"（fail-closed）。
 _NUMERIC_GUARD = f"{_STRUCTURED_VERSION_JSON_PATH} ~ '^[0-9]+$'"
+
+#: 运行 → 文件版本的关联条件。``structured_document_version_id`` 是上面两行表达式的
+#: 生成列（migration 0038，纯数字才有值，否则 NULL 不参与关联），带索引；
+#: 关联时不必把每行约 1.6MB 的 metadata 整列解开。
+_RUN_VERSION_JOIN = "j.structured_document_version_id = v.id::numeric"
+
+#: 复核摘要（复核清单、主管端）只读 metadata 的两个键：result_meta.obligation_coverage
+#: （补核义务）与 structured_ingest.review_items（结构化待复核项）。两者是 migration 0038
+#: 的生成列，摘要不再解开整列 metadata；这里拼回 ``analysis_from_run_row`` 读取的形状。
+#: 摘要新增读取的键必须同步加生成列。
+_RUN_SUMMARY_METADATA_PROJECTION = """jsonb_build_object(
+                   'result_meta', jsonb_build_object('obligation_coverage', j.result_obligation_coverage),
+                   'structured_ingest', jsonb_build_object('review_items', j.structured_review_items)
+               ) AS metadata"""
 
 #: 槽位行投影。三个接口共用同一份投影：少写一列会让某个接口悄悄拿到 None，
 #: 而不是报错。占位符 ``{where}`` 由调用方给出。
@@ -129,6 +147,7 @@ class UnknownRunMetadataError(ValueError):
     """``structured_ingest.document_version_id`` 出现了非数字值。
 
     只作为**排障信号**使用，不作为查询失败条件：查询侧用 ``_NUMERIC_GUARD``
+    （或同一表达式的生成列 ``structured_document_version_id``，非数字为 NULL）
     把这类行排除在关联之外（fail-closed），并由
     ``collect_legacy_metadata_warnings`` 汇总出来供日志与测试断言。
     原始值放在属性上而不是拼进消息：异常消息会顺着上游 ``{e}`` 落盘
@@ -535,9 +554,7 @@ class MaterialDetailQueryService:
                        r.rule_findings,
                        r.merged_result
                 FROM fiscal_document_versions v
-                LEFT JOIN analysis_jobs j
-                       ON {_NUMERIC_GUARD}
-                      AND {_STRUCTURED_VERSION_JSON_PATH}::bigint = v.id
+                LEFT JOIN analysis_jobs j ON {_RUN_VERSION_JOIN}
                 LEFT JOIN analysis_results r ON r.job_id = j.id
                 WHERE v.slot_id = $1
                 """,
@@ -930,15 +947,9 @@ def partition_findings(
 
     返回 ``(正式问题, 需人工核验, 信息提示)``。
 
-    **这只用于页面分组，不定义"正式 finding"的业务真值。**
-    "有多少条正式 finding"的唯一口径是 ``count_formal_findings``
-    （见 ``count_canonical_formal_findings``）：只要没有被 evidence guard
-    降级就是正式 finding，``info`` 严重度同样计入。这里的 ``formal`` 桶
-    额外把 ``info`` 拆出去只是为了让页面能分开显示——
-    **绝不允许**用 ``len(formal)`` 当作 formal finding 数去对外报数，
-    那会让同一份分析在"审核工作台 / 质量门禁"与"材料详情"上给出两个问题数。
-
-    判定链只有一条：``is_formal_finding``（``evidence_guard`` 的正式门禁）。
+    正式问题数的唯一口径是 ``count_formal_findings``，信息提示不计入。
+    信息提示仍须保留在自己的展示桶；不计入正式问题不等于需要人工复核。
+    正式问题的判定使用 ``is_formal_finding``（``evidence_guard`` 的正式门禁）。
     缺证据被降级的条目（``evidence_status='degraded_missing_evidence'``，
     severity 已被改成 ``manual_review``）**不是**正式 finding；它们必须单独成桶，
     否则页面会把"证据不足、待人工核验"显示成"确认存在的问题"，
@@ -947,7 +958,7 @@ def partition_findings(
     三个桶是**划分**（并集 = 全部 finding，两两不交）：
 
     - ``formal``：正式 finding 且严重度归并桶不是 ``info`` 的条目；
-    - ``info``：正式 finding 且严重度归并桶是 ``info`` 的条目；
+    - ``info``：未被证据门禁降级且严重度归并桶是 ``info`` 的条目；
     - ``manual_review``：未通过正式门禁（缺证据被降级）的条目。
 
     数据来源只有 ``analysis_results`` 的 ``ai_findings`` / ``rule_findings``
@@ -965,26 +976,20 @@ def partition_findings(
             if not isinstance(raw, dict):
                 continue
             item = _finding_item(raw)
-            if not is_formal_finding(raw):
+            if raw.get("evidence_status") == EVIDENCE_STATUS_DEGRADED:
                 manual_review.append(item)
             elif item.severity_bucket == "info":
                 info_items.append(item)
-            else:
+            elif is_formal_finding(raw):
                 formal.append(item)
+            else:
+                manual_review.append(item)
 
     return formal, manual_review, info_items
 
 
 def count_canonical_formal_findings(ai_findings: Any, rule_findings: Any) -> int:
     """正式 finding 数：**直接**调用仓库唯一权威函数 ``count_formal_findings``。
-
-    为什么必须走这一步而不是 ``len(partition_findings(...)[0])``：
-
-    ``partition_findings`` 的第一桶是**展示**用的"正式问题"（把 ``info``
-    拆到另一桶），而权威语义是"没有被 evidence guard 降级就是正式 finding"，
-    ``error`` / ``warn`` / ``info`` 三种严重度**都算**。一旦用 ``len(formal)``
-    对外报数，同一份分析会在审核工作台/质量门禁与材料详情上给出两个不同的
-    问题数——这是禁止的口径分裂。
 
     这里把已落库的两列拼成 ``count_formal_findings`` 认识的结果形态再交给它，
     保证本接口与工作台用的是同一段判定代码，而不是同一套"看起来一样"的规则。

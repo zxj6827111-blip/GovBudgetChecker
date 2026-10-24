@@ -161,7 +161,8 @@ async def test_persist_analysis_job_snapshot_clears_stale_results_for_active_job
     # 逐字相同的结果"会被当成重复落库，旧复核将静默继承新结论。
     assert len(conn.execute_calls) == 2
     query, args = conn.execute_calls[0]
-    assert query == "DELETE FROM analysis_results WHERE job_id = $1"
+    assert query.startswith("DELETE FROM analysis_results WHERE job_id = $1")
+    assert "current_fact_revision_id IS NULL" in query
     assert args == (17,)
     fingerprint_query, fingerprint_args = conn.execute_calls[1]
     assert "analysis_result_fingerprint = NULL" in fingerprint_query

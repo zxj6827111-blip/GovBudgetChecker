@@ -41,6 +41,8 @@ export type IssueItem = {
   percentage?: number;
   text_snippet?: string;
   why_not?: string;
+  evidence_status?: string;
+  evidence_verification?: { status?: string; source_identity_complete?: boolean };
   display?: {
     summary?: string;
     page_text?: string;

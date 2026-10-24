@@ -1,7 +1,16 @@
+import { countsFromJobs, type JobPageQuery, type JobPageView, type JobStatusCounts } from "../../../lib/jobListViews";
 import type { JobSummaryRecord } from "../../../lib/uiAdapters";
 import { isUiTaskFinished, normalizeUiTaskStatus } from "../../../lib/uiAdapters";
 
-import { filterQueueJobs, type QueuePageFilters } from "../queue/queuePageAdapters";
+import {
+  filterQueueJobs,
+  paginateJobs,
+  queuePageQuery,
+  sortQueueJobs,
+  type QueuePageFilters,
+  type QueueSortKey,
+} from "../queue/queuePageAdapters";
+import { collectAvailableYears } from "../workspace/workbenchAdapters";
 
 /**
  * 任务历史页（Task 8.2）的纯逻辑层：终态任务筛选 + 报告下载链接。
@@ -45,4 +54,43 @@ export function countTerminalJobs(jobs: JobSummaryRecord[] | null | undefined): 
     return 0;
   }
   return jobs.filter((job) => isUiTaskFinished(normalizeUiTaskStatus(job.status))).length;
+}
+
+/** 终态任务数，取自接口对全部可见任务的状态计数。 */
+export function terminalCountFromStatusCounts(counts: JobStatusCounts | null | undefined): number | null {
+  return counts ? counts.completed + counts.review_required + counts.failed : null;
+}
+
+/** 历史筛选 → /api/jobs?view=page 参数：与处理队列同一套筛选，外加只看已结束的任务。 */
+export function historyPageQuery(
+  filters: QueuePageFilters,
+  sortKey: QueueSortKey,
+  page: number,
+  pageSize: number,
+): JobPageQuery {
+  return { ...queuePageQuery(filters, sortKey, page, pageSize), include: undefined, scope: "finished" };
+}
+
+/** 后端未升级（/api/jobs 仍返回全量数组）时按原口径在本地算出同样形状的分页视图。 */
+export function buildHistoryPageViewLocally(
+  jobs: JobSummaryRecord[],
+  filters: QueuePageFilters,
+  sortKey: QueueSortKey,
+  page: number,
+  pageSize: number,
+): JobPageView {
+  const pagination = paginateJobs(sortQueueJobs(filterHistoryJobs(jobs, filters), sortKey), page, pageSize);
+  const counts = countsFromJobs(jobs);
+  return {
+    items: pagination.items,
+    total: pagination.total,
+    page: pagination.page,
+    page_size: pageSize,
+    page_count: pagination.pageCount,
+    years: collectAvailableYears(jobs),
+    has_unknown_year: jobs.some((job) => job.report_year === null || job.report_year === undefined),
+    job_total: counts.total,
+    status_counts: counts.status_counts,
+    activity: counts.activity,
+  };
 }

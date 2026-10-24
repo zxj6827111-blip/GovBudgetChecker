@@ -15,6 +15,10 @@
  *
  * 权限：本页由路由层用 AdminOnlyGuard 包裹；/api/metrics 本身 require_admin，
  * 请求失败（如会话过期）时指标区显示降级提示，不崩页。
+ *
+ * 任务侧统计（页面覆盖率、失败阶段、done 任务覆盖率、未关联组织）取自
+ * /api/jobs?view=overview 的汇总，不再下载全部任务摘要；后端未升级时回退到
+ * 本地同口径计算（jobOverviewAdapters.buildJobOverviewLocally）。
  */
 "use client";
 
@@ -22,23 +26,30 @@ import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 
 import { Badge, Card, Metric, SectionTitle, Td, Th } from "@/components/ui";
-import type { JobSummaryRecord } from "@/lib/uiAdapters";
+import { fetchJobOverview, type JobOverviewQuery, type JobOverviewView } from "@/lib/jobListViews";
 
-import { aggregatePageCoverage, formatCoveragePercentText } from "../workspace/workbenchAdapters";
 import {
-  computeDoneCoverageStats,
+  buildJobOverviewLocally,
+  doneCoverageFromOverview,
+  qualityCoverageFromOverview,
+} from "../workspace/jobOverviewAdapters";
+import { formatCoveragePercentText } from "../workspace/workbenchAdapters";
+import {
+  PAGE_COVERAGE_MIN_RATIO,
   computeFailureStageBarRatios,
   computeFailureStageWidthStyle,
   computeProcessingSuccessRate,
-  computeUnassociatedOrgRatio,
-  deriveFailureStageDistribution,
   deriveStructuralGateVerdict,
   deriveStructuralGates,
   DISABLED_METRIC_NOTES,
   formatRatioPercentText,
   type QualityMetricsResponse,
   type StructuralGate,
+  unassociatedOrgRatioFromCounts,
 } from "./qualityAdapters";
+
+/** 本页不画趋势，只取一天的趋势桶。 */
+const QUALITY_OVERVIEW_QUERY: JobOverviewQuery = { coverageMin: PAGE_COVERAGE_MIN_RATIO, trendDays: 1 };
 
 /** 失败阶段条形的语义色（对照 docs/UI_COLOR_TOKEN_MAPPING.md 环形图分段取色；
  *  neutral-chart-400 仅作条形填充，不承载文字）。 */
@@ -69,7 +80,8 @@ const GATE_VERDICT_CLASSES: Record<string, string> = {
 export function QualityPage() {
   const [metrics, setMetrics] = useState<QualityMetricsResponse | null>(null);
   const [metricsFailed, setMetricsFailed] = useState(false);
-  const [jobs, setJobs] = useState<JobSummaryRecord[] | null>(null);
+  const [overview, setOverview] = useState<JobOverviewView | null>(null);
+  const [jobsFailed, setJobsFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,18 +109,17 @@ export function QualityPage() {
 
     async function loadJobs() {
       try {
-        const response = await fetch("/api/jobs", { cache: "no-store" });
-        if (!response.ok) {
-          return;
-        }
-        const payload = (await response.json()) as
-          | JobSummaryRecord[]
-          | { items?: JobSummaryRecord[] };
+        const next = await fetchJobOverview(QUALITY_OVERVIEW_QUERY, (jobs) =>
+          buildJobOverviewLocally(jobs, QUALITY_OVERVIEW_QUERY),
+        );
         if (!cancelled) {
-          setJobs(Array.isArray(payload) ? payload : payload.items ?? []);
+          setOverview(next);
         }
       } catch {
-        // 保持 jobs=null（未拉到数据的展示态），不猜测。
+        // 保持 overview=null（未拉到数据的展示态），不猜测。
+        if (!cancelled) {
+          setJobsFailed(true);
+        }
       }
     }
 
@@ -120,27 +131,39 @@ export function QualityPage() {
   }, []);
 
   const processingSuccessRate = useMemo(() => computeProcessingSuccessRate(metrics), [metrics]);
-  const coverageAggregate = useMemo(() => aggregatePageCoverage(jobs), [jobs]);
+  const coverageAggregate = useMemo(() => qualityCoverageFromOverview(overview?.page_coverage_numeric), [overview]);
   const unknownRatio = metrics?.quality?.unknown_report_kind?.ratio ?? null;
   const unknownCount = metrics?.quality?.unknown_report_kind?.count ?? null;
   const evidenceRate = metrics?.quality?.evidence_completeness?.completeness_rate ?? null;
   const evidenceTotal = metrics?.quality?.evidence_completeness?.findings_total ?? null;
   const reviewRequiredCount = metrics?.quality?.review_required?.count ?? null;
   const unresolvedYearRatio = metrics?.quality?.unresolved_report_year?.ratio ?? null;
-  const unassociatedOrgRatio = useMemo(() => computeUnassociatedOrgRatio(jobs), [jobs]);
+  const unassociatedOrgRatio = overview ? unassociatedOrgRatioFromCounts(overview.unassociated_count, overview.total) : null;
 
-  const failureBuckets = useMemo(() => deriveFailureStageDistribution(jobs), [jobs]);
+  const failureBuckets = overview?.failure_stages ?? null;
   const failureBarWidths = useMemo(
     () => (failureBuckets ? computeFailureStageBarRatios(failureBuckets) : new Map<string, number>()),
     [failureBuckets],
   );
 
-  const doneCoverageStats = useMemo(() => computeDoneCoverageStats(jobs), [jobs]);
+  const doneCoverageStats = useMemo(() => doneCoverageFromOverview(overview), [overview]);
   const gates = useMemo(
-    () => deriveStructuralGates({ metrics, doneCoverageStats }),
-    [metrics, doneCoverageStats],
+    () => deriveStructuralGates({ metrics, doneCoverageStats }).map((gate) =>
+      // 任务列表读取失败时 doneCoverageStats 也是 null，但原因不是"没有留痕任务"。
+      gate.id === "page_coverage" && jobsFailed && overview === null
+        ? { ...gate, detail: "任务列表读取失败，暂无法判定页面覆盖率。" }
+        : gate,
+    ),
+    [metrics, doneCoverageStats, jobsFailed, overview],
   );
   const gateVerdict = useMemo(() => deriveStructuralGateVerdict(gates), [gates]);
+  // 门禁结论只能基于已读到的数据给出：读取中或指标接口失败时，不展示"无样本"与版本建议，
+  // 否则加载期间会先显示"尚无任务产物""有条件通过"这类与真实数据相反的结论。
+  const gatesState: "loading" | "unavailable" | "ready" = metricsFailed
+    ? "unavailable"
+    : metrics === null || (overview === null && !jobsFailed)
+      ? "loading"
+      : "ready";
 
   return (
     <div className="p-8" data-testid="gbc-quality-page">
@@ -223,9 +246,9 @@ export function QualityPage() {
           {failureBuckets === null ? (
             <div
               className="rounded-card border border-dashed border-border bg-surface-100 p-6 text-center text-sm text-slate-500"
-              data-testid="gbc-quality-failure-stages-loading"
+              data-testid={jobsFailed ? "gbc-quality-failure-stages-unavailable" : "gbc-quality-failure-stages-loading"}
             >
-              正在加载任务数据…
+              {jobsFailed ? "任务统计读取失败，请刷新后重试。" : "正在加载任务数据…"}
             </div>
           ) : failureBuckets.length === 0 ? (
             <div
@@ -321,6 +344,18 @@ export function QualityPage() {
         className="mt-8"
         data-testid="gbc-quality-gates-card"
       >
+        {gatesState !== "ready" ? (
+          <div
+            className="rounded-card border border-dashed border-border bg-surface-100 p-6 text-center text-sm text-slate-500"
+            data-testid={gatesState === "loading" ? "gbc-quality-gates-loading" : "gbc-quality-gates-unavailable"}
+            role="status"
+          >
+            {gatesState === "loading"
+              ? "正在读取门禁数据…"
+              : "门禁数据暂不可用（指标读取失败），本页暂不给出版本建议。"}
+          </div>
+        ) : (
+        <>
         <table className="w-full border-collapse text-left" data-testid="gbc-quality-gates-table">
           <thead>
             <tr>
@@ -367,6 +402,8 @@ export function QualityPage() {
             当前版本建议：{gateVerdict.label}
           </span>
         </div>
+        </>
+        )}
       </Card>
 
       <Card

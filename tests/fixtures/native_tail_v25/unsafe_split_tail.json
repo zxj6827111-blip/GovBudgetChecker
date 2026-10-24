@@ -1,0 +1,5 @@
+{
+  "type": "synthetic PDF; no department source document copied",
+  "purpose": "merged body rows combined with cross-grid decimal tail; unsafe source identity must fail closed",
+  "fixture_sha256": "5b03ebb8f812ec4c183d26c4cbc7d6f12a078230afcb76a32d94e56583a6f191"
+}

@@ -28,6 +28,7 @@ const REACHABLE_ROUTES = [
   "/queue",
   "/review",
   "/materials",
+  "/reports",
   "/archive",
   "/quality",
   "/rules",
@@ -42,6 +43,7 @@ const PRIMARY_NAV_IDS = [
   "queue",
   "review",
   "materials",
+  "reports",
   "archive",
   "quality",
   "rules",
@@ -93,6 +95,10 @@ async function installBaselineMocks(page: Page, options: { isAdmin: boolean; hea
       return;
     }
 
+    if (new URL(route.request().url()).pathname === "/api/reviews/worklist") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { items: [], counts: {}, pending_total: 1, viewer: "e2e-reviewer" } }) });
+      return;
+    }
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({}) });
   });
 }

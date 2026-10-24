@@ -25,6 +25,24 @@ from scripts.replay_analysis import (
     summarize,
 )
 
+_TEST_SOURCE_HASH = hashlib.sha256(b"synthetic-replay-test-source").hexdigest()
+
+
+def _verified_evidence(page: int, quote: str, source_id: str) -> Dict[str, Any]:
+    evidence_id = hashlib.sha1(
+        f"{_TEST_SOURCE_HASH}|{page}|{source_id}|{quote}".encode("utf-8")
+    ).hexdigest()[:16]
+    return {
+        "page": page,
+        "physical_page": page,
+        "text": quote,
+        "quote": quote,
+        "file_hash": _TEST_SOURCE_HASH,
+        "source_block_id": source_id,
+        "source_identity_status": "verified",
+        "evidence_id": evidence_id,
+    }
+
 
 def _write_job(uploads: Path, job_id: str, payload: Dict[str, Any]) -> Path:
     job_dir = uploads / job_id
@@ -74,7 +92,7 @@ def sample_uploads(tmp_path: Path) -> Path:
         "source": "rule",
         "severity": "error",
         "location": {"page": 12},
-        "evidence": [{"page": 12, "text": "合计 35.20"}],
+        "evidence": [_verified_evidence(12, "合计 35.20", "job-done:block-1")],
         "evidence_status": "complete",
     }
 

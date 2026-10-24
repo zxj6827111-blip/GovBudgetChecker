@@ -233,7 +233,7 @@ export function ArchivePage() {
         />
         <Metric
           label="已归档问题"
-          corner="in_package"
+          corner="已入包"
           value={summary?.inPackageCount}
           desc="整改包内问题"
           tone="info"

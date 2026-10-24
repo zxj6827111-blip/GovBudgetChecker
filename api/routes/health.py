@@ -44,9 +44,17 @@ async def _check_database() -> tuple[bool, str]:
 
 
 async def _check_ai_extractor() -> tuple[bool, str]:
-    ai_enabled = (os.getenv("AI_ASSIST_ENABLED", "true").strip().lower() == "true")
+    from src.services.ai_model_settings import capabilities, resolve_runtime
+    ai_config = capabilities()
+    ai_enabled = ai_config["enabled"]
     if not ai_enabled:
         return True, "disabled"
+    if ai_config["source"] == "settings":
+        try:
+            resolve_runtime()
+            return True, "managed_config_loaded; connectivity_not_probed"
+        except Exception:
+            return False, "managed_config_unavailable"
 
     url = (os.getenv("AI_EXTRACTOR_URL") or "").strip()
     if not url:
@@ -156,7 +164,8 @@ async def ready(request: Request, response: Response) -> Dict[str, Any]:
         "READY_REQUIRE_DATABASE",
         False,
     )
-    ai_required = (os.getenv("AI_ASSIST_ENABLED", "true").strip().lower() == "true") and _env_flag(
+    from src.services.ai_model_settings import capabilities
+    ai_required = capabilities()["enabled"] and _env_flag(
         "READY_REQUIRE_AI_EXTRACTOR",
         False,
     )

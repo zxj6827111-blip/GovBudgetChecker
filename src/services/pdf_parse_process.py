@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 import multiprocessing
 import os
 import time
+import threading
+import sys
 from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -148,7 +150,9 @@ def _apply_memory_limit(memory_mb: int) -> bool:
         return False
 
 
-def probe_memory_limit_enforceable(limit_mb: int = 128) -> bool:
+def probe_memory_limit_enforceable(
+    limit_mb: int = 128, cancel_event: Optional[threading.Event] = None
+) -> bool:
     """探测当前平台/环境下 RLIMIT_AS 是否真的强制执行（AC-16）。
 
     fork 一个探针子进程：设置与解析子进程相同的上限后尝试超限分配——
@@ -184,14 +188,25 @@ def probe_memory_limit_enforceable(limit_mb: int = 128) -> bool:
     process.start()
     child_conn.close()
     try:
-        result = parent_conn.recv()
+        deadline = time.monotonic() + 2.0
+        result = False
+        while time.monotonic() < deadline:
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            if parent_conn.poll(0.05):
+                result = parent_conn.recv()
+                break
     except (EOFError, OSError):
         result = False
     finally:
         parent_conn.close()
-        process.join(timeout=5)
+        process.join(timeout=0.2)
         if process.is_alive():
             process.terminate()
+            process.join(timeout=0.5)
+        if process.is_alive() and hasattr(process, "kill"):
+            process.kill()
+            process.join(timeout=0.5)
     return bool(result)
 
 
@@ -228,9 +243,9 @@ def _pdf_parse_worker(
                 pass
 
         memory_applied = _apply_memory_limit(int(limits.get("memory_mb") or 0))
-        memory_enforced = memory_applied and probe_memory_limit_enforceable(
-            int(limits.get("memory_mb") or 0)
-        )
+        # The capability probe must finish in the non-daemon parent. A daemon
+        # parser cannot spawn its own process; nesting made Linux parsing fail.
+        memory_enforced = memory_applied and bool(limits.get("memory_limit_enforceable", False))
 
         # 测试钩子：确定性地申请超过上限的内存，验证内存超限被拦。
         burn_mb = os.getenv("PDF_PARSE_TEST_ALLOCATE_MB", "").strip()
@@ -278,9 +293,7 @@ def _pdf_parse_worker(
         with pdfplumber.open(pdf_path) as pdf:
             page_count = len(pdf.pages)
             if page_count > max_pages:
-                connection.send(
-                    ("limit", f"page_limit_exceeded:{page_count}>{max_pages}")
-                )
+                connection.send(("limit", f"page_limit_exceeded:{page_count}>{max_pages}"))
                 return
 
             for page in pdf.pages:
@@ -289,9 +302,7 @@ def _pdf_parse_worker(
                 text_chars += len(text)
                 table_cells += _count_table_cells(tables)
                 if text_chars > max_text_chars:
-                    connection.send(
-                        ("limit", f"text_limit_exceeded:{text_chars}>{max_text_chars}")
-                    )
+                    connection.send(("limit", f"text_limit_exceeded:{text_chars}>{max_text_chars}"))
                     return
                 if table_cells > max_table_cells:
                     connection.send(
@@ -351,12 +362,20 @@ def _pdf_parse_worker(
 def _parse_pdf_sync(
     pdf_path: Path,
     limits: Optional[Dict[str, Any]] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Dict[str, Any]:
     effective = dict(resolve_limits())
     if limits:
         effective.update(limits)
 
     timeout_seconds = float(effective.get("timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)
+    effective["memory_limit_enforceable"] = (
+        probe_memory_limit_enforceable(int(effective.get("memory_mb") or 0), cancel_event)
+        if sys.platform.startswith("linux")
+        else False
+    )
+    if cancel_event is not None and cancel_event.is_set():
+        raise PdfParseError("pdf_parse_cancelled")
     context = multiprocessing.get_context(str(effective.get("start_method") or "spawn"))
     parent_connection, child_connection = context.Pipe(duplex=False)
     process = context.Process(
@@ -370,12 +389,14 @@ def _parse_pdf_sync(
     deadline = time.monotonic() + max(0.01, timeout_seconds)
 
     try:
-        remaining = max(0.0, deadline - time.monotonic())
-        if not parent_connection.poll(remaining):
-            _terminate(process)
-            raise PdfParseTimeout(
-                f"pdf parsing exceeded {timeout_seconds:g} seconds"
-            )
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise PdfParseError("pdf_parse_cancelled")
+            remaining = max(0.0, deadline - time.monotonic())
+            if parent_connection.poll(min(0.05, remaining)):
+                break
+            if remaining <= 0:
+                raise PdfParseTimeout(f"pdf parsing exceeded {timeout_seconds:g} seconds")
 
         status, payload = parent_connection.recv()
         process.join(timeout=5)
@@ -414,7 +435,25 @@ async def parse_pdf_in_process(
     limits: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """在独立进程中解析 PDF，返回 page_texts / page_tables / filesize 等。"""
-    return await asyncio.to_thread(_parse_pdf_sync, pdf_path, limits)
+    cancel_event = threading.Event()
+    worker = asyncio.create_task(asyncio.to_thread(_parse_pdf_sync, pdf_path, limits, cancel_event))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        # Cancelling a to_thread future cannot stop its thread or child process.
+        # Signal the owner and wait until its finally has terminated/reaped the
+        # child before the job publishes a cancellation/timeout terminal state.
+        cancel_event.set()
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not worker.cancelled():
+            worker.exception()
+        raise
 
 
 def parse_error_code(exc: BaseException) -> Tuple[str, str]:

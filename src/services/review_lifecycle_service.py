@@ -394,7 +394,7 @@ def _load_problem_set(state: ReviewState) -> None:
         return
     result_row = state.analysis.result_row or {}
     snapshot = _issue_decision_snapshot(job_uuid)
-    ignored = _ignored_issue_ids(job_uuid)
+    ignored = list(snapshot.get("ignored_issue_ids") or [])
     problems = collect_review_problems(
         job_uuid=job_uuid,
         ai_findings=result_row.get("ai_findings"),
@@ -547,9 +547,18 @@ def _unhandled_obligations(state: ReviewState) -> List[CoverageObligationItem]:
     与 ``_problem_blockers`` 同一条纪律：把不认识的值当成"已解决"，
     等于让一个拼错的状态码静默放行复核。
     """
+    return unhandled_coverage_obligations(state.coverage_items, state.obligation_decisions)
+
+
+def unhandled_coverage_obligations(
+    items: List[CoverageObligationItem], decisions: Dict[str, Dict[str, Any]]
+) -> List[CoverageObligationItem]:
+    """复核门禁与主管统计复用同一未完成判据，避免客户看到虚假的零待办。"""
     unhandled: List[CoverageObligationItem] = []
-    for item in _blocking_obligations(state):
-        row = state.obligation_decisions.get(item.obligation_id)
+    for item in items:
+        if not item.blocks_gate or item.status not in UNRESOLVED_OBLIGATION_STATUSES:
+            continue
+        row = decisions.get(item.obligation_id)
         current = str((row or {}).get("decision") or "").strip() or "pending"
         if current not in RESOLVED_OBLIGATION_DECISIONS:
             unhandled.append(item)
@@ -768,6 +777,69 @@ def _manual_decision_summary(state: ReviewState) -> Dict[str, int]:
         key = str(row.get("decision") or "").strip()
         summary[key if key in summary else "pending"] += 1
     return summary
+
+
+def review_session_matches(session: Dict[str, Any], *, slot_id: Any,
+                           document_version_id: Any, job_uuid: Any,
+                           analysis_revision: Any) -> bool:
+    """列表与复核详情共用身份判据，防止旧版/旧代际的完成记录冒充当前结论。"""
+    return (
+        str(session.get("slot_id")) == str(slot_id)
+        and session.get("document_version_id") == document_version_id
+        and session.get("analysis_job_uuid") == job_uuid
+        and session.get("analysis_basis_token") == review_session_store.build_analysis_basis_token(
+            job_uuid or "", analysis_revision
+        )
+    )
+
+
+def build_worklist_review_summary(
+    slot_row: Dict[str, Any],
+    analysis: review_context_query.ReviewAnalysis,
+    history: List[Dict[str, Any]],
+    decisions: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """只读清单复用问题/补核判据；历史会话必须同时匹配版本和分析代际。"""
+    basis = review_session_store.build_analysis_basis_token(
+        analysis.job_uuid or "", analysis.analysis_revision
+    )
+    matching = [
+        session for session in history
+        if review_session_matches(session, slot_id=slot_row.get("slot_id"),
+            document_version_id=analysis.document_version_id, job_uuid=analysis.job_uuid,
+            analysis_revision=analysis.analysis_revision)
+    ]
+    active = next((s for s in matching if s.get("status") == "in_progress"), None)
+    completed = next((s for s in matching if s.get("status") == "completed"), None)
+    effective = active or completed
+    status = (
+        "waiting_analysis" if not analysis.completed else
+        "in_progress" if active else
+        "completed" if completed else
+        "invalidated" if history else "pending"
+    )
+    state = ReviewState(
+        slot_row=slot_row, slot_id=str(slot_row["slot_id"]), analysis=analysis,
+        basis_token=basis, active_session=active, completed_session=completed,
+        history=history,
+        obligation_decisions={
+            str(d["obligation_id"]): d for d in decisions
+            if effective and str(d.get("review_session_id")) == str(effective.get("review_session_id"))
+        },
+    )
+    if analysis.completed:
+        _load_problem_set(state)
+        _load_coverage(state)
+    return {
+        "review_status": status,
+        "pending_findings": (
+            sum(b.count or 0 for b in _problem_blockers(state.problems, state.decisions))
+            if analysis.completed else None
+        ),
+        "pending_checks": len(_unhandled_obligations(state)) if state.coverage_available else None,
+        "reviewer": _opt_text((effective or {}).get("completed_by") or (effective or {}).get("started_by")),
+        "reviewed_at": _opt_iso((effective or {}).get("completed_at") or (effective or {}).get("started_at")),
+    }
 
 
 async def load_review_by_slot(
@@ -1091,6 +1163,10 @@ async def complete_review(
                     "manual_decisions": manual_decisions,
                 },
             }
+
+            # 问题身份随本次人工复核结论冻结，不能从后来的重新分析倒推旧问题。
+            from src.services.supervision_query import confirmed_snapshot
+            review_result["confirmed_findings"] = confirmed_snapshot(state)
 
             completed = await review_session_store.complete_session(
                 conn,
