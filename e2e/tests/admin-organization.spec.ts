@@ -350,9 +350,12 @@ test.describe("Admin organization regression", () => {
     await expect(page.getByTestId("admin-org-create-unit")).toBeEnabled();
     await expect(page.getByTestId("admin-org-delete-current")).toBeEnabled();
 
+    // 新目录模型：部门只能挂在市/区下，部门下只能建单位。
+    // 这里先清空选择（全部），按"新建顶层部门"的入口创建。
+    await page.getByTitle("查看全部组织").click();
     page.once("dialog", async (dialog) => {
       expect(dialog.type()).toBe("prompt");
-      expect(dialog.message()).toContain("财政局");
+      expect(dialog.message()).toContain("请输入新部门名称");
       await dialog.accept("审计局");
     });
     await page.getByTestId("admin-org-create-department").click();
@@ -395,7 +398,7 @@ test.describe("Admin organization regression", () => {
         {
           id: "city-shanghai",
           name: "上海市",
-          level: "organization",
+          level: "city",
           parent_id: null,
           job_count: 0,
           issue_count: 0,

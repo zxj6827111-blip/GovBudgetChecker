@@ -71,6 +71,18 @@ async function installWorkbenchMocks(page: Page, options: MockJobsOptions) {
     const url = new URL(req.url());
     const path = url.pathname;
 
+    // 年度报送功能默认关闭：capabilities 返回 404 时页面回落历史材料查询。
+    // 兜底的 200 {} 会让入口把 enabled 当成 undefined，误判为已启用并渲染新视图，
+    // 于是本用例要断言的台账 testid 一个都不出现。
+    if (url.pathname === "/api/reporting-tasks/capabilities") {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "reporting tasks disabled" }),
+      });
+      return;
+    }
+
     if (path === "/api/auth/me") {
       await route.fulfill({
         status: 200,

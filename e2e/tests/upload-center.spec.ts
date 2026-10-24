@@ -807,10 +807,12 @@ test.describe("Upload triggers analysis (fix 2)", () => {
     await expect.poll(() => analyzeCalls.length, { timeout: 10_000 }).toBe(1);
     expect(analyzeCalls[0].jobId).toBe("job-fix2-ok");
     // 与系统其他入口同参：dual 模式 + 本地规则；ZC-00 默认关闭 AI。
+    // 上传入口不再显式传 use_ai_assist——后端按 status.use_ai_assist 缺省 False 处理
+    // （api/main.py:1305），因此这里断言"没有请求 AI"而不是某个字段的具体取值。
     const body = JSON.parse(analyzeCalls[0].body);
     expect(body.mode).toBe("dual");
     expect(body.use_local_rules).toBe(true);
-    expect(body.use_ai_assist).toBe(false);
+    expect(body.use_ai_assist).toBeUndefined();
 
     // 全部成功：保持原有跳转行为。
     await expect(page).toHaveURL(/\/queue\?job=job-fix2-ok/, { timeout: 15_000 });
