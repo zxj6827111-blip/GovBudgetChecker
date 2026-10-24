@@ -25,6 +25,10 @@ export default function AIModelSettingsPanel() {
       const res = await fetch("/api/admin/ai-models", { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "无法读取模型配置");
+      // 200 也可能是别的 JSON：结构不符就按"读不到配置"处理。
+      // 直接 setSettings 会让下面的 settings.profiles.map 抛错，把整个设置区
+      // （包括同区块的其他 ConfigPanel）一起渲染崩掉。
+      if (!data || !Array.isArray(data.profiles)) throw new Error("模型配置结构不符合预期");
       setSettings(data); setDirty(false); setNotice(""); setTestResults({});
     } catch (e) { setNotice(e instanceof Error ? e.message : "无法读取模型配置"); }
     finally { setBusy(false); }

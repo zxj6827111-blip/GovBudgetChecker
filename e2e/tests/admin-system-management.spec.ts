@@ -509,7 +509,7 @@ test.describe("Admin system management actions", () => {
     await page.getByTestId("admin-users-create").click();
 
     await expect.poll(() => state.userCreates).toEqual([
-      { username: "new-user", password: "secret123", is_admin: false, organization_ids: ["unit-001"] },
+      { username: "new-user", password: "secret123", is_admin: false, is_read_only: false, organization_ids: ["unit-001"] },
     ]);
     await expect(page.getByTestId("admin-users-row-new-user")).toBeVisible();
 
@@ -597,7 +597,13 @@ test.describe("Admin system management actions", () => {
     await page.getByTestId("admin-reanalyze-ai-toggle").uncheck();
     await page.getByTestId("admin-operations-reanalyze-all").click();
     await expect.poll(() => state.reanalyzeAllBodies).toEqual([
-      { latest_per_department: true, use_local_rules: true, use_ai_assist: false },
+      {
+        latest_per_department: true,
+        use_local_rules: true,
+        use_ai_assist: false,
+        // 后端已上报 AI 能力时，批量重析还要带上档位（关闭时显式 null）
+        ai_profile_id: null,
+      },
     ]);
     await expect(page.getByTestId("reanalyze-progress-dialog")).toBeVisible();
     await page.getByTestId("reanalyze-progress-close").click();
