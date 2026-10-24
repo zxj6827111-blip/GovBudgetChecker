@@ -3,16 +3,19 @@ import pytest
 from src.services.org_name_identity import compare_org_names, organization_name
 
 
-@pytest.mark.parametrize("a,b,expected", [
-    ("甲局（本级）", "甲局本部", True),
-    ("甲局（本级）", "甲局", False),
-    ("甲局机关", "甲局（本级）", False),
-    ("中国（上海）服务中心", "中国服务中心", False),
-    ("甲市容（林业）管理站", "甲市容管理站", False),
-    ("甲局服务中心", "甲局", False),
-    ("甲 中心（２）", "甲中心(2)", True),
-    ("甲单位（筹）", "甲单位", False),
-])
+@pytest.mark.parametrize(
+    "a,b,expected",
+    [
+        ("甲局（本级）", "甲局本部", True),
+        ("甲局（本级）", "甲局", False),
+        ("甲局机关", "甲局（本级）", False),
+        ("中国（上海）服务中心", "中国服务中心", False),
+        ("甲市容（林业）管理站", "甲市容管理站", False),
+        ("甲局服务中心", "甲局", False),
+        ("甲 中心（２）", "甲中心(2)", True),
+        ("甲单位（筹）", "甲单位", False),
+    ],
+)
 def test_literal_identity(a, b, expected):
     assert compare_org_names(a, b).equivalent is expected
 

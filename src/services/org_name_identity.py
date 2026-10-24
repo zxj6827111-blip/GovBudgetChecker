@@ -1,4 +1,5 @@
 """组织名的格式归一与身份比较；候选召回的包含匹配不能作为身份等价。"""
+
 from __future__ import annotations
 
 import re
@@ -8,14 +9,18 @@ from typing import Any, Iterable
 
 
 def normalize_org_name(value: Any) -> str:
-    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(value or "")))
+    # 横线的排版字形可不同；只统一等长的 em dash / horizontal bar，不删除字符或身份标记。
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(value or ""))).replace("―", "—")
 
 
 def identity_name(value: Any) -> str:
     name = normalize_org_name(value)
     # 身份标记只统一写法，绝不删除；机关不等同于本级。
-    return re.sub(r"\(?(本级|本部|机关|部门|单位|筹)\)?$",
-                  lambda m: "(" + ("本级" if m[1] in {"本级", "本部"} else m[1]) + ")", name)
+    return re.sub(
+        r"\(?(本级|本部|机关|部门|单位|筹)\)?$",
+        lambda m: "(" + ("本级" if m[1] in {"本级", "本部"} else m[1]) + ")",
+        name,
+    )
 
 
 def _field(org: Any, key: str, default=None):
@@ -40,8 +45,11 @@ def _names(org: Any) -> set[str]:
         if (marker.group() if marker else None) == (key_marker.group() if key_marker else None):
             names.add(key)
     alias = re.fullmatch(r"(.+)\(([^()]*)\)", name)
-    if alias and not marker and len(alias[2]) >= 4 and re.search(
-        r"局|厅|中心|委员会|办公室|院|馆|所|站|处|队|学校|大学|政府", alias[2]
+    if (
+        alias
+        and not marker
+        and len(alias[2]) >= 4
+        and re.search(r"局|厅|中心|委员会|办公室|院|馆|所|站|处|队|学校|大学|政府", alias[2])
     ):
         # 仅末尾完整机构名是括号别名；（上海）、（林业）等正式组成不拆。
         names.update(alias.groups())
@@ -60,6 +68,7 @@ class NameComparison:
 
 class OrgNameIndex:
     """同一目录快照只构建一次索引，避免全量预检出现平方级目录扫描。"""
+
     def __init__(self, directory: Iterable[Any] = ()):
         self.owners: dict[str, set[int]] = {}
         for index, org in enumerate(directory):
