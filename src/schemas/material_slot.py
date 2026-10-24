@@ -48,7 +48,8 @@ from src.schemas.document_profile import REPORT_KINDS as _PROFILE_REPORT_KINDS
 #: 一份文种还没认出来的材料仍然真实存在，必须能在台账里被看见并停在
 #: ``mapping_required`` 上等人工确认。若在这里拒绝 unknown，这类材料就无处安放，
 #: "应收未收"台账会漏掉它们，正是本轮要修的盲区。
-SLOT_REPORT_KINDS: tuple = tuple(_PROFILE_REPORT_KINDS)
+# 非预决算是入口材料分类，不是财政报送槽位文种；不扩大数据库业务对象的取值域。
+SLOT_REPORT_KINDS: tuple = tuple(kind for kind in _PROFILE_REPORT_KINDS if kind in {"budget", "final", "unknown"})
 
 #: 主体层级。政府级对应"区本身"作为主体的材料（如区级政府总预算）。
 #: ``unknown`` 同样是可入库取值，语义是"主体尚未确认"。
