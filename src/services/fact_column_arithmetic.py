@@ -41,7 +41,7 @@ MIN_FAILED_SHARE = Decimal("0.5")
 def _row_outcome(group, total, parts):
     totals = [f for f in group if f.indicator == total]
     present = [f for f in group if f.indicator in parts]
-    if len(totals) != 1 or not present:
+    if len(totals) != 1 or len(present) != len(parts):
         return None
     if len({f.indicator for f in present}) != len(present):
         return None  # 同一行同一分项出现多次，列身份本身已有歧义，不在这里判。
@@ -63,7 +63,7 @@ def _half_display_unit(fact):
     return None if factor is None else Decimal(5) * Decimal(10) ** -(decimals + 1) * factor
 
 
-def column_arithmetic_conflicts(facts):
+def arithmetic_anomalies(facts):
     """返回 {instance_uid: [冲突说明]}；每条说明列出恒等式、核对行数和失败样例。"""
     rows = defaultdict(list)
     for fact in facts:
@@ -78,16 +78,50 @@ def column_arithmetic_conflicts(facts):
             outcomes = [(key, outcome) for key, group in sorted(groups.items(), key=lambda item: str(item[0]))
                         if (outcome := _row_outcome(group, total, parts)) is not None]
             failed = [(key, diff) for key, (bad, diff) in outcomes if bad]
-            if (len(failed) >= MIN_FAILED_SHARE * len(outcomes)
-                    and len({diff for _, diff in failed}) >= MIN_FAILED_ROWS):
+            if failed:
                 conflicts.setdefault(instance_uid, []).append({
                     "identity": f"{total} = " + " + ".join(parts),
                     "indicators": [total, *parts],
                     "checked_rows": len(outcomes), "failed_rows": len(failed),
                     "examples": [{"row_order": key[0], "budget_stage": key[1], "difference_wan": str(diff)}
-                                 for key, diff in failed[:3]],
+                                 for key, diff in failed],
                 })
     return conflicts
+
+
+def independent_structure_evidence(facts):
+    evidence = []
+    for fact in facts:
+        dims = fact.extra_dims
+        status = dims.get("column_identity_status")
+        reason = None
+        if status in {"cross_page_width_drift", "outside_header_band", "competing_geometry", "multiple_tokens"}:
+            reason = status
+        elif "source_header" in dims and not str(dims["source_header"] or "").strip():
+            reason = "source_header_missing"
+        elif str(dims.get("source_header") or "").strip() in {"类", "款", "项", "科目编码", "行次"}:
+            reason = "dimension_header_mapped_as_amount"
+        if reason:
+            evidence.append({"fact_uid": fact.fact_uid, "reason": reason,
+                             "header": dims.get("source_header"), "evidence_ids": list(fact.evidence_ids)})
+    return evidence
+
+
+def column_arithmetic_conflicts(facts):
+    """算术仅提供线索；降级必须另有表头/几何证据，且不依赖失败行数。"""
+    instances = defaultdict(list)
+    for fact in facts:
+        instances[fact.instance_uid].append(fact)
+    anomalies = arithmetic_anomalies(facts)
+    result = {}
+    for uid, group in instances.items():
+        structural = independent_structure_evidence(group)
+        if not structural:
+            continue
+        clues = anomalies.get(uid) or [{"indicators": sorted({f.indicator for f in group}),
+                                        "examples": [], "checked_rows": 0, "failed_rows": 0}]
+        result[uid] = [{**clue, "structure_evidence": structural} for clue in clues]
+    return result
 
 
 def constrain_column_arithmetic(facts):
@@ -97,8 +131,7 @@ def constrain_column_arithmetic(facts):
     勾稽规则在这些行上必然成立，查不出原件差错。
     """
     conflicts = column_arithmetic_conflicts(facts)
-    if not conflicts:
-        return facts
+    anomalies = arithmetic_anomalies(facts)
     constrained = []
     for fact in facts:
         found = [c for c in conflicts.get(fact.instance_uid, []) if fact.indicator in c["indicators"]]
@@ -106,5 +139,8 @@ def constrain_column_arithmetic(facts):
             fact = replace(fact, recognition_status="ambiguous", extra_dims={
                 **fact.extra_dims, "column_identity_status": "arithmetic_conflict",
                 "column_arithmetic_conflicts": found})
+        elif fact.instance_uid in anomalies:
+            fact = replace(fact, extra_dims={**fact.extra_dims,
+                           "source_arithmetic_anomalies": anomalies[fact.instance_uid]})
         constrained.append(fact)
     return constrained
