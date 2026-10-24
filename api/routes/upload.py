@@ -33,7 +33,7 @@ def _clean_optional_text(value: Optional[str]) -> Optional[str]:
 def _normalize_org_name(value: Any) -> str:
     """归一化封面/组织名，只用于防止明显错绑，不用于生成组织身份。
 
-    「本级」「本部」是同一主体的两种写法（封面写本部、组织树写本级），比较前去掉。
+    保留本级等身份标记；包含关系不能代替名称等价。
     """
     return identity_name(value)
 
@@ -282,9 +282,10 @@ def _auto_match_organization(
             )
         )
         current = resolved_preflight.get("current") or {}
-        runtime.merge_job_status(runtime.UPLOAD_ROOT / job_id, {
-            "binding_decision": resolved_preflight.get("binding_decision"),
-        })
+        if (runtime.UPLOAD_ROOT / job_id).is_dir():
+            runtime.merge_job_status(runtime.UPLOAD_ROOT / job_id, {
+                "binding_decision": resolved_preflight.get("binding_decision"),
+            })
         organization_id = str(current.get("organization_id") or "").strip()
         confidence = float(current.get("confidence") or 0.0)
         if not organization_id:

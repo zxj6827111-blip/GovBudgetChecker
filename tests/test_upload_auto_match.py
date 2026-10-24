@@ -66,12 +66,22 @@ def _create_org(
     return runtime.to_dict(created)
 
 
+
+def _seed_historical_auto_binding(monkeypatch, org_id):
+    """手动纠正/候选展示测试使用旧自动关联夹具，不借空白 PDF 绕过新的原件门禁。"""
+    monkeypatch.setattr(upload_route, "_auto_match_organization",
+                        lambda job_id, filename, user=None, preflight=None: runtime.set_job_organization(
+                            job_id, org_id, match_type="auto", confidence=0.96))
+
 def test_upload_auto_matches_organization_from_filename(tmp_path: Path, monkeypatch):
     _patch_runtime_state(tmp_path, monkeypatch)
     client = TestClient(app)
 
     org_id = _create_org("上海市普陀区民政局")["id"]
 
+    # 文件名负责候选召回，原件封面提供独立主体和口径证据。
+    monkeypatch.setattr(runtime, "extract_pdf_page_texts", lambda path, max_pages=8: [
+        "上海市普陀区民政局\n2025年度部门预算"])
     upload = client.post(
         "/api/documents/upload",
         headers=_headers(),
@@ -109,6 +119,7 @@ def test_manual_association_overrides_auto_match(tmp_path: Path, monkeypatch):
     matched_org_id = _create_org("上海市普陀区民政局")["id"]
     override_org_id = _create_org("上海市普陀区财政局")["id"]
 
+    _seed_historical_auto_binding(monkeypatch, matched_org_id)
     upload = client.post(
         "/api/documents/upload",
         headers=_headers(),
@@ -191,6 +202,7 @@ def test_manual_association_moves_job_between_organization_job_lists(
     original_org_id = _create_org("上海市普陀区民政局")["id"]
     target_org_id = _create_org("上海市普陀区财政局")["id"]
 
+    _seed_historical_auto_binding(monkeypatch, original_org_id)
     upload = client.post(
         "/api/documents/upload",
         headers=_headers(),
@@ -243,6 +255,7 @@ def test_job_org_suggestions_returns_current_and_candidates(tmp_path: Path, monk
     _create_org("上海市普陀区财政局")
     _create_org("上海市普陀区教育局")
 
+    _seed_historical_auto_binding(monkeypatch, matched_org_id)
     upload = client.post(
         "/api/documents/upload",
         headers=_headers(),
@@ -305,12 +318,14 @@ def test_batch_rematch_preview_and_apply_updates_auto_association(tmp_path: Path
             _ = (filename, first_page_text)
             return correct_org, 0.96
 
-        def suggest_matches(self, filename: str, first_page_text: str = "", top_n: int = 5):
+        def suggest_matches(self, filename: str, first_page_text: str = "", top_n: int = 5, **kwargs):
             _ = (filename, first_page_text, top_n)
             return [(correct_org, 0.96)]
 
     monkeypatch.setattr(org_matcher_module, "_matcher_instance", _FakeMatcher())
 
+    monkeypatch.setattr(runtime, "extract_pdf_page_texts", lambda path, max_pages=8: [
+        correct_org.name + "\n2025年度部门决算"])
     preview = client.post(
         "/api/jobs/rematch-organizations",
         headers=_headers(),
@@ -520,7 +535,7 @@ def test_upload_auto_match_prefers_cover_org_name_over_filename_only_match(tmp_p
         def __init__(self):
             self.calls: list[tuple[str, str, int]] = []
 
-        def suggest_matches(self, filename: str, first_page_text: str = "", top_n: int = 5):
+        def suggest_matches(self, filename: str, first_page_text: str = "", top_n: int = 5, **kwargs):
             self.calls.append((filename, first_page_text, top_n))
             if filename == "上海市普陀区人民政府石泉路街道办事处":
                 return [(correct_org_record, 0.97)]
