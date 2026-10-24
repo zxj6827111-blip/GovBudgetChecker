@@ -24,6 +24,7 @@ NULL 年份在复合唯一索引下的行为是否符合预期、既有库升级
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -332,7 +333,7 @@ async def test_rollback_restores_previous_shape_without_losing_versions(db):
         # （这正是本用例要守住的红线）。
         # 禁止用 CASCADE 偷过——那会让"我们真的理解依赖顺序"无从证明。
         #
-        # Step 1/3 —— 撤 0021（docs/MIGRATION_0021_REVIEW_OBLIGATION_DECISIONS.md）
+        # Step 1/4 —— 撤 0021（docs/MIGRATION_0021_REVIEW_OBLIGATION_DECISIONS.md）
         await connection.execute("DROP TABLE IF EXISTS review_obligation_decisions")
         await connection.execute(
             f'DELETE FROM "{schema}".schema_migrations WHERE id = $1',
@@ -342,7 +343,16 @@ async def test_rollback_restores_previous_shape_without_losing_versions(db):
             "SELECT to_regclass($1) IS NOT NULL", f'"{schema}".review_obligation_decisions'
         ) is False
 
-        # Step 2/3 —— 撤 0020（docs/MIGRATION_0020_REVIEW_LIFECYCLE.md）
+        # Step 2/4 —— 0030 的主管整改轮次表用 FK 指向 review_sessions，
+        # 所以它必须先于 0020 撤销；这里按依赖顺序显式 drop，仍然不许用 CASCADE。
+        await connection.execute("DROP TABLE IF EXISTS supervision_rounds")
+        await connection.execute("DROP TABLE IF EXISTS supervision_baselines")
+        await connection.execute(
+            f'DELETE FROM "{schema}".schema_migrations WHERE id = $1',
+            "2026-10-13_0030_supervision",
+        )
+
+        # Step 3/4 —— 撤 0020（docs/MIGRATION_0020_REVIEW_LIFECYCLE.md）
         await connection.execute("DROP TABLE IF EXISTS review_sessions")
         await connection.execute(
             "ALTER TABLE analysis_jobs DROP COLUMN IF EXISTS analysis_result_fingerprint"
@@ -366,7 +376,7 @@ async def test_rollback_restores_previous_shape_without_losing_versions(db):
             schema,
         ) == 0
 
-        # Step 3/3 —— 撤 0019（docs/MIGRATION_0019_MATERIAL_SLOTS.md）
+        # Step 4/4 —— 撤 0019（docs/MIGRATION_0019_MATERIAL_SLOTS.md）
         await connection.execute(
             "ALTER TABLE fiscal_document_versions DROP COLUMN IF EXISTS slot_id"
         )
@@ -1465,13 +1475,18 @@ def _patch_smoke_pipeline(monkeypatch, *, parser_error: Optional[BaseException] 
         def build_parse_artifact(self, _path, *, config_fingerprint=None):
             from src.schemas.parse_artifact import ParseArtifact
             from src.services.pdf_parser import PARSER_FINGERPRINT
+            from src.services.input_processing_identity import processing_config_fingerprint
 
             calls["parse"] += 1
             if parser_error is not None:
                 raise parser_error
+            # 真解析器落库的是 processing-v2 包裹后的配置指纹（pdf_parser.py:308），
+            # 缓存查找也按同一空间比对；桩若写裸值会让重跑既命中不了缓存，
+            # 又撞上 uq_parse_runs_cache_key。
             return ParseArtifact(
-                source_file_hash="", parser_fingerprint=PARSER_FINGERPRINT,
-                config_fingerprint=config_fingerprint or "",
+                source_file_hash=hashlib.sha256(open(_path, "rb").read()).hexdigest(),
+                parser_fingerprint=PARSER_FINGERPRINT,
+                config_fingerprint=processing_config_fingerprint(config_fingerprint or ""),
             )
 
         async def persist_artifact_to_legacy_tables(self, _version_id, _artifact):
@@ -1524,7 +1539,11 @@ def _smoke_pdf(tmp_path) -> Any:
     return pdf_path
 
 
-def _smoke_metadata(pdf_path, *, checksum: str) -> Dict[str, Any]:
+def _smoke_metadata(pdf_path, *, checksum: Optional[str] = None) -> Dict[str, Any]:
+    """入库主链路的 source_identity_verification 会拿 metadata.checksum 比对原件实摘要，
+    所以默认给真实值；只有故意验证哈希不一致反例的用例才显式传 checksum。"""
+    if checksum is None:
+        checksum = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
     return {
         "organization_id": "unit-org-1",
         "organization_name": "上海市普陀区规划和自然资源局本级",
@@ -1549,7 +1568,7 @@ async def test_run_structured_ingest_really_persists_material_slot(db, tmp_path,
     payload = await run_structured_ingest(
         job_id="job-smoke-ok",
         pdf_path=pdf_path,
-        metadata=_smoke_metadata(pdf_path, checksum="e" * 64),
+        metadata=_smoke_metadata(pdf_path),
     )
 
     assert payload["status"] == "done", payload
@@ -1592,7 +1611,7 @@ async def test_run_structured_ingest_parser_failure_still_persists_slot(
     payload = await run_structured_ingest(
         job_id="job-smoke-parser-fail",
         pdf_path=pdf_path,
-        metadata=_smoke_metadata(pdf_path, checksum="f" * 64),
+        metadata=_smoke_metadata(pdf_path),
     )
 
     assert payload["status"] == "error"
@@ -1630,7 +1649,7 @@ async def test_run_structured_ingest_rerun_reuses_single_slot_on_real_db(
     _patch_smoke_pipeline(monkeypatch)
 
     pdf_path = _smoke_pdf(tmp_path)
-    metadata = _smoke_metadata(pdf_path, checksum="a1" * 32)
+    metadata = _smoke_metadata(pdf_path)
 
     first = await run_structured_ingest(
         job_id="job-smoke-first", pdf_path=pdf_path, metadata=metadata

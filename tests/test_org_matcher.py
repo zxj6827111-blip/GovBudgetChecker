@@ -88,11 +88,45 @@ def test_org_matcher_prefers_department_when_filename_is_department_report(tmp_p
 
     matcher = org_matcher_module.OrgMatcher()
 
-    matched_org, confidence = matcher.match("上海市普陀区人民政府办公室25年预算.pdf")
+    matched_org, confidence = matcher.match("上海市普陀区人民政府办公室部门25年预算.pdf")
 
     assert matched_org is not None
     assert matched_org.id == department.id
     assert confidence >= 0.6
+
+
+def test_org_matcher_refuses_to_guess_between_identical_names_without_marker(tmp_path: Path, monkeypatch):
+    """同名部门与单位同时在场、文件名又没有任何级别标识时，不靠目录顺序猜。"""
+    _patch_storage_paths(tmp_path, monkeypatch)
+    storage = org_storage_module.OrganizationStorage()
+
+    storage.add(
+        Organization(
+            id="dept-office",
+            name="上海市普陀区人民政府办公室",
+            level="department",
+            parent_id=None,
+            code="D-OFFICE",
+            keywords=["人民政府办公室"],
+        )
+    )
+    storage.add(
+        Organization(
+            id="unit-office",
+            name="上海市普陀区人民政府办公室",
+            level="unit",
+            parent_id="dept-office",
+            code="U-OFFICE",
+            keywords=["人民政府办公室"],
+        )
+    )
+
+    matcher = org_matcher_module.OrgMatcher()
+
+    matched_org, confidence = matcher.match("上海市普陀区人民政府办公室25年预算.pdf")
+
+    assert matched_org is None
+    assert confidence == 0
 
 
 def test_org_matcher_prefers_street_office_over_generic_government_office_unit(tmp_path: Path, monkeypatch):
