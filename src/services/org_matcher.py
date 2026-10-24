@@ -90,19 +90,9 @@ class OrgMatcher:
             return "", ""
         from src.services.document_profile_resolver import detect_cover_facts
 
-        facts = detect_cover_facts([first_page_text])
+        facts = detect_cover_facts([first_page_text], self.storage.get_all())
         title = facts["cover_title"]
         issuer = facts["cover_org_name"]
-        if not facts["cover_org_label"] and title:
-            lines = [line.strip() for line in first_page_text.splitlines() if line.strip()]
-            title_line = title.splitlines()[0]
-            if title_line in lines[:20]:
-                index = lines.index(title_line)
-                # 保留原件的括号别名、本级标识以及折行名称。
-                prefix = re.split(r"20\d{2}", title_line, maxsplit=1)[0]
-                block = "".join(line for line in lines[:index] if not line.isdigit()) + prefix
-                if 3 <= len(self._literal_name(block)) <= 240 and not re.search(r"目录|目次|情况说明", block):
-                    issuer = block
         scope = facts["cover_scope_hint"]
         compact_title = self._literal_name(title)
         if not scope:
