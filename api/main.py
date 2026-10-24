@@ -1589,6 +1589,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                 fact_context_obj = build_fact_context_from_artifact(
                     parse_artifact_obj,
                     org_name=check_subject_name,
+                    org_level=runtime.resolve_organization_level(organization_id),
                     fiscal_year=fiscal_year or report_year,
                     report_kind=report_kind,
                     doc_type=doc_type,
@@ -1651,6 +1652,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                     fact_context_obj = build_fact_context_from_artifact(
                         parse_artifact_obj,
                         org_name=check_subject_name,
+                        org_level=runtime.resolve_organization_level(organization_id),
                         fiscal_year=fiscal_year or report_year,
                         report_kind=report_kind,
                         doc_type=doc_type,

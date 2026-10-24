@@ -88,10 +88,13 @@ def _owner_rejection_reason(fact: FiscalFact, organization: Optional[str]) -> Op
     return f"候选事实主体与当前材料主体不一致：{fact.org_name} ≠ {organization}"
 
 
-def operand_rejection_reason(fact: FiscalFact, organization: Optional[str] = None) -> Optional[str]:
+def operand_rejection_reason(fact: FiscalFact, organization: Optional[str] = None, *, required_dimensions=None) -> Optional[str]:
     """Canonical amount/subject admission shared by selection and fact views."""
     if fact.extra_dims.get('identity_incomplete')or fact.extra_dims.get('logical_identity_conflict'):
         return '候选事实的完整业务身份未确认'
+    from .rule_identity import ACTIVE_IDENTITY
+    if fact.extra_dims.get("org_scope_pending") and "org_scope" in (ACTIVE_IDENTITY.get() if required_dimensions is None else required_dimensions):
+        return "材料汇总口径待确认；本规则依赖该维度"
     if fact.extra_dims.get("table_reading_status") == "incomplete":
         return "来源表仍有未完成读取的区域，不能据此确认勾稽结论"
     owner_reason = _owner_rejection_reason(fact, organization)
@@ -347,6 +350,7 @@ class FactContext:
     version_token: str = ""
     context_version: str = FACT_CONTEXT_VERSION
     org_scope: Optional[str] = None
+    org_level: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.version_token:
@@ -436,6 +440,7 @@ class FactContext:
             "parse_run_uid": self.parse_run_uid,
             "org_name": self.org_name,
             "org_scope": self.org_scope,
+            "org_level": self.org_level,
             "fiscal_year": self.fiscal_year,
             "report_kind": self.report_kind,
             "budget_stage": self.budget_stage,
@@ -452,6 +457,7 @@ class FactContext:
             parse_run_uid=str(data.get("parse_run_uid") or ""),
             org_name=data.get("org_name"),
             org_scope=data.get('org_scope'),
+            org_level=data.get('org_level'),
             fiscal_year=data.get("fiscal_year"),
             report_kind=data.get("report_kind"),
             budget_stage=data.get("budget_stage"),
@@ -477,6 +483,7 @@ def build_fact_context_from_artifact(
     report_kind: Optional[str] = None,
     doc_type: Optional[str] = None,
     require_complete_identity: bool = False,
+    org_level: Optional[str] = None,
 ) -> Optional[FactContext]:
     """从统一解析对象构建规则侧事实上下文（不访问数据库）。
 
@@ -534,7 +541,11 @@ def build_fact_context_from_artifact(
             if instance.identity_conflict:
                 fact=dataclasses.replace(fact,recognition_status='ambiguous',extra_dims={**fact.extra_dims,
                     'logical_identity_conflict':list(instance.conflict_reasons)or['logical_table_identity_conflict']})
-            if require_complete_identity and (not fact.org_name or fact.fiscal_year is None or not fact.org_scope
+            if require_complete_identity and not fact.org_scope:
+                fact = dataclasses.replace(fact, extra_dims={**fact.extra_dims,
+                    "org_scope_pending": True, "org_level": org_level,
+                    "org_level_source": "confirmed_organization" if org_level else None})
+            if require_complete_identity and (not fact.org_name or fact.fiscal_year is None
                 or not fact.fund_scope or not stage or not fact.instance_uid):
                 fact=dataclasses.replace(fact,recognition_status='ambiguous',extra_dims={**fact.extra_dims,
                     'identity_incomplete':True,'identity_policy':'trusted_complete_fiscal_identity_v1'})
@@ -553,6 +564,7 @@ def build_fact_context_from_artifact(
         parse_run_uid=artifact.parse_run_uid,
         org_name=org_name,
         org_scope=org_scope,
+        org_level=org_level,
         fiscal_year=fiscal_year,
         report_kind=report_kind,
         budget_stage=budget_stage,

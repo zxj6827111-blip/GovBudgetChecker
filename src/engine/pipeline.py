@@ -150,10 +150,12 @@ def run_rules_with_outcomes(
         try:
             doc.current_rule_code = code
             rule = rule_obj() if isinstance(rule_obj, type) else rule_obj
-            if hasattr(rule, "apply_with_ai") and use_ai_assist:
-                produced = rule.apply_with_ai(doc, use_ai_assist)
-            else:
-                produced = rule.apply(doc)
+            from .rule_identity import rule_identity_requirements
+            with rule_identity_requirements(doc, code):
+                if hasattr(rule, "apply_with_ai") and use_ai_assist:
+                    produced = rule.apply_with_ai(doc, use_ai_assist)
+                else:
+                    produced = rule.apply(doc)
             produced_list = list(produced or [])
         except RuleOutcomeSignal as signal:
             # 非 fail 结局（insufficient_data / not_applicable 等）：

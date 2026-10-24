@@ -411,7 +411,7 @@ async def run_structured_ingest(
             from src.engine.fact_context import build_fact_context_from_artifact
             raw_fact_context = build_fact_context_from_artifact(
                 parse_artifact, org_name=_text_or_none(metadata.get("check_subject_name")) or org_name,
-                fiscal_year=fiscal_year,
+                fiscal_year=fiscal_year, org_level=metadata.get("organization_level"),
                 doc_type=doc_type, report_kind=metadata.get("report_kind"),
                 require_complete_identity=bool(analysis_revision or candidate_only))
             fiscal_facts = list(raw_fact_context.facts) if raw_fact_context else []

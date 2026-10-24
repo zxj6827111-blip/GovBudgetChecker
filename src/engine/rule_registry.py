@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, List, Tuple
 
 from . import budget_rules, common_rules, rules_v33
+from .rule_identity import FULL_IDENTITY, required_identity_dimensions
 
 RULE_REGISTRY_VERSION = "python-rule-registry-v2-profile-scope"
 EVALUATION_BASIS_LEGACY = "legacy_document"
@@ -46,6 +47,7 @@ class RuleRegistration:
     evaluation_basis: str = EVALUATION_BASIS_LEGACY
     fact_inputs: Tuple[str, ...] = ()
     fact_migration: str = "pending"
+    required_identity_dimensions: Tuple[str, ...] = FULL_IDENTITY
 
 
 def _registrations() -> List[RuleRegistration]:
@@ -69,6 +71,7 @@ def _registrations() -> List[RuleRegistration]:
                 ),
                 fact_inputs=fact_inputs,
                 fact_migration="complete" if fact_inputs else "pending",
+                required_identity_dimensions=required_identity_dimensions(rule_id),
             )
             if not registration.rule_id:
                 raise RuntimeError("rule registry contains an implementation without a code")
@@ -137,6 +140,7 @@ def rule_catalog() -> Dict[str, Any]:
                 "obligation_ids": obligation_ids_for_rule(item.rule_id),
                 "fact_inputs": list(item.fact_inputs),
                 "fact_migration": item.fact_migration,
+                "required_identity_dimensions": list(item.required_identity_dimensions),
             }
             for item in _registrations()
         ],

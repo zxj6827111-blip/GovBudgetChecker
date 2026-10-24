@@ -234,7 +234,9 @@ def build_table_import_receipt(artifact, facts, *, org_name=None):
                 f.extra_dims.get("column_identity_status", "bound") == "bound"
                 and f.indicator == mapping["canonical_measure"] for f in matches)
             columns_bound += column_safe
-            rejection = operand_rejection_reason(matches[0], org_name) if exact else None
+            from src.engine.rule_identity import FULL_IDENTITY
+            rejection = operand_rejection_reason(matches[0], org_name, required_dimensions=tuple(
+                dim for dim in FULL_IDENTITY if dim != "org_scope")) if exact else None
             conflict = not source_consistent or bool(matches) and (not exact or bool(mapping) and any(
                 f.indicator != mapping["canonical_measure"] for f in matches))
             conflicts += conflict
@@ -360,6 +362,8 @@ def build_table_import_receipt(artifact, facts, *, org_name=None):
                                  max(box[2], cell.bbox[2]), max(box[3], cell.bbox[3])]
         entry["row_boxes"] = row_boxes
     reading_quality["organization_status"] = "identified" if org_name else "unresolved"
+    reading_quality["org_scope_pending_count"] = sum(bool(f.extra_dims.get("org_scope_pending")) for f in facts)
+    reading_quality["org_scope_status"] = "pending_confirmation" if reading_quality["org_scope_pending_count"] else "determined_or_no_facts"
     # 身份闸门：主体为空、科目名称只剩编码的事实，不能计为已完成入库。
     reading_quality["fact_identity_gaps"] = {
         "organization_missing": sum(not fact.org_name for fact in facts),
