@@ -24,6 +24,11 @@ indent-style = "space"
 
 [tool.mypy]
 python_version = "3.11"
+# tests/ 没有 __init__.py，但测试之间用 `from tests.xxx import ...` 复用夹具与助手。
+# 不显式声明包基目录时，mypy 会把同一文件同时解析成 `test_x` 和 `tests.test_x`
+# 两个模块名并直接中止（"Source file found twice"），466 个文件一个都没检查。
+explicit_package_bases = true
+namespace_packages = true
 warn_unused_configs = true
 warn_return_any = false
 warn_unused_ignores = false

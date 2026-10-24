@@ -3546,7 +3546,8 @@ class BUD107_TextTableConsistency(Rule):
                 _, t4_exp_sv = _extract_t4_strict(t4_rows, default_unit=unit) if t4_rows else (None,None)
                 if fact_t4_sv is not None:t4_exp_sv=fact_t4_sv
                 elif fact_t4_block:
-                    t4_exp_sv=None;unresolved_reasons.append('T4财政拨款支出'+fact_t4_block)
+                    t4_exp_sv=None
+                    unresolved_reasons.append('T4财政拨款支出'+fact_t4_block)
                 # AC-03：叙述金额按年度绑定提取
                 text_fin_exp_sv, notes_t4 = extract_for_subject(
                     [r"财政拨款支出预算\s*([0-9,]+(?:\.[0-9]+)?)\s*万元"],

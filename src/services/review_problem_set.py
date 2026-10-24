@@ -200,12 +200,12 @@ def _display_issues(
     merged_ids = [item for item in merged_ids if item]
 
     if _text(merged.get("merge_policy_version")) == "fact-check-relation-v1":
-        by_id = {
+        by_id: Dict[str, Dict[str, Any]] = {
             _issue_id_of(item): item
             for item in source_issues
             if _issue_id_of(item)
         }
-        selected = [by_id[item] for item in merged_ids if item in by_id]
+        selected: List[Dict[str, Any]] = [by_id[item] for item in merged_ids if item in by_id]
         review_ids = [
             _text(item)
             for item in [
@@ -224,13 +224,13 @@ def _display_issues(
         return selected
 
     if merged_ids and source_issues:
-        by_id: Dict[str, Dict[str, Any]] = {}
+        by_id = {}
         for item in source_issues:
             issue_id = _issue_id_of(item)
             if issue_id and issue_id not in by_id:
                 by_id[issue_id] = item
-        selected: List[Dict[str, Any]] = []
-        seen: set = set()
+        selected = []
+        seen = set()
         for merged_id in merged_ids:
             if merged_id in seen:
                 continue

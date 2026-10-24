@@ -16,7 +16,9 @@ def _immutable(path,data):
     descriptor,name=tempfile.mkstemp(dir=path.parent,prefix='.history-')
     try:
         with os.fdopen(descriptor,'wb')as stream:
-            stream.write(data);stream.flush();os.fsync(stream.fileno())
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
         try:os.link(name,path)
         except FileExistsError:pass
         if path.read_bytes()!=data:raise ValueError('historical original bytes differ from frozen archive')
@@ -26,7 +28,8 @@ def _immutable(path,data):
 def archive_before_reanalysis(job_dir,filenames):
     status_file=job_dir/'status.json'
     if not status_file.is_file():return None
-    status_bytes=status_file.read_bytes();payload=json.loads(status_bytes)
+    status_bytes=status_file.read_bytes()
+    payload=json.loads(status_bytes)
     if payload.get('status')not in {'done','completed','review_required','degraded','error','cancelled'}:return None
     files={}
     for filename in sorted(set(filenames)|{'status.json','fact_context.json','corrections.jsonl'}):
@@ -45,7 +48,8 @@ def archive_before_reanalysis(job_dir,filenames):
     folder=job_dir/'preserved_analyses'/identity
     for name,data in files.items():
         blob=job_dir/'preserved_analyses'/'.blobs'/digests[name]
-        _immutable(blob,data);folder.mkdir(parents=True,exist_ok=True)
+        _immutable(blob,data)
+        folder.mkdir(parents=True,exist_ok=True)
         try:os.link(blob,folder/name)
         except FileExistsError:
             if(folder/name).read_bytes()!=data:raise ValueError('historical linked bytes differ')

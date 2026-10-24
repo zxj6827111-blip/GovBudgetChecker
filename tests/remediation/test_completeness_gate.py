@@ -23,7 +23,7 @@ def fact(row, indicator, value, *, uid="i5", code=FIN_05, status="unverified", *
 def ledger(rows):
     """rows: [(合计, 基本, 项目)]，返回同一实例的事实。"""
     return [fact(row, name, value) for row, values in enumerate(rows)
-            for name, value in zip(("total_actual", "basic_actual", "project_actual"), values)]
+            for name, value in zip(("total_actual", "basic_actual", "project_actual"), values, strict=False)]
 
 
 def test_code_column_bound_as_total_is_a_mapping_conflict_not_a_document_error():

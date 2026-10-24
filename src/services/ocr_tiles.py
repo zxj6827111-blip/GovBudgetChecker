@@ -389,7 +389,8 @@ def save_checkpoint(path, payload):
     try:
         with os.fdopen(descriptor,'w')as stream:
             json.dump(sealed,stream,ensure_ascii=False,sort_keys=True,allow_nan=False)
-            stream.flush();os.fsync(stream.fileno())
+            stream.flush()
+            os.fsync(stream.fileno())
         temporary.replace(path)
     finally:temporary.unlink(missing_ok=True)
 
@@ -401,7 +402,9 @@ def save_input_png(path,data,expected_hash):
     descriptor,name=tempfile.mkstemp(dir=path.parent,prefix='.ocr-input-')
     try:
         with os.fdopen(descriptor,'wb')as stream:
-            stream.write(data);stream.flush();os.fsync(stream.fileno())
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
         try:os.link(name,path)
         except FileExistsError:pass
         if hashlib.sha256(path.read_bytes()).hexdigest()!=expected_hash:
@@ -475,7 +478,8 @@ async def recognize_tiles(image,**kwargs):
     if path is None:return await _recognize_tiles(image,**kwargs)
     # 同一原件同一配置的两个任务可共享断点，但不能同时修改同页的轮次和响应。
     import fcntl
-    lock=Path(str(path)+'.lock');lock.parent.mkdir(parents=True,exist_ok=True)
+    lock=Path(str(path)+'.lock')
+    lock.parent.mkdir(parents=True,exist_ok=True)
     with lock.open('a+b')as stream:
         try:fcntl.flock(stream,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError:

@@ -30,7 +30,8 @@ def main():
                 if urlsplit(source).path.lower().endswith('.pdf'):
                     links = [(source, seed.get('title', unquote(urlsplit(source).path.rsplit('/',1)[-1])))]
                 else:
-                    response = client.get(source); response.raise_for_status()
+                    response = client.get(source)
+                    response.raise_for_status()
                     links = [(urljoin(str(response.url), html.unescape(url)),
                               re.sub('<[^>]+>', '', html.unescape(label)).strip())
                              for url,label in re.findall(r'<a[^>]+href=["\']([^"\']+\.pdf(?:\?[^"\']*)?)["\'][^>]*>(.*?)</a>', response.text, re.I|re.S)]
@@ -39,7 +40,9 @@ def main():
                         continue
                     if not (urlsplit(url).hostname or '').endswith('.gov.cn'):
                         continue
-                    response = client.get(url); response.raise_for_status(); data = response.content
+                    response = client.get(url)
+                    response.raise_for_status()
+                    data = response.content
                     if not data.startswith(b'%PDF-') or len(data)>50_000_000:
                         raise ValueError('not an acceptable original PDF')
                     digest = hashlib.sha256(data).hexdigest()
@@ -53,7 +56,8 @@ def main():
                               'document_type':seed['document_type'],'truth_status':'unlabelled'}
                     if any(r['sha256']==digest and r['group']!=record['group'] for r in records):
                         raise ValueError('source leakage between development and independent acceptance')
-                    records.append(record);known.add(url)
+                    records.append(record)
+                    known.add(url)
                     path.write_text(json.dumps(records,ensure_ascii=False,indent=2))
                     print(json.dumps({'title':label,'sha256':digest,'group':seed['group']},ensure_ascii=False),flush=True)
             except (httpx.HTTPError, ValueError) as exc:

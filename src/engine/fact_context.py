@@ -843,7 +843,9 @@ def parse_overlays_from_records(records: Iterable[Dict[str, Any]]) -> List[FactO
         if isinstance(changes, list):
             candidates = [item for item in changes if isinstance(item, dict)]
         else:
-            change = record.get("change") if isinstance(record.get("change"), dict) else record
+            change: Dict[str, Any] = (
+                record.get("change") if isinstance(record.get("change"), dict) else record
+            )
             candidates = [change]
 
         grouped: Dict[str, Dict[str, Any]] = {}

@@ -125,21 +125,26 @@ def fuse_overlapping_cells(artifact,candidate,*,table_code,mappings,organization
         fragment=deepcopy(native)
         prediction_hash=candidate.provenance.get('raw_prediction_sha256')or candidate.provenance.get('table_hash')
         fragment.fragment_uid=content_hash(['native-ocr-cell',source_id,prediction_hash])[:24]
-        cell.raw_text=str(observed['raw_text']);cell.normalized_text=cell.raw_text
+        cell.raw_text=str(observed['raw_text'])
+        cell.normalized_text=cell.raw_text
         from src.schemas.parse_artifact import CellPresence
         cell.presence=CellPresence.detect(cell.raw_text)
         factor={'元':Decimal('.0001'),'万元':Decimal(1),'亿元':Decimal(10000)}[qualified['unit']]
         cell.numeric_value=float(amount/factor)
-        cell.normalized_value_wan=amount;cell.extraction_method='ocr'
+        cell.normalized_value_wan=amount
+        cell.extraction_method='ocr'
         cell.confidence=observed.get('score')
         cell.origin_fragment_uid=fragment.fragment_uid
-        cell.origin_row_idx=cell.row_idx;cell.origin_col_idx=cell.col_idx
+        cell.origin_row_idx=cell.row_idx
+        cell.origin_col_idx=cell.col_idx
         cell.ocr_provenance={'qualification':qualified,'source':deepcopy(candidate.provenance),
                              'cell':deepcopy(observed),'native_alignment':proof}
         cell.native_text_sources=[]
         changed.rows[cell.row_idx][cell.col_idx]=cell.raw_text
-        fragment.cells=[deepcopy(cell)];fragment.rows=deepcopy(changed.rows)
-        fragment.extraction_method='ocr';fragment.page_number=candidate.page_number
+        fragment.cells=[deepcopy(cell)]
+        fragment.rows=deepcopy(changed.rows)
+        fragment.extraction_method='ocr'
+        fragment.page_number=candidate.page_number
         fragment.bbox=tuple(cell.bbox)
         if not any(t.fragment_uid==fragment.fragment_uid for t in artifact.physical_fragments):
             artifact.physical_fragments.append(fragment)

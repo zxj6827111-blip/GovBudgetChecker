@@ -50,9 +50,11 @@ def metadata(path, org="org"):
 @pytest.mark.asyncio
 async def test_received_file_two_tasks_and_new_version_do_not_inherit_review(report_db, tmp_path):
     conn=report_db
-    path=tmp_path/"医保局.pdf";path.write_bytes(b"first pdf")
+    path=tmp_path/"医保局.pdf"
+    path.write_bytes(b"first pdf")
     first=await registration.register_uploaded_material("first",path,metadata(path))
-    version=first["document_version_id"];slot=uuid.UUID(first["material_slot"]["slot_id"])
+    version=first["document_version_id"]
+    slot=uuid.UUID(first["material_slot"]["slot_id"])
     jobs=[]
     for name in ("early","current"):
         jobs.append(await conn.fetchval("INSERT INTO analysis_jobs(job_uuid,filename,status,analysis_revision,metadata) VALUES($1,'医保局.pdf','review_required',1,$2::jsonb) RETURNING id",name,json.dumps({"organization_id":"org","structured_ingest":{"document_version_id":version}})))
@@ -80,7 +82,8 @@ async def test_received_file_two_tasks_and_new_version_do_not_inherit_review(rep
 
 @pytest.mark.asyncio
 async def test_same_name_organizations_do_not_share_documents_or_versions(report_db,tmp_path):
-    path=tmp_path/"医保局.pdf";path.write_bytes(b"same bytes")
+    path=tmp_path/"医保局.pdf"
+    path.write_bytes(b"same bytes")
     first=await registration.register_uploaded_material("a",path,metadata(path,"org"))
     second=await registration.register_uploaded_material("b",path,metadata(path,"other"))
     assert first["document_id"]!=second["document_id"]
@@ -91,7 +94,8 @@ async def test_same_name_organizations_do_not_share_documents_or_versions(report
 
 @pytest.mark.asyncio
 async def test_registration_failure_rolls_back_document_and_slot(report_db,tmp_path,monkeypatch):
-    path=tmp_path/"医保局.pdf";path.write_bytes(b"rollback")
+    path=tmp_path/"医保局.pdf"
+    path.write_bytes(b"rollback")
     from src.services.material_slot_service import MaterialSlotService
     async def fail(*args): raise RuntimeError("binding rejected")
     monkeypatch.setattr(MaterialSlotService,"bind_document_version",fail)
@@ -103,7 +107,8 @@ async def test_registration_failure_rolls_back_document_and_slot(report_db,tmp_p
 
 @pytest.mark.asyncio
 async def test_same_subject_registration_replay_is_idempotent(report_db,tmp_path):
-    path=tmp_path/"医保局.pdf";path.write_bytes(b"same upload")
+    path=tmp_path/"医保局.pdf"
+    path.write_bytes(b"same upload")
     versions=[await registration.register_uploaded_material(str(i),path,metadata(path)) for i in range(3)]
     assert len({v["document_version_id"] for v in versions})==1
     assert await report_db.fetchval("SELECT count(*) FROM material_slots")==1
@@ -118,7 +123,8 @@ async def test_concurrent_upload_connections_keep_one_version(report_db,tmp_path
     active=contextvars.ContextVar("report_test_connection")
     async def acquire():return active.get()
     monkeypatch.setattr(DatabaseConnection,"acquire",acquire)
-    path=tmp_path/"医保局.pdf";path.write_bytes(b"concurrent upload")
+    path=tmp_path/"医保局.pdf"
+    path.write_bytes(b"concurrent upload")
     async def upload(conn,jid):
         active.set(conn)
         return await registration.register_uploaded_material(jid,path,metadata(path))
@@ -132,19 +138,26 @@ async def test_concurrent_upload_connections_keep_one_version(report_db,tmp_path
 @pytest.mark.asyncio
 async def test_confirmed_identity_repair_preserves_review_and_supports_rollback(report_db,tmp_path):
     from src.services.material_identity_repair import repair_material_identity,rollback_material_identity
-    path=tmp_path/"医保局.pdf";path.write_bytes(b"original")
+    path=tmp_path/"医保局.pdf"
+    path.write_bytes(b"original")
     registered=await registration.register_uploaded_material("reviewed",path,metadata(path))
-    version=registered["document_version_id"];slot=registered["material_slot"]["slot_id"]
+    version=registered["document_version_id"]
+    slot=registered["material_slot"]["slot_id"]
     meta={"organization_id":"org","organization_name":"医保局","structured_ingest":{"document_version_id":version}}
     job=await report_db.fetchval("INSERT INTO analysis_jobs(job_uuid,filename,status,analysis_revision,metadata) VALUES('reviewed','医保局.pdf','review_required',1,$1::jsonb) RETURNING id",json.dumps(meta))
     await report_db.execute("INSERT INTO analysis_results(job_id) VALUES($1)",job)
     await report_db.execute("""INSERT INTO review_sessions(slot_id,document_version_id,analysis_job_uuid,analysis_basis_token,
         status,started_by,completed_by,completed_at,review_result)
         VALUES($1,$2,'reviewed','reviewed:1','completed','admin','admin',NOW(),'{"issue_counts":{"confirmed":6}}')""",uuid.UUID(slot),version)
-    uploads=tmp_path/"uploads";directory=uploads/"reviewed";directory.mkdir(parents=True)
-    status=directory/"status.json";status.write_text(json.dumps({**meta,"status":"review_required"}))
-    links=tmp_path/"links.json";links.write_text(json.dumps({"links":[{"job_id":"reviewed","org_id":"org"}]}))
-    status_before=status.read_bytes();links_before=links.read_bytes()
+    uploads=tmp_path/"uploads"
+    directory=uploads/"reviewed"
+    directory.mkdir(parents=True)
+    status=directory/"status.json"
+    status.write_text(json.dumps({**meta,"status":"review_required"}))
+    links=tmp_path/"links.json"
+    links.write_text(json.dumps({"links":[{"job_id":"reviewed","org_id":"org"}]}))
+    status_before=status.read_bytes()
+    links_before=links.read_bytes()
     receipt=await repair_material_identity(report_db,old_id="org",new_id="canonical",slot_ids=[slot],
         catalog=[{"id":"city","name":"上海市","level":"city"},{"id":"canonical","name":"医保局","level":"department","parent_id":"city"}],
         upload_root=uploads,links_file=links,receipt_dir=tmp_path/"receipt",actor="user-confirmed")

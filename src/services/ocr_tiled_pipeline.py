@@ -250,7 +250,8 @@ async def recognize_document_tiles(
                     'source_sha256':artifact.source_file_hash,'render_sha256':parent_grid_sha,
                     'pixel_to_pdf_matrix':affine.values(),**grid})
 
-                def high_resolution(box, attempt, affine=affine, page=page, angle=angle, page_dpi=dpi):
+                def high_resolution(box, attempt, affine=affine, page=page, angle=angle, page_dpi=dpi,
+                                    original_parent_sha=original_parent_sha):
                     native_to_viewport = page_viewport_to_native(page).inverse()
                     clip = fitz.Rect(native_to_viewport.box(affine.box(box))) & page.rect
                     # 补读按首轮分辨率的 1.5/2 倍放大（矢量页仍是 450/600 DPI）；

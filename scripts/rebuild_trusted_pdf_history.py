@@ -30,13 +30,15 @@ async def connection():
     load_dotenv(ROOT/'.env',override=False)
     conn=await asyncpg.connect(os.environ['DATABASE_URL'])
     if await conn.fetchval("SELECT to_regclass('analysis_rebuild_events')")is None:
-        await conn.close();raise RuntimeError('apply reviewed database migrations before rebuilding history')
+        await conn.close()
+        raise RuntimeError('apply reviewed database migrations before rebuilding history')
     return conn
 
 
 async def inventory(args):
     from api import runtime
-    conn=await connection();items=[]
+    conn=await connection()
+    items=[]
     try:
         for job in args.jobs:
             if not job.replace('-','').replace('_','').isalnum():raise ValueError('invalid job ID')
@@ -57,10 +59,12 @@ async def inventory(args):
 
 
 def build(args):
-    entries=json.loads(args.inventory.read_text())['items'];args.output.mkdir(parents=True,exist_ok=True)
+    entries=json.loads(args.inventory.read_text())['items']
+    args.output.mkdir(parents=True,exist_ok=True)
     receipts=[]
     for item in entries:
-        job=item['job_id'];source=args.uploads.resolve()/job
+        job=item['job_id']
+        source=args.uploads.resolve()/job
         root=args.output.resolve()/('candidate-'+uuid.uuid4().hex)
         if root==source or source in root.parents:raise ValueError('candidate directory must be outside original job')
         target=root/job
@@ -73,7 +77,8 @@ def build(args):
                 raise ValueError('source changed while copying candidate workspace')
         workflow=args.uploads/'.issue_workflow.json'
         if workflow.is_file():shutil.copyfile(workflow,root/'.issue_workflow.json')
-        status_path=target/'status.json';status=json.loads(status_path.read_text())
+        status_path=target/'status.json'
+        status=json.loads(status_path.read_text())
         status.update(status='queued',use_ai_assist=False,mode='legacy',use_local_rules=True)
         status_path.write_text(json.dumps(status,ensure_ascii=False))
         env={**os.environ,'UPLOAD_DIR':str(root),'TRUSTED_REBUILD_EXPECTED_CURRENT':json.dumps(item['current_revision']),
@@ -133,7 +138,8 @@ async def worker(args):
     try:await _run_pipeline_body(runtime.UPLOAD_ROOT/args.job,candidate_only=True)
     finally:
         await close_structured_ingest_resources()
-        fcntl.flock(lease,fcntl.LOCK_UN);lease.close()
+        fcntl.flock(lease,fcntl.LOCK_UN)
+        lease.close()
 
 
 async def switch(args):
@@ -178,14 +184,30 @@ async def switch(args):
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);sub=parser.add_subparsers(dest='command',required=True)
-    p=sub.add_parser('inventory');p.add_argument('--uploads',type=Path,required=True);p.add_argument('--jobs',nargs='+',required=True);p.add_argument('--output',type=Path,required=True)
-    p=sub.add_parser('build');p.add_argument('--uploads',type=Path,required=True);p.add_argument('--inventory',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
-    p=sub.add_parser('resume');p.add_argument('--manifest',type=Path,required=True)
-    p=sub.add_parser('_candidate-worker');p.add_argument('--job',required=True)
-    p=sub.add_parser('publish');p.add_argument('--uploads',type=Path,required=True);p.add_argument('--manifest',type=Path,required=True);p.add_argument('--batch-id')
-    p=sub.add_parser('rollback');p.add_argument('--uploads',type=Path,required=True);p.add_argument('--batch-id',required=True)
-    p=sub.add_parser('sync');p.add_argument('--uploads',type=Path,required=True);p.add_argument('--batch-id',required=True)
+    parser=argparse.ArgumentParser(description=__doc__)
+    sub=parser.add_subparsers(dest='command',required=True)
+    p=sub.add_parser('inventory')
+    p.add_argument('--uploads',type=Path,required=True)
+    p.add_argument('--jobs',nargs='+',required=True)
+    p.add_argument('--output',type=Path,required=True)
+    p=sub.add_parser('build')
+    p.add_argument('--uploads',type=Path,required=True)
+    p.add_argument('--inventory',type=Path,required=True)
+    p.add_argument('--output',type=Path,required=True)
+    p=sub.add_parser('resume')
+    p.add_argument('--manifest',type=Path,required=True)
+    p=sub.add_parser('_candidate-worker')
+    p.add_argument('--job',required=True)
+    p=sub.add_parser('publish')
+    p.add_argument('--uploads',type=Path,required=True)
+    p.add_argument('--manifest',type=Path,required=True)
+    p.add_argument('--batch-id')
+    p=sub.add_parser('rollback')
+    p.add_argument('--uploads',type=Path,required=True)
+    p.add_argument('--batch-id',required=True)
+    p=sub.add_parser('sync')
+    p.add_argument('--uploads',type=Path,required=True)
+    p.add_argument('--batch-id',required=True)
     args=parser.parse_args()
     if args.command=='build':build(args)
     elif args.command=='resume':resume(args)

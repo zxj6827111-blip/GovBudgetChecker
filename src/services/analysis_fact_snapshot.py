@@ -121,7 +121,8 @@ def write_snapshot(path: Path, payload: dict) -> None:
     try:
         with os.fdopen(fd, 'w') as f:
             json.dump(payload, f, ensure_ascii=False, sort_keys=True, allow_nan=False)
-            f.flush(); os.fsync(f.fileno())
+            f.flush()
+            os.fsync(f.fileno())
         # 独占创建，避免并发把同一revision的不同快照互相覆盖。
         os.link(name, path)
     finally:

@@ -40,7 +40,8 @@ async def stage_candidate_result(payload):
             row=await conn.fetchrow('SELECT payload FROM analysis_fact_snapshots WHERE job_uuid=$1 AND revision_id=$2',
                 payload['job_id'],payload['analysis_revision'])
             if row is None:raise ValueError('candidate fact snapshot missing')
-            snapshot=decoded(row['payload']);validate_snapshot(snapshot)
+            snapshot=decoded(row['payload'])
+            validate_snapshot(snapshot)
             receipt=(payload.get('structured_ingest')or{}).get('fact_snapshot')or{}
             if receipt.get('storage_consistent')is not True or receipt.get('snapshot_hash')!=snapshot['snapshot_hash']:
                 raise ValueError('candidate fact snapshot readback unconfirmed')
@@ -60,7 +61,9 @@ async def candidate_record(conn,job,revision):
     row=await conn.fetchrow('SELECT s.*,r.payload AS result,r.core_hash FROM analysis_fact_snapshots s '
         'JOIN analysis_revision_results r USING(job_uuid,revision_id) WHERE s.job_uuid=$1 AND s.revision_id=$2',job,revision)
     if row is None:raise ValueError('candidate snapshot/report missing')
-    snapshot=decoded(row['payload']);result=decoded(row['result']);validate_snapshot(snapshot)
+    snapshot=decoded(row['payload'])
+    result=decoded(row['result'])
+    validate_snapshot(snapshot)
     from src.services.analysis_result_store import compute_analysis_result_fingerprint
     if (snapshot['job_uuid'],snapshot['revision_id'])!=(job,revision) or (result.get('job_id'),result.get('analysis_revision'))!=(job,revision):
         raise ValueError('candidate identity mismatch')
@@ -87,7 +90,8 @@ def validate_acceptance(item,snapshot,result):
 
 
 async def _event(conn,batch,action,payload):
-    event=uuid.uuid4().hex;digest=content_hash(payload)
+    event=uuid.uuid4().hex
+    digest=content_hash(payload)
     await conn.execute('INSERT INTO analysis_rebuild_events(event_id,batch_id,action,payload,payload_hash) '
         'VALUES($1,$2,$3,$4::jsonb,$5)',event,batch,action,json.dumps(payload,ensure_ascii=False),digest)
     stored=await conn.fetchrow('SELECT payload,payload_hash FROM analysis_rebuild_events WHERE event_id=$1',event)
@@ -101,13 +105,15 @@ async def publish_batch(conn,items,*,batch_id=None):
     from src.services.fact_compatibility_projection import archive_legacy_projection
     if not 1<=len(items)<=20 or len({i['job_id']for i in items})!=len(items):
         raise ValueError('batch must contain 1-20 unique jobs')
-    batch_id=batch_id or uuid.uuid4().hex;records=[]
+    batch_id=batch_id or uuid.uuid4().hex
+    records=[]
     async with conn.transaction():
         if await conn.fetchval('SELECT EXISTS(SELECT 1 FROM analysis_rebuild_events WHERE batch_id=$1)',batch_id):
             raise ValueError('rebuild batch already exists; inspect its outcome before retrying')
         documents=set()
         for item in sorted(items,key=lambda i:i['job_id']):
-            job=item['job_id'];revision=item['revision_id']
+            job=item['job_id']
+            revision=item['revision_id']
             previous=await conn.fetchrow('SELECT * FROM analysis_jobs WHERE job_uuid=$1 FOR UPDATE',job)
             if previous is None or previous['current_fact_revision_id']!=item.get('expected_current_revision'):
                 raise ValueError('candidate superseded; current revision changed')

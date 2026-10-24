@@ -160,7 +160,8 @@ def _amount(rule, doc, text, begin, end, amount, unit, fact, key, label, section
 
 def _truncated_name_source(doc, fact, item, siblings):
     """仅把同范围唯一原文名称用于本条关系，不改写原表名称或全局别名。"""
-    literal = lambda value: re.sub(r'\s+', '', str(value or ''))
+    def literal(value):
+        return re.sub(r'\s+', '', str(value or ''))
     raw, full = literal(fact.subject_name), literal(item['xiang'])
     if len(raw) < 8 or raw == full or not full.startswith(raw):
         return None

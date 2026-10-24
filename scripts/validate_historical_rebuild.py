@@ -36,11 +36,13 @@ async def seed_legacy_control(env,uploads,job):
     try:
         async with conn.transaction():
             head=await conn.fetchrow('SELECT * FROM published_fact_projections WHERE job_uuid=$1',job)
-            receipt=json.loads(head['receipt']);report=receipt['shared_report_id']
+            receipt=json.loads(head['receipt'])
+            report=receipt['shared_report_id']
             payload=json.loads(await conn.fetchval('SELECT r.raw_response FROM analysis_results r '
                 'JOIN analysis_jobs j ON j.id=r.job_id WHERE j.job_uuid=$1',job))
             for parent in [payload,(payload.get('result')or{}).get('meta')or{}]:
-                parent.pop('fact_snapshot',None);parent.pop('recognition_state',None)
+                parent.pop('fact_snapshot',None)
+                parent.pop('recognition_state',None)
                 (parent.get('structured_ingest')or{}).pop('fact_snapshot',None)
             payload.pop('analysis_revision',None)
             await conn.execute('UPDATE analysis_results SET raw_response=$2::jsonb WHERE job_id='
@@ -57,7 +59,8 @@ async def seed_legacy_control(env,uploads,job):
 
 
 async def legacy_view(dsn,job,version,report):
-    import asyncpg,uuid
+    import asyncpg
+    import uuid
     conn=await asyncpg.connect(dsn)
     try:
         fields={}
@@ -73,11 +76,14 @@ async def legacy_view(dsn,job,version,report):
 
 
 def run_history_validation(*,env,work,out,jobs,legacy_job=None):
-    all_jobs=sorted(jobs);legacy_job=legacy_job or(all_jobs[2]if len(all_jobs)>2 else None)
+    all_jobs=sorted(jobs)
+    legacy_job=legacy_job or(all_jobs[2]if len(all_jobs)>2 else None)
     jobs=[job for job in all_jobs if job!=legacy_job][:2]
     if len(jobs)!=2:raise ValueError('history control requires two distinct jobs')
-    root=out/'history_controls';root.mkdir()
-    script=ROOT/'scripts/rebuild_trusted_pdf_history.py';uploads=work/'uploads'
+    root=out/'history_controls'
+    root.mkdir()
+    script=ROOT/'scripts/rebuild_trusted_pdf_history.py'
+    uploads=work/'uploads'
     def command(name,*args,expected=0):
         with (root/(name+'.log')).open('w')as log:
             result=subprocess.run([sys.executable,str(script),*map(str,args)],env=env,cwd=ROOT,
@@ -90,18 +96,22 @@ def run_history_validation(*,env,work,out,jobs,legacy_job=None):
     assert asyncio.run(current_view(env['DATABASE_URL'],jobs))==before,'candidate changed currently consumed results'
     manifest=json.loads((root/'candidates/candidate_manifest.json').read_text())
     assert all(i['status']=='candidate_ready'for i in manifest['items'])
-    untouched=root/'unaccepted.json';untouched.write_text(json.dumps(manifest))
+    untouched=root/'unaccepted.json'
+    untouched.write_text(json.dumps(manifest))
     command('reject_unaccepted','publish','--uploads',uploads,'--manifest',untouched,expected='failure')
     assert asyncio.run(current_view(env['DATABASE_URL'],jobs))==before
     # 这是临时栈内故障控制凭据，明确不能迁移为业务验收记录。
     for item in manifest['items']:
         item['acceptance'].update(accepted=True,reviewer='ISOLATED_CONTROL_TEST_ONLY',
                                   reviewed_at='2026-10-20T00:00:00Z',errors=[])
-    bad=json.loads(json.dumps(manifest));bad['items'][-1]['acceptance']['accepted']=False
-    bad_path=root/'late_failure.json';bad_path.write_text(json.dumps(bad))
+    bad=json.loads(json.dumps(manifest))
+    bad['items'][-1]['acceptance']['accepted']=False
+    bad_path=root/'late_failure.json'
+    bad_path.write_text(json.dumps(bad))
     command('late_failure_rollback','publish','--uploads',uploads,'--manifest',bad_path,expected='failure')
     assert asyncio.run(current_view(env['DATABASE_URL'],jobs))==before,'failed batch partly published'
-    accepted=root/'accepted_control.json';accepted.write_text(json.dumps(manifest))
+    accepted=root/'accepted_control.json'
+    accepted.write_text(json.dumps(manifest))
     batch='control-history-'+jobs[0][:12]
     command('publish','publish','--uploads',uploads,'--manifest',accepted,'--batch-id',batch)
     after=asyncio.run(current_view(env['DATABASE_URL'],jobs))
@@ -123,7 +133,8 @@ def run_history_validation(*,env,work,out,jobs,legacy_job=None):
         legacy_manifest=json.loads((root/'legacy_candidates/candidate_manifest.json').read_text())
         for item in legacy_manifest['items']:
             item['acceptance'].update(accepted=True,reviewer='ISOLATED_CONTROL_TEST_ONLY',reviewed_at='2026-10-20',errors=[])
-        accepted_legacy=root/'legacy_accepted_control.json';accepted_legacy.write_text(json.dumps(legacy_manifest))
+        accepted_legacy=root/'legacy_accepted_control.json'
+        accepted_legacy.write_text(json.dumps(legacy_manifest))
         legacy_batch='legacy-'+batch
         command('legacy_publish','publish','--uploads',uploads,'--manifest',accepted_legacy,'--batch-id',legacy_batch)
         command('legacy_rollback','rollback','--uploads',uploads,'--batch-id',legacy_batch)

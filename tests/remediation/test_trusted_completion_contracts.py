@@ -56,7 +56,12 @@ async def test_current_job_view_keeps_new_attempt_failure_and_denies_changed_own
 async def test_document_soft_budget_retains_unstarted_pages(tmp_path,monkeypatch):
     import pymupdf as fitz
     from src.services.ocr_tiled_pipeline import recognize_document_tiles
-    path=tmp_path/'two-pages.pdf';doc=fitz.open();doc.new_page();doc.new_page();doc.save(path);doc.close()
+    path=tmp_path/'two-pages.pdf'
+    doc=fitz.open()
+    doc.new_page()
+    doc.new_page()
+    doc.save(path)
+    doc.close()
     now=[0.]
     monkeypatch.setenv('OCR_DOCUMENT_SOFT_BUDGET_SEC','1')
     monkeypatch.setattr('src.services.ocr_tiled_pipeline.time.monotonic',lambda:now[0])
@@ -73,7 +78,8 @@ async def test_document_soft_budget_retains_unstarted_pages(tmp_path,monkeypatch
 
 
 def test_repeated_same_amount_truth_is_not_deduplicated_and_missing_stays_denominator():
-    a,f=source();raw=FactContext([f],file_hash=a.source_file_hash,parse_run_uid=a.parse_run_uid)
+    a,f=source()
+    raw=FactContext([f],file_hash=a.source_file_hash,parse_run_uid=a.parse_run_uid)
     snapshot=make_snapshot(job_uuid='job',revision_id='r1',artifact=a,raw_context=raw,effective_context=raw)
     cell={k:f.to_dict().get(k)for k in ('org_name','org_scope','fiscal_year','period','fund_scope','budget_stage',
           'table_code','indicator','subject_code','subject_name')}
@@ -91,9 +97,11 @@ def test_repeated_same_amount_truth_is_not_deduplicated_and_missing_stays_denomi
     assert evaluate_cells(partial,snapshot)['independent_truth_confirmed']is False
     complete={**partial,'annotation_complete':True}
     assert evaluate_cells(complete,snapshot)['independent_truth_confirmed']is True
-    wrong=deepcopy(truth);wrong['cells'][0]['subject_name']='另一个科目'
+    wrong=deepcopy(truth)
+    wrong['cells'][0]['subject_name']='另一个科目'
     assert evaluate_cells(wrong,snapshot)['wrong_admissions'][0]['fields']==['subject_name']
-    blank=deepcopy(truth);blank['cells'][0]['literal_kind']='blank'
+    blank=deepcopy(truth)
+    blank['cells'][0]['literal_kind']='blank'
     assert evaluate_cells(blank,snapshot)['wrong_admissions'][0]['reason']=='amount_in_non_amount_cell'
     assert acceptance_suite([])['accepted']is False
     assert recognition_state(a)['recognition_accuracy']is None
@@ -107,7 +115,8 @@ def test_blank_acceptance_uses_local_unit_scope_and_requires_native_blank_proof(
         ['201','一般公共服务支出','']])
     table.title='测试局单位决算收入决算表'
     instance=_instance_for(table)
-    instance.org_name='测试局';instance.fiscal_year=2025
+    instance.org_name='测试局'
+    instance.fiscal_year=2025
     artifact=_artifact_with([table],[instance],file_hash='a'*64)
     cell=next(c for c in table.cells if c.row_idx==1 and c.col_idx==2)
     cell.native_blank_verified=True
@@ -121,15 +130,18 @@ def test_blank_acceptance_uses_local_unit_scope_and_requires_native_blank_proof(
 
 
 def test_snapshot_comparison_includes_status_and_identity_and_publication_requires_acceptance():
-    a,f=source();raw=FactContext([f],file_hash=a.source_file_hash,parse_run_uid='run')
+    a,f=source()
+    raw=FactContext([f],file_hash=a.source_file_hash,parse_run_uid='run')
     old=make_snapshot(job_uuid='job',revision_id='old',artifact=a,raw_context=raw,effective_context=raw)
-    effective=deepcopy(raw);effective.facts[0].recognition_status='ambiguous'
+    effective=deepcopy(raw)
+    effective.facts[0].recognition_status='ambiguous'
     new=make_snapshot(job_uuid='job',revision_id='new',artifact=a,raw_context=raw,effective_context=effective)
     assert compare_snapshots(old,new)['changed_facts'][0]['fields']==['recognition_status']
     item={'acceptance':{'accepted':True,'snapshot_hash':new['snapshot_hash'],'source_file_hash':a.source_file_hash,
                         'reviewer':'CONTROL_TEST_ONLY','reviewed_at':'2026-10-20','errors':[]}}
     validate_acceptance(item,new,{'status':'review_required'})
     for fault in ('accepted','snapshot_hash','source_file_hash','reviewer','reviewed_at','errors'):
-        bad=deepcopy(item);bad['acceptance'][fault]=None
+        bad=deepcopy(item)
+        bad['acceptance'][fault]=None
         with pytest.raises(ValueError):validate_acceptance(bad,new,{'status':'review_required'})
     with pytest.raises(ValueError):validate_acceptance(item,new,{'status':'done','fact_overlay':{'status':'partial'}})

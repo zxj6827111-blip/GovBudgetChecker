@@ -1671,8 +1671,8 @@ def build_check_receipts(
         # obligations; the first global reverse mapping can be a budget item.
         selected_ids = {item.obligation_id for item in OBLIGATION_CATALOG
                         if report_kind in item.report_kinds}
-        targets = ([receipt.obligation_id] if receipt.obligation_id else
-                   [key for key in obligation_ids_for_rule(receipt.rule_id) if key in selected_ids])
+        targets: List[Optional[str]] = ([receipt.obligation_id] if receipt.obligation_id else
+                                        [key for key in obligation_ids_for_rule(receipt.rule_id) if key in selected_ids])
         for obligation_id in targets or [None]:
             projected = CheckReceipt.from_dict(receipt.to_dict())
             projected.obligation_id = obligation_id

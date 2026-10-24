@@ -17,7 +17,8 @@ def bound_ocr_block(block,artifact):
     """身份文字也必须回到同一输入、原始预测和几何变换，不能只看高分。"""
     try:
         tid=block.block_uid.split(':block-',1)[0]
-        transform=artifact.coordinate_transforms[tid];source=transform['ocr_response']
+        transform=artifact.coordinate_transforms[tid]
+        source=transform['ocr_response']
         from src.schemas.parse_artifact import OcrTableCandidate
         from src.services.input_geometry import Affine
         from src.services.ocr_grid_reconstruction import detector_input_reasons

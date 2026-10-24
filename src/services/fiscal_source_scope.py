@@ -51,7 +51,8 @@ def organization_scope(artifact,local_title=None):
     text=''.join(_witness_blocks(artifact,lambda page:page==1))
     texts=([local_title]if local_title else[])+[text]+[table.title for table in artifact.table_fragments if table.page_number==1
                  and table.extraction_method in {'lines','lines_strict','text'}]
-    headings=set();labels=set()
+    headings=set()
+    labels=set()
     for value in texts:
         if re.search(r'部门(?:汇总)?(?:预算|决算)',value):headings.add('department')
         if re.search(r'单位(?:预算|决算)',value):headings.add('unit')

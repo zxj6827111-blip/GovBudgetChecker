@@ -1515,7 +1515,7 @@ class R33005_TableTotalConsistency(Rule):
         for row in table:
             totals = [i for i, value in enumerate(row) if self._TOTAL_RE.fullmatch(str(value or '').strip())]
             if any(any(parse_number(v) is not None for v in row[left + 1:right])
-                   for left, right in zip(totals, totals[1:])):
+                   for left, right in zip(totals, totals[1:], strict=False)):
                 return issues, contradictions, False
 
         # 找“合计/总计”行（第一列严格等于）
@@ -5084,9 +5084,10 @@ class R33120_DetailTableCheck(Rule):
 
             source_code = {"收入决算表": "FIN_02_income", "支出决算表": "FIN_03_expenditure",
                 "一般公共预算财政拨款支出决算表": "FIN_05_general_public_expenditure"}[table_name]
-            def refs_for_relation(parent_code, parent_amount, child_items, measure="total_actual"):
-                relation_id = f"{source_code}:{parent_code}:{measure}"
-                return [_v33_table_operand_ref(source_code, measure, amount, subject_code=code,
+            def refs_for_relation(parent_code, parent_amount, child_items, measure="total_actual",
+                                  bound_source_code=source_code):
+                relation_id = f"{bound_source_code}:{parent_code}:{measure}"
+                return [_v33_table_operand_ref(bound_source_code, measure, amount, subject_code=code,
                             role="parent" if i == 0 else "child", relation_id=relation_id)
                         for i, (code, amount) in enumerate([(parent_code, parent_amount)] + list(child_items))]
 
@@ -5260,7 +5261,7 @@ class R33120_DetailTableCheck(Rule):
                     if header_cols and (native_layout or adaptive is None):
                         role_cols = [(role, col + len(row) - modal_width) for role, col in header_cols.items()]
                     elif adaptive is not None:
-                        role_cols = zip(("total", "basic", "project"), adaptive[1:])
+                        role_cols = zip(("total", "basic", "project"), adaptive[1:], strict=False)
                     else:
                         continue
                     adaptive_ok += 1

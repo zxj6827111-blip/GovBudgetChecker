@@ -13,9 +13,11 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
-    args=parser.parse_args();records=[]
+    args=parser.parse_args()
+    records=[]
     for item in json.loads(args.manifest.read_text())['items']:
-        truth=json.loads(Path(item['truth']).read_text());snapshot=json.loads(Path(item['snapshot']).read_text())
+        truth=json.loads(Path(item['truth']).read_text())
+        snapshot=json.loads(Path(item['snapshot']).read_text())
         artifact=None
         if item.get('artifact'):
             from src.schemas.parse_artifact import ParseArtifact

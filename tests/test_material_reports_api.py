@@ -13,7 +13,8 @@ def test_material_reports_do_not_expose_ungranted_container(monkeypatch):
     class Storage:
         def get_all(self):return []
     monkeypatch.setattr(materials.runtime,"require_org_storage",lambda:Storage())
-    app=FastAPI();app.include_router(materials.router)
+    app=FastAPI()
+    app.include_router(materials.router)
     with TestClient(app) as client:
         assert client.get("/api/materials/reports?org=secret").status_code==403
 
@@ -27,11 +28,13 @@ def test_report_uses_task_authorization_instead_of_stale_database_owner(monkeypa
 
 
 def test_download_checks_requested_file_hash_after_authorization(tmp_path,monkeypatch):
-    path=tmp_path/"original.pdf";path.write_bytes(b"original pdf bytes")
+    path=tmp_path/"original.pdf"
+    path.write_bytes(b"original pdf bytes")
     calls=[]
     monkeypatch.setattr(files,"require_job_access",lambda *args,**kwargs:calls.append("authorized"))
     monkeypatch.setattr(files,"_resolve_source_pdf",lambda _:path)
-    app=FastAPI();app.include_router(files.router)
+    app=FastAPI()
+    app.include_router(files.router)
     with TestClient(app) as client:
         assert client.get("/api/files/job/source?checksum="+"0"*64).status_code==409
         response=client.get("/api/files/job/source?checksum="+hashlib.sha256(path.read_bytes()).hexdigest())
@@ -69,7 +72,8 @@ def test_report_category_cannot_expand_organization_permission(category, monkeyp
     class Storage:
         def get_all(self): return []
     monkeypatch.setattr(materials.runtime, "require_org_storage", lambda: Storage())
-    app = FastAPI(); app.include_router(materials.router)
+    app = FastAPI()
+    app.include_router(materials.router)
     with TestClient(app) as client:
         assert client.get(f"/api/materials/reports?org=secret&report_category={category}").status_code == 403
         assert client.get("/api/materials/reports?report_category=invalid").status_code == 422

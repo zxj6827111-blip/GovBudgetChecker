@@ -11,10 +11,12 @@ from src.engine.fact_context import build_fact_context_from_artifact,operand_rej
 
 def mixed_case(original=''):
     artifact,candidate=fixture()
-    rows=deepcopy(candidate.rows);rows[1][2]=original
+    rows=deepcopy(candidate.rows)
+    rows[1][2]=original
     cells=[]
     for item in candidate.cells:
-        row,col=item['row_idx'],item['col_idx'];raw=rows[row][col]
+        row,col=item['row_idx'],item['col_idx']
+        raw=rows[row][col]
         number=float(raw)if raw.isdigit() else None
         cells.append(ParsedCell(row,col,raw,raw,number,1,tuple(item['page_bbox']),row==0,.9,'万元','lines',
                                 grid_raw_text=raw,native_text_sources=[{'text':raw}]if raw else []))
@@ -35,8 +37,10 @@ def promote(artifact):
 
 
 def test_unknown_native_cell_uses_unique_qualified_ocr_and_preserves_raw_grid():
-    artifact,_=mixed_case();physical=deepcopy(artifact.physical_fragments[0].to_dict())
-    grids=deepcopy(artifact.source_grids[0].to_dict());run=artifact.parse_run_uid
+    artifact,_=mixed_case()
+    physical=deepcopy(artifact.physical_fragments[0].to_dict())
+    grids=deepcopy(artifact.source_grids[0].to_dict())
+    run=artifact.parse_run_uid
     summary=promote(artifact)
     assert len(summary['fused_cells'])==1 and summary['usable_for_rules']
     assert len(artifact.logical_tables)==len(artifact.table_fragments)==1
@@ -71,13 +75,17 @@ def test_unsafe_alignment_never_fills_native_cell(fault):
     artifact,candidate=mixed_case('—'if fault=='dash'else'')
     target=next(c for c in artifact.table_fragments[0].cells if (c.row_idx,c.col_idx)==(1,2))
     if fault=='certified_blank':target.native_blank_verified=True
-    if fault=='row_name':artifact.table_fragments[0].rows[1][1]='不同科目';artifact.table_fragments[0].cells[5].raw_text='不同科目'
+    if fault=='row_name':
+        artifact.table_fragments[0].rows[1][1]='不同科目'
+        artifact.table_fragments[0].cells[5].raw_text='不同科目'
     if fault=='unit':artifact.table_fragments[0].unit_hint='亿元'
     if fault=='year':artifact.logical_tables[0].fiscal_year=2024
     if fault=='subject':artifact.logical_tables[0].org_name='另一个单位'
     if fault=='geometry':target.bbox=(100,50,200,100)
     if fault=='partial_fragment':target.bbox=(205,50,305,100)
-    if fault=='other_stage':artifact.table_fragments[0].rows[0][2]='年初预算';artifact.table_fragments[0].cells[2].raw_text='年初预算'
+    if fault=='other_stage':
+        artifact.table_fragments[0].rows[0][2]='年初预算'
+        artifact.table_fragments[0].cells[2].raw_text='年初预算'
     if fault=='source_hash':artifact.source_file_hash='f'*64
     if fault=='score':candidate.provenance['detector_input_verified']=False
     if fault=='response':candidate.cells[-2]['raw_text']='999'
@@ -90,7 +98,8 @@ def test_unsafe_alignment_never_fills_native_cell(fault):
 
 
 def test_disagreeing_usable_native_value_retains_both_sources_and_blocks_its_operand():
-    artifact,_=mixed_case('105');physical=artifact.physical_fragments[0].to_dict()
+    artifact,_=mixed_case('105')
+    physical=artifact.physical_fragments[0].to_dict()
     summary=promote(artifact)
     assert not summary['fused_cells']and len(summary['native_conflicts'])==1
     assert artifact.table_fragments[0].rows[1][2]=='105'
@@ -104,7 +113,8 @@ def test_disagreeing_usable_native_value_retains_both_sources_and_blocks_its_ope
 
 def test_same_amount_different_overlapping_native_instance_is_not_flattened():
     artifact,_=mixed_case()
-    second=deepcopy(artifact.table_fragments[0]);second.fragment_uid='second-instance'
+    second=deepcopy(artifact.table_fragments[0])
+    second.fragment_uid='second-instance'
     artifact.table_fragments.append(second)
     result=promote(artifact)
     assert not result['fused_cells']

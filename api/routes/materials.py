@@ -145,7 +145,8 @@ async def department_material_reports(
         _require_container_access(scope, org, "organization access denied")
         org_ids = set(descendant_organization_ids(records, org)) if org_scope == "descendants" else {org}
     async def load(conn):
-        accessible = lambda payload: _report_job_is_accessible(user, payload)
+        def accessible(payload):
+            return _report_job_is_accessible(user, payload)
         items = await load_report_rows(conn, visible_org_ids=scope.visible_org_ids, job_accessible=accessible)
         items += await load_unlinked_reports(conn, job_accessible=accessible)
         if not items and not scope.unrestricted and not scope.has_any_visible_org:

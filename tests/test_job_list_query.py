@@ -48,7 +48,8 @@ def test_filters_follow_queue_and_report_semantics():
         job("c", status="uploaded", report_year=None, report_kind=None),
         job("d", status="error", organization_id="other", report_year=0, report_kind="weird"),
     ]
-    ids = lambda filters: [item["job_id"] for item in q.filter_jobs(jobs, filters)]
+    def ids(filters):
+        return [item["job_id"] for item in q.filter_jobs(jobs, filters)]
     assert ids(q.JobListFilters(keyword="  教育 ")) == ["a"]
     assert ids(q.JobListFilters(keyword="B.PDF")) == ["b"]
     assert ids(q.JobListFilters(status="analyzing")) == ["b"]

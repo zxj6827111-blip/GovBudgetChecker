@@ -48,7 +48,7 @@ def test_empty_grid_literal_survives_complete_json_roundtrip():
 
 def test_padded_hierarchy_is_interpreted_with_current_table_format():
     codes = ['2130000','2130100','2130105']
-    assert hierarchy_paths(codes) == dict(zip(codes,['213','21301','2130105']))
+    assert hierarchy_paths(codes) == dict(zip(codes,['213','21301','2130105'], strict=False))
     assert leaf_codes(codes) == {'2130105'}
     assert leaf_codes(['2130100']) == {'2130100'}
 
@@ -109,7 +109,8 @@ def test_income_nonzero_difference_is_not_hidden_by_blank_terms(farm):
 
 
 def test_same_amount_different_business_identity_remains_ambiguous(farm):
-    first = deepcopy(farm.fact_context.facts[0]); second = deepcopy(first)
+    first = deepcopy(farm.fact_context.facts[0])
+    second = deepcopy(first)
     first.subject_code, second.subject_code = '2130105','2130106'
     first.subject_name, second.subject_name = '甲','乙'
     first.fact_uid, second.fact_uid = 'a','b'
@@ -169,17 +170,22 @@ def test_real_truncated_names_have_local_evidence_and_keep_real_conflict(chemica
 @pytest.mark.parametrize('fault',['ambiguous_prefix','wrong_parent','wrong_year','missing_physical_name'])
 def test_truncated_name_never_uses_unproven_alias(chemical,fault):
     from src.engine.native_final_disclosure import _hierarchy_fact
-    doc=deepcopy(chemical); item,items=chemical_item(doc)
+    doc=deepcopy(chemical)
+    item,items=chemical_item(doc)
     facts=[f for f in doc.fact_context.facts if f.table_code=='FIN_05_general_public_expenditure']
     target=next(f for f in facts if f.subject_code=='2080505' and f.indicator=='total_actual')
     if fault=='ambiguous_prefix':
-        other=deepcopy(target);other.subject_code='2080507';other.fact_uid+=':other';facts.append(other)
+        other=deepcopy(target)
+        other.subject_code='2080507'
+        other.fact_uid+=':other'
+        facts.append(other)
         table=next(t for t in doc.parse_artifact.table_fragments if t.table_code==target.table_code)
         copied=[deepcopy(c) for c in table.cells if c.row_idx==target.row_order]
         for c in copied:
             c.row_idx+=100
             if c.raw_text=='2080505':c.raw_text='2080507'
-        other.row_order+=100;table.cells.extend(copied)
+        other.row_order+=100
+        table.cells.extend(copied)
     elif fault=='wrong_parent':target.subject_code='2080605'
     elif fault=='wrong_year':target.fiscal_year=2022
     else:

@@ -14,7 +14,8 @@ from src.services.ocr_tiles import make_tile,png_bytes
 
 
 def fixture(*,bbox_spill=False,neighboring_ink=False,extra=()):
-    image=Image.new('RGB',(680,260),'white');draw=ImageDraw.Draw(image)
+    image=Image.new('RGB',(680,260),'white')
+    draw=ImageDraw.Draw(image)
     for x in (30,180,330,480,630):draw.line((x,70,x,210),fill='black',width=2)
     for y in (70,140,210):draw.line((30,y,630,y),fill='black',width=2)
     entries=[('测试局2025年收入决算表 单位：万元',[30,20,550,40]),
@@ -32,7 +33,8 @@ def fixture(*,bbox_spill=False,neighboring_ink=False,extra=()):
     raw={'overall_ocr_res':{'rec_texts':[text for text,_ in entries],
         'rec_scores':scores,'rec_polys':[[[b[0],b[1]],[b[2],b[1]],
             [b[2],b[3]],[b[0],b[3]]]for _,b in entries]}}
-    data=png_bytes(image);context=make_tile(image,(0,0,*image.size),parent_sha=hashlib.sha256(data).hexdigest(),
+    data=png_bytes(image)
+    context=make_tile(image,(0,0,*image.size),parent_sha=hashlib.sha256(data).hexdigest(),
         file_hash='a'*64,page=1,pixel_to_pdf=Affine()).context
     source={'schema_version':'gbc.ocr.cells.v3','source_sha256':'a'*64,
         'render_sha256':context['input_sha256'],'input_sha256':context['input_sha256'],
@@ -66,7 +68,8 @@ def test_measured_grid_line_pixels_do_not_move_a_word_into_a_neighbor():
 
 
 def test_independent_grid_binds_occurrences_and_retains_blank_without_zero():
-    artifact,candidate=fixture();table,reasons=bound_grid_table(candidate,artifact)
+    artifact,candidate=fixture()
+    table,reasons=bound_grid_table(candidate,artifact)
     assert not reasons and table['rows']==[['科目编码','科目名称','本年收入合计','财政拨款收入'],
                                          ['','合计','100.00','100.00']]
     assert sum(c['raw_text']=='100.00'for c in table['cells'])==2

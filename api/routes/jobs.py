@@ -438,7 +438,8 @@ async def analysis_versions(job_id:str,request:Request,offset:int=Query(0,ge=0),
 @router.get('/api/jobs/{job_id}/preserved-analyses')
 async def preserved_analyses(job_id:str,request:Request):
     require_job_access(request,job_id,include_detail=False)
-    import json,hashlib
+    import json
+    import hashlib
     items=[]
     for path in (runtime.UPLOAD_ROOT/job_id/'preserved_analyses').glob('*/manifest.json'):
         record=json.loads(path.read_text())
@@ -455,7 +456,8 @@ async def preserved_analysis_file(job_id:str,archive_id:str,filename:str,request
     if not re.fullmatch('[a-f0-9]{64}',archive_id)or filename not in {
         'status.json','fact_context.json','corrections.jsonl','structured_ingest.json',
         'annotated.pdf','report.pdf','report_annotated.pdf'}:raise HTTPException(404,'preserved report not found')
-    import json,hashlib
+    import json
+    import hashlib
     from fastapi.responses import FileResponse
     root=runtime.UPLOAD_ROOT/job_id/'preserved_analyses'/archive_id
     if not(root/'manifest.json').is_file()or not(root/filename).is_file():

@@ -12,7 +12,8 @@ from src.services.legacy_history_guard import archive_before_reanalysis
 def test_legacy_original_bytes_remain_readable_after_caches_are_removed(tmp_path,monkeypatch):
     from api import runtime
     from api.routes.reports import _load_revision_payload
-    job=tmp_path/'job';job.mkdir()
+    job=tmp_path/'job'
+    job.mkdir()
     original=b'{"status":"done","legacy_number":-0.0,"result":{}}'
     (job/'status.json').write_bytes(original)
     (job/'report.pdf').write_bytes(b'original report bytes')
@@ -38,8 +39,13 @@ def test_legacy_original_bytes_remain_readable_after_caches_are_removed(tmp_path
 async def test_reanalysis_never_deletes_an_original_named_report_pdf(tmp_path,monkeypatch):
     import pymupdf as fitz
     from api import runtime
-    job=tmp_path/'job';job.mkdir();source=job/'report.pdf'
-    doc=fitz.open();doc.new_page();doc.save(source);doc.close()
+    job=tmp_path/'job'
+    job.mkdir()
+    source=job/'report.pdf'
+    doc=fitz.open()
+    doc.new_page()
+    doc.save(source)
+    doc.close()
     expected=hashlib.sha256(source.read_bytes()).hexdigest()
     (job/'annotated.pdf').write_bytes(b'old annotation')
     (job/'status.json').write_text(json.dumps({'job_id':'job','status':'done','filename':'report.pdf',

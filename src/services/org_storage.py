@@ -249,7 +249,10 @@ class OrganizationStorage:
         # 错误必须能对应到页面上的名称，不能只让管理员看到内部编号。
         for org_id, org in by_id.items():
             pattern = rf"(?<![\w-]){re.escape(org_id)}(?![\w-])"
-            errors = [re.sub(pattern, lambda match: f"{org.name}[{org_id}]", error) for error in errors]
+            errors = [
+                re.sub(pattern, lambda match, _o=org, _i=org_id: f"{_o.name}[{_i}]", error)
+                for error in errors
+            ]
         return errors
 
     def _commit_organizations(self, organizations: List[Organization]) -> None:

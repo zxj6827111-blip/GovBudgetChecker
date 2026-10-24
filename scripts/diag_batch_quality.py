@@ -87,7 +87,6 @@ def evaluate(pdf_path: Path) -> dict:
         for r in t.rows:
             if not r:
                 continue
-            label = " ".join(str(x or "") for x in r)
             if (str(r[0] or "").strip() == "合计") or (len(r) > 3 and "合计" in str(r[3] or "")):
                 total = num(r[4] if len(r) > 4 else None)
                 break

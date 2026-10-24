@@ -1,6 +1,11 @@
 """在独立PG schema中，以真实原件验证统一事实、快照和数据库往返。"""
 from __future__ import annotations
-import argparse,asyncio,hashlib,json,os,sys
+import argparse
+import asyncio
+import hashlib
+import json
+import os
+import sys
 from pathlib import Path
 from copy import deepcopy
 
@@ -75,7 +80,8 @@ async def main():
             actual=await conn.fetch('SELECT * FROM parse_facts WHERE parse_run_id=$1',result['parse_run_id'])
             assert canonical_facts(actual)==canonical_facts(raw.facts)
             # 实际数据库故障注入：同值资格变化必须阻止完成，并能事务回滚。
-            tx=conn.transaction();await tx.start()
+            tx=conn.transaction()
+            await tx.start()
             try:
                 await conn.execute("UPDATE parse_facts SET recognition_status='low_confidence' WHERE parse_run_id=$1 AND fact_uid=$2",
                                    result['parse_run_id'],raw.facts[0].fact_uid)
@@ -170,7 +176,8 @@ async def main():
             await verify_legacy_fact_projection(conn,result['document_version_id'],snapshot)
             await verify_shared_fact_projection(conn,report_id,snapshot)
             # 字符与快照未变时，兼容金额或资格漂移仍必须被实际读回检出。
-            tx=conn.transaction();await tx.start()
+            tx=conn.transaction()
+            await tx.start()
             try:
                 await conn.execute('UPDATE fact_fiscal_line_items SET amount=amount+1 WHERE id=(SELECT MIN(id) FROM fact_fiscal_line_items WHERE document_version_id=$1)',result['document_version_id'])
                 try:await verify_legacy_fact_projection(conn,result['document_version_id'],snapshot)
@@ -190,8 +197,9 @@ async def main():
         import httpx
         from api.routes import jobs
         original_access=jobs.require_job_access
-        jobs.require_job_access=lambda *a,**kw:(None,None,{'username':'isolated_acceptance'},payload)
-        app=FastAPI();app.include_router(jobs.router)
+        jobs.require_job_access=lambda *a,_bound_payload=payload,**kw:(None,None,{'username':'isolated_acceptance'},_bound_payload)
+        app=FastAPI()
+        app.include_router(jobs.router)
         try:
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://test')as client:
                 received=[]
@@ -227,7 +235,8 @@ async def main():
         record.update(effective_legacy_and_shared_projection_verified=True,
                       projection_amount_and_qualification_faults_rejected=True,
                       publication_failure_rolled_back_all_projections=True)
-        results.append(record);print(json.dumps(record,ensure_ascii=False),flush=True)
+        results.append(record)
+        print(json.dumps(record,ensure_ascii=False),flush=True)
     assert all(hashlib.sha256((ROOT/path).read_bytes()).hexdigest()==digest
                for path,digest in implementation_identity['code'].items()), 'source changed during runtime validation'
     (args.output/'summary.json').write_text(json.dumps(results,ensure_ascii=False,indent=2))

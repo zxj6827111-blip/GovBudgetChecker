@@ -634,7 +634,7 @@ class PDFParser:
         recovered = [ParsedCell(0, col, value, normalize_text(value), self._parse_numeric(value),
                                 table.page_number, (box[0], top, box[2], table.bbox[1]), False,
                                 table.confidence, table.unit_hint, table.extraction_method)
-                     for col, (value, box) in enumerate(zip(row, boxes))]
+                     for col, (value, box) in enumerate(zip(row, boxes, strict=False))]
         rows = [row, *table.rows]
         return replace(table, rows=rows, header_row_count=0,
                        cells=[*recovered, *[replace(c, row_idx=c.row_idx + 1, is_header=False) for c in table.cells]],
@@ -701,7 +701,7 @@ class PDFParser:
         cells = [ParsedCell(index, col, value, normalize_text(value), self._parse_numeric(value),
                             table.page_number, (box[0], table.bbox[3], box[2], bottom) if box else None,
                             False, table.confidence, table.unit_hint, table.extraction_method)
-                 for col, (value, box) in enumerate(zip(row, boxes))]
+                 for col, (value, box) in enumerate(zip(row, boxes, strict=False))]
         rows = [*table.rows, row]
         return replace(table, rows=rows, cells=[*table.cells, *cells],
                        bbox=(table.bbox[0], table.bbox[1], table.bbox[2], bottom),
@@ -1581,7 +1581,7 @@ class PDFParser:
             amounts = [cell for cell in current.cells if cell.numeric_value is not None]
             if len(amounts) != 2:
                 return False
-            for cell, mapping in zip(amounts, mappings):
+            for cell, mapping in zip(amounts, mappings, strict=False):
                 boxes = [original.bbox for original in previous.cells if original.bbox
                          and original.col_idx == mapping["source_col_idx"]]
                 if cell.col_idx != mapping["source_col_idx"] or not cell.bbox or not boxes:
@@ -1651,8 +1651,8 @@ class PDFParser:
         left, right = boundaries(previous), boundaries(current)
         if left is None or right is None:
             return False
-        return all(abs(a - b) <= .002 for first, second in zip(left, right)
-                   for a, b in zip(first, second))
+        return all(abs(a - b) <= .002 for first, second in zip(left, right, strict=False)
+                   for a, b in zip(first, second, strict=False))
 
     def _pad_native_trailing_columns(self, previous: ParsedTable, current: ParsedTable) -> ParsedTable:
         """续页网格少画了最右侧的空列：其余各列左右边界与前页逐列一致时，补空位而不是判列宽漂移。
@@ -1685,7 +1685,8 @@ class PDFParser:
             target, source = bounds(previous, col), bounds(current, col)
             if target is None or source is None or abs(target[0] - source[0]) > 1 or abs(target[2] - source[2]) > 1:
                 return current
-        return replace(current, rows=[[*row, *([None] * (width - narrow))] for row in current.rows])
+        # 补齐的列槽用 None 占位（不是空串），下游据此区分「无格」与「格内无字」。
+        return replace(current, rows=[[*row, *([None] * (width - narrow))] for row in current.rows])  # type: ignore[list-item]
 
     def _collapse_native_split_label_columns(self, previous: ParsedTable, current: ParsedTable) -> ParsedTable:
         """续页的编码/科目名称区被个别行错位的竖线多切出一两列时，按原格位置并回前页标签列。
@@ -1820,7 +1821,7 @@ class PDFParser:
 
         for target_col in range(reference_prefix, reference_width):
             target, source = bounds(previous, target_col), bounds(current, target_col - difference)
-            if target is None or source is None or any(abs(a - b) > .002 for a, b in zip(target, source)):
+            if target is None or source is None or any(abs(a - b) > .002 for a, b in zip(target, source, strict=False)):
                 return current
             # 最窄格匹配还不够：逐个金额格及其原字符都必须落在同一物理车道。
             for cell in current.cells:
@@ -1877,7 +1878,8 @@ class PDFParser:
             cells.append(replace(cell, col_idx=columns[cell.col_idx],
                                  origin_fragment_uid=current.fragment_uid,
                                  origin_row_idx=cell.row_idx, origin_col_idx=cell.col_idx))
-        aligned = replace(current, rows=[row], cells=cells)
+        # 未命中的列槽保持 None，交给列校验判定是否为「本格不存在」。
+        aligned = replace(current, rows=[row], cells=cells)  # type: ignore[list-item]
         return aligned if self._native_continuation_columns_match(previous, aligned) else current
 
     @staticmethod
@@ -1920,7 +1922,7 @@ class PDFParser:
         if not mappings or len(amounts) != len(mappings):
             return current
         columns = {0: 0}
-        for cell, mapping in zip(amounts, mappings):
+        for cell, mapping in zip(amounts, mappings, strict=False):
             if cell.raw_text.strip() and self._parse_numeric(cell.raw_text) is None:
                 return current
             boxes = [original.bbox for original in previous.cells

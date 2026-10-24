@@ -18,7 +18,9 @@ def typed_literal(raw, *, monetary=False, dimension=False):
     if re.search(r'\d[ \t\u3000]+\d',text):return 'unrecognized',None
     text=re.sub(r'\s+','',text)
     for unit in ['百万元','亿元','万元','千元','元']:
-        if text.endswith(unit):text=text[:-len(unit)];break
+        if text.endswith(unit):
+            text=text[:-len(unit)]
+            break
     percent=text.endswith('%')
     if percent:text=text[:-1]
     if text.startswith('(')and text.endswith(')'):text='-'+text[1:-1]
@@ -49,11 +51,13 @@ def native_source_conflict(cell):
 def resolve_empty_table_shadows(tables, page_text):
     """同一空表的文本策略投影需与原生闭合网格及原页无此项说明共同裁定。"""
     from src.services.fiscal_column_identity import canonical_column_mappings
-    selected=[];decisions=[]
+    selected=[]
+    decisions=[]
     compact=normalize_text(page_text)
     for text in tables:
         if text.extraction_method!='text' or text.table_code not in {'FIN_08_gov_fund','FIN_09_state_capital'}:
-            selected.append(text);continue
+            selected.append(text)
+            continue
         grids=[g for g in tables if g.extraction_method in {'lines','lines_strict'}and
                g.table_code==text.table_code and g.page_number==text.page_number and
                normalize_text(g.title)==normalize_text(text.title)]
@@ -90,10 +94,12 @@ def attach_reconstruction(artifact, candidates):
                                   b.extraction_method,b.confidence,{'source_file_hash':artifact.source_file_hash,'source_block_id':b.block_uid}))
     by_page={}
     for t in tokens:by_page.setdefault(t.physical_page,[]).append(t)
-    cells=[];seen=set()
+    cells=[]
+    seen=set()
     for table in candidates:
         for cell in table.cells:
-            cid=source_cell_id(table,cell);candidate_uid=content_hash([table.fragment_uid,cid,table.extraction_method])[:24]
+            cid=source_cell_id(table,cell)
+            candidate_uid=content_hash([table.fragment_uid,cid,table.extraction_method])[:24]
             if candidate_uid in seen:continue
             seen.add(candidate_uid)
             refs=[]
@@ -126,7 +132,9 @@ def attach_reconstruction(artifact, candidates):
                 'candidate'if table.extraction_method=='page_text_fallback'else'unresolved'if conflict or kind=='unrecognized'else'source_bound',
                 {'indicator':mapping.get('canonical_measure'),'table_code':table.table_code},
                 provenance))
-    artifact.source_tokens=tokens;artifact.cell_candidates=cells;artifact.resolved_cells=resolved
+    artifact.source_tokens=tokens
+    artifact.cell_candidates=cells
+    artifact.resolved_cells=resolved
 
 
 def resolve_native_table_candidates(policy, existing, incoming):
@@ -197,7 +205,8 @@ def resolve_native_table_candidates(policy, existing, incoming):
                 second=amount_in_wan(candidate.raw_text,other.unit_hint)
                 if first is None or second is None or first==second:continue
                 if changed is None:
-                    changed=deepcopy(selected);merged[index]=changed
+                    changed=deepcopy(selected)
+                    merged[index]=changed
                 target=next(c for c in changed.cells if(c.row_idx,c.col_idx)==(cell.row_idx,cell.col_idx))
                 proof={'recovery_kind':'unresolved_native_candidate_conflict',
                     'selected_fragment_uid':selected.fragment_uid,'selected_raw_text':cell.raw_text,

@@ -25,9 +25,13 @@ def snapshot():
                       table_code='FIN_05_general_public_expenditure',instance_uid='table-1',row_order=2,
                       budget_stage='决算',recognition_status='unverified',confidence=.7822)
     second = deepcopy(fact)
-    second.fact_uid='two';second.budget_stage='全年预算';second.recognition_status='ambiguous'
+    second.fact_uid='two'
+    second.budget_stage='全年预算'
+    second.recognition_status='ambiguous'
     third = deepcopy(fact)
-    third.fact_uid='three';third.instance_uid='table-2';third.subject_code='2130106'
+    third.fact_uid='three'
+    third.instance_uid='table-2'
+    third.subject_code='2130106'
     raw = FactContext([fact,second,third],file_hash=artifact.source_file_hash,parse_run_uid='run')
     effective = deepcopy(raw)
     effective.facts[0].normalized_value=Decimal('13.01')
@@ -64,7 +68,9 @@ def test_real_commerce_legacy_grid_uses_correction_without_changing_original_or_
     effective=deepcopy(raw)
     targets=[f for f in effective.facts if f.table_code=='FIN_06_basic_expenditure'and f.raw_value=='0.00']
     assert len(targets)>1
-    target=targets[0];target.normalized_value=Decimal('1.23');target.raw_value='1.23'
+    target=targets[0]
+    target.normalized_value=Decimal('1.23')
+    target.raw_value='1.23'
     value=make_snapshot(job_uuid='job',revision_id='rev',artifact=artifact,raw_context=raw,effective_context=effective)
     projected=effective_legacy_artifact(artifact,value)
     cells={source_cell_id(t,c):c for t in projected.table_fragments for c in t.cells}
@@ -99,7 +105,8 @@ async def test_shared_projection_actual_readback_rejects_drift(fault):
 @pytest.mark.asyncio
 @pytest.mark.parametrize('fault',['none','amount','qualification','instance','missing'])
 async def test_legacy_fact_actual_readback_keeps_complete_effective_fact(fault):
-    value=snapshot();rows=[]
+    value=snapshot()
+    rows=[]
     for fact in value['effective_context']['facts']:
         rows.append({'amount':Decimal(fact['normalized_value']),'normalized_amount':Decimal(fact['normalized_value']),
                      'table_code':fact['table_code'],'statement_code':fact['table_code'],

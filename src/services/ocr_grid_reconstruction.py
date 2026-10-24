@@ -29,17 +29,22 @@ def _overlap(a, b):
 
 def _components(cells):
     """相接的闭合格组成物理表；同页彼此分离的表不拼接。"""
-    pending=set(range(len(cells)));groups=[]
+    pending=set(range(len(cells)))
+    groups=[]
     while pending:
-        group=[pending.pop()];frontier=list(group)
+        group=[pending.pop()]
+        frontier=list(group)
         while frontier:
-            a=cells[frontier.pop()]['bbox'];connected=[]
+            a=cells[frontier.pop()]['bbox']
+            connected=[]
             for i in pending:
                 b=cells[i]['bbox']
                 vertical=(abs(a[2]-b[0])<.01 or abs(b[2]-a[0])<.01) and min(a[3],b[3])>max(a[1],b[1])
                 horizontal=(abs(a[3]-b[1])<.01 or abs(b[3]-a[1])<.01) and min(a[2],b[2])>max(a[0],b[0])
                 if vertical or horizontal:connected.append(i)
-            pending.difference_update(connected);group.extend(connected);frontier.extend(connected)
+            pending.difference_update(connected)
+            group.extend(connected)
+            frontier.extend(connected)
         if len(group)>1:groups.append([deepcopy(cells[i])for i in sorted(group)])
     return groups
 
@@ -88,7 +93,8 @@ def _source_tokens(artifact, page, affine, page_image_sha):
 def detector_input_reasons(source):
     size=source.get('source_size_px')or[]
     if len(size)!=2:return ['actual_detector_input_unverified']
-    padding=[0,0,(-size[0])%32,(-size[1])%32];expected=[size[0]+padding[2],size[1]+padding[3]]
+    padding=[0,0,(-size[0])%32,(-size[1])%32]
+    expected=[size[0]+padding[2],size[1]+padding[3]]
     if (source.get('detector_input_verified')is not True or source.get('input_resize_applied')is not False
         or source.get('model_input_size_px')!=expected or source.get('inference_padding_px')!=padding
         or not source.get('detector_tensor_sizes_px')or source['detector_tensor_sizes_px'][0]!=expected):
@@ -104,7 +110,8 @@ def reconstruct_grid_tables(image, affine, artifact, page, dpi=300):
     grid=discover_grid_cells(image,dpi=dpi)
     tokens=_source_tokens(artifact,page,affine,hashlib.sha256(png_bytes(image)).hexdigest())
     # 斜扫、断续网线的残段不是未读文字；与补读调度用同一套独立线检测，否则正确读出的格也会因残线判「未识别」。
-    tables=[];ink=_visible_text_ink(image,independent_lines=True)
+    tables=[]
+    ink=_visible_text_ink(image,independent_lines=True)
     # 仅排除已被四边闭合格使用的实测网线带，不能按固定容差把邻格文字抹掉。
     for border in grid.get('border_segments',[]):
         start,end=border['band']
@@ -127,9 +134,12 @@ def reconstruct_grid_tables(image, affine, artifact, page, dpi=300):
     for group in _components(grid['cells']):
         xs=sorted({c['bbox'][i]for c in group for i in (0,2)})
         ys=sorted({c['bbox'][i]for c in group for i in (1,3)})
-        rows=[[''for _ in xs[:-1]]for _ in ys[:-1]];cells=[]
+        rows=[[''for _ in xs[:-1]]for _ in ys[:-1]]
+        cells=[]
         for physical in group:
-            box=physical['bbox'];fragments=[];conflicts=[]
+            box=physical['bbox']
+            fragments=[]
+            conflicts=[]
             for token in tokens:
                 if not _contains(box,token['grid_bbox']):continue
                 duplicates=[f for f in fragments if _overlap(f['grid_bbox'],token['grid_bbox'])>.8]
@@ -137,18 +147,25 @@ def reconstruct_grid_tables(image, affine, artifact, page, dpi=300):
                     if any(f['text']!=token['text']for f in duplicates):conflicts.append(token)
                     # 相同片段只保留原始分数最高的实际观测；不同字面绝不投票。
                     elif token.get('score',0)>duplicates[0].get('score',0):
-                        fragments.remove(duplicates[0]);fragments.append(token)
+                        fragments.remove(duplicates[0])
+                        fragments.append(token)
                 else:fragments.append(token)
             fragments.sort(key=lambda f:(round(f['grid_bbox'][1]/5),f['grid_bbox'][0]))
             raw='\n'.join(f['text'].strip()for f in fragments)
-            row,col=ys.index(box[1]),xs.index(box[0]);rs=ys.index(box[3])-row;cs=xs.index(box[2])-col
+            row,col=ys.index(box[1]),xs.index(box[0])
+            rs=ys.index(box[3])-row
+            cs=xs.index(box[2])-col
             # 未被文字框覆盖的可见墨迹继续未裁定；空格保持空格。
-            y0,y1=int(box[1])+3,int(box[3])-3;x0,x1=int(box[0])+3,int(box[2])-3
+            y0,y1=int(box[1])+3,int(box[3])-3
+            x0,x1=int(box[0])+3,int(box[2])-3
             remaining=ink[y0:y1,x0:x1].copy()
             for f in fragments:
                 # 1 像素栅格容差须向外取整：878.9999 截成 878 会让字形最右一列像素落在框外。
-                b=f['grid_bbox'];left=max(x0,math.floor(b[0])-1);right=min(x1,math.ceil(b[2])+2)
-                top=max(y0,math.floor(b[1])-1);bottom=min(y1,math.ceil(b[3])+2)
+                b=f['grid_bbox']
+                left=max(x0,math.floor(b[0])-1)
+                right=min(x1,math.ceil(b[2])+2)
+                top=max(y0,math.floor(b[1])-1)
+                bottom=min(y1,math.ceil(b[3])+2)
                 if right>left and bottom>top:remaining[top-y0:bottom-y0,left-x0:right-x0]=False
             status='conflict'if conflicts else'unrecognized'if np.any(remaining)else'bound'if raw else'blank'
             cells.append({'row_idx':row,'col_idx':col,'row_span':rs,'col_span':cs,
@@ -164,7 +181,8 @@ def reconstruct_grid_tables(image, affine, artifact, page, dpi=300):
 def attach_grid_candidates(artifact, page, image, affine, dpi=300):
     from src.schemas.parse_artifact import OcrTableCandidate
     from src.services.ocr_tiles import png_bytes
-    data=png_bytes(image);render_sha=hashlib.sha256(data).hexdigest()
+    data=png_bytes(image)
+    render_sha=hashlib.sha256(data).hexdigest()
     tables=reconstruct_grid_tables(image,affine,artifact,page,dpi)
     prefix=f'ocr_grid_page_{page}_'
     artifact.ocr_table_candidates=[c for c in artifact.ocr_table_candidates
@@ -213,7 +231,8 @@ def bound_grid_table(candidate,artifact):
                                                transform.get('render_dpi',300))}
             artifact._grid_replay_cache=cache
         tables=cache[key]
-        index=candidate.provenance['table_index'];canonical=tables[index]
+        index=candidate.provenance['table_index']
+        canonical=tables[index]
         if (content_hash(canonical)!=candidate.provenance.get('table_hash')
             or candidate.rows!=canonical['rows']or candidate.cells!=canonical['cells']
             or list(candidate.page_bbox or[])!=affine.box(canonical['bbox'])):
@@ -245,7 +264,9 @@ def stitched_identity(blocks,organization):
 def qualify_grid(candidate,artifact,*,organization,year,report_kind,cell_position=None,native_field_alignment=False):
     from src.services.ocr_qualification import bound_response, complete_first_pass_cell
     from src.services.table_reading_assessment import native_region_conflicts
-    table,reasons=bound_grid_table(candidate,artifact);scores=[];unit=None
+    table,reasons=bound_grid_table(candidate,artifact)
+    scores=[]
+    unit=None
     page_blocks=[b for b in artifact.text_blocks if b.page_number==candidate.page_number and b.extraction_method=='ocr']
     identity=[b for b in artifact.text_blocks if b.extraction_method=='ocr' and (
         organization and organization in b.text or year and re.search(rf'{year}\s*年',b.text))]
@@ -283,8 +304,10 @@ def qualify_grid(candidate,artifact,*,organization,year,report_kind,cell_positio
             and (other.confidence or 0)>=.98 and _overlap(other.bbox,block.bbox)>=.5 for other in ocr_blocks)
 
     for block in identity+stage_blocks+[b for b,_ in units]:
-        tid=block.block_uid.split(':block-',1)[0];transform=artifact.coordinate_transforms.get(tid)or{}
-        response=transform.get('ocr_response')or{};raw=bound_response(response)or{}
+        tid=block.block_uid.split(':block-',1)[0]
+        transform=artifact.coordinate_transforms.get(tid)or{}
+        response=transform.get('ocr_response')or{}
+        raw=bound_response(response)or{}
         from src.schemas.parse_artifact import OcrTableCandidate
         from src.services.ocr_qualification import page_binding_reasons
         probe=OcrTableCandidate('identity-probe',block.page_number,[],coordinate_transform_id=tid,

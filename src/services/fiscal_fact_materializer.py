@@ -344,7 +344,7 @@ class FiscalFactMaterializer:
         # 窄编码列里的 7 位编码常在格内折行（"20700\n00"），折行不属于编码本身。
         compacts = [re.sub(r"\s+", "", text) for text in texts]
         code_parts = [compact for compact in compacts if compact.isdigit()]
-        text_parts = [text for text, compact in zip(texts, compacts) if not compact.isdigit()]
+        text_parts = [text for text, compact in zip(texts, compacts, strict=False) if not compact.isdigit()]
         if code_parts:
             code = "".join(code_parts)
             name = " ".join(text_parts).strip() or code

@@ -9,7 +9,8 @@ from api.job_queue import DurableJobQueue
 @pytest.mark.asyncio
 async def test_pending_ocr_checkpoint_requeues_after_delay_and_finishes_once(tmp_path,monkeypatch):
     monkeypatch.setattr(runtime,'UPLOAD_ROOT',tmp_path)
-    job=tmp_path/'source-job';job.mkdir()
+    job=tmp_path/'source-job'
+    job.mkdir()
     runtime.write_json_file(job/'status.json',{'status':'queued'})
     calls=[]
     async def runner(directory):

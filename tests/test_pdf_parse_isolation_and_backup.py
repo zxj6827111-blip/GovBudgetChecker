@@ -423,9 +423,12 @@ def _seed_uploads(root: Path) -> Dict[str, str]:
 def test_history_hardlinks_are_backed_up_as_regular_files_and_symlinks_stay_rejected(tmp_path):
     import tarfile
     from scripts import backup_all
-    uploads=tmp_path/'uploads';uploads.mkdir()
-    original=uploads/'status.json';original.write_bytes(b'{"history":true}')
-    history=uploads/'history';history.mkdir()
+    uploads=tmp_path/'uploads'
+    uploads.mkdir()
+    original=uploads/'status.json'
+    original.write_bytes(b'{"history":true}')
+    history=uploads/'history'
+    history.mkdir()
     os.link(original,history/'status.json')
     target=tmp_path/'uploads.tar.gz'
     result=backup_all.archive_uploads(uploads,target)

@@ -824,7 +824,7 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
             required = ("total_final", "abroad", "car_total", "reception")
             missing = [key for key in required if values.get(key) is None]
             relation_id = f"{self.code}:san_gong:{suffix}"
-            fact_ids: List[str] = []
+            fact_ids = []
             if side == "表格":
                 for key in required:
                     fact_ref = table_sum_fact_refs.get(key)

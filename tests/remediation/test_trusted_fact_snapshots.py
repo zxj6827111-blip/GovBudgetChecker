@@ -69,7 +69,8 @@ def test_immutable_raw_and_effective_snapshot_and_identity_tamper(tmp_path):
 
 def test_artifact_content_comparison_ignores_only_run_attempt_identity():
     artifact,_,_=contexts()
-    second=deepcopy(artifact);second.parse_run_uid='run-2'
+    second=deepcopy(artifact)
+    second.parse_run_uid='run-2'
     assert artifact_content_hash(artifact)==artifact_content_hash(second)
     second.reading_assessment={'status':'partial'}
     assert artifact_content_hash(artifact)!=artifact_content_hash(second)
@@ -78,7 +79,8 @@ def test_artifact_content_comparison_ignores_only_run_attempt_identity():
 def test_runtime_timing_updates_never_overwrite_historical_facts_or_report(tmp_path):
     from api import runtime
     artifact,raw,effective=contexts()
-    job=tmp_path/'job';job.mkdir()
+    job=tmp_path/'job'
+    job.mkdir()
     snapshot=make_snapshot(job_uuid='job',revision_id='rev-1',artifact=artifact,
                            raw_context=raw,effective_context=effective)
     write_snapshot(job/'fact_snapshots/rev-1.json',snapshot)
@@ -87,7 +89,8 @@ def test_runtime_timing_updates_never_overwrite_historical_facts_or_report(tmp_p
     payload={'job_id':'job','status':'done','analysis_revision':'rev-1',
              'structured_ingest':{'fact_snapshot':receipt},'result':{'meta':{'fact_snapshot':receipt}}}
     runtime.write_analysis_revision_snapshot(job,payload)
-    archived=job/'analysis_versions/rev-1/status.json';original=archived.read_bytes()
+    archived=job/'analysis_versions/rev-1/status.json'
+    original=archived.read_bytes()
     (job/'fact_context.json').write_text(json.dumps({'facts':[{'wrong':'other analysis'}]}))
     payload['pipeline_budget']={'outcome':'completed','elapsed_seconds':1}
     runtime.write_analysis_revision_snapshot(job,payload)
@@ -100,7 +103,8 @@ def test_runtime_timing_updates_never_overwrite_historical_facts_or_report(tmp_p
 
 @pytest.mark.parametrize('change',['same_uid_identity','instance','source','file'])
 def test_correction_migration_requires_complete_identity_and_original_anchor(change):
-    old=fact();old.instance_uid='table-1'
+    old=fact()
+    old.instance_uid='table-1'
     old.extra_dims['evidence_refs']=[{'file_hash':'frozen','physical_page':1,
                                     'source_cell_id':'grid:r1c2','bbox':[1,2,3,4]}]
     new=deepcopy(old)
@@ -115,7 +119,8 @@ def test_correction_migration_requires_complete_identity_and_original_anchor(cha
 @pytest.mark.asyncio
 @pytest.mark.parametrize('change',['missing','admission','identity','unit','evidence'])
 async def test_readback_rejects_missing_or_changed_fact_even_if_writer_reports_success(change):
-    f=fact();row=f.to_dict()
+    f=fact()
+    row=f.to_dict()
     if change=='admission':row['recognition_status']='low_confidence'
     if change=='identity':row['subject_name']='其他科目'
     if change=='unit':row['unit']='元'
@@ -129,7 +134,9 @@ async def test_readback_rejects_missing_or_changed_fact_even_if_writer_reports_s
 
 @pytest.mark.asyncio
 async def test_readback_accepts_database_json_fields_and_decimal_equivalence():
-    f=fact();row=f.to_dict();row['normalized_value']='12.00000'
+    f=fact()
+    row=f.to_dict()
+    row['normalized_value']='12.00000'
     for k in ['extra_dims','evidence_ids','hierarchy_path']:row[k]=json.dumps(row[k])
     conn=SimpleNamespace(fetch=AsyncMock(side_effect=[[row],[]]))
     assert (await verify_persisted_facts(conn,parse_run_id=1,facts=[f]))['verified']
@@ -138,8 +145,11 @@ async def test_readback_accepts_database_json_fields_and_decimal_equivalence():
 @pytest.mark.asyncio
 async def test_cache_must_not_replace_supplied_different_artifact(monkeypatch,tmp_path):
     from src.services import structured_ingest_runner as runner
-    artifact,_,_=contexts();cached=deepcopy(artifact);cached.reading_assessment={'wrong':True}
-    source = tmp_path/'source.pdf'; source.write_bytes(b'%PDF-1.4\n%%EOF')
+    artifact,_,_=contexts()
+    cached=deepcopy(artifact)
+    cached.reading_assessment={'wrong':True}
+    source = tmp_path/'source.pdf'
+    source.write_bytes(b'%PDF-1.4\n%%EOF')
     artifact.source_file_hash = runner._sha256_file(source)
     cached.source_file_hash = artifact.source_file_hash
     for k,v in {'ensure_structured_ingest_ready':AsyncMock(return_value=True),
@@ -162,14 +172,16 @@ async def test_cache_must_not_replace_supplied_different_artifact(monkeypatch,tm
 @pytest.mark.parametrize("mismatch", ["metadata", "artifact"])
 async def test_original_hash_mismatch_blocks_before_database_write(monkeypatch, tmp_path, mismatch):
     from src.services import structured_ingest_runner as runner
-    source = tmp_path/'source.pdf'; source.write_bytes(b'%PDF-1.4 original')
+    source = tmp_path/'source.pdf'
+    source.write_bytes(b'%PDF-1.4 original')
     digest = runner._sha256_file(source)
     artifact = ParseArtifact(source_file_hash=digest)
     metadata = {'checksum': digest}
     if mismatch == 'metadata': metadata['checksum'] = '0'*64
     else: artifact.source_file_hash = '0'*64
     monkeypatch.setattr(runner, 'ensure_structured_ingest_ready', AsyncMock(return_value=True))
-    acquire = AsyncMock(); monkeypatch.setattr(runner.DatabaseConnection, 'acquire', acquire)
+    acquire = AsyncMock()
+    monkeypatch.setattr(runner.DatabaseConnection, 'acquire', acquire)
     result = await runner.run_structured_ingest('hash-test',source,metadata,parse_artifact=artifact)
     assert result['status'] == 'error'
     assert 'source_file_hash_mismatch' in result['error']
@@ -195,9 +207,12 @@ def test_rules_cannot_mutate_the_frozen_input(mutation):
 def test_rule_configuration_is_part_of_processing_identity(monkeypatch,tmp_path):
     from src.services import input_processing_identity as identity
     (tmp_path/'rules').mkdir()
-    rule = tmp_path/'rules/v3_3.yaml'; rule.write_text('rules: []')
+    rule = tmp_path/'rules/v3_3.yaml'
+    rule.write_text('rules: []')
     for name in ('api/main.py','api/runtime.py','src/db/migrations.py'):
-        path = tmp_path/name; path.parent.mkdir(parents=True,exist_ok=True); path.write_text('# test')
+        path = tmp_path/name
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_text('# test')
     monkeypatch.setattr(identity,'ROOT',tmp_path)
     identity.runtime_code_manifest.cache_clear()
     first = identity.processing_manifest()
@@ -214,11 +229,14 @@ def test_rule_configuration_is_part_of_processing_identity(monkeypatch,tmp_path)
 def test_trusted_archive_cannot_switch_database_owned_pointer(monkeypatch,tmp_path):
     from api import runtime
     monkeypatch.setenv('DATABASE_URL','configured-by-test')
-    artifact,raw,effective=contexts();job=tmp_path/'job';job.mkdir()
+    artifact,raw,effective=contexts()
+    job=tmp_path/'job'
+    job.mkdir()
     snap=make_snapshot(job_uuid='job',revision_id='rev-new',artifact=artifact,
                        raw_context=raw,effective_context=effective)
     write_snapshot(job/'fact_snapshots/rev-new.json',snap)
-    pointer=job/'analysis_versions/current.json';pointer.parent.mkdir()
+    pointer=job/'analysis_versions/current.json'
+    pointer.parent.mkdir()
     pointer.write_text(json.dumps({'revision_id':'rev-current'}))
     receipt={k:snap[k]for k in ('revision_id','snapshot_hash','raw_facts_hash','effective_facts_hash')}
     result=runtime.write_analysis_revision_snapshot(job,{'job_id':'job','analysis_revision':'rev-new',

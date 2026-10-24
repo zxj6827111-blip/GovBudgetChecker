@@ -33,9 +33,13 @@ async def preview(output: Path):
                 first=group["slots"][0]
                 candidates=[o for o in catalog if o["name"]==first["subject_org_name"] and o["level"]==first["subject_kind"]]
                 for candidate in candidates:
-                    path=[];current=candidate;seen=set()
+                    path=[]
+                    current=candidate
+                    seen=set()
                     while current and current["id"] not in seen:
-                        seen.add(current["id"]);path.insert(0,current["name"]);current=by_id.get(current.get("parent_id"))
+                        seen.add(current["id"])
+                        path.insert(0,current["name"])
+                        current=by_id.get(current.get("parent_id"))
                     group["candidates"].append({"id":candidate["id"],"name":candidate["name"],"level":candidate["level"],"code":candidate.get("code"),"path":path})
                 ids=[s["slot_id"] for s in group["slots"]]
                 versions=await conn.fetch("SELECT id,slot_id::text AS slot_id,document_id,file_hash FROM fiscal_document_versions WHERE slot_id::text=ANY($1::text[])",ids)

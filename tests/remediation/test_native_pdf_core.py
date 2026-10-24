@@ -163,7 +163,7 @@ def test_open_grid_top_uses_native_word_positions_and_rejects_header_metadata(fi
                  [0, 30, 60, 80, 100, 120], uid="grid", page=2)
     # Native row immediately above the existing top border.
     words = [{"text": word, "x0": x + 2, "x1": x + 15, "top": -8, "bottom": -2}
-             for word, x in zip([first_word, "其他支出", "0.02", "0.00", "0.02"], [0, 30, 60, 80, 100])]
+             for word, x in zip([first_word, "其他支出", "0.02", "0.00", "0.02"], [0, 30, 60, 80, 100], strict=False)]
     recovered = PDFParser(None)._recover_open_top_grid_row(SimpleNamespace(extract_words=lambda: words), table)
     assert len(recovered.rows) == len(table.rows) + int(recover)
     if recover:
@@ -180,7 +180,7 @@ def test_open_bottom_merged_code_does_not_conflict_with_empty_header_lanes(code,
                  code="FIN_03_expenditure", confidence=.99, unit="万元")
     table.cells[7].bbox = (0, 10, 30, 20)
     words = [{"text": value, "x0": x, "x1": x + 10, "top": 22, "bottom": 28}
-             for value, x in zip([code, "行政单位医疗", "392.93", "392.93", "0.00"], [7, 35, 65, 85, 105])]
+             for value, x in zip([code, "行政单位医疗", "392.93", "392.93", "0.00"], [7, 35, 65, 85, 105], strict=False)]
     result = PDFParser(None)._recover_open_bottom_grid_row(SimpleNamespace(extract_words=lambda: words), table)
     assert len(result.rows) == len(table.rows) + int(recover)
     if recover:
@@ -195,7 +195,7 @@ def test_native_footer_requires_both_literal_labels_and_original_money_lanes(wro
                  [0, 30, 60, 80, 110, 140, 160], uid="head", page=1,
                  code="FIN_06_basic_expenditure", confidence=.99, unit="万元")
     words = [{"text": value, "x0": x, "x1": x + 8, "top": 5, "bottom": 12}
-             for value, x in zip(["人员经费合计", "100", "公用经费合计", "20"], [20, 62, 100, 142])]
+             for value, x in zip(["人员经费合计", "100", "公用经费合计", "20"], [20, 62, 100, 142], strict=False)]
     if wrong_lane:
         words[-1]["x0"], words[-1]["x1"] = 125, 132
     parser = PDFParser(None)

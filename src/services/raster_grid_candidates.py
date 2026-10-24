@@ -11,7 +11,7 @@ def _line_bands(ink,minimum,tolerance):
     for coordinate,line in enumerate(ink):
         edges=np.diff(np.r_[False,line,False].astype('int8'))
         starts,ends=np.flatnonzero(edges==1),np.flatnonzero(edges==-1)
-        segments.extend((coordinate,int(a),int(b))for a,b in zip(starts,ends)if b-a>=minimum)
+        segments.extend((coordinate,int(a),int(b))for a,b in zip(starts,ends, strict=False)if b-a>=minimum)
     bands=[]
     for coordinate,start,end in segments:
         if not bands or coordinate-bands[-1]['last']>tolerance:
@@ -68,17 +68,20 @@ def discover_grid_cells(image,*,dpi=300):
           'business_identity_confirmed':False,'completeness':None}
     if len(horizontal)>512 or len(vertical)>256:
         return {**base,'status':'geometry_limit','cells':[],'discovery_regions':[]}
-    cells=[];regions=[];used_edges=set()
+    cells=[]
+    regions=[]
+    used_edges=set()
     minimum_width,minimum_height=max(8,dpi/10),max(6,dpi/15)
     # T 形接头处竖线像素伸进横线带，离边框中线不超过一个线宽；格内文字离边框留白更多。
     slack=max_thickness
     for row,top in enumerate(horizontal[:-1]):
         for bottom_index in range(row+1,min(len(horizontal),row+9)):
-            bottom=horizontal[bottom_index];y0,y1=top['coordinate'],bottom['coordinate']
+            bottom=horizontal[bottom_index]
+            y0,y1=top['coordinate'],bottom['coordinate']
             if y1-y0<minimum_height:
                 continue
             active=[(i,line)for i,line in enumerate(vertical)if _coverage(line,y0,y1)>=.95]
-            for (column,left),(right_index,right)in zip(active,active[1:]):
+            for (column,left),(right_index,right)in zip(active,active[1:], strict=False):
                 x0,x1=left['coordinate'],right['coordinate']
                 if x1-x0<minimum_width:
                     continue

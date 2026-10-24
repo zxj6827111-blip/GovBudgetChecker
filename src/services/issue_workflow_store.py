@@ -569,7 +569,7 @@ def _find_report_review_item(payload: Dict[str, Any], issue_id: str) -> Optional
             identity = f"{record_type}:{key if key is not None else index}"
         if str(identity).strip() != issue_id:
             continue
-        finding = item.get("finding") if isinstance(item.get("finding"), dict) else {}
+        finding: Dict[str, Any] = item.get("finding") if isinstance(item.get("finding"), dict) else {}
         title = item.get("title") or finding.get("title") or item.get("code") or "待人工复核事项"
         if record_type == "review_reason":
             title = reason_titles.get(str(item.get("code") or ""), title)

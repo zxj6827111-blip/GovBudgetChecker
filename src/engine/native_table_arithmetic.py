@@ -244,7 +244,7 @@ def _rounding_case(issue, index, diff):
 
     child_detail = '、'.join(
         f'{name}={amount:.2f}万元' if amount is not None else name
-        for name, amount in zip(child_names, child_amounts)
+        for name, amount in zip(child_names, child_amounts, strict=False)
     )
     if parent_amount is not None and children and all(value is not None for value in child_amounts):
         children_total = sum(child_amounts, Decimal('0'))

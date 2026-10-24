@@ -62,7 +62,7 @@ def test_unpublished_observations_do_not_invent_submission_obligations():
 
 @pytest.mark.real_database
 @pytest.mark.asyncio
-async def test_directory_scope_lists_all_expected_and_missing_with_current_review_facts(ledger_db, monkeypatch, tmp_path):
+async def test_directory_scope_lists_all_expected_and_missing_with_current_review_facts(ledger_db, monkeypatch, tmp_path):  # noqa: F811 -- 复用导入的 pytest fixture
     from tests.test_material_ledger_pg import _insert_slot
     schema, pool = ledger_db
     monkeypatch.setattr(issue_workflow_store, '_store_path', lambda: tmp_path/'workflow.json')
@@ -165,7 +165,7 @@ async def receive(conn,slot,tag,status='review_required'):
 
 @pytest.mark.real_database
 @pytest.mark.asyncio
-async def test_two_regions_missing_progress_and_filters(ledger_db,monkeypatch,tmp_path):
+async def test_two_regions_missing_progress_and_filters(ledger_db,monkeypatch,tmp_path):  # noqa: F811 -- 复用导入的 pytest fixture
     schema,pool=ledger_db
     monkeypatch.setattr(issue_workflow_store,'_store_path',lambda:tmp_path/'workflow.json')
     async with _conn(schema,pool) as conn:
@@ -208,7 +208,7 @@ async def test_two_regions_missing_progress_and_filters(ledger_db,monkeypatch,tm
 
 @pytest.mark.real_database
 @pytest.mark.asyncio
-async def test_versions_extras_publish_revision_snapshot_and_conflicts(ledger_db,monkeypatch,tmp_path):
+async def test_versions_extras_publish_revision_snapshot_and_conflicts(ledger_db,monkeypatch,tmp_path):  # noqa: F811 -- 复用导入的 pytest fixture
     schema,pool=ledger_db
     monkeypatch.setattr(issue_workflow_store,'_store_path',lambda:tmp_path/'workflow.json')
     async with _conn(schema,pool) as conn:
@@ -269,9 +269,10 @@ async def test_versions_extras_publish_revision_snapshot_and_conflicts(ledger_db
 
 @pytest.mark.real_database
 @pytest.mark.asyncio
-async def test_api_authorization_csv_and_feature_switch(ledger_db,monkeypatch,tmp_path):
+async def test_api_authorization_csv_and_feature_switch(ledger_db,monkeypatch,tmp_path):  # noqa: F811 -- 复用导入的 pytest fixture
     # Windows 无 fcntl；直接装载真实新路由，避免导入无关的 macOS 纠错模块。
-    import importlib.util, sys
+    import importlib.util
+    import sys
     spec=importlib.util.spec_from_file_location("gbc_reporting_routes_test",Path(__file__).parents[1]/"api/routes/reporting_tasks.py")
     routes=importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules,spec.name,routes)
@@ -287,12 +288,14 @@ async def test_api_authorization_csv_and_feature_switch(ledger_db,monkeypatch,tm
     monkeypatch.setattr(runtime,'require_org_storage',lambda:storage)
     users={'admin':{'username':'admin','is_admin':True},'unit':{'username':'unit','is_admin':False,'organization_ids':['district-unit']},'boss':{'username':'boss','is_admin':False,'organization_ids':['district'],'is_read_only':True}}
     monkeypatch.setattr(runtime,'require_user_store',lambda:SimpleNamespace(get_user_by_token=lambda token:users.get(token)))
-    app=FastAPI();app.include_router(routes.router)
+    app=FastAPI()
+    app.include_router(routes.router)
     async with _conn(schema,pool) as conn:
         async def with_connection(callback):return await callback(conn)
         monkeypatch.setattr(routes.material_access,'with_connection',with_connection)
         s=ReportingTaskService(conn,CATALOG)
-        city=await publish(s,'city');district=await publish(s,'district')
+        city=await publish(s,'city')
+        district=await publish(s,'district')
         async with AsyncClient(transport=ASGITransport(app=app),base_url='http://test') as client:
             headers={'X-Session-Token':'unit'}
             result=await client.get(f'/api/reporting-tasks/{district["id"]}/statistics',headers=headers)
@@ -324,7 +327,7 @@ async def test_api_authorization_csv_and_feature_switch(ledger_db,monkeypatch,tm
 
 @pytest.mark.real_database
 @pytest.mark.asyncio
-async def test_identity_preview_apply_and_recovery_preserve_versions(ledger_db,monkeypatch,tmp_path):
+async def test_identity_preview_apply_and_recovery_preserve_versions(ledger_db,monkeypatch,tmp_path):  # noqa: F811 -- 复用导入的 pytest fixture
     from src.services.reporting_identity import preview,apply,rollback_ancestors
     from tests.test_material_ledger_pg import _insert_slot
     from src.schemas.material_slot import SlotIdentity
@@ -356,7 +359,7 @@ async def test_identity_preview_apply_and_recovery_preserve_versions(ledger_db,m
 
 @pytest.mark.real_database
 @pytest.mark.asyncio
-async def test_fiscal_configuration_takes_effect_only_on_publish(ledger_db,monkeypatch,tmp_path):
+async def test_fiscal_configuration_takes_effect_only_on_publish(ledger_db,monkeypatch,tmp_path):  # noqa: F811 -- 复用导入的 pytest fixture
     schema,pool=ledger_db
     monkeypatch.setattr(issue_workflow_store,'_store_path',lambda:tmp_path/'workflow.json')
     async with _conn(schema,pool) as conn:
@@ -371,7 +374,7 @@ async def test_fiscal_configuration_takes_effect_only_on_publish(ledger_db,monke
         assert {r['fiscal_year'] for r in before['components']}=={2026,2025}
         task=await s.get(str(task['id']))
         draft=await s.generate(str(task['id']),task['draft_revision'])
-        data=await s.edit(str(task['id']),draft['task']['draft_revision'],[dict(key=r['key'],decision='required',reason='核实年度配置') for r in draft['items']])
+        await s.edit(str(task['id']),draft['task']['draft_revision'],[dict(key=r['key'],decision='required',reason='核实年度配置') for r in draft['items']])
         task=await s.get(str(task['id']))
         preview=await s.preview(task)
         await s.publish(str(task['id']),task['draft_revision'],preview['preview_token'],'确认本次财政年度修订','admin')
@@ -389,7 +392,7 @@ def test_task_csv_allows_unknown_deadline_without_changing_legacy_import():
 
 @pytest.mark.real_database
 @pytest.mark.asyncio
-async def test_empty_directory_has_zero_obligations_without_fake_completeness(ledger_db, monkeypatch, tmp_path):
+async def test_empty_directory_has_zero_obligations_without_fake_completeness(ledger_db, monkeypatch, tmp_path):  # noqa: F811 -- 复用导入的 pytest fixture
     schema, pool = ledger_db
     monkeypatch.setattr(issue_workflow_store, '_store_path', lambda: tmp_path/'workflow.json')
     async with _conn(schema, pool) as conn:

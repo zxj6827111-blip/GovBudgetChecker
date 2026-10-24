@@ -20,7 +20,8 @@ def non_amount_cell_identity(artifact,snapshot,logical):
     instances=[i for i in artifact.logical_tables if i.instance_uid==logical.table_instance_uid
                or logical.table_instance_uid in i.fragment_uids]
     if len(instances)!=1 or instances[0].identity_conflict:return None
-    instance=instances[0];table=_fragment_for_instance(artifact,instance)
+    instance=instances[0]
+    table=_fragment_for_instance(artifact,instance)
     if table is None:return None
     columns=[m for m in _column_mappings_for_instance(instance,table)if m['source_col_idx']==logical.col_idx]
     if len(columns)!=1:return None
@@ -77,13 +78,21 @@ def evaluate_cells(truth,snapshot,artifact=None):
     if len({c['occurrence_id']for c in entries})!=len(entries):raise ValueError('duplicate truth occurrence ID')
     if len({(c['physical_page'],tuple(c['bbox']),c.get('column_identity'))for c in entries})!=len(entries):
         raise ValueError('duplicate truth physical cell identity')
-    facts=canonical_facts(snapshot['effective_context'].get('facts',[]));by_anchor=defaultdict(list)
+    facts=canonical_facts(snapshot['effective_context'].get('facts',[]))
+    by_anchor=defaultdict(list)
     for fact in facts:
         anchors={(r.get('physical_page'),tuple(r.get('bbox')or[]))for r in fact['extra_dims'].get('evidence_refs',[])}
         for anchor in anchors:by_anchor[anchor].append(fact)
-    correct=[];missing=[];wrong=[];unreadable=[];matched=set();readable=[]
+    correct=[]
+    missing=[]
+    wrong=[]
+    unreadable=[]
+    matched=set()
+    readable=[]
     for expected in entries:
-        if expected.get('legibility')=='unreadable':unreadable.append(expected['occurrence_id']);continue
+        if expected.get('legibility')=='unreadable':
+            unreadable.append(expected['occurrence_id'])
+            continue
         readable.append(expected)
         observed=by_anchor.get((expected['physical_page'],tuple(expected['bbox'])),[])
         admitted=[f for f in observed if f['recognition_status']in {'unverified','verified'}]
@@ -104,7 +113,8 @@ def evaluate_cells(truth,snapshot,artifact=None):
             (wrong if len(admitted)>1 else missing).append({'occurrence_id':expected['occurrence_id'],
                 'reason':'non_unique_admitted_fact'if len(admitted)>1 else'not_automatically_recovered'})
             continue
-        fact=admitted[0];matched.add(fact['fact_uid'])
+        fact=admitted[0]
+        matched.add(fact['fact_uid'])
         value=amount_in_wan(expected['raw_value'],expected['unit'])
         failures=[key for key in IDENTITY_FIELDS if fact.get(key)!=expected.get(key)]
         if expected.get('column_identity')!=fact['extra_dims'].get('source_header'):
@@ -132,11 +142,14 @@ def acceptance_suite(records):
     """材料配额、逐组覆盖率与零错误准入同时满足才通过。"""
     unique={r['source_file_hash']:r for r in records}
     if len(unique)!=len(records):raise ValueError('acceptance source hashes must be unique')
-    budgets=[r for r in records if r.get('report_kind')=='budget'];finals=[r for r in records if r.get('report_kind')=='final']
-    thresholds={'native':.999,'clear_scan':.995,'difficult_readable':.98};groups={}
+    budgets=[r for r in records if r.get('report_kind')=='budget']
+    finals=[r for r in records if r.get('report_kind')=='final']
+    thresholds={'native':.999,'clear_scan':.995,'difficult_readable':.98}
+    groups={}
     for key,minimum in thresholds.items():
         items=[r for r in records if r.get('material_group')==key]
-        denominator=sum(r['readable_occurrences']for r in items);numerator=sum(r['correct_occurrences']for r in items)
+        denominator=sum(r['readable_occurrences']for r in items)
+        numerator=sum(r['correct_occurrences']for r in items)
         coverage=numerator/denominator if denominator else None
         groups[key]={'denominator':denominator,'correct':numerator,'coverage':coverage,'threshold':minimum,
                      'passed':coverage is not None and coverage>=minimum}

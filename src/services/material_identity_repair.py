@@ -20,7 +20,8 @@ def digest(value: Any) -> str:
 def atomic_json(path: Path, payload: Any) -> str:
     raw=(json.dumps(payload,ensure_ascii=False,indent=2,default=str)+"\n").encode()
     with tempfile.NamedTemporaryFile(dir=path.parent,prefix=".identity-repair-",delete=False) as handle:
-        handle.write(raw);temporary=Path(handle.name)
+        handle.write(raw)
+        temporary=Path(handle.name)
     os.replace(temporary,path)
     return hashlib.sha256(raw).hexdigest()
 
@@ -52,7 +53,7 @@ async def repair_material_identity(conn: Any, *, old_id: str, new_id: str, slot_
             for key in sorted({s["slot_key"] for s in slots}|{s["new_slot_key"] for s in slots}):
                 await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",key)
             locked=await conn.fetch("SELECT * FROM material_slots WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE",[s["id"] for s in slots])
-            for original,current in zip(slots,locked):
+            for original,current in zip(slots,locked, strict=False):
                 if digest({k:v for k,v in original.items() if k!="new_slot_key"})!=digest(dict(current)):
                     raise ValueError("材料在确认后已改变，拒绝继续")
                 collision=await conn.fetchval("SELECT id FROM material_slots WHERE slot_key=$1 AND id<>$2",original["new_slot_key"],original["id"])
@@ -73,7 +74,8 @@ async def repair_material_identity(conn: Any, *, old_id: str, new_id: str, slot_
                 if outside:raise ValueError("文档存在其他材料引用，拒绝跨材料修改")
                 collision=await conn.fetchval("SELECT id FROM fiscal_documents WHERE org_unit_id=$1 AND fiscal_year IS NOT DISTINCT FROM $2 AND doc_type=$3 AND subject_org_id=$4 AND id<>$5",doc["org_unit_id"],doc["fiscal_year"],doc["doc_type"],new_id,doc["id"])
                 if collision:raise ValueError("目标已有文档，拒绝合并")
-            receipt["slots"]=slots;receipt["documents"]=documents
+            receipt["slots"]=slots
+            receipt["documents"]=documents
             receipt["jobs"]=[{"id":j["id"],"job_uuid":j["job_uuid"],"metadata_sha256":digest(j["metadata"])} for j in jobs]
             receipt["frozen_before"]=digest({"versions":versions,"reviews":reviews})
             # 在写入前复制原始字节；恢复不会从新分析结果反推旧结论。
@@ -83,13 +85,16 @@ async def repair_material_identity(conn: Any, *, old_id: str, new_id: str, slot_
                 if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}",jid):raise ValueError("非法任务 ID")
                 path=upload_root/jid/"status.json"
                 if not path.exists():raise ValueError("任务状态文件不存在，不能只修数据库")
-                raw=path.read_bytes();payload=json.loads(raw)
+                raw=path.read_bytes()
+                payload=json.loads(raw)
                 if payload.get("status") not in ("uploaded","review_required","done","completed","degraded","error","failed","cancelled"):
                     raise ValueError("任务状态文件显示正在处理，拒绝覆盖")
-                payload["organization_id"]=new_id;payload["organization_name"]=target["name"]
+                payload["organization_id"]=new_id
+                payload["organization_name"]=target["name"]
                 planned.append((path,raw,payload))
             if links_file.exists():
-                raw=links_file.read_bytes();payload=json.loads(raw)
+                raw=links_file.read_bytes()
+                payload=json.loads(raw)
                 for link in payload.get("links",[]):
                     if link.get("job_id") in {j["job_uuid"] for j in jobs}:
                         link["org_id"]=new_id
@@ -98,11 +103,16 @@ async def repair_material_identity(conn: Any, *, old_id: str, new_id: str, slot_
                 backup=receipt_dir/f"file-{index}.before"
                 backup.write_bytes(raw)
                 receipt["files"].append({"path":str(path.resolve()),"backup":str(backup.resolve()),"before_sha256":hashlib.sha256(raw).hexdigest()})
-            receipt["state"]="prepared";atomic_json(receipt_path,receipt)
+            receipt["state"]="prepared"
+            atomic_json(receipt_path,receipt)
             # 沿当前目录补齐展示层祖先；原复核会话和文件身份均不重建。
-            ancestors=[];current=target;seen=set()
+            ancestors=[]
+            current=target
+            seen=set()
             while current and current["id"] not in seen:
-                seen.add(current["id"]);ancestors.append(current);current=by_id.get(current.get("parent_id"))
+                seen.add(current["id"])
+                ancestors.append(current)
+                current=by_id.get(current.get("parent_id"))
             region=next((o for o in ancestors if o["level"] in ("district","city")),None)
             department=next((o for o in ancestors if o["level"]=="department"),None)
             for slot in slots:
@@ -116,11 +126,13 @@ async def repair_material_identity(conn: Any, *, old_id: str, new_id: str, slot_
                 new_meta={**old_meta,"organization_id":new_id,"organization_name":target["name"]}
                 await conn.execute("UPDATE analysis_jobs SET metadata=$2::jsonb WHERE id=$1",job["id"],json.dumps(new_meta,ensure_ascii=False))
                 receipt["jobs"][jobs.index(job)]["after_metadata_sha256"]=digest(new_meta)
-            for entry,(path,raw,payload) in zip(receipt["files"],planned):
+            for entry,(path,raw,payload) in zip(receipt["files"],planned, strict=False):
                 if hashlib.sha256(path.read_bytes()).hexdigest()!=entry["before_sha256"]:
                     raise ValueError("任务状态文件被并发修改，拒绝覆盖")
-                entry["after_sha256"]=atomic_json(path,payload);written.append(entry)
-                receipt["state"]="files_writing_database_pending";atomic_json(receipt_path,receipt)
+                entry["after_sha256"]=atomic_json(path,payload)
+                written.append(entry)
+                receipt["state"]="files_writing_database_pending"
+                atomic_json(receipt_path,receipt)
             after_versions=[dict(r) for r in await conn.fetch("SELECT * FROM fiscal_document_versions WHERE slot_id=ANY($1::uuid[]) ORDER BY id",ids)]
             after_reviews=[dict(r) for r in await conn.fetch("SELECT * FROM review_sessions WHERE slot_id=ANY($1::uuid[]) ORDER BY id",ids)]
             receipt["frozen_after"]=digest({"versions":after_versions,"reviews":after_reviews})
@@ -128,9 +140,11 @@ async def repair_material_identity(conn: Any, *, old_id: str, new_id: str, slot_
             if any(hashlib.sha256(Path(entry["path"]).read_bytes()).hexdigest()!=entry["after_sha256"] for entry in written):
                 raise ValueError("归属文件被并发修改，拒绝提交")
             receipt["after_slots_sha256"]=digest([dict(r) for r in await conn.fetch("SELECT * FROM material_slots WHERE id=ANY($1::uuid[]) ORDER BY id",ids)])
-            receipt["state"]="files_written_database_pending";atomic_json(receipt_path,receipt)
+            receipt["state"]="files_written_database_pending"
+            atomic_json(receipt_path,receipt)
         database_committed=True
-        receipt["state"]="committed";atomic_json(receipt_path,receipt)
+        receipt["state"]="committed"
+        atomic_json(receipt_path,receipt)
         return receipt
     except Exception:
         if database_committed:
@@ -143,7 +157,8 @@ async def repair_material_identity(conn: Any, *, old_id: str, new_id: str, slot_
                 path.write_bytes(Path(entry["backup"]).read_bytes())
             else:recovery.append(entry["path"])
         receipt["state"]="manual_recovery_required" if recovery else "rolled_back"
-        receipt["recovery_paths"]=recovery;atomic_json(receipt_path,receipt)
+        receipt["recovery_paths"]=recovery
+        atomic_json(receipt_path,receipt)
         raise
 
 
@@ -182,11 +197,14 @@ async def rollback_material_identity(conn: Any, receipt_path: Path) -> dict:
                 if owner!=receipt["new_id"]:raise ValueError("文档归属已有后续变更")
                 await conn.execute("UPDATE fiscal_documents SET subject_org_id=$2 WHERE id=$1",doc["id"],doc["subject_org_id"])
             for entry in receipt["files"]:
-                path=Path(entry["path"]);raw=path.read_bytes()
+                path=Path(entry["path"])
+                raw=path.read_bytes()
                 if hashlib.sha256(raw).hexdigest()!=entry["after_sha256"]:raise ValueError("文件已有后续变更，拒绝覆盖")
-                path.write_bytes(Path(entry["backup"]).read_bytes());written.append((path,raw))
+                path.write_bytes(Path(entry["backup"]).read_bytes())
+                written.append((path,raw))
         database_committed=True
-        receipt["state"]="reverted";atomic_json(receipt_path,receipt)
+        receipt["state"]="reverted"
+        atomic_json(receipt_path,receipt)
         return receipt
     except Exception:
         if database_committed:

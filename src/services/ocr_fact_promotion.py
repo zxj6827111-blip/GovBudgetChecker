@@ -100,12 +100,14 @@ def _source_title(artifact,candidate,table_code):
         and b.bbox[1]<page_box[1] and b.bbox[2]>page_box[0]and b.bbox[0]<page_box[2]
         and (b.extraction_method=='native_text'or b.extraction_method=='ocr'
              and(b.confidence or 0)>=.98 and bound_ocr_block(b,artifact))]
-    blocks.sort(key=lambda b:(b.bbox[1],b.bbox[0]));matches=[]
+    blocks.sort(key=lambda b:(b.bbox[1],b.bbox[0]))
+    matches=[]
     for start in range(len(blocks)):
         group=[]
         for block in blocks[start:start+3]:
             if group and block.bbox[1]-group[-1].bbox[3]>24:break
-            group.append(block);text=''.join(b.text for b in group)
+            group.append(block)
+            text=''.join(b.text for b in group)
             detected,score=detect_table_code(text,[])
             if detected==table_code and score>=.8:matches.append((max(b.bbox[3]for b in group),text))
     if not matches:return None
@@ -131,7 +133,7 @@ def _ocr_number(text: str) -> Optional[float]:
 
 def _detect_table_identity(
     rows: List[List[str]],
-) -> tuple[Optional[str], float, Dict[str, List[Dict[str, Any]]]]:
+) -> tuple[Optional[str], float, List[Dict[str, Any]]]:
     """按表头行匹配九表规则，返回 (table_code, confidence, canonical mappings)。
 
     表头窗口按数据特征选择：若第 2 行已含数值单元格，说明只有 1 行表头，
@@ -140,7 +142,7 @@ def _detect_table_identity(
     from src.services.fiscal_table_rules import NINE_TABLE_RULES, normalize_text
 
     if not rows:
-        return None, 0.0, {}
+        return None, 0.0, []
 
     header_depth = 1
     while header_depth < min(len(rows), 8) and not any(
@@ -149,7 +151,7 @@ def _detect_table_identity(
         header_depth += 1
     header_rows = [row for row in rows[:header_depth] if row]
     if not header_rows:
-        return None, 0.0, {}
+        return None, 0.0, []
     col_count = max(len(row) for row in header_rows)
     headers = [
         "".join(str(row[col]) for row in header_rows if col < len(row)).strip()
@@ -519,10 +521,12 @@ def promote_ocr_candidates(
         # 来源索引和逻辑格也进入统一主干，不能只追加二维表和事实。
         from copy import copy
         from src.services.source_reconstruction import attach_reconstruction
-        projection=copy(artifact);projection.table_fragments=promoted_fragments
+        projection=copy(artifact)
+        projection.table_fragments=promoted_fragments
         attach_reconstruction(projection,promoted_fragments)
         for field,key in [('source_tokens','token_uid'),('cell_candidates','candidate_uid'),('resolved_cells','logical_cell_uid')]:
-            existing=getattr(artifact,field);known={getattr(item,key)for item in existing}
+            existing=getattr(artifact,field)
+            known={getattr(item,key)for item in existing}
             existing.extend(item for item in getattr(projection,field)if getattr(item,key)not in known)
         _join_ocr_continuations(artifact, promoted_fragments)
         # 候选物化与资格分开；完整逐格来源及复验通过才可作操作数。

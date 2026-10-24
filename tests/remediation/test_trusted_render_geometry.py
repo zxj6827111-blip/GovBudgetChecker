@@ -9,14 +9,16 @@ from src.services.input_geometry import page_viewport_to_native, rendered_pixels
 
 def source_page(tmp_path, rotation, nonzero_media, user_unit):
     path=tmp_path/'geometry.pdf'
-    doc=fitz.open();page=doc.new_page(width=400,height=600)
+    doc=fitz.open()
+    page=doc.new_page(width=400,height=600)
     if nonzero_media:
         page.set_mediabox(fitz.Rect(-50,-30,350,570))
     page.draw_rect(fitz.Rect(50,100,80,120),color=(0,0,0),fill=(0,0,0),width=0)
     page.set_cropbox(fitz.Rect(-30,30,330,560) if nonzero_media else fitz.Rect(20,30,380,560))
     page.set_rotation(rotation)
     doc.xref_set_key(page.xref,'UserUnit',str(user_unit))
-    doc.save(path);doc.close()
+    doc.save(path)
+    doc.close()
     return path
 
 
@@ -36,7 +38,8 @@ def test_visible_crop_pixels_match_native_object_and_high_resolution_clip(tmp_pa
         obj=(pdf.pages[0].rects+pdf.pages[0].curves)[0]
         expected=[obj['x0'],obj['top'],obj['x1'],obj['bottom']]
     with fitz.open(path) as pdf:
-        page=pdf[0];pix=page.get_pixmap(dpi=300)
+        page=pdf[0]
+        pix=page.get_pixmap(dpi=300)
         transform=rendered_pixels_to_native(page,pix,300)
         pixels=black_box(pix)
         # 在真实像素中验证一像素上限，而不是只检查 inverse(forward(x))。

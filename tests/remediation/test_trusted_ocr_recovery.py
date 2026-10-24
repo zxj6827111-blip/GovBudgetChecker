@@ -193,7 +193,8 @@ def test_detector_trace_records_real_nchw_tensor_and_restores_hook():
     import numpy as np
     from types import SimpleNamespace
     from ocr_service.app import detector_tensor_trace
-    original=lambda **kw:[np.zeros((1,3,256,512),dtype='float32')]
+    def original(**kw):
+        return [np.zeros((1,3,256,512),dtype='float32')]
     detector=SimpleNamespace(pre_tfs={'ToBatch':original})
     predictor=SimpleNamespace(paddlex_pipeline=SimpleNamespace(
         general_ocr_pipeline=SimpleNamespace(text_det_model=detector)))

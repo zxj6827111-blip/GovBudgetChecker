@@ -350,7 +350,8 @@ def test_ocr_result_normalisation_and_error_isolation() -> None:
 
 def test_ocr_pipeline_runs_when_enabled_and_preserves_native(monkeypatch, tmp_path) -> None:
     """合成控制：真实切块适配器保留原生正文，未完成页继续待处理。"""
-    import asyncio,hashlib
+    import asyncio
+    import hashlib
     from src.services import ocr_pipeline,ocr_tiled_pipeline
     from src.services.ocr_tiles import make_tile,digest
     from src.schemas.parse_artifact import ParsedTextBlock,ParseArtifact,ParsePageState
@@ -365,7 +366,8 @@ def test_ocr_pipeline_runs_when_enabled_and_preserves_native(monkeypatch, tmp_pa
         'ok':True,'model_fingerprint':'a'*64,'pipeline_fingerprint':'b'*64}))
     calls=[]
     async def tiles(image,**kw):
-        page=kw['page'];calls.append(page)
+        page=kw['page']
+        calls.append(page)
         box=(0,0,400,200)
         req=make_tile(image,box,parent_sha='c'*64,file_hash=artifact.source_file_hash,
                       page=page,pixel_to_pdf=kw['pixel_to_pdf'])
@@ -477,7 +479,8 @@ def test_model_manifest_requires_matching_complete_files(tmp_path: Path, monkeyp
 
 def test_ocr_client_uses_service_multipart_contract(monkeypatch) -> None:
     """新推理发送真实v3图块身份，旧协议仅供历史读取。"""
-    import asyncio,json
+    import asyncio
+    import json
     from PIL import Image
     from src.services.ocr_client import ocr_page
     from src.services.ocr_tiles import make_tile,digest

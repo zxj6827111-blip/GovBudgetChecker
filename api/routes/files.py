@@ -86,7 +86,7 @@ def _native_to_viewport(page):
     except ValueError:
         return None
     identity = Affine().values()
-    return None if all(abs(v - i) < 1e-6 for v, i in zip(transform.values(), identity)) else transform
+    return None if all(abs(v - i) < 1e-6 for v, i in zip(transform.values(), identity, strict=False)) else transform
 
 
 def _page_geometry(pdf_path: Path) -> dict:
