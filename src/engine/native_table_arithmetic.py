@@ -197,11 +197,55 @@ def check_fiscal_grant_arithmetic(rule, doc):
                     formula="expenditure = general + government_fund + state_capital", reason=error)
             continue
         checked += 1
-        found, missing = relation(rule, doc, key, f"财政拨款收入支出决算总表第{row + 1}行", parent, children)
+        found, missing = relation(rule, doc, key, f"财政拨款收入支出决算总表第{row + 1}行", parent, children,
+                                  fund_composition=True)
         issues.extend(found)
         unresolved.extend(missing)
     if not checked and not unresolved:
         unresolved.append("财政拨款总表没有可确认的同一行合计及三个资金分项")
+    return finish(rule, issues, unresolved)
+
+
+def check_fund_zero_disclosures(rule, doc):
+    """只用总表已确认资金列判断对应表是否有数，禁止按倒数列位置或科目编码加总。"""
+    from .fact_table_projection import fact_bound_table_rows, ProjectionUnavailable
+    from .rule_policy import amount_difference_exceeds_policy
+    source, error = table_facts(doc, 'FIN_04_fiscal_grant_total')
+    if error:
+        return finish(rule, [], [error])
+    issues, unresolved = [], []
+    for indicator, fund, code, title in (
+        ('government_fund_budget', 'government_fund', 'FIN_08_gov_fund', '政府性基金预算财政拨款收入支出决算表'),
+        ('state_capital_budget', 'state_owned', 'FIN_09_state_capital', '国有资本经营预算财政拨款收入支出决算表'),
+    ):
+        terms = [fact for fact in source if fact.indicator == indicator]
+        key = f'{code}:zero_source'
+        if not terms or any(operand_rejection_reason(f, doc.fact_context.org_name)
+                            or f.fund_scope != fund or f.fiscal_year != doc.fact_context.fiscal_year for f in terms):
+            unresolved.append(f'{title}对应的总表资金列缺少明确可用数值，不能按零解释')
+            continue
+        if any(f.normalized_value != 0 for f in terms):
+            receipt(rule, doc, key, terms, status='not_applicable', formula='总表资金列非零，本项空表条件不适用')
+            continue
+        try:
+            fact_bound_table_rows(doc, title, strict_unknown_values=True)
+        except ProjectionUnavailable as exc:
+            unresolved.append(str(exc))
+            continue
+        target, error = table_facts(doc, code)
+        if error or any(operand_rejection_reason(f, doc.fact_context.org_name)
+                        or f.fiscal_year != doc.fact_context.fiscal_year or f.fund_scope != fund for f in target):
+            unresolved.append(error or f'{title}的原格金额/身份未确认，不能断言为空表')
+            continue
+        nonzero = [f for f in target if amount_difference_exceeds_policy(f.normalized_value)]
+        ids, evidence = receipt(rule, doc, key, [*terms, *target], status='fail' if nonzero else 'pass',
+                                formula='总表资金列明确为零时，对应表不得出现非零金额')
+        if nonzero:
+            message = f'{title}存在非零金额，但财政拨款总表对应资金列均明确为零，请核对资金口径。'
+            issues.append(rule._issue(message, {'table': title, 'table_code': code,
+                'operand_refs': [operand_ref(f, 'source_zero' if f in terms else 'target') for f in [*terms, *nonzero]]},
+                'error', evidence_text=message, fact_ids=ids, evidence_ids=evidence,
+                check_relation_id=f'{rule.code}:{key}'))
     return finish(rule, issues, unresolved)
 
 
@@ -345,11 +389,18 @@ def _rounding_case(issue, index, diff):
     }
 
 
-def relation(rule, doc, key, label, parent, children, *, hints=True):
+def relation(rule, doc, key, label, parent, children, *, hints=True, fund_composition=False):
     facts = [parent] + children
-    if any((f.instance_uid, f.org_scope, f.fund_scope, f.budget_stage, f.fiscal_year)
-           != (parent.instance_uid, parent.org_scope, parent.fund_scope,
-               parent.budget_stage, parent.fiscal_year) for f in children):
+    expected_funds = {'expenditure_actual': 'fiscal_appropriation',
+                      'general_public_budget': 'general_public_budget',
+                      'government_fund_budget': 'government_fund', 'state_capital_budget': 'state_owned'}
+    # 财政拨款合计与三个资金分项本来就属于不同资金口径；仅此明确公式允许按已识别列身份组成。
+    funds_match = (len(facts) == 4 and {f.indicator for f in facts} == set(expected_funds)
+                   and all(f.table_code == 'FIN_04_fiscal_grant_total'
+                           and f.fund_scope == expected_funds[f.indicator] for f in facts)) if fund_composition else (
+                       all(f.fund_scope == parent.fund_scope for f in children))
+    if not funds_match or any((f.instance_uid, f.org_scope, f.budget_stage, f.fiscal_year)
+           != (parent.instance_uid, parent.org_scope, parent.budget_stage, parent.fiscal_year) for f in children):
         reason = f'{label}操作数的表实例或口径不一致'
         receipt(rule, doc, key, facts, status='insufficient_data', formula='total = sum(parts)', reason=reason)
         return [], [reason]

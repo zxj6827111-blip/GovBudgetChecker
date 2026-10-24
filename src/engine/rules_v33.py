@@ -5659,12 +5659,8 @@ class R33122_EmptyTableCheck(Rule):
         if not t4_rows:
             raise RuleDeferred(self.code, "财政拨款总表未读取或列未映射，不能把政府性基金/国有资本口径当作零")
         if getattr(doc, "parse_artifact", None) is not None:
-            context = getattr(doc, "fact_context", None)
-            from .fact_context import operand_rejection_reason
-            usable_funds = {fact.indicator for fact in (context.facts if context else [])
-                            if fact.table_code == "FIN_04_fiscal_grant_total" and not operand_rejection_reason(fact)}
-            if not {"government_fund_budget", "state_capital_budget"}.issubset(usable_funds):
-                raise RuleDeferred(self.code, "总表资金分列缺少明确可用数值，空白或未映射不能当作零")
+            from .native_table_arithmetic import check_fund_zero_disclosures
+            return check_fund_zero_disclosures(self, doc)
         
         # 检查 Table 4 中 "政府性基金" 和 "国有资本" 列的总和
         sum_gov_fund = 0.0
