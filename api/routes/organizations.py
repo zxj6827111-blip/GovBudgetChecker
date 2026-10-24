@@ -308,6 +308,10 @@ async def create_organization(request: Request):
             parent_id=parent_id,
             code=body.get("code"),
             keywords=body.get("keywords") or [name],
+            verified_reporting_unit=body.get("verified_reporting_unit"),
+            name_warning_confirmation=({"source": "admin_confirmation", "actor": user.get("id"),
+                                        "confirmed_at": __import__("time").time()}
+                                       if body.get("confirm_name_warning") is True else None),
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"invalid organization payload: {e}") from e
@@ -517,6 +521,7 @@ async def import_organizations(
     request: Request,
     file: Annotated[UploadFile, File(...)],
     clear_existing: Annotated[bool, Form()] = False,
+    confirm_name_warning: Annotated[bool, Form()] = False,
 ):
     _, _, user = require_admin(request)
     storage = runtime.require_org_storage()
@@ -586,7 +591,8 @@ async def import_organizations(
         # 数据库不可用时不允许跳过引用检查，否则会制造新的悬空归属。
         referenced_org_ids = await with_connection(references)
     result = storage.import_from_list(rows, clear_existing=clear_existing,
-                                     referenced_org_ids=referenced_org_ids)
+                                     referenced_org_ids=referenced_org_ids,
+                                     confirm_name_warning=confirm_name_warning)
     if result.success and (result.imported > 0 or clear_existing):
         _clear_department_stats_cache()
     result_payload = runtime.to_dict(result)
@@ -598,6 +604,7 @@ async def import_organizations(
         resource_name=file.filename or "",
         details={
             "clear_existing": bool(clear_existing),
+            "confirm_name_warning": bool(confirm_name_warning),
             "imported": int(result_payload.get("imported") or 0),
             "attempted": int(result_payload.get("attempted") or 0),
             "skipped": int(result_payload.get("skipped") or 0),
