@@ -84,11 +84,15 @@ def _registrations() -> List[RuleRegistration]:
 def select_rules(report_kind: str) -> List[Any]:
     """Return canonical execution order for a known kind, or common rules only."""
     kind = str(report_kind or "unknown").strip().lower()
+    if kind == "non_budget":
+        return []
     return [*select_specific_rules(kind), *common_rules.ALL_COMMON_RULES]
 
 
 def restrict_rules_to_profile(rules, profile):
     """检查能力与报告口径一致；排除专项检查时账本必须保留能力缺口。"""
+    if getattr(profile, "kind", None) == "non_budget":
+        return []
     if getattr(profile, 'unsupported_reason', None) == 'government_mixed_period_report':
         # 重复词检查不需要部门九表，也不将不同期间的金额串起来复算。
         return [rule for rule in rules if getattr(rule, 'code', None) == 'CMM-002']

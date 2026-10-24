@@ -133,12 +133,13 @@ def run_rules_with_outcomes(
         selected_rules = restrict_rules_to_profile(selected_rules, profile)
     issues: List[Issue] = []
     outcomes: List[RuleOutcome] = []
-    if resolved_kind == "unknown":
+    if resolved_kind in {"unknown", "non_budget"}:
         issues.append(
             Issue(
                 rule="DOC-TYPE-UNKNOWN",
                 severity="manual_review",
-                message="未能可靠识别材料为预算或决算，已仅执行通用规则，请人工确认材料类型后重新检查。",
+                message=("非预决算材料，需人工确认；未运行预算/决算规则集。" if resolved_kind == "non_budget" else
+                         "未能可靠识别材料为预算或决算，已仅执行通用规则，请人工确认材料类型后重新检查。"),
                 location={"page": 1, "pos": 0},
             )
         )

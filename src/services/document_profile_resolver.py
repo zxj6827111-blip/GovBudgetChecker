@@ -177,6 +177,21 @@ def _detect_cover_report_kind(text: str) -> Optional[str]:
     return None
 
 
+def _title_shaped(line: str) -> bool:
+    compact = normalize_cover_line(line)
+    return bool(compact and len(compact) <= 100 and not re.search(r"《|》|通知|。|；|[，,]", compact)
+                and not re.match(r"(?:预算|决算)(?:主管部门|单位)[：:]", compact))
+
+
+def _cover_category(page_texts):
+    lines = str(page_texts[0] or "").splitlines()[:20] if page_texts else []
+    compact = normalize_cover_line("\n".join(line for line in lines if _title_shaped(line)))
+    mixed = bool(re.search(r"20\d{2}年度?(?:部门|单位)?决算.*20\d{2}年度?(?:部门|单位)?预算", compact))
+    ordinary = re.search(r"20\d{2}年度?(?:部门|单位)?(?:预算|决算)(?:公开|报告)?$", compact)
+    non_budget = bool(re.search(r"绩效自评|绩效评价报告|国有资产管理情况|转移支付.*绩效", compact)) and not ordinary
+    return mixed and not government_mixed_period_title(page_texts), non_budget, compact
+
+
 def _kind_from_doc_type(doc_type: Any) -> Optional[str]:
     text = str(doc_type or "").strip().lower()
     if not text:
@@ -445,6 +460,17 @@ def resolve_document_profile(
         source=year_source if parsed_year is not None else SOURCE_UNRESOLVED,
         evidence="显式指定" if year_source == SOURCE_EXPLICIT and parsed_year else "",
     )
+    mixed_material, non_budget_material, category_evidence = _cover_category(pages)
+    if mixed_material:
+        candidates = [{"value": kind, "year": int(year), "source": SOURCE_COVER_TITLE}
+                      for year, kind in re.findall(r"(20\d{2})年度?(?:部门|单位)?(预算|决算)", category_evidence)]
+        report_kind = ProfileField(value="unknown", source=SOURCE_COVER_TITLE,
+                                   evidence=category_evidence, rejected=candidates)
+        report_year = ProfileField(value=None, source=SOURCE_COVER_TITLE,
+                                   evidence=category_evidence, rejected=candidates)
+        conflicts.append({"field": "report_kind", "reason": "mixed_material_title", "candidates": candidates})
+    elif non_budget_material:
+        report_kind = ProfileField(value="non_budget", source=SOURCE_COVER_TITLE, evidence=category_evidence)
 
     table_org_name, table_org_pages = _table_header_org(pages)
     organization = _pick(
@@ -488,6 +514,9 @@ def resolve_document_profile(
     if mixed_government_title and resolved_level == 'government':
         profile_status = PROFILE_STATUS_PARTIAL
         unsupported_reason = 'government_mixed_period_report'
+    elif resolved_kind == "non_budget":
+        profile_status = PROFILE_STATUS_PARTIAL
+        unsupported_reason = "non_budget_material"
     elif resolved_kind == "unknown":
         profile_status = PROFILE_STATUS_UNRESOLVED
         unsupported_reason = "report_kind_unresolved"
@@ -591,6 +620,8 @@ def detect_cover_facts(page_texts: Sequence[str], directory: Sequence[Any] = ())
 
     cover_title = ""
     for index, line in enumerate(lines[:19]):
+        if not _title_shaped(line):
+            continue
         if re.search(r"20\d{2}(?:年度?)?(?:部门|单位)?$", normalize_cover_line(line)) and index + 1 < len(lines):
             following = normalize_cover_line(lines[index + 1])
             if following in {"预算", "决算", "部门预算", "部门决算", "单位预算", "单位决算", "年度预算", "年度决算"}:
@@ -599,6 +630,8 @@ def detect_cover_facts(page_texts: Sequence[str], directory: Sequence[Any] = ())
     for line in lines[:20]:
         if cover_title:
             break
+        if not _title_shaped(line):
+            continue
         compact = normalize_cover_line(line)
         if not compact:
             continue
@@ -609,6 +642,8 @@ def detect_cover_facts(page_texts: Sequence[str], directory: Sequence[Any] = ())
             break
     if not cover_title:
         for line in lines[:20]:
+            if not _title_shaped(line):
+                continue
             compact = normalize_cover_line(line)
             if "\u9884\u7b97" in compact or "\u51b3\u7b97" in compact:
                 cover_title = line.strip()

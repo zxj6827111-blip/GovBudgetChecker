@@ -1031,7 +1031,7 @@ def extract_cover_metadata(
         "cover_org_label": facts["cover_org_label"],
         "scope_hint": profile.level if profile.level != "unknown" else "",
         "report_kind": report_kind,
-        "report_year": report_year,
+        "report_year": profile.year,
         "doc_type": normalize_doc_type(doc_type, filename, report_kind=report_kind),
         "profile": profile.to_dict(),
         "profile_status": profile.profile_status,
