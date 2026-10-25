@@ -205,8 +205,9 @@ def test_append_rows_adds_data_rows_and_keeps_an_audit_trail():
     assert report["applied"] == 1 and not report["unresolved"]
     table = built.table_fragments[0]
     assert table.rows[-1][:4] == ["221", "住房保障支出", "200", "200"]
-    assert built.processing_manifest["manual_rows"]["t1:2"]["mode"] == "append_rows"
-    assert built.processing_manifest["manual_rows"]["t1:2"]["row_indices"] == [2]
+    [row_audit] = list(built.processing_manifest["manual_rows"].values())
+    assert row_audit["mode"] == "append_rows" and row_audit["row_indices"] == [2]
+    assert row_audit["actor"] == "审核员乙" and row_audit["location"]["physical_page"] == 1
     assert built.parse_run_uid != run_before
     fact = facts(built)["t1:2:total_actual"]
     assert fact.raw_value == "200" and fact.recognition_status == "verified"
@@ -245,7 +246,7 @@ def test_table_code_can_be_confirmed_only_when_the_original_is_unknown():
     assert report["applied"] == 1
     assert built.table_fragments[0].table_code == "FIN_02_income"
     assert built.logical_tables[0].table_code == "FIN_02_income"
-    assert built.processing_manifest["manual_rows"]["t1:2"]["original_header_missing"] is True
+    assert list(built.processing_manifest["manual_rows"].values())[0]["original_header_missing"] is True
 
 
 def test_table_code_conflict_is_refused():

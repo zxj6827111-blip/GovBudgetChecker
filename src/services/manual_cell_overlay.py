@@ -91,6 +91,7 @@ def _sync_row_cells(artifact: Any, table: Any, start: int, rows: List[Dict[int, 
     scope = "table_fill" if str((change.get("value") or {}).get("mode") or "") == "replace_data_rows" else "row_fill"
     for offset, cells in enumerate(rows):
         row_idx = start + offset
+        row_cids: List[str] = []
         values = [""] * width
         for col, text in cells.items():
             values[col] = text
@@ -118,13 +119,13 @@ def _sync_row_cells(artifact: Any, table: Any, start: int, rows: List[Dict[int, 
                 "column_identity_confirmed": (
                     col not in known_amount_columns or col in amount_columns),
             }
+            row_cids.append(cid)
         if row_idx < len(table.rows):
             table.rows[row_idx] = values
         else:
             table.rows.append(values)
         report["targets"].append({"target_id": table.fragment_uid, "record_id": record_id,
-                                  "source_cell_id": source_cell_id(table, table.cells[-1]) if table.cells else None,
-                                  "row_idx": row_idx, "col_idx": None})
+                                  "source_cell_ids": row_cids, "row_idx": row_idx})
 
 
 def _apply_table_identity(artifact: Any, table: Any, record_id: str, record: Dict[str, Any],
@@ -205,7 +206,7 @@ def _apply_table_rows(artifact: Any, table: Any, record_id: str, record: Dict[st
                     amount_columns, known_amount_columns, manual, report)
     row_indices = list(range(start, start + len(rows)))
     manual_rows = dict(artifact.processing_manifest.get("manual_rows") or {})
-    manual_rows[f"{table.fragment_uid}:{row_indices[0]}"] = {
+    manual_rows[f"{table.fragment_uid}:{row_indices[0]}:{record_id}"] = {
         "record_id": record_id, "actor": str(record.get("actor") or ""),
         "reason": str(record.get("reason") or ""), "mode": mode,
         "row_indices": row_indices, "table_code": str(table.table_code or ""),
