@@ -182,3 +182,127 @@ def test_value_corrected_fact_still_counts_as_read_from_its_cell():
     corrected = apply_fact_overlay(context, [FactOverlay(fact_uid="t1:1:total_actual", raw_value="301", reason="改值")])
     receipt = build_table_import_receipt(built, corrected.facts, org_name=ORG)
     assert receipt["tables"][0]["unresolved_money_cells"] == []
+
+
+def row_change(mode, rows, *, table_code=None, header_missing=False, target="t1", record_id="cor-row"):
+    value = {"mode": mode, "rows": rows}
+    if table_code is not None:
+        value["table_code"] = table_code
+    if header_missing:
+        value["original_header_missing"] = True
+    return {"record_id": record_id, "actor": "审核员乙", "reason": "原件缺行，按原页补录",
+            "changes": [{"target_type": "table_instance", "target_id": target, "field": "table_rows",
+                         "value": value,
+                         "location": {"physical_page": 1, "bbox": [20, 20, 300, 60]}}]}
+
+
+def test_append_rows_adds_data_rows_and_keeps_an_audit_trail():
+    built = artifact([["206", "科学技术支出", "300", "300"]])
+    run_before = built.parse_run_uid
+    report = apply_table_cell_overlays(built, [row_change("append_rows", [
+        {"cells": {"0": "221", "1": "住房保障支出", "2": "200", "3": "200"}},
+    ])])
+    assert report["applied"] == 1 and not report["unresolved"]
+    table = built.table_fragments[0]
+    assert table.rows[-1][:4] == ["221", "住房保障支出", "200", "200"]
+    assert built.processing_manifest["manual_rows"]["t1:2"]["mode"] == "append_rows"
+    assert built.processing_manifest["manual_rows"]["t1:2"]["row_indices"] == [2]
+    assert built.parse_run_uid != run_before
+    fact = facts(built)["t1:2:total_actual"]
+    assert fact.raw_value == "200" and fact.recognition_status == "verified"
+    assert fact.extra_dims["manual_fill"]["scope"] == "row_fill"
+
+
+def test_replace_data_rows_keeps_the_original_header_and_refuses_header_rows():
+    built = artifact([["206", "科学技术支出", "300", "300"], ["合计", "", "300", "300"]])
+    report = apply_table_cell_overlays(built, [row_change("replace_data_rows", [
+        {"cells": {"0": "221", "1": "住房保障支出", "2": "200", "3": "200"}},
+    ])])
+    assert report["applied"] == 1
+    table = built.table_fragments[0]
+    assert table.rows[0] == HEAD[0]
+    assert [row[:4] for row in table.rows[1:]] == [["221", "住房保障支出", "200", "200"]]
+    assert all(cell.row_idx == 0 for cell in table.cells if cell.row_idx < table.header_row_count)
+
+
+def test_header_rows_cannot_be_written_back():
+    built = artifact([["206", "科学技术支出", "300", "300"]])
+    report = apply_table_cell_overlays(built, [row_change("append_rows", [
+        {"cells": {"0": "功能分类科目编码", "1": "科目名称", "2": "合计", "3": "财政拨款收入"}},
+    ])])
+    assert report["applied"] == 0
+    assert "表头行不接受补录" in report["unresolved"][0]["reason"]
+    assert built.processing_manifest.get("manual_rows") is None
+
+
+def test_table_code_can_be_confirmed_only_when_the_original_is_unknown():
+    built = artifact([["206", "科学技术支出", "300", "300"]])
+    built.table_fragments[0].table_code = "UNKNOWN"
+    built.logical_tables[0].table_code = "UNKNOWN"
+    report = apply_table_cell_overlays(built, [row_change("append_rows", [
+        {"cells": {"0": "221", "1": "住房保障支出", "2": "200", "3": "200"}},
+    ], table_code="FIN_02_income", header_missing=True)])
+    assert report["applied"] == 1
+    assert built.table_fragments[0].table_code == "FIN_02_income"
+    assert built.logical_tables[0].table_code == "FIN_02_income"
+    assert built.processing_manifest["manual_rows"]["t1:2"]["original_header_missing"] is True
+
+
+def test_table_code_conflict_is_refused():
+    built = artifact([["206", "科学技术支出", "300", "300"]])
+    report = apply_table_cell_overlays(built, [row_change("append_rows", [
+        {"cells": {"0": "221", "1": "住房保障支出", "2": "200", "3": "200"}},
+    ], table_code="FIN_03_expenditure")])
+    assert report["applied"] == 0
+    assert "表种" in report["unresolved"][0]["reason"]
+
+
+def test_unconfirmed_column_identity_does_not_upgrade_the_fact():
+    from src.services.manual_cell_overlay import mark_manual_facts
+
+    built = artifact([["206", "科学技术支出", "300", "300"]])
+    apply_table_cell_overlays(built, [row_change("append_rows", [
+        {"cells": {"0": "221", "1": "住房保障支出", "2": "200", "3": "200"}},
+    ])])
+    cid = next(iter(built.processing_manifest["manual_cells"]))
+    built.processing_manifest["manual_cells"][cid]["column_identity_confirmed"] = False
+    from dataclasses import dataclass, field
+
+    @dataclass
+    class FakeFact:
+        fact_uid: str
+        recognition_status: str
+        extra_dims: dict = field(default_factory=dict)
+
+    fact = FakeFact(fact_uid="f1", recognition_status="unverified",
+                    extra_dims={"evidence_refs": [{"source_cell_id": cid}]})
+    [marked] = mark_manual_facts(built, [fact])
+    assert marked.recognition_status == "unverified"
+    assert marked.extra_dims["manual_fill"]["column_identity_confirmed"] is False
+
+
+def test_table_rows_api_accepts_append_and_rejects_malformed_rows(zc05_client):  # noqa: F811
+    client, job_dir = zc05_client
+    good = {"target_type": "table_instance", "target_id": "t1", "field": "table_rows",
+            "value": {"mode": "append_rows",
+                      "rows": [{"cells": {"0": "221", "1": "住房保障支出", "2": "200", "3": "200"}}]},
+            "location": {"physical_page": 1, "bbox": [20, 15, 200, 55]}}
+    response = client.post(f"/api/jobs/{JOB_ID}/corrections", headers=_headers(), json={
+        "analysis_basis_token": _basis(), "reason": "原件缺行，按原页补录整行", "changes": [good]})
+    assert response.status_code == 202, response.text
+    record = read_jsonl_records(job_dir / "corrections.jsonl")[-1]
+    assert record["changes"][0]["field"] == "table_rows"
+    assert record["changes"][0]["value"]["mode"] == "append_rows"
+    assert record["changes"][0]["evidence_ids"]
+
+    for bad_value in (
+        {"rows": [{"cells": {"0": "221"}}]},
+        {"mode": "append_rows", "rows": []},
+        {"mode": "append_rows", "rows": [{"cells": {}}]},
+        {"mode": "append_rows", "rows": [{"cells": {"50": "221"}}]},
+        {"mode": "append_rows", "rows": [{"cells": {"0": "221"}}], "original_header_missing": "yes"},
+    ):
+        response = client.post(f"/api/jobs/{JOB_ID}/corrections", headers=_headers(), json={
+            "analysis_basis_token": _basis(), "reason": "对照原页补录整行",
+            "changes": [{**good, "value": bad_value}]})
+        assert response.status_code == 422, (bad_value, response.text)

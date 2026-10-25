@@ -1673,7 +1673,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                             "reason": "应用列映射后仍未生成财政事实",
                         })
                 has_cell_value_changes = any(
-                    isinstance(change, dict) and str(change.get("field") or "") == "cell_value"
+                    isinstance(change, dict) and str(change.get("field") or "") in {"cell_value", "table_rows"}
                     for record in overlay_records
                     for change in (record.get("changes") if isinstance(record, dict) and isinstance(record.get("changes"), list) else [])
                 )

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   cellLocation,
   countCorrectionTargets,
+  describePending,
   describeReadingReason,
   describeSubmitError,
   toCorrectionChanges,
@@ -64,3 +65,46 @@ const targets: CorrectionTargets = {
 assert.equal(countCorrectionTargets(targets), 2);
 
 console.log("correctionAdapters.test.ts passed");
+
+import { knownAmountColumns, needsTableIdentity, parseDraftRows, tableLocation, validateDraftRows } from "../app/components/review-workbench/correctionAdapters";
+
+const rowsPending: PendingCorrection = {
+  kind: "rows", tableUid: "t1", tableTitle: "收入决算表", mode: "append_rows",
+  rows: [{ cells: { 0: "221", 1: "住房保障支出", 2: "200" } }],
+  location: { physical_page: 8, bbox: [10, 10, 500, 700] },
+};
+assert.deepEqual(toCorrectionChanges([rowsPending]), [{
+  target_type: "table_instance", target_id: "t1", field: "table_rows",
+  value: { mode: "append_rows", rows: [{ cells: { 0: "221", 1: "住房保障支出", 2: "200" } }] },
+  location: { physical_page: 8, bbox: [10, 10, 500, 700] },
+}]);
+assert.match(describePending(rowsPending), /新增 1 行/);
+
+const identityPending: PendingCorrection = {
+  kind: "identity", tableUid: "t1", tableTitle: "收入决算表", tableCode: "FIN_02_income",
+  tableCodeLabel: "收入决算表", originalHeaderMissing: true,
+  location: { physical_page: 8, bbox: [10, 10, 500, 700] },
+};
+assert.deepEqual(toCorrectionChanges([identityPending]), [{
+  target_type: "table_instance", target_id: "t1", field: "table_identity",
+  value: { table_code: "FIN_02_income", original_header_missing: true },
+  location: { physical_page: 8, bbox: [10, 10, 500, 700] },
+}]);
+assert.match(describePending(identityPending), /原件缺表头/);
+
+assert.equal(needsTableIdentity({ ...table, table_code: "UNKNOWN" }), true);
+assert.equal(needsTableIdentity(table), false);
+assert.deepEqual(tableLocation(table), { physical_page: 8, bbox: [10, 10, 500, 700] });
+assert.deepEqual(Array.from(knownAmountColumns(table)).sort((a, b) => a - b), [2]);
+
+const draft = parseDraftRows("221 | 住房保障支出 | 200\n\n206\t科学技术支出\t300", 3);
+assert.equal(draft.error, null);
+assert.deepEqual(draft.rows, [
+  { cells: { 0: "221", 1: "住房保障支出", 2: "200" } },
+  { cells: { 0: "206", 1: "科学技术支出", 2: "300" } },
+]);
+assert.match(String(parseDraftRows("1|2|3|4", 3).error), /最多 3 列/);
+assert.match(String(parseDraftRows("  ", 3).error), /至少一行/);
+assert.match(String(validateDraftRows([{ cells: { 1: "住房保障支出", 2: "两百" } }], new Set([2]), new Set([2]))), /只能填写数字/);
+
+console.log("correctionAdapters rows/identity test passed");

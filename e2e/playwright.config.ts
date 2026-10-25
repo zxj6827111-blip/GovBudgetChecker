@@ -25,6 +25,9 @@ export default defineConfig({
   use: {
     baseURL,
     trace: "on-first-retry",
+    // 本机未下载 Playwright 对应版本的 headless shell 时，可指向系统 Chrome；
+    // CI 保持默认浏览器包，不改变正式跑法。
+    launchOptions: process.env.E2E_CHROME_PATH ? {executablePath: process.env.E2E_CHROME_PATH} : undefined,
   },
   webServer: externalServer ? undefined : {
     command: "npm --prefix ../app run dev",

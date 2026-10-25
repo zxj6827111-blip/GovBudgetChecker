@@ -71,6 +71,7 @@ export interface CorrectionTargets {
   analysis_basis_token: string | null;
   reading_status?: string | null;
   tables: CorrectionTable[];
+  table_code_options?: { code: string; label: string }[];
   gaps: ReadingGap[];
   orphaned_amounts: ReadingCell[];
   overlay_status?: { status?: string; unresolved?: { reason?: string }[] } | null;
@@ -194,15 +195,34 @@ export type PendingCorrection =
       measure: string;
       measureLabel: string;
       location: CorrectionLocation;
+    }
+  | {
+      kind: "rows";
+      tableUid: string;
+      tableTitle: string;
+      mode: "append_rows" | "replace_data_rows";
+      rows: { cells: Record<number, string> }[];
+      location: CorrectionLocation;
+    }
+  | {
+      kind: "identity";
+      tableUid: string;
+      tableTitle: string;
+      tableCode: string;
+      tableCodeLabel: string;
+      originalHeaderMissing: boolean;
+      location: CorrectionLocation;
     };
 
 export function pendingKey(item: PendingCorrection): string {
+  if (item.kind === "rows") return `rows|${item.tableUid}|${item.mode}`;
+  if (item.kind === "identity") return `identity|${item.tableUid}`;
   return item.kind === "cell"
     ? `cell|${item.tableUid}|${item.row}|${item.column}`
     : `column|${item.tableUid}|${item.column}`;
 }
 
-/** 同一格/同一列只保留最后一次修改。 */
+/** 同一格/同一列/同一表的同一类整行操作只保留最后一次修改。 */
 export function upsertPending(list: PendingCorrection[], item: PendingCorrection): PendingCorrection[] {
   const key = pendingKey(item);
   return [...list.filter((existing) => pendingKey(existing) !== key), item];
@@ -212,13 +232,39 @@ export function describePending(item: PendingCorrection): string {
   if (item.kind === "column") {
     return `《${item.tableTitle}》第 ${item.column + 1} 列 → ${item.measureLabel}`;
   }
+  if (item.kind === "identity") {
+    const header = item.originalHeaderMissing ? "；原件缺表头，只确认缺失" : "";
+    return `《${item.tableTitle}》确认表种 → ${item.tableCodeLabel}${header}`;
+  }
+  if (item.kind === "rows") {
+    const action = item.mode === "append_rows" ? "新增" : "替换数据行";
+    return `《${item.tableTitle}》${action} ${item.rows.length} 行`;
+  }
   const before = item.previous.trim() ? `“${item.previous.trim()}”` : "空白";
   return `《${item.tableTitle}》第 ${item.row + 1} 行第 ${item.column + 1} 列：${before} → “${item.value.trim()}”`;
 }
 
 export function toCorrectionChanges(list: PendingCorrection[]): Record<string, unknown>[] {
-  return list.map((item) =>
-    item.kind === "cell"
+  return list.map((item) => {
+    if (item.kind === "identity") {
+      return {
+        target_type: "table_instance",
+        target_id: item.tableUid,
+        field: "table_identity",
+        value: { table_code: item.tableCode, original_header_missing: item.originalHeaderMissing },
+        location: item.location,
+      };
+    }
+    if (item.kind === "rows") {
+      return {
+        target_type: "table_instance",
+        target_id: item.tableUid,
+        field: "table_rows",
+        value: { mode: item.mode, rows: item.rows },
+        location: item.location,
+      };
+    }
+    return item.kind === "cell"
       ? {
           target_type: "table_instance",
           target_id: item.tableUid,
@@ -232,11 +278,68 @@ export function toCorrectionChanges(list: PendingCorrection[]): Record<string, u
           field: "column_mapping",
           value: { mappings: [{ canonical_measure: item.measure, source_col_idx: item.column }] },
           location: item.location,
-        },
-  );
+        };
+  });
 }
 
 const AMOUNT_RE = /^-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$/;
+
+export function needsTableIdentity(table: CorrectionTable): boolean {
+  return !table.table_code || table.table_code === "UNKNOWN";
+}
+
+/** 整表/整行草稿：每行一条，列之间用 | 或制表符分隔；空行忽略。 */
+export function parseDraftRows(text: string, columnCount: number): { rows: { cells: Record<number, string> }[]; error: string | null } {
+  const rows: { cells: Record<number, string> }[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const values = line.split(/\t|\|/).map((value) => value.trim());
+    if (values.length > columnCount) {
+      return { rows: [], error: `每行最多 ${columnCount} 列，当前有 ${values.length} 列` };
+    }
+    const cells: Record<number, string> = {};
+    values.forEach((value, column) => { if (value) cells[column] = value; });
+    if (Object.keys(cells).length === 0) continue;
+    rows.push({ cells });
+  }
+  if (rows.length === 0) return { rows: [], error: "请按原页填写至少一行" };
+  return { rows, error: null };
+}
+
+/** 整行补录的数字列校验与单格补录同口径。 */
+export function validateDraftRows(
+  rows: { cells: Record<number, string> }[],
+  amountColumns: Set<number>,
+  knownAmountColumns: Set<number>,
+): string | null {
+  for (const row of rows) {
+    for (const [column, value] of Object.entries(row.cells)) {
+      const index = Number(column);
+      const isAmount = amountColumns.has(index) || knownAmountColumns.has(index);
+      const problem = validateCellValue(value, isAmount);
+      if (problem) return `第 ${index + 1} 列：${problem}`;
+    }
+  }
+  return null;
+}
+
+export function tableLocation(table: CorrectionTable): CorrectionLocation | null {
+  const box = validBox(table.bbox);
+  return box && table.page > 0 ? { physical_page: table.page, bbox: box } : null;
+}
+
+/** 数据行里出现过数字的列也按金额列校验，避免把文字填进未映射的金额列。 */
+export function knownAmountColumns(table: CorrectionTable): Set<number> {
+  const result = new Set(table.column_mappings.map((item) => item.source_col_idx));
+  const headerCount = Math.max(0, Math.min(table.header_row_count ?? 0, table.rows.length));
+  for (const row of table.rows.slice(headerCount)) {
+    row.forEach((value, column) => {
+      // 前两列是科目编码/名称，编码本身也是数字，不能据此当成金额列。
+      if (column >= 2 && AMOUNT_RE.test(String(value ?? "").trim().replace(/\s+/g, ""))) result.add(column);
+    });
+  }
+  return result;
+}
 
 /** 金额列只能填数字（与后端校验同口径）；其他列只要求非空且不超过 100 字。 */
 export function validateCellValue(value: string, isAmountColumn: boolean): string | null {

@@ -54,6 +54,7 @@ import { ReviewDetailNavigation } from "./ReviewDetailNavigation";
 import { isUiTaskFinished, normalizeUiTaskStatus, selectStructuredForJob, toUiProblems, toUiSourceProblems } from "@/lib/uiAdapters";
 
 import { CorrectionsTab, type CorrectionFocus } from "./CorrectionsTab";
+import type { CorrectionLocation } from "./correctionAdapters";
 import { IssueNoteDialog } from "./IssueNoteDialog";
 import type { IssueWorkflowAction } from "./IssueCard";
 import { IssuesTab } from "./IssuesTab";
@@ -177,6 +178,9 @@ export function ReviewWorkbenchPage() {
   const [isReanalyzing, setIsReanalyzing] = useState(false);
   /** 「读取校正」页签选中的原页位置；只在该页签激活时接管左侧高亮。 */
   const [correctionFocus, setCorrectionFocus] = useState<CorrectionFocus | null>(null);
+  /** 整行/整表补录时请求左侧原页框选；pickedRegion 是框选结果。 */
+  const [regionRequest, setRegionRequest] = useState<{ label: string } | null>(null);
+  const [pickedRegion, setPickedRegion] = useState<CorrectionLocation | null>(null);
   /** 复核生命周期上下文（WP3-A）：由服务端把 job 解析到材料槽位后返回。 */
   const [reviewContext, setReviewContext] = useState<ReviewContextState>({ kind: "loading" });
   /** 正在提交复核写动作（开始/完成/重开）。 */
@@ -533,6 +537,11 @@ export function ReviewWorkbenchPage() {
       setIssuesExpanded(false);
     }
   }, []);
+
+  useEffect(() => {
+    setRegionRequest(null);
+    setPickedRegion(null);
+  }, [activeTab]);
 
   // keepLayout：列表自动选中首条时只同步原文页码，不收起用户放大的问题区。
   const handleSelectProblem = useCallback((problemId: string | null, options?: { keepLayout?: boolean }) => {
@@ -944,6 +953,13 @@ export function ReviewWorkbenchPage() {
             currentPage={currentPage}
             onPageChange={(page) => setCurrentPage(Math.max(1, page))}
             highlightedProblem={pdfHighlight}
+            regionPick={regionRequest ? { active: true, label: regionRequest.label } : null}
+            onRegionPicked={(region) => {
+              setPickedRegion(region);
+              setRegionRequest(null);
+              setCurrentPage(region.physical_page);
+            }}
+            onRegionPickCancel={() => setRegionRequest(null)}
             leadingControls={
               <button
                 type="button"
@@ -1189,8 +1205,16 @@ export function ReviewWorkbenchPage() {
                 jobId={jobId}
                 disabled={isReanalyzing}
                 onFocus={handleCorrectionFocus}
+                pickedRegion={pickedRegion}
+                onRequestRegion={(label) => {
+                  setPickedRegion(null);
+                  setRegionRequest({ label });
+                }}
+                onClearRegion={() => setPickedRegion(null)}
                 onSubmitted={() => {
                   setLastIssueDecision(null);
+                  setPickedRegion(null);
+                  setRegionRequest(null);
                   invalidateReviewReads(jobId);
                   // 静默刷新：留住页签上的提交结果；重分析开始后页面会自动切到进度视图。
                   void Promise.all([loadJobDetail({ silent: true }), loadWorkflow()]);
