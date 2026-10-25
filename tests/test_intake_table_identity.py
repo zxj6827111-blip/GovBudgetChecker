@@ -28,3 +28,13 @@ def test_missing_text_defers_missing_table_claim():
 
 def test_recognized_three_public_defines_appropriation_scope_even_with_truncated_title():
     assert infer_fund_scope("FIN_07_three_public", "政拨款三公经费支出决算表") == "fiscal_appropriation"
+
+
+def test_annual_chapter_heading_does_not_replace_actual_table_title():
+    from types import SimpleNamespace
+    from src.engine.checklist_content_rules import CMM021_TableTitleNormative, table_title_lines
+    text = '第二部分\n甲市测试中心2025年\n度决算表\n收入支出决算总表\n单位：万元'
+    doc = build_document('2025决算.pdf', [text], [[[['项目', '金额'], ['合计', '1.00']]]], 0)
+    doc.parse_artifact = SimpleNamespace(table_fragments=[SimpleNamespace(page_number=1, table_code='FIN_01_income_expenditure_total')])
+    assert [row[-1] for row in table_title_lines(doc)] == ['收入支出决算总表']
+    assert CMM021_TableTitleNormative().apply(doc) == []

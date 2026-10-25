@@ -139,6 +139,10 @@ def table_title_lines(doc: Document) -> List[Tuple[int, str, int, int, str]]:
         for line in lines[:6]:
             start, offset = offset, offset + len(line) + 1
             norm = _title_norm(line)
+            # 章节标题可折行为“某单位2025年 / 度决算表”，其下仍有真实表题，不能抢作九表表名。
+            if (re.search(r"(?:年度?|度)(?:部门|单位)?(?:预算|决算)表$", norm)
+                    or re.fullmatch(r"(?:部门|单位)?(?:预算|决算)表", norm)):
+                continue
             if norm.endswith("表") and re.search(r"(?:预算|决算)", norm) and len(norm) <= 48 \
                     and not norm.startswith(("注", "第")):
                 found.append((page, text, start, start + len(line), norm))
