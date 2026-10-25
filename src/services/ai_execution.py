@@ -39,6 +39,7 @@ def build_ai_execution(
     provider_stats: Optional[Iterable[Dict[str, Any]]] = None,
     window_errors: Optional[Iterable[Dict[str, Any]]] = None,
     error_code: str = "",
+    coverage: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """从调用留痕推导 AI 执行状态，返回 ``result.meta.ai_execution`` 结构。
 
@@ -68,6 +69,19 @@ def build_ai_execution(
         "finish_reason": None,
         "token_usage": None,
         "error_code": error_code or None,
+        "coverage_status": (coverage or {}).get("status") if isinstance(coverage, dict) else None,
+        "uncovered_ranges": list((coverage or {}).get("uncovered_ranges") or [])
+        if isinstance(coverage, dict)
+        else [],
+        "accepted_candidates": (coverage or {}).get("accepted_candidates", (coverage or {}).get("accepted_count"))
+        if isinstance(coverage, dict)
+        else None,
+        "rejected_candidates": (coverage or {}).get("rejected_candidates", (coverage or {}).get("rejected_count"))
+        if isinstance(coverage, dict)
+        else None,
+        "partial_calls": (coverage or {}).get("partial_calls") if isinstance(coverage, dict) else None,
+        "invalid_calls": (coverage or {}).get("invalid_calls") if isinstance(coverage, dict) else None,
+        "truncated_calls": (coverage or {}).get("truncated_calls") if isinstance(coverage, dict) else None,
     }
 
     if not requested:
@@ -101,6 +115,25 @@ def build_ai_execution(
         record["provider"] = failed_call.get("provider")
         record["model"] = failed_call.get("model")
         record["finish_reason"] = failed_call.get("finish_reason")
+        return record
+
+    # 拿到了响应但业务契约校验失败：合法 JSON 不等于合法业务响应，
+    # 不能因“有正文”就判成功，更不能解释为“未发现问题”。
+    invalid_contract = [
+        item for item in ledger if not item.get("error") and item.get("contract_ok") is False
+    ]
+    if invalid_contract:
+        last = invalid_contract[-1]
+        record["state"] = AI_STATE_FAILED
+        finish_reason = str(last.get("finish_reason") or "").strip().lower()
+        record["error_code"] = error_code or (
+            "ai_truncated_response"
+            if finish_reason in _TRUNCATED_FINISH_REASONS
+            else "ai_response_invalid"
+        )
+        record["provider"] = last.get("provider")
+        record["model"] = last.get("model")
+        record["finish_reason"] = last.get("finish_reason")
         return record
 
     # 拿到了响应但不可用：finish_reason=length（token 截断）或空正文。
@@ -149,7 +182,7 @@ def build_ai_execution(
 
 def summarize_ai_diagnostics(meta: Dict[str, Any]) -> Dict[str, Any]:
     """Keep failure evidence in the final result without copying model prose."""
-    fields = ("provider", "model", "finish_reason", "error", "token_usage", "latency_ms")
+    fields = ("provider", "model", "finish_reason", "error", "token_usage", "latency_ms", "contract_ok")
     return {
         "ai_error": meta.get("ai_error"),
         "ai_window_errors": list(meta.get("ai_window_errors") or []),
@@ -168,6 +201,8 @@ def _call_succeeded(item: Dict[str, Any]) -> bool:
     """
 
     if item.get("error"):
+        return False
+    if item.get("contract_ok") is False:
         return False
     provider = str(item.get("provider") or "").strip()
     model = str(item.get("model") or "").strip()

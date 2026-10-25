@@ -463,6 +463,9 @@ export function ReviewWorkbenchPage() {
     const aiExecution = meta.ai_execution && typeof meta.ai_execution === "object" && !Array.isArray(meta.ai_execution)
       ? meta.ai_execution as Record<string, unknown>
       : {};
+    const aiCoverage = meta.ai_coverage && typeof meta.ai_coverage === "object" && !Array.isArray(meta.ai_coverage)
+      ? meta.ai_coverage as Record<string, unknown>
+      : undefined;
     const aiFindingCount = Array.isArray(result.ai_findings) ? result.ai_findings.length : 0;
     const ruleFindingCount = Array.isArray(result.rule_findings) ? result.rule_findings.length : 0;
 
@@ -479,6 +482,7 @@ export function ReviewWorkbenchPage() {
       commonRelationCount: classification.commonRelations.length,
       aiState: String(aiExecution.state ?? meta.ai_status ?? "unknown"),
       aiModel: String(aiExecution.model ?? "").trim() || undefined,
+      aiCoverage,
     };
   }, [detail, problems]);
 

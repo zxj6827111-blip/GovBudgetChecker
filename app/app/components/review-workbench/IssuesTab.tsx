@@ -28,6 +28,21 @@ export interface SourceFindingViews {
   commonRelationCount: number;
   aiState?: string;
   aiModel?: string;
+  aiCoverage?: {
+    status?: string;
+    planned_calls?: number;
+    completed_calls?: number;
+    failed_calls?: number;
+    valid_empty_calls?: number;
+    partial_calls?: number;
+    invalid_calls?: number;
+    truncated_calls?: number;
+    pages_total?: number;
+    pages_covered?: number[];
+    uncovered_ranges?: Array<{ start?: number; end?: number; pages?: number[]; reason?: string }>;
+    capabilities?: Record<string, string>;
+    coverage_note?: string;
+  };
 }
 
 export interface IssuesTabProps {
@@ -107,6 +122,15 @@ function aiStateLabel(state: string | undefined): string {
   if (state === "failed" || state === "fallback") return "未成功";
   if (state === "skipped" || state === "not_requested") return "未启用";
   return "状态未知";
+}
+
+function aiCoverageLabel(status: string | undefined): string {
+  if (status === "complete") return "覆盖完整";
+  if (status === "partial") return "部分覆盖";
+  if (status === "failed") return "执行失败";
+  if (status === "not_run") return "未执行";
+  if (status === "unknown") return "覆盖未知";
+  return "覆盖未记录";
 }
 
 export function IssuesTab({
@@ -405,6 +429,12 @@ export function IssuesTab({
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600" data-testid="gbc-review-source-summary">
               <span>大模型：{aiStateLabel(sourceFindings.aiState)} · {sourceFindings.aiFindingCount} 条发现</span>
               {sourceFindings.aiModel ? <span>模型：{sourceFindings.aiModel}</span> : null}
+              {sourceFindings.aiCoverage ? (
+                <span data-testid="gbc-review-ai-coverage">
+                  检查覆盖：{aiCoverageLabel(sourceFindings.aiCoverage.status)}
+                  （{sourceFindings.aiCoverage.completed_calls ?? 0}/{sourceFindings.aiCoverage.planned_calls ?? 0} 个检查单元）
+                </span>
+              ) : null}
               <span>本地规则：{sourceFindings.ruleFindingCount} 条发现</span>
               <span>其他复核项：{sourceFindings.other.length} 条</span>
             </div>
@@ -420,6 +450,19 @@ export function IssuesTab({
         {sourceFindings?.aiState === "degraded" ? (
           <div className="mt-2 rounded-md border border-warning-200 bg-warning-50 px-2.5 py-2 text-[11px] leading-relaxed text-warning-700" data-testid="gbc-review-ai-degraded">
             大模型检查未完整完成。本次保存了 {sourceFindings.aiFindingCount} 条大模型发现；请在“大模型”中查看，并结合证据状态复核。
+            {sourceFindings.aiCoverage?.uncovered_ranges?.length ? (
+              <span className="mt-1 block" data-testid="gbc-review-ai-uncovered">
+                未覆盖页：
+                {sourceFindings.aiCoverage.uncovered_ranges
+                  .flatMap((range) => range.pages ?? [])
+                  .filter((page, index, all) => all.indexOf(page) === index)
+                  .join("、") || "范围未能映射到页码"}
+                （原因：窗口上限）。已检查范围不等于保证无遗漏。
+              </span>
+            ) : null}
+            {(sourceFindings.aiCoverage?.invalid_calls ?? 0) + (sourceFindings.aiCoverage?.truncated_calls ?? 0) > 0 ? (
+              <span className="mt-1 block">部分模型响应未通过校验或被截断；合法候选已保留，非法条目已拒绝，未计为“无问题”。</span>
+            ) : null}
           </div>
         ) : null}
       </div>

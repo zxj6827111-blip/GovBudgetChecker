@@ -84,7 +84,7 @@ def test_only_subject_dictionary_is_deferred(kind: str) -> None:
 def test_typo_and_sentence_items_are_ai_only(kind: str) -> None:
     """错别字、病句：词表只作提示，进一步判断只交大模型 AI。"""
     ai_only = {cid for cid, decision in _decisions(kind).items() if decision == "ai_only"}
-    expected = {"D-01", "D-03", "D-08"} if kind == "budget" else {"D-01", "D-08"}
+    expected = {"D-01", "D-03", "D-08"} if kind == "budget" else {"D-01", "D-03", "D-08"}
     assert ai_only == expected
 
 

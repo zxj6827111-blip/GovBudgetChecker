@@ -1894,6 +1894,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                 call_ledger=dual_result.meta.get("ai_call_ledger") or [],
                 provider_stats=dual_result.meta.get("provider_stats") or [],
                 window_errors=dual_result.meta.get("ai_window_errors") or [],
+                coverage=dual_result.meta.get("ai_coverage"),
             )
             from src.services.ai_execution import summarize_ai_diagnostics
             ai_diagnostics = summarize_ai_diagnostics(dual_result.meta)
@@ -1921,6 +1922,9 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                     "page_extraction": page_assessment,
                     "ai_execution": ai_execution,
                     **ai_diagnostics,
+                    "ai_coverage": dual_result.meta.get("ai_coverage"),
+                    "ai_audit_diagnostics": dual_result.meta.get("ai_audit_diagnostics"),
+                    "ai_locator_outcomes": dual_result.meta.get("ai_locator_outcomes") or [],
                     "ai_configuration": status_data.get("ai_configuration"),
                     "rule_execution_summary": dual_result.meta.get(
                         "rule_execution_summary"

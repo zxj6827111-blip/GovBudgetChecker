@@ -301,9 +301,11 @@ items:
     dimension: "四、文字规范"
     title: "无多字、漏字"
     criterion: "无多字漏字。"
-    status: implemented
-    obligations: [OBL-STRUCT-PUNCTUATION, OBL-TEXT-TYPO]
+    status: ai_assisted
+    obligations: [OBL-STRUCT-PUNCTUATION, OBL-TEXT-TYPO, OBL-AI-SEMANTIC-REVIEW]
     rules: [V33-113, CMM-002, CMM-009]
+    decision: ai_only
+    note: "确定性规则只覆盖重复字词/标点和高频漏字词表；一般多字、漏字、语序问题由大模型 AI 语义复核判断，结果列待人工复核（2026-10-25 复核修正）"
   - id: D-04
     dimension: "四、文字规范"
     title: "标点符号使用规范"
