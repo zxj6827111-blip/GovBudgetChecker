@@ -82,7 +82,7 @@ def decide_auto_binding(
     scope, scope_evidence, scope_conflict = source_scope_evidence(page_texts)
     all_evidence = [*evidence, *scope_evidence]
     suggestions = list(candidates)
-    checked = [
+    checked: list[dict[str, Any]] = [
         {
             "source": "page_scan",
             "page": page,

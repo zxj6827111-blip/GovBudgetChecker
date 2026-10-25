@@ -3590,7 +3590,7 @@ def rematch_job_organizations(body: Optional[Dict[str, Any]] = None) -> Dict[str
     scoped_department_name = str(request_body.get("department_name") or "").strip()
 
     storage = require_org_storage()
-    matcher = get_org_matcher()
+    _matcher = get_org_matcher()
 
     matches: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
@@ -3894,7 +3894,7 @@ def repair_missing_job_organization_links(
     scoped_department_name = str(request_body.get("department_name") or "").strip()
 
     storage = require_org_storage()
-    matcher = get_org_matcher()
+    _matcher = get_org_matcher()
 
     repairs: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
