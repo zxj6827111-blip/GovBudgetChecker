@@ -114,6 +114,57 @@ def _render_pages_png(pdf_path: str, page_numbers: List[int], dpi: int = DEFAULT
     return images, transforms
 
 
+def _page_has_visible_image(page, dpi: int = 72) -> bool:
+    """无文本页是否仍含可见图像/墨迹；无法判断时保守放行，不静默跳过。"""
+    try:
+        if page.get_images(full=True):
+            return True
+        pix = page.get_pixmap(dpi=dpi)
+    except Exception:
+        return True
+    samples = pix.samples
+    if not samples:
+        return False
+    stride = max(1, len(samples) // 200_000)
+    values = samples[::stride]
+    non_white = sum(1 for value in values if value < 245)
+    return non_white / max(1, len(values)) > 0.01
+
+
+def image_page_gate(
+    pdf_path: str,
+    page_numbers: List[int],
+    *,
+    no_text_pages: set[int],
+) -> tuple[List[int], List[int], Optional[str]]:
+    """只把无文本且确有图像/墨迹的页送 OCR；无文本空白页跳过。
+
+    有文字层的页（含嵌入表格图片的页）不在这里过滤，仍由 recovery_pages
+    的缺口证据决定；无法打开 PDF 或无法判断时保守返回原候选。
+    """
+    try:
+        import fitz
+    except Exception:
+        return list(page_numbers), [], "fitz_unavailable"
+    image_pages: List[int] = []
+    blank_pages: List[int] = []
+    try:
+        with fitz.open(str(pdf_path)) as document:
+            for page_number in page_numbers:
+                if page_number not in no_text_pages:
+                    image_pages.append(page_number)
+                    continue
+                page = document.load_page(page_number - 1)
+                if _page_has_visible_image(page):
+                    image_pages.append(page_number)
+                else:
+                    blank_pages.append(page_number)
+    except Exception as exc:
+        logger.warning("OCR image gate failed; keeping candidates: %s", exc)
+        return list(page_numbers), [], "pdf_open_failed"
+    return image_pages, blank_pages, None
+
+
 def _pdf_bbox_from_render_bbox(bbox: Any, transform: Dict[str, Any]) -> Optional[List[float]]:
     """仅在已验证的简单坐标变换下，把 OCR 像素框换为 PDF 点坐标。"""
     if (
@@ -424,6 +475,7 @@ async def maybe_ocr_scanned_pages(
 ) -> Optional[Dict[str, Any]]:
     """对低文本页执行本地 OCR。未启用或无需识别时返回 None。
 
+    ``OCR_IMAGE_GATE``（默认开启）只保留无文本且确有图像/墨迹的页；空白页跳过并记入 ``blank_pages``。
     ``artifact``（统一解析对象，可选）存在时把 OCR 页登记进 page_states
     （note="ocr_applied"），原生文本层不被覆盖；候选结果不直接进入规则输入。
     """
@@ -477,7 +529,55 @@ async def maybe_ocr_scanned_pages(
     if not re.fullmatch(r'[a-f0-9]{64}', str(service_health.get('pipeline_fingerprint') or '')):
         return {'enabled': True, 'status': 'pipeline_fingerprint_missing', 'requested_pages': candidates,
                 'failed_pages': candidates, 'usable_for_rules': False}
+    requested_pages = list(candidates)
+    blank_pages: List[int] = []
+    gate_error: Optional[str] = None
+    image_gate = os.getenv("OCR_IMAGE_GATE", "true").strip().lower() not in {"0", "false", "no"}
+    if image_gate:
+        states = getattr(artifact, "page_states", None)
+        if states:
+            no_text_pages = {
+                int(state.page_number)
+                for state in states
+                if not bool(getattr(state, "has_text_layer", False))
+            }
+        else:
+            no_text_pages = {
+                int(page)
+                for page in page_assessment.get("scanned_pages") or []
+                if type(page) is int
+            }
+        candidates, blank_pages, gate_error = image_page_gate(
+            pdf_path, candidates, no_text_pages=no_text_pages
+        )
+        if blank_pages:
+            page_assessment["blank_pages"] = sorted(
+                {*(page_assessment.get("blank_pages") or []), *blank_pages}
+            )
+        if not candidates:
+            return {
+                "enabled": True,
+                "status": "no_image_pages",
+                "requested_pages": requested_pages,
+                "image_pages": [],
+                "blank_pages": blank_pages,
+                "pages": [],
+                "failed_pages": [],
+                "usable_for_rules": False,
+                "image_gate": "enabled",
+                **({"gate_error": gate_error} if gate_error else {}),
+            }
     from src.services.ocr_tiled_pipeline import recognize_document_tiles
-    return await recognize_document_tiles(pdf_path, candidates, artifact, service_health,
-        checkpoint_path=checkpoint_path, progress_callback=progress_callback)
+    result = await recognize_document_tiles(
+        pdf_path, candidates, artifact, service_health,
+        checkpoint_path=checkpoint_path, progress_callback=progress_callback,
+    )
+    if isinstance(result, dict):
+        result["requested_pages"] = requested_pages
+        result["image_pages"] = candidates
+        result["blank_pages"] = blank_pages
+        result["image_gate"] = "enabled" if image_gate else "disabled"
+        if gate_error:
+            result["gate_error"] = gate_error
+    return result
 
