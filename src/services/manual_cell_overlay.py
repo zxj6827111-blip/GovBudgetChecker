@@ -10,7 +10,7 @@ import dataclasses
 import hashlib
 import json
 import re
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 
 from src.services.fiscal_table_rules import normalize_text
 from src.services.table_import_receipt import source_cell_id

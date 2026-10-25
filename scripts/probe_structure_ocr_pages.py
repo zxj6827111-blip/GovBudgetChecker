@@ -110,7 +110,7 @@ async def main() -> int:
         parser.error("--pdf and --page must be given in pairs")
     args.out.mkdir(parents=True, exist_ok=True)
     records = []
-    for pdf_path, page_no in zip(args.pdf, args.page):
+    for pdf_path, page_no in zip(args.pdf, args.page, strict=True):
         record = await probe(pdf_path, page_no, args.dpi, args.crop_height, args.out)
         records.append(record)
         print(json.dumps(record, ensure_ascii=False), flush=True)
