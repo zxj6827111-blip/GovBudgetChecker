@@ -34,6 +34,14 @@ def test_explicit_zero_fund_parts_execute_without_faking_a_single_fund_scope():
     assert doc.fact_receipts[0]['status'] == 'pass'
 
 
+def test_line_break_in_subject_name_still_matches_child_operands():
+    doc = document()
+    for fact in doc.fact_context.facts:
+        fact.subject_name = '一般公共服务支\n出'
+    assert check_fiscal_grant_arithmetic(R33119_FiscalTotalCheck(), doc) == []
+    assert doc.fact_receipts[0]['status'] == 'pass'
+
+
 @pytest.mark.parametrize('problem', ['fund_scope', 'instance_uid', 'fiscal_year', 'missing'])
 def test_fund_formula_keeps_other_identity_and_operand_gates(problem):
     doc = document()
@@ -76,3 +84,13 @@ def test_unmapped_fund_column_never_means_zero(monkeypatch):
     doc.fact_context.facts = [f for f in doc.fact_context.facts if f.indicator != 'government_fund_budget']
     with pytest.raises(RuleDeferred, match='缺少明确可用数值'):
         check_fund_zero_disclosures(R33122_EmptyTableCheck(), doc)
+
+
+def test_empty_fund_table_without_facts_passes_when_source_columns_are_zero(monkeypatch):
+    from src.engine import fact_table_projection
+
+    monkeypatch.setattr(
+        fact_table_projection, 'fact_bound_table_rows', lambda *args, **kwargs: [['header']]
+    )
+    doc = document()
+    assert check_fund_zero_disclosures(R33122_EmptyTableCheck(), doc) == []

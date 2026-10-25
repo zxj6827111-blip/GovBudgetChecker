@@ -30,11 +30,12 @@ def table_facts(doc, code):
 
 def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow_native_blank=False):
     context = doc.fact_context
+    normalized_name = re.sub(r'\s+', '', str(name)) if name is not None else None
     candidates = [f for f in facts if f.indicator == indicator
                   and (code is None or f.subject_code == code)
-                  and (name is None or (name in re.sub(r'\s+', '', f.subject_name or '')
+                  and (normalized_name is None or (normalized_name in re.sub(r'\s+', '', f.subject_name or '')
                        and not any(other in re.sub(r'\s+', '', f.subject_name or '')
-                                   for other in ('人员经费合计', '公用经费合计') if other != name)))
+                                   for other in ('人员经费合计', '公用经费合计') if other != normalized_name)))
                   and _canonical_budget_stage(f.budget_stage) == stage]
     if len(candidates) != 1:
         if not candidates and allow_native_blank and facts:
@@ -228,14 +229,22 @@ def check_fund_zero_disclosures(rule, doc):
             receipt(rule, doc, key, terms, status='not_applicable', formula='总表资金列非零，本项空表条件不适用')
             continue
         try:
-            fact_bound_table_rows(doc, title, strict_unknown_values=True)
+            target_rows = fact_bound_table_rows(doc, title, strict_unknown_values=True)
         except ProjectionUnavailable as exc:
             unresolved.append(str(exc))
             continue
         target, error = table_facts(doc, code)
-        if error or any(operand_rejection_reason(f, doc.fact_context.org_name)
-                        or f.fiscal_year != doc.fact_context.fiscal_year or f.fund_scope != fund for f in target):
-            unresolved.append(error or f'{title}的原格金额/身份未确认，不能断言为空表')
+        if error:
+            if target_rows and "没有可用金额事实" in error:
+                # 原文已明示本表无数据，且总表资金列明确为零：空表成立。
+                receipt(rule, doc, key, terms, status='pass',
+                        formula='总表资金列明确为零，对应表无可确认金额事实（空表）')
+                continue
+            unresolved.append(error)
+            continue
+        if any(operand_rejection_reason(f, doc.fact_context.org_name)
+               or f.fiscal_year != doc.fact_context.fiscal_year or f.fund_scope != fund for f in target):
+            unresolved.append(f'{title}的原格金额/身份未确认，不能断言为空表')
             continue
         nonzero = [f for f in target if amount_difference_exceeds_policy(f.normalized_value)]
         ids, evidence = receipt(rule, doc, key, [*terms, *target], status='fail' if nonzero else 'pass',

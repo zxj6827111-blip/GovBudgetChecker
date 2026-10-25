@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.engine.fact_context import build_fact_context_from_artifact
-from src.engine.fact_table_projection import fact_bound_table_rows
+from src.engine.fact_table_projection import ProjectionUnavailable, fact_bound_table_rows
 from src.engine.rules_v33 import R33120_DetailTableCheck
 from src.schemas.parse_artifact import LogicalTableInstance, ParseArtifact, ParsedCell, ParsedTable
 from src.services.pdf_parser import PDFParser
@@ -327,3 +327,32 @@ def test_spaced_leading_thousands_group_preserves_complete_budget_amount():
     # Separate decimal amounts are never concatenated into a new budget.
     match = _WP4E_BUDGET_RE.search("年初预算100.00 200.00万元")
     assert match.group("amount") == "100.00" and match.group("unit") is None
+
+
+def grant_total_bilateral_table(*, income_label=False):
+    rows = [
+        ["收入", "收入", "支出", "支出", "支出", "支出", "支出"],
+        ["项目", "决算数", "项目", "合计", "一般公共预算财政拨款", "政府性基金预算财政拨款", "国有资本经营预算财政拨款"],
+        ["一、一般公共预算财政拨款", "100", "一、一般公共服务支出", "100", "100", "0", "0"],
+        ["四、其他收入" if income_label else "", "", "二、外交支出", "0", "0", "0", "0"],
+        ["", "", "三、国防支出", "0", "0", "0", "0"],
+        ["本年收入合计", "100", "本年支出合计", "100", "100", "0", "0"],
+        ["总计", "100", "总计", "100", "100", "0", "0"],
+    ]
+    return grid(rows, [0, 30, 60, 90, 130, 170, 210, 250], uid="fin04", page=1,
+                code="FIN_04_fiscal_grant_total", headers=2, confidence=.99, unit="万元")
+
+
+def test_bilateral_blank_income_side_is_padding_not_unknown():
+    table = grant_total_bilateral_table()
+    doc = context_for([table], [table])
+    rows = fact_bound_table_rows(doc, "财政拨款收入支出决算总表", strict_unknown_values=True)
+    assert rows[3][0] == "" and rows[3][1] == ""
+    assert rows[3][3] == "0"
+
+
+def test_bilateral_blank_with_income_label_is_still_unknown():
+    table = grant_total_bilateral_table(income_label=True)
+    doc = context_for([table], [table])
+    with pytest.raises(ProjectionUnavailable):
+        fact_bound_table_rows(doc, "财政拨款收入支出决算总表", strict_unknown_values=True)
