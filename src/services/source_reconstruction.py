@@ -174,8 +174,16 @@ def resolve_native_table_candidates(policy, existing, incoming):
                 # 不能替换它而丢失空列/原格位置；无网格时仍使用文本策略。
                 if current.extraction_method == "text":
                     merged[idx] = candidate
-            elif policy._table_priority(candidate) > policy._table_priority(current):
-                merged[idx] = candidate
+            else:
+                current_priority = policy._table_priority(current)
+                candidate_priority = policy._table_priority(candidate)
+                structure = getattr(policy, "_structure_priority", None)
+                if candidate_priority > current_priority or (
+                    candidate_priority == current_priority
+                    and structure is not None
+                    and structure(candidate) > structure(current)
+                ):
+                    merged[idx] = candidate
             replaced = True
             break
         if not replaced:

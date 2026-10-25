@@ -259,9 +259,13 @@ class ParsedTable:
     # AC-02：合并片段时保留被合并的原始物理片段 uid——逻辑实例可回溯到
     # 每一页的原始片段，不因合并而丢失来源身份。
     source_fragment_uids: List[str] = field(default_factory=list)
+    #: 几何候选变体（如 snap6）；不新增 extraction_method 取值。
+    geometry_profile: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = dataclasses.asdict(self)
+        if data.get("geometry_profile") is None:
+            data.pop("geometry_profile", None)
         data["bbox"] = list(self.bbox) if self.bbox else None
         data["cells"] = [cell.to_dict() for cell in self.cells]
         return data
@@ -283,6 +287,7 @@ class ParsedTable:
             cells=[ParsedCell.from_dict(cell) for cell in data.get("cells") or []],
             fragment_uid=str(data.get("fragment_uid") or uuid.uuid4().hex),
             source_fragment_uids=[str(item) for item in data.get("source_fragment_uids") or []],
+            geometry_profile=_opt_str(data.get("geometry_profile")),
         )
 
 

@@ -56,6 +56,15 @@ DEFAULT_TABLE_SETTINGS: Sequence[Tuple[str, Dict[str, Any]]] = (
     ),
 )
 
+#: 重复框线候选：只改变吸附容差，extraction_method 仍为 lines。
+SNAP6_LINES_SETTINGS: Dict[str, Any] = {
+    "vertical_strategy": "lines",
+    "horizontal_strategy": "lines",
+    "snap_tolerance": 6,
+    "join_tolerance": 3,
+    "edge_min_length": 3,
+}
+
 UNIT_PATTERN = re.compile(
     r"(单位[:：]?\s*(万元|元|亿元|千元|百万元))|((金额|单位)[:：]?\s*(万元|元|亿元|千元|百万元))"
 )
@@ -103,7 +112,7 @@ def _stable_fragment_uid(*parts: Any, rows: Optional[Sequence[Sequence[str]]] = 
 #: 解析器指纹：表抽取策略组合变化时必须更新（缓存按指纹失效）
 from src.services.input_processing_identity import processing_manifest, processing_config_fingerprint, SCHEMA_VERSION
 
-PARSER_FINGERPRINT = "pdfplumber-cells-v27-trusted-input-" + processing_manifest()["sha256"][:16]
+PARSER_FINGERPRINT = "pdfplumber-cells-v28-snap6-trusted-input-" + processing_manifest()["sha256"][:16]
 
 
 # ---------------------------------------------------------------------------
@@ -375,48 +384,67 @@ class PDFParser:
             "errors": errors or None,
         }
 
+    @staticmethod
+    def _vertical_line_clusters(page, tolerance: float = 6.0) -> List[float]:
+        xs = sorted({
+            round(float(edge["x0"]), 2)
+            for edge in getattr(page, "edges", []) or []
+            if edge.get("orientation") == "v"
+        })
+        clusters: List[float] = []
+        for x in xs:
+            if not clusters or x - clusters[-1] > tolerance:
+                clusters.append(x)
+        return clusters
+
     def _extract_tables_from_page(self, page, page_number: int,
                                   continuation: Optional[ParsedTable] = None) -> List[ParsedTable]:
         best_candidates: List[ParsedTable] = []
 
+        def extract(method_name, settings, *, geometry_profile=None, record_source_grid=False):
+            candidates = []
+            for table_index, table in enumerate(page.find_tables(table_settings=settings)):
+                rows = table.extract() or []
+                footer = (continuation is not None and len(rows) == 1 and len(rows[0]) >= 3
+                          and normalize_text(str(rows[0][0] or '')) in {'合计', '总计'}
+                          and all(self._parse_numeric(str(value or '')) is not None for value in rows[0][1:]))
+                if not self._is_meaningful_table(rows, native_grid=method_name in {"lines", "lines_strict"}) and not footer:
+                    continue
+                parsed = self._build_parsed_table(
+                    page=page,
+                    page_number=page_number,
+                    table_index=table_index,
+                    table=table,
+                    rows=rows,
+                    extraction_method=method_name,
+                    geometry_profile=geometry_profile,
+                )
+                if record_source_grid:
+                    original = deepcopy(parsed)
+                    self._certify_native_blank_cells(page, original.cells, method_name)
+                    self._source_grid_fragments.append(original)
+                if footer:
+                    parsed = self._align_native_continuation_footer(continuation, parsed)
+                parsed = self._recover_open_top_grid_row(page, parsed, reference=continuation)
+                parsed = self._recover_open_bottom_grid_row(page, parsed)
+                from src.services.native_structure_recovery import repair_native_structure
+                reference = (continuation if continuation is not None
+                             and page_number == self._last_page_number(continuation) + 1
+                             and not self._unit_hints_conflict(continuation, parsed)
+                             and self._native_continuation_columns_match(continuation, parsed) else None)
+                parsed = repair_native_structure(page, parsed, reference=reference)
+                from src.services.native_dimension_recovery import repair_native_dimensions, repair_native_code_baselines
+                # 标签归属也要观察金额明确留空的前行，先给原格空白判据。
+                self._certify_native_blank_cells(page, parsed.cells, method_name)
+                parsed = repair_native_dimensions(page, parsed, reference=reference)
+                parsed = repair_native_code_baselines(page, parsed)
+                candidates.append(parsed)
+            return candidates
+
+        snap6_needed = False
         for method_name, settings in DEFAULT_TABLE_SETTINGS:
             try:
-                candidates = []
-                for table_index, table in enumerate(page.find_tables(table_settings=settings)):
-                    rows = table.extract() or []
-                    footer = (continuation is not None and len(rows) == 1 and len(rows[0]) >= 3
-                              and normalize_text(str(rows[0][0] or '')) in {'合计', '总计'}
-                              and all(self._parse_numeric(str(value or '')) is not None for value in rows[0][1:]))
-                    if not self._is_meaningful_table(rows, native_grid=method_name in {"lines", "lines_strict"}) and not footer:
-                        continue
-                    parsed = self._build_parsed_table(
-                        page=page,
-                        page_number=page_number,
-                        table_index=table_index,
-                        table=table,
-                        rows=rows,
-                        extraction_method=method_name,
-                    )
-                    if method_name == "lines":
-                        original = deepcopy(parsed)
-                        self._certify_native_blank_cells(page, original.cells, method_name)
-                        self._source_grid_fragments.append(original)
-                    if footer:
-                        parsed = self._align_native_continuation_footer(continuation, parsed)
-                    parsed = self._recover_open_top_grid_row(page, parsed, reference=continuation)
-                    parsed = self._recover_open_bottom_grid_row(page, parsed)
-                    from src.services.native_structure_recovery import repair_native_structure
-                    reference = (continuation if continuation is not None
-                                 and page_number == self._last_page_number(continuation) + 1
-                                 and not self._unit_hints_conflict(continuation, parsed)
-                                 and self._native_continuation_columns_match(continuation, parsed) else None)
-                    parsed = repair_native_structure(page, parsed, reference=reference)
-                    from src.services.native_dimension_recovery import repair_native_dimensions, repair_native_code_baselines
-                    # 标签归属也要观察金额明确留空的前行，先给原格空白判据。
-                    self._certify_native_blank_cells(page, parsed.cells, method_name)
-                    parsed = repair_native_dimensions(page, parsed, reference=reference)
-                    parsed = repair_native_code_baselines(page, parsed)
-                    candidates.append(parsed)
+                candidates = extract(method_name, settings, record_source_grid=(method_name == "lines"))
             except Exception:
                 logger.debug(
                     "Table extraction failed on page %s with method %s",
@@ -428,6 +456,25 @@ class PDFParser:
 
             self._cell_candidate_tables.extend(deepcopy(candidates))
             best_candidates = self._merge_candidates(best_candidates, candidates)
+            if method_name == "lines":
+                clusters = self._vertical_line_clusters(page)
+                snap6_needed = any(
+                    max((len(row) for row in table.rows), default=0) >= len(clusters) + 1
+                    for table in candidates
+                )
+        if snap6_needed:
+            try:
+                candidates = extract("lines", SNAP6_LINES_SETTINGS, geometry_profile="snap6")
+            except Exception:
+                logger.debug(
+                    "Table extraction failed on page %s with method lines (snap6)",
+                    page_number,
+                    exc_info=True,
+                )
+                candidates = []
+            if candidates:
+                self._cell_candidate_tables.extend(deepcopy(candidates))
+                best_candidates = self._merge_candidates(best_candidates, candidates)
 
         from src.services.source_reconstruction import resolve_empty_table_shadows
         best_candidates, decisions = resolve_empty_table_shadows(best_candidates, page.extract_text() or "")
@@ -985,6 +1032,7 @@ class PDFParser:
         table,
         rows: List[List[str]],
         extraction_method: str,
+        geometry_profile: Optional[str] = None,
     ) -> ParsedTable:
         title = self._extract_title(page, table.bbox, rows)
         header_row_count = self._detect_header_row_count(
@@ -1038,6 +1086,7 @@ class PDFParser:
             fragment_uid=_stable_fragment_uid(
                 "t", page_number, table_index, final_code, title, rows=rows
             ),
+            geometry_profile=geometry_profile,
         )
         from src.services.fiscal_column_identity import mixed_expenditure_header_cells
 
@@ -2161,6 +2210,8 @@ class PDFParser:
                 *(current.source_fragment_uids or [current.fragment_uid]),
             }
         )
+        profiles = {p for p in (previous.geometry_profile, current.geometry_profile) if p}
+        geometry_profile = next(iter(profiles)) if len(profiles) == 1 else ("mixed" if profiles else None)
         return ParsedTable(
             table_code=previous.table_code,
             title=previous.title if self._score_title_line(previous.title, 0) >= self._score_title_line(current.title, 0) else current.title,
@@ -2177,6 +2228,7 @@ class PDFParser:
             # RC-10：合并视图 UID 由成员 UID 集合派生——成员 UID 已稳定，
             # 合并 UID 不再随解析次数漂移。
             fragment_uid=_stable_fragment_uid("merged", *member_uids),
+            geometry_profile=geometry_profile,
         )
 
     def _repeated_header_rows(self, previous: ParsedTable, current: ParsedTable) -> int:
@@ -2210,6 +2262,25 @@ class PDFParser:
             if any(cell.col_idx in monetary_cols and not cell.is_header and cell.numeric_value is not None for cell in table.cells):
                 semantic_bonus = .5 + (.1 if table.extraction_method in {'lines', 'lines_strict'} else 0)
         return table.confidence + semantic_bonus + min(area / 1_000_000, 0.2)
+
+    def _structure_priority(self, table: ParsedTable) -> float:
+        """同优先级候选的结构裁决：少空列/空行、少重复金额者优先。"""
+        rows = table.rows or []
+        width = max((len(row) for row in rows), default=0)
+        total = sum(len(row) for row in rows)
+        if not total or not width:
+            return 0.0
+        non_empty = sum(1 for row in rows for value in row if str(value or "").strip())
+        empty_columns = sum(
+            1 for col in range(width)
+            if not any(col < len(row) and str(row[col] or "").strip() for row in rows)
+        )
+        empty_rows = sum(1 for row in rows if not any(str(value or "").strip() for value in row))
+        duplicate_amounts = 0
+        for row in rows:
+            amounts = [str(value or "").strip() for value in row if self._looks_numeric(str(value or ""))]
+            duplicate_amounts += len(amounts) - len(set(amounts))
+        return (non_empty / total) - 0.02 * empty_columns - 0.02 * empty_rows - 0.02 * duplicate_amounts
 
     def _containment_ratio(
         self,
