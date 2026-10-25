@@ -500,6 +500,10 @@ async def _handle_upload(
         )
         if duplicate is not None:
             runtime.cleanup_uploaded_job(str(uploaded.get("job_id") or ""))
+            try:
+                runtime.require_org_storage().unlink_job(str(uploaded.get("job_id") or ""))
+            except Exception:
+                logger.exception("Failed to unlink rejected auto-bound upload from organization")
             duplicate_filename = str(duplicate.get("filename") or "历史文件")
             duplicate_job_id = str(duplicate.get("job_id") or "")
             raise HTTPException(

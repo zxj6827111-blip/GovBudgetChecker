@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 from pathlib import Path
 
@@ -138,6 +139,8 @@ def test_auto_bound_duplicate_upload_is_rejected(tmp_path: Path, monkeypatch):
     second = client.post("/api/documents/upload", **request)
     assert second.status_code == 409
     assert "重复上传" in str(second.json()["detail"])
+    links = json.loads((tmp_path / "data" / "job_org_links.json").read_text(encoding="utf-8"))
+    assert len(links["links"]) == 1
 
 
 def test_manual_association_overrides_auto_match(tmp_path: Path, monkeypatch):
