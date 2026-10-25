@@ -207,6 +207,27 @@ def check_fiscal_grant_arithmetic(rule, doc):
     return finish(rule, issues, unresolved)
 
 
+def _target_disclosed_empty(doc, code):
+    """对应基金表是否由原文明确披露为无数据，而不是仅凭没有金额事实推断。"""
+    artifact = getattr(doc, "parse_artifact", None)
+    if artifact is None:
+        return False
+    from src.engine.fact_context import _fragment_for_instance
+    from src.services.fiscal_empty_disclosure import disclosed_empty_fiscal_table
+
+    instances = []
+    for instance in getattr(artifact, "logical_tables", []) or []:
+        if instance.table_code != code:
+            continue
+        fragment = _fragment_for_instance(artifact, instance)
+        if fragment is not None and fragment.extraction_method != "page_text_fallback":
+            instances.append((instance, fragment))
+    if len(instances) != 1:
+        return False
+    instance, fragment = instances[0]
+    return bool(disclosed_empty_fiscal_table(doc, instance, fragment))
+
+
 def check_fund_zero_disclosures(rule, doc):
     """只用总表已确认资金列判断对应表是否有数，禁止按倒数列位置或科目编码加总。"""
     from .fact_table_projection import fact_bound_table_rows, ProjectionUnavailable
@@ -235,10 +256,11 @@ def check_fund_zero_disclosures(rule, doc):
             continue
         target, error = table_facts(doc, code)
         if error:
-            if target_rows and "没有可用金额事实" in error:
-                # 原文已明示本表无数据，且总表资金列明确为零：空表成立。
+            if (target_rows and "没有可用金额事实" in error
+                    and _target_disclosed_empty(doc, code)):
+                # 原文明确本表无数据，且总表资金列明确为零：空表成立。
                 receipt(rule, doc, key, terms, status='pass',
-                        formula='总表资金列明确为零，对应表无可确认金额事实（空表）')
+                        formula='原文明确本表无数据，总表资金列明确为零')
                 continue
             unresolved.append(error)
             continue

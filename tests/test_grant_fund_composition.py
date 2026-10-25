@@ -86,11 +86,28 @@ def test_unmapped_fund_column_never_means_zero(monkeypatch):
         check_fund_zero_disclosures(R33122_EmptyTableCheck(), doc)
 
 
-def test_empty_fund_table_without_facts_passes_when_source_columns_are_zero(monkeypatch):
-    from src.engine import fact_table_projection
+def test_empty_fund_table_without_facts_passes_only_with_disclosure(monkeypatch):
+    from src.engine import fact_table_projection, native_table_arithmetic
 
     monkeypatch.setattr(
         fact_table_projection, 'fact_bound_table_rows', lambda *args, **kwargs: [['header']]
     )
+    monkeypatch.setattr(
+        native_table_arithmetic, '_target_disclosed_empty', lambda *args, **kwargs: True
+    )
     doc = document()
     assert check_fund_zero_disclosures(R33122_EmptyTableCheck(), doc) == []
+
+
+def test_empty_fund_table_without_facts_and_without_disclosure_is_deferred(monkeypatch):
+    from src.engine import fact_table_projection, native_table_arithmetic
+
+    monkeypatch.setattr(
+        fact_table_projection, 'fact_bound_table_rows', lambda *args, **kwargs: [['header']]
+    )
+    monkeypatch.setattr(
+        native_table_arithmetic, '_target_disclosed_empty', lambda *args, **kwargs: False
+    )
+    doc = document()
+    with pytest.raises(RuleDeferred, match='没有可用金额事实'):
+        check_fund_zero_disclosures(R33122_EmptyTableCheck(), doc)
