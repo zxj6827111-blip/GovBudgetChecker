@@ -242,6 +242,16 @@ class FiscalFactMaterializer:
                 bound_labels = [cell for cell in ordered if int(cell["col_idx"]) in local_labels] if local_labels else label_cells
                 classification = self._extract_classification(bound_labels)
                 if classification is None:
+                    # 合计行常把“合计/总计”写在编码列、名称列留空；只在标签明确时回退。
+                    total_labels = [
+                        cell for cell in ordered
+                        if int(cell["col_idx"]) < first_measure_col
+                        and str(cell.get("raw_text") or "").strip() in {"合计", "总计"}
+                    ]
+                    classification = self._extract_classification(total_labels)
+                    if classification is not None:
+                        bound_labels = total_labels
+                if classification is None:
                     if table_code == "FIN_07_three_public" and first_measure_col == 0:
                         classification = {"classification_code": "total", "classification_name": "合计"}
                     else:

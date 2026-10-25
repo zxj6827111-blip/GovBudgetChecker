@@ -358,6 +358,25 @@ def test_bilateral_blank_with_income_label_is_still_unknown():
         fact_bound_table_rows(doc, "财政拨款收入支出决算总表", strict_unknown_values=True)
 
 
+def test_total_label_in_code_column_still_materializes_total_facts():
+    table = grid([
+        ["项目", "科目名称", "合计", "财政拨款收入", "上级补助收入", "事业收入", "经营收入", "附属单位上缴收入", "其他收入"],
+        ["合计", "", "27504.19", "26618.75", "0.00", "870.63", "0.00", "0.00", "14.80"],
+        ["206", "科学技术支出", "6631.92", "5750.70", "0.00", "868.73", "0.00", "0.00", "12.49"],
+    ], [0, 30, 60, 90, 120, 150, 180, 210, 240, 270],
+        uid="fin02-total-label", page=1, code="FIN_02_income", headers=1, confidence=.99, unit="万元")
+    doc = context_for([table], [table])
+    facts = [
+        fact for fact in (doc.fact_context.facts if doc.fact_context else [])
+        if fact.table_code == "FIN_02_income"
+        and fact.row_order == 1
+        and fact.indicator == "business_income"
+    ]
+    assert len(facts) == 1
+    assert facts[0].subject_code == "total"
+    assert facts[0].normalized_value == Decimal("870.63")
+
+
 def test_target_disclosed_empty_requires_original_disclosure():
     from src.engine.native_table_arithmetic import _target_disclosed_empty
 
