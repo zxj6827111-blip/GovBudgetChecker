@@ -489,6 +489,23 @@ async def _handle_upload(
     uploaded["organization_match_confidence"] = (
         org_binding.get("organization_match_confidence") if org_binding else None
     )
+    # 自动归属在首次查重之后才发生：用最终绑定的组织再查一次，不能漏掉自动路径的重复。
+    if not selected_org and uploaded.get("organization_id"):
+        duplicate = runtime.find_duplicate_upload(
+            checksum=str(uploaded.get("checksum") or ""),
+            organization_id=str(uploaded.get("organization_id") or ""),
+            fiscal_year=fiscal_year,
+            doc_type=doc_type,
+            exclude_job_id=str(uploaded.get("job_id") or ""),
+        )
+        if duplicate is not None:
+            runtime.cleanup_uploaded_job(str(uploaded.get("job_id") or ""))
+            duplicate_filename = str(duplicate.get("filename") or "历史文件")
+            duplicate_job_id = str(duplicate.get("job_id") or "")
+            raise HTTPException(
+                status_code=409,
+                detail=f"检测到重复上传：{duplicate_filename}（任务 {duplicate_job_id}）",
+            )
     uploaded["fiscal_year"] = fiscal_year
     uploaded["doc_type"] = doc_type
     uploaded["report_year"] = runtime.parse_report_year(fiscal_year)

@@ -112,6 +112,34 @@ def test_upload_auto_matches_organization_from_filename(tmp_path: Path, monkeypa
     assert link.match_type == "auto"
 
 
+def test_auto_bound_duplicate_upload_is_rejected(tmp_path: Path, monkeypatch):
+    _patch_runtime_state(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    org_id = _create_org("上海市普陀区民政局")["id"]
+    monkeypatch.setattr(
+        runtime, "extract_pdf_page_texts",
+        lambda path, max_pages=8: ["上海市普陀区民政局\n2025年度部门预算"],
+    )
+    request = dict(
+        headers=_headers(),
+        files={
+            "file": (
+                "上海市普陀区民政局2025年预算公开.pdf",
+                io.BytesIO(_pdf_bytes()),
+                "application/pdf",
+            )
+        },
+    )
+    first = client.post("/api/documents/upload", **request)
+    assert first.status_code == 200, first.text
+    assert first.json()["organization_id"] == org_id
+
+    second = client.post("/api/documents/upload", **request)
+    assert second.status_code == 409
+    assert "重复上传" in str(second.json()["detail"])
+
+
 def test_manual_association_overrides_auto_match(tmp_path: Path, monkeypatch):
     _patch_runtime_state(tmp_path, monkeypatch)
     client = TestClient(app)
