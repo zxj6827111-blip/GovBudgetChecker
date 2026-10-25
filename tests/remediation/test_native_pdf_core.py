@@ -356,3 +356,20 @@ def test_bilateral_blank_with_income_label_is_still_unknown():
     doc = context_for([table], [table])
     with pytest.raises(ProjectionUnavailable):
         fact_bound_table_rows(doc, "财政拨款收入支出决算总表", strict_unknown_values=True)
+
+
+def test_target_disclosed_empty_requires_original_disclosure():
+    from src.engine.native_table_arithmetic import _target_disclosed_empty
+
+    table = grid([
+        ["项目", "年初结转和结余", "本年收入", "本年支出", "年末结转和结余"],
+    ], [0, 30, 60, 90, 120, 150], uid="empty-gov", page=1,
+        code="FIN_08_gov_fund", headers=1, confidence=.99, unit="万元")
+    doc = context_for([table], [table])
+    doc.page_texts = [
+        "政府性基金预算财政拨款收入支出决算表\n"
+        "说明：本单位本年度没有政府性基金预算财政拨款收入和支出，故本表无数据。"
+    ]
+    assert _target_disclosed_empty(doc, "FIN_08_gov_fund") is True
+    doc.page_texts = ["政府性基金预算财政拨款收入支出决算表"]
+    assert _target_disclosed_empty(doc, "FIN_08_gov_fund") is False
