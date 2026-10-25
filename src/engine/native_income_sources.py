@@ -76,7 +76,11 @@ def check_income_sources(rule, doc):
                     formula='income = sum(sources)', reason='；'.join(errors))
             parent = next((term for term in terms if term.indicator == 'total_actual'), None)
             known = [term for term in terms if term.indicator != 'total_actual']
-            if parent is not None and known and parent.normalized_value != sum(term.normalized_value for term in known):
+            from .amount_math import classify_amount_diff
+            known_mismatch = parent is not None and known and classify_amount_diff(
+                parent.normalized_value, sum(term.normalized_value for term in known), len(known)
+            )[0] == 'mismatch'
+            if known_mismatch:
                 from .native_table_arithmetic import journal
                 from .native_three_public_ratios import operand_ref
                 ids, evidence_ids = journal(rule, doc, terms)

@@ -10,11 +10,11 @@ from src.engine.rules_v33 import R33240_Table2_IncomeAdvancedCheck
 from src.schemas.parse_artifact import LogicalTableInstance, ParseArtifact, ParsedCell, ParsedTable
 
 
-def document(*, unknown=False):
+def document(*, unknown=False, known_income="50.00"):
     rows = [
         ["功能分类科目编码", "科目名称", "本年收入合计", "财政拨款收入", "上级补助收入", "事业收入", "经营收入", "附属单位上缴收入", "其他收入"],
         ["合计", "", "300.00", "200.00", "0.00", "90.00", "0.00", "0.00", "0.00"],
-        ["205", "教育支出", "200.00", "150.00", "0.00", "50.00", "0.00", "0.00", "0.00"],
+        ["205", "教育支出", "200.00", "150.00", "0.00", known_income, "0.00", "0.00", "0.00"],
         ["20502", "普通教育", "200.00", "150.00", "0.00", "50.00", "0.00", "0.00", "0.00"],
         ["208", "社会保障和就业支出", "100.00", "50.00", "0.00", "40.00", "0.00", "0.00", "0.00"],
         ["20805", "行政事业单位养老支出", "100.00", "50.00", "0.00", "40.00", "0.00", "0.00", "0.00"],
@@ -62,3 +62,14 @@ def test_unknown_source_cell_blocks_only_dependent_relations(monkeypatch):
     receipts = {row["sub_check_id"]: row for row in doc.fact_receipts}
     assert receipts["FIN_02_income:total:fiscal_allocation"]["status"] == "insufficient_data"
     assert receipts["FIN_02_income:total:business_income"]["status"] == "pass"
+
+
+def test_rounding_sized_known_difference_does_not_create_unknown_cell_problem(monkeypatch):
+    monkeypatch.delenv("GOVBUDGET_EMPTY_VALUE_CONVENTIONS", raising=False)
+    doc = document(unknown=True, known_income="199.99")
+    with pytest.raises(RuleDeferred) as caught:
+        R33240_Table2_IncomeAdvancedCheck().apply(doc)
+    assert not any(issue.severity == 'manual_review' and issue.location.get('code') == '205'
+                   for issue in caught.value.partial_issues)
+    row = next(r for r in doc.fact_receipts if r['sub_check_id'] == 'FIN_02_income:205:income_sources')
+    assert row['status'] == 'insufficient_data'  # 空白仍未知，不能把降低误报等同于算术通过。
