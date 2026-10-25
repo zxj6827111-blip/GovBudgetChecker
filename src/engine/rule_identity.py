@@ -175,7 +175,13 @@ def rule_identity_requirements(document, rule_id):
     ):
         from .rule_outcome import RuleDeferred
 
-        raise RuleDeferred("org_scope_pending", "材料汇总口径待确认；本规则依赖该维度，未完成检查")
+        partial = []
+        if rule_id == "CMM-005":
+            from .common_rules import CMM005_ComparativeNarrativeLogic
+            # 同一条规则还负责纯文字模板残留；缺口径不能把已有原文问题一起压掉。
+            partial = CMM005_ComparativeNarrativeLogic().scope_independent_issues(document)
+        raise RuleDeferred("org_scope_pending", "材料汇总口径待确认；本规则依赖该维度，未完成检查",
+                           partial_issues=partial)
     token = ACTIVE_IDENTITY.set(required)
     try:
         enforce_legacy_table_admission(document, rule_id)

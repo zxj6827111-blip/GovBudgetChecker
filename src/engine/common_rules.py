@@ -1776,6 +1776,32 @@ class CMM005_ComparativeNarrativeLogic(Rule):
     code, severity = "CMM-005", "warn"
     desc = "同比叙述逻辑异常检查（预/决算通用）"
 
+    def _template_issues(self, page_idx, page_text):
+        """纯原文模板残留不涉及跨年度金额，也不依赖材料汇总口径。"""
+        issues, seen_spans = [], set()
+        flat_text = _compact_text(page_text)
+        for pattern, message in _TEMPLATE_LEFTOVER_PATTERNS:
+            for match in pattern.finditer(page_text):
+                key = (match.start(), match.end(), message)
+                if key in seen_spans:
+                    continue
+                seen_spans.add(key)
+                issues.append(self._issue(message, {"page": page_idx, "pos": match.start()}, "warn",
+                                          evidence_text=_sentence_around(page_text, match.start(), match.end())))
+        for match in _ABNORMAL_DELTA_WORDING_PATTERN.finditer(flat_text):
+            key = (match.start(), match.end(), "wording")
+            if key in seen_spans:
+                continue
+            seen_spans.add(key)
+            issues.append(self._issue(f"疑似模板残留：出现“{match.group(0)}”",
+                                      {"page": page_idx, "pos": match.start()}, "warn",
+                                      evidence_text=_snippet(flat_text, match.start(), match.end())))
+        return issues, seen_spans
+
+    def scope_independent_issues(self, doc):
+        return [issue for page, text in enumerate(_page_texts(doc), 1)
+                for issue in self._template_issues(page, text)[0]]
+
     def apply(self, doc: Document) -> List[Issue]:
         issues: List[Issue] = []
         unresolved_reasons: List[str] = []
@@ -1785,37 +1811,8 @@ class CMM005_ComparativeNarrativeLogic(Rule):
             if not flat_text:
                 continue
 
-            seen_spans: set[Tuple[int, int, str]] = set()
-
-            for pattern, message in _TEMPLATE_LEFTOVER_PATTERNS:
-                for match in pattern.finditer(page_text):
-                    span_key = (match.start(), match.end(), message)
-                    if span_key in seen_spans:
-                        continue
-                    seen_spans.add(span_key)
-                    issues.append(
-                        self._issue(
-                            message,
-                            {"page": page_idx, "pos": match.start()},
-                            "warn",
-                            evidence_text=_sentence_around(page_text, match.start(), match.end()),
-                        )
-                    )
-
-            for match in _ABNORMAL_DELTA_WORDING_PATTERN.finditer(flat_text):
-                span_key = (match.start(), match.end(), "wording")
-                if span_key in seen_spans:
-                    continue
-                seen_spans.add(span_key)
-                phrase = match.group(0)
-                issues.append(
-                    self._issue(
-                        f"疑似模板残留：出现“{phrase}”",
-                        {"page": page_idx, "pos": match.start()},
-                        "warn",
-                        evidence_text=_snippet(flat_text, match.start(), match.end()),
-                    )
-                )
+            template_issues, seen_spans = self._template_issues(page_idx, page_text)
+            issues.extend(template_issues)
 
             for match in _ZERO_INCREASE_PATTERN.finditer(flat_text):
                 amount = _to_float(match.group(2))
