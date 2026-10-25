@@ -43,7 +43,7 @@ const unknownTable = {
   measure_options: [{measure: "total_actual", label: "合计"}],
 };
 
-async function correctionMocks(page: Page, posted: unknown[]) {
+async function correctionMocks(page: Page, posted: unknown[], pageGeometry: Record<string, number[]> | null = null) {
   await page.context().addCookies([{name: "gbc_session", value: "e2e-session", url: "http://127.0.0.1:3000", sameSite: "Lax"}]);
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -70,6 +70,9 @@ async function correctionMocks(page: Page, posted: unknown[]) {
     }
     if (path === "/api/auth/me") return json({user: {username: "corrections-reviewer", is_admin: true}});
     if (path === "/api/workflow") return json({issues: {}});
+    if (path === `/api/files/${JOB_ID}/page-geometry`) {
+      return json(pageGeometry ? {native_to_preview: pageGeometry} : {native_to_preview: {}});
+    }
     if (path.startsWith("/api/files/")) return route.fulfill({
       status: 200, contentType: "image/svg+xml",
       body: `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="1344"><rect width="100%" height="100%" fill="white"/></svg>`,
@@ -179,4 +182,40 @@ test("读取校正：确认表种、框选原页、补录新增行与整表数�
     expect(change.location.bbox[2] - change.location.bbox[0]).toBeGreaterThan(3);
     expect(change.location.bbox[3] - change.location.bbox[1]).toBeGreaterThan(3);
   }
+});
+
+test("读取校正：框选坐标按 MediaBox 平移矩阵换回解析坐标", async ({page}) => {
+  const posted: unknown[] = [];
+  await page.setViewportSize({width: 1440, height: 900});
+  // 预览图相对解析坐标平移 (20, 30)：框选结果必须减回该偏移。
+  await correctionMocks(page, posted, {"2": [1, 0, 0, 1, 20, 30]});
+  await page.goto(`/review?job=${JOB_ID}`);
+  await page.getByTestId("gbc-review-tab-corrections").click();
+
+  const card = page.getByTestId("gbc-correction-table-unknown-table");
+  await card.getByRole("button", {name: "新增行"}).click();
+  await card.getByRole("button", {name: "框选原页区域"}).click();
+  const layer = page.getByTestId("gbc-review-region-pick-layer");
+  await expect(layer).toBeVisible();
+  const box = await layer.boundingBox();
+  expect(box).not.toBeNull();
+  const ratios = [0.2, 0.55, 0.65, 0.68];
+  await page.mouse.move(box!.x + box!.width * ratios[0], box!.y + box!.height * ratios[1]);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + box!.width * ratios[2], box!.y + box!.height * ratios[3], {steps: 6});
+  await page.mouse.up();
+  await card.getByLabel("按原页填写数据行").fill("221 | 住房保障支出 | 200");
+  await card.getByRole("button", {name: "加入待提交"}).click();
+  await page.getByLabel("校正说明").fill("框选坐标换算反例");
+  await page.getByRole("button", {name: /提交校正并重新分析/}).click();
+
+  const [body] = posted as [{changes: {location: {physical_page: number; bbox: number[]}}[]}];
+  const {bbox} = body.changes[0].location;
+  // 预览像素 960×1344、渲染倍率 1.6 → 解析坐标；再减去矩阵平移 (20, 30)。
+  const expected = [
+    ratios[0] * 960 / 1.6 - 20, ratios[1] * 1344 / 1.6 - 30,
+    ratios[2] * 960 / 1.6 - 20, ratios[3] * 1344 / 1.6 - 30,
+  ];
+  expect(body.changes[0].location.physical_page).toBe(2);
+  bbox.forEach((value, index) => expect(Math.abs(value - expected[index])).toBeLessThan(2));
 });
