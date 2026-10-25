@@ -123,3 +123,35 @@ def test_explicit_benji_body_does_not_conflict_with_seed_department_in_combined_
     result = decide(pages, [org(), org("甲市财政局（本级）", "unit", "u", "d")])
     assert result["organization_id"] == "u"
     assert result["match_basis"] == "combined_source_scope"
+
+
+def test_exact_cover_with_missing_character_headings_binds_and_records_text_issue():
+    pages = [
+        "甲市财政局（本级）\n2025年度决算",
+        "目录\n第一部分 甲市财政（本级）概况",
+        "第一部分 甲市财政（本级）概况",
+    ]
+    directory = [org(), org("甲市财政局（本级）", "unit", "u", "d")]
+    result = decide(pages, directory)
+    assert result["decision"] == "bound"
+    assert result["organization_id"] == "u"
+    assert result["original_text_inconsistencies"]
+    assert all(
+        item["reason"] == "heading_missing_characters"
+        for item in result["original_text_inconsistencies"]
+    )
+
+
+def test_heading_naming_another_directory_org_still_blocks_binding():
+    pages = [
+        "甲市财政局（本级）\n2025年度决算",
+        "第一部分 甲市审计局（本级）概况",
+    ]
+    directory = [
+        org(),
+        org("甲市财政局（本级）", "unit", "u", "d"),
+        org("甲市审计局（本级）", "unit", "v", "x"),
+    ]
+    result = decide(pages, directory)
+    assert result["decision"] == "needs_confirmation"
+    assert code(result) == "evidence_conflict"

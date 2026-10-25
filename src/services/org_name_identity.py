@@ -89,6 +89,11 @@ class OrgNameIndex:
             return NameComparison(True, "unique_directory_alias_or_region")
         return NameComparison(False, "different_or_ambiguous")
 
+    def has_name(self, value: Any) -> bool:
+        """目录中是否存在与该值精确等价的条目（含已登记别名）。"""
+        name = identity_name(value)
+        return bool(name and self.owners.get(_region_key(name)))
+
 
 def compare_org_names(left: Any, right: Any, directory: Iterable[Any] = ()) -> NameComparison:
     return OrgNameIndex(directory).compare(left, right)

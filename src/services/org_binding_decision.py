@@ -17,6 +17,16 @@ from src.services.org_name_identity import (
 )
 
 
+def _is_short_deletion_variant(value: str, target: str) -> bool:
+    """值是否为目标的漏字变体：只允许删字，最多 2 个，不做替换或补字。"""
+    if not value or not target or len(value) < 4 or len(value) > len(target):
+        return False
+    if len(target) - len(value) > 2:
+        return False
+    target_iter = iter(target)
+    return all(char in target_iter for char in value)
+
+
 def source_scope_evidence(page_texts: Sequence[str]) -> tuple[str | None, list[dict], bool]:
     """目录/表注不能定论；明确封面与实际单位构成互相矛盾时不择一。"""
     cover = detect_cover_facts(page_texts)
@@ -102,6 +112,7 @@ def decide_auto_binding(
         ).encode()).hexdigest(),
         "directory_entries_checked": len(directory_snapshot),
         "name_comparisons": [],
+        "original_text_inconsistencies": [],
     }
 
     def brief(org):
@@ -161,6 +172,11 @@ def decide_auto_binding(
     # 每一项主体证据都须检查，不能靠另一项的高分覆盖明确矛盾。
     def conflict(org):
         target = identity_name(organization_name(org))
+        exact_cover = any(
+            item["source"] in {"cover", "cover_label"}
+            and identity_index.compare(item["text"], organization_name(org)).equivalent
+            for item in evidence
+        )
         for item in evidence:
             value = identity_name(item["text"])
             if identity_index.compare(value, target).equivalent:
@@ -170,6 +186,24 @@ def decide_auto_binding(
                 # 此处仅识别组合路径的部门种子；后面仍须核验本级单位及父子关系，绝不据此绑定部门。
                 continue
             if value and value in target:  # 抽取截断只作弱证据。
+                continue
+            if (
+                exact_cover
+                and item["source"] in {"toc", "part_heading"}
+                and not identity_index.has_name(value)
+                and _is_short_deletion_variant(value, target)
+            ):
+                # 目录/部分标题的漏字只作原件文字问题记录，不用它改写或补齐主体名。
+                entry = {
+                    "source": item["source"],
+                    "page": item["page"],
+                    "text": item["text"],
+                    "candidate_id": _field(org, "id"),
+                    "candidate_name": organization_name(org),
+                    "reason": "heading_missing_characters",
+                }
+                if entry not in audit["original_text_inconsistencies"]:
+                    audit["original_text_inconsistencies"].append(entry)
                 continue
             return True
         return False
