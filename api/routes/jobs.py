@@ -56,6 +56,8 @@ async def published_job_view(job_id,payload,user):
     except Exception:
         logger.warning("current human decisions projection skipped", exc_info=True)
         view.setdefault('human_decisions',[])
+    # 展示层按关联节点区分部门/单位；这不补齐原件尚未明确的材料汇总口径。
+    view['organization_level'] = runtime.resolve_organization_level(view.get('organization_id'))
     return view
 
 

@@ -481,6 +481,11 @@ export default function TaskDetail() {
                 </select>}
               </div>
               {recognitionLabel && <div className="mt-0.5 text-xs text-slate-500" data-testid="recognition-state">{recognitionLabel}</div>}
+              {task.reviewReasons?.some((reason) => reason.includes("汇总口径待确认")) && (
+                <div className="mt-0.5 text-xs text-amber-700" data-testid="task-scope-pending">
+                  汇总口径待确认 · 检查范围见结果与未完成项
+                </div>
+              )}
             </div>
           </div>
         </div>

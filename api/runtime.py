@@ -992,6 +992,7 @@ def extract_cover_metadata(
     filename: str = "",
     preferred_year: Any = None,
     doc_type: Optional[str] = None,
+    directory=(),
 ) -> Dict[str, Any]:
     """Extract lightweight cover metadata from the first page.
 
@@ -1002,7 +1003,7 @@ def extract_cover_metadata(
     都应消费这一个画像，不得各自重新猜文种。
     """
     normalized_pages = [str(text or "").strip() for text in (page_texts or [])]
-    facts = detect_cover_facts(normalized_pages)
+    facts = detect_cover_facts(normalized_pages, directory)
 
     # 年度沿用原有的加权推断（文件名权重最高、封面关键词加分、只看前 6 页），
     # 把它作为显式值交给画像，避免"统一画像"顺手把年度识别精度降级。
@@ -1030,7 +1031,7 @@ def extract_cover_metadata(
         "cover_org_label": facts["cover_org_label"],
         "scope_hint": profile.level if profile.level != "unknown" else "",
         "report_kind": report_kind,
-        "report_year": report_year,
+        "report_year": profile.year,
         "doc_type": normalize_doc_type(doc_type, filename, report_kind=report_kind),
         "profile": profile.to_dict(),
         "profile_status": profile.profile_status,
@@ -3589,7 +3590,7 @@ def rematch_job_organizations(body: Optional[Dict[str, Any]] = None) -> Dict[str
     scoped_department_name = str(request_body.get("department_name") or "").strip()
 
     storage = require_org_storage()
-    matcher = get_org_matcher()
+    _matcher = get_org_matcher()
 
     matches: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
@@ -3597,6 +3598,7 @@ def rematch_job_organizations(body: Optional[Dict[str, Any]] = None) -> Dict[str
     scanned_count = 0
     fast_path_hits = 0
     pdf_text_fallback_hits = 0
+    binding_decisions: Dict[str, Any] = {}
 
     def _serialize_org_brief(
         org_id: str,
@@ -3651,8 +3653,13 @@ def rematch_job_organizations(body: Optional[Dict[str, Any]] = None) -> Dict[str
             pdf_text_fallback_hits += 1
         else:
             fast_path_hits += 1
-        candidate, confidence = matcher.match(pdf_path.name, first_page_text)
-        return candidate, round(float(confidence), 4)
+        from api.routes.upload import _inspect_document_preflight
+
+        preflight = _inspect_document_preflight(filename=pdf_path.name, pdf_path=pdf_path)
+        binding_decisions[pdf_path.parent.name] = preflight["binding_decision"]
+        current = preflight.get("current") or {}
+        candidate = storage.get_by_id(current.get("organization_id")) if current else None
+        return candidate, float(current.get("confidence") or 0.0)
 
     for job_dir in sorted(iter_job_dirs(), key=get_job_quick_timestamp, reverse=True):
         if scoped_job_ids is not None and job_dir.name not in scoped_job_ids:
@@ -3856,6 +3863,7 @@ def rematch_job_organizations(body: Optional[Dict[str, Any]] = None) -> Dict[str
         "failed_count": len(failed),
         "fast_path_hits": fast_path_hits,
         "pdf_text_fallback_hits": pdf_text_fallback_hits,
+        "binding_decisions": binding_decisions,
         "matches": matches,
         "skipped": skipped,
         "failed": failed,
@@ -3886,7 +3894,7 @@ def repair_missing_job_organization_links(
     scoped_department_name = str(request_body.get("department_name") or "").strip()
 
     storage = require_org_storage()
-    matcher = get_org_matcher()
+    _matcher = get_org_matcher()
 
     repairs: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
@@ -3896,6 +3904,7 @@ def repair_missing_job_organization_links(
     matched_from_pdf_count = 0
     fast_path_hits = 0
     pdf_text_fallback_hits = 0
+    binding_decisions: Dict[str, Any] = {}
 
     def _serialize_org_brief(
         org_id: str,
@@ -3940,8 +3949,13 @@ def repair_missing_job_organization_links(
             pdf_text_fallback_hits += 1
         else:
             fast_path_hits += 1
-        candidate, confidence = matcher.match(pdf_path.name, first_page_text)
-        return candidate, round(float(confidence), 4)
+        from api.routes.upload import _inspect_document_preflight
+
+        preflight = _inspect_document_preflight(filename=pdf_path.name, pdf_path=pdf_path)
+        binding_decisions[pdf_path.parent.name] = preflight["binding_decision"]
+        current = preflight.get("current") or {}
+        candidate = storage.get_by_id(current.get("organization_id")) if current else None
+        return candidate, float(current.get("confidence") or 0.0)
 
     for job_dir in sorted(iter_job_dirs(), key=get_job_quick_timestamp, reverse=True):
         if scoped_job_ids is not None and job_dir.name not in scoped_job_ids:
@@ -4028,7 +4042,7 @@ def repair_missing_job_organization_links(
             action = ""
             detail = ""
 
-            if status_org is not None:
+            if status_org is not None and current_match_type == "manual":
                 target_org_id = status_org_id
                 action = "link_status_org"
                 detail = "restored link from job status metadata"
@@ -4164,6 +4178,7 @@ def repair_missing_job_organization_links(
         "failed_count": len(failed),
         "fast_path_hits": fast_path_hits,
         "pdf_text_fallback_hits": pdf_text_fallback_hits,
+        "binding_decisions": binding_decisions,
         "repairs": repairs,
         "skipped": skipped,
         "failed": failed,

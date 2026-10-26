@@ -177,6 +177,21 @@ def _detect_cover_report_kind(text: str) -> Optional[str]:
     return None
 
 
+def _title_shaped(line: str) -> bool:
+    compact = normalize_cover_line(line)
+    return bool(compact and len(compact) <= 100 and not re.search(r"《|》|通知|。|；|[，,]", compact)
+                and not re.match(r"(?:预算|决算)(?:主管部门|单位)[：:]", compact))
+
+
+def _cover_category(page_texts):
+    lines = str(page_texts[0] or "").splitlines()[:20] if page_texts else []
+    compact = normalize_cover_line("\n".join(line for line in lines if _title_shaped(line)))
+    mixed = bool(re.search(r"20\d{2}年度?(?:部门|单位)?决算.*20\d{2}年度?(?:部门|单位)?预算", compact))
+    ordinary = re.search(r"20\d{2}年度?(?:部门|单位)?(?:预算|决算)(?:公开|报告)?$", compact)
+    non_budget = bool(re.search(r"绩效自评|绩效评价报告|国有资产管理情况|转移支付.*绩效", compact)) and not ordinary
+    return mixed and not government_mixed_period_title(page_texts), non_budget, compact
+
+
 def _kind_from_doc_type(doc_type: Any) -> Optional[str]:
     text = str(doc_type or "").strip().lower()
     if not text:
@@ -445,6 +460,17 @@ def resolve_document_profile(
         source=year_source if parsed_year is not None else SOURCE_UNRESOLVED,
         evidence="显式指定" if year_source == SOURCE_EXPLICIT and parsed_year else "",
     )
+    mixed_material, non_budget_material, category_evidence = _cover_category(pages)
+    if mixed_material:
+        candidates = [{"value": kind, "year": int(year), "source": SOURCE_COVER_TITLE}
+                      for year, kind in re.findall(r"(20\d{2})年度?(?:部门|单位)?(预算|决算)", category_evidence)]
+        report_kind = ProfileField(value="unknown", source=SOURCE_COVER_TITLE,
+                                   evidence=category_evidence, rejected=candidates)
+        report_year = ProfileField(value=None, source=SOURCE_COVER_TITLE,
+                                   evidence=category_evidence, rejected=candidates)
+        conflicts.append({"field": "report_kind", "reason": "mixed_material_title", "candidates": candidates})
+    elif non_budget_material:
+        report_kind = ProfileField(value="non_budget", source=SOURCE_COVER_TITLE, evidence=category_evidence)
 
     table_org_name, table_org_pages = _table_header_org(pages)
     organization = _pick(
@@ -488,6 +514,9 @@ def resolve_document_profile(
     if mixed_government_title and resolved_level == 'government':
         profile_status = PROFILE_STATUS_PARTIAL
         unsupported_reason = 'government_mixed_period_report'
+    elif resolved_kind == "non_budget":
+        profile_status = PROFILE_STATUS_PARTIAL
+        unsupported_reason = "non_budget_material"
     elif resolved_kind == "unknown":
         profile_status = PROFILE_STATUS_UNRESOLVED
         unsupported_reason = "report_kind_unresolved"
@@ -579,7 +608,7 @@ def _open_brackets(text: str) -> int:
     return text.count("（") + text.count("(") - text.count("）") - text.count(")")
 
 
-def detect_cover_facts(page_texts: Sequence[str]) -> Dict[str, str]:
+def detect_cover_facts(page_texts: Sequence[str], directory: Sequence[Any] = ()) -> Dict[str, Any]:
     """从首页提取封面原始事实（标题、机构名、标签、层级提示）。
 
     只做事实抽取，不做文种/年度结论——结论一律由 ``resolve_document_profile``
@@ -591,14 +620,18 @@ def detect_cover_facts(page_texts: Sequence[str]) -> Dict[str, str]:
 
     cover_title = ""
     for index, line in enumerate(lines[:19]):
-        if re.search(r"20\d{2}年度?(?:部门|单位)?$", normalize_cover_line(line)) and index + 1 < len(lines):
+        if not _title_shaped(line):
+            continue
+        if re.search(r"20\d{2}(?:年度?)?(?:部门|单位)?$", normalize_cover_line(line)) and index + 1 < len(lines):
             following = normalize_cover_line(lines[index + 1])
-            if following in {"预算", "决算", "部门预算", "部门决算", "单位预算", "单位决算"}:
+            if re.fullmatch(r"(?:年度?)?(?:部门|单位)?(?:预算|决算)", following):
                 cover_title = line + "\n" + lines[index + 1]
                 break
     for line in lines[:20]:
         if cover_title:
             break
+        if not _title_shaped(line):
+            continue
         compact = normalize_cover_line(line)
         if not compact:
             continue
@@ -609,6 +642,8 @@ def detect_cover_facts(page_texts: Sequence[str]) -> Dict[str, str]:
             break
     if not cover_title:
         for line in lines[:20]:
+            if not _title_shaped(line):
+                continue
             compact = normalize_cover_line(line)
             if "\u9884\u7b97" in compact or "\u51b3\u7b97" in compact:
                 cover_title = line.strip()
@@ -668,16 +703,27 @@ def detect_cover_facts(page_texts: Sequence[str]) -> Dict[str, str]:
                   if re.search(r"20\d{2}", cover_title) else "")
         # 封面主体可能后接多行括号别名。先分离成对括号，再恢复相邻主名称；
         # 括号必须闭合，多个完整机构名并列时不擅自选择。
-        previous = lines[:title_index] if title_index is not None else []
+        previous = [line for line in (lines[:title_index] if title_index is not None else [])
+                    if not re.fullmatch(r"附件(?:\d+|[一二三四五六七八九十]+)?[：:]?", normalize_cover_line(line))]
         block = "".join(normalize_cover_line(line) for line in previous if not line.isdigit()) + prefix
         block = block.replace("（", "(").replace("）", ")")
         # “室”与“局/所”等同为机构后缀；仍只接受年度标题前的封面原文，
         # 并沿用下方的多主体/括号完整性检查，不能从正文或文件名补出发布者。
-        suffix = r"(?:委员会|办公厅|办公室|管理局|监督管理局|财政局|局|厅|部|医院|学校|中学|小学|校|幼儿园|红十字会|学院|大学|中心|人民法院|人民检察院|办事处|秘书处|街道|镇|乡|馆|队|会|委|宫|所|站|院|园|政府|室|监狱|团|社|场|台|基地)"
+        suffix = r"(?:委员会|办公厅|办公室|管理局|监督管理局|财政局|局|厅|部|医院|学校|中学|小学|校|幼儿园|红十字会|学院|大学|中心|人民法院|人民检察院|办事处|秘书处|街道|镇|乡|馆|队|会|委|宫|所|站|院|园|政府|室|监狱|团|社|场|台|基地|机关|管理处|营地)"
         def valid(name):
             return bool(re.fullmatch(r"[\u4e00-\u9fff]{3,100}" + suffix, name)) and not re.search(r"^关于|目录|附件|部分|项目支出|情况|说明|预算|决算", name)
-        balanced = block.count("(") == block.count(")") and "(" not in re.sub(r"\([^()]*\)", "", block)
-        clean = re.sub(r"\([^()]*\)", "", block) if balanced else ""
+        # 嵌套括号是正式名称的一部分；栈式验证仅取括号外文本作语法检查，输出仍保留全部原文。
+        depth, balanced, outside = 0, True, []
+        for char in block:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                balanced = balanced and depth >= 0
+            elif depth == 0:
+                outside.append(char)
+        balanced = balanced and depth == 0
+        clean = "".join(outside) if balanced else ""
         clean = re.sub(r"本级$", "", clean)
         adjacent = [normalize_cover_line(line) for line in previous if not line.isdigit()]
         if prefix:
@@ -701,14 +747,27 @@ def detect_cover_facts(page_texts: Sequence[str]) -> Dict[str, str]:
             r"(?:第一部分|第二部分|编制单位[:：]|发布单位[:：])" + re.escape(clean) + r"(?:概况|20\d{2})",
             normalize_cover_line(page),
         ) for page in pages[1:3])
-        # 一个主名称加括号别名，或本级口径括号，主体取括号外原文。
+        # 校验可以查看括号外机构后缀，输出必须保留原件括号及本级标记。
         if balanced and "(" in block and valid(clean) and len(set(standalone_names)) <= 1:
-            cover_org_name = clean
+            cover_org_name = block
         elif (len(set(standalone_names)) <= 1 or corroborated) and valid(clean):
             # 单独的地域/人民政府行只允许与紧接的机构名组成原文。
-            cover_org_name = clean
+            cover_org_name = block
         elif len(set(full_names)) == 1:
             cover_org_name = full_names[0]
+
+        if not cover_org_name and balanced and directory:
+            from src.services.org_name_identity import OrgNameIndex, organization_name
+
+            identity_index = OrgNameIndex(directory)
+            if any(identity_index.compare(block, organization_name(org)).equivalent for org in directory):
+                cover_org_name = block
+
+    if not scope_hint:
+        if re.search(r"本级|本部", cover_org_name):
+            scope_hint = "unit"
+        else:
+            scope_hint = _detect_cover_scope_hint(cover_title)
 
     return {
         "cover_title": cover_title,
@@ -716,3 +775,28 @@ def detect_cover_facts(page_texts: Sequence[str]) -> Dict[str, str]:
         "cover_org_label": cover_org_label,
         "cover_scope_hint": scope_hint or "",
     }
+
+
+def original_org_evidence(page_texts: Sequence[str], directory: Sequence[Any] = ()) -> List[Dict[str, Any]]:
+    """只保留可回到原页的主体证据；文件名不在本函数的输入中。"""
+    facts = detect_cover_facts(page_texts, directory)
+    evidence = []
+    if facts["cover_org_name"]:
+        evidence.append({"source": "cover_label" if facts["cover_org_label"] else "cover",
+                         "page": 1, "text": facts["cover_org_name"], "line": next(
+                             (i for i, line in enumerate(str(page_texts[0]).splitlines(), 1)
+                              if normalize_cover_line(line) in normalize_cover_line(facts["cover_org_name"])), None)})
+    for page, text in enumerate(page_texts, 1):
+        if page == 1:
+            continue
+        for line_no, line in enumerate(str(text or "").splitlines(), 1):
+            compact = normalize_cover_line(line)
+            match = re.search(r"第[一二三四五六七八九十0-9]+部分(.+?)(?:概况|20\d{2})", compact)
+            header = _TABLE_ORG_LABEL_RE.search(line)
+            if match or header:
+                value = (match or header).group(1).strip()
+                if value in {"部门", "单位", "本部门", "本单位"} or re.search(r"预算|决算", value):
+                    continue
+                evidence.append({"source": ("toc" if "目录" in normalize_cover_line(text) else "part_heading") if match else "table_header", "page": page,
+                                 "line": line_no, "text": value})
+    return evidence

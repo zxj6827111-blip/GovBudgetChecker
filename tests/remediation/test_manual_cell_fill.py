@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import copy
+
+import pytest
 from types import SimpleNamespace
 
 from api import runtime
@@ -182,3 +184,251 @@ def test_value_corrected_fact_still_counts_as_read_from_its_cell():
     corrected = apply_fact_overlay(context, [FactOverlay(fact_uid="t1:1:total_actual", raw_value="301", reason="改值")])
     receipt = build_table_import_receipt(built, corrected.facts, org_name=ORG)
     assert receipt["tables"][0]["unresolved_money_cells"] == []
+
+
+def row_change(mode, rows, *, table_code=None, header_missing=False, target="t1", record_id="cor-row"):
+    value = {"mode": mode, "rows": rows}
+    if table_code is not None:
+        value["table_code"] = table_code
+    if header_missing:
+        value["original_header_missing"] = True
+    return {"record_id": record_id, "actor": "审核员乙", "reason": "原件缺行，按原页补录",
+            "changes": [{"target_type": "table_instance", "target_id": target, "field": "table_rows",
+                         "value": value,
+                         "location": {"physical_page": 1, "bbox": [20, 20, 300, 60]}}]}
+
+
+def test_append_rows_adds_data_rows_and_keeps_an_audit_trail():
+    built = artifact([["206", "科学技术支出", "300", "300"]])
+    run_before = built.parse_run_uid
+    report = apply_table_cell_overlays(built, [row_change("append_rows", [
+        {"cells": {"0": "221", "1": "住房保障支出", "2": "200", "3": "200"}},
+    ])])
+    assert report["applied"] == 1 and not report["unresolved"]
+    table = built.table_fragments[0]
+    assert table.rows[-1][:4] == ["221", "住房保障支出", "200", "200"]
+    [row_audit] = list(built.processing_manifest["manual_rows"].values())
+    assert row_audit["mode"] == "append_rows" and row_audit["row_indices"] == [2]
+    assert row_audit["actor"] == "审核员乙" and row_audit["location"]["physical_page"] == 1
+    assert built.parse_run_uid != run_before
+    fact = facts(built)["t1:2:total_actual"]
+    assert fact.raw_value == "200" and fact.recognition_status == "verified"
+    assert fact.extra_dims["manual_fill"]["scope"] == "row_fill"
+
+
+def test_replace_data_rows_keeps_the_original_header_and_refuses_header_rows():
+    built = artifact([["206", "科学技术支出", "300", "300"], ["合计", "", "300", "300"]])
+    report = apply_table_cell_overlays(built, [row_change("replace_data_rows", [
+        {"cells": {"0": "221", "1": "住房保障支出", "2": "200", "3": "200"}},
+    ])])
+    assert report["applied"] == 1
+    table = built.table_fragments[0]
+    assert table.rows[0] == HEAD[0]
+    assert [row[:4] for row in table.rows[1:]] == [["221", "住房保障支出", "200", "200"]]
+    assert all(cell.row_idx == 0 for cell in table.cells if cell.row_idx < table.header_row_count)
+
+
+def test_header_rows_cannot_be_written_back():
+    built = artifact([["206", "科学技术支出", "300", "300"]])
+    report = apply_table_cell_overlays(built, [row_change("append_rows", [
+        {"cells": {"0": "功能分类科目编码", "1": "科目名称", "2": "合计", "3": "财政拨款收入"}},
+    ])])
+    assert report["applied"] == 0
+    assert "表头行不接受补录" in report["unresolved"][0]["reason"]
+    assert built.processing_manifest.get("manual_rows") is None
+
+
+def test_table_code_can_be_confirmed_only_when_the_original_is_unknown():
+    built = artifact([["206", "科学技术支出", "300", "300"]])
+    built.table_fragments[0].table_code = "UNKNOWN"
+    built.logical_tables[0].table_code = "UNKNOWN"
+    report = apply_table_cell_overlays(built, [row_change("append_rows", [
+        {"cells": {"0": "221", "1": "住房保障支出", "2": "200", "3": "200"}},
+    ], table_code="FIN_02_income", header_missing=True)])
+    assert report["applied"] == 1
+    assert built.table_fragments[0].table_code == "FIN_02_income"
+    assert built.logical_tables[0].table_code == "FIN_02_income"
+    assert list(built.processing_manifest["manual_rows"].values())[0]["original_header_missing"] is True
+
+
+def test_table_code_can_be_confirmed_for_the_parsers_real_unknown_encoding():
+    """解析器实际产出 UNKNOWN_P<页>_T<序号>，不是字面量 UNKNOWN。
+
+    回归：只认字面量 UNKNOWN 时，真实链路上的人工确认永远 applied=0。
+    """
+    built = artifact([["206", "科学技术支出", "300", "300"]])
+    built.table_fragments[0].table_code = "UNKNOWN_P1_T0"
+    built.logical_tables[0].table_code = "UNKNOWN_P1_T0"
+    report = apply_table_cell_overlays(built, [row_change("append_rows", [
+        {"cells": {"0": "221", "1": "住房保障支出", "2": "200", "3": "200"}},
+    ], table_code="FIN_02_income", header_missing=True)])
+    assert report["applied"] == 1, report["unresolved"]
+    assert built.table_fragments[0].table_code == "FIN_02_income"
+    assert built.logical_tables[0].table_code == "FIN_02_income"
+
+
+def test_table_code_conflict_is_refused():
+    built = artifact([["206", "科学技术支出", "300", "300"]])
+    report = apply_table_cell_overlays(built, [row_change("append_rows", [
+        {"cells": {"0": "221", "1": "住房保障支出", "2": "200", "3": "200"}},
+    ], table_code="FIN_03_expenditure")])
+    assert report["applied"] == 0
+    assert "表种" in report["unresolved"][0]["reason"]
+
+
+def test_unconfirmed_column_identity_does_not_upgrade_the_fact():
+    from src.services.manual_cell_overlay import mark_manual_facts
+
+    built = artifact([["206", "科学技术支出", "300", "300"]])
+    apply_table_cell_overlays(built, [row_change("append_rows", [
+        {"cells": {"0": "221", "1": "住房保障支出", "2": "200", "3": "200"}},
+    ])])
+    cid = next(iter(built.processing_manifest["manual_cells"]))
+    built.processing_manifest["manual_cells"][cid]["column_identity_confirmed"] = False
+    from dataclasses import dataclass, field
+
+    @dataclass
+    class FakeFact:
+        fact_uid: str
+        recognition_status: str
+        extra_dims: dict = field(default_factory=dict)
+
+    fact = FakeFact(fact_uid="f1", recognition_status="unverified",
+                    extra_dims={"evidence_refs": [{"source_cell_id": cid}]})
+    [marked] = mark_manual_facts(built, [fact])
+    assert marked.recognition_status == "unverified"
+    assert marked.extra_dims["manual_fill"]["column_identity_confirmed"] is False
+
+
+def test_table_rows_api_accepts_append_and_rejects_malformed_rows(zc05_client):  # noqa: F811
+    client, job_dir = zc05_client
+    good = {"target_type": "table_instance", "target_id": "t1", "field": "table_rows",
+            "value": {"mode": "append_rows",
+                      "rows": [{"cells": {"0": "221", "1": "住房保障支出", "2": "200", "3": "200"}}]},
+            "location": {"physical_page": 1, "bbox": [20, 15, 200, 55]}}
+    response = client.post(f"/api/jobs/{JOB_ID}/corrections", headers=_headers(), json={
+        "analysis_basis_token": _basis(), "reason": "原件缺行，按原页补录整行", "changes": [good]})
+    assert response.status_code == 202, response.text
+    record = read_jsonl_records(job_dir / "corrections.jsonl")[-1]
+    assert record["changes"][0]["field"] == "table_rows"
+    assert record["changes"][0]["value"]["mode"] == "append_rows"
+    assert record["changes"][0]["evidence_ids"]
+
+    for bad_value in (
+        {"rows": [{"cells": {"0": "221"}}]},
+        {"mode": "append_rows", "rows": []},
+        {"mode": "append_rows", "rows": [{"cells": {}}]},
+        {"mode": "append_rows", "rows": [{"cells": {"50": "221"}}]},
+        {"mode": "append_rows", "rows": [{"cells": {"0": "221"}}], "original_header_missing": "yes"},
+    ):
+        response = client.post(f"/api/jobs/{JOB_ID}/corrections", headers=_headers(), json={
+            "analysis_basis_token": _basis(), "reason": "对照原页补录整行",
+            "changes": [{**good, "value": bad_value}]})
+        assert response.status_code == 422, (bad_value, response.text)
+
+
+def _identity_change(code, record_id="id-1"):
+    return {"record_id": record_id, "actor": "审核员乙", "reason": "对照原页确认表种",
+            "changes": [{"target_type": "table_instance", "target_id": "t1",
+                         "field": "table_identity", "value": {"table_code": code},
+                         "location": {"physical_page": 1, "bbox": [0, 0, 270, 30]}}]}
+
+
+def test_identity_only_overlay_reports_under_its_own_field():
+    """回归第二轮复核 R2：只提交表种确认时，结果必须出现在回执里。
+
+    主链路此前只统计 cell_value/table_rows/column_mapping，导致表种确认的
+    成功与失败都被写成 not_requested，用户无法得知为什么没生效。
+    """
+    built = artifact([["206", "科学技术支出", "300", "300"]])
+    built.table_fragments[0].table_code = "UNKNOWN_P1_T0"
+    built.logical_tables[0].table_code = "UNKNOWN_P1_T0"
+
+    ok = apply_table_cell_overlays(built, [_identity_change("FIN_02_income", "id-ok")])
+    assert ok["by_field"]["table_identity"] == {"applied": 1, "unresolved": []}
+    assert ok["by_field"]["cell_value"] == {"applied": 0, "unresolved": []}
+
+    fresh = artifact([["206", "科学技术支出", "300", "300"]])
+    fresh.table_fragments[0].table_code = "UNKNOWN_P1_T0"
+    fresh.logical_tables[0].table_code = "UNKNOWN_P1_T0"
+    rejected = apply_table_cell_overlays(fresh, [_identity_change("NOT_A_REGISTERED_TABLE", "id-bad")])
+    assert rejected["by_field"]["table_identity"]["applied"] == 0
+    assert "提交的表种未登记" in rejected["by_field"]["table_identity"]["unresolved"][0]["reason"]
+
+
+def test_rejected_rows_restore_table_code_and_instance():
+    """回归第二轮复核 R3：整行补录被拒后，表种/实例不得留下改动。"""
+    built = artifact([["206", "科学技术支出", "300", "300"]])
+    built.table_fragments[0].table_code = "UNKNOWN_P1_T0"
+    built.logical_tables[0].table_code = "UNKNOWN_P1_T0"
+    run_uid = built.parse_run_uid
+
+    report = apply_table_cell_overlays(built, [{
+        "record_id": "bad-rows", "actor": "审核员乙", "reason": "对照原页补录",
+        "changes": [{"target_type": "table_instance", "target_id": "t1", "field": "table_rows",
+                     "value": {"table_code": "FIN_02_income", "mode": "append_rows",
+                               "rows": [{"cells": {"0": "221", "1": "住房保障支出", "2": "非数字"}}]},
+                     "location": {"physical_page": 1, "bbox": [0, 0, 270, 30]}}],
+    }])
+
+    assert report["applied"] == 0
+    assert built.table_fragments[0].table_code == "UNKNOWN_P1_T0"
+    assert built.logical_tables[0].table_code == "UNKNOWN_P1_T0"
+    assert built.parse_run_uid == run_uid
+    assert built.processing_manifest.get("manual_rows") is None
+    assert built.processing_manifest.get("manual_table_identity") is None
+
+
+@pytest.mark.parametrize("field", ["table_identity", "table_rows", "cell_value"])
+def test_stale_target_failure_is_preserved_in_its_field_group(field):
+    built = artifact([["206", "科学技术支出", "300", "300"]])
+    before = built.to_dict()
+    change = _identity_change("FIN_02_income")
+    change["changes"][0].update(target_id="obsolete-table-uid", field=field)
+    report = apply_table_cell_overlays(built, [change])
+    assert report["applied"] == 0
+    assert len(report["unresolved"]) == 1
+    assert report["unresolved"][0]["field"] == field
+    assert report["unresolved"][0]["target_id"] == "obsolete-table-uid"
+    assert report["by_field"][field] == {"applied": 0, "unresolved": report["unresolved"]}
+    assert sum(len(group["unresolved"]) for group in report["by_field"].values()) == 1
+    assert built.to_dict() == before
+
+
+@pytest.mark.parametrize("field", ["table_identity", "table_rows"])
+def test_stale_table_target_reaches_the_final_pipeline_receipt(tmp_path, monkeypatch, field):
+    """跑真实离线主管线，保证失效 UID 不会再次被折叠成 not_requested。"""
+    import asyncio
+    import json
+    from api import main
+    from tests.remediation.test_round6_export_chain import create_pdf
+
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    monkeypatch.setattr(runtime, "require_user_store", lambda: object())
+    for key, value in {"AI_ENABLED": "false", "OCR_ENABLED": "false", "DATABASE_URL": "",
+                       "PDF_PARSE_ISOLATION_ENABLED": "false", "RULE_EXECUTION_ISOLATION_ENABLED": "false",
+                       "AUDIT_LOG_PATH": str(tmp_path / "audit.jsonl")}.items():
+        monkeypatch.setenv(key, value)
+    directory = tmp_path / f"stale-target-{field}"
+    directory.mkdir()
+    create_pdf(directory / "source.pdf")
+    initial = {"job_id": directory.name, "filename": "source.pdf", "status": "queued",
+               "mode": "legacy", "use_local_rules": True, "use_ai_assist": False,
+               "fiscal_year": 2026, "report_year": 2026, "report_kind": "budget",
+               "doc_type": "budget", "organization_name": "测试局", "created_by": "test-admin"}
+    (directory / "status.json").write_text(json.dumps(initial), encoding="utf-8")
+    record = _identity_change("FIN_02_income")
+    record["changes"][0].update(target_id="obsolete-table-uid", field=field)
+    if field == "table_rows":
+        record["changes"][0]["value"] = {"mode": "append_rows", "rows": [{"cells": {"0": "221"}}]}
+    (directory / "corrections.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+    asyncio.run(main._run_pipeline(directory))
+    status = json.loads((directory / "status.json").read_text())
+    assert not status.get("error"), status.get("error")
+    assert status["fact_overlay"]["status"] == "failed"
+    group = "table_identity_overlay" if field == "table_identity" else "cell_value_overlay"
+    failures = status["fact_overlay"][group]["unresolved"]
+    assert len(failures) == 1
+    assert failures[0]["field"] == field
+    assert failures[0]["target_id"] == "obsolete-table-uid"
+    assert "correction_overlay_incomplete" in {r["code"] for r in status["review_reasons"]}

@@ -65,6 +65,13 @@ def native_doc(entries):
     table = ParsedTable(T5, '一般公共预算财政拨款支出决算表', 1, 0,
                         (10, 30, 300, 700), 1, .99, 'lines', '万元', rows, cells,
                         'complete', [f.fragment_uid for f in physical.values()])
+    # 完整性回执须看得到物理表头，不能只在 rows 里写标题却不提供原页列带。
+    for col, raw in enumerate(rows[0]):
+        header = ParsedCell(0, col, raw, raw, None, 1,
+                            (10 + col * 80, 20, 90 + col * 80, 40), True, .99, '万元', 'lines',
+                            origin_fragment_uid='page-1', origin_row_idx=0)
+        table.cells.insert(col, header)
+        physical[1].cells.insert(col, deepcopy(header))
     instance = LogicalTableInstance('complete', T5, table.title,
                                      ['complete'], 1, max(physical), org_name='甲单位', fiscal_year=2025)
     artifact = ParseArtifact(HASH, parse_run_uid='run', table_fragments=[table],

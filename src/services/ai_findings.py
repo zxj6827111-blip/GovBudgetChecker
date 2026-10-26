@@ -1307,7 +1307,7 @@ class AIFindingsService:
                 continue
             quote_norm = self._norm_text(issue.get("quote") or issue.get("original") or "")
             issue_type = str(issue.get("problem_type") or issue.get("type") or "generic")
-            span = self._safe_span(issue.get("span"))
+            _span = self._safe_span(issue.get("span"))
             target = None
             for existing in merged:
                 if not self._same_issue_location(existing, issue, quote_norm):

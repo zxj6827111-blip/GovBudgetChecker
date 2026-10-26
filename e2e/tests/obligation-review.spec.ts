@@ -340,6 +340,28 @@ function freshState(): ReviewServerState {
   };
 }
 
+/** 处理计数与完成阻塞收在「完成条件」说明里：打开说明断言后关闭。 */
+async function expectStatusCounts(page: Page, text: string) {
+  await page.getByTestId("gbc-review-state-progress").click();
+  await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText(text);
+  await page.getByTestId("gbc-review-info-panel-close").click();
+}
+
+/** text 为 null 表示服务端门禁已无阻塞。 */
+async function expectGateBlockers(page: Page, text: string | null) {
+  await page.getByTestId("gbc-review-state-progress").click();
+  if (text === null) await expect(page.getByTestId("gbc-review-gate-blockers")).toHaveCount(0);
+  else await expect(page.getByTestId("gbc-review-gate-blockers")).toContainText(text);
+  await page.getByTestId("gbc-review-info-panel-close").click();
+}
+
+/** 问题列表按需展开：断言列表行之前先展开（已展开时不重复点击）。 */
+async function openIssueList(page: Page) {
+  const toggle = page.getByTestId("gbc-review-toggle-list");
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  await expect(page.getByTestId("gbc-review-list-panel")).toBeVisible();
+}
+
 test.describe("人工补核（WP3-B）", () => {
   test("四张系统提示可处理并保存，完成真实补核后才能结束复核", async ({ page }) => {
     const state = freshState();
@@ -354,21 +376,29 @@ test.describe("人工补核（WP3-B）", () => {
     if (!state.activeSession && !state.history.some(item => item.status === "completed")) await page.getByTestId("gbc-review-start").click();
     await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
 
+    // 系统提示不计入完成条件，放在参考页签。
+    await page.getByTestId("gbc-review-tab-reference").click();
     for (const code of state.systemReviewCodes) {
       const id = `review_reason:${code}`;
+      await openIssueList(page);
+      await page.getByTestId(`gbc-review-issue-card-${id}`).click();
       await page.getByTestId(`gbc-review-issue-confirm-${id}`).click();
+      await openIssueList(page);
       await expect(page.getByTestId(`gbc-review-issue-card-${id}`)).toHaveCount(0);
       await expect(page.getByTestId("gbc-review-undo")).toBeEnabled();
       await expect(page.getByTestId("gbc-review-action-notice")).toHaveCount(0);
+      await page.getByTestId("gbc-review-close-list").click();
     }
     await page.reload();
-    await expect(page.getByTestId("gbc-review-issues-empty")).toContainText("当前筛选下已无待处理项");
+    await page.getByTestId("gbc-review-tab-reference").click();
+    await expect(page.getByTestId("gbc-review-issues-empty")).toContainText("当前队列已无待处理项");
     await expect(page.getByTestId("gbc-review-issues-empty")).toContainText("仍有 1 项检查待补核");
     await page.getByTestId("gbc-review-view-all").click();
+    await openIssueList(page);
     for (const code of state.systemReviewCodes) {
       await expect(page.getByTestId(`gbc-review-issue-card-review_reason:${code}`)).toContainText("已确认");
     }
-    await expect(page.getByTestId("gbc-review-gate-blockers")).toContainText("还有 1 项检查义务待人工补核");
+    await expectGateBlockers(page, "还有 1 项检查义务待人工补核");
     await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();
 
     await page.getByTestId("gbc-review-tab-obligations").click();
@@ -397,14 +427,12 @@ test.describe("人工补核（WP3-B）", () => {
     expect(state.startCalls).toBe(1);
 
     // 门禁常驻提示：2 项待补核
-    await expect(page.getByTestId("gbc-review-gate-blockers")).toContainText(
-      "还有 2 项检查义务待人工补核",
-    );
+    await expectGateBlockers(page, "还有 2 项检查义务待人工补核");
     await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();
 
     // 打开「检查补核」页签，徽标带待办数
     const tab = page.getByTestId("gbc-review-tab-obligations");
-    await expect(tab).toContainText("检查补核 (2)");
+    await expect(tab).toContainText("检查补核 2");
     await tab.click();
     await expect(page.getByTestId("gbc-obligation-summary")).toContainText("待补核 2 项");
 
@@ -422,11 +450,9 @@ test.describe("人工补核（WP3-B）", () => {
     expect(firstCall.body.note).toBe("已对照两表逐项核对");
     expect(firstCall.body.evidence_reference).toBe("第 12 页 表 8");
 
-    await expect(tab).toContainText("检查补核 (1)");
+    await expect(tab).toContainText("检查补核 1");
     await expect(page.getByTestId("gbc-obligation-summary")).toContainText("待补核 1 项");
-    await expect(page.getByTestId("gbc-review-gate-blockers")).toContainText(
-      "还有 1 项检查义务待人工补核",
-    );
+    await expectGateBlockers(page, "还有 1 项检查义务待人工补核");
 
     // 第二项：写明原因 → 人工判定不适用
     await page.getByTestId("gbc-obligation-note-OBL-TXT-FUND-DETAIL").fill("本单位本年度无政府性基金预算");
@@ -437,7 +463,7 @@ test.describe("人工补核（WP3-B）", () => {
     await expect(page.getByTestId("gbc-obligation-summary")).toContainText("待补核 0 项");
 
     // 门禁放行：完成按钮可点，点击后显示已完成复核及复核人
-    await expect(page.getByTestId("gbc-review-gate-blockers")).toHaveCount(0);
+    await expectGateBlockers(page, null);
     const completeButton = page.getByTestId("gbc-review-complete");
     await expect(completeButton).toBeEnabled();
     await completeButton.click();

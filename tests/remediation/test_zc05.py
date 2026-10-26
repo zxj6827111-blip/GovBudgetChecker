@@ -343,3 +343,12 @@ def test_zc05_unlinked_target_has_unknown_affected_checks() -> None:
     )
     assert result["status"] == "unknown"
     assert result["check_ids"] == []
+
+
+def test_zc05_table_uid_matches_its_fact_uids() -> None:
+    result = affected_check_ids(
+        [{"sub_check_id": "C-001:total", "operand_fact_uids": ["t1:2:total_actual"]},
+         {"sub_check_id": "C-002:other", "operand_fact_uids": ["t2:2:total_actual"]}],
+        ["t1"],
+    )
+    assert result == {"status": "mapped", "check_ids": ["C-001:total"], "reason": None}

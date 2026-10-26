@@ -111,7 +111,7 @@ def _unrepresented_source_codes(artifact, table, row_codes, measure_start):
     return list(dict.fromkeys(missing))
 
 
-def _table_view(doc, table_code):
+def _table_view(doc, table_code, *, include_income_sources=False):
     artifact, context = getattr(doc, 'parse_artifact', None), getattr(doc, 'fact_context', None)
     title = DETAIL_TABLES[table_code]
     if context is None or artifact is None:
@@ -132,6 +132,9 @@ def _table_view(doc, table_code):
     # Blank optional component columns must not expand this rule's scope.
     roles = {'total_actual'} if table_code == 'FIN_02_income' else {
         'total_actual', 'basic_actual', 'project_actual'}
+    if table_code == 'FIN_02_income' and include_income_sources:
+        roles.update({'fiscal_allocation', 'superior_subsidy_income', 'business_income',
+                      'operational_income', 'subsidiary_income', 'other_income'})
     mappings = [m for m in mappings if m.get('canonical_measure') in roles]
     if not mappings or not any(m['canonical_measure'] == 'total_actual' for m in mappings):
         return None, f'{title}本年合计金额列身份未绑定'
@@ -237,7 +240,7 @@ def _compare(rule, doc, title, key, code, indicator, parent, children, *, column
                         fact_ids=ids, evidence_ids=evidence_ids)], []
 
 
-def check_native_detail_tables(rule, doc, *, table_codes=None):
+def check_native_detail_tables(rule, doc, *, table_codes=None, include_income_sources=False):
     """V33-120 的原生入口；legacy Document 的原规则实现仍保留。
 
     每一金额列按完整行集合检查直接父子和总计；总计只累计根科目一次，
@@ -252,7 +255,7 @@ def check_native_detail_tables(rule, doc, *, table_codes=None):
     # physically present table still requires its own complete operands.
     for table_code in targets:
         title = DETAIL_TABLES[table_code]
-        view, error = _table_view(doc, table_code)
+        view, error = _table_view(doc, table_code, include_income_sources=include_income_sources)
         if error:
             unresolved.append(error)
             receipt(rule, doc, f'{table_code}:complete_table', [], status='insufficient_data',

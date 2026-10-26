@@ -362,6 +362,7 @@ def test_ocr_pipeline_runs_when_enabled_and_preserves_native(monkeypatch, tmp_pa
     from src.services.ocr_tiles import make_tile,digest
     from src.schemas.parse_artifact import ParsedTextBlock,ParseArtifact,ParsePageState
     monkeypatch.setenv('OCR_ENABLED','true')
+    monkeypatch.setenv('OCR_IMAGE_GATE','false')
     monkeypatch.setenv('OCR_MODEL_FINGERPRINT','a'*64)
     path=_make_pdf(tmp_path,[['残缺文本'],[]])
     artifact=ParseArtifact(source_file_hash=hashlib.sha256(path.read_bytes()).hexdigest(),page_count=2,

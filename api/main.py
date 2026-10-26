@@ -584,6 +584,12 @@ def _evaluate_quality_gate(
     unbound = reading.get("unbound_money_cells") or []
     fiscal_coverage = reading.get("fiscal_coverage") or {}
     mapping_tables = reading.get("mapping_incomplete_tables") or []
+    if reading.get("org_scope_pending_count"):
+        review_reasons.append({
+            "code": "org_scope_pending",
+            "message": "材料汇总口径待确认；不影响无需该维度的表内勾稽。依赖口径的检查仍列为未完成。",
+            "pending_fact_count": reading["org_scope_pending_count"],
+        })
     if reading_gaps or unbound or mapping_tables:
         named = "、".join(f"第{t.get('page')}页《{t.get('title') or t.get('table_code')}》" for t in mapping_tables[:5])
         review_reasons.append({
@@ -1543,6 +1549,12 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             subject_level=operand_profile.subject_level.value,
         )
         check_subject_name = check_subject["name"]
+        if parse_artifact_obj is not None:
+            from src.services.input_processing_identity import bind_artifact_document_identity
+            bind_artifact_document_identity(parse_artifact_obj,
+                organization_id=organization_id, organization_name=organization_name,
+                fiscal_year=report_year or fiscal_year, report_kind=report_kind, doc_type=doc_type,
+                check_subject_name=check_subject_name)
 
         # ZC-02（AC-07）：OCR 候选表经列身份/关键数字/置信度复验后晋升为
         # 可检查事实——与原生表共用同一事实物化路径；未通过者保持候选
@@ -1589,6 +1601,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                 fact_context_obj = build_fact_context_from_artifact(
                     parse_artifact_obj,
                     org_name=check_subject_name,
+                    org_level=runtime.resolve_organization_level(organization_id),
                     fiscal_year=fiscal_year or report_year,
                     report_kind=report_kind,
                     doc_type=doc_type,
@@ -1651,6 +1664,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                     fact_context_obj = build_fact_context_from_artifact(
                         parse_artifact_obj,
                         org_name=check_subject_name,
+                        org_level=runtime.resolve_organization_level(organization_id),
                         fiscal_year=fiscal_year or report_year,
                         report_kind=report_kind,
                         doc_type=doc_type,
@@ -1665,13 +1679,19 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                             "reason": "应用列映射后仍未生成财政事实",
                         })
                 has_cell_value_changes = any(
-                    isinstance(change, dict) and str(change.get("field") or "") == "cell_value"
+                    isinstance(change, dict) and str(change.get("field") or "") in {"cell_value", "table_rows"}
                     for record in overlay_records
                     for change in (record.get("changes") if isinstance(record, dict) and isinstance(record.get("changes"), list) else [])
                 )
                 has_column_mapping_changes = any(
                     isinstance(change, dict)
                     and str(change.get("field") or "") == "column_mapping"
+                    for record in overlay_records
+                    for change in (record.get("changes") if isinstance(record, dict) and isinstance(record.get("changes"), list) else [])
+                )
+                has_table_identity_changes = any(
+                    isinstance(change, dict)
+                    and str(change.get("field") or "") == "table_identity"
                     for record in overlay_records
                     for change in (record.get("changes") if isinstance(record, dict) and isinstance(record.get("changes"), list) else [])
                 )
@@ -1716,6 +1736,24 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                             fact_overlay_applied or cell_value_report.get("applied") or column_mapping_report.get("applied")
                         ) else "failed"
                     elif cell_value_report.get("applied") and fact_overlay_report.get("status") == "not_requested":
+                        fact_overlay_report["status"] = "applied"
+                if has_table_identity_changes:
+                    # 只提交表种确认时，本块是它唯一的回执出口：成功/未登记/
+                    # 目标不存在/已识别表种冲突都必须在任务状态里可见。
+                    identity_report = (
+                        (cell_value_report.get("by_field") or {}).get("table_identity")
+                        or {"applied": 0, "unresolved": []}
+                    )
+                    fact_overlay_report["table_identity_overlay"] = identity_report
+                    if identity_report.get("unresolved"):
+                        fact_overlay_report.setdefault("unresolved", []).extend(
+                            {**item, "reason": f"表种确认未生效：{item['reason']}"}
+                            for item in identity_report["unresolved"])
+                        fact_overlay_report["status"] = "partial" if (
+                            fact_overlay_applied or identity_report.get("applied")
+                            or column_mapping_report.get("applied") or cell_value_report.get("applied")
+                        ) else "failed"
+                    elif identity_report.get("applied") and fact_overlay_report.get("status") == "not_requested":
                         fact_overlay_report["status"] = "applied"
                 if unsupported_changes and any(item.get("blocking") for item in unsupported_changes):
                     fact_overlay_report["status"] = (

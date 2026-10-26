@@ -39,7 +39,7 @@ import type { Route } from "next";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Maximize2, Minimize2, PanelsTopLeft } from "lucide-react";
+import { ArrowLeft, ChevronDown, PanelsTopLeft } from "lucide-react";
 
 import { Badge, Button } from "@/components/ui";
 import { EmbeddedWorkspaceTopbar } from "@/components/workspace/EmbeddedWorkspaceTopbar";
@@ -54,10 +54,15 @@ import { ReviewDetailNavigation } from "./ReviewDetailNavigation";
 import { isUiTaskFinished, normalizeUiTaskStatus, selectStructuredForJob, toUiProblems, toUiSourceProblems } from "@/lib/uiAdapters";
 
 import { CorrectionsTab, type CorrectionFocus } from "./CorrectionsTab";
+import type { CorrectionLocation } from "./correctionAdapters";
 import { IssueNoteDialog } from "./IssueNoteDialog";
 import type { IssueWorkflowAction } from "./IssueCard";
 import { IssuesTab } from "./IssuesTab";
-import type { IssueDecisionNotice, SourceFindingViews } from "./IssuesTab";
+import type { IssueDecisionNotice, ReviewQueue, ReviewTextSize, SourceFindingViews } from "./IssuesTab";
+import { composeDecisionNote, parseDecisionNote, stripIgnoreReason, type IgnoreReason } from "./reviewDecisionNotes";
+import { buildCalculationGroups, evidenceRoleLabel } from "./reviewReadingAdapters";
+import { ReviewInfoPanel, ReviewStatusChips, type ReviewProgressCounts } from "./ReviewStatusPanels";
+import type { PdfRelatedRef } from "./PdfViewerPane";
 import { deriveAiScope } from "../../../lib/aiScope";
 import type { AiScopeView } from "../../../lib/aiScope";
 import { MetadataTab } from "./MetadataTab";
@@ -83,6 +88,7 @@ import {
 } from "./reviewLifecycleAdapters";
 import {
   computeWorkflowStatusCounts,
+  countFormalProblems,
   classifyFindingSources,
   extractTotalPageCount,
   resolveProblemTargetPage,
@@ -94,6 +100,12 @@ import { ThumbnailRail } from "./ThumbnailRail";
 import { useJobPolling } from "../workspace/useJobPolling";
 
 type RightTabId = "issues" | "corrections" | "metadata" | "stages" | "obligations";
+/** 收进「更多」菜单的辅助页签。 */
+const MORE_TABS: Array<{ id: RightTabId; label: string }> = [
+  { id: "corrections", label: "读取校正" },
+  { id: "metadata", label: "元数据" },
+  { id: "stages", label: "阶段记录" },
+];
 
 interface WorkflowStateResponse {
   issues?: Record<string, { issue_id: string; job_id: string; status: string; note?: string | null }>;
@@ -123,22 +135,33 @@ function ReviewStateFrame({ children }: { children: ReactNode }) {
   );
 }
 
-/** 原文栏默认占 45%，问题区拿到更宽的 55%；拖动后的宽度按浏览器记住。 */
+/** 原文与解释并排：原文默认占一半；拖动后的宽度按浏览器记住。 */
 const DOCUMENT_SHARE_KEY = "gbc-review-document-share";
-const DEFAULT_DOCUMENT_SHARE = 45;
+const DEFAULT_DOCUMENT_SHARE = 50;
+/** 放大解释时原文栏收窄但保留，仍能看到证据框。 */
+const FOCUS_DOCUMENT_SHARE = 36;
+const TEXT_SIZE_KEY = "gbc-review-text-size";
 /** 状态条里阻塞原因超过这个条数时先收起，避免把问题区再挤回去。 */
 const COLLAPSED_BLOCKER_COUNT = 4;
+/** 已由页签条数或「开始复核」按钮表达的门禁原因，状态条上不再重复。 */
+const COUNTED_BLOCKER_CODES = new Set([
+  "pending_findings", "needs_review_findings", "blocking_obligations", "review_not_started", "review_already_completed",
+]);
 
 function clampDocumentShare(value: number): number {
   return Math.max(35, Math.min(65, Math.round(value)));
 }
 
-function persistDocumentShare(value: number) {
+function persistPreference(key: string, value: string) {
   try {
-    window.localStorage.setItem(DOCUMENT_SHARE_KEY, String(value));
+    window.localStorage.setItem(key, value);
   } catch {
-    // 记不住宽度时仍按本次拖动显示。
+    // 记不住偏好时仍按本次选择显示。
   }
+}
+
+function persistDocumentShare(value: number) {
+  persistPreference(DOCUMENT_SHARE_KEY, String(value));
 }
 
 export function ReviewWorkbenchPage() {
@@ -153,7 +176,11 @@ export function ReviewWorkbenchPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [activeTab, setActiveTab] = useState<RightTabId>("issues");
   const [showThumbnails, setShowThumbnails] = useState(false);
-  const [issuesExpanded, setIssuesExpanded] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
+  const [issueQueue, setIssueQueue] = useState<ReviewQueue>("required");
+  const [textSize, setTextSize] = useState<ReviewTextSize>("standard");
+  const [infoPanel, setInfoPanel] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [documentShare, setDocumentShare] = useState(DEFAULT_DOCUMENT_SHARE);
   const [showAllBlockers, setShowAllBlockers] = useState(false);
   const splitPaneRef = useRef<HTMLDivElement>(null);
@@ -161,8 +188,9 @@ export function ReviewWorkbenchPage() {
     try {
       const saved = Number(window.localStorage.getItem(DOCUMENT_SHARE_KEY));
       if (saved > 0) setDocumentShare(clampDocumentShare(saved));
+      if (window.localStorage.getItem(TEXT_SIZE_KEY) === "large") setTextSize("large");
     } catch {
-      // 读不到偏好时使用默认宽度。
+      // 读不到偏好时使用默认宽度与字号。
     }
   }, []);
   const [selectedProblemId, setSelectedProblemId] = useState<string | null>(null);
@@ -179,6 +207,9 @@ export function ReviewWorkbenchPage() {
   const [isReanalyzing, setIsReanalyzing] = useState(false);
   /** 「读取校正」页签选中的原页位置；只在该页签激活时接管左侧高亮。 */
   const [correctionFocus, setCorrectionFocus] = useState<CorrectionFocus | null>(null);
+  /** 整行/整表补录时请求左侧原页框选；pickedRegion 是框选结果。 */
+  const [regionRequest, setRegionRequest] = useState<{ label: string } | null>(null);
+  const [pickedRegion, setPickedRegion] = useState<CorrectionLocation | null>(null);
   /** 复核生命周期上下文（WP3-A）：由服务端把 job 解析到材料槽位后返回。 */
   const [reviewContext, setReviewContext] = useState<ReviewContextState>({ kind: "loading" });
   /** 正在提交复核写动作（开始/完成/重开）。 */
@@ -541,25 +572,55 @@ export function ReviewWorkbenchPage() {
     };
   }, [activeTab, correctionFocus, highlightedProblem]);
 
+  /** 当前证据的合计/明细在原文上一起标出，主框仍是选中的那一处。 */
+  const pdfRelatedRefs = useMemo<PdfRelatedRef[]>(() => {
+    if (activeTab !== "issues" || !selectedProblem) return [];
+    const refsByKey = new Map((selectedProblem.evidenceRefs ?? []).map((ref) => [ref.key, ref]));
+    return buildCalculationGroups(selectedProblem).flatMap((group) => [group.total, ...group.items].map((row, index) => ({
+      key: row.key,
+      page: row.page,
+      bbox: refsByKey.get(row.key)?.bbox,
+      tone: index === 0 ? "total" as const : "item" as const,
+    })));
+  }, [activeTab, selectedProblem]);
+
+  const pdfLocator = useMemo(() => {
+    if (activeTab !== "issues" || !selectedProblem || !highlightedProblem?.page) return null;
+    const ref = selectedProblem.evidenceRefs?.find((item) => item.key === selectedEvidenceRefKey);
+    // 计算明细里的项用解释区同一个名称，便于左右对照。
+    const calcRow = buildCalculationGroups(selectedProblem)
+      .flatMap((group) => [{ row: group.total, role: "合计" }, ...group.items.map((row) => ({ row, role: "明细" }))])
+      .find((item) => item.row.key === selectedEvidenceRefKey);
+    // 只说证据是什么、哪条规则；问题标题已在右侧，不在这里重复。
+    const source = selectedProblem.source === "ai" ? "大模型" : selectedProblem.source === "rule" ? "本地规则" : "";
+    const label = calcRow
+      ? `${calcRow.role} · ${calcRow.row.label} · ${calcRow.row.valueText} 万元`
+      : ref && (ref.role === "parent" || ref.role === "child" || ref.valueText)
+        ? [evidenceRoleLabel(ref.role), ref.valueText ? `${ref.valueText} 万元` : ""].filter(Boolean).join(" · ")
+        : [source, selectedProblem.ruleId].filter(Boolean).join(" · ");
+    return { label, page: highlightedProblem.page };
+  }, [activeTab, selectedProblem, selectedEvidenceRefKey, highlightedProblem]);
+
   const handleCorrectionFocus = useCallback((focus: CorrectionFocus | null) => {
     setCorrectionFocus(focus);
     if (focus) {
       setCurrentPage(focus.page);
-      setIssuesExpanded(false);
     }
   }, []);
 
-  // keepLayout：列表自动选中首条时只同步原文页码，不收起用户放大的问题区。
-  const handleSelectProblem = useCallback((problemId: string | null, options?: { keepLayout?: boolean }) => {
+  useEffect(() => {
+    setRegionRequest(null);
+    setPickedRegion(null);
+  }, [activeTab]);
+
+  // 原文栏始终可见：选中问题只同步原文页码，不改变用户选的布局。
+  const handleSelectProblem = useCallback((problemId: string | null) => {
     setSelectedProblemId(problemId);
     setSelectedEvidenceRefKey(null);
     const target = selectableProblems.find((problem) => problem.id === problemId);
     if (target) {
       const targetPage = resolveProblemTargetPage(target);
-      if (targetPage !== null) {
-        setCurrentPage(targetPage);
-        if (!options?.keepLayout) setIssuesExpanded(false);
-      }
+      if (targetPage !== null) setCurrentPage(targetPage);
     }
   }, [selectableProblems]);
 
@@ -567,10 +628,7 @@ export function ReviewWorkbenchPage() {
     const ref = problem.evidenceRefs?.find((item) => item.key === refKey);
     setSelectedProblemId(problem.id);
     setSelectedEvidenceRefKey(refKey);
-    if (ref) {
-      setCurrentPage(ref.page);
-      setIssuesExpanded(false);
-    }
+    if (ref) setCurrentPage(ref.page);
   }, []);
 
   const mutateWorkflow = useCallback(
@@ -640,12 +698,17 @@ export function ReviewWorkbenchPage() {
   );
 
   const handleIssueAction = useCallback(
-    async (problem: Problem, action: IssueWorkflowAction): Promise<boolean> => {
+    async (problem: Problem, action: IssueWorkflowAction, ignoreReason?: IgnoreReason): Promise<boolean> => {
       if (action !== "note") {
+        // 忽略必须带理由；理由写在 note 开头，离开“已忽略”时去掉，补充意见原样保留。
+        if (action === "ignore" && !ignoreReason) return false;
         const status = action === "confirm" ? "confirmed" : action === "ignore" ? "no_issue" : "pending";
         const previousStatus = workflowIssues[problem.id]?.status ?? "pending";
-        const saved = await mutateWorkflow(problem, status);
-        if (saved) setLastIssueDecision({ problem, previousStatus, status });
+        const previousNote = workflowNotes[problem.id] ?? "";
+        const userNote = stripIgnoreReason(previousNote);
+        const note = action === "ignore" && ignoreReason ? composeDecisionNote(ignoreReason, userNote) : userNote;
+        const saved = await mutateWorkflow(problem, status, note);
+        if (saved) setLastIssueDecision({ problem, previousStatus, previousNote, status });
         return saved;
       }
       // action === "note"：打开备注输入框，保存时沿用当前状态（若尚无记录则为 pending），
@@ -653,7 +716,7 @@ export function ReviewWorkbenchPage() {
       setNoteDialogProblem(problem);
       return false;
     },
-    [mutateWorkflow, workflowIssues],
+    [mutateWorkflow, workflowIssues, workflowNotes],
   );
 
   const handleUndoIssueDecision = useCallback(async (): Promise<boolean> => {
@@ -662,7 +725,7 @@ export function ReviewWorkbenchPage() {
       setReviewNotice("该问题的处理状态已变化，请在全部问题中核对后再修改。");
       return false;
     }
-    const saved = await mutateWorkflow(lastIssueDecision.problem, lastIssueDecision.previousStatus);
+    const saved = await mutateWorkflow(lastIssueDecision.problem, lastIssueDecision.previousStatus, lastIssueDecision.previousNote ?? "");
     if (saved) setLastIssueDecision(null);
     return saved;
   }, [lastIssueDecision, mutateWorkflow, workflowIssues]);
@@ -673,10 +736,13 @@ export function ReviewWorkbenchPage() {
         return;
       }
       const currentStatus = workflowIssues[noteDialogProblem.id]?.status ?? "pending";
-      void mutateWorkflow(noteDialogProblem, currentStatus, note);
+      // 已忽略的问题保留忽略理由，只替换补充意见部分。
+      const { ignoreReason } = parseDecisionNote(workflowNotes[noteDialogProblem.id]);
+      const nextNote = composeDecisionNote(currentStatus === "no_issue" ? ignoreReason : null, note);
+      void mutateWorkflow(noteDialogProblem, currentStatus, nextNote);
       setNoteDialogProblem(null);
     },
-    [mutateWorkflow, noteDialogProblem, workflowIssues],
+    [mutateWorkflow, noteDialogProblem, workflowIssues, workflowNotes],
   );
 
   const handleReanalyze = useCallback(async () => {
@@ -899,54 +965,75 @@ export function ReviewWorkbenchPage() {
   /** 人工补核块（WP3-B）：老后端/旧数据没有该字段时按"无此页签"处理。 */
   const obligationReview = reviewData?.obligation_review ?? null;
   const pendingObligations = pendingObligationCount(reviewData);
-  const rightTabs: { id: RightTabId; label: string }[] = [
-    { id: "issues", label: "审核问题" },
-    ...(obligationReview
-      ? [
-          {
-            id: "obligations" as const,
-            label:
-              pendingObligations && pendingObligations > 0
-                ? `检查补核 (${pendingObligations})`
-                : "检查补核",
-          },
-        ]
-      : []),
-    { id: "corrections", label: "读取校正" },
-    { id: "metadata", label: "元数据" },
-    { id: "stages", label: "阶段记录" },
-  ];
+  const requiredTotal = countFormalProblems(problems);
+  const obligationItemCount = obligationReview?.available ? (obligationReview.items ?? []).length : 0;
+  const progressCounts: ReviewProgressCounts = {
+    requiredTotal,
+    ...statusCounts,
+    obligationTotal: pendingObligations === null ? null : Math.max(obligationItemCount, pendingObligations),
+    obligationPending: pendingObligations,
+  };
+  const requiredPending = statusCounts.pending + statusCounts.needsReview;
+  const referenceCount = problems.length - requiredTotal;
   const blockerLines = describeBlockers(reviewBlockers?.blockers ?? []);
   /**
-   * 服务端算出的门禁阻塞：**常驻**显示，而不是等用户点了按钮才出现。
-   *
-   * 两个理由：
-   * 1. 按钮在"还有待处理问题"时是 disabled 的，用户根本点不下去——若只在点击
-   *    之后才显示原因，他就只能看着一个灰按钮，不知道还差什么（§七十九）；
-   * 2. 版本已换、分析已重跑这类事实过期，是**打开页面就该知道**的事，
-   *    藏在一个需要点击才能触发的提示里等于没说。
+   * 服务端算出的门禁阻塞：每一条原因都必须常驻可见，而不是等用户点了按钮才出现
+   * （按钮 disabled 时用户根本点不下去，§七十九；版本已换这类事实过期是打开页面
+   * 就该知道的事）。但同一件事只说一次：
+   * - 还有几项问题/补核待处理 → 页签上的条数；
+   * - 尚未开始复核 → 「开始复核」按钮与操作栏提示；
+   * - 其余原因（身份未确认、口径冲突、版本已换、覆盖不可用……）→ 状态条常驻。
+   * 完整清单在「完成条件」说明里，并作为完成按钮的悬停提示。
    */
-  const gateBlockerLines = describeBlockers(reviewData?.completion_gate?.blockers ?? []);
-  const blockerLimit = showAllBlockers ? Infinity : COLLAPSED_BLOCKER_COUNT;
-  const visibleBlockerLines = blockerLines.slice(0, blockerLimit);
-  const visibleGateBlockerLines = gateBlockerLines.slice(0, Math.max(0, blockerLimit - visibleBlockerLines.length));
-  const hiddenBlockerCount = blockerLines.length + gateBlockerLines.length - visibleBlockerLines.length - visibleGateBlockerLines.length;
-  const previewNotice = reviewData && !canEditReview && !completeButton.completed
-    ? !currentReviewJob ? "当前查看的是历史分析，仅供查看。请从复核清单选择当前材料。"
-      : !reviewData.current_analysis.completed ? "当前版本尚未产出可复核的分析结果，请在处理队列检查进度。"
-        : "当前为材料预览。点击「开始复核」后可提交问题判定和检查补核。"
-    : null;
+  const gateBlockers = reviewData?.completion_gate?.blockers ?? [];
+  const gateBlockerLines = describeBlockers(gateBlockers);
+  const extraGateBlockerLines = describeBlockers(gateBlockers.filter((item) => !COUNTED_BLOCKER_CODES.has(String(item?.code ?? ""))));
+  const canComplete = completeButton.completed || reviewData?.completion_gate?.can_complete === true;
+  const visibleBlockerLines = showAllBlockers ? blockerLines : blockerLines.slice(0, COLLAPSED_BLOCKER_COUNT);
+  const hiddenBlockerCount = blockerLines.length - visibleBlockerLines.length;
+  const startLabel = invalidated ? "重新开始复核" : "开始复核";
   const showInvalidatedNotice = Boolean(invalidated && !completedSummary && !canEditReview);
+  // 不能提交判定时，在本该放操作按钮的位置说明原因与下一步；只说一次。
+  const readOnlyHint = reviewData && !canEditReview
+    ? completeButton.completed ? { text: "复核已完成，判定已锁定；如需修改请点击上方「重新复核」。", invalidatedReason: null, completed: true }
+      : !currentReviewJob ? { text: "当前查看的是历史分析，仅供查看。请从复核清单选择当前材料。", invalidatedReason: null }
+        : !reviewData.current_analysis.completed ? { text: "当前版本尚未产出可复核的分析结果，请在处理队列检查进度。", invalidatedReason: null }
+          : showInvalidatedNotice && invalidated ? {
+            text: `点击上方「${startLabel}」后可重新提交判定。`,
+            invalidatedReason: invalidationReasonLabel(invalidated.invalidated_reason) || "复核依据已变化，需要重新复核",
+          } : { text: `当前为预览：点击上方「${startLabel}」后可确认、忽略问题并补核。`, invalidatedReason: null }
+    : null;
+  const savedAtText = lastSavedAt ? `自动保存于 ${formatSavedAtTime(lastSavedAt)}` : null;
+  const activeMoreTab = MORE_TABS.find((tab) => tab.id === activeTab) ?? null;
+  const openTab = (tab: RightTabId) => {
+    setActiveTab(tab);
+    setInfoPanel(false);
+    setMoreMenuOpen(false);
+    if (tab !== "issues") setFocusMode(false);
+  };
+  const openIssueQueue = (queue: ReviewQueue) => {
+    setIssueQueue(queue);
+    openTab("issues");
+  };
+  const focusActive = focusMode && activeTab === "issues";
+  const effectiveDocumentShare = focusActive ? Math.min(FOCUS_DOCUMENT_SHARE, documentShare) : documentShare;
+  const tabClass = (active: boolean) => `inline-flex items-center gap-1 border-b-2 px-2.5 py-2 text-xs font-medium transition-colors ${
+    active ? "border-primary-600 text-primary-700" : "border-transparent text-slate-500 hover:text-slate-700"
+  }`;
+  const countBadge = (count: number, tone: "warning" | "muted") => (
+    <span className={`rounded px-1.5 text-[11px] font-medium tabular-nums ${tone === "warning" ? "bg-warning-50 text-warning-700" : "bg-surface-100 text-slate-500"}`}>{count}</span>
+  );
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden" data-testid="gbc-review-workbench-page">
       <div
         ref={splitPaneRef}
         className="grid min-h-0 min-w-0 flex-1 overflow-hidden"
-        style={{ gridTemplateColumns: issuesExpanded ? "minmax(0, 1fr)" : `minmax(0, ${documentShare}fr) 8px minmax(0, ${100 - documentShare}fr)` }}
+        style={{ gridTemplateColumns: `minmax(0, ${effectiveDocumentShare}fr) 8px minmax(0, ${100 - effectiveDocumentShare}fr)` }}
         data-testid="gbc-review-split-pane"
+        data-focus-mode={focusActive ? "true" : "false"}
       >
-        <div className={`min-h-0 min-w-0 overflow-hidden bg-white ${issuesExpanded ? "hidden" : "flex"}`} data-testid="gbc-review-document-pane">
+        <div className="flex min-h-0 min-w-0 overflow-hidden bg-white" data-testid="gbc-review-document-pane">
           {showThumbnails ? (
             <div className="w-40 shrink-0 overflow-hidden border-r border-border">
               <ThumbnailRail jobId={jobId} totalPages={totalPages} currentPage={currentPage} onSelectPage={setCurrentPage} />
@@ -959,6 +1046,15 @@ export function ReviewWorkbenchPage() {
             currentPage={currentPage}
             onPageChange={(page) => setCurrentPage(Math.max(1, page))}
             highlightedProblem={pdfHighlight}
+            relatedRefs={pdfRelatedRefs}
+            locator={pdfLocator}
+            regionPick={regionRequest ? { active: true, label: regionRequest.label } : null}
+            onRegionPicked={(region) => {
+              setPickedRegion(region);
+              setRegionRequest(null);
+              setCurrentPage(region.physical_page);
+            }}
+            onRegionPickCancel={() => setRegionRequest(null)}
             leadingControls={
               <button
                 type="button"
@@ -974,86 +1070,84 @@ export function ReviewWorkbenchPage() {
           />
           </div>
         </div>
-        {!issuesExpanded ? (
-          <div
-            role="separator"
-            tabIndex={0}
-            aria-label="调整原文与问题区宽度"
-            aria-orientation="vertical"
-            aria-valuemin={35}
-            aria-valuemax={65}
-            aria-valuenow={documentShare}
-            data-testid="gbc-review-resize-handle"
-            className="flex touch-none cursor-col-resize items-center justify-center border-x border-border bg-surface-100 hover:bg-primary-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-400"
-            onPointerDown={(event) => {
-              event.currentTarget.setPointerCapture(event.pointerId);
-              event.preventDefault();
-            }}
-            onPointerMove={(event) => {
-              if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-              const bounds = splitPaneRef.current?.getBoundingClientRect();
-              if (!bounds || bounds.width <= 0) return;
-              setDocumentShare(clampDocumentShare(((event.clientX - bounds.left) / bounds.width) * 100));
-            }}
-            onPointerUp={(event) => {
-              if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-              event.currentTarget.releasePointerCapture(event.pointerId);
-              persistDocumentShare(documentShare);
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home") return;
-              event.preventDefault();
-              const next = event.key === "Home" ? DEFAULT_DOCUMENT_SHARE : clampDocumentShare(documentShare + (event.key === "ArrowLeft" ? -2 : 2));
-              setDocumentShare(next);
-              persistDocumentShare(next);
-            }}
-          ><span className="h-8 w-0.5 rounded bg-slate-300" /></div>
-        ) : null}
+        <div
+          role="separator"
+          tabIndex={0}
+          aria-label="调整原文与解释区宽度"
+          aria-orientation="vertical"
+          aria-valuemin={35}
+          aria-valuemax={65}
+          aria-valuenow={effectiveDocumentShare}
+          data-testid="gbc-review-resize-handle"
+          className="flex touch-none cursor-col-resize items-center justify-center border-x border-border bg-surface-100 hover:bg-primary-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-400"
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId);
+            event.preventDefault();
+          }}
+          onPointerMove={(event) => {
+            if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+            const bounds = splitPaneRef.current?.getBoundingClientRect();
+            if (!bounds || bounds.width <= 0) return;
+            // 手动拖动即退出放大解释，以拖到的宽度为准。
+            setFocusMode(false);
+            setDocumentShare(clampDocumentShare(((event.clientX - bounds.left) / bounds.width) * 100));
+          }}
+          onPointerUp={(event) => {
+            if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+            event.currentTarget.releasePointerCapture(event.pointerId);
+            persistDocumentShare(documentShare);
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home") return;
+            event.preventDefault();
+            const next = event.key === "Home" ? DEFAULT_DOCUMENT_SHARE : clampDocumentShare(effectiveDocumentShare + (event.key === "ArrowLeft" ? -2 : 2));
+            setFocusMode(false);
+            setDocumentShare(next);
+            persistDocumentShare(next);
+          }}
+        ><span className="h-8 w-0.5 rounded bg-slate-300" /></div>
         <div className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-white" data-testid="gbc-review-problems-pane">
           <EmbeddedWorkspaceTopbar
             leading={
-              <>
+              // 窄栏时裁掉放不下的部分，不压到右侧的全局按钮上。
+              <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => router.push(returnTo as Route)}
+                  aria-label={returnTo.startsWith("/review") ? "返回复核清单" : "返回来源列表"}
+                  title={returnTo.startsWith("/review") ? "返回复核清单" : "返回来源列表"}
+                  data-testid="gbc-review-back-button"
+                  className="shrink-0 rounded-md p-1 text-slate-500 transition-colors hover:bg-surface-100 hover:text-slate-800"
+                >
+                  <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+                </button>
                 <span className="min-w-0 truncate text-sm font-semibold text-slate-900" title={filename} data-testid="gbc-review-filename">
                   {filename}
                 </span>
-                <span className="shrink-0"><Badge tone={headerBadge.tone}>{headerBadge.label}</Badge></span>
-                {reviewBadge ? (
-                  <span className="shrink-0" data-testid="gbc-review-lifecycle-badge">
-                    <Badge tone={reviewBadge.tone}>{reviewBadge.label}</Badge>
-                  </span>
-                ) : null}
-              </>
+              </div>
             }
           />
-          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-white px-3 py-1.5">
-            <div className="flex min-w-0 items-center gap-2">
-              <button
-                type="button"
-                onClick={() => router.push(returnTo as Route)}
-                aria-label={returnTo.startsWith("/review") ? "返回复核清单" : "返回来源列表"}
-                data-testid="gbc-review-back-button"
-                className="shrink-0 rounded-md px-1.5 py-1 text-sm text-slate-400 transition-colors hover:bg-surface-100 hover:text-slate-700"
-              >
-                ← {returnTo.startsWith("/review") ? "清单" : "返回"}
-              </button>
-              <span className="min-w-0 text-xs text-slate-400" data-testid="gbc-review-header-meta">
-                {reportId ? `报告 ${reportId} · ` : ""}
-                {totalPages !== null ? `${totalPages} 页` : "页数未知"}
-                {" · "}<Link href={"/reports" as Route} className="text-primary-700 hover:underline" data-testid="gbc-review-department-reports">按部门 / 年度查看报告</Link>
-                {completedSummary ? (
-                  <span data-testid="gbc-review-completed-summary"> · 已完成复核：{completedSummary}</span>
-                ) : null}
+          <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-surface-50 px-3 py-1.5" data-testid="gbc-review-status-row">
+            {/* 只放一枚状态，与它对应的操作按钮同排；复核页先看复核状态，分析状态在「更多」里。
+                顶栏窄时会被全局按钮挤掉，所以不放在顶栏。 */}
+            {reviewBadge ? (
+              <span className="shrink-0" data-testid="gbc-review-lifecycle-badge">
+                <Badge tone={reviewBadge.tone}>{reviewBadge.label}</Badge>
               </span>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
+            ) : (
+              <span className="shrink-0"><Badge tone={headerBadge.tone}>{headerBadge.label}</Badge></span>
+            )}
+            <ReviewStatusChips
+              aiScope={aiScope}
+              canComplete={canComplete}
+              open={infoPanel}
+              onOpen={() => setInfoPanel((value) => !value)}
+            />
+            <div className="ml-auto flex flex-wrap items-center gap-2">
               <ReviewDetailNavigation jobId={jobId} returnTo={returnTo} />
-              <Button size="sm" variant="secondary" onClick={() => void handleReanalyze()} disabled={isReanalyzing || submittingIssueId !== null} data-testid="gbc-review-reanalyze">
-                {isReanalyzing ? "重新分析中…" : "重新分析"}
-              </Button>
-              <Button size="sm" variant="secondary" onClick={handleExport} data-testid="gbc-review-export">
-                导出报告
-              </Button>
-              {showStartReview ? <Button size="sm" variant="primary" onClick={() => void handleStartReview()} disabled={reviewBusy} data-testid="gbc-review-start">{reviewBusy ? "提交中…" : invalidated ? "重新开始复核" : "开始复核"}</Button> : null}
+              {/* 未开始/已失效时只给「开始复核」一个动作；完成按钮在复核进行中才出现。 */}
+              {showStartReview ? <Button size="sm" variant="primary" onClick={() => void handleStartReview()} disabled={reviewBusy} data-testid="gbc-review-start">{reviewBusy ? "提交中…" : startLabel}</Button> : (
+              <span title={reviewContext.kind !== "available" ? REVIEW_CONTEXT_UNAVAILABLE_MESSAGE : completeButton.hint || (gateBlockerLines.length > 0 ? gateBlockerLines.join("；") : undefined)}>
               <Button
                 size="sm"
                 variant="primary"
@@ -1070,17 +1164,19 @@ export function ReviewWorkbenchPage() {
                 title={
                   reviewContext.kind !== "available"
                     ? REVIEW_CONTEXT_UNAVAILABLE_MESSAGE
-                    : completeButton.hint || undefined
+                    : completeButton.hint || (gateBlockerLines.length > 0 ? gateBlockerLines.join("；") : undefined)
                 }
               >
                 {reviewBusy ? "提交中…" : completeButton.label}
               </Button>
+              </span>
+              )}
             </div>
           </div>
           {/* 复核生命周期的状态与拒绝原因：都必须出现在页面上，而不是只留在控制台。
-              「为什么不能完成复核」是这个页面最有价值的信息，只显示 HTTP 409 等于
-              把它丢掉。预览说明、失效说明和阻塞原因合并成一条状态条，不再逐条
-              叠成多层横幅挤占问题区；原因较多时先收起，可展开查看全部。*/}
+              只显示 HTTP 409 等于把唯一有用的信息丢掉。这条状态条只放别处没说过的：
+              已完成记录、上下文不可用、页签与按钮表达不了的门禁原因、操作被拒原因。
+              预览/失效提示在问题区底部操作栏的位置。*/}
           {reviewNotice ? (
             <div
               className="shrink-0 border-b border-danger-200 bg-danger-50 px-3 py-1.5 text-xs text-danger-700"
@@ -1089,20 +1185,20 @@ export function ReviewWorkbenchPage() {
               {reviewNotice}
             </div>
           ) : null}
-          {previewNotice || reviewContext.kind === "unavailable" || showInvalidatedNotice || blockerLines.length > 0 || gateBlockerLines.length > 0 ? (
+          {completedSummary || reviewContext.kind === "unavailable" || extraGateBlockerLines.length > 0 || blockerLines.length > 0 ? (
             <div
               className={`flex shrink-0 flex-wrap items-baseline gap-x-4 gap-y-0.5 border-b px-3 py-1.5 text-xs ${
-                blockerLines.length > 0 || gateBlockerLines.length > 0 ? "border-warning-200 bg-warning-50" : "border-border bg-surface-50"
+                blockerLines.length > 0 || extraGateBlockerLines.length > 0 ? "border-warning-200 bg-warning-50" : "border-border bg-surface-50"
               }`}
               data-testid="gbc-review-status-strip"
             >
-              {previewNotice ? <span className="text-slate-600" data-testid="gbc-review-preview-notice">{previewNotice}</span> : null}
+              {completedSummary ? <span className="text-success-700" data-testid="gbc-review-completed-summary">已完成复核：{completedSummary}</span> : null}
               {reviewContext.kind === "unavailable" ? (
                 <span className="text-warning-700" data-testid="gbc-review-context-unavailable">{reviewContext.message}</span>
               ) : null}
-              {showInvalidatedNotice && invalidated ? (
-                <span className="text-warning-700" data-testid="gbc-review-invalidated-notice">
-                  {invalidationReasonLabel(invalidated.invalidated_reason) || "复核已失效，需要重新复核"}
+              {extraGateBlockerLines.length > 0 ? (
+                <span className="text-warning-700" data-testid="gbc-review-gate-blockers-extra">
+                  <span className="font-medium">完成前还需：</span>{extraGateBlockerLines.join("；")}
                 </span>
               ) : null}
               {visibleBlockerLines.length > 0 ? (
@@ -1116,18 +1212,7 @@ export function ReviewWorkbenchPage() {
                   ))}
                 </span>
               ) : null}
-              {visibleGateBlockerLines.length > 0 ? (
-                <span className="text-warning-700" data-testid="gbc-review-gate-blockers">
-                  <span className="font-medium">当前无法完成复核：</span>
-                  {visibleGateBlockerLines.map((line, index) => (
-                    <Fragment key={line}>
-                      {index > 0 ? "；" : null}
-                      <span data-testid="gbc-review-gate-blocker-item">{line}</span>
-                    </Fragment>
-                  ))}
-                </span>
-              ) : null}
-              {blockerLines.length + gateBlockerLines.length > COLLAPSED_BLOCKER_COUNT ? (
+              {blockerLines.length > COLLAPSED_BLOCKER_COUNT ? (
                 <button
                   type="button"
                   onClick={() => setShowAllBlockers((value) => !value)}
@@ -1141,55 +1226,91 @@ export function ReviewWorkbenchPage() {
             </div>
           ) : null}
 
-          <div className="flex shrink-0 flex-wrap items-center border-b border-border text-sm">
-            {rightTabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
-                data-testid={`gbc-review-tab-${tab.id}`}
-                aria-pressed={activeTab === tab.id}
-                className={`border-b-2 px-3 py-2 text-xs font-medium transition-colors ${
-                  activeTab === tab.id
-                    ? "border-primary-600 text-primary-700"
-                    : "border-transparent text-slate-500 hover:text-slate-700"
-                }`}
-              >
-                {tab.label}
+          {focusActive ? null : (
+            <div className="flex shrink-0 flex-wrap items-center gap-0.5 border-b border-border px-2" data-testid="gbc-review-tabs">
+              <button type="button" onClick={() => openIssueQueue("required")} data-testid="gbc-review-tab-issues"
+                aria-pressed={activeTab === "issues" && issueQueue === "required"} className={tabClass(activeTab === "issues" && issueQueue === "required")}>
+                必须处理 {countBadge(requiredPending, requiredPending > 0 ? "warning" : "muted")}
               </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => setIssuesExpanded((value) => !value)}
-              aria-pressed={issuesExpanded}
-              aria-label={issuesExpanded ? "还原左右对照" : "放大问题区"}
-              data-testid="gbc-review-expand-issues"
-              className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-xs text-slate-500 hover:bg-surface-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
-            >
-              {issuesExpanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-              {issuesExpanded ? "还原" : "放大"}
-            </button>
-          </div>
-          <div className="min-h-0 flex-1 overflow-hidden">
+              <button type="button" onClick={() => openIssueQueue("reference")} data-testid="gbc-review-tab-reference"
+                aria-pressed={activeTab === "issues" && issueQueue === "reference"} className={tabClass(activeTab === "issues" && issueQueue === "reference")}>
+                参考 {countBadge(referenceCount, "muted")}
+              </button>
+              {obligationReview ? (
+                <button type="button" onClick={() => openTab("obligations")} data-testid="gbc-review-tab-obligations"
+                  aria-pressed={activeTab === "obligations"} className={tabClass(activeTab === "obligations")}>
+                  检查补核{pendingObligations && pendingObligations > 0 ? <> {countBadge(pendingObligations, "warning")}</> : null}
+                </button>
+              ) : null}
+              <div className="relative ml-auto">
+                <button type="button" onClick={() => setMoreMenuOpen((value) => !value)} aria-expanded={moreMenuOpen} aria-haspopup="menu"
+                  data-testid="gbc-review-tab-more" className={tabClass(activeMoreTab !== null)}>
+                  更多{activeMoreTab ? ` · ${activeMoreTab.label}` : ""}<ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+                {moreMenuOpen ? (
+                  <>
+                    <button type="button" aria-label="关闭菜单" className="fixed inset-0 z-40 cursor-default" onClick={() => setMoreMenuOpen(false)} />
+                    <div role="menu" className="absolute right-0 top-full z-50 mt-1 w-56 rounded-md border border-border bg-white py-1 shadow-lg">
+                      {MORE_TABS.map((tab) => (
+                        <button key={tab.id} type="button" role="menuitem" onClick={() => openTab(tab.id)} data-testid={`gbc-review-tab-${tab.id}`}
+                          aria-current={activeTab === tab.id ? "true" : undefined}
+                          className={`block w-full px-3 py-2 text-left text-xs hover:bg-surface-100 ${activeTab === tab.id ? "font-medium text-primary-700" : "text-slate-700"}`}>
+                          {tab.label}
+                        </button>
+                      ))}
+                      <div className="mt-1 border-t border-border pt-1">
+                        <button type="button" role="menuitem" onClick={() => { setMoreMenuOpen(false); handleExport(); }} data-testid="gbc-review-export"
+                          className="block w-full px-3 py-2 text-left text-xs text-slate-700 hover:bg-surface-100">导出报告</button>
+                        <button type="button" role="menuitem" onClick={() => { setMoreMenuOpen(false); void handleReanalyze(); }}
+                          disabled={isReanalyzing || submittingIssueId !== null} data-testid="gbc-review-reanalyze"
+                          className="block w-full px-3 py-2 text-left text-xs text-slate-700 hover:bg-surface-100 disabled:cursor-not-allowed disabled:opacity-50">
+                          {isReanalyzing ? "重新分析中…" : "重新分析"}
+                        </button>
+                      </div>
+                      <div className="mt-1 border-t border-border px-3 pb-1 pt-2 text-[11px] text-slate-400" data-testid="gbc-review-header-meta">
+                        <span className="mb-1 block" data-testid="gbc-review-analysis-status">分析状态：{headerBadge.label}</span>
+                        {reportId ? `报告 ${reportId} · ` : ""}
+                        {totalPages !== null ? `${totalPages} 页` : "页数未知"}
+                        <Link href={"/reports" as Route} className="mt-1 block text-primary-700 hover:underline" data-testid="gbc-review-department-reports">按部门 / 年度查看报告</Link>
+                      </div>
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            </div>
+          )}
+          <div className="relative min-h-0 flex-1 overflow-hidden">
             {activeTab === "issues" ? (
               <IssuesTab
                 key={jobId}
                 problems={problems}
                 sourceFindings={sourceFindings}
                 aiScope={aiScope}
+                queue={issueQueue}
                 selectedProblemId={selectedProblemId}
                 onSelectProblem={handleSelectProblem}
+                selectedEvidenceRefKey={selectedEvidenceRefKey}
                 workflowStatusByIssueId={workflowStatusByIssueId}
+                workflowNotes={workflowNotes}
                 onAction={handleIssueAction}
                 submittingIssueId={submittingIssueId}
                 lastDecision={lastIssueDecision}
                 onUndo={handleUndoIssueDecision}
                 pendingObligations={pendingObligations ?? 0}
-                onOpenObligations={() => setActiveTab("obligations")}
+                onOpenObligations={() => openTab("obligations")}
                 onRecheckToTask={jobId ? () => router.push(`/task/${jobId}` as Route) : undefined}
                 onSelectEvidenceRef={handleSelectEvidenceRef}
                 readOnly={!canEditReview}
-                wide={issuesExpanded}
+                readOnlyHint={readOnlyHint}
+                savedAtText={savedAtText}
+                textSize={textSize}
+                onToggleTextSize={() => {
+                  const next: ReviewTextSize = textSize === "large" ? "standard" : "large";
+                  setTextSize(next);
+                  persistPreference(TEXT_SIZE_KEY, next);
+                }}
+                focusMode={focusActive}
+                onToggleFocus={() => setFocusMode((value) => !value)}
               />
             ) : activeTab === "obligations" && obligationReview ? (
               <ObligationsTab
@@ -1206,8 +1327,16 @@ export function ReviewWorkbenchPage() {
                 jobId={jobId}
                 disabled={isReanalyzing}
                 onFocus={handleCorrectionFocus}
+                pickedRegion={pickedRegion}
+                onRequestRegion={(label) => {
+                  setPickedRegion(null);
+                  setRegionRequest({ label });
+                }}
+                onClearRegion={() => setPickedRegion(null)}
                 onSubmitted={() => {
                   setLastIssueDecision(null);
+                  setPickedRegion(null);
+                  setRegionRequest(null);
                   invalidateReviewReads(jobId);
                   // 静默刷新：留住页签上的提交结果；重分析开始后页面会自动切到进度视图。
                   void Promise.all([loadJobDetail({ silent: true }), loadWorkflow()]);
@@ -1221,16 +1350,19 @@ export function ReviewWorkbenchPage() {
                 stageFailedAt={detail.stage_failed_at as { phase?: string | null } | null}
               /></>
             )}
-          </div>
-          <div className="flex shrink-0 flex-wrap items-center justify-between gap-1 border-t border-border bg-white px-3 py-1.5 text-xs text-slate-500">
-            <div data-testid="gbc-review-status-bar-counts">
-              正式问题处理：已确认 {statusCounts.confirmed} · 已忽略 {statusCounts.ignored} · 已进整改包{" "}
-              {statusCounts.inPackage} · 待复核 {statusCounts.needsReview} · 待处理{" "}
-              {statusCounts.pending}
-            </div>
-            <div data-testid="gbc-review-status-bar-saved-at">
-              {lastSavedAt ? `自动保存于 ${formatSavedAtTime(lastSavedAt)}` : "尚无保存记录"}
-            </div>
+            {infoPanel ? (
+              <ReviewInfoPanel
+                aiScope={aiScope}
+                progress={progressCounts}
+                gateBlockerLines={gateBlockerLines}
+                savedAtText={savedAtText}
+                onClose={() => setInfoPanel(false)}
+                onShowRequired={() => openIssueQueue("required")}
+                onShowReference={() => openIssueQueue("reference")}
+                onOpenObligations={obligationReview ? () => openTab("obligations") : undefined}
+                onRecheck={jobId ? () => router.push(`/task/${jobId}` as Route) : undefined}
+              />
+            ) : null}
           </div>
         </div>
       </div>
@@ -1238,7 +1370,7 @@ export function ReviewWorkbenchPage() {
       {noteDialogProblem ? (
         <IssueNoteDialog
           problemTitle={noteDialogProblem.title}
-          initialNote={workflowNotes[noteDialogProblem.id] ?? ""}
+          initialNote={parseDecisionNote(workflowNotes[noteDialogProblem.id]).userNote}
           onSave={handleSaveNote}
           onCancel={() => setNoteDialogProblem(null)}
           isSubmitting={submittingIssueId === noteDialogProblem.id}

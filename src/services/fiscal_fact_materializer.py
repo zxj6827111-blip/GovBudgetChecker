@@ -47,7 +47,7 @@ def infer_fund_scope(table_code: str, title: str = "") -> Optional[str]:
         return "general_public_budget"
     if table_code.startswith('FIN_04'):
         return 'fiscal_appropriation'
-    if table_code.startswith('FIN_07')and '财政拨款' in title:
+    if table_code.startswith('FIN_07'):
         return 'fiscal_appropriation'
     if table_code.startswith(('FIN_01','FIN_02','FIN_03')):
         return 'all_funds'
@@ -241,6 +241,16 @@ class FiscalFactMaterializer:
                 local_labels = mapping.get("source_label_cols")
                 bound_labels = [cell for cell in ordered if int(cell["col_idx"]) in local_labels] if local_labels else label_cells
                 classification = self._extract_classification(bound_labels)
+                if classification is None:
+                    # 合计行常把“合计/总计”写在编码列、名称列留空；只在标签明确时回退。
+                    total_labels = [
+                        cell for cell in ordered
+                        if int(cell["col_idx"]) < first_measure_col
+                        and str(cell.get("raw_text") or "").strip() in {"合计", "总计"}
+                    ]
+                    classification = self._extract_classification(total_labels)
+                    if classification is not None:
+                        bound_labels = total_labels
                 if classification is None:
                     if table_code == "FIN_07_three_public" and first_measure_col == 0:
                         classification = {"classification_code": "total", "classification_name": "合计"}
@@ -575,6 +585,8 @@ class FiscalFactMaterializer:
                 if measure_cell is not None and str(measure_cell.raw_text or "").strip()
                 else None
             )
+            from src.engine.fiscal_lexeme import lex_numeric
+            literal_invalid = bool(raw_value and lex_numeric(raw_value).kind == "invalid")
             unit = None
             normalized = None
             if measure_cell is not None:
@@ -617,6 +629,9 @@ class FiscalFactMaterializer:
                 and not native_conflict and bool(raw_value)
                 and normalize_text(''.join(str(p.get('text') or '') for p in native_sources)) == normalize_text(raw_value)
                 ) or (is_manual_source and bool(raw_value))
+            if literal_invalid:
+                normalized = None
+                amount_usable = False
             native_evidence_qualified = (native_literal_bound and column_identity_safe and not missing_subject_code
                 and table.confidence >= .8 and amount_usable
                 and bool(legacy.classification_code or legacy.classification_name)

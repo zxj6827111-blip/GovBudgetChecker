@@ -264,7 +264,8 @@ async def run_structured_ingest(
         if parse_artifact is not None and parse_artifact.source_file_hash != checksum:
             raise ValueError("source_file_hash_mismatch: supplied artifact differs from original file")
         conn = await DatabaseConnection.acquire()
-        org_name = _normalize_org_name(metadata.get("organization_name"), pdf_path)
+        org_name = _normalize_org_name(metadata.get("organization_name"), pdf_path,
+            preserve_identity=bool(metadata.get("organization_id")))
         fiscal_year = _parse_year(metadata.get("report_year") or metadata.get("fiscal_year"))
         doc_type = str(metadata.get("doc_type") or metadata.get("report_kind") or "unknown")
 
@@ -364,6 +365,11 @@ async def run_structured_ingest(
             parse_artifact = parser.build_parse_artifact(
                 str(pdf_path), config_fingerprint=parse_config_fingerprint
             )
+            from src.services.input_processing_identity import bind_artifact_document_identity
+            bind_artifact_document_identity(parse_artifact,
+                organization_id=metadata.get('organization_id'), organization_name=org_name,
+                fiscal_year=fiscal_year, report_kind=metadata.get('report_kind'), doc_type=doc_type,
+                check_subject_name=metadata.get('check_subject_name'))
         # 缓存和新解析都必须证明来自当前字节，不能把调用方的哈希写回产物掩盖差异。
         if parse_artifact.source_file_hash != checksum:
             raise ValueError("source_file_hash_mismatch: parsed or cached artifact differs from original file")
@@ -411,7 +417,7 @@ async def run_structured_ingest(
             from src.engine.fact_context import build_fact_context_from_artifact
             raw_fact_context = build_fact_context_from_artifact(
                 parse_artifact, org_name=_text_or_none(metadata.get("check_subject_name")) or org_name,
-                fiscal_year=fiscal_year,
+                fiscal_year=fiscal_year, org_level=metadata.get("organization_level"),
                 doc_type=doc_type, report_kind=metadata.get("report_kind"),
                 require_complete_identity=bool(analysis_revision or candidate_only))
             fiscal_facts = list(raw_fact_context.facts) if raw_fact_context else []
@@ -1125,9 +1131,12 @@ def _merge_keywords(storage, org, keywords: Sequence[str]) -> None:
         storage.update(org.id, {"keywords": merged})
 
 
-def _normalize_org_name(raw_org_name: Any, pdf_path: Path) -> str:
+def _normalize_org_name(raw_org_name: Any, pdf_path: Path, *, preserve_identity: bool = False) -> str:
     text = str(raw_org_name or "").strip()
     if text:
+        if preserve_identity:
+            # 已确认目录节点的名字是身份，不是待清洗的文件名；“单位”等尾字不能再删。
+            return text
         cleaned = _strip_report_words(text)
         return cleaned or text
 

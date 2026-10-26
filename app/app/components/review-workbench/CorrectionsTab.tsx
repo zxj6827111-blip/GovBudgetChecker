@@ -13,12 +13,17 @@ import {
   describePending,
   describeSubmitError,
   gapsForTable,
+  knownAmountColumns,
   measureLabel,
+  needsTableIdentity,
+  parseDraftRows,
   pendingKey,
+  tableLocation,
   toCorrectionChanges,
   unmappedColumns,
   upsertPending,
   validateCellValue,
+  validateDraftRows,
   type CorrectionLocation,
   type CorrectionTable,
   type CorrectionTargets,
@@ -47,6 +52,10 @@ interface CorrectionsTabProps {
   disabled: boolean;
   onFocus: (focus: CorrectionFocus | null) => void;
   onSubmitted: () => void;
+  /** 左侧原页框选结果；整行/整表补录用它作为证据位置。 */
+  pickedRegion: CorrectionLocation | null;
+  onRequestRegion: (label: string) => void;
+  onClearRegion: () => void;
 }
 
 interface SelectedCell {
@@ -61,18 +70,26 @@ function TableCard({
   pending,
   selected,
   disabled,
+  pickedRegion,
+  tableCodeOptions,
   onSelectCell,
   onLocate,
   onQueue,
+  onRequestRegion,
+  onClearRegion,
 }: {
   table: CorrectionTable;
   gaps: ReadingGap[];
   pending: PendingCorrection[];
   selected: SelectedCell | null;
   disabled: boolean;
+  pickedRegion: CorrectionLocation | null;
+  tableCodeOptions: { code: string; label: string }[];
   onSelectCell: (cell: SelectedCell) => void;
   onLocate: (focus: CorrectionFocus) => void;
   onQueue: (item: PendingCorrection) => void;
+  onRequestRegion: (label: string) => void;
+  onClearRegion: () => void;
 }) {
   const attention = useMemo(() => attentionCells(table), [table]);
   const unmapped = useMemo(() => unmappedColumns(table), [table]);
@@ -88,8 +105,15 @@ function TableCard({
   const [draft, setDraft] = useState("");
   const [draftLocation, setDraftLocation] = useState<CorrectionLocation | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rowMode, setRowMode] = useState<"append_rows" | "replace_data_rows" | null>(null);
+  const [rowDraft, setRowDraft] = useState("");
+  const [rowError, setRowError] = useState<string | null>(null);
+  const [identityCode, setIdentityCode] = useState("");
+  const [headerMissing, setHeaderMissing] = useState(false);
   const hasMappings = table.measure_options.length > 0;
   const amountColumns = new Set(table.column_mappings.map((item) => item.source_col_idx));
+  const knownAmounts = useMemo(() => knownAmountColumns(table), [table]);
+  const rowLocation = pickedRegion ?? tableLocation(table);
 
   useEffect(() => {
     setDraft(selectedPending && selectedPending.kind === "cell" ? selectedPending.value : currentText);
@@ -98,6 +122,61 @@ function TableCard({
     // 只在切换选中格时重置输入。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRow, selectedColumn, table.fragment_uid]);
+
+  const queueRows = () => {
+    if (!rowMode) return;
+    const parsed = parseDraftRows(rowDraft, columnCount);
+    if (parsed.error) {
+      setRowError(parsed.error);
+      return;
+    }
+    const problem = validateDraftRows(parsed.rows, amountColumns, knownAmounts);
+    if (problem) {
+      setRowError(problem);
+      return;
+    }
+    if (!rowLocation) {
+      setRowError("这张表拿不到原页位置，请先在左侧原页框选补录区域");
+      return;
+    }
+    onQueue({
+      kind: "rows",
+      tableUid: table.fragment_uid,
+      tableTitle: table.title || table.table_code,
+      mode: rowMode,
+      rows: parsed.rows,
+      location: rowLocation,
+    });
+    setRowDraft("");
+    setRowMode(null);
+    setRowError(null);
+    onClearRegion();
+  };
+
+  const queueIdentity = () => {
+    if (!identityCode) {
+      setRowError("请选择原件实际表种");
+      return;
+    }
+    if (!rowLocation) {
+      setRowError("这张表拿不到原页位置，请先在左侧原页框选表题区域");
+      return;
+    }
+    const option = tableCodeOptions.find((item) => item.code === identityCode);
+    onQueue({
+      kind: "identity",
+      tableUid: table.fragment_uid,
+      tableTitle: table.title || table.table_code,
+      tableCode: identityCode,
+      tableCodeLabel: option?.label ?? identityCode,
+      originalHeaderMissing: headerMissing,
+      location: rowLocation,
+    });
+    setIdentityCode("");
+    setHeaderMissing(false);
+    setRowError(null);
+    onClearRegion();
+  };
 
   const queueCell = (value: string) => {
     const isAmount = amountColumns.has(selectedColumn) || unmapped.has(selectedColumn);
@@ -159,7 +238,85 @@ function TableCard({
         >
           定位原页
         </button>
+        <button
+          type="button"
+          className="text-primary-600 hover:text-primary-700"
+          disabled={disabled}
+          onClick={() => { setRowMode("append_rows"); setRowError(null); }}
+        >
+          新增行
+        </button>
+        <button
+          type="button"
+          className="text-primary-600 hover:text-primary-700"
+          disabled={disabled}
+          onClick={() => { setRowMode("replace_data_rows"); setRowError(null); }}
+        >
+          整表重录
+        </button>
       </div>
+
+      {needsTableIdentity(table) ? (
+        <div className="mb-2 rounded border border-warning-200 bg-warning-50 p-2 text-xs" data-testid={`gbc-correction-identity-${table.fragment_uid}`}>
+          <div className="mb-1 font-medium text-warning-800">原件表种未认定，请对照表题确认；原件缺表头时只确认缺失，不补列名。</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              aria-label="原件实际表种"
+              className="rounded border border-border bg-white px-2 py-1"
+              value={identityCode}
+              disabled={disabled}
+              onChange={(event) => setIdentityCode(event.target.value)}
+            >
+              <option value="">选择表种</option>
+              {tableCodeOptions.map((option) => (
+                <option key={option.code} value={option.code}>{option.label}</option>
+              ))}
+            </select>
+            <label className="flex items-center gap-1 text-warning-800">
+              <input type="checkbox" checked={headerMissing} disabled={disabled}
+                onChange={(event) => setHeaderMissing(event.target.checked)} />
+              原件缺表头
+            </label>
+            <Button size="sm" variant="secondary" disabled={disabled} onClick={() => {
+              onLocate({ page: table.page, bbox: table.bbox, label: `《${table.title || table.table_code}》` });
+              onRequestRegion("表题区域");
+            }}>框选表题区域</Button>
+            <Button size="sm" disabled={disabled || !identityCode} onClick={queueIdentity}>确认表种</Button>
+            <span className="text-warning-800">
+              证据位置：{rowLocation ? `第 ${rowLocation.physical_page} 页（${pickedRegion ? "已框选" : "整表区域"}）` : "未取得"}
+            </span>
+          </div>
+        </div>
+      ) : null}
+
+      {rowMode ? (
+        <div className="mb-2 space-y-2 rounded border border-primary-200 bg-primary-50/40 p-2 text-xs" data-testid={`gbc-correction-row-editor-${table.fragment_uid}`}>
+          <div className="font-medium text-slate-800">
+            {rowMode === "append_rows" ? "新增数据行" : "重录全部数据行"}（保留原表头；表头列名不补）
+          </div>
+          <textarea
+            aria-label="按原页填写数据行"
+            className="w-full rounded border border-border bg-white px-2 py-1 font-mono"
+            rows={3}
+            value={rowDraft}
+            disabled={disabled}
+            placeholder={`每行一条，列之间用 | 或 Tab 分隔，最多 ${columnCount} 列。例：221 | 住房保障支出 | 200 | 200`}
+            onChange={(event) => setRowDraft(event.target.value)}
+          />
+          <div className="flex flex-wrap items-center gap-2 text-slate-600">
+            <span>证据位置：{rowLocation ? `第 ${rowLocation.physical_page} 页（${pickedRegion ? "已框选" : "整表区域"}）` : "未取得"}</span>
+            <Button size="sm" variant="secondary" disabled={disabled} onClick={() => {
+              onLocate({ page: table.page, bbox: table.bbox, label: `《${table.title || table.table_code}》` });
+              onRequestRegion("补录数据行区域");
+            }}>框选原页区域</Button>
+            <Button size="sm" disabled={disabled} onClick={queueRows}>加入待提交</Button>
+            <button type="button" className="text-slate-400 hover:text-danger-600" onClick={() => { setRowMode(null); setRowError(null); }}>
+              取消
+            </button>
+          </div>
+          {rowError ? <div className="text-danger-700">{rowError}</div> : null}
+        </div>
+      ) : null}
 
       {gaps.length > 0 ? (
         <ul className="mb-2 space-y-1 text-xs text-slate-600">
@@ -289,7 +446,7 @@ function TableCard({
   );
 }
 
-export function CorrectionsTab({ jobId, disabled, onFocus, onSubmitted }: CorrectionsTabProps) {
+export function CorrectionsTab({ jobId, disabled, onFocus, onSubmitted, pickedRegion, onRequestRegion, onClearRegion }: CorrectionsTabProps) {
   const [targets, setTargets] = useState<CorrectionTargets | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingCorrection[]>([]);
@@ -424,9 +581,13 @@ export function CorrectionsTab({ jobId, disabled, onFocus, onSubmitted }: Correc
             pending={pending}
             selected={selected}
             disabled={disabled || submitting}
+            pickedRegion={pickedRegion}
+            tableCodeOptions={targets.table_code_options ?? []}
             onSelectCell={selectCell}
             onLocate={onFocus}
             onQueue={(item) => setPending((list) => upsertPending(list, item))}
+            onRequestRegion={onRequestRegion}
+            onClearRegion={onClearRegion}
           />
         ))}
         {targets.history.length > 0 ? (

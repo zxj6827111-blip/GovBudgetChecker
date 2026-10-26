@@ -132,6 +132,13 @@ const partialMeta = {
   conclusion_scope: "incomplete_scope",
 };
 
+/** 问题列表按需展开：断言列表行之前先展开（已展开时不重复点击）。 */
+async function openIssueList(page: Page) {
+  const toggle = page.getByTestId("gbc-review-toggle-list");
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  await expect(page.getByTestId("gbc-review-list-panel")).toBeVisible();
+}
+
 test.describe("AI scope and explanation visibility", () => {
   test("部分失败直接显示 3/4、失败页与程序计算的解释字段", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
@@ -151,12 +158,14 @@ test.describe("AI scope and explanation visibility", () => {
     await expect(scope.getByTestId("gbc-review-ai-scope-failed-units")).toContainText("server_error");
     await expect(scope.getByTestId("gbc-review-ai-scope-failed-units")).toContainText("已尝试 2 次");
 
+    await openIssueList(page);
     await page.getByTestId("gbc-review-issue-card-FIN-EXPLAIN-1").click();
     const explanation = page.getByTestId("gbc-review-issue-explanation-FIN-EXPLAIN-1");
     await expect(explanation).toBeVisible();
-    await expect(explanation).toContainText("当前值：141.12");
-    await expect(explanation).toContainText("应为：165.80");
-    await expect(explanation).toContainText("差额：-24.68");
+    // 数字短时三栏并排：标签与数值分行显示。
+    await expect(explanation.getByLabel("金额对照")).toContainText("当前值141.12");
+    await expect(explanation.getByLabel("金额对照")).toContainText("应为165.80");
+    await expect(explanation.getByLabel("金额对照")).toContainText("差额-24.68");
     await expect(explanation).toContainText("检查项：final_disclosure_amount");
     await expect(explanation).toContainText("表/章节：五、一般公共预算财政拨款支出决算情况说明");
     await expect(explanation).toContainText("程序按已定位事实计算");
@@ -212,6 +221,9 @@ test.describe("AI scope and explanation visibility", () => {
     await installMocks(page, completeMeta, reviewReport);
     await page.goto(`/review?job=${JOB_ID}`);
     await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible({ timeout: 15_000 });
+    // 待核实的 AI 候选在参考页签，不计入完成条件。
+    await page.getByTestId("gbc-review-tab-reference").click();
+    await openIssueList(page);
     const card = page.locator('[data-review-problem-id="AI-CANON-1"]');
     await expect(card).toHaveCount(1);
     await card.click();

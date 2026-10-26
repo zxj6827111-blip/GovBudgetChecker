@@ -9,6 +9,9 @@ from decimal import Decimal
 
 import pytest
 
+# 只为本模块的网格/证据测试显式启用隔离约定；默认未知另有回归覆盖。
+pytestmark = pytest.mark.usefixtures("approved_test_blank_convention")
+
 from src.engine.common_rules import CMM001_ThreePublicNarrativeConsistency
 from src.engine.native_final_disclosure import (
     GENERAL, _DASH_ITEM, check_final_expenditure_shares, check_function_disclosures,

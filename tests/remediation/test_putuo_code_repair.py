@@ -6,6 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
+# 只为本模块的网格/证据测试显式启用隔离约定；默认未知另有回归覆盖。
+pytestmark = pytest.mark.usefixtures("approved_test_blank_convention")
+
 from test_native_blank_cells import grid_document
 from src.services.document_profile_resolver import detect_cover_facts, resolve_document_profile
 from src.services.fiscal_column_identity import mixed_expenditure_header_cells

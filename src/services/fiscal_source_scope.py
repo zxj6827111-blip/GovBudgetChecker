@@ -47,22 +47,13 @@ def _witness_blocks(artifact,pages):
     return witnesses
 
 
-def organization_scope(artifact,local_title=None):
-    text=''.join(_witness_blocks(artifact,lambda page:page==1))
-    texts=([local_title]if local_title else[])+[text]+[table.title for table in artifact.table_fragments if table.page_number==1
-                 and table.extraction_method in {'lines','lines_strict','text'}]
-    headings=set()
-    labels=set()
-    for value in texts:
-        if re.search(r'部门(?:汇总)?(?:预算|决算)',value):headings.add('department')
-        if re.search(r'单位(?:预算|决算)',value):headings.add('unit')
-        if re.search(r'(?:预算|决算)主管部门',value):labels.add('department')
-        if re.search(r'(?:预算|决算)单位[:：]',value):labels.add('unit')
-        if local_title and value==local_title and headings:
-            return next(iter(headings))if len(headings)==1 else None
-    scopes=headings or labels
-    if scopes:
-        return next(iter(scopes))if len(scopes)==1 else None
-    # 封面只写“××年度决算”时，所有表格的主体范围仍由目录与各部分标题明确写出；
-    # 一字不提时才保持未确认，不能因封面漏字把整份材料的金额全部挡在规则之外。
-    return heading_scope('\n'.join(_witness_blocks(artifact,lambda page:page>1)),majority=True)
+def organization_scope(artifact, local_title=None):
+    """材料范围仅由明确封面/实际构成正文决定，局部表题和模板多数票不定论。"""
+    from src.services.org_binding_decision import source_scope_evidence
+
+    pages = sorted({block.page_number for block in artifact.text_blocks})
+    max_page = max(pages, default=1)
+    texts = ["\n".join(_witness_blocks(artifact, lambda p, page=page: p == page))
+             for page in range(1, max_page + 1)]
+    scope, _evidence, _conflict = source_scope_evidence(texts)
+    return scope

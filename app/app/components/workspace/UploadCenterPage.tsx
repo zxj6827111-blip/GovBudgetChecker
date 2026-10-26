@@ -49,6 +49,7 @@ import { UploadDropzone } from "./UploadDropzone";
 import { UploadFileList, type UploadFileEntry } from "./UploadFileList";
 import {
   ANALYZE_START_REQUEST_BODY,
+  applyBatchConfirmationOverride,
   applyManualConfirmationOverride,
   buildUploadFormFields,
   checkUploadLimit,
@@ -213,7 +214,7 @@ export function UploadCenterPage() {
         return raw;
       }
       const afterPresets =
-        mode === "basic" ? applyManualConfirmationOverride(raw, presetsToOverride(presets)) : raw;
+        mode === "basic" ? applyBatchConfirmationOverride(raw, presetsToOverride(presets)) : raw;
       const manualOverride = manualOverrides[entryId];
       if (!manualOverride) {
         return afterPresets;

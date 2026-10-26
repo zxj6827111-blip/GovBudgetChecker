@@ -18,10 +18,10 @@ from src.services.table_import_receipt import build_table_import_receipt
 
 
 @pytest.mark.parametrize("cover,expected", [
-    ("上海市普陀区城市运行管理中心\n(上海市普陀区城市网格化综合管理\n中心、上海市普陀区政务服务中心、\n上海市普陀区大数据中心)", "上海市普陀区城市运行管理中心"),
+    ("上海市普陀区城市运行管理中心\n(上海市普陀区城市网格化综合管理\n中心、上海市普陀区政务服务中心、\n上海市普陀区大数据中心)", "上海市普陀区城市运行管理中心(上海市普陀区城市网格化综合管理中心、上海市普陀区政务服务中心、上海市普陀区大数据中心)"),
     ("上海市普陀区文化馆", "上海市普陀区文化馆"),
     ("上海市普陀区石泉路街道\n综合行政执法队", "上海市普陀区石泉路街道综合行政执法队"),
-    ("上海市普陀区人民政府长\n寿路街道办事处（本级）", "上海市普陀区人民政府长寿路街道办事处"),
+    ("上海市普陀区人民政府长\n寿路街道办事处（本级）", "上海市普陀区人民政府长寿路街道办事处(本级)"),
     ("上海市普陀区总工会", "上海市普陀区总工会"),
 ])
 def test_source_cover_blocks(cover, expected):
@@ -44,7 +44,7 @@ def test_cover_keeps_legitimate_organization_names(name):
 @pytest.mark.parametrize("name,expected", [
     ("上海市普陀区人民代表大会\n常务委员会办公室", "上海市普陀区人民代表大会常务委员会办公室"),
     ("中共上海市普陀区委\n老干部局", "中共上海市普陀区委老干部局"),
-    ("上海市普陀区档案局本级", "上海市普陀区档案局"),
+    ("上海市普陀区档案局本级", "上海市普陀区档案局本级"),
 ])
 def test_source_cover_namespace_and_explicit_caliber(name, expected):
     assert detect_cover_facts([name + "\n2025年度决算"])["cover_org_name"] == expected

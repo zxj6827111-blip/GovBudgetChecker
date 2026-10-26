@@ -137,7 +137,123 @@ def attach_reconstruction(artifact, candidates):
     artifact.resolved_cells=resolved
 
 
-def resolve_native_table_candidates(policy, existing, incoming):
+def _verified_amount_coverage(table, page=None):
+    """完整金额格证明 → 原页字符及其行列身份；部分证明一律不可比。
+
+    只认规范金额列，编码不算金额。用字符集合而非证明片段数量比较，避免
+    同一来源因拆成多条记录而加分；每个字符在一个候选内只能属于一个格。
+    """
+    from src.services.fiscal_column_identity import canonical_column_mappings
+
+    rule = NINE_TABLE_RULES.get(table.table_code)
+    if rule is None or table.extraction_method not in {"lines", "lines_strict"}:
+        return None
+    mappings = {m["source_col_idx"]: m for m in canonical_column_mappings(table, rule)}
+    if not mappings:
+        return None
+    claimed = {}
+    for cell in table.cells:
+        if cell.is_header or cell.col_idx not in mappings:
+            continue
+        raw = normalize_text(cell.raw_text)
+        if not raw:
+            continue
+        if cell.numeric_value is None or native_source_conflict(cell):
+            return None
+        mapping = mappings[cell.col_idx]
+        if not 0 <= cell.row_idx < len(table.rows):
+            return None
+        row = table.rows[cell.row_idx]
+        labels = tuple(normalize_text(str(row[col] or ""))
+                       for col in mapping["source_label_cols"] if col < len(row))
+        if mapping["source_label_cols"] and not any(labels):
+            return None
+        identity = (mapping["canonical_measure"], normalize_text(mapping["source_col_name"]), labels)
+        sources = cell.native_text_sources or []
+        if not sources or normalize_text("".join(str(p.get("text", "")) for p in sources)) != raw:
+            return None
+        for source in sources:
+            physical_page = source.get("physical_page")
+            start, end = source.get("start_char_index"), source.get("end_char_index")
+            text = str(source.get("text", ""))
+            if (physical_page != table.page_number or physical_page != cell.page_number
+                    or not isinstance(start, int) or not isinstance(end, int)
+                    or start < 0 or end <= start or end - start != len(text)):
+                return None
+            if page is not None and (end > len(page.chars)
+                    or "".join(str(c.get("text", "")) for c in page.chars[start:end]) != text):
+                return None
+            for index, char in enumerate(text, start):
+                key = (physical_page, index)
+                if key in claimed:
+                    return None
+                claimed[key] = (char, identity)
+    return claimed or None
+
+
+def _original_amount_universe(page, tables):
+    """直接从共享原页取金额字符全集，范围为两候选规范金额列的数据区。
+
+    不从 native_text_sources 的填充数量推断原件全集；编码列、表头和正文
+    不参与。无法独立组成金额的字符不据此择优，仍交由原有读取门槛处理。
+    """
+    from src.services.fiscal_column_identity import canonical_column_mappings
+    from src.services.native_structure_recovery import _samples, _text, _one_numeric_run
+
+    boxes = []
+    for table in tables:
+        rule = NINE_TABLE_RULES.get(table.table_code)
+        money = {m["source_col_idx"] for m in canonical_column_mappings(table, rule)}
+        boxes.extend(c.bbox for c in table.cells if c.bbox and not c.is_header and c.col_idx in money)
+    if not boxes:
+        return set()
+    region = (min(b[0] for b in boxes), min(b[1] for b in boxes),
+              max(b[2] for b in boxes), max(b[3] for b in boxes))
+    samples = _samples(page, region)
+    groups = []
+    for sample in sorted(samples, key=lambda s: s[0]):
+        if not re.fullmatch(r"[0-9.,，+()－−-]", str(sample[1].get("text", ""))):
+            continue
+        # 必须同时满足原字符连续和视觉连续；相邻两列的整数不能被拼成一笔。
+        if (not groups or sample[0] != groups[-1][-1][0] + 1
+                or not _one_numeric_run([groups[-1][-1], sample])):
+            groups.append([])
+        groups[-1].append(sample)
+    universe = set()
+    for group in groups:
+        if typed_literal(_text(group), monetary=True)[0] not in {"amount", "zero"}:
+            continue
+        if not all(any(b[0] <= (sample[2][0] + sample[2][2]) / 2 < b[2]
+                           and b[1] <= (sample[2][1] + sample[2][3]) / 2 < b[3]
+                           for b in boxes) for sample in group):
+            continue
+        universe.update((tables[0].page_number, sample[0]) for sample in group)
+    return universe
+
+
+def _amount_coverage_preference(current, candidate, page=None):
+    """只有同口径、完整且唯一归属的来源真包含关系，才优先于面积/置信度。"""
+    if current.table_code != candidate.table_code or current.unit_hint != candidate.unit_hint:
+        return None
+    left, right = _verified_amount_coverage(current, page), _verified_amount_coverage(candidate, page)
+    if left is None or right is None:
+        return None
+    common = left.keys() & right.keys()
+    if not common or any(left[key] != right[key] for key in common):
+        return None
+    if page is not None:
+        universe = _original_amount_universe(page, (current, candidate))
+        if not universe or left.keys() | right.keys() != universe:
+            return None
+    # 集合不可比时不拿数量硬排；相同数值也不能代替来源身份。
+    if left.keys() < right.keys():
+        return True
+    if right.keys() < left.keys():
+        return False
+    return None
+
+
+def resolve_native_table_candidates(policy, existing, incoming, *, page=None):
     """所有提取策略和修复候选在此唯一裁定业务表，物理来源保持独立。"""
     merged = existing[:]
     for candidate in incoming:
@@ -174,8 +290,21 @@ def resolve_native_table_candidates(policy, existing, incoming):
                 # 不能替换它而丢失空列/原格位置；无网格时仍使用文本策略。
                 if current.extraction_method == "text":
                     merged[idx] = candidate
-            elif policy._table_priority(candidate) > policy._table_priority(current):
-                merged[idx] = candidate
+            else:
+                current_priority = policy._table_priority(current)
+                candidate_priority = policy._table_priority(candidate)
+                structure = getattr(policy, "_structure_priority", None)
+                coverage_preference = _amount_coverage_preference(current, candidate, page)
+                # 来源集合可比时先约束覆盖完整性；0.1pt 空白边界差也不能绕过。
+                # 证明不完整/重复/行列身份冲突时保持既有结构裁决及后续准入门槛。
+                if coverage_preference is not None:
+                    if coverage_preference:
+                        merged[idx] = candidate
+                elif candidate_priority > current_priority:
+                    merged[idx] = candidate
+                elif candidate_priority == current_priority and structure is not None:
+                    if structure(candidate) > structure(current):
+                        merged[idx] = candidate
             replaced = True
             break
         if not replaced:

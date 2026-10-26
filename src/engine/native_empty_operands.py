@@ -33,7 +33,7 @@ def blank_observations(terms):
             for term in terms if isinstance(term, NativeBlankTerm)]
 
 
-def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算'):
+def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算', calculation=True):
     """未识别格保持缺失；只有原页原格、列身份和行身份均完整才返回空白项。"""
     context, artifact = getattr(doc, 'fact_context', None), getattr(doc, 'parse_artifact', None)
     if (table_code not in _TABLES or context is None or artifact is None
@@ -98,6 +98,12 @@ def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算
            and _canonical_budget_stage(f.budget_stage) == _canonical_budget_stage(stage) for f in context.facts):
         return None
     sid = cell_id(table, cell)
+    from .cell_value_policy import interpret_cell_value
+    interpreted, _presence, convention = interpret_cell_value(
+        cell.raw_text, native_blank_verified=cell.native_blank_verified,
+        region=context.org_name, year=context.fiscal_year, table_code=table_code, row=row_idx, column=col)
+    if calculation and interpreted is None:
+        return None
     physical = [(fragment, c) for fragment in getattr(artifact, 'physical_fragments', [])
                 for c in fragment.cells if cell_id(fragment, c) == sid]
     if len(physical) != 1:
@@ -111,9 +117,10 @@ def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算
                    'bbox': list(cell.bbox), 'presence': 'blank', 'raw_text': '',
                    'table_code': table_code, 'instance_uid': instance.instance_uid,
                    'indicator': indicator, 'subject_code': subject, 'subject_name': name,
-                   'budget_stage': stage, 'basis': 'verified_native_grid_blank_no_recorded_amount'}
+                   'budget_stage': stage, 'basis': 'verified_native_grid_blank_with_scoped_convention',
+                   'convention': convention, 'calculation': calculation}
     return NativeBlankTerm(fact_uid='', indicator=indicator, raw_value='', unit=table.unit_hint,
-                          normalized_value=Decimal('0'), org_name=context.org_name,
+                          normalized_value=Decimal('0') if calculation else None, org_name=context.org_name,
                           org_scope=next((f.org_scope for f in context.facts if f.instance_uid == instance.instance_uid), None),
                           fiscal_year=context.fiscal_year, period='本年', budget_stage=stage,
                           fund_scope=measure_fund_scope(table_code, table.title,mapping.get('source_col_name'))[0], subject_code=subject,
@@ -126,5 +133,5 @@ def valid_blank_observation(artifact, context, observation):
     term = blank_term(SimpleNamespace(parse_artifact=artifact, fact_context=context),
                       observation.get('table_code'), observation.get('indicator'),
                       code=observation.get('subject_code'), names=(observation.get('subject_name'),),
-                      stage=observation.get('budget_stage'))
+                      stage=observation.get('budget_stage'), calculation=observation.get('calculation', True))
     return term is not None and blank_observations([term])[0] == observation

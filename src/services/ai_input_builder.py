@@ -169,7 +169,7 @@ def _fact_identity_lines(fact_context: Optional[Mapping[str, Any]]) -> List[str]
             f"[事实ID] fact_uid={fact_uid}",
             f"指标={fact.get('indicator') or '未识别'}",
             f"值={value if value is not None else '未知'}",
-            f"单位=万元归一",
+            "单位=万元归一",
             f"年度={fact.get('fiscal_year') or '未知'}",
             f"主体={fact.get('org_name') or '未知'}",
             f"范围={fact.get('fund_scope') or '未知'}",

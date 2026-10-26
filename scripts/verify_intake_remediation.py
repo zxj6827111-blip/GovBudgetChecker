@@ -653,6 +653,20 @@ def _compare_intake(v: Verdicts, base: Dict[str, Dict], cur: Dict[str, Dict], ca
     variants = [f for f in org["name_variants_must_bind"] if f in cur and not cur[f].get("bound")]
     v.add("A4 写法差异不得误拒", not variants, f"{len(org['name_variants_must_bind'])} 例仍能绑定",
           f"{len(variants)} 例未绑定", variants)
+    pending_specs = org.get("name_variants_expected_pending") or []
+    pending_bad = []
+    for spec in pending_specs:
+        f = spec["file"] if isinstance(spec, dict) else spec
+        row = cur.get(f)
+        if row is None:
+            pending_bad.append(f + "（当前采集缺失）")
+            continue
+        required = set(spec.get("reason_in") or []) if isinstance(spec, dict) else set()
+        reasons = set(_reason_codes(row))
+        if row.get("bound") is not None or (required and not (reasons & required)):
+            pending_bad.append(f)
+    v.add("A4b 写法差异但口径不足的样本保持待确认", not pending_bad,
+          f"{len(pending_specs)} 例按 A2 口径待确认", f"{len(pending_bad)} 例不符", pending_bad)
     # 回归：基线已正确绑定（与文件名主体等价）的，整改后不得改绑到其他组织；
     # 转为待确认是安全结果，允许少量（封面抽取残缺等），逐条列出复核。
     correct = [f for f, r in base.items() if r.get("bound") and name_key(r["bound"]) == name_key(r.get("filename_org")) and f in cur]

@@ -66,6 +66,9 @@ def lex_numeric(raw: object, *, expected: str | None = None) -> NumericLexeme:
             return NumericLexeme(text, "invalid", reason="duplicate_sign")
     if not _NUMBER.fullmatch(token):
         return NumericLexeme(text, "invalid", unit=unit, reason="invalid_numeric_literal")
+    if re.match(r"[+-]?0\d*,", token):
+        # 000,000 等可能是跨格丢失了前导字符；不把不规范的千分位残段认证为明确零。
+        return NumericLexeme(text, "invalid", unit=unit, reason="leading_zero_thousands_fragment")
     value = Decimal(token.replace(",", ""))
     if negative:
         value = -value

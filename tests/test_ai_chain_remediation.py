@@ -820,7 +820,7 @@ async def test_specialty_failure_is_attributed_to_its_own_window() -> None:
     service.page_offsets = [(0, 20, 1), (21, 41, 2)]
 
     async def fake_audit(window_text: str, _doc_hash: str, structured_context=None):
-        window_id = 0 if window_text.startswith("A") else 1
+        _window_id = 0 if window_text.startswith("A") else 1
         return AuditIssueList(
             [],
             AuditOutcome(

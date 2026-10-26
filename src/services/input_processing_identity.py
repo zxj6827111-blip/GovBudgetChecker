@@ -17,7 +17,7 @@ _FLAGS = ('FACT_DISABLE_CELL_CONF_FLOOR', 'INTAKE_DISABLE_ZERO_GAP_PASS', 'PDF_D
           'PDF_DISABLE_PLACEHOLDER_ON_TABLE_PAGE', 'OCR_MODEL_FINGERPRINT',
           'OCR_RENDER_DPI', 'OCR_TILE_WIDTH', 'OCR_TILE_HEIGHT', 'OCR_TILE_OVERLAP',
           'OCR_DOCUMENT_SOFT_BUDGET_SEC',
-          'OCR_ENABLED', 'OCR_CPU_THREADS', 'PDF_PARSE_MAX_PAGES', 'MAX_UPLOAD_PAGES',
+          'OCR_ENABLED', 'OCR_IMAGE_GATE', 'OCR_CPU_THREADS', 'PDF_PARSE_MAX_PAGES', 'MAX_UPLOAD_PAGES',
           'PDF_PARSE_MAX_TEXT_CHARS', 'PDF_PARSE_MAX_TABLE_CELLS')
 
 
@@ -64,6 +64,24 @@ def artifact_content_hash(artifact) -> str:
     # 运行UID区分执行尝试，不是原件内容；物理格/逻辑格及资格证据均参与比较。
     payload.pop('parse_run_uid', None)
     return content_hash(payload)
+
+
+def bind_artifact_document_identity(artifact, *, organization_id=None, organization_name=None,
+                                    fiscal_year=None, report_kind=None, doc_type=None,
+                                    check_subject_name=None) -> None:
+    """同一 PDF 改归属后建立独立运行，不能复用旧主体的不可变原始事实。"""
+    binding = {key: str(value or '').strip() for key, value in {
+        'organization_id': organization_id, 'organization_name': organization_name,
+        'fiscal_year': fiscal_year, 'report_kind': report_kind, 'doc_type': doc_type,
+        'check_subject_name': check_subject_name,
+    }.items()}
+    if artifact.processing_manifest.get('document_binding') == binding:
+        return
+    artifact.processing_manifest = {**artifact.processing_manifest, 'document_binding': binding}
+    base = re.sub(r':document-binding-v1:[0-9a-f]{64}', '', artifact.config_fingerprint or '')
+    artifact.config_fingerprint = base + ':document-binding-v1:' + content_hash(binding)
+    # 来源格、原始文字、金额及文件哈希不改；仅让包含主体解释的运行身份与归属一起隔离。
+    artifact.parse_run_uid = artifact_content_hash(artifact)[:32]
 
 
 def journal_cache_conflict(job_id, supplied, cached):

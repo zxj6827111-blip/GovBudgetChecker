@@ -139,6 +139,10 @@ def table_title_lines(doc: Document) -> List[Tuple[int, str, int, int, str]]:
         for line in lines[:6]:
             start, offset = offset, offset + len(line) + 1
             norm = _title_norm(line)
+            # 章节标题可折行为“某单位2025年 / 度决算表”，其下仍有真实表题，不能抢作九表表名。
+            if (re.search(r"(?:年度?|度)(?:部门|单位)?(?:预算|决算)表$", norm)
+                    or re.fullmatch(r"(?:部门|单位)?(?:预算|决算)表", norm)):
+                continue
             if norm.endswith("表") and re.search(r"(?:预算|决算)", norm) and len(norm) <= 48 \
                     and not norm.startswith(("注", "第")):
                 found.append((page, text, start, start + len(line), norm))
@@ -170,6 +174,12 @@ class CMM021_TableTitleNormative(Rule):
         for page, text, start, end, norm in titles:
             body = re.sub(r"^20\d{2}年度?", "", norm)
             index = next((i for i, core in reversed(list(enumerate(cores))) if core in _title_norm(body)), None)
+            artifact = getattr(doc, "parse_artifact", None)
+            if kind == "final" and artifact is not None:
+                from src.services.fiscal_table_rules import NINE_TABLE_RULES
+                codes = {t.table_code for t in artifact.table_fragments if t.page_number == page and t.table_code in NINE_TABLE_RULES}
+                if len(codes) == 1:
+                    index = list(NINE_TABLE_RULES).index(next(iter(codes)))
             if index is None:
                 continue
             expected = names[index]

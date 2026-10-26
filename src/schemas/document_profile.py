@@ -34,12 +34,12 @@ from pydantic import BaseModel, Field
 
 #: 画像解析器版本。画像结构或候选优先级变更时必须递增，
 #: 否则历史结果无法回答"这条结论是按哪版识别口径产生的"。
-PROFILE_RESOLVER_VERSION = "document-profile-v5-native-cover-room-owner"
+PROFILE_RESOLVER_VERSION = "document-profile-v6-source-category-conflicts"
 
 # ---- 维度取值域 -------------------------------------------------------------
 
 #: 文种。``budget`` 含预算/调整预算，``final`` 含决算；无法识别为 ``unknown``。
-REPORT_KINDS: Tuple[str, ...] = ("budget", "final", "unknown")
+REPORT_KINDS: Tuple[str, ...] = ("budget", "final", "non_budget", "unknown")
 
 #: 主体层级。部门/单位/政府三级，识别不到为 ``unknown``。
 SUBJECT_LEVELS: Tuple[str, ...] = ("department", "unit", "government", "unknown")

@@ -176,9 +176,9 @@ def test_unresolved_total_le_15(replays):
         item=replays[alias]['unresolved']['V33-224']
         assert item['status']=='insufficient_data' and item['detail']=='因公出国说明或表内决算金额未唯一识别'
         planned_missing+=1
-    item=replays['shiquan']['unresolved']['V33-234']
-    assert '原文包含其他或未确认主体，不能跨主体拼接金额' in item['detail']
-    planned_missing+=1
+    assert replays['shiquan']['summary']['rule_statuses']['V33-234'] == 'fail'
+    assert any(issue.rule == 'V33-234' and '312.55%' in issue.message
+               and '20.00' in issue.message and '62.51' in issue.message for issue in replays['shiquan']['issues'])
     assert total - planned_missing <= 15, f"排除已核实缺分项预算后 unresolved {total} 超出验收线"
     # 2026-09-29 MR-B 批次计划内收敛：4 份决算 unresolved 14 → ≤10（实测 10），
     # 验收重走并固化于 tests/test_budget_intake_20260929.py（BUD-105/107/108/109
@@ -601,7 +601,9 @@ def test_scan_sim_mixed_end_to_end_gate_zeroes_errors():
         issue for issue in raw_issues
         if str(getattr(issue, "severity", "")).lower() in ("error", "high", "critical")
     ]
-    assert len(errors) >= 5, f"夹具形态变了：error 级只剩 {len(errors)} 条"
+    # 未读取页面不再制造“缺表”错误；保留三项可复现的实际问题验证降级门。
+    assert len(errors) == 3
+    assert all(issue.rule != "V33-002" for issue in errors)
 
     assessment = _scan_assessment(page_texts, page_tables)
     assert assessment["page_coverage"] < 0.8

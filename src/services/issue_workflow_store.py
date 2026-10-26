@@ -549,6 +549,7 @@ def _find_report_review_item(payload: Dict[str, Any], issue_id: str) -> Optional
         return None
     items = [item for item in report["manual_review"] if isinstance(item, dict)]
     reason_titles = {
+        "org_scope_pending": "材料汇总口径待确认",
         "ai_failed": "大模型检查未完整完成",
         "evidence_incomplete_findings": "大模型发现证据不足",
         "rule_evidence_incomplete": "规则问题证据不足",

@@ -28,8 +28,7 @@ import { Badge, Button } from "@/components/ui";
 
 import { flattenOrganizationTree } from "./OrganizationFilterSelect";
 import {
-  formatUnitScopeHint,
-  selectDepartmentOptions,
+  selectReportOrganizationOptions,
   type ManualConfirmationOverride,
   type OrganizationRecordLike,
   type PreflightConfirmationReason,
@@ -82,8 +81,8 @@ export function UploadConfirmationPanel({ fileName, reasons, onSave, onCancel }:
 
   const needsYear = reasons.includes("missing_report_year");
   const needsDocType = reasons.includes("missing_doc_type");
-  const needsOrg = reasons.includes("low_confidence_org");
-  const departmentOptions = selectDepartmentOptions(organizations);
+  const needsOrg = reasons.includes("low_confidence_org") || reasons.includes("organization_scope_unconfirmed");
+  const organizationOptions = selectReportOrganizationOptions(organizations);
 
   const canSave = (!needsYear || reportYear) && (!needsDocType || docType) && (!needsOrg || organizationId);
 
@@ -168,13 +167,13 @@ export function UploadConfirmationPanel({ fileName, reasons, onSave, onCancel }:
               className="w-full rounded-md border border-border bg-white px-3 py-2 text-sm text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
             >
               <option value="">请选择组织 *</option>
-              {departmentOptions.map((org) => (
+              {organizationOptions.map((org) => (
                 <option key={org.id} value={org.id}>
-                  {org.name}
+                  {org.label}
                 </option>
               ))}
             </select>
-            <p className="mt-1 text-[11px] text-slate-400">{formatUnitScopeHint("")}</p>
+            <p className="mt-1 text-[11px] text-slate-400">部门汇总材料选择部门节点；单位材料选择对应单位节点。</p>
           </div>
         ) : null}
       </div>

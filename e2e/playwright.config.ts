@@ -25,9 +25,9 @@ export default defineConfig({
   use: {
     baseURL,
     trace: "on-first-retry",
-    // 本机没有 Playwright 自带 chromium 时，用系统 Chrome 跑真实浏览器验收；
-    // CI 不设置该变量，仍使用默认浏览器。
-    channel: process.env.E2E_CHANNEL === "chrome" ? "chrome" : undefined,
+    // 本机支持系统 Chrome 或显式可执行路径，CI 不设置时仍使用默认浏览器。
+    channel: !process.env.E2E_CHROME_PATH && process.env.E2E_CHANNEL === "chrome" ? "chrome" : undefined,
+    launchOptions: process.env.E2E_CHROME_PATH ? { executablePath: process.env.E2E_CHROME_PATH } : undefined,
   },
   webServer: externalServer ? undefined : {
     command: "npm --prefix ../app run dev",

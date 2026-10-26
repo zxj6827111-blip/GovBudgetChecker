@@ -69,7 +69,10 @@ export function invalidationReasonLabel(reason: string | null | undefined): stri
       analysis_restarted: "分析结果已更新，需要重新复核",
       analysis_basis_changed: "分析结果已更新，需要重新复核",
       review_reopened: "复核已重新开始",
-    }[key] ?? key
+      organization_binding_corrected_by_user: "单位归属已更正，需要重新复核",
+    }[key]
+    // 未登记的原因码仍要带出（便于发现漏配），但先说结论，不让原码单独出现。
+    ?? `复核依据已变化，需要重新复核（原因码：${key}）`
   );
 }
 

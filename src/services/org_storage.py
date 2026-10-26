@@ -24,6 +24,11 @@ from src.schemas.organization import (
     OrganizationTree,
 )
 from src.services.org_hierarchy import LEVEL_ORDER, validate_organization_hierarchy
+from src.services.org_name_identity import normalize_org_name
+
+
+def organization_name_warning(name):
+    return bool(re.search(r"(?:20\d{2}(?:年|年度)*|预算|决算|年度)$", normalize_org_name(name)))
 
 logger = logging.getLogger(__name__)
 
@@ -242,7 +247,7 @@ class OrganizationStorage:
         by_id = {org.id: org for org in organizations}
         identities = set()
         for org in organizations:
-            key = (org.name.strip(), org.level, org.parent_id)
+            key = (normalize_org_name(org.name), org.level, org.parent_id)
             if key in identities:
                 errors.append(f"重复组织：{org.name}（{org.level}，上级 {org.parent_id or '无'}）")
             identities.add(key)
@@ -281,6 +286,8 @@ class OrganizationStorage:
 
         if not org.name.strip():
             raise ValueError("组织名称不能为空")
+        if organization_name_warning(org.name) and not org.name_warning_confirmation:
+            raise ValueError("organization_name_confirmation_required：名称尾部疑似包含年度或文种，请确认后再导入")
         self._commit_organizations([*self._organizations, org])
         return org
 
@@ -297,6 +304,8 @@ class OrganizationStorage:
                 updated = Organization(**org_dict)
                 if not updated.name.strip():
                     raise ValueError("组织名称不能为空")
+                if organization_name_warning(updated.name) and not updated.name_warning_confirmation:
+                    raise ValueError("organization_name_confirmation_required：名称尾部疑似包含年度或文种，需确认")
                 candidate = self._organizations.copy()
                 candidate[i] = updated
                 self._commit_organizations(candidate)
@@ -565,6 +574,7 @@ class OrganizationStorage:
         data: List[Dict[str, Any]],
         clear_existing: bool = False,
         referenced_org_ids: Optional[List[str]] = None,
+        confirm_name_warning: bool = False,
     ) -> ImportResult:
         """从列表导入组织，支持 `department/unit + parent` 模板。"""
 
@@ -580,6 +590,15 @@ class OrganizationStorage:
             if not records:
                 result.errors.append(f"第 {index} 行缺少组织名称，或表头不符合导入模板")
             expanded_rows.extend(records)
+        seen = {}
+        for row in expanded_rows:
+            name = row.get("name", "")
+            key = (normalize_org_name(name), row.get("level"), normalize_org_name(row.get("parent_name")))
+            if key in seen and seen[key] != name:
+                result.errors.append(f"格式归一后重复组织：{name}")
+            seen[key] = name
+            if organization_name_warning(name) and not confirm_name_warning:
+                result.errors.append(f"organization_name_confirmation_required：{name} 名称尾部疑似包含年度或文种，需确认")
         if not data:
             result.errors.append("文件没有可导入的组织记录")
 
@@ -671,6 +690,7 @@ class OrganizationStorage:
                         parent_id=parent_id,
                         code=code,
                         keywords=[name],
+                        name_warning_confirmation={"source": "import_confirmation", "confirmed_at": time.time()} if confirm_name_warning else None,
                     )
                 except Exception as e:
                     result.errors.append(f"组织“{name}”的信息无效：{e}")

@@ -400,7 +400,9 @@ class EngineRuleRunner:
 
                     # 鐩存帴璋冪敤瑙勫垯瀵硅薄鐨刟pply鏂规硶
                     document.current_rule_code = rule_id
-                    issues = rule_obj.apply(document)
+                    from src.engine.rule_identity import rule_identity_requirements
+                    with rule_identity_requirements(document, rule_id):
+                        issues = rule_obj.apply(document)
 
                     int((time.time() - start_time) * 1000)
 

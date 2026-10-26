@@ -1,8 +1,13 @@
 /**
  * WorkbenchQueueTable：原型图「处理队列」表格（Task 4.2；前置修复 2 拆分耗时/页数列）。
  *
- * 列：文档（文件名 + 组织·年份·类型副行）/ 当前阶段（阶段名+进度条）/
- * 质量状态（徽章）/ 耗时 / 页数 / 问题数 / 操作。
+ * 列：文档（文件名 + 组织·年份·类型副行）/ 状态（质量徽章 + 进行中的阶段进度 +
+ * 本地/大模型检查一行摘要）/ 页数·耗时 / 问题 / 提示 / 操作。
+ *
+ * 每行只说一次：已结束的任务不再画“质量门禁 100%”和两条 100% 进度条——
+ * 徽章说结论，检查摘要说两条检查线各跑了多少（“本地 89/89 · 大模型 未启用”），
+ * 单位、模型与步骤放在悬停提示里。进行中/失败的任务才显示阶段进度条。
+ * 窄单元格一律不换行，避免“需/要/人/工/复/核”式的逐字竖排。
  *
  * 关键约束：
  * - 阶段与进度必须用 Task 3 的 stage_progress（resolve_stage_progress 的输出），
@@ -25,13 +30,28 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { ClipboardCheck, RefreshCw } from "lucide-react";
 
 import { Badge, StageProgress, Td, Th } from "@/components/ui";
-import AnalysisCheckProgress from "@/components/AnalysisCheckProgress";
 import type { BadgeTone } from "@/components/ui";
 import type { JobSummaryRecord } from "@/lib/uiAdapters";
-import { normalizeUiTaskStatus } from "@/lib/uiAdapters";
+import { isUiTaskFinished, normalizeUiTaskStatus } from "@/lib/uiAdapters";
 import { reviewDetailPath } from "../review-workbench/reviewListAdapters";
 
-import { formatElapsedText, formatPagesText, resolveIssueCountText, resolveFindingCountDetails, resolveReviewEntryDecision } from "./workbenchAdapters";
+import {
+  formatElapsedText,
+  formatPagesText,
+  resolveFindingCountDetails,
+  resolveFindingCountSummary,
+  resolveIssueCountText,
+  resolveReviewEntryDecision,
+  summarizeCheckTracks,
+  type CheckTrackTone,
+} from "./workbenchAdapters";
+
+const CHECK_TONE_CLASSES: Record<CheckTrackTone, string> = {
+  done: "text-slate-600",
+  active: "text-primary-700",
+  warning: "text-warning-700",
+  muted: "text-slate-400",
+};
 
 interface StageProgressPayload {
   phase?: string | null;
@@ -39,6 +59,10 @@ interface StageProgressPayload {
   percent?: number | null;
   raw_stage?: string | null;
 }
+
+/** 表头不换行，单元格内边距收窄，让五列在常见笔记本宽度里不出横向滚动。 */
+const TH = "whitespace-nowrap px-3";
+const TD = "px-3";
 
 function readStageProgress(job: JobSummaryRecord): StageProgressPayload | null {
   const raw = job.stage_progress;
@@ -123,8 +147,6 @@ function formatDocTypeLabel(job: JobSummaryRecord): string {
 
 export interface WorkbenchQueueTableProps {
   jobs: JobSummaryRecord[];
-  /** 报告目录默认折叠检查明细，保留阶段与质量状态，避免每行占用过多高度。 */
-  collapsibleChecks?: boolean;
   onReanalyze?: (jobId: string) => void;
   /**
    * 修复 3：可选的「开始分析」回调——只对 uploaded（待分析）态的行渲染入口，
@@ -184,14 +206,13 @@ function ReviewEntryLink({ job, returnTo }: { job: JobSummaryRecord; returnTo: s
       className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-primary-700 transition-colors hover:border-primary-300 hover:bg-primary-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
     >
       <ClipboardCheck className="h-3.5 w-3.5" aria-hidden="true" />
-      查看复核材料
+      查看复核
     </Link>
   );
 }
 
 export function WorkbenchQueueTable({
   jobs,
-  collapsibleChecks = false,
   onReanalyze,
   onStartAnalysis,
   renderRowActions,
@@ -225,7 +246,7 @@ export function WorkbenchQueueTable({
         <thead>
           <tr>
             {selection ? (
-              <Th className="w-10">
+              <Th className="w-10 px-3">
                 <input
                   ref={selectAllRef}
                   type="checkbox"
@@ -238,13 +259,11 @@ export function WorkbenchQueueTable({
                 />
               </Th>
             ) : null}
-            <Th>文档</Th>
-            <Th>当前阶段</Th>
-            <Th>质量状态</Th>
-            <Th>耗时</Th>
-            <Th>页数</Th>
-            <Th>问题 / 提示</Th>
-            <Th className="text-right">操作</Th>
+            <Th className={TH}>文档</Th>
+            <Th className={TH}>状态</Th>
+            <Th className={TH}>页数 / 耗时</Th>
+            <Th className={TH}>问题 / 提示</Th>
+            <Th className={`${TH} text-right`}>操作</Th>
           </tr>
         </thead>
         <tbody>
@@ -253,12 +272,17 @@ export function WorkbenchQueueTable({
             const qualityBadge = resolveQualityBadge(job);
             const jobId = String(job.job_id ?? "");
             const issueCountText = resolveIssueCountText(job);
-            const isPendingAnalysis = normalizeUiTaskStatus(job.status) === "pending_analysis";
-            const checkTracks = job.check_progress as { local?: unknown; ai?: unknown } | null | undefined;
+            const status = normalizeUiTaskStatus(job.status);
+            const isPendingAnalysis = status === "pending_analysis";
+            // 已结束的任务阶段必然走到最后，进度条只给进行中和失败（看停在哪一步）。
+            const showStage = !isPendingAnalysis && (!isUiTaskFinished(status) || status === "failed");
+            const checks = summarizeCheckTracks(job.check_progress);
+            const findings = resolveFindingCountSummary(job);
+            const meta = `${String(job.organization_name ?? "未关联单位")} · ${formatYearLabel(job.report_year)} · ${formatDocTypeLabel(job)}`;
             return (
-              <tr key={jobId} data-testid={`gbc-workbench-queue-row-${jobId}`} className="hover:bg-surface-100">
+              <tr key={jobId} data-testid={`gbc-workbench-queue-row-${jobId}`} className="align-top hover:bg-surface-100">
                 {selection ? (
-                  <Td>
+                  <Td className="px-3">
                     <input
                       type="checkbox"
                       aria-label={`选择任务 ${job.filename ?? jobId}`}
@@ -267,52 +291,56 @@ export function WorkbenchQueueTable({
                       title={!selection.canSelect(job) ? "正在运行或状态未识别的任务不能重复提交" : undefined}
                       onChange={() => selection.onToggleJob(jobId)}
                       data-testid={`gbc-queue-select-${jobId}`}
-                      className="h-4 w-4 accent-primary-600"
+                      className="mt-0.5 h-4 w-4 accent-primary-600"
                     />
                   </Td>
                 ) : null}
-                <Td>
+                <Td className={`${TD} min-w-[10rem]`}>
                   <Link
                     href={`/queue?job=${encodeURIComponent(jobId)}` as Route}
-                    className="font-medium text-slate-900 hover:text-primary-700"
+                    className="line-clamp-2 font-medium leading-snug text-slate-900 hover:text-primary-700"
+                    title={String(job.filename ?? jobId)}
                     data-testid={`gbc-workbench-queue-row-link-${jobId}`}
                   >
                     {String(job.filename ?? jobId)}
                   </Link>
-                  <div className="mt-0.5 text-xs text-slate-400">
-                    {String(job.organization_name ?? "未关联单位")} · {formatYearLabel(job.report_year)} ·{" "}
-                    {formatDocTypeLabel(job)}
-                  </div>
+                  <div className="mt-0.5 line-clamp-1 text-xs text-slate-400" title={meta}>{meta}</div>
                 </Td>
-                <Td>
-                  <StageProgress
-                    stageLabel={resolveStageLabel(job)}
-                    progress={stageProgress?.percent ?? null}
-                    tone={resolveStageTone(job)}
-                    data-testid={`gbc-workbench-queue-stage-${jobId}`}
-                  />
-                  {collapsibleChecks && (checkTracks?.local || checkTracks?.ai) ? (
-                    <details className="mt-2 text-xs text-slate-500" data-testid={`gbc-report-check-details-${jobId}`}>
-                      <summary className="cursor-pointer rounded text-primary-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400">检查详情</summary>
-                      <AnalysisCheckProgress value={job.check_progress} compact />
-                    </details>
-                  ) : <AnalysisCheckProgress value={job.check_progress} compact />}
+                <Td className={`${TD} min-w-[8.5rem]`}>
+                  <Badge tone={qualityBadge.tone} className="whitespace-nowrap">{qualityBadge.label}</Badge>
+                  {showStage ? (
+                    <StageProgress
+                      stageLabel={resolveStageLabel(job)}
+                      progress={stageProgress?.percent ?? null}
+                      tone={resolveStageTone(job)}
+                      className="mt-1.5 min-w-0"
+                      data-testid={`gbc-workbench-queue-stage-${jobId}`}
+                    />
+                  ) : null}
+                  {checks ? (
+                    <div className="mt-1 flex flex-wrap gap-x-2 text-xs" title={checks.detail} data-testid={`gbc-workbench-queue-checks-${jobId}`}>
+                      {checks.items.map((item) => (
+                        <span key={item.key} className={`whitespace-nowrap ${CHECK_TONE_CLASSES[item.tone]}`}>{item.text}</span>
+                      ))}
+                    </div>
+                  ) : null}
                 </Td>
-                <Td>
-                  <Badge tone={qualityBadge.tone}>{qualityBadge.label}</Badge>
+                <Td className={`${TD} whitespace-nowrap`}>
+                  <div data-testid={`gbc-workbench-queue-pages-${jobId}`}>{formatPagesText(job)}</div>
+                  <div className="mt-0.5 text-xs text-slate-400" title="耗时" data-testid={`gbc-workbench-queue-elapsed-${jobId}`}>{formatElapsedText(job.elapsed_ms)}</div>
                 </Td>
-                <Td data-testid={`gbc-workbench-queue-elapsed-${jobId}`}>{formatElapsedText(job.elapsed_ms)}</Td>
-                <Td data-testid={`gbc-workbench-queue-pages-${jobId}`}>{formatPagesText(job)}</Td>
-                <Td data-testid={`gbc-workbench-queue-findings-${jobId}`}>
-                  <div className="whitespace-nowrap font-medium">
-                    {issueCountText === "—" ? "—" : `${issueCountText} 问题`}
-                  </div>
-                  {resolveFindingCountDetails(job).map((text) => (
-                    <div key={text} className="mt-0.5 whitespace-nowrap text-xs text-slate-500">{text}</div>
-                  ))}
+                <Td className={`${TD} min-w-[7rem]`} data-testid={`gbc-workbench-queue-findings-${jobId}`} title={resolveFindingCountDetails(job).join("；") || undefined}>
+                  <div className="whitespace-nowrap font-medium">{issueCountText === "—" ? "—" : `${issueCountText} 问题`}</div>
+                  {findings.candidate || findings.others.length > 0 ? (
+                    // 每个计数是一个不可拆的词，只在词与词之间换行。
+                    <div className="mt-0.5 flex flex-wrap gap-x-2 text-xs text-slate-500">
+                      {findings.candidate ? <span className="whitespace-nowrap text-warning-700">含待核实 {findings.candidate}</span> : null}
+                      {findings.others.map((text) => <span key={text} className="whitespace-nowrap">{text}</span>)}
+                    </div>
+                  ) : null}
                 </Td>
-                <Td className="text-right">
-                  <span className="inline-flex items-center justify-end gap-2">
+                <Td className={`${TD} text-right`}>
+                  <span className="inline-flex flex-col items-end gap-1.5">
                     <ReviewEntryLink job={job} returnTo={reviewReturnTo ?? pathname} />
                     {isPendingAnalysis && onStartAnalysis ? (
                       <button
@@ -321,7 +349,7 @@ export function WorkbenchQueueTable({
                         disabled={actionsDisabled || busyJobIds?.has(jobId)}
                         aria-label={`开始分析任务 ${jobId}`}
                         data-testid={`gbc-workbench-queue-start-${jobId}`}
-                        className="rounded-md border border-border px-2 py-1 text-xs font-medium text-primary-700 transition-colors hover:border-primary-300 hover:bg-primary-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="whitespace-nowrap rounded-md border border-border px-2 py-1 text-xs font-medium text-primary-700 transition-colors hover:border-primary-300 hover:bg-primary-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         开始分析
                       </button>
@@ -332,11 +360,11 @@ export function WorkbenchQueueTable({
                       <button
                         type="button"
                         onClick={() => onReanalyze?.(jobId)}
-                        disabled={!onReanalyze || actionsDisabled || busyJobIds?.has(jobId) || normalizeUiTaskStatus(job.status) === "analyzing"}
+                        disabled={!onReanalyze || actionsDisabled || busyJobIds?.has(jobId) || status === "analyzing"}
                         aria-label={`重新分析任务 ${job.filename ?? jobId}`}
                         title="重新运行本地检查，并按系统当前设置决定是否调用大模型"
                         data-testid={`gbc-workbench-queue-actions-${jobId}`}
-                        className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:border-primary-300 hover:bg-primary-50 hover:text-primary-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-primary-50 hover:text-primary-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
                         重新分析
