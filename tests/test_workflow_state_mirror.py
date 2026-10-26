@@ -288,3 +288,47 @@ async def test_persist_workflow_state_bounds_database_mirror_wait(monkeypatch, t
     persistence = runtime.read_json_file(tmp_path / ".issue_workflow_persistence.json", default={})
     assert persistence["status"] == "pending_retry"
     assert persistence["error"] == "database mirror timed out"
+
+
+def test_project_job_issue_decisions_exposes_old_note_actor_and_time() -> None:
+    payload = {
+        "job_id": "job-old-revision",
+        "analysis_revision": "rev-old",
+        "result": {
+            "rule_findings": [
+                {
+                    "id": "issue-old",
+                    "title": "缺失预算表",
+                    "page_number": 1,
+                    "check_relation_id": None,
+                    "fact_ids": [],
+                    "evidence_ids": [],
+                }
+            ],
+            "ai_findings": [],
+        },
+    }
+    state = {
+        "decision_events": [
+            {
+                "job_id": "job-old-revision",
+                "issue_id": "issue-old",
+                "status": "confirmed",
+                "note": "旧版本意见",
+                "analysis_revision": "rev-old",
+                "decision_revision": "2",
+                "decision_actor": "admin",
+                "updated_at": "2026-10-26T03:45:28Z",
+            }
+        ]
+    }
+    projected = issue_workflow_store.project_job_issue_decisions(
+        "job-old-revision", payload, _state=state
+    )
+    assert len(projected) == 1
+    assert projected[0]["status"] == "confirmed"
+    assert projected[0]["note"] == "旧版本意见"
+    assert projected[0]["actor"] == "admin"
+    assert projected[0]["updated_at"] == "2026-10-26T03:45:28Z"
+    assert projected[0]["title"] == "缺失预算表"
+    assert projected[0]["inherited"] is False

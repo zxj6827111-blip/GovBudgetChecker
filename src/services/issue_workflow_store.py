@@ -854,12 +854,16 @@ def project_job_issue_decisions(
         projected.append(
             {
                 "issue_id": issue_id,
+                "title": record.get("title") or issue.get("title"),
+                "page": record.get("page") if record.get("page") is not None else _issue_page(issue),
                 "status": str(record.get("status") or "pending"),
                 "note": record.get("note"),
                 "analysis_revision": revision or str(record.get("analysis_revision") or ""),
                 "decision_revision": str(record.get("decision_revision") or "1"),
                 "inherited": not same_revision,
                 "actor": record.get("decision_actor"),
+                # 页面上必须能看到旧意见的操作时间，不能只给 actor/note。
+                "updated_at": record.get("updated_at"),
                 "hide_from_results": bool(record.get("hide_from_results", False)),
                 "decision_origin": record.get("decision_origin") or "workflow",
                 "migration_id": record.get("migration_id"),

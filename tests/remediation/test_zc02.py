@@ -349,7 +349,13 @@ def test_ocr_result_normalisation_and_error_isolation() -> None:
 
 
 def test_ocr_pipeline_runs_when_enabled_and_preserves_native(monkeypatch, tmp_path) -> None:
-    """合成控制：真实切块适配器保留原生正文，未完成页继续待处理。"""
+    """合成控制：真实切块适配器保留原生正文，未完成页继续待处理。
+
+    本用例关注切块管线本身；夹具的第 2 页是物理空白纸，默认开启的图像门控会
+    把它记成 blank_pages 而不送 OCR，从而改变 pending/failed_pages 语义。
+    门控行为由 tests/remediation/test_ocr_image_gate.py 单独覆盖，这里显式关闭。
+    """
+    monkeypatch.setenv("OCR_IMAGE_GATE", "false")
     import asyncio
     import hashlib
     from src.services import ocr_pipeline,ocr_tiled_pipeline

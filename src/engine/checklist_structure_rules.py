@@ -560,29 +560,64 @@ class CMM015_PageIntegrity(Rule):
     code, severity = "CMM-015", "warn"
     desc = "无空白页、页码连续（预/决算通用，清单 E-02）"
 
+    @staticmethod
+    def _anchor(texts: List[str], index: int) -> Tuple[int, str, int, int]:
+        """空白页本身没有文字可引，锚到最近的正文页；首页空白则锚到后一页。"""
+        for offset, step in ((-1, -1), (1, 1)):
+            position = index + offset
+            while 0 <= position < len(texts):
+                text = str(texts[position] or "")
+                if text.strip():
+                    lines = [line for line in text.split("\n") if line.strip()]
+                    anchor = lines[-1] if step < 0 and lines else (lines[0] if lines else text)
+                    start = max(text.rfind(anchor), 0)
+                    return position + 1, text, start, start + len(anchor)
+                position += step
+        return index + 1, "", 0, 0
+
     def apply(self, doc: Document) -> List[Issue]:
         issues: List[Issue] = []
         texts = list(doc.page_texts or [])
         stats = _doc_pdf_stats(doc)
-        # 空白页：无文本、无表、无图片、无矢量图形；首页（封面）不判。
-        for index, text in enumerate(texts):
-            if index == 0 or str(text or "").strip():
+        textless = [
+            index for index, text in enumerate(texts)
+            if not str(text or "").strip() and not page_has_table(doc, index)
+        ]
+        # 版面层不可读时无法区分“真空白”与“有图但无文字”，不能静默当作通过。
+        if stats is None and textless:
+            raise RuleNotApplicable(
+                self.code, detail="原件版面层不可读，空白页检查无法完成（未按通过处理）"
+            )
+        for index in textless:
+            entry = stats[index]
+            if entry["images"]:
+                # 有图无文字是扫描页，由扫描页/OCR 链路处理，这里不重复报。
                 continue
-            if page_has_table(doc, index):
+            page_number = index + 1
+            anchor_page, anchor_text, start, end = self._anchor(texts, index)
+            if entry["drawings"]:
+                # 无文字、无图、仅矢量图形：可能是装饰，也可能是内容未被识别。
+                # 不当空白页跳过，转人工确认。
+                issues.append(issue_at(
+                    self,
+                    f"第{page_number}页无文字、无图片，仅含 {entry['drawings']} 个矢量图形，"
+                    "疑似内容未被识别，请人工确认该页是否有内容。",
+                    anchor_page, anchor_text, start, end,
+                    severity="info", checklist_item="E-02", blank_page=page_number,
+                ))
                 continue
-            if stats is None or stats[index]["images"] or stats[index]["drawings"]:
+            if index == 0:
+                # 封面空白同样是空白页，但按封面缺陷提示，不与正文缺页同权。
+                issues.append(issue_at(
+                    self, "封面页（第1页）为空白页（无文字、表格与图形），请补齐封面。",
+                    anchor_page, anchor_text, start, end,
+                    severity="info", checklist_item="E-02", blank_page=page_number,
+                ))
                 continue
-            neighbour = next((i for i in range(index - 1, -1, -1) if str(texts[i] or "").strip()), None)
-            if neighbour is None:
-                continue
-            neighbour_text = texts[neighbour]
-            lines = [ln for ln in neighbour_text.split("\n") if ln.strip()]
-            anchor = lines[-1] if lines else neighbour_text
-            pos = neighbour_text.rfind(anchor)
             issues.append(issue_at(
-                self, f"第{index + 1}页为空白页（无文字、表格与图形），请删除。",
-                neighbour + 1, neighbour_text, max(pos, 0), max(pos, 0) + len(anchor),
-                severity="warn", checklist_item="E-02", blank_page=index + 1,
+                self, f"第{page_number}页为空白页（无文字、表格与图形），请删除。",
+                anchor_page, anchor_text, start, end,
+                severity="warn", checklist_item="E-02", blank_page=page_number,
             ))
         # 页码：至少 4 页印有页码时，检查印刷页码随物理页单调递增。
         numbered = []

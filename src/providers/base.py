@@ -33,10 +33,13 @@ class LLMError(Exception):
     provider: Optional[str] = None
     model: Optional[str] = None
     retry_after: Optional[int] = None  # 重试等待时间（秒）
-    
+    #: 上游失败响应体的限长脱敏片段。只允许写入任务目录的私有 trace，
+    #: 不得进入普通日志或公开 API。
+    response_excerpt: Optional[str] = None
+
     def __str__(self):
         return f"LLMError({self.error_type.value}): {self.message}"
-    
+
     @property
     def is_retryable(self) -> bool:
         """是否可重试"""
@@ -46,7 +49,7 @@ class LLMError(Exception):
             LLMErrorType.SERVER_ERROR,
             LLMErrorType.NETWORK_ERROR
         }
-    
+
     @property
     def should_fallback(self) -> bool:
         """是否应该切换提供商"""
@@ -55,6 +58,19 @@ class LLMError(Exception):
             LLMErrorType.MODEL_NOT_FOUND,
             LLMErrorType.QUOTA_EXCEEDED
         }
+
+
+def sanitize_error_excerpt(text: Any, limit: int = 600) -> str:
+    """把上游错误响应压成可诊断的限长片段，并抹掉常见凭据。"""
+
+    import re
+
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    raw = re.sub(r"(?i)(api[_-]?key|authorization|bearer)\s*[:=]\s*\S+", r"\1=<redacted>", raw)
+    raw = re.sub(r"\s+", " ", raw)
+    return raw[:limit]
 
 
 @dataclass

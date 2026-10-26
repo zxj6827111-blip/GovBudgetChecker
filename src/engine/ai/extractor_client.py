@@ -16,6 +16,8 @@ import httpx
 from dataclasses import dataclass, field
 
 from src.services.ai_client import AIClient
+from src.providers import LLMError
+from src.providers.base import sanitize_error_excerpt
 from src.engine.ai.audit_contract import validate_audit_items
 from src.engine.ai.audit_prompts import (
     NARRATIVE_CONSISTENCY,
@@ -59,6 +61,14 @@ def _read_bool_env(name: str, default: bool) -> bool:
 
 def _read_str_env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
+
+
+def _read_int_env(name: str, default: int, minimum: int = 0, maximum: int = 10) -> int:
+    try:
+        value = int(str(os.getenv(name, str(default))).strip())
+    except Exception:
+        value = default
+    return max(minimum, min(maximum, value))
 
 
 MIN_ISSUE_CONFIDENCE = _read_float_env("AI_MIN_ISSUE_CONFIDENCE", 0.75)
@@ -114,10 +124,19 @@ class AuditOutcome:
     specialty: Optional[str] = None
     calls: List[Dict[str, Any]] = field(default_factory=list)
     errors: List[Dict[str, Any]] = field(default_factory=list)
+    #: 同一检查单元（专项×窗口）的尝试次数与逐次结果；覆盖计数只按单元算，
+    #: 补试次数单独统计，不进入 planned 分母。
+    attempts: int = 1
+    retry_count: int = 0
+    retried: bool = False
+    retryable: bool = False
+    error_type: Optional[str] = None
+    http_status: Optional[int] = None
+    attempts_log: List[Dict[str, Any]] = field(default_factory=list)
     raw_content: str = field(default="", repr=False)
     prompt_text: str = field(default="", repr=False)
     #: 每次专项调用的可回放输入/原始响应；只在 AI_AUDIT_TRACE 开启时写入任务目录。
-    raw_exchanges: List[Dict[str, str]] = field(default_factory=list, repr=False)
+    raw_exchanges: List[Dict[str, Any]] = field(default_factory=list, repr=False)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -140,6 +159,13 @@ class AuditOutcome:
             "specialty": self.specialty,
             "calls": [dict(call) for call in self.calls],
             "errors": [dict(error) for error in self.errors],
+            "attempts": int(self.attempts or 1),
+            "retry_count": int(self.retry_count or 0),
+            "retried": bool(self.retried),
+            "retryable": bool(self.retryable),
+            "error_type": self.error_type,
+            "http_status": self.http_status,
+            "attempts_log": [dict(item) for item in self.attempts_log],
         }
 
 
@@ -177,6 +203,11 @@ def _combine_outcomes(outcomes: List[AuditOutcome]) -> AuditOutcome:
         combined.calls.extend(outcome.calls)
         combined.errors.extend(outcome.errors)
         combined.raw_exchanges.extend(outcome.raw_exchanges)
+        combined.attempts_log.extend(outcome.attempts_log)
+        combined.retry_count += int(outcome.retry_count or 0)
+        combined.retried = combined.retried or bool(outcome.retried)
+        combined.retryable = combined.retryable or bool(outcome.retryable)
+    combined.attempts = sum(max(1, int(outcome.attempts or 1)) for outcome in outcomes)
     statuses = [outcome.status for outcome in outcomes]
     if all(status == "ok" for status in statuses):
         combined.status = "ok"
@@ -233,6 +264,14 @@ class ExtractorConfig:
     timeout: float = field(default_factory=lambda: _read_float_env("AI_EXTRACTOR_TIMEOUT", REQUEST_TIMEOUT))
     max_retries: int = field(default_factory=lambda: int(os.getenv("AI_EXTRACTOR_MAX_RETRIES", str(MAX_RETRIES))))
     retry_delay: float = field(default_factory=lambda: _read_float_env("AI_EXTRACTOR_RETRY_DELAY", RETRY_DELAY))
+    #: 专项×窗口级补试次数（本轮默认最多 1 次）。审计调用会关闭 provider
+    #: 内层重试，由该值统一控制，避免两层重试叠加。
+    specialty_retries: int = field(
+        default_factory=lambda: _read_int_env("AI_AUDIT_UNIT_RETRIES", 1, 0, 2)
+    )
+    specialty_retry_delay: float = field(
+        default_factory=lambda: _read_float_env("AI_AUDIT_UNIT_RETRY_DELAY", 1.5)
+    )
 
 class ExtractorClient:
     """AI抽取器客户端"""
@@ -256,6 +295,11 @@ class ExtractorClient:
         content: str = "",
         error: Optional[str] = None,
         contract_ok: Optional[bool] = None,
+        specialty: Optional[str] = None,
+        attempt: int = 1,
+        error_type: Optional[str] = None,
+        http_status: Optional[int] = None,
+        retryable: Optional[bool] = None,
     ) -> None:
         """追加一条调用留痕。error 非空表示本次调用失败。"""
 
@@ -278,6 +322,11 @@ class ExtractorClient:
                 # 调用方置 False，状态机不得把它当“成功且无问题”。
                 "contract_ok": contract_ok,
                 "error": error,
+                "specialty": specialty,
+                "attempt": int(attempt or 1),
+                "error_type": error_type,
+                "http_status": http_status,
+                "retryable": retryable,
                 "timestamp": time.time(),
             }
         )
@@ -490,11 +539,96 @@ class ExtractorClient:
         """只保留异常类型与指纹，避免把可能回显的材料原文落进任务元数据。"""
         return f"{type(exc).__name__}:{fingerprint_for_log(str(exc) or type(exc).__name__)}"
 
+    @staticmethod
+    def _error_fingerprint(exc: BaseException) -> str:
+        return fingerprint_for_log(str(exc) or type(exc).__name__)
+
+    def _record_specialty_failure(
+        self,
+        outcome: AuditOutcome,
+        *,
+        specialty: str,
+        attempt: int,
+        prompt: str,
+        error_type: str,
+        status_code: Optional[int],
+        retryable: bool,
+        public_error: str,
+        response_excerpt: str = "",
+    ) -> AuditOutcome:
+        provider = self._get_audit_provider()
+        model = self._get_audit_model()
+        outcome.status = "error"
+        outcome.provider = provider
+        outcome.model = model
+        outcome.retryable = bool(retryable)
+        outcome.error_type = error_type
+        outcome.http_status = status_code
+        outcome.errors.append(
+            {
+                "specialty": specialty,
+                "reason": "call_failed",
+                "error": public_error,
+                "error_type": error_type,
+                "http_status": status_code,
+                "retryable": bool(retryable),
+                "attempt": attempt,
+            }
+        )
+        outcome.attempts_log.append(
+            {
+                "attempt": attempt,
+                "status": "error",
+                "error_type": error_type,
+                "http_status": status_code,
+                "retryable": bool(retryable),
+                "error": public_error,
+                "response_chars": len(response_excerpt or ""),
+                "response_sha256": (
+                    hashlib.sha256(response_excerpt.encode("utf-8")).hexdigest()
+                    if response_excerpt
+                    else None
+                ),
+            }
+        )
+        outcome.attempts = len(outcome.attempts_log)
+        self.record_call(
+            provider,
+            model,
+            prompt_version=outcome.prompt_version,
+            error=public_error,
+            specialty=specialty,
+            attempt=attempt,
+            error_type=error_type,
+            http_status=status_code,
+            retryable=bool(retryable),
+        )
+        outcome.calls.append(self._call_summary(outcome))
+        outcome.raw_exchanges.append(
+            {
+                "specialty": specialty,
+                "attempt": attempt,
+                "prompt": prompt,
+                "raw_response": "",
+                "error": {
+                    "error_type": error_type,
+                    "http_status": status_code,
+                    "retryable": bool(retryable),
+                    "message": public_error,
+                    # 仅供任务目录私有 trace 回放，不进入公开 API。
+                    "response_excerpt": response_excerpt,
+                },
+            }
+        )
+        return outcome
+
     async def _run_direct_specialty(
         self,
         section_text: str,
         structured_context: Optional[str],
         specialty: str,
+        *,
+        attempt: int = 1,
     ) -> AuditOutcome:
         instructions = render_specialty_instructions(specialty, MIN_ISSUE_CONFIDENCE)
         prompt_version = specialty_prompt_version(specialty, MIN_ISSUE_CONFIDENCE)
@@ -505,9 +639,13 @@ class ExtractorClient:
             prompt_versions=[prompt_version],
             input_chars=len(section_text or ""),
             prompt_text=prompt,
+            provider=self._get_audit_provider(),
+            model=self._get_audit_model(),
         )
         ai_client = self._get_direct_ai_client()
         try:
+            # 内层 provider 重试关闭；专项级补试由 _run_direct_specialty_with_retry
+            # 统一控制，避免同一次失败被两层各重试一次。
             response = await ai_client.chat(
                 messages=[
                     {"role": "system", "content": "你是严格的 JSON 输出助手。"},
@@ -518,28 +656,40 @@ class ExtractorClient:
                 temperature=0,
                 max_tokens=self._resolve_audit_max_tokens(),
                 timeout=int(self.config.timeout),
+                max_retries_override=0,
+            )
+        except LLMError as exc:
+            error_type = str(getattr(exc.error_type, "value", exc.error_type) or "unknown")
+            response_excerpt = sanitize_error_excerpt(
+                getattr(exc, "response_excerpt", "") or ""
+            )
+            return self._record_specialty_failure(
+                outcome,
+                specialty=specialty,
+                attempt=attempt,
+                prompt=prompt,
+                error_type=error_type,
+                status_code=getattr(exc, "status_code", None),
+                retryable=bool(getattr(exc, "is_retryable", False)),
+                public_error=(
+                    f"{error_type}:HTTP{getattr(exc, 'status_code', None)}:"
+                    f"{self._error_fingerprint(exc)}"
+                    if getattr(exc, "status_code", None)
+                    else f"{error_type}:{self._error_fingerprint(exc)}"
+                ),
+                response_excerpt=response_excerpt,
             )
         except Exception as exc:
-            error_text = self._safe_error_text(exc)
-            outcome.status = "error"
-            outcome.errors.append({"specialty": specialty, "reason": "call_failed", "error": error_text})
-            self.record_call(
-                self._get_audit_provider(),
-                self._get_audit_model(),
-                prompt_version=prompt_version,
-                error=error_text,
+            return self._record_specialty_failure(
+                outcome,
+                specialty=specialty,
+                attempt=attempt,
+                prompt=prompt,
+                error_type=type(exc).__name__,
+                status_code=None,
+                retryable=False,
+                public_error=self._safe_error_text(exc),
             )
-            outcome.calls.append(
-                {
-                    "specialty": specialty,
-                    "status": "error",
-                    "provider": self._get_audit_provider(),
-                    "model": self._get_audit_model(),
-                    "prompt_version": prompt_version,
-                    "error": error_text,
-                }
-            )
-            return outcome
 
         content_text = self._response_content_text(response)
         finish_reason = response.get("finish_reason") if isinstance(response, dict) else None
@@ -553,6 +703,8 @@ class ExtractorClient:
             finish_reason=finish_reason if isinstance(finish_reason, str) else None,
             token_usage=token_usage,
             content=content_text,
+            specialty=specialty,
+            attempt=attempt,
         )
         provenance = build_finding_provenance(
             model_version=build_model_version(provider, model),
@@ -569,6 +721,7 @@ class ExtractorClient:
         outcome.raw_exchanges.append(
             {
                 "specialty": specialty,
+                "attempt": attempt,
                 "prompt": prompt,
                 "raw_response": content_text,
             }
@@ -577,8 +730,22 @@ class ExtractorClient:
         parsed = self._extract_json_array(content_text)
         if parsed is None:
             outcome.status = "truncated" if truncated else "invalid"
+            outcome.error_type = "response_truncated" if truncated else "response_invalid"
+            outcome.retryable = False
             outcome.rejection_reasons["json_parse_failed"] = 1
             self.call_ledger[-1]["contract_ok"] = False
+            outcome.attempts_log.append(
+                {
+                    "attempt": attempt,
+                    "status": outcome.status,
+                    "error_type": outcome.error_type,
+                    "retryable": False,
+                    "response_chars": outcome.response_chars,
+                    "response_sha256": outcome.response_sha256,
+                    "finish_reason": outcome.finish_reason,
+                }
+            )
+            outcome.attempts = len(outcome.attempts_log)
             outcome.calls.append(self._call_summary(outcome))
             return outcome
         validation = validate_audit_items(
@@ -603,11 +770,17 @@ class ExtractorClient:
             issue["manual_confirm"] = False
             outcome.issues.append(issue)
         if validation.status in {"invalid", "truncated"}:
+            outcome.error_type = (
+                "response_truncated" if validation.status == "truncated" else "response_invalid"
+            )
             outcome.errors.append(
                 {
                     "specialty": specialty,
                     "reason": "response_rejected_or_truncated",
                     "status": validation.status,
+                    "error_type": outcome.error_type,
+                    "retryable": False,
+                    "attempt": attempt,
                     "raw_count": validation.raw_count,
                     "rejected_count": validation.rejected_count,
                     "rejection_reasons": dict(validation.reasons),
@@ -619,12 +792,87 @@ class ExtractorClient:
                     "specialty": specialty,
                     "reason": "partial_response",
                     "status": validation.status,
+                    "retryable": False,
+                    "attempt": attempt,
                     "raw_count": validation.raw_count,
                     "rejected_count": validation.rejected_count,
                     "rejection_reasons": dict(validation.reasons),
                 }
             )
+        outcome.attempts_log.append(
+            {
+                "attempt": attempt,
+                "status": outcome.status,
+                "provider": outcome.provider,
+                "model": outcome.model,
+                "finish_reason": outcome.finish_reason,
+                "token_usage": dict(outcome.token_usage or {}),
+                "accepted_count": outcome.accepted_count,
+                "rejected_count": outcome.rejected_count,
+                "response_chars": outcome.response_chars,
+                "response_sha256": outcome.response_sha256,
+                "retryable": False,
+            }
+        )
+        outcome.attempts = len(outcome.attempts_log)
         outcome.calls.append(self._call_summary(outcome))
+        return outcome
+
+    async def _run_direct_specialty_with_retry(
+        self,
+        section_text: str,
+        structured_context: Optional[str],
+        specialty: str,
+    ) -> AuditOutcome:
+        """执行一个专项×窗口检查单元，可恢复上游故障最多补试一次。"""
+
+        outcome = await self._run_direct_specialty(
+            section_text, structured_context, specialty, attempt=1
+        )
+        retries = max(0, int(self.config.specialty_retries or 0))
+        while (
+            outcome.status == "error"
+            and outcome.retryable
+            and int(outcome.retry_count or 0) < retries
+        ):
+            delay = max(0.0, float(self.config.specialty_retry_delay or 0))
+            if delay:
+                await asyncio.sleep(delay)
+            retried = await self._run_direct_specialty(
+                section_text,
+                structured_context,
+                specialty,
+                attempt=int(outcome.attempts or 1) + 1,
+            )
+            retried.attempts_log = [*outcome.attempts_log, *retried.attempts_log]
+            retried.raw_exchanges = [*outcome.raw_exchanges, *retried.raw_exchanges]
+            retried.attempts = len(retried.attempts_log)
+            retried.retry_count = int(outcome.retry_count or 0) + 1
+            retried.retried = True
+            if retried.status == "error":
+                # 只公开最终失败一条；逐次尝试留在 attempts_log 与私有 trace。
+                retried.errors = [{**retried.errors[-1], "retry_history": [
+                    {
+                        "attempt": item.get("attempt"),
+                        "status": item.get("status"),
+                        "error_type": item.get("error_type"),
+                        "http_status": item.get("http_status"),
+                        "error": item.get("error"),
+                    }
+                    for item in retried.attempts_log
+                ]}] if retried.errors else []
+                retried.retryable = bool(retried.retryable)
+            else:
+                retried.errors = []
+                retried.retryable = False
+                retried.error_type = None
+                retried.http_status = None
+            if retried.calls:
+                retried.calls[-1]["attempts"] = retried.attempts
+                retried.calls[-1]["retry_count"] = retried.retry_count
+                retried.calls[-1]["retried"] = True
+            outcome = retried
+        outcome.attempts = max(1, len(outcome.attempts_log) or int(outcome.attempts or 1))
         return outcome
 
     @staticmethod
@@ -645,6 +893,12 @@ class ExtractorClient:
             "response_sha256": outcome.response_sha256,
             "response_chars": outcome.response_chars,
             "contract_mode": "strict_specialty_v1",
+            "attempts": int(outcome.attempts or 1),
+            "retry_count": int(outcome.retry_count or 0),
+            "retried": bool(outcome.retried),
+            "retryable": bool(outcome.retryable),
+            "error_type": outcome.error_type,
+            "http_status": outcome.http_status,
         }
 
     async def _direct_semantic_audit(
@@ -657,7 +911,9 @@ class ExtractorClient:
         """Run the configured specialties directly and return issues + outcome."""
         selected = specialties or list(SPECIALTIES)
         outcomes = [
-            await self._run_direct_specialty(section_text, structured_context, specialty)
+            await self._run_direct_specialty_with_retry(
+                section_text, structured_context, specialty
+            )
             for specialty in selected
         ]
         combined = _combine_outcomes(outcomes)

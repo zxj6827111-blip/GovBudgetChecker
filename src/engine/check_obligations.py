@@ -1495,12 +1495,33 @@ def _resolve_ai_backed(
     instance.status = status
     instance.reason = None if status == OBLIGATION_COMPLETED else status
     instance.blocks_gate = blocks
+    state = ""
+    if isinstance(ai_execution, Mapping):
+        state = str(ai_execution.get("state") or ai_execution.get("status") or "").strip()
+    try:
+        accepted_candidates = int((ai_execution or {}).get("accepted_candidates") or 0)
+    except Exception:
+        accepted_candidates = 0
     if status == OBLIGATION_COMPLETED:
         instance.detail = "语义复核已执行"
     elif status == OBLIGATION_AI_NOT_RUN:
         instance.detail = "本次未执行语义复核（未启用或未请求 AI）"
+    elif state == "degraded":
+        if accepted_candidates:
+            instance.detail = (
+                f"部分检查未完成，已保留 {accepted_candidates} 条有效候选；"
+                "未完成的专项与页码范围见检查覆盖"
+            )
+        else:
+            instance.detail = "部分检查未完成，未形成候选结论；未完成范围见检查覆盖"
     else:
-        instance.detail = "本次语义复核失败，未得出候选结论"
+        if accepted_candidates:
+            instance.detail = (
+                f"语义复核存在失败调用，已保留 {accepted_candidates} 条有效候选；"
+                "不能视为已完整复核"
+            )
+        else:
+            instance.detail = "本次语义复核失败，未得出候选结论"
 
 
 def _build_summary(

@@ -914,6 +914,15 @@ function collectReviewReportManualIssues(reviewReport: Record<string, unknown>):
       claimed_page_number: candidateFinding.claimed_page_number,
       evidence_missing: candidateFinding.evidence_missing,
       evidence_verification: candidateFinding.evidence_verification,
+      // 解释字段必须随候选一起转交；否则复核报告里的 AI 候选会在页面上
+      // 只剩一句 message，既看不到当前值/应为值，也丢了“模型声称”提示。
+      expected: candidateFinding.expected,
+      actual: candidateFinding.actual,
+      difference: candidateFinding.difference,
+      check: candidateFinding.check,
+      table_or_section: candidateFinding.table_or_section,
+      amounts_provenance: candidateFinding.amounts_provenance,
+      calculation_basis: candidateFinding.calculation_basis,
       suggestion: String(
         item.suggestion ?? candidateFinding.suggestion ?? item.recommended_action ?? "核对原始材料后确认。",
       ),

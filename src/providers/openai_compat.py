@@ -9,7 +9,7 @@ from typing import Dict, List, Any, Optional, AsyncIterator
 
 import aiohttp
 
-from .base import BaseLLMProvider, LLMResponse, LLMError, LLMErrorType
+from .base import BaseLLMProvider, LLMResponse, LLMError, LLMErrorType, sanitize_error_excerpt
 
 
 class OpenAICompatProvider(BaseLLMProvider):
@@ -204,6 +204,7 @@ class OpenAICompatProvider(BaseLLMProvider):
                 if response.status != 200:
                     error = self.parse_error(response.status, response_data)
                     error.model = model
+                    error.response_excerpt = sanitize_error_excerpt(raw_text)
                     self.update_stats(latency_ms, success=False)
                     raise error
 
@@ -293,6 +294,7 @@ class OpenAICompatProvider(BaseLLMProvider):
                             )
                         error = self.parse_error(response.status, response_data)
                         error.model = model
+                        error.response_excerpt = sanitize_error_excerpt(raw_text)
                         self.update_stats(latency_ms, success=False)
                         raise error
 

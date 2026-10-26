@@ -787,3 +787,24 @@ def _run(coro):
     import asyncio
 
     return asyncio.run(coro)
+
+
+def test_ai_scope_meta_none_when_history_has_no_ai_fields() -> None:
+    from src.services.material_detail_query_service import _ai_scope_meta
+
+    assert _ai_scope_meta({}) is None
+    assert _ai_scope_meta({"unrelated": 1}) is None
+
+
+def test_ai_scope_meta_reads_quality_gate_conclusion_scope_fallback() -> None:
+    from src.services.material_detail_query_service import _ai_scope_meta
+
+    payload = {
+        "ai_execution": {"requested": True, "state": "degraded"},
+        "ai_coverage": {"status": "partial", "planned_calls": 4, "succeeded_calls": 3},
+        "quality_gate": {"conclusion_scope": "incomplete_scope"},
+    }
+    scope = _ai_scope_meta(payload)
+    assert scope is not None
+    assert scope["conclusion_scope"] == "incomplete_scope"
+    assert scope["ai_coverage"]["status"] == "partial"

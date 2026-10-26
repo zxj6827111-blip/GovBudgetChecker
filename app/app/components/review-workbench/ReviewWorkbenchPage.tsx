@@ -58,6 +58,8 @@ import { IssueNoteDialog } from "./IssueNoteDialog";
 import type { IssueWorkflowAction } from "./IssueCard";
 import { IssuesTab } from "./IssuesTab";
 import type { IssueDecisionNotice, SourceFindingViews } from "./IssuesTab";
+import { deriveAiScope } from "../../../lib/aiScope";
+import type { AiScopeView } from "../../../lib/aiScope";
 import { MetadataTab } from "./MetadataTab";
 import { ObligationsTab } from "./ObligationsTab";
 import { PdfViewerPane } from "./PdfViewerPane";
@@ -402,6 +404,15 @@ export function ReviewWorkbenchPage() {
     () => computeWorkflowStatusCounts(problems, workflowIssues),
     [problems, workflowIssues],
   );
+
+  const aiScope = useMemo<AiScopeView | undefined>(() => {
+    if (!detail || !detail.result) return undefined;
+    const meta = detail.result.meta && typeof detail.result.meta === "object" && !Array.isArray(detail.result.meta)
+      ? detail.result.meta
+      : {};
+    const conclusionScopeHint = typeof detail.conclusion_scope === "string" ? detail.conclusion_scope : null;
+    return deriveAiScope(meta, { conclusionScopeHint });
+  }, [detail]);
 
   const sourceFindings = useMemo<SourceFindingViews | undefined>(() => {
     if (!detail || !detail.result) return undefined;
@@ -1165,6 +1176,7 @@ export function ReviewWorkbenchPage() {
                 key={jobId}
                 problems={problems}
                 sourceFindings={sourceFindings}
+                aiScope={aiScope}
                 selectedProblemId={selectedProblemId}
                 onSelectProblem={handleSelectProblem}
                 workflowStatusByIssueId={workflowStatusByIssueId}
@@ -1174,6 +1186,7 @@ export function ReviewWorkbenchPage() {
                 onUndo={handleUndoIssueDecision}
                 pendingObligations={pendingObligations ?? 0}
                 onOpenObligations={() => setActiveTab("obligations")}
+                onRecheckToTask={jobId ? () => router.push(`/task/${jobId}` as Route) : undefined}
                 onSelectEvidenceRef={handleSelectEvidenceRef}
                 readOnly={!canEditReview}
                 wide={issuesExpanded}

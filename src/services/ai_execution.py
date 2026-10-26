@@ -82,6 +82,19 @@ def build_ai_execution(
         "partial_calls": (coverage or {}).get("partial_calls") if isinstance(coverage, dict) else None,
         "invalid_calls": (coverage or {}).get("invalid_calls") if isinstance(coverage, dict) else None,
         "truncated_calls": (coverage or {}).get("truncated_calls") if isinstance(coverage, dict) else None,
+        "planned_calls": (coverage or {}).get("planned_calls") if isinstance(coverage, dict) else None,
+        "finished_calls": (coverage or {}).get("finished_calls", (coverage or {}).get("completed_calls"))
+        if isinstance(coverage, dict)
+        else None,
+        "succeeded_calls": (coverage or {}).get("succeeded_calls") if isinstance(coverage, dict) else None,
+        "completed_calls_includes_failed": (
+            (coverage or {}).get("completed_calls_includes_failed", True)
+            if isinstance(coverage, dict)
+            else None
+        ),
+        "retried_calls": (coverage or {}).get("retried_calls") if isinstance(coverage, dict) else None,
+        "retry_attempts": (coverage or {}).get("retry_attempts") if isinstance(coverage, dict) else None,
+        "failed_units": (coverage or {}).get("failed_units") if isinstance(coverage, dict) else None,
     }
 
     if not requested:
@@ -261,6 +274,24 @@ def quality_gate_ai_reasons(ai_execution: Optional[Dict[str, Any]]) -> List[Dict
                 "message": (
                     "请求了 AI 辅助但本次没有任何 AI 调用留痕，"
                     "结论覆盖面缺少 AI 审计部分，需人工复核或重新分析"
+                ),
+                "ai_state": state,
+                "error_code": error_code,
+            }
+        ]
+    if state == AI_STATE_DEGRADED:
+        accepted = ai_execution.get("accepted_candidates")
+        suffix = (
+            f"已保留 {accepted} 条有效候选，但仍有检查单元失败/未覆盖"
+            if accepted
+            else "仍有检查单元失败/未覆盖，未形成完整候选结论"
+        )
+        return [
+            {
+                "code": "ai_partial",
+                "message": (
+                    f"AI 检查部分完成：{suffix}；"
+                    "不能呈现为「AI 已完整审计且未发现问题」"
                 ),
                 "ai_state": state,
                 "error_code": error_code,
