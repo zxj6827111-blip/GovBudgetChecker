@@ -137,17 +137,23 @@ PORT=3012 BACKEND_URL=http://127.0.0.1:18745 npm run start
 
 ## 7. 主工作树、数据备份与回滚
 
-### 7.1 已完成的备份
+### 7.1 已执行的切换前备份
 
-- 主工作树原有改动补丁：`main_backup/main_worktree_preexisting.patch`
+备份目录：`backups/20261026-ai-chain-pre-switch/`（权限 700；`.env` 600）
+
+- 数据库：`fiscal_db.dump`（210 MB，`pg_dump -Fc`），SHA-256 `dd0c8afe6edd9ac57ae24497a9bf68fb76d4db04dbb5d1f6ba13acbaa57936d9`；`pg_restore -l` 可读。
+- 上传：`uploads/` 副本 3.0 GB；`data/` 副本 2.6 MB；`.env` 副本。
+- 样本哈希核对：S1/S3 PDF、`data/users.json`、`data/ai-model-settings.json` 4/4 与原件一致。
+- 主工作树原有改动补丁：`main_worktree_uncommitted.patch`
   - SHA-256 `e3f2416c190199027a4f656b78e6b53f21ac35d59a9266a2bf6ef5c8245aff83`
 - 原有未跟踪文档副本：`main_backup/AI_CHECK_CHAIN_REMEDIATION_20261025.md`
   - SHA-256 `2521a31044912b7414fa19dc4c366cc1f566a4bb59c79e19f52835b7ce87b108`
+- 备份清单：`backups/20261026-ai-chain-pre-switch/BACKUP_MANIFEST.txt`
 - 主工作树现状：3 个原有修改 + 1 个原有未跟踪文档；本轮未 reset、未覆盖。
 
-### 7.2 切换时需执行的备份（尚未执行，等待授权）
+### 7.2 切换时复核备份（已具备，不再重复复制）
 
-当前 `fiscal_db` 约 1,053 MB，`uploads` 约 2.9 GB；先确认磁盘余量，再执行：
+备份已完成；切换窗口只需复核 `BACKUP_MANIFEST.txt` 与样本哈希，必要时重新执行：
 
 ```bash
 # 1) 数据库
