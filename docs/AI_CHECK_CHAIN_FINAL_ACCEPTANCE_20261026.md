@@ -5,22 +5,23 @@
 
 ## 0. 切换结论
 
-**技术启动条件：可以切换（使用生产构建 `next build` + `next start`，不使用 `next dev`）。**
+**核验通过，允许切换。正式切换使用生产构建 `next build` + `next start`，不使用 `next dev`。**
 
-已验证：
+业务口径已确认：
 
-- 冻结版本 `next build` 退出码 0；生产 `next start` 在 3012 端口启动，登录页/API 代理/复核页/实际 CSV 均 200；
-- 最终版本的真实响应回放、页面解释块、双方证据、结论作用域、CSV 均通过；
-- 全量回归 4068 passed / 11 failed / 189 skipped，11 项与基线同名同因，不是本轮回归；
-- 构建产物与生产启动不依赖 `next dev`。
+- 重新分析产生新 revision 后，新版本问题需要重新确认；
+- **本轮不实现自动继承**；
+- 旧版本的确认、备注、操作人和时间必须完整保留，并能通过页面查看；
+- 页面明确提示“重新分析已生成新版本，本版本需重新确认”，并提供历史版本入口。
 
-**但有一条业务连续性事项必须在切换前确认：**
+已核验：
 
-- 重新分析会生成新的 analysis revision；旧的人工确认记录**保留在数据库历史中**（`workflow_issue_records` 仍有旧 issue_id + note），
-  但当前 revision 的 finding ID 会变化，`/api/workflow` 当前视图为空，**不会自动沿用到新 revision**。
-- 如果产品要求“重分析后同一问题自动继承人工确认”，这一项仍未完成，不能按“全自动连续”口径切换；
-  如果只要求“历史记录不删除、新 revision 重新确认”，则当前实现满足。
-- 这是业务口径决定，不是启动阻塞；本报告不把它写成“已通过自动继承”。
+- 生产构建/启动：`next build` 退出码 0；`next start` 3012 启动，登录/API/复核页/CSV 200；
+- 历史版本页：当前版本显示“需重新确认”，选择旧版本后可见旧意见 `备注/操作人/时间/版本`，可返回当前版本；
+- 权限路径（生产构建 + 隔离数据）：12/12 通过，授权读取/写入成功，越权读取任务/材料/复核/CSV 和越权写入均被拒绝；
+- 备份恢复演练：恢复到隔离库 `gbc_restore_drill_20261026b`，`pg_restore` 0 错误，关键表计数与人工确认历史可核对；
+- 真实响应回放：S1/S3 在最终版解析/保存/API/页面/CSV 全部通过，未新增模型调用；
+- 11 项既有失败不阻塞构建、启动、复核页/CSV 核心链路。
 
 ## 1. 冻结版本与交付标识
 
@@ -29,7 +30,7 @@
 | 主仓库 HEAD（未改） | `57abcf86`（`codex/zcode-remediation`） |
 | 验收分支 | `codex/zcode-remediation-r3` |
 | 上一轮 checkpoint | `6bed8137` |
-| **最终代码冻结提交** | **`5892b7ba`**（`fix(ui): expose recheck entry for rule-only scope banner`） |
+| **最终代码冻结提交** | **`e34f1009`**（`fix(history): show version-bound human decisions and scope workflow responses`） |
 | 最终验收 HEAD（含本报告） | 以 `final_manifest.json` 的 `acceptance_head` 为准 |
 | 最终补丁（相对 checkpoint，可应用到当前主工作树） | `scratch/ai_remediation_20261025/acceptance3/final_changes.patch` |
 | 最终补丁 SHA-256 | 以 `final_manifest.json` 的 `patch_sha256` 为准（补丁包含本报告，报告内不能自洽记录自身哈希） |
@@ -41,7 +42,7 @@
 说明：
 
 - `git apply --check` 只证明补丁可应用，不作为功能验收证据；功能验收见 §3–§5。
-- 冻结后所有后端/前端/页面/CSV 验收使用 `5892b7ba` 的 worktree。
+- 冻结后所有后端/前端/页面/CSV 验收使用 `e34f1009` 的 worktree（最终验收 HEAD 见 manifest）。
 - `acceptance_runtime/` 与 `app/node_modules` 是运行目录/软链接，不进入提交与补丁。
 
 ## 2. S2 第21页目标句受检证据
@@ -92,10 +93,53 @@
   - `analysis_versions` 同时保留旧 revision，分析历史未被覆盖。
 - 人工确认记录：
   - 旧 decision 仍在 `workflow_issue_records`（旧 issue_id `edb88f1f-…`，note `recheck-preserve-test`）；
-  - 但新 revision 的 issue ID 已变化，`/api/workflow?job_id=...` 当前视图为空，没有自动继承。
+  - 但新 revision 的 issue ID 已变化，`/api/workflow?job_id=...` 当前视图为空，没有自动继承；
+    按已确认业务口径这是预期行为，旧版本意见通过历史版本入口完整可见。
   - 因此：**历史记录未删除/未覆盖**；**当前 revision 不自动沿用**。切换前需确认业务口径。
 
 证据：`RECHECK_click_result.json`（含请求体与对话框）、`RECHECK_after_status.json`、`RECHECK_before_click.png`、`RECHECK_after_click.png`、`RECHECK_fixture_status_before.json`。
+
+## 4A. 历史版本、权限与恢复演练最后核验
+
+### 4A.1 历史版本页真实操作
+
+fixture 任务 `c40b9343f6a89ea553eb7ca5033ecf1d` 有 2 个 revision：
+
+- 当前 revision 页面显示：
+  “重新分析已生成新版本（当前 rev-20261026T034604-afc38fed），本版本需重新确认；历史版本可在上方‘分析版本’选择器查看。”
+  同时显示“本版本暂无人工确认记录。”
+- 在“分析版本”选择器选中旧 revision `rev-20261026T034510-e8f963cb` 后，页面显示：
+  “当前查看历史版本 …，仅供查看；本版本的确认状态不代表当前版本。”
+  旧意见完整可见：
+  `已确认 / 缺失预算表 / 备注：recheck-preserve-test / 操作人：admin / 时间：2026-10-26T03:45:28Z / 版本：rev-20261026T034510-e8f963cb`
+- 页面提供“返回当前版本”按钮；新旧确认状态不混淆。
+
+证据：`HISTORY_page_evidence.json`、`HISTORY_current_revision.png`、`HISTORY_old_revision.png`。
+
+### 4A.2 生产构建 + 隔离数据的权限路径
+
+普通用户 `regular_scope` 仅授权 S1 组织 `8acb3e1cea1d`，通过生产前端 3012 验证 12 项：
+
+| 操作 | 结果 |
+| --- | --- |
+| 授权读取任务 S1 / 材料 S1 / 复核 S1 / CSV S1 | 200 |
+| 越权读取任务 S2 / 材料 S2 / 复核 S2 / CSV S2 | 403 |
+| 普通用户访问用户管理 | 403 |
+| 越权修改复核记录 S2 / 越权忽略任务问题 S2 | 403 |
+| 授权修改复核记录 S1 | 200 |
+| POST workflow 响应仅含本任务 | 通过（修复后不再泄露全局记录） |
+
+发现并修复了一个权限响应问题：`POST /api/workflow` 原返回全局工作流状态，普通用户执行授权写操作时会看到其他任务的问题标题/备注。
+`api/routes/workflow.py` 已改为返回 `get_visible_state(user, job_id=...)` 的本任务视图；复测响应 keys 只含 S1 任务。
+
+证据：`PERMISSION_tests_prod_final.json`。
+
+### 4A.3 备份恢复演练
+
+- 将 `backups/20261026-ai-chain-pre-switch/fiscal_db.dump` 恢复到隔离库 `gbc_restore_drill_20261026b`（不是正式库）。
+- `pg_restore` 退出码 0，错误数 0；关键表：`analysis_jobs=285`、`analysis_results=283`、`workflow_issue_records=75`、`fiscal_document_versions=109`。
+- 人工确认历史可从备份的 `uploads/.issue_workflow.json` 核对：83 条 decision_events，含 `note/decision_actor/updated_at/analysis_revision`。
+- 证据：`RESTORE_DRILL.json`、`restore_drill_pg_restore.log`。
 
 ## 5. 正式启动方式
 
@@ -130,7 +174,7 @@ PORT=3012 BACKEND_URL=http://127.0.0.1:18745 npm run start
 ## 6. 测试与证据
 
 - 最终版本后端定向：**373 passed**（与上一轮相同测试集；后端在冻结提交后未再改）。
-- 全量：**4068 passed / 11 failed / 189 skipped**（11 项与基线同名同因）。
+- 全量：**4069 passed / 11 failed / 189 skipped**（11 项与基线同名同因）。
 - 前端：`tsc --noEmit` 通过；`npm run test:unit` 42 个脚本通过；e2e 4 passed。
 - e2e 在 **生产构建 3012** 上复跑通过（`e2e_production_frozen.log`）。
 - 构建日志：`frontend_build.log`；生产启动日志：`frontend_prod.log`；生产页面证据：`production_page_evidence.json`、`prod_replay_S1.png`。
@@ -149,6 +193,7 @@ PORT=3012 BACKEND_URL=http://127.0.0.1:18745 npm run start
 - 原有未跟踪文档副本：`main_backup/AI_CHECK_CHAIN_REMEDIATION_20261025.md`
   - SHA-256 `2521a31044912b7414fa19dc4c366cc1f566a4bb59c79e19f52835b7ce87b108`
 - 备份清单：`backups/20261026-ai-chain-pre-switch/BACKUP_MANIFEST.txt`
+- 恢复演练：已在隔离库 `gbc_restore_drill_20261026b` 完成，`pg_restore` 0 错误；关键计数与人工确认历史见 §4A.3。
 - 主工作树现状：3 个原有修改 + 1 个原有未跟踪文档；本轮未 reset、未覆盖。
 
 ### 7.2 切换时复核备份（已具备，不再重复复制）
@@ -187,7 +232,7 @@ git status --porcelain=v1 > /path/to/backup/status.txt
 - S2 的 text_semantics 窗口0 仍连续 524；覆盖 3/4，不能声明完整审核通过。目标句已在成功窗口1受检，见 §2。
 - 辅助定位真实场景仍为 `eligible=0, attempted=0`；真实“有原文无页码”样本未验收。
 - 纯文本窗口不覆盖视觉版式；D-03 一般多字漏字仍是 AI 辅助、结果待人工复核。
-- 重分析不自动继承人工确认（历史保留、当前 revision 为空），见 §0/§4，需业务确认。
+- 按已确认业务口径，重分析不自动继承；旧版本人工意见通过历史版本入口可见（§4A.1）。
 - 11 项既有失败不阻塞启动/核心链路，但组织/认证写路径未在正式库冒烟。
 - 主实例 18743 在 19:55 曾因仓库内 `scratch/*.py` 落盘触发一次 reload；主源码哈希未变，未加载本轮代码。之后所有验收脚本均写在 worktree/非 .py 证据目录，未再触发。
 - 未改动主工作树、未重启 18743、未切换生产。
