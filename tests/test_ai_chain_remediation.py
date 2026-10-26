@@ -40,7 +40,9 @@ from src.services.ai_execution import (
     AI_STATE_FAILED,
     AI_STATE_SUCCEEDED,
     build_ai_execution,
+    quality_gate_ai_reasons,
 )
+from src.providers import LLMError, LLMErrorType
 from src.services.ai_findings import AIFindingsService
 from src.services.ai_locator import AILocator
 from src.services.ai_window_builder import TextWindow, build_text_windows
@@ -67,6 +69,27 @@ class StaticChat:
 class FailingChat:
     async def chat(self, **_kwargs: Any) -> Dict[str, Any]:
         raise RuntimeError("simulated timeout")
+
+
+class SequenceChat:
+    """按顺序返回正文或抛出异常，用于验证有界补试。"""
+
+    def __init__(self, sequence: List[Any]) -> None:
+        self.sequence = list(sequence)
+        self.calls = 0
+
+    async def chat(self, **_kwargs: Any) -> Dict[str, Any]:
+        self.calls += 1
+        item = self.sequence.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return {
+            "content": item,
+            "provider_used": "fake-provider",
+            "model": "fake-model",
+            "finish_reason": "stop",
+            "tokens": {"total_tokens": 10},
+        }
 
 
 def _client(content: str, *, finish_reason: str = "stop", direct_only: bool = True) -> ExtractorClient:
@@ -339,6 +362,195 @@ async def test_timeout_is_failed_not_empty_success() -> None:
     assert execution["error_code"]
 
 
+def _server_error(*, excerpt: str = "") -> LLMError:
+    return LLMError(
+        error_type=LLMErrorType.SERVER_ERROR,
+        message="upstream 500",
+        status_code=502,
+        provider="managed",
+        response_excerpt=excerpt,
+    )
+
+
+@pytest.mark.asyncio
+async def test_unit_retry_recovers_once_without_duplicate_coverage() -> None:
+    client = _client("[]")
+    client.config.specialty_retries = 1
+    client.config.specialty_retry_delay = 0
+    chat = SequenceChat([_server_error(excerpt="upstream fail api_key=secret-123"), "[]"])
+    client._direct_ai_client = chat
+
+    outcome = await client.audit_full_report_outcome(
+        "正常原文。", "hash", specialties=[TEXT_SEMANTICS]
+    )
+
+    assert chat.calls == 2
+    assert outcome.status == "empty"
+    assert outcome.attempts == 2
+    assert outcome.retry_count == 1
+    assert outcome.retried is True
+    assert outcome.errors == []
+    assert outcome.calls[0]["attempts"] == 2
+    assert outcome.calls[0]["retry_count"] == 1
+    # 失败响应体只进私有 trace，且凭据已脱敏；公开 dict 不带正文。
+    excerpt = outcome.raw_exchanges[0]["error"]["response_excerpt"]
+    assert "secret-123" not in excerpt
+    assert "<redacted>" in excerpt
+    assert "secret-123" not in json.dumps(outcome.to_dict(), ensure_ascii=False)
+    ledger = client.pop_call_ledger()
+    assert len(ledger) == 2
+    execution = build_ai_execution(True, call_ledger=ledger)
+    assert execution["state"] == AI_STATE_SUCCEEDED
+
+
+@pytest.mark.asyncio
+async def test_unit_retry_stops_at_one_and_keeps_failure_diagnostics() -> None:
+    client = _client("[]")
+    client.config.specialty_retries = 1
+    client.config.specialty_retry_delay = 0
+    chat = SequenceChat([_server_error(), _server_error()])
+    client._direct_ai_client = chat
+
+    outcome = await client.audit_full_report_outcome(
+        "正常原文。", "hash", specialties=[TEXT_SEMANTICS]
+    )
+
+    assert chat.calls == 2
+    assert outcome.status == "error"
+    assert outcome.attempts == 2
+    assert outcome.retry_count == 1
+    assert len(outcome.errors) == 1
+    assert len(outcome.errors[0]["retry_history"]) == 2
+    assert outcome.errors[0]["error_type"] == "server_error"
+    assert outcome.errors[0]["http_status"] == 502
+    ledger = client.pop_call_ledger()
+    assert len(ledger) == 2
+    execution = build_ai_execution(True, call_ledger=ledger)
+    assert execution["state"] == AI_STATE_FAILED
+
+
+@pytest.mark.asyncio
+async def test_non_retryable_auth_error_is_not_retried() -> None:
+    client = _client("[]")
+    client.config.specialty_retries = 1
+    client.config.specialty_retry_delay = 0
+    auth_error = LLMError(
+        error_type=LLMErrorType.AUTHENTICATION,
+        message="bad key",
+        status_code=401,
+        provider="managed",
+    )
+    chat = SequenceChat([auth_error, "[]"])
+    client._direct_ai_client = chat
+
+    outcome = await client.audit_full_report_outcome(
+        "正常原文。", "hash", specialties=[TEXT_SEMANTICS]
+    )
+
+    assert chat.calls == 1
+    assert outcome.status == "error"
+    assert outcome.attempts == 1
+    assert outcome.retry_count == 0
+    assert outcome.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_partial_success_retries_only_failed_specialty() -> None:
+    client = _client("[]")
+    client.config.specialty_retries = 1
+    client.config.specialty_retry_delay = 0
+    # text_semantics: 首败后成功；narrative_consistency: 直接成功。
+    chat = SequenceChat([_server_error(), "[]", "[]"])
+    client._direct_ai_client = chat
+
+    outcome = await client.audit_full_report_outcome("正常原文。", "hash")
+
+    assert chat.calls == 3
+    assert outcome.attempts == 3
+    assert outcome.retry_count == 1
+    assert outcome.retried is True
+    assert len(outcome.calls) == 2
+    assert [call["attempts"] for call in outcome.calls] == [2, 1]
+    assert all(call["status"] in {"ok", "empty"} for call in outcome.calls)
+
+
+def test_coverage_counts_units_not_attempts_and_names_failed_pages() -> None:
+    service = AIFindingsService(AnalysisConfig(ai_enabled=True))
+    text = "正常原文。"
+    window = TextWindow(window_id=0, start=0, end=len(text), text=text, pages=[7])
+    outcome_dict = {
+        "status": "partial",
+        "calls": [
+            {
+                "specialty": TEXT_SEMANTICS,
+                "status": "ok",
+                "attempts": 1,
+                "retry_count": 0,
+                "accepted_count": 1,
+            },
+            {
+                "specialty": NARRATIVE_CONSISTENCY,
+                "status": "error",
+                "attempts": 2,
+                "retry_count": 1,
+                "retryable": True,
+                "error_type": "server_error",
+                "http_status": 502,
+            },
+        ],
+        "attempts": 3,
+    }
+    coverage = service._build_coverage(
+        all_text=text,
+        page_offsets=[(0, len(text), 7)],
+        windows=[window],
+        gaps=[],
+        window_results=[{"window": window, "outcome": outcome_dict, "issues": []}],
+    )
+    assert coverage["planned_calls"] == 2
+    assert coverage["succeeded_calls"] == 1
+    assert coverage["failed_calls"] == 1
+    assert coverage["completed_calls"] == 2
+    assert coverage["completed_calls_includes_failed"] is True
+    assert coverage["retried_calls"] == 1
+    assert coverage["retry_attempts"] == 1
+    assert coverage["attempts_total"] == 3
+    assert coverage["call_budget"]["max_attempts_per_unit"] == 2
+    assert coverage["failed_units"][0]["pages"] == [7]
+    assert coverage["failed_units"][0]["specialty"] == NARRATIVE_CONSISTENCY
+    assert coverage["status"] == "partial"
+
+
+def test_degraded_gate_keeps_effective_results_and_uses_partial_wording() -> None:
+    execution = build_ai_execution(
+        True,
+        call_ledger=[
+            {
+                "provider": "fake-provider",
+                "model": "fake-model",
+                "content": "[]",
+                "contract_ok": True,
+                "finish_reason": "stop",
+            }
+        ],
+        window_errors=[{"type": "audit_window_partial"}],
+        coverage={
+            "status": "partial",
+            "planned_calls": 4,
+            "succeeded_calls": 3,
+            "failed_calls": 1,
+            "accepted_candidates": 3,
+        },
+    )
+    assert execution["state"] == AI_STATE_DEGRADED
+    assert execution["planned_calls"] == 4
+    assert execution["succeeded_calls"] == 3
+    assert execution["completed_calls_includes_failed"] is True
+    reasons = quality_gate_ai_reasons(execution)
+    assert reasons[0]["code"] == "ai_partial"
+    assert "已保留 3 条有效候选" in reasons[0]["message"]
+
+
 # 7. 合法空数组与执行失败能够区分 -------------------------------------------------
 def test_empty_array_is_success_and_invalid_contract_is_failed() -> None:
     client = _client("[]")
@@ -600,6 +812,42 @@ async def test_locator_without_text_does_not_call_model() -> None:
     assert locator.last_outcome.status == "unavailable_no_text"
     assert enhanced.location["ai_locator"]["status"] == "unavailable_no_text"
     assert enhanced.evidence == finding.evidence
+
+
+@pytest.mark.asyncio
+async def test_specialty_failure_is_attributed_to_its_own_window() -> None:
+    service = AIFindingsService(AnalysisConfig(ai_enabled=True))
+    service.page_offsets = [(0, 20, 1), (21, 41, 2)]
+
+    async def fake_audit(window_text: str, _doc_hash: str, structured_context=None):
+        window_id = 0 if window_text.startswith("A") else 1
+        return AuditIssueList(
+            [],
+            AuditOutcome(
+                status="partial",
+                errors=[
+                    {
+                        "specialty": "narrative_consistency",
+                        "reason": "call_failed",
+                        "error": "server_error",
+                    }
+                ],
+                calls=[{"specialty": "narrative_consistency", "status": "error"}],
+            ),
+        )
+
+    service.ai_client.ai_full_report_audit = fake_audit
+    windows = [
+        TextWindow(window_id=0, start=0, end=20, text="A" * 20, pages=[1]),
+        TextWindow(window_id=1, start=21, end=41, text="B" * 20, pages=[2]),
+    ]
+    results = await service._run_window_audits(windows, "hash", 41)
+    assert len(results) == 2
+    failures = [
+        item for item in service.ai_errors if item.get("type") == "audit_specialty_failed"
+    ]
+    assert {item.get("window_index") for item in failures} == {0, 1}
+    assert all(item.get("specialty") == "narrative_consistency" for item in failures)
 
 
 # 12. 超出窗口上限时覆盖与执行状态如实显示 --------------------------------------

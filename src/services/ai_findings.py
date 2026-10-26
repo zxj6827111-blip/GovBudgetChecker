@@ -256,11 +256,20 @@ class AIFindingsService:
             "capabilities": self._capabilities(),
             "planned_calls": 0,
             "completed_calls": 0,
+            "completed_calls_includes_failed": True,
+            "finished_calls": 0,
+            "succeeded_calls": 0,
+            "effective_completed_calls": 0,
             "failed_calls": 0,
             "valid_empty_calls": 0,
             "partial_calls": 0,
             "invalid_calls": 0,
             "truncated_calls": 0,
+            "unknown_calls": 0,
+            "retried_calls": 0,
+            "retry_attempts": 0,
+            "attempts_total": 0,
+            "failed_units": [],
             "windows": [],
             "uncovered_ranges": [],
             "coverage_note": "已检查范围不等于保证无遗漏。",
@@ -304,18 +313,57 @@ class AIFindingsService:
                     }
                 )
         statuses = [str(call.get("status") or "unknown") for call in calls]
-        failed = sum(status in {"error", "invalid", "truncated"} for status in statuses)
+        succeeded_statuses = {"ok", "empty"}
+        failed_statuses = {"error", "invalid", "truncated"}
+        succeeded = sum(status in succeeded_statuses for status in statuses)
+        failed = sum(status in failed_statuses for status in statuses)
         partial = sum(status == "partial" for status in statuses)
         invalid = sum(status == "invalid" for status in statuses)
         truncated = sum(status == "truncated" for status in statuses)
         empty = sum(status == "empty" for status in statuses)
         ok = sum(status == "ok" for status in statuses)
+        unknown = sum(status not in succeeded_statuses | failed_statuses | {"partial"} for status in statuses)
         accepted_candidates = sum(int(call.get("accepted_count") or 0) for call in calls)
         rejected_candidates = sum(int(call.get("rejected_count") or 0) for call in calls)
         planned = len(windows) * len(SPECIALTIES)
         if legacy_windows:
             planned = legacy_windows
-        completed = len(calls)
+        finished = len(calls)
+        attempts_total = sum(max(1, int(call.get("attempts") or 1)) for call in calls)
+        retried_calls = sum(
+            1 for call in calls
+            if int(call.get("retry_count") or 0) > 0
+            or int(call.get("attempts") or 1) > 1
+        )
+        retry_attempts = sum(max(0, int(call.get("attempts") or 1) - 1) for call in calls)
+        failed_units: List[Dict[str, Any]] = []
+        for result in window_results:
+            window = result.get("window")
+            outcome = result.get("outcome")
+            if not isinstance(outcome, dict):
+                continue
+            pages = list(getattr(window, "pages", None) or [])
+            window_id = getattr(window, "window_id", None)
+            for call in outcome.get("calls") or []:
+                call_status = str(call.get("status") or "unknown")
+                if call_status in succeeded_statuses:
+                    continue
+                failed_units.append(
+                    {
+                        "specialty": call.get("specialty"),
+                        "window_id": window_id,
+                        "pages": pages,
+                        "status": call_status,
+                        "error_type": call.get("error_type"),
+                        "http_status": call.get("http_status"),
+                        "retryable": call.get("retryable"),
+                        "attempts": int(call.get("attempts") or 1),
+                        "retry_count": int(call.get("retry_count") or 0),
+                        "accepted_count": call.get("accepted_count"),
+                        "rejected_count": call.get("rejected_count"),
+                        "rejection_reasons": call.get("rejection_reasons"),
+                    }
+                )
         covered_pages = sorted(
             {page for window in windows for page in window.pages}
         )
@@ -323,10 +371,13 @@ class AIFindingsService:
         if not windows:
             status = "not_run"
             reason = "no_windows"
-        elif gaps or any(status in {"error", "invalid", "truncated", "partial", "unknown"} for status in statuses):
+        elif calls and all(status == "error" for status in statuses):
+            status = "failed"
+            reason = "all_calls_failed"
+        elif gaps or failed or partial or unknown or (planned and succeeded < planned):
             status = "partial"
             reason = "window_or_call_incomplete"
-        elif calls and all(status in {"ok", "empty"} for status in statuses):
+        elif calls and succeeded == planned:
             status = "complete"
             reason = "all_planned_calls_valid"
         elif legacy_windows:
@@ -335,9 +386,7 @@ class AIFindingsService:
         else:
             status = "partial"
             reason = "no_successful_calls"
-        if calls and all(status == "error" for status in statuses):
-            status = "failed"
-            reason = "all_calls_failed"
+        unit_retries = max(0, int(getattr(self.ai_client.config, "specialty_retries", 0) or 0))
         return {
             "version": 1,
             "status": status,
@@ -348,13 +397,30 @@ class AIFindingsService:
             "pages_total": total_pages,
             "pages_covered": covered_pages,
             "planned_calls": planned,
-            "completed_calls": completed,
+            # 兼容旧字段：completed_calls 表示“已结束的检查单元”，包含失败。
+            # 页面必须用 succeeded_calls 表示有效完成，不能把失败算成完成。
+            "completed_calls": finished,
+            "completed_calls_includes_failed": True,
+            "finished_calls": finished,
+            "succeeded_calls": succeeded,
+            "effective_completed_calls": succeeded,
             "failed_calls": failed,
             "valid_empty_calls": empty,
             "valid_finding_calls": ok,
             "partial_calls": partial,
             "invalid_calls": invalid,
             "truncated_calls": truncated,
+            "unknown_calls": unknown,
+            "retried_calls": retried_calls,
+            "retry_attempts": retry_attempts,
+            "attempts_total": attempts_total,
+            "call_budget": {
+                "unit_retries": unit_retries,
+                "max_attempts_per_unit": 1 + unit_retries,
+                "max_total_attempts": planned * (1 + unit_retries),
+                "attempts_total": attempts_total,
+            },
+            "failed_units": failed_units,
             "accepted_candidates": accepted_candidates,
             "rejected_candidates": rejected_candidates,
             "windows": list(self._windows_meta),
@@ -367,7 +433,10 @@ class AIFindingsService:
                 }
                 for gap in gaps
             ],
-            "coverage_note": "已检查范围不等于保证无遗漏；结构/视觉能力边界见 capabilities。",
+            "coverage_note": (
+                "有效完成只统计 ok/empty；失败、非法、截断和未覆盖不计入完成。"
+                "已检查范围不等于保证无遗漏；结构/视觉能力边界见 capabilities。"
+            ),
         }
 
     def _build_diagnostics(
@@ -386,12 +455,20 @@ class AIFindingsService:
         model_output = 0
         validation_accepted = 0
         rejected = 0
+        attempts_total = 0
+        retried_units = 0
+        retry_attempts = 0
         for result in window_results:
             outcome = result.get("outcome")
             if not isinstance(outcome, dict):
                 continue
             for call in outcome.get("calls") or []:
                 calls.append(dict(call))
+                call_attempts = max(1, int(call.get("attempts") or 1))
+                attempts_total += call_attempts
+                if call_attempts > 1:
+                    retried_units += 1
+                    retry_attempts += call_attempts - 1
             for version in outcome.get("prompt_versions") or []:
                 if version and version not in prompt_versions:
                     prompt_versions.append(version)
@@ -421,6 +498,9 @@ class AIFindingsService:
                 "final_candidates": final_candidates,
             },
             "rejection_reasons": rejection_reasons,
+            "attempts_total": attempts_total,
+            "retried_units": retried_units,
+            "retry_attempts": retry_attempts,
             "stage_notes": {
                 "deterministic_numeric": "规则/程序复算，AI 数值仅为模型判断",
                 "structure_full_document": "缺表缺章由完整文档结构与确定性规则负责",
@@ -955,6 +1035,23 @@ class AIFindingsService:
                             "timestamp": time.time(),
                         }
                     )
+                    if self._trace_path is not None:
+                        self._write_trace(
+                            {
+                                "job_id": job_id,
+                                "window": window.to_dict(""),
+                                "window_text": window.text,
+                                "origin": origin,
+                                "specialty": "window",
+                                "prompt": "",
+                                "raw_response": "",
+                                "error": {
+                                    "error_type": type(exc).__name__,
+                                    "message": error_text,
+                                },
+                                "outcome": {"status": "error"},
+                            }
+                        )
                     return {
                         "window": window,
                         "issues": [],
@@ -963,11 +1060,17 @@ class AIFindingsService:
                             "status": "error",
                             "calls": [
                                 {
-                                    "specialty": "window",
+                                    "specialty": specialty,
                                     "status": "error",
+                                    "error_type": type(exc).__name__,
+                                    "retryable": False,
+                                    "attempts": 1,
+                                    "retry_count": 0,
                                     "error": error_text,
                                 }
+                                for specialty in SPECIALTIES
                             ],
+                            "attempts": len(SPECIALTIES),
                         },
                     }
                 finally:
@@ -1014,8 +1117,10 @@ class AIFindingsService:
                             "window_text": window.text,
                             "origin": origin,
                             "specialty": exchange.get("specialty"),
+                            "attempt": exchange.get("attempt"),
                             "prompt": exchange.get("prompt") or "",
                             "raw_response": exchange.get("raw_response") or "",
+                            "error": exchange.get("error"),
                             "outcome": outcome_dict,
                         }
                     )
@@ -1042,6 +1147,26 @@ class AIFindingsService:
                 kept_issues.append(issued)
 
             status = str(outcome_dict.get("status") or "unknown")
+            for error in outcome_dict.get("errors") or []:
+                if not isinstance(error, dict) or error.get("reason") != "call_failed":
+                    continue
+                self.ai_errors.append(
+                    {
+                        "type": "audit_specialty_failed",
+                        "window_index": window.window_id,
+                        "window_start": window.start,
+                        "window_end": window.end,
+                        "pages": list(window.pages),
+                        "specialty": error.get("specialty"),
+                        "error": error.get("error"),
+                        "error_type": error.get("error_type"),
+                        "http_status": error.get("http_status"),
+                        "retryable": error.get("retryable"),
+                        "attempt": error.get("attempt"),
+                        "retry_history": error.get("retry_history"),
+                        "timestamp": time.time(),
+                    }
+                )
             if status in {"invalid", "truncated", "partial", "error"}:
                 self.ai_errors.append(
                     {
@@ -1054,6 +1179,21 @@ class AIFindingsService:
                         "accepted_count": outcome_dict.get("accepted_count"),
                         "rejected_count": outcome_dict.get("rejected_count"),
                         "rejection_reasons": outcome_dict.get("rejection_reasons"),
+                        "attempts": outcome_dict.get("attempts"),
+                        "retry_count": outcome_dict.get("retry_count"),
+                        "attempts_log": [
+                            {
+                                "attempt": item.get("attempt"),
+                                "status": item.get("status"),
+                                "error_type": item.get("error_type"),
+                                "http_status": item.get("http_status"),
+                                "retryable": item.get("retryable"),
+                                "response_chars": item.get("response_chars"),
+                                "response_sha256": item.get("response_sha256"),
+                            }
+                            for item in (outcome_dict.get("attempts_log") or [])
+                            if isinstance(item, dict)
+                        ],
                         "timestamp": time.time(),
                     }
                 )

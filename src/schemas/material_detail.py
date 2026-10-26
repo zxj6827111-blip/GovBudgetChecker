@@ -29,7 +29,7 @@ WP2-A 已经定下这条规则：后端翻译会让同一原因在两端各写�
 
 from __future__ import annotations
 
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -405,6 +405,9 @@ class AnalysisBlock(BaseModel):
     #: 恒成立；**不允许**用 ``len(formal_findings)`` 代替它对外报数。
     formal_issue_count: Optional[int] = None
     coverage: Optional[CoverageBlock] = None
+    #: 大模型文字复核的执行状态与检查范围（原始 meta 的受限子集）。
+    #: ``None`` = 历史结果没有记录；不能用“没有记录”冒充“全部完成”。
+    ai_scope_meta: Optional[Dict[str, Any]] = None
 
 
 # ---- 接口五：Slot Detail -----------------------------------------------------

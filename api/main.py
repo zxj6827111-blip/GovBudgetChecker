@@ -2415,6 +2415,9 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             fact_overlay_report=fact_overlay_report,
         )
         result["meta"]["quality_gate"] = quality_gate
+        # 结论作用域同时写进 result.meta：任务详情/复核台/材料详情读的是
+        # result.meta，只放顶层会让页面把新任务误显示成“历史未记录”。
+        result["meta"]["conclusion_scope"] = quality_gate["conclusion_scope"]
         final_status = quality_gate["status"]
         if final_status == JobStatus.REVIEW_REQUIRED.value:
             stage_text = "完成（需人工复核）"

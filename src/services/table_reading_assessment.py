@@ -383,6 +383,9 @@ def enrich_page_assessment(assessment: dict, artifact) -> dict:
     result["table_reading"] = reading
     result["table_recovery_pages"] = sorted({g["page"] for g in reading["gaps"]})
     blank = {p["page"] for p in reading.get("pages", []) if p["blank_verified"]}
+    # 空白页不参与文本覆盖率分母，但必须作为独立指标留痕：
+    # 覆盖率只描述“内容页读得怎么样”，不能因此让空白页在质量指标里消失。
+    result["blank_page_count"] = len(blank)
     if blank:
         result["blank_pages"] = sorted(blank)
         for field in ("low_text_pages", "scanned_pages"):
