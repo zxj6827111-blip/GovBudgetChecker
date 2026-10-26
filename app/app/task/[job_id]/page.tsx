@@ -584,13 +584,17 @@ export default function TaskDetail() {
                   返回当前版本
                 </button>
               </>
-            ) : (
+            ) : revisions.length > 1 ? (
               <span className="font-medium text-warning-700" data-testid="task-revision-notice">
                 重新分析已生成新版本
                 {revisions.find((item) => item.is_current)?.revision_id
                   ? `（当前 ${revisions.find((item) => item.is_current)?.revision_id}）`
                   : ""}
                 ，本版本需重新确认；历史版本可在上方“分析版本”选择器查看。
+              </span>
+            ) : (
+              <span className="font-medium text-slate-600" data-testid="task-revision-notice">
+                本版本人工确认记录
               </span>
             )}
           </div>
