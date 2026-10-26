@@ -13,6 +13,8 @@ import { SlidersHorizontal } from "lucide-react";
 import { EVIDENCE_STATUS_DEGRADED, problemReviewKind, sortProblemsForReview } from "./reviewWorkbenchAdapters";
 import type { IssueWorkflowAction } from "./IssueCard";
 import { IssueCard, IssueRow } from "./IssueCard";
+import { AiScopeBanner } from "../AiScopeBanner";
+import type { AiScopeView } from "../../../lib/aiScope";
 import type { Problem } from "../../../lib/mock";
 
 export interface SourceFindingViews {
@@ -32,11 +34,28 @@ export interface SourceFindingViews {
     status?: string;
     planned_calls?: number;
     completed_calls?: number;
+    completed_calls_includes_failed?: boolean;
+    finished_calls?: number;
+    succeeded_calls?: number;
+    effective_completed_calls?: number;
     failed_calls?: number;
     valid_empty_calls?: number;
     partial_calls?: number;
     invalid_calls?: number;
     truncated_calls?: number;
+    retried_calls?: number;
+    retry_attempts?: number;
+    failed_units?: Array<{
+      specialty?: string;
+      window_id?: number;
+      pages?: number[];
+      status?: string;
+      error_type?: string | null;
+      http_status?: number | null;
+      retryable?: boolean | null;
+      attempts?: number | null;
+      retry_count?: number | null;
+    }>;
     pages_total?: number;
     pages_covered?: number[];
     uncovered_ranges?: Array<{ start?: number; end?: number; pages?: number[]; reason?: string }>;
@@ -48,6 +67,8 @@ export interface SourceFindingViews {
 export interface IssuesTabProps {
   problems: Problem[];
   sourceFindings?: SourceFindingViews;
+  /** 检查范围条：无论 AI 是否启用/是否有覆盖记录都必须展示。 */
+  aiScope?: AiScopeView;
   selectedProblemId: string | null;
   onSelectProblem: (problemId: string | null, options?: { keepLayout?: boolean }) => void;
   /** issue_id -> 当前 workflow 状态（confirmed/no_issue/...），未记录时为 undefined。 */
@@ -58,6 +79,8 @@ export interface IssuesTabProps {
   onUndo: () => Promise<boolean>;
   pendingObligations: number;
   onOpenObligations: () => void;
+  /** 未完成检查的补检入口（通常跳到任务页重新分析）。 */
+  onRecheckToTask?: () => void;
   onSelectEvidenceRef: (problem: Problem, refKey: string) => void;
   readOnly?: boolean;
   /** 问题区放大（隐藏原文）时，列表和详情改为左右排布。 */
@@ -136,6 +159,7 @@ function aiCoverageLabel(status: string | undefined): string {
 export function IssuesTab({
   problems,
   sourceFindings,
+  aiScope,
   selectedProblemId,
   onSelectProblem,
   workflowStatusByIssueId,
@@ -145,6 +169,7 @@ export function IssuesTab({
   onUndo,
   pendingObligations,
   onOpenObligations,
+  onRecheckToTask,
   onSelectEvidenceRef,
   readOnly = false,
   wide = false,
@@ -345,6 +370,21 @@ export function IssuesTab({
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="gbc-review-issues-tab">
+      {aiScope ? (
+        <div className="shrink-0 px-3 pt-1.5">
+          <AiScopeBanner
+            scope={aiScope}
+            testId="gbc-review-ai-scope"
+            onRecheck={
+              aiScope.needsRecheck
+                ? onRecheckToTask ?? (pendingObligations > 0 ? onOpenObligations : undefined)
+                : undefined
+            }
+            recheckLabel={onRecheckToTask ? "前往任务页补检" : "查看检查补核"}
+            compact
+          />
+        </div>
+      ) : null}
       <div className="shrink-0 border-b border-border px-3 py-1.5">
         <div className="flex flex-wrap items-center gap-1.5">
           <div className="flex items-center gap-1.5" aria-label="按处理进度查看">
@@ -432,8 +472,11 @@ export function IssuesTab({
               {sourceFindings.aiCoverage ? (
                 <span data-testid="gbc-review-ai-coverage">
                   检查覆盖：{aiCoverageLabel(sourceFindings.aiCoverage.status)}
-                  （已处理 {sourceFindings.aiCoverage.completed_calls ?? 0}/{sourceFindings.aiCoverage.planned_calls ?? 0}
+                  （有效完成 {sourceFindings.aiCoverage.succeeded_calls
+                    ?? Math.max(0, (sourceFindings.aiCoverage.completed_calls ?? 0) - (sourceFindings.aiCoverage.failed_calls ?? 0))}
+                  /{sourceFindings.aiCoverage.planned_calls ?? 0}
                   {(sourceFindings.aiCoverage.failed_calls ?? 0) > 0 ? `；失败 ${sourceFindings.aiCoverage.failed_calls}` : ""}
+                  {(sourceFindings.aiCoverage.retried_calls ?? 0) > 0 ? `；重试 ${sourceFindings.aiCoverage.retried_calls} 个单元` : ""}
                   {(sourceFindings.aiCoverage.partial_calls ?? 0) > 0 ? `；部分 ${sourceFindings.aiCoverage.partial_calls}` : ""}
                   {(sourceFindings.aiCoverage.invalid_calls ?? 0) > 0 ? `；非法响应 ${sourceFindings.aiCoverage.invalid_calls}` : ""}
                   {(sourceFindings.aiCoverage.truncated_calls ?? 0) > 0 ? `；截断 ${sourceFindings.aiCoverage.truncated_calls}` : ""}

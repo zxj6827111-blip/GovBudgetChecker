@@ -418,6 +418,9 @@ class AIClient:
             }
         """
         preferred_provider = kwargs.pop("preferred_provider", None) or kwargs.pop("provider", None)
+        # 审计调用由专项×窗口层统一做有界补试；关闭 provider 内层重试，
+        # 避免两层重试叠加成 4 次尝试并突破调用预算。
+        max_retries_override = kwargs.pop("max_retries_override", None)
         available_providers = self.get_available_providers()
         if preferred_provider:
             preferred_provider = str(preferred_provider)
@@ -455,7 +458,14 @@ class AIClient:
             try:
                 # 执行请求
                 response = await self._execute_with_retry(
-                    provider, messages, model, temperature, max_tokens, timeout, **kwargs
+                    provider,
+                    messages,
+                    model,
+                    temperature,
+                    max_tokens,
+                    timeout,
+                    max_retries_override=max_retries_override,
+                    **kwargs,
                 )
                 
                 # 记录成功
@@ -519,9 +529,14 @@ class AIClient:
                                   temperature: float,
                                   max_tokens: Optional[int],
                                   timeout: int,
+                                  max_retries_override: Optional[int] = None,
                                   **kwargs) -> LLMResponse:
-        """带重试的执行"""
-        max_retries = getattr(provider, 'max_retries', 1)
+        """带重试的执行；``max_retries_override`` 供上层统一重试策略时关闭内层重试。"""
+        max_retries = (
+            getattr(provider, 'max_retries', 1)
+            if max_retries_override is None
+            else max(0, int(max_retries_override))
+        )
         
         for attempt in range(max_retries + 1):
             try:

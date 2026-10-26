@@ -90,3 +90,44 @@ def test_ai_client_env_slot_empty_enabled_uses_default_true(monkeypatch, tmp_pat
     client = AIClient(config_path=str(config_path))
 
     assert "main" in client.loaded_providers
+
+
+class _RetryProbeProvider:
+    name = "probe"
+    max_retries = 5
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def chat(self, **_kwargs):
+        self.calls += 1
+        from src.providers import LLMError, LLMErrorType
+
+        raise LLMError(error_type=LLMErrorType.SERVER_ERROR, message="upstream 500", provider=self.name)
+
+
+async def test_audit_retry_override_does_not_stack_provider_retries() -> None:
+    """审计调用关闭 provider 内层重试：一次失败只发一次请求，由专项层补试。"""
+
+    from src.providers import LLMError
+
+    client = AIClient.__new__(AIClient)
+    client._managed_config = None
+    probe = _RetryProbeProvider()
+
+    try:
+        await client._execute_with_retry(
+            probe,
+            messages=[{"role": "user", "content": "x"}],
+            model="m",
+            temperature=0,
+            max_tokens=10,
+            timeout=1,
+            max_retries_override=0,
+        )
+    except LLMError:
+        pass
+    else:  # pragma: no cover - 失败必须抛出，不能伪装成功
+        raise AssertionError("expected LLMError")
+
+    assert probe.calls == 1

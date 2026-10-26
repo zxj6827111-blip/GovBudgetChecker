@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Download, RefreshCw, FileText, Link2 } from "lucide-react";
 
 import AssociateDialog from "@/components/AssociateDialog";
+import { AiScopeBanner } from "@/components/AiScopeBanner";
 import { useAIAnalysisOptions } from "@/components/AIAnalysisOptions";
 import AnalysisCheckProgress from "@/components/AnalysisCheckProgress";
 import ReanalyzeAiToggle from "@/components/ReanalyzeAiToggle";
@@ -19,6 +20,7 @@ import { isHighRiskSeverity } from "@/lib/issueSeverity";
 import type { Problem, Task } from "@/lib/mock";
 import { cn } from "@/lib/utils";
 import { recognitionStateLabel } from "@/lib/reportVersion";
+import { deriveAiScope } from "@/lib/aiScope";
 import type { JobDetailRecord, StructuredIngestRecord } from "@/lib/uiAdapters";
 import { selectStructuredForJob, toUiProblems, toUiTask } from "@/lib/uiAdapters";
 import {
@@ -190,17 +192,35 @@ export default function TaskDetail() {
       ? aiOptions.enabled
       : typeof jobDetail?.use_ai_assist === "boolean" ? jobDetail.use_ai_assist : false);
 
-  const handleReanalyze = async () => {
+  const taskAiScope = useMemo(() => {
+    const meta = jobDetail?.result?.meta;
+    const requestedHint = typeof jobDetail?.use_ai_assist === "boolean"
+      ? jobDetail.use_ai_assist
+      : null;
+    const conclusionScopeHint = typeof jobDetail?.conclusion_scope === "string"
+      ? jobDetail.conclusion_scope
+      : null;
+    return deriveAiScope(
+      meta && typeof meta === "object" && !Array.isArray(meta) ? meta : {},
+      { requestedHint, conclusionScopeHint },
+    );
+  }, [jobDetail]);
+
+  const handleReanalyze = async (useAiOverride?: boolean) => {
     if (isReanalyzing || task?.status === "analyzing") {
       return;
     }
 
+    const useAi = useAiOverride ?? effectiveReanalyzeUseAiAssist;
     if (
-      !confirm("确定要重新分析这份报告吗？系统会基于当前任务重新执行分析。")
+      !confirm(
+        `确定要重新分析这份报告吗？系统会基于当前任务重新执行分析。\n本次将${useAi ? "调用大模型做文字语义复核" : "仅执行本地规则检查"}。`,
+      )
     ) {
       return;
     }
 
+    setReanalyzeUseAiAssist(useAi);
     setIsReanalyzing(true);
 
     try {
@@ -209,8 +229,8 @@ export default function TaskDetail() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           use_local_rules: true,
-          use_ai_assist: effectiveReanalyzeUseAiAssist,
-          ai_profile_id: effectiveReanalyzeUseAiAssist ? aiOptions.profileId || null : null,
+          use_ai_assist: useAi,
+          ai_profile_id: useAi ? aiOptions.profileId || null : null,
         }),
       });
 
@@ -225,7 +245,7 @@ export default function TaskDetail() {
           ? {
               ...current,
               use_local_rules: true,
-              use_ai_assist: effectiveReanalyzeUseAiAssist,
+              use_ai_assist: useAi,
             }
           : current
       );
@@ -487,6 +507,27 @@ export default function TaskDetail() {
             导出报告
           </button>
         </div>
+      </div>
+
+      <div className="border-b border-border bg-slate-50 px-6 py-2">
+        {task.status === "analyzing" ? (
+          <p className="text-xs text-slate-500" data-testid="task-ai-scope-analyzing">
+            分析进行中，检查范围将在完成后更新；当前不宣称已完成大模型文字复核。
+          </p>
+        ) : (
+          <AiScopeBanner
+            scope={taskAiScope}
+            testId="task-ai-scope"
+            onRecheck={
+              taskAiScope.needsRecheck && !selectedRevision
+                ? () => void handleReanalyze(true)
+                : undefined
+            }
+            recheckLabel={aiOptions.capabilities?.enabled ? "使用大模型重新分析" : "重新分析"}
+            recheckDisabled={isReanalyzing}
+            compact
+          />
+        )}
       </div>
 
       <div className="border-b border-border bg-slate-50 px-6 py-3">
