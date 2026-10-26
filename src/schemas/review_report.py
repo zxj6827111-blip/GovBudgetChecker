@@ -203,6 +203,12 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
 
     coverage = payload.get("check_coverage") or meta.get("obligation_coverage")
     coverage_dict = _mapping(coverage)
+    merged = _mapping(result.get("merged"))
+    candidate_ids = {
+        str(item).strip()
+        for item in merged.get("candidate_issue_ids", [])
+        if str(item or "").strip()
+    } if isinstance(merged.get("candidate_issue_ids"), list) else set()
     manual_review = [
         {"record_type": "review_reason", **item}
         for item in _mapping_list(payload.get("review_reasons"))
@@ -212,6 +218,10 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
         if severity == "info" or _is_rounding_hint(item) or _is_confirmed_material_finding(item):
             continue
         issue_id = str(item.get("id") or f"finding-candidate:{len(manual_review) + 1}")
+        # AI-only 候选统一由下方 ai_candidate 记录承载；这里再生成
+        # finding_review_candidate 会让同一候选在页面上重复出现两次。
+        if str(item.get("source") or "") == "ai" and issue_id in candidate_ids:
+            continue
         manual_review.append({
             "record_type": "finding_review_candidate",
             "id": issue_id,
@@ -221,13 +231,7 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
             "suggestion": item.get("suggestion") or "请核对原始 PDF 对应页后再确认。",
             "finding": item,
         })
-    merged = _mapping(result.get("merged"))
     merge_conflicts = _mapping_list(merged.get("conflicts"))
-    candidate_ids = {
-        str(item).strip()
-        for item in merged.get("candidate_issue_ids", [])
-        if str(item or "").strip()
-    } if isinstance(merged.get("candidate_issue_ids"), list) else set()
     source_by_id = {
         str(item.get("id") or ""): item
         for key in ("ai_findings", "rule_findings")

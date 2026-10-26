@@ -915,6 +915,15 @@ function collectReviewReportManualIssues(reviewReport: Record<string, unknown>):
       claimed_page_number: candidateFinding.claimed_page_number,
       evidence_missing: candidateFinding.evidence_missing,
       evidence_verification: candidateFinding.evidence_verification,
+      // 解释字段必须随候选一起转交；否则复核报告里的 AI 候选会在页面上
+      // 只剩一句 message，既看不到当前值/应为值，也丢了“模型声称”提示。
+      expected: candidateFinding.expected,
+      actual: candidateFinding.actual,
+      difference: candidateFinding.difference,
+      check: candidateFinding.check,
+      table_or_section: candidateFinding.table_or_section,
+      amounts_provenance: candidateFinding.amounts_provenance,
+      calculation_basis: candidateFinding.calculation_basis,
       suggestion: String(
         item.suggestion ?? candidateFinding.suggestion ?? item.recommended_action ?? "核对原始材料后确认。",
       ),
@@ -1040,6 +1049,54 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
           verificationStatus,
         }];
       });
+      const factRefs = Array.isArray(rawLocation.fact_source_refs)
+        ? rawLocation.fact_source_refs.filter(isRecord).flatMap((ref, refIndex) => {
+            const refPage = toNumber(ref.physical_page ?? ref.page);
+            if (!Number.isFinite(refPage) || refPage <= 0) return [];
+            const spanText = String(ref.span ?? ref.value ?? "").trim();
+            return [{
+              key: `fact|${String(ref.role ?? "原始表格金额")}|${Math.floor(refPage)}|${String(ref.fact_uid ?? ref.evidence_id ?? refIndex)}`,
+              role: String(ref.role ?? "原始表格金额"),
+              page: Math.floor(refPage),
+              locationText: [`第 ${Math.floor(refPage)} 页`, String(ref.role ?? "原始表格金额")].join(" · "),
+              valueText: spanText || undefined,
+              bbox: Array.isArray(ref.bbox) ? ref.bbox.map((item) => Number(item)) : undefined,
+              locationLevel: String(ref.location_level ?? "region"),
+              verificationStatus: String(ref.verification_status ?? "unverified"),
+            }];
+          })
+        : [];
+      const pairRefs = Array.isArray(rawLocation.evidence_pairs)
+        ? rawLocation.evidence_pairs.filter(isRecord).flatMap((ref, refIndex) => {
+            const refPage = toNumber(ref.page);
+            if (!Number.isFinite(refPage) || refPage <= 0) return [];
+            return [{
+              key: `pair|${Math.floor(refPage)}|${refIndex}`,
+              role: `跨段证据 ${refIndex + 1}`,
+              page: Math.floor(refPage),
+              locationText: [`第 ${Math.floor(refPage)} 页`, String(ref.table_or_section ?? "").trim()].filter(Boolean).join(" · "),
+              locationLevel: "region",
+              verificationStatus: "unverified",
+            }];
+          })
+        : [];
+      const rejectedPairRefs = Array.isArray(rawLocation.evidence_pairs_rejected)
+        ? rawLocation.evidence_pairs_rejected.filter(isRecord).flatMap((ref, refIndex) => {
+            const refPage = toNumber(ref.page);
+            if (!Number.isFinite(refPage) || refPage <= 0) return [];
+            return [{
+              key: `pair-rejected|${Math.floor(refPage)}|${refIndex}`,
+              role: "模型声称证据（未通过逐字校验）",
+              page: Math.floor(refPage),
+              locationText: [`第 ${Math.floor(refPage)} 页`, String(ref.table_or_section ?? "").trim()].filter(Boolean).join(" · "),
+              locationLevel: "region",
+              verificationStatus: "unverified",
+            }];
+          })
+        : [];
+      const allEvidenceRefs = [...evidenceRefs, ...factRefs, ...pairRefs, ...rejectedPairRefs].filter(
+        (ref, refIndex, all) => all.findIndex((item) => item.key === ref.key) === refIndex,
+      );
       const roundingCases = Array.isArray(rawLocation.rounding_cases)
         ? rawLocation.rounding_cases.filter(isRecord).flatMap((item, caseIndex) => {
             const relationId = String(item.relation_id ?? "").trim();
@@ -1081,12 +1138,19 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
             ? "manual_review"
             : mapSeverity(issue.severity) === "info" ? "tip" : "issue",
         bbox: anchor.bbox,
-        evidenceRefs,
+        evidenceRefs: allEvidenceRefs,
         roundingCases,
         expectedName: String(issue.expected_name ?? rawLocation.expected_name ?? ""),
         actualName: String(issue.actual_name ?? rawLocation.actual_name ?? ""),
         codeLevel: String(issue.code_level ?? rawLocation.code_level ?? ""),
         sourceOfTruth: String(issue.source_of_truth ?? rawLocation.source_of_truth ?? ""),
+        expected: String(issue.expected ?? "").trim() || undefined,
+        actual: String(issue.actual ?? "").trim() || undefined,
+        difference: String(issue.difference ?? "").trim() || undefined,
+        check: String(issue.check ?? rawLocation.check ?? "").trim() || undefined,
+        tableOrSection: String(issue.table_or_section ?? rawLocation.table_or_section ?? "").trim() || undefined,
+        amountsProvenance: String(issue.amounts_provenance ?? "").trim() || undefined,
+        calculationBasis: isRecord(issue.calculation_basis) ? issue.calculation_basis : undefined,
         evidenceStatus: issue.evidence_status ? String(issue.evidence_status) : undefined,
         usesManualFill: Array.isArray(issue.manual_fill_fact_ids) && issue.manual_fill_fact_ids.length > 0,
         claimedPage: toNumber(issue.claimed_page_number) > 0 ? toNumber(issue.claimed_page_number) : undefined,

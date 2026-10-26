@@ -215,6 +215,24 @@ class IssueItem(BaseModel):
     text_snippet: Optional[str] = Field(default=None, description="文本摘录")
     why_not: Optional[str] = Field(default=None, description="未命中原因")
 
+    # ---- 解释字段（AI 候选与规则 finding 共用承载位置）----
+    # 历史结果没有这些键时保持 None（未知），不得补造数值或证据。
+    expected: Optional[str] = Field(default=None, description="复核后的期望值/表述；未知为 None")
+    actual: Optional[str] = Field(default=None, description="原文中的实际值/表述；未知为 None")
+    difference: Optional[str] = Field(default=None, description="差额/百分点差；未知为 None")
+    check: Optional[str] = Field(default=None, description="检查项名称")
+    table_or_section: Optional[str] = Field(
+        default=None, description="对应表名或说明章节"
+    )
+    #: 数值来源边界：model_claimed_not_verified / program_calculated / rule_verified。
+    amounts_provenance: Optional[str] = Field(
+        default=None, description="expected/actual/difference 的来源与核实状态"
+    )
+    #: 程序计算的依据、单位、精度和规则版本；模型声称时 verified=False。
+    calculation_basis: Optional[Dict[str, Any]] = Field(
+        default=None, description="数值计算依据（来源、单位、精度、规则版本）"
+    )
+
     # ---- 版本留痕（P2-02）----
     # 目的是让历史结果可复现：任一条 finding 都能回答"哪个规则版本 / 哪个模型 /
     # 哪版提示词 / 哪版引擎产出的"。全部为可选字段并默认 None，

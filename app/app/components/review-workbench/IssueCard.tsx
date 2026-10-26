@@ -215,6 +215,29 @@ export function IssueCard({
         <h4 className="mb-1.5 text-base font-semibold text-slate-900">{problem.title}</h4>
         <p className="mb-3 whitespace-pre-line text-sm leading-relaxed text-slate-700">{problem.description}</p>
 
+        {problem.actual || problem.expected || problem.difference || problem.check || problem.tableOrSection ? (
+          <div className="mb-3 rounded-md border border-border bg-surface-50 px-3 py-2 text-xs leading-relaxed text-slate-700" data-testid={`gbc-review-issue-explanation-${problem.id}`}>
+            {problem.actual || problem.expected || problem.difference ? (
+              <div>
+                当前值：{problem.actual || "未提供"}；应为：{problem.expected || "未提供"}；差额：{problem.difference || "未提供"}
+              </div>
+            ) : null}
+            {problem.check ? <div>检查项：{problem.check}</div> : null}
+            {problem.tableOrSection ? <div>表/章节：{problem.tableOrSection}</div> : null}
+            {problem.amountsProvenance === "model_claimed_not_verified" ? (
+              <div className="mt-1 text-warning-700">数值来源：模型声称，尚未经程序核实。</div>
+            ) : problem.amountsProvenance === "program_calculated" ? (
+              <div className="mt-1 text-slate-500">
+                数值来源：程序按已定位事实计算
+                {problem.calculationBasis && typeof problem.calculationBasis === "object"
+                  ? `（单位：${String(problem.calculationBasis.unit ?? "未记录")}，精度：${String(problem.calculationBasis.precision ?? "未记录")}，规则版本：${String(problem.calculationBasis.rule_version ?? "未记录")}）`
+                  : ""}
+                。
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         {problem.snippet ? (
           <div className="mb-3 rounded-md bg-surface-100 px-3 py-2 text-sm leading-relaxed text-slate-700">
             <div className="mb-1 text-xs font-medium text-slate-500">{evidenceExcerptLabel(problem.sourceIdentityVerified === true)}</div>

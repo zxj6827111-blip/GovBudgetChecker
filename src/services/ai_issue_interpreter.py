@@ -16,10 +16,45 @@ _RULE_PREFIX = {
     "placeholder_residue": "AI-TPL",
     "unit_scope_conflict": "AI-SCOPE",
     "duplicate_text": "AI-TEXT",
+    "text_error": "AI-TEXT",
     "missing_explanation": "AI-DESC",
+    "explanation_insufficient": "AI-DESC",
+    "cross_section_conflict": "AI-XSEC",
     "direction_conflict": "AI-DIR",
     "code_subject_mismatch": "AI-CODE",
     "generic": "AI-SEM",
+}
+
+_TYPE_TO_KIND = {
+    "typo": "text_error",
+    "missing_char": "text_error",
+    "extra_char": "text_error",
+    "repeated_words": "duplicate_text",
+    "grammar": "text_error",
+    "fiscal_usage_error": "code_subject_mismatch",
+    "cost_purpose_mismatch": "code_subject_mismatch",
+    "document_identity_conflict": "document_kind_mismatch",
+    "placeholder_residue": "placeholder_residue",
+    "fragment": "text_error",
+    "explanation_insufficient": "explanation_insufficient",
+    "cross_section_conflict": "cross_section_conflict",
+    "missing_explanation": "missing_explanation",
+    "unit_scope_conflict": "unit_scope_conflict",
+    "ratio_recalc": "ratio_recalc",
+    "sum_mismatch": "sum_mismatch",
+    "direction_conflict": "direction_conflict",
+    "code_subject_mismatch": "code_subject_mismatch",
+    "generic": "generic",
+}
+
+_TEXT_TYPE_LABELS = {
+    "typo": "错别字",
+    "missing_char": "漏字",
+    "extra_char": "多字",
+    "repeated_words": "重复字词",
+    "grammar": "病句或语序不当",
+    "fiscal_usage_error": "财政用途表述错误",
+    "fragment": "残句",
 }
 
 
@@ -32,19 +67,27 @@ def interpret_ai_issue(
     issue_type = _compact_text(
         raw_issue.get("problem_type") or raw_issue.get("type") or raw_issue.get("category")
     )
-    quote = _compact_text(raw_issue.get("quote") or raw_issue.get("original"))
-    context = _compact_text(raw_issue.get("context") or raw_issue.get("evidence"))
-    original = _compact_text(raw_issue.get("original") or quote or context)
+    # 证据引文必须完整保留，不能为了展示截断到 120 字——
+    # 截断会让后处理无法按原文核验，也会让用户看到不完整的“原文”。
+    quote = _clean_text(raw_issue.get("quote") or raw_issue.get("original"), limit=2000)
+    context = _clean_text(raw_issue.get("context") or raw_issue.get("evidence"), limit=4000)
+    original = _clean_text(raw_issue.get("original") or quote or context, limit=2000)
     table_or_section = _compact_text(
         raw_issue.get("table_or_section")
         or raw_issue.get("section")
         or raw_issue.get("table")
     )
     check_name = _compact_text(raw_issue.get("check"))
-    expected = _compact_text(_first_non_empty(raw_issue.get("expected"), _metrics_value(raw_issue, "expected")))
-    actual = _compact_text(_first_non_empty(raw_issue.get("actual"), _metrics_value(raw_issue, "actual")))
-    difference = _compact_text(
-        _first_non_empty(raw_issue.get("difference"), raw_issue.get("diff"), _metrics_value(raw_issue, "diff"))
+    expected = _clean_text(_first_non_empty(raw_issue.get("expected"), _metrics_value(raw_issue, "expected")), limit=300)
+    actual = _clean_text(_first_non_empty(raw_issue.get("actual"), _metrics_value(raw_issue, "actual")), limit=300)
+    difference = _clean_text(
+        _first_non_empty(
+            raw_issue.get("difference"),
+            raw_issue.get("diff"),
+            _metrics_value(raw_issue, "difference"),
+            _metrics_value(raw_issue, "diff"),
+        ),
+        limit=300,
     )
     normalized_kind = _normalize_problem_kind(
         issue_type=issue_type,
@@ -125,6 +168,11 @@ def interpret_ai_issue(
         "quote": quote,
         "context": context,
         "original": original,
+        "expected": expected,
+        "actual": actual,
+        "difference": difference,
+        "check": check_name,
+        "table_or_section": table_or_section,
         "raw_severity": raw_severity,
     }
 
@@ -201,8 +249,16 @@ def _build_metrics(
         metrics["actual"] = actual
     if difference:
         metrics["diff"] = difference
+        metrics["difference"] = difference
     if _compact_text(raw_issue.get("check")):
         metrics["check"] = _compact_text(raw_issue.get("check"))
+    table_or_section = _compact_text(
+        raw_issue.get("table_or_section")
+        or raw_issue.get("section")
+        or raw_issue.get("table")
+    )
+    if table_or_section:
+        metrics["table_or_section"] = table_or_section
     confidence_value = _safe_float(confidence)
     if confidence_value is not None:
         metrics["confidence"] = confidence_value
@@ -223,11 +279,16 @@ def _build_title(
         "placeholder_residue": "模板残留或占位符未清理",
         "unit_scope_conflict": "金额单位或统计口径不一致",
         "duplicate_text": "重复表述或模板残句",
+        "text_error": "文字表述疑似错误",
         "missing_explanation": "说明或空表说明可能缺失",
+        "explanation_insufficient": "说明缺少实质性原因",
+        "cross_section_conflict": "跨段同口径表述矛盾",
         "direction_conflict": "增减方向与数字变化不一致",
         "code_subject_mismatch": "科目编码或用途表述异常",
     }
     base_title = title_map.get(normalized_kind, fallback_title or issue_type or "AI识别问题")
+    if normalized_kind == "text_error" and issue_type in _TEXT_TYPE_LABELS:
+        base_title = f"文字表述疑似错误（{_TEXT_TYPE_LABELS[issue_type]}）"
     if is_manual_review and not base_title.startswith("待人工复核"):
         return f"待人工复核：{base_title}"
     return base_title
@@ -284,9 +345,26 @@ def _build_message(
             f"{scope}存在重复表述、残句或异常标点{check_text}",
             quote_text,
         )
+    if normalized_kind == "text_error":
+        return _join_sentences(
+            f"{scope}疑似存在文字或语义错误{check_text}",
+            _comparison_text(actual=actual, expected=expected, difference=difference),
+            quote_text,
+        )
     if normalized_kind == "missing_explanation":
         return _join_sentences(
             f"{scope}缺少必要说明、空表说明或变动原因说明{check_text}",
+            quote_text,
+        )
+    if normalized_kind == "explanation_insufficient":
+        return _join_sentences(
+            f"{scope}的增减原因说明缺少实质内容，未说明具体业务原因{check_text}",
+            quote_text,
+        )
+    if normalized_kind == "cross_section_conflict":
+        return _join_sentences(
+            f"{scope}存在跨段同口径表述矛盾，需核对双方原文证据{check_text}",
+            _comparison_text(actual=actual, expected=expected, difference=difference),
             quote_text,
         )
     if normalized_kind == "direction_conflict":
@@ -321,7 +399,10 @@ def _build_suggestion(
         "placeholder_residue": "请删除模板占位符、残留示例或未清理文本，补齐正式内容后再公开。",
         "unit_scope_conflict": "请统一金额单位和统计口径，避免将不同口径数据直接比较。",
         "duplicate_text": "请删除重复表述、残句或异常标点，保持公开文本规范。",
+        "text_error": "请核对原文中的错别字、多字漏字或语序后修正，并保持句意不变。",
         "missing_explanation": "请补充空表说明、无此项说明或同比变动原因说明。",
+        "explanation_insufficient": "请补充可核实的业务原因，不要只重复“增加/减少/调整”等结果表述。",
+        "cross_section_conflict": "请核对涉及的主体、年度、科目、资金范围和指标期间；确认同口径后修正其中一侧，并同步保留双方证据。",
         "direction_conflict": "请核对增减方向及对应数据，确保文字描述与数字一致。",
         "code_subject_mismatch": "请核对科目编码、名称和用途说明，按正式口径修订。",
         "generic": "请结合原表、原文和截图证据复核后修正。",
@@ -345,7 +426,10 @@ def _build_tags(
         "placeholder_residue": "模板残留",
         "unit_scope_conflict": "口径检查",
         "duplicate_text": "文本规范",
+        "text_error": "文字规范",
         "missing_explanation": "说明完整性",
+        "explanation_insufficient": "说明合理性",
+        "cross_section_conflict": "跨段一致性",
         "direction_conflict": "方向校验",
         "code_subject_mismatch": "科目校验",
         "generic": "AI检测",
@@ -395,8 +479,18 @@ def _normalize_problem_kind(
     corpus = " | ".join(part for part in parts if part).lower()
     corpus_no_space = "|".join(_WHITESPACE_RE.sub("", part.lower()) for part in parts if part)
 
+    direct_kind = _TYPE_TO_KIND.get(issue_type.strip().lower())
+    if direct_kind:
+        return direct_kind
+
     if any(token in corpus_no_space for token in ("部门预算", "单位预算", "部门决算", "单位决算", "文种")):
         return "document_kind_mismatch"
+    if any(token in corpus_no_space for token in ("错别字", "多字", "漏字", "重复字", "病句", "语病", "残句", "表述错误", "用途错误", "广播影")):
+        return "text_error"
+    if any(token in corpus_no_space for token in ("跨段", "前后矛盾", "不同章节", "两处表述", "用字不一致")):
+        return "cross_section_conflict"
+    if any(token in corpus_no_space for token in ("说明不足", "原因不足", "未说明原因", "只重复", "实质原因")):
+        return "explanation_insufficient"
     if any(token in corpus_no_space for token in ("同比", "占比", "完成率", "增长率", "下降率", "百分点")) or (
         "%" in corpus and (expected or actual or difference)
     ):
@@ -513,6 +607,16 @@ def _safe_float(value: Any) -> Optional[float]:
 
 
 def _compact_text(value: Any, limit: int = 120) -> str:
+    if value is None:
+        return ""
+    text = _WHITESPACE_RE.sub(" ", str(value)).strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _clean_text(value: Any, limit: int = 2000) -> str:
+    """保留完整证据文本，只折叠空白；超长时显式截断。"""
     if value is None:
         return ""
     text = _WHITESPACE_RE.sub(" ", str(value)).strip()

@@ -7,16 +7,25 @@ import json
 import time
 import asyncio
 import os
+import hashlib
+from pathlib import Path
 from typing import List, Dict, Any, Mapping, Optional
 import traceback
 import re
 
 from src.schemas.issues import IssueItem, JobContext, AnalysisConfig
 from src.engine.ai.extractor_client import ExtractorClient, ExtractorConfig
+from src.engine.ai.audit_prompts import SPECIALTIES
 from src.services.check_progress import update_progress
 from src.services.ai_issue_interpreter import interpret_ai_issue, normalize_ai_severity
 from src.services.ai_input_builder import build_structured_context
 from src.services.ai_candidate_contract import validate_ai_candidate_batch
+from src.services.ai_window_builder import (
+    build_text_windows,
+    map_offset_to_page,
+    uncovered_ranges,
+    window_page_map,
+)
 from src.utils.logging_config import describe_exception, safe_log_extra
 from src.utils.provenance import ENGINE_VERSION, read_finding_provenance
 
@@ -44,6 +53,16 @@ class AIFindingsService:
             self.audit_overlap_chars = max(200, self.audit_window_chars // 4)
         self.audit_max_windows = self._read_int_env("AI_AUDIT_MAX_WINDOWS", 12, 1)
         self.audit_max_concurrency = self._read_int_env("AI_AUDIT_MAX_CONCURRENCY", 2, 1)
+        self.ai_coverage: Dict[str, Any] = {}
+        self.audit_diagnostics: Dict[str, Any] = {}
+        self._trace_enabled = os.getenv("AI_AUDIT_TRACE", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self._trace_path: Optional[Any] = None
+        self._windows_meta: List[Dict[str, Any]] = []
     
     async def analyze(self, context: JobContext) -> List[IssueItem]:
         """执行AI分析"""
@@ -57,8 +76,12 @@ class AIFindingsService:
         self._progress_job_id = context.job_id
         logger.info(f"开始AI分析: job_id={context.job_id}")
 
-        # 重置错误计数
+        # 重置错误计数与覆盖记录
         self.ai_errors = []
+        self.ai_coverage = {}
+        self.audit_diagnostics = {}
+        self._windows_meta = []
+        self._trace_path = self._resolve_trace_path(context)
 
         # 防御性留痕清理（review 🟢2）：ledger 里的 content 含材料原文，
         # 正常链路由 analyze_dual 在任务结束时 pop 走；若上一任务异常路径
@@ -76,6 +99,10 @@ class AIFindingsService:
             page_texts = context.page_texts if context.page_texts else []
             if not page_texts:
                 logger.warning("文档文本为空，跳过AI语义审计")
+                self.ai_errors.append(
+                    {"type": "audit_no_input", "reason": "no_page_texts", "timestamp": time.time()}
+                )
+                self.ai_coverage = self._empty_coverage("not_run", "no_page_texts")
                 return []
             
             # 计算每页的起始偏移量（用于后续页码映射）
@@ -91,51 +118,87 @@ class AIFindingsService:
             self.page_offsets = page_offsets
             if not all_text.strip():
                 logger.warning("文档文本为空，跳过AI语义审计")
+                self.ai_errors.append(
+                    {"type": "audit_no_input", "reason": "blank_text", "timestamp": time.time()}
+                )
+                self.ai_coverage = self._empty_coverage("not_run", "blank_text")
                 return []
             
-            # 生成文档哈希
-            import hashlib
-            doc_hash = hashlib.sha1(all_text[:5000].encode('utf-8')).hexdigest()[:12]
+            # 生成文档哈希（全量文本，窗口哈希再叠加窗口身份）
+            doc_hash = hashlib.sha1(all_text.encode('utf-8')).hexdigest()[:16]
 
-            # 分窗执行AI审计，避免15000字符硬截断导致漏检
-            semantic_issues: List[Dict[str, Any]] = []
-            windows = self._build_text_windows(all_text)
-            # 输入表征增强（计划 §4）：一次性构建「结构化事实 + 表格关系 +
-            # 页码」上下文，随每个窗口注入 prompt；模型只做语义候选，
-            # 金额勾稽以确定性规则为准
-            self.structured_context = build_structured_context(
-                page_texts,
-                getattr(context, "page_tables", None),
+            # 按句子/段落边界切窗；重叠窗口只用于避免边界漏检，不改变全局偏移。
+            windows = build_text_windows(
+                all_text,
+                page_offsets,
+                window_chars=self.audit_window_chars,
+                overlap_chars=self.audit_overlap_chars,
+                max_windows=self.audit_max_windows,
             )
-            if windows and (windows[-1][0] + len(windows[-1][1]) < len(all_text)):
+            self._windows_meta = [window.to_dict(all_text) for window in windows]
+            gaps = uncovered_ranges(windows, len(all_text))
+            for gap in gaps:
+                gap["pages"] = self._pages_in_range(page_offsets, gap["start"], gap["end"])
+            if gaps:
                 logger.warning(
-                    "AI审计窗口上限触发，文档后半部分未进入AI审计: covered=%s, total=%s",
-                    windows[-1][0] + len(windows[-1][1]),
+                    "AI审计窗口上限触发，文档部分内容未进入AI审计: gap_count=%s, total=%s",
+                    len(gaps),
                     len(all_text),
                 )
                 self.ai_errors.append(
                     {
                         "type": "audit_window_limit_reached",
-                        "covered_chars": windows[-1][0] + len(windows[-1][1]),
+                        "uncovered_ranges": gaps,
+                        "covered_chars": len(all_text) - sum(gap["chars"] for gap in gaps),
                         "total_chars": len(all_text),
                         "windows": len(windows),
                         "window_size": self.audit_window_chars,
                         "max_windows": self.audit_max_windows,
+                        "specialties": list(SPECIALTIES),
                         "timestamp": time.time(),
                     }
                 )
-            window_batches = await self._run_window_audits(
+
+            # 输入表征增强：结构化事实 + 表格关系 + 页码 + 可引用 ID。
+            self.structured_context = build_structured_context(
+                page_texts,
+                getattr(context, "page_tables", None),
+                fact_context=getattr(context, "fact_context", None),
+                check_receipts=(getattr(context, "meta", {}) or {}).get("check_receipts"),
+            )
+
+            window_results = await self._run_window_audits(
                 windows=windows,
                 doc_hash=doc_hash,
                 total_text_len=len(all_text),
             )
-            for window_issues in window_batches:
+            semantic_issues: List[Dict[str, Any]] = []
+            for result in window_results:
+                window_issues = result.get("issues") or []
+                for issue in window_issues:
+                    if isinstance(issue, dict):
+                        issue["audit_origin"] = dict(result.get("origin") or {})
                 semantic_issues.extend(window_issues)
+            before_dedupe = len(semantic_issues)
             semantic_issues = self._dedupe_semantic_issues(semantic_issues)
             
             # 转换为IssueItem格式，传入页码偏移量
             issues = self._convert_semantic_issues_to_items(semantic_issues, context, page_offsets)
             issues = self._populate_bbox_hints(issues, context)
+            self.ai_coverage = self._build_coverage(
+                all_text=all_text,
+                page_offsets=page_offsets,
+                windows=windows,
+                gaps=gaps,
+                window_results=window_results,
+            )
+            self.audit_diagnostics = self._build_diagnostics(
+                window_results=window_results,
+                all_text=all_text,
+                before_dedupe=before_dedupe,
+                after_dedupe=len(semantic_issues),
+                final_candidates=len(issues),
+            )
             
             elapsed = time.time() - start_time
             logger.info(f"AI分析完成: job_id={context.job_id}, issues={len(issues)}, elapsed={elapsed:.2f}s")
@@ -150,14 +213,320 @@ class AIFindingsService:
                 extra=safe_log_extra({"job_id": context.job_id, **describe_exception(e)}),
             )
             
-            # 记录分析失败错误
+            # 记录分析失败错误（不落材料原文）
             self.ai_errors.append({
                 "type": "analysis_failure",
-                "message": str(e),
+                "error_type": type(e).__name__,
+                "error": self.ai_client._safe_error_text(e),
                 "timestamp": time.time()
             })
+            self.ai_coverage = self._empty_coverage("failed", "analysis_failure")
             
             return []
+
+    def _resolve_trace_path(self, context: JobContext) -> Optional[Path]:
+        if not self._trace_enabled:
+            return None
+        job_id = str(context.job_id or "").strip()
+        if not job_id or "/" in job_id or "\\" in job_id:
+            return None
+        try:
+            root = Path(os.getenv("UPLOAD_DIR", "uploads")).resolve()
+            target_dir = root / job_id
+            target_dir.mkdir(parents=True, exist_ok=True)
+            return target_dir / "ai_audit_trace.jsonl"
+        except Exception:
+            return None
+
+    @staticmethod
+    def _pages_in_range(
+        page_offsets: List[tuple], start: int, end: int
+    ) -> List[int]:
+        pages = []
+        for page_start, page_end, page in page_offsets:
+            if page_start < end and page_end > start:
+                pages.append(int(page))
+        return pages
+
+    def _empty_coverage(self, status: str, reason: str) -> Dict[str, Any]:
+        return {
+            "version": 1,
+            "status": status,
+            "reason": reason,
+            "capabilities": self._capabilities(),
+            "planned_calls": 0,
+            "completed_calls": 0,
+            "completed_calls_includes_failed": True,
+            "finished_calls": 0,
+            "succeeded_calls": 0,
+            "effective_completed_calls": 0,
+            "failed_calls": 0,
+            "valid_empty_calls": 0,
+            "partial_calls": 0,
+            "invalid_calls": 0,
+            "truncated_calls": 0,
+            "unknown_calls": 0,
+            "retried_calls": 0,
+            "retry_attempts": 0,
+            "attempts_total": 0,
+            "failed_units": [],
+            "windows": [],
+            "uncovered_ranges": [],
+            "coverage_note": "已检查范围不等于保证无遗漏。",
+        }
+
+    @staticmethod
+    def _capabilities() -> Dict[str, str]:
+        return {
+            "text_semantics": "implemented",
+            "narrative_consistency": "implemented",
+            "deterministic_numeric": "rule_owned",
+            "structure_full_document": "rule_owned",
+            "visual_layout": "not_covered_text_only",
+        }
+
+    def _build_coverage(
+        self,
+        *,
+        all_text: str,
+        page_offsets: List[tuple],
+        windows: List[Any],
+        gaps: List[dict],
+        window_results: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        calls: List[Dict[str, Any]] = []
+        legacy_windows = 0
+        for result in window_results:
+            outcome = result.get("outcome")
+            if isinstance(outcome, dict):
+                calls.extend(outcome.get("calls") or [])
+            elif result.get("issues") is not None:
+                legacy_windows += 1
+                calls.append(
+                    {
+                        "specialty": "legacy_mock",
+                        "status": "unknown",
+                        "provider": None,
+                        "model": None,
+                        "prompt_version": None,
+                        "contract_mode": "legacy_mock",
+                    }
+                )
+        statuses = [str(call.get("status") or "unknown") for call in calls]
+        succeeded_statuses = {"ok", "empty"}
+        failed_statuses = {"error", "invalid", "truncated"}
+        succeeded = sum(status in succeeded_statuses for status in statuses)
+        failed = sum(status in failed_statuses for status in statuses)
+        partial = sum(status == "partial" for status in statuses)
+        invalid = sum(status == "invalid" for status in statuses)
+        truncated = sum(status == "truncated" for status in statuses)
+        empty = sum(status == "empty" for status in statuses)
+        ok = sum(status == "ok" for status in statuses)
+        unknown = sum(status not in succeeded_statuses | failed_statuses | {"partial"} for status in statuses)
+        accepted_candidates = sum(int(call.get("accepted_count") or 0) for call in calls)
+        rejected_candidates = sum(int(call.get("rejected_count") or 0) for call in calls)
+        planned = len(windows) * len(SPECIALTIES)
+        if legacy_windows:
+            planned = legacy_windows
+        finished = len(calls)
+        attempts_total = sum(max(1, int(call.get("attempts") or 1)) for call in calls)
+        retried_calls = sum(
+            1 for call in calls
+            if int(call.get("retry_count") or 0) > 0
+            or int(call.get("attempts") or 1) > 1
+        )
+        retry_attempts = sum(max(0, int(call.get("attempts") or 1) - 1) for call in calls)
+        failed_units: List[Dict[str, Any]] = []
+        for result in window_results:
+            window = result.get("window")
+            outcome = result.get("outcome")
+            if not isinstance(outcome, dict):
+                continue
+            pages = list(getattr(window, "pages", None) or [])
+            window_id = getattr(window, "window_id", None)
+            for call in outcome.get("calls") or []:
+                call_status = str(call.get("status") or "unknown")
+                if call_status in succeeded_statuses:
+                    continue
+                failed_units.append(
+                    {
+                        "specialty": call.get("specialty"),
+                        "window_id": window_id,
+                        "pages": pages,
+                        "status": call_status,
+                        "error_type": call.get("error_type"),
+                        "http_status": call.get("http_status"),
+                        "retryable": call.get("retryable"),
+                        "attempts": int(call.get("attempts") or 1),
+                        "retry_count": int(call.get("retry_count") or 0),
+                        "accepted_count": call.get("accepted_count"),
+                        "rejected_count": call.get("rejected_count"),
+                        "rejection_reasons": call.get("rejection_reasons"),
+                    }
+                )
+        covered_pages = sorted(
+            {page for window in windows for page in window.pages}
+        )
+        total_pages = len(page_offsets)
+        if not windows:
+            status = "not_run"
+            reason = "no_windows"
+        elif calls and all(status == "error" for status in statuses):
+            status = "failed"
+            reason = "all_calls_failed"
+        elif gaps or failed or partial or unknown or (planned and succeeded < planned):
+            status = "partial"
+            reason = "window_or_call_incomplete"
+        elif calls and succeeded == planned:
+            status = "complete"
+            reason = "all_planned_calls_valid"
+        elif legacy_windows:
+            status = "unknown"
+            reason = "legacy_call_without_outcome"
+        else:
+            status = "partial"
+            reason = "no_successful_calls"
+        unit_retries = max(0, int(getattr(self.ai_client.config, "specialty_retries", 0) or 0))
+        return {
+            "version": 1,
+            "status": status,
+            "reason": reason,
+            "capabilities": self._capabilities(),
+            "specialties": list(SPECIALTIES),
+            "document_chars": len(all_text),
+            "pages_total": total_pages,
+            "pages_covered": covered_pages,
+            "planned_calls": planned,
+            # 兼容旧字段：completed_calls 表示“已结束的检查单元”，包含失败。
+            # 页面必须用 succeeded_calls 表示有效完成，不能把失败算成完成。
+            "completed_calls": finished,
+            "completed_calls_includes_failed": True,
+            "finished_calls": finished,
+            "succeeded_calls": succeeded,
+            "effective_completed_calls": succeeded,
+            "failed_calls": failed,
+            "valid_empty_calls": empty,
+            "valid_finding_calls": ok,
+            "partial_calls": partial,
+            "invalid_calls": invalid,
+            "truncated_calls": truncated,
+            "unknown_calls": unknown,
+            "retried_calls": retried_calls,
+            "retry_attempts": retry_attempts,
+            "attempts_total": attempts_total,
+            "call_budget": {
+                "unit_retries": unit_retries,
+                "max_attempts_per_unit": 1 + unit_retries,
+                "max_total_attempts": planned * (1 + unit_retries),
+                "attempts_total": attempts_total,
+            },
+            "failed_units": failed_units,
+            "accepted_candidates": accepted_candidates,
+            "rejected_candidates": rejected_candidates,
+            "windows": list(self._windows_meta),
+            "uncovered_ranges": [
+                {
+                    **gap,
+                    "pages": gap.get("pages")
+                    or self._pages_in_range(page_offsets, gap["start"], gap["end"]),
+                    "reason": "window_limit",
+                }
+                for gap in gaps
+            ],
+            "coverage_note": (
+                "有效完成只统计 ok/empty；失败、非法、截断和未覆盖不计入完成。"
+                "已检查范围不等于保证无遗漏；结构/视觉能力边界见 capabilities。"
+            ),
+        }
+
+    def _build_diagnostics(
+        self,
+        *,
+        window_results: List[Dict[str, Any]],
+        all_text: str,
+        before_dedupe: int,
+        after_dedupe: int,
+        final_candidates: int,
+    ) -> Dict[str, Any]:
+        calls: List[Dict[str, Any]] = []
+        prompt_versions: List[str] = []
+        provider_models: List[str] = []
+        rejection_reasons: Dict[str, int] = {}
+        model_output = 0
+        validation_accepted = 0
+        rejected = 0
+        attempts_total = 0
+        retried_units = 0
+        retry_attempts = 0
+        for result in window_results:
+            outcome = result.get("outcome")
+            if not isinstance(outcome, dict):
+                continue
+            for call in outcome.get("calls") or []:
+                calls.append(dict(call))
+                call_attempts = max(1, int(call.get("attempts") or 1))
+                attempts_total += call_attempts
+                if call_attempts > 1:
+                    retried_units += 1
+                    retry_attempts += call_attempts - 1
+            for version in outcome.get("prompt_versions") or []:
+                if version and version not in prompt_versions:
+                    prompt_versions.append(version)
+            provider = outcome.get("provider")
+            model = outcome.get("model")
+            if provider or model:
+                marker = f"{provider or 'unknown'}/{model or 'unknown'}"
+                if marker not in provider_models:
+                    provider_models.append(marker)
+            model_output += int(outcome.get("raw_count") or 0)
+            validation_accepted += int(outcome.get("accepted_count") or 0)
+            rejected += int(outcome.get("rejected_count") or 0)
+            for key, value in (outcome.get("rejection_reasons") or {}).items():
+                rejection_reasons[key] = rejection_reasons.get(key, 0) + int(value or 0)
+        return {
+            "version": 1,
+            "document_chars": len(all_text),
+            "prompt_versions": prompt_versions,
+            "provider_models": provider_models,
+            "calls": calls,
+            "stages": {
+                "model_output": model_output,
+                "validation_accepted": validation_accepted,
+                "validation_rejected": rejected,
+                "normalized": before_dedupe,
+                "after_dedupe": after_dedupe,
+                "final_candidates": final_candidates,
+            },
+            "rejection_reasons": rejection_reasons,
+            "attempts_total": attempts_total,
+            "retried_units": retried_units,
+            "retry_attempts": retry_attempts,
+            "stage_notes": {
+                "deterministic_numeric": "规则/程序复算，AI 数值仅为模型判断",
+                "structure_full_document": "缺表缺章由完整文档结构与确定性规则负责",
+                "visual_layout": "纯文本 AI 不宣称完成颜色/横排等视觉检查",
+            },
+            "trace": {
+                "enabled": bool(self._trace_enabled),
+                "retained": bool(self._trace_path),
+                "scope": "window_text+prompt+raw_response" if self._trace_path else "none",
+                "location": self._trace_path.name if self._trace_path else None,
+                "excluded_from_public_api": True,
+            },
+        }
+
+    def _write_trace(self, record: Dict[str, Any]) -> None:
+        if not self._trace_path:
+            return
+        try:
+            payload = json.dumps(record, ensure_ascii=False)
+            # 材料全文与原始响应只留在任务目录，不进入普通日志或公开 API。
+            fd = os.open(self._trace_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as handle:
+                handle.write(payload + "\n")
+        except Exception as exc:
+            logger.warning("AI audit trace write failed: %s", type(exc).__name__)
+
     
     def _convert_semantic_issues_to_items(self, semantic_issues: List[Dict[str, Any]], context: JobContext, page_offsets: List[tuple] = None) -> List[IssueItem]:
         """将语义问题转换为IssueItem格式"""
@@ -179,19 +548,12 @@ class AIFindingsService:
                     pass
 
                 # 只有明确的页码或能映射到原始页文本的 span 才携带页码。
-                # 缺少 span 时不把默认偏移 0 误当第一页。
+                # 缺少 span 时不把默认偏移 0 误当第一页；span 映射优先于模型自报页码。
                 page_number: Optional[int] = None
-                try:
-                    raw_page = int(str(issue.get("page")).strip())
-                    if 0 < raw_page and (known_page_count == 0 or raw_page <= known_page_count):
-                        page_number = raw_page
-                except (TypeError, ValueError):
-                    pass
-
-                span = issue.get("span")
                 span_start: Optional[int] = None
                 full_text = "\n".join(context.page_texts or [])
                 anchor = str(issue.get("quote") or issue.get("original") or "")
+                span = issue.get("span")
                 if isinstance(span, (list, tuple)) and len(span) == 2:
                     try:
                         candidate_start = int(span[0])
@@ -205,10 +567,16 @@ class AIFindingsService:
                     except (TypeError, ValueError):
                         pass
                 if span_start is not None:
-                    for page_start, page_end, page_num in page_ranges:
-                        if page_start <= span_start < page_end:
-                            page_number = page_num
-                            break
+                    page_number = map_offset_to_page(page_ranges, span_start)
+                if page_number is None:
+                    try:
+                        raw_page = int(str(issue.get("page")).strip())
+                        if 0 < raw_page and (
+                            known_page_count == 0 or raw_page <= known_page_count
+                        ):
+                            page_number = raw_page
+                    except (TypeError, ValueError):
+                        pass
 
                 item = self._build_ai_issue_item(
                     raw_issue=issue,
@@ -351,15 +719,23 @@ class AIFindingsService:
                     known_relation_ids.add(item.strip())
 
         candidate_id = str(raw_issue.get("candidate_id") or f"{context.job_id}:semantic:{idx}").strip()
+        raw_relation_id = raw_issue.get("check_relation_id") or raw_issue.get("relation_id")
+        raw_fact_candidates = raw_issue.get("fact_candidates", [])
+        identity_claimed = bool(
+            raw_fact_ids
+            or raw_evidence_ids
+            or raw_relation_id
+            or raw_fact_candidates
+        )
         contract_candidate: Dict[str, Any] = {
             "candidate_id": candidate_id,
             "fact_ids": raw_fact_ids,
             "evidence_ids": raw_evidence_ids,
-            "fact_candidates": raw_issue.get("fact_candidates", []),
+            "fact_candidates": raw_fact_candidates,
             "semantic_uncertainties": raw_issue.get("semantic_uncertainties", []),
         }
-        if "check_relation_id" in raw_issue:
-            contract_candidate["check_relation_id"] = raw_issue.get("check_relation_id")
+        if raw_relation_id:
+            contract_candidate["check_relation_id"] = raw_relation_id
         contract = validate_ai_candidate_batch(
             {"candidates": [contract_candidate]},
             allowed_fact_ids=known_fact_ids,
@@ -370,7 +746,19 @@ class AIFindingsService:
         contract_accepted = bool(accepted_candidates)
         validated = accepted_candidates[0] if contract_accepted else {}
         candidate_relation_id = None
+        candidate_fact_ids: List[str] = []
+        candidate_evidence_ids: List[str] = []
         rejection_reasons: List[str] = []
+        merge_notes: List[str] = []
+
+        def _safe_candidate_ids(value: Any, allowed: set[str]) -> List[str]:
+            if not isinstance(value, list):
+                return []
+            return list(dict.fromkeys(
+                str(item).strip() for item in value
+                if str(item).strip() and str(item).strip() in allowed
+            ))
+
         if contract_accepted:
             candidate_fact_ids = list(validated.get("fact_ids") or [])
             candidate_evidence_ids = list(validated.get("evidence_ids") or [])
@@ -399,17 +787,18 @@ class AIFindingsService:
                         rejection_reasons.append("candidate_value_evidence_mismatch")
                         break
 
-        def _safe_candidate_ids(value: Any, allowed: set[str]) -> List[str]:
-            if not isinstance(value, list):
-                return []
-            return list(dict.fromkeys(
-                str(item).strip() for item in value
-                if str(item).strip() and str(item).strip() in allowed
-            ))
-
         filter_note: Dict[str, int] = {}
-        if contract_accepted:
+        if not identity_claimed:
+            # 纯文字候选没有声明任何事实/证据身份：这不是关联失败，也不是可合并结果。
+            contract_state = "no_identity_claimed"
+            merge_notes.append("no_fact_evidence_or_relation_claimed")
+            candidate_fact_ids = []
+            candidate_evidence_ids = []
+            candidate_relation_id = None
+        elif contract_accepted:
             contract_state = "accepted"
+            if not candidate_relation_id or not candidate_fact_ids:
+                merge_notes.append("missing_check_relation_or_fact_ids")
         else:
             candidate_fact_ids = _safe_candidate_ids(raw_fact_ids, known_fact_ids)
             candidate_evidence_ids = _safe_candidate_ids(raw_evidence_ids, known_evidence_ids)
@@ -421,9 +810,10 @@ class AIFindingsService:
                 filter_note["unknown_evidence_ids"] = len(raw_evidence_ids) - len(candidate_evidence_ids)
             elif raw_evidence_ids not in (None, []):
                 filter_note["invalid_evidence_ids_field"] = 1
-            candidate_relation_id = raw_issue.get("check_relation_id")
-            if candidate_relation_id and candidate_relation_id not in known_relation_ids:
-                candidate_relation_id = None
+            candidate_relation_id = (
+                raw_relation_id if raw_relation_id in known_relation_ids else None
+            )
+            if raw_relation_id and candidate_relation_id is None:
                 filter_note["unknown_relation_ids"] = 1
             rejected = (contract.get("rejected") or [{}])[0]
             if rejected.get("error") != "unknown_source_reference":
@@ -433,25 +823,75 @@ class AIFindingsService:
                 rejection_reasons.append(
                     raw_error if isinstance(raw_error, str) else "candidate_schema_invalid"
                 )
-            if raw_issue.get("fact_candidates"):
-                filter_note["rejected_fact_candidates"] = len(raw_issue.get("fact_candidates")) if isinstance(raw_issue.get("fact_candidates"), list) else 1
+            if raw_fact_candidates:
+                filter_note["rejected_fact_candidates"] = (
+                    len(raw_fact_candidates) if isinstance(raw_fact_candidates, list) else 1
+                )
             contract_state = "rejected"
         if filter_note:
             filtered_metrics["ai_candidate_ids_filtered"] = filter_note
         filtered_metrics["ai_candidate_id"] = candidate_id
-        filtered_metrics["ai_candidate_contract"] = "accepted" if contract_accepted else "identity_claims_removed"
+        filtered_metrics["ai_candidate_contract"] = (
+            "accepted"
+            if contract_state == "accepted"
+            else "no_identity_claimed"
+            if contract_state == "no_identity_claimed"
+            else "identity_claims_removed"
+        )
         filtered_metrics["ai_candidate_contract_state"] = contract_state
-        filtered_metrics["ai_merge_eligible"] = contract_accepted
-        if not contract_accepted:
-            filtered_metrics["ai_candidate_rejection_reasons"] = list(dict.fromkeys(rejection_reasons))
-        if contract_accepted and validated.get("semantic_uncertainties"):
-            filtered_metrics["ai_semantic_uncertainties"] = validated["semantic_uncertainties"]
+        filtered_metrics["ai_merge_eligible"] = bool(
+            contract_accepted and candidate_relation_id and candidate_fact_ids
+        )
+        if rejection_reasons:
+            filtered_metrics["ai_candidate_rejection_reasons"] = list(
+                dict.fromkeys(rejection_reasons)
+            )
+        if merge_notes:
+            filtered_metrics["ai_candidate_merge_notes"] = list(dict.fromkeys(merge_notes))
+        uncertainties = validated.get("semantic_uncertainties") if contract_accepted else None
+        uncertainties = uncertainties or raw_issue.get("semantic_uncertainties")
+        if uncertainties:
+            filtered_metrics["ai_semantic_uncertainties"] = uncertainties
         if contract_accepted and validated.get("fact_candidates"):
             filtered_metrics["ai_fact_candidates"] = validated["fact_candidates"]
-        if any(
-            key in filtered_metrics for key in ("expected", "actual", "difference")
-        ):
-            filtered_metrics["amounts_provenance"] = "model_claimed_not_verified"
+        if raw_issue.get("validation"):
+            filtered_metrics["ai_audit_validation"] = raw_issue.get("validation")
+        if raw_issue.get("audit_specialty"):
+            filtered_metrics["ai_audit_specialty"] = raw_issue.get("audit_specialty")
+        if raw_issue.get("audit_origins"):
+            filtered_metrics["ai_audit_origins"] = raw_issue.get("audit_origins")
+        if raw_issue.get("merged_count"):
+            filtered_metrics["ai_merged_count"] = raw_issue.get("merged_count")
+        if raw_issue.get("evidence_pairs"):
+            filtered_metrics["evidence_pairs"] = raw_issue.get("evidence_pairs")
+        if raw_issue.get("evidence_pairs_rejected"):
+            filtered_metrics["evidence_pairs_rejected"] = raw_issue.get("evidence_pairs_rejected")
+
+        expected = str(interpreted.get("expected") or "").strip()
+        actual = str(interpreted.get("actual") or "").strip()
+        difference = str(interpreted.get("difference") or "").strip()
+        check = str(interpreted.get("check") or "").strip()
+        table_or_section = str(interpreted.get("table_or_section") or "").strip()
+        amounts_provenance = None
+        calculation_basis = None
+        if any((expected, actual, difference)):
+            amounts_provenance = "model_claimed_not_verified"
+            calculation_basis = {
+                "source": "model_claim",
+                "verified": False,
+                "basis": "模型输出，未经程序复算",
+                "unit": None,
+                "precision": None,
+                "rule_version": None,
+            }
+            filtered_metrics["amounts_provenance"] = amounts_provenance
+            filtered_metrics["difference"] = difference
+            filtered_metrics["calculation_basis"] = calculation_basis
+        location = dict(interpreted["location"])
+        if raw_issue.get("evidence_pairs"):
+            location["evidence_pairs"] = raw_issue.get("evidence_pairs")
+        if raw_issue.get("evidence_pairs_rejected"):
+            location["evidence_pairs_rejected"] = raw_issue.get("evidence_pairs_rejected")
 
         return IssueItem(
             id=f"ai_semantic_{context.job_id}_{idx}_{int(time.time())}",
@@ -462,7 +902,7 @@ class AIFindingsService:
             title=str(interpreted["title"]),
             message=str(interpreted["message"]),
             evidence=evidence,
-            location=dict(interpreted["location"]),
+            location=location,
             metrics=dict(filtered_metrics),
             page_number=page_number,
             bbox=(
@@ -476,6 +916,13 @@ class AIFindingsService:
             location_level=location_level,
             verification_status=verification_status,
             suggestion=str(interpreted["suggestion"]),
+            expected=expected or None,
+            actual=actual or None,
+            difference=difference or None,
+            check=check or None,
+            table_or_section=table_or_section or None,
+            amounts_provenance=amounts_provenance,
+            calculation_basis=calculation_basis,
             tags=list(
                 dict.fromkeys(
                     [
@@ -516,10 +963,10 @@ class AIFindingsService:
 
     async def _run_window_audits(
         self,
-        windows: List[tuple[int, str]],
+        windows: List[Any],
         doc_hash: str,
         total_text_len: int,
-    ) -> List[List[Dict[str, Any]]]:
+    ) -> List[Dict[str, Any]]:
         if not windows:
             return []
 
@@ -528,64 +975,298 @@ class AIFindingsService:
         failed = 0
         job_id = getattr(self, "_progress_job_id", None)
         if job_id:
-            update_progress(job_id, "ai", state="running", total=len(windows), completed=0, current_step="正在检查文本", unit="段文本")
+            update_progress(
+                job_id,
+                "ai",
+                state="running",
+                total=len(windows),
+                completed=0,
+                current_step="正在检查文本",
+                unit="段文本",
+            )
 
-        async def audit_one(window_idx: int, window_start: int, window_text: str) -> List[Dict[str, Any]]:
+        async def audit_one(window: Any) -> Dict[str, Any]:
             nonlocal completed, failed
-            import hashlib
-
             window_hash = hashlib.sha1(
-                f"{doc_hash}:{window_idx}:{window_start}".encode("utf-8")
+                f"{doc_hash}:{window.window_id}:{window.start}".encode("utf-8")
             ).hexdigest()[:12]
+            origin = {
+                "window_id": window.window_id,
+                "start": window.start,
+                "end": window.end,
+                "pages": list(window.pages),
+                "boundary": window.boundary,
+                "hard_split": bool(window.hard_split),
+            }
             async with semaphore:
                 try:
                     window_issues = await self.ai_client.ai_full_report_audit(
-                        window_text,
+                        window.text,
                         window_hash,
-                        structured_context=self._window_page_context(window_start, len(window_text))
-                            + (getattr(self, "structured_context", None) or ""),
+                        structured_context=self._window_audit_context(window),
                     )
                 except asyncio.CancelledError:
                     failed += 1
-                    self.ai_errors.append({"type": "audit_window_cancelled", "window_index": window_idx, "message": "检查超时或已取消", "timestamp": time.time()})
-                    raise
-                except Exception as exc:
-                    failed += 1
-                    logger.warning("AI window audit failed: window=%s error=%s", window_idx, exc)
                     self.ai_errors.append(
                         {
-                            "type": "audit_window_failed",
-                            "window_index": window_idx,
-                            "window_start": window_start,
-                            "message": str(exc),
+                            "type": "audit_window_cancelled",
+                            "window_index": window.window_id,
+                            "message": "检查超时或已取消",
                             "timestamp": time.time(),
                         }
                     )
-                    return []
+                    raise
+                except Exception as exc:
+                    failed += 1
+                    error_text = self.ai_client._safe_error_text(exc)
+                    logger.warning(
+                        "AI window audit failed: window=%s error_type=%s",
+                        window.window_id,
+                        type(exc).__name__,
+                    )
+                    self.ai_errors.append(
+                        {
+                            "type": "audit_window_failed",
+                            "window_index": window.window_id,
+                            "window_start": window.start,
+                            "window_end": window.end,
+                            "pages": list(window.pages),
+                            "error": error_text,
+                            "timestamp": time.time(),
+                        }
+                    )
+                    if self._trace_path is not None:
+                        self._write_trace(
+                            {
+                                "job_id": job_id,
+                                "window": window.to_dict(""),
+                                "window_text": window.text,
+                                "origin": origin,
+                                "specialty": "window",
+                                "prompt": "",
+                                "raw_response": "",
+                                "error": {
+                                    "error_type": type(exc).__name__,
+                                    "message": error_text,
+                                },
+                                "outcome": {"status": "error"},
+                            }
+                        )
+                    return {
+                        "window": window,
+                        "issues": [],
+                        "origin": origin,
+                        "outcome": {
+                            "status": "error",
+                            "calls": [
+                                {
+                                    "specialty": specialty,
+                                    "status": "error",
+                                    "error_type": type(exc).__name__,
+                                    "retryable": False,
+                                    "attempts": 1,
+                                    "retry_count": 0,
+                                    "error": error_text,
+                                }
+                                for specialty in SPECIALTIES
+                            ],
+                            "attempts": len(SPECIALTIES),
+                        },
+                    }
                 finally:
                     completed += 1
                     if job_id:
-                        update_progress(job_id, "ai", completed=completed, failed=failed, current_step=f"已处理 {completed}/{len(windows)} 段文本")
+                        update_progress(
+                            job_id,
+                            "ai",
+                            completed=completed,
+                            failed=failed,
+                            current_step=f"已处理 {completed}/{len(windows)} 段文本",
+                        )
 
-            for issue in window_issues:
-                self._shift_issue_span(issue, window_start, total_text_len)
-            return window_issues
+            raw_outcome = getattr(window_issues, "outcome", None)
+            outcome_dict = raw_outcome.to_dict() if hasattr(raw_outcome, "to_dict") else None
+            if outcome_dict is None:
+                # 兼容测试/旧 client：普通 list 没有 outcome，按“旧调用形态”记录，
+                # 不能伪造成已完成，也不能据此判失败。
+                outcome_dict = {
+                    "status": "legacy_call",
+                    "calls": [
+                        {
+                            "specialty": "legacy_call",
+                            "status": "unknown",
+                            "contract_mode": "legacy_call",
+                        }
+                    ],
+                }
+            elif self._trace_path is not None:
+                exchanges = getattr(raw_outcome, "raw_exchanges", None) or []
+                if not exchanges:
+                    exchanges = [
+                        {
+                            "specialty": "unknown",
+                            "prompt": getattr(raw_outcome, "prompt_text", ""),
+                            "raw_response": getattr(raw_outcome, "raw_content", ""),
+                        }
+                    ]
+                for exchange in exchanges:
+                    self._write_trace(
+                        {
+                            "job_id": job_id,
+                            "window": window.to_dict(""),
+                            "window_text": window.text,
+                            "origin": origin,
+                            "specialty": exchange.get("specialty"),
+                            "attempt": exchange.get("attempt"),
+                            "prompt": exchange.get("prompt") or "",
+                            "raw_response": exchange.get("raw_response") or "",
+                            "error": exchange.get("error"),
+                            "outcome": outcome_dict,
+                        }
+                    )
 
-        tasks = [
-            asyncio.create_task(audit_one(window_idx, window_start, window_text))
-            for window_idx, (window_start, window_text) in enumerate(windows)
-        ]
-        return await asyncio.gather(*tasks)
+            kept_issues: List[Dict[str, Any]] = []
+            for issued in window_issues:
+                if not isinstance(issued, dict):
+                    continue
+                if self._is_boundary_fragment(issued, window):
+                    self.ai_errors.append(
+                        {
+                            "type": "audit_fragment_from_window_boundary",
+                            "window_index": window.window_id,
+                            "problem_type": issued.get("problem_type") or issued.get("type"),
+                            "span": issued.get("span"),
+                            "reason": "窗口起点在句中，半句不得判为原文残句",
+                            "timestamp": time.time(),
+                        }
+                    )
+                    continue
+                issued["audit_origin"] = dict(origin)
+                self._shift_issue_span(issued, window.start, total_text_len)
+                self._map_evidence_pair_pages(issued, window)
+                kept_issues.append(issued)
+
+            status = str(outcome_dict.get("status") or "unknown")
+            for error in outcome_dict.get("errors") or []:
+                if not isinstance(error, dict) or error.get("reason") != "call_failed":
+                    continue
+                self.ai_errors.append(
+                    {
+                        "type": "audit_specialty_failed",
+                        "window_index": window.window_id,
+                        "window_start": window.start,
+                        "window_end": window.end,
+                        "pages": list(window.pages),
+                        "specialty": error.get("specialty"),
+                        "error": error.get("error"),
+                        "error_type": error.get("error_type"),
+                        "http_status": error.get("http_status"),
+                        "retryable": error.get("retryable"),
+                        "attempt": error.get("attempt"),
+                        "retry_history": error.get("retry_history"),
+                        "timestamp": time.time(),
+                    }
+                )
+            if status in {"invalid", "truncated", "partial", "error"}:
+                self.ai_errors.append(
+                    {
+                        "type": f"audit_window_{status}",
+                        "window_index": window.window_id,
+                        "window_start": window.start,
+                        "window_end": window.end,
+                        "pages": list(window.pages),
+                        "raw_count": outcome_dict.get("raw_count"),
+                        "accepted_count": outcome_dict.get("accepted_count"),
+                        "rejected_count": outcome_dict.get("rejected_count"),
+                        "rejection_reasons": outcome_dict.get("rejection_reasons"),
+                        "attempts": outcome_dict.get("attempts"),
+                        "retry_count": outcome_dict.get("retry_count"),
+                        "attempts_log": [
+                            {
+                                "attempt": item.get("attempt"),
+                                "status": item.get("status"),
+                                "error_type": item.get("error_type"),
+                                "http_status": item.get("http_status"),
+                                "retryable": item.get("retryable"),
+                                "response_chars": item.get("response_chars"),
+                                "response_sha256": item.get("response_sha256"),
+                            }
+                            for item in (outcome_dict.get("attempts_log") or [])
+                            if isinstance(item, dict)
+                        ],
+                        "timestamp": time.time(),
+                    }
+                )
+            return {
+                "window": window,
+                "issues": kept_issues,
+                "origin": origin,
+                "outcome": outcome_dict,
+            }
+
+        tasks = [asyncio.create_task(audit_one(window)) for window in windows]
+        return list(await asyncio.gather(*tasks))
 
     def _window_page_context(self, start: int, length: int) -> str:
-        lines = ["【当前原文窗口的 PDF 物理页码映射】",
-                 "以下区间为当前窗口从 0 开始的字符偏移 [start,end)，页码从 PDF 第一张页面计为 1。",
-                 "span 必须对应逐字引文；page 根据区间填写，不使用页脚、目录页码或窗口序号。无法确定填 null。"]
-        for page_start, page_end, page in getattr(self, "page_offsets", []):
-            lo, hi = max(start, page_start), min(start + length, page_end)
-            if lo < hi:
-                lines.append(f"[{lo - start},{hi - start}) = PDF 第 {page} 页")
-        return "\n".join(lines) + "\n【页码映射结束】\n"
+        """兼容旧调用：页码映射文本。"""
+        return window_page_map(start, length, getattr(self, "page_offsets", []))
+
+    def _is_boundary_fragment(self, issue: Dict[str, Any], window: Any) -> bool:
+        problem_type = str(issue.get("problem_type") or issue.get("type") or "").lower()
+        if problem_type != "fragment":
+            return False
+        span = self._safe_span(issue.get("span"))
+        if span is None or span[0] > 2:
+            return False
+        prefix = str(getattr(window, "prefix_context", "") or "").rstrip()
+        if not prefix:
+            return False
+        return prefix[-1] not in "。！？；\n"
+
+    def _window_audit_context(self, window: Any) -> str:
+        lines = [
+            window_page_map(
+                window.start,
+                len(window.text),
+                getattr(self, "page_offsets", []),
+            ),
+            "【窗口边界信息】",
+            f"窗口号 {window.window_id}；全局字符偏移 [{window.start},{window.end})；"
+            f"页码 {window.pages or '未映射'}；边界类型 {window.boundary}。",
+        ]
+        if window.hard_split:
+            lines.append(
+                "本窗口在句子中间硬切；边界处被截断的半句话不得判为残句，"
+                "只能使用窗口内已完整呈现的句段。"
+            )
+        if window.prefix_context:
+            lines.append(
+                "【窗口前文，仅用于理解上下文，不可引用】\n" + window.prefix_context[-160:]
+            )
+        if window.suffix_context:
+            lines.append(
+                "【窗口后文，仅用于理解上下文，不可引用】\n" + window.suffix_context[:160]
+            )
+        return "\n".join(lines) + "\n" + (getattr(self, "structured_context", None) or "")
+
+    def _map_evidence_pair_pages(self, issue: Dict[str, Any], window: Any) -> None:
+        from src.engine.ai.audit_contract import locate_quote
+
+        pairs = issue.get("evidence_pairs")
+        if not isinstance(pairs, list):
+            return
+        for pair in pairs:
+            if not isinstance(pair, dict):
+                continue
+            quote = str(pair.get("quote") or "")
+            located = locate_quote(window.text, quote) if quote else None
+            if located is None:
+                continue
+            global_start = window.start + located[0]
+            page = map_offset_to_page(getattr(self, "page_offsets", []), global_start)
+            if page is not None:
+                pair["page"] = page
+            pair["window_span"] = [located[0], located[1]]
 
     @staticmethod
     def _read_int_env(name: str, default: int, min_value: int) -> int:
@@ -596,20 +1277,6 @@ class AIFindingsService:
             return value
         except Exception:
             return default
-
-    def _build_text_windows(self, full_text: str) -> List[tuple]:
-        if not full_text:
-            return []
-        text_len = len(full_text)
-        windows: List[tuple] = []
-        start = 0
-        while start < text_len and len(windows) < self.audit_max_windows:
-            end = min(start + self.audit_window_chars, text_len)
-            windows.append((start, full_text[start:end]))
-            if end >= text_len:
-                break
-            start = max(0, end - self.audit_overlap_chars)
-        return windows
 
     def _shift_issue_span(self, issue: Dict[str, Any], offset: int, total_len: int) -> None:
         if offset <= 0:
@@ -629,27 +1296,148 @@ class AIFindingsService:
         issue["span"] = [start, end]
 
     def _dedupe_semantic_issues(self, semantic_issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        unique: List[Dict[str, Any]] = []
-        seen = set()
+        """Merge overlapping-window duplicates while preserving every evidence origin.
+
+        合并条件：同一逐字引文、同一问题类型（generic 可与具体类型合并）、且 span
+        重叠或落在同一页。不同位置只在文字相似时不合并，避免吞掉真实问题。
+        """
+        merged: List[Dict[str, Any]] = []
         for issue in semantic_issues:
             if not isinstance(issue, dict):
                 continue
-            span = issue.get("span", [0, 0])
-            span_bucket = 0
-            if isinstance(span, list) and len(span) == 2 and isinstance(span[0], (int, float)):
-                span_bucket = int(span[0]) // 25
-            key = (
-                str(issue.get("rule_id") or ""),
-                str(issue.get("type") or issue.get("problem_type") or ""),
-                re.sub(r"\s+", "", str(issue.get("original") or issue.get("quote") or ""))[:80],
-                re.sub(r"\s+", "", str(issue.get("suggestion") or ""))[:80],
-                span_bucket,
-            )
-            if key in seen:
+            quote_norm = self._norm_text(issue.get("quote") or issue.get("original") or "")
+            issue_type = str(issue.get("problem_type") or issue.get("type") or "generic")
+            _span = self._safe_span(issue.get("span"))
+            target = None
+            for existing in merged:
+                if not self._same_issue_location(existing, issue, quote_norm):
+                    continue
+                existing_type = str(
+                    existing.get("problem_type") or existing.get("type") or "generic"
+                )
+                if existing_type != issue_type and "generic" not in {existing_type, issue_type}:
+                    continue
+                target = existing
+                break
+            if target is None:
+                new_issue = dict(issue)
+                new_issue["audit_origins"] = [
+                    dict(issue.get("audit_origin") or {})
+                ] if issue.get("audit_origin") else []
+                new_issue["merged_count"] = 1
+                merged.append(new_issue)
                 continue
-            seen.add(key)
-            unique.append(issue)
-        return unique
+            self._merge_issue(target, issue)
+
+        for issue in merged:
+            issue.pop("audit_origin", None)
+            issue["audit_origins"] = [
+                origin for origin in issue.get("audit_origins") or [] if origin
+            ]
+            if not issue["audit_origins"]:
+                issue.pop("audit_origins", None)
+        return merged
+
+    def _merge_issue(self, target: Dict[str, Any], incoming: Dict[str, Any]) -> None:
+        target["merged_count"] = int(target.get("merged_count") or 1) + 1
+        target_quote = self._norm_text(target.get("quote") or target.get("original") or "")
+        incoming_quote = self._norm_text(incoming.get("quote") or incoming.get("original") or "")
+        if len(incoming_quote) > len(target_quote):
+            for key in ("quote", "original", "context"):
+                if incoming.get(key):
+                    target[key] = incoming[key]
+            incoming_span = self._safe_span(incoming.get("span"))
+            if incoming_span is not None:
+                target["span"] = [incoming_span[0], incoming_span[1]]
+            if incoming.get("page") is not None:
+                target["page"] = incoming["page"]
+        origin = incoming.get("audit_origin")
+        if origin and origin not in (target.get("audit_origins") or []):
+            target.setdefault("audit_origins", []).append(dict(origin))
+        if incoming.get("audit_specialty") and incoming.get("audit_specialty") != target.get("audit_specialty"):
+            target.setdefault("audit_specialties", [target.get("audit_specialty")])
+            if incoming["audit_specialty"] not in target["audit_specialties"]:
+                target["audit_specialties"].append(incoming["audit_specialty"])
+        for key in ("expected", "actual", "difference", "check", "table_or_section"):
+            if not target.get(key) and incoming.get(key):
+                target[key] = incoming[key]
+        for key in ("fact_ids", "evidence_ids"):
+            values = list(dict.fromkeys([*(target.get(key) or []), *(incoming.get(key) or [])]))
+            if values:
+                target[key] = values
+        for key in ("semantic_uncertainties", "evidence_pairs", "evidence_pairs_rejected"):
+            if incoming.get(key):
+                current = target.setdefault(key, [])
+                for item in incoming[key]:
+                    if item not in current:
+                        current.append(item)
+        target["confidence"] = max(
+            float(target.get("confidence") or 0.0),
+            float(incoming.get("confidence") or 0.0),
+        )
+        target["severity"] = self._more_severe(
+            str(target.get("severity") or "medium"),
+            str(incoming.get("severity") or "medium"),
+        )
+        if not target.get("suggestion") and incoming.get("suggestion"):
+            target["suggestion"] = incoming["suggestion"]
+
+    @staticmethod
+    def _more_severe(left: str, right: str) -> str:
+        rank = {
+            "manual_review": 6,
+            "critical": 5,
+            "high": 4,
+            "medium": 3,
+            "low": 2,
+            "info": 1,
+        }
+        return left if rank.get(left, 0) >= rank.get(right, 0) else right
+
+    @staticmethod
+    def _safe_span(span: Any) -> Optional[tuple[int, int]]:
+        if (
+            isinstance(span, list)
+            and len(span) == 2
+            and all(isinstance(item, int) and not isinstance(item, bool) for item in span)
+            and 0 <= span[0] < span[1]
+        ):
+            return int(span[0]), int(span[1])
+        return None
+
+    def _same_issue_location(
+        self,
+        left: Dict[str, Any],
+        right: Dict[str, Any],
+        quote_norm: str,
+    ) -> bool:
+        left_quote = self._norm_text(left.get("quote") or left.get("original") or "")
+        if not quote_norm or not left_quote:
+            return False
+        same_text = left_quote == quote_norm
+        if not same_text:
+            shorter, longer = sorted((left_quote, quote_norm), key=len)
+            same_text = len(shorter) >= 6 and shorter in longer
+        if not same_text:
+            return False
+        left_span = self._safe_span(left.get("span"))
+        right_span = self._safe_span(right.get("span"))
+        if left_span is not None and right_span is not None:
+            return max(left_span[0], right_span[0]) < min(left_span[1], right_span[1])
+        # 两侧都没有可用 span 时，只在同一窗口内合并；不同窗口的相同文字
+        # 可能是原文里不同位置的两处问题，不能仅凭文字相似吞掉。
+        left_origin = left.get("audit_origin") or {}
+        right_origin = right.get("audit_origin") or {}
+        if not left_origin or not right_origin:
+            return False
+        return (
+            left_origin.get("window_id") == right_origin.get("window_id")
+            and left_origin.get("pages") == right_origin.get("pages")
+        )
+
+    @staticmethod
+    def _norm_text(value: Any) -> str:
+        return re.sub(r"\s+", "", str(value or ""))
     
     def _build_prompt(self, context: JobContext) -> str:
         """构建AI提示词"""

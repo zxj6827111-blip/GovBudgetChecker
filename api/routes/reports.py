@@ -111,6 +111,13 @@ _CSV_FIELDNAMES: List[str] = [
     "actual_name",
     "code_level",
     "source_of_truth",
+    "expected",
+    "actual",
+    "difference",
+    "check",
+    "table_or_section",
+    "amounts_provenance",
+    "calculation_basis",
     "关联检查项",
     "obligation_ids",
     "check_id",
@@ -881,6 +888,17 @@ def _build_csv_row(issue: Dict[str, Any]) -> Dict[str, Any]:
         "actual_name": enriched.get("actual_name") or export_location.get("actual_name") or "",
         "code_level": enriched.get("code_level") or export_location.get("code_level") or "",
         "source_of_truth": enriched.get("source_of_truth") or export_location.get("source_of_truth") or "",
+        "expected": enriched.get("expected") or "",
+        "actual": enriched.get("actual") or "",
+        "difference": enriched.get("difference") or "",
+        "check": enriched.get("check") or "",
+        "table_or_section": enriched.get("table_or_section") or "",
+        "amounts_provenance": enriched.get("amounts_provenance") or "",
+        "calculation_basis": (
+            json.dumps(enriched.get("calculation_basis"), ensure_ascii=False)
+            if enriched.get("calculation_basis")
+            else ""
+        ),
         # 关联检查项：把问题挂回"应检查事项"，让线下沟通能直接说清
         # "这条问题属于哪一项检查"，而不必让接收方按规则编号反查。
         "关联检查项": _format_obligation_ids(enriched),

@@ -1,6 +1,8 @@
 "use client";
 
 import { Badge, Card, Metric } from "@/components/ui";
+import { AiScopeBanner } from "@/components/AiScopeBanner";
+import { deriveAiScope } from "../../../lib/aiScope";
 
 import {
   COVERAGE_UNAVAILABLE_LABEL,
@@ -33,20 +35,25 @@ import {
  */
 export interface MaterialDetailCoverageTabProps {
   coverage: CoverageBlock | null | undefined;
+  aiScopeMeta?: Record<string, unknown> | null;
 }
 
-export function MaterialDetailCoverageTab({ coverage }: MaterialDetailCoverageTabProps) {
+export function MaterialDetailCoverageTab({ coverage, aiScopeMeta }: MaterialDetailCoverageTabProps) {
+  const aiScope = deriveAiScope(aiScopeMeta ?? {});
   if (!coverage?.available || !coverage.summary) {
     return (
-      <Card title="检查覆盖" desc="这份材料的检查义务完成情况">
-        <p className="text-sm text-slate-600" data-testid="gbc-material-coverage-unavailable">
-          {COVERAGE_UNAVAILABLE_LABEL}。
-        </p>
-        <p className="mt-1 text-xs text-slate-500">
-          可能原因：该文件版本尚未完成分析、分析结果尚未落库，或该次运行没有产出检查义务账本。
-          没有记录时页面一个数字都不给：不用「零覆盖」或「全部覆盖」代替「没有记录」。
-        </p>
-      </Card>
+      <div className="space-y-4">
+        <AiScopeBanner scope={aiScope} testId="gbc-material-ai-scope" compact />
+        <Card title="检查覆盖" desc="这份材料的检查义务完成情况">
+          <p className="text-sm text-slate-600" data-testid="gbc-material-coverage-unavailable">
+            {COVERAGE_UNAVAILABLE_LABEL}。
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            可能原因：该文件版本尚未完成分析、分析结果尚未落库，或该次运行没有产出检查义务账本。
+            没有记录时页面一个数字都不给：不用「零覆盖」或「全部覆盖」代替「没有记录」。
+          </p>
+        </Card>
+      </div>
     );
   }
 
@@ -56,6 +63,7 @@ export function MaterialDetailCoverageTab({ coverage }: MaterialDetailCoverageTa
 
   return (
     <div className="space-y-5">
+      <AiScopeBanner scope={aiScope} testId="gbc-material-ai-scope" compact />
       <div
         className="rounded-card border border-border bg-surface-100 px-4 py-3 text-xs text-slate-600"
         data-testid="gbc-material-coverage-scope"

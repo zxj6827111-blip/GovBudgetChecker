@@ -59,6 +59,8 @@ import { IssueNoteDialog } from "./IssueNoteDialog";
 import type { IssueWorkflowAction } from "./IssueCard";
 import { IssuesTab } from "./IssuesTab";
 import type { IssueDecisionNotice, SourceFindingViews } from "./IssuesTab";
+import { deriveAiScope } from "../../../lib/aiScope";
+import type { AiScopeView } from "../../../lib/aiScope";
 import { MetadataTab } from "./MetadataTab";
 import { ObligationsTab } from "./ObligationsTab";
 import { PdfViewerPane } from "./PdfViewerPane";
@@ -407,6 +409,15 @@ export function ReviewWorkbenchPage() {
     [problems, workflowIssues],
   );
 
+  const aiScope = useMemo<AiScopeView | undefined>(() => {
+    if (!detail || !detail.result) return undefined;
+    const meta = detail.result.meta && typeof detail.result.meta === "object" && !Array.isArray(detail.result.meta)
+      ? detail.result.meta
+      : {};
+    const conclusionScopeHint = typeof detail.conclusion_scope === "string" ? detail.conclusion_scope : null;
+    return deriveAiScope(meta, { conclusionScopeHint });
+  }, [detail]);
+
   const sourceFindings = useMemo<SourceFindingViews | undefined>(() => {
     if (!detail || !detail.result) return undefined;
     const result = detail.result;
@@ -467,6 +478,9 @@ export function ReviewWorkbenchPage() {
     const aiExecution = meta.ai_execution && typeof meta.ai_execution === "object" && !Array.isArray(meta.ai_execution)
       ? meta.ai_execution as Record<string, unknown>
       : {};
+    const aiCoverage = meta.ai_coverage && typeof meta.ai_coverage === "object" && !Array.isArray(meta.ai_coverage)
+      ? meta.ai_coverage as Record<string, unknown>
+      : undefined;
     const aiFindingCount = Array.isArray(result.ai_findings) ? result.ai_findings.length : 0;
     const ruleFindingCount = Array.isArray(result.rule_findings) ? result.rule_findings.length : 0;
 
@@ -483,6 +497,7 @@ export function ReviewWorkbenchPage() {
       commonRelationCount: classification.commonRelations.length,
       aiState: String(aiExecution.state ?? meta.ai_status ?? "unknown"),
       aiModel: String(aiExecution.model ?? "").trim() || undefined,
+      aiCoverage,
     };
   }, [detail, problems]);
 
@@ -1177,6 +1192,7 @@ export function ReviewWorkbenchPage() {
                 key={jobId}
                 problems={problems}
                 sourceFindings={sourceFindings}
+                aiScope={aiScope}
                 selectedProblemId={selectedProblemId}
                 onSelectProblem={handleSelectProblem}
                 workflowStatusByIssueId={workflowStatusByIssueId}
@@ -1186,6 +1202,7 @@ export function ReviewWorkbenchPage() {
                 onUndo={handleUndoIssueDecision}
                 pendingObligations={pendingObligations ?? 0}
                 onOpenObligations={() => setActiveTab("obligations")}
+                onRecheckToTask={jobId ? () => router.push(`/task/${jobId}` as Route) : undefined}
                 onSelectEvidenceRef={handleSelectEvidenceRef}
                 readOnly={!canEditReview}
                 wide={issuesExpanded}

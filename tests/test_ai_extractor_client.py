@@ -9,74 +9,18 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.engine.ai.extractor_client import ExtractorClient
+from src.engine.ai.extractor_client import AuditIssueList, AuditOutcome, ExtractorClient
 
 
-def test_rounding_issue_filter_drops_small_wanyuan_diff() -> None:
-    item = {
-        "problem_type": "DataInconsistency",
-        "message": "金额不一致",
-    }
-    dropped = ExtractorClient._should_drop_rounding_issue(
-        item=item,
-        issue_type="勾稽不一致",
-        original="项目支出 40.00万元",
-        suggestion="项目支出 40.01万元",
-        context="金额差异仅由四舍五入导致",
-    )
-    assert dropped
+def test_rounding_filter_is_gone_and_year_cannot_mask_amount_difference() -> None:
+    """取消“取两两最小差”的过滤：共同年份不能掩盖 100→90 的真实差额。"""
+    client = ExtractorClient()
+    assert not hasattr(client, "_should_drop_rounding_issue")
 
 
-def test_rounding_issue_filter_keeps_material_diff() -> None:
-    item = {
-        "problem_type": "DataInconsistency",
-        "message": "金额不一致",
-    }
-    dropped = ExtractorClient._should_drop_rounding_issue(
-        item=item,
-        issue_type="勾稽不一致",
-        original="项目支出 40.00万元",
-        suggestion="项目支出 42.00万元",
-        context="金额差异较大",
-    )
-    assert not dropped
-
-
-def test_rounding_issue_filter_does_not_drop_year_mismatch() -> None:
-    item = {
-        "problem_type": "DataInconsistency",
-        "message": "年份不一致",
-    }
-    dropped = ExtractorClient._should_drop_rounding_issue(
-        item=item,
-        issue_type="规范性",
-        original="2025年部门预算",
-        suggestion="2026年部门预算",
-        context="年份口径不一致",
-    )
-    assert not dropped
-
-
-def test_repeat_issue_filter_drops_single_occurrence() -> None:
-    text = "这是预算说明文本。A段落只出现一次，且包含较长的描述内容用于检测。"
-    dropped = ExtractorClient._should_drop_unverified_repeat_issue(
-        section_text=text,
-        issue_type="repeated_content",
-        original="A段落只出现一次，且包含较长的描述内容用于检测。",
-        context="",
-    )
-    assert dropped
-
-
-def test_repeat_issue_filter_keeps_real_repeat() -> None:
-    text = "预算说明：B段落重复。预算说明：B段落重复。"
-    dropped = ExtractorClient._should_drop_unverified_repeat_issue(
-        section_text=text,
-        issue_type="重复",
-        original="预算说明：B段落重复。",
-        context="",
-    )
-    assert not dropped
+def test_repeat_filter_is_gone_so_different_locations_are_not_swallowed() -> None:
+    client = ExtractorClient()
+    assert not hasattr(client, "_should_drop_unverified_repeat_issue")
 
 
 def test_response_content_text_supports_list_payload() -> None:
@@ -112,86 +56,98 @@ def test_normalize_severity_maps_p_levels() -> None:
 
 
 @pytest.mark.asyncio
-async def test_full_report_audit_falls_back_when_direct_result_is_empty() -> None:
+async def test_full_report_audit_does_not_fallback_on_legitimate_empty() -> None:
+    """合法空数组是“有效检查无发现”，不是调用失败，不能触发第二路。"""
     client = ExtractorClient()
-    client._direct_semantic_audit = AsyncMock(return_value=[])
-    client.ai_semantic_audit = AsyncMock(return_value=[{"type": "should_not_run"}])
+    client._direct_semantic_audit = AsyncMock(
+        return_value=AuditIssueList([], AuditOutcome(status="empty"))
+    )
+    client.semantic_service_outcome = AsyncMock(
+        return_value=AuditOutcome(status="ok", issues=[{"type": "should_not_run"}])
+    )
 
     result = await client.ai_full_report_audit("测试文本", "doc-hash")
 
-    assert result == [{"type": "should_not_run"}]
-    client._direct_semantic_audit.assert_awaited_once()
-    client.ai_semantic_audit.assert_awaited_once()
-
-
-# ---------------------------------------------------------------------------
-# 回退链 structured_context 透传（2026-09-06 K3 复核整改）
-#
-# 缺陷背景：ai_semantic_audit 签名无 structured_context，两处
-# _direct_semantic_audit 回退丢失注入块——同一文档在主链路与回退
-# 路径出现两种输入表征。以下测试锁定整条链的透传契约。
-# ---------------------------------------------------------------------------
+    assert list(result) == []
+    client.semantic_service_outcome.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_full_report_audit_passes_structured_context_to_extractor_fallback() -> None:
-    """直连失败回退到抽取服务时，structured_context 必须继续透传。"""
+async def test_full_report_audit_falls_back_only_on_direct_call_error() -> None:
     client = ExtractorClient()
-    client._direct_semantic_audit = AsyncMock(side_effect=RuntimeError("direct down"))
-    client.ai_semantic_audit = AsyncMock(return_value=[{"type": "from_service"}])
+    client._direct_semantic_audit = AsyncMock(
+        return_value=AuditIssueList([], AuditOutcome(status="error"))
+    )
+    client.semantic_service_outcome = AsyncMock(
+        return_value=AuditOutcome(status="ok", issues=[{"type": "from_service"}])
+    )
 
-    result = await client.ai_full_report_audit(
+    result = await client.ai_full_report_audit("测试文本", "doc-hash")
+
+    assert list(result) == [{"type": "from_service"}]
+    client.semantic_service_outcome.assert_awaited_once()
+    assert result.outcome.fallback_used is True
+    assert result.outcome.fallback_reason == "direct_call_failed"
+
+
+@pytest.mark.asyncio
+async def test_full_report_audit_passes_structured_context_to_direct() -> None:
+    """直连专项调用必须收到结构化事实/关系注入块。"""
+    client = ExtractorClient()
+    client._direct_semantic_audit = AsyncMock(
+        return_value=AuditIssueList([], AuditOutcome(status="error"))
+    )
+    client.semantic_service_outcome = AsyncMock(
+        return_value=AuditOutcome(status="ok", issues=[])
+    )
+
+    await client.ai_full_report_audit(
         "测试文本", "doc-hash", structured_context="结构化事实块"
     )
 
-    assert result == [{"type": "from_service"}]
-    client.ai_semantic_audit.assert_awaited_once_with(
-        "测试文本", "doc-hash", structured_context="结构化事实块"
+    client._direct_semantic_audit.assert_awaited_once_with(
+        "测试文本", structured_context="结构化事实块", specialties=None
     )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "fallback_trigger, extractor_returns",
-    [
-        ("empty_hits", []),
-        ("service_error", RuntimeError("service down")),
-    ],
-)
-async def test_semantic_audit_fallback_keeps_structured_context(
-    fallback_trigger, extractor_returns
-) -> None:
-    """抽取服务空结果/异常回退直连时，注入块必须随 prompt 下发。"""
+async def test_semantic_audit_does_not_fallback_on_legitimate_empty_hits() -> None:
     client = ExtractorClient()
-    if fallback_trigger == "empty_hits":
-        client._call_semantic_audit = AsyncMock(return_value=[])
-    else:
-        client._call_semantic_audit = AsyncMock(side_effect=extractor_returns)
-    client._direct_semantic_audit = AsyncMock(return_value=[{"type": "direct"}])
+    client.semantic_service_outcome = AsyncMock(
+        return_value=AuditOutcome(status="empty")
+    )
+    client._direct_semantic_audit = AsyncMock(
+        return_value=AuditIssueList([{"type": "should_not_run"}], AuditOutcome(status="ok"))
+    )
 
     result = await client.ai_semantic_audit(
         "测试文本", "doc-hash", structured_context="结构化事实块"
     )
 
-    assert result == [{"type": "direct"}]
-    client._direct_semantic_audit.assert_awaited_once_with(
-        "测试文本", structured_context="结构化事实块"
-    )
+    assert list(result) == []
+    client._direct_semantic_audit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_semantic_audit_fallback_without_structured_context() -> None:
-    """未提供注入块（历史调用形态）时回退行为不变：以 None 透传。"""
+async def test_semantic_audit_falls_back_on_service_call_error() -> None:
     client = ExtractorClient()
-    client._call_semantic_audit = AsyncMock(return_value=[])
-    client._direct_semantic_audit = AsyncMock(return_value=[{"type": "direct"}])
-
-    result = await client.ai_semantic_audit("测试文本", "doc-hash")
-
-    assert result == [{"type": "direct"}]
-    client._direct_semantic_audit.assert_awaited_once_with(
-        "测试文本", structured_context=None
+    client.semantic_service_outcome = AsyncMock(
+        return_value=AuditOutcome(status="error", errors=[{"reason": "call_failed"}])
     )
+    client._direct_semantic_audit = AsyncMock(
+        return_value=AuditIssueList([{"type": "direct"}], AuditOutcome(status="ok"))
+    )
+
+    result = await client.ai_semantic_audit(
+        "测试文本", "doc-hash", structured_context="结构化事实块"
+    )
+
+    assert list(result) == [{"type": "direct"}]
+    client._direct_semantic_audit.assert_awaited_once_with(
+        "测试文本", structured_context="结构化事实块"
+    )
+    assert result.outcome.fallback_used is True
+    assert result.outcome.fallback_reason == "service_call_failed"
 
 
 # ---------------------------------------------------------------------------

@@ -16,6 +16,17 @@ import httpx
 from dataclasses import dataclass, field
 
 from src.services.ai_client import AIClient
+from src.providers import LLMError
+from src.providers.base import sanitize_error_excerpt
+from src.engine.ai.audit_contract import validate_audit_items
+from src.engine.ai.audit_prompts import (
+    NARRATIVE_CONSISTENCY,
+    SPECIALTIES,
+    TEXT_SEMANTICS,
+    render_specialty_instructions,
+    specialty_prompt_version,
+    specialty_prompt_versions,
+)
 from src.utils.logging_config import describe_exception, fingerprint_for_log
 from src.utils.provenance import (
     build_finding_provenance,
@@ -52,94 +63,180 @@ def _read_str_env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
 
+def _read_int_env(name: str, default: int, minimum: int = 0, maximum: int = 10) -> int:
+    try:
+        value = int(str(os.getenv(name, str(default))).strip())
+    except Exception:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
 MIN_ISSUE_CONFIDENCE = _read_float_env("AI_MIN_ISSUE_CONFIDENCE", 0.75)
 
-# ==================== 提示词模板（版本留痕用，P2-02） ====================
-# 直连大模型做全量审查时使用的指令部分。之所以把它提到模块级常量、并与"待审文本"分离：
-#   1) 只有指令部分才代表"提示词版本"，把文档正文一起哈希会导致每份文档版本都不同；
-#   2) 版本号由内容哈希派生，改了这段文字版本号会自动变化，不依赖手工升版。
+# ==================== 提示词与响应契约 ====================
+# 直连审计按两个专项分别调用：文字语义、说明合理性/跨段一致性。
+# 旧的单块提示词保留版本号兼容接口，但实际调用不再使用它。
 FULL_REPORT_AUDIT_PROMPT_ID = "full_report_audit_direct"
 
-FULL_REPORT_AUDIT_PROMPT_INSTRUCTIONS = """
-你是一名“中国政府预决算公开材料审校助手”。
-输入是全文中的局部窗口文本，只能基于窗口内可直接定位的证据输出问题。
 
-必须遵守：
-1) 只输出 JSON 数组，不要输出任何其他文字；无问题返回 []。
-2) 证据优先：每个问题都必须能在当前窗口内找到原文证据，不臆测、不补数、不编造页码。
-3) 局部窗口限制：不要判断全书缺表、缺章、目录页码整体错误等必须看全书才能确认的问题。
-4) 引文必须是从当前窗口逐字复制的一段连续原文；不得改写、拼接不同位置的句子或补入原文没有的词。若无法给出连续原文引文，不输出该问题。
-5) 判断百分比时，先确认原文写的是“完成预算比例”“占总额比例”还是“同比增减比例”，并确认分子、分母口径。只根据明确的同一口径数据复算；不同口径或分母不明确时不报错。
-6) 优先检查以下问题：
-   - 同比、占比、完成率、增长率、下降率复算错误
-   - 合计与明细勾稽不一致、同条说明前后金额矛盾
-   - 增加/减少/增长/下降等方向描述与数字变化方向相反
-   - 部门/单位预算（决算）文种误写
-   - 模板残留、占位符、重复表述、残句、异常标点
-   - 三公经费、政府性基金、国有资本经营无此项说明缺失
-   - 年份冲突、金额单位错误、统计口径冲突、编码与名称用途错配
-7) 容差：万元差值<=0.01、元差值<=100、百分点差值<=0.1 视为一致，不得报错。
-8) 口径保护：政府采购预算、绩效项目资金、一般公共预算、财政拨款等不同口径，除非文本明确要求一致，否则不得直接判错。
-9) OCR 噪声保护：疑似抽取残影、隐藏层重复、跨页断裂不稳定时，优先输出 manual_review 或不输出。
-10) 输出必须使用中文，不得使用其他语言。
+def render_full_report_audit_instructions() -> str:
+    """兼容接口：返回两个专项提示词的合并文本（仅用于版本对照）。"""
+    return "\n\n".join(
+        render_specialty_instructions(specialty, MIN_ISSUE_CONFIDENCE)
+        for specialty in SPECIALTIES
+    )
 
-输出字段要求（每个元素必须具备）：
-- problem_type: 字符串，尽量使用 ratio_recalc/sum_mismatch/document_kind_mismatch/placeholder_residue/unit_scope_conflict/duplicate_text/missing_explanation/direction_conflict/code_subject_mismatch/generic
-- original: 字符串，原始问题文本或核心错误表述
-- suggestion: 字符串，简短修正建议
-- span: 引文在当前原文窗口中的字符偏移 [start, end)，从 0 开始；无法逐字核对填 [0,0]
-- context: 字符串，包含关键证据的上下文
-- severity: 仅允许 critical/high/medium/low/info/manual_review
-- confidence: 0-1 数值
 
-建议尽量补充以下字段：
-- quote: 直接命中的原文片段
-- page: 按窗口提供的页码映射填写 PDF 物理页码（第一张页面为 1），不能用印刷页脚、目录页码或窗口序号；无法确定填 null
-- table_or_section: 对应表名或说明章节
-- expected: 复核后的正确值
-- actual: 当前文本中的值
-- difference: 差额或百分点差
-- check: 检查项名称，如“同比复算”“三公经费合计”
-- rule_id, title, message
+def full_report_audit_prompt_version() -> str:
+    """兼容接口：两个专项提示词合并后的版本号。"""
+    return prompt_version_from_template(
+        FULL_REPORT_AUDIT_PROMPT_ID,
+        render_full_report_audit_instructions(),
+    )
 
-输出示例：
-[{{
-  "problem_type": "ratio_recalc",
-  "original": "同比增长12.5%",
-  "suggestion": "请按表内金额重新复算同比并修正文中表述",
-  "span": [120, 128],
-  "context": "一般公共预算支出情况说明：同比增长12.5%。",
-  "severity": "high",
-  "confidence": 0.86,
-  "quote": "同比增长12.5%",
-  "table_or_section": "一般公共预算支出情况说明",
-  "expected": "8.3%",
-  "actual": "12.5%",
-  "difference": "4.2个百分点",
-  "check": "同比复算"
-}}]
-
-低于 {min_confidence:.2f} 置信度的问题不要输出。
-""".strip()
 
 #: 抽取服务侧语义审计的任务契约标识。提示词实际由远端服务持有，
 #: 本地只能如实记录调用的任务契约版本，不假装知道远端提示词内容。
 SEMANTIC_AUDIT_SERVICE_TASK = "semantic_audit_v1"
 
 
-def render_full_report_audit_instructions() -> str:
-    """渲染直连全量审查提示词的指令部分（不含待审文档正文）。"""
-    return FULL_REPORT_AUDIT_PROMPT_INSTRUCTIONS.format(
-        min_confidence=MIN_ISSUE_CONFIDENCE
-    )
+@dataclass
+class AuditOutcome:
+    """一次（或一组专项）审计调用的可追溯结果。"""
+
+    issues: List[Dict[str, Any]] = field(default_factory=list)
+    status: str = "not_run"
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    prompt_version: Optional[str] = None
+    prompt_versions: List[str] = field(default_factory=list)
+    finish_reason: Optional[str] = None
+    token_usage: Optional[Dict[str, Any]] = None
+    input_chars: int = 0
+    raw_count: int = 0
+    accepted_count: int = 0
+    rejected_count: int = 0
+    rejection_reasons: Dict[str, int] = field(default_factory=dict)
+    response_sha256: Optional[str] = None
+    response_chars: int = 0
+    fallback_used: bool = False
+    fallback_reason: Optional[str] = None
+    specialty: Optional[str] = None
+    calls: List[Dict[str, Any]] = field(default_factory=list)
+    errors: List[Dict[str, Any]] = field(default_factory=list)
+    #: 同一检查单元（专项×窗口）的尝试次数与逐次结果；覆盖计数只按单元算，
+    #: 补试次数单独统计，不进入 planned 分母。
+    attempts: int = 1
+    retry_count: int = 0
+    retried: bool = False
+    retryable: bool = False
+    error_type: Optional[str] = None
+    http_status: Optional[int] = None
+    attempts_log: List[Dict[str, Any]] = field(default_factory=list)
+    raw_content: str = field(default="", repr=False)
+    prompt_text: str = field(default="", repr=False)
+    #: 每次专项调用的可回放输入/原始响应；只在 AI_AUDIT_TRACE 开启时写入任务目录。
+    raw_exchanges: List[Dict[str, Any]] = field(default_factory=list, repr=False)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "status": self.status,
+            "provider": self.provider,
+            "model": self.model,
+            "prompt_version": self.prompt_version,
+            "prompt_versions": list(self.prompt_versions),
+            "finish_reason": self.finish_reason,
+            "token_usage": dict(self.token_usage or {}),
+            "input_chars": self.input_chars,
+            "raw_count": self.raw_count,
+            "accepted_count": self.accepted_count,
+            "rejected_count": self.rejected_count,
+            "rejection_reasons": dict(self.rejection_reasons),
+            "response_sha256": self.response_sha256,
+            "response_chars": self.response_chars,
+            "fallback_used": self.fallback_used,
+            "fallback_reason": self.fallback_reason,
+            "specialty": self.specialty,
+            "calls": [dict(call) for call in self.calls],
+            "errors": [dict(error) for error in self.errors],
+            "attempts": int(self.attempts or 1),
+            "retry_count": int(self.retry_count or 0),
+            "retried": bool(self.retried),
+            "retryable": bool(self.retryable),
+            "error_type": self.error_type,
+            "http_status": self.http_status,
+            "attempts_log": [dict(item) for item in self.attempts_log],
+        }
 
 
-def full_report_audit_prompt_version() -> str:
-    """当前直连全量审查提示词的版本号（内容哈希派生）。"""
-    return prompt_version_from_template(
-        FULL_REPORT_AUDIT_PROMPT_ID,
-        render_full_report_audit_instructions(),
+class AuditIssueList(list):
+    """list-compatible return value carrying the audit outcome.
+
+    AIFindingsService 与既有 mock 仍按 list 消费；真实调用可从 ``outcome``
+    读取逐窗口校验状态，避免“空列表”掩盖非法响应/截断。
+    """
+
+    def __init__(self, issues: Optional[List[Dict[str, Any]]] = None, outcome: Optional[AuditOutcome] = None):
+        super().__init__(issues or [])
+        self.outcome = outcome
+
+
+def _combine_outcomes(outcomes: List[AuditOutcome]) -> AuditOutcome:
+    combined = AuditOutcome()
+    if not outcomes:
+        combined.status = "not_run"
+        return combined
+    combined.issues = [issue for outcome in outcomes for issue in outcome.issues]
+    combined.accepted_count = sum(outcome.accepted_count for outcome in outcomes)
+    combined.raw_count = sum(outcome.raw_count for outcome in outcomes)
+    combined.rejected_count = sum(outcome.rejected_count for outcome in outcomes)
+    combined.input_chars = sum(outcome.input_chars for outcome in outcomes)
+    combined.response_chars = sum(outcome.response_chars for outcome in outcomes)
+    combined.fallback_used = any(outcome.fallback_used for outcome in outcomes)
+    combined.fallback_reason = next(
+        (outcome.fallback_reason for outcome in outcomes if outcome.fallback_reason), None
     )
+    for outcome in outcomes:
+        for key, value in outcome.rejection_reasons.items():
+            combined.rejection_reasons[key] = combined.rejection_reasons.get(key, 0) + value
+        combined.prompt_versions.extend(outcome.prompt_versions)
+        combined.calls.extend(outcome.calls)
+        combined.errors.extend(outcome.errors)
+        combined.raw_exchanges.extend(outcome.raw_exchanges)
+        combined.attempts_log.extend(outcome.attempts_log)
+        combined.retry_count += int(outcome.retry_count or 0)
+        combined.retried = combined.retried or bool(outcome.retried)
+        combined.retryable = combined.retryable or bool(outcome.retryable)
+    combined.attempts = sum(max(1, int(outcome.attempts or 1)) for outcome in outcomes)
+    statuses = [outcome.status for outcome in outcomes]
+    if all(status == "ok" for status in statuses):
+        combined.status = "ok"
+    elif all(status in {"ok", "empty"} for status in statuses) and "ok" in statuses:
+        combined.status = "ok"
+    elif all(status == "empty" for status in statuses):
+        combined.status = "empty"
+    elif any(status == "error" for status in statuses) and not any(
+        status in {"ok", "empty", "partial"} for status in statuses
+    ):
+        combined.status = "error"
+    elif any(status == "invalid" for status in statuses) and not any(
+        status in {"ok", "empty", "partial"} for status in statuses
+    ):
+        combined.status = "invalid"
+    elif any(status == "truncated" for status in statuses) and not any(
+        status in {"ok", "empty", "partial"} for status in statuses
+    ):
+        combined.status = "truncated"
+    else:
+        combined.status = "partial"
+    first_call = next((call for call in combined.calls if call.get("provider") or call.get("model")), {})
+    combined.provider = first_call.get("provider")
+    combined.model = first_call.get("model")
+    combined.finish_reason = first_call.get("finish_reason")
+    combined.token_usage = first_call.get("token_usage")
+    combined.prompt_version = first_call.get("prompt_version")
+    return combined
+
 
 
 @dataclass
@@ -167,6 +264,14 @@ class ExtractorConfig:
     timeout: float = field(default_factory=lambda: _read_float_env("AI_EXTRACTOR_TIMEOUT", REQUEST_TIMEOUT))
     max_retries: int = field(default_factory=lambda: int(os.getenv("AI_EXTRACTOR_MAX_RETRIES", str(MAX_RETRIES))))
     retry_delay: float = field(default_factory=lambda: _read_float_env("AI_EXTRACTOR_RETRY_DELAY", RETRY_DELAY))
+    #: 专项×窗口级补试次数（本轮默认最多 1 次）。审计调用会关闭 provider
+    #: 内层重试，由该值统一控制，避免两层重试叠加。
+    specialty_retries: int = field(
+        default_factory=lambda: _read_int_env("AI_AUDIT_UNIT_RETRIES", 1, 0, 2)
+    )
+    specialty_retry_delay: float = field(
+        default_factory=lambda: _read_float_env("AI_AUDIT_UNIT_RETRY_DELAY", 1.5)
+    )
 
 class ExtractorClient:
     """AI抽取器客户端"""
@@ -189,6 +294,12 @@ class ExtractorClient:
         token_usage: Optional[Dict[str, Any]] = None,
         content: str = "",
         error: Optional[str] = None,
+        contract_ok: Optional[bool] = None,
+        specialty: Optional[str] = None,
+        attempt: int = 1,
+        error_type: Optional[str] = None,
+        http_status: Optional[int] = None,
+        retryable: Optional[bool] = None,
     ) -> None:
         """追加一条调用留痕。error 非空表示本次调用失败。"""
 
@@ -207,7 +318,15 @@ class ExtractorClient:
                 # 进程内状态机消费，pop 后不再外带。
                 "content": content or "",
                 "content_length": len(content or ""),
+                # 合法 JSON 不等于合法业务响应：结构/字段/引文校验失败时由
+                # 调用方置 False，状态机不得把它当“成功且无问题”。
+                "contract_ok": contract_ok,
                 "error": error,
+                "specialty": specialty,
+                "attempt": int(attempt or 1),
+                "error_type": error_type,
+                "http_status": http_status,
+                "retryable": retryable,
                 "timestamp": time.time(),
             }
         )
@@ -330,99 +449,6 @@ class ExtractorClient:
         return hits
 
     @staticmethod
-    def _extract_numeric_tokens(text: str) -> List[float]:
-        values: List[float] = []
-        for raw in re.findall(r"-?\d+(?:,\d{3})*(?:\.\d+)?", text or ""):
-            try:
-                values.append(float(raw.replace(",", "")))
-            except Exception:
-                continue
-        return values
-
-    @staticmethod
-    def _should_drop_rounding_issue(
-        item: Dict[str, Any],
-        issue_type: str,
-        original: str,
-        suggestion: str,
-        context: str,
-    ) -> bool:
-        type_hints = " ".join(
-            [
-                issue_type,
-                str(item.get("problem_type") or ""),
-                str(item.get("title") or ""),
-                str(item.get("message") or ""),
-            ]
-        ).lower()
-        if not any(
-            token in type_hints
-            for token in (
-                "inconsist",
-                "mismatch",
-                "conflict",
-                "勾稽",
-                "不一致",
-                "冲突",
-                "差异",
-                "口径",
-            )
-        ):
-            return False
-
-        original_numbers = ExtractorClient._extract_numeric_tokens(original)
-        suggestion_numbers = ExtractorClient._extract_numeric_tokens(suggestion)
-        if not original_numbers or not suggestion_numbers:
-            return False
-
-        content = " ".join(
-            [
-                original,
-                suggestion,
-                context,
-                str(item.get("message") or ""),
-                str(item.get("quote") or ""),
-            ]
-        )
-
-        all_numbers = original_numbers + suggestion_numbers
-        if "年" in content and all(1900 <= v <= 2100 for v in all_numbers):
-            return False
-
-        tolerance = 0.01
-        if "%" in content:
-            tolerance = 0.1
-        elif "亿元" in content:
-            tolerance = 0.0001
-        elif "万元" in content:
-            tolerance = 0.01
-        elif "元" in content:
-            tolerance = 100.0
-
-        diff = min(abs(a - b) for a in original_numbers for b in suggestion_numbers)
-        return diff <= tolerance
-
-    @staticmethod
-    def _should_drop_unverified_repeat_issue(
-        section_text: str,
-        issue_type: str,
-        original: str,
-        context: str,
-    ) -> bool:
-        type_hint = (issue_type or "").lower()
-        if ("repeat" not in type_hint) and ("\u91cd\u590d" not in issue_type):
-            return False
-
-        anchor = (original or context or "").strip()
-        if not anchor:
-            return True
-
-        anchor_norm = re.sub(r"\s+", "", anchor)
-        body_norm = re.sub(r"\s+", "", section_text or "")
-        if len(anchor_norm) < 24:
-            return False
-        return body_norm.count(anchor_norm) < 2
-
     @staticmethod
     def _normalize_confidence(value: Any) -> Optional[float]:
         if value is None:
@@ -508,26 +534,118 @@ class ExtractorClient:
             pass
         return 4000
 
-    async def _direct_semantic_audit(
+    @staticmethod
+    def _safe_error_text(exc: BaseException) -> str:
+        """只保留异常类型与指纹，避免把可能回显的材料原文落进任务元数据。"""
+        return f"{type(exc).__name__}:{fingerprint_for_log(str(exc) or type(exc).__name__)}"
+
+    @staticmethod
+    def _error_fingerprint(exc: BaseException) -> str:
+        return fingerprint_for_log(str(exc) or type(exc).__name__)
+
+    def _record_specialty_failure(
+        self,
+        outcome: AuditOutcome,
+        *,
+        specialty: str,
+        attempt: int,
+        prompt: str,
+        error_type: str,
+        status_code: Optional[int],
+        retryable: bool,
+        public_error: str,
+        response_excerpt: str = "",
+    ) -> AuditOutcome:
+        provider = self._get_audit_provider()
+        model = self._get_audit_model()
+        outcome.status = "error"
+        outcome.provider = provider
+        outcome.model = model
+        outcome.retryable = bool(retryable)
+        outcome.error_type = error_type
+        outcome.http_status = status_code
+        outcome.errors.append(
+            {
+                "specialty": specialty,
+                "reason": "call_failed",
+                "error": public_error,
+                "error_type": error_type,
+                "http_status": status_code,
+                "retryable": bool(retryable),
+                "attempt": attempt,
+            }
+        )
+        outcome.attempts_log.append(
+            {
+                "attempt": attempt,
+                "status": "error",
+                "error_type": error_type,
+                "http_status": status_code,
+                "retryable": bool(retryable),
+                "error": public_error,
+                "response_chars": len(response_excerpt or ""),
+                "response_sha256": (
+                    hashlib.sha256(response_excerpt.encode("utf-8")).hexdigest()
+                    if response_excerpt
+                    else None
+                ),
+            }
+        )
+        outcome.attempts = len(outcome.attempts_log)
+        self.record_call(
+            provider,
+            model,
+            prompt_version=outcome.prompt_version,
+            error=public_error,
+            specialty=specialty,
+            attempt=attempt,
+            error_type=error_type,
+            http_status=status_code,
+            retryable=bool(retryable),
+        )
+        outcome.calls.append(self._call_summary(outcome))
+        outcome.raw_exchanges.append(
+            {
+                "specialty": specialty,
+                "attempt": attempt,
+                "prompt": prompt,
+                "raw_response": "",
+                "error": {
+                    "error_type": error_type,
+                    "http_status": status_code,
+                    "retryable": bool(retryable),
+                    "message": public_error,
+                    # 仅供任务目录私有 trace 回放，不进入公开 API。
+                    "response_excerpt": response_excerpt,
+                },
+            }
+        )
+        return outcome
+
+    async def _run_direct_specialty(
         self,
         section_text: str,
-        structured_context: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """Use configured LLM provider directly when extractor service is unavailable.
-
-        AI 输入表征增强（计划 §4）：prompt = 指令 + 结构化事实与表格关系
-        （带页码，确定性解析产出）+ 原文窗口。模型只输出语义候选，
-        金额勾稽以确定性规则为准——注入块中显式声明该边界。
-        """
-        ai_client = self._get_direct_ai_client()
-        instructions = render_full_report_audit_instructions()
-        prompt = f"{instructions}\n\n待审文本：\n{section_text or ''}"
-        if structured_context:
-            prompt += f"\n\n{structured_context}"
-        prompt_version = prompt_version_from_template(
-            FULL_REPORT_AUDIT_PROMPT_ID, instructions
+        structured_context: Optional[str],
+        specialty: str,
+        *,
+        attempt: int = 1,
+    ) -> AuditOutcome:
+        instructions = render_specialty_instructions(specialty, MIN_ISSUE_CONFIDENCE)
+        prompt_version = specialty_prompt_version(specialty, MIN_ISSUE_CONFIDENCE)
+        prompt = f"{instructions}\n\n{structured_context or ''}\n\n待审文本：\n{section_text or ''}"
+        outcome = AuditOutcome(
+            specialty=specialty,
+            prompt_version=prompt_version,
+            prompt_versions=[prompt_version],
+            input_chars=len(section_text or ""),
+            prompt_text=prompt,
+            provider=self._get_audit_provider(),
+            model=self._get_audit_model(),
         )
+        ai_client = self._get_direct_ai_client()
         try:
+            # 内层 provider 重试关闭；专项级补试由 _run_direct_specialty_with_retry
+            # 统一控制，避免同一次失败被两层各重试一次。
             response = await ai_client.chat(
                 messages=[
                     {"role": "system", "content": "你是严格的 JSON 输出助手。"},
@@ -538,140 +656,316 @@ class ExtractorClient:
                 temperature=0,
                 max_tokens=self._resolve_audit_max_tokens(),
                 timeout=int(self.config.timeout),
+                max_retries_override=0,
+            )
+        except LLMError as exc:
+            error_type = str(getattr(exc.error_type, "value", exc.error_type) or "unknown")
+            response_excerpt = sanitize_error_excerpt(
+                getattr(exc, "response_excerpt", "") or ""
+            )
+            return self._record_specialty_failure(
+                outcome,
+                specialty=specialty,
+                attempt=attempt,
+                prompt=prompt,
+                error_type=error_type,
+                status_code=getattr(exc, "status_code", None),
+                retryable=bool(getattr(exc, "is_retryable", False)),
+                public_error=(
+                    f"{error_type}:HTTP{getattr(exc, 'status_code', None)}:"
+                    f"{self._error_fingerprint(exc)}"
+                    if getattr(exc, "status_code", None)
+                    else f"{error_type}:{self._error_fingerprint(exc)}"
+                ),
+                response_excerpt=response_excerpt,
             )
         except Exception as exc:
-            # 失败也要留痕：状态机需要区分"AI 没查"和"查了但失败"
-            self.record_call(
-                self._get_audit_provider(),
-                self._get_audit_model(),
-                prompt_version=prompt_version,
-                error=str(exc) or type(exc).__name__,
+            return self._record_specialty_failure(
+                outcome,
+                specialty=specialty,
+                attempt=attempt,
+                prompt=prompt,
+                error_type=type(exc).__name__,
+                status_code=None,
+                retryable=False,
+                public_error=self._safe_error_text(exc),
             )
-            raise
+
         content_text = self._response_content_text(response)
-        finish_reason = (
-            response.get("finish_reason") if isinstance(response, dict) else None
-        )
-        # 记录"这次实际用的是哪个提供商/模型"，而不是配置里"打算用"的那个：
-        # 客户端存在熔断回退，实际生效的模型可能与配置不同。
+        finish_reason = response.get("finish_reason") if isinstance(response, dict) else None
+        provider = response.get("provider_used") if isinstance(response, dict) else None
+        model = response.get("model") if isinstance(response, dict) else None
+        token_usage = response.get("tokens") if isinstance(response, dict) else None
         self.record_call(
-            response.get("provider_used") if isinstance(response, dict) else None,
-            response.get("model") if isinstance(response, dict) else None,
+            provider,
+            model,
             prompt_version=prompt_version,
             finish_reason=finish_reason if isinstance(finish_reason, str) else None,
-            token_usage=response.get("tokens") if isinstance(response, dict) else None,
+            token_usage=token_usage,
             content=content_text,
+            specialty=specialty,
+            attempt=attempt,
         )
         provenance = build_finding_provenance(
-            model_version=build_model_version(
-                response.get("provider_used") if isinstance(response, dict) else None,
-                response.get("model") if isinstance(response, dict) else None,
-            ),
+            model_version=build_model_version(provider, model),
             prompt_version=prompt_version,
             source_channel="direct_llm",
         )
+        outcome.provider = provider
+        outcome.model = model
+        outcome.finish_reason = finish_reason if isinstance(finish_reason, str) else None
+        outcome.token_usage = token_usage if isinstance(token_usage, dict) else None
+        outcome.raw_content = content_text
+        outcome.response_chars = len(content_text)
+        outcome.response_sha256 = hashlib.sha256(content_text.encode("utf-8")).hexdigest()
+        outcome.raw_exchanges.append(
+            {
+                "specialty": specialty,
+                "attempt": attempt,
+                "prompt": prompt,
+                "raw_response": content_text,
+            }
+        )
+        truncated = str(finish_reason or "").strip().lower() in {"length", "max_tokens", "incomplete"}
         parsed = self._extract_json_array(content_text)
-        if self.config.direct_only and (parsed is None or str(finish_reason).lower() in {"length", "max_tokens", "incomplete"}):
-            self.call_ledger[-1]["error"] = "invalid_or_truncated_response"
-            raise ValueError("模型响应格式错误或输出被截断，请调整模型或输出上限")
-        parsed = parsed or []
-        normalized: List[Dict[str, Any]] = []
-        seen_keys = set()
-        for item in parsed:
-            if not isinstance(item, dict):
-                continue
-            issue_type = str(item.get("problem_type") or item.get("type") or "规范性").strip() or "规范性"
-            quote = str(item.get("quote") or "").strip()
-            original = str(item.get("original") or quote or "").strip()
-            suggestion = str(item.get("suggestion") or "").strip()
-            context = str(item.get("context") or quote or original).strip()
-            if not original and not context:
-                continue
-            confidence_value = self._normalize_confidence(item.get("confidence"))
-            if confidence_value is None:
-                # Keep schema strict to prevent low-quality payloads from polluting findings.
-                continue
-            if confidence_value < MIN_ISSUE_CONFIDENCE:
-                continue
-            if confidence_value > 1:
-                confidence_value = 1.0
-            if confidence_value < 0:
-                confidence_value = 0.0
-            if self._should_drop_rounding_issue(item, issue_type, original, suggestion, context):
-                continue
-            if self._should_drop_unverified_repeat_issue(
-                section_text, issue_type, original, context
-            ):
-                continue
-
-            span = item.get("span")
-            if (
-                not isinstance(span, list)
-                or len(span) != 2
-                or not all(isinstance(v, (int, float)) for v in span)
-            ):
-                anchor = original or context
-                if anchor:
-                    start = section_text.find(anchor)
-                    if start >= 0:
-                        span = [start, start + len(anchor)]
-                    else:
-                        span = [0, 0]
-                else:
-                    span = [0, 0]
-
-            span_start = int(span[0])
-            span_end = int(span[1])
-            if span_start < 0:
-                span_start = 0
-            if span_end < span_start:
-                span_end = span_start
-            if section_text:
-                max_len = len(section_text)
-                span_start = min(span_start, max_len)
-                span_end = min(span_end, max_len)
-            # 模型给的偏移必须通过原文核验；乱填的 span 不能用于推导 PDF 页码。
-            anchor = quote or original or context
-            span_text = re.sub(r"\s+", "", section_text[span_start:span_end])
-            anchor_text = re.sub(r"\s+", "", anchor or "")
-            if not anchor or span_text != anchor_text:
-                start = section_text.find(anchor) if anchor and section_text.count(anchor) == 1 else -1
-                span_start, span_end = (start, start + len(anchor)) if start >= 0 else (0, 0)
-
-            severity = self._normalize_severity(item.get("severity"))
-            page = self._normalize_page(item.get("page"))
-            dedupe_key = (
-                issue_type,
-                severity,
-                re.sub(r"\s+", "", original)[:100],
-                span_start // 20,
-                page or 0,
-            )
-            if dedupe_key in seen_keys:
-                continue
-            seen_keys.add(dedupe_key)
-
-            normalized.append(
+        if parsed is None:
+            outcome.status = "truncated" if truncated else "invalid"
+            outcome.error_type = "response_truncated" if truncated else "response_invalid"
+            outcome.retryable = False
+            outcome.rejection_reasons["json_parse_failed"] = 1
+            self.call_ledger[-1]["contract_ok"] = False
+            outcome.attempts_log.append(
                 {
-                    "type": issue_type,
-                    "original": original,
-                    "suggestion": suggestion,
-                    "span": [span_start, span_end],
-                    "context": context,
-                    "rule_id": item.get("rule_id"),
-                    "title": item.get("title"),
-                    "message": item.get("message"),
-                    "severity": severity,
-                    "problem_type": item.get("problem_type"),
-                    "quote": quote or original,
-                    "confidence": confidence_value,
-                    "page": page,
-                    "manual_confirm": bool(item.get("manual_confirm", False)),
-                    "provenance": dict(provenance),
+                    "attempt": attempt,
+                    "status": outcome.status,
+                    "error_type": outcome.error_type,
+                    "retryable": False,
+                    "response_chars": outcome.response_chars,
+                    "response_sha256": outcome.response_sha256,
+                    "finish_reason": outcome.finish_reason,
                 }
             )
-        return normalized
-        
+            outcome.attempts = len(outcome.attempts_log)
+            outcome.calls.append(self._call_summary(outcome))
+            return outcome
+        validation = validate_audit_items(
+            parsed,
+            window_text=section_text,
+            min_confidence=MIN_ISSUE_CONFIDENCE,
+            truncated=truncated,
+        )
+        self.call_ledger[-1]["contract_ok"] = validation.status in {"ok", "empty"}
+        outcome.status = validation.status
+        outcome.raw_count = validation.raw_count
+        outcome.accepted_count = validation.accepted_count
+        outcome.rejected_count = validation.rejected_count
+        outcome.rejection_reasons = dict(validation.reasons)
+        for accepted in validation.accepted:
+            issue = dict(accepted)
+            issue["type"] = accepted["problem_type"]
+            issue["quote"] = accepted["quote"]
+            issue["page"] = accepted.get("page")
+            issue["audit_specialty"] = specialty
+            issue["provenance"] = dict(provenance)
+            issue["manual_confirm"] = False
+            outcome.issues.append(issue)
+        if validation.status in {"invalid", "truncated"}:
+            outcome.error_type = (
+                "response_truncated" if validation.status == "truncated" else "response_invalid"
+            )
+            outcome.errors.append(
+                {
+                    "specialty": specialty,
+                    "reason": "response_rejected_or_truncated",
+                    "status": validation.status,
+                    "error_type": outcome.error_type,
+                    "retryable": False,
+                    "attempt": attempt,
+                    "raw_count": validation.raw_count,
+                    "rejected_count": validation.rejected_count,
+                    "rejection_reasons": dict(validation.reasons),
+                }
+            )
+        elif validation.status == "partial":
+            outcome.errors.append(
+                {
+                    "specialty": specialty,
+                    "reason": "partial_response",
+                    "status": validation.status,
+                    "retryable": False,
+                    "attempt": attempt,
+                    "raw_count": validation.raw_count,
+                    "rejected_count": validation.rejected_count,
+                    "rejection_reasons": dict(validation.reasons),
+                }
+            )
+        outcome.attempts_log.append(
+            {
+                "attempt": attempt,
+                "status": outcome.status,
+                "provider": outcome.provider,
+                "model": outcome.model,
+                "finish_reason": outcome.finish_reason,
+                "token_usage": dict(outcome.token_usage or {}),
+                "accepted_count": outcome.accepted_count,
+                "rejected_count": outcome.rejected_count,
+                "response_chars": outcome.response_chars,
+                "response_sha256": outcome.response_sha256,
+                "retryable": False,
+            }
+        )
+        outcome.attempts = len(outcome.attempts_log)
+        outcome.calls.append(self._call_summary(outcome))
+        return outcome
+
+    async def _run_direct_specialty_with_retry(
+        self,
+        section_text: str,
+        structured_context: Optional[str],
+        specialty: str,
+    ) -> AuditOutcome:
+        """执行一个专项×窗口检查单元，可恢复上游故障最多补试一次。"""
+
+        outcome = await self._run_direct_specialty(
+            section_text, structured_context, specialty, attempt=1
+        )
+        retries = max(0, int(self.config.specialty_retries or 0))
+        while (
+            outcome.status == "error"
+            and outcome.retryable
+            and int(outcome.retry_count or 0) < retries
+        ):
+            delay = max(0.0, float(self.config.specialty_retry_delay or 0))
+            if delay:
+                await asyncio.sleep(delay)
+            retried = await self._run_direct_specialty(
+                section_text,
+                structured_context,
+                specialty,
+                attempt=int(outcome.attempts or 1) + 1,
+            )
+            retried.attempts_log = [*outcome.attempts_log, *retried.attempts_log]
+            retried.raw_exchanges = [*outcome.raw_exchanges, *retried.raw_exchanges]
+            retried.attempts = len(retried.attempts_log)
+            retried.retry_count = int(outcome.retry_count or 0) + 1
+            retried.retried = True
+            if retried.status == "error":
+                # 只公开最终失败一条；逐次尝试留在 attempts_log 与私有 trace。
+                retried.errors = [{**retried.errors[-1], "retry_history": [
+                    {
+                        "attempt": item.get("attempt"),
+                        "status": item.get("status"),
+                        "error_type": item.get("error_type"),
+                        "http_status": item.get("http_status"),
+                        "error": item.get("error"),
+                    }
+                    for item in retried.attempts_log
+                ]}] if retried.errors else []
+                retried.retryable = bool(retried.retryable)
+            else:
+                retried.errors = []
+                retried.retryable = False
+                retried.error_type = None
+                retried.http_status = None
+            if retried.calls:
+                retried.calls[-1]["attempts"] = retried.attempts
+                retried.calls[-1]["retry_count"] = retried.retry_count
+                retried.calls[-1]["retried"] = True
+            outcome = retried
+        outcome.attempts = max(1, len(outcome.attempts_log) or int(outcome.attempts or 1))
+        return outcome
+
+    @staticmethod
+    def _call_summary(outcome: AuditOutcome) -> Dict[str, Any]:
+        return {
+            "specialty": outcome.specialty,
+            "status": outcome.status,
+            "provider": outcome.provider,
+            "model": outcome.model,
+            "prompt_version": outcome.prompt_version,
+            "finish_reason": outcome.finish_reason,
+            "token_usage": dict(outcome.token_usage or {}),
+            "input_chars": outcome.input_chars,
+            "raw_count": outcome.raw_count,
+            "accepted_count": outcome.accepted_count,
+            "rejected_count": outcome.rejected_count,
+            "rejection_reasons": dict(outcome.rejection_reasons),
+            "response_sha256": outcome.response_sha256,
+            "response_chars": outcome.response_chars,
+            "contract_mode": "strict_specialty_v1",
+            "attempts": int(outcome.attempts or 1),
+            "retry_count": int(outcome.retry_count or 0),
+            "retried": bool(outcome.retried),
+            "retryable": bool(outcome.retryable),
+            "error_type": outcome.error_type,
+            "http_status": outcome.http_status,
+        }
+
+    async def _direct_semantic_audit(
+        self,
+        section_text: str,
+        structured_context: Optional[str] = None,
+        *,
+        specialties: Optional[List[str]] = None,
+    ) -> AuditIssueList:
+        """Run the configured specialties directly and return issues + outcome."""
+        selected = specialties or list(SPECIALTIES)
+        outcomes = [
+            await self._run_direct_specialty_with_retry(
+                section_text, structured_context, specialty
+            )
+            for specialty in selected
+        ]
+        combined = _combine_outcomes(outcomes)
+        return AuditIssueList(combined.issues, combined)
+
+    async def audit_full_report_outcome(
+        self,
+        section_text: str,
+        doc_hash: str,
+        structured_context: Optional[str] = None,
+        *,
+        specialties: Optional[List[str]] = None,
+    ) -> AuditOutcome:
+        """Primary AI audit entry with explicit execution status.
+
+        策略：
+        - 直连专项调用是主路径；合法空数组是“有效检查无发现”，不再触发第二路；
+        - 仅当直连**调用失败**（不是空、不是非法结构）且允许回退时，才走抽取服务；
+        - 回退来源、提示词/任务契约与成本逐次记录，不把两路结果混为一次成功。
+        """
+        if not self.config.enabled:
+            return AuditOutcome(status="disabled")
+        if not (section_text or "").strip():
+            return AuditOutcome(status="empty_input", input_chars=0)
+
+        direct = await self._direct_semantic_audit(
+            section_text, structured_context=structured_context, specialties=specialties
+        )
+        outcome = getattr(direct, "outcome", None)
+        if outcome is None:
+            outcome = AuditOutcome(
+                status="ok" if list(direct) else "empty",
+                issues=list(direct),
+                accepted_count=len(list(direct)),
+            )
+        elif not outcome.issues and list(direct):
+            outcome.issues = list(direct)
+            outcome.accepted_count = len(outcome.issues)
+            if outcome.status in {"error", "not_run"}:
+                outcome.status = "ok"
+        if outcome.status != "error":
+            return outcome
+        if not self.config.direct_fallback or self.config.direct_only:
+            return outcome
+
+        service = await self.semantic_service_outcome(section_text, doc_hash)
+        service.fallback_used = True
+        service.fallback_reason = "direct_call_failed"
+        service.errors = [*outcome.errors, *service.errors]
+        service.calls = [*outcome.calls, *service.calls]
+        return service
+
     async def ai_extract_pairs(self, section_text: str, doc_hash: str) -> List[Dict[str, Any]]:
         """
         调用AI抽取器进行信息抽取
@@ -858,124 +1152,79 @@ class ExtractorClient:
         section_text: str,
         doc_hash: str,
         structured_context: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        调用AI抽取器进行语义审计（错别字、重复、表达不当）
+    ) -> AuditIssueList:
+        """抽取服务语义审计（legacy 兼容入口）。
 
-        Args:
-            section_text: 待检查的文本内容
-            doc_hash: 文档哈希
-            structured_context: 结构化事实与表格关系注入块
-                （src/services/ai_input_builder.py 构建）。仅直连回退路径
-                消费；抽取服务路径提示词在远端，不透传。
-
-        Returns:
-            语义问题列表，每个元素包含：
-            - type: 错误类型（错别字/重复/表达不当/规范性）
-            - original: 原文错误内容
-            - suggestion: 修改建议
-            - span: [start, end) 位置
-            - context: 上下文片段
+        合法空 hits 是“有效检查无发现”，不再触发直连第二路；只有服务调用失败
+        且允许回退时才走直连专项。来源与提示词契约在 outcome 中如实记录。
         """
         if not self.config.enabled:
-            logger.debug("AI辅助未启用，返回空列表")
-            return []
-
+            return AuditIssueList([], AuditOutcome(status="disabled"))
         if not section_text.strip():
-            logger.debug("输入文本为空，返回空列表")
-            return []
-
-        try:
-            result = await self._call_semantic_audit(section_text, doc_hash)
-            if result:
-                return result
-            if self.config.direct_fallback:
-                try:
-                    logger.warning("Semantic audit service returned empty hits, falling back to direct LLM semantic audit")
-                    return await self._direct_semantic_audit(
-                        section_text, structured_context=structured_context
-                    )
-                except Exception as direct_err:
-                    logger.error(f"Direct semantic fallback on empty hits failed: {direct_err}")
-            return result
-
-        except Exception as e:
-            logger.error(f"AI语义审计失败: {e}")
-            if self.config.direct_fallback:
-                try:
-                    logger.warning("Falling back to direct LLM semantic audit")
-                    return await self._direct_semantic_audit(
-                        section_text, structured_context=structured_context
-                    )
-                except Exception as direct_err:
-                    logger.error(f"Direct semantic fallback failed: {direct_err}")
-            return []
+            return AuditIssueList([], AuditOutcome(status="empty_input"))
+        service = await self.semantic_service_outcome(section_text, doc_hash)
+        if service.status != "error" or not self.config.direct_fallback:
+            return AuditIssueList(service.issues, service)
+        direct = await self._direct_semantic_audit(
+            section_text, structured_context=structured_context
+        )
+        outcome = getattr(direct, "outcome", None)
+        if outcome is None:
+            outcome = AuditOutcome(
+                status="ok" if list(direct) else "empty",
+                issues=list(direct),
+                accepted_count=len(list(direct)),
+            )
+        elif not outcome.issues and list(direct):
+            outcome.issues = list(direct)
+            outcome.accepted_count = len(outcome.issues)
+            if outcome.status in {"error", "not_run"}:
+                outcome.status = "ok"
+        outcome.fallback_used = True
+        outcome.fallback_reason = "service_call_failed"
+        outcome.errors = [*service.errors, *outcome.errors]
+        outcome.calls = [*service.calls, *outcome.calls]
+        return AuditIssueList(outcome.issues, outcome)
 
     async def ai_full_report_audit(
         self,
         section_text: str,
         doc_hash: str,
         structured_context: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        全量报告审查：优先走直连大模型（Gemini等）以使用增强提示词，
-        当直连失败时再回退到抽取服务语义审计。
+    ) -> AuditIssueList:
+        """全量报告审查（兼容入口）：返回 list，同时携带 AuditOutcome。"""
+        outcome = await self.audit_full_report_outcome(
+            section_text, doc_hash, structured_context=structured_context
+        )
+        return AuditIssueList(outcome.issues, outcome)
 
-        ``structured_context`` 为可选的结构化事实与表格关系注入块
-        （src/services/ai_input_builder.py 构建），直连路径随 prompt 注入。
-        """
-        if not self.config.enabled:
-            logger.debug("AI辅助未启用，返回空列表")
-            return []
-
-        if not section_text.strip():
-            logger.debug("输入文本为空，返回空列表")
-            return []
-
-        # 先走直连模型，确保使用全量审查提示词
-        if self.config.direct_only:
-            return await self._direct_semantic_audit(section_text, structured_context=structured_context)
-        try:
-            direct_result = await self._direct_semantic_audit(
-                section_text, structured_context=structured_context
-            )
-            if direct_result:
-                return direct_result
-            logger.info("Direct full-report audit returned no issues, falling back to extractor semantic audit")
-        except Exception as direct_err:
-            logger.warning(f"Direct full-report audit failed: {direct_err}")
-
-        # 直连失败或直连无结果时，再尝试抽取服务；
-        # structured_context 继续透传——直连回退同样要拿到注入块，
-        # 避免同一文档在不同回退层级出现两种输入表征。
-        try:
-            return await self.ai_semantic_audit(
-                section_text, doc_hash, structured_context=structured_context
-            )
-        except Exception as e:
-            logger.error(f"AI全量审查失败: {e}")
-            return []
-    
-    async def _call_semantic_audit(self, section_text: str, doc_hash: str) -> List[Dict[str, Any]]:
-        """语义审计的单次调用"""
+    async def semantic_service_outcome(
+        self, section_text: str, doc_hash: str
+    ) -> AuditOutcome:
+        outcome = AuditOutcome(
+            status="not_run",
+            input_chars=len(section_text or ""),
+            provider="extractor_service",
+            model=self.config.main_model or None,
+            prompt_version=SEMANTIC_AUDIT_SERVICE_TASK,
+            prompt_versions=[SEMANTIC_AUDIT_SERVICE_TASK],
+        )
         request_data = {
             "task": SEMANTIC_AUDIT_SERVICE_TASK,
             "section_text": section_text,
-            "language": "zh", 
+            "language": "zh",
             "doc_hash": doc_hash,
-            "max_windows": 3
+            "max_windows": 3,
         }
         if self.config.main_model:
             request_data["model"] = self.config.main_model
-
         try:
             async with httpx.AsyncClient(timeout=self.config.timeout) as client:
                 response = await client.post(
                     self.config.url,
                     json=request_data,
-                    headers={"Content-Type": "application/json"}
+                    headers={"Content-Type": "application/json"},
                 )
-
                 if response.status_code != 200:
                     raise Exception(
                         "AI语义审计返回错误状态码: {status}, 响应指纹: {marker}".format(
@@ -983,62 +1232,117 @@ class ExtractorClient:
                             marker=fingerprint_for_log(response.text),
                         )
                     )
-
                 result = response.json()
-
                 if "hits" not in result:
                     raise Exception(
-                        f"AI语义审计返回格式错误: 缺少 hits 字段, 响应指纹: {fingerprint_for_log(result)}"
+                        "AI语义审计返回格式错误: 缺少 hits 字段, 响应指纹: {marker}".format(
+                            marker=fingerprint_for_log(result)
+                        )
                     )
-
                 hits = result["hits"]
-                logger.info(f"AI语义审计成功，获得{len(hits)}个结果")
-
-                # 走抽取服务时提示词在远端，本地只能记录任务契约标识；
-                # 模型优先采用服务回传的实际值，缺失时退回本次请求指定的模型。
-                service_model = ""
-                if isinstance(result, dict):
-                    service_model = str(result.get("model") or "").strip()
-                # 抽取服务路径同样留痕。合法空结果（hits=[]，服务 200 且
-                # 明确"无问题"）与调用失败不同：content 落 "[]"（非空字符串
-                # 构成成功证据，与直连路径返回 "[]" 的契约一致——GPT5.6 R2
-                # P1-3：此前空 hits 落 ""，会被 ai_execution 误判
-                # ai_empty_response → 直连失败+抽取服务成功无发现时错误转
-                # failed/review_required）。
+                if not isinstance(hits, list):
+                    raise Exception("AI语义审计返回格式错误: hits 不是数组")
+                service_model = str(result.get("model") or "").strip()
+                outcome.model = service_model or self.config.main_model or None
+                content = json.dumps(hits, ensure_ascii=False)
+                outcome.raw_content = content
+                outcome.response_chars = len(content)
+                outcome.response_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                outcome.raw_exchanges.append(
+                    {
+                        "specialty": "extractor_service",
+                        "prompt": json.dumps(request_data, ensure_ascii=False),
+                        "raw_response": content,
+                    }
+                )
+                outcome.token_usage = result.get("usage") if isinstance(result.get("usage"), dict) else None
                 self.record_call(
                     "extractor_service",
-                    service_model or self.config.main_model or None,
+                    outcome.model,
                     prompt_version=SEMANTIC_AUDIT_SERVICE_TASK,
-                    token_usage=result.get("usage") if isinstance(result, dict) else None,
-                    content=json.dumps(hits, ensure_ascii=False),
+                    token_usage=outcome.token_usage,
+                    content=content,
                 )
                 provenance = build_finding_provenance(
-                    model_version=build_model_version(
-                        None, service_model or self.config.main_model
-                    ),
+                    model_version=build_model_version(None, outcome.model),
                     prompt_version=SEMANTIC_AUDIT_SERVICE_TASK,
                     source_channel="extractor_service",
                 )
-
-                # 提取语义问题
-                semantic_issues = []
+                semantic_issues: List[Dict[str, Any]] = []
+                rejected = 0
                 for hit in hits:
-                    if "semantic_issues" in hit and hit["semantic_issues"]:
-                        for issue in hit["semantic_issues"]:
-                            if isinstance(issue, dict):
-                                issue.setdefault("provenance", dict(provenance))
-                            semantic_issues.append(issue)
-
-                return semantic_issues
+                    if not isinstance(hit, dict):
+                        rejected += 1
+                        continue
+                    issues = hit.get("semantic_issues")
+                    if not isinstance(issues, list):
+                        continue
+                    for issue in issues:
+                        if not isinstance(issue, dict):
+                            rejected += 1
+                            continue
+                        item = dict(issue)
+                        item.setdefault("provenance", dict(provenance))
+                        semantic_issues.append(item)
+                outcome.issues = semantic_issues
+                outcome.raw_count = len(semantic_issues) + rejected
+                outcome.accepted_count = len(semantic_issues)
+                outcome.rejected_count = rejected
+                if rejected:
+                    outcome.rejection_reasons["invalid_service_items"] = rejected
+                outcome.status = "partial" if rejected and semantic_issues else (
+                    "ok" if semantic_issues else ("invalid" if rejected else "empty")
+                )
+                if self.call_ledger:
+                    self.call_ledger[-1]["contract_ok"] = outcome.status in {"ok", "empty"}
+                outcome.calls.append(
+                    {
+                        "specialty": "extractor_service",
+                        "status": outcome.status,
+                        "provider": "extractor_service",
+                        "model": outcome.model,
+                        "prompt_version": SEMANTIC_AUDIT_SERVICE_TASK,
+                        "input_chars": outcome.input_chars,
+                        "raw_count": outcome.raw_count,
+                        "accepted_count": outcome.accepted_count,
+                        "rejected_count": outcome.rejected_count,
+                        "rejection_reasons": dict(outcome.rejection_reasons),
+                        "response_sha256": outcome.response_sha256,
+                        "response_chars": outcome.response_chars,
+                        "contract_mode": "remote_unverified",
+                    }
+                )
+                return outcome
         except Exception as exc:
+            error_text = self._safe_error_text(exc)
+            outcome.status = "error"
+            outcome.errors.append({"specialty": "extractor_service", "reason": "call_failed", "error": error_text})
             self.record_call(
                 "extractor_service",
                 self.config.main_model or None,
                 prompt_version=SEMANTIC_AUDIT_SERVICE_TASK,
-                error=str(exc) or type(exc).__name__,
+                error=error_text,
             )
-            raise
-    
+            outcome.calls.append(
+                {
+                    "specialty": "extractor_service",
+                    "status": "error",
+                    "provider": "extractor_service",
+                    "model": self.config.main_model or None,
+                    "prompt_version": SEMANTIC_AUDIT_SERVICE_TASK,
+                    "error": error_text,
+                    "contract_mode": "remote_unverified",
+                }
+            )
+            return outcome
+
+    async def _call_semantic_audit(self, section_text: str, doc_hash: str) -> List[Dict[str, Any]]:
+        """语义审计单次调用（兼容测试/旧调用方）。"""
+        outcome = await self.semantic_service_outcome(section_text, doc_hash)
+        if outcome.status == "error":
+            raise RuntimeError(outcome.errors[0].get("error") if outcome.errors else "service_failed")
+        return outcome.issues
+
     async def health_check(self) -> bool:
         """健康检查"""
         if not self.config.enabled:

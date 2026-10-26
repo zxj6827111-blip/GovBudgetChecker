@@ -13,6 +13,8 @@ import { SlidersHorizontal } from "lucide-react";
 import { EVIDENCE_STATUS_DEGRADED, problemReviewKind, sortProblemsForReview } from "./reviewWorkbenchAdapters";
 import type { IssueWorkflowAction } from "./IssueCard";
 import { IssueCard, IssueRow } from "./IssueCard";
+import { AiScopeBanner } from "../AiScopeBanner";
+import type { AiScopeView } from "../../../lib/aiScope";
 import type { Problem } from "../../../lib/mock";
 
 export interface SourceFindingViews {
@@ -28,11 +30,45 @@ export interface SourceFindingViews {
   commonRelationCount: number;
   aiState?: string;
   aiModel?: string;
+  aiCoverage?: {
+    status?: string;
+    planned_calls?: number;
+    completed_calls?: number;
+    completed_calls_includes_failed?: boolean;
+    finished_calls?: number;
+    succeeded_calls?: number;
+    effective_completed_calls?: number;
+    failed_calls?: number;
+    valid_empty_calls?: number;
+    partial_calls?: number;
+    invalid_calls?: number;
+    truncated_calls?: number;
+    retried_calls?: number;
+    retry_attempts?: number;
+    failed_units?: Array<{
+      specialty?: string;
+      window_id?: number;
+      pages?: number[];
+      status?: string;
+      error_type?: string | null;
+      http_status?: number | null;
+      retryable?: boolean | null;
+      attempts?: number | null;
+      retry_count?: number | null;
+    }>;
+    pages_total?: number;
+    pages_covered?: number[];
+    uncovered_ranges?: Array<{ start?: number; end?: number; pages?: number[]; reason?: string }>;
+    capabilities?: Record<string, string>;
+    coverage_note?: string;
+  };
 }
 
 export interface IssuesTabProps {
   problems: Problem[];
   sourceFindings?: SourceFindingViews;
+  /** 检查范围条：无论 AI 是否启用/是否有覆盖记录都必须展示。 */
+  aiScope?: AiScopeView;
   selectedProblemId: string | null;
   onSelectProblem: (problemId: string | null, options?: { keepLayout?: boolean }) => void;
   /** issue_id -> 当前 workflow 状态（confirmed/no_issue/...），未记录时为 undefined。 */
@@ -43,6 +79,8 @@ export interface IssuesTabProps {
   onUndo: () => Promise<boolean>;
   pendingObligations: number;
   onOpenObligations: () => void;
+  /** 未完成检查的补检入口（通常跳到任务页重新分析）。 */
+  onRecheckToTask?: () => void;
   onSelectEvidenceRef: (problem: Problem, refKey: string) => void;
   readOnly?: boolean;
   /** 问题区放大（隐藏原文）时，列表和详情改为左右排布。 */
@@ -109,9 +147,19 @@ function aiStateLabel(state: string | undefined): string {
   return "状态未知";
 }
 
+function aiCoverageLabel(status: string | undefined): string {
+  if (status === "complete") return "覆盖完整";
+  if (status === "partial") return "部分覆盖";
+  if (status === "failed") return "执行失败";
+  if (status === "not_run") return "未执行";
+  if (status === "unknown") return "覆盖未知";
+  return "覆盖未记录";
+}
+
 export function IssuesTab({
   problems,
   sourceFindings,
+  aiScope,
   selectedProblemId,
   onSelectProblem,
   workflowStatusByIssueId,
@@ -121,6 +169,7 @@ export function IssuesTab({
   onUndo,
   pendingObligations,
   onOpenObligations,
+  onRecheckToTask,
   onSelectEvidenceRef,
   readOnly = false,
   wide = false,
@@ -321,6 +370,21 @@ export function IssuesTab({
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="gbc-review-issues-tab">
+      {aiScope ? (
+        <div className="shrink-0 px-3 pt-1.5">
+          <AiScopeBanner
+            scope={aiScope}
+            testId="gbc-review-ai-scope"
+            onRecheck={
+              aiScope.needsRecheck
+                ? onRecheckToTask ?? (pendingObligations > 0 ? onOpenObligations : undefined)
+                : undefined
+            }
+            recheckLabel={onRecheckToTask ? "前往任务页补检" : "查看检查补核"}
+            compact
+          />
+        </div>
+      ) : null}
       <div className="shrink-0 border-b border-border px-3 py-1.5">
         <div className="flex flex-wrap items-center gap-1.5">
           <div className="flex items-center gap-1.5" aria-label="按处理进度查看">
@@ -405,6 +469,20 @@ export function IssuesTab({
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600" data-testid="gbc-review-source-summary">
               <span>大模型：{aiStateLabel(sourceFindings.aiState)} · {sourceFindings.aiFindingCount} 条发现</span>
               {sourceFindings.aiModel ? <span>模型：{sourceFindings.aiModel}</span> : null}
+              {sourceFindings.aiCoverage ? (
+                <span data-testid="gbc-review-ai-coverage">
+                  检查覆盖：{aiCoverageLabel(sourceFindings.aiCoverage.status)}
+                  （有效完成 {sourceFindings.aiCoverage.succeeded_calls
+                    ?? Math.max(0, (sourceFindings.aiCoverage.completed_calls ?? 0) - (sourceFindings.aiCoverage.failed_calls ?? 0))}
+                  /{sourceFindings.aiCoverage.planned_calls ?? 0}
+                  {(sourceFindings.aiCoverage.failed_calls ?? 0) > 0 ? `；失败 ${sourceFindings.aiCoverage.failed_calls}` : ""}
+                  {(sourceFindings.aiCoverage.retried_calls ?? 0) > 0 ? `；重试 ${sourceFindings.aiCoverage.retried_calls} 个单元` : ""}
+                  {(sourceFindings.aiCoverage.partial_calls ?? 0) > 0 ? `；部分 ${sourceFindings.aiCoverage.partial_calls}` : ""}
+                  {(sourceFindings.aiCoverage.invalid_calls ?? 0) > 0 ? `；非法响应 ${sourceFindings.aiCoverage.invalid_calls}` : ""}
+                  {(sourceFindings.aiCoverage.truncated_calls ?? 0) > 0 ? `；截断 ${sourceFindings.aiCoverage.truncated_calls}` : ""}
+                  ）
+                </span>
+              ) : null}
               <span>本地规则：{sourceFindings.ruleFindingCount} 条发现</span>
               <span>其他复核项：{sourceFindings.other.length} 条</span>
             </div>
@@ -420,6 +498,19 @@ export function IssuesTab({
         {sourceFindings?.aiState === "degraded" ? (
           <div className="mt-2 rounded-md border border-warning-200 bg-warning-50 px-2.5 py-2 text-[11px] leading-relaxed text-warning-700" data-testid="gbc-review-ai-degraded">
             大模型检查未完整完成。本次保存了 {sourceFindings.aiFindingCount} 条大模型发现；请在“大模型”中查看，并结合证据状态复核。
+            {sourceFindings.aiCoverage?.uncovered_ranges?.length ? (
+              <span className="mt-1 block" data-testid="gbc-review-ai-uncovered">
+                未覆盖页：
+                {sourceFindings.aiCoverage.uncovered_ranges
+                  .flatMap((range) => range.pages ?? [])
+                  .filter((page, index, all) => all.indexOf(page) === index)
+                  .join("、") || "范围未能映射到页码"}
+                （原因：窗口上限）。已检查范围不等于保证无遗漏。
+              </span>
+            ) : null}
+            {(sourceFindings.aiCoverage?.invalid_calls ?? 0) + (sourceFindings.aiCoverage?.truncated_calls ?? 0) > 0 ? (
+              <span className="mt-1 block">部分模型响应未通过校验或被截断；合法候选已保留，非法条目已拒绝，未计为“无问题”。</span>
+            ) : null}
           </div>
         ) : null}
       </div>

@@ -1926,6 +1926,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                 call_ledger=dual_result.meta.get("ai_call_ledger") or [],
                 provider_stats=dual_result.meta.get("provider_stats") or [],
                 window_errors=dual_result.meta.get("ai_window_errors") or [],
+                coverage=dual_result.meta.get("ai_coverage"),
             )
             from src.services.ai_execution import summarize_ai_diagnostics
             ai_diagnostics = summarize_ai_diagnostics(dual_result.meta)
@@ -1953,6 +1954,9 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                     "page_extraction": page_assessment,
                     "ai_execution": ai_execution,
                     **ai_diagnostics,
+                    "ai_coverage": dual_result.meta.get("ai_coverage"),
+                    "ai_audit_diagnostics": dual_result.meta.get("ai_audit_diagnostics"),
+                    "ai_locator_outcomes": dual_result.meta.get("ai_locator_outcomes") or [],
                     "ai_configuration": status_data.get("ai_configuration"),
                     "rule_execution_summary": dual_result.meta.get(
                         "rule_execution_summary"
@@ -2443,6 +2447,9 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             fact_overlay_report=fact_overlay_report,
         )
         result["meta"]["quality_gate"] = quality_gate
+        # 结论作用域同时写进 result.meta：任务详情/复核台/材料详情读的是
+        # result.meta，只放顶层会让页面把新任务误显示成“历史未记录”。
+        result["meta"]["conclusion_scope"] = quality_gate["conclusion_scope"]
         final_status = quality_gate["status"]
         if final_status == JobStatus.REVIEW_REQUIRED.value:
             stage_text = "完成（需人工复核）"
