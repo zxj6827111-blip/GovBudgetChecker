@@ -114,21 +114,34 @@ def _render_pages_png(pdf_path: str, page_numbers: List[int], dpi: int = DEFAULT
     return images, transforms
 
 
+def _page_ink_ratio(page, dpi: int = 72) -> Optional[float]:
+    """无文本页的非白像素比例；无法判断时返回 None。"""
+    try:
+        pix = page.get_pixmap(dpi=dpi)
+    except Exception:
+        return None
+    samples = pix.samples
+    if not samples:
+        return 0.0
+    stride = max(1, len(samples) // 200_000)
+    values = samples[::stride]
+    return sum(1 for value in values if value < 245) / max(1, len(values))
+
+
 def _page_has_visible_image(page, dpi: int = 72) -> bool:
-    """无文本页是否仍含可见图像/墨迹；无法判断时保守放行，不静默跳过。"""
+    """无文本页是否仍含可见图像/墨迹；无法判断时保守放行，不静默跳过。
+
+    判定口径是“有任何非白像素”，不再用 1% 面积比。轮廓文字、矢量数字等
+    稀疏内容可以只有千分之几的着墨面积（实测一页仅含矢量“100”时非白
+    比例 0.16%），按面积比判空白会把它静默丢掉。真空白页渲染后非白像素为 0。
+    """
     try:
         if page.get_images(full=True):
             return True
-        pix = page.get_pixmap(dpi=dpi)
     except Exception:
         return True
-    samples = pix.samples
-    if not samples:
-        return False
-    stride = max(1, len(samples) // 200_000)
-    values = samples[::stride]
-    non_white = sum(1 for value in values if value < 245)
-    return non_white / max(1, len(values)) > 0.01
+    ratio = _page_ink_ratio(page, dpi)
+    return True if ratio is None else ratio > 0
 
 
 def image_page_gate(

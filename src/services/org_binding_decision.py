@@ -204,7 +204,9 @@ def decide_auto_binding(
                 }
                 if entry not in audit["original_text_inconsistencies"]:
                     audit["original_text_inconsistencies"].append(entry)
-                continue
+                # 删字既可能是笔误，也可能指向组织库里尚未录入的另一个单位；
+                # 组织库缺一个名字不能证明它就是笔误。未核实前按原件冲突处理，转人工。
+                return True
             return True
         return False
 

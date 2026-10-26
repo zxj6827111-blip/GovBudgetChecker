@@ -1,0 +1,127 @@
+{
+ "version": "E1-v1",
+ "frozen_by": "验收方（Claude），2026-10-24；预期由样本构造与原页核对确定，不取自系统输出",
+ "environment": "隔离测试实例 + 测试库 + 组织库副本 + 独立输出目录；不写 data/；U-5 未批准，测试中不启用空白计零约定（本组样本不含空白格）",
+ "test_org_directory_additions": [
+  {
+   "name": "上海市E1测试主管局",
+   "level": "department",
+   "parent": null
+  },
+  {
+   "name": "上海市E1测试中心",
+   "level": "unit",
+   "parent": "上海市E1测试主管局"
+  }
+ ],
+ "samples": [
+  {
+   "id": "E1-S",
+   "file": "outputs/intake_remediation_20261024/t0/e1/E1_scope_pending.pdf",
+   "sha256": "e2e30201a399156f759ae5edfa7d29219fc94b1ae2751ccb19280f19c541d0c9",
+   "upload": {
+    "select_org": false,
+    "fiscal_year": null,
+    "doc_type": null
+   },
+   "design": "收入决算表 5 行，全文无部门/单位口径字样、无表注；主体、年度、资金口径、预算阶段、表实例、单位均明确",
+   "expect": {
+    "binding": {
+     "organization": "上海市E1测试中心",
+     "year": 2025,
+     "org_scope": "待确认（不得自动填为部门或单位）"
+    },
+    "must_report": [
+     {
+      "relation": "收入决算表 208 行横向：本年收入合计 = 各收入来源之和",
+      "page": 2,
+      "values": "100.00 vs 50.00 + 40.00 = 90.00",
+      "difference": "10.00"
+     },
+     {
+      "relation": "收入决算表合计行横向",
+      "page": 2,
+      "values": "300.00 vs 200.00 + 90.00 = 290.00",
+      "difference": "10.00",
+      "note": "与 208 行同一差错逐级传导，差额相同；可与 208 行合并为一条问题，但须能看到两行"
+     }
+    ],
+    "must_execute_and_pass": [
+     "205、20502 行横向（200.00 = 150.00 + 50.00）",
+     "纵向：合计 = 205 + 208（各列）；205 = 20502；208 = 20805"
+    ],
+    "must_be_incomplete": "依赖汇总口径的检查（如“本部门/本单位”用语、跨材料比较）显示未完成并写明原因，不计为通过",
+    "not_judged": "样本只含收入决算表，V33-002 报其余八张表缺失属于真实情况，不纳入 E1 判定"
+   }
+  },
+  {
+   "id": "E1-C",
+   "file": "outputs/intake_remediation_20261024/t0/e1/E1_control_no_year.pdf",
+   "sha256": "3960a3c69cfeb4a9e81bf44b4026684e0372800c0901f9a69b0dd8019781fa75",
+   "upload": {
+    "select_org": false,
+    "fiscal_year": null,
+    "doc_type": null
+   },
+   "design": "与 E1-S 相同，但封面和文件名都没有年度：受控缺少另一个必需身份维度",
+   "expect": {
+    "binding": {
+     "organization": "上海市E1测试中心（或待确认）",
+     "year": "待确认（不得猜测）"
+    },
+    "must_not_report": "不得基于这些事实给出 208 行或合计行的勾稽结论（error/warn）；相关检查显示因年度缺失而未完成",
+    "must_not": "不得跨主体或跨文件拼凑年度"
+   }
+  },
+  {
+   "id": "E1-R1",
+   "file": "2025/上海市经济和信息化委员会/上海市中小企业发展服务中心（上海市中小企业上市促进中心）2025年度决算.pdf",
+   "sha256": "340c848d0a132e55efc5a6bf8b0ad434af70cc9e2bd327a0bac5c556f8f06cc2",
+   "upload": {
+    "select_org": false,
+    "fiscal_year": null,
+    "doc_type": null
+   },
+   "expect": {
+    "binding": {
+     "organization": "上海市中小企业发展服务中心（上海市中小企业上市促进中心）",
+     "year": 2025,
+     "org_scope": "待确认（原件无定论证据）"
+    },
+    "must_execute": "表内勾稽规则实际执行：rules_insufficient_data 中的规则数低于基线 41；不要求本无算术错误的原件报错",
+    "must_be_incomplete": "依赖口径的检查单列未完成"
+   }
+  },
+  {
+   "id": "E1-R2",
+   "file": "2025/上海市人民政府合作交流办公室/上海市人民政府驻西宁办事处2025年度决算.pdf",
+   "sha256": "dec2525d6f2cb22609a5ae82aa0a221962e56932fbfdc25cef4aab137fc3123c",
+   "upload": {
+    "select_org": false,
+    "fiscal_year": null,
+    "doc_type": null
+   },
+   "expect": {
+    "binding": {
+     "organization": "上海市人民政府驻西宁办事处",
+     "year": 2025,
+     "org_scope": "待确认（原件无定论证据，且没有表注）"
+    },
+    "must_execute": "表内勾稽规则实际执行：rules_insufficient_data 中的规则数低于基线 39",
+    "must_be_incomplete": "依赖口径的检查单列未完成"
+   }
+  }
+ ],
+ "pass_conditions": "见计划第 5.4 节 1~6；每个样本须在结果页与同一任务的导出报告中核对，不得写“整份材料已完整审校/完整无问题”",
+ "evidence_package": [
+  "实例与配置说明",
+  "任务 ID",
+  "样本与测试组织库哈希",
+  "上传请求与关键响应",
+  "入库回执",
+  "实际规则结果",
+  "结果页截图或自动化断言",
+  "导出报告",
+  "逐项核验结论"
+ ]
+}

@@ -125,7 +125,12 @@ def test_explicit_benji_body_does_not_conflict_with_seed_department_in_combined_
     assert result["match_basis"] == "combined_source_scope"
 
 
-def test_exact_cover_with_missing_character_headings_binds_and_records_text_issue():
+def test_exact_cover_with_missing_character_headings_defers_and_records_text_issue():
+    """目录/正文标题比封面少字，未核实前不得据此自动绑定。
+
+    删字可能只是笔误，也可能指向组织库里尚未录入的另一个单位；
+    组织库缺这个名字不能证明它是笔误（复核 F4）。
+    """
     pages = [
         "甲市财政局（本级）\n2025年度决算",
         "目录\n第一部分 甲市财政（本级）概况",
@@ -133,13 +138,38 @@ def test_exact_cover_with_missing_character_headings_binds_and_records_text_issu
     ]
     directory = [org(), org("甲市财政局（本级）", "unit", "u", "d")]
     result = decide(pages, directory)
-    assert result["decision"] == "bound"
-    assert result["organization_id"] == "u"
+    assert result["decision"] == "needs_confirmation"
+    assert result["organization_id"] is None
+    assert code(result) == "evidence_conflict"
     assert result["original_text_inconsistencies"]
     assert all(
         item["reason"] == "heading_missing_characters"
         for item in result["original_text_inconsistencies"]
     )
+
+
+def test_internal_character_deletion_never_binds_on_cover_alone():
+    """复核 F4 反例：封面全名一致，正文名中间少「监督」两字，不得自动绑定。"""
+    pages = [
+        "甲市安全生产监督管理中心\n2025年度部门决算",
+        "目 录\n第一部分 甲市安全生产管理中心概况\n第二部分 2025年度部门决算表",
+    ]
+    directory = [org("甲市安全生产监督管理中心", "department", "d")]
+    result = decide(pages, directory)
+    assert result["decision"] == "needs_confirmation"
+    assert result["organization_id"] is None
+    assert code(result) == "evidence_conflict"
+
+
+def test_trailing_truncated_heading_still_binds_with_full_cover():
+    """标题只是末尾被截断（封面名的连续前缀）仍属抽取截断，不受本次收紧影响。"""
+    pages = [
+        "甲市财政局服务中心\n2025年度单位决算",
+        "第一部分 甲市财政局服务中概况",
+    ]
+    result = decide(pages, [org("甲市财政局服务中心", "unit", "u")])
+    assert result["decision"] == "bound"
+    assert result["organization_id"] == "u"
 
 
 def test_heading_naming_another_directory_org_still_blocks_binding():
