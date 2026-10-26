@@ -32,3 +32,9 @@ def test_corrected_year_and_checked_subject_cannot_reuse_old_fact_run():
         variants.append(artifact.parse_run_uid)
     assert variants[0] == variants[1]
     assert len(set(variants)) == 3
+
+
+def test_bound_directory_name_is_not_stripped_as_report_filename():
+    from pathlib import Path
+    from src.services.structured_ingest_runner import _normalize_org_name
+    assert _normalize_org_name('上海市信访办公室单位', Path('2024年决算.pdf'), preserve_identity=True) == '上海市信访办公室单位'

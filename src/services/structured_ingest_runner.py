@@ -264,7 +264,8 @@ async def run_structured_ingest(
         if parse_artifact is not None and parse_artifact.source_file_hash != checksum:
             raise ValueError("source_file_hash_mismatch: supplied artifact differs from original file")
         conn = await DatabaseConnection.acquire()
-        org_name = _normalize_org_name(metadata.get("organization_name"), pdf_path)
+        org_name = _normalize_org_name(metadata.get("organization_name"), pdf_path,
+            preserve_identity=bool(metadata.get("organization_id")))
         fiscal_year = _parse_year(metadata.get("report_year") or metadata.get("fiscal_year"))
         doc_type = str(metadata.get("doc_type") or metadata.get("report_kind") or "unknown")
 
@@ -1130,9 +1131,12 @@ def _merge_keywords(storage, org, keywords: Sequence[str]) -> None:
         storage.update(org.id, {"keywords": merged})
 
 
-def _normalize_org_name(raw_org_name: Any, pdf_path: Path) -> str:
+def _normalize_org_name(raw_org_name: Any, pdf_path: Path, *, preserve_identity: bool = False) -> str:
     text = str(raw_org_name or "").strip()
     if text:
+        if preserve_identity:
+            # 已确认目录节点的名字是身份，不是待清洗的文件名；“单位”等尾字不能再删。
+            return text
         cleaned = _strip_report_words(text)
         return cleaned or text
 
