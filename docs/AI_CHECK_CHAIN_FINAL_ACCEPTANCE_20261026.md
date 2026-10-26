@@ -244,7 +244,8 @@ git status --porcelain=v1 > /path/to/backup/status.txt
 - 真实响应回放：`replay_summary.json`、`replay_page_evidence.json`、`replay_S1_report.csv`、`replay_S3_report.csv`
 - 补检按钮：`RECHECK_click_result.json`、`RECHECK_after_status.json`、`RECHECK_after_workflow.json`
 - 生产构建/启动：`frontend_build.log`、`frontend_prod.log`、`production_page_evidence.json`、`prod_replay_S1.png`
-- 测试：`targeted_pytest_final.log`、`full_pytest_final2.log`、`frontend_unit_frozen.log`、`e2e_production_frozen.log`
+- 测试：`targeted_pytest_final.log`、`full_pytest_frozen_final.log`、`frontend_unit_frozen.log`、`e2e_prod_frozen_final.log`
+- 切换：`SWITCH_EXECUTION.json`、`main_prod_build_final.log`、`FORMAL_*`、`HISTORY_*`、`PERMISSION_*`、`RESTORE_DRILL.json`
 
 ## 10. 正式切换执行结果
 
