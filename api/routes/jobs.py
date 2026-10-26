@@ -44,9 +44,19 @@ async def published_job_view(job_id,payload,user):
     if published is None:return payload
     if not user_can_access_job(user,published):raise HTTPException(403,'无权访问当前分析版本')
     if payload.get('status')in runtime.ACTIVE_ANALYSIS_STATUSES|{'error','cancelled'}:
-        return {**payload,'result':published.get('result'),'analysis_revision':published.get('analysis_revision'),
-                'structured_ingest':published.get('structured_ingest'),'review_report':published.get('review_report')}
-    return {**published,'job_id':job_id}
+        view={**payload,'result':published.get('result'),'analysis_revision':published.get('analysis_revision'),
+              'structured_ingest':published.get('structured_ingest'),'review_report':published.get('review_report')}
+    else:
+        view={**published,'job_id':job_id}
+    # 当前版本结果从数据库读取时，人工确认历史可能只存在于工作流/文件快照；
+    # 必须按当前 revision 重新投影，否则页面会把已有确认显示成“暂无记录”。
+    try:
+        from src.services.issue_workflow_store import project_job_issue_decisions
+        view['human_decisions']=project_job_issue_decisions(job_id,view)
+    except Exception:
+        logger.warning("current human decisions projection skipped", exc_info=True)
+        view.setdefault('human_decisions',[])
+    return view
 
 
 def _serialize_org(org) -> Dict[str, Any]:
