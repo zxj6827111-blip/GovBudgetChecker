@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 import time
 import os
 import re
+import logging
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -28,6 +29,7 @@ from src.services.org_matcher import get_org_matcher
 from src.services.audit_log import append_audit_event
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 async def published_job_view(job_id,payload,user):
@@ -401,6 +403,15 @@ async def get_job_detail(job_id: str, request: Request, analysis_revision: Optio
         except RuntimeError as error:raise HTTPException(503,'historical analysis database unavailable')from error
         except ValueError as error:raise HTTPException(409,'historical analysis integrity failed')from error
         if not user_can_access_job(user,payload):raise HTTPException(403,'无权访问该历史分析版本')
+        # 历史 revision 也要带出当时的人工确认，否则页面只能看到数据库里有记录，
+        # 用户无法核对旧备注/操作人/时间。只投影与该 revision 或身份匹配的记录。
+        try:
+            from src.services.issue_workflow_store import project_job_issue_decisions
+
+            payload["human_decisions"] = project_job_issue_decisions(job_id, payload)
+        except Exception:
+            logger.warning("historical human decisions projection skipped", exc_info=True)
+            payload.setdefault("human_decisions", [])
     else:payload=await published_job_view(job_id,payload,user)
     payload.setdefault("job_id", job_id)
     try:

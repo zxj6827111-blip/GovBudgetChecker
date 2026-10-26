@@ -54,6 +54,25 @@ function normalizeProblemSearchValue(value: string): string {
   return value.trim().toLowerCase();
 }
 
+interface RevisionDecisionRecord {
+  issue_id: string;
+  title?: string | null;
+  page?: number | null;
+  status?: string;
+  note?: string | null;
+  actor?: string | null;
+  updated_at?: string | null;
+  analysis_revision?: string | null;
+  inherited?: boolean;
+}
+
+const DECISION_STATUS_LABELS: Record<string, string> = {
+  confirmed: "已确认",
+  no_issue: "已忽略",
+  in_package: "已进整改包",
+  pending: "待处理",
+};
+
 export default function TaskDetail() {
   const { job_id } = useParams<{ job_id: string }>();
   const router = useRouter();
@@ -78,6 +97,7 @@ export default function TaskDetail() {
   const [ignoringProblemId, setIgnoringProblemId] = useState<string | null>(null);
   const [selectedRevision, setSelectedRevision] = useState(() => typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("analysis_revision") ?? "");
   const [revisions, setRevisions] = useState<Array<{revision_id: string; is_current: boolean; state: string}>>([]);
+  const [historyDecisions, setHistoryDecisions] = useState<RevisionDecisionRecord[]>([]);
 
   useEffect(() => {
     let alive = true;
@@ -121,6 +141,23 @@ export default function TaskDetail() {
       // 接口兜底只对"请求失败"生效；拿到 200 但不是 {items:[...]} 时 items 会是
       // undefined，下面 revisions.length 直接抛错，整页（含全部操作按钮）被卸载。
       setRevisions(Array.isArray(versions?.items) ? versions.items : []);
+      const rawDecisions = Array.isArray(detail.human_decisions) ? detail.human_decisions : [];
+      setHistoryDecisions(
+        rawDecisions
+          .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+          .map((item) => ({
+            issue_id: String(item.issue_id ?? ""),
+            title: typeof item.title === "string" ? item.title : null,
+            page: typeof item.page === "number" ? item.page : null,
+            status: typeof item.status === "string" ? item.status : undefined,
+            note: typeof item.note === "string" ? item.note : null,
+            actor: typeof item.actor === "string" ? item.actor : null,
+            updated_at: typeof item.updated_at === "string" ? item.updated_at : null,
+            analysis_revision: typeof item.analysis_revision === "string" ? item.analysis_revision : null,
+            inherited: item.inherited === true,
+          }))
+          .filter((item) => item.issue_id),
+      );
       setTask(nextTask);
       setProblems(nextProblems);
       setLoading(false);
@@ -529,6 +566,71 @@ export default function TaskDetail() {
           />
         )}
       </div>
+
+      {revisions.length > 1 || selectedRevision || historyDecisions.length > 0 ? (
+        <section className="border-b border-border bg-white px-6 py-2" data-testid="task-revision-history-panel">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            {selectedRevision ? (
+              <>
+                <span className="font-medium text-info-700" data-testid="task-revision-notice">
+                  当前查看历史版本 {selectedRevision}，仅供查看；本版本的确认状态不代表当前版本。
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedRevision("")}
+                  data-testid="task-revision-return-current"
+                  className="rounded border border-border px-2 py-0.5 text-primary-700 hover:bg-surface-100"
+                >
+                  返回当前版本
+                </button>
+              </>
+            ) : (
+              <span className="font-medium text-warning-700" data-testid="task-revision-notice">
+                重新分析已生成新版本
+                {revisions.find((item) => item.is_current)?.revision_id
+                  ? `（当前 ${revisions.find((item) => item.is_current)?.revision_id}）`
+                  : ""}
+                ，本版本需重新确认；历史版本可在上方“分析版本”选择器查看。
+              </span>
+            )}
+          </div>
+          {historyDecisions.length > 0 ? (
+            <ul className="mt-1.5 space-y-1 text-xs text-slate-600" data-testid="task-history-decisions">
+              {historyDecisions.map((decision) => (
+                <li
+                  key={`${decision.issue_id}-${decision.analysis_revision ?? ""}`}
+                  data-testid={`task-history-decision-${decision.issue_id}`}
+                  className="rounded border border-border bg-surface-50 px-2 py-1"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded-full px-1.5 py-0.5 font-medium ${
+                      decision.status === "confirmed" || decision.status === "in_package"
+                        ? "bg-success-100 text-success-700"
+                        : decision.status === "no_issue"
+                          ? "bg-slate-100 text-slate-600"
+                          : "bg-warning-100 text-warning-700"
+                    }`}>
+                      {DECISION_STATUS_LABELS[decision.status ?? ""] ?? decision.status ?? "待处理"}
+                    </span>
+                    <span className="font-medium text-slate-800">{decision.title || decision.issue_id}</span>
+                    {decision.page ? <span className="text-slate-400">P{decision.page}</span> : null}
+                  </div>
+                  <div className="mt-0.5">备注：{decision.note || "无"}</div>
+                  <div className="mt-0.5 text-slate-500">
+                    操作人：{decision.actor || "未记录"} · 时间：{decision.updated_at || "未记录"} ·
+                    版本：{decision.analysis_revision || selectedRevision || "未记录"}
+                    {decision.inherited ? "（自旧版本沿用）" : ""}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-1 text-xs text-slate-500" data-testid="task-history-decisions-empty">
+              本版本暂无人工确认记录。
+            </p>
+          )}
+        </section>
+      ) : null}
 
       <div className="border-b border-border bg-slate-50 px-6 py-3">
         <AnalysisCheckProgress value={jobDetail?.check_progress} />
