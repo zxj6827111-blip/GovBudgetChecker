@@ -1549,6 +1549,12 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             subject_level=operand_profile.subject_level.value,
         )
         check_subject_name = check_subject["name"]
+        if parse_artifact_obj is not None:
+            from src.services.input_processing_identity import bind_artifact_document_identity
+            bind_artifact_document_identity(parse_artifact_obj,
+                organization_id=organization_id, organization_name=organization_name,
+                fiscal_year=report_year or fiscal_year, report_kind=report_kind, doc_type=doc_type,
+                check_subject_name=check_subject_name)
 
         # ZC-02（AC-07）：OCR 候选表经列身份/关键数字/置信度复验后晋升为
         # 可检查事实——与原生表共用同一事实物化路径；未通过者保持候选

@@ -364,6 +364,11 @@ async def run_structured_ingest(
             parse_artifact = parser.build_parse_artifact(
                 str(pdf_path), config_fingerprint=parse_config_fingerprint
             )
+            from src.services.input_processing_identity import bind_artifact_document_identity
+            bind_artifact_document_identity(parse_artifact,
+                organization_id=metadata.get('organization_id'), organization_name=org_name,
+                fiscal_year=fiscal_year, report_kind=metadata.get('report_kind'), doc_type=doc_type,
+                check_subject_name=metadata.get('check_subject_name'))
         # 缓存和新解析都必须证明来自当前字节，不能把调用方的哈希写回产物掩盖差异。
         if parse_artifact.source_file_hash != checksum:
             raise ValueError("source_file_hash_mismatch: parsed or cached artifact differs from original file")

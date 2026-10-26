@@ -173,6 +173,7 @@ async def persist_parse_artifact(
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'completed')
             ON CONFLICT (parse_run_uid) DO UPDATE
                 SET parse_run_uid = EXCLUDED.parse_run_uid
+                WHERE parse_runs.document_version_id = EXCLUDED.document_version_id
             RETURNING id, artifact_snapshot_hash
             """,
             artifact.parse_run_uid,
@@ -191,6 +192,8 @@ async def persist_parse_artifact(
             _json(snapshot),
             snapshot_hash,
         )
+        if row is None:
+            raise ValueError("parse_run_uid already belongs to another document version")
         parse_run_id = int(row["id"])
         if row["artifact_snapshot_hash"] != snapshot_hash:
             raise ValueError("parse_run_uid already binds a different or legacy artifact")

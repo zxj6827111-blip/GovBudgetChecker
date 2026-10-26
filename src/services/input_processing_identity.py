@@ -66,6 +66,24 @@ def artifact_content_hash(artifact) -> str:
     return content_hash(payload)
 
 
+def bind_artifact_document_identity(artifact, *, organization_id=None, organization_name=None,
+                                    fiscal_year=None, report_kind=None, doc_type=None,
+                                    check_subject_name=None) -> None:
+    """同一 PDF 改归属后建立独立运行，不能复用旧主体的不可变原始事实。"""
+    binding = {key: str(value or '').strip() for key, value in {
+        'organization_id': organization_id, 'organization_name': organization_name,
+        'fiscal_year': fiscal_year, 'report_kind': report_kind, 'doc_type': doc_type,
+        'check_subject_name': check_subject_name,
+    }.items()}
+    if artifact.processing_manifest.get('document_binding') == binding:
+        return
+    artifact.processing_manifest = {**artifact.processing_manifest, 'document_binding': binding}
+    base = re.sub(r':document-binding-v1:[0-9a-f]{64}', '', artifact.config_fingerprint or '')
+    artifact.config_fingerprint = base + ':document-binding-v1:' + content_hash(binding)
+    # 来源格、原始文字、金额及文件哈希不改；仅让包含主体解释的运行身份与归属一起隔离。
+    artifact.parse_run_uid = artifact_content_hash(artifact)[:32]
+
+
 def journal_cache_conflict(job_id, supplied, cached):
     import gzip
     if not str(job_id).replace('-', '').replace('_', '').isalnum():
