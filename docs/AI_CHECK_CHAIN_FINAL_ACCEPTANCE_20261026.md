@@ -156,7 +156,7 @@ PORT=3012 BACKEND_URL=http://127.0.0.1:18745 npm run start
 - `next build` 退出码 0；`/supervision/remediation` 路由已出现在构建产物中，上一轮的 PageNotFound 未复现。
 - `next start` 3012 启动成功；登录页、`POST /api/auth/login`、`/review?job=replay_S1_...`、CSV 下载均 200。
 - 生产服务器页面实际验证：banner、AI-XSEC-005 解释块、模型声称、第13/20页双方证据均可见。
-- **正式切换采用 `next build + next start`**；`next dev`（当前 3011）只作为开发/复核审查入口，不能作为正式发布方式。
+- **正式切换采用 `next build + next start`**；`next dev` 只作为开发/复核审查入口，不能作为正式发布方式；本轮验收实例 3011 已关闭。
 - 后端正式启动也应去掉 `--reload`（当前主实例 18743 仍是旧开发模式，切换时按原启动约定改为无 reload；具体命令见 §7）。
 
 ### 5.2 11 项既有失败的影响
@@ -176,7 +176,7 @@ PORT=3012 BACKEND_URL=http://127.0.0.1:18745 npm run start
 - 最终版本后端定向：**373 passed**（与上一轮相同测试集；后端在冻结提交后未再改）。
 - 全量：**4069 passed / 11 failed / 189 skipped**（11 项与基线同名同因）。
 - 前端：`tsc --noEmit` 通过；`npm run test:unit` 42 个脚本通过；e2e 4 passed。
-- e2e 在 **生产构建 3012** 上复跑通过（`e2e_production_frozen.log`）。
+- e2e 在 **生产构建 3012** 上复跑通过（`e2e_prod_frozen_final.log`）。
 - 构建日志：`frontend_build.log`；生产启动日志：`frontend_prod.log`；生产页面证据：`production_page_evidence.json`、`prod_replay_S1.png`。
 
 ## 7. 主工作树、数据备份与回滚
@@ -235,7 +235,7 @@ git status --porcelain=v1 > /path/to/backup/status.txt
 - 按已确认业务口径，重分析不自动继承；旧版本人工意见通过历史版本入口可见（§4A.1）。
 - 11 项既有失败不阻塞启动/核心链路，但组织/认证写路径未在正式库冒烟。
 - 主实例 18743 在 19:55 曾因仓库内 `scratch/*.py` 落盘触发一次 reload；主源码哈希未变，未加载本轮代码。之后所有验收脚本均写在 worktree/非 .py 证据目录，未再触发。
-- 未改动主工作树、未重启 18743、未切换生产。
+- 已完成正式切换：主工作树保留原有改动并应用冻结补丁；18743 已按无 reload 重启；验收实例已关闭。
 
 ## 9. 证据索引
 
