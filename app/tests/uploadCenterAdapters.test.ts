@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import {
   applyManualConfirmationOverride,
+  applyBatchConfirmationOverride,
   buildUploadFormFields,
   checkUploadLimit,
   derivePreflightStatus,
@@ -13,6 +14,7 @@ import {
   formatUnitScopeHint,
   listPreflightConfirmationReasons,
   selectDepartmentOptions,
+  selectReportOrganizationOptions,
   selectUnitOptionsForDepartment,
   validateAttribution,
   type OrganizationRecordLike,
@@ -244,6 +246,29 @@ assert.deepEqual(applyManualConfirmationOverride(originalWithYearOnly, undefined
 // response 为 null/undefined 时返回空对象基底（不抛错），覆盖值仍能叠加上去
 const fromEmptyBase = applyManualConfirmationOverride(null, { reportYear: "2025" });
 assert.equal(fromEmptyBase.report_year, 2025);
+
+// 信访办反例：封面裸名不能证明部门/单位，批量部门预设不得把待确认直接改为已确认。
+const ambiguousScope = {
+  report_year: 2024, doc_type: "dept_final", current: null,
+  binding_decision: { reasons: [{ code: "scope_undetermined" }] },
+};
+const presetDepartment = { organizationId: "letters-dept", organizationName: "上海市信访办公室" };
+const pendingScope = applyBatchConfirmationOverride(ambiguousScope, presetDepartment);
+assert.equal(derivePreflightStatus(pendingScope), "needs_confirmation");
+assert.deepEqual(listPreflightConfirmationReasons(pendingScope), ["organization_scope_unconfirmed"]);
+const confirmedUnit = applyManualConfirmationOverride(pendingScope, { organizationId: "letters-unit", organizationName: "上海市信访办公室单位" });
+assert.equal(derivePreflightStatus(confirmedUnit), "passed");
+assert.equal(confirmedUnit.current?.organization_id, "letters-unit");
+assert.equal(applyBatchConfirmationOverride({ report_year: 2024, doc_type: "dept_final", current: null }, presetDepartment).current?.organization_id, "letters-dept");
+
+const lettersOptions = selectReportOrganizationOptions([
+  { id: "city", name: "上海市", level: "city", parent_id: null },
+  { id: "letters-dept", name: "上海市信访办公室", level: "department", parent_id: "city" },
+  { id: "letters-unit", name: "上海市信访办公室单位", level: "unit", parent_id: "letters-dept" },
+]);
+assert.equal(lettersOptions.length, 2);
+assert.equal(lettersOptions.find((item) => item.id === "letters-dept")?.label, "上海市信访办公室（部门）");
+assert.equal(lettersOptions.find((item) => item.id === "letters-unit")?.label, "上海市信访办公室 › 上海市信访办公室单位（单位）");
 
 // --- buildUploadFormFields（修复 A1）：doc_type / fiscal_year 何时发送 ------------
 // 反例（核心断言）：预设 docType 默认值为空（不预填 dept_budget），且识别不到时

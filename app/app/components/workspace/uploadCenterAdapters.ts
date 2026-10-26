@@ -29,6 +29,7 @@ export interface PreflightResponseLike {
   doc_type?: string | null;
   report_kind?: string | null;
   current?: PreflightMatchCandidate | null;
+  binding_decision?: { reasons?: Array<{ code?: string }> } | null;
 }
 
 /** 与 current 是否存在同一个置信度门槛，来自 api/routes/upload.py `_inspect_document_preflight`
@@ -63,7 +64,11 @@ export const PREFLIGHT_STATUS_LABELS: Record<PreflightStatus, string> = {
 // ---------------------------------------------------------------------------
 
 /** needs_confirmation 的具体成因，供 UI 精确提示"缺什么"而不是笼统一句话。 */
-export type PreflightConfirmationReason = "missing_report_year" | "missing_doc_type" | "low_confidence_org";
+export type PreflightConfirmationReason = "missing_report_year" | "missing_doc_type" | "low_confidence_org" | "organization_scope_unconfirmed";
+
+function needsOrganizationScopeConfirmation(response: PreflightResponseLike): boolean {
+  return Boolean(response.binding_decision?.reasons?.some((reason) => reason.code === "scope_undetermined"));
+}
 
 /**
  * 逐项列出 preflight 响应缺失/低置信度的字段。
@@ -89,7 +94,7 @@ export function listPreflightConfirmationReasons(
     reasons.push("missing_doc_type");
   }
   if (!hasConfidentOrgMatch) {
-    reasons.push("low_confidence_org");
+    reasons.push(needsOrganizationScopeConfirmation(response) ? "organization_scope_unconfirmed" : "low_confidence_org");
   }
   return reasons;
 }
@@ -98,6 +103,7 @@ export const PREFLIGHT_CONFIRMATION_REASON_LABELS: Record<PreflightConfirmationR
   missing_report_year: "年份未识别到",
   missing_doc_type: "文档类型未识别到",
   low_confidence_org: "组织匹配置信度不足",
+  organization_scope_unconfirmed: "部门/单位归属待逐份确认",
 };
 
 /**
@@ -159,6 +165,18 @@ export function applyManualConfirmationOverride(
   }
 
   return base;
+}
+
+/** 批量部门预设不能代替对每份部门/单位材料的确认，否则两种材料会挤入同一版本序列。 */
+export function applyBatchConfirmationOverride(
+  response: PreflightResponseLike,
+  override: ManualConfirmationOverride,
+): PreflightResponseLike {
+  if (needsOrganizationScopeConfirmation(response)) {
+    const { organizationId: _organizationId, organizationName: _organizationName, ...metadata } = override;
+    return applyManualConfirmationOverride(response, metadata);
+  }
+  return applyManualConfirmationOverride(response, override);
 }
 
 // ---------------------------------------------------------------------------
@@ -290,6 +308,21 @@ export function selectDepartmentOptions(organizations: OrganizationRecordLike[])
     .filter((org) => org.level === "department")
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+}
+
+/** 单文件补齐允许选择部门和单位；显示上级与层级，避免同名节点混淆。 */
+export function selectReportOrganizationOptions(organizations: OrganizationRecordLike[]): Array<OrganizationRecordLike & { label: string }> {
+  const byId = new Map(organizations.map((org) => [org.id, org]));
+  return organizations
+    .filter((org) => org.level === "department" || org.level === "unit")
+    .map((org) => {
+      const parent = org.parent_id ? byId.get(org.parent_id) : undefined;
+      const label = org.level === "department"
+        ? `${org.name}（部门）`
+        : `${parent ? `${parent.name} › ` : ""}${org.name}（单位）`;
+      return { ...org, label };
+    })
+    .sort((a, b) => a.label.localeCompare(b.label, "zh-CN"));
 }
 
 /**
