@@ -29,7 +29,8 @@
 | 主仓库 HEAD（未改） | `57abcf86`（`codex/zcode-remediation`） |
 | 验收分支 | `codex/zcode-remediation-r3` |
 | 上一轮 checkpoint | `6bed8137` |
-| **最终冻结提交** | **`5892b7ba`**（`fix(ui): expose recheck entry for rule-only scope banner`） |
+| **最终代码冻结提交** | **`5892b7ba`**（`fix(ui): expose recheck entry for rule-only scope banner`） |
+| 最终验收 HEAD（含本报告） | 以 `final_manifest.json` 的 `acceptance_head` 为准 |
 | 最终补丁（相对 checkpoint，可应用到当前主工作树） | `scratch/ai_remediation_20261025/acceptance3/final_changes.patch` |
 | 最终补丁 SHA-256 | 以 `final_manifest.json` 的 `patch_sha256` 为准（补丁包含本报告，报告内不能自洽记录自身哈希） |
 | 全量补丁（相对 `57abcf86`，用于干净 checkout） | `scratch/ai_remediation_20261025/acceptance3/final_from_main_head.patch` |
