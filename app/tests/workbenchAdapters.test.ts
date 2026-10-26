@@ -12,7 +12,9 @@ import {
   formatPagesText,
   resolveIssueCountText,
   resolveFindingCountDetails,
+  resolveFindingCountSummary,
   resolveReviewEntryDecision,
+  summarizeCheckTracks,
 } from "../app/components/workspace/workbenchAdapters";
 
 // 本文件测试 Task 4 工作台总览的纯逻辑层（KPI 聚合/覆盖率聚合/质量告警派生/
@@ -339,5 +341,41 @@ assert.match(failedDecision.reason ?? "", /失败/);
 
 // 反例：可进入与不可进入的判定必须不同（防止恒真实现：一律 true 或一律 false）
 assert.notEqual(analyzingDecision.canEnter, resolveReviewEntryDecision(reviewJob("done")).canEnter);
+
+// --- summarizeCheckTracks：列表里每条检查线只占一个短语 -----------------------
+// 与真实落库同形：本地 89 条规则全部完成、大模型 2 段文本完成。
+const finishedTracks = summarizeCheckTracks({
+  local: { state: "completed", completed: 89, total: 89, percent: 100, unit: "条规则", current_step: "本地规则检查完成", failed: 0 },
+  ai: { state: "completed", completed: 2, total: 2, percent: 100, unit: "段文本", model: "gpt-6.1-sol", current_step: "大模型检查完成", failed: 0 },
+});
+assert.deepEqual(finishedTracks?.items, [
+  { key: "local", text: "本地 89/89", tone: "done" },
+  { key: "ai", text: "大模型 2/2", tone: "done" },
+]);
+// 单位、模型和步骤只进悬停说明，不在行里重复。
+assert.equal(finishedTracks?.detail, "本地检查：已完成 · 89/89 条规则 · 本地规则检查完成\n大模型检查：已完成 · 2/2 段文本 · 模型 gpt-6.1-sol · 大模型检查完成");
+// 未启用大模型必须明说，不能省略成只剩本地。
+assert.deepEqual(summarizeCheckTracks({ local: { state: "completed", completed: 89, total: 89 }, ai: { state: "skipped" } })?.items, [
+  { key: "local", text: "本地 89/89", tone: "done" },
+  { key: "ai", text: "大模型 未启用", tone: "muted" },
+]);
+assert.deepEqual(summarizeCheckTracks({ local: { state: "running", completed: 40, total: 89 }, ai: { state: "queued" } })?.items, [
+  { key: "local", text: "本地 40/89", tone: "active" },
+  { key: "ai", text: "大模型 排队中", tone: "muted" },
+]);
+assert.deepEqual(summarizeCheckTracks({ ai: { state: "degraded", completed: 1, total: 2, failed: 1 } })?.items, [
+  { key: "ai", text: "大模型 部分完成 1/2", tone: "warning" },
+]);
+assert.equal(summarizeCheckTracks({ ai: { state: "failed", failed: 2 } })?.detail, "大模型检查：失败（2 项失败）");
+assert.equal(summarizeCheckTracks(null), null);
+assert.equal(summarizeCheckTracks({}), null);
+// review_required 行的红线：检查摘要不得出现“分析完成”。
+assert.ok(!JSON.stringify(finishedTracks).includes("分析完成"));
+
+// --- resolveFindingCountSummary：问题副行压成一行 ------------------------------
+assert.deepEqual(resolveFindingCountSummary({ job_id: "a", tip_total: 2, review_candidate_total: 1, review_notice_total: 14 } as JobSummaryRecord),
+  { candidate: 1, others: ["提示 2", "复核事项 14"] });
+assert.deepEqual(resolveFindingCountSummary({ job_id: "b", tip_total: 0 } as JobSummaryRecord), { candidate: null, others: ["提示 0"] });
+assert.deepEqual(resolveFindingCountSummary({ job_id: "c" } as JobSummaryRecord), { candidate: null, others: [] });
 
 console.log("workbenchAdapters.test.ts passed");

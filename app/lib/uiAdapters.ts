@@ -23,6 +23,12 @@ const MEASURE_LABELS: Record<string, string> = {
   expenditure_actual: "支出决算金额",
   total_budget: "预算金额",
   budget_amount: "预算金额",
+  overseas: "因公出国（境）费",
+  vehicle_purchase_operation: "公务用车购置及运行费",
+  vehicle_subtotal: "公务用车购置及运行费",
+  vehicle_purchase: "公务用车购置费",
+  vehicle_operation: "公务用车运行费",
+  reception: "公务接待费",
 };
 
 function displayTableName(value: unknown): string {

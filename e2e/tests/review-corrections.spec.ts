@@ -86,6 +86,7 @@ test("读取校正：补录缺失的科目名称、指定列含义，带原页�
   await page.setViewportSize({width: 1440, height: 900});
   await correctionMocks(page, posted);
   await page.goto(`/review?job=${JOB_ID}`);
+  await page.getByTestId("gbc-review-tab-more").click();
   await page.getByTestId("gbc-review-tab-corrections").click();
   const card = page.getByTestId(`gbc-correction-table-${grantTable.fragment_uid}`);
   await expect(card).toContainText("待处理 2 格");
@@ -132,6 +133,7 @@ test("读取校正：确认表种、框选原页、补录新增行与整表数�
   await page.setViewportSize({width: 1440, height: 900});
   await correctionMocks(page, posted);
   await page.goto(`/review?job=${JOB_ID}`);
+  await page.getByTestId("gbc-review-tab-more").click();
   await page.getByTestId("gbc-review-tab-corrections").click();
 
   const card = page.getByTestId("gbc-correction-table-unknown-table");
@@ -190,6 +192,7 @@ test("读取校正：框选坐标按 MediaBox 平移矩阵换回解析坐标", a
   // 预览图相对解析坐标平移 (20, 30)：框选结果必须减回该偏移。
   await correctionMocks(page, posted, {"2": [1, 0, 0, 1, 20, 30]});
   await page.goto(`/review?job=${JOB_ID}`);
+  await page.getByTestId("gbc-review-tab-more").click();
   await page.getByTestId("gbc-review-tab-corrections").click();
 
   const card = page.getByTestId("gbc-correction-table-unknown-table");

@@ -2,6 +2,13 @@ import { buildDepartmentReportPageLocally } from "../../app/app/components/repor
 import type { JobSummaryRecord } from "../../app/lib/uiAdapters";
 import { expect, test, type Page } from "../../app/node_modules/playwright/test";
 
+/** 问题列表按需展开：断言列表行之前先展开（已展开时不重复点击）。 */
+async function openIssueList(page: Page) {
+  const toggle = page.getByTestId("gbc-review-toggle-list");
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  await expect(page.getByTestId("gbc-review-list-panel")).toBeVisible();
+}
+
 async function mockSession(page: Page) {
   await page.context().addCookies([{ name: "gbc_session", value: "e2e-session", url: "http://127.0.0.1:3000", sameSite: "Lax" }]);
 }
@@ -25,7 +32,9 @@ test("来源按钮显示完整 AI/规则结果，共同发现仍可单独查看�
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
   });
   await page.goto("/review?job=source-fixture");
-  await page.getByTestId("gbc-review-toggle-filters").click();
+  // AI 侧与规则侧一致时，必须处理的是合并结果里的规则条目；AI 侧原条目在参考页签。
+  await page.getByTestId("gbc-review-tab-reference").click();
+  await openIssueList(page);
   await page.getByTestId("gbc-review-source-ai").click();
   await expect(page.getByTestId("gbc-review-issue-card-ai-common")).toBeVisible();
   await expect(page.getByTestId("gbc-review-issue-card-rule-common")).toHaveCount(0);
@@ -34,6 +43,8 @@ test("来源按钮显示完整 AI/规则结果，共同发现仍可单独查看�
   await expect(page.getByTestId("gbc-review-pdf-page-input")).toHaveValue("2");
   await expect(page.getByTestId("gbc-review-evidence-highlight")).toBeVisible();
   await expect(page.getByTestId("gbc-review-ai-location-unavailable")).toHaveCount(0);
+  await page.getByTestId("gbc-review-tab-issues").click();
+  await openIssueList(page);
   await page.getByTestId("gbc-review-source-rule").click();
   await expect(page.getByTestId("gbc-review-issue-card-rule-common")).toBeVisible();
   await page.getByTestId("gbc-review-source-common").click();

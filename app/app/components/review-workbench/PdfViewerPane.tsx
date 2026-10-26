@@ -49,6 +49,17 @@ export interface PdfViewerPaneProps {
   regionPick?: { active: boolean; label?: string } | null;
   onRegionPicked?: (region: { physical_page: number; bbox: number[] }) => void;
   onRegionPickCancel?: () => void;
+  /** 同一勾稽的其他证据（合计/明细），在当前页淡色标出；当前证据仍用主框。 */
+  relatedRefs?: PdfRelatedRef[];
+  /** 当前定位说明；用户翻走或滚走后可一键回到证据位置。 */
+  locator?: { label: string; page: number } | null;
+}
+
+export interface PdfRelatedRef {
+  key: string;
+  page: number;
+  bbox?: number[];
+  tone: "total" | "item";
 }
 
 /** MediaBox 原点与预览页不一致时的仿射逆变换（preview → 解析坐标）。 */
@@ -68,7 +79,7 @@ function buildPageImageUrl(jobId: string, page: number, renderScale: number): st
 }
 
 export function PdfViewerPane({ jobId, totalPages, currentPage, onPageChange, highlightedProblem, leadingControls,
-  regionPick, onRegionPicked, onRegionPickCancel }: PdfViewerPaneProps) {
+  regionPick, onRegionPicked, onRegionPickCancel, relatedRefs, locator }: PdfViewerPaneProps) {
   const [scalePercent, setScalePercent] = useState(DEFAULT_SCALE_PERCENT);
   const [fitWidth, setFitWidth] = useState(true);
   const [loadedImage, setLoadedImage] = useState<{ url: string; width: number; height: number } | null>(null);
@@ -77,6 +88,7 @@ export function PdfViewerPane({ jobId, totalPages, currentPage, onPageChange, hi
   const [pageInputError, setPageInputError] = useState("");
   const [pickStart, setPickStart] = useState<{ x: number; y: number } | null>(null);
   const [pickCurrent, setPickCurrent] = useState<{ x: number; y: number } | null>(null);
+  const [relocateTick, setRelocateTick] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const pageGeometry = usePageGeometry(jobId);
@@ -149,6 +161,13 @@ export function PdfViewerPane({ jobId, totalPages, currentPage, onPageChange, hi
       : []);
   const isAiSelected = selectedSources.includes("ai");
   const isRuleSelected = selectedSources.includes("rule");
+  const relatedBoxes = (relatedRefs ?? []).flatMap((ref) => {
+    if (ref.page !== currentPage || !ref.bbox) return [];
+    // 与主框同一位置的不再重复画。
+    if (overlayProblem?.bbox && ref.bbox.every((value, index) => Math.abs(value - (overlayProblem.bbox?.[index] ?? NaN)) < 0.01)) return [];
+    const box = computeOverlayBoxAtScale(toPreviewBbox(ref.bbox, currentPage, pageGeometry), naturalSize, renderScale);
+    return box ? [{ ...ref, box }] : [];
+  });
   const showUnlocatedAiNotice = Boolean(
     highlightedProblem
     && isAiSelected
@@ -202,7 +221,7 @@ export function PdfViewerPane({ jobId, totalPages, currentPage, onPageChange, hi
     viewport.scrollTop = overlayTop === undefined
       ? 0 : Math.max(0, imageTop + img.clientHeight * overlayTop / 100 - viewport.clientHeight * 0.25);
     viewport.scrollLeft = 0;
-  }, [imageUrl, naturalSize, highlightedProblem?.id, overlayTop, overlayLeft]);
+  }, [imageUrl, naturalSize, highlightedProblem?.id, overlayTop, overlayLeft, relocateTick]);
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="gbc-review-pdf-viewer">
@@ -282,6 +301,22 @@ export function PdfViewerPane({ jobId, totalPages, currentPage, onPageChange, hi
         >适合宽度</button>
       </div>
 
+      {locator ? (
+        <div className="flex shrink-0 items-center gap-2 border-b border-primary-100 bg-primary-50 px-3 py-1 text-[11px] text-primary-700" data-testid="gbc-review-pdf-locator">
+          <span className="min-w-0 flex-1 truncate" title={locator.label}>
+            {locator.page === currentPage ? "当前证据" : "所选证据"}：{locator.label} · 第 {locator.page} 页
+          </span>
+          <button
+            type="button"
+            className="shrink-0 font-medium hover:underline"
+            data-testid="gbc-review-pdf-relocate"
+            onClick={() => {
+              if (locator.page !== currentPage) onPageChange(locator.page);
+              else setRelocateTick((value) => value + 1);
+            }}
+          >重新定位</button>
+        </div>
+      ) : null}
       {!selectedOtherPage && highlightedProblem?.page && new Set(highlightedProblem.evidenceRefs?.map((ref) => ref.page)).size > 1 ? (
         <div className="shrink-0 border-b border-border px-3 py-1 text-xs text-slate-500">
           当前证据：PDF 第 {currentPage} 页。此问题含多页证据，可点击问题卡下方的引用切换。
@@ -378,9 +413,20 @@ export function PdfViewerPane({ jobId, totalPages, currentPage, onPageChange, hi
               ) : null}
             </div>
           ) : null}
+          {relatedBoxes.map((ref) => (
+            <div
+              key={ref.key}
+              className={`pointer-events-none absolute z-[5] rounded-sm border ${ref.tone === "total" ? "border-primary-400 bg-primary-100/40" : "border-warning-400 bg-warning-100/40"}`}
+              style={getProblemOverlayStyle(ref.box)}
+              data-testid="gbc-review-related-highlight"
+              data-tone={ref.tone}
+            />
+          ))}
           {overlayBox && overlayProblem ? (
             <>
-              <div
+              {/* 问题证据的说明在上方定位条里，框上不再贴标签压住原文；
+                  读取校正对照原页时没有定位条，仍保留标签。 */}
+              {overlayProblem.source === "manual_correction" ? <div
                 className="pointer-events-none absolute z-20"
                 style={getProblemOverlayLabelStyle(overlayBox)}
                 data-testid="gbc-review-evidence-label"
@@ -396,7 +442,7 @@ export function PdfViewerPane({ jobId, totalPages, currentPage, onPageChange, hi
                       : `${isAiSelected && isRuleSelected ? "共同发现原文" : isAiSelected ? "大模型引用原文" : "本地规则证据"} · ${overlayProblem.ruleId}`}
                   </span>
                 </div>
-              </div>
+              </div> : null}
               <div
                 className={`pointer-events-none absolute z-10 rounded-sm border-2 ${isAiSelected ? "border-info-700 bg-info-50/40" : "border-warning-700 bg-warning-50/50"}`}
                 style={getProblemOverlayStyle(overlayBox)}
@@ -406,6 +452,13 @@ export function PdfViewerPane({ jobId, totalPages, currentPage, onPageChange, hi
           ) : null}
         </div>
       </div>
+      {relatedBoxes.length > 0 ? (
+        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-0.5 border-t border-border bg-white px-3 py-1 text-[11px] text-slate-500" data-testid="gbc-review-pdf-legend">
+          <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm border border-primary-400 bg-primary-100" />合计</span>
+          <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm border border-warning-400 bg-warning-100" />明细</span>
+          <span>粗框为当前证据，点右侧计算明细可逐项定位</span>
+        </div>
+      ) : null}
     </div>
   );
 }

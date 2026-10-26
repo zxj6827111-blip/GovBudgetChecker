@@ -1,4 +1,11 @@
-import { expect, test } from "../../app/node_modules/playwright/test";
+import { expect, test, type Page } from "../../app/node_modules/playwright/test";
+
+/** 问题列表按需展开：断言列表行之前先展开（已展开时不重复点击）。 */
+async function openIssueList(page: Page) {
+  const toggle = page.getByTestId("gbc-review-toggle-list");
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  await expect(page.getByTestId("gbc-review-list-panel")).toBeVisible();
+}
 
 test("表文跨页定位保持页码和框配对；输入跳页、错误页码和返回证据同步", async ({ page }) => {
   await page.context().addCookies([{ name: "gbc_session", value: "e2e-session", url: "http://127.0.0.1:3000", sameSite: "Lax" }]);
@@ -21,7 +28,7 @@ test("表文跨页定位保持页码和框配对；输入跳页、错误页码�
     return route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
   });
   await page.goto("/review?job=location-fixture");
-  await page.getByTestId("gbc-review-toggle-filters").click();
+  await openIssueList(page);
   await page.getByTestId("gbc-review-source-rule").click();
   await page.getByTestId("gbc-review-issue-card-rule-cross-page").click();
   const input = page.getByTestId("gbc-review-pdf-page-input");
@@ -49,6 +56,9 @@ test("表文跨页定位保持页码和框配对；输入跳页、错误页码�
   await page.getByTestId("gbc-review-pdf-jump").click();
   await expect(page.getByTestId("gbc-review-pdf-viewer").getByRole("alert")).toContainText("1–46");
   await expect(page.getByTestId("gbc-review-pdf-page-image")).toHaveAttribute("alt", "第 28 页");
+  // 待人工核实的 AI 条目在参考页签。
+  await page.getByTestId("gbc-review-tab-reference").click();
+  await openIssueList(page);
   await page.getByTestId("gbc-review-source-ai").click();
   await page.getByTestId("gbc-review-issue-card-ai-repeat").click();
   await expect(input).toHaveValue("39");

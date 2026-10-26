@@ -18,7 +18,6 @@
  */
 
 import {
-  invalidationReasonLabel,
   reviewStatusLabel,
   reviewStatusTone,
 } from "../../../lib/reviewLifecyclePresentation";
@@ -452,11 +451,8 @@ export function resolveReviewBadge(
   }
   const invalidated = latestInvalidatedSession(review);
   if (invalidated) {
-    const reason = invalidationReasonLabel(invalidated.invalidated_reason);
-    return {
-      tone: reviewStatusTone(invalidated.status),
-      label: reason ? `复核已失效 · ${reason}` : "复核已失效",
-    };
+    // 徽章只说状态；失效原因在操作提示里说一次，不在顶栏重复。
+    return { tone: reviewStatusTone(invalidated.status), label: "复核已失效" };
   }
   return null;
 }
