@@ -146,6 +146,11 @@ def cluster_source_errors(rule, issues):
     groups, retained = {}, []
     for issue in issues:
         location = issue.location if isinstance(issue.location, dict) else {}
+        # 支出纵向关系还需与 V33-120 按同一原格操作数去重；提前把不同
+        # 金额列揉成一条，会丢失单一算式身份，导致跨规则重复问题无法合并。
+        if rule.code == "V33-241" and ":expenditure:vertical:" in str(issue.check_relation_id):
+            retained.append(issue)
+            continue
         if issue.severity not in {"error", "warn"} or not location.get("table_code"):
             retained.append(issue)
             continue
