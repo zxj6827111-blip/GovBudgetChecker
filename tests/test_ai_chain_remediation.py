@@ -602,6 +602,42 @@ async def test_locator_without_text_does_not_call_model() -> None:
     assert enhanced.evidence == finding.evidence
 
 
+@pytest.mark.asyncio
+async def test_specialty_failure_is_attributed_to_its_own_window() -> None:
+    service = AIFindingsService(AnalysisConfig(ai_enabled=True))
+    service.page_offsets = [(0, 20, 1), (21, 41, 2)]
+
+    async def fake_audit(window_text: str, _doc_hash: str, structured_context=None):
+        window_id = 0 if window_text.startswith("A") else 1
+        return AuditIssueList(
+            [],
+            AuditOutcome(
+                status="partial",
+                errors=[
+                    {
+                        "specialty": "narrative_consistency",
+                        "reason": "call_failed",
+                        "error": "server_error",
+                    }
+                ],
+                calls=[{"specialty": "narrative_consistency", "status": "error"}],
+            ),
+        )
+
+    service.ai_client.ai_full_report_audit = fake_audit
+    windows = [
+        TextWindow(window_id=0, start=0, end=20, text="A" * 20, pages=[1]),
+        TextWindow(window_id=1, start=21, end=41, text="B" * 20, pages=[2]),
+    ]
+    results = await service._run_window_audits(windows, "hash", 41)
+    assert len(results) == 2
+    failures = [
+        item for item in service.ai_errors if item.get("type") == "audit_specialty_failed"
+    ]
+    assert {item.get("window_index") for item in failures} == {0, 1}
+    assert all(item.get("specialty") == "narrative_consistency" for item in failures)
+
+
 # 12. 超出窗口上限时覆盖与执行状态如实显示 --------------------------------------
 @pytest.mark.asyncio
 async def test_window_limit_records_uncovered_range_and_degrades_execution() -> None:

@@ -432,7 +432,12 @@ export function IssuesTab({
               {sourceFindings.aiCoverage ? (
                 <span data-testid="gbc-review-ai-coverage">
                   检查覆盖：{aiCoverageLabel(sourceFindings.aiCoverage.status)}
-                  （{sourceFindings.aiCoverage.completed_calls ?? 0}/{sourceFindings.aiCoverage.planned_calls ?? 0} 个检查单元）
+                  （已处理 {sourceFindings.aiCoverage.completed_calls ?? 0}/{sourceFindings.aiCoverage.planned_calls ?? 0}
+                  {(sourceFindings.aiCoverage.failed_calls ?? 0) > 0 ? `；失败 ${sourceFindings.aiCoverage.failed_calls}` : ""}
+                  {(sourceFindings.aiCoverage.partial_calls ?? 0) > 0 ? `；部分 ${sourceFindings.aiCoverage.partial_calls}` : ""}
+                  {(sourceFindings.aiCoverage.invalid_calls ?? 0) > 0 ? `；非法响应 ${sourceFindings.aiCoverage.invalid_calls}` : ""}
+                  {(sourceFindings.aiCoverage.truncated_calls ?? 0) > 0 ? `；截断 ${sourceFindings.aiCoverage.truncated_calls}` : ""}
+                  ）
                 </span>
               ) : null}
               <span>本地规则：{sourceFindings.ruleFindingCount} 条发现</span>

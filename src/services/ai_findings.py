@@ -1042,6 +1042,21 @@ class AIFindingsService:
                 kept_issues.append(issued)
 
             status = str(outcome_dict.get("status") or "unknown")
+            for error in outcome_dict.get("errors") or []:
+                if not isinstance(error, dict) or error.get("reason") != "call_failed":
+                    continue
+                self.ai_errors.append(
+                    {
+                        "type": "audit_specialty_failed",
+                        "window_index": window.window_id,
+                        "window_start": window.start,
+                        "window_end": window.end,
+                        "pages": list(window.pages),
+                        "specialty": error.get("specialty"),
+                        "error": error.get("error"),
+                        "timestamp": time.time(),
+                    }
+                )
             if status in {"invalid", "truncated", "partial", "error"}:
                 self.ai_errors.append(
                     {
