@@ -232,7 +232,9 @@ export function deriveAiScope(
   if (requested === false) {
     headline = "大模型文字复核：本次未执行";
     summary = "以下仅有本地规则结果，不能据此认为文字语义已经检查。";
-    scopeLine = "错别字、多字漏字、病句、说明理由是否充分等文字语义检查未执行。";
+    scopeLine = "错别字、多字漏字、病句、说明理由是否充分等文字语义检查未执行；可在任务页使用大模型重新分析补检。";
+    // 纯规则任务也要给出可执行的补检入口，而不是只写“未执行”。
+    needsRecheck = true;
   } else if (!coverage && requested === null && !state) {
     headline = "大模型检查状态与覆盖：未记录";
     summary = "历史结果没有保存 AI 是否执行、检查了哪些范围。";
