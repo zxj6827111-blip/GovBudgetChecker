@@ -5,7 +5,7 @@
 
 ## 0. 切换结论
 
-**核验通过，允许切换。正式切换使用生产构建 `next build` + `next start`，不使用 `next dev`。**
+**核验通过，已完成正式切换并稳定运行。正式服务使用生产构建 `next build` + `next start`，不使用 `next dev`。**
 
 业务口径已确认：
 
@@ -30,7 +30,7 @@
 | 主仓库 HEAD（未改） | `57abcf86`（`codex/zcode-remediation`） |
 | 验收分支 | `codex/zcode-remediation-r3` |
 | 上一轮 checkpoint | `6bed8137` |
-| **最终代码冻结提交** | **`e34f1009`**（`fix(history): show version-bound human decisions and scope workflow responses`） |
+| **最终代码冻结提交** | **`df269dd1`**（历史版本提示与当前确认投影收口；含 `e34f1009`、`d2b92670`） |
 | 最终验收 HEAD（含本报告） | 以 `final_manifest.json` 的 `acceptance_head` 为准 |
 | 最终补丁（相对 checkpoint，可应用到当前主工作树） | `scratch/ai_remediation_20261025/acceptance3/final_changes.patch` |
 | 最终补丁 SHA-256 | 以 `final_manifest.json` 的 `patch_sha256` 为准（补丁包含本报告，报告内不能自洽记录自身哈希） |
@@ -245,3 +245,51 @@ git status --porcelain=v1 > /path/to/backup/status.txt
 - 补检按钮：`RECHECK_click_result.json`、`RECHECK_after_status.json`、`RECHECK_after_workflow.json`
 - 生产构建/启动：`frontend_build.log`、`frontend_prod.log`、`production_page_evidence.json`、`prod_replay_S1.png`
 - 测试：`targeted_pytest_final.log`、`full_pytest_final2.log`、`frontend_unit_frozen.log`、`e2e_production_frozen.log`
+
+## 10. 正式切换执行结果
+
+执行时间：2026-10-26（北京时间）；受控维护窗口内完成。
+
+### 10.1 服务与版本
+
+| 项 | 结果 |
+| --- | --- |
+| 主工作树原 HEAD | `57abcf86`（原有 3 个修改 + 未跟踪文档保留，未 reset） |
+| 应用的冻结补丁 | `final_changes.patch`，应用前 `git apply --check` 通过 |
+| 最终代码冻结提交 | `df269dd1` |
+| 正式后端 | `127.0.0.1:18743`，PID 92767，**无 `--reload`**，日志 `output/backend-prod-20261026.log` |
+| 正式前端 | `127.0.0.1:3000`，PID 93776，生产构建 + `next start`，`BACKEND_URL=http://127.0.0.1:18743`，日志 `output/frontend-prod-20261026.log` |
+| 构建 | 主工作树 `npm run build` 退出码 0；`next start` Ready |
+| 验收实例 | 18745/3011/3012 已关闭（见 §10.4），保留证据与验收库 |
+
+### 10.2 正式入口冒烟
+
+- 登录 3000：200；任务页 `/task/5784989e...`：历史面板显示 12 条已确认记录，含 `备注/操作人/时间/版本`；CSV 下载 200。
+- 复核页 `/review?job=5784989e...`：正常渲染，AI 范围条明确“本次未执行”。
+- 权限（正式库）：临时普通用户 `regular_formal`（仅授权 S1 部门）——授权读取任务 200；越权读取无权限任务 403；访问用户管理 403；越权写工作流 403。权限测试后已将其停用/仅保留审计记录。
+- 受控小样本 `97f16129...`：
+  - 新分析 AI 覆盖完整（2/2）；规则 21 条；
+  - 人工确认 `缺失预算表` 写入成功，任务页显示 `已确认/备注 formal-switch-smoke/操作人 admin/时间`；
+  - 真实重新分析生成新 revision `rev-20261026T044124-4f6c1ef7`；当前页提示“重新分析已生成新版本，本版本需重新确认”，选择旧 revision 后显示旧意见完整信息；旧 revision 仍可查。
+  - 实际 CSV 200，`FORMAL_report.csv`。
+- 解释字段/双方证据（同生产构建，回放任务）：
+  - `formal_replay_S1_...` 页面显示“当前值/应为/差额”“模型声称，尚未经程序核实”、第13/20页跨段证据；CSV 200。
+  - 明确标注：这是已保存真实响应的回放，不是新的模型调用。
+
+### 10.3 备份与恢复
+
+- 切换窗口内、主服务停止后重新备份：`backups/20261026-ai-chain-switch-window/`
+  - `fiscal_db.dump` SHA-256 `18f0d96942c096801a7283880b24c5350b62f2227fb608424abad7b5af805070`
+  - uploads 3.0G、data 2.6M、`.env` 600；样本 PDF 哈希 MATCH。
+- 切换前已将旧备份恢复到隔离库 `gbc_restore_drill_20261026b`：`pg_restore` 0 错误，`analysis_jobs=285`、`analysis_results=283`、`workflow_issue_records=75`、`fiscal_document_versions=109`。
+- 回滚原则：优先回退代码/启动配置；不得无条件整库恢复或覆盖 `uploads/data`。若确需恢复，先保全切换后新增任务/文件，再按 §7.4 执行并说明影响。
+
+### 10.4 验收实例关闭
+
+正式服务稳定并完成证据归档后，关闭本轮验收实例（按已核实的端口/PID）：
+
+- 18745 验收后端；
+- 3011/3012 验收前端（3011 已在构建前停止，3012 在最终证据归档后停止）。
+
+保留：验收库 `gbc_acceptance_20261025_r3`、`gbc_restore_drill_20261026b`、`~/gbc-acceptance-r3` worktree 与全部截图/CSV/日志。正式服务 18743/3000 保持运行。
+
