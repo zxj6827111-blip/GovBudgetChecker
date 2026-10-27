@@ -503,10 +503,12 @@ def _problem_blockers(problems: List[ReviewProblem], decisions: Dict[str, str]) 
     """
     pending = 0
     needs_review = 0
+    from src.services.review_problem_set import problem_status
+
     for problem in problems:
         if not problem.is_blocking_candidate:
             continue
-        status = str(decisions.get(problem.issue_id) or "pending").strip() or "pending"
+        status = problem_status(problem, decisions)
         if status in RESOLVED_ISSUE_STATUSES:
             continue
         if status == "needs_review":

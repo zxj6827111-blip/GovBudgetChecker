@@ -176,6 +176,13 @@ def test_unresolved_total_le_15(replays):
         item=replays[alias]['unresolved']['V33-224']
         assert item['status']=='insufficient_data' and item['detail']=='因公出国说明或表内决算金额未唯一识别'
         planned_missing+=1
+    # 批次1 V33-251：原文确有未标单位的声明（yichuan“支出决算为4.19”、
+    # shiquan 年初预算同类），按合同不得把该部分并入完整分项加总；规则保留
+    # 已确认差额问题并转 insufficient_data，属于计划内取数不足。
+    for alias, label in (("yichuan", "支出决算"), ("shiquan", "年初预算")):
+        item = replays[alias]["unresolved"]["V33-251"]
+        assert "未纳入合计" in item["detail"] and label in item["detail"]
+        planned_missing += 1
     assert replays['shiquan']['summary']['rule_statuses']['V33-234'] == 'fail'
     assert any(issue.rule == 'V33-234' and '312.55%' in issue.message
                and '20.00' in issue.message and '62.51' in issue.message for issue in replays['shiquan']['issues'])
@@ -265,7 +272,10 @@ def test_yichuan_output_budget(replays):
     issues = replays["yichuan"]["issues"]
     checklist = [i for i in issues if getattr(i, "rule", "") in {"CMM-013", "V33-251"}]
     assert len(checklist) == 2
-    assert len(issues) - len(checklist) <= 13
+    # 批次1 年份角色修复恢复了完成率复算：yichuan 声明 98%，按
+    # 20707.11→20218.21 应为 97.64%，相差 0.36pp；这是真实新增发现，
+    # 不是回归，也不能为了维持旧条数而删除检查。
+    assert len(issues) - len(checklist) <= 14
 
 
 # ---------------------------------------------------------------------------

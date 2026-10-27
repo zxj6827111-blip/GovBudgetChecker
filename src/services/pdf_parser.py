@@ -112,7 +112,7 @@ def _stable_fragment_uid(*parts: Any, rows: Optional[Sequence[Sequence[str]]] = 
 #: 解析器指纹：表抽取策略组合变化时必须更新（缓存按指纹失效）
 from src.services.input_processing_identity import processing_manifest, processing_config_fingerprint, SCHEMA_VERSION
 
-PARSER_FINGERPRINT = "pdfplumber-cells-v28-snap6-trusted-input-" + processing_manifest()["sha256"][:16]
+PARSER_FINGERPRINT = "pdfplumber-cells-v29-label-visibility-" + processing_manifest()["sha256"][:16]
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +236,7 @@ class PDFParser:
                 file_hash=file_hash,
                 config_fingerprint=config_fingerprint,
                 ocr_model_fingerprint=ocr_model_fingerprint,
+                pdf_path=str(path),
             )
 
     def build_parse_artifact_from_handle(
@@ -245,6 +246,7 @@ class PDFParser:
         file_hash: str,
         config_fingerprint: str = "",
         ocr_model_fingerprint: Optional[str] = None,
+        pdf_path: Optional[str] = None,
     ) -> ParseArtifact:
         """从已打开的 pdfplumber 句柄构建解析对象（供子进程复用同一次打开）。"""
         page_states: List[ParsePageState] = []
@@ -254,6 +256,13 @@ class PDFParser:
         self._source_grid_fragments = []
         self._cell_candidate_tables = []
         self._reconstruction_decisions = []
+        self._label_visibility_stats = []
+        from src.services.native_label_visibility import VisibilityResolver
+
+        visibility = VisibilityResolver(
+            pdf_path or getattr(getattr(pdf, "stream", None), "name", None)
+        )
+        self._visibility_resolver = visibility
 
         page_count = len(pdf.pages)
         for page_number, page in enumerate(pdf.pages, start=1):
@@ -308,6 +317,12 @@ class PDFParser:
 
         merged = self._coalesce_tables(fragments)
         manifest = processing_manifest()
+        from src.services.native_label_visibility import POLICY_VERSION, recovery_enabled
+        visibility_stats = list(getattr(self, "_label_visibility_stats", []) or [])
+        visibility_available = visibility.available
+        visibility_error = visibility.error
+        visibility.close()
+        self._visibility_resolver = None
         artifact = ParseArtifact(
             source_file_hash=file_hash,
             schema_version=SCHEMA_VERSION,
@@ -330,6 +345,16 @@ class PDFParser:
                 self._build_logical_instance(table)
                 for table in merged
             ],
+            label_visibility={
+                "policy_version": POLICY_VERSION,
+                "enabled": recovery_enabled(),
+                "available": visibility_available,
+                "source_error": visibility_error,
+                "tables": visibility_stats,
+                "recovered_total": sum(int(item.get("recovered") or 0) for item in visibility_stats),
+                "conflict_total": sum(int(item.get("conflicts") or 0) for item in visibility_stats),
+                "skipped_total": sum(int(item.get("skipped") or 0) for item in visibility_stats),
+            },
         )
         from src.services.source_reconstruction import attach_reconstruction
         attach_reconstruction(artifact, self._cell_candidate_tables + fragments)
@@ -438,6 +463,22 @@ class PDFParser:
                 self._certify_native_blank_cells(page, parsed.cells, method_name)
                 parsed = repair_native_dimensions(page, parsed, reference=reference)
                 parsed = repair_native_code_baselines(page, parsed)
+                # 单元格级名称恢复须在结构/折行恢复之后：只删除可证明被裁剪的字符，
+                # 金额、编码与角色不明的格只留冲突证据。
+                from src.services.native_label_visibility import (
+                    recover_label_cells, table_name_and_code_columns,
+                )
+                visibility = getattr(self, "_visibility_resolver", None)
+                page_visibility = visibility.page(page_number) if visibility is not None else None
+                if page_visibility is not None:
+                    name_columns, code_columns = table_name_and_code_columns(parsed)
+                    parsed, visibility_stats = recover_label_cells(
+                        page, parsed, code_columns=code_columns, name_columns=name_columns,
+                        page_visibility=page_visibility,
+                    )
+                    if visibility_stats.get("recovered") or visibility_stats.get("conflicts") \
+                            or visibility_stats.get("skipped"):
+                        self._label_visibility_stats.append(visibility_stats)
                 # 裁决前给所有候选补齐同一原页的字符证明。恢复路径只给改动格
                 # 留证明，不能拿这些稀疏记录与另一候选的完整证明直接比数量。
                 from src.services.native_structure_recovery import bind_native_grid_character_sources

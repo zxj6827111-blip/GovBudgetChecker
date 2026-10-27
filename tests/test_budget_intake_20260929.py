@@ -463,6 +463,12 @@ def test_finals_unresolved_total_le_11(final_replays):
         item=next(x for x in final_replays[alias]['summary']['unresolved_rules']if x['rule_id']=='V33-224')
         assert item['status']=='insufficient_data' and item['detail']=='因公出国说明或表内决算金额未唯一识别'
         added+=1
+    # 批次1 V33-251：原文存在未标单位的声明，不能把该部分当成完整分项加总。
+    for alias in ('yichuan','shiquan'):
+        item=next(x for x in final_replays[alias]['summary']['unresolved_rules']
+                  if x['rule_id']=='V33-251')
+        assert '未纳入合计' in item['detail']
+        added+=1
     # IR-12 读全“主体+2025 / 年度部门决算”封面后，原有未知主体阻断解除；应暴露原件真实完成率问题。
     assert final_replays['shiquan']['summary']['rule_statuses']['V33-234'] == 'fail'
     assert any(issue.rule == 'V33-234' and '312.55%' in issue.message
@@ -480,7 +486,9 @@ def test_yichuan_findings_stay_12(final_replays):
     issues = final_replays["yichuan"]["issues"]
     checklist = sorted(i.rule for i in issues if i.rule in {"CMM-013", "V33-251"})
     assert checklist == ["CMM-013", "V33-251"]
-    assert len(issues) - len(checklist) == 13
+    # 批次1 年份角色修复新增一条真实完成率复算发现（97.64% vs 98%），
+    # 非清单项由 13 条增至 14 条。
+    assert len(issues) - len(checklist) == 14
 
 
 def test_wenlv_cascade_still_zero(final_replays):

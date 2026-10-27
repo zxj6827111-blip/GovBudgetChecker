@@ -132,6 +132,12 @@ _CSV_FIELDNAMES: List[str] = [
     "fact_migration_status",
     "analysis_revision",
     "check_relation_id",
+    "problem_group_id",
+    "defect_type",
+    "source_anchor",
+    "related_rule_ids",
+    "member_issue_ids",
+    "related_problem_group_ids",
     "fact_ids",
     "evidence_ids",
     "human_decision",
@@ -819,6 +825,7 @@ def _build_csv_row(issue: Dict[str, Any]) -> Dict[str, Any]:
     role_summary = export_location.get("role_summary") or ""
     suggestion = _resolve_suggestion(enriched)
     human_decision = enriched.get("human_decision") if isinstance(enriched.get("human_decision"), dict) else {}
+    location = enriched.get("location") if isinstance(enriched.get("location"), dict) else {}
     row = {
         # record_type（ZC-00）：区分问题行与摘要行；ZC-04 将扩展为
         # 摘要/问题/提示/待复核/检查五类完整记录
@@ -905,6 +912,20 @@ def _build_csv_row(issue: Dict[str, Any]) -> Dict[str, Any]:
         "obligation_ids": _format_obligation_ids(enriched),
         "analysis_revision": human_decision.get("analysis_revision") or enriched.get("analysis_revision") or "",
         "check_relation_id": enriched.get("check_relation_id") or "",
+        "problem_group_id": str(location.get("problem_group_id") or ""),
+        "defect_type": str(location.get("defect_type") or ""),
+        "source_anchor": (
+            json.dumps(location.get("source_anchor"), ensure_ascii=False)
+            if location.get("source_anchor") else ""
+        ),
+        "related_rule_ids": json.dumps(
+            enriched.get("related_rule_ids") or location.get("related_rule_ids") or [],
+            ensure_ascii=False),
+        "member_issue_ids": json.dumps(
+            enriched.get("merged_issue_ids") or location.get("merged_issue_ids")
+            or location.get("member_issue_ids") or [], ensure_ascii=False),
+        "related_problem_group_ids": json.dumps(
+            location.get("related_problem_group_ids") or [], ensure_ascii=False),
         "fact_ids": json.dumps(enriched.get("fact_ids") or [], ensure_ascii=False),
         "evidence_ids": json.dumps(enriched.get("evidence_ids") or [], ensure_ascii=False),
         "human_decision": human_decision.get("status") or "",

@@ -76,6 +76,8 @@ class ReviewProblem:
     title: str
     severity: str
     is_formal: bool
+    #: 已并组成员（旧成员报告 id）。只用于兼容查询；门禁仍只按 issue_id 计一次。
+    member_issue_ids: tuple = ()
 
     @property
     def is_blocking_candidate(self) -> bool:
@@ -330,6 +332,13 @@ def collect_review_problems(
             # 否则会出现"页面上没有这条问题，却永远完不成复核"的死局。
             continue
         structured_item = _text(item.get("source")) == PROBLEM_SOURCE_STRUCTURED_REVIEW
+        members = []
+        for container in (item, item.get("location") if isinstance(item.get("location"), dict) else {}):
+            for key in ("merged_issue_ids", "member_issue_ids"):
+                value = container.get(key) if isinstance(container, dict) else None
+                if isinstance(value, list):
+                    members.extend(str(entry) for entry in value if entry)
+        members = tuple(dict.fromkeys(entry for entry in members if entry and entry != issue_id))
         problems.append(
             ReviewProblem(
                 issue_id=issue_id,
@@ -350,9 +359,44 @@ def collect_review_problems(
                         and is_formal_finding(item)
                     )
                 ),
+                member_issue_ids=members,
             )
         )
     return problems
+
+
+def resolve_member_issue_id(problems: Sequence[ReviewProblem], requested: str) -> Optional[str]:
+    """把旧成员报告 id 解析为当前规范组 id；歧义/不存在返回 None（fail-closed）。"""
+    requested = _text(requested)
+    if not requested:
+        return None
+    if any(problem.issue_id == requested for problem in problems):
+        return requested
+    matches = [problem.issue_id for problem in problems if requested in problem.member_issue_ids]
+    return matches[0] if len(matches) == 1 else None
+
+
+def problem_status(problem: ReviewProblem, decisions: Dict[str, str]) -> str:
+    """一条规范问题的当前人工状态。
+
+    规范 id 的决定优先；没有时兼容旧成员 id：
+    - 成员决定唯一 → 视为该组的决定（读取时收敛，不重写历史事件）；
+    - 成员决定互相冲突 → ``needs_review``（必须重新确认，不能挑一个）；
+    - 都没有 → ``pending``。
+    """
+    direct = _text(decisions.get(problem.issue_id))
+    if direct:
+        return direct
+    member_statuses = sorted({
+        _text(decisions.get(member)) for member in problem.member_issue_ids
+        if _text(decisions.get(member))
+    })
+    if len(member_statuses) == 1:
+        return member_statuses[0]
+    if len(member_statuses) > 1:
+        return "needs_review"
+    return "pending"
+
 
 
 def build_issue_counts(
@@ -378,7 +422,7 @@ def build_issue_counts(
     for problem in problems:
         if not problem.is_blocking_candidate:
             continue
-        status = _text(decisions.get(problem.issue_id)) or "pending"
+        status = problem_status(problem, decisions)
         if status not in counts:
             # 未知状态码一律按待处理处理：把不认识的值当成"已处理"，
             # 等于让一个拼错的状态码静默放行复核。
@@ -393,4 +437,6 @@ __all__ = [
     "STRUCTURED_REVIEW_ID_MARKER",
     "collect_review_problems",
     "build_issue_counts",
+    "problem_status",
+    "resolve_member_issue_id",
 ]

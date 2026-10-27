@@ -180,6 +180,7 @@ def _normalize_state(value: Any) -> Dict[str, Any]:
                 "fact_ids": _strings(item.get("fact_ids")),
                 "evidence_ids": _strings(item.get("evidence_ids")),
                 "identity_fingerprint": str(item.get("identity_fingerprint") or "").strip() or None,
+                "resolved_from_issue_id": str(item.get("resolved_from_issue_id") or "").strip() or None,
                 "updated_at": str(item.get("updated_at") or "").strip() or _now(),
             }
 
@@ -508,34 +509,70 @@ DECISION_PAYLOAD_PATHS: Tuple[Tuple[str, ...], ...] = (
 )
 
 
-def _find_issue(payload: Dict[str, Any], issue_id: str) -> Optional[Dict[str, Any]]:
-    def _find(items: Any) -> Optional[Dict[str, Any]]:
-        if not isinstance(items, list):
-            return None
-        for item in items:
-            if isinstance(item, dict) and str(item.get("id") or "").strip() == issue_id:
-                return item
-        return None
-
+def _iter_finding_items(payload: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
     containers: Iterable[Any] = (payload, payload.get("result"))
     for container in containers:
         if not isinstance(container, dict):
             continue
         for key in ("ai_findings", "rule_findings"):
-            found = _find(container.get(key))
-            if found:
-                return found
+            items = container.get(key)
+            if isinstance(items, list):
+                for item in items:
+                    if isinstance(item, dict):
+                        yield item
         issues = container.get("issues")
         if isinstance(issues, list):
-            found = _find(issues)
-            if found:
-                return found
+            for item in issues:
+                if isinstance(item, dict):
+                    yield item
         elif isinstance(issues, dict):
             for key in ("all", "error", "warn", "info"):
-                found = _find(issues.get(key))
-                if found:
-                    return found
+                items = issues.get(key)
+                if isinstance(items, list):
+                    for item in items:
+                        if isinstance(item, dict):
+                            yield item
+
+
+def _member_issue_ids(item: Dict[str, Any]) -> Set[str]:
+    values: Set[str] = set()
+    for container in (item, item.get("location") if isinstance(item.get("location"), dict) else {}):
+        for key in ("merged_issue_ids", "member_issue_ids"):
+            raw = container.get(key)
+            if isinstance(raw, list):
+                values.update(str(entry) for entry in raw if entry)
+    values.discard(str(item.get("id") or ""))
+    return values
+
+
+def _find_issue(payload: Dict[str, Any], issue_id: str) -> Optional[Dict[str, Any]]:
+    # 规范 id 精确匹配优先；旧成员 id 只在当前分析的问题集合内解析，
+    # 且必须唯一——歧义时不写任何决定（fail-closed）。
+    exact = next((item for item in _iter_finding_items(payload)
+                  if str(item.get("id") or "").strip() == issue_id), None)
+    if exact is not None:
+        return exact
+    members = [item for item in _iter_finding_items(payload)
+               if issue_id in _member_issue_ids(item)]
+    unique = {str(item.get("id") or ""): item for item in members if str(item.get("id") or "")}
+    if len(unique) == 1:
+        return next(iter(unique.values()))
+    if len(unique) > 1:
+        return None
     return _find_structured_review_item(payload, issue_id) or _find_report_review_item(payload, issue_id)
+
+
+def _job_issue_and_alias(
+    user: Dict[str, Any], job_id: str, issue_id: str
+) -> tuple[Dict[str, Any], Dict[str, Any], Optional[str]]:
+    payload = runtime.get_job_status_payload(job_id, apply_issue_filters=False)
+    if not user_can_access_job(user, payload):
+        raise HTTPException(status_code=403, detail="job access denied")
+    issue = _find_issue(payload, issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="issue_id does not exist")
+    canonical = str(issue.get("id") or "")
+    return payload, issue, (issue_id if canonical and canonical != issue_id else None)
 
 
 def _find_report_review_item(payload: Dict[str, Any], issue_id: str) -> Optional[Dict[str, Any]]:
@@ -684,8 +721,10 @@ def get_visible_state(user: Dict[str, Any], *, job_id: Optional[str] = None) -> 
             if payload is None:
                 continue
             if user_can_access_job(user, payload):
-                if _find_issue(payload, record["issue_id"]) is None:
+                canonical = _find_issue(payload, record["issue_id"])
+                if canonical is None:
                     continue
+                canonical_id = str(canonical.get("id") or record["issue_id"])
                 if record_job not in current_decisions:
                     # setdefault 的默认表达式也会每次执行；直接复用同一份详情投影。
                     current_decisions[record_job] = {
@@ -693,8 +732,15 @@ def get_visible_state(user: Dict[str, Any], *, job_id: Optional[str] = None) -> 
                         for item in project_job_issue_decisions(record_job, payload, _state=state)
                     }
                 visible = copy.deepcopy(record)
-                visible["status"] = current_decisions[record_job].get(record["issue_id"], "pending")
-                visible_issues[key] = visible
+                visible["issue_id"] = canonical_id
+                if canonical_id != record["issue_id"]:
+                    visible["resolved_from_issue_id"] = record["issue_id"]
+                visible["status"] = current_decisions[record_job].get(canonical_id, "pending")
+                visible_key = _workflow_key(record_job, canonical_id)
+                existing = visible_issues.get(visible_key)
+                if existing is None or int(str(visible.get("decision_revision") or "0") or 0) >= int(
+                        str(existing.get("decision_revision") or "0") or 0):
+                    visible_issues[visible_key] = visible
                 visible_job_ids.add(record["job_id"])
         packages = [
             copy.deepcopy(package)
@@ -852,9 +898,13 @@ def project_job_issue_decisions(
             ),
         )
         same_revision = bool(revision and str(record.get("analysis_revision") or "") == revision)
+        canonical_id = str(issue.get("id") or issue_id)
         projected.append(
             {
-                "issue_id": issue_id,
+                "issue_id": canonical_id,
+                "resolved_from_issue_id": (
+                    issue_id if canonical_id != issue_id else record.get("resolved_from_issue_id")
+                ),
                 "title": record.get("title") or issue.get("title"),
                 "page": record.get("page") if record.get("page") is not None else _issue_page(issue),
                 "status": str(record.get("status") or "pending"),
@@ -874,7 +924,19 @@ def project_job_issue_decisions(
                 "identity_fingerprint": issue_identity_fingerprint(issue),
             }
         )
-    return projected
+    # 同一组可能同时有旧成员决定与规范决定：返回一条，优先当前分析、较新决定。
+    deduped: Dict[str, Dict[str, Any]] = {}
+    for item in projected:
+        key = str(item.get("issue_id") or "")
+        current = deduped.get(key)
+        if current is None or (
+            (not item.get("inherited"), bool(current.get("inherited")))
+            or (bool(item.get("inherited")) == bool(current.get("inherited"))
+                and int(str(item.get("decision_revision") or "0") or 0)
+                > int(str(current.get("decision_revision") or "0") or 0))
+        ):
+            deduped[key] = item
+    return [deduped[key] for key in sorted(deduped)]
 
 
 def _append_decision_event(state: Dict[str, Any], record: Dict[str, Any]) -> Dict[str, Any]:
@@ -1028,6 +1090,7 @@ def _decision_record(
     payload: Dict[str, Any], issue: Dict[str, Any], *, status: str,
     actor: Optional[str], note: Optional[str], hide_from_results: bool = False,
     origin: str = "workflow", migration_id: Optional[str] = None,
+    resolved_from_issue_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     revision = str(payload.get("analysis_revision") or "").strip()
     if not revision:
@@ -1043,7 +1106,9 @@ def _decision_record(
         "check_relation_id": str(issue.get("check_relation_id") or "").strip() or None,
         "fact_ids": _strings(issue.get("fact_ids")), "evidence_ids": _strings(issue.get("evidence_ids")),
         "identity_fingerprint": issue_identity_fingerprint(issue), "hide_from_results": hide_from_results,
-        "decision_origin": origin, "migration_id": migration_id, "updated_at": _now(),
+        "decision_origin": origin, "migration_id": migration_id,
+        "resolved_from_issue_id": resolved_from_issue_id,
+        "updated_at": _now(),
     }
 
 
@@ -1332,11 +1397,11 @@ async def update_issue(
     with _state_lock():
         state = _read_state()
         _require_issue_mutable(state, normalized_job_id)
-        payload, issue = _job_and_issue(user, normalized_job_id, normalized_issue_id)
+        payload, issue, resolved_from = _job_issue_and_alias(user, normalized_job_id, normalized_issue_id)
         _migrate_legacy_ignored_locked(state, normalized_job_id)
         record = _decision_record(payload, issue, status=normalized_status,
                                   actor=str(user.get("username") or user.get("user_id") or user.get("id") or "").strip() or None,
-                                  note=note)
+                                  note=note, resolved_from_issue_id=resolved_from)
         _record_decision(state, record)
         next_state = _write_state(state)
         runtime.invalidate_job_summary_cache(normalized_job_id)
@@ -1371,7 +1436,8 @@ async def create_package(
         issue = _find_issue(job_payloads[job_id], issue_id)
         if issue is None:
             raise HTTPException(status_code=404, detail=f"issue_id does not exist: {issue_id}")
-        resolved_issues.append((key, job_payloads[job_id], issue))
+        canonical_id = str(issue.get("id") or issue_id)
+        resolved_issues.append((f"{job_id}::{canonical_id}", job_payloads[job_id], issue))
 
     org_contexts = {_organization_context(payload) for payload in job_payloads.values()}
     organization_id, organization_name = next(iter(org_contexts)) if len(org_contexts) == 1 else (None, None)
@@ -1436,7 +1502,8 @@ async def create_package(
             "organization_id": organization_id,
             "organization_name": organization_name,
             "job_ids": normalized_job_ids,
-            "issue_keys": normalized_issue_keys,
+            "issue_keys": [key for key, _, _ in resolved_issues],
+            "requested_issue_keys": normalized_issue_keys,
             "report_snapshots": snapshots,
             "status": "ready",
             "created_at": now,

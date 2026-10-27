@@ -30,6 +30,17 @@ def _dec(text: Any) -> Optional[Decimal]:
         return None
 
 
+def _declared_wan(match: Any) -> Optional[Decimal]:
+    """按原文单位把一条“年初预算/支出决算”声明折算为万元；单位不明返回 None。"""
+    if match is None:
+        return None
+    value = _dec(match.group("amount"))
+    factor = _AMOUNT_UNIT_FACTOR.get(match.group("unit"))
+    if value is None or factor is None:
+        return None
+    return value * factor
+
+
 # ---------------------------------------------------------------------------
 # V33-251 支出决算具体情况
 # ---------------------------------------------------------------------------
@@ -38,8 +49,21 @@ _DETAIL_START_RE = re.compile(r"(?:[（(]三[)）])?一般公共预算财政拨�
 _DETAIL_STOP_RE = re.compile(r"六、|一般公共预算财政拨款基本支出决算情况说明")
 _DETAIL_TOTAL_RE = re.compile(r"年初预算(?:数)?为" + _AMOUNT + r"万元[，,]?支出决算(?:数)?为" + _AMOUNT + r"万元")
 _ITEM_START_RE = re.compile(r"(?:^|(?<=[。；;：:]))(\d{1,2})[、.．](?=[一-鿿“\"])")
-_ITEM_BUDGET_RE = re.compile(r"年初预算(?:数)?(?:为)?" + _AMOUNT + r"万元")
-_ITEM_FINAL_RE = re.compile(r"支出决算(?:数)?(?:为)?" + _AMOUNT + r"万元")
+_ITEM_AMOUNT_RE = re.compile(
+    r"(?P<kind>年初预算|支出决算)(?:数)?(?:为|是)?\s*"
+    r"(?P<amount>" + _AMOUNT + r")\s*(?P<unit>亿元|万元|元)"
+)
+_BUDGET_MARKER_RE = re.compile(
+    r"年初预算(?:数)?(?:为|是)?\s*\d[\d,]*(?:\.\d+)?\s*(?:亿元|万元|元)?"
+)
+_FINAL_MARKER_RE = re.compile(
+    r"支出决算(?:数)?(?:为|是)?\s*\d[\d,]*(?:\.\d+)?\s*(?:亿元|万元|元)?"
+)
+_AMOUNT_UNIT_FACTOR = {
+    "亿元": Decimal("10000"),
+    "万元": Decimal("1"),
+    "元": Decimal("0.0001"),
+}
 
 
 def _detail_section(doc: Document):
@@ -88,21 +112,26 @@ class R33251_FunctionalDetailCompleteness(Rule):
             return page, text, s, e
 
         issues: List[Issue] = []
+        unresolved: List[str] = []
         total = _DETAIL_TOTAL_RE.search(joined)
         starts = [m.start() for m in _ITEM_START_RE.finditer(joined)]
         items: List[Dict[str, Any]] = []
         for index, start in enumerate(starts):
             stop = starts[index + 1] if index + 1 < len(starts) else len(joined)
             body = joined[start:stop]
-            budget = _ITEM_BUDGET_RE.search(body)
-            final = _ITEM_FINAL_RE.search(body)
+            budget = next((m for m in _ITEM_AMOUNT_RE.finditer(body)
+                           if m.group("kind") == "年初预算"), None)
+            final = next((m for m in _ITEM_AMOUNT_RE.finditer(body)
+                          if m.group("kind") == "支出决算"), None)
             head = re.split(r"主要用于|。", body, maxsplit=1)[0]
             items.append({
                 "pos": start, "head": head,
-                "budget": _dec(budget.group(1)) if budget else None,
-                "final": _dec(final.group(1)) if final else None,
-                "budget_raw": budget.group(1) if budget else "",
-                "final_raw": final.group(1) if final else "",
+                "budget": _declared_wan(budget),
+                "final": _declared_wan(final),
+                "budget_raw": budget.group("amount") if budget else "",
+                "final_raw": final.group("amount") if final else "",
+                "budget_unit": budget.group("unit") if budget else "",
+                "final_unit": final.group("unit") if final else "",
             })
         if not items:
             raise RuleNotApplicable(self.code, detail="具体情况段落未识别到逐项列示条目")
@@ -113,31 +142,144 @@ class R33251_FunctionalDetailCompleteness(Rule):
                     self, f"支出决算具体情况未细化到项：“{item['head'][:30]}”只列至类/款级科目。",
                     page, text, s, e, severity="warn", checklist_item="A-09",
                 ))
+        listed_final = 0
         if total:
             # 一个编号下可能挂多条“类（类）款（款）项（项）”子条目（每条各有年初预算与支出决算），
-            # 所以按总额之后出现的全部“年初预算…万元/支出决算…万元”加总，不按编号取第一处。
-            tail = joined[total.end():]
-            for key, label, pattern, checklist in (
-                (1, "年初预算", _ITEM_BUDGET_RE, "C-11"), (2, "支出决算", _ITEM_FINAL_RE, "C-12"),
+            # 所以按总额之后出现的全部“年初预算…/支出决算…”加总，不按编号取第一处。
+            # 单位按原文（元/万元/亿元）归一；不能把“元”项按“万元”名义值补入。
+            tail_start = total.end()
+            tail = joined[tail_start:]
+            records: List[Dict[str, Any]] = []
+            for match in _ITEM_AMOUNT_RE.finditer(joined, tail_start):
+                kind = "budget" if match.group("kind") == "年初预算" else "final"
+                raw, unit = match.group("amount"), match.group("unit")
+                value = _dec(raw)
+                factor = _AMOUNT_UNIT_FACTOR.get(unit)
+                records.append({
+                    "kind": kind, "raw": raw, "unit": unit, "pos": match.start(),
+                    "value_wan": value * factor if value is not None and factor is not None else None,
+                    "not_included_reason": (
+                        None if value is not None and factor is not None
+                        else "amount_or_unit_unusable"
+                    ),
+                })
+            listed_final = sum(1 for record in records if record["kind"] == "final")
+            marker_counts = {
+                "budget": len(_BUDGET_MARKER_RE.findall(tail)),
+                "final": len(_FINAL_MARKER_RE.findall(tail)),
+            }
+            for key, label, kind, checklist in (
+                (1, "年初预算", "budget", "C-11"), (2, "支出决算", "final", "C-12"),
             ):
-                raws = [m.group(1) for m in pattern.finditer(tail)]
-                values = [v for v in (_dec(r) for r in raws) if v is not None]
-                if len(values) < 2:
+                kind_records = [record for record in records if record["kind"] == kind]
+                included = [record for record in kind_records if record["value_wan"] is not None]
+                not_included = [record for record in kind_records if record["value_wan"] is None]
+                if marker_counts[kind] > len(kind_records):
+                    not_included.append({
+                        "kind": kind, "raw": None, "unit": None, "value_wan": None,
+                        "pos": tail_start,
+                        "not_included_reason": "declared_amount_without_unit_or_unrecognized",
+                        "occurrences": marker_counts[kind] - len(kind_records),
+                    })
+                if len(included) < 2:
                     continue
                 stated = _dec(total.group(key))
-                subtotal = sum(values, Decimal(0))
-                if stated is None or abs(subtotal - stated) <= display_envelope([total.group(key), *raws]):
+                if stated is None:
                     continue
+                subtotal = sum((record["value_wan"] for record in included), Decimal(0))
+                envelope = display_envelope(
+                    [total.group(key), *[format(record["value_wan"], "f") for record in included]]
+                )
+                difference = subtotal - stated
+                if abs(difference) <= envelope and not not_included:
+                    continue
+                unit_items = [record for record in included if record["unit"] != "万元"]
+                anchors = []
+                for record in unit_items:
+                    page, text, s, e = _locate(record["pos"])
+                    anchors.append({
+                        "page": page, "amount": record["raw"], "unit": record["unit"],
+                        "value_wan": format(record["value_wan"], "f"),
+                        "section": "支出决算具体情况", "span": text[s:e],
+                    })
                 page, text, s, e = _locate(total.start())
+                parts = [
+                    f"支出决算具体情况逐项列示的{label}合计{format(subtotal, 'f')}万元"
+                    f"（纳入{len(included)}项），与该部分所列{label}总额{format(stated, 'f')}万元不一致，"
+                    f"相差{format(abs(difference), 'f')}万元"
+                ]
+                if not_included:
+                    parts.append(
+                        f"另有{len(not_included)}处{label}金额缺少可归一单位或格式，未纳入合计，"
+                        "不能视为完整分项加总"
+                    )
+                if unit_items:
+                    units = "、".join(sorted({record["unit"] for record in unit_items}))
+                    nominal = sum(
+                        (_dec(record["raw"]) or Decimal(0) for record in unit_items), Decimal(0)
+                    )
+                    parts.append(f"其中{len(unit_items)}项原文以{units}列示，已按原文单位折算为万元")
+                    parts.append(
+                        f"条件性说明：若这些项按万元名义值计入，合计将增加{format(nominal, 'f')}万元；"
+                        "本规则不采用该假设，单位问题另行确认"
+                    )
+                if not not_included and subtotal < stated:
+                    parts.append("可能漏列科目")
+                elif not not_included and subtotal > stated:
+                    parts.append("分项合计超出总额")
+                message = "；".join(parts) + "。"
                 issues.append(issue_at(
-                    self, f"支出决算具体情况逐项列示的{label}合计{subtotal}万元，与该部分所列{label}总额{stated}万元不一致，"
-                    f"相差{abs(subtotal - stated)}万元（{'可能漏列科目' if subtotal < stated else '分项合计超出总额'}）。",
-                    page, text, s, e, severity="warn", checklist_item=checklist,
+                    self, message, page, text, s, e, severity="warn", checklist_item=checklist,
+                    included_items=[
+                        {**{k: v for k, v in record.items() if k != "value_wan"},
+                         "value_wan": format(record["value_wan"], "f")}
+                        for record in included
+                    ],
+                    not_included_items=not_included,
+                    unit_normalized_items=anchors,
+                    stated_total_wan=format(stated, "f"),
+                    included_subtotal_wan=format(subtotal, "f"),
+                    difference_wan=format(difference, "f"),
+                    completeness="partial" if not_included else "complete",
                 ))
-        issues.extend(self._coverage(doc, joined, items, _locate))
+                from .native_table_arithmetic import receipt as relation_receipt
+                receipt_status = (
+                    "insufficient_data" if not_included
+                    else "fail" if abs(difference) > envelope else "pass"
+                )
+                receipt_codes: List[str] = []
+                if not_included:
+                    receipt_codes.append("item_amount_not_included")
+                if abs(difference) > envelope:
+                    receipt_codes.append("item_sum_mismatch")
+                if unit_items:
+                    receipt_codes.append("source_unit_normalized")
+                relation_receipt(
+                    self, doc, f"V33-251:{kind}:item_sum", [],
+                    status=receipt_status,
+                    formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
+                    reason=None if receipt_status == "pass" else message,
+                    reason_codes=receipt_codes,
+                )
+                if not_included:
+                    unresolved.append(
+                        f"{label}有{len(not_included)}处金额未纳入合计："
+                        + "、".join(
+                            str(record.get("not_included_reason") or "unusable")
+                            for record in not_included
+                        )
+                    )
+        issues.extend(self._coverage(doc, joined, items, _locate, listed_final))
+        if unresolved:
+            raise RuleDeferred(
+                self.code, detail="；".join(unresolved), partial_issues=issues,
+                unresolved_reasons=list(dict.fromkeys(unresolved)),
+                reason_codes=["item_amount_not_included"],
+            )
         return issues
 
-    def _coverage(self, doc: Document, joined: str, items, locate) -> List[Issue]:
+    def _coverage(self, doc: Document, joined: str, items, locate,
+                  listed_final: int = 0) -> List[Issue]:
         """决算表项级（7 位）本年支出非零的科目，应在具体情况中逐项出现。"""
         facts, reason = table_facts(doc, "FIN_05_general_public_expenditure")
         if reason:
@@ -157,7 +299,7 @@ class R33251_FunctionalDetailCompleteness(Rule):
                     and fact.normalized_value not in (None, Decimal(0))):
                 leaves[code] = re.sub(r"\s+", "", fact.subject_name or "")
         missing = [name for name in leaves.values() if name and name not in joined]
-        listed = max(len(items), len(_ITEM_FINAL_RE.findall(joined)) - 1)
+        listed = max(len(items), listed_final)
         if not missing or listed >= len(leaves):
             return []
         page, text, s, e = locate(0)

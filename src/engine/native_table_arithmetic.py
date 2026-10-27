@@ -67,12 +67,14 @@ def journal(rule, doc, facts):
     return ids, evidence
 
 
-def receipt(rule, doc, relation, facts, *, status, formula, reason=None, disclosure_sources=()):
+def receipt(rule, doc, relation, facts, *, status, formula, reason=None, disclosure_sources=(),
+            reason_codes=()):
     from .rules_v33 import _v33_relation_receipt
     ids, evidence = journal(rule, doc, facts)
     _v33_relation_receipt(doc, rule.code, relation, status=status,
                           operand_fact_ids=ids, formula=formula, incomplete_reason=reason,
-                          cell_observations=blank_observations(facts), disclosure_sources=disclosure_sources)
+                          cell_observations=blank_observations(facts), disclosure_sources=disclosure_sources,
+                          reason_codes=reason_codes)
     return ids, evidence
 
 

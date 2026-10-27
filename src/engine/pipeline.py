@@ -179,6 +179,7 @@ def run_rules_with_outcomes(
                     detail=detail_str,
                     partial_findings_count=len(partial_list),
                     unresolved_reasons=unresolved,
+                    reason_codes=list(getattr(signal, "reason_codes", []) or []),
                 )
             )
             continue

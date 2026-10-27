@@ -1024,6 +1024,15 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
       const resolvedTitle = String(display.summary ?? issue.rule_name ?? title).trim() || title;
       const snippet = String(evidence?.quote ?? evidence?.text_snippet ?? evidence?.text ?? issue.text_snippet ?? "").trim();
       const location = resolveProblemLocation(issue, page);
+      const relatedRuleIds = Array.from(new Set([
+        ...(Array.isArray(issue.related_rule_ids) ? issue.related_rule_ids : []),
+        ...(Array.isArray(rawLocation.related_rule_ids) ? rawLocation.related_rule_ids : []),
+      ].map((item) => String(item ?? "").trim()).filter(Boolean)));
+      const memberIssueIds = Array.from(new Set([
+        ...(Array.isArray(issue.merged_issue_ids) ? issue.merged_issue_ids : []),
+        ...(Array.isArray(rawLocation.merged_issue_ids) ? rawLocation.merged_issue_ids : []),
+        ...(Array.isArray(rawLocation.member_issue_ids) ? rawLocation.member_issue_ids : []),
+      ].map((item) => String(item ?? "").trim()).filter(Boolean)));
       const rawRefs = Array.isArray(rawLocation.table_refs)
         ? rawLocation.table_refs.filter(isRecord)
         : [];
@@ -1120,6 +1129,9 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
       return {
         id: String(issue.id ?? `${detail.job_id}-issue-${index + 1}`),
         ruleId: String(issue.rule_id ?? issue.rule ?? "UNKNOWN"),
+        problemGroupId: String(rawLocation.problem_group_id ?? "").trim() || undefined,
+        relatedRuleIds: relatedRuleIds.length ? relatedRuleIds : undefined,
+        memberIssueIds: memberIssueIds.length ? memberIssueIds : undefined,
         title: resolvedTitle,
         severity: mapSeverity(issue.severity),
         severityLabel: String(issue.severity_label ?? getSeverityMeta(issue.severity).label),

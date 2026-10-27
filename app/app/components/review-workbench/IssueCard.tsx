@@ -236,7 +236,11 @@ export function IssueCard({
         <span className={`rounded-full px-2 py-0.5 font-medium ${SEVERITY_TONE_CLASSES[severityCode]}`}>
           {severityMeta.riskLabel}
         </span>
-        <span>{[sources, problem.ruleId, problem.page ? `第 ${problem.page} 页` : ""].filter(Boolean).join(" · ")}</span>
+        <span title={problem.relatedRuleIds?.length ? `同一原文缺陷：${problem.relatedRuleIds.join("、")}` : undefined}>
+          {[sources, problem.ruleId, problem.relatedRuleIds?.length && problem.relatedRuleIds.length > 1
+            ? `同源规则 ${problem.relatedRuleIds.join("、")}` : "", problem.page ? `第 ${problem.page} 页` : ""]
+            .filter(Boolean).join(" · ")}
+        </span>
         {problem.usesManualFill ? (
           <span className="rounded-full bg-warning-100 px-2 py-0.5 font-medium text-warning-700" title="该结论用到了审核员对照原页补录的数据，可在「读取校正」页签查看记录">
             含人工补录数据

@@ -734,6 +734,7 @@ def _v33_relation_receipt(
     incomplete_reason: Optional[str] = None,
     cell_observations: Sequence[Dict[str, Any]] = (),
     disclosure_sources: Sequence[Dict[str, Any]] = (),
+    reason_codes: Sequence[str] = (),
 ) -> None:
     """RC-04：V33 族关系级回执——每条适用关系一条，携带真实操作数 ID。"""
     from src.engine.fact_context import make_fact_receipt
@@ -755,6 +756,7 @@ def _v33_relation_receipt(
             incomplete_reason=incomplete_reason,
             cell_observations=cell_observations,
             disclosure_sources=disclosure_sources,
+            reason_codes=reason_codes,
         )
     )
 
@@ -10569,7 +10571,9 @@ _TXT_FUND_ITEM_RE = re.compile(
 
 #: 说明句前缀里的显式年份（期间锚）：与材料年度不同的年份出现在同一句里，
 #: 说明该句可能在描述另一期间——不跨期绑定。
-_TXT_FUND_YEAR_RE = re.compile(r"(?:19|20)\d{2}")
+#: 年份识别统一收敛到 :mod:`src.engine.year_roles`：金额、百分比、编号里的
+#: 四位数字不是年份；真实期间（含年度列表）保留原文偏移。
+_TXT_FUND_YEAR_RE = re.compile(r"(?<![\d.,，．%])(?:19|20)\d{2}(?![\d.,，．%])")
 
 #: 单位归一（AGENTS.md v3_3_portable 口径）：元 = 0.0001 万元、亿元 = 10000 万元
 _TXT_FUND_UNIT_TO_WAN: Dict[str, Decimal] = {
@@ -10857,13 +10861,13 @@ def _txt_fund_bind_statements(
         cut = max(prefix.rfind(ch) for ch in "。；：！？\n")
         if cut >= 0:
             prefix = prefix[cut + 1:]
+        from .year_roles import foreign_period_years
         foreign_years = sorted(
             {
-                int(found)
-                for found in _TXT_FUND_YEAR_RE.findall(prefix + klass)
-                if fiscal_year is not None and int(found) != fiscal_year
+                token.year
+                for token in foreign_period_years(prefix + klass, fiscal_year)
             }
-        )
+        ) if fiscal_year is not None else []
         if fiscal_year is None or foreign_years:
             blocked.append(
                 f"说明句「{label}…」所在句含与材料年度（{fiscal_year}）"
@@ -11399,8 +11403,8 @@ def _nar_repeat_foreign_year(merged: str, start: int, names: str, year: int) -> 
     cut = max(prefix.rfind(ch) for ch in "。；：！？\n")
     if cut >= 0:
         prefix = prefix[cut + 1:]
-    found = _TXT_FUND_YEAR_RE.findall(prefix + str(names or ""))
-    return any(int(value) != year for value in found)
+    from .year_roles import foreign_period_years
+    return bool(foreign_period_years(prefix + str(names or ""), year))
 
 
 def _nar_repeat_slot_ambiguous(merged: str, end: int) -> bool:

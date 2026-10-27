@@ -230,7 +230,8 @@ def repair_native_dimensions(page, table, *, reference=None):
                 sources = [{**source, 'excluded_header_sources': removed} for source in sources]
             value = float(text) if re.fullmatch(r'\d+', text) else None
             updates[cell.row_idx, col] = replace(cell, raw_text=text, normalized_text=normalize_text(text),
-                 numeric_value=value, normalized_value_wan=None, grid_raw_text=cell.raw_text,
+                 numeric_value=value, normalized_value_wan=None,
+                 grid_raw_text=cell.grid_raw_text if cell.grid_raw_text is not None else cell.raw_text,
                  native_text_sources=sources, native_blank_verified=False)
     if not updates:
         return table

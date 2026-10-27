@@ -1154,6 +1154,7 @@ class ObligationInstance:
     missing_checkers: Tuple[str, ...] = ()
     depends_on: Tuple[str, ...] = ()
     input_gaps: Tuple[str, ...] = ()
+    reason_codes: Tuple[str, ...] = ()
     evidence_kind: str = EVIDENCE_LOCATABLE
     basis: str = ""
     gap_note: str = ""
@@ -1186,6 +1187,7 @@ class ObligationInstance:
             "missing_checkers": list(self.missing_checkers),
             "depends_on": list(self.depends_on),
             "input_gaps": list(self.input_gaps),
+            "reason_codes": list(self.reason_codes),
             "evidence_kind": self.evidence_kind,
             "basis": self.basis,
             "gap_note": self.gap_note,
@@ -1410,9 +1412,19 @@ def _resolve_rule_backed(
     *,
     registry: FrozenSet[str],
     statuses: Dict[str, str],
+    reason_codes_by_rule: Optional[Mapping[str, Sequence[str]]] = None,
 ) -> None:
     """就地判定规则类义务的状态。"""
     implemented = tuple(item for item in instance.checkers if item in registry)
+    reason_codes_by_rule = reason_codes_by_rule or {}
+
+    def _codes(for_rules: Sequence[str]) -> Tuple[str, ...]:
+        values: List[str] = []
+        for rule_id in for_rules:
+            for code in reason_codes_by_rule.get(rule_id, ()) or ():
+                if code and code not in values:
+                    values.append(str(code))
+        return tuple(values)
     # 清单里声明了、但注册表里查不到的编号：既可能是"尚未实现"（pending），
     # 也可能是清单笔误或规则被撤下。两种都要落账，不能静默忽略。
     absent = tuple(item for item in instance.checkers if item not in registry)
@@ -1468,6 +1480,7 @@ def _resolve_rule_backed(
             instance.status = mapped
             instance.reason = mapped
             instance.detail = f"规则 {'/'.join(hit)} 判定为 {rule_status}"
+            instance.reason_codes = _codes(implemented)
             return
 
     if all(observed[item] == "not_applicable" for item in implemented):
@@ -1607,6 +1620,13 @@ def build_obligation_ledger(
     kind = str(report_kind or (profile.kind if profile else "") or "unknown").strip().lower()
     registry = _registry_rule_ids(kind)
     statuses = _rule_statuses(rule_execution_summary)
+    reason_codes_by_rule: Dict[str, Sequence[str]] = {}
+    if isinstance(rule_execution_summary, Mapping):
+        for entry in rule_execution_summary.get("unresolved_rules") or []:
+            if isinstance(entry, Mapping) and entry.get("rule_id"):
+                reason_codes_by_rule[str(entry["rule_id"])] = tuple(
+                    str(code) for code in entry.get("reason_codes") or () if code
+                )
 
     for instance in instances:
         if instance.requires_ai:
@@ -1619,6 +1639,7 @@ def build_obligation_ledger(
                 instance,
                 registry=registry,
                 statuses=statuses,
+                reason_codes_by_rule=reason_codes_by_rule,
             )
         instance.input_gaps = tuple(
             _input_gaps(instance.depends_on, structured_ingest)

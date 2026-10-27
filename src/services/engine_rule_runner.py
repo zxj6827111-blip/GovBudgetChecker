@@ -489,6 +489,7 @@ class EngineRuleRunner:
                             detail=detail_str,
                             partial_findings_count=len(findings),
                             unresolved_reasons=unresolved,
+                            reason_codes=list(getattr(signal, "reason_codes", []) or []),
                         )
                     )
                     logger.info(

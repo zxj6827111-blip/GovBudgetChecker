@@ -92,6 +92,8 @@ def operand_rejection_reason(fact: FiscalFact, organization: Optional[str] = Non
     """Canonical amount/subject admission shared by selection and fact views."""
     if fact.extra_dims.get('identity_incomplete')or fact.extra_dims.get('logical_identity_conflict'):
         return '候选事实的完整业务身份未确认'
+    if fact.extra_dims.get('row_identity_status') == 'code_total_conflict':
+        return '候选事实的科目编码与合计标记冲突，行身份未确认'
     from .rule_identity import ACTIVE_IDENTITY
     if fact.extra_dims.get("org_scope_pending") and "org_scope" in (ACTIVE_IDENTITY.get() if required_dimensions is None else required_dimensions):
         return "材料汇总口径待确认；本规则依赖该维度"
@@ -104,6 +106,38 @@ def operand_rejection_reason(fact: FiscalFact, organization: Optional[str] = Non
         return "候选事实缺少可用万元归一金额，单位或数值口径未确认"
     if fact.recognition_status not in OPERAND_STATUSES:
         return f"候选事实识别状态不可作操作数（{fact.recognition_status}）"
+    return None
+
+
+#: 结构化取数原因代码：与自由文本并存，供回执、覆盖账本和验收逐项统计。
+OPERAND_REASON_CODES = {
+    "identity_incomplete": "identity_incomplete",
+    "identity_conflict": "identity_conflict",
+    "org_scope_pending": "org_scope_pending",
+    "table_reading_incomplete": "table_reading_incomplete",
+    "owner_mismatch": "owner_mismatch",
+    "amount_unusable": "amount_unusable",
+    "candidate_not_operand": "candidate_not_operand",
+}
+
+
+def operand_rejection_code(fact: FiscalFact, organization: Optional[str] = None, *, required_dimensions=None) -> Optional[str]:
+    """与 :func:`operand_rejection_reason` 同源的机器可读原因；无拒绝时返回 None。"""
+    if fact.extra_dims.get('identity_incomplete') or fact.extra_dims.get('logical_identity_conflict'):
+        return OPERAND_REASON_CODES["identity_incomplete"]
+    if fact.extra_dims.get('row_identity_status') == 'code_total_conflict':
+        return OPERAND_REASON_CODES["identity_conflict"]
+    from .rule_identity import ACTIVE_IDENTITY
+    if fact.extra_dims.get("org_scope_pending") and "org_scope" in (ACTIVE_IDENTITY.get() if required_dimensions is None else required_dimensions):
+        return OPERAND_REASON_CODES["org_scope_pending"]
+    if fact.extra_dims.get("table_reading_status") == "incomplete":
+        return OPERAND_REASON_CODES["table_reading_incomplete"]
+    if _owner_rejection_reason(fact, organization):
+        return OPERAND_REASON_CODES["owner_mismatch"]
+    if not normalized_amount_is_usable(fact.normalized_value):
+        return OPERAND_REASON_CODES["amount_unusable"]
+    if fact.recognition_status not in OPERAND_STATUSES:
+        return OPERAND_REASON_CODES["candidate_not_operand"]
     return None
 
 FACT_CONTEXT_VERSION = "fact-context-v3-rule-identity-dimensions"
@@ -1332,6 +1366,7 @@ def make_fact_receipt(
     fact_migration_status: Optional[str] = None,
     cell_observations: Sequence[Dict[str, Any]] = (),
     disclosure_sources: Sequence[Dict[str, Any]] = (),
+    reason_codes: Sequence[str] = (),
 ) -> Dict[str, Any]:
     """构造一条关系级 CheckReceipt（dict 形态，规则直接写入 doc.fact_receipts）。
 
@@ -1379,5 +1414,6 @@ def make_fact_receipt(
         obligation_id=obligation_id,
         evaluation_basis=evaluation_basis,
         fact_migration_status=fact_migration_status,
+        reason_codes=[str(item) for item in reason_codes if str(item)],
     )
     return receipt.to_dict()

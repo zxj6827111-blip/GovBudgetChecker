@@ -69,8 +69,23 @@ def _name(value):
 
 def _unresolved(rule, doc, key, reason, unresolved, facts=(), formula='text = table'):
     unresolved.append(reason)
+    codes = []
+    if facts:
+        from src.engine.fact_context import operand_rejection_code
+        context = getattr(doc, 'fact_context', None)
+        codes = [code for code in (
+            operand_rejection_code(fact, getattr(context, 'org_name', None)) for fact in facts
+        ) if code]
+    if not codes:
+        text = str(reason or '')
+        if '缺失或不唯一' in text:
+            codes = ['operand_missing_or_ambiguous']
+        elif '身份' in text or '识别状态' in text:
+            codes = ['identity_unconfirmed']
+        elif '未识别到' in text or '未找到' in text:
+            codes = ['source_missing']
     receipt(rule, doc, key, list(facts), status='insufficient_data',
-            formula=formula, reason=reason)
+            formula=formula, reason=reason, reason_codes=list(dict.fromkeys(codes)))
 
 
 def _source_refs(facts):
