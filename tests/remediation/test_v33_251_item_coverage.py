@@ -202,6 +202,12 @@ def test_explicit_zero_expense_disclosure_passes():
     assert signal is None
 
 
+def test_explicit_no_such_item_is_zero_not_missing():
+    body = "1、教育支出（类）普通教育（款）小学教育（项）。本项无此项。\n"
+    _issues, _doc, signal = _run(body, total_budget="0.00", total_final="0.00")
+    assert signal is None
+
+
 def test_lawful_withholding_is_not_missing_disclosure():
     body = (
         "1、社会保障和就业支出（类）退役安置（款）支出决算为90.00万元。"
