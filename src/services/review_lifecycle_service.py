@@ -943,6 +943,65 @@ def _require_autocommit(conn: Any, *, operation: str) -> None:
         )
 
 
+async def confirm_document_scope(conn: Any, job_uuid: str, *, actor: str, request: dict, actual_file_hash: str) -> dict:
+    """与完成复核共用槽位→会话→任务锁；决定和重算发件箱在同一事务提交。"""
+    from src.services import document_scope
+    import json
+
+    _require_autocommit(conn, operation="confirm_document_scope")
+    effects = _CommitEffects()
+    async with _mutation_scope(conn, effects):
+        link = await review_context_query.resolve_slot_link_for_job(conn, job_uuid)
+        if link is None:
+            raise HTTPException(409, {"error": "review_context_unavailable", "message": "材料版本不可用"})
+        state = await _load_state(conn, link.slot_id, lock_slot=True, lock_session=True)
+        if state is None:
+            raise HTTPException(404, "material slot not found")
+        _require_job_belongs_to_state(state, job_uuid)
+        if state.analysis.document_version_id != request["document_version_id"]:
+            raise HTTPException(409, {"error": "document_version_changed", "message": "材料已换版，请刷新"})
+        job = await conn.fetchrow("SELECT file_hash,status FROM analysis_jobs WHERE job_uuid=$1", job_uuid)
+        if job is None or job["file_hash"] != actual_file_hash or actual_file_hash != request["file_hash"]:
+            raise HTTPException(409, {"error": "source_file_changed", "message": "原件已变化，原确认依据不能复用"})
+        existing = await conn.fetchrow("SELECT * FROM document_scope_decisions WHERE request_id=$1::uuid", request["request_id"])
+        if existing is not None:
+            row = document_scope.decision_dict(existing)
+            if any(row.get(key) != value for key, value in {
+                "job_uuid": job_uuid, "document_version_id": request["document_version_id"],
+                "file_hash": actual_file_hash, "material_scope": request["material_scope"],
+                "note": request["note"], "evidence_reference": request["evidence_reference"], "actor": actor,
+            }.items()):
+                raise HTTPException(409, {"error": "idempotency_key_conflict", "message": "该提交标识已用于另一项决定"})
+            return row
+        if state.basis_token != request["analysis_basis_token"] or not state.analysis.completed or job["status"] in {"queued", "processing", "running"}:
+            raise HTTPException(409, {"error": "analysis_basis_changed", "message": "分析版本已变化或正在重算，请刷新"})
+        previous = await document_scope.latest_decision(conn, job_uuid, actual_file_hash, request["document_version_id"])
+        if (previous or {}).get("revision", 0) != request["expected_decision_revision"]:
+            raise HTTPException(409, {"error": "scope_decision_conflict", "message": "口径已被其他人更新，请刷新"})
+        evidence = document_scope.scope_evidence({"result": {"meta": state.analysis.result_meta}})
+        conflicts = document_scope.source_conflicts(evidence, request["material_scope"])
+        if conflicts and not request.get("acknowledge_conflicts"):
+            raise HTTPException(409, {"error": "scope_evidence_conflict", "message": "选择与已有原文证据冲突，请明确核对并裁决", "conflicts": conflicts})
+        # 失效会锁住已完成会话，必须先于任务行锁；拒绝时整个事务回滚。
+        invalidated = await review_session_store.invalidate_sessions_for_job(conn, job_uuid, reason="document_scope_changed")
+        locked_job = await conn.fetchrow("SELECT file_hash,status FROM analysis_jobs WHERE job_uuid=$1 FOR UPDATE", job_uuid)
+        if locked_job["file_hash"] != actual_file_hash or locked_job["status"] in {"queued", "processing", "running"}:
+            raise HTTPException(409, {"error": "analysis_basis_changed", "message": "分析已开始或原件已变化，请刷新"})
+        row = await conn.fetchrow("""INSERT INTO document_scope_decisions
+            (request_id,job_uuid,document_version_id,file_hash,revision,analysis_basis_token,material_scope,
+             note,evidence_reference,source_evidence,actor)
+            VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11) RETURNING *""",
+            request["request_id"], job_uuid, request["document_version_id"], actual_file_hash,
+            (previous or {}).get("revision", 0) + 1, state.basis_token, request["material_scope"],
+            request["note"], request["evidence_reference"], json.dumps(evidence, ensure_ascii=False), actor)
+        effects.lock_clears.extend({"job_uuid": job_uuid, "review_session_id": str(item["review_session_id"]),
+                                   "analysis_basis_token": str(item.get("analysis_basis_token") or "")} for item in invalidated)
+        await review_session_store.clear_analysis_result_fingerprint(conn, job_uuid)
+        # 即使提交后进程立即退出，门禁也已阻断旧分析，Worker 会重试发件箱。
+        await conn.execute("UPDATE analysis_jobs SET status='queued',updated_at=NOW() WHERE job_uuid=$1", job_uuid)
+        return document_scope.decision_dict(row)
+
+
 async def start_review(
     conn: Any,
     slot_id: str,

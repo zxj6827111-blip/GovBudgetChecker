@@ -1413,6 +1413,7 @@ def _resolve_rule_backed(
     registry: FrozenSet[str],
     statuses: Dict[str, str],
     reason_codes_by_rule: Optional[Mapping[str, Sequence[str]]] = None,
+    details_by_rule: Optional[Mapping[str, str]] = None,
 ) -> None:
     """就地判定规则类义务的状态。"""
     implemented = tuple(item for item in instance.checkers if item in registry)
@@ -1480,6 +1481,10 @@ def _resolve_rule_backed(
             instance.status = mapped
             instance.reason = mapped
             instance.detail = f"规则 {'/'.join(hit)} 判定为 {rule_status}"
+            details = list(dict.fromkeys((details_by_rule or {}).get(rule_id, "") for rule_id in hit))
+            details = [detail for detail in details if detail]
+            if details:
+                instance.detail = "；".join(details)
             instance.reason_codes = _codes(implemented)
             return
 
@@ -1621,8 +1626,11 @@ def build_obligation_ledger(
     registry = _registry_rule_ids(kind)
     statuses = _rule_statuses(rule_execution_summary)
     reason_codes_by_rule: Dict[str, Sequence[str]] = {}
+    details_by_rule: Dict[str, str] = {}
     if isinstance(rule_execution_summary, Mapping):
         for entry in rule_execution_summary.get("unresolved_rules") or []:
+            if isinstance(entry, Mapping) and entry.get("rule_id") and entry.get("detail"):
+                details_by_rule[str(entry["rule_id"])] = str(entry["detail"])
             if isinstance(entry, Mapping) and entry.get("rule_id"):
                 reason_codes_by_rule[str(entry["rule_id"])] = tuple(
                     str(code) for code in entry.get("reason_codes") or () if code
@@ -1640,6 +1648,7 @@ def build_obligation_ledger(
                 registry=registry,
                 statuses=statuses,
                 reason_codes_by_rule=reason_codes_by_rule,
+                details_by_rule=details_by_rule,
             )
         instance.input_gaps = tuple(
             _input_gaps(instance.depends_on, structured_ingest)

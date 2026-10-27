@@ -66,6 +66,7 @@ import type { PdfRelatedRef } from "./PdfViewerPane";
 import { deriveAiScope } from "../../../lib/aiScope";
 import type { AiScopeView } from "../../../lib/aiScope";
 import { MetadataTab } from "./MetadataTab";
+import { DocumentScopePanel } from "./DocumentScopePanel";
 import { ObligationsTab } from "./ObligationsTab";
 import { PdfViewerPane } from "./PdfViewerPane";
 import {
@@ -397,7 +398,7 @@ export function ReviewWorkbenchPage() {
   // 修复 1：任务未分析完成时轮询详情（默认 5 秒），完成后任务从"尚未分析完成"
   // 的引导态自动翻转到可复核内容——此前只能手动刷新页面。
   // 任务已终态或拉不到详情时决策为 stop，不向 /api/jobs/{id} 继续打请求。
-  useJobPolling({
+  const { refreshNow: refreshJobPolling } = useJobPolling({
     fetcher: useCallback(() => loadJobDetail({ silent: true }), [loadJobDetail]),
     decide: useCallback(() => {
       const current = detailRef.current;
@@ -407,6 +408,12 @@ export function ReviewWorkbenchPage() {
       return current ? { kind: "stop" as const } : resolvePollingDecision(null);
     }, []),
   });
+
+  const handleScopeQueued = useCallback(() => {
+    invalidateReviewReads(jobId);
+    refreshJobPolling();
+    void loadWorkflow();
+  }, [jobId, refreshJobPolling, loadWorkflow]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -760,11 +767,12 @@ export function ReviewWorkbenchPage() {
         setLastIssueDecision(null);
         invalidateReviewReads(jobId);
         await Promise.all([loadJobDetail(), loadWorkflow()]);
+        refreshJobPolling();
       }
     } finally {
       setIsReanalyzing(false);
     }
-  }, [isReanalyzing, jobId, loadJobDetail, loadWorkflow]);
+  }, [isReanalyzing, jobId, loadJobDetail, loadWorkflow, refreshJobPolling]);
 
   const handleExport = useCallback(() => {
     if (!jobId || !detail) {
@@ -1314,6 +1322,9 @@ export function ReviewWorkbenchPage() {
               />
             ) : activeTab === "obligations" && obligationReview ? (
               <ObligationsTab
+                key={`${jobId}:${displayedAnalysisRevision(detail) ?? ""}`}
+                jobId={jobId}
+                onScopeQueued={handleScopeQueued}
                 block={obligationReview}
                 submittingId={obligationSubmittingId}
                 readOnly={!canEditReview}
@@ -1343,7 +1354,10 @@ export function ReviewWorkbenchPage() {
                 }}
               />
             ) : activeTab === "metadata" ? (
-              <MetadataTab job={detail} detail={detail} />
+              <div className="h-full overflow-y-auto">
+                <DocumentScopePanel key={`${jobId}:${displayedAnalysisRevision(detail) ?? ""}`} jobId={jobId} onQueued={handleScopeQueued} />
+                <MetadataTab job={detail} detail={detail} />
+              </div>
             ) : (
               <><AnalysisCheckProgress value={detail.check_progress} /><StageHistoryTab
                 stageProgress={detail.stage_progress as { phase?: string | null; percent?: number | null } | null}

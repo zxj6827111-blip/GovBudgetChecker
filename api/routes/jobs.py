@@ -11,6 +11,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from starlette.concurrency import run_in_threadpool
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import Literal
+from uuid import UUID
 
 from api import job_list_query, runtime
 from api.auth_utils import (
@@ -48,6 +51,13 @@ async def published_job_view(job_id,payload,user):
               'structured_ingest':published.get('structured_ingest'),'review_report':published.get('review_report')}
     else:
         view={**published,'job_id':job_id}
+    from src.services.document_scope import pending_reanalysis
+    pending_scope = await pending_reanalysis(job_id)
+    if pending_scope:
+        view['scope_reanalysis'] = {key: pending_scope.get(key) for key in
+            ('request_id', 'dispatch_status', 'dispatch_error', 'retry_not_before')}
+        if view.get('status') not in runtime.ACTIVE_ANALYSIS_STATUSES | {'error', 'cancelled'}:
+            view.update(status='queued', stage='口径已确认，等待完整重新分析', progress=0)
     # 当前版本结果从数据库读取时，人工确认历史可能只存在于工作流/文件快照；
     # 必须按当前 revision 重新投影，否则页面会把已有确认显示成“暂无记录”。
     try:
@@ -691,6 +701,50 @@ async def reanalyze_job(job_id: str, request: Request):
     except Exception:
         body = {}
     return await runtime.reanalyze_job(job_id, body)
+
+
+class DocumentScopeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    document_version_id: int = Field(gt=0)
+    file_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    analysis_basis_token: str = Field(min_length=1, max_length=300)
+    expected_decision_revision: int = Field(ge=0)
+    material_scope: Literal["unit_self", "department_summary", "unknown"]
+    note: str = Field(min_length=3, max_length=2000)
+    evidence_reference: str = Field(min_length=3, max_length=2000)
+    acknowledge_conflicts: bool = False
+
+    @field_validator("note", "evidence_reference")
+    @classmethod
+    def meaningful_text(cls, value):
+        if len(value.strip()) < 3:
+            raise ValueError("请填写确认依据及证据位置")
+        return value.strip()
+
+
+@router.get("/api/jobs/{job_id}/document-scope")
+async def get_document_scope(job_id: str, request: Request):
+    _, _, user, payload = require_job_access(request, job_id)
+    from api import material_access
+    from src.services import document_scope
+    payload = await published_job_view(job_id, payload, user)
+    return await material_access.with_connection(lambda conn: document_scope.information(conn, job_id, payload))
+
+
+@router.post("/api/jobs/{job_id}/document-scope", status_code=202)
+async def confirm_document_scope(job_id: str, body: DocumentScopeRequest, request: Request):
+    _, _, user, _ = require_job_access(request, job_id)
+    from api import material_access
+    from src.services import document_scope, review_lifecycle_service
+    import hashlib
+    actual_hash = await run_in_threadpool(lambda: hashlib.sha256(runtime.find_first_pdf(runtime.UPLOAD_ROOT / job_id).read_bytes()).hexdigest())
+    values = body.model_dump(mode="json")
+    decision = await material_access.with_connection(lambda conn: review_lifecycle_service.confirm_document_scope(
+        conn, job_id, actor=str(user.get("username") or "unknown"), request=values, actual_file_hash=actual_hash))
+    await document_scope.dispatch_pending()
+    return {"decision": decision, "reanalysis_status": "pending_reanalysis",
+            "message": "口径确认已留痕，正在完整重新分析；旧复核已失效，新发现仍须复核。"}
 
 
 @router.post("/api/jobs/{job_id}/issues/ignore")

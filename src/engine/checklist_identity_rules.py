@@ -147,6 +147,10 @@ def body_scope(doc: Document) -> Optional[str]:
     """不看封面，只凭目录与正文标题判断部门/单位口径（封面本身是 A-02 的检查对象）。"""
     from src.services.fiscal_source_scope import heading_scope
 
+    field = getattr(getattr(doc, "document_profile", None), "subject_level", None)
+    if getattr(field, "source", None) == "human_confirmation":
+        return field.value if field.value in {"unit", "department"} else None
+
     kind = report_kind(doc)
     if kind not in {"final", "budget"}:
         return None

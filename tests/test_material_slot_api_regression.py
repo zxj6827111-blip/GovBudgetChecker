@@ -48,6 +48,9 @@ FROZEN_ROUTES = frozenset(
         ("DELETE", "/api/jobs/{job_id}"),
         ("POST", "/api/jobs/{job_id}/associate"),
         ("POST", "/api/jobs/{job_id}/reanalyze"),
+        # 批次 2：版本化材料口径证据与完整重分析入口，继续精确冻结其余接口。
+        ("GET", "/api/jobs/{job_id}/document-scope"),
+        ("POST", "/api/jobs/{job_id}/document-scope"),
         ("POST", "/api/jobs/{job_id}/issues/ignore"),
         ("POST", "/api/jobs/reanalyze-all"),
         ("POST", "/api/jobs/rematch-organizations"),

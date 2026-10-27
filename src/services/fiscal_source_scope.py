@@ -51,6 +51,11 @@ def organization_scope(artifact, local_title=None):
     """材料范围仅由明确封面/实际构成正文决定，局部表题和模板多数票不定论。"""
     from src.services.org_binding_decision import source_scope_evidence
 
+    decision = artifact.processing_manifest.get('document_binding', {}).get('scope_confirmation')
+    if decision and decision.get('file_hash') == artifact.source_file_hash:
+        from src.services.document_scope import MATERIAL_SCOPE_LEVEL
+        return MATERIAL_SCOPE_LEVEL[decision['material_scope']]
+
     pages = sorted({block.page_number for block in artifact.text_blocks})
     max_page = max(pages, default=1)
     texts = ["\n".join(_witness_blocks(artifact, lambda p, page=page: p == page))

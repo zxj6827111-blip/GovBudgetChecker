@@ -8938,6 +8938,10 @@ def _final_segment_subject(segment: str) -> str:
 
 
 def _infer_final_scope(doc: Document) -> Optional[str]:
+    profile = getattr(doc, "document_profile", None)
+    level = getattr(profile, "subject_level", None)
+    if getattr(level, "source", None) == "human_confirmation":
+        return level.value if level.value in {"unit", "department"} else None
     path_text = str(getattr(doc, "path", "") or "")
     head_text = "\n".join(doc.page_texts[:3])
     if "\u5355\u4f4d\u51b3\u7b97" in path_text or "\u5355\u4f4d\u51b3\u7b97" in head_text:
@@ -9186,16 +9190,19 @@ class R33236_DocumentScopeTerminology(Rule):
     desc = "部门/单位决算文种表述一致性"
 
     def apply(self, doc: Document) -> List[Issue]:
-        scope = _infer_final_scope(doc)
+        if not any(re.search(r"(?:部门|单位)决算安排", text or "") for text in doc.page_texts):
+            return []
+        context = getattr(doc, "fact_context", None)
+        if context is not None:
+            scope = context.org_scope
+        else:
+            # 没有事实上下文的独立规则入口也只采信明确范围声明。
+            from src.services.org_binding_decision import source_scope_evidence
+            scope, _, conflict = source_scope_evidence(doc.page_texts)
+            if conflict:
+                scope = None
+            scope = scope or _infer_final_scope(doc)
         if not scope:
-            # 封面只写“××年度决算”（上海 2022 单位决算）时，按目录与各部分标题判口径，
-            # 与 CMM-018 同一严格口径。
-            from src.services.fiscal_source_scope import heading_scope
-
-            scope = heading_scope("\n".join(list(doc.page_texts or [])[1:]), "final")
-        if not scope:
-            if not any(re.search(r"(?:部门|单位)决算安排", text or "") for text in doc.page_texts):
-                return []  # 两种“…决算安排”都没写，口径不影响本规则结论
             raise RuleDeferred(
                 self.code,
                 detail="未能识别决算材料口径（部门决算或单位决算）",

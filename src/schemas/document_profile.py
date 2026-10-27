@@ -76,6 +76,7 @@ SOURCE_DERIVED = "derived"
 SOURCE_UNRESOLVED = "unresolved"
 
 SOURCE_CONFIDENCE: Dict[str, float] = {
+    "human_confirmation": 1.0,
     SOURCE_EXPLICIT: 1.0,
     SOURCE_COVER_LABEL: 0.9,
     SOURCE_COVER_TITLE: 0.85,

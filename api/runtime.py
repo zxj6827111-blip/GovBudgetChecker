@@ -3185,6 +3185,7 @@ async def start_analysis(
         **preserved_context,
         "job_id": job_id,
         "status": "queued",
+        "document_scope_request_id": body.get("document_scope_request_id"),
         "progress": 0,
         "message": "analysis task queued",
         "use_local_rules": use_local_rules,

@@ -278,12 +278,13 @@ def _create_unit_with_department(client: TestClient, name: str) -> dict:
     suffix = uuid.uuid4().hex[:8]
     create_dept = client.post(
         "/api/organizations",
-        json={"name": f"归属部门-{suffix}", "level": "department"},
+        # 随机十六进制尾部可能恰好为 2052 等年份，不能随机触发组织名确认门禁。
+        json={"name": f"归属部门-{suffix}-测试部门", "level": "department"},
     )
     assert create_dept.status_code == 200, create_dept.text
     create_unit = client.post(
         "/api/organizations",
-        json={"name": name, "level": "unit", "parent_id": create_dept.json()["id"]},
+        json={"name": f"{name}-测试单位", "level": "unit", "parent_id": create_dept.json()["id"]},
     )
     assert create_unit.status_code == 200, create_unit.text
     return create_unit.json()

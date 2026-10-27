@@ -118,6 +118,11 @@ async def persist_analysis_job_snapshot(
                     await _upsert_analysis_result(conn, job_db_id, payload)
                     from src.services.analysis_fact_snapshot import publish_snapshot
                     await publish_snapshot(conn, payload)
+                    decision = ((payload.get("result") or {}).get("meta") or {}).get("document_scope_confirmation")
+                    if decision:
+                        await conn.execute("UPDATE document_scope_decisions SET dispatch_status='applied',dispatch_error=NULL "
+                                           "WHERE request_id=$1::uuid AND job_uuid=$2 AND file_hash=$3",
+                                           decision["request_id"], job_uuid, decision["file_hash"])
                 elif status in _ACTIVE_JOB_STATUSES:
                     await conn.execute("DELETE FROM analysis_results WHERE job_id = $1 AND EXISTS "
                                        "(SELECT 1 FROM analysis_jobs WHERE id=$1 AND current_fact_revision_id IS NULL)", job_db_id)

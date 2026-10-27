@@ -1722,6 +1722,34 @@ from src.db.reporting_task_migration import MIGRATION as REPORTING_TASK_MIGRATIO
 
 MIGRATIONS.append(REPORTING_TASK_MIGRATION)
 
+DOCUMENT_SCOPE_MIGRATION = {
+    "id": "2026-10-27_0041_document_scope_decisions",
+    "description": "材料口径的版本化人工证据与完整重分析发件箱",
+    "sql": [
+        """CREATE TABLE IF NOT EXISTS document_scope_decisions (
+            request_id UUID PRIMARY KEY,
+            job_uuid VARCHAR(36) NOT NULL REFERENCES analysis_jobs(job_uuid),
+            document_version_id BIGINT NOT NULL REFERENCES fiscal_document_versions(id),
+            file_hash VARCHAR(64) NOT NULL,
+            revision INTEGER NOT NULL CHECK (revision > 0),
+            analysis_basis_token TEXT NOT NULL,
+            material_scope TEXT NOT NULL CHECK (material_scope IN ('unit_self','department_summary','unknown')),
+            note TEXT NOT NULL,
+            evidence_reference TEXT NOT NULL,
+            source_evidence JSONB NOT NULL,
+            actor TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            dispatch_status TEXT NOT NULL DEFAULT 'pending' CHECK (dispatch_status IN ('pending','queued','applied')),
+            dispatch_error TEXT,
+            dispatch_attempts INTEGER NOT NULL DEFAULT 0,
+            retry_not_before TIMESTAMPTZ,
+            UNIQUE(job_uuid, document_version_id, revision)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_scope_decisions_pending ON document_scope_decisions(created_at) WHERE dispatch_status='pending'",
+    ],
+}
+MIGRATIONS.append(DOCUMENT_SCOPE_MIGRATION)
+
 
 async def ensure_migrations_table(conn: asyncpg.Connection, schema: str):
     """Create the schema_migrations tracking table if not exists.

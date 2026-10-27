@@ -1524,8 +1524,11 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                     if block.page_number == index+1 and block.extraction_method == "ocr"
                     and block.confidence is not None and block.confidence >= .98)
                 profile_page_texts[index] += "\n" + qualified_identity_text
+        from src.services.document_scope import load_for_analysis, apply_profile
+        scope_confirmation = await load_for_analysis(job_dir.name, parse_artifact_obj.source_file_hash) if parse_artifact_obj else None
         operand_profile = resolve_document_profile(filename=pdf_path.name,page_texts=profile_page_texts,
             explicit_report_kind=report_kind if any(text.strip() for text in page_texts) else None)
+        apply_profile(operand_profile, scope_confirmation)
         identity_conflicts = {item.get("field") for item in operand_profile.conflicts}
         if not organization_name and "organization_name" not in identity_conflicts:
             organization_name = operand_profile.organization_name.value
@@ -1547,6 +1550,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             cover_name=operand_profile.organization_name.value,
             cover_conflicted="organization_name" in identity_conflicts,
             subject_level=operand_profile.subject_level.value,
+            cover_text=profile_page_texts[0] if profile_page_texts else None,
         )
         check_subject_name = check_subject["name"]
         if parse_artifact_obj is not None:
@@ -1554,7 +1558,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             bind_artifact_document_identity(parse_artifact_obj,
                 organization_id=organization_id, organization_name=organization_name,
                 fiscal_year=report_year or fiscal_year, report_kind=report_kind, doc_type=doc_type,
-                check_subject_name=check_subject_name)
+                check_subject_name=check_subject_name, scope_confirmation=scope_confirmation)
 
         # ZC-02（AC-07）：OCR 候选表经列身份/关键数字/置信度复验后晋升为
         # 可检查事实——与原生表共用同一事实物化路径；未通过者保持候选
@@ -1816,6 +1820,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             page_texts=profile_page_texts,
             page_assessment=page_assessment,
         )
+        apply_profile(document_profile, scope_confirmation)
         if document_profile.kind in {"budget", "final"}:
             report_kind = document_profile.kind
 
@@ -2404,6 +2409,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         result["meta"]["rule_registry_version"] = RULE_REGISTRY_VERSION
         result["meta"]["rule_policy_version"] = PORTABLE_RULE_POLICY_VERSION
         result["meta"]["document_profile"] = document_profile.to_dict()
+        result["meta"]["document_scope_confirmation"] = scope_confirmation
         result["meta"]["check_subject"] = check_subject
         result["meta"]["structure_view"] = structure_view
         logger.info(

@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { Badge, Button } from "@/components/ui";
+import { DocumentScopePanel } from "./DocumentScopePanel";
 import {
   obligationDecisionLabel,
   obligationDecisionTone,
@@ -27,6 +28,8 @@ import {
  */
 
 interface ObligationsTabProps {
+  jobId?: string;
+  onScopeQueued?: () => void;
   block: ObligationReviewBlockRecord;
   /** 正在提交补核的义务 id（防连点）。 */
   submittingId: string | null;
@@ -158,7 +161,7 @@ function ObligationRow({ item, submittingId, readOnly, onDecide }: {
   );
 }
 
-export function ObligationsTab({ block, submittingId, readOnly, onDecide }: ObligationsTabProps) {
+export function ObligationsTab({ block, submittingId, readOnly, onDecide, jobId, onScopeQueued }: ObligationsTabProps) {
   if (!block.available) {
     return (
       <div className="px-4 py-6 text-sm text-slate-500" data-testid="gbc-obligation-unavailable">
@@ -175,6 +178,9 @@ export function ObligationsTab({ block, submittingId, readOnly, onDecide }: Obli
   }
   return (
     <div className="flex h-full flex-col overflow-hidden">
+      {jobId && block.items.some(item => item.obligation_id === "OBL-STRUCT-TERMINOLOGY") ? (
+        <DocumentScopePanel jobId={jobId} onQueued={() => onScopeQueued?.()} />
+      ) : null}
       <div
         className="shrink-0 border-b border-border bg-surface-50 px-4 py-2 text-xs text-slate-500"
         data-testid="gbc-obligation-summary"

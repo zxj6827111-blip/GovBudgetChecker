@@ -248,5 +248,10 @@ def test_scope_wording_rule_has_nothing_to_check_without_either_phrase():
                           '第二部分 甲中心2022年度决算表\n第三部分 甲中心2022年度决算情况说明',
                           '一、主要职能', '（三）其他\n本年部门决算安排如下'], [], 0)
     unit.report_kind = 'final'
+    # 标题体例只能提示，真实命中“决算安排”时，未知口径仍须人工确认。
+    with pytest.raises(RuleDeferred):
+        R33236_DocumentScopeTerminology().apply(unit)
+    from types import SimpleNamespace
+    unit.fact_context = SimpleNamespace(org_scope='unit')
     issues = R33236_DocumentScopeTerminology().apply(unit)
     assert issues and '单位决算安排' in issues[0].message

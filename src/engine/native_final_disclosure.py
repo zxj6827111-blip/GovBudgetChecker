@@ -274,6 +274,28 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                     return rebound
             level = {'klass': '类', 'kuan': '款', 'xiang': '项'}[group]
             if not candidates:
+                # 仅解释原文差异，不把近似名称或相同金额升级为同一科目身份。
+                near = {}
+                requested = _name(item[group])
+                if group == 'xiang':
+                    for f in facts:
+                        code = str(f.subject_code)
+                        actual = _name(f.subject_name)
+                        if (f.indicator != 'total_actual' or len(paths.get(code, '')) != 7
+                                or not paths[code].startswith(parent) or not 0 < len(actual)-len(requested) <= 2):
+                            continue
+                        chars = iter(actual)
+                        if all(char in chars for char in requested):
+                            near[code] = f
+                if len(near) == 1:
+                    candidate = next(iter(near.values()))
+                    refs = candidate.extra_dims.get('evidence_refs', [])
+                    pages = sorted({ref['physical_page'] for ref in refs if ref.get('physical_page')})
+                    text = _Text.from_pages(doc.page_texts)
+                    source = text.refs(item.start(), item.end(), '原文科目')
+                    return None, (f"科目名称差异候选：正文第{source[0]['page'] if source else '?'}页写“{item[group]}”；"
+                                  f"同款表格第{'、'.join(map(str,pages)) or '?'}页编码{candidate.subject_code}写“{candidate.subject_name}”。"
+                                  "名称不一致，尚未绑定金额；请核对科目名称后确认，不能仅凭金额相同认定一致。")
                 return None, (f'说明中的{level}“{item[group]}”在表内找不到同名科目'
                               f'（可能使用了旧科目名称或写错），无法与表格金额对应')
             return None, f'说明中的{level}“{item[group]}”在表内对应多个科目，无法唯一对应'
