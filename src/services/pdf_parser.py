@@ -478,7 +478,24 @@ class PDFParser:
                     )
                     if visibility_stats.get("recovered") or visibility_stats.get("conflicts") \
                             or visibility_stats.get("skipped"):
-                        self._label_visibility_stats.append(visibility_stats)
+                        # 同一片段可能由多个抽取候选各跑一次；汇总证据只保留
+                        # 恢复量最大的那份，避免同一格在回执里重复出现。
+                        identity = (
+                            visibility_stats.get("fragment_uid"),
+                            visibility_stats.get("table_code"),
+                            visibility_stats.get("page"),
+                        )
+                        existing = next(
+                            (index for index, item in enumerate(self._label_visibility_stats)
+                             if (item.get("fragment_uid"), item.get("table_code"),
+                                 item.get("page")) == identity),
+                            None,
+                        )
+                        if existing is None:
+                            self._label_visibility_stats.append(visibility_stats)
+                        elif int(visibility_stats.get("recovered") or 0) > int(
+                                self._label_visibility_stats[existing].get("recovered") or 0):
+                            self._label_visibility_stats[existing] = visibility_stats
                 # 裁决前给所有候选补齐同一原页的字符证明。恢复路径只给改动格
                 # 留证明，不能拿这些稀疏记录与另一候选的完整证明直接比数量。
                 from src.services.native_structure_recovery import bind_native_grid_character_sources
