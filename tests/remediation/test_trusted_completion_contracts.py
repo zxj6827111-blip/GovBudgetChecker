@@ -42,6 +42,7 @@ async def test_current_job_view_keeps_new_attempt_failure_and_denies_changed_own
     from fastapi import HTTPException
     from api.routes.jobs import published_job_view
     monkeypatch.setenv('DATABASE_URL','postgresql://control.invalid/test')
+    monkeypatch.setattr('src.services.document_scope.pending_reanalysis',AsyncMock(return_value=None))
     monkeypatch.setattr('src.services.analysis_fact_snapshot.read_database_result',AsyncMock(return_value={
         'analysis_revision':'old','status':'done','result':{'bound':'old'},'structured_ingest':{}}))
     monkeypatch.setattr('api.routes.jobs.user_can_access_job',lambda user,payload:True)

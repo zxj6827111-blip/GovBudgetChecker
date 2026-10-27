@@ -52,7 +52,10 @@ async def published_job_view(job_id,payload,user):
     else:
         view={**published,'job_id':job_id}
     from src.services.document_scope import pending_reanalysis
-    pending_scope = await pending_reanalysis(job_id)
+    try:
+        pending_scope = await pending_reanalysis(job_id)
+    except Exception as error:
+        raise HTTPException(503, 'material scope status unavailable') from error
     if pending_scope:
         view['scope_reanalysis'] = {key: pending_scope.get(key) for key in
             ('request_id', 'dispatch_status', 'dispatch_error', 'retry_not_before')}
