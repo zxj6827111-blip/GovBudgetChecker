@@ -9190,7 +9190,21 @@ class R33236_DocumentScopeTerminology(Rule):
     desc = "部门/单位决算文种表述一致性"
 
     def apply(self, doc: Document) -> List[Issue]:
-        if not any(re.search(r"(?:部门|单位)决算安排", text or "") for text in doc.page_texts):
+        from .native_narrative_checks import _Text
+        # 只合并同一物理页内的软换行，并保留归一位置到原文的映射。
+        source_text = _Text.from_pages(doc.page_texts)
+        views = []
+        for left, right in source_text.pages:
+            first, last = source_text.compact_range(left, right)
+            views.append((source_text.compact[first:last], [pos-left for pos in source_text.positions[first:last]]))
+        boundary_reasons = []
+        for index, (left, right) in enumerate(zip(views, views[1:]), 1):
+            if any(left[0].endswith(term[:split]) and right[0].startswith(term[split:])
+                   for term in ('部门决算安排', '单位决算安排') for split in range(1, len(term))):
+                boundary_reasons.append(f'第{index}—{index+1}页的口径表达可能跨页断裂，不能把两个页面边缘直接拼成确定结论')
+        if not any(re.search(r"(?:部门|单位)决算安排", view[0]) for view in views):
+            if boundary_reasons:
+                raise RuleDeferred(self.code, '；'.join(boundary_reasons), unresolved_reasons=boundary_reasons)
             return []
         context = getattr(doc, "fact_context", None)
         if context is not None:
@@ -9221,16 +9235,20 @@ class R33236_DocumentScopeTerminology(Rule):
             wrong_label = "单位决算安排"
 
         issues: List[Issue] = []
-        for page_num, text in enumerate(doc.page_texts, start=1):
-            for match in pattern.finditer(text or ""):
+        for page_num, (text, (compact, positions)) in enumerate(zip(doc.page_texts, views), start=1):
+            for match in pattern.finditer(compact):
+                start, end = positions[match.start()], positions[match.end()-1] + 1
                 issues.append(
                     self._issue(
                         f"当前材料为{current_scope}，但正文出现“{wrong_label}”表述，建议统一为“{expected}”",
-                        {"page": page_num, "section": "其他相关情况说明", "pos": match.start()},
+                        {"page": page_num, "section": "其他相关情况说明", "pos": start,
+                         "end_pos": end, "table_refs": [{"page": page_num, "span": text[start:end], "role": "口径用语原文"}]},
                         severity="warn",
-                        evidence_text=(text or "")[max(0, match.start() - 40): match.end() + 80].replace("\n", " "),
+                        evidence_text=(text or "")[max(0, start - 40): end + 80].replace("\n", " "),
                     )
                 )
+        if boundary_reasons:
+            raise RuleDeferred(self.code, '；'.join(boundary_reasons), partial_issues=issues, unresolved_reasons=boundary_reasons)
         return issues
 
 

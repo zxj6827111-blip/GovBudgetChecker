@@ -797,6 +797,8 @@ def test_common_income_expense_trend_rule_detects_direction_conflict() -> None:
         "\u6bd42025\u5e74\u9884\u7b97\u589e\u52a077.37\u4e07\u5143\u3002"
         "\u8d22\u653f\u62e8\u6b3e\u6536\u5165\u652f\u51fa\u51cf\u5c11\u7684\u4e3b\u8981\u539f\u56e0\u662f\u9879\u76ee\u8c03\u6574\u3002"
     )
+    # 汇总声明是财政拨款口径，两个操作数也必须显式属于同一资金范围。
+    page_text = page_text.replace("年收入预算", "年财政拨款收入预算").replace("年支出预算", "年财政拨款支出预算")
     doc = build_document(
         path="unit-2026-budget.pdf",
         page_texts=[page_text],
@@ -828,6 +830,7 @@ def test_common_income_expense_trend_rule_quotes_summary_sentence_with_optional_
         "\u8d22\u653f\u62e8\u6b3e\u6536\u5165\u652f\u51fa\u589e\u52a0\uff08\u51cf\u5c11\uff09"
         "\u7684\u4e3b\u8981\u539f\u56e0\u662f\u57fa\u5efa\u9879\u76ee\u51cf\u5c11\u3002"
     )
+    page_text = page_text.replace("年收入预算", "年财政拨款收入预算").replace("年支出预算", "年财政拨款支出预算")
     doc = build_document(
         path="unit-2026-budget.pdf",
         page_texts=[page_text],
