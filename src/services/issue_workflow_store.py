@@ -834,10 +834,141 @@ def get_job_issue_decision_records(job_id: str) -> Dict[str, Dict[str, Any]]:
     return result
 
 
+def _event_revision(record: Dict[str, Any]) -> int:
+    value = str(record.get("decision_revision") or "0")
+    return int(value) if value.isdigit() else 0
+
+
+def _pick_latest(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """按“当前分析 > 决定代数 > 时间”挑选一条；输入是同一身份的事件。"""
+    return max(
+        records,
+        key=lambda item: (
+            bool(item.get("same_revision")),
+            _event_revision(item.get("record") or {}),
+            str((item.get("record") or {}).get("updated_at") or ""),
+        ),
+    )
+
+
+def _member_decision(item: Dict[str, Any]) -> Dict[str, Any]:
+    record = item.get("record") or {}
+    return {
+        "issue_id": str(item.get("event_issue_id") or ""),
+        "status": str(record.get("status") or "pending"),
+        "decision_revision": str(record.get("decision_revision") or "1"),
+        "analysis_revision": record.get("analysis_revision"),
+        "inherited": not bool(item.get("same_revision")),
+        "actor": record.get("decision_actor"),
+        "updated_at": record.get("updated_at"),
+        "note": record.get("note"),
+    }
+
+
+def _project_group(canonical_id: str, issue: Dict[str, Any], records: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """把一个规范组上的全部事件聚合成一条投影。
+
+    语义（批次 1 返工）：
+    - 当前分析的**规范组决定**是显式重新确认，优先于成员决定；
+    - 没有当前规范决定时，当前分析的成员决定参与聚合；成员结论不一致
+      → ``needs_review``，不得挑一个放行；
+    - 只有旧成员/旧规范决定时，同样按“一致才收敛，冲突必阻塞”处理；
+    - 继承的旧成员决定不能与当前成员决定互相冲突，当前决定优先。
+    """
+    if not records:
+        return None
+    canonical_records = [item for item in records if item.get("event_issue_id") == canonical_id]
+    member_records = [item for item in records if item.get("event_issue_id") != canonical_id]
+    current_canonical = [item for item in canonical_records if item.get("same_revision")]
+    current_members = [item for item in member_records if item.get("same_revision")]
+    inherited_canonical = [item for item in canonical_records if not item.get("same_revision")]
+    inherited_members = [item for item in member_records if not item.get("same_revision")]
+
+    status = "pending"
+    conflict = False
+    inherited = False
+    chosen: Optional[Dict[str, Any]] = None
+    superseded: List[Dict[str, Any]] = []
+    if current_canonical:
+        chosen = _pick_latest(current_canonical)
+        status = str((chosen.get("record") or {}).get("status") or "pending")
+        superseded = [_member_decision(item) for item in member_records]
+    elif current_members:
+        chosen = _pick_latest(current_members)
+        statuses = sorted({str((item.get("record") or {}).get("status") or "pending")
+                           for item in current_members})
+        if len(statuses) > 1:
+            status, conflict = "needs_review", True
+            chosen = _pick_latest(current_members)
+        else:
+            status = statuses[0]
+        superseded = [_member_decision(item) for item in inherited_members]
+    elif inherited_canonical:
+        chosen = _pick_latest(inherited_canonical)
+        status = str((chosen.get("record") or {}).get("status") or "pending")
+        inherited = True
+    elif inherited_members:
+        chosen = _pick_latest(inherited_members)
+        statuses = sorted({str((item.get("record") or {}).get("status") or "pending")
+                           for item in inherited_members})
+        if len(statuses) > 1:
+            status, conflict = "needs_review", True
+        else:
+            status = statuses[0]
+        inherited = True
+    else:
+        return None
+
+    record = chosen.get("record") or {}
+    facts = sorted(_strings(issue.get("fact_ids")))
+    evidence = sorted(_strings(issue.get("evidence_ids")))
+    resolved_from_issue_id = (
+        str(chosen.get("event_issue_id"))
+        if str(chosen.get("event_issue_id")) != canonical_id
+        else record.get("resolved_from_issue_id")
+    )
+    result = {
+        "issue_id": canonical_id,
+        "resolved_from_issue_id": resolved_from_issue_id,
+        "resolved_from_issue_ids": sorted({
+            str(item.get("event_issue_id")) for item in member_records
+            if item.get("event_issue_id")
+        }),
+        "title": issue.get("title") or record.get("title"),
+        "page": issue.get("page_number") if issue.get("page_number") is not None else _issue_page(issue),
+        "status": status,
+        "conflict": conflict,
+        "member_decisions": [_member_decision(item) for item in member_records],
+        **({"superseded_member_decisions": superseded} if superseded else {}),
+        "note": (
+            "成员结论冲突，需显式组级重新确认"
+            if conflict
+            else record.get("note")
+        ),
+        "analysis_revision": record.get("analysis_revision"),
+        "decision_revision": str(record.get("decision_revision") or "1"),
+        "inherited": inherited,
+        "actor": record.get("decision_actor"),
+        "updated_at": record.get("updated_at"),
+        "hide_from_results": bool(record.get("hide_from_results", False)),
+        "decision_origin": record.get("decision_origin") or "workflow",
+        "migration_id": record.get("migration_id"),
+        "check_relation_id": issue.get("check_relation_id"),
+        "fact_ids": facts,
+        "evidence_ids": evidence,
+        "identity_fingerprint": issue_identity_fingerprint(issue),
+    }
+    return result
+
+
 def project_job_issue_decisions(
     job_id: str, payload: Dict[str, Any], *, _state: Optional[Dict[str, Any]] = None
 ) -> List[Dict[str, Any]]:
-    """Project only decisions that still match this report revision or issue identity."""
+    """Project only decisions that still match this report revision or issue identity.
+
+    投影在丢弃旧成员 ID 之前完成组级聚合：显式当前规范决定优先；没有时按
+    当前成员决定聚合，成员结论冲突输出 ``needs_review``，不得挑一条放行。
+    """
     revision = str(payload.get("analysis_revision") or "")
     normalized_job_id = str(job_id or "").strip()
     if not revision:
@@ -853,7 +984,7 @@ def project_job_issue_decisions(
     for event in state.get("decision_events", []):
         if str(event.get("job_id") or "") == normalized_job_id:
             events_by_issue.setdefault(str(event.get("issue_id") or ""), []).append(event)
-    projected: List[Dict[str, Any]] = []
+    grouped: Dict[str, Dict[str, Any]] = {}
     for issue_id in sorted(events_by_issue):
         issue = _find_issue(payload, issue_id)
         if issue is None:
@@ -883,60 +1014,20 @@ def project_job_issue_decisions(
             else:
                 applies = same_revision or same_identity
             if applies:
-                matching_events.append((same_revision, event))
+                matching_events.append({"record": event, "same_revision": same_revision})
         if not matching_events:
             continue
-        # Prefer the decision recorded for this exact analysis. Otherwise the
-        # latest identity-compatible event may be inherited by a rerun.
-        _, record = max(
-            matching_events,
-            key=lambda pair: (
-                pair[0],
-                int(str(pair[1].get("decision_revision") or "0"))
-                if str(pair[1].get("decision_revision") or "0").isdigit() else 0,
-                str(pair[1].get("updated_at") or ""),
-            ),
-        )
-        same_revision = bool(revision and str(record.get("analysis_revision") or "") == revision)
+        latest = _pick_latest(matching_events)
         canonical_id = str(issue.get("id") or issue_id)
-        projected.append(
-            {
-                "issue_id": canonical_id,
-                "resolved_from_issue_id": (
-                    issue_id if canonical_id != issue_id else record.get("resolved_from_issue_id")
-                ),
-                "title": record.get("title") or issue.get("title"),
-                "page": record.get("page") if record.get("page") is not None else _issue_page(issue),
-                "status": str(record.get("status") or "pending"),
-                "note": record.get("note"),
-                "analysis_revision": revision or str(record.get("analysis_revision") or ""),
-                "decision_revision": str(record.get("decision_revision") or "1"),
-                "inherited": not same_revision,
-                "actor": record.get("decision_actor"),
-                # 页面上必须能看到旧意见的操作时间，不能只给 actor/note。
-                "updated_at": record.get("updated_at"),
-                "hide_from_results": bool(record.get("hide_from_results", False)),
-                "decision_origin": record.get("decision_origin") or "workflow",
-                "migration_id": record.get("migration_id"),
-                "check_relation_id": issue.get("check_relation_id"),
-                "fact_ids": facts,
-                "evidence_ids": evidence,
-                "identity_fingerprint": issue_identity_fingerprint(issue),
-            }
-        )
-    # 同一组可能同时有旧成员决定与规范决定：返回一条，优先当前分析、较新决定。
-    deduped: Dict[str, Dict[str, Any]] = {}
-    for item in projected:
-        key = str(item.get("issue_id") or "")
-        current = deduped.get(key)
-        if current is None or (
-            (not item.get("inherited"), bool(current.get("inherited")))
-            or (bool(item.get("inherited")) == bool(current.get("inherited"))
-                and int(str(item.get("decision_revision") or "0") or 0)
-                > int(str(current.get("decision_revision") or "0") or 0))
-        ):
-            deduped[key] = item
-    return [deduped[key] for key in sorted(deduped)]
+        bundle = grouped.setdefault(canonical_id, {"issue": issue, "records": []})
+        bundle["records"].append({"event_issue_id": issue_id, **latest})
+    projected = []
+    for canonical_id in sorted(grouped):
+        bundle = grouped[canonical_id]
+        projected_item = _project_group(canonical_id, bundle["issue"], bundle["records"])
+        if projected_item is not None:
+            projected.append(projected_item)
+    return projected
 
 
 def _append_decision_event(state: Dict[str, Any], record: Dict[str, Any]) -> Dict[str, Any]:

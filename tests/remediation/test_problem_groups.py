@@ -170,3 +170,144 @@ def test_decision_record_marks_resolved_alias_source():
     )
     assert record["issue_id"] == issue["id"]
     assert record["resolved_from_issue_id"] == "CMM-011-7"
+
+
+# ---------------------------------------------------------------------------
+# B1-A01 返工：冲突成员决定必须在投影和门禁两层都保持未解决
+# ---------------------------------------------------------------------------
+
+from src.services import issue_workflow_store as _workflow
+from src.services.review_lifecycle_service import _problem_blockers as _lifecycle_blockers
+
+
+def _conflict_issue():
+    return {
+        "id": "pg-canonical", "rule_id": "V33-222", "severity": "high",
+        "title": "单位错误", "message": "同源单位问题", "evidence_status": "complete",
+        "location": {"member_issue_ids": ["member-a", "member-b"]},
+    }
+
+
+def _decision_event(issue_id, status, revision=1, analysis_revision="rev-current"):
+    return {
+        "job_id": "job", "issue_id": issue_id,
+        "analysis_revision": analysis_revision,
+        "status": status, "decision_revision": str(revision),
+        "decision_actor": "tester", "updated_at": f"2026-10-27T00:00:0{min(revision, 9)}Z",
+    }
+
+
+def _project(events, issue=None, analysis_revision="rev-current"):
+    payload = {"analysis_revision": analysis_revision,
+               "result": {"rule_findings": [issue or _conflict_issue()]}}
+    return _workflow.project_job_issue_decisions(
+        "job", payload, _state={"decision_events": events})
+
+
+def test_conflicting_member_decisions_project_to_needs_review_and_block_gate():
+    projected = _project([
+        _decision_event("member-a", "confirmed"),
+        _decision_event("member-b", "no_issue"),
+    ])
+    assert len(projected) == 1
+    assert projected[0]["status"] == "needs_review"
+    assert projected[0]["conflict"] is True
+    assert {item["issue_id"] for item in projected[0]["member_decisions"]} == {"member-a", "member-b"}
+    problems = collect_review_problems(job_uuid="job", rule_findings=[_conflict_issue()])
+    decisions = {item["issue_id"]: item["status"] for item in projected}
+    blockers = _lifecycle_blockers(problems, decisions)
+    assert any(blocker.code == "needs_review_findings" and blocker.count == 1 for blocker in blockers)
+    counts = build_issue_counts(problems, decisions)
+    assert counts["needs_review"] == 1 and counts["total"] == 1
+
+
+def test_conflicting_member_decisions_are_order_independent():
+    for events in (
+        [_decision_event("member-b", "no_issue"), _decision_event("member-a", "confirmed")],
+        [_decision_event("member-a", "confirmed"), _decision_event("member-b", "no_issue")],
+    ):
+        projected = _project(events)
+        assert projected[0]["status"] == "needs_review"
+        assert projected[0]["conflict"] is True
+
+
+def test_same_member_conclusions_converge():
+    projected = _project([
+        _decision_event("member-a", "confirmed"),
+        _decision_event("member-b", "confirmed"),
+    ])
+    assert projected[0]["status"] == "confirmed"
+    assert projected[0]["conflict"] is False
+    assert len(projected[0]["member_decisions"]) == 2
+
+
+def test_latest_member_decision_wins_within_member():
+    projected = _project([
+        _decision_event("member-a", "no_issue", revision=1),
+        _decision_event("member-a", "confirmed", revision=2),
+        _decision_event("member-b", "confirmed", revision=1),
+    ])
+    assert projected[0]["status"] == "confirmed"
+    assert projected[0]["decision_revision"] == "2"
+
+
+def test_explicit_current_group_decision_supersedes_conflicting_members():
+    projected = _project([
+        _decision_event("member-a", "confirmed"),
+        _decision_event("member-b", "no_issue"),
+        _decision_event("pg-canonical", "confirmed", revision=3),
+    ])
+    assert projected[0]["status"] == "confirmed"
+    assert projected[0]["conflict"] is False
+    assert projected[0]["resolved_from_issue_id"] is None
+    assert set(projected[0]["resolved_from_issue_ids"]) == {"member-a", "member-b"}
+    assert len(projected[0]["superseded_member_decisions"]) == 2
+    problems = collect_review_problems(job_uuid="job", rule_findings=[_conflict_issue()])
+    decisions = {item["issue_id"]: item["status"] for item in projected}
+    assert not _lifecycle_blockers(problems, decisions)
+
+
+def test_current_group_decision_wins_over_inherited_members():
+    projected = _project([
+        _decision_event("member-a", "confirmed", analysis_revision="rev-old"),
+        _decision_event("member-b", "no_issue", analysis_revision="rev-old"),
+        _decision_event("pg-canonical", "no_issue", revision=2),
+    ])
+    assert projected[0]["status"] == "no_issue"
+    assert projected[0]["inherited"] is False
+    assert projected[0]["conflict"] is False
+
+
+def test_inherited_group_decision_yields_to_current_conflicting_members():
+    projected = _project([
+        _decision_event("pg-canonical", "confirmed", analysis_revision="rev-old"),
+        _decision_event("member-a", "confirmed"),
+        _decision_event("member-b", "no_issue"),
+    ])
+    assert projected[0]["status"] == "needs_review"
+    assert projected[0]["inherited"] is False
+    assert projected[0]["conflict"] is True
+
+
+def test_inherited_group_decision_yields_to_current_agreeing_members():
+    projected = _project([
+        _decision_event("pg-canonical", "no_issue", analysis_revision="rev-old"),
+        _decision_event("member-a", "confirmed"),
+        _decision_event("member-b", "confirmed"),
+    ])
+    assert projected[0]["status"] == "confirmed"
+    assert projected[0]["inherited"] is False
+
+
+def test_old_member_events_without_identity_are_not_inherited_for_positive_decisions():
+    projected = _project([
+        _decision_event("member-a", "confirmed", analysis_revision="rev-old"),
+        _decision_event("member-b", "confirmed", analysis_revision="rev-old"),
+    ])
+    assert projected == []
+
+
+def test_raw_member_decisions_block_gate_even_without_projection():
+    problems = collect_review_problems(job_uuid="job", rule_findings=[_conflict_issue()])
+    blockers = _lifecycle_blockers(problems, {"member-a": "confirmed", "member-b": "no_issue"})
+    assert any(blocker.code == "needs_review_findings" and blocker.count == 1 for blocker in blockers)
