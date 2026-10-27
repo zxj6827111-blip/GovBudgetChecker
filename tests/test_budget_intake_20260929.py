@@ -7,7 +7,7 @@ insufficient；决算侧 CMM-001（三公表×说明）4/4 转真实判定。
 - BUD-105/107/108/109 on 3 份预算：全部出真实判定（pass/fail/not_applicable），
   Deferred 类必须有正面证据（BUD-105 的差额=T6 实证锁在
   test_bud105_dual_caliber::test_bud105_gate_keeps_deferred_when_diff_not_t6）
-- 预算 3 份 unresolved：每份 ≤2，合计 ≤6（实测 2/0/2）
+- 预算 3 份历史 unresolved：每份 ≤2；新增 CMM-006 身份绑定缺口单独锁定，合计仍 ≤6
 - CMM-001 on 4 份决算：4/4 出判定；每份 ≥5/6 字段提取成功（缺项需取证）
 - 4 份决算 unresolved 合计 14 → ≤10（实测 10；其余规则不得上升）
 - 宜川 findings 12 不动；文旅 1700.57 级联 0；golden 零变化
@@ -189,15 +189,29 @@ EXPECTED_BUD_UNRESOLVED = {
     "wenlvju": {"BUD-001"},
 }
 
+# 2026-10-27：不再跨“总额，其中分项”的金额猜配同比。
+# 冻结原文中这两份声明还缺唯一的操作数绑定，保留待补核，不能为旧数量门槛强行 pass。
+EXPECTED_CONTEXT_GUARDS = {
+    "jianguanwei": {"CMM-006"},
+    "chengguan": {"CMM-006"},
+    "wenlvju": set(),
+}
+
 
 @pytest.mark.parametrize("alias", sorted(BUDGET_FIXTURES))
 def test_budget_unresolved_per_doc(budget_replays, alias):
     summary = budget_replays[alias]["summary"]
     unresolved = {item.get("rule_id") for item in summary["unresolved_rules"]}
-    assert unresolved == EXPECTED_BUD_UNRESOLVED[alias], (
+    assert unresolved == EXPECTED_BUD_UNRESOLVED[alias] | EXPECTED_CONTEXT_GUARDS[alias], (
         f"{alias}: unresolved 集合 {unresolved} 与锁定不符"
     )
-    assert len(unresolved) <= 2, f"{alias}: unresolved {len(unresolved)} > 2"
+    # 历史修复不得回退；只允许新增这一条经原文证实的身份绑定缺口。
+    assert len(unresolved - EXPECTED_CONTEXT_GUARDS[alias]) <= 2
+    for rule_id in EXPECTED_CONTEXT_GUARDS[alias]:
+        receipt = next(item for item in summary["unresolved_rules"] if item["rule_id"] == rule_id)
+        assert receipt["status"] == "insufficient_data"
+        assert "comparison_identity_unresolved" in receipt["reason_codes"]
+        assert "分项或其他金额" in receipt["detail"]
 
 
 def test_budget_unresolved_total_le_6(budget_replays):
