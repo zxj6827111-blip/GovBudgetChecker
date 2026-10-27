@@ -77,6 +77,15 @@ _SUBITEM_SCOPE_RE = re.compile(
     r"各\s*[“\"']?\s*项\s*[”\"']?\s*中|下\s*[“\"']?\s*项\s*[”\"']?\s*中"
     r"|下各\s*[“\"']?\s*项|子项|明细"
 )
+# 否定或未确认的声明不能作为零值或不公开证据，也不能推断真实金额。
+_EXCEPTION_UNCERTAINTY_RE = re.compile(
+    r"(?:并不是|并不属于|尚未证实|尚未确认|并非|不是|不属于|并未|并不|"
+    r"未证实|未确认|未必|不能|不应|是否|可能|疑似)[^。；;，,、]{0,6}$"
+)
+_EXCEPTION_UNCONFIRMED_SUFFIX_RE = re.compile(
+    r"\s*[，,]?\s*[（(]?(?:的(?:说法|情况))?"
+    r"(?:尚未确认|尚待确认|未确认|待确认|待核实|待核对|待复核|仍需复核)"
+)
 _EXCEPTION_PATTERNS = (
     (re.compile(
         r"年初(?:无预算|无此项预算|无此项|预算不含此项|未安排预算|未编制预算|预算为零)"
@@ -87,7 +96,7 @@ _EXCEPTION_PATTERNS = (
         r"|未(?:发生|安排|列支|支出)(?:此|该项|本项)?支出"
     ), "zero", "final"),
     (re.compile(r"(?:本项|该项目|该科目|此科目)?无此项|无此科目|本项不涉及"), "zero", "auto"),
-    (re.compile(r"涉密[^。；;]{0,30}(?:不予公开|不公开)|依法不予公开"), "withheld", "auto"),
+    (re.compile(r"涉密(?:(?![。；;但而却]|不过).){0,30}(?:不予公开|不公开)|依法不予公开"), "withheld", "auto"),
 )
 
 
@@ -163,14 +172,12 @@ def _subject_clauses(joined: str, items: Sequence[Dict[str, Any]]) -> List[Dict[
 def _segment_bounds(text: str, pos: int) -> Tuple[int, int]:
     """例外声明所在的分句（逗号也切分）：后文另一个阶段的金额不属于本声明。"""
     start = 0
-    for index in range(pos - 1, -1, -1):
-        if text[index] in "。；;，,、":
-            start = index + 1
-            break
     end = len(text)
-    for index in range(pos, len(text)):
-        if text[index] in "。；;，,、":
-            end = index
+    for boundary in re.finditer(r"[。；;，,、]|然而|不过|但是|但|而|却", text):
+        if boundary.end() <= pos:
+            start = boundary.end()
+        elif boundary.start() >= pos:
+            end = boundary.start()
             break
     return start, end
 
@@ -197,6 +204,23 @@ def _exception_stages(
                 distance = 0
             if distance <= 12:
                 nearby.add(stage)
+    if len(nearby) == 2:
+        # 仅邻近不足以证明共同作用域；两个阶段须以并列结构共同修饰声明。
+        prefix = sentence[:match_start]
+        joint = re.search(
+            r"(?P<first>年初预算|预算数|预算|支出决算|决算数|决算)\s*"
+            r"(?:和|与|及|以及|、)\s*"
+            r"(?P<second>年初预算|预算数|预算|支出决算|决算数|决算)\s*$",
+            prefix,
+        )
+        if joint:
+            pair = {
+                "budget" if _STAGE_BUDGET_RE.fullmatch(joint.group(name)) else "final"
+                for name in ("first", "second")
+            }
+            if pair == {"budget", "final"}:
+                return sorted(pair), "stage"
+        return [], "ambiguous"
     if nearby:
         return sorted(nearby), "stage"
     if tokens:
@@ -215,25 +239,42 @@ def _clause_exceptions(text: str, text_start: int, item_head: str) -> List[Dict[
             claimed.append((match.start(), match.end()))
             sentence_start, sentence_end = _segment_bounds(text, match.start())
             sentence = text[sentence_start:sentence_end]
+            uncertainty = _EXCEPTION_UNCERTAINTY_RE.search(text[sentence_start:match.start()])
+            suffix_uncertainty = _EXCEPTION_UNCONFIRMED_SUFFIX_RE.match(text[match.end():])
             stages, scope = _exception_stages(
                 sentence, match.start() - sentence_start, match.end() - sentence_start, hint
             )
-            if reason == "withheld":
+            if scope == "subject" and (
+                re.match(r"[，,]?\s*(?:但|而|不过|然而|却)", text[sentence_end:])
+                or re.search(r"(?:但|而|不过|然而|却)[，,]?\s*$", text[:sentence_start])
+            ):
+                # 转折两侧不能由无阶段限定的片段推定整个科目都被豁免。
+                stages, scope = [], "ambiguous"
+            if reason == "withheld" and not (uncertainty or suffix_uncertainty):
                 # “年初预算涉密，决算不公开”这类跨逗号声明：声明自身提到的阶段
                 # 也要算进来，不能只看第一个分句。
                 phrase = text[match.start():match.end()]
-                if _STAGE_BUDGET_RE.search(phrase) and "budget" not in stages:
-                    stages.append("budget")
-                    scope = "stage"
-                if _STAGE_FINAL_RE.search(phrase) and "final" not in stages:
-                    stages.append("final")
-                    scope = "stage"
-            if _SUBITEM_SCOPE_RE.search(sentence):
+                # 跨逗号仅在两个阶段各有明确保密谓语时共同覆盖。
+                if re.fullmatch(r"涉密[，,]\s*(?:支出决算|决算数|决算|年初预算|预算数|预算)不公开", phrase):
+                    if _STAGE_BUDGET_RE.search(phrase) and "budget" not in stages:
+                        stages.append("budget")
+                        scope = "stage"
+                    if _STAGE_FINAL_RE.search(phrase) and "final" not in stages:
+                        stages.append("final")
+                        scope = "stage"
+            if uncertainty or suffix_uncertainty:
+                # 若不确定声明明确限定单一阶段，另一阶段仍可独立检查。
+                if scope != "stage" or len(stages) != 1:
+                    stages = []
+                scope = "ambiguous"
+            if scope != "ambiguous" and _SUBITEM_SCOPE_RE.search(sentence):
+                # 子项限定只改变科目层级，不得扩大已经确定的预算阶段。
                 scope = "subitems"
-                stages = ["budget", "final"]
+            evidence_start = sentence_start + uncertainty.start() if uncertainty else match.start()
+            evidence_end = match.end() + suffix_uncertainty.end() if suffix_uncertainty else match.end()
             exceptions.append({
                 "reason": reason, "stages": stages, "scope": scope,
-                "text": match.group(0), "pos": text_start + match.start(),
+                "text": text[evidence_start:evidence_end], "pos": text_start + evidence_start,
                 "item_head": item_head,
             })
     return exceptions
@@ -294,7 +335,9 @@ def _clause_declaration_accounting(
                         conflicts.add(record["pos"])
             kind_exceptions = [item for item in clause_exceptions if kind in item["stages"]]
             ambiguous_exceptions = [
-                item for item in clause_exceptions if item["scope"] == "ambiguous"
+                item for item in clause_exceptions
+                if item["scope"] == "ambiguous"
+                and (not item["stages"] or kind in item["stages"])
             ]
             stage_exceptions = [item for item in kind_exceptions if item["scope"] != "subitems"]
             subitem_exceptions = [item for item in kind_exceptions if item["scope"] == "subitems"]
@@ -313,13 +356,9 @@ def _clause_declaration_accounting(
                         "not_included_reason": reason, "item_head": clause["label"],
                     })
 
-            if ambiguous_exceptions and not kind_records:
-                gaps[kind].append({
-                    "kind": kind, "raw": "", "unit": None, "value_wan": None,
-                    "pos": ambiguous_exceptions[0]["pos"],
-                    "not_included_reason": "exception_scope_ambiguous",
-                    "item_head": clause["label"],
-                })
+            if ambiguous_exceptions:
+                # 金额存在也不能消除例外歧义，否则可用恰好相等的总额误放行。
+                mark_conflict("exception_scope_ambiguous", ambiguous_exceptions)
                 continue
             if stage_exceptions and has_zero and has_withheld:
                 for item in stage_exceptions:
@@ -456,6 +495,21 @@ def _completeness_codes(items: Sequence[Dict[str, Any]]) -> List[str]:
     return codes
 
 
+def _operand_admitted(record: Dict[str, Any], rejected_positions: set) -> bool:
+    """拒绝原因或冲突槽位均不得参与确定性金额计算。"""
+    return (record.get("value_wan") is not None
+            and not record.get("not_included_reason")
+            and record["pos"] not in rejected_positions)
+
+
+def _operand_evidence(record: Dict[str, Any]) -> Dict[str, Any]:
+    """证据保留原始数值精度，同时保证分析快照可序列化。"""
+    evidence = dict(record)
+    if isinstance(evidence.get("value_wan"), Decimal):
+        evidence["value_wan"] = format(evidence["value_wan"], "f")
+    return evidence
+
+
 class R33251_FunctionalDetailCompleteness(Rule):
     code, severity = "V33-251", "warn"
     desc = "支出决算具体情况逐项细化到项、分项加总等于总额、不漏列科目（清单 A-09/C-11/C-12）"
@@ -535,23 +589,22 @@ class R33251_FunctionalDetailCompleteness(Rule):
                 (1, "年初预算", "budget", "C-11"), (2, "支出决算", "final", "C-12"),
             ):
                 kind_records = [record for record in records if record["kind"] == kind]
-                included = [
-                    record for record in kind_records
-                    if record["value_wan"] is not None
-                    and record["pos"] not in accounting["conflicts"]
-                ]
                 not_included = {
                     record["pos"]: record
                     for record in kind_records
-                    if record["value_wan"] is None or record.get("not_included_reason")
+                    if not _operand_admitted(record, accounting["conflicts"])
                 }
                 for record in accounting["gaps"].get(kind, []):
                     not_included[record["pos"]] = record
+                rejected_positions = set(not_included) | accounting["conflicts"]
+                included = [record for record in kind_records
+                            if _operand_admitted(record, rejected_positions)]
                 not_included_items = [not_included[pos] for pos in sorted(not_included)]
                 withheld_items = accounting["withheld"].get(kind, [])
                 disclosure_exceptions = [
                     item for item in accounting["exceptions"]
-                    if kind in item["stages"] or item["scope"] == "ambiguous"
+                    if kind in item["stages"]
+                    or (item["scope"] == "ambiguous" and not item["stages"])
                 ]
                 exception_evidence = _exception_evidence(disclosure_exceptions, _locate)
                 if not kind_records and not not_included_items and not withheld_items:
@@ -639,12 +692,8 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         issues.append(issue_at(
                             self, message, page, text, s, e, severity="warn",
                             checklist_item=checklist,
-                            included_items=[
-                                {**{k: v for k, v in record.items() if k != "value_wan"},
-                                 "value_wan": format(record["value_wan"], "f")}
-                                for record in included
-                            ],
-                            not_included_items=not_included_items,
+                            included_items=[_operand_evidence(record) for record in included],
+                            not_included_items=[_operand_evidence(record) for record in not_included_items],
                             withheld_items=withheld_items,
                             disclosure_exceptions=exception_evidence,
                             stated_total_wan=format(stated, "f"),
@@ -693,12 +742,8 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         issues.append(issue_at(
                             self, message, page, text, s, e, severity="warn",
                             checklist_item=checklist,
-                            included_items=[
-                                {**{k: v for k, v in record.items() if k != "value_wan"},
-                                 "value_wan": format(record["value_wan"], "f")}
-                                for record in included
-                            ],
-                            not_included_items=not_included_items,
+                            included_items=[_operand_evidence(record) for record in included],
+                            not_included_items=[_operand_evidence(record) for record in not_included_items],
                             withheld_items=withheld_items,
                             disclosure_exceptions=exception_evidence,
                             stated_total_wan=format(stated, "f"),
