@@ -1,0 +1,24 @@
+{
+  "job_id": "68d4d3ac899f30839ae9c8f7f7b3f29f",
+  "status": "review_required",
+  "snapshot_revision": 3,
+  "package_id": "5114d486-9388-4b3d-874b-13d3b7806d55",
+  "binding": {
+    "scope_resolution": {
+      "value": "unit",
+      "source": "human",
+      "status": "confirmed",
+      "algorithm": "material-writing-v3.2",
+      "package_id": "5114d486-9388-4b3d-874b-13d3b7806d55",
+      "config_hash": "fcee57c69215ec8d7173138cd7e758a500253255cc99cd7ab855834f9301f655",
+      "target_year": 2024,
+      "binding_revision": 3,
+      "capability_scope": {
+        "position_checks": true
+      },
+      "decision_revision": 2,
+      "human_decision_id": "9b34aeab-1f7e-44ec-92ae-fc139c19b39d"
+    }
+  },
+  "writing_processing_identity": "58871ada7b3c5796594131300609c5cba62f8350d9500ac82391d875a230549c"
+}

@@ -1,0 +1,1975 @@
+{
+  "boundary_observations_only": true,
+  "independent_acceptance": false,
+  "filename_used_only_to_locate_plan_candidates": true,
+  "rows": [
+    {
+      "source": "/Users/zhangxingjin/Desktop/决算测试上海市/2024/上海市交通委员会/上海市交通委员会2024年度决算.pdf",
+      "sha256": "694cc44e2eb9bdb10d85a44d397b3c838eabef8624f3d2ae1ff0596dc284eab0",
+      "page_count": 41,
+      "resolution": {
+        "observed_template_style": "mixed",
+        "status": "conflict",
+        "value": null,
+        "source": "unresolved",
+        "reason": "conflicting_evidence",
+        "cover_independent_scope": null,
+        "evidence": [
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 45,
+            "end": 55,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 209,
+            "end": 222,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "heading",
+            "page": 8,
+            "text": "2024 年度部门决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 13,
+            "end": 25,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 8,
+            "text": "本表反映部门本年度的总收支和年末结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 785,
+            "end": 807,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 12,
+            "text": "本表反映部门本年度取得的各项收入情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 140,
+            "end": 158,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 16,
+            "text": "本表反映部门本年度各项支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 428,
+            "end": 443,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 18,
+            "text": "本表反映部门本年度财政拨款总收支和结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 494,
+            "end": 517,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 20,
+            "text": "本表反映部门本年度一般公共预算财政拨款支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 1031,
+            "end": 1054,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 22,
+            "text": "本表反映部门本年度一般公共预算财政拨款基本支出明细情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 107,
+            "end": 134,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 23,
+            "text": "本表反映部门本年度“三公”经费支出预决算情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 226,
+            "end": 248,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 24,
+            "text": "本表反映部门本年度政府性基金预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 502,
+            "end": 534,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 25,
+            "text": "本表反映部门本年度国有资本经营预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 96,
+            "end": 129,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 26,
+            "text": "2024 年度决算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 13,
+            "end": 26,
+            "source_blocks": []
+          }
+        ],
+        "human_decision_id": null
+      }
+    },
+    {
+      "source": "/Users/zhangxingjin/Desktop/决算测试上海市/2024/上海市人民政府参事室/上海市人民政府参事室单位2024年度决算.pdf",
+      "sha256": "7f795465d766bf4711e1a2c404f05129eb8f87b831f3f7e113ac921bc4f1b6cb",
+      "page_count": 27,
+      "resolution": {
+        "observed_template_style": "mixed",
+        "status": "conflict",
+        "value": null,
+        "source": "unresolved",
+        "reason": "conflicting_evidence",
+        "cover_independent_scope": null,
+        "evidence": [
+          {
+            "scope": "unit",
+            "kind": "declaration",
+            "page": 1,
+            "text": "单位决算",
+            "position": "declaration",
+            "qualified": true,
+            "start": 33,
+            "end": 37,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 66,
+            "end": 76,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 245,
+            "end": 258,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 6,
+            "text": "2024 年度单位决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 14,
+            "end": 26,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 6,
+            "text": "本表反映部门本年度的总收支和年末结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 736,
+            "end": 758,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 8,
+            "text": "本表反映部门本年度取得的各项收入情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 242,
+            "end": 260,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 10,
+            "text": "本表反映部门本年度各项支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 233,
+            "end": 248,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 12,
+            "text": "本表反映部门本年度财政拨款总收支和结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 407,
+            "end": 430,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 13,
+            "text": "本表反映部门本年度一般公共预算财政拨款支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 874,
+            "end": 897,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 15,
+            "text": "本表反映部门本年度一般公共预算财政拨款基本支出明细情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 151,
+            "end": 178,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 16,
+            "text": "本表反映部门本年度“三公”经费支出预决算情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 263,
+            "end": 285,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 17,
+            "text": "本表反映部门本年度政府性基金预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 169,
+            "end": 201,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 18,
+            "text": "本表反映部门本年度国有资本经营预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 174,
+            "end": 207,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 19,
+            "text": "2024 年度决算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 24,
+            "end": 37,
+            "source_blocks": []
+          }
+        ],
+        "human_decision_id": null
+      }
+    },
+    {
+      "source": "/Users/zhangxingjin/Desktop/决算测试上海市/2024/上海市人民政府合作交流办公室/上海市人民政府驻西藏办事处2024年度决算.pdf",
+      "sha256": "43b0930f63f2e172555297f6dc9be580e4491b481e29d45c44b790bdc0f1f1ac",
+      "page_count": 22,
+      "resolution": {
+        "observed_template_style": "mixed",
+        "status": "conflict",
+        "value": null,
+        "source": "unresolved",
+        "reason": "conflicting_evidence",
+        "cover_independent_scope": null,
+        "evidence": [
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 55,
+            "end": 65,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算情况说\n明",
+            "position": "heading",
+            "qualified": true,
+            "start": 224,
+            "end": 238,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 5,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 13,
+            "end": 23,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "heading",
+            "page": 15,
+            "text": "2024 年度部门决算\n情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 18,
+            "end": 34,
+            "source_blocks": []
+          }
+        ],
+        "human_decision_id": null
+      }
+    },
+    {
+      "source": "/Users/zhangxingjin/Desktop/决算测试上海市/2024/上海市信访办公室/上海市信访办公室2024年决算.pdf",
+      "sha256": "10f6afe6ca550ad41fec04ed1cd2c2757ed1434e88172246e46fdccedb8ff973",
+      "page_count": 27,
+      "resolution": {
+        "observed_template_style": "mixed",
+        "status": "conflict",
+        "value": null,
+        "source": "unresolved",
+        "reason": "conflicting_evidence",
+        "cover_independent_scope": null,
+        "evidence": [
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 58,
+            "end": 68,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 233,
+            "end": 246,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 6,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 19,
+            "end": 29,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 6,
+            "text": "本表反映部门本年度的总收支和年末结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 852,
+            "end": 874,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 8,
+            "text": "本表反映部门本年度取得的各项收入情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 368,
+            "end": 386,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 10,
+            "text": "本表反映部门本年度各项支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 390,
+            "end": 405,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 12,
+            "text": "本表反映部门本年度财政拨款总收支和结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 571,
+            "end": 594,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 13,
+            "text": "本表反映部门本年度一般公共预算财政拨款支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 1031,
+            "end": 1054,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 14,
+            "text": "本表反映部门本年度一般公共预算财政拨款基本支出明细情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 1789,
+            "end": 1816,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 15,
+            "text": "本表反映部门本年度“三公”经费支出预决算情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 243,
+            "end": 265,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 16,
+            "text": "本表反映部门本年度政府性基金预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 134,
+            "end": 166,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 17,
+            "text": "本表反映部门本年度国有资本经营预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 140,
+            "end": 173,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 18,
+            "text": "2024 年度决算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 20,
+            "end": 33,
+            "source_blocks": []
+          }
+        ],
+        "human_decision_id": null
+      }
+    },
+    {
+      "source": "/Users/zhangxingjin/Desktop/决算测试上海市/2024/上海市农业农村委员会/上海市动物疫病预防控制中心2024年度决算.pdf",
+      "sha256": "9ab79460ad29573a14c01030ac3c6e3231511a1ded9aa39f58ac02102fe4d1a9",
+      "page_count": 28,
+      "resolution": {
+        "observed_template_style": "mixed",
+        "status": "conflict",
+        "value": null,
+        "source": "unresolved",
+        "reason": "conflicting_evidence",
+        "cover_independent_scope": null,
+        "evidence": [
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 55,
+            "end": 65,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算情况说\n明",
+            "position": "heading",
+            "qualified": true,
+            "start": 224,
+            "end": 238,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 7,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 18,
+            "end": 28,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 7,
+            "text": "本表反映部门本年度的总收支和年末结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 711,
+            "end": 733,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 9,
+            "text": "本表反映部门本年度取得的各项收入情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 493,
+            "end": 511,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 11,
+            "text": "本表反映部门本年度各项支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 448,
+            "end": 463,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 13,
+            "text": "本表反映部门本年度财政拨款总收支和结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 509,
+            "end": 532,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 14,
+            "text": "本表反映部门本年度一般公共预算财政拨款支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 801,
+            "end": 824,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 15,
+            "text": "本表反映部门本年度一般公共预算财政拨款基本支出明细情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 1261,
+            "end": 1288,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 16,
+            "text": "本表反映部门本年度“三公”经费支出预决算情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 204,
+            "end": 226,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 17,
+            "text": "本表反映部门本年度政府性基金预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 89,
+            "end": 121,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 18,
+            "text": "本表反映部门本年度国有资本经营预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 90,
+            "end": 123,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 19,
+            "text": "2024 年度决算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 19,
+            "end": 32,
+            "source_blocks": []
+          }
+        ],
+        "human_decision_id": null
+      }
+    },
+    {
+      "source": "/Users/zhangxingjin/Desktop/决算测试上海市/2024/上海市农业农村委员会/中荷农业部上海园艺培训示范中心2024年度决算.pdf",
+      "sha256": "f2e511d0330ff25b3cc310238ac2f2a9dea0f13bb29fd84cad8898e552f1ea1a",
+      "page_count": 24,
+      "resolution": {
+        "observed_template_style": "mixed",
+        "status": "conflict",
+        "value": null,
+        "source": "unresolved",
+        "reason": "conflicting_evidence",
+        "cover_independent_scope": null,
+        "evidence": [
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 72,
+            "end": 82,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算情\n况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 254,
+            "end": 268,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 5,
+            "text": "2024 年度决算\n表",
+            "position": "heading",
+            "qualified": true,
+            "start": 27,
+            "end": 38,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 5,
+            "text": "本表反映单位本年度的总收支和年末结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 827,
+            "end": 849,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 6,
+            "text": "本表反映单位本年度取得的各项收入情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 1150,
+            "end": 1168,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 7,
+            "text": "本表反映单位本年度各项支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 1044,
+            "end": 1059,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 9,
+            "text": "本表反映单位本年度财政拨款总收支和结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 517,
+            "end": 540,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 10,
+            "text": "本表反映单位本年度一般公共预算财政拨款支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 720,
+            "end": 743,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 12,
+            "text": "本表反映单位本年度一般公共预算财政拨款基本支出明细情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 68,
+            "end": 95,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 13,
+            "text": "本表反映单位本年度“三公”经费支出预决算情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 249,
+            "end": 271,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 14,
+            "text": "本表反映部门本年度政府性基金预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 161,
+            "end": 193,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 15,
+            "text": "本表反映部门本年度国有资本经营预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 162,
+            "end": 195,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 16,
+            "text": "2024 年度决算情\n况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 29,
+            "end": 43,
+            "source_blocks": []
+          }
+        ],
+        "human_decision_id": null
+      }
+    },
+    {
+      "source": "/Users/zhangxingjin/Desktop/决算测试上海市/2024/上海市地方金融监督管理局/中共上海市委金融委员会办公室2024年度单位决算.pdf",
+      "sha256": "f70660194937a27980b0e69dd11c366d062ac2949565c47be60c421a59d866d8",
+      "page_count": 26,
+      "resolution": {
+        "observed_template_style": "mixed",
+        "status": "conflict",
+        "value": null,
+        "source": "unresolved",
+        "reason": "conflicting_evidence",
+        "cover_independent_scope": null,
+        "evidence": [
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算\n表",
+            "position": "heading",
+            "qualified": true,
+            "start": 65,
+            "end": 76,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算\n情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 240,
+            "end": 254,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 5,
+            "text": "2024 年度\n决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 23,
+            "end": 34,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 5,
+            "text": "本表反映单位本年度的总收支和年末结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 699,
+            "end": 721,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 7,
+            "text": "本表反映单位本年度取得的各项收入情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 107,
+            "end": 125,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 9,
+            "text": "本表反映单位本年度各项支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 189,
+            "end": 204,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 11,
+            "text": "本表反映单位本年度财政拨款总收支和结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 462,
+            "end": 485,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 12,
+            "text": "本表反映单位本年度一般公共预算财政拨款支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 845,
+            "end": 868,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 13,
+            "text": "本表反映单位本年度一般公共预算财政拨款基本支出明细情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 1239,
+            "end": 1266,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 14,
+            "text": "本表反映单位本年度“三公”经费支出预决算情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 206,
+            "end": 228,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 15,
+            "text": "本表反映部门本年度政府性基金预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 87,
+            "end": 119,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 16,
+            "text": "本表反映部门本年度政府性基金预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 92,
+            "end": 124,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 17,
+            "text": "2024 年度决\n算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 23,
+            "end": 37,
+            "source_blocks": []
+          }
+        ],
+        "human_decision_id": null
+      }
+    },
+    {
+      "source": "/Users/zhangxingjin/Desktop/决算测试上海市/2024/上海市应急管理局/上海市应急管理宣传教育中心2024年度决算.pdf",
+      "sha256": "59226dd34967a660f60c87b754a5143dd071e3532a8da7bdaf834920afb275f4",
+      "page_count": 22,
+      "resolution": {
+        "observed_template_style": "mixed",
+        "status": "conflict",
+        "value": null,
+        "source": "unresolved",
+        "reason": "conflicting_evidence",
+        "cover_independent_scope": null,
+        "evidence": [
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 66,
+            "end": 76,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 246,
+            "end": 259,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 5,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 23,
+            "end": 33,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 5,
+            "text": "本表反映单位本年度的总收支和年末结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 834,
+            "end": 856,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 6,
+            "text": "本表反映单位本年度取得的各项收入情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 1216,
+            "end": 1234,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 7,
+            "text": "本表反映单位本年度各项支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 994,
+            "end": 1009,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 9,
+            "text": "本表反映单位本年度财政拨款总收支和结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 433,
+            "end": 456,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 10,
+            "text": "本表反映单位本年度一般公共预算财政拨款支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 693,
+            "end": 716,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 11,
+            "text": "本表反映部门本年度一般公共预算财政拨款基本支出明细情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 1496,
+            "end": 1523,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 12,
+            "text": "本表反映单位本年度“三公”经费支出预决算情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 237,
+            "end": 259,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 15,
+            "text": "2024 年度决算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 23,
+            "end": 36,
+            "source_blocks": []
+          }
+        ],
+        "human_decision_id": null
+      }
+    },
+    {
+      "source": "/Users/zhangxingjin/Desktop/决算测试上海市/2024/上海市监狱管理局/上海市青浦监狱2024 年度决算.pdf",
+      "sha256": "d18a8a5c2653e5a1e46c716afe09be329713b330fdd9f0c38272bb0b83bc8842",
+      "page_count": 28,
+      "resolution": {
+        "observed_template_style": "mixed",
+        "status": "conflict",
+        "value": null,
+        "source": "unresolved",
+        "reason": "conflicting_evidence",
+        "cover_independent_scope": null,
+        "evidence": [
+          {
+            "scope": "department",
+            "kind": "declaration",
+            "page": 1,
+            "text": "部门决算",
+            "position": "declaration",
+            "qualified": true,
+            "start": 15,
+            "end": 19,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 47,
+            "end": 57,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 210,
+            "end": 223,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "heading",
+            "page": 6,
+            "text": "2024 年度部门决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 7,
+            "end": 19,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 6,
+            "text": "本表反映部门本年度的总收支和年末结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 583,
+            "end": 605,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 8,
+            "text": "本表反映部门本年度取得的各项收入情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 282,
+            "end": 300,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 10,
+            "text": "本表反映部门本年度各项支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 278,
+            "end": 293,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 12,
+            "text": "本表反映部门本年度财政拨款总收支和结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 315,
+            "end": 338,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 13,
+            "text": "本表反映部门本年度一般公共预算财政拨款支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 759,
+            "end": 782,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 15,
+            "text": "本表反映部门本年度一般公共预算财政拨款基本支出明细情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 154,
+            "end": 181,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 16,
+            "text": "本表反映部门本年度“三公”经费支出预决算情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 228,
+            "end": 250,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 17,
+            "text": "本表反映部门本年度政府性基金预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 112,
+            "end": 144,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 18,
+            "text": "本表反映部门本年度国有资本经营预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 113,
+            "end": 146,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "heading",
+            "page": 19,
+            "text": "2024 年度部门决算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 15,
+            "end": 30,
+            "source_blocks": []
+          }
+        ],
+        "human_decision_id": null
+      }
+    },
+    {
+      "source": "/Users/zhangxingjin/Desktop/决算测试上海市/2024/上海市绿化和市容管理局/上海市市容环境卫生水上管理处2024年度决算公开.pdf",
+      "sha256": "f429ea052d0f37f334e5e0929751475005e1fa3f149d2fb1ac657b37ed6541e7",
+      "page_count": 26,
+      "resolution": {
+        "observed_template_style": "mixed",
+        "status": "conflict",
+        "value": null,
+        "source": "unresolved",
+        "reason": "conflicting_evidence",
+        "cover_independent_scope": null,
+        "evidence": [
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 57,
+            "end": 67,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算情况\n说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 227,
+            "end": 241,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "heading",
+            "page": 6,
+            "text": "2024 年度部门决\n算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 19,
+            "end": 32,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 6,
+            "text": "本表反映单位本年度的总收支和年末结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 713,
+            "end": 735,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 8,
+            "text": "本表反映单位本年度取得的各项收入情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 341,
+            "end": 359,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 10,
+            "text": "本表反映单位本年度各项支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 316,
+            "end": 331,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 12,
+            "text": "本表反映单位本年度财政拨款总收支和结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 511,
+            "end": 534,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 13,
+            "text": "本表反映单位本年度一般公共预算财政拨款支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 716,
+            "end": 739,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 14,
+            "text": "本表反映单位本年度一般公共预算财政拨款基本支出明细情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 1266,
+            "end": 1293,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 15,
+            "text": "本表反映单位本年度“三公”经费支出预决算情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 206,
+            "end": 228,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 16,
+            "text": "本表反映单位本年度政府性基金预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 89,
+            "end": 121,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 17,
+            "text": "本表反映单位本年度国有资本经营预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 90,
+            "end": 123,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "heading",
+            "page": 18,
+            "text": "2024 年度部门决\n算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 19,
+            "end": 35,
+            "source_blocks": []
+          }
+        ],
+        "human_decision_id": null
+      }
+    },
+    {
+      "source": "/Users/zhangxingjin/Desktop/决算测试上海市/2024/上海市退役军人事务局/上海市军队离退休干部古美休养所2024年度决算.pdf",
+      "sha256": "cef514e1ff2d34db2fe3f9143bb06a469d6cdd50b1023dc6f03fda9216be5f8a",
+      "page_count": 26,
+      "resolution": {
+        "observed_template_style": "mixed",
+        "status": "conflict",
+        "value": null,
+        "source": "unresolved",
+        "reason": "conflicting_evidence",
+        "cover_independent_scope": null,
+        "evidence": [
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 59,
+            "end": 69,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算情\n况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 230,
+            "end": 244,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "heading",
+            "page": 5,
+            "text": "2024 年度部门决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 15,
+            "end": 27,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 5,
+            "text": "本表反映部门本年度的总收支和年末结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 694,
+            "end": 716,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 7,
+            "text": "本表反映部门本年度取得的各项收入情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 203,
+            "end": 221,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 9,
+            "text": "本表反映部门本年度各项支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 183,
+            "end": 198,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 11,
+            "text": "本表反映部门本年度财政拨款总收支和结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 531,
+            "end": 554,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 12,
+            "text": "本表反映部门本年度一般公共预算财政拨款支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 592,
+            "end": 615,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 14,
+            "text": "本表反映部门本年度一般公共预算财政拨款基本支出明细情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 125,
+            "end": 152,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 15,
+            "text": "本表反映部门本年度“三公”经费支出预决算情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 198,
+            "end": 220,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 16,
+            "text": "本表反映部门本年度政府性基金预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 89,
+            "end": 121,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 17,
+            "text": "本表反映部门本年度国有资本经营预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 90,
+            "end": 123,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 18,
+            "text": "2024 年度决算\n情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 20,
+            "end": 34,
+            "source_blocks": []
+          }
+        ],
+        "human_decision_id": null
+      }
+    },
+    {
+      "source": "/Users/zhangxingjin/Desktop/决算测试上海市/2024/上海市退役军人事务局/上海市龙华烈士陵园（龙华烈士纪念馆、上海市烈士纪念设施保护中心）2024年度决算.pdf",
+      "sha256": "b9c17fa7979ba35e9b931f14092bf4d06b581e6f0840123b3fa9cdc835efb91f",
+      "page_count": 27,
+      "resolution": {
+        "observed_template_style": "mixed",
+        "status": "conflict",
+        "value": null,
+        "source": "unresolved",
+        "reason": "conflicting_evidence",
+        "cover_independent_scope": null,
+        "evidence": [
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 95,
+            "end": 105,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 284,
+            "end": 297,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 5,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 38,
+            "end": 48,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 5,
+            "text": "本表反映部门本年度的总收支和年末结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 728,
+            "end": 750,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 7,
+            "text": "本表反映部门本年度取得的各项收入情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 497,
+            "end": 515,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 9,
+            "text": "本表反映部门本年度各项支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 455,
+            "end": 470,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 11,
+            "text": "本表反映部门本年度财政拨款总收支和结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 547,
+            "end": 570,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 12,
+            "text": "本表反映部门本年度一般公共预算财政拨款支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 698,
+            "end": 721,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 14,
+            "text": "本表反映部门本年度一般公共预算财政拨款基本支出明细情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 330,
+            "end": 357,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 15,
+            "text": "本表反映部门本年度“三公”经费支出预决算情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 202,
+            "end": 224,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 16,
+            "text": "本表反映部门本年度政府性基金预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 89,
+            "end": 121,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 17,
+            "text": "本表反映部门本年度国有资本经营预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 90,
+            "end": 123,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 18,
+            "text": "2024 年度决算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 38,
+            "end": 51,
+            "source_blocks": []
+          }
+        ],
+        "human_decision_id": null
+      }
+    },
+    {
+      "source": "/Users/zhangxingjin/Desktop/决算测试上海市/2024/上海推进科技创新中心建设办公室/上海推进科技创新中心建设办公室2024年度单位决算.pdf",
+      "sha256": "3a6426c19bedcfe54b7715be7dbdea60003b7c15cff593c05a5405b2c8b70fc4",
+      "page_count": 26,
+      "resolution": {
+        "observed_template_style": "mixed",
+        "status": "conflict",
+        "value": null,
+        "source": "unresolved",
+        "reason": "conflicting_evidence",
+        "cover_independent_scope": null,
+        "evidence": [
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 72,
+            "end": 82,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算情\n况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 254,
+            "end": 268,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 5,
+            "text": "2024 年度 \n决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 27,
+            "end": 39,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 5,
+            "text": "本表反映单位本年度的总收支和年末结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 726,
+            "end": 748,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 7,
+            "text": "本表反映部门本年度取得的各项收入情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 335,
+            "end": 353,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 9,
+            "text": "本表反映部门本年度各项支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 351,
+            "end": 366,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 11,
+            "text": "本表反映部门本年度财政拨款总收支和结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 448,
+            "end": 471,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 12,
+            "text": "本表反映部门本年度一般公共预算财政拨款支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 870,
+            "end": 893,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 13,
+            "text": "本表反映部门本年度一般公共预算财政拨款基本支出明细情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 1609,
+            "end": 1636,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 14,
+            "text": "本表反映部门本年度“三公”经费支出预决算情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 246,
+            "end": 268,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 15,
+            "text": "本表反映单位本年度政府性基金预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 161,
+            "end": 193,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "table_note",
+            "page": 16,
+            "text": "本表反映单位本年度国有资本经营预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 162,
+            "end": 195,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "heading",
+            "page": 17,
+            "text": "2024 年度 \n部门决算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 25,
+            "end": 42,
+            "source_blocks": []
+          }
+        ],
+        "human_decision_id": null
+      }
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+[
+  {
+    "file": "/Volumes/workSSD/互政信息/项目实施/上海普陀财政局/2023/参考材料/2022年度决算公开/附件2：2022年度单位决算公开模板.doc",
+    "sha256": "3c608759a13b36504bd826b92ac7efae4c2bf99924ddb8a4738c06b7000a2ccc",
+    "report_kind": "final",
+    "source_report_year": 2022,
+    "extraction_status": "needs_visual_verification"
+  },
+  {
+    "file": "/Volumes/workSSD/互政信息/项目实施/上海普陀财政局/2023/参考材料/2022年度决算公开/附件1：2022年度部门决算公开模板.doc",
+    "sha256": "21f58a5f2f8d4d6b1e4ccefb00c0c2b682b69b7a542f41604849d9f8e01c686d",
+    "report_kind": "final",
+    "source_report_year": 2022,
+    "extraction_status": "needs_visual_verification"
+  },
+  {
+    "draft_id": "d4a43568-5bc9-4d02-b70e-78a9a65b0a4f",
+    "report_kind": "final",
+    "status": "draft",
+    "pair_differences": 20,
+    "source_pair_consistent": false
+  },
+  {
+    "file": "/Volumes/workSSD/互政信息/项目实施/上海普陀财政局/2023/参考材料/预决算公开检查/市级预决算公开模板（供参考）.doc/附件3：20XX年单位预算公开样张.xls",
+    "sha256": "260e2d2f9a0120c1d8566989d4ff055c5110eee23caabb5a38c3d898980af2e2",
+    "report_kind": "budget",
+    "source_report_year": null,
+    "extraction_status": "needs_visual_verification"
+  },
+  {
+    "file": "/Volumes/workSSD/互政信息/项目实施/上海普陀财政局/2023/参考材料/预决算公开检查/市级预决算公开模板（供参考）.doc/附件1：20XX年部门预算公开样张.xls",
+    "sha256": "30c9f98f77bdf82097393ddebca7129c43d9092fe6ec4761cba878268f834748",
+    "report_kind": "budget",
+    "source_report_year": null,
+    "extraction_status": "needs_visual_verification"
+  },
+  {
+    "draft_id": "534a6072-d3b5-433e-b0ef-4865ad200b75",
+    "report_kind": "budget",
+    "status": "draft",
+    "pair_differences": 25,
+    "source_pair_consistent": false
+  }
+]

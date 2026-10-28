@@ -1,0 +1,33 @@
+{
+  "code_head": "218615b9be3db0dcbed0331061e3371480b2f276",
+  "python_full": {
+    "passed": 4684,
+    "skipped": 33,
+    "seconds": 344.88
+  },
+  "feature_targeted": {
+    "passed": 42,
+    "skipped": 1
+  },
+  "subsequent_export_patch": {
+    "export_and_dimensions_passed": 24,
+    "canonical_report_regressions_passed": 124
+  },
+  "real_xls_opt_in_test": {
+    "passed": 7,
+    "skipped": 0
+  },
+  "frontend": {
+    "typescript": "passed",
+    "build": "passed",
+    "existing_unit_suite": "passed",
+    "latest_browser_validation": "blocked: browser.user is unavailable"
+  },
+  "independent_acceptance": false,
+  "production_deployed": false,
+  "real_material_decisions_submitted": false,
+  "test_schema": "annual_runtime_verified",
+  "backend_port": 28743,
+  "frontend_port": 3308,
+  "postgres_port": 25462
+}
