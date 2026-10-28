@@ -109,7 +109,7 @@ items:
     criterion: "口径与报告类型匹配，无混用。"
     status: implemented
     obligations: [OBL-STRUCT-TERMINOLOGY]
-    rules: [V33-236, CMM-018]
+    rules: [V33-236, CMM-018, CMM-027]
   - id: B-03
     dimension: "二、一致性"
     title: "科目名称与本报告决算表一致"

@@ -487,6 +487,12 @@ def test_finals_unresolved_total_le_11(final_replays):
     assert final_replays['shiquan']['summary']['rule_statuses']['V33-234'] == 'fail'
     assert any(issue.rule == 'V33-234' and '312.55%' in issue.message
                and '20.00' in issue.message and '62.51' in issue.message for issue in final_replays['shiquan']['issues'])
+    # 年度模板 v3：冻结 page-data 没有已批准年度模板/独立人工写法依据。
+    # 封面自身不能证明文种；逐条核实新增回执，不放宽原有规则阈值。
+    for alias in ("golden", "yichuan", "wenlv", "shiquan"):
+        item = next(x for x in final_replays[alias]["summary"]["unresolved_rules"] if x["rule_id"] == "CMM-019")
+        assert item["status"] == "insufficient_data" and "封面文种缺少独立依据" in item["detail"]
+        added += 1
     assert total - added <= 11, f"除已核实的原文缺操作数外仍有计划外回升: {total} - {added} > 11"
 
 

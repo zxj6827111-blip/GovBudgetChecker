@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import json
+import hashlib
 import time
 import asyncio
 import uuid
@@ -584,7 +585,11 @@ def _evaluate_quality_gate(
     unbound = reading.get("unbound_money_cells") or []
     fiscal_coverage = reading.get("fiscal_coverage") or {}
     mapping_tables = reading.get("mapping_incomplete_tables") or []
-    if reading.get("org_scope_pending_count"):
+    amount_scope_blocked = any(
+        (item.get("rule_id") == "V33-236" and "材料口径" in str(item))
+        or "材料汇总口径" in str(item) or "org_scope_pending" in str(item)
+        for item in (rule_execution_summary or {}).get("unresolved_rules", []))
+    if reading.get("org_scope_pending_count") and amount_scope_blocked:
         review_reasons.append({
             "code": "org_scope_pending",
             "message": "材料汇总口径待确认；不影响无需该维度的表内勾稽。依赖口径的检查仍列为未完成。",
@@ -1286,6 +1291,14 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
     # 解析前先给出"零覆盖"默认值：若在解析阶段就失败，错误态也能诚实报出覆盖率 0
     page_assessment: Dict[str, Any] = _assess_page_extraction([], [])
     try:
+        frozen_template_bindings = None
+        from src.services.material_writing import enabled as template_scope_enabled
+        if template_scope_enabled() and (os.getenv('DATABASE_URL') or '').strip():
+            from src.db.connection import DatabaseConnection
+            from src.services.annual_templates import freeze_current_bindings
+            template_conn=await DatabaseConnection.acquire()
+            try:frozen_template_bindings=await freeze_current_bindings(template_conn)
+            finally:await DatabaseConnection.release(template_conn)
         # 读取检测模式配置
         expected_fact_revision = None
         if (os.getenv('DATABASE_URL') or '').strip():
@@ -1396,7 +1409,6 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             p_texts = []
             p_tables = []
             f_size = pdf_path.stat().st_size
-            import hashlib
 
             from src.services.pdf_parser import PDFParser as _CellParser
 
@@ -1518,12 +1530,8 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         from src.services.structure_view import build_structure_view
 
         structure_view = build_structure_view(page_texts, parse_artifact_obj, page_assessment)
-        if parse_artifact_obj is not None and ocr_summary:
-            for index in range(len(profile_page_texts)):
-                qualified_identity_text = "\n".join(block.text for block in parse_artifact_obj.text_blocks
-                    if block.page_number == index+1 and block.extraction_method == "ocr"
-                    and block.confidence is not None and block.confidence >= .98)
-                profile_page_texts[index] += "\n" + qualified_identity_text
+        from src.services.material_writing import qualified_identity_view
+        profile_page_texts, writing_source_spans = qualified_identity_view(page_texts, parse_artifact_obj)
         from src.services.document_scope import load_for_analysis, apply_profile
         scope_confirmation = await load_for_analysis(job_dir.name, parse_artifact_obj.source_file_hash) if parse_artifact_obj else None
         operand_profile = resolve_document_profile(filename=pdf_path.name,page_texts=profile_page_texts,
@@ -1821,6 +1829,13 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             page_assessment=page_assessment,
         )
         apply_profile(document_profile, scope_confirmation)
+        from src.services.material_writing import budget_enabled
+        if document_profile.kind == "final" or (document_profile.kind == "budget" and budget_enabled()):
+            from src.services.material_writing import load as load_writing
+            document_profile.writing_scope = await load_writing(job_dir.name,
+                parse_artifact_obj.source_file_hash if parse_artifact_obj else hashlib.sha256(pdf_path.read_bytes()).hexdigest(),
+                document_profile, profile_page_texts, runtime.resolve_organization_level(organization_id),
+                excluded_pages=(), source_spans=writing_source_spans, frozen_bindings=frozen_template_bindings)
         if document_profile.kind in {"budget", "final"}:
             report_kind = document_profile.kind
 
@@ -1856,6 +1871,8 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             document.parse_artifact = parse_artifact_obj
             document.document_profile = document_profile
             document.structure_view = structure_view
+            document.writing_page_texts = profile_page_texts
+            document.writing_source_spans = writing_source_spans
             return document
 
         doc = await loop.run_in_executor(None, _sync_build_document)
@@ -1901,6 +1918,8 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                     "organization_name": organization_name,
                     "document_profile": document_profile.model_dump(),
                     "structure_view": structure_view,
+                    "writing_page_texts": profile_page_texts,
+                    "writing_source_spans": writing_source_spans,
                 },
             )
 
@@ -2315,7 +2334,6 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             else ""
         )
         if not source_file_hash:
-            import hashlib
 
             source_digest = hashlib.sha256()
             with pdf_path.open("rb") as source_handle:
@@ -2410,6 +2428,18 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         result["meta"]["rule_policy_version"] = PORTABLE_RULE_POLICY_VERSION
         result["meta"]["document_profile"] = document_profile.to_dict()
         result["meta"]["document_scope_confirmation"] = scope_confirmation
+        result["meta"]["document_scope_resolution"] = document_profile.writing_scope
+        if document_profile.writing_scope:
+            from src.services.annual_templates import sha as writing_hash
+            result["meta"]["writing_processing_identity"] = writing_hash(document_profile.writing_scope)
+            resolution=document_profile.writing_scope; snapshot=resolution.get('snapshot') or {}
+            # 分析语义摘要独立于金额物化身份，防止写法决定改变来源格及 fact_uid。
+            result['meta']['binding']={'scope_resolution':{
+                'status':resolution.get('status'),'value':resolution.get('value'),'source':resolution.get('source'),
+                'package_id':snapshot.get('package_id'),'config_hash':snapshot.get('effective_config_sha256') or snapshot.get('content_sha256'),
+                'binding_revision':snapshot.get('revision'),'target_year':snapshot.get('target_year'),
+                'capability_scope':snapshot.get('capability_scope'),'algorithm':resolution.get('algorithm'),
+                'human_decision_id':resolution.get('human_decision_id'),'decision_revision':resolution.get('decision_revision')}}
         result["meta"]["check_subject"] = check_subject
         result["meta"]["structure_view"] = structure_view
         logger.info(

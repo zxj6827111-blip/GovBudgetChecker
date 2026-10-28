@@ -318,7 +318,7 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         group_id=GROUP_DISCLOSURE,
         title="文种口径用语一致性（部门/单位不得混用）",
         report_kinds=_BOTH,
-        checkers_by_kind=_both(("V33-236", "CMM-018"), ("BUD-113", "CMM-018")),
+        checkers_by_kind=_both(("V33-236", "CMM-018", "CMM-027"), ("BUD-113", "CMM-018")),
         basis="单位预算材料中出现'部门预算安排'等表述属口径混用；本部门/本单位不得混用，区级材料不得套用市级口径（清单 B-02）",
     ),
     Obligation(
@@ -1623,6 +1623,11 @@ def build_obligation_ledger(
     """
     instances, notes = expand_obligations(profile, report_kind=report_kind)
     kind = str(report_kind or (profile.kind if profile else "") or "unknown").strip().lower()
+    # 只在该次预算分析实际采用新链路时增加义务，默认预算回执要求不变。
+    if kind=='budget' and (getattr(profile,'writing_scope',{}) or {}).get('domain')=='budget':
+        for instance in instances:
+            if instance.obligation_id=='OBL-STRUCT-TERMINOLOGY':
+                instance.checkers=tuple(dict.fromkeys((*instance.checkers,'CMM-027')))
     registry = _registry_rule_ids(kind)
     statuses = _rule_statuses(rule_execution_summary)
     reason_codes_by_rule: Dict[str, Sequence[str]] = {}

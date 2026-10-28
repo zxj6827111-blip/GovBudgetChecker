@@ -34,6 +34,9 @@ FROZEN_ROUTES = frozenset(
         ("GET", "/api/jobs/{job_id}"),
         ("GET", "/api/jobs/{job_id}/status"),
         ("GET", "/jobs/{job_id}/status"),
+        # 年度模板 v3 新增独立维度入口；保留旧 document-scope 路由。
+        ("GET", "/api/jobs/{job_id}/material-dimensions"),
+        ("POST", "/api/jobs/{job_id}/material-dimensions"),
         ("GET", "/api/jobs/{job_id}/review"),
         ("GET", "/api/jobs/{job_id}/evidence/{evidence_id}"),
         ("POST", "/api/jobs/{job_id}/corrections"),

@@ -253,6 +253,26 @@ class CMM008_TemplateResidue(Rule):
                                   else "warn"),
                         checklist_item="D-05" if label != "疑似误植字符" else "D-06",
                     ))
+        if report_kind(doc) == "final" or (getattr(getattr(doc,"document_profile",None),"writing_scope",{}) or {}).get("domain")=="budget":
+            from src.services.material_writing import identity_document
+            template_doc=identity_document(doc)
+            resolution = getattr(getattr(doc, "document_profile", None), "writing_scope", {}) or {}
+            snapshot = resolution.get("snapshot") or {}
+            if snapshot.get("available") and (snapshot.get("capability_scope") or {}).get("residue"):
+                prompts = (snapshot.get("effective_config") or (snapshot.get("content") or {}).get("config") or {}).get("prompts") or []
+                for page, text in iter_pages(template_doc):
+                    flat, positions = page_flat(template_doc, page, text)
+                    for prompt in prompts:
+                        for match in re.finditer(re.escape(prompt), flat):
+                            prefix = flat[max(0,match.start()-20):match.start()]
+                            # 正常引用和示例不直接认定为残留；完整提示语才参与正式检查。
+                            if re.search(r"(?:示例|引用|例如|说明模板)[^。]*$", prefix) or (prefix.count('“') > prefix.count('”')):
+                                continue
+                            start, end = flat_span(positions,match.start(),match.end())
+                            if any(i.location.get("page")==page and start<=i.location.get("pos",-1)<end for i in issues):
+                                continue
+                            issues.append(issue_at(self, "已审核模板的编报提示语未清理：“"+prompt+"”。",
+                                page,text,start,end,severity="warn",checklist_item="D-05",template_package=snapshot.get("package_id"),template_anchor=prompt))
         return issues
 
 

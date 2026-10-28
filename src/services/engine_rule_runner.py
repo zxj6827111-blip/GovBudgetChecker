@@ -359,6 +359,8 @@ class EngineRuleRunner:
         # 独立验收 2026-09-17 kind_disagreement 反例整改）。
         if document is not None:
             document.report_kind = report_kind
+            document.writing_page_texts = (job_context.meta or {}).get("writing_page_texts")
+            document.writing_source_spans = (job_context.meta or {}).get("writing_source_spans") or []
             profile_snapshot = (job_context.meta or {}).get("document_profile")
             if isinstance(profile_snapshot, dict):
                 from src.schemas.document_profile import DocumentProfile
@@ -369,6 +371,8 @@ class EngineRuleRunner:
         from src.services.document_profile_resolver import resolve_document_profile
         profile = getattr(document, 'document_profile', None) or resolve_document_profile(
             path=str(getattr(document, 'path', '') or ''), page_texts=getattr(document, 'page_texts', []) or [])
+        from src.services.material_writing import ensure_document_resolution
+        ensure_document_resolution(document, profile)
         selected_rules = restrict_rules_to_profile(selected_rules, profile)
         update_progress(job_context.job_id, "local", state="running", total=len(selected_rules), completed=0, current_step="开始本地规则检查")
         # 版本留痕（P2-02）：本次实际生效的规则集版本，逐条写进 finding。

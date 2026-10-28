@@ -20,6 +20,7 @@ from .checklist_support import (
     CJK,
     compact,
     issue_at,
+    unique_quote,
     iter_pages,
     jurisdiction,
     org_name,
@@ -29,8 +30,9 @@ from .checklist_support import (
     report_year,
     subject_scope,
 )
-from .rule_outcome import RuleNotApplicable
+from .rule_outcome import RuleNotApplicable, RuleDeferred
 from .rules_v33 import Document, Issue, Rule
+from src.services.material_writing import identity_document, prepare_identity_document
 
 _NAME = rf"[{CJK}（）()]{{4,40}}?"
 _NAME_CONTEXTS: Sequence[re.Pattern[str]] = (
@@ -143,15 +145,27 @@ class CMM017_OrgNameConsistency(Rule):
 # ---------------------------------------------------------------------------
 
 
+def _uses_writing_resolution(doc):
+    value = getattr(getattr(doc, "document_profile", None), "writing_scope", {}) or {}
+    return (report_kind(doc) == "final" or (report_kind(doc) == "budget" and value.get("domain") == "budget"
+        and (value.get("snapshot") or {}).get("available") and ((value.get("snapshot") or {}).get("capability_scope") or {}).get("writing_auto")))
+
+
 def body_scope(doc: Document) -> Optional[str]:
     """不看封面，只凭目录与正文标题判断部门/单位口径（封面本身是 A-02 的检查对象）。"""
     from src.services.fiscal_source_scope import heading_scope
 
+    if _uses_writing_resolution(doc):
+        resolution = getattr(getattr(doc, "document_profile", None), "writing_scope", {}) or {}
+        return resolution.get("value") if resolution.get("status") == "confirmed" else None
     field = getattr(getattr(doc, "document_profile", None), "subject_level", None)
     if getattr(field, "source", None) == "human_confirmation":
         return field.value if field.value in {"unit", "department"} else None
 
     kind = report_kind(doc)
+    if kind == "final":
+        resolution = getattr(getattr(doc, "document_profile", None), "writing_scope", {}) or {}
+        return resolution.get("value") if resolution.get("status") == "confirmed" else None
     if kind not in {"final", "budget"}:
         return None
     return heading_scope("\n".join(list(doc.page_texts or [])[1:]), kind)
@@ -179,7 +193,8 @@ class CMM018_ScopeTerminology(Rule):
     desc = "部门/单位主体口径与层级口径一致（预/决算通用，清单 B-02）"
 
     def apply(self, doc: Document) -> List[Issue]:
-        scope = body_scope(doc) or subject_scope(doc)
+        doc = prepare_identity_document(doc) if _uses_writing_resolution(doc) else doc
+        scope = body_scope(doc) if _uses_writing_resolution(doc) else (body_scope(doc) or subject_scope(doc))
         issues: List[Issue] = []
         if scope in _SCOPE_WRONG_TERMS:
             label = "部门" if scope == "department" else "单位"
@@ -188,7 +203,24 @@ class CMM018_ScopeTerminology(Rule):
                 for page, text in iter_pages(doc):
                     flat, positions = page_flat(doc, page, text)
                     for match in pattern.finditer(flat):
-                        hits.append((page, text, *flat_span(positions, match.start(), match.end())))
+                        resolution = getattr(getattr(doc, "document_profile", None), "writing_scope", {}) or {}
+                        snapshot = resolution.get("snapshot") or {}
+                        config = snapshot.get("effective_config") or (snapshot.get("content") or {}).get("config") or {}
+                        native = config.get("native") or {}
+                        section_before = compact("\n".join(list(doc.page_texts or [])[:page-1]) + text[:positions[match.start()]])
+                        perf_start = section_before.rfind("预算绩效管理")
+                        other_start = section_before.rfind("其他重要事项")
+                        native_here = (report_kind(doc) == "final" and scope == "unit" and term == "本部门"
+                            and snapshot.get("available") and config.get("d2") == "low"
+                            and native.get("sentence") and flat[match.start():].startswith(native["sentence"])
+                            and flat[match.start()+len(native["sentence"]):].startswith(("：", ":"))
+                            and perf_start > other_start and perf_start >= 0)
+                        if native_here:
+                            start, end = flat_span(positions, match.start(), match.end())
+                            issues.append(issue_at(self, "单位材料使用模板原句“本部门建立了…”；按主体用语清单提示统一写法（low），该句来自已审核模板。",
+                                page, text, start, end, severity="low", checklist_item="B-02", template_package=snapshot.get("package_id")))
+                        else:
+                            hits.append((page, text, *flat_span(positions, match.start(), match.end())))
                 if hits:
                     page, text, start, end = hits[0]
                     more = f"（全文共 {len(hits)} 处）" if len(hits) > 1 else ""
@@ -196,6 +228,8 @@ class CMM018_ScopeTerminology(Rule):
                         self, f"主体口径混用：本材料为{label}{'预算' if report_kind(doc) == 'budget' else '决算'}，"
                         f"正文出现“{term}”表述{more}，应统一为“{'本部门' if scope == 'department' else '本单位'}”口径。",
                         page, text, start, end, severity="warn", checklist_item="B-02", occurrences=len(hits),
+                        locations=[{'page':p,'text':unique_quote(t,a,b),'start':a,'end':b} for p,t,a,b in hits],
+                        table_refs=[{'page':p,'span':unique_quote(t,a,b),'role':'反向主体用语'} for p,t,a,b in hits],
                     ))
         area = jurisdiction(doc) or org_name(doc) or ""
         if re.search(r"[区县]", area.replace("社区", "")) and not re.search(r"^(?:北京|上海|天津|重庆)市$", area):
@@ -209,6 +243,8 @@ class CMM018_ScopeTerminology(Rule):
                         page, text, start, end, severity="warn", checklist_item="B-02",
                     ))
                     break
+        if not scope and _uses_writing_resolution(doc):
+            raise RuleDeferred(self.code, detail="写法口径未确认；主体用语子项未完成", partial_issues=issues)
         if not scope and not issues:
             raise RuleNotApplicable(self.code, detail="未能从目录、正文或文件名确定部门/单位口径")
         return issues
@@ -241,6 +277,7 @@ class CMM019_CoverElements(Rule):
     desc = "封面要素：单位全称、年度、文种与区级标识（预/决算通用，清单 A-02）"
 
     def apply(self, doc: Document) -> List[Issue]:
+        doc = prepare_identity_document(doc) if _uses_writing_resolution(doc) else doc
         texts = list(doc.page_texts or [])
         if not texts or not str(texts[0] or "").strip():
             raise RuleNotApplicable(self.code, detail="首页无文本层，封面要素无法核验")
@@ -252,13 +289,16 @@ class CMM019_CoverElements(Rule):
         first_line = next((ln for ln in cover.split("\n") if ln.strip()), "")
         anchor = (0, len(first_line))
         issues: List[Issue] = []
+        incomplete: List[str] = []
 
         def _emit(message: str, start: int, end: int, severity: str = "warn") -> None:
             issues.append(issue_at(self, message, 1, cover, start, end, severity=severity, checklist_item="A-02"))
 
         # 年度
         cover_years = {int(y) for y in _YEAR_RE.findall(flat)}
-        expected_year = body_year(doc) or report_year(doc)
+        expected_year = body_year(doc) if _uses_writing_resolution(doc) else (body_year(doc) or report_year(doc))
+        if _uses_writing_resolution(doc) and not expected_year:
+            incomplete.append("封面年度缺少正文独立依据")
         if not cover_years:
             _emit("封面未写明年度（应为“××××年（度）…预算/决算”）。", *anchor)
         elif expected_year and expected_year not in cover_years:
@@ -268,6 +308,12 @@ class CMM019_CoverElements(Rule):
 
         # 单位全称
         canonical = canonical_org_name(doc)
+        if _uses_writing_resolution(doc):
+            independent_names = Counter(m[0] for m in name_mentions(doc) if m[1] > 1)
+            candidate, count = independent_names.most_common(1)[0] if independent_names else (None, 0)
+            canonical = candidate if count >= 2 else None
+            if not canonical:
+                incomplete.append("封面单位名称缺少正文独立依据")
         if canonical and canonical not in flat:
             variant = next((n for n, *_ in name_mentions(doc) if n in flat and _variant_kind(n, canonical)), None)
             if variant:
@@ -277,7 +323,8 @@ class CMM019_CoverElements(Rule):
                 _emit(f"封面未出现单位全称“{canonical}”。", *anchor)
 
         # 文种（部门/单位）
-        scope = body_scope(doc)
+        resolution = getattr(getattr(doc, "document_profile", None), "writing_scope", {}) or {}
+        scope = resolution.get("cover_independent_scope") if _uses_writing_resolution(doc) else body_scope(doc)
         noun = "预算" if kind == "budget" else "决算"
         if scope == "department":
             if kind == "final" and "部门决算" not in flat:
@@ -304,6 +351,10 @@ class CMM019_CoverElements(Rule):
             if district and district.group(1) not in title_line:
                 pos = cover.find("区级")
                 _emit(f"封面标题漏写区名：“{title_line}”应写明“{district.group(1)}”。", max(pos - 12, 0), max(pos, 0) + 6)
+        if _uses_writing_resolution(doc) and not scope:
+            incomplete.append("封面文种缺少独立依据")
+        if incomplete:
+            raise RuleDeferred(self.code, detail="；".join(incomplete), partial_issues=issues, unresolved_reasons=incomplete)
         return issues
 
 
@@ -316,3 +367,36 @@ __all__ = [
     "canonical_org_name",
     "name_mentions",
 ]
+
+
+class CMM027_TemplatePositionScope(Rule):
+    code, severity = 'CMM-027', 'warn'
+    desc = '模板写法位置一致性（决算，清单 B-02）'
+
+    def apply(self, doc: Document) -> List[Issue]:
+        doc = prepare_identity_document(doc) if _uses_writing_resolution(doc) else doc
+        if report_kind(doc) != 'final' and not _uses_writing_resolution(doc):
+            raise RuleNotApplicable(self.code, detail='该材料未接入经批准的模板位置检查')
+        resolution = getattr(getattr(doc, 'document_profile', None), 'writing_scope', {}) or {}
+        snapshot = resolution.get('snapshot') or {}
+        if not snapshot.get('available') and '校验失败' in str(snapshot.get('reason')):
+            raise RuleDeferred(self.code, detail='模板依据校验失败，位置检查未完成：'+snapshot['reason'])
+        if not snapshot.get('available') or not (snapshot.get('capability_scope') or {}).get('position_checks'):
+            raise RuleNotApplicable(self.code, detail='该年度模板位置检查未启用；既有规范检查继续执行；'+str(snapshot.get('reason') or '年度能力未获准'))
+        if resolution.get('status') != 'confirmed':
+            raise RuleDeferred(self.code, detail='模板位置冲突或写法依据不足，待人工分维度确认')
+        value = resolution['value']; groups = {}
+        for item in resolution.get('evidence', []):
+            # 封面缺陷由 CMM-019 统一报告，保留本规则回执以免重复确认。
+            if item.get('page', 0) <= 1 or item.get('scope') == value or item.get('kind') not in ('heading','table_note','budget_financial_table','budget_function_table'):
+                continue
+            groups.setdefault(item['kind'], []).append(item)
+        issues=[]
+        for kind, positions in groups.items():
+            first=positions[0]; page=first['page']; text=(doc.page_texts or [])[page-1]
+            issues.append(issue_at(self, f"模板口径位置混用：{'表注' if kind == 'table_note' else '标题'}采用反向写法，共{len(positions)}处；写法基准为{'单位' if value == 'unit' else '部门'}。",
+                page,text,first.get('start',0),first.get('end',len(first['text'])),checklist_item='B-02',
+                occurrences=len(positions),locations=positions,
+                table_refs=[{'page':p['page'],'span':p['text'],'role':'反向写法原文'} for p in positions],template_package=snapshot.get('package_id'),
+                binding_revision=snapshot.get('revision'),writing_source=resolution.get('source')))
+        return issues

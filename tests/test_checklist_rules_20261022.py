@@ -269,14 +269,15 @@ def test_scope_terms_mixed_in_department_final() -> None:
     assert any("本单位" in i.message for i in issues)
 
 
-def test_cover_missing_department_word() -> None:
+def test_cover_heading_only_needs_qualified_writing_basis() -> None:
     doc = _doc(["上海市普陀区国防动员办公室\n2025 年度决算",
                 "目 录\n二、部门决算单位构成\n第二部分 上海市普陀区国防动员办公室 2025 年度部门决算表",
                 "第三部分 上海市普陀区国防动员办公室 2025 年度部门决算情况说明"], kind="final",
                org="上海市普陀区国防动员办公室")
-    issues = CMM019_CoverElements().apply(doc)
-    assert any("漏写“部门”" in i.message for i in issues)
-
+    from src.engine.rule_outcome import RuleDeferred
+    with pytest.raises(RuleDeferred) as caught:
+        CMM019_CoverElements().apply(doc)
+    assert "封面文种缺少独立依据" in caught.value.detail
 
 def test_cover_year_and_district() -> None:
     doc = _doc(["上海市2025年区级部门预算\n预算主管部门：上海市普陀区人力资源和社会保障局",

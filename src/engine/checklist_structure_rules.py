@@ -23,6 +23,7 @@ from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .checklist_support import (
+    report_kind,
     CJK,
     is_table_like_line,
     is_toc_page,
@@ -207,6 +208,11 @@ class CMM013_TocHeadingAlignment(Rule):
             num = _norm_num(entry["num"])
             toc_text = doc.page_texts[entry["page"] - 1]
             quote_args = (entry["page"], toc_text, entry["start"], entry["end"])
+            resolution = getattr(getattr(doc, "document_profile", None), "writing_scope", {}) or {}
+            snap = resolution.get("snapshot") or {}
+            config = snap.get("effective_config") or (snap.get("content") or {}).get("config") or {}
+            if report_kind(doc) == "final" and snap.get("available") and (snap.get("capability_scope") or {}).get("structure") and config.get("accept_native_toc_variant") and _cn_to_int(num) == 11 and title == "其他重要事项说明" and "其他重要事项的情况说明" in body.text:
+                title = "其他重要事项的情况说明"
             positions = [m.start() for m in re.finditer(re.escape(title), body.text)]
             after = [p for p in positions if p >= cursor]
             pick = next((p for p in after if body.strong(p, len(title))), None)

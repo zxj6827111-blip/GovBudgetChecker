@@ -176,6 +176,8 @@ class Document:
     document_profile: Optional[Any] = None
     # 表/章节存在性使用独立视图；未获数字资格的 OCR 不进入金额规则文本。
     structure_view: Optional[Dict[str, Any]] = None
+    writing_page_texts: Optional[List[str]] = None
+    writing_source_spans: List[Dict[str, Any]] = field(default_factory=list)
     # ZC-03（AC-04）：规则在执行中写下的关系级子检查回执
     # （CheckReceipt.to_dict() 形态），由 build_issues_payload 收集上报。
     fact_receipts: List[Dict[str, Any]] = field(default_factory=list)

@@ -30,10 +30,10 @@ def test_canonical_registry_routes_every_production_family() -> None:
     assert catalog["version"] == RULE_REGISTRY_VERSION
     # 2026-10-22：新增 BUD-114（主要内容逐项金额）、BUD-115（三公数量要素）；
     # 检查点清单全系统默认：CMM-008~026（19 条通用）、BUD-116~123（8 条）、V33-251/252。
-    assert catalog["total"] == 116
-    assert len(all_rule_ids()) == 116
+    assert catalog["total"] == 117
+    assert len(all_rule_ids()) == 117
     assert len(select_rules("budget")) == 54
-    assert len(select_rules("final")) == 89
+    assert len(select_rules("final")) == 90
     assert len(select_rules("unknown")) == 27
     # AC-01：已迁移规则以统一事实为输入（fact_inputs 非空、migration=complete），
     # 其余规则仍是 legacy_document/pending——目录必须如实区分两种口径。

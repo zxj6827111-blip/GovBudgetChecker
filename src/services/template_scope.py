@@ -9,11 +9,14 @@ Scope = Literal['unit', 'department']
 @dataclass(frozen=True)
 class Evidence:
     scope: Scope
-    kind: Literal['declaration', 'heading', 'table_note']
+    kind: Literal['declaration', 'heading', 'table_note', 'budget_financial_table', 'budget_function_table']
     page: int
     text: str
     position: str
     qualified: bool = False
+    start: int = 0
+    end: int = 0
+    source_blocks: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -39,20 +42,21 @@ class ScopeResolution:
 def resolve_material_scope(*, evidence: tuple[Evidence, ...],
                            template_qualified: bool,
                            human: HumanDecision | None = None,
-                           archive_scope: Scope | None = None) -> ScopeResolution:
+                           archive_scope: Scope | None = None,
+                           required_categories: tuple[str,...] = ('heading','table_note')) -> ScopeResolution:
     """按 v3 裁决表处理已合格证据，不从文件名、金额范围或多数票推断。"""
     if human and human.value not in ('unit', 'department', 'unknown'):
         raise ValueError('无效的写法决定')
     if archive_scope not in (None, 'unit', 'department'):
         raise ValueError('无效的归档层级')
     valid = tuple(e for e in evidence if e.qualified and e.scope in ('unit', 'department')
-                  and e.kind in ('declaration', 'heading', 'table_note') and e.page > 0 and e.text.strip())
-    body = tuple(e for e in valid if e.kind in ('heading', 'table_note') and e.page > 1)
+                  and e.kind in ('declaration', *required_categories) and e.page > 0 and e.text.strip())
+    body = tuple(e for e in valid if e.kind in required_categories and e.page > 1)
     by_scope = {scope: {e.kind for e in body if e.scope == scope} for scope in ('unit', 'department')}
     present = {scope for scope, kinds in by_scope.items() if kinds}
     if len(present) == 2:
         observed = 'mixed'
-    elif len(present) == 1 and by_scope[next(iter(present))] == {'heading', 'table_note'}:
+    elif len(present) == 1 and by_scope[next(iter(present))] == set(required_categories):
         observed = next(iter(present))
     else:
         observed = 'insufficient'
@@ -84,7 +88,7 @@ def resolve_material_scope(*, evidence: tuple[Evidence, ...],
             independent = value
         elif source == 'template':
             independent = value
-        elif source == 'declaration' and any(e.kind == 'declaration' and e.page > 1 and e.scope == value for e in valid):
+        elif source == 'declaration' and ((template_qualified and observed == value) or any(e.kind == 'declaration' and e.page > 1 and e.scope == value for e in valid)):
             independent = value
     return ScopeResolution(observed, status, value, source, reason, independent, valid,
                            human.decision_id if human else None)

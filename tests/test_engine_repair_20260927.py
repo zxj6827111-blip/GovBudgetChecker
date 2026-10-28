@@ -186,6 +186,14 @@ def test_unresolved_total_le_15(replays):
     assert replays['shiquan']['summary']['rule_statuses']['V33-234'] == 'fail'
     assert any(issue.rule == 'V33-234' and '312.55%' in issue.message
                and '20.00' in issue.message and '62.51' in issue.message for issue in replays['shiquan']['issues'])
+    # v3 封面不能用封面或未验收的标题风格自证；冻结夹具不带年度模板快照。
+    # 逐份锁定新增的独立依据缺口，原有 15/11 门槛与冻结文件哈希保持。
+    for alias in ('golden','yichuan','wenlv','shiquan'):
+        item=replays[alias]['unresolved']['CMM-019']
+        assert item['status']=='insufficient_data'
+        expected='封面年度缺少正文独立依据；封面文种缺少独立依据' if alias in ('yichuan','shiquan') else '封面文种缺少独立依据'
+        assert item['detail']==expected
+        planned_missing+=1
     assert total - planned_missing <= 15, f"排除已核实缺分项预算后 unresolved {total} 超出验收线"
     # 2026-09-29 MR-B 批次计划内收敛：4 份决算 unresolved 14 → ≤10（实测 10），
     # 验收重走并固化于 tests/test_budget_intake_20260929.py（BUD-105/107/108/109

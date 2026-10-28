@@ -97,6 +97,7 @@ INTERNAL_RELATION_RULES = frozenset(
         "CMM-024",
         "CMM-025",
         "CMM-026",
+        "CMM-027",
     }
 )
 # 规则外统计只判断原始事实能否供材料内检查使用；执行时再套用规则自己的全部声明。
@@ -175,6 +176,8 @@ def enforce_legacy_table_admission(document, rule_id):
 @contextmanager
 def rule_identity_requirements(document, rule_id):
     required = required_identity_dimensions(rule_id)
+    if rule_id == "CMM-018" and (getattr(getattr(document, "document_profile", None), "kind", None) == "final" or ((getattr(getattr(document, "document_profile", None), "writing_scope", {}) or {}).get("domain") == "budget")):
+        required = tuple(dim for dim in required if dim != "org_scope")
     context = getattr(document, "fact_context", None)
     if (
         context is not None

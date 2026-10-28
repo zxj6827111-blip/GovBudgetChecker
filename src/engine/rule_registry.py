@@ -15,7 +15,7 @@ from typing import Any, Dict, FrozenSet, List, Tuple
 from . import budget_rules, common_rules, rules_v33
 from .rule_identity import FULL_IDENTITY, required_identity_dimensions
 
-RULE_REGISTRY_VERSION = "python-rule-registry-v2-profile-scope"
+RULE_REGISTRY_VERSION = "python-rule-registry-v3-writing-scope"
 EVALUATION_BASIS_LEGACY = "legacy_document"
 EVALUATION_BASIS_FACT = "fiscal_fact"
 
@@ -64,7 +64,7 @@ def _registrations() -> List[RuleRegistration]:
             registration = RuleRegistration(
                 rule_id=rule_id,
                 implementation=rule,
-                report_kinds=kinds,
+                report_kinds=("final","budget") if rule_id == "CMM-027" else kinds,
                 rule_family=family,
                 evaluation_basis=(
                     EVALUATION_BASIS_FACT if fact_inputs else EVALUATION_BASIS_LEGACY
@@ -86,7 +86,9 @@ def select_rules(report_kind: str) -> List[Any]:
     kind = str(report_kind or "unknown").strip().lower()
     if kind == "non_budget":
         return []
-    return [*select_specific_rules(kind), *common_rules.ALL_COMMON_RULES]
+    from src.services.material_writing import budget_enabled
+    common = [r for r in common_rules.ALL_COMMON_RULES if r.code != "CMM-027" or kind == "final" or (kind == "budget" and budget_enabled())]
+    return [*select_specific_rules(kind), *common]
 
 
 def restrict_rules_to_profile(rules, profile):

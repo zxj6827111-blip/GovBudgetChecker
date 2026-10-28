@@ -763,3 +763,56 @@ async def ignore_job_issue(job_id: str, request: Request):
     payload = runtime.ignore_job_issue(job_id, issue_id, user=user, note=(body or {}).get("note"))
     clear_department_stats_cache()
     return payload
+
+
+class DimensionChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    value: str
+    expected_revision: int = Field(ge=0)
+    note: str = Field(min_length=3,max_length=2000)
+    evidence_reference: str = Field(min_length=3,max_length=2000)
+    acknowledge_conflicts: bool = False
+    cover_independent: bool = False
+    @field_validator("note", "evidence_reference")
+    @classmethod
+    def meaningful_text(cls,value):
+        if len(value.strip())<3: raise ValueError("依据和位置至少3个字")
+        return value.strip()
+
+class MaterialDimensionsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    document_version_id: int = Field(gt=0)
+    file_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    analysis_basis_token: str = Field(min_length=1,max_length=300)
+    writing: DimensionChoice|None = None
+    amount: DimensionChoice|None = None
+
+@router.get("/api/jobs/{job_id}/material-dimensions")
+async def get_material_dimensions(job_id:str, request:Request):
+    _,_,user,payload=require_job_access(request,job_id)
+    from api import material_access
+    from src.services import document_scope
+    payload=await published_job_view(job_id,payload,user)
+    async def query(conn):
+        result=await document_scope.information(conn,job_id,payload)
+        result['writing_decision']=await document_scope.latest_writing_decision(conn,job_id,result['file_hash'],result['document_version_id'])
+        result['resolution']=((payload.get('result') or {}).get('meta') or {}).get('document_scope_resolution') or {}
+        result['report_kind']=((((payload.get('result') or {}).get('meta') or {}).get('document_profile') or {}).get('report_kind') or {}).get('value')
+        return result
+    return await material_access.with_connection(query)
+
+@router.post("/api/jobs/{job_id}/material-dimensions",status_code=202)
+async def confirm_material_dimensions(job_id:str,body:MaterialDimensionsRequest,request:Request):
+    _,_,user,_=require_job_access(request,job_id)
+    from api import material_access
+    from src.services import review_lifecycle_service, document_scope
+    import hashlib
+    if body.writing and body.writing.value not in {'unit','department','unknown'}: raise HTTPException(422,'无效写法')
+    if body.amount and body.amount.value not in {'unit_self','department_summary','unknown'}: raise HTTPException(422,'无效金额范围')
+    actual=await run_in_threadpool(lambda:hashlib.sha256(runtime.find_first_pdf(runtime.UPLOAD_ROOT/job_id).read_bytes()).hexdigest())
+    result=await material_access.with_connection(lambda conn:review_lifecycle_service.confirm_material_dimensions(conn,job_id,
+        actor=str(user.get('username') or 'unknown'),request=body.model_dump(mode='json'),actual_file_hash=actual))
+    await document_scope.dispatch_pending()
+    await document_scope.dispatch_writing_pending()
+    return {'decisions':result,'reanalysis_status':'pending_reanalysis'}

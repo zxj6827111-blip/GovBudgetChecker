@@ -2872,6 +2872,7 @@ from .checklist_identity_rules import (  # noqa: E402
     CMM017_OrgNameConsistency,
     CMM018_ScopeTerminology,
     CMM019_CoverElements,
+    CMM027_TemplatePositionScope,
 )
 from .checklist_content_rules import (  # noqa: E402
     CMM020_ShareSum,
@@ -2896,6 +2897,7 @@ ALL_COMMON_RULES.extend([
     CMM017_OrgNameConsistency(),
     CMM018_ScopeTerminology(),
     CMM019_CoverElements(),
+    CMM027_TemplatePositionScope(),
     CMM020_ShareSum(),
     CMM021_TableTitleNormative(),
     CMM022_SubjectCodeFormat(),

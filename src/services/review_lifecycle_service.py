@@ -2127,3 +2127,82 @@ __all__ = [
     "invalidate_review",
     "invalidate_reviews_for_analysis_restart",
 ]
+
+
+async def confirm_material_dimensions(conn, job_uuid: str, *, actor: str, request: dict, actual_file_hash: str) -> dict:
+    """写法与金额分开校验、同一事务记录；共用槽位→会话→任务锁序。"""
+    from src.services import document_scope
+    import json
+    _require_autocommit(conn, operation='confirm_material_dimensions')
+    selections={k:v for k,v in request.items() if k in ('writing','amount') and v is not None}
+    if not selections: raise HTTPException(422,'至少确认一个维度')
+    effects=_CommitEffects()
+    async with _mutation_scope(conn,effects):
+        link=await review_context_query.resolve_slot_link_for_job(conn,job_uuid)
+        if not link: raise HTTPException(409,'材料版本不可用')
+        state=await _load_state(conn,link.slot_id,lock_slot=True,lock_session=True)
+        if not state: raise HTTPException(404,'材料槽位不存在')
+        _require_job_belongs_to_state(state,job_uuid)
+        job=await conn.fetchrow('SELECT file_hash,status FROM analysis_jobs WHERE job_uuid=$1',job_uuid)
+        if state.analysis.document_version_id!=request['document_version_id'] or not job or actual_file_hash!=request['file_hash'] or job['file_hash']!=actual_file_hash:
+            raise HTTPException(409,'材料版本或原件已变化')
+        kind=(state.analysis.result_meta.get('document_profile') or {}).get('report_kind',{}).get('value')
+        resolution=state.analysis.result_meta.get('document_scope_resolution') or {}
+        from src.services.material_writing import budget_enabled
+        if kind!='final' and not (kind=='budget' and budget_enabled() and resolution.get('domain')=='budget'):
+            raise HTTPException(422,'当前材料尚未启用经过验收的模板写法链路')
+        tables={'writing':'document_writing_scope_decisions','amount':'document_scope_decisions'}
+        choices={'writing':'writing_scope','amount':'material_scope'}
+        for absent in set(tables)-set(selections):
+            if await conn.fetchval(f'SELECT 1 FROM {tables[absent]} WHERE request_id=$1::uuid',request['request_id']):
+                raise HTTPException(409,'提交维度与原请求不一致')
+        result={};pending={}
+        for dimension,selection in selections.items():
+            table=tables[dimension];choice=choices[dimension]
+            existing=await conn.fetchrow(f'SELECT * FROM {table} WHERE request_id=$1::uuid',request['request_id'])
+            if existing:
+                saved=document_scope.decision_dict(existing)
+                expected={'job_uuid':job_uuid,'document_version_id':request['document_version_id'],'file_hash':actual_file_hash,
+                          choice:selection['value'],'note':selection['note'],'evidence_reference':selection['evidence_reference'],'actor':actor,
+                          'analysis_basis_token':request['analysis_basis_token']}
+                if dimension=='writing':
+                    expected['conflict_acknowledged']=selection.get('acknowledge_conflicts',False)
+                    saved_independent=any(e.get('dimension')=='human_cover_independent' and e.get('value') is True for e in saved.get('source_evidence',[]))
+                    if saved_independent!=selection.get('cover_independent',False): raise HTTPException(409,'同一请求不能改变依据独立性')
+                if any(saved.get(k)!=v for k,v in expected.items()): raise HTTPException(409,'提交标识已被用于另一决定')
+                result[dimension]=saved
+            else: pending[dimension]=selection
+        if result and pending: raise HTTPException(409,'提交维度与原请求不一致')
+        if result: return result
+        if state.basis_token!=request['analysis_basis_token'] or not state.analysis.completed or job['status'] in {'queued','processing','running'}:
+            raise HTTPException(409,'分析已变化或正在重算')
+        for dimension,selection in pending.items():
+            table=tables[dimension]
+            prev=await conn.fetchval(f'SELECT max(revision) FROM {table} WHERE job_uuid=$1 AND document_version_id=$2',job_uuid,request['document_version_id']) or 0
+            if prev!=selection['expected_revision']: raise HTTPException(409,'该维度已被其他人更新，请刷新')
+            if dimension=='writing':
+                evidence=(state.analysis.result_meta.get('document_scope_resolution') or {}).get('evidence') or []
+                conflicts=[e for e in evidence if selection['value']!='unknown' and e.get('scope')!=selection['value']]
+            else:
+                evidence=document_scope.scope_evidence({'result':{'meta':state.analysis.result_meta}})
+                conflicts=document_scope.source_conflicts(evidence,selection['value'])
+            if conflicts and not selection.get('acknowledge_conflicts'): raise HTTPException(409,'选择与原文存在反向证据，请明确核对')
+            if dimension=='writing': evidence=[*evidence,{'dimension':'human_cover_independent','value':selection.get('cover_independent',False)}]
+            selection.update(revision=prev+1,source_evidence=evidence)
+        invalidated=await review_session_store.invalidate_sessions_for_job(conn,job_uuid,reason='material_dimensions_changed')
+        locked=await conn.fetchrow('SELECT file_hash,status FROM analysis_jobs WHERE job_uuid=$1 FOR UPDATE',job_uuid)
+        if locked['file_hash']!=actual_file_hash or locked['status'] in {'queued','processing','running'}: raise HTTPException(409,'分析已开始或原件已变化')
+        for dimension,selection in pending.items():
+            table=tables[dimension];choice=choices[dimension]
+            extra=',conflict_acknowledged' if dimension=='writing' else ''
+            extra_value=',$12' if dimension=='writing' else ''
+            args=[request['request_id'],job_uuid,request['document_version_id'],actual_file_hash,selection['revision'],state.basis_token,
+                  selection['value'],selection['note'],selection['evidence_reference'],json.dumps(selection['source_evidence'],ensure_ascii=False),actor]
+            if dimension=='writing':args.append(selection.get('acknowledge_conflicts',False))
+            saved=await conn.fetchrow(f'''INSERT INTO {table}(request_id,job_uuid,document_version_id,file_hash,revision,analysis_basis_token,{choice},note,evidence_reference,source_evidence,actor{extra})
+                VALUES($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11{extra_value}) RETURNING *''',*args)
+            result[dimension]=document_scope.decision_dict(saved)
+        effects.lock_clears.extend({'job_uuid':job_uuid,'review_session_id':str(item['review_session_id']),'analysis_basis_token':str(item.get('analysis_basis_token') or '')} for item in invalidated)
+        await review_session_store.clear_analysis_result_fingerprint(conn,job_uuid)
+        await conn.execute("UPDATE analysis_jobs SET status='queued',updated_at=NOW() WHERE job_uuid=$1",job_uuid)
+        return result

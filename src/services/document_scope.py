@@ -99,6 +99,13 @@ async def pending_reanalysis(job_uuid: str) -> dict | None:
     from src.db.connection import DatabaseConnection
     conn = await DatabaseConnection.acquire()
     try:
+        writing = await conn.fetchrow("""SELECT d.* FROM document_writing_scope_decisions d
+            JOIN analysis_jobs j ON j.job_uuid=d.job_uuid AND j.file_hash=d.file_hash
+                AND j.structured_document_version_id=d.document_version_id
+            WHERE d.job_uuid=$1 AND d.dispatch_status IN ('pending','queued')
+            ORDER BY d.revision DESC LIMIT 1""", job_uuid)
+        if writing is not None:
+            return decision_dict(writing)
         return decision_dict(await conn.fetchrow("""SELECT d.* FROM document_scope_decisions d
             JOIN analysis_jobs j ON j.job_uuid=d.job_uuid AND j.file_hash=d.file_hash
                 AND j.structured_document_version_id=d.document_version_id
@@ -162,6 +169,62 @@ async def dispatch_pending() -> int:
                 count += 1
             except Exception as exc:
                 await conn.execute("UPDATE document_scope_decisions SET dispatch_error=$2,dispatch_attempts=dispatch_attempts+1, "
+                                   "retry_not_before=NOW()+LEAST(300,5*POWER(2,LEAST(dispatch_attempts,6)))*INTERVAL '1 second' "
+                                   "WHERE request_id=$1::uuid",
+                                   row["request_id"], str(exc)[:500])
+                logger.exception("Document scope reanalysis dispatch failed for %s", row["job_uuid"])
+            finally:
+                await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", key)
+    finally:
+        await DatabaseConnection.release(conn)
+    return count
+
+
+async def latest_writing_decision(conn, job_uuid, file_hash, version_id):
+    return decision_dict(await conn.fetchrow("SELECT * FROM document_writing_scope_decisions WHERE job_uuid=$1 AND file_hash=$2 AND document_version_id=$3 ORDER BY revision DESC LIMIT 1",job_uuid,file_hash,version_id))
+
+async def dispatch_writing_pending() -> int:
+    """提交后可靠投递。Worker 周期重试；崩溃后按请求 ID 恢复，不重复启动分析。"""
+    if not os.getenv("DATABASE_URL"):
+        return 0
+    from api import runtime
+    from src.db.connection import DatabaseConnection
+    from src.services.analysis_result_store import ensure_analysis_persistence_ready
+    if not await ensure_analysis_persistence_ready():
+        return 0
+    conn = await DatabaseConnection.acquire()
+    count = 0
+    try:
+        rows = await conn.fetch("SELECT * FROM document_writing_scope_decisions WHERE dispatch_status='pending' "
+                                "AND (retry_not_before IS NULL OR retry_not_before<=NOW()) ORDER BY created_at LIMIT 10")
+        for raw in rows:
+            row = decision_dict(raw)
+            key = "writing-scope-dispatch:" + row["job_uuid"]
+            if not await conn.fetchval("SELECT pg_try_advisory_lock(hashtext($1))", key):
+                continue
+            try:
+                latest = await latest_writing_decision(conn, row["job_uuid"], row["file_hash"], row["document_version_id"])
+                if latest["request_id"] != row["request_id"]:
+                    continue
+                job_dir = runtime.UPLOAD_ROOT / row["job_uuid"]
+                status = runtime.read_json_file(job_dir / "status.json", default={})
+                if status.get("status") in runtime.ACTIVE_ANALYSIS_STATUSES:
+                    if status.get("writing_scope_request_id") != row["request_id"]:
+                        continue
+                else:
+                    pdf = runtime.find_first_pdf(job_dir)
+                    if hashlib.sha256(pdf.read_bytes()).hexdigest() != row["file_hash"]:
+                        raise ValueError("原件哈希已变化，拒绝将口径确认应用于其他文件")
+                    await runtime.reanalyze_job(row["job_uuid"], {
+                        "writing_scope_request_id": row["request_id"], "mode": status.get("mode") or "legacy",
+                        "use_local_rules": status.get("use_local_rules", True),
+                        "use_ai_assist": status.get("use_ai_assist", False),
+                    })
+                await conn.execute("UPDATE document_writing_scope_decisions SET dispatch_status='queued',dispatch_error=NULL "
+                                   "WHERE request_id=$1::uuid AND dispatch_status='pending'", row["request_id"])
+                count += 1
+            except Exception as exc:
+                await conn.execute("UPDATE document_writing_scope_decisions SET dispatch_error=$2,dispatch_attempts=dispatch_attempts+1, "
                                    "retry_not_before=NOW()+LEAST(300,5*POWER(2,LEAST(dispatch_attempts,6)))*INTERVAL '1 second' "
                                    "WHERE request_id=$1::uuid",
                                    row["request_id"], str(exc)[:500])

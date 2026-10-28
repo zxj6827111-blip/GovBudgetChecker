@@ -138,6 +138,7 @@ class DocumentProfile(BaseModel):
     - **质量维度**（``extraction_quality``）：决定页面级检查是否可信。
     """
 
+    writing_scope: Dict[str, Any] = Field(default_factory=dict)
     report_kind: ProfileField = Field(default_factory=ProfileField)
     report_year: ProfileField = Field(default_factory=ProfileField)
     organization_name: ProfileField = Field(default_factory=ProfileField)
@@ -203,6 +204,7 @@ class DocumentProfile(BaseModel):
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "writing_scope": self.writing_scope,
             "report_kind": self.report_kind.to_dict(),
             "report_year": self.report_year.to_dict(),
             "organization_name": self.organization_name.to_dict(),
