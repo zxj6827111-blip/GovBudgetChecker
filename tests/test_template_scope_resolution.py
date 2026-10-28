@@ -44,3 +44,8 @@ def test_template_requires_two_categories_and_compatible_archive():
     assert resolve(*rows).cover_independent_scope == 'unit'
     assert resolve(*rows, archive_scope='department').status == 'conflict'
     assert resolve(ev('unit', 'heading', qualified=False), ev('unit', 'table_note')).status == 'insufficient'
+
+
+def test_invalid_human_decision_is_rejected():
+    with pytest.raises(ValueError):
+        resolve(human=HumanDecision('bogus', '3'))

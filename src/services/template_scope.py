@@ -41,6 +41,10 @@ def resolve_material_scope(*, evidence: tuple[Evidence, ...],
                            human: HumanDecision | None = None,
                            archive_scope: Scope | None = None) -> ScopeResolution:
     """按 v3 裁决表处理已合格证据，不从文件名、金额范围或多数票推断。"""
+    if human and human.value not in ('unit', 'department', 'unknown'):
+        raise ValueError('无效的写法决定')
+    if archive_scope not in (None, 'unit', 'department'):
+        raise ValueError('无效的归档层级')
     valid = tuple(e for e in evidence if e.qualified and e.scope in ('unit', 'department')
                   and e.kind in ('declaration', 'heading', 'table_note') and e.page > 0 and e.text.strip())
     body = tuple(e for e in valid if e.kind in ('heading', 'table_note') and e.page > 1)
