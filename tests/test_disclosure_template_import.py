@@ -31,6 +31,8 @@ def test_differences_retain_original_and_position_never_auto_approve():
     assert '2024' in str(changes) and '2025' in str(changes)
     assert '万元' in str(changes) and '金额单位：元' in str(changes)
     assert changes[0]['old'][0]['offset'] == 3
+    assert changes[0]['old'][0]['page'] is None
+    assert changes[0]['old'][0]['paragraph'] == 2
 
 
 def test_unsupported_or_empty_is_rejected_before_creating_draft(tmp_path):

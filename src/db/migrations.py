@@ -1750,6 +1750,10 @@ DOCUMENT_SCOPE_MIGRATION = {
 }
 MIGRATIONS.append(DOCUMENT_SCOPE_MIGRATION)
 
+from src.db.annual_template_migration import MIGRATION as ANNUAL_TEMPLATE_MIGRATION
+
+MIGRATIONS.append(ANNUAL_TEMPLATE_MIGRATION)
+
 
 async def ensure_migrations_table(conn: asyncpg.Connection, schema: str):
     """Create the schema_migrations tracking table if not exists.

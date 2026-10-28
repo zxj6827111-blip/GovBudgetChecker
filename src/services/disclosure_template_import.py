@@ -68,13 +68,13 @@ def _paragraphs(text: str) -> list[dict]:
     # 不删除年份、名称、数字或标点；位置仍指向原始提取文本。
     result = []
     offset = 0
-    page = 1
+    paragraph = 0
     for line in text.splitlines(keepends=True):
         content = line.rstrip('\r\n\f')
         if content.strip():
-            result.append({'page': page, 'offset': offset, 'text': content})
+            paragraph += 1
+            result.append({'page': None, 'paragraph': paragraph, 'offset': offset, 'text': content})
         offset += len(line)
-        page += line.count('\f')
     return result
 
 
