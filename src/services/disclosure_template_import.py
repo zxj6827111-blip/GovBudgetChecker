@@ -10,7 +10,7 @@ import shutil
 import subprocess
 
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
-SUPPORTED = {'.doc', '.docx', '.pdf'}
+SUPPORTED = {'.doc', '.docx', '.pdf', '.xls'}
 
 
 def digest(data: bytes) -> str:
@@ -18,9 +18,36 @@ def digest(data: bytes) -> str:
 
 
 def _extract(source: Path) -> tuple[str, str]:
+    if source.suffix.lower() == '.xls':
+        import xlrd
+        book = xlrd.open_workbook(source, on_demand=True)
+        lines=[]; cell_map=[]; text_offset=0; total_cells=0
+        try:
+            for sheet in book.sheets():
+                total_cells+=sheet.nrows*sheet.ncols
+                if total_cells>2_000_000:raise ValueError('模板工作簿超过安全处理上限')
+                if sheet.nrows*sheet.ncols > 500_000: raise ValueError('模板表格超过安全处理上限')
+                header='工作表：'+sheet.name
+                lines.append(header);text_offset+=len(header)+1
+                for row in range(sheet.nrows):
+                    values=[];row_offset=text_offset
+                    for column in range(sheet.ncols):
+                        value=sheet.cell_value(row,column)
+                        if sheet.cell_type(row,column)==xlrd.XL_CELL_EMPTY: continue
+                        # 仅提供模板比较视图，数字/公式缓存不参与金额事实或规则计算。
+                        rendered=str(value)
+                        values.append(rendered)
+                        cell_map.append({'sheet':sheet.name,'row':row+1,'column':column+1,'value':value,'cell_type':sheet.cell_type(row,column),'text_start':row_offset,'text_end':row_offset+len(rendered)})
+                        row_offset+=len(rendered)+1
+                    if values:
+                        lines.append('\t'.join(values));text_offset=row_offset
+        finally:book.release_resources()
+        (source.parent/'spreadsheet_cells.json').write_text(json.dumps(cell_map,ensure_ascii=False,allow_nan=False),encoding='utf-8')
+        return '\n'.join(lines), 'xlrd:'+xlrd.__version__+':cached-values-only'
     if source.suffix.lower() == '.pdf':
         import fitz
         with fitz.open(source) as document:
+            if document.page_count > 800: raise ValueError('模板超过800页')
             pages = [page.get_text() for page in document]
         return '\f'.join(pages), 'pymupdf:' + str(fitz.VersionBind)
     converter = shutil.which('textutil')
@@ -29,7 +56,8 @@ def _extract(source: Path) -> tuple[str, str]:
     result = subprocess.run([converter, '-convert', 'txt', '-stdout', str(source)],
                             check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             timeout=60)
-    return result.stdout.decode('utf-8'), 'textutil:' + os.path.realpath(converter)
+    build = subprocess.run(['/usr/bin/sw_vers', '-buildVersion'], check=True, stdout=subprocess.PIPE, timeout=5).stdout.decode().strip()
+    return result.stdout.decode('utf-8'), 'textutil:' + os.path.realpath(converter) + ':macOS-' + build
 
 
 def import_source(source: Path, target: Path, metadata: dict) -> dict:
@@ -37,13 +65,14 @@ def import_source(source: Path, target: Path, metadata: dict) -> dict:
     source, target = Path(source), Path(target)
     suffix = source.suffix.lower()
     if suffix not in SUPPORTED:
-        raise ValueError('仅支持已验证的 DOC、DOCX、PDF 草稿导入')
+        raise ValueError('仅支持已验证的 DOC、DOCX、PDF、XLS 草稿导入')
+    if not isinstance(metadata, dict):
+        raise ValueError('来源元数据必须为对象')
+    metadata = {**metadata, 'original_filename':metadata.get('original_filename') or source.name}
     with source.open('rb') as handle:
         data = handle.read(MAX_SOURCE_BYTES + 1)
     if not data or len(data) > MAX_SOURCE_BYTES:
         raise ValueError('原件为空或超过大小限制')
-    if not isinstance(metadata, dict):
-        raise ValueError('来源元数据必须为对象')
     # 草稿目录不可复用，防止覆盖既有原件；文件名由系统生成而非信任上传名。
     target.mkdir(parents=True, exist_ok=False)
     original = target / ('original' + suffix)
@@ -53,13 +82,16 @@ def import_source(source: Path, target: Path, metadata: dict) -> dict:
                 'extraction_status': 'failed', 'converter': None, 'error': None}
     try:
         text, converter = _extract(original)
+        if len(text)>2_000_000:
+            raise ValueError('转换文本超过安全处理上限')
         if not text.strip():
             raise ValueError('转换结果为空；不允许作为有效模板发布')
         (target / 'extracted.txt').write_text(text, encoding='utf-8')
         manifest.update(extraction_status='needs_visual_verification', converter=converter,
                         text_sha256=digest(text.encode('utf-8')))
-    except (OSError, ValueError, UnicodeError, RuntimeError, subprocess.SubprocessError, ImportError) as exc:
-        manifest['error'] = f'{type(exc).__name__}: {exc}'
+    except Exception as exc:
+        # 转换器专有解析异常也要落失败回执；原件和错误不能因空模板而消失。
+        manifest['error'] = f'{type(exc).__name__}: {exc}'[:1000]
     (target / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     return manifest
 

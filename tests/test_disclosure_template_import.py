@@ -39,3 +39,12 @@ def test_unsupported_or_empty_is_rejected_before_creating_draft(tmp_path):
     bad = tmp_path / 'x.wps'; bad.write_bytes(b'x')
     with pytest.raises(ValueError): import_source(bad, tmp_path / 'draft', {})
     assert not (tmp_path / 'draft').exists()
+
+
+def test_corrupt_xls_keeps_original_and_failed_receipt(tmp_path):
+    source=tmp_path/'broken.xls';source.write_bytes(b'not-a-valid-xls')
+    target=tmp_path/'retained'
+    result=import_source(source,target,{'report_kind':'budget','source_report_year':None})
+    assert result['extraction_status']=='failed' and result['error']
+    assert (target/'original.xls').read_bytes()==source.read_bytes()
+    assert (target/'manifest.json').exists() and not (target/'extracted.txt').exists()

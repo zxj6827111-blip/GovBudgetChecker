@@ -25,3 +25,6 @@ cryptography>=41.0.0
 
 # PostgreSQL 异步数据库驱动
 asyncpg>=0.29.0
+
+# 旧版预算模板 XLS 只读提取，不执行宏
+xlrd==2.0.2

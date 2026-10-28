@@ -1753,6 +1753,24 @@ MIGRATIONS.append(DOCUMENT_SCOPE_MIGRATION)
 from src.db.annual_template_migration import MIGRATION as ANNUAL_TEMPLATE_MIGRATION
 
 MIGRATIONS.append(ANNUAL_TEMPLATE_MIGRATION)
+MIGRATIONS.append({
+    "id": "2026-10-28_0043_template_drafts",
+    "description": "模板草稿审核生命周期",
+    "sql": ["""CREATE TABLE IF NOT EXISTS disclosure_template_drafts (
+        id UUID PRIMARY KEY, revision INTEGER NOT NULL CHECK(revision>0),
+        status TEXT NOT NULL CHECK(status IN ('draft','reviewed','published')),
+        data JSONB NOT NULL, actor TEXT NOT NULL, package_id UUID REFERENCES disclosure_template_packages(id),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )"""],
+})
+
+
+MIGRATIONS.append({
+    "id": "2026-10-28_0044_undated_template_sources",
+    "description": "保留20XX样张源报告年度未知，禁止将下发日期冒充报告年度",
+    "sql": ["ALTER TABLE disclosure_template_sources ALTER COLUMN source_report_year DROP NOT NULL",
+            "ALTER TABLE disclosure_template_packages ALTER COLUMN source_report_year DROP NOT NULL"],
+})
 
 
 async def ensure_migrations_table(conn: asyncpg.Connection, schema: str):
