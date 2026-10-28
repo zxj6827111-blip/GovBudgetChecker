@@ -18,9 +18,9 @@ Browserslist: browsers data (caniuse-lite) is 8 months old. Please run:
 info  - Need to disable some ESLint rules? Learn more here: https://nextjs.org/docs/app/api-reference/config/eslint#disabling-rules
    Collecting page data ...
    Generating static pages (0/45) ...
-   Generating static pages (11/45) 
-   Generating static pages (22/45) 
-   Generating static pages (33/45) 
+   Generating static pages (11/45)
+   Generating static pages (22/45)
+   Generating static pages (33/45)
  ✓ Generating static pages (45/45)
    Finalizing page optimization ...
    Collecting build traces ...
@@ -157,4 +157,3 @@ Route (app)                                               Size  First Load JS
 
 ○  (Static)   prerendered as static content
 ƒ  (Dynamic)  server-rendered on demand
-

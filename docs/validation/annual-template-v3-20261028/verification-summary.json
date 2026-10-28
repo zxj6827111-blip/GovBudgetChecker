@@ -29,5 +29,6 @@
   "test_schema": "annual_runtime_verified",
   "backend_port": 28743,
   "frontend_port": 3308,
-  "postgres_port": 25462
+  "postgres_port": 25462,
+  "log_normalization": "测试连接已脱敏，构建进度行去除尾随空白；原始临时日志保留。"
 }
