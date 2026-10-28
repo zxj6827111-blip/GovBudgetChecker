@@ -18,7 +18,7 @@ test-results/
 .env
 .env.*
 !.env.example
-node_modules/
+node_modules
 app/.next/
 app/.next-*/
 app/.npm-cache/

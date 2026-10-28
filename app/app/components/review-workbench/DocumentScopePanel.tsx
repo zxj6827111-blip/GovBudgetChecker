@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
+import { MaterialDimensionsPanel } from "./MaterialDimensionsPanel";
 import { Button } from "@/components/ui";
 
 type Scope = "unit_self" | "department_summary" | "unknown";
@@ -12,7 +13,7 @@ interface ScopeState {
 }
 const labels = { unit_self: "单位材料", department_summary: "部门材料（含所属单位的汇总范围）", unknown: "暂不确定" };
 
-export function DocumentScopePanel({ jobId, onQueued }: { jobId: string; onQueued: () => void }) {
+function LegacyDocumentScopePanel({ jobId, onQueued }: { jobId: string; onQueued: () => void }) {
   const formId = useId();
   const [state, setState] = useState<ScopeState | null>(null);
   const [scope, setScope] = useState<Scope | "">("");
@@ -108,4 +109,11 @@ export function DocumentScopePanel({ jobId, onQueued }: { jobId: string; onQueue
       </>}
     </>}
   </div>;
+}
+
+
+export function DocumentScopePanel(props: {jobId:string;onQueued:()=>void}) {
+  const [budget,setBudget]=useState(false);
+  const onBudget=useCallback(()=>setBudget(true),[]);
+  return budget ? <LegacyDocumentScopePanel {...props}/> : <MaterialDimensionsPanel {...props} onBudget={onBudget}/>;
 }

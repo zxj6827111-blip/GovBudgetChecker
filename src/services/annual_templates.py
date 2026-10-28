@@ -275,14 +275,15 @@ def reviewed_slot_changes(content):
         if len(kinds)!=len(changes): return False
         for change,kind in zip(changes,kinds):
             old='\n'.join(p['text'] for p in change['old']); new='\n'.join(p['text'] for p in change['new'])
+            candidate=old
             if kind=='layout' and ''.join(old.split())==''.join(new.split()): continue
-            if kind in ('report_year','comparison_year','report_and_comparison_year'):
+            if kind in ('report_year','comparison_year','report_and_comparison_year','annual_and_name'):
                 replacements={}
                 old_value=content.get('previous_source_report_year');new_value=content.get('source_report_year')
                 if type(new_value) is int:
-                    if kind in ('report_year','report_and_comparison_year'):
+                    if kind in ('report_year','report_and_comparison_year','annual_and_name'):
                         replacements[str(old_value) if type(old_value) is int else '20XX']=str(new_value)
-                    if kind in ('comparison_year','report_and_comparison_year') and type(old_value) is int:
+                    if kind in ('comparison_year','report_and_comparison_year','annual_and_name') and type(old_value) is int:
                         replacements[str(old_value-1)]=str(new_value-1)
                 def approved_year(match):
                     prefix=old[:match.start()]
@@ -291,11 +292,12 @@ def reviewed_slot_changes(content):
                     return replacements[match.group()]
                 if replacements:
                     changed=re.sub(r'(?<!\d)(?:'+ '|'.join(map(re.escape,replacements))+r')(?=年)',approved_year,old)
-                    if changed!=old and changed==new:continue
-            if kind=='organization_name':
+                    candidate=changed
+                    if kind!='annual_and_name' and changed!=old and changed==new:continue
+            if kind in ('organization_name','annual_and_name'):
                 pattern=r'(?:上海市|XX|××)[^\d，。；：:（）()]{0,40}?(?:办公室|委员会|中心|局)'
-                left=list(re.finditer(pattern,old));right=list(re.finditer(pattern,new))
-                if any(old[:a.start()]+b.group()+old[a.end():]==new for a in left for b in right):continue
+                left=list(re.finditer(pattern,candidate));right=list(re.finditer(pattern,new))
+                if any(candidate[:a.start()]+b.group()+candidate[a.end():]==new for a in left for b in right):continue
             return False
     return True
 

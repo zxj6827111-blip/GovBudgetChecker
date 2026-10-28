@@ -107,3 +107,9 @@ def test_year_slot_does_not_rewrite_amounts_codes_or_fixed_citations():
     assert not reviewed_slot_changes(slot_content('预算2024.00万元','预算2025.00万元','report_year'))
     assert not reviewed_slot_changes(slot_content('依据《2024年办法》','依据《2025年办法》','report_year'))
     assert not reviewed_slot_changes(slot_content('科目编码2024','科目编码2025','report_year'))
+
+
+def test_compound_annual_and_name_slots_still_reject_amount_changes():
+    old='上海市XX局2024年收入，比2023年增加10.00万元'
+    assert reviewed_slot_changes(slot_content(old,'上海市测试局2025年收入，比2024年增加10.00万元','annual_and_name'))
+    assert not reviewed_slot_changes(slot_content(old,'上海市测试局2025年收入，比2024年增加11.00万元','annual_and_name'))
