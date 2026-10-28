@@ -213,6 +213,9 @@ async def bind(conn, data, actor):
         if sha(package['content'])!=package['content_sha256']: raise HTTPException(409,'发布包哈希校验失败')
         caps=data['capabilities']
         if set(caps)-CAPABILITIES or any(type(v) is not bool or (v and not package['capability_scope'].get(k)) for k,v in caps.items()): raise HTTPException(422,'年度能力不能超出发布包')
+        if any(caps.values()):
+            verify_source_receipts(package['content'])
+            for side in ('unit','department'):await text(conn,package[side+'_source_id'])
         if data['adoption_kind'] in ('not_received','historical_reference') and (caps.get('writing_auto') or caps.get('position_checks')):
             validate_compatibility(data.get('compatibility'),package)
         if data['adoption_kind']=='issued' and data['target_year']!=package['source_report_year']:

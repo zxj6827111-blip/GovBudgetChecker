@@ -79,6 +79,9 @@ async def test_template_lifecycle_real_postgres(real_database_url, tmp_path, mon
         # 已发布原件被改写时能力 fail-closed，不能偷偷改选其他年份。
         directory=service.source_dir(unit['id']); original=directory/'original.pdf'; original.write_bytes(b'tampered')
         assert not (await service.snapshot(conn,2024))['available']
+        with pytest.raises(HTTPException) as ex:
+            await service.bind(conn,{**bind,'expected_revision':3},'test')
+        assert ex.value.status_code==409
     finally:
         await conn.execute('SET search_path TO public')
         await conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
