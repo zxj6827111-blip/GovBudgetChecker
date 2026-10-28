@@ -66,6 +66,10 @@ def test_qualified_ocr_view_is_separate_deduplicated_and_shared():
         ParsedTextBlock('h',2,'2024年度决算表',confidence=.99,extraction_method='ocr'),
         ParsedTextBlock('repeat',2,'2024年度决算表',confidence=.99,extraction_method='ocr'),
         ParsedTextBlock('n',2,'本表反映单位本年度收入。',confidence=.99,extraction_method='ocr'),
+        ParsedTextBlock('nan',2,'2024年度部门决算表',confidence=float('nan'),extraction_method='ocr'),
+        ParsedTextBlock('inf',2,'2024年度部门决算表',confidence=float('inf'),extraction_method='ocr'),
+        ParsedTextBlock('bool',2,'2024年度部门决算表',confidence=True,extraction_method='ocr'),
+        ParsedTextBlock('overflow',2,'2024年度部门决算表',confidence=1.01,extraction_method='ocr'),
         ParsedTextBlock('bad',2,'2024年度部门决算表',confidence=.97,extraction_method='ocr')]
     raw=['',''];pages,spans=qualified_identity_view(raw,SimpleNamespace(text_blocks=blocks))
     assert raw==['',''] and pages[1].count('2024年度决算表')==1

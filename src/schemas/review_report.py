@@ -351,6 +351,9 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
             'fact_snapshot': meta.get('fact_snapshot') or (payload.get('structured_ingest') or {}).get('fact_snapshot'),
             "rule_registry_version": meta.get("rule_registry_version"),
             "rule_policy_version": meta.get("rule_policy_version"),
+            **({'material_dimensions':{'writing':meta.get('document_scope_resolution'),
+                 'amount':meta.get('document_scope_confirmation'),'binding':meta.get('binding')}}
+               if meta.get('document_scope_resolution') or meta.get('document_scope_confirmation') else {}),
         },
         conclusion={
             "status": payload.get("status"),

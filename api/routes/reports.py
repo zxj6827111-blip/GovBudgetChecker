@@ -152,6 +152,7 @@ _CSV_FIELDNAMES: List[str] = [
     "conclusion_scope",
     "manual_review_type",
     "conclusion_json",
+    "material_dimensions_json",
 ]
 
 
@@ -627,6 +628,7 @@ def _build_check_scope_export(status_payload: Dict[str, Any]) -> Dict[str, Any]:
             "check_coverage": coverage if isinstance(coverage, dict) else "旧版未记录",
             "unfinished_checks": unfinished if isinstance(coverage, dict) else "旧版未记录",
             "document_profile": metadata,
+            "material_dimensions": _export_material_dimensions(status_payload),
             "coverage_note": (
                 "本次结果为旧版记录，未包含检查覆盖台账，无法据此判断检查范围是否完整"
                 if not isinstance(coverage, dict)
@@ -673,6 +675,7 @@ def _build_check_scope_export(status_payload: Dict[str, Any]) -> Dict[str, Any]:
             else "旧版未记录"
         ),
         "document_profile": profile if isinstance(profile, dict) else "旧版未记录",
+        "material_dimensions": _export_material_dimensions(status_payload),
         "coverage_note": (
             "本次结果为旧版记录，未包含检查覆盖台账，"
             "无法据此判断检查范围是否完整"
@@ -976,6 +979,7 @@ def _build_csv_summary_row(
             "analysis_conclusion": status_payload.get("analysis_conclusion") or "",
             "conclusion_scope": status_payload.get("conclusion_scope") or "",
             "conclusion_json": json.dumps(review_conclusion or {}, ensure_ascii=False, sort_keys=True),
+            "material_dimensions_json": json.dumps(_export_material_dimensions(status_payload),ensure_ascii=False,sort_keys=True),
         }
     )
     return {key: row.get(key, "") for key in _CSV_FIELDNAMES}
@@ -1079,6 +1083,7 @@ def _build_docx_document_xml(
                 ("结论作用域", conclusion_scope_text),
                 ("材料类型", str(scope.get("report_kind") or "旧版未记录")),
                 ("检查范围说明", str(scope.get("coverage_note") or "")),
+                *[("材料口径依据",line) for line in _material_dimension_lines(status_payload)],
             ]
         ),
         _docx_paragraph("问题清单", style="Heading1"),
@@ -1723,6 +1728,7 @@ def _append_report_appendix_pages(
         if isinstance(item, dict) and str(item.get("issue_id") or "")
     } if isinstance(decisions, list) else {}
     lines.append(f"REVIEW_REPORT_SHA256: {_review_report_sha256(status_payload)}")
+    lines.extend(_material_dimension_lines(status_payload))
     if conclusion["is_complete"] is True:
         lines.append("检查范围已完成。以下问题和提示以本次 ReviewReport 为准。")
     elif conclusion["coverage_known"] is False:
@@ -2279,3 +2285,26 @@ async def download_reports_batch(body: Dict[str, Any], request: Request):
     )
     response.headers["Content-Disposition"] = 'attachment; filename="reports-batch.zip"'
     return response
+
+
+def _export_material_dimensions(payload):
+    """导出只读所选分析版本，不查询最新人工决定覆盖历史。"""
+    metadata=(payload.get('review_report') or {}).get('metadata') or {}
+    if isinstance(metadata.get('material_dimensions'),dict):return metadata['material_dimensions']
+    meta=(payload.get('result') or {}).get('meta') or {}
+    if not (meta.get('document_scope_resolution') or meta.get('document_scope_confirmation')):return '旧版未记录'
+    return {'writing':meta.get('document_scope_resolution'),'amount':meta.get('document_scope_confirmation'),'binding':meta.get('binding')}
+
+
+def _material_dimension_lines(payload):
+    value=_export_material_dimensions(payload)
+    if not isinstance(value,dict):return []
+    writing=value.get('writing') or {};snapshot=writing.get('snapshot') or {};human=writing.get('human_decision') or {}
+    labels={'unit':'单位','department':'部门','unknown':'暂不确定','confirmed':'已确定','conflict':'冲突','insufficient':'依据不足','human':'人工确认','declaration':'原文明示','template':'模板推断','unresolved':'未确定'}
+    lines=[f"写法基准：{labels.get(writing.get('value'),'未知')}；{labels.get(writing.get('status'),'未记录')}；来源：{labels.get(writing.get('source'),'未记录')}",
+        f"模板：{snapshot.get('version') or snapshot.get('package_id') or '未绑定'}；源年度：{snapshot.get('source_report_year') or '未知'}；目标年度：{snapshot.get('target_year') or '未知'}；绑定修订：{snapshot.get('revision') or '未记录'}；算法：{writing.get('algorithm') or '未记录'}"]
+    if human:lines.append('写法确认依据：'+str(human.get('note') or '旧版本未记录')+'；证据：'+str(human.get('evidence_reference') or '未记录'))
+    amount=value.get('amount') or {}
+    lines.append('金额人工决定：'+str(amount.get('material_scope') or '未记录（不能由写法推断）'))
+    if amount:lines.append('金额确认依据：'+str(amount.get('note') or '未记录')+'；证据：'+str(amount.get('evidence_reference') or '未记录'))
+    return lines

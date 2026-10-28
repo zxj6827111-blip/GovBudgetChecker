@@ -2,6 +2,7 @@
 from __future__ import annotations
 from dataclasses import asdict
 import os
+import math
 import re
 from src.services.template_scope import Evidence, HumanDecision, resolve_material_scope
 from src.services.annual_templates import ALGORITHM
@@ -94,6 +95,10 @@ async def load(job_id, file_hash, profile, page_texts, archive_scope=None, exclu
         human=HumanDecision(human.value,human.decision_id,independent)
     resolution=asdict(resolve_material_scope(evidence=evidence,template_qualified=bool(snapshot.get('available') and caps.get('writing_auto')),human=human,archive_scope=archive_scope if archive_scope in ('unit','department') else None, required_categories=('budget_financial_table','budget_function_table') if profile.kind=='budget' else ('heading','table_note')))
     resolution.update(snapshot=snapshot,algorithm=ALGORITHM,domain=profile.kind,template_enabled=enabled(),decision_revision=decision.get('revision') if decision else None,archive_scope=archive_scope,archive_conflict=bool(archive_scope in ('unit','department') and resolution.get('value') and resolution['value']!=archive_scope))
+    if decision:
+        resolution['human_decision']={key:decision.get(key) for key in
+            ('request_id','revision','writing_scope','actor','note','evidence_reference','conflict_acknowledged')}
+        resolution['human_decision']['request_id']=str(decision['request_id'])
     if profile.kind=='budget' and not (budget_enabled() and snapshot.get('available') and caps.get('writing_auto')):
         return {}
     return resolution
@@ -120,7 +125,9 @@ def qualified_identity_view(page_texts, artifact):
         spans.append({'page':page,'start':0,'end':len(native),'source_method':'native_text'})
         seen={re.sub(r'\s+','',native)}
         for block in getattr(artifact,'text_blocks',[]) or []:
-            if block.page_number!=page or block.extraction_method!='ocr' or block.confidence is None or block.confidence<.98:continue
+            confidence=block.confidence
+            if (block.page_number!=page or block.extraction_method!='ocr' or isinstance(confidence,bool)
+                or not isinstance(confidence,(int,float)) or not math.isfinite(confidence) or not .98<=confidence<=1):continue
             normalized=re.sub(r'\s+','',block.text)
             if not normalized or any(normalized in existing for existing in seen):continue
             start=len(pages[page-1])+1

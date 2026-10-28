@@ -764,3 +764,17 @@ def test_csv_keeps_explanation_fields_for_rule_and_old_issues() -> None:
     assert old_row["actual"] == ""
     assert old_row["difference"] == ""
     assert old_row["amounts_provenance"] == ""
+
+
+def test_material_dimension_exports_use_the_selected_analysis_snapshot():
+    from api.routes.reports import _build_check_scope_export,_build_csv_summary_row,_material_dimension_lines
+    dimensions={'writing':{'value':'unit','status':'confirmed','source':'human','algorithm':'test-v3',
+        'human_decision':{'note':'写法独立依据','evidence_reference':'正文第二页'},
+        'snapshot':{'version':'test-v1','source_report_year':2024,'target_year':2025,'revision':3}},'amount':None}
+    payload={'review_report':{'metadata':{'material_dimensions':dimensions}},'result':{'meta':{'document_scope_resolution':{'value':'department'}}}}
+    assert _build_check_scope_export(payload)['material_dimensions']==dimensions
+    assert json.loads(_build_csv_summary_row('test',payload,0)['material_dimensions_json'])==dimensions
+    lines=_material_dimension_lines(payload)
+    assert any('写法独立依据' in line for line in lines)
+    assert any('不能由写法推断' in line for line in lines)
+    assert any('绑定修订：3' in line for line in lines)
