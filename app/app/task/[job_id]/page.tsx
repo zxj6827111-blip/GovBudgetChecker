@@ -442,8 +442,9 @@ export default function TaskDetail() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-surface-50" data-analysis-revision={task.analysisRevision}>
-      <div className="z-10 flex h-16 shrink-0 items-center justify-between border-b border-border bg-white px-6 shadow-sm">
-        <div className="flex items-center gap-4">
+      {/* 识别状态、版本和口径提示会增加行数，标题栏必须随内容增高。 */}
+      <div data-testid="task-summary-header" className="z-10 flex min-h-16 shrink-0 flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b border-border bg-white px-4 py-3 shadow-sm sm:px-6">
+        <div className="flex min-w-0 flex-1 basis-full items-start gap-4 lg:basis-0">
           <Link
             href={(task.departmentId ? `/department/${task.departmentId}` : "/") as Route}
             onClick={(event) => {
@@ -456,18 +457,18 @@ export default function TaskDetail() {
 
               router.push((task.departmentId ? `/department/${task.departmentId}` : "/") as Route);
             }}
-            className="rounded-md p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+            className="shrink-0 rounded-md p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
           >
             <ArrowLeft className="h-5 w-5" />
           </Link>
-          <div className="h-6 w-px bg-border" />
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded bg-primary-50 text-primary-600">
+          <div className="mt-1 h-6 w-px shrink-0 bg-border" />
+          <div className="flex min-w-0 flex-1 items-start gap-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-primary-50 text-primary-600">
               <FileText className="h-4 w-4" />
             </div>
-            <div>
-              <h1 className="text-base font-bold leading-tight text-slate-900">{task.filename}</h1>
-              <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
+            <div className="min-w-0 flex-1">
+              <h1 className="break-words text-base font-bold leading-tight text-slate-900">{task.filename}</h1>
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
                 <span>{task.department}</span>
                 <span className="h-1 w-1 rounded-full bg-slate-300" />
                 <span>{task.year} {task.reportLabel}</span>
@@ -490,7 +491,7 @@ export default function TaskDetail() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-3">
           <span
             title={task.reviewReasons?.join("；") || undefined}
             className={cn(
