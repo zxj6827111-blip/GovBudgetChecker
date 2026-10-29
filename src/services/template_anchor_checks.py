@@ -11,6 +11,15 @@ def _title(text):
     return _NUMBER.sub('',compact(text),count=1)
 
 
+def _heading_context(lines, index):
+    # 独占编号属于同一标题块；后续行重入也须看到编号前的引用或否定语境。
+    for j in range(index - 1, -1, -1):
+        text = compact(lines[j])
+        if text and not _NUMBER.fullmatch(text):
+            return text
+    return ''
+
+
 def _headings(doc, expected):
     found=[];target=_title(expected)
     for page,text in iter_pages(doc):
@@ -18,7 +27,7 @@ def _headings(doc, expected):
         lines=text.splitlines(keepends=True);offset=0
         for i,line in enumerate(lines):
             start=offset;offset+=len(line)
-            previous=next((compact(p) for p in reversed(lines[:i]) if p.strip()),'')
+            previous=_heading_context(lines,i)
             if re.search(r'(?:尚未提供|未提供|未编制|详见|参见|引用|例如|提及|缺少)[：:]?$',previous):continue
             # 连续折行只要仍是完整标题的前缀就继续，行数不能充当缺失证据。
             # 空行、句末标点或无关文字仍中止；不跨页、不查找正文中的子串。
