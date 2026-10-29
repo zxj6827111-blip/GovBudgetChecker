@@ -30,7 +30,7 @@ from .checklist_support import (
     subject_scope,
 )
 from .checklist_identity_rules import body_scope
-from .rule_outcome import RuleNotApplicable
+from .rule_outcome import RuleDeferred, RuleNotApplicable
 from src.utils.narration import normalize_amount_punctuation
 from .rules_v33 import Document, Issue, Rule
 

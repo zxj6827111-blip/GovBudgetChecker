@@ -68,3 +68,66 @@ def test_budget_default_unchanged_and_new_chain_has_receipt_obligation(monkeypat
     assert 'CMM-027' in json.dumps(ledger)
     entries=ledger['instances']
     assert any('CMM-027' in x.get('checkers',[]) and x['status']!='completed' for x in entries)
+
+
+
+def budget_position_snapshot(legacy=False):
+    caps = {"writing_auto": False, "position_checks": True, "structure": True}
+    content = {"config": {"domain": "budget"}}
+    proof = {"report_reference": "synthetic-budget-position-report", "independent_labels": True,
+             "boundary_cases_passed": True, "independent_sample_count": 100,
+             "automatic_verified_count": 0, "automatic_errors": 0,
+             "source_report_year": 2025, "target_year": 2026, "capability_scope": caps,
+             "algorithm": annual_templates.ALGORITHM, "package_hash": annual_templates.sha(content)}
+    if legacy: proof.pop("independent_sample_count")
+    return annual_templates.qualify_binding_capabilities({
+        "available": True, "adoption_kind": "not_received", "target_year": 2026,
+        "source_report_year": 2025, "content": content, "content_sha256": annual_templates.sha(content),
+        "capability_scope": caps, "basis": annual_templates.canonical({"compatibility": proof})})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_budget_position_only_m0_runs_or_defers_by_its_own_compatibility_proof(monkeypatch, legacy):
+    from src.engine.checklist_identity_rules import CMM027_TemplatePositionScope
+    from src.engine.rule_outcome import RuleDeferred
+    from tests.test_material_writing_rules import document
+    monkeypatch.setenv("GBC_TEMPLATE_SCOPE", "true")
+    monkeypatch.setenv("GBC_BUDGET_TEMPLATE_SCOPE", "true")
+    monkeypatch.setenv("GBC_TEMPLATE_EXPORT", "synthetic-only")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    snap = budget_position_snapshot(legacy)
+    monkeypatch.setattr(annual_templates, "offline_for_profile", lambda *args: snap)
+    pages = ["上海市测试局2026年度单位预算", "2026年部门财务收支预算总表", "2026年部门一般公共预算支出功能分类预算表"]
+    value = await material_writing.load("test-budget", "a" * 64, profile(), pages)
+    assert value["domain"] == "budget" and value["status"] == "confirmed"
+    assert value["source"] == "declaration" and value["value"] == "unit"
+    doc = document(pages, value); doc.report_kind = "budget"
+    doc.document_profile.report_kind = ProfileField(value="budget")
+    if legacy:
+        assert value["template_capability_pending"]["position_checks"]
+        with pytest.raises(RuleDeferred): CMM027_TemplatePositionScope().apply(doc)
+    else:
+        issues = CMM027_TemplatePositionScope().apply(doc)
+        assert len(issues) == 2
+        assert all("反向写法" in issue.message or "反向写法" in str(issue.location) for issue in issues)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_budget_default_off_still_excludes_position_or_pending_new_chain(monkeypatch, legacy):
+    from src.engine.checklist_identity_rules import CMM027_TemplatePositionScope
+    from src.engine.rule_outcome import RuleNotApplicable
+    from tests.test_material_writing_rules import document
+    monkeypatch.setenv("GBC_TEMPLATE_SCOPE", "true")
+    monkeypatch.delenv("GBC_BUDGET_TEMPLATE_SCOPE", raising=False)
+    monkeypatch.setenv("GBC_TEMPLATE_EXPORT", "synthetic-only")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    snap = budget_position_snapshot(legacy)
+    monkeypatch.setattr(annual_templates, "offline_for_profile", lambda *args: snap)
+    pages = ["上海市测试局2026年度单位预算", "2026年部门财务收支预算总表"]
+    assert await material_writing.load("test-budget", "a" * 64, profile(), pages) == {}
+    # 即使旧材料保存着预算写法视图，总开关关闭仍不接入新的预算位置链路。
+    doc = document(pages, {"domain": "budget", "status": "confirmed", "value": "unit", "snapshot": snap})
+    doc.report_kind = "budget"; doc.document_profile.report_kind = ProfileField(value="budget")
+    with pytest.raises(RuleNotApplicable): CMM027_TemplatePositionScope().apply(doc)

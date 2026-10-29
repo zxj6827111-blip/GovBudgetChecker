@@ -8,12 +8,24 @@ from src.services.template_scope import Evidence, HumanDecision, resolve_materia
 from src.services.annual_templates import ALGORITHM
 
 
+def copy_pending(snapshot):
+    # 单独保留模板能力缺口；原文明示、人工决定及其他检查仍按各自证据运行。
+    return dict(snapshot.get('compatibility_pending') or {})
+
+
 def enabled():
     return os.getenv('GBC_TEMPLATE_SCOPE','0').lower() in ('1','true','yes')
 
 
 def budget_enabled():
     return enabled() and os.getenv('GBC_BUDGET_TEMPLATE_SCOPE','0').lower() in ('1','true','yes')
+
+
+def budget_resolution_enabled(snapshot):
+    # 位置能力可独立验收；兼容待核须保留回执，但不能越过预算总开关。
+    caps=snapshot.get('capability_scope') or {}; pending=snapshot.get('compatibility_pending') or {}
+    return bool(budget_enabled() and snapshot.get('available') and
+                any(caps.get(k) or pending.get(k) for k in ('writing_auto','position_checks')))
 
 
 def collect(page_texts, excluded_pages=(), report_kind='final', source_spans=()):
@@ -120,12 +132,12 @@ async def load(job_id, file_hash, profile, page_texts, archive_scope=None, exclu
         independent=any(e.get('dimension')=='human_cover_independent' and e.get('value') is True for e in saved)
         human=HumanDecision(human.value,human.decision_id,independent)
     resolution=asdict(resolve_material_scope(evidence=evidence,template_qualified=bool(snapshot.get('available') and caps.get('writing_auto')),human=human,archive_scope=archive_scope if archive_scope in ('unit','department') else None, required_categories=('budget_financial_table','budget_function_table') if profile.kind=='budget' else ('heading','table_note')))
-    resolution.update(template_applicability=applicability,unqualified_ocr_candidates=[x for x in source_spans if x.get('qualified') is False],snapshot=snapshot,algorithm=ALGORITHM,domain=profile.kind,template_enabled=enabled(),decision_revision=decision.get('revision') if decision else None,archive_scope=archive_scope,archive_conflict=bool(archive_scope in ('unit','department') and resolution.get('value') and resolution['value']!=archive_scope))
+    resolution.update(template_capability_pending=copy_pending(snapshot),template_applicability=applicability,unqualified_ocr_candidates=[x for x in source_spans if x.get('qualified') is False],snapshot=snapshot,algorithm=ALGORITHM,domain=profile.kind,template_enabled=enabled(),decision_revision=decision.get('revision') if decision else None,archive_scope=archive_scope,archive_conflict=bool(archive_scope in ('unit','department') and resolution.get('value') and resolution['value']!=archive_scope))
     if decision:
         resolution['human_decision']={key:decision.get(key) for key in
             ('request_id','revision','writing_scope','actor','note','evidence_reference','conflict_acknowledged')}
         resolution['human_decision']['request_id']=str(decision['request_id'])
-    if profile.kind=='budget' and not (budget_enabled() and snapshot.get('available') and caps.get('writing_auto')):
+    if profile.kind=='budget' and not budget_resolution_enabled(snapshot):
         return {}
     return resolution
 
@@ -142,7 +154,7 @@ def ensure_document_resolution(document, profile):
         snapshot=offline_for_profile(os.environ['GBC_TEMPLATE_EXPORT'],os.getenv('GBC_TEMPLATE_EXPORT_SHA256'),selection_profile,pages)
     proof=collect(getattr(document,'writing_page_texts',None) or getattr(document,'page_texts',[]) or [],source_spans=getattr(document,'writing_source_spans',()) or ())
     resolution=asdict(resolve_material_scope(evidence=proof,template_qualified=bool(snapshot.get('available') and (snapshot.get('capability_scope') or {}).get('writing_auto'))))
-    resolution.update(template_applicability=applicability,snapshot=snapshot,algorithm=ALGORITHM)
+    resolution.update(template_capability_pending=copy_pending(snapshot),template_applicability=applicability,snapshot=snapshot,algorithm=ALGORITHM)
     profile.writing_scope=resolution
     document.document_profile=profile
 

@@ -23,6 +23,16 @@ def test_additional_requirement_keeps_scope_and_source_basis():
     assert not issues and pending
 
 
+@pytest.mark.parametrize('kind,rule',[('normative_section','CMM023_SectionTemplate'),('normative_table','CMM021_TableTitleNormative')])
+def test_pending_anchor_requirement_is_an_incomplete_receipt_not_an_execution_error(kind,rule):
+    # 写法依据不足时附加要求待核，规则须诚实记为未完成，而不是因缺少导入变成执行错误。
+    from src.engine import checklist_content_rules
+    anchor={'kind':kind,'scope':'unit','text':'测试附加要求','basis':'test-only authority','source_id':'test-only'}
+    doc=document(['2025年度决算','第二部分决算表'],fixture_resolution([anchor],status='insufficient',value=None))
+    with pytest.raises(RuleDeferred) as caught:getattr(checklist_content_rules,rule)().apply(doc)
+    assert '适用条件未核实' in caught.value.detail
+
+
 def test_optional_content_never_becomes_missing_requirement():
     anchor={'kind':'optional','scope':'all','text':'测试可选采购段落','basis':'test-only optional'}
     doc=document(['2024年度决算','正文'],fixture_resolution([anchor]))
@@ -37,13 +47,31 @@ def test_table_name_reference_without_table_is_not_passed():
 
 
 def test_full_prompt_and_normal_empty_statement_are_distinguished():
-    prompt='无政府性基金预算财政拨款收入支出的，仍保留该表格式，并在本表下方作下述说明：'
+    prompt='三公经费说明中列明公务接待批次、人次'
     result=fixture_resolution(prompts=[prompt])
-    bad=document(['2024年度决算',prompt+'本年度无相关收入支出。'],result)
+    bad=document(['2024年度决算',prompt+'。本年度无公务接待。'],result)
     assert any('已审核模板' in i.message for i in CMM008_TemplateResidue().apply(bad))
-    for text in ['本单位本年度无政府性基金预算财政拨款收入支出。','引用：“'+prompt+'”属于编报提示语。']:
+    for text in ['本单位本年度无公务接待支出。','引用：“'+prompt+'”属于编报提示语。']:
         clean=document(['2024年度决算',text],result)
         assert not any('已审核模板' in i.message for i in CMM008_TemplateResidue().apply(clean))
+
+
+def test_conditional_table_prompt_is_reported_once_and_not_as_missing_statement():
+    from src.engine.native_disclosure_semantics import check_disclosure_semantics
+    from src.engine.rules_v33 import R33234_NarrativePercentConsistency
+    from src.engine.checklist_final_rules import CMM026_EmptyNoteOnDataTable
+    prompt='无政府性基金预算财政拨款收入支出的，仍保留该表格式，并在本表下方作下述说明：'
+    pages=['2024年度决算','八、政府性基金预算财政拨款收入支出决算表\n'+prompt+'本单位本年度没有政府性基金预算财政拨款收入和支出，故本表无数据。']
+    doc=document(pages,fixture_resolution(prompts=[prompt]))
+    assert not any('已审核模板' in i.message for i in CMM008_TemplateResidue().apply(doc))
+    native,_=check_disclosure_semantics(R33234_NarrativePercentConsistency(),doc)
+    assert len([i for i in native if '仍保留该表格式' in i.message])==1
+    # 提示语之后的事实说明仍是正常空表说明；提示语本身不构成“有数据表保留空表说明”。
+    only_prompt=document(['2024年度决算','八、政府性基金预算财政拨款收入支出决算表\n'+prompt],fixture_resolution(prompts=[prompt]))
+    assert not CMM026_EmptyNoteOnDataTable().apply(only_prompt)
+    budget=document(pages,{**fixture_resolution(prompts=[prompt]),'domain':'budget'})
+    budget.report_kind='budget'
+    assert any('已审核模板' in i.message for i in CMM008_TemplateResidue().apply(budget))
 
 
 def test_corrupted_template_receipt_cannot_be_not_applicable():
@@ -67,14 +95,17 @@ def test_only_reviewed_slots_can_reuse_package():
 
 
 def test_compatibility_denominator_and_hash_are_required():
-    package={'content_sha256':'hash'}
-    proof={'report_reference':'test-only','independent_labels':True,'boundary_cases_passed':True,'automatic_verified_count':99,
-        'automatic_errors':0,'algorithm':ALGORITHM,'package_hash':'hash'}
-    with pytest.raises(HTTPException):validate_compatibility(proof,package)
-    validate_compatibility({**proof,'automatic_verified_count':100},package)
-    validate_compatibility({**proof,'automatic_verified_count':12,'corpus_size':12,'all_corpus_verified':True},package)
-    with pytest.raises(HTTPException):validate_compatibility({**proof,'automatic_verified_count':100,'automatic_errors':1},package)
-    with pytest.raises(HTTPException):validate_compatibility({**proof,'automatic_verified_count':100,'package_hash':'wrong'},package)
+    package={'content_sha256':'hash','source_report_year':2024}
+    proof={'report_reference':'test-only','independent_labels':True,'boundary_cases_passed':True,
+        'independent_sample_count':99,'automatic_verified_count':40,'automatic_errors':0,
+        'algorithm':ALGORITHM,'package_hash':'hash','source_report_year':2024,'target_year':2025,
+        'capability_scope':{'writing_auto':True}}
+    def check(value):validate_compatibility(value,package,target_year=2025,capabilities={'writing_auto':True})
+    with pytest.raises(HTTPException):check(proof)
+    check({**proof,'independent_sample_count':100})
+    check({**proof,'independent_sample_count':12,'automatic_verified_count':4,'corpus_size':12,'all_corpus_verified':True})
+    with pytest.raises(HTTPException):check({**proof,'independent_sample_count':100,'automatic_errors':1})
+    with pytest.raises(HTTPException):check({**proof,'independent_sample_count':100,'package_hash':'wrong'})
 
 
 def test_geography_and_overlay_keep_municipal_norms_without_moving_facts():

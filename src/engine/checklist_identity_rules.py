@@ -32,7 +32,7 @@ from .checklist_support import (
 )
 from .rule_outcome import RuleNotApplicable, RuleDeferred
 from .rules_v33 import Document, Issue, Rule
-from src.services.material_writing import identity_document, prepare_identity_document
+from src.services.material_writing import identity_document, prepare_identity_document, budget_resolution_enabled
 
 _NAME = rf"[{CJK}（）()]{{4,40}}?"
 _NAME_CONTEXTS: Sequence[re.Pattern[str]] = (
@@ -108,6 +108,32 @@ def canonical_org_name(doc: Document, mentions: Optional[Sequence[Tuple[str, int
     return best if best_count >= 2 else (profile or best)
 
 
+def _brackets_balanced(name: str) -> bool:
+    depth = 0
+    for ch in name:
+        depth += 1 if ch in "（(" else -1 if ch in "）)" else 0
+        if depth < 0:
+            return False
+    return depth == 0
+
+
+def _independent_body_name(doc: Document) -> Optional[str]:
+    """封面名称的正文独立依据：只取封面以外、括号完整的主体名称。
+
+    “本级”是范围标注而非名称；折行残片或两个不同名称出现次数相同时不作依据，
+    不按插入顺序硬选一个名称去核对封面。
+    """
+    counts: Counter = Counter()
+    for name, page, *_ in name_mentions(doc):
+        name = re.sub(r"本级$", "", name)
+        if page > 1 and len(name) >= 4 and _brackets_balanced(name):
+            counts[name] += 1
+    ranked = counts.most_common(2)
+    if not ranked or ranked[0][1] < 2 or (len(ranked) > 1 and ranked[1][1] == ranked[0][1]):
+        return None
+    return ranked[0][0]
+
+
 class CMM017_OrgNameConsistency(Rule):
     code, severity = "CMM-017", "warn"
     desc = "单位名称全篇一致且为规范全称、编制栏不得为空（预/决算通用，清单 B-01）"
@@ -148,7 +174,7 @@ class CMM017_OrgNameConsistency(Rule):
 def _uses_writing_resolution(doc):
     value = getattr(getattr(doc, "document_profile", None), "writing_scope", {}) or {}
     return (report_kind(doc) == "final" or (report_kind(doc) == "budget" and value.get("domain") == "budget"
-        and (value.get("snapshot") or {}).get("available") and ((value.get("snapshot") or {}).get("capability_scope") or {}).get("writing_auto")))
+        and budget_resolution_enabled(value.get("snapshot") or {})))
 
 
 def body_scope(doc: Document) -> Optional[str]:
@@ -309,9 +335,7 @@ class CMM019_CoverElements(Rule):
         # 单位全称
         canonical = canonical_org_name(doc)
         if _uses_writing_resolution(doc):
-            independent_names = Counter(m[0] for m in name_mentions(doc) if m[1] > 1)
-            candidate, count = independent_names.most_common(1)[0] if independent_names else (None, 0)
-            canonical = candidate if count >= 2 else None
+            canonical = _independent_body_name(doc)
             if not canonical:
                 incomplete.append("封面单位名称缺少正文独立依据")
         if canonical and canonical not in flat:
@@ -381,6 +405,8 @@ class CMM027_TemplatePositionScope(Rule):
         snapshot = resolution.get('snapshot') or {}
         if not snapshot.get('available') and '校验失败' in str(snapshot.get('reason')):
             raise RuleDeferred(self.code, detail='模板依据校验失败，位置检查未完成：'+snapshot['reason'])
+        if (snapshot.get('compatibility_pending') or {}).get('position_checks'):
+            raise RuleDeferred(self.code, detail='模板位置能力兼容依据待核：'+snapshot['compatibility_pending']['position_checks'])
         if not snapshot.get('available') or not (snapshot.get('capability_scope') or {}).get('position_checks'):
             raise RuleNotApplicable(self.code, detail='该年度模板位置检查未启用；既有规范检查继续执行；'+str(snapshot.get('reason') or '年度能力未获准'))
         if resolution.get('status') != 'confirmed':

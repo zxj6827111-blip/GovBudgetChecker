@@ -9,8 +9,9 @@ from uuid import uuid4, UUID
 from fastapi import HTTPException
 from src.services.disclosure_template_import import import_source, compare_text
 
-ALGORITHM = 'material-writing-v3.5'
+ALGORITHM = 'material-writing-v3.6'
 CAPABILITIES = {'writing_auto', 'position_checks', 'residue', 'structure'}
+WRITING_CAPABILITIES = ('writing_auto', 'position_checks')
 
 
 def canonical(value):
@@ -163,7 +164,7 @@ def validate_capabilities(capabilities, validation):
             raise HTTPException(422,'启用能力必须引用对应验证记录')
     if capabilities.get('writing_auto'):
         proof=validation.get('writing_auto') or {}
-        if not proof.get('independent_acceptance') or proof.get('automatic_errors')!=0 or type(proof.get('automatic_verified_count')) is not int or proof['automatic_verified_count']<1:
+        if proof.get('independent_acceptance') is not True or type(proof.get('automatic_errors')) is not int or proof['automatic_errors']!=0 or type(proof.get('automatic_verified_count')) is not int or proof['automatic_verified_count']<1:
             raise HTTPException(422,'写法自动判定须有独立验收及实际自动判定数量和零错误记录')
 
 
@@ -216,25 +217,41 @@ async def bind(conn, data, actor):
         if any(caps.values()):
             verify_source_receipts(package['content'])
             for side in ('unit','department'):await text(conn,package[side+'_source_id'])
-        if data['adoption_kind'] in ('not_received','historical_reference') and (caps.get('writing_auto') or caps.get('position_checks')):
-            validate_compatibility(data.get('compatibility'),package)
-        if data['adoption_kind']=='issued' and data['target_year']!=package['source_report_year']:
+        basis={'basis':data['basis'],'compatibility_reference':data.get('compatibility_reference'),
+               'source_draft_id':data.get('source_draft_id'),'compatibility':data.get('compatibility')}
+        adoption=data['adoption_kind']
+        if adoption=='rollback':
+            prior=row(await conn.fetchrow('SELECT * FROM disclosure_template_binding_revisions WHERE region=$1 AND overlay=$2 AND report_kind=$3 AND target_year=$4 AND revision=$5',*key,data.get('restore_revision',0)))
+            if not prior or str(prior['package_id'])!=data['package_id'] or prior['capability_scope']!=caps:
+                raise HTTPException(422,'回滚只能恢复该年度已有审核修订及其能力')
+            original=binding_basis(prior)
+            adoption=effective_adoption_kind(prior,original)
+            # 恢复的是原修订的证据；不能用回滚请求替换证明或借回滚绕过跨年准入。
+            basis.update({k:copy.deepcopy(original.get(k)) for k in ('compatibility_reference','source_draft_id','compatibility')})
+            basis.update(restored_from_revision=prior['revision'],original_adoption_kind=adoption,
+                         compatibility_source_revision=original.get('compatibility_source_revision',prior['revision']))
+            if adoption is None and any(caps.get(k) for k in WRITING_CAPABILITIES):
+                raise HTTPException(422,'历史回滚缺少原沿用方式与兼容依据来源，请重新核实后建立年度绑定')
+        if adoption in ('not_received','historical_reference') and any(caps.get(k) for k in WRITING_CAPABILITIES):
+            validate_compatibility(basis.get('compatibility'),package,target_year=data['target_year'],capabilities=caps)
+        if adoption=='issued' and data['target_year']!=package['source_report_year']:
             raise HTTPException(422,'当年正式下发须匹配源报告年度；否则选择沿用或历史参考')
-        if data['adoption_kind']=='verified_same':
-            draft_id=data.get('source_draft_id')
+        if adoption=='verified_same':
+            draft_id=basis.get('source_draft_id')
             checked=row(await conn.fetchrow('SELECT * FROM disclosure_template_drafts WHERE id=$1',UUID(draft_id))) if draft_id else None
             if not checked or checked['status']!='published' or checked['package_id']!=data['package_id'] or checked['data']['source_report_year']!=data['target_year'] or checked['data'].get('review_record',{}).get('decision')!='same':
                 raise HTTPException(422,'确认无变化须关联该年度已审核且复用此包的来源比较记录')
-        if package['source_report_year'] is not None and data['target_year']<package['source_report_year'] and data['adoption_kind'] not in ('historical_reference','rollback'): raise HTTPException(422,'后续模板只能以历史参考用于早期年度')
-        if data['adoption_kind']=='rollback':
-            prior=await conn.fetchrow('SELECT * FROM disclosure_template_binding_revisions WHERE region=$1 AND overlay=$2 AND report_kind=$3 AND target_year=$4 AND revision=$5',*key,data.get('restore_revision',0))
-            if not prior or str(prior['package_id'])!=data['package_id'] or row(prior)['capability_scope']!=caps: raise HTTPException(422,'回滚只能恢复该年度已有审核修订及其能力')
+        # 较早年度上传了当年原件且核实无实质变化（上方已校验比较记录）时可复用较晚版本；
+        # 没有当年原件时，较晚版本不能冒充当年已生效，只能作历史参考。
+        if (package['source_report_year'] is not None and data['target_year']<package['source_report_year']
+                and adoption not in ('historical_reference','verified_same',None)):
+            raise HTTPException(422,'较晚模板用于较早年度须先上传该年度原件并核实无实质变化，否则只能作为历史参考')
         new=(current or 0)+1
         await conn.execute('''INSERT INTO disclosure_template_binding_revisions(region,overlay,report_kind,target_year,revision,package_id,adoption_kind,capability_scope,basis,actor)
-            VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10)''',*key,new,UUID(data['package_id']),data['adoption_kind'],canonical(caps),canonical({'basis':data['basis'],'compatibility_reference':data.get('compatibility_reference'),'source_draft_id':data.get('source_draft_id'),'compatibility':data.get('compatibility')}),actor)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10)''',*key,new,UUID(data['package_id']),data['adoption_kind'],canonical(caps),canonical(basis),actor)
         await conn.execute('''INSERT INTO disclosure_template_current_bindings(region,overlay,report_kind,target_year,revision) VALUES($1,$2,$3,$4,$5)
             ON CONFLICT(region,overlay,report_kind,target_year) DO UPDATE SET revision=EXCLUDED.revision''',*key,new)
-        await audit(conn,'rollback' if data['adoption_kind']=='rollback' else 'bind',actor,data['basis'],before={'revision':current},after={**data,'revision':new})
+        await audit(conn,'rollback' if data['adoption_kind']=='rollback' else 'bind',actor,data['basis'],before={'revision':current},after={**data,'binding_basis':basis,'revision':new})
     return {'revision':new}
 
 
@@ -252,7 +269,7 @@ async def validated_snapshot(conn, record):
         verify_source_receipts(record['content'])
         for k in ('unit','department'): await text(conn,record[k+'_source_id'])
     except (OSError,ValueError,HTTPException): return {'available':False,'reason':'原件或提取文本校验失败','algorithm':ALGORITHM}
-    return {'available':True,**record,'algorithm':ALGORITHM}
+    return qualify_binding_capabilities({'available':True,**record,'algorithm':ALGORITHM})
 
 
 async def catalog(conn):
@@ -344,22 +361,86 @@ def offline_snapshot(path, expected_sha256, year, kind='final', region='上海�
             binding=next(x for x in payload['bindings'] if all(x[k]==v for k,v in key.items()))
             package=next(x for x in payload['packages'] if x['id']==binding['package_id'])
             if sha(package['content'])!=package['content_sha256']:raise ValueError('package hash mismatch')
-            return {**binding,'content':package['content'],'content_sha256':package['content_sha256'],
-                'source_report_year':package['source_report_year'],'available':True,'algorithm':ALGORITHM,'offline_export_sha256':expected_sha256}
+            return qualify_binding_capabilities({**binding,'content':package['content'],'content_sha256':package['content_sha256'],
+                'source_report_year':package['source_report_year'],'available':True,'algorithm':ALGORITHM,'offline_export_sha256':expected_sha256})
     except (OSError,ValueError,KeyError,StopIteration,zipfile.BadZipFile):
         return {'available':False,'reason':'离线模板内容校验失败','algorithm':ALGORITHM}
 
 
-def validate_compatibility(proof, package):
-    if not isinstance(proof,dict) or not proof.get('report_reference') or not proof.get('independent_labels') or not proof.get('boundary_cases_passed'):
+def validate_compatibility(proof, package, *, target_year, capabilities):
+    """n 是独立兼容样本，m 是有真值的自动确定子集，不能用自动覆盖率代替验收。"""
+    if (not isinstance(proof,dict) or not isinstance(proof.get('report_reference'),str)
+        or not proof['report_reference'].strip() or proof.get('independent_labels') is not True
+        or proof.get('boundary_cases_passed') is not True):
         raise HTTPException(422,'沿用能力须有独立标注、关键边界和年度兼容验证记录')
-    count=proof.get('automatic_verified_count'); corpus=proof.get('corpus_size')
-    if type(count) is not int or count<1 or proof.get('automatic_errors')!=0:
-        raise HTTPException(422,'兼容验证须记录实际自动确定数及零错误结果')
-    if count<100 and not (type(corpus) is int and 0<corpus<100 and count==corpus and proof.get('all_corpus_verified')):
-        raise HTTPException(422,'兼容验证至少100份；语料不足时须全量独立核实并注明规模')
-    if proof.get('package_hash')!=package['content_sha256'] or proof.get('algorithm')!=ALGORITHM:
-        raise HTTPException(422,'兼容验证的模板哈希或算法版本不匹配')
+    n=proof.get('independent_sample_count'); m=proof.get('automatic_verified_count'); errors=proof.get('automatic_errors')
+    corpus=proof.get('corpus_size')
+    if type(n) is not int or n<1:
+        raise HTTPException(422,'须记录独立核实的兼容样本数；旧自动确定数不能补作独立样本数')
+    if (type(m) is not int or not 0<=m<=n or type(errors) is not int or not 0<=errors<=m or errors!=0):
+        raise HTTPException(422,'自动确定数须在独立样本内，错误数须为实际整数且为零')
+    if corpus is not None and (type(corpus) is not int or corpus<1 or n>corpus):
+        raise HTTPException(422,'独立兼容样本数不能超过实际目标语料总数')
+    if type(proof.get('all_corpus_verified',False)) is not bool:
+        raise HTTPException(422,'全量核实声明无效')
+    if proof.get('all_corpus_verified') is True and (corpus is None or n!=corpus):
+        raise HTTPException(422,'全量核实声明须与实际语料总数和独立样本数一致')
+    if n<100 and not (type(corpus) is int and 0<corpus<100 and n==corpus and proof.get('all_corpus_verified') is True):
+        raise HTTPException(422,'独立兼容样本至少100份；小语料须全量核实，不要求自动确定数达到100')
+    scope=proof.get('capability_scope')
+    if (not isinstance(scope,dict) or set(scope)-CAPABILITIES or any(type(v) is not bool for v in scope.values())
+        or any(capabilities.get(k) and not scope.get(k) for k in WRITING_CAPABILITIES)):
+        raise HTTPException(422,'兼容验证未覆盖请求的写法能力范围')
+    if capabilities.get('writing_auto') and m<1:
+        raise HTTPException(422,'写法自动判定尚无独立核实的自动确定结果；可单独核实位置检查能力')
+    if (type(proof.get('source_report_year')) is not int or proof['source_report_year']!=package.get('source_report_year')
+        or type(proof.get('target_year')) is not int or proof['target_year']!=target_year
+        or proof.get('package_hash')!=package['content_sha256'] or proof.get('algorithm')!=ALGORITHM):
+        raise HTTPException(422,'兼容验证的源年度、目标年度、模板哈希或算法版本不匹配')
+
+
+def binding_basis(record):
+    value=record.get('basis')
+    if isinstance(value,str):
+        try:value=json.loads(value)
+        except (ValueError,TypeError):return {}
+    return value if isinstance(value,dict) else {}
+
+
+def effective_adoption_kind(record, basis):
+    adoption=record.get('adoption_kind')
+    if adoption!='rollback':return adoption
+    original=basis.get('original_adoption_kind'); revision=basis.get('restored_from_revision')
+    if type(revision) is int and revision>0 and original in ('issued','verified_same','not_received','historical_reference'):
+        return original
+    return None
+
+
+def qualify_binding_capabilities(record):
+    """仅为新分析投影有效能力；批准记录、依据和历史快照保持原样。"""
+    result=copy.deepcopy(record); caps=result.get('capability_scope') or {}
+    result['approved_capability_scope']=copy.deepcopy(caps)
+    basis=binding_basis(result); adoption=effective_adoption_kind(result,basis); pending={}
+    for capability in WRITING_CAPABILITIES:
+        if not caps.get(capability):continue
+        try:
+            if adoption in ('not_received','historical_reference'):
+                validate_compatibility(basis.get('compatibility'),result,target_year=result.get('target_year'),capabilities={capability:True})
+            elif adoption=='issued':
+                if result.get('target_year')!=result.get('source_report_year'):
+                    raise HTTPException(422,'正式下发年度与源年度不匹配')
+            elif adoption=='verified_same':
+                if not basis.get('source_draft_id'):
+                    raise HTTPException(422,'确认无变化缺少已审核的来源比较记录')
+            else:
+                raise HTTPException(422,'原沿用方式或回滚证据来源尚未核实')
+        except HTTPException as exc:
+            caps[capability]=False; pending[capability]=str(exc.detail)
+    result['capability_scope']=caps
+    if pending:
+        result['compatibility_pending']=pending
+        result['reason']='年度写法能力兼容依据待核：'+'；'.join(sorted(set(pending.values())))
+    return result
 
 
 async def reviewed_anchors(conn, content, review_record):

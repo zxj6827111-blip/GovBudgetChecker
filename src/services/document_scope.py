@@ -33,6 +33,17 @@ async def latest_decision(conn, job_uuid: str, file_hash: str, version_id: int |
         job_uuid, file_hash, version_id))
 
 
+def amount_dependent_rules(rule_execution_summary: dict | None) -> list[str]:
+    """实际因金额汇总口径未确认而未完成的规则；写法已确定不代表这些检查已完成。"""
+    rules = []
+    for item in (rule_execution_summary or {}).get("unresolved_rules") or []:
+        text = str(item)
+        if ((item.get("rule_id") == "V33-236" and "材料口径" in text)
+                or "材料汇总口径" in text or "org_scope_pending" in text):
+            rules.append(str(item.get("rule_id") or "未记录规则"))
+    return list(dict.fromkeys(rules))
+
+
 def scope_evidence(payload: dict) -> list[dict]:
     meta = (payload.get("result") or {}).get("meta") or {}
     profile = meta.get("document_profile") or {}

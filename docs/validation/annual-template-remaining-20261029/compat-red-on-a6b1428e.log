@@ -1,0 +1,1334 @@
+FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF.FFFFFFFFFF..F.                         [100%]
+=================================== FAILURES ===================================
+_ test_independent_sample_gate_never_becomes_automatic_coverage_gate[100-40-200-False] _
+
+n = 100, m = 40, corpus = 200, all_checked = False
+
+    @pytest.mark.parametrize("n,m,corpus,all_checked", [(100, 40, 200, False), (100, 1, 100, True), (12, 4, 12, True)])
+    def test_independent_sample_gate_never_becomes_automatic_coverage_gate(n, m, corpus, all_checked):
+        pkg = package()
+>       validate(proof(pkg, independent_sample_count=n, automatic_verified_count=m,
+                       corpus_size=corpus, all_corpus_verified=all_checked), pkg)
+
+tests/test_template_compatibility_proof.py:42: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'all_corpus_verified': False, 'automatic_errors': 0, 'automatic_verified_count': 40, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '3e86f958-dbdc-45be-bbe4-f6bafbf9aaab', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_independent_sample_gate_never_becomes_automatic_coverage_gate[100-1-100-True] _
+
+n = 100, m = 1, corpus = 100, all_checked = True
+
+    @pytest.mark.parametrize("n,m,corpus,all_checked", [(100, 40, 200, False), (100, 1, 100, True), (12, 4, 12, True)])
+    def test_independent_sample_gate_never_becomes_automatic_coverage_gate(n, m, corpus, all_checked):
+        pkg = package()
+>       validate(proof(pkg, independent_sample_count=n, automatic_verified_count=m,
+                       corpus_size=corpus, all_corpus_verified=all_checked), pkg)
+
+tests/test_template_compatibility_proof.py:42: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'all_corpus_verified': True, 'automatic_errors': 0, 'automatic_verified_count': 1, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '8a2569cc-7236-4781-a1ce-f29c24e0de47', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_independent_sample_gate_never_becomes_automatic_coverage_gate[12-4-12-True] _
+
+n = 12, m = 4, corpus = 12, all_checked = True
+
+    @pytest.mark.parametrize("n,m,corpus,all_checked", [(100, 40, 200, False), (100, 1, 100, True), (12, 4, 12, True)])
+    def test_independent_sample_gate_never_becomes_automatic_coverage_gate(n, m, corpus, all_checked):
+        pkg = package()
+>       validate(proof(pkg, independent_sample_count=n, automatic_verified_count=m,
+                       corpus_size=corpus, all_corpus_verified=all_checked), pkg)
+
+tests/test_template_compatibility_proof.py:42: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'all_corpus_verified': True, 'automatic_errors': 0, 'automatic_verified_count': 4, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': 'd1308ed8-7ce9-4662-9897-fed8938ea250', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+___________ test_position_only_can_have_no_automatic_determinations ____________
+
+    def test_position_only_can_have_no_automatic_determinations():
+        pkg = package()
+>       validate(proof(pkg, automatic_verified_count=0), pkg, {"position_checks": True})
+
+tests/test_template_compatibility_proof.py:48: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 0, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '72000cdd-a673-44af-8e67-84c68d174bf4', ...}
+caps = {'position_checks': True}
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+__ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes0] __
+
+changes = {'independent_sample_count': 99}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '0db4a525-570d-4e5c-b811-ad8b060da21c', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+__ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes1] __
+
+changes = {'independent_sample_count': True}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': 'a8a83eff-fa44-4de5-9c37-48f924d4a81e', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+__ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes2] __
+
+changes = {'independent_sample_count': 0}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '4e59f4a5-e1ae-4b46-9823-9076dc05a48d', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+__ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes3] __
+
+changes = {'corpus_size': 12, 'independent_sample_count': 12}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '4f821575-852e-487e-bfda-323ecd3aa829', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+__ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes4] __
+
+changes = {'all_corpus_verified': 'true', 'corpus_size': 12, 'independent_sample_count': 12}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'all_corpus_verified': 'true', 'automatic_errors': 0, 'automatic_verified_count': 40, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '44a654d0-652f-4453-971d-c84b7bf9ce7e', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+__ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes5] __
+
+changes = {'corpus_size': 12}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '1b78af83-d06c-4e75-9a2d-34602b661234', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+__ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes6] __
+
+changes = {'corpus_size': False}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '224c1861-7a9f-42af-96d8-518e324fef11', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+__ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes7] __
+
+changes = {'corpus_size': -1}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': 'b703c6e3-d0bc-4797-bd22-99164966afdb', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+__ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes8] __
+
+changes = {'all_corpus_verified': True, 'corpus_size': 200}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'all_corpus_verified': True, 'automatic_errors': 0, 'automatic_verified_count': 40, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '3d82a7ce-1686-4ee6-bb7b-95b51ecd3baf', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+__ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes9] __
+
+changes = {'all_corpus_verified': True, 'corpus_size': None}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'all_corpus_verified': True, 'automatic_errors': 0, 'automatic_verified_count': 40, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': 'eac89da9-2aba-4c47-9924-6d3d976a5c22', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes10] __
+
+changes = {'automatic_verified_count': 101}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 101, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': 'e7ced9b4-45ad-4288-bf93-04b4b0af059a', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes11] __
+
+changes = {'automatic_verified_count': -1}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': -1, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '26afb588-3095-4672-859b-d0b713f30db7', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes12] __
+
+changes = {'automatic_verified_count': True}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': True, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '1952cedc-babf-40bd-9d5b-8fd9f269bd35', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes13] __
+
+changes = {'automatic_verified_count': 1.0}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 1.0, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': 'a67c6b7d-268c-4d09-a8c6-334b05229cfe', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes14] __
+
+changes = {'automatic_errors': 1}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 1, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': 'eea311d8-1f8e-4456-b0b3-b915fdeba1be', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes15] __
+
+changes = {'automatic_errors': -1}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': -1, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '7e978cd8-f314-459c-a01b-8b18942ca63d', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes16] __
+
+changes = {'automatic_errors': False}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': False, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': 'a469ae5a-be28-4015-b2e3-d07aca680fae', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes17] __
+
+changes = {'automatic_errors': 0.0}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0.0, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '3dbd9195-92bc-4dfa-bbfa-f0e095aa943c', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes18] __
+
+changes = {'independent_labels': 'true'}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '0233ca11-519c-4246-80cb-d0c24cdccb72', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes19] __
+
+changes = {'boundary_cases_passed': 'true'}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 40, 'boundary_cases_passed': 'true', ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '21da13a6-06f2-4f7f-8700-848b495c3d0d', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes20] __
+
+changes = {'algorithm': 'material-writing-v3.5'}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '709ad859-f537-46ad-955a-184cad1048f5', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes21] __
+
+changes = {'target_year': 2024}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': 'd11120a1-49ce-48ec-852f-22210145254b', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes22] __
+
+changes = {'source_report_year': 2023}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': 'eae11ff4-cb92-42e1-9fec-daa0d281cef5', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes23] __
+
+changes = {'package_hash': 'another-package'}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '63e80dcc-5e05-4bbe-bc18-28facbffc14b', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes24] __
+
+changes = {'capability_scope': {'position_checks': True}}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': 'a219723f-4744-42ba-8b44-49e22888f92a', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_ test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes25] __
+
+changes = {'capability_scope': {'writing_auto': 'true'}}
+
+    @pytest.mark.parametrize("changes", [
+        {"independent_sample_count": 99}, {"independent_sample_count": True},
+        {"independent_sample_count": 0}, {"independent_sample_count": 12, "corpus_size": 12},
+        {"independent_sample_count": 12, "corpus_size": 12, "all_corpus_verified": "true"},
+        {"corpus_size": 12}, {"corpus_size": False}, {"corpus_size": -1},
+        {"all_corpus_verified": True, "corpus_size": 200}, {"all_corpus_verified": True, "corpus_size": None},
+        {"automatic_verified_count": 101}, {"automatic_verified_count": -1},
+        {"automatic_verified_count": True}, {"automatic_verified_count": 1.0},
+        {"automatic_errors": 1}, {"automatic_errors": -1}, {"automatic_errors": False},
+        {"automatic_errors": 0.0}, {"independent_labels": "true"}, {"boundary_cases_passed": "true"},
+        {"algorithm": "material-writing-v3.5"}, {"target_year": 2024},
+        {"source_report_year": 2023}, {"package_hash": "another-package"},
+        {"capability_scope": {"position_checks": True}}, {"capability_scope": {"writing_auto": "true"}},
+    ])
+    def test_invalid_or_inconsistent_evidence_cannot_enable_capabilities(changes):
+        pkg = package()
+        with pytest.raises(HTTPException):
+>           validate(proof(pkg, **changes), pkg)
+
+tests/test_template_compatibility_proof.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 40, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': '63bbdcaa-6c54-471c-8ebf-ea96e0f5b217', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+_____ test_legacy_proof_is_not_silently_relabelled_as_independent_samples ______
+
+    def test_legacy_proof_is_not_silently_relabelled_as_independent_samples():
+        pkg = package()
+        old = proof(pkg, automatic_verified_count=100)
+        old.pop("independent_sample_count")
+        before = deepcopy(old)
+        with pytest.raises(HTTPException):
+>           validate(old, pkg)
+
+tests/test_template_compatibility_proof.py:79: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+p = {'algorithm': 'material-writing-v3.5', 'automatic_errors': 0, 'automatic_verified_count': 100, 'boundary_cases_passed': True, ...}
+pkg = {'capability_scope': {'position_checks': True, 'residue': True, 'structure': True, 'writing_auto': True}, 'content': {...0454201ddef447d1776122df16d836668582a26122ecd8aa', 'department_source_id': 'eb0d3ef3-2ce6-41d1-93f9-e770d6717860', ...}
+caps = None
+
+    def validate(p, pkg, caps=None):
+>       return service.validate_compatibility(p, pkg, target_year=2025, capabilities=caps or CAPS)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: validate_compatibility() got an unexpected keyword argument 'target_year'
+
+tests/test_template_compatibility_proof.py:36: TypeError
+____ test_new_database_and_frozen_reads_mask_only_unqualified_capabilities _____
+
+qualified_sources = None
+
+    @pytest.mark.asyncio
+    async def test_new_database_and_frozen_reads_mask_only_unqualified_capabilities(qualified_sources):
+        from src.schemas.document_profile import DocumentProfile, ProfileField
+        pkg = package(); old = proof(pkg); old.pop("independent_sample_count")
+        value = record(pkg, old); before = deepcopy(value)
+        profile = DocumentProfile(report_kind=ProfileField(value="final"), report_year=ProfileField(value=2025))
+        conn = type("ReadConnection", (), {"fetchrow": AsyncMock(return_value=deepcopy(value))})()
+        for snap in [await service.validated_snapshot(None, value),
+                     await service.snapshot(conn, 2025),
+                     await service.select_frozen(None, [value], profile, ["上海市示例局2025年度决算"])]:
+            assert snap["available"]
+>           assert snap["capability_scope"] == {**CAPS, "writing_auto": False, "position_checks": False}
+E           AssertionError: assert {'position_ch...g_auto': True} == {'position_ch..._auto': False}
+E             
+E             Omitting 2 identical items, use -vv to show
+E             Differing items:
+E             {'position_checks': True} != {'position_checks': False}
+E             {'writing_auto': True} != {'writing_auto': False}
+E             Use -v to get more diff
+
+tests/test_template_compatibility_proof.py:107: AssertionError
+__________________ test_capabilities_are_qualified_separately __________________
+
+qualified_sources = None
+
+    @pytest.mark.asyncio
+    async def test_capabilities_are_qualified_separately(qualified_sources):
+        pkg = package(); value = record(pkg, proof(pkg, automatic_verified_count=0))
+        snap = await service.validated_snapshot(None, value)
+        assert snap["capability_scope"]["position_checks"] is True
+>       assert snap["capability_scope"]["writing_auto"] is False
+E       assert True is False
+
+tests/test_template_compatibility_proof.py:119: AssertionError
+_______ test_offline_read_uses_the_same_effective_capability_gate[True] ________
+
+tmp_path = PosixPath('<scratch>/pt-h3/test_offline_read_uses_the_sam1')
+legacy = True
+
+    @pytest.mark.parametrize("legacy", [False, True])
+    def test_offline_read_uses_the_same_effective_capability_gate(tmp_path, legacy):
+        pkg = package(); p = proof(pkg)
+        if legacy: p.pop("independent_sample_count")
+        value = record(pkg, p); before = deepcopy(value)
+        current = {k: value[k] for k in ("region", "overlay", "report_kind", "target_year", "revision")}
+        payload = {"current": [current], "bindings": [value], "packages": [pkg]}
+        bundle = tmp_path / "approved-test.zip"
+        with zipfile.ZipFile(bundle, "w") as archive:
+            archive.writestr("catalog.json", service.canonical(payload))
+            archive.writestr("checksums.json", "{}")
+        snap = service.offline_snapshot(bundle, hashlib.sha256(bundle.read_bytes()).hexdigest(), 2025)
+        assert snap["available"]
+>       assert snap["capability_scope"]["writing_auto"] is not legacy
+E       assert True is not True
+
+tests/test_template_compatibility_proof.py:136: AssertionError
+____________ test_rollback_keeps_and_revalidates_original_evidence _____________
+
+qualified_sources = None
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107974ed0>
+
+    @pytest.mark.asyncio
+    async def test_rollback_keeps_and_revalidates_original_evidence(qualified_sources, monkeypatch):
+        monkeypatch.setattr(service, "audit", AsyncMock())
+        pkg = package(); p = proof(pkg); prior = record(pkg, p); before = deepcopy(prior)
+        conn = FakeConnection(pkg, prior)
+        assert (await service.bind(conn, rollback_data(pkg), "test"))["revision"] == 2
+        saved = next(args for sql, args in conn.writes if "INSERT INTO disclosure_template_binding_revisions" in sql)
+        basis = json.loads(saved[8])
+>       assert basis["restored_from_revision"] == 1
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'restored_from_revision'
+
+tests/test_template_compatibility_proof.py:171: KeyError
+__________ test_rollback_cannot_bypass_compatibility_gate[missing-n] ___________
+
+defect = 'missing-n', qualified_sources = None
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107977f90>
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("defect", ["missing-n", "wrong-algorithm", "legacy-rollback"])
+    async def test_rollback_cannot_bypass_compatibility_gate(defect, qualified_sources, monkeypatch):
+        monkeypatch.setattr(service, "audit", AsyncMock())
+        pkg = package(); p = proof(pkg)
+        if defect == "missing-n": p.pop("independent_sample_count")
+        if defect == "wrong-algorithm": p["algorithm"] = "material-writing-v3.5"
+        prior = record(pkg, p, adoption="rollback" if defect == "legacy-rollback" else "historical_reference")
+        conn = FakeConnection(pkg, prior)
+>       with pytest.raises(HTTPException):
+E       Failed: DID NOT RAISE <class 'fastapi.exceptions.HTTPException'>
+
+tests/test_template_compatibility_proof.py:189: Failed
+_______ test_rollback_cannot_bypass_compatibility_gate[wrong-algorithm] ________
+
+defect = 'wrong-algorithm', qualified_sources = None
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10962dd10>
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("defect", ["missing-n", "wrong-algorithm", "legacy-rollback"])
+    async def test_rollback_cannot_bypass_compatibility_gate(defect, qualified_sources, monkeypatch):
+        monkeypatch.setattr(service, "audit", AsyncMock())
+        pkg = package(); p = proof(pkg)
+        if defect == "missing-n": p.pop("independent_sample_count")
+        if defect == "wrong-algorithm": p["algorithm"] = "material-writing-v3.5"
+        prior = record(pkg, p, adoption="rollback" if defect == "legacy-rollback" else "historical_reference")
+        conn = FakeConnection(pkg, prior)
+>       with pytest.raises(HTTPException):
+E       Failed: DID NOT RAISE <class 'fastapi.exceptions.HTTPException'>
+
+tests/test_template_compatibility_proof.py:189: Failed
+_______ test_rollback_cannot_bypass_compatibility_gate[legacy-rollback] ________
+
+defect = 'legacy-rollback', qualified_sources = None
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10962cf90>
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("defect", ["missing-n", "wrong-algorithm", "legacy-rollback"])
+    async def test_rollback_cannot_bypass_compatibility_gate(defect, qualified_sources, monkeypatch):
+        monkeypatch.setattr(service, "audit", AsyncMock())
+        pkg = package(); p = proof(pkg)
+        if defect == "missing-n": p.pop("independent_sample_count")
+        if defect == "wrong-algorithm": p["algorithm"] = "material-writing-v3.5"
+        prior = record(pkg, p, adoption="rollback" if defect == "legacy-rollback" else "historical_reference")
+        conn = FakeConnection(pkg, prior)
+>       with pytest.raises(HTTPException):
+E       Failed: DID NOT RAISE <class 'fastapi.exceptions.HTTPException'>
+
+tests/test_template_compatibility_proof.py:189: Failed
+_ test_pending_position_proof_is_deferred_but_intentional_disable_is_not_applicable _
+
+qualified_sources = None
+
+    @pytest.mark.asyncio
+    async def test_pending_position_proof_is_deferred_but_intentional_disable_is_not_applicable(qualified_sources):
+        pkg = package(); old = proof(pkg); old.pop("independent_sample_count")
+        snap = await service.validated_snapshot(None, record(pkg, old))
+        resolution = {"status": "confirmed", "value": "unit", "snapshot": snap}
+        doc = document(["2025年度决算", "2025年度决算表"], resolution)
+>       with pytest.raises(RuleDeferred): CMM027_TemplatePositionScope().apply(doc)
+E       Failed: DID NOT RAISE <class 'src.engine.rule_outcome.RuleDeferred'>
+
+tests/test_template_compatibility_proof.py:200: Failed
+_ test_invalid_automatic_proof_remains_insufficient_without_overriding_explicit_evidence[False] _
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109944910>
+qualified_sources = None, explicit = False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("explicit", [False, True])
+    async def test_invalid_automatic_proof_remains_insufficient_without_overriding_explicit_evidence(monkeypatch, qualified_sources, explicit):
+        from src.services import material_writing
+        from src.services.document_profile_resolver import resolve_document_profile
+        pkg = package(); old = proof(pkg); old.pop("independent_sample_count")
+        snap = await service.validated_snapshot(None, record(pkg, old))
+        monkeypatch.setenv("GBC_TEMPLATE_SCOPE", "true")
+        monkeypatch.setenv("GBC_TEMPLATE_EXPORT", "synthetic-only")
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.setattr(service, "offline_for_profile", lambda *args: snap)
+        pages = ["上海市测试局2025年度" + ("单位决算" if explicit else "决算"),
+                 "2025年度决算表\n本表反映单位本年度收入。"]
+        profile = resolve_document_profile(page_texts=pages)
+        result = await material_writing.load("test-only", "a" * 64, profile, pages)
+>       assert result["template_capability_pending"]["writing_auto"]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'template_capability_pending'
+
+tests/test_template_compatibility_proof.py:220: KeyError
+_ test_invalid_automatic_proof_remains_insufficient_without_overriding_explicit_evidence[True] _
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107947b50>
+qualified_sources = None, explicit = True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("explicit", [False, True])
+    async def test_invalid_automatic_proof_remains_insufficient_without_overriding_explicit_evidence(monkeypatch, qualified_sources, explicit):
+        from src.services import material_writing
+        from src.services.document_profile_resolver import resolve_document_profile
+        pkg = package(); old = proof(pkg); old.pop("independent_sample_count")
+        snap = await service.validated_snapshot(None, record(pkg, old))
+        monkeypatch.setenv("GBC_TEMPLATE_SCOPE", "true")
+        monkeypatch.setenv("GBC_TEMPLATE_EXPORT", "synthetic-only")
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.setattr(service, "offline_for_profile", lambda *args: snap)
+        pages = ["上海市测试局2025年度" + ("单位决算" if explicit else "决算"),
+                 "2025年度决算表\n本表反映单位本年度收入。"]
+        profile = resolve_document_profile(page_texts=pages)
+        result = await material_writing.load("test-only", "a" * 64, profile, pages)
+>       assert result["template_capability_pending"]["writing_auto"]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'template_capability_pending'
+
+tests/test_template_compatibility_proof.py:220: KeyError
+_________ test_publish_automatic_errors_are_real_integer_counts[False] _________
+
+errors = False
+
+    @pytest.mark.parametrize("errors", [False, 0.0, -1, 1])
+    def test_publish_automatic_errors_are_real_integer_counts(errors):
+>       with pytest.raises(HTTPException):
+E       Failed: DID NOT RAISE <class 'fastapi.exceptions.HTTPException'>
+
+tests/test_template_compatibility_proof.py:227: Failed
+__________ test_publish_automatic_errors_are_real_integer_counts[0.0] __________
+
+errors = 0.0
+
+    @pytest.mark.parametrize("errors", [False, 0.0, -1, 1])
+    def test_publish_automatic_errors_are_real_integer_counts(errors):
+>       with pytest.raises(HTTPException):
+E       Failed: DID NOT RAISE <class 'fastapi.exceptions.HTTPException'>
+
+tests/test_template_compatibility_proof.py:227: Failed
+_ test_rollback_chain_preserves_original_proof_instead_of_request_replacement __
+
+qualified_sources = None
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1099accd0>
+
+    @pytest.mark.asyncio
+    async def test_rollback_chain_preserves_original_proof_instead_of_request_replacement(qualified_sources, monkeypatch):
+        monkeypatch.setattr(service, "audit", AsyncMock())
+        pkg = package(); original = proof(pkg)
+        prior = record(pkg, original, adoption="rollback", restored_from_revision=1,
+                       original_adoption_kind="not_received", compatibility_source_revision=1)
+        prior["revision"] = 2
+        conn = FakeConnection(pkg, prior); conn.current = 2
+        data = {**rollback_data(pkg), "expected_revision": 2, "restore_revision": 2,
+                "compatibility": proof(pkg, target_year=2024)}
+        assert (await service.bind(conn, data, "test"))["revision"] == 3
+        saved = next(args for sql, args in conn.writes if "INSERT INTO disclosure_template_binding_revisions" in sql)
+        basis = json.loads(saved[8])
+>       assert basis["restored_from_revision"] == 2
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'restored_from_revision'
+
+tests/test_template_compatibility_proof.py:246: KeyError
+=========================== short test summary info ============================
+FAILED tests/test_template_compatibility_proof.py::test_independent_sample_gate_never_becomes_automatic_coverage_gate[100-40-200-False]
+FAILED tests/test_template_compatibility_proof.py::test_independent_sample_gate_never_becomes_automatic_coverage_gate[100-1-100-True]
+FAILED tests/test_template_compatibility_proof.py::test_independent_sample_gate_never_becomes_automatic_coverage_gate[12-4-12-True]
+FAILED tests/test_template_compatibility_proof.py::test_position_only_can_have_no_automatic_determinations
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes0]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes1]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes2]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes3]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes4]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes5]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes6]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes7]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes8]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes9]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes10]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes11]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes12]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes13]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes14]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes15]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes16]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes17]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes18]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes19]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes20]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes21]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes22]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes23]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes24]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_or_inconsistent_evidence_cannot_enable_capabilities[changes25]
+FAILED tests/test_template_compatibility_proof.py::test_legacy_proof_is_not_silently_relabelled_as_independent_samples
+FAILED tests/test_template_compatibility_proof.py::test_new_database_and_frozen_reads_mask_only_unqualified_capabilities
+FAILED tests/test_template_compatibility_proof.py::test_capabilities_are_qualified_separately
+FAILED tests/test_template_compatibility_proof.py::test_offline_read_uses_the_same_effective_capability_gate[True]
+FAILED tests/test_template_compatibility_proof.py::test_rollback_keeps_and_revalidates_original_evidence
+FAILED tests/test_template_compatibility_proof.py::test_rollback_cannot_bypass_compatibility_gate[missing-n]
+FAILED tests/test_template_compatibility_proof.py::test_rollback_cannot_bypass_compatibility_gate[wrong-algorithm]
+FAILED tests/test_template_compatibility_proof.py::test_rollback_cannot_bypass_compatibility_gate[legacy-rollback]
+FAILED tests/test_template_compatibility_proof.py::test_pending_position_proof_is_deferred_but_intentional_disable_is_not_applicable
+FAILED tests/test_template_compatibility_proof.py::test_invalid_automatic_proof_remains_insufficient_without_overriding_explicit_evidence[False]
+FAILED tests/test_template_compatibility_proof.py::test_invalid_automatic_proof_remains_insufficient_without_overriding_explicit_evidence[True]
+FAILED tests/test_template_compatibility_proof.py::test_publish_automatic_errors_are_real_integer_counts[False]
+FAILED tests/test_template_compatibility_proof.py::test_publish_automatic_errors_are_real_integer_counts[0.0]
+FAILED tests/test_template_compatibility_proof.py::test_rollback_chain_preserves_original_proof_instead_of_request_replacement
+44 failed, 4 passed in 0.60s

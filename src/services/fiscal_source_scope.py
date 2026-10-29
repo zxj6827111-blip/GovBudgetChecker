@@ -5,34 +5,29 @@ import re
 #: 只写“××年度决算表/情况说明”是单位口径（上海 2022 单位决算的标准写法）。
 _FINAL_DEPT_RE=re.compile(r'部门决算单位构成|年度部门决算(?:表|情况说明)')
 _FINAL_ANY_RE=re.compile(r'年度(?:单位)?决算(?:表|情况说明)')
-_FINAL_DEPT_HEADING_RE=re.compile(r'年度部门决算(?:表|情况说明)')
 _BUDGET_TABLES=r'(?=财务收支预算总表|收入预算总表|支出预算总表|财政拨款收支预算总表|预算编制说明)'
 _BUDGET_DEPT_RE=re.compile(r'部门'+_BUDGET_TABLES)
 _BUDGET_UNIT_RE=re.compile(r'单位'+_BUDGET_TABLES)
 
 
-def heading_scope(body,kind=None,*,majority=False):
-    """按目录与正文标题判部门/单位口径；判不出或两种都像时返回 None。
+def heading_scope(body,kind=None):
+    """按目录与正文标题判部门/单位口径；只出现一侧字样时才返回，两侧都有返回 None。
 
     封面本身是清单 A-02 的检查对象（部门决算封面漏写“部门”），不能拿来反推，
-    所以这里只看封面以外的标题。CMM-018 与解析层的主体范围共用这一口径。
-
-    ``majority``：两种字样都出现时按 2:1 多数取口径。只给解析层的主体范围用——
-    它只要求同一份材料内的事实口径一致；单位材料里残留一处“年度部门决算情况说明”
-    是模板问题，由结构检查报出，不能因此把整份金额挡在规则之外。
+    所以这里只看封面以外的标题。决算写法已改由 ``resolve_material_scope`` 统一裁决，
+    生产调用方只剩第三阶段验收前的预算 ``body_scope``；两侧混写不按多数票取口径。
     """
     body=re.sub(r'\s+','',str(body or ''))
-    counts=[]  # (部门字样数, 单位字样数, 部门是否按 2:1 多数认定)
+    counts=[]  # (部门字样数, 单位字样数)
     if kind in (None,'final'):
-        dept=len(_FINAL_DEPT_RE.findall(body))
-        unit=len(_FINAL_ANY_RE.findall(body))-len(_FINAL_DEPT_HEADING_RE.findall(body))
-        counts.append((dept,max(unit,0),True))
+        # “年度决算表”不含“年度部门决算表”，单位计数不得再减去部门标题数。
+        counts.append((len(_FINAL_DEPT_RE.findall(body)),len(_FINAL_ANY_RE.findall(body))))
     if kind in (None,'budget'):
-        counts.append((len(_BUDGET_DEPT_RE.findall(body)),len(_BUDGET_UNIT_RE.findall(body)),False))
+        counts.append((len(_BUDGET_DEPT_RE.findall(body)),len(_BUDGET_UNIT_RE.findall(body))))
     scopes=set()
-    for dept,unit,dept_by_ratio in counts:
-        if dept and (not unit or (dept_by_ratio or majority) and dept>=2*unit):scopes.add('department')
-        elif unit and (not dept or majority and unit>=2*dept):scopes.add('unit')
+    for dept,unit in counts:
+        if dept and not unit:scopes.add('department')
+        elif unit and not dept:scopes.add('unit')
     return next(iter(scopes))if len(scopes)==1 else None
 
 

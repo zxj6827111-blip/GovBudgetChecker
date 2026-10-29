@@ -260,6 +260,10 @@ class CMM008_TemplateResidue(Rule):
             snapshot = resolution.get("snapshot") or {}
             if snapshot.get("available") and (snapshot.get("capability_scope") or {}).get("residue"):
                 prompts = (snapshot.get("effective_config") or (snapshot.get("content") or {}).get("config") or {}).get("prompts") or []
+                if report_kind(doc) == "final":
+                    # 决算条件表提示语由 V33-234 按两张条件表成组报告；同源问题不重复确认。
+                    from .native_disclosure_semantics import _TEMPLATE as _CONDITIONAL_TABLE_PROMPT
+                    prompts = [p for p in prompts if not _CONDITIONAL_TABLE_PROMPT.fullmatch(p)]
                 for page, text in iter_pages(template_doc):
                     flat, positions = page_flat(template_doc, page, text)
                     for prompt in prompts:

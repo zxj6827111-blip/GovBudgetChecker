@@ -799,6 +799,7 @@ async def get_material_dimensions(job_id:str, request:Request):
         result['writing_decision']=await document_scope.latest_writing_decision(conn,job_id,result['file_hash'],result['document_version_id'])
         result['resolution']=((payload.get('result') or {}).get('meta') or {}).get('document_scope_resolution') or {}
         result['report_kind']=((((payload.get('result') or {}).get('meta') or {}).get('document_profile') or {}).get('report_kind') or {}).get('value')
+        result['amount_dependent_rules']=document_scope.amount_dependent_rules(((payload.get('result') or {}).get('meta') or {}).get('rule_execution_summary'))
         return result
     return await material_access.with_connection(query)
 

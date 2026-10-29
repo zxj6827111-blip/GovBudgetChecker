@@ -58,10 +58,16 @@ def test_single_leftover_department_heading_does_not_block_a_unit_material():
             "八、政府性基金预算财政拨款收入支出决算表\n本表无数据。",
             "第三部分 上海市某学校2022 年度部门决算情况说明"]
     text = "\n".join(body)
-    # 规则侧（CMM-018）仍按严格口径判不出，模板混写照常可报。
+    # 混写不按多数票取口径，交统一写法裁决保留冲突。
     assert heading_scope(text, "final") is None
-    assert heading_scope(text, "final", majority=True) == "unit"
     assert organization_scope(_scope_artifact("上海市某学校\n2022 年度决算", body)) is None
+
+
+def test_department_headings_no_longer_shrink_the_unit_count():
+    # 旧实现把单位计数减去部门标题数：3 单位 + 3 部门被算成 0:3 并判为部门。
+    text = "\n".join(["2024年度决算表"] * 3 + ["2024年度部门决算表"] * 3)
+    assert heading_scope(text, "final") is None
+    assert heading_scope("2024年度部门决算表\n2024年度部门决算情况说明\n2024年度部门决算表", "final") == "department"
 
 
 def test_cover_kind_still_wins_over_body_headings():

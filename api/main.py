@@ -585,11 +585,8 @@ def _evaluate_quality_gate(
     unbound = reading.get("unbound_money_cells") or []
     fiscal_coverage = reading.get("fiscal_coverage") or {}
     mapping_tables = reading.get("mapping_incomplete_tables") or []
-    amount_scope_blocked = any(
-        (item.get("rule_id") == "V33-236" and "材料口径" in str(item))
-        or "材料汇总口径" in str(item) or "org_scope_pending" in str(item)
-        for item in (rule_execution_summary or {}).get("unresolved_rules", []))
-    if reading.get("org_scope_pending_count") and amount_scope_blocked:
+    from src.services.document_scope import amount_dependent_rules
+    if reading.get("org_scope_pending_count") and amount_dependent_rules(rule_execution_summary):
         review_reasons.append({
             "code": "org_scope_pending",
             "message": "材料汇总口径待确认；不影响无需该维度的表内勾稽。依赖口径的检查仍列为未完成。",

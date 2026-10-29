@@ -1,0 +1,40 @@
+> govbudgetchecker-app@0.1.0 test:location-consistency
+> jiti tests/locationConsistency.test.ts
+
+location consistency tests passed
+
+> govbudgetchecker-app@0.1.0 test:review-list
+> jiti tests/reviewListAdapters.test.ts
+
+reviewListAdapters.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:list-requests
+> jiti tests/listRequests.test.ts
+
+listRequests.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:review-reads
+> jiti tests/reviewReadRequests.test.ts
+
+reviewReadRequests.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:supervision
+> jiti tests/supervisionAdapters.test.ts
+
+supervisionAdapters.test.ts passed: unknown/zero, baseline, read-only landing, four pages, explicit verification
+
+> govbudgetchecker-app@0.1.0 test:report-version
+> jiti tests/reportVersion.test.ts
+
+report version identity passed
+
+> govbudgetchecker-app@0.1.0 test:correction-adapters
+> jiti tests/correctionAdapters.test.ts
+
+correctionAdapters.test.ts passed
+correctionAdapters rows/identity test passed
+
+> govbudgetchecker-app@0.1.0 test:material-dimensions
+> jiti tests/materialDimensionLabels.test.ts
+
+materialDimensionLabels.test.ts passed
