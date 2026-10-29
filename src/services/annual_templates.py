@@ -9,7 +9,7 @@ from uuid import uuid4, UUID
 from fastapi import HTTPException
 from src.services.disclosure_template_import import import_source, compare_text
 
-ALGORITHM = 'material-writing-v3.2'
+ALGORITHM = 'material-writing-v3.3'
 CAPABILITIES = {'writing_auto', 'position_checks', 'residue', 'structure'}
 
 
@@ -41,7 +41,7 @@ def source_dir(source_id):
 
 def config_2024():
     # 固定算法只启用已审核位置，上传内容不能注入任意可执行正则或金额公式。
-    return {'schema': 1, 'algorithm': ALGORITHM, 'd2': 'low',
+    return {'schema': 2, 'algorithm': ALGORITHM, 'd2': 'low',
             'markers': ['part_heading', 'table_note'],
             'native': {'section':'预算绩效管理', 'sentence':'本部门建立了如下预算绩效管理制度'}}
 
@@ -398,8 +398,15 @@ async def reviewed_anchors(conn, content, review_record):
             source_cells=[{k:cell[k] for k in ('sheet','row','column','cell_type')} for cell in all_cells
                 if cell.get('text_start',-1)<end and cell.get('text_end',-1)>start]
             if not source_cells:raise HTTPException(422,'请选择单元格原文，工作表名称不能充当规范依据')
+        from src.services.template_anchor_slots import validated_slots
+        try:slots=validated_slots({**item,'text':needle},original['source_report_year'])
+        except ValueError as exc:raise HTTPException(422,str(exc)) from exc
+        for slot in slots:
+            slot['source_start']=chars[match.start()+slot['start']][0]
+            slot['source_end']=chars[match.start()+slot['end']-1][0]+1
+            slot['source_quote']=raw[slot['source_start']:slot['source_end']]
         anchors.append({**item,'text':needle,'start':start,'end':end,'raw_text':raw[start:end],
-                        'organization_slot':org_slot,'source_report_year':original['source_report_year'],'source_cells':source_cells})
+                        'organization_slot':org_slot,'source_report_year':original['source_report_year'],'source_cells':source_cells,'slots':slots})
     return anchors
 
 
@@ -408,12 +415,9 @@ def semantic_config(config):
     value=copy.deepcopy(config)
     mapped=[]
     for item in value.get('anchors') or []:
-        text=item['text']
-        if item.get('annual_slot'):text=text.replace(str(item.get('source_report_year') or '20XX'),'{REPORT_YEAR}')
-        if item.get('organization_slot'):text=text.replace(item['organization_slot'],'{ORGANIZATION}')
-        mapped.append({k:v for k,v in item.items() if k in ('kind','scope','basis','annual_slot','organization_slot')} | {'text':text})
-    for item in mapped:
-        if item.get('organization_slot'):item['organization_slot']='{ORGANIZATION}'
+        from src.services.template_anchor_slots import instantiate_anchor
+        text=instantiate_anchor(item,item.get('source_report_year'),None,semantic=True)
+        mapped.append({k:v for k,v in item.items() if k in ('kind','scope','basis')} | {'text':text})
     value['anchors']=sorted(mapped,key=canonical)
     value.setdefault('accept_native_toc_variant',False)
     return value

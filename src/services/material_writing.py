@@ -58,17 +58,43 @@ def collect(page_texts, excluded_pages=(), report_kind='final', source_spans=())
                     if prefix and not re.fullmatch(r'(?:第[二三23]部分)?[\u4e00-\u9fff（）()·]{0,80}',prefix): continue
                     if re.search(r'请参考|例如|参见|引用|根据|按上述|本报告采用',prefix): continue
                     if after.strip() and not re.fullmatch(r'[\s.·…\d]*',after): continue
-                overlaps=[span for span in source_spans if span['page']==page and span['start']<end and span['end']>start]
+                overlaps=[span for span in source_spans if span.get('qualified',True) and span['page']==page and span['start']<end and span['end']>start]
                 # 不跨 OCR 块拼接强信号；保留不足状态，避免断裂或重复块制造证据。
                 if overlaps and not any(span['start']<=start and span['end']>=end for span in overlaps):continue
                 found.append(Evidence(scope,kind,page,text[start:end],kind,True,start,end,tuple(overlaps)))
     return tuple(found)
 
 
+def template_applicability(profile, page_texts):
+    """仅为模板选择核实原件画像，不改写金额链路已保存的画像。"""
+    from src.services.document_profile_resolver import resolve_document_profile
+    from src.schemas.document_profile import SOURCE_COVER_TITLE
+    original = resolve_document_profile(page_texts=page_texts)
+    proof = {'profile_year': profile.report_year.to_dict(),
+             'original_year': original.report_year.to_dict(),
+             'original_kind': original.report_kind.to_dict(), 'verified': False}
+    if any(c.get('field') in ('report_year', 'fiscal_year', 'report_kind', 'jurisdiction')
+           for c in [*profile.conflicts, *original.conflicts]):
+        return None, {**proof, 'reason': '原件年度、文种或适用范围存在未解决冲突'}
+    if original.report_year.source != SOURCE_COVER_TITLE or not original.year:
+        return None, {**proof, 'reason': '缺少原件封面报告年度依据，文件名不能单独选模板'}
+    if original.kind not in ('final', 'budget') or original.kind != profile.kind:
+        return None, {**proof, 'reason': '原件文种与画像不一致或尚未核实'}
+    if profile.year is not None and profile.year != original.year:
+        return None, {**proof, 'reason': '文件名或画像年度与原件封面相反，须先核实年度'}
+    selected = profile.model_copy(deep=True)
+    selected.report_year = original.report_year.model_copy(deep=True)
+    selected.report_year.rejected.append(profile.report_year.to_dict())
+    selected.report_kind = original.report_kind.model_copy(deep=True)
+    return selected, {**proof, 'verified': True, 'reason': '原件封面独立核实年度与文种'}
+
+
 async def load(job_id, file_hash, profile, page_texts, archive_scope=None, excluded_pages=(), source_spans=(), frozen_bindings=None):
     from src.db.connection import DatabaseConnection
     from src.services import annual_templates
     snapshot={'available':False,'reason':'模板能力关闭' if not enabled() else '年度、文种或适用依据尚未核实','algorithm':ALGORITHM,'target_year':profile.year,'report_kind':profile.kind}
+    selection_profile, applicability = template_applicability(profile, page_texts)
+    if not applicability['verified'] and enabled():snapshot['reason']=applicability['reason']
     decision=None
     if os.getenv('DATABASE_URL'):
         conn=await DatabaseConnection.acquire()
@@ -77,12 +103,12 @@ async def load(job_id, file_hash, profile, page_texts, archive_scope=None, exclu
                 ON j.job_uuid=d.job_uuid AND j.structured_document_version_id=d.document_version_id
                 WHERE d.job_uuid=$1 AND d.file_hash=$2 ORDER BY d.revision DESC LIMIT 1''',job_id,file_hash)
             decision=dict(raw) if raw else None
-            if (profile.kind=='final' or (profile.kind=='budget' and budget_enabled())) and enabled() and profile.year and not any(c.get('field') in ('report_year','fiscal_year','report_kind') for c in profile.conflicts) and profile.report_year.source!='filename' and profile.report_kind.source!='filename':
-                snapshot=await annual_templates.select_frozen(conn,frozen_bindings,profile,page_texts) if frozen_bindings is not None else await annual_templates.select_for_profile(conn,profile, page_texts)
+            if enabled() and selection_profile is not None and (profile.kind=='final' or (profile.kind=='budget' and budget_enabled())):
+                snapshot=await annual_templates.select_frozen(conn,frozen_bindings,selection_profile,page_texts) if frozen_bindings is not None else await annual_templates.select_for_profile(conn,selection_profile,page_texts)
         finally: await DatabaseConnection.release(conn)
-    elif enabled() and os.getenv('GBC_TEMPLATE_EXPORT') and profile.kind in ('final','budget') and (profile.kind!='budget' or budget_enabled()) and profile.year and profile.report_year.source!='filename' and not profile.conflicts:
+    elif enabled() and os.getenv('GBC_TEMPLATE_EXPORT') and selection_profile is not None and (profile.kind=='final' or (profile.kind=='budget' and budget_enabled())):
         from src.services.annual_templates import offline_for_profile
-        snapshot=offline_for_profile(os.environ['GBC_TEMPLATE_EXPORT'],os.getenv('GBC_TEMPLATE_EXPORT_SHA256'),profile,page_texts)
+        snapshot=offline_for_profile(os.environ['GBC_TEMPLATE_EXPORT'],os.getenv('GBC_TEMPLATE_EXPORT_SHA256'),selection_profile,page_texts)
     evidence=collect(page_texts,excluded_pages,profile.kind,source_spans)
     caps=snapshot.get('capability_scope') or {}
     human=HumanDecision(decision['writing_scope'],str(decision['request_id']),False) if decision else None
@@ -94,7 +120,7 @@ async def load(job_id, file_hash, profile, page_texts, archive_scope=None, exclu
         independent=any(e.get('dimension')=='human_cover_independent' and e.get('value') is True for e in saved)
         human=HumanDecision(human.value,human.decision_id,independent)
     resolution=asdict(resolve_material_scope(evidence=evidence,template_qualified=bool(snapshot.get('available') and caps.get('writing_auto')),human=human,archive_scope=archive_scope if archive_scope in ('unit','department') else None, required_categories=('budget_financial_table','budget_function_table') if profile.kind=='budget' else ('heading','table_note')))
-    resolution.update(snapshot=snapshot,algorithm=ALGORITHM,domain=profile.kind,template_enabled=enabled(),decision_revision=decision.get('revision') if decision else None,archive_scope=archive_scope,archive_conflict=bool(archive_scope in ('unit','department') and resolution.get('value') and resolution['value']!=archive_scope))
+    resolution.update(template_applicability=applicability,unqualified_ocr_candidates=[x for x in source_spans if x.get('qualified') is False],snapshot=snapshot,algorithm=ALGORITHM,domain=profile.kind,template_enabled=enabled(),decision_revision=decision.get('revision') if decision else None,archive_scope=archive_scope,archive_conflict=bool(archive_scope in ('unit','department') and resolution.get('value') and resolution['value']!=archive_scope))
     if decision:
         resolution['human_decision']={key:decision.get(key) for key in
             ('request_id','revision','writing_scope','actor','note','evidence_reference','conflict_acknowledged')}
@@ -108,26 +134,43 @@ def ensure_document_resolution(document, profile):
     """独立规则入口也只消费统一裁决；没有运行快照时不访问数据库或猜模板。"""
     if profile.kind!='final' or getattr(profile,'writing_scope',None):return
     snapshot={'available':False,'reason':'独立入口未提供已批准年度快照','algorithm':ALGORITHM,'target_year':profile.year}
-    if enabled() and os.getenv('GBC_TEMPLATE_EXPORT') and profile.year and profile.report_year.source!='filename' and not profile.conflicts:
+    pages=getattr(document,'writing_page_texts',None) or getattr(document,'page_texts',[]) or []
+    selection_profile, applicability=template_applicability(profile,pages)
+    if not applicability['verified']:snapshot['reason']=applicability['reason']
+    if enabled() and os.getenv('GBC_TEMPLATE_EXPORT') and selection_profile is not None:
         from src.services.annual_templates import offline_for_profile
-        snapshot=offline_for_profile(os.environ['GBC_TEMPLATE_EXPORT'],os.getenv('GBC_TEMPLATE_EXPORT_SHA256'),profile,getattr(document,'page_texts',[]) or [])
+        snapshot=offline_for_profile(os.environ['GBC_TEMPLATE_EXPORT'],os.getenv('GBC_TEMPLATE_EXPORT_SHA256'),selection_profile,pages)
     proof=collect(getattr(document,'writing_page_texts',None) or getattr(document,'page_texts',[]) or [],source_spans=getattr(document,'writing_source_spans',()) or ())
     resolution=asdict(resolve_material_scope(evidence=proof,template_qualified=bool(snapshot.get('available') and (snapshot.get('capability_scope') or {}).get('writing_auto'))))
-    resolution.update(snapshot=snapshot,algorithm=ALGORITHM)
+    resolution.update(template_applicability=applicability,snapshot=snapshot,algorithm=ALGORITHM)
     profile.writing_scope=resolution
     document.document_profile=profile
 
 
 def qualified_identity_view(page_texts, artifact):
     """仅构造身份文字视图，不修改数字规则文本、单元格或财政事实。"""
+    from src.services.ocr_qualification import bound_ocr_block
     pages=list(page_texts); spans=[]
+    for block in getattr(artifact,'text_blocks',[]) or []:
+        page=block.page_number
+        if block.extraction_method=='ocr' and (type(page) is not int or not 1<=page<=len(pages)):
+            spans.append({'page':None,'start':0,'end':0,'qualified':False,'source_method':'unqualified_ocr',
+                'source_block_id':block.block_uid,'text':block.text,'reason':'OCR声称页码不属于本原件'})
     for page, native in enumerate(pages,1):
         spans.append({'page':page,'start':0,'end':len(native),'source_method':'native_text'})
         seen={re.sub(r'\s+','',native)}
         for block in getattr(artifact,'text_blocks',[]) or []:
             confidence=block.confidence
-            if (block.page_number!=page or block.extraction_method!='ocr' or isinstance(confidence,bool)
-                or not isinstance(confidence,(int,float)) or not math.isfinite(confidence) or not .98<=confidence<=1):continue
+            if block.page_number!=page or block.extraction_method!='ocr':continue
+            score_ok=(not isinstance(confidence,bool) and isinstance(confidence,(int,float))
+                      and math.isfinite(confidence) and .98<=confidence<=1)
+            try:bound=score_ok and bound_ocr_block(block,artifact)
+            except (AttributeError,KeyError,TypeError,ValueError):bound=False
+            if not bound:
+                spans.append({'page':page,'start':0,'end':0,'qualified':False,
+                    'source_method':'unqualified_ocr','source_block_id':block.block_uid,'text':block.text,
+                    'reason':'OCR置信度不合格' if not score_ok else 'OCR未通过同源页面、请求、预测、几何和模型绑定校验'})
+                continue
             normalized=re.sub(r'\s+','',block.text)
             if not normalized or any(normalized in existing for existing in seen):continue
             start=len(pages[page-1])+1

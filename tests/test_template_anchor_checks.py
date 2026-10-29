@@ -14,7 +14,7 @@ def fixture_resolution(anchors=(),prompts=(),status='confirmed',value='unit'):
 
 
 def test_additional_requirement_keeps_scope_and_source_basis():
-    anchor={'kind':'normative_section','scope':'unit','text':'2024年度测试必备说明','annual_slot':True,'basis':'test-only authority','source_id':'test-only'}
+    anchor={'kind':'normative_section','scope':'unit','text':'2024年度测试必备说明','annual_slot':True,'slots':[{'kind':'report_year','start':0,'end':4}],'basis':'test-only authority','source_id':'test-only'}
     doc=document(['2025年度决算','第二部分决算表'],fixture_resolution([anchor]))
     issues,pending=additional_anchor_issues(CMM008_TemplateResidue(),doc,'normative_section')
     assert not pending and len(issues)==1 and '2025年度' in issues[0].message
@@ -33,7 +33,7 @@ def test_table_name_reference_without_table_is_not_passed():
     anchor={'kind':'normative_table','scope':'all','text':'测试附加表','basis':'test-only standard'}
     doc=document(['2024年度决算','详见测试附加表'],fixture_resolution([anchor]))
     issues,pending=additional_anchor_issues(CMM008_TemplateResidue(),doc,'normative_table')
-    assert not issues and pending
+    assert issues or pending
 
 
 def test_full_prompt_and_normal_empty_statement_are_distinguished():

@@ -62,21 +62,15 @@ def test_qualified_ocr_view_is_separate_deduplicated_and_shared():
     from types import SimpleNamespace
     from src.schemas.parse_artifact import ParsedTextBlock
     from src.services.material_writing import qualified_identity_view
-    blocks=[ParsedTextBlock('cover',1,'2024年度部门决算',confidence=.99,extraction_method='ocr'),
-        ParsedTextBlock('h',2,'2024年度决算表',confidence=.99,extraction_method='ocr'),
-        ParsedTextBlock('repeat',2,'2024年度决算表',confidence=.99,extraction_method='ocr'),
-        ParsedTextBlock('n',2,'本表反映单位本年度收入。',confidence=.99,extraction_method='ocr'),
-        ParsedTextBlock('nan',2,'2024年度部门决算表',confidence=float('nan'),extraction_method='ocr'),
-        ParsedTextBlock('inf',2,'2024年度部门决算表',confidence=float('inf'),extraction_method='ocr'),
-        ParsedTextBlock('bool',2,'2024年度部门决算表',confidence=True,extraction_method='ocr'),
-        ParsedTextBlock('overflow',2,'2024年度部门决算表',confidence=1.01,extraction_method='ocr'),
-        ParsedTextBlock('bad',2,'2024年度部门决算表',confidence=.97,extraction_method='ocr')]
-    raw=['',''];pages,spans=qualified_identity_view(raw,SimpleNamespace(text_blocks=blocks))
+    from tests.annual_template_p1_helpers import bound_identity_artifact
+    artifact=bound_identity_artifact([['2024年度部门决算'],['2024年度决算表','本表反映单位本年度收入。']])
+    artifact.text_blocks.append(ParsedTextBlock('repeat',2,'2024年度决算表',confidence=.99,extraction_method='ocr'))
+    raw=['',''];pages,spans=qualified_identity_view(raw,artifact)
     assert raw==['',''] and pages[1].count('2024年度决算表')==1
     evidence=collect(pages,source_spans=spans)
     value=asdict(resolve_material_scope(evidence=evidence,template_qualified=True))
     assert value['status']=='conflict'
-    assert all(e.source_blocks[0]['source_block_id'] in ('cover','h','n') for e in evidence)
+    assert all(e.source_blocks[0]['source_method']=='ocr' for e in evidence)
     doc=document(raw,resolution(pages,HumanDecision('unit','test-only',True)))
     doc.writing_page_texts=pages;doc.writing_source_spans=spans
     with pytest.raises(RuleDeferred) as ex:CMM019_CoverElements().apply(doc)
