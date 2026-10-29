@@ -1,0 +1,50 @@
+{
+  "date": "2026-10-29T02:27:22.618493-07:00",
+  "repair_commit": "1c0cd04d948abc45bdc56860beda2f1419b3a153",
+  "baseline": "1a173fa62e99e6deded7488fc64958e15c9946bd",
+  "finding": "F2/P2: standalone numbering hides quoted or negative heading context",
+  "algorithm": "material-writing-v3.5",
+  "config_schema": 2,
+  "new_regressions": 53,
+  "red_tests": {
+    "failed": 40,
+    "passed": 13
+  },
+  "focused": {
+    "passed": 192,
+    "skipped": 1,
+    "overlaps_full_suite": true,
+    "skip_reason": "PG lifecycle without explicit test DSN; included in full fresh-DB run"
+  },
+  "full": {
+    "passed": 4846,
+    "skipped": 33,
+    "warnings": 21,
+    "seconds": 337.88,
+    "database": "gbc_heading_ctx_3a8ba9a79e01",
+    "endpoint": "127.0.0.1:25462"
+  },
+  "original_f2_fixed": true,
+  "original_four_p1_still_fixed": true,
+  "original_four_line_p2_still_fixed": true,
+  "second_readonly_review": {
+    "passed": true,
+    "additional_boundary_cases": 84,
+    "modified_files": false
+  },
+  "source_sha256": {
+    "src/services/template_anchor_checks.py": "028961140ca11b48762fafc0a4294cd531fb775c0293149a73cea575d0238646",
+    "src/services/annual_templates.py": "bd67a9a7518c0793b66983b00be95778ffa7002380c67fa00617c9e217a42875",
+    "tests/test_template_heading_context.py": "fa1d5a6cd5b5f6de2a5493b3f53e7aeae1e509e8f06e795589cb4d4ca0e63ae2"
+  },
+  "boundary": {
+    "frontend_rerun": false,
+    "runtime_restart": false,
+    "real_template_approval": false,
+    "real_annual_compatibility": false,
+    "real_budget_acceptance": false,
+    "merged_to_primary": false,
+    "deployed": false,
+    "business_data_modified": false
+  }
+}

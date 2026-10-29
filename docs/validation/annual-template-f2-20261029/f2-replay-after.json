@@ -1,0 +1,139 @@
+{
+  "original_audit_sha256": "65481640bc5565ff67e52c2e692aef30d47479b18969f2b4017e8027f1fde33e",
+  "old_presence_guard_failed_as_expected": true,
+  "original_f2_fixed": true,
+  "old_four_line_p2_still_fixed": true,
+  "original_four_p1_still_fixed": true,
+  "cases": [
+    {
+      "case": "normal_numbered_four_lines",
+      "text": "一、\n新增\n政策执行\n情况\n说明",
+      "expected_title": "新增政策执行情况说明",
+      "baseline": {
+        "headings": [],
+        "issues": [
+          "缺少经审核的模板要求标题：“新增政策执行情况说明”；依据：isolated independent audit fixture"
+        ],
+        "pending": []
+      },
+      "current": {
+        "headings": [
+          {
+            "page": 2,
+            "start": 0,
+            "end": 16,
+            "text": "一、新增政策执行情况说明"
+          },
+          {
+            "page": 2,
+            "start": 3,
+            "end": 16,
+            "text": "新增政策执行情况说明"
+          }
+        ],
+        "issues": [],
+        "pending": []
+      }
+    },
+    {
+      "case": "quoted_without_number",
+      "text": "引用：\n新增\n政策执行\n情况\n说明",
+      "expected_title": "新增政策执行情况说明",
+      "baseline": {
+        "headings": [],
+        "issues": [
+          "缺少经审核的模板要求标题：“新增政策执行情况说明”；依据：isolated independent audit fixture"
+        ],
+        "pending": []
+      },
+      "current": {
+        "headings": [],
+        "issues": [
+          "缺少经审核的模板要求标题：“新增政策执行情况说明”；依据：isolated independent audit fixture"
+        ],
+        "pending": []
+      }
+    },
+    {
+      "case": "quoted_numbered_four_lines",
+      "text": "引用：\n一、\n新增\n政策执行\n情况\n说明",
+      "expected_title": "新增政策执行情况说明",
+      "baseline": {
+        "headings": [],
+        "issues": [
+          "缺少经审核的模板要求标题：“新增政策执行情况说明”；依据：isolated independent audit fixture"
+        ],
+        "pending": []
+      },
+      "current": {
+        "headings": [],
+        "issues": [
+          "缺少经审核的模板要求标题：“新增政策执行情况说明”；依据：isolated independent audit fixture"
+        ],
+        "pending": []
+      }
+    },
+    {
+      "case": "negative_numbered_four_lines",
+      "text": "本报告尚未提供\n一、\n新增\n政策执行\n情况\n说明",
+      "expected_title": "新增政策执行情况说明",
+      "baseline": {
+        "headings": [],
+        "issues": [
+          "缺少经审核的模板要求标题：“新增政策执行情况说明”；依据：isolated independent audit fixture"
+        ],
+        "pending": []
+      },
+      "current": {
+        "headings": [],
+        "issues": [
+          "缺少经审核的模板要求标题：“新增政策执行情况说明”；依据：isolated independent audit fixture"
+        ],
+        "pending": []
+      }
+    },
+    {
+      "case": "example_numbered_four_lines",
+      "text": "例如：\n一、\n新增\n政策执行\n情况\n说明",
+      "expected_title": "新增政策执行情况说明",
+      "baseline": {
+        "headings": [],
+        "issues": [
+          "缺少经审核的模板要求标题：“新增政策执行情况说明”；依据：isolated independent audit fixture"
+        ],
+        "pending": []
+      },
+      "current": {
+        "headings": [],
+        "issues": [
+          "缺少经审核的模板要求标题：“新增政策执行情况说明”；依据：isolated independent audit fixture"
+        ],
+        "pending": []
+      }
+    },
+    {
+      "case": "quoted_numbered_three_lines",
+      "text": "引用：\n一、\n新增政策\n执行情况\n说明",
+      "expected_title": "新增政策执行情况说明",
+      "baseline": {
+        "headings": [
+          {
+            "page": 2,
+            "start": 7,
+            "end": 17,
+            "text": "新增政策执行情况说明"
+          }
+        ],
+        "issues": [],
+        "pending": []
+      },
+      "current": {
+        "headings": [],
+        "issues": [
+          "缺少经审核的模板要求标题：“新增政策执行情况说明”；依据：isolated independent audit fixture"
+        ],
+        "pending": []
+      }
+    }
+  ]
+}
