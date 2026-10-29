@@ -1,0 +1,226 @@
+Browser tab: 5, Title: "GovBudgetChecker", URL: "http://127.0.0.1:3308/settings".
+1 AXWebArea GovBudgetChecker, URL: 127.0.0.1:3308/settings
+	2 container
+		3 link Description: GBC GovBudgetChecker 预算审核与质量控制平台, Value: 127.0.0.1:3308/workbench
+		4 link Description: 主管驾驶舱, Value: 127.0.0.1:3308/supervision
+		5 text 工作区
+		6 content list
+			7 link Description: 工作台总览, Value: 127.0.0.1:3308/workbench
+			8 link Description: 上传中心, Value: 127.0.0.1:3308/upload
+			9 link Description: 处理队列, Help: 角标表示正在处理的分析运行数；列表保留历史记录, Value: 127.0.0.1:3308/queue
+			10 link Description: 人工复核, Help: 角标表示当前材料未完成复核的数量, Value: 127.0.0.1:3308/review
+			11 link Description: 区域报送台账, Value: 127.0.0.1:3308/materials
+			12 link Description: 部门报告, Value: 127.0.0.1:3308/reports
+			13 link Description: 导出归档, Value: 127.0.0.1:3308/archive
+		14 text 管理
+		15 content list
+			16 link Description: 质量管理, Value: 127.0.0.1:3308/quality
+			17 link Description: 规则与版本, Value: 127.0.0.1:3308/rules
+			18 link Description: 系统设置, Value: 127.0.0.1:3308/settings
+		19 text A annual-test-admin 管理员
+		20 container
+			21 text 管理 /  系统设置
+		22 text 系统设置
+		23 container 19:33 更新
+			24 text 服务正常 ·  19:33  更新
+		25 pop up button (collapsed) Description: 搜索, Secondary Actions: Expand
+		26 button 通知
+		27 button 帮助
+		28 heading 系统设置, Value: 1
+			29 text 系统设置
+		30 text 管理大模型配置、组织架构、用户权限、规则包和导出模板。
+		31 container
+			32 heading 模板管理, Value: 2
+				33 text 模板管理
+			34 text 年度适用与模板版本分别维护；发布不会自动重算或确认材料问题。
+			35 container 模板维护步骤
+				36 button 1. 模板与来源
+					37 text 1
+					38 text .
+					39 text 模板与来源
+				40 button 2. 上传、比较
+					41 text 2
+					42 text .
+					43 text 上传、比较
+				44 button 3. 审核与发布
+					45 text 3
+					46 text .
+					47 text 审核与发布
+				48 button 4. 年度适用
+					49 text 4
+					50 text .
+					51 text 年度适用
+				52 button 5. 历史、回滚与影响
+					53 text 5
+					54 text .
+					55 text 历史、回滚与影响
+			256 text 审核已留痕，尚未发布。
+			155 pop up button (collapsed, settable) Description: 草稿, Value: 655d3cb8 · 已审核 · 修订2, Secondary Actions: Expand
+				156 menu
+					157 选择草稿
+					158 (selected) 655d3cb8 · 已审核 · 修订2
+					159 534a6072 · 草稿 · 修订1
+					160 d4a43568 · 草稿 · 修订1
+					161 f2b92b47 · 已发布 · 修订3
+					162 bfd93f19 · 草稿 · 修订1
+					163 3c0479b8 · 已发布 · 修订3
+			164 button (expanded) 原文差异及位置（均须审核）, Secondary Actions: Collapse
+				165 text 原文差异及位置（均须审核）
+			166 heading 部门与单位, Value: 4
+				167 text 部门与单位
+			168 table
+				169 row
+					170 cell
+						171 text 位置
+					172 cell
+						173 text 旧文
+					174 cell
+						175 text 新文
+					176 cell
+						177 text 状态
+				178 row
+					179 cell
+						180 text 段落1  · 偏移 0
+					181 cell
+						182 text 2024年度部门决算 本表反映部门本年度收入
+					183 cell
+						184 text 2024年度决算 本表反映单位本年度收入
+					185 cell
+						186 text 只作观察，不自动成为规范
+			187 text 原件、自动编号、表格及条件必须对照渲染件核实；同一文件的新来源不会自动成为新规则。
+			188 container 逐项分类与规范映射（可选，差异不会自动生成规则）
+				189 text 逐项分类与规范映射（可选，差异不会自动生成规则）
+				190 pop up button (collapsed, settable) Description: 锚点来源, Value: 单位模板, Secondary Actions: Expand
+					191 menu
+						192 选择当前原件
+						193 (selected) 单位模板
+						194 部门模板
+				195 pop up button (collapsed, settable) Description: 锚点类别, Value: 规范必备章节, Secondary Actions: Expand
+					196 menu
+						197 (selected) 规范必备章节
+						198 规范必备表名
+						199 应清理的编报提示
+						200 模板样式，仅参考
+						201 可选内容，不强制补删
+				202 pop up button (collapsed, settable) Description: 锚点适用条件, Value: 部门与单位均适用, Secondary Actions: Expand
+					203 menu
+						204 (selected) 部门与单位均适用
+						205 仅单位
+						206 仅部门
+				207 container
+					208 text 完整原文锚点
+					209 text field (settable) 完整原文锚点
+				210 container
+					211 text 规范或分类依据
+					212 text field (settable) 规范或分类依据
+				213 container
+					214 text 原件中第几处（唯一出现可留空）
+					215 stepper (settable) 原件中第几处（唯一出现可留空）
+				216 container
+					217 text 锚点内已核实的完整机构名称槽位（可留空）
+					218 text field (settable) 锚点内已核实的完整机构名称槽位（可留空）
+				219 container 逐位置审核槽位
+					220 text 逐位置审核槽位
+					221 text 只替换所选位置。固定文献年份、金额和科目编码保持原文；位置按归一原文字符计数。
+					257 text 当前锚点没有可选的年度或完整名称位置。
+				223 button (disabled) 加入待审核映射
+				258 container
+					259 text 2024年度依据《2024年办法》执行情况说明  ·  虚构回归测试，只核验年度位置与固定文献年份
+					260 button 移除此映射
+			224 checkbox (settable, integer) Description: 已单独核实并接受第十一节目录/正文“其他重要事项说明／其他重要事项的情况说明”的模板原生变体，仅限本版本和该节, Value: 0
+			225 text 审核结论
+			226 pop up button (collapsed, settable) 审核结论, Value: 差异未明确，保留草稿, Secondary Actions: Expand
+				227 menu
+					228 (selected) 差异未明确，保留草稿
+					229 确认无变化，沿用旧包
+					230 有实质变化或首版，形成新包
+			231 text 审核依据
+			232 text entry area (settable) Description: 模板审核依据, Value: 虚构槽位回归测试：保留草稿，不发布，不代表业务审核结论。
+			233 checkbox (settable, integer) Description: 已对照原件核实编号、表格及条件, Value: 1
+			234 button 保存审核
+			235 text 新包版本号（仅新版必填）
+			236 text field (settable) 新包版本号（仅新版必填）
+			237 container 经过验证后启用的能力
+				238 text 经过验证后启用的能力
+				239 container
+					240 checkbox (settable, integer) Description: 写法自动判定, Value: 0
+					241 text 写法自动判定
+				242 container
+					243 checkbox (settable, integer) Description: 写法位置检查, Value: 0
+					244 text 写法位置检查
+				245 container
+					246 checkbox (settable, integer) Description: 提示语参照, Value: 0
+					247 text 提示语参照
+				248 container
+					249 checkbox (settable, integer) Description: 结构参照, Value: 0
+					250 text 结构参照
+			251 text 验证报告或验收记录引用
+			252 text field (settable) 验证报告或验收记录引用
+			253 button (collapsed) 发布前核对包内容、验证与影响, Secondary Actions: Expand
+				254 text 发布前核对包内容、验证与影响
+			255 button 校验并发布／复用
+		92 container
+			93 text ADMIN CONSOLE
+			94 heading 系统管理, Value: 2
+				95 text 系统管理
+			96 text 后台运维、组织维护、权限配置与配置留档。
+			97 button 基础档案总览 系统管理入口与配置概览
+				98 text 基础档案总览
+				99 text 系统管理入口与配置概览
+			100 button 组织与单位 组织树、部门、单位、导入与删除
+				101 text 组织与单位
+				102 text 组织树、部门、单位、导入与删除
+			103 button 用户与权限 账号、角色与登录权限
+				104 text 用户与权限
+				105 text 账号、角色与登录权限
+			106 button 运维操作 上传、重分析、修复与清理
+				107 text 运维操作
+				108 text 上传、重分析、修复与清理
+			109 button 分析结果 AI 与规则分析结果入库查看
+				110 text 分析结果
+				111 text AI 与规则分析结果入库查看
+			112 button 规则包与口径 规则包版本、启用状态和说明
+				113 text 规则包与口径
+				114 text 规则包版本、启用状态和说明
+			115 button 材料类型与字段映射 材料类型、字段别名和表格映射
+				116 text 材料类型与字段映射
+				117 text 材料类型、字段别名和表格映射
+			118 button 大模型与系统参数 大模型配置、系统参数和导出模板
+				119 text 大模型与系统参数
+				120 text 大模型配置、系统参数和导出模板
+		121 container
+			122 text 基础档案总览
+			123 heading 基础档案总览, Value: 1
+				124 text 基础档案总览
+			125 text 系统管理入口与配置概览
+			126 text 新系统管理内置页面
+			127 button 组织与单位 维护部门、单位、导入模板和删除影响范围。 4 个组织
+				128 text 组织与单位
+				129 text 维护部门、单位、导入模板和删除影响范围。
+				130 text 4 个组织
+			131 button 用户与权限 管理账号、管理员角色、启停和密码重置。 账号权限
+				132 text 用户与权限
+				133 text 管理账号、管理员角色、启停和密码重置。
+				134 text 账号权限
+			135 button 运维操作 上传、重分析、缺失关联修复和结构化清理。 上传与修复
+				136 text 运维操作
+				137 text 上传、重分析、缺失关联修复和结构化清理。
+				138 text 上传与修复
+			139 button 分析结果 查看 AI、规则与结构化入库结果。 结果查询
+				140 text 分析结果
+				141 text 查看 AI、规则与结构化入库结果。
+				142 text 结果查询
+			143 button 规则包与口径 维护规则包说明、版本和启用状态。 配置留档
+				144 text 规则包与口径
+				145 text 维护规则包说明、版本和启用状态。
+				146 text 配置留档
+			147 button 材料类型与字段映射 维护材料类型、字段别名和表格映射。 配置留档
+				148 text 材料类型与字段映射
+				149 text 维护材料类型、字段别名和表格映射。
+				150 text 配置留档
+			151 button 大模型与系统参数 配置模型和导出模板。 模型配置
+				152 text 大模型与系统参数
+				153 text 配置模型和导出模板。
+				154 text 模型配置
+
+The focused UI element is 1 AXWebArea GovBudgetChecker, URL: 127.0.0.1:3308/settings

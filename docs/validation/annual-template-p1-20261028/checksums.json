@@ -1,0 +1,20 @@
+{
+  "browser-console.json": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "browser-exact-slots.png": "e431aee2dfc701e63c9003673b597ed3f94972373a7e72a7b73f736cef20b5a2",
+  "browser-state.txt": "e444c444f052a3656a9cb8dfc67fe9affee11bd29551372034d8e89d5cd5b130",
+  "frontend-build.log": "20875fc5374ab84ac93b4e24ffbf35759e59ae0ebf82e47a98b572fa07f32748",
+  "frontend-unit.log": "80fe91f318b0f7b8a9b870f3951d8a00250833009361a7bf4be7bbb2a1ede7c1",
+  "material-exports.json": "5a352072cada5cdf87a90ac43fd655057c5be1f2a08af818d0c1a974634fe589",
+  "material-history.json": "30eae05bf262028426d690c01453d49e3f19847ff219a0a6a605d5a709d72eec",
+  "process-restart.json": "dae036f8c24c11035d187680679324e7b25392a236b17dc821e8eb2a7a00006a",
+  "python-focused.log": "d23a2c9fb379378e7229c803bacfeda2a9f1f406249a98ff0c05fd48765c1087",
+  "python-full.log": "42507e62c49a98b7c9dd83617a48daa78795b51bd6a5192778bf1dd4b22fe761",
+  "review-after.json": "8ebe4330beb44714f1b2346bf880451eeaaa403893db2450190d29bea2cc67b3",
+  "review-before.json": "89c18a8eaf08c214f412a56d684f2b2cdbc3452031bb4fadabc9fe028300c6bb",
+  "review-reproduce.original.py": "1d3aa544ee576fdb2c9be34f8c037aec3c35909c342687128bcdcd3ea333fd7e",
+  "runtime-slots.json": "793e72fa0ef4b0984eba37544104bb3a16b64957c7003124b8a6efbb51fdec5a",
+  "upgrade-identity-diff.txt": "03f4123036335ade54ff94c200715e59aa6c60e11686f1965b0790ba5bcb1e5a",
+  "verification-summary.json": "d2b2bf2a539c02321d2282e7dee4b7666097af45ea5fc3987b761f0841804035",
+  "writing-only-preservation.json": "89308900528a32c9e017d18f7d4442d99aa20e9503f89cd67b31c4bc66ce9700",
+  "writing-upgrade-observation.json": "98941b17e7c064b7461f33257d437d98669f1506d634a8342bf777aaacc41cc5"
+}

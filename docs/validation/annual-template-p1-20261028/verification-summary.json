@@ -1,0 +1,73 @@
+{
+  "repair_commit": "8ed769ad7de82a72875e10b3ed59409aa60207ec",
+  "reviewed_head": "b97d6880",
+  "branch": "codex/annual-template-management",
+  "baseline": "b557e8b71ef7eaddead3069d3f177dca5ede9342",
+  "algorithm": "material-writing-v3.3",
+  "new_config_schema": 2,
+  "original_review_sha256": {
+    "review-summary.json": "236fd52402a7e410d3b0bc9da861772ff3a02ca68564137d6c942a44cf229fbb",
+    "reproduce.py": "1d3aa544ee576fdb2c9be34f8c037aec3c35909c342687128bcdcd3ea333fd7e"
+  },
+  "old_delivery_evidence_hashes_matched": 20,
+  "independent_review_inputs_modified": false,
+  "tests": {
+    "full": {
+      "passed": 4721,
+      "skipped": 33,
+      "warnings": 21,
+      "duration_seconds": 319.99,
+      "database_included": true,
+      "database": "gbc_annual_p1_92ea6ec157d1"
+    },
+    "focused_after_additional_score_cases": {
+      "passed": 59,
+      "skipped": 1,
+      "skip_reason": "未配置测试DSN的独立专项进程跳过PG生命周期；全量含数据库时已执行通过"
+    },
+    "typescript": true,
+    "frontend_unit": true,
+    "frontend_build": true,
+    "frontend_warning": "existing useEffect dependency load warning"
+  },
+  "browser": {
+    "normal_authenticated_session": true,
+    "isolated_port": 3308,
+    "exact_report_year_slot_selected": true,
+    "fixed_citation_disabled": true,
+    "synthetic_draft_saved_and_read_back": true,
+    "console_warning_or_error_entries": 0
+  },
+  "runtime": {
+    "backend_port": 28743,
+    "database_port": 25462,
+    "schema": "annual_runtime_verified",
+    "only_synthetic_material_confirmed": true,
+    "no_real_template_published_or_bound": true,
+    "old_packages_and_bindings_unchanged": true,
+    "real_source_drafts_unchanged": true,
+    "amount_facts": 10,
+    "same_code_writing_only_artifact_hash_stable": true,
+    "raw_facts_hash_stable": true,
+    "restart_readback": true,
+    "export_formats": [
+      "json",
+      "csv",
+      "pdf",
+      "docx"
+    ]
+  },
+  "acceptance": {
+    "repair_code_implemented": true,
+    "automated_regressions_passed": true,
+    "reviewer_four_cases_reproduced_before": true,
+    "reviewer_four_cases_reproduced_after": false,
+    "new_independent_acceptance": false,
+    "business_truth_or_accuracy_guarantee": false,
+    "real_annual_compatibility": false,
+    "real_budget_acceptance": false,
+    "production_deployed": false,
+    "merged_to_original": false
+  },
+  "evidence_formatting": "browser-state.txt 与 frontend-build.log 仅移除行尾空白；审核原脚本逐字节不变"
+}

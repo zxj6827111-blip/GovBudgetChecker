@@ -1,0 +1,66 @@
+{
+  "original_script_sha256": "1d3aa544ee576fdb2c9be34f8c037aec3c35909c342687128bcdcd3ea333fd7e",
+  "original_guard_expects_all_bugs": true,
+  "old_guard_failed_as_expected": true,
+  "results": {
+    "R1_filename_gate": {
+      "reproduced": false,
+      "cases": [
+        {
+          "filename": "示例局2024年度决算.pdf",
+          "year_source": "filename",
+          "available": true,
+          "status": "conflict"
+        },
+        {
+          "filename": null,
+          "year_source": "cover_title",
+          "available": true,
+          "status": "conflict"
+        }
+      ]
+    },
+    "R2_annual_slot": {
+      "reproduced": false,
+      "correct_heading": "2025年度依据《2024年办法》执行情况说明",
+      "issues": [],
+      "pending": [
+        "旧版槽位未记录具体位置，请重新逐位置审核：2024年度依据《2024年办法》执行情况说明"
+      ]
+    },
+    "R3_unbound_ocr": {
+      "reproduced": false,
+      "source_bound": [
+        false,
+        false,
+        false
+      ],
+      "accepted_ocr_blocks": 0,
+      "status": "insufficient",
+      "value": null
+    },
+    "R4_structural_false_completion": {
+      "reproduced": false,
+      "cases": [
+        {
+          "kind": "normative_section",
+          "text": "本报告尚未提供新增政策执行情况说明。",
+          "unrelated_table_present": false,
+          "issues": [
+            "缺少经审核的模板要求标题：“新增政策执行情况说明”；依据：isolated audit fixture"
+          ],
+          "pending": []
+        },
+        {
+          "kind": "normative_table",
+          "text": "说明：测试新增披露表本年未编制。",
+          "unrelated_table_present": true,
+          "issues": [
+            "缺少经审核的模板要求标题：“测试新增披露表”；依据：isolated audit fixture"
+          ],
+          "pending": []
+        }
+      ]
+    }
+  }
+}

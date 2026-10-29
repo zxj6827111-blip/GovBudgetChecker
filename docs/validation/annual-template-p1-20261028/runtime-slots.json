@@ -1,0 +1,37 @@
+{
+  "synthetic_only": true,
+  "normal_authentication": true,
+  "draft_id": "655d3cb8-1514-4d5d-b10a-acff58c4fa8c",
+  "revision": 2,
+  "decision": "pending",
+  "anchor": {
+    "end": 44,
+    "kind": "normative_section",
+    "text": "2024年度依据《2024年办法》执行情况说明",
+    "basis": "虚构回归测试，只核验年度位置与固定文献年份",
+    "scope": "all",
+    "slots": [
+      {
+        "end": 4,
+        "kind": "report_year",
+        "start": 0,
+        "source_end": 25,
+        "source_text": "2024",
+        "source_quote": "2024",
+        "source_start": 21
+      }
+    ],
+    "start": 21,
+    "raw_text": "2024年度依据《2024年办法》执行情况说明",
+    "source_id": "9f1f4271-8fa6-4313-9945-17bb822a4312",
+    "occurrence": null,
+    "annual_slot": true,
+    "source_cells": [],
+    "organization_slot": "",
+    "source_report_year": 2024
+  },
+  "instantiated_2025": "2025年度依据《2024年办法》执行情况说明",
+  "packages_and_bindings_unchanged": true,
+  "existing_real_drafts_unchanged": true,
+  "algorithm": "material-writing-v3.3"
+}
