@@ -20,15 +20,19 @@ def _headings(doc, expected):
             start=offset;offset+=len(line)
             previous=next((compact(p) for p in reversed(lines[:i]) if p.strip()),'')
             if re.search(r'(?:尚未提供|未提供|未编制|详见|参见|引用|例如|提及|缺少)[：:]?$',previous):continue
-            # 只匹配整行标题或其连续折行；不查找正文中的子串。
-            value=''
-            for part in lines[i:i+3]:
+            # 连续折行只要仍是完整标题的前缀就继续，行数不能充当缺失证据。
+            # 空行、句末标点或无关文字仍中止；不跨页、不查找正文中的子串。
+            value='';raw_end=start
+            for j in range(i,len(lines)):
+                part=lines[j]
                 if not part.strip() or re.search(r'[，。；!?！？]$',part.strip()):break
                 value+=part.strip()
                 current=_title(value)
                 if current==target:
-                    found.append({'page':page,'start':start,'end':start+len(value),'text':value});break
+                    found.append({'page':page,'start':start+len(line)-len(line.lstrip()),
+                                  'end':raw_end+len(part.rstrip()),'text':value});break
                 if not target.startswith(current):break
+                raw_end+=len(part)
     return found
 
 

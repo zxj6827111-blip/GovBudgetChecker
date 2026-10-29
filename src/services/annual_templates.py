@@ -9,7 +9,7 @@ from uuid import uuid4, UUID
 from fastapi import HTTPException
 from src.services.disclosure_template_import import import_source, compare_text
 
-ALGORITHM = 'material-writing-v3.3'
+ALGORITHM = 'material-writing-v3.4'
 CAPABILITIES = {'writing_auto', 'position_checks', 'residue', 'structure'}
 
 
