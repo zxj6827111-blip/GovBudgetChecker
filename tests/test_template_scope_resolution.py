@@ -105,6 +105,10 @@ def test_cover_match_rules():
     # 一致
     assert cover_matches_selected_org('上海市信访办公室', '上海市信访办公室') is True
     assert cover_matches_selected_org('上海市 信访办公 室', '上海市信访办公室') is True
+    # 全角/半角括号视为同名（NFKC 归一）
+    assert cover_matches_selected_org('上海市水务局(上海市海洋局)', '上海市水务局（上海市海洋局）') is True
+    assert cover_matches_selected_org('中国(上海)自由贸易试验区临港新片区管理委员会',
+                                      '中国（上海）自由贸易试验区临港新片区管理委员会') is True
     # 目录名多“单位”后缀（verified_cover_alias 同规则：目录名 == 封面名 + 单位）
     assert cover_matches_selected_org('上海市信访办公室', '上海市信访办公室单位') is True
     # 本级 /（本级）/ 本部 标注

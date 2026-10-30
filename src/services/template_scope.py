@@ -48,7 +48,9 @@ _LEVEL_ANNOTATION_RE = re.compile(r"(?:（本级）|\(本级\)|本级|本部)+$"
 
 
 def _compact_name(text) -> str:
-    return re.sub(r"\s+", "", str(text or ""))
+    """比较用归一：NFKC（全角/半角括号与数字）+ 去空白。"""
+    import unicodedata
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(text or "")))
 
 
 def cover_matches_selected_org(cover_name, selected_org_name):
