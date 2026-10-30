@@ -1834,10 +1834,15 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         from src.services.material_writing import budget_enabled
         if document_profile.kind == "final" or (document_profile.kind == "budget" and budget_enabled()):
             from src.services.material_writing import load as load_writing
+            # 封面主体名用于"所选组织一致性"校验；画像将名称标为冲突时不采信，
+            # 视同识别不到，维持所选层级现行为。
+            cover_org_name = None if "organization_name" in identity_conflicts \
+                else operand_profile.organization_name.value
             document_profile.writing_scope = await load_writing(job_dir.name,
                 parse_artifact_obj.source_file_hash if parse_artifact_obj else hashlib.sha256(pdf_path.read_bytes()).hexdigest(),
                 document_profile, profile_page_texts,
                 archive_scope=selected_org_basis["level"], archive_basis=selected_org_basis,
+                cover_name=cover_org_name,
                 excluded_pages=(), source_spans=writing_source_spans, frozen_bindings=frozen_template_bindings)
         if document_profile.kind in {"budget", "final"}:
             report_kind = document_profile.kind

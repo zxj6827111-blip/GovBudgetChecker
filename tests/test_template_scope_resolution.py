@@ -1,7 +1,7 @@
 import pytest
 from dataclasses import asdict
 from src.services.template_scope import (Evidence, HumanDecision, comprehensive_writing_contrast,
-                                         resolve_material_scope)
+                                         cover_matches_selected_org, resolve_material_scope)
 
 
 def ev(scope, kind, page=2, qualified=True):
@@ -94,6 +94,63 @@ def test_invalid_archive_level_still_rejected():
     # archive_scope 的非法值仍按原契约拒绝（与 selected_level 的宽松处理不同）。
     with pytest.raises(ValueError):
         resolve(selected_level='unit', archive_scope='bogus')
+
+
+# ---------------------------------------------------------------------------
+# 阶段 0 审核修正：封面主体与所选组织一致性
+# ---------------------------------------------------------------------------
+
+
+def test_cover_match_rules():
+    # 一致
+    assert cover_matches_selected_org('上海市信访办公室', '上海市信访办公室') is True
+    assert cover_matches_selected_org('上海市 信访办公 室', '上海市信访办公室') is True
+    # 目录名多“单位”后缀（verified_cover_alias 同规则：目录名 == 封面名 + 单位）
+    assert cover_matches_selected_org('上海市信访办公室', '上海市信访办公室单位') is True
+    # 本级 /（本级）/ 本部 标注
+    assert cover_matches_selected_org('上海市发展和改革委员会本级', '上海市发展和改革委员会') is True
+    assert cover_matches_selected_org('上海市发展和改革委员会（本级）', '上海市发展和改革委员会') is True
+    assert cover_matches_selected_org('上海市发展和改革委员会', '上海市发展和改革委员会本部') is True
+    # 封面名前的附件/序号编号
+    assert cover_matches_selected_org('附件1上海市农业农村委员会', '上海市农业农村委员会') is True
+    assert cover_matches_selected_org('1上海市农业农村委员会', '上海市农业农村委员会') is True
+    # 下属单位：封面主体是所选组织名加后缀 → 不一致
+    assert cover_matches_selected_org('上海市文化和旅游局执法总队', '上海市文化和旅游局') is False
+    # 名称完全不同 → 不一致
+    assert cover_matches_selected_org('上海市财政局', '上海市数据局') is False
+    # 封面名或目录名识别不到 → 不判定（维持现行为）
+    assert cover_matches_selected_org(None, '上海市文化和旅游局') is None
+    assert cover_matches_selected_org('上海市文化和旅游局', '') is None
+    assert cover_matches_selected_org('测试局', '上海市文化和旅游局') is None
+
+
+def test_selected_level_rejected_on_cover_subject_mismatch():
+    rows = (ev('department', 'heading'), ev('department', 'table_note'))
+    # 下属单位：不用所选层级、走原路径（模板未批准 → 依据不足），并记录原因。
+    mismatch = resolve(*rows, template_qualified=False, selected_level='department',
+                       cover_name='上海市文化和旅游局执法总队', selected_org_name='上海市文化和旅游局')
+    assert mismatch.status == 'insufficient' and mismatch.source == 'unresolved'
+    assert mismatch.value is None and mismatch.cover_independent_scope is None
+    assert mismatch.archive_subject_mismatch is True
+    # 一致时照常使用所选层级。
+    matched = resolve(*rows, template_qualified=False, selected_level='department',
+                      cover_name='上海市文化和旅游局', selected_org_name='上海市文化和旅游局')
+    assert matched.source == 'archive' and matched.value == 'department'
+    assert matched.archive_subject_mismatch is False
+    # 封面名识别不到：维持现行为，仍使用所选层级。
+    unknown = resolve(*rows, template_qualified=False, selected_level='department',
+                      selected_org_name='上海市文化和旅游局')
+    assert unknown.source == 'archive' and unknown.archive_subject_mismatch is False
+    # 允许差异（单位后缀/本级/附件编号）不触发拒绝。
+    for cover in ('上海市文化和旅游局', '上海市文化和旅游局本级',
+                  '附件2上海市文化和旅游局'):
+        basis = resolve(*rows, template_qualified=False, selected_level='department',
+                        cover_name=cover, selected_org_name='上海市文化和旅游局单位')
+        assert basis.source == 'archive' and basis.archive_subject_mismatch is False, cover
+    # 人工决定优先：不做一致性拒绝，也不记 mismatch。
+    human = resolve(*rows, template_qualified=False, human=HumanDecision('unit', '9'),
+                    cover_name='上海市文化和旅游局执法总队', selected_org_name='上海市文化和旅游局')
+    assert human.source == 'human' and human.archive_subject_mismatch is False
 
 
 # ---------------------------------------------------------------------------

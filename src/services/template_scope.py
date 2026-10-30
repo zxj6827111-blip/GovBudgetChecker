@@ -38,6 +38,41 @@ class ScopeResolution:
     cover_independent_scope: str | None
     evidence: tuple[Evidence, ...]
     human_decision_id: str | None
+    # 封面主体与所选组织不一致：所选层级未用作检查基准，转面板提示人工核对归档。
+    archive_subject_mismatch: bool = False
+
+
+#: 封面名前的附件/序号编号（“附件1”“1”），以及“（本级）/(本级)/本级/本部”标注。
+_COVER_INDEX_RE = re.compile(r"^(?:附件)?[0-9０-９]{1,3}(?=[一-鿿])")
+_LEVEL_ANNOTATION_RE = re.compile(r"(?:（本级）|\(本级\)|本级|本部)+$")
+
+
+def _compact_name(text) -> str:
+    return re.sub(r"\s+", "", str(text or ""))
+
+
+def cover_matches_selected_org(cover_name, selected_org_name):
+    """封面主体名称与所选组织是否一致；任一方识别不到返回 None（不判定）。
+
+    允许的差异：目录名多“单位”后缀（与 check_subject 的 verified_cover_alias
+    同规则：目录名 == 封面名 + “单位”）、“（本级）/(本级)/本级/本部”标注、
+    封面名前的“附件1/1”编号。封面主体是所选组织名加后缀（下属单位）或名称
+    不同 → False；比较前去掉全部空白。
+    """
+    cover = _compact_name(cover_name)
+    org = _compact_name(selected_org_name)
+    if len(cover) < 4 or len(org) < 4:
+        return None
+    cover = _COVER_INDEX_RE.sub("", cover, count=1)
+    cover_stripped = _LEVEL_ANNOTATION_RE.sub("", cover)
+    org_stripped = _LEVEL_ANNOTATION_RE.sub("", org)
+    if cover_stripped == org_stripped:
+        return True
+    # 目录名多“单位”后缀（与 verified_cover_alias 同方向：目录名更长）。
+    if org_stripped == cover_stripped + "单位" or org == cover + "单位":
+        return True
+    # 其余一律视为不一致：前缀更长的是下属单位，非前缀的是不同名称。
+    return False
 
 
 def resolve_material_scope(*, evidence: tuple[Evidence, ...],
@@ -45,6 +80,8 @@ def resolve_material_scope(*, evidence: tuple[Evidence, ...],
                            human: HumanDecision | None = None,
                            archive_scope: Scope | None = None,
                            selected_level: str | None = None,
+                           cover_name: str | None = None,
+                           selected_org_name: str | None = None,
                            required_categories: tuple[str,...] = ('heading','table_note')) -> ScopeResolution:
     """按 v3 裁决表处理已合格证据，不从文件名、金额范围或多数票推断。
 
@@ -53,6 +90,10 @@ def resolve_material_scope(*, evidence: tuple[Evidence, ...],
     声明等）> 依据不足。层级为 city/district/government/unknown、组织查不到或
     未选择时不使用所选层级，原路径不变；它不宣称"身份已核实"，只是检查基准，
     因此同时可作为 cover_independent_scope 用来核对封面。
+
+    封面主体一致性（``cover_name`` × ``selected_org_name``）：两者都能识别且
+    不一致（下属单位或另一名称）时，不使用所选层级、走原路径，并在结果中记
+    ``archive_subject_mismatch``；任一方识别不到时维持现行为，仍使用所选层级。
     """
     if human and human.value not in ('unit', 'department', 'unknown'):
         raise ValueError('无效的写法决定')
@@ -75,26 +116,36 @@ def resolve_material_scope(*, evidence: tuple[Evidence, ...],
     effective_body = body if template_qualified else ()
     declarations = {e.scope for e in valid if e.kind == 'declaration'}
     body_scopes = {e.scope for e in effective_body}
+    subject_mismatch = False
+    use_selected = False
     if human:
         if human.value == 'unknown':
             status, value, source, reason = 'insufficient', None, 'human', 'human_unknown'
         else:
             status, value, source, reason = 'confirmed', human.value, 'human', 'human_decision'
     elif selected_level:
-        status, value, source, reason = 'confirmed', selected_level, 'archive', 'upload_selection_level'
-    elif len(declarations) > 1 or len(body_scopes) > 1:
-        status, value, source, reason = 'conflict', None, 'unresolved', 'conflicting_evidence'
-    elif declarations and body_scopes and declarations != body_scopes:
-        status, value, source, reason = 'conflict', None, 'unresolved', 'declaration_body_conflict'
-    elif declarations:
-        status, value, source, reason = 'confirmed', next(iter(declarations)), 'declaration', 'explicit_declaration'
-    elif template_qualified and observed in ('unit', 'department'):
-        if archive_scope and archive_scope != observed:
-            status, value, source, reason = 'conflict', None, 'unresolved', 'archive_conflict'
+        # 封面主体与所选组织不一致（下属单位或另一名称）时不用所选层级，
+        # 记 archive_subject_mismatch 并落到下方原路径继续裁决。
+        if cover_matches_selected_org(cover_name, selected_org_name) is False:
+            subject_mismatch = True
         else:
-            status, value, source, reason = 'confirmed', observed, 'template', 'qualified_template'
-    else:
-        status, value, source, reason = 'insufficient', None, 'unresolved', 'insufficient_evidence'
+            use_selected = True
+    if use_selected:
+        status, value, source, reason = 'confirmed', selected_level, 'archive', 'upload_selection_level'
+    elif not human:
+        if len(declarations) > 1 or len(body_scopes) > 1:
+            status, value, source, reason = 'conflict', None, 'unresolved', 'conflicting_evidence'
+        elif declarations and body_scopes and declarations != body_scopes:
+            status, value, source, reason = 'conflict', None, 'unresolved', 'declaration_body_conflict'
+        elif declarations:
+            status, value, source, reason = 'confirmed', next(iter(declarations)), 'declaration', 'explicit_declaration'
+        elif template_qualified and observed in ('unit', 'department'):
+            if archive_scope and archive_scope != observed:
+                status, value, source, reason = 'conflict', None, 'unresolved', 'archive_conflict'
+            else:
+                status, value, source, reason = 'confirmed', observed, 'template', 'qualified_template'
+        else:
+            status, value, source, reason = 'insufficient', None, 'unresolved', 'insufficient_evidence'
     independent = None
     if status == 'confirmed':
         if source == 'human' and human and human.cover_independent:
@@ -106,7 +157,7 @@ def resolve_material_scope(*, evidence: tuple[Evidence, ...],
         elif source == 'declaration' and ((template_qualified and observed == value) or any(e.kind == 'declaration' and e.page > 1 and e.scope == value for e in valid)):
             independent = value
     return ScopeResolution(observed, status, value, source, reason, independent, valid,
-                           human.decision_id if human else None)
+                           human.decision_id if human else None, subject_mismatch)
 
 
 # ---------------------------------------------------------------------------

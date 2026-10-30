@@ -329,7 +329,11 @@ class CMM018_ScopeTerminology(Rule):
                     ))
                     break
         if not scope and _uses_writing_resolution(doc):
-            raise RuleDeferred(self.code, detail="写法口径未确认；主体用语子项未完成", partial_issues=issues)
+            detail = "写法口径未确认；主体用语子项未完成"
+            resolution = getattr(getattr(doc, "document_profile", None), "writing_scope", {}) or {}
+            if resolution.get("archive_subject_mismatch"):
+                detail += "；封面主体与所选组织不一致，请核对归档"
+            raise RuleDeferred(self.code, detail=detail, partial_issues=issues)
         if not scope and not issues:
             raise RuleNotApplicable(self.code, detail="未能从目录、正文或文件名确定部门/单位口径")
         return issues
@@ -445,7 +449,10 @@ class CMM019_CoverElements(Rule):
         if _uses_writing_resolution(doc) and not scope:
             incomplete.append("封面文种缺少独立依据")
         if incomplete:
-            raise RuleDeferred(self.code, detail="；".join(incomplete), partial_issues=issues, unresolved_reasons=incomplete)
+            detail = "；".join(incomplete)
+            if resolution.get("archive_subject_mismatch"):
+                detail += "；封面主体与所选组织不一致，请核对归档"
+            raise RuleDeferred(self.code, detail=detail, partial_issues=issues, unresolved_reasons=incomplete)
         return issues
 
 

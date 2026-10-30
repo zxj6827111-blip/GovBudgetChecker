@@ -97,11 +97,13 @@ def native_spans(pages):
     return [{'page':p,'start':0,'end':len(t),'source_method':'native_text'} for p,t in enumerate(pages,1)]
 
 
-def archive_resolution(pages,level='unit'):
+def archive_resolution(pages,level='unit',cover=None,org=None):
     result=asdict(resolve_material_scope(evidence=collect(pages,source_spans=native_spans(pages)),
-                                         template_qualified=False,selected_level=level))
+                                         template_qualified=False,selected_level=level,
+                                         cover_name=cover,selected_org_name=org))
     result['snapshot']={'available':False,'reason':'模板能力关闭'}
-    result['archive_basis']=dict(ARCHIVE_BASIS, level=level)
+    result['archive_basis']=dict(ARCHIVE_BASIS, level=level,
+                                 organization_name=org or ARCHIVE_BASIS['organization_name'])
     result['domain']='final'
     return result
 
@@ -219,3 +221,43 @@ def test_load_records_archive_basis_and_confirms_selected_level():
     # 原路径不受影响：封面声明仍按 declaration 裁决。
     result_decl=asyncio.run(load('job-x','hash-x',profile,pages,'city',archive_basis=city_basis))
     assert result_decl['source']=='declaration' and result_decl['value']=='unit'
+
+
+def test_load_rejects_selected_level_on_cover_subject_mismatch():
+    # 封面主体是所选组织名加后缀（下属单位）：不用所选层级，记录 archive_subject_mismatch。
+    import asyncio
+    from src.services.material_writing import load
+    from src.schemas.document_profile import DocumentProfile,ProfileField
+    profile=DocumentProfile(report_kind=ProfileField(value='final'))
+    pages=['上海市测试中心执法总队2024 年度决算',
+           '2024 年度部门决算表\n本表反映部门本年度收入。',
+           '2024 年度部门决算情况说明']
+    dept_basis=dict(ARCHIVE_BASIS,level='department')
+    mismatch=asyncio.run(load('job-x','hash-x',profile,pages,'department',
+                              archive_basis=dept_basis,cover_name='上海市测试中心执法总队'))
+    assert mismatch['status']=='insufficient' and mismatch['source']=='unresolved'
+    assert mismatch['archive_subject_mismatch'] is True
+    assert mismatch['cover_independent_scope'] is None
+    # 封面主体一致（含允许差异）时照常使用所选层级。
+    matched=asyncio.run(load('job-x','hash-x',profile,pages,'department',
+                             archive_basis=dept_basis,cover_name='附件1上海市测试中心'))
+    assert matched['source']=='archive' and matched['value']=='department'
+    assert matched['archive_subject_mismatch'] is False
+
+
+def test_rules_report_subject_mismatch_in_deferred_reason():
+    from src.engine.rule_outcome import RuleDeferred
+    # 封面主体不一致 → 写法基准回到未完成；CMM-018/019 的未完成原因附核对归档提示。
+    pages=['上海市测试中心执法总队2024 年度决算',
+           '2024 年度部门决算表\n本表反映部门本年度收入。',
+           '2024 年度部门决算情况说明']
+    res=archive_resolution(pages,level='department',cover='上海市测试中心执法总队',
+                           org='上海市测试中心')
+    assert res['archive_subject_mismatch'] is True and res['status']=='insufficient'
+    doc=document(pages,res)
+    with pytest.raises(RuleDeferred) as caught:
+        CMM019_CoverElements().apply(doc)
+    assert '封面主体与所选组织不一致' in caught.value.detail
+    with pytest.raises(RuleDeferred) as caught:
+        CMM018_ScopeTerminology().apply(doc)
+    assert '封面主体与所选组织不一致' in caught.value.detail
