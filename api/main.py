@@ -1332,6 +1332,11 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             except:
                 pass
 
+        # 阶段 0：分析开始时冻结“上传所选组织”依据（与 resolve_organization_level
+        # 同一来源），检查主体、金额范围与写法裁决全程消费这一份冻结值；
+        # 重新分析取当时的当前选择，已出结果引用冻结副本。
+        selected_org_basis = runtime.resolve_organization_basis(organization_id)
+
         # 检查是否启用双模式。
         # 必须走真实 Settings 接口（is_dual_mode_enabled 读 config/app.yaml 的
         # dual_mode.enabled）；此前用 "dual_mode.enabled" 点号风格调用
@@ -1551,7 +1556,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         check_subject = resolve_check_subject(
             organization_id=organization_id,
             organization_name=organization_name,
-            organization_level=runtime.resolve_organization_level(organization_id),
+            organization_level=selected_org_basis["level"],
             cover_name=operand_profile.organization_name.value,
             cover_conflicted="organization_name" in identity_conflicts,
             subject_level=operand_profile.subject_level.value,
@@ -1610,7 +1615,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                 fact_context_obj = build_fact_context_from_artifact(
                     parse_artifact_obj,
                     org_name=check_subject_name,
-                    org_level=runtime.resolve_organization_level(organization_id),
+                    org_level=selected_org_basis["level"],
                     fiscal_year=fiscal_year or report_year,
                     report_kind=report_kind,
                     doc_type=doc_type,
@@ -1673,7 +1678,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                     fact_context_obj = build_fact_context_from_artifact(
                         parse_artifact_obj,
                         org_name=check_subject_name,
-                        org_level=runtime.resolve_organization_level(organization_id),
+                        org_level=selected_org_basis["level"],
                         fiscal_year=fiscal_year or report_year,
                         report_kind=report_kind,
                         doc_type=doc_type,
@@ -1831,7 +1836,8 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             from src.services.material_writing import load as load_writing
             document_profile.writing_scope = await load_writing(job_dir.name,
                 parse_artifact_obj.source_file_hash if parse_artifact_obj else hashlib.sha256(pdf_path.read_bytes()).hexdigest(),
-                document_profile, profile_page_texts, runtime.resolve_organization_level(organization_id),
+                document_profile, profile_page_texts,
+                archive_scope=selected_org_basis["level"], archive_basis=selected_org_basis,
                 excluded_pages=(), source_spans=writing_source_spans, frozen_bindings=frozen_template_bindings)
         if document_profile.kind in {"budget", "final"}:
             report_kind = document_profile.kind
@@ -2436,7 +2442,9 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                 'package_id':snapshot.get('package_id'),'config_hash':snapshot.get('effective_config_sha256') or snapshot.get('content_sha256'),
                 'binding_revision':snapshot.get('revision'),'target_year':snapshot.get('target_year'),
                 'capability_scope':snapshot.get('capability_scope'),'algorithm':resolution.get('algorithm'),
-                'human_decision_id':resolution.get('human_decision_id'),'decision_revision':resolution.get('decision_revision')}}
+                'human_decision_id':resolution.get('human_decision_id'),'decision_revision':resolution.get('decision_revision'),
+                # 阶段 0：冻结的“上传所选组织”依据；已包含在 writing_processing_identity 内。
+                'archive':resolution.get('archive_basis')}}
         result["meta"]["check_subject"] = check_subject
         result["meta"]["structure_view"] = structure_view
         logger.info(
