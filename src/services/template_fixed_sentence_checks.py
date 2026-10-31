@@ -2,6 +2,12 @@
 
 模板固定语句试运行检查（2025 决算模板对照最小试运行闭环，专用模块）。
 
+**调用边界（2026-10-31 复审后再次确认）**：本模块只由试运行 harness
+（``scripts/phase1_prep/run_template_trial.py``）调用；不从 api/ 导入、不在
+正式规则注册表注册。**发布模板或打开 GBC_TEMPLATE_SCOPE 线上开关只会启用
+material_writing / template_anchor_checks 等已有生产消费者，不会自动把本模块
+接入上传主链**；本模块的判定也不会出现在任何正式审校报告里。
+
 本模块只消费试运行导出包 config 里的 ``trial_fixed_sentences`` 候选条目：
 这些条目来自 uploads/.templates 两份 2025 决算模板 extracted.txt，状态为
 "候选（待人工确认）"，不冒充已发布标准，也不写入义务账本或正式规则清单。
@@ -12,27 +18,50 @@
 - ``doc.document_profile.writing_scope``：material_writing.load 的统一裁决，
   其中 ``snapshot.available`` 须为真，``snapshot.content.config.trial_fixed_sentences``
   为候选条目列表；
+- ``doc.document_profile.organization_name``：机构名槽位来源，``source`` 为
+  filename 时视为不可用（文件名不可作已核实机构名）；
+- ``doc.fact_context``（可选）：合格事实快照；条目配置 ``fact_indicators``
+  且事实可用时金额判定优先走事实，否则回退章节文本模式；
 - ``doc.writing_page_texts``（优先）或 ``doc.page_texts``：材料逐页原生文本。
 
-每条候选固定语句的判定顺序（与试运行方案一致）：
+判定流（v2，按 outputs/tpl_trial_review_20261031/review.json F1 修复重写）：
 
-1. 资格：模板侧记录（来源哈希/行号/原文/核对核心）齐全，否则"未检查"；
+1. 模板侧资格：来源哈希/行号/原文/核对核心齐全，否则"未检查"；
 2. 层级：``writing_scope`` 裁决与条目 scope 不匹配 → "不适用"；
    裁决未确认且 scope='all' 仍可运行（固定语句与写法无关）；
-3. 上级章节（如"第三部分"）在正文（跳目录页）未定位 → "未检查"并写明原因；
-4. 正文精确出现核对尾串（仅允许机构名槽位差异）→ "正常"；
-5. 找到近似行（核对核心在页内但尾串被改，或"无"与核心关键词近距离同现
-   而与原文不一致）→ "命中/改动候选"（规划 CMM-028，low）；
-6. 完全找不到但条件语境存在（三公/国资章节可定位）→ 结合实际支出叙述
-   判"命中/缺失候选"（规划 CMM-029，medium）或信号混叠时"待复核"；
-   条件语境不存在（材料有实际支出叙述或章节缺失）→ "不适用"。
+3. 先定位目标章节：条目配置的所属章节锚（``section_anchor``，缺省回退
+   ``context_heading``）用与 template_anchor_checks 同源的正文标题定位
+   （扁平流含折行容忍），并复用其目录区排除（toc_region_pages，目录续页
+   条目不算正文）；章节未定位或多处出现 → "未检查（上级章节未定位）"；
+   材料文本层不足 → "未检查"；
+4. 章节内条件判定（仅用章节片段文本，禁止跨章节）：
+   - 出现"无……支出"标准空表表述（核对核心命中）→ 条件成立（空表成立）；
+   - 章节内金额全部为 0.00/0 万元 → 条件成立（零值成立；0.00 不能当作
+     有实际支出）；
+   - 存在非零金额（如 10.00万元）→ 条件不成立 → "不适用"；
+   - 标准空表表述与非零金额同时出现（信号混叠）→ 条件未知 → "待复核"；
+   - 两者都取不到（如"本节内容待核实"）→ 条件未知 → "未检查"，绝不报缺失。
+   所用依据写入 ``condition_basis``（合格事实 / 章节文本模式）；
+5. 句比对限定在章节片段内（第四部分等引用/示例中的相同语句不算）：
+   条件成立后，槽位实例化句（模板句按已审核槽位替换机构名/目标年度，机构名
+   取 profile.organization_name 且 source 非 filename，取不到 → "未检查"）
+   精确出现 → "正常"；出现近似（去空白后不一致，如"支出安排。"）→
+   "命中/改动候选"（规划 CMM-028，low，附双侧证据）；完全缺失 →
+   "命中/缺失候选"（规划 CMM-029，medium）。不得统一 low。
+
+槽位说明（试运行判据）：候选条目的机构名前缀（核对尾串年度令牌之前的文本）
+与报告年度令牌即两处已审核槽位（与 annual_templates.reviewed_slot_changes 的
+organization_name/report_year 两类一致）；实例化只替换这两处，金额、编码与
+其他文字保持模板原文。
 """
 from __future__ import annotations
 
 import re
+import unicodedata
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.engine.checklist_support import is_toc_page
+from src.services.template_anchor_checks import toc_region_pages
 
 # ---------------------------------------------------------------------------
 # 中文正则集中区（试运行固定算法；候选条目不能注入任意正则，只能引用此处
@@ -46,34 +75,68 @@ _PROXIMITY_GUARDS: Dict[str, re.Pattern[str]] = {
     "state_capital": re.compile(r"无[^，。；：！？\n]{0,8}国有资本"),
 }
 
-#: 实际支出叙述提示：金额陈述（区分"空表说明语境"与真实支出）。
-_AMOUNT_STATEMENT_RE = re.compile(r"\d+(?:\.\d+)?\s*万元")
+#: 金额陈述（万元口径；含千分位逗号，与 AGENTS.md R001 换算前识别同一形态）。
+_AMOUNT_RE = re.compile(r"\d[\d,，]*(?:\.\d+)?\s*万元")
 
-#: 上下文章节标题前缀（决算第三部分：决算情况说明）。
+#: 报告年度槽位令牌（固定语句核对尾串的起点）。
+_YEAR_TOKEN_RE = re.compile(r"20\d{2}")
+
+#: 章节标题起始（第X部分 / 中文或数字顿号小节）。用于章节边界探测。
+_SECTION_HEAD_RE = re.compile(r"第([一二三四五六七八九十百\d]+)部分|([一二三四五六七八九十百\d]+)、")
+
+#: 中文序号数值表（决算说明小节序号实际范围 一~九十九）。
+_CN_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+              "六": 6, "七": 7, "八": 8, "九": 9}
+
+#: 上下文章节标题前缀（决算第三部分：决算情况说明；仅作模板侧记录展示）。
 _PART_HEADING_PREFIX = "第三部分"
 
 #: 候选条目允许的层级取值（与锚点 scope 同表）。
 _ALLOWED_SCOPES = ("all", "unit", "department")
 
+#: 条件状态取值（新增字段 condition_state 的固定枚举）。
+CONDITION_STATES = ("空表成立", "零值成立", "条件不成立", "条件未知")
+
+#: 主链接入状态常量：本模块与试运行锚点均"尚未接入主链"。
+CHAIN_STATUS = "尚未接入主链（仅试运行 harness 调用；发布模板或开线上开关也不会自动接入）"
+
+#: 证据片段半径（去空白视图上的字符数，与 v1 报告可读性一致）。
+_SNIPPET_RADIUS = 16
+
 
 def _flat(text: str) -> str:
-    """比较用归一：去全部空白。引号、全半角差异按原文保留，避免过度归一。"""
-    return re.sub(r"\s+", "", str(text or ""))
+    """比较用归一（v2）：NFKC 全半角折叠 + 去全部空白。
+
+    全半角按 AGENTS.md 通用归一规则折叠（机构名槽位实测：封面画像产出
+    “上海市统计局(本级)”半角括号，正文写“（本级）”全角——不折叠会把经批准
+    的槽位放行误判成改动候选）。弯引号“”、句读不受 NFKC 影响，仍按原文
+    参与近似比对，改动候选（如“支出安排。”）照常检出。
+    """
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(text or "")))
 
 
-def _iter_body(pages: List[str]):
-    """逐页产出 (1 起始页码, 原文, 去空白视图)；目录页跳过（与 iter_pages 同纪律）。"""
-    for index, text in enumerate(pages, start=1):
-        if not str(text or "").strip() or is_toc_page(text):
-            continue
-        yield index, str(text), _flat(text)
-
-
-def _snippet(flat_page: str, start: int, end: int, radius: int = 16) -> str:
+def _snippet(flat_text: str, start: int, end: int, radius: int = _SNIPPET_RADIUS) -> str:
     """在去空白视图上截取命中片段及少量上下文，供报告阅读定位。"""
     left = max(0, start - radius)
-    right = min(len(flat_page), end + radius)
-    return flat_page[left:right]
+    right = min(len(flat_text), end + radius)
+    return flat_text[left:right]
+
+
+def _cn_to_int(text: str) -> Optional[int]:
+    """中文/阿拉伯序号转整数（一~九十九；解析失败返回 None，不作后继判定）。"""
+    text = str(text or "").strip()
+    if text.isdigit():
+        return int(text)
+    if "十" in text:
+        left, _, right = text.partition("十")
+        tens = _CN_DIGITS.get(left, 1) if left else 1
+        ones = _CN_DIGITS.get(right, 0) if right else 0
+        if left and left not in _CN_DIGITS or right and right not in _CN_DIGITS:
+            return None
+        return tens * 10 + ones
+    if len(text) == 1 and text in _CN_DIGITS:
+        return _CN_DIGITS[text]
+    return None
 
 
 def _entry_qualified(entry: Any) -> Tuple[bool, str]:
@@ -102,100 +165,217 @@ def _entry_qualified(entry: Any) -> Tuple[bool, str]:
     tail = _flat(entry.get("tail"))
     if _flat(entry.get("check_core")) not in tail:
         return False, "核对核心不在核对尾串内，条目内部不一致"
+    if not str(entry.get("section_anchor") or entry.get("context_heading") or "").strip():
+        return False, "缺少所属章节锚（section_anchor/context_heading）"
     return True, ""
 
 
-def _find_exact(pages: List[str], tail: str) -> Optional[Dict[str, Any]]:
-    """正文精确出现核对尾串（仅机构名槽位差异）→ 正常。"""
-    for page, _raw, page_flat in _iter_body(pages):
-        start = page_flat.find(tail)
-        if start >= 0:
-            return {"page": page, "text": _snippet(page_flat, start, start + len(tail))}
-    return None
+# ---------------------------------------------------------------------------
+# 章节定位：正文扁平流 + 目录区排除 + 折行容忍（与 template_anchor_checks 同源）。
+# ---------------------------------------------------------------------------
 
 
-def _find_near_miss(pages: List[str], core: str, tail: str, guard: re.Pattern[str]) -> List[Dict[str, Any]]:
-    """近似行两种形态（试运行判据，注明重叠范围）：
+def _body_stream(pages: List[str], toc_pages: set) -> Tuple[str, List[Tuple[int, int]]]:
+    """正文扁平流：跳过目录区页与空页，逐字符 NFKC 折叠拼接并记录 (页码, 页内偏移)。
 
-    a) 核对核心整段在去空白页内、但核对尾串不再成立（核心片段外围被改，
-       如"……财政拨款支出安排。"）；
-    b) "无"与核心关键词近距离同现的行，去空白后与原文尾串不一致
-       （核心片段内部被改，如"和"改"及"）。
+    折行标题与跨页句子在流上连续；命中位置经映射回到页码，供证据定位。
+    全半角按 _flat 同一规则折叠（机构名槽位实测：profile 产出半角括号、
+    正文原文是全角括号，不折叠会把经批准的槽位放行误判成改动候选）。
     """
-    hits: List[Dict[str, Any]] = []
-    for page, raw, page_flat in _iter_body(pages):
-        if tail in page_flat:
+    chars: List[str] = []
+    positions: List[Tuple[int, int]] = []
+    for index, text in enumerate(pages, start=1):
+        if index in toc_pages:
             continue
-        start = page_flat.find(core)
-        if start >= 0:
-            hits.append({"page": page, "text": _snippet(page_flat, start, start + len(core)),
-                         "form": "核心片段外围被改"})
-            continue
-        for line in raw.splitlines():
-            flat_line = _flat(line)
-            if not flat_line or flat_line == _flat(tail):
+        for offset, char in enumerate(str(text or "")):
+            if char.isspace():
                 continue
-            if guard.search(flat_line):
-                hits.append({"page": page, "text": _snippet(flat_line, 0, min(len(flat_line), 48)),
-                             "form": "无与核心关键词近距离同现"})
-                break
-    return hits
+            for folded in unicodedata.normalize("NFKC", char):
+                if folded.isspace():
+                    continue
+                chars.append(folded)
+                positions.append((index, offset))
+    return "".join(chars), positions
 
 
-def _last_page_with(pages: List[str], needle: str) -> Optional[int]:
-    """取（跳目录页后）包含归一文本的最后一个正文页。
+def _parse_section_number(heading: str) -> Tuple[Optional[int], Optional[int]]:
+    """解析章节锚的 (小节序号, 部分序号)；"九、…" → (9, None)。"""
+    head = _flat(heading)[:12]
+    match = _SECTION_HEAD_RE.match(head)
+    if not match:
+        return None, None
+    item = _cn_to_int(match.group(2)) if match.group(2) else None
+    part = _cn_to_int(match.group(1)) if match.group(1) else None
+    return item, part
 
-    目录续页（样本第 3 页）不被 is_toc_page 识别，标题先出现在目录里；
-    正文位置总在目录之后，故取最后一次出现作为条件语境页（试运行判据）。
+
+def _section_end(stream: str, content_start: int, item_number: Optional[int],
+                 part_number: Optional[int]) -> int:
+    """章节片段终点：内容起点之后第一个后继小节/后继部分标题处；找不到到流尾。
+
+    中文小节锚只把"更大中文序号小节"当后继（"10、"式阿拉伯子目不打断章节）；
+    "第X部分"以更大部分序号为界。探测不到边界时章节延伸到材料末尾（试运行
+    判据，宁大勿小，不据此放宽条件判定）。
     """
-    found: Optional[int] = None
-    for page, _raw, page_flat in _iter_body(pages):
-        if needle in page_flat:
-            found = page
-    return found
+    for match in _SECTION_HEAD_RE.finditer(stream, content_start):
+        part_text, item_text = match.group(1), match.group(2)
+        if part_text:
+            part = _cn_to_int(part_text)
+            if part is not None and part_number is not None and part > part_number:
+                return match.start()
+            if part is not None and part_number is None:
+                return match.start()
+        elif item_text:
+            item = _cn_to_int(item_text)
+            if item is not None and item_number is not None and item > item_number:
+                return match.start()
+            if item is not None and item_number is None:
+                return match.start()
+    return len(stream)
 
 
-def _locate_part(pages: List[str], prefix: str) -> Optional[int]:
-    """定位上级部分标题（跳目录页）；找不到返回 None。
+def _locate_section_span(stream: str, positions: List[Tuple[int, int]], heading_flat: str,
+                         item_number: Optional[int], part_number: Optional[int]
+                         ) -> Tuple[Optional[Tuple[int, int, List[int]]], str]:
+    """定位目标章节唯一正文出现；返回 ((内容起点, 终点, 页码列表), 失败原因)。"""
+    starts = [match.start() for match in re.finditer(re.escape(heading_flat), stream)]
+    if not starts:
+        return None, "未在正文（跳目录区）定位到所属章节标题"
+    if len(starts) > 1:
+        return None, "所属章节标题在正文出现多处（" + str(len(starts)) + "处），无法唯一归位"
+    content_start = starts[0] + len(heading_flat)
+    seg_end = _section_end(stream, content_start, item_number, part_number)
+    upper = min(seg_end, len(positions))
+    lower = min(content_start, upper)
+    seg_pages = sorted({positions[i][0] for i in range(lower, upper)}) if upper > lower else []
+    return (content_start, seg_end, seg_pages), ""
 
-    标题可能折行或与正文同行，去空白视图上包含前缀即视为定位到（试运行
-    判据；目录页已跳过，正文引用场景极少，人工复核兜底）。
+
+# ---------------------------------------------------------------------------
+# 条件判定（章节片段内；金额判定优先合格事实，否则章节文本模式）。
+# ---------------------------------------------------------------------------
+
+
+def _amounts_from_text(segment_flat: str) -> List[Decimal]:
+    values: List[Decimal] = []
+    for match in _AMOUNT_RE.finditer(segment_flat):
+        raw = match.group(0)[: match.group(0).find("万元")].replace(",", "").replace("，", "")
+        try:
+            values.append(Decimal(raw))
+        except InvalidOperation:
+            continue
+    return values
+
+
+def _amounts_from_facts(doc: Any, entry: Dict[str, Any]) -> Optional[List[Decimal]]:
+    """条目配置 fact_indicators 且 fact_context 全部可解析时返回金额列表；否则 None。
+
+    任一指标取不到确定操作数（best_value 返回 None）即视为事实不可裁决，
+    回退章节文本模式，不把 None 当 0。
     """
-    return _last_page_with(pages, _flat(prefix))
-
-
-def _locate_section(pages: List[str], heading: str) -> Optional[Dict[str, Any]]:
-    """按标题原文（去空白）定位条件语境章节页（取最后一次出现，见 _last_page_with）。"""
-    needle = _flat(heading)
-    page = _last_page_with(pages, needle)
-    if page is None:
+    indicators = entry.get("fact_indicators") or []
+    if not indicators:
         return None
-    page_flat = _flat(pages[page - 1])
-    start = page_flat.find(needle)
-    return {"page": page, "text": _snippet(page_flat, start, start + len(needle))}
+    context = getattr(doc, "fact_context", None)
+    if context is None:
+        return None
+    values: List[Decimal] = []
+    for indicator in indicators:
+        value, _fact = context.best_value(str(indicator))
+        if value is None:
+            return None
+        values.append(value)
+    return values
 
 
-def _spending_signals(pages: List[str], anchor_page: int, context_token: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """在语境章节页及邻近页（±1）内分检"实际支出叙述"与"无字样"信号。
+def _evaluate_condition(segment_flat: str, core: str, doc: Any, entry: Dict[str, Any]
+                        ) -> Tuple[str, str]:
+    """章节内条件判定；返回 (condition_state, condition_basis)。
 
-    返回 (支出信号, 无字样信号)。两者同时存在时判据混叠，按试运行纪律
-    只能标"待复核"，不冒充确定结论。
+    优先级（review F1 修复）：标准空表表述与非零金额同现属信号混叠 → 条件未知；
+    其余按 空表表述 > 全零金额 > 非零金额 > 取不到 的顺序裁决。
     """
-    spending: List[Dict[str, Any]] = []
-    negatives: List[Dict[str, Any]] = []
-    wanted = {anchor_page - 1, anchor_page, anchor_page + 1}
-    for page, raw, _page_flat in _iter_body(pages):
-        if page not in wanted:
-            continue
-        for line in raw.splitlines():
-            flat_line = _flat(line)
-            if context_token not in flat_line:
-                continue
-            if _AMOUNT_STATEMENT_RE.search(flat_line) and "无" not in flat_line:
-                spending.append({"page": page, "text": _snippet(flat_line, 0, min(len(flat_line), 48))})
-            elif "无" in flat_line:
-                negatives.append({"page": page, "text": _snippet(flat_line, 0, min(len(flat_line), 48))})
-    return spending, negatives
+    core_present = core in segment_flat
+    fact_values = _amounts_from_facts(doc, entry)
+    if fact_values is not None:
+        mode = "合格事实（doc.fact_context）"
+        amounts = fact_values
+    else:
+        mode = "章节文本模式（万元金额陈述）"
+        amounts = _amounts_from_text(segment_flat)
+    nonzero = [value for value in amounts if value != 0]
+    zero_count = len(amounts) - len(nonzero)
+    if core_present and nonzero:
+        return "条件未知", (
+            "信号混叠：章节内同时出现标准空表表述与非零金额叙述（" + mode +
+            "，非零金额 " + str(len(nonzero)) + " 笔）；条件无法裁决，待人工复核")
+    if core_present:
+        return "空表成立", ("章节内出现与核对核心同源的“无……支出”标准空表表述；" +
+                            mode + "，零值金额 " + str(zero_count) + " 笔")
+    if amounts and not nonzero:
+        return "零值成立", ("章节内金额全部为 0.00/0 万元（0.00 不当作有实际支出）；" +
+                            mode + "，零值金额 " + str(zero_count) + " 笔")
+    if nonzero:
+        return "条件不成立", ("章节内存在非零金额叙述（" + str(len(nonzero)) + " 笔）；" + mode)
+    return "条件未知", ("章节内既无标准空表表述也无金额陈述（如“本节内容待核实”）；" +
+                        mode + "，条件事实不足")
+
+
+# ---------------------------------------------------------------------------
+# 句比对（限定章节片段；槽位实例化 + 近似行两种形态）。
+# ---------------------------------------------------------------------------
+
+
+def _instantiated_tail(entry: Dict[str, Any], target_year: Any) -> str:
+    """核对尾串按报告年度槽位实例化（仅替换第一处年度令牌）。"""
+    tail = _flat(entry["tail"])
+    match = _YEAR_TOKEN_RE.search(tail)
+    if isinstance(target_year, int) and match:
+        tail = tail[: match.start()] + str(target_year) + tail[match.end():]
+    return tail
+
+
+def _organization_name(profile: Any) -> Optional[str]:
+    """机构名槽位：profile.organization_name 且 source 非 filename；取不到返回 None。"""
+    field = getattr(profile, "organization_name", None)
+    value = getattr(field, "value", None)
+    if getattr(field, "source", None) == "filename":
+        return None
+    name = str(value or "").strip()
+    return name or None
+
+
+def _sentence_outcome(segment_flat: str, positions: List[Tuple[int, int]], seg_start: int,
+                      seg_end: int, entry: Dict[str, Any], org_name: str, tail: str,
+                      guard: re.Pattern[str]) -> Dict[str, Any]:
+    """章节片段内的句比对；返回材料侧证据与判定要素（不直接写 verdict）。"""
+    sentence = _flat(org_name) + tail
+    exact = segment_flat.find(sentence)
+    core = _flat(entry["check_core"])
+    if exact >= 0:
+        index = min(seg_start + exact, len(positions) - 1)
+        return {"state": "精确出现", "page": positions[index][0],
+                "text": _snippet(segment_flat, exact, exact + len(sentence)),
+                "expected": sentence, "actual": sentence, "overlaps": []}
+    overlaps: List[Dict[str, Any]] = []
+    core_at = segment_flat.find(core)
+    if core_at >= 0:
+        index = min(seg_start + core_at, len(positions) - 1)
+        overlaps.append({"page": positions[index][0], "form": "核心片段外围被改",
+                         "text": _snippet(segment_flat, core_at, core_at + len(core))})
+    guard_match = guard.search(segment_flat)
+    if guard_match:
+        index = min(seg_start + guard_match.start(), len(positions) - 1)
+        overlaps.append({"page": positions[index][0], "form": "无与核心关键词近距离同现",
+                         "text": _snippet(segment_flat, guard_match.start(), guard_match.end())})
+    if overlaps:
+        return {"state": "近似出现", "page": overlaps[0]["page"], "text": overlaps[0]["text"],
+                "expected": sentence,
+                "actual": overlaps[0]["text"], "overlaps": overlaps}
+    index = min(seg_start, len(positions) - 1)
+    return {"state": "未出现", "page": positions[index][0],
+            "text": _snippet(segment_flat, 0, min(len(segment_flat), 2 * _SNIPPET_RADIUS)),
+            "expected": sentence, "actual": "章节片段内未找到实例化句", "overlaps": []}
 
 
 def trial_fixed_sentence_findings(doc: Any) -> List[Dict[str, Any]]:
@@ -203,8 +383,12 @@ def trial_fixed_sentence_findings(doc: Any) -> List[Dict[str, Any]]:
     resolution = getattr(getattr(doc, "document_profile", None), "writing_scope", {}) or {}
     snapshot = resolution.get("snapshot") or {}
     config = snapshot.get("effective_config") or (snapshot.get("content") or {}).get("config") or {}
-    pages = list(getattr(doc, "writing_page_texts", None) or getattr(doc, "page_texts", None) or [])
+    pages = [str(text or "") for text in
+             (getattr(doc, "writing_page_texts", None) or getattr(doc, "page_texts", None) or [])]
     entries = config.get("trial_fixed_sentences") or []
+    profile = getattr(doc, "document_profile", None)
+    org_name = _organization_name(profile)
+    target_year = snapshot.get("target_year")
 
     findings: List[Dict[str, Any]] = []
     for position, entry in enumerate(entries, start=1):
@@ -214,7 +398,12 @@ def trial_fixed_sentence_findings(doc: Any) -> List[Dict[str, Any]]:
             "id": identifier,
             "rule_scope": "CMM-028(规划)/CMM-029(规划)",
             "trial_only": True,
+            "chain_status": CHAIN_STATUS,
+            "execution_status": "实际执行",
             "condition": entry.get("condition") if isinstance(entry, dict) else None,
+            "condition_state": None,
+            "section_pages": None,
+            "condition_basis": None,
             "template_side": {
                 "source_id": (template_side or {}).get("source_id"),
                 "material_type": (template_side or {}).get("material_type"),
@@ -232,12 +421,14 @@ def trial_fixed_sentence_findings(doc: Any) -> List[Dict[str, Any]]:
         qualified, quality_reason = _entry_qualified(entry)
         if not qualified:
             base["verdict"] = "未检查"
+            base["execution_status"] = "未检查"
             base["reason"] = "模板侧记录不完整，" + quality_reason
             findings.append(base)
             continue
 
         if not snapshot.get("available"):
             base["verdict"] = "未检查"
+            base["execution_status"] = "未检查"
             base["reason"] = "年度模板快照不可用：" + str(snapshot.get("reason") or "")
             findings.append(base)
             continue
@@ -248,6 +439,7 @@ def trial_fixed_sentence_findings(doc: Any) -> List[Dict[str, Any]]:
         if scope != "all":
             if status != "confirmed":
                 base["verdict"] = "未检查"
+                base["execution_status"] = "未检查"
                 base["reason"] = "写法层级未确认（scope=" + str(scope) + "），固定语句层级适用性无法裁决"
                 findings.append(base)
                 continue
@@ -257,74 +449,100 @@ def trial_fixed_sentence_findings(doc: Any) -> List[Dict[str, Any]]:
                 findings.append(base)
                 continue
 
-        core = _flat(entry["check_core"])
-        tail = _flat(entry["tail"])
-        guard = _PROXIMITY_GUARDS[entry["guard"]]
-
-        parent_page = _locate_part(pages, str(entry.get("parent_section") or _PART_HEADING_PREFIX))
-        if parent_page is None:
+        if not any(text.strip() for text in pages):
             base["verdict"] = "未检查"
-            base["reason"] = "上级章节“" + str(entry.get("parent_section") or _PART_HEADING_PREFIX) + "”未在正文（跳目录页）定位，固定语句无法归位"
+            base["execution_status"] = "未检查"
+            base["reason"] = "材料文本层不足（无逐页文本），固定语句无法核验"
             findings.append(base)
             continue
 
-        exact = _find_exact(pages, tail)
-        if exact is not None:
+        # ---- 先定位目标章节（所属章节锚；目录区排除、折行容忍） ----
+        heading = str(entry.get("section_anchor") or entry.get("context_heading") or "")
+        heading_flat = _flat(heading)
+        item_number, part_number = _parse_section_number(heading)
+        parent_flat = _flat(str(entry.get("parent_section") or ""))
+        if part_number is None and parent_flat:
+            _parent_item, part_number = _parse_section_number(parent_flat)
+        stream, positions = _body_stream(pages, toc_region_pages(pages))
+        span, span_error = _locate_section_span(stream, positions, heading_flat,
+                                                item_number, part_number)
+        if span is None:
+            base["verdict"] = "未检查"
+            base["execution_status"] = "未检查"
+            base["reason"] = "上级章节未定位（" + heading + "）：" + span_error + "，固定语句无法归位，不判缺失"
+            findings.append(base)
+            continue
+        seg_start, seg_end, seg_pages = span
+        segment_flat = stream[seg_start:seg_end]
+        base["section_pages"] = seg_pages
+
+        # ---- 章节内条件判定（禁止跨章节） ----
+        core = _flat(entry["check_core"])
+        guard = _PROXIMITY_GUARDS[entry["guard"]]
+        state, basis = _evaluate_condition(segment_flat, core, doc, entry)
+        base["condition_state"] = state
+        base["condition_basis"] = basis
+
+        if state == "条件不成立":
+            base["verdict"] = "不适用"
+            base["material_side"] = {"page": seg_pages[0] if seg_pages else None,
+                                     "text": _snippet(segment_flat, 0, min(len(segment_flat), 2 * _SNIPPET_RADIUS))}
+            base["reason"] = ("材料在“" + heading + "”章节（第" + "、".join(str(p) for p in seg_pages) +
+                              "页）存在非零金额支出叙述，不属于空表说明语境；固定语句缺席符合模板条件。依据：" + basis)
+            findings.append(base)
+            continue
+        if state == "条件未知":
+            mixed = "信号混叠" in basis
+            base["verdict"] = "待复核" if mixed else "未检查"
+            base["execution_status"] = "未检查" if not mixed else "实际执行"
+            base["material_side"] = {"page": seg_pages[0] if seg_pages else None,
+                                     "text": _snippet(segment_flat, 0, min(len(segment_flat), 2 * _SNIPPET_RADIUS))}
+            base["reason"] = ("条件事实不足（" + basis + "）；不能因章节存在就认定应有无支出语句，"
+                              "绝不报缺失，待人工复核")
+            findings.append(base)
+            continue
+
+        # ---- 条件成立：句比对限定在章节片段（机构名槽位先决） ----
+        if not org_name:
+            base["verdict"] = "未检查"
+            base["execution_status"] = "未检查"
+            base["reason"] = ("条件成立（" + state + "）但机构名槽位不可用：profile.organization_name 缺失或"
+                              "source 为 filename，无法实例化模板句，不判缺失")
+            findings.append(base)
+            continue
+
+        tail = _instantiated_tail(entry, target_year)
+        outcome = _sentence_outcome(segment_flat, positions, seg_start, seg_end, entry,
+                                    org_name, tail, guard)
+        base["material_side"] = {"page": outcome["page"], "text": outcome["text"]}
+        base["overlaps"] = outcome["overlaps"]
+        line_note = "模板侧第" + str(template_side["line"]) + "行原文为：" + str(entry["original"])
+        if outcome["state"] == "精确出现":
             base["verdict"] = "正常"
-            base["material_side"] = exact
-            base["reason"] = "核对尾串在正文精确出现（仅机构名槽位与模板不同）；模板侧第" + str(template_side["line"]) + "行"
+            base["reason"] = ("条件成立（" + state + "）且槽位实例化句在所属章节精确出现（机构名取自"
+                              "profile.organization_name，年度按目标报告年度替换）；" + line_note +
+                              "。依据：" + basis)
             findings.append(base)
             continue
-
-        near = _find_near_miss(pages, core, tail, guard)
-        if near:
-            first = near[0]
+        if outcome["state"] == "近似出现":
             base["verdict"] = "命中"
             base["candidate_type"] = "改动候选"
             base["rule_scope"] = "CMM-028(规划)"
             base["severity_suggestion"] = "low"
-            base["material_side"] = {"page": first["page"], "text": first["text"]}
-            base["overlaps"] = [{"page": item["page"], "text": item["text"], "form": item["form"]} for item in near]
-            base["reason"] = ("正文出现与模板固定语句近似但不一致的写法（" + first["form"] +
-                              "）；模板侧第" + str(template_side["line"]) + "行原文为：" + str(entry["original"]) +
-                              "。改动候选为试运行判据，与缺失候选存在重叠范围，待人工复核")
+            base["reason"] = ("条件成立（" + state + "）但章节内出现与实例化句近似而不一致的写法；期望「" +
+                              outcome["expected"] + "」。改动候选为试运行判据，与缺失候选存在重叠范围，" +
+                              line_note + "，待人工复核。依据：" + basis)
             findings.append(base)
             continue
-
-        section = _locate_section(pages, str(entry.get("context_heading") or ""))
-        if section is None:
-            base["verdict"] = "不适用"
-            base["reason"] = "条件语境不存在：条件章节“" + str(entry.get("context_heading") or "") + "”未在正文定位"
-            findings.append(base)
-            continue
-
-        context_token = str(entry.get("context_token") or "")
-        spending, negatives = _spending_signals(pages, section["page"], context_token)
-        if spending and negatives:
-            base["verdict"] = "待复核"
-            base["material_side"] = {"page": section["page"], "text": section["text"]}
-            base["reason"] = ("条件语境页内同时存在实际支出叙述与“无”字样说明，试运行判据无法区分；"
-                              "固定语句未找到。语境章节见第" + str(section["page"]) + "页，待人工复核")
-            findings.append(base)
-            continue
-        if spending:
-            base["verdict"] = "不适用"
-            base["material_side"] = {"page": section["page"], "text": section["text"]}
-            base["reason"] = ("材料在“" + str(entry.get("context_heading") or "") + "”章节（第" + str(section["page"]) +
-                              "页起）存在实际支出叙述，不属于空表说明语境；固定语句缺席符合模板条件")
-            findings.append(base)
-            continue
-
         base["verdict"] = "命中"
         base["candidate_type"] = "缺失候选"
         base["rule_scope"] = "CMM-029(规划)"
         base["severity_suggestion"] = "medium"
-        base["material_side"] = {"page": section["page"], "text": section["text"]}
-        base["reason"] = ("条件语境存在（" + str(entry.get("context_heading") or "") + "，第" + str(section["page"]) +
-                          "页起）但正文未找到模板固定语句；模板侧第" + str(template_side["line"]) + "行原文为：" +
-                          str(entry["original"]) + "。缺失候选为试运行判据，与改动候选存在重叠范围，待人工复核")
+        base["reason"] = ("条件成立（" + state + "）但所属章节片段内未找到模板固定语句；期望「" +
+                          outcome["expected"] + "」。" + line_note +
+                          "。缺失候选为试运行判据，待人工复核。依据：" + basis)
         findings.append(base)
     return findings
 
 
-__all__ = ["trial_fixed_sentence_findings"]
+__all__ = ["trial_fixed_sentence_findings", "CHAIN_STATUS", "CONDITION_STATES"]
