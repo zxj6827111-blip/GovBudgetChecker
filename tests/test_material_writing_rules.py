@@ -206,6 +206,26 @@ def test_wrapped_note_with_footer_number_keeps_manual_review():
     assert all(i.severity!='warn' for i in caught.value.partial_issues)
 
 
+@pytest.mark.parametrize('toc', ['2024年度单位决算情况说明 12',
+                                 '2024年度单位决算情况\n说明 12'],
+                         ids=['single_line', 'wrapped_title'])
+def test_toc_title_wrapping_does_not_change_archive_review(toc):
+    # 审核第四轮（P2，对齐审查方边界用例）：同一目录条目折行与否，
+    # CMM-018/019 都必须是待复核（全面相反成立），不得退回逐条 warn。
+    from src.engine.rule_outcome import RuleOutcomeSignal
+    pages=['上海市测试中心2024年度部门决算', toc,
+           '上海市测试中心2024年度部门决算表\n本表反映部门本年度收入。',
+           '上海市测试中心2024年度部门决算情况说明\n本部门经费情况见相关说明。']
+    doc=archive_document(pages)
+    for rule in (CMM018_ScopeTerminology(), CMM019_CoverElements()):
+        try:
+            issues=rule.apply(doc)
+        except RuleOutcomeSignal as signal:
+            issues=signal.partial_issues
+        assert any(i.severity=='manual_review' for i in issues), (rule.code, toc)
+        assert all(i.severity!='warn' for i in issues), (rule.code, toc)
+
+
 def test_human_decision_keeps_existing_warn_behavior():
     # 有人工写法决定时以人工为准：不做全面相反合并，行为与现状一致。
     pages=CONTRAST_PAGES

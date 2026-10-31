@@ -182,15 +182,16 @@ def _looks_like_toc_page(text: str) -> bool:
     return head.startswith('目录') or '目录' in head[:12]
 
 
-def _toc_style_line(page_text: str, start: int, end: int) -> bool:
-    """证据起始所在物理行是否是目录式行：点线引导，或"标题 + 页码尾巴"。
+def _toc_style_line(page_text: str, start: int, end: int, kind: str | None = None) -> bool:
+    """按证据类别判断目录式标题，避免将正文表注与独立页脚拼接。
 
-    只看起始物理行：collect 在去空白串上匹配，证据可能跨软换行（如无句号
-    表注把下一行页脚页码一起吃进证据）；若按证据终点找行尾，会把正文表注
-    与下一行页脚拼起来误判成目录条目。``end`` 保留在签名里仅为兼容调用方。
+    标题有确定终点：目录标题折行时，须检查完整标题块及末行的页码尾巴。
+    表注/声明可能在去空白匹配时吸收下一行页脚，只检查起始物理行。
     """
     line_start = page_text.rfind('\n', 0, start) + 1
-    line_end = page_text.find('\n', line_start)
+    title_kinds = ('heading', 'budget_financial_table', 'budget_function_table')
+    anchor = end if kind in title_kinds else start
+    line_end = page_text.find('\n', anchor)
     line_end = len(page_text) if line_end < 0 else line_end
     line = page_text[line_start:line_end]
     if _TOC_LEADER_RE.search(line):
@@ -244,7 +245,7 @@ def comprehensive_writing_contrast(*, evidence, selected_scope: str | None,
         if _looks_like_toc_page(text_page):
             result['excluded'].append({**record, 'reason': 'toc_page'})
             continue
-        if _toc_style_line(text_page, item.get('start') or 0, item.get('end') or 0):
+        if _toc_style_line(text_page, item.get('start') or 0, item.get('end') or 0, kind=kind):
             result['excluded'].append({**record, 'reason': 'toc_style_line'})
             continue
         counted.append(item)

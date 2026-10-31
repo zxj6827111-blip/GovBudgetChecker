@@ -279,6 +279,25 @@ def test_wrapped_table_note_with_footer_page_number_still_counts():
     assert summary['comprehensive_contrast'] is True
 
 
+@pytest.mark.parametrize('toc', ['2024年度单位决算情况说明 12',
+                                 '2024年度单位决算情况\n说明 12'],
+                         ids=['single_line', 'wrapped_title'])
+def test_wrapped_toc_title_still_excluded(toc):
+    # 审核第四轮（P2）：目录标题折行、页码在末行时同样要排除；
+    # 表注/声明仍只看起始物理行（上一轮页脚回归保持不变）。
+    pages = ['2024年度单位决算', toc,
+             '2024 年度部门决算表\n本表反映部门本年度收入。',
+             '2024 年度部门决算情况说明\n本表反映部门本年度支出。']
+    from src.services.material_writing import collect
+    spans = [{'page': p, 'start': 0, 'end': len(t), 'source_method': 'native_text'}
+             for p, t in enumerate(pages, 1)]
+    evidence = collect(pages, (), 'final', spans)
+    summary = contrast(evidence, pages)
+    toc_excluded = [e for e in summary['excluded'] if e.get('reason') == 'toc_style_line']
+    assert toc_excluded and toc_excluded[0]['page'] == 2, toc
+    assert summary['comprehensive_contrast'] is True
+
+
 def test_comprehensive_contrast_keeps_real_body_headings():
     pages = ['2024年度单位决算', '第二部分\n2024年度部门决算表\n本表反映部门本年度收入。\n市级部门决算情况另行说明。']
     rows = [opp('department', 'heading', 2, '2024年度部门决算表', [native(2, pages[1])]),
