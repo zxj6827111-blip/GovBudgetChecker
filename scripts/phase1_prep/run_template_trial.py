@@ -1,6 +1,26 @@
 #!/usr/bin/env python3
 """2025 决算模板对照最小试运行闭环 harness（试运行专用，不进正式规则链）。
 
+r3（2026-10-31，按 outputs/tpl_trial_r2_review_20261031/review.json F1 条件
+取数口径整改）：
+
+1. template_fixed_sentence_checks._evaluate_condition 取数口径重写：只认
+   “当年决算”口径指标金额（F1 = 本年度“三公”经费财政拨款支出决算合计；
+   F2 = 本年度国有资本经营预算财政拨款收入、支出两项）；预算口径（年初
+   预算为/预算数/完成预算的）、增减额、含非目标年份 20XX年度 的分句
+   （。；切分）一律排除；所需指标齐且全为零才判零值成立，任一指标取不到
+   → 条件未知，绝不报缺失。判定流其余语义（章节定位、标准空表表述优先、
+   信号混叠、槽位实例化、候选分级）不变。
+2. 审核反例 6 例（outputs/tpl_trial_r2_review_20261031/probe_conditions.py
+   口径）纳入 R 组自动断言：unknown_control→未检查、both_current_zero_control
+   →命中、both_current_positive_control→不适用、incomplete_zero_false_positive
+   →未检查、budget_vs_actual_false_negative→命中、prior_year_vs_actual_false
+   _negative→命中；旧列 = r2 模块（git show 15afb6a4 导出到 /tmp 后 importlib
+   加载）判定，必须与审核 actual（condition_results.json）一致。
+3. 结果目录改 outputs/tpl_trial_20261031_r3；integrity 冻结引用补 r2
+   integrity 与 r2 审核证据，另对 v1/r2/phase1_prep（含 v3 core 118 清单）
+   三个冻结根做“打包前后哈希不变”校验，任何漂移即拒绝发布。
+
 r2（2026-10-31，按 outputs/tpl_trial_review_20261031/review.json 收尾）：
 
 1. 从 uploads/.templates 两份 2025 决算模板 extracted.txt 构建试运行导出包
@@ -14,16 +34,17 @@ r2（2026-10-31，按 outputs/tpl_trial_review_20261031/review.json 收尾）：
    纯函数入口）产物，运行 CMM-018/019/027/008、模板锚点检查（A1/A2/A3）与
    固定语句试运行检查（v2 判定流：章节定位 + 条件判定 + 章节范围句比对）。
 3. 固定语句条件对照组（a–f 小页文本探针）以 git show c633affe 的旧模块出
-   旧判定，连同新判定写 old_vs_new.json（旧模块只写 /tmp，不改仓库）。
+   旧判定，连同新判定写 old_vs_new.json（旧模块只写 /tmp，不改仓库）；
+   r3 起新增审核反例 6 例的 r2（15afb6a4）旧模块对照（review_rows）。
 4. 产出 template_content_candidates.csv/.md、trial_report.json/.md、
    old_vs_new.json、integrity.json、场景副本 PDF。
-5. 发布纪律：结果目录 outputs/tpl_trial_20261031_r2 已存在且非空 → 退出码
-   非 0 拒绝；否则写入同目录隐藏 staging，自校验（断言全过 + 完整性复算）
-   后 os.replace 原子发布。
+5. 发布纪律：结果目录 outputs/tpl_trial_20261031_r3 已存在且非空 → 退出码
+   非 0 拒绝；否则写入同目录隐藏 staging，自校验（断言全过 + 完整性复算
+   + 冻结根哈希复算）后 os.replace 原子发布。
 
 确定性：不使用 random；zip 使用固定 ZipInfo 时间戳；PDF 副本清空元数据并
 no_new_id 保存；报告不含墙钟时间，报告内的产物路径一律用发布约定相对路径
-（outputs/tpl_trial_20261031_r2/...），与实际落盘目录解耦，同输入重跑字节级
+（outputs/tpl_trial_20261031_r3/...），与实际落盘目录解耦，同输入重跑字节级
 一致。
 
 调用边界：固定语句检查模块（template_fixed_sentence_checks）只由本 harness
@@ -61,13 +82,21 @@ DEPT_SOURCE_ID = "9b09cc2f-3f13-44a0-ae4c-888bae343557"
 UNIT_SOURCE_ID = "eacee742-42b2-418d-95f0-30494aa6c52b"
 TRIAL_NOTE = "试运行候选内容，未经人工发布确认"
 
-#: r2 结果目录（发布约定名）；报告/完整性清单里的路径一律基于它，与
+#: r3 结果目录（发布约定名）；报告/完整性清单里的路径一律基于它，与
 #: --output-dir 实际落盘位置解耦，保证重跑字节一致。
-R2_DIR_NAME = "tpl_trial_20261031_r2"
+R3_DIR_NAME = "tpl_trial_20261031_r3"
 
 #: 旧版对照（review.json F1/F2）所需的两份 c633affe 模块快照（只写 /tmp）。
 LEGACY_FIXED_PATH = Path("/tmp/old_fixed_c633affe.py")
 LEGACY_ANCHOR_PATH = Path("/tmp/old_anchor_c633affe.py")
+
+#: 审核反例对照（tpl_trial_r2_review_20261031）所需的 r2 模块快照（只写 /tmp）。
+LEGACY_R2_FIXED_PATH = Path("/tmp/old_fixed_15afb6a4.py")
+
+#: 冻结根（只读）：发布前后哈希必须不变；漂移即拒绝发布（Mimosa 友好：
+#: 路径规范化校验后逐文件 digest.update，不做串拼接哈希）。
+FROZEN_ROOTS = ("outputs/tpl_trial_20261031", "outputs/tpl_trial_20261031_r2",
+                "outputs/phase1_prep")
 
 #: 主链接入状态标注（试运行条目逐条携带）。
 CHAIN_STATUS_ANCHOR = "尚未接入主链（试运行候选锚点：未发布、未绑定，生产消费者拿不到该候选内容）"
@@ -144,6 +173,29 @@ def payload_sha256(payload: bytes) -> str:
     digest = hashlib.sha256()
     digest.update(payload)
     return digest.hexdigest()
+
+
+def frozen_root_snapshot(relative_root: str) -> Dict[str, Any]:
+    """冻结根快照：排序遍历目录内全部文件，rel 路径与 sha256 逐段 digest.update
+    汇成滚动摘要（发布前后复算比对，漂移即拒绝发布；不写任何文件）。"""
+    if ".." in Path(relative_root).parts:
+        raise ValueError("拒绝相对上跳冻结根：" + relative_root)
+    root = (REPO_ROOT / relative_root).resolve()
+    if not root.is_dir():
+        raise ValueError("冻结根必须是已存在目录：" + relative_root)
+    digest = hashlib.sha256()
+    file_count = 0
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        digest.update(b"f:")
+        digest.update(rel.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(file_sha256(path).encode("utf-8"))
+        digest.update(b"\n")
+        file_count += 1
+    return {"path": relative_root, "file_count": file_count, "rolling_sha256": digest.hexdigest()}
 
 
 def canonical_text(value: Any) -> str:
@@ -1086,7 +1138,7 @@ def run_one(scenario: Dict[str, Any], mode: Dict[str, Any], trial: Dict[str, Any
         "mode": mode["id"],
         "mode_desc": mode["desc"],
         "sample_id": scenario["sample_id"],
-        # 报告记录发布约定路径（副本为 outputs/tpl_trial_20261031_r2/<文件名>），
+        # 报告记录发布约定路径（副本为 outputs/tpl_trial_20261031_r3/<文件名>），
         # 与实际落盘 staging 目录解耦，保证重跑字节一致。
         "document_path": scenario.get("published_path") or str(document_path),
         "document_sha256": file_hash,
@@ -1153,6 +1205,23 @@ def load_legacy_modules() -> Tuple[Any, Any]:
         spec.loader.exec_module(module)
         modules.append(module)
     return modules[0], modules[1]
+
+
+def load_r2_fixed_module() -> Any:
+    """从 15afb6a4（r2）提取固定语句模块到 /tmp 并以 importlib 加载（只读 git）。
+
+    审核反例 6 例的“旧判定”必须出自 r2 模块本身（r2 败绩 = 审核 actual，
+    outputs/tpl_trial_r2_review_20261031/condition_results.json）。
+    """
+    source = subprocess.run(
+        ["git", "show", "15afb6a4:src/services/template_fixed_sentence_checks.py"],
+        cwd=str(REPO_ROOT), check=True, capture_output=True, text=True).stdout
+    LEGACY_R2_FIXED_PATH.write_text(source, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("legacy_fixed_15afb6a4", LEGACY_R2_FIXED_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["legacy_fixed_15afb6a4"] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _probe_doc(pages: List[str], entry: Dict[str, Any], org_name: Optional[str]):
@@ -1242,6 +1311,56 @@ def run_fixed_sentence_probes(entries_by_id: Dict[str, Dict[str, Any]], legacy_f
             _probe_doc(sample_pages, entry, FIXED_SENTENCE_ORG_SLOT))[0]
         rows.append({"case": name, "entry_id": entry_id, "probe_org": FIXED_SENTENCE_ORG_SLOT,
                      "pages": "<S4 真实样本逐页文本，共" + str(len(sample_pages)) + "页>",
+                     "old": _verdict_tuple(old_result), "new": _verdict_tuple(new_result),
+                     "new_reason": new_result.get("reason"),
+                     "new_section_pages": new_result.get("section_pages"),
+                     "new_condition_basis": new_result.get("condition_basis")})
+    return rows
+
+
+#: 审核反例 6 例（outputs/tpl_trial_r2_review_20261031/probe_conditions.py 口径）：
+#: (案例名, 条目, 反例段落, r3 期望 (判定, 候选类型), r2 审核 actual (判定, 候选类型))。
+#: r2 审核 actual 取自同目录 condition_results.json（15afb6a4 实际败绩）。
+REVIEW_PROBE_CASES: Tuple[Tuple[str, str, str, Tuple[str, Optional[str]], Tuple[str, Optional[str]]], ...] = (
+    ("unknown_control", "F2", "本节内容待核实。",
+     ("未检查", None), ("未检查", None)),
+    ("both_current_zero_control", "F2", "国有资本经营预算财政拨款收入0.00万元，支出0.00万元。",
+     ("命中", "缺失候选"), ("命中", "缺失候选")),
+    ("both_current_positive_control", "F2", "国有资本经营预算财政拨款收入10.00万元，支出10.00万元。",
+     ("不适用", None), ("不适用", None)),
+    ("incomplete_zero_false_positive", "F2", "国有资本经营预算财政拨款收入0.00万元，支出情况待核实。",
+     ("未检查", None), ("命中", "缺失候选")),
+    ("budget_vs_actual_false_negative", "F1", "“三公”经费财政拨款支出年初预算为10.00万元，支出决算为0.00万元。",
+     ("命中", "缺失候选"), ("不适用", None)),
+    ("prior_year_vs_actual_false_negative", "F2",
+     "2025年度国有资本经营预算财政拨款收入0.00万元、支出0.00万元；2024年度收入10.00万元、支出10.00万元。",
+     ("命中", "缺失候选"), ("不适用", None)),
+)
+
+
+def run_review_condition_probes(entries_by_id: Dict[str, Dict[str, Any]], r2_fixed: Any
+                                ) -> List[Dict[str, Any]]:
+    """审核反例 6 例：r2 模块（15afb6a4）与 r3 模块同页文本对照判定。
+
+    口径与 outputs/tpl_trial_r2_review_20261031/probe_conditions.py 完全一致：
+    小页文本 = 封面 + 第三部分标题 + 条目 section_anchor + 反例段落；机构槽位
+    = 上海市测试局（source 非 filename）；target_year = 2025。断言要求：
+    r2 判定 == 审核 actual（败绩复现），r3 判定 == 修复预期（全部达标）。
+    """
+    from src.services.template_fixed_sentence_checks import trial_fixed_sentence_findings
+
+    org = "上海市测试局"
+    rows: List[Dict[str, Any]] = []
+    for name, entry_id, paragraph, expected_new, r2_actual in REVIEW_PROBE_CASES:
+        entry = entries_by_id[entry_id]
+        case_pages = ["2025年度决算",
+                      "第三部分 决算情况说明\n" + entry["section_anchor"] + "\n" + paragraph]
+        old_result = r2_fixed.trial_fixed_sentence_findings(_probe_doc(case_pages, entry, org))[0]
+        new_result = trial_fixed_sentence_findings(_probe_doc(case_pages, entry, org))[0]
+        rows.append({"case": name, "entry_id": entry_id, "paragraph": paragraph,
+                     "probe_org": org, "pages": "<小页文本×2>",
+                     "expected_new": {"verdict": expected_new[0], "candidate_type": expected_new[1]},
+                     "r2_actual": {"verdict": r2_actual[0], "candidate_type": r2_actual[1]},
                      "old": _verdict_tuple(old_result), "new": _verdict_tuple(new_result),
                      "new_reason": new_result.get("reason"),
                      "new_section_pages": new_result.get("section_pages"),
@@ -1412,7 +1531,7 @@ def verdict_matrix(runs: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def render_report_md(report: Dict[str, Any], path: Path) -> None:
     lines: List[str] = [
-        "# 2025 决算模板对照最小试运行闭环报告（r2）",
+        "# 2025 决算模板对照最小试运行闭环报告（r3）",
         "",
         "- 导出包：" + report["template_export"]["zip_path"] + "（sha256 `" + report["template_export"]["zip_sha256"] + "`）",
         "- 发布内容哈希：" + report["template_export"]["content_sha256"],
@@ -1420,6 +1539,9 @@ def render_report_md(report: Dict[str, Any], path: Path) -> None:
         "- A2 表格锚点已挂生产解析器离线产物（PDFParser.build_parse_artifact），展示 正常/未检查/缺失 三态。",
         "- 固定语句判定为 v2 判定流（章节定位+条件判定+章节范围句比对）：改动候选（规划 CMM-028，low）、",
         "  缺失候选（规划 CMM-029，medium），全部待人工复核；条件未知绝不报缺失。",
+        "- r3 条件取数口径：只认当年决算口径指标金额（F1=本年度“三公”经费财政拨款支出决算合计；",
+        "  F2=本年度国有资本经营预算财政拨款收入、支出两项），预算口径/增减额/非目标年份分句一律排除；",
+        "  指标齐且全为零才判零值成立，任一指标取不到 → 条件未知，绝不报缺失（审核反例 6 例见 R 组断言）。",
         "- 主链接入状态：" + report["chain_status"]["trial_fixed_sentences"],
         "- 执行状态标注：" + report["execution_status_legend"],
         "",
@@ -1434,7 +1556,8 @@ def render_report_md(report: Dict[str, Any], path: Path) -> None:
     for row in rows:
         lines.append("| " + " | ".join(str(row.get(h, "")) for h in headers) + " |")
     lines += ["", "## 断言结果", ""]
-    for tag, key in (("A", "A"), ("T 目录三例", "T"), ("C 表格三态", "C"), ("D 条件成立组", "D"), ("P 新旧对照", "P")):
+    for tag, key in (("A", "A"), ("T 目录三例", "T"), ("C 表格三态", "C"), ("D 条件成立组", "D"),
+                     ("P 新旧对照", "P"), ("R 审核反例", "R")):
         for item in report["verification"][key]["items"]:
             lines.append("- **" + tag + "** " + item["name"] + "：" + ("通过" if item["passed"] else "失败") + "；" + item["detail"])
     lines += ["", "## 新旧判定对照（c633affe 旧模块 vs v2 判定流）", ""]
@@ -1451,6 +1574,16 @@ def render_report_md(report: Dict[str, Any], path: Path) -> None:
     for row in report["probes"]["toc_rows"]:
         lines.append("- " + row["case"] + "：旧命中页 " + str(row["old_heading_pages"]) +
                      " → 新命中页 " + str(row["new_heading_pages"]))
+    lines += ["", "### 审核反例 6 例（r2 15afb6a4 vs r3 取数口径；r2 败绩=审核 actual，r3 全部达标）", ""]
+    lines.append("| case | 条目 | r2 判定（审核 actual） | r3 判定 | condition_state |")
+    lines.append("|---|---|---|---|---|")
+    for row in report["probes"]["review_rows"]:
+        old = row["old"]
+        new = row["new"]
+        old_text = old["verdict"] + ("/" + old["candidate_type"] if old.get("candidate_type") else "")
+        new_text = new["verdict"] + ("/" + new["candidate_type"] if new.get("candidate_type") else "")
+        lines.append("| " + row["case"] + " | " + row["entry_id"] + " | " + old_text + " | " + new_text +
+                     " | " + str(new.get("condition_state")) + " |")
     lines += ["", "## 确定性", "",
               "- trial_report.json 重跑字节级一致：报告内产物路径用发布约定相对路径（与落盘目录解耦）。",
               "- 导出包 sha256：" + report["template_export"]["zip_sha256"],
@@ -1530,7 +1663,7 @@ MODES = [
 ]
 
 #: 副本文件的发布约定名（报告/完整性清单引用；实际落盘在 staging，原子发布后
-#: 即 outputs/tpl_trial_20261031_r2/<name>）。
+#: 即 outputs/tpl_trial_20261031_r3/<name>）。
 COPY_NAMES = {
     "scenario4": "scenario4_缺第四部分标题_S1副本.pdf",
     "scenario5": "scenario5_改F1固定语句_S2副本.pdf",
@@ -1547,18 +1680,18 @@ A2_INSTANCE_EXPECTED_PAGES = {"S1": 7, "S2": 7, "S3": 5}
 
 def published_rel(name: str) -> str:
     """发布约定相对路径（与实际落盘目录解耦，保证重跑字节一致）。"""
-    return "outputs/" + R2_DIR_NAME + "/" + name
+    return "outputs/" + R3_DIR_NAME + "/" + name
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-dir", type=Path, default=REPO_ROOT / "outputs" / R2_DIR_NAME)
+    parser.add_argument("--output-dir", type=Path, default=REPO_ROOT / "outputs" / R3_DIR_NAME)
     parser.add_argument("--samples-root", type=Path,
                         default=Path("/Users/zhangxingjin/Desktop/决算测试上海市/2025"))
     args = parser.parse_args()
 
     output_dir = args.output_dir.resolve()
-    # ---- r2 发布纪律：已存在非空 → 退出码非 0 拒绝；否则 staging 自校验后原子发布 ----
+    # ---- r3 发布纪律：已存在非空 → 退出码非 0 拒绝；否则 staging 自校验后原子发布 ----
     if output_dir.exists():
         if not output_dir.is_dir():
             print("[refuse] 输出路径已存在且不是目录：" + str(output_dir), file=sys.stderr)
@@ -1570,6 +1703,12 @@ def main() -> int:
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True)
+
+    # ---- 冻结根快照（v1/r2/phase1_prep，含 v3 core 118 清单）：发布前基线 ----
+    frozen_before = [frozen_root_snapshot(root) for root in FROZEN_ROOTS]
+    print("[frozen] 基线快照：" + json.dumps(
+        [{"path": item["path"], "file_count": item["file_count"]} for item in frozen_before],
+        ensure_ascii=False))
 
     # 边界纪律：离线运行不读业务库；模板开关只在本进程内指向 harness 构建的试运行导出包。
     os.environ.pop("DATABASE_URL", None)
@@ -1656,12 +1795,14 @@ def main() -> int:
                   "/".join(a["verdict"] for a in runs[key]["checks"]["anchors"]) +
                   " fixed=" + "/".join(e["verdict"] for e in runs[key]["checks"]["trial_fixed_sentences"]))
 
-    # ---- 固定语句条件对照组与目录/正文对照（旧 c633affe vs 新） ----
+    # ---- 固定语句条件对照组与目录/正文对照（旧 c633affe vs 新；审核反例 r2 15afb6a4 vs 新） ----
     entries_by_id = {entry["id"]: entry for entry in fixed}
     legacy_fixed, legacy_anchor = load_legacy_modules()
+    r2_fixed = load_r2_fixed_module()
     probe_rows = run_fixed_sentence_probes(entries_by_id, legacy_fixed, artifact_cache,
                                            SAMPLES["S4"]["resolved"],
                                            safe_output_path(staging, COPY_NAMES["scenario9"]))
+    review_rows = run_review_condition_probes(entries_by_id, r2_fixed)
     toc_rows = probe_toc_anchor(legacy_anchor)
 
     # ---- 断言 A（构建与零误报） ----
@@ -1855,6 +1996,29 @@ def main() -> int:
                              "detail": "old=" + str(toc_body["old_heading_pages"]) + " new=" + str(toc_body["new_heading_pages"])})
     verification_probes = {"items": probe_assertions, "rows": probe_rows}
 
+    # ---- 断言 R（审核反例 6 例：r2 败绩复现 + r3 全部达标，tpl_trial_r2_review_20261031） ----
+    review_assertions: List[Dict[str, Any]] = []
+    for row in review_rows:
+        new = row["new"]
+        review_assertions.append({
+            "name": "R-新 " + row["case"] + " → " + row["expected_new"]["verdict"] +
+                    ("（" + row["expected_new"]["candidate_type"] + "）" if row["expected_new"]["candidate_type"] else "") +
+                    "，取数口径达标",
+            "passed": (new["verdict"] == row["expected_new"]["verdict"]
+                       and new["candidate_type"] == row["expected_new"]["candidate_type"]),
+            "detail": "r3 判定：" + json.dumps(new, ensure_ascii=False)})
+        review_assertions.append({
+            "name": "R-旧 " + row["case"] + " 与审核 actual 一致（" + row["r2_actual"]["verdict"] +
+                    ("，" + row["r2_actual"]["candidate_type"] if row["r2_actual"]["candidate_type"] else "") + "）",
+            "passed": (row["old"]["verdict"] == row["r2_actual"]["verdict"]
+                       and row["old"]["candidate_type"] == row["r2_actual"]["candidate_type"]),
+            "detail": "r2(15afb6a4) 判定：" + json.dumps(row["old"], ensure_ascii=False)})
+    verification_review = {
+        "items": review_assertions,
+        "rows": review_rows,
+        "review_evidence": "outputs/tpl_trial_r2_review_20261031/（probe_conditions.py / condition_results.json / review.json）",
+    }
+
     report = {
         "schema": SCHEMA,
         "trial_note": TRIAL_NOTE,
@@ -1865,6 +2029,10 @@ def main() -> int:
             "F2": "template_anchor_checks._headings 最小修复：toc_region_pages 从“目录”表头页向后传播目录区（连续条目形态页），"
                   "目录区内命中不计为正文证据；点线引导/页码尾巴条目行另在行级排除；正文折行标题正例不回退。",
             "table_trial": "A2 表格锚点改挂生产解析器离线产物（PDFParser.build_parse_artifact），展示 正常/未检查/缺失 三态。",
+            "condition_scope_r3": "条件取数口径修订（tpl_trial_r2_review_20261031 F1）：只认当年决算口径指标金额"
+                                  "（F1=本年度“三公”经费财政拨款支出决算合计；F2=本年度国有资本经营预算财政拨款收入、"
+                                  "支出两项），预算口径/增减额/非目标年份分句（。；切分）一律排除；指标齐且全为零才判"
+                                  "零值成立，任一指标取不到 → 条件未知，绝不报缺失。审核反例 6 例纳入 R 组断言。",
         },
         "chain_status": {"anchors": CHAIN_STATUS_ANCHOR, "trial_fixed_sentences": CHAIN_STATUS_FIXED},
         "execution_status_legend": "每个条目带 execution_status（实际执行/未检查）与 chain_status（尚未接入主链）；"
@@ -1889,7 +2057,7 @@ def main() -> int:
             "scenario10": {**scenario10, "path": published_rel(COPY_NAMES["scenario10"])},
             "scenario11": {**scenario11, "path": published_rel(COPY_NAMES["scenario11"])},
         },
-        "probes": {"rows": probe_rows, "toc_rows": toc_rows},
+        "probes": {"rows": probe_rows, "toc_rows": toc_rows, "review_rows": review_rows},
         "runs": runs,
         "verification": {
             "A": verification_a,
@@ -1898,10 +2066,13 @@ def main() -> int:
             "C": verification_table,
             "D": verification_d,
             "P": verification_probes,
+            "R": verification_review,
         },
         "production_boundaries": [
             "固定语句模块（template_fixed_sentence_checks）只由本 harness 调用：不接 api/、不进正式规则注册表；发布模板或打开 "
             "GBC_TEMPLATE_SCOPE 线上开关也只会启用已有生产消费者，不会自动接入该模块。",
+            "r3 条件取数口径只认当年决算口径指标金额：预算口径、增减额与非目标年份分句一律排除；指标不完整时一律条件未知"
+            "（未检查/待复核），绝不报缺失；未认定标签金额如实计数但不参与裁决（章节文本模式的保守边界）。",
             "试运行导出包与候选内容未发布、未绑定年度，生产消费者拿不到 A1–A3/F1–F2；本脚本的 GBC_TEMPLATE_SCOPE/GBC_TEMPLATE_EXPORT "
             "只是本进程离线运行环境变量，不是生产配置变更。",
             "目录区排除按“目录表头页向后传播的连续条目形态页”识别；紧邻目录续页、整页只有一个孤立编号标题的正文页会被并入目录区，"
@@ -1916,12 +2087,19 @@ def main() -> int:
 
     old_vs_new_path = safe_output_path(staging, "old_vs_new.json")
     old_vs_new_path.write_text(json.dumps(
-        {"schema": "gbc.trial-old-vs-new.v1",
+        {"schema": "gbc.trial-old-vs-new.v2",
          "reviewed_commit": "c633affe",
-         "note": "旧模块经 git show c633affe 导出到 /tmp 后 importlib 加载（未修改仓库）；四反例 a–d 旧版失败、新版通过",
+         "note": "旧模块经 git show 导出到 /tmp 后 importlib 加载（未修改仓库）；"
+                 "c633affe 四反例 a–d 旧版失败、新版通过（probe_rows）；"
+                 "15afb6a4（r2）审核反例 6 例旧版按混合口径误判、r3 取数口径全部达标（review_rows），"
+                 "r2 败绩与 outputs/tpl_trial_r2_review_20261031/condition_results.json 一致",
          "legacy_sources": {"fixed": "git show c633affe:src/services/template_fixed_sentence_checks.py",
-                            "anchor": "git show c633affe:src/services/template_anchor_checks.py"},
-         "probe_rows": probe_rows, "toc_rows": toc_rows}, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                            "anchor": "git show c633affe:src/services/template_anchor_checks.py",
+                            "fixed_r2": "git show 15afb6a4:src/services/template_fixed_sentence_checks.py"},
+         "review_evidence": {"dir": "outputs/tpl_trial_r2_review_20261031",
+                             "files": ["probe_conditions.py", "condition_results.json", "review.json"]},
+         "probe_rows": probe_rows, "toc_rows": toc_rows, "review_rows": review_rows},
+        ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8")
 
     report_path = safe_output_path(staging, "trial_report.json")
@@ -1941,12 +2119,24 @@ def main() -> int:
         "capability_scope": trial["capability_scope"], "note": TRIAL_NOTE,
         "anchors": trial["anchors"], "trial_fixed_sentences": trial["trial_fixed_sentences"],
         "db_writes": 0, "business_jobs_touched": 0,
-        "publish_discipline": "staging 自校验（断言全过+完整性复算）后 os.replace 原子发布；输出目录已存在非空则拒绝",
+        "publish_discipline": "staging 自校验（断言全过+完整性复算+冻结根哈希复算）后 os.replace 原子发布；输出目录已存在非空则拒绝",
         "env": {"GBC_TEMPLATE_SCOPE": "1（仅本进程离线运行，非生产配置变更）", "GBC_TEMPLATE_EXPORT": "已设置（staging 导出包）",
                 "GBC_TEMPLATE_EXPORT_SHA256": "已设置", "DATABASE_URL": "空（离线分支）"},
     }
     meta_path = safe_output_path(staging, "offline_export_meta.json")
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    # ---- 冻结根复算：v1/r2/phase1_prep 打包前后哈希必须不变（漂移即拒绝发布） ----
+    frozen_after = [frozen_root_snapshot(root) for root in FROZEN_ROOTS]
+    frozen_errors = []
+    for before, after in zip(frozen_before, frozen_after):
+        if before != after:
+            frozen_errors.append("冻结根哈希漂移：" + before["path"] +
+                                 "（基线 " + before["rolling_sha256"][:16] + " → 现值 " +
+                                 after["rolling_sha256"][:16] + "）")
+    if frozen_errors:
+        print("[publish-abort] " + "; ".join(frozen_errors), file=sys.stderr)
+        return 1
 
     integrity_files = {
         "scripts/phase1_prep/run_template_trial.py": file_sha256(Path(__file__).resolve()),
@@ -1965,15 +2155,21 @@ def main() -> int:
                         ("scenario11", scenario11)):
         integrity_files[published_rel(COPY_NAMES[name])] = build["sha256"]
     integrity = {
-        "schema": "gbc.trial-integrity.v2",
+        "schema": "gbc.trial-integrity.v3",
         "note": "脚本与产物 sha256 清单（逐文件 digest.update；integrity.json 自身不在清单内）；"
                 "文件键为发布约定相对路径，与实际落盘目录解耦",
         "repo_root": str(REPO_ROOT),
-        "published_dir": "outputs/" + R2_DIR_NAME,
+        "published_dir": "outputs/" + R3_DIR_NAME,
         "files": integrity_files,
         "frozen_references": {
             "v1_integrity": {"path": "outputs/tpl_trial_20261031/integrity.json",
                              "sha256": file_sha256(REPO_ROOT / "outputs/tpl_trial_20261031/integrity.json")},
+            "r2_integrity": {"path": "outputs/tpl_trial_20261031_r2/integrity.json",
+                             "sha256": file_sha256(REPO_ROOT / "outputs/tpl_trial_20261031_r2/integrity.json")},
+            "r2_review": {"path": "outputs/tpl_trial_r2_review_20261031/review.json",
+                          "sha256": file_sha256(REPO_ROOT / "outputs/tpl_trial_r2_review_20261031/review.json")},
+            "r2_review_condition_results": {"path": "outputs/tpl_trial_r2_review_20261031/condition_results.json",
+                                            "sha256": file_sha256(REPO_ROOT / "outputs/tpl_trial_r2_review_20261031/condition_results.json")},
             "v3_integrity": {"path": "outputs/phase1_prep/v3/integrity.json",
                              "sha256": file_sha256(REPO_ROOT / "outputs/phase1_prep/v3/integrity.json")},
             "v3_core_sample_118": {"path": "outputs/phase1_prep/v3/desktop_core_sample.csv",
@@ -1981,16 +2177,23 @@ def main() -> int:
             "review_evidence": {"path": "outputs/tpl_trial_review_20261031/review.json",
                                 "sha256": file_sha256(REPO_ROOT / "outputs/tpl_trial_review_20261031/review.json")},
         },
+        "frozen_roots": {
+            "roots": frozen_after,
+            "unchanged_verified": True,
+            "note": "v1/r2/phase1_prep（含 v3 core 118 清单）打包前后逐文件滚动摘要一致；"
+                    "漂移时本脚本在写 integrity.json 之前即以退出码 1 拒绝发布",
+        },
     }
     integrity_path = safe_output_path(staging, "integrity.json")
     integrity_path.write_text(json.dumps(integrity, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    # ---- staging 自校验：断言全过 + 完整性复算，通过后才原子发布 ----
+    # ---- staging 自校验：断言全过（含 R 审核反例组）+ 完整性复算，通过后才原子发布 ----
     failed = [item["name"] for group in (assertion_a, toc_assertions, table_assertions,
-                                         verification_d["items"], probe_assertions)
+                                         verification_d["items"], probe_assertions,
+                                         verification_review["items"])
               for item in group if not item["passed"]]
     verify_errors: List[str] = list(failed)
-    product_prefix = "outputs/" + R2_DIR_NAME + "/"
+    product_prefix = "outputs/" + R3_DIR_NAME + "/"
     for rel, expected_sha in integrity_files.items():
         # 产物键 → staging 内复算；仓库文件键（脚本/服务模块）→ 仓库内复算。
         source = staging / rel.rsplit("/", 1)[-1] if rel.startswith(product_prefix) else REPO_ROOT / rel

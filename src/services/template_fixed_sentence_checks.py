@@ -34,14 +34,24 @@ material_writing / template_anchor_checks 等已有生产消费者，不会自�
    （扁平流含折行容忍），并复用其目录区排除（toc_region_pages，目录续页
    条目不算正文）；章节未定位或多处出现 → "未检查（上级章节未定位）"；
    材料文本层不足 → "未检查"；
-4. 章节内条件判定（仅用章节片段文本，禁止跨章节）：
-   - 出现"无……支出"标准空表表述（核对核心命中）→ 条件成立（空表成立）；
-   - 章节内金额全部为 0.00/0 万元 → 条件成立（零值成立；0.00 不能当作
+4. 章节内条件判定（仅用章节片段文本，禁止跨章节；取数口径 r3，按
+   outputs/tpl_trial_r2_review_20261031/review.json F1 修复）：
+   - 只认"当年决算"口径金额：F1 指标 = 本年度"三公"经费财政拨款支出决算
+     合计（"支出决算（数/为）"标签）；F2 指标 = 本年度国有资本经营预算
+     财政拨款收入、支出两项；
+   - 预算口径（年初预算为/预算数/完成预算的）、增减额（金额紧邻
+     增加/减少/增长/下降）、含非目标年份 20XX年度 的分句（。；切分）一律
+     排除——预算数与上年金额不得否决当年决算零值；
+   - 出现"无……支出"标准空表表述（核对核心命中）→ 条件成立（空表成立，
+     标准空表表述优先）；
+   - 所需指标齐且全部为 0.00/0 万元 → 条件成立（零值成立；0.00 不能当作
      有实际支出）；
-   - 存在非零金额（如 10.00万元）→ 条件不成立 → "不适用"；
-   - 标准空表表述与非零金额同时出现（信号混叠）→ 条件未知 → "待复核"；
-   - 两者都取不到（如"本节内容待核实"）→ 条件未知 → "未检查"，绝不报缺失。
-   所用依据写入 ``condition_basis``（合格事实 / 章节文本模式）；
+   - 任一纳入指标金额非零 → 条件不成立 → "不适用"；
+   - 标准空表表述与非零指标金额同现（信号混叠）→ 条件未知 → "待复核"；
+   - 所需指标任一取不到（如"支出情况待核实"）或全部取不到（如"本节内容
+     待核实"）→ 条件未知 → "未检查"，绝不报缺失。
+   取数依据（匹配到的指标金额、排除项计数）写入 ``condition_basis``
+   （合格事实 / 章节文本模式）；
 5. 句比对限定在章节片段内（第四部分等引用/示例中的相同语句不算）：
    条件成立后，槽位实例化句（模板句按已审核槽位替换机构名/目标年度，机构名
    取 profile.organization_name 且 source 非 filename，取不到 → "未检查"）
@@ -77,6 +87,33 @@ _PROXIMITY_GUARDS: Dict[str, re.Pattern[str]] = {
 
 #: 金额陈述（万元口径；含千分位逗号，与 AGENTS.md R001 换算前识别同一形态）。
 _AMOUNT_RE = re.compile(r"\d[\d,，]*(?:\.\d+)?\s*万元")
+
+#: 条件取数指标（r3 取数口径，按 guard 映射；候选条目只允许引用此处已审核
+#: 标签，不能注入任意正则）。金额只认紧邻其前的标签文字（尾字匹配）：
+#: sangong 条件（F1）指标 = 本年度“三公”经费财政拨款支出决算合计；
+#: state_capital 条件（F2）指标 = 本年度国有资本经营预算财政拨款收入、
+#: 支出两项，须两项齐且均为零才判零值成立。
+_INDICATOR_LABELS: Dict[str, Tuple[Tuple[str, str], ...]] = {
+    "sangong": (("支出决算合计", "支出决算"),),
+    "state_capital": (("收入", "收入"), ("支出", "支出")),
+}
+
+#: 预算口径标签：金额标签含其一即排除（年初预算数不得否决当年决算零值）。
+_BUDGET_LABEL_RE = re.compile(r"年初预算|预算数|完成预算|预算为")
+
+#: 增减额标签：金额紧邻其前（标签以这些词结尾）时视为增减差额，不作余额水平。
+_DELTA_LABEL_RE = re.compile(r"(?:增加|减少|增长|下降)$")
+
+#: 分句年份令牌：分句出现非目标年份的 20XX年度（如 2024年度）时整句排除。
+_CLAUSE_YEAR_RE = re.compile(r"(20\d{2})年度")
+
+#: 分句切分：句号/分号（审核反例 6 的上年分句以“；”分隔，必须按分句隔离
+#: 才能实现上年口径剔除）。注意：章节流经 NFKC 折叠，全角“；”已变半角“;”，
+#: 因此两种形态都要切。
+_CLAUSE_SPLIT_RE = re.compile(r"[。；;]")
+
+#: 标签回溯窗口：金额标签取“前一个万元之后、至多 24 字”的紧邻文字。
+_LABEL_WINDOW = 24
 
 #: 报告年度槽位令牌（固定语句核对尾串的起点）。
 _YEAR_TOKEN_RE = re.compile(r"20\d{2}")
@@ -252,19 +289,9 @@ def _locate_section_span(stream: str, positions: List[Tuple[int, int]], heading_
 
 
 # ---------------------------------------------------------------------------
-# 条件判定（章节片段内；金额判定优先合格事实，否则章节文本模式）。
+# 条件判定（章节片段内；取数口径 r3：只认当年决算口径指标金额，预算口径、
+# 非目标年份分句、增减额一律排除；金额判定优先合格事实，否则章节文本模式）。
 # ---------------------------------------------------------------------------
-
-
-def _amounts_from_text(segment_flat: str) -> List[Decimal]:
-    values: List[Decimal] = []
-    for match in _AMOUNT_RE.finditer(segment_flat):
-        raw = match.group(0)[: match.group(0).find("万元")].replace(",", "").replace("，", "")
-        try:
-            values.append(Decimal(raw))
-        except InvalidOperation:
-            continue
-    return values
 
 
 def _amounts_from_facts(doc: Any, entry: Dict[str, Any]) -> Optional[List[Decimal]]:
@@ -288,37 +315,163 @@ def _amounts_from_facts(doc: Any, entry: Dict[str, Any]) -> Optional[List[Decima
     return values
 
 
+def _target_year_from_doc(doc: Any) -> Optional[int]:
+    """目标报告年度（writing_scope.snapshot.target_year）；取不到返回 None。
+
+    None 时含年份令牌的分句一律排除（无法确认目标年份，宁缺毋滥）。
+    """
+    resolution = getattr(getattr(doc, "document_profile", None), "writing_scope", None)
+    if not isinstance(resolution, dict):
+        return None
+    snapshot = resolution.get("snapshot")
+    if not isinstance(snapshot, dict):
+        return None
+    value = snapshot.get("target_year")
+    return value if isinstance(value, int) else None
+
+
+def _label_before(clause: str, start: int) -> str:
+    """金额紧邻其前的标签文字：回溯到上一个“万元”之后、至多 _LABEL_WINDOW 字。"""
+    previous = clause.rfind("万元", 0, start)
+    lower = previous + 2 if previous >= 0 else 0
+    lower = max(lower, start - _LABEL_WINDOW)
+    return clause[lower:start]
+
+
+def _clause_amounts(clause: str) -> List[Tuple[str, Decimal]]:
+    """分句内的 (紧邻标签, 金额) 列表（万元口径；解析失败跳过）。"""
+    rows: List[Tuple[str, Decimal]] = []
+    for match in _AMOUNT_RE.finditer(clause):
+        raw = match.group(0)[: match.group(0).find("万元")].replace(",", "").replace("，", "")
+        try:
+            value = Decimal(raw)
+        except InvalidOperation:
+            continue
+        rows.append((_label_before(clause, match.start()), value))
+    return rows
+
+
+def _strip_label_tail(label: str) -> str:
+    """剥掉标签尾部的“为/是/数”（支出决算为→支出决算），保留口径尾字。"""
+    return re.sub(r"[为是数]$", "", label)
+
+
+def _scoped_amounts(segment_flat: str, target_year: Optional[int]) -> Dict[str, Any]:
+    """按分句收集纳入金额与排除计数（取数口径 r3）。
+
+    分句按 。；切分（审核反例 6 的上年分句以“；”分隔，必须按分句隔离才能
+    剔除上年口径）；分句内出现非目标年份的 20XX年度 → 整句排除；目标年份
+    分句与无年份分句纳入。金额标签紧邻其前：增减额（增加/减少/增长/下降
+    结尾）与预算口径（年初预算/预算数/完成预算/预算为）一律排除，不参与
+    指标归位。
+    """
+    included: List[Tuple[str, Decimal]] = []
+    counts = {"prior_year_clause": 0, "budget": 0, "delta": 0}
+    for clause in _CLAUSE_SPLIT_RE.split(segment_flat):
+        if not clause:
+            continue
+        years = _CLAUSE_YEAR_RE.findall(clause)
+        if years and (target_year is None or any(year != str(target_year) for year in years)):
+            counts["prior_year_clause"] += 1
+            continue
+        for label, value in _clause_amounts(clause):
+            if _DELTA_LABEL_RE.search(label):
+                counts["delta"] += 1
+                continue
+            if _BUDGET_LABEL_RE.search(label):
+                counts["budget"] += 1
+                continue
+            included.append((_strip_label_tail(label), value))
+    return {"included": included, "excluded": counts}
+
+
+def _indicator_values(scoped: Dict[str, Any], guard: str) -> Tuple[Dict[str, List[Decimal]], int]:
+    """把纳入金额按指标标签归位（尾字匹配，只认紧邻标签）。
+
+    返回 (指标值表, 未认定标签笔数)；未认定金额如实计数但不参与裁决——
+    非指标口径金额（如分项叙述）不得驱动条件判定。
+    """
+    labels = _INDICATOR_LABELS.get(guard, ())
+    values: Dict[str, List[Decimal]] = {name: [] for name, _suffix in labels}
+    unlabeled = 0
+    for label, value in scoped["included"]:
+        for name, suffix in labels:
+            if label.endswith(suffix):
+                values[name].append(value)
+                break
+        else:
+            unlabeled += 1
+    return values, unlabeled
+
+
+def _indicator_summary(values: Dict[str, List[Decimal]]) -> str:
+    """指标取数摘要（供 condition_basis：匹配到的金额与未取到的指标）。"""
+    parts: List[str] = []
+    for name, row in values.items():
+        if row:
+            parts.append(name + "=" + "/".join(str(value) for value in row) +
+                         "万元共" + str(len(row)) + "笔")
+        else:
+            parts.append(name + "未取到")
+    return "，".join(parts)
+
+
 def _evaluate_condition(segment_flat: str, core: str, doc: Any, entry: Dict[str, Any]
                         ) -> Tuple[str, str]:
     """章节内条件判定；返回 (condition_state, condition_basis)。
 
-    优先级（review F1 修复）：标准空表表述与非零金额同现属信号混叠 → 条件未知；
-    其余按 空表表述 > 全零金额 > 非零金额 > 取不到 的顺序裁决。
+    取数口径（r3，审核反例修复）：只认当年决算口径指标金额；标准空表表述
+    与非零指标金额同现属信号混叠 → 条件未知；其余按 空表表述（优先）>
+    指标齐且全零（零值成立）> 存在非零指标（条件不成立）> 指标不完整
+    （条件未知，绝不报缺失）的顺序裁决。合格事实钩子语义与 v2 一致：
+    事实金额可整体裁决时替代章节文本取数。
     """
     core_present = core in segment_flat
     fact_values = _amounts_from_facts(doc, entry)
     if fact_values is not None:
-        mode = "合格事实（doc.fact_context）"
-        amounts = fact_values
-    else:
-        mode = "章节文本模式（万元金额陈述）"
-        amounts = _amounts_from_text(segment_flat)
-    nonzero = [value for value in amounts if value != 0]
-    zero_count = len(amounts) - len(nonzero)
-    if core_present and nonzero:
-        return "条件未知", (
-            "信号混叠：章节内同时出现标准空表表述与非零金额叙述（" + mode +
-            "，非零金额 " + str(len(nonzero)) + " 笔）；条件无法裁决，待人工复核")
+        nonzero = [value for value in fact_values if value != 0]
+        zero_count = len(fact_values) - len(nonzero)
+        if core_present and nonzero:
+            return "条件未知", (
+                "信号混叠：章节内同时出现标准空表表述与非零金额事实（合格事实"
+                "（doc.fact_context），非零金额 " + str(len(nonzero)) + " 笔）；条件无法裁决，待人工复核")
+        if core_present:
+            return "空表成立", ("章节内出现与核对核心同源的“无……支出”标准空表表述；合格事实"
+                                "（doc.fact_context），零值金额 " + str(zero_count) + " 笔")
+        if nonzero:
+            return "条件不成立", ("合格事实（doc.fact_context）存在非零金额 " +
+                                  str(len(nonzero)) + " 笔")
+        return "零值成立", ("合格事实（doc.fact_context）金额全部为 0.00/0 万元"
+                            "（0.00 不当作有实际支出），零值金额 " + str(zero_count) + " 笔")
+
+    guard = str(entry.get("guard") or "")
+    if guard not in _INDICATOR_LABELS:
+        return "条件未知", ("章节文本模式取数口径未覆盖该守卫类型（" + guard +
+                            "），条件无法裁决，不判缺失")
+    target_year = _target_year_from_doc(doc)
+    scoped = _scoped_amounts(segment_flat, target_year)
+    values, unlabeled = _indicator_values(scoped, guard)
+    excluded = scoped["excluded"]
+    exclusion_note = ("排除：非目标年份分句 " + str(excluded["prior_year_clause"]) + " 句、"
+                      "预算口径金额 " + str(excluded["budget"]) + " 笔、增减额 " +
+                      str(excluded["delta"]) + " 笔、未认定标签金额 " + str(unlabeled) +
+                      " 笔（不参与裁决）")
+    nonzero_all = [value for row in values.values() for value in row if value != 0]
+    if core_present and nonzero_all:
+        return "条件未知", ("信号混叠：章节内同时出现标准空表表述与非零当年决算金额（" +
+                            _indicator_summary(values) + "）；条件无法裁决，待人工复核")
     if core_present:
-        return "空表成立", ("章节内出现与核对核心同源的“无……支出”标准空表表述；" +
-                            mode + "，零值金额 " + str(zero_count) + " 笔")
-    if amounts and not nonzero:
-        return "零值成立", ("章节内金额全部为 0.00/0 万元（0.00 不当作有实际支出）；" +
-                            mode + "，零值金额 " + str(zero_count) + " 笔")
-    if nonzero:
-        return "条件不成立", ("章节内存在非零金额叙述（" + str(len(nonzero)) + " 笔）；" + mode)
-    return "条件未知", ("章节内既无标准空表表述也无金额陈述（如“本节内容待核实”）；" +
-                        mode + "，条件事实不足")
+        return "空表成立", ("章节内出现与核对核心同源的“无……支出”标准空表表述，标准空表表述优先；"
+                            "当年决算口径 " + _indicator_summary(values) + "；" + exclusion_note)
+    if nonzero_all:
+        return "条件不成立", ("章节内存在非零当年决算金额（" + _indicator_summary(values) +
+                              "）；" + exclusion_note)
+    missing = [name for name, row in values.items() if not row]
+    if missing:
+        return "条件未知", ("当年决算口径指标不完整（" + _indicator_summary(values) + "；未取到：" +
+                            "、".join(missing) + "），条件未知，绝不报缺失；" + exclusion_note)
+    return "零值成立", ("当年决算口径指标齐且全部为 0.00/0 万元（0.00 不当作有实际支出；" +
+                        _indicator_summary(values) + "）；" + exclusion_note)
 
 
 # ---------------------------------------------------------------------------
