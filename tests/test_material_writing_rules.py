@@ -175,6 +175,19 @@ def test_cmm018_keeps_warns_when_contrast_is_not_comprehensive():
     assert not any(i.severity=='manual_review' for i in issues)
 
 
+def test_single_space_toc_entry_no_longer_blocks_comprehensive_contrast():
+    # 审核修正（P2）：目录续页条目（单空格+页码）不得当作所选一侧正文证据，
+    # 否则本应转 manual_review 的 CMM-018 会继续逐条 warn。
+    pages=['2024年度单位决算',
+           '第二部分 测试中心2024 年度单位决算表 3',
+           '2024 年度部门决算表\n本表反映部门本年度收入。',
+           '2024 年度部门决算情况说明\n本部门经费情况见相关说明。']
+    doc=archive_document(pages)
+    issues=CMM018_ScopeTerminology().apply(doc)
+    assert any(i.severity=='manual_review' and '相反' in i.message for i in issues)
+    assert not any(i.severity=='warn' and '主体口径混用' in i.message for i in issues)
+
+
 def test_human_decision_keeps_existing_warn_behavior():
     # 有人工写法决定时以人工为准：不做全面相反合并，行为与现状一致。
     pages=CONTRAST_PAGES

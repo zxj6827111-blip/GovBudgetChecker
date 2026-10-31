@@ -103,6 +103,10 @@ def resolve_material_scope(*, evidence: tuple[Evidence, ...],
         raise ValueError('无效的归档层级')
     if selected_level not in ('unit', 'department'):
         selected_level = None
+    if required_categories == ('budget_financial_table', 'budget_function_table'):
+        # 阶段 0 约定：所选层级只用于决算写法裁决；预算路径保持基线不变
+        # （开启预算模板开关时，封面与正文冲突仍按 conflict 裁决）。
+        selected_level = None
     valid = tuple(e for e in evidence if e.qualified and e.scope in ('unit', 'department')
                   and e.kind in ('declaration', *required_categories) and e.page > 0 and e.text.strip())
     body = tuple(e for e in valid if e.kind in required_categories and e.page > 1)
@@ -168,7 +172,8 @@ def resolve_material_scope(*, evidence: tuple[Evidence, ...],
 
 # 与 checklist_support 同口径的目录引导线；此处本地实现避免 services→engine 循环导入。
 _TOC_LEADER_RE = re.compile(r'(?:\.{4,}|…{2,}|·{4,}|-{6,}|_{6,})')
-_TOC_PAGE_TAIL_RE = re.compile(r'(?:[.·…_\-]{3,}|\s{2,}|\t)\s*\d{1,4}\s*$')
+# 目录式页码尾巴：标题与页码之间一个及以上空白即算（单空格目录续页条目不得当作正文证据）。
+_TOC_PAGE_TAIL_RE = re.compile(r'(?:[.·…_\-]{3,}|\s+|\t)\s*\d{1,4}\s*$')
 _SENTENCE_TAIL_RE = re.compile(r'[，。；：、！？”)]$')
 
 
