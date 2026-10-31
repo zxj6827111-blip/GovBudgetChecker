@@ -183,9 +183,14 @@ def _looks_like_toc_page(text: str) -> bool:
 
 
 def _toc_style_line(page_text: str, start: int, end: int) -> bool:
-    """证据所在行是否是目录式行：点线引导，或"标题 + 页码尾巴"。"""
+    """证据起始所在物理行是否是目录式行：点线引导，或"标题 + 页码尾巴"。
+
+    只看起始物理行：collect 在去空白串上匹配，证据可能跨软换行（如无句号
+    表注把下一行页脚页码一起吃进证据）；若按证据终点找行尾，会把正文表注
+    与下一行页脚拼起来误判成目录条目。``end`` 保留在签名里仅为兼容调用方。
+    """
     line_start = page_text.rfind('\n', 0, start) + 1
-    line_end = page_text.find('\n', end)
+    line_end = page_text.find('\n', line_start)
     line_end = len(page_text) if line_end < 0 else line_end
     line = page_text[line_start:line_end]
     if _TOC_LEADER_RE.search(line):

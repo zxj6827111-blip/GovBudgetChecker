@@ -188,6 +188,24 @@ def test_single_space_toc_entry_no_longer_blocks_comprehensive_contrast():
     assert not any(i.severity=='warn' and '主体口径混用' in i.message for i in issues)
 
 
+def test_wrapped_note_with_footer_number_keeps_manual_review():
+    # 审核第三轮（P2）复现场景：无句号表注 + 下一行独立页码。
+    # 修复前：表注被当目录条目排除 → 全面相反不成立 → CMM-018/019 退回 warn。
+    from src.engine.rule_outcome import RuleDeferred
+    pages=['2024年度单位决算',
+           '2024 年度部门决算表\n本表反映部门本年度收入情况\n12\n',
+           '2024 年度部门决算情况说明\n本部门经费情况见相关说明。']
+    doc=archive_document(pages)
+    issues=CMM018_ScopeTerminology().apply(doc)
+    assert any(i.severity=='manual_review' and '相反' in i.message for i in issues)
+    assert not any(i.severity=='warn' and '主体口径混用' in i.message for i in issues)
+    # CMM-019：缺正文独立名称依据 → RuleDeferred，partial_issues 仍带待复核、无文种 warn。
+    with pytest.raises(RuleDeferred) as caught:
+        CMM019_CoverElements().apply(doc)
+    assert any(i.severity=='manual_review' and '相反' in i.message for i in caught.value.partial_issues)
+    assert all(i.severity!='warn' for i in caught.value.partial_issues)
+
+
 def test_human_decision_keeps_existing_warn_behavior():
     # 有人工写法决定时以人工为准：不做全面相反合并，行为与现状一致。
     pages=CONTRAST_PAGES

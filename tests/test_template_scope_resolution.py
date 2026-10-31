@@ -259,6 +259,26 @@ def test_single_space_toc_entry_is_not_body_evidence():
     assert body_summary['selected_hits'] and not body_summary['comprehensive_contrast']
 
 
+def test_wrapped_table_note_with_footer_page_number_still_counts():
+    # 审核第三轮（P2）：无句号表注跨软换行把下一行页脚页码吃进证据时，
+    # 不得把正文表注与页脚拼成目录条目而排除这条有效表注。
+    pages = ['2024年度单位决算',
+             '2024 年度部门决算表\n本表反映部门本年度收入情况\n12\n',
+             '2024 年度部门决算情况说明\n本表反映部门本年度支出情况\n34\n']
+    from src.services.material_writing import collect
+    spans = [{'page': p, 'start': 0, 'end': len(t), 'source_method': 'native_text'}
+             for p, t in enumerate(pages, 1)]
+    evidence = collect(pages, (), 'final', spans)
+    notes = [asdict(e) for e in evidence if e.kind == 'table_note']
+    # 前置确认：去空白匹配确实让表注证据跨行吃到了页脚页码。
+    assert len(notes) == 2
+    assert notes[0]['text'].endswith('12') and notes[1]['text'].endswith('34')
+    summary = contrast(evidence, pages)
+    assert not [e for e in summary['excluded'] if e.get('reason') == 'toc_style_line']
+    assert len(summary['opposite']['table_note']) == 2
+    assert summary['comprehensive_contrast'] is True
+
+
 def test_comprehensive_contrast_keeps_real_body_headings():
     pages = ['2024年度单位决算', '第二部分\n2024年度部门决算表\n本表反映部门本年度收入。\n市级部门决算情况另行说明。']
     rows = [opp('department', 'heading', 2, '2024年度部门决算表', [native(2, pages[1])]),
