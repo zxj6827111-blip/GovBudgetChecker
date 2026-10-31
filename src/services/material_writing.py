@@ -101,7 +101,7 @@ def template_applicability(profile, page_texts):
     return selected, {**proof, 'verified': True, 'reason': '原件封面独立核实年度与文种'}
 
 
-async def load(job_id, file_hash, profile, page_texts, archive_scope=None, excluded_pages=(), source_spans=(), frozen_bindings=None):
+async def load(job_id, file_hash, profile, page_texts, archive_scope=None, excluded_pages=(), source_spans=(), frozen_bindings=None, archive_basis=None, cover_name=None):
     from src.db.connection import DatabaseConnection
     from src.services import annual_templates
     snapshot={'available':False,'reason':'模板能力关闭' if not enabled() else '年度、文种或适用依据尚未核实','algorithm':ALGORITHM,'target_year':profile.year,'report_kind':profile.kind}
@@ -131,8 +131,14 @@ async def load(job_id, file_hash, profile, page_texts, archive_scope=None, exclu
         if isinstance(saved,str):saved=json.loads(saved)
         independent=any(e.get('dimension')=='human_cover_independent' and e.get('value') is True for e in saved)
         human=HumanDecision(human.value,human.decision_id,independent)
-    resolution=asdict(resolve_material_scope(evidence=evidence,template_qualified=bool(snapshot.get('available') and caps.get('writing_auto')),human=human,archive_scope=archive_scope if archive_scope in ('unit','department') else None, required_categories=('budget_financial_table','budget_function_table') if profile.kind=='budget' else ('heading','table_note')))
-    resolution.update(template_capability_pending=copy_pending(snapshot),template_applicability=applicability,unqualified_ocr_candidates=[x for x in source_spans if x.get('qualified') is False],snapshot=snapshot,algorithm=ALGORITHM,domain=profile.kind,template_enabled=enabled(),decision_revision=decision.get('revision') if decision else None,archive_scope=archive_scope,archive_conflict=bool(archive_scope in ('unit','department') and resolution.get('value') and resolution['value']!=archive_scope))
+    # 阶段 0：冻结的"上传所选组织层级"只是检查基准（department/unit 才可用），
+    # 且只用于决算写法；封面主体与所选组织不一致时不使用，走原路径并记录
+    # archive_subject_mismatch。预算路径不消费所选层级，保持基线行为。
+    selected_level=((archive_basis or {}).get('level') if isinstance(archive_basis,dict) else None) \
+        if profile.kind=='final' else None
+    selected_org_name=(archive_basis or {}).get('organization_name') if isinstance(archive_basis,dict) else None
+    resolution=asdict(resolve_material_scope(evidence=evidence,template_qualified=bool(snapshot.get('available') and caps.get('writing_auto')),human=human,archive_scope=archive_scope if archive_scope in ('unit','department') else None,selected_level=selected_level,cover_name=cover_name,selected_org_name=selected_org_name,required_categories=('budget_financial_table','budget_function_table') if profile.kind=='budget' else ('heading','table_note')))
+    resolution.update(template_capability_pending=copy_pending(snapshot),template_applicability=applicability,unqualified_ocr_candidates=[x for x in source_spans if x.get('qualified') is False],snapshot=snapshot,algorithm=ALGORITHM,domain=profile.kind,template_enabled=enabled(),decision_revision=decision.get('revision') if decision else None,archive_scope=archive_scope,archive_basis={key:archive_basis.get(key) for key in ('organization_id','organization_name','level','source')} if isinstance(archive_basis,dict) else None,archive_conflict=bool(archive_scope in ('unit','department') and resolution.get('value') and resolution['value']!=archive_scope))
     if decision:
         resolution['human_decision']={key:decision.get(key) for key in
             ('request_id','revision','writing_scope','actor','note','evidence_reference','conflict_acknowledged')}

@@ -20,6 +20,46 @@ def test_budget_two_directions_remain_conflicts(cover,body):
     assert result.status=='conflict'
 
 
+@pytest.mark.parametrize('cover,body',[('部门','单位'),('单位','部门')])
+def test_budget_conflict_unchanged_even_with_selected_level(cover,body):
+    """阶段 0 审核修正：所选层级只用于决算写法。
+
+    开启预算模板开关时，封面与正文写法冲突仍按基线判 conflict，
+    不因上传所选层级改判 confirmed（预算路径不变约定）。
+    """
+    pages=[f'上海市测试局2026年{cover}预算',f'2026年{body}财务收支预算总表',f'2026年{body}一般公共预算支出功能分类预算表']
+    rows=material_writing.collect(pages,report_kind='budget')
+    result=resolve_material_scope(evidence=rows,template_qualified=True,required_categories=('budget_financial_table','budget_function_table'),
+                                  selected_level='unit' if body=='单位' else 'department')
+    assert result.status=='conflict' and result.value is None
+    assert result.archive_subject_mismatch is False
+
+
+@pytest.mark.asyncio
+async def test_budget_load_ignores_selected_level_but_final_uses_it(monkeypatch):
+    """load() 层面同样只对决算消费所选层级：预算冲突保持基线，决算按基准裁决。"""
+    from src.db.connection import DatabaseConnection
+    conn=type('Connection',(),{'fetchrow':AsyncMock(return_value=None)})()
+    monkeypatch.setenv('DATABASE_URL','test-only-unused-no-network')
+    monkeypatch.setenv('GBC_TEMPLATE_SCOPE','true')
+    monkeypatch.setenv('GBC_BUDGET_TEMPLATE_SCOPE','true')
+    monkeypatch.setattr(DatabaseConnection,'acquire',AsyncMock(return_value=conn))
+    monkeypatch.setattr(DatabaseConnection,'release',AsyncMock())
+    snap={'available':True,'capability_scope':{'writing_auto':True},'content':{'config':{}},'target_year':2026}
+    monkeypatch.setattr(annual_templates,'select_for_profile',AsyncMock(return_value=snap))
+    basis={'organization_id':'org-1','organization_name':'上海市测试局','level':'unit','source':'upload_selection'}
+    # 预算：封面单位写法、正文部门写法 → 与基线一致判 conflict，不按所选层级 confirmed。
+    budget_pages=['上海市测试局2026年单位预算','2026年部门财务收支预算总表','2026年部门一般公共预算支出功能分类预算表']
+    budget_result=await material_writing.load('test','a'*64,profile(),budget_pages,'unit',archive_basis=dict(basis))
+    assert budget_result['status']=='conflict' and budget_result['value'] is None
+    assert not budget_result.get('archive_subject_mismatch')
+    # 决算对照：同样提供所选层级时按基准裁决。
+    final_pages=['2026年度单位决算','2026年度部门决算表\n本表反映部门本年度收入。','2026年度部门决算情况说明']
+    final_profile=DocumentProfile(report_kind=ProfileField(value='final'))
+    final_result=await material_writing.load('test','a'*64,final_profile,final_pages,'unit',archive_basis=dict(basis))
+    assert final_result['source']=='archive' and final_result['value']=='unit'
+
+
 @pytest.mark.asyncio
 async def test_budget_requires_both_feature_and_approved_capability(monkeypatch):
     from src.db.connection import DatabaseConnection

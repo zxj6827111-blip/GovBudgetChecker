@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .checklist_support import (
     CJK,
@@ -214,6 +214,46 @@ _SCOPE_WRONG_TERMS: Dict[str, Sequence[Tuple[str, re.Pattern[str]]]] = {
 _CITY_LEVEL_TERMS_RE = re.compile(r"市级预算主管部门|与市级财政有经费领拨关系|使用市级财政拨款|市级财政(?=部门|拨款)")
 
 
+def _archive_writing_contrast(doc: Document) -> Optional[dict]:
+    """仅当写法基准来自"上传所选层级"（source=archive）时判定"写法全面相反"。
+
+    人工决定、原文明示与模板推断保持原有行为；全面相反时主体/封面文种子项
+    转为一条待人工复核，不再逐条报 warn。
+    """
+    resolution = getattr(getattr(doc, "document_profile", None), "writing_scope", {}) or {}
+    if resolution.get("source") != "archive" or resolution.get("status") != "confirmed":
+        return None
+    value = resolution.get("value")
+    if value not in ("unit", "department"):
+        return None
+    from src.services.template_scope import comprehensive_writing_contrast
+
+    categories = (("budget_financial_table", "budget_function_table")
+                  if report_kind(doc) == "budget" else ("heading", "table_note"))
+    return comprehensive_writing_contrast(
+        evidence=resolution.get("evidence") or (),
+        selected_scope=value,
+        page_texts=getattr(doc, "writing_page_texts", None) or getattr(doc, "page_texts", None) or [],
+        required_categories=categories,
+    )
+
+
+def _contrast_summary(contrast: dict) -> dict:
+    """问题引用里保留页码与判定要点，不塞入完整证据列表。"""
+    opposite_pages = sorted({
+        item["page"]
+        for rows in (contrast.get("opposite") or {}).values()
+        for item in rows
+        if item.get("page")
+    })
+    return {"comprehensive_contrast": True, "opposite_pages": opposite_pages,
+            "other_scope": contrast.get("other_scope")}
+
+
+def _contrast_label(scope: Optional[str]) -> str:
+    return "单位" if scope == "unit" else "部门"
+
+
 class CMM018_ScopeTerminology(Rule):
     code, severity = "CMM-018", "warn"
     desc = "部门/单位主体口径与层级口径一致（预/决算通用，清单 B-02）"
@@ -222,6 +262,8 @@ class CMM018_ScopeTerminology(Rule):
         doc = prepare_identity_document(doc) if _uses_writing_resolution(doc) else doc
         scope = body_scope(doc) if _uses_writing_resolution(doc) else (body_scope(doc) or subject_scope(doc))
         issues: List[Issue] = []
+        contrast = _archive_writing_contrast(doc)
+        contrast_hits: List[Tuple[int, str, int, int]] = []
         if scope in _SCOPE_WRONG_TERMS:
             label = "部门" if scope == "department" else "单位"
             for term, pattern in _SCOPE_WRONG_TERMS[scope]:
@@ -248,6 +290,10 @@ class CMM018_ScopeTerminology(Rule):
                         else:
                             hits.append((page, text, *flat_span(positions, match.start(), match.end())))
                 if hits:
+                    # 全面相反时不再逐条报反向主体用语，合并为一条待人工复核。
+                    if contrast and contrast.get("comprehensive_contrast"):
+                        contrast_hits.extend(hits)
+                        continue
                     page, text, start, end = hits[0]
                     more = f"（全文共 {len(hits)} 处）" if len(hits) > 1 else ""
                     issues.append(issue_at(
@@ -257,6 +303,19 @@ class CMM018_ScopeTerminology(Rule):
                         locations=[{'page':p,'text':unique_quote(t,a,b),'start':a,'end':b} for p,t,a,b in hits],
                         table_refs=[{'page':p,'span':unique_quote(t,a,b),'role':'反向主体用语'} for p,t,a,b in hits],
                     ))
+        if contrast_hits and contrast and contrast.get("comprehensive_contrast"):
+            summary = _contrast_summary(contrast)
+            pages_text = "、".join(str(p) for p in summary["opposite_pages"]) or "未定位"
+            first_page, first_text, first_start, first_end = contrast_hits[0]
+            issues.append(issue_at(
+                self,
+                f"材料标题与表注均为{_contrast_label(summary['other_scope'])}写法，与所选层级（{_contrast_label(scope)}）相反，"
+                f"请核对归档（反向写法见第{pages_text}页）。",
+                first_page, first_text, first_start, first_end, severity="manual_review", checklist_item="B-02",
+                occurrences=len(contrast_hits),
+                locations=[{'page':p,'text':unique_quote(t,a,b),'start':a,'end':b} for p,t,a,b in contrast_hits],
+                writing_contrast=summary,
+            ))
         area = jurisdiction(doc) or org_name(doc) or ""
         if re.search(r"[区县]", area.replace("社区", "")) and not re.search(r"^(?:北京|上海|天津|重庆)市$", area):
             for page, text in iter_pages(doc):
@@ -270,7 +329,11 @@ class CMM018_ScopeTerminology(Rule):
                     ))
                     break
         if not scope and _uses_writing_resolution(doc):
-            raise RuleDeferred(self.code, detail="写法口径未确认；主体用语子项未完成", partial_issues=issues)
+            detail = "写法口径未确认；主体用语子项未完成"
+            resolution = getattr(getattr(doc, "document_profile", None), "writing_scope", {}) or {}
+            if resolution.get("archive_subject_mismatch"):
+                detail += "；封面主体与所选组织不一致，请核对归档"
+            raise RuleDeferred(self.code, detail=detail, partial_issues=issues)
         if not scope and not issues:
             raise RuleNotApplicable(self.code, detail="未能从目录、正文或文件名确定部门/单位口径")
         return issues
@@ -317,8 +380,8 @@ class CMM019_CoverElements(Rule):
         issues: List[Issue] = []
         incomplete: List[str] = []
 
-        def _emit(message: str, start: int, end: int, severity: str = "warn") -> None:
-            issues.append(issue_at(self, message, 1, cover, start, end, severity=severity, checklist_item="A-02"))
+        def _emit(message: str, start: int, end: int, severity: str = "warn", **extra: Any) -> None:
+            issues.append(issue_at(self, message, 1, cover, start, end, severity=severity, checklist_item="A-02", **extra))
 
         # 年度
         cover_years = {int(y) for y in _YEAR_RE.findall(flat)}
@@ -349,8 +412,16 @@ class CMM019_CoverElements(Rule):
         # 文种（部门/单位）
         resolution = getattr(getattr(doc, "document_profile", None), "writing_scope", {}) or {}
         scope = resolution.get("cover_independent_scope") if _uses_writing_resolution(doc) else body_scope(doc)
+        contrast = _archive_writing_contrast(doc)
         noun = "预算" if kind == "budget" else "决算"
-        if scope == "department":
+        if contrast and contrast.get("comprehensive_contrast"):
+            # 全面相反：文种子项不出 warn，改出一条待人工复核；年度、名称等其余子项照常执行。
+            summary = _contrast_summary(contrast)
+            pages_text = "、".join(str(p) for p in summary["opposite_pages"]) or "未定位"
+            _emit(f"材料标题与表注均为{_contrast_label(summary['other_scope'])}写法，"
+                  f"与所选层级（{_contrast_label(scope)}）相反，请核对归档（反向写法见第{pages_text}页）。",
+                  *anchor, severity="manual_review", writing_contrast=summary)
+        elif scope == "department":
             if kind == "final" and "部门决算" not in flat:
                 _emit("部门决算封面应写明“××××年度部门决算”，当前封面漏写“部门”二字。", *anchor)
             if kind == "budget" and ("单位预算" in flat or re.search(r"预算单位[:：]", flat)):
@@ -378,7 +449,10 @@ class CMM019_CoverElements(Rule):
         if _uses_writing_resolution(doc) and not scope:
             incomplete.append("封面文种缺少独立依据")
         if incomplete:
-            raise RuleDeferred(self.code, detail="；".join(incomplete), partial_issues=issues, unresolved_reasons=incomplete)
+            detail = "；".join(incomplete)
+            if resolution.get("archive_subject_mismatch"):
+                detail += "；封面主体与所选组织不一致，请核对归档"
+            raise RuleDeferred(self.code, detail=detail, partial_issues=issues, unresolved_reasons=incomplete)
         return issues
 
 

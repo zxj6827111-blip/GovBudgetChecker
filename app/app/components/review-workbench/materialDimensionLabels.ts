@@ -3,6 +3,17 @@ type Snapshot = Record<string, any> | null | undefined;
 
 export const WRITING_LABELS: Record<string, string> = { unit: "单位", department: "部门", unknown: "暂不确定" };
 export const AMOUNT_LABELS: Record<string, string> = { unit_self: "仅本级", department_summary: "汇总所属单位", unknown: "暂不确定" };
+// 写法基准来源。archive = 上传所选组织层级：它只是检查基准，不代表“身份已核实”。
+export const WRITING_SOURCE_LABELS: Record<string, string> = {
+  human: "人工确认",
+  declaration: "原文明示",
+  template: "经批准模板推断",
+  archive: "按上传所选层级作为检查基准",
+  unresolved: "未确定",
+};
+// 封面主体与所选组织不一致：本次检查未采用上传所选层级，请人工核对归档。
+export const ARCHIVE_SUBJECT_MISMATCH_NOTE =
+  "封面主体与所选组织不一致，请核对归档；本次检查未采用上传所选层级作为写法基准。";
 const ADOPTION_LABELS: Record<string, string> = {
   issued: "当年正式下发",
   verified_same: "已核对与旧版一致",

@@ -1218,19 +1218,37 @@ def _resolve_department_name(department_id: Optional[str]) -> Optional[str]:
         return None
 
 
-def resolve_organization_level(organization_id: Any) -> Optional[str]:
-    """组织树中的层级（city/district/department/unit）；查不到返回 None。"""
+def resolve_organization_basis(organization_id: Any) -> Dict[str, Any]:
+    """冻结"上传所选组织"依据：ID、名称、层级与来源；目录查不到时 level=None。
+
+    分析开始时调用一次并贯穿整个分析（检查主体、金额范围与写法裁决消费同一
+    份冻结值）；重新分析取当时的当前选择，已出结果引用冻结副本，不随后续
+    改名或调整层级而变化。
+    """
+    basis: Dict[str, Any] = {
+        "organization_id": organization_id,
+        "organization_name": None,
+        "level": None,
+        "source": "upload_selection",
+    }
     normalized_id = str(organization_id or "").strip()
     if not normalized_id or not ORG_AVAILABLE:
-        return None
+        return basis
     try:
         org = require_org_storage().get_by_id(normalized_id)
     except Exception:
-        logger.exception("Failed to resolve organization level for %s", normalized_id)
-        return None
+        logger.exception("Failed to resolve organization basis for %s", normalized_id)
+        return basis
     if org is None:
-        return None
-    return str(getattr(org, "level", "") or "").strip() or None
+        return basis
+    basis["organization_name"] = str(getattr(org, "name", "") or "").strip() or None
+    basis["level"] = str(getattr(org, "level", "") or "").strip() or None
+    return basis
+
+
+def resolve_organization_level(organization_id: Any) -> Optional[str]:
+    """组织树中的层级（city/district/department/unit）；查不到返回 None。"""
+    return resolve_organization_basis(organization_id)["level"]
 
 
 #: 已绑定 Material Slot 的文件版本禁止由旧结构化清理链路删除。

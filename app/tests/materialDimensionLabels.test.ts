@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 import {
+  WRITING_SOURCE_LABELS,
   adoptionLabel,
   amountNeed,
   auditDetail,
@@ -25,5 +26,11 @@ assert.match(templateSummary({ ...forward, adoption_kind: "issued", target_year:
 assert.equal(templateSummary({ available: false, reason: "年度模板未绑定" }), "模板对照未启用：年度模板未绑定");
 assert.match(amountNeed(["CMM-018", "V33-236"]), /仍有 2 项检查.*CMM-018、V33-236/);
 assert.match(amountNeed([]), /可暂不填写/);
+
+// 阶段 0：上传所选层级只是检查基准，不写“身份已核实”。
+assert.equal(WRITING_SOURCE_LABELS.archive, "按上传所选层级作为检查基准");
+assert.doesNotMatch(JSON.stringify(WRITING_SOURCE_LABELS), /身份已核实/);
+assert.equal(WRITING_SOURCE_LABELS.human, "人工确认");
+assert.equal(WRITING_SOURCE_LABELS.declaration, "原文明示");
 
 console.log("materialDimensionLabels.test.ts passed");
