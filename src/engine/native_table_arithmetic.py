@@ -148,6 +148,11 @@ def cluster_source_errors(rule, issues):
     groups, retained = {}, []
     for issue in issues:
         location = issue.location if isinstance(issue.location, dict) else {}
+        # 整列错位的根因问题须独立成条（高危、可定位到列位），
+        # 不能并入"多行勾稽不平"的症状聚簇，否则严重度与措辞都会被稀释。
+        if str(issue.check_relation_id or '').endswith(':column_shift'):
+            retained.append(issue)
+            continue
         # 支出纵向关系还需与 V33-120 按同一原格操作数去重；提前把不同
         # 金额列揉成一条，会丢失单一算式身份，导致跨规则重复问题无法合并。
         if rule.code == "V33-241" and ":expenditure:vertical:" in str(issue.check_relation_id):
@@ -595,6 +600,18 @@ def check_expenditure_arithmetic(rule, doc):
         unresolved.append('支出决算表未找到唯一合计行')
     indicators = ('total_actual', 'basic_actual', 'project_actual', 'to_superior_actual',
                   'operational_actual', 'subsidiary_actual')
+    from .native_column_shift import (
+        EXPENSE_LABELS, column_shift_hint, column_shift_issue, detect_column_shift,
+    )
+    # 明细行整列错位（源文件漏列/错列）的根因判定：列合计证据一旦成立，
+    # 输出一条高危根因问题，并在补核原因里给出材料视角提示。
+    valid_codes = {code for code in codes if code == 'total'
+                   or re.fullmatch(r'\d{3}(?:\d{2}){0,2}', str(code))}
+    shift = detect_column_shift(
+        [(indicator, EXPENSE_LABELS[indicator]) for indicator in indicators],
+        [fact for fact in facts if fact.subject_code in valid_codes],
+        org_name=doc.fact_context.org_name,
+    )
     for code in codes:
         operands, errors = [], []
         for indicator in indicators:
@@ -626,6 +643,10 @@ def check_expenditure_arithmetic(rule, doc):
                     f'支出决算表{code}/{indicator}层级合计', parent, children)
                 issues.extend(found)
                 unresolved.extend(missing)
+    if shift:
+        issues.append(column_shift_issue(rule, doc, '支出决算表', 'FIN_03_expenditure', shift))
+        if unresolved:
+            unresolved.append(column_shift_hint('支出决算表', rule.code))
     if len(unresolved) > 12:
         # Relation receipts retain each row and reason; the rule summary
         # should remain readable for a table with many explicit blank cells.

@@ -50,6 +50,20 @@ def check_income_sources(rule, doc):
     roles = [m['canonical_measure'] for m in mappings]
     if any(roles.count(role) != 1 for role in ('total_actual', *SOURCES)):
         return finish(rule, header_issues, ['收入表来源列未绑定至唯一已确认模板'])
+    from .native_column_shift import (
+        INCOME_LABELS, column_shift_hint, column_shift_issue, detect_column_shift,
+    )
+    # 明细行整列错位（源文件漏列/错列）的根因判定：列合计证据一旦成立，
+    # 输出一条高危根因问题，并在补核原因里给出材料视角提示。
+    columns = [
+        (mapping['canonical_measure'],
+         mapping.get('source_col_name') or INCOME_LABELS.get(mapping['canonical_measure'],
+                                                             mapping['canonical_measure']))
+        for mapping in sorted(mappings, key=lambda item: int(item['source_col_idx']))
+    ]
+    shift = detect_column_shift(columns, facts, org_name=doc.fact_context.org_name)
+    shift_note = ('经列合计比对，本表明细行疑似整体错位一列（各列明细之和逐列等于合计行相邻列），'
+                  '请优先核对原件列位。' if shift else '')
     issues, unresolved = [], []
     for code in rows:
         terms, errors, unknown_cells = [], [], []
@@ -87,7 +101,8 @@ def check_income_sources(rule, doc):
                 message = (f'收入决算表科目{code}：原件合计{parent.normalized_value:.2f}万元，'
                            f'已确认分项合计{sum(term.normalized_value for term in known):.2f}万元；'
                            f'已知数差额{parent.normalized_value - sum(term.normalized_value for term in known):.2f}万元。'
-                           '差额可能由空白或未知格承担，请核对原件；本次不作完整勾稽错误认定。' + '；'.join(errors))
+                           '差额可能由空白或未知格承担，请核对原件；本次不作完整勾稽错误认定。'
+                           + shift_note + '；'.join(errors))
                 issues.append(rule._issue(message, {'table_code': CODE, 'code': code,
                     'unknown_operand_cells': unknown_cells,
                     'operand_refs': [operand_ref(term, 'known') for term in terms]}, 'manual_review',
@@ -98,6 +113,10 @@ def check_income_sources(rule, doc):
                                   terms[0], terms[1:])
         issues.extend(found)
         unresolved.extend(missing)
+    if shift:
+        issues.append(column_shift_issue(rule, doc, table.title, CODE, shift))
+        if unresolved:
+            unresolved.append(column_shift_hint(table.title, rule.code))
     try:
         # 收入来源列同样需要纵向核对；不能用合计列已通过替代其他列的实际检查。
         issues.extend(check_native_detail_tables(rule, doc, table_codes=(CODE,), include_income_sources=True))
