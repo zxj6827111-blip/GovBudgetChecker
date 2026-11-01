@@ -20,6 +20,7 @@ from src.schemas.organization import Organization
 from src.services.fiscal_fact_materializer import FiscalFactMaterializer
 from src.services.fiscal_table_rules import NINE_TABLE_RULES
 from src.services.org_storage import get_org_storage
+from src.services.org_name_identity import identity_name
 from src.services.parse_artifact_store import (
     find_cached_parse_run,
     load_parse_artifact,
@@ -1085,9 +1086,13 @@ def _find_org_by_name_and_level(
     level: str,
     parent_id: Optional[str] = None,
 ):
-    clean_name = str(name or "").strip()
+    # 同一个本级单位在不同原件的封面上会写成“局本级 / 局本部 / 局（本级）”。
+    # 按原始字符串比较会把这些写法各建一条记录，形成并列候选，必须按身份归一比较。
+    clean_identity = identity_name(str(name or "").strip())
+    if not clean_identity:
+        return None
     for org in storage.get_all():
-        if org.level != level or org.name != clean_name:
+        if org.level != level or identity_name(org.name) != clean_identity:
             continue
         if parent_id is not None and org.parent_id != parent_id:
             continue

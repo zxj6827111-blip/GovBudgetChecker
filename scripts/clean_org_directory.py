@@ -21,9 +21,28 @@ def read(path):
     return json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
 
 
-def plan_directory(payload, review_groups=()):
+def _keeper(values, referenced_ids):
+    """保留项优先取仍有材料引用的记录，其次最早创建，最后按 id 定序。"""
+    return min(
+        values,
+        key=lambda org: (
+            0 if org["id"] in referenced_ids else 1,
+            org.get("created_at", 0),
+            org["id"],
+        ),
+    )
+
+
+def _resolve(mapping, org_id):
+    while org_id in mapping:
+        org_id = mapping[org_id]
+    return org_id
+
+
+def plan_directory(payload, review_groups=(), approve_groups=(), referenced_ids=()):
     groups, mapping, review = {}, {}, []
     rows = payload.get("organizations", [])
+    referenced = frozenset(str(item) for item in (referenced_ids or ()))
     for org in rows:
         groups.setdefault(
             (org["level"], org.get("parent_id"), normalize_org_name(org["name"])), []
@@ -47,7 +66,7 @@ def plan_directory(payload, review_groups=()):
                 }
             )
     for values in groups.values():
-        keep = min(values, key=lambda org: (org.get("created_at", 0), org["id"]))
+        keep = _keeper(values, referenced)
         mapping.update({org["id"]: keep["id"] for org in values if org["id"] != keep["id"]})
     near = {}
     for org in rows:
@@ -73,6 +92,40 @@ def plan_directory(payload, review_groups=()):
                 review.append({"kind": "external_group_review", "id": org["id"],
                                "name": org["name"],
                                "reason": f"独立清单第{group_index}组：{' / '.join(names)}；仅供核对，不认定等价"})
+    # 经用户明确批准的写法变体组（如“局本级 / 局本部 / 局（本级）”）才允许合并。
+    # 等价比较器只用来校验同组确实等价，不能用它自行授权合并“机关/本级”这类实质差别。
+    by_id = {org["id"]: org for org in rows}
+    by_name = {}
+    for org in rows:
+        by_name.setdefault(normalize_org_name(org["name"]), []).append(org)
+    for group_index, names in enumerate(approve_groups, 1):
+        label = f"批准的变体组第{group_index}组（{' / '.join(names)}）"
+        if len({identity_name(name) for name in names}) != 1:
+            raise ValueError(f"{label}身份不一致，拒绝合并")
+        members = {
+            org["id"]: org
+            for name in names
+            for org in by_name.get(normalize_org_name(name), [])
+        }
+        if len(members) < 2:
+            review.append(
+                {
+                    "kind": "approve_group_unmatched",
+                    "id": "",
+                    "name": " / ".join(names),
+                    "reason": "批准组未命中至少两条目录记录，未执行合并",
+                }
+            )
+            continue
+        if len({(org["level"], org.get("parent_id")) for org in members.values()}) != 1:
+            raise ValueError(f"{label}层级或上级不一致，拒绝合并")
+        survivors = {_resolve(mapping, org_id) for org_id in members}
+        keep = _keeper([by_id[org_id] for org_id in survivors], referenced)
+        for org_id in survivors:
+            if org_id != keep["id"]:
+                mapping[org_id] = keep["id"]
+    # 已并入保留项的记录不再存在，继续列为“待确认”会让复核人对着已删除的条目核对。
+    review = [item for item in review if item["id"] not in mapping]
     retained = []
     for org in rows:
         if org["id"] in mapping:
@@ -99,6 +152,16 @@ def rewrite_ids(value, mapping):
     return value
 
 
+#: 组织引用列不只叫 org_id：material_slots 用 subject_org_id/department_org_id/
+#: jurisdiction_org_id，reporting_tasks 用 jurisdiction_org_id。漏扫会错误宣称已核对。
+ORG_REFERENCE_COLUMN_SQL = (
+    "SELECT table_schema, table_name, column_name FROM information_schema.columns "
+    "WHERE table_schema='public' AND (column_name LIKE '%org_id%' "
+    "OR column_name IN ('organization_id','department_id','unit_id')) "
+    "ORDER BY table_name, column_name"
+)
+
+
 async def database_references(dsn, mapping):
     if not dsn:
         return {
@@ -112,9 +175,7 @@ async def database_references(dsn, mapping):
     tables = []
     try:
         async with conn.transaction(readonly=True):
-            columns = await conn.fetch(
-                "SELECT table_schema, table_name, column_name FROM information_schema.columns WHERE table_schema='public' AND column_name IN ('org_id','organization_id','department_id')"
-            )
+            columns = await conn.fetch(ORG_REFERENCE_COLUMN_SQL)
             for row in columns:
                 schema, table, column = (
                     str(row[key]).replace('"', '""')
@@ -146,6 +207,11 @@ def main():
         "--expected-orgs", type=Path, help="独立清单（JSON 名称数组），只报告缺失，不创建组织"
     )
     parser.add_argument("--review-groups", type=Path, help="独立冻结的近似名称组（JSON 二维数组），只输出人工核查，不参与合并")
+    parser.add_argument(
+        "--approve-groups",
+        type=Path,
+        help="已明确批准合并的写法变体组（JSON 二维数组，如 局本级/局（本级）），仅在身份、层级、上级一致时并入保留项",
+    )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--write-copy", type=Path)
@@ -157,7 +223,16 @@ def main():
     if args.out.resolve().is_relative_to(source):
         parser.error("演练输出不得位于原组织数据目录内")
     payload = read(source / "organizations.json")
-    cleaned, mapping, review = plan_directory(payload, read(args.review_groups) if args.review_groups else ())
+    links = read(source / "job_org_links.json")
+    referenced_ids = {
+        str(link["org_id"]) for link in links.get("links", []) if link.get("org_id")
+    }
+    cleaned, mapping, review = plan_directory(
+        payload,
+        review_groups=read(args.review_groups) if args.review_groups else (),
+        approve_groups=read(args.approve_groups) if args.approve_groups else (),
+        referenced_ids=referenced_ids,
+    )
     if args.expected_orgs:
         expected = read(args.expected_orgs)
         existing_names = {
@@ -202,8 +277,12 @@ def main():
         "review_groups_source": ({"path": str(args.review_groups.resolve()),
                                   "sha256": hashlib.sha256(args.review_groups.read_bytes()).hexdigest()}
                                  if args.review_groups else None),
+        "approve_groups_source": ({"path": str(args.approve_groups.resolve()),
+                                   "sha256": hashlib.sha256(args.approve_groups.read_bytes()).hexdigest()}
+                                  if args.approve_groups else None),
         "limits": [
             "仅合并同层级同上级格式归一后完全相同的节点",
+            "写法变体组须由 --approve-groups 明确列出，且身份、层级、上级一致才合并",
             "缺失组织必须由用户确认后补录",
             "近似别名不自动合并",
         ],

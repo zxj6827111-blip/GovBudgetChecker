@@ -24,7 +24,7 @@ from src.schemas.organization import (
     OrganizationTree,
 )
 from src.services.org_hierarchy import LEVEL_ORDER, validate_organization_hierarchy
-from src.services.org_name_identity import normalize_org_name
+from src.services.org_name_identity import identity_name, normalize_org_name
 
 
 def organization_name_warning(name):
@@ -247,7 +247,9 @@ class OrganizationStorage:
         by_id = {org.id: org for org in organizations}
         identities = set()
         for org in organizations:
-            key = (normalize_org_name(org.name), org.level, org.parent_id)
+            # 本级/本部/（本级）是同一主体的三种写法，按身份归一去重；
+            # 只按括号全半角比较会让“局本级”和“局（本级）”各建一条记录。
+            key = (identity_name(org.name), org.level, org.parent_id)
             if key in identities:
                 errors.append(f"重复组织：{org.name}（{org.level}，上级 {org.parent_id or '无'}）")
             identities.add(key)
@@ -593,9 +595,9 @@ class OrganizationStorage:
         seen = {}
         for row in expanded_rows:
             name = row.get("name", "")
-            key = (normalize_org_name(name), row.get("level"), normalize_org_name(row.get("parent_name")))
+            key = (identity_name(name), row.get("level"), identity_name(row.get("parent_name")))
             if key in seen and seen[key] != name:
-                result.errors.append(f"格式归一后重复组织：{name}")
+                result.errors.append(f"格式或本级写法归一后重复组织：{name}")
             seen[key] = name
             if organization_name_warning(name) and not confirm_name_warning:
                 result.errors.append(f"organization_name_confirmation_required：{name} 名称尾部疑似包含年度或文种，需确认")
