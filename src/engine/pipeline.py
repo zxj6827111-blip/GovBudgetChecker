@@ -190,6 +190,11 @@ def run_rules_with_outcomes(
                     partial_findings_count=len(partial_list),
                     unresolved_reasons=unresolved,
                     reason_codes=list(getattr(signal, "reason_codes", []) or []),
+                    blocked_by=list(getattr(signal, "blocked_by", []) or []),
+                    missing_operands=list(getattr(signal, "missing_operands", []) or []),
+                    candidates=list(getattr(signal, "candidates", []) or []),
+                    next_action=getattr(signal, "next_action", None),
+                    root_cause_key=getattr(signal, "root_cause_key", None),
                 )
             )
             continue

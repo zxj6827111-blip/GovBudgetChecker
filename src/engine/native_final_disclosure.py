@@ -269,14 +269,14 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
         if page and span:
             candidates.insert(0, text_candidate(
                 section=section, page=page, span=span,
-                value=item.get('xiang') or item.get('kuan') or item.get('klass'),
+                value=item.group('xiang') or item.group('kuan') or item.group('klass'),
             ))
         return make_diagnosis(
             reason_codes=[code],
             missing_operands=[missing_text_operand(
-                role=role or item.get('xiang') or item.get('kuan') or item.get('klass') or '科目',
+                role=role or item.group('xiang') or item.group('kuan') or item.group('klass') or '科目',
                 section=section, page=page,
-                row_key={key: item.get(key) for key in ('klass', 'kuan', 'xiang') if item.get(key)},
+                row_key={key: item.group(key) for key in ('klass', 'kuan', 'xiang') if item.group(key)},
                 fund_scope='一般公共预算', stage='决算', year=year,
             )],
             candidates=candidates,
@@ -367,12 +367,12 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                     ), text_diag(
                         'text_binding_failed',
                         extra_candidates=[table_candidate_row] if table_candidate_row else [],
-                        role=item.get(group),
+                        role=item.group(group),
                     )
                 return None, (
                     f'说明中的{level}“{item[group]}”在表内找不到同名科目'
                     f'（可能使用了旧科目名称或写错），无法与表格金额对应'
-                ), text_diag('subject_name_unlocated', role=item.get(group))
+                ), text_diag('subject_name_unlocated', role=item.group(group))
             return None, (
                 f'说明中的{level}“{item[group]}”在表内对应多个科目，无法唯一对应'
             ), text_diag(
@@ -383,7 +383,7 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                         if str(fact.subject_code) in candidates
                     ) if candidate
                 ],
-                role=item.get(group),
+                role=item.group(group),
             )
         parent = paths[next(iter(candidates))]
         if group == 'klass':
