@@ -75,6 +75,7 @@ from src.engine.diagnostics import (
     make_diagnosis,
     merge_diagnoses,
 )
+from src.engine.diagnostic_text import render_obligation_detail, render_receipt_reason
 from src.engine.rule_policy import AMOUNT_TOLERANCE_WAN
 
 #: 关系级子检查状态 → 聚合优先级（与规则六态共用优先级语义；
@@ -1972,6 +1973,10 @@ def build_check_receipts(
                     sub_check_id=f"{obligation_id}:{raw_rule_id}",
                     obligation_id=obligation_id or None,
                 )
+                if status in UNCOMPLETED_RECEIPT_STATUSES or incomplete_reason:
+                    incomplete_reason = render_receipt_reason(
+                        raw_rule_id, f"{obligation_id}:{raw_rule_id}", diagnosis
+                    )
             receipt = CheckReceipt(
                 rule_id=raw_rule_id,
                 sub_check_id=f"{obligation_id}:{raw_rule_id}",
@@ -2098,6 +2103,8 @@ def apply_obligation_diagnosis(
             instance["candidates"] = list(diagnosis["candidates"])
             instance["next_action"] = diagnosis["next_action"]
             instance["root_cause_key"] = diagnosis["root_cause_key"]
+            if status not in {"ai_not_run", "ai_failed"}:
+                instance["detail"] = render_obligation_detail(instance, children)
             continue
 
         child_diagnoses = [
@@ -2146,6 +2153,7 @@ def apply_obligation_diagnosis(
         instance["candidates"] = list(merged["candidates"])
         instance["next_action"] = selected.get("next_action") or choose_next_action(codes)
         instance["root_cause_key"] = selected.get("root_cause_key") or merged["root_cause_key"]
+        instance["detail"] = render_obligation_detail(instance, children)
 
 
 def obligation_ids_for_rule(rule_id: Any) -> List[str]:
