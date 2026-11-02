@@ -258,6 +258,67 @@ function rowKeyLabel(value: unknown): string | null {
   return null;
 }
 
+function pageLabel(value: unknown): string {
+  return typeof value === "number" && Number.isInteger(value) && value > 0
+    ? `第${value}页`
+    : "页码未确认";
+}
+
+function missingOperandLabel(entry: {
+  source: string;
+  role?: string;
+  table_code?: string | null;
+  section?: string | null;
+  page?: number | null;
+  row_key?: unknown;
+  column?: string | null;
+}): string {
+  const role = entry.role?.trim();
+  const row = rowKeyLabel(entry.row_key);
+  const column = entry.column?.trim();
+  if (entry.source === "text") {
+    const where = entry.section || "说明章节";
+    return [
+      `说明「${where}」`,
+      pageLabel(entry.page),
+      role ? `角色：${role}` : "",
+      row ? `行：${row}` : "",
+      column ? `列：${column}` : "",
+    ].filter(Boolean).join(" / ");
+  }
+  return [
+    `表${entry.table_code || "表格"}`,
+    pageLabel(entry.page),
+    role ? `角色：${role}` : "",
+    row ? `行${row}` : "",
+    column ? `列${column}` : "",
+  ].filter(Boolean).join(" / ");
+}
+
+function candidateLabel(entry: {
+  source: string;
+  table_code?: string | null;
+  section?: string | null;
+  page?: number | null;
+  cell_id?: string | null;
+  value?: unknown;
+}): string {
+  const value = entry.value === null || entry.value === undefined
+    ? ""
+    : String(entry.value).trim();
+  if (entry.source === "text") {
+    return `说明「${entry.section || "未识别章节"}」${pageLabel(entry.page)}${value ? `「${value}」` : ""}`;
+  }
+  return `表${entry.table_code || "未识别表"} ${pageLabel(entry.page)} 格${entry.cell_id || "未识别"}${value ? `（值：${value}）` : ""}`;
+}
+
+/** 后端在 rule_no_reason 时保留的规则业务说明；只做带标签的展示提取。 */
+function retainedRuleExplanation(detail: string | null | undefined): string | null {
+  const match = /规则说明：([\s\S]*?)(?:。下一步：|$)/.exec(String(detail ?? ""));
+  const value = match?.[1]?.trim().replace(/[。；;]+$/, "");
+  return value || null;
+}
+
 /** 用结构化卡点回答“卡在哪、缺什么、下一步谁处理”；旧结果返回 null。 */
 export function describeObligationDiagnosis(
   item: ObligationReviewItemRecord,
@@ -279,23 +340,19 @@ export function describeObligationDiagnosis(
     );
   }
   if (missing.length) {
-    parts.push(
-      `缺少：${missing
-        .map((entry) => {
-          const where = entry.source === "table"
-            ? entry.table_code || "表格"
-            : entry.section || "说明章节";
-          const row = rowKeyLabel(entry.row_key);
-          return [where, row, entry.column].filter(Boolean).join(" / ");
-        })
-        .join("、")}`,
-    );
+    parts.push(`缺少：${missing.map((entry) => missingOperandLabel(entry)).join("、")}`);
   }
   if (candidates.length) {
-    parts.push(`候选：${candidates.length} 处`);
+    parts.push(`候选：${candidates.map((entry) => candidateLabel(entry)).join("；")}`);
   }
   if (codes.length) {
     parts.push(`原因码：${codes.map((code) => REASON_CODE_LABELS[code] ?? code).join("、")}`);
+  }
+  if (codes.includes("rule_no_reason")) {
+    const retained = retainedRuleExplanation(item.detail);
+    if (retained) {
+      parts.push(`规则说明：${retained}`);
+    }
   }
   if (action) {
     parts.push(`下一步：${ACTION_LABELS[action] ?? action}`);
@@ -346,6 +403,22 @@ function mentionsEmptyStatement(item: ObligationReviewItemRecord): boolean {
   return /财政拨款收入支出决算总表/.test(String(item.detail ?? ""));
 }
 
+function subjectBindingUnlocated(item: ObligationReviewItemRecord): boolean {
+  // 新结果用冻结原因码 + 冻结覆盖词判断；只有旧后端缺字段（undefined/null）
+  // 时才读 detail。[] 是合法的新结果，表示“没有该原因”，不能回退到中文正则。
+  if (item.reason_codes === undefined || item.reason_codes === null) {
+    return /找不到同名科目/.test(String(item.detail ?? ""));
+  }
+  if (item.reason_codes.includes("subject_name_unlocated")) {
+    return true;
+  }
+  // text_binding_failed 比“找不到同名科目”宽；只有同时保留了旧覆盖词
+  // （说明确实定位到了具体科目名）才按同源处理，避免把金额绑定失败误报成
+  // 科目名称问题。
+  return item.reason_codes.includes("text_binding_failed")
+    && (item.legacy_coverage_terms?.length ?? 0) > 0;
+}
+
 /**
  * 同源提示。
  *
@@ -392,7 +465,7 @@ function buildSameSource(
     }
   }
 
-  if (item.obligation_id === "OBL-TXT-T5" && /找不到同名科目/.test(String(item.detail ?? ""))) {
+  if (item.obligation_id === "OBL-TXT-T5" && subjectBindingUnlocated(item)) {
     if ((item.checkers ?? []).includes("V33-227")) {
       findingIds.push("V33-227");
       notes.push(

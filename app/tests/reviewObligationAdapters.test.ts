@@ -330,7 +330,40 @@ assert.match(
     candidates: [],
     next_action: "system_recheck",
   }),
-  /缺少：FIN_03_expenditure.*下一步：系统定向补取/,
+  /缺少：表FIN_03_expenditure.*下一步：系统定向补取/,
+);
+
+// 默认备注路径（必须处理列表 description）也必须保留 rule_no_reason 的业务说明。
+const noReasonProblems = toObligationProblems({
+  available: true,
+  reason: null,
+  pending_total: 1,
+  items: [{
+    obligation_id: "OBL-TXT-T5",
+    group_id: "g",
+    group_title: "说明一致性",
+    title: "一般公共预算支出决算表 与 功能分类说明一致",
+    status: "insufficient_data",
+    reason: "insufficient_data",
+    reason_label: "取数不足",
+    detail: "原因码：规则未给出具体原因；规则说明：科目“住房公积金”决算金额未唯一取得；下一步：技术修复解析/规则",
+    reason_codes: ["rule_no_reason"],
+    blocked_by: [],
+    missing_operands: [],
+    candidates: [],
+    next_action: "tech_fix",
+    locations: [],
+    decision: null,
+    decision_revision: null,
+    decided_by: null,
+    decided_at: null,
+    note: null,
+    evidence_reference: null,
+  }],
+}, "job-no-reason");
+assert.match(
+  noReasonProblems[0].description,
+  /取数不足：.*规则说明：科目“住房公积金”决算金额未唯一取得/,
 );
 
 console.log("reviewObligationAdapters.test.ts passed");

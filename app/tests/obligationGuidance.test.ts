@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { obligationGuidance } from "../app/components/review-workbench/obligationGuidance";
+import { describeObligationDiagnosis, obligationGuidance } from "../app/components/review-workbench/obligationGuidance";
 import type { ObligationReviewItemRecord } from "../app/components/review-workbench/reviewLifecycleAdapters";
 
 /**
@@ -139,7 +139,7 @@ const structured = item({
 });
 const structuredGuidance = obligationGuidance(structured);
 assert.equal(structuredGuidance.category, "limitation");
-assert.match(structuredGuidance.blocker ?? "", /缺少：FIN_03_expenditure/);
+assert.match(structuredGuidance.blocker ?? "", /缺少：表FIN_03_expenditure/);
 assert.match(structuredGuidance.blocker ?? "", /208/);
 assert.match(structuredGuidance.blocker ?? "", /下一步：系统定向补取/);
 
@@ -157,3 +157,86 @@ const materialByName = item({
 });
 assert.equal(obligationGuidance(materialByName).category, "material");
 assert.match(obligationGuidance(materialByName).blocker ?? "", /说明章节|一般公共预算/);
+
+
+// ---- F5：文字操作数的角色/页码、候选内容与保留的业务说明 -------------------
+
+const textOperand = item({
+  obligation_id: "OBL-NARRATIVE-AMOUNT",
+  detail: "",
+  reason_codes: ["subject_name_unlocated"],
+  missing_operands: [{
+    source: "text",
+    role: "住房公积金决算金额",
+    section: "支出决算具体情况",
+    page: 12,
+  }],
+  candidates: [
+    { source: "text", section: "支出决算具体情况", page: 12, span: [10, 20], value: "10.00" },
+    { source: "text", section: "支出决算具体情况", page: 13, span: [30, 40], value: "20.00" },
+  ],
+  next_action: "human_confirm",
+});
+const textBlock = describeObligationDiagnosis(textOperand) ?? "";
+assert.match(textBlock, /说明「支出决算具体情况」第12页/);
+assert.match(textBlock, /角色：住房公积金决算金额/);
+assert.match(textBlock, /说明「支出决算具体情况」第12页「10\.00」/);
+assert.match(textBlock, /第13页「20\.00」/);
+assert.doesNotMatch(textBlock, /候选：2 处/);
+
+const noReason = item({
+  obligation_id: "OBL-TXT-T5",
+  detail: "原因码：规则未给出具体原因；规则说明：科目“住房公积金”决算金额未唯一取得；下一步：技术修复解析/规则",
+  reason_codes: ["rule_no_reason"],
+  missing_operands: [],
+  candidates: [],
+  next_action: "tech_fix",
+});
+assert.match(describeObligationDiagnosis(noReason) ?? "", /规则说明：科目“住房公积金”决算金额未唯一取得/);
+
+// ---- F4：同源提示改用冻结原因码；旧结果缺字段才回退 detail -------------------
+
+const t5Structured = item({
+  obligation_id: "OBL-TXT-T5",
+  detail: "判断不了的原因：疑似旧科目名无法在文内定位。",
+  reason_codes: ["subject_name_unlocated"],
+  checkers: ["V33-106", "V33-222", "V33-227"],
+});
+const t5StructuredGuidance = obligationGuidance(t5Structured, [t5Structured, finalDetail]);
+assert.deepEqual(t5StructuredGuidance.sameSource?.findingIds, ["V33-227"]);
+assert.ok(t5StructuredGuidance.sameSource?.obligationIds.includes("OBL-TXT-FINAL-DETAIL"));
+
+// [] 是合法的新结果：不得因为 detail 里还有旧句式就重新触发。
+const emptyCodes = item({
+  obligation_id: "OBL-TXT-T5",
+  detail: "说明中的款“行政事业单位离退休”在表内找不到同名科目",
+  reason_codes: [],
+  checkers: ["V33-227"],
+});
+assert.equal(obligationGuidance(emptyCodes, [emptyCodes]).sameSource, null);
+
+// 旧后端缺 reason_codes 字段时才回退旧 detail 正则。
+const missingCodes = item({
+  obligation_id: "OBL-TXT-T5",
+  detail: "说明中的款“行政事业单位离退休”在表内找不到同名科目",
+  checkers: ["V33-227"],
+});
+assert.deepEqual(obligationGuidance(missingCodes, [missingCodes]).sameSource?.findingIds, ["V33-227"]);
+
+// text_binding_failed 只有在同时保留了冻结覆盖词时才按同源处理。
+const bindingWithTerms = item({
+  obligation_id: "OBL-TXT-T5",
+  detail: "判断不了的原因：说明条目绑不到表内科目。",
+  reason_codes: ["text_binding_failed"],
+  legacy_coverage_terms: ["住房公积金"],
+  checkers: ["V33-227"],
+});
+assert.deepEqual(obligationGuidance(bindingWithTerms, [bindingWithTerms]).sameSource?.findingIds, ["V33-227"]);
+const bindingWithoutTerms = item({
+  obligation_id: "OBL-TXT-T5",
+  detail: "判断不了的原因：说明条目绑不到表内科目。",
+  reason_codes: ["text_binding_failed"],
+  legacy_coverage_terms: [],
+  checkers: ["V33-227"],
+});
+assert.equal(obligationGuidance(bindingWithoutTerms, [bindingWithoutTerms]).sameSource, null);
