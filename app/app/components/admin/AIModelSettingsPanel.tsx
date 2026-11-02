@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 type Profile = {
   id: string; name: string; provider_type: string; base_url: string; model: string;
   api_key?: string; has_api_key?: boolean; timeout_s: number; max_tokens: number;
+  reasoning_effort?: string | null; thinking?: boolean;
 };
 type ModelSettings = {
   revision: number; enabled: boolean; default_use_ai: boolean;
@@ -91,15 +92,17 @@ export default function AIModelSettingsPanel() {
           <label className="text-sm md:col-span-2">API 基础地址<input className={fieldClass} value={p.base_url} onChange={e => edit(p.id, { base_url: e.target.value })} placeholder="https://服务地址/v1" /><span className="mt-1 block text-xs text-slate-500">填写服务商提供的基础地址，通常以 /v1 结尾；不包含 /chat/completions。</span></label>
           <label className="text-sm">模型名称<input className={fieldClass} value={p.model} onChange={e => edit(p.id, { model: e.target.value })} placeholder="服务商提供的模型 ID" /></label>
           <label className="text-sm">API 密钥<input type="password" autoComplete="new-password" className={fieldClass} value={p.api_key || ""} onChange={e => edit(p.id, { api_key: e.target.value })} placeholder={p.has_api_key ? "已保存，留空保留现有密钥" : "请输入 API 密钥"} /></label>
-          <label className="text-sm">单次请求超时（秒）<input type="number" min={10} max={300} className={fieldClass} value={p.timeout_s} onChange={e => edit(p.id, { timeout_s: Number(e.target.value) })} /></label>
+          <label className="text-sm">单次请求超时（秒）<input type="number" min={10} max={600} className={fieldClass} value={p.timeout_s} onChange={e => edit(p.id, { timeout_s: Number(e.target.value) })} /></label>
           <label className="text-sm">最大输出 Token 数<input type="number" min={512} max={64000} className={fieldClass} value={p.max_tokens} onChange={e => edit(p.id, { max_tokens: Number(e.target.value) })} /></label>
+          <label className="text-sm">推理强度<select className={fieldClass} value={p.reasoning_effort || ""} onChange={e => edit(p.id, { reasoning_effort: e.target.value || null })}><option value="">服务商默认</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="max">最高</option></select><span className="mt-1 block text-xs text-slate-500">仅推理模型支持；服务商不接受时会被忽略。</span></label>
+          <label className="flex items-center gap-2 text-sm md:col-span-2"><input type="checkbox" checked={Boolean(p.thinking)} onChange={e => edit(p.id, { thinking: e.target.checked })} />开启思考模式<span className="text-xs text-slate-500">部分模型默认已开启；勾选后会显式下发 thinking 参数。</span></label>
         </div>
         <div className="flex flex-wrap items-center gap-3"><button type="button" className="rounded-md border bg-white px-3 py-2 text-sm" onClick={() => void test(p)}>{testing === p.id ? "正在测试…" : "测试连接"}</button><span className="text-xs text-slate-500">测试会发送一条简短模型请求。</span></div>
         {testResults[p.id] && <p role="status" className="text-sm text-slate-700">{testResults[p.id]}</p>}
       </div>)}
       <button type="button" className="rounded-md border px-3 py-2 text-sm" disabled={settings.profiles.length >= 20} onClick={() => {
         const id = `model-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-        change({ profiles: [...settings.profiles, { id, name: "", provider_type: "openai_compat", base_url: "", model: "", timeout_s: 90, max_tokens: 4000 }], active_profile_id: settings.active_profile_id || id });
+        change({ profiles: [...settings.profiles, { id, name: "", provider_type: "openai_compat", base_url: "", model: "", timeout_s: 90, max_tokens: 4000, reasoning_effort: null, thinking: false }], active_profile_id: settings.active_profile_id || id });
       }}>添加模型</button>
     </fieldset>
     <div className="flex items-center gap-3"><button disabled={disabled || !dirty} onClick={() => void save()} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy ? "保存中…" : "保存配置"}</button><button disabled={disabled} onClick={() => void load()} className="text-sm text-slate-600">重新加载</button>{dirty && <span className="text-xs text-amber-700">有未保存的修改</span>}</div>

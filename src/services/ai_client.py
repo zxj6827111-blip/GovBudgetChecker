@@ -300,6 +300,8 @@ class AIClient:
         timeout = config.get('timeout_s', config.get('timeout', 60))
         max_retries = config.get('retries', 1)
         provider_type = str(config.get('provider_type', '') or '').strip().lower()
+        reasoning_effort = str(config.get('reasoning_effort') or '').strip().lower() or None
+        thinking = bool(config.get('thinking'))
         
         if provider_type in {'openai', 'openai_compat', 'openai-compatible'}:
             return OpenAICompatProvider(
@@ -307,7 +309,9 @@ class AIClient:
                 base_url=base_url,
                 default_model=model,
                 timeout=timeout,
-                max_retries=max_retries
+                max_retries=max_retries,
+                reasoning_effort=reasoning_effort,
+                thinking=thinking,
             )
         elif provider_type in {'zhipu'}:
             return ZhipuProvider(
@@ -331,7 +335,9 @@ class AIClient:
                 base_url=base_url,
                 default_model=model,
                 timeout=timeout,
-                max_retries=max_retries
+                max_retries=max_retries,
+                reasoning_effort=reasoning_effort,
+                thinking=thinking,
             )
         elif 'zhipu' in name.lower():
             return ZhipuProvider(
@@ -355,7 +361,9 @@ class AIClient:
                 base_url=base_url,
                 default_model=model,
                 timeout=timeout,
-                max_retries=max_retries
+                max_retries=max_retries,
+                reasoning_effort=reasoning_effort,
+                thinking=thinking,
             )
         else:
             return OpenAICompatProvider(
@@ -363,7 +371,9 @@ class AIClient:
                 base_url=base_url,
                 default_model=model,
                 timeout=timeout,
-                max_retries=max_retries
+                max_retries=max_retries,
+                reasoning_effort=reasoning_effort,
+                thinking=thinking,
             )
     
     def _init_circuit_breakers(self):

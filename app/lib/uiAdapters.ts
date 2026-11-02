@@ -70,6 +70,15 @@ export interface JobSummaryRecord {
   review_candidate_total?: number;
   tip_total?: number;
   review_notice_total?: number;
+  /** 审核台两个页签的条数（后端 review_queue_counts）；旧摘要可能没有。 */
+  queue_required_total?: number;
+  queue_reference_total?: number;
+  /** 必须处理里“未能自动核对”的条数（已含在 queue_required_total 内）。 */
+  queue_obligation_total?: number;
+  queue_candidate_total?: number;
+  queue_degraded_total?: number;
+  queue_tip_total?: number;
+  queue_notice_total?: number;
   issue_error?: number;
   issue_warn?: number;
   issue_info?: number;
@@ -990,6 +999,28 @@ function annotateFindingSources(
   });
 }
 
+const MACHINE_CODE_AI_TITLE = /^(待人工复核：)?([A-Za-z][A-Za-z0-9_-]*)$/;
+
+/**
+ * 旧版 AI 结果里，问题类型不在中文对照表时标题落成了英文机器代码（如“待人工复核：generic”），
+ * 并写进了 message 与 display.summary。有检查项名称时改用检查项名称展示；原始记录不改。
+ */
+function withReadableAiTitle(issue: Record<string, unknown>): Record<string, unknown> {
+  if (String(issue.source ?? "") !== "ai") return issue;
+  const title = String(issue.title ?? "").trim();
+  const match = MACHINE_CODE_AI_TITLE.exec(title);
+  const metrics = isRecord(issue.metrics) ? issue.metrics : {};
+  const checkName = String(issue.check ?? metrics.check ?? "").trim();
+  if (!match || !checkName) return issue;
+  const readable = `${match[1] ?? ""}${checkName}`;
+  // 只有带“待人工复核：”前缀时才在长文本里替换，裸代码可能是别的词的一部分。
+  const swap = (value: unknown) => typeof value !== "string" ? value
+    : value.trim() === title ? readable
+      : match[1] ? value.split(title).join(readable) : value;
+  const display = isRecord(issue.display) ? { ...issue.display, summary: swap(issue.display.summary) } : issue.display;
+  return { ...issue, title: readable, message: swap(issue.message), display };
+}
+
 export function toUiProblems(detail: JobDetailRecord, options: { includeEvidencePreview?: boolean } = {}): Problem[] {
   const result = isRecord(detail.result) ? detail.result : {};
   const reviewReport = isRecord(detail.review_report) ? detail.review_report : {};
@@ -1015,7 +1046,8 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
 
   const mappedProblems: Problem[] = issues
     .filter((issue) => !ignored.has(String(issue.id ?? "")))
-    .map((issue, index) => {
+    .map((rawIssue, index) => {
+      const issue = withReadableAiTitle(rawIssue);
       const anchor = resolveIssueAnchor(issue);
       const { page, evidence } = anchor;
       const rawLocation = isRecord(issue.location) ? issue.location : {};

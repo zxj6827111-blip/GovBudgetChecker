@@ -21,9 +21,11 @@ import {
 import type { IssueWorkflowAction } from "./IssueCard";
 import { IssueCard, IssueDecisionFooter, IssueRow } from "./IssueCard";
 import { IgnoreReasonPanel } from "./IgnoreReasonPanel";
+import { ObligationCard } from "./ObligationCard";
+import { ObligationDecisionPanel, type ObligationPanelDecision } from "./ObligationDecisionPanel";
+import { isObligationProblem, obligationAutoEvidence, readableObligationReason, type ObligationDecision } from "./obligationProblems";
 import type { IgnoreReason } from "./reviewDecisionNotes";
-import { AiScopeBanner } from "../AiScopeBanner";
-import type { AiScopeView } from "../../../lib/aiScope";
+import type { ObligationReviewItemRecord } from "./reviewLifecycleAdapters";
 import type { Problem } from "../../../lib/mock";
 
 export interface SourceFindingViews {
@@ -81,7 +83,6 @@ export interface IssuesTabProps {
   problems: Problem[];
   sourceFindings?: SourceFindingViews;
   /** 检查范围：未完整完成时在问题区顶部展开说明，完整完成时只在页面状态条显示。 */
-  aiScope?: AiScopeView;
   queue: ReviewQueue;
   selectedProblemId: string | null;
   onSelectProblem: (problemId: string | null, options?: { keepLayout?: boolean }) => void;
@@ -93,15 +94,19 @@ export interface IssuesTabProps {
   submittingIssueId: string | null;
   lastDecision: IssueDecisionNotice | null;
   onUndo: () => Promise<boolean>;
-  pendingObligations: number;
-  onOpenObligations: () => void;
-  /** 未完成检查的补检入口（通常跳到任务页重新分析）。 */
-  onRecheckToTask?: () => void;
+  /** 「未能自动核对」条目（补核义务）的原记录，键为条目 id。 */
+  obligationItems?: Record<string, ObligationReviewItemRecord>;
+  /** 提交补核结论；返回是否已保存（用于处理后接续下一条）。 */
+  onObligationDecision?: (problem: Problem, decision: ObligationDecision, note: string, evidenceReference: string) => Promise<boolean>;
+  /** 文种口径类补核需要先确认材料口径时的入口。 */
+  onOpenScope?: () => void;
   onSelectEvidenceRef: (problem: Problem, refKey: string) => void;
   readOnly?: boolean;
   /** 不能提交判定时，操作栏位置显示的说明（预览、失效、历史、已完成）。 */
   readOnlyHint?: { text: string; invalidatedReason: string | null; completed?: boolean } | null;
   savedAtText?: string | null;
+  /** 外部请求的来源筛选（如从「AI 文字检查」点“查看大模型参考条目”），nonce 变化即生效。 */
+  sourceRequest?: { value: SourceView; nonce: number } | null;
   textSize: ReviewTextSize;
   onToggleTextSize: () => void;
   /** 放大解释：原文栏变窄但保留，解释区变宽。 */
@@ -118,21 +123,25 @@ export interface IssueDecisionNotice {
 }
 
 type SourceView = "all" | "common" | "rule" | "ai" | "other";
-type ReviewFilter = "all" | "issue" | "manual_review" | "degraded" | "tip" | "review_notice";
+export type { SourceView };
+type ReviewFilter = "all" | "issue" | "obligation" | "manual_review" | "degraded" | "tip" | "review_notice";
 type QueueView = "pending" | "all";
 type StatusFilter = "all" | "confirmed" | "no_issue" | "in_package";
 
 const SOURCE_LABELS: Record<SourceView, string> = { all: "全部来源", rule: "本地规则", ai: "大模型", common: "共同发现", other: "系统复核" };
-const REVIEW_FILTER_LABELS: Record<ReviewFilter, string> = { all: "全部", issue: "正式问题", manual_review: "待核实", degraded: "证据不足", tip: "提示", review_notice: "复核事项" };
+const REVIEW_FILTER_LABELS: Record<ReviewFilter, string> = { all: "全部", issue: "正式问题", obligation: "未能自动核对", manual_review: "待核实", degraded: "证据不足", tip: "提示", review_notice: "复核事项" };
 const STATUS_FILTER_LABELS: Record<StatusFilter, string> = { all: "全部状态", confirmed: "已确认", no_issue: "已忽略", in_package: "已进整改包" };
 
 // 与复核工作流共用终态语义；未知状态、待复核和未记录状态仍留在待处理视图。
+// 「未能自动核对」条目的状态是补核决定码，三种结论同样算已处理。
+const PROCESSED_STATUSES = new Set(["confirmed", "no_issue", "in_package", "verified_ok", "verified_issue", "not_applicable"]);
 function isProcessedStatus(status: string | undefined): boolean {
-  return status === "confirmed" || status === "no_issue" || status === "in_package";
+  return PROCESSED_STATUSES.has(status ?? "");
 }
 
 const groups = [
   { kind: "issue", label: "审核问题" },
+  { kind: "obligation", label: "未能自动核对" },
   { kind: "manual_review", label: "待人工核实" },
   { kind: "degraded", label: "证据降级（不计入问题数）" },
   { kind: "tip", label: "提示" },
@@ -183,7 +192,6 @@ function aiCoverageLabel(status: string | undefined): string {
 export function IssuesTab({
   problems,
   sourceFindings,
-  aiScope,
   queue,
   selectedProblemId,
   onSelectProblem,
@@ -194,13 +202,14 @@ export function IssuesTab({
   submittingIssueId,
   lastDecision,
   onUndo,
-  pendingObligations,
-  onOpenObligations,
-  onRecheckToTask,
+  obligationItems = {},
+  onObligationDecision,
+  onOpenScope,
   onSelectEvidenceRef,
   readOnly = false,
   readOnlyHint = null,
   savedAtText = null,
+  sourceRequest = null,
   textSize,
   onToggleTextSize,
   focusMode,
@@ -217,11 +226,23 @@ export function IssuesTab({
   const [ignoreState, setIgnoreState] = useState<{ problem: Problem; queue: ReviewQueue } | null>(null);
   const ignoreTarget = ignoreState?.queue === queue ? ignoreState.problem : null;
   const setIgnoreTarget = (problem: Problem | null) => setIgnoreState(problem ? { problem, queue } : null);
+  // 补核结论需要文字依据时的填写面板（确认有问题 / 不适用 / 无定位的核对无误）。
+  const [obligationPanel, setObligationPanel] = useState<{ problem: Problem; decision: ObligationPanelDecision; queue: ReviewQueue } | null>(null);
+  const obligationPanelTarget = obligationPanel?.queue === queue ? obligationPanel : null;
+  const [obligationSubmitting, setObligationSubmitting] = useState(false);
   // 处理后接续、撤销恢复这些流程自己决定选中哪一条；父组件跟上之前不自动选首条。
   const flowSelectionRef = useRef<string | null | undefined>(undefined);
   const [queueView, setQueueView] = useState<QueueView>("pending");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [restoreTarget, setRestoreTarget] = useState<string | null>(null);
+  // 外部跳转（例如从「AI 文字检查」点“查看大模型参考条目”）要直接落到大模型来源，
+  // 而不是让用户在全量参考队列里逐条翻找；nonce 保证同一筛选可以重复触发。
+  useEffect(() => {
+    if (!sourceRequest) return;
+    setSourceView(sourceRequest.value);
+    setReviewFilter("all");
+    setStatusFilter("all");
+  }, [sourceRequest]);
   // 已完成或历史材料默认查看全部记录，不显示一个空的待处理队列。
   const effectiveQueueView = readOnly ? "all" : queueView;
   const listRef = useRef<HTMLDivElement>(null);
@@ -242,14 +263,21 @@ export function IssuesTab({
     setReviewFilter("all");
   }
 
-  const sourceProblems = useMemo(() => {
-    const bucket = !sourceFindings || sourceView === "all" ? allSortedProblems
-      : sortProblemsForReview(sourceView === "common" ? sourceFindings.common
-        : sourceView === "rule" ? sourceFindings.rule ?? [...sourceFindings.ruleOnly, ...sourceFindings.common.filter((item) => item.findingSources?.includes("rule"))]
-          : sourceView === "ai" ? sourceFindings.ai ?? [...sourceFindings.aiOnly, ...sourceFindings.common.filter((item) => item.findingSources?.includes("ai"))]
-            : sourceFindings.other);
-    return bucket.filter((problem) => requiredIds.has(problem.id) === (queue === "required"));
-  }, [allSortedProblems, sourceFindings, sourceView, queue, requiredIds]);
+  // 每个来源按当前队列取条目：来源按钮上的数字与点开后看到的条数必须一致，
+  // 不能把另一队列的条目也算进来。
+  const sourceBuckets = useMemo(() => {
+    const inQueue = (items: Problem[]) => items.filter((problem) => requiredIds.has(problem.id) === (queue === "required"));
+    const all = inQueue(allSortedProblems);
+    if (!sourceFindings) return { all, rule: all, ai: all, common: all, other: all } as Record<SourceView, Problem[]>;
+    return {
+      all,
+      common: inQueue(sortProblemsForReview(sourceFindings.common)),
+      rule: inQueue(sortProblemsForReview(sourceFindings.rule ?? [...sourceFindings.ruleOnly, ...sourceFindings.common.filter((item) => item.findingSources?.includes("rule"))])),
+      ai: inQueue(sortProblemsForReview(sourceFindings.ai ?? [...sourceFindings.aiOnly, ...sourceFindings.common.filter((item) => item.findingSources?.includes("ai"))])),
+      other: inQueue(sortProblemsForReview(sourceFindings.other)),
+    } as Record<SourceView, Problem[]>;
+  }, [allSortedProblems, sourceFindings, queue, requiredIds]);
+  const sourceProblems = sourceBuckets[sourceView];
   const classifiedProblems = useMemo(() => {
     return sourceProblems.filter((problem) => {
       if (reviewFilter === "all") return true;
@@ -268,9 +296,6 @@ export function IssuesTab({
   const orderedVisibleProblems = useMemo(() => groups.flatMap(({ kind }) =>
     visibleProblems.filter((problem) => problemGroup(problem) === kind)
   ), [visibleProblems]);
-  const requiredPendingCount = useMemo(() => problems.filter((problem) =>
-    requiredIds.has(problem.id) && !isProcessedStatus(workflowStatusByIssueId[problem.id])
-  ).length, [problems, requiredIds, workflowStatusByIssueId]);
 
   useLayoutEffect(() => {
     const navigation = pendingNavigationRef.current;
@@ -359,6 +384,34 @@ export function IssuesTab({
     }
   };
 
+  // 「未能自动核对」条目：核对无误有系统定位时一键提交（证据位置自动带上），
+  // 需要文字依据的先开填写面板；保存后与确认/忽略一样接续到下一条。
+  const handleObligation = async (problem: Problem, decision: ObligationDecision, note?: string) => {
+    const item = obligationItems[problem.id];
+    if (!item || !onObligationDecision) return;
+    const autoEvidence = decision === "verified_ok" ? obligationAutoEvidence(item) : null;
+    if (note === undefined && (decision === "verified_issue" || decision === "not_applicable" || (decision === "verified_ok" && !autoEvidence))) {
+      setListOpen(false);
+      setObligationPanel({ problem, decision, queue });
+      return;
+    }
+    if (effectiveQueueView === "pending" && decision !== "pending") {
+      const index = orderedVisibleProblems.findIndex((entry) => entry.id === problem.id);
+      const remaining = orderedVisibleProblems.filter((entry) => entry.id !== problem.id);
+      const next = remaining[Math.min(Math.max(0, index), remaining.length - 1)];
+      pendingNavigationRef.current = { issueId: problem.id, status: decision, nextId: next?.id ?? null, viewKey };
+    }
+    setObligationSubmitting(true);
+    const saved = await onObligationDecision(problem, decision, note ?? "", autoEvidence ?? "");
+    setObligationSubmitting(false);
+    if (!saved && pendingNavigationRef.current?.issueId === problem.id) pendingNavigationRef.current = null;
+    if (saved) setObligationPanel(null);
+    if (saved && decision === "pending") {
+      setStatusFilter("all");
+      setRestoreTarget(problem.id);
+    }
+  };
+
   const handleUndo = async () => {
     if (!lastDecision) return;
     const decision = lastDecision;
@@ -381,7 +434,7 @@ export function IssuesTab({
   const countOf = (kind: ReviewFilter) => kind === "all" ? sourceProblems.length
     : kind === "degraded" ? sourceProblems.filter((problem) => problem.evidenceStatus === EVIDENCE_STATUS_DEGRADED).length
       : sourceProblems.filter((problem) => problemReviewKind(problem) === kind && problem.evidenceStatus !== EVIDENCE_STATUS_DEGRADED).length;
-  const categoryOptions = (["all", "issue", "manual_review", "degraded", "tip", "review_notice"] as ReviewFilter[])
+  const categoryOptions = (["all", "issue", "obligation", "manual_review", "degraded", "tip", "review_notice"] as ReviewFilter[])
     .map((id) => [id, countOf(id)] as [ReviewFilter, number])
     .filter(([id, count]) => id === "all" || id === reviewFilter || count > 0);
   const emptyText = reviewFilter !== "all" ? "当前分类与来源筛选下没有检查结果。" : sourceView === "ai" && sourceFindings?.enabled
@@ -402,13 +455,12 @@ export function IssuesTab({
         ? "当前队列没有其他系统复核事项。"
         : queue === "required" ? "当前没有必须处理的问题。" : "当前没有参考条目。";
 
-  const sourceOptions: Array<[SourceView, number]> = sourceFindings?.enabled ? [
-    ["all", problems.length],
-    ["rule", sourceFindings.rule?.length ?? sourceFindings.ruleFindingCount],
-    ["ai", sourceFindings.ai?.length ?? sourceFindings.aiFindingCount],
-    ["common", sourceFindings.commonRelationCount],
-    ["other", sourceFindings.other.length],
-  ] : [];
+  // 大模型按钮即使为 0 也保留：它带着 AI 执行状态的说明；其余为 0 的来源不占位。
+  const sourceOptions: Array<[SourceView, number]> = sourceFindings?.enabled
+    ? (["all", "rule", "ai", "common", "other"] as SourceView[])
+      .map((id) => [id, sourceBuckets[id].length] as [SourceView, number])
+      .filter(([id, count]) => id === "all" || id === "ai" || id === sourceView || count > 0)
+    : [];
   const activeFilterLabels = [
     sourceView !== "all" ? `来源：${SOURCE_LABELS[sourceView]}` : null,
     reviewFilter !== "all" ? `类型：${REVIEW_FILTER_LABELS[reviewFilter]}` : null,
@@ -417,7 +469,6 @@ export function IssuesTab({
   const chipClass = (active: boolean) => `rounded-md border px-2 py-0.5 text-xs transition-colors ${
     active ? "border-primary-300 bg-primary-50 text-primary-700" : "border-border bg-white text-slate-600 hover:bg-surface-100"
   }`;
-  const showScopeBanner = Boolean(aiScope && aiScope.tone !== "success");
   const scopeLabel = effectiveQueueView === "pending" ? "待处理" : "全部";
   const noticeText = lastDecision
     ? `${lastDecision.status === "confirmed" ? "已确认" : lastDecision.status === "no_issue" ? "已忽略" : "已恢复为待处理"}：${lastDecision.problem.title}`
@@ -425,21 +476,6 @@ export function IssuesTab({
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="gbc-review-issues-tab" data-review-queue={queue}>
-      {showScopeBanner && aiScope ? (
-        <div className="shrink-0 px-3 pt-1.5">
-          <AiScopeBanner
-            scope={aiScope}
-            testId="gbc-review-ai-scope"
-            onRecheck={
-              aiScope.needsRecheck
-                ? onRecheckToTask ?? (pendingObligations > 0 ? onOpenObligations : undefined)
-                : undefined
-            }
-            recheckLabel={onRecheckToTask ? "前往任务页补检" : "查看检查补核"}
-            compact
-          />
-        </div>
-      ) : null}
       <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-3 py-1.5" data-testid="gbc-review-issue-toolbar">
         <button
           type="button"
@@ -493,7 +529,18 @@ export function IssuesTab({
 
       <div className="relative min-h-0 min-w-0 flex-1" data-testid="gbc-review-issue-detail-pane">
         <div ref={readingRef} className="h-full overflow-y-auto" style={{ fontSize: REVIEW_TEXT_SIZE_PX[textSize] }} data-text-size={textSize}>
-          {detailProblem ? (
+          {detailProblem && isObligationProblem(detailProblem) && obligationItems[detailProblem.id] ? (
+            <ObligationCard
+              key={detailProblem.id}
+              problem={detailProblem}
+              item={obligationItems[detailProblem.id]}
+              allItems={Object.values(obligationItems)}
+              workflowStatus={workflowStatusByIssueId[detailProblem.id] ?? null}
+              selectedEvidenceRefKey={detailProblem.id === selectedProblemId ? selectedEvidenceRefKey : null}
+              onSelectEvidenceRef={(refKey) => onSelectEvidenceRef(detailProblem, refKey)}
+              onOpenScope={onOpenScope}
+            />
+          ) : detailProblem ? (
             <IssueCard
               key={detailProblem.id}
               problem={detailProblem}
@@ -506,7 +553,6 @@ export function IssuesTab({
             <div className="p-6 text-center text-sm text-slate-500" data-testid="gbc-review-issues-empty">
               <p>{effectiveQueueView === "pending" && classifiedProblems.length > 0 ? "当前队列已无待处理项。" : effectiveQueueView === "all" && statusFilter !== "all" ? "当前筛选下没有该处理状态的条目。" : emptyText}</p>
               {effectiveQueueView === "pending" && classifiedProblems.length > 0 ? <button type="button" onClick={() => { setQueueView("all"); setStatusFilter("all"); }} className="mt-3 text-primary-700 hover:underline" data-testid="gbc-review-view-all">查看全部条目</button> : null}
-              {pendingObligations > 0 ? <p className="mt-3 text-xs">仍有 {pendingObligations} 项检查待补核。<button type="button" onClick={onOpenObligations} className="ml-1 text-primary-700 hover:underline" data-testid="gbc-review-open-obligations">前往检查补核</button></p> : null}
             </div>
           )}
         </div>
@@ -579,6 +625,7 @@ export function IssuesTab({
               {sourceFindings?.enabled && showSourceDetails ? (
                 <div className="rounded-md bg-white px-3 py-2">
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600" data-testid="gbc-review-source-summary">
+                    <span className="text-slate-500">本次检查（必须处理与参考合计）</span>
                     <span>大模型：{aiStateLabel(sourceFindings.aiState)} · {sourceFindings.aiFindingCount} 条发现</span>
                     {sourceFindings.aiModel ? <span>模型：{sourceFindings.aiModel}</span> : null}
                     {sourceFindings.aiCoverage ? (
@@ -598,7 +645,7 @@ export function IssuesTab({
                     <span>本地规则：{sourceFindings.ruleFindingCount} 条发现</span>
                     <span>其他复核项：{sourceFindings.other.length} 条</span>
                   </div>
-                  <div className="mt-1 text-xs text-slate-500">本地规则和大模型各自展示完整结果，包含共同发现；两侧数量不能直接相加。共同发现按明确的检查关系，或原件中同一处已核验的重复词匹配；原文相同不代表 AI 结论已经确认。</div>
+                  <div className="mt-1 text-xs text-slate-500">上方来源按钮只计当前页签（必须处理或参考）的条目，点开即是该数目。本地规则和大模型各自展示完整结果，包含共同发现；两侧数量不能直接相加。共同发现按明确的检查关系，或原件中同一处已核验的重复词匹配；原文相同不代表 AI 结论已经确认。</div>
                   <div className="mt-1 text-xs text-slate-500">必须处理：正式问题与结构化识别待复核项，计入完成条件。参考：待核实、证据不足、提示，供查阅，不计入完成条件。</div>
                 </div>
               ) : null}
@@ -662,7 +709,7 @@ export function IssuesTab({
               })}
             </div>
             <div className="shrink-0 border-t border-border px-4 py-2 text-[11px] text-slate-500">
-              {queue === "required" ? "这些问题计入完成条件：逐条确认，或记录理由后忽略。" : "参考项不影响完成复核；可按需确认、忽略或补充意见。"}
+              {queue === "required" ? "这些条目计入完成条件：问题逐条确认或记录理由后忽略；未能自动核对的检查选核对无误、确认有问题或不适用。" : "参考项不影响完成复核；可按需确认、忽略或补充意见。"}
               <span className="ml-1 text-slate-400">展开时可按 ↑ ↓ 切换，Esc 关闭。</span>
             </div>
           </div>
@@ -677,21 +724,31 @@ export function IssuesTab({
             onCancel={() => setIgnoreTarget(null)}
           />
         ) : null}
+
+        {obligationPanelTarget ? (
+          <ObligationDecisionPanel
+            key={`${obligationPanelTarget.problem.id}:${obligationPanelTarget.decision}`}
+            decision={obligationPanelTarget.decision}
+            checkName={obligationItems[obligationPanelTarget.problem.id]?.title ?? obligationPanelTarget.problem.title}
+            defaultNote={readableObligationReason(obligationItems[obligationPanelTarget.problem.id]?.detail)}
+            isSubmitting={obligationSubmitting}
+            onSubmit={(note) => void handleObligation(obligationPanelTarget.problem, obligationPanelTarget.decision, note)}
+            onCancel={() => setObligationPanel(null)}
+          />
+        ) : null}
       </div>
 
       {detailProblem || lastDecision || readOnlyHint ? (
         <IssueDecisionFooter
           problem={detailProblem}
           workflowStatus={detailProblem ? workflowStatusByIssueId[detailProblem.id] ?? null : null}
-          showActions={Boolean(detailProblem) && !readOnly && (sourceView === "all" || (detailProblem !== null && baseProblemIds.has(detailProblem.id)))}
+          showActions={Boolean(detailProblem) && !readOnly && !obligationPanelTarget && (sourceView === "all" || (detailProblem !== null && baseProblemIds.has(detailProblem.id)))}
           readOnlyHint={readOnlyHint}
           savedAtText={savedAtText}
-          isSubmitting={submittingIssueId !== null}
+          isSubmitting={submittingIssueId !== null || obligationSubmitting}
           onAction={(action) => { if (detailProblem) void handleAction(detailProblem, action); }}
+          onObligationDecision={(decision) => { if (detailProblem) void handleObligation(detailProblem, decision); }}
           notice={lastDecision ? { text: noticeText, canUndo: !readOnly, onUndo: () => void handleUndo() } : null}
-          nextStep={queue === "required" && requiredPendingCount === 0 && pendingObligations > 0 && !readOnly
-            ? { label: `必须处理项已处理完，前往检查补核（${pendingObligations}）→`, onClick: onOpenObligations }
-            : null}
         />
       ) : null}
     </div>

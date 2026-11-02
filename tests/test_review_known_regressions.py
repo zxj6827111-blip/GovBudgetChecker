@@ -11,7 +11,7 @@ from src.engine.rules_v33 import (
     _unique_native_row_quote, build_document,
 )
 from src.schemas.issues import JobContext
-from src.schemas.review_report import build_review_report, review_report_counts
+from src.schemas.review_report import build_review_report, review_queue_counts, review_report_counts
 from src.services.engine_rule_runner import EngineRuleRunner
 from src.services.evidence_guard import apply_evidence_completeness
 from src.services.rule_source_binding import bind_rule_sources
@@ -41,6 +41,30 @@ def test_material_counts_keep_tips_and_review_reasons_separate():
     assert review_report_counts(legacy)["review_issue_total"] == 0
     assert review_report_counts(legacy)["review_candidate_total"] == 1
     assert review_report_counts(legacy)["tip_total"] == 1
+
+
+def test_queue_counts_match_review_workbench_tabs():
+    """The job list shows the workbench's 必须处理 / 参考 numbers, split by 结果类型."""
+    verified = {"evidence_status": "complete", "evidence_verification": {
+        "status": "verified", "source_identity_complete": True}}
+    report = {
+        "issues": [{"id": "f1", "severity": "high", **verified}, {"id": "f2", "severity": "medium", **verified}],
+        "tips": [{"id": "t1", "severity": "info"}, {"id": "f1", "severity": "high"}],
+        "manual_review": [
+            {"id": "c1", "record_type": "finding_review_candidate", "finding": {"evidence_status": "incomplete_rule_warning"}},
+            {"id": "a1", "record_type": "ai_candidate", "finding": {"evidence_status": "complete"}},
+            {"id": "a2", "record_type": "ai_candidate", "finding": {"evidence_status": "degraded_missing_evidence"}},
+            {"code": "rule_evidence_incomplete"},
+            {"record_type": "unfinished_check", "obligation_id": "o1"},
+        ],
+    }
+    assert review_queue_counts(report) == {
+        "queue_required_total": 2, "queue_reference_total": 5, "queue_candidate_total": 2,
+        "queue_degraded_total": 1, "queue_tip_total": 1, "queue_notice_total": 1,
+    }
+    # 被忽略的条目在工作台里看不到，列表也不计。
+    assert review_queue_counts(report, ["f2", "a1"])["queue_required_total"] == 1
+    assert review_queue_counts(report, ["f2", "a1"])["queue_candidate_total"] == 1
 
 
 def test_income_table_row_quote_uses_unique_literal_native_page_text():

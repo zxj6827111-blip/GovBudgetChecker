@@ -58,7 +58,7 @@ import type { CorrectionLocation } from "./correctionAdapters";
 import { IssueNoteDialog } from "./IssueNoteDialog";
 import type { IssueWorkflowAction } from "./IssueCard";
 import { IssuesTab } from "./IssuesTab";
-import type { IssueDecisionNotice, ReviewQueue, ReviewTextSize, SourceFindingViews } from "./IssuesTab";
+import type { IssueDecisionNotice, ReviewQueue, ReviewTextSize, SourceFindingViews, SourceView } from "./IssuesTab";
 import { composeDecisionNote, parseDecisionNote, stripIgnoreReason, type IgnoreReason } from "./reviewDecisionNotes";
 import { buildCalculationGroups, evidenceRoleLabel } from "./reviewReadingAdapters";
 import { ReviewInfoPanel, ReviewStatusChips, type ReviewProgressCounts } from "./ReviewStatusPanels";
@@ -67,7 +67,6 @@ import { deriveAiScope } from "../../../lib/aiScope";
 import type { AiScopeView } from "../../../lib/aiScope";
 import { MetadataTab } from "./MetadataTab";
 import { DocumentScopePanel } from "./DocumentScopePanel";
-import { ObligationsTab } from "./ObligationsTab";
 import { PdfViewerPane } from "./PdfViewerPane";
 import {
   REVIEW_CONTEXT_UNAVAILABLE_MESSAGE,
@@ -82,11 +81,16 @@ import {
   resolveReviewBadge,
   canStartReview,
   toReviewContextState,
-  type ObligationReviewItemRecord,
   type ReviewByJobDataRecord,
   type ReviewContextState,
   type ReviewErrorDetail,
 } from "./reviewLifecycleAdapters";
+import {
+  obligationItemsByProblemId,
+  obligationStatusEntries,
+  toObligationProblems,
+  type ObligationDecision,
+} from "./obligationProblems";
 import {
   computeWorkflowStatusCounts,
   countFormalProblems,
@@ -100,7 +104,7 @@ import { StageHistoryTab } from "./StageHistoryTab";
 import { ThumbnailRail } from "./ThumbnailRail";
 import { useJobPolling } from "../workspace/useJobPolling";
 
-type RightTabId = "issues" | "corrections" | "metadata" | "stages" | "obligations";
+type RightTabId = "issues" | "corrections" | "metadata" | "stages";
 /** 收进「更多」菜单的辅助页签。 */
 const MORE_TABS: Array<{ id: RightTabId; label: string }> = [
   { id: "corrections", label: "读取校正" },
@@ -179,8 +183,11 @@ export function ReviewWorkbenchPage() {
   const [showThumbnails, setShowThumbnails] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [issueQueue, setIssueQueue] = useState<ReviewQueue>("required");
+  // 外部跳转要求的问题来源筛选（AI 参考条目直达）；nonce 递增保证重复点击也生效。
+  const [issueSourceRequest, setIssueSourceRequest] = useState<{ value: SourceView; nonce: number } | null>(null);
   const [textSize, setTextSize] = useState<ReviewTextSize>("standard");
   const [infoPanel, setInfoPanel] = useState(false);
+  const [infoPanelSection, setInfoPanelSection] = useState<"ai" | null>(null);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [documentShare, setDocumentShare] = useState(DEFAULT_DOCUMENT_SHARE);
   const [showAllBlockers, setShowAllBlockers] = useState(false);
@@ -219,8 +226,6 @@ export function ReviewWorkbenchPage() {
   const [reviewBlockers, setReviewBlockers] = useState<ReviewErrorDetail | null>(null);
   /** 复核写动作失败的非门禁原因（网络/权限/服务不可用）。 */
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
-  /** 正在提交人工补核的义务 id（WP3-B，防连点）。 */
-  const [obligationSubmittingId, setObligationSubmittingId] = useState<string | null>(null);
   const loadSeqRef = useRef(0);
   const reviewLoadSeqRef = useRef(0);
   const workflowLoadSeqRef = useRef(0);
@@ -426,6 +431,8 @@ export function ReviewWorkbenchPage() {
     setReviewBlockers(null);
     setReviewNotice(null);
     setReviewContext({ kind: "loading" });
+    // 来源筛选的跳转请求只属于触发它的那份材料，不能带到下一份材料。
+    setIssueSourceRequest(null);
   }, [jobId]);
 
   const totalPages = extractTotalPageCount(detail);
@@ -452,14 +459,30 @@ export function ReviewWorkbenchPage() {
     return deriveAiScope(meta, { conclusionScopeHint });
   }, [detail]);
 
+  // 补核义务并入「必须处理」：只取与本页材料同一分析的补核块，历史分析不混入当前补核。
+  const obligationBlock = reviewContext.kind === "available" && reviewContext.review.current_analysis.job_uuid === jobId
+    ? reviewContext.review.obligation_review ?? null
+    : null;
+  const obligationProblems = useMemo(() => toObligationProblems(obligationBlock, jobId), [obligationBlock, jobId]);
+  const obligationItems = useMemo(() => obligationItemsByProblemId(obligationBlock), [obligationBlock]);
+  const reviewProblems = useMemo(() => [...problems, ...obligationProblems], [problems, obligationProblems]);
+  const reviewStatusById = useMemo(
+    () => ({ ...workflowStatusByIssueId, ...obligationStatusEntries(obligationBlock) }),
+    [workflowStatusByIssueId, obligationBlock],
+  );
+
   const sourceFindings = useMemo<SourceFindingViews | undefined>(() => {
     if (!detail || !detail.result) return undefined;
     const result = detail.result;
     const hasSourceBuckets = Array.isArray(result.ai_findings) || Array.isArray(result.rule_findings);
     if (!hasSourceBuckets) return undefined;
 
-    const aiProblems = toUiSourceProblems(detail, "ai", { includeEvidencePreview: false });
-    const ruleProblems = toUiSourceProblems(detail, "rule", { includeEvidencePreview: false });
+    // 来源桶只决定“谁发现的”；同一条已在主列表（服务端复核报告口径）里时，沿用
+    // 主列表那一条，否则按来源筛选时会把服务端判为待核实的 AI 候选重新算成正式问题。
+    const problemById = new Map(problems.map((problem) => [problem.id, problem]));
+    const alignWithReport = (problem: Problem) => problemById.get(problem.id) ?? problem;
+    const aiProblems = toUiSourceProblems(detail, "ai", { includeEvidencePreview: false }).map(alignWithReport);
+    const ruleProblems = toUiSourceProblems(detail, "rule", { includeEvidencePreview: false }).map(alignWithReport);
     const aiById = new Map(aiProblems.map((problem) => [problem.id, problem]));
     const ruleById = new Map(ruleProblems.map((problem) => [problem.id, problem]));
     const classification = classifyFindingSources(result);
@@ -505,7 +528,7 @@ export function ReviewWorkbenchPage() {
       .filter((problem) => classification.ruleOnlyIssueIds.has(problem.id) && !pairedIds.has(problem.id))
       .map((problem) => ({ ...problem, findingSources: ["rule"] as Array<"ai" | "rule"> }));
     const sourceIds = new Set([...aiProblems, ...ruleProblems].map((problem) => problem.id));
-    const other = problems.filter((problem) => !sourceIds.has(problem.id));
+    const other = reviewProblems.filter((problem) => !sourceIds.has(problem.id));
     const meta = result.meta && typeof result.meta === "object" && !Array.isArray(result.meta)
       ? result.meta as Record<string, unknown>
       : {};
@@ -533,11 +556,11 @@ export function ReviewWorkbenchPage() {
       aiModel: String(aiExecution.model ?? "").trim() || undefined,
       aiCoverage,
     };
-  }, [detail, problems]);
+  }, [detail, problems, reviewProblems]);
 
   const selectableProblems = useMemo(
     () => [
-      ...problems,
+      ...reviewProblems,
       ...(sourceFindings?.ai ?? []),
       ...(sourceFindings?.rule ?? []),
       ...(sourceFindings?.common ?? []),
@@ -545,7 +568,7 @@ export function ReviewWorkbenchPage() {
       ...(sourceFindings?.ruleOnly ?? []),
       ...(sourceFindings?.other ?? []),
     ],
-    [problems, sourceFindings],
+    [reviewProblems, sourceFindings],
   );
 
   const selectedProblem = useMemo(
@@ -599,12 +622,13 @@ export function ReviewWorkbenchPage() {
       .flatMap((group) => [{ row: group.total, role: "合计" }, ...group.items.map((row) => ({ row, role: "明细" }))])
       .find((item) => item.row.key === selectedEvidenceRefKey);
     // 只说证据是什么、哪条规则；问题标题已在右侧，不在这里重复。
-    const source = selectedProblem.source === "ai" ? "大模型" : selectedProblem.source === "rule" ? "本地规则" : "";
+    const source = selectedProblem.source === "ai" ? "大模型" : selectedProblem.source === "rule" ? "本地规则"
+      : selectedProblem.source === "obligation" ? "未能自动核对" : "";
     const label = calcRow
       ? `${calcRow.role} · ${calcRow.row.label} · ${calcRow.row.valueText} 万元`
       : ref && (ref.role === "parent" || ref.role === "child" || ref.valueText)
         ? [evidenceRoleLabel(ref.role), ref.valueText ? `${ref.valueText} 万元` : ""].filter(Boolean).join(" · ")
-        : [source, selectedProblem.ruleId].filter(Boolean).join(" · ");
+        : [source, selectedProblem.source === "obligation" ? selectedProblem.check : selectedProblem.ruleId].filter(Boolean).join(" · ");
     return { label, page: highlightedProblem.page };
   }, [activeTab, selectedProblem, selectedEvidenceRefKey, highlightedProblem]);
 
@@ -826,14 +850,16 @@ export function ReviewWorkbenchPage() {
    * 乐观锁：改写已有结论时必须带上页面上读到的 ``decision_revision``；
    * 带旧版本被拒绝（409 obligation_decision_conflict）就让用户看到
    * "有人先改了"，而不是把别人的结论悄悄冲掉。
+   *
+   * 补核并入「必须处理」后由问题队列调用：返回是否已保存，队列据此接续下一条。
    */
   const handleObligationDecision = useCallback(
-    async (item: ObligationReviewItemRecord, decision: string, note: string, evidenceReference: string) => {
-      if (reviewContext.kind !== "available") {
-        return;
+    async (problem: Problem, decision: ObligationDecision, note: string, evidenceReference: string): Promise<boolean> => {
+      const item = obligationItems[problem.id];
+      if (reviewContext.kind !== "available" || !item) {
+        return false;
       }
       const slotId = reviewContext.review.slot_id;
-      setObligationSubmittingId(item.obligation_id);
       setReviewNotice(null);
       try {
         const response = await fetch(
@@ -858,7 +884,8 @@ export function ReviewWorkbenchPage() {
           invalidateReviewReads(jobId);
           setReviewBlockers(null);
           await Promise.all([loadReviewContext(), loadWorkflow()]);
-          return;
+          setLastSavedAt(new Date());
+          return true;
         }
         let body: unknown = null;
         try {
@@ -879,22 +906,21 @@ export function ReviewWorkbenchPage() {
           // 被拒意味着页面事实可能已过期：静默重取，把面板上的
           // revision / 结论 / 门禁刷成服务端真值。
           await loadReviewContext();
-          return;
+          return false;
         }
         setReviewNotice(
           response.status === 403
             ? "没有权限对这条材料执行该操作。"
             : response.status === 404
-              ? "这条检查义务不在当前复核范围内（可能分析已更新）。"
+              ? "这条检查不在当前复核范围内（可能分析已更新）。"
               : `操作未完成（HTTP ${response.status}）。`,
         );
       } catch {
         setReviewNotice("复核服务暂时不可用，请稍后重试。");
-      } finally {
-        setObligationSubmittingId(null);
       }
+      return false;
     },
-    [jobId, loadReviewContext, loadWorkflow, reviewContext],
+    [jobId, loadReviewContext, loadWorkflow, obligationItems, reviewContext],
   );
 
   if (!jobId) {
@@ -970,18 +996,20 @@ export function ReviewWorkbenchPage() {
   const completedSummary = describeCompletedReview(latestCompletedSession(reviewData));
   const invalidated = latestInvalidatedSession(reviewData);
   const completeButton = resolveCompleteButtonState(reviewData, statusCounts.pending);
-  /** 人工补核块（WP3-B）：老后端/旧数据没有该字段时按"无此页签"处理。 */
-  const obligationReview = reviewData?.obligation_review ?? null;
-  const pendingObligations = pendingObligationCount(reviewData);
+  /**
+   * 人工补核（WP3-B）已并入「必须处理」：页签数字 = 待处理正式问题 + 待处理补核，
+   * 与服务端完成门禁的两类阻塞一一对应。老后端/旧数据没有补核块时只计问题。
+   */
+  const pendingObligations = currentReviewJob ? pendingObligationCount(reviewData) : null;
   const requiredTotal = countFormalProblems(problems);
-  const obligationItemCount = obligationReview?.available ? (obligationReview.items ?? []).length : 0;
+  const obligationItemCount = obligationProblems.length;
   const progressCounts: ReviewProgressCounts = {
     requiredTotal,
     ...statusCounts,
     obligationTotal: pendingObligations === null ? null : Math.max(obligationItemCount, pendingObligations),
     obligationPending: pendingObligations,
   };
-  const requiredPending = statusCounts.pending + statusCounts.needsReview;
+  const requiredPending = statusCounts.pending + statusCounts.needsReview + (pendingObligations ?? 0);
   const referenceCount = problems.length - requiredTotal;
   const blockerLines = describeBlockers(reviewBlockers?.blockers ?? []);
   /**
@@ -1009,7 +1037,7 @@ export function ReviewWorkbenchPage() {
           : showInvalidatedNotice && invalidated ? {
             text: `点击上方「${startLabel}」后可重新提交判定。`,
             invalidatedReason: invalidationReasonLabel(invalidated.invalidated_reason) || "复核依据已变化，需要重新复核",
-          } : { text: `当前为预览：点击上方「${startLabel}」后可确认、忽略问题并补核。`, invalidatedReason: null }
+          } : { text: `当前为预览：点击上方「${startLabel}」后可确认、忽略问题和核对未能自动核对的检查。`, invalidatedReason: null }
     : null;
   const savedAtText = lastSavedAt ? `自动保存于 ${formatSavedAtTime(lastSavedAt)}` : null;
   const activeMoreTab = MORE_TABS.find((tab) => tab.id === activeTab) ?? null;
@@ -1019,8 +1047,11 @@ export function ReviewWorkbenchPage() {
     setMoreMenuOpen(false);
     if (tab !== "issues") setFocusMode(false);
   };
-  const openIssueQueue = (queue: ReviewQueue) => {
+  const openIssueQueue = (queue: ReviewQueue, source?: SourceView) => {
     setIssueQueue(queue);
+    if (source) {
+      setIssueSourceRequest((previous) => ({ value: source, nonce: (previous?.nonce ?? 0) + 1 }));
+    }
     openTab("issues");
   };
   const focusActive = focusMode && activeTab === "issues";
@@ -1147,9 +1178,10 @@ export function ReviewWorkbenchPage() {
             )}
             <ReviewStatusChips
               aiScope={aiScope}
+              aiFindingCount={sourceFindings?.aiFindingCount}
               canComplete={canComplete}
               open={infoPanel}
-              onOpen={() => setInfoPanel((value) => !value)}
+              onOpen={(section) => { setInfoPanelSection(section); setInfoPanel((value) => !value); }}
             />
             <div className="ml-auto flex flex-wrap items-center gap-2">
               <ReviewDetailNavigation jobId={jobId} returnTo={returnTo} />
@@ -1236,20 +1268,14 @@ export function ReviewWorkbenchPage() {
 
           {focusActive ? null : (
             <div className="flex shrink-0 flex-wrap items-center gap-0.5 border-b border-border px-2" data-testid="gbc-review-tabs">
-              <button type="button" onClick={() => openIssueQueue("required")} data-testid="gbc-review-tab-issues"
+              <button type="button" onClick={() => openIssueQueue("required", "all")} data-testid="gbc-review-tab-issues"
                 aria-pressed={activeTab === "issues" && issueQueue === "required"} className={tabClass(activeTab === "issues" && issueQueue === "required")}>
                 必须处理 {countBadge(requiredPending, requiredPending > 0 ? "warning" : "muted")}
               </button>
-              <button type="button" onClick={() => openIssueQueue("reference")} data-testid="gbc-review-tab-reference"
+              <button type="button" onClick={() => openIssueQueue("reference", "all")} data-testid="gbc-review-tab-reference"
                 aria-pressed={activeTab === "issues" && issueQueue === "reference"} className={tabClass(activeTab === "issues" && issueQueue === "reference")}>
                 参考 {countBadge(referenceCount, "muted")}
               </button>
-              {obligationReview ? (
-                <button type="button" onClick={() => openTab("obligations")} data-testid="gbc-review-tab-obligations"
-                  aria-pressed={activeTab === "obligations"} className={tabClass(activeTab === "obligations")}>
-                  检查补核{pendingObligations && pendingObligations > 0 ? <> {countBadge(pendingObligations, "warning")}</> : null}
-                </button>
-              ) : null}
               <div className="relative ml-auto">
                 <button type="button" onClick={() => setMoreMenuOpen((value) => !value)} aria-expanded={moreMenuOpen} aria-haspopup="menu"
                   data-testid="gbc-review-tab-more" className={tabClass(activeMoreTab !== null)}>
@@ -1291,22 +1317,22 @@ export function ReviewWorkbenchPage() {
             {activeTab === "issues" ? (
               <IssuesTab
                 key={jobId}
-                problems={problems}
+                problems={reviewProblems}
                 sourceFindings={sourceFindings}
-                aiScope={aiScope}
                 queue={issueQueue}
+                sourceRequest={issueSourceRequest}
                 selectedProblemId={selectedProblemId}
                 onSelectProblem={handleSelectProblem}
                 selectedEvidenceRefKey={selectedEvidenceRefKey}
-                workflowStatusByIssueId={workflowStatusByIssueId}
+                workflowStatusByIssueId={reviewStatusById}
                 workflowNotes={workflowNotes}
                 onAction={handleIssueAction}
                 submittingIssueId={submittingIssueId}
                 lastDecision={lastIssueDecision}
                 onUndo={handleUndoIssueDecision}
-                pendingObligations={pendingObligations ?? 0}
-                onOpenObligations={() => openTab("obligations")}
-                onRecheckToTask={jobId ? () => router.push(`/task/${jobId}` as Route) : undefined}
+                obligationItems={obligationItems}
+                onObligationDecision={handleObligationDecision}
+                onOpenScope={() => openTab("metadata")}
                 onSelectEvidenceRef={handleSelectEvidenceRef}
                 readOnly={!canEditReview}
                 readOnlyHint={readOnlyHint}
@@ -1319,18 +1345,6 @@ export function ReviewWorkbenchPage() {
                 }}
                 focusMode={focusActive}
                 onToggleFocus={() => setFocusMode((value) => !value)}
-              />
-            ) : activeTab === "obligations" && obligationReview ? (
-              <ObligationsTab
-                key={`${jobId}:${displayedAnalysisRevision(detail) ?? ""}`}
-                jobId={jobId}
-                onScopeQueued={handleScopeQueued}
-                block={obligationReview}
-                submittingId={obligationSubmittingId}
-                readOnly={!canEditReview}
-                onDecide={(item, decision, note, evidenceReference) =>
-                  void handleObligationDecision(item, decision, note, evidenceReference)
-                }
               />
             ) : activeTab === "corrections" ? (
               <CorrectionsTab
@@ -1371,10 +1385,10 @@ export function ReviewWorkbenchPage() {
                 gateBlockerLines={gateBlockerLines}
                 savedAtText={savedAtText}
                 onClose={() => setInfoPanel(false)}
-                onShowRequired={() => openIssueQueue("required")}
-                onShowReference={() => openIssueQueue("reference")}
-                onOpenObligations={obligationReview ? () => openTab("obligations") : undefined}
+                onShowRequired={() => openIssueQueue("required", "all")}
+                onShowReference={(source) => openIssueQueue("reference", source ?? "all")}
                 onRecheck={jobId ? () => router.push(`/task/${jobId}` as Route) : undefined}
+                focusSection={infoPanelSection}
               />
             ) : null}
           </div>

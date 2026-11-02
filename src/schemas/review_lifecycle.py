@@ -265,6 +265,19 @@ class ObligationDecisionRecord(BaseModel):
     revision: int
 
 
+class ObligationLocation(BaseModel):
+    """补核义务在原文里的一个可跳转位置。
+
+    页码/bbox 必须来自当前分析代际的结构化表清单或 finding 证据；
+    取不到就不给，**不在本层猜页码**。``label`` 只说明"这是哪张表/哪条证据"，
+    不是新的判定结论。
+    """
+
+    page: int = Field(ge=1)
+    label: Optional[str] = None
+    bbox: Optional[List[float]] = None
+
+
 class ObligationReviewItem(BaseModel):
     """复核视角的一条检查义务：引擎判定的未完成实例 + 当前会话的人工决定。
 
@@ -282,6 +295,14 @@ class ObligationReviewItem(BaseModel):
     reason: Optional[str] = None
     reason_label: Optional[str] = None
     detail: Optional[str] = None
+    #: 检查依据（来自引擎义务目录）。补核面板用它回答"这条检查在查什么"，
+    #: 与 ``detail``（系统卡在哪）并列展示。
+    basis: Optional[str] = None
+    #: 支撑该义务的 checker 编号；展示层据此提示同源问题（如 V33-227）。
+    checkers: List[str] = Field(default_factory=list)
+    #: 原文可跳转位置（表起始页/问题证据页）。空列表 = 当前分析代际没有可确认位置，
+    #: 页面显示"未识别到位置"，不编造页码。
+    locations: List[ObligationLocation] = Field(default_factory=list)
     #: 当前有效会话上的人工决定；None = 尚无记录（待处理）。
     decision: Optional[str] = None
     decision_revision: Optional[int] = None
@@ -307,6 +328,9 @@ class ObligationReviewBlock(BaseModel):
     pending_total: Optional[int] = Field(
         default=None, description="尚无已解决决定的阻塞义务条数；覆盖不可用时为 null"
     )
+    #: 已被同源正式问题覆盖、因此不重复列出的补核条数。它们不再阻塞门禁；
+    #: 问题本身仍在问题清单里，由人工按问题流程处理一次。
+    covered_total: int = 0
     items: List[ObligationReviewItem] = Field(default_factory=list)
 
 

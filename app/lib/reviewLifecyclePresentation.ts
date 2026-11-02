@@ -91,8 +91,8 @@ export function blockerLabel(code: string, count?: number | null): string {
     return `还有 ${n} 项问题标记为待复核`;
   }
   if (key === "blocking_obligations" && hasCount) {
-    // WP3-B 起补核入口已存在：告诉用户**去哪里**处理，而不只是"不能完成"。
-    return `还有 ${n} 项检查义务待人工补核（请在「检查补核」页签逐项确认）`;
+    // 补核已并入「必须处理」：告诉用户**去哪里**处理，而不只是"不能完成"。
+    return `还有 ${n} 项“未能自动核对”的检查待处理（在「必须处理」里逐项选择结论）`;
   }
 
   return (
@@ -104,7 +104,7 @@ export function blockerLabel(code: string, count?: number | null): string {
       pending_findings: "还有问题待处理",
       needs_review_findings: "还有问题标记为待复核",
       coverage_unavailable: "检查覆盖不可用，无法证明已完成检查",
-      blocking_obligations: "存在需要人工补核的检查义务",
+      blocking_obligations: "还有“未能自动核对”的检查待处理",
       analysis_unavailable: "当前版本还没有可复核的分析结果",
       analysis_not_completed: "当前分析尚未完成",
       no_current_document_version: "这条材料还没有当前文件版本",
@@ -119,9 +119,9 @@ export function obligationDecisionLabel(decision: string | null | undefined): st
   const key = String(decision ?? "").trim();
   return (
     {
-      verified_ok: "已补核通过",
-      verified_issue: "已确认存在问题",
-      not_applicable: "人工判定不适用",
+      verified_ok: "已核对无误",
+      verified_issue: "已确认有问题",
+      not_applicable: "不适用",
       pending: "待处理",
     }[key] ?? (key || "待处理")
   );

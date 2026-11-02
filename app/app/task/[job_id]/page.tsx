@@ -243,6 +243,14 @@ export default function TaskDetail() {
     );
   }, [jobDetail]);
 
+  const currentRevisionId = revisions.find((item) => item.is_current)?.revision_id ?? "";
+  const hasCheckProgress = (() => {
+    const value = jobDetail?.check_progress;
+    if (!value || typeof value !== "object") return false;
+    const tracks = value as { local?: unknown; ai?: unknown };
+    return Boolean(tracks.local || tracks.ai);
+  })();
+
   const handleReanalyze = async (useAiOverride?: boolean) => {
     if (isReanalyzing || task?.status === "analyzing") {
       return;
@@ -530,6 +538,19 @@ export default function TaskDetail() {
             <Link2 className="h-4 w-4 text-slate-400" />
             {jobDetail?.organization_id ? "更改关联" : "关联报告"}
           </button>
+          <ReanalyzeAiToggle
+            compact
+            title="使用大模型"
+            checked={effectiveReanalyzeUseAiAssist}
+            onChange={setReanalyzeUseAiAssist}
+            disabled={Boolean(aiOptions.capabilities && !aiOptions.capabilities.enabled)}
+            testId="task-reanalyze-ai-toggle"
+            description={aiOptions.error || (aiOptions.capabilities?.enabled
+              ? aiOptions.enabled
+                ? "重新分析将使用系统当前启用的模型；取消勾选后仅执行本地检查。"
+                : "模型已配置，但本次默认关闭；勾选后重新分析会调用大模型。"
+              : "当前没有可用的大模型配置，重新分析将仅执行本地检查。")}
+          />
           <button
             type="button"
             data-testid="task-reanalyze-button"
@@ -552,113 +573,97 @@ export default function TaskDetail() {
         </div>
       </div>
 
-      <div className="border-b border-border bg-slate-50 px-6 py-2">
-        {task.status === "analyzing" ? (
-          <p className="text-xs text-slate-500" data-testid="task-ai-scope-analyzing">
-            分析进行中，检查范围将在完成后更新；当前不宣称已完成大模型文字复核。
-          </p>
-        ) : (
-          <AiScopeBanner
-            scope={taskAiScope}
-            testId="task-ai-scope"
-            onRecheck={
-              taskAiScope.needsRecheck && !selectedRevision
-                ? () => void handleReanalyze(true)
-                : undefined
-            }
-            recheckLabel={aiOptions.capabilities?.enabled ? "使用大模型重新分析" : "重新分析"}
-            recheckDisabled={isReanalyzing}
-            compact
-          />
-        )}
-      </div>
-
-      {revisions.length > 1 || selectedRevision || historyDecisions.length > 0 ? (
-        <section className="border-b border-border bg-white px-6 py-2" data-testid="task-revision-history-panel">
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            {selectedRevision ? (
-              <>
-                <span className="font-medium text-info-700" data-testid="task-revision-notice">
-                  当前查看历史版本 {selectedRevision}，仅供查看；本版本的确认状态不代表当前版本。
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setSelectedRevision("")}
-                  data-testid="task-revision-return-current"
-                  className="rounded border border-border px-2 py-0.5 text-primary-700 hover:bg-surface-100"
-                >
-                  返回当前版本
-                </button>
-              </>
-            ) : revisions.length > 1 ? (
-              <span className="font-medium text-warning-700" data-testid="task-revision-notice">
-                重新分析已生成新版本
-                {revisions.find((item) => item.is_current)?.revision_id
-                  ? `（当前 ${revisions.find((item) => item.is_current)?.revision_id}）`
-                  : ""}
-                ，本版本需重新确认；历史版本可在上方“分析版本”选择器查看。
-              </span>
+      {/* 状态行：AI 检查范围、版本提示合成一行，问题区不被多条横带挤压。 */}
+      <div className="border-b border-border bg-slate-50 px-6 py-1.5" data-testid="task-status-row">
+        <div className="flex flex-wrap items-start gap-2">
+          <div className="min-w-0 flex-1 basis-[28rem]">
+            {task.status === "analyzing" ? (
+              <p className="py-1 text-xs text-slate-500" data-testid="task-ai-scope-analyzing">
+                分析进行中，检查范围将在完成后更新；当前不宣称已完成大模型文字复核。
+              </p>
             ) : (
-              <span className="font-medium text-slate-600" data-testid="task-revision-notice">
-                本版本人工确认记录
-              </span>
+              <AiScopeBanner
+                scope={taskAiScope}
+                testId="task-ai-scope"
+                onRecheck={
+                  taskAiScope.needsRecheck && !selectedRevision
+                    ? () => void handleReanalyze(true)
+                    : undefined
+                }
+                recheckLabel={aiOptions.capabilities?.enabled ? "使用大模型重新分析" : "重新分析"}
+                recheckDisabled={isReanalyzing}
+                variant="inline"
+              />
             )}
           </div>
-          {historyDecisions.length > 0 ? (
-            <ul className="mt-1.5 space-y-1 text-xs text-slate-600" data-testid="task-history-decisions">
-              {historyDecisions.map((decision) => (
-                <li
-                  key={`${decision.issue_id}-${decision.analysis_revision ?? ""}`}
-                  data-testid={`task-history-decision-${decision.issue_id}`}
-                  className="rounded border border-border bg-surface-50 px-2 py-1"
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className={`rounded-full px-1.5 py-0.5 font-medium ${
-                      decision.status === "confirmed" || decision.status === "in_package"
-                        ? "bg-success-100 text-success-700"
-                        : decision.status === "no_issue"
-                          ? "bg-slate-100 text-slate-600"
-                          : "bg-warning-100 text-warning-700"
-                    }`}>
-                      {DECISION_STATUS_LABELS[decision.status ?? ""] ?? decision.status ?? "待处理"}
-                    </span>
-                    <span className="font-medium text-slate-800">{decision.title || decision.issue_id}</span>
-                    {decision.page ? <span className="text-slate-400">P{decision.page}</span> : null}
-                  </div>
-                  <div className="mt-0.5">备注：{decision.note || "无"}</div>
-                  <div className="mt-0.5 text-slate-500">
-                    操作人：{decision.actor || "未记录"} · 时间：{decision.updated_at || "未记录"} ·
-                    版本：{decision.analysis_revision || selectedRevision || "未记录"}
-                    {decision.inherited ? "（自旧版本沿用）" : ""}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="mt-1 text-xs text-slate-500" data-testid="task-history-decisions-empty">
-              本版本暂无人工确认记录。
-            </p>
-          )}
+          {selectedRevision ? (
+            <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-md border border-info-200 bg-info-50 px-2.5 py-1 text-xs">
+              <span className="font-medium text-info-700" data-testid="task-revision-notice">
+                当前查看历史版本 {selectedRevision}，仅供查看；本版本的确认状态不代表当前版本。
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedRevision("")}
+                data-testid="task-revision-return-current"
+                className="rounded border border-border bg-white px-2 py-0.5 text-primary-700 hover:bg-surface-100"
+              >
+                返回当前版本
+              </button>
+            </div>
+          ) : revisions.length > 1 ? (
+            <span
+              data-testid="task-revision-notice"
+              title={`重新分析已生成新版本${currentRevisionId ? `（当前 ${currentRevisionId}）` : ""}，本版本需重新确认；历史版本可在上方“分析版本”选择器查看。`}
+              className="shrink-0 rounded-md border border-warning-200 bg-white px-2.5 py-1 text-xs font-medium text-warning-700"
+            >
+              已生成新版本 · 本版本需重新确认
+            </span>
+          ) : null}
+        </div>
+        {aiOptions.error ? (
+          <p className="mt-1 text-xs text-warning-700" data-testid="task-ai-options-error">{aiOptions.error}</p>
+        ) : null}
+        {hasCheckProgress ? (
+          <div className="mt-1.5">
+            <AnalysisCheckProgress value={jobDetail?.check_progress} />
+          </div>
+        ) : null}
+      </div>
+
+      {historyDecisions.length > 0 ? (
+        <section className="border-b border-border bg-white px-6 py-2" data-testid="task-revision-history-panel">
+          <div className="text-xs font-medium text-slate-600">本版本人工确认记录 {historyDecisions.length} 条</div>
+          <ul className="mt-1.5 max-h-40 space-y-1 overflow-y-auto text-xs text-slate-600" data-testid="task-history-decisions">
+            {historyDecisions.map((decision) => (
+              <li
+                key={`${decision.issue_id}-${decision.analysis_revision ?? ""}`}
+                data-testid={`task-history-decision-${decision.issue_id}`}
+                className="rounded border border-border bg-surface-50 px-2 py-1"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`rounded-full px-1.5 py-0.5 font-medium ${
+                    decision.status === "confirmed" || decision.status === "in_package"
+                      ? "bg-success-100 text-success-700"
+                      : decision.status === "no_issue"
+                        ? "bg-slate-100 text-slate-600"
+                        : "bg-warning-100 text-warning-700"
+                  }`}>
+                    {DECISION_STATUS_LABELS[decision.status ?? ""] ?? decision.status ?? "待处理"}
+                  </span>
+                  <span className="font-medium text-slate-800">{decision.title || decision.issue_id}</span>
+                  {decision.page ? <span className="text-slate-400">P{decision.page}</span> : null}
+                </div>
+                <div className="mt-0.5">备注：{decision.note || "无"}</div>
+                <div className="mt-0.5 text-slate-500">
+                  操作人：{decision.actor || "未记录"} · 时间：{decision.updated_at || "未记录"} ·
+                  版本：{decision.analysis_revision || selectedRevision || "未记录"}
+                  {decision.inherited ? "（自旧版本沿用）" : ""}
+                </div>
+              </li>
+            ))}
+          </ul>
         </section>
       ) : null}
-
-      <div className="border-b border-border bg-slate-50 px-6 py-3">
-        <AnalysisCheckProgress value={jobDetail?.check_progress} />
-        <div className="flex justify-end">
-          <ReanalyzeAiToggle
-            checked={effectiveReanalyzeUseAiAssist}
-            onChange={setReanalyzeUseAiAssist}
-            disabled={Boolean(aiOptions.capabilities && !aiOptions.capabilities.enabled)}
-            testId="task-reanalyze-ai-toggle"
-            className="w-full max-w-md bg-white"
-            description={aiOptions.error || (aiOptions.capabilities?.enabled
-              ? aiOptions.enabled
-                ? "重新分析将使用系统当前启用的模型；取消勾选后仅执行本地检查。"
-                : "模型已配置，但本次默认关闭；勾选后重新分析会调用大模型。"
-              : "当前没有可用的大模型配置，重新分析将仅执行本地检查。")}
-          />
-        </div>
-      </div>
 
       <div className="relative flex flex-1 overflow-hidden">
         <PipelineDrawer

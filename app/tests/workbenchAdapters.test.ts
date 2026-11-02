@@ -11,6 +11,7 @@ import {
   formatElapsedText,
   formatPagesText,
   resolveIssueCountText,
+  resolveQueueCounts,
   resolveFindingCountDetails,
   resolveFindingCountSummary,
   resolveReviewEntryDecision,
@@ -377,5 +378,22 @@ assert.deepEqual(resolveFindingCountSummary({ job_id: "a", tip_total: 2, review_
   { candidate: 1, others: ["提示 2", "复核事项 14"] });
 assert.deepEqual(resolveFindingCountSummary({ job_id: "b", tip_total: 0 } as JobSummaryRecord), { candidate: null, others: ["提示 0"] });
 assert.deepEqual(resolveFindingCountSummary({ job_id: "c" } as JobSummaryRecord), { candidate: null, others: [] });
+
+// --- resolveQueueCounts：列表与审核台两个页签同口径 ----------------------------
+// 真实材料（价格监测与成本调查队 2025 决算）：审核台必须处理 4、参考 15。
+const queued = resolveQueueCounts({ job_id: "q", queue_required_total: 4, queue_reference_total: 15,
+  queue_candidate_total: 5, queue_degraded_total: 2, queue_tip_total: 6, queue_notice_total: 2 } as JobSummaryRecord);
+assert.equal(queued?.required, 4);
+assert.equal(queued?.reference, 15);
+assert.deepEqual(queued?.referenceParts, ["待核实 5", "证据不足 2", "提示 6", "复核事项 2"]);
+assert.match(queued?.detail ?? "", /不计入完成条件/);
+// 必须处理含“未能自动核对”时，悬停说明拆开两类。
+assert.match(resolveQueueCounts({ job_id: "o", queue_required_total: 6, queue_obligation_total: 4, queue_reference_total: 22 } as JobSummaryRecord)?.detail ?? "",
+  /必须处理 6（问题 2、未能自动核对 4）/);
+// 为 0 的组成不列。
+assert.deepEqual(resolveQueueCounts({ job_id: "z", queue_required_total: 0, queue_reference_total: 3,
+  queue_candidate_total: 0, queue_degraded_total: 0, queue_tip_total: 3, queue_notice_total: 0 } as JobSummaryRecord)?.referenceParts, ["提示 3"]);
+// 旧摘要没有 queue_* 字段：返回 null，调用方退回旧写法。
+assert.equal(resolveQueueCounts({ job_id: "old", review_issue_total: 3 } as JobSummaryRecord), null);
 
 console.log("workbenchAdapters.test.ts passed");

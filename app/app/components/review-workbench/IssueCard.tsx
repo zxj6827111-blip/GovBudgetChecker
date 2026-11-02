@@ -29,6 +29,7 @@ import {
   type CalculationGroup,
 } from "./reviewReadingAdapters";
 import { dedupeEvidenceRefsForDisplay, isProblemDegraded } from "./reviewWorkbenchAdapters";
+import { OBLIGATION_DECISION_LABELS, isObligationProblem, type ObligationDecision } from "./obligationProblems";
 
 const SEVERITY_TONE_CLASSES: Record<SeverityCode, string> = {
   critical: "bg-danger-100 text-danger-700",
@@ -47,7 +48,11 @@ function sourceLabel(problem: Problem): string {
     .join(" + ");
 }
 
-function WorkflowStatusBadge({ workflowStatus }: { workflowStatus: string | null }) {
+export function WorkflowStatusBadge({ workflowStatus }: { workflowStatus: string | null }) {
+  // 补核条目的处理状态是补核决定码，与问题工作流共用一个状态表。
+  if (workflowStatus === "verified_issue") return <span className="shrink-0 rounded-full bg-success-100 px-2 py-0.5 font-medium text-success-700">已确认有问题</span>;
+  if (workflowStatus === "verified_ok") return <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-500">已核对无误</span>;
+  if (workflowStatus === "not_applicable") return <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-500">不适用</span>;
   if (workflowStatus === "confirmed") return <span className="shrink-0 rounded-full bg-success-100 px-2 py-0.5 font-medium text-success-700">已确认</span>;
   if (workflowStatus === "no_issue") return <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-500">已忽略</span>;
   if (workflowStatus === "in_package") return <span className="shrink-0 rounded-full bg-success-100 px-2 py-0.5 font-medium text-success-700">已进整改包</span>;
@@ -88,9 +93,13 @@ export function IssueRow({ problem, isActive, workflowStatus, onSelect }: IssueR
       }`}
     >
       <span className="flex min-w-0 items-center gap-2 text-slate-500">
-        <span className={`shrink-0 rounded-full px-2 py-0.5 font-medium ${SEVERITY_TONE_CLASSES[severityCode]}`}>
-          {severityMeta.riskLabel}
-        </span>
+        {isObligationProblem(problem) ? (
+          <span className="shrink-0 rounded-full bg-warning-100 px-2 py-0.5 font-medium text-warning-700">未能自动核对</span>
+        ) : (
+          <span className={`shrink-0 rounded-full px-2 py-0.5 font-medium ${SEVERITY_TONE_CLASSES[severityCode]}`}>
+            {severityMeta.riskLabel}
+          </span>
+        )}
         {sources ? <span className="shrink-0">{sources}</span> : null}
         {isProblemDegraded(problem) ? <span className="shrink-0 rounded-full bg-warning-100 px-2 py-0.5 font-medium text-warning-700">证据不足</span> : null}
         <WorkflowStatusBadge workflowStatus={workflowStatus} />
@@ -413,8 +422,9 @@ export interface IssueDecisionFooterProps {
   savedAtText?: string | null;
   isSubmitting: boolean;
   onAction: (action: IssueWorkflowAction) => void;
+  /** 「未能自动核对」条目的三个结论（及置回待处理），提交到补核接口。 */
+  onObligationDecision?: (decision: ObligationDecision) => void;
   notice: IssueDecisionNoticeView | null;
-  /** 必须处理项已全部处理、仍有补核时，引导到检查补核。 */
   nextStep?: { label: string; onClick: () => void } | null;
 }
 
@@ -427,12 +437,14 @@ export function IssueDecisionFooter({
   savedAtText,
   isSubmitting,
   onAction,
+  onObligationDecision,
   notice,
   nextStep,
 }: IssueDecisionFooterProps) {
   const isConfirmed = workflowStatus === "confirmed";
   const isIgnored = workflowStatus === "no_issue";
   const actions = problem && showActions;
+  const obligation = isObligationProblem(problem);
   if (!actions && !readOnlyHint && !notice && !nextStep && !savedAtText) return null;
   return (
     <footer className="shrink-0 space-y-1.5 border-t border-border bg-white px-4 py-2" data-testid="gbc-review-decision-footer">
@@ -461,7 +473,34 @@ export function IssueDecisionFooter({
           {!actions && savedAtText ? <span className="ml-auto text-slate-400" data-testid="gbc-review-status-bar-saved-at">{savedAtText}</span> : null}
         </div>
       ) : null}
-      {actions ? (
+      {actions && obligation ? (
+        <div className="flex flex-wrap items-center gap-2" data-testid="gbc-review-obligation-actions">
+          {(Object.keys(OBLIGATION_DECISION_LABELS) as Array<keyof typeof OBLIGATION_DECISION_LABELS>).map((decision, index) => (
+            <button
+              key={decision}
+              type="button"
+              onClick={() => onObligationDecision?.(decision)}
+              disabled={isSubmitting || workflowStatus === decision}
+              data-testid={`gbc-review-obligation-${decision}-${problem.id}`}
+              className={index === 0
+                ? "rounded-md border border-primary-600 bg-primary-600 px-3.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
+                : "rounded-md border border-border bg-white px-3.5 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-surface-100 disabled:cursor-not-allowed disabled:opacity-50"}
+            >
+              {OBLIGATION_DECISION_LABELS[decision]}
+            </button>
+          ))}
+          {workflowStatus ? (
+            <button
+              type="button"
+              onClick={() => onObligationDecision?.("pending")}
+              disabled={isSubmitting}
+              data-testid={`gbc-review-obligation-pending-${problem.id}`}
+              className="rounded-md border border-border px-3 py-1.5 text-xs text-slate-600 hover:bg-surface-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >恢复待处理</button>
+          ) : null}
+          {savedAtText ? <span className="ml-auto text-[11px] text-slate-400" data-testid="gbc-review-status-bar-saved-at">{savedAtText}</span> : null}
+        </div>
+      ) : actions ? (
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"

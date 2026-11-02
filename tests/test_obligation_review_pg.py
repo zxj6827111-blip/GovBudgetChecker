@@ -438,6 +438,8 @@ async def test_manual_decision_unblocks_completion(review_db):
     assert by_id["OBL-A"].decision == "verified_ok"
     assert by_id["OBL-A"].decision_revision == 1
     assert by_id["OBL-A"].note == "已对照三公表逐项核对"
+    assert by_id["OBL-A"].basis == "测试依据"
+    assert by_id["OBL-A"].checkers == []
     assert by_id["OBL-B"].decision == "verified_issue"
 
 

@@ -5,8 +5,9 @@ import { expect, test, type Page } from "../../app/node_modules/playwright/test"
  *
  * 关键约束：
  * - 覆盖状态不能藏在“来源与分类说明”二级折叠里；
- * - 4 个检查单元只成功 3 个时，页面必须写“有效完成 3/4，失败 1”，
- *   不能把失败算成“已处理 4/4”；
+ * - 4 个检查单元只成功 3 个时，顶栏 AI 标识直接写“3/4 未完成”和未检页码，
+ *   点开的状态面板写“有效完成 3/4，失败 1”，不能把失败算成“已处理 4/4”；
+ * - 问题队列不再另放检查范围条（与顶栏 AI 标识重复）；
  * - 纯规则任务与历史无覆盖记录必须显式写“未执行/未记录”；
  * - 规则问题的当前值/应为/差额和“程序计算”来源必须直接可见。
  */
@@ -41,7 +42,11 @@ const issue = {
   location: { page: 20 },
 };
 
-function buildJobDetail(meta: Record<string, unknown>, reviewReport?: Record<string, unknown>) {
+function buildJobDetail(
+  meta: Record<string, unknown>,
+  reviewReport?: Record<string, unknown>,
+  aiFindings: Record<string, unknown>[] = [],
+) {
   return {
     job_id: JOB_ID,
     filename: "上海市某单位2022年度部门决算.pdf",
@@ -54,14 +59,19 @@ function buildJobDetail(meta: Record<string, unknown>, reviewReport?: Record<str
     stage_failed_at: null,
     result: {
       rule_findings: [issue],
-      ai_findings: [],
+      ai_findings: aiFindings,
       meta,
     },
     ...(reviewReport ? { review_report: reviewReport } : {}),
   };
 }
 
-async function installMocks(page: Page, meta: Record<string, unknown>, reviewReport?: Record<string, unknown>) {
+async function installMocks(
+  page: Page,
+  meta: Record<string, unknown>,
+  reviewReport?: Record<string, unknown>,
+  aiFindings: Record<string, unknown>[] = [],
+) {
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -80,7 +90,7 @@ async function installMocks(page: Page, meta: Record<string, unknown>, reviewRep
         completion_gate: { can_complete: false, blockers: [] },
       } } });
     }
-    if (path === `/api/jobs/${JOB_ID}`) return json(buildJobDetail(meta, reviewReport));
+    if (path === `/api/jobs/${JOB_ID}`) return json(buildJobDetail(meta, reviewReport, aiFindings));
     if (path === `/api/jobs/${JOB_ID}/structured-ingest`) return json({ status: "done", review_item_count: 0, review_items: [] });
     if (path === "/api/workflow") return json({ issues: {}, packages: [] });
     if (path.startsWith("/api/files/")) {
@@ -146,17 +156,27 @@ test.describe("AI scope and explanation visibility", () => {
     await page.goto(`/review?job=${JOB_ID}`);
     await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible({ timeout: 15_000 });
 
-    // 不点击“来源与分类说明”，检查范围必须已经可见。
-    const scope = page.getByTestId("gbc-review-ai-scope");
-    await expect(scope).toBeVisible();
-    await expect(scope.getByTestId("gbc-review-ai-scope-headline")).toContainText("有效完成 3/4");
-    await expect(scope.getByTestId("gbc-review-ai-scope-headline")).toContainText("失败 1");
-    await expect(scope.getByTestId("gbc-review-ai-scope-headline")).toContainText("另有 1 个单元重试");
-    await expect(scope.getByTestId("gbc-review-ai-scope-conclusion-scope")).toContainText("不能得出完整结论");
-    await expect(scope.getByTestId("gbc-review-ai-scope-failed-units")).toContainText("说明一致性");
-    await expect(scope.getByTestId("gbc-review-ai-scope-failed-units")).toContainText("第13-14、20页");
-    await expect(scope.getByTestId("gbc-review-ai-scope-failed-units")).toContainText("server_error");
-    await expect(scope.getByTestId("gbc-review-ai-scope-failed-units")).toContainText("已尝试 2 次");
+    // 不点击任何东西，顶栏 AI 标识已写出完成计数与未检页码。
+    const chip = page.getByTestId("gbc-review-state-ai");
+    await expect(chip).toContainText("AI 检查完成 3/4 单元");
+    await expect(chip).toContainText("未完成：说明一致性第13-14、20页");
+    // 问题队列不再重复放一条检查范围条。
+    await expect(page.getByTestId("gbc-review-issues-tab")).toBeVisible();
+    await expect(page.getByTestId("gbc-review-ai-scope")).toHaveCount(0);
+
+    // 完整计数、结论作用域、错误类型、尝试次数在 AI 标识打开的状态面板里。
+    await chip.click();
+    const panelScope = page.getByTestId("gbc-review-ai-scope-panel");
+    await expect(panelScope).toBeInViewport();
+    await expect(panelScope.getByTestId("gbc-review-ai-scope-panel-headline")).toContainText("有效完成 3/4");
+    await expect(panelScope.getByTestId("gbc-review-ai-scope-panel-headline")).toContainText("失败 1");
+    await expect(panelScope.getByTestId("gbc-review-ai-scope-panel-headline")).toContainText("另有 1 个单元重试");
+    await expect(panelScope.getByTestId("gbc-review-ai-scope-panel-conclusion-scope")).toContainText("不能得出完整结论");
+    await expect(panelScope.getByTestId("gbc-review-ai-scope-panel-failed-units")).toContainText("说明一致性");
+    await expect(panelScope.getByTestId("gbc-review-ai-scope-panel-failed-units")).toContainText("第13-14、20页");
+    await expect(panelScope.getByTestId("gbc-review-ai-scope-panel-failed-units")).toContainText("server_error");
+    await expect(panelScope.getByTestId("gbc-review-ai-scope-panel-failed-units")).toContainText("已尝试 2 次");
+    await page.getByTestId("gbc-review-info-panel-close").click();
 
     await openIssueList(page);
     await page.getByTestId("gbc-review-issue-card-FIN-EXPLAIN-1").click();
@@ -173,6 +193,30 @@ test.describe("AI scope and explanation visibility", () => {
     await page.screenshot({ path: test.info().outputPath("ai-scope-partial.png") });
   });
 
+  test("任务页把检查范围压成一行，详情就地展开，大模型开关在重新分析旁", async ({ page }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installMocks(page, partialMeta);
+    await page.goto(`/task/${JOB_ID}`);
+    const scope = page.getByTestId("task-ai-scope");
+    await expect(scope).toBeVisible({ timeout: 15_000 });
+    await expect(scope.getByTestId("task-ai-scope-headline")).toContainText("有效完成 3/4");
+    await expect(scope.getByTestId("task-ai-scope-failed-groups")).toContainText("说明一致性第13-14、20页");
+    await expect(scope.getByTestId("task-ai-scope-details")).toHaveCount(0);
+    expect((await scope.boundingBox())?.height ?? 999).toBeLessThan(40);
+
+    const toggle = scope.getByTestId("task-ai-scope-details-toggle");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(scope.getByTestId("task-ai-scope-failed-units")).toContainText("server_error");
+    await expect(scope.getByTestId("task-ai-scope-failed-units")).toContainText("已尝试 2 次");
+
+    // 开关贴着“重新分析”按钮，不再单独占一条横带。
+    const header = page.getByTestId("task-summary-header");
+    await expect(header.getByTestId("task-reanalyze-ai-toggle")).toBeVisible();
+    await expect(header.getByTestId("task-reanalyze-button")).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath("ai-scope-task-inline.png") });
+  });
+
   test("纯规则任务明确写“文字语义未执行”，不显示成覆盖完整", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
     await installMocks(page, {
@@ -181,9 +225,11 @@ test.describe("AI scope and explanation visibility", () => {
     });
     await page.goto(`/review?job=${JOB_ID}`);
     await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible({ timeout: 15_000 });
-    const scope = page.getByTestId("gbc-review-ai-scope");
-    await expect(scope).toBeVisible();
-    await expect(scope.getByTestId("gbc-review-ai-scope-headline")).toContainText("本次未执行");
+    const chip = page.getByTestId("gbc-review-state-ai");
+    await expect(chip).toHaveText("AI 检查未执行");
+    await chip.click();
+    const scope = page.getByTestId("gbc-review-ai-scope-panel");
+    await expect(scope.getByTestId("gbc-review-ai-scope-panel-headline")).toContainText("本次未执行");
     await expect(scope).toContainText("文字语义检查未执行");
     await expect(scope).not.toContainText("覆盖完整");
   });
@@ -244,9 +290,37 @@ test.describe("AI scope and explanation visibility", () => {
     });
     await page.goto(`/review?job=${JOB_ID}`);
     await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible({ timeout: 15_000 });
-    const scope = page.getByTestId("gbc-review-ai-scope");
-    await expect(scope).toBeVisible();
-    await expect(scope.getByTestId("gbc-review-ai-scope-headline")).toContainText("覆盖信息未记录");
+    const chip = page.getByTestId("gbc-review-state-ai");
+    await expect(chip).toHaveText("AI 检查未记录");
+    await chip.click();
+    const scope = page.getByTestId("gbc-review-ai-scope-panel");
+    await expect(scope.getByTestId("gbc-review-ai-scope-panel-headline")).toContainText("覆盖信息未记录");
     await expect(scope).not.toContainText("已完整完成");
+  });
+
+  test("从 AI 文字检查进入参考时直接筛选大模型来源，不用在全部参考里翻找", async ({ page }) => {
+    await page.context().addCookies([sessionCookie]);
+    const aiFinding = {
+      id: "AI-NAV-1",
+      rule_id: "AI-XSEC-001",
+      source: "ai",
+      severity: "medium",
+      title: "AI 候选：口径表述待核实",
+      message: "AI 候选：口径表述待核实",
+      evidence: [{ page: 20, text: "支出决算为141.12万元" }],
+      evidence_status: "complete",
+      location: { page: 20 },
+    };
+    await installMocks(page, completeMeta, undefined, [aiFinding]);
+    await page.goto(`/review?job=${JOB_ID}`);
+    await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible({ timeout: 15_000 });
+    // AI 标识 → 检查与复核状态面板 → AI 文字检查一节里的“查看大模型参考条目”。
+    await page.getByTestId("gbc-review-state-ai").click();
+    await page.getByRole("button", { name: "查看大模型参考条目" }).click();
+    // 直接落在「大模型」来源筛选上，而不是 20 条参考里的第一条。
+    await expect(page.getByTestId("gbc-review-source-ai")).toHaveAttribute("aria-pressed", "true");
+    await openIssueList(page);
+    await expect(page.locator('[data-review-problem-id="AI-NAV-1"]')).toHaveCount(1);
+    await expect(page.locator('[data-review-problem-id="FIN-EXPLAIN-1"]')).toHaveCount(0);
   });
 });

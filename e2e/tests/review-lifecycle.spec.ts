@@ -385,12 +385,12 @@ test.describe("Review lifecycle (WP3-A)", () => {
     }
 
     await expectGateBlockers(page, "还有 1 项问题待处理");
-    await expectGateBlockers(page, "还有 1 项检查义务待人工补核");
+    await expectGateBlockers(page, "还有 1 项“未能自动核对”的检查待处理");
     await page.getByTestId("gbc-review-issue-confirm-FIN-1").click();
     await expectStatusCounts(page, "已确认 1");
     await page.getByTestId("gbc-review-state-progress").click();
     await expect(page.getByTestId("gbc-review-gate-blockers")).not.toContainText("问题待处理");
-    await expect(page.getByTestId("gbc-review-gate-blockers")).toContainText("还有 1 项检查义务待人工补核");
+    await expect(page.getByTestId("gbc-review-gate-blockers")).toContainText("还有 1 项“未能自动核对”的检查待处理");
     await page.getByTestId("gbc-review-info-panel-close").click();
     await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();
     expect(state.completeCalls).toBe(0);
@@ -487,7 +487,7 @@ test.describe("Review lifecycle (WP3-A)", () => {
     await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核已失效");
   });
 
-  test("阻塞义务：还有 2 项检查义务待人工补核时禁止完成，并说出条数", async ({ page }) => {
+  test("阻塞义务：还有 2 项“未能自动核对”的检查待处理时禁止完成，并说出条数", async ({ page }) => {
     const state = freshState({
       activeSession: buildSession(),
       completionBlockers: [{ code: "blocking_obligations", count: 2 }],
@@ -502,9 +502,9 @@ test.describe("Review lifecycle (WP3-A)", () => {
       await page.getByTestId("gbc-review-start").click();
     }
 
-    // WP3-B：文案必须说出条数，且指路到「检查补核」页签（能力已交付，
+    // WP3-B：文案必须说出条数，且指路到「必须处理」（补核已并入必须处理，
     // 不再是"该能力将在人工补核流程中处理"这种期货话术）。
-    await expectGateBlockers(page, "还有 2 项检查义务待人工补核");
+    await expectGateBlockers(page, "还有 2 项“未能自动核对”的检查待处理");
 
     // 按钮此时应当是灰的（即时提示）：点不动也是被禁止完成的正确表现之一
     await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();

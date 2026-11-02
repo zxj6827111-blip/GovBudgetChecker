@@ -331,6 +331,12 @@ class CoverageObligationItem(BaseModel):
     #: 前者供人读，后者供机器判定，二者都不是本层新造的。
     reason_label: Optional[str] = None
     detail: Optional[str] = None
+    #: 义务的检查依据（引擎目录里的 ``basis``）。展示层用它解释"这条在查什么"，
+    #: 不在本层翻译成第二套中文说明。
+    basis: Optional[str] = None
+    #: 支撑该义务的 checker 编号（如 ``V33-227``）。展示层据此标出同源问题，
+    #: 不把 checker 编号当主文案。
+    checkers: List[str] = Field(default_factory=list)
     blocks_gate: bool = False
     requires_ai: bool = False
     input_gaps: List[str] = Field(default_factory=list)

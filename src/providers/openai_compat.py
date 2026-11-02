@@ -5,7 +5,9 @@ OpenAI 兼容提供商实现
 import asyncio
 import json
 import time
+import uuid
 from typing import Dict, List, Any, Optional, AsyncIterator
+from urllib.parse import urlsplit
 
 import aiohttp
 
@@ -21,7 +23,9 @@ class OpenAICompatProvider(BaseLLMProvider):
                  default_model: str = "gpt-4o-mini",
                  timeout: int = 60,
                  max_retries: int = 1,
-                 organization: Optional[str] = None):
+                 organization: Optional[str] = None,
+                 reasoning_effort: Optional[str] = None,
+                 thinking: bool = False):
         
         # 模型别名映射
         model_aliases = {
@@ -46,6 +50,23 @@ class OpenAICompatProvider(BaseLLMProvider):
         )
         
         self.organization = organization
+        # 推理强度与思考模式（DeepSeek/OpenCode 等兼容网关）：留空则不下发，沿用服务商默认。
+        self.reasoning_effort = (reasoning_effort or "").strip().lower() or None
+        self.thinking = bool(thinking)
+        # OpenCode 网关要求稳定会话标识；按提供商实例生成一次即可。
+        self.session_id = f"gbc-{uuid.uuid4().hex}"
+
+    def _apply_reasoning_options(self, payload: Dict[str, Any]) -> None:
+        """把推理强度/思考模式写入请求体；模型不支持时由服务商忽略或报错。"""
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
+        if self.thinking:
+            payload["thinking"] = {"type": "enabled"}
+
+    def _requires_opencode_session(self) -> bool:
+        """OpenCode Zen/Go 网关缺少 x-opencode-session 时返回 400 MissingSessionID。"""
+        hostname = (urlsplit(self.base_url).hostname or "").lower()
+        return hostname == "opencode.ai" or hostname.endswith(".opencode.ai")
     
     @property
     def name(self) -> str:
@@ -71,7 +92,10 @@ class OpenAICompatProvider(BaseLLMProvider):
         
         if self.organization:
             headers["OpenAI-Organization"] = self.organization
-        
+
+        if self._requires_opencode_session():
+            headers["x-opencode-session"] = self.session_id
+
         return headers
     
     def format_messages(self, messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -191,6 +215,10 @@ class OpenAICompatProvider(BaseLLMProvider):
         if "user" in kwargs:
             payload["user"] = kwargs["user"]
 
+        # Responses API 的推理强度字段与 chat/completions 不同，按官方字段映射。
+        if self.reasoning_effort:
+            payload["reasoning"] = {"effort": self.reasoning_effort}
+
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
             async with session.post(
                 f"{self.base_url}/responses",
@@ -269,6 +297,8 @@ class OpenAICompatProvider(BaseLLMProvider):
                 payload["logit_bias"] = kwargs["logit_bias"]
             if "user" in kwargs:
                 payload["user"] = kwargs["user"]
+
+            self._apply_reasoning_options(payload)
             
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
                 async with session.post(

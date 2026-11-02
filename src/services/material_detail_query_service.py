@@ -1196,6 +1196,8 @@ def build_coverage(raw: Any) -> CoverageBlock:
                 reason=_text_or_none(row.get("reason")),
                 reason_label=_text_or_none(row.get("reason_label")),
                 detail=_text_or_none(row.get("detail")),
+                basis=_text_or_none(row.get("basis")),
+                checkers=_string_list(row.get("checkers")),
                 blocks_gate=bool(row.get("blocks_gate")),
                 requires_ai=bool(row.get("requires_ai")),
                 input_gaps=_string_list(row.get("input_gaps")),

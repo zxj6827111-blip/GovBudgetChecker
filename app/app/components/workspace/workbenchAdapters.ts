@@ -37,6 +37,45 @@ export function resolveFindingCountSummary(job: JobSummaryRecord): { candidate: 
   };
 }
 
+export interface QueueCountSummary {
+  required: number;
+  reference: number;
+  /** 参考的组成，词与审核台“结果类型”筛选一致；为 0 的不列。 */
+  referenceParts: string[];
+  /** 悬停提示：两个页签各是什么、是否计入完成条件。 */
+  detail: string;
+}
+
+/**
+ * 与审核台「必须处理 / 参考」两个页签同口径的条数（后端 review_queue_counts），
+ * 点进去看到的页签数字就是这两个数。旧摘要没有这些字段时返回 null，由调用方
+ * 退回旧的“问题 / 提示”写法。
+ */
+export function resolveQueueCounts(job: JobSummaryRecord): QueueCountSummary | null {
+  const count = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+  const required = count(job.queue_required_total);
+  const reference = count(job.queue_reference_total);
+  if (required === null || reference === null) return null;
+  const referenceParts = ([
+    ["待核实", job.queue_candidate_total],
+    ["证据不足", job.queue_degraded_total],
+    ["提示", job.queue_tip_total],
+    ["复核事项", job.queue_notice_total],
+  ] as Array<[string, unknown]>).flatMap(([label, value]) => {
+    const n = count(value);
+    return n ? [`${label} ${n}`] : [];
+  });
+  const obligations = count(job.queue_obligation_total);
+  const requiredParts = obligations ? `（问题 ${required - obligations}、未能自动核对 ${obligations}）` : "";
+  return {
+    required,
+    reference,
+    referenceParts,
+    detail: `必须处理 ${required}${requiredParts}：逐条处理后才能完成复核；`
+      + `参考 ${reference}${referenceParts.length ? `（${referenceParts.join("、")}）` : ""}：供查阅，不计入完成条件`,
+  };
+}
+
 export type CheckTrackTone = "done" | "active" | "warning" | "muted";
 
 export interface CheckTrackSummaryItem {

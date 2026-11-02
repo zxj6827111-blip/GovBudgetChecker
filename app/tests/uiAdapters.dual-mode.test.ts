@@ -367,4 +367,27 @@ for (const [evidenceStatus, sourceComplete, expected] of [
   assert.equal(problem.snippet, "narrative=10, table=20", "retain unverified observations for review without promoting their source status");
 }
 
+// 旧版 AI 结果标题落成英文机器代码时，展示检查项名称（标题、摘要、说明一致）。
+{
+  const [problem] = toUiProblems({
+    job_id: "job-generic-title",
+    result: { ai_findings: [{
+      id: "ai-generic", source: "ai", rule_id: "AI-SEM-002", severity: "manual_review",
+      title: "待人工复核：generic", check: "机构数量与列举项一致性",
+      message: "第7页“机构设置”发现待人工复核：generic。命中文本：设 22 个内设机构",
+      display: { summary: "待人工复核：generic" },
+      evidence: [{ page: 7, text: "设 22 个内设机构" }], location: { page: 7 },
+    }] },
+  } as any);
+  assert.equal(problem.title, "待人工复核：机构数量与列举项一致性");
+  assert.equal(problem.description, "第7页“机构设置”发现待人工复核：机构数量与列举项一致性。命中文本：设 22 个内设机构");
+  // 没有检查项名称时不猜，保持原样。
+  const [untouched] = toUiProblems({
+    job_id: "job-generic-title-2",
+    result: { ai_findings: [{ id: "ai-generic-2", source: "ai", rule_id: "AI-SEM-002", severity: "manual_review",
+      title: "待人工复核：generic", message: "m", evidence: [{ page: 1, text: "x" }], location: { page: 1 } }] },
+  } as any);
+  assert.equal(untouched.title, "待人工复核：generic");
+}
+
 console.log("uiAdapters dual-mode tests passed");

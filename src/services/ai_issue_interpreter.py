@@ -128,6 +128,7 @@ def interpret_ai_issue(
         normalized_kind=normalized_kind,
         fallback_title=_compact_text(raw_issue.get("title")),
         issue_type=issue_type,
+        check_name=check_name,
         is_manual_review=is_manual_review,
     )
     message = _build_message(
@@ -265,12 +266,16 @@ def _build_metrics(
     return metrics
 
 
+_MACHINE_CODE_RE = re.compile(r"[A-Za-z0-9_\-]+")
+
+
 def _build_title(
     *,
     normalized_kind: str,
     fallback_title: str,
     issue_type: str,
     is_manual_review: bool,
+    check_name: str = "",
 ) -> str:
     title_map = {
         "ratio_recalc": "同比/比例复算异常",
@@ -286,7 +291,13 @@ def _build_title(
         "direction_conflict": "增减方向与数字变化不一致",
         "code_subject_mismatch": "科目编码或用途表述异常",
     }
-    base_title = title_map.get(normalized_kind, fallback_title or issue_type or "AI识别问题")
+    # 类型不在对照表时依次用模型标题、检查项名称、类型；generic 这类英文机器代码
+    # 不能直接展示成标题（曾出现“待人工复核：generic”）。
+    fallback = next(
+        (text for text in (fallback_title, check_name, issue_type) if text and not _MACHINE_CODE_RE.fullmatch(text)),
+        "AI识别问题",
+    )
+    base_title = title_map.get(normalized_kind, fallback)
     if normalized_kind == "text_error" and issue_type in _TEXT_TYPE_LABELS:
         base_title = f"文字表述疑似错误（{_TEXT_TYPE_LABELS[issue_type]}）"
     if is_manual_review and not base_title.startswith("待人工复核"):

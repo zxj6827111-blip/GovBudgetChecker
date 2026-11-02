@@ -2,7 +2,7 @@
  * WorkbenchQueueTable：原型图「处理队列」表格（Task 4.2；前置修复 2 拆分耗时/页数列）。
  *
  * 列：文档（文件名 + 组织·年份·类型副行）/ 状态（质量徽章 + 进行中的阶段进度 +
- * 本地/大模型检查一行摘要）/ 页数·耗时 / 问题 / 提示 / 操作。
+ * 本地/大模型检查一行摘要）/ 页数·耗时 / 复核条目 / 操作。
  *
  * 每行只说一次：已结束的任务不再画“质量门禁 100%”和两条 100% 进度条——
  * 徽章说结论，检查摘要说两条检查线各跑了多少（“本地 89/89 · 大模型 未启用”），
@@ -14,8 +14,9 @@
  *   经 StageProgress 组件渲染，未知态由该组件内部的 isProgressUnknown 处理，
  *   本文件不重新判定 null——避免出现"两处判断逻辑，一处漏改就产生分裂"。
  * - 质量状态徽章：review_required 必须显示"需要人工复核"，不可显示"分析完成"。
- * - 问题数：与审核台采用 review_issue_total，包含待人工确认的材料问题；
- *   提示和系统复核事项单独计数。
+ * - 复核条目：与审核台两个页签同口径，写“必须处理 N / 参考 M”（后端 queue_* 计数），
+ *   参考再按审核台“结果类型”列出待核实、证据不足、提示、复核事项；旧摘要没有
+ *   queue_* 时退回“N 问题 / 提示 / 复核事项”。
  * - 年份未识别显示"未识别到"，不显示 2000 或留空猜测。
  * - 耗时：读 job.elapsed_ms（runtime.collect_job_summary 已按 finished_at-started_at
  *   优先、elapsed_ms.total 兜底的口径计算好），null/undefined 时显示"—"，
@@ -41,6 +42,7 @@ import {
   resolveFindingCountDetails,
   resolveFindingCountSummary,
   resolveIssueCountText,
+  resolveQueueCounts,
   resolveReviewEntryDecision,
   summarizeCheckTracks,
   type CheckTrackTone,
@@ -262,7 +264,7 @@ export function WorkbenchQueueTable({
             <Th className={TH}>文档</Th>
             <Th className={TH}>状态</Th>
             <Th className={TH}>页数 / 耗时</Th>
-            <Th className={TH}>问题 / 提示</Th>
+            <Th className={TH}>复核条目</Th>
             <Th className={`${TH} text-right`}>操作</Th>
           </tr>
         </thead>
@@ -278,6 +280,7 @@ export function WorkbenchQueueTable({
             const showStage = !isPendingAnalysis && (!isUiTaskFinished(status) || status === "failed");
             const checks = summarizeCheckTracks(job.check_progress);
             const findings = resolveFindingCountSummary(job);
+            const queueCounts = resolveQueueCounts(job);
             const meta = `${String(job.organization_name ?? "未关联单位")} · ${formatYearLabel(job.report_year)} · ${formatDocTypeLabel(job)}`;
             return (
               <tr key={jobId} data-testid={`gbc-workbench-queue-row-${jobId}`} className="align-top hover:bg-surface-100">
@@ -329,6 +332,16 @@ export function WorkbenchQueueTable({
                   <div data-testid={`gbc-workbench-queue-pages-${jobId}`}>{formatPagesText(job)}</div>
                   <div className="mt-0.5 text-xs text-slate-400" title="耗时" data-testid={`gbc-workbench-queue-elapsed-${jobId}`}>{formatElapsedText(job.elapsed_ms)}</div>
                 </Td>
+                {queueCounts ? (
+                  // 与审核台两个页签同口径：点进去「必须处理」「参考」页签上的数字就是这两个。
+                  <Td className={`${TD} min-w-[7rem]`} data-testid={`gbc-workbench-queue-findings-${jobId}`} title={queueCounts.detail}>
+                    <div className={`whitespace-nowrap font-medium ${queueCounts.required > 0 ? "text-warning-700" : ""}`}>必须处理 {queueCounts.required}</div>
+                    <div className="mt-0.5 flex flex-wrap gap-x-2 text-xs text-slate-500">
+                      <span className="whitespace-nowrap">参考 {queueCounts.reference}</span>
+                      {queueCounts.referenceParts.map((text) => <span key={text} className="whitespace-nowrap text-slate-400">{text}</span>)}
+                    </div>
+                  </Td>
+                ) : (
                 <Td className={`${TD} min-w-[7rem]`} data-testid={`gbc-workbench-queue-findings-${jobId}`} title={resolveFindingCountDetails(job).join("；") || undefined}>
                   <div className="whitespace-nowrap font-medium">{issueCountText === "—" ? "—" : `${issueCountText} 问题`}</div>
                   {findings.candidate || findings.others.length > 0 ? (
@@ -339,6 +352,7 @@ export function WorkbenchQueueTable({
                     </div>
                   ) : null}
                 </Td>
+                )}
                 <Td className={`${TD} text-right`}>
                   <span className="inline-flex flex-col items-end gap-1.5">
                     <ReviewEntryLink job={job} returnTo={reviewReturnTo ?? pathname} />

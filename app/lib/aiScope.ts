@@ -26,6 +26,16 @@ export interface AiScopeFailedUnit {
   attempts: number | null;
 }
 
+/** 同一专项的未完成单元合并后的页码范围；窗口有重叠时不重复列出。 */
+export interface AiScopeFailedGroup {
+  specialty: string;
+  specialtyLabel: string;
+  pages: number[];
+  pagesLabel: string;
+  statusLabels: string[];
+  unitCount: number;
+}
+
 export interface AiScopeView {
   recorded: boolean;
   missingCoverage: boolean;
@@ -34,17 +44,24 @@ export interface AiScopeView {
   stateLabel: string;
   tone: AiScopeTone;
   headline: string;
+  /** 单行状态条用的一句话后果；部分失败时由 failedGroups 代替，可为空。 */
+  brief: string;
   summary: string;
   scopeLine: string;
   conclusionScope: string;
   conclusionScopeLabel: string;
+  /** 单行状态条用的结论作用域短语。 */
+  conclusionScopeShort: string;
   coverageStatus: string | null;
   coverageStatusLabel: string;
   planned: number | null;
   succeeded: number | null;
   failed: number | null;
   retried: number | null;
+  /** 检查单元的构成，如“2 个专项 × 2 段文本”；记录不足以拆解时为空。 */
+  unitBreakdown: string;
   failedUnits: AiScopeFailedUnit[];
+  failedGroups: AiScopeFailedGroup[];
   uncoveredPages: number[];
   note: string;
   needsRecheck: boolean;
@@ -87,6 +104,12 @@ const CONCLUSION_SCOPE_LABELS: Record<string, string> = {
   findings_within_covered_checks: "结论仅适用于本次已完成的检查范围",
   no_findings_within_covered_checks: "未发现问题仅限本次已完成的检查范围",
   incomplete_scope: "检查未完成，不能得出完整结论",
+};
+
+const CONCLUSION_SCOPE_SHORT_LABELS: Record<string, string> = {
+  findings_within_covered_checks: "结论仅限已完成范围",
+  no_findings_within_covered_checks: "未发现问题仅限已完成范围",
+  incomplete_scope: "不能得出完整结论",
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -168,6 +191,29 @@ function failedUnitsFrom(raw: unknown): AiScopeFailedUnit[] {
   });
 }
 
+/** 按专项合并未完成单元：文字语义 1-23 页与 21-27 页合成“第1-27页”。 */
+export function groupFailedUnits(units: AiScopeFailedUnit[]): AiScopeFailedGroup[] {
+  const groups = new Map<string, AiScopeFailedGroup>();
+  for (const unit of units) {
+    const group = groups.get(unit.specialty) ?? {
+      specialty: unit.specialty,
+      specialtyLabel: unit.specialtyLabel,
+      pages: [],
+      pagesLabel: "",
+      statusLabels: [],
+      unitCount: 0,
+    };
+    group.pages.push(...unit.pages);
+    if (!group.statusLabels.includes(unit.statusLabel)) group.statusLabels.push(unit.statusLabel);
+    group.unitCount += 1;
+    groups.set(unit.specialty, group);
+  }
+  return Array.from(groups.values()).map((group) => {
+    const pages = Array.from(new Set(group.pages)).sort((left, right) => left - right);
+    return { ...group, pages, pagesLabel: formatPageList(pages) };
+  });
+}
+
 function uncoveredPagesFrom(raw: unknown): number[] {
   if (!Array.isArray(raw)) return [];
   return uniquePages(
@@ -213,6 +259,12 @@ export function deriveAiScope(
     }
   }
   const retried = asInt(coverage?.retried_calls);
+  // 检查单元 = 专项 × 文本段；只有两者相乘恰好等于计划数时才写出构成，避免猜测。
+  const specialtyCount = Array.isArray(coverage?.specialties) ? coverage.specialties.length : 0;
+  const windowCount = Array.isArray(coverage?.windows) ? coverage.windows.length : 0;
+  const unitBreakdown = planned && specialtyCount > 0 && windowCount > 0 && specialtyCount * windowCount === planned
+    ? `${specialtyCount} 个专项 × ${windowCount} 段文本`
+    : "";
   const failedUnits = failedUnitsFrom(coverage?.failed_units);
   const uncoveredPages = uncoveredPagesFrom(coverage?.uncovered_ranges);
   const conclusionScope = asText(metaRecord?.conclusion_scope)
@@ -225,18 +277,21 @@ export function deriveAiScope(
 
   let tone: AiScopeTone = "muted";
   let headline = "";
+  let brief = "";
   let summary = "";
   let scopeLine = "";
   let needsRecheck = false;
 
   if (requested === false) {
     headline = "大模型文字复核：本次未执行";
+    brief = "仅有本地规则结果，文字语义检查未执行";
     summary = "以下仅有本地规则结果，不能据此认为文字语义已经检查。";
     scopeLine = "错别字、多字漏字、病句、说明理由是否充分等文字语义检查未执行；可在任务页使用大模型重新分析补检。";
     // 纯规则任务也要给出可执行的补检入口，而不是只写“未执行”。
     needsRecheck = true;
   } else if (!coverage && requested === null && !state) {
     headline = "大模型检查状态与覆盖：未记录";
+    brief = "历史结果未保存执行与覆盖信息";
     summary = "历史结果没有保存 AI 是否执行、检查了哪些范围。";
     scopeLine = "不能据此认为已完成或未完成文字语义检查；如需确认，请重新分析。";
     needsRecheck = true;
@@ -245,6 +300,7 @@ export function deriveAiScope(
     headline = state === "succeeded"
       ? "大模型文字复核：状态为已完成，但覆盖信息未记录"
       : `大模型文字复核：${stateLabel}，覆盖信息未记录`;
+    brief = "无法确认是否完整覆盖";
     summary = "没有检查单元计数，无法确认是否完整覆盖。";
     scopeLine = "历史结果未记录检查范围，不能据此认为全量完成；结论只适用于可确认的已完成部分。";
     needsRecheck = true;
@@ -253,16 +309,19 @@ export function deriveAiScope(
     headline = coverageStatus === "not_run"
       ? "大模型文字复核：本次未执行"
       : `大模型文字复核：${coverageStatusLabel}（计数未记录）`;
+    brief = coverageStatus === "not_run" ? "文字语义检查未执行" : "缺少检查单元计数";
     summary = "覆盖记录存在，但缺少检查单元计数，无法计算有效完成比例。";
     scopeLine = "不能把“覆盖记录存在”当作“全部检查完成”。";
     needsRecheck = coverageStatus !== "not_run";
   } else if (planned === 0) {
     headline = "大模型文字复核：未执行（没有检查单元）";
+    brief = "没有可检查的文本窗口";
     summary = "本次没有可审计的文本窗口。";
     scopeLine = "未执行文字语义检查，不能据此认为材料没有文字问题。";
   } else if (coverageStatus === "complete" && succeeded >= planned && failed === 0) {
     tone = "success";
     headline = `大模型文字复核：已完整完成（${succeeded}/${planned}）`;
+    brief = retried && retried > 0 ? `其中 ${retried} 个单元补试成功` : "";
     summary = retried && retried > 0
       ? `全部检查单元有效完成；其中 ${retried} 个单元首次失败后补试成功。`
       : "全部检查单元有效完成。";
@@ -275,14 +334,18 @@ export function deriveAiScope(
     headline = isTotalFailure
       ? `大模型文字复核：执行失败（有效完成 ${succeeded}/${planned}）`
       : `大模型文字复核：有效完成 ${succeeded}/${planned}${failedText}${retryText}`;
-    summary = "存在未完成的检查单元；已保留有效结果，但不能视为完整审核通过。";
-    scopeLine = "结论仅适用于已完成检查；未完成范围需要补检后才能得出完整结论。";
+    // 标题旁已写“不能得出完整结论”，这里只补充标题没说的两点，不再重复同一句。
+    brief = failedUnits.length > 0 ? "" : "部分检查单元未完成";
+    summary = "已完成部分的结果已保留，但不能视为完整审核通过。";
+    scopeLine = "未完成范围补检后，才能得出完整结论。";
     needsRecheck = true;
   }
 
   if (uncoveredPages.length > 0) {
     const pageText = `未覆盖页：${formatPageList(uncoveredPages)}。`;
     summary = summary ? `${summary} ${pageText}` : pageText;
+    const briefPageText = `未覆盖${formatPageList(uncoveredPages)}`;
+    brief = brief ? `${brief}；${briefPageText}` : briefPageText;
     needsRecheck = true;
   }
 
@@ -296,17 +359,24 @@ export function deriveAiScope(
     stateLabel,
     tone,
     headline,
+    brief,
     summary,
     scopeLine,
     conclusionScope: conclusionScope || "未记录",
     conclusionScopeLabel,
+    // AI 已全部完成而整体结论仍为“未完成”时，未完成的是补核事项，不是 AI 检查。
+    conclusionScopeShort: tone === "success" && conclusionScope === "incomplete_scope"
+      ? "仍有未能自动核对的检查待处理"
+      : CONCLUSION_SCOPE_SHORT_LABELS[conclusionScope] || conclusionScopeLabel,
     coverageStatus,
     coverageStatusLabel,
     planned,
     succeeded,
     failed,
     retried,
+    unitBreakdown,
     failedUnits,
+    failedGroups: groupFailedUnits(failedUnits),
     uncoveredPages,
     note,
     needsRecheck,

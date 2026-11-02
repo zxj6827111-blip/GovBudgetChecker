@@ -30,6 +30,23 @@ def test_interpret_ai_issue_builds_readable_ratio_message() -> None:
     assert interpreted["metrics"]["diff"] == "4.2个百分点"
 
 
+def test_interpret_ai_issue_titles_unmapped_type_with_check_name_not_machine_code() -> None:
+    interpreted = interpret_ai_issue(
+        {
+            "problem_type": "generic",
+            "severity": "manual_review",
+            "check": "机构数量与列举项一致性",
+            "quote": "设 22 个内设机构，包括：办公室、政策研究与科技发展处",
+            "table_or_section": "机构设置",
+        },
+        page_number=7,
+        fallback_rule_id="AI-SEM-002",
+    )
+
+    assert interpreted["title"] == "待人工复核：机构数量与列举项一致性"
+    assert "generic" not in interpreted["message"]
+
+
 def test_normalize_ai_severity_maps_manual_review_to_medium() -> None:
     assert normalize_ai_severity("manual_review") == "manual_review"
 

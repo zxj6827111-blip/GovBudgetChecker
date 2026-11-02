@@ -52,13 +52,21 @@ from contextlib import asynccontextmanager
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from fastapi import HTTPException
 from src.db.transaction import in_transaction
 
-from src.engine.check_obligations import UNRESOLVED_OBLIGATION_STATUSES
+from src.engine.check_obligations import (
+    UNRESOLVED_OBLIGATION_STATUSES,
+    get_obligation,
+)
 from src.schemas.material_detail import CoverageObligationItem
+from src.services.obligation_finding_coverage import obligation_covered_by_finding
+from src.services.obligation_locations import (
+    merge_locations,
+    resolve_obligation_locations,
+)
 from src.schemas.material_slot import slot_identity_is_resolved
 from src.schemas.review_lifecycle import (
     BLOCKER_ANALYSIS_BASIS_CHANGED,
@@ -527,17 +535,52 @@ def _problem_blockers(problems: List[ReviewProblem], decisions: Dict[str, str]) 
     return blockers
 
 
-def _blocking_obligations(state: ReviewState) -> List[CoverageObligationItem]:
-    """引擎判定"阻塞门禁且未完成"的义务实例（WP3-B 起补核待办只含这些）。
-
-    与 ``check_obligations._build_summary`` 的 ``blocking`` 口径完全一致：
-    ``blocks_gate`` 且状态落在未完成集合里。门禁统计从这里出数，
-    保证页面上"待补核清单"与 409 的 ``count`` 说的是同一批条目。
-    """
+def _unresolved_obligations(state: ReviewState) -> List[CoverageObligationItem]:
+    """引擎判定阻塞且未完成的义务（未做同源问题去重前的原始集合）。"""
     return [
         item
         for item in state.coverage_items
         if item.blocks_gate and item.status in UNRESOLVED_OBLIGATION_STATUSES
+    ]
+
+
+def _blocking_obligations(state: ReviewState) -> List[CoverageObligationItem]:
+    """补核待办：未完成的阻塞义务，去掉已被同源正式问题覆盖的副本。
+
+    为什么去重：同一根因（如 T5 款名旧称）已经作为正式问题出现在问题清单里，
+    义务只是"因为名称对不上所以金额绑不上"。两条都进补核队列会让用户对
+    同一件事表态两次。被覆盖的义务不再阻塞门禁；问题本身仍留在问题清单里，
+    由人工按问题流程处理一次。
+
+    与 ``check_obligations._build_summary`` 的 ``blocking`` 口径保持一致：
+    ``blocks_gate`` 且状态落在未完成集合里；门禁统计从这里出数，
+    保证页面上"待补核清单"与 409 的 ``count`` 说的是同一批条目。
+    """
+    return blocking_coverage_obligations(
+        state.coverage_items,
+        state.analysis.result_row,
+        visible_issue_ids={problem.issue_id for problem in state.problems},
+    )
+
+
+def blocking_coverage_obligations(
+    items: List[CoverageObligationItem],
+    result_row: Any,
+    *,
+    visible_issue_ids: Iterable[str],
+) -> List[CoverageObligationItem]:
+    """门禁与列表共用的补核清单：阻塞且未完成、未被同源正式问题覆盖的义务。
+
+    审核台把这些条目列在「必须处理」的“未能自动核对”里；列表摘要用同一函数
+    计数，两处数字才能对上。
+    """
+    visible = set(visible_issue_ids)
+    return [
+        item
+        for item in items
+        if item.blocks_gate
+        and item.status in UNRESOLVED_OBLIGATION_STATUSES
+        and not obligation_covered_by_finding(item, result_row, visible_issue_ids=visible)
     ]
 
 
@@ -549,7 +592,7 @@ def _unhandled_obligations(state: ReviewState) -> List[CoverageObligationItem]:
     与 ``_problem_blockers`` 同一条纪律：把不认识的值当成"已解决"，
     等于让一个拼错的状态码静默放行复核。
     """
-    return unhandled_coverage_obligations(state.coverage_items, state.obligation_decisions)
+    return unhandled_coverage_obligations(_blocking_obligations(state), state.obligation_decisions)
 
 
 def unhandled_coverage_obligations(
@@ -720,19 +763,44 @@ def _obligation_review_block(state: ReviewState) -> "ObligationReviewBlock":
     """
     if not state.coverage_available:
         return ObligationReviewBlock(available=False, reason=BLOCKER_COVERAGE_UNAVAILABLE)
+    raw_unresolved = _unresolved_obligations(state)
+    blocking = _blocking_obligations(state)
+    covered_total = max(0, len(raw_unresolved) - len(blocking))
+    resolved_locations = {
+        item.obligation_id: resolve_obligation_locations(
+            item,
+            structured_ingest=state.analysis.structured_ingest,
+            result_row=state.analysis.result_row,
+            result_meta=state.analysis.result_meta,
+        )
+        for item in blocking
+    }
+    # 同一处空白金额格的两条义务共享位置：总表表首 + 行号所在续页 +
+    # 两张空表说明。只合并位置，不合并决定——每条义务仍有独立 revision。
+    for left, right in (("OBL-STRUCT-EMPTY-STATEMENT", "OBL-CROSS-FISCAL-TOTAL"),):
+        if left in resolved_locations and right in resolved_locations:
+            merged = merge_locations(resolved_locations[left], resolved_locations[right])
+            resolved_locations[left] = merged
+            resolved_locations[right] = merged
     items: List[ObligationReviewItem] = []
-    for item in _blocking_obligations(state):
+    for item in blocking:
         row = state.obligation_decisions.get(item.obligation_id)
+        # 标题/依据用**当前目录**刷新；状态与 checker 仍用账本原值，避免把
+        # "现在目录里有这个 checker"误当成"那次分析跑过它"。
+        definition = get_obligation(item.obligation_id)
         items.append(
             ObligationReviewItem(
                 obligation_id=item.obligation_id,
                 group_id=item.group_id,
                 group_title=item.group_title,
-                title=item.title,
+                title=definition.title if definition else item.title,
                 status=item.status,
                 reason=item.reason,
                 reason_label=item.reason_label,
                 detail=item.detail,
+                basis=definition.basis if definition else item.basis,
+                checkers=list(item.checkers),
+                locations=resolved_locations.get(item.obligation_id, []),
                 decision=(str(row.get("decision") or "") or None) if row else None,
                 decision_revision=(
                     int(row.get("revision") or 0) if row else None
@@ -749,6 +817,7 @@ def _obligation_review_block(state: ReviewState) -> "ObligationReviewBlock":
         available=True,
         reason=None,
         pending_total=len(_unhandled_obligations(state)),
+        covered_total=covered_total,
         items=items,
     )
 
