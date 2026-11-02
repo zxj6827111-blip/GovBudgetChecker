@@ -311,15 +311,23 @@ test.describe("AI scope and explanation visibility", () => {
       evidence_status: "complete",
       location: { page: 20 },
     };
-    await installMocks(page, completeMeta, undefined, [aiFinding]);
+    // AI 发现按复核报告口径归入参考（ai_candidate），与真实后端一致；只给
+    // ai_findings 而不给复核报告时，前端会把它当成正式问题放进「必须处理」。
+    const reviewReport = {
+      issues: [],
+      tips: [],
+      manual_review: [{ id: "AI-NAV-1", record_type: "ai_candidate", finding: aiFinding }],
+    };
+    await installMocks(page, completeMeta, reviewReport, [aiFinding]);
     await page.goto(`/review?job=${JOB_ID}`);
     await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible({ timeout: 15_000 });
     // AI 标识 → 检查与复核状态面板 → AI 文字检查一节里的“查看大模型参考条目”。
     await page.getByTestId("gbc-review-state-ai").click();
     await page.getByRole("button", { name: "查看大模型参考条目" }).click();
-    // 直接落在「大模型」来源筛选上，而不是 20 条参考里的第一条。
-    await expect(page.getByTestId("gbc-review-source-ai")).toHaveAttribute("aria-pressed", "true");
+    // 来源筛选在问题列表面板内；先展开列表，再确认直接落在「大模型」来源，
+    // 而不是 20 条参考里的第一条。
     await openIssueList(page);
+    await expect(page.getByTestId("gbc-review-source-ai")).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator('[data-review-problem-id="AI-NAV-1"]')).toHaveCount(1);
     await expect(page.locator('[data-review-problem-id="FIN-EXPLAIN-1"]')).toHaveCount(0);
   });

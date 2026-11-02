@@ -29,6 +29,11 @@ function LegacyDocumentScopePanel({ jobId, onQueued }: { jobId: string; onQueued
       .then(async response => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail?.message || data.detail || "口径信息暂时不可用");
+        // 端点不可用或中间层返回 {} 时，不能把空对象当成有效口径状态：下面的
+        // evidence.filter 会在渲染期抛错，连带把整个元数据页签清空。
+        if (!data || typeof data !== "object" || !Array.isArray(data.evidence)) {
+          throw new Error("口径信息暂时不可用");
+        }
         setState(data); setScope(data.decision?.material_scope ?? ""); setRequestId(crypto.randomUUID());
       }).catch(e => { if (e.name !== "AbortError") setError(String(e.message)); });
     return () => controller.abort();

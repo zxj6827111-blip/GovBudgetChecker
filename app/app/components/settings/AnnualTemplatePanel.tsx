@@ -20,7 +20,17 @@ export default function AnnualTemplatePanel(){
  const [impactYear,setImpactYear]=useState(''),[impactAlgorithm,setImpactAlgorithm]=useState(''),[impactRevision,setImpactRevision]=useState(''),[impactCapability,setImpactCapability]=useState('');
  const [impact,setImpact]=useState<Row[]>([]),[selected,setSelected]=useState<string[]>([]);
  async function call(path='',body?:unknown){const res=await fetch(endpoint+path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined,cache:'no-store'});const x=await res.json();if(!res.ok)throw Error(typeof x.detail==='string'?x.detail:JSON.stringify(x.detail));return x;}
- async function load(){setData(await call());}
+ // 端点不可用或中间层返回 {} 时，渲染期会直接读 data.packages.length 而崩掉整页设置。
+ // 列表字段一律归一成数组，缺字段按“没有数据”处理，错误仍走 error 提示。
+ const emptyData:Row={sources:[],drafts:[],packages:[],bindings:[],current:[],audit:[]};
+ function normalizeData(payload:unknown):Row{
+  if(!payload||typeof payload!=='object')return emptyData;
+  const record=payload as Row;
+  const next:Row={...emptyData,...record};
+  for(const key of Object.keys(emptyData)) if(!Array.isArray(next[key])) next[key]=[];
+  return next;
+ }
+ async function load(){setData(normalizeData(await call()));}
  useEffect(()=>{load().catch(e=>setError(e.message));},[]);
  async function run(fn:()=>Promise<void>){setBusy(true);setError('');setNotice('');try{await fn();await load();}catch(e){setError(e instanceof Error?e.message:String(e));}finally{setBusy(false);}}
  const field='rounded border border-slate-300 bg-white px-3 py-2 text-sm';

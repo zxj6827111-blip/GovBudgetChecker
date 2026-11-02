@@ -15,9 +15,8 @@ const tree = [{
   ],
 }];
 
-async function installMocks(page: Page, options: { noCandidates?: boolean; failDirectoryOnce?: boolean } = {}) {
+async function installMocks(page: Page, options: { noCandidates?: boolean; failDirectory?: { active: boolean } } = {}) {
   const uploads: string[] = [];
-  let catalogRequests = 0;
   await page.context().addCookies([{ name: "gbc_session", value: "e2e-session", url: "http://127.0.0.1:3000", sameSite: "Lax" }]);
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -27,12 +26,9 @@ async function installMocks(page: Page, options: { noCandidates?: boolean; failD
     if (url.pathname === "/api/config") body = { max_upload_mb: 30, max_upload_pages: 800 };
     if (url.pathname === "/api/ai/capabilities") body = { enabled: false, profiles: [], default_use_ai: false };
     if (url.pathname === "/api/organizations") {
-      if (url.searchParams.get("purpose") === "upload") {
-        catalogRequests += 1;
-        if (options.failDirectoryOnce && catalogRequests === 1) {
-          await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "temporarily unavailable" }) });
-          return;
-        }
+      if (url.searchParams.get("purpose") === "upload" && options.failDirectory?.active) {
+        await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "temporarily unavailable" }) });
+        return;
       }
       body = { tree };
     }
@@ -57,6 +53,11 @@ async function installMocks(page: Page, options: { noCandidates?: boolean; failD
 
 async function addFiles(page: Page, count = 1) {
   await page.goto("/upload");
+  // dev 首次编译时 goto 可能在 React 挂载前返回；先等依赖 /api/config 的上限提示
+  // 出现，确认客户端 effect 已运行，再触发 change，否则待上传行不会出现。
+  await expect(page.getByTestId("gbc-upload-limit-hint")).toContainText("单个文件不超过", {
+    timeout: 15_000,
+  });
   await page.getByTestId("gbc-upload-file-input").setInputFiles(Array.from({ length: count }, (_, i) => ({
     name: `上海市信访办公室2024年决算${i ? `-${i}` : ""}.pdf`,
     mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 e2e placeholder"),
@@ -135,12 +136,16 @@ test.describe("Upload organization candidate confirmation", () => {
 
   test("目录失败可重试，无候选直接搜索，窄屏不横向溢出", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await installMocks(page, { failDirectoryOnce: true, noCandidates: true });
+    // dev 的 StrictMode 会挂载两次并中止第一次请求；按“第几次失败”计数会让
+    // 第二次请求直接成功，重试按钮就没机会出现。改成显式开关，由用例控制恢复时机。
+    const failDirectory = { active: true };
+    await installMocks(page, { failDirectory, noCandidates: true });
     await addFiles(page);
     await page.getByRole("button", { name: "确认归属", exact: true }).click();
     const panel = page.getByTestId("gbc-upload-confirmation-panel");
     await expect(panel.getByRole("alert")).toContainText("组织目录加载失败");
     await expect(panel.getByTestId("gbc-upload-confirm-save")).toBeDisabled();
+    failDirectory.active = false;
     await panel.getByRole("button", { name: "重新加载组织" }).click();
     const search = panel.getByTestId("gbc-upload-org-search");
     await search.fill("仅可见的上级部门");

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Badge, Button } from "@/components/ui";
 import { flattenOrganizationTree } from "./OrganizationFilterSelect";
 import type { OrganizationRecordLike, PreflightResponseLike } from "./uploadCenterAdapters";
@@ -31,12 +31,18 @@ export function UploadOrganizationPicker({ preflight, value, onSelect }: {
   const [level, setLevel] = useState("");
   const [scopeId, setScopeId] = useState("");
   const [searchLimit, setSearchLimit] = useState(SEARCH_PAGE_SIZE);
+  // 父组件每次渲染都可能传入新的回调；把它放进依赖会让加载 effect 反复执行，
+  // 一次失败后又被下一次成功请求覆盖（重试按钮形同虚设）。
+  const onSelectRef = useRef(onSelect);
+  useEffect(() => {
+    onSelectRef.current = onSelect;
+  }, [onSelect]);
 
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
     setLoadError(false);
-    onSelect(null);
+    onSelectRef.current(null);
     async function loadOrganizations() {
       try {
         const response = await fetch("/api/organizations?stats=none&purpose=upload", { cache: "no-store", signal: controller.signal });
@@ -52,7 +58,7 @@ export function UploadOrganizationPicker({ preflight, value, onSelect }: {
     }
     void loadOrganizations();
     return () => controller.abort();
-  }, [loadAttempt, onSelect]);
+  }, [loadAttempt]);
 
   const options = useMemo(() => buildUploadOrganizationOptions(organizations), [organizations]);
   const candidates = useMemo(() => selectUploadOrganizationCandidates(options, preflight), [options, preflight]);
