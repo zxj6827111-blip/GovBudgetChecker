@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import multiprocessing
 import os
+import pickle
 import sys
 import time
 import threading
 from multiprocessing.connection import Connection
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class RuleExecutionTimeout(TimeoutError):
@@ -104,7 +108,27 @@ def _evaluate_in_process(target: Any, args: tuple, timeout_seconds: float,
         name=name,
         daemon=True,
     )
-    process.start()
+    try:
+        process.start()
+    except (AttributeError, TypeError, pickle.PicklingError) as exc:
+        if start_method != "spawn":
+            raise
+        # spawn 在父进程里把 target/args 整体 pickle 到子进程。测试替身、运行期闭包
+        # 或规则对象持有不可 pickle 的句柄时（本地 lambda、线程锁等），这一步会失败；
+        # 退回 fork 的旧行为，只在这一类无法序列化的边界上重新承受继承锁的风险，
+        # 比整单直接失败可控。
+        logger.warning("rule evaluator payload is not picklable (%s); falling back to fork", exc)
+        parent_connection.close()
+        child_connection.close()
+        context = multiprocessing.get_context("fork")
+        parent_connection, child_connection = context.Pipe(duplex=False)
+        process = context.Process(
+            target=target,
+            args=(child_connection, *args),
+            name=name,
+            daemon=True,
+        )
+        process.start()
     child_connection.close()
     deadline = time.monotonic() + max(0.01, float(timeout_seconds))
 
