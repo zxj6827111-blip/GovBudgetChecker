@@ -105,6 +105,7 @@ class RuleOutcomeSignal(BaseException):
         partial_issues: Optional[List[Any]] = None,
         unresolved_reasons: Optional[List[str]] = None,
         status: Optional[str] = None,
+        reason_codes: Optional[List[str]] = None,
     ) -> None:
         super().__init__(detail or rule_id)
         self.rule_id = rule_id
@@ -113,6 +114,7 @@ class RuleOutcomeSignal(BaseException):
         self.detail = detail
         self.partial_issues: List[Any] = list(partial_issues or [])
         self.unresolved_reasons: List[str] = list(unresolved_reasons or [])
+        self.reason_codes: List[str] = list(reason_codes or [])
 
 
 class RuleDeferred(RuleOutcomeSignal):
@@ -126,12 +128,14 @@ class RuleDeferred(RuleOutcomeSignal):
         detail: str = "",
         partial_issues: Optional[List[Any]] = None,
         unresolved_reasons: Optional[List[str]] = None,
+        reason_codes: Optional[List[str]] = None,
     ) -> None:
         super().__init__(
             rule_id,
             detail=detail,
             partial_issues=partial_issues,
             unresolved_reasons=unresolved_reasons,
+            reason_codes=reason_codes,
         )
 
     def __str__(self) -> str:  # pragma: no cover - 调试用
@@ -149,12 +153,14 @@ class RuleNotApplicable(RuleOutcomeSignal):
         detail: str = "",
         partial_issues: Optional[List[Any]] = None,
         unresolved_reasons: Optional[List[str]] = None,
+        reason_codes: Optional[List[str]] = None,
     ) -> None:
         super().__init__(
             rule_id,
             detail=detail,
             partial_issues=partial_issues,
             unresolved_reasons=unresolved_reasons,
+            reason_codes=reason_codes,
         )
 
     def __str__(self) -> str:  # pragma: no cover - 调试用
@@ -172,12 +178,14 @@ class RuleExecutionError(RuleOutcomeSignal):
         detail: str = "",
         partial_issues: Optional[List[Any]] = None,
         unresolved_reasons: Optional[List[str]] = None,
+        reason_codes: Optional[List[str]] = None,
     ) -> None:
         super().__init__(
             rule_id,
             detail=detail,
             partial_issues=partial_issues,
             unresolved_reasons=unresolved_reasons,
+            reason_codes=reason_codes,
         )
 
     def __str__(self) -> str:  # pragma: no cover - 调试用
@@ -195,12 +203,14 @@ class RuleParseError(RuleOutcomeSignal):
         detail: str = "",
         partial_issues: Optional[List[Any]] = None,
         unresolved_reasons: Optional[List[str]] = None,
+        reason_codes: Optional[List[str]] = None,
     ) -> None:
         super().__init__(
             rule_id,
             detail=detail,
             partial_issues=partial_issues,
             unresolved_reasons=unresolved_reasons,
+            reason_codes=reason_codes,
         )
 
     def __str__(self) -> str:  # pragma: no cover - 调试用
@@ -220,6 +230,8 @@ class RuleOutcome:
     partial_findings_count: int = 0
     # 增量字段：未完成原因列表（支持双保留：规则缺数据 + 转换失败）
     unresolved_reasons: List[str] = field(default_factory=list)
+    # 增量字段：结构化原因代码（identity_conflict / source_missing / ...）
+    reason_codes: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {"rule_id": self.rule_id, "status": self.status}
@@ -229,6 +241,8 @@ class RuleOutcome:
             data["partial_findings_count"] = self.partial_findings_count
         if self.unresolved_reasons:
             data["unresolved_reasons"] = self.unresolved_reasons
+        if self.reason_codes:
+            data["reason_codes"] = self.reason_codes
         return data
 
 

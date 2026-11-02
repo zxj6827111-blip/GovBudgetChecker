@@ -245,7 +245,10 @@ export function MaterialDetailPage({ slotId, tab = "overview" }: MaterialDetailP
             ) : null}
             {activeTab === "findings" ? <MaterialDetailFindingsTab analysis={data.current_analysis} /> : null}
             {activeTab === "coverage" ? (
-              <MaterialDetailCoverageTab coverage={data.current_analysis?.coverage ?? null} />
+              <MaterialDetailCoverageTab
+                coverage={data.current_analysis?.coverage ?? null}
+                aiScopeMeta={data.current_analysis?.ai_scope_meta ?? null}
+              />
             ) : null}
             {activeTab === "versions" ? (
               <MaterialDetailVersionsTab slotId={slotId} detail={data} reviewReturnTo={materialDetailTabHref(slotId, "versions") + (safeReturn ? "&returnTo=" + encodeURIComponent(safeReturn) : "")} />

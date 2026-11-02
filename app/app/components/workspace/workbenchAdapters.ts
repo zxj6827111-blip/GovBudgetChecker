@@ -25,6 +25,118 @@ export function resolveFindingCountDetails(job: JobSummaryRecord): string[] {
   return details;
 }
 
+/** 列表行里的问题副行：提示、复核事项压成短词，完整说法留给悬停提示。 */
+export function resolveFindingCountSummary(job: JobSummaryRecord): { candidate: number | null; others: string[] } {
+  const count = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+  const tips = count(job.tip_total);
+  const candidate = count(job.review_candidate_total);
+  const notices = count(job.review_notice_total);
+  return {
+    candidate: candidate && candidate > 0 ? candidate : null,
+    others: [tips !== null ? `提示 ${tips}` : "", notices ? `复核事项 ${notices}` : ""].filter(Boolean),
+  };
+}
+
+export interface QueueCountSummary {
+  required: number;
+  reference: number;
+  /** 参考的组成，词与审核台“结果类型”筛选一致；为 0 的不列。 */
+  referenceParts: string[];
+  /** 悬停提示：两个页签各是什么、是否计入完成条件。 */
+  detail: string;
+}
+
+/**
+ * 与审核台「必须处理 / 参考」两个页签同口径的条数（后端 review_queue_counts），
+ * 点进去看到的页签数字就是这两个数。旧摘要没有这些字段时返回 null，由调用方
+ * 退回旧的“问题 / 提示”写法。
+ */
+export function resolveQueueCounts(job: JobSummaryRecord): QueueCountSummary | null {
+  const count = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+  const required = count(job.queue_required_total);
+  const reference = count(job.queue_reference_total);
+  if (required === null || reference === null) return null;
+  const referenceParts = ([
+    ["待核实", job.queue_candidate_total],
+    ["证据不足", job.queue_degraded_total],
+    ["提示", job.queue_tip_total],
+    ["复核事项", job.queue_notice_total],
+  ] as Array<[string, unknown]>).flatMap(([label, value]) => {
+    const n = count(value);
+    return n ? [`${label} ${n}`] : [];
+  });
+  const obligations = count(job.queue_obligation_total);
+  const requiredParts = obligations ? `（问题 ${required - obligations}、未能自动核对 ${obligations}）` : "";
+  return {
+    required,
+    reference,
+    referenceParts,
+    detail: `必须处理 ${required}${requiredParts}：逐条处理后才能完成复核；`
+      + `参考 ${reference}${referenceParts.length ? `（${referenceParts.join("、")}）` : ""}：供查阅，不计入完成条件`,
+  };
+}
+
+export type CheckTrackTone = "done" | "active" | "warning" | "muted";
+
+export interface CheckTrackSummaryItem {
+  key: "local" | "ai";
+  text: string;
+  tone: CheckTrackTone;
+}
+
+const CHECK_STATE_LABELS: Record<string, string> = {
+  waiting: "等待解析", queued: "排队中", running: "检查中", completed: "已完成",
+  degraded: "部分完成", failed: "失败", skipped: "未启用", cancelled: "已取消",
+};
+
+/**
+ * 本地/大模型两条检查线在列表里各压成一个短语（“本地 89/89”“大模型 未启用”），
+ * 不再把“已完成 · 100% · 89/89 · 检查完成”这类同义信息叠成几行。
+ * 条数、单位、模型和当前步骤都放进 detail，供悬停查看。
+ */
+export function summarizeCheckTracks(value: unknown): { items: CheckTrackSummaryItem[]; detail: string } | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const tracks = value as Record<string, unknown>;
+  const items: CheckTrackSummaryItem[] = [];
+  const details: string[] = [];
+  for (const key of ["local", "ai"] as const) {
+    const raw = tracks[key];
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const track = raw as Record<string, unknown>;
+    const label = key === "local" ? "本地" : "大模型";
+    const state = String(track.state ?? "");
+    const completed = typeof track.completed === "number" && Number.isFinite(track.completed) ? track.completed : 0;
+    const total = typeof track.total === "number" && Number.isFinite(track.total) && track.total > 0 ? track.total : null;
+    const percent = typeof track.percent === "number" && Number.isFinite(track.percent) ? Math.round(Math.min(100, Math.max(0, track.percent))) : null;
+    const ratio = total !== null ? `${completed}/${total}` : "";
+    const stateLabel = CHECK_STATE_LABELS[state] ?? "状态未知";
+    let text: string;
+    let tone: CheckTrackTone;
+    if (state === "completed") {
+      text = `${label} ${ratio || "已完成"}`;
+      tone = "done";
+    } else if (state === "running") {
+      text = `${label} ${ratio || (percent !== null ? `${percent}%` : "检查中")}`;
+      tone = "active";
+    } else if (state === "failed" || state === "degraded") {
+      text = `${label} ${stateLabel}${state === "degraded" && ratio ? ` ${ratio}` : ""}`;
+      tone = "warning";
+    } else {
+      text = `${label} ${stateLabel}`;
+      tone = "muted";
+    }
+    items.push({ key, text, tone });
+    const failed = typeof track.failed === "number" && track.failed > 0 ? `（${track.failed} 项失败）` : "";
+    details.push([
+      `${key === "local" ? "本地检查" : "大模型检查"}：${stateLabel}`,
+      total !== null ? `${completed}/${total} ${String(track.unit ?? "项")}` : "",
+      track.model ? `模型 ${String(track.model)}` : "",
+      String(track.current_step ?? "").trim(),
+    ].filter(Boolean).join(" · ") + failed);
+  }
+  return items.length > 0 ? { items, detail: details.join("\n") } : null;
+}
+
 /**
  * 工作台总览（Task 4）的纯逻辑层：KPI 聚合、页面覆盖率聚合、质量告警派生、
  * 处理队列筛选。拆到无 JSX 依赖的 .ts 文件，理由与 app/components/ui/*Styles.ts

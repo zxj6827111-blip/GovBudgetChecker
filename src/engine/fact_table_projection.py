@@ -39,7 +39,48 @@ class ProjectionUnavailable(ValueError):
     pass
 
 
-def fact_bound_table_rows(doc, table_name):
+def _bilateral_blank_padding(table, rows, mappings_by_col, measure_columns):
+    """双边总表中没有本侧标签的空白金额格是结构占位，不是未知金额。
+
+    只在两侧使用不同标签列时启用；本侧有标签却没有金额的空白仍按未知处理。
+    """
+    label_sets = {
+        tuple(mapping.get("source_label_cols") or [])
+        for mapping in mappings_by_col.values()
+    }
+    if len(label_sets) < 2:
+        return set()
+    cells = {(cell.row_idx, cell.col_idx): cell for cell in table.cells}
+    positions = set()
+    for row_idx, row in enumerate(rows):
+        if is_index_header(row):
+            continue
+        labels_present = {}
+        for col in measure_columns:
+            label_cols = mappings_by_col[col].get("source_label_cols") or []
+            labels_present[col] = any(
+                label_col < len(row) and str(row[label_col] or "").strip()
+                for label_col in label_cols
+            )
+        if not any(labels_present.values()):
+            continue
+        for col in measure_columns:
+            if labels_present[col]:
+                continue
+            cell = cells.get((row_idx, col))
+            if cell is None or str(cell.raw_text or "").strip():
+                continue
+            if any(
+                other != col and labels_present[other]
+                and (other_cell := cells.get((row_idx, other))) is not None
+                and other_cell.numeric_value is not None
+                for other in measure_columns
+            ):
+                positions.add((row_idx, col))
+    return positions
+
+
+def fact_bound_table_rows(doc, table_name, *, strict_unknown_values=False):
     artifact = getattr(doc, "parse_artifact", None)
     context = getattr(doc, "fact_context", None)
     if artifact is None:
@@ -91,6 +132,7 @@ def fact_bound_table_rows(doc, table_name):
     source_units = set()
     mappings_by_col = {int(m["source_col_idx"]): m for m in mappings}
     padding_positions = native_bilateral_padding_positions(table)
+    padding_positions |= _bilateral_blank_padding(table, rows, mappings_by_col, measure_columns)
     for cell in table.cells:
         if (
             cell.col_idx not in measure_columns
@@ -100,13 +142,22 @@ def fact_bound_table_rows(doc, table_name):
         ):
             continue
         if not str(cell.raw_text or "").strip():
-            continue  # Blank means not disclosed; never manufacture zero.
+            # 双边总表无标签侧的结构空白是版式占位，不参与“金额未知”判定。
+            if (cell.row_idx, cell.col_idx) in padding_positions:
+                continue
+            # 有金额的业务行中，缺失分项不能被旧规则的 `or 0` 静默吞掉。
+            if strict_unknown_values and any(c.numeric_value is not None and c.col_idx in measure_columns
+                   for c in table.cells if c.row_idx == cell.row_idx):
+                raise ProjectionUnavailable(f"{table_name} 第{cell.row_idx + 1}行第{cell.col_idx + 1}列为空白，不能按零计算")
+            continue
         if (cell.row_idx, cell.col_idx) in padding_positions:
             continue  # 真实占位零仍在表格中；它没有右侧业务行，不能借左侧标签生成事实。
         if (cell.presence == CellPresence.DASH and cell.numeric_value is None
                 and cell.raw_text.strip() in {'-', '—', '–', '－'}):
             # 保留原件破折号的展示角色，不要求它拥有数字事实，也不将其转换成零。
             # 后续需要金额的关系仍会如实报取数不足。
+            if strict_unknown_values:
+                raise ProjectionUnavailable(f"{table_name} 第{cell.row_idx + 1}行第{cell.col_idx + 1}列为横线，计算含义未确认")
             continue
         cell_id = f"{cell.origin_fragment_uid or table.fragment_uid}:r{cell.origin_row_idx if cell.origin_row_idx is not None else cell.row_idx}c{cell.origin_col_idx if cell.origin_col_idx is not None else cell.col_idx}"
         facts = by_cell.get(cell_id, [])

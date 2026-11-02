@@ -176,9 +176,25 @@ def test_unresolved_total_le_15(replays):
         item=replays[alias]['unresolved']['V33-224']
         assert item['status']=='insufficient_data' and item['detail']=='因公出国说明或表内决算金额未唯一识别'
         planned_missing+=1
-    item=replays['shiquan']['unresolved']['V33-234']
-    assert '原文包含其他或未确认主体，不能跨主体拼接金额' in item['detail']
-    planned_missing+=1
+    # 批次1 V33-251：原文确有未标单位的声明（yichuan“支出决算为4.19”、
+    # shiquan 年初预算同类），按合同不得把该部分并入完整分项加总；规则保留
+    # 已确认差额问题并转 insufficient_data，属于计划内取数不足。
+    for alias, label in (("yichuan", "支出决算"), ("shiquan", "年初预算")):
+        item = replays[alias]["unresolved"]["V33-251"]
+        assert "未纳入合计" in item["detail"] and label in item["detail"]
+        planned_missing += 1
+    assert replays['shiquan']['summary']['rule_statuses']['V33-234'] == 'fail'
+    assert any(issue.rule == 'V33-234' and '312.55%' in issue.message
+               and '20.00' in issue.message and '62.51' in issue.message for issue in replays['shiquan']['issues'])
+    # v3 封面不能用封面或未验收的标题风格自证；冻结夹具不带年度模板快照。
+    # 2026-11-01：body_year 改为按页 ±20 字窗口识别标题，跨行的
+    # “2025\n年度决算表”不再漏计；yichuan/shiquan 的年度锚点已能独立成立，
+    # 只剩“封面文种缺少独立依据”这一项真实缺口。
+    for alias in ('golden','yichuan','wenlv','shiquan'):
+        item=replays[alias]['unresolved']['CMM-019']
+        assert item['status']=='insufficient_data'
+        assert item['detail']=='封面文种缺少独立依据'
+        planned_missing+=1
     assert total - planned_missing <= 15, f"排除已核实缺分项预算后 unresolved {total} 超出验收线"
     # 2026-09-29 MR-B 批次计划内收敛：4 份决算 unresolved 14 → ≤10（实测 10），
     # 验收重走并固化于 tests/test_budget_intake_20260929.py（BUD-105/107/108/109
@@ -265,7 +281,10 @@ def test_yichuan_output_budget(replays):
     issues = replays["yichuan"]["issues"]
     checklist = [i for i in issues if getattr(i, "rule", "") in {"CMM-013", "V33-251"}]
     assert len(checklist) == 2
-    assert len(issues) - len(checklist) <= 13
+    # 批次1 年份角色修复恢复了完成率复算：yichuan 声明 98%，按
+    # 20707.11→20218.21 应为 97.64%，相差 0.36pp；这是真实新增发现，
+    # 不是回归，也不能为了维持旧条数而删除检查。
+    assert len(issues) - len(checklist) <= 14
 
 
 # ---------------------------------------------------------------------------
@@ -601,7 +620,9 @@ def test_scan_sim_mixed_end_to_end_gate_zeroes_errors():
         issue for issue in raw_issues
         if str(getattr(issue, "severity", "")).lower() in ("error", "high", "critical")
     ]
-    assert len(errors) >= 5, f"夹具形态变了：error 级只剩 {len(errors)} 条"
+    # 未读取页面不再制造“缺表”错误；保留三项可复现的实际问题验证降级门。
+    assert len(errors) == 3
+    assert all(issue.rule != "V33-002" for issue in errors)
 
     assessment = _scan_assessment(page_texts, page_tables)
     assert assessment["page_coverage"] < 0.8

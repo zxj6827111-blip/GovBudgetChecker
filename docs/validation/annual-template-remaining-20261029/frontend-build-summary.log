@@ -1,0 +1,3 @@
+ ✓ Compiled successfully in 5.8s
+24:56  Warning: React Hook useEffect has a missing dependency: 'load'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+Route (app)                                               Size  First Load JS

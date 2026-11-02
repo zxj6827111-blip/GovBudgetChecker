@@ -111,7 +111,7 @@ def _unrepresented_source_codes(artifact, table, row_codes, measure_start):
     return list(dict.fromkeys(missing))
 
 
-def _table_view(doc, table_code):
+def _table_view(doc, table_code, *, include_income_sources=False):
     artifact, context = getattr(doc, 'parse_artifact', None), getattr(doc, 'fact_context', None)
     title = DETAIL_TABLES[table_code]
     if context is None or artifact is None:
@@ -132,12 +132,16 @@ def _table_view(doc, table_code):
     # Blank optional component columns must not expand this rule's scope.
     roles = {'total_actual'} if table_code == 'FIN_02_income' else {
         'total_actual', 'basic_actual', 'project_actual'}
+    if table_code == 'FIN_02_income' and include_income_sources:
+        roles.update({'fiscal_allocation', 'superior_subsidy_income', 'business_income',
+                      'operational_income', 'subsidiary_income', 'other_income'})
     mappings = [m for m in mappings if m.get('canonical_measure') in roles]
     if not mappings or not any(m['canonical_measure'] == 'total_actual' for m in mappings):
         return None, f'{title}本年合计金额列身份未绑定'
     start = min(int(m['source_col_idx']) for m in mappings)
     source_cells = {(c.row_idx, c.col_idx): c for c in table.cells}
     code_rows, issues = {}, []
+    row_signatures = {}
     for row_idx, row in enumerate(table.rows):
         if row_idx < table.header_row_count or is_index_header(row):
             continue
@@ -149,8 +153,16 @@ def _table_view(doc, table_code):
             if any(c is not None and c.numeric_value is not None and not c.is_header for c in measure_cells):
                 issues.append(f'{title}第{row_idx + 1}行金额科目编码未唯一识别')
             continue
+        signature = tuple(re.sub(r'\s+', '', str(value or '')) for value in row)
         if code in code_rows:
-            issues.append(f'{title}科目{code}存在重复行身份')
+            # 同一科目编码连续重复且整行文字完全相同＝排版重复印了一行
+            # （2026-11-01 实样：第 8、10 页把 21211 行印了两遍，各列数字一致）。
+            # 这种重复不携带第二个业务项，按一行参与合计；整行不一致的重复仍是
+            # 身份歧义，必须转人工，不能挑一行当答案。
+            if row_signatures[code] != signature:
+                issues.append(f'{title}科目{code}存在重复行身份')
+            continue
+        row_signatures[code] = signature
         code_rows[code] = row_idx
     issues += _unrepresented_source_codes(artifact, table, code_rows, start)
     if not code_rows or 'total' not in code_rows:
@@ -170,6 +182,15 @@ def _select(doc, view, code, indicator):
         term = blank_term(doc, table.table_code, indicator, code=code)
         if term is not None:
             return term, None
+    if len(candidates) > 1 and cell is not None:
+        # 同一原行被排版重复时会有多条事实；只认绑定到本行这一格的唯一事实，
+        # 不按顺序挑第一条。
+        cell_id = _cell_id(table, cell)
+        bound = [f for f in candidates
+                 if any(ref.get('source_cell_id') == cell_id
+                        for ref in (f.extra_dims or {}).get('evidence_refs', []))]
+        if len(bound) == 1:
+            candidates = bound
     if cell is None or not str(cell.raw_text or '').strip() or len(candidates) != 1:
         return None, f'{table.title}科目{code}/{indicator}原始单元格或当前事实缺失、不唯一'
     fact = candidates[0]
@@ -237,7 +258,42 @@ def _compare(rule, doc, title, key, code, indicator, parent, children, *, column
                         fact_ids=ids, evidence_ids=evidence_ids)], []
 
 
-def check_native_detail_tables(rule, doc, *, table_codes=None):
+def _exact_duplicate_rows(table, start, source_cells):
+    """整行完全相同的重复科目行（同一编码在各列金额完全一致地印了两遍）。
+
+    这类重复按一行参与合计（见 :func:`_table_view`），但它本身是原件缺陷：
+    实样里第二行本应是项级行（2121100），却印成了款级编码（21211），
+    项级科目因此整行缺失。内容不同的重复行不在这里报，由 _table_view 判身份歧义。
+    """
+    seen, duplicates = {}, []
+    for row_idx, row in enumerate(table.rows):
+        if row_idx < table.header_row_count or is_index_header(row):
+            continue
+        code = _row_code(row, start)
+        if code is None:
+            continue
+        signature = tuple(re.sub(r'\s+', '', str(value or '')) for value in row)
+        first = seen.get(code)
+        if first is None:
+            seen[code] = (row_idx, signature)
+            continue
+        if first[1] != signature:
+            continue
+        cells = [source_cells.get((row_idx, col)) for col in range(len(row))]
+        page = next((int(cell.page_number) for cell in cells
+                     if cell is not None and cell.page_number), None)
+        name = ''
+        for value in list(row)[1:start]:
+            text = re.sub(r'\s+', '', str(value or ''))
+            if text and not text.replace(',', '').replace('.', '').isdigit():
+                name = text
+                break
+        duplicates.append({'code': code, 'name': name, 'row_idx': row_idx,
+                           'first_row_idx': first[0], 'page': page})
+    return duplicates
+
+
+def check_native_detail_tables(rule, doc, *, table_codes=None, include_income_sources=False):
     """V33-120 的原生入口；legacy Document 的原规则实现仍保留。
 
     每一金额列按完整行集合检查直接父子和总计；总计只累计根科目一次，
@@ -252,13 +308,52 @@ def check_native_detail_tables(rule, doc, *, table_codes=None):
     # physically present table still requires its own complete operands.
     for table_code in targets:
         title = DETAIL_TABLES[table_code]
-        view, error = _table_view(doc, table_code)
+        view, error = _table_view(doc, table_code, include_income_sources=include_income_sources)
         if error:
             unresolved.append(error)
             receipt(rule, doc, f'{table_code}:complete_table', [], status='insufficient_data',
                     formula='complete logical table', reason=error)
             continue
         _, _, mappings, _, rows, _ = view
+        # 整行排版重复只在表格级规则（V33-005）报一次，避免同一缺陷在收入/支出
+        # 各自的专项规则里重复出现。重复行本身已按一行参与合计，不影响勾稽。
+        if rule.code == 'V33-005':
+            measure_start = min(int(m['source_col_idx']) for m in mappings)
+            for duplicate in _exact_duplicate_rows(view[1], measure_start, view[3]):
+                label = f"{duplicate['code']} {duplicate['name']}".strip()
+                page_text = f"第{duplicate['page']}页" if duplicate['page'] else "原件"
+                message = (
+                    f"{title}{page_text}科目{label}整行重复印了两遍（各列金额完全相同），"
+                    "本次已按一行参与合计；若该行本应是项级科目行，请核对编码是否"
+                    "误植为上级款级编码（项级科目将因此整行缺失）。"
+                )
+                location = {
+                    'table': title, 'table_code': table_code, 'code': duplicate['code'],
+                    'page': duplicate['page'],
+                    'pages': [duplicate['page']] if duplicate['page'] else [],
+                    'row_index': duplicate['row_idx'] + 1,
+                }
+                # 证据走当前事实的原格身份：单行原文在版面上出现两次，无法作为
+                # 唯一原文片段；该行的金额格仍是可回溯到原页原格的唯一事实。
+                row_facts = [fact for fact in view[5]
+                             if fact.subject_code == duplicate['code']
+                             and fact.indicator == 'total_actual']
+                # 两行重复会各产生一条事实；金额完全一致时它们指向同一数值，
+                # 取第一条作证据锚（内容不同的重复行不会走到这里）。
+                if len(row_facts) > 1 and len({
+                        (str(fact.raw_value), str(fact.normalized_value), fact.unit)
+                        for fact in row_facts}) == 1:
+                    row_facts = row_facts[:1]
+                if len(row_facts) == 1:
+                    from .native_table_arithmetic import journal
+                    from .native_three_public_ratios import operand_ref
+                    journal(rule, doc, row_facts)
+                    location['operand_refs'] = [operand_ref(row_facts[0], 'duplicate_row')]
+                    location['fact_context_version_token'] = doc.fact_context.version_token
+                issues.append(rule._issue(
+                    message, location, 'low', evidence_text=message,
+                    check_relation_id=(
+                        f"{rule.code}:{table_code}:duplicate_row:{duplicate['code']}")))
         codes = sorted(code for code in rows if code != 'total')
         paths = hierarchy_paths(codes)
         if len(set(paths.values())) != len(paths):

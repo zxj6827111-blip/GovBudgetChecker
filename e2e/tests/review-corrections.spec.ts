@@ -32,7 +32,18 @@ const grantTable = {
   ],
 };
 
-async function correctionMocks(page: Page, posted: unknown[]) {
+const unknownTable = {
+  fragment_uid: "unknown-table", instance_uid: "unknown-table", table_code: "UNKNOWN",
+  title: "第 24 页表格", page: 2, bbox: [56, 420, 560, 700], header_row_count: 1,
+  extraction_method: "lines", scope: "core", mapping_status: "mapping_incomplete",
+  column_mappings: [{source_col_idx: 2, canonical_measure: "total_actual"}],
+  rows: [["项目", "金额", "合计"], ["", "300", "300"]],
+  row_boxes: [null, {page: 2, bbox: [56, 440, 560, 462]}],
+  unresolved_money_cells: [], unqualified_ocr_cells: [], arithmetic_conflicts: [],
+  measure_options: [{measure: "total_actual", label: "合计"}],
+};
+
+async function correctionMocks(page: Page, posted: unknown[], pageGeometry: Record<string, number[]> | null = null) {
   await page.context().addCookies([{name: "gbc_session", value: "e2e-session", url: "http://127.0.0.1:3000", sameSite: "Lax"}]);
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -44,7 +55,12 @@ async function correctionMocks(page: Page, posted: unknown[]) {
       result: {rule_findings: [], ai_findings: [], meta: {pages: 3, ai_execution: {state: "succeeded"}}},
     });
     if (path === `/api/jobs/${JOB_ID}/correction-targets`) return json({
-      job_id: JOB_ID, analysis_basis_token: BASIS, reading_status: "partial", tables: [grantTable],
+      job_id: JOB_ID, analysis_basis_token: BASIS, reading_status: "partial", tables: [grantTable, unknownTable],
+      table_code_options: [
+        {code: "FIN_01_income_expenditure_total", label: "收入支出决算总表"},
+        {code: "FIN_02_income", label: "收入决算表"},
+        {code: "FIN_03_expenditure", label: "支出决算表"},
+      ],
       gaps: [{id: "g1", page: 3, reason: "image_region_not_structured", bbox: [40, 60, 500, 700], affected_fragment_uids: []}],
       orphaned_amounts: [], overlay_status: null, history: [],
     });
@@ -54,6 +70,9 @@ async function correctionMocks(page: Page, posted: unknown[]) {
     }
     if (path === "/api/auth/me") return json({user: {username: "corrections-reviewer", is_admin: true}});
     if (path === "/api/workflow") return json({issues: {}});
+    if (path === `/api/files/${JOB_ID}/page-geometry`) {
+      return json(pageGeometry ? {native_to_preview: pageGeometry} : {native_to_preview: {}});
+    }
     if (path.startsWith("/api/files/")) return route.fulfill({
       status: 200, contentType: "image/svg+xml",
       body: `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="1344"><rect width="100%" height="100%" fill="white"/></svg>`,
@@ -67,6 +86,7 @@ test("读取校正：补录缺失的科目名称、指定列含义，带原页�
   await page.setViewportSize({width: 1440, height: 900});
   await correctionMocks(page, posted);
   await page.goto(`/review?job=${JOB_ID}`);
+  await page.getByTestId("gbc-review-tab-more").click();
   await page.getByTestId("gbc-review-tab-corrections").click();
   const card = page.getByTestId(`gbc-correction-table-${grantTable.fragment_uid}`);
   await expect(card).toContainText("待处理 2 格");
@@ -105,4 +125,100 @@ test("读取校正：补录缺失的科目名称、指定列含义，带原页�
        location: {physical_page: 2, bbox: [470, 200, 560, 222]}},
     ],
   }]);
+});
+
+
+test("读取校正：确认表种、框选原页、补录新增行与整表数据行", async ({page}) => {
+  const posted: unknown[] = [];
+  await page.setViewportSize({width: 1440, height: 900});
+  await correctionMocks(page, posted);
+  await page.goto(`/review?job=${JOB_ID}`);
+  await page.getByTestId("gbc-review-tab-more").click();
+  await page.getByTestId("gbc-review-tab-corrections").click();
+
+  const card = page.getByTestId("gbc-correction-table-unknown-table");
+  const identity = page.getByTestId("gbc-correction-identity-unknown-table");
+  await expect(identity).toContainText("原件表种未认定");
+  await identity.getByLabel("原件实际表种").selectOption("FIN_02_income");
+  await identity.getByLabel("原件缺表头").check();
+
+  // 框选原页区域：在 PDF 图上拖拽，服务端只接受页码与边界合法的位置。
+  await identity.getByRole("button", {name: "框选表题区域"}).click();
+  const layer = page.getByTestId("gbc-review-region-pick-layer");
+  await expect(layer).toBeVisible();
+  const box = await layer.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box!.x + box!.width * 0.2, box!.y + box!.height * 0.55);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + box!.width * 0.65, box!.y + box!.height * 0.68, {steps: 6});
+  await page.mouse.up();
+  await expect(layer).toBeHidden();
+  await expect(card).toContainText("已框选");
+  await identity.getByRole("button", {name: "确认表种"}).click();
+
+  // 新增一行；列之间用 | 分隔，只允许数据行。
+  await card.getByRole("button", {name: "新增行"}).click();
+  await card.getByLabel("按原页填写数据行").fill("221 | 住房保障支出 | 200");
+  await card.getByRole("button", {name: "加入待提交"}).click();
+
+  // 整表重录：一次提交多行替换原有数据行，表头保留。
+  await card.getByRole("button", {name: "整表重录"}).click();
+  await card.getByLabel("按原页填写数据行").fill("206 | 科学技术支出 | 300\n221 | 住房保障支出 | 200");
+  await card.getByRole("button", {name: "加入待提交"}).click();
+
+  const pending = page.getByTestId("gbc-correction-pending");
+  await expect(pending).toContainText("确认表种 → 收入决算表；原件缺表头，只确认缺失");
+  await expect(pending).toContainText("新增 1 行");
+  await expect(pending).toContainText("替换数据行 2 行");
+  await page.getByLabel("校正说明").fill("第 24 页原件缺表头且缺行，按原页框选区域补录");
+  await page.getByRole("button", {name: /提交校正并重新分析/}).click();
+  await expect(pending).toContainText("校正已追加留痕");
+
+  const [body] = posted as [{changes: {field: string; value: Record<string, unknown>; location: {physical_page: number; bbox: number[]}}[]}];
+  expect(body.changes.map((change) => change.field)).toEqual(["table_identity", "table_rows", "table_rows"]);
+  expect(body.changes[0].value).toEqual({table_code: "FIN_02_income", original_header_missing: true});
+  expect(body.changes[1].value).toMatchObject({mode: "append_rows", rows: [{cells: {0: "221", 1: "住房保障支出", 2: "200"}}]});
+  expect(body.changes[2].value).toMatchObject({mode: "replace_data_rows"});
+  for (const change of body.changes) {
+    expect(change.location.physical_page).toBe(2);
+    expect(change.location.bbox[2] - change.location.bbox[0]).toBeGreaterThan(3);
+    expect(change.location.bbox[3] - change.location.bbox[1]).toBeGreaterThan(3);
+  }
+});
+
+test("读取校正：框选坐标按 MediaBox 平移矩阵换回解析坐标", async ({page}) => {
+  const posted: unknown[] = [];
+  await page.setViewportSize({width: 1440, height: 900});
+  // 预览图相对解析坐标平移 (20, 30)：框选结果必须减回该偏移。
+  await correctionMocks(page, posted, {"2": [1, 0, 0, 1, 20, 30]});
+  await page.goto(`/review?job=${JOB_ID}`);
+  await page.getByTestId("gbc-review-tab-more").click();
+  await page.getByTestId("gbc-review-tab-corrections").click();
+
+  const card = page.getByTestId("gbc-correction-table-unknown-table");
+  await card.getByRole("button", {name: "新增行"}).click();
+  await card.getByRole("button", {name: "框选原页区域"}).click();
+  const layer = page.getByTestId("gbc-review-region-pick-layer");
+  await expect(layer).toBeVisible();
+  const box = await layer.boundingBox();
+  expect(box).not.toBeNull();
+  const ratios = [0.2, 0.55, 0.65, 0.68];
+  await page.mouse.move(box!.x + box!.width * ratios[0], box!.y + box!.height * ratios[1]);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + box!.width * ratios[2], box!.y + box!.height * ratios[3], {steps: 6});
+  await page.mouse.up();
+  await card.getByLabel("按原页填写数据行").fill("221 | 住房保障支出 | 200");
+  await card.getByRole("button", {name: "加入待提交"}).click();
+  await page.getByLabel("校正说明").fill("框选坐标换算反例");
+  await page.getByRole("button", {name: /提交校正并重新分析/}).click();
+
+  const [body] = posted as [{changes: {location: {physical_page: number; bbox: number[]}}[]}];
+  const {bbox} = body.changes[0].location;
+  // 预览像素 960×1344、渲染倍率 1.6 → 解析坐标；再减去矩阵平移 (20, 30)。
+  const expected = [
+    ratios[0] * 960 / 1.6 - 20, ratios[1] * 1344 / 1.6 - 30,
+    ratios[2] * 960 / 1.6 - 20, ratios[3] * 1344 / 1.6 - 30,
+  ];
+  expect(body.changes[0].location.physical_page).toBe(2);
+  bbox.forEach((value, index) => expect(Math.abs(value - expected[index])).toBeLessThan(2));
 });

@@ -1,0 +1,169 @@
+FFFF..F...............FF...F.......                                      [100%]
+==================================== ERRORS ====================================
+____________ ERROR collecting tests/test_amount_dependent_rules.py _____________
+ImportError while importing test module '<scratch>/wip/tests/test_amount_dependent_rules.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/Users/zhangxingjin/.local/share/uv/python/cpython-3.11.16-macos-aarch64-none/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_amount_dependent_rules.py:2: in <module>
+    from src.services.document_scope import amount_dependent_rules
+E   ImportError: cannot import name 'amount_dependent_rules' from 'src.services.document_scope' (<scratch>/wip/src/services/document_scope.py)
+=================================== FAILURES ===================================
+____________ test_wrapped_name_fragment_is_not_an_independent_name _____________
+
+    def test_wrapped_name_fragment_is_not_an_independent_name():
+        # 2024 真实样本：正文标题把带括号的全称折成两行，只剩“投促中心）”一类残片。
+        pages = ["上海市甲服务中心\n2024年度单位决算",
+                 "目录\n第一部分 上海市甲服务中心（上海市乙\n促进中心）概况\n第二部分 上海市甲服务中心（上海市乙\n促进中心）2024年度决算表",
+                 "第二部分 上海市甲服务中心（上海市乙\n促进中心）2024年度决算表\n本表反映单位本年度收入。"]
+        issues, reasons = run(pages)
+>       assert not any("促进中心）" in issue.message for issue in issues)
+E       assert not True
+E        +  where True = any(<generator object test_wrapped_name_fragment_is_not_an_independent_name.<locals>.<genexpr> at 0x10cf6b850>)
+
+tests/test_cover_independent_name.py:24: AssertionError
+_____________ test_bare_self_level_suffix_is_not_a_different_name ______________
+
+    def test_bare_self_level_suffix_is_not_a_different_name():
+        # 2024 真实样本：目录写“××本级”，正文写全称，封面写全称不应报不一致。
+        pages = ["上海市甲办公室\n2024年度单位决算",
+                 "目录\n第一部分 上海市甲办公室本级概况\n第二部分 上海市甲办公室本级2024年度决算表",
+                 "第一部分 上海市甲办公室概况\n一、主要职能",
+                 "上海市甲办公室2024年度单位决算表\n本表反映单位本年度收入。"]
+        issues, reasons = run(pages)
+>       assert not any("单位名称" in issue.message or "单位全称" in issue.message for issue in issues)
+E       assert not True
+E        +  where True = any(<generator object test_bare_self_level_suffix_is_not_a_different_name.<locals>.<genexpr> at 0x10d2dcfb0>)
+
+tests/test_cover_independent_name.py:35: AssertionError
+_ test_tied_different_names_leave_the_name_subcheck_incomplete[\u4e0a\u6d77\u5e02\u4e59\u529e\u516c\u5ba4] _
+
+second = '上海市乙办公室'
+
+    @pytest.mark.parametrize("second", ["上海市乙办公室", "上海市甲办公室分部"])
+    def test_tied_different_names_leave_the_name_subcheck_incomplete(second):
+        pages = ["上海市甲办公室\n2024年度单位决算",
+                 f"第一部分 上海市甲办公室概况\n第一部分 {second}概况",
+                 f"上海市甲办公室2024年度单位决算表\n{second}2024年度单位决算表"]
+        issues, reasons = run(pages)
+        assert not any("单位名称" in issue.message or "单位全称" in issue.message for issue in issues)
+>       assert "封面单位名称缺少正文独立依据" in reasons
+E       AssertionError: assert '封面单位名称缺少正文独立依据' in []
+
+tests/test_cover_independent_name.py:46: AssertionError
+_ test_tied_different_names_leave_the_name_subcheck_incomplete[\u4e0a\u6d77\u5e02\u7532\u529e\u516c\u5ba4\u5206\u90e8] _
+
+second = '上海市甲办公室分部'
+
+    @pytest.mark.parametrize("second", ["上海市乙办公室", "上海市甲办公室分部"])
+    def test_tied_different_names_leave_the_name_subcheck_incomplete(second):
+        pages = ["上海市甲办公室\n2024年度单位决算",
+                 f"第一部分 上海市甲办公室概况\n第一部分 {second}概况",
+                 f"上海市甲办公室2024年度单位决算表\n{second}2024年度单位决算表"]
+        issues, reasons = run(pages)
+        assert not any("单位名称" in issue.message or "单位全称" in issue.message for issue in issues)
+>       assert "封面单位名称缺少正文独立依据" in reasons
+E       AssertionError: assert '封面单位名称缺少正文独立依据' in []
+
+tests/test_cover_independent_name.py:46: AssertionError
+___________ test_department_headings_no_longer_shrink_the_unit_count ___________
+
+    def test_department_headings_no_longer_shrink_the_unit_count():
+        # 旧实现把单位计数减去部门标题数：3 单位 + 3 部门被算成 0:3 并判为部门。
+        text = "\n".join(["2024年度决算表"] * 3 + ["2024年度部门决算表"] * 3)
+>       assert heading_scope(text, "final") is None
+E       AssertionError: assert 'department' is None
+E        +  where 'department' = heading_scope('2024年度决算表\n2024年度决算表\n2024年度决算表\n2024年度部门决算表\n2024年度部门决算表\n2024年度部门决算表', 'final')
+
+tests/remediation/test_intake_2022_layout.py:69: AssertionError
+_ test_pending_anchor_requirement_is_an_incomplete_receipt_not_an_execution_error[normative_section-CMM023_SectionTemplate] _
+
+kind = 'normative_section', rule = 'CMM023_SectionTemplate'
+
+    @pytest.mark.parametrize('kind,rule',[('normative_section','CMM023_SectionTemplate'),('normative_table','CMM021_TableTitleNormative')])
+    def test_pending_anchor_requirement_is_an_incomplete_receipt_not_an_execution_error(kind,rule):
+        # 写法依据不足时附加要求待核，规则须诚实记为未完成，而不是因缺少导入变成执行错误。
+        from src.engine import checklist_content_rules
+        anchor={'kind':kind,'scope':'unit','text':'测试附加要求','basis':'test-only authority','source_id':'test-only'}
+        doc=document(['2025年度决算','第二部分决算表'],fixture_resolution([anchor],status='insufficient',value=None))
+>       with pytest.raises(RuleDeferred) as caught:getattr(checklist_content_rules,rule)().apply(doc)
+                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_template_anchor_checks.py:32: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <src.engine.checklist_content_rules.CMM023_SectionTemplate object at 0x10cf16dd0>
+doc = Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '第二部分决算表'], pa...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[])
+
+    def apply(self, doc: Document) -> List[Issue]:
+        kind = report_kind(doc)
+        if kind not in {"budget", "final"}:
+            raise RuleNotApplicable(self.code, detail="文种未识别，章节模板无法确定")
+        texts = list(doc.page_texts or [])
+        if len(texts) < 4 or not any(str(t or "").strip() for t in texts):
+            from src.services.template_anchor_checks import additional_anchor_issues
+            extra, pending = additional_anchor_issues(self, doc, "normative_section")
+>           if pending: raise RuleDeferred(self.code, detail="；".join(pending), partial_issues=extra)
+                              ^^^^^^^^^^^^
+E           NameError: name 'RuleDeferred' is not defined
+
+src/engine/checklist_content_rules.py:363: NameError
+_ test_pending_anchor_requirement_is_an_incomplete_receipt_not_an_execution_error[normative_table-CMM021_TableTitleNormative] _
+
+kind = 'normative_table', rule = 'CMM021_TableTitleNormative'
+
+    @pytest.mark.parametrize('kind,rule',[('normative_section','CMM023_SectionTemplate'),('normative_table','CMM021_TableTitleNormative')])
+    def test_pending_anchor_requirement_is_an_incomplete_receipt_not_an_execution_error(kind,rule):
+        # 写法依据不足时附加要求待核，规则须诚实记为未完成，而不是因缺少导入变成执行错误。
+        from src.engine import checklist_content_rules
+        anchor={'kind':kind,'scope':'unit','text':'测试附加要求','basis':'test-only authority','source_id':'test-only'}
+        doc=document(['2025年度决算','第二部分决算表'],fixture_resolution([anchor],status='insufficient',value=None))
+>       with pytest.raises(RuleDeferred) as caught:getattr(checklist_content_rules,rule)().apply(doc)
+                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_template_anchor_checks.py:32: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <src.engine.checklist_content_rules.CMM021_TableTitleNormative object at 0x10d324690>
+doc = Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '第二部分决算表'], pa...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[])
+
+    def apply(self, doc: Document) -> List[Issue]:
+        kind = report_kind(doc)
+        if kind not in {"budget", "final"}:
+            raise RuleNotApplicable(self.code, detail="文种未识别，规范表名无法确定")
+        from src.services.template_anchor_checks import additional_anchor_issues
+        extra, pending = additional_anchor_issues(self, doc, "normative_table")
+        titles = table_title_lines(doc)
+        if not titles:
+>           if pending: raise RuleDeferred(self.code, detail="；".join(pending), partial_issues=extra)
+                              ^^^^^^^^^^^^
+E           NameError: name 'RuleDeferred' is not defined
+
+src/engine/checklist_content_rules.py:165: NameError
+_ test_conditional_table_prompt_is_reported_once_and_not_as_missing_statement __
+
+    def test_conditional_table_prompt_is_reported_once_and_not_as_missing_statement():
+        from src.engine.native_disclosure_semantics import check_disclosure_semantics
+        from src.engine.rules_v33 import R33234_NarrativePercentConsistency
+        from src.engine.checklist_final_rules import CMM026_EmptyNoteOnDataTable
+        prompt='无政府性基金预算财政拨款收入支出的，仍保留该表格式，并在本表下方作下述说明：'
+        pages=['2024年度决算','八、政府性基金预算财政拨款收入支出决算表\n'+prompt+'本单位本年度没有政府性基金预算财政拨款收入和支出，故本表无数据。']
+        doc=document(pages,fixture_resolution(prompts=[prompt]))
+>       assert not any('已审核模板' in i.message for i in CMM008_TemplateResidue().apply(doc))
+E       assert not True
+E        +  where True = any(<generator object test_conditional_table_prompt_is_reported_once_and_not_as_missing_statement.<locals>.<genexpr> at 0x10d3c8e10>)
+
+tests/test_template_anchor_checks.py:66: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_cover_independent_name.py::test_wrapped_name_fragment_is_not_an_independent_name
+FAILED tests/test_cover_independent_name.py::test_bare_self_level_suffix_is_not_a_different_name
+FAILED tests/test_cover_independent_name.py::test_tied_different_names_leave_the_name_subcheck_incomplete[\u4e0a\u6d77\u5e02\u4e59\u529e\u516c\u5ba4]
+FAILED tests/test_cover_independent_name.py::test_tied_different_names_leave_the_name_subcheck_incomplete[\u4e0a\u6d77\u5e02\u7532\u529e\u516c\u5ba4\u5206\u90e8]
+FAILED tests/remediation/test_intake_2022_layout.py::test_department_headings_no_longer_shrink_the_unit_count
+FAILED tests/test_template_anchor_checks.py::test_pending_anchor_requirement_is_an_incomplete_receipt_not_an_execution_error[normative_section-CMM023_SectionTemplate]
+FAILED tests/test_template_anchor_checks.py::test_pending_anchor_requirement_is_an_incomplete_receipt_not_an_execution_error[normative_table-CMM021_TableTitleNormative]
+FAILED tests/test_template_anchor_checks.py::test_conditional_table_prompt_is_reported_once_and_not_as_missing_statement
+ERROR tests/test_amount_dependent_rules.py
+8 failed, 27 passed, 1 error in 0.62s

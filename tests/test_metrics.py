@@ -16,6 +16,7 @@ unknown 类型比例、review_required 比例、report_id 冲突计数。
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -136,6 +137,29 @@ def _write_heartbeat(
 # ---------------------------------------------------------------------------
 # 1. 无数据：结构完整的骨架
 # ---------------------------------------------------------------------------
+def test_metrics_record_sidecar_is_reused_without_parsing_status(monkeypatch, tmp_path):
+    """重启后指标预热不得重新解析全部 status.json。"""
+    _write_job(tmp_path, "job-sidecar", status="done", rule_ms=10, ts=FIXED_NOW - 10)
+    first = collect_metrics(tmp_path, now=FIXED_NOW)
+    assert (tmp_path / "job-sidecar" / "job_metrics.json").exists()
+
+    from src.services import metrics as metrics_module
+
+    reset_metrics_cache()
+    original_read_json = metrics_module._read_json
+
+    def guarded_read_json(path):
+        if path.name == "status.json":
+            raise AssertionError(
+                "metrics must reuse job_metrics.json instead of parsing status.json"
+            )
+        return original_read_json(path)
+
+    monkeypatch.setattr(metrics_module, "_read_json", guarded_read_json)
+    second = collect_metrics(tmp_path, now=FIXED_NOW)
+    assert second == first
+
+
 def test_metrics_on_empty_uploads_returns_zero_skeleton(tmp_path):
     metrics = collect_metrics(tmp_path, now=FIXED_NOW)
 
@@ -521,8 +545,9 @@ def test_metrics_rescan_parses_only_changed_status_files(tmp_path, monkeypatch):
         assert parsed == [], "未变化的任务直接复用上次的记录"
 
         _write_job(tmp_path, "job-2", status="error", ts=FIXED_NOW - 5)
-        (tmp_path / "job-1" / "status.json").unlink()
-        (tmp_path / "job-1").rmdir()
+        # 任务删除是整目录删除（含 job_metrics.json 等缓存 sidecar），与
+        # api.runtime.delete_job 的真实路径一致。
+        shutil.rmtree(tmp_path / "job-1")
         result = collect_metrics(tmp_path, now=FIXED_NOW)
         assert parsed == ["job-2"]
         assert result["jobs"]["total"] == 1 and result["quality"]["error_jobs"]["count"] == 1

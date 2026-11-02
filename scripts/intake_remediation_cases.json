@@ -1,5 +1,5 @@
 {
- "version": "2026-10-24",
+ "version": "2026-10-26-v1.4",
  "corpus": "~/Desktop/决算测试上海市（2,363 份；文件路径均相对此目录）",
  "org_binding": {
   "must_not_bind_level": [
@@ -122,8 +122,11 @@
     "one_of": [
      "上海市生物医药产业促进中心"
     ],
-    "allow_unbound": false,
-    "note": "组织库已有对应单位"
+    "allow_unbound": true,
+    "note": "用户已确认：封面明确写“部门决算”，但组织库只有 unit；按 R1.2 保持待确认并记录证据冲突，不得为通过验收强绑单位。v1.3 由用户授权按验收方口径修订期望。",
+    "reason_in": [
+     "evidence_conflict"
+    ]
    },
    {
     "file": "2023/上海市农业农村委员会/上海市2023年度农业防灾减灾资金转移支付绩效自评报告（动物防疫、农作物重大病虫疫情防控）.pdf",
@@ -238,8 +241,11 @@
      "上海市城市数字化转型应用促进中心(上海市智慧城市建设促进中心)",
      "上海市城市数字化转型应用促进中心（上海市智慧城市建设促进中心）"
     ],
-    "allow_unbound": false,
-    "note": "组织库已有对应单位"
+    "allow_unbound": true,
+    "note": "用户已确认：封面明确写“部门决算”，但组织库只有 unit；按 R1.2 保持待确认并记录证据冲突，不得为通过验收强绑单位。v1.3 由用户授权按验收方口径修订期望。",
+    "reason_in": [
+     "evidence_conflict"
+    ]
    },
    {
     "file": "2024/上海市国防动员办公室/上海市民防宣传教育中心2024年度决算.pdf",
@@ -342,8 +348,11 @@
     "one_of": [
      "上海市青浦监狱"
     ],
-    "allow_unbound": false,
-    "note": "组织库已有对应单位"
+    "allow_unbound": true,
+    "note": "用户已确认：封面明确写“部门决算”，但组织库只有 unit；按 R1.2 保持待确认并记录证据冲突，不得为通过验收强绑单位。v1.3 由用户授权按验收方口径修订期望。",
+    "reason_in": [
+     "evidence_conflict"
+    ]
    },
    {
     "file": "2025/上海市国防动员办公室/上海市民防宣传教育中心2025年度决算.pdf",
@@ -541,26 +550,994 @@
     ],
     "allow_unbound": true,
     "note": "下属单位材料不得绑到上级部门"
+   },
+   {
+    "file": "2022/上海市地方金融监督管理局/上海市地方金融监督管理局2022年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市地方金融监督管理局",
+    "not": [
+     "上海市地方金融监督管理局"
+    ],
+    "one_of": [],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市地方金融监督管理局2022年度部门决算.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2022/上海市地方金融监督管理局/上海市地方金融监督管理局2022年度部门决算.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市地方金融监督管理局",
+    "one_of": [
+     "上海市地方金融监督管理局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2022/上海市机关事务管理局/上海市机关事务管理局（本级）2022年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市机关事务管理局",
+    "not": [
+     "上海市机关事务管理局"
+    ],
+    "one_of": [
+     "上海市机关事务管理局（本级）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市机关事务管理局2022年度部门决算.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2022/上海市机关事务管理局/上海市机关事务管理局2022年度部门决算.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市机关事务管理局",
+    "one_of": [
+     "上海市机关事务管理局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2022/上海市财政局/上海市财政局2022年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市财政局",
+    "not": [
+     "上海市财政局"
+    ],
+    "one_of": [
+     "上海市财政局本部",
+     "上海市财政局（本级）",
+     "上海市财政局（本部）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市财政局2022年度部门决算.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2022/上海市财政局/上海市财政局2022年度部门决算.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市财政局",
+    "one_of": [
+     "上海市财政局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2022/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2022年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "中国（上海）自由贸易试验区临港新片区管理委员会",
+    "not": [
+     "中国（上海）自由贸易试验区临港新片区管理委员会"
+    ],
+    "one_of": [],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：中国（上海）自由贸易试验区临港新片区管理委员会2022年度部门决算.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2022/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2022年度部门决算.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "中国（上海）自由贸易试验区临港新片区管理委员会",
+    "one_of": [
+     "中国（上海）自由贸易试验区临港新片区管理委员会"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2023/上海化学工业区管理委员会/上海化学工业区管理委员会2023年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海化学工业区管理委员会",
+    "not": [
+     "上海化学工业区管理委员会"
+    ],
+    "one_of": [],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 7}（同年度部门决算：上海化学工业区管理委员会.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2023/上海化学工业区管理委员会/上海化学工业区管理委员会.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海化学工业区管理委员会",
+    "one_of": [
+     "上海化学工业区管理委员会"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2023/上海市农业农村委员会/上海市农业农村委员会2023年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市农业农村委员会",
+    "not": [
+     "上海市农业农村委员会"
+    ],
+    "one_of": [],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市农业农村委员会.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2023/上海市农业农村委员会/上海市农业农村委员会.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市农业农村委员会",
+    "one_of": [
+     "上海市农业农村委员会"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2023/上海市国有资产监督管理委员会/上海市国有资产监督管理委员会（本级）2023年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市国有资产监督管理委员会",
+    "not": [
+     "上海市国有资产监督管理委员会"
+    ],
+    "one_of": [
+     "上海市国有资产监督管理委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市国有资产监督管理委员会.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2023/上海市国有资产监督管理委员会/上海市国有资产监督管理委员会.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市国有资产监督管理委员会",
+    "one_of": [
+     "上海市国有资产监督管理委员会"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2023/上海市地方金融监督管理局/上海市地方金融监督管理局 2023年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市地方金融监督管理局",
+    "not": [
+     "上海市地方金融监督管理局"
+    ],
+    "one_of": [],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市地方金融监督管理局 2023年度部门决算.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2023/上海市地方金融监督管理局/上海市地方金融监督管理局 2023年度部门决算.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市地方金融监督管理局",
+    "one_of": [
+     "上海市地方金融监督管理局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2023/上海市机关事务管理局/上海市机关事务管理局2023年决算 (本级).pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市机关事务管理局",
+    "not": [
+     "上海市机关事务管理局"
+    ],
+    "one_of": [
+     "上海市机关事务管理局（本级）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市机关事务管理局.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2023/上海市机关事务管理局/上海市机关事务管理局.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市机关事务管理局",
+    "one_of": [
+     "上海市机关事务管理局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2023/上海市民族和宗教事务局/上海市民族和宗教事务局2023年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市民族和宗教事务局",
+    "not": [
+     "上海市民族和宗教事务局"
+    ],
+    "one_of": [
+     "上海市民族和宗教事务局（本级）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市民族和宗教事务局.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2023/上海市民族和宗教事务局/上海市民族和宗教事务局.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市民族和宗教事务局",
+    "one_of": [
+     "上海市民族和宗教事务局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2023/上海市知识产权局/上海市知识产权局2023年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市知识产权局",
+    "not": [
+     "上海市知识产权局"
+    ],
+    "one_of": [],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市知识产权局.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2023/上海市知识产权局/上海市知识产权局.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市知识产权局",
+    "one_of": [
+     "上海市知识产权局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2023/上海市财政局/上海市财政局（本级）2023年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市财政局",
+    "not": [
+     "上海市财政局"
+    ],
+    "one_of": [
+     "上海市财政局本部",
+     "上海市财政局（本级）",
+     "上海市财政局（本部）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市财政局.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2023/上海市财政局/上海市财政局.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市财政局",
+    "one_of": [
+     "上海市财政局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2023/上海市退役军人事务局/上海市退役军人事务局（本级）2023年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市退役军人事务局",
+    "not": [
+     "上海市退役军人事务局"
+    ],
+    "one_of": [
+     "上海市退役军人事务局（本级）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市退役军人事务局.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2023/上海市退役军人事务局/上海市退役军人事务局.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市退役军人事务局",
+    "one_of": [
+     "上海市退役军人事务局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2024/上海化学工业区管理委员会/上海化学工业区管理委员会2024年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海化学工业区管理委员会",
+    "not": [
+     "上海化学工业区管理委员会"
+    ],
+    "one_of": [],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海化学工业区管理委员会.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2024/上海化学工业区管理委员会/上海化学工业区管理委员会.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海化学工业区管理委员会",
+    "one_of": [
+     "上海化学工业区管理委员会"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2024/上海市体育局/上海市体育局本级2024年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市体育局",
+    "not": [
+     "上海市体育局"
+    ],
+    "one_of": [
+     "上海市体育局本级",
+     "上海市体育局（本级）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市体育局.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2024/上海市体育局/上海市体育局.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市体育局",
+    "one_of": [
+     "上海市体育局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2024/上海市农业农村委员会/上海市农业农村委员会2024年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市农业农村委员会",
+    "not": [
+     "上海市农业农村委员会"
+    ],
+    "one_of": [],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市农业农村委员会2024年度部门决算.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2024/上海市农业农村委员会/上海市农业农村委员会2024年度部门决算.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市农业农村委员会",
+    "one_of": [
+     "上海市农业农村委员会"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2024/上海市国有资产监督管理委员会/上海市国有资产监督管理委员会2024年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市国有资产监督管理委员会",
+    "not": [
+     "上海市国有资产监督管理委员会"
+    ],
+    "one_of": [
+     "上海市国有资产监督管理委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市国有资产监督管理委员会.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2024/上海市国有资产监督管理委员会/上海市国有资产监督管理委员会.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市国有资产监督管理委员会",
+    "one_of": [
+     "上海市国有资产监督管理委员会"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2024/上海市机关事务管理局/上海市机关事务管理局2024年决算 (本级).pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市机关事务管理局",
+    "not": [
+     "上海市机关事务管理局"
+    ],
+    "one_of": [
+     "上海市机关事务管理局（本级）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市机关事务管理局.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2024/上海市机关事务管理局/上海市机关事务管理局.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市机关事务管理局",
+    "one_of": [
+     "上海市机关事务管理局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2024/上海市民族和宗教事务局/上海市民族和宗教事务局2024年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市民族和宗教事务局",
+    "not": [
+     "上海市民族和宗教事务局"
+    ],
+    "one_of": [
+     "上海市民族和宗教事务局（本级）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市民族和宗教事务局.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2024/上海市民族和宗教事务局/上海市民族和宗教事务局.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市民族和宗教事务局",
+    "one_of": [
+     "上海市民族和宗教事务局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2024/上海市知识产权局/上海市知识产权局2024年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市知识产权局",
+    "not": [
+     "上海市知识产权局"
+    ],
+    "one_of": [],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市知识产权局2024年度部门决算.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2024/上海市知识产权局/上海市知识产权局2024年度部门决算.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市知识产权局",
+    "one_of": [
+     "上海市知识产权局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2024/上海市财政局/上海市财政局（本级）2024年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市财政局",
+    "not": [
+     "上海市财政局"
+    ],
+    "one_of": [
+     "上海市财政局本部",
+     "上海市财政局（本级）",
+     "上海市财政局（本部）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市财政局.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2024/上海市财政局/上海市财政局.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市财政局",
+    "one_of": [
+     "上海市财政局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2024/上海市退役军人事务局/上海市退役军人事务局（本级）2024年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市退役军人事务局",
+    "not": [
+     "上海市退役军人事务局"
+    ],
+    "one_of": [
+     "上海市退役军人事务局（本级）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市退役军人事务局2024年度部门决算.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2024/上海市退役军人事务局/上海市退役军人事务局2024年度部门决算.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市退役军人事务局",
+    "one_of": [
+     "上海市退役军人事务局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2024/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2024年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "中国（上海）自由贸易试验区临港新片区管理委员会",
+    "not": [
+     "中国（上海）自由贸易试验区临港新片区管理委员会"
+    ],
+    "one_of": [],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：中国（上海）自由贸易试验区临港新片区管理委员会2024年度部门决算.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2024/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2024年度部门决算.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "中国（上海）自由贸易试验区临港新片区管理委员会",
+    "one_of": [
+     "中国（上海）自由贸易试验区临港新片区管理委员会"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2025/上海化学工业区管理委员会/上海化学工业区管理委员会2025年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海化学工业区管理委员会",
+    "not": [
+     "上海化学工业区管理委员会"
+    ],
+    "one_of": [],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 7}（同年度部门决算：上海化学工业区管理委员会2025年度部门决算.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2025/上海化学工业区管理委员会/上海化学工业区管理委员会2025年度部门决算.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海化学工业区管理委员会",
+    "one_of": [
+     "上海化学工业区管理委员会"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2025/上海市体育局/上海市体育局2025年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市体育局",
+    "not": [
+     "上海市体育局"
+    ],
+    "one_of": [
+     "上海市体育局本级",
+     "上海市体育局（本级）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市体育局2025年度部门决算.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2025/上海市体育局/上海市体育局2025年度部门决算.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市体育局",
+    "one_of": [
+     "上海市体育局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2025/上海市农业农村委员会/上海市农业农村委员会2025年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市农业农村委员会",
+    "not": [
+     "上海市农业农村委员会"
+    ],
+    "one_of": [],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市农业农村委员会2025年度部门决算.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2025/上海市农业农村委员会/上海市农业农村委员会2025年度部门决算.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市农业农村委员会",
+    "one_of": [
+     "上海市农业农村委员会"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2025/上海市国有资产监督管理委员会/上海市国有资产监督管理委员会2025年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市国有资产监督管理委员会",
+    "not": [
+     "上海市国有资产监督管理委员会"
+    ],
+    "one_of": [
+     "上海市国有资产监督管理委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市国有资产监督管理委员会2025年度部门决算.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2025/上海市国有资产监督管理委员会/上海市国有资产监督管理委员会2025年度部门决算.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市国有资产监督管理委员会",
+    "one_of": [
+     "上海市国有资产监督管理委员会"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2025/上海市机关事务管理局/上海市机关事务管理局2025 年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市机关事务管理局",
+    "not": [
+     "上海市机关事务管理局"
+    ],
+    "one_of": [
+     "上海市机关事务管理局（本级）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 7}（同年度部门决算：上海市机关事务管理局.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2025/上海市机关事务管理局/上海市机关事务管理局.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市机关事务管理局",
+    "one_of": [
+     "上海市机关事务管理局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2025/上海市民族和宗教事务局/上海市民族和宗教事务局2025年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市民族和宗教事务局",
+    "not": [
+     "上海市民族和宗教事务局"
+    ],
+    "one_of": [
+     "上海市民族和宗教事务局（本级）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市民族和宗教事务局.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2025/上海市民族和宗教事务局/上海市民族和宗教事务局.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市民族和宗教事务局",
+    "one_of": [
+     "上海市民族和宗教事务局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2025/上海市知识产权局/上海市知识产权局2025年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市知识产权局",
+    "not": [
+     "上海市知识产权局"
+    ],
+    "one_of": [],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市知识产权局.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2025/上海市知识产权局/上海市知识产权局.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市知识产权局",
+    "one_of": [
+     "上海市知识产权局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2025/上海市财政局/上海市财政局（本级）2025年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市财政局",
+    "not": [
+     "上海市财政局"
+    ],
+    "one_of": [
+     "上海市财政局本部",
+     "上海市财政局（本级）",
+     "上海市财政局（本部）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市财政局.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2025/上海市财政局/上海市财政局.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市财政局",
+    "one_of": [
+     "上海市财政局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2025/上海市退役军人事务局/上海市退役军人事务局（本级）2025年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "上海市退役军人事务局",
+    "not": [
+     "上海市退役军人事务局"
+    ],
+    "one_of": [
+     "上海市退役军人事务局（本级）"
+    ],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：上海市退役军人事务局2025年度部门决算.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2025/上海市退役军人事务局/上海市退役军人事务局2025年度部门决算.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "上海市退役军人事务局",
+    "one_of": [
+     "上海市退役军人事务局"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
+   },
+   {
+    "file": "2025/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2025年度决算.pdf",
+    "kind": "benji_bound_to_department",
+    "baseline_bound": "中国（上海）自由贸易试验区临港新片区管理委员会",
+    "not": [
+     "中国（上海）自由贸易试验区临港新片区管理委员会"
+    ],
+    "one_of": [],
+    "allow_unbound": true,
+    "note": "本级材料不得绑到部门：部门决算有单位构成清单；本份表注以单位为主{'单位': 9}（同年度部门决算：中国（上海）自由贸易试验区临港新片区管理委员会2025年度部门决算.pdf）；封面无“本级/单位决算”定论证据，按 R1.2 应转待确认（scope_undetermined），不得绑部门；“X机关”不视为本级",
+    "reason_in": [
+     "scope_undetermined",
+     "equivalent_candidates_tie",
+     "directory_missing_org",
+     "organization_relation_unverified",
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2025/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2025年度部门决算.pdf",
+    "kind": "department_aggregate_must_bind",
+    "baseline_bound": "中国（上海）自由贸易试验区临港新片区管理委员会",
+    "one_of": [
+     "中国（上海）自由贸易试验区临港新片区管理委员会"
+    ],
+    "allow_unbound": false,
+    "note": "部门决算（有单位构成清单）必须绑到部门"
    }
   ],
   "name_variants_must_bind": [
    "2022/上海市绿化和市容管理局/上海市绿化和市容（林业）工程管理站2022年度决算.pdf",
    "2022/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区市场监督管理局2022年度决算.pdf",
-   "2022/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2022年度决算.pdf",
    "2022/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2022年度部门决算.pdf",
    "2022/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会财务结算和国有资产事务中心2022年度决算.pdf",
    "2023/上海市监狱管理局/上海市青浦监狱2023 年度决算.pdf",
    "2023/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区市场监督管理局2023年度决算.pdf",
    "2023/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会.pdf",
    "2023/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2023年年度部门决算.pdf",
-   "2023/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2023年度决算.pdf",
    "2023/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会财务结算和国有资产事务中心2023年度决算.pdf",
    "2024/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区市场监督管理局2024年度决算.pdf",
-   "2024/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2024年度决算.pdf",
    "2024/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2024年度部门决算.pdf",
    "2024/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会财务结算和国有资产事务中心2024年度决算.pdf",
    "2025/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区市场监督管理局2025年度决算.pdf",
-   "2025/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2025年度决算.pdf",
    "2025/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2025年度部门决算.pdf",
    "2025/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会财务结算和国有资产事务中心2025年度决算.pdf"
   ],
@@ -783,7 +1760,7 @@
    "上海市救助管理站预算",
    "上海市科普工作联席会议办公室2022年年度"
   ],
-  "max_unbound": 30,
+  "max_unbound": 40,
   "directory_alias_collisions_need_confirm": [
    [
     "上海临床研究中心",
@@ -920,6 +1897,1819 @@
     "上海虹桥国际中央商务区管理委员会(本级)",
     "上海虹桥国际中央商务区管理委员会本部"
    ]
+  ],
+  "allowed_unbound_reasons": [
+   "directory_missing_org",
+   "equivalent_candidates_tie",
+   "evidence_conflict",
+   "no_original_evidence",
+   "non_standard_material",
+   "organization_relation_unverified",
+   "scan_without_text",
+   "scope_undetermined"
+  ],
+  "binding_boundary_cases": [
+   {
+    "file": "2022/上海市人力资源和社会保障局/上海市人力资源和社会保障局（本级）2022年度决算.pdf",
+    "cover": "上海市人力资源和社会保障局（本级）2022年度决算",
+    "not": [
+     "上海市人力资源和社会保障局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人力资源和社会保障局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2022/上海市人民政府办公厅/上海市人民政府办公厅（本级） 2022年度决算.pdf",
+    "cover": "上海市人民政府办公厅（本级）2022年度决算",
+    "not": [
+     "上海市人民政府办公厅"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人民政府办公厅（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2022/上海市人民政府发展研究中心/上海市人民政府发展研究中心（本级）2022年度决算.pdf",
+    "cover": "上海市人民政府发展研究中心（本级）2022年度决算",
+    "not": [
+     "上海市人民政府发展研究中心"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人民政府发展研究中心（本级）"
+    ],
+    "allow_unbound": true,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认；但原件 p2 目录/部分标题三次写作「上海市人民政发展研究中心（本级）」，漏内部「府」字（p4 正文与封面为全称）。按 IR-01 3(c) 属原件证据冲突，当前规则转待确认是预期结果，故允许未绑定并要求原因码 evidence_conflict。",
+    "reason_in": [
+     "evidence_conflict"
+    ]
+   },
+   {
+    "file": "2022/上海市人民政府合作交流办公室/上海市人民政府合作交流办公室（本部）2022年度决算.pdf",
+    "cover": "上海市人民政府合作交流办公室（本部）2022年度决算",
+    "not": [
+     "上海市人民政府合作交流办公室"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市人民政府合作交流办公室(本部)",
+     "上海市人民政府合作交流办公室（本部）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2022/上海市人民政府外事办公室/上海市人民政府外事办公室（本级）2022年度决算.pdf",
+    "cover": "上海市人民政府外事办公室（本级）2022年度决算",
+    "not": [
+     "上海市人民政府外事办公室"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人民政府外事办公室（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2022/上海市人民政府驻北京办事处/上海市人民政府驻北京办事处2022年度单位决算.pdf",
+    "cover": "上海市人民政府驻北京办事处(本级)2022年度决算",
+    "not": [
+     "上海市人民政府驻北京办事处"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人民政府驻北京办事处(本级)"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2022/上海市住房和城乡建设管理委员会/上海市住房和城乡建设管理委员会(本级)2022年度决算.pdf",
+    "cover": "上海市住房和城乡建设管理委员会(本级)2022年度决算",
+    "not": [
+     "上海市住房和城乡建设管理委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市住房和城乡建设管理委员会(本级)",
+     "上海市住房和城乡建设管理委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2022/上海市体育局/上海市体育局（本级）2022年度决算.pdf",
+    "cover": "上海市体育局（本级）2022年度决算",
+    "not": [
+     "上海市体育局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市体育局本级",
+     "上海市体育局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2022/上海市公安局/上海市公安局（本级）2022年度决算.pdf",
+    "cover": "上海市公安局本级2022年度部门决算",
+    "not": [
+     "上海市公安局"
+    ],
+    "kind": "benji_evidence_conflict",
+    "one_of": [],
+    "allow_unbound": true,
+    "reason_in": [
+     "evidence_conflict"
+    ],
+    "note": "封面同时写“本级/本部”和“部门决算”：明确证据实质冲突，待确认并保留双方证据"
+   },
+   {
+    "file": "2022/上海市医疗保障局/上海市医疗保障局（本级）2022年度决算.pdf",
+    "cover": "上海市医疗保障局（本级）2022年度决算",
+    "not": [
+     "上海市医疗保障局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市医疗保障局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2022/上海市卫生健康委员会/上海市卫生健康委员会(本级)2022年度决算.pdf",
+    "cover": "上海市卫生健康委员会(本级)2022年度决算",
+    "not": [
+     "上海市卫生健康委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市卫生健康委员会(本级)",
+     "上海市卫生健康委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2022/上海市发展和改革委员会/上海市发展和改革委员会(本级)2022年度决算.pdf",
+    "cover": "上海市发展和改革委员会(本级)2022年度决算",
+    "not": [
+     "上海市发展和改革委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市发展和改革委员会(本级)",
+     "上海市发展和改革委员会本级",
+     "上海市发展和改革委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2022/上海市商务委员会/上海市商务委员会（本级）2022年度决算.pdf",
+    "cover": "上海市商务委员会（本级）2022年度决算",
+    "not": [
+     "上海市商务委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市商务委员会(本级)",
+     "上海市商务委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2022/上海市国有资产监督管理委员会/上海市国有资产监督管理委员会（本级）2022年度决算.pdf",
+    "cover": "上海市国有资产监督管理委员会（本级）2022年度决算",
+    "not": [
+     "上海市国有资产监督管理委员会"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市国有资产监督管理委员会（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2022/上海市审计局/上海市审计局(本级)2022年度决算.pdf",
+    "cover": "上海市审计局(本级)2022年度决算",
+    "not": [
+     "上海市审计局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市审计局(本级)",
+     "上海市审计局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2022/上海市市场监督管理局/上海市市场监督管理局（本级）2022年度决算.pdf",
+    "cover": "上海市市场监督管理局（本级）2022年度决算",
+    "not": [
+     "上海市市场监督管理局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市市场监督管理局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2022/上海市应急管理局/上海市应急管理局（本级）2022年度决算.pdf",
+    "cover": "上海市应急管理局（本级）2022年度决算",
+    "not": [
+     "上海市应急管理局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市应急管理局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2022/上海市教育委员会/上海市教育委员会（本级）2022年度决算.pdf",
+    "cover": "上海市教育委员会(本级)2022年度决算",
+    "not": [
+     "上海市教育委员会"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市教育委员会（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2022/上海市文化和旅游局/上海市文化和旅游局（本级）2022年度决算.pdf",
+    "cover": "上海市文化和旅游局（本级）2022年度决算",
+    "not": [
+     "上海市文化和旅游局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市文化和旅游局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2022/上海市民政局/上海市民政局（本级）2022年度决算.pdf",
+    "cover": "上海市民政局（本级）2022年度决算",
+    "not": [
+     "上海市民政局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市民政局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2022/上海市民族和宗教事务局/上海市民族和宗教事务局（本级）2022年度决算.pdf",
+    "cover": "上海市民族和宗教事务局（本级）2022年度决算",
+    "not": [
+     "上海市民族和宗教事务局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市民族和宗教事务局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2022/上海市生态环境局/上海市生态环境局（本级）2022年度决算.pdf",
+    "cover": "上海市生态环境局（本级）2022年度决算",
+    "not": [
+     "上海市生态环境局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市生态环境局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2022/上海市科学技术委员会/上海市科学技术委员会（本级）2022年度决算.pdf",
+    "cover": "上海市科学技术委员会(本级)2022年度决算",
+    "not": [
+     "上海市科学技术委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市科学技术委员会(本级)",
+     "上海市科学技术委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2022/上海市统计局/上海市统计局（本级）2022年度决算.pdf",
+    "cover": "上海市统计局（本级）2022年度决算",
+    "not": [
+     "上海市统计局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市统计局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2022/上海市绿化和市容管理局/上海市绿化和市容管理局（本级）2022年度决算.pdf",
+    "cover": "上海市绿化和市容管理局（本级）2022年度决算",
+    "not": [
+     "上海市绿化和市容管理局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市绿化和市容管理局本部",
+     "上海市绿化和市容管理局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2022/上海市药品监督管理局/上海市药品监督管理局（本级）2022年度决算.pdf",
+    "cover": "上海市药品监督管理局（本级）2022年度决算",
+    "not": [
+     "上海市药品监督管理局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市药品监督管理局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2022/上海市规划和自然资源局/上海市规划和自然资源局(本级)2022年度决算.pdf",
+    "cover": "上海市规划和自然资源局(本级)2022年度决算",
+    "not": [
+     "上海市规划和自然资源局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市规划和自然资源局(本级)",
+     "上海市规划和自然资源局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2022/上海市退役军人事务局/上海市退役军人事务局（本级）2022年度决算.pdf",
+    "cover": "上海市退役军人事务局（本级）2022年度决算",
+    "not": [
+     "上海市退役军人事务局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市退役军人事务局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2022/上海市长兴岛开发建设管理委员会办公室/上海市长兴岛开发建设管理委员会2022年单位决算.pdf",
+    "cover": "上海市长兴岛开发建设管理委员会本级2022年度决算",
+    "not": [
+     "上海市长兴岛开发建设管理委员会"
+    ],
+    "kind": "benji_missing_org",
+    "one_of": [],
+    "allow_unbound": true,
+    "reason_in": [
+     "directory_missing_org"
+    ],
+    "note": "封面明确本级，组织库缺少对应本级单位：待确认，不得退回绑部门"
+   },
+   {
+    "file": "2022/上海虹桥国际中央商务区管理委员会/2022年度上海虹桥国际中央商务区管理委员会本部单位决算.pdf",
+    "cover": "上海虹桥国际中央商务区管理委员会2022年度单位决算",
+    "not": [
+     "上海虹桥国际中央商务区管理委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海虹桥国际中央商务区管理委员会本部",
+     "上海虹桥国际中央商务区管理委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2023/上海市人力资源和社会保障局/上海市人力资源和社会保障局（本级）2023年度决算.pdf",
+    "cover": "上海市人力资源和社会保障局（本级）2023年度决算",
+    "not": [
+     "上海市人力资源和社会保障局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人力资源和社会保障局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2023/上海市人民政府办公厅/上海市人民政府办公厅（本级）2023年度决算.pdf",
+    "cover": "上海市人民政府办公厅（本级）2023年度决算",
+    "not": [
+     "上海市人民政府办公厅"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人民政府办公厅（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2023/上海市人民政府发展研究中心/上海市人民政府发展研究中心（本级）2023年度决算.pdf",
+    "cover": "上海市人民政府发展研究中心（本级）2023年度决算",
+    "not": [
+     "上海市人民政府发展研究中心"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人民政府发展研究中心（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2023/上海市人民政府合作交流办公室/上海市人民政府合作交流办公室(本部)2023年度决算.pdf",
+    "cover": "上海市人民政府合作交流办公室(本部)2023年度决算",
+    "not": [
+     "上海市人民政府合作交流办公室"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市人民政府合作交流办公室(本部)",
+     "上海市人民政府合作交流办公室（本部）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2023/上海市人民政府外事办公室/上海市人民政府外事办公室（本级）2023年度决算.pdf",
+    "cover": "上海市人民政府外事办公室（本级）2023年度决算",
+    "not": [
+     "上海市人民政府外事办公室"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人民政府外事办公室（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2023/上海市人民政府驻北京办事处/上海市人民政府驻北京办事处(本级)2023年决算公开.pdf",
+    "cover": "上海市人民政府驻北京办事处(本级)2023年度决算",
+    "not": [
+     "上海市人民政府驻北京办事处"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人民政府驻北京办事处(本级)"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2023/上海市住房和城乡建设管理委员会/上海市住房和城乡建设管理委员会(本级)2023年度决算.pdf",
+    "cover": "上海市住房和城乡建设管理委员会(本级)2023年度决算",
+    "not": [
+     "上海市住房和城乡建设管理委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市住房和城乡建设管理委员会(本级)",
+     "上海市住房和城乡建设管理委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2023/上海市体育局/上海市体育局（本级）2023年度决算.pdf",
+    "cover": "上海市体育局（本级）2023年度决算",
+    "not": [
+     "上海市体育局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市体育局本级",
+     "上海市体育局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2023/上海市公安局/上海市公安局（本级）2023年度决算.pdf",
+    "cover": "上海市公安局（本级）2023年度决算",
+    "not": [
+     "上海市公安局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市公安局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2023/上海市医疗保障局/上海市医疗保障局（本级）2023年度决算公开.pdf",
+    "cover": "上海市医疗保障局（本级）2023年度决算",
+    "not": [
+     "上海市医疗保障局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市医疗保障局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2023/上海市卫生健康委员会/上海市卫生健康委员会（本级）2023年度决算.pdf",
+    "cover": "上海市卫生健康委员会(本级)2023年度决算",
+    "not": [
+     "上海市卫生健康委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市卫生健康委员会(本级)",
+     "上海市卫生健康委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2023/上海市发展和改革委员会/上海市发展和改革委员会（本级）2023年度决算.pdf",
+    "cover": "上海市发展和改革委员会(本级)2023年度决算",
+    "not": [
+     "上海市发展和改革委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市发展和改革委员会(本级)",
+     "上海市发展和改革委员会本级",
+     "上海市发展和改革委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2023/上海市司法局/上海市司法局（本级）2023年度决算.pdf",
+    "cover": "上海市司法局（本级）2023年度决算",
+    "not": [
+     "上海市司法局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市司法局(本级)",
+     "上海市司法局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2023/上海市商务委员会/上海市商务委员会（本级）2023年决算.pdf",
+    "cover": "上海市商务委员会（本级）2023年度决算",
+    "not": [
+     "上海市商务委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市商务委员会(本级)",
+     "上海市商务委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2023/上海市市场监督管理局/上海市市场监督管理局（本级）2023年度决算.pdf",
+    "cover": "上海市市场监督管理局（本级）2023年度决算",
+    "not": [
+     "上海市市场监督管理局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市市场监督管理局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2023/上海市应急管理局/上海市应急管理局（本级）2023年度决算.pdf",
+    "cover": "上海市应急管理局（本级）2023年度决算",
+    "not": [
+     "上海市应急管理局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市应急管理局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2023/上海市教育委员会/上海市教育委员会（本级）2023年度决算.pdf",
+    "cover": "上海市教育委员会(本级)2023年度决算",
+    "not": [
+     "上海市教育委员会"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市教育委员会（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2023/上海市文化和旅游局/上海市文化和旅游局（本级）2023年度决算.pdf",
+    "cover": "上海市文化和旅游局（本级）2023年度决算",
+    "not": [
+     "上海市文化和旅游局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市文化和旅游局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2023/上海市民政局/上海市民政局（本级）2023年度决算.pdf",
+    "cover": "上海市民政局（本级）2023年度决算",
+    "not": [
+     "上海市民政局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市民政局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2023/上海市生态环境局/上海市生态环境局（本级）2023年度决算.pdf",
+    "cover": "上海市生态环境局（本级）2023年度决算",
+    "not": [
+     "上海市生态环境局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市生态环境局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2023/上海市科学技术委员会/上海市科学技术委员会（本级）2023年度决算.pdf",
+    "cover": "上海市科学技术委员会（本级）2023年度决算",
+    "not": [
+     "上海市科学技术委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市科学技术委员会(本级)",
+     "上海市科学技术委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2023/上海市经济和信息化委员会/上海市经济和信息化委员会2023年度决算.pdf",
+    "cover": "上海市经济和信息化委员会(本级)2023年度决算",
+    "not": [
+     "上海市经济和信息化委员会"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市经济和信息化委员会本级"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2023/上海市统计局/上海市统计局（本级）2023年度决算.pdf",
+    "cover": "上海市统计局（本级）2023年度决算",
+    "not": [
+     "上海市统计局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市统计局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2023/上海市绿化和市容管理局/上海市绿化和市容管理局（本级）2023年度决算.pdf",
+    "cover": "上海市绿化和市容管理局（本级）2023年度决算",
+    "not": [
+     "上海市绿化和市容管理局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市绿化和市容管理局本部",
+     "上海市绿化和市容管理局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2023/上海市药品监督管理局/上海市药品监督管理局（本级）2023年度决算.pdf",
+    "cover": "上海市药品监督管理局（本级）2023年度决算",
+    "not": [
+     "上海市药品监督管理局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市药品监督管理局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2023/上海市规划和自然资源局/上海市规划和自然资源局(本级)2023年度决算.pdf",
+    "cover": "上海市规划和自然资源局(本级)2023年度决算",
+    "not": [
+     "上海市规划和自然资源局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市规划和自然资源局(本级)",
+     "上海市规划和自然资源局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2023/上海市长兴岛开发建设管理委员会办公室/上海市长兴岛开发建设管理委员会2023年决算.pdf",
+    "cover": "上海市长兴岛开发建设管理委员会本级2023年度决算",
+    "not": [
+     "上海市长兴岛开发建设管理委员会"
+    ],
+    "kind": "benji_missing_org",
+    "one_of": [],
+    "allow_unbound": true,
+    "reason_in": [
+     "directory_missing_org"
+    ],
+    "note": "封面明确本级，组织库缺少对应本级单位：待确认，不得退回绑部门"
+   },
+   {
+    "file": "2023/上海虹桥国际中央商务区管理委员会/上海虹桥国际中央商务区管理委员会2023年度单位决算.pdf",
+    "cover": "上海虹桥国际中央商务区管理委员会（本级）2023年度决算",
+    "not": [
+     "上海虹桥国际中央商务区管理委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海虹桥国际中央商务区管理委员会本部",
+     "上海虹桥国际中央商务区管理委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2024/上海市交通委员会/上海市交通委机关2024年度决算.pdf",
+    "cover": "上海市交通委员会本级2024年度决算",
+    "not": [
+     "上海市交通委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市交通委员会本级",
+     "上海市交通委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2024/上海市人力资源和社会保障局/上海市人力资源和社会保障局（本级）2024年度决算.pdf",
+    "cover": "上海市人力资源和社会保障局（本级）2024年度决算",
+    "not": [
+     "上海市人力资源和社会保障局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人力资源和社会保障局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2024/上海市人民政府办公厅/上海市人民政府办公厅2024年度决算.pdf",
+    "cover": "上海市人民政府办公厅（本级）2024年度决算",
+    "not": [
+     "上海市人民政府办公厅"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人民政府办公厅（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2024/上海市人民政府参事室/上海市人民政府参事室单位2024年度决算.pdf",
+    "cover": "上海市人民政府参事室2024年度单位决算",
+    "not": [
+     "上海市人民政府参事室"
+    ],
+    "kind": "benji_missing_org",
+    "one_of": [],
+    "allow_unbound": true,
+    "reason_in": [
+     "directory_missing_org"
+    ],
+    "note": "封面明确本级，组织库缺少对应本级单位：待确认，不得退回绑部门"
+   },
+   {
+    "file": "2024/上海市人民政府发展研究中心/上海市人民政府发展研究中心（本级）2024年度单位决算.pdf",
+    "cover": "上海市人民政府发展研究中心（本级）2024年度决算",
+    "not": [
+     "上海市人民政府发展研究中心"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人民政府发展研究中心（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2024/上海市人民政府合作交流办公室/上海市人民政府合作交流办公室(本部)2024年度决算.pdf",
+    "cover": "上海市人民政府合作交流办公室(本部)2024年度决算",
+    "not": [
+     "上海市人民政府合作交流办公室"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市人民政府合作交流办公室(本部)",
+     "上海市人民政府合作交流办公室（本部）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2024/上海市人民政府外事办公室/上海市人民政府外事办公室（本级）2024年度决算.pdf",
+    "cover": "上海市人民政府外事办公室（本级）2024年度决算",
+    "not": [
+     "上海市人民政府外事办公室"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人民政府外事办公室（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2024/上海市人民政府驻北京办事处/上海市人民政府驻北京办事处(本级)2024年决算公开.pdf",
+    "cover": "上海市人民政府驻北京办事处(本级)2024年度决算",
+    "not": [
+     "上海市人民政府驻北京办事处"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人民政府驻北京办事处(本级)"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2024/上海市住房和城乡建设管理委员会/上海市住房和城乡建设管理委员会（本级）2024年度决算.pdf",
+    "cover": "上海市住房和城乡建设管理委员会(本级)2024年度决算",
+    "not": [
+     "上海市住房和城乡建设管理委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市住房和城乡建设管理委员会(本级)",
+     "上海市住房和城乡建设管理委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2024/上海市公安局/上海市公安局（本级）2024年度决算.pdf",
+    "cover": "上海市公安局（本级）2024年度决算",
+    "not": [
+     "上海市公安局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市公安局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2024/上海市医疗保障局/上海市医疗保障局（本级）2024年度决算公开.pdf",
+    "cover": "上海市医疗保障局（本级）2024年度决算",
+    "not": [
+     "上海市医疗保障局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市医疗保障局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2024/上海市卫生健康委员会/上海市卫生健康委员会(本级)2024年度决算.pdf",
+    "cover": "上海市卫生健康委员会(本级)2024年度决算",
+    "not": [
+     "上海市卫生健康委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市卫生健康委员会(本级)",
+     "上海市卫生健康委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2024/上海市发展和改革委员会/上海市发展和改革委员会(本级).pdf",
+    "cover": "上海市发展和改革委员会(本级)2024年度决算",
+    "not": [
+     "上海市发展和改革委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市发展和改革委员会(本级)",
+     "上海市发展和改革委员会本级",
+     "上海市发展和改革委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2024/上海市发展和改革委员会/上海市发展和改革委员会(本级)2024年度决算公开.pdf",
+    "cover": "上海市发展和改革委员会(本级)2024年度决算",
+    "not": [
+     "上海市发展和改革委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市发展和改革委员会(本级)",
+     "上海市发展和改革委员会本级",
+     "上海市发展和改革委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2024/上海市司法局/上海市司法局（本级）2024年度决算.pdf",
+    "cover": "上海市司法局（本级）2024年度决算",
+    "not": [
+     "上海市司法局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市司法局(本级)",
+     "上海市司法局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2024/上海市商务委员会/上海市商务委员会（本级）2024年决算.pdf",
+    "cover": "上海市商务委员会（本级）2024年度决算",
+    "not": [
+     "上海市商务委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市商务委员会(本级)",
+     "上海市商务委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2024/上海市审计局/上海市审计局(本级)2024年度决算.pdf",
+    "cover": "上海市审计局(本级)2024年度决算",
+    "not": [
+     "上海市审计局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市审计局(本级)",
+     "上海市审计局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2024/上海市市场监督管理局/上海市市场监督管理局（本级）2024年度决算.pdf",
+    "cover": "上海市市场监督管理局（本级）2024年度决算",
+    "not": [
+     "上海市市场监督管理局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市市场监督管理局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2024/上海市应急管理局/上海市应急管理局（本级）2024年度决算.pdf",
+    "cover": "上海市应急管理局（本级）2024年度决算",
+    "not": [
+     "上海市应急管理局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市应急管理局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2024/上海市教育委员会/上海市教育委员会（本级）2024年度决算.pdf",
+    "cover": "上海市教育委员会(本级)2024年度决算",
+    "not": [
+     "上海市教育委员会"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市教育委员会（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2024/上海市数据局/上海市数据局（本级）2024年度决算.pdf",
+    "cover": "上海市数据局（本级）2024年度决算",
+    "not": [
+     "上海市数据局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市数据局本级",
+     "上海市数据局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2024/上海市文化和旅游局/上海市文化和旅游局（本级）2024年度决算.pdf",
+    "cover": "上海市文化和旅游局（本级）2024年度决算",
+    "not": [
+     "上海市文化和旅游局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市文化和旅游局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2024/上海市民政局/上海市民政局（本级）2024年度决算.pdf",
+    "cover": "上海市民政局（本级）2024年度决算",
+    "not": [
+     "上海市民政局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市民政局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2024/上海市生态环境局/上海市生态环境局（本级）2024年度决算.pdf",
+    "cover": "上海市生态环境局（本级）2024年度决算",
+    "not": [
+     "上海市生态环境局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市生态环境局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2024/上海市科学技术委员会/上海市科学技术委员会（本级）2024年度决算.pdf",
+    "cover": "上海市科学技术委员会（本级）2024年度决算",
+    "not": [
+     "上海市科学技术委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市科学技术委员会(本级)",
+     "上海市科学技术委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2024/上海市经济和信息化委员会/上海市经济和信息化委员会2024年度决算.pdf",
+    "cover": "上海市经济和信息化委员会(本级)2024年度决算",
+    "not": [
+     "上海市经济和信息化委员会"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市经济和信息化委员会本级"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2024/上海市统计局/上海市统计局（本级）2024年度决算.pdf",
+    "cover": "上海市统计局（本级）2024年度决算",
+    "not": [
+     "上海市统计局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市统计局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2024/上海市绿化和市容管理局/上海市绿化和市容管理局（本级）2024年度决算公开.pdf",
+    "cover": "上海市绿化和市容管理局（本级）2024年度决算",
+    "not": [
+     "上海市绿化和市容管理局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市绿化和市容管理局本部",
+     "上海市绿化和市容管理局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2024/上海市药品监督管理局/上海市药品监督管理局（本级）2024年度决算.pdf",
+    "cover": "上海市药品监督管理局（本级）2024年度决算",
+    "not": [
+     "上海市药品监督管理局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市药品监督管理局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2024/上海市规划和自然资源局/上海市规划和自然资源局（本级））2024年度部门决算.pdf",
+    "cover": "上海市规划和自然资源局(本级)2024年度决算",
+    "not": [
+     "上海市规划和自然资源局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市规划和自然资源局(本级)",
+     "上海市规划和自然资源局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2024/上海市长兴岛开发建设管理委员会办公室/上海市长兴岛开发建设管理委员会2024年度决算.pdf",
+    "cover": "上海市长兴岛开发建设管理委员会本级2024年度决算",
+    "not": [
+     "上海市长兴岛开发建设管理委员会"
+    ],
+    "kind": "benji_missing_org",
+    "one_of": [],
+    "allow_unbound": true,
+    "reason_in": [
+     "directory_missing_org"
+    ],
+    "note": "封面明确本级，组织库缺少对应本级单位：待确认，不得退回绑部门"
+   },
+   {
+    "file": "2024/上海虹桥国际中央商务区管理委员会/上海虹桥国际中央商务区管理委员会（本级）2024年度单位决算公开.pdf",
+    "cover": "上海虹桥国际中央商务区管理委员会（本级）2024年度决算",
+    "not": [
+     "上海虹桥国际中央商务区管理委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海虹桥国际中央商务区管理委员会本部",
+     "上海虹桥国际中央商务区管理委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2025/上海市交通委员会/上海市交通委员会本级2025年度单位决算.pdf",
+    "cover": "上海市交通委员会本级2025年度决算",
+    "not": [
+     "上海市交通委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市交通委员会本级",
+     "上海市交通委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2025/上海市人力资源和社会保障局/上海市人力资源和社会保障局（本级）2025年度决算.pdf",
+    "cover": "上海市人力资源和社会保障局（本级）2025年度决算",
+    "not": [
+     "上海市人力资源和社会保障局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人力资源和社会保障局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2025/上海市人民政府办公厅/上海市人民政府办公厅2025年度决算.pdf",
+    "cover": "上海市人民政府办公厅（本级）2025年度决算",
+    "not": [
+     "上海市人民政府办公厅"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人民政府办公厅（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2025/上海市人民政府参事室/上海市人民政府参事室单位2025年决算.pdf",
+    "cover": "上海市人民政府参事室2025年度单位决算",
+    "not": [
+     "上海市人民政府参事室"
+    ],
+    "kind": "benji_missing_org",
+    "one_of": [],
+    "allow_unbound": true,
+    "reason_in": [
+     "directory_missing_org"
+    ],
+    "note": "封面明确本级，组织库缺少对应本级单位：待确认，不得退回绑部门"
+   },
+   {
+    "file": "2025/上海市人民政府发展研究中心/上海市人民政府发展研究中心（本级）决算公开.pdf",
+    "cover": "上海市人民政府发展研究中心（本级）2025年度决算",
+    "not": [
+     "上海市人民政府发展研究中心"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人民政府发展研究中心（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2025/上海市人民政府合作交流办公室/上海市人民政府合作交流办公室(本部)2025年度决算.pdf",
+    "cover": "上海市人民政府合作交流办公室(本部)2025年度决算",
+    "not": [
+     "上海市人民政府合作交流办公室"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市人民政府合作交流办公室(本部)",
+     "上海市人民政府合作交流办公室（本部）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2025/上海市人民政府外事办公室/上海市人民政府外事办公室（本级）2025年度决算.pdf",
+    "cover": "上海市人民政府外事办公室（本级）2025年度决算",
+    "not": [
+     "上海市人民政府外事办公室"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人民政府外事办公室（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2025/上海市人民政府驻北京办事处/上海市人民政府驻北京办事处(本级)2025年决算公开.pdf",
+    "cover": "上海市人民政府驻北京办事处(本级)2025年度决算",
+    "not": [
+     "上海市人民政府驻北京办事处"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市人民政府驻北京办事处(本级)"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2025/上海市住房和城乡建设管理委员会/上海市住房和城乡建设管理委员会（本级）2025年度决算.pdf",
+    "cover": "上海市住房和城乡建设管理委员会(本级)2025年度决算",
+    "not": [
+     "上海市住房和城乡建设管理委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市住房和城乡建设管理委员会(本级)",
+     "上海市住房和城乡建设管理委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2025/上海市公安局/上海市公安局（本级）2025年度决算.pdf",
+    "cover": "上海市公安局（本级）2025年度决算",
+    "not": [
+     "上海市公安局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市公安局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2025/上海市医疗保障局/上海市医疗保障局（本级）2025年度决算.pdf",
+    "cover": "上海市医疗保障局（本级）2025年度决算",
+    "not": [
+     "上海市医疗保障局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市医疗保障局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2025/上海市卫生健康委员会/上海市卫生健康委员会（本级）2025年度决算公开.pdf",
+    "cover": "上海市卫生健康委员会(本级)2025年度决算",
+    "not": [
+     "上海市卫生健康委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市卫生健康委员会(本级)",
+     "上海市卫生健康委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2025/上海市发展和改革委员会/上海市发展和改革委员会(本级)2025年度决算.pdf",
+    "cover": "上海市发展和改革委员会(本级)2025年度决算",
+    "not": [
+     "上海市发展和改革委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市发展和改革委员会(本级)",
+     "上海市发展和改革委员会本级",
+     "上海市发展和改革委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2025/上海市司法局/上海市司法局（本级）2025年度决算.pdf",
+    "cover": "上海市司法局（本级）2025年度决算",
+    "not": [
+     "上海市司法局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市司法局(本级)",
+     "上海市司法局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2025/上海市商务委员会/上海市商务委员会（本级）2025年决算.pdf",
+    "cover": "上海市商务委员会（本级）2025年度决算",
+    "not": [
+     "上海市商务委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市商务委员会(本级)",
+     "上海市商务委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2025/上海市审计局/上海市审计局(本级)2025年度决算.pdf",
+    "cover": "上海市审计局(本级)2025年度决算",
+    "not": [
+     "上海市审计局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市审计局(本级)",
+     "上海市审计局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2025/上海市市场监督管理局/上海市市场监督管理局（本级）2025年度决算.pdf",
+    "cover": "上海市市场监督管理局（本级）2025年度决算",
+    "not": [
+     "上海市市场监督管理局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市市场监督管理局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2025/上海市应急管理局/上海市应急管理局（本级）2025年度决算.pdf",
+    "cover": "上海市应急管理局（本级）2025年度决算",
+    "not": [
+     "上海市应急管理局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市应急管理局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2025/上海市教育委员会/上海市教育委员会（本级）2025年度决算.pdf",
+    "cover": "上海市教育委员会（本级）2025年度决算",
+    "not": [
+     "上海市教育委员会"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市教育委员会（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2025/上海市数据局/上海市数据局（本级）2025年度决算.pdf",
+    "cover": "上海市数据局（本级）2025年度决算",
+    "not": [
+     "上海市数据局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市数据局本级",
+     "上海市数据局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2025/上海市文化和旅游局/上海市文化和旅游局（本级）2025年度决算.pdf",
+    "cover": "上海市文化和旅游局（本级）2025年度决算",
+    "not": [
+     "上海市文化和旅游局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市文化和旅游局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2025/上海市民政局/上海市民政局（本级）2025年决算.pdf",
+    "cover": "上海市民政局（本级）2025年度决算",
+    "not": [
+     "上海市民政局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市民政局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2025/上海市生态环境局/上海市生态环境局（本级）2025年度决算.pdf",
+    "cover": "上海市生态环境局（本级）2025年度决算",
+    "not": [
+     "上海市生态环境局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市生态环境局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2025/上海市科学技术委员会/上海市科学技术委员会（本级）2025年度决算.pdf",
+    "cover": "上海市科学技术委员会（本级）2025年度决算",
+    "not": [
+     "上海市科学技术委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市科学技术委员会(本级)",
+     "上海市科学技术委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2025/上海市统计局/上海市统计局（本级）2025年度决算.pdf",
+    "cover": "上海市统计局（本级）2025年度决算",
+    "not": [
+     "上海市统计局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市统计局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2025/上海市绿化和市容管理局/上海市绿化和市容管理局（本级）2025年度决算.pdf",
+    "cover": "上海市绿化和市容管理局（本级）2025年度决算",
+    "not": [
+     "上海市绿化和市容管理局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市绿化和市容管理局本部",
+     "上海市绿化和市容管理局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2025/上海市药品监督管理局/上海市药品监督管理局（本级）2025年度决算.pdf",
+    "cover": "上海市药品监督管理局（本级）2025年度决算",
+    "not": [
+     "上海市药品监督管理局"
+    ],
+    "kind": "benji_unique_must_bind",
+    "one_of": [
+     "上海市药品监督管理局（本级）"
+    ],
+    "allow_unbound": false,
+    "note": "封面明确本级，组织库有唯一本级单位且上级关系已确认：组合判定后必须绑定该单位"
+   },
+   {
+    "file": "2025/上海市规划和自然资源局/上海市规划和自然资源局(本级)2025年决算.pdf",
+    "cover": "上海市规划和自然资源局(本级)2025年度决算",
+    "not": [
+     "上海市规划和自然资源局"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海市规划和自然资源局(本级)",
+     "上海市规划和自然资源局（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   },
+   {
+    "file": "2025/上海市长兴岛开发建设管理委员会办公室/上海市长兴岛开发建设管理委员会2025年度决算.pdf",
+    "cover": "上海市长兴岛开发建设管理委员会本级2025年度决算",
+    "not": [
+     "上海市长兴岛开发建设管理委员会"
+    ],
+    "kind": "benji_missing_org",
+    "one_of": [],
+    "allow_unbound": true,
+    "reason_in": [
+     "directory_missing_org"
+    ],
+    "note": "封面明确本级，组织库缺少对应本级单位：待确认，不得退回绑部门"
+   },
+   {
+    "file": "2025/上海虹桥国际中央商务区管理委员会/上海虹桥国际中央商务区管理委员会2025年度单位决算.pdf",
+    "cover": "上海虹桥国际中央商务区管理委员会（本级）2025年度决算",
+    "not": [
+     "上海虹桥国际中央商务区管理委员会"
+    ],
+    "kind": "benji_tie",
+    "one_of": [
+     "上海虹桥国际中央商务区管理委员会本部",
+     "上海虹桥国际中央商务区管理委员会（本级）"
+    ],
+    "allow_unbound": true,
+    "reason_in": [
+     "equivalent_candidates_tie"
+    ],
+    "note": "封面明确本级，组织库有多个写法不同的本级条目：清洗前应待确认（多候选），清洗合并后可绑定合并条目"
+   }
+  ],
+  "name_variants_expected_pending": [
+   {
+    "file": "2022/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2022年度决算.pdf",
+    "reason_in": [
+     "scope_undetermined"
+    ],
+    "note": "封面只有“年度决算”，无部门/本级口径；按 A2 不绑同名部门，保持待确认。"
+   },
+   {
+    "file": "2023/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2023年度决算.pdf",
+    "reason_in": [
+     "scope_undetermined"
+    ],
+    "note": "封面只有“年度决算”，无部门/本级口径；按 A2 不绑同名部门，保持待确认。"
+   },
+   {
+    "file": "2024/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2024年度决算.pdf",
+    "reason_in": [
+     "scope_undetermined"
+    ],
+    "note": "封面只有“年度决算”，无部门/本级口径；按 A2 不绑同名部门，保持待确认。"
+   },
+   {
+    "file": "2025/中国（上海）自由贸易试验区临港新片区管理委员会/中国（上海）自由贸易试验区临港新片区管理委员会2025年度决算.pdf",
+    "reason_in": [
+     "scope_undetermined"
+    ],
+    "note": "封面只有“年度决算”，无部门/本级口径；按 A2 不绑同名部门，保持待确认。"
+   }
   ]
  },
  "profile": {
@@ -929,13 +3719,17 @@
    "2023/上海市农业农村委员会/上海市2023年度农业防灾减灾资金转移支付绩效自评报告（动物防疫、农作物重大病虫疫情防控）.pdf",
    "2023/上海市农业农村委员会/上海市2023年度耕地建设与利用资金转移支付绩效自评报告（耕地地力保护补贴、高标准农田建设）.pdf",
    "2023/上海市农业农村委员会/上海市农业农村委员会2023年度市对区专项转移支付绩效自评报告.pdf",
-   "2025/上海市规划和自然资源局/上海市规划和自然资源局2025年度部门国有资产管理情况.pdf"
+   "2025/上海市规划和自然资源局/上海市规划和自然资源局2025年度部门国有资产管理情况.pdf",
+   "2023/中国（上海）自由贸易试验区临港新片区管理委员会/上海市自由贸易试验区临港新片区管理委员会综合执法大队2023年度决算 (2).pdf"
   ],
   "max_empty_cover_org": 10,
   "mixed_title_probe": {
    "title": "上海市交通委员会\n2024年度部门决算及2025年度部门预算",
    "expect_report_kind": "unresolved",
    "expect_year": null
+  },
+  "non_standard_notes": {
+   "2023/中国（上海）自由贸易试验区临港新片区管理委员会/上海市自由贸易试验区临港新片区管理委员会综合执法大队2023年度决算 (2).pdf": "原件第1页明确为“2023年度国有资产管理情况”，共4页； froze B4 将其误列为标准决算，v1.3 更正为非预决算材料。"
   }
  },
  "parse": [
@@ -969,6 +3763,30 @@
    "file": "2023/上海市文化和旅游局/上海鲁迅纪念馆2023年度决算.pdf",
    "identity_incomplete_max": 0,
    "expect": "表题缺字时资金口径取自认定的表种；基线 12 个三公事实因 fund_scope 为空被挡"
+  },
+  {
+   "id": "华东政法大学2025 原件多处勾稽错误不得降级",
+   "file": "2025/上海市教育委员会/华东政法大学2025年度决算.pdf",
+   "arithmetic_conflicts_max": 0,
+   "expect": "原件明细行确有系统性勾稽错误（已渲染原页逐份核实），不得当作列映射错误降级；基线降级 211 格"
+  },
+  {
+   "id": "龙华烈士陵园2025 原件多处勾稽错误不得降级",
+   "file": "2025/上海市退役军人事务局/上海市龙华烈士陵园（龙华烈士纪念馆、上海市烈士纪念设施保护中心）2025年度决算.pdf",
+   "arithmetic_conflicts_max": 0,
+   "expect": "原件明细行确有系统性勾稽错误（已渲染原页逐份核实），不得当作列映射错误降级；基线降级 147 格"
+  },
+  {
+   "id": "航宇科普中心2023 原件多处勾稽错误不得降级",
+   "file": "2023/上海市经济和信息化委员会/上海航宇科普中心2023年度决算.pdf",
+   "arithmetic_conflicts_max": 0,
+   "expect": "原件明细行确有系统性勾稽错误（已渲染原页逐份核实），不得当作列映射错误降级；基线降级 112 格"
+  },
+  {
+   "id": "上海应用技术大学本级2022 原件多处勾稽错误不得降级",
+   "file": "2022/上海市教育委员会/上海应用技术大学（本级）2022年度决算.pdf",
+   "arithmetic_conflicts_max": 0,
+   "expect": "原件明细行确有系统性勾稽错误（已渲染原页逐份核实），不得当作列映射错误降级；基线降级 60 格"
   }
  ],
  "table_identity": [
@@ -992,6 +3810,18 @@
   }
  ],
  "e2e": [
+  {
+   "id": "驻西宁办事处2025 口径待定时表内检查照常执行",
+   "file": "2025/上海市人民政府合作交流办公室/上海市人民政府驻西宁办事处2025年度决算.pdf",
+   "rules_insufficient_lower_than_baseline": true,
+   "expect": "按规则声明身份维度后，表内勾稽不因汇总口径待定而停止；取数不足规则数低于基线"
+  },
+  {
+   "id": "中小企业发展服务中心2025 口径待定时表内检查照常执行",
+   "file": "2025/上海市经济和信息化委员会/上海市中小企业发展服务中心（上海市中小企业上市促进中心）2025年度决算.pdf",
+   "rules_insufficient_lower_than_baseline": true,
+   "expect": "按规则声明身份维度后，表内勾稽不因汇总口径待定而停止；取数不足规则数低于基线"
+  },
   {
    "id": "规划展示馆2023 表题缺字不得误报缺表",
    "file": "2023/上海市规划和自然资源局/上海城市规划展示馆2023年度决算.pdf",
@@ -1136,6 +3966,129 @@
     }
    ],
    "expect": "识别为非预决算材料，不报九表缺失、页数过少"
+  },
+  {
+   "id": "华东政法大学2025 收入决算表勾稽错误须报出",
+   "file": "2025/上海市教育委员会/华东政法大学2025年度决算.pdf",
+   "must_have": [
+    {
+     "contains_any": [
+      "收入决算表",
+      "87161.66",
+      "87,161.66",
+      "147338.58"
+     ],
+     "severity_in": [
+      "error",
+      "warn",
+      "manual_review"
+     ]
+    }
+   ],
+   "expect": "收入决算表明细行勾稽不平作为问题报出：明确数值的为 error/warn；涉及空白格且 U-5 未批准的，以 manual_review 报出差额与空白格，不得只记取数不足"
+  },
+  {
+   "id": "龙华烈士陵园2025 收入决算表勾稽错误须报出",
+   "file": "2025/上海市退役军人事务局/上海市龙华烈士陵园（龙华烈士纪念馆、上海市烈士纪念设施保护中心）2025年度决算.pdf",
+   "must_have": [
+    {
+     "contains_any": [
+      "收入决算表",
+      "14849.10",
+      "14,849.10",
+      "15675.62"
+     ],
+     "severity_in": [
+      "error",
+      "warn",
+      "manual_review"
+     ]
+    }
+   ],
+   "expect": "收入决算表明细行勾稽不平作为问题报出：明确数值的为 error/warn；涉及空白格且 U-5 未批准的，以 manual_review 报出差额与空白格，不得只记取数不足"
+  },
+  {
+   "id": "航宇科普中心2023 收入决算表勾稽错误须报出",
+   "file": "2023/上海市经济和信息化委员会/上海航宇科普中心2023年度决算.pdf",
+   "must_have": [
+    {
+     "contains_any": [
+      "收入决算表",
+      "2438.14",
+      "2,438.14",
+      "3047.90"
+     ],
+     "severity_in": [
+      "error",
+      "warn",
+      "manual_review"
+     ]
+    }
+   ],
+   "expect": "收入决算表明细行勾稽不平作为问题报出：明确数值的为 error/warn；涉及空白格且 U-5 未批准的，以 manual_review 报出差额与空白格，不得只记取数不足"
+  },
+  {
+   "id": "文旅公共服务和人才服务中心2022 表头缺失（反向用例）",
+   "file": "2022/上海市文化和旅游局/上海市文化旅游公共服务和人才服务中心2022年度决算.pdf",
+   "must_not_have": [
+    {
+     "contains": [
+      "收入决算表"
+     ],
+     "severity_in": [
+      "error"
+     ]
+    }
+   ],
+   "must_have": [
+    {
+     "contains": [
+      "表头"
+     ]
+    }
+   ],
+   "expect": "原件表格本身是平的，第二列表头漏印“财政拨款收入”：有结构证据，可以降级；不得报出错误级勾稽结论；表头缺失作为原件问题报出"
+  },
+  {
+   "id": "上海应用技术大学本级2022 收入决算表勾稽错误须报出",
+   "file": "2022/上海市教育委员会/上海应用技术大学（本级）2022年度决算.pdf",
+   "must_have": [
+    {
+     "contains_any": [
+      "收入决算表",
+      "231.63",
+      "10476.05",
+      "10,476.05",
+      "112552.31"
+     ],
+     "severity_in": [
+      "error",
+      "warn",
+      "manual_review"
+     ]
+    }
+   ],
+   "expect": "收入决算表明细行勾稽不平作为问题报出：明确数值的为 error/warn；涉及空白格且 U-5 未批准的，以 manual_review 报出差额与空白格，不得只记取数不足"
+  },
+  {
+   "id": "扫描件不得报缺表 上海市农业生物基因中心2022年",
+   "file": "2022/上海市农业农村委员会/上海市农业生物基因中心2022年度决算.pdf",
+   "must_not_have": [
+    {
+     "rule_id": "V33-002"
+    }
+   ],
+   "expect": "页面未可靠读取时报告检查未完成，不报“缺失表”"
+  },
+  {
+   "id": "扫描件不得报缺表 上海市农产品质量安全中心2022",
+   "file": "2022/上海市农业农村委员会/上海市农产品质量安全中心2022年度决算.pdf",
+   "must_not_have": [
+    {
+     "rule_id": "V33-002"
+    }
+   ],
+   "expect": "页面未可靠读取时报告检查未完成，不报“缺失表”"
   },
   {
    "id": "对照1 上海市文化旅游市场质量监测和服务中心2025年度",

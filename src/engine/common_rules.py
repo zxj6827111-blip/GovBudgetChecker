@@ -1776,6 +1776,32 @@ class CMM005_ComparativeNarrativeLogic(Rule):
     code, severity = "CMM-005", "warn"
     desc = "同比叙述逻辑异常检查（预/决算通用）"
 
+    def _template_issues(self, page_idx, page_text):
+        """纯原文模板残留不涉及跨年度金额，也不依赖材料汇总口径。"""
+        issues, seen_spans = [], set()
+        flat_text = _compact_text(page_text)
+        for pattern, message in _TEMPLATE_LEFTOVER_PATTERNS:
+            for match in pattern.finditer(page_text):
+                key = (match.start(), match.end(), message)
+                if key in seen_spans:
+                    continue
+                seen_spans.add(key)
+                issues.append(self._issue(message, {"page": page_idx, "pos": match.start()}, "warn",
+                                          evidence_text=_sentence_around(page_text, match.start(), match.end())))
+        for match in _ABNORMAL_DELTA_WORDING_PATTERN.finditer(flat_text):
+            key = (match.start(), match.end(), "wording")
+            if key in seen_spans:
+                continue
+            seen_spans.add(key)
+            issues.append(self._issue(f"疑似模板残留：出现“{match.group(0)}”",
+                                      {"page": page_idx, "pos": match.start()}, "warn",
+                                      evidence_text=_snippet(flat_text, match.start(), match.end())))
+        return issues, seen_spans
+
+    def scope_independent_issues(self, doc):
+        return [issue for page, text in enumerate(_page_texts(doc), 1)
+                for issue in self._template_issues(page, text)[0]]
+
     def apply(self, doc: Document) -> List[Issue]:
         issues: List[Issue] = []
         unresolved_reasons: List[str] = []
@@ -1785,37 +1811,8 @@ class CMM005_ComparativeNarrativeLogic(Rule):
             if not flat_text:
                 continue
 
-            seen_spans: set[Tuple[int, int, str]] = set()
-
-            for pattern, message in _TEMPLATE_LEFTOVER_PATTERNS:
-                for match in pattern.finditer(page_text):
-                    span_key = (match.start(), match.end(), message)
-                    if span_key in seen_spans:
-                        continue
-                    seen_spans.add(span_key)
-                    issues.append(
-                        self._issue(
-                            message,
-                            {"page": page_idx, "pos": match.start()},
-                            "warn",
-                            evidence_text=_sentence_around(page_text, match.start(), match.end()),
-                        )
-                    )
-
-            for match in _ABNORMAL_DELTA_WORDING_PATTERN.finditer(flat_text):
-                span_key = (match.start(), match.end(), "wording")
-                if span_key in seen_spans:
-                    continue
-                seen_spans.add(span_key)
-                phrase = match.group(0)
-                issues.append(
-                    self._issue(
-                        f"疑似模板残留：出现“{phrase}”",
-                        {"page": page_idx, "pos": match.start()},
-                        "warn",
-                        evidence_text=_snippet(flat_text, match.start(), match.end()),
-                    )
-                )
+            template_issues, seen_spans = self._template_issues(page_idx, page_text)
+            issues.extend(template_issues)
 
             for match in _ZERO_INCREASE_PATTERN.finditer(flat_text):
                 amount = _to_float(match.group(2))
@@ -1850,15 +1847,15 @@ class CMM005_ComparativeNarrativeLogic(Rule):
 
 
 _BUDGET_DELTA_PATTERN_TEMPLATE = re.compile(
-    r"(?P<subject>收入|支出)预算[0-9][0-9,]*\.?[0-9]*万元[^。；]{0,120}?比20\d{2}年预算(?P<dir>增加|减少)(?P<amount>[0-9][0-9,]*\.?[0-9]*)万元"
+    r"(?P<subject>收入|支出)预算[0-9][0-9,]*\.?[0-9]*万元(?P<bridge>[^。；]{0,120}?)比(?P<base_year>20\d{2})年预算(?P<dir>增加|减少)(?P<amount>[0-9][0-9,]*\.?[0-9]*)万元"
 )
 _INCOME_EXPENSE_SUMMARY_PATTERN = re.compile(r"财政拨款收入支出(?P<dir>增加|减少)")
 
 
 def _extract_budget_delta(flat_text: str, subject: str) -> Optional[Dict[str, Any]]:
-    for match in _BUDGET_DELTA_PATTERN_TEMPLATE.finditer(flat_text):
-        if match.group("subject") != subject:
-            continue
+    matches = [match for match in _BUDGET_DELTA_PATTERN_TEMPLATE.finditer(flat_text)
+               if match.group("subject") == subject]
+    for match in matches:
         amount = _to_float(match.group("amount"))
         if amount is None:
             continue
@@ -1867,7 +1864,67 @@ def _extract_budget_delta(flat_text: str, subject: str) -> Optional[Dict[str, An
             "amount": amount,
             "start": match.start(),
             "end": match.end(),
+            "base_year": int(match.group("base_year")),
+            "bridge": match.group("bridge"),
+            "candidate_count": len(matches),
         }
+    return None
+
+
+_CMM006_OWNER_RE = re.compile(r"[一-鿿]{1,40}?(?:人民政府|委员会|办事处|办公室|管理所|研究院|研究所|中心|学校|大学|医院|总队|支队|协会|局|厅|馆|站)")
+
+
+def _budget_delta_context_guard(doc, text, income, expense, summary=None):
+    """同页不代表同一主体或期间；无法证明可比时留待补核，不报告方向矛盾。"""
+    from .native_narrative_checks import _Text, _metadata
+
+    year, owner, _ = _metadata(doc, _Text.from_pages(_page_texts(doc)))
+    if re.search(r"结转|结余|动用.*(?:基金|资金)|使用.*(?:基金|资金)", text):
+        return "原文涉及结转结余或其他资金来源，收支增减方向可以不同，不能直接认定矛盾"
+    frames = []
+    entries = [income, expense]
+    if summary is not None:
+        entries.append({"start": summary.start(), "end": summary.end(),
+                        "base_year": income["base_year"], "candidate_count": 1})
+    for entry in entries:
+        is_summary = summary is not None and entry is entries[-1]
+        # 紧接唯一且已证明同口径的收支声明时，汇总句可以承接该上下文；
+        # 隔着其他句子/条目时，不能靠“同页”继承主体或期间。
+        inherit_pair = (is_summary and len(frames) == 2 and frames[0] == frames[1]
+                        and summary.start() >= max(income['end'], expense['end'])
+                        and re.fullmatch(r'[。；，,：:]*', text[max(income['end'], expense['end']):summary.start()]) is not None)
+        if entry["candidate_count"] != 1:
+            return "同页存在多个收入或支出同比声明，无法唯一绑定；不按首个金额猜配"
+        if re.search(r"其中|分别|另有|\d.*(?:元|%)", entry.get("bridge", "")):
+            return "本期金额与同比之间出现分项或其他金额，不能跨业务绑定"
+        begin = max(text.rfind(mark, 0, entry["start"]) for mark in "。；！？") + 1
+        prefix = text[begin:entry["start"]]
+        named_owners = set(_CMM006_OWNER_RE.findall(prefix))
+        if owner and owner in prefix:
+            # 去掉已证实本主体后仍有机构名，不能把它当成同一主体。
+            named_owners = set(_CMM006_OWNER_RE.findall(prefix.replace(owner, "")))
+            if named_owners:
+                return "同比声明包含其他或未确认主体，不能跨主体比较"
+            named_owners = {owner}
+        elif named_owners and owner:
+            return "同比声明属于其他或未确认主体，不能跨主体比较"
+        if len(named_owners) > 1:
+            return "同比声明的主体不唯一，不能跨主体比较"
+        current_owner = next(iter(named_owners), owner or (frames[0][0] if inherit_pair else "本材料未另行限定的总体"))
+        years = {int(value) for value in re.findall(r"(?<!\d)(20\d{2})(?=年度|年)", prefix)}
+        if len(years) > 1:
+            return "同比本期年度存在多个候选，期间无法唯一绑定"
+        current_year = next(iter(years), year or (frames[0][1] if inherit_pair else None))
+        if current_year is None or entry["base_year"] != current_year - 1:
+            return "同比本期年度或上年基期未能确认，不能跨期间比较"
+        scope_text = prefix + (summary.group() if is_summary else "")
+        scopes = {scope for scope in ("一般公共预算", "政府性基金", "国有资本经营") if scope in scope_text}
+        if len(scopes) > 1:
+            return "同比声明包含多个资金范围，不能跨资金范围比较"
+        scope = next(iter(scopes), "财政拨款" if "财政拨款" in scope_text else "未另行限定的总体预算")
+        frames.append((current_owner, current_year, entry["base_year"], scope))
+    if len(set(frames)) != 1:
+        return "收入、支出或汇总声明的主体、年度、基期或资金范围不同，无法确认同口径比较"
     return None
 
 
@@ -1877,6 +1934,7 @@ class CMM006_IncomeExpenseTrendConsistency(Rule):
 
     def apply(self, doc: Document) -> List[Issue]:
         issues: List[Issue] = []
+        unresolved: List[str] = []
 
         for page_idx, page_text in enumerate(_page_texts(doc), start=1):
             flat_text = _compact_text(page_text)
@@ -1885,7 +1943,14 @@ class CMM006_IncomeExpenseTrendConsistency(Rule):
 
             income_delta = _extract_budget_delta(flat_text, "收入")
             expense_delta = _extract_budget_delta(flat_text, "支出")
-            summary_match = _INCOME_EXPENSE_SUMMARY_PATTERN.search(flat_text)
+            summary_matches = list(_INCOME_EXPENSE_SUMMARY_PATTERN.finditer(flat_text))
+            summary_match = summary_matches[0] if summary_matches else None
+
+            if income_delta and expense_delta:
+                reason = _budget_delta_context_guard(doc, flat_text, income_delta, expense_delta)
+                if reason:
+                    unresolved.append(f"第{page_idx}页：{reason}")
+                    continue
 
             if income_delta and expense_delta and income_delta["direction"] != expense_delta["direction"]:
                 start = min(int(income_delta["start"]), int(expense_delta["start"]))
@@ -1911,6 +1976,13 @@ class CMM006_IncomeExpenseTrendConsistency(Rule):
                 )
 
             if summary_match and income_delta and expense_delta:
+                if len(summary_matches) > 1:
+                    unresolved.append(f"第{page_idx}页汇总说明：存在多个收支方向汇总声明，不能按首个声明认定检查完成")
+                    continue
+                reason = _budget_delta_context_guard(doc, flat_text, income_delta, expense_delta, summary_match)
+                if reason:
+                    unresolved.append(f"第{page_idx}页汇总说明：{reason}")
+                    continue
                 summary_direction = summary_match.group("dir")
                 if (
                     summary_direction != str(income_delta["direction"])
@@ -1934,6 +2006,9 @@ class CMM006_IncomeExpenseTrendConsistency(Rule):
                         )
                     )
 
+        if unresolved:
+            raise RuleDeferred(self.code, "；".join(dict.fromkeys(unresolved)), partial_issues=issues,
+                               unresolved_reasons=list(dict.fromkeys(unresolved)), reason_codes=["comparison_identity_unresolved"])
         return issues
 
 
@@ -2797,6 +2872,7 @@ from .checklist_identity_rules import (  # noqa: E402
     CMM017_OrgNameConsistency,
     CMM018_ScopeTerminology,
     CMM019_CoverElements,
+    CMM027_TemplatePositionScope,
 )
 from .checklist_content_rules import (  # noqa: E402
     CMM020_ShareSum,
@@ -2821,6 +2897,7 @@ ALL_COMMON_RULES.extend([
     CMM017_OrgNameConsistency(),
     CMM018_ScopeTerminology(),
     CMM019_CoverElements(),
+    CMM027_TemplatePositionScope(),
     CMM020_ShareSum(),
     CMM021_TableTitleNormative(),
     CMM022_SubjectCodeFormat(),

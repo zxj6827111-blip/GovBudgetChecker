@@ -157,7 +157,8 @@ def test_public_pipeline_keeps_unsafe_blank_continuation_unresolved(monkeypatch,
 def test_spaced_marker_normalization_does_not_rewrite_an_arbitrary_subject_name():
     from src.services.fiscal_fact_materializer import FiscalFactMaterializer
     result = FiscalFactMaterializer(None)._extract_classification([{'raw_text': '综合 计划工作'}])
-    assert result == {'classification_code': None, 'classification_name': '综合 计划工作'}
+    assert result == {'classification_code': None, 'classification_name': '综合 计划工作',
+                      'classification_status': 'name_only'}
 
 
 @pytest.mark.parametrize('filename', ['independent_blank_total.pdf', 'independent_blank_total_offset.pdf'])

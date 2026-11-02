@@ -132,6 +132,67 @@ def review_report_counts(report: Mapping[str, Any], ignored_issue_ids=()) -> Dic
             "formal_issue_total": sum(is_formal_finding(item) for item in unique_formal_sources)}
 
 
+_WORKBENCH_FORMAL_SEVERITIES = {"critical", "fatal", "error", "high", "warn", "warning", "medium", "low"}
+
+
+def review_queue_counts(report: Mapping[str, Any], ignored_issue_ids=()) -> Dict[str, int]:
+    """Counts for the review workbench's two queues, so the job list shows the same numbers.
+
+    必须处理 holds formal findings (``is_formal_finding``, the completion-gate rule);
+    参考 holds every other visible row, split like the workbench's 结果类型 filter into
+    待核实 / 证据不足 / 提示 / 复核事项. Rows are taken and de-duplicated in the same
+    order as the frontend ``toUiProblems`` (issues, tips, then manual-review records).
+    """
+    from src.services.evidence_guard import EVIDENCE_STATUS_DEGRADED
+
+    ignored = {str(value) for value in ignored_issue_ids}
+    seen: set[str] = set()
+    counts = {"required": 0, "candidate": 0, "degraded": 0, "tip": 0, "notice": 0}
+
+    def take(identity: str) -> bool:
+        if identity and (identity in ignored or identity in seen):
+            return False
+        if identity:
+            seen.add(identity)
+        return True
+
+    def degraded(item: Mapping[str, Any]) -> bool:
+        return str(item.get("evidence_status") or "").strip() == EVIDENCE_STATUS_DEGRADED
+
+    for item in [*_mapping_list(report.get("issues")), *_mapping_list(report.get("tips"))]:
+        if not take(str(item.get("id") or "")):
+            continue
+        review_kind = str(item.get("review_kind") or "")
+        # 前端 normalizeSeverityCode 把未知或空级别归为提示，这里同样处理，
+        # 否则同一行在列表算“必须处理”、在工作台算“提示”。
+        severity = str(item.get("severity") or "").strip().lower()
+        if degraded(item):
+            counts["degraded"] += 1
+        elif severity in _WORKBENCH_FORMAL_SEVERITIES:
+            counts["required"] += 1
+        elif review_kind == "review_notice" or str(item.get("source") or "") == "structured_ingest":
+            counts["notice"] += 1
+        elif review_kind != "manual_review" and severity != "manual_review":
+            counts["tip"] += 1
+        else:
+            counts["candidate"] += 1
+    for index, item in enumerate(_mapping_list(report.get("manual_review"))):
+        record_type = str(item.get("record_type") or "review_reason")
+        if record_type == "unfinished_check":
+            continue
+        identity = str(item.get("id") or f"{record_type}:{item.get('code') or item.get('obligation_id') or index}")
+        if not take(identity):
+            continue
+        if record_type in {"finding_review_candidate", "ai_candidate"}:
+            counts["degraded" if degraded(_mapping(item.get("finding"))) else "candidate"] += 1
+        else:
+            counts["notice"] += 1
+    reference = counts["candidate"] + counts["degraded"] + counts["tip"] + counts["notice"]
+    return {"queue_required_total": counts["required"], "queue_reference_total": reference,
+            "queue_candidate_total": counts["candidate"], "queue_degraded_total": counts["degraded"],
+            "queue_tip_total": counts["tip"], "queue_notice_total": counts["notice"]}
+
+
 def _is_confirmed_material_finding(item: Mapping[str, Any]) -> bool:
     """Only count non-informational findings with a verified source and full binding."""
     severity = str(item.get("severity") or "").strip().lower()
@@ -203,6 +264,12 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
 
     coverage = payload.get("check_coverage") or meta.get("obligation_coverage")
     coverage_dict = _mapping(coverage)
+    merged = _mapping(result.get("merged"))
+    candidate_ids = {
+        str(item).strip()
+        for item in merged.get("candidate_issue_ids", [])
+        if str(item or "").strip()
+    } if isinstance(merged.get("candidate_issue_ids"), list) else set()
     manual_review = [
         {"record_type": "review_reason", **item}
         for item in _mapping_list(payload.get("review_reasons"))
@@ -212,6 +279,10 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
         if severity == "info" or _is_rounding_hint(item) or _is_confirmed_material_finding(item):
             continue
         issue_id = str(item.get("id") or f"finding-candidate:{len(manual_review) + 1}")
+        # AI-only 候选统一由下方 ai_candidate 记录承载；这里再生成
+        # finding_review_candidate 会让同一候选在页面上重复出现两次。
+        if str(item.get("source") or "") == "ai" and issue_id in candidate_ids:
+            continue
         manual_review.append({
             "record_type": "finding_review_candidate",
             "id": issue_id,
@@ -221,13 +292,7 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
             "suggestion": item.get("suggestion") or "请核对原始 PDF 对应页后再确认。",
             "finding": item,
         })
-    merged = _mapping(result.get("merged"))
     merge_conflicts = _mapping_list(merged.get("conflicts"))
-    candidate_ids = {
-        str(item).strip()
-        for item in merged.get("candidate_issue_ids", [])
-        if str(item or "").strip()
-    } if isinstance(merged.get("candidate_issue_ids"), list) else set()
     source_by_id = {
         str(item.get("id") or ""): item
         for key in ("ai_findings", "rule_findings")
@@ -347,6 +412,9 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
             'fact_snapshot': meta.get('fact_snapshot') or (payload.get('structured_ingest') or {}).get('fact_snapshot'),
             "rule_registry_version": meta.get("rule_registry_version"),
             "rule_policy_version": meta.get("rule_policy_version"),
+            **({'material_dimensions':{'writing':meta.get('document_scope_resolution'),
+                 'amount':meta.get('document_scope_confirmation'),'binding':meta.get('binding')}}
+               if meta.get('document_scope_resolution') or meta.get('document_scope_confirmation') else {}),
         },
         conclusion={
             "status": payload.get("status"),

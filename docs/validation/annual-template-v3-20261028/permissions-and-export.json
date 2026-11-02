@@ -1,0 +1,77 @@
+{
+  "permissions": [
+    {
+      "role": "editor",
+      "method": "GET",
+      "path": "/api/admin/templates",
+      "status": 403
+    },
+    {
+      "role": "editor",
+      "method": "POST",
+      "path": "/api/admin/templates/bindings",
+      "status": 403
+    },
+    {
+      "role": "editor",
+      "method": "GET",
+      "path": "/api/jobs/68d4d3ac899f30839ae9c8f7f7b3f29f/material-dimensions",
+      "status": 200
+    },
+    {
+      "role": "outside",
+      "method": "GET",
+      "path": "/api/admin/templates",
+      "status": 403
+    },
+    {
+      "role": "outside",
+      "method": "POST",
+      "path": "/api/admin/templates/bindings",
+      "status": 403
+    },
+    {
+      "role": "outside",
+      "method": "GET",
+      "path": "/api/jobs/68d4d3ac899f30839ae9c8f7f7b3f29f/material-dimensions",
+      "status": 403
+    },
+    {
+      "role": "outside",
+      "operation": "dimension-write",
+      "status": 403
+    },
+    {
+      "role": "reader",
+      "method": "GET",
+      "path": "/api/admin/templates",
+      "status": 403
+    },
+    {
+      "role": "reader",
+      "method": "POST",
+      "path": "/api/admin/templates/bindings",
+      "status": 403
+    },
+    {
+      "role": "reader",
+      "method": "GET",
+      "path": "/api/jobs/68d4d3ac899f30839ae9c8f7f7b3f29f/material-dimensions",
+      "status": 200
+    },
+    {
+      "role": "reader",
+      "operation": "dimension-write",
+      "status": 403
+    }
+  ],
+  "history_status": 200,
+  "export_sha256": "a9a8a00676abb9ab48f90c4c9e70bf3c7423717b5ecabd22391a5f32d94fdf95",
+  "export_bytes": 313907,
+  "initial_readback": {
+    "writing": "unit",
+    "revision": 1,
+    "dispatch": "applied",
+    "amount": null
+  }
+}

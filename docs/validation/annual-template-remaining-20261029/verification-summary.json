@@ -1,0 +1,87 @@
+{
+  "base_commit": "a6b1428ea6dd0f2febbb1277d22c7129d1a0bc66",
+  "baseline_for_corpus_diff": "b557e8b71ef7eaddead3069d3f177dca5ede9342",
+  "algorithm": "material-writing-v3.6",
+  "committed": false,
+  "source_sha256": {
+    "api/main.py": "da3564dcdcd05fd66522c44f435341f05e810bfc882245b6404df56f44429cd0",
+    "api/routes/jobs.py": "31bd6d21990cd1edbfec9e276abce5c6508f2a95f9ab41c18f92d91cb7e6b723",
+    "app/app/components/review-workbench/MaterialDimensionsPanel.tsx": "fd9eb1eced89abb569f28565fbd7fd12becb16357c7aa787bf9899450e59c221",
+    "app/app/components/review-workbench/materialDimensionLabels.ts": "c20940baa27296a8217b431fe5385af51079084060dd4d59d635b3b0b7fecd9b",
+    "app/app/components/settings/AnnualTemplatePanel.tsx": "b262725137609caeafda2387742b31b317698a4e4082b11204c5cbc4bfd1517c",
+    "app/package.json": "3691da37c0b2229e49e859b8f7b5ff3329fde07e2f1e348036332d0ba6995599",
+    "app/tests/materialDimensionLabels.test.ts": "f369df29c7d5580e9bcd1fdc41e6dc82bfadcd4a5c75791c6b18c7e31b662ab0",
+    "docs/annual-template-management-implementation.md": "dd7e9ef16ec5451aa0f57905ec7c53d8a1ffc6bfd763e08dffb7e76d696320a2",
+    "docs/annual-template-remaining-remediation-20261029.md": "e577fe4f4bd5fc4162fbe1e1026d9302d7fe7edd524de8d34ea5d91a1d94b46b",
+    "src/engine/checklist_content_rules.py": "b8c29834ddb7e1c5eec70406beaaff2ed41aabad48e3a42fe7c768a0889980ca",
+    "src/engine/checklist_identity_rules.py": "415e624725575e8afa999a9375eba6a7e60e1e3a8d43f5591001cb90221adc87",
+    "src/engine/checklist_text_rules.py": "8af4455330a620e69d9cd100ce8967c7419249e3e58bcacf7bad638f0bc600ca",
+    "src/services/annual_templates.py": "82111c22d91b0b2c4f91afbb88ba7c188165eb5134755383b7967678ef1aa2f5",
+    "src/services/document_scope.py": "dbeeb338f6d3f2e076e873e59e2a77017c06da64236c2c6621014f0d0c9dcc60",
+    "src/services/fiscal_source_scope.py": "4416050bd4c498725968c6a834f5ef27bc0ed0738301310e56a776a4a19b23b9",
+    "src/services/material_writing.py": "1488c233fa0020a2bcacf4df3297b0acf577fc8ddfdcabb6b437c9a02624aeb2",
+    "tests/remediation/test_intake_2022_layout.py": "dfacd0d8960226a614b04bf441c321b3a7b60f61932f2bbabcc7c01f50683579",
+    "tests/test_amount_dependent_rules.py": "ff6c9b9c49dabf4d0a121df4a67d10dfe72bc401c6b2935bfe59f2b8ae560885",
+    "tests/test_budget_template_scope.py": "3d8b1ccee4576f5836b819ec3b527cfa024ce12d0660170735c1e8514acc23d9",
+    "tests/test_cover_independent_name.py": "c91ca61702749da4f03c3dcdf3c99f15b59105a30833a0b5b573ad358e8a2391",
+    "tests/test_template_anchor_checks.py": "a95203ff3e86a984539f5016bf985a0530d7cbd606e2d0761c2ccb7938ede779",
+    "tests/test_template_compatibility_proof.py": "395b6165535ffdde10edeb9ae998149e60134c586daac00b032071421c51706c",
+    "tests/test_template_earlier_year_reuse.py": "1183f24ad311d59ff378e62100f55c704467bd37d923b61270f16f25e96aa3cc"
+  },
+  "python_full": {
+    "passed": 4909,
+    "skipped": 32,
+    "warnings": 21,
+    "seconds": 324.92,
+    "database": "fresh test database on 127.0.0.1:25462 (isolated instance)",
+    "log": "python-full.log"
+  },
+  "python_focused": {
+    "passed": 362,
+    "skipped": 5,
+    "note": "5 skips need a test DB or XLS opt-in and are executed in python_full"
+  },
+  "red_before_fix": {
+    "compat_tests_on_a6b1428e": {
+      "failed": 44,
+      "passed": 4,
+      "log": "compat-red-on-a6b1428e.log"
+    },
+    "new_tests_on_pre_fix_code": {
+      "failed": 8,
+      "collection_errors": 1,
+      "passed": 27,
+      "log": "red-tests.log"
+    },
+    "earlier_year_reuse": {
+      "failed": 1,
+      "log": "earlier-year-reuse-red.log",
+      "reason": "旧 bind() 拒绝较早年度的“已核对一致”复用"
+    }
+  },
+  "frontend": {
+    "typescript": "passed",
+    "unit": "passed (includes test:material-dimensions)",
+    "build": "passed with pre-existing useEffect dependency warning"
+  },
+  "corpus_diff": {
+    "file": "corpus-diff.json",
+    "years": [
+      2022,
+      2023,
+      2024,
+      2025
+    ],
+    "template_capability": "off",
+    "scope": "rule-level replay on native text layer; not full pipeline, not truth accuracy"
+  },
+  "browser_validation": "not run in this round",
+  "independent_acceptance": false,
+  "production_deployed": false,
+  "real_templates_enabled": false,
+  "real_material_decisions_submitted": false,
+  "earlier_year_reuse_postgres": {
+    "test": "tests/test_template_earlier_year_reuse.py",
+    "passed": true
+  }
+}

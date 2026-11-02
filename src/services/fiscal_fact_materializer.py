@@ -47,7 +47,7 @@ def infer_fund_scope(table_code: str, title: str = "") -> Optional[str]:
         return "general_public_budget"
     if table_code.startswith('FIN_04'):
         return 'fiscal_appropriation'
-    if table_code.startswith('FIN_07')and '财政拨款' in title:
+    if table_code.startswith('FIN_07'):
         return 'fiscal_appropriation'
     if table_code.startswith(('FIN_01','FIN_02','FIN_03')):
         return 'all_funds'
@@ -188,6 +188,8 @@ class FiscalFactMaterializer:
         cells: Sequence[asyncpg.Record | Dict[str, object]],
         mappings: Sequence[asyncpg.Record | Dict[str, object]],
         table_confidence: float,
+        *,
+        code_columns: Optional[Sequence[int]] = None,
     ) -> List[MaterializedFact]:
         if table_code not in NINE_TABLE_RULES:
             return []
@@ -199,6 +201,7 @@ class FiscalFactMaterializer:
         if not mapping_by_col:
             return []
         first_measure_col = min(mapping_by_col)
+        code_column_set = {int(value) for value in code_columns or ()}
 
         rows: Dict[int, List[Dict[str, object]]] = {}
         for cell in cells:
@@ -240,7 +243,17 @@ class FiscalFactMaterializer:
                 mapping = mapping_by_col[col_idx]
                 local_labels = mapping.get("source_label_cols")
                 bound_labels = [cell for cell in ordered if int(cell["col_idx"]) in local_labels] if local_labels else label_cells
-                classification = self._extract_classification(bound_labels)
+                classification = self._extract_classification(bound_labels, code_column_set)
+                if classification is None:
+                    # 合计行常把“合计/总计”写在编码列、名称列留空；只在标签明确时回退。
+                    total_labels = [
+                        cell for cell in ordered
+                        if int(cell["col_idx"]) < first_measure_col
+                        and str(cell.get("raw_text") or "").strip() in {"合计", "总计"}
+                    ]
+                    classification = self._extract_classification(total_labels, code_column_set)
+                    if classification is not None:
+                        bound_labels = total_labels
                 if classification is None:
                     if table_code == "FIN_07_three_public" and first_measure_col == 0:
                         classification = {"classification_code": "total", "classification_name": "合计"}
@@ -289,6 +302,9 @@ class FiscalFactMaterializer:
                             "source_header": mapping.get("source_col_name"),
                             "unit_hint": self._pick_unit_hint(ordered),
                             "source_label_cols": [int(cell['col_idx']) for cell in bound_labels],
+                            "classification_status": classification.get("classification_status"),
+                            **({"classification_conflict": classification["classification_conflict"]}
+                               if classification.get("classification_conflict") else {}),
                         },
                         source_col_idx=col_idx,
                     )
@@ -317,7 +333,9 @@ class FiscalFactMaterializer:
     def _extract_classification(
         self,
         label_cells: Iterable[Dict[str, object]],
+        code_columns: Optional[set] = None,
     ) -> Optional[Dict[str, Optional[str]]]:
+        label_cells = list(label_cells)
         texts = [
             str(cell.get("raw_text") or "").strip()
             for cell in label_cells
@@ -326,37 +344,87 @@ class FiscalFactMaterializer:
         if not texts:
             return None
 
-        # 只归一完整的合计/总计标记，原格及其来源原文保持不变。
-        # 不能把正文科目名称中任意出现的“合计”当作这条特殊标记。
-        for text in texts:
-            total = re.sub(r"\s+", "", text)
-            if total in {"合计", "总计"}:
-                return {"classification_code": "total", "classification_name": total}
+        code_columns = {int(value) for value in code_columns or ()}
+        code_parts: List[str] = []
+        name_texts: List[str] = []
+        total_exact: Optional[str] = None
+        total_markers: List[str] = []
+        fallback_code_parts: List[str] = []
+        for cell in label_cells:
+            text = str(cell.get("raw_text") or "").strip()
+            if not text:
+                continue
+            compact = re.sub(r"\s+", "", text)
+            col = int(cell.get("col_idx") or 0)
+            is_code_column = col in code_columns
+            if compact in {"合计", "总计"}:
+                total_exact = total_exact or compact
+                total_markers.append(text)
+                continue
+            if "合计" in text or "总计" in text:
+                total_markers.append(text)
+                name_texts.append(text)
+                continue
+            if compact.isdigit():
+                if is_code_column:
+                    code_parts.append(compact)
+                elif not code_columns:
+                    # 旧调用没有编码列信息，只能按“纯数字标签格”兜底。
+                    fallback_code_parts.append(compact)
+                else:
+                    # 已知列角色时，非编码列里的数字不能当编码（可能是宽度漂移
+                    # 后的金额/合计值）；保留为名称证据，由身份状态转人工。
+                    name_texts.append(text)
+                continue
+            name_texts.append(text)
 
-        if any("合计" in text or "总计" in text for text in texts):
+        # 编码列优先；没有编码列信息时沿用旧口径（任意纯数字标签格）。
+        code = "".join(code_parts) if code_parts else "".join(fallback_code_parts)
+        code_format_ok = bool(code and re.fullmatch(r"\d{3}(?:\d{2}){0,2}", code))
+        name = " ".join(name_texts).strip()
+
+        if code and (total_exact or total_markers):
+            # 行身份硬冲突：同一行既有有效编码，又有（完整或嵌入名称的）合计标记。
+            # 保留编码候选与原文，交由准入层标 ambiguous；不得当成合法总计。
+            conflict_detail: Dict[str, Any] = {
+                "code_candidates": [part for part in (code_parts or fallback_code_parts)],
+                "total_markers": total_markers,
+                "label_cells": [
+                    {"col_idx": int(cell.get("col_idx") or 0),
+                     "raw_text": str(cell.get("raw_text") or "").strip()}
+                    for cell in label_cells if str(cell.get("raw_text") or "").strip()
+                ],
+            }
+            classification: Dict[str, Any] = {
+                "classification_code": code,
+                "classification_name": name or code,
+                "classification_status": "code_total_conflict",
+                "classification_conflict": conflict_detail,
+            }
+            return classification
+        if total_exact and not code:
             return {
                 "classification_code": "total",
-                "classification_name": next(
-                    text for text in texts if "合计" in text or "总计" in text
-                ),
+                "classification_name": total_exact,
+                "classification_status": "total_marker",
             }
-
-        # 窄编码列里的 7 位编码常在格内折行（"20700\n00"），折行不属于编码本身。
-        compacts = [re.sub(r"\s+", "", text) for text in texts]
-        code_parts = [compact for compact in compacts if compact.isdigit()]
-        text_parts = [text for text, compact in zip(texts, compacts, strict=False) if not compact.isdigit()]
-        if code_parts:
-            code = "".join(code_parts)
-            name = " ".join(text_parts).strip() or code
+        if total_markers and not code:
+            # 人员经费合计 / 公用经费合计 等合法结构合计：保留原名称与既有总计角色。
+            return {
+                "classification_code": "total",
+                "classification_name": total_markers[0],
+                "classification_status": "structural_total",
+            }
+        if code:
             return {
                 "classification_code": code,
-                "classification_name": name,
+                "classification_name": name or code,
+                "classification_status": "code_bound" if code_format_ok else "code_format_unverified",
             }
-
-        name = " ".join(texts).strip()
         return {
             "classification_code": None,
             "classification_name": name,
+            "classification_status": "name_only",
         }
 
     def _infer_hierarchy(
@@ -523,11 +591,14 @@ class FiscalFactMaterializer:
             return []
         from src.engine.fiscal_lexeme import amount_in_wan
 
+        from src.services.fiscal_column_identity import code_dimension_columns
+        code_columns = sorted(code_dimension_columns(table))
         legacy_facts = self.build_facts_for_table(
             table_code=table.table_code,
             cells=[dataclasses.asdict(cell) for cell in table.cells],
             mappings=[dict(mapping) for mapping in mappings],
             table_confidence=table.confidence,
+            code_columns=code_columns,
         )
         if not legacy_facts:
             return []
@@ -535,7 +606,6 @@ class FiscalFactMaterializer:
         rule = NINE_TABLE_RULES[table.table_code]
         row_widths = {len(row) for row in table.rows if any(str(cell or "").strip() for cell in row)}
         column_identity_safe = len(row_widths) <= 1
-        from src.services.fiscal_column_identity import code_dimension_columns
         code_columns = code_dimension_columns(table)
 
         # 行×列→单元格索引：证据必须按物化时的来源列精确绑定（AC-08），
@@ -554,6 +624,12 @@ class FiscalFactMaterializer:
                 (legacy.extra_dims or{}).get('source_header'))
             row_cells = cells_by_row.get(legacy.row_order, [])
             source_label_cols = (legacy.extra_dims or {}).get('source_label_cols', [])
+            classification_status = str((legacy.extra_dims or {}).get('classification_status') or '')
+            identity_conflict = classification_status == 'code_total_conflict'
+            raw_conflict = (legacy.extra_dims or {}).get('classification_conflict') or {}
+            classification_conflict: Dict[str, Any] = (
+                dict(raw_conflict) if isinstance(raw_conflict, Mapping) else {}
+            )
             missing_subject_code = (bool(code_columns.intersection(source_label_cols))
                                     and not legacy.classification_code)
             measure_cell = None
@@ -575,6 +651,8 @@ class FiscalFactMaterializer:
                 if measure_cell is not None and str(measure_cell.raw_text or "").strip()
                 else None
             )
+            from src.engine.fiscal_lexeme import lex_numeric
+            literal_invalid = bool(raw_value and lex_numeric(raw_value).kind == "invalid")
             unit = None
             normalized = None
             if measure_cell is not None:
@@ -617,6 +695,9 @@ class FiscalFactMaterializer:
                 and not native_conflict and bool(raw_value)
                 and normalize_text(''.join(str(p.get('text') or '') for p in native_sources)) == normalize_text(raw_value)
                 ) or (is_manual_source and bool(raw_value))
+            if literal_invalid:
+                normalized = None
+                amount_usable = False
             native_evidence_qualified = (native_literal_bound and column_identity_safe and not missing_subject_code
                 and table.confidence >= .8 and amount_usable
                 and bool(legacy.classification_code or legacy.classification_name)
@@ -682,10 +763,11 @@ class FiscalFactMaterializer:
                     instance_uid=instance_uid,
                     row_order=legacy.row_order,
                     recognition_status=(
-                        "ambiguous" if native_conflict or fund_identity_conflict else "low_confidence"
+                        "ambiguous" if native_conflict or fund_identity_conflict or identity_conflict else "low_confidence"
                         if table.confidence < 0.8 or (legacy.parse_confidence < 0.8 and not native_evidence_qualified)
                         or not column_identity_safe
                         or missing_subject_code
+                        or classification_status == 'code_format_unverified'
                         or not amount_usable
                         or (is_ocr_source and not ocr_qualified)
                         else "unverified"
@@ -701,12 +783,24 @@ class FiscalFactMaterializer:
                         "source_table_title": table.title,
                         "amount_binding_status": "normalized" if amount_usable else "unresolved",
                         "column_identity_status": "bound" if column_identity_safe else "cross_page_width_drift",
-                        "row_identity_status": "missing_subject_code" if missing_subject_code else "bound",
+                        "row_identity_status": (
+                            "code_total_conflict" if identity_conflict
+                            else "missing_subject_code" if missing_subject_code else "bound"
+                        ),
+                        "classification_status": classification_status or None,
+                        **({"row_identity_conflict": {
+                            "status": "code_total_conflict",
+                            "reason": "编码与合计标记同时出现在同一行的标签列，来源证据未消除冲突",
+                            **classification_conflict,
+                        }} if identity_conflict else {}),
                         'fund_scope_conflict':fund_identity_conflict,
                         "qualification_evidence": {
                             "literal": "source_bound" if native_literal_bound else "candidate",
                             "structure": "column_bound" if column_identity_safe else "ambiguous",
-                            "identity": "bound" if not missing_subject_code else "missing_code",
+                            "identity": (
+                                "conflict" if identity_conflict
+                                else "bound" if not missing_subject_code else "missing_code"
+                            ),
                             "native_evidence_qualified": bool(native_evidence_qualified),
                             "source_conflict": native_conflict,
                             "raw_cell_score": measure_cell.confidence if measure_cell is not None else None,

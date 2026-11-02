@@ -48,6 +48,47 @@ def test_import_fails_when_parent_not_found(tmp_path: Path, monkeypatch):
     assert any("父级未找到" in msg for msg in result.errors)
 
 
+def test_import_rejects_same_entity_written_with_different_benji_forms(tmp_path: Path, monkeypatch):
+    _patch_storage_paths(tmp_path, monkeypatch)
+    storage = org_storage_module.OrganizationStorage()
+
+    rows = [
+        {"department_name": "上海市普陀区民政局", "unit_name": "上海市普陀区民政局本级"},
+        {"department_name": "上海市普陀区民政局", "unit_name": "上海市普陀区民政局（本级）"},
+    ]
+    result = storage.import_from_list(rows, clear_existing=True)
+
+    assert result.success is False
+    assert result.imported == 0
+    assert any("重复组织" in msg for msg in result.errors)
+
+
+def test_add_rejects_existing_org_with_equivalent_identity(tmp_path: Path, monkeypatch):
+    _patch_storage_paths(tmp_path, monkeypatch)
+    storage = org_storage_module.OrganizationStorage()
+    storage.add(
+        org_storage_module.Organization(
+            id="dept-1", name="上海市水务局", level="department", parent_id=None
+        )
+    )
+    storage.add(
+        org_storage_module.Organization(
+            id="unit-1", name="上海市水务局（本级）", level="unit", parent_id="dept-1"
+        )
+    )
+
+    try:
+        storage.add(
+            org_storage_module.Organization(
+                id="unit-2", name="上海市水务局本级", level="unit", parent_id="dept-1"
+            )
+        )
+    except ValueError as exc:
+        assert "重复组织" in str(exc)
+    else:
+        raise AssertionError("同一主体的另一种写法不能被重复写入")
+
+
 def test_storage_loads_utf8_sig_json(tmp_path: Path, monkeypatch):
     _patch_storage_paths(tmp_path, monkeypatch)
     org_storage_module.ORG_FILE.write_text(

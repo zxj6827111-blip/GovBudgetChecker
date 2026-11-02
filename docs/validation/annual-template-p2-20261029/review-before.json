@@ -1,0 +1,53 @@
+{
+  "reproduced": true,
+  "priority": "P2",
+  "file": "/Users/zhangxingjin/.codex/worktrees/annual-template-management/GovBudgetChecker/src/services/template_anchor_checks.py",
+  "line": 25,
+  "reason": "标题最多拼接三行，四行完整标题和对应有效表实例仍被确定性报缺失。",
+  "cases": [
+    {
+      "case": "three_lines",
+      "title": "上海市普陀区某某事业发展中心\n2024年度一般公共预算\n财政拨款基本支出决算表",
+      "expected_title": "上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表",
+      "text_equal_after_removing_linebreaks": true,
+      "qualified_matching_instances": [
+        {
+          "instance_uid": "source-instance",
+          "fragment_uid": "source-fragment",
+          "page": 2,
+          "bbox": [
+            20,
+            50,
+            400,
+            200
+          ]
+        }
+      ],
+      "issues": [],
+      "pending": []
+    },
+    {
+      "case": "four_lines",
+      "title": "上海市普陀区某某事业发展中心\n2024年度一般公共预算\n财政拨款基本支出\n决算表",
+      "expected_title": "上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表",
+      "text_equal_after_removing_linebreaks": true,
+      "qualified_matching_instances": [
+        {
+          "instance_uid": "source-instance",
+          "fragment_uid": "source-fragment",
+          "page": 2,
+          "bbox": [
+            20,
+            50,
+            400,
+            200
+          ]
+        }
+      ],
+      "issues": [
+        "缺少经审核的模板要求标题：“上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表”；依据：test-only"
+      ],
+      "pending": []
+    }
+  ]
+}

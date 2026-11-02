@@ -279,6 +279,28 @@ function freshState(overrides: Partial<ReviewServerState> = {}): ReviewServerSta
   };
 }
 
+/** 处理计数与完成阻塞收在「完成条件」说明里：打开说明断言后关闭。 */
+async function expectStatusCounts(page: Page, text: string) {
+  await page.getByTestId("gbc-review-state-progress").click();
+  await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText(text);
+  await page.getByTestId("gbc-review-info-panel-close").click();
+}
+
+/** text 为 null 表示服务端门禁已无阻塞。 */
+async function expectGateBlockers(page: Page, text: string | null) {
+  await page.getByTestId("gbc-review-state-progress").click();
+  if (text === null) await expect(page.getByTestId("gbc-review-gate-blockers")).toHaveCount(0);
+  else await expect(page.getByTestId("gbc-review-gate-blockers")).toContainText(text);
+  await page.getByTestId("gbc-review-info-panel-close").click();
+}
+
+/** 问题列表按需展开：断言列表行之前先展开（已展开时不重复点击）。 */
+async function openIssueList(page: Page) {
+  const toggle = page.getByTestId("gbc-review-toggle-list");
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  await expect(page.getByTestId("gbc-review-list-panel")).toBeVisible();
+}
+
 test.describe("Review lifecycle (WP3-A)", () => {
   test("主链路：进入→显式开始复核→确认问题→完成→刷新仍显示已完成", async ({ page }) => {
     const state = freshState({ completionBlockers: [{ code: "pending_findings", count: 1 }] });
@@ -296,16 +318,17 @@ test.describe("Review lifecycle (WP3-A)", () => {
     await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible();
     await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
     expect(state.startCalls).toBeGreaterThan(0);
-    await expect(page.getByTestId("gbc-review-gate-blockers")).toContainText("还有 1 项问题待处理");
+    await expectGateBlockers(page, "还有 1 项问题待处理");
     await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();
 
     // 2. 逐个确认问题
     const issuesTab = page.getByTestId("gbc-review-tab-issues");
     await issuesTab.click();
+    await openIssueList(page);
     await page.getByTestId("gbc-review-issue-card-FIN-1").click();
     await page.getByTestId("gbc-review-issue-confirm-FIN-1").click();
-    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("已确认 1");
-    await expect(page.getByTestId("gbc-review-gate-blockers")).toHaveCount(0);
+    await expectStatusCounts(page, "已确认 1");
+    await expectGateBlockers(page, null);
     await expect(page.getByTestId("gbc-review-complete")).toBeEnabled();
 
     // 3. 完成复核必须真的打到后端（整改前这里只是 router.push("/queue")）
@@ -333,12 +356,14 @@ test.describe("Review lifecycle (WP3-A)", () => {
     await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
     await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();
     await page.getByTestId("gbc-review-issue-ignore-FIN-1").click();
-    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("已忽略 1");
-    await expect(page.getByTestId("gbc-review-gate-blockers")).toHaveCount(0);
+    await page.getByTestId("gbc-review-ignore-reason-rounding").check();
+    await page.getByTestId("gbc-review-ignore-save").click();
+    await expectStatusCounts(page, "已忽略 1");
+    await expectGateBlockers(page, null);
     await expect(page.getByTestId("gbc-review-complete")).toBeEnabled();
 
     await page.reload();
-    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("已忽略 1");
+    await expectStatusCounts(page, "已忽略 1");
     await expect(page.getByTestId("gbc-review-complete")).toBeEnabled();
   });
 
@@ -359,13 +384,14 @@ test.describe("Review lifecycle (WP3-A)", () => {
       await page.getByTestId("gbc-review-start").click();
     }
 
-    const blockers = page.getByTestId("gbc-review-gate-blockers");
-    await expect(blockers).toContainText("还有 1 项问题待处理");
-    await expect(blockers).toContainText("还有 1 项检查义务待人工补核");
+    await expectGateBlockers(page, "还有 1 项问题待处理");
+    await expectGateBlockers(page, "还有 1 项“未能自动核对”的检查待处理");
     await page.getByTestId("gbc-review-issue-confirm-FIN-1").click();
-    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("已确认 1");
-    await expect(blockers).not.toContainText("问题待处理");
-    await expect(blockers).toContainText("还有 1 项检查义务待人工补核");
+    await expectStatusCounts(page, "已确认 1");
+    await page.getByTestId("gbc-review-state-progress").click();
+    await expect(page.getByTestId("gbc-review-gate-blockers")).not.toContainText("问题待处理");
+    await expect(page.getByTestId("gbc-review-gate-blockers")).toContainText("还有 1 项“未能自动核对”的检查待处理");
+    await page.getByTestId("gbc-review-info-panel-close").click();
     await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();
     expect(state.completeCalls).toBe(0);
   });
@@ -398,8 +424,9 @@ test.describe("Review lifecycle (WP3-A)", () => {
       await expect(page.getByTestId("gbc-review-action-notice")).toContainText(
         failure === "network" ? "服务暂时不可用" : "当前分析未记录版本，不能认定问题已处理",
       );
+      await openIssueList(page);
       await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).not.toContainText("已确认");
-      await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("待处理 1");
+      await expectStatusCounts(page, "待处理 1");
       await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();
       expect(state.completeCalls).toBe(0);
     });
@@ -423,7 +450,8 @@ test.describe("Review lifecycle (WP3-A)", () => {
 
     // 门禁阻塞必须**常驻**显示：按钮在"还有待处理问题"时是灰的，
     // 若只在点击后才显示原因，用户就只能看着一个点不动的按钮。
-    const blockers = page.getByTestId("gbc-review-gate-blockers");
+    // 页签条数表达不了的原因（如材料已更新）在状态条上常驻。
+    const blockers = page.getByTestId("gbc-review-gate-blockers-extra");
     await expect(blockers).toBeVisible();
     await expect(blockers).toContainText("材料文件已更新，请重新复核");
     // 不能只显示 HTTP 状态码 —— 那等于把唯一有用的信息丢掉
@@ -459,7 +487,7 @@ test.describe("Review lifecycle (WP3-A)", () => {
     await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核已失效");
   });
 
-  test("阻塞义务：还有 2 项检查义务待人工补核时禁止完成，并说出条数", async ({ page }) => {
+  test("阻塞义务：还有 2 项“未能自动核对”的检查待处理时禁止完成，并说出条数", async ({ page }) => {
     const state = freshState({
       activeSession: buildSession(),
       completionBlockers: [{ code: "blocking_obligations", count: 2 }],
@@ -474,11 +502,9 @@ test.describe("Review lifecycle (WP3-A)", () => {
       await page.getByTestId("gbc-review-start").click();
     }
 
-    const blockers = page.getByTestId("gbc-review-gate-blockers");
-    // WP3-B：文案必须说出条数，且指路到「检查补核」页签（能力已交付，
+    // WP3-B：文案必须说出条数，且指路到「必须处理」（补核已并入必须处理，
     // 不再是"该能力将在人工补核流程中处理"这种期货话术）。
-    await expect(blockers).toContainText("还有 2 项检查义务待人工补核");
-    await expect(blockers).toContainText("人工补核");
+    await expectGateBlockers(page, "还有 2 项“未能自动核对”的检查待处理");
 
     // 按钮此时应当是灰的（即时提示）：点不动也是被禁止完成的正确表现之一
     await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();

@@ -1,0 +1,14 @@
+rev-20261028T132604-0c8d16ed.json ['artifact_content_hash', 'effective_context', 'effective_facts_hash', 'job_uuid', 'parse_run_uid', 'processing_manifest', 'raw_context', 'raw_facts_hash', 'revision_id', 'schema_version', 'snapshot_hash', 'source_file_hash'] 42e00552a6c0e59a670b1db56a2242553c303e7b5e7feb6dd858616adb7e2b73 f3ba0f1972af5fd79ef9d43ea77c4ca0954d53ba7c2d47e7b4a57ef7039473cf
+rev-20261029T023041-fa01666f.json ['artifact_content_hash', 'effective_context', 'effective_facts_hash', 'job_uuid', 'parse_run_uid', 'processing_manifest', 'raw_context', 'raw_facts_hash', 'revision_id', 'schema_version', 'snapshot_hash', 'source_file_hash'] 5570e9801b0ea1ce4907904264375503c2833af350547fa76648258d9ff0f8fc f3ba0f1972af5fd79ef9d43ea77c4ca0954d53ba7c2d47e7b4a57ef7039473cf
+rev-20261029T023116-6023eca3.json ['artifact_content_hash', 'effective_context', 'effective_facts_hash', 'job_uuid', 'parse_run_uid', 'processing_manifest', 'raw_context', 'raw_facts_hash', 'revision_id', 'schema_version', 'snapshot_hash', 'source_file_hash'] 5570e9801b0ea1ce4907904264375503c2833af350547fa76648258d9ff0f8fc f3ba0f1972af5fd79ef9d43ea77c4ca0954d53ba7c2d47e7b4a57ef7039473cf
+.revision_id 'rev-20261028T132604-0c8d16ed' 'rev-20261029T023041-fa01666f'
+.effective_context.parse_run_uid '42e00552a6c0e59a670b1db56a224255' '5570e9801b0ea1ce4907904264375503'
+.parse_run_uid '42e00552a6c0e59a670b1db56a224255' '5570e9801b0ea1ce4907904264375503'
+.raw_context.parse_run_uid '42e00552a6c0e59a670b1db56a224255' '5570e9801b0ea1ce4907904264375503'
+.artifact_content_hash '42e00552a6c0e59a670b1db56a2242553c303e7b5e7feb6dd858616adb7e2b73' '5570e9801b0ea1ce4907904264375503c2833af350547fa76648258d9ff0f8fc'
+.processing_manifest.code.src/services/template_anchor_checks.py '78d803b92ece556fa5005fd3fc43447a79fec1198b837a0e93f488da73fff903' 'e9d8e406848b043273544724e03f3d4542d308d18f08a7b525e43aefc0ce521c'
+.processing_manifest.code.src/services/template_anchor_slots.py added
+.processing_manifest.code.src/services/annual_templates.py '54dbdfce5ad9d5d66108ef527e4c47be535493b81dcc7b52ca06b0ad1d5a3158' '3944f81d4ba50bf31fc66346e5683a1de963b8f26c085aa8dc48400c06d71da0'
+.processing_manifest.code.src/services/material_writing.py '8b765512175eaf9ce06e7a4a5354620fb38a0bddbb9d71c9cbc2e5af32ed53be' '6e1abb7bf560b67ab09c0db4c191e705551f09dbedf6a4367bb0eb78096f0960'
+.processing_manifest.sha256 '2252c635fcba28c54d73622b369a2a30edb86ee9852b43cb8865dbc63da94576' '23c225df25da549c441ce88b6359d6e9557697fc80efa7c9be9faed13a88fdf1'
+.snapshot_hash '940bbe577bc251c7e3a1a68f434d439933bb6c31e286098db9817059821f8955' 'd88d8862a872574572cfd191e82370c0b55c1b75a2eba6cd626f4d82c543a110'

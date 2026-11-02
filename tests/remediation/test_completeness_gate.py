@@ -2,6 +2,7 @@
 整列算术对不上的映射不能当原件错误。
 """
 from decimal import Decimal
+from dataclasses import replace
 
 from src.schemas.parse_artifact import FiscalFact, LogicalTableInstance, ParseArtifact, ParsedCell, ParsedTable
 from src.services.fact_column_arithmetic import column_arithmetic_conflicts, constrain_column_arithmetic
@@ -28,8 +29,11 @@ def ledger(rows):
 
 def test_code_column_bound_as_total_is_a_mapping_conflict_not_a_document_error():
     # 修复前 SH2022-16：「项」编码 08/99/01 被当成合计金额，整列对不上。
-    facts = constrain_column_arithmetic(ledger([("08", "120.00", "30.00"), ("99", "40.00", "0.00"),
-                                                ("01", "15.50", "4.50"), ("30.00", "20.00", "10.00")]))
+    original = ledger([("08", "120.00", "30.00"), ("99", "40.00", "0.00"),
+                       ("01", "15.50", "4.50"), ("30.00", "20.00", "10.00")])
+    # 独立证据：金额指标被绑到了原件“项”编码表头，算不平本身不证明列错。
+    original[0] = replace(original[0], extra_dims={"source_header": "项"})
+    facts = constrain_column_arithmetic(original)
     flagged = {f.indicator for f in facts if f.extra_dims.get("column_identity_status") == "arithmetic_conflict"}
     assert flagged == {"total_actual", "basic_actual", "project_actual"}
     assert all(f.recognition_status == "ambiguous" for f in facts)
@@ -48,7 +52,9 @@ def test_single_wrong_row_stays_a_document_finding():
     facts = ledger([("150.00", "120.00", "30.00"), ("45.00", "40.00", "0.00"),
                     ("20.00", "15.50", "4.50"), ("30.00", "20.00", "10.00")])
     assert column_arithmetic_conflicts(facts) == {}
-    assert constrain_column_arithmetic(facts) == facts
+    result = constrain_column_arithmetic(facts)
+    assert [replace(f, extra_dims={}) for f in result] == facts
+    assert result[0].extra_dims["source_arithmetic_anomalies"]
 
 
 def text_table(code, title, rows, method="text", uid="u", header_rows=1):
@@ -114,9 +120,10 @@ def test_receipt_reports_arithmetic_conflicts_and_identity_gaps():
     from src.engine.fact_context import build_fact_context_from_artifact
     context = build_fact_context_from_artifact(artifact, org_name="某局", fiscal_year=2024, report_kind="final")
     receipt = build_table_import_receipt(artifact, context.facts, org_name="某局")
-    [incomplete] = receipt["mapping_incomplete_tables"]
-    assert incomplete["reasons"] == {"column_arithmetic_conflict": 9}
-    assert incomplete["arithmetic_conflicts"][0]["failed_rows"] == 3
+    # 完整表头下的小整数同样可能是原件金额，不能仅凭算不平认成编码。
+    assert receipt["mapping_incomplete_tables"] == []
+    assert all(f.recognition_status == "unverified" for f in context.facts)
+    assert context.facts[0].extra_dims["source_arithmetic_anomalies"][0]["failed_rows"] == 3
     assert receipt["reading_quality"]["fact_identity_gaps"] == {"organization_missing": 0, "subject_name_is_code": 0}
 
 

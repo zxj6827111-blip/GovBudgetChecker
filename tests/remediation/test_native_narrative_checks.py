@@ -208,3 +208,14 @@ def test_original_pdf_plain_text_replay(filename, page, kind, expected_count):
     else:
         assert [Decimal(issue.location['computed_percent']).quantize(Decimal('.001')) for issue in found] == [
             Decimal('6.632'), Decimal('6.632'), Decimal('6.649')]
+
+
+def test_procurement_parts_with_lei_suffix_are_recognized_and_summed():
+    """「货物类/工程类/服务类」是常见写法，不能因为多个“类”字就转人工。"""
+    issues, unresolved, doc = run(
+        '2025年度政府采购金额为577.45万元，其中：货物类4.00万元，工程类0万元，服务类573.45万元。',
+        heading='（二）政府采购支出情况',
+    )
+    assert not unresolved
+    assert not issues
+    assert doc.fact_receipts[-1]['status'] == 'pass'

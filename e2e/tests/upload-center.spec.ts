@@ -36,6 +36,20 @@ const SAMPLE_ORG_TREE = [
   },
 ];
 
+/**
+ * 打开上传页并等待客户端 hydration + `/api/config` 生效。
+ *
+ * dev 首次编译时 `page.goto()` 可能在 React 挂载前返回；此时 `setInputFiles`
+ * 触发的 change 事件没有监听器，待上传行永远不会出现（表现为随机超时）。
+ * 拖拽区上限提示需要 config 才能渲染数字，它出现即证明客户端 effect 已经运行。
+ */
+async function gotoUploadPage(page: Page) {
+  await page.goto("/upload");
+  await expect(page.getByTestId("gbc-upload-limit-hint")).toContainText("单个文件不超过", {
+    timeout: 15_000,
+  });
+}
+
 async function installUploadCenterMocks(page: Page, options: MockOptions = {}) {
   await page.route("**/api/**", async (route) => {
     const req = route.request();
@@ -184,7 +198,7 @@ test.describe("Upload center (Task 5)", () => {
   }) => {
     await page.context().addCookies([sessionCookie]);
     await installUploadCenterMocks(page, { maxUploadMb: 30, maxUploadPages: 800 });
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     const hint = page.getByTestId("gbc-upload-limit-hint");
     await expect(hint).toContainText("30 MB");
@@ -195,7 +209,7 @@ test.describe("Upload center (Task 5)", () => {
   test("dropzone reflects a different real config value when the backend limit changes", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
     await installUploadCenterMocks(page, { maxUploadMb: 50, maxUploadPages: 1200 });
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     const hint = page.getByTestId("gbc-upload-limit-hint");
     await expect(hint).toContainText("50 MB");
@@ -205,7 +219,7 @@ test.describe("Upload center (Task 5)", () => {
   test("REGRESSION: the pre-analysis confirmation banner text is preserved verbatim", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
     await installUploadCenterMocks(page);
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     const banner = page.getByTestId("gbc-upload-preanalysis-banner");
     await expect(banner).toContainText("系统不会把无法识别的年份写成默认值");
@@ -215,7 +229,7 @@ test.describe("Upload center (Task 5)", () => {
   test("uploading a PDF runs preflight and shows a real 校验通过 badge", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
     await installUploadCenterMocks(page);
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     const fileInput = page.getByTestId("gbc-upload-file-input");
     await fileInput.setInputFiles({
@@ -233,7 +247,7 @@ test.describe("Upload center (Task 5)", () => {
   test("REGRESSION: attribution wizard blocks submission until all required steps are filled", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
     await installUploadCenterMocks(page);
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     await page.getByTestId("gbc-upload-mode-attribution").click();
     await expect(page.getByTestId("gbc-attribution-wizard")).toBeVisible();
@@ -259,7 +273,7 @@ test.describe("Upload center (Task 5)", () => {
   test("REGRESSION: department-summary file level does not require selecting a unit", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
     await installUploadCenterMocks(page);
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     await page.getByTestId("gbc-upload-mode-attribution").click();
     await page.getByTestId("gbc-attribution-department-select").selectOption("dept-caizheng");
@@ -274,7 +288,7 @@ test.describe("Upload center (Task 5)", () => {
   test("REGRESSION: unit file level requires selecting a unit before submission is allowed", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
     await installUploadCenterMocks(page);
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     await page.getByTestId("gbc-upload-mode-attribution").click();
     await page.getByTestId("gbc-attribution-department-select").selectOption("dept-caizheng");
@@ -292,7 +306,7 @@ test.describe("Upload center (Task 5)", () => {
   }) => {
     await page.context().addCookies([sessionCookie]);
     await installUploadCenterMocks(page);
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     await page.getByTestId("gbc-upload-mode-attribution").click();
     await page.getByTestId("gbc-attribution-department-select").selectOption("dept-caizheng");
@@ -316,7 +330,7 @@ test.describe("Upload center (Task 5)", () => {
     const uploadRequests: Array<Record<string, unknown>> = [];
     await page.context().addCookies([sessionCookie]);
     await installUploadCenterMocksWithMissingYear(page, uploadRequests);
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     const fileInput = page.getByTestId("gbc-upload-file-input");
     await fileInput.setInputFiles({
@@ -343,7 +357,10 @@ test.describe("Upload center (Task 5)", () => {
     const uploadRequests: Array<Record<string, unknown>> = [];
     await page.context().addCookies([sessionCookie]);
     await installUploadCenterMocksWithMissingYear(page, uploadRequests);
-    await page.goto("/upload");
+    await gotoUploadPage(page);
+    // 等 hydration：/api/config 生效后拖拽区才显示真实上限；否则 setInputFiles
+    // 可能早于 React 挂载，onChange 不触发，待上传行永远不会出现。
+    await expect(page.getByText(/单个文件不超过 30 MB/)).toBeVisible({ timeout: 15_000 });
 
     const fileInput = page.getByTestId("gbc-upload-file-input");
     await fileInput.setInputFiles({
@@ -382,7 +399,9 @@ test.describe("Upload center (Task 5)", () => {
     const uploadRequests: Array<Record<string, unknown>> = [];
     await page.context().addCookies([sessionCookie]);
     await installUploadCenterMocksWithMissingYear(page, uploadRequests);
-    await page.goto("/upload");
+    await gotoUploadPage(page);
+    // 同前：等客户端 hydration/config 完成后再注入文件。
+    await expect(page.getByText(/单个文件不超过 30 MB/)).toBeVisible({ timeout: 15_000 });
 
     const fileInput = page.getByTestId("gbc-upload-file-input");
     await fileInput.setInputFiles({
@@ -512,7 +531,7 @@ test.describe("Upload center failure diagnostics (fix A)", () => {
   test("REGRESSION: batch preset docType defaults to 不预设 (empty), never dept_budget", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
     await installFinalDocMocks(page, { preflightIdentifiesDocType: true });
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     await expect(page.getByTestId("gbc-upload-preset-doctype")).toHaveValue("");
     await expect(page.getByTestId("gbc-upload-preset-year")).toHaveValue("");
@@ -524,7 +543,7 @@ test.describe("Upload center failure diagnostics (fix A)", () => {
     const uploadRequests: Array<Record<string, unknown>> = [];
     await page.context().addCookies([sessionCookie]);
     await installFinalDocMocks(page, { preflightIdentifiesDocType: false, uploadRequests });
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     const fileInput = page.getByTestId("gbc-upload-file-input");
     await fileInput.setInputFiles(FINAL_PDF);
@@ -543,7 +562,7 @@ test.describe("Upload center failure diagnostics (fix A)", () => {
     const uploadRequests: Array<Record<string, unknown>> = [];
     await page.context().addCookies([sessionCookie]);
     await installFinalDocMocks(page, { preflightIdentifiesDocType: false, uploadRequests });
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     const fileInput = page.getByTestId("gbc-upload-file-input");
     await fileInput.setInputFiles(FINAL_PDF);
@@ -583,7 +602,7 @@ test.describe("Upload center failure diagnostics (fix A)", () => {
         },
       },
     });
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     const fileInput = page.getByTestId("gbc-upload-file-input");
     await fileInput.setInputFiles(FINAL_PDF);
@@ -614,7 +633,7 @@ test.describe("Upload center failure diagnostics (fix A)", () => {
       uploadStatus: 413,
       uploadBody: { detail: "File exceeds 30MB limit" },
     });
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     const fileInput = page.getByTestId("gbc-upload-file-input");
     await fileInput.setInputFiles(FINAL_PDF);
@@ -637,7 +656,7 @@ test.describe("Upload center failure diagnostics (fix A)", () => {
       uploadStatus: 409,
       uploadBody: { detail: "检测到重复上传：同名文件.pdf（任务 job-dup-001）" },
     });
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     const fileInput = page.getByTestId("gbc-upload-file-input");
     await fileInput.setInputFiles(FINAL_PDF);
@@ -658,10 +677,15 @@ test.describe("Upload center failure diagnostics (fix A)", () => {
 // 修复 2：上传成功后真正触发分析。
 // 此前"开始分析 N 个文件"按钮只上传、从不调 /api/analyze（真实库里 451 个
 // uploaded 任务即此缺口的历史欠账）。本节验证：
-// 1. 上传成功后逐文件 POST /api/analyze/{job_id}；
+// 1. 上传成功后逐文件启动分析；
 // 2. 批量中单个文件分析启动失败不影响其他文件；
 // 3. "上传成功但分析启动失败"与"上传失败"文案严格区分；
 // 4. 全部成功才跳转 /queue。
+//
+// 兼容性说明：本组 mock 模拟**旧后端**——上传响应只有 job_id、没有 analysis
+// 字段，因此前端必须回退到独立的 POST /api/analyze/{job_id}。新后端支持
+// 上传即入队（enqueue=true），响应带 analysis.started，前端不再发第二个请求；
+// 那条路径由 uploadCenterAdapters 单元测试与后端 enqueue 集成测试覆盖。
 // ---------------------------------------------------------------------------
 
 test.describe("Upload triggers analysis (fix 2)", () => {
@@ -795,7 +819,7 @@ test.describe("Upload triggers analysis (fix 2)", () => {
       analyzeStatusByJob: {},
       jobIdByFilename: { [ANALYZE_OK_PDF.name]: "job-fix2-ok" },
     });
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     const fileInput = page.getByTestId("gbc-upload-file-input");
     await fileInput.setInputFiles(ANALYZE_OK_PDF);
@@ -833,7 +857,7 @@ test.describe("Upload triggers analysis (fix 2)", () => {
         [ANALYZE_FAIL_PDF.name]: "job-fix2-bad",
       },
     });
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     const fileInput = page.getByTestId("gbc-upload-file-input");
     await fileInput.setInputFiles([ANALYZE_OK_PDF, ANALYZE_FAIL_PDF]);
@@ -873,7 +897,7 @@ test.describe("Upload triggers analysis (fix 2)", () => {
       uploadStatus: 413,
       jobIdByFilename: {},
     });
-    await page.goto("/upload");
+    await gotoUploadPage(page);
 
     const fileInput = page.getByTestId("gbc-upload-file-input");
     await fileInput.setInputFiles(ANALYZE_OK_PDF);

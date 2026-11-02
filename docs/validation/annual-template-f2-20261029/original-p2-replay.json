@@ -1,0 +1,51 @@
+{
+  "original_script_sha256": "100a3b6931e81954ee11c98186c9aeff3f6a1a2c97e5b71d33f9fe08d30d4f74",
+  "original_script_unchanged": true,
+  "old_bug_presence_assertion_failed_as_expected": true,
+  "original_four_p1_still_fixed": true,
+  "original_four_line_p2_fixed": true,
+  "cases": [
+    {
+      "case": "three_lines",
+      "title": "上海市普陀区某某事业发展中心\n2024年度一般公共预算\n财政拨款基本支出决算表",
+      "expected_title": "上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表",
+      "text_equal_after_removing_linebreaks": true,
+      "qualified_matching_instances": [
+        {
+          "instance_uid": "source-instance",
+          "fragment_uid": "source-fragment",
+          "page": 2,
+          "bbox": [
+            20,
+            50,
+            400,
+            200
+          ]
+        }
+      ],
+      "issues": [],
+      "pending": []
+    },
+    {
+      "case": "four_lines",
+      "title": "上海市普陀区某某事业发展中心\n2024年度一般公共预算\n财政拨款基本支出\n决算表",
+      "expected_title": "上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表",
+      "text_equal_after_removing_linebreaks": true,
+      "qualified_matching_instances": [
+        {
+          "instance_uid": "source-instance",
+          "fragment_uid": "source-fragment",
+          "page": 2,
+          "bbox": [
+            20,
+            50,
+            400,
+            200
+          ]
+        }
+      ],
+      "issues": [],
+      "pending": []
+    }
+  ]
+}

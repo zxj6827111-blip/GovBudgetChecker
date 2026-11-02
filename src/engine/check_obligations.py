@@ -273,13 +273,13 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
     Obligation(
         obligation_id="OBL-STRUCT-COVER",
         group_id=GROUP_STRUCTURE,
-        title="封面要素：年度、单位、文种、金额单位",
+        title="封面要素：报告年度、单位全称、文种",
         report_kinds=_BOTH,
         checkers_by_kind=_both(("V33-001", "CMM-019"), ("BUD-003", "CMM-019")),
         evidence_kind=EVIDENCE_DOCUMENT_LEVEL,
         basis=(
-            "预决算公开材料须在封面标明年度、编制单位与文种，金额单位须与表格一致；"
-            "封面须含单位全称、报告年度与部门/单位文种标识（清单 A-02）"
+            "封面须含单位全称、报告年度与部门/单位文种标识（清单 A-02）。"
+            "金额单位不在本义务内，另由「说明正文金额单位为万元」等条目检查。"
         ),
     ),
     Obligation(
@@ -307,18 +307,22 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
     Obligation(
         obligation_id="OBL-STRUCT-EMPTY-STATEMENT",
         group_id=GROUP_DISCLOSURE,
-        title="空表/无此项的规范说明",
+        title="空表/无此项说明与总表零值确认",
         report_kinds=_BOTH,
         checkers_by_kind=_both(("V33-114", "V33-109", "V33-122", "CMM-026"), ("BUD-106", "CMM-026")),
         evidence_kind=EVIDENCE_DOCUMENT_LEVEL,
-        basis="无此项或空表必须给出说明，且说明与所涉表名一致（不得套用模板）；有数据的表不得保留空表说明（清单 A-07）",
+        basis=(
+            "无此项或空表必须给出说明，且说明与所涉表名一致（不得套用模板）；"
+            "有数据的表不得保留空表说明；总表金额分项为空白时，须能由本表合计"
+            "或对应空表说明确认零值（清单 A-07）。"
+        ),
     ),
     Obligation(
         obligation_id="OBL-STRUCT-TERMINOLOGY",
         group_id=GROUP_DISCLOSURE,
         title="文种口径用语一致性（部门/单位不得混用）",
         report_kinds=_BOTH,
-        checkers_by_kind=_both(("V33-236", "CMM-018"), ("BUD-113", "CMM-018")),
+        checkers_by_kind=_both(("V33-236", "CMM-018", "CMM-027"), ("BUD-113", "CMM-018")),
         basis="单位预算材料中出现'部门预算安排'等表述属口径混用；本部门/本单位不得混用，区级材料不得套用市级口径（清单 B-02）",
     ),
     Obligation(
@@ -1059,6 +1063,21 @@ SAN_GONG_OBLIGATION_IDS: Tuple[str, ...] = tuple(
     item.obligation_id for item in OBLIGATION_CATALOG if item.group_id == GROUP_SAN_GONG
 )
 
+_OBLIGATION_BY_ID: Dict[str, Obligation] = {
+    item.obligation_id: item for item in OBLIGATION_CATALOG
+}
+
+
+def get_obligation(obligation_id: str) -> Optional[Obligation]:
+    """按编号取**当前**目录里的义务定义。
+
+    用途仅限展示层刷新标题/依据：旧分析结果里的 obligation ledger 仍保留
+    当时的标题（审计事实）；复核面板是"现在要人做什么"，标题口径应与当前
+    目录一致，否则改一次措辞就得整份材料重新分析才能看到。状态/checker
+    仍使用账本里的原值，不把"现在目录里有这个 checker"当成"当时跑过"。
+    """
+    return _OBLIGATION_BY_ID.get(str(obligation_id))
+
 
 def catalog_fingerprint() -> str:
     """清单内容指纹（sha256，前 16 位）。
@@ -1154,6 +1173,7 @@ class ObligationInstance:
     missing_checkers: Tuple[str, ...] = ()
     depends_on: Tuple[str, ...] = ()
     input_gaps: Tuple[str, ...] = ()
+    reason_codes: Tuple[str, ...] = ()
     evidence_kind: str = EVIDENCE_LOCATABLE
     basis: str = ""
     gap_note: str = ""
@@ -1186,6 +1206,7 @@ class ObligationInstance:
             "missing_checkers": list(self.missing_checkers),
             "depends_on": list(self.depends_on),
             "input_gaps": list(self.input_gaps),
+            "reason_codes": list(self.reason_codes),
             "evidence_kind": self.evidence_kind,
             "basis": self.basis,
             "gap_note": self.gap_note,
@@ -1410,9 +1431,20 @@ def _resolve_rule_backed(
     *,
     registry: FrozenSet[str],
     statuses: Dict[str, str],
+    reason_codes_by_rule: Optional[Mapping[str, Sequence[str]]] = None,
+    details_by_rule: Optional[Mapping[str, str]] = None,
 ) -> None:
     """就地判定规则类义务的状态。"""
     implemented = tuple(item for item in instance.checkers if item in registry)
+    reason_codes_by_rule = reason_codes_by_rule or {}
+
+    def _codes(for_rules: Sequence[str]) -> Tuple[str, ...]:
+        values: List[str] = []
+        for rule_id in for_rules:
+            for code in reason_codes_by_rule.get(rule_id, ()) or ():
+                if code and code not in values:
+                    values.append(str(code))
+        return tuple(values)
     # 清单里声明了、但注册表里查不到的编号：既可能是"尚未实现"（pending），
     # 也可能是清单笔误或规则被撤下。两种都要落账，不能静默忽略。
     absent = tuple(item for item in instance.checkers if item not in registry)
@@ -1468,6 +1500,11 @@ def _resolve_rule_backed(
             instance.status = mapped
             instance.reason = mapped
             instance.detail = f"规则 {'/'.join(hit)} 判定为 {rule_status}"
+            details = list(dict.fromkeys((details_by_rule or {}).get(rule_id, "") for rule_id in hit))
+            details = [detail for detail in details if detail]
+            if details:
+                instance.detail = "；".join(details)
+            instance.reason_codes = _codes(implemented)
             return
 
     if all(observed[item] == "not_applicable" for item in implemented):
@@ -1495,12 +1532,33 @@ def _resolve_ai_backed(
     instance.status = status
     instance.reason = None if status == OBLIGATION_COMPLETED else status
     instance.blocks_gate = blocks
+    state = ""
+    if isinstance(ai_execution, Mapping):
+        state = str(ai_execution.get("state") or ai_execution.get("status") or "").strip()
+    try:
+        accepted_candidates = int((ai_execution or {}).get("accepted_candidates") or 0)
+    except Exception:
+        accepted_candidates = 0
     if status == OBLIGATION_COMPLETED:
         instance.detail = "语义复核已执行"
     elif status == OBLIGATION_AI_NOT_RUN:
         instance.detail = "本次未执行语义复核（未启用或未请求 AI）"
+    elif state == "degraded":
+        if accepted_candidates:
+            instance.detail = (
+                f"部分检查未完成，已保留 {accepted_candidates} 条有效候选；"
+                "未完成的专项与页码范围见检查覆盖"
+            )
+        else:
+            instance.detail = "部分检查未完成，未形成候选结论；未完成范围见检查覆盖"
     else:
-        instance.detail = "本次语义复核失败，未得出候选结论"
+        if accepted_candidates:
+            instance.detail = (
+                f"语义复核存在失败调用，已保留 {accepted_candidates} 条有效候选；"
+                "不能视为已完整复核"
+            )
+        else:
+            instance.detail = "本次语义复核失败，未得出候选结论"
 
 
 def _build_summary(
@@ -1584,8 +1642,23 @@ def build_obligation_ledger(
     """
     instances, notes = expand_obligations(profile, report_kind=report_kind)
     kind = str(report_kind or (profile.kind if profile else "") or "unknown").strip().lower()
+    # 只在该次预算分析实际采用新链路时增加义务，默认预算回执要求不变。
+    if kind=='budget' and (getattr(profile,'writing_scope',{}) or {}).get('domain')=='budget':
+        for instance in instances:
+            if instance.obligation_id=='OBL-STRUCT-TERMINOLOGY':
+                instance.checkers=tuple(dict.fromkeys((*instance.checkers,'CMM-027')))
     registry = _registry_rule_ids(kind)
     statuses = _rule_statuses(rule_execution_summary)
+    reason_codes_by_rule: Dict[str, Sequence[str]] = {}
+    details_by_rule: Dict[str, str] = {}
+    if isinstance(rule_execution_summary, Mapping):
+        for entry in rule_execution_summary.get("unresolved_rules") or []:
+            if isinstance(entry, Mapping) and entry.get("rule_id") and entry.get("detail"):
+                details_by_rule[str(entry["rule_id"])] = str(entry["detail"])
+            if isinstance(entry, Mapping) and entry.get("rule_id"):
+                reason_codes_by_rule[str(entry["rule_id"])] = tuple(
+                    str(code) for code in entry.get("reason_codes") or () if code
+                )
 
     for instance in instances:
         if instance.requires_ai:
@@ -1598,6 +1671,8 @@ def build_obligation_ledger(
                 instance,
                 registry=registry,
                 statuses=statuses,
+                reason_codes_by_rule=reason_codes_by_rule,
+                details_by_rule=details_by_rule,
             )
         instance.input_gaps = tuple(
             _input_gaps(instance.depends_on, structured_ingest)

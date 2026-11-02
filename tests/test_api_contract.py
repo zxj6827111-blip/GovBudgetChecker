@@ -278,12 +278,13 @@ def _create_unit_with_department(client: TestClient, name: str) -> dict:
     suffix = uuid.uuid4().hex[:8]
     create_dept = client.post(
         "/api/organizations",
-        json={"name": f"归属部门-{suffix}", "level": "department"},
+        # 随机十六进制尾部可能恰好为 2052 等年份，不能随机触发组织名确认门禁。
+        json={"name": f"归属部门-{suffix}-测试部门", "level": "department"},
     )
     assert create_dept.status_code == 200, create_dept.text
     create_unit = client.post(
         "/api/organizations",
-        json={"name": name, "level": "unit", "parent_id": create_dept.json()["id"]},
+        json={"name": f"{name}-测试单位", "level": "unit", "parent_id": create_dept.json()["id"]},
     )
     assert create_unit.status_code == 200, create_unit.text
     return create_unit.json()
@@ -560,9 +561,11 @@ def test_department_unit_endpoints_with_legacy_endpoints_compatible():
 def test_organization_jobs_scope_controls_child_inclusion():
     client = TestClient(app)
 
+    # 随机串若恰好以 20xx 结束，会触发组织名称年度尾缀的确认门禁。
+    # 本用例只验证组织查询范围，把固定名称类型放在随机串之后。
     create_dept = client.post(
         "/api/organizations",
-        json={"name": f"范围测试部门-{uuid.uuid4().hex[:8]}", "level": "department"},
+        json={"name": f"范围测试-{uuid.uuid4().hex[:8]}-部门", "level": "department"},
     )
     assert create_dept.status_code == 200
     dept_id = create_dept.json()["id"]
@@ -570,7 +573,7 @@ def test_organization_jobs_scope_controls_child_inclusion():
     create_unit = client.post(
         "/api/organizations",
         json={
-            "name": f"范围测试单位-{uuid.uuid4().hex[:8]}",
+            "name": f"范围测试-{uuid.uuid4().hex[:8]}-单位",
             "level": "unit",
             "parent_id": dept_id,
         },

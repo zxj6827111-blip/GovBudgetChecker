@@ -1,0 +1,66 @@
+[
+  {
+    "method": "POST",
+    "path": "/api/admin/templates/sources",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/templates/sources",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/templates/drafts",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/templates/drafts/3c0479b8-835d-4869-a5dd-ba4fd4e6f73d/review",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/templates/drafts/3c0479b8-835d-4869-a5dd-ba4fd4e6f73d/publish",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/templates/bindings",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/templates/export",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/templates/bindings",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/templates/impact",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/templates/sources",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/templates/sources",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/templates/drafts",
+    "status": 200
+  },
+  {
+    "actual_pair_difference_groups": 19,
+    "actual_template_status": "draft"
+  }
+]

@@ -18,7 +18,6 @@
  */
 
 import {
-  invalidationReasonLabel,
   reviewStatusLabel,
   reviewStatusTone,
 } from "../../../lib/reviewLifecyclePresentation";
@@ -87,6 +86,13 @@ export interface ReviewContextRecord {
   job_uuid: string | null;
 }
 
+/** 补核义务在原文里的一个可跳转位置（页码/表名/bbox 来自当前分析代际）。 */
+export interface ObligationLocationRecord {
+  page: number;
+  label: string | null;
+  bbox: number[] | null;
+}
+
 /** 人工补核（WP3-B）的一条义务：引擎判定的阻塞实例 + 当前会话的人工决定。 */
 export interface ObligationReviewItemRecord {
   obligation_id: string;
@@ -98,6 +104,15 @@ export interface ObligationReviewItemRecord {
   reason: string | null;
   reason_label: string | null;
   detail: string | null;
+  /**
+   * 检查依据（引擎义务目录的 basis）。旧后端可能没有该字段；
+   * 缺失时补核提示仍可按 obligation_id 给出通用说明。
+   */
+  basis?: string | null;
+  /** 支撑该义务的 checker 编号（如 V33-227）；旧后端可能没有。 */
+  checkers?: string[];
+  /** 原文可跳转位置；旧后端/没有可靠位置时为空数组或缺失。 */
+  locations?: ObligationLocationRecord[];
   /** 当前有效会话上的人工决定；null = 尚无记录（待处理）。 */
   decision: string | null;
   decision_revision: number | null;
@@ -112,6 +127,8 @@ export interface ObligationReviewBlockRecord {
   available: boolean;
   reason: string | null;
   pending_total: number | null;
+  /** 已被同源正式问题覆盖、不重复列出的补核条数；旧后端可能没有。 */
+  covered_total?: number;
   items: ObligationReviewItemRecord[];
 }
 
@@ -452,11 +469,8 @@ export function resolveReviewBadge(
   }
   const invalidated = latestInvalidatedSession(review);
   if (invalidated) {
-    const reason = invalidationReasonLabel(invalidated.invalidated_reason);
-    return {
-      tone: reviewStatusTone(invalidated.status),
-      label: reason ? `复核已失效 · ${reason}` : "复核已失效",
-    };
+    // 徽章只说状态；失效原因在操作提示里说一次，不在顶栏重复。
+    return { tone: reviewStatusTone(invalidated.status), label: "复核已失效" };
   }
   return null;
 }

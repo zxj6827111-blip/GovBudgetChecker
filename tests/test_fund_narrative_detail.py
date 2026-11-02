@@ -634,3 +634,177 @@ def test_withdrawing_the_checker_puts_the_obligation_back_as_a_gap(monkeypatch):
     )
     assert instance["status"] == OBLIGATION_NOT_IMPLEMENTED
     assert instance["missing_checkers"] == [RULE_ID]
+
+
+# ---------------------------------------------------------------------------
+# 地方式「类-款-项」连字符写法 + 表内只列到款（2026-11-01 实样回归）
+#
+# 真值材料：上海市建设用地和土地整理事务中心 2025 年度决算（本机 uploads）。
+# 说明第八节写「城乡社区支出-国有土地使用权出让收入安排的支出-土地出让业务
+# 支出」，表内只有 212/21208 的类款行、没有 7 位项级行；修复前整节一句都绑
+# 不上，义务报「说明章节无可绑定的项级支出表述」。这里用同版式合成夹具锁定
+# 两条能力：连字符身份可绑定；款级行在「该款下唯一子项＝所写项名」时可比。
+# ---------------------------------------------------------------------------
+
+_DASH_KLASS = "城乡社区支出"
+_DASH_KUAN = "国有土地使用权出让收入安排的支出"
+_DASH_XIANG = "土地出让业务支出"
+
+_DASH_FUND_ROWS = [
+    ["项目", "", "年初结转和\n结余", "本年收入", "本年支出", "", "", "年末结转和\n结余"],
+    ["功能分类\n科目编码", "科目名称", "", "", "", "", "", ""],
+    ["合计", "", "0.00", "7,402.47", "合计", "基本支出", "项目支出", "0.00"],
+    ["212", _DASH_KLASS, "0.00", "7,402.47", "7,402.47", "0.00", "7,402.47", "0.00"],
+    ["21208", _DASH_KUAN, "0.00", "357.97", "357.97", "0.00", "357.97", "0.00"],
+]
+
+#: 另一张功能分类表（支出决算表）证明 21208 款下只有一个同名项——款级行可比的身份闭环。
+_DASH_SUPPORT_ROWS = [
+    ["功能分类科目编码", "科目名称", "本年支出合计", "基本支出", "项目支出"],
+    ["21208", _DASH_KUAN, "357.97", "0.00", "357.97"],
+    ["2120806", _DASH_XIANG, "357.97", "0.00", "357.97"],
+]
+
+
+def _dash_payload(narrative_amount: str = "357.97", *, support_rows=None) -> Dict[str, Any]:
+    narrative = (
+        "八、政府性基金预算财政拨款收入支出决算情况说明\n"
+        "政府性基金预算财政拨款收入 7,402.47 万元，支出 7,402.47 万元，支出具体情况如下：\n"
+        f"1、{_DASH_KLASS}-{_DASH_KUAN}-{_DASH_XIANG}。主要用于：“生态保护修复”项目。"
+        f"年初预算为 373.00 万元，支出决算为 {narrative_amount} 万元。\n"
+        "九、国有资本经营预算财政拨款收入支出决算情况说明\n"
+        "某某中心 2025 年度无国有资本经营预算财政拨款收入和支出。\n"
+    )
+    return {
+        "doc_id": "CONTRACT-DASH-FUND-2025",
+        "page_texts": [
+            "上海市某某事务中心\n2025 年度单位决算\n",
+            "政府性基金预算财政拨款收入支出决算表\n单位：万元\n",
+            "支出决算表\n单位：万元\n",
+            "第三部分 2025年度单位决算情况说明\n" + narrative,
+        ],
+        "page_tables": [
+            [], [_DASH_FUND_ROWS],
+            [_DASH_SUPPORT_ROWS if support_rows is None else support_rows],
+            [],
+        ],
+    }
+
+
+def test_dash_identity_binds_and_matches_kwan_level_row():
+    """连字符说明 + 表内只有款级行 → 按款级行比对，一致时零 finding。"""
+    assert _run(_document(_dash_payload("357.97"))) == []
+
+
+def test_dash_identity_mismatch_reports_item_conflict():
+    """连字符说明金额与款级行不一致 → 1 条 error，金额两侧与编码都取真值。"""
+    issues = _run(_document(_dash_payload("300.00")))
+
+    assert len(issues) == 1, [issue.message for issue in issues]
+    assert issues[0].severity == "error"
+    location = issues[0].location
+    assert location["code"] == "21208"
+    assert location["table_amount"] == "357.97"
+    assert location["narrative_amount"] == "300.00"
+    assert location["difference"] == "57.97"
+    assert location["fund_scope"] == "政府性基金"
+    assert location["obligation_id"] == OBLIGATION_ID
+
+
+def test_dash_identity_without_unique_child_stays_unresolved():
+    """该款下不止一个子项时不得拿款合计顶项金额 → 取数不足，不静默通过。"""
+    support = [
+        ["功能分类科目编码", "科目名称", "本年支出合计", "基本支出", "项目支出"],
+        ["2120806", _DASH_XIANG, "357.97", "0.00", "357.97"],
+        ["2120807", "其他土地出让业务支出", "1.00", "0.00", "1.00"],
+    ]
+    with pytest.raises(RuleDeferred) as excinfo:
+        _run(_document(_dash_payload("357.97", support_rows=support)))
+    assert excinfo.value.status == "insufficient_data"
+    assert "未在表内定位到同名同级的功能分类项" in _rule_detail(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# 版式变体（2026-11-01 语料抽样实样）：
+# - 说明侧：项名带引号、破折号、漏写「支出」后缀、两行之间夹落单逗号行；
+# - 表侧：只印项级行（无类/款行），或项级行名称被印成款名。
+# ---------------------------------------------------------------------------
+
+_ITEM_ONLY_ROWS = [
+    ["项目", "", "年初结转和\n结余", "本年收入", "本年支出", "", "", "年末结转和\n结余"],
+    ["功能分类\n科目编码", "科目名称", "", "", "", "", "", ""],
+    ["合计", "", "0.00", "1,275.50", "合计", "基本支出", "项目支出", "0.00"],
+    ["2120806", _DASH_XIANG, "0.00", "1,275.50", "1,275.50", "0.00", "1,275.50", "0.00"],
+]
+
+
+def _variant_payload(item_line: str, rows=None, table_title="政府性基金预算财政拨款收入支出决算表"):
+    narrative = (
+        "八、政府性基金预算财政拨款收入支出决算情况说明\n"
+        "政府性基金预算财政拨款收入 1,275.50 万元，支出 1,275.50 万元，支出具体情况如下：\n"
+        + item_line
+        + "九、国有资本经营预算财政拨款收入支出决算情况说明\n"
+        "某某中心 2025 年度无国有资本经营预算财政拨款收入和支出。\n"
+    )
+    return {
+        "doc_id": "CONTRACT-FUND-VARIANT-2025",
+        "page_texts": [
+            "上海市某某事务中心\n2025 年度单位决算\n",
+            table_title + "\n单位：万元\n",
+            "支出决算表\n单位：万元\n",
+            "第三部分 2025年度单位决算情况说明\n" + narrative,
+        ],
+        "page_tables": [
+            [],
+            [_ITEM_ONLY_ROWS if rows is None else rows],
+            [_DASH_SUPPORT_ROWS],
+            [],
+        ],
+    }
+
+
+def test_quoted_dash_identity_is_recognised():
+    """真值实样：上海土地储备中心写成「“城乡社区支出-…-土地出让业务支出”」。"""
+    line = (
+        f"“{_DASH_KLASS}-{_DASH_KUAN}-{_DASH_XIANG}”。主要用于：储备地块看护。"
+        "年初预算为 1,550.00 万元，支出决算为 1,275.50 万元。\n"
+    )
+    assert _run(_document(_variant_payload(line))) == []
+
+
+def test_truncated_item_name_still_binds():
+    """真值实样：上海城市规划展示馆说明写「…-土地出让业务」，漏了规范后缀。"""
+    line = (
+        f"1、{_DASH_KLASS}-{_DASH_KUAN}-土地出让业务。主要用于：信息化运维。"
+        "年初预算为 2.90 万元，支出决算为 1,275.50 万元。\n"
+    )
+    assert _run(_document(_variant_payload(line))) == []
+
+
+def test_stray_punctuation_line_between_decision_words_is_noise():
+    """真值实样：自然资源调查利用研究院「支\\n,\\n出决算为 …」，落单标点行是抽行噪声。"""
+    line = (
+        f"{_DASH_KLASS}-{_DASH_KUAN}-{_DASH_XIANG}。主要用于：全市自然资源调查评价。\n"
+        "年初预算为 1,284.16 万元，支\n,\n出决算为 1,275.50 万元。\n"
+    )
+    assert _run(_document(_variant_payload(line))) == []
+
+
+def test_item_only_fund_table_closes_identity_by_unique_item_name():
+    """表内只印项级行时，同名项唯一即可比对（真值实样：自然资源调查利用研究院）。"""
+    line = (
+        f"{_DASH_KLASS}-{_DASH_KUAN}-{_DASH_XIANG}。主要用于：全市自然资源调查评价。\n"
+        "年初预算为 1,284.16 万元，支出决算为 1,275.50 万元。\n"
+    )
+    assert _run(_document(_variant_payload(line))) == []
+
+
+def test_item_only_fund_table_still_reports_a_real_difference():
+    line = (
+        f"{_DASH_KLASS}-{_DASH_KUAN}-{_DASH_XIANG}。主要用于：全市自然资源调查评价。\n"
+        "年初预算为 1,284.16 万元，支出决算为 1,300.00 万元。\n"
+    )
+    issues = _run(_document(_variant_payload(line)))
+    assert len(issues) == 1
+    assert issues[0].location["code"] == "2120806"
+    assert issues[0].location["difference"] == "24.50"

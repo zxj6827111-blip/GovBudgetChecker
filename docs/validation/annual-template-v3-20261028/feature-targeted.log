@@ -1,0 +1,16 @@
+.................................s.........                              [100%]
+=============================== warnings summary ===============================
+tests/test_annual_template_management.py::test_template_lifecycle_real_postgres
+tests/test_annual_template_management.py::test_template_lifecycle_real_postgres
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+tests/test_annual_template_management.py::test_template_lifecycle_real_postgres
+tests/test_annual_template_management.py::test_template_lifecycle_real_postgres
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+tests/test_annual_template_management.py::test_template_lifecycle_real_postgres
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+42 passed, 1 skipped, 5 warnings in 2.08s
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

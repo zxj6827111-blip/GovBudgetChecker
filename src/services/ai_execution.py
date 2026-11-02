@@ -39,6 +39,7 @@ def build_ai_execution(
     provider_stats: Optional[Iterable[Dict[str, Any]]] = None,
     window_errors: Optional[Iterable[Dict[str, Any]]] = None,
     error_code: str = "",
+    coverage: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """从调用留痕推导 AI 执行状态，返回 ``result.meta.ai_execution`` 结构。
 
@@ -68,6 +69,32 @@ def build_ai_execution(
         "finish_reason": None,
         "token_usage": None,
         "error_code": error_code or None,
+        "coverage_status": (coverage or {}).get("status") if isinstance(coverage, dict) else None,
+        "uncovered_ranges": list((coverage or {}).get("uncovered_ranges") or [])
+        if isinstance(coverage, dict)
+        else [],
+        "accepted_candidates": (coverage or {}).get("accepted_candidates", (coverage or {}).get("accepted_count"))
+        if isinstance(coverage, dict)
+        else None,
+        "rejected_candidates": (coverage or {}).get("rejected_candidates", (coverage or {}).get("rejected_count"))
+        if isinstance(coverage, dict)
+        else None,
+        "partial_calls": (coverage or {}).get("partial_calls") if isinstance(coverage, dict) else None,
+        "invalid_calls": (coverage or {}).get("invalid_calls") if isinstance(coverage, dict) else None,
+        "truncated_calls": (coverage or {}).get("truncated_calls") if isinstance(coverage, dict) else None,
+        "planned_calls": (coverage or {}).get("planned_calls") if isinstance(coverage, dict) else None,
+        "finished_calls": (coverage or {}).get("finished_calls", (coverage or {}).get("completed_calls"))
+        if isinstance(coverage, dict)
+        else None,
+        "succeeded_calls": (coverage or {}).get("succeeded_calls") if isinstance(coverage, dict) else None,
+        "completed_calls_includes_failed": (
+            (coverage or {}).get("completed_calls_includes_failed", True)
+            if isinstance(coverage, dict)
+            else None
+        ),
+        "retried_calls": (coverage or {}).get("retried_calls") if isinstance(coverage, dict) else None,
+        "retry_attempts": (coverage or {}).get("retry_attempts") if isinstance(coverage, dict) else None,
+        "failed_units": (coverage or {}).get("failed_units") if isinstance(coverage, dict) else None,
     }
 
     if not requested:
@@ -101,6 +128,25 @@ def build_ai_execution(
         record["provider"] = failed_call.get("provider")
         record["model"] = failed_call.get("model")
         record["finish_reason"] = failed_call.get("finish_reason")
+        return record
+
+    # 拿到了响应但业务契约校验失败：合法 JSON 不等于合法业务响应，
+    # 不能因“有正文”就判成功，更不能解释为“未发现问题”。
+    invalid_contract = [
+        item for item in ledger if not item.get("error") and item.get("contract_ok") is False
+    ]
+    if invalid_contract:
+        last = invalid_contract[-1]
+        record["state"] = AI_STATE_FAILED
+        finish_reason = str(last.get("finish_reason") or "").strip().lower()
+        record["error_code"] = error_code or (
+            "ai_truncated_response"
+            if finish_reason in _TRUNCATED_FINISH_REASONS
+            else "ai_response_invalid"
+        )
+        record["provider"] = last.get("provider")
+        record["model"] = last.get("model")
+        record["finish_reason"] = last.get("finish_reason")
         return record
 
     # 拿到了响应但不可用：finish_reason=length（token 截断）或空正文。
@@ -149,7 +195,7 @@ def build_ai_execution(
 
 def summarize_ai_diagnostics(meta: Dict[str, Any]) -> Dict[str, Any]:
     """Keep failure evidence in the final result without copying model prose."""
-    fields = ("provider", "model", "finish_reason", "error", "token_usage", "latency_ms")
+    fields = ("provider", "model", "finish_reason", "error", "token_usage", "latency_ms", "contract_ok")
     return {
         "ai_error": meta.get("ai_error"),
         "ai_window_errors": list(meta.get("ai_window_errors") or []),
@@ -168,6 +214,8 @@ def _call_succeeded(item: Dict[str, Any]) -> bool:
     """
 
     if item.get("error"):
+        return False
+    if item.get("contract_ok") is False:
         return False
     provider = str(item.get("provider") or "").strip()
     model = str(item.get("model") or "").strip()
@@ -226,6 +274,24 @@ def quality_gate_ai_reasons(ai_execution: Optional[Dict[str, Any]]) -> List[Dict
                 "message": (
                     "请求了 AI 辅助但本次没有任何 AI 调用留痕，"
                     "结论覆盖面缺少 AI 审计部分，需人工复核或重新分析"
+                ),
+                "ai_state": state,
+                "error_code": error_code,
+            }
+        ]
+    if state == AI_STATE_DEGRADED:
+        accepted = ai_execution.get("accepted_candidates")
+        suffix = (
+            f"已保留 {accepted} 条有效候选，但仍有检查单元失败/未覆盖"
+            if accepted
+            else "仍有检查单元失败/未覆盖，未形成完整候选结论"
+        )
+        return [
+            {
+                "code": "ai_partial",
+                "message": (
+                    f"AI 检查部分完成：{suffix}；"
+                    "不能呈现为「AI 已完整审计且未发现问题」"
                 ),
                 "ai_state": state,
                 "error_code": error_code,

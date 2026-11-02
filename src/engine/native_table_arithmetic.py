@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from dataclasses import replace
 from decimal import Decimal
 
 from .amount_math import classify_amount_diff
@@ -30,12 +31,33 @@ def table_facts(doc, code):
 
 def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow_native_blank=False):
     context = doc.fact_context
+    normalized_name = re.sub(r'\s+', '', str(name)) if name is not None else None
     candidates = [f for f in facts if f.indicator == indicator
                   and (code is None or f.subject_code == code)
-                  and (name is None or (name in re.sub(r'\s+', '', f.subject_name or '')
+                  and (normalized_name is None or (normalized_name in re.sub(r'\s+', '', f.subject_name or '')
                        and not any(other in re.sub(r'\s+', '', f.subject_name or '')
-                                   for other in ('人员经费合计', '公用经费合计') if other != name)))
+                                   for other in ('人员经费合计', '公用经费合计') if other != normalized_name)))
                   and _canonical_budget_stage(f.budget_stage) == stage]
+    if len(candidates) > 1:
+        # 整行排版重复（同一科目编码、同一金额在原表印两遍）会为两个不同的
+        # 原格各生成一条事实；它们是同一行的副本，不是两个候选值，按
+        # (科目, 指标, 原值, 归一值, 单位) 收敛。绑定同一个原格的多条事实是
+        # 事实层重复登记，仍判不唯一。
+        cells = {
+            tuple(sorted({
+                ref.get("source_cell_id")
+                for ref in (fact.extra_dims or {}).get("evidence_refs", [])
+                if ref.get("source_cell_id")
+            }))
+            for fact in candidates
+        }
+        if len(cells) > 1:
+            unique = {}
+            for fact in candidates:
+                unique.setdefault(
+                    (fact.subject_code, fact.indicator, str(fact.raw_value),
+                     str(fact.normalized_value), fact.unit), fact)
+            candidates = list(unique.values())
     if len(candidates) != 1:
         if not candidates and allow_native_blank and facts:
             term = blank_term(doc, facts[0].table_code, indicator, code=code,
@@ -66,12 +88,14 @@ def journal(rule, doc, facts):
     return ids, evidence
 
 
-def receipt(rule, doc, relation, facts, *, status, formula, reason=None, disclosure_sources=()):
+def receipt(rule, doc, relation, facts, *, status, formula, reason=None, disclosure_sources=(),
+            reason_codes=()):
     from .rules_v33 import _v33_relation_receipt
     ids, evidence = journal(rule, doc, facts)
     _v33_relation_receipt(doc, rule.code, relation, status=status,
                           operand_fact_ids=ids, formula=formula, incomplete_reason=reason,
-                          cell_observations=blank_observations(facts), disclosure_sources=disclosure_sources)
+                          cell_observations=blank_observations(facts), disclosure_sources=disclosure_sources,
+                          reason_codes=reason_codes)
     return ids, evidence
 
 
@@ -129,11 +153,220 @@ def _literal_fact_refs(facts, doc, relation_label):
 
 
 def finish(rule, issues, unresolved):
+    issues = cluster_source_errors(rule, issues)
     if unresolved:
         reasons = list(dict.fromkeys(unresolved))
         raise RuleDeferred(rule.code, detail='；'.join(reasons), partial_issues=issues,
                            unresolved_reasons=reasons)
     return issues
+
+
+def cluster_source_errors(rule, issues):
+    """同表同类多行问题合并，完整保留每行差额、关系与证据。"""
+    import copy
+    if rule.code not in {"V33-240", "V33-241", "V33-119"}:
+        return issues
+    groups, retained = {}, []
+    for issue in issues:
+        location = issue.location if isinstance(issue.location, dict) else {}
+        # 整列错位的根因问题须独立成条（高危、可定位到列位），
+        # 不能并入"多行勾稽不平"的症状聚簇，否则严重度与措辞都会被稀释。
+        if str(issue.check_relation_id or '').endswith(':column_shift'):
+            retained.append(issue)
+            continue
+        # 支出纵向关系还需与 V33-120 按同一原格操作数去重；提前把不同
+        # 金额列揉成一条，会丢失单一算式身份，导致跨规则重复问题无法合并。
+        if rule.code == "V33-241" and ":expenditure:vertical:" in str(issue.check_relation_id):
+            retained.append(issue)
+            continue
+        if issue.severity not in {"error", "warn"} or not location.get("table_code"):
+            retained.append(issue)
+            continue
+        relation_kind = "income_sources" if "income_sources" in str(issue.check_relation_id) else "table_arithmetic"
+        groups.setdefault((location["table_code"], relation_kind), []).append(issue)
+    for (table_code, _kind), group in groups.items():
+        if len(group) == 1:
+            retained.extend(group)
+            continue
+        combined = copy.copy(group[0])
+        title = group[0].location.get("table") or "当前表格"
+        combined.message = f"{title}多行勾稽不平，可能为原件整列漏填或错位：\n" + "\n".join(issue.message for issue in group)
+        combined.evidence_text = "\n".join(issue.evidence_text or issue.message for issue in group)
+        combined.location = {**group[0].location,
+            "relations": [{"message": issue.message, "relation_id": issue.check_relation_id, "location": issue.location} for issue in group],
+            "operand_refs": [ref for issue in group for ref in issue.location.get("operand_refs", [])],
+            "native_blank_sources": [ref for issue in group for ref in issue.location.get("native_blank_sources", [])]}
+        combined.fact_ids = list(dict.fromkeys(fid for issue in group for fid in issue.fact_ids))
+        combined.evidence_ids = list(dict.fromkeys(eid for issue in group for eid in issue.evidence_ids))
+        combined.check_relation_id = f"{rule.code}:{table_code}:source_errors"
+        retained.append(combined)
+    return retained
+
+
+def _document_scoped_zero(parent, indicator):
+    """两张基金表都明确“本表无数据”时，总表该资金列的缺失按零。
+
+    只用于 V33-119 的财政拨款总表公式：政府性基金/国有资本两张表都明确
+    无数据时，总表对应列留空属于版式空白，不是未知数值。合成事实带
+    ``document_scoped_zero`` 标记，便于审计区分"原文写了 0"与"按披露推定 0"。
+    """
+    fund_scope = {
+        "government_fund_budget": "government_fund",
+        "state_capital_budget": "state_owned",
+    }[indicator]
+    return replace(
+        parent,
+        fact_uid=f"document-scoped-zero:{parent.fact_uid}:{indicator}",
+        indicator=indicator,
+        raw_value="0",
+        normalized_value=Decimal("0"),
+        fund_scope=fund_scope,
+        recognition_status="document_scoped_zero",
+        extra_dims={
+            **dict(parent.extra_dims or {}),
+            "document_scoped_zero": "both_fund_tables_disclosed_empty",
+            # 合成零没有原格证据；不要伪造 bbox/页码。
+            "evidence_refs": [],
+        },
+    )
+
+
+def check_fiscal_grant_arithmetic(rule, doc):
+    """财政拨款总表按事实列身份取数，缺失分项绝不使用位置推断或补零。
+
+    唯一例外：政府性基金、国有资本经营两张表都明确披露“本表无数据”时，
+    总表对应资金列的空白按 0 参与公式（带 ``document_scoped_zero`` 标记）；
+    只有一张表为空、或有候选事实但身份不一致时，仍保持 fail-closed。
+    """
+    code = "FIN_04_fiscal_grant_total"
+    facts, error = table_facts(doc, code)
+    if error:
+        return finish(rule, [], [error])
+    fund_columns_zero = both_fund_tables_disclosed_empty(doc)
+    issues, unresolved, checked = [], [], 0
+    for row in sorted({fact.row_order for fact in facts if fact.indicator == "expenditure_actual"}, key=str):
+        row_facts = [fact for fact in facts if fact.row_order == row]
+        parent, error = select(doc, row_facts, "expenditure_actual")
+        if error:
+            unresolved.append(error)
+            continue
+        children = []
+        for indicator in ("general_public_budget", "government_fund_budget", "state_capital_budget"):
+            term, missing = select(doc, row_facts, indicator, code=parent.subject_code,
+                                   name=parent.subject_name, allow_native_blank=True)
+            if (
+                missing
+                and fund_columns_zero
+                and indicator in ("government_fund_budget", "state_capital_budget")
+                and not any(fact.indicator == indicator for fact in row_facts)
+            ):
+                # 两张基金表都明确无数据，且该行该资金列没有任何候选事实。
+                term = _document_scoped_zero(parent, indicator)
+                missing = None
+            if missing:
+                error = missing
+                unresolved.append(missing)
+            elif term is not None:
+                children.append(term)
+        key = f"{code}:row:{row}"
+        if error:
+            receipt(rule, doc, key, [parent, *children], status="insufficient_data",
+                    formula="expenditure = general + government_fund + state_capital", reason=error)
+            continue
+        checked += 1
+        found, missing = relation(rule, doc, key, f"财政拨款收入支出决算总表第{row + 1}行", parent, children,
+                                  fund_composition=True)
+        issues.extend(found)
+        unresolved.extend(missing)
+    if not checked and not unresolved:
+        unresolved.append("财政拨款总表没有可确认的同一行合计及三个资金分项")
+    return finish(rule, issues, unresolved)
+
+
+def _target_disclosed_empty(doc, code):
+    """对应基金表是否由原文明确披露为无数据，而不是仅凭没有金额事实推断。"""
+    artifact = getattr(doc, "parse_artifact", None)
+    if artifact is None:
+        return False
+    from src.engine.fact_context import _fragment_for_instance
+    from src.services.fiscal_empty_disclosure import disclosed_empty_fiscal_table
+
+    instances = []
+    for instance in getattr(artifact, "logical_tables", []) or []:
+        if instance.table_code != code:
+            continue
+        fragment = _fragment_for_instance(artifact, instance)
+        if fragment is not None and fragment.extraction_method != "page_text_fallback":
+            instances.append((instance, fragment))
+    if len(instances) != 1:
+        return False
+    instance, fragment = instances[0]
+    return bool(disclosed_empty_fiscal_table(doc, instance, fragment))
+
+
+def both_fund_tables_disclosed_empty(doc) -> bool:
+    """政府性基金、国有资本经营两张表是否都明确披露“本表无数据”。
+
+    V33-122 的放宽条件：只有两张基金表都明确无数据时，才把财政拨款总表
+    对应资金列的空白按版式空白（0）处理；只空一张时仍保持 fail-closed，
+    不把空白当零。
+    """
+    return (
+        _target_disclosed_empty(doc, "FIN_08_gov_fund")
+        and _target_disclosed_empty(doc, "FIN_09_state_capital")
+    )
+
+
+def check_fund_zero_disclosures(rule, doc):
+    """只用总表已确认资金列判断对应表是否有数，禁止按倒数列位置或科目编码加总。"""
+    from .fact_table_projection import fact_bound_table_rows, ProjectionUnavailable
+    from .rule_policy import amount_difference_exceeds_policy
+    source, error = table_facts(doc, 'FIN_04_fiscal_grant_total')
+    if error:
+        return finish(rule, [], [error])
+    issues, unresolved = [], []
+    for indicator, fund, code, title in (
+        ('government_fund_budget', 'government_fund', 'FIN_08_gov_fund', '政府性基金预算财政拨款收入支出决算表'),
+        ('state_capital_budget', 'state_owned', 'FIN_09_state_capital', '国有资本经营预算财政拨款收入支出决算表'),
+    ):
+        terms = [fact for fact in source if fact.indicator == indicator]
+        key = f'{code}:zero_source'
+        if not terms or any(operand_rejection_reason(f, doc.fact_context.org_name)
+                            or f.fund_scope != fund or f.fiscal_year != doc.fact_context.fiscal_year for f in terms):
+            unresolved.append(f'{title}对应的总表资金列缺少明确可用数值，不能按零解释')
+            continue
+        if any(f.normalized_value != 0 for f in terms):
+            receipt(rule, doc, key, terms, status='not_applicable', formula='总表资金列非零，本项空表条件不适用')
+            continue
+        try:
+            target_rows = fact_bound_table_rows(doc, title, strict_unknown_values=True)
+        except ProjectionUnavailable as exc:
+            unresolved.append(str(exc))
+            continue
+        target, error = table_facts(doc, code)
+        if error:
+            if (target_rows and "没有可用金额事实" in error
+                    and _target_disclosed_empty(doc, code)):
+                # 原文明确本表无数据，且总表资金列明确为零：空表成立。
+                receipt(rule, doc, key, terms, status='pass',
+                        formula='原文明确本表无数据，总表资金列明确为零')
+                continue
+            unresolved.append(error)
+            continue
+        if any(operand_rejection_reason(f, doc.fact_context.org_name)
+               or f.fiscal_year != doc.fact_context.fiscal_year or f.fund_scope != fund for f in target):
+            unresolved.append(f'{title}的原格金额/身份未确认，不能断言为空表')
+            continue
+        nonzero = [f for f in target if amount_difference_exceeds_policy(f.normalized_value)]
+        ids, evidence = receipt(rule, doc, key, [*terms, *target], status='fail' if nonzero else 'pass',
+                                formula='总表资金列明确为零时，对应表不得出现非零金额')
+        if nonzero:
+            message = f'{title}存在非零金额，但财政拨款总表对应资金列均明确为零，请核对资金口径。'
+            issues.append(rule._issue(message, {'table': title, 'table_code': code,
+                'operand_refs': [operand_ref(f, 'source_zero' if f in terms else 'target') for f in [*terms, *nonzero]]},
+                'error', evidence_text=message, fact_ids=ids, evidence_ids=evidence,
+                check_relation_id=f'{rule.code}:{key}'))
+    return finish(rule, issues, unresolved)
 
 
 def cluster_rounding(rule, issues):
@@ -276,11 +509,18 @@ def _rounding_case(issue, index, diff):
     }
 
 
-def relation(rule, doc, key, label, parent, children, *, hints=True):
+def relation(rule, doc, key, label, parent, children, *, hints=True, fund_composition=False):
     facts = [parent] + children
-    if any((f.instance_uid, f.org_scope, f.fund_scope, f.budget_stage, f.fiscal_year)
-           != (parent.instance_uid, parent.org_scope, parent.fund_scope,
-               parent.budget_stage, parent.fiscal_year) for f in children):
+    expected_funds = {'expenditure_actual': 'fiscal_appropriation',
+                      'general_public_budget': 'general_public_budget',
+                      'government_fund_budget': 'government_fund', 'state_capital_budget': 'state_owned'}
+    # 财政拨款合计与三个资金分项本来就属于不同资金口径；仅此明确公式允许按已识别列身份组成。
+    funds_match = (len(facts) == 4 and {f.indicator for f in facts} == set(expected_funds)
+                   and all(f.table_code == 'FIN_04_fiscal_grant_total'
+                           and f.fund_scope == expected_funds[f.indicator] for f in facts)) if fund_composition else (
+                       all(f.fund_scope == parent.fund_scope for f in children))
+    if not funds_match or any((f.instance_uid, f.org_scope, f.budget_stage, f.fiscal_year)
+           != (parent.instance_uid, parent.org_scope, parent.budget_stage, parent.fiscal_year) for f in children):
         reason = f'{label}操作数的表实例或口径不一致'
         receipt(rule, doc, key, facts, status='insufficient_data', formula='total = sum(parts)', reason=reason)
         return [], [reason]
@@ -437,6 +677,18 @@ def check_expenditure_arithmetic(rule, doc):
         unresolved.append('支出决算表未找到唯一合计行')
     indicators = ('total_actual', 'basic_actual', 'project_actual', 'to_superior_actual',
                   'operational_actual', 'subsidiary_actual')
+    from .native_column_shift import (
+        EXPENSE_LABELS, column_shift_hint, column_shift_issue, detect_column_shift,
+    )
+    # 明细行整列错位（源文件漏列/错列）的根因判定：列合计证据一旦成立，
+    # 输出一条高危根因问题，并在补核原因里给出材料视角提示。
+    valid_codes = {code for code in codes if code == 'total'
+                   or re.fullmatch(r'\d{3}(?:\d{2}){0,2}', str(code))}
+    shift = detect_column_shift(
+        [(indicator, EXPENSE_LABELS[indicator]) for indicator in indicators],
+        [fact for fact in facts if fact.subject_code in valid_codes],
+        org_name=doc.fact_context.org_name,
+    )
     for code in codes:
         operands, errors = [], []
         for indicator in indicators:
@@ -468,6 +720,10 @@ def check_expenditure_arithmetic(rule, doc):
                     f'支出决算表{code}/{indicator}层级合计', parent, children)
                 issues.extend(found)
                 unresolved.extend(missing)
+    if shift:
+        issues.append(column_shift_issue(rule, doc, '支出决算表', 'FIN_03_expenditure', shift))
+        if unresolved:
+            unresolved.append(column_shift_hint('支出决算表', rule.code))
     if len(unresolved) > 12:
         # Relation receipts retain each row and reason; the rule summary
         # should remain readable for a table with many explicit blank cells.

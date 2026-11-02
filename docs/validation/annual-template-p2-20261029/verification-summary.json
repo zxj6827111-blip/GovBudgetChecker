@@ -1,0 +1,97 @@
+{
+  "repair_commit": "0ded8894defce81628ee3856282cdfa9c01ec050",
+  "reviewed_head": "bc8da8d752268706ad398b426ea410647eb0256f",
+  "branch": "codex/annual-template-management",
+  "baseline": "b557e8b71ef7eaddead3069d3f177dca5ede9342",
+  "algorithm": "material-writing-v3.4",
+  "config_schema": 2,
+  "finding": "F1/P2: complete title wrapped across four or more lines",
+  "before": {
+    "original_reviewer_case_reproduced": true,
+    "new_regressions_failed": 48,
+    "new_regressions_passed": 19
+  },
+  "after": {
+    "reviewer_three_and_four_line_cases_pass": true,
+    "old_four_p1_still_fixed": true,
+    "new_regressions": 67,
+    "wrapped_title_line_counts": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37
+    ],
+    "qualified_table_instance_still_required": true,
+    "negative_or_quoted_context_still_blocked": true,
+    "raw_text_offsets_verified": true
+  },
+  "tests": {
+    "focused": {
+      "passed": 126,
+      "skipped": 1,
+      "overlaps_full_suite": true,
+      "skip": "PG lifecycle skipped without DSN in focused process; passed in fresh-DB full suite"
+    },
+    "full": {
+      "passed": 4793,
+      "skipped": 33,
+      "warnings": 21,
+      "seconds": 323.7,
+      "database": "gbc_annual_p2_edcf2bb912e5",
+      "database_endpoint": "127.0.0.1:25462"
+    },
+    "frontend_rerun": false,
+    "browser_rerun": false,
+    "reason": "No frontend, API, database schema or export changes in this focused P2 repair"
+  },
+  "source_review_script_sha256": "100a3b6931e81954ee11c98186c9aeff3f6a1a2c97e5b71d33f9fe08d30d4f74",
+  "source_review_checksum_entries_unchanged": 15,
+  "previous_delivery_evidence_entries_unchanged": {
+    "annual-template-v3-20261028": 20,
+    "annual-template-p1-20261028": 18
+  },
+  "boundary": {
+    "new_independent_reacceptance": false,
+    "real_template_approved": false,
+    "real_annual_compatibility": false,
+    "real_budget_business_acceptance": false,
+    "statistical_accuracy_claim": false,
+    "merged": false,
+    "deployed": false,
+    "production_or_existing_isolated_services_restarted": false,
+    "business_data_modified": false
+  }
+}

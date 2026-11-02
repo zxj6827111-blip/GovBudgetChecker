@@ -7,12 +7,15 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from api import runtime
 from api.auth_utils import require_login, user_can_access_org
 from api.routes.organizations import clear_department_stats_cache
 from src.services.analysis_result_store import persist_analysis_job_snapshot
 from src.services.org_matcher import get_org_matcher
+from src.services.org_binding_decision import decide_auto_binding
+from src.services.org_name_identity import compare_org_names, identity_name, organization_name
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -31,10 +34,9 @@ def _clean_optional_text(value: Optional[str]) -> Optional[str]:
 def _normalize_org_name(value: Any) -> str:
     """归一化封面/组织名，只用于防止明显错绑，不用于生成组织身份。
 
-    「本级」「本部」是同一主体的两种写法（封面写本部、组织树写本级），比较前去掉。
+    保留本级等身份标记；包含关系不能代替名称等价。
     """
-    name = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", "", str(value or "")).casefold()
-    return re.sub(r"(?:本级|本部)$", "", name) or name
+    return identity_name(value)
 
 
 def _organization_binding_conflict(
@@ -48,17 +50,21 @@ def _organization_binding_conflict(
     if not isinstance(preflight, dict) or not isinstance(organization, dict):
         return None
     cover_name = _normalize_org_name(preflight.get("cover_org_name"))
-    selected_name = _normalize_org_name(organization.get("name"))
+    try:
+        selected_name = _normalize_org_name(organization_name(organization))
+    except ValueError as exc:
+        return {"code": "organization_contract_conflict", "message": str(exc)}
     cover_label = str(preflight.get("cover_org_label") or "")
     scope_hint = str(preflight.get("scope_hint") or "").strip().lower()
     level = str(organization.get("level") or "").strip().lower()
 
     if cover_name and cover_name not in _GENERIC_COVER_NAMES and selected_name:
-        if cover_name not in selected_name and selected_name not in cover_name:
+        directory = runtime.require_org_storage().get_all() if runtime.ORG_AVAILABLE else []
+        if not compare_org_names(cover_name, selected_name, directory).equivalent and cover_name not in selected_name:
             return {
                 "code": "organization_cover_conflict",
                 "cover_org_name": str(preflight.get("cover_org_name") or ""),
-                "selected_org_name": str(organization.get("name") or ""),
+                "selected_org_name": organization_name(organization),
                 "message": "PDF 封面组织与所选组织不一致，已拒绝建立组织绑定。",
             }
     if scope_hint == "department" and level == "unit":
@@ -127,20 +133,7 @@ def _collect_org_matches(
     search_requests: List[Tuple[str, str, str]] = []
 
     if cover_org_name:
-        hint_tokens = ""
-        if scope_hint == "unit":
-            hint_tokens = "\u5355\u4f4d \u672c\u7ea7 \u533a\u7ea7\u5355\u4f4d"
-        elif scope_hint == "department":
-            hint_tokens = "\u4e3b\u7ba1\u90e8\u95e8 \u90e8\u95e8"
-        search_requests.append(
-            (
-                "cover_field",
-                cover_org_name,
-                # 提示词只能接在正文之后：封面抽取按首行定位标题，前置会把提示词并进标题行，
-                # 反而让 cover 字段这一路的得分低于文件名回退路（match_basis 被错记成 content_fallback）。
-                "\n".join(token for token in (first_page_text, cover_org_label, hint_tokens) if token).strip(),
-            )
-        )
+        search_requests.append(("cover_field", cover_org_name, first_page_text))
 
     search_requests.append(("content_fallback", filename, first_page_text))
 
@@ -151,6 +144,8 @@ def _collect_org_matches(
             query_filename,
             query_text,
             top_n=fetch_top_n,
+            cover_org_name=cover_org_name if basis == "cover_field" else "",
+            scope_hint=scope_hint if basis == "cover_field" else "",
         ):
             score = float(confidence or 0.0)
             current = ranked.get(org.id)
@@ -191,20 +186,22 @@ def _inspect_document_preflight(
     page_texts: List[str] = []
     page_count: Optional[int] = None
     if content is not None:
-        page_texts = runtime.extract_pdf_page_texts_from_bytes(content, max_pages=3)
+        page_texts = runtime.extract_pdf_page_texts_from_bytes(content, max_pages=8)
         # 页数只在 content（内存字节）分支计算：这正是上传中心 preflight 请求真正
         # 需要页数的路径。pdf_path 分支主要用于 `_auto_match_organization` 的内部
         # 复检，那里不消费 page_count，没必要额外打开一次文件读页数。
         page_count = runtime.get_pdf_page_count_from_bytes(content)
     elif pdf_path is not None:
-        page_texts = runtime.extract_pdf_page_texts(pdf_path, max_pages=3)
+        page_texts = runtime.extract_pdf_page_texts(pdf_path, max_pages=8)
 
     first_page_text = page_texts[0] if page_texts else ""
+    directory = runtime.require_org_storage().get_all() if runtime.ORG_AVAILABLE else []
     cover = runtime.extract_cover_metadata(
         page_texts=page_texts,
         filename=filename,
         preferred_year=preferred_year,
         doc_type=doc_type,
+        directory=directory,
     )
     report_year = cover.get("report_year")
     report_kind = str(cover.get("report_kind") or "unknown")
@@ -237,6 +234,13 @@ def _inspect_document_preflight(
         if index == 0 and float(confidence or 0.0) >= 0.6 and not tied_same_name:
             current = serialized
 
+    decision = decide_auto_binding(filename=filename, page_texts=page_texts, directory=directory,
+                                   candidates=suggestions, report_kind=report_kind)
+    current = next((item for item in suggestions if item["organization_id"] == decision["organization_id"]), None)
+    if decision["decision"] == "bound":
+        org = runtime.require_org_storage().get_by_id(decision["organization_id"])
+        current = _serialize_match_candidate(org, 0.96, decision["match_basis"])
+
     return {
         "filename": filename,
         "report_year": report_year,
@@ -249,6 +253,7 @@ def _inspect_document_preflight(
         "scope_hint": str(cover.get("scope_hint") or ""),
         "current": current,
         "suggestions": suggestions,
+        "binding_decision": decision,
         # UI 重建第二批 Task 5：待上传文件列表需要显示真实页数。解析失败时为
         # None（未知），前端必须显示"—"而不是猜一个数字或干脆显示 0 页。
         "page_count": page_count,
@@ -278,6 +283,10 @@ def _auto_match_organization(
             )
         )
         current = resolved_preflight.get("current") or {}
+        if (runtime.UPLOAD_ROOT / job_id).is_dir():
+            runtime.merge_job_status(runtime.UPLOAD_ROOT / job_id, {
+                "binding_decision": resolved_preflight.get("binding_decision"),
+            })
         organization_id = str(current.get("organization_id") or "").strip()
         confidence = float(current.get("confidence") or 0.0)
         if not organization_id:
@@ -392,6 +401,8 @@ async def _handle_upload(
     doc_type: Optional[str] = None,
     created_by: Optional[str] = None,
     actor: Optional[Dict[str, Any]] = None,
+    enqueue: bool = False,
+    analyze_body: Optional[Dict[str, Any]] = None,
 ) -> dict:
     selected_org = _clean_optional_text(selected_org)
     fiscal_year = _clean_optional_text(fiscal_year)
@@ -433,7 +444,8 @@ async def _handle_upload(
         persist_snapshot=False,
     )
 
-    duplicate = runtime.find_duplicate_upload(
+    duplicate = await run_in_threadpool(
+        runtime.find_duplicate_upload,
         checksum=str(uploaded.get("checksum") or ""),
         organization_id=selected_org,
         fiscal_year=fiscal_year,
@@ -481,6 +493,28 @@ async def _handle_upload(
     uploaded["organization_match_confidence"] = (
         org_binding.get("organization_match_confidence") if org_binding else None
     )
+    # 自动归属在首次查重之后才发生：用最终绑定的组织再查一次，不能漏掉自动路径的重复。
+    if not selected_org and uploaded.get("organization_id"):
+        duplicate = await run_in_threadpool(
+            runtime.find_duplicate_upload,
+            checksum=str(uploaded.get("checksum") or ""),
+            organization_id=str(uploaded.get("organization_id") or ""),
+            fiscal_year=fiscal_year,
+            doc_type=doc_type,
+            exclude_job_id=str(uploaded.get("job_id") or ""),
+        )
+        if duplicate is not None:
+            runtime.cleanup_uploaded_job(str(uploaded.get("job_id") or ""))
+            try:
+                runtime.require_org_storage().unlink_job(str(uploaded.get("job_id") or ""))
+            except Exception:
+                logger.exception("Failed to unlink rejected auto-bound upload from organization")
+            duplicate_filename = str(duplicate.get("filename") or "历史文件")
+            duplicate_job_id = str(duplicate.get("job_id") or "")
+            raise HTTPException(
+                status_code=409,
+                detail=f"检测到重复上传：{duplicate_filename}（任务 {duplicate_job_id}）",
+            )
     uploaded["fiscal_year"] = fiscal_year
     uploaded["doc_type"] = doc_type
     uploaded["report_year"] = runtime.parse_report_year(fiscal_year)
@@ -505,6 +539,29 @@ async def _handle_upload(
     )
     if uploaded.get("organization_id"):
         clear_department_stats_cache()
+    # P0：上传与首次入队合并为一次请求。前端不必等逐文件 `/api/analyze` 返回后才
+    # 跳转；文件落盘、查重、登记完成后由服务端同步入队，响应即代表"已排队"。
+    # 入队失败不回滚原件：文件已上传成功，必须在响应里如实区分，让用户能在队列重试。
+    if enqueue:
+        request_body = dict(analyze_body or {})
+        request_body.setdefault("mode", "dual")
+        request_body.setdefault("use_local_rules", True)
+        try:
+            analysis = await runtime.start_analysis(job_id, request_body)
+            uploaded["analysis"] = {"started": True, **analysis}
+        except HTTPException as exc:
+            uploaded["analysis"] = {
+                "started": False,
+                "status_code": exc.status_code,
+                "detail": exc.detail,
+            }
+        except Exception as exc:  # noqa: BLE001 - 原件已保存，入队失败只降级不回滚
+            logger.exception("Failed to enqueue analysis for uploaded job %s", job_id)
+            uploaded["analysis"] = {
+                "started": False,
+                "status_code": 500,
+                "detail": str(exc),
+            }
     return uploaded
 
 
@@ -554,10 +611,24 @@ async def upload_document(
     org_id: Optional[str] = Form(None),
     fiscal_year: Optional[str] = Form(None),
     doc_type: Optional[str] = Form(None),
+    enqueue: bool = Form(False),
+    mode: Optional[str] = Form(None),
+    use_local_rules: Optional[str] = Form(None),
+    use_ai_assist: Optional[str] = Form(None),
+    ai_profile_id: Optional[str] = Form(None),
     api_key: str = Depends(runtime.verify_api_key),
 ):
     _ = api_key
     _, _, user = require_login(request)
+    analyze_body: Optional[Dict[str, Any]] = None
+    if enqueue:
+        analyze_body = {
+            "mode": (mode or "dual").strip().lower(),
+            "use_local_rules": use_local_rules if use_local_rules is not None else True,
+            "use_ai_assist": use_ai_assist,
+        }
+        if ai_profile_id:
+            analyze_body["ai_profile_id"] = ai_profile_id
     return await _handle_upload(
         file,
         selected_org=org_unit_id or org_id,
@@ -565,4 +636,6 @@ async def upload_document(
         doc_type=doc_type,
         created_by=str(user.get("username") or ""),
         actor=user,
+        enqueue=enqueue,
+        analyze_body=analyze_body,
     )

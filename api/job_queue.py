@@ -151,6 +151,10 @@ class DurableJobQueue:
 
     async def discover_pending_jobs(self, *, mark_requeued: bool = False) -> int:
         """Discover persisted jobs, including jobs submitted after worker startup."""
+        from src.services.document_scope import dispatch_pending
+        await dispatch_pending()
+        from src.services.document_scope import dispatch_writing_pending
+        await dispatch_writing_pending()
         resumed = 0
         # 读文件放到线程里，不占用事件循环。
         for job_dir, retry_not_before, status_data in await asyncio.to_thread(self._scan_resumable_jobs):

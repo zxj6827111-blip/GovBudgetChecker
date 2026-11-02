@@ -19,8 +19,10 @@ import pytest
 
 import src.services.analysis_result_store as analysis_result_store
 from src.engine.ai import extractor_client as extractor_module
+from src.engine.ai.audit_prompts import TEXT_SEMANTICS, specialty_prompt_version
 from src.engine.ai.extractor_client import (
     FULL_REPORT_AUDIT_PROMPT_ID,
+    MIN_ISSUE_CONFIDENCE,
     ExtractorClient,
     full_report_audit_prompt_version,
     render_full_report_audit_instructions,
@@ -98,6 +100,7 @@ async def test_direct_semantic_audit_records_actual_model(monkeypatch: pytest.Mo
         {
             "problem_type": "ratio_recalc",
             "original": "同比增长12.5%",
+            "quote": "同比增长12.5%",
             "suggestion": "复算同比",
             "span": [0, 8],
             "context": "同比增长12.5%",
@@ -117,13 +120,17 @@ async def test_direct_semantic_audit_records_actual_model(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(client, "_get_direct_ai_client", lambda: _FakeAIClient())
 
-    issues = await client._direct_semantic_audit("同比增长12.5%，实际应为8.3%。")
+    issues = await client._direct_semantic_audit(
+        "同比增长12.5%，实际应为8.3%。", specialties=[TEXT_SEMANTICS]
+    )
 
     assert len(issues) == 1
     provenance = read_finding_provenance(issues[0])
     assert provenance["model_version"] == "actual_provider/actual-model"
     assert provenance["model_version"] != "configured_provider/configured-model"
-    assert provenance["prompt_version"] == full_report_audit_prompt_version()
+    assert provenance["prompt_version"] == specialty_prompt_version(
+        TEXT_SEMANTICS, MIN_ISSUE_CONFIDENCE
+    )
     assert provenance["source_channel"] == "direct_llm"
 
 

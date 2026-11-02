@@ -617,6 +617,8 @@ def test_coverage_keeps_raw_status_codes_for_the_presentation_layer():
                     "reason": "insufficient_data",
                     "reason_label": "取数不足",
                     "detail": "未能定位合计行",
+                    "basis": "表内合计必须等于分项之和（清单 C-01）",
+                    "checkers": ["V33-005", "V33-120"],
                     "blocks_gate": True,
                     "requires_ai": False,
                     "input_gaps": ["table_total"],
@@ -639,6 +641,9 @@ def test_coverage_keeps_raw_status_codes_for_the_presentation_layer():
     assert block.items[0].status == "insufficient_data"
     assert block.items[0].blocks_gate is True
     assert block.items[0].reason_label == "取数不足"
+    # 补核面板要回答"这条在查什么"和"同源问题是谁"，依据与 checker 必须透出。
+    assert block.items[0].basis == "表内合计必须等于分项之和（清单 C-01）"
+    assert block.items[0].checkers == ["V33-005", "V33-120"]
 
 
 def test_coverage_rate_is_none_when_nothing_is_applicable():
@@ -787,3 +792,24 @@ def _run(coro):
     import asyncio
 
     return asyncio.run(coro)
+
+
+def test_ai_scope_meta_none_when_history_has_no_ai_fields() -> None:
+    from src.services.material_detail_query_service import _ai_scope_meta
+
+    assert _ai_scope_meta({}) is None
+    assert _ai_scope_meta({"unrelated": 1}) is None
+
+
+def test_ai_scope_meta_reads_quality_gate_conclusion_scope_fallback() -> None:
+    from src.services.material_detail_query_service import _ai_scope_meta
+
+    payload = {
+        "ai_execution": {"requested": True, "state": "degraded"},
+        "ai_coverage": {"status": "partial", "planned_calls": 4, "succeeded_calls": 3},
+        "quality_gate": {"conclusion_scope": "incomplete_scope"},
+    }
+    scope = _ai_scope_meta(payload)
+    assert scope is not None
+    assert scope["conclusion_scope"] == "incomplete_scope"
+    assert scope["ai_coverage"]["status"] == "partial"

@@ -154,6 +154,37 @@ def isolate_upload_root(tmp_path_factory, monkeypatch):
     yield root
 
 
+@pytest.fixture(autouse=True)
+def isolate_organization_directory(tmp_path, monkeypatch):
+    """测试不能复用历史 /tmp 组织库，避免遗留无上级单位污染后续层级校验。"""
+    from src.services import org_storage, org_matcher
+
+    directory = tmp_path / "isolated-orgs"
+    monkeypatch.setenv("ORG_DATA_DIR", str(directory))
+    monkeypatch.setattr(org_storage, "DATA_DIR", directory)
+    monkeypatch.setattr(org_storage, "ORG_FILE", directory / "organizations.json")
+    monkeypatch.setattr(org_storage, "LINKS_FILE", directory / "job_org_links.json")
+    monkeypatch.setattr(org_storage, "_storage_instance", None)
+    monkeypatch.setattr(org_matcher, "_matcher_instance", None)
+    yield directory
+
+
+@pytest.fixture
+def approved_test_blank_convention(tmp_path, monkeypatch):
+    """历史网格/证据测试显式申请的测试约定，绝不成为生产默认口径。"""
+    import json
+    from src.services.fiscal_table_rules import NINE_TABLE_RULES
+
+    path = tmp_path / "test-only-empty-conventions.json"
+    policies = [dict(id=f"isolated-blank-{region}", source_kind="isolated_test", region=region,
+                     years=[2022, 2023, 2024, 2025, 2026], table_codes=list(NINE_TABLE_RULES),
+                     cell_ranges=[dict(rows=[0, 300], columns=[0, 30])], semantics={"blank": "zero"})
+                for region in ("甲局", "上海市", "测试局")]
+    path.write_text(json.dumps(policies, ensure_ascii=False))
+    monkeypatch.setenv("GOVBUDGET_EMPTY_VALUE_CONVENTIONS", str(path))
+    yield path
+
+
 @pytest.fixture(scope="session")
 def event_loop():
     """创建事件循环用于异步测试"""

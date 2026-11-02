@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 from decimal import Decimal
 
+from .amount_math import classify_amount_diff
 from .rule_policy import AMOUNT_TOLERANCE_WAN, amount_difference_exceeds_policy
 from .native_narrative_checks import (
     _Text, _NUMBER, _UNIT, _wan, _metadata, _sections, _foreign_owner,
@@ -69,8 +70,23 @@ def _name(value):
 
 def _unresolved(rule, doc, key, reason, unresolved, facts=(), formula='text = table'):
     unresolved.append(reason)
+    codes = []
+    if facts:
+        from src.engine.fact_context import operand_rejection_code
+        context = getattr(doc, 'fact_context', None)
+        codes = [code for code in (
+            operand_rejection_code(fact, getattr(context, 'org_name', None)) for fact in facts
+        ) if code]
+    if not codes:
+        text = str(reason or '')
+        if '缺失或不唯一' in text:
+            codes = ['operand_missing_or_ambiguous']
+        elif '身份' in text or '识别状态' in text:
+            codes = ['identity_unconfirmed']
+        elif '未识别到' in text or '未找到' in text:
+            codes = ['source_missing']
     receipt(rule, doc, key, list(facts), status='insufficient_data',
-            formula=formula, reason=reason)
+            formula=formula, reason=reason, reason_codes=list(dict.fromkeys(codes)))
 
 
 def _source_refs(facts):
@@ -259,6 +275,28 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                     return rebound
             level = {'klass': '类', 'kuan': '款', 'xiang': '项'}[group]
             if not candidates:
+                # 仅解释原文差异，不把近似名称或相同金额升级为同一科目身份。
+                near = {}
+                requested = _name(item[group])
+                if group == 'xiang':
+                    for f in facts:
+                        code = str(f.subject_code)
+                        actual = _name(f.subject_name)
+                        if (f.indicator != 'total_actual' or len(paths.get(code, '')) != 7
+                                or not paths[code].startswith(parent) or not 0 < len(actual)-len(requested) <= 2):
+                            continue
+                        chars = iter(actual)
+                        if all(char in chars for char in requested):
+                            near[code] = f
+                if len(near) == 1:
+                    candidate = next(iter(near.values()))
+                    refs = candidate.extra_dims.get('evidence_refs', [])
+                    pages = sorted({ref['physical_page'] for ref in refs if ref.get('physical_page')})
+                    text = _Text.from_pages(doc.page_texts)
+                    source = text.refs(item.start(), item.end(), '原文科目')
+                    return None, (f"科目名称差异候选：正文第{source[0]['page'] if source else '?'}页写“{item[group]}”；"
+                                  f"同款表格第{'、'.join(map(str,pages)) or '?'}页编码{candidate.subject_code}写“{candidate.subject_name}”。"
+                                  "名称不一致，尚未绑定金额；请核对科目名称后确认，不能仅凭金额相同认定一致。")
                 return None, (f'说明中的{level}“{item[group]}”在表内找不到同名科目'
                               f'（可能使用了旧科目名称或写错），无法与表格金额对应')
             return None, f'说明中的{level}“{item[group]}”在表内对应多个科目，无法唯一对应'
@@ -271,6 +309,59 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
 
 def _general_ranges(doc):
     return sections(doc, is_general_expenditure_title)
+
+
+def _zero_item_parent_reconciles(doc, facts, item) -> bool:
+    """说明列示为 0、表内却省略该零值项时，父级款合计能否证明它确为 0。
+
+    只处理“项名在表内找不到”的情形；父级款合计必须等于表内已列项之和。
+    若未列项其实有金额，父级合计会大于已列项之和，本函数返回 False，
+    调用方继续按取数不足/问题处理，不静默补零。
+    """
+    codes = {str(f.subject_code) for f in facts if str(f.subject_code or "").isdigit()}
+    paths = hierarchy_paths(codes)
+    if len(set(paths.values())) != len(paths):
+        return False
+
+    def unique_code(width: int, prefix: str, name: str):
+        matches = {
+            code
+            for code in codes
+            if len(paths.get(code, "")) == width
+            and paths[code].startswith(prefix)
+            and {
+                _name(f.subject_name)
+                for f in facts
+                if str(f.subject_code) == code and f.indicator == "total_actual"
+            }
+            == {_name(name)}
+        }
+        return next(iter(matches)) if len(matches) == 1 else None
+
+    klass_code = unique_code(3, "", item["klass"])
+    if klass_code is None:
+        return False
+    kuan_code = unique_code(5, paths[klass_code], item["kuan"])
+    if kuan_code is None:
+        return False
+    parent, error = select(doc, facts, "total_actual", code=kuan_code)
+    if error or parent is None:
+        return False
+    children = [
+        f
+        for f in facts
+        if f.indicator == "total_actual"
+        and len(paths.get(str(f.subject_code), "")) == 7
+        and paths[str(f.subject_code)].startswith(paths[kuan_code])
+        and f.instance_uid == parent.instance_uid
+        and f.budget_stage == parent.budget_stage
+        and f.fund_scope == parent.fund_scope
+    ]
+    if not children:
+        return False
+    total = sum((f.normalized_value for f in children), Decimal("0"))
+    level, _ = classify_amount_diff(parent.normalized_value, total, n_children=len(children))
+    return level in {"ok", "rounding_hint", "within_policy_tolerance"}
 
 
 def check_function_disclosures(rule, doc):
@@ -338,12 +429,90 @@ def check_function_disclosures(rule, doc):
         if len(claims) != 1:
             error = error or f'{item["xiang"]}条目显式决算金额缺失或不唯一，不能用预算金额替代'
         if error:
+            # 零额项被表内省略：说明明确写 0，且父级款合计 = 表内已列项之和。
+            # 这不是“找不到科目”的取数不足，而是零值行未列示；不弹补核。
+            if (
+                len(claims) == 1
+                and _wan(claims[0]["amount"], claims[0]["unit"]) == 0
+                and "说明中的项" in error
+                and "在表内找不到同名科目" in error
+                and _zero_item_parent_reconciles(doc, facts, item)
+            ):
+                receipt(
+                    rule,
+                    doc,
+                    key,
+                    [],
+                    status="not_applicable",
+                    formula="说明列示决算为0且表内未列零值行；父级款合计=已列项之和",
+                )
+                continue
             _unresolved(rule, doc, key, error, unresolved, [fact] if fact else [])
         else:
             claim = claims[0]
             issues.extend(_amount(rule, doc, text, item.start(), claim.end(), claim['amount'],
                           claim['unit'], fact, key, item['xiang'], title, identity_sources=aliases))
     return finish(rule, issues, unresolved)
+
+
+def _fund_total_from_classes(doc, facts):
+    """合计行本年支出被支出子表头占位时，按类级行合计给出总额。
+
+    区级模板把「合计/基本支出/项目支出」三个叶表头印在合计行同一原行上
+    （:func:`src.services.fiscal_column_identity.mixed_expenditure_header_cells`
+    已按表头处理这些单元格），所以合计行的本年支出没有金额事实。此时类级行
+    齐全可读就用它们的和作总额——这是"合计 = 各类之和"的勾稽，不是空白补零：
+    任何一个 3 位编码行缺原始值或读不出金额就放弃推导，交由调用方按取数不足
+    上报。
+    """
+    classes = [f for f in facts
+               if f.indicator == 'total_actual'
+               and re.fullmatch(r'\d{3}', str(f.subject_code or ''))]
+    codes = [str(f.subject_code) for f in classes]
+    if not classes or len(set(codes)) != len(codes):
+        return None, (), ''
+    if any(not str(f.raw_value or '').strip() or f.normalized_value is None for f in classes):
+        return None, (), ''
+    # 类级行必须与合计行同一操作数口径：年度、期间、阶段与主体都要过 select 同款判据。
+    from .fact_context import _canonical_budget_stage, operand_rejection_reason
+    context = doc.fact_context
+    for fact in classes:
+        if (operand_rejection_reason(fact, context.org_name)
+                or context.fiscal_year is None or fact.fiscal_year != context.fiscal_year
+                or fact.period not in (None, '本年')
+                or _canonical_budget_stage(fact.budget_stage) != '决算'):
+            return None, (), ''
+    total = sum((f.normalized_value for f in classes), Decimal('0'))
+    return total, tuple(classes), (
+        '合计行本年支出单元格印的是支出子表头（合计/基本支出/项目支出），未印数；'
+        '按类级行合计核算')
+
+
+def _amount_from_derived(rule, doc, text, begin, end, amount, unit, derived, key, label, section):
+    """说明金额 × 推导总额（类级行合计）的比对；推导依据写进 evidence/formula。"""
+    value, operands, note = derived
+    declared = _wan(amount, unit)
+    difference = declared - value
+    failed = amount_difference_exceeds_policy(difference)
+    refs = text.refs(begin, end, '原文决算金额声明')
+    ids, evidence = receipt(rule, doc, key, list(operands), status='fail' if failed else 'pass',
+            formula='explicit narrative amount == sum of class rows (total cell not printed)',
+            disclosure_sources=[dict(ref, file_hash=doc.fact_context.file_hash) for ref in refs])
+    if not failed:
+        return []
+    location = _location(doc, refs, list(operands), section, 'final_disclosure_amount',
+                         table_code=operands[0].table_code, subject_code='total',
+                         indicator='total_actual', declared_amount_wan=str(declared),
+                         table_amount_wan=str(value), declared_unit=unit,
+                         difference_wan=str(difference), tolerance_wan=str(AMOUNT_TOLERANCE_WAN),
+                         derived_total_from='class_rows', derived_total_note=note)
+    message = (f'{label}表文金额不一致：原文{amount}{unit}折合{declared}万元，'
+               f'表内类级行合计{value:.2f}万元（{note}），'
+               f'相差{abs(difference):.4f}万元。')
+    return [rule._issue(message, location, 'error',
+                        evidence_text=_quote(location),
+                        check_relation_id=f'{rule.code}:{key}', fact_ids=ids,
+                        evidence_ids=evidence)]
 
 
 def check_fund_totals(rule, doc):
@@ -377,9 +546,19 @@ def check_fund_totals(rule, doc):
     for indicator, label, claim, proof_start in claims:
         key = f'fund:text:{indicator}:{claim.start()}'
         fact, error = select(doc, facts, indicator, code='total')
+        derived = None
+        if error and indicator == 'total_actual':
+            value, operands, note = _fund_total_from_classes(doc, facts)
+            if value is not None:
+                derived = (value, operands, note)
+                error = None
         error = error or _guard(doc, text, begin, proof_start, claim.end())
         if error:
-            _unresolved(rule, doc, key, error, unresolved, [fact] if fact else [])
+            _unresolved(rule, doc, key, error, unresolved,
+                        [fact] if fact else list(derived[1]) if derived else [])
+        elif derived is not None:
+            issues.extend(_amount_from_derived(rule, doc, text, proof_start, claim.end(),
+                          claim['amount'], claim['unit'], derived, key, label, title))
         else:
             issues.extend(_amount(rule, doc, text, proof_start, claim.end(), claim['amount'],
                           claim['unit'], fact, key, label, title))

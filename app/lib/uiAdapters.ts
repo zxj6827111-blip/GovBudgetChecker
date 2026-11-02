@@ -23,6 +23,12 @@ const MEASURE_LABELS: Record<string, string> = {
   expenditure_actual: "支出决算金额",
   total_budget: "预算金额",
   budget_amount: "预算金额",
+  overseas: "因公出国（境）费",
+  vehicle_purchase_operation: "公务用车购置及运行费",
+  vehicle_subtotal: "公务用车购置及运行费",
+  vehicle_purchase: "公务用车购置费",
+  vehicle_operation: "公务用车运行费",
+  reception: "公务接待费",
 };
 
 function displayTableName(value: unknown): string {
@@ -64,6 +70,15 @@ export interface JobSummaryRecord {
   review_candidate_total?: number;
   tip_total?: number;
   review_notice_total?: number;
+  /** 审核台两个页签的条数（后端 review_queue_counts）；旧摘要可能没有。 */
+  queue_required_total?: number;
+  queue_reference_total?: number;
+  /** 必须处理里“未能自动核对”的条数（已含在 queue_required_total 内）。 */
+  queue_obligation_total?: number;
+  queue_candidate_total?: number;
+  queue_degraded_total?: number;
+  queue_tip_total?: number;
+  queue_notice_total?: number;
   issue_error?: number;
   issue_warn?: number;
   issue_info?: number;
@@ -849,6 +864,7 @@ function collectReviewReportManualIssues(reviewReport: Record<string, unknown>):
     );
     const page = rawPage > 0 ? rawPage : candidatePage > 0 ? candidatePage : undefined;
     const reviewReasonTitles: Record<string, string> = {
+      org_scope_pending: "材料汇总口径待确认",
       ai_failed: "大模型检查未完整完成",
       evidence_incomplete_findings: "大模型发现证据不足",
       rule_evidence_incomplete: "规则问题证据不足",
@@ -914,6 +930,15 @@ function collectReviewReportManualIssues(reviewReport: Record<string, unknown>):
       claimed_page_number: candidateFinding.claimed_page_number,
       evidence_missing: candidateFinding.evidence_missing,
       evidence_verification: candidateFinding.evidence_verification,
+      // 解释字段必须随候选一起转交；否则复核报告里的 AI 候选会在页面上
+      // 只剩一句 message，既看不到当前值/应为值，也丢了“模型声称”提示。
+      expected: candidateFinding.expected,
+      actual: candidateFinding.actual,
+      difference: candidateFinding.difference,
+      check: candidateFinding.check,
+      table_or_section: candidateFinding.table_or_section,
+      amounts_provenance: candidateFinding.amounts_provenance,
+      calculation_basis: candidateFinding.calculation_basis,
       suggestion: String(
         item.suggestion ?? candidateFinding.suggestion ?? item.recommended_action ?? "核对原始材料后确认。",
       ),
@@ -974,6 +999,28 @@ function annotateFindingSources(
   });
 }
 
+const MACHINE_CODE_AI_TITLE = /^(待人工复核：)?([A-Za-z][A-Za-z0-9_-]*)$/;
+
+/**
+ * 旧版 AI 结果里，问题类型不在中文对照表时标题落成了英文机器代码（如“待人工复核：generic”），
+ * 并写进了 message 与 display.summary。有检查项名称时改用检查项名称展示；原始记录不改。
+ */
+function withReadableAiTitle(issue: Record<string, unknown>): Record<string, unknown> {
+  if (String(issue.source ?? "") !== "ai") return issue;
+  const title = String(issue.title ?? "").trim();
+  const match = MACHINE_CODE_AI_TITLE.exec(title);
+  const metrics = isRecord(issue.metrics) ? issue.metrics : {};
+  const checkName = String(issue.check ?? metrics.check ?? "").trim();
+  if (!match || !checkName) return issue;
+  const readable = `${match[1] ?? ""}${checkName}`;
+  // 只有带“待人工复核：”前缀时才在长文本里替换，裸代码可能是别的词的一部分。
+  const swap = (value: unknown) => typeof value !== "string" ? value
+    : value.trim() === title ? readable
+      : match[1] ? value.split(title).join(readable) : value;
+  const display = isRecord(issue.display) ? { ...issue.display, summary: swap(issue.display.summary) } : issue.display;
+  return { ...issue, title: readable, message: swap(issue.message), display };
+}
+
 export function toUiProblems(detail: JobDetailRecord, options: { includeEvidencePreview?: boolean } = {}): Problem[] {
   const result = isRecord(detail.result) ? detail.result : {};
   const reviewReport = isRecord(detail.review_report) ? detail.review_report : {};
@@ -999,7 +1046,8 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
 
   const mappedProblems: Problem[] = issues
     .filter((issue) => !ignored.has(String(issue.id ?? "")))
-    .map((issue, index) => {
+    .map((rawIssue, index) => {
+      const issue = withReadableAiTitle(rawIssue);
       const anchor = resolveIssueAnchor(issue);
       const { page, evidence } = anchor;
       const rawLocation = isRecord(issue.location) ? issue.location : {};
@@ -1008,6 +1056,15 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
       const resolvedTitle = String(display.summary ?? issue.rule_name ?? title).trim() || title;
       const snippet = String(evidence?.quote ?? evidence?.text_snippet ?? evidence?.text ?? issue.text_snippet ?? "").trim();
       const location = resolveProblemLocation(issue, page);
+      const relatedRuleIds = Array.from(new Set([
+        ...(Array.isArray(issue.related_rule_ids) ? issue.related_rule_ids : []),
+        ...(Array.isArray(rawLocation.related_rule_ids) ? rawLocation.related_rule_ids : []),
+      ].map((item) => String(item ?? "").trim()).filter(Boolean)));
+      const memberIssueIds = Array.from(new Set([
+        ...(Array.isArray(issue.merged_issue_ids) ? issue.merged_issue_ids : []),
+        ...(Array.isArray(rawLocation.merged_issue_ids) ? rawLocation.merged_issue_ids : []),
+        ...(Array.isArray(rawLocation.member_issue_ids) ? rawLocation.member_issue_ids : []),
+      ].map((item) => String(item ?? "").trim()).filter(Boolean)));
       const rawRefs = Array.isArray(rawLocation.table_refs)
         ? rawLocation.table_refs.filter(isRecord)
         : [];
@@ -1039,6 +1096,54 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
           verificationStatus,
         }];
       });
+      const factRefs = Array.isArray(rawLocation.fact_source_refs)
+        ? rawLocation.fact_source_refs.filter(isRecord).flatMap((ref, refIndex) => {
+            const refPage = toNumber(ref.physical_page ?? ref.page);
+            if (!Number.isFinite(refPage) || refPage <= 0) return [];
+            const spanText = String(ref.span ?? ref.value ?? "").trim();
+            return [{
+              key: `fact|${String(ref.role ?? "原始表格金额")}|${Math.floor(refPage)}|${String(ref.fact_uid ?? ref.evidence_id ?? refIndex)}`,
+              role: String(ref.role ?? "原始表格金额"),
+              page: Math.floor(refPage),
+              locationText: [`第 ${Math.floor(refPage)} 页`, String(ref.role ?? "原始表格金额")].join(" · "),
+              valueText: spanText || undefined,
+              bbox: Array.isArray(ref.bbox) ? ref.bbox.map((item) => Number(item)) : undefined,
+              locationLevel: String(ref.location_level ?? "region"),
+              verificationStatus: String(ref.verification_status ?? "unverified"),
+            }];
+          })
+        : [];
+      const pairRefs = Array.isArray(rawLocation.evidence_pairs)
+        ? rawLocation.evidence_pairs.filter(isRecord).flatMap((ref, refIndex) => {
+            const refPage = toNumber(ref.page);
+            if (!Number.isFinite(refPage) || refPage <= 0) return [];
+            return [{
+              key: `pair|${Math.floor(refPage)}|${refIndex}`,
+              role: `跨段证据 ${refIndex + 1}`,
+              page: Math.floor(refPage),
+              locationText: [`第 ${Math.floor(refPage)} 页`, String(ref.table_or_section ?? "").trim()].filter(Boolean).join(" · "),
+              locationLevel: "region",
+              verificationStatus: "unverified",
+            }];
+          })
+        : [];
+      const rejectedPairRefs = Array.isArray(rawLocation.evidence_pairs_rejected)
+        ? rawLocation.evidence_pairs_rejected.filter(isRecord).flatMap((ref, refIndex) => {
+            const refPage = toNumber(ref.page);
+            if (!Number.isFinite(refPage) || refPage <= 0) return [];
+            return [{
+              key: `pair-rejected|${Math.floor(refPage)}|${refIndex}`,
+              role: "模型声称证据（未通过逐字校验）",
+              page: Math.floor(refPage),
+              locationText: [`第 ${Math.floor(refPage)} 页`, String(ref.table_or_section ?? "").trim()].filter(Boolean).join(" · "),
+              locationLevel: "region",
+              verificationStatus: "unverified",
+            }];
+          })
+        : [];
+      const allEvidenceRefs = [...evidenceRefs, ...factRefs, ...pairRefs, ...rejectedPairRefs].filter(
+        (ref, refIndex, all) => all.findIndex((item) => item.key === ref.key) === refIndex,
+      );
       const roundingCases = Array.isArray(rawLocation.rounding_cases)
         ? rawLocation.rounding_cases.filter(isRecord).flatMap((item, caseIndex) => {
             const relationId = String(item.relation_id ?? "").trim();
@@ -1056,6 +1161,9 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
       return {
         id: String(issue.id ?? `${detail.job_id}-issue-${index + 1}`),
         ruleId: String(issue.rule_id ?? issue.rule ?? "UNKNOWN"),
+        problemGroupId: String(rawLocation.problem_group_id ?? "").trim() || undefined,
+        relatedRuleIds: relatedRuleIds.length ? relatedRuleIds : undefined,
+        memberIssueIds: memberIssueIds.length ? memberIssueIds : undefined,
         title: resolvedTitle,
         severity: mapSeverity(issue.severity),
         severityLabel: String(issue.severity_label ?? getSeverityMeta(issue.severity).label),
@@ -1080,12 +1188,19 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
             ? "manual_review"
             : mapSeverity(issue.severity) === "info" ? "tip" : "issue",
         bbox: anchor.bbox,
-        evidenceRefs,
+        evidenceRefs: allEvidenceRefs,
         roundingCases,
         expectedName: String(issue.expected_name ?? rawLocation.expected_name ?? ""),
         actualName: String(issue.actual_name ?? rawLocation.actual_name ?? ""),
         codeLevel: String(issue.code_level ?? rawLocation.code_level ?? ""),
         sourceOfTruth: String(issue.source_of_truth ?? rawLocation.source_of_truth ?? ""),
+        expected: String(issue.expected ?? "").trim() || undefined,
+        actual: String(issue.actual ?? "").trim() || undefined,
+        difference: String(issue.difference ?? "").trim() || undefined,
+        check: String(issue.check ?? rawLocation.check ?? "").trim() || undefined,
+        tableOrSection: String(issue.table_or_section ?? rawLocation.table_or_section ?? "").trim() || undefined,
+        amountsProvenance: String(issue.amounts_provenance ?? "").trim() || undefined,
+        calculationBasis: isRecord(issue.calculation_basis) ? issue.calculation_basis : undefined,
         evidenceStatus: issue.evidence_status ? String(issue.evidence_status) : undefined,
         usesManualFill: Array.isArray(issue.manual_fill_fact_ids) && issue.manual_fill_fact_ids.length > 0,
         claimedPage: toNumber(issue.claimed_page_number) > 0 ? toNumber(issue.claimed_page_number) : undefined,

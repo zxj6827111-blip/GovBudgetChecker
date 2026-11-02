@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Download, RefreshCw, FileText, Link2 } from "lucide-react";
 
 import AssociateDialog from "@/components/AssociateDialog";
+import { AiScopeBanner } from "@/components/AiScopeBanner";
 import { useAIAnalysisOptions } from "@/components/AIAnalysisOptions";
 import AnalysisCheckProgress from "@/components/AnalysisCheckProgress";
 import ReanalyzeAiToggle from "@/components/ReanalyzeAiToggle";
@@ -19,6 +20,7 @@ import { isHighRiskSeverity } from "@/lib/issueSeverity";
 import type { Problem, Task } from "@/lib/mock";
 import { cn } from "@/lib/utils";
 import { recognitionStateLabel } from "@/lib/reportVersion";
+import { deriveAiScope } from "@/lib/aiScope";
 import type { JobDetailRecord, StructuredIngestRecord } from "@/lib/uiAdapters";
 import { selectStructuredForJob, toUiProblems, toUiTask } from "@/lib/uiAdapters";
 import {
@@ -52,6 +54,25 @@ function normalizeProblemSearchValue(value: string): string {
   return value.trim().toLowerCase();
 }
 
+interface RevisionDecisionRecord {
+  issue_id: string;
+  title?: string | null;
+  page?: number | null;
+  status?: string;
+  note?: string | null;
+  actor?: string | null;
+  updated_at?: string | null;
+  analysis_revision?: string | null;
+  inherited?: boolean;
+}
+
+const DECISION_STATUS_LABELS: Record<string, string> = {
+  confirmed: "已确认",
+  no_issue: "已忽略",
+  in_package: "已进整改包",
+  pending: "待处理",
+};
+
 export default function TaskDetail() {
   const { job_id } = useParams<{ job_id: string }>();
   const router = useRouter();
@@ -76,6 +97,7 @@ export default function TaskDetail() {
   const [ignoringProblemId, setIgnoringProblemId] = useState<string | null>(null);
   const [selectedRevision, setSelectedRevision] = useState(() => typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("analysis_revision") ?? "");
   const [revisions, setRevisions] = useState<Array<{revision_id: string; is_current: boolean; state: string}>>([]);
+  const [historyDecisions, setHistoryDecisions] = useState<RevisionDecisionRecord[]>([]);
 
   useEffect(() => {
     let alive = true;
@@ -119,6 +141,23 @@ export default function TaskDetail() {
       // 接口兜底只对"请求失败"生效；拿到 200 但不是 {items:[...]} 时 items 会是
       // undefined，下面 revisions.length 直接抛错，整页（含全部操作按钮）被卸载。
       setRevisions(Array.isArray(versions?.items) ? versions.items : []);
+      const rawDecisions = Array.isArray(detail.human_decisions) ? detail.human_decisions : [];
+      setHistoryDecisions(
+        rawDecisions
+          .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+          .map((item) => ({
+            issue_id: String(item.issue_id ?? ""),
+            title: typeof item.title === "string" ? item.title : null,
+            page: typeof item.page === "number" ? item.page : null,
+            status: typeof item.status === "string" ? item.status : undefined,
+            note: typeof item.note === "string" ? item.note : null,
+            actor: typeof item.actor === "string" ? item.actor : null,
+            updated_at: typeof item.updated_at === "string" ? item.updated_at : null,
+            analysis_revision: typeof item.analysis_revision === "string" ? item.analysis_revision : null,
+            inherited: item.inherited === true,
+          }))
+          .filter((item) => item.issue_id),
+      );
       setTask(nextTask);
       setProblems(nextProblems);
       setLoading(false);
@@ -190,17 +229,43 @@ export default function TaskDetail() {
       ? aiOptions.enabled
       : typeof jobDetail?.use_ai_assist === "boolean" ? jobDetail.use_ai_assist : false);
 
-  const handleReanalyze = async () => {
+  const taskAiScope = useMemo(() => {
+    const meta = jobDetail?.result?.meta;
+    const requestedHint = typeof jobDetail?.use_ai_assist === "boolean"
+      ? jobDetail.use_ai_assist
+      : null;
+    const conclusionScopeHint = typeof jobDetail?.conclusion_scope === "string"
+      ? jobDetail.conclusion_scope
+      : null;
+    return deriveAiScope(
+      meta && typeof meta === "object" && !Array.isArray(meta) ? meta : {},
+      { requestedHint, conclusionScopeHint },
+    );
+  }, [jobDetail]);
+
+  const currentRevisionId = revisions.find((item) => item.is_current)?.revision_id ?? "";
+  const hasCheckProgress = (() => {
+    const value = jobDetail?.check_progress;
+    if (!value || typeof value !== "object") return false;
+    const tracks = value as { local?: unknown; ai?: unknown };
+    return Boolean(tracks.local || tracks.ai);
+  })();
+
+  const handleReanalyze = async (useAiOverride?: boolean) => {
     if (isReanalyzing || task?.status === "analyzing") {
       return;
     }
 
+    const useAi = useAiOverride ?? effectiveReanalyzeUseAiAssist;
     if (
-      !confirm("确定要重新分析这份报告吗？系统会基于当前任务重新执行分析。")
+      !confirm(
+        `确定要重新分析这份报告吗？系统会基于当前任务重新执行分析。\n本次将${useAi ? "调用大模型做文字语义复核" : "仅执行本地规则检查"}。`,
+      )
     ) {
       return;
     }
 
+    setReanalyzeUseAiAssist(useAi);
     setIsReanalyzing(true);
 
     try {
@@ -209,8 +274,8 @@ export default function TaskDetail() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           use_local_rules: true,
-          use_ai_assist: effectiveReanalyzeUseAiAssist,
-          ai_profile_id: effectiveReanalyzeUseAiAssist ? aiOptions.profileId || null : null,
+          use_ai_assist: useAi,
+          ai_profile_id: useAi ? aiOptions.profileId || null : null,
         }),
       });
 
@@ -225,7 +290,7 @@ export default function TaskDetail() {
           ? {
               ...current,
               use_local_rules: true,
-              use_ai_assist: effectiveReanalyzeUseAiAssist,
+              use_ai_assist: useAi,
             }
           : current
       );
@@ -385,8 +450,9 @@ export default function TaskDetail() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-surface-50" data-analysis-revision={task.analysisRevision}>
-      <div className="z-10 flex h-16 shrink-0 items-center justify-between border-b border-border bg-white px-6 shadow-sm">
-        <div className="flex items-center gap-4">
+      {/* 识别状态、版本和口径提示会增加行数，标题栏必须随内容增高。 */}
+      <div data-testid="task-summary-header" className="z-10 flex min-h-16 shrink-0 flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b border-border bg-white px-4 py-3 shadow-sm sm:px-6">
+        <div className="flex min-w-0 flex-1 basis-full items-start gap-4 lg:basis-0">
           <Link
             href={(task.departmentId ? `/department/${task.departmentId}` : "/") as Route}
             onClick={(event) => {
@@ -399,18 +465,18 @@ export default function TaskDetail() {
 
               router.push((task.departmentId ? `/department/${task.departmentId}` : "/") as Route);
             }}
-            className="rounded-md p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+            className="shrink-0 rounded-md p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
           >
             <ArrowLeft className="h-5 w-5" />
           </Link>
-          <div className="h-6 w-px bg-border" />
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded bg-primary-50 text-primary-600">
+          <div className="mt-1 h-6 w-px shrink-0 bg-border" />
+          <div className="flex min-w-0 flex-1 items-start gap-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-primary-50 text-primary-600">
               <FileText className="h-4 w-4" />
             </div>
-            <div>
-              <h1 className="text-base font-bold leading-tight text-slate-900">{task.filename}</h1>
-              <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
+            <div className="min-w-0 flex-1">
+              <h1 className="break-words text-base font-bold leading-tight text-slate-900">{task.filename}</h1>
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
                 <span>{task.department}</span>
                 <span className="h-1 w-1 rounded-full bg-slate-300" />
                 <span>{task.year} {task.reportLabel}</span>
@@ -424,11 +490,16 @@ export default function TaskDetail() {
                 </select>}
               </div>
               {recognitionLabel && <div className="mt-0.5 text-xs text-slate-500" data-testid="recognition-state">{recognitionLabel}</div>}
+              {task.reviewReasons?.some((reason) => reason.includes("汇总口径待确认")) && (
+                <div className="mt-0.5 text-xs text-amber-700" data-testid="task-scope-pending">
+                  汇总口径待确认 · 检查范围见结果与未完成项
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-3">
           <span
             title={task.reviewReasons?.join("；") || undefined}
             className={cn(
@@ -467,6 +538,19 @@ export default function TaskDetail() {
             <Link2 className="h-4 w-4 text-slate-400" />
             {jobDetail?.organization_id ? "更改关联" : "关联报告"}
           </button>
+          <ReanalyzeAiToggle
+            compact
+            title="使用大模型"
+            checked={effectiveReanalyzeUseAiAssist}
+            onChange={setReanalyzeUseAiAssist}
+            disabled={Boolean(aiOptions.capabilities && !aiOptions.capabilities.enabled)}
+            testId="task-reanalyze-ai-toggle"
+            description={aiOptions.error || (aiOptions.capabilities?.enabled
+              ? aiOptions.enabled
+                ? "重新分析将使用系统当前启用的模型；取消勾选后仅执行本地检查。"
+                : "模型已配置，但本次默认关闭；勾选后重新分析会调用大模型。"
+              : "当前没有可用的大模型配置，重新分析将仅执行本地检查。")}
+          />
           <button
             type="button"
             data-testid="task-reanalyze-button"
@@ -489,23 +573,97 @@ export default function TaskDetail() {
         </div>
       </div>
 
-      <div className="border-b border-border bg-slate-50 px-6 py-3">
-        <AnalysisCheckProgress value={jobDetail?.check_progress} />
-        <div className="flex justify-end">
-          <ReanalyzeAiToggle
-            checked={effectiveReanalyzeUseAiAssist}
-            onChange={setReanalyzeUseAiAssist}
-            disabled={Boolean(aiOptions.capabilities && !aiOptions.capabilities.enabled)}
-            testId="task-reanalyze-ai-toggle"
-            className="w-full max-w-md bg-white"
-            description={aiOptions.error || (aiOptions.capabilities?.enabled
-              ? aiOptions.enabled
-                ? "重新分析将使用系统当前启用的模型；取消勾选后仅执行本地检查。"
-                : "模型已配置，但本次默认关闭；勾选后重新分析会调用大模型。"
-              : "当前没有可用的大模型配置，重新分析将仅执行本地检查。")}
-          />
+      {/* 状态行：AI 检查范围、版本提示合成一行，问题区不被多条横带挤压。 */}
+      <div className="border-b border-border bg-slate-50 px-6 py-1.5" data-testid="task-status-row">
+        <div className="flex flex-wrap items-start gap-2">
+          <div className="min-w-0 flex-1 basis-[28rem]">
+            {task.status === "analyzing" ? (
+              <p className="py-1 text-xs text-slate-500" data-testid="task-ai-scope-analyzing">
+                分析进行中，检查范围将在完成后更新；当前不宣称已完成大模型文字复核。
+              </p>
+            ) : (
+              <AiScopeBanner
+                scope={taskAiScope}
+                testId="task-ai-scope"
+                onRecheck={
+                  taskAiScope.needsRecheck && !selectedRevision
+                    ? () => void handleReanalyze(true)
+                    : undefined
+                }
+                recheckLabel={aiOptions.capabilities?.enabled ? "使用大模型重新分析" : "重新分析"}
+                recheckDisabled={isReanalyzing}
+                variant="inline"
+              />
+            )}
+          </div>
+          {selectedRevision ? (
+            <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-md border border-info-200 bg-info-50 px-2.5 py-1 text-xs">
+              <span className="font-medium text-info-700" data-testid="task-revision-notice">
+                当前查看历史版本 {selectedRevision}，仅供查看；本版本的确认状态不代表当前版本。
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedRevision("")}
+                data-testid="task-revision-return-current"
+                className="rounded border border-border bg-white px-2 py-0.5 text-primary-700 hover:bg-surface-100"
+              >
+                返回当前版本
+              </button>
+            </div>
+          ) : revisions.length > 1 ? (
+            <span
+              data-testid="task-revision-notice"
+              title={`重新分析已生成新版本${currentRevisionId ? `（当前 ${currentRevisionId}）` : ""}，本版本需重新确认；历史版本可在上方“分析版本”选择器查看。`}
+              className="shrink-0 rounded-md border border-warning-200 bg-white px-2.5 py-1 text-xs font-medium text-warning-700"
+            >
+              已生成新版本 · 本版本需重新确认
+            </span>
+          ) : null}
         </div>
+        {aiOptions.error ? (
+          <p className="mt-1 text-xs text-warning-700" data-testid="task-ai-options-error">{aiOptions.error}</p>
+        ) : null}
+        {hasCheckProgress ? (
+          <div className="mt-1.5">
+            <AnalysisCheckProgress value={jobDetail?.check_progress} />
+          </div>
+        ) : null}
       </div>
+
+      {historyDecisions.length > 0 ? (
+        <section className="border-b border-border bg-white px-6 py-2" data-testid="task-revision-history-panel">
+          <div className="text-xs font-medium text-slate-600">本版本人工确认记录 {historyDecisions.length} 条</div>
+          <ul className="mt-1.5 max-h-40 space-y-1 overflow-y-auto text-xs text-slate-600" data-testid="task-history-decisions">
+            {historyDecisions.map((decision) => (
+              <li
+                key={`${decision.issue_id}-${decision.analysis_revision ?? ""}`}
+                data-testid={`task-history-decision-${decision.issue_id}`}
+                className="rounded border border-border bg-surface-50 px-2 py-1"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`rounded-full px-1.5 py-0.5 font-medium ${
+                    decision.status === "confirmed" || decision.status === "in_package"
+                      ? "bg-success-100 text-success-700"
+                      : decision.status === "no_issue"
+                        ? "bg-slate-100 text-slate-600"
+                        : "bg-warning-100 text-warning-700"
+                  }`}>
+                    {DECISION_STATUS_LABELS[decision.status ?? ""] ?? decision.status ?? "待处理"}
+                  </span>
+                  <span className="font-medium text-slate-800">{decision.title || decision.issue_id}</span>
+                  {decision.page ? <span className="text-slate-400">P{decision.page}</span> : null}
+                </div>
+                <div className="mt-0.5">备注：{decision.note || "无"}</div>
+                <div className="mt-0.5 text-slate-500">
+                  操作人：{decision.actor || "未记录"} · 时间：{decision.updated_at || "未记录"} ·
+                  版本：{decision.analysis_revision || selectedRevision || "未记录"}
+                  {decision.inherited ? "（自旧版本沿用）" : ""}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <div className="relative flex flex-1 overflow-hidden">
         <PipelineDrawer

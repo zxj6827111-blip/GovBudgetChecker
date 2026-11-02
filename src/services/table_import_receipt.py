@@ -151,7 +151,27 @@ def build_table_import_receipt(artifact, facts, *, org_name=None):
 
     by_source = {}
     arithmetic_by_instance = {}
+    identity_conflicts_by_instance = {}
     for fact in facts:
+        conflict = fact.extra_dims.get("row_identity_conflict")
+        if isinstance(conflict, dict) and conflict:
+            refs = [ref for ref in fact.extra_dims.get("evidence_refs", []) if isinstance(ref, dict)]
+            ref = refs[0] if refs else {}
+            identity_conflicts_by_instance.setdefault(fact.instance_uid, []).append({
+                "fact_uid": fact.fact_uid,
+                "table_code": fact.table_code,
+                "indicator": fact.indicator,
+                "subject_code": fact.subject_code,
+                "subject_name": fact.subject_name,
+                "page": ref.get("physical_page"),
+                "source_cell_id": ref.get("source_cell_id"),
+                "bbox": ref.get("bbox"),
+                "status": conflict.get("status") or "code_total_conflict",
+                "reason": conflict.get("reason"),
+                "code_candidates": conflict.get("code_candidates") or [],
+                "total_markers": conflict.get("total_markers") or [],
+                "label_cells": conflict.get("label_cells") or [],
+            })
         for conflict in fact.extra_dims.get("column_arithmetic_conflicts", []):
             known = arithmetic_by_instance.setdefault(fact.instance_uid, [])
             if conflict not in known:
@@ -184,7 +204,12 @@ def build_table_import_receipt(artifact, facts, *, org_name=None):
         present = columns_bound = admitted = conflicts = blocked = 0
         for cell in table.cells:
             if cell.numeric_value is None:
-                continue
+                from src.engine.fiscal_lexeme import lex_numeric
+                invalid_amount = (cell.row_idx >= table.header_row_count and cell.col_idx in mapping_by_col
+                                  and re.search(r"\d", cell.raw_text or "")
+                                  and lex_numeric(cell.raw_text).kind == "invalid")
+                if not invalid_amount:
+                    continue
             cid = source_cell_id(table, cell)
             observed_ids.add(cid)
             observation = {"source_cell_id": cid, "raw_text": cell.raw_text,
@@ -234,7 +259,9 @@ def build_table_import_receipt(artifact, facts, *, org_name=None):
                 f.extra_dims.get("column_identity_status", "bound") == "bound"
                 and f.indicator == mapping["canonical_measure"] for f in matches)
             columns_bound += column_safe
-            rejection = operand_rejection_reason(matches[0], org_name) if exact else None
+            from src.engine.rule_identity import FULL_IDENTITY
+            rejection = operand_rejection_reason(matches[0], org_name, required_dimensions=tuple(
+                dim for dim in FULL_IDENTITY if dim != "org_scope")) if exact else None
             conflict = not source_consistent or bool(matches) and (not exact or bool(mapping) and any(
                 f.indicator != mapping["canonical_measure"] for f in matches))
             conflicts += conflict
@@ -305,6 +332,15 @@ def build_table_import_receipt(artifact, facts, *, org_name=None):
                        "amount_cells": observations, "unresolved_money_cells": unresolved,
                        "out_of_scope_money_cells": out_of_scope, "scope": scope,
                        "mapping_status": mapping_status, "arithmetic_conflicts": arithmetic,
+                       "row_identity_conflicts": identity_conflicts_by_instance.get(
+                           instance.instance_uid if instance else None, []),
+                       "row_identity_status": (
+                           "conflict" if identity_conflicts_by_instance.get(
+                               instance.instance_uid if instance else None) else "bound"
+                       ),
+                       "label_visibility_recovered": sum(
+                           1 for cell in table.cells
+                           if (cell.label_recovery or {}).get("status") == "recovered"),
                        "classification_status": "identified" if rule else "retained_unclassified"})
     # 逻辑视图丢失的原物理金额也必须进回执。金额按来源身份检查，不能按同额反找。
     orphaned = []
@@ -360,11 +396,34 @@ def build_table_import_receipt(artifact, facts, *, org_name=None):
                                  max(box[2], cell.bbox[2]), max(box[3], cell.bbox[3])]
         entry["row_boxes"] = row_boxes
     reading_quality["organization_status"] = "identified" if org_name else "unresolved"
+    reading_quality["org_scope_pending_count"] = sum(bool(f.extra_dims.get("org_scope_pending")) for f in facts)
+    reading_quality["org_scope_status"] = "pending_confirmation" if reading_quality["org_scope_pending_count"] else "determined_or_no_facts"
     # 身份闸门：主体为空、科目名称只剩编码的事实，不能计为已完成入库。
     reading_quality["fact_identity_gaps"] = {
         "organization_missing": sum(not fact.org_name for fact in facts),
         "subject_name_is_code": sum(bool(re.fullmatch(r"[\d\s]+", fact.subject_name or "")) for fact in facts),
     }
+    all_identity_conflicts = [
+        item for values in identity_conflicts_by_instance.values() for item in values
+    ]
+    # “检测区域读取完成”和“事实身份可信”分开呈现：有未解决硬身份冲突时，
+    # 不能把整份材料的读取/身份总称成全部可信。
+    reading_quality["row_identity_conflict_count"] = len(all_identity_conflicts)
+    reading_quality["row_identity_status"] = (
+        "conflict" if all_identity_conflicts else "bound"
+    )
+    reading_quality["identity_trust"] = {
+        "status": "conflict" if all_identity_conflicts else "bound",
+        "reason_codes": sorted({
+            str(item.get("status") or "code_total_conflict") for item in all_identity_conflicts
+        }),
+        "conflict_count": len(all_identity_conflicts),
+        "note": (
+            "存在编码与合计标记未消除的行身份冲突；区域读取完成不等于事实身份可信"
+            if all_identity_conflicts else None
+        ),
+    }
+    reading_quality["label_visibility"] = dict(artifact.label_visibility or {})
     coverage = {
         "basis": "all_retained_numeric_cells_with_explicit_exclusions",
         "original_pdf_full_coverage_verified": False,
@@ -384,6 +443,8 @@ def build_table_import_receipt(artifact, facts, *, org_name=None):
         "column_arithmetic_conflict_count": sum(c["reason"] == "column_arithmetic_conflict" for c in unresolved),
         "out_of_scope_amount_cell_count": sum(len(t["out_of_scope_money_cells"]) for t in tables),
         "out_of_scope_table_count": sum(t["mapping_status"] == "out_of_scope" for t in tables),
+        "row_identity_conflict_count": len(all_identity_conflicts),
+        "label_visibility_recovered_count": sum(t["label_visibility_recovered"] for t in tables),
     }
     coverage["fact_missing_count"] = coverage["amount_cell_count"] - coverage["fact_present_count"]
     coverage["column_identity_unresolved_count"] = coverage["amount_cell_count"] - coverage["column_identity_bound_count"]

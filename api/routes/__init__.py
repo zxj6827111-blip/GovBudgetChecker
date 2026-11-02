@@ -5,11 +5,13 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from api.routes.activity import router as activity_router
+from api.routes.annual_templates import router as annual_templates_router
 from api.routes.ai_models import router as ai_models_router
 from api.routes.analyze import router as analyze_router
 from api.routes.auth import router as auth_router
 from api.routes.config import router as config_router
 from api.routes.corrections import router as corrections_router
+from api.routes.disclosure_calendar import router as disclosure_calendar_router
 from api.routes.files import router as files_router
 from api.routes.health import router as health_router
 from api.routes.jobs import router as jobs_router
@@ -28,6 +30,7 @@ from api.routes.reporting_tasks import router as reporting_tasks_router
 
 def register_routes(app: FastAPI) -> None:
     """Register all API routers."""
+    app.include_router(annual_templates_router)
     app.include_router(health_router)
     app.include_router(metrics_router)
     app.include_router(activity_router)
@@ -42,6 +45,7 @@ def register_routes(app: FastAPI) -> None:
     app.include_router(ps_shared_router)
     app.include_router(files_router)
     app.include_router(corrections_router)
+    app.include_router(disclosure_calendar_router)
     app.include_router(reports_router)
     app.include_router(reviews_router)
     app.include_router(rules_router)

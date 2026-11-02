@@ -31,6 +31,7 @@ from src.schemas.review_lifecycle import (
     REVIEW_STATUS_INVALIDATED,
 )
 from src.services import review_lifecycle_service, review_session_store
+from src.services.review_problem_set import ReviewProblem
 from src.services.analysis_result_store import (
     _upsert_analysis_job,
     compute_analysis_result_fingerprint,
@@ -505,6 +506,53 @@ def test_gate_passes_when_all_blocking_obligations_handled():
         obligation_decisions=decisions,
     )
     assert _codes(state) == []
+
+
+def test_obligation_covered_by_same_finding_is_not_a_duplicate_todo():
+    """同源正式问题已经报出来的，不再要求补核；问题本身仍留在问题清单。"""
+    item = _obligation_item("OBL-TXT-T5", status="insufficient_data")
+    item.detail = "说明中的款“行政事业单位离退休”在表内找不到同名科目"
+    item.checkers = ["V33-222", "V33-227"]
+    finding = {
+        "id": "finding-1",
+        "rule_id": "V33-227",
+        "tags": ["V33-227"],
+        "severity": "medium",
+        "title": "说明5款级科目名称与T5不一致",
+        "message": "表格“行政事业单位养老支出”，说明“行政事业单位离退休”",
+        "location": {
+            "actual_name": "行政事业单位离退休",
+            "expected_name": "行政事业单位养老支出",
+        },
+    }
+    analysis = _analysis(
+        result_row={"ai_findings": [], "rule_findings": [finding], "merged_result": {}}
+    )
+    problem = ReviewProblem(
+        issue_id="finding-1",
+        source="finding",
+        title="说明5款级科目名称与T5不一致",
+        severity="medium",
+        is_formal=True,
+    )
+    state = _state(
+        analysis=analysis,
+        active=_session(),
+        problems=[problem],
+        coverage_available=True,
+        coverage_blocking_total=1,
+        coverage_items=[item],
+    )
+    assert review_lifecycle_service._blocking_obligations(state) == []
+    assert review_lifecycle_service._unhandled_obligations(state) == []
+    block = review_lifecycle_service._obligation_review_block(state)
+    assert block.items == []
+    assert block.pending_total == 0
+    assert block.covered_total == 1
+    # 去重只去掉补核副本，不替人处理问题本身：pending_findings 仍然存在。
+    codes = [blocker.code for blocker in review_lifecycle_service.evaluate_completion_gate(state).blockers]
+    assert "blocking_obligations" not in codes
+    assert "pending_findings" in codes
 
 
 def test_gate_treats_explicit_pending_and_unknown_decisions_as_blocking():

@@ -42,6 +42,7 @@ async def test_current_job_view_keeps_new_attempt_failure_and_denies_changed_own
     from fastapi import HTTPException
     from api.routes.jobs import published_job_view
     monkeypatch.setenv('DATABASE_URL','postgresql://control.invalid/test')
+    monkeypatch.setattr('src.services.document_scope.pending_reanalysis',AsyncMock(return_value=None))
     monkeypatch.setattr('src.services.analysis_fact_snapshot.read_database_result',AsyncMock(return_value={
         'analysis_revision':'old','status':'done','result':{'bound':'old'},'structured_ingest':{}}))
     monkeypatch.setattr('api.routes.jobs.user_can_access_job',lambda user,payload:True)
@@ -123,6 +124,10 @@ def test_blank_acceptance_uses_local_unit_scope_and_requires_native_blank_proof(
     logical=SimpleNamespace(table_instance_uid=instance.instance_uid,row_idx=1,col_idx=2,value_kind='blank')
     snapshot={'effective_context':{'org_name':'测试局','org_scope':'department','fiscal_year':2025,
         'report_kind':'final','budget_stage':'决算'}}
+    # 单独表题不足以定论；加入明确原件封面后，才允许完成非金额格的完整身份验收。
+    assert non_amount_cell_identity(artifact,snapshot,logical) is None
+    from src.schemas.parse_artifact import ParsedTextBlock
+    artifact.text_blocks = [ParsedTextBlock('cover', 1, '测试局\n2025年度单位决算')]
     identity=non_amount_cell_identity(artifact,snapshot,logical)
     assert identity['org_scope']=='unit'
     cell.native_blank_verified=False

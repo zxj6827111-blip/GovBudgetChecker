@@ -24,8 +24,10 @@ review_required 比例多少"这类即时状态，仍需要外部日志管道先
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -39,6 +41,8 @@ from src.schemas.issues import (
 )
 from src.services.evidence_guard import count_formal_findings
 from src.utils.report_year import parse_report_year
+
+logger = logging.getLogger(__name__)
 
 #: 心跳文件目录名，与 api/queue_runtime.has_recent_worker_heartbeat 保持一致
 HEARTBEAT_DIRNAME = ".worker-heartbeats"
@@ -55,6 +59,56 @@ _collect_lock = threading.Lock()
 # 任务目录 -> ((mtime_ns, size), 记录)：TTL 过期后只重新解析有变化的 status.json。
 # 单个 status.json 可达数 MB（277 个任务合计约 850MB），此前每 15 秒全部重读一遍。
 _record_cache: Dict[str, Tuple[Tuple[int, int], Optional[Dict[str, Any]]]] = {}
+# 指标记录的持久化快照：与 _record_cache 同键（status.json 的 mtime/size）。进程
+# 重启后内存缓存为空，若没有它，启动预热要重新解析全部大文件（实测 4 秒），
+# 并与首次队列请求抢 CPU/磁盘。任一任务状态变化时签名失配，自动重算。
+_RECORD_SIDECAR_FILENAME = "job_metrics.json"
+
+
+def _record_sidecar_path(job_dir: Path) -> Path:
+    return job_dir / _RECORD_SIDECAR_FILENAME
+
+
+def _read_persisted_record(
+    job_dir: Path, signature: Tuple[int, int]
+) -> Optional[Dict[str, Any]]:
+    try:
+        payload = json.loads(_record_sidecar_path(job_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("signature") != list(signature):
+        return None
+    record = payload.get("record")
+    return record if isinstance(record, dict) else None
+
+
+def _write_persisted_record(
+    job_dir: Path, signature: Tuple[int, int], record: Dict[str, Any]
+) -> None:
+    """原子写回指标快照；失败只影响下次冷启动速度，不影响本次采集。"""
+    path = _record_sidecar_path(job_dir)
+    tmp_fd = -1
+    tmp_path: Optional[Path] = None
+    try:
+        tmp_fd, tmp_name = tempfile.mkstemp(suffix=".tmp", dir=str(path.parent))
+        tmp_path = Path(tmp_name)
+        data = json.dumps(
+            {"signature": list(signature), "record": record}, ensure_ascii=False
+        ).encode("utf-8")
+        os.write(tmp_fd, data)
+        os.fsync(tmp_fd)
+        os.close(tmp_fd)
+        tmp_fd = -1
+        tmp_path.replace(path)
+    except BaseException:
+        if tmp_fd >= 0:
+            try:
+                os.close(tmp_fd)
+            except OSError:
+                pass
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def _env_float(name: str, default: float) -> float:
@@ -298,7 +352,18 @@ def _cached_job_metric_record(
     signature = (stat.st_mtime_ns, stat.st_size)
     key = job_dir.as_posix()
     cached = _record_cache.get(key)
-    record = cached[1] if cached is not None and cached[0] == signature else collect_job_metric_record(job_dir)
+    if cached is not None and cached[0] == signature:
+        record = cached[1]
+    else:
+        record = _read_persisted_record(job_dir, signature)
+        if record is None:
+            record = collect_job_metric_record(job_dir)
+            if record is not None:
+                try:
+                    _write_persisted_record(job_dir, signature, record)
+                except Exception:
+                    # 快照只是加速缓存；写失败（只读盘/磁盘满/不可序列化）不得影响采集。
+                    logger.exception("Failed to persist metrics record for %s", job_dir.name)
     seen[key] = (signature, record)
     return record
 

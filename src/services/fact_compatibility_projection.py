@@ -183,7 +183,7 @@ async def publish_compatibility_projection(conn, snapshot, parse_run_id):
     """调用方持有发布事务；失败时旧事实、共享查询和当前指针一起回滚。"""
     facts = snapshot_facts(snapshot)
     document = await conn.fetchrow('''SELECT d.id AS document_id,v.id AS document_version_id,
-        d.fiscal_year,d.doc_type,o.org_name,v.storage_key,v.original_filename,v.file_size_bytes
+        d.fiscal_year,d.doc_type,d.subject_org_id,o.org_name,v.storage_key,v.original_filename,v.file_size_bytes
         FROM parse_runs r JOIN fiscal_document_versions v ON v.id=r.document_version_id
         JOIN fiscal_documents d ON d.id=v.document_id JOIN org_units o ON o.id=d.org_unit_id
         WHERE r.id=$1 FOR UPDATE OF d''', parse_run_id)
@@ -248,6 +248,7 @@ async def publish_compatibility_projection(conn, snapshot, parse_run_id):
         fiscal_year=document['fiscal_year'], doc_type=document['doc_type'],
         pdf_path=Path(document['storage_key'] or document['original_filename'] or snapshot['job_uuid']),
         checksum=snapshot['source_file_hash'], fact_snapshot=snapshot,
+        organization_id=document['subject_org_id'] or None,
         file_size_bytes=document['file_size_bytes'])
     if shared['status'] != 'done':
         raise ValueError('effective shared fact projection unavailable: ' + str(shared.get('reason')))

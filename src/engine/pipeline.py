@@ -84,7 +84,7 @@ def _common_rule_set() -> List[Any]:
     """Use registry routing in production; honor legacy monkeypatch hooks in tests."""
     if ALL_COMMON_RULES is not _INITIAL_COMMON_RULES:
         return ALL_COMMON_RULES
-    return select_rules("unknown")
+    return list(_common_rules.ALL_COMMON_RULES)
 
 
 def run_rules(
@@ -119,6 +119,13 @@ def run_rules_with_outcomes(
     if doc is not None:
         doc.report_kind = resolved_kind
 
+    if resolved_kind == "final":
+        from src.services.document_profile_resolver import resolve_document_profile
+        from src.services.material_writing import ensure_document_resolution
+        profile = getattr(doc, 'document_profile', None) or resolve_document_profile(
+            path=str(getattr(doc, 'path', '') or ''), page_texts=getattr(doc, 'page_texts', []) or [])
+        ensure_document_resolution(doc, profile)
+
     if rules is not None:
         selected_rules = list(rules)
     else:
@@ -131,14 +138,18 @@ def run_rules_with_outcomes(
         profile = getattr(doc, 'document_profile', None) or resolve_document_profile(
             path=str(getattr(doc, 'path', '') or ''), page_texts=getattr(doc, 'page_texts', []) or [])
         selected_rules = restrict_rules_to_profile(selected_rules, profile)
+    from src.services.material_writing import budget_enabled
+    if rules is None and resolved_kind != "final" and not (resolved_kind=="budget" and budget_enabled()):
+        selected_rules = [r for r in selected_rules if r.code != "CMM-027"]
     issues: List[Issue] = []
     outcomes: List[RuleOutcome] = []
-    if resolved_kind == "unknown":
+    if resolved_kind in {"unknown", "non_budget"}:
         issues.append(
             Issue(
                 rule="DOC-TYPE-UNKNOWN",
                 severity="manual_review",
-                message="未能可靠识别材料为预算或决算，已仅执行通用规则，请人工确认材料类型后重新检查。",
+                message=("非预决算材料，需人工确认；未运行预算/决算规则集。" if resolved_kind == "non_budget" else
+                         "未能可靠识别材料为预算或决算，已仅执行通用规则，请人工确认材料类型后重新检查。"),
                 location={"page": 1, "pos": 0},
             )
         )
@@ -150,10 +161,12 @@ def run_rules_with_outcomes(
         try:
             doc.current_rule_code = code
             rule = rule_obj() if isinstance(rule_obj, type) else rule_obj
-            if hasattr(rule, "apply_with_ai") and use_ai_assist:
-                produced = rule.apply_with_ai(doc, use_ai_assist)
-            else:
-                produced = rule.apply(doc)
+            from .rule_identity import rule_identity_requirements
+            with rule_identity_requirements(doc, code):
+                if hasattr(rule, "apply_with_ai") and use_ai_assist:
+                    produced = rule.apply_with_ai(doc, use_ai_assist)
+                else:
+                    produced = rule.apply(doc)
             produced_list = list(produced or [])
         except RuleOutcomeSignal as signal:
             # 非 fail 结局（insufficient_data / not_applicable 等）：
@@ -176,6 +189,7 @@ def run_rules_with_outcomes(
                     detail=detail_str,
                     partial_findings_count=len(partial_list),
                     unresolved_reasons=unresolved,
+                    reason_codes=list(getattr(signal, "reason_codes", []) or []),
                 )
             )
             continue

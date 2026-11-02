@@ -711,3 +711,70 @@ def test_r5_07_actual_four_format_downloads_pass_gate_and_tampered_row_fails(
     rejected = zc07._evaluate_export_agreement(tampered_manifest, tmp_path)
     assert rejected["status"] == "not_computable"
     assert "缺少 1 项 canonical 可见语义字段" in rejected["reason"]
+
+
+def test_csv_keeps_explanation_fields_for_rule_and_old_issues() -> None:
+    """CSV 不只保留列名：金额、差额、单位、中文检查项必须逐值保留。"""
+
+    from api.routes.reports import _CSV_FIELDNAMES, _build_csv_row
+
+    assert "expected" in _CSV_FIELDNAMES
+    assert "calculation_basis" in _CSV_FIELDNAMES
+    assert "规则编号" in _CSV_FIELDNAMES
+
+    row = _build_csv_row(
+        {
+            "id": "issue-csv-1",
+            "rule_id": "V33-222",
+            "source": "rule",
+            "severity": "high",
+            "title": "机关事业单位基本养老保险缴费支出表文金额不一致",
+            "message": "表文金额不一致",
+            "expected": "165.80",
+            "actual": "141.12",
+            "difference": "-24.68",
+            "check": "final_disclosure_amount",
+            "table_or_section": "五、一般公共预算财政拨款支出决算情况说明",
+            "amounts_provenance": "program_calculated",
+            "calculation_basis": {
+                "unit": "万元",
+                "precision": 2,
+                "rule_version": "v3_3",
+                "verified": True,
+            },
+        }
+    )
+    assert row["expected"] == "165.80"
+    assert row["actual"] == "141.12"
+    assert row["difference"] == "-24.68"
+    assert row["check"] == "final_disclosure_amount"
+    assert row["table_or_section"] == "五、一般公共预算财政拨款支出决算情况说明"
+    assert row["amounts_provenance"] == "program_calculated"
+    basis = json.loads(row["calculation_basis"])
+    assert basis["unit"] == "万元"
+    assert basis["precision"] == 2
+    assert basis["rule_version"] == "v3_3"
+    assert row["规则编号"] == "V33-222"
+
+    old_row = _build_csv_row(
+        {"id": "old-1", "rule_id": "OLD-1", "source": "rule", "severity": "low",
+         "title": "旧结果", "message": "旧结果"}
+    )
+    assert old_row["expected"] == ""
+    assert old_row["actual"] == ""
+    assert old_row["difference"] == ""
+    assert old_row["amounts_provenance"] == ""
+
+
+def test_material_dimension_exports_use_the_selected_analysis_snapshot():
+    from api.routes.reports import _build_check_scope_export,_build_csv_summary_row,_material_dimension_lines
+    dimensions={'writing':{'value':'unit','status':'confirmed','source':'human','algorithm':'test-v3',
+        'human_decision':{'note':'写法独立依据','evidence_reference':'正文第二页'},
+        'snapshot':{'version':'test-v1','source_report_year':2024,'target_year':2025,'revision':3}},'amount':None}
+    payload={'review_report':{'metadata':{'material_dimensions':dimensions}},'result':{'meta':{'document_scope_resolution':{'value':'department'}}}}
+    assert _build_check_scope_export(payload)['material_dimensions']==dimensions
+    assert json.loads(_build_csv_summary_row('test',payload,0)['material_dimensions_json'])==dimensions
+    lines=_material_dimension_lines(payload)
+    assert any('写法独立依据' in line for line in lines)
+    assert any('不能由写法推断' in line for line in lines)
+    assert any('绑定修订：3' in line for line in lines)

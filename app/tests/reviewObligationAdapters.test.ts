@@ -6,6 +6,15 @@ import {
   obligationDecisionTone,
 } from "../lib/reviewLifecyclePresentation";
 import {
+  obligationAutoEvidence,
+  obligationItemsByProblemId,
+  obligationProblemId,
+  obligationStatusEntries,
+  readableObligationReason,
+  toObligationProblems,
+} from "../app/components/review-workbench/obligationProblems";
+import { isFormalProblem, problemReviewKind } from "../app/components/review-workbench/reviewWorkbenchAdapters";
+import {
   canDecideObligations,
   isObligationHandled,
   obligationEvidencePolicy,
@@ -114,9 +123,9 @@ assert.equal(
 
 // ---- 标签与色调 -----------------------------------------------------------------
 
-assert.equal(obligationDecisionLabel("verified_ok"), "已补核通过");
-assert.equal(obligationDecisionLabel("verified_issue"), "已确认存在问题");
-assert.equal(obligationDecisionLabel("not_applicable"), "人工判定不适用");
+assert.equal(obligationDecisionLabel("verified_ok"), "已核对无误");
+assert.equal(obligationDecisionLabel("verified_issue"), "已确认有问题");
+assert.equal(obligationDecisionLabel("not_applicable"), "不适用");
 assert.equal(obligationDecisionLabel("pending"), "待处理");
 assert.equal(obligationDecisionLabel(null), "待处理");
 assert.equal(obligationDecisionLabel("approved"), "approved", "未识别的码不吞、不编");
@@ -125,16 +134,17 @@ assert.equal(obligationDecisionTone("verified_issue"), "failed");
 assert.equal(obligationDecisionTone("not_applicable"), "neutral");
 assert.equal(obligationDecisionTone(null), "lowconf");
 
-// ---- 阻塞文案指路到补核页签（WP3-B 交付后不再说"该能力将在…中处理"） -------------
+// ---- 阻塞文案指路到「必须处理」（补核已并入必须处理，不再有单独的补核页签） -------------
 
 const label = blockerLabel("blocking_obligations", 2);
-assert.ok(label.includes("还有 2 项检查义务"), "计数必须说出来");
-assert.ok(label.includes("人工补核"), "必须保留人工补核字样");
-assert.ok(label.includes("检查补核"), "必须指路到补核页签");
+assert.ok(label.includes("还有 2 项"), "计数必须说出来");
+assert.ok(label.includes("未能自动核对"), "用页面上同一个说法");
+assert.ok(label.includes("必须处理"), "必须指路到处理位置");
+assert.ok(!label.includes("检查补核"), "补核页签已取消，不能再指过去");
 assert.ok(!label.includes("将在"), "不再说能力『将来才有』");
 assert.equal(
   blockerLabel("blocking_obligations", null),
-  "存在需要人工补核的检查义务",
+  "还有“未能自动核对”的检查待处理",
 );
 
 // ---- 上下文解析对 obligation_review 的容忍 --------------------------------------
@@ -236,5 +246,59 @@ assert.equal(obligationEvidenceSatisfied("not_applicable", "本单位不涉及",
 assert.equal(obligationEvidenceSatisfied("pending", "", ""), true);
 // 未知值同样放行客户端提示——服务端会先用 400/422 拒绝它，提示不构成放行
 assert.equal(obligationEvidenceSatisfied("approved", "", ""), true);
+
+// ---- 补核并入「必须处理」：条目转换、处理状态、核对无误的自动证据 ----------------------
+
+const mergedBlock = {
+  available: true,
+  reason: null,
+  pending_total: 1,
+  items: [
+    {
+      obligation_id: "OBL-INTERNAL-BASIC-EXPENSE", group_id: "g", group_title: "表内勾稽", title: "基本支出 = 人员经费 + 公用经费",
+      status: "insufficient_data", reason: "insufficient_data", reason_label: "取数不足",
+      detail: "人员经费合计的决算操作数缺失或不唯一", basis: null,
+      locations: [{ page: 12, label: "基本支出决算表", bbox: [10, 20, 300, 40] }, { page: 13, label: null, bbox: null }],
+      decision: null, decision_revision: null, decided_by: null, decided_at: null, note: null, evidence_reference: null,
+    },
+    {
+      obligation_id: "OBL-TXT-T5", group_id: "g", group_title: "说明一致性", title: "一般公共预算支出决算表 与 功能分类说明一致",
+      status: "insufficient_data", reason: "insufficient_data", reason_label: "取数不足",
+      detail: "说明中的项“其他城乡社区支出”在表内找不到同名科目", basis: null, locations: [],
+      decision: "verified_issue", decision_revision: 2, decided_by: "reviewer", decided_at: "2026-11-01", note: "科目名称写错", evidence_reference: null,
+    },
+  ],
+};
+const mergedProblems = toObligationProblems(mergedBlock, "job-merge");
+assert.equal(mergedProblems.length, 2, "已处理的补核也留在队列里，便于查看与恢复待处理");
+const [basicExpense, t5] = mergedProblems;
+assert.equal(basicExpense.id, obligationProblemId("OBL-INTERNAL-BASIC-EXPENSE"));
+assert.equal(basicExpense.title, "基本支出 = 人员经费 + 公用经费", "列表里由分组和徽标说明“未能自动核对”，标题不再重复");
+assert.equal(basicExpense.description, "取数不足：人员经费合计的决算数值没取到（或取到不止一个）");
+assert.equal(basicExpense.page, 12);
+assert.deepEqual(basicExpense.bbox, [10, 20, 300, 40]);
+assert.equal(basicExpense.evidenceRefs?.length, 2);
+assert.equal(basicExpense.evidenceRefs?.[1].locationLevel, "page", "没有框的位置只翻页，不画框");
+assert.equal(isFormalProblem(basicExpense), true, "补核计入必须处理");
+assert.equal(problemReviewKind(basicExpense), "obligation");
+assert.equal(t5.page, undefined, "没有位置时不编页码");
+assert.equal(t5.status, "resolved");
+assert.deepEqual(obligationStatusEntries(mergedBlock), { [obligationProblemId("OBL-TXT-T5")]: "verified_issue" });
+assert.equal(obligationItemsByProblemId(mergedBlock)[t5.id].decision_revision, 2, "提交时要带回乐观锁版本");
+assert.deepEqual(toObligationProblems({ ...mergedBlock, available: false }), [], "补核块不可用时不出条目");
+assert.deepEqual(toObligationProblems(null), []);
+// 核对无误一键提交：证据位置取系统定位并注明来源；没有定位时返回 null，由人写一句。
+assert.equal(obligationAutoEvidence(mergedBlock.items[0]), "第 12 页 · 基本支出决算表；第 13 页（按系统定位核对）");
+assert.equal(obligationAutoEvidence(mergedBlock.items[1]), null);
+const manyPlaces = { ...mergedBlock.items[0], locations: Array.from({ length: 40 }, (_, index) => ({ page: index + 1, label: "很长的表名用于测试截断", bbox: null })) };
+assert.ok((obligationAutoEvidence(manyPlaces) ?? "").length <= 200, "不超过后端证据位置上限");
+
+// 引擎卡点里的机器字段名只在展示时换成人话；普通缩写不动。
+assert.equal(
+  readableObligationReason("人员经费合计的total_actual/决算操作数缺失或不唯一；公用经费合计的total_actual/决算操作数缺失或不唯一"),
+  "人员经费合计的决算数值没取到（或取到不止一个）；公用经费合计的决算数值没取到（或取到不止一个）",
+);
+assert.equal(readableObligationReason("PDF/表8 未识别到"), "PDF/表8 未识别到");
+assert.equal(readableObligationReason(null), "");
 
 console.log("reviewObligationAdapters.test.ts passed");

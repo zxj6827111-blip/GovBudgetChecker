@@ -44,3 +44,37 @@ def test_extract_responses_content_from_output_text() -> None:
     provider = _provider()
     data = {"output_text": "[]"}
     assert provider._extract_responses_content(data) == "[]"
+
+
+def test_opencode_gateway_sends_stable_session_header() -> None:
+    provider = OpenAICompatProvider(
+        api_key="test-key",
+        base_url="https://opencode.ai/zen/go/v1",
+        default_model="deepseek-v4.1-flash",
+    )
+    headers = provider.get_headers()
+    assert headers["x-opencode-session"].startswith("gbc-")
+    assert provider.get_headers()["x-opencode-session"] == headers["x-opencode-session"]
+
+
+def test_non_opencode_gateway_has_no_session_header() -> None:
+    assert "x-opencode-session" not in _provider().get_headers()
+
+
+def test_reasoning_options_are_added_to_payload() -> None:
+    provider = OpenAICompatProvider(
+        api_key="test-key",
+        base_url="https://example.com/v1",
+        default_model="deepseek-v4.1-flash",
+        reasoning_effort="max",
+        thinking=True,
+    )
+    payload = {}
+    provider._apply_reasoning_options(payload)
+    assert payload == {"reasoning_effort": "max", "thinking": {"type": "enabled"}}
+
+
+def test_reasoning_options_absent_by_default() -> None:
+    payload = {}
+    _provider()._apply_reasoning_options(payload)
+    assert payload == {}

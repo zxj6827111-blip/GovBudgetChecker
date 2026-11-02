@@ -103,10 +103,13 @@ class AnalysisMetrics:
     merged_conflicts: int = 0
     merged_agreements: int = 0
     provider_stats: List[Dict[str, Any]] = None
+    ai_locator_outcomes: List[Dict[str, Any]] = None
     
     def __post_init__(self):
         if self.provider_stats is None:
             self.provider_stats = []
+        if self.ai_locator_outcomes is None:
+            self.ai_locator_outcomes = []
 
 
 class DualModeAnalyzer:
@@ -179,9 +182,9 @@ class DualModeAnalyzer:
         from src.services.ai_model_settings import audit_time_budget
         TIMEOUT_SECONDS = audit_time_budget(config.ai_timeout)
         try:
-            RULE_TIMEOUT_SECONDS = max(1, int(os.getenv("RULES_TIMEOUT_SEC", "150")))
+            RULE_TIMEOUT_SECONDS = max(1, int(os.getenv("RULES_TIMEOUT_SEC", "300")))
         except ValueError:
-            RULE_TIMEOUT_SECONDS = 150
+            RULE_TIMEOUT_SECONDS = 300
 
         # AC-11：部分结果保全——管线后段（合并/定位/快照）异常时，
         # 已完成的 AI/规则结果不得被整批清空后按空结果重算。
@@ -400,6 +403,8 @@ class DualModeAnalyzer:
             metrics.total_elapsed_ms = int((time.time() - start_time) * 1000)
             
             # 保存最终快照
+            ai_coverage = getattr(self.ai_service, "ai_coverage", None) if self.ai_service is not None else None
+            ai_diagnostics = getattr(self.ai_service, "audit_diagnostics", None) if self.ai_service is not None else None
             save_snapshot(job_context.job_id, {
                 "ai_findings": ai_findings,
                 "rule_findings": rule_findings,
@@ -415,7 +420,10 @@ class DualModeAnalyzer:
                     "rule_started_at": rule_started_at,
                     "rule_done_at": rule_done_at,
                     "last_heartbeat": time.time(),
-                    "provider_stats": metrics.provider_stats
+                    "provider_stats": metrics.provider_stats,
+                    "ai_coverage": ai_coverage,
+                    "ai_audit_diagnostics": ai_diagnostics,
+                    "ai_locator_outcomes": metrics.ai_locator_outcomes,
                 }
             })
             
@@ -452,6 +460,9 @@ class DualModeAnalyzer:
                     "ai_call_ledger": ai_call_ledger,
                     # 覆盖缺口（如审计窗口上限触发）：degraded 判定依据
                     "ai_window_errors": list(getattr(self.ai_service, "ai_errors", []) or []) if self.ai_service is not None else [],
+                    "ai_coverage": ai_coverage,
+                    "ai_audit_diagnostics": ai_diagnostics,
+                    "ai_locator_outcomes": metrics.ai_locator_outcomes,
                     "rule_execution_summary": rule_execution_summary,
                     # AC-04：关系级子检查回执与统一事实摘要随结果交付
                     "fact_receipts": (self.engine_runner.get_stats() or {}).get("fact_receipts", []) if self.engine_runner else [],
@@ -780,9 +791,9 @@ class DualModeAnalyzer:
         if not config.rule_enabled:
             return []
         try:
-            timeout_seconds = max(1, int(os.getenv("RULES_TIMEOUT_SEC", "150")))
+            timeout_seconds = max(1, int(os.getenv("RULES_TIMEOUT_SEC", "300")))
         except ValueError:
-            timeout_seconds = 150
+            timeout_seconds = 300
         return await run_engine_rules_in_process(
             self.engine_runner, job_context, engine_rules, config, timeout_seconds,
         )
@@ -829,35 +840,100 @@ class DualModeAnalyzer:
                                      job_context: JobContext,
                                      rule_findings: List[IssueItem],
                                      metrics: AnalysisMetrics) -> List[IssueItem]:
-        """使用 AI 定位器增强引擎结果"""
+        """使用 AI 定位器增强引擎结果（辅助定位，不是定性）。"""
         if self.ai_locator is None:
             logger.warning("AILocator not available, skip locator enhancement")
+            metrics.ai_locator_outcomes.append(
+                {"status": "not_available", "reason": "locator_client_missing"}
+            )
             return rule_findings
+        page_texts = list(getattr(job_context, "page_texts", None) or [])
+        if not page_texts and not str(getattr(job_context, "ocr_text", "") or "").strip():
+            metrics.ai_locator_outcomes.append(
+                {
+                    "status": "unavailable_no_text",
+                    "reason": "no_page_texts_or_ocr_text",
+                    "eligible": 0,
+                    "attempted": 0,
+                }
+            )
+            return rule_findings
+        try:
+            max_findings = max(0, int(os.getenv("AI_LOCATOR_MAX_FINDINGS", "5")))
+        except ValueError:
+            max_findings = 5
+        eligible = [finding for finding in rule_findings if self._needs_ai_locator_enhancement(finding)]
+        selected_ids = {id(finding) for finding in eligible[:max_findings]}
+        attempted = 0
         enhanced_findings = []
         
         for finding in rule_findings:
-            # 检查是否需要 AI 定位增强
-            if self._needs_ai_locator_enhancement(finding):
-                try:
-                    enhanced_finding = await self.ai_locator.enhance_finding(
-                        job_context=job_context,
-                        finding=finding
-                    )
-                    enhanced_findings.append(enhanced_finding)
-                except Exception as e:
-                    logger.warning(f"AI locator enhancement failed for finding {finding.rule_id}: {e}")
-                    # 失败时使用原始结果
-                    enhanced_findings.append(finding)
-            else:
+            if id(finding) not in selected_ids:
                 enhanced_findings.append(finding)
-        
+                continue
+            attempted += 1
+            try:
+                enhanced_finding = await self.ai_locator.enhance_finding(
+                    job_context=job_context,
+                    finding=finding
+                )
+                enhanced_findings.append(enhanced_finding)
+                outcome = getattr(self.ai_locator, "last_outcome", None)
+                metrics.ai_locator_outcomes.append(
+                    {
+                        **(outcome.to_dict() if hasattr(outcome, "to_dict") else {}),
+                        "issue_id": finding.id,
+                        "rule_id": finding.rule_id,
+                    }
+                )
+            except Exception as exc:
+                logger.warning(
+                    "AI locator enhancement failed for finding %s: %s",
+                    finding.rule_id,
+                    type(exc).__name__,
+                )
+                metrics.ai_locator_outcomes.append(
+                    {
+                        "status": "call_failed",
+                        "reason": type(exc).__name__,
+                        "issue_id": finding.id,
+                        "rule_id": finding.rule_id,
+                    }
+                )
+                # 失败时使用原始结果
+                enhanced_findings.append(finding)
+        metrics.ai_locator_outcomes.append(
+            {
+                "status": "summary",
+                "eligible": len(eligible),
+                "attempted": attempted,
+                "skipped_due_to_cap": max(0, len(eligible) - attempted),
+                "cap": max_findings,
+            }
+        )
         return enhanced_findings
     
     def _needs_ai_locator_enhancement(self, finding: IssueItem) -> bool:
-        """判断是否需要 AI 定位增强"""
-        # 检查是否有 NO_ANCHOR 或 MULTI_ANCHOR 错误
+        """判断是否需要 AI 定位增强。
+
+        这是此前不可达的支路：旧实现只认 NO_ANCHOR/MULTI_ANCHOR，但规则链
+        从未写入这两个标记。现在改为“有原文但页码未知”也可触发，并设上限。
+        """
         why_not = finding.why_not or ""
-        return "NO_ANCHOR" in why_not or "MULTI_ANCHOR" in why_not
+        if "AI_LOCATED" in why_not or "AI_LOCATOR_UNVERIFIED" in why_not:
+            return False
+        if "NO_ANCHOR" in why_not or "MULTI_ANCHOR" in why_not:
+            return True
+        if finding.page_number is not None:
+            return False
+        if finding.text_snippet:
+            return True
+        for evidence in finding.evidence or []:
+            if isinstance(evidence, dict) and str(
+                evidence.get("text") or evidence.get("quote") or ""
+            ).strip():
+                return True
+        return False
     
     async def _fallback_engine_only(self, 
                                    job_context: JobContext,

@@ -184,6 +184,9 @@ class ParsedCell:
     # 行高不足时文字可能跨横线；保留网格初次抽取及真实字符来源，金额格不改写。
     grid_raw_text: Optional[str] = None
     native_text_sources: List[Dict[str, Any]] = field(default_factory=list)
+    # 单元格级可见性恢复证据：原文本、恢复文本、被排除字符、坐标、来源、策略与版本。
+    # 只在名称标签格确实发生恢复或需要记录冲突时写入；原始网格仍见 grid_raw_text。
+    label_recovery: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.presence = CellPresence.detect(self.raw_text)
@@ -232,6 +235,7 @@ class ParsedCell:
             # 空字符串是原生网格的真实空白；None表示没有保存原始网格文字。
             grid_raw_text=str(data["grid_raw_text"]) if data.get("grid_raw_text") is not None else None,
             native_text_sources=[dict(item) for item in data.get("native_text_sources") or [] if isinstance(item, dict)],
+            label_recovery=dict(data.get("label_recovery") or {}),
         )
 
 
@@ -259,9 +263,13 @@ class ParsedTable:
     # AC-02：合并片段时保留被合并的原始物理片段 uid——逻辑实例可回溯到
     # 每一页的原始片段，不因合并而丢失来源身份。
     source_fragment_uids: List[str] = field(default_factory=list)
+    #: 几何候选变体（如 snap6）；不新增 extraction_method 取值。
+    geometry_profile: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = dataclasses.asdict(self)
+        if data.get("geometry_profile") is None:
+            data.pop("geometry_profile", None)
         data["bbox"] = list(self.bbox) if self.bbox else None
         data["cells"] = [cell.to_dict() for cell in self.cells]
         return data
@@ -283,6 +291,7 @@ class ParsedTable:
             cells=[ParsedCell.from_dict(cell) for cell in data.get("cells") or []],
             fragment_uid=str(data.get("fragment_uid") or uuid.uuid4().hex),
             source_fragment_uids=[str(item) for item in data.get("source_fragment_uids") or []],
+            geometry_profile=_opt_str(data.get("geometry_profile")),
         )
 
 
@@ -583,6 +592,8 @@ class ParseArtifact:
     source_grids: List[ParsedTable] = field(default_factory=list)
     #: 原页表题、图像和金额位置线索；不代表已完成独立准确率验收。
     reading_assessment: Dict[str, Any] = field(default_factory=dict)
+    #: 单元格级名称可见性恢复的汇总（逐格证据在各 cell.label_recovery）。
+    label_visibility: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         data = {
@@ -619,6 +630,8 @@ class ParseArtifact:
         # 空字段不写出，保证旧完整快照仍能原样回读。
         if self.reading_assessment:
             data["reading_assessment"] = self.reading_assessment
+        if self.label_visibility:
+            data["label_visibility"] = self.label_visibility
         return data
 
     @classmethod
@@ -654,6 +667,7 @@ class ParseArtifact:
             coordinate_transforms=dict(data.get("coordinate_transforms") or {}),
             source_grids=[ParsedTable.from_dict(item) for item in data.get("source_grids") or []],
             reading_assessment=dict(data.get("reading_assessment") or {}),
+            label_visibility=dict(data.get("label_visibility") or {}),
         )
 
     def cells(self) -> List[Tuple[ParsedTable, ParsedCell]]:
@@ -691,6 +705,8 @@ class CheckReceipt:
     policy_version: str = "v3_3_portable"
     cell_observations: List[Dict[str, Any]] = field(default_factory=list)
     disclosure_sources: List[Dict[str, Any]] = field(default_factory=list)
+    # 结构化未完成原因：身份冲突、来源缺失、候选不唯一、口径待确认、主体不匹配、几何不支持等。
+    reason_codes: List[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.status not in SUB_CHECK_STATUSES:

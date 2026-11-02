@@ -118,6 +118,14 @@ async def persist_analysis_job_snapshot(
                     await _upsert_analysis_result(conn, job_db_id, payload)
                     from src.services.analysis_fact_snapshot import publish_snapshot
                     await publish_snapshot(conn, payload)
+                    decision = ((payload.get("result") or {}).get("meta") or {}).get("document_scope_confirmation")
+                    if decision:
+                        await conn.execute("UPDATE document_scope_decisions SET dispatch_status='applied',dispatch_error=NULL "
+                                           "WHERE request_id=$1::uuid AND job_uuid=$2 AND file_hash=$3",
+                                           decision["request_id"], job_uuid, decision["file_hash"])
+                    writing = ((payload.get("result") or {}).get("meta") or {}).get("document_scope_resolution") or {}
+                    if writing.get("human_decision_id"):
+                        await conn.execute("UPDATE document_writing_scope_decisions SET dispatch_status='applied',dispatch_error=NULL WHERE request_id=$1::uuid AND job_uuid=$2", writing["human_decision_id"], job_uuid)
                 elif status in _ACTIVE_JOB_STATUSES:
                     await conn.execute("DELETE FROM analysis_results WHERE job_id = $1 AND EXISTS "
                                        "(SELECT 1 FROM analysis_jobs WHERE id=$1 AND current_fact_revision_id IS NULL)", job_db_id)
@@ -321,6 +329,8 @@ def compute_analysis_result_fingerprint(payload: Dict[str, Any]) -> str:
         value = result_payload.get(key, payload.get(key))
         content[key] = value if value is not None else None
     content["obligation_coverage"] = meta.get("obligation_coverage")
+    if meta.get("document_scope_resolution"):
+        content["document_scope_resolution"] = meta["document_scope_resolution"]
     if meta.get('fact_snapshot'):
         content['fact_snapshot'] = meta['fact_snapshot']
     canonical = json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)

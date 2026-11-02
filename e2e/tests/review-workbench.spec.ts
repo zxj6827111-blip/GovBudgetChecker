@@ -9,6 +9,9 @@ import { expect, test, type Page } from "../../app/node_modules/playwright/test"
  *    进度未知显示"—"；
  * 3. 反例：review_required 状态徽章不得显示成"分析完成"；
  * 4. 三 tab 切换与计数准确性（问题数与后端 count_formal_findings 同口径）。
+ *
+ * 解释区占满问题栏：问题列表按需展开（选中后收起），必须处理与参考分两个
+ * 页签；降级的 FIN-2 属于参考，不计入完成条件。忽略须先选理由。
  */
 
 const sessionCookie = {
@@ -136,6 +139,48 @@ async function installReviewWorkbenchMocks(page: Page, options: MockOptions) {
   });
 }
 
+/** 处理计数与完成阻塞收在「完成条件」说明里：打开说明断言后关闭。 */
+async function expectStatusCounts(page: Page, text: string) {
+  await page.getByTestId("gbc-review-state-progress").click();
+  await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText(text);
+  await page.getByTestId("gbc-review-info-panel-close").click();
+}
+
+/** text 为 null 表示服务端门禁已无阻塞。 */
+async function expectGateBlockers(page: Page, text: string | null) {
+  await page.getByTestId("gbc-review-state-progress").click();
+  if (text === null) await expect(page.getByTestId("gbc-review-gate-blockers")).toHaveCount(0);
+  else await expect(page.getByTestId("gbc-review-gate-blockers")).toContainText(text);
+  await page.getByTestId("gbc-review-info-panel-close").click();
+}
+
+/** 问题列表按需展开：断言列表行之前先展开（已展开时不重复点击）。 */
+async function openIssueList(page: Page) {
+  const toggle = page.getByTestId("gbc-review-toggle-list");
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  await expect(page.getByTestId("gbc-review-list-panel")).toBeVisible();
+}
+
+/** 从列表选中一条；选中后列表收起，解释区显示该条。 */
+async function selectIssue(page: Page, id: string) {
+  await openIssueList(page);
+  await page.getByTestId(`gbc-review-issue-card-${id}`).click();
+  await expect(page.getByTestId("gbc-review-issue-detail")).toHaveAttribute("data-detail-problem-id", id);
+}
+
+/** 忽略必须先记录理由。 */
+async function ignoreWithReason(page: Page, id: string, reason = "false_positive") {
+  await page.getByTestId(`gbc-review-issue-ignore-${id}`).click();
+  await page.getByTestId(`gbc-review-ignore-reason-${reason}`).check();
+  await page.getByTestId("gbc-review-ignore-save").click();
+}
+
+/** 读取校正、元数据、阶段记录收在「更多」菜单里。 */
+async function openMoreTab(page: Page, tab: "corrections" | "metadata" | "stages") {
+  await page.getByTestId("gbc-review-tab-more").click();
+  await page.getByTestId(`gbc-review-tab-${tab}`).click();
+}
+
 test.describe("Review workbench (Task 6)", () => {
   test("核心闭环：确认移出待处理，自动接续证据，全部问题及刷新保留记录", async ({ page }) => {
     const workflowUpdates: Array<Record<string, unknown>> = [];
@@ -157,14 +202,16 @@ test.describe("Review workbench (Task 6)", () => {
     // 底部状态条初始计数：2 条 finding 中只有 1 条是正式问题（FIN-2 因证据不足
     // 被降级，不计入正式问题数，也不计入待处理），均未操作，应是
     // 0 已确认 · 0 已忽略 · 1 待处理
-    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("已确认 0");
-    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("待处理 1");
+    await expectStatusCounts(page, "已确认 0");
+    await expectStatusCounts(page, "待处理 1");
 
-    // 选中问题：点击第一张问题卡，应跳转到该问题所在页（第 12 页）
-    await page.getByTestId("gbc-review-issue-card-FIN-1").click();
+    // 选中问题：从列表点击第一条，应跳转到该问题所在页（第 12 页）
+    await selectIssue(page, "FIN-1");
     await expect(page.getByTestId("gbc-review-pdf-page-input")).toHaveValue("12");
     // 证据高亮应出现，标签包含问题的 rule_id
-    await expect(page.getByTestId("gbc-review-evidence-label")).toContainText("GBC-BUD-014");
+    // 证据说明在原文上方的定位条里，不再贴在框上压住原文。
+    await expect(page.getByTestId("gbc-review-pdf-locator")).toContainText("GBC-BUD-014");
+    await expect(page.getByTestId("gbc-review-evidence-label")).toHaveCount(0);
 
     // 确认问题：点击"确认问题"按钮
     await page.getByTestId("gbc-review-issue-confirm-FIN-1").click();
@@ -175,28 +222,37 @@ test.describe("Review workbench (Task 6)", () => {
     expect(workflowUpdates[0].status).toBe("confirmed");
 
     // 计数变化：已确认应从 0 变为 1，待处理从 1 变为 0
-    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("已确认 1");
-    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("待处理 0");
+    await expectStatusCounts(page, "已确认 1");
+    await expectStatusCounts(page, "待处理 0");
     // 自动保存时间应从"尚无保存记录"变为真实的 HH:MM
     await expect(page.getByTestId("gbc-review-status-bar-saved-at")).toContainText("自动保存于");
 
-    // 保存成功才移出队列，接续下一张卡和对应 PDF 原文。
+    // 保存成功才移出必须处理队列；降级的 FIN-2 在参考页签，不计入完成条件。
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toHaveCount(0);
-    await expect(page.getByTestId("gbc-review-issue-card-FIN-2")).toHaveAttribute("aria-current", "true");
+    await openIssueList(page);
+    await expect(page.getByTestId("gbc-review-scope-pending")).toContainText("待处理 0");
+    await expect(page.getByTestId("gbc-review-tab-reference")).toContainText("1");
+    await page.getByTestId("gbc-review-tab-reference").click();
+    await expect(page.getByTestId("gbc-review-issue-detail")).toHaveAttribute("data-detail-problem-id", "FIN-2");
     await expect(page.getByTestId("gbc-review-pdf-page-input")).toHaveValue("1");
-    await expect(page.getByTestId("gbc-review-scope-pending")).toContainText("待处理（1）");
     await page.screenshot({ path: test.info().outputPath("pending-after-confirm.png") });
+    await page.getByTestId("gbc-review-tab-issues").click();
+    await openIssueList(page);
     await page.getByTestId("gbc-review-scope-all").click();
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toContainText("已确认");
 
     // 刷新默认回到待处理，已处理记录在全部问题中持续可查。
     await page.reload();
     await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("已确认 1");
+    await expectStatusCounts(page, "已确认 1");
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-scope-pending")).toHaveAttribute("aria-pressed", "true");
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toHaveCount(0);
+    await openIssueList(page);
     await page.getByTestId("gbc-review-scope-all").click();
-    await page.getByTestId("gbc-review-toggle-filters").click();
     await page.getByTestId("gbc-review-status-confirmed").click();
     await expect(page.locator('[data-testid="gbc-review-issue-card-FIN-1"]')).toContainText("已确认");
     await expect(page.getByTestId("gbc-review-issue-card-FIN-2")).toHaveCount(0);
@@ -212,12 +268,14 @@ test.describe("Review workbench (Task 6)", () => {
     await page.goto(`/review?job=${JOB_ID}`);
     await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible({ timeout: 15_000 });
 
-    // 审核问题 tab：计数必须是 1（正式问题数，FIN-2 是降级问题不计入，
+    // 必须处理页签：计数必须是 1（正式问题数，FIN-2 是降级问题不计入，
     // 与后端 count_formal_findings 同口径：2 条 finding 里只有 1 条正式）
+    await expect(page.getByTestId("gbc-review-tab-issues")).toContainText("1");
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issues-count")).toContainText("正式问题（1）");
 
     // 元数据 tab
-    await page.getByTestId("gbc-review-tab-metadata").click();
+    await openMoreTab(page, "metadata");
     await expect(page.getByTestId("gbc-review-metadata-tab")).toBeVisible();
     await expect(page.getByTestId("gbc-review-metadata-year")).toContainText("2026");
     await expect(page.getByTestId("gbc-review-metadata-rule-version")).toContainText("v3_3");
@@ -225,7 +283,7 @@ test.describe("Review workbench (Task 6)", () => {
     await expect(page.getByTestId("gbc-review-metadata-report-id")).toContainText("GBC-2026-0731-0187");
 
     // 阶段记录 tab：quality_gate 应是最终阶段，显示已完成
-    await page.getByTestId("gbc-review-tab-stages").click();
+    await openMoreTab(page, "stages");
     await expect(page.getByTestId("gbc-review-stage-history-tab")).toBeVisible();
     await expect(page.getByTestId("gbc-review-stage-quality_gate")).toBeVisible();
   });
@@ -239,13 +297,17 @@ test.describe("Review workbench (Task 6)", () => {
     await page.goto(`/review?job=${JOB_ID}`);
     await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible({ timeout: 15_000 });
 
-    // FIN-2 是降级问题：卡片仍然展示（用户有权知道），但带独立的降级标识
+    // FIN-2 是降级问题：仍然展示（用户有权知道），放在参考页签并带独立的降级标识
+    await page.getByTestId("gbc-review-tab-reference").click();
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-FIN-2")).toContainText("证据不足");
     await page.getByTestId("gbc-review-issue-card-FIN-2").click();
     await expect(page.getByTestId("gbc-review-issue-degraded-badge-FIN-2")).toBeVisible();
     await expect(page.getByTestId("gbc-review-issue-degraded-badge-FIN-2")).toContainText("证据不足待复核");
-    // 但"审核问题（N）"的 N 不应把它算进去：2 条 finding 里只有 1 条正式，
+    // 但正式问题数不应把它算进去：2 条 finding 里只有 1 条正式，
     // 必须显示（1）而不是（2）——这正是与 count_formal_findings 同口径的核心断言。
+    await page.getByTestId("gbc-review-tab-issues").click();
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issues-count")).toContainText("正式问题（1）");
     await expect(page.getByTestId("gbc-review-issues-count")).not.toContainText("正式问题（2）");
   });
@@ -253,29 +315,44 @@ test.describe("Review workbench (Task 6)", () => {
   test("列表 + 详情：打开即选中首条，↑↓ 与上一条/下一条同步切换详情和原文", async ({ page }) => {
     const workflowUpdates: Array<Record<string, unknown>> = [];
     const workflowIssuesState: MockOptions["workflowIssuesState"] = {};
+    const [fin1, fin2] = buildJobDetail({ workflowUpdates, workflowIssuesState }).result.rule_findings;
+    const fin3 = {
+      ...fin1, id: "FIN-3", title: "第二条必须处理的问题",
+      evidence: [{ page: 14, bbox: [100, 200, 400, 260], text: "项目支出 52,350.00 万元", location_level: "exact_span", verification_status: "verified" }],
+      location: { page: 14 },
+    };
     await page.context().addCookies([sessionCookie]);
-    await installReviewWorkbenchMocks(page, { reportYear: 2026, workflowUpdates, workflowIssuesState });
+    await installReviewWorkbenchMocks(page, { reportYear: 2026, workflowUpdates, workflowIssuesState, ruleFindings: [fin1, fin2, fin3] });
     await page.goto(`/review?job=${JOB_ID}`);
 
-    const first = page.getByTestId("gbc-review-issue-card-FIN-1");
     const detail = page.getByTestId("gbc-review-issue-detail");
-    await expect(first).toHaveAttribute("aria-current", "true");
     await expect(detail).toHaveAttribute("data-detail-problem-id", "FIN-1");
     await expect(page.getByTestId("gbc-review-pdf-page-input")).toHaveValue("12");
-    await expect(page.getByTestId("gbc-review-issue-position")).toContainText("第 1 / 2 条");
+    await expect(page.getByTestId("gbc-review-issue-position")).toContainText("1 / 2");
     await expect(page.getByTestId("gbc-review-issue-prev")).toBeDisabled();
+    // 列表默认收起，解释区占满问题栏。
+    await expect(page.getByTestId("gbc-review-list-panel")).toHaveCount(0);
 
-    await first.focus();
-    await page.keyboard.press("ArrowDown");
-    await expect(page.getByTestId("gbc-review-issue-card-FIN-2")).toHaveAttribute("aria-current", "true");
-    await expect(page.getByTestId("gbc-review-issue-card-FIN-2")).toBeFocused();
-    await expect(detail).toHaveAttribute("data-detail-problem-id", "FIN-2");
+    await page.getByTestId("gbc-review-issue-next").click();
+    await expect(detail).toHaveAttribute("data-detail-problem-id", "FIN-3");
+    await expect(page.getByTestId("gbc-review-pdf-page-input")).toHaveValue("14");
     await expect(page.getByTestId("gbc-review-issue-next")).toBeDisabled();
 
-    await page.getByTestId("gbc-review-issue-prev").click();
-    await expect(detail).toHaveAttribute("data-detail-problem-id", "FIN-1");
+    // 展开列表时聚焦当前条目，↑ 键切换并保持列表展开。
+    await openIssueList(page);
+    const third = page.getByTestId("gbc-review-issue-card-FIN-3");
+    await expect(third).toHaveAttribute("aria-current", "true");
+    await expect(third).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    const first = page.getByTestId("gbc-review-issue-card-FIN-1");
     await expect(first).toHaveAttribute("aria-current", "true");
+    await expect(first).toBeFocused();
+    await expect(detail).toHaveAttribute("data-detail-problem-id", "FIN-1");
     await expect(page.getByTestId("gbc-review-pdf-page-input")).toHaveValue("12");
+    // 点选后列表收起。
+    await third.click();
+    await expect(page.getByTestId("gbc-review-list-panel")).toHaveCount(0);
+    await expect(detail).toHaveAttribute("data-detail-problem-id", "FIN-3");
     expect(workflowUpdates).toHaveLength(0);
   });
 
@@ -288,7 +365,7 @@ test.describe("Review workbench (Task 6)", () => {
     await page.goto(`/review?job=${JOB_ID}`);
     await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible({ timeout: 15_000 });
 
-    await page.getByTestId("gbc-review-tab-metadata").click();
+    await openMoreTab(page, "metadata");
     await expect(page.getByTestId("gbc-review-metadata-year")).toContainText("未识别到");
     await expect(page.getByTestId("gbc-review-metadata-year")).not.toContainText("2000");
   });
@@ -308,7 +385,9 @@ test.describe("Review workbench (Task 6)", () => {
     await page.goto(`/review?job=${JOB_ID}`);
     await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible({ timeout: 15_000 });
 
-    await expect(page.getByText("需要人工复核")).toBeVisible();
+    // 复核页顶部只放复核状态；分析状态在「更多」里。
+    await page.getByTestId("gbc-review-tab-more").click();
+    await expect(page.getByTestId("gbc-review-analysis-status")).toContainText("需要人工复核");
     await expect(page.getByText("分析完成", { exact: false })).toHaveCount(0);
   });
 
@@ -321,21 +400,37 @@ test.describe("Review workbench (Task 6)", () => {
     await page.goto(`/review?job=${JOB_ID}`);
     await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible({ timeout: 15_000 });
 
+    // 未选理由不能确认忽略；“其他”必须写说明。
     await page.getByTestId("gbc-review-issue-ignore-FIN-1").click();
+    await expect(page.getByTestId("gbc-review-ignore-save")).toBeDisabled();
+    await page.getByTestId("gbc-review-ignore-reason-other").check();
+    await expect(page.getByTestId("gbc-review-ignore-save")).toBeDisabled();
+    await page.getByTestId("gbc-review-ignore-reason-false_positive").check();
+    await page.getByTestId("gbc-review-ignore-detail").fill("第 12 页按全口径列示");
+    await page.getByTestId("gbc-review-ignore-save").click();
     await expect.poll(() => workflowUpdates.length, { timeout: 10_000 }).toBeGreaterThan(0);
     expect(workflowUpdates[0].status).toBe("no_issue");
+    // 理由随工作流 note 保存，导出记录直接可读。
+    expect(workflowUpdates[0].note).toBe("忽略理由：规则误报\n说明：第 12 页按全口径列示");
 
-    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("已忽略 1");
-    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("待处理 0");
+    await expectStatusCounts(page, "已忽略 1");
+    await expectStatusCounts(page, "待处理 0");
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toHaveCount(0);
+    await openIssueList(page);
     await page.getByTestId("gbc-review-scope-all").click();
-    await page.getByTestId("gbc-review-toggle-filters").click();
     await page.getByTestId("gbc-review-status-no_issue").click();
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toContainText("已忽略");
+    await page.getByTestId("gbc-review-close-list").click();
+    await expect(page.getByTestId("gbc-review-ignore-record")).toContainText("理由：规则误报");
     await page.getByTestId("gbc-review-issue-restore-FIN-1").click();
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toHaveAttribute("data-workflow-status", "pending");
-    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("待处理 1");
+    await expectStatusCounts(page, "待处理 1");
+    // 恢复待处理时去掉忽略理由。
+    expect(workflowUpdates.at(-1)).toMatchObject({ status: "pending", note: "" });
     await page.reload();
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toHaveAttribute("data-workflow-status", "pending");
   });
 
@@ -355,6 +450,8 @@ test.describe("Review workbench (Task 6)", () => {
 
     await expect.poll(() => workflowUpdates.length, { timeout: 10_000 }).toBeGreaterThan(0);
     expect(workflowUpdates[0].note).toBe("已与预算处电话核实，属实需整改。");
+    await expect(page.getByTestId("gbc-review-note-record")).toContainText("已与预算处电话核实");
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toHaveAttribute("data-workflow-status", "pending");
     await expect(page.getByTestId("gbc-review-undo")).toHaveCount(0);
   });
@@ -367,6 +464,7 @@ test.describe("Review workbench (Task 6)", () => {
     await page.context().addCookies([sessionCookie]);
     await installReviewWorkbenchMocks(page, { reportYear: 2026, workflowUpdates, workflowIssuesState });
     await page.goto(`/review?job=${JOB_ID}`);
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toHaveAttribute("data-workflow-status", "needs_review");
     await page.getByTestId("gbc-review-issue-confirm-FIN-1").click();
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toHaveCount(0);
@@ -374,9 +472,10 @@ test.describe("Review workbench (Task 6)", () => {
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toHaveAttribute("data-workflow-status", "needs_review");
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toHaveAttribute("aria-current", "true");
     await expect(page.getByTestId("gbc-review-pdf-page-input")).toHaveValue("12");
-    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("待复核 1");
+    await expectStatusCounts(page, "待复核 1");
     expect(workflowUpdates.at(-1)).toMatchObject({ status: "needs_review", note: "待核对财政拨款口径" });
     await page.reload();
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toHaveAttribute("data-workflow-status", "needs_review");
   });
 
@@ -388,12 +487,16 @@ test.describe("Review workbench (Task 6)", () => {
     await page.context().addCookies([sessionCookie]);
     await installReviewWorkbenchMocks(page, { reportYear: 2026, workflowUpdates, workflowIssuesState });
     await page.goto(`/review?job=${JOB_ID}`);
-    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("已确认 1");
+    await expectStatusCounts(page, "已确认 1");
+    await openIssueList(page);
     await page.getByTestId("gbc-review-scope-all").click();
-    await page.getByTestId("gbc-review-issue-card-FIN-1").click();
-    await page.getByTestId("gbc-review-issue-ignore-FIN-1").click();
+    await selectIssue(page, "FIN-1");
+    await ignoreWithReason(page, "FIN-1", "scope");
+    expect(workflowUpdates.at(-1)).toMatchObject({ status: "no_issue", note: "忽略理由：口径不同\n\n已核实" });
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toContainText("已忽略");
     await page.getByTestId("gbc-review-undo").click();
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-scope-all")).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toHaveAttribute("data-workflow-status", "confirmed");
     expect(workflowUpdates.at(-1)).toMatchObject({ status: "confirmed", note: "已核实" });
@@ -405,20 +508,28 @@ test.describe("Review workbench (Task 6)", () => {
     await page.context().addCookies([sessionCookie]);
     await installReviewWorkbenchMocks(page, { reportYear: 2026, workflowUpdates, workflowIssuesState });
     await page.goto(`/review?job=${JOB_ID}`);
-    await page.getByTestId("gbc-review-toggle-filters").click();
+    await openIssueList(page);
     await page.getByTestId("gbc-review-source-rule").click();
     await page.getByTestId("gbc-review-category-issue").click();
     await page.getByTestId("gbc-review-issue-card-FIN-1").click();
     await page.getByTestId("gbc-review-issue-confirm-FIN-1").click();
-    await expect(page.getByTestId("gbc-review-issues-empty")).toContainText("当前筛选下已无待处理项");
-    await expect(page.getByTestId("gbc-review-issue-card-FIN-2")).toHaveCount(0);
+    await expect(page.getByTestId("gbc-review-issues-empty")).toContainText("当前队列已无待处理项");
     await expect(page.getByTestId("gbc-review-evidence-highlight")).toHaveCount(0);
+    await openIssueList(page);
+    await expect(page.getByTestId("gbc-review-issue-card-FIN-2")).toHaveCount(0);
     await expect(page.getByTestId("gbc-review-source-rule")).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("gbc-review-category-issue")).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByTestId("gbc-review-scope-pending")).toContainText("待处理（0）");
+    await openIssueList(page);
+    await expect(page.getByTestId("gbc-review-scope-pending")).toContainText("待处理 0");
+    await page.getByTestId("gbc-review-close-list").click();
     await page.getByTestId("gbc-review-view-all").click();
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toContainText("已确认");
     await page.getByTestId("gbc-review-clear-filters").click();
+    await expect(page.getByTestId("gbc-review-source-rule")).toHaveAttribute("aria-pressed", "false");
+    // 降级的 FIN-2 一直在参考页签，不因必须处理项清空而混入。
+    await page.getByTestId("gbc-review-tab-reference").click();
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-FIN-2")).toBeVisible();
   });
 
@@ -430,9 +541,10 @@ test.describe("Review workbench (Task 6)", () => {
       return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: { error: "review_context_mismatch", message: "分析结果已更新，请刷新后重新核对" } }) });
     });
     await page.goto(`/review?job=${JOB_ID}`);
-    await page.getByTestId("gbc-review-issue-card-FIN-1").click();
+    await selectIssue(page, "FIN-1");
     await page.getByTestId("gbc-review-issue-confirm-FIN-1").click();
     await expect(page.getByTestId("gbc-review-action-notice")).toContainText("分析结果已更新");
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toHaveAttribute("data-workflow-status", "pending");
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toHaveAttribute("aria-current", "true");
     await expect(page.getByTestId("gbc-review-pdf-page-input")).toHaveValue("12");
@@ -450,8 +562,10 @@ test.describe("Review workbench (Task 6)", () => {
     await page.goto(`/review?job=${JOB_ID}`);
     await page.getByTestId("gbc-review-issue-confirm-FIN-1").click();
     await expect(page.getByTestId("gbc-review-undo")).toBeEnabled();
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toHaveCount(0);
-    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("已确认 1");
+    await expectStatusCounts(page, "已确认 1");
+    await openIssueList(page);
     await page.getByTestId("gbc-review-scope-all").click();
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toContainText("已确认");
   });
@@ -475,11 +589,13 @@ test.describe("Review workbench (Task 6)", () => {
       return route.fallback();
     });
     await page.goto(`/review?job=${JOB_ID}`);
-    const firstBounds = await page.getByTestId("gbc-review-issue-card-LONG-0").boundingBox();
-    const listBefore = await page.getByTestId("gbc-review-issues-list").boundingBox();
+    await expect(page.getByTestId("gbc-review-issue-detail")).toHaveAttribute("data-detail-problem-id", "LONG-0");
+    // 长解释滚到下方后处理，下一条应从标题读起。
+    await page.getByTestId("gbc-review-issue-detail-pane").locator("[data-text-size]").evaluate((element) => { element.scrollTop = element.scrollHeight; });
     await page.getByTestId("gbc-review-issue-confirm-LONG-0").click();
     await expect(page.getByTestId("gbc-review-issue-confirm-LONG-0")).toBeDisabled();
     await expect(page.getByTestId("gbc-review-issue-ignore-LONG-0")).toBeDisabled();
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-LONG-0")).toHaveCount(1);
     expect(workflowUpdates).toHaveLength(0);
     releaseWrite();
@@ -489,10 +605,8 @@ test.describe("Review workbench (Task 6)", () => {
     await expect(page.getByTestId("gbc-review-pdf-page-input")).toHaveValue("3");
     await expect(page.getByTestId("gbc-review-issue-detail")).toHaveAttribute("data-detail-problem-id", "LONG-1");
     await expect(page.getByTestId("gbc-review-issue-confirm-LONG-1")).toBeVisible();
-    // 撤销提示条会把列表整体下移，所以按列表内的相对位置比较。
-    const nextBounds = await next.boundingBox();
-    const listAfter = await page.getByTestId("gbc-review-issues-list").boundingBox();
-    expect(Math.abs((nextBounds!.y - listAfter!.y) - (firstBounds!.y - listBefore!.y))).toBeLessThan(8);
+    await page.getByTestId("gbc-review-close-list").click();
+    await expect(page.getByTestId("gbc-review-issue-detail").locator("h2")).toBeInViewport();
     expect(workflowUpdates).toHaveLength(1);
   });
 
@@ -509,12 +623,15 @@ test.describe("Review workbench (Task 6)", () => {
     await page.context().addCookies([sessionCookie]);
     await installReviewWorkbenchMocks(page, { reportYear: 2026, workflowUpdates, workflowIssuesState, ruleFindings });
     await page.goto(`/review?job=${JOB_ID}`);
-    await expect(page.getByTestId("gbc-review-scope-pending")).toContainText("待处理（3）");
+    await openIssueList(page);
+    await expect(page.getByTestId("gbc-review-scope-pending")).toContainText("待处理 3");
+    await openIssueList(page);
     for (let i = 0; i < 3; i++) await expect(page.getByTestId(`gbc-review-issue-card-STATUS-${i}`)).toHaveCount(0);
     for (let i = 3; i < 6; i++) await expect(page.getByTestId(`gbc-review-issue-card-STATUS-${i}`)).toHaveCount(1);
+    await openIssueList(page);
     await page.getByTestId("gbc-review-scope-all").click();
-    await expect(page.getByTestId("gbc-review-scope-all")).toContainText("全部问题（6）");
-    await page.getByTestId("gbc-review-toggle-filters").click();
+    await openIssueList(page);
+    await expect(page.getByTestId("gbc-review-scope-all")).toContainText("全部 6");
     await page.getByTestId("gbc-review-status-in_package").click();
     await expect(page.getByTestId("gbc-review-issue-card-STATUS-2")).toContainText("已进整改包");
     await expect(page.getByTestId("gbc-review-issues-list").locator("[data-review-problem-id]")).toHaveCount(1);
@@ -554,12 +671,14 @@ test.describe("Review workbench (Task 6)", () => {
     await expect(page.getByTestId("gbc-review-issue-confirm-FIN-1")).toBeDisabled();
     // Next 支持的原生历史导航保留页面组件，覆盖同一个工作台切换 job 的竞态。
     await page.evaluate((url) => window.history.pushState(null, "", url), `/review?job=${nextJob}`);
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-scope-pending")).toHaveAttribute("aria-pressed", "true");
     releaseWrite();
     await expect(page.getByTestId("gbc-review-issue-confirm-FIN-1")).toBeEnabled();
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toHaveAttribute("data-workflow-status", "pending");
     await expect(page.getByTestId("gbc-review-decision-notice")).toHaveCount(0);
-    await page.getByTestId("gbc-review-issue-ignore-FIN-1").click();
+    await ignoreWithReason(page, "FIN-1");
     await expect(page.getByTestId("gbc-review-undo")).toBeEnabled();
     expect(workflowUpdates).toEqual([
       expect.objectContaining({ job_id: JOB_ID, status: "confirmed" }),
@@ -587,7 +706,7 @@ test.describe("Review workbench (Task 6)", () => {
     await page.goto(`/review?job=${JOB_ID}`);
     await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible({ timeout: 15_000 });
 
-    await page.getByTestId("gbc-review-tab-stages").click();
+    await openMoreTab(page, "stages");
     await expect(page.getByTestId("gbc-review-stage-history-tab")).toBeVisible();
     // 5 个阶段在数据缺失时都应显示 —（unknown 态），不得显示 0% 或误标为已完成
     for (const stage of ["upload", "pdf_parse", "metadata_recognition", "rule_ai_analysis", "quality_gate"]) {
@@ -651,8 +770,10 @@ test.describe("Review workbench (Task 6)", () => {
     await expect(page).toHaveURL(new RegExp(`/review\\?job=${JOB_ID}`), { timeout: 15_000 });
     await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible({ timeout: 15_000 });
     // 看到该任务的真实问题列表（与直接访问 URL 相同的数据与断言口径）
+    await expect(page.getByTestId("gbc-review-issue-detail")).toHaveAttribute("data-detail-problem-id", "FIN-1");
+    await openIssueList(page);
     await expect(page.getByTestId("gbc-review-issue-card-FIN-1")).toBeVisible();
-    await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("待处理 1");
+    await expectStatusCounts(page, "待处理 1");
   });
 
   test("REGRESSION (fix B): hand-typed /review?job= for a running job shows a clear guidance state, not an empty workbench", async ({

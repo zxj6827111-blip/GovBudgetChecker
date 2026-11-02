@@ -154,7 +154,17 @@ def affected_check_ids(check_receipts: Any, target_ids: Iterable[str]) -> Dict[s
 
     affected: List[str] = []
     for receipt in check_receipts:
-        if not isinstance(receipt, Mapping) or not (collect(receipt) & target_set):
+        if not isinstance(receipt, Mapping):
+            continue
+        dependencies = collect(receipt)
+        # 表格补录的目标是表实例 UID，回执记录的是该表下的事实 UID（如 t1:2:total_actual）。
+        # 只按显式依赖字段的前缀匹配，不按标题或金额推断。
+        table_scoped = any(
+            dependency.startswith(f"{target}:")
+            for dependency in dependencies
+            for target in target_set if ":" not in target
+        )
+        if not (dependencies & target_set or table_scoped):
             continue
         check_id = str(receipt.get("sub_check_id") or receipt.get("check_id") or "").strip()
         if check_id and check_id not in affected:

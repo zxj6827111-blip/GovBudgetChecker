@@ -699,6 +699,7 @@ class MaterialDetailQueryService:
                 current_run.get("ai_findings"), current_run.get("rule_findings")
             ),
             coverage=build_coverage(result_meta.get("obligation_coverage")),
+            ai_scope_meta=_ai_scope_meta(result_meta),
         )
 
     async def versions(self, slot_row: Dict[str, Any]) -> List[MaterialVersionItem]:
@@ -1090,6 +1091,27 @@ def _unavailable_coverage(reason: str) -> CoverageBlock:
     return CoverageBlock(available=False, reason=reason, summary=None, items=[])
 
 
+def _ai_scope_meta(result_meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """只暴露展示 AI 检查范围所需的 meta 子集。
+
+    ``None`` 表示这次运行**没有记录** AI 状态/覆盖；前端必须显示“未记录”。
+    不把空 dict 当“完整覆盖”，也不把缺失字段补成 0。
+    """
+
+    keys = ("ai_execution", "ai_coverage", "conclusion_scope", "quality_gate")
+    if not any(key in result_meta for key in keys):
+        return None
+    quality_gate = result_meta.get("quality_gate")
+    conclusion_scope = result_meta.get("conclusion_scope")
+    if not conclusion_scope and isinstance(quality_gate, dict):
+        conclusion_scope = quality_gate.get("conclusion_scope")
+    return {
+        "ai_execution": result_meta.get("ai_execution"),
+        "ai_coverage": result_meta.get("ai_coverage"),
+        "conclusion_scope": conclusion_scope,
+    }
+
+
 def _empty_analysis(reason: str) -> AnalysisBlock:
     return AnalysisBlock(
         available=False,
@@ -1174,6 +1196,8 @@ def build_coverage(raw: Any) -> CoverageBlock:
                 reason=_text_or_none(row.get("reason")),
                 reason_label=_text_or_none(row.get("reason_label")),
                 detail=_text_or_none(row.get("detail")),
+                basis=_text_or_none(row.get("basis")),
+                checkers=_string_list(row.get("checkers")),
                 blocks_gate=bool(row.get("blocks_gate")),
                 requires_ai=bool(row.get("requires_ai")),
                 input_gaps=_string_list(row.get("input_gaps")),

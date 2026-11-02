@@ -1,0 +1,14 @@
+{
+  "job_id": "68d4d3ac899f30839ae9c8f7f7b3f29f",
+  "status": "review_required",
+  "writing_scope": "unit",
+  "writing_source": "human",
+  "fact_count_before": 10,
+  "fact_count_after": 10,
+  "amount_facts_identical": true,
+  "artifact_content_hash_unchanged": true,
+  "raw_facts_hash_unchanged": true,
+  "amount_decision": null,
+  "writing_decision_revision": 5,
+  "history_status": 200
+}

@@ -1,0 +1,17 @@
+........................................................................ [ 58%]
+....................................................                     [100%]
+=============================== warnings summary ===============================
+tests/remediation/test_rc_batch1.py::test_rc09_table_refs_require_content_anchoring
+tests/remediation/test_rc_batch1.py::test_rc09_table_refs_require_content_anchoring
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+tests/remediation/test_rc_batch1.py::test_rc09_table_refs_require_content_anchoring
+tests/remediation/test_rc_batch1.py::test_rc09_table_refs_require_content_anchoring
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+tests/remediation/test_rc_batch1.py::test_rc09_table_refs_require_content_anchoring
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+124 passed, 5 warnings in 0.92s
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

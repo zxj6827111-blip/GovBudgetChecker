@@ -4,6 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
+# 只为本模块的网格/证据测试显式启用隔离约定；默认未知另有回归覆盖。
+pytestmark = pytest.mark.usefixtures("approved_test_blank_convention")
+
 from src.engine.fact_context import build_fact_context_from_artifact
 from src.engine.native_empty_operands import blank_term, valid_blank_observation
 from src.engine.pipeline import build_document
@@ -100,7 +103,8 @@ def test_real_difference_survives_blank_support_and_support_must_be_current():
     issues=R33241_Table3_ExpenseAdvancedCheck().apply(doc)
     assert any(i.severity=='error' and '10.00' in i.message for i in issues)
     issue=next(i for i in issues if i.severity=='error')
-    assert len(issue.location['native_blank_sources'])==3
+    assert len(issue.location['native_blank_sources'])==6  # 两行业务关系合并后，保留两行各三格空白依据。
+    assert len(issue.location['relations']) == 2
     finding={'id':'rule-test','source':'rule','rule_id':'V33-241','location':deepcopy(issue.location),'evidence':[]}
     pages=['甲局2024年度部门决算 20.00 7.00 3.00']
     result={'rule_findings':[finding]}

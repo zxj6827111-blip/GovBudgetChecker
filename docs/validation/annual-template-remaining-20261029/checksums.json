@@ -1,0 +1,14 @@
+{
+  "batch2.py": "91ee81e7a38f11d2852dc1b60a3ff9e99feb79a10041341940e2aecf74296319",
+  "compat-red-on-a6b1428e.log": "cbbe50dc394e39bc76b17c10e0e0b77a3c708e4bb883579354884c1a047c3679",
+  "corpus-diff.json": "993c1124bf55eba46600f799a44b74db00dc53dbf5bc534c481299b8e8cc44eb",
+  "earlier-year-reuse-red.log": "36d5cde5ba8efcc5e491bc4e058ff3ad16e945db27d9784aebdba5ace580ebc0",
+  "extract.py": "c7d15ccc7657719ea8d84bcd30701dcc0d472717a1523ff260cfc0bc4c894579",
+  "frontend-build-summary.log": "225cb75d940f757cae5ac9f27b81ad72784999450e4a74b076a76edd6cf52031",
+  "frontend-typescript.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "frontend-unit-tail.log": "a29af8170b3798edc96acee2314ebceb0c2946906a4d7338e9815c8f57af61da",
+  "python-full.log": "1639a810612be1e38b5bdc3d32903dfbcf9cef8b14678a01c89ddb764cab0b7f",
+  "red-tests.log": "e122ab32b79a033b6d8dc0ba058f4bf9d880ca5c25fc16894775ca72da6d283a",
+  "summarize.py": "dfd8bbe5804b4b8afdc188485e795a6c7c90478029f048577b2742f6321bab49",
+  "verification-summary.json": "1d0408377e59871acabd5156a7ddba8b0ac5b1ebc44d41d205b81805bb907369"
+}

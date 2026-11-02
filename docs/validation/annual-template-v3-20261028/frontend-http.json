@@ -1,0 +1,8 @@
+{
+  "normal_login_status": 200,
+  "isolated_cookie_name": "gbc_annual_v3_isolated",
+  "/settings": 200,
+  "/api/auth/me": 200,
+  "/api/admin/templates": 200,
+  "/api/admin/templates/impact?target_year=2024&binding_revision=3&algorithm=material-writing-v3.2&capability=position_checks": 200
+}

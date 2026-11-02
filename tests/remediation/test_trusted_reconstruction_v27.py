@@ -7,6 +7,9 @@ from pathlib import Path
 import pdfplumber
 import pytest
 
+# 只为本模块的网格/证据测试显式启用隔离约定；默认未知另有回归覆盖。
+pytestmark = pytest.mark.usefixtures("approved_test_blank_convention")
+
 from src.engine.fact_context import FactContext, build_fact_context_from_artifact, resolve_operand
 from src.engine.rules_v33 import R33005_TableTotalConsistency, build_document
 from src.schemas.parse_artifact import ParseArtifact, ParsedCell
@@ -96,7 +99,13 @@ def test_income_certified_blank_executes_and_preserves_raw_snapshot(farm):
     assert R33240_Table2_IncomeAdvancedCheck().apply(doc) == []
     assert doc.fact_context.to_dict() == before
     receipts = [r for r in doc.fact_receipts if r.get('cell_observations') and r['rule_id'] == 'V33-240']
-    assert receipts and all(r['status'] == 'pass' for r in receipts)
+    horizontal = [r for r in receipts if r['sub_check_id'].endswith(':income_sources')]
+    assert horizontal and all(r['status'] == 'pass' for r in horizontal)
+    # 新增来源列纵向关系：全部为已认证空格时应明确“不适用”，不能伪记算术通过。
+    vertical = [r for r in receipts if not r['sub_check_id'].endswith(':income_sources')]
+    assert vertical
+    for record in vertical:
+        assert record['status'] == ('pass' if record['operand_fact_ids'] else 'not_applicable')
 
 
 def test_income_nonzero_difference_is_not_hidden_by_blank_terms(farm):

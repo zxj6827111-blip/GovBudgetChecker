@@ -1,0 +1,124 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_years_reuse_a_package_only_with_their_own_reviewed_original _______
+
+real_database_url = '[REDACTED]'
+tmp_path = PosixPath('<scratch>/red-run/full-pytest/test_years_reuse_a_package_onl0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10beea690>
+
+    @pytest.mark.asyncio
+    async def test_years_reuse_a_package_only_with_their_own_reviewed_original(real_database_url, tmp_path, monkeypatch):
+        conn = await asyncpg.connect(real_database_url)
+        schema = "annual_reuse_" + uuid4().hex
+        monkeypatch.setenv("GBC_TEMPLATE_STORAGE", str(tmp_path / "storage"))
+        await conn.execute(f'CREATE SCHEMA "{schema}"; SET search_path TO "{schema}"')
+        try:
+            for migration in MIGRATIONS:
+                for sql in migration["sql"]:
+                    await conn.execute(sql)
+            import fitz
+    
+            async def pair(year, unit_note="本表反映单位本年度收入"):
+                ids = {}
+                for kind, heading, note in (("unit", f"{year}年度决算表", unit_note),
+                                            ("department", f"{year}年度部门决算表", "本表反映部门本年度收入")):
+                    path = tmp_path / (kind + uuid4().hex + ".pdf")
+                    pdf = fitz.open(); page = pdf.new_page()
+                    page.insert_text((50, 50), heading + "\n" + note, fontname="china-s"); pdf.save(path); pdf.close()
+                    ids[kind] = (await service.register_source(conn, path=path, metadata=dict(
+                        report_kind="final", material_type=kind, source_report_year=year, issuer="test-only issuer",
+                        release_reference=f"isolated-set-{year}", description="isolated test source", issue_date=""),
+                        actor="test"))["id"]
+                return ids
+    
+            async def reuse(ids, previous):
+                draft = await service.create_draft(conn, dict(unit_source_id=ids["unit"], department_source_id=ids["department"],
+                                                              previous_package_id=previous), "test")
+                reviews = {side: ["report_year"] * len(changes) for side, changes in draft["data"]["changes"].items()}
+                draft = await service.review(conn, draft["id"], 1, dict(basis="test-only slot review", visual_verified=True,
+                                                                         decision="same", slot_reviews=reviews), "test")
+                return draft, await service.publish(conn, draft["id"], 2, dict(version="ignored", capabilities=CAPS, validation={}), "test")
+    
+            base = await pair(2024)
+            draft = await service.create_draft(conn, dict(unit_source_id=base["unit"], department_source_id=base["department"]), "test")
+            await service.review(conn, draft["id"], 1, dict(basis="test-only visual review", visual_verified=True, decision="new"), "test")
+            package = (await service.publish(conn, draft["id"], 2, dict(
+                version="2024", capabilities=CAPS, validation={"position_checks": {"report_reference": "test-only"}}), "test"))["package_id"]
+            bind = dict(region="上海市", overlay="", report_kind="final", package_id=package, expected_revision=0,
+                        capabilities=CAPS, basis="isolated verification")
+    
+            # 较早年度：当年原件只差年度槽位，审核后复用 2024 版并继承已批准能力，不需要兼容样本。
+            draft_2023, published = await reuse(await pair(2023), package)
+            assert published["package_id"] == package
+>           await service.bind(conn, {**bind, "target_year": 2023, "adoption_kind": "verified_same",
+                                      "source_draft_id": draft_2023["id"]}, "test")
+
+tests/test_template_earlier_year_reuse.py:58: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+conn = <asyncpg.connection.Connection object at 0x10c2aca90>
+data = {'adoption_kind': 'verified_same', 'basis': 'isolated verification', 'capabilities': {'position_checks': True}, 'expected_revision': 0, ...}
+actor = 'test'
+
+    async def bind(conn, data, actor):
+        key=(data['region'],data.get('overlay',''),data['report_kind'],data['target_year'])
+        if len(data['basis'].strip())<3: raise HTTPException(422,'须填写适用依据')
+        async with conn.transaction():
+            # 序列化不存在的键与已有键，修订号使陈旧页面不能覆盖另一位维护者。
+            await conn.execute('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',canonical(key))
+            current=await conn.fetchval('SELECT revision FROM disclosure_template_current_bindings WHERE region=$1 AND overlay=$2 AND report_kind=$3 AND target_year=$4',*key)
+            if (current or 0)!=data['expected_revision']: raise HTTPException(409,'年度绑定已变化，请刷新')
+            package=row(await conn.fetchrow('SELECT * FROM disclosure_template_packages WHERE id=$1',UUID(data['package_id'])))
+            if not package or package['report_kind']!=data['report_kind']: raise HTTPException(422,'发布包不存在或文种不匹配')
+            if sha(package['content'])!=package['content_sha256']: raise HTTPException(409,'发布包哈希校验失败')
+            caps=data['capabilities']
+            if set(caps)-CAPABILITIES or any(type(v) is not bool or (v and not package['capability_scope'].get(k)) for k,v in caps.items()): raise HTTPException(422,'年度能力不能超出发布包')
+            if any(caps.values()):
+                verify_source_receipts(package['content'])
+                for side in ('unit','department'):await text(conn,package[side+'_source_id'])
+            basis={'basis':data['basis'],'compatibility_reference':data.get('compatibility_reference'),
+                   'source_draft_id':data.get('source_draft_id'),'compatibility':data.get('compatibility')}
+            adoption=data['adoption_kind']
+            if adoption=='rollback':
+                prior=row(await conn.fetchrow('SELECT * FROM disclosure_template_binding_revisions WHERE region=$1 AND overlay=$2 AND report_kind=$3 AND target_year=$4 AND revision=$5',*key,data.get('restore_revision',0)))
+                if not prior or str(prior['package_id'])!=data['package_id'] or prior['capability_scope']!=caps:
+                    raise HTTPException(422,'回滚只能恢复该年度已有审核修订及其能力')
+                original=binding_basis(prior)
+                adoption=effective_adoption_kind(prior,original)
+                # 恢复的是原修订的证据；不能用回滚请求替换证明或借回滚绕过跨年准入。
+                basis.update({k:copy.deepcopy(original.get(k)) for k in ('compatibility_reference','source_draft_id','compatibility')})
+                basis.update(restored_from_revision=prior['revision'],original_adoption_kind=adoption,
+                             compatibility_source_revision=original.get('compatibility_source_revision',prior['revision']))
+                if adoption is None and any(caps.get(k) for k in WRITING_CAPABILITIES):
+                    raise HTTPException(422,'历史回滚缺少原沿用方式与兼容依据来源，请重新核实后建立年度绑定')
+            if adoption in ('not_received','historical_reference') and any(caps.get(k) for k in WRITING_CAPABILITIES):
+                validate_compatibility(basis.get('compatibility'),package,target_year=data['target_year'],capabilities=caps)
+            if adoption=='issued' and data['target_year']!=package['source_report_year']:
+                raise HTTPException(422,'当年正式下发须匹配源报告年度；否则选择沿用或历史参考')
+            if adoption=='verified_same':
+                draft_id=basis.get('source_draft_id')
+                checked=row(await conn.fetchrow('SELECT * FROM disclosure_template_drafts WHERE id=$1',UUID(draft_id))) if draft_id else None
+                if not checked or checked['status']!='published' or checked['package_id']!=data['package_id'] or checked['data']['source_report_year']!=data['target_year'] or checked['data'].get('review_record',{}).get('decision')!='same':
+                    raise HTTPException(422,'确认无变化须关联该年度已审核且复用此包的来源比较记录')
+            if package['source_report_year'] is not None and data['target_year']<package['source_report_year'] and adoption not in ('historical_reference',None):
+>               raise HTTPException(422,'后续模板只能以历史参考用于早期年度')
+E               fastapi.exceptions.HTTPException: 422: 后续模板只能以历史参考用于早期年度
+
+src/services/annual_templates.py:245: HTTPException
+----------------------------- Captured stdout call -----------------------------
+warning: The `fitz` API is deprecated and will be removed in future. Use `import pymupdf` instead.
+=============================== warnings summary ===============================
+tests/test_template_earlier_year_reuse.py::test_years_reuse_a_package_only_with_their_own_reviewed_original
+tests/test_template_earlier_year_reuse.py::test_years_reuse_a_package_only_with_their_own_reviewed_original
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+tests/test_template_earlier_year_reuse.py::test_years_reuse_a_package_only_with_their_own_reviewed_original
+tests/test_template_earlier_year_reuse.py::test_years_reuse_a_package_only_with_their_own_reviewed_original
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+tests/test_template_earlier_year_reuse.py::test_years_reuse_a_package_only_with_their_own_reviewed_original
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1 failed, 5 warnings in 0.63s
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

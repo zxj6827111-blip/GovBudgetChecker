@@ -462,11 +462,17 @@ def test_real_sample_doc_positive_passes(sample):
 
 
 def test_real_yichuan_summary_rate_passes(yichuan):
-    """宜川（REAL）：有可复算的总述；部分三公分项预算未披露，
-    必须返回未完成且不伪造 finding。"""
+    """宜川（REAL）：有可复算的总述；部分三公分项预算未披露，必须返回未完成。
+    批次1 年份角色修复后恢复一条真实完成率复算差异（声明 98%，按
+    20707.11→20218.21 应为 97.64%，相差 0.36 个百分点）；该 finding
+    是已核实的真实发现，仍须与未完成状态并存。"""
     with pytest.raises(RuleDeferred) as excinfo:
         _run(_document(yichuan))
-    assert excinfo.value.partial_issues == []
+    issues = excinfo.value.partial_issues
+    assert [item.rule for item in issues] == ["V33-TREND-COMPLETION-RATE"]
+    assert issues[0].severity == "error"
+    assert "97.64%" in issues[0].message and "98%" in issues[0].message
+    assert "0.36 个百分点" in issues[0].message
     assert "预算分母" in excinfo.value.detail
 
 
@@ -785,3 +791,17 @@ def test_zero_yuan_unit_r004_kept():
     assert issues[0].location["zero_denominator"] is True
     assert issues[0].location["denominator_unit"] == "元"
     assert issues[0].location["normalized_denominator_wan"] == "0.00"
+
+
+def test_adjusted_budget_and_execution_rate_labels_are_recognized():
+    """「调整后预算/年终决算执行数」是常见变体，完成率本身能复算时应通过。"""
+    doc = _contract_doc(
+        _final_page(
+            "学校2025年公共财政预算年初预算为13,995.10万元，"
+            "2025年财政追加增资和中央财政支持的学生资助专项以及现代职业教育质量提升，"
+            "调整后预算为14,039.35万元，年终决算执行数为13,859.21万元"
+            "（含按规定可以结转下年使用的190.45万元），"
+            "与调整后预算比较，完成预算98.72%。"
+        )
+    )
+    assert _run(doc) == []

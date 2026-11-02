@@ -48,6 +48,18 @@ export interface Problem {
   actualName?: string;
   codeLevel?: string;
   sourceOfTruth?: string;
+  /** 同一原文缺陷的稳定组身份与全部成员规则（批次 1）。 */
+  problemGroupId?: string;
+  relatedRuleIds?: string[];
+  memberIssueIds?: string[];
+  /** 解释字段：与后端 IssueItem 同名；历史数据为空时保持 undefined。 */
+  expected?: string;
+  actual?: string;
+  difference?: string;
+  check?: string;
+  tableOrSection?: string;
+  amountsProvenance?: string;
+  calculationBasis?: Record<string, unknown>;
   /**
    * 证据完整性状态（src/services/evidence_guard.py 的 evidence_status 字段）。
    * "degraded_missing_evidence" 表示这是一条因缺证据被降级为待复核的 AI finding，

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
+import hashlib
 import json
 import re
 import unicodedata
@@ -18,7 +19,17 @@ from .native_narrative_checks import _Text
 _SUM_FAMILIES = ({'V33-117', 'V33-243'}, {'V33-120', 'V33-241'}, {'V33-101', 'V33-115'})
 _YOY = {'V33-234', 'CMM-007'}
 _TEXT = {'CMM-001', 'V33-108', 'V33-105', 'V33-221'}
+_UNIT_MAGNITUDE = {'V33-222', 'CMM-011'}
 _NUMBER = r'(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?'
+_DECISION_LITERAL = re.compile(
+    rf'(?:支\s*出\s*决\s*算(?:\s*数)?|决\s*算\s*数)(?:\s*为|\s*是)?\s*'
+    rf'(?P<amount>{_NUMBER})\s*(?P<unit>亿元|万元|元)'
+)
+_YUAN_LITERAL = re.compile(rf'(?<![\d.,，])(?P<amount>{_NUMBER})\s*(?P<unit>元)(?![/／每])')
+
+#: 缺陷等价关系必须显式声明，不能只因金额相同就合并。
+DEFECT_AMOUNT_UNIT_MISSING_WAN = "amount_unit_missing_wan"
+PROBLEM_GROUP_ID_PREFIX = "pg-"
 _CHANGE = re.compile(rf'(?:增加|减少){_NUMBER}(?:亿元|万元|元)[，,]?(?:增长|下降|增加|减少){_NUMBER}[%％]')
 _THREE_TOTAL = re.compile(
     rf'三公经费(?:财政拨款)?(?:支出)?(?:年初预算|全年预算|调整后预算|支出决算(?:数)?|决算数)'
@@ -160,6 +171,113 @@ def _sum_key(item, family, context):
     return ('sum', tuple(sorted(family)), identities[parent], tuple(sorted(children, key=repr)), _version(item, context))
 
 
+def _unit_magnitude_anchor(item, doc=None):
+    """V33-222/CMM-011 的同一原文字面量锚点。
+
+    只接受“原文以元列示、表格为同额万元”的窄场景：同一文件哈希、同一物理页、
+    同一最小字面量（金额+元）和同一原文中的唯一出现区间，才声明缺陷等价。
+    金额相同、同页或区间部分重叠都不够。
+
+    去重发生在证据序列化之前：V33-222 的 location 只有说明句 span，
+    CMM-011 只有 pos/消息字面量；两边都先回到原页文本，再取同一个
+    “金额+元”区间，不能依赖展示用 bbox 或事实 UID。
+    """
+    rule = _rule(item)
+    location = _location(item)
+    page = location.get("page")
+    if not isinstance(page, int) or isinstance(page, bool) or page < 1:
+        return None
+    pages = getattr(doc, "page_texts", None) if doc is not None else None
+    if not pages or page > len(pages):
+        return None
+    page_text = str(pages[page - 1] or "")
+    if rule == "V33-222":
+        if location.get("unit_magnitude_error") is not True:
+            return None
+        if str(location.get("declared_unit") or "") != "元":
+            return None
+        spans = [
+            str(ref.get("span") or ref.get("quote"))
+            for ref in location.get("table_refs") or []
+            if isinstance(ref, dict)
+            and str(ref.get("role") or "") == "原文决算金额声明"
+            and (ref.get("span") or ref.get("quote"))
+        ]
+        if len(spans) != 1:
+            return None
+        span = spans[0]
+        if page_text.count(span) != 1:
+            return None
+        span_start = page_text.find(span)
+        matches = list(_DECISION_LITERAL.finditer(span))
+        if len(matches) != 1:
+            return None
+        match = matches[0]
+        amount = match.group("amount").replace(",", "")
+        if match.group("unit") != "元":
+            return None
+        start = span_start + match.start("amount")
+        end = span_start + match.end("unit")
+    elif rule == "CMM-011":
+        message = str(_get(item, "message") or "")
+        literal_match = re.search(r"[“\"]([\d.,]+)元[”\"]", message)
+        if literal_match is None or "." not in literal_match.group(1):
+            return None
+        amount = literal_match.group(1).replace(",", "")
+        pattern = re.compile(re.escape(amount) + r"\s*元")
+        matches = list(pattern.finditer(page_text))
+        # 必须在原页唯一出现；多个出现位置无法证明两条规则指向同一处。
+        if len(matches) != 1:
+            return None
+        start, end = matches[0].start(), matches[0].end()
+    else:
+        return None
+    file_hash = ""
+    context = getattr(doc, "fact_context", None)
+    if context is not None:
+        file_hash = str(getattr(context, "file_hash", "") or "")
+    if not file_hash:
+        for ref in location.get("table_refs") or []:
+            if isinstance(ref, dict) and ref.get("file_hash"):
+                file_hash = str(ref["file_hash"])
+                break
+    if not file_hash:
+        return None
+    literal = _compact(f"{amount}元")
+    return {
+        "file_hash": file_hash,
+        "physical_page": page,
+        "literal": literal,
+        "literal_amount": amount,
+        "literal_unit": "元",
+        "text_span": [start, end],
+        "defect_type": DEFECT_AMOUNT_UNIT_MISSING_WAN,
+    }
+
+
+def _unit_magnitude_key(item, doc=None):
+    anchor = _unit_magnitude_anchor(item, doc)
+    if anchor is None:
+        return None
+    return (
+        anchor["defect_type"],
+        anchor["file_hash"],
+        anchor["physical_page"],
+        anchor["literal"],
+        tuple(anchor["text_span"]),
+    )
+
+
+def problem_group_id(key) -> str:
+    """稳定组 ID：只由缺陷类别、文件哈希、物理页、最小字面量与原文区间构成。
+
+    不含随机 UUID、标题、提示语或展示 bbox；原文提取基准变化时必须重新
+    验证唯一重定位，不能承诺无条件稳定。
+    """
+    payload = json.dumps(list(key), ensure_ascii=False, separators=(",", ":"))
+    return PROBLEM_GROUP_ID_PREFIX + hashlib.sha256(payload.encode()).hexdigest()[:20]
+
+
 def _source_spans(item):
     refs = _location(item).get('table_refs') or []
     result = [str(ref.get('span') or ref.get('quote') or '') for ref in refs if isinstance(ref, dict)]
@@ -273,6 +391,8 @@ def _key(item, doc, context):
         return _yoy_key(item, doc)
     if rule in _TEXT:
         return _text_key(item, doc, context)
+    if rule in _UNIT_MAGNITUDE:
+        return _unit_magnitude_key(item, doc)
     return None
 
 
@@ -323,7 +443,7 @@ def _repair_literal_refs(refs, doc):
     return _unique(result)
 
 
-def _merged(group, doc=None):
+def _merged(group, doc=None, *, key=None):
     primary = max(group, key=_quality)
     result = deepcopy(primary)
     location = deepcopy(_location(primary))
@@ -333,15 +453,16 @@ def _merged(group, doc=None):
     relations = list(dict.fromkeys(relation for item in group for relation in _relation_ids(item)))
     aliases = list(dict.fromkeys(str(value) for item in group for value in [
         _get(item, 'id'), *(_get(item, 'merged_issue_ids') or []),
-        *(_location(item).get('merged_issue_ids') or [])] if value))
+        *(_location(item).get('merged_issue_ids') or []),
+        _location(item).get('pre_group_issue_id')] if value))
     # Preserve every original operand and source reference; distinct relation
     # names may reference the same original cell without manufacturing evidence.
-    for key in ('operand_refs', 'table_refs'):
-        refs = _unique([ref for item in group for ref in _location(item).get(key) or []])
+    for field in ('operand_refs', 'table_refs'):
+        refs = _unique([ref for item in group for ref in _location(item).get(field) or []])
         if refs:
-            location[key] = _repair_literal_refs(refs, doc) if key == 'table_refs' else refs
+            location[field] = _repair_literal_refs(refs, doc) if field == 'table_refs' else refs
         else:
-            location.pop(key, None)
+            location.pop(field, None)
     pages = {page for item in group for page in [
         _location(item).get('page'), *(_location(item).get('pages') or [])]
              if isinstance(page, int) and not isinstance(page, bool) and page > 0}
@@ -351,6 +472,30 @@ def _merged(group, doc=None):
                     related_findings=[{'rule_id': _rule(item), 'message': _get(item, 'message'),
                                        'check_relation_id': _get(item, 'check_relation_id'),
                                        'location': deepcopy(_location(item))} for item in group])
+    if key is not None and key and key[0] == DEFECT_AMOUNT_UNIT_MISSING_WAN:
+        anchor = None
+        for item in group:
+            candidate = _unit_magnitude_anchor(item, doc)
+            if candidate is not None:
+                anchor = candidate
+                break
+        if anchor is not None:
+            location["problem_group_id"] = problem_group_id(key)
+            location["source_anchor"] = anchor
+            location["defect_type"] = DEFECT_AMOUNT_UNIT_MISSING_WAN
+            location["member_issue_ids"] = aliases
+            location["member_rules"] = rules
+            # 成员各自的证据与回执原样保留；主卡片采用质量最高的成员。
+            location["member_evidence"] = [
+                {
+                    "rule_id": _rule(item),
+                    "issue_id": _get(item, "id"),
+                    "check_relation_id": _get(item, "check_relation_id"),
+                    "message": _get(item, "message"),
+                    "evidence": deepcopy(_get(item, "evidence", []) or []),
+                }
+                for item in group
+            ]
     _set(result, 'location', location)
     for key in ('fact_ids', 'evidence_ids', 'tags'):
         values = list(dict.fromkeys(value for item in group for value in _get(item, key, []) or []))
@@ -396,6 +541,13 @@ def deduplicate_native_issues(issues, doc=None, *, receipts=None):
     context = getattr(doc, 'fact_context', None) if doc is not None else None
     groups, order = {}, []
     for index, item in enumerate(issues):
+        # 记录“未并组时该条会得到的报告 id”。旧链接/旧客户端仍可按它查询，
+        # 但只在当前分析的问题集合内解析，不跨版本。
+        rule = _rule(item)
+        if rule:
+            location = _location(item)
+            location.setdefault("pre_group_issue_id", f"{rule}-{index + 1}")
+            _set(item, "location", location)
         key = _key(item, doc, context)
         if key is None:
             order.append(('single', index))
@@ -405,8 +557,46 @@ def deduplicate_native_issues(issues, doc=None, *, receipts=None):
             order.append(('group', key))
         groups[key].append(item)
     result = [issues[key] if kind == 'single' else (
-        _merged(groups[key], doc) if len(groups[key]) > 1 else groups[key][0]) for kind, key in order]
+        _merged(groups[key], doc, key=key) if len(groups[key]) > 1 else groups[key][0])
+        for kind, key in order]
+    _link_related_symptoms(result)
     receipt_list = receipts if receipts is not None else getattr(doc, 'fact_receipts', None)
     if receipt_list is not None:
         link_merged_issue_receipts(result, receipt_list)
     return result
+
+
+def _link_related_symptoms(issues) -> None:
+    """V33-251 等关联症状只建立引用，不并入单位缺陷组。
+
+    关联依据是同一原文锚点（物理页 + 最小字面量），不是金额相近；
+    症状仍需独立处理和独立回执。
+    """
+    groups = {}
+    for item in issues:
+        location = _location(item)
+        anchor = location.get("source_anchor")
+        group_id = location.get("problem_group_id")
+        if not isinstance(anchor, dict) or not group_id:
+            continue
+        key = (anchor.get("physical_page"), anchor.get("literal"))
+        groups.setdefault(key, []).append(group_id)
+    if not groups:
+        return
+    for item in issues:
+        location = _location(item)
+        related = location.get("related_problem_group_ids")
+        if isinstance(related, list) and related:
+            continue
+        anchors = location.get("unit_normalized_items") or []
+        found = []
+        for anchor in anchors:
+            if not isinstance(anchor, dict):
+                continue
+            key = (anchor.get("page"), _compact(f"{anchor.get('amount')}{anchor.get('unit')}"))
+            for group_id in groups.get(key, []):
+                if group_id not in found:
+                    found.append(group_id)
+        if found:
+            location["related_problem_group_ids"] = found
+            _set(item, "location", location)

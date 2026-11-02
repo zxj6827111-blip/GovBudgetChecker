@@ -221,6 +221,8 @@ export interface AnalysisBlock {
   info_findings: AnalysisFindingItem[] | null;
   formal_issue_count: number | null;
   coverage: CoverageBlock | null;
+  /** AI 状态/覆盖的受限子集；null = 历史结果没有记录。 */
+  ai_scope_meta?: Record<string, unknown> | null;
 }
 
 export interface SlotDetailData {

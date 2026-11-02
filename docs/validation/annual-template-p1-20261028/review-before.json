@@ -1,0 +1,57 @@
+{
+  "R1_filename_gate": {
+    "reproduced": true,
+    "cases": [
+      {
+        "filename": "示例局2024年度决算.pdf",
+        "year_source": "filename",
+        "available": false,
+        "status": "insufficient"
+      },
+      {
+        "filename": null,
+        "year_source": "cover_title",
+        "available": true,
+        "status": "conflict"
+      }
+    ]
+  },
+  "R2_annual_slot": {
+    "reproduced": true,
+    "correct_heading": "2025年度依据《2024年办法》执行情况说明",
+    "issues": [
+      "缺少经审核的模板要求：“2025年度依据《2025年办法》执行情况说明”；依据：isolated audit fixture"
+    ],
+    "pending": []
+  },
+  "R3_unbound_ocr": {
+    "reproduced": true,
+    "source_bound": [
+      false,
+      false,
+      false
+    ],
+    "accepted_ocr_blocks": 3,
+    "status": "confirmed",
+    "value": "department"
+  },
+  "R4_structural_false_completion": {
+    "reproduced": true,
+    "cases": [
+      {
+        "kind": "normative_section",
+        "text": "本报告尚未提供新增政策执行情况说明。",
+        "unrelated_table_present": false,
+        "issues": [],
+        "pending": []
+      },
+      {
+        "kind": "normative_table",
+        "text": "说明：测试新增披露表本年未编制。",
+        "unrelated_table_present": true,
+        "issues": [],
+        "pending": []
+      }
+    ]
+  }
+}

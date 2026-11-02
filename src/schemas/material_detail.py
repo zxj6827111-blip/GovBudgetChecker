@@ -29,7 +29,7 @@ WP2-A 已经定下这条规则：后端翻译会让同一原因在两端各写�
 
 from __future__ import annotations
 
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -331,6 +331,12 @@ class CoverageObligationItem(BaseModel):
     #: 前者供人读，后者供机器判定，二者都不是本层新造的。
     reason_label: Optional[str] = None
     detail: Optional[str] = None
+    #: 义务的检查依据（引擎目录里的 ``basis``）。展示层用它解释"这条在查什么"，
+    #: 不在本层翻译成第二套中文说明。
+    basis: Optional[str] = None
+    #: 支撑该义务的 checker 编号（如 ``V33-227``）。展示层据此标出同源问题，
+    #: 不把 checker 编号当主文案。
+    checkers: List[str] = Field(default_factory=list)
     blocks_gate: bool = False
     requires_ai: bool = False
     input_gaps: List[str] = Field(default_factory=list)
@@ -405,6 +411,9 @@ class AnalysisBlock(BaseModel):
     #: 恒成立；**不允许**用 ``len(formal_findings)`` 代替它对外报数。
     formal_issue_count: Optional[int] = None
     coverage: Optional[CoverageBlock] = None
+    #: 大模型文字复核的执行状态与检查范围（原始 meta 的受限子集）。
+    #: ``None`` = 历史结果没有记录；不能用“没有记录”冒充“全部完成”。
+    ai_scope_meta: Optional[Dict[str, Any]] = None
 
 
 # ---- 接口五：Slot Detail -----------------------------------------------------

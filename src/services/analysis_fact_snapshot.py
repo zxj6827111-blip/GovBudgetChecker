@@ -184,6 +184,24 @@ async def persist_snapshot(conn, *, snapshot: dict, parse_run_id: int) -> dict:
             'storage_consistent': True}
 
 
+def check_publishable_fact_identity(data, source_file_hash):
+    """发布保留其他身份/原件门禁，口径待定单独记录，交规则声明决定是否可用。"""
+    if data['recognition_status'] not in {'unverified', 'verified'}:
+        return
+    required = ('org_name', 'fiscal_year', 'period', 'fund_scope', 'budget_stage', 'table_code', 'instance_uid', 'indicator')
+    dims = data.get('extra_dims', {})
+    scope_pending = data.get('org_scope') is None and dims.get('org_scope_pending') is True
+    from src.engine.fact_context import normalized_amount_is_usable
+    refs = dims.get('evidence_refs') or []
+    anchored = any(ref.get('file_hash') == source_file_hash and ref.get('physical_page')
+                   and (ref.get('source_cell_id') or ref.get('source_block_id')) for ref in refs)
+    if (dims.get('identity_incomplete') or any(not data.get(key) for key in required)
+            or (not data.get('org_scope') and not scope_pending)
+            or not (data.get('subject_code') or data.get('subject_name')) or not anchored
+            or not normalized_amount_is_usable(data.get('normalized_value'))):
+        raise ValueError('incomplete fiscal identity/source cannot be published as an admitted fact')
+
+
 async def publish_snapshot(conn, payload: dict) -> None:
     """在结果提交事务内切换权威指针；文件指针只是可重试的镜像。"""
     receipt = (payload.get('structured_ingest') or {}).get('fact_snapshot')
@@ -202,16 +220,7 @@ async def publish_snapshot(conn, payload: dict) -> None:
     validate_snapshot(snapshot)
     for kind in ('raw','effective'):
         for data in snapshot[kind+'_context'].get('facts',[]):
-            if data['recognition_status']not in {'unverified','verified'}:continue
-            required=('org_name','org_scope','fiscal_year','period','fund_scope','budget_stage','table_code','instance_uid','indicator')
-            from src.engine.fact_context import normalized_amount_is_usable
-            refs=data.get('extra_dims',{}).get('evidence_refs')or[]
-            anchored=any(r.get('file_hash')==snapshot['source_file_hash']and r.get('physical_page')
-                         and(r.get('source_cell_id')or r.get('source_block_id'))for r in refs)
-            if (data.get('extra_dims',{}).get('identity_incomplete')or any(not data.get(k)for k in required)
-                    or not(data.get('subject_code')or data.get('subject_name'))or not anchored
-                    or not normalized_amount_is_usable(data.get('normalized_value'))):
-                raise ValueError('incomplete fiscal identity/source cannot be published as an admitted fact')
+            check_publishable_fact_identity(data, snapshot['source_file_hash'])
     for key in ('revision_id', 'snapshot_hash', 'raw_facts_hash', 'effective_facts_hash'):
         if receipt.get(key) != snapshot.get(key):
             raise ValueError('analysis publication snapshot mismatch: ' + key)

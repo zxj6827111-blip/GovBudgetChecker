@@ -1,0 +1,16 @@
+sssssssssssssssssssssssssssssssss                                        [100%]
+=========================== short test summary info ============================
+SKIPPED [2] tests/remediation/test_native_issue_dedup.py:201: 冻结原件复测产物未提供
+SKIPPED [2] tests/remediation/test_native_narrative_checks.py:195: 原始真实PDF未在该电脑提供；合成边界测试仍执行
+SKIPPED [10] tests/remediation/test_real_intake_disclosure_numeric.py:476: 该电脑未提供真实原件；合成边界用例仍执行
+SKIPPED [4] tests/remediation/test_real_intake_semantic_gaps.py:195: 真实原件未在该电脑提供；合成边界测试仍执行
+SKIPPED [3] tests/remediation/test_real_intake_table_gaps.py:101: 真实复测冻结解析产物未随本checkout提供
+SKIPPED [1] tests/remediation/test_zc02.py:527: could not import 'cv2': No module named 'cv2'
+SKIPPED [1] tests/test_budget_template_scope.py:45: 真实XLS模板核验需显式提供来源目录
+SKIPPED [1] tests/test_env_isolation.py:62: 本机配置了 GOVBUDGET_TEST_DATABASE_URL，跳过该反例
+SKIPPED [1] tests/test_pdf_parse_isolation_and_backup.py:264: RLIMIT_AS 在本平台不被内核强制（macOS/Darwin 或受限沙箱）；目标部署（Linux 容器）由内核强制，且支持容器级 memory limit
+SKIPPED [3] tests/test_probe14_repair_20260930.py:75: 语料 PDF 不在本机（干净 checkout）：DOC-B1-015
+SKIPPED [2] tests/test_probe14_repair_20260930.py:75: 语料 PDF 不在本机（干净 checkout）：DOC-B1-019
+SKIPPED [1] tests/test_probe14_repair_20260930.py:75: 语料 PDF 不在本机（干净 checkout）：DOC-B1-028
+SKIPPED [2] tests/test_probe14_repair_20260930.py:75: 语料 PDF 不在本机（干净 checkout）：DOC-B1-009
+33 skipped in 0.91s

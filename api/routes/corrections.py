@@ -34,9 +34,10 @@ router = APIRouter()
 _SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 CORRECTION_FIELDS = frozenset(
-    {"raw_value", "unit", "year", "org", "scope", "indicator", "column_mapping", "cell_value", "manual_location"}
+    {"raw_value", "unit", "year", "org", "scope", "indicator", "column_mapping", "cell_value",
+     "table_rows", "table_identity", "manual_location"}
 )
-TABLE_FIELDS = frozenset({"column_mapping", "cell_value"})
+TABLE_FIELDS = frozenset({"column_mapping", "cell_value", "table_rows", "table_identity"})
 FEEDBACK_REASONS = frozenset(
     {
         "parse_error",
@@ -63,6 +64,8 @@ class CorrectionChange(BaseModel):
         "indicator",
         "column_mapping",
         "cell_value",
+        "table_rows",
+        "table_identity",
         "manual_location",
     ]
     value: Any
@@ -88,6 +91,33 @@ class CorrectionChange(BaseModel):
             if (isinstance(row, bool) or isinstance(col, bool) or not isinstance(row, int) or not isinstance(col, int)
                     or row < 0 or col < 0 or not isinstance(text, str) or not text.strip() or len(text) > 100):
                 raise ValueError("cell_value correction needs row_idx, col_idx and a raw_value of 1-100 characters")
+        elif self.field == "table_rows":
+            value = self.value if isinstance(self.value, dict) else {}
+            mode = value.get("mode")
+            rows = value.get("rows")
+            if mode not in {"append_rows", "replace_data_rows"}:
+                raise ValueError("table_rows correction needs mode append_rows or replace_data_rows")
+            if not isinstance(rows, list) or not 1 <= len(rows) <= 300:
+                raise ValueError("table_rows correction needs 1-300 rows")
+            for row in rows:
+                cells = row.get("cells") if isinstance(row, dict) else None
+                if not isinstance(cells, dict) or not cells:
+                    raise ValueError("each table_rows row needs a non-empty cells object")
+                for key, text in cells.items():
+                    if not str(key).isdigit() or not 0 <= int(key) <= 49:
+                        raise ValueError("table_rows cell keys must be column indices 0-49")
+                    if isinstance(text, bool) or not isinstance(text, (str, int, float)) or len(str(text)) > 100:
+                        raise ValueError("table_rows cell values must be text of at most 100 characters")
+            if value.get("table_code") is not None and not isinstance(value.get("table_code"), str):
+                raise ValueError("table_rows table_code must be a string")
+            if "original_header_missing" in value and not isinstance(value["original_header_missing"], bool):
+                raise ValueError("original_header_missing must be a boolean")
+        elif self.field == "table_identity":
+            value = self.value if isinstance(self.value, dict) else {}
+            if not isinstance(value.get("table_code"), str) or not value["table_code"].strip():
+                raise ValueError("table_identity correction needs a table_code")
+            if "original_header_missing" in value and not isinstance(value["original_header_missing"], bool):
+                raise ValueError("original_header_missing must be a boolean")
         elif self.field == "manual_location":
             if not isinstance(self.value, dict):
                 raise ValueError("manual_location correction must be an object")
@@ -718,6 +748,10 @@ async def get_correction_targets(job_id: str, request: Request) -> Dict[str, Any
         "analysis_basis_token": current_analysis_basis_token(job_id, job_dir),
         "reading_status": reading.get("status"),
         "tables": tables,
+        "table_code_options": [
+            {"code": code, "label": rule.aliases[0] if rule.aliases else code}
+            for code, rule in NINE_TABLE_RULES.items()
+        ],
         "gaps": [gap for gap in reading.get("gaps") or [] if isinstance(gap, dict)],
         "orphaned_amounts": receipt.get("orphaned_physical_amounts") or [],
         "overlay_status": payload.get("fact_overlay"),

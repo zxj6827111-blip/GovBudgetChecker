@@ -33,7 +33,7 @@ async def mutate_workflow(request: Request):
     action = str(body.get("action") or "").strip()
     actor = str(user.get("username") or "")
     if action == "update_issue":
-        state = await issue_workflow_store.update_issue(
+        _state = await issue_workflow_store.update_issue(
             user,
             job_id=str(body.get("job_id") or ""),
             issue_id=str(body.get("issue_id") or ""),
@@ -66,7 +66,10 @@ async def mutate_workflow(request: Request):
             resource_id=f"{body.get('job_id') or ''}::{body.get('issue_id') or ''}",
             details={"status": body.get("status")},
         )
-        return state
+        # update_issue() 返回的是全局工作流状态；不能把其他组织/任务的
+        # 问题标题、备注通过 POST 响应泄露给普通用户。返回已按权限过滤的
+        # 本任务视图，前端也只消费本任务。
+        return issue_workflow_store.get_visible_state(user, job_id=normalized_job_id)
 
     if action == "create_package":
         result = await issue_workflow_store.create_package(

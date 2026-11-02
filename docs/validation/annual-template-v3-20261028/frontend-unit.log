@@ -1,0 +1,333 @@
+
+> govbudgetchecker-app@0.1.0 test:unit
+> npm run test:material-reports && npm run test:ui-adapters && npm run test:ui-status && npm run test:ai-scope && npm run test:review-explanation && npm run test:review-reading && npm run test:unit-match && npm run test:admin-config && npm run test:ui-components && npm run test:ui-preview-guard && npm run test:color-guard && npm run test:workspace-navigation && npm run test:workbench-adapters && npm run test:workbench-cockpit && npm run test:upload-center-adapters && npm run test:review-workbench-adapters && npm run test:review-workbench-contract && npm run test:review-problem-groups && npm run test:quality-adapters && npm run test:queue-adapters && npm run test:history-adapters && npm run test:job-polling && npm run test:job-list-events && npm run test:rules-adapters && npm run test:archive-adapters && npm run test:login-next-path && npm run test:material-ledger && npm run test:material-detail && npm run test:material-search && npm run test:obligation-review && npm run test:review-known-regressions && npm run test:department-reports && npm run test:location-consistency && npm run test:review-list && npm run test:list-requests && npm run test:review-reads && npm run test:supervision && npm run test:report-version && npm run test:correction-adapters
+
+
+> govbudgetchecker-app@0.1.0 test:material-reports
+> jiti tests/materialReportAdapters.test.ts
+
+Material review labels and exact-file download regressions passed
+Department directory material status labels passed
+Material history link passed
+
+> govbudgetchecker-app@0.1.0 test:ui-adapters
+> jiti tests/uiAdapters.dual-mode.test.ts
+
+uiAdapters dual-mode tests passed
+
+> govbudgetchecker-app@0.1.0 test:ui-status
+> jiti tests/uiAdapters.status.test.ts
+
+uiAdapters.status.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:ai-scope
+> jiti tests/aiScope.test.ts
+
+aiScope.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:review-explanation
+> jiti tests/reviewExplanation.test.ts
+
+reviewExplanation.test.ts passed
+canonical AI explanation mapping passed
+
+> govbudgetchecker-app@0.1.0 test:review-reading
+> jiti tests/reviewReading.test.ts
+
+reviewReading tests passed
+
+> govbudgetchecker-app@0.1.0 test:unit-match
+> jiti tests/unitMatch.regression.test.ts
+
+PASS: isHeadUnit: 部门本级（带全角括号）判定为真
+PASS: isHeadUnit: 部门本级（无括号）判定为真
+PASS: isHeadUnit: 直属单位判定为假
+PASS: isHeadUnit: 单位缺失返回 false
+PASS: isHeadUnit: 部门缺失返回 false
+PASS: formatUnitOption: 部门本级标注
+PASS: formatUnitOption: 直属单位标注
+PASS: formatUnitOption: 无部门上下文时按直属单位标注
+PASS: normalize: 去除括号与本级后与部门名一致
+
+9 assertions passed
+
+> govbudgetchecker-app@0.1.0 test:admin-config
+> jiti tests/adminConfigStore.test.ts
+
+adminConfigStore CRUD and audit tests passed
+
+> govbudgetchecker-app@0.1.0 test:ui-components
+> jiti tests/uiComponents.test.ts
+
+uiComponents.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:ui-preview-guard
+> jiti tests/uiPreviewPage.guard.test.ts
+
+uiPreviewPage.guard.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:color-guard
+> jiti tests/hardcodedColorGuard.test.ts
+
+hardcodedColorGuard.test.ts passed（扫描 129 个新 UI 源文件，0 违规）
+
+> govbudgetchecker-app@0.1.0 test:workspace-navigation
+> jiti tests/workspaceNavigation.test.ts
+
+workspaceNavigation.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:workbench-adapters
+> jiti tests/workbenchAdapters.test.ts
+
+workbenchAdapters.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:workbench-cockpit
+> jiti tests/workbenchCockpitAdapters.test.ts
+
+workbenchCockpitAdapters.test.ts passed: authoritative review, unknown/zero, organization coverage, real event times, export semantics, overview parity, paged drawer
+
+> govbudgetchecker-app@0.1.0 test:upload-center-adapters
+> jiti tests/uploadCenterAdapters.test.ts
+
+uploadCenterAdapters.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:review-workbench-adapters
+> jiti tests/reviewWorkbenchAdapters.test.ts
+
+reviewWorkbenchAdapters.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:review-workbench-contract
+> jiti tests/reviewWorkbenchContract.test.ts
+
+reviewWorkbenchContract.test.ts: 前端与后端复核问题集合契约一致
+
+> govbudgetchecker-app@0.1.0 test:review-problem-groups
+> jiti tests/reviewProblemGroups.test.ts
+
+reviewProblemGroups.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:quality-adapters
+> jiti tests/qualityAdapters.test.ts
+
+qualityAdapters.test.ts: all assertions passed
+
+> govbudgetchecker-app@0.1.0 test:queue-adapters
+> jiti tests/queuePageAdapters.test.ts
+
+queuePageAdapters.test.ts: all assertions passed
+queuePageAdapters.test.ts: 批量提交、部分失败、状态与接口边界通过
+
+> govbudgetchecker-app@0.1.0 test:history-adapters
+> jiti tests/historyPageAdapters.test.ts
+
+historyPageAdapters.test.ts: all assertions passed
+
+> govbudgetchecker-app@0.1.0 test:job-polling
+> jiti tests/jobPolling.test.ts
+
+jobPolling.test: all assertions passed
+
+> govbudgetchecker-app@0.1.0 test:job-list-events
+> jiti tests/jobListEvents.test.ts
+
+jobListEvents.test.ts: all assertions passed
+
+> govbudgetchecker-app@0.1.0 test:rules-adapters
+> jiti tests/rulesPageAdapters.test.ts
+
+rulesPageAdapters.test.ts: all assertions passed
+
+> govbudgetchecker-app@0.1.0 test:archive-adapters
+> jiti tests/archivePageAdapters.test.ts
+
+archivePageAdapters.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:login-next-path
+> jiti tests/loginNextPath.test.ts
+
+loginNextPath.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:material-ledger
+> jiti tests/materialLedgerAdapters.test.ts
+
+materialLedgerAdapters.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:material-detail
+> jiti tests/materialDetailAdapters.test.ts
+
+PASS: 时间轴按后端给定的财政年度降序渲染
+PASS: 预算 / 决算 / 文种待确认三列不串位
+PASS: 文种未识别的槽位出现在 unclassified 而不是消失
+PASS: 没有槽位的格子只写「尚无已建立材料」
+PASS: 「尚无已建立材料」不含缺失/逾期/未上传字样
+PASS: 同一（年度 × 文种）多条槽位不隐藏：extraCount 与完整列表都在
+PASS: 多条槽位时主卡片是后端顺序的第一条（身份已确认的优先）
+PASS: 年度未识别的槽位不进任何具体年份
+PASS: 年度待确认的槽位保留在独立字段里
+PASS: 年度待确认文案固定
+PASS: 时间轴不存在「完整」这种结论（应收基线未建立时推不出完整）
+PASS: 只有 missing 才显示「有逾期未上传」
+PASS: 存在待确认项时显示「有待确认项」
+PASS: 全部 completed 才显示「已复核完成」
+PASS: 其余情况显示「处理中」而不是「完整」
+PASS: 只有 status=missing 才算缺失态
+PASS: due_at_unknown 不是缺失态
+PASS: due_at_unknown 的文案是「截止时间未知，当前无法判断是否逾期」
+PASS: due_at_unknown 的文案里没有「缺失」
+PASS: missing 且存在历史版本时写「当前无有效文件版本」
+PASS: missing 且存在历史版本时整个文案里都不出现「从未上传」
+PASS: missing 且没有关联版本时也只说槽位没关联 PDF，不说「从未上传」
+PASS: 非缺失非截止未知时不给文案
+PASS: 没有分析时的文案是「暂无可确认的分析结果」而不是「暂无问题」
+PASS: 没有当前版本时的文案说明原因是缺文件版本
+PASS: 分析未落库时的文案说明原因是尚未完成/落库
+PASS: formal_issue_count 为 null 显示 —
+PASS: formal_issue_count 为 0 显示 0（已确认没有正式问题）
+PASS: formatCount 不吞掉 undefined
+PASS: 比例 null 显示 —
+PASS: 比例 0 显示 0%
+PASS: 覆盖不可用时 KPI 一个都不给
+PASS: 覆盖不可用时分组一个都不给
+PASS: 覆盖不可用文案不含 0 / 0 或 100%
+PASS: 覆盖不可用时 KPI 文案合计里没有 0
+PASS: 覆盖可用时给出 6 张 KPI
+PASS: 阻塞未完成单独成一张 KPI
+PASS: 待人工核验 = 未完成 - 阻塞（非阻塞部分）
+PASS: 覆盖完成率按后端给的数字显示
+PASS: 分组逐行给出完成/应检查
+PASS: 分组未完成情况逐条列出而不是合并成「有问题」
+PASS: 阻塞项按原因分别列出（不是一个大数字）
+PASS: 分组标题用引擎给的中文
+PASS: 义务状态取值域与后端契约一一对应（11 个）
+PASS: completed → 自动检查完成
+PASS: not_applicable → 不适用
+PASS: not_implemented → 自动检查暂不可用，需要人工核验
+PASS: not_executed → 检查未执行
+PASS: insufficient_data → 取数不足，需要人工核验
+PASS: parse_ambiguity → 解析存在歧义
+PASS: execution_error → 检查执行异常
+PASS: profile_unresolved → 材料画像待确认
+PASS: kind_conflict → 文种冲突待确认
+PASS: ai_not_run → 语义检查未执行
+PASS: ai_failed → 语义检查失败
+PASS: completed / not_applicable 不算阻塞，其余都算
+PASS: 11 个状态的业务文案互不重复
+PASS: 未登记的义务状态不吞掉
+PASS: 未完成原因码有中文映射
+PASS: 未登记的原因码原样显示
+PASS: 当前版本徽章
+PASS: 历史版本徽章
+PASS: hash 显示为摘要而不是完整 64 位
+PASS: hash 缺失显示 —
+PASS: 文件大小缺失显示 —（不显示 0 B）
+PASS: 文件大小 0 显示 0 B
+PASS: 官方来源文案
+PASS: 人工上传文案（不是「来源缺失」）
+PASS: excel_import 有中文
+PASS: 来源类型未识别时原样显示
+PASS: 来源状态有效
+PASS: 来源状态未识别不吞掉
+PASS: 运行按当前/历史文件版本分栏
+PASS: 当前版本的运行标「当前文件版本」
+PASS: 历史版本的运行标「历史文件版本」
+PASS: 运行状态 done 显示「已完成」
+PASS: review_required 显示「完成（需人工复核）」而不是「已完成」
+PASS: error 显示「处理失败」
+PASS: 未落库结果的运行 finding 摘要显示 —（不是 0）
+PASS: 已落库结果的运行给出三类计数
+PASS: 耗时未知显示 —
+PASS: 耗时 0 显示 0 ms
+PASS: 耗时按秒显示
+PASS: 运行列表不带正式问题数（只解释跑了什么）
+PASS: 检查结果固定三栏
+PASS: 正式问题只含通过正式门禁的条目
+PASS: 降级条目进「需人工核验」而不是「正式问题」
+PASS: 分析不可用时三栏都不给（不显示「暂无问题」）
+PASS: 三栏之和等于该版本分析结论的全部条目（1 正式 + 1 需核验 + 0 提示）
+PASS: formal_issue_count = 正式问题栏 + 信息提示栏（不是正式问题栏长度）
+PASS: 该样本里两者确实不同（否则断言无意义）
+PASS: 只有 info 时「正式问题」栏为空，但计数仍为 1（不能被读成「没有正式 finding」）
+PASS: info 仍然单独成栏，展示分组不因计数口径改变
+PASS: 五个 Tab 且 key 稳定
+PASS: Tab 文案固定
+PASS: 未知 tab 回落到概览
+PASS: 缺失 tab 回落到概览
+PASS: 合法 tab 原样保留
+PASS: Tab 链接带查询串（便于将来直接落到某个 Tab）
+PASS: 槽位 id 做 URL 编码
+PASS: 面包屑含台账/区县/部门/单位四级 + 当前年度文种
+PASS: 面包屑第一级是材料台账
+PASS: 面包屑部门级带年度参数
+PASS: 面包屑单位级指向单位时间轴
+PASS: 最后一级不可点击
+PASS: 年度未识别时面包屑写「年度待确认」
+PASS: 时间轴响应形状正确时通过
+PASS: 时间轴缺 years 时返回 null
+PASS: 详情响应缺 current_analysis 时返回 null
+PASS: 版本响应 items 不是数组时返回 null
+PASS: 运行响应 items 不是数组时返回 null
+PASS: ok 不为 true 时一律返回 null
+PASS: HTML 错误页返回 null
+PASS: 契约内的空数据是合法的（不是错误）
+PASS: 详情响应可以通过（供页面读取）
+
+115 assertions passed
+
+> govbudgetchecker-app@0.1.0 test:material-search
+> jiti tests/materialSearchAdapters.test.ts
+
+materialSearchAdapters.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:obligation-review
+> jiti tests/reviewObligationAdapters.test.ts
+
+reviewObligationAdapters.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:review-known-regressions
+> jiti tests/reviewKnownRegressions.test.ts
+
+reviewKnownRegressions.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:department-reports
+> jiti tests/departmentReports.test.ts
+
+department report identity/year/kind/scope and directory hierarchy/search/count regression tests passed
+department report route view regression tests passed
+department directory open-review totals and sorting passed
+department report card view regression tests passed
+
+> govbudgetchecker-app@0.1.0 test:location-consistency
+> jiti tests/locationConsistency.test.ts
+
+location consistency tests passed
+
+> govbudgetchecker-app@0.1.0 test:review-list
+> jiti tests/reviewListAdapters.test.ts
+
+reviewListAdapters.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:list-requests
+> jiti tests/listRequests.test.ts
+
+listRequests.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:review-reads
+> jiti tests/reviewReadRequests.test.ts
+
+reviewReadRequests.test.ts passed
+
+> govbudgetchecker-app@0.1.0 test:supervision
+> jiti tests/supervisionAdapters.test.ts
+
+supervisionAdapters.test.ts passed: unknown/zero, baseline, read-only landing, four pages, explicit verification
+
+> govbudgetchecker-app@0.1.0 test:report-version
+> jiti tests/reportVersion.test.ts
+
+report version identity passed
+
+> govbudgetchecker-app@0.1.0 test:correction-adapters
+> jiti tests/correctionAdapters.test.ts
+
+correctionAdapters.test.ts passed
+correctionAdapters rows/identity test passed

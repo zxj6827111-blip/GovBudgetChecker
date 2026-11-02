@@ -39,7 +39,7 @@ _PROC_TOTAL = re.compile(
     rf"(?P<total>{_NUMBER})(?P<unit>{_UNIT})[，,]其中[:：]?"
 )
 _PROC_PART = re.compile(
-    rf"(?:政府采购)?(?P<kind>货物|工程|服务)(?:采购)?(?:支出金额|金额|支出)?"
+    rf"(?:政府采购)?(?P<kind>货物|工程|服务)(?:类)?(?:采购)?(?:支出金额|金额|支出)?"
     rf"(?:为|共计|共|合计|[:：])?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})"
 )
 _PROC_ABSENCE = re.compile(

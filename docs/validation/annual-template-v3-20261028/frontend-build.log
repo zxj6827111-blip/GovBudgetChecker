@@ -1,0 +1,159 @@
+
+> govbudgetchecker-app@0.1.0 build
+> node ../scripts/next-build.cjs
+
+[next-build] cleared app/.next cache
+   ▲ Next.js 15.5.18
+
+   Creating an optimized production build ...
+Browserslist: browsers data (caniuse-lite) is 8 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+ ✓ Compiled successfully in 5.9s
+   Linting and checking validity of types ...
+
+./app/components/settings/AnnualTemplatePanel.tsx
+23:56  Warning: React Hook useEffect has a missing dependency: 'load'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+info  - Need to disable some ESLint rules? Learn more here: https://nextjs.org/docs/app/api-reference/config/eslint#disabling-rules
+   Collecting page data ...
+   Generating static pages (0/45) ...
+   Generating static pages (11/45)
+   Generating static pages (22/45)
+   Generating static pages (33/45)
+ ✓ Generating static pages (45/45)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                                               Size  First Load JS
+┌ ○ /                                                    360 B         103 kB
+├ ○ /_not-found                                          995 B         104 kB
+├ ○ /account/password                                  1.71 kB         108 kB
+├ ○ /admin                                               360 B         103 kB
+├ ○ /admin/users                                         360 B         103 kB
+├ ƒ /api/activity                                        360 B         103 kB
+├ ƒ /api/admin/ai-models                                 360 B         103 kB
+├ ƒ /api/admin/ai-models/test                            360 B         103 kB
+├ ƒ /api/admin/analysis-results                          360 B         103 kB
+├ ƒ /api/admin/analysis-results/[jobUuid]                360 B         103 kB
+├ ƒ /api/admin/config/[collection]                       360 B         103 kB
+├ ƒ /api/admin/config/[collection]/[itemId]              360 B         103 kB
+├ ƒ /api/admin/templates/[[...path]]                     360 B         103 kB
+├ ƒ /api/ai/capabilities                                 360 B         103 kB
+├ ƒ /api/analyze/[job_id]                                360 B         103 kB
+├ ƒ /api/auth/change-password                            360 B         103 kB
+├ ƒ /api/auth/login                                      360 B         103 kB
+├ ƒ /api/auth/logout                                     360 B         103 kB
+├ ƒ /api/auth/me                                         360 B         103 kB
+├ ƒ /api/config                                          360 B         103 kB
+├ ƒ /api/departments                                     360 B         103 kB
+├ ƒ /api/departments/[dept_id]/stats                     360 B         103 kB
+├ ƒ /api/departments/[dept_id]/units                     360 B         103 kB
+├ ƒ /api/documents/[versionId]/run                       360 B         103 kB
+├ ƒ /api/documents/preflight                             360 B         103 kB
+├ ƒ /api/documents/upload                                360 B         103 kB
+├ ƒ /api/files/[job_id]/page-geometry                    360 B         103 kB
+├ ƒ /api/files/[job_id]/preview                          360 B         103 kB
+├ ƒ /api/files/[job_id]/source                           360 B         103 kB
+├ ƒ /api/gbc-ui-demo/workflow                            360 B         103 kB
+├ ƒ /api/health                                          360 B         103 kB
+├ ƒ /api/jobs                                            360 B         103 kB
+├ ƒ /api/jobs_adv/[job_id]/status                        360 B         103 kB
+├ ƒ /api/jobs_adv2/[job_id]/status                       360 B         103 kB
+├ ƒ /api/jobs/[job_id]                                   360 B         103 kB
+├ ƒ /api/jobs/[job_id]/analysis-versions                 360 B         103 kB
+├ ƒ /api/jobs/[job_id]/associate                         360 B         103 kB
+├ ƒ /api/jobs/[job_id]/correction-targets                360 B         103 kB
+├ ƒ /api/jobs/[job_id]/corrections                       360 B         103 kB
+├ ƒ /api/jobs/[job_id]/document-scope                    360 B         103 kB
+├ ƒ /api/jobs/[job_id]/fact-snapshot                     360 B         103 kB
+├ ƒ /api/jobs/[job_id]/issues/ignore                     360 B         103 kB
+├ ƒ /api/jobs/[job_id]/material-dimensions               360 B         103 kB
+├ ƒ /api/jobs/[job_id]/org-suggestions                   360 B         103 kB
+├ ƒ /api/jobs/[job_id]/reanalyze                         360 B         103 kB
+├ ƒ /api/jobs/[job_id]/status                            360 B         103 kB
+├ ƒ /api/jobs/[job_id]/structured-ingest                 360 B         103 kB
+├ ƒ /api/jobs/batch-delete                               360 B         103 kB
+├ ƒ /api/jobs/reanalyze-all                              360 B         103 kB
+├ ƒ /api/jobs/rematch-organizations                      360 B         103 kB
+├ ƒ /api/jobs/repair-missing-links                       360 B         103 kB
+├ ƒ /api/jobs/structured-ingest-cleanup                  360 B         103 kB
+├ ƒ /api/materials/coverage                              360 B         103 kB
+├ ƒ /api/materials/departments/[departmentId]/matrix     360 B         103 kB
+├ ƒ /api/materials/districts/[districtId]/departments    360 B         103 kB
+├ ƒ /api/materials/expected/[action]                     360 B         103 kB
+├ ƒ /api/materials/reports                               360 B         103 kB
+├ ƒ /api/materials/reports/[slotId]/history              360 B         103 kB
+├ ƒ /api/materials/search                                360 B         103 kB
+├ ƒ /api/materials/slots/[slotId]                        360 B         103 kB
+├ ƒ /api/materials/slots/[slotId]/runs                   360 B         103 kB
+├ ƒ /api/materials/slots/[slotId]/versions               360 B         103 kB
+├ ƒ /api/materials/units/[unitId]/timeline               360 B         103 kB
+├ ƒ /api/metrics                                         360 B         103 kB
+├ ƒ /api/organizations                                   360 B         103 kB
+├ ƒ /api/organizations/[org_id]                          360 B         103 kB
+├ ƒ /api/organizations/[org_id]/delete                   360 B         103 kB
+├ ƒ /api/organizations/[org_id]/delete-preview           360 B         103 kB
+├ ƒ /api/organizations/[org_id]/jobs                     360 B         103 kB
+├ ƒ /api/organizations/import                            360 B         103 kB
+├ ƒ /api/organizations/list                              360 B         103 kB
+├ ƒ /api/ps/reports                                      360 B         103 kB
+├ ƒ /api/ps/reports/[report_id]                          360 B         103 kB
+├ ƒ /api/ps/reports/[report_id]/line-items               360 B         103 kB
+├ ƒ /api/ps/reports/[report_id]/tables                   360 B         103 kB
+├ ƒ /api/qc/findings                                     360 B         103 kB
+├ ƒ /api/reporting-tasks/[[...path]]                     360 B         103 kB
+├ ƒ /api/reports/download                                360 B         103 kB
+├ ƒ /api/reports/download-batch                          360 B         103 kB
+├ ƒ /api/reviews                                         360 B         103 kB
+├ ƒ /api/reviews/[slotId]                                360 B         103 kB
+├ ƒ /api/reviews/[slotId]/complete                       360 B         103 kB
+├ ƒ /api/reviews/[slotId]/obligations/[obligationId]     360 B         103 kB
+├ ƒ /api/reviews/[slotId]/reopen                         360 B         103 kB
+├ ƒ /api/reviews/[slotId]/start                          360 B         103 kB
+├ ƒ /api/reviews/worklist                                360 B         103 kB
+├ ƒ /api/rules/[endpoint]                                360 B         103 kB
+├ ƒ /api/supervision/[[...path]]                         360 B         103 kB
+├ ƒ /api/upload                                          360 B         103 kB
+├ ƒ /api/upload-by-url                                   360 B         103 kB
+├ ƒ /api/users                                           360 B         103 kB
+├ ƒ /api/users/[username]                                360 B         103 kB
+├ ƒ /api/workflow                                        360 B         103 kB
+├ ○ /archive                                           5.41 kB         126 kB
+├ ƒ /department/[id]                                   10.8 kB         152 kB
+├ ○ /dev/ui-preview                                      360 B         103 kB
+├ ○ /e2e/batch-upload                                    421 B         117 kB
+├ ○ /history                                           4.32 kB         145 kB
+├ ○ /login                                             1.99 kB         105 kB
+├ ○ /materials                                         5.85 kB         136 kB
+├ ƒ /materials/department/[departmentId]               6.48 kB         124 kB
+├ ƒ /materials/district/[districtId]                   5.57 kB         124 kB
+├ ƒ /materials/slots/[slotId]                          14.2 kB         143 kB
+├ ƒ /materials/unit/[unitId]                           4.86 kB         130 kB
+├ ○ /quality                                           6.51 kB         145 kB
+├ ○ /queue                                             4.69 kB         146 kB
+├ ○ /reports                                             140 B         146 kB
+├ ƒ /reports/[organizationId]                            140 B         146 kB
+├ ○ /review                                            51.9 kB         196 kB
+├ ○ /rules                                             4.29 kB         115 kB
+├ ○ /settings                                          11.6 kB         168 kB
+├ ○ /supervision                                         137 B         136 kB
+├ ○ /supervision/issues                                  137 B         136 kB
+├ ○ /supervision/materials                               137 B         136 kB
+├ ƒ /supervision/materials/[slotId]                    6.83 kB         121 kB
+├ ○ /supervision/remediation                             137 B         136 kB
+├ ƒ /task/[job_id]                                     15.7 kB         148 kB
+├ ○ /upload                                             9.1 kB         125 kB
+├ ƒ /viewer/[job_id]                                   8.21 kB         111 kB
+├ ○ /viewer/gbc-ui-demo                                  20 kB         186 kB
+└ ○ /workbench                                         12.5 kB         162 kB
++ First Load JS shared by all                           103 kB
+  ├ chunks/9061-13293bd1e28ec785.js                    46.4 kB
+  ├ chunks/b3712bec-ef1cd6c803f3bcda.js                54.2 kB
+  └ other shared chunks (total)                        1.93 kB
+
+
+ƒ Middleware                                           34.4 kB
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand

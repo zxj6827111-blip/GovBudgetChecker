@@ -111,6 +111,13 @@ _CSV_FIELDNAMES: List[str] = [
     "actual_name",
     "code_level",
     "source_of_truth",
+    "expected",
+    "actual",
+    "difference",
+    "check",
+    "table_or_section",
+    "amounts_provenance",
+    "calculation_basis",
     "关联检查项",
     "obligation_ids",
     "check_id",
@@ -125,6 +132,12 @@ _CSV_FIELDNAMES: List[str] = [
     "fact_migration_status",
     "analysis_revision",
     "check_relation_id",
+    "problem_group_id",
+    "defect_type",
+    "source_anchor",
+    "related_rule_ids",
+    "member_issue_ids",
+    "related_problem_group_ids",
     "fact_ids",
     "evidence_ids",
     "human_decision",
@@ -139,6 +152,7 @@ _CSV_FIELDNAMES: List[str] = [
     "conclusion_scope",
     "manual_review_type",
     "conclusion_json",
+    "material_dimensions_json",
 ]
 
 
@@ -614,6 +628,7 @@ def _build_check_scope_export(status_payload: Dict[str, Any]) -> Dict[str, Any]:
             "check_coverage": coverage if isinstance(coverage, dict) else "旧版未记录",
             "unfinished_checks": unfinished if isinstance(coverage, dict) else "旧版未记录",
             "document_profile": metadata,
+            "material_dimensions": _export_material_dimensions(status_payload),
             "coverage_note": (
                 "本次结果为旧版记录，未包含检查覆盖台账，无法据此判断检查范围是否完整"
                 if not isinstance(coverage, dict)
@@ -660,6 +675,7 @@ def _build_check_scope_export(status_payload: Dict[str, Any]) -> Dict[str, Any]:
             else "旧版未记录"
         ),
         "document_profile": profile if isinstance(profile, dict) else "旧版未记录",
+        "material_dimensions": _export_material_dimensions(status_payload),
         "coverage_note": (
             "本次结果为旧版记录，未包含检查覆盖台账，"
             "无法据此判断检查范围是否完整"
@@ -812,6 +828,7 @@ def _build_csv_row(issue: Dict[str, Any]) -> Dict[str, Any]:
     role_summary = export_location.get("role_summary") or ""
     suggestion = _resolve_suggestion(enriched)
     human_decision = enriched.get("human_decision") if isinstance(enriched.get("human_decision"), dict) else {}
+    location = enriched.get("location") if isinstance(enriched.get("location"), dict) else {}
     row = {
         # record_type（ZC-00）：区分问题行与摘要行；ZC-04 将扩展为
         # 摘要/问题/提示/待复核/检查五类完整记录
@@ -881,12 +898,37 @@ def _build_csv_row(issue: Dict[str, Any]) -> Dict[str, Any]:
         "actual_name": enriched.get("actual_name") or export_location.get("actual_name") or "",
         "code_level": enriched.get("code_level") or export_location.get("code_level") or "",
         "source_of_truth": enriched.get("source_of_truth") or export_location.get("source_of_truth") or "",
+        "expected": enriched.get("expected") or "",
+        "actual": enriched.get("actual") or "",
+        "difference": enriched.get("difference") or "",
+        "check": enriched.get("check") or "",
+        "table_or_section": enriched.get("table_or_section") or "",
+        "amounts_provenance": enriched.get("amounts_provenance") or "",
+        "calculation_basis": (
+            json.dumps(enriched.get("calculation_basis"), ensure_ascii=False)
+            if enriched.get("calculation_basis")
+            else ""
+        ),
         # 关联检查项：把问题挂回"应检查事项"，让线下沟通能直接说清
         # "这条问题属于哪一项检查"，而不必让接收方按规则编号反查。
         "关联检查项": _format_obligation_ids(enriched),
         "obligation_ids": _format_obligation_ids(enriched),
         "analysis_revision": human_decision.get("analysis_revision") or enriched.get("analysis_revision") or "",
         "check_relation_id": enriched.get("check_relation_id") or "",
+        "problem_group_id": str(location.get("problem_group_id") or ""),
+        "defect_type": str(location.get("defect_type") or ""),
+        "source_anchor": (
+            json.dumps(location.get("source_anchor"), ensure_ascii=False)
+            if location.get("source_anchor") else ""
+        ),
+        "related_rule_ids": json.dumps(
+            enriched.get("related_rule_ids") or location.get("related_rule_ids") or [],
+            ensure_ascii=False),
+        "member_issue_ids": json.dumps(
+            enriched.get("merged_issue_ids") or location.get("merged_issue_ids")
+            or location.get("member_issue_ids") or [], ensure_ascii=False),
+        "related_problem_group_ids": json.dumps(
+            location.get("related_problem_group_ids") or [], ensure_ascii=False),
         "fact_ids": json.dumps(enriched.get("fact_ids") or [], ensure_ascii=False),
         "evidence_ids": json.dumps(enriched.get("evidence_ids") or [], ensure_ascii=False),
         "human_decision": human_decision.get("status") or "",
@@ -937,6 +979,7 @@ def _build_csv_summary_row(
             "analysis_conclusion": status_payload.get("analysis_conclusion") or "",
             "conclusion_scope": status_payload.get("conclusion_scope") or "",
             "conclusion_json": json.dumps(review_conclusion or {}, ensure_ascii=False, sort_keys=True),
+            "material_dimensions_json": json.dumps(_export_material_dimensions(status_payload),ensure_ascii=False,sort_keys=True),
         }
     )
     return {key: row.get(key, "") for key in _CSV_FIELDNAMES}
@@ -1040,6 +1083,7 @@ def _build_docx_document_xml(
                 ("结论作用域", conclusion_scope_text),
                 ("材料类型", str(scope.get("report_kind") or "旧版未记录")),
                 ("检查范围说明", str(scope.get("coverage_note") or "")),
+                *[("材料口径依据",line) for line in _material_dimension_lines(status_payload)],
             ]
         ),
         _docx_paragraph("问题清单", style="Heading1"),
@@ -1684,6 +1728,7 @@ def _append_report_appendix_pages(
         if isinstance(item, dict) and str(item.get("issue_id") or "")
     } if isinstance(decisions, list) else {}
     lines.append(f"REVIEW_REPORT_SHA256: {_review_report_sha256(status_payload)}")
+    lines.extend(_material_dimension_lines(status_payload))
     if conclusion["is_complete"] is True:
         lines.append("检查范围已完成。以下问题和提示以本次 ReviewReport 为准。")
     elif conclusion["coverage_known"] is False:
@@ -2240,3 +2285,28 @@ async def download_reports_batch(body: Dict[str, Any], request: Request):
     )
     response.headers["Content-Disposition"] = 'attachment; filename="reports-batch.zip"'
     return response
+
+
+def _export_material_dimensions(payload):
+    """导出只读所选分析版本，不查询最新人工决定覆盖历史。"""
+    metadata=(payload.get('review_report') or {}).get('metadata') or {}
+    if isinstance(metadata.get('material_dimensions'),dict):return metadata['material_dimensions']
+    meta=(payload.get('result') or {}).get('meta') or {}
+    if not (meta.get('document_scope_resolution') or meta.get('document_scope_confirmation')):return '旧版未记录'
+    return {'writing':meta.get('document_scope_resolution'),'amount':meta.get('document_scope_confirmation'),'binding':meta.get('binding')}
+
+
+def _material_dimension_lines(payload):
+    value=_export_material_dimensions(payload)
+    if not isinstance(value,dict):return []
+    writing=value.get('writing') or {}
+    snapshot=writing.get('snapshot') or {}
+    human=writing.get('human_decision') or {}
+    labels={'unit':'单位','department':'部门','unknown':'暂不确定','confirmed':'已确定','conflict':'冲突','insufficient':'依据不足','human':'人工确认','declaration':'原文明示','template':'模板推断','unresolved':'未确定'}
+    lines=[f"写法基准：{labels.get(writing.get('value'),'未知')}；{labels.get(writing.get('status'),'未记录')}；来源：{labels.get(writing.get('source'),'未记录')}",
+        f"模板：{snapshot.get('version') or snapshot.get('package_id') or '未绑定'}；源年度：{snapshot.get('source_report_year') or '未知'}；目标年度：{snapshot.get('target_year') or '未知'}；绑定修订：{snapshot.get('revision') or '未记录'}；算法：{writing.get('algorithm') or '未记录'}"]
+    if human:lines.append('写法确认依据：'+str(human.get('note') or '旧版本未记录')+'；证据：'+str(human.get('evidence_reference') or '未记录'))
+    amount=value.get('amount') or {}
+    lines.append('金额人工决定：'+str(amount.get('material_scope') or '未记录（不能由写法推断）'))
+    if amount:lines.append('金额确认依据：'+str(amount.get('note') or '未记录')+'；证据：'+str(amount.get('evidence_reference') or '未记录'))
+    return lines

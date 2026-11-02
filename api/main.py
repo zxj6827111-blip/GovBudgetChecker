@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import json
+import hashlib
 import time
 import asyncio
 import uuid
@@ -584,6 +585,13 @@ def _evaluate_quality_gate(
     unbound = reading.get("unbound_money_cells") or []
     fiscal_coverage = reading.get("fiscal_coverage") or {}
     mapping_tables = reading.get("mapping_incomplete_tables") or []
+    from src.services.document_scope import amount_dependent_rules
+    if reading.get("org_scope_pending_count") and amount_dependent_rules(rule_execution_summary):
+        review_reasons.append({
+            "code": "org_scope_pending",
+            "message": "材料汇总口径待确认；不影响无需该维度的表内勾稽。依赖口径的检查仍列为未完成。",
+            "pending_fact_count": reading["org_scope_pending_count"],
+        })
     if reading_gaps or unbound or mapping_tables:
         named = "、".join(f"第{t.get('page')}页《{t.get('title') or t.get('table_code')}》" for t in mapping_tables[:5])
         review_reasons.append({
@@ -1280,6 +1288,14 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
     # 解析前先给出"零覆盖"默认值：若在解析阶段就失败，错误态也能诚实报出覆盖率 0
     page_assessment: Dict[str, Any] = _assess_page_extraction([], [])
     try:
+        frozen_template_bindings = None
+        from src.services.material_writing import enabled as template_scope_enabled
+        if template_scope_enabled() and (os.getenv('DATABASE_URL') or '').strip():
+            from src.db.connection import DatabaseConnection
+            from src.services.annual_templates import freeze_current_bindings
+            template_conn=await DatabaseConnection.acquire()
+            try:frozen_template_bindings=await freeze_current_bindings(template_conn)
+            finally:await DatabaseConnection.release(template_conn)
         # 读取检测模式配置
         expected_fact_revision = None
         if (os.getenv('DATABASE_URL') or '').strip():
@@ -1315,6 +1331,11 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                 report_kind = str(status_data.get("report_kind") or "").strip()
             except:
                 pass
+
+        # 阶段 0：分析开始时冻结“上传所选组织”依据（与 resolve_organization_level
+        # 同一来源），检查主体、金额范围与写法裁决全程消费这一份冻结值；
+        # 重新分析取当时的当前选择，已出结果引用冻结副本。
+        selected_org_basis = runtime.resolve_organization_basis(organization_id)
 
         # 检查是否启用双模式。
         # 必须走真实 Settings 接口（is_dual_mode_enabled 读 config/app.yaml 的
@@ -1390,7 +1411,6 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             p_texts = []
             p_tables = []
             f_size = pdf_path.stat().st_size
-            import hashlib
 
             from src.services.pdf_parser import PDFParser as _CellParser
 
@@ -1512,14 +1532,13 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         from src.services.structure_view import build_structure_view
 
         structure_view = build_structure_view(page_texts, parse_artifact_obj, page_assessment)
-        if parse_artifact_obj is not None and ocr_summary:
-            for index in range(len(profile_page_texts)):
-                qualified_identity_text = "\n".join(block.text for block in parse_artifact_obj.text_blocks
-                    if block.page_number == index+1 and block.extraction_method == "ocr"
-                    and block.confidence is not None and block.confidence >= .98)
-                profile_page_texts[index] += "\n" + qualified_identity_text
+        from src.services.material_writing import qualified_identity_view
+        profile_page_texts, writing_source_spans = qualified_identity_view(page_texts, parse_artifact_obj)
+        from src.services.document_scope import load_for_analysis, apply_profile
+        scope_confirmation = await load_for_analysis(job_dir.name, parse_artifact_obj.source_file_hash) if parse_artifact_obj else None
         operand_profile = resolve_document_profile(filename=pdf_path.name,page_texts=profile_page_texts,
             explicit_report_kind=report_kind if any(text.strip() for text in page_texts) else None)
+        apply_profile(operand_profile, scope_confirmation)
         identity_conflicts = {item.get("field") for item in operand_profile.conflicts}
         if not organization_name and "organization_name" not in identity_conflicts:
             organization_name = operand_profile.organization_name.value
@@ -1537,12 +1556,19 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         check_subject = resolve_check_subject(
             organization_id=organization_id,
             organization_name=organization_name,
-            organization_level=runtime.resolve_organization_level(organization_id),
+            organization_level=selected_org_basis["level"],
             cover_name=operand_profile.organization_name.value,
             cover_conflicted="organization_name" in identity_conflicts,
             subject_level=operand_profile.subject_level.value,
+            cover_text=profile_page_texts[0] if profile_page_texts else None,
         )
         check_subject_name = check_subject["name"]
+        if parse_artifact_obj is not None:
+            from src.services.input_processing_identity import bind_artifact_document_identity
+            bind_artifact_document_identity(parse_artifact_obj,
+                organization_id=organization_id, organization_name=organization_name,
+                fiscal_year=report_year or fiscal_year, report_kind=report_kind, doc_type=doc_type,
+                check_subject_name=check_subject_name, scope_confirmation=scope_confirmation)
 
         # ZC-02（AC-07）：OCR 候选表经列身份/关键数字/置信度复验后晋升为
         # 可检查事实——与原生表共用同一事实物化路径；未通过者保持候选
@@ -1589,6 +1615,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                 fact_context_obj = build_fact_context_from_artifact(
                     parse_artifact_obj,
                     org_name=check_subject_name,
+                    org_level=selected_org_basis["level"],
                     fiscal_year=fiscal_year or report_year,
                     report_kind=report_kind,
                     doc_type=doc_type,
@@ -1651,6 +1678,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                     fact_context_obj = build_fact_context_from_artifact(
                         parse_artifact_obj,
                         org_name=check_subject_name,
+                        org_level=selected_org_basis["level"],
                         fiscal_year=fiscal_year or report_year,
                         report_kind=report_kind,
                         doc_type=doc_type,
@@ -1665,13 +1693,19 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                             "reason": "应用列映射后仍未生成财政事实",
                         })
                 has_cell_value_changes = any(
-                    isinstance(change, dict) and str(change.get("field") or "") == "cell_value"
+                    isinstance(change, dict) and str(change.get("field") or "") in {"cell_value", "table_rows"}
                     for record in overlay_records
                     for change in (record.get("changes") if isinstance(record, dict) and isinstance(record.get("changes"), list) else [])
                 )
                 has_column_mapping_changes = any(
                     isinstance(change, dict)
                     and str(change.get("field") or "") == "column_mapping"
+                    for record in overlay_records
+                    for change in (record.get("changes") if isinstance(record, dict) and isinstance(record.get("changes"), list) else [])
+                )
+                has_table_identity_changes = any(
+                    isinstance(change, dict)
+                    and str(change.get("field") or "") == "table_identity"
                     for record in overlay_records
                     for change in (record.get("changes") if isinstance(record, dict) and isinstance(record.get("changes"), list) else [])
                 )
@@ -1716,6 +1750,24 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                             fact_overlay_applied or cell_value_report.get("applied") or column_mapping_report.get("applied")
                         ) else "failed"
                     elif cell_value_report.get("applied") and fact_overlay_report.get("status") == "not_requested":
+                        fact_overlay_report["status"] = "applied"
+                if has_table_identity_changes:
+                    # 只提交表种确认时，本块是它唯一的回执出口：成功/未登记/
+                    # 目标不存在/已识别表种冲突都必须在任务状态里可见。
+                    identity_report = (
+                        (cell_value_report.get("by_field") or {}).get("table_identity")
+                        or {"applied": 0, "unresolved": []}
+                    )
+                    fact_overlay_report["table_identity_overlay"] = identity_report
+                    if identity_report.get("unresolved"):
+                        fact_overlay_report.setdefault("unresolved", []).extend(
+                            {**item, "reason": f"表种确认未生效：{item['reason']}"}
+                            for item in identity_report["unresolved"])
+                        fact_overlay_report["status"] = "partial" if (
+                            fact_overlay_applied or identity_report.get("applied")
+                            or column_mapping_report.get("applied") or cell_value_report.get("applied")
+                        ) else "failed"
+                    elif identity_report.get("applied") and fact_overlay_report.get("status") == "not_requested":
                         fact_overlay_report["status"] = "applied"
                 if unsupported_changes and any(item.get("blocking") for item in unsupported_changes):
                     fact_overlay_report["status"] = (
@@ -1778,6 +1830,20 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             page_texts=profile_page_texts,
             page_assessment=page_assessment,
         )
+        apply_profile(document_profile, scope_confirmation)
+        from src.services.material_writing import budget_enabled
+        if document_profile.kind == "final" or (document_profile.kind == "budget" and budget_enabled()):
+            from src.services.material_writing import load as load_writing
+            # 封面主体名用于"所选组织一致性"校验；画像将名称标为冲突时不采信，
+            # 视同识别不到，维持所选层级现行为。
+            cover_org_name = None if "organization_name" in identity_conflicts \
+                else operand_profile.organization_name.value
+            document_profile.writing_scope = await load_writing(job_dir.name,
+                parse_artifact_obj.source_file_hash if parse_artifact_obj else hashlib.sha256(pdf_path.read_bytes()).hexdigest(),
+                document_profile, profile_page_texts,
+                archive_scope=selected_org_basis["level"], archive_basis=selected_org_basis,
+                cover_name=cover_org_name,
+                excluded_pages=(), source_spans=writing_source_spans, frozen_bindings=frozen_template_bindings)
         if document_profile.kind in {"budget", "final"}:
             report_kind = document_profile.kind
 
@@ -1813,6 +1879,8 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             document.parse_artifact = parse_artifact_obj
             document.document_profile = document_profile
             document.structure_view = structure_view
+            document.writing_page_texts = profile_page_texts
+            document.writing_source_spans = writing_source_spans
             return document
 
         doc = await loop.run_in_executor(None, _sync_build_document)
@@ -1858,6 +1926,8 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                     "organization_name": organization_name,
                     "document_profile": document_profile.model_dump(),
                     "structure_view": structure_view,
+                    "writing_page_texts": profile_page_texts,
+                    "writing_source_spans": writing_source_spans,
                 },
             )
 
@@ -1894,6 +1964,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                 call_ledger=dual_result.meta.get("ai_call_ledger") or [],
                 provider_stats=dual_result.meta.get("provider_stats") or [],
                 window_errors=dual_result.meta.get("ai_window_errors") or [],
+                coverage=dual_result.meta.get("ai_coverage"),
             )
             from src.services.ai_execution import summarize_ai_diagnostics
             ai_diagnostics = summarize_ai_diagnostics(dual_result.meta)
@@ -1921,6 +1992,9 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                     "page_extraction": page_assessment,
                     "ai_execution": ai_execution,
                     **ai_diagnostics,
+                    "ai_coverage": dual_result.meta.get("ai_coverage"),
+                    "ai_audit_diagnostics": dual_result.meta.get("ai_audit_diagnostics"),
+                    "ai_locator_outcomes": dual_result.meta.get("ai_locator_outcomes") or [],
                     "ai_configuration": status_data.get("ai_configuration"),
                     "rule_execution_summary": dual_result.meta.get(
                         "rule_execution_summary"
@@ -2032,9 +2106,9 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             # 使用线程池为规则检查设置超时，避免在95%阶段长时间卡住
             provider_stats = []
             try:
-                RULES_TIMEOUT_SEC = int(os.getenv("RULES_TIMEOUT_SEC", "150"))
+                RULES_TIMEOUT_SEC = int(os.getenv("RULES_TIMEOUT_SEC", "300"))
             except Exception:
-                RULES_TIMEOUT_SEC = 150
+                RULES_TIMEOUT_SEC = 300
 
             try:
                 from src.services.check_progress import update_progress
@@ -2268,7 +2342,6 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             else ""
         )
         if not source_file_hash:
-            import hashlib
 
             source_digest = hashlib.sha256()
             with pdf_path.open("rb") as source_handle:
@@ -2362,6 +2435,22 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         result["meta"]["rule_registry_version"] = RULE_REGISTRY_VERSION
         result["meta"]["rule_policy_version"] = PORTABLE_RULE_POLICY_VERSION
         result["meta"]["document_profile"] = document_profile.to_dict()
+        result["meta"]["document_scope_confirmation"] = scope_confirmation
+        result["meta"]["document_scope_resolution"] = document_profile.writing_scope
+        if document_profile.writing_scope:
+            from src.services.annual_templates import sha as writing_hash
+            result["meta"]["writing_processing_identity"] = writing_hash(document_profile.writing_scope)
+            resolution=document_profile.writing_scope
+            snapshot=resolution.get('snapshot') or {}
+            # 分析语义摘要独立于金额物化身份，防止写法决定改变来源格及 fact_uid。
+            result['meta']['binding']={'scope_resolution':{
+                'status':resolution.get('status'),'value':resolution.get('value'),'source':resolution.get('source'),
+                'package_id':snapshot.get('package_id'),'config_hash':snapshot.get('effective_config_sha256') or snapshot.get('content_sha256'),
+                'binding_revision':snapshot.get('revision'),'target_year':snapshot.get('target_year'),
+                'capability_scope':snapshot.get('capability_scope'),'algorithm':resolution.get('algorithm'),
+                'human_decision_id':resolution.get('human_decision_id'),'decision_revision':resolution.get('decision_revision'),
+                # 阶段 0：冻结的“上传所选组织”依据；已包含在 writing_processing_identity 内。
+                'archive':resolution.get('archive_basis')}}
         result["meta"]["check_subject"] = check_subject
         result["meta"]["structure_view"] = structure_view
         logger.info(
@@ -2411,6 +2500,9 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             fact_overlay_report=fact_overlay_report,
         )
         result["meta"]["quality_gate"] = quality_gate
+        # 结论作用域同时写进 result.meta：任务详情/复核台/材料详情读的是
+        # result.meta，只放顶层会让页面把新任务误显示成“历史未记录”。
+        result["meta"]["conclusion_scope"] = quality_gate["conclusion_scope"]
         final_status = quality_gate["status"]
         if final_status == JobStatus.REVIEW_REQUIRED.value:
             stage_text = "完成（需人工复核）"

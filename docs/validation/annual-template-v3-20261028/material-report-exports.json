@@ -1,0 +1,25 @@
+{
+  "json": {
+    "status": 200,
+    "bytes": 279933,
+    "sha256": "952c8357caea33c2a40b0686c7c5cadef2664ebd9387a863b60bc05c593754ad"
+  },
+  "analysis_revision": "rev-20261028T132604-0c8d16ed",
+  "csv": {
+    "status": 200,
+    "bytes": 119951,
+    "sha256": "17ea81e6e73655fc9818c930c3d1b2b537d41214ab56f736c8cfe980f67dc16f"
+  },
+  "pdf": {
+    "status": 200,
+    "bytes": 2050587,
+    "sha256": "1a15ea1f373874556b5279d963e8eb85ef21fb5b43550def21f817101cc18de0"
+  },
+  "docx": {
+    "status": 200,
+    "bytes": 12982,
+    "sha256": "731701338a2eaf20eb2a0a736e55dc4aff06c17cdaa5355fbead9db265d4e984"
+  },
+  "original_unchanged": true,
+  "history_status": 200
+}

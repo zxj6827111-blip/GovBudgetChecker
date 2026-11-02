@@ -81,7 +81,9 @@ _INFRA_ONLY: Dict[str, str] = {
     "HOST_SAMPLES_DIR": "compose 卷挂载路径",
     "HOST_UPLOADS_DIR": "compose 卷挂载路径",
     "COMPOSE_FILE": "docker compose 自身的多文件开关",
+    "PATH": "操作系统提供，固定传给子进程，不是可部署的配置项",
     "BACKEND_URL": "Next.js 前端（app/ 下 TS 代码）读取，不在 Python 侧",
+    "GBC_SESSION_COOKIE_NAME": "Next.js app/lib/session.ts 读取，用于并行实例的会话隔离",
     # 下面两个是给 ai-extractor 这个**独立服务**透传的：仓库自带的最小实现
     # （ai_extractor_service.py）不读，但换成真实抽取器实现时需要，
     # 所以刻意保留在 compose 的 ai-extractor 段，并在此登记以免被判成死变量。

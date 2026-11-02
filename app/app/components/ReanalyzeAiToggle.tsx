@@ -8,6 +8,8 @@ type ReanalyzeAiToggleProps = {
   description?: string;
   className?: string;
   testId?: string;
+  /** 紧凑：只留勾选框与标题，说明放悬停提示（放在“重新分析”按钮旁）。 */
+  compact?: boolean;
 };
 
 export default function ReanalyzeAiToggle({
@@ -18,7 +20,31 @@ export default function ReanalyzeAiToggle({
   description = "使用系统设置中的默认模型进行检查，可在设置中更换模型。",
   className,
   testId,
+  compact = false,
 }: ReanalyzeAiToggleProps) {
+  if (compact) {
+    return (
+      <label
+        title={description}
+        className={cn(
+          "inline-flex items-center gap-1.5 whitespace-nowrap text-sm text-slate-700",
+          disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
+          className,
+        )}
+      >
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          data-testid={testId}
+          onChange={(event) => onChange(event.target.checked)}
+          className="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500"
+          aria-label={title}
+        />
+        {title}
+      </label>
+    );
+  }
   return (
     <label
       className={cn(

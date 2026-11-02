@@ -30,7 +30,7 @@ from .checklist_support import (
     subject_scope,
 )
 from .checklist_identity_rules import body_scope
-from .rule_outcome import RuleNotApplicable
+from .rule_outcome import RuleDeferred, RuleNotApplicable
 from src.utils.narration import normalize_amount_punctuation
 from .rules_v33 import Document, Issue, Rule
 
@@ -139,6 +139,10 @@ def table_title_lines(doc: Document) -> List[Tuple[int, str, int, int, str]]:
         for line in lines[:6]:
             start, offset = offset, offset + len(line) + 1
             norm = _title_norm(line)
+            # 章节标题可折行为“某单位2025年 / 度决算表”，其下仍有真实表题，不能抢作九表表名。
+            if (re.search(r"(?:年度?|度)(?:部门|单位)?(?:预算|决算)表$", norm)
+                    or re.fullmatch(r"(?:部门|单位)?(?:预算|决算)表", norm)):
+                continue
             if norm.endswith("表") and re.search(r"(?:预算|决算)", norm) and len(norm) <= 48 \
                     and not norm.startswith(("注", "第")):
                 found.append((page, text, start, start + len(line), norm))
@@ -154,8 +158,12 @@ class CMM021_TableTitleNormative(Rule):
         kind = report_kind(doc)
         if kind not in {"budget", "final"}:
             raise RuleNotApplicable(self.code, detail="文种未识别，规范表名无法确定")
+        from src.services.template_anchor_checks import additional_anchor_issues
+        extra, pending = additional_anchor_issues(self, doc, "normative_table")
         titles = table_title_lines(doc)
         if not titles:
+            if pending: raise RuleDeferred(self.code, detail="；".join(pending), partial_issues=extra)
+            if extra: return extra
             raise RuleNotApplicable(self.code, detail="未识别到表格页表题")
         if kind == "budget":
             scope = body_scope(doc) or subject_scope(doc)
@@ -170,6 +178,12 @@ class CMM021_TableTitleNormative(Rule):
         for page, text, start, end, norm in titles:
             body = re.sub(r"^20\d{2}年度?", "", norm)
             index = next((i for i, core in reversed(list(enumerate(cores))) if core in _title_norm(body)), None)
+            artifact = getattr(doc, "parse_artifact", None)
+            if kind == "final" and artifact is not None:
+                from src.services.fiscal_table_rules import NINE_TABLE_RULES
+                codes = {t.table_code for t in artifact.table_fragments if t.page_number == page and t.table_code in NINE_TABLE_RULES}
+                if len(codes) == 1:
+                    index = list(NINE_TABLE_RULES).index(next(iter(codes)))
             if index is None:
                 continue
             expected = names[index]
@@ -178,14 +192,17 @@ class CMM021_TableTitleNormative(Rule):
             if body != expected:
                 mismatches.append((page, text, start, end, body, expected))
         if not mismatches:
-            return []
+            if pending: raise RuleDeferred(self.code, detail="；".join(pending), partial_issues=extra)
+            return extra
         page, text, start, end, body, expected = mismatches[0]
         detail = "；".join(f"“{b}”应为“{e}”" for _, _, _, _, b, e in mismatches[:4])
         more = f"等 {len(mismatches)} 张" if len(mismatches) > 4 else ""
-        return [issue_at(
+        combined = [*extra, issue_at(
             self, f"表名与规范表名不一致：{detail}{more}。",
             page, text, start, end, severity="info", checklist_item="E-06", occurrences=len(mismatches),
         )]
+        if pending: raise RuleDeferred(self.code, detail="；".join(pending), partial_issues=combined)
+        return combined
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +358,10 @@ class CMM023_SectionTemplate(Rule):
             raise RuleNotApplicable(self.code, detail="文种未识别，章节模板无法确定")
         texts = list(doc.page_texts or [])
         if len(texts) < 4 or not any(str(t or "").strip() for t in texts):
+            from src.services.template_anchor_checks import additional_anchor_issues
+            extra, pending = additional_anchor_issues(self, doc, "normative_section")
+            if pending: raise RuleDeferred(self.code, detail="；".join(pending), partial_issues=extra)
+            if extra: return extra
             raise RuleNotApplicable(self.code, detail="材料页数过少或无文本层，章节结构由 BUD-001/V33-003 判定")
         body = compact("\n".join(str(t or "") for t in texts[1:]))
         scope = body_scope(doc) or subject_scope(doc)
@@ -373,6 +394,10 @@ class CMM023_SectionTemplate(Rule):
             for part, pattern in _FINAL_PARTS:
                 if not re.search(rf"{part}[^。；]{{0,60}}?(?:{pattern})", body):
                     _missing("A-01", f"报告缺少“{part}”（标题或“{part}”字样缺失）。")
+        from src.services.template_anchor_checks import additional_anchor_issues
+        extra, pending = additional_anchor_issues(self, doc, "normative_section")
+        issues.extend(extra)
+        if pending: raise RuleDeferred(self.code, detail="；".join(pending), partial_issues=issues)
         return issues
 
 

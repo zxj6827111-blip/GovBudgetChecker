@@ -325,14 +325,17 @@ export function deriveStageHistory(
 /** Formal workflow counts are narrower than the visible material issue list. */
 export const EVIDENCE_STATUS_DEGRADED = "degraded_missing_evidence";
 
-export function problemReviewKind(problem: Problem): "issue" | "tip" | "manual_review" | "review_notice" {
+export function problemReviewKind(problem: Problem): "issue" | "tip" | "manual_review" | "review_notice" | "obligation" {
+  // 补核义务并入必须处理后自成一类（「未能自动核对」），不混进正式问题或复核事项。
+  if (problem.source === "obligation") return "obligation";
   if (problem.reviewKind) return problem.reviewKind;
   if (problem.source === "manual_review" || problem.source === "structured_ingest") return "review_notice";
   return problem.severity === "info" ? "tip" : "issue";
 }
 
 export function isFormalProblem(problem: Problem): boolean {
-  if (problem.source === "structured_ingest") return true;
+  // 补核义务由服务端完成门禁逐条要求人工结论，与结构化待复核项一样恒为必须处理。
+  if (problem.source === "structured_ingest" || problem.source === "obligation") return true;
   // Match backend evidence_guard.is_formal_finding: source identity affects
   // whether the row is a verified issue or a review candidate, but a human
   // decision still participates in the workflow unless evidence was explicitly

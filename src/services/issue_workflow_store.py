@@ -13,7 +13,7 @@ import secrets
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from fastapi import HTTPException
 
@@ -180,6 +180,7 @@ def _normalize_state(value: Any) -> Dict[str, Any]:
                 "fact_ids": _strings(item.get("fact_ids")),
                 "evidence_ids": _strings(item.get("evidence_ids")),
                 "identity_fingerprint": str(item.get("identity_fingerprint") or "").strip() or None,
+                "resolved_from_issue_id": str(item.get("resolved_from_issue_id") or "").strip() or None,
                 "updated_at": str(item.get("updated_at") or "").strip() or _now(),
             }
 
@@ -508,34 +509,70 @@ DECISION_PAYLOAD_PATHS: Tuple[Tuple[str, ...], ...] = (
 )
 
 
-def _find_issue(payload: Dict[str, Any], issue_id: str) -> Optional[Dict[str, Any]]:
-    def _find(items: Any) -> Optional[Dict[str, Any]]:
-        if not isinstance(items, list):
-            return None
-        for item in items:
-            if isinstance(item, dict) and str(item.get("id") or "").strip() == issue_id:
-                return item
-        return None
-
+def _iter_finding_items(payload: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
     containers: Iterable[Any] = (payload, payload.get("result"))
     for container in containers:
         if not isinstance(container, dict):
             continue
         for key in ("ai_findings", "rule_findings"):
-            found = _find(container.get(key))
-            if found:
-                return found
+            items = container.get(key)
+            if isinstance(items, list):
+                for item in items:
+                    if isinstance(item, dict):
+                        yield item
         issues = container.get("issues")
         if isinstance(issues, list):
-            found = _find(issues)
-            if found:
-                return found
+            for item in issues:
+                if isinstance(item, dict):
+                    yield item
         elif isinstance(issues, dict):
             for key in ("all", "error", "warn", "info"):
-                found = _find(issues.get(key))
-                if found:
-                    return found
+                items = issues.get(key)
+                if isinstance(items, list):
+                    for item in items:
+                        if isinstance(item, dict):
+                            yield item
+
+
+def _member_issue_ids(item: Dict[str, Any]) -> Set[str]:
+    values: Set[str] = set()
+    for container in (item, item.get("location") if isinstance(item.get("location"), dict) else {}):
+        for key in ("merged_issue_ids", "member_issue_ids"):
+            raw = container.get(key)
+            if isinstance(raw, list):
+                values.update(str(entry) for entry in raw if entry)
+    values.discard(str(item.get("id") or ""))
+    return values
+
+
+def _find_issue(payload: Dict[str, Any], issue_id: str) -> Optional[Dict[str, Any]]:
+    # 规范 id 精确匹配优先；旧成员 id 只在当前分析的问题集合内解析，
+    # 且必须唯一——歧义时不写任何决定（fail-closed）。
+    exact = next((item for item in _iter_finding_items(payload)
+                  if str(item.get("id") or "").strip() == issue_id), None)
+    if exact is not None:
+        return exact
+    members = [item for item in _iter_finding_items(payload)
+               if issue_id in _member_issue_ids(item)]
+    unique = {str(item.get("id") or ""): item for item in members if str(item.get("id") or "")}
+    if len(unique) == 1:
+        return next(iter(unique.values()))
+    if len(unique) > 1:
+        return None
     return _find_structured_review_item(payload, issue_id) or _find_report_review_item(payload, issue_id)
+
+
+def _job_issue_and_alias(
+    user: Dict[str, Any], job_id: str, issue_id: str
+) -> tuple[Dict[str, Any], Dict[str, Any], Optional[str]]:
+    payload = runtime.get_job_status_payload(job_id, apply_issue_filters=False)
+    if not user_can_access_job(user, payload):
+        raise HTTPException(status_code=403, detail="job access denied")
+    issue = _find_issue(payload, issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="issue_id does not exist")
+    canonical = str(issue.get("id") or "")
+    return payload, issue, (issue_id if canonical and canonical != issue_id else None)
 
 
 def _find_report_review_item(payload: Dict[str, Any], issue_id: str) -> Optional[Dict[str, Any]]:
@@ -549,6 +586,7 @@ def _find_report_review_item(payload: Dict[str, Any], issue_id: str) -> Optional
         return None
     items = [item for item in report["manual_review"] if isinstance(item, dict)]
     reason_titles = {
+        "org_scope_pending": "材料汇总口径待确认",
         "ai_failed": "大模型检查未完整完成",
         "evidence_incomplete_findings": "大模型发现证据不足",
         "rule_evidence_incomplete": "规则问题证据不足",
@@ -683,8 +721,10 @@ def get_visible_state(user: Dict[str, Any], *, job_id: Optional[str] = None) -> 
             if payload is None:
                 continue
             if user_can_access_job(user, payload):
-                if _find_issue(payload, record["issue_id"]) is None:
+                canonical = _find_issue(payload, record["issue_id"])
+                if canonical is None:
                     continue
+                canonical_id = str(canonical.get("id") or record["issue_id"])
                 if record_job not in current_decisions:
                     # setdefault 的默认表达式也会每次执行；直接复用同一份详情投影。
                     current_decisions[record_job] = {
@@ -692,8 +732,15 @@ def get_visible_state(user: Dict[str, Any], *, job_id: Optional[str] = None) -> 
                         for item in project_job_issue_decisions(record_job, payload, _state=state)
                     }
                 visible = copy.deepcopy(record)
-                visible["status"] = current_decisions[record_job].get(record["issue_id"], "pending")
-                visible_issues[key] = visible
+                visible["issue_id"] = canonical_id
+                if canonical_id != record["issue_id"]:
+                    visible["resolved_from_issue_id"] = record["issue_id"]
+                visible["status"] = current_decisions[record_job].get(canonical_id, "pending")
+                visible_key = _workflow_key(record_job, canonical_id)
+                existing = visible_issues.get(visible_key)
+                if existing is None or int(str(visible.get("decision_revision") or "0") or 0) >= int(
+                        str(existing.get("decision_revision") or "0") or 0):
+                    visible_issues[visible_key] = visible
                 visible_job_ids.add(record["job_id"])
         packages = [
             copy.deepcopy(package)
@@ -787,10 +834,141 @@ def get_job_issue_decision_records(job_id: str) -> Dict[str, Dict[str, Any]]:
     return result
 
 
+def _event_revision(record: Dict[str, Any]) -> int:
+    value = str(record.get("decision_revision") or "0")
+    return int(value) if value.isdigit() else 0
+
+
+def _pick_latest(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """按“当前分析 > 决定代数 > 时间”挑选一条；输入是同一身份的事件。"""
+    return max(
+        records,
+        key=lambda item: (
+            bool(item.get("same_revision")),
+            _event_revision(item.get("record") or {}),
+            str((item.get("record") or {}).get("updated_at") or ""),
+        ),
+    )
+
+
+def _member_decision(item: Dict[str, Any]) -> Dict[str, Any]:
+    record = item.get("record") or {}
+    return {
+        "issue_id": str(item.get("event_issue_id") or ""),
+        "status": str(record.get("status") or "pending"),
+        "decision_revision": str(record.get("decision_revision") or "1"),
+        "analysis_revision": record.get("analysis_revision"),
+        "inherited": not bool(item.get("same_revision")),
+        "actor": record.get("decision_actor"),
+        "updated_at": record.get("updated_at"),
+        "note": record.get("note"),
+    }
+
+
+def _project_group(canonical_id: str, issue: Dict[str, Any], records: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """把一个规范组上的全部事件聚合成一条投影。
+
+    语义（批次 1 返工）：
+    - 当前分析的**规范组决定**是显式重新确认，优先于成员决定；
+    - 没有当前规范决定时，当前分析的成员决定参与聚合；成员结论不一致
+      → ``needs_review``，不得挑一个放行；
+    - 只有旧成员/旧规范决定时，同样按“一致才收敛，冲突必阻塞”处理；
+    - 继承的旧成员决定不能与当前成员决定互相冲突，当前决定优先。
+    """
+    if not records:
+        return None
+    canonical_records = [item for item in records if item.get("event_issue_id") == canonical_id]
+    member_records = [item for item in records if item.get("event_issue_id") != canonical_id]
+    current_canonical = [item for item in canonical_records if item.get("same_revision")]
+    current_members = [item for item in member_records if item.get("same_revision")]
+    inherited_canonical = [item for item in canonical_records if not item.get("same_revision")]
+    inherited_members = [item for item in member_records if not item.get("same_revision")]
+
+    status = "pending"
+    conflict = False
+    inherited = False
+    chosen: Optional[Dict[str, Any]] = None
+    superseded: List[Dict[str, Any]] = []
+    if current_canonical:
+        chosen = _pick_latest(current_canonical)
+        status = str((chosen.get("record") or {}).get("status") or "pending")
+        superseded = [_member_decision(item) for item in member_records]
+    elif current_members:
+        chosen = _pick_latest(current_members)
+        statuses = sorted({str((item.get("record") or {}).get("status") or "pending")
+                           for item in current_members})
+        if len(statuses) > 1:
+            status, conflict = "needs_review", True
+            chosen = _pick_latest(current_members)
+        else:
+            status = statuses[0]
+        superseded = [_member_decision(item) for item in inherited_members]
+    elif inherited_canonical:
+        chosen = _pick_latest(inherited_canonical)
+        status = str((chosen.get("record") or {}).get("status") or "pending")
+        inherited = True
+    elif inherited_members:
+        chosen = _pick_latest(inherited_members)
+        statuses = sorted({str((item.get("record") or {}).get("status") or "pending")
+                           for item in inherited_members})
+        if len(statuses) > 1:
+            status, conflict = "needs_review", True
+        else:
+            status = statuses[0]
+        inherited = True
+    else:
+        return None
+
+    record = chosen.get("record") or {}
+    facts = sorted(_strings(issue.get("fact_ids")))
+    evidence = sorted(_strings(issue.get("evidence_ids")))
+    resolved_from_issue_id = (
+        str(chosen.get("event_issue_id"))
+        if str(chosen.get("event_issue_id")) != canonical_id
+        else record.get("resolved_from_issue_id")
+    )
+    result = {
+        "issue_id": canonical_id,
+        "resolved_from_issue_id": resolved_from_issue_id,
+        "resolved_from_issue_ids": sorted({
+            str(item.get("event_issue_id")) for item in member_records
+            if item.get("event_issue_id")
+        }),
+        "title": issue.get("title") or record.get("title"),
+        "page": issue.get("page_number") if issue.get("page_number") is not None else _issue_page(issue),
+        "status": status,
+        "conflict": conflict,
+        "member_decisions": [_member_decision(item) for item in member_records],
+        **({"superseded_member_decisions": superseded} if superseded else {}),
+        "note": (
+            "成员结论冲突，需显式组级重新确认"
+            if conflict
+            else record.get("note")
+        ),
+        "analysis_revision": record.get("analysis_revision"),
+        "decision_revision": str(record.get("decision_revision") or "1"),
+        "inherited": inherited,
+        "actor": record.get("decision_actor"),
+        "updated_at": record.get("updated_at"),
+        "hide_from_results": bool(record.get("hide_from_results", False)),
+        "decision_origin": record.get("decision_origin") or "workflow",
+        "migration_id": record.get("migration_id"),
+        "check_relation_id": issue.get("check_relation_id"),
+        "fact_ids": facts,
+        "evidence_ids": evidence,
+        "identity_fingerprint": issue_identity_fingerprint(issue),
+    }
+    return result
+
+
 def project_job_issue_decisions(
     job_id: str, payload: Dict[str, Any], *, _state: Optional[Dict[str, Any]] = None
 ) -> List[Dict[str, Any]]:
-    """Project only decisions that still match this report revision or issue identity."""
+    """Project only decisions that still match this report revision or issue identity.
+
+    投影在丢弃旧成员 ID 之前完成组级聚合：显式当前规范决定优先；没有时按
+    当前成员决定聚合，成员结论冲突输出 ``needs_review``，不得挑一条放行。
+    """
     revision = str(payload.get("analysis_revision") or "")
     normalized_job_id = str(job_id or "").strip()
     if not revision:
@@ -806,7 +984,7 @@ def project_job_issue_decisions(
     for event in state.get("decision_events", []):
         if str(event.get("job_id") or "") == normalized_job_id:
             events_by_issue.setdefault(str(event.get("issue_id") or ""), []).append(event)
-    projected: List[Dict[str, Any]] = []
+    grouped: Dict[str, Dict[str, Any]] = {}
     for issue_id in sorted(events_by_issue):
         issue = _find_issue(payload, issue_id)
         if issue is None:
@@ -836,39 +1014,19 @@ def project_job_issue_decisions(
             else:
                 applies = same_revision or same_identity
             if applies:
-                matching_events.append((same_revision, event))
+                matching_events.append({"record": event, "same_revision": same_revision})
         if not matching_events:
             continue
-        # Prefer the decision recorded for this exact analysis. Otherwise the
-        # latest identity-compatible event may be inherited by a rerun.
-        _, record = max(
-            matching_events,
-            key=lambda pair: (
-                pair[0],
-                int(str(pair[1].get("decision_revision") or "0"))
-                if str(pair[1].get("decision_revision") or "0").isdigit() else 0,
-                str(pair[1].get("updated_at") or ""),
-            ),
-        )
-        same_revision = bool(revision and str(record.get("analysis_revision") or "") == revision)
-        projected.append(
-            {
-                "issue_id": issue_id,
-                "status": str(record.get("status") or "pending"),
-                "note": record.get("note"),
-                "analysis_revision": revision or str(record.get("analysis_revision") or ""),
-                "decision_revision": str(record.get("decision_revision") or "1"),
-                "inherited": not same_revision,
-                "actor": record.get("decision_actor"),
-                "hide_from_results": bool(record.get("hide_from_results", False)),
-                "decision_origin": record.get("decision_origin") or "workflow",
-                "migration_id": record.get("migration_id"),
-                "check_relation_id": issue.get("check_relation_id"),
-                "fact_ids": facts,
-                "evidence_ids": evidence,
-                "identity_fingerprint": issue_identity_fingerprint(issue),
-            }
-        )
+        latest = _pick_latest(matching_events)
+        canonical_id = str(issue.get("id") or issue_id)
+        bundle = grouped.setdefault(canonical_id, {"issue": issue, "records": []})
+        bundle["records"].append({"event_issue_id": issue_id, **latest})
+    projected = []
+    for canonical_id in sorted(grouped):
+        bundle = grouped[canonical_id]
+        projected_item = _project_group(canonical_id, bundle["issue"], bundle["records"])
+        if projected_item is not None:
+            projected.append(projected_item)
     return projected
 
 
@@ -1023,6 +1181,7 @@ def _decision_record(
     payload: Dict[str, Any], issue: Dict[str, Any], *, status: str,
     actor: Optional[str], note: Optional[str], hide_from_results: bool = False,
     origin: str = "workflow", migration_id: Optional[str] = None,
+    resolved_from_issue_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     revision = str(payload.get("analysis_revision") or "").strip()
     if not revision:
@@ -1038,7 +1197,9 @@ def _decision_record(
         "check_relation_id": str(issue.get("check_relation_id") or "").strip() or None,
         "fact_ids": _strings(issue.get("fact_ids")), "evidence_ids": _strings(issue.get("evidence_ids")),
         "identity_fingerprint": issue_identity_fingerprint(issue), "hide_from_results": hide_from_results,
-        "decision_origin": origin, "migration_id": migration_id, "updated_at": _now(),
+        "decision_origin": origin, "migration_id": migration_id,
+        "resolved_from_issue_id": resolved_from_issue_id,
+        "updated_at": _now(),
     }
 
 
@@ -1327,11 +1488,11 @@ async def update_issue(
     with _state_lock():
         state = _read_state()
         _require_issue_mutable(state, normalized_job_id)
-        payload, issue = _job_and_issue(user, normalized_job_id, normalized_issue_id)
+        payload, issue, resolved_from = _job_issue_and_alias(user, normalized_job_id, normalized_issue_id)
         _migrate_legacy_ignored_locked(state, normalized_job_id)
         record = _decision_record(payload, issue, status=normalized_status,
                                   actor=str(user.get("username") or user.get("user_id") or user.get("id") or "").strip() or None,
-                                  note=note)
+                                  note=note, resolved_from_issue_id=resolved_from)
         _record_decision(state, record)
         next_state = _write_state(state)
         runtime.invalidate_job_summary_cache(normalized_job_id)
@@ -1366,7 +1527,8 @@ async def create_package(
         issue = _find_issue(job_payloads[job_id], issue_id)
         if issue is None:
             raise HTTPException(status_code=404, detail=f"issue_id does not exist: {issue_id}")
-        resolved_issues.append((key, job_payloads[job_id], issue))
+        canonical_id = str(issue.get("id") or issue_id)
+        resolved_issues.append((f"{job_id}::{canonical_id}", job_payloads[job_id], issue))
 
     org_contexts = {_organization_context(payload) for payload in job_payloads.values()}
     organization_id, organization_name = next(iter(org_contexts)) if len(org_contexts) == 1 else (None, None)
@@ -1431,7 +1593,8 @@ async def create_package(
             "organization_id": organization_id,
             "organization_name": organization_name,
             "job_ids": normalized_job_ids,
-            "issue_keys": normalized_issue_keys,
+            "issue_keys": [key for key, _, _ in resolved_issues],
+            "requested_issue_keys": normalized_issue_keys,
             "report_snapshots": snapshots,
             "status": "ready",
             "created_at": now,

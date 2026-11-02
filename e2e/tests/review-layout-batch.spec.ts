@@ -32,7 +32,12 @@ async function reviewMocks(page: Page) {
       job_id: JOB_ID, filename: "布局回归测试.pdf", status: "review_required", report_year: 2026,
       result: {
         rule_findings: [verifiedIssue], ai_findings: [],
-        meta: {pages: 4, ai_execution: {state: "succeeded"}},
+        // AI 覆盖完整：状态只在状态条显示，这里测的是布局本身。
+        meta: {
+          pages: 4, ai_execution: {state: "succeeded", requested: true},
+          ai_coverage: {status: "complete", planned_calls: 2, succeeded_calls: 2, failed_calls: 0},
+          conclusion_scope: "findings_within_covered_checks",
+        },
       },
     });
     if (path === "/api/jobs") return json([{job_id: JOB_ID, status: "review_required"}]);
@@ -57,7 +62,29 @@ async function reviewMocks(page: Page) {
   });
 }
 
-test("左右对照：问题区默认 55% 宽，列表 + 详情占满阅读区，导航、缩略图、来源折叠可还原，证据与工作流保持联动", async ({page}) => {
+/** 处理计数与完成阻塞收在「完成条件」说明里：打开说明断言后关闭。 */
+async function expectStatusCounts(page: Page, text: string) {
+  await page.getByTestId("gbc-review-state-progress").click();
+  await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText(text);
+  await page.getByTestId("gbc-review-info-panel-close").click();
+}
+
+/** text 为 null 表示服务端门禁已无阻塞。 */
+async function expectGateBlockers(page: Page, text: string | null) {
+  await page.getByTestId("gbc-review-state-progress").click();
+  if (text === null) await expect(page.getByTestId("gbc-review-gate-blockers")).toHaveCount(0);
+  else await expect(page.getByTestId("gbc-review-gate-blockers")).toContainText(text);
+  await page.getByTestId("gbc-review-info-panel-close").click();
+}
+
+/** 问题列表按需展开：断言列表行之前先展开（已展开时不重复点击）。 */
+async function openIssueList(page: Page) {
+  const toggle = page.getByTestId("gbc-review-toggle-list");
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  await expect(page.getByTestId("gbc-review-list-panel")).toBeVisible();
+}
+
+test("原文与完整解释并排：解释区占满问题栏，列表按需展开，放大解释保留原文，证据与工作流保持联动", async ({page}) => {
   await page.setViewportSize({width: 1440, height: 900});
   await session(page);
   await reviewMocks(page);
@@ -66,19 +93,20 @@ test("左右对照：问题区默认 55% 宽，列表 + 详情占满阅读区，
   await expect(page.getByTestId("gbc-workspace-sidebar")).toHaveAttribute("data-collapsed", "true");
   await expect(page.getByTestId("gbc-review-thumbnail-rail")).toHaveCount(0);
   await expect(page.getByTestId("gbc-review-source-summary")).toHaveCount(0);
-  await expect(page.getByTestId("gbc-review-issues-count")).toContainText("正式问题（1）");
   const main = await page.getByTestId("gbc-review-split-pane").boundingBox();
   const problems = await page.getByTestId("gbc-review-problems-pane").boundingBox();
-  const list = await page.getByTestId("gbc-review-issues-list").boundingBox();
   const detail = await page.getByTestId("gbc-review-issue-detail-pane").boundingBox();
-  expect(problems!.width / main!.width).toBeGreaterThan(0.52);
-  expect((list!.height + detail!.height) / main!.height).toBeGreaterThan(0.75);
+  expect(problems!.width / main!.width).toBeGreaterThan(0.45);
+  // 列表默认收起，解释区独占问题栏的大部分高度。
+  await expect(page.getByTestId("gbc-review-list-panel")).toHaveCount(0);
+  expect(detail!.height / main!.height).toBeGreaterThan(0.6);
   // 打开即选中首条：详情与原文都对应它，不用先点一下。
-  await expect(page.getByTestId("gbc-review-issue-card-layout-issue")).toHaveAttribute("aria-current", "true");
   await expect(page.getByTestId("gbc-review-issue-detail")).toHaveAttribute("data-detail-problem-id", "layout-issue");
   await expect(page.getByTestId("gbc-review-pdf-page-input")).toHaveValue("2");
-  // 三组筛选默认收起，只占一行。
-  await expect(page.getByTestId("gbc-review-filter-panel")).toHaveCount(0);
+  await openIssueList(page);
+  await expect(page.getByTestId("gbc-review-issues-count")).toContainText("正式问题（1）");
+  await expect(page.getByTestId("gbc-review-issue-card-layout-issue")).toHaveAttribute("aria-current", "true");
+  await page.getByTestId("gbc-review-close-list").click();
 
   await page.getByTestId("gbc-workspace-sidebar-toggle").click();
   await expect(page.getByTestId("gbc-workspace-sidebar")).toHaveAttribute("data-collapsed", "false");
@@ -86,32 +114,37 @@ test("左右对照：问题区默认 55% 宽，列表 + 详情占满阅读区，
   await page.getByTestId("gbc-review-toggle-thumbnails").click();
   await expect(page.getByTestId("gbc-review-thumbnail-rail")).toBeVisible();
   await page.getByTestId("gbc-review-toggle-thumbnails").click();
+  await openIssueList(page);
   await page.getByTestId("gbc-review-toggle-source-details").click();
   await expect(page.getByTestId("gbc-review-source-summary")).toBeVisible();
   await page.getByTestId("gbc-review-toggle-source-details").click();
+  await page.getByTestId("gbc-review-close-list").click();
   const handle = page.getByTestId("gbc-review-resize-handle");
   await handle.focus();
   await page.keyboard.press("ArrowLeft");
-  await expect(handle).toHaveAttribute("aria-valuenow", "43");
+  await expect(handle).toHaveAttribute("aria-valuenow", "48");
   const bounds = await handle.boundingBox();
   await page.mouse.move(bounds!.x + bounds!.width / 2, bounds!.y + 30);
   await page.mouse.down();
   await page.mouse.move(bounds!.x - 70, bounds!.y + 30);
   await page.mouse.up();
-  expect(Number(await handle.getAttribute("aria-valuenow"))).toBeLessThan(43);
+  expect(Number(await handle.getAttribute("aria-valuenow"))).toBeLessThan(48);
   await handle.focus();
   await page.keyboard.press("Home");
-  await expect(handle).toHaveAttribute("aria-valuenow", "45");
+  await expect(handle).toHaveAttribute("aria-valuenow", "50");
   // 拖动后的宽度按浏览器记住，刷新后仍然生效。
   await page.keyboard.press("ArrowRight");
   await page.reload();
-  await expect(page.getByTestId("gbc-review-resize-handle")).toHaveAttribute("aria-valuenow", "47");
+  await expect(page.getByTestId("gbc-review-resize-handle")).toHaveAttribute("aria-valuenow", "52");
   await handle.focus();
   await page.keyboard.press("Home");
-  await page.getByTestId("gbc-review-expand-issues").click();
-  await expect(page.getByTestId("gbc-review-document-pane")).toBeHidden();
-  await page.getByTestId("gbc-review-issue-card-layout-issue").click();
+  // 放大解释：原文栏收窄但仍在，页签收起；还原后回到原宽度。
+  await page.getByTestId("gbc-review-focus-toggle").click();
   await expect(page.getByTestId("gbc-review-document-pane")).toBeVisible();
+  await expect(handle).toHaveAttribute("aria-valuenow", "36");
+  await expect(page.getByTestId("gbc-review-tabs")).toHaveCount(0);
+  await page.getByTestId("gbc-review-focus-toggle").click();
+  await expect(handle).toHaveAttribute("aria-valuenow", "50");
   await expect(page.getByTestId("gbc-review-pdf-page-input")).toHaveValue("2");
   await expect(page.getByTestId("gbc-review-evidence-highlight")).toBeVisible();
   await page.getByTestId("gbc-review-pdf-zoom-in").click();
@@ -121,19 +154,20 @@ test("左右对照：问题区默认 55% 宽，列表 + 详情占满阅读区，
   await expect(page.getByTestId("gbc-review-pdf-zoom-level")).toHaveText("100%");
   await page.screenshot({path: "output/ui-layout-batch/review-workbench.png"});
   await page.getByTestId("gbc-review-issue-confirm-layout-issue").click();
-  await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("已确认 1");
-  await page.getByTestId("gbc-review-toggle-filters").click();
-  await page.getByTestId("gbc-review-category-degraded").click();
+  await expectStatusCounts(page, "已确认 1");
   await expect(page.getByTestId("gbc-review-issues-empty")).toBeVisible();
-  await page.getByTestId("gbc-review-category-all").click();
+  await openIssueList(page);
   await page.getByTestId("gbc-review-source-rule").click();
   await expect(page.getByTestId("gbc-review-issue-card-layout-issue")).toHaveCount(0);
+  await openIssueList(page);
   await page.getByTestId("gbc-review-scope-all").click();
   await expect(page.getByTestId("gbc-review-issue-card-layout-issue")).toBeVisible();
   await page.reload();
-  await expect(page.getByTestId("gbc-review-status-bar-counts")).toContainText("已确认 1");
+  await expectStatusCounts(page, "已确认 1");
+  await page.getByTestId("gbc-review-tab-more").click();
   await page.getByTestId("gbc-review-tab-metadata").click();
   await expect(page.getByTestId("gbc-review-metadata-tab")).toBeVisible();
+  await page.getByTestId("gbc-review-tab-more").click();
   await page.getByTestId("gbc-review-tab-stages").click();
   await expect(page.getByTestId("gbc-review-stage-history-tab")).toBeVisible();
 });
@@ -202,7 +236,7 @@ test("左右对照在较小窗口中仍有独立滚动的问题阅读区", async
   await reviewMocks(page);
   await page.setViewportSize({width: 1024, height: 720});
   await page.goto(`/review?job=${JOB_ID}`);
-  await expect(page.getByTestId("gbc-review-issues-list")).toBeVisible();
+  await expect(page.getByTestId("gbc-review-issue-detail")).toBeVisible();
   expect(await page.locator("body").evaluate((body) => body.scrollWidth <= window.innerWidth)).toBe(true);
   const height = await page.getByTestId("gbc-review-issue-detail-pane").evaluate((element) => element.clientHeight);
   expect(height).toBeGreaterThan(300);

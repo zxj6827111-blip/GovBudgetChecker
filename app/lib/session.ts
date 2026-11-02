@@ -1,4 +1,5 @@
-export const SESSION_COOKIE_NAME = "gbc_session";
+// 本地验收与正式入口可并行运行，分别使用 Cookie，避免不同端口的会话互相覆盖。
+export const SESSION_COOKIE_NAME = process.env.GBC_SESSION_COOKIE_NAME?.trim() || "gbc_session";
 
 export const SESSION_MAX_AGE_SECONDS = Number(
   process.env.GBC_SESSION_MAX_AGE_SECONDS ?? 8 * 60 * 60

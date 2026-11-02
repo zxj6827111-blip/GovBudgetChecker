@@ -45,6 +45,8 @@ class Organization(BaseModel):
     parent_id: Optional[str] = Field(None, description="上级组织ID")
     code: Optional[str] = Field(None, description="组织代码（可选）")
     keywords: List[str] = Field(default_factory=list, description="用于匹配的关键词")
+    verified_reporting_unit: Optional[Dict[str, Any]] = Field(None, description="用户核实的独立报送属性，含 source 与 years；默认未核实")
+    name_warning_confirmation: Optional[Dict[str, Any]] = Field(None, description="尾部名称污染警告的人工确认记录")
     created_at: float = Field(default_factory=time.time, description="创建时间")
     updated_at: float = Field(default_factory=time.time, description="更新时间")
     

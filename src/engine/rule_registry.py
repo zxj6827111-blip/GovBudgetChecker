@@ -13,8 +13,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, List, Tuple
 
 from . import budget_rules, common_rules, rules_v33
+from .rule_identity import FULL_IDENTITY, required_identity_dimensions
 
-RULE_REGISTRY_VERSION = "python-rule-registry-v2-profile-scope"
+RULE_REGISTRY_VERSION = "python-rule-registry-v3-writing-scope"
 EVALUATION_BASIS_LEGACY = "legacy_document"
 EVALUATION_BASIS_FACT = "fiscal_fact"
 
@@ -46,6 +47,7 @@ class RuleRegistration:
     evaluation_basis: str = EVALUATION_BASIS_LEGACY
     fact_inputs: Tuple[str, ...] = ()
     fact_migration: str = "pending"
+    required_identity_dimensions: Tuple[str, ...] = FULL_IDENTITY
 
 
 def _registrations() -> List[RuleRegistration]:
@@ -62,13 +64,14 @@ def _registrations() -> List[RuleRegistration]:
             registration = RuleRegistration(
                 rule_id=rule_id,
                 implementation=rule,
-                report_kinds=kinds,
+                report_kinds=("final","budget") if rule_id == "CMM-027" else kinds,
                 rule_family=family,
                 evaluation_basis=(
                     EVALUATION_BASIS_FACT if fact_inputs else EVALUATION_BASIS_LEGACY
                 ),
                 fact_inputs=fact_inputs,
                 fact_migration="complete" if fact_inputs else "pending",
+                required_identity_dimensions=required_identity_dimensions(rule_id),
             )
             if not registration.rule_id:
                 raise RuntimeError("rule registry contains an implementation without a code")
@@ -81,11 +84,17 @@ def _registrations() -> List[RuleRegistration]:
 def select_rules(report_kind: str) -> List[Any]:
     """Return canonical execution order for a known kind, or common rules only."""
     kind = str(report_kind or "unknown").strip().lower()
-    return [*select_specific_rules(kind), *common_rules.ALL_COMMON_RULES]
+    if kind == "non_budget":
+        return []
+    from src.services.material_writing import budget_enabled
+    common = [r for r in common_rules.ALL_COMMON_RULES if r.code != "CMM-027" or kind == "final" or (kind == "budget" and budget_enabled())]
+    return [*select_specific_rules(kind), *common]
 
 
 def restrict_rules_to_profile(rules, profile):
     """检查能力与报告口径一致；排除专项检查时账本必须保留能力缺口。"""
+    if getattr(profile, "kind", None) == "non_budget":
+        return []
     if getattr(profile, 'unsupported_reason', None) == 'government_mixed_period_report':
         # 重复词检查不需要部门九表，也不将不同期间的金额串起来复算。
         return [rule for rule in rules if getattr(rule, 'code', None) == 'CMM-002']
@@ -137,6 +146,7 @@ def rule_catalog() -> Dict[str, Any]:
                 "obligation_ids": obligation_ids_for_rule(item.rule_id),
                 "fact_inputs": list(item.fact_inputs),
                 "fact_migration": item.fact_migration,
+                "required_identity_dimensions": list(item.required_identity_dimensions),
             }
             for item in _registrations()
         ],

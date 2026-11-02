@@ -9,7 +9,7 @@
  * 组织匹配置信度不足（后端 current=null，即 confidence < 0.6）。
  *
  * 前置修复 1：needs_confirmation 状态的文件会额外显示"补齐"按钮，点击后
- * 展开 UploadConfirmationPanel 单文件编辑表单——这是"分析前确认闸门"必须提供的
+ * 打开 UploadConfirmationPanel 单文件确认侧栏——这是"分析前确认闸门"必须提供的
  * 解决路径的前端入口，具体的状态解除逻辑在 UploadCenterPage 里完成。
  */
 "use client";
@@ -76,6 +76,8 @@ export function UploadFileList({ entries, onRemove, onManualConfirm }: UploadFil
       {entries.map((entry) => {
         const badge = resolveStatusBadge(entry);
         const confirmationReasons = listPreflightConfirmationReasons(entry.preflight);
+        const onlyOrganizationMissing = confirmationReasons.length === 1 &&
+          (confirmationReasons[0] === "low_confidence_org" || confirmationReasons[0] === "organization_scope_unconfirmed");
         const isExpanded = expandedEntryId === entry.id;
         return (
           <li key={entry.id} className="py-3" data-testid={`gbc-upload-file-row-${entry.id}`}>
@@ -88,6 +90,11 @@ export function UploadFileList({ entries, onRemove, onManualConfirm }: UploadFil
                   {formatFileSizeMb(entry.file.size)} · {formatPageCountText(entry.pageCount)}
                   {entry.errorMessage ? ` · ${entry.errorMessage}` : ""}
                 </div>
+                {entry.preflight?.current?.organization_path ? (
+                  <div className="mt-1 break-words text-xs text-slate-600" data-testid="gbc-upload-confirmed-organization">
+                    {entry.preflight.current.organization_path} · {entry.preflight.current.level === "unit" ? "单位材料" : "部门汇总"}
+                  </div>
+                ) : null}
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <Badge tone={badge.tone}>{badge.label}</Badge>
@@ -98,7 +105,7 @@ export function UploadFileList({ entries, onRemove, onManualConfirm }: UploadFil
                     onClick={() => setExpandedEntryId(isExpanded ? null : entry.id)}
                     data-testid={`gbc-upload-file-confirm-toggle-${entry.id}`}
                   >
-                    补齐
+                    {onlyOrganizationMissing ? "确认归属" : "补齐"}
                   </Button>
                 ) : null}
                 <button
@@ -117,6 +124,7 @@ export function UploadFileList({ entries, onRemove, onManualConfirm }: UploadFil
               <UploadConfirmationPanel
                 fileName={entry.file.name}
                 reasons={confirmationReasons}
+                preflight={entry.preflight}
                 onSave={(override) => {
                   onManualConfirm(entry.id, override);
                   setExpandedEntryId(null);

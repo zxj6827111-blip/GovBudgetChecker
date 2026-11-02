@@ -157,6 +157,9 @@ class EngineRuleRunner:
             location_level in {"exact_cell", "exact_span"}
             and verification_status == "verified"
         )
+        expected, actual, difference, check, table_or_section, amounts_provenance, calculation_basis = (
+            self._calculation_fields(location, resolved_rule_id, rule_version)
+        )
 
         return IssueItem(
             id=str(uuid.uuid4()),
@@ -172,6 +175,13 @@ class EngineRuleRunner:
             location_level=location_level,
             verification_status=verification_status,
             suggestion=suggestion,
+            expected=expected,
+            actual=actual,
+            difference=difference,
+            check=check,
+            table_or_section=table_or_section,
+            amounts_provenance=amounts_provenance,
+            calculation_basis=calculation_basis,
             tags=[resolved_rule_id] if resolved_rule_id else [],
             # AC-11：规则侧关系/事实身份透传（引擎 Issue 未来携带 fact_ids 时
             # 与 AI 候选建立精确配对；现在保留通道，不再在适配层丢弃）。
@@ -190,6 +200,50 @@ class EngineRuleRunner:
             # 与引擎版本；模型/提示词版本留空，因为这条问题不经过任何 AI 调用。
             rule_version=rule_version,
             engine_version=ENGINE_VERSION,
+        )
+
+    @staticmethod
+    def _calculation_fields(
+        location: Dict[str, Any],
+        rule_id: str,
+        rule_version: Optional[str],
+    ) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str], Optional[str], Optional[str], Optional[Dict[str, Any]]]:
+        """把规则已核实的两侧金额/差额放到统一解释字段。
+
+        ``expected`` 只表示“表内一侧”，不冒充已确认的正确值；正确侧仍需人工判断。
+        """
+        actual = location.get("declared_amount_wan") or location.get("actual")
+        expected = location.get("table_amount_wan") or location.get("expected")
+        difference = location.get("difference_wan") or location.get("difference") or location.get("diff")
+        check = location.get("relation_type") or location.get("check")
+        table_or_section = location.get("section") or location.get("table") or location.get("table_code")
+        if not any(value not in (None, "") for value in (expected, actual, difference)):
+            return (
+                None,
+                None,
+                None,
+                str(check) if check else None,
+                str(table_or_section) if table_or_section else None,
+                None,
+                None,
+            )
+        basis = {
+            "source": "fact_context",
+            "verified": True,
+            "basis": "表内金额与说明金额由规则基于已定位事实比较；正确侧需人工确认",
+            "unit": "万元",
+            "precision": 2,
+            "rule_version": rule_version or rule_id,
+            "correct_side": None,
+        }
+        return (
+            str(expected) if expected not in (None, "") else None,
+            str(actual) if actual not in (None, "") else None,
+            str(difference) if difference not in (None, "") else None,
+            str(check) if check else None,
+            str(table_or_section) if table_or_section else None,
+            "program_calculated",
+            basis,
         )
 
     def _convert_and_locate_issues(
@@ -305,6 +359,8 @@ class EngineRuleRunner:
         # 独立验收 2026-09-17 kind_disagreement 反例整改）。
         if document is not None:
             document.report_kind = report_kind
+            document.writing_page_texts = (job_context.meta or {}).get("writing_page_texts")
+            document.writing_source_spans = (job_context.meta or {}).get("writing_source_spans") or []
             profile_snapshot = (job_context.meta or {}).get("document_profile")
             if isinstance(profile_snapshot, dict):
                 from src.schemas.document_profile import DocumentProfile
@@ -315,6 +371,8 @@ class EngineRuleRunner:
         from src.services.document_profile_resolver import resolve_document_profile
         profile = getattr(document, 'document_profile', None) or resolve_document_profile(
             path=str(getattr(document, 'path', '') or ''), page_texts=getattr(document, 'page_texts', []) or [])
+        from src.services.material_writing import ensure_document_resolution
+        ensure_document_resolution(document, profile)
         selected_rules = restrict_rules_to_profile(selected_rules, profile)
         update_progress(job_context.job_id, "local", state="running", total=len(selected_rules), completed=0, current_step="开始本地规则检查")
         # 版本留痕（P2-02）：本次实际生效的规则集版本，逐条写进 finding。
@@ -346,7 +404,9 @@ class EngineRuleRunner:
 
                     # 鐩存帴璋冪敤瑙勫垯瀵硅薄鐨刟pply鏂规硶
                     document.current_rule_code = rule_id
-                    issues = rule_obj.apply(document)
+                    from src.engine.rule_identity import rule_identity_requirements
+                    with rule_identity_requirements(document, rule_id):
+                        issues = rule_obj.apply(document)
 
                     int((time.time() - start_time) * 1000)
 
@@ -433,6 +493,7 @@ class EngineRuleRunner:
                             detail=detail_str,
                             partial_findings_count=len(findings),
                             unresolved_reasons=unresolved,
+                            reason_codes=list(getattr(signal, "reason_codes", []) or []),
                         )
                     )
                     logger.info(

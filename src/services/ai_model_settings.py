@@ -24,8 +24,20 @@ class ModelProfile(BaseModel):
     base_url: str = Field(min_length=1, max_length=500)
     model: str = Field(min_length=1, max_length=150)
     api_key: str | None = Field(default=None, max_length=4096, repr=False)
-    timeout_s: int = Field(default=90, ge=10, le=300)
+    timeout_s: int = Field(default=90, ge=10, le=600)
     max_tokens: int = Field(default=4000, ge=512, le=64000)
+    reasoning_effort: str | None = None
+    thinking: bool = False
+
+    @field_validator("reasoning_effort")
+    @classmethod
+    def validate_reasoning_effort(cls, value: str | None) -> str | None:
+        if value is None or not str(value).strip():
+            return None
+        value = str(value).strip().lower()
+        if value not in {"low", "medium", "high", "max"}:
+            raise ValueError("推理强度仅支持 low、medium、high、max")
+        return value
 
     @field_validator("id")
     @classmethod
@@ -132,7 +144,7 @@ def _read(path: Path) -> dict[str, Any]:
 def public_settings(data: dict[str, Any]) -> dict[str, Any]:
     return {
         **{key: data.get(key) for key in ("revision", "enabled", "default_use_ai", "active_profile_id", "updated_at")},
-        "profiles": [{**{key: p.get(key) for key in ("id", "name", "provider_type", "base_url", "model", "timeout_s", "max_tokens")},
+        "profiles": [{**{key: p.get(key) for key in ("id", "name", "provider_type", "base_url", "model", "timeout_s", "max_tokens", "reasoning_effort", "thinking")},
                       "has_api_key": bool(p.get("encrypted_api_key"))} for p in data["profiles"]],
     }
 
@@ -196,6 +208,7 @@ def resolve_runtime(profile_id: str | None = None, *, for_test: bool = False, dr
         except InvalidToken as exc:
             raise ValueError("模型密钥无法解密，请重新保存 API 密钥") from exc
     return {**{k: profile[k] for k in ("id", "name", "provider_type", "base_url", "model", "timeout_s", "max_tokens")},
+            "reasoning_effort": profile.get("reasoning_effort"), "thinking": bool(profile.get("thinking")),
             "api_key": key, "enabled": True, "revision": data["revision"]}
 
 

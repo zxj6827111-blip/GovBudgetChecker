@@ -148,3 +148,28 @@ async def test_legacy_consumer_cannot_reinterpret_or_overwrite_a_published_snaps
     conn.execute.assert_not_awaited()
     conn.fetch.assert_not_awaited()
     conn.fetchrow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_shared_publication_keeps_explicit_unit_identity_even_when_names_match_department(monkeypatch):
+    from unittest.mock import MagicMock
+    from src.services import fact_compatibility_projection as projection
+    from src.services import parse_artifact_store, pdf_parser, table_recognizer, ps_schema_sync
+    value = snapshot()
+    artifact = ParseArtifact(source_file_hash='a'*64, parse_run_uid='run')
+    document = {'document_id':2,'document_version_id':3,'fiscal_year':2024,'doc_type':'dept_final',
+                'subject_org_id':'confirmed-unit','org_name':'上海市信访办公室','storage_key':'source.pdf',
+                'original_filename':'source.pdf','file_size_bytes':100}
+    conn = SimpleNamespace(fetchrow=AsyncMock(side_effect=[document,None]), execute=AsyncMock())
+    monkeypatch.setattr(parse_artifact_store,'load_parse_artifact',AsyncMock(return_value=artifact))
+    monkeypatch.setattr(projection,'archive_legacy_projection',AsyncMock())
+    monkeypatch.setattr(projection,'effective_legacy_artifact',lambda a,s:a)
+    monkeypatch.setattr(projection,'verify_legacy_fact_projection',AsyncMock())
+    parser = SimpleNamespace(persist_artifact_to_legacy_tables=AsyncMock(return_value={'success':True}))
+    monkeypatch.setattr(pdf_parser,'PDFParser',MagicMock(return_value=parser))
+    recognizer = SimpleNamespace(recognize_tables=AsyncMock(return_value=[]),save_table_instances=AsyncMock())
+    monkeypatch.setattr(table_recognizer,'TableRecognizer',MagicMock(return_value=recognizer))
+    sync = AsyncMock(return_value={'status':'done','report_id':'00000000-0000-0000-0000-000000000001'})
+    monkeypatch.setattr(ps_schema_sync.PSSharedSchemaSync,'sync',sync)
+    await projection.publish_compatibility_projection(conn,value,5)
+    assert sync.await_args.kwargs['organization_id'] == 'confirmed-unit'

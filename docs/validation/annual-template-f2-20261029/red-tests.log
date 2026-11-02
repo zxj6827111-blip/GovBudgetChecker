@@ -1,0 +1,648 @@
+FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF............F.                    [100%]
+=================================== FAILURES ===================================
+_ test_quoted_numbered_section_is_not_a_real_heading[three-\u5f15\u7528\uff1a] _
+
+prefix = '引用：', text = '新增政策\n执行情况\n说明'
+
+    @pytest.mark.parametrize("prefix", ["引用：", "本报告尚未提供", "例如："])
+    @pytest.mark.parametrize("text", ["新增政策\n执行情况\n说明", "新增\n政策执行\n情况\n说明",
+                                      "\n".join("新增政策执行情况说明")], ids=["three", "four", "many"])
+    def test_quoted_numbered_section_is_not_a_real_heading(prefix, text):
+        title = "新增政策执行情况说明"
+        anchor = {"kind": "normative_section", "scope": "all", "text": title, "basis": "independent F2 counterexample"}
+        doc = document(["2025年度决算", prefix + "\n一、\n" + text], fixture_resolution([anchor]))
+>       assert not _headings(doc, title)
+E       AssertionError: assert not [{'end': 19, 'page': 2, 'start': 7, 'text': '新增政策执行情况说明'}]
+E        +  where [{'end': 19, 'page': 2, 'start': 7, 'text': '新增政策执行情况说明'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '引用：\n一、\n新增政策...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '新增政策执行情况说明')
+
+tests/test_template_heading_context.py:20: AssertionError
+_ test_quoted_numbered_section_is_not_a_real_heading[three-\u672c\u62a5\u544a\u5c1a\u672a\u63d0\u4f9b] _
+
+prefix = '本报告尚未提供', text = '新增政策\n执行情况\n说明'
+
+    @pytest.mark.parametrize("prefix", ["引用：", "本报告尚未提供", "例如："])
+    @pytest.mark.parametrize("text", ["新增政策\n执行情况\n说明", "新增\n政策执行\n情况\n说明",
+                                      "\n".join("新增政策执行情况说明")], ids=["three", "four", "many"])
+    def test_quoted_numbered_section_is_not_a_real_heading(prefix, text):
+        title = "新增政策执行情况说明"
+        anchor = {"kind": "normative_section", "scope": "all", "text": title, "basis": "independent F2 counterexample"}
+        doc = document(["2025年度决算", prefix + "\n一、\n" + text], fixture_resolution([anchor]))
+>       assert not _headings(doc, title)
+E       AssertionError: assert not [{'end': 23, 'page': 2, 'start': 11, 'text': '新增政策执行情况说明'}]
+E        +  where [{'end': 23, 'page': 2, 'start': 11, 'text': '新增政策执行情况说明'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '本报告尚未提供\n一、\n...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '新增政策执行情况说明')
+
+tests/test_template_heading_context.py:20: AssertionError
+_ test_quoted_numbered_section_is_not_a_real_heading[three-\u4f8b\u5982\uff1a] _
+
+prefix = '例如：', text = '新增政策\n执行情况\n说明'
+
+    @pytest.mark.parametrize("prefix", ["引用：", "本报告尚未提供", "例如："])
+    @pytest.mark.parametrize("text", ["新增政策\n执行情况\n说明", "新增\n政策执行\n情况\n说明",
+                                      "\n".join("新增政策执行情况说明")], ids=["three", "four", "many"])
+    def test_quoted_numbered_section_is_not_a_real_heading(prefix, text):
+        title = "新增政策执行情况说明"
+        anchor = {"kind": "normative_section", "scope": "all", "text": title, "basis": "independent F2 counterexample"}
+        doc = document(["2025年度决算", prefix + "\n一、\n" + text], fixture_resolution([anchor]))
+>       assert not _headings(doc, title)
+E       AssertionError: assert not [{'end': 19, 'page': 2, 'start': 7, 'text': '新增政策执行情况说明'}]
+E        +  where [{'end': 19, 'page': 2, 'start': 7, 'text': '新增政策执行情况说明'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '例如：\n一、\n新增政策...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '新增政策执行情况说明')
+
+tests/test_template_heading_context.py:20: AssertionError
+_ test_quoted_numbered_section_is_not_a_real_heading[four-\u5f15\u7528\uff1a] __
+
+prefix = '引用：', text = '新增\n政策执行\n情况\n说明'
+
+    @pytest.mark.parametrize("prefix", ["引用：", "本报告尚未提供", "例如："])
+    @pytest.mark.parametrize("text", ["新增政策\n执行情况\n说明", "新增\n政策执行\n情况\n说明",
+                                      "\n".join("新增政策执行情况说明")], ids=["three", "four", "many"])
+    def test_quoted_numbered_section_is_not_a_real_heading(prefix, text):
+        title = "新增政策执行情况说明"
+        anchor = {"kind": "normative_section", "scope": "all", "text": title, "basis": "independent F2 counterexample"}
+        doc = document(["2025年度决算", prefix + "\n一、\n" + text], fixture_resolution([anchor]))
+>       assert not _headings(doc, title)
+E       AssertionError: assert not [{'end': 20, 'page': 2, 'start': 7, 'text': '新增政策执行情况说明'}]
+E        +  where [{'end': 20, 'page': 2, 'start': 7, 'text': '新增政策执行情况说明'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '引用：\n一、\n新增\n...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '新增政策执行情况说明')
+
+tests/test_template_heading_context.py:20: AssertionError
+_ test_quoted_numbered_section_is_not_a_real_heading[four-\u672c\u62a5\u544a\u5c1a\u672a\u63d0\u4f9b] _
+
+prefix = '本报告尚未提供', text = '新增\n政策执行\n情况\n说明'
+
+    @pytest.mark.parametrize("prefix", ["引用：", "本报告尚未提供", "例如："])
+    @pytest.mark.parametrize("text", ["新增政策\n执行情况\n说明", "新增\n政策执行\n情况\n说明",
+                                      "\n".join("新增政策执行情况说明")], ids=["three", "four", "many"])
+    def test_quoted_numbered_section_is_not_a_real_heading(prefix, text):
+        title = "新增政策执行情况说明"
+        anchor = {"kind": "normative_section", "scope": "all", "text": title, "basis": "independent F2 counterexample"}
+        doc = document(["2025年度决算", prefix + "\n一、\n" + text], fixture_resolution([anchor]))
+>       assert not _headings(doc, title)
+E       AssertionError: assert not [{'end': 24, 'page': 2, 'start': 11, 'text': '新增政策执行情况说明'}]
+E        +  where [{'end': 24, 'page': 2, 'start': 11, 'text': '新增政策执行情况说明'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '本报告尚未提供\n一、\n...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '新增政策执行情况说明')
+
+tests/test_template_heading_context.py:20: AssertionError
+_ test_quoted_numbered_section_is_not_a_real_heading[four-\u4f8b\u5982\uff1a] __
+
+prefix = '例如：', text = '新增\n政策执行\n情况\n说明'
+
+    @pytest.mark.parametrize("prefix", ["引用：", "本报告尚未提供", "例如："])
+    @pytest.mark.parametrize("text", ["新增政策\n执行情况\n说明", "新增\n政策执行\n情况\n说明",
+                                      "\n".join("新增政策执行情况说明")], ids=["three", "four", "many"])
+    def test_quoted_numbered_section_is_not_a_real_heading(prefix, text):
+        title = "新增政策执行情况说明"
+        anchor = {"kind": "normative_section", "scope": "all", "text": title, "basis": "independent F2 counterexample"}
+        doc = document(["2025年度决算", prefix + "\n一、\n" + text], fixture_resolution([anchor]))
+>       assert not _headings(doc, title)
+E       AssertionError: assert not [{'end': 20, 'page': 2, 'start': 7, 'text': '新增政策执行情况说明'}]
+E        +  where [{'end': 20, 'page': 2, 'start': 7, 'text': '新增政策执行情况说明'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '例如：\n一、\n新增\n...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '新增政策执行情况说明')
+
+tests/test_template_heading_context.py:20: AssertionError
+_ test_quoted_numbered_section_is_not_a_real_heading[many-\u5f15\u7528\uff1a] __
+
+prefix = '引用：', text = '新\n增\n政\n策\n执\n行\n情\n况\n说\n明'
+
+    @pytest.mark.parametrize("prefix", ["引用：", "本报告尚未提供", "例如："])
+    @pytest.mark.parametrize("text", ["新增政策\n执行情况\n说明", "新增\n政策执行\n情况\n说明",
+                                      "\n".join("新增政策执行情况说明")], ids=["three", "four", "many"])
+    def test_quoted_numbered_section_is_not_a_real_heading(prefix, text):
+        title = "新增政策执行情况说明"
+        anchor = {"kind": "normative_section", "scope": "all", "text": title, "basis": "independent F2 counterexample"}
+        doc = document(["2025年度决算", prefix + "\n一、\n" + text], fixture_resolution([anchor]))
+>       assert not _headings(doc, title)
+E       AssertionError: assert not [{'end': 26, 'page': 2, 'start': 7, 'text': '新增政策执行情况说明'}]
+E        +  where [{'end': 26, 'page': 2, 'start': 7, 'text': '新增政策执行情况说明'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '引用：\n一、\n新\n增...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '新增政策执行情况说明')
+
+tests/test_template_heading_context.py:20: AssertionError
+_ test_quoted_numbered_section_is_not_a_real_heading[many-\u672c\u62a5\u544a\u5c1a\u672a\u63d0\u4f9b] _
+
+prefix = '本报告尚未提供', text = '新\n增\n政\n策\n执\n行\n情\n况\n说\n明'
+
+    @pytest.mark.parametrize("prefix", ["引用：", "本报告尚未提供", "例如："])
+    @pytest.mark.parametrize("text", ["新增政策\n执行情况\n说明", "新增\n政策执行\n情况\n说明",
+                                      "\n".join("新增政策执行情况说明")], ids=["three", "four", "many"])
+    def test_quoted_numbered_section_is_not_a_real_heading(prefix, text):
+        title = "新增政策执行情况说明"
+        anchor = {"kind": "normative_section", "scope": "all", "text": title, "basis": "independent F2 counterexample"}
+        doc = document(["2025年度决算", prefix + "\n一、\n" + text], fixture_resolution([anchor]))
+>       assert not _headings(doc, title)
+E       AssertionError: assert not [{'end': 30, 'page': 2, 'start': 11, 'text': '新增政策执行情况说明'}]
+E        +  where [{'end': 30, 'page': 2, 'start': 11, 'text': '新增政策执行情况说明'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '本报告尚未提供\n一、\n...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '新增政策执行情况说明')
+
+tests/test_template_heading_context.py:20: AssertionError
+_ test_quoted_numbered_section_is_not_a_real_heading[many-\u4f8b\u5982\uff1a] __
+
+prefix = '例如：', text = '新\n增\n政\n策\n执\n行\n情\n况\n说\n明'
+
+    @pytest.mark.parametrize("prefix", ["引用：", "本报告尚未提供", "例如："])
+    @pytest.mark.parametrize("text", ["新增政策\n执行情况\n说明", "新增\n政策执行\n情况\n说明",
+                                      "\n".join("新增政策执行情况说明")], ids=["three", "four", "many"])
+    def test_quoted_numbered_section_is_not_a_real_heading(prefix, text):
+        title = "新增政策执行情况说明"
+        anchor = {"kind": "normative_section", "scope": "all", "text": title, "basis": "independent F2 counterexample"}
+        doc = document(["2025年度决算", prefix + "\n一、\n" + text], fixture_resolution([anchor]))
+>       assert not _headings(doc, title)
+E       AssertionError: assert not [{'end': 26, 'page': 2, 'start': 7, 'text': '新增政策执行情况说明'}]
+E        +  where [{'end': 26, 'page': 2, 'start': 7, 'text': '新增政策执行情况说明'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '例如：\n一、\n新\n增...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '新增政策执行情况说明')
+
+tests/test_template_heading_context.py:20: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001-\u6b63\u6587\u8be6\u89c1-normative_section] _
+
+kind = 'normative_section', prefix = '正文详见', number = '一、'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 48, 'page': 2, 'start': 8, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 48, 'page': 2, 'start': 8, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '正文详见\n一、\n上海市...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001-\u6b63\u6587\u8be6\u89c1-normative_table] _
+
+kind = 'normative_table', prefix = '正文详见', number = '一、'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 48, 'page': 2, 'start': 8, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 48, 'page': 2, 'start': 8, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '正文详见\n一、\n上海市...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_section] _
+
+kind = 'normative_section', prefix = '本报告未编制', number = '一、'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 50, 'page': 2, 'start': 10, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 50, 'page': 2, 'start': 10, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '本报告未编制\n一、\n上...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_table] _
+
+kind = 'normative_table', prefix = '本报告未编制', number = '一、'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 50, 'page': 2, 'start': 10, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 50, 'page': 2, 'start': 10, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '本报告未编制\n一、\n上...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001-\u5f15\u7528\uff1a-normative_section] _
+
+kind = 'normative_section', prefix = '引用：', number = '一、'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 47, 'page': 2, 'start': 7, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 47, 'page': 2, 'start': 7, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '引用：\n一、\n上海市普...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001-\u5f15\u7528\uff1a-normative_table] _
+
+kind = 'normative_table', prefix = '引用：', number = '一、'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 47, 'page': 2, 'start': 7, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 47, 'page': 2, 'start': 7, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '引用：\n一、\n上海市普...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[(\u4e00)-\u6b63\u6587\u8be6\u89c1-normative_section] _
+
+kind = 'normative_section', prefix = '正文详见', number = '(一)'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 49, 'page': 2, 'start': 9, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 49, 'page': 2, 'start': 9, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '正文详见\n(一)\n上海...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[(\u4e00)-\u6b63\u6587\u8be6\u89c1-normative_table] _
+
+kind = 'normative_table', prefix = '正文详见', number = '(一)'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 49, 'page': 2, 'start': 9, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 49, 'page': 2, 'start': 9, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '正文详见\n(一)\n上海...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[(\u4e00)-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_section] _
+
+kind = 'normative_section', prefix = '本报告未编制', number = '(一)'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 51, 'page': 2, 'start': 11, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 51, 'page': 2, 'start': 11, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '本报告未编制\n(一)\n...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[(\u4e00)-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_table] _
+
+kind = 'normative_table', prefix = '本报告未编制', number = '(一)'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 51, 'page': 2, 'start': 11, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 51, 'page': 2, 'start': 11, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '本报告未编制\n(一)\n...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[(\u4e00)-\u5f15\u7528\uff1a-normative_section] _
+
+kind = 'normative_section', prefix = '引用：', number = '(一)'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 48, 'page': 2, 'start': 8, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 48, 'page': 2, 'start': 8, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '引用：\n(一)\n上海市...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[(\u4e00)-\u5f15\u7528\uff1a-normative_table] _
+
+kind = 'normative_table', prefix = '引用：', number = '(一)'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 48, 'page': 2, 'start': 8, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 48, 'page': 2, 'start': 8, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '引用：\n(一)\n上海市...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[1.-\u6b63\u6587\u8be6\u89c1-normative_section] _
+
+kind = 'normative_section', prefix = '正文详见', number = '1.'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 48, 'page': 2, 'start': 8, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 48, 'page': 2, 'start': 8, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '正文详见\n1.\n上海市...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[1.-\u6b63\u6587\u8be6\u89c1-normative_table] _
+
+kind = 'normative_table', prefix = '正文详见', number = '1.'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 48, 'page': 2, 'start': 8, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 48, 'page': 2, 'start': 8, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '正文详见\n1.\n上海市...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[1.-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_section] _
+
+kind = 'normative_section', prefix = '本报告未编制', number = '1.'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 50, 'page': 2, 'start': 10, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 50, 'page': 2, 'start': 10, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '本报告未编制\n1.\n上...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[1.-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_table] _
+
+kind = 'normative_table', prefix = '本报告未编制', number = '1.'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 50, 'page': 2, 'start': 10, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 50, 'page': 2, 'start': 10, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '本报告未编制\n1.\n上...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[1.-\u5f15\u7528\uff1a-normative_section] _
+
+kind = 'normative_section', prefix = '引用：', number = '1.'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 47, 'page': 2, 'start': 7, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 47, 'page': 2, 'start': 7, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '引用：\n1.\n上海市普...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[1.-\u5f15\u7528\uff1a-normative_table] _
+
+kind = 'normative_table', prefix = '引用：', number = '1.'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 47, 'page': 2, 'start': 7, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 47, 'page': 2, 'start': 7, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '引用：\n1.\n上海市普...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u7b2c\u5341\u4e00\u90e8\u5206-\u6b63\u6587\u8be6\u89c1-normative_section] _
+
+kind = 'normative_section', prefix = '正文详见', number = '第十一部分'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 51, 'page': 2, 'start': 11, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 51, 'page': 2, 'start': 11, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '正文详见\n第十一部分\n...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u7b2c\u5341\u4e00\u90e8\u5206-\u6b63\u6587\u8be6\u89c1-normative_table] _
+
+kind = 'normative_table', prefix = '正文详见', number = '第十一部分'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 51, 'page': 2, 'start': 11, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 51, 'page': 2, 'start': 11, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '正文详见\n第十一部分\n...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u7b2c\u5341\u4e00\u90e8\u5206-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_section] _
+
+kind = 'normative_section', prefix = '本报告未编制', number = '第十一部分'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 53, 'page': 2, 'start': 13, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 53, 'page': 2, 'start': 13, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '本报告未编制\n第十一部分...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u7b2c\u5341\u4e00\u90e8\u5206-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_table] _
+
+kind = 'normative_table', prefix = '本报告未编制', number = '第十一部分'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 53, 'page': 2, 'start': 13, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 53, 'page': 2, 'start': 13, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '本报告未编制\n第十一部分...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u7b2c\u5341\u4e00\u90e8\u5206-\u5f15\u7528\uff1a-normative_section] _
+
+kind = 'normative_section', prefix = '引用：', number = '第十一部分'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 50, 'page': 2, 'start': 10, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 50, 'page': 2, 'start': 10, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '引用：\n第十一部分\n上...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u7b2c\u5341\u4e00\u90e8\u5206-\u5f15\u7528\uff1a-normative_table] _
+
+kind = 'normative_table', prefix = '引用：', number = '第十一部分'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 50, 'page': 2, 'start': 10, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 50, 'page': 2, 'start': 10, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '引用：\n第十一部分\n上...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001\n\uff08\u4e00\uff09-\u6b63\u6587\u8be6\u89c1-normative_section] _
+
+kind = 'normative_section', prefix = '正文详见', number = '一、\n（一）'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 52, 'page': 2, 'start': 8, 'text': '（一）上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}, {'end': 52, 'page': 2, 'start': 12, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 52, 'page': 2, 'start': 8, 'text': '（一）上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}, {'end': 52, 'page': 2, 'start': 12, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '正文详见\n一、\n（一）...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001\n\uff08\u4e00\uff09-\u6b63\u6587\u8be6\u89c1-normative_table] _
+
+kind = 'normative_table', prefix = '正文详见', number = '一、\n（一）'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 52, 'page': 2, 'start': 8, 'text': '（一）上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}, {'end': 52, 'page': 2, 'start': 12, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 52, 'page': 2, 'start': 8, 'text': '（一）上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}, {'end': 52, 'page': 2, 'start': 12, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '正文详见\n一、\n（一）...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001\n\uff08\u4e00\uff09-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_section] _
+
+kind = 'normative_section', prefix = '本报告未编制', number = '一、\n（一）'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 54, 'page': 2, 'start': 10, 'text': '（一）上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}, {'end': 54, 'page': 2, 'start': 14, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 54, 'page': 2, 'start': 10, 'text': '（一）上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}, {'end': 54, 'page': 2, 'start': 14, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '本报告未编制\n一、\n（...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001\n\uff08\u4e00\uff09-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_table] _
+
+kind = 'normative_table', prefix = '本报告未编制', number = '一、\n（一）'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 54, 'page': 2, 'start': 10, 'text': '（一）上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}, {'end': 54, 'page': 2, 'start': 14, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 54, 'page': 2, 'start': 10, 'text': '（一）上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}, {'end': 54, 'page': 2, 'start': 14, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '本报告未编制\n一、\n（...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001\n\uff08\u4e00\uff09-\u5f15\u7528\uff1a-normative_section] _
+
+kind = 'normative_section', prefix = '引用：', number = '一、\n（一）'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 51, 'page': 2, 'start': 7, 'text': '（一）上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}, {'end': 51, 'page': 2, 'start': 11, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 51, 'page': 2, 'start': 7, 'text': '（一）上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}, {'end': 51, 'page': 2, 'start': 11, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '引用：\n一、\n（一）\...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_ test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001\n\uff08\u4e00\uff09-\u5f15\u7528\uff1a-normative_table] _
+
+kind = 'normative_table', prefix = '引用：', number = '一、\n（一）'
+
+    @pytest.mark.parametrize("kind", ["normative_section", "normative_table"])
+    @pytest.mark.parametrize("prefix", ["正文详见", "本报告未编制", "引用："])
+    @pytest.mark.parametrize("number", ["一、", "(一)", "1.", "第十一部分", "一、\n（一）"])
+    def test_reference_context_propagates_through_standalone_numbers(kind, prefix, number):
+        doc = titled_document(prefix + "\n" + number + "\n" + FOUR_LINES, kind)
+        before = deepcopy(doc.parse_artifact.to_dict())
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 51, 'page': 2, 'start': 7, 'text': '（一）上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}, {'end': 51, 'page': 2, 'start': 11, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 51, 'page': 2, 'start': 7, 'text': '（一）上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}, {'end': 51, 'page': 2, 'start': 11, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '引用：\n一、\n（一）\...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:31: AssertionError
+_________ test_crlf_indent_and_number_lines_cannot_hide_quoted_context _________
+
+    def test_crlf_indent_and_number_lines_cannot_hide_quoted_context():
+        text = "引用：\r\n  第三部分  \r\n  （一）  \r\n" + "\r\n".join("  " + part for part in FOUR_LINES.splitlines())
+        doc = titled_document(text)
+>       assert not _headings(doc, TITLE)
+E       AssertionError: assert not [{'end': 75, 'page': 2, 'start': 17, 'text': '（一）上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}, {'end': 75, 'page': 2, 'start': 26, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}]
+E        +  where [{'end': 75, 'page': 2, 'start': 17, 'text': '（一）上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}, {'end': 75, 'page': 2, 'start': 26, 'text': '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表'}] = _headings(Document(path='filename-department-does-not-decide.pdf', pages=2, filesize=100, page_texts=['2025年度决算', '引用：\r\n  第三部分...ory-conflicts', conflicts=[]), structure_view=None, writing_page_texts=None, writing_source_spans=[], fact_receipts=[]), '上海市普陀区某某事业发展中心2024年度一般公共预算财政拨款基本支出决算表')
+
+tests/test_template_heading_context.py:49: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_template_heading_context.py::test_quoted_numbered_section_is_not_a_real_heading[three-\u5f15\u7528\uff1a]
+FAILED tests/test_template_heading_context.py::test_quoted_numbered_section_is_not_a_real_heading[three-\u672c\u62a5\u544a\u5c1a\u672a\u63d0\u4f9b]
+FAILED tests/test_template_heading_context.py::test_quoted_numbered_section_is_not_a_real_heading[three-\u4f8b\u5982\uff1a]
+FAILED tests/test_template_heading_context.py::test_quoted_numbered_section_is_not_a_real_heading[four-\u5f15\u7528\uff1a]
+FAILED tests/test_template_heading_context.py::test_quoted_numbered_section_is_not_a_real_heading[four-\u672c\u62a5\u544a\u5c1a\u672a\u63d0\u4f9b]
+FAILED tests/test_template_heading_context.py::test_quoted_numbered_section_is_not_a_real_heading[four-\u4f8b\u5982\uff1a]
+FAILED tests/test_template_heading_context.py::test_quoted_numbered_section_is_not_a_real_heading[many-\u5f15\u7528\uff1a]
+FAILED tests/test_template_heading_context.py::test_quoted_numbered_section_is_not_a_real_heading[many-\u672c\u62a5\u544a\u5c1a\u672a\u63d0\u4f9b]
+FAILED tests/test_template_heading_context.py::test_quoted_numbered_section_is_not_a_real_heading[many-\u4f8b\u5982\uff1a]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001-\u6b63\u6587\u8be6\u89c1-normative_section]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001-\u6b63\u6587\u8be6\u89c1-normative_table]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_section]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_table]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001-\u5f15\u7528\uff1a-normative_section]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001-\u5f15\u7528\uff1a-normative_table]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[(\u4e00)-\u6b63\u6587\u8be6\u89c1-normative_section]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[(\u4e00)-\u6b63\u6587\u8be6\u89c1-normative_table]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[(\u4e00)-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_section]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[(\u4e00)-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_table]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[(\u4e00)-\u5f15\u7528\uff1a-normative_section]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[(\u4e00)-\u5f15\u7528\uff1a-normative_table]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[1.-\u6b63\u6587\u8be6\u89c1-normative_section]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[1.-\u6b63\u6587\u8be6\u89c1-normative_table]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[1.-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_section]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[1.-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_table]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[1.-\u5f15\u7528\uff1a-normative_section]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[1.-\u5f15\u7528\uff1a-normative_table]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u7b2c\u5341\u4e00\u90e8\u5206-\u6b63\u6587\u8be6\u89c1-normative_section]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u7b2c\u5341\u4e00\u90e8\u5206-\u6b63\u6587\u8be6\u89c1-normative_table]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u7b2c\u5341\u4e00\u90e8\u5206-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_section]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u7b2c\u5341\u4e00\u90e8\u5206-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_table]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u7b2c\u5341\u4e00\u90e8\u5206-\u5f15\u7528\uff1a-normative_section]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u7b2c\u5341\u4e00\u90e8\u5206-\u5f15\u7528\uff1a-normative_table]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001\n\uff08\u4e00\uff09-\u6b63\u6587\u8be6\u89c1-normative_section]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001\n\uff08\u4e00\uff09-\u6b63\u6587\u8be6\u89c1-normative_table]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001\n\uff08\u4e00\uff09-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_section]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001\n\uff08\u4e00\uff09-\u672c\u62a5\u544a\u672a\u7f16\u5236-normative_table]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001\n\uff08\u4e00\uff09-\u5f15\u7528\uff1a-normative_section]
+FAILED tests/test_template_heading_context.py::test_reference_context_propagates_through_standalone_numbers[\u4e00\u3001\n\uff08\u4e00\uff09-\u5f15\u7528\uff1a-normative_table]
+FAILED tests/test_template_heading_context.py::test_crlf_indent_and_number_lines_cannot_hide_quoted_context
+40 failed, 13 passed in 0.37s

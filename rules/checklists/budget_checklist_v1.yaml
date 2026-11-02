@@ -111,7 +111,8 @@ items:
     criterion: "主体口径与报告类型匹配、层级口径均为“区级”，全文无混用。"
     status: implemented
     obligations: [OBL-STRUCT-TERMINOLOGY]
-    rules: [BUD-113, CMM-018]
+    rules: [BUD-113, CMM-018, CMM-027]
+    note: "CMM-027 仅在该次分析已采用经批准的预算模板链路时形成义务"
   - id: B-03
     dimension: "二、一致性"
     title: "科目名称与预算表一致"

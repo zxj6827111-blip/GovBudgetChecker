@@ -1,0 +1,303 @@
+{
+  "schema": "gbc.template-scope-validation.v1",
+  "manifest_sha256": "65a0fa836c264933840b683100cb56cf827625abc264ee0c56501f5c73cb4987",
+  "template_export_sha256": "a9a8a00676abb9ab48f90c4c9e70bf3c7423717b5ecabd22391a5f32d94fdf95",
+  "metrics": {
+    "cohorts": {
+      "random": {
+        "total": 1,
+        "verified_writing_labels": 0,
+        "automatic_verified_count": 0,
+        "automatic_errors": 0,
+        "correct": 0,
+        "accuracy": null,
+        "conflict_false_positive": 0,
+        "conflict_false_negative": 0,
+        "insufficient": 1,
+        "zero_error_upper_bound_95": null,
+        "supports_approximately_one_percent_claim": false
+      }
+    },
+    "independent_acceptance_granted": false,
+    "note": "独立标签由业务人员提供；统计不授予能力或替代独立验收。定向反例不推断总体错误率。"
+  },
+  "rows": [
+    {
+      "path": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/67217a651ab2f9e7f64dba9d85c7742d/上海市信访办公室2024年决算.pdf",
+      "sha256": "10f6afe6ca550ad41fec04ed1cd2c2757ed1434e88172246e46fdccedb8ff973",
+      "cohort": "random",
+      "writing_truth": null,
+      "style_truth": null,
+      "reporting_identity_truth": null,
+      "amount_scope_truth": null,
+      "verified_independently": false,
+      "label_reference": null,
+      "label_version": null,
+      "status": "insufficient",
+      "source": "unresolved",
+      "value": null,
+      "resolution": {
+        "observed_template_style": "mixed",
+        "status": "insufficient",
+        "value": null,
+        "source": "unresolved",
+        "reason": "insufficient_evidence",
+        "cover_independent_scope": null,
+        "evidence": [
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 58,
+            "end": 68,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 2,
+            "text": "2024 年度决算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 233,
+            "end": 246,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 6,
+            "text": "2024 年度决算表",
+            "position": "heading",
+            "qualified": true,
+            "start": 19,
+            "end": 29,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 6,
+            "text": "本表反映部门本年度的总收支和年末结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 852,
+            "end": 874,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 8,
+            "text": "本表反映部门本年度取得的各项收入情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 368,
+            "end": 386,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 10,
+            "text": "本表反映部门本年度各项支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 390,
+            "end": 405,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 12,
+            "text": "本表反映部门本年度财政拨款总收支和结转结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 571,
+            "end": 594,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 13,
+            "text": "本表反映部门本年度一般公共预算财政拨款支出情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 1031,
+            "end": 1054,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 14,
+            "text": "本表反映部门本年度一般公共预算财政拨款基本支出明细情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 1789,
+            "end": 1816,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 15,
+            "text": "本表反映部门本年度“三公”经费支出预决算情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 243,
+            "end": 265,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 16,
+            "text": "本表反映部门本年度政府性基金预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 134,
+            "end": 166,
+            "source_blocks": []
+          },
+          {
+            "scope": "department",
+            "kind": "table_note",
+            "page": 17,
+            "text": "本表反映部门本年度国有资本经营预算财政拨款收入支出及结转和结余情况",
+            "position": "table_note",
+            "qualified": true,
+            "start": 140,
+            "end": 173,
+            "source_blocks": []
+          },
+          {
+            "scope": "unit",
+            "kind": "heading",
+            "page": 18,
+            "text": "2024 年度决算情况说明",
+            "position": "heading",
+            "qualified": true,
+            "start": 20,
+            "end": 33,
+            "source_blocks": []
+          }
+        ],
+        "human_decision_id": null,
+        "snapshot": {
+          "actor": "annual-test-admin",
+          "adoption_kind": "issued",
+          "basis": "{\"basis\":\"虚构模板校验收据测试绑定\",\"compatibility\":null,\"compatibility_reference\":null,\"source_draft_id\":null}",
+          "capability_scope": {
+            "position_checks": true
+          },
+          "created_at": "2026-10-28 12:58:13.620350+00:00",
+          "overlay": "",
+          "package_id": "5114d486-9388-4b3d-874b-13d3b7806d55",
+          "region": "上海市",
+          "report_kind": "final",
+          "revision": 3,
+          "target_year": 2024,
+          "content": {
+            "capabilities": {
+              "position_checks": true
+            },
+            "changes": {},
+            "config": {
+              "accept_native_toc_variant": false,
+              "algorithm": "material-writing-v3.2",
+              "anchors": [],
+              "d2": "low",
+              "domain": "final",
+              "markers": [
+                "part_heading",
+                "table_note"
+              ],
+              "native": {},
+              "prompts": [],
+              "schema": 1,
+              "supported_pair": true
+            },
+            "department_source_id": "117451e1-3f85-4cd3-93cf-1211956a3a3d",
+            "pair_diff": [
+              {
+                "business_classification": "pending_review",
+                "change": "replace",
+                "new": [
+                  {
+                    "offset": 11,
+                    "page": null,
+                    "paragraph": 2,
+                    "text": "2024年度决算表"
+                  },
+                  {
+                    "offset": 21,
+                    "page": null,
+                    "paragraph": 3,
+                    "text": "本表反映单位本年度收入。"
+                  }
+                ],
+                "old": [
+                  {
+                    "offset": 11,
+                    "page": null,
+                    "paragraph": 2,
+                    "text": "2024年度部门决算表"
+                  },
+                  {
+                    "offset": 23,
+                    "page": null,
+                    "paragraph": 3,
+                    "text": "本表反映部门本年度收入。"
+                  }
+                ]
+              }
+            ],
+            "previous_package_id": null,
+            "report_kind": "final",
+            "review_record": {
+              "accept_native_toc_variant": false,
+              "anchors": [],
+              "basis": "虚构模板的提取回执保护验证",
+              "decision": "new",
+              "slot_reviews": {},
+              "visual_verified": true
+            },
+            "source_pair_consistent": true,
+            "source_receipts": {
+              "department": {
+                "extracted.txt": "bf91a77162852f9f25595db106ffd22770e97eb3469b4608d70384f020282a53",
+                "manifest.json": "585a2924c6c570b25d002b90687e67c05b36e62852c7fe0615faa4b134f3cb38"
+              },
+              "unit": {
+                "extracted.txt": "db5504bec2fb684f6e4e15e56cfac73bacc083947e89b574751d82d45792cb55",
+                "manifest.json": "93f35622db7532800fb053610c780ccc2822d701919d334970c565b4d270ab62"
+              }
+            },
+            "source_report_year": 2024,
+            "unit_source_id": "f402d2ed-6405-4eb7-a58a-35b9a5093e14"
+          },
+          "content_sha256": "fcee57c69215ec8d7173138cd7e758a500253255cc99cd7ab855834f9301f655",
+          "source_report_year": 2024,
+          "available": true,
+          "algorithm": "material-writing-v3.2",
+          "offline_export_sha256": "a9a8a00676abb9ab48f90c4c9e70bf3c7423717b5ecabd22391a5f32d94fdf95"
+        },
+        "algorithm": "material-writing-v3.2",
+        "domain": "final",
+        "template_enabled": true,
+        "decision_revision": null,
+        "archive_scope": null,
+        "archive_conflict": false
+      }
+    }
+  ],
+  "limitations": [
+    "只回放原生文本；OCR、真实报送身份、金额及页面交互须分别验收"
+  ]
+}

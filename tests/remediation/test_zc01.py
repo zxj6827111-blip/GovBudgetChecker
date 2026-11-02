@@ -385,10 +385,10 @@ def test_build_parse_artifact_single_pass(tmp_path: Path) -> None:
 
 
 def test_parser_cache_fingerprint_invalidates_pre_structural_row_runs() -> None:
-    """结构行语义改变后，解析缓存必须绕过旧 v4/v5/v6 产物。"""
+    """结构行语义改变后，解析缓存必须绕过旧 v4/v5/v6 产物；v29 引入单元格级名称可见性恢复。"""
     from src.services.input_processing_identity import processing_manifest
     import re
-    assert re.fullmatch(r'pdfplumber-cells-v27-trusted-input-[0-9a-f]{16}',PARSER_FINGERPRINT)
+    assert re.fullmatch(r'pdfplumber-cells-v29-label-visibility-[0-9a-f]{16}',PARSER_FINGERPRINT)
     assert PARSER_FINGERPRINT != "pdfplumber-cells-v25-native-tail-and-dimension-identity"
     assert PARSER_FINGERPRINT != "pdfplumber-cells-v24-continuation-and-fiscal-coverage"
     assert PARSER_FINGERPRINT != "pdfplumber-cells-v23-native-structure-recovery"

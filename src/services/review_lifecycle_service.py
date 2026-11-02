@@ -52,13 +52,21 @@ from contextlib import asynccontextmanager
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from fastapi import HTTPException
 from src.db.transaction import in_transaction
 
-from src.engine.check_obligations import UNRESOLVED_OBLIGATION_STATUSES
+from src.engine.check_obligations import (
+    UNRESOLVED_OBLIGATION_STATUSES,
+    get_obligation,
+)
 from src.schemas.material_detail import CoverageObligationItem
+from src.services.obligation_finding_coverage import obligation_covered_by_finding
+from src.services.obligation_locations import (
+    merge_locations,
+    resolve_obligation_locations,
+)
 from src.schemas.material_slot import slot_identity_is_resolved
 from src.schemas.review_lifecycle import (
     BLOCKER_ANALYSIS_BASIS_CHANGED,
@@ -503,10 +511,12 @@ def _problem_blockers(problems: List[ReviewProblem], decisions: Dict[str, str]) 
     """
     pending = 0
     needs_review = 0
+    from src.services.review_problem_set import problem_status
+
     for problem in problems:
         if not problem.is_blocking_candidate:
             continue
-        status = str(decisions.get(problem.issue_id) or "pending").strip() or "pending"
+        status = problem_status(problem, decisions)
         if status in RESOLVED_ISSUE_STATUSES:
             continue
         if status == "needs_review":
@@ -525,17 +535,52 @@ def _problem_blockers(problems: List[ReviewProblem], decisions: Dict[str, str]) 
     return blockers
 
 
-def _blocking_obligations(state: ReviewState) -> List[CoverageObligationItem]:
-    """引擎判定"阻塞门禁且未完成"的义务实例（WP3-B 起补核待办只含这些）。
-
-    与 ``check_obligations._build_summary`` 的 ``blocking`` 口径完全一致：
-    ``blocks_gate`` 且状态落在未完成集合里。门禁统计从这里出数，
-    保证页面上"待补核清单"与 409 的 ``count`` 说的是同一批条目。
-    """
+def _unresolved_obligations(state: ReviewState) -> List[CoverageObligationItem]:
+    """引擎判定阻塞且未完成的义务（未做同源问题去重前的原始集合）。"""
     return [
         item
         for item in state.coverage_items
         if item.blocks_gate and item.status in UNRESOLVED_OBLIGATION_STATUSES
+    ]
+
+
+def _blocking_obligations(state: ReviewState) -> List[CoverageObligationItem]:
+    """补核待办：未完成的阻塞义务，去掉已被同源正式问题覆盖的副本。
+
+    为什么去重：同一根因（如 T5 款名旧称）已经作为正式问题出现在问题清单里，
+    义务只是"因为名称对不上所以金额绑不上"。两条都进补核队列会让用户对
+    同一件事表态两次。被覆盖的义务不再阻塞门禁；问题本身仍留在问题清单里，
+    由人工按问题流程处理一次。
+
+    与 ``check_obligations._build_summary`` 的 ``blocking`` 口径保持一致：
+    ``blocks_gate`` 且状态落在未完成集合里；门禁统计从这里出数，
+    保证页面上"待补核清单"与 409 的 ``count`` 说的是同一批条目。
+    """
+    return blocking_coverage_obligations(
+        state.coverage_items,
+        state.analysis.result_row,
+        visible_issue_ids={problem.issue_id for problem in state.problems},
+    )
+
+
+def blocking_coverage_obligations(
+    items: List[CoverageObligationItem],
+    result_row: Any,
+    *,
+    visible_issue_ids: Iterable[str],
+) -> List[CoverageObligationItem]:
+    """门禁与列表共用的补核清单：阻塞且未完成、未被同源正式问题覆盖的义务。
+
+    审核台把这些条目列在「必须处理」的“未能自动核对”里；列表摘要用同一函数
+    计数，两处数字才能对上。
+    """
+    visible = set(visible_issue_ids)
+    return [
+        item
+        for item in items
+        if item.blocks_gate
+        and item.status in UNRESOLVED_OBLIGATION_STATUSES
+        and not obligation_covered_by_finding(item, result_row, visible_issue_ids=visible)
     ]
 
 
@@ -547,7 +592,7 @@ def _unhandled_obligations(state: ReviewState) -> List[CoverageObligationItem]:
     与 ``_problem_blockers`` 同一条纪律：把不认识的值当成"已解决"，
     等于让一个拼错的状态码静默放行复核。
     """
-    return unhandled_coverage_obligations(state.coverage_items, state.obligation_decisions)
+    return unhandled_coverage_obligations(_blocking_obligations(state), state.obligation_decisions)
 
 
 def unhandled_coverage_obligations(
@@ -718,19 +763,44 @@ def _obligation_review_block(state: ReviewState) -> "ObligationReviewBlock":
     """
     if not state.coverage_available:
         return ObligationReviewBlock(available=False, reason=BLOCKER_COVERAGE_UNAVAILABLE)
+    raw_unresolved = _unresolved_obligations(state)
+    blocking = _blocking_obligations(state)
+    covered_total = max(0, len(raw_unresolved) - len(blocking))
+    resolved_locations = {
+        item.obligation_id: resolve_obligation_locations(
+            item,
+            structured_ingest=state.analysis.structured_ingest,
+            result_row=state.analysis.result_row,
+            result_meta=state.analysis.result_meta,
+        )
+        for item in blocking
+    }
+    # 同一处空白金额格的两条义务共享位置：总表表首 + 行号所在续页 +
+    # 两张空表说明。只合并位置，不合并决定——每条义务仍有独立 revision。
+    for left, right in (("OBL-STRUCT-EMPTY-STATEMENT", "OBL-CROSS-FISCAL-TOTAL"),):
+        if left in resolved_locations and right in resolved_locations:
+            merged = merge_locations(resolved_locations[left], resolved_locations[right])
+            resolved_locations[left] = merged
+            resolved_locations[right] = merged
     items: List[ObligationReviewItem] = []
-    for item in _blocking_obligations(state):
+    for item in blocking:
         row = state.obligation_decisions.get(item.obligation_id)
+        # 标题/依据用**当前目录**刷新；状态与 checker 仍用账本原值，避免把
+        # "现在目录里有这个 checker"误当成"那次分析跑过它"。
+        definition = get_obligation(item.obligation_id)
         items.append(
             ObligationReviewItem(
                 obligation_id=item.obligation_id,
                 group_id=item.group_id,
                 group_title=item.group_title,
-                title=item.title,
+                title=definition.title if definition else item.title,
                 status=item.status,
                 reason=item.reason,
                 reason_label=item.reason_label,
                 detail=item.detail,
+                basis=definition.basis if definition else item.basis,
+                checkers=list(item.checkers),
+                locations=resolved_locations.get(item.obligation_id, []),
                 decision=(str(row.get("decision") or "") or None) if row else None,
                 decision_revision=(
                     int(row.get("revision") or 0) if row else None
@@ -747,6 +817,7 @@ def _obligation_review_block(state: ReviewState) -> "ObligationReviewBlock":
         available=True,
         reason=None,
         pending_total=len(_unhandled_obligations(state)),
+        covered_total=covered_total,
         items=items,
     )
 
@@ -939,6 +1010,65 @@ def _require_autocommit(conn: Any, *, operation: str) -> None:
             f"{operation} requires an autocommit connection; it owns its "
             "PostgreSQL transaction boundary (don't nest)"
         )
+
+
+async def confirm_document_scope(conn: Any, job_uuid: str, *, actor: str, request: dict, actual_file_hash: str) -> dict:
+    """与完成复核共用槽位→会话→任务锁；决定和重算发件箱在同一事务提交。"""
+    from src.services import document_scope
+    import json
+
+    _require_autocommit(conn, operation="confirm_document_scope")
+    effects = _CommitEffects()
+    async with _mutation_scope(conn, effects):
+        link = await review_context_query.resolve_slot_link_for_job(conn, job_uuid)
+        if link is None:
+            raise HTTPException(409, {"error": "review_context_unavailable", "message": "材料版本不可用"})
+        state = await _load_state(conn, link.slot_id, lock_slot=True, lock_session=True)
+        if state is None:
+            raise HTTPException(404, "material slot not found")
+        _require_job_belongs_to_state(state, job_uuid)
+        if state.analysis.document_version_id != request["document_version_id"]:
+            raise HTTPException(409, {"error": "document_version_changed", "message": "材料已换版，请刷新"})
+        job = await conn.fetchrow("SELECT file_hash,status FROM analysis_jobs WHERE job_uuid=$1", job_uuid)
+        if job is None or job["file_hash"] != actual_file_hash or actual_file_hash != request["file_hash"]:
+            raise HTTPException(409, {"error": "source_file_changed", "message": "原件已变化，原确认依据不能复用"})
+        existing = await conn.fetchrow("SELECT * FROM document_scope_decisions WHERE request_id=$1::uuid", request["request_id"])
+        if existing is not None:
+            row = document_scope.decision_dict(existing)
+            if any(row.get(key) != value for key, value in {
+                "job_uuid": job_uuid, "document_version_id": request["document_version_id"],
+                "file_hash": actual_file_hash, "material_scope": request["material_scope"],
+                "note": request["note"], "evidence_reference": request["evidence_reference"], "actor": actor,
+            }.items()):
+                raise HTTPException(409, {"error": "idempotency_key_conflict", "message": "该提交标识已用于另一项决定"})
+            return row
+        if state.basis_token != request["analysis_basis_token"] or not state.analysis.completed or job["status"] in {"queued", "processing", "running"}:
+            raise HTTPException(409, {"error": "analysis_basis_changed", "message": "分析版本已变化或正在重算，请刷新"})
+        previous = await document_scope.latest_decision(conn, job_uuid, actual_file_hash, request["document_version_id"])
+        if (previous or {}).get("revision", 0) != request["expected_decision_revision"]:
+            raise HTTPException(409, {"error": "scope_decision_conflict", "message": "口径已被其他人更新，请刷新"})
+        evidence = document_scope.scope_evidence({"result": {"meta": state.analysis.result_meta}})
+        conflicts = document_scope.source_conflicts(evidence, request["material_scope"])
+        if conflicts and not request.get("acknowledge_conflicts"):
+            raise HTTPException(409, {"error": "scope_evidence_conflict", "message": "选择与已有原文证据冲突，请明确核对并裁决", "conflicts": conflicts})
+        # 失效会锁住已完成会话，必须先于任务行锁；拒绝时整个事务回滚。
+        invalidated = await review_session_store.invalidate_sessions_for_job(conn, job_uuid, reason="document_scope_changed")
+        locked_job = await conn.fetchrow("SELECT file_hash,status FROM analysis_jobs WHERE job_uuid=$1 FOR UPDATE", job_uuid)
+        if locked_job["file_hash"] != actual_file_hash or locked_job["status"] in {"queued", "processing", "running"}:
+            raise HTTPException(409, {"error": "analysis_basis_changed", "message": "分析已开始或原件已变化，请刷新"})
+        row = await conn.fetchrow("""INSERT INTO document_scope_decisions
+            (request_id,job_uuid,document_version_id,file_hash,revision,analysis_basis_token,material_scope,
+             note,evidence_reference,source_evidence,actor)
+            VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11) RETURNING *""",
+            request["request_id"], job_uuid, request["document_version_id"], actual_file_hash,
+            (previous or {}).get("revision", 0) + 1, state.basis_token, request["material_scope"],
+            request["note"], request["evidence_reference"], json.dumps(evidence, ensure_ascii=False), actor)
+        effects.lock_clears.extend({"job_uuid": job_uuid, "review_session_id": str(item["review_session_id"]),
+                                   "analysis_basis_token": str(item.get("analysis_basis_token") or "")} for item in invalidated)
+        await review_session_store.clear_analysis_result_fingerprint(conn, job_uuid)
+        # 即使提交后进程立即退出，门禁也已阻断旧分析，Worker 会重试发件箱。
+        await conn.execute("UPDATE analysis_jobs SET status='queued',updated_at=NOW() WHERE job_uuid=$1", job_uuid)
+        return document_scope.decision_dict(row)
 
 
 async def start_review(
@@ -2066,3 +2196,85 @@ __all__ = [
     "invalidate_review",
     "invalidate_reviews_for_analysis_restart",
 ]
+
+
+async def confirm_material_dimensions(conn, job_uuid: str, *, actor: str, request: dict, actual_file_hash: str) -> dict:
+    """写法与金额分开校验、同一事务记录；共用槽位→会话→任务锁序。"""
+    from src.services import document_scope
+    import json
+    _require_autocommit(conn, operation='confirm_material_dimensions')
+    selections={k:v for k,v in request.items() if k in ('writing','amount') and v is not None}
+    if not selections: raise HTTPException(422,'至少确认一个维度')
+    effects=_CommitEffects()
+    async with _mutation_scope(conn,effects):
+        link=await review_context_query.resolve_slot_link_for_job(conn,job_uuid)
+        if not link: raise HTTPException(409,'材料版本不可用')
+        state=await _load_state(conn,link.slot_id,lock_slot=True,lock_session=True)
+        if not state: raise HTTPException(404,'材料槽位不存在')
+        _require_job_belongs_to_state(state,job_uuid)
+        job=await conn.fetchrow('SELECT file_hash,status FROM analysis_jobs WHERE job_uuid=$1',job_uuid)
+        if state.analysis.document_version_id!=request['document_version_id'] or not job or actual_file_hash!=request['file_hash'] or job['file_hash']!=actual_file_hash:
+            raise HTTPException(409,'材料版本或原件已变化')
+        kind=(state.analysis.result_meta.get('document_profile') or {}).get('report_kind',{}).get('value')
+        resolution=state.analysis.result_meta.get('document_scope_resolution') or {}
+        from src.services.material_writing import budget_enabled
+        if kind!='final' and not (kind=='budget' and budget_enabled() and resolution.get('domain')=='budget'):
+            raise HTTPException(422,'当前材料尚未启用经过验收的模板写法链路')
+        tables={'writing':'document_writing_scope_decisions','amount':'document_scope_decisions'}
+        choices={'writing':'writing_scope','amount':'material_scope'}
+        for absent in set(tables)-set(selections):
+            if await conn.fetchval(f'SELECT 1 FROM {tables[absent]} WHERE request_id=$1::uuid',request['request_id']):
+                raise HTTPException(409,'提交维度与原请求不一致')
+        result={}
+        pending={}
+        for dimension,selection in selections.items():
+            table=tables[dimension]
+            choice=choices[dimension]
+            existing=await conn.fetchrow(f'SELECT * FROM {table} WHERE request_id=$1::uuid',request['request_id'])
+            if existing:
+                saved=document_scope.decision_dict(existing)
+                expected={'job_uuid':job_uuid,'document_version_id':request['document_version_id'],'file_hash':actual_file_hash,
+                          choice:selection['value'],'note':selection['note'],'evidence_reference':selection['evidence_reference'],'actor':actor,
+                          'analysis_basis_token':request['analysis_basis_token']}
+                if dimension=='writing':
+                    expected['conflict_acknowledged']=selection.get('acknowledge_conflicts',False)
+                    saved_independent=any(e.get('dimension')=='human_cover_independent' and e.get('value') is True for e in saved.get('source_evidence',[]))
+                    if saved_independent!=selection.get('cover_independent',False): raise HTTPException(409,'同一请求不能改变依据独立性')
+                if any(saved.get(k)!=v for k,v in expected.items()): raise HTTPException(409,'提交标识已被用于另一决定')
+                result[dimension]=saved
+            else: pending[dimension]=selection
+        if result and pending: raise HTTPException(409,'提交维度与原请求不一致')
+        if result: return result
+        if state.basis_token!=request['analysis_basis_token'] or not state.analysis.completed or job['status'] in {'queued','processing','running'}:
+            raise HTTPException(409,'分析已变化或正在重算')
+        for dimension,selection in pending.items():
+            table=tables[dimension]
+            prev=await conn.fetchval(f'SELECT max(revision) FROM {table} WHERE job_uuid=$1 AND document_version_id=$2',job_uuid,request['document_version_id']) or 0
+            if prev!=selection['expected_revision']: raise HTTPException(409,'该维度已被其他人更新，请刷新')
+            if dimension=='writing':
+                evidence=(state.analysis.result_meta.get('document_scope_resolution') or {}).get('evidence') or []
+                conflicts=[e for e in evidence if selection['value']!='unknown' and e.get('scope')!=selection['value']]
+            else:
+                evidence=document_scope.scope_evidence({'result':{'meta':state.analysis.result_meta}})
+                conflicts=document_scope.source_conflicts(evidence,selection['value'])
+            if conflicts and not selection.get('acknowledge_conflicts'): raise HTTPException(409,'选择与原文存在反向证据，请明确核对')
+            if dimension=='writing': evidence=[*evidence,{'dimension':'human_cover_independent','value':selection.get('cover_independent',False)}]
+            selection.update(revision=prev+1,source_evidence=evidence)
+        invalidated=await review_session_store.invalidate_sessions_for_job(conn,job_uuid,reason='material_dimensions_changed')
+        locked=await conn.fetchrow('SELECT file_hash,status FROM analysis_jobs WHERE job_uuid=$1 FOR UPDATE',job_uuid)
+        if locked['file_hash']!=actual_file_hash or locked['status'] in {'queued','processing','running'}: raise HTTPException(409,'分析已开始或原件已变化')
+        for dimension,selection in pending.items():
+            table=tables[dimension]
+            choice=choices[dimension]
+            extra=',conflict_acknowledged' if dimension=='writing' else ''
+            extra_value=',$12' if dimension=='writing' else ''
+            args=[request['request_id'],job_uuid,request['document_version_id'],actual_file_hash,selection['revision'],state.basis_token,
+                  selection['value'],selection['note'],selection['evidence_reference'],json.dumps(selection['source_evidence'],ensure_ascii=False),actor]
+            if dimension=='writing':args.append(selection.get('acknowledge_conflicts',False))
+            saved=await conn.fetchrow(f'''INSERT INTO {table}(request_id,job_uuid,document_version_id,file_hash,revision,analysis_basis_token,{choice},note,evidence_reference,source_evidence,actor{extra})
+                VALUES($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11{extra_value}) RETURNING *''',*args)
+            result[dimension]=document_scope.decision_dict(saved)
+        effects.lock_clears.extend({'job_uuid':job_uuid,'review_session_id':str(item['review_session_id']),'analysis_basis_token':str(item.get('analysis_basis_token') or '')} for item in invalidated)
+        await review_session_store.clear_analysis_result_fingerprint(conn,job_uuid)
+        await conn.execute("UPDATE analysis_jobs SET status='queued',updated_at=NOW() WHERE job_uuid=$1",job_uuid)
+        return result

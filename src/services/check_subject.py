@@ -44,6 +44,7 @@ def resolve_check_subject(
     cover_name: Optional[str],
     cover_conflicted: bool = False,
     subject_level: Optional[str] = None,
+    cover_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     """返回检查主体；``name`` 是规则应当视为本单位的名称。"""
     linked = str(organization_name or "").strip() or None
@@ -57,7 +58,16 @@ def resolve_check_subject(
         "organization_level": level,
         "cover_organization_name": cover,
         "conflict": None,
+        "evidence": [],
     }
+    # 组织目录用“单位”区分同名部门/单位节点；只接受这一精确技术后缀，
+    # 且封面必须有原文证据。不能把包含关系或上级名称当作别名。
+    if (organization_id and level == "unit" and linked and cover and not cover_conflicted
+            and subject_level != "government" and _compact(linked) == _compact(cover) + "单位"
+            and _compact(cover) in _compact(cover_text)):
+        return {**subject, "name": cover, "source": "verified_cover_alias",
+                "evidence": [{"page": 1, "text": cover, "source": "cover_literal",
+                              "linked_name": linked, "relation": "directory_unit_suffix"}]}
     if (not organization_id or level not in PARENT_LEVELS or not linked or not cover
             or cover_conflicted or subject_level == "government"):
         return subject
