@@ -2039,7 +2039,16 @@ def apply_obligation_diagnosis(
         if not isinstance(receipt, Mapping):
             continue
         obligation_id = receipt.get("obligation_id")
-        if not obligation_id or receipt.get("status") not in UNCOMPLETED_RECEIPT_STATUSES:
+        if not obligation_id:
+            continue
+        # 未完成回执全部参与汇总；另有 10 条状态为 pass/fail、但底层规则未完成
+        # 的特殊回执（diagnostic_scope 审定）也携带结构化诊断，必须同样汇总。
+        has_diagnosis = any(
+            receipt.get(field)
+            for field in ("reason_codes", "blocked_by", "missing_operands",
+                          "candidates", "next_action", "root_cause_key")
+        )
+        if receipt.get("status") not in UNCOMPLETED_RECEIPT_STATUSES and not has_diagnosis:
             continue
         children_by_obligation.setdefault(str(obligation_id), []).append(receipt)
 
