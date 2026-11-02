@@ -344,17 +344,28 @@ class CMM018_ScopeTerminology(Rule):
 # ---------------------------------------------------------------------------
 
 _YEAR_RE = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
+#: 表题/说明标题关键词。年份与关键词只要求在同一页的邻近窗口内，
+#: 不再要求同一行——PDF 的标题经常在“2025”和“年度决算表”之间换行。
+_TITLE_CONTEXT_RE = re.compile(r"(?:决算|预算)(?:表|情况说明|编制说明)|预算总表|分类预算表")
+_TITLE_WINDOW = 20
 
 
 def body_year(doc: Document) -> Optional[int]:
-    """表题与说明标题中的年度众数（不看封面）。"""
+    """表题与说明标题中的年度众数（不看封面）。
+
+    旧实现逐行扫描，``2025\\n年度决算表`` 这种跨行标题会被漏计，导致
+    “封面年度缺少正文独立依据”的假取数不足。改为按页 compact 后，
+    只要求年份与标题关键词落在同一页的 ±20 字窗口内；仍然不看封面页，
+    也仍然要求至少出现 2 次，避免单个残留年份被当成报告年度。
+    """
     counts: Counter = Counter()
     for text in list(doc.page_texts or [])[1:]:
-        for line in str(text or "").split("\n"):
-            flat = compact(line)
-            if re.search(r"(?:决算|预算)(?:表|情况说明|编制说明)|预算总表|分类预算表", flat):
-                for year in _YEAR_RE.findall(flat):
-                    counts[int(year)] += 1
+        flat = compact(text)
+        for match in _YEAR_RE.finditer(flat):
+            start = max(0, match.start() - _TITLE_WINDOW)
+            end = min(len(flat), match.end() + _TITLE_WINDOW)
+            if _TITLE_CONTEXT_RE.search(flat[start:end]):
+                counts[int(match.group(1))] += 1
     if not counts:
         return None
     year, count = counts.most_common(1)[0]

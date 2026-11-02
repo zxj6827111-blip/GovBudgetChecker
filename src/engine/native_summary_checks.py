@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from decimal import Decimal
 
 from .amount_math import rounding_envelope
@@ -128,12 +129,62 @@ def check_grant_general_vs_function_total(rule, doc):
     return finish(rule, issues, unresolved)
 
 
+def _equation_zero_child(doc, facts, values, labels):
+    """收入支出决算总表仅缺一个组成项时，用总计残差判断它是否为 0。
+
+    - 只允许父项（总计）和另外两个组成项都已确认；
+    - 缺失项不得存在任何候选事实（候选被拒是身份/年度问题，不能补零）；
+    - 残差必须在政策容差内为 0；非零残差保留取数不足，不拿它凑恒等式。
+    """
+    errors = [index for index, (_, error) in enumerate(values) if error]
+    if len(errors) != 1:
+        return None
+    index = errors[0]
+    if index == 0:
+        return None
+    parent = values[0][0]
+    if parent is None:
+        return None
+    present = [values[i][0] for i in range(1, 4) if i != index and values[i][0] is not None]
+    if len(present) != 2:
+        return None
+    wanted = {re.sub(r"\s+", "", name) for name in labels[index]}
+    if any(
+        f.indicator == "expenditure_actual"
+        and re.sub(r"\s+", "", f.subject_name or "") in wanted
+        for f in facts
+    ):
+        return None
+    residual = parent.normalized_value - sum((f.normalized_value for f in present), Decimal("0"))
+    if amount_difference_exceeds_policy(residual, rounding_envelope(3)):
+        return None
+    return replace(
+        parent,
+        fact_uid=f"equation-zero:{parent.fact_uid}:{labels[index][0]}",
+        indicator="expenditure_actual",
+        raw_value="0",
+        normalized_value=Decimal("0"),
+        subject_name=labels[index][0],
+        recognition_status="equation_residual_zero",
+        extra_dims={
+            **dict(parent.extra_dims or {}),
+            "equation_residual_zero": "other_terms_reconcile",
+            "evidence_refs": [],
+        },
+    )
+
+
 def check_total_expenditure_balance(rule, doc):
     facts, reason = table_facts(doc, 'FIN_01_income_expenditure_total')
     if reason:
         return finish(rule, [], [reason])
-    values = [_pick(doc, facts, 'expenditure_actual', labels, allow_native_blank=True) for labels in
-              (('总计', '支出总计'), ('本年支出合计',), ('结余分配',), ('年末结转和结余',))]
+    labels = (('总计', '支出总计'), ('本年支出合计',), ('结余分配',), ('年末结转和结余',))
+    values = [_pick(doc, facts, 'expenditure_actual', names, allow_native_blank=True)
+              for names in labels]
+    zero_child = _equation_zero_child(doc, facts, values, labels)
+    if zero_child is not None:
+        index = next(i for i, (_, error) in enumerate(values) if error)
+        values[index] = (zero_child, None)
     roles = [(role, *value) for role, value in zip(('parent', 'child', 'child', 'child'), values, strict=True)]
     issues, unresolved = [], []
     _relation(rule, doc, 'total_expenditure_balance', '支出总计=本年支出合计+结余分配+年末结转和结余',

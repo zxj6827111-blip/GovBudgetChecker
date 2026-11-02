@@ -4226,8 +4226,10 @@ def _get_table_rows(
     """
     from .fact_table_projection import fact_bound_table_rows, ProjectionUnavailable
     try:
+        # V33-122 不列入强制 strict：它在两张基金表都明确“本表无数据”时
+        # 显式传 False，让总表基金列的版式空白按 0 处理；其余情况它自己传 True。
         projected = fact_bound_table_rows(doc, table_name, strict_unknown_values=(strict_unknown_values or
-            getattr(doc, "current_rule_code", None) in {"V33-005", "V33-119", "V33-120", "V33-122", "V33-240", "V33-241"}))
+            getattr(doc, "current_rule_code", None) in {"V33-005", "V33-119", "V33-120", "V33-240", "V33-241"}))
     except ProjectionUnavailable as exc:
         raise RuleDeferred("structured_table_projection", str(exc)) from exc
     if projected is not None:
@@ -5658,8 +5660,20 @@ class R33122_EmptyTableCheck(Rule):
 
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
-        # 检查 Table 4 对应的列是否为 0
-        t4_rows = _get_table_rows(doc, "财政拨款收入支出决算总表", strict_unknown_values=True)
+        # 检查 Table 4 对应的列是否为 0。
+        # 两张基金表都明确“本表无数据”时，总表对应资金列的空白是版式空白，
+        # 不是未知数值，按 0 处理；只空一张时仍严格（空白 ≠ 0）。
+        # 放宽只针对“总表能否读取”这道门；基金列以外的其他空白仍由
+        # V33-119/104 等逐行勾稽规则负责。
+        strict_unknown_values = True
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_table_arithmetic import both_fund_tables_disclosed_empty
+            strict_unknown_values = not both_fund_tables_disclosed_empty(doc)
+        t4_rows = _get_table_rows(
+            doc,
+            "财政拨款收入支出决算总表",
+            strict_unknown_values=strict_unknown_values,
+        )
         if not t4_rows:
             raise RuleDeferred(self.code, "财政拨款总表未读取或列未映射，不能把政府性基金/国有资本口径当作零")
         if getattr(doc, "parse_artifact", None) is not None:
@@ -10596,6 +10610,31 @@ _TXT_FUND_ITEM_RE = re.compile(
     r"(?P<unit>万\s*元|亿\s*元|元)", re.S
 )
 
+#: 连字符写法：``城乡社区支出-国有土地使用权出让收入安排的支出-土地出让业务支出``。
+#: 区级部门/单位决算大量使用这种写法，全篇不出现（类）（款）（项）标记；类名一律
+#: 以"支出"结尾，因此三段连字符身份可以稳定切分，日期区间与文号不会误中。名称段
+#: 允许内部换行（PDF 软换行把"土地出让业务支出"拆成"土\n地出让业务支出"），身份
+#: 必须以句读或"主要用于"收尾，避免把跨句的普通连字符文字当成科目身份。
+_TXT_FUND_DASH_ITEM_RE = re.compile(
+    r"(?:^|(?<=[。；;：:、\d“\"「\n]))[“\"「]?"
+    r"(?P<klass>[\u4e00-\u9fff]{1,28}支出)\s*[-—–－]\s*"
+    r"(?P<kuan>[\u4e00-\u9fff（）()\s]{2,60}?)\s*[-—–－]\s*"
+    r"(?P<xiang>[\u4e00-\u9fff（）()\s]{2,60}?)[”\"」]?"
+    r"(?=\s*(?:[。.，,]|主要用于|年初预算|支出决算))", re.S
+)
+
+#: 连字符写法的金额锚：项名之后才写「支出决算为 X 万元」，中间隔着用途说明与
+#: 年初预算；只在同一条目内（下一条科目身份或下一个编号条目前）取数。
+_TXT_FUND_DECISION_RE = re.compile(
+    r"支\s*出\s*决\s*算(?:\s*数)?\s*(?:为|是)?\s*"
+    r"(?P<amount>\d[\d,，]*(?:\.\d+)?)\s*(?P<unit>万\s*元|亿\s*元|元)"
+)
+
+#: 连字符写法里不构成科目身份的通用词组（"本年支出-基本支出-项目支出"类表述）
+_TXT_FUND_DASH_REFUSE = {
+    "本年支出", "上年支出", "支出合计", "基本支出", "项目支出", "预算支出",
+}
+
 #: 说明句前缀里的显式年份（期间锚）：与材料年度不同的年份出现在同一句里，
 #: 说明该句可能在描述另一期间——不跨期绑定。
 #: 年份识别统一收敛到 :mod:`src.engine.year_roles`：金额、百分比、编号里的
@@ -10660,7 +10699,13 @@ def _txt_fund_body_without_page_footers(doc, section, offsets):
             local = position - start
             if 0 <= local < len(body):
                 body[local] = ' '
-    return ''.join(body)
+    text = ''.join(body)
+    # 版面里落单的标点行（实样：两行"支"/"出"之间单独一行","，来自千分位错位抽取）
+    # 只把标点本身换成空格，长度与偏移都不变——"支出决算为 X 万元"这类固定句式
+    # 因此仍能连续匹配，证据切片仍能回到原文。
+    for match in re.finditer(r'(?m)^[ \t]*([,，、;；.。])[ \t]*$', text):
+        text = text[:match.start(1)] + ' ' + text[match.end(1):]
+    return text
 
 
 def _txt_fund_section(
@@ -10816,39 +10861,179 @@ def _txt_fund_table_items(
     return items, hierarchy
 
 
+def _txt_fund_document_names(
+    doc: Document, *, exclude: Sequence[Any] = ()
+) -> Dict[str, Set[str]]:
+    """全文档功能分类编码 → 该编码在各表里的名称集合（不含被检查的基金/国资表）。
+
+    用途有两个，都只做**身份**证明、不做金额比对：
+    - 基表只列到款时，证明「该款下唯一子项就是说明所写项名」（款合计＝该项）；
+    - 基表缺类/款层级行时，证明说明写的类/款名确实对应表内项级编码的上级。
+
+    ``exclude`` 是被检查的基金/国资表本体：被检查表如果项级行名称印错
+    （实样：2120806 印成款名"国有土地使用权出让收入安排的支出"），把它算进
+    名称集合会让身份闭环失真。
+    """
+    names: Dict[str, Set[str]] = {}
+    tables = getattr(doc, "parsed_tables", None)
+    if not isinstance(tables, dict):
+        return names
+    excluded = {id(table) for table in exclude}
+    for table in tables.values():
+        if id(table) in excluded:
+            continue
+        for row in getattr(table, "rows", []):
+            if getattr(row, "row_role", "") == "header":
+                continue
+            code = str(getattr(row, "code", "") or "").strip()
+            if len(code) not in (3, 5, 7) or not code.isdigit():
+                continue
+            name = ""
+            for cell in list(getattr(row, "cells", []))[1:3]:
+                text = _txt_fund_norm(getattr(cell, "text", ""))
+                if text and not text.replace(",", "").replace(".", "").isdigit():
+                    name = text
+                    break
+            if name:
+                names.setdefault(code, set()).add(name)
+    return names
+
+
+def _txt_fund_children(names: Dict[str, Set[str]]) -> Dict[str, Set[str]]:
+    """7 位项级编码 → 所属 5 位款下的项名集合。"""
+    children: Dict[str, Set[str]] = {}
+    for code, code_names in names.items():
+        if len(code) == 7:
+            children.setdefault(code[:5], set()).update(code_names)
+    return children
+
+
+def _txt_fund_parent_name(code: str, names: Dict[str, Set[str]]) -> Optional[str]:
+    """上级编码在文档其他表里的唯一名称；0 个或多个名称都算未确认。"""
+    found = names.get(code, set())
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def _txt_fund_name_key(name: str) -> str:
+    """科目名称比对键：只容忍规范后缀「支出」的缺省。
+
+    AGENTS.md 口径：科目名称按编码或名称定位后逐字比对，"支出/预算/决算"等
+    后缀差异属名称多/少字、标 low，而不是归一豁免。这里只做**同一身份**的
+    定位比对（表内名称 vs 说明名称），定位到以后金额照常比；真正不同的业务
+    名称（如"其他支出"vs"其他"）不会被并成同一项，因为两侧必须同款同级。
+    """
+    return name[:-2] if len(name) > 2 and name.endswith("支出") else name
+
+
 def _txt_fund_match_item(
     items: List[Dict[str, Any]],
     hierarchy: Dict[str, str],
     klass: str,
     kuan: str,
     xiang: str,
+    children: Optional[Dict[str, Set[str]]] = None,
+    document_names: Optional[Dict[str, Set[str]]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], str]:
     """三级层级名称逐级全匹配定位唯一表行；0 行/多行/层级不全都不可比。
 
     说明侧只有名称没有编码，身份锚是"表内编码层级推导出的名称链"：项级行
     （7 位编码）的款层（code[:5]）与类层（code[:3]）行名称必须逐级相等。
     只凭项级名称相等不认——那是 Mutation A 要拦的误配形态。
+
+    表内只列到款（区级模板常见）时，允许把项落到款级行，但必须另有身份闭环：
+    要么项名与款名完全相同（款即项），要么同一份材料的其他功能分类表证明
+    该款下只有一个同名项。两种情形下「款合计 = 该项金额」都成立。
     """
-    same_name = [item for item in items if len(item["code"]) == 7 and item["name"] == xiang]
-    hits: List[Dict[str, Any]] = []
-    incomplete = False
-    for item in same_name:
-        kuan_name = hierarchy.get(item["code"][:5])
-        klass_name = hierarchy.get(item["code"][:3])
-        if kuan_name is None or klass_name is None:
-            incomplete = True
-            continue
-        if kuan_name == kuan and klass_name == klass:
-            hits.append(item)
+    def locate(predicate) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], bool]:
+        # 表内完全没有类/款行（有的模板只印项级行）：表内身份由「同名项唯一」闭环，
+        # 不存在可竞争的上级层级；此时才允许不校验上级名称。
+        parents_printed = any(len(code) in (3, 5) for code in hierarchy)
+        named: List[Dict[str, Any]] = []
+        hits: List[Dict[str, Any]] = []
+        incomplete = False
+        for item in items:
+            if len(item["code"]) != 7 or not predicate(item["name"]):
+                continue
+            named.append(item)
+            kuan_name = hierarchy.get(item["code"][:5])
+            klass_name = hierarchy.get(item["code"][:3])
+            if kuan_name is None or klass_name is None:
+                if not parents_printed:
+                    hits.append(item)
+                    continue
+                # 表内有类/款行但本项缺上级：用同一份材料的其他功能分类表证明
+                # 上级名称，仍然是逐级全匹配，不做近似。
+                kuan_name = kuan_name or _txt_fund_parent_name(item["code"][:5], document_names or {})
+                klass_name = klass_name or _txt_fund_parent_name(item["code"][:3], document_names or {})
+                if kuan_name is None or klass_name is None:
+                    incomplete = True
+                    continue
+            if _txt_fund_name_key(kuan_name) == _txt_fund_name_key(kuan) \
+                    and _txt_fund_name_key(klass_name) == _txt_fund_name_key(klass):
+                hits.append(item)
+        return named, hits, incomplete
+
+    named, hits, incomplete = locate(lambda name: name == xiang)
+    if not hits:
+        # 名称少写规范后缀（"土地出让业务" vs 表内"土地出让业务支出"）仍可定位，
+        # 但必须唯一：同级同名键命中多行即身份不唯一，不挑一行。
+        named, hits, incomplete = locate(lambda name: _txt_fund_name_key(name) == _txt_fund_name_key(xiang))
     if len(hits) > 1:
         return None, "命中多行，无法确定取哪一行"
-    if hits and len(same_name) > len(hits):
+    if hits and len(named) > len(hits):
         return None, "同名项级行存在类/款层级不全的行，业务身份无法闭环"
     if hits:
         return hits[0], ""
     if incomplete:
         return None, "表内项级行存在，但类/款层级行缺失，三级业务身份无法闭环"
+
+    closed: List[Dict[str, Any]] = []
+    for item in items:
+        if len(item["code"]) != 5 or item["name"] != kuan:
+            continue
+        if hierarchy.get(item["code"][:3]) != klass:
+            continue
+        child_names = {_txt_fund_name_key(name) for name in (children or {}).get(item["code"], set())}
+        if _txt_fund_name_key(xiang) == _txt_fund_name_key(kuan) or child_names == {
+            _txt_fund_name_key(xiang)
+        }:
+            closed.append(item)
+    if len(closed) > 1:
+        return None, "款级命中多行，无法确定取哪一行"
+    if closed:
+        return closed[0], ""
     return None, "未在表内定位到同名同级的功能分类项"
+
+
+def _txt_fund_item_occurrences(body: str) -> List[Dict[str, Any]]:
+    """枚举说明章节里的业务项身份出现位置（两种写法合并）。"""
+    marks = [
+        {"form": "mark", "start": m.start(), "end": m.end(), "match": m}
+        for m in _TXT_FUND_ITEM_RE.finditer(body)
+    ]
+    dashes = [
+        {"form": "dash", "start": m.start(), "end": m.end(), "match": m}
+        for m in _TXT_FUND_DASH_ITEM_RE.finditer(body)
+        if not any(item["start"] <= m.start() < item["end"] for item in marks)
+    ]
+    return sorted(marks + dashes, key=lambda item: item["start"])
+
+
+def _txt_fund_dash_amount(
+    body: str, start: int, stop: int
+) -> Optional[Tuple[str, str, int]]:
+    """连字符条目内的支出决算金额：(金额原文, 单位, 结束偏移)。"""
+    # 下一条目（含没有识别出身份的编号条目）就是本条目的金额边界，绝不借用
+    heading = re.search(r"\n\s*\d+[、.．]", body[start:stop])
+    if heading:
+        stop = start + heading.start()
+    # 条目边界（下一条科目身份/下一个编号条目）才是真正的金额边界；600 字上限只
+    # 防跑飞，允许「主要用于：……」写成长段用途说明后仍能取到支出决算数。
+    window = body[start:min(stop, start + 600)]
+    decision = _TXT_FUND_DECISION_RE.search(window)
+    if decision is None:
+        return None
+    return decision.group("amount"), decision.group("unit"), start + decision.end()
 
 
 def _txt_fund_bind_statements(
@@ -10857,7 +11042,7 @@ def _txt_fund_bind_statements(
     """绑定说明章节里的项级支出金额句。
 
     一条说明句要成为正式比较的说明侧证据，必须同时满足四个锚：
-    - 业务项锚：完整三级「X（类）Y（款）Z（项）」身份；
+    - 业务项锚：完整三级身份——「X（类）Y（款）Z（项）」或「X-Y-Z」连字符写法；
     - 口径锚：落在「支出具体情况如下（含变体）」之后的支出明细段里
       （同段还有收入总额/年初预算/同比增减，都不能当项金额）；
     - 期间锚：句前缀不出现与材料年度不同的显式年份；
@@ -10865,16 +11050,39 @@ def _txt_fund_bind_statements(
     任一锚不成立 → 不绑定并记录原因（fail-closed，不出正式结论）。
     """
     markers = [m.start() for m in _TXT_FUND_BREAKDOWN_RE.finditer(body)]
+    occurrences = _txt_fund_item_occurrences(body)
     bindings: List[Dict[str, Any]] = []
     blocked: List[str] = []
     amounts_by_item: Dict[str, List[str]] = {}
-    for m in _TXT_FUND_ITEM_RE.finditer(body):
+    for index, occurrence in enumerate(occurrences):
+        m = occurrence["match"]
         klass = _txt_fund_norm(m.group("klass"))
         kuan = _txt_fund_norm(m.group("kuan"))
         xiang = _txt_fund_norm(m.group("xiang"))
-        amount_text = re.sub(r"[,，\s]", "", m.group("amount"))
-        unit = _txt_fund_norm(m.group("unit"))
         label = f"{klass}（类）{kuan}（款）{xiang}（项）"
+        if not klass or not kuan or not xiang or klass in _TXT_FUND_DASH_REFUSE:
+            continue
+        if occurrence["form"] == "dash":
+            stop = (
+                occurrences[index + 1]["start"]
+                if index + 1 < len(occurrences)
+                else len(body)
+            )
+            found = _txt_fund_dash_amount(body, m.end(), stop)
+            if found is None:
+                blocked.append(
+                    f"说明项「{label}…」未写明「支出决算为 X 万元」，"
+                    "项级支出金额不可确认"
+                )
+                continue
+            amount_text, unit, amount_end = found
+            span = source_body[m.start():amount_end] if source_body is not None else body[m.start():amount_end]
+        else:
+            amount_text = m.group("amount")
+            unit = m.group("unit")
+            span = source_body[m.start():m.end()] if source_body is not None else m.group(0)
+        amount_text = re.sub(r"[,，\s]", "", amount_text)
+        unit = _txt_fund_norm(unit)
         if not any(pos < m.start() for pos in markers):
             blocked.append(
                 f"说明句「{label}…」未落在「支出具体情况如下」支出明细段内，"
@@ -10923,7 +11131,7 @@ def _txt_fund_bind_statements(
                 "unit": unit,
                 "scale": scale,
                 "offset": m.start(),
-                "span": (source_body[m.start():m.end()] if source_body is not None else m.group(0)),
+                "span": span,
             }
         )
     # 同一业务项出现多个不同金额：取哪个无从证明（同段矛盾归其它规则）→ 不比较该项
@@ -11140,9 +11348,15 @@ class R33TxtFundDetail(Rule):
             )
             return
 
+        fund_tables = list(matched)
+        for other_scope in _TXT_FUND_SCOPES:
+            fund_tables.extend(_txt_fund_tables_by_alias(doc, other_scope[3]))
+        document_names = _txt_fund_document_names(doc, exclude=fund_tables)
+        document_children = _txt_fund_children(document_names)
         for binding in bindings:
             item, match_error = _txt_fund_match_item(
-                items, hierarchy, binding["klass"], binding["kuan"], binding["xiang"]
+                items, hierarchy, binding["klass"], binding["kuan"], binding["xiang"],
+                children=document_children, document_names=document_names,
             )
             if item is None:
                 unresolved.append(
@@ -11980,14 +12194,14 @@ _WP4E_OBLIGATION_ID = "OBL-TREND-COMPLETION-RATE"
 #: CMM-007 领域）与占比句（占X的P%）都不带「完成…预算」锚，不进本 matcher
 #: （Mutation D 看守该边界）。
 _WP4E_CLAIM_RE = re.compile(
-    r"完\s*成\s*(?P<denom>年初\s*预\s*算|全年\s*预\s*算|调整\s*预\s*算|预\s*算)"
+    r"完\s*成\s*(?P<denom>年初\s*预\s*算|全年\s*预\s*算|调整\s*后?\s*预\s*算|预\s*算)"
     r"(?:\s*数)?(?:\s*的\s*比\s*重)?(?:\s*的)?(?:\s*为)?\s*"
     r"(?P<pct>\d[\d,，]*(?:\.\d+)?)\s*%"
 )
 
 #: 完成率声明句（名词形态）：「（年初|全年|调整|）预算完成率为?P%」。
 _WP4E_CLAIM_NOUN_RE = re.compile(
-    r"(?P<denom>年初\s*预\s*算|全年\s*预\s*算|调整\s*预\s*算|预\s*算)\s*完\s*成\s*率"
+    r"(?P<denom>年初\s*预\s*算|全年\s*预\s*算|调整\s*后?\s*预\s*算|预\s*算)\s*完\s*成\s*率"
     r"(?:\s*为)?\s*(?P<pct>\d[\d,，]*(?:\.\d+)?)\s*%"
 )
 
@@ -11997,7 +12211,7 @@ _WP4E_CLAIM_NOUN_RE = re.compile(
 #: 泛身份，只在与完成率声明同句读单元时绑定，避免表格表头「预算数\n0.00」
 #: 误入；「决算数大于预算数的主要原因」类无金额句读不命中。
 _WP4E_BUDGET_RE = re.compile(
-    r"(?P<role>年初\s*预\s*算(?:\s*数)?|全年\s*预\s*算(?:\s*数)?|调整\s*预\s*算(?:\s*数)?|预\s*算(?:\s*数)?)"
+    r"(?P<role>年初\s*预\s*算(?:\s*数)?|全年\s*预\s*算(?:\s*数)?|调整\s*后?\s*预\s*算(?:\s*数)?|预\s*算(?:\s*数)?)"
     # A native text layer may insert a horizontal gap inside the leading
     # thousands group: 1 10,210.99. Only accept a complete 1–3 digit group,
     # retaining the literal comma-separated groups; do not join amount columns.
@@ -12008,7 +12222,7 @@ _WP4E_BUDGET_RE = re.compile(
 #: 决算」（收入侧不是支出完成率的分子）；measure 词容忍软换行（宜川 Y07
 #: 教训：「支␊出决算为」「决算␊为」）。
 _WP4E_ACTUAL_RE = re.compile(
-    r"(?<!收入)(?:支\s*出\s*)?决\s*算(?:\s*数)?\s*(?:为|是)?\s*(?P<amount>\d(?:[\d,，]*\d)?(?:\.\d+)?)\s*"
+    r"(?<!收入)(?:支\s*出\s*)?决\s*算(?:\s*(?:数|执\s*行\s*数?))?\s*(?:为|是)?\s*(?P<amount>\d(?:[\d,，]*\d)?(?:\.\d+)?)\s*"
     r"(?P<unit>万\s*元|亿\s*元|元)?"
 )
 
@@ -12039,7 +12253,7 @@ _WP4E_SUBCLAUSE_BREAK_RE = re.compile(r"[。；;！？，,、：:]")
 #: 指标为「一般公共预算财政拨款支出」）。软换行先整体去空白再截，避免
 #: 「决算␊为 16.95」把「为 16.95 万元」当成指标名。
 _WP4E_HEAD_CUT_RE = re.compile(
-    r"年初\s*预\s*算|全年\s*预\s*算|调整\s*预\s*算|预\s*算(?:\s*数)?|支\s*出\s*决\s*算|决\s*算"
+    r"年初\s*预\s*算|全年\s*预\s*算|调整\s*后?\s*预\s*算|预\s*算(?:\s*数)?|支\s*出\s*决\s*算|决\s*算"
 )
 
 #: 条目类款项头（不要求紧邻首句金额——「（项），主要用于…年初预算为X」
@@ -12072,6 +12286,7 @@ _WP4E_CLAIM_ROLES: Dict[str, str] = {
     "年初预算": "年初预算",
     "全年预算": "全年预算",
     "调整预算": "调整预算",
+    "调整后预算": "调整预算",
     "预算": "",
 }
 
@@ -12083,6 +12298,8 @@ def _wp4e_claim_role(denom_text: str) -> str:
 def _wp4e_role_key(role_text: str) -> str:
     """分母披露身份归一：「年初预算数」并入「年初预算」；「预算/预算数」为泛身份。"""
     norm = _txt_fund_norm(role_text)
+    if norm.startswith("调整后预算"):
+        return "调整预算"
     for key in ("年初预算", "全年预算", "调整预算"):
         if norm.startswith(key):
             return key

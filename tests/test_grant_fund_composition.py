@@ -111,3 +111,80 @@ def test_empty_fund_table_without_facts_and_without_disclosure_is_deferred(monke
     doc = document()
     with pytest.raises(RuleDeferred, match='没有可用金额事实'):
         check_fund_zero_disclosures(R33122_EmptyTableCheck(), doc)
+
+
+def test_missing_fund_columns_are_zero_only_when_both_fund_tables_empty(monkeypatch):
+    """两张基金表都明确无数据时，总表缺失的基金列按 0 参与公式。"""
+    from src.engine import native_table_arithmetic
+
+    doc = document()
+    doc.fact_context.facts = [
+        fact for fact in doc.fact_context.facts
+        if fact.indicator not in ("government_fund_budget", "state_capital_budget")
+    ]
+    monkeypatch.setattr(
+        native_table_arithmetic, "both_fund_tables_disclosed_empty", lambda _doc: True
+    )
+    assert check_fiscal_grant_arithmetic(R33119_FiscalTotalCheck(), doc) == []
+
+    zero = native_table_arithmetic._document_scoped_zero(doc.fact_context.facts[0],
+                                                         "government_fund_budget")
+    assert zero.normalized_value == Decimal("0")
+    assert zero.recognition_status == "document_scoped_zero"
+    assert zero.extra_dims["document_scoped_zero"] == "both_fund_tables_disclosed_empty"
+    assert zero.extra_dims["evidence_refs"] == []
+
+    # 只空一张表时仍严格：缺失基金列不得补零
+    monkeypatch.setattr(
+        native_table_arithmetic, "both_fund_tables_disclosed_empty", lambda _doc: False
+    )
+    with pytest.raises(RuleDeferred):
+        check_fiscal_grant_arithmetic(R33119_FiscalTotalCheck(), doc)
+
+
+def test_both_fund_tables_must_be_disclosed_empty(monkeypatch):
+    """只有政府性基金、国有资本两张表都明确无数据，才允许把总表空白当零。"""
+    from src.engine import native_table_arithmetic
+
+    doc = SimpleNamespace()
+    monkeypatch.setattr(
+        native_table_arithmetic,
+        '_target_disclosed_empty',
+        lambda _doc, code: code == 'FIN_08_gov_fund',
+    )
+    assert native_table_arithmetic.both_fund_tables_disclosed_empty(doc) is False
+    monkeypatch.setattr(
+        native_table_arithmetic,
+        '_target_disclosed_empty',
+        lambda _doc, _code: True,
+    )
+    assert native_table_arithmetic.both_fund_tables_disclosed_empty(doc) is True
+
+
+def test_fund_zero_check_relaxes_total_table_blanks_only_when_both_empty(monkeypatch):
+    """V33-122：两张基金表都明确无数据 → 总表空白按零；否则仍严格。"""
+    from src.engine import native_table_arithmetic, rules_v33
+
+    captured = {}
+
+    def fake_get_rows(_doc, _name, strict_unknown_values=False):
+        captured['strict'] = strict_unknown_values
+        return [['已验证原格']]
+
+    monkeypatch.setattr(rules_v33, '_get_table_rows', fake_get_rows)
+    monkeypatch.setattr(
+        native_table_arithmetic, 'check_fund_zero_disclosures', lambda _rule, _doc: []
+    )
+    doc = SimpleNamespace(parse_artifact=object())
+
+    monkeypatch.setattr(
+        native_table_arithmetic, 'both_fund_tables_disclosed_empty', lambda _doc: True
+    )
+    assert rules_v33.R33122_EmptyTableCheck().apply(doc) == []
+    assert captured['strict'] is False
+
+    monkeypatch.setattr(
+        native_table_arithmetic, 'both_fund_tables_disclosed_empty', lambda _doc: False
+    )
+    assert rules_v33.R33122_EmptyTableCheck().apply(doc) == []
+    assert captured['strict'] is True

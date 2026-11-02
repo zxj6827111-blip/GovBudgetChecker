@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import multiprocessing
 import os
+import sys
 import time
 import threading
 from multiprocessing.connection import Connection
@@ -89,7 +90,12 @@ def _evaluate_in_process(target: Any, args: tuple, timeout_seconds: float,
                          cancel_event: Optional[threading.Event], *, name: str) -> Dict[str, Any]:
     start_method = os.getenv("RULES_PROCESS_START_METHOD", "").strip()
     if not start_method:
-        start_method = "spawn" if os.name == "nt" else "fork"
+        # macOS 与 Windows 默认用 spawn：父进程是多线程 asyncio（工作线程、线程池、
+        # 数据库连接池），fork 出的子进程会继承其它线程当时持有的锁（日志锁、进度
+        # 文件锁、导入锁）。一旦继承到已上锁的锁，子进程会永久等待，父进程只能等到
+        # 超时把整单判失败——2026-11-01 生产日志里出现过一次 150 秒零回传即此类。
+        # spawn 重新起解释器，不继承父进程锁，代价是每次多几百毫秒启动开销。
+        start_method = "spawn" if (os.name == "nt" or sys.platform == "darwin") else "fork"
     context = multiprocessing.get_context(start_method)
     parent_connection, child_connection = context.Pipe(duplex=False)
     process = context.Process(

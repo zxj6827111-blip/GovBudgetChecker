@@ -40,6 +40,15 @@ _DETAIL_TOTAL_RE = re.compile(
     r"年初预算(?:数)?(?:为|是)?\s*[:：]?\s*" + _AMOUNT + r"\s*万元[，,、\s]*"
     r"支出决算(?:数)?(?:为|是)?\s*[:：]?\s*" + _AMOUNT + r"\s*万元"
 )
+#: 「年初预算 → 调整后预算 → 决算执行数」是常见变体。只认这三段式，
+#: 且“调整后预算”金额用非捕获组，保证 group(1)=年初预算、group(2)=决算
+#: 执行数，与标准总额匹配的取值口径一致。若决算执行数与分项之和不一致，
+#: 仍按真实差额出 finding，不因为换了标签就放过。
+_DETAIL_TOTAL_ADJUSTED_RE = re.compile(
+    r"年初预算(?:数)?\s*(?:为|是)?\s*[:：]?\s*" + _AMOUNT + r"\s*万元"
+    r"[\s\S]{0,160}?调整\s*后\s*预\s*算(?:\s*数)?\s*(?:为|是)?\s*[:：]?\s*\d[\d,]*(?:\.\d+)?\s*万元"
+    r"[\s\S]{0,80}?(?:年终)?决算执行数\s*(?:为|是)?\s*[:：]?\s*" + _AMOUNT + r"\s*万元"
+)
 _ITEM_START_RE = re.compile(r"(?:^|(?<=[。；;：:]))(\d{1,2})[、.．](?=[一-鿿“\"])")
 # 声明角色：年初预算及其省略“年初”的写法（只认句首/分句起点的“预算为”，
 # 避免把“决算数大于预算数2.39万元”“追加预算”“调整后预算”当成预算声明），
@@ -537,12 +546,18 @@ class R33251_FunctionalDetailCompleteness(Rule):
         issues: List[Issue] = []
         unresolved: List[str] = []
         unresolved_codes: List[str] = []
-        total = _DETAIL_TOTAL_RE.search(joined)
         starts = [m.start() for m in _ITEM_START_RE.finditer(joined)]
         # 总额必须在逐项条目之前；否则命中的只是某项自己的“年初预算…支出决算…”，
         # 不能拿它当该部分总额（否则会把第一项误当总额并重复计缺失）。
+        total = _DETAIL_TOTAL_RE.search(joined)
         if total is not None and starts and total.start() >= starts[0]:
             total = None
+        if total is None:
+            # 标准三段式命中到了某个分项时，再试“年初预算→调整后预算→决算执行数”
+            # 的总额变体；同样要求它在首项之前。
+            total = _DETAIL_TOTAL_ADJUSTED_RE.search(joined)
+            if total is not None and starts and total.start() >= starts[0]:
+                total = None
         items: List[Dict[str, Any]] = []
         for index, start in enumerate(starts):
             stop = starts[index + 1] if index + 1 < len(starts) else len(joined)

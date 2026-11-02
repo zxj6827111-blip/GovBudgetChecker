@@ -312,3 +312,22 @@ def test_rules_report_subject_mismatch_in_deferred_reason():
     with pytest.raises(RuleDeferred) as caught:
         CMM018_ScopeTerminology().apply(doc)
     assert '封面主体与所选组织不一致' in caught.value.detail
+
+
+def test_body_year_counts_headings_split_across_lines():
+    """PDF 标题常在年份和“年度决算表”之间换行；跨行标题必须计入正文锚点。"""
+    from types import SimpleNamespace
+    from src.engine.checklist_identity_rules import body_year
+    pages = [
+        "某单位\n2025 年度决算",
+        "第二部分 某单位 2025\n年度决算表",
+        "第三部分 某单位 2025\n年度决算情况说明",
+    ]
+    assert body_year(SimpleNamespace(page_texts=pages)) == 2025
+
+
+def test_body_year_still_needs_two_anchors_and_rejects_typo_year():
+    from types import SimpleNamespace
+    from src.engine.checklist_identity_rules import body_year
+    assert body_year(SimpleNamespace(page_texts=["封面", "2025年度决算表"])) is None
+    assert body_year(SimpleNamespace(page_texts=["封面", "22025年度决算表", "2025年度决算表"])) is None

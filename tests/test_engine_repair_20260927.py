@@ -187,12 +187,13 @@ def test_unresolved_total_le_15(replays):
     assert any(issue.rule == 'V33-234' and '312.55%' in issue.message
                and '20.00' in issue.message and '62.51' in issue.message for issue in replays['shiquan']['issues'])
     # v3 封面不能用封面或未验收的标题风格自证；冻结夹具不带年度模板快照。
-    # 逐份锁定新增的独立依据缺口，原有 15/11 门槛与冻结文件哈希保持。
+    # 2026-11-01：body_year 改为按页 ±20 字窗口识别标题，跨行的
+    # “2025\n年度决算表”不再漏计；yichuan/shiquan 的年度锚点已能独立成立，
+    # 只剩“封面文种缺少独立依据”这一项真实缺口。
     for alias in ('golden','yichuan','wenlv','shiquan'):
         item=replays[alias]['unresolved']['CMM-019']
         assert item['status']=='insufficient_data'
-        expected='封面年度缺少正文独立依据；封面文种缺少独立依据' if alias in ('yichuan','shiquan') else '封面文种缺少独立依据'
-        assert item['detail']==expected
+        assert item['detail']=='封面文种缺少独立依据'
         planned_missing+=1
     assert total - planned_missing <= 15, f"排除已核实缺分项预算后 unresolved {total} 超出验收线"
     # 2026-09-29 MR-B 批次计划内收敛：4 份决算 unresolved 14 → ≤10（实测 10），

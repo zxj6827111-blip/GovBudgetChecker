@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from dataclasses import replace
 from decimal import Decimal
 
 from .amount_math import classify_amount_diff
@@ -37,6 +38,26 @@ def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow
                        and not any(other in re.sub(r'\s+', '', f.subject_name or '')
                                    for other in ('人员经费合计', '公用经费合计') if other != normalized_name)))
                   and _canonical_budget_stage(f.budget_stage) == stage]
+    if len(candidates) > 1:
+        # 整行排版重复（同一科目编码、同一金额在原表印两遍）会为两个不同的
+        # 原格各生成一条事实；它们是同一行的副本，不是两个候选值，按
+        # (科目, 指标, 原值, 归一值, 单位) 收敛。绑定同一个原格的多条事实是
+        # 事实层重复登记，仍判不唯一。
+        cells = {
+            tuple(sorted({
+                ref.get("source_cell_id")
+                for ref in (fact.extra_dims or {}).get("evidence_refs", [])
+                if ref.get("source_cell_id")
+            }))
+            for fact in candidates
+        }
+        if len(cells) > 1:
+            unique = {}
+            for fact in candidates:
+                unique.setdefault(
+                    (fact.subject_code, fact.indicator, str(fact.raw_value),
+                     str(fact.normalized_value), fact.unit), fact)
+            candidates = list(unique.values())
     if len(candidates) != 1:
         if not candidates and allow_native_blank and facts:
             term = blank_term(doc, facts[0].table_code, indicator, code=code,
@@ -182,12 +203,46 @@ def cluster_source_errors(rule, issues):
     return retained
 
 
+def _document_scoped_zero(parent, indicator):
+    """两张基金表都明确“本表无数据”时，总表该资金列的缺失按零。
+
+    只用于 V33-119 的财政拨款总表公式：政府性基金/国有资本两张表都明确
+    无数据时，总表对应列留空属于版式空白，不是未知数值。合成事实带
+    ``document_scoped_zero`` 标记，便于审计区分"原文写了 0"与"按披露推定 0"。
+    """
+    fund_scope = {
+        "government_fund_budget": "government_fund",
+        "state_capital_budget": "state_owned",
+    }[indicator]
+    return replace(
+        parent,
+        fact_uid=f"document-scoped-zero:{parent.fact_uid}:{indicator}",
+        indicator=indicator,
+        raw_value="0",
+        normalized_value=Decimal("0"),
+        fund_scope=fund_scope,
+        recognition_status="document_scoped_zero",
+        extra_dims={
+            **dict(parent.extra_dims or {}),
+            "document_scoped_zero": "both_fund_tables_disclosed_empty",
+            # 合成零没有原格证据；不要伪造 bbox/页码。
+            "evidence_refs": [],
+        },
+    )
+
+
 def check_fiscal_grant_arithmetic(rule, doc):
-    """财政拨款总表按事实列身份取数，缺失分项绝不使用位置推断或补零。"""
+    """财政拨款总表按事实列身份取数，缺失分项绝不使用位置推断或补零。
+
+    唯一例外：政府性基金、国有资本经营两张表都明确披露“本表无数据”时，
+    总表对应资金列的空白按 0 参与公式（带 ``document_scoped_zero`` 标记）；
+    只有一张表为空、或有候选事实但身份不一致时，仍保持 fail-closed。
+    """
     code = "FIN_04_fiscal_grant_total"
     facts, error = table_facts(doc, code)
     if error:
         return finish(rule, [], [error])
+    fund_columns_zero = both_fund_tables_disclosed_empty(doc)
     issues, unresolved, checked = [], [], 0
     for row in sorted({fact.row_order for fact in facts if fact.indicator == "expenditure_actual"}, key=str):
         row_facts = [fact for fact in facts if fact.row_order == row]
@@ -199,6 +254,15 @@ def check_fiscal_grant_arithmetic(rule, doc):
         for indicator in ("general_public_budget", "government_fund_budget", "state_capital_budget"):
             term, missing = select(doc, row_facts, indicator, code=parent.subject_code,
                                    name=parent.subject_name, allow_native_blank=True)
+            if (
+                missing
+                and fund_columns_zero
+                and indicator in ("government_fund_budget", "state_capital_budget")
+                and not any(fact.indicator == indicator for fact in row_facts)
+            ):
+                # 两张基金表都明确无数据，且该行该资金列没有任何候选事实。
+                term = _document_scoped_zero(parent, indicator)
+                missing = None
             if missing:
                 error = missing
                 unresolved.append(missing)
@@ -238,6 +302,19 @@ def _target_disclosed_empty(doc, code):
         return False
     instance, fragment = instances[0]
     return bool(disclosed_empty_fiscal_table(doc, instance, fragment))
+
+
+def both_fund_tables_disclosed_empty(doc) -> bool:
+    """政府性基金、国有资本经营两张表是否都明确披露“本表无数据”。
+
+    V33-122 的放宽条件：只有两张基金表都明确无数据时，才把财政拨款总表
+    对应资金列的空白按版式空白（0）处理；只空一张时仍保持 fail-closed，
+    不把空白当零。
+    """
+    return (
+        _target_disclosed_empty(doc, "FIN_08_gov_fund")
+        and _target_disclosed_empty(doc, "FIN_09_state_capital")
+    )
 
 
 def check_fund_zero_disclosures(rule, doc):

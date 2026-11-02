@@ -182,9 +182,9 @@ class DualModeAnalyzer:
         from src.services.ai_model_settings import audit_time_budget
         TIMEOUT_SECONDS = audit_time_budget(config.ai_timeout)
         try:
-            RULE_TIMEOUT_SECONDS = max(1, int(os.getenv("RULES_TIMEOUT_SEC", "150")))
+            RULE_TIMEOUT_SECONDS = max(1, int(os.getenv("RULES_TIMEOUT_SEC", "300")))
         except ValueError:
-            RULE_TIMEOUT_SECONDS = 150
+            RULE_TIMEOUT_SECONDS = 300
 
         # AC-11：部分结果保全——管线后段（合并/定位/快照）异常时，
         # 已完成的 AI/规则结果不得被整批清空后按空结果重算。
@@ -791,9 +791,9 @@ class DualModeAnalyzer:
         if not config.rule_enabled:
             return []
         try:
-            timeout_seconds = max(1, int(os.getenv("RULES_TIMEOUT_SEC", "150")))
+            timeout_seconds = max(1, int(os.getenv("RULES_TIMEOUT_SEC", "300")))
         except ValueError:
-            timeout_seconds = 150
+            timeout_seconds = 300
         return await run_engine_rules_in_process(
             self.engine_runner, job_context, engine_rules, config, timeout_seconds,
         )
