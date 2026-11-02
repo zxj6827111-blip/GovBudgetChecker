@@ -671,7 +671,6 @@ def _build_check_scope_export(status_payload: Dict[str, Any]) -> Dict[str, Any]:
                     "candidates": item.get("candidates") or [],
                     "next_action": item.get("next_action"),
                     "root_cause_key": item.get("root_cause_key"),
-                    "legacy_coverage_terms": item.get("legacy_coverage_terms"),
                 }
                 for item in coverage.get("instances", [])
                 if isinstance(item, dict)

@@ -1207,10 +1207,6 @@ def build_coverage(raw: Any) -> CoverageBlock:
                 candidates=[dict(item) for item in _json_list(row.get("candidates")) if isinstance(item, dict)],
                 next_action=_text_or_none(row.get("next_action")),
                 root_cause_key=_text_or_none(row.get("root_cause_key")),
-                legacy_coverage_terms=(
-                    None if row.get("legacy_coverage_terms") is None
-                    else _string_list(row.get("legacy_coverage_terms"))
-                ),
             )
         )
 
