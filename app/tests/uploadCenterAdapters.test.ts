@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { buildUploadOrganizationOptions, searchUploadOrganizations, selectUploadOrganizationCandidates } from "../app/components/workspace/uploadOrganizationOptions";
 
 import {
   applyManualConfirmationOverride,
@@ -17,6 +18,8 @@ import {
   selectReportOrganizationOptions,
   selectUnitOptionsForDepartment,
   validateAttribution,
+  UPLOAD_CONCURRENCY,
+  mapWithConcurrency,
   type OrganizationRecordLike,
   describeAnalyzeStartFailure,
   summarizeSubmitOutcome,
@@ -269,6 +272,39 @@ const lettersOptions = selectReportOrganizationOptions([
 assert.equal(lettersOptions.length, 2);
 assert.equal(lettersOptions.find((item) => item.id === "letters-dept")?.label, "上海市信访办公室（部门）");
 assert.equal(lettersOptions.find((item) => item.id === "letters-unit")?.label, "上海市信访办公室 › 上海市信访办公室单位（单位）");
+
+// 上传选择器必须保留同名不同层级/管理范围，不能把候选响应当成额外授权。
+const uploadOptions = buildUploadOrganizationOptions([
+  { id: "city", name: "上海市", level: "city", parent_id: null, selectable: false },
+  { id: "letters-dept", name: "上海市信访办公室", level: "department", parent_id: "city", selectable: true, keywords: ["信访窗口"] },
+  { id: "letters-unit", name: "上海市信访办公室单位", level: "unit", parent_id: "letters-dept", selectable: true },
+  { id: "district", name: "普陀区", level: "district", parent_id: "city", selectable: false },
+  { id: "district-dept", name: "上海市信访办公室", level: "department", parent_id: "district", selectable: true },
+  { id: "ancestor-only", name: "只可见的上级部门", level: "department", parent_id: "city", selectable: false },
+  { id: "unmarked", name: "缺少授权标记", level: "unit", parent_id: "letters-dept" },
+]);
+assert.equal(uploadOptions.length, 3);
+assert.equal(uploadOptions.find((org) => org.id === "letters-unit")?.path, "上海市 › 上海市信访办公室 › 上海市信访办公室单位");
+assert.equal(uploadOptions.find((org) => org.id === "district-dept")?.path, "上海市 › 普陀区 › 上海市信访办公室");
+assert.deepEqual(searchUploadOrganizations(uploadOptions, "信访窗口").map((org) => org.id), ["letters-dept"]);
+assert.equal(searchUploadOrganizations(uploadOptions, "信访", "department").length, 2);
+assert.deepEqual(searchUploadOrganizations(uploadOptions, "信访", "department", "district").map((org) => org.id), ["district-dept"]);
+assert.equal(searchUploadOrganizations(uploadOptions, "普陀 信访").length, 1);
+assert.equal(searchUploadOrganizations(uploadOptions, "不存在的单位").length, 0);
+assert.deepEqual(selectUploadOrganizationCandidates(uploadOptions, null), []);
+assert.deepEqual(selectUploadOrganizationCandidates(uploadOptions, {
+  ...ambiguousScope,
+  binding_decision: { reasons: [{ code: "scope_undetermined", candidates: [{ id: "letters-dept" }, { id: "outside-directory" }, { id: "ancestor-only" }] }] },
+}).map((org) => org.id), ["letters-dept", "letters-unit"]);
+assert.deepEqual(selectUploadOrganizationCandidates(uploadOptions, {
+  suggestions: [{ organization_id: "letters-unit", organization_name: "不能替换目录名", level: "department", confidence: 0.5 }],
+}).map((org) => [org.id, org.name, org.level]), [["letters-unit", "上海市信访办公室单位", "unit"]]);
+const withPath = applyManualConfirmationOverride(ambiguousScope, {
+  organizationId: "letters-unit", organizationName: "上海市信访办公室单位",
+  organizationPath: "上海市 › 上海市信访办公室 › 上海市信访办公室单位", organizationLevel: "unit",
+});
+assert.equal(withPath.current?.level, "unit");
+assert.equal(withPath.current?.organization_path, "上海市 › 上海市信访办公室 › 上海市信访办公室单位");
 
 // --- buildUploadFormFields（修复 A1）：doc_type / fiscal_year 何时发送 ------------
 // 反例（核心断言）：预设 docType 默认值为空（不预填 dept_budget），且识别不到时
@@ -525,4 +561,29 @@ const empty = summarizeSubmitOutcome([]);
 assert.equal(empty.allSucceeded, true);
 assert.equal(empty.summaryText, null);
 
-console.log("uploadCenterAdapters.test.ts passed");
+// --- mapWithConcurrency：批量上传必须保序且不超并发上限 ---------------------
+assert.equal(UPLOAD_CONCURRENCY, 3);
+async function testMapWithConcurrency(): Promise<void> {
+  let active = 0;
+  let peak = 0;
+  const started: number[] = [];
+  const results = await mapWithConcurrency([1, 2, 3, 4, 5], 2, async (value) => {
+    active += 1;
+    peak = Math.max(peak, active);
+    started.push(value);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    active -= 1;
+    return value * 10;
+  });
+  assert.deepEqual(results, [10, 20, 30, 40, 50], "结果必须按输入顺序返回，不能按完成顺序");
+  assert.equal(peak, 2, "并发数不得超过 limit");
+  assert.deepEqual([...started].sort((a, b) => a - b), [1, 2, 3, 4, 5]);
+  assert.deepEqual(await mapWithConcurrency([], 3, async (value: number) => value), []);
+}
+
+testMapWithConcurrency()
+  .then(() => console.log("uploadCenterAdapters.test.ts passed"))
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });

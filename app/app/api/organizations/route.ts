@@ -36,6 +36,8 @@ export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const statsMode = String(requestUrl.searchParams.get("stats") ?? "").trim().toLowerCase();
   const useLightLocalTree = ["none", "false", "0", "off"].includes(statsMode);
+  // 上传选择必须以服务端授权为准，不能用本地完整目录补大一个已裁剪的响应。
+  const uploadPicker = requestUrl.searchParams.get("purpose") === "upload";
 
   try {
     const upstreamUrl = new URL(`${apiBase}/api/organizations`);
@@ -55,6 +57,9 @@ export async function GET(request: Request) {
       data = { tree: [], total: 0 };
     }
     if (response.ok) {
+      if (uploadPicker) {
+        return NextResponse.json(data, { status: response.status });
+      }
       const localData = await getLocalOrganizationsTree({ stats: !useLightLocalTree });
       if (shouldPreferLocalOrganizations(data, localData)) {
         if (process.env.NODE_ENV !== "production") {
@@ -67,7 +72,7 @@ export async function GET(request: Request) {
       }
       return NextResponse.json(data, { status: response.status });
     }
-    if (shouldFallbackToLocal(response.status) && process.env.NODE_ENV !== "production") {
+    if (!uploadPicker && shouldFallbackToLocal(response.status) && process.env.NODE_ENV !== "production") {
       console.warn("organizations route falling back to local data", { status: response.status });
       const localData = await getLocalOrganizationsTree({ stats: !useLightLocalTree });
       return NextResponse.json(localData, {

@@ -22,6 +22,7 @@ export interface PreflightMatchCandidate {
   organization_name: string;
   level: string;
   confidence: number;
+  organization_path?: string;
 }
 
 export interface PreflightResponseLike {
@@ -29,7 +30,12 @@ export interface PreflightResponseLike {
   doc_type?: string | null;
   report_kind?: string | null;
   current?: PreflightMatchCandidate | null;
-  binding_decision?: { reasons?: Array<{ code?: string }> } | null;
+  cover_org_name?: string;
+  suggestions?: PreflightMatchCandidate[];
+  binding_decision?: {
+    candidates?: PreflightMatchCandidate[];
+    reasons?: Array<{ code?: string; candidates?: Array<{ id: string; name?: string; level?: string }> }>;
+  } | null;
 }
 
 /** 与 current 是否存在同一个置信度门槛，来自 api/routes/upload.py `_inspect_document_preflight`
@@ -118,6 +124,8 @@ export interface ManualConfirmationOverride {
   docType?: string;
   organizationId?: string;
   organizationName?: string;
+  organizationPath?: string;
+  organizationLevel?: string;
 }
 
 /**
@@ -157,7 +165,8 @@ export function applyManualConfirmationOverride(
     base.current = {
       organization_id: override.organizationId,
       organization_name: override.organizationName || "",
-      level: base.current?.level || "",
+      organization_path: override.organizationPath,
+      level: override.organizationLevel || base.current?.level || "",
       // 人工选择视为完全确认，置信度记为 1——这与手动关联组织（associate 接口）
       // 的既有语义一致：人工选择不再是"匹配出来的猜测"，是已确认事实。
       confidence: 1,
@@ -300,6 +309,8 @@ export interface OrganizationRecordLike {
   name: string;
   level: string;
   parent_id: string | null;
+  selectable?: boolean;
+  keywords?: string[];
 }
 
 /** 从拉平后的组织列表中筛出部门（level=department），按名称排序。 */
@@ -761,4 +772,30 @@ export function summarizeSubmitOutcome(outcomes: SubmitFileOutcome[]): SubmitOut
     failedEntryIds,
     summaryText: lines.join("\n"),
   };
+}
+
+/** 批量上传的默认并发数：避免串行把总时长乘 N，也避免一次性打满后端。 */
+export const UPLOAD_CONCURRENCY = 3;
+
+/** 按固定并发跑完一批异步任务，结果按输入顺序返回。 */
+export async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const runnerCount = Math.min(Math.max(1, limit), items.length);
+  const runners = Array.from({ length: runnerCount }, async () => {
+    for (;;) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) {
+        return;
+      }
+      results[index] = await worker(items[index]);
+    }
+  });
+  await Promise.all(runners);
+  return results;
 }

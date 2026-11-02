@@ -7,6 +7,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from api import runtime
 from api.auth_utils import require_login, user_can_access_org
@@ -400,6 +401,8 @@ async def _handle_upload(
     doc_type: Optional[str] = None,
     created_by: Optional[str] = None,
     actor: Optional[Dict[str, Any]] = None,
+    enqueue: bool = False,
+    analyze_body: Optional[Dict[str, Any]] = None,
 ) -> dict:
     selected_org = _clean_optional_text(selected_org)
     fiscal_year = _clean_optional_text(fiscal_year)
@@ -441,7 +444,8 @@ async def _handle_upload(
         persist_snapshot=False,
     )
 
-    duplicate = runtime.find_duplicate_upload(
+    duplicate = await run_in_threadpool(
+        runtime.find_duplicate_upload,
         checksum=str(uploaded.get("checksum") or ""),
         organization_id=selected_org,
         fiscal_year=fiscal_year,
@@ -491,7 +495,8 @@ async def _handle_upload(
     )
     # 自动归属在首次查重之后才发生：用最终绑定的组织再查一次，不能漏掉自动路径的重复。
     if not selected_org and uploaded.get("organization_id"):
-        duplicate = runtime.find_duplicate_upload(
+        duplicate = await run_in_threadpool(
+            runtime.find_duplicate_upload,
             checksum=str(uploaded.get("checksum") or ""),
             organization_id=str(uploaded.get("organization_id") or ""),
             fiscal_year=fiscal_year,
@@ -534,6 +539,29 @@ async def _handle_upload(
     )
     if uploaded.get("organization_id"):
         clear_department_stats_cache()
+    # P0：上传与首次入队合并为一次请求。前端不必等逐文件 `/api/analyze` 返回后才
+    # 跳转；文件落盘、查重、登记完成后由服务端同步入队，响应即代表"已排队"。
+    # 入队失败不回滚原件：文件已上传成功，必须在响应里如实区分，让用户能在队列重试。
+    if enqueue:
+        request_body = dict(analyze_body or {})
+        request_body.setdefault("mode", "dual")
+        request_body.setdefault("use_local_rules", True)
+        try:
+            analysis = await runtime.start_analysis(job_id, request_body)
+            uploaded["analysis"] = {"started": True, **analysis}
+        except HTTPException as exc:
+            uploaded["analysis"] = {
+                "started": False,
+                "status_code": exc.status_code,
+                "detail": exc.detail,
+            }
+        except Exception as exc:  # noqa: BLE001 - 原件已保存，入队失败只降级不回滚
+            logger.exception("Failed to enqueue analysis for uploaded job %s", job_id)
+            uploaded["analysis"] = {
+                "started": False,
+                "status_code": 500,
+                "detail": str(exc),
+            }
     return uploaded
 
 
@@ -583,10 +611,24 @@ async def upload_document(
     org_id: Optional[str] = Form(None),
     fiscal_year: Optional[str] = Form(None),
     doc_type: Optional[str] = Form(None),
+    enqueue: bool = Form(False),
+    mode: Optional[str] = Form(None),
+    use_local_rules: Optional[str] = Form(None),
+    use_ai_assist: Optional[str] = Form(None),
+    ai_profile_id: Optional[str] = Form(None),
     api_key: str = Depends(runtime.verify_api_key),
 ):
     _ = api_key
     _, _, user = require_login(request)
+    analyze_body: Optional[Dict[str, Any]] = None
+    if enqueue:
+        analyze_body = {
+            "mode": (mode or "dual").strip().lower(),
+            "use_local_rules": use_local_rules if use_local_rules is not None else True,
+            "use_ai_assist": use_ai_assist,
+        }
+        if ai_profile_id:
+            analyze_body["ai_profile_id"] = ai_profile_id
     return await _handle_upload(
         file,
         selected_org=org_unit_id or org_id,
@@ -594,4 +636,6 @@ async def upload_document(
         doc_type=doc_type,
         created_by=str(user.get("username") or ""),
         actor=user,
+        enqueue=enqueue,
+        analyze_body=analyze_body,
     )

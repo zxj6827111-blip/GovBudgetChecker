@@ -36,6 +36,8 @@
  */
 "use client";
 
+import type { Route } from "next";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button, SectionTitle } from "@/components/ui";
@@ -49,6 +51,7 @@ import { UploadDropzone } from "./UploadDropzone";
 import { UploadFileList, type UploadFileEntry } from "./UploadFileList";
 import {
   ANALYZE_START_REQUEST_BODY,
+  UPLOAD_CONCURRENCY,
   applyBatchConfirmationOverride,
   applyManualConfirmationOverride,
   buildUploadFormFields,
@@ -57,6 +60,7 @@ import {
   describeUploadFailure,
   derivePreflightStatus,
   formatUploadFailureText,
+  mapWithConcurrency,
   summarizeSubmitOutcome,
   validateAttribution,
   type ManualConfirmationOverride,
@@ -86,6 +90,19 @@ function presetsToOverride(presets: BatchPresetValues): ManualConfirmationOverri
   };
 }
 
+/** 上传响应；`analysis` 字段由支持 enqueue=true 的新后端返回。 */
+interface UploadResponsePayload {
+  id?: string;
+  job_id?: string;
+  /** 上传即入队时后端返回的启动结果；旧后端没有该字段。 */
+  analysis?: {
+    started?: boolean;
+    status?: string;
+    status_code?: number;
+    detail?: unknown;
+  };
+}
+
 export function UploadCenterPage() {
   const [mode, setMode] = useState<UploadMode>("basic");
   const [maxUploadMb, setMaxUploadMb] = useState<number | null>(null);
@@ -103,6 +120,7 @@ export function UploadCenterPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const aiOptions = useAIAnalysisOptions();
+  const router = useRouter();
   const [startedJobs, setStartedJobs] = useState<{ id: string; filename: string }[]>([]);
   const liveJobs = useAnalysisJobProgress(startedJobs.map(job => job.id));
 
@@ -169,6 +187,9 @@ export function UploadCenterPage() {
 
   const handleFilesSelected = useCallback(
     (files: File[]) => {
+      // 用户一旦选了文件就很可能提交并跳转队列：此刻预取，避免在页面挂载时
+      // 与配置/预检请求抢资源，也让首屏 hydration 更轻。
+      router.prefetch("/queue" as Route);
       const newEntries: UploadFileEntry[] = files.map((file) => ({
         id: createFileEntryId(file),
         file,
@@ -180,7 +201,7 @@ export function UploadCenterPage() {
         void runPreflight(entry.id, entry.file);
       }
     },
-    [runPreflight],
+    [router, runPreflight],
   );
 
   const handleRemoveEntry = useCallback((id: string) => {
@@ -266,137 +287,154 @@ export function UploadCenterPage() {
     (mode === "basic" || attributionValidation.isComplete);
 
   /**
-   * 修复 2：让"开始分析 N 个文件"名副其实——上传成功后逐文件触发首次分析
-   * （POST /api/analyze/{job_id}，参数依据见 ANALYZE_START_REQUEST_BODY 注释）。
+   * P0-3：上传与首次入队合并为一次请求，并按固定并发处理一批文件。
    *
-   * 批量语义（逐文件隔离）：
-   * - 单个文件"上传失败"或"上传成功但分析启动失败"都不中断其他文件；
-   * - 两类失败文案严格区分（summarizeSubmitOutcome），上传失败的条目保留在
-   *   列表中可修正后重试，上传成功的条目移除（任务已在队列，重复提交会重复上传）；
-   * - 全部成功时保持原有跳转行为；有任何失败时留在本页如实呈现汇总。
+   * 之前是"逐文件上传 → 逐文件 POST /api/analyze → 全部完成后才跳转"：
+   * 每个文件都要等一次查重扫描和启动分析往返，N 个文件的总等待时间线性叠加。
+   * 现在：
+   * - 上传请求携带 enqueue=true，服务端在落盘/查重/登记后直接入队；
+   * - 前端最多 3 个文件同时在途；
+   * - 全部任务"上传成功且已入队/已启动"后立即 client-side 跳转队列，
+   *   不再用 window.location.assign 整页刷新。
+   *
+   * 兼容性：旧后端不会返回 analysis 字段，此时退回原来的独立 /api/analyze 调用。
+   * 批量语义（逐文件隔离）保持不变：单个文件失败不中断其他文件，两类失败文案
+   * 严格区分（summarizeSubmitOutcome），有任何失败时留在本页如实呈现汇总。
    */
   const handleSubmit = useCallback(async () => {
     setIsSubmitting(true);
     setSubmitError(null);
-    try {
-      const targetOrgId = mode === "attribution" ? attribution.unitId || attribution.departmentId : presets.organizationId;
-      const outcomes: SubmitFileOutcome[] = [];
-      for (const entry of entries) {
-        const formData = new FormData();
-        formData.set("file", entry.file);
-        // 有效 preflight（含批量预设 + 单文件补齐）是本次提交唯一的取值来源，
-        // 保证"用户在补齐表单里填的值"真正进入上传请求，而不是被静默丢弃。
-        const effectivePreflight = effectivePreflightFor(entry.id);
-        const effectiveOrgId = effectivePreflight?.current?.organization_id || targetOrgId;
-        if (effectiveOrgId) {
-          formData.set("org_unit_id", effectiveOrgId);
-        }
-        // 修复 A1：doc_type / fiscal_year 由 buildUploadFormFields 统一解析——
-        // 识别不到且未预设时返回 null，字段整个不发送（不塞空字符串），
-        // 让后端用封面识别结果，避免"前端默认预算 vs 封面识别决算"的必然冲突。
-        const formFields = buildUploadFormFields(effectivePreflight, presets);
-        if (formFields.fiscalYear) {
-          formData.append("fiscal_year", formFields.fiscalYear);
-        }
-        if (formFields.docType) {
-          formData.append("doc_type", formFields.docType);
-        }
+    const targetOrgId = mode === "attribution" ? attribution.unitId || attribution.departmentId : presets.organizationId;
 
-        // ---- 阶段 1：上传 ----
-        let jobId: string | null = null;
-        try {
-          const response = await fetch("/api/documents/upload", { method: "POST", body: formData });
-          if (!response.ok) {
-            // 修复 A2：必须读取并如实呈现后端的结构化失败原因（提交值 vs 封面识别值、
-            // 实际大小 vs 系统限制等），不得丢弃响应体只留一句"上传失败"。
-            const payload = (await response.json().catch(() => null)) as unknown;
-            const failureMessage = describeUploadFailure({
-              filename: entry.file.name,
-              status: response.status,
-              payload,
-              fileSizeBytes: entry.file.size,
-              maxUploadMb,
-            });
-            outcomes.push({
-              entryId: entry.id,
-              filename: entry.file.name,
-              uploadOk: false,
-              analysisStarted: false,
-              jobId: null,
-              failureText: formatUploadFailureText(failureMessage),
-            });
-            continue;
-          }
-          const payload = (await response.json().catch(() => ({}))) as { id?: string; job_id?: string };
-          jobId = payload.id || payload.job_id || null;
-        } catch {
-          outcomes.push({
+    /** 上传单个文件；服务端支持时同时完成首次入队。 */
+    const submitEntry = async (entry: UploadFileEntry): Promise<SubmitFileOutcome> => {
+      const formData = new FormData();
+      formData.set("file", entry.file);
+      // 有效 preflight（含批量预设 + 单文件补齐）是本次提交唯一的取值来源，
+      // 保证"用户在补齐表单里填的值"真正进入上传请求，而不是被静默丢弃。
+      const effectivePreflight = effectivePreflightFor(entry.id);
+      const effectiveOrgId = effectivePreflight?.current?.organization_id || targetOrgId;
+      if (effectiveOrgId) {
+        formData.set("org_unit_id", effectiveOrgId);
+      }
+      // 修复 A1：doc_type / fiscal_year 由 buildUploadFormFields 统一解析——
+      // 识别不到且未预设时返回 null，字段整个不发送（不塞空字符串），
+      // 让后端用封面识别结果，避免"前端默认预算 vs 封面识别决算"的必然冲突。
+      const formFields = buildUploadFormFields(effectivePreflight, presets);
+      if (formFields.fiscalYear) {
+        formData.append("fiscal_year", formFields.fiscalYear);
+      }
+      if (formFields.docType) {
+        formData.append("doc_type", formFields.docType);
+      }
+
+      // 上传即入队：一次请求完成落盘、查重、登记和首次入队，省掉逐文件
+      // /api/analyze 往返。参数与 ANALYZE_START_REQUEST_BODY 保持一致。
+      formData.set("enqueue", "true");
+      formData.set("mode", ANALYZE_START_REQUEST_BODY.mode);
+      formData.set("use_local_rules", "true");
+      formData.set("use_ai_assist", aiOptions.enabled ? "true" : "false");
+      if (aiOptions.enabled && aiOptions.profileId) {
+        formData.set("ai_profile_id", aiOptions.profileId);
+      }
+
+      // ---- 阶段 1：上传（新后端同时入队）----
+      let jobId: string | null = null;
+      let analysisFromUpload: UploadResponsePayload["analysis"];
+      try {
+        const response = await fetch("/api/documents/upload", { method: "POST", body: formData });
+        if (!response.ok) {
+          // 修复 A2：必须读取并如实呈现后端的结构化失败原因（提交值 vs 封面识别值、
+          // 实际大小 vs 系统限制等），不得丢弃响应体只留一句"上传失败"。
+          const payload = (await response.json().catch(() => null)) as unknown;
+          const failureMessage = describeUploadFailure({
+            filename: entry.file.name,
+            status: response.status,
+            payload,
+            fileSizeBytes: entry.file.size,
+            maxUploadMb,
+          });
+          return {
             entryId: entry.id,
             filename: entry.file.name,
             uploadOk: false,
             analysisStarted: false,
             jobId: null,
-            failureText: formatUploadFailureText({
-              title: `文件 ${entry.file.name} 上传失败`,
-              detail: "网络异常或服务暂不可用。",
-              suggestion: "请检查网络后重试。",
-            }),
-          });
-          continue;
+            failureText: formatUploadFailureText(failureMessage),
+          };
         }
+        const payload = (await response.json().catch(() => ({}))) as UploadResponsePayload;
+        jobId = payload.id || payload.job_id || null;
+        analysisFromUpload = payload.analysis;
+      } catch {
+        return {
+          entryId: entry.id,
+          filename: entry.file.name,
+          uploadOk: false,
+          analysisStarted: false,
+          jobId: null,
+          failureText: formatUploadFailureText({
+            title: `文件 ${entry.file.name} 上传失败`,
+            detail: "网络异常或服务暂不可用。",
+            suggestion: "请检查网络后重试。",
+          }),
+        };
+      }
 
-        if (!jobId) {
-          // 上传响应里没有任务标识：无法触发分析，也不能声称"已开始分析"——如实上报。
-          outcomes.push({
-            entryId: entry.id,
-            filename: entry.file.name,
-            uploadOk: true,
-            analysisStarted: false,
-            jobId: null,
-            failureText: formatUploadFailureText({
-              title: `文件 ${entry.file.name} 上传响应缺少任务标识，分析未启动`,
-              suggestion: "请在处理队列确认任务是否创建；未创建时请重新上传。",
-            }),
-          });
-          continue;
-        }
+      if (!jobId) {
+        // 上传响应里没有任务标识：无法触发分析，也不能声称"已开始分析"——如实上报。
+        return {
+          entryId: entry.id,
+          filename: entry.file.name,
+          uploadOk: true,
+          analysisStarted: false,
+          jobId: null,
+          failureText: formatUploadFailureText({
+            title: `文件 ${entry.file.name} 上传响应缺少任务标识，分析未启动`,
+            suggestion: "请在处理队列确认任务是否创建；未创建时请重新上传。",
+          }),
+        };
+      }
 
-        // ---- 阶段 2：触发首次分析（修复 2 核心行为）----
-        try {
-          const analyzeResponse = await fetch(`/api/analyze/${encodeURIComponent(jobId)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ...ANALYZE_START_REQUEST_BODY, use_ai_assist: aiOptions.enabled, ai_profile_id: aiOptions.enabled ? aiOptions.profileId || null : null }),
-          });
-          if (!analyzeResponse.ok) {
-            const analyzePayload = (await analyzeResponse.json().catch(() => null)) as unknown;
-            outcomes.push({
-              entryId: entry.id,
-              filename: entry.file.name,
-              uploadOk: true,
-              analysisStarted: false,
-              jobId,
-              failureText: formatUploadFailureText(
-                describeAnalyzeStartFailure({
-                  filename: entry.file.name,
-                  status: analyzeResponse.status,
-                  payload: analyzePayload,
-                }),
-              ),
-            });
-            continue;
-          }
+      // ---- 阶段 2：确认首次入队（新后端已在上传请求内完成）----
+      if (analysisFromUpload) {
+        if (analysisFromUpload.started === true || analysisFromUpload.status === "started") {
           setStartedJobs(old => [...old, { id: jobId!, filename: entry.file.name }]);
-          outcomes.push({
+          return {
             entryId: entry.id,
             filename: entry.file.name,
             uploadOk: true,
             analysisStarted: true,
             jobId,
             failureText: null,
-          });
-        } catch {
-          outcomes.push({
+          };
+        }
+        return {
+          entryId: entry.id,
+          filename: entry.file.name,
+          uploadOk: true,
+          analysisStarted: false,
+          jobId,
+          failureText: formatUploadFailureText(
+            describeAnalyzeStartFailure({
+              filename: entry.file.name,
+              status: analysisFromUpload.status_code ?? 500,
+              payload: analysisFromUpload,
+            }),
+          ),
+        };
+      }
+
+      // ---- 兼容旧后端：没有 analysis 字段时退回独立启动分析 ----
+      try {
+        const analyzeResponse = await fetch(`/api/analyze/${encodeURIComponent(jobId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...ANALYZE_START_REQUEST_BODY, use_ai_assist: aiOptions.enabled, ai_profile_id: aiOptions.enabled ? aiOptions.profileId || null : null }),
+        });
+        if (!analyzeResponse.ok) {
+          const analyzePayload = (await analyzeResponse.json().catch(() => null)) as unknown;
+          return {
             entryId: entry.id,
             filename: entry.file.name,
             uploadOk: true,
@@ -405,13 +443,41 @@ export function UploadCenterPage() {
             failureText: formatUploadFailureText(
               describeAnalyzeStartFailure({
                 filename: entry.file.name,
-                status: 0,
-                payload: null,
+                status: analyzeResponse.status,
+                payload: analyzePayload,
               }),
             ),
-          });
+          };
         }
+        setStartedJobs(old => [...old, { id: jobId!, filename: entry.file.name }]);
+        return {
+          entryId: entry.id,
+          filename: entry.file.name,
+          uploadOk: true,
+          analysisStarted: true,
+          jobId,
+          failureText: null,
+        };
+      } catch {
+        return {
+          entryId: entry.id,
+          filename: entry.file.name,
+          uploadOk: true,
+          analysisStarted: false,
+          jobId,
+          failureText: formatUploadFailureText(
+            describeAnalyzeStartFailure({
+              filename: entry.file.name,
+              status: 0,
+              payload: null,
+            }),
+          ),
+        };
       }
+    };
+
+    try {
+      const outcomes = await mapWithConcurrency(entries, UPLOAD_CONCURRENCY, submitEntry);
 
       const summary = summarizeSubmitOutcome(outcomes);
 
@@ -441,17 +507,18 @@ export function UploadCenterPage() {
       if (summary.summaryText) {
         // 有失败：留在本页如实呈现，不跳转（跳转会让失败信息随着页面卸载丢失）。
         setSubmitError(summary.summaryText);
-      } else if (!aiOptions.enabled && summary.uploadedJobIds.length === 1) {
-        window.location.assign(`/queue?job=${encodeURIComponent(summary.uploadedJobIds[0])}`);
-      } else if (!aiOptions.enabled && summary.uploadedJobIds.length > 1) {
-        window.location.assign("/queue");
+      } else if (summary.uploadedJobIds.length === 1) {
+        // 上传即入队已完成：client-side 跳转，保留应用外壳，不再整页刷新。
+        router.push(`/queue?job=${encodeURIComponent(summary.uploadedJobIds[0])}` as Route);
+      } else if (summary.uploadedJobIds.length > 1) {
+        router.push("/queue" as Route);
       }
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "上传失败");
     } finally {
       setIsSubmitting(false);
     }
-  }, [attribution, effectivePreflightFor, entries, maxUploadMb, mode, presets, aiOptions.enabled, aiOptions.profileId]);
+  }, [attribution, effectivePreflightFor, entries, maxUploadMb, mode, presets, aiOptions.enabled, aiOptions.profileId, router]);
 
   return (
     <div className="p-8" data-testid="gbc-upload-center-page">
@@ -530,7 +597,7 @@ export function UploadCenterPage() {
             {hasUnresolvedConfirmation ? (
               <p className="mt-2 font-medium text-warning-700" data-testid="gbc-upload-confirmation-blocking-notice">
                 还有 {effectiveEntries.filter((entry) => entry.status === "needs_confirmation").length} 个文件需要确认后才能开始分析——
-                在左侧填写批量预设，或点击文件右侧「补齐」逐个填写缺失信息。
+                在左侧填写批量预设，或点击文件右侧「确认归属」或「补齐」逐个确认信息。
               </p>
             ) : null}
           </div>

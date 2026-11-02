@@ -27,6 +27,9 @@ export interface OrganizationFilterOption {
    * 这一份——拉平语义必须全仓只有一个来源。
    */
   parent_id: string | null;
+  /** 上传专用目录由服务端明确标记可选性，祖先仅用于导航。 */
+  selectable?: boolean;
+  keywords?: string[];
 }
 
 interface OrganizationTreeNode {
@@ -34,6 +37,8 @@ interface OrganizationTreeNode {
   name: string;
   level?: string;
   parent_id?: string | null;
+  selectable?: boolean;
+  keywords?: string[];
   children?: OrganizationTreeNode[];
 }
 
@@ -63,6 +68,8 @@ export function flattenOrganizationTree(
       // 节点自带 parent_id 优先（后端树响应包含该字段）；缺失时用递归路径上
       // 的结构父 id 兜底，保证"单位属于哪个部门"永远可判定。
       parent_id: node.parent_id ? String(node.parent_id) : structuralParentId,
+      selectable: node.selectable,
+      keywords: node.keywords,
     });
     if (Array.isArray(node.children) && node.children.length > 0) {
       result.push(...flattenOrganizationTree(node.children, depth + 1, String(node.id)));

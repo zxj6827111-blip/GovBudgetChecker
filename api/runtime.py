@@ -125,6 +125,28 @@ _JOB_ACCESS_FIELD_KEYS = (
 STRUCTURED_INGEST_FILENAME = "structured_ingest.json"
 IGNORED_ISSUES_FILENAME = "ignored_issues.json"
 PERSISTENCE_STATE_FILENAME = "persistence.json"
+# 查重与列表摘要只需要少量稳定字段；它们被完整结果淹在 status.json 末尾
+# （单任务可达数 MB）。这里单独落一个轻量 sidecar，避免每次上传为了查重
+# 解析全部历史 status.json（实测 300 个任务约 940MB、单次 5 秒左右）。
+JOB_META_FILENAME = "job_meta.json"
+# 列表摘要的持久化快照：键是 status.json/进度/工作流等文件签名。重启后只要签名
+# 未变就直接复用，不必重新解析全部（合计约 940MB）的 status.json；任一来源变化
+# 都会让键失配并自动重建，语义与内存缓存完全一致。
+JOB_SUMMARY_FILENAME = "job_summary.json"
+# 摘要字段口径的版本：新增或改变摘要字段时递增，旧快照因键失配自动重建。
+# 2：增加审核台两个页签的条数（queue_*）；3：必须处理计入“未能自动核对”（queue_obligation_total）。
+JOB_SUMMARY_SCHEMA_VERSION = 3
+JOB_META_KEYS = (
+    "job_id",
+    "checksum",
+    "organization_id",
+    "organization_name",
+    "fiscal_year",
+    "doc_type",
+    "report_year",
+    "report_kind",
+    "filename",
+)
 JOB_STATUS_CONTEXT_KEYS = (
     "use_local_rules",
     "use_ai_assist",
@@ -559,7 +581,69 @@ def merge_job_status(job_dir: Path, patch: Dict[str, Any]) -> Dict[str, Any]:
     current = read_json_file(status_file, default={})
     current.update(patch)
     write_json_file(status_file, current)
+    update_job_meta(job_dir, patch)
     return current
+
+
+def get_job_meta_path(job_dir: Path) -> Path:
+    return job_dir / JOB_META_FILENAME
+
+
+def get_job_summary_path(job_dir: Path) -> Path:
+    return job_dir / JOB_SUMMARY_FILENAME
+
+
+def write_job_meta(job_dir: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Persist only the stable fields needed by duplicate checks and list summaries."""
+    meta = {key: payload[key] for key in JOB_META_KEYS if payload.get(key) is not None}
+    meta["updated_at"] = time.time()
+    write_json_file(get_job_meta_path(job_dir), meta)
+    return meta
+
+
+def read_job_meta(
+    job_dir: Path, *, status_payload: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Read the lightweight sidecar, backfilling it from status.json when absent.
+
+    Older task directories predate the sidecar. They are backfilled on first read
+    (and during the startup summary warm-up) so each job pays the large JSON parse
+    at most once, not on every upload.
+    """
+    meta_path = get_job_meta_path(job_dir)
+    try:
+        if meta_path.exists():
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data:
+                return data
+    except Exception:
+        logger.exception("Failed to read job meta: %s", meta_path)
+    if status_payload is None:
+        status_payload = read_json_file(job_dir / "status.json", default={})
+    if not isinstance(status_payload, dict) or not status_payload:
+        return {}
+    try:
+        return write_job_meta(job_dir, status_payload)
+    except Exception:
+        logger.exception("Failed to backfill job meta for %s", job_dir.name)
+        return dict(status_payload)
+
+
+def update_job_meta(job_dir: Path, patch: Dict[str, Any]) -> None:
+    """Keep the sidecar current when stable metadata changes (e.g. org binding)."""
+    relevant = {
+        key: patch[key]
+        for key in JOB_META_KEYS
+        if key in patch and patch[key] is not None
+    }
+    if not relevant:
+        return
+    meta = read_job_meta(job_dir)
+    meta.update(relevant)
+    try:
+        write_job_meta(job_dir, meta)
+    except Exception:
+        logger.exception("Failed to update job meta for %s", job_dir.name)
 
 
 def invalidate_job_summary_cache(job_id: str) -> None:
@@ -1768,6 +1852,35 @@ async def cleanup_structured_ingest_history(
     }
 
 
+def _blocking_obligation_total(job_id: str, status_data: Dict[str, Any], ignored_issue_ids: Any) -> Optional[int]:
+    """审核台“未能自动核对”的条数：与完成门禁同一函数，取不到覆盖记录时返回 None（未知不当 0）。"""
+    from src.services.material_detail_query_service import build_coverage
+    from src.services.review_lifecycle_service import blocking_coverage_obligations
+    from src.services.review_problem_set import collect_review_problems
+
+    try:
+        result = status_data.get("result") if isinstance(status_data.get("result"), dict) else {}
+        meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
+        coverage = build_coverage(meta.get("obligation_coverage"))
+        if not coverage.available:
+            return None
+        problems = collect_review_problems(
+            job_uuid=job_id,
+            ai_findings=result.get("ai_findings"),
+            rule_findings=result.get("rule_findings"),
+            merged_result=result.get("merged"),
+            structured_ingest=status_data.get("structured_ingest"),
+            result=result,
+            ignored_issue_ids=ignored_issue_ids or [],
+        )
+        return len(blocking_coverage_obligations(
+            list(coverage.items), result, visible_issue_ids={problem.issue_id for problem in problems},
+        ))
+    except Exception:
+        logger.exception("Failed to count blocking obligations for %s", job_id)
+        return None
+
+
 def _workflow_job_signature(job_id: str) -> str:
     """本任务复核判定的指纹，作为摘要缓存键的一部分。
 
@@ -1881,6 +1994,7 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     progress_path = job_dir / FILENAME
     progress_mtime = progress_path.stat().st_mtime_ns if progress_path.exists() else 0
     cache_key = (
+        JOB_SUMMARY_SCHEMA_VERSION,
         progress_mtime,
         status_mtime_ns,
         status_size,
@@ -1901,10 +2015,30 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         if isinstance(cached_summary, dict):
             return dict(cached_summary)
 
+    # 进程重启后内存缓存为空；先试持久化快照。键由文件签名组成，任何来源
+    # （status/进度/工作流/结构化入库/持久化状态）变化都会失配，不会读到旧摘要。
+    persisted_summary = read_json_file(get_job_summary_path(job_dir), default={})
+    if (
+        isinstance(persisted_summary, dict)
+        and persisted_summary.get("key") == list(cache_key)
+        and isinstance(persisted_summary.get("summary"), dict)
+    ):
+        _JOB_SUMMARY_CACHE[job_dir.name] = {
+            "key": cache_key,
+            "summary": persisted_summary["summary"],
+        }
+        return dict(persisted_summary["summary"])
+
     raw_status = read_json_file(status_file, default={})
     if isinstance(raw_status, dict) and raw_status and status_mtime_ns >= 0:
         # 摘要已经解析过状态文件，顺手记住授权字段，复核清单的权限判断不必再读一遍。
         _remember_job_access_fields(job_dir.name, (status_mtime_ns, status_size), raw_status)
+        # 冷缓存/启动预热时顺手回填轻量 sidecar；下一次上传查重不必再解析大文件。
+        if not get_job_meta_path(job_dir).exists():
+            try:
+                write_job_meta(job_dir, raw_status)
+            except Exception:
+                logger.exception("Failed to backfill job meta for %s", job_dir.name)
     status_data = _enrich_job_organization_context(job_dir.name, raw_status)
     status_data = apply_job_issue_filters(job_dir, status_data)
     created_ts = get_job_created_timestamp(job_dir, status_data)
@@ -2300,11 +2434,18 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
 
     # Rebuild the visible counts for historical snapshots too. A global
     # review reason or rounding tip must not inflate the material issue count.
-    from src.schemas.review_report import build_review_report, review_report_counts
+    from src.schemas.review_report import build_review_report, review_queue_counts, review_report_counts
 
-    review_counts = review_report_counts(
-        build_review_report(status_data), status_data.get("ignored_issue_ids") or []
-    )
+    review_report = build_review_report(status_data)
+    ignored_issue_ids = status_data.get("ignored_issue_ids") or []
+    review_counts = review_report_counts(review_report, ignored_issue_ids)
+    # 列表显示审核台两个页签（必须处理 / 参考）的条数，点进去看到的就是这两个数。
+    queue_counts = review_queue_counts(review_report, ignored_issue_ids)
+    # 补核已并入审核台「必须处理」（“未能自动核对”），列表的必须处理也计入同一批条目。
+    obligation_total = _blocking_obligation_total(job_dir.name, status_data, ignored_issue_ids)
+    if obligation_total is not None:
+        queue_counts["queue_obligation_total"] = obligation_total
+        queue_counts["queue_required_total"] += obligation_total
 
     ai_participated = bool(use_ai_assist) and (
         dual_mode_enabled
@@ -2370,6 +2511,7 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
         "review_candidate_total": review_counts["review_candidate_total"],
         "tip_total": review_counts["tip_total"],
         "review_notice_total": review_counts["review_notice_total"],
+        **queue_counts,
         "degraded_issue_total": degraded_issue_total,
         "has_issues": issue_total > 0,
         "merged_issue_total": merged_issue_total,
@@ -2422,6 +2564,15 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     if len(_JOB_SUMMARY_CACHE) > _JOB_SUMMARY_CACHE_MAX_SIZE:
         # Remove arbitrary oldest item (insertion-ordered dict).
         _JOB_SUMMARY_CACHE.pop(next(iter(_JOB_SUMMARY_CACHE)))
+
+    # 快照是纯缓存：写失败只影响下次冷启动速度，绝不影响本次列表结果。
+    try:
+        write_json_file(
+            get_job_summary_path(job_dir),
+            {"key": list(cache_key), "summary": summary},
+        )
+    except Exception:
+        logger.exception("Failed to persist job summary for %s", job_dir.name)
 
     return dict(summary)
 
@@ -2702,12 +2853,10 @@ def find_duplicate_upload(
     for job_dir in iter_job_dirs():
         if exclude_job_id and job_dir.name == exclude_job_id:
             continue
-        status_file = job_dir / "status.json"
-        if not status_file.exists():
-            continue
-        try:
-            payload = json.loads(status_file.read_text(encoding="utf-8"))
-        except Exception:
+        # 轻量 sidecar：命中时只读几百字节；只有历史任务首次命中才会解析
+        # 一次 status.json 并回填 sidecar，之后不再重复付这个成本。
+        payload = read_job_meta(job_dir)
+        if not payload:
             continue
 
         if str(payload.get("organization_id") or "").strip() != normalized_org_id:
@@ -2857,6 +3006,13 @@ async def store_upload_file(
     if metadata:
         status_payload.update({key: value for key, value in metadata.items() if value is not None})
     write_json_file(job_dir / "status.json", status_payload)
+    # 上传时一次性写好查重/摘要所需的稳定字段，后续上传不必再解析本任务的
+    # 完整 status.json（结果落库后该文件可达数 MB）。sidecar 是索引而非事实源，
+    # 写失败只降级为下次回填，不能阻断已经成功落盘的原件。
+    try:
+        write_job_meta(job_dir, status_payload)
+    except Exception:
+        logger.exception("Failed to write job meta for %s", job_dir.name)
     if persist_snapshot:
         await persist_analysis_job_snapshot(status_payload)
     return {**payload, **extract_job_status_context(status_payload)}

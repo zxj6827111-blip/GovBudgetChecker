@@ -35,6 +35,41 @@ def seed(org_api, organizations, links=None):
     org_api[1].get_all()
 
 
+def test_upload_catalog_marks_navigation_ancestors_unselectable(org_api, monkeypatch):
+    client, _, _ = org_api
+    seed(org_api, [
+        {"id": "city", "name": "上海市", "level": "city"},
+        {"id": "dept", "name": "上海市信访办公室", "level": "department", "parent_id": "city"},
+        {"id": "unit", "name": "上海市信访办公室单位", "level": "unit", "parent_id": "dept", "keywords": ["信访办单位"]},
+        {"id": "other", "name": "其他部门", "level": "department", "parent_id": "city"},
+    ])
+    before = storage_module.ORG_FILE.read_bytes()
+    monkeypatch.setattr(routes, "require_login", lambda request: (None, "", {"username": "unit-user", "is_admin": False}))
+    monkeypatch.setattr(routes, "user_can_access_org", lambda user, org_id: org_id == "unit")
+    response = client.get("/api/organizations?stats=none&purpose=upload")
+    assert response.status_code == 200
+    city = response.json()["tree"][0]
+    department = city["children"][0]
+    unit = department["children"][0]
+    assert city["selectable"] is False and department["selectable"] is False
+    assert unit["selectable"] is True and unit["keywords"] == ["信访办单位"]
+    assert len(city["children"]) == 1
+    assert storage_module.ORG_FILE.read_bytes() == before
+
+
+def test_upload_catalog_adds_keywords_without_changing_normal_navigation(org_api):
+    client, _, _ = org_api
+    seed(org_api, [
+        {"id": "city", "name": "上海市", "level": "city"},
+        {"id": "dept", "name": "上海市信访办公室", "level": "department", "parent_id": "city", "keywords": ["市信访办"]},
+    ])
+    upload_tree = client.get("/api/organizations?stats=none&purpose=upload").json()["tree"]
+    department = upload_tree[0]["children"][0]
+    assert department["selectable"] is True and department["keywords"] == ["市信访办"]
+    normal_tree = client.get("/api/organizations?stats=none").json()["tree"]
+    assert "selectable" not in normal_tree[0]["children"][0]
+
+
 def upload(client, text, clear=False):
     return client.post("/api/organizations/import", data={"clear_existing": str(clear).lower()},
                        files={"file": ("organizations.csv", text.encode("utf-8-sig"), "text/csv")})

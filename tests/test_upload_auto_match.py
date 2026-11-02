@@ -661,3 +661,88 @@ def test_upload_real_final_account_pdf_without_doc_type_succeeds(tmp_path: Path,
     assert uploaded["doc_type"] == "dept_final", uploaded
     assert uploaded["report_kind"] == "final", uploaded
     assert uploaded["fiscal_year"] == "2024", uploaded
+
+
+def test_duplicate_check_uses_lightweight_job_meta_sidecar(tmp_path: Path, monkeypatch):
+    """查重不得每次解析全部历史 status.json；sidecar 回填后应独立于大文件生效。"""
+    _patch_runtime_state(tmp_path, monkeypatch)
+    job_dir = runtime.UPLOAD_ROOT / "job-sidecar"
+    job_dir.mkdir(parents=True)
+    status = {
+        "job_id": "job-sidecar",
+        "status": "done",
+        "checksum": "checksum-sidecar",
+        "organization_id": "org-sidecar",
+        "fiscal_year": "2025",
+        "doc_type": "budget",
+        "filename": "sidecar.pdf",
+    }
+    runtime.write_json_file(job_dir / "status.json", status)
+
+    duplicate = runtime.find_duplicate_upload(
+        checksum="checksum-sidecar",
+        organization_id="org-sidecar",
+        fiscal_year="2025",
+        doc_type="budget",
+    )
+    assert duplicate is not None
+    assert duplicate["job_id"] == "job-sidecar"
+    meta_path = runtime.get_job_meta_path(job_dir)
+    assert meta_path.exists()
+
+    # 把 status.json 换成不再包含查重字段的内容；仍能命中说明读的是 sidecar。
+    runtime.write_json_file(job_dir / "status.json", {"job_id": "job-sidecar", "status": "done"})
+    duplicate = runtime.find_duplicate_upload(
+        checksum="checksum-sidecar",
+        organization_id="org-sidecar",
+        fiscal_year="2025",
+        doc_type="budget",
+    )
+    assert duplicate is not None
+    assert duplicate["job_id"] == "job-sidecar"
+
+    # 组织绑定变化时 sidecar 必须跟着更新，否则查重会漏掉新归属。
+    runtime.merge_job_status(job_dir, {"organization_id": "org-sidecar-new"})
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["organization_id"] == "org-sidecar-new"
+
+
+def test_upload_can_enqueue_analysis_in_same_request(tmp_path: Path, monkeypatch):
+    """上传接口 enqueue=true 时应在返回前完成首次入队，前端无需再单独调 analyze。"""
+    _patch_runtime_state(tmp_path, monkeypatch)
+    client = TestClient(app)
+    calls: list[tuple[str, dict]] = []
+
+    async def fake_start_analysis(job_id: str, body: dict | None = None):
+        calls.append((job_id, dict(body or {})))
+        return {"job_id": job_id, "status": "started", "dispatch": "test"}
+
+    monkeypatch.setattr(runtime, "start_analysis", fake_start_analysis)
+
+    upload = client.post(
+        "/api/documents/upload",
+        headers=_headers(),
+        data={"enqueue": "true", "use_ai_assist": "false"},
+        files={
+            "file": (
+                "enqueue_budget_2025.pdf",
+                io.BytesIO(_pdf_bytes()),
+                "application/pdf",
+            )
+        },
+    )
+
+    assert upload.status_code == 200, upload.text
+    payload = upload.json()
+    assert payload["analysis"]["started"] is True
+    assert payload["analysis"]["dispatch"] == "test"
+    assert calls == [
+        (
+            payload["job_id"],
+            {
+                "mode": "dual",
+                "use_local_rules": True,
+                "use_ai_assist": "false",
+            },
+        )
+    ]

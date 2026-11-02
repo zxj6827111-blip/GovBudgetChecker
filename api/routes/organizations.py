@@ -265,6 +265,7 @@ def _filter_tree_for_user(nodes: List[Dict[str, Any]], user: Dict[str, Any]) -> 
 @router.get("/api/organizations")
 async def get_organizations(
     request: Request,
+    purpose: str = Query(default="", description="Use 'upload' for the authorized upload picker."),
     stats: str = Query(
         default="aggregated",
         description="Use 'none' for a lightweight navigation tree without job statistics.",
@@ -274,6 +275,18 @@ async def get_organizations(
     storage = runtime.require_org_storage()
     tree = [runtime.to_dict(node) for node in storage.get_tree()]
     tree = _filter_tree_for_user(tree, user)
+    if purpose == "upload":
+        by_id = {org.id: org for org in storage.get_all()}
+
+        def annotate(nodes):
+            for node in nodes:
+                org = by_id.get(node["id"])
+                # 可见祖先只用于完整路径，不能因此获得上传归属权限。
+                node["selectable"] = node.get("level") in {"department", "unit"} and user_can_access_org(user, node["id"])
+                node["keywords"] = list(getattr(org, "keywords", []) or []) if node["selectable"] else []
+                annotate(node.get("children") or [])
+
+        annotate(tree)
     if str(stats or "").lower() not in {"none", "false", "0", "off"}:
         if bool(user.get("is_admin")):
             stats_by_org = _build_aggregated_org_stats(storage)

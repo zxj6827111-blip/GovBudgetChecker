@@ -87,3 +87,51 @@ def test_summary_analysis_finish_timestamp_does_not_borrow_old_running_results(j
 def test_summary_without_analysis_finish_time_does_not_use_updated_time(job):
     write_status(job, status='done', updated_ts=1800000000)
     assert runtime.collect_job_summary(job)['analysis_finished_ts'] is None
+
+
+def test_persisted_summary_sidecar_is_reused_without_parsing_status(job, monkeypatch):
+    """重启后内存缓存为空；签名未变时应直接复用 job_summary.json。"""
+    write_status(job, progress=100)
+    first = runtime.collect_job_summary(job)
+    assert runtime.get_job_summary_path(job).exists()
+
+    runtime._JOB_SUMMARY_CACHE.clear()
+    original_read_json = runtime.read_json_file
+
+    def guarded_read_json(path, default=None):
+        if path.name == 'status.json':
+            raise AssertionError('persisted summary must not re-parse status.json')
+        return original_read_json(path, default=default)
+
+    monkeypatch.setattr(runtime, 'read_json_file', guarded_read_json)
+    second = runtime.collect_job_summary(job)
+    assert second['progress'] == first['progress'] == 100
+    assert second['job_id'] == job.name
+
+
+def test_persisted_summary_sidecar_invalidates_when_status_changes(job):
+    """status.json 变化后签名失配，必须重建而不是返回旧摘要。"""
+    write_status(job, progress=10)
+    assert runtime.collect_job_summary(job)['progress'] == 10
+
+    runtime._JOB_SUMMARY_CACHE.clear()
+    write_status(job, progress=90, stage='分析完成')
+    summary = runtime.collect_job_summary(job)
+    assert summary['progress'] == 90
+    assert summary['stage'] == '分析完成'
+
+
+def test_list_required_count_includes_blocking_obligations():
+    """列表“必须处理”与审核台同口径：计入阻塞且未被同源问题覆盖的“未能自动核对”条目。"""
+    def instance(index, *, status="insufficient_data", blocks_gate=True):
+        return {"obligation_id": f"OBL-{index}", "group_id": "G", "group_title": "表内", "title": f"检查 {index}",
+                "status": status, "reason": status, "reason_label": "取数不足", "detail": "人员经费合计缺失",
+                "checkers": [], "missing_checkers": [], "depends_on": [], "input_gaps": [], "evidence_kind": "document_level",
+                "basis": "", "gap_note": "", "requires_ai": False, "blocks_gate": blocks_gate}
+    coverage = {"catalog_version": "t", "catalog_fingerprint": "f", "applicable_total": 4, "completed_total": 1,
+                "not_applicable_total": 0, "unresolved_total": 3, "blocking_total": 2, "by_reason": {}, "by_group": [],
+                "instances": [instance(1), instance(2), instance(3, blocks_gate=False), instance(4, status="completed")]}
+    status = {"result": {"rule_findings": [], "ai_findings": [], "meta": {"obligation_coverage": coverage}}}
+    assert runtime._blocking_obligation_total("job-obl", status, []) == 2
+    # 没有覆盖记录是“未知”，不是 0。
+    assert runtime._blocking_obligation_total("job-obl", {"result": {"meta": {}}}, []) is None
