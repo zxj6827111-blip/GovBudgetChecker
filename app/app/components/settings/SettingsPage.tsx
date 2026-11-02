@@ -18,6 +18,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { SectionTitle } from "@/components/ui";
 import AnnualTemplatePanel from "./AnnualTemplatePanel";
+import DisclosureCalendarPanel from "./DisclosureCalendarPanel";
 import SystemManagementPanel, { type OrganizationsLoadStatus } from "@/components/admin/SystemManagementPanel";
 import type { OrganizationRecord } from "@/lib/uiAdapters";
 
@@ -102,6 +103,7 @@ export function SettingsPage() {
       ) : null}
 
       <AnnualTemplatePanel />
+      <DisclosureCalendarPanel />
       <div className="mt-6">
         <SystemManagementPanel
           organizations={organizations}
