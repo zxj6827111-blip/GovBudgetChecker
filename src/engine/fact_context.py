@@ -1646,7 +1646,8 @@ def make_fact_receipt(
         )
         if status in {"insufficient_data", "parse_error", "execution_error"}:
             incomplete_reason = render_receipt_reason(
-                str(rule_id), str(sub_check_id), diagnosis
+                str(rule_id), str(sub_check_id), diagnosis,
+                old_reason=incomplete_reason,
             )
     if evaluation_basis is None or fact_migration_status is None:
         if operand_ids:

@@ -1975,7 +1975,8 @@ def build_check_receipts(
                 )
                 if status in UNCOMPLETED_RECEIPT_STATUSES or incomplete_reason:
                     incomplete_reason = render_receipt_reason(
-                        raw_rule_id, f"{obligation_id}:{raw_rule_id}", diagnosis
+                        raw_rule_id, f"{obligation_id}:{raw_rule_id}", diagnosis,
+                        old_reason=incomplete_reason,
                     )
             receipt = CheckReceipt(
                 rule_id=raw_rule_id,
@@ -2079,6 +2080,7 @@ def apply_obligation_diagnosis(
         if status not in DH02_OBLIGATION_SCOPE:
             continue
         obligation_id = str(instance.get("obligation_id") or "")
+        old_detail = str(instance.get("detail") or "")
         existing_codes = [
             str(code) for code in instance.get("reason_codes") or []
             if str(code) in KNOWN_REASON_CODES
@@ -2104,7 +2106,7 @@ def apply_obligation_diagnosis(
             instance["next_action"] = diagnosis["next_action"]
             instance["root_cause_key"] = diagnosis["root_cause_key"]
             if status not in {"ai_not_run", "ai_failed"}:
-                instance["detail"] = render_obligation_detail(instance, children)
+                instance["detail"] = render_obligation_detail(instance, children, old_detail=old_detail)
             continue
 
         child_diagnoses = [
@@ -2153,7 +2155,7 @@ def apply_obligation_diagnosis(
         instance["candidates"] = list(merged["candidates"])
         instance["next_action"] = selected.get("next_action") or choose_next_action(codes)
         instance["root_cause_key"] = selected.get("root_cause_key") or merged["root_cause_key"]
-        instance["detail"] = render_obligation_detail(instance, children)
+        instance["detail"] = render_obligation_detail(instance, children, old_detail=old_detail)
 
 
 def obligation_ids_for_rule(rule_id: Any) -> List[str]:

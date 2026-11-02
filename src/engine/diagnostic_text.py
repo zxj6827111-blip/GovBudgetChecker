@@ -105,9 +105,15 @@ def _candidate_text(candidate: Mapping[str, Any]) -> str:
     return f"表{candidate.get('table_code') or '未识别表'} {_page_text(candidate.get('page'))} 格{candidate.get('cell_id') or '未识别'}"
 
 
+def _compat_reason(text: Any) -> str:
+    """保留规则原有业务说明；只把禁止的合并句式换成中性表述。"""
+    return str(text or "").strip().replace("缺失或不唯一", "未唯一取得")
+
+
 def render_obligation_detail(
     instance: Mapping[str, Any],
     children: Sequence[Mapping[str, Any]] = (),
+    old_detail: Optional[str] = None,
 ) -> str:
     title = str(instance.get("title") or instance.get("obligation_id") or "该检查项")
     codes = [str(code) for code in instance.get("reason_codes") or []]
@@ -140,6 +146,8 @@ def render_obligation_detail(
     else:
         parts.append("缺少：规则未给出可定位的操作数规格。")
     parts.append(f"判断不了的原因：{_codes_text(codes)}。")
+    if codes == ["rule_no_reason"] and _compat_reason(old_detail):
+        parts.append(f"规则说明：{_compat_reason(old_detail)}。")
     parts.append(f"下一步：{_ACTION_TEXT.get(action, action or '人工核对原文后确认')}。")
     return "".join(parts)
 
@@ -148,6 +156,7 @@ def render_receipt_reason(
     rule_id: str,
     sub_check_id: str,
     diagnosis: Mapping[str, Any],
+    old_reason: Optional[str] = None,
 ) -> str:
     codes = [str(code) for code in diagnosis.get("reason_codes") or []]
     blocked = [item for item in diagnosis.get("blocked_by") or [] if isinstance(item, dict)]
@@ -162,6 +171,8 @@ def render_receipt_reason(
     if candidates:
         parts.append(f"候选：{'；'.join(_candidate_text(item) for item in candidates)}，需要人工消歧。")
     parts.append(f"判断不了的原因：{_codes_text(codes)}。")
+    if codes == ["rule_no_reason"] and _compat_reason(old_reason):
+        parts.append(f"规则说明：{_compat_reason(old_reason)}。")
     parts.append(f"下一步：{_ACTION_TEXT.get(action, action or '人工核对原文后确认')}。")
     return "".join(parts)
 
