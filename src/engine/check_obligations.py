@@ -2053,12 +2053,14 @@ def apply_obligation_diagnosis(
     if not isinstance(instances, list):
         return
     children_by_obligation: Dict[str, List[Mapping[str, Any]]] = {}
+    related_by_obligation: Dict[str, List[Mapping[str, Any]]] = {}
     for receipt in check_receipts or []:
         if not isinstance(receipt, Mapping):
             continue
         obligation_id = receipt.get("obligation_id")
         if not obligation_id:
             continue
+        related_by_obligation.setdefault(str(obligation_id), []).append(receipt)
         # 未完成回执全部参与汇总；另有 10 条状态为 pass/fail、但底层规则未完成
         # 的特殊**义务×规则聚合**回执（diagnostic_scope 审定）也携带诊断，
         # 必须同样汇总。普通 pass/fail 关系回执不在诊断范围，不能把它们的
@@ -2086,6 +2088,7 @@ def apply_obligation_diagnosis(
             if str(code) in KNOWN_REASON_CODES
         ]
         children = children_by_obligation.get(obligation_id, [])
+        related = related_by_obligation.get(obligation_id, [])
         if not children:
             if status in {"ai_not_run", "ai_failed"}:
                 codes = (
@@ -2106,7 +2109,10 @@ def apply_obligation_diagnosis(
             instance["next_action"] = diagnosis["next_action"]
             instance["root_cause_key"] = diagnosis["root_cause_key"]
             if status not in {"ai_not_run", "ai_failed"}:
-                instance["detail"] = render_obligation_detail(instance, children, old_detail=old_detail)
+                instance["detail"] = render_obligation_detail(
+                    instance, children, old_detail=old_detail,
+                    related_receipts=related,
+                )
             continue
 
         child_diagnoses = [
@@ -2155,7 +2161,9 @@ def apply_obligation_diagnosis(
         instance["candidates"] = list(merged["candidates"])
         instance["next_action"] = selected.get("next_action") or choose_next_action(codes)
         instance["root_cause_key"] = selected.get("root_cause_key") or merged["root_cause_key"]
-        instance["detail"] = render_obligation_detail(instance, children, old_detail=old_detail)
+        instance["detail"] = render_obligation_detail(
+            instance, children, old_detail=old_detail, related_receipts=related,
+        )
 
 
 def obligation_ids_for_rule(rule_id: Any) -> List[str]:

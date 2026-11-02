@@ -40,6 +40,30 @@ interface ObligationItem {
   reason_label: string | null;
   detail: string | null;
   locations?: Array<{ page: number; label: string | null; bbox: number[] | null }>;
+  checkers?: string[];
+  reason_codes?: string[];
+  blocked_by?: Array<{ dimension: string; ref: string; reason_code: string }>;
+  missing_operands?: Array<{
+    source: "table" | "text";
+    role: string;
+    table_code?: string | null;
+    section?: string | null;
+    page?: number | null;
+    row_key?: unknown;
+    column?: string | null;
+  }>;
+  candidates?: Array<{
+    source: "table" | "text";
+    table_code?: string | null;
+    section?: string | null;
+    page?: number | null;
+    cell_id?: string | null;
+    span?: [number, number] | null;
+    value?: unknown;
+  }>;
+  next_action?: string | null;
+  root_cause_key?: string | null;
+  legacy_coverage_terms?: string[] | null;
   decision: string | null;
   decision_revision: number | null;
   decided_by: string | null;
@@ -511,5 +535,63 @@ test.describe("人工补核（WP3-B）：并入必须处理", () => {
     expect(state.decideCalls[1].body.decision).toBe("pending");
     await expect(page.getByTestId("gbc-review-tab-issues")).toContainText("必须处理 1");
     await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();
+  });
+
+  test("结构化卡点在实际卡片与默认备注里展示角色、页码、候选和业务说明", async ({ page }) => {
+    const state = freshState();
+    const structured = obligationItem(
+      "OBL-TXT-T5",
+      "一般公共预算支出决算表与功能分类说明一致（含科目名称）",
+    );
+    structured.status = "insufficient_data";
+    structured.reason = "insufficient_data";
+    structured.reason_label = "取数不足";
+    structured.detail = "原因码：规则未给出具体原因；规则说明：科目“住房公积金”决算金额未唯一取得；下一步：技术修复解析/规则";
+    structured.reason_codes = ["subject_name_unlocated", "rule_no_reason"];
+    structured.blocked_by = [];
+    structured.missing_operands = [{
+      source: "text",
+      role: "住房公积金决算金额",
+      section: "支出决算具体情况",
+      page: 12,
+      row_key: null,
+      column: null,
+    }];
+    structured.candidates = [{
+      source: "text",
+      section: "支出决算具体情况",
+      page: 12,
+      span: [10, 20],
+      value: "10.00",
+    }];
+    structured.next_action = "human_confirm";
+    structured.checkers = ["V33-227"];
+    structured.legacy_coverage_terms = ["住房公积金"];
+    state.obligations = [
+      structured,
+      obligationItem("OBL-TXT-FINAL-DETAIL", "支出决算具体情况逐项细化到项"),
+    ];
+    await page.context().addCookies([sessionCookie]);
+    await installMocks(page, state);
+    await page.goto(`/review?job=${JOB_ID}`);
+    if (!state.activeSession && !state.history.some(item => item.status === "completed")) {
+      await page.getByTestId("gbc-review-start").click();
+    }
+    await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
+    await openIssueList(page);
+    await page.getByTestId(`gbc-review-issue-card-${entry("OBL-TXT-T5")}`).click();
+
+    const reason = page.getByTestId("gbc-review-obligation-reason-OBL-TXT-T5");
+    await expect(reason).toContainText("角色：住房公积金决算金额");
+    await expect(reason).toContainText("第12页");
+    await expect(reason).toContainText("「10.00」");
+    await expect(reason).toContainText("规则说明：科目“住房公积金”决算金额未唯一取得");
+    await expect(page.getByTestId("gbc-obligation-same-source-OBL-TXT-T5")).toContainText("V33-227");
+
+    // 默认备注路径与卡片使用同一份结构化说明。
+    await page.getByTestId(`gbc-review-obligation-verified_issue-${entry("OBL-TXT-T5")}`).click();
+    await expect(page.getByTestId("gbc-review-obligation-note")).toHaveValue(
+      /角色：住房公积金决算金额[\s\S]*第12页[\s\S]*规则说明：科目“住房公积金”决算金额未唯一取得/,
+    );
   });
 });

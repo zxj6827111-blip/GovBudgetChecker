@@ -110,10 +110,66 @@ def _compat_reason(text: Any) -> str:
     return str(text or "").strip().replace("缺失或不唯一", "未唯一取得")
 
 
+def _fact_ids(receipts: Sequence[Mapping[str, Any]]) -> List[str]:
+    values: List[str] = []
+    for receipt in receipts:
+        if not isinstance(receipt, Mapping):
+            continue
+        for fact_id in receipt.get("operand_fact_ids") or []:
+            text = str(fact_id or "").strip()
+            if text:
+                values.append(text)
+    return values
+
+
+def _acquired_text(
+    children: Sequence[Mapping[str, Any]],
+    related_receipts: Optional[Sequence[Mapping[str, Any]]],
+) -> str:
+    """区分“不同事实数”与“引用次数”，并说明统计范围。
+
+    旧文案把未完成子回执的 ``operand_fact_ids`` 直接相加，既会重复计数，
+    也会把“本次未完成子检查没有操作数”误写成整个义务“没有可用操作数”。
+    这里同时给出两个范围：本次未完成子检查、全义务关联回执；数值一律按
+    不同事实 ID 去重，括号内才是引用次数。
+    """
+    diagnostic_ids = _fact_ids(children)
+    diagnostic_unique = len(set(diagnostic_ids))
+    if related_receipts is None:
+        if diagnostic_unique:
+            return (
+                f"已取到：本次未完成子检查涉及 {diagnostic_unique} 个不同操作数"
+                f"（{len(diagnostic_ids)} 次引用）。"
+            )
+        return "已取到：本次未完成子检查没有已绑定操作数。"
+    all_ids = _fact_ids(related_receipts)
+    all_unique = len(set(all_ids))
+    if not children:
+        if all_unique:
+            return (
+                f"已取到：全义务关联回执合计 {all_unique} 个不同操作数"
+                f"（{len(all_ids)} 次引用）。"
+            )
+        return "已取到：全义务关联回执没有已绑定操作数。"
+    if diagnostic_unique:
+        return (
+            f"已取到：本次未完成子检查涉及 {diagnostic_unique} 个不同操作数"
+            f"（{len(diagnostic_ids)} 次引用）；全义务关联回执合计 {all_unique} 个"
+            f"不同操作数（{len(all_ids)} 次引用）。"
+        )
+    if all_unique:
+        return (
+            "已取到：本次未完成子检查没有已绑定操作数；全义务关联回执合计 "
+            f"{all_unique} 个不同操作数（{len(all_ids)} 次引用）。"
+        )
+    return "已取到：本次未完成子检查与全义务关联回执均没有已绑定操作数。"
+
+
 def render_obligation_detail(
     instance: Mapping[str, Any],
     children: Sequence[Mapping[str, Any]] = (),
     old_detail: Optional[str] = None,
+    related_receipts: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> str:
     title = str(instance.get("title") or instance.get("obligation_id") or "该检查项")
     codes = [str(code) for code in instance.get("reason_codes") or []]
@@ -121,22 +177,13 @@ def render_obligation_detail(
     missing = [item for item in instance.get("missing_operands") or [] if isinstance(item, dict)]
     candidates = [item for item in instance.get("candidates") or [] if isinstance(item, dict)]
     action = str(instance.get("next_action") or "")
-    operand_count = sum(
-        len(child.get("operand_fact_ids") or [])
-        for child in children
-        if isinstance(child, Mapping)
-    )
     parts = [f"正在核对：{title}。"]
     where: List[str] = []
     where.extend(_missing_location(spec) for spec in missing)
     where.extend(_candidate_text(candidate) for candidate in candidates)
     where.extend(_blocker_text(blocker) for blocker in blocked)
     parts.append(f"原文位置：{'；'.join(dict.fromkeys(where))}。" if where else "原文位置：当前无法确认到具体页码或表格位置。")
-    parts.append(
-        f"已取到：{operand_count} 个操作数（逐项见关联回执）。"
-        if operand_count
-        else "已取到：没有可用操作数。"
-    )
+    parts.append(_acquired_text(children, related_receipts))
     if missing:
         parts.append(f"缺少：{'；'.join(_missing_location(spec) for spec in missing)}。")
     elif candidates:
