@@ -2106,9 +2106,9 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             # 使用线程池为规则检查设置超时，避免在95%阶段长时间卡住
             provider_stats = []
             try:
-                RULES_TIMEOUT_SEC = int(os.getenv("RULES_TIMEOUT_SEC", "150"))
+                RULES_TIMEOUT_SEC = int(os.getenv("RULES_TIMEOUT_SEC", "300"))
             except Exception:
-                RULES_TIMEOUT_SEC = 150
+                RULES_TIMEOUT_SEC = 300
 
             try:
                 from src.services.check_progress import update_progress
