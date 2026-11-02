@@ -9,8 +9,10 @@ import sys
 ROOT = Path('/Volumes/workSSD/software development/GovBudgetChecker')
 IMPLEMENTATION = Path('/Users/zhangxingjin/.codex/worktrees/annual-template-management/GovBudgetChecker')
 OUT = Path(__file__).resolve().parent
-sha = lambda data: hashlib.sha256(data).hexdigest()
-write = lambda name, value: (OUT / name).write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n')
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+def write(name, value):
+    return (OUT / name).write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n')
 os.chdir(IMPLEMENTATION)
 sys.path.insert(0, str(IMPLEMENTATION))
 

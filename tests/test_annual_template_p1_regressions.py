@@ -1,5 +1,6 @@
 """独立审核 R1–R4 的永久回归：来源、槽位、OCR 绑定及结构实例。"""
-import asyncio,copy
+import asyncio
+import copy
 from dataclasses import asdict
 from unittest.mock import AsyncMock
 import pytest
@@ -21,23 +22,31 @@ PAGES=['上海市示例局2024年度决算','2024年度决算表\n说明：本�
 @pytest.mark.parametrize('entry',['offline','database','frozen','standalone'])
 @pytest.mark.parametrize('filename',['示例局2024年度决算.pdf',None])
 def test_r1_equal_filename_and_cover_use_original_year(monkeypatch,entry,filename):
-    monkeypatch.setenv('GBC_TEMPLATE_SCOPE','true');monkeypatch.setenv('GBC_TEMPLATE_EXPORT','test-only')
+    monkeypatch.setenv('GBC_TEMPLATE_SCOPE','true')
+    monkeypatch.setenv('GBC_TEMPLATE_EXPORT','test-only')
     monkeypatch.delenv('DATABASE_URL',raising=False)
     snapshot={'available':True,'capability_scope':{'writing_auto':True},'target_year':2024}
     selection=[]
-    def offline(path,digest,profile,pages):selection.append(profile);return snapshot
+    def offline(path,digest,profile,pages):
+        selection.append(profile)
+        return snapshot
     monkeypatch.setattr(annual_templates,'offline_for_profile',offline)
-    profile=resolve_document_profile(filename=filename,page_texts=PAGES);before=profile.to_dict()
+    profile=resolve_document_profile(filename=filename,page_texts=PAGES)
+    before=profile.to_dict()
     if entry in ('database','frozen'):
         from src.db.connection import DatabaseConnection
         conn=type('Connection',(),{'fetchrow':AsyncMock(return_value=None)})()
         monkeypatch.setenv('DATABASE_URL','test-only-no-network')
-        monkeypatch.setattr(DatabaseConnection,'acquire',AsyncMock(return_value=conn));monkeypatch.setattr(DatabaseConnection,'release',AsyncMock())
-        async def selected(*args):selection.append(args[-2]);return snapshot
-        monkeypatch.setattr(annual_templates,'select_for_profile',selected);monkeypatch.setattr(annual_templates,'select_frozen',selected)
+        monkeypatch.setattr(DatabaseConnection,'acquire',AsyncMock(return_value=conn))
+        monkeypatch.setattr(DatabaseConnection,'release',AsyncMock())
+        async def selected(*args):selection.append(args[-2])
+        return snapshot
+        monkeypatch.setattr(annual_templates,'select_for_profile',selected)
+        monkeypatch.setattr(annual_templates,'select_frozen',selected)
     if entry=='standalone':
         doc=document(PAGES,{})
-        material_writing.ensure_document_resolution(doc,profile);result=profile.writing_scope
+        material_writing.ensure_document_resolution(doc,profile)
+        result=profile.writing_scope
     else:result=asyncio.run(material_writing.load('test','a'*64,profile,PAGES,frozen_bindings=[] if entry=='frozen' else None))
     assert result['snapshot']['available'] and result['status']=='conflict'
     assert selection[0].report_year.source=='cover_title'
@@ -46,7 +55,9 @@ def test_r1_equal_filename_and_cover_use_original_year(monkeypatch,entry,filenam
 
 @pytest.mark.parametrize('filename,pages',[('示例2023年度决算.pdf',PAGES),('示例2024年度决算.pdf',['年度决算','正文']),('示例2024预算.pdf',PAGES)])
 def test_r1_filename_alone_or_opposite_does_not_select(monkeypatch,filename,pages):
-    monkeypatch.setenv('GBC_TEMPLATE_SCOPE','true');monkeypatch.setenv('GBC_TEMPLATE_EXPORT','test-only');monkeypatch.delenv('DATABASE_URL',raising=False)
+    monkeypatch.setenv('GBC_TEMPLATE_SCOPE','true')
+    monkeypatch.setenv('GBC_TEMPLATE_EXPORT','test-only')
+    monkeypatch.delenv('DATABASE_URL',raising=False)
     def forbidden(*args):raise AssertionError('没有原件同向依据，不得选模板')
     monkeypatch.setattr(annual_templates,'offline_for_profile',forbidden)
     profile=resolve_document_profile(filename=filename,page_texts=pages)
@@ -56,12 +67,16 @@ def test_r1_filename_alone_or_opposite_does_not_select(monkeypatch,filename,page
 
 def test_r2_report_comparison_and_name_slots_preserve_citation_amount_and_code():
     text='2024年度依据《2024年办法》，比2023年增加2024.00万元，编码2024，上海市示例局说明'
-    name='上海市示例局';start=text.index('2023');org=text.index(name)
+    name='上海市示例局'
+    start=text.index('2023')
+    org=text.index(name)
     anchor={'text':text,'annual_slot':True,'organization_slot':name,'slots':[
         {'kind':'report_year','start':0,'end':4}, {'kind':'comparison_year','start':start,'end':start+4},
         {'kind':'organization_name','start':org,'end':org+len(name)}]}
     assert instantiate_anchor(anchor,2024,2025,'上海市新局')=='2025年度依据《2024年办法》，比2024年增加2024.00万元，编码2024，上海市新局说明'
-    changed=copy.deepcopy(anchor);citation=text.index('2024',4);changed['slots']=[{'kind':'report_year','start':citation,'end':citation+4}]
+    changed=copy.deepcopy(anchor)
+    citation=text.index('2024',4)
+    changed['slots']=[{'kind':'report_year','start':citation,'end':citation+4}]
     with pytest.raises(ValueError,match='固定文献'):validated_slots(changed,2024)
     for start in (text.index('2024.00'),text.index('2024，')):
         changed['slots']=[{'kind':'report_year','start':start,'end':start+4}]
@@ -83,7 +98,8 @@ def test_r3_orphan_ocr_cannot_determine_writing_scope():
         ParsedTextBlock('orphan-cover',1,'2024年度部门决算',confidence=.99,extraction_method='ocr'),
         ParsedTextBlock('orphan-heading',2,'2024年度部门决算表',confidence=.99,extraction_method='ocr'),
         ParsedTextBlock('orphan-note',2,'本表反映部门本年度收入。',confidence=.99,extraction_method='ocr')])
-    original=artifact.to_dict();pages,spans=material_writing.qualified_identity_view(['',''],artifact)
+    original=artifact.to_dict()
+    pages,spans=material_writing.qualified_identity_view(['',''],artifact)
     result=resolve_material_scope(evidence=material_writing.collect(pages,source_spans=spans),template_qualified=True)
     assert result.status=='insufficient' and result.value is None and pages==['','']
     assert len([s for s in spans if s.get('qualified') is False])==3
@@ -131,7 +147,8 @@ def table_document():
 
 @pytest.mark.parametrize('change',['none','other-table','wrong-page','no-instance','unbound-ocr'])
 def test_r4_title_requires_corresponding_source_table(change):
-    doc=table_document();table=doc.parse_artifact.table_fragments[0]
+    doc=table_document()
+    table=doc.parse_artifact.table_fragments[0]
     if change=='other-table':table.title='另一个表'
     elif change=='wrong-page':table.page_number=1
     elif change=='no-instance':doc.parse_artifact.logical_tables=[]
@@ -168,7 +185,8 @@ def test_r2_semantic_reuse_preserves_fixed_reference_year():
 async def test_r2_review_records_original_slot_positions(monkeypatch,tmp_path):
     from uuid import uuid4
     from fastapi import HTTPException
-    unit,dept=str(uuid4()),str(uuid4());raw='原件说明\n2024年度依据《2024年办法》执行情况说明'
+    unit,dept=str(uuid4()),str(uuid4())
+    raw='原件说明\n2024年度依据《2024年办法》执行情况说明'
     monkeypatch.setenv('GBC_TEMPLATE_STORAGE',str(tmp_path))
     monkeypatch.setattr(annual_templates,'text',AsyncMock(return_value=raw))
     monkeypatch.setattr(annual_templates,'source',AsyncMock(return_value=({'source_report_year':2024},{},tmp_path)))

@@ -23,7 +23,8 @@ def budget_enabled():
 
 def budget_resolution_enabled(snapshot):
     # 位置能力可独立验收；兼容待核须保留回执，但不能越过预算总开关。
-    caps=snapshot.get('capability_scope') or {}; pending=snapshot.get('compatibility_pending') or {}
+    caps=snapshot.get('capability_scope') or {}
+    pending=snapshot.get('compatibility_pending') or {}
     return bool(budget_enabled() and snapshot.get('available') and
                 any(caps.get(k) or pending.get(k) for k in ('writing_auto','position_checks')))
 
@@ -32,7 +33,8 @@ def collect(page_texts, excluded_pages=(), report_kind='final', source_spans=())
     found=[]
     for page,text in enumerate(page_texts,1):
         if page in excluded_pages: continue
-        chars=[(i,c) for i,c in enumerate(text) if not c.isspace()]; flat=''.join(c for _,c in chars)
+        chars=[(i,c) for i,c in enumerate(text) if not c.isspace()]
+        flat=''.join(c for _,c in chars)
         patterns=[]
         if page==1:
             patterns=[('declaration','department',r'部门决算(?!单位构成)'),('declaration','unit',r'单位决算')]
@@ -55,7 +57,8 @@ def collect(page_texts, excluded_pages=(), report_kind='final', source_spans=())
                         ('budget_function_table',scope,year+prefix+r'(?:一般公共预算支出功能分类预算表|政府性基金预算支出功能分类预算表|国有资本经营预算支出功能分类预算表|一般公共预算基本支出部门预算经济分类预算表)')])
         for kind,scope,pattern in patterns:
             for match in re.finditer(pattern,flat):
-                start=chars[match.start()][0];end=chars[match.end()-1][0]+1
+                start=chars[match.start()][0]
+                end=chars[match.end()-1][0]+1
                 before_line=text[text.rfind('\n',0,start)+1:start]
                 prefix_flat=re.sub(r'\s+','',before_line)
                 if kind in ('declaration','table_note'):
@@ -168,7 +171,8 @@ def ensure_document_resolution(document, profile):
 def qualified_identity_view(page_texts, artifact):
     """仅构造身份文字视图，不修改数字规则文本、单元格或财政事实。"""
     from src.services.ocr_qualification import bound_ocr_block
-    pages=list(page_texts); spans=[]
+    pages=list(page_texts)
+    spans=[]
     for block in getattr(artifact,'text_blocks',[]) or []:
         page=block.page_number
         if block.extraction_method=='ocr' and (type(page) is not int or not 1<=page<=len(pages)):
@@ -205,7 +209,8 @@ def identity_document(document):
     import copy
     pages=getattr(document,'writing_page_texts',None)
     if not pages:return document
-    result=copy.copy(document);result.page_texts=pages
+    result=copy.copy(document)
+    result.page_texts=pages
     return result
 
 

@@ -22,7 +22,7 @@ async def setup(conn):
 
 
 @pytest.mark.asyncio
-async def test_writing_only_joint_unknown_and_idempotency(review_db):
+async def test_writing_only_joint_unknown_and_idempotency(review_db):  # noqa: F811 - pytest fixture
     schema,pool=review_db
     async with _conn(schema,pool) as conn:
         material,request=await setup(conn)
@@ -41,7 +41,7 @@ async def test_writing_only_joint_unknown_and_idempotency(review_db):
 
 
 @pytest.mark.asyncio
-async def test_joint_conflict_rolls_back_and_concurrent_confirmation(review_db):
+async def test_joint_conflict_rolls_back_and_concurrent_confirmation(review_db):  # noqa: F811 - pytest fixture
     schema,pool=review_db
     async with _conn(schema,pool) as conn:
         material,request=await setup(conn)
@@ -58,20 +58,24 @@ async def test_joint_conflict_rolls_back_and_concurrent_confirmation(review_db):
 
 
 @pytest.mark.asyncio
-async def test_writing_outbox_failure_and_retry_are_durable(review_db,monkeypatch,tmp_path):
+async def test_writing_outbox_failure_and_retry_are_durable(review_db,monkeypatch,tmp_path):  # noqa: F811 - pytest fixture
     from unittest.mock import AsyncMock
-    import hashlib,json
+    import hashlib
+    import json
     from api import runtime
     from src.db.connection import DatabaseConnection
     from src.services import document_scope,analysis_result_store
     schema,pool=review_db
     async with _conn(schema,pool) as conn:
         material,request=await setup(conn)
-        content=b'test-only original';digest=hashlib.sha256(content).hexdigest()
+        content=b'test-only original'
+        digest=hashlib.sha256(content).hexdigest()
         request['file_hash']=digest
         await conn.execute('UPDATE analysis_jobs SET file_hash=$2 WHERE job_uuid=$1',material['job_uuid'],digest)
         await lifecycle.confirm_material_dimensions(conn,material['job_uuid'],actor='test',request=request,actual_file_hash=digest)
-        directory=tmp_path/material['job_uuid'];directory.mkdir();(directory/'source.pdf').write_bytes(content)
+        directory=tmp_path/material['job_uuid']
+        directory.mkdir()
+        (directory/'source.pdf').write_bytes(content)
         (directory/'status.json').write_text(json.dumps({'status':'done'}))
         monkeypatch.setenv('DATABASE_URL','explicit-isolated-test')
         monkeypatch.setattr(runtime,'UPLOAD_ROOT',tmp_path)
@@ -84,7 +88,8 @@ async def test_writing_outbox_failure_and_retry_are_durable(review_db,monkeypatc
         saved=await document_scope.latest_writing_decision(conn,material['job_uuid'],digest,material['version_id'])
         assert saved['dispatch_status']=='pending' and saved['dispatch_attempts']==1 and saved['dispatch_error']
         await conn.execute('UPDATE document_writing_scope_decisions SET retry_not_before=NULL')
-        enqueue.side_effect=None;enqueue.return_value=None
+        enqueue.side_effect=None
+        enqueue.return_value=None
         assert await document_scope.dispatch_writing_pending()==1
         assert (await document_scope.latest_writing_decision(conn,material['job_uuid'],digest,material['version_id']))['dispatch_status']=='queued'
         assert await document_scope.dispatch_writing_pending()==0

@@ -354,7 +354,11 @@ def _clause_declaration_accounting(
             has_withheld = any(item["reason"] == "withheld" for item in stage_exceptions)
 
             def mark_conflict(reason: str = "exception_amount_conflict",
-                              items: Sequence[Dict[str, Any]] = stage_exceptions) -> None:
+                              items: Sequence[Dict[str, Any]] = stage_exceptions,
+                              kind_records: Sequence[Dict[str, Any]] = kind_records,
+                              kind: str = kind,
+                              start: Any = start,
+                              clause: Dict[str, Any] = clause) -> None:
                 if kind_records:
                     for record in kind_records:
                         record["not_included_reason"] = reason

@@ -155,9 +155,9 @@ def safe_directory(raw_value, role):
         raise SystemExit(role + " 路径为空")
     candidate = Path(value)
     if ".." in candidate.parts:
-        raise SystemExit(role + " 拒绝包含 '..' 的路径: " + value)
+        raise SystemExit(role + " 拒绝包含 '..' 的路径: " + str(candidate))
     if not candidate.is_dir():
-        raise SystemExit(role + " 不是已存在的目录: " + value)
+        raise SystemExit(role + " 不是已存在的目录: " + str(candidate))
     return candidate
 
 
@@ -174,12 +174,12 @@ def safe_output_target(raw_value, role):
         raise SystemExit(role + " 路径为空")
     candidate = Path(value)
     if ".." in candidate.parts:
-        raise SystemExit(role + " 拒绝包含 '..' 的路径: " + value)
+        raise SystemExit(role + " 拒绝包含 '..' 的路径: " + str(candidate))
     if candidate.exists():
         if not candidate.is_dir():
-            raise SystemExit(role + " 已存在且不是目录: " + value)
+            raise SystemExit(role + " 已存在且不是目录: " + str(candidate))
         if any(candidate.iterdir()):
-            raise SystemExit(role + " 已存在且非空，拒绝覆盖（冻结保护）: " + value)
+            raise SystemExit(role + " 已存在且非空，拒绝覆盖（冻结保护）: " + str(candidate))
     return candidate
 
 
@@ -547,17 +547,14 @@ def rule_worksheet_rows(repo_root):
     checker→文种映射（依据列=obligation-catalog）；查不到再按编号前缀约定
     （依据列=code-prefix-convention：BUD-*=预算、CMM-*=通用、V33-*=决算为主），
     不允许空。正例/负例计数留空待标注，达标列固定"待标注"。
-    规则注册表会间接引用仓库根下的 api 包，因此把仓库根与 src/ 都加入
-    sys.path（只加路径，不改包）。"""
+    规则注册表会间接引用仓库根下的 api 包，因此把仓库根加入 sys.path
+    （只加路径，不改包）。"""
     root_path = str(repo_root)
     if root_path not in sys.path:
         sys.path.insert(0, root_path)
-    src_path = str(repo_root / "src")
-    if src_path not in sys.path:
-        sys.path.insert(0, src_path)
-    from engine.check_obligations import OBLIGATION_CATALOG
-    from engine.rule_registry import rule_catalog
-    from engine import budget_rules, common_rules, rules_v33
+    from src.engine.check_obligations import OBLIGATION_CATALOG
+    from src.engine.rule_registry import rule_catalog
+    from src.engine import budget_rules, common_rules, rules_v33
 
     # 义务清单的 checker→适用文种映射（同一规则可能被多个义务、多个文种引用）。
     kinds_by_checker = {}

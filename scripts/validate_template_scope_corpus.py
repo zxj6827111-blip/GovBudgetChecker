@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """冻结盲标清单并回放统一写法裁决；不读业务库、不生成业务真值或人工决定。"""
 from __future__ import annotations
-import argparse,asyncio,hashlib,json,os,random,sys
+import argparse
+import asyncio
+import hashlib
+import json
+import os
+import random
+import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from src.services.template_scope_metrics import summarize
@@ -13,11 +19,15 @@ def digest(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     sub=parser.add_subparsers(dest='command',required=True)
-    prepare=sub.add_parser('prepare');prepare.add_argument('--pdf-dir',type=Path,required=True)
-    prepare.add_argument('--seed',type=int,required=True);prepare.add_argument('--random-count',type=int,required=True)
+    prepare=sub.add_parser('prepare')
+    prepare.add_argument('--pdf-dir',type=Path,required=True)
+    prepare.add_argument('--seed',type=int,required=True)
+    prepare.add_argument('--random-count',type=int,required=True)
     prepare.add_argument('--output',type=Path,required=True)
-    replay=sub.add_parser('replay');replay.add_argument('--manifest',type=Path,required=True)
-    replay.add_argument('--template-export',type=Path,required=True);replay.add_argument('--template-sha256',required=True)
+    replay=sub.add_parser('replay')
+    replay.add_argument('--manifest',type=Path,required=True)
+    replay.add_argument('--template-export',type=Path,required=True)
+    replay.add_argument('--template-sha256',required=True)
     replay.add_argument('--output',type=Path,required=True)
     args=parser.parse_args()
     if args.output.exists():parser.error('输出已存在；请选择新文件以保留冻结证据')
@@ -39,9 +49,12 @@ def main():
         from src.services.document_profile_resolver import resolve_document_profile
         from src.services.material_writing import load
         import fitz
-        manifest=json.loads(args.manifest.read_text());seen=set();rows=[]
+        manifest=json.loads(args.manifest.read_text())
+        seen=set()
+        rows=[]
         for entry in manifest['entries']:
-            path=Path(entry['path']);sha=digest(path)
+            path=Path(entry['path'])
+            sha=digest(path)
             if sha!=entry['sha256'] or sha in seen:parser.error('原件哈希变化或清单含重复原件')
             seen.add(sha)
             with fitz.open(path) as pdf:pages=[p.get_text() for p in pdf]

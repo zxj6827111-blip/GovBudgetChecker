@@ -100,9 +100,11 @@ def test_budget_default_unchanged_and_new_chain_has_receipt_obligation(monkeypat
     from src.engine.check_obligations import build_obligation_ledger
     monkeypatch.delenv('GBC_BUDGET_TEMPLATE_SCOPE',raising=False)
     assert 'CMM-027' not in [r.code for r in select_rules('budget')]
-    monkeypatch.setenv('GBC_TEMPLATE_SCOPE','true');monkeypatch.setenv('GBC_BUDGET_TEMPLATE_SCOPE','true')
+    monkeypatch.setenv('GBC_TEMPLATE_SCOPE','true')
+    monkeypatch.setenv('GBC_BUDGET_TEMPLATE_SCOPE','true')
     assert 'CMM-027' in [r.code for r in select_rules('budget')]
-    current=profile();current.writing_scope={'domain':'budget'}
+    current=profile()
+    current.writing_scope={'domain':'budget'}
     ledger=build_obligation_ledger(current,report_kind='budget',rule_execution_summary={'rule_statuses':{'CMM-018':'pass','BUD-113':'pass'}})
     import json
     assert 'CMM-027' in json.dumps(ledger)
@@ -142,7 +144,8 @@ async def test_budget_position_only_m0_runs_or_defers_by_its_own_compatibility_p
     value = await material_writing.load("test-budget", "a" * 64, profile(), pages)
     assert value["domain"] == "budget" and value["status"] == "confirmed"
     assert value["source"] == "declaration" and value["value"] == "unit"
-    doc = document(pages, value); doc.report_kind = "budget"
+    doc = document(pages, value)
+    doc.report_kind = "budget"
     doc.document_profile.report_kind = ProfileField(value="budget")
     if legacy:
         assert value["template_capability_pending"]["position_checks"]
@@ -169,5 +172,6 @@ async def test_budget_default_off_still_excludes_position_or_pending_new_chain(m
     assert await material_writing.load("test-budget", "a" * 64, profile(), pages) == {}
     # 即使旧材料保存着预算写法视图，总开关关闭仍不接入新的预算位置链路。
     doc = document(pages, {"domain": "budget", "status": "confirmed", "value": "unit", "snapshot": snap})
-    doc.report_kind = "budget"; doc.document_profile.report_kind = ProfileField(value="budget")
+    doc.report_kind = "budget"
+    doc.document_profile.report_kind = ProfileField(value="budget")
     with pytest.raises(RuleNotApplicable): CMM027_TemplatePositionScope().apply(doc)

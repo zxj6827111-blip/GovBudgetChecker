@@ -5,7 +5,8 @@ from src.services.disclosure_template_import import compare_text, import_source
 
 
 def test_import_preserves_original_and_does_not_overwrite(tmp_path):
-    source = tmp_path / 'a.doc'; source.write_bytes(b'original')
+    source = tmp_path / 'a.doc'
+    source.write_bytes(b'original')
     with patch('src.services.disclosure_template_import._extract', return_value=('2024年度\n单位', 'test')):
         result = import_source(source, tmp_path / 'draft', {'year': 2024})
     assert result['status'] == 'draft'
@@ -16,7 +17,8 @@ def test_import_preserves_original_and_does_not_overwrite(tmp_path):
 
 
 def test_conversion_failure_keeps_original_and_error(tmp_path):
-    source = tmp_path / 'bad.doc'; source.write_bytes(b'invalid')
+    source = tmp_path / 'bad.doc'
+    source.write_bytes(b'invalid')
     with patch('src.services.disclosure_template_import._extract', side_effect=ValueError('bad conversion')):
         result = import_source(source, tmp_path / 'draft', {})
     assert result['extraction_status'] == 'failed'
@@ -36,13 +38,15 @@ def test_differences_retain_original_and_position_never_auto_approve():
 
 
 def test_unsupported_or_empty_is_rejected_before_creating_draft(tmp_path):
-    bad = tmp_path / 'x.wps'; bad.write_bytes(b'x')
+    bad = tmp_path / 'x.wps'
+    bad.write_bytes(b'x')
     with pytest.raises(ValueError): import_source(bad, tmp_path / 'draft', {})
     assert not (tmp_path / 'draft').exists()
 
 
 def test_corrupt_xls_keeps_original_and_failed_receipt(tmp_path):
-    source=tmp_path/'broken.xls';source.write_bytes(b'not-a-valid-xls')
+    source=tmp_path/'broken.xls'
+    source.write_bytes(b'not-a-valid-xls')
     target=tmp_path/'retained'
     result=import_source(source,target,{'report_kind':'budget','source_report_year':None})
     assert result['extraction_status']=='failed' and result['error']

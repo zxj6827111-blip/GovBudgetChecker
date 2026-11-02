@@ -21,16 +21,21 @@ def _extract(source: Path) -> tuple[str, str]:
     if source.suffix.lower() == '.xls':
         import xlrd
         book = xlrd.open_workbook(source, on_demand=True)
-        lines=[]; cell_map=[]; text_offset=0; total_cells=0
+        lines=[]
+        cell_map=[]
+        text_offset=0
+        total_cells=0
         try:
             for sheet in book.sheets():
                 total_cells+=sheet.nrows*sheet.ncols
                 if total_cells>2_000_000:raise ValueError('模板工作簿超过安全处理上限')
                 if sheet.nrows*sheet.ncols > 500_000: raise ValueError('模板表格超过安全处理上限')
                 header='工作表：'+sheet.name
-                lines.append(header);text_offset+=len(header)+1
+                lines.append(header)
+                text_offset+=len(header)+1
                 for row in range(sheet.nrows):
-                    values=[];row_offset=text_offset
+                    values=[]
+                    row_offset=text_offset
                     for column in range(sheet.ncols):
                         value=sheet.cell_value(row,column)
                         if sheet.cell_type(row,column)==xlrd.XL_CELL_EMPTY: continue
@@ -40,7 +45,8 @@ def _extract(source: Path) -> tuple[str, str]:
                         cell_map.append({'sheet':sheet.name,'row':row+1,'column':column+1,'value':value,'cell_type':sheet.cell_type(row,column),'text_start':row_offset,'text_end':row_offset+len(rendered)})
                         row_offset+=len(rendered)+1
                     if values:
-                        lines.append('\t'.join(values));text_offset=row_offset
+                        lines.append('\t'.join(values))
+                        text_offset=row_offset
         finally:book.release_resources()
         (source.parent/'spreadsheet_cells.json').write_text(json.dumps(cell_map,ensure_ascii=False,allow_nan=False),encoding='utf-8')
         return '\n'.join(lines), 'xlrd:'+xlrd.__version__+':cached-values-only'
@@ -115,6 +121,6 @@ def compare_text(old: str, new: str) -> list[dict]:
     left, right = _paragraphs(old), _paragraphs(new)
     # 字面比较不归一化，以免掩盖任何待审核的字符变化。
     matcher = difflib.SequenceMatcher(a=[p['text'] for p in left], b=[p['text'] for p in right], autojunk=False)
-    return [{'change': tag, 'old': left[i:j], 'new': right[k:l],
+    return [{'change': tag, 'old': left[i:j], 'new': right[k:new_end],
              'business_classification': 'pending_review'}
-            for tag, i, j, k, l in matcher.get_opcodes() if tag != 'equal']
+            for tag, i, j, k, new_end in matcher.get_opcodes() if tag != 'equal']

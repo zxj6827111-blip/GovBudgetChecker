@@ -96,8 +96,11 @@ def qualified_sources(monkeypatch):
 @pytest.mark.asyncio
 async def test_new_database_and_frozen_reads_mask_only_unqualified_capabilities(qualified_sources):
     from src.schemas.document_profile import DocumentProfile, ProfileField
-    pkg = package(); old = proof(pkg); old.pop("independent_sample_count")
-    value = record(pkg, old); before = deepcopy(value)
+    pkg = package()
+    old = proof(pkg)
+    old.pop("independent_sample_count")
+    value = record(pkg, old)
+    before = deepcopy(value)
     profile = DocumentProfile(report_kind=ProfileField(value="final"), report_year=ProfileField(value=2025))
     conn = type("ReadConnection", (), {"fetchrow": AsyncMock(return_value=deepcopy(value))})()
     for snap in [await service.validated_snapshot(None, value),
@@ -113,7 +116,8 @@ async def test_new_database_and_frozen_reads_mask_only_unqualified_capabilities(
 
 @pytest.mark.asyncio
 async def test_capabilities_are_qualified_separately(qualified_sources):
-    pkg = package(); value = record(pkg, proof(pkg, automatic_verified_count=0))
+    pkg = package()
+    value = record(pkg, proof(pkg, automatic_verified_count=0))
     snap = await service.validated_snapshot(None, value)
     assert snap["capability_scope"]["position_checks"] is True
     assert snap["capability_scope"]["writing_auto"] is False
@@ -122,9 +126,11 @@ async def test_capabilities_are_qualified_separately(qualified_sources):
 
 @pytest.mark.parametrize("legacy", [False, True])
 def test_offline_read_uses_the_same_effective_capability_gate(tmp_path, legacy):
-    pkg = package(); p = proof(pkg)
+    pkg = package()
+    p = proof(pkg)
     if legacy: p.pop("independent_sample_count")
-    value = record(pkg, p); before = deepcopy(value)
+    value = record(pkg, p)
+    before = deepcopy(value)
     current = {k: value[k] for k in ("region", "overlay", "report_kind", "target_year", "revision")}
     payload = {"current": [current], "bindings": [value], "packages": [pkg]}
     bundle = tmp_path / "approved-test.zip"
@@ -141,7 +147,10 @@ def test_offline_read_uses_the_same_effective_capability_gate(tmp_path, legacy):
 
 class FakeConnection:
     def __init__(self, pkg, prior):
-        self.pkg = pkg; self.prior = prior; self.writes = []; self.current = 1
+        self.pkg = pkg
+        self.prior = prior
+        self.writes = []
+        self.current = 1
     def transaction(self): return self
     async def __aenter__(self): return self
     async def __aexit__(self, *args): return False
@@ -163,7 +172,10 @@ def rollback_data(pkg):
 @pytest.mark.asyncio
 async def test_rollback_keeps_and_revalidates_original_evidence(qualified_sources, monkeypatch):
     monkeypatch.setattr(service, "audit", AsyncMock())
-    pkg = package(); p = proof(pkg); prior = record(pkg, p); before = deepcopy(prior)
+    pkg = package()
+    p = proof(pkg)
+    prior = record(pkg, p)
+    before = deepcopy(prior)
     conn = FakeConnection(pkg, prior)
     assert (await service.bind(conn, rollback_data(pkg), "test"))["revision"] == 2
     saved = next(args for sql, args in conn.writes if "INSERT INTO disclosure_template_binding_revisions" in sql)
@@ -181,7 +193,8 @@ async def test_rollback_keeps_and_revalidates_original_evidence(qualified_source
 @pytest.mark.parametrize("defect", ["missing-n", "wrong-algorithm", "legacy-rollback"])
 async def test_rollback_cannot_bypass_compatibility_gate(defect, qualified_sources, monkeypatch):
     monkeypatch.setattr(service, "audit", AsyncMock())
-    pkg = package(); p = proof(pkg)
+    pkg = package()
+    p = proof(pkg)
     if defect == "missing-n": p.pop("independent_sample_count")
     if defect == "wrong-algorithm": p["algorithm"] = "material-writing-v3.5"
     prior = record(pkg, p, adoption="rollback" if defect == "legacy-rollback" else "historical_reference")
@@ -193,7 +206,9 @@ async def test_rollback_cannot_bypass_compatibility_gate(defect, qualified_sourc
 
 @pytest.mark.asyncio
 async def test_pending_position_proof_is_deferred_but_intentional_disable_is_not_applicable(qualified_sources):
-    pkg = package(); old = proof(pkg); old.pop("independent_sample_count")
+    pkg = package()
+    old = proof(pkg)
+    old.pop("independent_sample_count")
     snap = await service.validated_snapshot(None, record(pkg, old))
     resolution = {"status": "confirmed", "value": "unit", "snapshot": snap}
     doc = document(["2025年度决算", "2025年度决算表"], resolution)
@@ -207,7 +222,9 @@ async def test_pending_position_proof_is_deferred_but_intentional_disable_is_not
 async def test_invalid_automatic_proof_remains_insufficient_without_overriding_explicit_evidence(monkeypatch, qualified_sources, explicit):
     from src.services import material_writing
     from src.services.document_profile_resolver import resolve_document_profile
-    pkg = package(); old = proof(pkg); old.pop("independent_sample_count")
+    pkg = package()
+    old = proof(pkg)
+    old.pop("independent_sample_count")
     snap = await service.validated_snapshot(None, record(pkg, old))
     monkeypatch.setenv("GBC_TEMPLATE_SCOPE", "true")
     monkeypatch.setenv("GBC_TEMPLATE_EXPORT", "synthetic-only")
@@ -233,11 +250,13 @@ def test_publish_automatic_errors_are_real_integer_counts(errors):
 @pytest.mark.asyncio
 async def test_rollback_chain_preserves_original_proof_instead_of_request_replacement(qualified_sources, monkeypatch):
     monkeypatch.setattr(service, "audit", AsyncMock())
-    pkg = package(); original = proof(pkg)
+    pkg = package()
+    original = proof(pkg)
     prior = record(pkg, original, adoption="rollback", restored_from_revision=1,
                    original_adoption_kind="not_received", compatibility_source_revision=1)
     prior["revision"] = 2
-    conn = FakeConnection(pkg, prior); conn.current = 2
+    conn = FakeConnection(pkg, prior)
+    conn.current = 2
     data = {**rollback_data(pkg), "expected_revision": 2, "restore_revision": 2,
             "compatibility": proof(pkg, target_year=2024)}
     assert (await service.bind(conn, data, "test"))["revision"] == 3
@@ -252,7 +271,9 @@ async def test_rollback_chain_preserves_original_proof_instead_of_request_replac
 @pytest.mark.asyncio
 async def test_same_year_issued_rollback_needs_no_cross_year_sample_gate(qualified_sources, monkeypatch):
     monkeypatch.setattr(service, "audit", AsyncMock())
-    pkg = package(); prior = record(pkg, None, adoption="issued"); prior["target_year"] = 2024
+    pkg = package()
+    prior = record(pkg, None, adoption="issued")
+    prior["target_year"] = 2024
     conn = FakeConnection(pkg, prior)
     assert (await service.bind(conn, {**rollback_data(pkg), "target_year": 2024}, "test"))["revision"] == 2
     saved = next(args for sql, args in conn.writes if "INSERT INTO disclosure_template_binding_revisions" in sql)

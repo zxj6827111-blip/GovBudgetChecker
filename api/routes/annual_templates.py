@@ -83,7 +83,8 @@ async def upload(request:Request, file:UploadFile=File(...), report_kind:Literal
     if suffix not in SUPPORTED: raise HTTPException(422,'支持 DOC、DOCX、PDF、XLS；WPS 尚未验证')
     # 流式限制上传，不执行宏；临时文件与受管原件名称均由服务端生成。
     with tempfile.TemporaryDirectory(prefix='gbc-template-') as temp:
-        target=Path(temp)/('upload'+suffix); count=0
+        target=Path(temp)/('upload'+suffix)
+        count=0
         with target.open('wb') as handle:
             while chunk:=await file.read(1024*1024):
                 count+=len(chunk)
@@ -105,12 +106,16 @@ async def draft(body:Pair,request:Request):
 
 @router.post('/drafts/{identifier}/review')
 async def review(identifier:str,body:Review,request:Request):
-    who=actor(request); values=body.model_dump(mode='json'); revision=values.pop('revision')
+    who=actor(request)
+    values=body.model_dump(mode='json')
+    revision=values.pop('revision')
     return await with_connection(lambda conn:service.review(conn,identifier,revision,values,who))
 
 @router.post('/drafts/{identifier}/publish')
 async def publish(identifier:str,body:Publish,request:Request):
-    who=actor(request); values=body.model_dump(mode='json'); revision=values.pop('revision')
+    who=actor(request)
+    values=body.model_dump(mode='json')
+    revision=values.pop('revision')
     return await with_connection(lambda conn:service.publish(conn,identifier,revision,values,who))
 
 @router.post('/bindings')
@@ -131,10 +136,12 @@ async def impact(request:Request,package_id:str|None=None,target_year:int|None=N
     from api import runtime
     def scan():
         import json
-        records=[]; unreadable=[]
+        records=[]
+        unreadable=[]
         for path in runtime.UPLOAD_ROOT.glob('*/status.json'):
             try:
-                payload=json.loads(path.read_text()); resolution=((payload.get('result') or {}).get('meta') or {}).get('document_scope_resolution') or {}
+                payload=json.loads(path.read_text())
+                resolution=((payload.get('result') or {}).get('meta') or {}).get('document_scope_resolution') or {}
                 snap=resolution.get('snapshot') or {}
                 meta=(payload.get('result') or {}).get('meta') or {}
                 profile=meta.get('document_profile') or {}

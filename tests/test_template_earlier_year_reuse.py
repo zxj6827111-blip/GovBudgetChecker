@@ -28,8 +28,11 @@ async def test_years_reuse_a_package_only_with_their_own_reviewed_original(real_
             for kind, heading, note in (("unit", f"{year}年度决算表", unit_note),
                                         ("department", f"{year}年度部门决算表", "本表反映部门本年度收入")):
                 path = tmp_path / (kind + uuid4().hex + ".pdf")
-                pdf = fitz.open(); page = pdf.new_page()
-                page.insert_text((50, 50), heading + "\n" + note, fontname="china-s"); pdf.save(path); pdf.close()
+                pdf = fitz.open()
+                page = pdf.new_page()
+                page.insert_text((50, 50), heading + "\n" + note, fontname="china-s")
+                pdf.save(path)
+                pdf.close()
                 ids[kind] = (await service.register_source(conn, path=path, metadata=dict(
                     report_kind="final", material_type=kind, source_report_year=year, issuer="test-only issuer",
                     release_reference=f"isolated-set-{year}", description="isolated test source", issue_date=""),

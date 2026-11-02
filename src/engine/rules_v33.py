@@ -9214,7 +9214,7 @@ class R33236_DocumentScopeTerminology(Rule):
             first, last = source_text.compact_range(left, right)
             views.append((source_text.compact[first:last], [pos-left for pos in source_text.positions[first:last]]))
         boundary_reasons = []
-        for index, (left, right) in enumerate(zip(views, views[1:]), 1):
+        for index, (left, right) in enumerate(zip(views, views[1:], strict=False), 1):
             if any(left[0].endswith(term[:split]) and right[0].startswith(term[split:])
                    for term in ('部门决算安排', '单位决算安排') for split in range(1, len(term))):
                 boundary_reasons.append(f'第{index}—{index+1}页的口径表达可能跨页断裂，不能把两个页面边缘直接拼成确定结论')
@@ -9251,7 +9251,7 @@ class R33236_DocumentScopeTerminology(Rule):
             wrong_label = "单位决算安排"
 
         issues: List[Issue] = []
-        for page_num, (text, (compact, positions)) in enumerate(zip(doc.page_texts, views), start=1):
+        for page_num, (text, (compact, positions)) in enumerate(zip(doc.page_texts, views, strict=False), start=1):
             for match in pattern.finditer(compact):
                 start, end = positions[match.start()], positions[match.end()-1] + 1
                 issues.append(

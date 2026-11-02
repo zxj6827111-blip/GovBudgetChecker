@@ -24,7 +24,8 @@ def resolution(pages,human=None):
 def test_position_conflict_then_human_confirmation_groups_notes():
     pages=['2024年度决算','2024年度决算表\n本表反映部门本年度收入。','2024年度决算情况说明\n本表反映部门本年度支出。']
     assert resolution(pages)['status']=='conflict'
-    value=resolution(pages,HumanDecision('unit','test-only',True));doc=document(pages,value)
+    value=resolution(pages,HumanDecision('unit','test-only',True))
+    doc=document(pages,value)
     issues=CMM027_TemplatePositionScope().apply(doc)
     assert len(issues)==1 and issues[0].location['occurrences']==2
     assert len(issues[0].location['locations'])==2
@@ -65,14 +66,16 @@ def test_qualified_ocr_view_is_separate_deduplicated_and_shared():
     from tests.annual_template_p1_helpers import bound_identity_artifact
     artifact=bound_identity_artifact([['2024年度部门决算'],['2024年度决算表','本表反映单位本年度收入。']])
     artifact.text_blocks.append(ParsedTextBlock('repeat',2,'2024年度决算表',confidence=.99,extraction_method='ocr'))
-    raw=['',''];pages,spans=qualified_identity_view(raw,artifact)
+    raw=['','']
+    pages,spans=qualified_identity_view(raw,artifact)
     assert raw==['',''] and pages[1].count('2024年度决算表')==1
     evidence=collect(pages,source_spans=spans)
     value=asdict(resolve_material_scope(evidence=evidence,template_qualified=True))
     assert value['status']=='conflict'
     assert all(e.source_blocks[0]['source_method']=='ocr' for e in evidence)
     doc=document(raw,resolution(pages,HumanDecision('unit','test-only',True)))
-    doc.writing_page_texts=pages;doc.writing_source_spans=spans
+    doc.writing_page_texts=pages
+    doc.writing_source_spans=spans
     with pytest.raises(RuleDeferred) as ex:CMM019_CoverElements().apply(doc)
     assert any('误写' in i.message for i in ex.value.partial_issues)
     assert doc.page_texts==raw

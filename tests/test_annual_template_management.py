@@ -24,7 +24,11 @@ async def test_template_lifecycle_real_postgres(real_database_url, tmp_path, mon
         import fitz
         async def imported(kind,content):
             path=tmp_path/(kind+uuid4().hex+'.pdf')
-            pdf=fitz.open();p=pdf.new_page();p.insert_text((50,50),content,fontname='china-s');pdf.save(path);pdf.close()
+            pdf=fitz.open()
+            p=pdf.new_page()
+            p.insert_text((50,50),content,fontname='china-s')
+            pdf.save(path)
+            pdf.close()
             return await service.register_source(conn,path=path,metadata=dict(report_kind='final',material_type=kind,source_report_year=2024,
                 issuer='test-only',release_reference='isolated-test-set',description='isolated test source',issue_date=''),actor='test')
         unit=await imported('unit','2024年度决算表\n本表反映单位本年度收入')
@@ -36,7 +40,8 @@ async def test_template_lifecycle_real_postgres(real_database_url, tmp_path, mon
         package_id=published['package_id']
         bind=dict(region='上海市',overlay='',report_kind='final',target_year=2024,package_id=package_id,expected_revision=0,adoption_kind='issued',capabilities={'position_checks':True},basis='isolated verification')
         assert (await service.bind(conn,bind,'test'))['revision']==1
-        snap=await service.snapshot(conn,2024);assert snap['available'] and snap['revision']==1
+        snap=await service.snapshot(conn,2024)
+        assert snap['available'] and snap['revision']==1
         with pytest.raises(HTTPException) as ex: await service.bind(conn,bind,'other')
         assert ex.value.status_code==409
         assert not (await service.snapshot(conn,2023))['available']
@@ -71,13 +76,22 @@ async def test_template_lifecycle_real_postgres(real_database_url, tmp_path, mon
         assert service.offline_snapshot(bundle,digest,2024)['available']
         assert not service.offline_snapshot(bundle,'bad',2024)['available']
         # 同时篡改文本及其自报哈希也不能绕过发布包中的不可变提取回执。
-        directory=service.source_dir(unit['id']);manifest_path=directory/'manifest.json';text_path=directory/'extracted.txt'
-        old_manifest=manifest_path.read_bytes();old_text=text_path.read_bytes()
-        text_path.write_text('tampered text');manifest=json.loads(old_manifest);manifest['text_sha256']=hashlib.sha256(text_path.read_bytes()).hexdigest();manifest_path.write_text(json.dumps(manifest))
+        directory=service.source_dir(unit['id'])
+        manifest_path=directory/'manifest.json'
+        text_path=directory/'extracted.txt'
+        old_manifest=manifest_path.read_bytes()
+        old_text=text_path.read_bytes()
+        text_path.write_text('tampered text')
+        manifest=json.loads(old_manifest)
+        manifest['text_sha256']=hashlib.sha256(text_path.read_bytes()).hexdigest()
+        manifest_path.write_text(json.dumps(manifest))
         assert not (await service.snapshot(conn,2024))['available']
-        text_path.write_bytes(old_text);manifest_path.write_bytes(old_manifest)
+        text_path.write_bytes(old_text)
+        manifest_path.write_bytes(old_manifest)
         # 已发布原件被改写时能力 fail-closed，不能偷偷改选其他年份。
-        directory=service.source_dir(unit['id']); original=directory/'original.pdf'; original.write_bytes(b'tampered')
+        directory=service.source_dir(unit['id'])
+        original=directory/'original.pdf'
+        original.write_bytes(b'tampered')
         assert not (await service.snapshot(conn,2024))['available']
         with pytest.raises(HTTPException) as ex:
             await service.bind(conn,{**bind,'expected_revision':3},'test')

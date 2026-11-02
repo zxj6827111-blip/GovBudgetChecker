@@ -220,7 +220,7 @@ def test_comprehensive_contrast_ignores_toc_pages_and_toc_lines():
     pages = ['2024年度单位决算', TOC_PAGE, '2024年度部门决算表\n本表反映部门本年度收入。']
     toc_heading = opp('department', 'heading', 2, '部门决算情况说明', [native(2, TOC_PAGE)]
                       )
-    note = opp('department', 'table_note', 3, '本表反映部门本年度收入。', [native(3, pages[2])])
+    opp('department', 'table_note', 3, '本表反映部门本年度收入。', [native(3, pages[2])])
     # 只有目录页写法相反、正文一致：不判为全面相反。
     assert contrast([toc_heading], pages)['comprehensive_contrast'] is False
     assert any(e['reason'] == 'toc_page' for e in contrast([toc_heading], pages)['excluded'])

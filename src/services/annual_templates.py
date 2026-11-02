@@ -86,16 +86,19 @@ async def text(conn, source_id):
 
 
 async def create_draft(conn, data, actor):
-    unit,_,_ = await source(conn,data['unit_source_id']); dept,_,_=await source(conn,data['department_source_id'])
+    unit,_,_ = await source(conn,data['unit_source_id'])
+    dept,_,_=await source(conn,data['department_source_id'])
     if unit['material_type']!='unit' or dept['material_type']!='department' or unit['report_kind']!=dept['report_kind'] or unit['source_report_year']!=dept['source_report_year']:
         raise HTTPException(422,'部门和单位来源类型、文种或源年度不匹配')
-    dept_text=await text(conn,dept['id']); unit_text=await text(conn,unit['id'])
+    dept_text=await text(conn,dept['id'])
+    unit_text=await text(conn,unit['id'])
     source_receipts={kind:source_receipt(data['id']) for kind,data in [('unit',unit),('department',dept)]}
     pair_diff=compare_text(dept_text,unit_text)
     config=config_2024()
     config['domain']=unit['report_kind']
     import re
-    flat_dept=''.join(dept_text.split()); flat_unit=''.join(unit_text.split())
+    flat_dept=''.join(dept_text.split())
+    flat_unit=''.join(unit_text.split())
     config['supported_pair']=all(token in value for token,value in (
         ('年度部门决算',flat_dept),('本表反映部门本年度',flat_dept),
         ('年度决算',flat_unit),('本表反映单位本年度',flat_unit)))
@@ -141,7 +144,8 @@ async def review(conn, identifier, revision, review_record, actor):
     async with conn.transaction():
         old=row(await conn.fetchrow('SELECT * FROM disclosure_template_drafts WHERE id=$1 FOR UPDATE',UUID(identifier)))
         if not old or old['revision']!=revision or old['status']=='published': raise HTTPException(409,'草稿版本已改变')
-        data=old['data']; data['review_record']=review_record
+        data=old['data']
+        data['review_record']=review_record
         anchors=await reviewed_anchors(conn,data,review_record)
         data['config']['anchors']=anchors
         data['config']['prompts']=sorted(set(data['config'].get('prompts',[])+[a['text'] for a in anchors if a['kind']=='prompt']))
@@ -172,7 +176,8 @@ async def publish(conn, identifier, revision, data, actor):
     async with conn.transaction():
         draft=row(await conn.fetchrow('SELECT * FROM disclosure_template_drafts WHERE id=$1 FOR UPDATE',UUID(identifier)))
         if not draft or draft['revision']!=revision or draft['status']!='reviewed': raise HTTPException(409,'须先审核当前草稿')
-        content=draft['data']; decision=content['review_record'].get('decision')
+        content=draft['data']
+        decision=content['review_record'].get('decision')
         verify_source_receipts(content)
         if decision not in ('same','new'): raise HTTPException(422,'差异未明确，继续保留草稿')
         for kind in ('unit','department'): await text(conn,content[kind+'_source_id'])
@@ -193,7 +198,8 @@ async def publish(conn, identifier, revision, data, actor):
                 raise HTTPException(422,'模板对缺少受支持的成对标题/表注指纹，不能启用写法能力')
             if any(data['capabilities'].values()) and not content.get('source_pair_consistent'):
                 raise HTTPException(422,'模板来源尚未核实为同一套/批次，不能启用检查能力')
-            package_id=str(uuid4()); frozen={**content,'capabilities':data['capabilities']}
+            package_id=str(uuid4())
+            frozen={**content,'capabilities':data['capabilities']}
             await conn.execute('''INSERT INTO disclosure_template_packages(id,version,report_kind,source_report_year,content,content_sha256,unit_source_id,department_source_id,predecessor_id,capability_scope,review_record,validation_record,actor)
                 VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13)''',UUID(package_id),data['version'],content['report_kind'],content['source_report_year'],canonical(frozen),sha(frozen),UUID(content['unit_source_id']),UUID(content['department_source_id']),UUID(content['previous_package_id']) if content.get('previous_package_id') else None,canonical(data['capabilities']),canonical(content['review_record']),canonical(data['validation']),actor)
         await conn.execute("UPDATE disclosure_template_drafts SET revision=revision+1,status='published',package_id=$2 WHERE id=$1",UUID(identifier),UUID(package_id))
@@ -288,24 +294,26 @@ def reviewed_slot_changes(content):
     """只允许逐组审核过的年度/名称槽位或纯排版；单位、数字等变化不能借槽位放行。"""
     import re
     reviews=content['review_record'].get('slot_reviews') or {}
-    old_year=str(content.get('previous_source_report_year',''))
-    new_year=str(content['source_report_year'])
+    str(content.get('previous_source_report_year',''))
+    str(content['source_report_year'])
     for side,changes in content.get('changes',{}).items():
         kinds=reviews.get(side,[])
         if len(kinds)!=len(changes): return False
-        for change,kind in zip(changes,kinds):
-            old='\n'.join(p['text'] for p in change['old']); new='\n'.join(p['text'] for p in change['new'])
+        for change,kind in zip(changes,kinds, strict=False):
+            old='\n'.join(p['text'] for p in change['old'])
+            new='\n'.join(p['text'] for p in change['new'])
             candidate=old
             if kind=='layout' and ''.join(old.split())==''.join(new.split()): continue
             if kind in ('report_year','comparison_year','report_and_comparison_year','annual_and_name'):
                 replacements={}
-                old_value=content.get('previous_source_report_year');new_value=content.get('source_report_year')
+                old_value=content.get('previous_source_report_year')
+                new_value=content.get('source_report_year')
                 if type(new_value) is int:
                     if kind in ('report_year','report_and_comparison_year','annual_and_name'):
                         replacements[str(old_value) if type(old_value) is int else '20XX']=str(new_value)
                     if kind in ('comparison_year','report_and_comparison_year','annual_and_name') and type(old_value) is int:
                         replacements[str(old_value-1)]=str(new_value-1)
-                def approved_year(match):
+                def approved_year(match, *, old=old, replacements=replacements):
                     prefix=old[:match.start()]
                     # 引用文献中的固定年份不充当报告年度槽位；金额和编码也不匹配。
                     if prefix.rfind('《')>prefix.rfind('》'):return match.group()
@@ -316,7 +324,8 @@ def reviewed_slot_changes(content):
                     if kind!='annual_and_name' and changed!=old and changed==new:continue
             if kind in ('organization_name','annual_and_name'):
                 pattern=r'(?:上海市|XX|××)[^\d，。；：:（）()]{0,40}?(?:办公室|委员会|中心|局)'
-                left=list(re.finditer(pattern,candidate));right=list(re.finditer(pattern,new))
+                left=list(re.finditer(pattern,candidate))
+                right=list(re.finditer(pattern,new))
                 if any(candidate[:a.start()]+b.group()+candidate[a.end():]==new for a in left for b in right):continue
             return False
     return True
@@ -336,14 +345,16 @@ async def export_bundle(conn):
             path=directory/filename
             if path.exists():entries['sources/'+item['id']+'/'+filename]=path.read_bytes()
     entries['checksums.json']=canonical({name:hashlib.sha256(value).hexdigest() for name,value in entries.items()}).encode()
-    target=storage()/'exports'/(str(uuid4())+'.zip');target.parent.mkdir(parents=True,exist_ok=True)
+    target=storage()/'exports'/(str(uuid4())+'.zip')
+    target.parent.mkdir(parents=True,exist_ok=True)
     with zipfile.ZipFile(target,'w',compression=zipfile.ZIP_DEFLATED) as archive:
         for name,value in entries.items():archive.writestr(name,value)
     return target
 
 
 def offline_snapshot(path, expected_sha256, year, kind='final', region='上海市', overlay=''):
-    import zipfile,io
+    import zipfile
+    import io
     try:
         data=Path(path).read_bytes()
     except OSError:
@@ -373,7 +384,9 @@ def validate_compatibility(proof, package, *, target_year, capabilities):
         or not proof['report_reference'].strip() or proof.get('independent_labels') is not True
         or proof.get('boundary_cases_passed') is not True):
         raise HTTPException(422,'沿用能力须有独立标注、关键边界和年度兼容验证记录')
-    n=proof.get('independent_sample_count'); m=proof.get('automatic_verified_count'); errors=proof.get('automatic_errors')
+    n=proof.get('independent_sample_count')
+    m=proof.get('automatic_verified_count')
+    errors=proof.get('automatic_errors')
     corpus=proof.get('corpus_size')
     if type(n) is not int or n<1:
         raise HTTPException(422,'须记录独立核实的兼容样本数；旧自动确定数不能补作独立样本数')
@@ -410,7 +423,8 @@ def binding_basis(record):
 def effective_adoption_kind(record, basis):
     adoption=record.get('adoption_kind')
     if adoption!='rollback':return adoption
-    original=basis.get('original_adoption_kind'); revision=basis.get('restored_from_revision')
+    original=basis.get('original_adoption_kind')
+    revision=basis.get('restored_from_revision')
     if type(revision) is int and revision>0 and original in ('issued','verified_same','not_received','historical_reference'):
         return original
     return None
@@ -418,9 +432,12 @@ def effective_adoption_kind(record, basis):
 
 def qualify_binding_capabilities(record):
     """仅为新分析投影有效能力；批准记录、依据和历史快照保持原样。"""
-    result=copy.deepcopy(record); caps=result.get('capability_scope') or {}
+    result=copy.deepcopy(record)
+    caps=result.get('capability_scope') or {}
     result['approved_capability_scope']=copy.deepcopy(caps)
-    basis=binding_basis(result); adoption=effective_adoption_kind(result,basis); pending={}
+    basis=binding_basis(result)
+    adoption=effective_adoption_kind(result,basis)
+    pending={}
     for capability in WRITING_CAPABILITIES:
         if not caps.get(capability):continue
         try:
@@ -435,7 +452,8 @@ def qualify_binding_capabilities(record):
             else:
                 raise HTTPException(422,'原沿用方式或回滚证据来源尚未核实')
         except HTTPException as exc:
-            caps[capability]=False; pending[capability]=str(exc.detail)
+            caps[capability]=False
+            pending[capability]=str(exc.detail)
     result['capability_scope']=caps
     if pending:
         result['compatibility_pending']=pending
@@ -445,7 +463,8 @@ def qualify_binding_capabilities(record):
 
 async def reviewed_anchors(conn, content, review_record):
     """模板差异只有经明确分类、规范依据与原件定位审核后才能新增检查。"""
-    import re,unicodedata
+    import re
+    import unicodedata
     anchors=[]
     inherited=[]
     if content.get('previous_package_id'):
@@ -459,13 +478,17 @@ async def reviewed_anchors(conn, content, review_record):
             raise HTTPException(422,'变更锚点须来自当前成对原件；旧锚点只可完整继承')
         needle=''.join(unicodedata.normalize('NFKC',item.get('text','')).split())
         if not 3<=len(needle)<=200 or len(item.get('basis','').strip())<3:raise HTTPException(422,'须填写完整锚点原文和规范/分类依据')
-        raw=await text(conn,item['source_id']); chars=[(i,c) for i,char in enumerate(raw) for c in unicodedata.normalize('NFKC',char) if not c.isspace()]
-        view=''.join(c for _,c in chars);matches=list(re.finditer(re.escape(needle),view))
+        raw=await text(conn,item['source_id'])
+        chars=[(i,c) for i,char in enumerate(raw) for c in unicodedata.normalize('NFKC',char) if not c.isspace()]
+        view=''.join(c for _,c in chars)
+        matches=list(re.finditer(re.escape(needle),view))
         occurrence=item.get('occurrence')
         if not matches or (len(matches)>1 and occurrence is None):raise HTTPException(422,'原文未唯一定位，请指定已核实的第几处')
         occurrence=occurrence if occurrence is not None else 1
         if type(occurrence) is not int or not 1<=occurrence<=len(matches):raise HTTPException(422,'锚点位置序号无效')
-        match=matches[occurrence-1];start=chars[match.start()][0];end=chars[match.end()-1][0]+1
+        match=matches[occurrence-1]
+        start=chars[match.start()][0]
+        end=chars[match.end()-1][0]+1
         if item['kind']=='prompt' and not re.search('列明|仍保留该表格式|按上述格式|不涉及的不列|如持平|作下述说明|根据三定方案',needle):
             raise HTTPException(422,'尚未支持此类提示语自动检查；可登记为样式或可选内容')
         original,_,_=await source(conn,item['source_id'])
@@ -527,10 +550,12 @@ def compose_snapshots(base, overlay):
     result=copy.deepcopy(overlay)
     result['municipal_reference']={k:base.get(k) for k in ('available','reason','package_id','content_sha256','revision')}
     if base.get('available'):
-        base_config=base['content']['config']; config=copy.deepcopy(result['content']['config'])
+        base_config=base['content']['config']
+        config=copy.deepcopy(result['content']['config'])
         config['anchors']=[*base_config.get('anchors',[]),*config.get('anchors',[])]
         config['prompts']=sorted(set(base_config.get('prompts',[])+config.get('prompts',[])))
-        result['effective_config']=config; result['effective_config_sha256']=sha(config)
+        result['effective_config']=config
+        result['effective_config_sha256']=sha(config)
         # 类型/位置能力由覆盖层自身的验收决定，规范与已审核提示语不能因覆盖层省略而取消。
         caps=result['capability_scope']
         for capability in ('structure','residue'):
@@ -549,7 +574,8 @@ async def select_for_profile(conn, profile, pages):
 
 
 def offline_for_profile(path, expected_sha256, profile, pages):
-    import zipfile,io
+    import zipfile
+    import io
     try:
         data=Path(path).read_bytes()
         if hashlib.sha256(data).hexdigest()!=expected_sha256:raise ValueError('unapproved export')

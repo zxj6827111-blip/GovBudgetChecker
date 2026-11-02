@@ -2225,9 +2225,11 @@ async def confirm_material_dimensions(conn, job_uuid: str, *, actor: str, reques
         for absent in set(tables)-set(selections):
             if await conn.fetchval(f'SELECT 1 FROM {tables[absent]} WHERE request_id=$1::uuid',request['request_id']):
                 raise HTTPException(409,'提交维度与原请求不一致')
-        result={};pending={}
+        result={}
+        pending={}
         for dimension,selection in selections.items():
-            table=tables[dimension];choice=choices[dimension]
+            table=tables[dimension]
+            choice=choices[dimension]
             existing=await conn.fetchrow(f'SELECT * FROM {table} WHERE request_id=$1::uuid',request['request_id'])
             if existing:
                 saved=document_scope.decision_dict(existing)
@@ -2262,7 +2264,8 @@ async def confirm_material_dimensions(conn, job_uuid: str, *, actor: str, reques
         locked=await conn.fetchrow('SELECT file_hash,status FROM analysis_jobs WHERE job_uuid=$1 FOR UPDATE',job_uuid)
         if locked['file_hash']!=actual_file_hash or locked['status'] in {'queued','processing','running'}: raise HTTPException(409,'分析已开始或原件已变化')
         for dimension,selection in pending.items():
-            table=tables[dimension];choice=choices[dimension]
+            table=tables[dimension]
+            choice=choices[dimension]
             extra=',conflict_acknowledged' if dimension=='writing' else ''
             extra_value=',$12' if dimension=='writing' else ''
             args=[request['request_id'],job_uuid,request['document_version_id'],actual_file_hash,selection['revision'],state.basis_token,

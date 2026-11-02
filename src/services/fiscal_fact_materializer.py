@@ -386,20 +386,22 @@ class FiscalFactMaterializer:
         if code and (total_exact or total_markers):
             # 行身份硬冲突：同一行既有有效编码，又有（完整或嵌入名称的）合计标记。
             # 保留编码候选与原文，交由准入层标 ambiguous；不得当成合法总计。
-            return {
+            conflict_detail: Dict[str, Any] = {
+                "code_candidates": [part for part in (code_parts or fallback_code_parts)],
+                "total_markers": total_markers,
+                "label_cells": [
+                    {"col_idx": int(cell.get("col_idx") or 0),
+                     "raw_text": str(cell.get("raw_text") or "").strip()}
+                    for cell in label_cells if str(cell.get("raw_text") or "").strip()
+                ],
+            }
+            classification: Dict[str, Any] = {
                 "classification_code": code,
                 "classification_name": name or code,
                 "classification_status": "code_total_conflict",
-                "classification_conflict": {
-                    "code_candidates": [part for part in (code_parts or fallback_code_parts)],
-                    "total_markers": total_markers,
-                    "label_cells": [
-                        {"col_idx": int(cell.get("col_idx") or 0),
-                         "raw_text": str(cell.get("raw_text") or "").strip()}
-                        for cell in label_cells if str(cell.get("raw_text") or "").strip()
-                    ],
-                },
+                "classification_conflict": conflict_detail,
             }
+            return classification
         if total_exact and not code:
             return {
                 "classification_code": "total",
@@ -624,7 +626,10 @@ class FiscalFactMaterializer:
             source_label_cols = (legacy.extra_dims or {}).get('source_label_cols', [])
             classification_status = str((legacy.extra_dims or {}).get('classification_status') or '')
             identity_conflict = classification_status == 'code_total_conflict'
-            classification_conflict = (legacy.extra_dims or {}).get('classification_conflict') or {}
+            raw_conflict = (legacy.extra_dims or {}).get('classification_conflict') or {}
+            classification_conflict: Dict[str, Any] = (
+                dict(raw_conflict) if isinstance(raw_conflict, Mapping) else {}
+            )
             missing_subject_code = (bool(code_columns.intersection(source_label_cols))
                                     and not legacy.classification_code)
             measure_cell = None

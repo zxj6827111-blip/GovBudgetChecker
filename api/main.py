@@ -2440,7 +2440,8 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         if document_profile.writing_scope:
             from src.services.annual_templates import sha as writing_hash
             result["meta"]["writing_processing_identity"] = writing_hash(document_profile.writing_scope)
-            resolution=document_profile.writing_scope; snapshot=resolution.get('snapshot') or {}
+            resolution=document_profile.writing_scope
+            snapshot=resolution.get('snapshot') or {}
             # 分析语义摘要独立于金额物化身份，防止写法决定改变来源格及 fact_uid。
             result['meta']['binding']={'scope_resolution':{
                 'status':resolution.get('status'),'value':resolution.get('value'),'source':resolution.get('source'),

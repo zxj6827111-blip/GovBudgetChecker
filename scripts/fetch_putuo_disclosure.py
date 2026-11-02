@@ -10,8 +10,18 @@
   python3 scripts/fetch_putuo_disclosure.py download --years 2027 --kinds 预算
   python3 scripts/fetch_putuo_disclosure.py download --limit 20  # 小样本试跑
 """
-import argparse, collections, concurrent.futures as cf, csv, hashlib, json, os, re, sys, time
-import urllib.request, urllib.error
+import argparse
+import collections
+import concurrent.futures as cf
+import csv
+import hashlib
+import json
+import os
+import re
+import sys
+import time
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 BASE = "https://www.shpt.gov.cn"
@@ -604,14 +614,14 @@ def write_checklist_md(path, tag, kind, year, subjects, missing, orphans, dept_r
         except ValueError:
             return None
     drift = sorted([s for s in ok if (_dv(s) or 0) > 0], key=lambda s: -_dv(s))
-    same_day = [s for s in ok if _dv(s) == 0]
+    [s for s in ok if _dv(s) == 0]
     dl_txt = (f"已按当年通知取值：主管部门 {deadline['部门']}、下属单位 {deadline['单位']}"
               f"（来源 {deadline.get('来源') or '未注明'}）" if deadline
               else "未填当年通知截止日 → 不计算偏差。公开时限每年随人大批准/财政批复日期变动，"
                    "站点年度通知只公布编报时间(一上/一下/二上)，未公布公开截止日；"
                    "要判逾期请先在系统设置页「年度公开时限」录入当年通知日期（data/disclosure-calendar.json）")
     L = [f"# {tag} 公开清单摘要（上海市普陀区）\n",
-         f"- 依据：上海普陀区政府网站「政务/财政资金/财政预决算」栏目，接口 `POST /front/api/data/search`",
+         "- 依据：上海普陀区政府网站「政务/财政资金/财政预决算」栏目，接口 `POST /front/api/data/search`",
          f"- 公开主体名册：站点 {len(subjects)} 个（主管部门栏目 {sum(1 for s in subjects if s['层级']=='部门')}、"
          f"下属单位栏目 {sum(1 for s in subjects if s['层级']=='单位')}、区本级 1 个）",
          f"- 已公开 {len(ok)} 个，未公开 {len(missing)} 个，"
@@ -717,7 +727,7 @@ def checklist_main(args, cache_dir, items):
     print(f"同一周期内比{args.year - 1}年度晚公开: {len(drift)} 个"
           f"（同日 {len([s for s in ok if _cycle_days(s) == 0])} 个、更早 "
           f"{len([s for s in ok if _cycle_days(s) is not None and _cycle_days(s) < 0])} 个）——不依赖截止日假设")
-    print(f"晚于通知截止日: " + (f"{len(late)} 个（截止日 部门{deadline['部门']}/单位{deadline['单位']}）"
+    print("晚于通知截止日: " + (f"{len(late)} 个（截止日 部门{deadline['部门']}/单位{deadline['单位']}）"
                                  if deadline else "未计算——系统设置页「年度公开时限」未填当年通知日期"))
     print(f"已公开但文件未入库: {len(not_landed)} 个")
     print(f"组织目录在册但站点名册对不上: {len(orphans)} 个 → "

@@ -2299,7 +2299,9 @@ def _export_material_dimensions(payload):
 def _material_dimension_lines(payload):
     value=_export_material_dimensions(payload)
     if not isinstance(value,dict):return []
-    writing=value.get('writing') or {};snapshot=writing.get('snapshot') or {};human=writing.get('human_decision') or {}
+    writing=value.get('writing') or {}
+    snapshot=writing.get('snapshot') or {}
+    human=writing.get('human_decision') or {}
     labels={'unit':'单位','department':'部门','unknown':'暂不确定','confirmed':'已确定','conflict':'冲突','insufficient':'依据不足','human':'人工确认','declaration':'原文明示','template':'模板推断','unresolved':'未确定'}
     lines=[f"写法基准：{labels.get(writing.get('value'),'未知')}；{labels.get(writing.get('status'),'未记录')}；来源：{labels.get(writing.get('source'),'未记录')}",
         f"模板：{snapshot.get('version') or snapshot.get('package_id') or '未绑定'}；源年度：{snapshot.get('source_report_year') or '未知'}；目标年度：{snapshot.get('target_year') or '未知'}；绑定修订：{snapshot.get('revision') or '未记录'}；算法：{writing.get('algorithm') or '未记录'}"]

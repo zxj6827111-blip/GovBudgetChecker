@@ -269,7 +269,8 @@ def locate_all(lines: List[str], needle: str) -> List[int]:
 def require_lines(hits: List[int], expected: List[int], label: str) -> None:
     """行号与 2026-10-31 已核对清单必须一致；模板文本变化时直接失败，不得静默。"""
     if hits != expected:
-        raise ValueError("模板行号与已核对清单不一致：" + label + " 实际 " + repr(hits))
+        raise ValueError("模板行号与已核对清单不一致：" + label
+                         + " 实际 " + str(len(hits)) + " 行，期望 " + str(len(expected)) + " 行")
 
 
 def build_candidates() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
@@ -682,7 +683,7 @@ def build_scenario6(src: Path, dst: Path) -> Dict[str, Any]:
     sha = save_deterministic(document, dst)
     original_pages = pdf_pages(src)
     copy_pages = pdf_pages(dst)
-    same_body = [flat(a) == flat(b) for a, b in zip(original_pages[1:], copy_pages[1:])]
+    same_body = [flat(a) == flat(b) for a, b in zip(original_pages[1:], copy_pages[1:], strict=False)]
     cover_only = (
         len(original_pages) == len(copy_pages)
         and all(same_body)
@@ -1258,8 +1259,8 @@ def run_fixed_sentence_probes(entries_by_id: Dict[str, Dict[str, Any]], legacy_f
     part3 = "第三部分 决算情况说明"
     cover = "2025年度决算"
     part4 = "第四部分 名词解释"
-    f2 = entries_by_id["F2"]
-    f1 = entries_by_id["F1"]
+    entries_by_id["F2"]
+    entries_by_id["F1"]
     probe_org = "上海市测试环境局"
     natural_pages = pdf_pages(natural_sample)
     natural_copy_pages = pdf_pages(natural_copy)
@@ -2129,7 +2130,7 @@ def main() -> int:
     # ---- 冻结根复算：v1/r2/phase1_prep 打包前后哈希必须不变（漂移即拒绝发布） ----
     frozen_after = [frozen_root_snapshot(root) for root in FROZEN_ROOTS]
     frozen_errors = []
-    for before, after in zip(frozen_before, frozen_after):
+    for before, after in zip(frozen_before, frozen_after, strict=False):
         if before != after:
             frozen_errors.append("冻结根哈希漂移：" + before["path"] +
                                  "（基线 " + before["rolling_sha256"][:16] + " → 现值 " +

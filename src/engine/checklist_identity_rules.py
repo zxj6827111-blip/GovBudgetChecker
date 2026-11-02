@@ -496,7 +496,8 @@ class CMM027_TemplatePositionScope(Rule):
             raise RuleNotApplicable(self.code, detail='该年度模板位置检查未启用；既有规范检查继续执行；'+str(snapshot.get('reason') or '年度能力未获准'))
         if resolution.get('status') != 'confirmed':
             raise RuleDeferred(self.code, detail='模板位置冲突或写法依据不足，待人工分维度确认')
-        value = resolution['value']; groups = {}
+        value = resolution['value']
+        groups = {}
         for item in resolution.get('evidence', []):
             # 封面缺陷由 CMM-019 统一报告，保留本规则回执以免重复确认。
             if item.get('page', 0) <= 1 or item.get('scope') == value or item.get('kind') not in ('heading','table_note','budget_financial_table','budget_function_table'):
@@ -504,7 +505,9 @@ class CMM027_TemplatePositionScope(Rule):
             groups.setdefault(item['kind'], []).append(item)
         issues=[]
         for kind, positions in groups.items():
-            first=positions[0]; page=first['page']; text=(doc.page_texts or [])[page-1]
+            first=positions[0]
+            page=first['page']
+            text=(doc.page_texts or [])[page-1]
             issues.append(issue_at(self, f"模板口径位置混用：{'表注' if kind == 'table_note' else '标题'}采用反向写法，共{len(positions)}处；写法基准为{'单位' if value == 'unit' else '部门'}。",
                 page,text,first.get('start',0),first.get('end',len(first['text'])),checklist_item='B-02',
                 occurrences=len(positions),locations=positions,

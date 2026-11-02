@@ -3,14 +3,17 @@ from __future__ import annotations
 
 
 def validated_slots(anchor, source_year):
-    text=anchor['text']; slots=anchor.get('slots') or []
+    text=anchor['text']
+    slots=anchor.get('slots') or []
     if not slots and (anchor.get('annual_slot') or anchor.get('organization_slot')):
         raise ValueError('旧版槽位未记录具体位置，请重新逐位置审核')
     if not isinstance(slots,list) or len(slots)>100 or any(not isinstance(s,dict) or type(s.get('start')) is not int or type(s.get('end')) is not int for s in slots):
         raise ValueError('槽位列表及位置格式无效')
-    result=[]; previous_end=0
+    result=[]
+    previous_end=0
     for item in sorted(slots,key=lambda x:x['start']):
-        start,end=item.get('start'),item.get('end');kind=item.get('kind')
+        start,end=item.get('start'),item.get('end')
+        kind=item.get('kind')
         if type(start) is not int or type(end) is not int or not 0<=start<end<=len(text) or start<previous_end:
             raise ValueError('槽位位置无效或重叠')
         original=text[start:end]
@@ -35,7 +38,8 @@ def validated_slots(anchor, source_year):
 
 
 def instantiate_anchor(anchor, source_year, target_year, organization=None, semantic=False):
-    text=anchor['text']; slots=validated_slots(anchor,source_year)
+    text=anchor['text']
+    slots=validated_slots(anchor,source_year)
     for slot in reversed(slots):
         kind=slot['kind']
         if semantic:value={'report_year':'{REPORT_YEAR}','comparison_year':'{COMPARISON_YEAR}','organization_name':'{ORGANIZATION}'}[kind]

@@ -95,20 +95,24 @@ def _heading_context(lines, index):
 
 
 def _headings(doc, expected):
-    found=[];target=_title(expected)
+    found=[]
+    target=_title(expected)
     # 目录区（含目录续页）内的同文条目不充当正文证据（review F2 修复）。
     toc_pages=toc_region_pages(list(getattr(doc,'page_texts',None) or []))
     for page,text in iter_pages(doc):
         if page<=1 or page in toc_pages:continue
-        lines=text.splitlines(keepends=True);offset=0
+        lines=text.splitlines(keepends=True)
+        offset=0
         for i,line in enumerate(lines):
-            start=offset;offset+=len(line)
+            start=offset
+            offset+=len(line)
             if is_toc_entry_line(line):continue
             previous=_heading_context(lines,i)
             if re.search(r'(?:尚未提供|未提供|未编制|详见|参见|引用|例如|提及|缺少)[：:]?$',previous):continue
             # 连续折行只要仍是完整标题的前缀就继续，行数不能充当缺失证据。
             # 空行、句末标点或无关文字仍中止；不跨页、不查找正文中的子串。
-            value='';raw_end=start
+            value=''
+            raw_end=start
             for j in range(i,len(lines)):
                 part=lines[j]
                 if not part.strip() or re.search(r'[，。；!?！？]$',part.strip()):break
@@ -116,7 +120,8 @@ def _headings(doc, expected):
                 current=_title(value)
                 if current==target:
                     found.append({'page':page,'start':start+len(line)-len(line.lstrip()),
-                                  'end':raw_end+len(part.rstrip()),'text':value});break
+                    'end':raw_end+len(part.rstrip()),'text':value})
+                    break
                 if not target.startswith(current):break
                 raw_end+=len(part)
     return found
@@ -129,7 +134,8 @@ def _matching_table_instances(doc, expected, headings):
     fragments={}
     for fragment in artifact.table_fragments:
         fragments.setdefault(fragment.fragment_uid,[]).append(fragment)
-    pages={h['page'] for h in headings};matched=[]
+    pages={h['page'] for h in headings}
+    matched=[]
     for table in artifact.logical_tables:
         if table.identity_conflict or _title(table.title)!=_title(expected) or not table.fragment_uids:continue
         for uid in table.fragment_uids:
@@ -148,7 +154,9 @@ def _matching_table_instances(doc, expected, headings):
                 for candidate in artifact.ocr_table_candidates:
                     if candidate.page_number!=fragment.page_number or list(candidate.page_bbox or [])!=list(fragment.bbox):continue
                     canonical,reasons=bound_table(candidate,artifact)
-                    if canonical is not None and not reasons and canonical['rows']==fragment.rows:bound=True;break
+                    if canonical is not None and not reasons and canonical['rows']==fragment.rows:
+                        bound=True
+                        break
                 if not bound:continue
             matched.append({'instance_uid':table.instance_uid,'fragment_uid':uid,'page':fragment.page_number,'bbox':list(fragment.bbox)})
     return matched
@@ -164,19 +172,22 @@ def additional_anchor_issues(rule,doc,kind):
     snapshot=resolution.get('snapshot') or {}
     if not snapshot.get('available') or not (snapshot.get('capability_scope') or {}).get('structure'):return [],[]
     config=snapshot.get('effective_config') or (snapshot.get('content') or {}).get('config') or {}
-    issues=[];pending=[]
+    issues=[]
+    pending=[]
     for anchor in config.get('anchors') or []:
         if anchor.get('kind')!=kind:continue
         scope=anchor.get('scope')
         if scope!='all':
             if resolution.get('status')!='confirmed':
-                pending.append('附加模板要求的部门/单位适用条件未核实：'+anchor['text']);continue
+                pending.append('附加模板要求的部门/单位适用条件未核实：'+anchor['text'])
+                continue
             if scope!=resolution.get('value'):continue
         field=getattr(getattr(doc,'document_profile',None),'organization_name',None)
         name=getattr(field,'value',None) if getattr(field,'source',None)!='filename' else None
         try:expected=instantiate_anchor(anchor,anchor.get('source_report_year',snapshot.get('source_report_year')),snapshot.get('target_year'),name)
         except ValueError as exc:
-            pending.append(str(exc)+'：'+anchor['text']);continue
+            pending.append(str(exc)+'：'+anchor['text'])
+            continue
         headings=_headings(doc,expected)
         if headings:
             if kind=='normative_table':
@@ -185,7 +196,8 @@ def additional_anchor_issues(rule,doc,kind):
                     pending.append('标题尚未唯一关联对应表实例及原件位置：'+expected)
             continue
         if not absence_ready:
-            pending.append('材料部分页面缺少合格结构证据，尚不能确认模板要求缺失：'+expected);continue
+            pending.append('材料部分页面缺少合格结构证据，尚不能确认模板要求缺失：'+expected)
+            continue
         first=str((doc.page_texts or [''])[0])
         issues.append(issue_at(rule,'缺少经审核的模板要求标题：“'+expected+'”；依据：'+anchor['basis'],1,first,0,len(first.split('\n')[0]),
             severity='warn',checklist_item='E-06' if kind=='normative_table' else 'A-01',document_level=True,

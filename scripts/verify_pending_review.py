@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """待核治理第一阶段验收工具（验收包 v1-regression）。
 
-方案：``docs/待核治理实施方案_20261101.md``（R2）；验收包说明：
+方案：``docs/待核治理实施方案_20261101.md``（R2.1）；验收包说明：
 ``docs/待核治理验收包_第一阶段_20261101.md``。本工具由验收方编写并随验收包冻结，
 执行方不得修改“比较与判定”部分；入口函数改名时只能改“适配层”，并在整改记录中写明。
 
@@ -26,10 +26,12 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import copy
 import gzip
 import hashlib
+import importlib.util
 import json
 import os
 import platform
@@ -40,14 +42,18 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-KIT_VERSION = "v1-regression-r1"
-META_SCHEMA_VERSION = 2
+KIT_VERSION = "v1-regression-r2"
+META_SCHEMA_VERSION = 3
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_KIT = REPO_ROOT / "outputs" / "pending_review_20261101" / "acceptance_kit" / KIT_VERSION
+if (REPO_ROOT / "rule_identity_dimensions.json").is_file() and (REPO_ROOT / "manifest_RA.json").is_file():
+    # 封包内的 tools/ 副本自包含定位验收包，避免在线工作区改写工具影响长时验证。
+    DEFAULT_KIT = REPO_ROOT
 CATALOG_V12 = "obligations-v12-checklist-global-20261022"
 FIXTURE_FILENAMES = {"FORMAL_fixture.pdf"}
 UNRESOLVED_RECEIPT = {"insufficient_data", "parse_error", "execution_error"}
@@ -135,6 +141,8 @@ def kit_files(kit: Path) -> List[Path]:
 
 
 def seal_kit(kit: Path) -> str:
+    if not (kit / "rule_identity_dimensions.json").is_file():
+        refuse("封包前必须导出规则—必需身份维度对照表")
     lines = [f"{sha256_file(p)}  {p.relative_to(kit).as_posix()}" for p in kit_files(kit)]
     harness = Path(__file__).resolve()
     lines.append(f"{sha256_file(harness)}  @harness/{harness.name}")
@@ -322,7 +330,7 @@ def code_fingerprint(code_root: Path) -> Dict[str, Any]:
             return subprocess.run(["git", *args], cwd=code_root, capture_output=True, text=True).stdout
         info["git_head"] = git("rev-parse", "HEAD").strip()
         porcelain = git("status", "--porcelain")
-        info["git_status_entries"] = len([l for l in porcelain.splitlines() if l.strip()])
+        info["git_status_entries"] = len([line for line in porcelain.splitlines() if line.strip()])
         info["git_status_sha256"] = sha256_text(porcelain)
     return info
 
@@ -553,6 +561,13 @@ def finding_fingerprint(finding: Dict[str, Any], keys: Set[str]) -> str:
     return sha256_text(canonical(strip_volatile(finding, keys)))
 
 
+def _identity_context(status, meta):
+    profile = status.get("document_profile") or meta.get("document_profile") or {}
+    scope = profile.get("writing_scope") or {}
+    return {"kind": profile.get("kind") if profile.get("kind") in {"final", "budget"} else "unknown",
+            "domain": scope.get("domain") if scope.get("domain") in {"final", "budget"} else "unknown"}
+
+
 def extract_record(sample: Dict[str, Any], status: Dict[str, Any], todo: Dict[str, Any],
                    volatile: Dict[str, Any]) -> Dict[str, Any]:
     keys = set(volatile["finding_keys"])
@@ -590,6 +605,7 @@ def extract_record(sample: Dict[str, Any], status: Dict[str, Any], todo: Dict[st
     return {
         "sample_id": sample["sample_id"],
         "sha256": sample["sha256"],
+        "identity_context": _identity_context(status, meta),
         "run": {
             "status": status.get("status"),
             "error": status.get("error"),
@@ -651,6 +667,9 @@ def collect_main(args: argparse.Namespace) -> int:
     kit = Path(args.kit).resolve()
     kit_digest = verify_kit(kit)
     code_root = Path(args.code_root).resolve()
+    contract = _identity_contract(kit)
+    if sha256_file(code_root / contract["source_file"]) != contract["source_sha256"]:
+        refuse("规则身份维度声明与冻结对照表不符，须重新导出、封包并采集基线")
     out = Path(args.out).expanduser().resolve()
     if is_within(code_root, kit) or is_within(out, kit):
         refuse("代码根或输出目录不得位于验收包内")
@@ -856,6 +875,9 @@ def _run_records(root: Path, meta: Dict[str, Any], expected: Dict[str, str], all
             for field in ("receipts", "findings", "reading_items"):
                 if not isinstance(row.get(field), list):
                     raise ValueError(f"{field} 不是列表")
+            context = row.get("identity_context")
+            if not isinstance(context, dict) or any(context.get(k) not in {"final", "budget", "unknown"} for k in ("kind", "domain")):
+                raise ValueError("缺少有效的规则身份上下文")
             if row["run"].get("status") not in {"done", "review_required"} \
                     or row["run"].get("analysis_conclusion") not in {"findings_detected", "no_findings", "incomplete"} \
                     or not _empty(row["run"].get("error")):
@@ -879,6 +901,93 @@ def _nonblank(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def build_identity_contract(code_root: Path) -> Dict[str, Any]:
+    """从规则声明导出，不复制通用维度清单；同时执行实际上下文条件分支。"""
+    source = code_root / "src/engine/rule_identity.py"
+    spec = importlib.util.spec_from_file_location("pending_frozen_identity", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    ids = set(module.INTERNAL_RELATION_RULES) | set(module.LEGACY_TABLE_INPUTS)
+    for path in (code_root / "src/engine").glob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) \
+                    and re.fullmatch(r"(?:V33|CMM|BUD)-[A-Z0-9-]+", node.value):
+                ids.add(node.value)
+    rules = {}
+    for rid in sorted(ids):
+        variants = {}
+        for kind in ("final", "budget", "unknown"):
+            for domain in ("final", "budget", "unknown"):
+                doc = SimpleNamespace(document_profile=SimpleNamespace(kind=kind, writing_scope={"domain": domain}),
+                                      fact_context=None, parse_artifact=None)
+                with module.rule_identity_requirements(doc, rid):
+                    variants[f"{kind}|{domain}"] = list(module.ACTIVE_IDENTITY.get())
+        tables = module.LEGACY_TABLE_INPUTS.get(rid)
+        rules[rid] = {"required_dimensions": list(module.required_identity_dimensions(rid)), "contexts": variants,
+                      "legacy_input_declared": rid in module.LEGACY_TABLE_INPUTS,
+                      "input_tables": sorted(tables) if tables is not None else None}
+    upstream = {
+        "subject_unconfirmed": ["organization"], "subject_conflict": ["organization"],
+        "scope_unconfirmed": ["org_scope", "fund_scope", "budget_stage", "year"],
+        "table_missing": ["instance_uid"], "table_mapping_incomplete": ["instance_uid"],
+        "row_code_missing": ["row"], "row_identity_duplicate": ["row"], "row_level_unresolved": ["row"],
+        "column_identity_unconfirmed": ["column"], "column_width_drift": ["column"],
+        "cell_blank_semantics_unknown": ["cell"], "cell_low_confidence": ["cell"], "cell_unbound": ["cell"],
+    }
+    return {"version": 1, "source_file": "src/engine/rule_identity.py", "source_sha256": sha256_file(source),
+            "rules": rules, "structural_dimensions": ["row", "column", "cell"],
+            "upstream_reason_dimensions": upstream,
+            "root_priority": {"organization": 0, "year": 1, "fund_scope": 1, "budget_stage": 1,
+                              "org_scope": 1, "instance_uid": 2, "row": 3, "column": 4, "cell": 5}}
+
+
+def _identity_contract(kit: Path) -> Dict[str, Any]:
+    path = kit / "rule_identity_dimensions.json"
+    if not path.is_file():
+        refuse("验收包缺少冻结的规则—必需身份维度对照表")
+    return read_json(path)
+
+
+def _required_dimensions(contract: Dict[str, Any], rule_id: str, context: Dict[str, Any]) -> Set[str]:
+    if not _nonblank(rule_id):
+        raise ValueError("回执缺少规则编号")
+    rule = contract["rules"].get(rule_id)
+    if rule is None:
+        raise ValueError(f"规则 {rule_id!r} 不在冻结维度表中")
+    key = f"{context.get('kind', 'unknown')}|{context.get('domain', 'unknown')}"
+    return set(rule["contexts"].get(key, rule["required_dimensions"])) | set(contract["structural_dimensions"])
+
+
+def _root_signature(item: Dict[str, Any], contract: Dict[str, Any]) -> str:
+    blockers = [b for b in item.get("blocked_by", []) if isinstance(b, dict)] if isinstance(item.get("blocked_by"), list) else []
+    if blockers:
+        # 同层多阻断时采用冻结的字典序选主根因，其他阻断仍完整保留。
+        points = [{k: b.get(k) for k in ("dimension", "ref", "reason_code")} for b in blockers]
+        point = min(points, key=lambda b: (contract["root_priority"].get(str(b["dimension"]), 99), canonical(b)))
+        return canonical({"upstream": point})
+    missing = item.get("missing_operands")
+    if isinstance(missing, list) and missing and all(isinstance(v, dict) and type(v.get("page")) is int
+                                                   and v["page"] > 0 and v.get("source") in {"table", "text"}
+                                                   for v in missing):
+        return canonical({"missing_locations": sorted(missing, key=canonical)})
+    return canonical({"rule": item.get("rule_id"), "sub_check": item.get("sub_check_id"),
+                      "obligation": item.get("obligation_id"), "reasons": sorted(item.get("reason_codes") or []),
+                      "missing": item.get("missing_operands"),
+                      "candidate_locations": [{k: c.get(k) for k in ("source", "table_code", "section", "page", "cell_id", "span")}
+                                              for c in item.get("candidates", []) if isinstance(c, dict)]
+                          if isinstance(item.get("candidates", []), list) else []})
+
+
+def diagnostic_root_key(item: Dict[str, Any], contract: Dict[str, Any]) -> str:
+    return "rc:" + sha256_text(_root_signature(item, contract))
+
+
+def _upstream_rank(item: Dict[str, Any], contract: Dict[str, Any]) -> int:
+    blockers = item.get("blocked_by") if isinstance(item.get("blocked_by"), list) else []
+    return min((contract["root_priority"].get(str(b.get("dimension")), 99)
+                for b in blockers if isinstance(b, dict)), default=99)
+
+
 def _operand_shape_errors(value: Any, *, candidates: bool = False) -> List[str]:
     if not isinstance(value, list) or len(value) < (2 if candidates else 1):
         return ["候选必须是至少两项的列表" if candidates else "missing_operands 必须是非空列表"]
@@ -887,17 +996,30 @@ def _operand_shape_errors(value: Any, *, candidates: bool = False) -> List[str]:
         if not isinstance(item, dict):
             errors.append("元素必须是对象")
             continue
-        keys = {"page", "cell_id", "value"} if candidates else {
-            "role", "table_code", "page", "row_key", "column", "fund_scope", "stage", "year"}
+        source = item.get("source")
+        if not isinstance(source, str) or source not in {"table", "text"}:
+            errors.append("source 必须明确为 table 或 text")
+        keys = {"source", "page", "value"} if candidates else {
+            "source", "role", "page", "row_key", "column", "fund_scope", "stage", "year"}
+        keys |= ({"table_code", "cell_id"} if candidates else {"table_code"}) if source == "table" else {"section"}
         if keys - set(item):
             errors.append(f"缺少必需键 {sorted(keys - set(item))}")
-        for key in (("cell_id",) if candidates else ("role", "table_code")):
+        required = (["role"] if not candidates else []) + (["table_code"] + (["cell_id"] if candidates else [])
+                    if source == "table" else ["section"])
+        for key in required:
             if not _nonblank(item.get(key)):
                 errors.append(f"{key} 必须是非空字符串")
         page = item.get("page")
         if page is not None and (type(page) is not int or page < 1):
             errors.append("page 必须是正整数或明确的 null")
         if candidates:
+            if source == "text":
+                span = item.get("span")
+                if not (isinstance(span, list) and len(span) == 2 and all(type(x) is int for x in span)
+                        and 0 <= span[0] < span[1]):
+                    errors.append("文字候选须给出页内 span=[起点,终点]，不得伪造单元格编号")
+                if page is None:
+                    errors.append("文字候选须有已确认页码")
             if isinstance(item.get("value"), (dict, list, bool)):
                 errors.append("候选 value 必须是原文标量或 null")
         else:
@@ -909,10 +1031,16 @@ def _operand_shape_errors(value: Any, *, candidates: bool = False) -> List[str]:
             row = item.get("row_key")
             if row is not None and not (_nonblank(row) or isinstance(row, dict) and any(_nonblank(v) for v in row.values())):
                 errors.append("row_key 必须是名称/编码、有效身份对象或 null")
+    if candidates and not errors:
+        locations = {canonical({k: item.get(k) for k in ("source", "table_code", "section", "page", "cell_id", "span")})
+                     for item in value}
+        if len(locations) < 2:
+            errors.append("候选必须至少包含两个不同位置，不能重复同一个候选")
     return errors
 
 
-def _diagnostic_errors(item: Dict[str, Any], vocabulary: Set[str]) -> List[str]:
+def _diagnostic_errors(item: Dict[str, Any], vocabulary: Set[str], contract: Dict[str, Any],
+                       dimensions: Set[str]) -> List[str]:
     errors = []
     codes = item.get("reason_codes")
     if not isinstance(codes, list) or not codes or any(not _nonblank(c) for c in codes):
@@ -925,13 +1053,104 @@ def _diagnostic_errors(item: Dict[str, Any], vocabulary: Set[str]) -> List[str]:
     if not isinstance(blockers, list):
         errors.append("blocked_by 必须是列表")
     else:
-        dimensions = {"organization", "year", "fund_scope", "budget_stage", "instance_uid", "org_scope", "row", "column", "cell"}
         for blocker in blockers:
             if not isinstance(blocker, dict) or not _nonblank(blocker.get("dimension")) \
                     or blocker["dimension"] not in dimensions or not _nonblank(blocker.get("ref")) \
                     or not _nonblank(blocker.get("reason_code")) or blocker["reason_code"] not in vocabulary:
                 errors.append("blocked_by 元素缺少有效的 dimension/ref/reason_code")
+            elif blocker["reason_code"] not in (codes or []):
+                errors.append("阻断项原因码不在本条诊断的原因码中")
+            elif blocker["reason_code"] in contract["upstream_reason_dimensions"] \
+                    and blocker["dimension"] not in contract["upstream_reason_dimensions"][blocker["reason_code"]]:
+                errors.append("阻断项的维度与原因码不符")
+        if isinstance(codes, list):
+            for code in codes:
+                if isinstance(code, str) and code in contract["upstream_reason_dimensions"] \
+                        and not any(isinstance(b, dict) and b.get("reason_code") == code for b in blockers):
+                    errors.append(f"上游原因 {code} 缺少对应阻断项")
     return errors
+
+
+def _receipt_key(receipt: Dict[str, Any]) -> Tuple[Any, Any, Any]:
+    return tuple(receipt.get(k) for k in ("obligation_id", "rule_id", "sub_check_id"))
+
+
+def diagnostic_receipt_keys(row: Dict[str, Any]) -> Set[Tuple[Any, Any, Any]]:
+    # 旧聚合器可能用 fail 保留正式问题，同时仍记录未完成原因、保留父义务未完成。
+    # 此范围按基线冻结；不得靠改写新文案选择或排除需要诊断的回执。
+    return {_receipt_key(r) for r in row["receipts"]
+            if r.get("status") in UNRESOLVED_RECEIPT or
+            row["obligations"].get(r.get("obligation_id"), {}).get("status") in DH02_OBLIGATION_SCOPE
+            and _nonblank(r.get("incomplete_reason"))}
+
+
+def _diagnostic_consistency(row: Dict[str, Any], vocabulary: Set[str], contract: Dict[str, Any],
+                            eligible: Set[Tuple[Any, Any, Any]], baseline: Optional[Dict[str, Any]] = None):
+    shape, rollup, roots = [], [], []
+    point_to_key, key_to_point = {}, {}
+    context = row.get("identity_context") or {}
+    children: Dict[str, List[Dict[str, Any]]] = {}
+    dimensions_by_oid: Dict[str, Set[str]] = {}
+    for receipt in row["receipts"]:
+        if _receipt_key(receipt) not in eligible:
+            continue
+        oid, rid = receipt.get("obligation_id"), receipt.get("rule_id")
+        where = f"{oid}|{rid}|{receipt.get('sub_check_id')}"
+        children.setdefault(oid, []).append(receipt)
+        try:
+            dimensions = _required_dimensions(contract, rid, context)
+        except ValueError as exc:
+            shape.append(f"{where}: {exc}")
+            dimensions = set(contract["structural_dimensions"])
+        dimensions_by_oid.setdefault(oid, set()).update(dimensions)
+        shape.extend(f"{where}: {e}" for e in _diagnostic_errors(receipt, vocabulary, contract, dimensions))
+        if oid is not None and oid not in row["obligations"]:
+            rollup.append(f"{where}: 未完成回执没有所属义务")
+
+    def register(item, where):
+        if not _nonblank(item.get("root_cause_key")) or not isinstance(item.get("reason_codes"), list) \
+                or not all(isinstance(c, str) for c in item["reason_codes"]):
+            return
+        point, key = _root_signature(item, contract), item["root_cause_key"]
+        if point in point_to_key and point_to_key[point] != key:
+            roots.append(f"{where}: 同一主阻断点使用不同根因键")
+        if key in key_to_point and key_to_point[key] != point:
+            roots.append(f"{where}: 不同主阻断点共用同一根因键")
+        point_to_key[point], key_to_point[key] = key, point
+
+    for rs in children.values():
+        for receipt in rs:
+            register(receipt, f"receipt {receipt.get('obligation_id')}|{receipt.get('sub_check_id')}")
+    for oid, item in row["obligations"].items():
+        if item.get("status") not in DH02_OBLIGATION_SCOPE:
+            continue
+        rs = children.get(oid, [])
+        dimensions = dimensions_by_oid.get(oid, set(contract["structural_dimensions"]))
+        shape.extend(f"{oid}: {e}" for e in _diagnostic_errors(item, vocabulary, contract, dimensions))
+        if not rs:
+            # AI 未执行等模式义务没有规则回执，但仍保留自身诊断；不虚构汇总来源。
+            if item.get("status") not in {"ai_not_run", "ai_failed"}:
+                rollup.append(f"{oid}: 范围内义务没有未完成回执可供汇总")
+            register(item, oid)
+            continue
+        codes = {c for r in rs for c in (r.get("reason_codes") if isinstance(r.get("reason_codes"), list) else []) if isinstance(c, str)}
+        parent_codes = item.get("reason_codes") if isinstance(item.get("reason_codes"), list) else []
+        if not codes.issubset(set(c for c in parent_codes if isinstance(c, str))):
+            rollup.append(f"{oid}: 义务原因码未包含全部未完成回执原因码")
+        legacy = ((baseline or {}).get("obligations", {}).get(oid, {}).get("reason_codes") or [])
+        if set(c for c in parent_codes if isinstance(c, str)) - codes - set(legacy):
+            rollup.append(f"{oid}: 新增义务原因码没有回执依据")
+        best_rank = min(_upstream_rank(r, contract) for r in rs)
+        selected = [r for r in rs if r.get("root_cause_key") == item.get("root_cause_key")
+                    and _upstream_rank(r, contract) == best_rank]
+        if not selected or item.get("next_action") not in [r.get("next_action") for r in selected]:
+            rollup.append(f"{oid}: 主根因键/下一步动作不来自同一最上游未完成回执")
+        for field in ("blocked_by", "missing_operands", "candidates"):
+            expected = {canonical(v) for r in rs for v in (r.get(field) if isinstance(r.get(field), list) else [])}
+            actual = {canonical(v) for v in (item.get(field) if isinstance(item.get(field), list) else [])}
+            if expected != actual:
+                rollup.append(f"{oid}: 义务 {field} 与回执汇总不符")
+    return shape, rollup, roots
 
 
 def compare_runs(base_dir: Path, cur_dir: Path, stage: str, kit: Path, *, allow_partial: bool = False) -> Dict[str, Any]:
@@ -944,6 +1163,7 @@ def compare_runs(base_dir: Path, cur_dir: Path, stage: str, kit: Path, *, allow_
 
     bm, cm = read_json(base_dir / "meta.json"), read_json(cur_dir / "meta.json")
     vocabulary = set(read_json(kit / "reason_codes_v1.json")["codes"])
+    contract = _identity_contract(kit)
     expected_digest = sha256_file(kit / "SHA256SUMS")
     frozen_profile = read_json(kit / "runtime_profile.json")["env"]
     expected_samples = _frozen_samples(kit)
@@ -983,12 +1203,15 @@ def compare_runs(base_dir: Path, cur_dir: Path, stage: str, kit: Path, *, allow_
     # 新代码读取的新环境变量：若用它做功能开关且默认关闭，重放就没有执行到新代码。
     new_env = sorted(set(cm["code_env_names"]) - set(bm["code_env_names"]))
     add("M10", "当前代码新读取的环境变量（须说明默认值与生产取值一致）", not new_env, new_env, level="REVIEW")
+    add("M11", "规则身份维度声明与冻结对照表一致", all(
+        m["code"].get("files", {}).get(contract["source_file"]) == contract["source_sha256"] for m in (bm, cm)))
 
     run_d, obl_d, add_d, rec_d, fnd_d, todo_d, cov_d, read_d, sum_d, led_d = ([] for _ in range(10))
     t_codes, t_noreason, t_missing, t_ambig, t_vocab, t_inst, t_terms, t_terms_eq, t_phrase, t_dump = (
         [] for _ in range(10))
     out_of_scope: List[str] = []
     shape_d, transport_d = [], []
+    rollup_d, root_d = [], []
     unresolved_receipts = 0
     no_reason = 0
     for sid in sorted(bs):
@@ -996,6 +1219,9 @@ def compare_runs(base_dir: Path, cur_dir: Path, stage: str, kit: Path, *, allow_
             run_d.append(f"{sid}: 缺少有效采集记录")
             continue
         b, c = brs[sid], crs[sid]
+        diagnostic_keys = diagnostic_receipt_keys(b)
+        if b["identity_context"] != c["identity_context"]:
+            run_d.append(f"{sid}: 规则身份上下文改变")
         if canonical(b["run"]) != canonical(c["run"]):
             run_d.append(f"{sid}: {canonical(b['run'])[:200]} → {canonical(c['run'])[:200]}")
         if canonical(b["obligation_summary"]) != canonical(c["obligation_summary"]):
@@ -1037,7 +1263,7 @@ def compare_runs(base_dir: Path, cur_dir: Path, stage: str, kit: Path, *, allow_
         if set(bg) != set(cg) or any(len(bg[k]) != len(cg.get(k, [])) for k in bg):
             rec_d.append(f"{sid}: 回执键集合或数量改变 {sorted(set(bg) ^ set(cg))[:6]}")
         for key, blist in bg.items():
-            for index, (br, cr) in enumerate(zip(blist, cg.get(key, []))):
+            for index, (br, cr) in enumerate(zip(blist, cg.get(key, []), strict=False)):
                 if br.get("status") != cr.get("status"):
                     rec_d.append(f"{sid} {key}#{index}: status {br.get('status')} → {cr.get('status')}")
                 _compare_dict(br, cr, stage, f"{sid} receipt {key}#{index}", rec_d, add_d)
@@ -1054,15 +1280,18 @@ def compare_runs(base_dir: Path, cur_dir: Path, stage: str, kit: Path, *, allow_
             read_d.append(f"{sid}: 读取缺口改变")
 
         # 覆盖目标（只看当前采集）
+        if stage != "self":
+            ds, dr, dk = _diagnostic_consistency(c, vocabulary, contract, diagnostic_keys, b)
+            shape_d.extend(f"{sid}: {e}" for e in ds)
+            rollup_d.extend(f"{sid}: {e}" for e in dr)
+            root_d.extend(f"{sid}: {e}" for e in dk)
         for r in c["receipts"]:
-            if r.get("status") not in UNRESOLVED_RECEIPT:
+            if _receipt_key(r) not in diagnostic_keys:
                 continue
             unresolved_receipts += 1
             where = f"{sid} {rkey(r)}"
             raw_codes = r.get("reason_codes")
             codes = raw_codes if isinstance(raw_codes, list) and all(isinstance(v, str) for v in raw_codes) else []
-            if stage != "self":
-                shape_d.extend(f"{where}: {e}" for e in _diagnostic_errors(r, vocabulary))
             if not codes:
                 t_codes.append(where)
             if "rule_no_reason" in codes:
@@ -1090,7 +1319,11 @@ def compare_runs(base_dir: Path, cur_dir: Path, stage: str, kit: Path, *, allow_
                 out_of_scope.append(f"{where}: {ci.get('status')}")
             else:
                 if stage != "self":
-                    t_inst.extend(f"{where}: {e}" for e in _diagnostic_errors(ci, vocabulary))
+                    dimensions = set(contract["structural_dimensions"])
+                    for receipt in c["receipts"]:
+                        if receipt.get("obligation_id") == oid and receipt.get("rule_id") in contract["rules"]:
+                            dimensions.update(_required_dimensions(contract, receipt["rule_id"], c.get("identity_context") or {}))
+                    t_inst.extend(f"{where}: {e}" for e in _diagnostic_errors(ci, vocabulary, contract, dimensions))
                 for field in STAGE_NEW_FIELDS.get(stage, set()):
                     if field in ci and canonical(ci[field]) != canonical(c["coverage_items"].get(oid, {}).get(field, "<absent>")):
                         transport_d.append(f"{where}: 覆盖块丢失或改写 {field}")
@@ -1139,6 +1372,8 @@ def compare_runs(base_dir: Path, cur_dir: Path, stage: str, kit: Path, *, allow_
             not t_inst, t_inst)
         add("T11", "关系级与义务级卡点字段结构有效", not shape_d, shape_d)
         add("T12", "全部新增卡点字段从台账贯通到接口覆盖块", not transport_d, transport_d)
+        add("T13", "义务诊断来自其未完成回执且汇总完整", not rollup_d, rollup_d)
+        add("T14", "同份材料的主阻断点与根因键一一对应", not root_d, root_d)
         checks.append({"id": "T6i", "title": "范围外的未完成义务（方案 DH-02 第 1 条未要求，仅报告）",
                        "verdict": "INFO", "count": len(out_of_scope), "details": out_of_scope})
     if stage in {"DH-03a", "DH-03b"}:
@@ -1346,7 +1581,7 @@ def manifest_main(args: argparse.Namespace) -> int:
 
     with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
         derived = list(pool.map(derive, rb))
-    for sample, res in zip(rb, derived):
+    for sample, res in zip(rb, derived, strict=False):
         if not res.get("ok"):
             refuse(f"{sample['sample_id']} 输入推导失败：{res.get('error')}")
         sample["input_status"] = res["inputs"]
@@ -1366,6 +1601,16 @@ def manifest_main(args: argparse.Namespace) -> int:
 def seal_main(args: argparse.Namespace) -> int:
     digest = seal_kit(Path(args.kit).resolve())
     print(f"SHA256SUMS 已生成；验收包身份 = {digest}")
+    return 0
+
+
+def identity_main(args: argparse.Namespace) -> int:
+    path = Path(args.out).resolve()
+    if path.exists():
+        refuse("身份维度对照表输出已存在，禁止覆盖冻结表")
+    result = build_identity_contract(Path(args.code_root).resolve())
+    write_json(path, result)
+    print(json.dumps({"rules": len(result["rules"]), "source_sha256": result["source_sha256"], "out": str(path)}))
     return 0
 
 
@@ -1399,7 +1644,7 @@ def snapshot_main(args: argparse.Namespace) -> int:
     git = lambda *a: subprocess.run(["git", *a], cwd=source, capture_output=True, text=True).stdout  # noqa: E731
     porcelain = git("status", "--porcelain")
     meta = {"source": {"path": str(source), "git_head": git("rev-parse", "HEAD").strip(),
-                       "git_status_entries": len([l for l in porcelain.splitlines() if l.strip()]),
+                       "git_status_entries": len([line for line in porcelain.splitlines() if line.strip()]),
                        "git_status_sha256": sha256_text(porcelain), "taken_at": time.strftime("%Y-%m-%d %H:%M:%S %z")},
             "file_count": len(before), "files": before, "drift_during_copy": drift, "copy_mismatch": mismatch}
     write_json(dest / "SNAPSHOT.json", meta)
@@ -1432,8 +1677,51 @@ def _selftest_probe(run: Path) -> str:
     refuse("自测样本缺少取数不足义务及未完成关系回执，无法运行整改正反例")
 
 
+def _synthetic_diagnostics(record, stage, contract):
+    """仅构造字段契约测试数据；不把合成卡点当作对真实原文的诊断。"""
+    eligible = diagnostic_receipt_keys(record)
+    by_oid = {}
+    for receipt in record["receipts"]:
+        if _receipt_key(receipt) not in eligible:
+            continue
+        receipt["reason_codes"] = list(dict.fromkeys(list(receipt.get("reason_codes") or []) + ["operand_missing"]))
+        receipt["missing_operands"] = [{"source":"table", "role":"total", "table_code":"FIN_03_expenditure",
+            "page":None, "row_key":None, "column":None, "fund_scope":None, "stage":None, "year":None}]
+        receipt.update(blocked_by=[], next_action="tech_fix")
+        receipt["root_cause_key"] = diagnostic_root_key(receipt, contract)
+        if stage == "DH-03b":
+            receipt["incomplete_reason"] = "结构化生成的回执原因"
+        by_oid.setdefault(receipt.get("obligation_id"), []).append(receipt)
+    for oid, item in record["obligations"].items():
+        old_terms = _old_coverage_terms(item.get("detail", ""))
+        if item.get("status") in DH02_OBLIGATION_SCOPE:
+            rs = by_oid.get(oid, [])
+            if rs:
+                item["reason_codes"] = list(dict.fromkeys(list(item.get("reason_codes") or []) +
+                    [c for r in rs for c in r["reason_codes"]]))
+                for field in ("blocked_by", "missing_operands", "candidates"):
+                    values = {canonical(v):v for r in rs for v in r.get(field, [])}
+                    if values or field == "blocked_by":
+                        item[field] = [values[k] for k in sorted(values)]
+                primary = min(rs, key=lambda r: (_upstream_rank(r, contract), r["root_cause_key"]))
+                item.update(next_action=primary["next_action"], root_cause_key=primary["root_cause_key"])
+            else:
+                code = "ai_not_requested" if item.get("status") == "ai_not_run" else "ai_partial_invalid_output"
+                item.update(reason_codes=list(dict.fromkeys(list(item.get("reason_codes") or [])+[code])),
+                            blocked_by=[], next_action="rerun_ai")
+                item["root_cause_key"] = diagnostic_root_key(item, contract)
+            if oid in record["coverage_items"]:
+                record["coverage_items"][oid].update({k:copy.deepcopy(item[k]) for k in STAGE_NEW_FIELDS[stage] if k in item})
+        if stage in {"DH-03a", "DH-03b"} and item.get("status") == "insufficient_data":
+            item["legacy_coverage_terms"] = list(old_terms)
+            record["coverage_items"][oid]["legacy_coverage_terms"] = list(old_terms)
+        if stage == "DH-03b" and item.get("status") in UNRESOLVED_OBLIGATION:
+            item["detail"] = record["coverage_items"][oid]["detail"] = f"结构化生成的卡点说明（{oid}）"
+
+
 def selftest_main(args: argparse.Namespace) -> int:
     kit = Path(args.kit).resolve()
+    contract = _identity_contract(kit)
     out = ensure_new_dir(Path(args.out))
     me = [sys.executable, str(Path(__file__).resolve())]
     results: List[Dict[str, Any]] = []
@@ -1517,26 +1805,7 @@ def selftest_main(args: argparse.Namespace) -> int:
                     write_json_gz(path, record)
         for path in sorted((dst / "records").glob("*.json.gz")):
             record = read_json_gz(path)
-            for oid, item in record["obligations"].items():
-                targets = [item] + ([record["coverage_items"][oid]] if oid in record["coverage_items"] else [])
-                old_terms = _old_coverage_terms(item.get("detail", ""))  # 先取，避免 DH-03b 改写 detail 后再取
-                for target in targets:
-                    if item.get("status") in DH02_OBLIGATION_SCOPE:
-                        target.update(blocked_by=[], next_action="tech_fix", root_cause_key=f"rc:{oid}",
-                                      reason_codes=list(target.get("reason_codes") or []) + ["table_mapping_incomplete"])
-                    if stage in {"DH-03a", "DH-03b"} and item.get("status") == "insufficient_data":
-                        target["legacy_coverage_terms"] = list(old_terms)
-                    if stage == "DH-03b" and item.get("status") in UNRESOLVED_OBLIGATION:
-                        target["detail"] = f"结构化生成的卡点说明（{oid}）"
-            for receipt in record["receipts"]:
-                if receipt.get("status") in UNRESOLVED_RECEIPT:
-                    receipt["reason_codes"] = list(receipt.get("reason_codes") or []) + ["operand_missing"]
-                    receipt["missing_operands"] = [{"role": "total", "table_code": "FIN_03_expenditure",
-                        "page": None, "row_key": None, "column": None, "fund_scope": None, "stage": None, "year": None}]
-                    receipt.update(blocked_by=[], next_action="tech_fix",
-                                   root_cause_key=f"rc:{receipt.get('rule_id')}:{receipt.get('sub_check_id')}")
-                    if stage == "DH-03b":
-                        receipt["incomplete_reason"] = "结构化生成的回执原因"
+            _synthetic_diagnostics(record, stage, contract)
             if tweak:
                 tweak(record)
             write_json_gz(path, record)
@@ -1575,6 +1844,26 @@ def selftest_main(args: argparse.Namespace) -> int:
         oid = insufficient(record)
         record["obligations"][oid]["reason_codes"] = ["stated_total_missing"]
         record["coverage_items"][oid]["reason_codes"] = ["stated_total_missing"]
+
+    def wrong_rollup(record):
+        oid = insufficient(record)
+        for collection in (record["obligations"], record["coverage_items"]):
+            collection[oid].update(reason_codes=["ai_timeout"], root_cause_key="wrong-ai-root", next_action="rerun_ai")
+
+    def text_positive(record):
+        receipt = unresolved_receipt(record)
+        receipt["missing_operands"] = [{"source":"text", "role":"basic_expenditure", "section":"三、支出决算情况说明",
+            "page":20, "row_key":"基本支出", "column":None, "fund_scope":None, "stage":None, "year":None}]
+        receipt["root_cause_key"] = diagnostic_root_key(receipt, contract)
+        oid = receipt["obligation_id"]
+        rs = [r for r in record["receipts"] if r.get("obligation_id") == oid and _receipt_key(r) in diagnostic_receipt_keys(record)]
+        primary = min(rs, key=lambda r: r["root_cause_key"])
+        for collection in (record["obligations"], record["coverage_items"]):
+            target = collection[oid]
+            for field in ("blocked_by", "missing_operands", "candidates"):
+                values = {canonical(v):v for r in rs for v in r.get(field, [])}
+                target[field] = [values[k] for k in sorted(values)]
+            target.update(root_cause_key=primary["root_cause_key"], next_action=primary["next_action"])
 
     synthetic = [
         ("S7a DH-02 合格局部输出 → PARTIAL_PASS", "a", "DH-02", None, None, "PARTIAL_PASS"),
@@ -1620,6 +1909,10 @@ def selftest_main(args: argparse.Namespace) -> int:
          first_record_fn(lambda r: r["coverage_items"].update({"EXTRA": {"obligation_id": "EXTRA"}})), "I6", "FAIL"),
         ("S7u 删除全部原因文案 → T10 FAIL", "u", "DH-03b",
          first_record_fn(remove_text), "T10", "FAIL"),
+        ("S7v 上游原因却没有阻断项 → T11 FAIL", "v", "DH-02",
+         first_record_fn(lambda r: unresolved_receipt(r).update(reason_codes=["table_mapping_incomplete"], blocked_by=[])), "T11", "FAIL"),
+        ("S7w 义务诊断与回执无关 → T13 FAIL", "w", "DH-02", first_record_fn(wrong_rollup), "T13", "FAIL"),
+        ("S7x 说明文字操作数无表号 → PARTIAL_PASS", "x", "DH-02", first_record_fn(text_positive), None, "PARTIAL_PASS"),
     ]
     for entry in synthetic:
         title, name, stage, tweak, check_id, want = entry[:6]
@@ -1658,7 +1951,7 @@ def selftest_main(args: argparse.Namespace) -> int:
                      env=worker_env(profile, home=case_dir / "home", tmp=case_dir / "tmp", org_dir=case_dir / "org",
                                     upload_dir=case_dir / "uploads"), work=case_dir, timeout=300,
                      log_path=case_dir / "worker.log")
-    mismatch = [t for t, live in zip(texts, res.get("terms") or []) if _old_coverage_terms(t) != live]
+    mismatch = [t for t, live in zip(texts, res.get("terms") or [], strict=False) if _old_coverage_terms(t) != live]
     ok = bool(res.get("ok")) and not mismatch and len(res.get("terms") or []) == len(texts)
     results.append({"name": f"S8b 冻结旧算法与代码根 distinctive_terms 等价（{len(texts)} 条 detail）", "ok": ok,
                     "detail": mismatch[:5] or res.get("error")})
@@ -1792,6 +2085,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     s = sub.add_parser("seal")
     s.add_argument("--kit", default=str(DEFAULT_KIT))
 
+    identity = sub.add_parser("identity-matrix")
+    identity.add_argument("--code-root", required=True)
+    identity.add_argument("--out", required=True)
+
     sn = sub.add_parser("snapshot")
     sn.add_argument("--source", default=str(REPO_ROOT))
     sn.add_argument("--out", required=True)
@@ -1837,7 +2134,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     t.add_argument("--equivalence-root", default="", help="快照的来源仓库；给出时加测 S6 快照完整性")
 
     args = parser.parse_args(argv)
-    handlers = {"_worker": worker_main, "manifest": manifest_main, "seal": seal_main, "snapshot": snapshot_main,
+    handlers = {"_worker": worker_main, "manifest": manifest_main, "seal": seal_main, "identity-matrix": identity_main, "snapshot": snapshot_main,
                 "collect": collect_main, "compare": compare_main, "boundary": boundary_main,
                 "selftest": selftest_main}
     return handlers[args.cmd](args)
