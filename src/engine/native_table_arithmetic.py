@@ -11,6 +11,8 @@ from .amount_math import classify_amount_diff
 from .fact_context import (
     _canonical_budget_stage,
     ambiguous_operand_diagnosis,
+    fact_page,
+    matching_row_page,
     missing_operand_diagnosis,
     operand_rejection_diagnosis,
     operand_rejection_reason,
@@ -92,7 +94,8 @@ def select_diagnostic(doc, facts, indicator, *, code=None, name=None, stage='决
             )
         else:
             diagnosis = missing_operand_diagnosis(
-                role=indicator, table_code=table_code, page=_facts_page(facts),
+                role=indicator, table_code=table_code,
+                page=matching_row_page(facts, code=code, name=name),
                 row_key=code or name, column=indicator, fund_scope=None,
                 stage=stage, year=getattr(context, 'fiscal_year', None),
             )
@@ -591,7 +594,7 @@ def relation(rule, doc, key, label, parent, children, *, hints=True, fund_compos
             blocked_by=[blocker('fund_scope', '资金口径', 'scope_unconfirmed')],
             missing_operands=[{
                 'source': 'table', 'role': 'fund_scope', 'table_code': parent.table_code,
-                'page': _facts_page(facts), 'row_key': getattr(parent, 'subject_code', None),
+                'page': fact_page(parent), 'row_key': getattr(parent, 'subject_code', None),
                 'column': 'fund_scope', 'fund_scope': getattr(parent, 'fund_scope', None),
                 'stage': getattr(parent, 'budget_stage', None),
                 'year': getattr(parent, 'fiscal_year', None),
@@ -686,7 +689,7 @@ def check_basic_economics(rule, doc):
             ],
             missing_operands=[
                 {'source': 'table', 'role': 'total_actual', 'table_code': 'FIN_06_basic_expenditure',
-                 'page': _facts_page(unknown), 'row_key': fact.subject_code or fact.subject_name,
+                 'page': fact_page(fact), 'row_key': fact.subject_code or fact.subject_name,
                  'column': 'total_actual', 'fund_scope': getattr(fact, 'fund_scope', None),
                  'stage': '决算', 'year': getattr(doc.fact_context, 'fiscal_year', None)}
                 for fact in unknown
@@ -807,7 +810,7 @@ def check_expenditure_arithmetic(rule, doc):
             ],
             missing_operands=[
                 {'source': 'table', 'role': 'total_actual', 'table_code': 'FIN_03_expenditure',
-                 'page': _facts_page(unknown_rows), 'row_key': fact.subject_code or fact.subject_name,
+                 'page': fact_page(fact), 'row_key': fact.subject_code or fact.subject_name,
                  'column': 'total_actual', 'fund_scope': getattr(fact, 'fund_scope', None),
                  'stage': '决算', 'year': getattr(doc.fact_context, 'fiscal_year', None)}
                 for fact in unknown_rows
@@ -822,7 +825,7 @@ def check_expenditure_arithmetic(rule, doc):
             blocked_by=[blocker('row', '合计行', 'row_level_unresolved')],
             missing_operands=[{
                 'source': 'table', 'role': 'total_actual', 'table_code': 'FIN_03_expenditure',
-                'page': _facts_page(facts), 'row_key': 'total', 'column': 'total_actual',
+                'page': None, 'row_key': 'total', 'column': 'total_actual',
                 'fund_scope': None, 'stage': '决算',
                 'year': getattr(doc.fact_context, 'fiscal_year', None),
             }],

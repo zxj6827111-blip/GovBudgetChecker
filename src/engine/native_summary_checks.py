@@ -7,8 +7,8 @@ from decimal import Decimal
 
 from .amount_math import rounding_envelope
 from .fact_context import (
-    _canonical_budget_stage, ambiguous_operand_diagnosis, missing_operand_diagnosis,
-    operand_rejection_diagnosis, operand_rejection_reason,
+    _canonical_budget_stage, ambiguous_operand_diagnosis, matching_row_page,
+    missing_operand_diagnosis, operand_rejection_diagnosis, operand_rejection_reason,
 )
 from .diagnostics import blocker, make_diagnosis, merge_diagnoses
 from .rule_policy import amount_difference_exceeds_policy
@@ -30,12 +30,7 @@ def _pick(doc, facts, indicator, names, *, allow_native_blank=False):
     candidates = [f for f in facts if f.indicator == indicator
                   and re.sub(r'\s+', '', f.subject_name or '') in names]
     table_code = facts[0].table_code if facts else None
-    page = next(
-        (ref.get('physical_page') for fact in facts
-         for ref in (fact.extra_dims or {}).get('evidence_refs') or []
-         if isinstance(ref, dict) and type(ref.get('physical_page')) is int),
-        None,
-    )
+    page = matching_row_page(facts, names=names)
     year = getattr(doc.fact_context, 'fiscal_year', None)
     if len(candidates) != 1:
         if not candidates and allow_native_blank and facts:

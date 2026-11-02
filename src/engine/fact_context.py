@@ -254,9 +254,73 @@ def _fact_cell_ref(fact: Any) -> str:
     return str(ref.get("source_cell_id") or getattr(fact, "fact_uid", "") or "未识别到")
 
 
-def _fact_page(fact: Any) -> Optional[int]:
-    page = _first_fact_source_ref(fact).get("physical_page")
-    return page if type(page) is int and page > 0 else None
+def _fact_source_pages(fact: Any) -> set[int]:
+    """该事实可证明的原格页码集合。
+
+    只有同时带 ``source_cell_id`` 与 ``physical_page`` 的证据才算定位成立；
+    同一事实若在原表的多个位置重复出现，页码集合会大于 1，调用方必须
+    按“无法唯一证明”处理，不能随便挑一个。
+    """
+    pages: set[int] = set()
+    for ref in (getattr(fact, "extra_dims", None) or {}).get("evidence_refs") or []:
+        if not isinstance(ref, dict):
+            continue
+        page = ref.get("physical_page")
+        if ref.get("source_cell_id") and type(page) is int and page > 0:
+            pages.add(page)
+    return pages
+
+
+def fact_page(fact: Any) -> Optional[int]:
+    pages = _fact_source_pages(fact)
+    return next(iter(pages)) if len(pages) == 1 else None
+
+
+#: 兼容既有内部调用名。
+_fact_page = fact_page
+
+
+def matching_row_page(
+    facts: Sequence[Any],
+    *,
+    code: Any = None,
+    name: Any = None,
+    names: Sequence[str] = (),
+) -> Optional[int]:
+    """只在同一行/格证据能唯一证明页码时返回页码，否则返回 None。
+
+    缺失操作数的 ``page`` 不能借用整表首个事实的页码：那样会把第 7 页其他
+    行的位置安到第 8 页的目标行上。这里只接受与请求的科目编码（优先）或
+    科目名称匹配的事实，并且要求它们指向唯一原格页码。
+    """
+    expected_code = str(code) if code is not None else None
+    expected_name = re.sub(r"\s+", "", str(name)) if name is not None else None
+    expected_names = {
+        re.sub(r"\s+", "", str(value)) for value in names if str(value).strip()
+    }
+    matched: List[Any] = []
+    if expected_code is not None:
+        matched = [
+            fact for fact in facts or ()
+            if str(getattr(fact, "subject_code", None) or "") == expected_code
+        ]
+    if not matched and expected_names:
+        matched = [
+            fact for fact in facts or ()
+            if re.sub(r"\s+", "", str(getattr(fact, "subject_name", None) or ""))
+            in expected_names
+        ]
+    if not matched and expected_name:
+        matched = [
+            fact for fact in facts or ()
+            if expected_name in re.sub(
+                r"\s+", "", str(getattr(fact, "subject_name", None) or "")
+            )
+        ]
+    pages: set[int] = set()
+    for fact in matched:
+        pages |= _fact_source_pages(fact)
+    return next(iter(pages)) if len(pages) == 1 else None
 
 
 def missing_operand_diagnosis(
@@ -311,6 +375,9 @@ def operand_rejection_diagnosis(
     extra = getattr(fact, "extra_dims", None) or {}
     codes: List[str] = []
     blockers: List[Dict[str, Any]] = []
+    from .rule_identity import ACTIVE_IDENTITY
+
+    required_dimensions = ACTIVE_IDENTITY.get()
 
     def add(dimension: str, ref: Any, code: str) -> None:
         if code not in codes:
@@ -338,9 +405,13 @@ def operand_rejection_diagnosis(
     if extra.get("row_identity_status") == "code_total_conflict":
         add("row", getattr(fact, "subject_code", None) or getattr(fact, "subject_name", None),
             "row_identity_duplicate")
-    if extra.get("org_scope_pending"):
+    if extra.get("org_scope_pending") and "org_scope" in required_dimensions:
         add("org_scope", "org_scope", "scope_unconfirmed")
-    if org_scope is not None and getattr(fact, "org_scope", None) is None:
+    if (
+        org_scope is not None
+        and getattr(fact, "org_scope", None) is None
+        and "org_scope" in required_dimensions
+    ):
         add("org_scope", org_scope, "scope_unconfirmed")
     if instance_uid is not None and getattr(fact, "instance_uid", None) is None:
         add("instance_uid", instance_uid, "table_mapping_incomplete")
@@ -358,7 +429,29 @@ def operand_rejection_diagnosis(
     if not normalized_amount_is_usable(getattr(fact, "normalized_value", None)):
         add("cell", _fact_cell_ref(fact), "cell_low_confidence")
     elif getattr(fact, "recognition_status", None) not in OPERAND_STATUSES:
-        add("cell", _fact_cell_ref(fact), "cell_low_confidence")
+        # 识别状态已带类型化来源：缺科目编码是行身份问题，跨页列宽漂移是列
+        # 身份问题，不能一律折叠成 cell_low_confidence。只有来源没有给出
+        # 具体类型时，才退回单元格置信度。
+        typed = False
+        row_status = extra.get("row_identity_status")
+        column_status = extra.get("column_identity_status")
+        if row_status == "missing_subject_code":
+            add(
+                "row",
+                getattr(fact, "subject_code", None)
+                or getattr(fact, "subject_name", None)
+                or _fact_cell_ref(fact),
+                "row_code_missing",
+            )
+            typed = True
+        if column_status == "cross_page_width_drift":
+            add("column", _fact_cell_ref(fact), "column_width_drift")
+            typed = True
+        elif column_status == "arithmetic_conflict":
+            add("column", _fact_cell_ref(fact), "column_identity_unconfirmed")
+            typed = True
+        if not typed:
+            add("cell", _fact_cell_ref(fact), "cell_low_confidence")
 
     missing: List[Dict[str, Any]] = []
     if table_code:
