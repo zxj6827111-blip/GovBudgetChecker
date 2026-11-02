@@ -199,15 +199,15 @@ def test_income_rule_wires_root_cause_and_material_view_reason(monkeypatch):
                 for index, (role, _label) in enumerate(INCOME_COLUMNS)]
     code_rows = {row[0]: index + 1 for index, row in enumerate(INCOME_DETAIL_ROWS)}
     code_rows['total'] = 0
-    table = SimpleNamespace(title='收入决算表', cells=[])
+    table = SimpleNamespace(title='收入决算表', table_code='FIN_02_income', cells=[])
     view = (SimpleNamespace(), table, mappings, {}, code_rows, facts)
-    monkeypatch.setattr(income_module, '_table_view', lambda doc, code: (view, None))
+    monkeypatch.setattr(income_module, '_table_view', lambda doc, code: (view, None, None))
     monkeypatch.setattr(income_module, '_column_mappings_for_instance',
                         lambda instance, table: mappings)
     # 末尾的 check_native_detail_tables 走它自己模块内的视图入口，需同步打桩。
     import src.engine.native_hierarchy_checks as hierarchy_module
     monkeypatch.setattr(hierarchy_module, '_table_view',
-                        lambda doc, code, include_income_sources=False: (view, None))
+                        lambda doc, code, include_income_sources=False: (view, None, None))
     context = SimpleNamespace(org_name=ORG, fiscal_year=2025, file_hash=HASH,
                               parse_run_uid='run', version_token='v1', facts=facts,
                               report_kind='final', budget_stage='决算')

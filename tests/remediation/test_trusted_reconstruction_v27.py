@@ -202,7 +202,7 @@ def test_truncated_name_never_uses_unproven_alias(chemical,fault):
             for c in t.cells:
                 if c.raw_text==target.subject_name:c.raw_text='原件名称冲突'
     aliases=[]
-    fact,error=_hierarchy_fact(doc,facts,item,siblings=items,aliases=aliases)
+    fact,error,_diagnosis=_hierarchy_fact(doc,facts,item,siblings=items,aliases=aliases)
     assert fact is None and error and not aliases
 
 
